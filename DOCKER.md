@@ -29,22 +29,22 @@ docker build -t figma-dev-mcp .
     ```
   You can stop the containe in Docker if you get that terminal output and then configure Cline/Claude.
 
-  ## Cline / Claude MCP Settings:
+## Cline / Claude MCP Settings:
 
-   ```json
-    "figma-developer-mcp": {
-      "command": "docker",
-      "args": [
-        "run",
-        "-i",
-        "--rm",
-        "-e", "FIGMA_API_KEY=<Your Figma Access Token>",
-        "figma-dev-mcp",
-        "npx figma-developer-mcp --stdio"
-      ]
-    }
-    ```
+ ```json
+  "figma-developer-mcp": {
+    "command": "docker",
+    "args": [
+      "run",
+      "-i",
+      "--rm",
+      "-e", "FIGMA_API_KEY=<Your Figma Access Token>",
+      "figma-dev-mcp",
+      "npx figma-developer-mcp --stdio"
+    ]
+  }
+  ```
 
-    You should now have access to the following tools:
-    - get_file
-    - get_node
+  You should now have access to the following tools:
+  - get_file
+  - get_node
