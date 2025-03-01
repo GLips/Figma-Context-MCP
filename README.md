@@ -49,6 +49,13 @@ bunx figma-developer-mcp --figma-api-key=<your-figma-api-key>
 
 Instructions on how to create a Figma API access token can be found [here](https://help.figma.com/hc/en-us/articles/8085703771159-Manage-personal-access-tokens).
 
+### Docker Support
+
+This repository now includes Docker support for easy deployment of the Figma Context MCP server.
+
+See [DOCKER.md](./DOCKER.md) for instructions on building and running the Docker container.
+
+
 ### JSON config for tools that use configuration files
 
 Many tools like Windsurf, Cline, and [Claude Desktop](https://claude.ai/download) use a configuration file to start the server.
