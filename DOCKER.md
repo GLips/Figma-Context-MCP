@@ -48,4 +48,3 @@ docker build -t figma-dev-mcp .
     You should now have access to the following tools:
     - get_file
     - get_node
-
