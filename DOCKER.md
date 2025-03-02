@@ -5,12 +5,12 @@ This document explains how to use the Docker container for the Figma Context MCP
 ## Build Docker Image:
 
 ```bash
-docker build -t figma-dev-mcp .
+docker build -t mcp/figma-context-mcp .
 ```
 
 ## Test Run Docker Image:
   ```bash
-    docker run -i --rm -e FIGMA_API_KEY="Your Figma Access Token" figma-dev-mcp "npx figma-developer-mcp --stdio"
+    docker run -i --rm -e FIGMA_API_KEY="Your Figma Access Token" figma-dev-mcp "npx mcp/figma-context-mcp --stdio"
   ```
 ## Expected Output:
     ```
@@ -32,16 +32,20 @@ docker build -t figma-dev-mcp .
 ## Cline / Claude MCP Settings:
 
  ```json
-  "figma-developer-mcp": {
-    "command": "docker",
-    "args": [
-      "run",
-      "-i",
-      "--rm",
-      "-e", "FIGMA_API_KEY=<Your Figma Access Token>",
-      "figma-dev-mcp",
-      "npx figma-developer-mcp --stdio"
-    ]
+  {
+    "mcpServers": {
+    "figma-developer-mcp": {
+      "command": "docker",
+      "args": [
+        "run",
+        "-i",
+        "--rm",
+        "-e", "FIGMA_API_KEY=<Your Figma Access Token>",
+        "mcp/figma-context-mcp",
+        "npx figma-developer-mcp --stdio"
+      ]
+    }
+    }
   }
   ```
 
