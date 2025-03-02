@@ -51,9 +51,33 @@ Instructions on how to create a Figma API access token can be found [here](https
 
 ### Docker Support
 
-This repository now includes Docker support for easy deployment of the Figma Context MCP server.
+This repository now includes Docker support for easy deployment of the Figma Context MCP server, **particularly for Windows users** who may face issues running node-based applications. Windows environments can have varying configurations, leading to dependency conflicts or unexpected behavior. Docker standardizes this.
+Docker encapsulates the entire runtime environment, including the operating system libraries, Node.js version, and all dependencies.
+This ensures that the server runs identically regardless of the host system. The process outlined below will build an image based on the latest version of this repo and the JSON command used in Cline/Claude will spin up this image into a container, allow it to be used by your model, and then remove the container when Claude/Cline disconnect. 
 
-See [DOCKER.md](./DOCKER.md) for instructions on building and running the Docker container.
+#### Build Docker Image:
+
+  ```bash
+    docker build -t figma-dev-mcp .
+  ```
+
+#### Cline / Claude MCP Config Settings:
+
+ ```json
+  "figma-developer-mcp": {
+    "command": "docker",
+    "args": [
+      "run",
+      "-i",
+      "--rm",
+      "-e", "FIGMA_API_KEY=<Your Figma Access Token>",
+      "figma-v1",
+      "npx figma-developer-mcp --stdio"
+    ]
+  }
+  ```
+
+See [DOCKER.md](./DOCKER.md) for more detailed instructions on building and running the Docker container.
 
 
 ### JSON config for tools that use configuration files
