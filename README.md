@@ -58,12 +58,14 @@ This ensures that the server runs identically regardless of the host system. The
 #### Build Docker Image:
 
   ```bash
-    docker build -t figma-dev-mcp .
+    docker build -t mcp/figma-context-mcp .
   ```
 
 #### Cline / Claude MCP Config Settings:
 
  ```json
+{
+  "mcpServers": {
   "figma-developer-mcp": {
     "command": "docker",
     "args": [
@@ -71,10 +73,12 @@ This ensures that the server runs identically regardless of the host system. The
       "-i",
       "--rm",
       "-e", "FIGMA_API_KEY=<Your Figma Access Token>",
-      "figma-v1",
+      "mcp/figma-context-mcp",
       "npx figma-developer-mcp --stdio"
     ]
   }
+  }
+}
   ```
 
 See [DOCKER.md](./DOCKER.md) for more detailed instructions on building and running the Docker container.
