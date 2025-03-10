@@ -6,6 +6,7 @@ import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import { IncomingMessage, ServerResponse } from "http";
 import { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { SimplifiedDesign } from "./services/simplify-node-response";
+import { generateSwiftUICode } from "./transformers/swiftui";
 
 export const Logger = {
   log: (...args: any[]) => {},
@@ -164,6 +165,64 @@ export class FigmaMcpServer {
           Logger.error(`Error downloading images from file ${fileKey}:`, error);
           return {
             content: [{ type: "text", text: `Error downloading images: ${error}` }],
+          };
+        }
+      },
+    );
+
+    // New tool to generate SwiftUI code
+    this.server.tool(
+      "generate_swiftui_code",
+      "Generate SwiftUI code from a Figma design",
+      {
+        fileKey: z
+          .string()
+          .describe(
+            "The key of the Figma file to generate code from",
+          ),
+        nodeId: z
+          .string()
+          .optional()
+          .describe(
+            "The ID of the specific node to generate code from",
+          ),
+        useResponsiveLayout: z
+          .boolean()
+          .optional()
+          .describe(
+            "Whether to use responsive layout in the generated code. If not provided, it will be automatically determined based on the design.",
+          ),
+      },
+      async ({ fileKey, nodeId, useResponsiveLayout }) => {
+        try {
+          console.log('📥 Received SwiftUI generation request:');
+          console.log(`   File Key: ${fileKey}`);
+          console.log(`   Node ID: ${nodeId || 'entire file'}`);
+          console.log(`   Force Responsive Layout: ${useResponsiveLayout !== undefined ? useResponsiveLayout : 'auto'}`);
+
+          let design: SimplifiedDesign;
+          if (nodeId) {
+            console.log('🔍 Fetching specific node from Figma...');
+            design = await this.figmaService.getNode(fileKey, nodeId);
+          } else {
+            console.log('🔍 Fetching entire file from Figma...');
+            design = await this.figmaService.getFile(fileKey);
+          }
+          console.log(`✅ Successfully fetched Figma design: ${design.name}`);
+
+          const swiftUICode = generateSwiftUICode(design, useResponsiveLayout);
+          
+          console.log('✨ SwiftUI code generation completed successfully');
+          console.log('📤 Sending response...');
+          
+          return {
+            content: [{ type: "text", text: swiftUICode }],
+          };
+        } catch (error) {
+          console.error('❌ Error in SwiftUI generation:', error);
+          Logger.error(`Error generating SwiftUI code for file ${fileKey}:`, error);
+          return {
+            content: [{ type: "text", text: `Error generating SwiftUI code: ${error}` }],
           };
         }
       },
