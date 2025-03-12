@@ -8,7 +8,13 @@ export async function startServer(): Promise<void> {
 
   const config = getServerConfig(isStdioMode);
 
-  const server = new FigmaMcpServer(config.figmaApiKey);
+  const server = new FigmaMcpServer(
+    config.figmaApiKey,
+    config.gitlabToken,
+    config.gitlabBaseUrl,
+    config.gitlabProjectId,
+    config.gitlabBranch
+  );
 
   if (isStdioMode) {
     const transport = new StdioServerTransport();

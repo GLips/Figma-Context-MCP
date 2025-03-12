@@ -28,6 +28,12 @@ This MCP server is specifically designed for use with Cursor. Before responding 
 
 Reducing the amount of context provided to the model helps make the AI more accurate and the responses more relevant.
 
+## Features
+
+- **Figma Integration**: Access Figma design data directly from your AI coding tools
+- **SwiftUI Code Generation**: Generate SwiftUI code from Figma designs
+- **GitLab Integration**: Commit generated code directly to your GitLab repository
+
 ## Installation
 
 ### Running the server quickly with NPM
@@ -62,7 +68,11 @@ The `figma-developer-mcp` server can be configured by adding the following to yo
       "command": "npx",
       "args": ["-y", "figma-developer-mcp", "--stdio"],
       "env": {
-        "FIGMA_API_KEY": "<your-figma-api-key>"
+        "FIGMA_API_KEY": "<your-figma-api-key>",
+        "GITLAB_TOKEN": "<your-gitlab-token>",
+        "GITLAB_BASE_URL": "<your-gitlab-base-url>",
+        "GITLAB_PROJECT_ID": "<your-gitlab-project-id>",
+        "GITLAB_BRANCH": "<your-gitlab-branch>"
       }
     }
   }
@@ -73,7 +83,7 @@ The `figma-developer-mcp` server can be configured by adding the following to yo
 
 1. Clone the [repository](https://github.com/GLips/Figma-Context-MCP)
 2. Install dependencies with `pnpm install`
-3. Copy `.env.example` to `.env` and fill in your [Figma API access token](https://help.figma.com/hc/en-us/articles/8085703771159-Manage-personal-access-tokens). Only read access is required.
+3. Copy `.env.example` to `.env` and fill in your [Figma API access token](https://help.figma.com/hc/en-us/articles/8085703771159-Manage-personal-access-tokens) and GitLab credentials if needed. Only read access is required for Figma, but write access is required for GitLab.
 4. Run the server with `pnpm run dev`, along with any of the flags from the [Command-line Arguments](#command-line-arguments) section.
 
 ## Configuration
@@ -84,82 +94,43 @@ The server can be configured using either environment variables (via `.env` file
 
 - `FIGMA_API_KEY`: Your [Figma API access token](https://help.figma.com/hc/en-us/articles/8085703771159-Manage-personal-access-tokens) (required)
 - `PORT`: The port to run the server on (default: 3333)
+- `GITLAB_TOKEN`: Your GitLab personal access token (optional, required for GitLab integration)
+- `GITLAB_BASE_URL`: Your GitLab API base URL (optional, required for GitLab integration)
+- `GITLAB_PROJECT_ID`: Your GitLab project ID or path (optional, required for GitLab integration)
+- `GITLAB_BRANCH`: Your GitLab branch to use (optional, required for GitLab integration)
 
 ### Command-line Arguments
 
 - `--version`: Show version number
 - `--figma-api-key`: Your Figma API access token
 - `--port`: The port to run the server on
+- `--gitlab-token`: Your GitLab personal access token
+- `--gitlab-base-url`: Your GitLab API base URL
+- `--gitlab-project-id`: Your GitLab project ID or path
+- `--gitlab-branch`: Your GitLab branch to use
 - `--stdio`: Run the server in command mode, instead of default HTTP/SSE
 - `--help`: Show help menu
+
+## GitLab Integration
+
+The GitLab integration allows you to:
+
+1. Commit generated SwiftUI code directly to your GitLab repository
+2. Create new branches in your GitLab repository
+3. Retrieve files from your GitLab repository
+4. List branches in your GitLab repository
+5. List files and directories in your GitLab repository
+6. Test the connection to your GitLab API
+
+To use the GitLab integration, you need to provide the following:
+
+- `GITLAB_TOKEN`: A personal access token with API access to your GitLab repository
+- `GITLAB_BASE_URL`: The base URL for your GitLab API (e.g., `https://gitlab.com/api/v4`)
+- `GITLAB_PROJECT_ID`: The ID or path of your GitLab project (e.g., `group/project`)
+- `GITLAB_BRANCH`: The default branch to use for operations (e.g., `main`)
 
 ## Connecting to Cursor
 
 ### Start the server
 
-```bash
-> npx figma-developer-mcp --figma-api-key=<your-figma-api-key>
-# Initializing Figma MCP Server in HTTP mode on port 3333...
-# HTTP server listening on port 3333
-# SSE endpoint available at http://localhost:3333/sse
-# Message endpoint available at http://localhost:3333/messages
 ```
-
-### Connect Cursor to the MCP server
-
-Once the server is running, [connect Cursor to the MCP server](https://docs.cursor.com/context/model-context-protocol) in Cursor's settings, under the features tab.
-
-![Connecting to MCP server in Cursor](./docs/cursor-MCP-settings.png)
-
-After the server has been connected, you can confirm Cursor's has a valid connection before getting started. If you get a green dot and the tools show up, you're good to go!
-
-![Confirming connection in Cursor](./docs/verify-connection.png)
-
-### Start using Composer with your Figma designs
-
-Once the MCP server is connected, **you can start using the tools in Cursor's composer, as long as the composer is in agent mode.**
-
-Dropping a link to a Figma file in the composer and asking Cursor to do something with it should automatically trigger the `get_file` tool.
-
-Most Figma files end up being huge, so you'll probably want to link to a specific frame or group within the file. With a single element selected, you can hit `CMD + L` to copy the link to the element. You can also find it in the context menu:
-
-![Copy link to Figma selection by right clicking](./docs/figma-copy-link.png)
-
-Once you have a link to a specific element, you can drop it in the composer and ask Cursor to do something with it.
-
-## Inspect Responses
-
-To inspect responses from the MCP server more easily, you can run the `inspect` command, which launches the `@modelcontextprotocol/inspector` web UI for triggering tool calls and reviewing responses:
-
-```bash
-pnpm inspect
-# > figma-mcp@0.1.7 inspect
-# > pnpx @modelcontextprotocol/inspector
-#
-# Starting MCP inspector...
-# Proxy server listening on port 3333
-#
-# 🔍 MCP Inspector is up and running at http://localhost:5173 🚀
-```
-
-## Available Tools
-
-The server provides the following MCP tools:
-
-### get_file
-
-Fetches information about a Figma file.
-
-Parameters:
-
-- `fileKey` (string): The key of the Figma file to fetch
-- `depth` (number, optional): How many levels deep to traverse the node tree
-
-### get_node
-
-Fetches information about a specific node within a Figma file.
-
-Parameters:
-
-- `fileKey` (string): The key of the Figma file containing the node
-- `nodeId` (string): The ID of the node to fetch
