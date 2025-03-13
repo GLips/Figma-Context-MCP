@@ -21,7 +21,7 @@
     "lint": "eslint . --ext .ts",
     "format": "prettier --write \"src/**/*.ts\"",
     "inspect": "pnpx @modelcontextprotocol/inspector",
-    "prepare": "pnpm run build && chmod +x ./dist/cli.js",
+    "prepare": "pnpm run build && cross-env-shell \"if %OS% == Windows_NT (exit 0) else (chmod +x .\\dist\\cli.js)\"",
     "pub:release": "pnpm build && npm publish"
   },
   "engines": {
