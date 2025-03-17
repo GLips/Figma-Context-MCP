@@ -13,6 +13,7 @@
   "scripts": {
     "build": "tsc && tsc-alias",
     "type-check": "tsc --noEmit",
+    "test": "jest",
     "start": "node dist/index.js",
     "start:cli": "cross-env NODE_ENV=cli node dist/index.js",
     "start:http": "node dist/index.js",
@@ -45,6 +46,7 @@
     "cross-env": "^7.0.3",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
+    "js-yaml": "^4.1.0",
     "remeda": "^2.20.1",
     "yargs": "^17.7.2",
     "zod": "^3.24.2"
@@ -52,7 +54,8 @@
   "devDependencies": {
     "@figma/rest-api-spec": "^0.24.0",
     "@types/express": "^5.0.0",
-    "@types/jest": "^29.5.11",
+    "@types/jest": "^29.5.14",
+    "@types/js-yaml": "^4.0.9",
     "@types/node": "^20.17.0",
     "@typescript-eslint/eslint-plugin": "^8.24.0",
     "@typescript-eslint/parser": "^8.24.0",

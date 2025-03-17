@@ -6,6 +6,7 @@ import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import { IncomingMessage, ServerResponse } from "http";
 import { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { SimplifiedDesign } from "./services/simplify-node-response";
+import yaml from "js-yaml";
 
 export const Logger = {
   log: (...args: any[]) => {},
@@ -79,14 +80,16 @@ export class FigmaMcpServer {
           Logger.log(`Successfully fetched file: ${file.name}`);
           const { nodes, globalVars, ...metadata } = file;
 
-          // Stringify each node individually to try to avoid max string length error with big files
-          const nodesJson = `[${nodes.map((node) => JSON.stringify(node, null, 2)).join(",")}]`;
-          const metadataJson = JSON.stringify(metadata, null, 2);
-          const globalVarsJson = JSON.stringify(globalVars, null, 2);
-          const resultJson = `{ "metadata": ${metadataJson}, "nodes": ${nodesJson}, "globalVars": ${globalVarsJson} }`;
+          const result = {
+            metadata,
+            nodes,
+            globalVars,
+          };
+
+          const yamlResult = yaml.dump(result);
 
           return {
-            content: [{ type: "text", text: resultJson }],
+            content: [{ type: "text", text: yamlResult }],
           };
         } catch (error) {
           Logger.error(`Error fetching file ${fileKey}:`, error);
