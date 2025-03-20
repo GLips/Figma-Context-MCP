@@ -21,8 +21,12 @@
     "lint": "eslint . --ext .ts",
     "format": "prettier --write \"src/**/*.ts\"",
     "inspect": "pnpx @modelcontextprotocol/inspector",
-    "prepare": "pnpm run build && chmod +x ./dist/cli.js",
-    "pub:release": "pnpm build && npm publish"
+    "prepare": "pnpm run build && (node -e \"process.platform !== 'win32' && process.exit(1)\" || echo Windows detected) || chmod +x ./dist/cli.js",
+    "prepare:win": "pnpm run build",
+    "pub:release": "pnpm build && npm publish",
+    "dev:win": "cross-env NODE_ENV=development npx tsx watch src/index.ts",
+    "dev:cli:win": "cross-env NODE_ENV=development npx tsx watch src/index.ts --stdio",
+    "start:win": "node .\\dist\\index.js"
   },
   "engines": {
     "node": ">=18.0.0"
