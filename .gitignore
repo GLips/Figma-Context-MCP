@@ -31,7 +31,8 @@ pnpm-debug.log*
 
 # Testing
 coverage
+test-output
 
 # OS
 .DS_Store
-Thumbs.db 
+Thumbs.db
