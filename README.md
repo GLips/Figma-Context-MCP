@@ -59,8 +59,7 @@ The `figma-developer-mcp` server can be configured by adding the following to yo
 {
   "mcpServers": {
     "figma-developer-mcp": {
-      "command": "npx",
-      "args": ["-y", "figma-developer-mcp", "--stdio"],
+      "url": "http://localhost:3333/sse",
       "env": {
         "FIGMA_API_KEY": "<your-figma-api-key>"
       }
