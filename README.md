@@ -66,6 +66,14 @@ The `figma-developer-mcp` server can be configured by adding the following to yo
 }
 ```
 
+### Command to add MCP to Claude Code
+
+To install on Claude Code, run the following command:
+
+```
+claude mcp add figma-developer-mcp npx -e FIGMA_API_KEY=<your-figma-api-key> -- -y figma-developer-mcp --stdio 
+```
+
 ### Running the server from local source
 
 1. Clone the [repository](https://github.com/GLips/Figma-Context-MCP)
