@@ -1,0 +1,19 @@
+services:
+  figma-developer-mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: figma-developer-mcp
+    restart: unless-stopped
+    ports:
+      - "3333:3333"
+    environment:
+      - NODE_ENV=production
+      - PORT=3333
+      # We don't include FIGMA_API_KEY here for security reasons, it should be provided when starting the container
+    volumes:
+      # Mount the .env file from the root project directory
+      - ./.env:/app/.env:ro
+    # Alternative commands for different execution modes
+    # command: ["pnpm", "start:cli"]  # For CLI mode
+    # command: ["pnpm", "start:http"] # For HTTP mode (default)

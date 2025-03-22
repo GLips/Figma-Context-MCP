@@ -28,6 +28,48 @@ This MCP server is specifically designed for use with Cursor. Before responding 
 
 Reducing the amount of context provided to the model helps make the AI more accurate and the responses more relevant.
 
+## Docker Setup
+
+### Using Docker Compose
+
+The easiest way to run this server with Docker is using Docker Compose:
+
+```bash
+# Copy the example .env file and add your Figma API key
+cp .env.example .env
+# Edit the .env file with your Figma API key
+nano .env  # or use your preferred text editor
+
+# Start the server with Docker Compose
+docker-compose up -d
+```
+
+The server will be available at http://localhost:3333.
+
+### Using Docker Directly
+
+You can also build and run the Docker container manually:
+
+```bash
+# Build the Docker image
+docker build -t figma-developer-mcp .
+
+# Run the container
+docker run -p 3333:3333 \
+  -e FIGMA_API_KEY=your_figma_api_key_here \
+  -e NODE_ENV=production \
+  --name figma-developer-mcp \
+  figma-developer-mcp
+```
+
+### Configuration Options
+
+The Docker container respects the same environment variables as the regular installation:
+
+- `FIGMA_API_KEY`: Your Figma API key (required)
+- `PORT`: The port to run the server on (default: 3333)
+- `NODE_ENV`: Environment mode (default: production)
+
 ## Installation
 
 ### Running the server quickly with NPM
