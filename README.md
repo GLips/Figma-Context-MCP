@@ -33,20 +33,7 @@ Reducing the amount of context provided to the model helps make the AI more accu
 This MCP server provides access to Figma design data through several tools:
 
 - `get_figma_data`: Retrieves layout information about a Figma file or specific node
-- `get_figma_styles`: Retrieves all local styles (colors, text, effects, grids) from a Figma file
-- `get_figma_style_details`: Retrieves detailed information about specific styles
-- `download_figma_images`: Downloads images used in a Figma file
-
-### Accessing Local Styles
-
-The server now supports retrieving local styles from Figma files, which can be particularly useful for design systems implementation. This includes:
-
-- Color/fill styles
-- Text styles
-- Effect styles
-- Grid styles
-
-When retrieving a Figma file using `get_figma_data`, style information is now automatically included in the response. You can also use the dedicated style tools for more specific style-related requests.
+- `download_figma_images`: Downloads images used in a Figma file (work in progress)
 
 ## Installation
 
@@ -164,59 +151,25 @@ pnpm inspect
 The server provides the following MCP tools:
 
 ### get_figma_data
-Get layout information about a Figma file. 
-- fileKey: The key of the Figma file to fetch
-- nodeId: (optional) The ID of the node to fetch
-- depth: (optional) How many levels deep to traverse the node tree
 
-### get_figma_styles
-Retrieve all local styles from a Figma file.
-- fileKey: The key of the Figma file to fetch styles from
+Fetches information about a Figma file or a specific node within a file.
 
-### get_figma_style_details
-Retrieve detailed information about specific styles including their properties and values
-- styleKeys: Array of style keys to fetch details for
+Parameters:
 
-### map_figma_styles_to_nodes
-Map local styles to nodes in the Figma file, providing comprehensive style values and usage information.
-- fileKey: The key of the Figma file to analyze
-- nodeId: (optional) The ID of a specific node to analyze. If not provided, the entire file will be analyzed.
+* `fileKey` (string, required): The key of the Figma file to fetch, often found in a provided URL like `figma.com/(file|design)/<fileKey>/...`
+* `nodeId` (string, optional, **highly recommended**): The ID of the node to fetch, often found as URL parameter node-id=
+* `depth` (number, optional): How many levels deep to traverse the node tree, only used if explicitly requested by you via chat
 
-### detect_figma_style_usage
-Detect where styles are used in a Figma file or node.
-- fileKey: The key of the Figma file to analyze
-- nodeId: (optional) The ID of a specific node to analyze
+### download_figma_images (work in progress)
 
-### download_figma_images
-Download SVG and PNG images used in a Figma file based on the IDs of image or icon nodes
-- fileKey: The key of the Figma file containing the node
-- nodes: The nodes to fetch as images
-- localPath: The absolute path to the directory where images are stored in the project
+Download SVG and PNG images used in a Figma file based on the IDs of image or icon nodes.
 
-Each node object should have:
-- nodeId: The ID of the Figma image node to fetch
-- fileName: The local name for saving the fetched file
-- imageRef: (optional) If a node has an imageRef fill, include this
+Parameters:
 
-## Example Usage
+* `fileKey` (string, required): The key of the Figma file containing the node
+* `nodes` (array, required): The nodes to fetch as images  
+   * `nodeId` (string, required): The ID of the Figma image node to fetch, formatted as 1234:5678  
+   * `imageRef` (string, optional): If a node has an imageRef fill, you must include this variable. Leave blank when downloading Vector SVG images.  
+   * `fileName` (string, required): The local name for saving the fetched file
+* `localPath` (string, required): The absolute path to the directory where images are stored in the project. Automatically creates directories if needed.
 
-### Analyzing Style Usage
-
-You can now retrieve a comprehensive mapping between local styles and their usage within a Figma file:
-
-```javascript
-// Map styles to nodes in a file
-const styleMapping = await figmaService.mapNodesToLocalStyles('YOUR_FILE_KEY');
-
-// Access the style values
-console.log('Fill styles:', styleMapping.fillStyles);
-console.log('Text styles:', styleMapping.textStyles);
-console.log('Effect styles:', styleMapping.effectStyles);
-console.log('Grid styles:', styleMapping.gridStyles);
-```
-
-The returned mapping provides:
-- Style IDs and names
-- Actual style values (colors, typography settings, effects, grid settings)
-- Node IDs where each style is used
-- Comprehensive correlation between style definitions and their usage
