@@ -28,13 +28,6 @@ This MCP server is specifically designed for use with Cursor. Before responding 
 
 Reducing the amount of context provided to the model helps make the AI more accurate and the responses more relevant.
 
-## Features
-
-This MCP server provides access to Figma design data through several tools:
-
-- `get_figma_data`: Retrieves layout information about a Figma file or specific node
-- `download_figma_images`: Downloads images used in a Figma file (work in progress)
-
 ## Installation
 
 ### Running the server quickly with NPM
@@ -156,9 +149,9 @@ Fetches information about a Figma file or a specific node within a file.
 
 Parameters:
 
-* `fileKey` (string, required): The key of the Figma file to fetch, often found in a provided URL like `figma.com/(file|design)/<fileKey>/...`
-* `nodeId` (string, optional, **highly recommended**): The ID of the node to fetch, often found as URL parameter node-id=
-* `depth` (number, optional): How many levels deep to traverse the node tree, only used if explicitly requested by you via chat
+- `fileKey` (string, required): The key of the Figma file to fetch, often found in a provided URL like `figma.com/(file|design)/<fileKey>/...`
+- `nodeId` (string, optional, **highly recommended**): The ID of the node to fetch, often found as URL parameter node-id=<nodeId>
+- `depth` (number, optional): How many levels deep to traverse the node tree, only used if explicitly requested by you via chat
 
 ### download_figma_images (work in progress)
 
@@ -166,10 +159,9 @@ Download SVG and PNG images used in a Figma file based on the IDs of image or ic
 
 Parameters:
 
-* `fileKey` (string, required): The key of the Figma file containing the node
-* `nodes` (array, required): The nodes to fetch as images  
-   * `nodeId` (string, required): The ID of the Figma image node to fetch, formatted as 1234:5678  
-   * `imageRef` (string, optional): If a node has an imageRef fill, you must include this variable. Leave blank when downloading Vector SVG images.  
-   * `fileName` (string, required): The local name for saving the fetched file
-* `localPath` (string, required): The absolute path to the directory where images are stored in the project. Automatically creates directories if needed.
-
+- `fileKey` (string, required): The key of the Figma file containing the node
+- `nodes` (array, required): The nodes to fetch as images
+  - `nodeId` (string, required): The ID of the Figma image node to fetch, formatted as 1234:5678
+  - `imageRef` (string, optional): If a node has an imageRef fill, you must include this variable. Leave blank when downloading Vector SVG images.
+  - `fileName` (string, required): The local name for saving the fetched file
+- `localPath` (string, required): The absolute path to the directory where images are stored in the project. Automatically creates directories if needed.
