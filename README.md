@@ -108,6 +108,15 @@ Once the server is running, [connect Cursor to the MCP server](https://docs.curs
 
 ![Connecting to MCP server in Cursor](./docs/cursor-MCP-settings.png)
 
+Another option is to update the `~/.cursor/mcp.json`
+
+```
+    "Figma-MCP": {
+      "type": "sse",
+      "url": "http://localhost:3333/sse"
+    }
+```
+
 After the server has been connected, you can confirm Cursor's has a valid connection before getting started. If you get a green dot and the tools show up, you're good to go!
 
 ![Confirming connection in Cursor](./docs/verify-connection.png)
