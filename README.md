@@ -1,6 +1,6 @@
 # Figma MCP Server
 
-Give [Cursor](https://cursor.sh/), [Windsurf](https://codeium.com/windsurf), [Cline](https://cline.bot/), and other AI-powered coding tools access to your Figma files with this [Model Context Protocol](https://modelcontextprotocol.io/introduction) server.
+Give [Cursor](https://cursor.sh/), [Windsurf](https://codeium.com/windsurf), [Cline](https://cline.bot/), [Qodo](https://qodo.ai/), and other AI-powered coding tools access to your Figma files with this [Model Context Protocol](https://modelcontextprotocol.io/introduction) server.
 
 When Cursor has access to Figma design data, it's **way** better at one-shotting designs accurately than alternative approaches like pasting screenshots.
 
@@ -51,7 +51,7 @@ Instructions on how to create a Figma API access token can be found [here](https
 
 ### JSON config for tools that use configuration files
 
-Many tools like Windsurf, Cline, and [Claude Desktop](https://claude.ai/download) use a configuration file to start the server.
+Many tools like Windsurf, Cline, Qodo, and [Claude Desktop](https://claude.ai/download) use a configuration file to start the server.
 
 The `figma-developer-mcp` server can be configured by adding the following to your configuration file:
 
