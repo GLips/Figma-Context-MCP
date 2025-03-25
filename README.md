@@ -51,7 +51,7 @@ Instructions on how to create a Figma API access token can be found [here](https
 
 ### JSON config for tools that use configuration files
 
-Many tools like Windsurf, Cline, and [Claude Desktop](https://claude.ai/download) use a configuration file to start the server.
+Many tools like Windsurf, Cline, Qodo, and [Claude Desktop](https://claude.ai/download) use a configuration file to start the server.
 
 The `figma-developer-mcp` server can be configured by adding the following to your configuration file:
 
