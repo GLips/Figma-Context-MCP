@@ -45,15 +45,25 @@ type StyleTypes =
   | SimplifiedStroke
   | SimplifiedEffects
   | string;
+
+// Enhanced StyleInfo to include name information
+export interface StyleInfo {
+  name?: string;
+  value: StyleTypes;
+}
+
 type GlobalVars = {
   styles: Record<StyleId, StyleTypes>;
+  styleInfo?: Record<StyleId, StyleInfo>; // Added to include style name information
 };
+
 export interface SimplifiedDesign {
   name: string;
   lastModified: string;
   thumbnailUrl: string;
   nodes: SimplifiedNode[];
   globalVars: GlobalVars;
+  styles?: any; // Optional field to include all available styles
 }
 
 export interface SimplifiedNode {
@@ -112,7 +122,10 @@ export interface ColorValue {
 }
 
 // ---------------------- PARSING ----------------------
-export function parseFigmaResponse(data: GetFileResponse | GetFileNodesResponse): SimplifiedDesign {
+export function parseFigmaResponse(
+  data: GetFileResponse | GetFileNodesResponse, 
+  styleMap?: Record<string, any>
+): SimplifiedDesign {
   const { name, lastModified, thumbnailUrl } = data;
   let nodes: FigmaDocumentNode[];
   if ("document" in data) {
@@ -120,21 +133,31 @@ export function parseFigmaResponse(data: GetFileResponse | GetFileNodesResponse)
   } else {
     nodes = Object.values(data.nodes).map((n) => n.document);
   }
+  
   let globalVars: GlobalVars = {
     styles: {},
+    styleInfo: {}, // Initialize the styleInfo object
   };
+  
   const simplifiedNodes: SimplifiedNode[] = nodes
     .filter(isVisible)
-    .map((n) => parseNode(globalVars, n))
+    .map((n) => parseNode(globalVars, n, undefined, styleMap))
     .filter((child) => child !== null && child !== undefined);
 
-  return {
+  const result: SimplifiedDesign = {
     name,
     lastModified,
     thumbnailUrl: thumbnailUrl || "",
     nodes: simplifiedNodes,
     globalVars,
   };
+  
+  // Add styles to the top level for easier access if available
+  if (styleMap && Object.keys(styleMap).length > 0) {
+    result.styles = styleMap;
+  }
+  
+  return result;
 }
 
 // Helper function to find node by ID
@@ -160,9 +183,15 @@ const findNodeById = (id: string, nodes: SimplifiedNode[]): SimplifiedNode | und
  * @param globalVars - Global variables object
  * @param value - Value to store
  * @param prefix - Variable ID prefix
+ * @param styleName - Optional style name to associate with the variable
  * @returns Variable ID
  */
-function findOrCreateVar(globalVars: GlobalVars, value: any, prefix: string): StyleId {
+function findOrCreateVar(
+  globalVars: GlobalVars, 
+  value: any, 
+  prefix: string,
+  styleName?: string
+): StyleId {
   // Check if the same value already exists
   const [existingVarId] =
     Object.entries(globalVars.styles).find(
@@ -170,12 +199,28 @@ function findOrCreateVar(globalVars: GlobalVars, value: any, prefix: string): St
     ) ?? [];
 
   if (existingVarId) {
+    // If the style name is provided and not already set, add it
+    if (styleName && globalVars.styleInfo && !globalVars.styleInfo[existingVarId as StyleId]?.name) {
+      globalVars.styleInfo[existingVarId as StyleId] = {
+        name: styleName,
+        value: value
+      };
+    }
     return existingVarId as StyleId;
   }
 
   // Create a new variable if it doesn't exist
   const varId = generateVarId(prefix);
   globalVars.styles[varId] = value;
+  
+  // Add style name information if provided
+  if (styleName && globalVars.styleInfo) {
+    globalVars.styleInfo[varId] = {
+      name: styleName,
+      value: value
+    };
+  }
+  
   return varId;
 }
 
@@ -183,6 +228,7 @@ function parseNode(
   globalVars: GlobalVars,
   n: FigmaDocumentNode,
   parent?: FigmaDocumentNode,
+  styleMap?: Record<string, any>
 ): SimplifiedNode | null {
   const { id, name, type } = n;
 
@@ -191,6 +237,17 @@ function parseNode(
     name,
     type,
   };
+
+  // Check for style IDs in the node
+  const nodeStyleIds: Record<string, string> = {};
+  if (hasValue("styles", n) && typeof n.styles === "object" && n.styles) {
+    // Capture style IDs used by this node for different style types
+    Object.entries(n.styles).forEach(([styleType, styleId]) => {
+      if (styleId && typeof styleId === 'string') {
+        nodeStyleIds[styleType] = styleId;
+      }
+    });
+  }
 
   // text
   if (hasValue("style", n) && Object.keys(n.style).length) {
@@ -211,30 +268,62 @@ function parseNode(
       textAlignHorizontal: style.textAlignHorizontal,
       textAlignVertical: style.textAlignVertical,
     };
-    simplified.textStyle = findOrCreateVar(globalVars, textStyle, "style");
+    
+    // Check if there's a text style ID and look it up in the styleMap
+    const textStyleId = nodeStyleIds.text;
+    const textStyleName = textStyleId && styleMap && styleMap[textStyleId] 
+      ? styleMap[textStyleId].name 
+      : undefined;
+    
+    simplified.textStyle = findOrCreateVar(globalVars, textStyle, "style", textStyleName);
   }
 
   // fills & strokes
   if (hasValue("fills", n) && Array.isArray(n.fills) && n.fills.length) {
     // const fills = simplifyFills(n.fills.map(parsePaint));
     const fills = n.fills.map(parsePaint);
-    simplified.fills = findOrCreateVar(globalVars, fills, "fill");
+    
+    // Check if there's a fill style ID and look it up in the styleMap
+    const fillStyleId = nodeStyleIds.fill;
+    const fillStyleName = fillStyleId && styleMap && styleMap[fillStyleId] 
+      ? styleMap[fillStyleId].name 
+      : undefined;
+    
+    simplified.fills = findOrCreateVar(globalVars, fills, "fill", fillStyleName);
   }
 
   const strokes = buildSimplifiedStrokes(n);
   if (strokes.colors.length) {
-    simplified.strokes = findOrCreateVar(globalVars, strokes, "stroke");
+    // Check if there's a stroke style ID and look it up in the styleMap
+    const strokeStyleId = nodeStyleIds.stroke;
+    const strokeStyleName = strokeStyleId && styleMap && styleMap[strokeStyleId] 
+      ? styleMap[strokeStyleId].name 
+      : undefined;
+    
+    simplified.strokes = findOrCreateVar(globalVars, strokes, "stroke", strokeStyleName);
   }
 
   const effects = buildSimplifiedEffects(n);
   if (Object.keys(effects).length) {
-    simplified.effects = findOrCreateVar(globalVars, effects, "effect");
+    // Check if there's an effect style ID and look it up in the styleMap
+    const effectStyleId = nodeStyleIds.effect;
+    const effectStyleName = effectStyleId && styleMap && styleMap[effectStyleId] 
+      ? styleMap[effectStyleId].name 
+      : undefined;
+    
+    simplified.effects = findOrCreateVar(globalVars, effects, "effect", effectStyleName);
   }
 
   // Process layout
   const layout = buildSimplifiedLayout(n, parent);
   if (Object.keys(layout).length > 1) {
-    simplified.layout = findOrCreateVar(globalVars, layout, "layout");
+    // Check if there's a grid style ID and look it up in the styleMap
+    const gridStyleId = nodeStyleIds.grid;
+    const gridStyleName = gridStyleId && styleMap && styleMap[gridStyleId] 
+      ? styleMap[gridStyleId].name 
+      : undefined;
+    
+    simplified.layout = findOrCreateVar(globalVars, layout, "layout", gridStyleName);
   }
 
   // Keep other simple properties directly
@@ -243,27 +332,26 @@ function parseNode(
   }
 
   // border/corner
+  if (hasValue("cornerRadius", n) && typeof (n as any).cornerRadius === "number" && (n as any).cornerRadius !== 0) {
+    simplified.borderRadius = `${(n as any).cornerRadius}px`;
+  } else if (hasValue("cornerRadius", n) && isRectangleCornerRadii((n as any).cornerRadius)) {
+    const { topLeft, topRight, bottomRight, bottomLeft } = (n as any).cornerRadius;
+    simplified.borderRadius = `${topLeft}px ${topRight}px ${bottomRight}px ${bottomLeft}px`;
+  }
 
   // opacity
   if (hasValue("opacity", n) && typeof n.opacity === "number" && n.opacity !== 1) {
     simplified.opacity = n.opacity;
   }
 
-  if (hasValue("cornerRadius", n) && typeof n.cornerRadius === "number") {
-    simplified.borderRadius = `${n.cornerRadius}px`;
-  }
-  if (hasValue("rectangleCornerRadii", n, isRectangleCornerRadii)) {
-    simplified.borderRadius = `${n.rectangleCornerRadii[0]}px ${n.rectangleCornerRadii[1]}px ${n.rectangleCornerRadii[2]}px ${n.rectangleCornerRadii[3]}px`;
-  }
-
-  // Recursively process child nodes
-  if (hasValue("children", n) && n.children.length > 0) {
+  // Handle children recursively
+  if (hasValue("children", n) && Array.isArray(n.children) && n.children.length) {
     let children = n.children
       .filter(isVisible)
-      .map((child) => parseNode(globalVars, child, n))
+      .map((child) => parseNode(globalVars, child, n, styleMap))
       .filter((child) => child !== null && child !== undefined);
     if (children.length) {
-      simplified.children = children;
+      simplified.children = children as SimplifiedNode[];
     }
   }
 

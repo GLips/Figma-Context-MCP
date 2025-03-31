@@ -1,6 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { FigmaService } from "./services/figma.js";
+import { FigmaService, StyleToNodeMappingResult } from "./services/figma.js";
 import express, { Request, Response } from "express";
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import { IncomingMessage, ServerResponse } from "http";
@@ -36,64 +36,108 @@ export class FigmaMcpServer {
   }
 
   private registerTools(): void {
-    // Tool to get file information
+    // Tool for getting data from Figma
     this.server.tool(
       "get_figma_data",
       "When the nodeId cannot be obtained, obtain the layout information about the entire Figma file",
       {
         fileKey: z
           .string()
-          .describe(
-            "The key of the Figma file to fetch, often found in a provided URL like figma.com/(file|design)/<fileKey>/...",
-          ),
+          .describe("The key of the Figma file to fetch, often found in a provided URL like figma.com/(file|design)/<fileKey>/..."),
         nodeId: z
           .string()
           .optional()
-          .describe(
-            "The ID of the node to fetch, often found as URL parameter node-id=<nodeId>, always use if provided",
-          ),
+          .describe("The ID of the node to fetch, often found as URL parameter node-id=<nodeId>, always use if provided"),
         depth: z
           .number()
           .optional()
-          .describe(
-            "How many levels deep to traverse the node tree, only use if explicitly requested by the user",
-          ),
+          .describe("How many levels deep to traverse the node tree, only use if explicitly requested by the user")
       },
       async ({ fileKey, nodeId, depth }) => {
+        Logger.log(`Getting Figma data for file: ${fileKey}, node: ${nodeId || "root"}, depth: ${depth || "default"}`);
         try {
-          Logger.log(
-            `Fetching ${
-              depth ? `${depth} layers deep` : "all layers"
-            } of ${nodeId ? `node ${nodeId} from file` : `full file`} ${fileKey}`,
-          );
-
-          let file: SimplifiedDesign;
+          // First, fetch the style information for the file to enhance responses
+          let stylesData;
+          try {
+            stylesData = await this.figmaService.getStyles(fileKey);
+            Logger.log(`Successfully fetched ${
+              stylesData.paintStyles.length + 
+              stylesData.textStyles.length + 
+              stylesData.effectStyles.length + 
+              stylesData.gridStyles.length
+            } styles for file ${fileKey}`);
+          } catch (styleError) {
+            Logger.error("Error fetching style information:", styleError);
+            // Continue with the operation even if styles can't be fetched
+          }
+          
+          // Fetch basic file or node data from Figma
+          let figmaData;
           if (nodeId) {
-            file = await this.figmaService.getNode(fileKey, nodeId, depth);
+            figmaData = await this.figmaService.getNode(fileKey, nodeId, depth);
           } else {
-            file = await this.figmaService.getFile(fileKey, depth);
+            figmaData = await this.figmaService.getFile(fileKey, depth);
           }
 
-          Logger.log(`Successfully fetched file: ${file.name}`);
-          const { nodes, globalVars, ...metadata } = file;
-
-          // Stringify each node individually to try to avoid max string length error with big files
-          const nodesJson = `[${nodes.map((node) => JSON.stringify(node, null, 2)).join(",")}]`;
-          const metadataJson = JSON.stringify(metadata, null, 2);
-          const globalVarsJson = JSON.stringify(globalVars, null, 2);
-          const resultJson = `{ "metadata": ${metadataJson}, "nodes": ${nodesJson}, "globalVars": ${globalVarsJson} }`;
+          // Organize style information for easy reference in the output
+          if (stylesData) {
+            // Use type assertion to work with the figmaData more flexibly
+            const figmaDataAny = figmaData as any;
+            
+            // Create a section in the response specifically for style information
+            figmaDataAny.styleReferences = {
+              // Group styles by type
+              fills: stylesData.paintStyles.map(style => ({
+                name: style.name,
+                key: style.key,
+                description: style.description || ""
+              })),
+              text: stylesData.textStyles.map(style => ({
+                name: style.name,
+                key: style.key,
+                description: style.description || ""
+              })),
+              effects: stylesData.effectStyles.map(style => ({
+                name: style.name,
+                key: style.key,
+                description: style.description || ""
+              })),
+              grids: stylesData.gridStyles.map(style => ({
+                name: style.name,
+                key: style.key,
+                description: style.description || ""
+              }))
+            };
+            
+            // Create a mapping section to show which style variables map to named styles
+            if (figmaDataAny.globalVars && figmaDataAny.globalVars.styleInfo) {
+              figmaDataAny.styleMapping = Object.entries(figmaDataAny.globalVars.styleInfo)
+                .filter(([_, info]: [string, any]) => info.name) // Only include entries with style names
+                .reduce((acc: Record<string, any>, [varId, info]: [string, any]) => {
+                  acc[varId] = {
+                    styleName: info.name,
+                    // Don't include the full value to keep the response size reasonable
+                    valuePreview: typeof info.value === 'object' ? '[Style Object]' : info.value
+                  };
+                  return acc;
+                }, {});
+            }
+            
+            // Reassign back to figmaData to use in the response
+            figmaData = figmaDataAny;
+          }
 
           return {
-            content: [{ type: "text", text: resultJson }],
+            content: [{ type: "text", text: JSON.stringify(figmaData) }],
           };
         } catch (error) {
-          Logger.error(`Error fetching file ${fileKey}:`, error);
+          Logger.error("Error fetching Figma data:", error);
           return {
             isError: true,
-            content: [{ type: "text", text: `Error fetching file: ${error}` }],
+            content: [{ type: "text", text: `Error: ${error}` }],
           };
         }
-      },
+      }
     );
 
     // TODO: Clean up all image download related code, particularly getImages in Figma service
