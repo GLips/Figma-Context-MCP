@@ -25,7 +25,7 @@
 
 <br/>
 
-Give [Cursor](https://cursor.sh/), [Windsurf](https://codeium.com/windsurf), [Cline](https://cline.bot/), and other AI-powered coding tools access to your Figma files with this [Model Context Protocol](https://modelcontextprotocol.io/introduction) server.
+Give [Cursor](https://cursor.sh/), [Windsurf](https://codeium.com/windsurf), [VS Code](https://code.visualstudio.com/), [Cline](https://cline.bot/), and other AI-powered coding tools access to your Figma files with this [Model Context Protocol](https://modelcontextprotocol.io/introduction) server.
 
 When Cursor has access to Figma design data, it's **way** better at one-shotting designs accurately than alternative approaches like pasting screenshots.
 
@@ -39,10 +39,10 @@ When Cursor has access to Figma design data, it's **way** better at one-shotting
 
 ## How it works
 
-1. Open your IDE's chat (e.g. agent mode in Cursor).
+1. Open your IDE's chat (e.g. agent mode in Cursor or VS Code).
 2. Paste a link to a Figma file, frame, or group.
-3. Ask Cursor to do something with the Figma file—e.g. implement the design.
-4. Cursor will fetch the relevant metadata from Figma and use it to write your code.
+3. Ask Cursor/VS Code to do something with the Figma file—e.g. implement the design.
+4. Cursor/VS Code will fetch the relevant metadata from Figma and use it to write your code.
 
 This MCP server is specifically designed for use with Cursor. Before responding with context from the [Figma API](https://www.figma.com/developers/api), it simplifies and translates the response so only the most relevant layout and styling information is provided to the model.
 
@@ -77,6 +77,66 @@ The `figma-developer-mcp` server can be configured by adding the following to yo
     "Framelink Figma MCP": {
       "command": "cmd",
       "args": ["/c", "npx", "-y", "figma-developer-mcp", "--figma-api-key=YOUR-KEY", "--stdio"]
+    }
+  }
+}
+```
+
+### VS Code Installation
+
+For one-click installation, click one of the install buttons below:
+
+[![Install with NPX in VS Code](https://img.shields.io/badge/VS_Code-NPM-0098FF?style=flat-square&logo=visualstudiocode&logoColor=white)](https://insiders.vscode.dev/redirect/mcp/install?name=figma&config=%7B%22command%22%3A%22npx%22%2C%22args%22%3A%5B%22-y%22%2C%22figma-developer-mcp%22%5D%2C%22env%22%3A%7B%22FIGMA_API_KEY%22%3A%22%24%7Binput%3AfigmaApiKey%7D%22%7D%7D&inputs=%5B%7B%22type%22%3A%22promptString%22%2C%22id%22%3A%22figmaApiKey%22%2C%22description%22%3A%22Figma+API+Key%22%2C%22password%22%3Atrue%7D%5D) [![Install with NPX in VS Code Insiders](https://img.shields.io/badge/VS_Code_Insiders-NPM-24bfa5?style=flat-square&logo=visualstudiocode&logoColor=white)](https://insiders.vscode.dev/redirect/mcp/install?name=figma&config=%7B%22command%22%3A%22npx%22%2C%22args%22%3A%5B%22-y%22%2C%22figma-developer-mcp%22%5D%2C%22env%22%3A%7B%22FIGMA_API_KEY%22%3A%22%24%7Binput%3AfigmaApiKey%7D%22%7D%7D&inputs=%5B%7B%22type%22%3A%22promptString%22%2C%22id%22%3A%22figmaApiKey%22%2C%22description%22%3A%22Figma+API+Key%22%2C%22password%22%3Atrue%7D%5D&quality=insiders)
+
+### Manual Installation
+
+You can click the install buttons at the top of this section for quick installation. For manual installation, follow these steps:
+
+Add the following JSON block to your User Settings (JSON) file in VS Code. You can do this by pressing `Ctrl + Shift + P` and typing `Preferences: Open User Settings (JSON)`.
+
+```json
+{
+  "mcp": {
+    "inputs": [
+      {
+        "type": "promptString",
+        "id": "figmaApiKey",
+        "description": "Figma API Key",
+        "password": true
+      }
+    ],
+    "servers": {
+      "figma": {
+        "command": "npx",
+        "args": ["-y", "figma-developer-mcp"],
+        "env": {
+          "FIGMA_API_KEY": "${input:figmaApiKey}"
+        }
+      }
+    }
+  }
+}
+```
+
+Optionally, you can add it to a file called `.vscode/mcp.json` in your workspace:
+
+```json
+{
+  "inputs": [
+    {
+      "type": "promptString",
+      "id": "figmaApiKey", 
+      "description": "Figma API Key",
+      "password": true
+    }
+  ],
+  "servers": {
+    "figma": {
+      "command": "npx",
+      "args": ["-y", "figma-developer-mcp"],
+      "env": {
+        "FIGMA_API_KEY": "${input:figmaApiKey}"
+      }
     }
   }
 }
