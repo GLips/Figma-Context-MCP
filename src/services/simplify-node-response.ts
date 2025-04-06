@@ -1,4 +1,4 @@
-import { SimplifiedLayout, buildSimplifiedLayout } from "~/transformers/layout";
+import { SimplifiedLayout, buildSimplifiedLayout } from "~/transformers/layout.js";
 import type {
   GetFileNodesResponse,
   Node as FigmaDocumentNode,
@@ -6,12 +6,12 @@ import type {
   Vector,
   GetFileResponse,
 } from "@figma/rest-api-spec";
-import { hasValue, isRectangleCornerRadii, isTruthy } from "~/utils/identity";
-import { removeEmptyKeys, generateVarId, StyleId, parsePaint, isVisible } from "~/utils/common";
-import { buildSimplifiedStrokes, SimplifiedStroke } from "~/transformers/style";
-import { buildSimplifiedEffects, SimplifiedEffects } from "~/transformers/effects";
+import { hasValue, isRectangleCornerRadii, isTruthy } from "~/utils/identity.js";
+import { removeEmptyKeys, generateVarId, StyleId, parsePaint, isVisible } from "~/utils/common.js";
+import { buildSimplifiedStrokes, SimplifiedStroke } from "~/transformers/style.js";
+import { buildSimplifiedEffects, SimplifiedEffects } from "~/transformers/effects.js";
 /**
- * TDOO ITEMS
+ * TODO ITEMS
  *
  * - Improve layout handling—translate from Figma vocabulary to CSS
  * - Pull image fills/vectors out to top level for better AI visibility

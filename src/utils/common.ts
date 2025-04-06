@@ -1,9 +1,8 @@
-import axios from "axios";
 import fs from "fs";
 import path from "path";
 
 import type { Paint, RGBA } from "@figma/rest-api-spec";
-import { CSSHexColor, CSSRGBAColor, SimplifiedFill } from "~/services/simplify-node-response";
+import { CSSHexColor, CSSRGBAColor, SimplifiedFill } from "~/services/simplify-node-response.js";
 
 export type StyleId = `${string}_${string}` & { __brand: "StyleId" };
 
@@ -34,31 +33,51 @@ export async function downloadFigmaImage(
     // Build the complete file path
     const fullPath = path.join(localPath, fileName);
 
-    // Use axios to download the image, set responseType to stream
-    const response = await axios({
+    // Use fetch to download the image
+    const response = await fetch(imageUrl, {
       method: "GET",
-      url: imageUrl,
-      responseType: "stream",
-      timeout: 30000, // 30 seconds timeout
     });
+
+    if (!response.ok) {
+      throw new Error(`Failed to download image: ${response.statusText}`);
+    }
 
     // Create write stream
     const writer = fs.createWriteStream(fullPath);
 
-    // Pipe response stream to file stream
-    response.data.pipe(writer);
+    // Get the response as a readable stream and pipe it to the file
+    const reader = response.body?.getReader();
+    if (!reader) {
+      throw new Error("Failed to get response body");
+    }
 
-    // Return a Promise that resolves when writing is complete
     return new Promise((resolve, reject) => {
-      writer.on("finish", () => {
-        resolve(fullPath);
+      // Process stream
+      const processStream = async () => {
+        try {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) {
+              writer.end();
+              break;
+            }
+            writer.write(value);
+          }
+          resolve(fullPath);
+        } catch (err) {
+          writer.end();
+          fs.unlink(fullPath, () => {});
+          reject(err);
+        }
+      };
+
+      writer.on("error", (err) => {
+        reader.cancel();
+        fs.unlink(fullPath, () => {});
+        reject(new Error(`Failed to write image: ${err.message}`));
       });
 
-      writer.on("error", (err: Error) => {
-        // Delete partially downloaded file
-        fs.unlink(fullPath, () => {});
-        reject(new Error(`Failed to download image: ${err.message}`));
-      });
+      processStream();
     });
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);

@@ -1,11 +1,11 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { FigmaService } from "./services/figma";
+import { FigmaService } from "./services/figma.js";
 import express, { Request, Response } from "express";
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
-import { IncomingMessage, ServerResponse } from "http";
+import { IncomingMessage, ServerResponse, Server } from "http";
 import { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
-import { SimplifiedDesign } from "./services/simplify-node-response";
+import { SimplifiedDesign } from "./services/simplify-node-response.js";
 import yaml from "js-yaml";
 
 export const Logger = {
@@ -16,14 +16,15 @@ export const Logger = {
 export class FigmaMcpServer {
   private readonly server: McpServer;
   private readonly figmaService: FigmaService;
-  private sseTransport: SSEServerTransport | null = null;
+  private transports: { [sessionId: string]: SSEServerTransport } = {};
+  private httpServer: Server | null = null;
 
   constructor(figmaApiKey: string) {
     this.figmaService = new FigmaService(figmaApiKey);
     this.server = new McpServer(
       {
         name: "Figma MCP Server",
-        version: "0.1.8",
+        version: "0.1.14",
       },
       {
         capabilities: {
@@ -65,9 +66,7 @@ export class FigmaMcpServer {
           Logger.log(
             `Fetching ${
               depth ? `${depth} layers deep` : "all layers"
-            } of ${nodeId ? `node ${nodeId} from file` : `full file`} ${fileKey} at depth: ${
-              depth ?? "all layers"
-            }`,
+            } of ${nodeId ? `node ${nodeId} from file` : `full file`} ${fileKey}`,
           );
 
           let file: SimplifiedDesign;
@@ -92,9 +91,11 @@ export class FigmaMcpServer {
             content: [{ type: "text", text: yamlResult }],
           };
         } catch (error) {
-          Logger.error(`Error fetching file ${fileKey}:`, error);
+          const message = error instanceof Error ? error.message : JSON.stringify(error);
+          Logger.error(`Error fetching file ${fileKey}:`, message);
           return {
-            content: [{ type: "text", text: `Error fetching file: ${error}` }],
+            isError: true,
+            content: [{ type: "text", text: `Error fetching file: ${message}` }],
           };
         }
       },
@@ -125,7 +126,7 @@ export class FigmaMcpServer {
         localPath: z
           .string()
           .describe(
-            "The absolute path to the directory where images are stored in the project. Automatically creates directories if needed.",
+            "The absolute path to the directory where images are stored in the project. If the directory does not exist, it will be created. The format of this path should respect the directory format of the operating system you are running on. Don't use any special character escaping in the path name either.",
           ),
       },
       async ({ fileKey, nodes, localPath }) => {
@@ -166,6 +167,7 @@ export class FigmaMcpServer {
         } catch (error) {
           Logger.error(`Error downloading images from file ${fileKey}:`, error);
           return {
+            isError: true,
             content: [{ type: "text", text: `Error downloading images: ${error}` }],
           };
         }
@@ -197,33 +199,60 @@ export class FigmaMcpServer {
     const app = express();
 
     app.get("/sse", async (req: Request, res: Response) => {
-      console.log("New SSE connection established");
-      this.sseTransport = new SSEServerTransport(
+      console.log("Establishing new SSE connection");
+      const transport = new SSEServerTransport(
         "/messages",
         res as unknown as ServerResponse<IncomingMessage>,
       );
-      await this.server.connect(this.sseTransport);
+      console.log(`New SSE connection established for sessionId ${transport.sessionId}`);
+
+      this.transports[transport.sessionId] = transport;
+      res.on("close", () => {
+        delete this.transports[transport.sessionId];
+      });
+
+      await this.server.connect(transport);
     });
 
     app.post("/messages", async (req: Request, res: Response) => {
-      if (!this.sseTransport) {
-        // @ts-expect-error Not sure why Express types aren't working
-        res.sendStatus(400);
+      const sessionId = req.query.sessionId as string;
+      if (!this.transports[sessionId]) {
+        res.status(400).send(`No transport found for sessionId ${sessionId}`);
         return;
       }
-      await this.sseTransport.handlePostMessage(
-        req as unknown as IncomingMessage,
-        res as unknown as ServerResponse<IncomingMessage>,
-      );
+      console.log(`Received message for sessionId ${sessionId}`);
+      await this.transports[sessionId].handlePostMessage(req, res);
     });
 
     Logger.log = console.log;
     Logger.error = console.error;
 
-    app.listen(port, () => {
+    this.httpServer = app.listen(port, () => {
       Logger.log(`HTTP server listening on port ${port}`);
       Logger.log(`SSE endpoint available at http://localhost:${port}/sse`);
       Logger.log(`Message endpoint available at http://localhost:${port}/messages`);
+    });
+  }
+
+  async stopHttpServer(): Promise<void> {
+    if (!this.httpServer) {
+      throw new Error("HTTP server is not running");
+    }
+
+    return new Promise((resolve, reject) => {
+      this.httpServer!.close((err: Error | undefined) => {
+        if (err) {
+          reject(err);
+          return;
+        }
+        this.httpServer = null;
+        const closing = Object.values(this.transports).map((transport) => {
+          return transport.close();
+        });
+        Promise.all(closing).then(() => {
+          resolve();
+        });
+      });
     });
   }
 }

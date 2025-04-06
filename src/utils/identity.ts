@@ -5,8 +5,7 @@ import type {
   HasFramePropertiesTrait,
 } from "@figma/rest-api-spec";
 import { isTruthy } from "remeda";
-import { CSSHexColor } from "~/services/simplify-node-response";
-import { CSSRGBAColor } from "~/services/simplify-node-response";
+import { CSSHexColor, CSSRGBAColor } from "~/services/simplify-node-response.js";
 
 export { isTruthy };
 
