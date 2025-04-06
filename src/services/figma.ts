@@ -8,6 +8,7 @@ import type {
 } from "@figma/rest-api-spec";
 import { downloadFigmaImage } from "~/utils/common.js";
 import { Logger } from "~/server.js";
+import yaml from "js-yaml";
 
 export interface FigmaError {
   status: number;
@@ -141,8 +142,8 @@ export class FigmaService {
       const response = await this.request<GetFileResponse>(endpoint);
       Logger.log("Got response");
       const simplifiedResponse = parseFigmaResponse(response);
-      writeLogs("figma-raw.json", response);
-      writeLogs("figma-simplified.json", simplifiedResponse);
+      writeLogs("figma-raw.yml", response);
+      writeLogs("figma-simplified.yml", simplifiedResponse);
       return simplifiedResponse;
     } catch (e) {
       console.error("Failed to get file:", e);
@@ -154,9 +155,9 @@ export class FigmaService {
     const endpoint = `/files/${fileKey}/nodes?ids=${nodeId}${depth ? `&depth=${depth}` : ""}`;
     const response = await this.request<GetFileNodesResponse>(endpoint);
     Logger.log("Got response from getNode, now parsing.");
-    writeLogs("figma-raw.json", response);
+    writeLogs("figma-raw.yml", response);
     const simplifiedResponse = parseFigmaResponse(response);
-    writeLogs("figma-simplified.json", simplifiedResponse);
+    writeLogs("figma-simplified.yml", simplifiedResponse);
     return simplifiedResponse;
   }
 }
@@ -177,7 +178,7 @@ function writeLogs(name: string, value: any) {
     if (!fs.existsSync(logsDir)) {
       fs.mkdirSync(logsDir);
     }
-    fs.writeFileSync(`${logsDir}/${name}`, JSON.stringify(value, null, 2));
+    fs.writeFileSync(`${logsDir}/${name}`, yaml.dump(value));
   } catch (error) {
     console.debug("Failed to write logs:", error);
   }

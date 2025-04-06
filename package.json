@@ -1,6 +1,6 @@
 {
   "name": "figma-developer-mcp",
-  "version": "0.1.14",
+  "version": "0.1.15",
   "description": "Model Context Protocol server for Figma integration",
   "type": "module",
   "main": "dist/index.js",
