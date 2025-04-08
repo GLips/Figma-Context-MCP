@@ -45,7 +45,8 @@ type StyleTypes =
   | SimplifiedStroke
   | SimplifiedEffects
   | string;
-type GlobalVars = {
+
+export type GlobalVars = {
   styles: Record<StyleId, StyleTypes>;
 };
 export interface SimplifiedDesign {
