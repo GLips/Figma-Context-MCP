@@ -78,9 +78,10 @@ export class FigmaMcpServer {
           }
 
           Logger.log(`Successfully fetched file: ${file.name}`);
-          const { nodes, globalVars, ...metadata } = compress(file);
+          const { nodes, globalVars, hierarchy, ...metadata } = compress(file);
 
           const result = {
+            hierarchy,
             metadata,
             nodes,
             globalVars,

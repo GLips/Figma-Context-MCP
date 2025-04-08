@@ -1,12 +1,5 @@
-import { StyleId } from '~/utils/common.js';
-import { SimplifiedNode, GlobalVars, SimplifiedDesign } from '~/services/simplify-node-response.js';
-
-interface Result {
-  shortenedNodes: SimplifiedNode[];
-  shortenedGlobalVars: GlobalVars;
-  idMap: Record<StyleId, string>; // Map from original long ID to new short ID
-  prefixMap: Record<string, string>; // Map from generated short prefix to original prefix
-}
+import { StyleId } from "~/utils/common.js";
+import { SimplifiedNode, GlobalVars, SimplifiedDesign } from "~/services/simplify-node-response.js";
 
 // Regular expression to match and capture the prefix of Figma style IDs
 const idPattern = /^([a-zA-Z]+)_([a-zA-Z0-9]+)$/;
@@ -15,9 +8,12 @@ export function compress(file: SimplifiedDesign): SimplifiedDesign {
   const { nodes, globalVars } = file;
   const { shortenedNodes, shortenedGlobalVars } = shortenGlobalVarIds(nodes, globalVars);
 
+  const { hierarchy, nodes: flattenedNodes } = flattenNodes(shortenedNodes);
+
   return {
     ...file,
-    nodes: shortenedNodes,
+    hierarchy,
+    nodes: flattenedNodes,
     globalVars: shortenedGlobalVars,
   };
 }
@@ -34,7 +30,12 @@ export function compress(file: SimplifiedDesign): SimplifiedDesign {
 export function shortenGlobalVarIds(
   nodes: SimplifiedNode[],
   globalVars: GlobalVars,
-): Result {
+): {
+  shortenedNodes: SimplifiedNode[];
+  shortenedGlobalVars: GlobalVars;
+  idMap: Record<StyleId, string>; // Map from original long ID to new short ID
+  prefixMap: Record<string, string>; // Map from generated short prefix to original prefix
+} {
   const idMap: Record<StyleId, string> = {};
   const shortenedGlobalVars: GlobalVars = { styles: {} };
   const counters: Record<string, number> = {};
@@ -69,24 +70,27 @@ export function shortenGlobalVarIds(
       }
 
       if (!generatedShortPrefix) {
-        generatedShortPrefix = originalLowerPrefix + '_fallback';
+        generatedShortPrefix = originalLowerPrefix + "_fallback";
         prefixMap[generatedShortPrefix] = originalLowerPrefix;
-         console.warn(`Could not generate unique short prefix for ${originalLowerPrefix}. Using fallback: ${generatedShortPrefix}`);
+        console.warn(
+          `Could not generate unique short prefix for ${originalLowerPrefix}. Using fallback: ${generatedShortPrefix}`,
+        );
       }
     } else {
-      generatedShortPrefix = 'unk';
+      generatedShortPrefix = "unk";
       if (!prefixMap[generatedShortPrefix]) {
-         prefixMap[generatedShortPrefix] = 'unknown';
+        prefixMap[generatedShortPrefix] = "unknown";
       }
-       console.warn(`Unexpected GlobalVar ID format: ${originalId}. Using fallback prefix: ${generatedShortPrefix}`);
+      console.warn(
+        `Unexpected GlobalVar ID format: ${originalId}. Using fallback prefix: ${generatedShortPrefix}`,
+      );
     }
 
     if (!(generatedShortPrefix in counters)) {
-        counters[generatedShortPrefix] = 0;
+      counters[generatedShortPrefix] = 0;
     }
     counters[generatedShortPrefix]++;
     shortId = `${generatedShortPrefix}${counters[generatedShortPrefix]}`;
-
 
     idMap[originalId as StyleId] = shortId;
     shortenedGlobalVars.styles[shortId as StyleId] = styleValue;
@@ -96,17 +100,17 @@ export function shortenGlobalVarIds(
     const newNode: SimplifiedNode = { ...node };
 
     const propertiesToUpdate: (keyof SimplifiedNode)[] = [
-      'fills',
-      'strokes',
-      'effects',
-      'layout',
-      'textStyle',
-      'styles', // Include 'styles' if it's used for referencing globalVars
+      "fills",
+      "strokes",
+      "effects",
+      "layout",
+      "textStyle",
+      "styles", // Include 'styles' if it's used for referencing globalVars
     ];
 
     for (const prop of propertiesToUpdate) {
       const originalValue = newNode[prop];
-      if (typeof originalValue === 'string' && originalValue in idMap) {
+      if (typeof originalValue === "string" && originalValue in idMap) {
         (newNode[prop] as string) = idMap[originalValue as StyleId];
       }
     }
@@ -125,5 +129,56 @@ export function shortenGlobalVarIds(
     shortenedGlobalVars,
     idMap,
     prefixMap,
+  };
+}
+
+
+/**
+ * Flattens the nodes into a hierarchy string and returns the flattened nodes.
+ * the format of the hierarchy string is:
+ * root1_id(child1_id(grandchild1_id(greatgrandchild1_id,greatgrandchild2_id(leaf1_id,leaf2_id)),grandchild2_id))
+ *
+ * @param nodes - The array of simplified nodes.
+ * @returns An object containing the hierarchy string and the flattened nodes.
+ */
+interface TreeNode {
+  id: string;
+  children?: this[];
+}
+
+export function flattenNodes<T extends TreeNode>(
+  nodes: T[],
+): {
+  hierarchy: string;
+  nodes: Omit<T, "children">[];
+} {
+  const flattened: Omit<T, "children">[] = [];
+
+  function buildPath(node: T): string {
+    const { children, ...nodeWithoutChildren } = node;
+
+    flattened.push(nodeWithoutChildren);
+
+    if (!children?.length) {
+      return node.id;
+    }
+
+    const childPaths = children.map(buildPath);
+    return `${node.id}(${childPaths.join(",")})`;
+  }
+
+  const hierarchy = nodes.map(buildPath).join(",");
+
+
+  const hierarchyText = `The hierarchy string represents the complete node structure in a compact format.
+  Each node ID is followed by its children in parentheses, creating a nested representation
+  that preserves the original hierarchy while eliminating the need for redundant node objects.
+  This format allows for efficient reconstruction of the tree structure when needed.
+  the format of the hierarchy string is: root1_id(child1_id(grandchild1_id(greatgrandchild1_id,greatgrandchild2_id(leaf1_id,leaf2_id)),grandchild2_id))
+  the hierarchy data is: ${hierarchy}`;
+
+  return {
+    hierarchy: hierarchyText,
+    nodes: flattened,
   };
 }
