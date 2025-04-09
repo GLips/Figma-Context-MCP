@@ -7,6 +7,7 @@ import { IncomingMessage, ServerResponse, Server } from "http";
 import { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { SimplifiedDesign } from "./services/simplify-node-response.js";
 import yaml from "js-yaml";
+import { compress } from "./utils/compressor.js";
 
 export const Logger = {
   log: (...args: any[]) => {},
@@ -77,9 +78,10 @@ export class FigmaMcpServer {
           }
 
           Logger.log(`Successfully fetched file: ${file.name}`);
-          const { nodes, globalVars, ...metadata } = file;
+          const { nodes, globalVars, hierarchy, ...metadata } = compress(file);
 
           const result = {
+            hierarchy,
             metadata,
             nodes,
             globalVars,
