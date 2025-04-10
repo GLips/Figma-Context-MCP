@@ -1,0 +1,34 @@
+# Node modules (we'll install fresh in the image)
+node_modules
+npm-debug.log
+yarn-error.log
+
+# Logs
+logs
+*.log
+
+# Environment files (optional for security)
+.env
+.env.* 
+
+# OS & editor junk
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.idea
+.vscode
+
+# Test coverage / build artifacts
+coverage
+dist
+build
+tmp
+.cache
+
+# Git
+.git
+.gitignore
+
+# Dockerignore itself (not needed inside the image)
+.dockerignore
