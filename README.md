@@ -7,6 +7,12 @@
 
 <div align="center">
   <h1>Framelink Figma MCP Server</h1>
+  <p>
+    🌐 Available in:
+    <a href="README.ko.md">한국어 (Korean)</a> |
+    <a href="README.ja.md">日本語 (Japanese)</a> |
+    <a href="README.zh.md">中文 (Chinese)</a>
+  </p>
   <h3>Give your coding agent access to your Figma data.<br/>Implement designs in any framework in one-shot.</h3>
   <a href="https://npmcharts.com/compare/figma-developer-mcp?interval=30">
     <img alt="weekly downloads" src="https://img.shields.io/npm/dm/figma-developer-mcp.svg">
