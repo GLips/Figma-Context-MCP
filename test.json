@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "docbase-mcp-server": {
+      "command": "./server.sh",
+      "env": {
+        "DOMAIN": "<YOUR_DOMAIN>",
+        "TOKEN": "<YOUR_TOKEN>"
+      }
+    }
+  }
+}
