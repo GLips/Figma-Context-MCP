@@ -88,6 +88,8 @@
 }
 ```
 
+或者您可以在 `env` 字段中设置 `FIGMA_API_KEY` 和 `PORT`。
+
 有关如何配置 Framelink Figma MCP 服务器的更多信息，请参阅 [Framelink 文档](https://www.framelink.ai/docs/quickstart?utm_source=github&utm_medium=readme&utm_campaign=readme)。
 
 ## 星标历史

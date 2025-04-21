@@ -88,6 +88,8 @@ The `figma-developer-mcp` server can be configured by adding the following to yo
 }
 ```
 
+Or you can set `FIGMA_API_KEY` and `PORT` in the `env` field.
+
 If you need more information on how to configure the Framelink Figma MCP server, see the [Framelink docs](https://www.framelink.ai/docs/quickstart?utm_source=github&utm_medium=referral&utm_campaign=readme).
 
 ## Star History

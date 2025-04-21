@@ -88,6 +88,8 @@ Cursor가 Figma 디자인 데이터에 접근할 수 있을 때, 스크린샷을
 }
 ```
 
+또는 `env` 필드에 `FIGMA_API_KEY`와 `PORT`를 넣을 수 있습니다.
+
 Framelink Figma MCP 서버를 구성하는 방법에 대한 자세한 정보가 필요하면 [Framelink 문서](https://www.framelink.ai/docs/quickstart?utm_source=github&utm_medium=readme&utm_campaign=readme)를 참조하세요.
 
 ## 스타 히스토리

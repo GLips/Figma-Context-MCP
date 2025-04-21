@@ -88,6 +88,8 @@ CursorがFigmaデザインデータにアクセスできる場合、スクリー
 }
 ```
 
+または `env` フィールドに `FIGMA_API_KEY` と `PORT` を設定することもできます。
+
 Framelink Figma MCPサーバーの設定方法の詳細については、[Framelinkドキュメント](https://www.framelink.ai/docs/quickstart?utm_source=github&utm_medium=readme&utm_campaign=readme)を参照してください。
 
 ## スター履歴
