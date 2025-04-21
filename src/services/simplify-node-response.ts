@@ -10,6 +10,7 @@ import { hasValue, isRectangleCornerRadii, isTruthy } from "~/utils/identity.js"
 import { removeEmptyKeys, generateVarId, StyleId, parsePaint, isVisible } from "~/utils/common.js";
 import { buildSimplifiedStrokes, SimplifiedStroke } from "~/transformers/style.js";
 import { buildSimplifiedEffects, SimplifiedEffects } from "~/transformers/effects.js";
+import { mapValues } from "remeda";
 /**
  * TODO ITEMS
  *
@@ -68,6 +69,7 @@ export interface SimplifiedNode {
   // appearance
   fills?: string;
   styles?: string;
+  extraStyles?: Record<string, unknown>;
   strokes?: string;
   effects?: string;
   opacity?: number;
@@ -114,15 +116,20 @@ export interface ColorValue {
 // ---------------------- PARSING ----------------------
 export function parseFigmaResponse(data: GetFileResponse | GetFileNodesResponse): SimplifiedDesign {
   const { name, lastModified, thumbnailUrl } = data;
-  let nodes: FigmaDocumentNode[];
-  if ("document" in data) {
-    nodes = Object.values(data.document.children);
-  } else {
-    nodes = Object.values(data.nodes).map((n) => n.document);
-  }
+
   let globalVars: GlobalVars = {
     styles: {},
   };
+
+  let nodes: FigmaDocumentNode[];
+  if ("document" in data) {
+    nodes = Object.values(data.document.children);
+    globalVars.styles = data.styles as any;
+  } else {
+    nodes = Object.values(data.nodes).map((n) => n.document);
+    globalVars.styles = Object.assign({}, ...Object.values(data.nodes).map((n) => n.styles));
+  }
+
   const simplifiedNodes: SimplifiedNode[] = nodes
     .filter(isVisible)
     .map((n) => parseNode(globalVars, n))
@@ -212,6 +219,15 @@ function parseNode(
       textAlignVertical: style.textAlignVertical,
     };
     simplified.textStyle = findOrCreateVar(globalVars, textStyle, "style");
+  }
+
+  if (hasValue("styles", n)) {
+    const styles = n.styles as Record<string, StyleId>;
+
+    simplified.extraStyles = mapValues(styles, (nodeId) => {
+      const style = globalVars.styles[nodeId];
+      return hasValue("name", style) ? style.name : style;
+    });
   }
 
   // fills & strokes
