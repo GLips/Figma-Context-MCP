@@ -18,9 +18,9 @@ const serverOptions = {
 export class FigmaMcpServer extends McpServer {
   private readonly figmaService: FigmaService;
 
-  constructor(figmaApiKey: string) {
+  constructor(figmaApiKey: string, figmaOAuthToken?: string, useOAuth?: boolean) {
     super(serverInfo, serverOptions);
-    this.figmaService = new FigmaService(figmaApiKey);
+    this.figmaService = new FigmaService(figmaApiKey, figmaOAuthToken, useOAuth);
     // this.server = new McpServer(this.serverInfo, this.serverOptions);
 
     this.registerTools();

@@ -16,7 +16,11 @@ export async function startServer(): Promise<void> {
 
   const config = getServerConfig(isStdioMode);
 
-  const server = new FigmaMcpServer(config.figmaApiKey);
+  const server = new FigmaMcpServer(
+    config.figmaApiKey, 
+    config.figmaOAuthToken, 
+    config.useOAuth
+  );
 
   if (isStdioMode) {
     const transport = new StdioServerTransport();
