@@ -5,6 +5,7 @@ import type {
   Paint,
   Vector,
   GetFileResponse,
+  ComponentPropertyType,
 } from "@figma/rest-api-spec";
 import { hasValue, isRectangleCornerRadii, isTruthy } from "~/utils/identity.js";
 import { removeEmptyKeys, generateVarId, StyleId, parsePaint, isVisible } from "~/utils/common.js";
@@ -48,12 +49,19 @@ type StyleTypes =
 type GlobalVars = {
   styles: Record<StyleId, StyleTypes>;
 };
+
 export interface SimplifiedDesign {
   name: string;
   lastModified: string;
   thumbnailUrl: string;
   nodes: SimplifiedNode[];
   globalVars: GlobalVars;
+}
+
+export interface ComponentProperties {
+  name: string;
+  value: string;
+  type: ComponentPropertyType;
 }
 
 export interface SimplifiedNode {
@@ -78,6 +86,7 @@ export interface SimplifiedNode {
   // for rect-specific strokes, etc.
   // children
   children?: SimplifiedNode[];
+  componentProperties?: ComponentProperties[];
 }
 
 export interface BoundingBox {
@@ -265,6 +274,14 @@ function parseNode(
     if (children.length) {
       simplified.children = children;
     }
+  }
+
+  if (type === "INSTANCE" && hasValue("componentProperties", n)) {
+    simplified.componentProperties = Object.entries(n?.componentProperties ?? {}).map(([name, { value, type }]) => ({
+      name,
+      value: value.toString(),
+      type,
+    }));
   }
 
   // Convert VECTOR to IMAGE
