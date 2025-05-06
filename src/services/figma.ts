@@ -103,12 +103,13 @@ export class FigmaService {
     fileKey: string,
     nodes: FetchImageParams[],
     localPath: string,
+    scale: number = 2,
   ): Promise<string[]> {
     const pngIds = nodes.filter(({ fileType }) => fileType === "png").map(({ nodeId }) => nodeId);
     const pngFiles =
       pngIds.length > 0
         ? this.request<GetImagesResponse>(
-            `/images/${fileKey}?ids=${pngIds.join(",")}&scale=2&format=png`,
+            `/images/${fileKey}?ids=${pngIds.join(",")}&scale=${scale}&format=png`,
           ).then(({ images = {} }) => images)
         : ({} as GetImagesResponse["images"]);
 

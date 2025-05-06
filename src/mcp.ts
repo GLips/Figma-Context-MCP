@@ -112,13 +112,14 @@ function registerTools(server: McpServer, figmaService: FigmaService): void {
         })
         .array()
         .describe("The nodes to fetch as images"),
+        scale: z.number().positive().optional().describe("Export scale, no use for SVG"),
       localPath: z
         .string()
         .describe(
           "The absolute path to the directory where images are stored in the project. If the directory does not exist, it will be created. The format of this path should respect the directory format of the operating system you are running on. Don't use any special character escaping in the path name either.",
         ),
     },
-    async ({ fileKey, nodes, localPath }) => {
+    async ({ fileKey, nodes, scale, localPath }) => {
       try {
         const imageFills = nodes.filter(({ imageRef }) => !!imageRef) as {
           nodeId: string;
@@ -134,7 +135,7 @@ function registerTools(server: McpServer, figmaService: FigmaService): void {
             fileType: fileName.endsWith(".svg") ? ("svg" as const) : ("png" as const),
           }));
 
-        const renderDownloads = figmaService.getImages(fileKey, renderRequests, localPath);
+        const renderDownloads = figmaService.getImages(fileKey, renderRequests, localPath, scale);
 
         const downloads = await Promise.all([fillDownloads, renderDownloads]).then(([f, r]) => [
           ...f,
