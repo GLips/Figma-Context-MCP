@@ -92,6 +92,40 @@ Or you can set `FIGMA_API_KEY` and `PORT` in the `env` field.
 
 If you need more information on how to configure the Framelink Figma MCP server, see the [Framelink docs](https://www.framelink.ai/docs/quickstart?utm_source=github&utm_medium=referral&utm_campaign=readme).
 
+## Pagination for Large Figma Files
+
+When working with large Figma files that exceed token limits in AI models, you can use pagination:
+
+```
+get_figma_data:
+  fileKey: "YOUR_FILE_KEY"
+  page: 1
+  pageSize: 100
+  includeMetadata: true
+```
+
+For subsequent pages, you can set `includeMetadata: false` to reduce response size:
+
+```
+get_figma_data:
+  fileKey: "YOUR_FILE_KEY"
+  page: 2
+  pageSize: 100
+  includeMetadata: false
+```
+
+The response includes pagination metadata so you can fetch all pages:
+
+```yaml
+metadata:
+  pagination:
+    page: 1
+    pageSize: 100
+    totalNodes: 523
+    totalPages: 6
+    hasNextPage: true
+```
+
 ## Star History
 
 <a href="https://star-history.com/#GLips/Figma-Context-MCP"><img src="https://api.star-history.com/svg?repos=GLips/Figma-Context-MCP&type=Date" alt="Star History Chart" width="600" /></a>

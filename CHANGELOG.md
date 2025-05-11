@@ -1,5 +1,12 @@
 # figma-developer-mcp
 
+## 0.2.3
+
+### Minor Changes
+
+- Add pagination support to handle large Figma files that exceed token limits
+- Add documentation for pagination features
+
 ## 0.2.2
 
 ### Patch Changes

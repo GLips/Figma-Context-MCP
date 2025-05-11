@@ -7,7 +7,7 @@ import { Logger } from "./utils/logger.js";
 
 const serverInfo = {
   name: "Figma MCP Server",
-  version: "0.2.1",
+  version: "0.2.3",
 };
 
 const serverOptions = {
@@ -47,13 +47,34 @@ function registerTools(server: McpServer, figmaService: FigmaService): void {
         .describe(
           "How many levels deep to traverse the node tree, only use if explicitly requested by the user",
         ),
+      page: z
+        .number()
+        .optional()
+        .default(1)
+        .describe(
+          "Page number for paginated results, starting from 1",
+        ),
+      pageSize: z
+        .number()
+        .optional()
+        .default(100)
+        .describe(
+          "Number of nodes per page, default is 100",
+        ),
+      includeMetadata: z
+        .boolean()
+        .optional()
+        .default(true)
+        .describe(
+          "Whether to include metadata in the response, set to false for subsequent pages to reduce payload size",
+        ),
     },
-    async ({ fileKey, nodeId, depth }) => {
+    async ({ fileKey, nodeId, depth, page, pageSize, includeMetadata }) => {
       try {
         Logger.log(
           `Fetching ${
             depth ? `${depth} layers deep` : "all layers"
-          } of ${nodeId ? `node ${nodeId} from file` : `full file`} ${fileKey}`,
+          } of ${nodeId ? `node ${nodeId} from file` : `full file`} ${fileKey} (page ${page}, pageSize ${pageSize})`,
         );
 
         let file: SimplifiedDesign;
@@ -64,12 +85,40 @@ function registerTools(server: McpServer, figmaService: FigmaService): void {
         }
 
         Logger.log(`Successfully fetched file: ${file.name}`);
-        const { nodes, globalVars, ...metadata } = file;
+
+        // Calculate pagination
+        const allNodes = file.nodes;
+        const totalNodes = allNodes.length;
+        const totalPages = Math.ceil(totalNodes / pageSize);
+        const startIndex = (page - 1) * pageSize;
+        const endIndex = Math.min(startIndex + pageSize, totalNodes);
+        const paginatedNodes = allNodes.slice(startIndex, endIndex);
+
+        Logger.log(`Pagination: Showing nodes ${startIndex+1}-${endIndex} of ${totalNodes} (page ${page}/${totalPages})`);
 
         const result = {
-          metadata,
-          nodes,
-          globalVars,
+          metadata: includeMetadata ? {
+            ...file,
+            nodes: undefined,
+            globalVars: undefined,
+            pagination: {
+              page,
+              pageSize,
+              totalNodes,
+              totalPages,
+              hasNextPage: page < totalPages,
+            }
+          } : {
+            pagination: {
+              page,
+              pageSize,
+              totalNodes,
+              totalPages,
+              hasNextPage: page < totalPages,
+            }
+          },
+          nodes: paginatedNodes,
+          globalVars: file.globalVars,
         };
 
         Logger.log("Generating YAML result from file");
