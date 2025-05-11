@@ -51,8 +51,7 @@ function registerTools(server: McpServer, figmaService: FigmaService): void {
     async ({ fileKey, nodeId, depth }) => {
       try {
         Logger.log(
-          `Fetching ${
-            depth ? `${depth} layers deep` : "all layers"
+          `Fetching ${depth ? `${depth} layers deep` : "all layers"
           } of ${nodeId ? `node ${nodeId} from file` : `full file`} ${fileKey}`,
         );
 
@@ -87,6 +86,20 @@ function registerTools(server: McpServer, figmaService: FigmaService): void {
           content: [{ type: "text", text: `Error fetching file: ${message}` }],
         };
       }
+    },
+  );
+
+  server.tool(
+    "get_figma_variables",
+    "Get the variables from a Figma file",
+    {
+      fileKey: z.string().describe("The key of the Figma file to fetch"),
+    },
+    async ({ fileKey }) => {
+      const variables = await figmaService.getVariables(fileKey);
+      return {
+        content: [{ type: "text", text: JSON.stringify(variables) }],
+      };
     },
   );
 

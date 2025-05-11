@@ -9,6 +9,7 @@ import type {
 import { downloadFigmaImage } from "~/utils/common.js";
 import { Logger } from "~/utils/logger.js";
 import yaml from "js-yaml";
+import type { VariablesResponse } from "./variables-response.js";
 
 export interface FigmaError {
   status: number;
@@ -108,16 +109,16 @@ export class FigmaService {
     const pngFiles =
       pngIds.length > 0
         ? this.request<GetImagesResponse>(
-            `/images/${fileKey}?ids=${pngIds.join(",")}&scale=2&format=png`,
-          ).then(({ images = {} }) => images)
+          `/images/${fileKey}?ids=${pngIds.join(",")}&scale=2&format=png`,
+        ).then(({ images = {} }) => images)
         : ({} as GetImagesResponse["images"]);
 
     const svgIds = nodes.filter(({ fileType }) => fileType === "svg").map(({ nodeId }) => nodeId);
     const svgFiles =
       svgIds.length > 0
         ? this.request<GetImagesResponse>(
-            `/images/${fileKey}?ids=${svgIds.join(",")}&format=svg`,
-          ).then(({ images = {} }) => images)
+          `/images/${fileKey}?ids=${svgIds.join(",")}&format=svg`,
+        ).then(({ images = {} }) => images)
         : ({} as GetImagesResponse["images"]);
 
     const files = await Promise.all([pngFiles, svgFiles]).then(([f, l]) => ({ ...f, ...l }));
@@ -159,6 +160,12 @@ export class FigmaService {
     const simplifiedResponse = parseFigmaResponse(response);
     writeLogs("figma-simplified.yml", simplifiedResponse);
     return simplifiedResponse;
+  }
+
+  async getVariables(fileKey: string): Promise<VariablesResponse> {
+    const endpoint = `/files/${fileKey}/variables`;
+    const response = await this.request<VariablesResponse>(endpoint);
+    return response;
   }
 }
 
