@@ -1,4 +1,4 @@
-<a href="https://www.framelink.ai/?utm_source=github&utm_medium=readme&utm_campaign=readme" target="_blank" rel="noopener">
+<a href="https://www.framelink.ai/?utm_source=github&utm_medium=referral&utm_campaign=readme" target="_blank" rel="noopener">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="https://www.framelink.ai/github/HeaderDark.png" />
     <img alt="Framelink" src="https://www.framelink.ai/github/HeaderLight.png" />
@@ -7,6 +7,12 @@
 
 <div align="center">
   <h1>Framelink Figma MCP Server</h1>
+  <p>
+    🌐 Available in:
+    <a href="README.ko.md">한국어 (Korean)</a> |
+    <a href="README.ja.md">日本語 (Japanese)</a> |
+    <a href="README.zh.md">中文 (Chinese)</a>
+  </p>
   <h3>Give your coding agent access to your Figma data.<br/>Implement designs in any framework in one-shot.</h3>
   <a href="https://npmcharts.com/compare/figma-developer-mcp?interval=30">
     <img alt="weekly downloads" src="https://img.shields.io/npm/dm/figma-developer-mcp.svg">
@@ -25,11 +31,11 @@
 
 <br/>
 
-Give [Cursor](https://cursor.sh/), [Windsurf](https://codeium.com/windsurf), [Cline](https://cline.bot/), and other AI-powered coding tools access to your Figma files with this [Model Context Protocol](https://modelcontextprotocol.io/introduction) server.
+Give [Cursor](https://cursor.sh/) and other AI-powered coding tools access to your Figma files with this [Model Context Protocol](https://modelcontextprotocol.io/introduction) server.
 
 When Cursor has access to Figma design data, it's **way** better at one-shotting designs accurately than alternative approaches like pasting screenshots.
 
-<h3><a href="https://www.framelink.ai/docs/quickstart?utm_source=github&utm_medium=readme&utm_campaign=readme">See quickstart instructions →</a></h3>
+<h3><a href="https://www.framelink.ai/docs/quickstart?utm_source=github&utm_medium=referral&utm_campaign=readme">See quickstart instructions →</a></h3>
 
 ## Demo
 
@@ -82,7 +88,9 @@ The `figma-developer-mcp` server can be configured by adding the following to yo
 }
 ```
 
-If you need more information on how to configure the Framelink Figma MCP server, see the [Framelink docs](https://www.framelink.ai/docs/quickstart?utm_source=github&utm_medium=readme&utm_campaign=readme).
+Or you can set `FIGMA_API_KEY` and `PORT` in the `env` field.
+
+If you need more information on how to configure the Framelink Figma MCP server, see the [Framelink docs](https://www.framelink.ai/docs/quickstart?utm_source=github&utm_medium=referral&utm_campaign=readme).
 
 ## Star History
 
@@ -90,4 +98,50 @@ If you need more information on how to configure the Framelink Figma MCP server,
 
 ## Learn More
 
-The Framelink Figma MCP server is simple but powerful. Get the most out of it by learning more at the [Framelink](https://framelink.ai?utm_source=github&utm_medium=readme&utm_campaign=readme) site.
+The Framelink Figma MCP server is simple but powerful. Get the most out of it by learning more at the [Framelink](https://framelink.ai?utm_source=github&utm_medium=referral&utm_campaign=readme) site.
+
+<!-- SPONSORS:LIST:START -->
+<!-- prettier-ignore-start -->
+<!-- markdownlint-disable -->
+
+## Sponsors
+
+### 🥇 Gold Sponsors
+
+<table>
+  <tr>
+   <td align="center"><a href="https://framelink.ai/?ref=framelink-mcp&utm_source=github&utm_medium=referral&utm_campaign=framelink-mcp"><img src="https://avatars.githubusercontent.com/u/204619719" width="180" alt="Framelink"/><br />Framelink</a></td>
+  </tr>
+</table>
+
+### 🥈 Silver Sponsors
+
+<table>
+  <tr>
+   <!-- <td align="center"><a href=""><img src="" width="150" alt="tbd"/><br />Title</a></td> -->
+  </tr>
+</table>
+
+### 🥉 Bronze Sponsors
+
+<table>
+  <tr>
+   <!-- <td align="center"><a href=""><img src="" width="120" alt="tbd"/><br />tbd</a></td>-->
+  </tr>
+</table>
+
+### 😻 Smaller Backers
+
+<table>
+  <tr>
+   <!-- <td align="center"><a href=""><img src="" width="100" alt="tbd"/><br />tbd</a></td>-->
+  </tr>
+  <tr>
+   <!-- <td align="center"><a href=""><img src="" width="100" alt="tbd"/><br />tbd</a></td>-->
+  </tr>
+</table>
+
+<!-- markdownlint-restore -->
+<!-- prettier-ignore-end -->
+
+<!-- SPONSORS:LIST:END -->

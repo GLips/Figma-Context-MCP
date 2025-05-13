@@ -1,4 +1,4 @@
-import { SimplifiedLayout, buildSimplifiedLayout } from "~/transformers/layout.js";
+import { type SimplifiedLayout, buildSimplifiedLayout } from "~/transformers/layout.js";
 import type {
   GetFileNodesResponse,
   Node as FigmaDocumentNode,
@@ -12,11 +12,17 @@ import type {
   SimplifiedComponentDefinition,
   SimplifiedComponentSetDefinition,
 } from "~/utils/sanitization.js";
-import { hasValue, isRectangleCornerRadii, isTruthy } from "~/utils/identity.js";
-import { removeEmptyKeys, generateVarId, StyleId, parsePaint, isVisible } from "~/utils/common.js";
-import { buildSimplifiedStrokes, SimplifiedStroke } from "~/transformers/style.js";
-import { buildSimplifiedEffects, SimplifiedEffects } from "~/transformers/effects.js";
 import { sanitizeComponents, sanitizeComponentSets } from "~/utils/sanitization.js";
+import { hasValue, isRectangleCornerRadii, isTruthy } from "~/utils/identity.js";
+import {
+  removeEmptyKeys,
+  generateVarId,
+  type StyleId,
+  parsePaint,
+  isVisible,
+} from "~/utils/common.js";
+import { buildSimplifiedStrokes, type SimplifiedStroke } from "~/transformers/style.js";
+import { buildSimplifiedEffects, type SimplifiedEffects } from "~/transformers/effects.js";
 /**
  * TODO ITEMS
  *

@@ -1,5 +1,5 @@
 import fs from "fs";
-import { parseFigmaResponse, SimplifiedDesign } from "./simplify-node-response.js";
+import { parseFigmaResponse, type SimplifiedDesign } from "./simplify-node-response.js";
 import type {
   GetImagesResponse,
   GetFileResponse,
@@ -7,7 +7,7 @@ import type {
   GetImageFillsResponse,
 } from "@figma/rest-api-spec";
 import { downloadFigmaImage } from "~/utils/common.js";
-import { Logger } from "~/server.js";
+import { Logger } from "~/utils/logger.js";
 import yaml from "js-yaml";
 
 export interface FigmaError {
@@ -116,7 +116,7 @@ export class FigmaService {
     const svgFiles =
       svgIds.length > 0
         ? this.request<GetImagesResponse>(
-            `/images/${fileKey}?ids=${svgIds.join(",")}&scale=2&format=svg`,
+            `/images/${fileKey}?ids=${svgIds.join(",")}&format=svg`,
           ).then(({ images = {} }) => images)
         : ({} as GetImagesResponse["images"]);
 
@@ -135,7 +135,7 @@ export class FigmaService {
     return Promise.all(downloads);
   }
 
-  async getFile(fileKey: string, depth?: number): Promise<SimplifiedDesign> {
+  async getFile(fileKey: string, depth?: number | null): Promise<SimplifiedDesign> {
     try {
       const endpoint = `/files/${fileKey}${depth ? `?depth=${depth}` : ""}`;
       Logger.log(`Retrieving Figma file: ${fileKey} (depth: ${depth ?? "default"})`);
@@ -151,7 +151,7 @@ export class FigmaService {
     }
   }
 
-  async getNode(fileKey: string, nodeId: string, depth?: number): Promise<SimplifiedDesign> {
+  async getNode(fileKey: string, nodeId: string, depth?: number | null): Promise<SimplifiedDesign> {
     const endpoint = `/files/${fileKey}/nodes?ids=${nodeId}${depth ? `&depth=${depth}` : ""}`;
     const response = await this.request<GetFileNodesResponse>(endpoint);
     Logger.log("Got response from getNode, now parsing.");

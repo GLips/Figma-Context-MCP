@@ -1,14 +1,15 @@
-import { FigmaMcpServer } from "../server";
+import { createServer } from "../mcp.js";
 import { config } from "dotenv";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
 import yaml from "js-yaml";
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 config();
 
-describe('Figma MCP Server Tests', () => {
-  let server: FigmaMcpServer;
+describe("Figma MCP Server Tests", () => {
+  let server: McpServer;
   let client: Client;
   let figmaApiKey: string;
   let figmaFileKey: string;
@@ -24,36 +25,33 @@ describe('Figma MCP Server Tests', () => {
       throw new Error("FIGMA_FILE_KEY is not set in environment variables");
     }
 
-    server = new FigmaMcpServer(figmaApiKey);
+    server = createServer(figmaApiKey);
 
     client = new Client(
       {
         name: "figma-test-client",
-        version: "1.0.0"
+        version: "1.0.0",
       },
       {
         capabilities: {
-          tools: {}
-        }
-      }
+          tools: {},
+        },
+      },
     );
 
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
 
-    await Promise.all([
-      client.connect(clientTransport),
-      server.connect(serverTransport)
-    ]);
+    await Promise.all([client.connect(clientTransport), server.connect(serverTransport)]);
   });
 
   afterAll(async () => {
     await client.close();
   });
 
-  describe('Get Figma Data', () => {
-    it('should be able to get Figma file data', async () => {
+  describe("Get Figma Data", () => {
+    it("should be able to get Figma file data", async () => {
       const args: any = {
-        fileKey: figmaFileKey
+        fileKey: figmaFileKey,
       };
 
       const result = await client.request(
@@ -61,7 +59,7 @@ describe('Figma MCP Server Tests', () => {
           method: "tools/call",
           params: {
             name: "get_figma_data",
-            arguments: args
+            arguments: args,
           },
         },
         CallToolResultSchema,
