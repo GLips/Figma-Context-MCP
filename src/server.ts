@@ -1,11 +1,11 @@
 import { randomUUID } from "node:crypto";
-import express, { Request, Response } from "express";
+import express, { type Request, type Response } from "express";
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { Server } from "http";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { Logger } from "./index.js";
+import { Logger } from "./utils/logger.js";
 
 let httpServer: Server | null = null;
 const transports = {
@@ -173,7 +173,7 @@ async function closeTransports(
 ) {
   for (const sessionId in transports) {
     try {
-      await transports[sessionId].close();
+      await transports[sessionId]?.close();
       delete transports[sessionId];
     } catch (error) {
       console.error(`Error closing transport for session ${sessionId}:`, error);

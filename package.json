@@ -1,6 +1,6 @@
 {
   "name": "figma-developer-mcp",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Model Context Protocol server for Figma integration",
   "type": "module",
   "main": "dist/index.js",
@@ -24,11 +24,19 @@
     "format": "prettier --write \"src/**/*.ts\"",
     "inspect": "pnpx @modelcontextprotocol/inspector",
     "prepack": "pnpm build",
-    "pub:release": "pnpm build && npm publish"
+    "changeset": "changeset add",
+    "version": "changeset version && git add -A",
+    "beta:start": "changeset pre enter beta",
+    "beta:end": "changeset pre exit",
+    "prerelease": "pnpm build",
+    "release": "changeset publish && git push --follow-tags",
+    "pub:release": "pnpm build && npm publish",
+    "pub:release:beta": "pnpm build && npm publish --tag beta"
   },
   "engines": {
     "node": ">=18.0.0"
   },
+  "packageManager": "pnpm@10.10.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/GLips/Figma-Context-MCP.git"
@@ -53,6 +61,7 @@
     "zod": "^3.24.2"
   },
   "devDependencies": {
+    "@changesets/cli": "^2.29.2",
     "@types/express": "^5.0.0",
     "@types/jest": "^29.5.14",
     "@types/js-yaml": "^4.0.9",
