@@ -27,6 +27,7 @@
   <a href="https://twitter.com/glipsman">
     <img alt="Twitter" src="https://img.shields.io/twitter/url?url=https%3A%2F%2Fx.com%2Fglipsman&label=%40glipsman" />
   </a>
+  <a href="https://smithery.ai/server/@GLips/Figma-Context-MCP"><img alt="Smithery Badge" src="https://smithery.ai/badge/@GLips/Figma-Context-MCP"></a>
 </div>
 
 <br/>
@@ -61,6 +62,14 @@ Many code editors and other AI clients use a configuration file to manage MCP se
 The `figma-developer-mcp` server can be configured by adding the following to your configuration file.
 
 > NOTE: You will need to create a Figma access token to use this server. Instructions on how to create a Figma API access token can be found [here](https://help.figma.com/hc/en-us/articles/8085703771159-Manage-personal-access-tokens).
+
+### Installing via Smithery
+
+To install Framelink Figma MCP for Claude Desktop automatically via [Smithery](https://smithery.ai/server/@GLips/Figma-Context-MCP):
+
+```bash
+npx -y @smithery/cli install @GLips/Figma-Context-MCP --client claude
+```
 
 ### MacOS / Linux
 
