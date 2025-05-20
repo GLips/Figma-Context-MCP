@@ -1,4 +1,4 @@
-import { Component, ComponentSet } from "@figma/rest-api-spec";
+import type { Component, ComponentSet } from "@figma/rest-api-spec";
 
 export interface SimplifiedComponentDefinition {
   id: string;
