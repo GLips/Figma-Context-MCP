@@ -221,7 +221,7 @@ function buildSimplifiedLayoutValues(
   }
 
   // Handle dimensions based on layout growth and alignment
-  if (isRectangle("absoluteBoundingBox", n) && isRectangle("absoluteBoundingBox", parent)) {
+  if (isRectangle("absoluteBoundingBox", n)) {
     const dimensions: { width?: number; height?: number; aspectRatio?: number } = {};
 
     // Only include dimensions that aren't meant to stretch
@@ -239,6 +239,14 @@ function buildSimplifiedLayoutValues(
 
       if (n.preserveRatio) {
         dimensions.aspectRatio = n.absoluteBoundingBox?.width / n.absoluteBoundingBox?.height;
+      }
+    } else {
+      // The size of the layout processed without AutoLayout.
+      if (!n.layoutSizingHorizontal || n.layoutSizingHorizontal === "FIXED") {
+        dimensions.width = n.absoluteBoundingBox.width;
+      }
+      if (!n.layoutSizingVertical || n.layoutSizingVertical === "FIXED") {
+        dimensions.height = n.absoluteBoundingBox.height;
       }
     }
 
