@@ -112,7 +112,13 @@ function registerTools(server: McpServer, figmaService: FigmaService): void {
         })
         .array()
         .describe("The nodes to fetch as images"),
-        scale: z.number().positive().optional().describe("Export scale, no use for SVG"),
+      scale: z
+        .number()
+        .positive()
+        .optional()
+        .describe(
+          "Export scale for PNG images. Optional, generally 2 is best, though users may specify a different scale.",
+        ),
       localPath: z
         .string()
         .describe(
