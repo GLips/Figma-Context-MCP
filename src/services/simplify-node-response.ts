@@ -128,14 +128,14 @@ export function parseFigmaResponse(data: GetFileResponse | GetFileNodesResponse)
     .map((n) => parseNode(globalVars, n))
     .filter((child) => child !== null && child !== undefined);
 
-  const simplifiedDesign:SimplifiedDesign = {
+  const simplifiedDesign: SimplifiedDesign = {
     name,
     lastModified,
     thumbnailUrl: thumbnailUrl || "",
     nodes: simplifiedNodes,
     globalVars,
   };
-  
+
   return removeEmptyKeys(simplifiedDesign);
 }
 
