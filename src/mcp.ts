@@ -7,7 +7,7 @@ import { Logger } from "./utils/logger.js";
 
 const serverInfo = {
   name: "Figma MCP Server",
-  version: "0.2.1",
+  version: "0.3.0",
 };
 
 function createServer(
