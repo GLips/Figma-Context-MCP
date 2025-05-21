@@ -1,15 +1,28 @@
-import { SimplifiedLayout, buildSimplifiedLayout } from "~/transformers/layout.js";
+import { type SimplifiedLayout, buildSimplifiedLayout } from "~/transformers/layout.js";
 import type {
   GetFileNodesResponse,
   Node as FigmaDocumentNode,
   Paint,
   Vector,
   GetFileResponse,
+  Component,
+  ComponentSet,
 } from "@figma/rest-api-spec";
+import type {
+  SimplifiedComponentDefinition,
+  SimplifiedComponentSetDefinition,
+} from "~/utils/sanitization.js";
+import { sanitizeComponents, sanitizeComponentSets } from "~/utils/sanitization.js";
 import { hasValue, isRectangleCornerRadii, isTruthy } from "~/utils/identity.js";
-import { removeEmptyKeys, generateVarId, StyleId, parsePaint, isVisible } from "~/utils/common.js";
-import { buildSimplifiedStrokes, SimplifiedStroke } from "~/transformers/style.js";
-import { buildSimplifiedEffects, SimplifiedEffects } from "~/transformers/effects.js";
+import {
+  removeEmptyKeys,
+  generateVarId,
+  type StyleId,
+  parsePaint,
+  isVisible,
+} from "~/utils/common.js";
+import { buildSimplifiedStrokes, type SimplifiedStroke } from "~/transformers/style.js";
+import { buildSimplifiedEffects, type SimplifiedEffects } from "~/transformers/effects.js";
 /**
  * TODO ITEMS
  *
@@ -53,6 +66,8 @@ export interface SimplifiedDesign {
   lastModified: string;
   thumbnailUrl: string;
   nodes: SimplifiedNode[];
+  components: Record<string, SimplifiedComponentDefinition>;
+  componentSets: Record<string, SimplifiedComponentSetDefinition>;
   globalVars: GlobalVars;
 }
 
@@ -76,6 +91,8 @@ export interface SimplifiedNode {
   layout?: string;
   // backgroundColor?: ColorValue; // Deprecated by Figma API
   // for rect-specific strokes, etc.
+  componentId?: string;
+  componentProperties?: Record<string, any>;
   // children
   children?: SimplifiedNode[];
 }
@@ -113,17 +130,39 @@ export interface ColorValue {
 
 // ---------------------- PARSING ----------------------
 export function parseFigmaResponse(data: GetFileResponse | GetFileNodesResponse): SimplifiedDesign {
-  const { name, lastModified, thumbnailUrl } = data;
-  let nodes: FigmaDocumentNode[];
-  if ("document" in data) {
-    nodes = Object.values(data.document.children);
+  const aggregatedComponents: Record<string, Component> = {};
+  const aggregatedComponentSets: Record<string, ComponentSet> = {};
+  let nodesToParse: Array<FigmaDocumentNode>;
+
+  if ("nodes" in data) {
+    // GetFileNodesResponse
+    const nodeResponses = Object.values(data.nodes); // Compute once
+    nodeResponses.forEach((nodeResponse) => {
+      if (nodeResponse.components) {
+        Object.assign(aggregatedComponents, nodeResponse.components);
+      }
+      if (nodeResponse.componentSets) {
+        Object.assign(aggregatedComponentSets, nodeResponse.componentSets);
+      }
+    });
+    nodesToParse = nodeResponses.map((n) => n.document);
   } else {
-    nodes = Object.values(data.nodes).map((n) => n.document);
+    // GetFileResponse
+    Object.assign(aggregatedComponents, data.components);
+    Object.assign(aggregatedComponentSets, data.componentSets);
+    nodesToParse = data.document.children;
   }
+
+  const sanitizedComponents = sanitizeComponents(aggregatedComponents);
+  const sanitizedComponentSets = sanitizeComponentSets(aggregatedComponentSets);
+
+  const { name, lastModified, thumbnailUrl } = data;
+
   let globalVars: GlobalVars = {
     styles: {},
   };
-  const simplifiedNodes: SimplifiedNode[] = nodes
+
+  const simplifiedNodes: SimplifiedNode[] = nodesToParse
     .filter(isVisible)
     .map((n) => parseNode(globalVars, n))
     .filter((child) => child !== null && child !== undefined);
@@ -133,6 +172,8 @@ export function parseFigmaResponse(data: GetFileResponse | GetFileNodesResponse)
     lastModified,
     thumbnailUrl: thumbnailUrl || "",
     nodes: simplifiedNodes,
+    components: sanitizedComponents,
+    componentSets: sanitizedComponentSets,
     globalVars,
   };
 
@@ -194,10 +235,19 @@ function parseNode(
     type,
   };
 
+  if (type === "INSTANCE") {
+    if (hasValue("componentId", n)) {
+      simplified.componentId = n.componentId;
+    }
+    if (hasValue("componentProperties", n)) {
+      simplified.componentProperties = n.componentProperties;
+    }
+  }
+
   // text
   if (hasValue("style", n) && Object.keys(n.style).length) {
     const style = n.style;
-    const textStyle = {
+    const textStyle: TextStyle = {
       fontFamily: style.fontFamily,
       fontWeight: style.fontWeight,
       fontSize: style.fontSize,
@@ -259,8 +309,8 @@ function parseNode(
   }
 
   // Recursively process child nodes
-  if (hasValue("children", n) && n.children.length > 0) {
-    let children = n.children
+  if (hasValue("children", n) && Array.isArray(n.children) && n.children.length > 0) {
+    const children = n.children
       .filter(isVisible)
       .map((child) => parseNode(globalVars, child, n))
       .filter((child) => child !== null && child !== undefined);

@@ -1,5 +1,5 @@
 import fs from "fs";
-import { parseFigmaResponse, SimplifiedDesign } from "./simplify-node-response.js";
+import { parseFigmaResponse, type SimplifiedDesign } from "./simplify-node-response.js";
 import type {
   GetImagesResponse,
   GetFileResponse,
@@ -7,8 +7,14 @@ import type {
   GetImageFillsResponse,
 } from "@figma/rest-api-spec";
 import { downloadFigmaImage } from "~/utils/common.js";
-import { Logger } from "~/index.js";
+import { Logger } from "~/utils/logger.js";
 import yaml from "js-yaml";
+
+export type FigmaAuthOptions = {
+  figmaApiKey: string;
+  figmaOAuthToken: string;
+  useOAuth: boolean;
+};
 
 export interface FigmaError {
   status: number;
@@ -39,10 +45,14 @@ type FetchImageFillParams = Omit<FetchImageParams, "fileType"> & {
 
 export class FigmaService {
   private readonly apiKey: string;
+  private readonly oauthToken: string;
+  private readonly useOAuth: boolean;
   private readonly baseUrl = "https://api.figma.com/v1";
 
-  constructor(apiKey: string) {
-    this.apiKey = apiKey;
+  constructor({ figmaApiKey, figmaOAuthToken, useOAuth }: FigmaAuthOptions) {
+    this.apiKey = figmaApiKey || "";
+    this.oauthToken = figmaOAuthToken || "";
+    this.useOAuth = !!useOAuth && !!this.oauthToken;
   }
 
   private async request<T>(endpoint: string): Promise<T> {
@@ -53,10 +63,22 @@ export class FigmaService {
     }
     try {
       Logger.log(`Calling ${this.baseUrl}${endpoint}`);
+
+      // Set auth headers based on authentication method
+      const headers: Record<string, string> = {};
+
+      if (this.useOAuth) {
+        // Use OAuth token with Authorization: Bearer header
+        Logger.log("Using OAuth Bearer token for authentication");
+        headers["Authorization"] = `Bearer ${this.oauthToken}`;
+      } else {
+        // Use Personal Access Token with X-Figma-Token header
+        Logger.log("Using Personal Access Token for authentication");
+        headers["X-Figma-Token"] = this.apiKey;
+      }
+
       const response = await fetch(`${this.baseUrl}${endpoint}`, {
-        headers: {
-          "X-Figma-Token": this.apiKey,
-        },
+        headers,
       });
 
       if (!response.ok) {

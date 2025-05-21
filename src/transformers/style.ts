@@ -1,5 +1,5 @@
-import { Node as FigmaDocumentNode } from "@figma/rest-api-spec";
-import { SimplifiedFill } from "~/services/simplify-node-response.js";
+import type { Node as FigmaDocumentNode } from "@figma/rest-api-spec";
+import type { SimplifiedFill } from "~/services/simplify-node-response.js";
 import { generateCSSShorthand, isVisible, parsePaint } from "~/utils/common.js";
 import { hasValue, isStrokeWeights } from "~/utils/identity.js";
 export type SimplifiedStroke = {
