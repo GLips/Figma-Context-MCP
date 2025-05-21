@@ -129,6 +129,7 @@ function registerTools(server: McpServer, figmaService: FigmaService): void {
           outlineText: z.boolean().optional().describe("Whether to outline text in SVG exports. Default is true."),
           includeId: z.boolean().optional().describe("Whether to include IDs in SVG exports. Default is false."),
           simplifyStroke: z.boolean().optional().describe("Whether to simplify strokes in SVG exports. Default is true."),
+          scale: z.number().optional().describe("Scale for SVG exports. Default is 2."),
         })
         .optional()
         .describe("Options for SVG export"),
