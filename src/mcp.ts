@@ -45,7 +45,7 @@ function registerTools(server: McpServer, figmaService: FigmaService): void {
         .number()
         .optional()
         .describe(
-          "How many levels deep to traverse the node tree, only use if explicitly requested by the user",
+          "OPTIONAL. Do NOT use unless explicitly requested by the user. Controls how many levels deep to traverse the node tree,",
         ),
     },
     async ({ fileKey, nodeId, depth }) => {
