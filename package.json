@@ -61,6 +61,7 @@
     "zod": "^3.24.2"
   },
   "devDependencies": {
+    "@changesets/changelog-github": "^0.5.1",
     "@changesets/cli": "^2.29.2",
     "@types/express": "^5.0.0",
     "@types/jest": "^29.5.14",
