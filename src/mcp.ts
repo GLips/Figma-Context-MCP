@@ -1,7 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { FigmaService, type FigmaAuthOptions } from "./services/figma.js";
-import type { SimplifiedDesign } from "./services/simplify-node-response.js";
 import yaml from "js-yaml";
 import { Logger } from "./utils/logger.js";
 
@@ -56,24 +55,15 @@ function registerTools(server: McpServer, figmaService: FigmaService): void {
           } of ${nodeId ? `node ${nodeId} from file` : `full file`} ${fileKey}`,
         );
 
-        let file: SimplifiedDesign;
+        let file: any;
         if (nodeId) {
           file = await figmaService.getNode(fileKey, nodeId, depth);
         } else {
           file = await figmaService.getFile(fileKey, depth);
         }
 
-        Logger.log(`Successfully fetched file: ${file.name}`);
-        const { nodes, globalVars, ...metadata } = file;
-
-        const result = {
-          metadata,
-          nodes,
-          globalVars,
-        };
-
-        Logger.log("Generating YAML result from file");
-        const yamlResult = yaml.dump(result);
+        Logger.log(`Successfully fetched file: ${file.name || file.document?.name}`);
+        const yamlResult = yaml.dump(file);
 
         Logger.log("Sending result to client");
         return {
