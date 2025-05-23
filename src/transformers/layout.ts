@@ -13,10 +13,6 @@ export interface SimplifiedLayout {
   alignSelf?: "flex-start" | "flex-end" | "center" | "stretch";
   wrap?: boolean;
   gap?: string;
-  locationRelativeToParent?: {
-    x: number;
-    y: number;
-  };
   dimensions?: {
     width?: number;
     height?: number;
