@@ -23,6 +23,7 @@ export interface SimplifiedLayout {
     aspectRatio?: number;
   };
   padding?: string;
+  margin?: string;
   sizing?: {
     horizontal?: "fixed" | "fill" | "hug";
     vertical?: "fixed" | "fill" | "hug";
@@ -209,17 +210,18 @@ function buildSimplifiedLayoutValues(
   // Only include positioning-related properties if parent layout isn't flex or if the node is absolute
   if (
     isFrame(parent) &&
-    // If parent is a frame but not an AutoLayout, or if the node is absolute, include positioning-related properties
-    (!parent.layoutMode || parent.layoutMode === "NONE" || n.layoutPositioning === "ABSOLUTE")
+    (!parent?.layoutMode || parent?.layoutMode === "NONE" || n.layoutPositioning === "ABSOLUTE")
   ) {
-    if (n.layoutPositioning === "ABSOLUTE") {
-      layoutValues.position = "absolute";
-    }
     if (n.absoluteBoundingBox && parent.absoluteBoundingBox) {
-      layoutValues.locationRelativeToParent = {
-        x: n.absoluteBoundingBox.x - parent.absoluteBoundingBox.x,
-        y: n.absoluteBoundingBox.y - parent.absoluteBoundingBox.y,
-      };
+      let marginLeft =
+        n.absoluteBoundingBox.x - (parent?.absoluteBoundingBox?.x ?? n.absoluteBoundingBox.x);
+      let marginTop =
+        n.absoluteBoundingBox.y - (parent?.absoluteBoundingBox?.y ?? n.absoluteBoundingBox.y);
+      marginLeft = marginLeft - (parent?.paddingLeft ?? 0);
+      marginTop = marginTop - (parent?.paddingTop ?? 0);
+      if (marginLeft !== 0 || marginTop !== 0) {
+        layoutValues.margin = `${marginTop} 0 0 ${marginLeft}`;
+      }
     }
   }
 
