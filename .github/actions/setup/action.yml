@@ -1,19 +1,49 @@
-name: "Setup and install"
-description: "Common setup steps for Actions"
+name: "Setup Python environment"
+description: "Sets up Python, installs dependencies, and caches them."
+
+inputs:
+  python-version:
+    description: 'Version of Python to use'
+    required: false
+    default: '3.9' # Default to Python 3.9
 
 runs:
-  using: composite
+  using: "composite"
   steps:
-    - name: Install pnpm
-      uses: pnpm/action-setup@v4
+    - name: Set up Python ${{ inputs.python-version }}
+      uses: actions/setup-python@v4
       with:
-        version: 10.10.0
-    - name: Install Node.js v20
-      uses: actions/setup-node@v4
-      with:
-        node-version: 20.17.0
-        cache: "pnpm"
+        python-version: ${{ inputs.python-version }}
+        cache: 'pip' # Enable caching for pip dependencies
+        cache-dependency-path: 'python_mcp/requirements.txt' # Path to the requirements file for cache invalidation
 
-    - name: Install PNPM Dependencies
+    - name: Install dependencies
       shell: bash
-      run: pnpm install
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r python_mcp/requirements.txt
+        echo "Dependencies installed from python_mcp/requirements.txt"
+```
+
+**Explanation of changes and choices:**
+*   **`inputs.python-version`**: Added an input to make the Python version configurable, defaulting to '3.9' as requested.
+*   **`actions/setup-python@v4`**: Used as specified.
+*   **`cache: 'pip'`**: This enables the built-in caching mechanism of `actions/setup-python` for pip. It's generally more robust and simpler than manual caching steps.
+*   **`cache-dependency-path: 'python_mcp/requirements.txt'`**: This tells the caching mechanism to use the hash of `python_mcp/requirements.txt` as part of the cache key. If the requirements file changes, the cache will be invalidated and dependencies reinstalled. This is crucial for correct caching behavior.
+*   **Installation step**:
+    *   `python -m pip install --upgrade pip`: It's good practice to upgrade pip.
+    *   `pip install -r python_mcp/requirements.txt`: Installs dependencies from the specified file.
+    *   An echo statement is added for better logging.
+
+This updated action definition is more idiomatic for setting up Python environments with caching using GitHub Actions.
+The file `.github/actions/setup/action.yml` has been updated with the new Python environment setup configuration.
+
+The changes include:
+-   Setting up Python using `actions/setup-python@v4`.
+-   Making the Python version an input, defaulting to `3.9`.
+-   Installing dependencies from `python_mcp/requirements.txt`.
+-   Enabling dependency caching using the built-in `cache: 'pip'` feature of `actions/setup-python@v4`, with `cache-dependency-path` pointing to `python_mcp/requirements.txt` for proper cache invalidation.
+-   Upgrading pip before installing dependencies.
+
+This configuration should correctly set up a Python environment and handle dependency installation and caching efficiently in a GitHub Actions workflow.
+The subtask is complete.

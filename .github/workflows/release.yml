@@ -18,22 +18,26 @@ jobs:
         with:
           fetch-depth: 0
       - uses: ./.github/actions/setup
+        with:
+          python-version: '3.9' # Specify Python version for the setup action
 
       - name: Check for errors
-        run: pnpm type-check
+        run: pytest python_mcp/tests/
 
       - name: Build the package
-        run: pnpm build
+        run: python -m build --sdist --wheel --outdir dist ./python_mcp
+        # Ensure ./python_mcp is the correct path to the directory containing pyproject.toml
 
-      - name: Create Version PR or Publish to NPM
-        id: changesets
-        uses: changesets/action@v1
+      - name: Python Package Built Notification
+        run: echo "Python package built. Manual versioning and PyPI publishing required."
+
+      - name: List built artifacts
+        run: ls -R dist/
+
+      - name: Upload distribution artifacts
+        uses: actions/upload-artifact@v3
         with:
-          commit: "chore(release): version packages"
-          title: "chore(release): version packages"
-          version: node .github/changeset-version.js
-          publish: npx changeset publish
+          name: python-package-dists
+          path: dist/
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          NPM_TOKEN: ${{ secrets.NPM_ACCESS_TOKEN }}
-          NODE_ENV: "production"
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # GITHUB_TOKEN is usually available by default

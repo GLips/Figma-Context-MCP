@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "figma-mcp-server"
+version = "0.1.0" # Initial version
+description = "A server to convert Figma designs to HTML/CSS using the Model Context Protocol."
+readme = "README.md"
+requires-python = ">=3.8"
+license = { file = "LICENSE" }
+authors = [
+  { name = "AI Agent", email = "ai@example.com" }, # Placeholder
+]
+keywords = ["figma", "mcp", "html", "css"]
+
+dependencies = [
+  "python-dotenv",
+  "requests",
+  "httpx",
+  "PyYAML",
+  "pydantic",
+  "Flask", # Assuming Flask is for the server part, may or may not be part of this core package
+  "pytest" # Typically a dev dependency, but listed in requirements.txt previously
+]
+
+[project.urls]
+Homepage = "https://github.com/example/figma-mcp-server" # Placeholder for actual repo URL
+
+# Optional: if you plan to have console scripts
+# [project.scripts]
+# figma-mcp = "mcp.cli:main" # Example, if cli.py has a main function

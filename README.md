@@ -13,10 +13,9 @@
     <a href="README.ja.md">日本語 (Japanese)</a> |
     <a href="README.zh.md">中文 (Chinese)</a>
   </p>
+  *(Note: This project has been converted to Python. The translated READMEs (Korean, Japanese, Chinese) may still contain outdated Node.js specific instructions. Contributions to update them are welcome!)*
   <h3>Give your coding agent access to your Figma data.<br/>Implement designs in any framework in one-shot.</h3>
-  <a href="https://npmcharts.com/compare/figma-developer-mcp?interval=30">
-    <img alt="weekly downloads" src="https://img.shields.io/npm/dm/figma-developer-mcp.svg">
-  </a>
+  <!-- NPM badge removed -->
   <a href="https://github.com/GLips/Figma-Context-MCP/blob/main/LICENSE">
     <img alt="MIT License" src="https://img.shields.io/github/license/GLips/Figma-Context-MCP" />
   </a>
@@ -56,41 +55,83 @@ Reducing the amount of context provided to the model helps make the AI more accu
 
 ## Getting Started
 
-Many code editors and other AI clients use a configuration file to manage MCP servers.
+### Prerequisites
 
-The `figma-developer-mcp` server can be configured by adding the following to your configuration file.
+*   Python 3.8 or higher installed.
+*   Access to a terminal or command prompt.
+
+### Running from Source (Recommended for now)
+
+1.  Clone the repository:
+    ```bash
+    git clone https://github.com/GLips/Figma-Context-MCP.git
+    cd Figma-Context-MCP
+    ```
+2.  Navigate to the Python package directory:
+    ```bash
+    cd python_mcp 
+    ```
+    *(Note: If `pyproject.toml` and the `mcp` package are moved to the repository root in the future, this `cd python_mcp` step might be omitted).*
+3.  Create a virtual environment and activate it:
+    ```bash
+    python -m venv venv
+    source venv/bin/activate  # On Windows use: venv\Scripts\activate
+    ```
+4.  Install dependencies:
+    ```bash
+    pip install -r requirements.txt
+    # Alternatively, if you want to install the package in editable mode (useful for development):
+    # pip install -e . 
+    ```
+
+### Configuration
+
+Many code editors and other AI clients use a configuration file to manage MCP servers.
+To configure the Python version of the Framelink Figma MCP server (when running from source), add the following to your MCP client's configuration file:
 
 > NOTE: You will need to create a Figma access token to use this server. Instructions on how to create a Figma API access token can be found [here](https://help.figma.com/hc/en-us/articles/8085703771159-Manage-personal-access-tokens).
 
-### MacOS / Linux
+**Configuration for MacOS / Linux:**
 
 ```json
 {
   "mcpServers": {
     "Framelink Figma MCP": {
-      "command": "npx",
-      "args": ["-y", "figma-developer-mcp", "--figma-api-key=YOUR-KEY", "--stdio"]
+      "command": "python",
+      "args": ["-m", "mcp.cli", "--figma-api-key=YOUR-KEY", "--stdio"],
+      "workingDirectory": "./python_mcp" 
+      // Specify the path to the python_mcp directory if running from the repo root.
+      // If your terminal's CWD is already python_mcp, you might not need workingDirectory.
     }
   }
 }
 ```
 
-### Windows
+**Configuration for Windows:**
 
 ```json
 {
   "mcpServers": {
     "Framelink Figma MCP": {
-      "command": "cmd",
-      "args": ["/c", "npx", "-y", "figma-developer-mcp", "--figma-api-key=YOUR-KEY", "--stdio"]
+      "command": "python",
+      "args": ["-m", "mcp.cli", "--figma-api-key=YOUR-KEY", "--stdio"],
+      "workingDirectory": ".\\python_mcp" 
+      // Specify the path to the python_mcp directory if running from the repo root.
+      // If your terminal's CWD is already python_mcp, you might not need workingDirectory.
     }
   }
 }
 ```
 
-Or you can set `FIGMA_API_KEY` and `PORT` in the `env` field.
+**Explanation of `workingDirectory`**:
+- The `python -m mcp.cli` command needs to be run from a context where Python can find the `mcp` package.
+- If you are in the `Figma-Context-MCP/python_mcp` directory, Python can directly find `mcp.cli`.
+- If your MCP client runs commands from the repository root (`Figma-Context-MCP`), you might need `workingDirectory` pointing to `python_mcp` for `python -m mcp.cli` to work correctly, or ensure `python_mcp` is in your `PYTHONPATH`. The `workingDirectory` option is often supported by MCP clients.
+- Alternatively, if the package is installed (e.g., via `pip install -e .`), `python -m mcp.cli` should work from anywhere as long as the virtual environment is active. The `workingDirectory` might still be useful for relative paths if the script expects any.
 
-If you need more information on how to configure the Framelink Figma MCP server, see the [Framelink docs](https://www.framelink.ai/docs/quickstart?utm_source=github&utm_medium=referral&utm_campaign=readme).
+You can also set `FIGMA_API_KEY` and `PORT` (if applicable, e.g., for HTTP mode) as environment variables instead of using command-line arguments.
+
+If you need more information on how to configure the Framelink Figma MCP server, see the [Framelink docs](https://www.framelink.ai/docs/quickstart?utm_source=github&utm_medium=referral&utm_campaign=readme) (Note: these docs may still reflect Node.js specific instructions).
 
 ## Star History
 

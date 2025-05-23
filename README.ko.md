@@ -13,10 +13,9 @@
     <a href="README.ja.md">日本語 (Japanese)</a> |
     <a href="README.zh.md">中文 (Chinese)</a>
   </p>
+  *(Note: This project has been converted to Python. This translated README may still contain outdated Node.js specific instructions. Please refer to the main English README.md for the most up-to-date information. Contributions to update this translation are welcome!)*
   <h3>코딩 에이전트에게 Figma 데이터에 대한 접근 권한을 부여하세요.<br/>한 번에 모든 프레임워크에서 디자인을 구현하세요.</h3>
-  <a href="https://npmcharts.com/compare/figma-developer-mcp?interval=30">
-    <img alt="주간 다운로드" src="https://img.shields.io/npm/dm/figma-developer-mcp.svg">
-  </a>
+  <!-- NPM badge removed -->
   <a href="https://github.com/GLips/Figma-Context-MCP/blob/main/LICENSE">
     <img alt="MIT 라이선스" src="https://img.shields.io/github/license/GLips/Figma-Context-MCP" />
   </a>
@@ -68,12 +67,15 @@ Cursor가 Figma 디자인 데이터에 접근할 수 있을 때, 스크린샷을
 {
   "mcpServers": {
     "Framelink Figma MCP": {
-      "command": "npx",
-      "args": ["-y", "figma-developer-mcp", "--figma-api-key=YOUR-KEY", "--stdio"]
+      "command": "python",
+      "args": ["-m", "mcp.cli", "--figma-api-key=YOUR-KEY", "--stdio"],
+      "workingDirectory": "./python_mcp"
     }
   }
 }
 ```
+
+> 파이썬 전제 조건: 파이썬 3.8 이상이 필요합니다. 자세한 설치 지침 및 가상 환경 설정은 기본 영어 `README.md`를 참조하십시오.
 
 ### Windows
 
@@ -81,8 +83,9 @@ Cursor가 Figma 디자인 데이터에 접근할 수 있을 때, 스크린샷을
 {
   "mcpServers": {
     "Framelink Figma MCP": {
-      "command": "cmd",
-      "args": ["/c", "npx", "-y", "figma-developer-mcp", "--figma-api-key=YOUR-KEY", "--stdio"]
+      "command": "python",
+      "args": ["-m", "mcp.cli", "--figma-api-key=YOUR-KEY", "--stdio"],
+      "workingDirectory": ".\\python_mcp"
     }
   }
 }
@@ -90,7 +93,7 @@ Cursor가 Figma 디자인 데이터에 접근할 수 있을 때, 스크린샷을
 
 또는 `env` 필드에 `FIGMA_API_KEY`와 `PORT`를 넣을 수 있습니다.
 
-Framelink Figma MCP 서버를 구성하는 방법에 대한 자세한 정보가 필요하면 [Framelink 문서](https://www.framelink.ai/docs/quickstart?utm_source=github&utm_medium=readme&utm_campaign=readme)를 참조하세요.
+Framelink Figma MCP 서버를 구성하는 방법에 대한 자세한 정보가 필요하면 [Framelink 문서](https://www.framelink.ai/docs/quickstart?utm_source=github&utm_medium=readme&utm_campaign=readme)를 참조하세요. (참고: 이 문서는 아직 Node.js 관련 지침을 반영하고 있을 수 있습니다.)
 
 ## 스타 히스토리
 
