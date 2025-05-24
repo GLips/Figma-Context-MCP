@@ -141,21 +141,31 @@ export class FigmaService {
         ? this.request<GetImagesResponse>(
             `/images/${fileKey}?ids=${svgIds.join(",")}&format=svg`,
           ).then(({ images = {} }) => images)
-        : ({} as GetImagesResponse["images"]);
+        : Promise.resolve({} as GetImagesResponse["images"]);
 
-    const files = await Promise.all([pngFiles, svgFiles]).then(([f, l]) => ({ ...f, ...l }));
+    const svgIds = nodes.filter(({ fileType }) => fileType === "svg").map(({ nodeId }) => nodeId);
+    const svgFilesPromise =
+      svgIds.length > 0
+        ? this.request<GetImagesResponse>(
+            `/images/${fileKey}?ids=${svgIds.join(",")}&format=svg`,
+          ).then(({ images = {} }) => images)
+        : Promise.resolve({} as GetImagesResponse["images"]);
 
-    const downloads = nodes
-      .map(({ nodeId, fileName }) => {
-        const imageUrl = files[nodeId];
-        if (imageUrl) {
-          return downloadFigmaImage(fileName, localPath, imageUrl);
-        }
-        return false;
-      })
-      .filter((url) => !!url);
+    const pngUrls = await pngFilesPromise;
+    const svgUrls = await svgFilesPromise;
+    const allImageUrlsById = { ...pngUrls, ...svgUrls };
 
-    return Promise.all(downloads);
+    const downloadPromises: Promise<string>[] = [];
+
+    for (const { nodeId, fileName } of nodes) {
+      const imageUrl = allImageUrlsById[nodeId];
+      if (imageUrl) {
+        downloadPromises.push(downloadFigmaImage(fileName, localPath, imageUrl));
+      } else {
+        Logger.warn(`Image URL not found for node ID: ${nodeId} in getImages`);
+      }
+    }
+    return Promise.all(downloadPromises);
   }
 
   async getFile(fileKey: string, depth?: number | null): Promise<SimplifiedDesign> {

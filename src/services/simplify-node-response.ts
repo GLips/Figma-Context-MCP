@@ -69,6 +69,15 @@ export interface SimplifiedDesign {
   components: Record<string, SimplifiedComponentDefinition>;
   componentSets: Record<string, SimplifiedComponentSetDefinition>;
   globalVars: GlobalVars;
+  imageAssets: ImageAsset[];
+}
+
+export interface ImageAsset {
+  nodeId: string; // ID of the node associated with this image (original VECTOR node for SVGs, or node with image fill)
+  imageRef?: string; // The imageRef, if it's an image fill
+  fileNameSuggestion: string; // A suggested filename, e.g., from the node name + extension
+  type: "SVG" | "PNG" | "FILL"; // Type of image asset to help downloader
+  // Potentially add scale if we can determine it here, default to 2 for PNGs
 }
 
 export interface SimplifiedNode {
@@ -161,10 +170,11 @@ export function parseFigmaResponse(data: GetFileResponse | GetFileNodesResponse)
   let globalVars: GlobalVars = {
     styles: {},
   };
+  const imageAssets: ImageAsset[] = [];
 
   const simplifiedNodes: SimplifiedNode[] = nodesToParse
     .filter(isVisible)
-    .map((n) => parseNode(globalVars, n))
+    .map((n) => parseNode(globalVars, imageAssets, n))
     .filter((child) => child !== null && child !== undefined);
 
   const simplifiedDesign: SimplifiedDesign = {
@@ -175,6 +185,7 @@ export function parseFigmaResponse(data: GetFileResponse | GetFileNodesResponse)
     components: sanitizedComponents,
     componentSets: sanitizedComponentSets,
     globalVars,
+    imageAssets,
   };
 
   return removeEmptyKeys(simplifiedDesign);
@@ -224,6 +235,7 @@ function findOrCreateVar(globalVars: GlobalVars, value: any, prefix: string): St
 
 function parseNode(
   globalVars: GlobalVars,
+  imageAssets: ImageAsset[],
   n: FigmaDocumentNode,
   parent?: FigmaDocumentNode,
 ): SimplifiedNode | null {
@@ -268,9 +280,23 @@ function parseNode(
 
   // fills & strokes
   if (hasValue("fills", n) && Array.isArray(n.fills) && n.fills.length) {
-    // const fills = simplifyFills(n.fills.map(parsePaint));
-    const fills = n.fills.map(parsePaint);
-    simplified.fills = findOrCreateVar(globalVars, fills, "fill");
+    const parsedFills = n.fills.map(parsePaint);
+    simplified.fills = findOrCreateVar(globalVars, parsedFills, "fill");
+
+    // Check for image fills and add to imageAssets
+    parsedFills.forEach((fill) => {
+      if (typeof fill === "object" && fill.type === "IMAGE" && fill.imageRef) {
+        // De-duplicate based on imageRef
+        if (!imageAssets.some(asset => asset.imageRef === fill.imageRef)) {
+          imageAssets.push({
+            nodeId: n.id,
+            imageRef: fill.imageRef,
+            fileNameSuggestion: `${n.name.replace(/[^a-zA-Z0-9]/g, "_")}_fill.png`,
+            type: "FILL",
+          });
+        }
+      }
+    });
   }
 
   const strokes = buildSimplifiedStrokes(n);
@@ -312,16 +338,24 @@ function parseNode(
   if (hasValue("children", n) && Array.isArray(n.children) && n.children.length > 0) {
     const children = n.children
       .filter(isVisible)
-      .map((child) => parseNode(globalVars, child, n))
+      .map((child) => parseNode(globalVars, imageAssets, child, n))
       .filter((child) => child !== null && child !== undefined);
     if (children.length) {
       simplified.children = children;
     }
   }
 
-  // Convert VECTOR to IMAGE
+  // Convert VECTOR to IMAGE-SVG and add to imageAssets
   if (type === "VECTOR") {
     simplified.type = "IMAGE-SVG";
+    // De-duplicate based on nodeId for SVGs
+    if (!imageAssets.some(asset => asset.nodeId === n.id && asset.type === "SVG")) {
+      imageAssets.push({
+        nodeId: n.id,
+        fileNameSuggestion: `${n.name.replace(/[^a-zA-Z0-9]/g, "_")}.svg`,
+        type: "SVG",
+      });
+    }
   }
 
   return simplified;
