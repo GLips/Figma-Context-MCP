@@ -125,8 +125,14 @@ export class FigmaService {
     fileKey: string,
     nodes: FetchImageParams[],
     localPath: string,
-    scale: number = 2,
+    svgOptions?: {
+      outlineText?: boolean;
+      includeId?: boolean;
+      simplifyStroke?: boolean;
+      scale?: number;
+    },
   ): Promise<string[]> {
+    const defaultSvgScale = 2
     const pngIds = nodes.filter(({ fileType }) => fileType === "png").map(({ nodeId }) => nodeId);
     const pngFiles =
       pngIds.length > 0
@@ -135,11 +141,29 @@ export class FigmaService {
           ).then(({ images = {} }) => images)
         : ({} as GetImagesResponse["images"]);
 
+    let svgParams = "&format=svg";
+    if (svgOptions) {
+      if (svgOptions.outlineText !== undefined) {
+        svgParams += `&svg_outline_text=${svgOptions.outlineText}`;
+      }
+      if (svgOptions.includeId !== undefined) {
+        svgParams += `&svg_include_id=${svgOptions.includeId}`;
+      }
+      if (svgOptions.simplifyStroke !== undefined) {
+        svgParams += `&svg_simplify_stroke=${svgOptions.simplifyStroke}`;
+      }
+      if (svgOptions.scale !== undefined) {
+        svgParams += `&scale=${svgOptions.scale}`;
+      } else {
+        svgParams += `&scale=${defaultSvgScale}`;
+      }
+    }
+
     const svgIds = nodes.filter(({ fileType }) => fileType === "svg").map(({ nodeId }) => nodeId);
     const svgFiles =
       svgIds.length > 0
         ? this.request<GetImagesResponse>(
-            `/images/${fileKey}?ids=${svgIds.join(",")}&format=svg`,
+            `/images/${fileKey}?ids=${svgIds.join(",")}${svgParams}`,
           ).then(({ images = {} }) => images)
         : ({} as GetImagesResponse["images"]);
 

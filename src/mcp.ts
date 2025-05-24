@@ -124,8 +124,17 @@ function registerTools(server: McpServer, figmaService: FigmaService): void {
         .describe(
           "The absolute path to the directory where images are stored in the project. If the directory does not exist, it will be created. The format of this path should respect the directory format of the operating system you are running on. Don't use any special character escaping in the path name either.",
         ),
+      svgOptions: z
+        .object({
+          outlineText: z.boolean().optional().describe("Whether to outline text in SVG exports. Default is true."),
+          includeId: z.boolean().optional().describe("Whether to include IDs in SVG exports. Default is false."),
+          simplifyStroke: z.boolean().optional().describe("Whether to simplify strokes in SVG exports. Default is true."),
+          scale: z.number().optional().describe("Scale for SVG exports. Default is 2."),
+        })
+        .optional()
+        .describe("Options for SVG export"),
     },
-    async ({ fileKey, nodes, scale, localPath }) => {
+    async ({ fileKey, nodes, localPath, svgOptions }) => {
       try {
         const imageFills = nodes.filter(({ imageRef }) => !!imageRef) as {
           nodeId: string;
@@ -141,7 +150,7 @@ function registerTools(server: McpServer, figmaService: FigmaService): void {
             fileType: fileName.endsWith(".svg") ? ("svg" as const) : ("png" as const),
           }));
 
-        const renderDownloads = figmaService.getImages(fileKey, renderRequests, localPath, scale);
+        const renderDownloads = figmaService.getImages(fileKey, renderRequests, localPath, svgOptions);
 
         const downloads = await Promise.all([fillDownloads, renderDownloads]).then(([f, r]) => [
           ...f,
