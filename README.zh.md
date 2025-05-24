@@ -13,10 +13,9 @@
     <a href="README.ko.md">한국어 (Korean)</a> |
     <a href="README.ja.md">日本語 (Japanese)</a>
   </p>
+  *(Note: This project has been converted to Python. This translated README may still contain outdated Node.js specific instructions. Please refer to the main English README.md for the most up-to-date information. Contributions to update this translation are welcome!)*
   <h3>为您的编码代理提供 Figma 数据访问权限。<br/>一次性在任何框架中实现设计。</h3>
-  <a href="https://npmcharts.com/compare/figma-developer-mcp?interval=30">
-    <img alt="每周下载" src="https://img.shields.io/npm/dm/figma-developer-mcp.svg">
-  </a>
+  <!-- NPM badge removed -->
   <a href="https://github.com/GLips/Figma-Context-MCP/blob/main/LICENSE">
     <img alt="MIT 许可证" src="https://img.shields.io/github/license/GLips/Figma-Context-MCP" />
   </a>
@@ -68,12 +67,15 @@
 {
   "mcpServers": {
     "Framelink Figma MCP": {
-      "command": "npx",
-      "args": ["-y", "figma-developer-mcp", "--figma-api-key=YOUR-KEY", "--stdio"]
+      "command": "python",
+      "args": ["-m", "mcp.cli", "--figma-api-key=YOUR-KEY", "--stdio"],
+      "workingDirectory": "./python_mcp"
     }
   }
 }
 ```
+
+> Python 先决条件：需要 Python 3.8 或更高版本。有关详细的安装说明和虚拟环境设置，请参阅主要的英文 `README.md`。
 
 ### Windows
 
@@ -81,8 +83,9 @@
 {
   "mcpServers": {
     "Framelink Figma MCP": {
-      "command": "cmd",
-      "args": ["/c", "npx", "-y", "figma-developer-mcp", "--figma-api-key=YOUR-KEY", "--stdio"]
+      "command": "python",
+      "args": ["-m", "mcp.cli", "--figma-api-key=YOUR-KEY", "--stdio"],
+      "workingDirectory": ".\\python_mcp"
     }
   }
 }
@@ -90,7 +93,7 @@
 
 或者您可以在 `env` 字段中设置 `FIGMA_API_KEY` 和 `PORT`。
 
-有关如何配置 Framelink Figma MCP 服务器的更多信息，请参阅 [Framelink 文档](https://www.framelink.ai/docs/quickstart?utm_source=github&utm_medium=readme&utm_campaign=readme)。
+有关如何配置 Framelink Figma MCP 服务器的更多信息，请参阅 [Framelink 文档](https://www.framelink.ai/docs/quickstart?utm_source=github&utm_medium=readme&utm_campaign=readme)。 (注意：这些文档可能仍反映特定于 Node.js 的说明。)
 
 ## 星标历史
 

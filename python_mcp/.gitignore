@@ -1,0 +1,50 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+pip-selfcheck.json
+pip-log.txt
+
+# Distribution / packaging
+.bundle/
+dist/
+build/
+develop-eggs/
+.eggs/
+sdist/
+wheel/
+*.egg-info/
+*.egg
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Environments
+.env
+.venv
+env.bak
+venv.bak
+
+# IDEs
+.idea/
+.vscode/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+#mypy
+.mypy_cache/
+
+#pytest
+.pytest_cache/
+.coverage
+
+#tox
+.tox/

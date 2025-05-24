@@ -1,0 +1,8 @@
+python-dotenv
+requests
+httpx
+PyYAML
+pydantic
+Flask
+pytest
+pytest-asyncio
