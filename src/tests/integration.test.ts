@@ -25,7 +25,11 @@ describe("Figma MCP Server Tests", () => {
       throw new Error("FIGMA_FILE_KEY is not set in environment variables");
     }
 
-    server = createServer(figmaApiKey);
+    server = createServer({
+      figmaApiKey,
+      figmaOAuthToken: "",
+      useOAuth: false,
+    });
 
     client = new Client(
       {

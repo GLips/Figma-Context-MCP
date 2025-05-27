@@ -16,7 +16,7 @@ export async function startServer(): Promise<void> {
 
   const config = getServerConfig(isStdioMode);
 
-  const server = createServer(config.figmaApiKey, { isHTTP: !isStdioMode });
+  const server = createServer(config.auth, { isHTTP: !isStdioMode });
 
   if (isStdioMode) {
     const transport = new StdioServerTransport();

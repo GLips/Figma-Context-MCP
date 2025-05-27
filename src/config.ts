@@ -1,26 +1,29 @@
 import { config } from "dotenv";
 import yargs from "yargs";
 import { hideBin } from "yargs/helpers";
+import type { FigmaAuthOptions } from "./services/figma.js";
 
 // Load environment variables from .env file
 config();
 
 interface ServerConfig {
-  figmaApiKey: string;
+  auth: FigmaAuthOptions;
   port: number;
   configSources: {
     figmaApiKey: "cli" | "env";
+    figmaOAuthToken: "cli" | "env" | "none";
     port: "cli" | "env" | "default";
   };
 }
 
 function maskApiKey(key: string): string {
-  if (key.length <= 4) return "****";
+  if (!key || key.length <= 4) return "****";
   return `****${key.slice(-4)}`;
 }
 
 interface CliArgs {
   "figma-api-key"?: string;
+  "figma-oauth-token"?: string;
   port?: number;
 }
 
@@ -30,7 +33,11 @@ export function getServerConfig(isStdioMode: boolean): ServerConfig {
     .options({
       "figma-api-key": {
         type: "string",
-        description: "Figma API key",
+        description: "Figma API key (Personal Access Token)",
+      },
+      "figma-oauth-token": {
+        type: "string",
+        description: "Figma OAuth Bearer token",
       },
       port: {
         type: "number",
@@ -41,22 +48,39 @@ export function getServerConfig(isStdioMode: boolean): ServerConfig {
     .version("0.2.1")
     .parseSync() as CliArgs;
 
-  const config: ServerConfig = {
+  const auth: FigmaAuthOptions = {
     figmaApiKey: "",
+    figmaOAuthToken: "",
+    useOAuth: false,
+  };
+
+  const config: Omit<ServerConfig, "auth"> = {
     port: 3333,
     configSources: {
       figmaApiKey: "env",
+      figmaOAuthToken: "none",
       port: "default",
     },
   };
 
   // Handle FIGMA_API_KEY
   if (argv["figma-api-key"]) {
-    config.figmaApiKey = argv["figma-api-key"];
+    auth.figmaApiKey = argv["figma-api-key"];
     config.configSources.figmaApiKey = "cli";
   } else if (process.env.FIGMA_API_KEY) {
-    config.figmaApiKey = process.env.FIGMA_API_KEY;
+    auth.figmaApiKey = process.env.FIGMA_API_KEY;
     config.configSources.figmaApiKey = "env";
+  }
+
+  // Handle FIGMA_OAUTH_TOKEN
+  if (argv["figma-oauth-token"]) {
+    auth.figmaOAuthToken = argv["figma-oauth-token"];
+    config.configSources.figmaOAuthToken = "cli";
+    auth.useOAuth = true;
+  } else if (process.env.FIGMA_OAUTH_TOKEN) {
+    auth.figmaOAuthToken = process.env.FIGMA_OAUTH_TOKEN;
+    config.configSources.figmaOAuthToken = "env";
+    auth.useOAuth = true;
   }
 
   // Handle PORT
@@ -69,20 +93,33 @@ export function getServerConfig(isStdioMode: boolean): ServerConfig {
   }
 
   // Validate configuration
-  if (!config.figmaApiKey) {
-    console.error("FIGMA_API_KEY is required (via CLI argument --figma-api-key or .env file)");
+  if (!auth.figmaApiKey && !auth.figmaOAuthToken) {
+    console.error(
+      "Either FIGMA_API_KEY or FIGMA_OAUTH_TOKEN is required (via CLI argument or .env file)",
+    );
     process.exit(1);
   }
 
   // Log configuration sources
   if (!isStdioMode) {
     console.log("\nConfiguration:");
-    console.log(
-      `- FIGMA_API_KEY: ${maskApiKey(config.figmaApiKey)} (source: ${config.configSources.figmaApiKey})`,
-    );
+    if (auth.useOAuth) {
+      console.log(
+        `- FIGMA_OAUTH_TOKEN: ${maskApiKey(auth.figmaOAuthToken)} (source: ${config.configSources.figmaOAuthToken})`,
+      );
+      console.log("- Authentication Method: OAuth Bearer Token");
+    } else {
+      console.log(
+        `- FIGMA_API_KEY: ${maskApiKey(auth.figmaApiKey)} (source: ${config.configSources.figmaApiKey})`,
+      );
+      console.log("- Authentication Method: Personal Access Token (X-Figma-Token)");
+    }
     console.log(`- PORT: ${config.port} (source: ${config.configSources.port})`);
     console.log(); // Empty line for better readability
   }
 
-  return config;
+  return {
+    ...config,
+    auth,
+  };
 }
