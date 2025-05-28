@@ -1,5 +1,11 @@
 # figma-developer-mcp
 
+## 0.3.1
+
+### Patch Changes
+
+- [#133](https://github.com/GLips/Figma-Context-MCP/pull/133) [`983375d`](https://github.com/GLips/Figma-Context-MCP/commit/983375d3fe7f2c4b48ce770b13e5b8cb06b162d0) Thanks [@dgomez-orangeloops](https://github.com/dgomez-orangeloops)! - Auto-update package version in code.
+
 ## 0.3.0
 
 ### Minor Changes
