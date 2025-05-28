@@ -11,11 +11,14 @@ const serverInfo = {
 
 function createServer(
   authOptions: FigmaAuthOptions,
-  { isHTTP = false }: { isHTTP?: boolean } = {},
+  {
+    isHTTP = false,
+    rawFigmaResponse = false,
+  }: { isHTTP?: boolean; rawFigmaResponse?: boolean } = {},
 ) {
   const server = new McpServer(serverInfo);
-  // const figmaService = new FigmaService(figmaApiKey);
   const figmaService = new FigmaService(authOptions);
+  (figmaService as any).rawFigmaResponse = rawFigmaResponse;
   registerTools(server, figmaService);
 
   Logger.isHTTP = isHTTP;
@@ -62,9 +65,21 @@ function registerTools(server: McpServer, figmaService: FigmaService): void {
           file = await figmaService.getFile(fileKey, depth);
         }
 
-        Logger.log(`Successfully fetched file: ${file.name || file.document?.name}`);
-        const yamlResult = yaml.dump(file);
+        // Get the rawFigmaResponse flag from config (attached to figmaService for simplicity)
+        const rawFigmaResponse = (figmaService as any).rawFigmaResponse;
+        let output: any;
+        if (rawFigmaResponse) {
+          Logger.log(`Successfully fetched file: ${file.name || file.document?.name}`);
+          output = file;
+        } else {
+          const mod = await import("./services/simplify-node-response.js");
+          const simplified = mod.parseFigmaResponse(file);
+          Logger.log(`Successfully fetched file: ${simplified.name}`);
+          const { nodes, globalVars, ...metadata } = simplified;
+          output = { metadata, nodes, globalVars };
+        }
 
+        const yamlResult = yaml.dump(output);
         Logger.log("Sending result to client");
         return {
           content: [{ type: "text", text: yamlResult }],
