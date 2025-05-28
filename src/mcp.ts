@@ -7,7 +7,7 @@ import { Logger } from "./utils/logger.js";
 
 const serverInfo = {
   name: "Figma MCP Server",
-  version: process.env.NPM_PACKAGE_VERSION,
+  version: process.env.NPM_PACKAGE_VERSION ?? "unknown",
 };
 
 function createServer(

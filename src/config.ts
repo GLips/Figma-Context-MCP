@@ -45,7 +45,7 @@ export function getServerConfig(isStdioMode: boolean): ServerConfig {
       },
     })
     .help()
-    .version(process.env.NPM_PACKAGE_VERSION)
+    .version(process.env.NPM_PACKAGE_VERSION ?? "unknown")
     .parseSync() as CliArgs;
 
   const auth: FigmaAuthOptions = {
