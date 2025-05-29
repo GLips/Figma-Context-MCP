@@ -47,8 +47,14 @@ function registerTools(server: McpServer, figmaService: FigmaService): void {
         .describe(
           "OPTIONAL. Do NOT use unless explicitly requested by the user. Controls how many levels deep to traverse the node tree,",
         ),
+      saveToFile: z
+        .string()
+        .optional()
+        .describe(
+          "Optional path to save the YAML output to a file. If provided, the YAML data will be saved to this location.",
+        ),
     },
-    async ({ fileKey, nodeId, depth }) => {
+    async ({ fileKey, nodeId, depth, saveToFile }) => {
       try {
         Logger.log(
           `Fetching ${
@@ -75,9 +81,38 @@ function registerTools(server: McpServer, figmaService: FigmaService): void {
         Logger.log("Generating YAML result from file");
         const yamlResult = yaml.dump(result);
 
+        // Save to file if path is provided
+        if (saveToFile) {
+          try {
+            // Ensure directory exists
+            const fs = await import("fs");
+            const path = await import("path");
+            const dirname = path.dirname(saveToFile);
+            
+            if (!fs.existsSync(dirname)) {
+              fs.mkdirSync(dirname, { recursive: true });
+            }
+            
+            fs.writeFileSync(saveToFile, yamlResult);
+            Logger.log(`Saved Figma data to ${saveToFile}`);
+          } catch (fileError) {
+            const fileErrorMsg = fileError instanceof Error ? fileError.message : String(fileError);
+            Logger.error(`Failed to save file to ${saveToFile}: ${fileErrorMsg}`);
+            return {
+              isError: true,
+              content: [{ type: "text", text: `Fetched Figma data but failed to save to file: ${fileErrorMsg}` }],
+            };
+          }
+        }
+
         Logger.log("Sending result to client");
         return {
-          content: [{ type: "text", text: yamlResult }],
+          content: [{ 
+            type: "text", 
+            text: saveToFile ? 
+              `Successfully fetched Figma data and saved to ${saveToFile}\n\n${yamlResult}` : 
+              yamlResult 
+          }],
         };
       } catch (error) {
         const message = error instanceof Error ? error.message : JSON.stringify(error);
