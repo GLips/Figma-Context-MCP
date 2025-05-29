@@ -43,6 +43,16 @@ export function isLayout(val: unknown): val is HasLayoutTrait {
   );
 }
 
+export function isChildAutoLayout(node: unknown, parent: unknown): boolean {
+  const autoLayoutModes = ["HORIZONTAL", "VERTICAL"];
+  return (
+    isFrame(parent) &&
+    autoLayoutModes.includes(parent.layoutMode ?? "NONE") &&
+    isLayout(node) &&
+    node.layoutPositioning !== "ABSOLUTE"
+  );
+}
+
 export function isStrokeWeights(val: unknown): val is StrokeWeights {
   return (
     typeof val === "object" &&
