@@ -67,13 +67,17 @@ export async function downloadFigmaImage(
             }
             writer.write(value);
           }
-          resolve(fullPath);
         } catch (err) {
           writer.end();
           fs.unlink(fullPath, () => {});
           reject(err);
         }
       };
+
+      // Resolve only when the stream is fully written
+      writer.on('finish', () => {
+        resolve(fullPath);
+      });
 
       writer.on("error", (err) => {
         reader.cancel();
