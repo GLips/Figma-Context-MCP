@@ -16,7 +16,10 @@ export async function startServer(): Promise<void> {
 
   const config = getServerConfig(isStdioMode);
 
-  const server = createServer(config.auth, { isHTTP: !isStdioMode });
+  const server = createServer(config.auth, {
+    isHTTP: !isStdioMode,
+    rawFigmaResponse: (config as any).rawFigmaResponse,
+  });
 
   if (isStdioMode) {
     const transport = new StdioServerTransport();

@@ -92,6 +92,35 @@ Or you can set `FIGMA_API_KEY` and `PORT` in the `env` field.
 
 If you need more information on how to configure the Framelink Figma MCP server, see the [Framelink docs](https://www.framelink.ai/docs/quickstart?utm_source=github&utm_medium=referral&utm_campaign=readme).
 
+## Raw Figma API Response Mode
+
+By default, this server returns a simplified version of the Figma API response, optimized for AI coding agents. If you want to receive the full raw Figma API response (for debugging or advanced use cases), you can start the server with the `--raw-figma-response` flag:
+
+```sh
+npx figma-developer-mcp --figma-api-key=YOUR-KEY --raw-figma-response --stdio
+```
+
+Or add the flag to your MCP server configuration:
+
+```json
+{
+  "mcpServers": {
+    "Framelink Figma MCP": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "figma-developer-mcp",
+        "--figma-api-key=YOUR-KEY",
+        "--raw-figma-response",
+        "--stdio"
+      ]
+    }
+  }
+}
+```
+
+If the flag is not set, the server will continue to return the simplified response as before.
+
 ## Star History
 
 <a href="https://star-history.com/#GLips/Figma-Context-MCP"><img src="https://api.star-history.com/svg?repos=GLips/Figma-Context-MCP&type=Date" alt="Star History Chart" width="600" /></a>

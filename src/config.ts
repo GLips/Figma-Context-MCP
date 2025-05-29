@@ -25,6 +25,7 @@ interface CliArgs {
   "figma-api-key"?: string;
   "figma-oauth-token"?: string;
   port?: number;
+  "raw-figma-response"?: boolean;
 }
 
 export function getServerConfig(isStdioMode: boolean): ServerConfig {
@@ -42,6 +43,11 @@ export function getServerConfig(isStdioMode: boolean): ServerConfig {
       port: {
         type: "number",
         description: "Port to run the server on",
+      },
+      "raw-figma-response": {
+        type: "boolean",
+        description: "Return the raw Figma API response instead of the simplified response",
+        default: false,
       },
     })
     .help()
@@ -91,6 +97,9 @@ export function getServerConfig(isStdioMode: boolean): ServerConfig {
     config.port = parseInt(process.env.PORT, 10);
     config.configSources.port = "env";
   }
+
+  // Add to config
+  (config as any).rawFigmaResponse = argv["raw-figma-response"] || false;
 
   // Validate configuration
   if (!auth.figmaApiKey && !auth.figmaOAuthToken) {
