@@ -13,7 +13,7 @@ import type {
   SimplifiedComponentSetDefinition,
 } from "~/utils/sanitization.js";
 import { sanitizeComponents, sanitizeComponentSets } from "~/utils/sanitization.js";
-import { hasValue, isRectangleCornerRadii, isTruthy } from "~/utils/identity.js";
+import { getNodeCategory, hasValue, isRectangleCornerRadii, isTruthy } from "~/utils/identity.js";
 import {
   removeEmptyKeys,
   generateVarId,
@@ -23,6 +23,8 @@ import {
 } from "~/utils/common.js";
 import { buildSimplifiedStrokes, type SimplifiedStroke } from "~/transformers/style.js";
 import { buildSimplifiedEffects, type SimplifiedEffects } from "~/transformers/effects.js";
+import { buildSimplifiedIcon, type SimpledIcon } from "~/transformers/icon.js";
+
 /**
  * TODO ITEMS
  *
@@ -60,7 +62,9 @@ type StyleTypes =
   | string;
 type GlobalVars = {
   styles: Record<StyleId, StyleTypes>;
+  icons: Record<string, SimpledIcon>;
 };
+
 export interface SimplifiedDesign {
   name: string;
   lastModified: string;
@@ -93,6 +97,7 @@ export interface SimplifiedNode {
   // for rect-specific strokes, etc.
   componentId?: string;
   componentProperties?: Record<string, any>;
+  icon?: string;
   // children
   children?: SimplifiedNode[];
 }
@@ -129,7 +134,10 @@ export interface ColorValue {
 }
 
 // ---------------------- PARSING ----------------------
-export function parseFigmaResponse(data: GetFileResponse | GetFileNodesResponse): SimplifiedDesign {
+export async function parseFigmaResponse(
+  fileKey: string,
+  data: GetFileResponse | GetFileNodesResponse,
+): Promise<SimplifiedDesign> {
   const aggregatedComponents: Record<string, Component> = {};
   const aggregatedComponentSets: Record<string, ComponentSet> = {};
   let nodesToParse: Array<FigmaDocumentNode>;
@@ -158,14 +166,18 @@ export function parseFigmaResponse(data: GetFileResponse | GetFileNodesResponse)
 
   const { name, lastModified, thumbnailUrl } = data;
 
-  let globalVars: GlobalVars = {
+  const globalVars: GlobalVars = {
     styles: {},
+    icons: {},
   };
 
-  const simplifiedNodes: SimplifiedNode[] = nodesToParse
-    .filter(isVisible)
-    .map((n) => parseNode(globalVars, n))
-    .filter((child) => child !== null && child !== undefined);
+  const visibleNodes = nodesToParse.filter(isVisible);
+  let simplifiedNodes = [];
+  for (const n of visibleNodes) {
+    const parsedNode = await parseNode(fileKey, globalVars, n);
+    simplifiedNodes.push(parsedNode);
+  }
+  simplifiedNodes = simplifiedNodes.filter((child) => child !== null && child !== undefined);
 
   const simplifiedDesign: SimplifiedDesign = {
     name,
@@ -179,24 +191,6 @@ export function parseFigmaResponse(data: GetFileResponse | GetFileNodesResponse)
 
   return removeEmptyKeys(simplifiedDesign);
 }
-
-// Helper function to find node by ID
-const findNodeById = (id: string, nodes: SimplifiedNode[]): SimplifiedNode | undefined => {
-  for (const node of nodes) {
-    if (node?.id === id) {
-      return node;
-    }
-
-    if (node?.children && node.children.length > 0) {
-      const foundInChildren = findNodeById(id, node.children);
-      if (foundInChildren) {
-        return foundInChildren;
-      }
-    }
-  }
-
-  return undefined;
-};
 
 /**
  * Find or create global variables
@@ -222,11 +216,29 @@ function findOrCreateVar(globalVars: GlobalVars, value: any, prefix: string): St
   return varId;
 }
 
-function parseNode(
+/**
+ * Find or create a global variable for an icon
+ *
+ * @param icon - Icon object containing fileName and other properties
+ * @param globalVars - Global variables object to store icons
+ * @returns The fileName of the icon
+ */
+function findOrCreateVarForIcons(icon: SimpledIcon, globalVars: GlobalVars): string {
+  const { fileName } = icon;
+  globalVars.icons = globalVars.icons ?? {};
+  const isExist = Object.keys(globalVars.icons).findIndex((key) => key === icon.fileName) !== -1;
+  if (!isExist) {
+    globalVars.icons[fileName] = icon;
+  }
+  return fileName;
+}
+
+async function parseNode(
+  fileKey: string,
   globalVars: GlobalVars,
   n: FigmaDocumentNode,
   parent?: FigmaDocumentNode,
-): SimplifiedNode | null {
+): Promise<SimplifiedNode | null> {
   const { id, name, type } = n;
 
   const simplified: SimplifiedNode = {
@@ -235,12 +247,21 @@ function parseNode(
     type,
   };
 
-  if (type === "INSTANCE") {
-    if (hasValue("componentId", n)) {
-      simplified.componentId = n.componentId;
+  // Determine the category of the node
+  const category = getNodeCategory(n);
+  if (category === "component") {
+    if (type === "INSTANCE") {
+      if (hasValue("componentId", n)) {
+        simplified.componentId = n.componentId;
+      }
+      if (hasValue("componentProperties", n)) {
+        simplified.componentProperties = n.componentProperties;
+      }
     }
-    if (hasValue("componentProperties", n)) {
-      simplified.componentProperties = n.componentProperties;
+  } else if (category === "icon") {
+    const icon = await buildSimplifiedIcon(fileKey, n);
+    if (icon) {
+      simplified.icon = findOrCreateVarForIcons(icon, globalVars);
     }
   }
 
@@ -309,20 +330,37 @@ function parseNode(
   }
 
   // Recursively process child nodes
-  if (hasValue("children", n) && Array.isArray(n.children) && n.children.length > 0) {
-    const children = n.children
-      .filter(isVisible)
-      .map((child) => parseNode(globalVars, child, n))
-      .filter((child) => child !== null && child !== undefined);
-    if (children.length) {
-      simplified.children = children;
+  if (hasValue("children", n) && shouldTraverseChildren(n, simplified)) {
+    const visibleNodes = n.children.filter(isVisible);
+    let simplifiedNodes = [];
+    for (const visibleNode of visibleNodes) {
+      const parsedNode = await parseNode(fileKey, globalVars, visibleNode, n);
+      simplifiedNodes.push(parsedNode);
+    }
+    simplifiedNodes = simplifiedNodes.filter((child) => child !== null && child !== undefined);
+
+    if (simplifiedNodes.length) {
+      simplified.children = simplifiedNodes;
     }
   }
 
-  // Convert VECTOR to IMAGE
-  if (type === "VECTOR") {
-    simplified.type = "IMAGE-SVG";
-  }
-
   return simplified;
+}
+
+/**
+ * Determines whether to traverse the children of a Figma node
+ *
+ * @param n - The Figma node to evaluate
+ * @param simplifiedParent - The simplified parent node containing metadata like icon classification
+ * @returns True if the node's children should be traversed, false otherwise
+ */
+function shouldTraverseChildren(n: FigmaDocumentNode, simplifiedParent: SimplifiedNode): boolean {
+  // If a node has a determined classification (e.g., icon or component), its type alone
+  // provides enough information to generate code, and traversing children is unnecessary.
+  return (
+    hasValue("children", n) &&
+    Array.isArray(n.children) &&
+    n.children.length > 0 &&
+    !simplifiedParent.icon
+  );
 }
