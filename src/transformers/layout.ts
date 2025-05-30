@@ -255,6 +255,12 @@ function buildSimplifiedLayoutValues(
     }
 
     if (Object.keys(dimensions).length > 0) {
+      if (dimensions.width) {
+        dimensions.width = pixelRound(dimensions.width);
+      }
+      if (dimensions.height) {
+        dimensions.height = pixelRound(dimensions.height);
+      }
       layoutValues.dimensions = dimensions;
     }
   }
