@@ -1,4 +1,4 @@
-import { isChildAutoLayout, isFrame, isLayout, isRectangle } from "~/utils/identity.js";
+import { isInAutoLayoutFlow, isFrame, isLayout, isRectangle } from "~/utils/identity.js";
 import type {
   Node as FigmaDocumentNode,
   HasFramePropertiesTrait,
@@ -210,7 +210,7 @@ function buildSimplifiedLayoutValues(
   if (
     // If parent is a frame but not an AutoLayout, or if the node is absolute, include positioning-related properties
     isFrame(parent) &&
-    !isChildAutoLayout(n, parent)
+    !isInAutoLayoutFlow(n, parent)
   ) {
     if (n.layoutPositioning === "ABSOLUTE") {
       layoutValues.position = "absolute";
