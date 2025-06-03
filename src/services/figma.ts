@@ -1,5 +1,5 @@
 import fs from "fs";
-import { parseFigmaResponse, SimplifiedDesign } from "./simplify-node-response.js";
+import { parseFigmaResponse, type SimplifiedDesign } from "./simplify-node-response.js";
 import type {
   GetImagesResponse,
   GetFileResponse,
@@ -7,13 +7,15 @@ import type {
   GetImageFillsResponse,
 } from "@figma/rest-api-spec";
 import { downloadFigmaImage } from "~/utils/common.js";
-import { Logger } from "~/server.js";
+import { Logger } from "~/utils/logger.js";
+import { fetchWithRetry } from "~/utils/fetch-with-retry.js";
 import yaml from "js-yaml";
 
-export interface FigmaError {
-  status: number;
-  err: string;
-}
+export type FigmaAuthOptions = {
+  figmaApiKey: string;
+  figmaOAuthToken: string;
+  useOAuth: boolean;
+};
 
 type FetchImageParams = {
   /**
@@ -39,38 +41,37 @@ type FetchImageFillParams = Omit<FetchImageParams, "fileType"> & {
 
 export class FigmaService {
   private readonly apiKey: string;
+  private readonly oauthToken: string;
+  private readonly useOAuth: boolean;
   private readonly baseUrl = "https://api.figma.com/v1";
 
-  constructor(apiKey: string) {
-    this.apiKey = apiKey;
+  constructor({ figmaApiKey, figmaOAuthToken, useOAuth }: FigmaAuthOptions) {
+    this.apiKey = figmaApiKey || "";
+    this.oauthToken = figmaOAuthToken || "";
+    this.useOAuth = !!useOAuth && !!this.oauthToken;
   }
 
   private async request<T>(endpoint: string): Promise<T> {
-    if (typeof fetch !== "function") {
-      throw new Error(
-        "The MCP server is being run in a Node.js environment where `fetch` is not available. You won't be able to access any data related to the Figma file.\n\nAs the coding AI assistant, PLEASE ABORT THE CURRENT REQUEST. No alternate approaches will work. Help the user fix this issue so you can proceed by letting them know that they need to run the MCP server with Node.js version 18 or higher.",
-      );
-    }
     try {
       Logger.log(`Calling ${this.baseUrl}${endpoint}`);
-      const response = await fetch(`${this.baseUrl}${endpoint}`, {
-        headers: {
-          "X-Figma-Token": this.apiKey,
-        },
+
+      // Set auth headers based on authentication method
+      const headers: Record<string, string> = {};
+
+      if (this.useOAuth) {
+        // Use OAuth token with Authorization: Bearer header
+        Logger.log("Using OAuth Bearer token for authentication");
+        headers["Authorization"] = `Bearer ${this.oauthToken}`;
+      } else {
+        // Use Personal Access Token with X-Figma-Token header
+        Logger.log("Using Personal Access Token for authentication");
+        headers["X-Figma-Token"] = this.apiKey;
+      }
+
+      return await fetchWithRetry<T>(`${this.baseUrl}${endpoint}`, {
+        headers,
       });
-
-      if (!response.ok) {
-        throw {
-          status: response.status,
-          err: response.statusText || "Unknown error",
-        } as FigmaError;
-      }
-
-      return await response.json();
     } catch (error) {
-      if ((error as FigmaError).status) {
-        throw error;
-      }
       if (error instanceof Error) {
         throw new Error(`Failed to make request to Figma API: ${error.message}`);
       }
@@ -103,12 +104,13 @@ export class FigmaService {
     fileKey: string,
     nodes: FetchImageParams[],
     localPath: string,
+    scale: number = 2,
   ): Promise<string[]> {
     const pngIds = nodes.filter(({ fileType }) => fileType === "png").map(({ nodeId }) => nodeId);
     const pngFiles =
       pngIds.length > 0
         ? this.request<GetImagesResponse>(
-            `/images/${fileKey}?ids=${pngIds.join(",")}&scale=2&format=png`,
+            `/images/${fileKey}?ids=${pngIds.join(",")}&scale=${scale}&format=png`,
           ).then(({ images = {} }) => images)
         : ({} as GetImagesResponse["images"]);
 
@@ -135,7 +137,7 @@ export class FigmaService {
     return Promise.all(downloads);
   }
 
-  async getFile(fileKey: string, depth?: number): Promise<SimplifiedDesign> {
+  async getFile(fileKey: string, depth?: number | null): Promise<SimplifiedDesign> {
     try {
       const endpoint = `/files/${fileKey}${depth ? `?depth=${depth}` : ""}`;
       Logger.log(`Retrieving Figma file: ${fileKey} (depth: ${depth ?? "default"})`);
@@ -151,7 +153,7 @@ export class FigmaService {
     }
   }
 
-  async getNode(fileKey: string, nodeId: string, depth?: number): Promise<SimplifiedDesign> {
+  async getNode(fileKey: string, nodeId: string, depth?: number | null): Promise<SimplifiedDesign> {
     const endpoint = `/files/${fileKey}/nodes?ids=${nodeId}${depth ? `&depth=${depth}` : ""}`;
     const response = await this.request<GetFileNodesResponse>(endpoint);
     Logger.log("Got response from getNode, now parsing.");

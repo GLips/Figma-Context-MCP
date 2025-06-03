@@ -2,7 +2,11 @@ import fs from "fs";
 import path from "path";
 
 import type { Paint, RGBA } from "@figma/rest-api-spec";
-import { CSSHexColor, CSSRGBAColor, SimplifiedFill } from "~/services/simplify-node-response.js";
+import type {
+  CSSHexColor,
+  CSSRGBAColor,
+  SimplifiedFill,
+} from "~/services/simplify-node-response.js";
 
 export type StyleId = `${string}_${string}` & { __brand: "StyleId" };
 
@@ -63,13 +67,17 @@ export async function downloadFigmaImage(
             }
             writer.write(value);
           }
-          resolve(fullPath);
         } catch (err) {
           writer.end();
           fs.unlink(fullPath, () => {});
           reject(err);
         }
       };
+
+      // Resolve only when the stream is fully written
+      writer.on('finish', () => {
+        resolve(fullPath);
+      });
 
       writer.on("error", (err) => {
         reader.cancel();

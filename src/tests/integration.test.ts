@@ -1,14 +1,15 @@
-import { FigmaMcpServer } from "../server.js";
+import { createServer } from "../mcp.js";
 import { config } from "dotenv";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
 import yaml from "js-yaml";
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 config();
 
 describe("Figma MCP Server Tests", () => {
-  let server: FigmaMcpServer;
+  let server: McpServer;
   let client: Client;
   let figmaApiKey: string;
   let figmaFileKey: string;
@@ -24,7 +25,11 @@ describe("Figma MCP Server Tests", () => {
       throw new Error("FIGMA_FILE_KEY is not set in environment variables");
     }
 
-    server = new FigmaMcpServer(figmaApiKey);
+    server = createServer({
+      figmaApiKey,
+      figmaOAuthToken: "",
+      useOAuth: false,
+    });
 
     client = new Client(
       {
