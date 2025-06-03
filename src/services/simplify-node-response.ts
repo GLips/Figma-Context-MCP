@@ -265,7 +265,19 @@ function parseNode(
     simplified.borderRadius = `${n.rectangleCornerRadii[0]}px ${n.rectangleCornerRadii[1]}px ${n.rectangleCornerRadii[2]}px ${n.rectangleCornerRadii[3]}px`;
   }
 
-  // Recursively process child nodes
+  // Add specific properties for instances of components
+  if (type === "INSTANCE" && hasValue("componentProperties", n)) {
+    simplified.componentProperties = Object.entries(n.componentProperties ?? {}).map(
+      ([name, { value, type }]) => ({
+        name,
+        value: value.toString(),
+        type,
+      }),
+    );
+  }
+
+  // Recursively process child nodes.
+  // Include children at the very end so all relevant configuration data for the element is output first and kept together for the AI.
   if (hasValue("children", n) && n.children.length > 0) {
     let children = n.children
       .filter(isVisible)
@@ -274,14 +286,6 @@ function parseNode(
     if (children.length) {
       simplified.children = children;
     }
-  }
-
-  if (type === "INSTANCE" && hasValue("componentProperties", n)) {
-    simplified.componentProperties = Object.entries(n?.componentProperties ?? {}).map(([name, { value, type }]) => ({
-      name,
-      value: value.toString(),
-      type,
-    }));
   }
 
   // Convert VECTOR to IMAGE
