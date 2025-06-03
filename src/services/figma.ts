@@ -125,19 +125,18 @@ export class FigmaService {
     fileKey: string,
     nodes: FetchImageParams[],
     localPath: string,
-    svgOptions?: {
-      outlineText?: boolean;
-      includeId?: boolean;
-      simplifyStroke?: boolean;
-      scale?: number;
+    pngScale: number,
+    svgOptions: {
+      outlineText: boolean;
+      includeId: boolean;
+      simplifyStroke: boolean;
     },
   ): Promise<string[]> {
-    const defaultSvgScale = 2
     const pngIds = nodes.filter(({ fileType }) => fileType === "png").map(({ nodeId }) => nodeId);
     const pngFiles =
       pngIds.length > 0
         ? this.request<GetImagesResponse>(
-            `/images/${fileKey}?ids=${pngIds.join(",")}&scale=${scale}&format=png`,
+            `/images/${fileKey}?ids=${pngIds.join(",")}&format=png&scale=${pngScale}`,
           ).then(({ images = {} }) => images)
         : ({} as GetImagesResponse["images"]);
 
@@ -151,11 +150,6 @@ export class FigmaService {
       }
       if (svgOptions.simplifyStroke !== undefined) {
         svgParams += `&svg_simplify_stroke=${svgOptions.simplifyStroke}`;
-      }
-      if (svgOptions.scale !== undefined) {
-        svgParams += `&scale=${svgOptions.scale}`;
-      } else {
-        svgParams += `&scale=${defaultSvgScale}`;
       }
     }
 
