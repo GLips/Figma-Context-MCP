@@ -100,10 +100,9 @@ export interface SimplifiedNode {
   // backgroundColor?: ColorValue; // Deprecated by Figma API
   // for rect-specific strokes, etc.
   componentId?: string;
-  // componentProperties?: Record<string, any>;
+  componentProperties?: ComponentProperties[];
   // children
   children?: SimplifiedNode[];
-  componentProperties?: ComponentProperties[];
 }
 
 export interface BoundingBox {
