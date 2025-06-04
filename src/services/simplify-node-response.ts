@@ -5,6 +5,7 @@ import type {
   Paint,
   Vector,
   GetFileResponse,
+  ComponentPropertyType,
   Component,
   ComponentSet,
 } from "@figma/rest-api-spec";
@@ -75,6 +76,12 @@ export interface SimplifiedDesign {
   globalVars: GlobalVars;
 }
 
+export interface ComponentProperties {
+  name: string;
+  value: string;
+  type: ComponentPropertyType;
+}
+
 export interface SimplifiedNode {
   id: string;
   name: string;
@@ -96,7 +103,7 @@ export interface SimplifiedNode {
   // backgroundColor?: ColorValue; // Deprecated by Figma API
   // for rect-specific strokes, etc.
   componentId?: string;
-  componentProperties?: Record<string, any>;
+  componentProperties?: ComponentProperties[];
   icon?: string;
   // children
   children?: SimplifiedNode[];
@@ -254,8 +261,16 @@ async function parseNode(
       if (hasValue("componentId", n)) {
         simplified.componentId = n.componentId;
       }
+
+      // Add specific properties for instances of components
       if (hasValue("componentProperties", n)) {
-        simplified.componentProperties = n.componentProperties;
+        simplified.componentProperties = Object.entries(n.componentProperties ?? {}).map(
+          ([name, { value, type }]) => ({
+            name,
+            value: value.toString(),
+            type,
+          }),
+        );
       }
     }
   } else if (category === "icon") {
@@ -330,6 +345,7 @@ async function parseNode(
   }
 
   // Recursively process child nodes
+  // Include children at the very end so all relevant configuration data for the element is output first and kept together for the AI.
   if (hasValue("children", n) && shouldTraverseChildren(n, simplified)) {
     const visibleNodes = n.children.filter(isVisible);
     let simplifiedNodes = [];
@@ -359,7 +375,6 @@ function shouldTraverseChildren(n: FigmaDocumentNode, simplifiedParent: Simplifi
   // provides enough information to generate code, and traversing children is unnecessary.
   return (
     hasValue("children", n) &&
-    Array.isArray(n.children) &&
     n.children.length > 0 &&
     !simplifiedParent.icon
   );

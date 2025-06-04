@@ -1,10 +1,10 @@
-import { isFrame, isLayout, isRectangle } from "~/utils/identity.js";
+import { isInAutoLayoutFlow, isFrame, isLayout, isRectangle } from "~/utils/identity.js";
 import type {
   Node as FigmaDocumentNode,
   HasFramePropertiesTrait,
   HasLayoutTrait,
 } from "@figma/rest-api-spec";
-import { generateCSSShorthand } from "~/utils/common.js";
+import { generateCSSShorthand, pixelRound } from "~/utils/common.js";
 
 export interface SimplifiedLayout {
   mode: "none" | "row" | "column";
@@ -208,17 +208,17 @@ function buildSimplifiedLayoutValues(
 
   // Only include positioning-related properties if parent layout isn't flex or if the node is absolute
   if (
-    isFrame(parent) &&
     // If parent is a frame but not an AutoLayout, or if the node is absolute, include positioning-related properties
-    (!parent.layoutMode || parent.layoutMode === "NONE" || n.layoutPositioning === "ABSOLUTE")
+    isFrame(parent) &&
+    !isInAutoLayoutFlow(n, parent)
   ) {
     if (n.layoutPositioning === "ABSOLUTE") {
       layoutValues.position = "absolute";
     }
     if (n.absoluteBoundingBox && parent.absoluteBoundingBox) {
       layoutValues.locationRelativeToParent = {
-        x: n.absoluteBoundingBox.x - parent.absoluteBoundingBox.x,
-        y: n.absoluteBoundingBox.y - parent.absoluteBoundingBox.y,
+        x: pixelRound(n.absoluteBoundingBox.x - parent.absoluteBoundingBox.x),
+        y: pixelRound(n.absoluteBoundingBox.y - parent.absoluteBoundingBox.y),
       };
     }
   }
@@ -255,6 +255,12 @@ function buildSimplifiedLayoutValues(
     }
 
     if (Object.keys(dimensions).length > 0) {
+      if (dimensions.width) {
+        dimensions.width = pixelRound(dimensions.width);
+      }
+      if (dimensions.height) {
+        dimensions.height = pixelRound(dimensions.height);
+      }
       layoutValues.dimensions = dimensions;
     }
   }

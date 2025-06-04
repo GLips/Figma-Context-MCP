@@ -44,6 +44,25 @@ export function isLayout(val: unknown): val is HasLayoutTrait {
   );
 }
 
+/**
+ * Checks if:
+ * 1. A node is a child to an auto layout frame
+ * 2. The child adheres to the auto layout rules—i.e. it's not absolutely positioned
+ *
+ * @param node - The node to check.
+ * @param parent - The parent node.
+ * @returns True if the node is a child of an auto layout frame, false otherwise.
+ */
+export function isInAutoLayoutFlow(node: unknown, parent: unknown): boolean {
+  const autoLayoutModes = ["HORIZONTAL", "VERTICAL"];
+  return (
+    isFrame(parent) &&
+    autoLayoutModes.includes(parent.layoutMode ?? "NONE") &&
+    isLayout(node) &&
+    node.layoutPositioning !== "ABSOLUTE"
+  );
+}
+
 export function isStrokeWeights(val: unknown): val is StrokeWeights {
   return (
     typeof val === "object" &&
