@@ -47,8 +47,15 @@ function registerTools(server: McpServer, figmaService: FigmaService): void {
         .describe(
           "OPTIONAL. Do NOT use unless explicitly requested by the user. Controls how many levels deep to traverse the node tree,",
         ),
+      outputFormat: z
+        .enum(["yaml", "json"])
+        .optional()
+        .default("yaml")
+        .describe(
+          "Output format for the returned data. Can be 'yaml' dump (using `js-yaml`) or stringified 'json' (using `JSON.stringify`). Defaults to 'yaml'.",
+        ),
     },
-    async ({ fileKey, nodeId, depth }) => {
+    async ({ fileKey, nodeId, depth, outputFormat = "yaml" }) => {
       try {
         Logger.log(
           `Fetching ${
@@ -72,12 +79,13 @@ function registerTools(server: McpServer, figmaService: FigmaService): void {
           globalVars,
         };
 
-        Logger.log("Generating YAML result from file");
-        const yamlResult = yaml.dump(result);
+        Logger.log(`Generating ${outputFormat.toUpperCase()} result from file`);
+        const formattedResult =
+          outputFormat === "json" ? JSON.stringify(result, null, 2) : yaml.dump(result);
 
         Logger.log("Sending result to client");
         return {
-          content: [{ type: "text", text: yamlResult }],
+          content: [{ type: "text", text: formattedResult }],
         };
       } catch (error) {
         const message = error instanceof Error ? error.message : JSON.stringify(error);
