@@ -327,5 +327,5 @@ export function pixelRound(num: number): number {
   if (isNaN(num)) {
     throw new TypeError(`Input must be a valid number`);
   }
-  return Number(Number(num).toFixed(2));
+  return Number(Number(num).toFixed(1));
 }
