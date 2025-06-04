@@ -40,6 +40,23 @@ type FetchImageFillParams = Omit<FetchImageParams, "fileType"> & {
   imageRef: string;
 };
 
+type GetImagesParams = {
+  /**
+   * Whether text elements are rendered as outlines (vector paths) or as <text> elements in SVGs.
+   */
+  outlineText?: boolean;
+
+  /**
+   * Whether to include id attributes for all SVG elements. Adds the layer name to the id attribute of an svg element.
+   */
+  includeId?: boolean;
+
+  /**
+   * Whether to simplify inside/outside strokes and use stroke attribute if possible instead of <mask>.
+   */
+  simplifyStroke?: boolean;
+};
+
 export class FigmaService {
 // Static property to store the singleton instance
   private static instance: FigmaService | null = null;
@@ -117,22 +134,31 @@ export class FigmaService {
     fileKey: string,
     nodes: FetchImageParams[],
     localPath: string,
-    scale: number = 2,
+    pngScale: number,
+    { outlineText = true, includeId = false, simplifyStroke = true }: GetImagesParams = {},
   ): Promise<string[]> {
     const pngIds = nodes.filter(({ fileType }) => fileType === "png").map(({ nodeId }) => nodeId);
     const pngFiles =
       pngIds.length > 0
         ? this.request<GetImagesResponse>(
-            `/images/${fileKey}?ids=${pngIds.join(",")}&scale=${scale}&format=png`,
+            `/images/${fileKey}?ids=${pngIds.join(",")}&format=png&scale=${pngScale}`,
           ).then(({ images = {} }) => images)
         : ({} as GetImagesResponse["images"]);
 
     const svgIds = nodes.filter(({ fileType }) => fileType === "svg").map(({ nodeId }) => nodeId);
+    const svgParams = [
+      `ids=${svgIds.join(",")}`,
+      "format=svg",
+      `svg_outline_text=${outlineText}`,
+      `svg_include_id=${includeId}`,
+      `svg_simplify_stroke=${simplifyStroke}`,
+    ].join("&");
+
     const svgFiles =
       svgIds.length > 0
-        ? this.request<GetImagesResponse>(
-            `/images/${fileKey}?ids=${svgIds.join(",")}&format=svg`,
-          ).then(({ images = {} }) => images)
+        ? this.request<GetImagesResponse>(`/images/${fileKey}?${svgParams}`).then(
+            ({ images = {} }) => images,
+          )
         : ({} as GetImagesResponse["images"]);
 
     const files = await Promise.all([pngFiles, svgFiles]).then(([f, l]) => ({ ...f, ...l }));
