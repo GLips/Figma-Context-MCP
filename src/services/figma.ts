@@ -10,6 +10,7 @@ import { downloadFigmaImage } from "~/utils/common.js";
 import { Logger } from "~/utils/logger.js";
 import { fetchWithRetry } from "~/utils/fetch-with-retry.js";
 import yaml from "js-yaml";
+import path from "path";
 
 export type FigmaAuthOptions = {
   figmaApiKey: string;
@@ -17,7 +18,7 @@ export type FigmaAuthOptions = {
   useOAuth: boolean;
 };
 
-type FetchImageParams = {
+export type FetchImageParams = {
   /**
    * The Node in Figma that will either be rendered or have its background image downloaded
    */
@@ -39,16 +40,45 @@ type FetchImageFillParams = Omit<FetchImageParams, "fileType"> & {
   imageRef: string;
 };
 
+type GetImagesParams = {
+  /**
+   * Whether text elements are rendered as outlines (vector paths) or as <text> elements in SVGs.
+   */
+  outlineText?: boolean;
+
+  /**
+   * Whether to include id attributes for all SVG elements. Adds the layer name to the id attribute of an svg element.
+   */
+  includeId?: boolean;
+
+  /**
+   * Whether to simplify inside/outside strokes and use stroke attribute if possible instead of <mask>.
+   */
+  simplifyStroke?: boolean;
+};
+
 export class FigmaService {
+// Static property to store the singleton instance
+  private static instance: FigmaService | null = null;
+
   private readonly apiKey: string;
   private readonly oauthToken: string;
   private readonly useOAuth: boolean;
   private readonly baseUrl = "https://api.figma.com/v1";
 
-  constructor({ figmaApiKey, figmaOAuthToken, useOAuth }: FigmaAuthOptions) {
+  private constructor({ figmaApiKey, figmaOAuthToken, useOAuth }: FigmaAuthOptions) {
     this.apiKey = figmaApiKey || "";
     this.oauthToken = figmaOAuthToken || "";
     this.useOAuth = !!useOAuth && !!this.oauthToken;
+  }
+
+// Static method to retrieve the singleton instance
+  public static getInstance(options?: FigmaAuthOptions): FigmaService {
+    if (!FigmaService.instance && options) {
+      const {figmaApiKey, figmaOAuthToken, useOAuth} = options
+      FigmaService.instance = new FigmaService({ figmaApiKey, figmaOAuthToken, useOAuth });
+    }
+    return <FigmaService>FigmaService.instance;
   }
 
   private async request<T>(endpoint: string): Promise<T> {
@@ -105,11 +135,7 @@ export class FigmaService {
     nodes: FetchImageParams[],
     localPath: string,
     pngScale: number,
-    svgOptions: {
-      outlineText: boolean;
-      includeId: boolean;
-      simplifyStroke: boolean;
-    },
+    { outlineText = true, includeId = false, simplifyStroke = true }: GetImagesParams = {},
   ): Promise<string[]> {
     const pngIds = nodes.filter(({ fileType }) => fileType === "png").map(({ nodeId }) => nodeId);
     const pngFiles =
@@ -123,9 +149,9 @@ export class FigmaService {
     const svgParams = [
       `ids=${svgIds.join(",")}`,
       "format=svg",
-      `svg_outline_text=${svgOptions.outlineText}`,
-      `svg_include_id=${svgOptions.includeId}`,
-      `svg_simplify_stroke=${svgOptions.simplifyStroke}`,
+      `svg_outline_text=${outlineText}`,
+      `svg_include_id=${includeId}`,
+      `svg_simplify_stroke=${simplifyStroke}`,
     ].join("&");
 
     const svgFiles =
@@ -141,6 +167,17 @@ export class FigmaService {
       .map(({ nodeId, fileName }) => {
         const imageUrl = files[nodeId];
         if (imageUrl) {
+          // Build the complete file path
+          const fullPath = path.join(localPath, fileName);
+
+          if (!fs.existsSync(localPath)) {
+            fs.mkdirSync(localPath, { recursive: true });
+          }
+
+          if (fs.existsSync(fullPath)) {
+            fs.unlinkSync(fullPath)
+          }
+
           return downloadFigmaImage(fileName, localPath, imageUrl);
         }
         return false;
@@ -156,7 +193,7 @@ export class FigmaService {
       Logger.log(`Retrieving Figma file: ${fileKey} (depth: ${depth ?? "default"})`);
       const response = await this.request<GetFileResponse>(endpoint);
       Logger.log("Got response");
-      const simplifiedResponse = parseFigmaResponse(response);
+      const simplifiedResponse = await parseFigmaResponse(fileKey, response);
       writeLogs("figma-raw.yml", response);
       writeLogs("figma-simplified.yml", simplifiedResponse);
       return simplifiedResponse;
@@ -171,7 +208,7 @@ export class FigmaService {
     const response = await this.request<GetFileNodesResponse>(endpoint);
     Logger.log("Got response from getNode, now parsing.");
     writeLogs("figma-raw.yml", response);
-    const simplifiedResponse = parseFigmaResponse(response);
+    const simplifiedResponse = await parseFigmaResponse(fileKey, response);
     writeLogs("figma-simplified.yml", simplifiedResponse);
     return simplifiedResponse;
   }

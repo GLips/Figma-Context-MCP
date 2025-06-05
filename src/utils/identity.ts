@@ -3,6 +3,7 @@ import type {
   HasLayoutTrait,
   StrokeWeights,
   HasFramePropertiesTrait,
+  Node as FigmaDocumentNode,
 } from "@figma/rest-api-spec";
 import { isTruthy } from "remeda";
 import type { CSSHexColor, CSSRGBAColor } from "~/services/simplify-node-response.js";
@@ -97,4 +98,25 @@ export function isRectangleCornerRadii(val: unknown): val is number[] {
 
 export function isCSSColorValue(val: unknown): val is CSSRGBAColor | CSSHexColor {
   return typeof val === "string" && (val.startsWith("#") || val.startsWith("rgba"));
+}
+
+/**
+ * Determines the category of a Figma node
+ *
+ * @param n - The Figma node to evaluate
+ * @returns The category ("component" or "icon") or null if no category applies
+ */
+export function getNodeCategory(n: FigmaDocumentNode): "component" | "icon" | null {
+  if (hasValue("children", n)) {
+    // If all children are vectors, categorize as an icon
+    const isAllVectorChildren = n.children.every((child) => child.type === "VECTOR");
+    if (isAllVectorChildren) {
+      return "icon";
+    }
+  }
+
+  if (n.type === "INSTANCE") {
+    return "component";
+  }
+  return null;
 }
