@@ -9,10 +9,12 @@ config();
 interface ServerConfig {
   auth: FigmaAuthOptions;
   port: number;
+  outputFormat: "yaml" | "json";
   configSources: {
     figmaApiKey: "cli" | "env";
     figmaOAuthToken: "cli" | "env" | "none";
     port: "cli" | "env" | "default";
+    outputFormat: "cli" | "default";
   };
 }
 
@@ -25,6 +27,7 @@ interface CliArgs {
   "figma-api-key"?: string;
   "figma-oauth-token"?: string;
   port?: number;
+  json?: boolean;
 }
 
 export function getServerConfig(isStdioMode: boolean): ServerConfig {
@@ -43,6 +46,11 @@ export function getServerConfig(isStdioMode: boolean): ServerConfig {
         type: "number",
         description: "Port to run the server on",
       },
+      json: {
+        type: "boolean",
+        description: "Output data from tools in JSON format instead of YAML",
+        default: false,
+      },
     })
     .help()
     .version(process.env.NPM_PACKAGE_VERSION ?? "unknown")
@@ -56,10 +64,12 @@ export function getServerConfig(isStdioMode: boolean): ServerConfig {
 
   const config: Omit<ServerConfig, "auth"> = {
     port: 3333,
+    outputFormat: "yaml",
     configSources: {
       figmaApiKey: "env",
       figmaOAuthToken: "none",
       port: "default",
+      outputFormat: "default",
     },
   };
 
@@ -92,6 +102,12 @@ export function getServerConfig(isStdioMode: boolean): ServerConfig {
     config.configSources.port = "env";
   }
 
+  // Handle JSON output format
+  if (argv.json) {
+    config.outputFormat = "json";
+    config.configSources.outputFormat = "cli";
+  }
+
   // Validate configuration
   if (!auth.figmaApiKey && !auth.figmaOAuthToken) {
     console.error(
@@ -115,6 +131,7 @@ export function getServerConfig(isStdioMode: boolean): ServerConfig {
       console.log("- Authentication Method: Personal Access Token (X-Figma-Token)");
     }
     console.log(`- PORT: ${config.port} (source: ${config.configSources.port})`);
+    console.log(`- OUTPUT_FORMAT: ${config.outputFormat} (source: ${config.configSources.outputFormat})`);
     console.log(); // Empty line for better readability
   }
 
