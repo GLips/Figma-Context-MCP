@@ -39,6 +39,23 @@ type FetchImageFillParams = Omit<FetchImageParams, "fileType"> & {
   imageRef: string;
 };
 
+type GetImagesParams = {
+  /**
+   * Whether text elements are rendered as outlines (vector paths) or as <text> elements in SVGs.
+   */
+  outlineText?: boolean;
+
+  /**
+   * Whether to include id attributes for all SVG elements. Adds the layer name to the id attribute of an svg element.
+   */
+  includeId?: boolean;
+
+  /**
+   * Whether to simplify inside/outside strokes and use stroke attribute if possible instead of <mask>.
+   */
+  simplifyStroke?: boolean;
+};
+
 export class FigmaService {
   private readonly apiKey: string;
   private readonly oauthToken: string;
@@ -105,11 +122,7 @@ export class FigmaService {
     nodes: FetchImageParams[],
     localPath: string,
     pngScale: number,
-    svgOptions: {
-      outlineText: boolean;
-      includeId: boolean;
-      simplifyStroke: boolean;
-    },
+    { outlineText = true, includeId = false, simplifyStroke = true }: GetImagesParams = {},
   ): Promise<string[]> {
     const pngIds = nodes.filter(({ fileType }) => fileType === "png").map(({ nodeId }) => nodeId);
     const pngFiles =
@@ -123,9 +136,9 @@ export class FigmaService {
     const svgParams = [
       `ids=${svgIds.join(",")}`,
       "format=svg",
-      `svg_outline_text=${svgOptions.outlineText}`,
-      `svg_include_id=${svgOptions.includeId}`,
-      `svg_simplify_stroke=${svgOptions.simplifyStroke}`,
+      `svg_outline_text=${outlineText}`,
+      `svg_include_id=${includeId}`,
+      `svg_simplify_stroke=${simplifyStroke}`,
     ].join("&");
 
     const svgFiles =
