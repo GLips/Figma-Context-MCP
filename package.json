@@ -28,6 +28,8 @@
     "version": "changeset version && git add -A",
     "beta:start": "changeset pre enter beta",
     "beta:end": "changeset pre exit",
+    "beta:version": "changeset version && pnpm install --lockfile-only",
+    "beta:publish": "changeset publish --tag beta",
     "prerelease": "pnpm build",
     "release": "changeset publish && git push --follow-tags",
     "pub:release": "pnpm build && npm publish",
