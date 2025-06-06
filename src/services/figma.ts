@@ -150,7 +150,7 @@ export class FigmaService {
     return Promise.all(downloads);
   }
 
-  async getFile(fileKey: string, depth?: number | null): Promise<SimplifiedDesign> {
+  async getFile(fileKey: string, depth?: number | null): Promise<GetFileResponse> {
     try {
       const endpoint = `/files/${fileKey}${depth ? `?depth=${depth}` : ""}`;
       Logger.log(`Retrieving Figma file: ${fileKey} (depth: ${depth ?? "default"})`);
@@ -159,21 +159,25 @@ export class FigmaService {
       const simplifiedResponse = parseFigmaResponse(response);
       writeLogs("figma-raw.yml", response);
       writeLogs("figma-simplified.yml", simplifiedResponse);
-      return simplifiedResponse;
+      return response;
     } catch (e) {
       console.error("Failed to get file:", e);
       throw e;
     }
   }
 
-  async getNode(fileKey: string, nodeId: string, depth?: number | null): Promise<SimplifiedDesign> {
+  async getNode(
+    fileKey: string,
+    nodeId: string,
+    depth?: number | null,
+  ): Promise<GetFileNodesResponse> {
     const endpoint = `/files/${fileKey}/nodes?ids=${nodeId}${depth ? `&depth=${depth}` : ""}`;
     const response = await this.request<GetFileNodesResponse>(endpoint);
     Logger.log("Got response from getNode, now parsing.");
     writeLogs("figma-raw.yml", response);
     const simplifiedResponse = parseFigmaResponse(response);
     writeLogs("figma-simplified.yml", simplifiedResponse);
-    return simplifiedResponse;
+    return response;
   }
 }
 
