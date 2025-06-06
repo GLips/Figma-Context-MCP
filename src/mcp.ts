@@ -10,9 +10,14 @@ const serverInfo = {
   version: process.env.NPM_PACKAGE_VERSION ?? "unknown",
 };
 
+type CreateServerOptions = {
+  isHTTP?: boolean;
+  outputFormat?: "yaml" | "json";
+};
+
 function createServer(
   authOptions: FigmaAuthOptions,
-  { isHTTP = false, outputFormat = "yaml" }: { isHTTP?: boolean; outputFormat?: "yaml" | "json" } = {},
+  { isHTTP = false, outputFormat = "yaml" }: CreateServerOptions = {},
 ) {
   const server = new McpServer(serverInfo);
   // const figmaService = new FigmaService(figmaApiKey);
@@ -24,7 +29,11 @@ function createServer(
   return server;
 }
 
-function registerTools(server: McpServer, figmaService: FigmaService, outputFormat: "yaml" | "json"): void {
+function registerTools(
+  server: McpServer,
+  figmaService: FigmaService,
+  outputFormat: "yaml" | "json",
+): void {
   // Tool to get file information
   server.tool(
     "get_figma_data",
@@ -73,9 +82,8 @@ function registerTools(server: McpServer, figmaService: FigmaService, outputForm
         };
 
         Logger.log(`Generating ${outputFormat.toUpperCase()} result from file`);
-        const formattedResult = outputFormat === "json" 
-          ? JSON.stringify(result, null, 2)
-          : yaml.dump(result);
+        const formattedResult =
+          outputFormat === "json" ? JSON.stringify(result, null, 2) : yaml.dump(result);
 
         Logger.log("Sending result to client");
         return {
