@@ -14,7 +14,7 @@ interface ServerConfig {
     figmaApiKey: "cli" | "env";
     figmaOAuthToken: "cli" | "env" | "none";
     port: "cli" | "env" | "default";
-    outputFormat: "cli" | "default";
+    outputFormat: "cli" | "env" | "default";
   };
 }
 
@@ -106,6 +106,9 @@ export function getServerConfig(isStdioMode: boolean): ServerConfig {
   if (argv.json) {
     config.outputFormat = "json";
     config.configSources.outputFormat = "cli";
+  } else if (process.env.OUTPUT_FORMAT) {
+    config.outputFormat = process.env.OUTPUT_FORMAT as "yaml" | "json";
+    config.configSources.outputFormat = "env";
   }
 
   // Validate configuration
@@ -131,7 +134,9 @@ export function getServerConfig(isStdioMode: boolean): ServerConfig {
       console.log("- Authentication Method: Personal Access Token (X-Figma-Token)");
     }
     console.log(`- PORT: ${config.port} (source: ${config.configSources.port})`);
-    console.log(`- OUTPUT_FORMAT: ${config.outputFormat} (source: ${config.configSources.outputFormat})`);
+    console.log(
+      `- OUTPUT_FORMAT: ${config.outputFormat} (source: ${config.configSources.outputFormat})`,
+    );
     console.log(); // Empty line for better readability
   }
 
