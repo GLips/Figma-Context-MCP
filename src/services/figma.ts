@@ -10,6 +10,7 @@ import { downloadFigmaImage } from "~/utils/common.js";
 import { Logger } from "~/utils/logger.js";
 import { fetchWithRetry } from "~/utils/fetch-with-retry.js";
 import yaml from "js-yaml";
+import path from 'path';
 
 export type FigmaAuthOptions = {
   figmaApiKey: string;
@@ -157,8 +158,8 @@ export class FigmaService {
       const response = await this.request<GetFileResponse>(endpoint);
       Logger.log("Got response");
       const simplifiedResponse = parseFigmaResponse(response);
-      writeLogs("figma-raw.yml", response);
-      writeLogs("figma-simplified.yml", simplifiedResponse);
+      writeJSON2YamlLogs("figma-raw.yml", response);
+      writeJSON2YamlLogs("figma-simplified.yml", simplifiedResponse);
       return simplifiedResponse;
     } catch (e) {
       console.error("Failed to get file:", e);
@@ -166,25 +167,34 @@ export class FigmaService {
     }
   }
 
-  async getNode(fileKey: string, nodeId: string, depth?: number | null): Promise<SimplifiedDesign> {
-    const endpoint = `/files/${fileKey}/nodes?ids=${nodeId}${depth ? `&depth=${depth}` : ""}`;
+  async getNode(fileKey: string, nodeIds: string, depth?: number | null): Promise<SimplifiedDesign> {
+    const endpoint = `/files/${fileKey}/nodes?ids=${nodeIds}${depth ? `&depth=${depth}` : ""}`;
     const response = await this.request<GetFileNodesResponse>(endpoint);
     Logger.log("Got response from getNode, now parsing.");
-    writeLogs("figma-raw.yml", response);
+    writeJSON2YamlLogs("figma-raw.yml", response);
     const simplifiedResponse = parseFigmaResponse(response);
-    writeLogs("figma-simplified.yml", simplifiedResponse);
+    writeJSON2YamlLogs("figma-simplified.yml", simplifiedResponse);
+    writeLogs("figma-raw.json", JSON.stringify(response));
+    writeLogs("figma-simplified.json", JSON.stringify(simplifiedResponse));
     return simplifiedResponse;
   }
+}
+
+function writeJSON2YamlLogs(name: string, value: any) {
+  if (process.env.NODE_ENV !== "development") return;
+  const result = yaml.dump(value);
+  writeLogs(name, result);
 }
 
 function writeLogs(name: string, value: any) {
   try {
     if (process.env.NODE_ENV !== "development") return;
 
-    const logsDir = "logs";
+    const logsCWD = process.env.LOG_DIR || process.cwd();
+    const logsDir = path.resolve(logsCWD, "logs");
 
     try {
-      fs.accessSync(process.cwd(), fs.constants.W_OK);
+      fs.accessSync(logsCWD, fs.constants.W_OK);
     } catch (error) {
       Logger.log("Failed to write logs:", error);
       return;
@@ -193,7 +203,9 @@ function writeLogs(name: string, value: any) {
     if (!fs.existsSync(logsDir)) {
       fs.mkdirSync(logsDir);
     }
-    fs.writeFileSync(`${logsDir}/${name}`, yaml.dump(value));
+    const filePath = path.resolve(logsDir, `${name}`);
+    fs.writeFileSync(filePath, value);
+    console.log(`Wrote ${name} to ${filePath}`);
   } catch (error) {
     console.debug("Failed to write logs:", error);
   }
