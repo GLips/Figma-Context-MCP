@@ -1,13 +1,18 @@
-import { createServer } from "../mcp.js";
+import { createServer } from "../mcp"
 import { config } from "dotenv";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
 import yaml from "js-yaml";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { Logger } from '../utils/logger';
 
-config();
-
+// read test args from .env.local (For the first run, need to refer to .env.example to create.)
+config({
+  path: ".env.local",
+});
+Logger.isHTTP = true;
+  
 describe("Figma MCP Server Tests", () => {
   let server: McpServer;
   let client: Client;
@@ -56,7 +61,12 @@ describe("Figma MCP Server Tests", () => {
     it("should be able to get Figma file data", async () => {
       const args: any = {
         fileKey: figmaFileKey,
+        depth: 1,
       };
+
+      if (process.env.FIGMA_NODE_ID) {
+        args.nodeId = process.env.FIGMA_NODE_ID;
+      }
 
       const result = await client.request(
         {

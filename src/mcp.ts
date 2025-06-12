@@ -2,8 +2,9 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { FigmaService, type FigmaAuthOptions } from "./services/figma.js";
 import type { SimplifiedDesign } from "./services/simplify-node-response.js";
-import yaml from "js-yaml";
 import { Logger } from "./utils/logger.js";
+import { calcStringSize } from "./utils/calc-string-size.js";
+import yaml from "js-yaml";
 
 const serverInfo = {
   name: "Figma MCP Server",
@@ -29,33 +30,122 @@ function createServer(
   return server;
 }
 
+const fileKeyDescription =
+  "The key of the Figma file to fetch, often found in a provided URL like figma.com/(file|design)/<fileKey>/...";
+const nodeIdDescription =
+  "The ID of the node to fetch, often found as URL parameter node-id=nodeId, always use if provided. If there are multiple node IDs that need to be obtained simultaneously, they can be combined and passed in with commas as separators.";
+const depthDescription =
+  "Optional parameter, Controls how many levels deep to traverse the node tree";
+
 function registerTools(
   server: McpServer,
   figmaService: FigmaService,
   outputFormat: "yaml" | "json",
 ): void {
+  const sizeLimit = process.env.GET_NODE_SIZE_LIMIT
+    ? parseInt(process.env.GET_NODE_SIZE_LIMIT)
+    : undefined;
+
+  // Tool to get node size
+  server.tool(
+    "get_figma_data_size",
+    `Obtain the memory size of a figma data, return the nodeId and size in KB, e.g 
+- nodeId: '1234:5678'
+  size: 1024 KB
+
+Allowed to pass in multiple node IDs to batch obtain the sizes of multiple nodes at one time.
+`,
+    {
+      fileKey: z.string().describe(fileKeyDescription),
+      nodeId: z.string().optional().describe(nodeIdDescription),
+      depth: z.number().optional().describe(depthDescription),
+    },
+    async ({ fileKey, nodeId, depth }) => {
+      try {
+        Logger.log(
+          `Getting size for ${nodeId ? `node ${nodeId}` : "full file"} from file ${fileKey}`,
+        );
+
+        let file: SimplifiedDesign;
+        if (nodeId) {
+          file = await figmaService.getNode(fileKey, nodeId, depth);
+        } else {
+          file = await figmaService.getFile(fileKey, depth);
+        }
+
+        const { nodes, globalVars, ...metadata } = file;
+
+        const results = nodes.map((node) => {
+          const result = {
+            metadata,
+            nodes: [node],
+            // TODO: globalVars is not very accurate here
+            globalVars,
+          };
+          const yamlResult = yaml.dump(result);
+          const sizeInKB = calcStringSize(yamlResult);
+          return {
+            nodeId: node.id,
+            size: `${sizeInKB} KB`,
+          };
+        });
+
+        return {
+          content: [{ type: "text", text: yaml.dump(results) }],
+        };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : JSON.stringify(error);
+        Logger.error(`Error getting node size for ${fileKey}:`, message);
+        return {
+          isError: true,
+          content: [{ type: "text", text: `Error getting node size: ${message}` }],
+        };
+      }
+    },
+  );
+
+  const needLimitPrompt = sizeLimit && sizeLimit > 0;
   // Tool to get file information
   server.tool(
     "get_figma_data",
-    "When the nodeId cannot be obtained, obtain the layout information about the entire Figma file",
+    `When the nodeId cannot be obtained, obtain the layout information about the entire Figma file.
+
+Allowed to pass in multiple node IDs to batch obtain data of multiple nodes at one time.
+
+${
+  needLimitPrompt
+    ? `
+## Figma Data Retrieval Strategy
+
+**IMPORTANT: Work incrementally, not comprehensively.**
+
+### Core Principle
+Retrieve and implement ONE screen/component at a time. Don't try to understand the entire design upfront.
+
+### Process
+1. **Start Small**: Get shallow data (depth: 1) of the main node to see available screens/components
+2. **Pick One**: Choose a single screen to implement completely 
+3. **Get Full Data**: Retrieve complete data for that one screen only
+4. **Implement**: Build the HTML/CSS for that screen before moving on
+5. **Repeat**: Move to the next screen only after the current one is done
+
+### Data Size Guidelines
+- **Over ${sizeLimit}KB**: Use \`depth: 1\` to get structure only
+- **Under ${sizeLimit}KB**: Get full data without depth parameter
+
+### Key Point
+**Don't analyze multiple screens in parallel.** Focus on implementing one complete, working screen at a time. This avoids context overload and produces better results.
+`
+    : ""
+}
+        `,
     {
-      fileKey: z
-        .string()
-        .describe(
-          "The key of the Figma file to fetch, often found in a provided URL like figma.com/(file|design)/<fileKey>/...",
-        ),
-      nodeId: z
-        .string()
-        .optional()
-        .describe(
-          "The ID of the node to fetch, often found as URL parameter node-id=<nodeId>, always use if provided",
-        ),
+      fileKey: z.string().describe(fileKeyDescription),
+      nodeId: z.string().optional().describe(nodeIdDescription),
       depth: z
         .number()
         .optional()
-        .describe(
-          "OPTIONAL. Do NOT use unless explicitly requested by the user. Controls how many levels deep to traverse the node tree,",
-        ),
+        .describe(depthDescription + ",Do NOT use unless explicitly requested."),
     },
     async ({ fileKey, nodeId, depth }) => {
       try {
@@ -84,6 +174,22 @@ function registerTools(
         Logger.log(`Generating ${outputFormat.toUpperCase()} result from file`);
         const formattedResult =
           outputFormat === "json" ? JSON.stringify(result, null, 2) : yaml.dump(result);
+        const formattedResultSize = calcStringSize(formattedResult);
+
+        Logger.log(`Data size: ${formattedResultSize} KB (${outputFormat.toUpperCase()})`);
+
+        if (sizeLimit && formattedResultSize > sizeLimit) {
+          Logger.log(`Data size exceeds ${sizeLimit} KB, performing truncated reading`);
+          return {
+            isError: true,
+            content: [
+              {
+                type: "text",
+                text: `The data size of file ${fileKey} ${nodeId ? `node ${nodeId}` : ""} is ${formattedResultSize} KB, exceeded the limit of ${sizeLimit} KB, please performing truncated reading`,
+              },
+            ],
+          };
+        }
 
         Logger.log("Sending result to client");
         return {
