@@ -21,6 +21,7 @@ interface ServerConfig {
     webpEnabled: "cli" | "env" | "default";
     webpQuality: "cli" | "env" | "default";
     webpKeepOriginal: "cli" | "env" | "default";
+    envFile: "cli" | "default";
   };
 }
 
@@ -122,6 +123,7 @@ export function getServerConfig(isStdioMode: boolean): ServerConfig {
       webpEnabled: "default",
       webpQuality: "default",
       webpKeepOriginal: "default",
+      envFile: envFileSource,
     },
   };
 
