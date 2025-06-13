@@ -8,11 +8,19 @@ interface ServerConfig {
   auth: FigmaAuthOptions;
   port: number;
   outputFormat: "yaml" | "json";
+  webp: {
+    enabled: boolean;
+    quality: number;
+    keepOriginal: boolean;
+  };
   configSources: {
     figmaApiKey: "cli" | "env";
     figmaOAuthToken: "cli" | "env" | "none";
     port: "cli" | "env" | "default";
     outputFormat: "cli" | "env" | "default";
+    webpEnabled: "cli" | "env" | "default";
+    webpQuality: "cli" | "env" | "default";
+    webpKeepOriginal: "cli" | "env" | "default";
     envFile: "cli" | "default";
   };
 }
@@ -28,6 +36,9 @@ interface CliArgs {
   env?: string;
   port?: number;
   json?: boolean;
+  "webp-enabled"?: boolean;
+  "webp-quality"?: number;
+  "webp-keep-original"?: boolean;
 }
 
 export function getServerConfig(isStdioMode: boolean): ServerConfig {
@@ -53,6 +64,21 @@ export function getServerConfig(isStdioMode: boolean): ServerConfig {
       json: {
         type: "boolean",
         description: "Output data from tools in JSON format instead of YAML",
+        default: false,
+      },
+      "webp-enabled": {
+        type: "boolean",
+        description: "Enable WebP conversion for downloaded PNG images",
+        default: false,
+      },
+      "webp-quality": {
+        type: "number",
+        description: "WebP compression quality (1-100)",
+        default: 80,
+      },
+      "webp-keep-original": {
+        type: "boolean",
+        description: "Keep original PNG images after WebP conversion",
         default: false,
       },
     })
@@ -84,11 +110,19 @@ export function getServerConfig(isStdioMode: boolean): ServerConfig {
   const config: Omit<ServerConfig, "auth"> = {
     port: 3333,
     outputFormat: "yaml",
+    webp: {
+      enabled: false,
+      quality: 80,
+      keepOriginal: false,
+    },
     configSources: {
       figmaApiKey: "env",
       figmaOAuthToken: "none",
       port: "default",
       outputFormat: "default",
+      webpEnabled: "default",
+      webpQuality: "default",
+      webpKeepOriginal: "default",
       envFile: envFileSource,
     },
   };
@@ -131,6 +165,34 @@ export function getServerConfig(isStdioMode: boolean): ServerConfig {
     config.configSources.outputFormat = "env";
   }
 
+  // Handle WebP settings
+  if (argv["webp-enabled"] !== undefined) {
+    config.webp.enabled = argv["webp-enabled"];
+    config.configSources.webpEnabled = "cli";
+  } else if (process.env.WEBP_ENABLED) {
+    config.webp.enabled = process.env.WEBP_ENABLED.toLowerCase() === "true";
+    config.configSources.webpEnabled = "env";
+  }
+
+  if (argv["webp-quality"] !== undefined) {
+    config.webp.quality = Math.min(100, Math.max(1, argv["webp-quality"]));
+    config.configSources.webpQuality = "cli";
+  } else if (process.env.WEBP_QUALITY) {
+    const quality = parseInt(process.env.WEBP_QUALITY, 10);
+    if (!isNaN(quality) && quality >= 1 && quality <= 100) {
+      config.webp.quality = quality;
+      config.configSources.webpQuality = "env";
+    }
+  }
+
+  if (argv["webp-keep-original"] !== undefined) {
+    config.webp.keepOriginal = argv["webp-keep-original"];
+    config.configSources.webpKeepOriginal = "cli";
+  } else if (process.env.WEBP_KEEP_ORIGINAL) {
+    config.webp.keepOriginal = process.env.WEBP_KEEP_ORIGINAL.toLowerCase() === "true";
+    config.configSources.webpKeepOriginal = "env";
+  }
+
   // Validate configuration
   if (!auth.figmaApiKey && !auth.figmaOAuthToken) {
     console.error(
@@ -158,6 +220,11 @@ export function getServerConfig(isStdioMode: boolean): ServerConfig {
     console.log(
       `- OUTPUT_FORMAT: ${config.outputFormat} (source: ${config.configSources.outputFormat})`,
     );
+    console.log(`- WebP Conversion: ${config.webp.enabled ? "Enabled" : "Disabled"} (source: ${config.configSources.webpEnabled})`);
+    if (config.webp.enabled) {
+      console.log(`  - Quality: ${config.webp.quality} (source: ${config.configSources.webpQuality})`);
+      console.log(`  - Keep Original: ${config.webp.keepOriginal ? "Yes" : "No"} (source: ${config.configSources.webpKeepOriginal})`);
+    }
     console.log(); // Empty line for better readability
   }
 

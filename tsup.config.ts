@@ -5,7 +5,12 @@ const packageVersion = process.env.npm_package_version;
 
 export default defineConfig({
   clean: true,
-  entry: ["src/index.ts", "src/cli.ts"],
+  entry: [
+    "src/index.ts", 
+    "src/cli.ts", 
+    "src/utils/imageConverter.ts", 
+    "src/utils/imageConverterCli.ts"
+  ],
   format: ["esm"],
   minify: !isDev,
   target: "esnext",
