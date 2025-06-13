@@ -1,5 +1,11 @@
 # figma-developer-mcp
 
+## 0.4.2
+
+### Patch Changes
+
+- [#170](https://github.com/GLips/Figma-Context-MCP/pull/170) [`d560252`](https://github.com/GLips/Figma-Context-MCP/commit/d56025286e8c3c24d75f170974c12f96d32fda8b) Thanks [@GLips](https://github.com/GLips)! - Add support for custom .env files.
+
 ## 0.4.1
 
 ### Patch Changes

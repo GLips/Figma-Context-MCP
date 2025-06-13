@@ -1,10 +1,8 @@
-import { config } from "dotenv";
+import { config as loadEnv } from "dotenv";
 import yargs from "yargs";
 import { hideBin } from "yargs/helpers";
+import { resolve } from "path";
 import type { FigmaAuthOptions } from "./services/figma.js";
-
-// Load environment variables from .env file
-config();
 
 interface ServerConfig {
   auth: FigmaAuthOptions;
@@ -34,6 +32,7 @@ function maskApiKey(key: string): string {
 interface CliArgs {
   "figma-api-key"?: string;
   "figma-oauth-token"?: string;
+  env?: string;
   port?: number;
   json?: boolean;
   "webp-enabled"?: boolean;
@@ -52,6 +51,10 @@ export function getServerConfig(isStdioMode: boolean): ServerConfig {
       "figma-oauth-token": {
         type: "string",
         description: "Figma OAuth Bearer token",
+      },
+      env: {
+        type: "string",
+        description: "Path to custom .env file to load environment variables from",
       },
       port: {
         type: "number",
@@ -81,6 +84,21 @@ export function getServerConfig(isStdioMode: boolean): ServerConfig {
     .help()
     .version(process.env.NPM_PACKAGE_VERSION ?? "unknown")
     .parseSync() as CliArgs;
+
+  // Load environment variables ASAP from custom path or default
+  let envFilePath: string;
+  let envFileSource: "cli" | "default";
+
+  if (argv["env"]) {
+    envFilePath = resolve(argv["env"]);
+    envFileSource = "cli";
+  } else {
+    envFilePath = resolve(process.cwd(), ".env");
+    envFileSource = "default";
+  }
+
+  // Override anything auto-loaded from .env if a custom file is provided.
+  loadEnv({ path: envFilePath, override: true });
 
   const auth: FigmaAuthOptions = {
     figmaApiKey: "",
@@ -184,6 +202,7 @@ export function getServerConfig(isStdioMode: boolean): ServerConfig {
   // Log configuration sources
   if (!isStdioMode) {
     console.log("\nConfiguration:");
+    console.log(`- ENV_FILE: ${envFilePath} (source: ${config.configSources.envFile})`);
     if (auth.useOAuth) {
       console.log(
         `- FIGMA_OAUTH_TOKEN: ${maskApiKey(auth.figmaOAuthToken)} (source: ${config.configSources.figmaOAuthToken})`,
