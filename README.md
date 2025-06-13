@@ -90,6 +90,67 @@ The `figma-developer-mcp` server can be configured by adding the following to yo
 
 Or you can set `FIGMA_API_KEY` and `PORT` in the `env` field.
 
+## WebP Image Conversion
+
+This server supports automatic conversion of downloaded PNG images to WebP format for better performance and smaller file sizes. WebP typically provides 25-35% smaller file sizes compared to PNG with similar visual quality.
+
+### Enabling WebP Conversion
+
+You can enable WebP conversion in several ways:
+
+#### Command Line Arguments
+
+```bash
+npx figma-developer-mcp --figma-api-key=YOUR-KEY --webp-enabled=true --webp-quality=80 --webp-keep-original=false
+```
+
+#### Environment Variables
+
+```
+FIGMA_API_KEY=your-key
+WEBP_ENABLED=true
+WEBP_QUALITY=80
+WEBP_KEEP_ORIGINAL=false
+```
+
+#### In MCP Configuration
+
+```json
+{
+  "mcpServers": {
+    "Framelink Figma MCP": {
+      "command": "npx",
+      "args": [
+        "-y", 
+        "figma-developer-mcp", 
+        "--figma-api-key=YOUR-KEY", 
+        "--webp-enabled=true", 
+        "--webp-quality=80", 
+        "--webp-keep-original=false", 
+        "--stdio"
+      ]
+    }
+  }
+}
+```
+
+### WebP Configuration Options
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `webp-enabled` | Enable WebP conversion | `false` |
+| `webp-quality` | WebP compression quality (1-100) | `80` |
+| `webp-keep-original` | Keep original PNG files after conversion | `false` |
+
+### Using the WebP Conversion Tool
+
+You can also manually convert PNG images to WebP using the `convert_png_to_webp` tool:
+
+```
+// In your AI client
+Please convert the PNG images at [paths] to WebP format for better performance.
+```
+
 If you need more information on how to configure the Framelink Figma MCP server, see the [Framelink docs](https://www.framelink.ai/docs/quickstart?utm_source=github&utm_medium=referral&utm_campaign=readme).
 
 ## Star History

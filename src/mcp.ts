@@ -4,6 +4,7 @@ import { FigmaService, type FigmaAuthOptions } from "./services/figma.js";
 import type { SimplifiedDesign } from "./services/simplify-node-response.js";
 import yaml from "js-yaml";
 import { Logger } from "./utils/logger.js";
+import { convertPngToWebp } from "./utils/imageConverter.js";
 
 const serverInfo = {
   name: "Figma MCP Server",
@@ -13,16 +14,21 @@ const serverInfo = {
 type CreateServerOptions = {
   isHTTP?: boolean;
   outputFormat?: "yaml" | "json";
+  webp?: {
+    enabled: boolean;
+    quality: number;
+    keepOriginal: boolean;
+  };
 };
 
 function createServer(
   authOptions: FigmaAuthOptions,
-  { isHTTP = false, outputFormat = "yaml" }: CreateServerOptions = {},
+  { isHTTP = false, outputFormat = "yaml", webp = { enabled: false, quality: 80, keepOriginal: false } }: CreateServerOptions = {},
 ) {
   const server = new McpServer(serverInfo);
   // const figmaService = new FigmaService(figmaApiKey);
   const figmaService = new FigmaService(authOptions);
-  registerTools(server, figmaService, outputFormat);
+  registerTools(server, figmaService, outputFormat, webp);
 
   Logger.isHTTP = isHTTP;
 
@@ -33,6 +39,7 @@ function registerTools(
   server: McpServer,
   figmaService: FigmaService,
   outputFormat: "yaml" | "json",
+  webp: { enabled: boolean; quality: number; keepOriginal: boolean },
 ): void {
   // Tool to get file information
   server.tool(
@@ -156,9 +163,17 @@ function registerTools(
         .optional()
         .default({})
         .describe("Options for SVG export"),
+      convertToWebp: z
+        .boolean()
+        .optional()
+        .describe("Whether to convert PNG images to WebP format. If not specified, uses the server's default configuration."),
     },
-    async ({ fileKey, nodes, localPath, svgOptions, pngScale }) => {
+    async ({ fileKey, nodes, localPath, svgOptions, pngScale, convertToWebp }) => {
       try {
+        // 确定是否需要转换为WebP
+        // Determine if WebP conversion is needed
+        const shouldConvertToWebp = convertToWebp !== undefined ? convertToWebp : webp.enabled;
+        
         const imageFills = nodes.filter(({ imageRef }) => !!imageRef) as {
           nodeId: string;
           imageRef: string;
@@ -188,12 +203,48 @@ function registerTools(
 
         // If any download fails, return false
         const saveSuccess = !downloads.find((success) => !success);
+        
+        // 如果启用了WebP转换，并且下载成功，则转换PNG为WebP
+        // If WebP conversion is enabled and download was successful, convert PNG to WebP
+        let webpResult = "";
+        if (saveSuccess && shouldConvertToWebp) {
+          try {
+            // 筛选出PNG图片
+            // Filter PNG images
+            const pngFiles = downloads.filter(path => 
+              typeof path === 'string' && path.toLowerCase().endsWith('.png')
+            ) as string[];
+            
+            if (pngFiles.length > 0) {
+              Logger.log(`Converting ${pngFiles.length} PNG images to WebP format`);
+              
+              // 转换为WebP
+              // Convert to WebP
+              const stats = await convertPngToWebp(pngFiles, {
+                quality: webp.quality,
+                keepOriginal: webp.keepOriginal,
+                verbose: true
+              });
+              
+              const savedSize = stats.totalSizeBefore - stats.totalSizeAfter;
+              const compressionRatio = stats.totalSizeBefore > 0
+                ? (savedSize / stats.totalSizeBefore * 100).toFixed(2)
+                : '0';
+                
+              webpResult = ` Additionally, ${stats.convertedFiles}/${pngFiles.length} PNG images were converted to WebP format, saving ${compressionRatio}% space.`;
+            }
+          } catch (error) {
+            Logger.error("WebP conversion failed:", error);
+            webpResult = " WebP conversion was attempted but failed.";
+          }
+        }
+        
         return {
           content: [
             {
               type: "text",
               text: saveSuccess
-                ? `Success, ${downloads.length} images downloaded: ${downloads.join(", ")}`
+                ? `Success, ${downloads.length} images downloaded: ${downloads.join(", ")}${webpResult}`
                 : "Failed",
             },
           ],
@@ -203,6 +254,66 @@ function registerTools(
         return {
           isError: true,
           content: [{ type: "text", text: `Error downloading images: ${error}` }],
+        };
+      }
+    },
+  );
+
+  // Tool to convert PNG images to WebP format
+  server.tool(
+    "convert_png_to_webp",
+    "Convert downloaded PNG images to WebP format with compression",
+    {
+      imagePaths: z
+        .string()
+        .array()
+        .describe("Array of paths to the PNG images that need to be converted to WebP"),
+      quality: z
+        .number()
+        .positive()
+        .max(100)
+        .optional()
+        .default(80)
+        .describe("WebP compression quality (1-100). Higher values mean better quality but larger file size. Default is 80."),
+      keepOriginal: z
+        .boolean()
+        .optional()
+        .default(false)
+        .describe("Whether to keep the original PNG images after conversion. Default is false (will delete original PNGs)."),
+      verbose: z
+        .boolean()
+        .optional()
+        .default(false)
+        .describe("Whether to output detailed logs during conversion. Default is false."),
+    },
+    async ({ imagePaths, quality, keepOriginal, verbose }) => {
+      try {
+        Logger.log(`Converting ${imagePaths.length} PNG images to WebP format (quality: ${quality}, keepOriginal: ${keepOriginal})`);
+        
+        const stats = await convertPngToWebp(imagePaths, {
+          quality,
+          keepOriginal,
+          verbose
+        });
+
+        const savedSize = stats.totalSizeBefore - stats.totalSizeAfter;
+        const compressionRatio = stats.totalSizeBefore > 0
+          ? (savedSize / stats.totalSizeBefore * 100).toFixed(2)
+          : '0';
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Conversion completed: ${stats.convertedFiles}/${stats.totalFiles} images converted to WebP. ${stats.skippedFiles} skipped, ${stats.errorFiles} errors. Space saved: ${compressionRatio}%`
+            },
+          ],
+        };
+      } catch (error) {
+        Logger.error(`Error converting PNG images to WebP:`, error);
+        return {
+          isError: true,
+          content: [{ type: "text", text: `Error converting images: ${error}` }],
         };
       }
     },

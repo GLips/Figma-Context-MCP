@@ -18,7 +18,8 @@ export async function startServer(): Promise<void> {
 
   const server = createServer(config.auth, { 
     isHTTP: !isStdioMode, 
-    outputFormat: config.outputFormat 
+    outputFormat: config.outputFormat,
+    webp: config.webp
   });
 
   if (isStdioMode) {
