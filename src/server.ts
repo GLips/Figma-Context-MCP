@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import express, { type Request, type Response } from "express";
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import cors from "cors";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { Server } from "http";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -18,6 +19,9 @@ export async function startHttpServer(port: number, mcpServer: McpServer): Promi
 
   // Parse JSON requests for the Streamable HTTP endpoint only, will break SSE endpoint
   app.use("/mcp", express.json());
+  app.use(cors({
+    origin: process.env.CORS_ORIGINS?.split(","),
+  }));
 
   // Modern Streamable HTTP endpoint
   app.post("/mcp", async (req, res) => {
