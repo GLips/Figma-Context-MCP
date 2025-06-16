@@ -21,6 +21,8 @@ export async function startHttpServer(port: number, mcpServer: McpServer): Promi
   app.use("/mcp", express.json());
   app.use(cors({
     origin: process.env.CORS_ORIGINS?.split(","),
+    exposedHeaders: ['mcp-session-id'], 
+    allowedHeaders: ['Content-Type', 'mcp-session-id'],
   }));
 
   // Modern Streamable HTTP endpoint
