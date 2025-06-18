@@ -52,6 +52,7 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
+    "@asgardeo/mcp-express": "^0.1.0",
     "@figma/rest-api-spec": "^0.24.0",
     "@modelcontextprotocol/sdk": "^1.10.2",
     "@types/yargs": "^17.0.33",

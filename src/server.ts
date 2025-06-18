@@ -7,6 +7,7 @@ import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { Server } from "http";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { Logger } from "./utils/logger.js";
+import { McpAuthServer } from "@asgardeo/mcp-express";
 
 let httpServer: Server | null = null;
 const transports = {
@@ -17,16 +18,24 @@ const transports = {
 export async function startHttpServer(port: number, mcpServer: McpServer): Promise<void> {
   const app = express();
 
+  // Initialize authentication middleware
+  const mcpAuthServer = new McpAuthServer({
+    baseUrl: process.env.BASE_URL as string,
+  });
+
   // Parse JSON requests for the Streamable HTTP endpoint only, will break SSE endpoint
   app.use("/mcp", express.json());
   app.use(cors({
     origin: process.env.CORS_ORIGINS?.split(","),
-    exposedHeaders: ['mcp-session-id'], 
+    exposedHeaders: ['mcp-session-id'],
     allowedHeaders: ['Content-Type', 'mcp-session-id'],
   }));
 
+  // Register auth metadata + OAuth endpoints
+  app.use(mcpAuthServer.router());
+
   // Modern Streamable HTTP endpoint
-  app.post("/mcp", async (req, res) => {
+  app.post("/mcp", mcpAuthServer.protect(), async (req, res) => {
     Logger.log("Received StreamableHTTP request");
     const sessionId = req.headers["mcp-session-id"] as string | undefined;
     // Logger.log("Session ID:", sessionId);
