@@ -18,7 +18,11 @@ export async function fetchWithRetry<T>(url: string, options: RequestInit = {}):
     );
 
     const curlHeaders = formatHeadersForCurl(options.headers);
-    const curlCommand = `curl -s -L ${curlHeaders.join(" ")} "${url}"`;
+    // -s: Silent mode—no progress bar in stderr
+    // -S: Show errors in stderr
+    // --fail-with-body: curl errors with code 22, and outputs body of failed request, e.g. "Fetch failed with status 404"
+    // -L: Follow redirects
+    const curlCommand = `curl -s -S --fail-with-body -L ${curlHeaders.join(" ")} "${url}"`;
 
     try {
       // Fallback to curl for  corporate networks that have proxies that sometimes block fetch
