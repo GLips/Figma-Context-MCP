@@ -20,7 +20,7 @@ export async function startHttpServer(port: number, mcpServer: McpServer): Promi
 
   // Initialize authentication middleware
   const mcpAuthServer = new McpAuthServer({
-    baseUrl: process.env.BASE_URL as string,
+    baseUrl: process.env.ASGARDEO_BASE_URL as string,
   });
 
   // Parse JSON requests for the Streamable HTTP endpoint only, will break SSE endpoint
