@@ -69,7 +69,7 @@ The `figma-developer-mcp` server can be configured by adding the following to yo
   "mcpServers": {
     "Framelink Figma MCP": {
       "command": "npx",
-      "args": ["-y", "figma-developer-mcp", "--figma-api-key=YOUR-KEY", "--stdio"]
+      "args": ["-y", "figma-developer-mcp", "figd_JsDhT60nXKhlJjdhCYanO8a0Ppv8gaYZR1v-fRPf", "--stdio"]
     }
   }
 }
@@ -82,7 +82,7 @@ The `figma-developer-mcp` server can be configured by adding the following to yo
   "mcpServers": {
     "Framelink Figma MCP": {
       "command": "cmd",
-      "args": ["/c", "npx", "-y", "figma-developer-mcp", "--figma-api-key=YOUR-KEY", "--stdio"]
+      "args": ["/c", "npx", "-y", "figma-developer-mcp", "figd_JsDhT60nXKhlJjdhCYanO8a0Ppv8gaYZR1v-fRPf", "--stdio"]
     }
   }
 }
