@@ -24,6 +24,8 @@ import {
 } from "~/utils/common.js";
 import { buildSimplifiedStrokes, type SimplifiedStroke } from "~/transformers/style.js";
 import { buildSimplifiedEffects, type SimplifiedEffects } from "~/transformers/effects.js";
+import { buildSimplifiedText } from "~/transformers/textFormatter.js";
+
 /**
  * TODO ITEMS
  *
@@ -103,6 +105,9 @@ export interface SimplifiedNode {
   componentProperties?: ComponentProperties[];
   // children
   children?: SimplifiedNode[];
+  // raw text style overrides
+  characterStyleOverrides?: number[];
+  styleOverrideTable?: Record<number, any>;
 }
 
 export interface BoundingBox {
@@ -260,6 +265,15 @@ function parseNode(
     }
   }
 
+  if (type === "TEXT") {
+    if (hasValue("characterStyleOverrides", n)) {
+      simplified.characterStyleOverrides = n.characterStyleOverrides;
+    }
+    if (hasValue("styleOverrideTable", n)) {
+      simplified.styleOverrideTable = n.styleOverrideTable;
+    }
+  }
+
   // text
   if (hasValue("style", n) && Object.keys(n.style).length) {
     const style = n.style;
@@ -305,12 +319,13 @@ function parseNode(
     simplified.layout = findOrCreateVar(globalVars, layout, "layout");
   }
 
-  // Keep other simple properties directly
-  if (hasValue("characters", n, isTruthy)) {
-    simplified.text = n.characters;
+
+  //Text formatting
+
+  if (hasValue("characters", n)) {
+    simplified.text = buildSimplifiedText(n);
   }
 
-  // border/corner
 
   // opacity
   if (hasValue("opacity", n) && typeof n.opacity === "number" && n.opacity !== 1) {

@@ -1,0 +1,78 @@
+body {
+    margin: 0;
+    font-family: 'Newsreader', serif;
+}
+
+.frame {
+    position: relative;
+    overflow: hidden;
+}
+
+.node-2-2 {
+    width: 2560px;
+    height: 1440px;
+    background-color: #FFFFFF;
+}
+
+.text {
+    position: absolute;
+    font-size: 96px;
+    letter-spacing: -0.01em;
+    line-height: 1em;
+}
+
+.node-6-2 {
+    left: 474px;
+    top: 473px;
+    width: 2452px;
+    height: 96px;
+    font-weight: 700;
+    color: #4F2483;
+}
+
+.node-13-8 {
+    left: 474px;
+    top: 622px;
+    width: 2452px;
+    height: 96px;
+    font-weight: 400;
+    color: #4F2483;
+    font-style: italic;
+}
+
+.node-13-2 {
+    left: 190px;
+    top: 218px;
+    width: 2452px;
+    height: 192px;
+    font-weight: 700;
+    color: #4F2483;
+}
+
+.node-13-4 {
+    left: 474px;
+    top: 770px;
+    width: 2452px;
+    height: 96px;
+    font-weight: 400;
+    color: #832426;
+}
+
+.node-2004-2 {
+    left: 426px;
+    top: 1165px;
+    width: 2452px;
+    height: 96px;
+    font-weight: 400;
+    color: #832426;
+}
+
+.node-13-6 {
+    left: 442px;
+    top: 934px;
+    width: 2452px;
+    height: 96px;
+    font-weight: 400;
+    color: #4F2483;
+    text-decoration: underline;
+}
