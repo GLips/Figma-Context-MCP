@@ -3,7 +3,7 @@ import { FigmaService } from "../../services/figma.js";
 import { Logger } from "../../utils/logger.js";
 
 const parameters = {
-  fileKey: z.string().describe("The key of the Figma file containing the node"),
+  fileKey: z.string().describe("The key of the Figma file containing the images"),
   nodes: z
     .object({
       nodeId: z
@@ -63,45 +63,22 @@ async function downloadFigmaImages(params: DownloadImagesParams, figmaService: F
   try {
     const { fileKey, nodes, localPath, svgOptions, pngScale = 2 } = params;
 
-    // Separate nodes by type
-    const imageFills = nodes.filter((node) => node.imageRef);
-    const renderNodes = nodes.filter((node) => !node.imageRef);
+    // Convert the tool's node format to the new unified format
+    const items = nodes.map((node) => {
+      if (node.imageRef) {
+        // Image fill
+        return { imageRef: node.imageRef, fileName: node.fileName };
+      } else {
+        // Rendered node
+        return { nodeId: node.nodeId, fileName: node.fileName };
+      }
+    });
 
-    const downloads = await Promise.all([
-      // Download image fills
-      imageFills.length > 0
-        ? figmaService.getImageFills(
-            fileKey,
-            imageFills.map((node) => ({
-              nodeId: node.nodeId,
-              fileName: node.fileName,
-              imageRef: node.imageRef!, // Safe because we filtered for imageRef existence
-            })),
-            localPath,
-          )
-        : Promise.resolve([]),
+    const allDownloads = await figmaService.downloadImages(fileKey, localPath, items, {
+      pngScale,
+      svgOptions,
+    });
 
-      // Download rendered nodes
-      renderNodes.length > 0
-        ? figmaService.getImages(
-            fileKey,
-            renderNodes.map(({ nodeId, fileName }) => ({
-              nodeId,
-              fileName,
-              fileType: fileName.endsWith(".svg") ? ("svg" as const) : ("png" as const),
-            })),
-            localPath,
-            pngScale,
-            {
-              outlineText: svgOptions.outlineText ?? true,
-              includeId: svgOptions.includeId ?? false,
-              simplifyStroke: svgOptions.simplifyStroke ?? true,
-            },
-          )
-        : Promise.resolve([]),
-    ]);
-
-    const allDownloads = downloads.flat();
     const successCount = allDownloads.filter(Boolean).length;
 
     return {

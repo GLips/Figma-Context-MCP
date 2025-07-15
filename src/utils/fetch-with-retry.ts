@@ -27,6 +27,7 @@ export async function fetchWithRetry<T>(url: string, options: RequestOptions = {
     );
 
     const curlHeaders = formatHeadersForCurl(options.headers);
+    // Most options here are to ensure stderr only contains errors, so we can use it to confidently check if an error occurred.
     // -s: Silent mode—no progress bar in stderr
     // -S: Show errors in stderr
     // --fail-with-body: curl errors with code 22, and outputs body of failed request, e.g. "Fetch failed with status 404"
