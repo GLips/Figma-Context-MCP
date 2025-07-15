@@ -5,7 +5,8 @@
   "type": "module",
   "main": "dist/index.js",
   "bin": {
-    "figma-developer-mcp": "dist/cli.js"
+    "figma-developer-mcp": "dist/cli.js",
+    "webp-converter": "dist/utils/imageConverterCli.js"
   },
   "files": [
     "dist",
@@ -33,7 +34,8 @@
     "prerelease": "pnpm build",
     "release": "changeset publish && git push --follow-tags",
     "pub:release": "pnpm build && npm publish",
-    "pub:release:beta": "pnpm build && npm publish --tag beta"
+    "pub:release:beta": "pnpm build && npm publish --tag beta",
+    "webp": "node dist/utils/imageConverterCli.js"
   },
   "engines": {
     "node": ">=18.0.0"
@@ -60,6 +62,7 @@
     "express": "^4.21.2",
     "js-yaml": "^4.1.0",
     "remeda": "^2.20.1",
+    "sharp": "^0.34.2",
     "yargs": "^17.7.2",
     "zod": "^3.24.2"
   },
@@ -70,6 +73,7 @@
     "@types/jest": "^29.5.14",
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^20.17.0",
+    "@types/sharp": "^0.32.0",
     "@typescript-eslint/eslint-plugin": "^8.24.0",
     "@typescript-eslint/parser": "^8.24.0",
     "eslint": "^9.20.1",
