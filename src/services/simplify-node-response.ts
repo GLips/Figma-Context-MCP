@@ -71,6 +71,7 @@ export interface SimplifiedDesign {
   components: Record<string, SimplifiedComponentDefinition>;
   componentSets: Record<string, SimplifiedComponentSetDefinition>;
   globalVars: GlobalVars;
+  missedNodeIds?: object;
 }
 
 export interface ComponentProperties {
@@ -103,6 +104,7 @@ export interface SimplifiedNode {
   componentProperties?: ComponentProperties[];
   // children
   children?: SimplifiedNode[];
+  oneLevelDeeperChildrenIds?: string[];
 }
 
 export interface BoundingBox {
@@ -137,7 +139,7 @@ export interface ColorValue {
 }
 
 // ---------------------- PARSING ----------------------
-export function parseFigmaResponse(data: GetFileResponse | GetFileNodesResponse): SimplifiedDesign {
+export function parseFigmaResponse(data: GetFileResponse | GetFileNodesResponse, maxDepth?: number | null): SimplifiedDesign {
   const aggregatedComponents: Record<string, Component> = {};
   const aggregatedComponentSets: Record<string, ComponentSet> = {};
   let nodesToParse: Array<FigmaDocumentNode>;
@@ -169,10 +171,10 @@ export function parseFigmaResponse(data: GetFileResponse | GetFileNodesResponse)
   let globalVars: GlobalVars = {
     styles: {},
   };
-
+  const missedChildren: string[] = [];
   const simplifiedNodes: SimplifiedNode[] = nodesToParse
     .filter(isVisible)
-    .map((n) => parseNode(globalVars, n))
+    .map((n) => parseNode(globalVars, n, missedChildren, 0, maxDepth))
     .filter((child) => child !== null && child !== undefined);
 
   const simplifiedDesign: SimplifiedDesign = {
@@ -184,7 +186,12 @@ export function parseFigmaResponse(data: GetFileResponse | GetFileNodesResponse)
     componentSets: sanitizedComponentSets,
     globalVars,
   };
-
+  if (missedChildren.length > 0) {
+    simplifiedDesign.missedNodeIds = {
+      description: "Direct children ids of nodes that has depth one more than specified depth. You may want to fetch them in next steps.",
+      ids: missedChildren,
+    }
+  }
   return removeEmptyKeys(simplifiedDesign);
 }
 
@@ -233,6 +240,9 @@ function findOrCreateVar(globalVars: GlobalVars, value: any, prefix: string): St
 function parseNode(
   globalVars: GlobalVars,
   n: FigmaDocumentNode,
+  missedChildrenIds: string[],
+  depthLevel?: number | null,
+  maxDepthLevel?: number | null,
   parent?: FigmaDocumentNode,
 ): SimplifiedNode | null {
   const { id, name, type } = n;
@@ -326,14 +336,20 @@ function parseNode(
 
   // Recursively process child nodes.
   // Include children at the very end so all relevant configuration data for the element is output first and kept together for the AI.
-  if (hasValue("children", n) && n.children.length > 0) {
+  if (hasValue("children", n) && n.children.length > 0 && (depthLevel == null || maxDepthLevel == null || depthLevel < maxDepthLevel)) {
     const children = n.children
       .filter(isVisible)
-      .map((child) => parseNode(globalVars, child, n))
+      .map((child) => parseNode(globalVars, child, missedChildrenIds, depthLevel == null ? depthLevel : depthLevel + 1, maxDepthLevel, n))
       .filter((child) => child !== null && child !== undefined);
     if (children.length) {
       simplified.children = children;
     }
+  }
+
+  if (hasValue("children", n) && n.children.length > 0 && depthLevel != null && maxDepthLevel != null && depthLevel >= maxDepthLevel) {
+    const childrenIds = n.children.filter(isVisible).map((child) => child.id);
+    childrenIds.forEach((nid) => missedChildrenIds.push(nid));
+    simplified.oneLevelDeeperChildrenIds = childrenIds;
   }
 
   // Convert VECTOR to IMAGE
