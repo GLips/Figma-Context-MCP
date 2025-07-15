@@ -1,4 +1,4 @@
-import { createServer } from "../mcp.js";
+import { createServer } from "../mcp/index.js";
 import { config } from "dotenv";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
