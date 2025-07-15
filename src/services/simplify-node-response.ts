@@ -268,7 +268,7 @@ function parseNode(
       fontWeight: style.fontWeight,
       fontSize: style.fontSize,
       lineHeight:
-        style.lineHeightPx && style.fontSize
+        "lineHeightPx" in style && style.lineHeightPx && style.fontSize
           ? `${style.lineHeightPx / style.fontSize}em`
           : undefined,
       letterSpacing:

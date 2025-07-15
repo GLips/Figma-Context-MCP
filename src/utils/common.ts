@@ -75,7 +75,7 @@ export async function downloadFigmaImage(
       };
 
       // Resolve only when the stream is fully written
-      writer.on('finish', () => {
+      writer.on("finish", () => {
         resolve(fullPath);
       });
 
@@ -289,6 +289,11 @@ export function parsePaint(raw: Paint): SimplifiedFill {
     } else {
       return formatRGBAColor(raw.color!, opacity);
     }
+  } else if (raw.type === "PATTERN") {
+    // TODO: Handle pattern fills better
+    return {
+      type: raw.type,
+    };
   } else if (
     ["GRADIENT_LINEAR", "GRADIENT_RADIAL", "GRADIENT_ANGULAR", "GRADIENT_DIAMOND"].includes(
       raw.type,
