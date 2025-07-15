@@ -1,11 +1,7 @@
 import { z } from "zod";
-import type { ToolDefinition } from "../index.js";
 import { FigmaService } from "../../services/figma.js";
 import { Logger } from "../../utils/logger.js";
 
-const name = "download_figma_images";
-const description =
-  "Download SVG and PNG images used in a Figma file based on the IDs of image or icon nodes";
 const parameters = {
   fileKey: z.string().describe("The key of the Figma file containing the node"),
   nodes: z
@@ -59,84 +55,85 @@ const parameters = {
     .describe("Options for SVG export"),
 };
 
-type DownloadFigmaImagesOptions = {
-  figmaService: FigmaService;
-};
+const parametersSchema = z.object(parameters);
+export type DownloadImagesParams = z.infer<typeof parametersSchema>;
 
-// Overloaded factory function
-export function createDownloadFigmaImagesTool(
-  options: DownloadFigmaImagesOptions,
-): ToolDefinition<typeof parameters> {
-  return {
-    name,
-    description,
-    parameters,
-    handler:
-      () =>
-      async ({ fileKey, nodes, localPath, svgOptions, pngScale }) => {
-        try {
-          const imageFills = nodes.filter(({ imageRef }) => !!imageRef) as {
-            nodeId: string;
-            imageRef: string;
-            fileName: string;
-          }[];
+// Simplified handler function
+async function downloadFigmaImages(params: DownloadImagesParams, figmaService: FigmaService) {
+  try {
+    const { fileKey, nodes, localPath, svgOptions, pngScale = 2 } = params;
 
-          const { figmaService } = options;
+    // Separate nodes by type
+    const imageFills = nodes.filter((node) => node.imageRef);
+    const renderNodes = nodes.filter((node) => !node.imageRef);
 
-          const fillDownloads = figmaService.getImageFills(fileKey, imageFills, localPath);
-          const renderRequests = nodes
-            .filter(({ imageRef }) => !imageRef)
-            .map(({ nodeId, fileName }) => ({
+    const downloads = await Promise.all([
+      // Download image fills
+      imageFills.length > 0
+        ? figmaService.getImageFills(
+            fileKey,
+            imageFills.map((node) => ({
+              nodeId: node.nodeId,
+              fileName: node.fileName,
+              imageRef: node.imageRef!, // Safe because we filtered for imageRef existence
+            })),
+            localPath,
+          )
+        : Promise.resolve([]),
+
+      // Download rendered nodes
+      renderNodes.length > 0
+        ? figmaService.getImages(
+            fileKey,
+            renderNodes.map(({ nodeId, fileName }) => ({
               nodeId,
               fileName,
               fileType: fileName.endsWith(".svg") ? ("svg" as const) : ("png" as const),
-            }));
-
-          const renderDownloads = figmaService.getImages(
-            fileKey,
-            renderRequests,
+            })),
             localPath,
             pngScale,
-            svgOptions,
-          );
+            {
+              outlineText: svgOptions.outlineText ?? true,
+              includeId: svgOptions.includeId ?? false,
+              simplifyStroke: svgOptions.simplifyStroke ?? true,
+            },
+          )
+        : Promise.resolve([]),
+    ]);
 
-          const downloads = await Promise.all([fillDownloads, renderDownloads]).then(([f, r]) => [
-            ...f,
-            ...r,
-          ]);
+    const allDownloads = downloads.flat();
+    const successCount = allDownloads.filter(Boolean).length;
 
-          // If any download fails, return false
-          const saveSuccess = !downloads.find((success) => !success);
-          return {
-            content: [
-              {
-                type: "text",
-                text: saveSuccess
-                  ? `Success, ${downloads.length} images downloaded: ${downloads.join(", ")}`
-                  : "Failed",
-              },
-            ],
-          };
-        } catch (error) {
-          Logger.error(`Error downloading images from file ${fileKey}:`, error);
-          return {
-            isError: true,
-            content: [{ type: "text", text: `Error downloading images: ${error}` }],
-          };
-        }
-      },
-    register: (server) => {
-      if (!options) {
-        throw new Error(
-          "Cannot register downloadFigmaImagesTool without required options (figmaService)",
-        );
-      }
-      return server.tool(
-        name,
-        description,
-        parameters,
-        createDownloadFigmaImagesTool(options).handler(),
-      );
-    },
-  };
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text:
+            successCount === allDownloads.length
+              ? `Successfully downloaded ${successCount} images`
+              : `Downloaded ${successCount}/${allDownloads.length} images (some failed)`,
+        },
+      ],
+    };
+  } catch (error) {
+    Logger.error(`Error downloading images from ${params.fileKey}:`, error);
+    return {
+      isError: true,
+      content: [
+        {
+          type: "text" as const,
+          text: `Failed to download images: ${error instanceof Error ? error.message : String(error)}`,
+        },
+      ],
+    };
+  }
 }
+
+// Export tool configuration
+export const downloadFigmaImagesTool = {
+  name: "download_figma_images",
+  description:
+    "Download SVG and PNG images used in a Figma file based on the IDs of image or icon nodes",
+  parameters,
+  handler: downloadFigmaImages,
+} as const;
