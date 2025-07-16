@@ -24,6 +24,13 @@ import {
 } from "~/utils/common.js";
 import { buildSimplifiedStrokes, type SimplifiedStroke } from "~/transformers/style.js";
 import { buildSimplifiedEffects, type SimplifiedEffects } from "~/transformers/effects.js";
+import {
+  extractNodeText,
+  extractTextStyle,
+  hasTextStyle,
+  isTextNode,
+  type TextStyle,
+} from "~/transformers/text.js";
 /**
  * TODO ITEMS
  *
@@ -36,16 +43,6 @@ import { buildSimplifiedEffects, type SimplifiedEffects } from "~/transformers/e
 
 // -------------------- SIMPLIFIED STRUCTURES --------------------
 
-export type TextStyle = Partial<{
-  fontFamily: string;
-  fontWeight: number;
-  fontSize: number;
-  lineHeight: string;
-  letterSpacing: string;
-  textCase: string;
-  textAlignHorizontal: string;
-  textAlignVertical: string;
-}>;
 export type StrokeWeights = {
   top: number;
   right: number;
@@ -261,24 +258,8 @@ function parseNode(
   }
 
   // text
-  if (hasValue("style", n) && Object.keys(n.style).length) {
-    const style = n.style;
-    const textStyle: TextStyle = {
-      fontFamily: style.fontFamily,
-      fontWeight: style.fontWeight,
-      fontSize: style.fontSize,
-      lineHeight:
-        "lineHeightPx" in style && style.lineHeightPx && style.fontSize
-          ? `${style.lineHeightPx / style.fontSize}em`
-          : undefined,
-      letterSpacing:
-        style.letterSpacing && style.letterSpacing !== 0 && style.fontSize
-          ? `${(style.letterSpacing / style.fontSize) * 100}%`
-          : undefined,
-      textCase: style.textCase,
-      textAlignHorizontal: style.textAlignHorizontal,
-      textAlignVertical: style.textAlignVertical,
-    };
+  if (hasTextStyle(n)) {
+    const textStyle = extractTextStyle(n);
     simplified.textStyle = findOrCreateVar(globalVars, textStyle, "style");
   }
 
@@ -306,8 +287,8 @@ function parseNode(
   }
 
   // Keep other simple properties directly
-  if (hasValue("characters", n, isTruthy)) {
-    simplified.text = n.characters;
+  if (isTextNode(n)) {
+    simplified.text = extractNodeText(n);
   }
 
   // border/corner
