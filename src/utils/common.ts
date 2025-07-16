@@ -5,9 +5,15 @@ import type { Paint, RGBA } from "@figma/rest-api-spec";
 import type {
   CSSHexColor,
   CSSRGBAColor,
+  GlobalVars,
+  SimplifiedDesign,
   SimplifiedFill,
+  SimplifiedNode,
 } from "~/services/simplify-node-response.js";
-
+import type {
+  SimplifiedComponentDefinition,
+  SimplifiedComponentSetDefinition,
+} from "~/utils/sanitization.js";
 export type StyleId = `${string}_${string}` & { __brand: "StyleId" };
 
 export interface ColorValue {
@@ -75,7 +81,7 @@ export async function downloadFigmaImage(
       };
 
       // Resolve only when the stream is fully written
-      writer.on('finish', () => {
+      writer.on("finish", () => {
         resolve(fullPath);
       });
 
@@ -270,7 +276,7 @@ export function generateCSSShorthand(
 }
 
 /**
- * Convert a Figma paint (solid, image, gradient) to a SimplifiedFill
+ * Convert a Figma paint (solid, image, gradient, pattern) to a SimplifiedFill
  * @param raw - The Figma paint to convert
  * @returns The converted SimplifiedFill
  */
@@ -289,6 +295,21 @@ export function parsePaint(raw: Paint): SimplifiedFill {
     } else {
       return formatRGBAColor(raw.color!, opacity);
     }
+  } else if (raw.type === "PATTERN") {
+    // TODO: test this
+    // try to get the image url from the sourceNodeId
+    const backgroundRepeat = raw.tileType === "RECTANGULAR" ? "repeat" : "repeat";
+    const backgroundPosition = `${raw.horizontalAlignment?.toLowerCase() || "center"} ${raw.verticalAlignment?.toLowerCase() || "center"}`;
+    const backgroundSize = raw.scalingFactor !== 1 ? `${raw.scalingFactor * 100}%` : "auto";
+
+    // return the image url
+    return {
+      backgroundImage: `url(figma-pattern:${raw.sourceNodeId})`, // placeholder, will be replaced with the actual image url
+      backgroundRepeat,
+      backgroundPosition,
+      backgroundSize,
+      opacity: raw.opacity,
+    };
   } else if (
     ["GRADIENT_LINEAR", "GRADIENT_RADIAL", "GRADIENT_ANGULAR", "GRADIENT_DIAMOND"].includes(
       raw.type,
@@ -328,4 +349,80 @@ export function pixelRound(num: number): number {
     throw new TypeError(`Input must be a valid number`);
   }
   return Number(Number(num).toFixed(2));
+}
+
+/**
+ * Normalize a Figma node ID to
+ * example:
+ * 123-14507 -> 123:14507
+ * @param nodeId - The Figma node ID to normalize
+ * @returns The normalized Figma node ID
+ */
+export function normalizeFigmaNodeId(nodeId: string): string {
+  return nodeId.replace(/-/g, ":");
+}
+
+/**
+ * Remove unused components and component sets from a design
+ * @param design - The design to remove unused components and component sets from
+ * @returns The design with unused components and component sets removed
+ */
+export function removeUnusedComponentsAndStyles(design: SimplifiedDesign): SimplifiedDesign {
+  const usedComponentIds = new Set<string>();
+  const usedComponentSets = new Set<string>();
+  const usedStyles = new Set<string>();
+
+  const findUsedComponents = (node: SimplifiedNode) => {
+    if (node.type === "INSTANCE") {
+      if (node.componentId) {
+        usedComponentIds.add(node.componentId);
+      }
+      if (node.textStyle) {
+        usedStyles.add(node.textStyle);
+      }
+    }
+    if (node.children) {
+      node.children.forEach(findUsedComponents);
+    }
+  };
+
+  design.nodes.forEach(findUsedComponents);
+
+  const newComponents: Record<string, SimplifiedComponentDefinition> = {};
+
+  for (const componentId in design.components) {
+    if (usedComponentIds.has(componentId)) {
+      newComponents[componentId] = design.components[componentId];
+      if (design.components[componentId].componentSetId) {
+        usedComponentSets.add(design.components[componentId].componentSetId);
+      }
+    }
+  }
+
+  const newComponentSets: Record<string, SimplifiedComponentSetDefinition> = {};
+
+  for (const componentSetId in design.componentSets) {
+    if (usedComponentSets.has(componentSetId)) {
+      newComponentSets[componentSetId] = design.componentSets[componentSetId];
+    }
+  }
+
+  const newGlobalVars: GlobalVars = {
+    styles: {},
+  };
+
+  for (const styleId in design.globalVars.styles) {
+    if (usedStyles.has(styleId)) {
+      newGlobalVars.styles[styleId as StyleId] = design.globalVars.styles[styleId as StyleId];
+    }
+  }
+
+  const newDesign: SimplifiedDesign = {
+    ...design,
+    components: newComponents,
+    componentSets: newComponentSets,
+    globalVars: newGlobalVars,
+  };
+
+  return newDesign;
 }

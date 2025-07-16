@@ -59,7 +59,7 @@ type StyleTypes =
   | SimplifiedStroke
   | SimplifiedEffects
   | string;
-type GlobalVars = {
+export type GlobalVars = {
   styles: Record<StyleId, StyleTypes>;
 };
 
@@ -114,7 +114,20 @@ export interface BoundingBox {
 
 export type CSSRGBAColor = `rgba(${number}, ${number}, ${number}, ${number})`;
 export type CSSHexColor = `#${string}`;
+
+// CSS background-image
+export type CSSBackgroundImage = {
+  backgroundImage: string;
+  backgroundRepeat?: "repeat" | "repeat-x" | "repeat-y" | "no-repeat" | "space" | "round";
+  backgroundPosition?: string;
+  backgroundSize?: string;
+  opacity?: number;
+};
+
 export type SimplifiedFill =
+  | CSSRGBAColor
+  | CSSHexColor
+  | CSSBackgroundImage
   | {
       type?: Paint["type"];
       hex?: string;
@@ -127,9 +140,7 @@ export type SimplifiedFill =
         position: number;
         color: ColorValue | string;
       }[];
-    }
-  | CSSRGBAColor
-  | CSSHexColor;
+    };
 
 export interface ColorValue {
   hex: string;
@@ -262,13 +273,14 @@ function parseNode(
 
   // text
   if (hasValue("style", n) && Object.keys(n.style).length) {
+    // TODO: how to handle text path?
     const style = n.style;
     const textStyle: TextStyle = {
       fontFamily: style.fontFamily,
       fontWeight: style.fontWeight,
       fontSize: style.fontSize,
       lineHeight:
-        style.lineHeightPx && style.fontSize
+        "lineHeightPx" in style && style.lineHeightPx && style.fontSize
           ? `${style.lineHeightPx / style.fontSize}em`
           : undefined,
       letterSpacing:

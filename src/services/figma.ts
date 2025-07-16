@@ -1,20 +1,27 @@
 import fs from "fs";
-import { parseFigmaResponse, type SimplifiedDesign } from "./simplify-node-response.js";
+import {
+  parseFigmaResponse,
+  type SimplifiedDesign,
+  type SimplifiedNode,
+} from "./simplify-node-response.js";
 import type {
   GetImagesResponse,
   GetFileResponse,
   GetFileNodesResponse,
   GetImageFillsResponse,
+  GetFileMetaResponse,
 } from "@figma/rest-api-spec";
-import { downloadFigmaImage } from "~/utils/common.js";
+import { downloadFigmaImage, normalizeFigmaNodeId } from "~/utils/common.js";
 import { Logger } from "~/utils/logger.js";
 import { fetchWithRetry } from "~/utils/fetch-with-retry.js";
-import yaml from "js-yaml";
+import { ParseDataCache } from "~/utils/parse-data-cache.js";
+import { writeJSON2YamlLogs, writeLogs } from "../utils/write-log.js";
 
 export type FigmaAuthOptions = {
   figmaApiKey: string;
   figmaOAuthToken: string;
   useOAuth: boolean;
+  useCache: boolean;
 };
 
 type FetchImageParams = {
@@ -44,11 +51,16 @@ export class FigmaService {
   private readonly oauthToken: string;
   private readonly useOAuth: boolean;
   private readonly baseUrl = "https://api.figma.com/v1";
+  private readonly cache: ParseDataCache;
+  private readonly useCache: boolean;
 
-  constructor({ figmaApiKey, figmaOAuthToken, useOAuth }: FigmaAuthOptions) {
+  constructor({ figmaApiKey, figmaOAuthToken, useOAuth, useCache }: FigmaAuthOptions) {
     this.apiKey = figmaApiKey || "";
     this.oauthToken = figmaOAuthToken || "";
     this.useOAuth = !!useOAuth && !!this.oauthToken;
+    // Create cache with capacity for 10 file node data entries
+    this.cache = new ParseDataCache(10);
+    this.useCache = useCache;
   }
 
   private async request<T>(endpoint: string): Promise<T> {
@@ -157,8 +169,8 @@ export class FigmaService {
       const response = await this.request<GetFileResponse>(endpoint);
       Logger.log("Got response");
       const simplifiedResponse = parseFigmaResponse(response);
-      writeLogs("figma-raw.yml", response);
-      writeLogs("figma-simplified.yml", simplifiedResponse);
+      writeJSON2YamlLogs("figma-raw.yml", response);
+      writeJSON2YamlLogs("figma-simplified.yml", simplifiedResponse);
       return simplifiedResponse;
     } catch (e) {
       console.error("Failed to get file:", e);
@@ -166,35 +178,126 @@ export class FigmaService {
     }
   }
 
-  async getNode(fileKey: string, nodeId: string, depth?: number | null): Promise<SimplifiedDesign> {
-    const endpoint = `/files/${fileKey}/nodes?ids=${nodeId}${depth ? `&depth=${depth}` : ""}`;
+  async getFileMeta(fileKey: string): Promise<GetFileMetaResponse> {
+    const endpoint = `/files/${fileKey}/meta`;
+    const response = await this.request<GetFileMetaResponse>(endpoint);
+    return response;
+  }
+
+  /**
+   * normal nodes handle
+   * @param fileKey Figma file ID
+   * @param nodeIds node ID string (comma separated)
+   * @param depth depth parameter
+   * @returns processed simplified design data
+   */
+  private async fetchAndProcessNodes(
+    fileKey: string,
+    nodeIds: string,
+    depth?: number | null,
+  ): Promise<SimplifiedDesign> {
+    const endpoint = `/files/${fileKey}/nodes?ids=${nodeIds}${depth ? `&depth=${depth}` : ""}`;
     const response = await this.request<GetFileNodesResponse>(endpoint);
     Logger.log("Got response from getNode, now parsing.");
-    writeLogs("figma-raw.yml", response);
-    const simplifiedResponse = parseFigmaResponse(response);
-    writeLogs("figma-simplified.yml", simplifiedResponse);
-    return simplifiedResponse;
+    const apiResponse = parseFigmaResponse(response);
+
+    writeJSON2YamlLogs("figma-raw.yml", response);
+    writeJSON2YamlLogs("figma-simplified.yml", apiResponse);
+    writeLogs("figma-raw.json", JSON.stringify(response));
+    writeLogs("figma-simplified.json", JSON.stringify(apiResponse));
+
+    return apiResponse;
   }
-}
 
-function writeLogs(name: string, value: any) {
-  try {
-    if (process.env.NODE_ENV !== "development") return;
+  async getNode(
+    fileKey: string,
+    _nodeIds: string,
+    depth?: number | null,
+  ): Promise<SimplifiedDesign> {
+    const startTime = performance.now();
+    const nodeIds = normalizeFigmaNodeId(_nodeIds);
 
-    const logsDir = "logs";
+    let result: SimplifiedDesign;
+    if (!this.useCache) {
+      Logger.log(`Cache disabled, making direct API call for nodes: ${nodeIds}`);
+      result = await this.fetchAndProcessNodes(fileKey, nodeIds, depth);
+    } else {
+      const cacheKey = `${fileKey}:${nodeIds}:${depth || "default"}`;
 
-    try {
-      fs.accessSync(process.cwd(), fs.constants.W_OK);
-    } catch (error) {
-      Logger.log("Failed to write logs:", error);
-      return;
+      // Create validation params for cache freshness validation
+      const validationParams = {
+        fileKey,
+        getFileMeta: () => this.getFileMeta(fileKey),
+      };
+
+      // First check for exact cache match
+      const cachedResult = await this.cache.get(cacheKey, validationParams);
+      if (cachedResult) {
+        Logger.log(`Cache hit: ${cacheKey}`);
+        result = cachedResult;
+      } else {
+        // Parse requested node IDs array
+        const nodeIdArray = nodeIds.split(",").map((id) => id.trim());
+
+        // Check cache status for multiple nodes with depth consideration
+        const { cachedNodes, missingNodeIds, sourceDesign } = await this.cache.findMultipleNodes(
+          fileKey,
+          nodeIdArray,
+          validationParams,
+          depth,
+        );
+
+        // If all nodes are cached, return merged result directly
+        if (missingNodeIds.length === 0 && sourceDesign) {
+          Logger.log(`All nodes are cached: ${nodeIds}`);
+          const mergedDesign = this.cache.mergeNodesAsDesign(sourceDesign, cachedNodes);
+          // Cache merged result
+          this.cache.put(cacheKey, mergedDesign, sourceDesign.lastModified);
+          result = mergedDesign;
+        } else {
+          // If some nodes are missing, request only the missing nodes
+          let apiResponse: SimplifiedDesign | null = null;
+          if (missingNodeIds.length > 0) {
+            const missingNodeIdsStr = missingNodeIds.join(",");
+            Logger.log(`Partial cache miss, requesting missing nodes: ${missingNodeIdsStr}`);
+            apiResponse = await this.fetchAndProcessNodes(fileKey, missingNodeIdsStr, depth);
+          }
+
+          // Merge cached nodes and API response nodes
+          const allNodes: SimplifiedNode[] = [...cachedNodes];
+          if (apiResponse) {
+            allNodes.push(...apiResponse.nodes);
+          }
+
+          // Create final merged result
+          const finalDesign = this.cache.mergeNodesAsDesign(sourceDesign || apiResponse!, allNodes);
+
+          this.cache.put(cacheKey, finalDesign, finalDesign.lastModified);
+
+          Logger.log(
+            `Cached merged result: ${cacheKey} (cached nodes: ${cachedNodes.length}, API nodes: ${apiResponse?.nodes.length || 0})`,
+          );
+
+          result = finalDesign;
+        }
+      }
     }
+    const endTime = performance.now();
+    Logger.log(`Figma Call Node Time taken: ${((endTime - startTime) / 1000).toFixed(2)} seconds`);
+    return result;
+  }
 
-    if (!fs.existsSync(logsDir)) {
-      fs.mkdirSync(logsDir);
-    }
-    fs.writeFileSync(`${logsDir}/${name}`, yaml.dump(value));
-  } catch (error) {
-    console.debug("Failed to write logs:", error);
+  /**
+   * Clear all cache entries for a specific file
+   */
+  clearFileCache(fileKey: string): void {
+    this.cache.clearFileCache(fileKey);
+  }
+
+  /**
+   * Clear all cache entries
+   */
+  clearAllCache(): void {
+    this.cache.clearAllCache();
   }
 }
