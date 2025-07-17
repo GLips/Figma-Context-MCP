@@ -226,7 +226,7 @@ export class FigmaService {
     Logger.log(`Retrieving raw Figma file: ${fileKey} (depth: ${depth ?? "default"})`);
 
     const response = await this.request<GetFileResponse>(endpoint);
-    writeLogs("figma-raw.yml", response);
+    writeLogs("figma-raw.yml", JSON.stringify(response, null, 2));
 
     return response;
   }
@@ -245,7 +245,7 @@ export class FigmaService {
     );
 
     const response = await this.request<GetFileNodesResponse>(endpoint);
-    writeLogs("figma-raw.yml", response);
+    writeLogs("figma-raw.yml", JSON.stringify(response, null, 2));
 
     return response;
   }
