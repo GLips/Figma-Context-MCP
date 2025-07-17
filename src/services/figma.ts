@@ -1,5 +1,4 @@
 import fs from "fs";
-import { parseFigmaResponse, type SimplifiedDesign } from "./simplify-node-response.js";
 import type {
   GetImagesResponse,
   GetFileResponse,
@@ -221,36 +220,28 @@ export class FigmaService {
     return results.flat();
   }
 
-  async getFile(fileKey: string, depth?: number | null): Promise<SimplifiedDesign> {
-    try {
-      const endpoint = `/files/${fileKey}${depth ? `?depth=${depth}` : ""}`;
-      Logger.log(`Retrieving Figma file: ${fileKey} (depth: ${depth ?? "default"})`);
-
-      const response = await this.request<GetFileResponse>(endpoint);
-      Logger.log("Got response");
-
-      const simplifiedResponse = parseFigmaResponse(response);
-      writeLogs("figma-raw.yml", response);
-      writeLogs("figma-simplified.yml", simplifiedResponse);
-
-      return simplifiedResponse;
-    } catch (error) {
-      console.error("Failed to get file:", error);
-      throw error;
-    }
+  /**
+   * Get raw Figma API response for a file (for use with flexible extractors)
+   */
+  async getRawFile(fileKey: string, depth?: number | null): Promise<GetFileResponse> {
+    const endpoint = `/files/${fileKey}${depth ? `?depth=${depth}` : ""}`;
+    Logger.log(`Retrieving raw Figma file: ${fileKey} (depth: ${depth ?? "default"})`);
+    return await this.request<GetFileResponse>(endpoint);
   }
 
-  async getNode(fileKey: string, nodeId: string, depth?: number | null): Promise<SimplifiedDesign> {
+  /**
+   * Get raw Figma API response for specific nodes (for use with flexible extractors)
+   */
+  async getRawNode(
+    fileKey: string,
+    nodeId: string,
+    depth?: number | null,
+  ): Promise<GetFileNodesResponse> {
     const endpoint = `/files/${fileKey}/nodes?ids=${nodeId}${depth ? `&depth=${depth}` : ""}`;
-    const response = await this.request<GetFileNodesResponse>(endpoint);
-
-    Logger.log("Got response from getNode, now parsing.");
-    writeLogs("figma-raw.yml", response);
-
-    const simplifiedResponse = parseFigmaResponse(response);
-    writeLogs("figma-simplified.yml", simplifiedResponse);
-
-    return simplifiedResponse;
+    Logger.log(
+      `Retrieving raw Figma node: ${nodeId} from ${fileKey} (depth: ${depth ?? "default"})`,
+    );
+    return await this.request<GetFileNodesResponse>(endpoint);
   }
 }
 

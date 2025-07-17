@@ -27,6 +27,7 @@ _High impact, foundational improvements_
 - [ ] **Fix masked / cropped image exports**
   - [ ] Correctly export cropped images ([#162](https://github.com/GLips/Figma-Context-MCP/issues/162))
   - [?] Support complex mask shapes and transformations
+  - [?] Pull image fills/vectors out to top level for better AI visibility
 - [ ] **Improve SVG handling**
   - [ ] Better icon identification, e.g. if all components of a frame are VECTOR, download the full frame as an SVG
   - [?] Add support for raw path data in response—not sure if this is valuable yet
@@ -47,7 +48,7 @@ _High impact, foundational improvements_
   - [ ] Support for Figma's new grid autolayout (an addition to the long-existing flex autolayout)
   - [ ] Legacy "layout guide" grids
 - [ ] **Named styles extraction**
-  - [ ] Export style names associated with different layouts, colors, text, etc. for easier identification by the LLM
+  - [ ] Export style names associated with different layouts, colors, text, etc. for easier identification by the LLM (can use `/v1/styles/:key` endpoint)
 
 ### Text & Typography
 

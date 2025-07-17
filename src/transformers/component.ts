@@ -1,4 +1,10 @@
-import type { Component, ComponentSet } from "@figma/rest-api-spec";
+import type { Component, ComponentPropertyType, ComponentSet } from "@figma/rest-api-spec";
+
+export interface ComponentProperties {
+  name: string;
+  value: string;
+  type: ComponentPropertyType;
+}
 
 export interface SimplifiedComponentDefinition {
   id: string;
@@ -14,7 +20,10 @@ export interface SimplifiedComponentSetDefinition {
   description?: string;
 }
 
-export function sanitizeComponents(
+/**
+ * Remove unnecessary component properties and convert to simplified format.
+ */
+export function simplifyComponents(
   aggregatedComponents: Record<string, Component>,
 ): Record<string, SimplifiedComponentDefinition> {
   return Object.fromEntries(
@@ -30,7 +39,10 @@ export function sanitizeComponents(
   );
 }
 
-export function sanitizeComponentSets(
+/**
+ * Remove unnecessary component set properties and convert to simplified format.
+ */
+export function simplifyComponentSets(
   aggregatedComponentSets: Record<string, ComponentSet>,
 ): Record<string, SimplifiedComponentSetDefinition> {
   return Object.fromEntries(

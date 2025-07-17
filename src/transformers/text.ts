@@ -1,7 +1,7 @@
 import type { Node as FigmaDocumentNode } from "@figma/rest-api-spec";
 import { hasValue, isTruthy } from "~/utils/identity.js";
 
-export type TextStyle = Partial<{
+export type SimplifiedTextStyle = Partial<{
   fontFamily: string;
   fontWeight: number;
   fontSize: number;
@@ -34,7 +34,7 @@ export function extractNodeText(n: FigmaDocumentNode) {
 export function extractTextStyle(n: FigmaDocumentNode) {
   if (hasTextStyle(n)) {
     const style = n.style;
-    const textStyle: TextStyle = {
+    const textStyle: SimplifiedTextStyle = {
       fontFamily: style.fontFamily,
       fontWeight: style.fontWeight,
       fontSize: style.fontSize,

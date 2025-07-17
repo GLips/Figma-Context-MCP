@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { FigmaService } from "../../services/figma.js";
-import type { SimplifiedDesign } from "../../services/simplify-node-response.js";
+import type { GetFileResponse, GetFileNodesResponse } from "@figma/rest-api-spec";
+import { extractDesignFromAPI, allExtractors } from "../../extractors/index.js";
 import yaml from "js-yaml";
 import { Logger } from "../../utils/logger.js";
 
@@ -20,7 +21,7 @@ const parameters = {
     .number()
     .optional()
     .describe(
-      "OPTIONAL. Do NOT use unless explicitly requested by the user. Controls how many levels deep to traverse the node tree,",
+      "OPTIONAL. Do NOT use unless explicitly requested by the user. Controls how many levels deep to traverse the node tree.",
     ),
 };
 
@@ -42,19 +43,31 @@ async function getFigmaData(
       } ${fileKey}`,
     );
 
-    let file: SimplifiedDesign;
+    // Get raw Figma API response
+    let rawApiResponse: GetFileResponse | GetFileNodesResponse;
     if (nodeId) {
-      file = await figmaService.getNode(fileKey, nodeId, depth);
+      rawApiResponse = await figmaService.getRawNode(fileKey, nodeId, depth);
     } else {
-      file = await figmaService.getFile(fileKey, depth);
+      rawApiResponse = await figmaService.getRawFile(fileKey, depth);
     }
 
-    Logger.log(`Successfully fetched file: ${file.name}`);
-    const { nodes, globalVars, ...metadata } = file;
+    // Use unified design extraction (handles nodes + components consistently)
+    const simplifiedDesign = extractDesignFromAPI(rawApiResponse, allExtractors, {
+      maxDepth: depth,
+    });
 
-    const result = { metadata, nodes, globalVars };
+    Logger.log(
+      `Successfully extracted data: ${simplifiedDesign.nodes.length} nodes, ${Object.keys(simplifiedDesign.globalVars.styles).length} styles`,
+    );
 
-    Logger.log(`Generating ${outputFormat.toUpperCase()} result from file`);
+    const { nodes, globalVars, ...metadata } = simplifiedDesign;
+    const result = {
+      metadata,
+      nodes,
+      globalVars,
+    };
+
+    Logger.log(`Generating ${outputFormat.toUpperCase()} result from extracted data`);
     const formattedResult =
       outputFormat === "json" ? JSON.stringify(result, null, 2) : yaml.dump(result);
 
@@ -76,7 +89,7 @@ async function getFigmaData(
 export const getFigmaDataTool = {
   name: "get_figma_data",
   description:
-    "When the nodeId cannot be obtained, obtain the layout information about the entire Figma file",
+    "Get comprehensive Figma file data including layout, content, visuals, and component information",
   parameters,
   handler: getFigmaData,
 } as const;
