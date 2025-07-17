@@ -1,9 +1,9 @@
 import { z } from "zod";
-import { FigmaService } from "../../services/figma.js";
 import type { GetFileResponse, GetFileNodesResponse } from "@figma/rest-api-spec";
-import { extractDesignFromAPI, allExtractors } from "../../extractors/index.js";
+import { FigmaService } from "~/services/figma.js";
+import { simplifyRawFigmaObject, allExtractors } from "~/extractors/index.js";
 import yaml from "js-yaml";
-import { Logger } from "../../utils/logger.js";
+import { Logger, writeLogs } from "~/utils/logger.js";
 
 const parameters = {
   fileKey: z
@@ -52,9 +52,11 @@ async function getFigmaData(
     }
 
     // Use unified design extraction (handles nodes + components consistently)
-    const simplifiedDesign = extractDesignFromAPI(rawApiResponse, allExtractors, {
+    const simplifiedDesign = simplifyRawFigmaObject(rawApiResponse, allExtractors, {
       maxDepth: depth,
     });
+
+    writeLogs("figma-simplified.json", simplifiedDesign);
 
     Logger.log(
       `Successfully extracted data: ${simplifiedDesign.nodes.length} nodes, ${Object.keys(simplifiedDesign.globalVars.styles).length} styles`,

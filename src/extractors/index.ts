@@ -11,7 +11,7 @@ export type {
 export { extractFromDesign } from "./node-walker.js";
 
 // Design-level extraction (unified nodes + components)
-export { simplifyRawFigmaObject as extractDesignFromAPI } from "./design-extractor.js";
+export { simplifyRawFigmaObject } from "./design-extractor.js";
 
 // Built-in extractors
 export {

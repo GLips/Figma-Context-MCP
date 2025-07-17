@@ -1,4 +1,3 @@
-import fs from "fs";
 import type {
   GetImagesResponse,
   GetFileResponse,
@@ -6,9 +5,8 @@ import type {
   GetImageFillsResponse,
 } from "@figma/rest-api-spec";
 import { downloadFigmaImage } from "~/utils/common.js";
-import { Logger } from "~/utils/logger.js";
+import { Logger, writeLogs } from "~/utils/logger.js";
 import { fetchWithRetry } from "~/utils/fetch-with-retry.js";
-import yaml from "js-yaml";
 
 export type FigmaAuthOptions = {
   figmaApiKey: string;
@@ -226,7 +224,11 @@ export class FigmaService {
   async getRawFile(fileKey: string, depth?: number | null): Promise<GetFileResponse> {
     const endpoint = `/files/${fileKey}${depth ? `?depth=${depth}` : ""}`;
     Logger.log(`Retrieving raw Figma file: ${fileKey} (depth: ${depth ?? "default"})`);
-    return await this.request<GetFileResponse>(endpoint);
+
+    const response = await this.request<GetFileResponse>(endpoint);
+    writeLogs("figma-raw.yml", response);
+
+    return response;
   }
 
   /**
@@ -241,29 +243,10 @@ export class FigmaService {
     Logger.log(
       `Retrieving raw Figma node: ${nodeId} from ${fileKey} (depth: ${depth ?? "default"})`,
     );
-    return await this.request<GetFileNodesResponse>(endpoint);
-  }
-}
 
-function writeLogs(name: string, value: any): void {
-  if (process.env.NODE_ENV !== "development") return;
+    const response = await this.request<GetFileNodesResponse>(endpoint);
+    writeLogs("figma-raw.yml", response);
 
-  try {
-    const logsDir = "logs";
-    const logPath = `${logsDir}/${name}`;
-
-    // Check if we can write to the current directory
-    fs.accessSync(process.cwd(), fs.constants.W_OK);
-
-    // Create logs directory if it doesn't exist
-    if (!fs.existsSync(logsDir)) {
-      fs.mkdirSync(logsDir, { recursive: true });
-    }
-
-    fs.writeFileSync(logPath, yaml.dump(value, { indent: 2, lineWidth: 120 }));
-    Logger.log(`Debug log written to: ${logPath}`);
-  } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : String(error);
-    Logger.log(`Failed to write logs to ${name}: ${errorMessage}`);
+    return response;
   }
 }

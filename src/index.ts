@@ -16,7 +16,7 @@ export type {
 
 export {
   extractFromDesign,
-  extractDesignFromAPI,
+  simplifyRawFigmaObject,
   layoutExtractor,
   textExtractor,
   visualsExtractor,
