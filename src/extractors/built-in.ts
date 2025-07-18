@@ -67,7 +67,7 @@ export const visualsExtractor: ExtractorFn = (node, result, context) => {
   
   // fills
   if (hasValue("fills", node) && Array.isArray(node.fills) && node.fills.length) {
-    const fills = node.fills.map((fill) => parsePaint(fill, hasChildren));
+    const fills = node.fills.map((fill) => parsePaint(fill, hasChildren)).reverse();
     result.fills = findOrCreateVar(context.globalVars, fills, "fill");
   }
 

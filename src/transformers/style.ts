@@ -71,11 +71,7 @@ export type SimplifiedImageFill = {
 
 export type SimplifiedGradientFill = {
   type: "GRADIENT_LINEAR" | "GRADIENT_RADIAL" | "GRADIENT_ANGULAR" | "GRADIENT_DIAMOND";
-  gradientHandlePositions?: Vector[];
-  gradientStops?: {
-    position: number;
-    color: ColorValue | string;
-  }[];
+  gradient: string;
 };
 
 export type SimplifiedPatternFill = {
@@ -314,11 +310,7 @@ export function parsePaint(raw: Paint, hasChildren: boolean = false): Simplified
         | "GRADIENT_RADIAL"
         | "GRADIENT_ANGULAR"
         | "GRADIENT_DIAMOND",
-      gradientHandlePositions: raw.gradientHandlePositions,
-      gradientStops: raw.gradientStops.map(({ position, color }) => ({
-        position,
-        color: convertColor(color),
-      })),
+      gradient: convertGradientToCss(raw),
     };
   } else {
     throw new Error(`Unknown paint type: ${raw.type}`);
@@ -445,4 +437,348 @@ export function formatRGBAColor(color: RGBA, opacity = 1): CSSRGBAColor {
   const a = Math.round(opacity * color.a * 100) / 100;
 
   return `rgba(${r}, ${g}, ${b}, ${a})`;
+}
+
+/**
+ * Map gradient stops from Figma's handle-based coordinate system to CSS percentages
+ */
+function mapGradientStops(
+  gradient: Extract<
+    Paint,
+    { type: "GRADIENT_LINEAR" | "GRADIENT_RADIAL" | "GRADIENT_ANGULAR" | "GRADIENT_DIAMOND" }
+  >,
+  elementBounds: { width: number; height: number } = { width: 1, height: 1 },
+): { stops: string; cssGeometry: string } {
+  const handles = gradient.gradientHandlePositions;
+  if (!handles || handles.length < 2) {
+    const stops = gradient.gradientStops
+      .map(({ position, color }) => {
+        const cssColor = formatRGBAColor(color, 1);
+        return `${cssColor} ${Math.round(position * 100)}%`;
+      })
+      .join(", ");
+    return { stops, cssGeometry: "0deg" };
+  }
+
+  const [handle1, handle2, handle3] = handles;
+
+  switch (gradient.type) {
+    case "GRADIENT_LINEAR": {
+      return mapLinearGradient(gradient.gradientStops, handle1, handle2, elementBounds);
+    }
+    case "GRADIENT_RADIAL": {
+      return mapRadialGradient(gradient.gradientStops, handle1, handle2, handle3, elementBounds);
+    }
+    case "GRADIENT_ANGULAR": {
+      return mapAngularGradient(gradient.gradientStops, handle1, handle2, handle3, elementBounds);
+    }
+    case "GRADIENT_DIAMOND": {
+      return mapDiamondGradient(gradient.gradientStops, handle1, handle2, handle3, elementBounds);
+    }
+    default: {
+      const stops = gradient.gradientStops
+        .map(({ position, color }) => {
+          const cssColor = formatRGBAColor(color, 1);
+          return `${cssColor} ${Math.round(position * 100)}%`;
+        })
+        .join(", ");
+      return { stops, cssGeometry: "0deg" };
+    }
+  }
+}
+
+/**
+ * Map linear gradient from Figma handles to CSS
+ */
+function mapLinearGradient(
+  gradientStops: { position: number; color: RGBA }[],
+  start: Vector,
+  end: Vector,
+  elementBounds: { width: number; height: number },
+): { stops: string; cssGeometry: string } {
+  // Calculate the gradient line in element space
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  const gradientLength = Math.sqrt(dx * dx + dy * dy);
+
+  // Handle degenerate case
+  if (gradientLength === 0) {
+    const stops = gradientStops
+      .map(({ position, color }) => {
+        const cssColor = formatRGBAColor(color, 1);
+        return `${cssColor} ${Math.round(position * 100)}%`;
+      })
+      .join(", ");
+    return { stops, cssGeometry: "0deg" };
+  }
+
+  // Calculate angle for CSS
+  const angle = Math.atan2(dy, dx) * (180 / Math.PI) + 90;
+
+  // Find where the extended gradient line intersects the element boundaries
+  const extendedIntersections = findExtendedLineIntersections(start, end);
+
+  if (extendedIntersections.length >= 2) {
+    // The gradient line extended to fill the element
+    const fullLineStart = Math.min(extendedIntersections[0], extendedIntersections[1]);
+    const fullLineEnd = Math.max(extendedIntersections[0], extendedIntersections[1]);
+    const fullLineLength = fullLineEnd - fullLineStart;
+
+    // Map gradient stops from the Figma line segment to the full CSS line
+    const mappedStops = gradientStops.map(({ position, color }) => {
+      const cssColor = formatRGBAColor(color, 1);
+
+      // Position along the Figma gradient line (0 = start handle, 1 = end handle)
+      const figmaLinePosition = position;
+
+      // The Figma line spans from t=0 to t=1
+      // The full extended line spans from fullLineStart to fullLineEnd
+      // Map the figma position to the extended line
+      const tOnExtendedLine = figmaLinePosition * (1 - 0) + 0; // This is just figmaLinePosition
+      const extendedPosition = (tOnExtendedLine - fullLineStart) / (fullLineEnd - fullLineStart);
+      const clampedPosition = Math.max(0, Math.min(1, extendedPosition));
+
+      return `${cssColor} ${Math.round(clampedPosition * 100)}%`;
+    });
+
+    return {
+      stops: mappedStops.join(", "),
+      cssGeometry: `${Math.round(angle)}deg`,
+    };
+  }
+
+  // Fallback to simple gradient if intersection calculation fails
+  const mappedStops = gradientStops.map(({ position, color }) => {
+    const cssColor = formatRGBAColor(color, 1);
+    return `${cssColor} ${Math.round(position * 100)}%`;
+  });
+
+  return {
+    stops: mappedStops.join(", "),
+    cssGeometry: `${Math.round(angle)}deg`,
+  };
+}
+
+/**
+ * Find where the extended gradient line intersects with the element boundaries
+ */
+function findExtendedLineIntersections(start: Vector, end: Vector): number[] {
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+
+  // Handle degenerate case
+  if (Math.abs(dx) < 1e-10 && Math.abs(dy) < 1e-10) {
+    return [];
+  }
+
+  const intersections: number[] = [];
+
+  // Check intersection with each edge of the unit square [0,1] x [0,1]
+  // Top edge (y = 0)
+  if (Math.abs(dy) > 1e-10) {
+    const t = -start.y / dy;
+    const x = start.x + t * dx;
+    if (x >= 0 && x <= 1) {
+      intersections.push(t);
+    }
+  }
+
+  // Bottom edge (y = 1)
+  if (Math.abs(dy) > 1e-10) {
+    const t = (1 - start.y) / dy;
+    const x = start.x + t * dx;
+    if (x >= 0 && x <= 1) {
+      intersections.push(t);
+    }
+  }
+
+  // Left edge (x = 0)
+  if (Math.abs(dx) > 1e-10) {
+    const t = -start.x / dx;
+    const y = start.y + t * dy;
+    if (y >= 0 && y <= 1) {
+      intersections.push(t);
+    }
+  }
+
+  // Right edge (x = 1)
+  if (Math.abs(dx) > 1e-10) {
+    const t = (1 - start.x) / dx;
+    const y = start.y + t * dy;
+    if (y >= 0 && y <= 1) {
+      intersections.push(t);
+    }
+  }
+
+  // Remove duplicates and sort
+  const uniqueIntersections = [
+    ...new Set(intersections.map((t) => Math.round(t * 1000000) / 1000000)),
+  ];
+  return uniqueIntersections.sort((a, b) => a - b);
+}
+
+/**
+ * Find where a line intersects with the unit square (0,0) to (1,1)
+ */
+function findLineIntersections(start: Vector, end: Vector): number[] {
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  const intersections: number[] = [];
+
+  // Check intersection with each edge of the unit square
+  const edges = [
+    { x: 0, y: 0, dx: 1, dy: 0 }, // top edge
+    { x: 1, y: 0, dx: 0, dy: 1 }, // right edge
+    { x: 1, y: 1, dx: -1, dy: 0 }, // bottom edge
+    { x: 0, y: 1, dx: 0, dy: -1 }, // left edge
+  ];
+
+  for (const edge of edges) {
+    const t = lineIntersection(start, { x: dx, y: dy }, edge, { x: edge.dx, y: edge.dy });
+    if (t !== null && t >= 0 && t <= 1) {
+      intersections.push(t);
+    }
+  }
+
+  return intersections.sort((a, b) => a - b);
+}
+
+/**
+ * Calculate line intersection parameter
+ */
+function lineIntersection(
+  p1: Vector,
+  d1: Vector,
+  p2: { x: number; y: number },
+  d2: Vector,
+): number | null {
+  const denominator = d1.x * d2.y - d1.y * d2.x;
+  if (Math.abs(denominator) < 1e-10) return null; // Lines are parallel
+
+  const dx = p2.x - p1.x;
+  const dy = p2.y - p1.y;
+  const t = (dx * d2.y - dy * d2.x) / denominator;
+
+  return t;
+}
+
+/**
+ * Map radial gradient from Figma handles to CSS
+ */
+function mapRadialGradient(
+  gradientStops: { position: number; color: RGBA }[],
+  center: Vector,
+  edge: Vector,
+  widthHandle: Vector,
+  elementBounds: { width: number; height: number },
+): { stops: string; cssGeometry: string } {
+  const centerX = Math.round(center.x * 100);
+  const centerY = Math.round(center.y * 100);
+
+  const stops = gradientStops
+    .map(({ position, color }) => {
+      const cssColor = formatRGBAColor(color, 1);
+      return `${cssColor} ${Math.round(position * 100)}%`;
+    })
+    .join(", ");
+
+  return {
+    stops,
+    cssGeometry: `circle at ${centerX}% ${centerY}%`,
+  };
+}
+
+/**
+ * Map angular gradient from Figma handles to CSS
+ */
+function mapAngularGradient(
+  gradientStops: { position: number; color: RGBA }[],
+  center: Vector,
+  angleHandle: Vector,
+  widthHandle: Vector,
+  elementBounds: { width: number; height: number },
+): { stops: string; cssGeometry: string } {
+  const centerX = Math.round(center.x * 100);
+  const centerY = Math.round(center.y * 100);
+
+  const angle =
+    Math.atan2(angleHandle.y - center.y, angleHandle.x - center.x) * (180 / Math.PI) + 90;
+
+  const stops = gradientStops
+    .map(({ position, color }) => {
+      const cssColor = formatRGBAColor(color, 1);
+      return `${cssColor} ${Math.round(position * 100)}%`;
+    })
+    .join(", ");
+
+  return {
+    stops,
+    cssGeometry: `from ${Math.round(angle)}deg at ${centerX}% ${centerY}%`,
+  };
+}
+
+/**
+ * Map diamond gradient from Figma handles to CSS (approximate with ellipse)
+ */
+function mapDiamondGradient(
+  gradientStops: { position: number; color: RGBA }[],
+  center: Vector,
+  edge: Vector,
+  widthHandle: Vector,
+  elementBounds: { width: number; height: number },
+): { stops: string; cssGeometry: string } {
+  const centerX = Math.round(center.x * 100);
+  const centerY = Math.round(center.y * 100);
+
+  const stops = gradientStops
+    .map(({ position, color }) => {
+      const cssColor = formatRGBAColor(color, 1);
+      return `${cssColor} ${Math.round(position * 100)}%`;
+    })
+    .join(", ");
+
+  return {
+    stops,
+    cssGeometry: `ellipse at ${centerX}% ${centerY}%`,
+  };
+}
+
+/**
+ * Convert a Figma gradient to CSS gradient syntax
+ */
+function convertGradientToCss(
+  gradient: Extract<
+    Paint,
+    { type: "GRADIENT_LINEAR" | "GRADIENT_RADIAL" | "GRADIENT_ANGULAR" | "GRADIENT_DIAMOND" }
+  >,
+): string {
+  // Sort stops by position to ensure proper order
+  const sortedGradient = {
+    ...gradient,
+    gradientStops: [...gradient.gradientStops].sort((a, b) => a.position - b.position),
+  };
+
+  // Map gradient stops using handle-based geometry
+  const { stops, cssGeometry } = mapGradientStops(sortedGradient);
+
+  switch (gradient.type) {
+    case "GRADIENT_LINEAR": {
+      return `linear-gradient(${cssGeometry}, ${stops})`;
+    }
+
+    case "GRADIENT_RADIAL": {
+      return `radial-gradient(${cssGeometry}, ${stops})`;
+    }
+
+    case "GRADIENT_ANGULAR": {
+      return `conic-gradient(${cssGeometry}, ${stops})`;
+    }
+
+    case "GRADIENT_DIAMOND": {
+      return `radial-gradient(${cssGeometry}, ${stops})`;
+    }
+
+    default:
+      return `linear-gradient(0deg, ${stops})`;
+  }
 }
