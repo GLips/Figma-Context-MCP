@@ -1,3 +1,4 @@
+import path from "path";
 import type {
   GetImagesResponse,
   GetFileResponse,
@@ -151,6 +152,12 @@ export class FigmaService {
     options: { pngScale?: number; svgOptions?: SvgOptions } = {},
   ): Promise<ImageProcessingResult[]> {
     if (items.length === 0) return [];
+    
+    const sanitizedPath = path.normalize(localPath).replace(/^(\.\.(\/|\\|$))+/, '');
+    const resolvedPath = path.resolve(sanitizedPath);
+    if (!resolvedPath.startsWith(path.resolve(process.cwd()))) {
+      throw new Error("Invalid path specified. Directory traversal is not allowed.");
+    }
 
     const { pngScale = 2, svgOptions } = options;
     const downloadPromises: Promise<ImageProcessingResult[]>[] = [];
@@ -172,7 +179,7 @@ export class FigmaService {
           return imageUrl
             ? downloadAndProcessImage(
                 fileName,
-                localPath,
+                resolvedPath,
                 imageUrl,
                 needsCropping,
                 cropTransform,
@@ -206,7 +213,7 @@ export class FigmaService {
             return imageUrl
               ? downloadAndProcessImage(
                   fileName,
-                  localPath,
+                  resolvedPath,
                   imageUrl,
                   needsCropping,
                   cropTransform,
@@ -235,7 +242,7 @@ export class FigmaService {
             return imageUrl
               ? downloadAndProcessImage(
                   fileName,
-                  localPath,
+                  resolvedPath,
                   imageUrl,
                   needsCropping,
                   cropTransform,
