@@ -8,11 +8,13 @@ import { Logger, writeLogs } from "~/utils/logger.js";
 const parameters = {
   fileKey: z
     .string()
+    .regex(/^[a-zA-Z0-9]+$/, "File key must be alphanumeric")
     .describe(
       "The key of the Figma file to fetch, often found in a provided URL like figma.com/(file|design)/<fileKey>/...",
     ),
   nodeId: z
     .string()
+    .regex(/^\d+:\d+$/, "Node ID must be in the format of 'number:number'")
     .optional()
     .describe(
       "The ID of the node to fetch, often found as URL parameter node-id=<nodeId>, always use if provided",
@@ -69,9 +71,26 @@ async function getFigmaData(
       globalVars,
     };
 
+    // Sanitize result
+    const sanitizedResult = JSON.parse(
+      JSON.stringify(result, (key, value) => {
+        if (typeof value === "string") {
+          return value
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;")
+            .replace(/'/g, "&#039;");
+        }
+        return value;
+      }),
+    );
+
     Logger.log(`Generating ${outputFormat.toUpperCase()} result from extracted data`);
     const formattedResult =
-      outputFormat === "json" ? JSON.stringify(result, null, 2) : yaml.dump(result);
+      outputFormat === "json"
+        ? JSON.stringify(sanitizedResult, null, 2)
+        : yaml.dump(sanitizedResult);
 
     Logger.log("Sending result to client");
     return {
