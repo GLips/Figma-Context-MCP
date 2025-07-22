@@ -3,11 +3,15 @@ import { FigmaService } from "../../services/figma.js";
 import { Logger } from "../../utils/logger.js";
 
 const parameters = {
-  fileKey: z.string().describe("The key of the Figma file containing the images"),
+  fileKey: z
+    .string()
+    .regex(/^[a-zA-Z0-9]+$/, "File key must be alphanumeric")
+    .describe("The key of the Figma file containing the images"),
   nodes: z
     .object({
       nodeId: z
         .string()
+        .regex(/^\d+:\d+$/, "Node ID must be in the format of 'number:number'")
         .describe("The ID of the Figma image node to fetch, formatted as 1234:5678"),
       imageRef: z
         .string()
@@ -17,6 +21,7 @@ const parameters = {
         ),
       fileName: z
         .string()
+        .regex(/^[a-zA-Z0-9_.-]+$/, "File name can only contain alphanumeric characters, underscores, dots, and hyphens")
         .describe(
           "The local name for saving the fetched file, including extension. Either png or svg.",
         ),
