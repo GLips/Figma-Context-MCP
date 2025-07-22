@@ -9,9 +9,10 @@
   <h1>Framelink Figma MCP サーバー</h1>
   <p>
     🌐 利用可能な言語:
-    <a href="README.md">English</a> |
-    <a href="README.ko.md">한국어 (Korean)</a> |
-    <a href="README.zh.md">中文 (Chinese)</a>
+    <a href="README.md">English (英語)</a> |
+    <a href="README.ko.md">한국어 (韓国語)</a> |
+    <a href="README.zh-cn.md">简体中文 (簡体字中国語)</a> |
+    <a href="README.zh-tw.md">繁體中文 (繁体字中国語)</a>
   </p>
   <h3>コーディングエージェントにFigmaデータへのアクセスを提供。<br/>ワンショットで任意のフレームワークにデザインを実装。</h3>
   <a href="https://npmcharts.com/compare/figma-developer-mcp?interval=30">

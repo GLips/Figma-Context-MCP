@@ -8,12 +8,14 @@ interface ServerConfig {
   auth: FigmaAuthOptions;
   port: number;
   outputFormat: "yaml" | "json";
+  skipImageDownloads?: boolean;
   configSources: {
     figmaApiKey: "cli" | "env";
     figmaOAuthToken: "cli" | "env" | "none";
     port: "cli" | "env" | "default";
     outputFormat: "cli" | "env" | "default";
     envFile: "cli" | "default";
+    skipImageDownloads?: "cli" | "env" | "default";
   };
 }
 
@@ -28,6 +30,7 @@ interface CliArgs {
   env?: string;
   port?: number;
   json?: boolean;
+  "skip-image-downloads"?: boolean;
 }
 
 export function getServerConfig(isStdioMode: boolean): ServerConfig {
@@ -53,6 +56,11 @@ export function getServerConfig(isStdioMode: boolean): ServerConfig {
       json: {
         type: "boolean",
         description: "Output data from tools in JSON format instead of YAML",
+        default: false,
+      },
+      "skip-image-downloads": {
+        type: "boolean",
+        description: "Do not register the download_figma_images tool (skip image downloads)",
         default: false,
       },
     })
@@ -84,12 +92,14 @@ export function getServerConfig(isStdioMode: boolean): ServerConfig {
   const config: Omit<ServerConfig, "auth"> = {
     port: 3333,
     outputFormat: "yaml",
+    skipImageDownloads: false,
     configSources: {
       figmaApiKey: "env",
       figmaOAuthToken: "none",
       port: "default",
       outputFormat: "default",
       envFile: envFileSource,
+      skipImageDownloads: "default",
     },
   };
 
@@ -131,6 +141,15 @@ export function getServerConfig(isStdioMode: boolean): ServerConfig {
     config.configSources.outputFormat = "env";
   }
 
+  // Handle skipImageDownloads
+  if (argv["skip-image-downloads"]) {
+    config.skipImageDownloads = true;
+    config.configSources.skipImageDownloads = "cli";
+  } else if (process.env.SKIP_IMAGE_DOWNLOADS === "true") {
+    config.skipImageDownloads = true;
+    config.configSources.skipImageDownloads = "env";
+  }
+
   // Validate configuration
   if (!auth.figmaApiKey && !auth.figmaOAuthToken) {
     console.error(
@@ -157,6 +176,9 @@ export function getServerConfig(isStdioMode: boolean): ServerConfig {
     console.log(`- PORT: ${config.port} (source: ${config.configSources.port})`);
     console.log(
       `- OUTPUT_FORMAT: ${config.outputFormat} (source: ${config.configSources.outputFormat})`,
+    );
+    console.log(
+      `- SKIP_IMAGE_DOWNLOADS: ${config.skipImageDownloads} (source: ${config.configSources.skipImageDownloads})`,
     );
     console.log(); // Empty line for better readability
   }

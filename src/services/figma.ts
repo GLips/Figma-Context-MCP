@@ -1,5 +1,3 @@
-import fs from "fs";
-import { parseFigmaResponse, type SimplifiedDesign } from "./simplify-node-response.js";
 import type {
   GetImagesResponse,
   GetFileResponse,
@@ -7,9 +5,9 @@ import type {
   GetImageFillsResponse,
 } from "@figma/rest-api-spec";
 import { downloadFigmaImage } from "~/utils/common.js";
-import { Logger } from "~/utils/logger.js";
+import { downloadAndProcessImage, type ImageProcessingResult } from "~/utils/image-processing.js";
+import { Logger, writeLogs } from "~/utils/logger.js";
 import { fetchWithRetry } from "~/utils/fetch-with-retry.js";
-import yaml from "js-yaml";
 
 export type FigmaAuthOptions = {
   figmaApiKey: string;
@@ -17,26 +15,10 @@ export type FigmaAuthOptions = {
   useOAuth: boolean;
 };
 
-type FetchImageParams = {
-  /**
-   * The Node in Figma that will either be rendered or have its background image downloaded
-   */
-  nodeId: string;
-  /**
-   * The local file name to save the image
-   */
-  fileName: string;
-  /**
-   * The file mimetype for the image
-   */
-  fileType: "png" | "svg";
-};
-
-type FetchImageFillParams = Omit<FetchImageParams, "fileType"> & {
-  /**
-   * Required to grab the background image when an image is used as a fill
-   */
-  imageRef: string;
+type SvgOptions = {
+  outlineText: boolean;
+  includeId: boolean;
+  simplifyStroke: boolean;
 };
 
 export class FigmaService {
@@ -51,150 +33,257 @@ export class FigmaService {
     this.useOAuth = !!useOAuth && !!this.oauthToken;
   }
 
+  private getAuthHeaders(): Record<string, string> {
+    if (this.useOAuth) {
+      Logger.log("Using OAuth Bearer token for authentication");
+      return { Authorization: `Bearer ${this.oauthToken}` };
+    } else {
+      Logger.log("Using Personal Access Token for authentication");
+      return { "X-Figma-Token": this.apiKey };
+    }
+  }
+
+  /**
+   * Filters out null values from Figma image responses. This ensures we only work with valid image URLs.
+   */
+  private filterValidImages(
+    images: { [key: string]: string | null } | undefined,
+  ): Record<string, string> {
+    if (!images) return {};
+    return Object.fromEntries(Object.entries(images).filter(([, value]) => !!value)) as Record<
+      string,
+      string
+    >;
+  }
+
   private async request<T>(endpoint: string): Promise<T> {
     try {
       Logger.log(`Calling ${this.baseUrl}${endpoint}`);
+      const headers = this.getAuthHeaders();
 
-      // Set auth headers based on authentication method
-      const headers: Record<string, string> = {};
-
-      if (this.useOAuth) {
-        // Use OAuth token with Authorization: Bearer header
-        Logger.log("Using OAuth Bearer token for authentication");
-        headers["Authorization"] = `Bearer ${this.oauthToken}`;
-      } else {
-        // Use Personal Access Token with X-Figma-Token header
-        Logger.log("Using Personal Access Token for authentication");
-        headers["X-Figma-Token"] = this.apiKey;
-      }
-
-      return await fetchWithRetry<T>(`${this.baseUrl}${endpoint}`, {
-        headers,
-      });
+      return await fetchWithRetry<T>(`${this.baseUrl}${endpoint}`, { headers });
     } catch (error) {
-      if (error instanceof Error) {
-        throw new Error(`Failed to make request to Figma API: ${error.message}`);
-      }
-      throw new Error(`Failed to make request to Figma API: ${error}`);
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      throw new Error(
+        `Failed to make request to Figma API endpoint '${endpoint}': ${errorMessage}`,
+      );
     }
   }
 
-  async getImageFills(
-    fileKey: string,
-    nodes: FetchImageFillParams[],
-    localPath: string,
-  ): Promise<string[]> {
-    if (nodes.length === 0) return [];
-
-    let promises: Promise<string>[] = [];
-    const endpoint = `/files/${fileKey}/images`;
-    const file = await this.request<GetImageFillsResponse>(endpoint);
-    const { images = {} } = file.meta;
-    promises = nodes.map(async ({ imageRef, fileName }) => {
-      const imageUrl = images[imageRef];
-      if (!imageUrl) {
-        return "";
-      }
-      return downloadFigmaImage(fileName, localPath, imageUrl);
+  /**
+   * Builds URL query parameters for SVG image requests.
+   */
+  private buildSvgQueryParams(svgIds: string[], svgOptions: SvgOptions): string {
+    const params = new URLSearchParams({
+      ids: svgIds.join(","),
+      format: "svg",
+      svg_outline_text: String(svgOptions.outlineText),
+      svg_include_id: String(svgOptions.includeId),
+      svg_simplify_stroke: String(svgOptions.simplifyStroke),
     });
-    return Promise.all(promises);
+    return params.toString();
   }
 
-  async getImages(
+  /**
+   * Gets download URLs for image fills without downloading them.
+   *
+   * @returns Map of imageRef to download URL
+   */
+  async getImageFillUrls(fileKey: string): Promise<Record<string, string>> {
+    const endpoint = `/files/${fileKey}/images`;
+    const response = await this.request<GetImageFillsResponse>(endpoint);
+    return response.meta.images || {};
+  }
+
+  /**
+   * Gets download URLs for rendered nodes without downloading them.
+   *
+   * @returns Map of node ID to download URL
+   */
+  async getNodeRenderUrls(
     fileKey: string,
-    nodes: FetchImageParams[],
+    nodeIds: string[],
+    format: "png" | "svg",
+    options: { pngScale?: number; svgOptions?: SvgOptions } = {},
+  ): Promise<Record<string, string>> {
+    if (nodeIds.length === 0) return {};
+
+    if (format === "png") {
+      const scale = options.pngScale || 2;
+      const endpoint = `/images/${fileKey}?ids=${nodeIds.join(",")}&format=png&scale=${scale}`;
+      const response = await this.request<GetImagesResponse>(endpoint);
+      return this.filterValidImages(response.images);
+    } else {
+      const svgOptions = options.svgOptions || {
+        outlineText: true,
+        includeId: false,
+        simplifyStroke: true,
+      };
+      const params = this.buildSvgQueryParams(nodeIds, svgOptions);
+      const endpoint = `/images/${fileKey}?${params}`;
+      const response = await this.request<GetImagesResponse>(endpoint);
+      return this.filterValidImages(response.images);
+    }
+  }
+
+  /**
+   * Download images method with post-processing support for cropping and returning image dimensions.
+   *
+   * Supports:
+   * - Image fills vs rendered nodes (based on imageRef vs nodeId)
+   * - PNG vs SVG format (based on filename extension)
+   * - Image cropping based on transform matrices
+   * - CSS variable generation for image dimensions
+   *
+   * @returns Array of local file paths for successfully downloaded images
+   */
+  async downloadImages(
+    fileKey: string,
     localPath: string,
-    pngScale: number,
-    svgOptions: {
-      outlineText: boolean;
-      includeId: boolean;
-      simplifyStroke: boolean;
-    },
-  ): Promise<string[]> {
-    const pngIds = nodes.filter(({ fileType }) => fileType === "png").map(({ nodeId }) => nodeId);
-    const pngFiles =
-      pngIds.length > 0
-        ? this.request<GetImagesResponse>(
-            `/images/${fileKey}?ids=${pngIds.join(",")}&format=png&scale=${pngScale}`,
-          ).then(({ images = {} }) => images)
-        : ({} as GetImagesResponse["images"]);
+    items: Array<{
+      imageRef?: string;
+      nodeId?: string;
+      fileName: string;
+      needsCropping?: boolean;
+      cropTransform?: any;
+      requiresImageDimensions?: boolean;
+    }>,
+    options: { pngScale?: number; svgOptions?: SvgOptions } = {},
+  ): Promise<ImageProcessingResult[]> {
+    if (items.length === 0) return [];
 
-    const svgIds = nodes.filter(({ fileType }) => fileType === "svg").map(({ nodeId }) => nodeId);
-    const svgParams = [
-      `ids=${svgIds.join(",")}`,
-      "format=svg",
-      `svg_outline_text=${svgOptions.outlineText}`,
-      `svg_include_id=${svgOptions.includeId}`,
-      `svg_simplify_stroke=${svgOptions.simplifyStroke}`,
-    ].join("&");
+    const { pngScale = 2, svgOptions } = options;
+    const downloadPromises: Promise<ImageProcessingResult[]>[] = [];
 
-    const svgFiles =
-      svgIds.length > 0
-        ? this.request<GetImagesResponse>(`/images/${fileKey}?${svgParams}`).then(
-            ({ images = {} }) => images,
-          )
-        : ({} as GetImagesResponse["images"]);
+    // Separate items by type
+    const imageFills = items.filter(
+      (item): item is typeof item & { imageRef: string } => !!item.imageRef,
+    );
+    const renderNodes = items.filter(
+      (item): item is typeof item & { nodeId: string } => !!item.nodeId,
+    );
 
-    const files = await Promise.all([pngFiles, svgFiles]).then(([f, l]) => ({ ...f, ...l }));
+    // Download image fills with processing
+    if (imageFills.length > 0) {
+      const fillUrls = await this.getImageFillUrls(fileKey);
+      const fillDownloads = imageFills
+        .map(({ imageRef, fileName, needsCropping, cropTransform, requiresImageDimensions }) => {
+          const imageUrl = fillUrls[imageRef];
+          return imageUrl
+            ? downloadAndProcessImage(
+                fileName,
+                localPath,
+                imageUrl,
+                needsCropping,
+                cropTransform,
+                requiresImageDimensions,
+              )
+            : null;
+        })
+        .filter((promise): promise is Promise<ImageProcessingResult> => promise !== null);
 
-    const downloads = nodes
-      .map(({ nodeId, fileName }) => {
-        const imageUrl = files[nodeId];
-        if (imageUrl) {
-          return downloadFigmaImage(fileName, localPath, imageUrl);
+      if (fillDownloads.length > 0) {
+        downloadPromises.push(Promise.all(fillDownloads));
+      }
+    }
+
+    // Download rendered nodes with processing
+    if (renderNodes.length > 0) {
+      const pngNodes = renderNodes.filter((node) => !node.fileName.toLowerCase().endsWith(".svg"));
+      const svgNodes = renderNodes.filter((node) => node.fileName.toLowerCase().endsWith(".svg"));
+
+      // Download PNG renders
+      if (pngNodes.length > 0) {
+        const pngUrls = await this.getNodeRenderUrls(
+          fileKey,
+          pngNodes.map((n) => n.nodeId),
+          "png",
+          { pngScale },
+        );
+        const pngDownloads = pngNodes
+          .map(({ nodeId, fileName, needsCropping, cropTransform, requiresImageDimensions }) => {
+            const imageUrl = pngUrls[nodeId];
+            return imageUrl
+              ? downloadAndProcessImage(
+                  fileName,
+                  localPath,
+                  imageUrl,
+                  needsCropping,
+                  cropTransform,
+                  requiresImageDimensions,
+                )
+              : null;
+          })
+          .filter((promise): promise is Promise<ImageProcessingResult> => promise !== null);
+
+        if (pngDownloads.length > 0) {
+          downloadPromises.push(Promise.all(pngDownloads));
         }
-        return false;
-      })
-      .filter((url) => !!url);
+      }
 
-    return Promise.all(downloads);
-  }
+      // Download SVG renders
+      if (svgNodes.length > 0) {
+        const svgUrls = await this.getNodeRenderUrls(
+          fileKey,
+          svgNodes.map((n) => n.nodeId),
+          "svg",
+          { svgOptions },
+        );
+        const svgDownloads = svgNodes
+          .map(({ nodeId, fileName, needsCropping, cropTransform, requiresImageDimensions }) => {
+            const imageUrl = svgUrls[nodeId];
+            return imageUrl
+              ? downloadAndProcessImage(
+                  fileName,
+                  localPath,
+                  imageUrl,
+                  needsCropping,
+                  cropTransform,
+                  requiresImageDimensions,
+                )
+              : null;
+          })
+          .filter((promise): promise is Promise<ImageProcessingResult> => promise !== null);
 
-  async getFile(fileKey: string, depth?: number | null): Promise<SimplifiedDesign> {
-    try {
-      const endpoint = `/files/${fileKey}${depth ? `?depth=${depth}` : ""}`;
-      Logger.log(`Retrieving Figma file: ${fileKey} (depth: ${depth ?? "default"})`);
-      const response = await this.request<GetFileResponse>(endpoint);
-      Logger.log("Got response");
-      const simplifiedResponse = parseFigmaResponse(response);
-      writeLogs("figma-raw.yml", response);
-      writeLogs("figma-simplified.yml", simplifiedResponse);
-      return simplifiedResponse;
-    } catch (e) {
-      console.error("Failed to get file:", e);
-      throw e;
+        if (svgDownloads.length > 0) {
+          downloadPromises.push(Promise.all(svgDownloads));
+        }
+      }
     }
+
+    const results = await Promise.all(downloadPromises);
+    return results.flat();
   }
 
-  async getNode(fileKey: string, nodeId: string, depth?: number | null): Promise<SimplifiedDesign> {
+  /**
+   * Get raw Figma API response for a file (for use with flexible extractors)
+   */
+  async getRawFile(fileKey: string, depth?: number | null): Promise<GetFileResponse> {
+    const endpoint = `/files/${fileKey}${depth ? `?depth=${depth}` : ""}`;
+    Logger.log(`Retrieving raw Figma file: ${fileKey} (depth: ${depth ?? "default"})`);
+
+    const response = await this.request<GetFileResponse>(endpoint);
+    writeLogs("figma-raw.json", response);
+
+    return response;
+  }
+
+  /**
+   * Get raw Figma API response for specific nodes (for use with flexible extractors)
+   */
+  async getRawNode(
+    fileKey: string,
+    nodeId: string,
+    depth?: number | null,
+  ): Promise<GetFileNodesResponse> {
     const endpoint = `/files/${fileKey}/nodes?ids=${nodeId}${depth ? `&depth=${depth}` : ""}`;
+    Logger.log(
+      `Retrieving raw Figma node: ${nodeId} from ${fileKey} (depth: ${depth ?? "default"})`,
+    );
+
     const response = await this.request<GetFileNodesResponse>(endpoint);
-    Logger.log("Got response from getNode, now parsing.");
-    writeLogs("figma-raw.yml", response);
-    const simplifiedResponse = parseFigmaResponse(response);
-    writeLogs("figma-simplified.yml", simplifiedResponse);
-    return simplifiedResponse;
-  }
-}
+    writeLogs("figma-raw.json", response);
 
-function writeLogs(name: string, value: any) {
-  try {
-    if (process.env.NODE_ENV !== "development") return;
-
-    const logsDir = "logs";
-
-    try {
-      fs.accessSync(process.cwd(), fs.constants.W_OK);
-    } catch (error) {
-      Logger.log("Failed to write logs:", error);
-      return;
-    }
-
-    if (!fs.existsSync(logsDir)) {
-      fs.mkdirSync(logsDir);
-    }
-    fs.writeFileSync(`${logsDir}/${name}`, yaml.dump(value));
-  } catch (error) {
-    console.debug("Failed to write logs:", error);
+    return response;
   }
 }

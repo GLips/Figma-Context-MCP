@@ -9,9 +9,10 @@
   <h1>Framelink Figma MCP 서버</h1>
   <p>
     🌐 다른 언어:
-    <a href="README.md">English</a> |
-    <a href="README.ja.md">日本語 (Japanese)</a> |
-    <a href="README.zh.md">中文 (Chinese)</a>
+    <a href="README.md">English (영어)</a> |
+    <a href="README.ja.md">日本語 (일본어)</a> |
+    <a href="README.zh-cn.md">简体中文 (중국어 간체)</a> |
+    <a href="README.zh-tw.md">繁體中文 (중국어 번체)</a>
   </p>
   <h3>코딩 에이전트에게 Figma 데이터에 대한 접근 권한을 부여하세요.<br/>한 번에 모든 프레임워크에서 디자인을 구현하세요.</h3>
   <a href="https://npmcharts.com/compare/figma-developer-mcp?interval=30">

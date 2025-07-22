@@ -11,7 +11,8 @@
     🌐 Available in:
     <a href="README.ko.md">한국어 (Korean)</a> |
     <a href="README.ja.md">日本語 (Japanese)</a> |
-    <a href="README.zh.md">中文 (Chinese)</a>
+    <a href="README.zh-cn.md">简体中文 (Simplified Chinese)</a> |
+    <a href="README.zh-tw.md">繁體中文 (Traditional Chinese)</a>
   </p>
   <h3>Give your coding agent access to your Figma data.<br/>Implement designs in any framework in one-shot.</h3>
   <a href="https://npmcharts.com/compare/figma-developer-mcp?interval=30">
@@ -99,49 +100,3 @@ If you need more information on how to configure the Framelink Figma MCP server,
 ## Learn More
 
 The Framelink Figma MCP server is simple but powerful. Get the most out of it by learning more at the [Framelink](https://framelink.ai?utm_source=github&utm_medium=referral&utm_campaign=readme) site.
-
-<!-- SPONSORS:LIST:START -->
-<!-- prettier-ignore-start -->
-<!-- markdownlint-disable -->
-
-## Sponsors
-
-### 🥇 Gold Sponsors
-
-<table>
-  <tr>
-   <td align="center"><a href="https://framelink.ai/?ref=framelink-mcp&utm_source=github&utm_medium=referral&utm_campaign=framelink-mcp"><img src="https://avatars.githubusercontent.com/u/204619719" width="180" alt="Framelink"/><br />Framelink</a></td>
-  </tr>
-</table>
-
-### 🥈 Silver Sponsors
-
-<table>
-  <tr>
-   <!-- <td align="center"><a href=""><img src="" width="150" alt="tbd"/><br />Title</a></td> -->
-  </tr>
-</table>
-
-### 🥉 Bronze Sponsors
-
-<table>
-  <tr>
-   <!-- <td align="center"><a href=""><img src="" width="120" alt="tbd"/><br />tbd</a></td>-->
-  </tr>
-</table>
-
-### 😻 Smaller Backers
-
-<table>
-  <tr>
-   <!-- <td align="center"><a href=""><img src="" width="100" alt="tbd"/><br />tbd</a></td>-->
-  </tr>
-  <tr>
-   <!-- <td align="center"><a href=""><img src="" width="100" alt="tbd"/><br />tbd</a></td>-->
-  </tr>
-</table>
-
-<!-- markdownlint-restore -->
-<!-- prettier-ignore-end -->
-
-<!-- SPONSORS:LIST:END -->

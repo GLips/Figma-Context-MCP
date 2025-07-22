@@ -9,9 +9,10 @@
   <h1>Framelink Figma MCP 服务器</h1>
   <p>
     🌐 可用语言:
-    <a href="README.md">English</a> |
-    <a href="README.ko.md">한국어 (Korean)</a> |
-    <a href="README.ja.md">日本語 (Japanese)</a>
+    <a href="README.md">English (英语)</a> |
+    <a href="README.ko.md">한국어 (韩语)</a> |
+    <a href="README.ja.md">日本語 (日语)</a> |
+    <a href="README.zh-tw.md">繁體中文 (繁体中文)</a>
   </p>
   <h3>为您的编码代理提供 Figma 数据访问权限。<br/>一次性在任何框架中实现设计。</h3>
   <a href="https://npmcharts.com/compare/figma-developer-mcp?interval=30">
