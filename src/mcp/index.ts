@@ -3,9 +3,11 @@ import { FigmaService, type FigmaAuthOptions } from "../services/figma.js";
 import { Logger } from "../utils/logger.js";
 import {
   downloadFigmaImagesTool,
+  getFigmaDataSizeTool,
   getFigmaDataTool,
   type DownloadImagesParams,
   type GetFigmaDataParams,
+  type GetFigmaDataSizeParams,
 } from "./tools/index.js";
 
 const serverInfo = {
@@ -58,6 +60,15 @@ function registerTools(
       (params: DownloadImagesParams) => downloadFigmaImagesTool.handler(params, figmaService),
     );
   }
+
+  // Register get_figma_data_size tool
+  server.tool(
+    getFigmaDataSizeTool.name,
+    getFigmaDataSizeTool.description,
+    getFigmaDataSizeTool.parameters,
+    (params: GetFigmaDataSizeParams) =>
+      getFigmaDataSizeTool.handler(params, figmaService, options.outputFormat),
+  );
 }
 
 export { createServer };

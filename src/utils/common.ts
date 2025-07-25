@@ -1,5 +1,7 @@
 import fs from "fs";
 import path from "path";
+import type { GlobalVars, SimplifiedDesign, SimplifiedNode } from "~/extractors/types.js";
+import type { SimplifiedComponentDefinition, SimplifiedComponentSetDefinition } from "~/transformers/component.js";
 
 export type StyleId = `${string}_${string}` & { __brand: "StyleId" };
 
@@ -213,4 +215,80 @@ export function pixelRound(num: number): number {
     throw new TypeError(`Input must be a valid number`);
   }
   return Number(Number(num).toFixed(2));
+}
+
+/**
+ * Normalize a Figma node ID to
+ * example:
+ * 123-14507 -> 123:14507
+ * @param nodeId - The Figma node ID to normalize
+ * @returns The normalized Figma node ID
+ */
+export function normalizeFigmaNodeId(nodeId: string): string {
+  return nodeId.replace(/-/g, ":");
+}
+
+/**
+ * Remove unused components and component sets from a design
+ * @param design - The design to remove unused components and component sets from
+ * @returns The design with unused components and component sets removed
+ */
+export function removeUnusedComponentsAndStyles(design: SimplifiedDesign): SimplifiedDesign {
+  const usedComponentIds = new Set<string>();
+  const usedComponentSets = new Set<string>();
+  const usedStyles = new Set<string>();
+
+  const findUsedComponents = (node: SimplifiedNode) => {
+    if (node.type === "INSTANCE") {
+      if (node.componentId) {
+        usedComponentIds.add(node.componentId);
+      }
+      if (node.textStyle) {
+        usedStyles.add(node.textStyle);
+      }
+    }
+    if (node.children) {
+      node.children.forEach(findUsedComponents);
+    }
+  };
+
+  design.nodes.forEach(findUsedComponents);
+
+  const newComponents: Record<string, SimplifiedComponentDefinition> = {};
+
+  for (const componentId in design.components) {
+    if (usedComponentIds.has(componentId)) {
+      newComponents[componentId] = design.components[componentId];
+      if (design.components[componentId].componentSetId) {
+        usedComponentSets.add(design.components[componentId].componentSetId);
+      }
+    }
+  }
+
+  const newComponentSets: Record<string, SimplifiedComponentSetDefinition> = {};
+
+  for (const componentSetId in design.componentSets) {
+    if (usedComponentSets.has(componentSetId)) {
+      newComponentSets[componentSetId] = design.componentSets[componentSetId];
+    }
+  }
+
+  const newGlobalVars: GlobalVars = {
+    styles: {},
+  };
+
+  for (const styleId in design.globalVars.styles) {
+    if (usedStyles.has(styleId)) {
+      newGlobalVars.styles[styleId as StyleId] = design.globalVars.styles[styleId as StyleId];
+    }
+  }
+
+  const newDesign: SimplifiedDesign = {
+    ...design,
+    components: newComponents,
+    componentSets: newComponentSets,
+    globalVars: newGlobalVars,
+  };
+
+  return newDesign;
 }

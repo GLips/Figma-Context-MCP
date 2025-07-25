@@ -28,16 +28,11 @@ const parameters = {
 };
 
 const parametersSchema = z.object(parameters);
-export type GetFigmaDataParams = z.infer<typeof parametersSchema>;
-
-const sizeLimit = process.env.GET_NODE_SIZE_LIMIT
-  ? parseInt(process.env.GET_NODE_SIZE_LIMIT)
-  : undefined;
-const needLimitPrompt = sizeLimit && sizeLimit > 0;
+export type GetFigmaDataSizeParams = z.infer<typeof parametersSchema>;
 
 // Simplified handler function
-async function getFigmaData(
-  params: GetFigmaDataParams,
+async function getFigmaDataSize(
+  params: GetFigmaDataSizeParams,
   figmaService: FigmaService,
   outputFormat: "yaml" | "json",
 ): Promise<CallToolResult> {
@@ -80,32 +75,17 @@ async function getFigmaData(
     const formattedResult =
       outputFormat === "json" ? JSON.stringify(result, null, 2) : yaml.dump(result);
 
+
     const size = calcStringSize(formattedResult);
-
-    const overSizeLimit = sizeLimit && size > sizeLimit;
-    const depthLimit = !depth || depth > 1;
-
-    Logger.log(`Data Size: ${size} KB`);
-
-    if (overSizeLimit) {
-      Logger.log(`Data Size over size limit: ${sizeLimit} KB`);
-      if (depthLimit) {
-        Logger.log(`send error to client, need to perform truncated reading`);
-        return {
-          isError: true,
-          content: [
-            {
-              type: "text",
-              text: `The data size of file ${fileKey} ${nodeId ? `node ${nodeId}` : ""} is ${size} KB, exceeded the limit of ${sizeLimit} KB, please performing truncated reading`,
-            },
-          ],
-        };
-      }
-    }
+    const sizeResult = [{
+      nodeId: nodeId,
+      size: size,
+    }];
 
     Logger.log("Sending result to client");
+
     return {
-      content: [{ type: "text", text: formattedResult }],
+      content: [{ type: "text", text: yaml.dump(sizeResult) }],
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : JSON.stringify(error);
@@ -118,33 +98,10 @@ async function getFigmaData(
 }
 
 // Export tool configuration
-export const getFigmaDataTool = {
-  name: "get_figma_data",
-  description: `Get comprehensive Figma file data including layout, content, visuals, and component information
-${
-  needLimitPrompt
-    ? `## Figma Data Size Guidelines
-- **Over ${sizeLimit}KB**: with \`depth: 1\` to get structure only, enter the *Pruning Reading Strategy*
-- **Under ${sizeLimit}KB**: Get full data without depth parameter
-
-## Figma Data Pruning Reading Strategy
-
-**IMPORTANT: Work incrementally, not comprehensively.**
-
-### Core Principle
-Retrieve and implement ONE node at a time. Don't try to understand the entire design upfront.
-
-### Pruning Reading Process
-1. **Start Small**: Get shallow data (depth: 1) of the main node to see basic information of itself and children nodes
-2. **Pick One**: Choose one from the child nodes to implement completely
-3. **Get Full Data**: Retrieve complete data for that one node only
-4. **Implement**: Implement specifically according to user needs based on the content of the node
-5. **Repeat**: Move to the next node only after the current one is done
-
-### Key Point
-**Don't analyze multiple nodes in parallel.** Focus on implementing one complete, working node at a time. This avoids context overload and produces better results.`
-    : ""
-}`,
+export const getFigmaDataSizeTool = {
+  name: "get_figma_data_size",
+  description:
+    "Obtain the memory size of a figma data, return the nodeId and size in KB, e.g \n- nodeId: '1234:5678'\n  size: 1024 KB",
   parameters,
-  handler: getFigmaData,
+  handler: getFigmaDataSize,
 } as const;

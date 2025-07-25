@@ -87,6 +87,7 @@ export function getServerConfig(isStdioMode: boolean): ServerConfig {
     figmaApiKey: "",
     figmaOAuthToken: "",
     useOAuth: false,
+    useCache: process.env.USE_CACHE ? process.env.USE_CACHE === "true" : false,
   };
 
   const config: Omit<ServerConfig, "auth"> = {

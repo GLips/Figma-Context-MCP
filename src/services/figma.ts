@@ -3,8 +3,8 @@ import type {
   GetFileResponse,
   GetFileNodesResponse,
   GetImageFillsResponse,
+  GetFileMetaResponse,
 } from "@figma/rest-api-spec";
-import { downloadFigmaImage } from "~/utils/common.js";
 import { downloadAndProcessImage, type ImageProcessingResult } from "~/utils/image-processing.js";
 import { Logger, writeLogs } from "~/utils/logger.js";
 import { fetchWithRetry } from "~/utils/fetch-with-retry.js";
@@ -13,6 +13,7 @@ export type FigmaAuthOptions = {
   figmaApiKey: string;
   figmaOAuthToken: string;
   useOAuth: boolean;
+  useCache: boolean;
 };
 
 type SvgOptions = {
@@ -26,11 +27,13 @@ export class FigmaService {
   private readonly oauthToken: string;
   private readonly useOAuth: boolean;
   private readonly baseUrl = "https://api.figma.com/v1";
+  private readonly useCache: boolean;
 
-  constructor({ figmaApiKey, figmaOAuthToken, useOAuth }: FigmaAuthOptions) {
+  constructor({ figmaApiKey, figmaOAuthToken, useOAuth, useCache }: FigmaAuthOptions) {
     this.apiKey = figmaApiKey || "";
     this.oauthToken = figmaOAuthToken || "";
     this.useOAuth = !!useOAuth && !!this.oauthToken;
+    this.useCache = useCache;
   }
 
   private getAuthHeaders(): Record<string, string> {
@@ -254,6 +257,16 @@ export class FigmaService {
     const results = await Promise.all(downloadPromises);
     return results.flat();
   }
+
+  /**
+   * Get file meta data
+   */
+  async getFileMeta(fileKey: string): Promise<GetFileMetaResponse> {
+    const endpoint = `/files/${fileKey}/meta`;
+    const response = await this.request<GetFileMetaResponse>(endpoint);
+    return response;
+  }
+
 
   /**
    * Get raw Figma API response for a file (for use with flexible extractors)
