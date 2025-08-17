@@ -28,6 +28,8 @@
   <a href="https://twitter.com/glipsman">
     <img alt="Twitter" src="https://img.shields.io/twitter/url?url=https%3A%2F%2Fx.com%2Fglipsman&label=%40glipsman" />
   </a>
+
+[![Trust Score](https://archestra.ai/mcp-catalog/api/badge/quality/GLips/Figma-Context-MCP)](https://archestra.ai/mcp-catalog/glips__figma-context-mcp)
 </div>
 
 <br/>
