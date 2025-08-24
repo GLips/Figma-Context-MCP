@@ -11,7 +11,7 @@ const parameters = {
     .object({
       nodeId: z
         .string()
-        .regex(/^\d+:\d+$/, "Node ID must be in the format of 'number:number'")
+        .regex(/^I?\d+:\d+(?:;\d+:\d+)*$/, "Node ID must be like '1234:5678' or 'I5666:180910;1:10515;1:10336'")
         .describe("The ID of the Figma image node to fetch, formatted as 1234:5678"),
       imageRef: z
         .string()
