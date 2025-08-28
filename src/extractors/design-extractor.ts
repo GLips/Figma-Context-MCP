@@ -4,10 +4,11 @@ import type {
   Node as FigmaDocumentNode,
   Component,
   ComponentSet,
+  Style,
 } from "@figma/rest-api-spec";
 import { simplifyComponents, simplifyComponentSets } from "~/transformers/component.js";
 import { isVisible } from "~/utils/common.js";
-import type { ExtractorFn, TraversalOptions, GlobalVars, SimplifiedDesign } from "./types.js";
+import type { ExtractorFn, TraversalOptions, SimplifiedDesign, TraversalContext } from "./types.js";
 import { extractFromDesign } from "./node-walker.js";
 
 /**
@@ -19,10 +20,11 @@ export function simplifyRawFigmaObject(
   options: TraversalOptions = {},
 ): SimplifiedDesign {
   // Extract components, componentSets, and raw nodes from API response
-  const { metadata, rawNodes, components, componentSets } = parseAPIResponse(apiResponse);
+  const { metadata, rawNodes, components, componentSets, extraStyles } =
+    parseAPIResponse(apiResponse);
 
   // Process nodes using the flexible extractor system
-  const globalVars: GlobalVars = { styles: {} };
+  const globalVars: TraversalContext["globalVars"] = { styles: {}, extraStyles };
   const { nodes: extractedNodes, globalVars: finalGlobalVars } = extractFromDesign(
     rawNodes,
     nodeExtractors,
@@ -36,7 +38,7 @@ export function simplifyRawFigmaObject(
     nodes: extractedNodes,
     components: simplifyComponents(components),
     componentSets: simplifyComponentSets(componentSets),
-    globalVars: finalGlobalVars,
+    globalVars: { styles: finalGlobalVars.styles },
   };
 }
 
@@ -46,6 +48,7 @@ export function simplifyRawFigmaObject(
 function parseAPIResponse(data: GetFileResponse | GetFileNodesResponse) {
   const aggregatedComponents: Record<string, Component> = {};
   const aggregatedComponentSets: Record<string, ComponentSet> = {};
+  let extraStyles: Record<string, Style> = {};
   let nodesToParse: Array<FigmaDocumentNode>;
 
   if ("nodes" in data) {
@@ -58,12 +61,18 @@ function parseAPIResponse(data: GetFileResponse | GetFileNodesResponse) {
       if (nodeResponse.componentSets) {
         Object.assign(aggregatedComponentSets, nodeResponse.componentSets);
       }
+      if (nodeResponse.styles) {
+        Object.assign(extraStyles, nodeResponse.styles);
+      }
     });
     nodesToParse = nodeResponses.map((n) => n.document).filter(isVisible);
   } else {
     // GetFileResponse
     Object.assign(aggregatedComponents, data.components);
     Object.assign(aggregatedComponentSets, data.componentSets);
+    if (data.styles) {
+      extraStyles = data.styles;
+    }
     nodesToParse = data.document.children.filter(isVisible);
   }
 
@@ -76,6 +85,7 @@ function parseAPIResponse(data: GetFileResponse | GetFileNodesResponse) {
       thumbnailUrl: thumbnailUrl || "",
     },
     rawNodes: nodesToParse,
+    extraStyles,
     components: aggregatedComponents,
     componentSets: aggregatedComponentSets,
   };

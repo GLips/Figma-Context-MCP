@@ -1,4 +1,3 @@
-import type { Node as FigmaDocumentNode } from "@figma/rest-api-spec";
 import type { ExtractorFn } from "./types.js";
 import { buildSimplifiedLayout } from "~/transformers/layout.js";
 import { buildSimplifiedStrokes, parsePaint } from "~/transformers/style.js";
@@ -10,7 +9,8 @@ import {
   isTextNode,
 } from "~/transformers/text.js";
 import { hasValue, isRectangleCornerRadii } from "~/utils/identity.js";
-import { generateVarId } from "~/utils/common.js";
+import { generateVarId, type StyleId } from "~/utils/common.js";
+import { mapValues } from "remeda";
 
 /**
  * Helper function to find or create a global variable.
@@ -63,8 +63,9 @@ export const textExtractor: ExtractorFn = (node, result, context) => {
  */
 export const visualsExtractor: ExtractorFn = (node, result, context) => {
   // Check if node has children to determine CSS properties
-  const hasChildren = hasValue("children", node) && Array.isArray(node.children) && node.children.length > 0;
-  
+  const hasChildren =
+    hasValue("children", node) && Array.isArray(node.children) && node.children.length > 0;
+
   // fills
   if (hasValue("fills", node) && Array.isArray(node.fills) && node.fills.length) {
     const fills = node.fills.map((fill) => parsePaint(fill, hasChildren)).reverse();
@@ -119,12 +120,28 @@ export const componentExtractor: ExtractorFn = (node, result, context) => {
   }
 };
 
+/**
+ * Extracts styles from the Figma REST API for nodes that have styles applied.
+ */
+export const stylesExtractor: ExtractorFn = (node, result, context) => {
+  if (!hasValue("styles", node)) return;
+
+  const styles = node.styles as Record<string, StyleId>;
+  result.extraStyles = mapValues(styles, (nodeId) => context.globalVars.extraStyles?.[nodeId].name);
+};
+
 // -------------------- CONVENIENCE COMBINATIONS --------------------
 
 /**
  * All extractors - replicates the current parseNode behavior.
  */
-export const allExtractors = [layoutExtractor, textExtractor, visualsExtractor, componentExtractor];
+export const allExtractors = [
+  layoutExtractor,
+  textExtractor,
+  visualsExtractor,
+  componentExtractor,
+  stylesExtractor,
+];
 
 /**
  * Layout and text only - useful for content analysis and layout planning.

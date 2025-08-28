@@ -1,4 +1,4 @@
-import type { Node as FigmaDocumentNode } from "@figma/rest-api-spec";
+import type { Node as FigmaDocumentNode, Style } from "@figma/rest-api-spec";
 import type { StyleId } from "~/utils/common.js";
 import type { SimplifiedTextStyle } from "~/transformers/text.js";
 import type { SimplifiedLayout } from "~/transformers/layout.js";
@@ -23,7 +23,7 @@ export type GlobalVars = {
 };
 
 export interface TraversalContext {
-  globalVars: GlobalVars;
+  globalVars: GlobalVars & { extraStyles: Record<string, Style> };
   currentDepth: number;
   parent?: FigmaDocumentNode;
 }
@@ -66,6 +66,7 @@ export interface SimplifiedNode {
   // appearance
   fills?: string;
   styles?: string;
+  extraStyles?: Record<string, unknown>;
   strokes?: string;
   effects?: string;
   opacity?: number;
