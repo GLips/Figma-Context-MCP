@@ -13,6 +13,15 @@ export default [
         ecmaVersion: 2022,
         sourceType: "module",
       },
+      globals: {
+        console: "readonly",
+        process: "readonly",
+        fetch: "readonly",
+        RequestInit: "readonly",
+        describe: "readonly",
+        it: "readonly",
+        expect: "readonly",
+      },
     },
     plugins: {
       "@typescript-eslint": tseslint,
