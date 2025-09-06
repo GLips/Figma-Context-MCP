@@ -1,12 +1,9 @@
 {
   "name": "figma-developer-mcp",
   "version": "0.5.2",
-  "description": "Model Context Protocol server for Figma integration",
+  "description": "Utilities for working with Figma, including image downloads and data extraction",
   "type": "module",
   "main": "dist/index.js",
-  "bin": {
-    "figma-developer-mcp": "dist/cli.js"
-  },
   "files": [
     "dist",
     "README.md"
@@ -15,14 +12,9 @@
     "build": "tsup --dts",
     "type-check": "tsc --noEmit",
     "test": "jest",
-    "start": "node dist/cli.js",
-    "start:cli": "cross-env NODE_ENV=cli node dist/cli.js",
-    "start:http": "node dist/cli.js",
     "dev": "cross-env NODE_ENV=development tsup --watch",
-    "dev:cli": "cross-env NODE_ENV=development tsup --watch -- --stdio",
     "lint": "eslint .",
     "format": "prettier --write \"src/**/*.ts\"",
-    "inspect": "pnpx @modelcontextprotocol/inspector",
     "prepack": "pnpm build",
     "changeset": "changeset add",
     "version": "changeset version && git add -A",

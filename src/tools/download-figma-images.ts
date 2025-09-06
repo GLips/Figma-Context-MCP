@@ -1,6 +1,6 @@
 import { z } from "zod";
-import { FigmaService } from "../../services/figma.js";
-import { Logger } from "../../utils/logger.js";
+import { FigmaService } from "../services/figma.js";
+import { Logger } from "../utils/logger.js";
 
 const parameters = {
   fileKey: z
@@ -61,11 +61,14 @@ const parameters = {
     ),
 };
 
-const parametersSchema = z.object(parameters);
-export type DownloadImagesParams = z.infer<typeof parametersSchema>;
+export const downloadFigmaImagesSchema = z.object(parameters);
+export type DownloadImagesParams = z.infer<typeof downloadFigmaImagesSchema>;
 
 // Enhanced handler function with image processing support
-async function downloadFigmaImages(params: DownloadImagesParams, figmaService: FigmaService) {
+export async function downloadFigmaImages(
+  params: DownloadImagesParams,
+  figmaService: FigmaService,
+) {
   try {
     const { fileKey, nodes, localPath, pngScale = 2 } = params;
 
@@ -170,12 +173,3 @@ async function downloadFigmaImages(params: DownloadImagesParams, figmaService: F
     };
   }
 }
-
-// Export tool configuration
-export const downloadFigmaImagesTool = {
-  name: "download_figma_images",
-  description:
-    "Download SVG and PNG images used in a Figma file based on the IDs of image or icon nodes",
-  parameters,
-  handler: downloadFigmaImages,
-} as const;

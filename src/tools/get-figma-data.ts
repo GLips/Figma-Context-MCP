@@ -1,9 +1,9 @@
 import { z } from "zod";
 import type { GetFileResponse, GetFileNodesResponse } from "@figma/rest-api-spec";
-import { FigmaService } from "~/services/figma.js";
-import { simplifyRawFigmaObject, allExtractors } from "~/extractors/index.js";
+import { FigmaService } from "../services/figma.js";
+import { simplifyRawFigmaObject, allExtractors } from "../extractors/index.js";
 import yaml from "js-yaml";
-import { Logger, writeLogs } from "~/utils/logger.js";
+import { Logger, writeLogs } from "../utils/logger.js";
 
 const parameters = {
   fileKey: z
@@ -25,14 +25,14 @@ const parameters = {
     ),
 };
 
-const parametersSchema = z.object(parameters);
-export type GetFigmaDataParams = z.infer<typeof parametersSchema>;
+export const getFigmaDataSchema = z.object(parameters);
+export type GetFigmaDataParams = z.infer<typeof getFigmaDataSchema>;
 
 // Simplified handler function
-async function getFigmaData(
+export async function getFigmaData(
   params: GetFigmaDataParams,
   figmaService: FigmaService,
-  outputFormat: "yaml" | "json",
+  outputFormat: "yaml" | "json" = "yaml",
 ) {
   try {
     const { fileKey, nodeId, depth } = params;
@@ -86,12 +86,3 @@ async function getFigmaData(
     };
   }
 }
-
-// Export tool configuration
-export const getFigmaDataTool = {
-  name: "get_figma_data",
-  description:
-    "Get comprehensive Figma file data including layout, content, visuals, and component information",
-  parameters,
-  handler: getFigmaData,
-} as const;

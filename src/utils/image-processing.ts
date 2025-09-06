@@ -1,5 +1,4 @@
 import fs from "fs";
-import path from "path";
 import sharp from "sharp";
 import type { Transform } from "@figma/rest-api-spec";
 
@@ -18,9 +17,7 @@ export async function applyCropTransform(
   try {
     // Extract transform values
     const scaleX = cropTransform[0]?.[0] ?? 1;
-    const skewX = cropTransform[0]?.[1] ?? 0;
     const translateX = cropTransform[0]?.[2] ?? 0;
-    const skewY = cropTransform[1]?.[0] ?? 0;
     const scaleY = cropTransform[1]?.[1] ?? 1;
     const translateY = cropTransform[1]?.[2] ?? 0;
 
