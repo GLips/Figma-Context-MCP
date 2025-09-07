@@ -1,6 +1,8 @@
 import { z } from "zod";
 import { FigmaService } from "../services/figma.js";
 import { Logger } from "../utils/logger.js";
+import type { WriteStream } from "fs";
+import { PassThrough } from "stream";
 
 const parameters = {
   fileKey: z
@@ -68,6 +70,7 @@ export type DownloadImagesParams = z.infer<typeof downloadFigmaImagesSchema>;
 export async function downloadFigmaImages(
   params: DownloadImagesParams,
   figmaService: FigmaService,
+  upload?: (writer: WriteStream | PassThrough, fullPath: string) => unknown | Promise<unknown>,
 ) {
   try {
     const { fileKey, nodes, localPath, pngScale = 2 } = params;
@@ -124,9 +127,15 @@ export async function downloadFigmaImages(
       }
     }
 
-    const allDownloads = await figmaService.downloadImages(fileKey, localPath, downloadItems, {
-      pngScale,
-    });
+    const allDownloads = await figmaService.downloadImages(
+      fileKey,
+      localPath,
+      downloadItems,
+      {
+        pngScale,
+      },
+      upload,
+    );
 
     const successCount = allDownloads.filter(Boolean).length;
 
