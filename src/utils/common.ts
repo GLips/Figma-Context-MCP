@@ -1,5 +1,6 @@
 import fs from "fs";
 import path from "path";
+import { PassThrough } from "stream";
 
 export type StyleId = `${string}_${string}` & { __brand: "StyleId" };
 
@@ -15,6 +16,7 @@ export async function downloadFigmaImage(
   fileName: string,
   localPath: string,
   imageUrl: string,
+  upload?: (writer: fs.WriteStream | PassThrough, fullPath: string) => unknown | Promise<unknown>,
 ): Promise<string> {
   try {
     // Ensure local path exists
@@ -34,8 +36,12 @@ export async function downloadFigmaImage(
       throw new Error(`Failed to download image: ${response.statusText}`);
     }
 
-    // Create write stream
-    const writer = fs.createWriteStream(fullPath);
+    // Create write stream or passthrough for upload handler
+    const writer: fs.WriteStream | PassThrough = upload
+      ? new PassThrough()
+      : fs.createWriteStream(fullPath);
+
+    const uploadResult = upload ? upload(writer, fullPath) : undefined;
 
     // Get the response as a readable stream and pipe it to the file
     const reader = response.body?.getReader();
@@ -57,19 +63,25 @@ export async function downloadFigmaImage(
           }
         } catch (err) {
           writer.end();
-          fs.unlink(fullPath, () => {});
+          if (!upload) {
+            fs.unlink(fullPath, () => {});
+          }
           reject(err);
         }
       };
 
       // Resolve only when the stream is fully written
       writer.on("finish", () => {
-        resolve(fullPath);
+        Promise.resolve(uploadResult)
+          .then(() => resolve(fullPath))
+          .catch(reject);
       });
 
       writer.on("error", (err) => {
         reader.cancel();
-        fs.unlink(fullPath, () => {});
+        if (!upload) {
+          fs.unlink(fullPath, () => {});
+        }
         reject(new Error(`Failed to write image: ${err.message}`));
       });
 

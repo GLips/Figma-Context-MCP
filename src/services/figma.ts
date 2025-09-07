@@ -5,7 +5,8 @@ import type {
   GetFileNodesResponse,
   GetImageFillsResponse,
 } from "@figma/rest-api-spec";
-import { downloadFigmaImage } from "~/utils/common.js";
+import type { WriteStream } from "fs";
+import { PassThrough } from "stream";
 import { downloadAndProcessImage, type ImageProcessingResult } from "~/utils/image-processing.js";
 import { Logger, writeLogs } from "~/utils/logger.js";
 import { fetchWithRetry } from "~/utils/fetch-with-retry.js";
@@ -150,6 +151,7 @@ export class FigmaService {
       requiresImageDimensions?: boolean;
     }>,
     options: { pngScale?: number; svgOptions?: SvgOptions } = {},
+    upload?: (writer: WriteStream | PassThrough, fullPath: string) => unknown | Promise<unknown>,
   ): Promise<ImageProcessingResult[]> {
     if (items.length === 0) return [];
     
@@ -184,6 +186,7 @@ export class FigmaService {
                 needsCropping,
                 cropTransform,
                 requiresImageDimensions,
+                upload,
               )
             : null;
         })
@@ -218,6 +221,7 @@ export class FigmaService {
                   needsCropping,
                   cropTransform,
                   requiresImageDimensions,
+                  upload,
                 )
               : null;
           })
@@ -247,6 +251,7 @@ export class FigmaService {
                   needsCropping,
                   cropTransform,
                   requiresImageDimensions,
+                  upload,
                 )
               : null;
           })

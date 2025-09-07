@@ -1,6 +1,7 @@
 import fs from "fs";
 import sharp from "sharp";
 import type { Transform } from "@figma/rest-api-spec";
+import { PassThrough } from "stream";
 
 /**
  * Apply crop transform to an image based on Figma's transformation matrix
@@ -135,13 +136,14 @@ export async function downloadAndProcessImage(
   needsCropping: boolean = false,
   cropTransform?: Transform,
   requiresImageDimensions: boolean = false,
+  upload?: (writer: fs.WriteStream | PassThrough, fullPath: string) => unknown | Promise<unknown>,
 ): Promise<ImageProcessingResult> {
   const { Logger } = await import("./logger.js");
   const processingLog: string[] = [];
 
   // First download the original image
   const { downloadFigmaImage } = await import("./common.js");
-  const originalPath = await downloadFigmaImage(fileName, localPath, imageUrl);
+  const originalPath = await downloadFigmaImage(fileName, localPath, imageUrl, upload);
   Logger.log(`Downloaded original image: ${originalPath}`);
 
   // Get original dimensions before any processing
