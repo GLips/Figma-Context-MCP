@@ -13,7 +13,10 @@ const parameters = {
     .object({
       nodeId: z
         .string()
-        .regex(/^I?\d+:\d+(?:;\d+:\d+)*$/, "Node ID must be like '1234:5678' or 'I5666:180910;1:10515;1:10336'")
+        .regex(
+          /^I?\d+:\d+(?:;\d+:\d+)*$/,
+          "Node ID must be like '1234:5678' or 'I5666:180910;1:10515;1:10336'",
+        )
         .describe("The ID of the Figma image node to fetch, formatted as 1234:5678"),
       imageRef: z
         .string()
@@ -23,7 +26,10 @@ const parameters = {
         ),
       fileName: z
         .string()
-        .regex(/^[a-zA-Z0-9_.-]+$/, "File name can only contain alphanumeric characters, underscores, dots, and hyphens")
+        .regex(
+          /^[a-zA-Z0-9_.-]+$/,
+          "File name can only contain alphanumeric characters, underscores, dots, and hyphens",
+        )
         .describe(
           "The local name for saving the fetched file, including extension. Either png or svg.",
         ),
@@ -65,6 +71,7 @@ const parameters = {
 
 export const downloadFigmaImagesSchema = z.object(parameters);
 export type DownloadImagesParams = z.infer<typeof downloadFigmaImagesSchema>;
+export type DownloadedImage = { nodeId: string; filePath: string };
 
 // Enhanced handler function with image processing support
 export async function downloadFigmaImages(
@@ -76,9 +83,18 @@ export async function downloadFigmaImages(
     const { fileKey, nodes, localPath, pngScale = 2 } = params;
 
     // Process nodes: collect unique downloads and track which requests they satisfy
-    const downloadItems = [];
+    const downloadItems: {
+      imageRef?: string;
+      nodeId?: string;
+      fileName: string;
+      needsCropping: boolean;
+      cropTransform?: any;
+      requiresImageDimensions: boolean;
+    }[] = [];
     const downloadToRequests = new Map<number, string[]>(); // download index -> requested filenames
     const seenDownloads = new Map<string, number>(); // uniqueKey -> download index
+    const nodeToFileName = new Map<string, string>(); // nodeId -> final file name
+    const fileNameToDownloadIndex = new Map<string, number>();
 
     for (const node of nodes) {
       // Apply filename suffix if provided
@@ -96,6 +112,8 @@ export async function downloadFigmaImages(
         requiresImageDimensions: node.requiresImageDimensions || false,
       };
 
+      nodeToFileName.set(node.nodeId, finalFileName);
+
       if (node.imageRef) {
         // For imageRefs, check if we've already planned to download this
         const uniqueKey = `${node.imageRef}-${node.filenameSuffix || "none"}`;
@@ -112,18 +130,21 @@ export async function downloadFigmaImages(
           if (downloadItem.requiresImageDimensions) {
             downloadItems[downloadIndex].requiresImageDimensions = true;
           }
+          fileNameToDownloadIndex.set(finalFileName, downloadIndex);
         } else {
           // New unique download
           const downloadIndex = downloadItems.length;
           downloadItems.push({ ...downloadItem, imageRef: node.imageRef });
           downloadToRequests.set(downloadIndex, [finalFileName]);
           seenDownloads.set(uniqueKey, downloadIndex);
+          fileNameToDownloadIndex.set(finalFileName, downloadIndex);
         }
       } else {
         // Rendered nodes are always unique
         const downloadIndex = downloadItems.length;
         downloadItems.push({ ...downloadItem, nodeId: node.nodeId });
         downloadToRequests.set(downloadIndex, [finalFileName]);
+        fileNameToDownloadIndex.set(finalFileName, downloadIndex);
       }
     }
 
@@ -137,38 +158,29 @@ export async function downloadFigmaImages(
       upload,
     );
 
-    const successCount = allDownloads.filter(Boolean).length;
+    const fileNameToPath: Record<string, string> = {};
+    allDownloads.forEach((result) => {
+      const fileName = result.filePath.split("/").pop() || result.filePath;
+      const downloadIndex = fileNameToDownloadIndex.get(fileName);
+      const requestedNames =
+        downloadIndex !== undefined
+          ? downloadToRequests.get(downloadIndex) || [fileName]
+          : [fileName];
+      for (const name of requestedNames) {
+        fileNameToPath[name] = result.filePath;
+      }
+    });
 
-    // Format results with aliases
-    const imagesList = allDownloads
-      .map((result, index) => {
-        const fileName = result.filePath.split("/").pop() || result.filePath;
-        const dimensions = `${result.finalDimensions.width}x${result.finalDimensions.height}`;
-        const cropStatus = result.wasCropped ? " (cropped)" : "";
+    const images: DownloadedImage[] = [];
+    for (const node of nodes) {
+      const finalFileName = nodeToFileName.get(node.nodeId);
+      const filePath = finalFileName ? fileNameToPath[finalFileName] : undefined;
+      if (filePath) {
+        images.push({ nodeId: node.nodeId, filePath });
+      }
+    }
 
-        const dimensionInfo = result.cssVariables
-          ? `${dimensions} | ${result.cssVariables}`
-          : dimensions;
-
-        // Show all the filenames that were requested for this download
-        const requestedNames = downloadToRequests.get(index) || [fileName];
-        const aliasText =
-          requestedNames.length > 1
-            ? ` (also requested as: ${requestedNames.filter((name: string) => name !== fileName).join(", ")})`
-            : "";
-
-        return `- ${fileName}: ${dimensionInfo}${cropStatus}${aliasText}`;
-      })
-      .join("\n");
-
-    return {
-      content: [
-        {
-          type: "text" as const,
-          text: `Downloaded ${successCount} images:\n${imagesList}`,
-        },
-      ],
-    };
+    return images;
   } catch (error) {
     Logger.error(`Error downloading images from ${params.fileKey}:`, error);
     return {
