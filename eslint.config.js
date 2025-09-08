@@ -19,7 +19,7 @@ export default [
     },
     rules: {
       ...tseslint.configs.recommended.rules,
-      "@typescript-eslint/explicit-function-return-type": "warn",
+      "@typescript-eslint/explicit-function-return-type": "off",
       "@typescript-eslint/no-unused-vars": ["error", { argsIgnorePattern: "^_" }],
       "@typescript-eslint/no-explicit-any": "warn",
     },

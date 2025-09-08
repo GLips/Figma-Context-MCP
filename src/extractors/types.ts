@@ -1,5 +1,4 @@
 import type { Node as FigmaDocumentNode, Style } from "@figma/rest-api-spec";
-import type { StyleId } from "~/utils/common.js";
 import type { SimplifiedTextStyle } from "~/transformers/text.js";
 import type { SimplifiedLayout } from "~/transformers/layout.js";
 import type { SimplifiedFill, SimplifiedStroke } from "~/transformers/style.js";
@@ -19,11 +18,11 @@ export type StyleTypes =
   | string;
 
 export type GlobalVars = {
-  styles: Record<StyleId, StyleTypes>;
+  styles: Record<string, StyleTypes>;
 };
 
 export interface TraversalContext {
-  globalVars: GlobalVars & { extraStyles: Record<string, Style> };
+  globalVars: GlobalVars & { extraStyles?: Record<string, Style> };
   currentDepth: number;
   parent?: FigmaDocumentNode;
 }
@@ -66,8 +65,11 @@ export interface SimplifiedNode {
   // appearance
   fills?: string;
   styles?: string;
-  extraStyles?: Record<string, unknown>;
   strokes?: string;
+  // Non-stylable stroke properties are kept on the node when stroke uses a named color style
+  strokeWeight?: string;
+  strokeDashes?: number[];
+  strokeWeights?: string;
   effects?: string;
   opacity?: number;
   borderRadius?: string;

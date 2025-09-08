@@ -59,7 +59,9 @@ async function getFigmaData(
     writeLogs("figma-simplified.json", simplifiedDesign);
 
     Logger.log(
-      `Successfully extracted data: ${simplifiedDesign.nodes.length} nodes, ${Object.keys(simplifiedDesign.globalVars.styles).length} styles`,
+      `Successfully extracted data: ${simplifiedDesign.nodes.length} nodes, ${
+        Object.keys(simplifiedDesign.globalVars.styles).length
+      } styles`,
     );
 
     const { nodes, globalVars, ...metadata } = simplifiedDesign;

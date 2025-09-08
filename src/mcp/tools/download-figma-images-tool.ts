@@ -11,7 +11,10 @@ const parameters = {
     .object({
       nodeId: z
         .string()
-        .regex(/^I?\d+:\d+(?:;\d+:\d+)*$/, "Node ID must be like '1234:5678' or 'I5666:180910;1:10515;1:10336'")
+        .regex(
+          /^I?\d+:\d+(?:;\d+:\d+)*$/,
+          "Node ID must be like '1234:5678' or 'I5666:180910;1:10515;1:10336'",
+        )
         .describe("The ID of the Figma image node to fetch, formatted as 1234:5678"),
       imageRef: z
         .string()
@@ -21,7 +24,10 @@ const parameters = {
         ),
       fileName: z
         .string()
-        .regex(/^[a-zA-Z0-9_.-]+$/, "File name can only contain alphanumeric characters, underscores, dots, and hyphens")
+        .regex(
+          /^[a-zA-Z0-9_.-]+$/,
+          "File name can only contain alphanumeric characters, underscores, dots, and hyphens",
+        )
         .describe(
           "The local name for saving the fetched file, including extension. Either png or svg.",
         ),
