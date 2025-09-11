@@ -59,7 +59,7 @@
 
 許多程式碼編輯器和其他 AI 客戶端都使用設定檔來管理 MCP 伺服器。
 
-可以透過將以下內容新增至您的設定檔來設定 `figma-developer-mcp` 伺服器
+可以透過將以下內容新增至您的設定檔來設定 `figma-developer-mcp` 伺服器。
 
 > 注意：您需要建立一個 Figma 存取權杖才能使用此伺服器。有關如何建立 Figma API 存取權杖的說明，請參閱[此處](https://help.figma.com/hc/en-us/articles/8085703771159-Manage-personal-access-tokens)。
 
