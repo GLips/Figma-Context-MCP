@@ -71,7 +71,12 @@ const parameters = {
 
 export const downloadFigmaImagesSchema = z.object(parameters);
 export type DownloadImagesParams = z.infer<typeof downloadFigmaImagesSchema>;
-export type DownloadedImage = { nodeId: string; filePath: string };
+export type DownloadedImage = {
+  nodeId: string;
+  filePath: string;
+  width: number;
+  height: number;
+};
 
 // Enhanced handler function with image processing support
 export async function downloadFigmaImages(
@@ -158,7 +163,7 @@ export async function downloadFigmaImages(
       upload,
     );
 
-    const fileNameToPath: Record<string, string> = {};
+    const fileNameToInfo: Record<string, { filePath: string; width: number; height: number }> = {};
     allDownloads.forEach((result) => {
       const fileName = result.filePath.split("/").pop() || result.filePath;
       const downloadIndex = fileNameToDownloadIndex.get(fileName);
@@ -167,16 +172,25 @@ export async function downloadFigmaImages(
           ? downloadToRequests.get(downloadIndex) || [fileName]
           : [fileName];
       for (const name of requestedNames) {
-        fileNameToPath[name] = result.filePath;
+        fileNameToInfo[name] = {
+          filePath: result.filePath,
+          width: result.finalDimensions.width,
+          height: result.finalDimensions.height,
+        };
       }
     });
 
     const images: DownloadedImage[] = [];
     for (const node of nodes) {
       const finalFileName = nodeToFileName.get(node.nodeId);
-      const filePath = finalFileName ? fileNameToPath[finalFileName] : undefined;
-      if (filePath) {
-        images.push({ nodeId: node.nodeId, filePath });
+      const info = finalFileName ? fileNameToInfo[finalFileName] : undefined;
+      if (info) {
+        images.push({
+          nodeId: node.nodeId,
+          filePath: info.filePath,
+          width: info.width,
+          height: info.height,
+        });
       }
     }
 
