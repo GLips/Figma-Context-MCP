@@ -25,8 +25,8 @@ const parameters = {
       fileName: z
         .string()
         .regex(
-          /^[a-zA-Z0-9_.-]+$/,
-          "File name can only contain alphanumeric characters, underscores, dots, and hyphens",
+          /^[a-zA-Z0-9_.-]+\.(png|svg)$/,
+          "File names must contain only letters, numbers, underscores, dots, or hyphens, and end with .png or .svg.",
         )
         .describe(
           "The local name for saving the fetched file, including extension. Either png or svg.",
