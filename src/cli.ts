@@ -7,9 +7,6 @@ import { getServerConfig } from "./config.js";
 import { startHttpServer } from "./server.js";
 import { createServer } from "./mcp/index.js";
 
-// Load .env from the current working directory
-config({ path: resolve(process.cwd(), ".env") });
-
 export async function startServer(): Promise<void> {
   // Check if we're running in stdio mode (e.g., via CLI)
   const isStdioMode = process.env.NODE_ENV === "cli" || process.argv.includes("--stdio");
@@ -33,6 +30,9 @@ export async function startServer(): Promise<void> {
 
 // If we're being executed directly (not imported), start the server
 if (process.argv[1]) {
+  // Load .env from the current working directory
+  config({ path: resolve(process.cwd(), ".env") });
+
   startServer().catch((error) => {
     console.error("Failed to start server:", error);
     process.exit(1);
