@@ -6,12 +6,39 @@ import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { Server } from "http";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { Logger } from "./utils/logger.js";
+import { createServer } from "./mcp/index.js";
+import { getServerConfig } from "./config.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 
 let httpServer: Server | null = null;
 const transports = {
   streamable: {} as Record<string, StreamableHTTPServerTransport>,
   sse: {} as Record<string, SSEServerTransport>,
 };
+
+/**
+ * Start the MCP server in either stdio or HTTP mode.
+ */
+export async function startServer(): Promise<void> {
+  // Check if we're running in stdio mode (e.g., via CLI)
+  const isStdioMode = process.env.NODE_ENV === "cli" || process.argv.includes("--stdio");
+
+  const config = getServerConfig(isStdioMode);
+
+  const server = createServer(config.auth, {
+    isHTTP: !isStdioMode,
+    outputFormat: config.outputFormat,
+    skipImageDownloads: config.skipImageDownloads,
+  });
+
+  if (isStdioMode) {
+    const transport = new StdioServerTransport();
+    await server.connect(transport);
+  } else {
+    console.log(`Initializing Figma MCP Server in HTTP mode on port ${config.port}...`);
+    await startHttpServer(config.port, server);
+  }
+}
 
 export async function startHttpServer(port: number, mcpServer: McpServer): Promise<void> {
   const app = express();

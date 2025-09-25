@@ -6,7 +6,7 @@
   "type": "module",
   "main": "dist/index.js",
   "bin": {
-    "figma-developer-mcp": "dist/cli.js"
+    "figma-developer-mcp": "dist/bin.js"
   },
   "files": [
     "dist",
@@ -16,9 +16,9 @@
     "build": "tsup --dts",
     "type-check": "tsc --noEmit",
     "test": "jest",
-    "start": "node dist/cli.js",
-    "start:cli": "cross-env NODE_ENV=cli node dist/cli.js",
-    "start:http": "node dist/cli.js",
+    "start": "node dist/bin.js",
+    "start:cli": "cross-env NODE_ENV=cli node dist/bin.js",
+    "start:http": "node dist/bin.js",
     "dev": "cross-env NODE_ENV=development tsup --watch",
     "dev:cli": "cross-env NODE_ENV=development tsup --watch -- --stdio",
     "lint": "eslint .",
