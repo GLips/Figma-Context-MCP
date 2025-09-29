@@ -22,6 +22,10 @@ _High impact, foundational improvements_
   - [ ] Return data on animations / transitions
   - [?] State management hints
 
+### Parsing Logic
+
+- [ ] Inline variables that only show up once, and keep global vars only for variables that are reused
+
 ### Image & Asset Handling
 
 - [ ] **Fix masked / cropped image exports**
@@ -74,8 +78,7 @@ _Improving usability and integration_
 ### Performance & Reliability
 
 - [ ] **Better error handling**
-  - [ ] Retry logic for API failures
-  - [ ] Graceful degradation
+  - [x] Retry logic for API failures
   - [ ] Detailed error messages which the LLM can expand on for users
 
 ### Documentation & Testing
