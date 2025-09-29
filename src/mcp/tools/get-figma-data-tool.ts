@@ -8,14 +8,19 @@ import { Logger, writeLogs } from "~/utils/logger.js";
 const parameters = {
   fileKey: z
     .string()
+    .regex(/^[a-zA-Z0-9]+$/, "File key must be alphanumeric")
     .describe(
       "The key of the Figma file to fetch, often found in a provided URL like figma.com/(file|design)/<fileKey>/...",
     ),
   nodeId: z
     .string()
+    .regex(
+      /^I?\d+[:|-]\d+(?:;\d+[:|-]\d+)*$/,
+      "Node ID must be like '1234:5678' or 'I5666:180910;1:10515;1:10336'",
+    )
     .optional()
     .describe(
-      "The ID of the node to fetch, often found as URL parameter node-id=<nodeId>, always use if provided",
+      "The ID of the node to fetch, often found as URL parameter node-id=<nodeId>, always use if provided. Use format '1234:5678' or 'I5666:180910;1:10515;1:10336' for multiple nodes.",
     ),
   depth: z
     .number()
@@ -35,7 +40,10 @@ async function getFigmaData(
   outputFormat: "yaml" | "json",
 ) {
   try {
-    const { fileKey, nodeId, depth } = params;
+    const { fileKey, nodeId: rawNodeId, depth } = parametersSchema.parse(params);
+
+    // Replace - with : in nodeId for our query—Figma API expects :
+    const nodeId = rawNodeId?.replace(/-/g, ":");
 
     Logger.log(
       `Fetching ${depth ? `${depth} layers deep` : "all layers"} of ${

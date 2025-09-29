@@ -12,7 +12,7 @@ const parameters = {
       nodeId: z
         .string()
         .regex(
-          /^I?\d+:\d+(?:;\d+:\d+)*$/,
+          /^I?\d+[:|-]\d+(?:;\d+[:|-]\d+)*$/,
           "Node ID must be like '1234:5678' or 'I5666:180910;1:10515;1:10336'",
         )
         .describe("The ID of the Figma image node to fetch, formatted as 1234:5678"),
@@ -73,14 +73,19 @@ export type DownloadImagesParams = z.infer<typeof parametersSchema>;
 // Enhanced handler function with image processing support
 async function downloadFigmaImages(params: DownloadImagesParams, figmaService: FigmaService) {
   try {
-    const { fileKey, nodes, localPath, pngScale = 2 } = params;
+    const { fileKey, nodes, localPath, pngScale = 2 } = parametersSchema.parse(params);
 
     // Process nodes: collect unique downloads and track which requests they satisfy
     const downloadItems = [];
     const downloadToRequests = new Map<number, string[]>(); // download index -> requested filenames
     const seenDownloads = new Map<string, number>(); // uniqueKey -> download index
 
-    for (const node of nodes) {
+    for (const rawNode of nodes) {
+      const { nodeId: rawNodeId, ...node } = rawNode;
+
+      // Replace - with : in nodeId for our query—Figma API expects :
+      const nodeId = rawNodeId?.replace(/-/g, ":");
+
       // Apply filename suffix if provided
       let finalFileName = node.fileName;
       if (node.filenameSuffix && !finalFileName.includes(node.filenameSuffix)) {
@@ -122,7 +127,7 @@ async function downloadFigmaImages(params: DownloadImagesParams, figmaService: F
       } else {
         // Rendered nodes are always unique
         const downloadIndex = downloadItems.length;
-        downloadItems.push({ ...downloadItem, nodeId: node.nodeId });
+        downloadItems.push({ ...downloadItem, nodeId });
         downloadToRequests.set(downloadIndex, [finalFileName]);
       }
     }
