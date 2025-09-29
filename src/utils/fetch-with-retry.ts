@@ -1,8 +1,8 @@
-import { exec } from "child_process";
+import { execFile } from "child_process";
 import { promisify } from "util";
 import { Logger } from "./logger.js";
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 type RequestOptions = RequestInit & {
   /**
@@ -35,12 +35,12 @@ export async function fetchWithRetry<T extends { status?: number }>(
     // -S: Show errors in stderr
     // --fail-with-body: curl errors with code 22, and outputs body of failed request, e.g. "Fetch failed with status 404"
     // -L: Follow redirects
-    const curlCommand = `curl -s -S --fail-with-body -L ${curlHeaders.join(" ")} "${url}"`;
+    const curlArgs = ["-s", "-S", "--fail-with-body", "-L", ...curlHeaders, url];
 
     try {
       // Fallback to curl for  corporate networks that have proxies that sometimes block fetch
-      Logger.log(`[fetchWithRetry] Executing curl command: ${curlCommand}`);
-      const { stdout, stderr } = await execAsync(curlCommand);
+      Logger.log(`[fetchWithRetry] Executing curl with args: ${JSON.stringify(curlArgs)}`);
+      const { stdout, stderr } = await execFileAsync("curl", curlArgs);
 
       if (stderr) {
         // curl often outputs progress to stderr, so only treat as error if stdout is empty
@@ -81,14 +81,18 @@ export async function fetchWithRetry<T extends { status?: number }>(
 }
 
 /**
- * Converts HeadersInit to an array of curl header arguments.
+ * Converts HeadersInit to an array of curl header arguments for execFile.
  * @param headers Headers to convert.
- * @returns Array of strings, each a curl -H argument.
+ * @returns Array of strings for curl arguments: ["-H", "key: value", "-H", "key2: value2"]
  */
 function formatHeadersForCurl(headers: Record<string, string> | undefined): string[] {
   if (!headers) {
     return [];
   }
 
-  return Object.entries(headers).map(([key, value]) => `-H "${key}: ${value}"`);
+  const headerArgs: string[] = [];
+  for (const [key, value] of Object.entries(headers)) {
+    headerArgs.push("-H", `${key}: ${value}`);
+  }
+  return headerArgs;
 }
