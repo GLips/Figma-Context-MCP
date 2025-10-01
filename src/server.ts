@@ -7,7 +7,7 @@ import { Server } from "http";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { Logger } from "./utils/logger.js";
 import { createServer } from "./mcp/index.js";
-import { getServerConfig } from "./config.js";
+import { getParsedArgs, getServerConfig, type CliArgs } from "./config.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 
 let httpServer: Server | null = null;
@@ -20,10 +20,15 @@ const transports = {
  * Start the MCP server in either stdio or HTTP mode.
  */
 export async function startServer(): Promise<void> {
-  // Check if we're running in stdio mode (e.g., via CLI)
-  const isStdioMode = process.env.NODE_ENV === "cli" || process.argv.includes("--stdio");
+  const argv = getParsedArgs();
 
-  const config = getServerConfig(isStdioMode);
+  // Server mode (stdio or HTTP)
+  const isStdioMode = process.env.NODE_ENV === "cli" || argv.stdio === true;
+  await startServerConfigurable(argv, isStdioMode);
+}
+
+export async function startServerConfigurable(argv: CliArgs, isStdioMode: boolean): Promise<void> {
+  const config = getServerConfig(argv, isStdioMode, false);
 
   const server = createServer(config.auth, {
     isHTTP: !isStdioMode,
