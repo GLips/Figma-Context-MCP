@@ -76,13 +76,11 @@ function parseAPIResponse(data: GetFileResponse | GetFileNodesResponse) {
     nodesToParse = data.document.children.filter(isVisible);
   }
 
-  const { name, lastModified, thumbnailUrl } = data;
+  const { name } = data;
 
   return {
     metadata: {
       name,
-      lastModified,
-      thumbnailUrl: thumbnailUrl || "",
     },
     rawNodes: nodesToParse,
     extraStyles,

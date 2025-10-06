@@ -47,8 +47,6 @@ export type ExtractorFn = (
 
 export interface SimplifiedDesign {
   name: string;
-  lastModified: string;
-  thumbnailUrl: string;
   nodes: SimplifiedNode[];
   components: Record<string, SimplifiedComponentDefinition>;
   componentSets: Record<string, SimplifiedComponentSetDefinition>;
