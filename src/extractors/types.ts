@@ -30,6 +30,20 @@ export interface TraversalContext {
 export interface TraversalOptions {
   maxDepth?: number;
   nodeFilter?: (node: FigmaDocumentNode) => boolean;
+  /**
+   * Called after children are processed, allowing modification of the parent node
+   * and control over which children to include in the output.
+   *
+   * @param node - Original Figma node
+   * @param result - SimplifiedNode being built (can be mutated)
+   * @param children - Processed children
+   * @returns Children to include (return empty array to omit children)
+   */
+  afterChildren?: (
+    node: FigmaDocumentNode,
+    result: SimplifiedNode,
+    children: SimplifiedNode[],
+  ) => SimplifiedNode[];
 }
 
 /**

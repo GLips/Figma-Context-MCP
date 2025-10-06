@@ -81,7 +81,14 @@ function processNodeWithExtractors(
         .filter((child): child is SimplifiedNode => child !== null);
 
       if (children.length > 0) {
-        result.children = children;
+        // Allow custom logic to modify parent and control which children to include
+        const childrenToInclude = options.afterChildren
+          ? options.afterChildren(node, result, children)
+          : children;
+
+        if (childrenToInclude.length > 0) {
+          result.children = childrenToInclude;
+        }
       }
     }
   }

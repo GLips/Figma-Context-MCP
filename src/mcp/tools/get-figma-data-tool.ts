@@ -1,7 +1,11 @@
 import { z } from "zod";
 import type { GetFileResponse, GetFileNodesResponse } from "@figma/rest-api-spec";
 import { FigmaService } from "~/services/figma.js";
-import { simplifyRawFigmaObject, allExtractors } from "~/extractors/index.js";
+import {
+  simplifyRawFigmaObject,
+  allExtractors,
+  collapseSvgContainers,
+} from "~/extractors/index.js";
 import yaml from "js-yaml";
 import { Logger, writeLogs } from "~/utils/logger.js";
 
@@ -62,6 +66,7 @@ async function getFigmaData(
     // Use unified design extraction (handles nodes + components consistently)
     const simplifiedDesign = simplifyRawFigmaObject(rawApiResponse, allExtractors, {
       maxDepth: depth,
+      afterChildren: collapseSvgContainers,
     });
 
     writeLogs("figma-simplified.json", simplifiedDesign);

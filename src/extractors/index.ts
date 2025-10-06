@@ -13,7 +13,7 @@ export { extractFromDesign } from "./node-walker.js";
 // Design-level extraction (unified nodes + components)
 export { simplifyRawFigmaObject } from "./design-extractor.js";
 
-// Built-in extractors
+// Built-in extractors and afterChildren helpers
 export {
   layoutExtractor,
   textExtractor,
@@ -25,4 +25,7 @@ export {
   contentOnly,
   visualsOnly,
   layoutOnly,
+  // afterChildren helpers
+  collapseSvgContainers,
+  SVG_ELIGIBLE_TYPES,
 } from "./built-in.js";
