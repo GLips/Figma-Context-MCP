@@ -157,9 +157,9 @@ export class FigmaService {
 
     const sanitizedPath = path.normalize(localPath).replace(/^(\.\.(\/|\\|$))+/, "");
     const resolvedPath = path.resolve(sanitizedPath);
-    if (!resolvedPath.startsWith(path.resolve(process.cwd()))) {
-      throw new Error("Invalid path specified. Directory traversal is not allowed.");
-    }
+    // if (!resolvedPath.startsWith(path.resolve(process.cwd()))) {
+    //   throw new Error("Invalid path specified. Directory traversal is not allowed.");
+    // }
 
     const { pngScale = 2, svgOptions } = options;
     const downloadPromises: Promise<ImageProcessingResult[]>[] = [];
