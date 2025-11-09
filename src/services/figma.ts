@@ -19,6 +19,12 @@ export type FigmaAuthOptions = {
   useOAuth: boolean;
 };
 
+export type CacheInfo = {
+  usedCache: boolean;
+  cachedAt?: number;
+  ttlMs?: number;
+};
+
 type SvgOptions = {
   outlineText: boolean;
   includeId: boolean;
@@ -277,23 +283,30 @@ export class FigmaService {
   /**
    * Get raw Figma API response for a file (for use with flexible extractors)
    */
-  async getRawFile(fileKey: string, depth?: number | null): Promise<GetFileResponse> {
+  async getRawFile(
+    fileKey: string,
+    depth?: number | null,
+  ): Promise<{ data: GetFileResponse; cacheInfo: CacheInfo }> {
     let response: GetFileResponse;
+    let cacheInfo: CacheInfo;
 
     if (this.fileCache) {
-      response = await this.loadFileFromCache(fileKey);
+      const cacheResult = await this.loadFileFromCache(fileKey);
+      response = cacheResult.data;
+      cacheInfo = cacheResult.cacheInfo;
+
       if (typeof depth === "number") {
         const truncated = cloneFileResponseWithDepth(response, depth);
         writeLogs("figma-raw.json", truncated);
-        return truncated;
+        return { data: truncated, cacheInfo };
       }
       writeLogs("figma-raw.json", response);
-      return response;
+      return { data: response, cacheInfo };
     }
 
     response = await this.fetchFileFromApi(fileKey, depth);
     writeLogs("figma-raw.json", response);
-    return response;
+    return { data: response, cacheInfo: { usedCache: false } };
   }
 
   /**
@@ -303,12 +316,12 @@ export class FigmaService {
     fileKey: string,
     nodeId: string,
     depth?: number | null,
-  ): Promise<GetFileNodesResponse> {
+  ): Promise<{ data: GetFileNodesResponse; cacheInfo: CacheInfo }> {
     if (this.fileCache) {
-      const file = await this.loadFileFromCache(fileKey);
-      const nodeResponse = buildNodeResponseFromFile(file, nodeId, depth);
+      const cacheResult = await this.loadFileFromCache(fileKey);
+      const nodeResponse = buildNodeResponseFromFile(cacheResult.data, nodeId, depth);
       writeLogs("figma-raw.json", nodeResponse);
-      return nodeResponse;
+      return { data: nodeResponse, cacheInfo: cacheResult.cacheInfo };
     }
 
     const endpoint = `/files/${fileKey}/nodes?ids=${nodeId}${depth ? `&depth=${depth}` : ""}`;
@@ -319,22 +332,37 @@ export class FigmaService {
     const response = await this.request<GetFileNodesResponse>(endpoint);
     writeLogs("figma-raw.json", response);
 
-    return response;
+    return { data: response, cacheInfo: { usedCache: false } };
   }
 
-  private async loadFileFromCache(fileKey: string): Promise<GetFileResponse> {
+  private async loadFileFromCache(
+    fileKey: string,
+  ): Promise<{ data: GetFileResponse; cacheInfo: CacheInfo }> {
     if (!this.fileCache) {
-      return this.fetchFileFromApi(fileKey);
+      const data = await this.fetchFileFromApi(fileKey);
+      return { data, cacheInfo: { usedCache: false } };
     }
 
-    const cached = await this.fileCache.get(fileKey);
-    if (cached) {
-      return cached;
+    const cacheResult = await this.fileCache.get(fileKey);
+    if (cacheResult) {
+      return {
+        data: cacheResult.data,
+        cacheInfo: {
+          usedCache: true,
+          cachedAt: cacheResult.cachedAt,
+          ttlMs: cacheResult.ttlMs,
+        },
+      };
     }
 
     const fresh = await this.fetchFileFromApi(fileKey);
     await this.fileCache.set(fileKey, fresh);
-    return fresh;
+    return {
+      data: fresh,
+      cacheInfo: {
+        usedCache: false,
+      },
+    };
   }
 
   private async fetchFileFromApi(fileKey: string, depth?: number | null): Promise<GetFileResponse> {

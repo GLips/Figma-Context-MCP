@@ -40,7 +40,7 @@ describe("FigmaFileCache", () => {
       await cache.set("ABC", SAMPLE_FILE);
       const loaded = await cache.get("ABC");
 
-      expect(loaded?.name).toBe("Test File");
+      expect(loaded?.data.name).toBe("Test File");
     } finally {
       await cleanupDir(dir);
     }

@@ -64,8 +64,8 @@ describe("FigmaService caching", () => {
       const first = await service.getRawFile("FILE123");
       const second = await service.getRawFile("FILE123");
 
-      expect(first.name).toBe("Sample");
-      expect(second.document.id).toBe("0:0");
+      expect(first.data.name).toBe("Sample");
+      expect(second.data.document.id).toBe("0:0");
       expect(requestSpy).toHaveBeenCalledTimes(1);
     } finally {
       requestSpy.mockRestore();
@@ -83,7 +83,7 @@ describe("FigmaService caching", () => {
       const nodeId = "10:20";
 
       const first = await service.getRawNode("FILE456", nodeId);
-      expect(first.nodes[nodeId]).toBeDefined();
+      expect(first.data.nodes[nodeId]).toBeDefined();
       expect(requestSpy).toHaveBeenCalledTimes(1);
 
       await service.getRawNode("FILE456", nodeId);

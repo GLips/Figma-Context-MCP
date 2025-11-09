@@ -49,7 +49,9 @@ export class FigmaFileCache {
     return Date.now() - fetchedAt > this.options.ttlMs;
   }
 
-  async get(fileKey: string): Promise<GetFileResponse | null> {
+  async get(
+    fileKey: string,
+  ): Promise<{ data: GetFileResponse; cachedAt: number; ttlMs: number } | null> {
     await this.waitForInit();
 
     // NOTE: Race condition possible - if multiple requests for the same uncached file
@@ -75,7 +77,11 @@ export class FigmaFileCache {
       }
 
       Logger.log(`[FigmaFileCache] Cache hit for ${fileKey}`);
-      return payload.data;
+      return {
+        data: payload.data,
+        cachedAt: payload.fetchedAt,
+        ttlMs: this.options.ttlMs,
+      };
     } catch (error: unknown) {
       const err = error as { code?: string; message?: string };
       if (err?.code !== "ENOENT") {
