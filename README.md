@@ -93,6 +93,22 @@ Or you can set `FIGMA_API_KEY` and `PORT` in the `env` field.
 
 If you need more information on how to configure the Framelink MCP for Figma, see the [Framelink docs](https://www.framelink.ai/docs/quickstart?utm_source=github&utm_medium=referral&utm_campaign=readme).
 
+### Persistent caching (optional)
+
+If you are hitting Figma's limited API quota, you can tell the MCP server to cache full file responses on disk by setting a `FIGMA_CACHING` environment variable that contains a JSON object.
+
+```bash
+FIGMA_CACHING='{
+  "cacheDir": "~/.figma-mcp-cache",
+  "ttl": { "value": 30, "unit": "d" }
+}'
+```
+
+- `cacheDir` (optional) controls where cached files are written. Relative paths are resolved against the current working directory and `~` expands to your home directory. If you omit it, the server defaults to `~/.cache/figma-mcp` on Linux, `~/Library/Caches/FigmaMcp` on macOS, and `%LOCALAPPDATA%/FigmaMcpCache` on Windows.
+- `ttl` controls how long a cached file remains valid. It must contain a `value` (number) and a `unit` (`ms`, `s`, `m`, `h`, or `d`). In the example above, cached files live for 30 days.
+
+When caching is enabled the server always fetches the full Figma file once, stores it on disk, and serves subsequent `get_figma_data` / `get_raw_node` requests from the cached copy until it expires. Delete the files inside `cacheDir` if you need to force a refresh. Leaving `FIGMA_CACHING` unset keeps the previous non-cached behavior.
+
 ## Star History
 
 <a href="https://star-history.com/#GLips/Figma-Context-MCP"><img src="https://api.star-history.com/svg?repos=GLips/Figma-Context-MCP&type=Date" alt="Star History Chart" width="600" /></a>
