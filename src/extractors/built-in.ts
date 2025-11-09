@@ -235,9 +235,7 @@ export function collapseSvgContainers(
   result: SimplifiedNode,
   children: SimplifiedNode[],
 ): SimplifiedNode[] {
-  const allChildrenAreSvgEligible = children.every((child) =>
-    SVG_ELIGIBLE_TYPES.has(child.type),
-  );
+  const allChildrenAreSvgEligible = children.every((child) => SVG_ELIGIBLE_TYPES.has(child.type));
 
   if (
     (node.type === "FRAME" || node.type === "GROUP" || node.type === "INSTANCE") &&

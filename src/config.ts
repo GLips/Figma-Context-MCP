@@ -1,14 +1,17 @@
 import { config as loadEnv } from "dotenv";
 import yargs from "yargs";
 import { hideBin } from "yargs/helpers";
-import { resolve } from "path";
+import os from "os";
+import { isAbsolute, join, resolve } from "path";
 import type { FigmaAuthOptions } from "./services/figma.js";
+import type { FigmaCachingOptions } from "./services/figma-file-cache.js";
 
 interface ServerConfig {
   auth: FigmaAuthOptions;
   port: number;
   outputFormat: "yaml" | "json";
   skipImageDownloads?: boolean;
+  caching?: FigmaCachingOptions;
   configSources: {
     figmaApiKey: "cli" | "env";
     figmaOAuthToken: "cli" | "env" | "none";
@@ -16,6 +19,7 @@ interface ServerConfig {
     outputFormat: "cli" | "env" | "default";
     envFile: "cli" | "default";
     skipImageDownloads?: "cli" | "env" | "default";
+    caching?: "env";
   };
 }
 
@@ -32,6 +36,16 @@ interface CliArgs {
   json?: boolean;
   "skip-image-downloads"?: boolean;
 }
+
+type DurationUnit = "ms" | "s" | "m" | "h" | "d";
+
+const DURATION_IN_MS: Record<DurationUnit, number> = {
+  ms: 1,
+  s: 1000,
+  m: 60 * 1000,
+  h: 60 * 60 * 1000,
+  d: 24 * 60 * 60 * 1000,
+};
 
 export function getServerConfig(isStdioMode: boolean): ServerConfig {
   // Parse command line arguments
@@ -93,6 +107,7 @@ export function getServerConfig(isStdioMode: boolean): ServerConfig {
     port: 3333,
     outputFormat: "yaml",
     skipImageDownloads: false,
+    caching: undefined,
     configSources: {
       figmaApiKey: "env",
       figmaOAuthToken: "none",
@@ -100,6 +115,7 @@ export function getServerConfig(isStdioMode: boolean): ServerConfig {
       outputFormat: "default",
       envFile: envFileSource,
       skipImageDownloads: "default",
+      caching: undefined,
     },
   };
 
@@ -150,6 +166,13 @@ export function getServerConfig(isStdioMode: boolean): ServerConfig {
     config.configSources.skipImageDownloads = "env";
   }
 
+  // Handle FIGMA_CACHING
+  const cachingConfig = parseCachingConfig(process.env.FIGMA_CACHING);
+  if (cachingConfig) {
+    config.caching = cachingConfig;
+    config.configSources.caching = "env";
+  }
+
   // Validate configuration
   if (!auth.figmaApiKey && !auth.figmaOAuthToken) {
     console.error(
@@ -180,6 +203,9 @@ export function getServerConfig(isStdioMode: boolean): ServerConfig {
     console.log(
       `- SKIP_IMAGE_DOWNLOADS: ${config.skipImageDownloads} (source: ${config.configSources.skipImageDownloads})`,
     );
+    console.log(
+      `- FIGMA_CACHING: ${config.caching ? JSON.stringify({ cacheDir: config.caching.cacheDir, ttlMs: config.caching.ttlMs }) : "disabled"}`,
+    );
     console.log(); // Empty line for better readability
   }
 
@@ -187,4 +213,83 @@ export function getServerConfig(isStdioMode: boolean): ServerConfig {
     ...config,
     auth,
   };
+}
+
+function parseCachingConfig(rawValue: string | undefined): FigmaCachingOptions | undefined {
+  if (!rawValue) return undefined;
+
+  try {
+    const parsed = JSON.parse(rawValue) as {
+      cacheDir?: string;
+      ttl: {
+        value: number;
+        unit: DurationUnit;
+      };
+    };
+
+    if (!parsed || typeof parsed !== "object") {
+      throw new Error("FIGMA_CACHING must be a JSON object");
+    }
+
+    if (!parsed.ttl || typeof parsed.ttl.value !== "number" || parsed.ttl.value <= 0) {
+      throw new Error("FIGMA_CACHING.ttl.value must be a positive number");
+    }
+
+    if (!parsed.ttl.unit || !(parsed.ttl.unit in DURATION_IN_MS)) {
+      throw new Error("FIGMA_CACHING.ttl.unit must be one of ms, s, m, h, d");
+    }
+
+    const ttlMs = parsed.ttl.value * DURATION_IN_MS[parsed.ttl.unit];
+    const cacheDir = resolveCacheDir(parsed.cacheDir);
+
+    return {
+      cacheDir,
+      ttlMs,
+    };
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`Failed to parse FIGMA_CACHING: ${message}`);
+    process.exit(1);
+  }
+}
+
+function resolveCacheDir(inputPath?: string): string {
+  const defaultDir = getDefaultCacheDir();
+  if (!inputPath) {
+    return defaultDir;
+  }
+
+  const expanded = expandHomeDir(inputPath.trim());
+  if (isAbsolute(expanded)) {
+    return expanded;
+  }
+  return resolve(process.cwd(), expanded);
+}
+
+function expandHomeDir(targetPath: string): string {
+  if (targetPath === "~") {
+    return os.homedir();
+  }
+
+  if (targetPath.startsWith("~/")) {
+    return resolve(os.homedir(), targetPath.slice(2));
+  }
+
+  return targetPath;
+}
+
+function getDefaultCacheDir(): string {
+  const platform = process.platform;
+  if (platform === "win32") {
+    const base = process.env.LOCALAPPDATA || resolve(os.homedir(), "AppData", "Local");
+    return join(base, "FigmaMcpCache");
+  }
+
+  if (platform === "darwin") {
+    return join(os.homedir(), "Library", "Caches", "FigmaMcp");
+  }
+
+  // linux and others -> use XDG cache dir
+  const xdgCache = process.env.XDG_CACHE_HOME || join(os.homedir(), ".cache");
+  return join(xdgCache, "figma-mcp");
 }

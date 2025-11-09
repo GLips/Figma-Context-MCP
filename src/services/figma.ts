@@ -4,16 +4,25 @@ import type {
   GetFileResponse,
   GetFileNodesResponse,
   GetImageFillsResponse,
+  Node as FigmaNode,
+  DocumentNode,
+  Transform,
 } from "@figma/rest-api-spec";
-import { downloadFigmaImage } from "~/utils/common.js";
 import { downloadAndProcessImage, type ImageProcessingResult } from "~/utils/image-processing.js";
 import { Logger, writeLogs } from "~/utils/logger.js";
 import { fetchWithRetry } from "~/utils/fetch-with-retry.js";
+import { FigmaFileCache, type FigmaCachingOptions } from "./figma-file-cache.js";
 
 export type FigmaAuthOptions = {
   figmaApiKey: string;
   figmaOAuthToken: string;
   useOAuth: boolean;
+};
+
+export type CacheInfo = {
+  usedCache: boolean;
+  cachedAt?: number;
+  ttlMs?: number;
 };
 
 type SvgOptions = {
@@ -27,11 +36,18 @@ export class FigmaService {
   private readonly oauthToken: string;
   private readonly useOAuth: boolean;
   private readonly baseUrl = "https://api.figma.com/v1";
+  private readonly fileCache?: FigmaFileCache;
 
-  constructor({ figmaApiKey, figmaOAuthToken, useOAuth }: FigmaAuthOptions) {
+  constructor(
+    { figmaApiKey, figmaOAuthToken, useOAuth }: FigmaAuthOptions,
+    cachingOptions?: FigmaCachingOptions,
+  ) {
     this.apiKey = figmaApiKey || "";
     this.oauthToken = figmaOAuthToken || "";
     this.useOAuth = !!useOAuth && !!this.oauthToken;
+    if (cachingOptions) {
+      this.fileCache = new FigmaFileCache(cachingOptions);
+    }
   }
 
   private getAuthHeaders(): Record<string, string> {
@@ -148,7 +164,7 @@ export class FigmaService {
       nodeId?: string;
       fileName: string;
       needsCropping?: boolean;
-      cropTransform?: any;
+      cropTransform?: Transform;
       requiresImageDimensions?: boolean;
     }>,
     options: { pngScale?: number; svgOptions?: SvgOptions } = {},
@@ -267,14 +283,30 @@ export class FigmaService {
   /**
    * Get raw Figma API response for a file (for use with flexible extractors)
    */
-  async getRawFile(fileKey: string, depth?: number | null): Promise<GetFileResponse> {
-    const endpoint = `/files/${fileKey}${depth ? `?depth=${depth}` : ""}`;
-    Logger.log(`Retrieving raw Figma file: ${fileKey} (depth: ${depth ?? "default"})`);
+  async getRawFile(
+    fileKey: string,
+    depth?: number | null,
+  ): Promise<{ data: GetFileResponse; cacheInfo: CacheInfo }> {
+    let response: GetFileResponse;
+    let cacheInfo: CacheInfo;
 
-    const response = await this.request<GetFileResponse>(endpoint);
+    if (this.fileCache) {
+      const cacheResult = await this.loadFileFromCache(fileKey);
+      response = cacheResult.data;
+      cacheInfo = cacheResult.cacheInfo;
+
+      if (typeof depth === "number") {
+        const truncated = cloneFileResponseWithDepth(response, depth);
+        writeLogs("figma-raw.json", truncated);
+        return { data: truncated, cacheInfo };
+      }
+      writeLogs("figma-raw.json", response);
+      return { data: response, cacheInfo };
+    }
+
+    response = await this.fetchFileFromApi(fileKey, depth);
     writeLogs("figma-raw.json", response);
-
-    return response;
+    return { data: response, cacheInfo: { usedCache: false } };
   }
 
   /**
@@ -284,7 +316,14 @@ export class FigmaService {
     fileKey: string,
     nodeId: string,
     depth?: number | null,
-  ): Promise<GetFileNodesResponse> {
+  ): Promise<{ data: GetFileNodesResponse; cacheInfo: CacheInfo }> {
+    if (this.fileCache) {
+      const cacheResult = await this.loadFileFromCache(fileKey);
+      const nodeResponse = buildNodeResponseFromFile(cacheResult.data, nodeId, depth);
+      writeLogs("figma-raw.json", nodeResponse);
+      return { data: nodeResponse, cacheInfo: cacheResult.cacheInfo };
+    }
+
     const endpoint = `/files/${fileKey}/nodes?ids=${nodeId}${depth ? `&depth=${depth}` : ""}`;
     Logger.log(
       `Retrieving raw Figma node: ${nodeId} from ${fileKey} (depth: ${depth ?? "default"})`,
@@ -293,6 +332,144 @@ export class FigmaService {
     const response = await this.request<GetFileNodesResponse>(endpoint);
     writeLogs("figma-raw.json", response);
 
-    return response;
+    return { data: response, cacheInfo: { usedCache: false } };
   }
+
+  private async loadFileFromCache(
+    fileKey: string,
+  ): Promise<{ data: GetFileResponse; cacheInfo: CacheInfo }> {
+    if (!this.fileCache) {
+      const data = await this.fetchFileFromApi(fileKey);
+      return { data, cacheInfo: { usedCache: false } };
+    }
+
+    const cacheResult = await this.fileCache.get(fileKey);
+    if (cacheResult) {
+      return {
+        data: cacheResult.data,
+        cacheInfo: {
+          usedCache: true,
+          cachedAt: cacheResult.cachedAt,
+          ttlMs: cacheResult.ttlMs,
+        },
+      };
+    }
+
+    const fresh = await this.fetchFileFromApi(fileKey);
+    await this.fileCache.set(fileKey, fresh);
+    return {
+      data: fresh,
+      cacheInfo: {
+        usedCache: false,
+      },
+    };
+  }
+
+  private async fetchFileFromApi(fileKey: string, depth?: number | null): Promise<GetFileResponse> {
+    const endpoint = `/files/${fileKey}${depth ? `?depth=${depth}` : ""}`;
+    Logger.log(
+      `Retrieving raw Figma file: ${fileKey} (depth: ${depth ?? (this.fileCache ? "full" : "default")})`,
+    );
+
+    return this.request<GetFileResponse>(endpoint);
+  }
+}
+
+function cloneFileResponseWithDepth(file: GetFileResponse, depth: number): GetFileResponse {
+  if (depth === undefined || depth === null) {
+    return file;
+  }
+
+  return {
+    ...file,
+    document: cloneNode(file.document, depth) as DocumentNode,
+  };
+}
+
+function cloneNode<T extends FigmaNode>(node: T, depth?: number): T {
+  const clone = { ...node } as T & { children?: FigmaNode[] };
+
+  if (!nodeHasChildren(node)) {
+    delete clone.children;
+    return clone;
+  }
+
+  if (depth === undefined || depth === null) {
+    clone.children = node.children.map((child) => cloneNode(child));
+    return clone;
+  }
+
+  if (depth <= 0) {
+    delete clone.children;
+    return clone;
+  }
+
+  clone.children = node.children.map((child) => cloneNode(child, depth - 1));
+
+  return clone;
+}
+
+function buildNodeResponseFromFile(
+  file: GetFileResponse,
+  nodeIdParam: string,
+  depth?: number | null,
+): GetFileNodesResponse {
+  const nodeIds = nodeIdParam.split(";").filter((id) => id);
+  if (nodeIds.length === 0) {
+    throw new Error("No valid node IDs provided");
+  }
+
+  const nodesMap = findNodesById(file.document, new Set(nodeIds));
+  const nodes: GetFileNodesResponse["nodes"] = {};
+
+  for (const id of nodeIds) {
+    const node = nodesMap.get(id);
+    if (!node) {
+      throw new Error(`Node ${id} not found in cached file`);
+    }
+    nodes[id] = {
+      document: cloneNode(node, depth ?? undefined),
+      components: file.components ?? {},
+      componentSets: file.componentSets ?? {},
+      styles: file.styles,
+      schemaVersion: file.schemaVersion,
+    };
+  }
+
+  return {
+    name: file.name,
+    lastModified: file.lastModified,
+    thumbnailUrl: file.thumbnailUrl ?? "",
+    version: file.version ?? "",
+    role: file.role ?? "viewer",
+    editorType: file.editorType ?? "figma",
+    nodes,
+  };
+}
+
+function findNodesById(root: DocumentNode, targetIds: Set<string>): Map<string, FigmaNode> {
+  const result = new Map<string, FigmaNode>();
+  const stack: FigmaNode[] = [root];
+
+  while (stack.length > 0 && result.size < targetIds.size) {
+    const current = stack.pop();
+    if (!current) continue;
+
+    if (targetIds.has(current.id)) {
+      result.set(current.id, current);
+    }
+
+    if (nodeHasChildren(current)) {
+      stack.push(...current.children);
+    }
+  }
+
+  return result;
+}
+
+type NodeWithChildren = FigmaNode & { children: FigmaNode[] };
+
+function nodeHasChildren(node: FigmaNode): node is NodeWithChildren {
+  const maybeChildren = (node as Partial<NodeWithChildren>).children;
+  return Array.isArray(maybeChildren) && maybeChildren.length > 0;
 }

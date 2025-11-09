@@ -7,6 +7,7 @@ import {
   type DownloadImagesParams,
   type GetFigmaDataParams,
 } from "./tools/index.js";
+import type { FigmaCachingOptions } from "~/services/figma-file-cache.js";
 
 const serverInfo = {
   name: "Figma MCP Server",
@@ -17,14 +18,20 @@ type CreateServerOptions = {
   isHTTP?: boolean;
   outputFormat?: "yaml" | "json";
   skipImageDownloads?: boolean;
+  caching?: FigmaCachingOptions;
 };
 
 function createServer(
   authOptions: FigmaAuthOptions,
-  { isHTTP = false, outputFormat = "yaml", skipImageDownloads = false }: CreateServerOptions = {},
+  {
+    isHTTP = false,
+    outputFormat = "yaml",
+    skipImageDownloads = false,
+    caching,
+  }: CreateServerOptions = {},
 ) {
   const server = new McpServer(serverInfo);
-  const figmaService = new FigmaService(authOptions);
+  const figmaService = new FigmaService(authOptions, caching);
   registerTools(server, figmaService, { outputFormat, skipImageDownloads });
 
   Logger.isHTTP = isHTTP;
