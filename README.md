@@ -114,8 +114,10 @@ If you need more information on how to configure the Framelink MCP for Figma, se
 To avoid hitting Figma's heavy rate limits, you can tell the MCP server to cache full file responses on disk by setting a `FIGMA_CACHING` environment variable that contains a JSON object.
 
 ```bash
-FIGMA_CACHING='{ "ttl":{ "value": 30, "unit": "d" } }'
+FIGMA_CACHING='{ "ttl": { "value": 30, "unit": "d" } }'
 ```
+
+Put this var into your mcp config json, see example above.
 
 - `cacheDir` (optional) controls where cached files are written. Relative paths are resolved against the current working directory and `~` expands to your home directory. If you omit it, the server defaults to `~/.cache/figma-mcp` on Linux, `~/Library/Caches/FigmaMcp` on macOS, and `%LOCALAPPDATA%/FigmaMcpCache` on Windows.
 - `ttl` controls how long a cached file remains valid. It must contain a `value` (number) and a `unit` (`ms`, `s`, `m`, `h`, or `d`).
