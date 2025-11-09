@@ -104,7 +104,7 @@ export class FigmaFileCache {
 
     try {
       // Write to temporary file first, then atomically rename to avoid corruption
-      await writeFile(tempPath, JSON.stringify(payload));
+      await writeFile(tempPath, JSON.stringify(payload, null, 2));
       await rename(tempPath, cachePath);
       Logger.log(`[FigmaFileCache] Cached file ${fileKey}`);
     } catch (error: unknown) {
