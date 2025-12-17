@@ -7,12 +7,14 @@ import type { FigmaAuthOptions } from "./services/figma.js";
 interface ServerConfig {
   auth: FigmaAuthOptions;
   port: number;
+  host: string;
   outputFormat: "yaml" | "json";
   skipImageDownloads?: boolean;
   configSources: {
     figmaApiKey: "cli" | "env";
     figmaOAuthToken: "cli" | "env" | "none";
     port: "cli" | "env" | "default";
+    host: "cli" | "env" | "default";
     outputFormat: "cli" | "env" | "default";
     envFile: "cli" | "default";
     skipImageDownloads?: "cli" | "env" | "default";
@@ -29,6 +31,7 @@ interface CliArgs {
   "figma-oauth-token"?: string;
   env?: string;
   port?: number;
+  host?: string;
   json?: boolean;
   "skip-image-downloads"?: boolean;
 }
@@ -52,6 +55,10 @@ export function getServerConfig(isStdioMode: boolean): ServerConfig {
       port: {
         type: "number",
         description: "Port to run the server on",
+      },
+      host: {
+        type: "string",
+        description: "Host to run the server on",
       },
       json: {
         type: "boolean",
@@ -91,12 +98,14 @@ export function getServerConfig(isStdioMode: boolean): ServerConfig {
 
   const config: Omit<ServerConfig, "auth"> = {
     port: 3333,
+    host: "127.0.0.1",
     outputFormat: "yaml",
     skipImageDownloads: false,
     configSources: {
       figmaApiKey: "env",
       figmaOAuthToken: "none",
       port: "default",
+      host: "default",
       outputFormat: "default",
       envFile: envFileSource,
       skipImageDownloads: "default",
@@ -130,6 +139,15 @@ export function getServerConfig(isStdioMode: boolean): ServerConfig {
   } else if (process.env.PORT) {
     config.port = parseInt(process.env.PORT, 10);
     config.configSources.port = "env";
+  }
+
+  // Handle HOST
+  if (argv.host) {
+    config.host = argv.host;
+    config.configSources.host = "cli";
+  } else if (process.env.HOST) {
+    config.host = process.env.HOST;
+    config.configSources.host = "env";
   }
 
   // Handle JSON output format
@@ -174,6 +192,7 @@ export function getServerConfig(isStdioMode: boolean): ServerConfig {
       console.log("- Authentication Method: Personal Access Token (X-Figma-Token)");
     }
     console.log(`- PORT: ${config.port} (source: ${config.configSources.port})`);
+    console.log(`- HOST: ${config.host} (source: ${config.configSources.host})`);
     console.log(
       `- OUTPUT_FORMAT: ${config.outputFormat} (source: ${config.configSources.outputFormat})`,
     );
