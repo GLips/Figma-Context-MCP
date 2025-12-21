@@ -54,7 +54,7 @@
   "license": "MIT",
   "dependencies": {
     "@figma/rest-api-spec": "^0.33.0",
-    "@modelcontextprotocol/sdk": "^1.10.2",
+    "@modelcontextprotocol/sdk": "^1.25.1",
     "@types/yargs": "^17.0.33",
     "cross-env": "^7.0.3",
     "dotenv": "^16.4.7",
