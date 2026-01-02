@@ -45,6 +45,10 @@ function registerTools(
     getFigmaDataTool.name,
     getFigmaDataTool.description,
     getFigmaDataTool.parameters,
+    {
+      title: "Get Figma Data",
+      readOnlyHint: true,
+    },
     (params: GetFigmaDataParams) =>
       getFigmaDataTool.handler(params, figmaService, options.outputFormat),
   );
@@ -55,6 +59,10 @@ function registerTools(
       downloadFigmaImagesTool.name,
       downloadFigmaImagesTool.description,
       downloadFigmaImagesTool.parameters,
+      {
+        title: "Download Figma Images",
+        destructiveHint: true,
+      },
       (params: DownloadImagesParams) => downloadFigmaImagesTool.handler(params, figmaService),
     );
   }
