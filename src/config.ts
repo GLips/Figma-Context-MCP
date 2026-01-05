@@ -1,8 +1,20 @@
 import { config as loadEnv } from "dotenv";
+import { resolve } from "path";
 import yargs from "yargs";
 import { hideBin } from "yargs/helpers";
-import { resolve } from "path";
 import type { FigmaAuthOptions } from "./services/figma.js";
+
+export interface CliArgs {
+  "figma-api-key"?: string;
+  "figma-oauth-token"?: string;
+  env?: string;
+  port?: number;
+  json?: boolean;
+  "skip-image-downloads"?: boolean;
+  exec?: string;
+  e?: string;
+  stdio?: boolean;
+}
 
 interface ServerConfig {
   auth: FigmaAuthOptions;
@@ -24,18 +36,8 @@ function maskApiKey(key: string): string {
   return `****${key.slice(-4)}`;
 }
 
-interface CliArgs {
-  "figma-api-key"?: string;
-  "figma-oauth-token"?: string;
-  env?: string;
-  port?: number;
-  json?: boolean;
-  "skip-image-downloads"?: boolean;
-}
-
-export function getServerConfig(isStdioMode: boolean): ServerConfig {
-  // Parse command line arguments
-  const argv = yargs(hideBin(process.argv))
+export function getParsedArgs(): CliArgs {
+  return yargs(hideBin(process.argv))
     .options({
       "figma-api-key": {
         type: "string",
@@ -63,11 +65,27 @@ export function getServerConfig(isStdioMode: boolean): ServerConfig {
         description: "Do not register the download_figma_images tool (skip image downloads)",
         default: false,
       },
+      exec: {
+        type: "string",
+        alias: "e",
+        description: "Execute a single Figma data fetch from URL and exit (non-server mode)",
+      },
+      stdio: {
+        type: "boolean",
+        description: "Run server in stdio mode (for MCP clients like Cursor)",
+        default: false,
+      },
     })
     .help()
     .version(process.env.NPM_PACKAGE_VERSION ?? "unknown")
     .parseSync() as CliArgs;
+}
 
+export function getServerConfig(
+  argv: CliArgs,
+  isStdioMode: boolean,
+  isExecMode = false,
+): ServerConfig {
   // Load environment variables ASAP from custom path or default
   let envFilePath: string;
   let envFileSource: "cli" | "default";
@@ -158,8 +176,8 @@ export function getServerConfig(isStdioMode: boolean): ServerConfig {
     process.exit(1);
   }
 
-  // Log configuration sources
-  if (!isStdioMode) {
+  // Log configuration sources (skip in exec mode for cleaner output)
+  if (!isStdioMode && !isExecMode) {
     console.log("\nConfiguration:");
     console.log(`- ENV_FILE: ${envFilePath} (source: ${config.configSources.envFile})`);
     if (auth.useOAuth) {
