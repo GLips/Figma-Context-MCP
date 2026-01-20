@@ -1,5 +1,13 @@
 # figma-developer-mcp
 
+## 0.7.0
+
+### Minor Changes
+
+- [#261](https://github.com/GLips/Figma-Context-MCP/pull/261) [`c730417`](https://github.com/GLips/Figma-Context-MCP/commit/c73041730cb2b288a32c6c6ba4b48d8970841659) Thanks [@jnhyperion](https://github.com/jnhyperion)! - Add configurable `--host` CLI option for remote deployments. Use `--host` CLI argument or `FRAMELINK_HOST` environment variable to bind to addresses other than localhost (e.g., `0.0.0.0` for network access).
+
+  Also adds `FRAMELINK_PORT` environment variable (with backwards-compatible fallback to `PORT`).
+
 ## 0.6.4
 
 ### Patch Changes
