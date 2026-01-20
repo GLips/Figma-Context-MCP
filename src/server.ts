@@ -35,12 +35,12 @@ export async function startServer(): Promise<void> {
     const transport = new StdioServerTransport();
     await server.connect(transport);
   } else {
-    console.log(`Initializing Figma MCP Server in HTTP mode on port ${config.port}...`);
-    await startHttpServer(config.port, server);
+    console.log(`Initializing Figma MCP Server in HTTP mode on ${config.host}:${config.port}...`);
+    await startHttpServer(config.host, config.port, server);
   }
 }
 
-export async function startHttpServer(port: number, mcpServer: McpServer): Promise<void> {
+export async function startHttpServer(host: string, port: number, mcpServer: McpServer): Promise<void> {
   const app = express();
 
   // Parse JSON requests for the Streamable HTTP endpoint only, will break SSE endpoint
@@ -176,11 +176,11 @@ export async function startHttpServer(port: number, mcpServer: McpServer): Promi
     }
   });
 
-  httpServer = app.listen(port, "127.0.0.1", () => {
+  httpServer = app.listen(port, host, () => {
     Logger.log(`HTTP server listening on port ${port}`);
-    Logger.log(`SSE endpoint available at http://localhost:${port}/sse`);
-    Logger.log(`Message endpoint available at http://localhost:${port}/messages`);
-    Logger.log(`StreamableHTTP endpoint available at http://localhost:${port}/mcp`);
+    Logger.log(`SSE endpoint available at http://${host}:${port}/sse`);
+    Logger.log(`Message endpoint available at http://${host}:${port}/messages`);
+    Logger.log(`StreamableHTTP endpoint available at http://${host}:${port}/mcp`);
   });
 
   process.on("SIGINT", async () => {
