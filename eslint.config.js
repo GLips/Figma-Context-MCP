@@ -24,7 +24,7 @@ export default [
     rules: {
       ...tseslint.configs.recommended.rules,
       "no-undef": "off", // TypeScript handles this; no-undef doesn't understand TS types like NodeJS
-      "@typescript-eslint/explicit-function-return-type": "warn",
+      "@typescript-eslint/explicit-function-return-type": "off",
       "@typescript-eslint/no-unused-vars": ["error", { argsIgnorePattern: "^_" }],
       "@typescript-eslint/no-explicit-any": "warn",
     },

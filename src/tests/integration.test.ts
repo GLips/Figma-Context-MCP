@@ -49,7 +49,7 @@ describeOrSkip("Figma MCP Server Tests", () => {
 
   describe("Get Figma Data", () => {
     it("should be able to get Figma file data", async () => {
-      const args: any = {
+      const args = {
         fileKey: figmaFileKey,
       };
 
