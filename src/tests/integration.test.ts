@@ -8,7 +8,9 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 config();
 
-describe("Figma MCP Server Tests", () => {
+const describeOrSkip = process.env.RUN_FIGMA_INTEGRATION === "1" ? describe : describe.skip;
+
+describeOrSkip("Figma MCP Server Tests", () => {
   let server: McpServer;
   let client: Client;
   let figmaApiKey: string;
@@ -16,14 +18,7 @@ describe("Figma MCP Server Tests", () => {
 
   beforeAll(async () => {
     figmaApiKey = process.env.FIGMA_API_KEY || "";
-    if (!figmaApiKey) {
-      throw new Error("FIGMA_API_KEY is not set in environment variables");
-    }
-
     figmaFileKey = process.env.FIGMA_FILE_KEY || "";
-    if (!figmaFileKey) {
-      throw new Error("FIGMA_FILE_KEY is not set in environment variables");
-    }
 
     server = createServer({
       figmaApiKey,

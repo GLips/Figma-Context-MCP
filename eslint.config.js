@@ -23,6 +23,7 @@ export default [
     },
     rules: {
       ...tseslint.configs.recommended.rules,
+      "no-undef": "off", // TypeScript handles this; no-undef doesn't understand TS types like NodeJS
       "@typescript-eslint/explicit-function-return-type": "warn",
       "@typescript-eslint/no-unused-vars": ["error", { argsIgnorePattern: "^_" }],
       "@typescript-eslint/no-explicit-any": "warn",
@@ -31,6 +32,14 @@ export default [
   {
     files: ["**/*.ts", "**/*.tsx"],
     rules: prettier.rules,
+  },
+  {
+    files: ["**/*.test.ts", "**/*.test.tsx", "**/tests/**/*.ts"],
+    languageOptions: {
+      globals: {
+        ...globals.jest,
+      },
+    },
   },
   {
     ignores: ["dist/**", "node_modules/**"],
