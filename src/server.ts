@@ -199,7 +199,10 @@ export async function startHttpServer(
       Logger.log(`StreamableHTTP endpoint available at http://${host}:${port}/mcp`);
       resolve(server);
     });
-    server.on("error", reject);
+    server.once("error", (err) => {
+      httpServer = null;
+      reject(err);
+    });
     httpServer = server;
   });
 }

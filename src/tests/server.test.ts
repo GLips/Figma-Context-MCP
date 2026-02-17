@@ -22,7 +22,11 @@ describe("StreamableHTTP transport", () => {
   }, 15_000);
 
   afterAll(async () => {
-    await stopHttpServer();
+    try {
+      await stopHttpServer();
+    } catch {
+      // Server may not have started
+    }
   });
 
   it("connects, initializes, and lists tools", async () => {
@@ -52,7 +56,11 @@ describe("SSE transport", () => {
   }, 15_000);
 
   afterAll(async () => {
-    await stopHttpServer();
+    try {
+      await stopHttpServer();
+    } catch {
+      // Server may not have started
+    }
   });
 
   it("connects, initializes, and lists tools", async () => {
@@ -80,7 +88,11 @@ describe("Negative protocol tests", () => {
   }, 15_000);
 
   afterAll(async () => {
-    await stopHttpServer();
+    try {
+      await stopHttpServer();
+    } catch {
+      // Server may not have started
+    }
   });
 
   it("POST /mcp without session ID and non-initialize body returns 400", async () => {
@@ -136,41 +148,49 @@ describe("Multi-client test", () => {
   }, 15_000);
 
   afterAll(async () => {
-    await stopHttpServer();
+    try {
+      await stopHttpServer();
+    } catch {
+      // Server may not have started
+    }
   });
 
   // Known issue: mcpServer.connect() is called per-transport, but the SDK's
   // Protocol.connect() replaces the active transport, breaking routing for
   // earlier connections. See server.ts:77 TODO comment. This test documents
   // the expected behavior after the architecture refactor fixes this.
-  it.skip("StreamableHTTP and SSE clients work concurrently", async () => {
-    const streamableClient = new Client({ name: "test-streamable", version: "1.0.0" });
-    const streamableTransport = new StreamableHTTPClientTransport(
-      new URL(`http://127.0.0.1:${port}/mcp`),
-    );
+  it.failing(
+    "StreamableHTTP and SSE clients work concurrently",
+    async () => {
+      const streamableClient = new Client({ name: "test-streamable", version: "1.0.0" });
+      const streamableTransport = new StreamableHTTPClientTransport(
+        new URL(`http://127.0.0.1:${port}/mcp`),
+      );
 
-    const sseClient = new Client({ name: "test-sse", version: "1.0.0" });
-    const sseTransport = new SSEClientTransport(new URL(`http://127.0.0.1:${port}/sse`));
+      const sseClient = new Client({ name: "test-sse", version: "1.0.0" });
+      const sseTransport = new SSEClientTransport(new URL(`http://127.0.0.1:${port}/sse`));
 
-    // Connect both concurrently
-    await Promise.all([
-      streamableClient.connect(streamableTransport),
-      sseClient.connect(sseTransport),
-    ]);
+      // Connect both concurrently
+      await Promise.all([
+        streamableClient.connect(streamableTransport),
+        sseClient.connect(sseTransport),
+      ]);
 
-    // Both should be able to list tools
-    const [streamableTools, sseTools] = await Promise.all([
-      streamableClient.listTools(),
-      sseClient.listTools(),
-    ]);
+      // Both should be able to list tools
+      const [streamableTools, sseTools] = await Promise.all([
+        streamableClient.listTools(),
+        sseClient.listTools(),
+      ]);
 
-    expect(streamableTools.tools.map((t) => t.name)).toContain("get_figma_data");
-    expect(sseTools.tools.map((t) => t.name)).toContain("get_figma_data");
+      expect(streamableTools.tools.map((t) => t.name)).toContain("get_figma_data");
+      expect(sseTools.tools.map((t) => t.name)).toContain("get_figma_data");
 
-    // Clean up
-    await streamableTransport.terminateSession();
-    await Promise.all([streamableClient.close(), sseClient.close()]);
-  }, 15_000);
+      // Clean up
+      await streamableTransport.terminateSession();
+      await Promise.all([streamableClient.close(), sseClient.close()]);
+    },
+    15_000,
+  );
 });
 
 describe("Server lifecycle", () => {
@@ -190,7 +210,7 @@ describe("Server lifecycle", () => {
 
     // Race stopHttpServer against a deadline
     const timeout = new Promise<"timeout">((resolve) =>
-      setTimeout(() => resolve("timeout"), 5_000),
+      setTimeout(() => resolve("timeout"), 5_000).unref(),
     );
     const result = await Promise.race([stopHttpServer().then(() => "stopped" as const), timeout]);
 
