@@ -34,6 +34,7 @@ interface CliArgs {
   host?: string;
   json?: boolean;
   "skip-image-downloads"?: boolean;
+  stdio?: boolean;
 }
 
 export function getServerConfig(isStdioMode: boolean): ServerConfig {
@@ -68,6 +69,11 @@ export function getServerConfig(isStdioMode: boolean): ServerConfig {
       "skip-image-downloads": {
         type: "boolean",
         description: "Do not register the download_figma_images tool (skip image downloads)",
+        default: false,
+      },
+      stdio: {
+        type: "boolean",
+        description: "Run in stdio mode for CLI-based MCP clients (e.g., Cursor, Claude Desktop)",
         default: false,
       },
     })
