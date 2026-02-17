@@ -130,6 +130,7 @@ function getDirection(
         case "column":
           return "vertical";
       }
+      break;
     case "counter":
       switch (mode) {
         case "row":

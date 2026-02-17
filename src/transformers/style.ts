@@ -494,7 +494,7 @@ function mapLinearGradient(
   gradientStops: { position: number; color: RGBA }[],
   start: Vector,
   end: Vector,
-  elementBounds: { width: number; height: number },
+  _elementBounds: { width: number; height: number },
 ): { stops: string; cssGeometry: string } {
   // Calculate the gradient line in element space
   const dx = end.x - start.x;
@@ -522,7 +522,6 @@ function mapLinearGradient(
     // The gradient line extended to fill the element
     const fullLineStart = Math.min(extendedIntersections[0], extendedIntersections[1]);
     const fullLineEnd = Math.max(extendedIntersections[0], extendedIntersections[1]);
-    const fullLineLength = fullLineEnd - fullLineStart;
 
     // Map gradient stops from the Figma line segment to the full CSS line
     const mappedStops = gradientStops.map(({ position, color }) => {
@@ -618,59 +617,14 @@ function findExtendedLineIntersections(start: Vector, end: Vector): number[] {
 }
 
 /**
- * Find where a line intersects with the unit square (0,0) to (1,1)
- */
-function findLineIntersections(start: Vector, end: Vector): number[] {
-  const dx = end.x - start.x;
-  const dy = end.y - start.y;
-  const intersections: number[] = [];
-
-  // Check intersection with each edge of the unit square
-  const edges = [
-    { x: 0, y: 0, dx: 1, dy: 0 }, // top edge
-    { x: 1, y: 0, dx: 0, dy: 1 }, // right edge
-    { x: 1, y: 1, dx: -1, dy: 0 }, // bottom edge
-    { x: 0, y: 1, dx: 0, dy: -1 }, // left edge
-  ];
-
-  for (const edge of edges) {
-    const t = lineIntersection(start, { x: dx, y: dy }, edge, { x: edge.dx, y: edge.dy });
-    if (t !== null && t >= 0 && t <= 1) {
-      intersections.push(t);
-    }
-  }
-
-  return intersections.sort((a, b) => a - b);
-}
-
-/**
- * Calculate line intersection parameter
- */
-function lineIntersection(
-  p1: Vector,
-  d1: Vector,
-  p2: { x: number; y: number },
-  d2: Vector,
-): number | null {
-  const denominator = d1.x * d2.y - d1.y * d2.x;
-  if (Math.abs(denominator) < 1e-10) return null; // Lines are parallel
-
-  const dx = p2.x - p1.x;
-  const dy = p2.y - p1.y;
-  const t = (dx * d2.y - dy * d2.x) / denominator;
-
-  return t;
-}
-
-/**
  * Map radial gradient from Figma handles to CSS
  */
 function mapRadialGradient(
   gradientStops: { position: number; color: RGBA }[],
   center: Vector,
-  edge: Vector,
-  widthHandle: Vector,
-  elementBounds: { width: number; height: number },
+  _edge: Vector,
+  _widthHandle: Vector,
+  _elementBounds: { width: number; height: number },
 ): { stops: string; cssGeometry: string } {
   const centerX = Math.round(center.x * 100);
   const centerY = Math.round(center.y * 100);
@@ -695,8 +649,8 @@ function mapAngularGradient(
   gradientStops: { position: number; color: RGBA }[],
   center: Vector,
   angleHandle: Vector,
-  widthHandle: Vector,
-  elementBounds: { width: number; height: number },
+  _widthHandle: Vector,
+  _elementBounds: { width: number; height: number },
 ): { stops: string; cssGeometry: string } {
   const centerX = Math.round(center.x * 100);
   const centerY = Math.round(center.y * 100);
@@ -723,9 +677,9 @@ function mapAngularGradient(
 function mapDiamondGradient(
   gradientStops: { position: number; color: RGBA }[],
   center: Vector,
-  edge: Vector,
-  widthHandle: Vector,
-  elementBounds: { width: number; height: number },
+  _edge: Vector,
+  _widthHandle: Vector,
+  _elementBounds: { width: number; height: number },
 ): { stops: string; cssGeometry: string } {
   const centerX = Math.round(center.x * 100);
   const centerY = Math.round(center.y * 100);
