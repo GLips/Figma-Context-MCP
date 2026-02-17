@@ -159,7 +159,7 @@ describe("Multi-client test", () => {
   // Protocol.connect() replaces the active transport, breaking routing for
   // earlier connections. See server.ts:77 TODO comment. This test documents
   // the expected behavior after the architecture refactor fixes this.
-  it.failing(
+  it.fails(
     "StreamableHTTP and SSE clients work concurrently",
     async () => {
       const streamableClient = new Client({ name: "test-streamable", version: "1.0.0" });
