@@ -24,17 +24,7 @@
     "lint": "eslint .",
     "format": "prettier --write \"src/**/*.ts\"",
     "inspect": "pnpx @modelcontextprotocol/inspector",
-    "prepack": "pnpm build",
-    "changeset": "changeset add",
-    "version": "changeset version && git add -A",
-    "beta:start": "changeset pre enter beta",
-    "beta:end": "changeset pre exit",
-    "beta:version": "changeset version && pnpm install --lockfile-only",
-    "beta:publish": "changeset publish",
-    "prerelease": "pnpm build",
-    "release": "changeset publish && git push --follow-tags",
-    "pub:release": "pnpm build && npm publish",
-    "pub:release:beta": "pnpm build && npm publish --tag beta"
+    "prepack": "pnpm build"
   },
   "engines": {
     "node": ">=18.0.0"
@@ -66,8 +56,6 @@
     "zod": "^3.24.2"
   },
   "devDependencies": {
-    "@changesets/changelog-github": "^0.5.1",
-    "@changesets/cli": "^2.29.2",
     "@eslint/js": "^9.33.0",
     "@types/express": "^5.0.0",
     "@types/js-yaml": "^4.0.9",

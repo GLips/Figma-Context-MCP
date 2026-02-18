@@ -148,9 +148,14 @@ src/
 
 ### Commit Messages
 
-- Use clear, descriptive commit messages
-- Follow conventional commit format when possible
-- Reference issue numbers when applicable
+This project uses [Conventional Commits](https://www.conventionalcommits.org/) to automate versioning and changelog generation. The maintainer applies the correct prefix when squash-merging your PR — you don't need to worry about this in your individual commits.
+
+For reference, these prefixes determine version bumps:
+
+- `fix: <description>` — patch release (0.6.4 → 0.6.5)
+- `feat: <description>` — minor release (0.6.4 → 0.7.0)
+- `feat!: <description>` or `BREAKING CHANGE:` footer — major release (0.6.4 → 1.0.0)
+- `chore:`, `docs:`, `test:`, `refactor:` — no release triggered
 
 ### What We're Looking For
 

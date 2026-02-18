@@ -1,6 +1,3 @@
-# Originally inspired by create-t3-app
-# https://github.com/t3-oss/create-t3-app/blob/main/.github/workflows/release.yml
-
 name: Release
 
 on:
@@ -8,32 +5,49 @@ on:
     branches:
       - main
 
+permissions:
+  contents: write
+  pull-requests: write
+  id-token: write # Required for npm OIDC trusted publishing
+
 jobs:
-  release:
+  release-please:
     if: ${{ github.repository_owner == 'GLips' }}
-    name: Create a PR for release workflow
     runs-on: ubuntu-latest
     steps:
+      - uses: googleapis/release-please-action@v4
+        id: release
+        with:
+          release-type: node
+
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - uses: ./.github/actions/setup
+        if: ${{ steps.release.outputs.release_created }}
 
-      - name: Check for errors
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.10.0
+        if: ${{ steps.release.outputs.release_created }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: "https://registry.npmjs.org"
+        if: ${{ steps.release.outputs.release_created }}
+
+      - name: Install dependencies
+        run: pnpm install
+        if: ${{ steps.release.outputs.release_created }}
+
+      - name: Type check
         run: pnpm type-check
+        if: ${{ steps.release.outputs.release_created }}
 
-      - name: Build the package
+      - name: Build
         run: pnpm build
+        if: ${{ steps.release.outputs.release_created }}
 
-      - name: Create Version PR or Publish to NPM
-        id: changesets
-        uses: changesets/action@v1
-        with:
-          commit: "chore(release): version packages"
-          title: "chore(release): version packages"
-          version: node .github/changeset-version.js
-          publish: npx changeset publish
+      - name: Publish to npm
+        run: pnpm publish --no-git-checks
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          NPM_TOKEN: ${{ secrets.NPM_ACCESS_TOKEN }}
-          NODE_ENV: "production"
+          NODE_ENV: production
+        if: ${{ steps.release.outputs.release_created }}
