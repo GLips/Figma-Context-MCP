@@ -522,7 +522,6 @@ function mapLinearGradient(
     // The gradient line extended to fill the element
     const fullLineStart = Math.min(extendedIntersections[0], extendedIntersections[1]);
     const fullLineEnd = Math.max(extendedIntersections[0], extendedIntersections[1]);
-
     // Map gradient stops from the Figma line segment to the full CSS line
     const mappedStops = gradientStops.map(({ position, color }) => {
       const cssColor = formatRGBAColor(color, 1);

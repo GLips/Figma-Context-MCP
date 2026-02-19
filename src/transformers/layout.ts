@@ -134,9 +134,9 @@ function getDirection(
     case "counter":
       switch (mode) {
         case "row":
-          return "horizontal";
-        case "column":
           return "vertical";
+        case "column":
+          return "horizontal";
       }
   }
 }
