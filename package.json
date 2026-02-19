@@ -30,6 +30,13 @@
     "node": ">=18.0.0"
   },
   "packageManager": "pnpm@10.10.0",
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild",
+      "lefthook",
+      "sharp"
+    ]
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/GLips/Figma-Context-MCP.git"

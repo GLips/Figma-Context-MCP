@@ -1,4 +1,0 @@
-onlyBuiltDependencies:
-  - esbuild
-  - lefthook
-  - sharp
