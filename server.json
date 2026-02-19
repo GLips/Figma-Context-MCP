@@ -1,40 +1,33 @@
 {
-  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-07-09/server.schema.json",
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.GLips/Figma-Context-MCP",
   "description": "Give your coding agent access to your Figma data. Implement designs in any framework in one-shot.",
-  "status": "active",
   "repository": {
     "url": "https://github.com/GLips/Figma-Context-MCP",
     "source": "github"
   },
-  "version": "0.5.2",
+  "version": "0.6.4",
   "packages": [
     {
-      "registry_type": "npm",
-      "registry_base_url": "https://registry.npmjs.org",
+      "registryType": "npm",
       "identifier": "figma-developer-mcp",
-      "version": "0.5.2",
+      "version": "0.6.4",
       "transport": {
         "type": "stdio"
       },
-      "package_arguments": [
+      "packageArguments": [
         {
           "type": "positional",
           "value": "--stdio"
         }
       ],
-      "environment_variables": [
+      "environmentVariables": [
         {
           "description": "Your Figma Personal Access Token, learn more here: https://www.figma.com/developers/api#access-tokens",
-          "is_required": true,
+          "isRequired": true,
           "format": "string",
-          "is_secret": true,
+          "isSecret": true,
           "name": "FIGMA_API_KEY"
-        },
-        {
-          "name": "NODE_ENV",
-          "description": "Start the server in stdio mode, keep as CLI",
-          "default": "cli"
         }
       ]
     }
