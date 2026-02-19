@@ -37,10 +37,25 @@ export async function startServer(): Promise<void> {
   } else {
     console.log(`Initializing Figma MCP Server in HTTP mode on ${config.host}:${config.port}...`);
     await startHttpServer(config.host, config.port, server);
+
+    process.on("SIGINT", async () => {
+      Logger.log("Shutting down server...");
+      await stopHttpServer();
+      Logger.log("Server shutdown complete");
+      process.exit(0);
+    });
   }
 }
 
-export async function startHttpServer(host: string, port: number, mcpServer: McpServer): Promise<void> {
+export async function startHttpServer(
+  host: string,
+  port: number,
+  mcpServer: McpServer,
+): Promise<Server> {
+  if (httpServer) {
+    throw new Error("HTTP server is already running");
+  }
+
   const app = express();
 
   // Parse JSON requests for the Streamable HTTP endpoint only, will break SSE endpoint
@@ -176,22 +191,19 @@ export async function startHttpServer(host: string, port: number, mcpServer: Mcp
     }
   });
 
-  httpServer = app.listen(port, host, () => {
-    Logger.log(`HTTP server listening on port ${port}`);
-    Logger.log(`SSE endpoint available at http://${host}:${port}/sse`);
-    Logger.log(`Message endpoint available at http://${host}:${port}/messages`);
-    Logger.log(`StreamableHTTP endpoint available at http://${host}:${port}/mcp`);
-  });
-
-  process.on("SIGINT", async () => {
-    Logger.log("Shutting down server...");
-
-    // Close all active transports to properly clean up resources
-    await closeTransports(transports.sse);
-    await closeTransports(transports.streamable);
-
-    Logger.log("Server shutdown complete");
-    process.exit(0);
+  return new Promise((resolve, reject) => {
+    const server = app.listen(port, host, () => {
+      Logger.log(`HTTP server listening on port ${port}`);
+      Logger.log(`SSE endpoint available at http://${host}:${port}/sse`);
+      Logger.log(`Message endpoint available at http://${host}:${port}/messages`);
+      Logger.log(`StreamableHTTP endpoint available at http://${host}:${port}/mcp`);
+      resolve(server);
+    });
+    server.once("error", (err) => {
+      httpServer = null;
+      reject(err);
+    });
+    httpServer = server;
   });
 }
 
@@ -213,19 +225,16 @@ export async function stopHttpServer(): Promise<void> {
     throw new Error("HTTP server is not running");
   }
 
+  // Close all transports FIRST so connections drain
+  await closeTransports(transports.sse);
+  await closeTransports(transports.streamable);
+
+  // Then close the HTTP server
   return new Promise((resolve, reject) => {
-    httpServer!.close((err: Error | undefined) => {
-      if (err) {
-        reject(err);
-        return;
-      }
+    httpServer!.close((err) => {
       httpServer = null;
-      const closing = Object.values(transports.sse).map((transport) => {
-        return transport.close();
-      });
-      Promise.all(closing).then(() => {
-        resolve();
-      });
+      if (err) reject(err);
+      else resolve();
     });
   });
 }

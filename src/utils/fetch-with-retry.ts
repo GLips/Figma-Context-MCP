@@ -24,9 +24,10 @@ export async function fetchWithRetry<T extends { status?: number }>(
       throw new Error(`Fetch failed with status ${response.status}: ${response.statusText}`);
     }
     return (await response.json()) as T;
-  } catch (fetchError: any) {
+  } catch (fetchError: unknown) {
+    const fetchMessage = fetchError instanceof Error ? fetchError.message : String(fetchError);
     Logger.log(
-      `[fetchWithRetry] Initial fetch failed for ${url}: ${fetchError.message}. Likely a corporate proxy or SSL issue. Attempting curl fallback.`,
+      `[fetchWithRetry] Initial fetch failed for ${url}: ${fetchMessage}. Likely a corporate proxy or SSL issue. Attempting curl fallback.`,
     );
 
     const curlHeaders = formatHeadersForCurl(options.headers);
@@ -70,8 +71,9 @@ export async function fetchWithRetry<T extends { status?: number }>(
       }
 
       return result;
-    } catch (curlError: any) {
-      Logger.error(`[fetchWithRetry] Curl fallback also failed for ${url}: ${curlError.message}`);
+    } catch (curlError: unknown) {
+      const curlMessage = curlError instanceof Error ? curlError.message : String(curlError);
+      Logger.error(`[fetchWithRetry] Curl fallback also failed for ${url}: ${curlMessage}`);
       // Re-throw the original fetch error to give context about the initial failure
       // or throw a new error that wraps both, depending on desired error reporting.
       // For now, re-throwing the original as per the user example's spirit.

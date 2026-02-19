@@ -4,8 +4,8 @@ import type {
   GetFileResponse,
   GetFileNodesResponse,
   GetImageFillsResponse,
+  Transform,
 } from "@figma/rest-api-spec";
-import { downloadFigmaImage } from "~/utils/common.js";
 import { downloadAndProcessImage, type ImageProcessingResult } from "~/utils/image-processing.js";
 import { Logger, writeLogs } from "~/utils/logger.js";
 import { fetchWithRetry } from "~/utils/fetch-with-retry.js";
@@ -148,7 +148,7 @@ export class FigmaService {
       nodeId?: string;
       fileName: string;
       needsCropping?: boolean;
-      cropTransform?: any;
+      cropTransform?: Transform;
       requiresImageDimensions?: boolean;
     }>,
     options: { pngScale?: number; svgOptions?: SvgOptions } = {},
