@@ -34,6 +34,10 @@ pnpm test -- --testNamePattern="pattern"
 
 Releases are automated via [release-please](https://github.com/googleapis/release-please). On merge to `main`, release-please reads conventional commit prefixes (`fix:`, `feat:`, `feat!:`) and maintains a release PR. Merging the release PR publishes to npm via OIDC trusted publishing.
 
+### PR Title Convention
+
+PRs are squash-merged, so the PR title becomes the commit message that release-please parses. Always use [Conventional Commit](https://www.conventionalcommits.org/) prefixes in PR titles.
+
 ## Architecture
 
 ### Entry Points
