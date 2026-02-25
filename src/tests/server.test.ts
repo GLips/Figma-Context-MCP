@@ -39,6 +39,7 @@ describe("StreamableHTTP transport", () => {
     const toolNames = tools.map((t) => t.name);
 
     expect(toolNames).toContain("get_figma_data");
+    expect(toolNames).toContain("get_node_screenshot");
     expect(toolNames).toContain("download_figma_images");
 
     await transport.terminateSession();
@@ -73,6 +74,7 @@ describe("SSE transport", () => {
     const toolNames = tools.map((t) => t.name);
 
     expect(toolNames).toContain("get_figma_data");
+    expect(toolNames).toContain("get_node_screenshot");
 
     await client.close();
   }, 15_000);
@@ -183,7 +185,9 @@ describe("Multi-client test", () => {
       ]);
 
       expect(streamableTools.tools.map((t) => t.name)).toContain("get_figma_data");
+      expect(streamableTools.tools.map((t) => t.name)).toContain("get_node_screenshot");
       expect(sseTools.tools.map((t) => t.name)).toContain("get_figma_data");
+      expect(sseTools.tools.map((t) => t.name)).toContain("get_node_screenshot");
 
       // Clean up
       await streamableTransport.terminateSession();

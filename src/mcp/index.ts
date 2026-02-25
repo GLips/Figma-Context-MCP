@@ -4,8 +4,10 @@ import { Logger } from "../utils/logger.js";
 import {
   downloadFigmaImagesTool,
   getFigmaDataTool,
+  getNodeScreenshotTool,
   type DownloadImagesParams,
   type GetFigmaDataParams,
+  type GetNodeScreenshotParams,
 } from "./tools/index.js";
 
 const serverInfo = {
@@ -47,6 +49,14 @@ function registerTools(
     getFigmaDataTool.parameters,
     (params: GetFigmaDataParams) =>
       getFigmaDataTool.handler(params, figmaService, options.outputFormat),
+  );
+
+  // Register get_node_screenshot tool
+  server.tool(
+    getNodeScreenshotTool.name,
+    getNodeScreenshotTool.description,
+    getNodeScreenshotTool.parameters,
+    (params: GetNodeScreenshotParams) => getNodeScreenshotTool.handler(params, figmaService),
   );
 
   // Register download_figma_images tool if CLI flag or env var is not set

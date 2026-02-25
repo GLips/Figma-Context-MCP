@@ -48,6 +48,14 @@ This MCP server is specifically designed for use with Cursor. Before responding 
 
 Reducing the amount of context provided to the model helps make the AI more accurate and the responses more relevant.
 
+## Built-in MCP Tools
+
+The server currently exposes these tools:
+
+- `get_figma_data` — Fetches and simplifies Figma file or node data for AI consumption.
+- `download_figma_images` — Downloads node renders and image fills as local PNG/SVG assets.
+- `get_node_screenshot` — Returns a single node screenshot as base64-encoded PNG image content.
+
 ## Getting Started
 
 Many code editors and other AI clients use a configuration file to manage MCP servers.

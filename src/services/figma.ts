@@ -130,6 +130,43 @@ export class FigmaService {
   }
 
   /**
+   * Gets screenshot for a node and returns as base64 encoded PNG image data.
+   *
+   * @param fileKey - The Figma file key
+   * @param nodeId - The node ID to render
+   * @returns Base64 encoded PNG image data, or null if screenshot could not be generated
+   */
+  async getNodeScreenshot(fileKey: string, nodeId: string): Promise<string | null> {
+    const scale = 0.9; //reduce the size of the image
+
+    Logger.log(`Getting screenshot for node: ${nodeId} (scale: ${scale})`);
+
+    const endpoint = `/images/${fileKey}?ids=${nodeId}&format=png&scale=${scale}`;
+    const response = await this.request<GetImagesResponse>(endpoint);
+    const images = this.filterValidImages(response.images);
+    const imageUrl = images[nodeId];
+
+    if (!imageUrl) {
+      Logger.log(`No image URL returned for node ${nodeId}`);
+      return null;
+    }
+
+    Logger.log(`Downloading image from: ${imageUrl}`);
+    const imageResponse = await fetch(imageUrl);
+
+    if (!imageResponse.ok) {
+      Logger.error(`Failed to download image: ${imageResponse.statusText}`);
+      return null;
+    }
+
+    const arrayBuffer = await imageResponse.arrayBuffer();
+    const base64 = Buffer.from(arrayBuffer).toString("base64");
+
+    Logger.log(`Successfully downloaded and encoded image (${base64.length} chars)`);
+    return base64;
+  }
+
+  /**
    * Download images method with post-processing support for cropping and returning image dimensions.
    *
    * Supports:
