@@ -107,6 +107,6 @@ export const getFigmaDataTool = {
   name: "get_figma_data",
   description:
     "Get comprehensive Figma file data including layout, content, visuals, and component information",
-  parameters,
+  parametersSchema,
   handler: getFigmaData,
 } as const;

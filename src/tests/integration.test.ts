@@ -26,17 +26,10 @@ describeOrSkip("Figma MCP Server Tests", () => {
       useOAuth: false,
     });
 
-    client = new Client(
-      {
-        name: "figma-test-client",
-        version: "1.0.0",
-      },
-      {
-        capabilities: {
-          tools: {},
-        },
-      },
-    );
+    client = new Client({
+      name: "figma-test-client",
+      version: "1.0.0",
+    });
 
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
 
@@ -64,7 +57,8 @@ describeOrSkip("Figma MCP Server Tests", () => {
         CallToolResultSchema,
       );
 
-      const content = result.content[0].text as string;
+      const firstContent = result.content[0];
+      const content = firstContent.type === "text" ? firstContent.text : "";
       const parsed = yaml.load(content);
 
       expect(parsed).toBeDefined();
