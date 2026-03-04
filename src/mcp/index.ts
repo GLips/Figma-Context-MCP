@@ -11,6 +11,8 @@ import {
 const serverInfo = {
   name: "Figma MCP Server",
   version: process.env.NPM_PACKAGE_VERSION ?? "unknown",
+  description:
+    "Gives AI coding agents access to Figma design data, providing layout, styling, and content information for implementing designs.",
 };
 
 type CreateServerOptions = {
@@ -40,21 +42,27 @@ function registerTools(
     skipImageDownloads: boolean;
   },
 ): void {
-  // Register get_figma_data tool
-  server.tool(
+  server.registerTool(
     getFigmaDataTool.name,
-    getFigmaDataTool.description,
-    getFigmaDataTool.parameters,
+    {
+      title: "Get Figma Data",
+      description: getFigmaDataTool.description,
+      inputSchema: getFigmaDataTool.parametersSchema,
+      annotations: { readOnlyHint: true },
+    },
     (params: GetFigmaDataParams) =>
       getFigmaDataTool.handler(params, figmaService, options.outputFormat),
   );
 
-  // Register download_figma_images tool if CLI flag or env var is not set
   if (!options.skipImageDownloads) {
-    server.tool(
+    server.registerTool(
       downloadFigmaImagesTool.name,
-      downloadFigmaImagesTool.description,
-      downloadFigmaImagesTool.parameters,
+      {
+        title: "Download Figma Images",
+        description: downloadFigmaImagesTool.description,
+        inputSchema: downloadFigmaImagesTool.parametersSchema,
+        annotations: { openWorldHint: true },
+      },
       (params: DownloadImagesParams) => downloadFigmaImagesTool.handler(params, figmaService),
     );
   }

@@ -89,8 +89,20 @@ export async function startHttpServer(
           delete transports.streamable[transport.sessionId];
         }
       };
-      // TODO? There semes to be an issue—at least in Cursor—where after a connection is made to an HTTP Streamable endpoint, SSE connections to the same Express server fail with "Received a response for an unknown message ID"
-      await mcpServer.connect(transport);
+      // SDK 1.21+ throws if already connected to another transport. A single
+      // McpServer can only serve one transport at a time — this is a known
+      // architectural limitation (see multi-client test in server.test.ts).
+      try {
+        await mcpServer.connect(transport);
+      } catch (error) {
+        Logger.error("Failed to connect Streamable HTTP transport:", error);
+        res.status(500).json({
+          jsonrpc: "2.0",
+          error: { code: -32000, message: "Server transport conflict" },
+          id: null,
+        });
+        return;
+      }
     } else {
       // Invalid request
       Logger.log("Invalid request:", req.body);
@@ -174,7 +186,18 @@ export async function startHttpServer(
       delete transports.sse[transport.sessionId];
     });
 
-    await mcpServer.connect(transport);
+    // SDK 1.21+ throws if already connected to another transport (e.g. a
+    // Streamable HTTP session). This is a known architectural limitation —
+    // a single McpServer instance can only serve one transport at a time.
+    try {
+      await mcpServer.connect(transport);
+    } catch (error) {
+      delete transports.sse[transport.sessionId];
+      Logger.error("Failed to connect SSE transport:", error);
+      if (!res.headersSent) {
+        res.status(500).send("Failed to establish SSE connection");
+      }
+    }
   });
 
   app.post("/messages", async (req, res) => {

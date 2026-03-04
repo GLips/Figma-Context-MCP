@@ -155,10 +155,10 @@ describe("Multi-client test", () => {
     }
   });
 
-  // Known issue: mcpServer.connect() is called per-transport, but the SDK's
-  // Protocol.connect() replaces the active transport, breaking routing for
-  // earlier connections. See server.ts:77 TODO comment. This test documents
-  // the expected behavior after the architecture refactor fixes this.
+  // Known issue: a single McpServer instance can only serve one transport at a
+  // time — SDK 1.21+ throws on double-connect instead of silently replacing
+  // the active transport. The error is caught in server.ts but the second
+  // client never gets a working connection.
   it.fails(
     "StreamableHTTP and SSE clients work concurrently",
     async () => {
