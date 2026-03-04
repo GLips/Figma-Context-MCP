@@ -20,18 +20,15 @@ const transports = {
  * Start the MCP server in either stdio or HTTP mode.
  */
 export async function startServer(): Promise<void> {
-  // Check if we're running in stdio mode (e.g., via CLI)
-  const isStdioMode = process.env.NODE_ENV === "cli" || process.argv.includes("--stdio");
-
-  const config = getServerConfig(isStdioMode);
+  const config = getServerConfig();
 
   const server = createServer(config.auth, {
-    isHTTP: !isStdioMode,
+    isHTTP: !config.isStdioMode,
     outputFormat: config.outputFormat,
     skipImageDownloads: config.skipImageDownloads,
   });
 
-  if (isStdioMode) {
+  if (config.isStdioMode) {
     const transport = new StdioServerTransport();
     await server.connect(transport);
   } else {
