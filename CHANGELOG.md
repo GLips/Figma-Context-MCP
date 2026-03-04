@@ -1,5 +1,12 @@
 # figma-developer-mcp
 
+## [0.6.5](https://github.com/GLips/Figma-Context-MCP/compare/v0.6.4...v0.6.5) (2026-03-04)
+
+
+### Bug Fixes
+
+* upgrade MCP SDK to 1.27.1 and modernize tool registration ([#282](https://github.com/GLips/Figma-Context-MCP/issues/282)) ([4153e5f](https://github.com/GLips/Figma-Context-MCP/commit/4153e5f857aa708ee9ee10156e553c1289f03cf7))
+
 ## 0.6.4
 
 ### Patch Changes
