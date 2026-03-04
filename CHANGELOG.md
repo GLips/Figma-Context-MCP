@@ -1,5 +1,12 @@
 # figma-developer-mcp
 
+## [0.6.6](https://github.com/GLips/Figma-Context-MCP/compare/v0.6.5...v0.6.6) (2026-03-04)
+
+
+### Bug Fixes
+
+* use Node 24 in release workflow for npm OIDC support ([11ba7c6](https://github.com/GLips/Figma-Context-MCP/commit/11ba7c6a2e22910c483592ba7cdc1966fcdc9166))
+
 ## [0.6.5](https://github.com/GLips/Figma-Context-MCP/compare/v0.6.4...v0.6.5) (2026-03-04)
 
 
