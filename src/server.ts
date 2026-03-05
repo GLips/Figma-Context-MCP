@@ -58,8 +58,9 @@ export async function startHttpServer(
 
   const app = express();
 
-  // Parse JSON requests for the Streamable HTTP endpoint only, will break SSE endpoint
-  app.use("/mcp", express.json());
+  // Parse JSON requests for the Streamable HTTP endpoint only (this will break SSE endpoints),
+  // and enforce an explicit body size limit to reduce DoS risk.
+  app.use("/mcp", express.json({ limit: "1mb" }));
 
   // Modern Streamable HTTP endpoint
   app.post("/mcp", async (req, res) => {
