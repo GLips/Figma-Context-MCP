@@ -157,7 +157,7 @@ export class FigmaService {
 
     const sanitizedPath = path.normalize(localPath).replace(/^(\.\.(\/|\\|$))+/, "");
     const resolvedPath = path.resolve(sanitizedPath);
-    if (!resolvedPath.startsWith(path.resolve(process.cwd()))) {
+    if ((resolvedPath != path.resolve(process.cwd())) && !resolvedPath.startsWith(path.resolve(process.cwd()) + path.sep)) {
       throw new Error("Invalid path specified. Directory traversal is not allowed.");
     }
 
