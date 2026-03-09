@@ -3,6 +3,9 @@ import { FigmaService } from "../../services/figma.js";
 import { Logger } from "../../utils/logger.js";
 
 const parameters = {
+  figma_api_key: z
+    .string()
+    .describe("Your Figma Personal Access Token for authenticating with the Figma API"),
   fileKey: z
     .string()
     .regex(/^[a-zA-Z0-9]+$/, "File key must be alphanumeric")
@@ -71,9 +74,14 @@ const parametersSchema = z.object(parameters);
 export type DownloadImagesParams = z.infer<typeof parametersSchema>;
 
 // Enhanced handler function with image processing support
-async function downloadFigmaImages(params: DownloadImagesParams, figmaService: FigmaService) {
+async function downloadFigmaImages(params: DownloadImagesParams) {
   try {
-    const { fileKey, nodes, localPath, pngScale = 2 } = parametersSchema.parse(params);
+    const { figma_api_key, fileKey, nodes, localPath, pngScale = 2 } = parametersSchema.parse(params);
+    const figmaService = new FigmaService({
+      figmaApiKey: figma_api_key,
+      figmaOAuthToken: "",
+      useOAuth: false,
+    });
 
     // Process nodes: collect unique downloads and track which requests they satisfy
     const downloadItems = [];

@@ -1,5 +1,4 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { FigmaService, type FigmaAuthOptions } from "../services/figma.js";
 import { Logger } from "../utils/logger.js";
 import {
   downloadFigmaImagesTool,
@@ -22,12 +21,10 @@ type CreateServerOptions = {
 };
 
 function createServer(
-  authOptions: FigmaAuthOptions,
   { isHTTP = false, outputFormat = "yaml", skipImageDownloads = false }: CreateServerOptions = {},
 ) {
   const server = new McpServer(serverInfo);
-  const figmaService = new FigmaService(authOptions);
-  registerTools(server, figmaService, { outputFormat, skipImageDownloads });
+  registerTools(server, { outputFormat, skipImageDownloads });
 
   Logger.isHTTP = isHTTP;
 
@@ -36,7 +33,6 @@ function createServer(
 
 function registerTools(
   server: McpServer,
-  figmaService: FigmaService,
   options: {
     outputFormat: "yaml" | "json";
     skipImageDownloads: boolean;
@@ -50,8 +46,7 @@ function registerTools(
       inputSchema: getFigmaDataTool.parametersSchema,
       annotations: { readOnlyHint: true },
     },
-    (params: GetFigmaDataParams) =>
-      getFigmaDataTool.handler(params, figmaService, options.outputFormat),
+    (params: GetFigmaDataParams) => getFigmaDataTool.handler(params, options.outputFormat),
   );
 
   if (!options.skipImageDownloads) {
@@ -63,7 +58,7 @@ function registerTools(
         inputSchema: downloadFigmaImagesTool.parametersSchema,
         annotations: { openWorldHint: true },
       },
-      (params: DownloadImagesParams) => downloadFigmaImagesTool.handler(params, figmaService),
+      (params: DownloadImagesParams) => downloadFigmaImagesTool.handler(params),
     );
   }
 }

@@ -1,0 +1,9 @@
+services:
+  figma-mcp:
+    build: .
+    ports:
+      - "3333:3333"
+    environment:
+      - FRAMELINK_PORT=3333
+      - FRAMELINK_HOST=0.0.0.0
+    restart: unless-stopped

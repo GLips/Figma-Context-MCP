@@ -10,6 +10,9 @@ import yaml from "js-yaml";
 import { Logger, writeLogs } from "~/utils/logger.js";
 
 const parameters = {
+  figma_api_key: z
+    .string()
+    .describe("Your Figma Personal Access Token for authenticating with the Figma API"),
   fileKey: z
     .string()
     .regex(/^[a-zA-Z0-9]+$/, "File key must be alphanumeric")
@@ -38,13 +41,14 @@ const parametersSchema = z.object(parameters);
 export type GetFigmaDataParams = z.infer<typeof parametersSchema>;
 
 // Simplified handler function
-async function getFigmaData(
-  params: GetFigmaDataParams,
-  figmaService: FigmaService,
-  outputFormat: "yaml" | "json",
-) {
+async function getFigmaData(params: GetFigmaDataParams, outputFormat: "yaml" | "json") {
   try {
-    const { fileKey, nodeId: rawNodeId, depth } = parametersSchema.parse(params);
+    const { figma_api_key, fileKey, nodeId: rawNodeId, depth } = parametersSchema.parse(params);
+    const figmaService = new FigmaService({
+      figmaApiKey: figma_api_key,
+      figmaOAuthToken: "",
+      useOAuth: false,
+    });
 
     // Replace - with : in nodeId for our query—Figma API expects :
     const nodeId = rawNodeId?.replace(/-/g, ":");
