@@ -145,6 +145,7 @@ export class FigmaService {
     localPath: string,
     items: Array<{
       imageRef?: string;
+      gifRef?: string;
       nodeId?: string;
       fileName: string;
       needsCropping?: boolean;
@@ -164,31 +165,44 @@ export class FigmaService {
     const { pngScale = 2, svgOptions } = options;
     const downloadPromises: Promise<ImageProcessingResult[]>[] = [];
 
-    // Separate items by type
+    // Separate items by type: image/gif fills vs rendered nodes
     const imageFills = items.filter(
-      (item): item is typeof item & { imageRef: string } => !!item.imageRef,
+      (item): item is typeof item & ({ imageRef: string } | { gifRef: string }) =>
+        !!item.imageRef || !!item.gifRef,
     );
     const renderNodes = items.filter(
       (item): item is typeof item & { nodeId: string } => !!item.nodeId,
     );
 
-    // Download image fills with processing
+    // Download image fills (static images and animated GIFs) with processing
     if (imageFills.length > 0) {
       const fillUrls = await this.getImageFillUrls(fileKey);
       const fillDownloads = imageFills
-        .map(({ imageRef, fileName, needsCropping, cropTransform, requiresImageDimensions }) => {
-          const imageUrl = fillUrls[imageRef];
-          return imageUrl
-            ? downloadAndProcessImage(
-                fileName,
-                resolvedPath,
-                imageUrl,
-                needsCropping,
-                cropTransform,
-                requiresImageDimensions,
-              )
-            : null;
-        })
+        .map(
+          ({
+            imageRef,
+            gifRef,
+            fileName,
+            needsCropping,
+            cropTransform,
+            requiresImageDimensions,
+          }) => {
+            // gifRef takes priority when present — it points to the animated GIF file.
+            // imageRef only points to a static snapshot frame for GIF nodes.
+            const fillRef = gifRef ?? imageRef;
+            const imageUrl = fillRef ? fillUrls[fillRef] : undefined;
+            return imageUrl
+              ? downloadAndProcessImage(
+                  fileName,
+                  resolvedPath,
+                  imageUrl,
+                  needsCropping,
+                  cropTransform,
+                  requiresImageDimensions,
+                )
+              : null;
+          },
+        )
         .filter((promise): promise is Promise<ImageProcessingResult> => promise !== null);
 
       if (fillDownloads.length > 0) {
