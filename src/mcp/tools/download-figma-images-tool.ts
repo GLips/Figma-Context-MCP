@@ -20,16 +20,22 @@ const parameters = {
         .string()
         .optional()
         .describe(
-          "If a node has an imageRef fill, you must include this variable. Leave blank when downloading Vector SVG images.",
+          "If a node has an imageRef fill, you must include this variable. Leave blank when downloading Vector SVG images or animated GIFs (use gifRef instead).",
+        ),
+      gifRef: z
+        .string()
+        .optional()
+        .describe(
+          "If a node has a gifRef fill (animated GIF), you must include this variable to download the animated GIF. When gifRef is present in the Figma data, use it instead of imageRef to get the animated file rather than a static snapshot.",
         ),
       fileName: z
         .string()
         .regex(
-          /^[a-zA-Z0-9_.-]+\.(png|svg)$/,
-          "File names must contain only letters, numbers, underscores, dots, or hyphens, and end with .png or .svg.",
+          /^[a-zA-Z0-9_.-]+\.(png|svg|gif)$/,
+          "File names must contain only letters, numbers, underscores, dots, or hyphens, and end with .png, .svg, or .gif.",
         )
         .describe(
-          "The local name for saving the fetched file, including extension. Either png or svg.",
+          "The local name for saving the fetched file, including extension. png, svg, or gif.",
         ),
       needsCropping: z
         .boolean()
@@ -101,7 +107,12 @@ async function downloadFigmaImages(params: DownloadImagesParams, figmaService: F
         requiresImageDimensions: node.requiresImageDimensions || false,
       };
 
-      if (node.imageRef) {
+      if (node.gifRef) {
+        // GIF fills are always unique downloads (animated, no dedup needed)
+        const downloadIndex = downloadItems.length;
+        downloadItems.push({ ...downloadItem, gifRef: node.gifRef });
+        downloadToRequests.set(downloadIndex, [finalFileName]);
+      } else if (node.imageRef) {
         // For imageRefs, check if we've already planned to download this
         const uniqueKey = `${node.imageRef}-${node.filenameSuffix || "none"}`;
 
