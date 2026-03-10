@@ -27,6 +27,12 @@ export interface ColorValue {
 export type SimplifiedImageFill = {
   type: "IMAGE";
   imageRef: string;
+  /**
+   * Present when the fill is an animated GIF. Use this ref (instead of imageRef) when calling
+   * download_figma_images to retrieve the animated GIF file; imageRef only points to a static
+   * snapshot frame.
+   */
+  gifRef?: string;
   scaleMode: "FILL" | "FIT" | "TILE" | "STRETCH";
   /**
    * For TILE mode, the scaling factor relative to original image size
@@ -257,6 +263,7 @@ export function parsePaint(raw: Paint, hasChildren: boolean = false): Simplified
     const baseImageFill: SimplifiedImageFill = {
       type: "IMAGE",
       imageRef: raw.imageRef,
+      ...(raw.gifRef ? { gifRef: raw.gifRef } : {}),
       scaleMode: raw.scaleMode as "FILL" | "FIT" | "TILE" | "STRETCH",
       scalingFactor: raw.scalingFactor,
     };
