@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { GetFileResponse, GetFileNodesResponse } from "@figma/rest-api-spec";
-import { FigmaService } from "~/services/figma.js";
+import { FigmaService, type CacheInfo } from "~/services/figma.js";
 import {
   simplifyRawFigmaObject,
   allExtractors,
@@ -37,6 +37,27 @@ const parameters = {
 const parametersSchema = z.object(parameters);
 export type GetFigmaDataParams = z.infer<typeof parametersSchema>;
 
+// Format a human-readable cache notice
+function formatCacheNotice(cachedAt: number, ttlMs: number): string {
+  const now = Date.now();
+  const age = now - cachedAt;
+  const remaining = ttlMs - age;
+
+  const formatDuration = (ms: number): string => {
+    const seconds = Math.floor(ms / 1000);
+    const minutes = Math.floor(seconds / 60);
+    const hours = Math.floor(minutes / 60);
+    const days = Math.floor(hours / 24);
+
+    if (days > 0) return `${days}d ${hours % 24}h`;
+    if (hours > 0) return `${hours}h ${minutes % 60}m`;
+    if (minutes > 0) return `${minutes}m`;
+    return `${seconds}s`;
+  };
+
+  return `ℹ️ Note: Using cached Figma data (fetched ${formatDuration(age)} ago, expires in ${formatDuration(remaining)}) due to FIGMA_CACHING environment variable.`;
+}
+
 // Simplified handler function
 async function getFigmaData(
   params: GetFigmaDataParams,
@@ -57,10 +78,15 @@ async function getFigmaData(
 
     // Get raw Figma API response
     let rawApiResponse: GetFileResponse | GetFileNodesResponse;
+    let cacheInfo: CacheInfo;
     if (nodeId) {
-      rawApiResponse = await figmaService.getRawNode(fileKey, nodeId, depth);
+      const result = await figmaService.getRawNode(fileKey, nodeId, depth);
+      rawApiResponse = result.data;
+      cacheInfo = result.cacheInfo;
     } else {
-      rawApiResponse = await figmaService.getRawFile(fileKey, depth);
+      const result = await figmaService.getRawFile(fileKey, depth);
+      rawApiResponse = result.data;
+      cacheInfo = result.cacheInfo;
     }
 
     // Use unified design extraction (handles nodes + components consistently)
@@ -85,8 +111,14 @@ async function getFigmaData(
     };
 
     Logger.log(`Generating ${outputFormat.toUpperCase()} result from extracted data`);
-    const formattedResult =
+    let formattedResult =
       outputFormat === "json" ? JSON.stringify(result, null, 2) : yaml.dump(result);
+
+    // Prepend cache notice if data came from cache
+    if (cacheInfo.usedCache && cacheInfo.cachedAt && cacheInfo.ttlMs) {
+      const cacheNotice = formatCacheNotice(cacheInfo.cachedAt, cacheInfo.ttlMs);
+      formattedResult = `${cacheNotice}\n\n${formattedResult}`;
+    }
 
     Logger.log("Sending result to client");
     return {
