@@ -1,5 +1,6 @@
 import fs from "fs";
 
+/* eslint-disable @typescript-eslint/no-explicit-any -- logging accepts arbitrary values */
 export const Logger = {
   isHTTP: false,
   log: (...args: any[]) => {
@@ -13,7 +14,9 @@ export const Logger = {
     console.error("[ERROR]", ...args);
   },
 };
+/* eslint-enable @typescript-eslint/no-explicit-any */
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- writes arbitrary debug data
 export function writeLogs(name: string, value: any): void {
   if (process.env.NODE_ENV !== "development") return;
 

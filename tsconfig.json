@@ -22,6 +22,8 @@
     "sourceMap": true,
     "removeComments": true,
 
+    "types": ["vitest/globals"],
+
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,

@@ -20,6 +20,7 @@ export function isTextNode(
 
 export function hasTextStyle(
   n: FigmaDocumentNode,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- `any` needed to extract the style variant from the union
 ): n is FigmaDocumentNode & { style: Extract<FigmaDocumentNode, { style: any }>["style"] } {
   return hasValue("style", n) && Object.keys(n.style).length > 0;
 }

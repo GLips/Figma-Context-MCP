@@ -8,7 +8,9 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 config();
 
-describe("Figma MCP Server Tests", () => {
+const describeOrSkip = process.env.RUN_FIGMA_INTEGRATION === "1" ? describe : describe.skip;
+
+describeOrSkip("Figma MCP Server Tests", () => {
   let server: McpServer;
   let client: Client;
   let figmaApiKey: string;
@@ -16,14 +18,7 @@ describe("Figma MCP Server Tests", () => {
 
   beforeAll(async () => {
     figmaApiKey = process.env.FIGMA_API_KEY || "";
-    if (!figmaApiKey) {
-      throw new Error("FIGMA_API_KEY is not set in environment variables");
-    }
-
     figmaFileKey = process.env.FIGMA_FILE_KEY || "";
-    if (!figmaFileKey) {
-      throw new Error("FIGMA_FILE_KEY is not set in environment variables");
-    }
 
     server = createServer({
       figmaApiKey,
@@ -31,17 +26,10 @@ describe("Figma MCP Server Tests", () => {
       useOAuth: false,
     });
 
-    client = new Client(
-      {
-        name: "figma-test-client",
-        version: "1.0.0",
-      },
-      {
-        capabilities: {
-          tools: {},
-        },
-      },
-    );
+    client = new Client({
+      name: "figma-test-client",
+      version: "1.0.0",
+    });
 
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
 
@@ -54,7 +42,7 @@ describe("Figma MCP Server Tests", () => {
 
   describe("Get Figma Data", () => {
     it("should be able to get Figma file data", async () => {
-      const args: any = {
+      const args = {
         fileKey: figmaFileKey,
       };
 
@@ -69,7 +57,8 @@ describe("Figma MCP Server Tests", () => {
         CallToolResultSchema,
       );
 
-      const content = result.content[0].text as string;
+      const firstContent = result.content[0];
+      const content = firstContent.type === "text" ? firstContent.text : "";
       const parsed = yaml.load(content);
 
       expect(parsed).toBeDefined();

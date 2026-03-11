@@ -10,7 +10,7 @@ export default defineConfig({
   minify: !isDev,
   target: "esnext",
   outDir: "dist",
-  outExtension: ({ format }) => ({
+  outExtension: ({ format: _format }) => ({
     js: ".js",
   }),
   onSuccess: isDev ? "node dist/bin.js" : undefined,

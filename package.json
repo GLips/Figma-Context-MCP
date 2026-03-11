@@ -1,6 +1,6 @@
 {
   "name": "figma-developer-mcp",
-  "version": "0.6.4",
+  "version": "0.6.6",
   "mcpName": "io.github.GLips/Figma-Context-MCP",
   "description": "Give your coding agent access to your Figma data. Implement designs in any framework in one-shot.",
   "type": "module",
@@ -15,7 +15,7 @@
   "scripts": {
     "build": "tsup --dts",
     "type-check": "tsc --noEmit",
-    "test": "jest",
+    "test": "vitest run",
     "start": "node dist/bin.js",
     "start:cli": "cross-env NODE_ENV=cli node dist/bin.js",
     "start:http": "node dist/bin.js",
@@ -24,22 +24,19 @@
     "lint": "eslint .",
     "format": "prettier --write \"src/**/*.ts\"",
     "inspect": "pnpx @modelcontextprotocol/inspector",
-    "prepack": "pnpm build",
-    "changeset": "changeset add",
-    "version": "changeset version && git add -A",
-    "beta:start": "changeset pre enter beta",
-    "beta:end": "changeset pre exit",
-    "beta:version": "changeset version && pnpm install --lockfile-only",
-    "beta:publish": "changeset publish",
-    "prerelease": "pnpm build",
-    "release": "changeset publish && git push --follow-tags",
-    "pub:release": "pnpm build && npm publish",
-    "pub:release:beta": "pnpm build && npm publish --tag beta"
+    "prepack": "pnpm build"
   },
   "engines": {
     "node": ">=18.0.0"
   },
   "packageManager": "pnpm@10.10.0",
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild",
+      "lefthook",
+      "sharp"
+    ]
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/GLips/Figma-Context-MCP.git"
@@ -54,35 +51,32 @@
   "license": "MIT",
   "dependencies": {
     "@figma/rest-api-spec": "^0.33.0",
-    "@modelcontextprotocol/sdk": "^1.10.2",
+    "@modelcontextprotocol/sdk": "^1.27.1",
     "@types/yargs": "^17.0.33",
     "cross-env": "^7.0.3",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
-    "js-yaml": "^4.1.0",
+    "js-yaml": "^4.1.1",
     "remeda": "^2.20.1",
     "sharp": "^0.34.3",
     "yargs": "^17.7.2",
-    "zod": "^3.24.2"
+    "zod": "^3.25.76"
   },
   "devDependencies": {
-    "@changesets/changelog-github": "^0.5.1",
-    "@changesets/cli": "^2.29.2",
     "@eslint/js": "^9.33.0",
     "@types/express": "^5.0.0",
-    "@types/jest": "^29.5.14",
     "@types/js-yaml": "^4.0.9",
-    "@types/node": "^20.17.0",
-    "@typescript-eslint/eslint-plugin": "^8.24.0",
-    "@typescript-eslint/parser": "^8.24.0",
-    "eslint": "^9.20.1",
+    "@types/node": "^25.3.3",
+    "@typescript-eslint/eslint-plugin": "^8.56.1",
+    "@typescript-eslint/parser": "^8.56.1",
+    "eslint": "^9.39.3",
     "eslint-config-prettier": "^10.0.1",
-    "globals": "^16.5.0",
-    "jest": "^29.7.0",
+    "globals": "^17.3.0",
+    "lefthook": "^2.0.15",
     "prettier": "^3.5.0",
-    "ts-jest": "^29.2.5",
-    "tsup": "^8.4.0",
-    "tsx": "^4.19.2",
-    "typescript": "^5.7.3"
+    "tsup": "^8.5.1",
+    "tsx": "^4.21.0",
+    "typescript": "^5.7.3",
+    "vitest": "^4.0.18"
   }
 }

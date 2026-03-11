@@ -1,3 +1,4 @@
+import { vi } from "vitest";
 import { mkdtemp, rm } from "fs/promises";
 import os from "os";
 import path from "path";
@@ -95,7 +96,7 @@ describe("FigmaService caching", () => {
   });
 });
 function spyOnRequest() {
-  return jest.spyOn(
+  return vi.spyOn(
     FigmaService.prototype as unknown as {
       request: (endpoint: string) => Promise<unknown>;
     },

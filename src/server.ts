@@ -36,12 +36,27 @@ export async function startServer(): Promise<void> {
     const transport = new StdioServerTransport();
     await server.connect(transport);
   } else {
-    console.log(`Initializing Figma MCP Server in HTTP mode on port ${config.port}...`);
-    await startHttpServer(config.port, server);
+    console.log(`Initializing Figma MCP Server in HTTP mode on ${config.host}:${config.port}...`);
+    await startHttpServer(config.host, config.port, server);
+
+    process.on("SIGINT", async () => {
+      Logger.log("Shutting down server...");
+      await stopHttpServer();
+      Logger.log("Server shutdown complete");
+      process.exit(0);
+    });
   }
 }
 
-export async function startHttpServer(port: number, mcpServer: McpServer): Promise<void> {
+export async function startHttpServer(
+  host: string,
+  port: number,
+  mcpServer: McpServer,
+): Promise<Server> {
+  if (httpServer) {
+    throw new Error("HTTP server is already running");
+  }
+
   const app = express();
 
   // Parse JSON requests for the Streamable HTTP endpoint only, will break SSE endpoint
@@ -75,8 +90,20 @@ export async function startHttpServer(port: number, mcpServer: McpServer): Promi
           delete transports.streamable[transport.sessionId];
         }
       };
-      // TODO? There semes to be an issue—at least in Cursor—where after a connection is made to an HTTP Streamable endpoint, SSE connections to the same Express server fail with "Received a response for an unknown message ID"
-      await mcpServer.connect(transport);
+      // SDK 1.21+ throws if already connected to another transport. A single
+      // McpServer can only serve one transport at a time — this is a known
+      // architectural limitation (see multi-client test in server.test.ts).
+      try {
+        await mcpServer.connect(transport);
+      } catch (error) {
+        Logger.error("Failed to connect Streamable HTTP transport:", error);
+        res.status(500).json({
+          jsonrpc: "2.0",
+          error: { code: -32000, message: "Server transport conflict" },
+          id: null,
+        });
+        return;
+      }
     } else {
       // Invalid request
       Logger.log("Invalid request:", req.body);
@@ -160,7 +187,18 @@ export async function startHttpServer(port: number, mcpServer: McpServer): Promi
       delete transports.sse[transport.sessionId];
     });
 
-    await mcpServer.connect(transport);
+    // SDK 1.21+ throws if already connected to another transport (e.g. a
+    // Streamable HTTP session). This is a known architectural limitation —
+    // a single McpServer instance can only serve one transport at a time.
+    try {
+      await mcpServer.connect(transport);
+    } catch (error) {
+      delete transports.sse[transport.sessionId];
+      Logger.error("Failed to connect SSE transport:", error);
+      if (!res.headersSent) {
+        res.status(500).send("Failed to establish SSE connection");
+      }
+    }
   });
 
   app.post("/messages", async (req, res) => {
@@ -177,22 +215,19 @@ export async function startHttpServer(port: number, mcpServer: McpServer): Promi
     }
   });
 
-  httpServer = app.listen(port, "127.0.0.1", () => {
-    Logger.log(`HTTP server listening on port ${port}`);
-    Logger.log(`SSE endpoint available at http://localhost:${port}/sse`);
-    Logger.log(`Message endpoint available at http://localhost:${port}/messages`);
-    Logger.log(`StreamableHTTP endpoint available at http://localhost:${port}/mcp`);
-  });
-
-  process.on("SIGINT", async () => {
-    Logger.log("Shutting down server...");
-
-    // Close all active transports to properly clean up resources
-    await closeTransports(transports.sse);
-    await closeTransports(transports.streamable);
-
-    Logger.log("Server shutdown complete");
-    process.exit(0);
+  return new Promise((resolve, reject) => {
+    const server = app.listen(port, host, () => {
+      Logger.log(`HTTP server listening on port ${port}`);
+      Logger.log(`SSE endpoint available at http://${host}:${port}/sse`);
+      Logger.log(`Message endpoint available at http://${host}:${port}/messages`);
+      Logger.log(`StreamableHTTP endpoint available at http://${host}:${port}/mcp`);
+      resolve(server);
+    });
+    server.once("error", (err) => {
+      httpServer = null;
+      reject(err);
+    });
+    httpServer = server;
   });
 }
 
@@ -214,19 +249,16 @@ export async function stopHttpServer(): Promise<void> {
     throw new Error("HTTP server is not running");
   }
 
+  // Close all transports FIRST so connections drain
+  await closeTransports(transports.sse);
+  await closeTransports(transports.streamable);
+
+  // Then close the HTTP server
   return new Promise((resolve, reject) => {
-    httpServer!.close((err: Error | undefined) => {
-      if (err) {
-        reject(err);
-        return;
-      }
+    httpServer!.close((err) => {
       httpServer = null;
-      const closing = Object.values(transports.sse).map((transport) => {
-        return transport.close();
-      });
-      Promise.all(closing).then(() => {
-        resolve();
-      });
+      if (err) reject(err);
+      else resolve();
     });
   });
 }

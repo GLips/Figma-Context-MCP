@@ -130,12 +130,13 @@ function getDirection(
         case "column":
           return "vertical";
       }
+      break;
     case "counter":
       switch (mode) {
         case "row":
-          return "horizontal";
-        case "column":
           return "vertical";
+        case "column":
+          return "horizontal";
       }
   }
 }

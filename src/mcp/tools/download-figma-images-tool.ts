@@ -187,6 +187,6 @@ export const downloadFigmaImagesTool = {
   name: "download_figma_images",
   description:
     "Download SVG and PNG images used in a Figma file based on the IDs of image or icon nodes",
-  parameters,
+  parametersSchema,
   handler: downloadFigmaImages,
 } as const;
