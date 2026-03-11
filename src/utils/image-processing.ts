@@ -1,6 +1,36 @@
 import fs from "fs";
-import sharp from "sharp";
 import type { Transform } from "@figma/rest-api-spec";
+
+type SharpFn = typeof import("sharp");
+
+/**
+ * sharp is loaded lazily because its native binaries (libvips) frequently fail
+ * to install when users run the server via `npx`, which doesn't reliably
+ * resolve optional platform-specific packages. Making sharp optional lets the
+ * server start and serve design data even when image post-processing is
+ * unavailable. See: https://github.com/GLips/Figma-Context-MCP/issues/288
+ *
+ * TODO: Consider replacing sharp with a pure-JS image solution (e.g. jimp or
+ * node Canvas) to eliminate native binary issues entirely.
+ */
+let sharpFn: SharpFn | null | undefined;
+
+async function getSharp(): Promise<SharpFn | null> {
+  if (sharpFn !== undefined) return sharpFn;
+
+  try {
+    sharpFn = (await import("sharp")).default;
+    return sharpFn;
+  } catch {
+    const { Logger } = await import("./logger.js");
+    Logger.log(
+      "sharp is not available — image cropping and dimension detection will be skipped. " +
+        "Images will still be downloaded. To enable post-processing: npm install sharp",
+    );
+    sharpFn = null;
+    return null;
+  }
+}
 
 /**
  * Apply crop transform to an image based on Figma's transformation matrix
@@ -13,6 +43,9 @@ export async function applyCropTransform(
   cropTransform: Transform,
 ): Promise<string> {
   const { Logger } = await import("./logger.js");
+  const sharp = await getSharp();
+
+  if (!sharp) return imagePath;
 
   try {
     // Extract transform values (skew values intentionally unused for now)
@@ -89,6 +122,9 @@ export async function getImageDimensions(imagePath: string): Promise<{
   height: number;
 }> {
   const { Logger } = await import("./logger.js");
+  const sharp = await getSharp();
+
+  if (!sharp) return { width: 0, height: 0 };
 
   try {
     const metadata = await sharp(imagePath).metadata();
