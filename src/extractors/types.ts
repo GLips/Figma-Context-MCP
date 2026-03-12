@@ -8,6 +8,7 @@ import type {
   SimplifiedComponentDefinition,
   SimplifiedComponentSetDefinition,
 } from "~/transformers/component.js";
+import type { SimplifiedInteraction } from "~/transformers/interaction.js";
 
 export type StyleTypes =
   | SimplifiedTextStyle
@@ -90,6 +91,8 @@ export interface SimplifiedNode {
   // for rect-specific strokes, etc.
   componentId?: string;
   componentProperties?: ComponentProperties[];
+  // prototype interactions
+  interactions?: SimplifiedInteraction[];
   // children
   children?: SimplifiedNode[];
 }
