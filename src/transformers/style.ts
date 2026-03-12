@@ -228,7 +228,10 @@ export function buildSimplifiedStrokes(
 ): SimplifiedStroke {
   let strokes: SimplifiedStroke = { colors: [] };
   if (hasValue("strokes", n) && Array.isArray(n.strokes) && n.strokes.length) {
-    strokes.colors = n.strokes.filter(isVisible).map((stroke) => parsePaint(stroke, hasChildren));
+    strokes.colors = n.strokes
+      .filter((s): s is NonNullable<typeof s> => s != null)
+      .filter(isVisible)
+      .map((stroke) => parsePaint(stroke, hasChildren));
   }
 
   if (hasValue("strokeWeight", n) && typeof n.strokeWeight === "number" && n.strokeWeight > 0) {

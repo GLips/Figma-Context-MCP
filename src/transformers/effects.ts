@@ -16,7 +16,7 @@ export type SimplifiedEffects = {
 
 export function buildSimplifiedEffects(n: FigmaDocumentNode): SimplifiedEffects {
   if (!hasValue("effects", n)) return {};
-  const effects = n.effects.filter((e) => e.visible);
+  const effects = n.effects.filter((e): e is NonNullable<typeof e> => e != null && e.visible);
 
   // Handle drop and inner shadows (both go into CSS box-shadow)
   const dropShadows = effects
