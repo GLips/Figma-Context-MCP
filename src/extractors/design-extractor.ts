@@ -70,12 +70,17 @@ function parseAPIResponse(data: GetFileResponse | GetFileNodesResponse) {
     nodesToParse = nodeResponses.map((n) => n?.document).filter((doc) => doc && isVisible(doc));
   } else {
     // GetFileResponse
-    Object.assign(aggregatedComponents, data.components);
-    Object.assign(aggregatedComponentSets, data.componentSets);
+    if (data.components) {
+      Object.assign(aggregatedComponents, data.components);
+    }
+    if (data.componentSets) {
+      Object.assign(aggregatedComponentSets, data.componentSets);
+    }
     if (data.styles) {
       extraStyles = data.styles;
     }
-    nodesToParse = data.document.children.filter(isVisible);
+    // Handle null document or children in prototype file responses
+    nodesToParse = data.document?.children?.filter(isVisible) ?? [];
   }
 
   const { name } = data;
