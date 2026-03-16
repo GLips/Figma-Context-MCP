@@ -1,6 +1,5 @@
 import React, { useState, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { addPropertyControls, ControlType } from 'framer';
 
 interface NavBarProps {
   backgroundColor: string;
@@ -317,74 +316,3 @@ NavBar.defaultProps = {
   width: 400,
   resourceItems: ['Documentation', 'API Reference', 'Tutorials', 'Blog'],
 };
-
-addPropertyControls(NavBar, {
-  width: {
-    type: ControlType.Number,
-    title: "Width",
-    min: 366,
-    max: 400,
-    step: 1,
-  },
-  backgroundColor: {
-    type: ControlType.Color,
-    title: "Background Color",
-  },
-  navItemColor: {
-    type: ControlType.Color,
-    title: "Nav Item Color",
-  },
-  navItemHoverColor: {
-    type: ControlType.Color,
-    title: "Nav Hover Color",
-  },
-  resourceItems: {
-    type: ControlType.Array,
-    title: "Resource Items",
-    control: {
-      type: ControlType.String,
-    },
-  },
-  navFont: {
-    type: ControlType.Font,
-    title: "Nav Font",
-  },
-  fontSize: {
-    type: ControlType.Number,
-    title: "Font Size",
-    min: 12,
-    max: 32,
-    step: 1,
-  },
-  buttonText: {
-    type: ControlType.String,
-    title: "Button Text",
-  },
-  buttonTextColor: {
-    type: ControlType.Color,
-    title: "Button Text Color",
-  },
-  buttonBgColor: {
-    type: ControlType.Color,
-    title: "Button Color",
-  },
-  buttonFont: {
-    type: ControlType.Font,
-    title: "Button Font",
-  },
-  buttonFontSize: {
-    type: ControlType.Number,
-    title: "Button Font Size",
-    min: 12,
-    max: 32,
-    step: 1,
-  },
-  glowColor1: {
-    type: ControlType.Color,
-    title: "Glow Color 1",
-  },
-  glowColor2: {
-    type: ControlType.Color,
-    title: "Glow Color 2",
-  },
-}); 
