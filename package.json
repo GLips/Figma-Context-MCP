@@ -52,14 +52,13 @@
   "dependencies": {
     "@figma/rest-api-spec": "^0.33.0",
     "@modelcontextprotocol/sdk": "^1.27.1",
-    "@types/yargs": "^17.0.33",
+    "cleye": "^2.2.1",
     "cross-env": "^7.0.3",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
     "js-yaml": "^4.1.1",
     "remeda": "^2.20.1",
     "sharp": "^0.34.3",
-    "yargs": "^17.7.2",
     "zod": "^3.25.76"
   },
   "devDependencies": {
