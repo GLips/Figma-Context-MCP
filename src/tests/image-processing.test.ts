@@ -1,37 +1,27 @@
 import path from "path";
+import os from "os";
 import fs from "fs";
 import { Jimp } from "jimp";
 import { getImageDimensions, applyCropTransform } from "../utils/image-processing.js";
 import type { Transform } from "@figma/rest-api-spec";
 
-const FIXTURES_DIR = path.resolve(__dirname, "../../tests/fixtures");
-
-async function createTestImage(
-  name: string,
-  width: number,
-  height: number,
-  color: number = 0xff0000ff,
-): Promise<string> {
-  const filePath = path.join(FIXTURES_DIR, name);
-  const image = new Jimp({ width, height, color });
-  await image.write(filePath as `${string}.${string}`);
-  return filePath;
-}
-
 describe("image processing", () => {
-  const tempFiles: string[] = [];
+  let tmpDir: string;
 
-  async function createTemp(name: string, width: number, height: number): Promise<string> {
-    const filePath = await createTestImage(name, width, height);
-    tempFiles.push(filePath);
-    return filePath;
-  }
+  beforeAll(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "image-processing-test-"));
+  });
 
   afterAll(() => {
-    for (const f of tempFiles) {
-      if (fs.existsSync(f)) fs.unlinkSync(f);
-    }
+    fs.rmSync(tmpDir, { recursive: true });
   });
+
+  async function createTemp(name: string, width: number, height: number): Promise<string> {
+    const filePath = path.join(tmpDir, name);
+    const image = new Jimp({ width, height, color: 0xff0000ff });
+    await image.write(filePath as `${string}.${string}`);
+    return filePath;
+  }
 
   describe("getImageDimensions", () => {
     it("reads correct dimensions from a PNG", async () => {
