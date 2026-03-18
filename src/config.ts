@@ -70,6 +70,11 @@ export function getServerConfig(isStdioMode: boolean): ServerConfig {
         description: "Do not register the download_figma_images tool (skip image downloads)",
         default: false,
       },
+      stdio: {
+        type: "boolean",
+        description: "Run in stdio mode for MCP client communication (required by most MCP clients)",
+        default: false,
+      },
     })
     .help()
     .version(process.env.NPM_PACKAGE_VERSION ?? "unknown")
