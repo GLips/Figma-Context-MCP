@@ -1,7 +1,7 @@
 import path from "path";
 import fs from "fs";
 import { Jimp } from "jimp";
-import { getImageDimensions, applyCropTransform } from "~/utils/image-processing";
+import { getImageDimensions, applyCropTransform } from "../utils/image-processing.js";
 import type { Transform } from "@figma/rest-api-spec";
 
 const FIXTURES_DIR = path.resolve(__dirname, "../../tests/fixtures");
