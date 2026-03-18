@@ -7,3 +7,6 @@ pre-commit:
     lint:
       glob: "*.{ts,js}"
       run: pnpm eslint {staged_files}
+    type-check:
+      glob: "*.{ts,js}"
+      run: pnpm type-check
