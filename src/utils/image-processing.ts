@@ -152,8 +152,8 @@ export async function downloadAndProcessImage(
   let wasCropped = false;
   let cropRegion: { left: number; top: number; width: number; height: number } | undefined;
 
-  // Apply crop transform if needed
-  if (needsCropping && cropTransform) {
+  // Apply crop transform if needed (skip for GIFs — cropping destroys animation frames)
+  if (needsCropping && cropTransform && !fileName.toLowerCase().endsWith(".gif")) {
     Logger.log("Applying crop transform...");
 
     // Extract crop region info before applying transform
