@@ -26,20 +26,9 @@ describe("download path validation", () => {
     expect(result.content[0].text).toContain(imageDir);
   });
 
-  it("rejects absolute path outside imageDir", async () => {
+  it("rejects traversal with leading slash", async () => {
     const result = await downloadFigmaImagesTool.handler(
-      { ...validParams, localPath: "/tmp/evil" },
-      stubFigmaService,
-      imageDir,
-    );
-
-    expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain("resolves outside the allowed image directory");
-  });
-
-  it("rejects path that is a prefix match but not a child directory", async () => {
-    const result = await downloadFigmaImagesTool.handler(
-      { ...validParams, localPath: "/project/root-evil/images" },
+      { ...validParams, localPath: "/../../etc" },
       stubFigmaService,
       imageDir,
     );
@@ -53,6 +42,19 @@ describe("download path validation", () => {
     // return the path validation error.
     const result = await downloadFigmaImagesTool.handler(
       { ...validParams, localPath: "public/images" },
+      stubFigmaService,
+      imageDir,
+    );
+
+    if (result.isError) {
+      expect(result.content[0].text).not.toContain("resolves outside the allowed image directory");
+    }
+  });
+
+  it("accepts path with leading slash as relative", async () => {
+    // LLMs frequently produce paths like "/public/images" when they mean "public/images"
+    const result = await downloadFigmaImagesTool.handler(
+      { ...validParams, localPath: "/public/images" },
       stubFigmaService,
       imageDir,
     );

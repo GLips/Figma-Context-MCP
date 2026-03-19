@@ -90,9 +90,11 @@ async function downloadFigmaImages(
   try {
     const { fileKey, nodes, localPath, pngScale = 2 } = parametersSchema.parse(params);
 
-    // Resolve localPath relative to the configured image directory
+    // Resolve localPath relative to the configured image directory.
+    // path.join (not path.resolve) so a leading "/" is treated as relative, not absolute —
+    // LLMs frequently produce paths like "/public/images" when they mean "public/images".
     const baseDir = imageDir ?? process.cwd();
-    const resolvedPath = path.resolve(baseDir, localPath);
+    const resolvedPath = path.resolve(path.join(baseDir, localPath));
     if (resolvedPath !== baseDir && !resolvedPath.startsWith(baseDir + path.sep)) {
       return {
         isError: true,
