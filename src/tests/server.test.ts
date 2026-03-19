@@ -17,7 +17,7 @@ describe("StreamableHTTP transport", () => {
 
   beforeAll(async () => {
     const mcpServer = createServer(dummyAuth, { isHTTP: true });
-    const httpServer = await startHttpServer("127.0.0.1", 0, mcpServer);
+    const httpServer = await startHttpServer("127.0.0.1", 0, () => mcpServer);
     port = (httpServer.address() as AddressInfo).port;
   }, 15_000);
 
@@ -51,7 +51,7 @@ describe("SSE transport", () => {
 
   beforeAll(async () => {
     const mcpServer = createServer(dummyAuth, { isHTTP: true });
-    const httpServer = await startHttpServer("127.0.0.1", 0, mcpServer);
+    const httpServer = await startHttpServer("127.0.0.1", 0, () => mcpServer);
     port = (httpServer.address() as AddressInfo).port;
   }, 15_000);
 
@@ -83,7 +83,7 @@ describe("Negative protocol tests", () => {
 
   beforeAll(async () => {
     const mcpServer = createServer(dummyAuth, { isHTTP: true });
-    const httpServer = await startHttpServer("127.0.0.1", 0, mcpServer);
+    const httpServer = await startHttpServer("127.0.0.1", 0, () => mcpServer);
     port = (httpServer.address() as AddressInfo).port;
   }, 15_000);
 
@@ -143,7 +143,7 @@ describe("Multi-client test", () => {
 
   beforeAll(async () => {
     const mcpServer = createServer(dummyAuth, { isHTTP: true });
-    const httpServer = await startHttpServer("127.0.0.1", 0, mcpServer);
+    const httpServer = await startHttpServer("127.0.0.1", 0, () => mcpServer);
     port = (httpServer.address() as AddressInfo).port;
   }, 15_000);
 
@@ -196,7 +196,7 @@ describe("Multi-client test", () => {
 describe("Server lifecycle", () => {
   it("starts and listens on assigned port", async () => {
     const mcpServer = createServer(dummyAuth, { isHTTP: true });
-    const httpServer = await startHttpServer("127.0.0.1", 0, mcpServer);
+    const httpServer = await startHttpServer("127.0.0.1", 0, () => mcpServer);
     const port = (httpServer.address() as AddressInfo).port;
 
     expect(port).toBeGreaterThan(0);
@@ -206,7 +206,7 @@ describe("Server lifecycle", () => {
 
   it("stopHttpServer shuts down cleanly without hanging", async () => {
     const mcpServer = createServer(dummyAuth, { isHTTP: true });
-    await startHttpServer("127.0.0.1", 0, mcpServer);
+    await startHttpServer("127.0.0.1", 0, () => mcpServer);
 
     // Race stopHttpServer against a deadline
     const timeout = new Promise<"timeout">((resolve) =>
