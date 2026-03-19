@@ -1,5 +1,5 @@
-import { config as loadEnv } from "dotenv";
 import { cli } from "cleye";
+import { config as loadEnv } from "dotenv";
 import { resolve as resolvePath } from "path";
 import type { FigmaAuthOptions } from "./services/figma.js";
 
@@ -16,6 +16,7 @@ interface ServerConfig {
   host: string;
   outputFormat: "yaml" | "json";
   skipImageDownloads: boolean;
+  imageDir: string;
   isStdioMode: boolean;
   configSources: Record<string, Source>;
 }
@@ -84,6 +85,11 @@ export function getServerConfig(): ServerConfig {
         type: Boolean,
         description: "Do not register the download_figma_images tool (skip image downloads)",
       },
+      imageDir: {
+        type: String,
+        description:
+          "Base directory for image downloads. The download tool will only write files within this directory. Defaults to the current working directory.",
+      },
       stdio: {
         type: Boolean,
         description: "Run in stdio transport mode for MCP clients",
@@ -107,6 +113,12 @@ export function getServerConfig(): ServerConfig {
     argv.flags.skipImageDownloads,
     envBool("SKIP_IMAGE_DOWNLOADS"),
     false,
+  );
+  const envImageDir = envStr("IMAGE_DIR");
+  const imageDir = resolve(
+    argv.flags.imageDir ? resolvePath(argv.flags.imageDir) : undefined,
+    envImageDir ? resolvePath(envImageDir) : undefined,
+    process.cwd(),
   );
 
   // These two don't fit the simple pattern: --json maps to a string enum,
@@ -141,6 +153,7 @@ export function getServerConfig(): ServerConfig {
     host: host.source,
     outputFormat: outputFormat.source,
     skipImageDownloads: skipImageDownloads.source,
+    imageDir: imageDir.source,
   };
 
   if (!isStdioMode) {
@@ -163,6 +176,7 @@ export function getServerConfig(): ServerConfig {
     console.log(
       `- SKIP_IMAGE_DOWNLOADS: ${skipImageDownloads.value} (source: ${configSources.skipImageDownloads})`,
     );
+    console.log(`- IMAGE_DIR: ${imageDir.value} (source: ${configSources.imageDir})`);
     console.log();
   }
 
@@ -172,6 +186,7 @@ export function getServerConfig(): ServerConfig {
     host: host.value,
     outputFormat: outputFormat.value,
     skipImageDownloads: skipImageDownloads.value,
+    imageDir: imageDir.value,
     isStdioMode,
     configSources,
   };

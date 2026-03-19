@@ -22,8 +22,12 @@ export async function downloadFigmaImage(
       fs.mkdirSync(localPath, { recursive: true });
     }
 
-    // Build the complete file path
-    const fullPath = path.join(localPath, fileName);
+    // Build the complete file path and verify it stays within localPath
+    const fullPath = path.resolve(path.join(localPath, fileName));
+    const resolvedLocalPath = path.resolve(localPath);
+    if (!fullPath.startsWith(resolvedLocalPath + path.sep)) {
+      throw new Error(`File path escapes target directory: ${fileName}`);
+    }
 
     // Use fetch to download the image
     const response = await fetch(imageUrl, {

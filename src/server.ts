@@ -28,6 +28,7 @@ export async function startServer(): Promise<void> {
     isHTTP: !config.isStdioMode,
     outputFormat: config.outputFormat as "yaml" | "json",
     skipImageDownloads: config.skipImageDownloads,
+    imageDir: config.imageDir,
   };
 
   if (config.isStdioMode) {
