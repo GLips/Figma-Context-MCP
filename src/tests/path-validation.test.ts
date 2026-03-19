@@ -45,6 +45,7 @@ describe("download path validation", () => {
     );
 
     expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("resolves outside the allowed image directory");
   });
 
   it("accepts valid relative path within imageDir", async () => {
