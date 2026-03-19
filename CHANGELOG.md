@@ -1,5 +1,25 @@
 # figma-developer-mcp
 
+## [0.7.0](https://github.com/GLips/Figma-Context-MCP/compare/v0.6.6...v0.7.0) (2026-03-19)
+
+
+### ⚠ BREAKING CHANGES
+
+* getServerConfig() no longer takes an isStdioMode parameter. It now detects stdio mode internally and returns it as part of ServerConfig.
+
+### Features
+
+* add --image-dir config for image download path control ([#297](https://github.com/GLips/Figma-Context-MCP/issues/297)) ([0417766](https://github.com/GLips/Figma-Context-MCP/commit/0417766eb5fc1e0b76e55da497961f9aee2f62f7))
+* replace yargs with cleye for CLI flag parsing ([#285](https://github.com/GLips/Figma-Context-MCP/issues/285)) ([0092ee7](https://github.com/GLips/Figma-Context-MCP/commit/0092ee789fce01b9ef1dab5e8f32c52e71107dbb))
+* support gifRef for downloading animated GIF embeds ([#286](https://github.com/GLips/Figma-Context-MCP/issues/286)) ([f1ec913](https://github.com/GLips/Figma-Context-MCP/commit/f1ec9133c31a351b55651126c20ea2f842c0a9ee))
+
+
+### Bug Fixes
+
+* remove inline release-type so release-please reads config file ([a03cd68](https://github.com/GLips/Figma-Context-MCP/commit/a03cd68826da1c1596273a223a612eb919832397))
+* replace sharp dependency with js-native jimp for image manipulation ([#289](https://github.com/GLips/Figma-Context-MCP/issues/289)) ([62b9f94](https://github.com/GLips/Figma-Context-MCP/commit/62b9f94b1607dd08daeaa90e8ace0a896fe6eb50))
+* skip jimp processing for SVGs and prevent image-fill collapse ([#298](https://github.com/GLips/Figma-Context-MCP/issues/298)) ([a4a4b13](https://github.com/GLips/Figma-Context-MCP/commit/a4a4b13ec7cae5d603022b1c8719cc717749195b))
+
 ## [0.6.6](https://github.com/GLips/Figma-Context-MCP/compare/v0.6.5...v0.6.6) (2026-03-04)
 
 
