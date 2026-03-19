@@ -105,6 +105,18 @@ export async function downloadAndProcessImage(
   const originalPath = await downloadFigmaImage(fileName, localPath, imageUrl);
   Logger.log(`Downloaded original image: ${originalPath}`);
 
+  // SVGs are vector — jimp can't read them and cropping/dimensions don't apply
+  const isSvg = fileName.toLowerCase().endsWith(".svg");
+  if (isSvg) {
+    return {
+      filePath: originalPath,
+      originalDimensions: { width: 0, height: 0 },
+      finalDimensions: { width: 0, height: 0 },
+      wasCropped: false,
+      processingLog,
+    };
+  }
+
   // Get original dimensions before any processing
   const originalDimensions = await getImageDimensions(originalPath);
   Logger.log(`Original dimensions: ${originalDimensions.width}x${originalDimensions.height}`);
