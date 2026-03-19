@@ -19,15 +19,21 @@ type CreateServerOptions = {
   isHTTP?: boolean;
   outputFormat?: "yaml" | "json";
   skipImageDownloads?: boolean;
+  imageDir?: string;
 };
 
 function createServer(
   authOptions: FigmaAuthOptions,
-  { isHTTP = false, outputFormat = "yaml", skipImageDownloads = false }: CreateServerOptions = {},
+  {
+    isHTTP = false,
+    outputFormat = "yaml",
+    skipImageDownloads = false,
+    imageDir,
+  }: CreateServerOptions = {},
 ) {
   const server = new McpServer(serverInfo);
   const figmaService = new FigmaService(authOptions);
-  registerTools(server, figmaService, { outputFormat, skipImageDownloads });
+  registerTools(server, figmaService, { outputFormat, skipImageDownloads, imageDir });
 
   Logger.isHTTP = isHTTP;
 
@@ -40,6 +46,7 @@ function registerTools(
   options: {
     outputFormat: "yaml" | "json";
     skipImageDownloads: boolean;
+    imageDir?: string;
   },
 ): void {
   server.registerTool(
@@ -59,11 +66,12 @@ function registerTools(
       downloadFigmaImagesTool.name,
       {
         title: "Download Figma Images",
-        description: downloadFigmaImagesTool.description,
+        description: downloadFigmaImagesTool.getDescription(options.imageDir),
         inputSchema: downloadFigmaImagesTool.parametersSchema,
         annotations: { openWorldHint: true },
       },
-      (params: DownloadImagesParams) => downloadFigmaImagesTool.handler(params, figmaService),
+      (params: DownloadImagesParams) =>
+        downloadFigmaImagesTool.handler(params, figmaService, options.imageDir),
     );
   }
 }
