@@ -240,7 +240,7 @@ export function collapseSvgContainers(
   if (
     (node.type === "FRAME" || node.type === "GROUP" || node.type === "INSTANCE") &&
     allChildrenAreSvgEligible &&
-    !hasImageFillInSubtree(node)
+    !hasImageFillInChildren(node)
   ) {
     // Collapse to IMAGE-SVG and omit children
     result.type = "IMAGE-SVG";
@@ -252,16 +252,20 @@ export function collapseSvgContainers(
 }
 
 /**
- * Check whether a node or any of its descendants has an image fill.
- * Nodes with image fills are content containers, not pure vector shapes,
- * and should not be collapsed into IMAGE-SVG.
+ * Check whether a node or its direct children have image fills.
+ *
+ * Only direct children need checking because afterChildren runs bottom-up:
+ * if a deeper descendant has image fills, its parent won't collapse (stays FRAME),
+ * and FRAME isn't SVG-eligible, so the chain breaks naturally at each level.
  */
-function hasImageFillInSubtree(node: FigmaDocumentNode): boolean {
+function hasImageFillInChildren(node: FigmaDocumentNode): boolean {
   if (hasValue("fills", node) && node.fills.some((fill) => fill.type === "IMAGE")) {
     return true;
   }
   if (hasValue("children", node)) {
-    return node.children.some((child) => hasImageFillInSubtree(child));
+    return node.children.some(
+      (child) => hasValue("fills", child) && child.fills.some((fill) => fill.type === "IMAGE"),
+    );
   }
   return false;
 }
