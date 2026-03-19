@@ -17,7 +17,7 @@ describe("StreamableHTTP transport", () => {
 
   beforeAll(async () => {
     const mcpServer = createServer(dummyAuth, { isHTTP: true });
-    const httpServer = await startHttpServer("127.0.0.1", 0, mcpServer);
+    const httpServer = await startHttpServer("127.0.0.1", 0, () => mcpServer);
     port = (httpServer.address() as AddressInfo).port;
   }, 15_000);
 
@@ -51,7 +51,7 @@ describe("SSE transport", () => {
 
   beforeAll(async () => {
     const mcpServer = createServer(dummyAuth, { isHTTP: true });
-    const httpServer = await startHttpServer("127.0.0.1", 0, mcpServer);
+    const httpServer = await startHttpServer("127.0.0.1", 0, () => mcpServer);
     port = (httpServer.address() as AddressInfo).port;
   }, 15_000);
 
@@ -83,7 +83,7 @@ describe("Negative protocol tests", () => {
 
   beforeAll(async () => {
     const mcpServer = createServer(dummyAuth, { isHTTP: true });
-    const httpServer = await startHttpServer("127.0.0.1", 0, mcpServer);
+    const httpServer = await startHttpServer("127.0.0.1", 0, () => mcpServer);
     port = (httpServer.address() as AddressInfo).port;
   }, 15_000);
 
@@ -142,8 +142,9 @@ describe("Multi-client test", () => {
   let port: number;
 
   beforeAll(async () => {
-    const mcpServer = createServer(dummyAuth, { isHTTP: true });
-    const httpServer = await startHttpServer("127.0.0.1", 0, mcpServer);
+    const httpServer = await startHttpServer("127.0.0.1", 0, () =>
+      createServer(dummyAuth, { isHTTP: true }),
+    );
     port = (httpServer.address() as AddressInfo).port;
   }, 15_000);
 
@@ -155,48 +156,102 @@ describe("Multi-client test", () => {
     }
   });
 
-  // Known issue: a single McpServer instance can only serve one transport at a
-  // time — SDK 1.21+ throws on double-connect instead of silently replacing
-  // the active transport. The error is caught in server.ts but the second
-  // client never gets a working connection.
-  it.fails(
-    "StreamableHTTP and SSE clients work concurrently",
-    async () => {
-      const streamableClient = new Client({ name: "test-streamable", version: "1.0.0" });
-      const streamableTransport = new StreamableHTTPClientTransport(
-        new URL(`http://127.0.0.1:${port}/mcp`),
-      );
+  it("StreamableHTTP and SSE clients work concurrently", async () => {
+    const streamableClient = new Client({ name: "test-streamable", version: "1.0.0" });
+    const streamableTransport = new StreamableHTTPClientTransport(
+      new URL(`http://127.0.0.1:${port}/mcp`),
+    );
 
-      const sseClient = new Client({ name: "test-sse", version: "1.0.0" });
-      const sseTransport = new SSEClientTransport(new URL(`http://127.0.0.1:${port}/sse`));
+    const sseClient = new Client({ name: "test-sse", version: "1.0.0" });
+    const sseTransport = new SSEClientTransport(new URL(`http://127.0.0.1:${port}/sse`));
 
-      // Connect both concurrently
-      await Promise.all([
-        streamableClient.connect(streamableTransport),
-        sseClient.connect(sseTransport),
-      ]);
+    // Connect both concurrently
+    await Promise.all([
+      streamableClient.connect(streamableTransport),
+      sseClient.connect(sseTransport),
+    ]);
 
-      // Both should be able to list tools
-      const [streamableTools, sseTools] = await Promise.all([
-        streamableClient.listTools(),
-        sseClient.listTools(),
-      ]);
+    // Both should be able to list tools
+    const [streamableTools, sseTools] = await Promise.all([
+      streamableClient.listTools(),
+      sseClient.listTools(),
+    ]);
 
-      expect(streamableTools.tools.map((t) => t.name)).toContain("get_figma_data");
-      expect(sseTools.tools.map((t) => t.name)).toContain("get_figma_data");
+    expect(streamableTools.tools.map((t) => t.name)).toContain("get_figma_data");
+    expect(sseTools.tools.map((t) => t.name)).toContain("get_figma_data");
 
-      // Clean up
-      await streamableTransport.terminateSession();
-      await Promise.all([streamableClient.close(), sseClient.close()]);
-    },
-    15_000,
-  );
+    // Clean up
+    await streamableTransport.terminateSession();
+    await Promise.all([streamableClient.close(), sseClient.close()]);
+  }, 15_000);
+});
+
+describe("Session reconnection", () => {
+  let port: number;
+
+  beforeAll(async () => {
+    const httpServer = await startHttpServer("127.0.0.1", 0, () =>
+      createServer(dummyAuth, { isHTTP: true }),
+    );
+    port = (httpServer.address() as AddressInfo).port;
+  }, 15_000);
+
+  afterAll(async () => {
+    try {
+      await stopHttpServer();
+    } catch {
+      // Server may not have started
+    }
+  });
+
+  it("connects, terminates, and reconnects successfully", async () => {
+    // First session
+    const client1 = new Client({ name: "test-reconnect-1", version: "1.0.0" });
+    const transport1 = new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${port}/mcp`));
+    await client1.connect(transport1);
+    const { tools: tools1 } = await client1.listTools();
+    expect(tools1.map((t) => t.name)).toContain("get_figma_data");
+
+    await transport1.terminateSession();
+    await client1.close();
+
+    // Second session after termination
+    const client2 = new Client({ name: "test-reconnect-2", version: "1.0.0" });
+    const transport2 = new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${port}/mcp`));
+    await client2.connect(transport2);
+    const { tools: tools2 } = await client2.listTools();
+    expect(tools2.map((t) => t.name)).toContain("get_figma_data");
+
+    await transport2.terminateSession();
+    await client2.close();
+  }, 15_000);
+
+  it("reconnects after client drops without clean termination", async () => {
+    // First session — close abruptly without terminateSession()
+    const client1 = new Client({ name: "test-dirty-close-1", version: "1.0.0" });
+    const transport1 = new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${port}/mcp`));
+    await client1.connect(transport1);
+    await client1.listTools();
+
+    // Simulate unclean disconnect (just close, no terminate)
+    await client1.close();
+
+    // Second session should still work
+    const client2 = new Client({ name: "test-dirty-close-2", version: "1.0.0" });
+    const transport2 = new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${port}/mcp`));
+    await client2.connect(transport2);
+    const { tools } = await client2.listTools();
+    expect(tools.map((t) => t.name)).toContain("get_figma_data");
+
+    await transport2.terminateSession();
+    await client2.close();
+  }, 15_000);
 });
 
 describe("Server lifecycle", () => {
   it("starts and listens on assigned port", async () => {
     const mcpServer = createServer(dummyAuth, { isHTTP: true });
-    const httpServer = await startHttpServer("127.0.0.1", 0, mcpServer);
+    const httpServer = await startHttpServer("127.0.0.1", 0, () => mcpServer);
     const port = (httpServer.address() as AddressInfo).port;
 
     expect(port).toBeGreaterThan(0);
@@ -206,7 +261,7 @@ describe("Server lifecycle", () => {
 
   it("stopHttpServer shuts down cleanly without hanging", async () => {
     const mcpServer = createServer(dummyAuth, { isHTTP: true });
-    await startHttpServer("127.0.0.1", 0, mcpServer);
+    await startHttpServer("127.0.0.1", 0, () => mcpServer);
 
     // Race stopHttpServer against a deadline
     const timeout = new Promise<"timeout">((resolve) =>
