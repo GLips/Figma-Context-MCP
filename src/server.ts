@@ -26,6 +26,7 @@ export async function startServer(): Promise<void> {
     isHTTP: !config.isStdioMode,
     outputFormat: config.outputFormat,
     skipImageDownloads: config.skipImageDownloads,
+    imageDir: config.imageDir,
   });
 
   if (config.isStdioMode) {
