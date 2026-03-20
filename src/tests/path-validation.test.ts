@@ -51,6 +51,22 @@ describe("download path validation", () => {
     }
   });
 
+  it("accepts valid path when imageDir is a drive root", async () => {
+    // Windows drive roots (E:\, D:\) already end with a separator.
+    // path.resolve on posix treats this as a regular directory, which is fine
+    // — the logic under test is the prefix check, not actual Windows I/O.
+    const driveRoot = path.resolve("/");
+    const result = await downloadFigmaImagesTool.handler(
+      { ...validParams, localPath: "project/src/static/images/test" },
+      stubFigmaService,
+      driveRoot,
+    );
+
+    if (result.isError) {
+      expect(result.content[0].text).not.toContain("resolves outside the allowed image directory");
+    }
+  });
+
   it("accepts path with leading slash as relative", async () => {
     // LLMs frequently produce paths like "/public/images" when they mean "public/images"
     const result = await downloadFigmaImagesTool.handler(

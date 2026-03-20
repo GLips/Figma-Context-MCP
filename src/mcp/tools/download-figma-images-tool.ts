@@ -95,7 +95,9 @@ async function downloadFigmaImages(
     // LLMs frequently produce paths like "/public/images" when they mean "public/images".
     const baseDir = imageDir ?? process.cwd();
     const resolvedPath = path.resolve(path.join(baseDir, localPath));
-    if (resolvedPath !== baseDir && !resolvedPath.startsWith(baseDir + path.sep)) {
+    // Drive roots (e.g. E:\) already end with a separator — avoid doubling it
+    const baseDirPrefix = baseDir.endsWith(path.sep) ? baseDir : baseDir + path.sep;
+    if (resolvedPath !== baseDir && !resolvedPath.startsWith(baseDirPrefix)) {
       return {
         isError: true,
         content: [
