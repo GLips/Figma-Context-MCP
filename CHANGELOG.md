@@ -1,5 +1,12 @@
 # figma-developer-mcp
 
+## [0.7.1](https://github.com/GLips/Figma-Context-MCP/compare/v0.7.0...v0.7.1) (2026-03-20)
+
+
+### Bug Fixes
+
+* handle drive root paths in image directory security check ([#301](https://github.com/GLips/Figma-Context-MCP/issues/301)) ([9f32616](https://github.com/GLips/Figma-Context-MCP/commit/9f32616caa29b1dbdd5c5a9dcfafa3dd717070a3))
+
 ## [0.7.0](https://github.com/GLips/Figma-Context-MCP/compare/v0.6.6...v0.7.0) (2026-03-19)
 
 
