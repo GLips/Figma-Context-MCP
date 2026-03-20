@@ -3,7 +3,9 @@ import { describe, expect, it } from "vitest";
 import { downloadFigmaImagesTool } from "~/mcp/tools/download-figma-images-tool.js";
 import { downloadFigmaImage } from "~/utils/common.js";
 
-const stubFigmaService = {} as Parameters<typeof downloadFigmaImagesTool.handler>[1];
+const stubFigmaService = {
+  downloadImages: () => Promise.resolve([]),
+} as unknown as Parameters<typeof downloadFigmaImagesTool.handler>[1];
 
 const validParams = {
   fileKey: "abc123",
@@ -38,17 +40,13 @@ describe("download path validation", () => {
   });
 
   it("accepts valid relative path within imageDir", async () => {
-    // Will fail on the Figma API call — we only care that it doesn't
-    // return the path validation error.
     const result = await downloadFigmaImagesTool.handler(
       { ...validParams, localPath: "public/images" },
       stubFigmaService,
       imageDir,
     );
 
-    if (result.isError) {
-      expect(result.content[0].text).not.toContain("resolves outside the allowed image directory");
-    }
+    expect(result.isError).toBeUndefined();
   });
 
   it("accepts valid path when imageDir is a drive root", async () => {
@@ -62,22 +60,17 @@ describe("download path validation", () => {
       driveRoot,
     );
 
-    if (result.isError) {
-      expect(result.content[0].text).not.toContain("resolves outside the allowed image directory");
-    }
+    expect(result.isError).toBeUndefined();
   });
 
   it("accepts path with leading slash as relative", async () => {
-    // LLMs frequently produce paths like "/public/images" when they mean "public/images"
     const result = await downloadFigmaImagesTool.handler(
       { ...validParams, localPath: "/public/images" },
       stubFigmaService,
       imageDir,
     );
 
-    if (result.isError) {
-      expect(result.content[0].text).not.toContain("resolves outside the allowed image directory");
-    }
+    expect(result.isError).toBeUndefined();
   });
 });
 
