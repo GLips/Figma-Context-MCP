@@ -4,8 +4,22 @@ import { Logger } from "../utils/logger.js";
 import {
   downloadFigmaImagesTool,
   getFigmaDataTool,
+  whoamiTool,
+  getDesignContextTool,
+  getScreenshotTool,
+  getVariableDefsTool,
+  createDesignSystemRulesTool,
+  getMetadataTool,
+  getFigJamTool,
   type DownloadImagesParams,
   type GetFigmaDataParams,
+  type WhoamiParams,
+  type GetDesignContextParams,
+  type GetScreenshotParams,
+  type GetVariableDefsParams,
+  type CreateDesignSystemRulesParams,
+  type GetMetadataParams,
+  type GetFigJamParams,
 } from "./tools/index.js";
 
 const serverInfo = {
@@ -19,21 +33,15 @@ type CreateServerOptions = {
   isHTTP?: boolean;
   outputFormat?: "yaml" | "json";
   skipImageDownloads?: boolean;
-  imageDir?: string;
 };
 
 function createServer(
   authOptions: FigmaAuthOptions,
-  {
-    isHTTP = false,
-    outputFormat = "yaml",
-    skipImageDownloads = false,
-    imageDir,
-  }: CreateServerOptions = {},
+  { isHTTP = false, outputFormat = "yaml", skipImageDownloads = false }: CreateServerOptions = {},
 ) {
   const server = new McpServer(serverInfo);
   const figmaService = new FigmaService(authOptions);
-  registerTools(server, figmaService, { outputFormat, skipImageDownloads, imageDir });
+  registerTools(server, figmaService, { outputFormat, skipImageDownloads });
 
   Logger.isHTTP = isHTTP;
 
@@ -46,9 +54,9 @@ function registerTools(
   options: {
     outputFormat: "yaml" | "json";
     skipImageDownloads: boolean;
-    imageDir?: string;
   },
 ): void {
+  // Existing tools
   server.registerTool(
     getFigmaDataTool.name,
     {
@@ -66,14 +74,94 @@ function registerTools(
       downloadFigmaImagesTool.name,
       {
         title: "Download Figma Images",
-        description: downloadFigmaImagesTool.getDescription(options.imageDir),
+        description: downloadFigmaImagesTool.description,
         inputSchema: downloadFigmaImagesTool.parametersSchema,
         annotations: { openWorldHint: true },
       },
-      (params: DownloadImagesParams) =>
-        downloadFigmaImagesTool.handler(params, figmaService, options.imageDir),
+      (params: DownloadImagesParams) => downloadFigmaImagesTool.handler(params, figmaService),
     );
   }
+
+  // Phase 1 tools
+  server.registerTool(
+    whoamiTool.name,
+    {
+      title: "Who Am I",
+      description: whoamiTool.description,
+      inputSchema: whoamiTool.parametersSchema,
+      annotations: { readOnlyHint: true },
+    },
+    (params: WhoamiParams) => whoamiTool.handler(params, figmaService, options.outputFormat),
+  );
+
+  server.registerTool(
+    getDesignContextTool.name,
+    {
+      title: "Get Design Context",
+      description: getDesignContextTool.description,
+      inputSchema: getDesignContextTool.parametersSchema,
+      annotations: { readOnlyHint: true },
+    },
+    (params: GetDesignContextParams) =>
+      getDesignContextTool.handler(params, figmaService, options.outputFormat),
+  );
+
+  server.registerTool(
+    getScreenshotTool.name,
+    {
+      title: "Get Screenshot",
+      description: getScreenshotTool.description,
+      inputSchema: getScreenshotTool.parametersSchema,
+      annotations: { readOnlyHint: true },
+    },
+    (params: GetScreenshotParams) => getScreenshotTool.handler(params, figmaService),
+  );
+
+  server.registerTool(
+    getVariableDefsTool.name,
+    {
+      title: "Get Variable Definitions",
+      description: getVariableDefsTool.description,
+      inputSchema: getVariableDefsTool.parametersSchema,
+      annotations: { readOnlyHint: true },
+    },
+    (params: GetVariableDefsParams) =>
+      getVariableDefsTool.handler(params, figmaService, options.outputFormat),
+  );
+
+  server.registerTool(
+    createDesignSystemRulesTool.name,
+    {
+      title: "Create Design System Rules",
+      description: createDesignSystemRulesTool.description,
+      inputSchema: createDesignSystemRulesTool.parametersSchema,
+      annotations: { readOnlyHint: true },
+    },
+    (params: CreateDesignSystemRulesParams) => createDesignSystemRulesTool.handler(params),
+  );
+
+  server.registerTool(
+    getMetadataTool.name,
+    {
+      title: "Get Metadata",
+      description: getMetadataTool.description,
+      inputSchema: getMetadataTool.parametersSchema,
+      annotations: { readOnlyHint: true },
+    },
+    (params: GetMetadataParams) => getMetadataTool.handler(params, figmaService),
+  );
+
+  // Phase 2 tools
+  server.registerTool(
+    getFigJamTool.name,
+    {
+      title: "Get FigJam",
+      description: getFigJamTool.description,
+      inputSchema: getFigJamTool.parametersSchema,
+      annotations: { readOnlyHint: true },
+    },
+    (params: GetFigJamParams) => getFigJamTool.handler(params, figmaService),
+  );
 }
 
 export { createServer };

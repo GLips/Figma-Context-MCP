@@ -1,4 +1,3 @@
-import path from "path";
 import { z } from "zod";
 import { FigmaService } from "../../services/figma.js";
 import { Logger } from "../../utils/logger.js";
@@ -21,22 +20,16 @@ const parameters = {
         .string()
         .optional()
         .describe(
-          "If a node has an imageRef fill, you must include this variable. Leave blank when downloading Vector SVG images or animated GIFs (use gifRef instead).",
-        ),
-      gifRef: z
-        .string()
-        .optional()
-        .describe(
-          "If a node has a gifRef fill (animated GIF), you must include this variable to download the animated GIF. When gifRef is present in the Figma data, use it instead of imageRef to get the animated file rather than a static snapshot.",
+          "If a node has an imageRef fill, you must include this variable. Leave blank when downloading Vector SVG images.",
         ),
       fileName: z
         .string()
         .regex(
-          /^[a-zA-Z0-9_.-]+\.(png|svg|gif)$/,
-          "File names must contain only letters, numbers, underscores, dots, or hyphens, and end with .png, .svg, or .gif.",
+          /^[a-zA-Z0-9_.-]+\.(png|svg)$/,
+          "File names must contain only letters, numbers, underscores, dots, or hyphens, and end with .png or .svg.",
         )
         .describe(
-          "The local name for saving the fetched file, including extension. png, svg, or gif.",
+          "The local name for saving the fetched file, including extension. Either png or svg.",
         ),
       needsCropping: z
         .boolean()
@@ -52,10 +45,6 @@ const parameters = {
         .describe("Whether this image requires dimension information for CSS variables"),
       filenameSuffix: z
         .string()
-        .regex(
-          /^[a-zA-Z0-9_-]+$/,
-          "Suffix must contain only letters, numbers, underscores, or hyphens",
-        )
         .optional()
         .describe(
           "Suffix to add to filename for unique cropped images, provided in the Figma data (e.g., 'abc123')",
@@ -74,7 +63,7 @@ const parameters = {
   localPath: z
     .string()
     .describe(
-      "The path to the directory where images should be saved, relative to the project root. If the directory does not exist, it will be created. Use forward slashes for path separators (e.g., 'public/images' or 'assets/icons').",
+      "The absolute path to the directory where images are stored in the project. If the directory does not exist, it will be created. The format of this path should respect the directory format of the operating system you are running on. Don't use any special character escaping in the path name either.",
     ),
 };
 
@@ -82,32 +71,9 @@ const parametersSchema = z.object(parameters);
 export type DownloadImagesParams = z.infer<typeof parametersSchema>;
 
 // Enhanced handler function with image processing support
-async function downloadFigmaImages(
-  params: DownloadImagesParams,
-  figmaService: FigmaService,
-  imageDir?: string,
-) {
+async function downloadFigmaImages(params: DownloadImagesParams, figmaService: FigmaService) {
   try {
     const { fileKey, nodes, localPath, pngScale = 2 } = parametersSchema.parse(params);
-
-    // Resolve localPath relative to the configured image directory.
-    // path.join (not path.resolve) so a leading "/" is treated as relative, not absolute —
-    // LLMs frequently produce paths like "/public/images" when they mean "public/images".
-    const baseDir = imageDir ?? process.cwd();
-    const resolvedPath = path.resolve(path.join(baseDir, localPath));
-    // Drive roots (e.g. E:\) already end with a separator — avoid doubling it
-    const baseDirPrefix = baseDir.endsWith(path.sep) ? baseDir : baseDir + path.sep;
-    if (resolvedPath !== baseDir && !resolvedPath.startsWith(baseDirPrefix)) {
-      return {
-        isError: true,
-        content: [
-          {
-            type: "text" as const,
-            text: `Invalid path: "${localPath}" resolves outside the allowed image directory. The server's image directory is "${baseDir}". Provide a path relative to this directory (e.g., "public/images" or "assets/icons").`,
-          },
-        ],
-      };
-    }
 
     // Process nodes: collect unique downloads and track which requests they satisfy
     const downloadItems = [];
@@ -135,12 +101,7 @@ async function downloadFigmaImages(
         requiresImageDimensions: node.requiresImageDimensions || false,
       };
 
-      if (node.gifRef) {
-        // GIF fills are always unique downloads (animated, no dedup needed)
-        const downloadIndex = downloadItems.length;
-        downloadItems.push({ ...downloadItem, gifRef: node.gifRef });
-        downloadToRequests.set(downloadIndex, [finalFileName]);
-      } else if (node.imageRef) {
+      if (node.imageRef) {
         // For imageRefs, check if we've already planned to download this
         const uniqueKey = `${node.imageRef}-${node.filenameSuffix || "none"}`;
 
@@ -171,7 +132,7 @@ async function downloadFigmaImages(
       }
     }
 
-    const allDownloads = await figmaService.downloadImages(fileKey, resolvedPath, downloadItems, {
+    const allDownloads = await figmaService.downloadImages(fileKey, localPath, downloadItems, {
       pngScale,
     });
 
@@ -221,15 +182,11 @@ async function downloadFigmaImages(
   }
 }
 
-function getDescription(imageDir?: string) {
-  const baseDir = imageDir ?? process.cwd();
-  return `Download SVG and PNG images used in a Figma file based on the IDs of image or icon nodes. Images will be saved relative to the server's image directory: ${baseDir}`;
-}
-
 // Export tool configuration
 export const downloadFigmaImagesTool = {
   name: "download_figma_images",
-  getDescription,
+  description:
+    "Download SVG and PNG images used in a Figma file based on the IDs of image or icon nodes",
   parametersSchema,
   handler: downloadFigmaImages,
 } as const;

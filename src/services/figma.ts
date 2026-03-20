@@ -1,3 +1,4 @@
+import path from "path";
 import type {
   GetImagesResponse,
   GetFileResponse,
@@ -144,7 +145,6 @@ export class FigmaService {
     localPath: string,
     items: Array<{
       imageRef?: string;
-      gifRef?: string;
       nodeId?: string;
       fileName: string;
       needsCropping?: boolean;
@@ -155,48 +155,40 @@ export class FigmaService {
   ): Promise<ImageProcessingResult[]> {
     if (items.length === 0) return [];
 
-    const resolvedPath = localPath;
+    const sanitizedPath = path.normalize(localPath).replace(/^(\.\.(\/|\\|$))+/, "");
+    const resolvedPath = path.resolve(sanitizedPath);
+    if (!resolvedPath.startsWith(path.resolve(process.cwd()))) {
+      throw new Error("Invalid path specified. Directory traversal is not allowed.");
+    }
+
     const { pngScale = 2, svgOptions } = options;
     const downloadPromises: Promise<ImageProcessingResult[]>[] = [];
 
-    // Separate items by type: image/gif fills vs rendered nodes
+    // Separate items by type
     const imageFills = items.filter(
-      (item): item is typeof item & ({ imageRef: string } | { gifRef: string }) =>
-        !!item.imageRef || !!item.gifRef,
+      (item): item is typeof item & { imageRef: string } => !!item.imageRef,
     );
     const renderNodes = items.filter(
       (item): item is typeof item & { nodeId: string } => !!item.nodeId,
     );
 
-    // Download image fills (static images and animated GIFs) with processing
+    // Download image fills with processing
     if (imageFills.length > 0) {
       const fillUrls = await this.getImageFillUrls(fileKey);
       const fillDownloads = imageFills
-        .map(
-          ({
-            imageRef,
-            gifRef,
-            fileName,
-            needsCropping,
-            cropTransform,
-            requiresImageDimensions,
-          }) => {
-            // gifRef takes priority when present — it points to the animated GIF file.
-            // imageRef only points to a static snapshot frame for GIF nodes.
-            const fillRef = gifRef ?? imageRef;
-            const imageUrl = fillRef ? fillUrls[fillRef] : undefined;
-            return imageUrl
-              ? downloadAndProcessImage(
-                  fileName,
-                  resolvedPath,
-                  imageUrl,
-                  needsCropping,
-                  cropTransform,
-                  requiresImageDimensions,
-                )
-              : null;
-          },
-        )
+        .map(({ imageRef, fileName, needsCropping, cropTransform, requiresImageDimensions }) => {
+          const imageUrl = fillUrls[imageRef];
+          return imageUrl
+            ? downloadAndProcessImage(
+                fileName,
+                resolvedPath,
+                imageUrl,
+                needsCropping,
+                cropTransform,
+                requiresImageDimensions,
+              )
+            : null;
+        })
         .filter((promise): promise is Promise<ImageProcessingResult> => promise !== null);
 
       if (fillDownloads.length > 0) {
@@ -302,5 +294,55 @@ export class FigmaService {
     writeLogs("figma-raw.json", response);
 
     return response;
+  }
+
+  /**
+   * Get authenticated user information (whoami)
+   */
+  async getMe(): Promise<{
+    id: string;
+    email: string;
+    handle: string;
+    img_url: string;
+  }> {
+    Logger.log("Retrieving authenticated user information");
+    return this.request("/me");
+  }
+
+  /**
+   * Get screenshot as base64 for a specific node
+   */
+  async getScreenshotBase64(fileKey: string, nodeId: string): Promise<string> {
+    Logger.log(`Fetching screenshot for node ${nodeId} from file ${fileKey}`);
+    const urls = await this.getNodeRenderUrls(fileKey, [nodeId], "png", { pngScale: 2 });
+    const url = urls[nodeId];
+
+    if (!url) {
+      throw new Error(`No render URL available for node ${nodeId}`);
+    }
+
+    const response = await fetch(url);
+    if (!response.ok) {
+      throw new Error(`Failed to download screenshot: ${response.statusText}`);
+    }
+
+    const buffer = await response.arrayBuffer();
+    return Buffer.from(buffer).toString("base64");
+  }
+
+  /**
+   * Get local variables from a Figma file
+   */
+  async getLocalVariables(fileKey: string): Promise<any> {
+    Logger.log(`Retrieving local variables for file ${fileKey}`);
+    return this.request(`/files/${fileKey}/variables/local`);
+  }
+
+  /**
+   * Get published styles from a Figma file
+   */
+  async getStyles(fileKey: string): Promise<any> {
+    Logger.log(`Retrieving styles for file ${fileKey}`);
+    return this.request(`/files/${fileKey}/styles`);
   }
 }
