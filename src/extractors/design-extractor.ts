@@ -55,6 +55,8 @@ function parseAPIResponse(data: GetFileResponse | GetFileNodesResponse) {
     // GetFileNodesResponse
     const nodeResponses = Object.values(data.nodes);
     nodeResponses.forEach((nodeResponse) => {
+      // Skip null responses (can occur for prototype files or inaccessible branches)
+      if (!nodeResponse) return;
       if (nodeResponse.components) {
         Object.assign(aggregatedComponents, nodeResponse.components);
       }
@@ -65,15 +67,20 @@ function parseAPIResponse(data: GetFileResponse | GetFileNodesResponse) {
         Object.assign(extraStyles, nodeResponse.styles);
       }
     });
-    nodesToParse = nodeResponses.map((n) => n.document).filter(isVisible);
+    nodesToParse = nodeResponses.map((n) => n?.document).filter((doc) => doc && isVisible(doc));
   } else {
     // GetFileResponse
-    Object.assign(aggregatedComponents, data.components);
-    Object.assign(aggregatedComponentSets, data.componentSets);
+    if (data.components) {
+      Object.assign(aggregatedComponents, data.components);
+    }
+    if (data.componentSets) {
+      Object.assign(aggregatedComponentSets, data.componentSets);
+    }
     if (data.styles) {
       extraStyles = data.styles;
     }
-    nodesToParse = data.document.children.filter(isVisible);
+    // Handle null document or children in prototype file responses
+    nodesToParse = data.document?.children?.filter(isVisible) ?? [];
   }
 
   const { name } = data;
