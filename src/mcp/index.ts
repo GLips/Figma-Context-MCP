@@ -65,8 +65,9 @@ function registerTools(
       inputSchema: getFigmaDataTool.parametersSchema,
       annotations: { readOnlyHint: true },
     },
-    (params: GetFigmaDataParams) =>
-      getFigmaDataTool.handler(params, figmaService, options.outputFormat),
+    (params: GetFigmaDataParams) => {
+      return getFigmaDataTool.handler(params, figmaService, options.outputFormat);
+    },
   );
 
   if (!options.skipImageDownloads) {
@@ -78,7 +79,9 @@ function registerTools(
         inputSchema: downloadFigmaImagesTool.parametersSchema,
         annotations: { openWorldHint: true },
       },
-      (params: DownloadImagesParams) => downloadFigmaImagesTool.handler(params, figmaService),
+      (params: DownloadImagesParams) => {
+        return downloadFigmaImagesTool.handler(params, figmaService);
+      },
     );
   }
 
@@ -91,7 +94,9 @@ function registerTools(
       inputSchema: whoamiTool.parametersSchema,
       annotations: { readOnlyHint: true },
     },
-    (params: WhoamiParams) => whoamiTool.handler(params, figmaService, options.outputFormat),
+    (params: WhoamiParams) => {
+      return whoamiTool.handler(params, figmaService, options.outputFormat);
+    },
   );
 
   server.registerTool(
@@ -102,8 +107,9 @@ function registerTools(
       inputSchema: getDesignContextTool.parametersSchema,
       annotations: { readOnlyHint: true },
     },
-    (params: GetDesignContextParams) =>
-      getDesignContextTool.handler(params, figmaService, options.outputFormat),
+    (params: GetDesignContextParams) => {
+      return getDesignContextTool.handler(params, figmaService, options.outputFormat);
+    },
   );
 
   server.registerTool(
@@ -114,7 +120,9 @@ function registerTools(
       inputSchema: getScreenshotTool.parametersSchema,
       annotations: { readOnlyHint: true },
     },
-    (params: GetScreenshotParams) => getScreenshotTool.handler(params, figmaService),
+    (params: GetScreenshotParams) => {
+      return getScreenshotTool.handler(params, figmaService);
+    },
   );
 
   server.registerTool(
@@ -125,8 +133,9 @@ function registerTools(
       inputSchema: getVariableDefsTool.parametersSchema,
       annotations: { readOnlyHint: true },
     },
-    (params: GetVariableDefsParams) =>
-      getVariableDefsTool.handler(params, figmaService, options.outputFormat),
+    (params: GetVariableDefsParams) => {
+      return getVariableDefsTool.handler(params, figmaService, options.outputFormat);
+    },
   );
 
   server.registerTool(
@@ -137,7 +146,9 @@ function registerTools(
       inputSchema: createDesignSystemRulesTool.parametersSchema,
       annotations: { readOnlyHint: true },
     },
-    (params: CreateDesignSystemRulesParams) => createDesignSystemRulesTool.handler(params),
+    (params: CreateDesignSystemRulesParams) => {
+      return createDesignSystemRulesTool.handler(params);
+    },
   );
 
   server.registerTool(
@@ -148,7 +159,9 @@ function registerTools(
       inputSchema: getMetadataTool.parametersSchema,
       annotations: { readOnlyHint: true },
     },
-    (params: GetMetadataParams) => getMetadataTool.handler(params, figmaService),
+    (params: GetMetadataParams) => {
+      return getMetadataTool.handler(params, figmaService);
+    },
   );
 
   // Phase 2 tools
@@ -160,7 +173,9 @@ function registerTools(
       inputSchema: getFigJamTool.parametersSchema,
       annotations: { readOnlyHint: true },
     },
-    (params: GetFigJamParams) => getFigJamTool.handler(params, figmaService),
+    (params: GetFigJamParams) => {
+      return getFigJamTool.handler(params, figmaService);
+    },
   );
 }
 
