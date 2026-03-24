@@ -1,0 +1,143 @@
+import { describe, expect, it } from "vitest";
+import { extractFromDesign } from "~/extractors/node-walker.js";
+import { allExtractors, collapseSvgContainers } from "~/extractors/built-in.js";
+import { simplifyRawFigmaObject } from "~/extractors/design-extractor.js";
+import type { GetFileResponse } from "@figma/rest-api-spec";
+import type { Node as FigmaNode } from "@figma/rest-api-spec";
+
+// Minimal Figma node factory — only the fields the walker actually reads.
+// The Figma types are deeply discriminated unions; we cast through unknown
+// because tests only need the subset of fields the walker touches.
+function makeNode(overrides: Record<string, unknown>): FigmaNode {
+  return { visible: true, ...overrides } as unknown as FigmaNode;
+}
+
+// A small but representative node tree:
+//   Page
+//   ├── Frame "Header" (visible)
+//   │   ├── Text "Title"
+//   │   └── Rectangle "Bg" (invisible)
+//   ├── Frame "Body"
+//   │   └── Frame "Card"
+//   │       └── Text "Label"
+//   └── Vector "Icon" (becomes IMAGE-SVG)
+const fixtureNodes: FigmaNode[] = [
+  makeNode({
+    id: "1:1",
+    name: "Header",
+    type: "FRAME",
+    children: [
+      makeNode({ id: "1:2", name: "Title", type: "TEXT", characters: "Hello" }),
+      makeNode({ id: "1:3", name: "Bg", type: "RECTANGLE", visible: false }),
+    ],
+  }),
+  makeNode({
+    id: "2:1",
+    name: "Body",
+    type: "FRAME",
+    children: [
+      makeNode({
+        id: "2:2",
+        name: "Card",
+        type: "FRAME",
+        children: [makeNode({ id: "2:3", name: "Label", type: "TEXT", characters: "World" })],
+      }),
+    ],
+  }),
+  makeNode({ id: "3:1", name: "Icon", type: "VECTOR" }),
+];
+
+describe("extractFromDesign", () => {
+  it("produces correct node structure from a nested tree", async () => {
+    const { nodes } = await extractFromDesign(fixtureNodes, allExtractors);
+
+    // Top-level: Header, Body, Icon (3 nodes — Bg is invisible, filtered out)
+    expect(nodes).toHaveLength(3);
+    expect(nodes.map((n) => n.name)).toEqual(["Header", "Body", "Icon"]);
+
+    // Header has 1 child (Title only — Bg is invisible)
+    const header = nodes[0];
+    expect(header.children).toHaveLength(1);
+    expect(header.children![0].name).toBe("Title");
+    expect(header.children![0].text).toBe("Hello");
+
+    // Body > Card > Label
+    const body = nodes[1];
+    expect(body.children).toHaveLength(1);
+    expect(body.children![0].name).toBe("Card");
+    expect(body.children![0].children).toHaveLength(1);
+    expect(body.children![0].children![0].name).toBe("Label");
+    expect(body.children![0].children![0].text).toBe("World");
+
+    // Vector becomes IMAGE-SVG
+    const icon = nodes[2];
+    expect(icon.type).toBe("IMAGE-SVG");
+    expect(icon.children).toBeUndefined();
+  });
+
+  it("respects maxDepth option", async () => {
+    const { nodes } = await extractFromDesign(fixtureNodes, allExtractors, { maxDepth: 1 });
+
+    // At depth 0 we get top-level nodes, depth 1 gets their direct children, no deeper
+    const header = nodes.find((n) => n.name === "Header")!;
+    expect(header.children).toHaveLength(1);
+    expect(header.children![0].name).toBe("Title");
+
+    // Body's child "Card" is at depth 1 — it should exist but have no children
+    const body = nodes.find((n) => n.name === "Body")!;
+    expect(body.children).toHaveLength(1);
+    expect(body.children![0].name).toBe("Card");
+    expect(body.children![0].children).toBeUndefined();
+  });
+
+  it("accumulates global style variables across nodes", async () => {
+    const styledNode = makeNode({
+      id: "4:1",
+      name: "Styled",
+      type: "FRAME",
+      fills: [{ type: "SOLID", color: { r: 1, g: 0, b: 0, a: 1 }, visible: true }],
+    });
+
+    const { globalVars } = await extractFromDesign([styledNode], allExtractors);
+
+    // The fill should be extracted into a global variable
+    expect(Object.keys(globalVars.styles).length).toBeGreaterThan(0);
+  });
+});
+
+describe("simplifyRawFigmaObject", () => {
+  it("produces a complete SimplifiedDesign from a mock API response", async () => {
+    const mockResponse = {
+      name: "Test File",
+      document: {
+        id: "0:0",
+        name: "Document",
+        type: "DOCUMENT",
+        children: fixtureNodes,
+        visible: true,
+      },
+      components: {},
+      componentSets: {},
+      styles: {},
+      schemaVersion: 0,
+      version: "1",
+      role: "owner",
+      lastModified: "2024-01-01",
+      thumbnailUrl: "",
+      editorType: "figma",
+    } as unknown as GetFileResponse;
+
+    const result = await simplifyRawFigmaObject(mockResponse, allExtractors, {
+      afterChildren: collapseSvgContainers,
+    });
+
+    expect(result.name).toBe("Test File");
+    expect(result.nodes).toHaveLength(3);
+    expect(result.nodes.map((n) => n.name)).toEqual(["Header", "Body", "Icon"]);
+
+    // Verify full depth traversal happened
+    const label = result.nodes[1].children![0].children![0];
+    expect(label.name).toBe("Label");
+    expect(label.text).toBe("World");
+  });
+});
