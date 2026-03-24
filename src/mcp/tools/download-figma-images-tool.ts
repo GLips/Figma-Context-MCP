@@ -2,7 +2,7 @@ import path from "path";
 import { z } from "zod";
 import { FigmaService } from "../../services/figma.js";
 import { Logger } from "../../utils/logger.js";
-import { sendProgress, type ToolExtra } from "../index.js";
+import { sendProgress, type ToolExtra } from "../progress.js";
 
 const parameters = {
   fileKey: z

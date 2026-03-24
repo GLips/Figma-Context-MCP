@@ -8,7 +8,7 @@ import {
 } from "~/extractors/index.js";
 import yaml from "js-yaml";
 import { Logger, writeLogs } from "~/utils/logger.js";
-import { sendProgress, type ToolExtra } from "~/mcp/index.js";
+import { sendProgress, type ToolExtra } from "~/mcp/progress.js";
 
 const parameters = {
   fileKey: z

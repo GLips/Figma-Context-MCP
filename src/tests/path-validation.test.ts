@@ -2,7 +2,7 @@ import path from "path";
 import { describe, expect, it } from "vitest";
 import { downloadFigmaImagesTool } from "~/mcp/tools/download-figma-images-tool.js";
 import { downloadFigmaImage } from "~/utils/common.js";
-import type { ToolExtra } from "~/mcp/index.js";
+import type { ToolExtra } from "~/mcp/progress.js";
 
 const stubFigmaService = {
   downloadImages: () => Promise.resolve([]),
