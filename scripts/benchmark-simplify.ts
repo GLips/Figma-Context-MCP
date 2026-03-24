@@ -15,13 +15,34 @@ import { resolve } from "node:path";
 import { performance } from "node:perf_hooks";
 import { Session } from "node:inspector/promises";
 import yaml from "js-yaml";
-import { simplifyRawFigmaObject } from "../src/extractors/design-extractor.js";
-import { allExtractors, collapseSvgContainers } from "../src/extractors/built-in.js";
-import { getNodesProcessed } from "../src/extractors/node-walker.js";
-import type { SimplifiedNode } from "../src/extractors/types.js";
+import {
+  simplifyRawFigmaObject,
+  layoutExtractor,
+  textExtractor,
+  visualsExtractor,
+  componentExtractor,
+  collapseSvgContainers,
+  getNodesProcessed,
+} from "../src/extractors/index.js";
+import type { ExtractorFn, SimplifiedNode } from "../src/extractors/index.js";
 
 const INPUT_PATH = resolve("logs/figma-raw.json");
 const PROFILE_FLAG = process.argv.includes("--profile");
+
+interface ExtractorTiming {
+  name: string;
+  totalMs: number;
+  calls: number;
+}
+
+function timedExtractor(fn: ExtractorFn, timing: ExtractorTiming): ExtractorFn {
+  return (node, result, context) => {
+    const start = performance.now();
+    fn(node, result, context);
+    timing.totalMs += performance.now() - start;
+    timing.calls++;
+  };
+}
 
 function countOutputNodes(nodes: SimplifiedNode[]): number {
   let count = 0;
@@ -34,34 +55,20 @@ function countOutputNodes(nodes: SimplifiedNode[]): number {
   return count;
 }
 
+/** Count objects with id+type fields recursively — rough estimate of Figma node count. */
 function countRawNodes(obj: unknown): number {
   if (!obj || typeof obj !== "object") return 0;
   const record = obj as Record<string, unknown>;
   let count = 0;
 
-  // Count this node if it has an "id" and "type" (Figma node shape)
-  if ("id" in record && "type" in record) {
-    count = 1;
-  }
+  if ("id" in record && "type" in record) count = 1;
 
-  if ("children" in record && Array.isArray(record.children)) {
-    for (const child of record.children) {
-      count += countRawNodes(child);
+  for (const value of Object.values(record)) {
+    if (Array.isArray(value)) {
+      for (const item of value) count += countRawNodes(item);
+    } else if (value && typeof value === "object") {
+      count += countRawNodes(value);
     }
-  }
-
-  // GetFileNodesResponse wraps nodes in a { nodes: { "id": { document: ... } } } structure
-  if ("nodes" in record && typeof record.nodes === "object" && record.nodes !== null) {
-    for (const entry of Object.values(record.nodes as Record<string, unknown>)) {
-      if (entry && typeof entry === "object" && "document" in (entry as Record<string, unknown>)) {
-        count += countRawNodes((entry as Record<string, unknown>).document);
-      }
-    }
-  }
-
-  // GetFileResponse has document.children at the top level
-  if ("document" in record && typeof record.document === "object") {
-    count += countRawNodes(record.document);
   }
 
   return count;
@@ -88,7 +95,6 @@ async function main() {
     process.exit(1);
   }
 
-  // --- CPU profiler setup ---
   let session: Session | undefined;
   if (PROFILE_FLAG) {
     session = new Session();
@@ -98,7 +104,6 @@ async function main() {
     console.log("CPU profiler started\n");
   }
 
-  // --- Read input ---
   console.log(`Reading ${INPUT_PATH}...`);
   const rawJson = readFileSync(INPUT_PATH, "utf-8");
   const inputBytes = Buffer.byteLength(rawJson, "utf-8");
@@ -107,23 +112,46 @@ async function main() {
 
   const memBefore = process.memoryUsage();
 
-  // --- Simplification ---
+  const extractorTimings: ExtractorTiming[] = [
+    { name: "layout", totalMs: 0, calls: 0 },
+    { name: "text", totalMs: 0, calls: 0 },
+    { name: "visuals", totalMs: 0, calls: 0 },
+    { name: "component", totalMs: 0, calls: 0 },
+  ];
+
+  const timedExtractors = [
+    timedExtractor(layoutExtractor, extractorTimings[0]),
+    timedExtractor(textExtractor, extractorTimings[1]),
+    timedExtractor(visualsExtractor, extractorTimings[2]),
+    timedExtractor(componentExtractor, extractorTimings[3]),
+  ];
+
+  const afterChildrenTiming = { totalMs: 0, calls: 0 };
+  const timedAfterChildren: typeof collapseSvgContainers = (node, result, children) => {
+    const start = performance.now();
+    const out = collapseSvgContainers(node, result, children);
+    afterChildrenTiming.totalMs += performance.now() - start;
+    afterChildrenTiming.calls++;
+    return out;
+  };
+
   const simplifyStart = performance.now();
-  const result = await simplifyRawFigmaObject(apiResponse, allExtractors, {
-    afterChildren: collapseSvgContainers,
+  const result = await simplifyRawFigmaObject(apiResponse, timedExtractors, {
+    afterChildren: timedAfterChildren,
   });
   const simplifyMs = performance.now() - simplifyStart;
+
+  const extractorTotal = extractorTimings.reduce((sum, t) => sum + t.totalMs, 0);
+  const overhead = simplifyMs - extractorTotal - afterChildrenTiming.totalMs;
 
   const nodesProcessed = getNodesProcessed();
   const outputNodeCount = countOutputNodes(result.nodes);
 
-  // --- YAML serialization ---
   const yamlStart = performance.now();
   const yamlOutput = yaml.dump(result);
   const yamlMs = performance.now() - yamlStart;
   const yamlBytes = Buffer.byteLength(yamlOutput, "utf-8");
 
-  // --- JSON serialization ---
   const jsonStart = performance.now();
   const jsonOutput = JSON.stringify(result, null, 2);
   const jsonMs = performance.now() - jsonStart;
@@ -131,7 +159,6 @@ async function main() {
 
   const memAfter = process.memoryUsage();
 
-  // --- CPU profiler teardown ---
   if (session) {
     const { profile } = await session.post("Profiler.stop");
     const profilePath = resolve("logs/benchmark.cpuprofile");
@@ -141,30 +168,42 @@ async function main() {
     session.disconnect();
   }
 
-  // --- Report ---
-  const peakRss = Math.max(memBefore.rss, memAfter.rss);
+  const maxRss = Math.max(memBefore.rss, memAfter.rss);
   const rssGrowth = memAfter.rss - memBefore.rss;
   const rssGrowthStr =
     rssGrowth < 0 ? `-${formatBytes(Math.abs(rssGrowth))}` : `+${formatBytes(rssGrowth)}`;
 
+  const row = (label: string, value: string) =>
+    console.log(`│ ${label.padEnd(23)} │ ${value.padStart(17)} │`);
+  const separator = () => console.log("├─────────────────────────┼───────────────────┤");
+
   console.log("\n┌─────────────────────────────────────────────┐");
   console.log("│          Simplification Benchmark           │");
-  console.log("├─────────────────────────┬───────────────────┤");
-  console.log(`│ Input file size         │ ${formatBytes(inputBytes).padStart(17)} │`);
-  console.log(`│ Input nodes (raw)       │ ${String(inputNodeCount).padStart(17)} │`);
-  console.log(`│ Nodes walked            │ ${String(nodesProcessed).padStart(17)} │`);
-  console.log(`│ Output nodes            │ ${String(outputNodeCount).padStart(17)} │`);
-  console.log("├─────────────────────────┼───────────────────┤");
-  console.log(`│ Simplification time     │ ${formatMs(simplifyMs).padStart(17)} │`);
-  console.log(`│ YAML serialization      │ ${formatMs(yamlMs).padStart(17)} │`);
-  console.log(`│ JSON serialization      │ ${formatMs(jsonMs).padStart(17)} │`);
-  console.log("├─────────────────────────┼───────────────────┤");
-  console.log(`│ YAML output size        │ ${formatBytes(yamlBytes).padStart(17)} │`);
-  console.log(`│ JSON output size        │ ${formatBytes(jsonBytes).padStart(17)} │`);
-  console.log("├─────────────────────────┼───────────────────┤");
-  console.log(`│ Peak RSS                │ ${formatBytes(peakRss).padStart(17)} │`);
-  console.log(`│ RSS growth              │ ${rssGrowthStr.padStart(17)} │`);
-  console.log(`│ Heap used (after)       │ ${formatBytes(memAfter.heapUsed).padStart(17)} │`);
+  separator();
+  row("Input file size", formatBytes(inputBytes));
+  row("Input nodes (raw)", String(inputNodeCount));
+  row("Nodes walked", String(nodesProcessed));
+  row("Output nodes", String(outputNodeCount));
+  separator();
+  row("Simplification time", formatMs(simplifyMs));
+  for (const t of extractorTimings) {
+    const pct = ((t.totalMs / simplifyMs) * 100).toFixed(1);
+    row(`  ${t.name} extractor`, `${formatMs(t.totalMs)} (${pct}%)`);
+  }
+  const afterPct = ((afterChildrenTiming.totalMs / simplifyMs) * 100).toFixed(1);
+  row("  afterChildren", `${formatMs(afterChildrenTiming.totalMs)} (${afterPct}%)`);
+  const overheadPct = ((overhead / simplifyMs) * 100).toFixed(1);
+  row("  overhead (walk+yield)", `${formatMs(overhead)} (${overheadPct}%)`);
+  separator();
+  row("YAML serialization", formatMs(yamlMs));
+  row("JSON serialization", formatMs(jsonMs));
+  separator();
+  row("YAML output size", formatBytes(yamlBytes));
+  row("JSON output size", formatBytes(jsonBytes));
+  separator();
+  row("RSS (max sampled)", formatBytes(maxRss));
+  row("RSS growth", rssGrowthStr);
+  row("Heap used (after)", formatBytes(memAfter.heapUsed));
   console.log("└─────────────────────────┴───────────────────┘");
 }
 

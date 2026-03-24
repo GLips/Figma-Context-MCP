@@ -1,6 +1,7 @@
 // Types
 export type {
   ExtractorFn,
+  SimplifiedNode,
   TraversalContext,
   TraversalOptions,
   GlobalVars,
