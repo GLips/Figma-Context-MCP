@@ -103,6 +103,23 @@ describe("extractFromDesign", () => {
     // The fill should be extracted into a global variable
     expect(Object.keys(globalVars.styles).length).toBeGreaterThan(0);
   });
+
+  it("deduplicates identical styles across nodes into a single global variable", async () => {
+    const sharedFill = [{ type: "SOLID", color: { r: 1, g: 0, b: 0, a: 1 }, visible: true }];
+
+    const nodeA = makeNode({ id: "5:1", name: "A", type: "FRAME", fills: sharedFill });
+    const nodeB = makeNode({ id: "5:2", name: "B", type: "FRAME", fills: sharedFill });
+
+    const { nodes, globalVars } = await extractFromDesign([nodeA, nodeB], allExtractors);
+
+    // Both nodes should reference the same fill variable
+    expect(nodes[0].fills).toBeDefined();
+    expect(nodes[0].fills).toBe(nodes[1].fills);
+
+    // Only one fill entry should exist in globalVars
+    const fillEntries = Object.entries(globalVars.styles).filter(([key]) => key.startsWith("fill"));
+    expect(fillEntries).toHaveLength(1);
+  });
 });
 
 describe("simplifyRawFigmaObject", () => {

@@ -24,6 +24,7 @@
     "lint": "eslint .",
     "format": "prettier --write \"src/**/*.ts\"",
     "inspect": "pnpx @modelcontextprotocol/inspector",
+    "benchmark:simplify": "tsx scripts/benchmark-simplify.ts",
     "prepack": "pnpm build"
   },
   "engines": {
