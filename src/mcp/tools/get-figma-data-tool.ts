@@ -57,7 +57,7 @@ async function getFigmaData(
       } ${fileKey}`,
     );
 
-    await sendProgress(extra, 0, 3, "Fetching design data from Figma API");
+    await sendProgress(extra, 0, 4, "Fetching design data from Figma API");
     const stopHeartbeat = startProgressHeartbeat(extra, "Waiting for Figma API response");
 
     // Get raw Figma API response
@@ -75,7 +75,7 @@ async function getFigmaData(
     await sendProgress(extra, 1, 4, "Fetched design data, simplifying");
 
     // Use unified design extraction (handles nodes + components consistently)
-    const simplifiedDesign = simplifyRawFigmaObject(rawApiResponse, allExtractors, {
+    const simplifiedDesign = await simplifyRawFigmaObject(rawApiResponse, allExtractors, {
       maxDepth: depth,
       afterChildren: collapseSvgContainers,
     });

@@ -120,5 +120,7 @@ export async function stopHttpServer(): Promise<void> {
       if (err) reject(err);
       else resolve();
     });
+    // Force-close keep-alive connections so the process can exit promptly
+    httpServer!.closeAllConnections();
   });
 }
