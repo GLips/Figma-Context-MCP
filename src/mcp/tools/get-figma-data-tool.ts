@@ -72,7 +72,7 @@ async function getFigmaData(
       stopHeartbeat();
     }
 
-    await sendProgress(extra, 1, 3, "Fetched design data, processing");
+    await sendProgress(extra, 1, 4, "Fetched design data, simplifying");
 
     // Use unified design extraction (handles nodes + components consistently)
     const simplifiedDesign = simplifyRawFigmaObject(rawApiResponse, allExtractors, {
@@ -81,15 +81,14 @@ async function getFigmaData(
     });
 
     writeLogs("figma-simplified.json", simplifiedDesign);
-    await sendProgress(extra, 2, 3, "Generating response");
-
-    // The final 3/3 is implicit — the tool returns its result
 
     Logger.log(
       `Successfully extracted data: ${simplifiedDesign.nodes.length} nodes, ${
         Object.keys(simplifiedDesign.globalVars.styles).length
       } styles`,
     );
+
+    await sendProgress(extra, 2, 4, "Simplified design, serializing response");
 
     const { nodes, globalVars, ...metadata } = simplifiedDesign;
     const result = {
@@ -101,6 +100,8 @@ async function getFigmaData(
     Logger.log(`Generating ${outputFormat.toUpperCase()} result from extracted data`);
     const formattedResult =
       outputFormat === "json" ? JSON.stringify(result, null, 2) : yaml.dump(result);
+
+    await sendProgress(extra, 3, 4, "Serialized, sending response");
 
     Logger.log("Sending result to client");
     return {
