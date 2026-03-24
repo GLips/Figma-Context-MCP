@@ -18,23 +18,33 @@ import { hasValue, isRectangleCornerRadii } from "~/utils/identity.js";
 import { generateVarId } from "~/utils/common.js";
 import type { Node as FigmaDocumentNode } from "@figma/rest-api-spec";
 
+// Reverse lookup cache: serialized style value → varId.
+// Keyed on the GlobalVars instance so it's automatically scoped to each
+// extraction run and garbage-collected when the run's context is released.
+const styleCaches = new WeakMap<GlobalVars, Map<string, string>>();
+
+function getStyleCache(globalVars: GlobalVars): Map<string, string> {
+  let cache = styleCaches.get(globalVars);
+  if (!cache) {
+    cache = new Map();
+    styleCaches.set(globalVars, cache);
+  }
+  return cache;
+}
+
 /**
- * Helper function to find or create a global variable.
+ * Find an existing global style variable with the same value, or create one.
  */
 function findOrCreateVar(globalVars: GlobalVars, value: StyleTypes, prefix: string): string {
-  // Check if the same value already exists
-  const [existingVarId] =
-    Object.entries(globalVars.styles).find(
-      ([_, existingValue]) => JSON.stringify(existingValue) === JSON.stringify(value),
-    ) ?? [];
+  const cache = getStyleCache(globalVars);
+  const key = JSON.stringify(value);
 
-  if (existingVarId) {
-    return existingVarId;
-  }
+  const existing = cache.get(key);
+  if (existing) return existing;
 
-  // Create a new variable if it doesn't exist
   const varId = generateVarId(prefix);
   globalVars.styles[varId] = value;
+  cache.set(key, varId);
   return varId;
 }
 
