@@ -1,5 +1,6 @@
-import express, { type NextFunction, type Request, type Response } from "express";
+import { type NextFunction, type Request, type Response } from "express";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js";
 import { Server } from "http";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { Logger } from "./utils/logger.js";
@@ -50,7 +51,7 @@ export async function startHttpServer(
     throw new Error("HTTP server is already running");
   }
 
-  const app = express();
+  const app = createMcpExpressApp({ host });
 
   const handlePost = async (req: Request, res: Response) => {
     Logger.log("Received StreamableHTTP request");
@@ -73,7 +74,7 @@ export async function startHttpServer(
   // Serving StreamableHTTP at /sse lets existing client configs keep working —
   // modern MCP clients probe with a POST before falling back to SSE.
   for (const path of ["/mcp", "/sse"]) {
-    app.post(path, express.json(), handlePost);
+    app.post(path, handlePost);
     app.get(path, handleMethodNotAllowed);
     app.delete(path, handleMethodNotAllowed);
   }
