@@ -11,8 +11,14 @@ import type {
 
 // Yield the event loop every N nodes so heartbeats, SIGINT, and
 // other async work can run during large file processing.
+// Yield the event loop every N nodes so heartbeats, SIGINT, and
+// other async work can run during large file processing.
 const YIELD_INTERVAL = 500;
 let nodesProcessed = 0;
+
+export function getNodesProcessed(): number {
+  return nodesProcessed;
+}
 
 async function maybeYield(): Promise<void> {
   nodesProcessed++;

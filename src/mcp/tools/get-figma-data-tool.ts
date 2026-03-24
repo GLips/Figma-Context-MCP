@@ -5,6 +5,7 @@ import {
   simplifyRawFigmaObject,
   allExtractors,
   collapseSvgContainers,
+  getNodesProcessed,
 } from "~/extractors/index.js";
 import yaml from "js-yaml";
 import { Logger, writeLogs } from "~/utils/logger.js";
@@ -73,7 +74,10 @@ async function getFigmaData(
     }
 
     await sendProgress(extra, 1, 4, "Fetched design data, simplifying");
-    const stopSimplifyHeartbeat = startProgressHeartbeat(extra, "Simplifying design data");
+    const stopSimplifyHeartbeat = startProgressHeartbeat(
+      extra,
+      () => `Simplifying design data (${getNodesProcessed()} nodes processed)`,
+    );
 
     // Use unified design extraction (handles nodes + components consistently)
     let simplifiedDesign;

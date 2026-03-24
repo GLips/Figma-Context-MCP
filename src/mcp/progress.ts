@@ -31,7 +31,7 @@ export async function sendProgress(
  */
 export function startProgressHeartbeat(
   extra: ToolExtra,
-  message: string,
+  message: string | (() => string),
   intervalMs = 5_000,
 ): () => void {
   const progressToken = extra._meta?.progressToken;
@@ -40,10 +40,11 @@ export function startProgressHeartbeat(
   let tick = 0;
   const interval = setInterval(() => {
     tick++;
+    const msg = typeof message === "function" ? message() : message;
     extra
       .sendNotification({
         method: "notifications/progress",
-        params: { progressToken, progress: tick, message },
+        params: { progressToken, progress: tick, message: msg },
       })
       .catch(() => clearInterval(interval));
   }, intervalMs);
