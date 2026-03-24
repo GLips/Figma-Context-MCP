@@ -73,12 +73,18 @@ async function getFigmaData(
     }
 
     await sendProgress(extra, 1, 4, "Fetched design data, simplifying");
+    const stopSimplifyHeartbeat = startProgressHeartbeat(extra, "Simplifying design data");
 
     // Use unified design extraction (handles nodes + components consistently)
-    const simplifiedDesign = await simplifyRawFigmaObject(rawApiResponse, allExtractors, {
-      maxDepth: depth,
-      afterChildren: collapseSvgContainers,
-    });
+    let simplifiedDesign;
+    try {
+      simplifiedDesign = await simplifyRawFigmaObject(rawApiResponse, allExtractors, {
+        maxDepth: depth,
+        afterChildren: collapseSvgContainers,
+      });
+    } finally {
+      stopSimplifyHeartbeat();
+    }
 
     writeLogs("figma-simplified.json", simplifiedDesign);
 
