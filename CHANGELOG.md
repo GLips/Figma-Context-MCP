@@ -1,5 +1,26 @@
 # figma-developer-mcp
 
+## [0.8.0](https://github.com/GLips/Figma-Context-MCP/compare/v0.7.1...v0.8.0) (2026-03-24)
+
+
+### ⚠ BREAKING CHANGES
+
+* switch to stateless HTTP transport ([#304](https://github.com/GLips/Figma-Context-MCP/issues/304))
+
+### Features
+
+* add progress notifications and async tree walker ([#305](https://github.com/GLips/Figma-Context-MCP/issues/305)) ([b5724ad](https://github.com/GLips/Figma-Context-MCP/commit/b5724ade8234e73fe94467c6bfad5e020552f0e2))
+
+
+### Performance Improvements
+
+* fix O(n²) bottlenecks in simplification and YAML serialization ([#307](https://github.com/GLips/Figma-Context-MCP/issues/307)) ([29cff0c](https://github.com/GLips/Figma-Context-MCP/commit/29cff0cbd6d2fd0459900e9c3cbc49f64e47075d))
+
+
+### Code Refactoring
+
+* switch to stateless HTTP transport ([#304](https://github.com/GLips/Figma-Context-MCP/issues/304)) ([9dfb1cb](https://github.com/GLips/Figma-Context-MCP/commit/9dfb1cb65a081655d7dca5f076ab76f5d7e9edc0))
+
 ## [0.7.1](https://github.com/GLips/Figma-Context-MCP/compare/v0.7.0...v0.7.1) (2026-03-20)
 
 
