@@ -52,12 +52,23 @@ export async function startHttpServer(
   const app = express();
 
   const handlePost = async (req: Request, res: Response) => {
-    Logger.log("Received StreamableHTTP request");
-    const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
-    const mcpServer = createMcpServer();
-    await mcpServer.connect(transport);
-    await transport.handleRequest(req, res, req.body);
-    Logger.log("StreamableHTTP request handled");
+    try {
+      Logger.log("Received StreamableHTTP request");
+      const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+      const mcpServer = createMcpServer();
+      await mcpServer.connect(transport);
+      await transport.handleRequest(req, res, req.body);
+      Logger.log("StreamableHTTP request handled");
+    } catch (error) {
+      Logger.log("Error handling StreamableHTTP request:", error);
+      if (!res.headersSent) {
+        res.status(500).json({
+          jsonrpc: "2.0",
+          error: { code: -32603, message: "Internal server error" },
+          id: null,
+        });
+      }
+    }
   };
 
   const handleMethodNotAllowed = (_req: Request, res: Response) => {
