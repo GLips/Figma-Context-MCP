@@ -1,6 +1,5 @@
 import type { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/protocol.js";
 import type { ServerNotification, ServerRequest } from "@modelcontextprotocol/sdk/types.js";
-import { Logger } from "~/utils/logger.js";
 
 export type ToolExtra = RequestHandlerExtra<ServerRequest, ServerNotification>;
 
@@ -12,9 +11,6 @@ export async function sendProgress(
   message?: string,
 ): Promise<void> {
   const progressToken = extra._meta?.progressToken;
-  Logger.log(
-    `sendProgress: progressToken=${progressToken}, progress=${progress}/${total}, msg=${message}`,
-  );
   if (progressToken === undefined) return;
 
   await extra.sendNotification({
