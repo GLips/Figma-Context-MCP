@@ -32,7 +32,7 @@ export async function sendProgress(
 export function startProgressHeartbeat(
   extra: ToolExtra,
   message: string | (() => string),
-  intervalMs = 5_000,
+  intervalMs = 3_000,
 ): () => void {
   const progressToken = extra._meta?.progressToken;
   if (progressToken === undefined) return () => {};

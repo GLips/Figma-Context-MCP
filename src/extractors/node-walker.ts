@@ -13,7 +13,7 @@ import type {
 // other async work can run during large file processing.
 // Yield the event loop every N nodes so heartbeats, SIGINT, and
 // other async work can run during large file processing.
-const YIELD_INTERVAL = 500;
+const YIELD_INTERVAL = 100;
 let nodesProcessed = 0;
 
 export function getNodesProcessed(): number {
