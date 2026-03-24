@@ -2,7 +2,7 @@ import path from "path";
 import { z } from "zod";
 import { FigmaService } from "../../services/figma.js";
 import { Logger } from "../../utils/logger.js";
-import { sendProgress, type ToolExtra } from "../progress.js";
+import { sendProgress, startProgressHeartbeat, type ToolExtra } from "../progress.js";
 
 const parameters = {
   fileKey: z
@@ -176,10 +176,16 @@ async function downloadFigmaImages(
     }
 
     await sendProgress(extra, 1, 3, `Resolved ${downloadItems.length} images, downloading`);
+    const stopHeartbeat = startProgressHeartbeat(extra, "Downloading images");
 
-    const allDownloads = await figmaService.downloadImages(fileKey, resolvedPath, downloadItems, {
-      pngScale,
-    });
+    let allDownloads;
+    try {
+      allDownloads = await figmaService.downloadImages(fileKey, resolvedPath, downloadItems, {
+        pngScale,
+      });
+    } finally {
+      stopHeartbeat();
+    }
 
     const successCount = allDownloads.filter(Boolean).length;
     await sendProgress(extra, 2, 3, `Downloaded ${successCount} images, formatting response`);

@@ -8,7 +8,7 @@ import {
 } from "~/extractors/index.js";
 import yaml from "js-yaml";
 import { Logger, writeLogs } from "~/utils/logger.js";
-import { sendProgress, type ToolExtra } from "~/mcp/progress.js";
+import { sendProgress, startProgressHeartbeat, type ToolExtra } from "~/mcp/progress.js";
 
 const parameters = {
   fileKey: z
@@ -58,13 +58,18 @@ async function getFigmaData(
     );
 
     await sendProgress(extra, 0, 3, "Fetching design data from Figma API");
+    const stopHeartbeat = startProgressHeartbeat(extra, "Waiting for Figma API response");
 
     // Get raw Figma API response
     let rawApiResponse: GetFileResponse | GetFileNodesResponse;
-    if (nodeId) {
-      rawApiResponse = await figmaService.getRawNode(fileKey, nodeId, depth);
-    } else {
-      rawApiResponse = await figmaService.getRawFile(fileKey, depth);
+    try {
+      if (nodeId) {
+        rawApiResponse = await figmaService.getRawNode(fileKey, nodeId, depth);
+      } else {
+        rawApiResponse = await figmaService.getRawFile(fileKey, depth);
+      }
+    } finally {
+      stopHeartbeat();
     }
 
     await sendProgress(extra, 1, 3, "Fetched design data, processing");
