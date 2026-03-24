@@ -5,9 +5,11 @@ import {
   simplifyRawFigmaObject,
   allExtractors,
   collapseSvgContainers,
+  getNodesProcessed,
 } from "~/extractors/index.js";
 import yaml from "js-yaml";
 import { Logger, writeLogs } from "~/utils/logger.js";
+import { sendProgress, startProgressHeartbeat, type ToolExtra } from "~/mcp/progress.js";
 
 const parameters = {
   fileKey: z
@@ -42,6 +44,7 @@ async function getFigmaData(
   params: GetFigmaDataParams,
   figmaService: FigmaService,
   outputFormat: "yaml" | "json",
+  extra: ToolExtra,
 ) {
   try {
     const { fileKey, nodeId: rawNodeId, depth } = parametersSchema.parse(params);
@@ -55,19 +58,37 @@ async function getFigmaData(
       } ${fileKey}`,
     );
 
+    await sendProgress(extra, 0, 4, "Fetching design data from Figma API");
+    const stopHeartbeat = startProgressHeartbeat(extra, "Waiting for Figma API response");
+
     // Get raw Figma API response
     let rawApiResponse: GetFileResponse | GetFileNodesResponse;
-    if (nodeId) {
-      rawApiResponse = await figmaService.getRawNode(fileKey, nodeId, depth);
-    } else {
-      rawApiResponse = await figmaService.getRawFile(fileKey, depth);
+    try {
+      if (nodeId) {
+        rawApiResponse = await figmaService.getRawNode(fileKey, nodeId, depth);
+      } else {
+        rawApiResponse = await figmaService.getRawFile(fileKey, depth);
+      }
+    } finally {
+      stopHeartbeat();
     }
 
+    await sendProgress(extra, 1, 4, "Fetched design data, simplifying");
+    const stopSimplifyHeartbeat = startProgressHeartbeat(
+      extra,
+      () => `Simplifying design data (${getNodesProcessed()} nodes processed)`,
+    );
+
     // Use unified design extraction (handles nodes + components consistently)
-    const simplifiedDesign = simplifyRawFigmaObject(rawApiResponse, allExtractors, {
-      maxDepth: depth,
-      afterChildren: collapseSvgContainers,
-    });
+    let simplifiedDesign;
+    try {
+      simplifiedDesign = await simplifyRawFigmaObject(rawApiResponse, allExtractors, {
+        maxDepth: depth,
+        afterChildren: collapseSvgContainers,
+      });
+    } finally {
+      stopSimplifyHeartbeat();
+    }
 
     writeLogs("figma-simplified.json", simplifiedDesign);
 
@@ -76,6 +97,8 @@ async function getFigmaData(
         Object.keys(simplifiedDesign.globalVars.styles).length
       } styles`,
     );
+
+    await sendProgress(extra, 2, 4, "Simplified design, serializing response");
 
     const { nodes, globalVars, ...metadata } = simplifiedDesign;
     const result = {
@@ -87,6 +110,8 @@ async function getFigmaData(
     Logger.log(`Generating ${outputFormat.toUpperCase()} result from extracted data`);
     const formattedResult =
       outputFormat === "json" ? JSON.stringify(result, null, 2) : yaml.dump(result);
+
+    await sendProgress(extra, 3, 4, "Serialized, sending response");
 
     Logger.log("Sending result to client");
     return {

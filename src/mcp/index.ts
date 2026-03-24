@@ -1,6 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { FigmaService, type FigmaAuthOptions } from "../services/figma.js";
 import { Logger } from "../utils/logger.js";
+import type { ToolExtra } from "./progress.js";
 import {
   downloadFigmaImagesTool,
   getFigmaDataTool,
@@ -57,8 +58,8 @@ function registerTools(
       inputSchema: getFigmaDataTool.parametersSchema,
       annotations: { readOnlyHint: true },
     },
-    (params: GetFigmaDataParams) =>
-      getFigmaDataTool.handler(params, figmaService, options.outputFormat),
+    (params: GetFigmaDataParams, extra: ToolExtra) =>
+      getFigmaDataTool.handler(params, figmaService, options.outputFormat, extra),
   );
 
   if (!options.skipImageDownloads) {
@@ -70,8 +71,8 @@ function registerTools(
         inputSchema: downloadFigmaImagesTool.parametersSchema,
         annotations: { openWorldHint: true },
       },
-      (params: DownloadImagesParams) =>
-        downloadFigmaImagesTool.handler(params, figmaService, options.imageDir),
+      (params: DownloadImagesParams, extra: ToolExtra) =>
+        downloadFigmaImagesTool.handler(params, figmaService, options.imageDir, extra),
     );
   }
 }

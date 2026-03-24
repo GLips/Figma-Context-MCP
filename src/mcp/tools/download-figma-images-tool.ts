@@ -2,6 +2,7 @@ import path from "path";
 import { z } from "zod";
 import { FigmaService } from "../../services/figma.js";
 import { Logger } from "../../utils/logger.js";
+import { sendProgress, startProgressHeartbeat, type ToolExtra } from "../progress.js";
 
 const parameters = {
   fileKey: z
@@ -85,7 +86,8 @@ export type DownloadImagesParams = z.infer<typeof parametersSchema>;
 async function downloadFigmaImages(
   params: DownloadImagesParams,
   figmaService: FigmaService,
-  imageDir?: string,
+  imageDir: string | undefined,
+  extra: ToolExtra,
 ) {
   try {
     const { fileKey, nodes, localPath, pngScale = 2 } = parametersSchema.parse(params);
@@ -108,6 +110,8 @@ async function downloadFigmaImages(
         ],
       };
     }
+
+    await sendProgress(extra, 0, 3, "Resolving image downloads");
 
     // Process nodes: collect unique downloads and track which requests they satisfy
     const downloadItems = [];
@@ -171,11 +175,20 @@ async function downloadFigmaImages(
       }
     }
 
-    const allDownloads = await figmaService.downloadImages(fileKey, resolvedPath, downloadItems, {
-      pngScale,
-    });
+    await sendProgress(extra, 1, 3, `Resolved ${downloadItems.length} images, downloading`);
+    const stopHeartbeat = startProgressHeartbeat(extra, "Downloading images");
+
+    let allDownloads;
+    try {
+      allDownloads = await figmaService.downloadImages(fileKey, resolvedPath, downloadItems, {
+        pngScale,
+      });
+    } finally {
+      stopHeartbeat();
+    }
 
     const successCount = allDownloads.filter(Boolean).length;
+    await sendProgress(extra, 2, 3, `Downloaded ${successCount} images, formatting response`);
 
     // Format results with aliases
     const imagesList = allDownloads

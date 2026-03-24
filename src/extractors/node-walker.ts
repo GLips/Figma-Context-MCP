@@ -9,6 +9,24 @@ import type {
   SimplifiedNode,
 } from "./types.js";
 
+// Yield the event loop every N nodes so heartbeats, SIGINT, and
+// other async work can run during large file processing.
+// Yield the event loop every N nodes so heartbeats, SIGINT, and
+// other async work can run during large file processing.
+const YIELD_INTERVAL = 100;
+let nodesProcessed = 0;
+
+export function getNodesProcessed(): number {
+  return nodesProcessed;
+}
+
+async function maybeYield(): Promise<void> {
+  nodesProcessed++;
+  if (nodesProcessed % YIELD_INTERVAL === 0) {
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+}
+
 /**
  * Extract data from Figma nodes using a flexible, single-pass approach.
  *
@@ -18,21 +36,25 @@ import type {
  * @param globalVars - Global variables for style deduplication
  * @returns Object containing processed nodes and updated global variables
  */
-export function extractFromDesign(
+export async function extractFromDesign(
   nodes: FigmaDocumentNode[],
   extractors: ExtractorFn[],
   options: TraversalOptions = {},
   globalVars: GlobalVars = { styles: {} },
-): { nodes: SimplifiedNode[]; globalVars: GlobalVars } {
+): Promise<{ nodes: SimplifiedNode[]; globalVars: GlobalVars }> {
   const context: TraversalContext = {
     globalVars,
     currentDepth: 0,
   };
 
-  const processedNodes = nodes
-    .filter((node) => shouldProcessNode(node, options))
-    .map((node) => processNodeWithExtractors(node, extractors, context, options))
-    .filter((node): node is SimplifiedNode => node !== null);
+  nodesProcessed = 0;
+
+  const processedNodes: SimplifiedNode[] = [];
+  for (const node of nodes) {
+    if (!shouldProcessNode(node, options)) continue;
+    const result = await processNodeWithExtractors(node, extractors, context, options);
+    if (result !== null) processedNodes.push(result);
+  }
 
   return {
     nodes: processedNodes,
@@ -43,15 +65,17 @@ export function extractFromDesign(
 /**
  * Process a single node with all provided extractors in one pass.
  */
-function processNodeWithExtractors(
+async function processNodeWithExtractors(
   node: FigmaDocumentNode,
   extractors: ExtractorFn[],
   context: TraversalContext,
   options: TraversalOptions,
-): SimplifiedNode | null {
+): Promise<SimplifiedNode | null> {
   if (!shouldProcessNode(node, options)) {
     return null;
   }
+
+  await maybeYield();
 
   // Always include base metadata
   const result: SimplifiedNode = {
@@ -75,10 +99,12 @@ function processNodeWithExtractors(
 
     // Use the same pattern as the existing parseNode function
     if (hasValue("children", node) && node.children.length > 0) {
-      const children = node.children
-        .filter((child) => shouldProcessNode(child, options))
-        .map((child) => processNodeWithExtractors(child, extractors, childContext, options))
-        .filter((child): child is SimplifiedNode => child !== null);
+      const children: SimplifiedNode[] = [];
+      for (const child of node.children) {
+        if (!shouldProcessNode(child, options)) continue;
+        const processed = await processNodeWithExtractors(child, extractors, childContext, options);
+        if (processed !== null) children.push(processed);
+      }
 
       if (children.length > 0) {
         // Allow custom logic to modify parent and control which children to include

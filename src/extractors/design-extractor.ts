@@ -14,18 +14,18 @@ import { extractFromDesign } from "./node-walker.js";
 /**
  * Extract a complete SimplifiedDesign from raw Figma API response using extractors.
  */
-export function simplifyRawFigmaObject(
+export async function simplifyRawFigmaObject(
   apiResponse: GetFileResponse | GetFileNodesResponse,
   nodeExtractors: ExtractorFn[],
   options: TraversalOptions = {},
-): SimplifiedDesign {
+): Promise<SimplifiedDesign> {
   // Extract components, componentSets, and raw nodes from API response
   const { metadata, rawNodes, components, componentSets, extraStyles } =
     parseAPIResponse(apiResponse);
 
   // Process nodes using the flexible extractor system
   const globalVars: TraversalContext["globalVars"] = { styles: {}, extraStyles };
-  const { nodes: extractedNodes, globalVars: finalGlobalVars } = extractFromDesign(
+  const { nodes: extractedNodes, globalVars: finalGlobalVars } = await extractFromDesign(
     rawNodes,
     nodeExtractors,
     options,
