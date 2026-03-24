@@ -8,6 +8,7 @@ import {
 } from "~/extractors/index.js";
 import yaml from "js-yaml";
 import { Logger, writeLogs } from "~/utils/logger.js";
+import { sendProgress, type ToolExtra } from "~/mcp/index.js";
 
 const parameters = {
   fileKey: z
@@ -42,6 +43,7 @@ async function getFigmaData(
   params: GetFigmaDataParams,
   figmaService: FigmaService,
   outputFormat: "yaml" | "json",
+  extra: ToolExtra,
 ) {
   try {
     const { fileKey, nodeId: rawNodeId, depth } = parametersSchema.parse(params);
@@ -63,6 +65,8 @@ async function getFigmaData(
       rawApiResponse = await figmaService.getRawFile(fileKey, depth);
     }
 
+    await sendProgress(extra, 1, 2, "Fetched design data from Figma API");
+
     // Use unified design extraction (handles nodes + components consistently)
     const simplifiedDesign = simplifyRawFigmaObject(rawApiResponse, allExtractors, {
       maxDepth: depth,
@@ -70,6 +74,7 @@ async function getFigmaData(
     });
 
     writeLogs("figma-simplified.json", simplifiedDesign);
+    await sendProgress(extra, 2, 2, "Processed design data");
 
     Logger.log(
       `Successfully extracted data: ${simplifiedDesign.nodes.length} nodes, ${

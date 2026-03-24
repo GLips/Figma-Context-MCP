@@ -2,6 +2,7 @@ import path from "path";
 import { z } from "zod";
 import { FigmaService } from "../../services/figma.js";
 import { Logger } from "../../utils/logger.js";
+import { sendProgress, type ToolExtra } from "../index.js";
 
 const parameters = {
   fileKey: z
@@ -85,7 +86,8 @@ export type DownloadImagesParams = z.infer<typeof parametersSchema>;
 async function downloadFigmaImages(
   params: DownloadImagesParams,
   figmaService: FigmaService,
-  imageDir?: string,
+  imageDir: string | undefined,
+  extra: ToolExtra,
 ) {
   try {
     const { fileKey, nodes, localPath, pngScale = 2 } = parametersSchema.parse(params);
@@ -171,11 +173,14 @@ async function downloadFigmaImages(
       }
     }
 
+    await sendProgress(extra, 1, 2, `Resolved ${downloadItems.length} images to download`);
+
     const allDownloads = await figmaService.downloadImages(fileKey, resolvedPath, downloadItems, {
       pngScale,
     });
 
     const successCount = allDownloads.filter(Boolean).length;
+    await sendProgress(extra, 2, 2, `Downloaded ${successCount} images`);
 
     // Format results with aliases
     const imagesList = allDownloads

@@ -2,10 +2,16 @@ import path from "path";
 import { describe, expect, it } from "vitest";
 import { downloadFigmaImagesTool } from "~/mcp/tools/download-figma-images-tool.js";
 import { downloadFigmaImage } from "~/utils/common.js";
+import type { ToolExtra } from "~/mcp/index.js";
 
 const stubFigmaService = {
   downloadImages: () => Promise.resolve([]),
 } as unknown as Parameters<typeof downloadFigmaImagesTool.handler>[1];
+
+const stubExtra = {
+  sendNotification: () => Promise.resolve(),
+  signal: AbortSignal.timeout(30_000),
+} as unknown as ToolExtra;
 
 const validParams = {
   fileKey: "abc123",
@@ -21,6 +27,7 @@ describe("download path validation", () => {
       { ...validParams, localPath: "../../etc" },
       stubFigmaService,
       imageDir,
+      stubExtra,
     );
 
     expect(result.isError).toBe(true);
@@ -33,6 +40,7 @@ describe("download path validation", () => {
       { ...validParams, localPath: "/../../etc" },
       stubFigmaService,
       imageDir,
+      stubExtra,
     );
 
     expect(result.isError).toBe(true);
@@ -44,6 +52,7 @@ describe("download path validation", () => {
       { ...validParams, localPath: "public/images" },
       stubFigmaService,
       imageDir,
+      stubExtra,
     );
 
     expect(result.isError).toBeUndefined();
@@ -58,6 +67,7 @@ describe("download path validation", () => {
       { ...validParams, localPath: "project/src/static/images/test" },
       stubFigmaService,
       driveRoot,
+      stubExtra,
     );
 
     expect(result.isError).toBeUndefined();
@@ -68,6 +78,7 @@ describe("download path validation", () => {
       { ...validParams, localPath: "/public/images" },
       stubFigmaService,
       imageDir,
+      stubExtra,
     );
 
     expect(result.isError).toBeUndefined();

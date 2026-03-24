@@ -1,4 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/protocol.js";
+import type { ServerNotification, ServerRequest } from "@modelcontextprotocol/sdk/types.js";
 import { FigmaService, type FigmaAuthOptions } from "../services/figma.js";
 import { Logger } from "../utils/logger.js";
 import {
@@ -7,6 +9,27 @@ import {
   type DownloadImagesParams,
   type GetFigmaDataParams,
 } from "./tools/index.js";
+
+export type ToolExtra = RequestHandlerExtra<ServerRequest, ServerNotification>;
+
+/**
+ * Send a progress notification if the client requested one via progressToken.
+ * No-ops silently when the client didn't ask for progress.
+ */
+export async function sendProgress(
+  extra: ToolExtra,
+  progress: number,
+  total?: number,
+  message?: string,
+): Promise<void> {
+  const progressToken = extra._meta?.progressToken;
+  if (progressToken === undefined) return;
+
+  await extra.sendNotification({
+    method: "notifications/progress",
+    params: { progressToken, progress, total, message },
+  });
+}
 
 const serverInfo = {
   name: "Figma MCP Server",
@@ -57,8 +80,8 @@ function registerTools(
       inputSchema: getFigmaDataTool.parametersSchema,
       annotations: { readOnlyHint: true },
     },
-    (params: GetFigmaDataParams) =>
-      getFigmaDataTool.handler(params, figmaService, options.outputFormat),
+    (params: GetFigmaDataParams, extra: ToolExtra) =>
+      getFigmaDataTool.handler(params, figmaService, options.outputFormat, extra),
   );
 
   if (!options.skipImageDownloads) {
@@ -70,8 +93,8 @@ function registerTools(
         inputSchema: downloadFigmaImagesTool.parametersSchema,
         annotations: { openWorldHint: true },
       },
-      (params: DownloadImagesParams) =>
-        downloadFigmaImagesTool.handler(params, figmaService, options.imageDir),
+      (params: DownloadImagesParams, extra: ToolExtra) =>
+        downloadFigmaImagesTool.handler(params, figmaService, options.imageDir, extra),
     );
   }
 }
