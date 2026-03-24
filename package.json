@@ -54,10 +54,10 @@
     "cleye": "^2.2.1",
     "cross-env": "^7.0.3",
     "dotenv": "^16.4.7",
-    "express": "^4.21.2",
+    "express": "^5.2.1",
+    "jimp": "^1.6.0",
     "js-yaml": "^4.1.1",
     "remeda": "^2.20.1",
-    "jimp": "^1.6.0",
     "zod": "^3.25.76"
   },
   "devDependencies": {
