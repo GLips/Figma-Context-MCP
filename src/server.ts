@@ -1,4 +1,4 @@
-import express, { type Request, type Response } from "express";
+import express, { type NextFunction, type Request, type Response } from "express";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { Server } from "http";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -6,6 +6,7 @@ import { Logger } from "./utils/logger.js";
 import { createServer } from "./mcp/index.js";
 import { getServerConfig } from "./config.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { ErrorCode } from "@modelcontextprotocol/sdk/types.js";
 
 let httpServer: Server | null = null;
 
@@ -55,6 +56,10 @@ export async function startHttpServer(
     Logger.log("Received StreamableHTTP request");
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
     const mcpServer = createMcpServer();
+    res.on("close", () => {
+      transport.close();
+      mcpServer.close();
+    });
     await mcpServer.connect(transport);
     await transport.handleRequest(req, res, req.body);
     Logger.log("StreamableHTTP request handled");
@@ -72,6 +77,19 @@ export async function startHttpServer(
     app.get(path, handleMethodNotAllowed);
     app.delete(path, handleMethodNotAllowed);
   }
+
+  // Express 5 forwards rejected promises from async handlers here.
+  // Return a JSON-RPC error instead of Express's default HTML 500.
+  app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
+    Logger.log("Unhandled error:", err);
+    if (!res.headersSent) {
+      res.status(500).json({
+        jsonrpc: "2.0",
+        error: { code: ErrorCode.InternalError, message: "Internal server error" },
+        id: null,
+      });
+    }
+  });
 
   return new Promise((resolve, reject) => {
     const server = app.listen(port, host, () => {
