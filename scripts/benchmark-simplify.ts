@@ -148,7 +148,12 @@ async function main() {
   const outputNodeCount = countOutputNodes(result.nodes);
 
   const yamlStart = performance.now();
-  const yamlOutput = yaml.dump(result);
+  const yamlOutput = yaml.dump(result, {
+    noRefs: true,
+    lineWidth: -1,
+    noCompatMode: true,
+    schema: yaml.JSON_SCHEMA,
+  });
   const yamlMs = performance.now() - yamlStart;
   const yamlBytes = Buffer.byteLength(yamlOutput, "utf-8");
 
