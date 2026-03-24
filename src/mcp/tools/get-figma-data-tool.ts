@@ -57,6 +57,8 @@ async function getFigmaData(
       } ${fileKey}`,
     );
 
+    await sendProgress(extra, 0, 3, "Fetching design data from Figma API");
+
     // Get raw Figma API response
     let rawApiResponse: GetFileResponse | GetFileNodesResponse;
     if (nodeId) {
@@ -65,7 +67,7 @@ async function getFigmaData(
       rawApiResponse = await figmaService.getRawFile(fileKey, depth);
     }
 
-    await sendProgress(extra, 1, 2, "Fetched design data from Figma API");
+    await sendProgress(extra, 1, 3, "Fetched design data, processing");
 
     // Use unified design extraction (handles nodes + components consistently)
     const simplifiedDesign = simplifyRawFigmaObject(rawApiResponse, allExtractors, {
@@ -74,7 +76,9 @@ async function getFigmaData(
     });
 
     writeLogs("figma-simplified.json", simplifiedDesign);
-    await sendProgress(extra, 2, 2, "Processed design data");
+    await sendProgress(extra, 2, 3, "Generating response");
+
+    // The final 3/3 is implicit — the tool returns its result
 
     Logger.log(
       `Successfully extracted data: ${simplifiedDesign.nodes.length} nodes, ${

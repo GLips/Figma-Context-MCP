@@ -111,6 +111,8 @@ async function downloadFigmaImages(
       };
     }
 
+    await sendProgress(extra, 0, 3, "Resolving image downloads");
+
     // Process nodes: collect unique downloads and track which requests they satisfy
     const downloadItems = [];
     const downloadToRequests = new Map<number, string[]>(); // download index -> requested filenames
@@ -173,14 +175,14 @@ async function downloadFigmaImages(
       }
     }
 
-    await sendProgress(extra, 1, 2, `Resolved ${downloadItems.length} images to download`);
+    await sendProgress(extra, 1, 3, `Resolved ${downloadItems.length} images, downloading`);
 
     const allDownloads = await figmaService.downloadImages(fileKey, resolvedPath, downloadItems, {
       pngScale,
     });
 
     const successCount = allDownloads.filter(Boolean).length;
-    await sendProgress(extra, 2, 2, `Downloaded ${successCount} images`);
+    await sendProgress(extra, 2, 3, `Downloaded ${successCount} images, formatting response`);
 
     // Format results with aliases
     const imagesList = allDownloads
