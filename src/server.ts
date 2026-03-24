@@ -11,6 +11,12 @@ import { ErrorCode } from "@modelcontextprotocol/sdk/types.js";
 
 let httpServer: Server | null = null;
 
+type ActiveConnection = {
+  transport: StreamableHTTPServerTransport;
+  server: McpServer;
+};
+const activeConnections = new Set<ActiveConnection>();
+
 /**
  * Start the MCP server in either stdio or HTTP mode.
  */
@@ -57,7 +63,10 @@ export async function startHttpServer(
     Logger.log("Received StreamableHTTP request");
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
     const mcpServer = createMcpServer();
+    const conn: ActiveConnection = { transport, server: mcpServer };
+    activeConnections.add(conn);
     res.on("close", () => {
+      activeConnections.delete(conn);
       transport.close();
       mcpServer.close();
     });
@@ -114,13 +123,19 @@ export async function stopHttpServer(): Promise<void> {
     throw new Error("HTTP server is not running");
   }
 
+  // Gracefully close all active MCP connections before tearing down the server
+  for (const conn of activeConnections) {
+    await conn.transport.close();
+    await conn.server.close();
+  }
+  activeConnections.clear();
+
   return new Promise((resolve, reject) => {
     httpServer!.close((err) => {
       httpServer = null;
       if (err) reject(err);
       else resolve();
     });
-    // Force-close keep-alive connections so the process can exit promptly
     httpServer!.closeAllConnections();
   });
 }
