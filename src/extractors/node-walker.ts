@@ -76,6 +76,7 @@ function processNodeWithExtractors(
     // Use the same pattern as the existing parseNode function
     if (hasValue("children", node) && node.children.length > 0) {
       const children = node.children
+        .filter((child): child is NonNullable<typeof child> => child != null)
         .filter((child) => shouldProcessNode(child, options))
         .map((child) => processNodeWithExtractors(child, extractors, childContext, options))
         .filter((child): child is SimplifiedNode => child !== null);

@@ -1,4 +1,5 @@
 import type {
+  Node as FigmaDocumentNode,
   GetImagesResponse,
   GetFileResponse,
   GetFileNodesResponse,
@@ -286,21 +287,69 @@ export class FigmaService {
   }
 
   /**
-   * Get raw Figma API response for specific nodes (for use with flexible extractors)
+   * Get raw Figma API response for specific nodes (for use with flexible extractors).
+   *
+   * Fetches the full file rather than using `ids` or the `/nodes` endpoint.
+   * Both `/files?ids=` and `/files/nodes` nullify interaction destinationIds
+   * when the destination falls outside the queried subtree. Fetching the full
+   * file preserves all prototype interaction data.
+   *
+   * The `depth` parameter is NOT forwarded to the API—it is only used by the
+   * extractor pipeline to limit traversal. This ensures the target node and
+   * its interaction destinations are always present in the response.
    */
   async getRawNode(
     fileKey: string,
     nodeId: string,
     depth?: number | null,
   ): Promise<GetFileNodesResponse> {
-    const endpoint = `/files/${fileKey}/nodes?ids=${nodeId}${depth ? `&depth=${depth}` : ""}`;
+    const endpoint = `/files/${fileKey}`;
     Logger.log(
       `Retrieving raw Figma node: ${nodeId} from ${fileKey} (depth: ${depth ?? "default"})`,
     );
 
-    const response = await this.request<GetFileNodesResponse>(endpoint);
-    writeLogs("figma-raw.json", response);
+    const fileResponse = await this.request<GetFileResponse>(endpoint);
+    writeLogs("figma-raw.json", fileResponse);
 
-    return response;
+    const targetNode = findNodeInTree(fileResponse.document, nodeId);
+    if (!targetNode) {
+      throw new Error(`Node ${nodeId} not found in file ${fileKey}`);
+    }
+
+    return {
+      name: fileResponse.name,
+      role: fileResponse.role,
+      lastModified: fileResponse.lastModified,
+      editorType: fileResponse.editorType,
+      thumbnailUrl: fileResponse.thumbnailUrl ?? "",
+      version: fileResponse.version,
+      nodes: {
+        [nodeId]: {
+          document: targetNode,
+          components: fileResponse.components ?? {},
+          componentSets: fileResponse.componentSets ?? {},
+          schemaVersion: fileResponse.schemaVersion,
+          styles: fileResponse.styles ?? {},
+        },
+      },
+    };
   }
+}
+
+/**
+ * Recursively searches a Figma document tree for a node with the given ID.
+ * Guards against null/undefined entries that may appear in pruned API responses.
+ */
+function findNodeInTree(node: FigmaDocumentNode, targetId: string): FigmaDocumentNode | null {
+  if (!node || typeof node !== "object") return null;
+  if (node.id === targetId) return node;
+
+  const children = "children" in node && Array.isArray(node.children) ? node.children : [];
+  for (const child of children) {
+    if (!child) continue;
+    const found = findNodeInTree(child as FigmaDocumentNode, targetId);
+    if (found) return found;
+  }
+
+  return null;
 }

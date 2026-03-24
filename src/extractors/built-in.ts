@@ -14,6 +14,7 @@ import {
   hasTextStyle,
   isTextNode,
 } from "~/transformers/text.js";
+import { buildSimplifiedInteractions } from "~/transformers/interaction.js";
 import { hasValue, isRectangleCornerRadii } from "~/utils/identity.js";
 import { generateVarId } from "~/utils/common.js";
 import type { Node as FigmaDocumentNode } from "@figma/rest-api-spec";
@@ -83,7 +84,10 @@ export const visualsExtractor: ExtractorFn = (node, result, context) => {
 
   // fills
   if (hasValue("fills", node) && Array.isArray(node.fills) && node.fills.length) {
-    const fills = node.fills.map((fill) => parsePaint(fill, hasChildren)).reverse();
+    const fills = node.fills
+      .filter((fill): fill is NonNullable<typeof fill> => fill != null)
+      .map((fill) => parsePaint(fill, hasChildren))
+      .reverse();
     const styleName = getStyleName(node, context, ["fill", "fills"]);
     if (styleName) {
       context.globalVars.styles[styleName] = fills;
@@ -158,6 +162,16 @@ export const componentExtractor: ExtractorFn = (node, result, _context) => {
   }
 };
 
+/**
+ * Extracts prototype interaction data (triggers and actions) from nodes.
+ */
+export const interactionExtractor: ExtractorFn = (node, result, _context) => {
+  const interactions = buildSimplifiedInteractions(node);
+  if (interactions) {
+    result.interactions = interactions;
+  }
+};
+
 // Helper to fetch a Figma style name for specific style keys on a node
 function getStyleName(
   node: FigmaDocumentNode,
@@ -181,7 +195,13 @@ function getStyleName(
 /**
  * All extractors - replicates the current parseNode behavior.
  */
-export const allExtractors = [layoutExtractor, textExtractor, visualsExtractor, componentExtractor];
+export const allExtractors = [
+  layoutExtractor,
+  textExtractor,
+  visualsExtractor,
+  componentExtractor,
+  interactionExtractor,
+];
 
 /**
  * Layout and text only - useful for content analysis and layout planning.

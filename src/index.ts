@@ -17,6 +17,7 @@ export {
   textExtractor,
   visualsExtractor,
   componentExtractor,
+  interactionExtractor,
   allExtractors,
   layoutAndText,
   contentOnly,
