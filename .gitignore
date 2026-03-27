@@ -40,3 +40,6 @@ Thumbs.db
 
 # mcp-publisher CLI tool files
 .mcpregistry*
+fix-secrets.sh
+pr-body.md
+replacements.txt
