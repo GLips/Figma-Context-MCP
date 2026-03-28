@@ -207,11 +207,13 @@ export const layoutOnly = [layoutExtractor];
 
 /**
  * Node types that can be exported as SVG images.
- * When a FRAME, GROUP, or INSTANCE contains only these types, we can collapse it to IMAGE-SVG.
- * Note: FRAME/GROUP/INSTANCE are NOT included here—they're only eligible if collapsed to IMAGE-SVG.
+ * When a FRAME, GROUP, INSTANCE, or BOOLEAN_OPERATION contains only these types, we can collapse
+ * it to IMAGE-SVG. BOOLEAN_OPERATION is included because it's both a collapsible container AND
+ * SVG-eligible as a child (boolean ops always produce vector output).
  */
 export const SVG_ELIGIBLE_TYPES = new Set([
   "IMAGE-SVG", // VECTOR nodes are converted to IMAGE-SVG, or containers that were collapsed
+  "BOOLEAN_OPERATION",
   "STAR",
   "LINE",
   "ELLIPSE",
@@ -222,7 +224,7 @@ export const SVG_ELIGIBLE_TYPES = new Set([
 /**
  * afterChildren callback that collapses SVG-heavy containers to IMAGE-SVG.
  *
- * If a FRAME, GROUP, or INSTANCE contains only SVG-eligible children, the parent
+ * If a FRAME, GROUP, INSTANCE, or BOOLEAN_OPERATION contains only SVG-eligible children, the parent
  * is marked as IMAGE-SVG and children are omitted, reducing payload size.
  *
  * @param node - Original Figma node
@@ -238,7 +240,10 @@ export function collapseSvgContainers(
   const allChildrenAreSvgEligible = children.every((child) => SVG_ELIGIBLE_TYPES.has(child.type));
 
   if (
-    (node.type === "FRAME" || node.type === "GROUP" || node.type === "INSTANCE") &&
+    (node.type === "FRAME" ||
+      node.type === "GROUP" ||
+      node.type === "INSTANCE" ||
+      node.type === "BOOLEAN_OPERATION") &&
     allChildrenAreSvgEligible &&
     !hasImageFillInChildren(node)
   ) {
