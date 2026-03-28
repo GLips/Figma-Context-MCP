@@ -122,6 +122,59 @@ describe("extractFromDesign", () => {
   });
 });
 
+describe("collapseSvgContainers", () => {
+  it("collapses BOOLEAN_OPERATION nodes to IMAGE-SVG", async () => {
+    const booleanOpNode = makeNode({
+      id: "5:1",
+      name: "Combined Shape",
+      type: "BOOLEAN_OPERATION",
+      booleanOperation: "UNION",
+      children: [
+        makeNode({ id: "5:2", name: "Circle", type: "ELLIPSE" }),
+        makeNode({ id: "5:3", name: "Square", type: "RECTANGLE" }),
+      ],
+    });
+
+    const { nodes } = await extractFromDesign([booleanOpNode], allExtractors, {
+      afterChildren: collapseSvgContainers,
+    });
+
+    expect(nodes).toHaveLength(1);
+    expect(nodes[0].type).toBe("IMAGE-SVG");
+    expect(nodes[0].children).toBeUndefined();
+  });
+
+  it("collapses a frame containing a BOOLEAN_OPERATION to IMAGE-SVG", async () => {
+    const frameWithBoolOp = makeNode({
+      id: "6:1",
+      name: "Icon Frame",
+      type: "FRAME",
+      children: [
+        makeNode({
+          id: "6:2",
+          name: "Union",
+          type: "BOOLEAN_OPERATION",
+          booleanOperation: "UNION",
+          children: [
+            makeNode({ id: "6:3", name: "A", type: "RECTANGLE" }),
+            makeNode({ id: "6:4", name: "B", type: "ELLIPSE" }),
+          ],
+        }),
+      ],
+    });
+
+    const { nodes } = await extractFromDesign([frameWithBoolOp], allExtractors, {
+      afterChildren: collapseSvgContainers,
+    });
+
+    // The BOOLEAN_OPERATION collapses to IMAGE-SVG first (bottom-up),
+    // then the FRAME sees all children are SVG-eligible and collapses too.
+    expect(nodes).toHaveLength(1);
+    expect(nodes[0].type).toBe("IMAGE-SVG");
+    expect(nodes[0].children).toBeUndefined();
+  });
+});
+
 describe("simplifyRawFigmaObject", () => {
   it("produces a complete SimplifiedDesign from a mock API response", async () => {
     const mockResponse = {
