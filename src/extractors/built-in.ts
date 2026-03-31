@@ -23,11 +23,23 @@ import type { Node as FigmaDocumentNode } from "@figma/rest-api-spec";
 // extraction run and garbage-collected when the run's context is released.
 const styleCaches = new WeakMap<GlobalVars, Map<string, string>>();
 
+// Style ID → style key cache for stable naming within a single extraction run.
+const styleKeyCaches = new WeakMap<GlobalVars, Map<string, string>>();
+
 function getStyleCache(globalVars: GlobalVars): Map<string, string> {
   let cache = styleCaches.get(globalVars);
   if (!cache) {
     cache = new Map();
     styleCaches.set(globalVars, cache);
+  }
+  return cache;
+}
+
+function getStyleKeyCache(globalVars: GlobalVars): Map<string, string> {
+  let cache = styleKeyCaches.get(globalVars);
+  if (!cache) {
+    cache = new Map();
+    styleKeyCaches.set(globalVars, cache);
   }
   return cache;
 }
@@ -168,6 +180,34 @@ export const componentExtractor: ExtractorFn = (node, result, _context) => {
   }
 };
 
+function buildStyleKey(context: TraversalContext, name: string, styleId: string): string {
+  const cache = getStyleKeyCache(context.globalVars);
+  const cached = cache.get(styleId);
+  if (cached) return cached;
+
+  const rawId = styleId.replace(/^S:/, "");
+  const normalized = rawId.split(":").pop() ?? rawId;
+  const compact = normalized.replace(/[^a-zA-Z0-9]/g, "");
+
+  const baseId = compact.length ? compact : rawId.replace(/[^a-zA-Z0-9]/g, "");
+  let length = 6;
+  let suffix = baseId.slice(-length) || baseId || styleId;
+  let key = `${name} (${suffix})`;
+
+  while (context.globalVars.styles[key]) {
+    if (baseId.length <= length) {
+      key = `${name} (${baseId || styleId})`;
+      break;
+    }
+    length = Math.min(baseId.length, length + 2);
+    suffix = baseId.slice(-length);
+    key = `${name} (${suffix})`;
+  }
+
+  cache.set(styleId, key);
+  return key;
+}
+
 // Helper to fetch a Figma style name for specific style keys on a node
 function getStyleName(
   node: FigmaDocumentNode,
@@ -178,10 +218,12 @@ function getStyleName(
   const styleMap = node.styles as Record<string, string>;
   for (const key of keys) {
     const styleId = styleMap[key];
-    if (styleId) {
-      const meta = context.globalVars.extraStyles?.[styleId];
-      if (meta?.name) return meta.name;
-    }
+    if (!styleId) continue;
+
+    const meta = context.globalVars.extraStyles?.[styleId];
+    if (!meta?.name) continue;
+
+    return buildStyleKey(context, meta.name, styleId);
   }
   return undefined;
 }
