@@ -72,10 +72,11 @@ export const textExtractor: ExtractorFn = (node, result, context) => {
     const textStyle = extractTextStyle(node);
     if (textStyle) {
       // Prefer Figma named style when available
-      const styleName = getStyleName(node, context, ["text", "typography"]);
-      if (styleName) {
-        context.globalVars.styles[styleName] = textStyle;
-        result.textStyle = styleName;
+      const styleMatch = getStyleMatch(node, context, ["text", "typography"]);
+      if (styleMatch) {
+        const styleKey = resolveStyleKey(context, styleMatch, textStyle);
+        context.globalVars.styles[styleKey] = textStyle;
+        result.textStyle = styleKey;
       } else {
         result.textStyle = findOrCreateVar(context.globalVars, textStyle, "style");
       }
@@ -94,10 +95,11 @@ export const visualsExtractor: ExtractorFn = (node, result, context) => {
   // fills
   if (hasValue("fills", node) && Array.isArray(node.fills) && node.fills.length) {
     const fills = node.fills.map((fill) => parsePaint(fill, hasChildren)).reverse();
-    const styleName = getStyleName(node, context, ["fill", "fills"]);
-    if (styleName) {
-      context.globalVars.styles[styleName] = fills;
-      result.fills = styleName;
+    const styleMatch = getStyleMatch(node, context, ["fill", "fills"]);
+    if (styleMatch) {
+      const styleKey = resolveStyleKey(context, styleMatch, fills);
+      context.globalVars.styles[styleKey] = fills;
+      result.fills = styleKey;
     } else {
       result.fills = findOrCreateVar(context.globalVars, fills, "fill");
     }
@@ -106,11 +108,12 @@ export const visualsExtractor: ExtractorFn = (node, result, context) => {
   // strokes
   const strokes = buildSimplifiedStrokes(node, hasChildren);
   if (strokes.colors.length) {
-    const styleName = getStyleName(node, context, ["stroke", "strokes"]);
-    if (styleName) {
+    const styleMatch = getStyleMatch(node, context, ["stroke", "strokes"]);
+    if (styleMatch) {
       // Only colors are stylable; keep other stroke props on the node
-      context.globalVars.styles[styleName] = strokes.colors;
-      result.strokes = styleName;
+      const styleKey = resolveStyleKey(context, styleMatch, strokes.colors);
+      context.globalVars.styles[styleKey] = strokes.colors;
+      result.strokes = styleKey;
       if (strokes.strokeWeight) result.strokeWeight = strokes.strokeWeight;
       if (strokes.strokeDashes) result.strokeDashes = strokes.strokeDashes;
       if (strokes.strokeWeights) result.strokeWeights = strokes.strokeWeights;
@@ -122,11 +125,12 @@ export const visualsExtractor: ExtractorFn = (node, result, context) => {
   // effects
   const effects = buildSimplifiedEffects(node);
   if (Object.keys(effects).length) {
-    const styleName = getStyleName(node, context, ["effect", "effects"]);
-    if (styleName) {
+    const styleMatch = getStyleMatch(node, context, ["effect", "effects"]);
+    if (styleMatch) {
       // Effects styles store only the effect values
-      context.globalVars.styles[styleName] = effects;
-      result.effects = styleName;
+      const styleKey = resolveStyleKey(context, styleMatch, effects);
+      context.globalVars.styles[styleKey] = effects;
+      result.effects = styleKey;
     } else {
       result.effects = findOrCreateVar(context.globalVars, effects, "effect");
     }
@@ -168,22 +172,38 @@ export const componentExtractor: ExtractorFn = (node, result, _context) => {
   }
 };
 
+type StyleMatch = { name: string; id: string };
+
 // Helper to fetch a Figma style name for specific style keys on a node
-function getStyleName(
+function getStyleMatch(
   node: FigmaDocumentNode,
   context: TraversalContext,
   keys: string[],
-): string | undefined {
+): StyleMatch | undefined {
   if (!hasValue("styles", node)) return undefined;
   const styleMap = node.styles as Record<string, string>;
   for (const key of keys) {
     const styleId = styleMap[key];
     if (styleId) {
       const meta = context.globalVars.extraStyles?.[styleId];
-      if (meta?.name) return meta.name;
+      if (meta?.name) return { name: meta.name, id: styleId };
     }
   }
   return undefined;
+}
+
+function resolveStyleKey(
+  context: TraversalContext,
+  styleMatch: StyleMatch,
+  value: StyleTypes,
+): string {
+  const existing = context.globalVars.styles[styleMatch.name];
+  if (!existing) return styleMatch.name;
+  if (JSON.stringify(existing) === JSON.stringify(value)) return styleMatch.name;
+
+  const cleanedId = styleMatch.id.replace(/[^a-zA-Z0-9]/g, "");
+  if (!cleanedId) return styleMatch.name;
+  return `${styleMatch.name}__${cleanedId}`;
 }
 
 // -------------------- CONVENIENCE COMBINATIONS --------------------

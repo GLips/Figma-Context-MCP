@@ -2,8 +2,9 @@ import { describe, expect, it } from "vitest";
 import { extractFromDesign } from "~/extractors/node-walker.js";
 import { allExtractors, collapseSvgContainers } from "~/extractors/built-in.js";
 import { simplifyRawFigmaObject } from "~/extractors/design-extractor.js";
-import type { GetFileResponse } from "@figma/rest-api-spec";
+import type { GetFileResponse, Style } from "@figma/rest-api-spec";
 import type { Node as FigmaNode } from "@figma/rest-api-spec";
+import type { GlobalVars } from "~/extractors/types.js";
 
 // Minimal Figma node factory — only the fields the walker actually reads.
 // The Figma types are deeply discriminated unions; we cast through unknown
@@ -119,6 +120,48 @@ describe("extractFromDesign", () => {
     // Only one fill entry should exist in globalVars
     const fillEntries = Object.entries(globalVars.styles).filter(([key]) => key.startsWith("fill"));
     expect(fillEntries).toHaveLength(1);
+  });
+
+  it("disambiguates named styles when style names collide", async () => {
+    const nodeA = makeNode({
+      id: "7:1",
+      name: "Text A",
+      type: "TEXT",
+      characters: "Hello",
+      style: { fontFamily: "Inter", fontWeight: 400, fontSize: 12 },
+      styles: { text: "S:1:1" },
+    });
+
+    const nodeB = makeNode({
+      id: "7:2",
+      name: "Text B",
+      type: "TEXT",
+      characters: "World",
+      style: { fontFamily: "Inter", fontWeight: 600, fontSize: 14 },
+      styles: { text: "S:2:2" },
+    });
+
+    const extraStyles: Record<string, Style> = {
+      "S:1:1": { name: "Style A" } as Style,
+      "S:2:2": { name: "Style A" } as Style,
+    };
+
+    const globalVars = { styles: {}, extraStyles } as GlobalVars;
+
+    const { nodes, globalVars: resultVars } = await extractFromDesign(
+      [nodeA, nodeB],
+      allExtractors,
+      {},
+      globalVars,
+    );
+
+    const styleKeys = Object.keys(resultVars.styles).filter((key) => key.startsWith("Style A"));
+    expect(styleKeys).toHaveLength(2);
+    expect(styleKeys).toContain("Style A");
+    const disambiguated = styleKeys.find((key) => key !== "Style A");
+    expect(disambiguated).toMatch(/^Style A__/);
+    expect(nodes[0].textStyle).toBe("Style A");
+    expect(nodes[1].textStyle).toBe(disambiguated);
   });
 });
 
