@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { extractFromDesign } from "~/extractors/node-walker.js";
 import { allExtractors, collapseSvgContainers } from "~/extractors/built-in.js";
 import { simplifyRawFigmaObject } from "~/extractors/design-extractor.js";
+import type { GlobalVars } from "~/extractors/types.js";
 import type { GetFileResponse } from "@figma/rest-api-spec";
 import type { Node as FigmaNode } from "@figma/rest-api-spec";
 
@@ -119,6 +120,55 @@ describe("extractFromDesign", () => {
     // Only one fill entry should exist in globalVars
     const fillEntries = Object.entries(globalVars.styles).filter(([key]) => key.startsWith("fill"));
     expect(fillEntries).toHaveLength(1);
+  });
+
+  it("disambiguates named styles that share the same name", async () => {
+    const styleName = "Heading / Large";
+    const styleIdA = "S:1234567890";
+    const styleIdB = "S:abcdef1234";
+
+    const extraStyles = {
+      [styleIdA]: { name: styleName },
+      [styleIdB]: { name: styleName },
+    };
+
+    const baseStyle = {
+      fontFamily: "Inter",
+      fontWeight: 400,
+      fontSize: 14,
+      lineHeightPx: 20,
+      textAlignHorizontal: "LEFT",
+      textAlignVertical: "TOP",
+    };
+
+    const nodeA = makeNode({
+      id: "6:1",
+      name: "Title A",
+      type: "TEXT",
+      characters: "Hello",
+      style: baseStyle,
+      styles: { text: styleIdA },
+    });
+
+    const nodeB = makeNode({
+      id: "6:2",
+      name: "Title B",
+      type: "TEXT",
+      characters: "World",
+      style: baseStyle,
+      styles: { text: styleIdB },
+    });
+
+    const { nodes, globalVars } = await extractFromDesign([nodeA, nodeB], allExtractors, {}, {
+      styles: {},
+      extraStyles,
+    } as GlobalVars & { extraStyles: typeof extraStyles });
+
+    const styleKeys = Object.keys(globalVars.styles).filter((key) => key.startsWith(styleName));
+    expect(styleKeys).toHaveLength(2);
+    expect(nodes[0].textStyle).not.toBe(nodes[1].textStyle);
+    expect(nodes[0].textStyle).toBe(`${styleName} (567890)`);
+    expect(nodes[1].textStyle).toBe(`${styleName} (ef1234)`);
   });
 });
 

@@ -16,12 +16,14 @@ import {
 } from "~/transformers/text.js";
 import { hasValue, isRectangleCornerRadii } from "~/utils/identity.js";
 import { generateVarId } from "~/utils/common.js";
-import type { Node as FigmaDocumentNode } from "@figma/rest-api-spec";
+import type { Node as FigmaDocumentNode, Style } from "@figma/rest-api-spec";
 
 // Reverse lookup cache: serialized style value → varId.
 // Keyed on the GlobalVars instance so it's automatically scoped to each
 // extraction run and garbage-collected when the run's context is released.
 const styleCaches = new WeakMap<GlobalVars, Map<string, string>>();
+const styleNameCounts = new WeakMap<Record<string, Style>, Map<string, number>>();
+const styleKeyCache = new WeakMap<Record<string, Style>, Map<string, string>>();
 
 function getStyleCache(globalVars: GlobalVars): Map<string, string> {
   let cache = styleCaches.get(globalVars);
@@ -30,6 +32,40 @@ function getStyleCache(globalVars: GlobalVars): Map<string, string> {
     styleCaches.set(globalVars, cache);
   }
   return cache;
+}
+
+function getStyleNameCounts(extraStyles: Record<string, Style>): Map<string, number> {
+  let counts = styleNameCounts.get(extraStyles);
+  if (!counts) {
+    counts = new Map();
+    for (const style of Object.values(extraStyles)) {
+      if (!style.name) continue;
+      counts.set(style.name, (counts.get(style.name) ?? 0) + 1);
+    }
+    styleNameCounts.set(extraStyles, counts);
+  }
+  return counts;
+}
+
+function getShortStyleId(styleId: string): string {
+  const base = styleId.split(":").pop() ?? styleId;
+  return base.length > 6 ? base.slice(-6) : base;
+}
+
+function getStyleKey(extraStyles: Record<string, Style>, styleId: string, name: string): string {
+  let cache = styleKeyCache.get(extraStyles);
+  if (!cache) {
+    cache = new Map();
+    styleKeyCache.set(extraStyles, cache);
+  }
+
+  const existing = cache.get(styleId);
+  if (existing) return existing;
+
+  const counts = getStyleNameCounts(extraStyles);
+  const key = counts.get(name) && counts.get(name)! > 1 ? `${name} (${getShortStyleId(styleId)})` : name;
+  cache.set(styleId, key);
+  return key;
 }
 
 /**
@@ -180,7 +216,10 @@ function getStyleName(
     const styleId = styleMap[key];
     if (styleId) {
       const meta = context.globalVars.extraStyles?.[styleId];
-      if (meta?.name) return meta.name;
+      if (meta?.name) {
+        const extraStyles = context.globalVars.extraStyles;
+        return extraStyles ? getStyleKey(extraStyles, styleId, meta.name) : meta.name;
+      }
     }
   }
   return undefined;
