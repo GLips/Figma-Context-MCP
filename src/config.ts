@@ -54,7 +54,7 @@ function maskApiKey(key: string): string {
 
 export function getServerConfig(): ServerConfig {
   const argv = cli({
-    name: "figma-developer-mcp",
+    name: "figma-context-mcp-air",
     version: process.env.NPM_PACKAGE_VERSION ?? "unknown",
     flags: {
       figmaApiKey: {

@@ -1,12 +1,12 @@
 {
-  "name": "figma-developer-mcp",
-  "version": "0.8.0",
-  "mcpName": "io.github.GLips/Figma-Context-MCP",
-  "description": "Give your coding agent access to your Figma data. Implement designs in any framework in one-shot.",
+  "name": "figma-context-mcp-air",
+  "version": "1.0.0",
+  "mcpName": "io.github.compassalessandrolorenz/Figma-Context-MCP-AIR",
+  "description": "Give your AI coding agent access to Figma design data. 9 tools covering design context, variables, screenshots, metadata, FigJam, and more.",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
-    "figma-developer-mcp": "dist/bin.js"
+    "figma-context-mcp-air": "dist/bin.js"
   },
   "files": [
     "dist",
@@ -39,15 +39,21 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/GLips/Figma-Context-MCP.git"
+    "url": "git+https://github.com/compassalessandrolorenz/Figma-Context-MCP-AIR.git"
   },
-  "homepage": "https://www.framelink.ai",
+  "homepage": "https://github.com/compassalessandrolorenz/Figma-Context-MCP-AIR",
   "keywords": [
     "figma",
     "mcp",
-    "typescript"
+    "typescript",
+    "design-to-code",
+    "ai",
+    "cursor",
+    "claude",
+    "design-system",
+    "figma-api"
   ],
-  "author": "",
+  "author": "Alessandro Lorenz",
   "license": "MIT",
   "dependencies": {
     "@figma/rest-api-spec": "^0.33.0",

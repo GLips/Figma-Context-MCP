@@ -1,17 +1,17 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
-  "name": "io.github.GLips/Figma-Context-MCP",
-  "description": "Give your coding agent access to your Figma data. Implement designs in any framework in one-shot.",
+  "name": "io.github.compassalessandrolorenz/Figma-Context-MCP-AIR",
+  "description": "Give your AI coding agent access to Figma design data. 9 tools covering design context, variables, screenshots, metadata, FigJam, and more.",
   "repository": {
-    "url": "https://github.com/GLips/Figma-Context-MCP",
+    "url": "https://github.com/compassalessandrolorenz/Figma-Context-MCP-AIR",
     "source": "github"
   },
-  "version": "0.6.4",
+  "version": "1.0.0",
   "packages": [
     {
       "registryType": "npm",
-      "identifier": "figma-developer-mcp",
-      "version": "0.6.4",
+      "identifier": "figma-context-mcp-air",
+      "version": "1.0.0",
       "transport": {
         "type": "stdio"
       },

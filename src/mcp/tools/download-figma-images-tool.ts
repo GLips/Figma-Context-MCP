@@ -1,3 +1,4 @@
+import path from "path";
 import { z } from "zod";
 import { FigmaService } from "../../services/figma.js";
 import { Logger } from "../../utils/logger.js";
@@ -71,9 +72,36 @@ const parametersSchema = z.object(parameters);
 export type DownloadImagesParams = z.infer<typeof parametersSchema>;
 
 // Enhanced handler function with image processing support
-async function downloadFigmaImages(params: DownloadImagesParams, figmaService: FigmaService) {
+async function downloadFigmaImages(
+  params: DownloadImagesParams,
+  figmaService: FigmaService,
+  imageDir?: string,
+) {
   try {
     const { fileKey, nodes, localPath, pngScale = 2 } = parametersSchema.parse(params);
+
+    // Validate localPath stays within the allowed image directory.
+    // Strip a leading slash so absolute-looking paths are treated as relative to imageDir.
+    // Resolve imageDir first so Windows drive-letter paths compare correctly.
+    if (imageDir) {
+      const relativePath = localPath.startsWith("/") ? localPath.slice(1) : localPath;
+      const resolvedImageDir = path.resolve(imageDir);
+      const resolvedPath = path.resolve(resolvedImageDir, relativePath);
+      const normalizedImageDir = resolvedImageDir.endsWith(path.sep)
+        ? resolvedImageDir
+        : resolvedImageDir + path.sep;
+      if (!resolvedPath.startsWith(normalizedImageDir)) {
+        return {
+          isError: true as const,
+          content: [
+            {
+              type: "text" as const,
+              text: `Path "${localPath}" resolves outside the allowed image directory: ${imageDir}`,
+            },
+          ],
+        };
+      }
+    }
 
     // Process nodes: collect unique downloads and track which requests they satisfy
     const downloadItems = [];
