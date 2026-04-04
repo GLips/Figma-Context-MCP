@@ -3,9 +3,9 @@ import { config as loadEnv } from "dotenv";
 import { resolve as resolvePath } from "path";
 import type { FigmaAuthOptions } from "./services/figma.js";
 
-type Source = "cli" | "env" | "default";
+export type Source = "cli" | "env" | "default";
 
-interface Resolved<T> {
+export interface Resolved<T> {
   value: T;
   source: Source;
 }
@@ -22,17 +22,17 @@ interface ServerConfig {
 }
 
 /** Resolve a config value through the priority chain: CLI flag → env var → default. */
-function resolve<T>(flag: T | undefined, env: T | undefined, fallback: T): Resolved<T> {
+export function resolve<T>(flag: T | undefined, env: T | undefined, fallback: T): Resolved<T> {
   if (flag !== undefined) return { value: flag, source: "cli" };
   if (env !== undefined) return { value: env, source: "env" };
   return { value: fallback, source: "default" };
 }
 
-function envStr(name: string): string | undefined {
+export function envStr(name: string): string | undefined {
   return process.env[name] || undefined;
 }
 
-function envInt(...names: string[]): number | undefined {
+export function envInt(...names: string[]): number | undefined {
   for (const name of names) {
     const val = process.env[name];
     if (val) return parseInt(val, 10);
@@ -40,7 +40,7 @@ function envInt(...names: string[]): number | undefined {
   return undefined;
 }
 
-function envBool(name: string): boolean | undefined {
+export function envBool(name: string): boolean | undefined {
   const val = process.env[name];
   if (val === "true") return true;
   if (val === "false") return false;
