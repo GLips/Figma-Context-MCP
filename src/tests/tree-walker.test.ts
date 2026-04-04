@@ -122,6 +122,35 @@ describe("extractFromDesign", () => {
     expect(fillEntries).toHaveLength(1);
   });
 
+  it("deduplicates identical colors used as both fill and stroke", async () => {
+    const sharedColor = [{ type: "SOLID", color: { r: 1, g: 0, b: 0, a: 1 }, visible: true }];
+
+    // Stroke node first — if strokes used a different prefix, the var would
+    // be named stroke_* and the fill would reuse it under the wrong prefix.
+    const strokeNode = makeNode({
+      id: "8:1",
+      name: "A",
+      type: "FRAME",
+      strokes: sharedColor,
+      strokeWeight: 1,
+    });
+    const fillNode = makeNode({ id: "8:2", name: "B", type: "FRAME", fills: sharedColor });
+
+    const { nodes, globalVars } = await extractFromDesign([strokeNode, fillNode], allExtractors);
+
+    expect(nodes[0].strokes).toBeDefined();
+    expect(nodes[1].fills).toBeDefined();
+    expect(nodes[0].strokes).toBe(nodes[1].fills);
+
+    // The shared var should use the fill prefix since stroke colors are
+    // structurally identical to fill colors in Figma (both are FILL-type styles).
+    const colorEntries = Object.entries(globalVars.styles).filter(
+      ([, value]) => JSON.stringify(value) === JSON.stringify(["#FF0000"]),
+    );
+    expect(colorEntries).toHaveLength(1);
+    expect(colorEntries[0][0]).toMatch(/^fill_/);
+  });
+
   it("disambiguates named styles when style names collide", async () => {
     const nodeA = makeNode({
       id: "7:1",
