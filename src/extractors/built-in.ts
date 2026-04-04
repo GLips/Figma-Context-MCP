@@ -113,7 +113,7 @@ export const visualsExtractor: ExtractorFn = (node, result, context) => {
   // strokes
   const strokes = buildSimplifiedStrokes(node, hasChildren);
   if (strokes.colors.length) {
-    result.strokes = registerStyle(node, context, strokes.colors, ["stroke", "strokes"], "stroke");
+    result.strokes = registerStyle(node, context, strokes.colors, ["stroke", "strokes"], "fill");
     if (strokes.strokeWeight) result.strokeWeight = strokes.strokeWeight;
     if (strokes.strokeDashes) result.strokeDashes = strokes.strokeDashes;
     if (strokes.strokeWeights) result.strokeWeights = strokes.strokeWeights;
