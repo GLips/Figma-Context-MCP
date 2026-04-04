@@ -49,6 +49,26 @@ function findOrCreateVar(globalVars: GlobalVars, value: StyleTypes, prefix: stri
 }
 
 /**
+ * Register a style value, preferring a Figma named style when available.
+ * Falls back to an auto-generated deduplicating variable ID.
+ */
+function registerStyle(
+  node: FigmaDocumentNode,
+  context: TraversalContext,
+  value: StyleTypes,
+  styleKeys: string[],
+  prefix: string,
+): string {
+  const styleMatch = getStyleMatch(node, context, styleKeys);
+  if (styleMatch) {
+    const styleKey = resolveStyleKey(context, styleMatch, value);
+    context.globalVars.styles[styleKey] = value;
+    return styleKey;
+  }
+  return findOrCreateVar(context.globalVars, value, prefix);
+}
+
+/**
  * Extracts layout-related properties from a node.
  */
 export const layoutExtractor: ExtractorFn = (node, result, context) => {
@@ -71,15 +91,7 @@ export const textExtractor: ExtractorFn = (node, result, context) => {
   if (hasTextStyle(node)) {
     const textStyle = extractTextStyle(node);
     if (textStyle) {
-      // Prefer Figma named style when available
-      const styleMatch = getStyleMatch(node, context, ["text", "typography"]);
-      if (styleMatch) {
-        const styleKey = resolveStyleKey(context, styleMatch, textStyle);
-        context.globalVars.styles[styleKey] = textStyle;
-        result.textStyle = styleKey;
-      } else {
-        result.textStyle = findOrCreateVar(context.globalVars, textStyle, "style");
-      }
+      result.textStyle = registerStyle(node, context, textStyle, ["text", "typography"], "style");
     }
   }
 };
@@ -95,14 +107,7 @@ export const visualsExtractor: ExtractorFn = (node, result, context) => {
   // fills
   if (hasValue("fills", node) && Array.isArray(node.fills) && node.fills.length) {
     const fills = node.fills.map((fill) => parsePaint(fill, hasChildren)).reverse();
-    const styleMatch = getStyleMatch(node, context, ["fill", "fills"]);
-    if (styleMatch) {
-      const styleKey = resolveStyleKey(context, styleMatch, fills);
-      context.globalVars.styles[styleKey] = fills;
-      result.fills = styleKey;
-    } else {
-      result.fills = findOrCreateVar(context.globalVars, fills, "fill");
-    }
+    result.fills = registerStyle(node, context, fills, ["fill", "fills"], "fill");
   }
 
   // strokes
@@ -125,15 +130,7 @@ export const visualsExtractor: ExtractorFn = (node, result, context) => {
   // effects
   const effects = buildSimplifiedEffects(node);
   if (Object.keys(effects).length) {
-    const styleMatch = getStyleMatch(node, context, ["effect", "effects"]);
-    if (styleMatch) {
-      // Effects styles store only the effect values
-      const styleKey = resolveStyleKey(context, styleMatch, effects);
-      context.globalVars.styles[styleKey] = effects;
-      result.effects = styleKey;
-    } else {
-      result.effects = findOrCreateVar(context.globalVars, effects, "effect");
-    }
+    result.effects = registerStyle(node, context, effects, ["effect", "effects"], "effect");
   }
 
   // opacity
