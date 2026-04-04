@@ -15,7 +15,7 @@ import {
   isTextNode,
 } from "~/transformers/text.js";
 import { hasValue, isRectangleCornerRadii } from "~/utils/identity.js";
-import { generateVarId } from "~/utils/common.js";
+import { generateVarId, isVisible } from "~/utils/common.js";
 import type { Node as FigmaDocumentNode } from "@figma/rest-api-spec";
 
 // Reverse lookup cache: serialized style value → varId.
@@ -106,7 +106,10 @@ export const visualsExtractor: ExtractorFn = (node, result, context) => {
 
   // fills
   if (hasValue("fills", node) && Array.isArray(node.fills) && node.fills.length) {
-    const fills = node.fills.map((fill) => parsePaint(fill, hasChildren)).reverse();
+    const fills = node.fills
+      .filter(isVisible)
+      .map((fill) => parsePaint(fill, hasChildren))
+      .reverse();
     result.fills = registerStyle(node, context, fills, ["fill", "fills"], "fill");
   }
 
