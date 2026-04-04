@@ -15,7 +15,7 @@ import {
   isTextNode,
 } from "~/transformers/text.js";
 import { hasValue, isRectangleCornerRadii } from "~/utils/identity.js";
-import { generateVarId } from "~/utils/common.js";
+import { generateVarId, isVisible } from "~/utils/common.js";
 import type { Node as FigmaDocumentNode } from "@figma/rest-api-spec";
 
 // Reverse lookup cache: serialized style value → varId.
@@ -49,6 +49,26 @@ function findOrCreateVar(globalVars: GlobalVars, value: StyleTypes, prefix: stri
 }
 
 /**
+ * Register a style value, preferring a Figma named style when available.
+ * Falls back to an auto-generated deduplicating variable ID.
+ */
+function registerStyle(
+  node: FigmaDocumentNode,
+  context: TraversalContext,
+  value: StyleTypes,
+  styleKeys: string[],
+  prefix: string,
+): string {
+  const styleMatch = getStyleMatch(node, context, styleKeys);
+  if (styleMatch) {
+    const styleKey = resolveStyleKey(context, styleMatch, value);
+    context.globalVars.styles[styleKey] = value;
+    return styleKey;
+  }
+  return findOrCreateVar(context.globalVars, value, prefix);
+}
+
+/**
  * Extracts layout-related properties from a node.
  */
 export const layoutExtractor: ExtractorFn = (node, result, context) => {
@@ -71,14 +91,7 @@ export const textExtractor: ExtractorFn = (node, result, context) => {
   if (hasTextStyle(node)) {
     const textStyle = extractTextStyle(node);
     if (textStyle) {
-      // Prefer Figma named style when available
-      const styleName = getStyleName(node, context, ["text", "typography"]);
-      if (styleName) {
-        context.globalVars.styles[styleName] = textStyle;
-        result.textStyle = styleName;
-      } else {
-        result.textStyle = findOrCreateVar(context.globalVars, textStyle, "style");
-      }
+      result.textStyle = registerStyle(node, context, textStyle, ["text", "typography"], "style");
     }
   }
 };
@@ -93,43 +106,26 @@ export const visualsExtractor: ExtractorFn = (node, result, context) => {
 
   // fills
   if (hasValue("fills", node) && Array.isArray(node.fills) && node.fills.length) {
-    const fills = node.fills.map((fill) => parsePaint(fill, hasChildren)).reverse();
-    const styleName = getStyleName(node, context, ["fill", "fills"]);
-    if (styleName) {
-      context.globalVars.styles[styleName] = fills;
-      result.fills = styleName;
-    } else {
-      result.fills = findOrCreateVar(context.globalVars, fills, "fill");
-    }
+    const fills = node.fills
+      .filter(isVisible)
+      .map((fill) => parsePaint(fill, hasChildren))
+      .reverse();
+    result.fills = registerStyle(node, context, fills, ["fill", "fills"], "fill");
   }
 
   // strokes
   const strokes = buildSimplifiedStrokes(node, hasChildren);
   if (strokes.colors.length) {
-    const styleName = getStyleName(node, context, ["stroke", "strokes"]);
-    if (styleName) {
-      // Only colors are stylable; keep other stroke props on the node
-      context.globalVars.styles[styleName] = strokes.colors;
-      result.strokes = styleName;
-      if (strokes.strokeWeight) result.strokeWeight = strokes.strokeWeight;
-      if (strokes.strokeDashes) result.strokeDashes = strokes.strokeDashes;
-      if (strokes.strokeWeights) result.strokeWeights = strokes.strokeWeights;
-    } else {
-      result.strokes = findOrCreateVar(context.globalVars, strokes, "stroke");
-    }
+    result.strokes = registerStyle(node, context, strokes.colors, ["stroke", "strokes"], "fill");
+    if (strokes.strokeWeight) result.strokeWeight = strokes.strokeWeight;
+    if (strokes.strokeDashes) result.strokeDashes = strokes.strokeDashes;
+    if (strokes.strokeWeights) result.strokeWeights = strokes.strokeWeights;
   }
 
   // effects
   const effects = buildSimplifiedEffects(node);
   if (Object.keys(effects).length) {
-    const styleName = getStyleName(node, context, ["effect", "effects"]);
-    if (styleName) {
-      // Effects styles store only the effect values
-      context.globalVars.styles[styleName] = effects;
-      result.effects = styleName;
-    } else {
-      result.effects = findOrCreateVar(context.globalVars, effects, "effect");
-    }
+    result.effects = registerStyle(node, context, effects, ["effect", "effects"], "effect");
   }
 
   // opacity
@@ -168,22 +164,36 @@ export const componentExtractor: ExtractorFn = (node, result, _context) => {
   }
 };
 
+type StyleMatch = { name: string; id: string };
+
 // Helper to fetch a Figma style name for specific style keys on a node
-function getStyleName(
+function getStyleMatch(
   node: FigmaDocumentNode,
   context: TraversalContext,
   keys: string[],
-): string | undefined {
+): StyleMatch | undefined {
   if (!hasValue("styles", node)) return undefined;
   const styleMap = node.styles as Record<string, string>;
   for (const key of keys) {
     const styleId = styleMap[key];
     if (styleId) {
       const meta = context.globalVars.extraStyles?.[styleId];
-      if (meta?.name) return meta.name;
+      if (meta?.name) return { name: meta.name, id: styleId };
     }
   }
   return undefined;
+}
+
+function resolveStyleKey(
+  context: TraversalContext,
+  styleMatch: StyleMatch,
+  value: StyleTypes,
+): string {
+  const existing = context.globalVars.styles[styleMatch.name];
+  if (!existing) return styleMatch.name;
+  if (JSON.stringify(existing) === JSON.stringify(value)) return styleMatch.name;
+
+  return `${styleMatch.name} (${styleMatch.id})`;
 }
 
 // -------------------- CONVENIENCE COMBINATIONS --------------------

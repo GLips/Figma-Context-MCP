@@ -2,8 +2,9 @@ import { describe, expect, it } from "vitest";
 import { extractFromDesign } from "~/extractors/node-walker.js";
 import { allExtractors, collapseSvgContainers } from "~/extractors/built-in.js";
 import { simplifyRawFigmaObject } from "~/extractors/design-extractor.js";
-import type { GetFileResponse } from "@figma/rest-api-spec";
+import type { GetFileResponse, Style } from "@figma/rest-api-spec";
 import type { Node as FigmaNode } from "@figma/rest-api-spec";
+import type { GlobalVars } from "~/extractors/types.js";
 
 // Minimal Figma node factory — only the fields the walker actually reads.
 // The Figma types are deeply discriminated unions; we cast through unknown
@@ -119,6 +120,77 @@ describe("extractFromDesign", () => {
     // Only one fill entry should exist in globalVars
     const fillEntries = Object.entries(globalVars.styles).filter(([key]) => key.startsWith("fill"));
     expect(fillEntries).toHaveLength(1);
+  });
+
+  it("deduplicates identical colors used as both fill and stroke", async () => {
+    const sharedColor = [{ type: "SOLID", color: { r: 1, g: 0, b: 0, a: 1 }, visible: true }];
+
+    // Stroke node first — if strokes used a different prefix, the var would
+    // be named stroke_* and the fill would reuse it under the wrong prefix.
+    const strokeNode = makeNode({
+      id: "8:1",
+      name: "A",
+      type: "FRAME",
+      strokes: sharedColor,
+      strokeWeight: 1,
+    });
+    const fillNode = makeNode({ id: "8:2", name: "B", type: "FRAME", fills: sharedColor });
+
+    const { nodes, globalVars } = await extractFromDesign([strokeNode, fillNode], allExtractors);
+
+    expect(nodes[0].strokes).toBeDefined();
+    expect(nodes[1].fills).toBeDefined();
+    expect(nodes[0].strokes).toBe(nodes[1].fills);
+
+    // The shared var should use the fill prefix since stroke colors are
+    // structurally identical to fill colors in Figma (both are FILL-type styles).
+    const colorEntries = Object.entries(globalVars.styles).filter(
+      ([, value]) => JSON.stringify(value) === JSON.stringify(["#FF0000"]),
+    );
+    expect(colorEntries).toHaveLength(1);
+    expect(colorEntries[0][0]).toMatch(/^fill_/);
+  });
+
+  it("disambiguates named styles when style names collide", async () => {
+    const nodeA = makeNode({
+      id: "7:1",
+      name: "Text A",
+      type: "TEXT",
+      characters: "Hello",
+      style: { fontFamily: "Inter", fontWeight: 400, fontSize: 12 },
+      styles: { text: "13:77" },
+    });
+
+    const nodeB = makeNode({
+      id: "7:2",
+      name: "Text B",
+      type: "TEXT",
+      characters: "World",
+      style: { fontFamily: "Inter", fontWeight: 600, fontSize: 14 },
+      styles: { text: "161:300" },
+    });
+
+    const extraStyles: Record<string, Style> = {
+      "13:77": { name: "Heading / Large" } as Style,
+      "161:300": { name: "Heading / Large" } as Style,
+    };
+
+    const globalVars = { styles: {}, extraStyles } as GlobalVars;
+
+    const { nodes, globalVars: resultVars } = await extractFromDesign(
+      [nodeA, nodeB],
+      allExtractors,
+      {},
+      globalVars,
+    );
+
+    expect(nodes[0].textStyle).toBe("Heading / Large");
+    expect(nodes[1].textStyle).toBe("Heading / Large (161:300)");
+
+    const styleKeys = Object.keys(resultVars.styles).filter((key) =>
+      key.startsWith("Heading / Large"),
+    );
+    expect(styleKeys).toHaveLength(2);
   });
 });
 
