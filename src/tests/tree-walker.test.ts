@@ -129,7 +129,7 @@ describe("extractFromDesign", () => {
       type: "TEXT",
       characters: "Hello",
       style: { fontFamily: "Inter", fontWeight: 400, fontSize: 12 },
-      styles: { text: "S:1:1" },
+      styles: { text: "13:77" },
     });
 
     const nodeB = makeNode({
@@ -138,12 +138,12 @@ describe("extractFromDesign", () => {
       type: "TEXT",
       characters: "World",
       style: { fontFamily: "Inter", fontWeight: 600, fontSize: 14 },
-      styles: { text: "S:2:2" },
+      styles: { text: "161:300" },
     });
 
     const extraStyles: Record<string, Style> = {
-      "S:1:1": { name: "Style A" } as Style,
-      "S:2:2": { name: "Style A" } as Style,
+      "13:77": { name: "Heading / Large" } as Style,
+      "161:300": { name: "Heading / Large" } as Style,
     };
 
     const globalVars = { styles: {}, extraStyles } as GlobalVars;
@@ -155,13 +155,13 @@ describe("extractFromDesign", () => {
       globalVars,
     );
 
-    const styleKeys = Object.keys(resultVars.styles).filter((key) => key.startsWith("Style A"));
+    expect(nodes[0].textStyle).toBe("Heading / Large");
+    expect(nodes[1].textStyle).toBe("Heading / Large (161:300)");
+
+    const styleKeys = Object.keys(resultVars.styles).filter((key) =>
+      key.startsWith("Heading / Large"),
+    );
     expect(styleKeys).toHaveLength(2);
-    expect(styleKeys).toContain("Style A");
-    const disambiguated = styleKeys.find((key) => key !== "Style A");
-    expect(disambiguated).toMatch(/^Style A__/);
-    expect(nodes[0].textStyle).toBe("Style A");
-    expect(nodes[1].textStyle).toBe(disambiguated);
   });
 });
 

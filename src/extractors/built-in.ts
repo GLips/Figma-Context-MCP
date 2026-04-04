@@ -201,9 +201,7 @@ function resolveStyleKey(
   if (!existing) return styleMatch.name;
   if (JSON.stringify(existing) === JSON.stringify(value)) return styleMatch.name;
 
-  const cleanedId = styleMatch.id.replace(/[^a-zA-Z0-9]/g, "");
-  if (!cleanedId) return styleMatch.name;
-  return `${styleMatch.name}__${cleanedId}`;
+  return `${styleMatch.name} (${styleMatch.id})`;
 }
 
 // -------------------- CONVENIENCE COMBINATIONS --------------------
