@@ -113,18 +113,10 @@ export const visualsExtractor: ExtractorFn = (node, result, context) => {
   // strokes
   const strokes = buildSimplifiedStrokes(node, hasChildren);
   if (strokes.colors.length) {
-    const styleMatch = getStyleMatch(node, context, ["stroke", "strokes"]);
-    if (styleMatch) {
-      // Only colors are stylable; keep other stroke props on the node
-      const styleKey = resolveStyleKey(context, styleMatch, strokes.colors);
-      context.globalVars.styles[styleKey] = strokes.colors;
-      result.strokes = styleKey;
-      if (strokes.strokeWeight) result.strokeWeight = strokes.strokeWeight;
-      if (strokes.strokeDashes) result.strokeDashes = strokes.strokeDashes;
-      if (strokes.strokeWeights) result.strokeWeights = strokes.strokeWeights;
-    } else {
-      result.strokes = findOrCreateVar(context.globalVars, strokes, "stroke");
-    }
+    result.strokes = registerStyle(node, context, strokes.colors, ["stroke", "strokes"], "stroke");
+    if (strokes.strokeWeight) result.strokeWeight = strokes.strokeWeight;
+    if (strokes.strokeDashes) result.strokeDashes = strokes.strokeDashes;
+    if (strokes.strokeWeights) result.strokeWeights = strokes.strokeWeights;
   }
 
   // effects
