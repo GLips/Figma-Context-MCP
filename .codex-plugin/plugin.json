@@ -1,0 +1,24 @@
+{
+  "name": "figma-context-mcp",
+  "version": "0.1.0",
+  "description": "Figma layout information for AI coding agents via Codex",
+  "author": {
+    "name": "GLips",
+    "url": "https://github.com/GLips/Figma-Context-MCP"
+  },
+  "homepage": "https://github.com/GLips/Figma-Context-MCP",
+  "repository": "https://github.com/GLips/Figma-Context-MCP",
+  "keywords": [
+    "mcp",
+    "codex"
+  ],
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Figma Context MCP",
+    "shortDescription": "Figma layout information for AI coding agents via Codex",
+    "longDescription": "MCP server to provide Figma layout information to AI coding agents like Cursor.",
+    "category": "Development",
+    "websiteURL": "https://github.com/GLips/Figma-Context-MCP"
+  },
+  "skills": "./skills/"
+}
