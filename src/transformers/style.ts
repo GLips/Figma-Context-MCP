@@ -234,11 +234,7 @@ export function buildSimplifiedStrokes(
 ): SimplifiedStroke {
   let strokes: SimplifiedStroke = { colors: [] };
   if (hasValue("strokes", n) && Array.isArray(n.strokes) && n.strokes.length) {
-    // Reverse to match CSS stacking order (Figma layers bottom-to-top, CSS top-to-bottom)
-    strokes.colors = n.strokes
-      .filter(isVisible)
-      .map((stroke) => parsePaint(stroke, hasChildren))
-      .reverse();
+    strokes.colors = n.strokes.filter(isVisible).map((stroke) => parsePaint(stroke, hasChildren));
   }
 
   if (hasValue("strokeWeight", n) && typeof n.strokeWeight === "number" && n.strokeWeight > 0) {
