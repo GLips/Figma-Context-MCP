@@ -1,4 +1,3 @@
-import { cli } from "cleye";
 import { config as loadEnv } from "dotenv";
 import { resolve as resolvePath } from "path";
 import type { FigmaAuthOptions } from "./services/figma.js";
@@ -10,7 +9,19 @@ export interface Resolved<T> {
   source: Source;
 }
 
-interface ServerConfig {
+export interface ServerFlags {
+  figmaApiKey?: string;
+  figmaOauthToken?: string;
+  env?: string;
+  port?: number;
+  host?: string;
+  json?: boolean;
+  skipImageDownloads?: boolean;
+  imageDir?: string;
+  stdio?: boolean;
+}
+
+export interface ServerConfig {
   auth: FigmaAuthOptions;
   port: number;
   host: string;
@@ -52,85 +63,19 @@ function maskApiKey(key: string): string {
   return `****${key.slice(-4)}`;
 }
 
-export function getServerConfig(): ServerConfig {
-  const argv = cli({
-    name: "figma-developer-mcp",
-    version: process.env.NPM_PACKAGE_VERSION ?? "unknown",
-    flags: {
-      figmaApiKey: {
-        type: String,
-        description: "Figma API key (Personal Access Token)",
-      },
-      figmaOauthToken: {
-        type: String,
-        description: "Figma OAuth Bearer token",
-      },
-      env: {
-        type: String,
-        description: "Path to custom .env file to load environment variables from",
-      },
-      port: {
-        type: Number,
-        description: "Port to run the server on",
-      },
-      host: {
-        type: String,
-        description: "Host to run the server on",
-      },
-      json: {
-        type: Boolean,
-        description: "Output data from tools in JSON format instead of YAML",
-      },
-      skipImageDownloads: {
-        type: Boolean,
-        description: "Do not register the download_figma_images tool (skip image downloads)",
-      },
-      imageDir: {
-        type: String,
-        description:
-          "Base directory for image downloads. The download tool will only write files within this directory. Defaults to the current working directory.",
-      },
-      stdio: {
-        type: Boolean,
-        description: "Run in stdio transport mode for MCP clients",
-      },
-    },
-  });
-
-  // Load .env before resolving env-backed values
-  const envFilePath = argv.flags.env
-    ? resolvePath(argv.flags.env)
-    : resolvePath(process.cwd(), ".env");
-  const envFileSource: Source = argv.flags.env ? "cli" : "default";
+export function loadEnvFile(envPath?: string): string {
+  const envFilePath = envPath ? resolvePath(envPath) : resolvePath(process.cwd(), ".env");
   loadEnv({ path: envFilePath, override: true });
+  return envFilePath;
+}
 
-  // Resolve config values: CLI flag → env var → default
-  const figmaApiKey = resolve(argv.flags.figmaApiKey, envStr("FIGMA_API_KEY"), "");
-  const figmaOauthToken = resolve(argv.flags.figmaOauthToken, envStr("FIGMA_OAUTH_TOKEN"), "");
-  const port = resolve(argv.flags.port, envInt("FRAMELINK_PORT", "PORT"), 3333);
-  const host = resolve(argv.flags.host, envStr("FRAMELINK_HOST"), "127.0.0.1");
-  const skipImageDownloads = resolve(
-    argv.flags.skipImageDownloads,
-    envBool("SKIP_IMAGE_DOWNLOADS"),
-    false,
-  );
-  const envImageDir = envStr("IMAGE_DIR");
-  const imageDir = resolve(
-    argv.flags.imageDir ? resolvePath(argv.flags.imageDir) : undefined,
-    envImageDir ? resolvePath(envImageDir) : undefined,
-    process.cwd(),
-  );
+export function resolveAuth(flags: {
+  figmaApiKey?: string;
+  figmaOauthToken?: string;
+}): FigmaAuthOptions {
+  const figmaApiKey = resolve(flags.figmaApiKey, envStr("FIGMA_API_KEY"), "");
+  const figmaOauthToken = resolve(flags.figmaOauthToken, envStr("FIGMA_OAUTH_TOKEN"), "");
 
-  // These two don't fit the simple pattern: --json maps to a string enum,
-  // and --stdio has a NODE_ENV backdoor.
-  const outputFormat = resolve<"yaml" | "json">(
-    argv.flags.json ? "json" : undefined,
-    envStr("OUTPUT_FORMAT") as "yaml" | "json" | undefined,
-    "yaml",
-  );
-  const isStdioMode = argv.flags.stdio === true || process.env.NODE_ENV === "cli";
-
-  // Auth
   const useOAuth = Boolean(figmaOauthToken.value);
   const auth: FigmaAuthOptions = {
     figmaApiKey: figmaApiKey.value,
@@ -144,6 +89,43 @@ export function getServerConfig(): ServerConfig {
     );
     process.exit(1);
   }
+
+  return auth;
+}
+
+export function getServerConfig(flags: ServerFlags): ServerConfig {
+  // Load .env before resolving env-backed values
+  const envFilePath = loadEnvFile(flags.env);
+  const envFileSource: Source = flags.env !== undefined ? "cli" : "default";
+
+  // Auth
+  const auth = resolveAuth(flags);
+
+  // Resolve config values: CLI flag → env var → default
+  const figmaApiKey = resolve(flags.figmaApiKey, envStr("FIGMA_API_KEY"), "");
+  const figmaOauthToken = resolve(flags.figmaOauthToken, envStr("FIGMA_OAUTH_TOKEN"), "");
+  const port = resolve(flags.port, envInt("FRAMELINK_PORT", "PORT"), 3333);
+  const host = resolve(flags.host, envStr("FRAMELINK_HOST"), "127.0.0.1");
+  const skipImageDownloads = resolve(
+    flags.skipImageDownloads,
+    envBool("SKIP_IMAGE_DOWNLOADS"),
+    false,
+  );
+  const envImageDir = envStr("IMAGE_DIR");
+  const imageDir = resolve(
+    flags.imageDir ? resolvePath(flags.imageDir) : undefined,
+    envImageDir ? resolvePath(envImageDir) : undefined,
+    process.cwd(),
+  );
+
+  // --json maps to a string enum
+  const outputFormat = resolve<"yaml" | "json">(
+    flags.json ? "json" : undefined,
+    envStr("OUTPUT_FORMAT") as "yaml" | "json" | undefined,
+    "yaml",
+  );
+
+  const isStdioMode = flags.stdio === true;
 
   const configSources: Record<string, Source> = {
     envFile: envFileSource,
@@ -159,7 +141,7 @@ export function getServerConfig(): ServerConfig {
   if (!isStdioMode) {
     console.log("\nConfiguration:");
     console.log(`- ENV_FILE: ${envFilePath} (source: ${configSources.envFile})`);
-    if (useOAuth) {
+    if (auth.useOAuth) {
       console.log(
         `- FIGMA_OAUTH_TOKEN: ${maskApiKey(auth.figmaOAuthToken)} (source: ${configSources.figmaOauthToken})`,
       );

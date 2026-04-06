@@ -5,7 +5,7 @@ import { Server } from "http";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { Logger } from "./utils/logger.js";
 import { createServer } from "./mcp/index.js";
-import { getServerConfig } from "./config.js";
+import type { ServerConfig } from "./config.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { ErrorCode } from "@modelcontextprotocol/sdk/types.js";
 
@@ -20,9 +20,7 @@ const activeConnections = new Set<ActiveConnection>();
 /**
  * Start the MCP server in either stdio or HTTP mode.
  */
-export async function startServer(): Promise<void> {
-  const config = getServerConfig();
-
+export async function startServer(config: ServerConfig): Promise<void> {
   const serverOptions = {
     isHTTP: !config.isStdioMode,
     outputFormat: config.outputFormat as "yaml" | "json",
