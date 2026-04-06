@@ -46,6 +46,23 @@ describe("result serialization", () => {
       expect(colorMatches).toHaveLength(2);
     });
 
+    it("skips unnecessary quoting for strings ambiguous under default YAML schema", () => {
+      const data = { answer: "yes", date: "2024-01-01" };
+
+      const output = yaml.dump(data, yamlOptions);
+      const bare = yaml.dump(data);
+
+      // Default schema quotes "yes" and "2024-01-01" to prevent
+      // boolean/timestamp interpretation on load.
+      expect(bare).toContain("'yes'");
+      expect(bare).toContain("'2024-01-01'");
+
+      // JSON_SCHEMA only recognizes true/false as booleans and has no
+      // timestamp type, so these strings don't need protective quoting.
+      expect(output).not.toContain("'yes'");
+      expect(output).not.toContain("'2024-01-01'");
+    });
+
     it("round-trips through parse without data loss", () => {
       const data = {
         name: "Frame 1",

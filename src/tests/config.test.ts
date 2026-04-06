@@ -16,6 +16,11 @@ describe("resolve", () => {
     const result = resolve(undefined, undefined, "fallback");
     expect(result).toEqual({ value: "fallback", source: "default" });
   });
+
+  it("preserves falsy flag values (false, 0) instead of falling through", () => {
+    expect(resolve(false, true, true)).toEqual({ value: false, source: "cli" });
+    expect(resolve(0, 42, 99)).toEqual({ value: 0, source: "cli" });
+  });
 });
 
 describe("envStr", () => {
