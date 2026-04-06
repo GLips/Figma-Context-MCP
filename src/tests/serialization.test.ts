@@ -1,16 +1,5 @@
 import yaml from "js-yaml";
-
-/**
- * These options mirror the inline serialization in get-figma-data-tool.ts.
- * When that logic is extracted into a shared function, these tests will
- * switch to importing it — but the assertions stay the same.
- */
-const yamlOptions: yaml.DumpOptions = {
-  noRefs: true,
-  lineWidth: -1,
-  noCompatMode: true,
-  schema: yaml.JSON_SCHEMA,
-};
+import { serializeResult } from "~/utils/serialize.js";
 
 describe("result serialization", () => {
   describe("YAML format", () => {
@@ -18,7 +7,7 @@ describe("result serialization", () => {
       const longString = "a".repeat(200);
       const data = { description: longString };
 
-      const output = yaml.dump(data, yamlOptions);
+      const output = serializeResult(data, "yaml");
       const bare = yaml.dump(data);
 
       // Bare yaml.dump folds at 80 chars, producing multi-line output
@@ -31,7 +20,7 @@ describe("result serialization", () => {
       const shared = { color: "#ff0000", opacity: 1 };
       const data = { fill: shared, stroke: shared };
 
-      const output = yaml.dump(data, yamlOptions);
+      const output = serializeResult(data, "yaml");
       const bare = yaml.dump(data);
 
       // Bare yaml.dump detects the shared reference and emits anchors/aliases
@@ -49,7 +38,7 @@ describe("result serialization", () => {
     it("skips unnecessary quoting for strings ambiguous under default YAML schema", () => {
       const data = { answer: "yes", date: "2024-01-01" };
 
-      const output = yaml.dump(data, yamlOptions);
+      const output = serializeResult(data, "yaml");
       const bare = yaml.dump(data);
 
       // Default schema quotes "yes" and "2024-01-01" to prevent
@@ -71,7 +60,7 @@ describe("result serialization", () => {
         children: [{ name: "Text", content: "hello" }],
       };
 
-      const output = yaml.dump(data, yamlOptions);
+      const output = serializeResult(data, "yaml");
       const parsed = yaml.load(output);
 
       expect(parsed).toEqual(data);
@@ -82,7 +71,7 @@ describe("result serialization", () => {
     it("pretty-prints with 2-space indentation", () => {
       const data = { name: "Frame", width: 100 };
 
-      const output = JSON.stringify(data, null, 2);
+      const output = serializeResult(data, "json");
 
       const lines = output.split("\n");
       // Second line should be indented with exactly 2 spaces
@@ -97,7 +86,7 @@ describe("result serialization", () => {
         children: [{ name: "Text", content: "hello" }],
       };
 
-      const output = JSON.stringify(data, null, 2);
+      const output = serializeResult(data, "json");
       const parsed = JSON.parse(output);
 
       expect(parsed).toEqual(data);
