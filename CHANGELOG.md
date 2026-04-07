@@ -1,5 +1,15 @@
 # figma-developer-mcp
 
+## [0.8.1](https://github.com/GLips/Figma-Context-MCP/compare/v0.8.0...v0.8.1) (2026-04-07)
+
+
+### Bug Fixes
+
+* disambiguate named styles with duplicate names ([#319](https://github.com/GLips/Figma-Context-MCP/issues/319)) ([a077ace](https://github.com/GLips/Figma-Context-MCP/commit/a077ace9809bf6b14c4e4a9906065fb3cea2d24f))
+* include BOOLEAN_OPERATION in SVG container collapse ([354679e](https://github.com/GLips/Figma-Context-MCP/commit/354679eab17389c551a435ca7c5224a250446301))
+* include BOOLEAN_OPERATION in SVG container collapse ([19c50b3](https://github.com/GLips/Figma-Context-MCP/commit/19c50b3ad3ecf12ce4b4bedc0aefff718b3b89f9))
+* replace jimp with selective @jimp/* imports to fix ESM crash ([#333](https://github.com/GLips/Figma-Context-MCP/issues/333)) ([dd47ebf](https://github.com/GLips/Figma-Context-MCP/commit/dd47ebf82520c6147b913415db99c3b4caaa40b2)), closes [#329](https://github.com/GLips/Figma-Context-MCP/issues/329)
+
 ## [0.8.0](https://github.com/GLips/Figma-Context-MCP/compare/v0.7.1...v0.8.0) (2026-03-24)
 
 
