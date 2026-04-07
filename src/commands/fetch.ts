@@ -1,6 +1,15 @@
-import { command } from "cleye";
+import { type Command, command } from "cleye";
+import { loadEnvFile, resolveAuth } from "~/config.js";
+import { FigmaService } from "~/services/figma.js";
+import {
+  simplifyRawFigmaObject,
+  allExtractors,
+  collapseSvgContainers,
+} from "~/extractors/index.js";
+import { serializeResult } from "~/utils/serialize.js";
+import { parseFigmaUrl } from "~/utils/figma-url.js";
 
-export const fetchCommand = command(
+export const fetchCommand: Command = command(
   {
     name: "fetch",
     description: "Fetch simplified Figma data and print to stdout",
@@ -36,8 +45,58 @@ export const fetchCommand = command(
       },
     },
   },
-  () => {
-    console.error("fetch command not yet implemented");
-    process.exit(1);
+  (argv) => {
+    run(argv.flags, argv._).catch((error) => {
+      console.error(error instanceof Error ? error.message : String(error));
+      process.exit(1);
+    });
   },
 );
+
+async function run(
+  flags: {
+    fileKey?: string;
+    nodeId?: string;
+    depth?: number;
+    json?: boolean;
+    figmaApiKey?: string;
+    figmaOauthToken?: string;
+    env?: string;
+  },
+  positionals: string[],
+) {
+  const url = positionals[0];
+  let fileKey = flags.fileKey;
+  let nodeId = flags.nodeId;
+
+  if (url) {
+    const parsed = parseFigmaUrl(url);
+    fileKey ??= parsed.fileKey;
+    nodeId ??= parsed.nodeId;
+  }
+
+  if (!fileKey) {
+    console.error("Either a Figma URL or --file-key is required");
+    process.exit(1);
+  }
+
+  loadEnvFile(flags.env);
+  const auth = resolveAuth(flags);
+  const figmaService = new FigmaService(auth);
+
+  const depth = flags.depth;
+  const rawApiResponse = nodeId
+    ? await figmaService.getRawNode(fileKey, nodeId, depth)
+    : await figmaService.getRawFile(fileKey, depth);
+
+  const simplifiedDesign = await simplifyRawFigmaObject(rawApiResponse, allExtractors, {
+    maxDepth: depth,
+    afterChildren: collapseSvgContainers,
+  });
+
+  const { nodes, globalVars, ...metadata } = simplifiedDesign;
+  const result = { metadata, nodes, globalVars };
+
+  const outputFormat = flags.json ? "json" : "yaml";
+  console.log(serializeResult(result, outputFormat));
+}
