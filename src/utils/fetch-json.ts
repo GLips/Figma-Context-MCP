@@ -15,7 +15,7 @@ const CONNECTION_ERROR_CODES = new Set([
   "UND_ERR_CONNECT_TIMEOUT",
 ]);
 
-export async function fetchWithRetry<T extends { status?: number }>(
+export async function fetchJSON<T extends { status?: number }>(
   url: string,
   options: RequestOptions = {},
 ): Promise<T> {

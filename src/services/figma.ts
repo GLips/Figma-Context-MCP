@@ -7,7 +7,7 @@ import type {
 } from "@figma/rest-api-spec";
 import { downloadAndProcessImage, type ImageProcessingResult } from "~/utils/image-processing.js";
 import { Logger, writeLogs } from "~/utils/logger.js";
-import { fetchWithRetry } from "~/utils/fetch-with-retry.js";
+import { fetchJSON } from "~/utils/fetch-json.js";
 
 export type FigmaAuthOptions = {
   figmaApiKey: string;
@@ -61,7 +61,7 @@ export class FigmaService {
       Logger.log(`Calling ${this.baseUrl}${endpoint}`);
       const headers = this.getAuthHeaders();
 
-      return await fetchWithRetry<T & { status?: number }>(`${this.baseUrl}${endpoint}`, {
+      return await fetchJSON<T & { status?: number }>(`${this.baseUrl}${endpoint}`, {
         headers,
       });
     } catch (error) {

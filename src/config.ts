@@ -126,10 +126,10 @@ export function getServerConfig(): ServerConfig {
     process.cwd(),
   );
 
-  // Proxy has a 4-source fallback chain, so it doesn't fit the resolve() helper.
-  const proxyUrl =
-    argv.flags.proxy ?? envStr("FIGMA_PROXY") ?? envStr("HTTPS_PROXY") ?? envStr("HTTP_PROXY");
-  const proxySource: Source = argv.flags.proxy ? "cli" : proxyUrl ? "env" : "default";
+  // Only resolve explicit proxy config here. Standard env vars (HTTPS_PROXY, HTTP_PROXY,
+  // NO_PROXY) are handled by undici's EnvHttpProxyAgent at the dispatcher level, which
+  // correctly respects NO_PROXY exclusions.
+  const proxy = resolve(argv.flags.proxy, envStr("FIGMA_PROXY"), undefined);
 
   // These two don't fit the simple pattern: --json maps to a string enum,
   // and --stdio has a NODE_ENV backdoor.
@@ -161,7 +161,7 @@ export function getServerConfig(): ServerConfig {
     figmaOauthToken: figmaOauthToken.source,
     port: port.source,
     host: host.source,
-    proxy: proxySource,
+    proxy: proxy.source,
     outputFormat: outputFormat.source,
     skipImageDownloads: skipImageDownloads.source,
     imageDir: imageDir.source,
@@ -183,7 +183,7 @@ export function getServerConfig(): ServerConfig {
     }
     console.log(`- FRAMELINK_PORT: ${port.value} (source: ${configSources.port})`);
     console.log(`- FRAMELINK_HOST: ${host.value} (source: ${configSources.host})`);
-    console.log(`- PROXY: ${proxyUrl ?? "none"} (source: ${configSources.proxy})`);
+    console.log(`- PROXY: ${proxy.value ? "configured" : "none"} (source: ${configSources.proxy})`);
     console.log(`- OUTPUT_FORMAT: ${outputFormat.value} (source: ${configSources.outputFormat})`);
     console.log(
       `- SKIP_IMAGE_DOWNLOADS: ${skipImageDownloads.value} (source: ${configSources.skipImageDownloads})`,
@@ -196,7 +196,7 @@ export function getServerConfig(): ServerConfig {
     auth,
     port: port.value,
     host: host.value,
-    proxy: proxyUrl,
+    proxy: proxy.value,
     outputFormat: outputFormat.value,
     skipImageDownloads: skipImageDownloads.value,
     imageDir: imageDir.value,
