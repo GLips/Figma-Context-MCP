@@ -73,7 +73,7 @@ const HTML_COMMENT_RE = /<!--([\s\S]*?)-->/g;
 //   [//]: # (hidden text here)
 //   [//]: # "hidden text here"
 // Invisible when rendered, but parsed by AI context scrapers.
-const HIDDEN_REF_LINK_RE = /^\[\/\/\]: #\s*[\("](.*?)[\)"]\s*$/;
+const HIDDEN_REF_LINK_RE = /^\[\/\/\]: #\s*[("](.*?)[)"]\s*$/;
 
 // ---------------------------------------------------------------------------
 // Scanning
