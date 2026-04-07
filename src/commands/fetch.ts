@@ -70,9 +70,14 @@ async function run(
   let nodeId = flags.nodeId;
 
   if (url) {
-    const parsed = parseFigmaUrl(url);
-    fileKey ??= parsed.fileKey;
-    nodeId ??= parsed.nodeId;
+    try {
+      const parsed = parseFigmaUrl(url);
+      fileKey ??= parsed.fileKey;
+      nodeId ??= parsed.nodeId;
+    } catch (error) {
+      if (!fileKey) throw error;
+      // fileKey provided via flag — malformed URL is non-fatal
+    }
   }
 
   if (!fileKey) {
