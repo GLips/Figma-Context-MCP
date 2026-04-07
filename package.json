@@ -63,6 +63,7 @@
     "express": "^5.2.1",
     "js-yaml": "^4.1.1",
     "remeda": "^2.20.1",
+    "undici": "^8.0.2",
     "zod": "^3.25.76"
   },
   "devDependencies": {

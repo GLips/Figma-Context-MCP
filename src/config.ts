@@ -14,6 +14,7 @@ interface ServerConfig {
   auth: FigmaAuthOptions;
   port: number;
   host: string;
+  proxy: string | undefined;
   outputFormat: "yaml" | "json";
   skipImageDownloads: boolean;
   imageDir: string;
@@ -90,6 +91,10 @@ export function getServerConfig(): ServerConfig {
         description:
           "Base directory for image downloads. The download tool will only write files within this directory. Defaults to the current working directory.",
       },
+      proxy: {
+        type: String,
+        description: "HTTP proxy URL for corporate networks (e.g. http://proxy:8080)",
+      },
       stdio: {
         type: Boolean,
         description: "Run in stdio transport mode for MCP clients",
@@ -121,6 +126,11 @@ export function getServerConfig(): ServerConfig {
     process.cwd(),
   );
 
+  // Proxy has a 4-source fallback chain, so it doesn't fit the resolve() helper.
+  const proxyUrl =
+    argv.flags.proxy ?? envStr("FIGMA_PROXY") ?? envStr("HTTPS_PROXY") ?? envStr("HTTP_PROXY");
+  const proxySource: Source = argv.flags.proxy ? "cli" : proxyUrl ? "env" : "default";
+
   // These two don't fit the simple pattern: --json maps to a string enum,
   // and --stdio has a NODE_ENV backdoor.
   const outputFormat = resolve<"yaml" | "json">(
@@ -151,6 +161,7 @@ export function getServerConfig(): ServerConfig {
     figmaOauthToken: figmaOauthToken.source,
     port: port.source,
     host: host.source,
+    proxy: proxySource,
     outputFormat: outputFormat.source,
     skipImageDownloads: skipImageDownloads.source,
     imageDir: imageDir.source,
@@ -172,6 +183,7 @@ export function getServerConfig(): ServerConfig {
     }
     console.log(`- FRAMELINK_PORT: ${port.value} (source: ${configSources.port})`);
     console.log(`- FRAMELINK_HOST: ${host.value} (source: ${configSources.host})`);
+    console.log(`- PROXY: ${proxyUrl ?? "none"} (source: ${configSources.proxy})`);
     console.log(`- OUTPUT_FORMAT: ${outputFormat.value} (source: ${configSources.outputFormat})`);
     console.log(
       `- SKIP_IMAGE_DOWNLOADS: ${skipImageDownloads.value} (source: ${configSources.skipImageDownloads})`,
@@ -184,6 +196,7 @@ export function getServerConfig(): ServerConfig {
     auth,
     port: port.value,
     host: host.value,
+    proxy: proxyUrl,
     outputFormat: outputFormat.value,
     skipImageDownloads: skipImageDownloads.value,
     imageDir: imageDir.value,
