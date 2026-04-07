@@ -50,9 +50,8 @@ const argv = cli({
   commands: [fetchCommand],
 });
 
-if (argv.command) {
-  // Subcommand handler already executed via the command's callback
-} else {
+// Subcommand callbacks execute during cli() — only start the server when no subcommand ran.
+if (!argv.command) {
   // NODE_ENV=cli is a legacy backdoor for stdio mode
   const isStdio = argv.flags.stdio === true || process.env.NODE_ENV === "cli";
   const config = getServerConfig({ ...argv.flags, stdio: isStdio });

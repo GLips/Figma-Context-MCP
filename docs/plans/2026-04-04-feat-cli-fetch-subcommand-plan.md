@@ -1,7 +1,7 @@
 ---
 title: "feat: CLI fetch subcommand"
 type: feat
-status: active
+status: completed
 date: 2026-04-04
 ---
 
@@ -157,11 +157,22 @@ const auth = resolveAuth({ figmaApiKey: flagValue, figmaOauthToken: flagValue })
 
 ### Done when
 
-- [ ] `figma-developer-mcp` with no subcommand starts the server identically to today (stdio and HTTP modes)
-- [ ] `figma-developer-mcp fetch "https://figma.com/design/ABC/name?node-id=1-2"` outputs simplified YAML to stdout
-- [ ] `figma-developer-mcp fetch --file-key ABC --node-id 1:2 --json` outputs JSON
-- [ ] Phase 1 safety-net tests still pass
-- [ ] Existing test suite passes with no modifications (except import path changes if tests import from moved modules)
+- [x] `figma-developer-mcp` with no subcommand starts the server identically to today (stdio and HTTP modes)
+- [x] `figma-developer-mcp fetch "https://figma.com/design/ABC/name?node-id=1-2"` outputs simplified YAML to stdout
+- [x] `figma-developer-mcp fetch --file-key ABC --node-id 1:2 --json` outputs JSON
+- [x] Phase 1 safety-net tests still pass
+- [x] Existing test suite passes with no modifications (except import path changes if tests import from moved modules)
+
+### Completed
+
+Branch: `feat/cli-fetch-subcommand` (4 commits on top of Phase 1)
+
+- `da54217` — extracted `serializeResult` to `utils/serialize.ts`, updated `get-figma-data-tool.ts` and serialization tests
+- `2028bb1` — created Figma URL parser at `utils/figma-url.ts`
+- `f747868` — restructured CLI: `bin.ts` as router with cleye, `config.ts` decomposed into `getServerConfig(flags)` + `resolveAuth()` + `loadEnvFile()`, `startServer(config)` parameterized
+- `b2af468` — implemented `commands/fetch.ts` handler: URL parsing → auth → FigmaService → simplify → serialize → stdout
+
+All 77 existing tests pass unchanged. Process-level tests (stdio, NODE_ENV=cli, HTTP startup) verified the server path is identical to before.
 
 ---
 
