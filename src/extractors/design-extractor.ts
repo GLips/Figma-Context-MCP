@@ -7,8 +7,7 @@ import type {
   Style,
 } from "@figma/rest-api-spec";
 import { simplifyComponents, simplifyComponentSets } from "~/transformers/component.js";
-import { isVisible } from "~/utils/common.js";
-import type { ExtractorFn, TraversalOptions, SimplifiedDesign, TraversalContext } from "./types.js";
+import type { ExtractorFn, TraversalOptions, SimplifiedDesign } from "./types.js";
 import { extractFromDesign } from "./node-walker.js";
 
 /**
@@ -24,20 +23,20 @@ export async function simplifyRawFigmaObject(
     parseAPIResponse(apiResponse);
 
   // Process nodes using the flexible extractor system
-  const globalVars: TraversalContext["globalVars"] = { styles: {}, extraStyles };
-  const { nodes: extractedNodes, globalVars: finalGlobalVars } = await extractFromDesign(
-    rawNodes,
-    nodeExtractors,
-    options,
-    globalVars,
-  );
+  const {
+    nodes: extractedNodes,
+    globalVars: finalGlobalVars,
+    traversalState,
+  } = await extractFromDesign(rawNodes, nodeExtractors, options, { styles: {} }, extraStyles);
 
-  // Return complete design
   return {
     ...metadata,
     nodes: extractedNodes,
-    components: simplifyComponents(components),
-    componentSets: simplifyComponentSets(componentSets),
+    components: simplifyComponents(components, traversalState.componentPropertyDefinitions),
+    componentSets: simplifyComponentSets(
+      componentSets,
+      traversalState.componentPropertyDefinitions,
+    ),
     globalVars: { styles: finalGlobalVars.styles },
   };
 }
@@ -65,7 +64,7 @@ function parseAPIResponse(data: GetFileResponse | GetFileNodesResponse) {
         Object.assign(extraStyles, nodeResponse.styles);
       }
     });
-    nodesToParse = nodeResponses.map((n) => n.document).filter(isVisible);
+    nodesToParse = nodeResponses.map((n) => n.document);
   } else {
     // GetFileResponse
     Object.assign(aggregatedComponents, data.components);
@@ -73,7 +72,7 @@ function parseAPIResponse(data: GetFileResponse | GetFileNodesResponse) {
     if (data.styles) {
       extraStyles = data.styles;
     }
-    nodesToParse = data.document.children.filter(isVisible);
+    nodesToParse = data.document.children;
   }
 
   const { name } = data;

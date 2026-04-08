@@ -4,7 +4,6 @@ import { allExtractors, collapseSvgContainers } from "~/extractors/built-in.js";
 import { simplifyRawFigmaObject } from "~/extractors/design-extractor.js";
 import type { GetFileResponse, Style } from "@figma/rest-api-spec";
 import type { Node as FigmaNode } from "@figma/rest-api-spec";
-import type { GlobalVars } from "~/extractors/types.js";
 
 // Minimal Figma node factory — only the fields the walker actually reads.
 // The Figma types are deeply discriminated unions; we cast through unknown
@@ -175,13 +174,12 @@ describe("extractFromDesign", () => {
       "161:300": { name: "Heading / Large" } as Style,
     };
 
-    const globalVars = { styles: {}, extraStyles } as GlobalVars;
-
     const { nodes, globalVars: resultVars } = await extractFromDesign(
       [nodeA, nodeB],
       allExtractors,
       {},
-      globalVars,
+      { styles: {} },
+      extraStyles,
     );
 
     expect(nodes[0].textStyle).toBe("Heading / Large");
@@ -247,6 +245,151 @@ describe("collapseSvgContainers", () => {
   });
 });
 
+describe("component property support", () => {
+  it("rescues hidden nodes with componentPropertyReferences.visible inside components", async () => {
+    const componentNode = makeNode({
+      id: "10:1",
+      name: "Card",
+      type: "COMPONENT",
+      children: [
+        makeNode({ id: "10:2", name: "Title", type: "TEXT", characters: "Card Title" }),
+        makeNode({
+          id: "10:3",
+          name: "Badge",
+          type: "FRAME",
+          visible: false,
+          componentPropertyReferences: { visible: "Show Badge#341:0" },
+          children: [makeNode({ id: "10:4", name: "Badge Text", type: "TEXT", characters: "NEW" })],
+        }),
+      ],
+    });
+
+    const { nodes } = await extractFromDesign([componentNode], allExtractors);
+
+    const card = nodes[0];
+    expect(card.children).toHaveLength(2);
+
+    const badge = card.children!.find((c) => c.name === "Badge")!;
+    expect(badge).toBeDefined();
+    expect(badge.componentPropertyReferences).toEqual({ visible: "Show Badge" });
+  });
+
+  it("strips hidden nodes normally inside instances", async () => {
+    const instanceNode = makeNode({
+      id: "11:1",
+      name: "Card Instance",
+      type: "INSTANCE",
+      componentId: "10:1",
+      componentProperties: {
+        "Show Badge": { type: "BOOLEAN", value: false },
+      },
+      children: [
+        makeNode({ id: "11:2", name: "Title", type: "TEXT", characters: "My Card" }),
+        makeNode({ id: "11:3", name: "Badge", type: "FRAME", visible: false }),
+      ],
+    });
+
+    const { nodes } = await extractFromDesign([instanceNode], allExtractors);
+
+    const instance = nodes[0];
+    expect(instance.children).toHaveLength(1);
+    expect(instance.children![0].name).toBe("Title");
+  });
+
+  it("collects componentPropertyDefinitions during traversal", async () => {
+    const componentNode = makeNode({
+      id: "12:1",
+      name: "Product Card",
+      type: "COMPONENT",
+      componentPropertyDefinitions: {
+        "On Sale#341:0": { type: "BOOLEAN", defaultValue: true },
+        "Title#341:1": { type: "TEXT", defaultValue: "Product Name" },
+        "Icon#341:2": { type: "INSTANCE_SWAP", defaultValue: "999:1" },
+      },
+      children: [makeNode({ id: "12:2", name: "Title", type: "TEXT", characters: "Product Name" })],
+    });
+
+    const { traversalState } = await extractFromDesign([componentNode], allExtractors);
+
+    expect(traversalState.componentPropertyDefinitions["12:1"]).toEqual({
+      "On Sale": { type: "boolean", defaultValue: true },
+      Title: { type: "text", defaultValue: "Product Name" },
+    });
+    expect(traversalState.componentPropertyDefinitions["12:1"]).not.toHaveProperty("Icon");
+  });
+
+  it("annotates componentPropertyReferences with characters→text rename", async () => {
+    const componentNode = makeNode({
+      id: "13:1",
+      name: "Button",
+      type: "COMPONENT",
+      children: [
+        makeNode({
+          id: "13:2",
+          name: "Label",
+          type: "TEXT",
+          characters: "Click me",
+          componentPropertyReferences: { characters: "Button Label#100:0" },
+        }),
+      ],
+    });
+
+    const { nodes } = await extractFromDesign([componentNode], allExtractors);
+
+    const label = nodes[0].children![0];
+    expect(label.componentPropertyReferences).toEqual({ text: "Button Label" });
+  });
+
+  it("simplifies instance componentProperties to Record format", async () => {
+    const instanceNode = makeNode({
+      id: "14:1",
+      name: "Card Instance",
+      type: "INSTANCE",
+      componentId: "10:1",
+      componentProperties: {
+        "On Sale": { type: "BOOLEAN", value: true },
+        Title: { type: "TEXT", value: "My Product" },
+      },
+      children: [makeNode({ id: "14:2", name: "Content", type: "FRAME" })],
+    });
+
+    const { nodes } = await extractFromDesign([instanceNode], allExtractors);
+
+    expect(nodes[0].componentProperties).toEqual({
+      "On Sale": true,
+      Title: "My Product",
+    });
+  });
+
+  it("strips hidden children inside nested instances within components", async () => {
+    const componentNode = makeNode({
+      id: "15:1",
+      name: "Wrapper",
+      type: "COMPONENT",
+      children: [
+        makeNode({
+          id: "15:2",
+          name: "Nested Instance",
+          type: "INSTANCE",
+          componentId: "99:1",
+          children: [
+            makeNode({ id: "15:3", name: "Visible Child", type: "FRAME" }),
+            makeNode({ id: "15:4", name: "Hidden Child", type: "FRAME", visible: false }),
+          ],
+        }),
+      ],
+    });
+
+    const { nodes } = await extractFromDesign([componentNode], allExtractors);
+
+    const nestedInstance = nodes[0].children![0];
+    expect(nestedInstance).toBeDefined();
+    expect(nestedInstance.name).toBe("Nested Instance");
+    expect(nestedInstance.children).toHaveLength(1);
+    expect(nestedInstance.children![0].name).toBe("Visible Child");
+  });
+});
+
 describe("simplifyRawFigmaObject", () => {
   it("produces a complete SimplifiedDesign from a mock API response", async () => {
     const mockResponse = {
@@ -281,5 +424,47 @@ describe("simplifyRawFigmaObject", () => {
     const label = result.nodes[1].children![0].children![0];
     expect(label.name).toBe("Label");
     expect(label.text).toBe("World");
+  });
+
+  it("flows property definitions from tree traversal into component metadata", async () => {
+    const componentNode = makeNode({
+      id: "20:1",
+      name: "Product Card",
+      type: "COMPONENT",
+      componentPropertyDefinitions: {
+        "On Sale#341:0": { type: "BOOLEAN", defaultValue: true },
+        "Title#341:1": { type: "TEXT", defaultValue: "Product Name" },
+      },
+      children: [makeNode({ id: "20:2", name: "Content", type: "FRAME" })],
+    });
+
+    const mockResponse = {
+      name: "Test File",
+      document: {
+        id: "0:0",
+        name: "Document",
+        type: "DOCUMENT",
+        children: [componentNode],
+        visible: true,
+      },
+      components: {
+        "20:1": { key: "abc123", name: "Product Card", componentSetId: undefined },
+      },
+      componentSets: {},
+      styles: {},
+      schemaVersion: 0,
+      version: "1",
+      role: "owner",
+      lastModified: "2024-01-01",
+      thumbnailUrl: "",
+      editorType: "figma",
+    } as unknown as GetFileResponse;
+
+    const result = await simplifyRawFigmaObject(mockResponse, allExtractors);
+
+    expect(result.components["20:1"].propertyDefinitions).toEqual({
+      "On Sale": { type: "boolean", defaultValue: true },
+      Title: { type: "text", defaultValue: "Product Name" },
+    });
   });
 });

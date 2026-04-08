@@ -14,6 +14,11 @@ import {
   hasTextStyle,
   isTextNode,
 } from "~/transformers/text.js";
+import {
+  simplifyComponentProperties,
+  simplifyPropertyDefinitions,
+  simplifyPropertyReferences,
+} from "~/transformers/component.js";
 import { hasValue, isRectangleCornerRadii } from "~/utils/identity.js";
 import { generateVarId, isVisible } from "~/utils/common.js";
 import type { Node as FigmaDocumentNode } from "@figma/rest-api-spec";
@@ -143,23 +148,55 @@ export const visualsExtractor: ExtractorFn = (node, result, context) => {
 };
 
 /**
- * Extracts component-related properties from INSTANCE nodes.
+ * Extracts component-related properties from nodes.
+ * Handles three cases: INSTANCE property values, property references on any node,
+ * and property definitions on COMPONENT/COMPONENT_SET nodes.
  */
-export const componentExtractor: ExtractorFn = (node, result, _context) => {
+export const componentExtractor: ExtractorFn = (node, result, context) => {
+  // Instance nodes: componentId + simplified componentProperties
   if (node.type === "INSTANCE") {
     if (hasValue("componentId", node)) {
       result.componentId = node.componentId;
     }
-
-    // Add specific properties for instances of components
     if (hasValue("componentProperties", node)) {
-      result.componentProperties = Object.entries(node.componentProperties ?? {}).map(
-        ([name, { value, type }]) => ({
-          name,
-          value: value.toString(),
-          type,
-        }),
+      const props = simplifyComponentProperties(
+        node.componentProperties as Record<string, { type: string; value: boolean | string }>,
       );
+      if (Object.keys(props).length > 0) {
+        result.componentProperties = props;
+      }
+    }
+  }
+
+  // Any node with property references: annotate with simplified refs
+  if (
+    "componentPropertyReferences" in node &&
+    node.componentPropertyReferences &&
+    typeof node.componentPropertyReferences === "object"
+  ) {
+    const refs = simplifyPropertyReferences(
+      node.componentPropertyReferences as Record<string, string>,
+    );
+    if (Object.keys(refs).length > 0) {
+      result.componentPropertyReferences = refs;
+    }
+  }
+
+  // Component/ComponentSet definitions: collect property definitions
+  if (
+    (node.type === "COMPONENT" || node.type === "COMPONENT_SET") &&
+    "componentPropertyDefinitions" in node &&
+    node.componentPropertyDefinitions &&
+    typeof node.componentPropertyDefinitions === "object"
+  ) {
+    const defs = simplifyPropertyDefinitions(
+      node.componentPropertyDefinitions as Record<
+        string,
+        { type: string; defaultValue: boolean | string }
+      >,
+    );
+    if (Object.keys(defs).length > 0) {
+      context.traversalState.componentPropertyDefinitions[node.id] = defs;
     }
   }
 };
@@ -177,7 +214,7 @@ function getStyleMatch(
   for (const key of keys) {
     const styleId = styleMap[key];
     if (styleId) {
-      const meta = context.globalVars.extraStyles?.[styleId];
+      const meta = context.extraStyles?.[styleId];
       if (meta?.name) return { name: meta.name, id: styleId };
     }
   }
