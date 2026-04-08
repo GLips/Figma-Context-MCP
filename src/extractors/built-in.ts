@@ -159,9 +159,12 @@ export const componentExtractor: ExtractorFn = (node, result, context) => {
       result.componentId = node.componentId;
     }
     if (hasValue("componentProperties", node)) {
-      result.componentProperties = simplifyComponentProperties(
+      const props = simplifyComponentProperties(
         node.componentProperties as Record<string, { type: string; value: boolean | string }>,
       );
+      if (Object.keys(props).length > 0) {
+        result.componentProperties = props;
+      }
     }
   }
 

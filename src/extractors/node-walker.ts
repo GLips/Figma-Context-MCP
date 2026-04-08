@@ -139,7 +139,7 @@ async function processNodeWithExtractors(
  */
 function shouldProcessNode(
   node: FigmaDocumentNode,
-  context: TraversalContext | undefined,
+  context: TraversalContext,
   options: TraversalOptions,
 ): boolean {
   if (!isVisible(node)) {
@@ -149,7 +149,7 @@ function shouldProcessNode(
       node.componentPropertyReferences &&
       typeof node.componentPropertyReferences === "object" &&
       "visible" in node.componentPropertyReferences;
-    if (!(hasVisibleRef && context?.insideComponentDefinition)) {
+    if (!(hasVisibleRef && context.insideComponentDefinition)) {
       return false;
     }
   }
