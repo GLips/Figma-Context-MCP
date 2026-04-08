@@ -24,21 +24,19 @@ export async function simplifyRawFigmaObject(
 
   // Process nodes using the flexible extractor system
   const globalVars: TraversalContext["globalVars"] = { styles: {}, extraStyles };
-  const { nodes: extractedNodes, globalVars: finalGlobalVars } = await extractFromDesign(
-    rawNodes,
-    nodeExtractors,
-    options,
-    globalVars,
-  );
+  const {
+    nodes: extractedNodes,
+    globalVars: finalGlobalVars,
+    traversalState,
+  } = await extractFromDesign(rawNodes, nodeExtractors, options, globalVars);
 
-  // Pass property definitions collected during traversal to component metadata
   return {
     ...metadata,
     nodes: extractedNodes,
-    components: simplifyComponents(components, finalGlobalVars.componentPropertyDefinitions),
+    components: simplifyComponents(components, traversalState.componentPropertyDefinitions),
     componentSets: simplifyComponentSets(
       componentSets,
-      finalGlobalVars.componentPropertyDefinitions,
+      traversalState.componentPropertyDefinitions,
     ),
     globalVars: { styles: finalGlobalVars.styles },
   };

@@ -18,7 +18,6 @@ export type StyleTypes =
 
 export type GlobalVars = {
   styles: Record<string, StyleTypes>;
-  componentPropertyDefinitions?: Record<string, Record<string, boolean | string>>;
 };
 
 export interface TraversalContext {
@@ -26,6 +25,11 @@ export interface TraversalContext {
   currentDepth: number;
   parent?: FigmaDocumentNode;
   insideComponentDefinition?: boolean;
+  traversalState: TraversalState;
+}
+
+export interface TraversalState {
+  componentPropertyDefinitions: Record<string, Record<string, boolean | string>>;
 }
 
 export interface TraversalOptions {

@@ -196,10 +196,7 @@ export const componentExtractor: ExtractorFn = (node, result, context) => {
       >,
     );
     if (Object.keys(defs).length > 0) {
-      if (!context.globalVars.componentPropertyDefinitions) {
-        context.globalVars.componentPropertyDefinitions = {};
-      }
-      context.globalVars.componentPropertyDefinitions[node.id] = defs;
+      context.traversalState.componentPropertyDefinitions[node.id] = defs;
     }
   }
 };

@@ -4,6 +4,7 @@ export type {
   SimplifiedNode,
   TraversalContext,
   TraversalOptions,
+  TraversalState,
   GlobalVars,
   StyleTypes,
 } from "./types.js";

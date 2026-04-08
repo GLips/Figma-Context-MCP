@@ -5,6 +5,7 @@ import type {
   ExtractorFn,
   TraversalContext,
   TraversalOptions,
+  TraversalState,
   GlobalVars,
   SimplifiedNode,
 } from "./types.js";
@@ -41,10 +42,15 @@ export async function extractFromDesign(
   extractors: ExtractorFn[],
   options: TraversalOptions = {},
   globalVars: GlobalVars = { styles: {} },
-): Promise<{ nodes: SimplifiedNode[]; globalVars: GlobalVars }> {
+): Promise<{
+  nodes: SimplifiedNode[];
+  globalVars: GlobalVars;
+  traversalState: TraversalState;
+}> {
   const context: TraversalContext = {
     globalVars,
     currentDepth: 0,
+    traversalState: { componentPropertyDefinitions: {} },
   };
 
   nodesProcessed = 0;
@@ -59,6 +65,7 @@ export async function extractFromDesign(
   return {
     nodes: processedNodes,
     globalVars: context.globalVars,
+    traversalState: context.traversalState,
   };
 }
 

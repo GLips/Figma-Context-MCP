@@ -299,7 +299,7 @@ describe("component property support", () => {
     expect(instance.children![0].name).toBe("Title");
   });
 
-  it("collects componentPropertyDefinitions into globalVars", async () => {
+  it("collects componentPropertyDefinitions during traversal", async () => {
     const componentNode = makeNode({
       id: "12:1",
       name: "Product Card",
@@ -312,15 +312,13 @@ describe("component property support", () => {
       children: [makeNode({ id: "12:2", name: "Title", type: "TEXT", characters: "Product Name" })],
     });
 
-    const { globalVars } = await extractFromDesign([componentNode], allExtractors);
+    const { traversalState } = await extractFromDesign([componentNode], allExtractors);
 
-    expect(globalVars.componentPropertyDefinitions).toBeDefined();
-    expect(globalVars.componentPropertyDefinitions!["12:1"]).toBeDefined();
-    expect(globalVars.componentPropertyDefinitions!["12:1"]).toEqual({
+    expect(traversalState.componentPropertyDefinitions["12:1"]).toEqual({
       "On Sale": true,
       Title: "Product Name",
     });
-    expect(globalVars.componentPropertyDefinitions!["12:1"]).not.toHaveProperty("Icon");
+    expect(traversalState.componentPropertyDefinitions["12:1"]).not.toHaveProperty("Icon");
   });
 
   it("annotates componentPropertyReferences with characters→text rename", async () => {
@@ -429,5 +427,47 @@ describe("simplifyRawFigmaObject", () => {
     const label = result.nodes[1].children![0].children![0];
     expect(label.name).toBe("Label");
     expect(label.text).toBe("World");
+  });
+
+  it("flows property definitions from tree traversal into component metadata", async () => {
+    const componentNode = makeNode({
+      id: "20:1",
+      name: "Product Card",
+      type: "COMPONENT",
+      componentPropertyDefinitions: {
+        "On Sale#341:0": { type: "BOOLEAN", defaultValue: true },
+        "Title#341:1": { type: "TEXT", defaultValue: "Product Name" },
+      },
+      children: [makeNode({ id: "20:2", name: "Content", type: "FRAME" })],
+    });
+
+    const mockResponse = {
+      name: "Test File",
+      document: {
+        id: "0:0",
+        name: "Document",
+        type: "DOCUMENT",
+        children: [componentNode],
+        visible: true,
+      },
+      components: {
+        "20:1": { key: "abc123", name: "Product Card", componentSetId: undefined },
+      },
+      componentSets: {},
+      styles: {},
+      schemaVersion: 0,
+      version: "1",
+      role: "owner",
+      lastModified: "2024-01-01",
+      thumbnailUrl: "",
+      editorType: "figma",
+    } as unknown as GetFileResponse;
+
+    const result = await simplifyRawFigmaObject(mockResponse, allExtractors);
+
+    expect(result.components["20:1"].propertyDefinitions).toEqual({
+      "On Sale": true,
+      Title: "Product Name",
+    });
   });
 });
