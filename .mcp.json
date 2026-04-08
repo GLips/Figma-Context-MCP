@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "figma-context-mcp": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "figma-developer-mcp"
+      ]
+    }
+  }
+}
