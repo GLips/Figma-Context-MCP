@@ -6,6 +6,7 @@ import type { SimplifiedEffects } from "~/transformers/effects.js";
 import type {
   SimplifiedComponentDefinition,
   SimplifiedComponentSetDefinition,
+  SimplifiedPropertyDefinition,
 } from "~/transformers/component.js";
 
 export type StyleTypes =
@@ -30,7 +31,7 @@ export interface TraversalContext {
 }
 
 export interface TraversalState {
-  componentPropertyDefinitions: Record<string, Record<string, boolean | string>>;
+  componentPropertyDefinitions: Record<string, Record<string, SimplifiedPropertyDefinition>>;
 }
 
 export interface TraversalOptions {
@@ -93,8 +94,6 @@ export interface SimplifiedNode {
   borderRadius?: string;
   // layout & alignment
   layout?: string;
-  // for rect-specific strokes, etc.
-  visible?: false;
   componentId?: string;
   componentProperties?: Record<string, boolean | string>;
   componentPropertyReferences?: Record<string, string>;

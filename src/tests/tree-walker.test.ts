@@ -271,7 +271,6 @@ describe("component property support", () => {
 
     const badge = card.children!.find((c) => c.name === "Badge")!;
     expect(badge).toBeDefined();
-    expect(badge.visible).toBe(false);
     expect(badge.componentPropertyReferences).toEqual({ visible: "Show Badge" });
   });
 
@@ -313,8 +312,8 @@ describe("component property support", () => {
     const { traversalState } = await extractFromDesign([componentNode], allExtractors);
 
     expect(traversalState.componentPropertyDefinitions["12:1"]).toEqual({
-      "On Sale": true,
-      Title: "Product Name",
+      "On Sale": { type: "boolean", defaultValue: true },
+      Title: { type: "text", defaultValue: "Product Name" },
     });
     expect(traversalState.componentPropertyDefinitions["12:1"]).not.toHaveProperty("Icon");
   });
@@ -464,8 +463,8 @@ describe("simplifyRawFigmaObject", () => {
     const result = await simplifyRawFigmaObject(mockResponse, allExtractors);
 
     expect(result.components["20:1"].propertyDefinitions).toEqual({
-      "On Sale": true,
-      Title: "Product Name",
+      "On Sale": { type: "boolean", defaultValue: true },
+      Title: { type: "text", defaultValue: "Product Name" },
     });
   });
 });

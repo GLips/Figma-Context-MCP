@@ -94,11 +94,6 @@ async function processNodeWithExtractors(
     type: node.type === "VECTOR" ? "IMAGE-SVG" : node.type,
   };
 
-  // Mark rescued hidden nodes so the AI knows the default rendered state
-  if (!isVisible(node)) {
-    result.visible = false;
-  }
-
   // Apply all extractors to this node in a single pass
   for (const extractor of extractors) {
     extractor(node, result, context);

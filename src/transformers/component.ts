@@ -1,11 +1,16 @@
 import type { Component, ComponentSet } from "@figma/rest-api-spec";
 
+export interface SimplifiedPropertyDefinition {
+  type: string;
+  defaultValue: boolean | string;
+}
+
 export interface SimplifiedComponentDefinition {
   id: string;
   key: string;
   name: string;
   componentSetId?: string;
-  propertyDefinitions?: Record<string, boolean | string>;
+  propertyDefinitions?: Record<string, SimplifiedPropertyDefinition>;
 }
 
 export interface SimplifiedComponentSetDefinition {
@@ -13,7 +18,7 @@ export interface SimplifiedComponentSetDefinition {
   key: string;
   name: string;
   description?: string;
-  propertyDefinitions?: Record<string, boolean | string>;
+  propertyDefinitions?: Record<string, SimplifiedPropertyDefinition>;
 }
 
 /**
@@ -32,11 +37,14 @@ export function stripPropertyNameSuffix(name: string): string {
  */
 export function simplifyPropertyDefinitions(
   definitions: Record<string, { type: string; defaultValue: boolean | string }>,
-): Record<string, boolean | string> {
-  const result: Record<string, boolean | string> = {};
+): Record<string, SimplifiedPropertyDefinition> {
+  const result: Record<string, SimplifiedPropertyDefinition> = {};
   for (const [name, def] of Object.entries(definitions)) {
     if (def.type === "BOOLEAN" || def.type === "TEXT") {
-      result[stripPropertyNameSuffix(name)] = def.defaultValue;
+      result[stripPropertyNameSuffix(name)] = {
+        type: def.type.toLowerCase(),
+        defaultValue: def.defaultValue,
+      };
     }
   }
   return result;
@@ -82,7 +90,7 @@ export function simplifyComponentProperties(
  */
 export function simplifyComponents(
   aggregatedComponents: Record<string, Component>,
-  propertyDefinitions?: Record<string, Record<string, boolean | string>>,
+  propertyDefinitions?: Record<string, Record<string, SimplifiedPropertyDefinition>>,
 ): Record<string, SimplifiedComponentDefinition> {
   return Object.fromEntries(
     Object.entries(aggregatedComponents).map(([id, comp]) => [
@@ -105,7 +113,7 @@ export function simplifyComponents(
  */
 export function simplifyComponentSets(
   aggregatedComponentSets: Record<string, ComponentSet>,
-  propertyDefinitions?: Record<string, Record<string, boolean | string>>,
+  propertyDefinitions?: Record<string, Record<string, SimplifiedPropertyDefinition>>,
 ): Record<string, SimplifiedComponentSetDefinition> {
   return Object.fromEntries(
     Object.entries(aggregatedComponentSets).map(([id, set]) => [
