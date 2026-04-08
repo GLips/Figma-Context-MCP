@@ -103,6 +103,28 @@ function convertSelfAlign(align?: HasLayoutTrait["layoutAlign"]) {
   }
 }
 
+// SPACE_BETWEEN computes gaps dynamically — the API returns stale spacing
+// values, but Figma's UI shows "Auto". Suppress the affected axis.
+function buildGap(n: HasFramePropertiesTrait, mode: "row" | "column"): string | undefined {
+  const primaryGap = n.primaryAxisAlignItems === "SPACE_BETWEEN" ? undefined : n.itemSpacing;
+  const counterGap =
+    n.layoutWrap !== "WRAP" || n.counterAxisAlignContent === "SPACE_BETWEEN"
+      ? undefined
+      : n.counterAxisSpacing;
+
+  // Map Figma's primary/counter axes to CSS's row/column axes
+  const rowGap = mode === "row" ? counterGap : primaryGap;
+  const colGap = mode === "row" ? primaryGap : counterGap;
+
+  return gapShorthand(rowGap, colGap);
+}
+
+function gapShorthand(row?: number, col?: number): string | undefined {
+  if (!row && !col) return undefined;
+  if (row && col) return row === col ? `${row}px` : `${row}px ${col}px`;
+  return `${(row ?? col)!}px`;
+}
+
 // interpret sizing
 function convertSizing(
   s?: HasLayoutTrait["layoutSizingHorizontal"] | HasLayoutTrait["layoutSizingVertical"],
@@ -146,7 +168,7 @@ function buildSimplifiedFrameValues(n: FigmaDocumentNode): SimplifiedLayout | { 
 
   // Only include wrap if it's set to WRAP, since flex layouts don't default to wrapping
   frameValues.wrap = n.layoutWrap === "WRAP" ? true : undefined;
-  frameValues.gap = n.itemSpacing ? `${n.itemSpacing ?? 0}px` : undefined;
+  frameValues.gap = buildGap(n, frameValues.mode);
   // gather padding
   if (n.paddingTop || n.paddingBottom || n.paddingLeft || n.paddingRight) {
     frameValues.padding = generateCSSShorthand({
