@@ -14,7 +14,11 @@ import {
   hasTextStyle,
   isTextNode,
 } from "~/transformers/text.js";
-import { simplifyComponentProperties } from "~/transformers/component.js";
+import {
+  simplifyComponentProperties,
+  simplifyPropertyDefinitions,
+  simplifyPropertyReferences,
+} from "~/transformers/component.js";
 import { hasValue, isRectangleCornerRadii } from "~/utils/identity.js";
 import { generateVarId, isVisible } from "~/utils/common.js";
 import type { Node as FigmaDocumentNode } from "@figma/rest-api-spec";
@@ -144,18 +148,55 @@ export const visualsExtractor: ExtractorFn = (node, result, context) => {
 };
 
 /**
- * Extracts component-related properties from INSTANCE nodes.
+ * Extracts component-related properties from nodes.
+ * Handles three cases: INSTANCE property values, property references on any node,
+ * and property definitions on COMPONENT/COMPONENT_SET nodes.
  */
-export const componentExtractor: ExtractorFn = (node, result, _context) => {
+export const componentExtractor: ExtractorFn = (node, result, context) => {
+  // Instance nodes: componentId + simplified componentProperties
   if (node.type === "INSTANCE") {
     if (hasValue("componentId", node)) {
       result.componentId = node.componentId;
     }
-
     if (hasValue("componentProperties", node)) {
       result.componentProperties = simplifyComponentProperties(
         node.componentProperties as Record<string, { type: string; value: boolean | string }>,
       );
+    }
+  }
+
+  // Any node with property references: annotate with simplified refs
+  if (
+    "componentPropertyReferences" in node &&
+    node.componentPropertyReferences &&
+    typeof node.componentPropertyReferences === "object"
+  ) {
+    const refs = simplifyPropertyReferences(
+      node.componentPropertyReferences as Record<string, string>,
+    );
+    if (Object.keys(refs).length > 0) {
+      result.componentPropertyReferences = refs;
+    }
+  }
+
+  // Component/ComponentSet definitions: collect property definitions
+  if (
+    (node.type === "COMPONENT" || node.type === "COMPONENT_SET") &&
+    "componentPropertyDefinitions" in node &&
+    node.componentPropertyDefinitions &&
+    typeof node.componentPropertyDefinitions === "object"
+  ) {
+    const defs = simplifyPropertyDefinitions(
+      node.componentPropertyDefinitions as Record<
+        string,
+        { type: string; defaultValue: boolean | string }
+      >,
+    );
+    if (Object.keys(defs).length > 0) {
+      if (!context.globalVars.componentPropertyDefinitions) {
+        context.globalVars.componentPropertyDefinitions = {};
+      }
+      context.globalVars.componentPropertyDefinitions[node.id] = defs;
     }
   }
 };
