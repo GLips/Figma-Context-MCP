@@ -7,7 +7,6 @@ import type {
   Style,
 } from "@figma/rest-api-spec";
 import { simplifyComponents, simplifyComponentSets } from "~/transformers/component.js";
-import { isVisible } from "~/utils/common.js";
 import type { ExtractorFn, TraversalOptions, SimplifiedDesign, TraversalContext } from "./types.js";
 import { extractFromDesign } from "./node-walker.js";
 
@@ -32,12 +31,15 @@ export async function simplifyRawFigmaObject(
     globalVars,
   );
 
-  // Return complete design
+  // Pass property definitions collected during traversal to component metadata
   return {
     ...metadata,
     nodes: extractedNodes,
-    components: simplifyComponents(components),
-    componentSets: simplifyComponentSets(componentSets),
+    components: simplifyComponents(components, finalGlobalVars.componentPropertyDefinitions),
+    componentSets: simplifyComponentSets(
+      componentSets,
+      finalGlobalVars.componentPropertyDefinitions,
+    ),
     globalVars: { styles: finalGlobalVars.styles },
   };
 }
@@ -65,7 +67,7 @@ function parseAPIResponse(data: GetFileResponse | GetFileNodesResponse) {
         Object.assign(extraStyles, nodeResponse.styles);
       }
     });
-    nodesToParse = nodeResponses.map((n) => n.document).filter(isVisible);
+    nodesToParse = nodeResponses.map((n) => n.document);
   } else {
     // GetFileResponse
     Object.assign(aggregatedComponents, data.components);
@@ -73,7 +75,7 @@ function parseAPIResponse(data: GetFileResponse | GetFileNodesResponse) {
     if (data.styles) {
       extraStyles = data.styles;
     }
-    nodesToParse = data.document.children.filter(isVisible);
+    nodesToParse = data.document.children;
   }
 
   const { name } = data;

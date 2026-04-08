@@ -51,7 +51,7 @@ export async function extractFromDesign(
 
   const processedNodes: SimplifiedNode[] = [];
   for (const node of nodes) {
-    if (!shouldProcessNode(node, options)) continue;
+    if (!shouldProcessNode(node, context, options)) continue;
     const result = await processNodeWithExtractors(node, extractors, context, options);
     if (result !== null) processedNodes.push(result);
   }
@@ -71,7 +71,7 @@ async function processNodeWithExtractors(
   context: TraversalContext,
   options: TraversalOptions,
 ): Promise<SimplifiedNode | null> {
-  if (!shouldProcessNode(node, options)) {
+  if (!shouldProcessNode(node, context, options)) {
     return null;
   }
 
@@ -84,6 +84,11 @@ async function processNodeWithExtractors(
     type: node.type === "VECTOR" ? "IMAGE-SVG" : node.type,
   };
 
+  // Mark rescued hidden nodes so the AI knows the default rendered state
+  if (!isVisible(node)) {
+    result.visible = false;
+  }
+
   // Apply all extractors to this node in a single pass
   for (const extractor of extractors) {
     extractor(node, result, context);
@@ -95,13 +100,20 @@ async function processNodeWithExtractors(
       ...context,
       currentDepth: context.currentDepth + 1,
       parent: node,
+      // COMPONENT nodes define properties; INSTANCE nodes resolve them
+      insideComponentDefinition:
+        node.type === "COMPONENT" || node.type === "COMPONENT_SET"
+          ? true
+          : node.type === "INSTANCE"
+            ? false
+            : context.insideComponentDefinition,
     };
 
     // Use the same pattern as the existing parseNode function
     if (hasValue("children", node) && node.children.length > 0) {
       const children: SimplifiedNode[] = [];
       for (const child of node.children) {
-        if (!shouldProcessNode(child, options)) continue;
+        if (!shouldProcessNode(child, childContext, options)) continue;
         const processed = await processNodeWithExtractors(child, extractors, childContext, options);
         if (processed !== null) children.push(processed);
       }
@@ -125,13 +137,23 @@ async function processNodeWithExtractors(
 /**
  * Determine if a node should be processed based on filters.
  */
-function shouldProcessNode(node: FigmaDocumentNode, options: TraversalOptions): boolean {
-  // Skip invisible nodes
+function shouldProcessNode(
+  node: FigmaDocumentNode,
+  context: TraversalContext | undefined,
+  options: TraversalOptions,
+): boolean {
   if (!isVisible(node)) {
-    return false;
+    // Rescue hidden nodes controlled by a boolean property inside component definitions
+    const hasVisibleRef =
+      "componentPropertyReferences" in node &&
+      node.componentPropertyReferences &&
+      typeof node.componentPropertyReferences === "object" &&
+      "visible" in node.componentPropertyReferences;
+    if (!(hasVisibleRef && context?.insideComponentDefinition)) {
+      return false;
+    }
   }
 
-  // Apply custom node filter if provided
   if (options.nodeFilter && !options.nodeFilter(node)) {
     return false;
   }
