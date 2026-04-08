@@ -30,7 +30,7 @@ export async function fetchJSON<T extends { status?: number }>(
     if (isConnectionError(error)) {
       const message = error instanceof Error ? error.message : String(error);
       throw new Error(
-        `${message}\n\nCould not connect to the Figma API. If you are behind a corporate proxy, ` +
+        `${message}\n\nCould not connect to the Figma API. If your network requires a proxy, ` +
           `set the --proxy flag in your MCP server config or the FIGMA_PROXY environment variable ` +
           `to your proxy URL (e.g. http://proxy:8080).`,
       );

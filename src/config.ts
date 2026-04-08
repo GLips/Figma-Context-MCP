@@ -93,7 +93,7 @@ export function getServerConfig(): ServerConfig {
       },
       proxy: {
         type: String,
-        description: "HTTP proxy URL for corporate networks (e.g. http://proxy:8080)",
+        description: "HTTP proxy URL for networks that require a proxy (e.g. http://proxy:8080)",
       },
       stdio: {
         type: Boolean,
