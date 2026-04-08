@@ -14,6 +14,7 @@ import {
   hasTextStyle,
   isTextNode,
 } from "~/transformers/text.js";
+import { simplifyComponentProperties } from "~/transformers/component.js";
 import { hasValue, isRectangleCornerRadii } from "~/utils/identity.js";
 import { generateVarId, isVisible } from "~/utils/common.js";
 import type { Node as FigmaDocumentNode } from "@figma/rest-api-spec";
@@ -151,14 +152,9 @@ export const componentExtractor: ExtractorFn = (node, result, _context) => {
       result.componentId = node.componentId;
     }
 
-    // Add specific properties for instances of components
     if (hasValue("componentProperties", node)) {
-      result.componentProperties = Object.entries(node.componentProperties ?? {}).map(
-        ([name, { value, type }]) => ({
-          name,
-          value: value.toString(),
-          type,
-        }),
+      result.componentProperties = simplifyComponentProperties(
+        node.componentProperties as Record<string, { type: string; value: boolean | string }>,
       );
     }
   }

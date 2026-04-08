@@ -4,7 +4,6 @@ import type { SimplifiedLayout } from "~/transformers/layout.js";
 import type { SimplifiedFill, SimplifiedStroke } from "~/transformers/style.js";
 import type { SimplifiedEffects } from "~/transformers/effects.js";
 import type {
-  ComponentProperties,
   SimplifiedComponentDefinition,
   SimplifiedComponentSetDefinition,
 } from "~/transformers/component.js";
@@ -19,12 +18,14 @@ export type StyleTypes =
 
 export type GlobalVars = {
   styles: Record<string, StyleTypes>;
+  componentPropertyDefinitions?: Record<string, Record<string, boolean | string>>;
 };
 
 export interface TraversalContext {
   globalVars: GlobalVars & { extraStyles?: Record<string, Style> };
   currentDepth: number;
   parent?: FigmaDocumentNode;
+  insideComponentDefinition?: boolean;
 }
 
 export interface TraversalOptions {
@@ -88,8 +89,10 @@ export interface SimplifiedNode {
   // layout & alignment
   layout?: string;
   // for rect-specific strokes, etc.
+  visible?: false;
   componentId?: string;
-  componentProperties?: ComponentProperties[];
+  componentProperties?: Record<string, boolean | string>;
+  componentPropertyReferences?: Record<string, string>;
   // children
   children?: SimplifiedNode[];
 }
