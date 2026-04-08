@@ -21,7 +21,8 @@ export type GlobalVars = {
 };
 
 export interface TraversalContext {
-  globalVars: GlobalVars & { extraStyles?: Record<string, Style> };
+  globalVars: GlobalVars;
+  extraStyles?: Record<string, Style>;
   currentDepth: number;
   parent?: FigmaDocumentNode;
   insideComponentDefinition?: boolean;

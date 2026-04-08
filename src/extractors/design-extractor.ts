@@ -7,7 +7,7 @@ import type {
   Style,
 } from "@figma/rest-api-spec";
 import { simplifyComponents, simplifyComponentSets } from "~/transformers/component.js";
-import type { ExtractorFn, TraversalOptions, SimplifiedDesign, TraversalContext } from "./types.js";
+import type { ExtractorFn, TraversalOptions, SimplifiedDesign } from "./types.js";
 import { extractFromDesign } from "./node-walker.js";
 
 /**
@@ -23,12 +23,11 @@ export async function simplifyRawFigmaObject(
     parseAPIResponse(apiResponse);
 
   // Process nodes using the flexible extractor system
-  const globalVars: TraversalContext["globalVars"] = { styles: {}, extraStyles };
   const {
     nodes: extractedNodes,
     globalVars: finalGlobalVars,
     traversalState,
-  } = await extractFromDesign(rawNodes, nodeExtractors, options, globalVars);
+  } = await extractFromDesign(rawNodes, nodeExtractors, options, { styles: {} }, extraStyles);
 
   return {
     ...metadata,

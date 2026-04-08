@@ -214,7 +214,7 @@ function getStyleMatch(
   for (const key of keys) {
     const styleId = styleMap[key];
     if (styleId) {
-      const meta = context.globalVars.extraStyles?.[styleId];
+      const meta = context.extraStyles?.[styleId];
       if (meta?.name) return { name: meta.name, id: styleId };
     }
   }

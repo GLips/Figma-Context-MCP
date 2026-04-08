@@ -1,6 +1,7 @@
 import type { Node as FigmaDocumentNode } from "@figma/rest-api-spec";
 import { isVisible } from "~/utils/common.js";
 import { hasValue } from "~/utils/identity.js";
+import type { Style } from "@figma/rest-api-spec";
 import type {
   ExtractorFn,
   TraversalContext,
@@ -42,6 +43,7 @@ export async function extractFromDesign(
   extractors: ExtractorFn[],
   options: TraversalOptions = {},
   globalVars: GlobalVars = { styles: {} },
+  extraStyles?: Record<string, Style>,
 ): Promise<{
   nodes: SimplifiedNode[];
   globalVars: GlobalVars;
@@ -49,6 +51,7 @@ export async function extractFromDesign(
 }> {
   const context: TraversalContext = {
     globalVars,
+    extraStyles,
     currentDepth: 0,
     traversalState: { componentPropertyDefinitions: {} },
   };

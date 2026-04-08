@@ -4,7 +4,6 @@ import { allExtractors, collapseSvgContainers } from "~/extractors/built-in.js";
 import { simplifyRawFigmaObject } from "~/extractors/design-extractor.js";
 import type { GetFileResponse, Style } from "@figma/rest-api-spec";
 import type { Node as FigmaNode } from "@figma/rest-api-spec";
-import type { GlobalVars } from "~/extractors/types.js";
 
 // Minimal Figma node factory — only the fields the walker actually reads.
 // The Figma types are deeply discriminated unions; we cast through unknown
@@ -175,13 +174,12 @@ describe("extractFromDesign", () => {
       "161:300": { name: "Heading / Large" } as Style,
     };
 
-    const globalVars = { styles: {}, extraStyles } as GlobalVars;
-
     const { nodes, globalVars: resultVars } = await extractFromDesign(
       [nodeA, nodeB],
       allExtractors,
       {},
-      globalVars,
+      { styles: {} },
+      extraStyles,
     );
 
     expect(nodes[0].textStyle).toBe("Heading / Large");
