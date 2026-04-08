@@ -1,7 +1,12 @@
 import path from "path";
 import os from "os";
 import fs from "fs";
-import { Jimp } from "jimp";
+import { createJimp } from "@jimp/core";
+import png from "@jimp/js-png";
+import jpeg from "@jimp/js-jpeg";
+import * as crop from "@jimp/plugin-crop";
+
+const Jimp = createJimp({ formats: [png, jpeg], plugins: [crop.methods] });
 import { getImageDimensions, applyCropTransform } from "../utils/image-processing.js";
 import type { Transform } from "@figma/rest-api-spec";
 

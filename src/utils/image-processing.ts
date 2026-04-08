@@ -1,5 +1,11 @@
-import { Jimp } from "jimp";
+import { createJimp } from "@jimp/core";
+import png from "@jimp/js-png";
+import jpeg from "@jimp/js-jpeg";
+import gif from "@jimp/js-gif";
+import * as crop from "@jimp/plugin-crop";
 import type { Transform } from "@figma/rest-api-spec";
+
+const Jimp = createJimp({ formats: [png, jpeg, gif], plugins: [crop.methods] });
 
 /**
  * Apply crop transform to an image based on Figma's transformation matrix

@@ -1,6 +1,6 @@
 {
   "name": "figma-developer-mcp",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "mcpName": "io.github.GLips/Figma-Context-MCP",
   "description": "Give your coding agent access to your Figma data. Implement designs in any framework in one-shot.",
   "type": "module",
@@ -51,14 +51,19 @@
   "license": "MIT",
   "dependencies": {
     "@figma/rest-api-spec": "^0.33.0",
+    "@jimp/core": "^1.6.0",
+    "@jimp/js-gif": "^1.6.0",
+    "@jimp/js-jpeg": "^1.6.0",
+    "@jimp/js-png": "^1.6.0",
+    "@jimp/plugin-crop": "^1.6.0",
     "@modelcontextprotocol/sdk": "^1.27.1",
     "cleye": "^2.2.1",
     "cross-env": "^7.0.3",
     "dotenv": "^16.4.7",
     "express": "^5.2.1",
-    "jimp": "^1.6.0",
     "js-yaml": "^4.1.1",
     "remeda": "^2.20.1",
+    "undici": "^6.24.1",
     "zod": "^3.25.76"
   },
   "devDependencies": {

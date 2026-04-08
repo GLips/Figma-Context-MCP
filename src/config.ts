@@ -18,6 +18,7 @@ export interface ServerFlags {
   json?: boolean;
   skipImageDownloads?: boolean;
   imageDir?: string;
+  proxy?: string;
   stdio?: boolean;
 }
 
@@ -25,6 +26,7 @@ export interface ServerConfig {
   auth: FigmaAuthOptions;
   port: number;
   host: string;
+  proxy: string | undefined;
   outputFormat: "yaml" | "json";
   skipImageDownloads: boolean;
   imageDir: string;
@@ -118,6 +120,11 @@ export function getServerConfig(flags: ServerFlags): ServerConfig {
     process.cwd(),
   );
 
+  // Only resolve explicit proxy config here. Standard env vars (HTTPS_PROXY, HTTP_PROXY,
+  // NO_PROXY) are handled by undici's EnvHttpProxyAgent at the dispatcher level, which
+  // correctly respects NO_PROXY exclusions.
+  const proxy = resolve(flags.proxy, envStr("FIGMA_PROXY"), undefined);
+
   // --json maps to a string enum
   const outputFormat = resolve<"yaml" | "json">(
     flags.json ? "json" : undefined,
@@ -133,6 +140,7 @@ export function getServerConfig(flags: ServerFlags): ServerConfig {
     figmaOauthToken: figmaOauthToken.source,
     port: port.source,
     host: host.source,
+    proxy: proxy.source,
     outputFormat: outputFormat.source,
     skipImageDownloads: skipImageDownloads.source,
     imageDir: imageDir.source,
@@ -154,6 +162,7 @@ export function getServerConfig(flags: ServerFlags): ServerConfig {
     }
     console.log(`- FRAMELINK_PORT: ${port.value} (source: ${configSources.port})`);
     console.log(`- FRAMELINK_HOST: ${host.value} (source: ${configSources.host})`);
+    console.log(`- PROXY: ${proxy.value ? "configured" : "none"} (source: ${configSources.proxy})`);
     console.log(`- OUTPUT_FORMAT: ${outputFormat.value} (source: ${configSources.outputFormat})`);
     console.log(
       `- SKIP_IMAGE_DOWNLOADS: ${skipImageDownloads.value} (source: ${configSources.skipImageDownloads})`,
@@ -166,6 +175,7 @@ export function getServerConfig(flags: ServerFlags): ServerConfig {
     auth,
     port: port.value,
     host: host.value,
+    proxy: proxy.value,
     outputFormat: outputFormat.value,
     skipImageDownloads: skipImageDownloads.value,
     imageDir: imageDir.value,

@@ -3,6 +3,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js";
 import { Server } from "http";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { ProxyAgent, EnvHttpProxyAgent, setGlobalDispatcher } from "undici";
 import { Logger } from "./utils/logger.js";
 import { createServer } from "./mcp/index.js";
 import type { ServerConfig } from "./config.js";
@@ -21,6 +22,14 @@ const activeConnections = new Set<ActiveConnection>();
  * Start the MCP server in either stdio or HTTP mode.
  */
 export async function startServer(config: ServerConfig): Promise<void> {
+  if (config.proxy) {
+    setGlobalDispatcher(new ProxyAgent(config.proxy));
+  } else {
+    // EnvHttpProxyAgent automatically respects HTTP_PROXY/HTTPS_PROXY/NO_PROXY
+    // env vars when present, and falls through to direct connections when absent.
+    setGlobalDispatcher(new EnvHttpProxyAgent());
+  }
+
   const serverOptions = {
     isHTTP: !config.isStdioMode,
     outputFormat: config.outputFormat as "yaml" | "json",

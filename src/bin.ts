@@ -42,6 +42,10 @@ const argv = cli({
       description:
         "Base directory for image downloads. The download tool will only write files within this directory. Defaults to the current working directory.",
     },
+    proxy: {
+      type: String,
+      description: "HTTP proxy URL for networks that require a proxy (e.g. http://proxy:8080)",
+    },
     stdio: {
       type: Boolean,
       description: "Run in stdio transport mode for MCP clients",
