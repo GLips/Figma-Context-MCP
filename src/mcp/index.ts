@@ -90,7 +90,6 @@ function registerTools(
           params,
           figmaService,
           options.imageDir,
-          options.outputFormat,
           options.transport,
           options.authMode,
           extra,

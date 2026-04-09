@@ -22,25 +22,32 @@ export interface InitTelemetryOptions {
   immediateFlush?: boolean;
 }
 
-export interface ToolCallProperties {
-  tool: "get_figma_data" | "download_figma_images";
+type CommonCallProps = {
   duration_ms: number;
   transport: Transport;
-  output_format: "yaml" | "json";
   auth_mode: AuthMode;
   is_error: boolean;
   error_type?: string;
   error_message?: string;
-  // get_figma_data only
+};
+
+export type GetFigmaDataCall = CommonCallProps & {
+  tool: "get_figma_data";
+  output_format: "yaml" | "json";
   raw_size_kb?: number;
   simplified_size_kb?: number;
   node_count?: number;
-  depth?: number | null;
-  has_node_id?: boolean;
-  // download_figma_images only
-  image_count?: number;
+  depth: number | null;
+  has_node_id: boolean;
+};
+
+export type DownloadFigmaImagesCall = CommonCallProps & {
+  tool: "download_figma_images";
+  image_count: number;
   success_count?: number;
-}
+};
+
+export type ToolCallProperties = GetFigmaDataCall | DownloadFigmaImagesCall;
 
 type CommonProperties = {
   server_version: string;
@@ -80,7 +87,11 @@ export function initTelemetry(opts: InitTelemetryOptions): void {
 
   disabled = false;
   sessionId = randomUUID();
-  redactionSecrets = [opts.figmaApiKey, opts.figmaOAuthToken].filter((secret) => secret.length > 0);
+  // Short strings would garble unrelated text via collisions; real Figma
+  // tokens are well over 8 chars.
+  redactionSecrets = [opts.figmaApiKey, opts.figmaOAuthToken].filter(
+    (secret) => secret.length >= 8,
+  );
 
   commonProps = {
     server_version: process.env.NPM_PACKAGE_VERSION ?? "unknown",
@@ -101,17 +112,25 @@ export function initTelemetry(opts: InitTelemetryOptions): void {
 export function captureToolCall(props: ToolCallProperties): void {
   if (disabled || !client || !sessionId || !commonProps) return;
 
-  const { error_message, ...rest } = props;
-  const redactedProps: ToolCallProperties =
+  const { error_message } = props;
+  const redactedProps =
     error_message !== undefined
-      ? { ...rest, error_message: redactErrorMessage(error_message) }
+      ? { ...props, error_message: redactErrorMessage(error_message) }
       : props;
 
-  client.capture({
-    distinctId: sessionId,
-    event: "tool_called",
-    properties: { ...commonProps, ...redactedProps },
-  });
+  // Telemetry must never surface errors to callers — this runs inside tool
+  // handler `finally` blocks, where throwing would mask the tool's real
+  // return value (or its original error). Swallow silently; no logging
+  // because telemetry is supposed to be invisible.
+  try {
+    client.capture({
+      distinctId: sessionId,
+      event: "tool_called",
+      properties: { ...commonProps, ...redactedProps },
+    });
+  } catch {
+    // intentionally empty
+  }
 }
 
 export async function shutdown(): Promise<void> {
@@ -120,5 +139,13 @@ export async function shutdown(): Promise<void> {
   const current = client;
   client = undefined;
   disabled = true;
-  await current.shutdown();
+  try {
+    await current.shutdown();
+  } catch {
+    // Telemetry shutdown must never break callers — the server.ts shutdown
+    // handler and the fetch.ts cleye chain both depend on this resolving.
+  }
+  // Reset so the module can be re-initialized in the same process (relevant
+  // for tests; harmless in production where shutdown runs only at exit).
+  initialized = false;
 }

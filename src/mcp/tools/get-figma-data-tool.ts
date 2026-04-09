@@ -1,16 +1,10 @@
 import { z } from "zod";
-import type { GetFileResponse, GetFileNodesResponse } from "@figma/rest-api-spec";
 import { FigmaService } from "~/services/figma.js";
-import {
-  simplifyRawFigmaObject,
-  allExtractors,
-  collapseSvgContainers,
-  getNodesProcessed,
-} from "~/extractors/index.js";
-import { Logger, writeLogs } from "~/utils/logger.js";
-import { serializeResult } from "~/utils/serialize.js";
+import { getNodesProcessed } from "~/extractors/index.js";
+import { Logger } from "~/utils/logger.js";
 import { sendProgress, startProgressHeartbeat, type ToolExtra } from "~/mcp/progress.js";
 import { captureToolCall, type AuthMode, type Transport } from "~/services/telemetry.js";
+import { getFigmaData as runGetFigmaData } from "~/services/get-figma-data.js";
 
 const parameters = {
   fileKey: z
@@ -40,7 +34,6 @@ const parameters = {
 const parametersSchema = z.object(parameters);
 export type GetFigmaDataParams = z.infer<typeof parametersSchema>;
 
-// Simplified handler function
 async function getFigmaData(
   params: GetFigmaDataParams,
   figmaService: FigmaService,
@@ -65,7 +58,8 @@ async function getFigmaData(
     depthForEvent = depth ?? null;
     hasNodeIdForEvent = Boolean(rawNodeId);
 
-    // Replace - with : in nodeId for our query—Figma API expects :
+    // Replace - with : in nodeId for our query — Figma API expects :.
+    // MCP-specific input quirk, so it lives here rather than in the shared core.
     const nodeId = rawNodeId?.replace(/-/g, ":");
 
     Logger.log(
@@ -74,69 +68,42 @@ async function getFigmaData(
       } ${fileKey}`,
     );
 
-    await sendProgress(extra, 0, 4, "Fetching design data from Figma API");
-    const stopHeartbeat = startProgressHeartbeat(extra, "Waiting for Figma API response");
+    let stopFetchHeartbeat: (() => void) | undefined;
+    let stopSimplifyHeartbeat: (() => void) | undefined;
 
-    // Get raw Figma API response
-    let rawApiResponse: GetFileResponse | GetFileNodesResponse;
-    let rawResult: { data: GetFileResponse | GetFileNodesResponse; rawSize: number };
-    try {
-      if (nodeId) {
-        rawResult = await figmaService.getRawNode(fileKey, nodeId, depth);
-      } else {
-        rawResult = await figmaService.getRawFile(fileKey, depth);
-      }
-      rawApiResponse = rawResult.data;
-      rawSizeKb = rawResult.rawSize / 1024;
-    } finally {
-      stopHeartbeat();
-    }
+    const result = await runGetFigmaData(figmaService, { fileKey, nodeId, depth }, outputFormat, {
+      onFetchStart: async () => {
+        await sendProgress(extra, 0, 4, "Fetching design data from Figma API");
+        stopFetchHeartbeat = startProgressHeartbeat(extra, "Waiting for Figma API response");
+      },
+      onFetchComplete: () => {
+        stopFetchHeartbeat?.();
+      },
+      onSimplifyStart: async () => {
+        await sendProgress(extra, 1, 4, "Fetched design data, simplifying");
+        stopSimplifyHeartbeat = startProgressHeartbeat(
+          extra,
+          () => `Simplifying design data (${getNodesProcessed()} nodes processed)`,
+        );
+      },
+      onSimplifyComplete: () => {
+        stopSimplifyHeartbeat?.();
+      },
+      onSerializeStart: async () => {
+        await sendProgress(extra, 2, 4, "Simplified design, serializing response");
+      },
+    });
 
-    await sendProgress(extra, 1, 4, "Fetched design data, simplifying");
-    const stopSimplifyHeartbeat = startProgressHeartbeat(
-      extra,
-      () => `Simplifying design data (${getNodesProcessed()} nodes processed)`,
-    );
+    rawSizeKb = result.metrics.rawSizeKb;
+    simplifiedSizeKb = result.metrics.simplifiedSizeKb;
+    nodeCount = result.metrics.nodeCount;
 
-    // Use unified design extraction (handles nodes + components consistently)
-    let simplifiedDesign;
-    try {
-      simplifiedDesign = await simplifyRawFigmaObject(rawApiResponse, allExtractors, {
-        maxDepth: depth,
-        afterChildren: collapseSvgContainers,
-      });
-    } finally {
-      stopSimplifyHeartbeat();
-    }
-
-    nodeCount = simplifiedDesign.nodes.length;
-
-    writeLogs("figma-simplified.json", simplifiedDesign);
-
-    Logger.log(
-      `Successfully extracted data: ${simplifiedDesign.nodes.length} nodes, ${
-        Object.keys(simplifiedDesign.globalVars.styles).length
-      } styles`,
-    );
-
-    await sendProgress(extra, 2, 4, "Simplified design, serializing response");
-
-    const { nodes, globalVars, ...metadata } = simplifiedDesign;
-    const result = {
-      metadata,
-      nodes,
-      globalVars,
-    };
-
-    Logger.log(`Generating ${outputFormat.toUpperCase()} result from extracted data`);
-    const formattedResult = serializeResult(result, outputFormat);
-    simplifiedSizeKb = Buffer.byteLength(formattedResult, "utf8") / 1024;
-
+    Logger.log(`Successfully extracted data: ${nodeCount} nodes`);
     await sendProgress(extra, 3, 4, "Serialized, sending response");
-
     Logger.log("Sending result to client");
+
     return {
-      content: [{ type: "text" as const, text: formattedResult }],
+      content: [{ type: "text" as const, text: result.formatted }],
     };
   } catch (error) {
     isError = true;

@@ -1,14 +1,9 @@
 import { type Command, command } from "cleye";
 import { loadEnvFile, resolveAuth, resolveTelemetryEnabled } from "~/config.js";
 import { FigmaService } from "~/services/figma.js";
-import {
-  simplifyRawFigmaObject,
-  allExtractors,
-  collapseSvgContainers,
-} from "~/extractors/index.js";
-import { serializeResult } from "~/utils/serialize.js";
 import { parseFigmaUrl } from "~/utils/figma-url.js";
 import { initTelemetry, captureToolCall, shutdown } from "~/services/telemetry.js";
+import { getFigmaData } from "~/services/get-figma-data.js";
 
 export const fetchCommand: Command = command(
   {
@@ -119,25 +114,11 @@ async function run(
   let nodeCount: number | undefined;
 
   try {
-    const rawResult = nodeId
-      ? await figmaService.getRawNode(fileKey, nodeId, depth)
-      : await figmaService.getRawFile(fileKey, depth);
-    const rawApiResponse = rawResult.data;
-    rawSizeKb = rawResult.rawSize / 1024;
-
-    const simplifiedDesign = await simplifyRawFigmaObject(rawApiResponse, allExtractors, {
-      maxDepth: depth,
-      afterChildren: collapseSvgContainers,
-    });
-    nodeCount = simplifiedDesign.nodes.length;
-
-    const { nodes, globalVars, ...metadata } = simplifiedDesign;
-    const result = { metadata, nodes, globalVars };
-
-    const serialized = serializeResult(result, outputFormat);
-    simplifiedSizeKb = Buffer.byteLength(serialized, "utf8") / 1024;
-
-    console.log(serialized);
+    const result = await getFigmaData(figmaService, { fileKey, nodeId, depth }, outputFormat);
+    rawSizeKb = result.metrics.rawSizeKb;
+    simplifiedSizeKb = result.metrics.simplifiedSizeKb;
+    nodeCount = result.metrics.nodeCount;
+    console.log(result.formatted);
   } catch (error) {
     isError = true;
     errorType = error instanceof Error ? error.constructor.name : "Unknown";

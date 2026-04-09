@@ -89,9 +89,15 @@ function registerShutdownHandlers(onShutdown: () => Promise<void>): void {
   const handle = async () => {
     if (shuttingDown) return;
     shuttingDown = true;
-    await onShutdown();
-    await telemetry.shutdown();
-    process.exit(0);
+    // onShutdown may throw (e.g. stopHttpServer failures); telemetry.shutdown
+    // swallows its own errors (see src/services/telemetry.ts). Use try/finally
+    // so process.exit(0) always runs regardless of onShutdown failure.
+    try {
+      await onShutdown();
+    } finally {
+      await telemetry.shutdown();
+      process.exit(0);
+    }
   };
   process.on("SIGINT", handle);
   process.on("SIGTERM", handle);
