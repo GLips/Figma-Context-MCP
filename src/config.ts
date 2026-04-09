@@ -1,16 +1,28 @@
-import { cli } from "cleye";
 import { config as loadEnv } from "dotenv";
 import { resolve as resolvePath } from "path";
 import type { FigmaAuthOptions } from "./services/figma.js";
 
-type Source = "cli" | "env" | "default";
+export type Source = "cli" | "env" | "default";
 
-interface Resolved<T> {
+export interface Resolved<T> {
   value: T;
   source: Source;
 }
 
-interface ServerConfig {
+export interface ServerFlags {
+  figmaApiKey?: string;
+  figmaOauthToken?: string;
+  env?: string;
+  port?: number;
+  host?: string;
+  json?: boolean;
+  skipImageDownloads?: boolean;
+  imageDir?: string;
+  proxy?: string;
+  stdio?: boolean;
+}
+
+export interface ServerConfig {
   auth: FigmaAuthOptions;
   port: number;
   host: string;
@@ -23,17 +35,17 @@ interface ServerConfig {
 }
 
 /** Resolve a config value through the priority chain: CLI flag → env var → default. */
-function resolve<T>(flag: T | undefined, env: T | undefined, fallback: T): Resolved<T> {
+export function resolve<T>(flag: T | undefined, env: T | undefined, fallback: T): Resolved<T> {
   if (flag !== undefined) return { value: flag, source: "cli" };
   if (env !== undefined) return { value: env, source: "env" };
   return { value: fallback, source: "default" };
 }
 
-function envStr(name: string): string | undefined {
+export function envStr(name: string): string | undefined {
   return process.env[name] || undefined;
 }
 
-function envInt(...names: string[]): number | undefined {
+export function envInt(...names: string[]): number | undefined {
   for (const name of names) {
     const val = process.env[name];
     if (val) return parseInt(val, 10);
@@ -41,7 +53,7 @@ function envInt(...names: string[]): number | undefined {
   return undefined;
 }
 
-function envBool(name: string): boolean | undefined {
+export function envBool(name: string): boolean | undefined {
   const val = process.env[name];
   if (val === "true") return true;
   if (val === "false") return false;
@@ -53,94 +65,19 @@ function maskApiKey(key: string): string {
   return `****${key.slice(-4)}`;
 }
 
-export function getServerConfig(): ServerConfig {
-  const argv = cli({
-    name: "figma-developer-mcp",
-    version: process.env.NPM_PACKAGE_VERSION ?? "unknown",
-    flags: {
-      figmaApiKey: {
-        type: String,
-        description: "Figma API key (Personal Access Token)",
-      },
-      figmaOauthToken: {
-        type: String,
-        description: "Figma OAuth Bearer token",
-      },
-      env: {
-        type: String,
-        description: "Path to custom .env file to load environment variables from",
-      },
-      port: {
-        type: Number,
-        description: "Port to run the server on",
-      },
-      host: {
-        type: String,
-        description: "Host to run the server on",
-      },
-      json: {
-        type: Boolean,
-        description: "Output data from tools in JSON format instead of YAML",
-      },
-      skipImageDownloads: {
-        type: Boolean,
-        description: "Do not register the download_figma_images tool (skip image downloads)",
-      },
-      imageDir: {
-        type: String,
-        description:
-          "Base directory for image downloads. The download tool will only write files within this directory. Defaults to the current working directory.",
-      },
-      proxy: {
-        type: String,
-        description: "HTTP proxy URL for networks that require a proxy (e.g. http://proxy:8080)",
-      },
-      stdio: {
-        type: Boolean,
-        description: "Run in stdio transport mode for MCP clients",
-      },
-    },
-  });
-
-  // Load .env before resolving env-backed values
-  const envFilePath = argv.flags.env
-    ? resolvePath(argv.flags.env)
-    : resolvePath(process.cwd(), ".env");
-  const envFileSource: Source = argv.flags.env ? "cli" : "default";
+export function loadEnvFile(envPath?: string): string {
+  const envFilePath = envPath ? resolvePath(envPath) : resolvePath(process.cwd(), ".env");
   loadEnv({ path: envFilePath, override: true });
+  return envFilePath;
+}
 
-  // Resolve config values: CLI flag → env var → default
-  const figmaApiKey = resolve(argv.flags.figmaApiKey, envStr("FIGMA_API_KEY"), "");
-  const figmaOauthToken = resolve(argv.flags.figmaOauthToken, envStr("FIGMA_OAUTH_TOKEN"), "");
-  const port = resolve(argv.flags.port, envInt("FRAMELINK_PORT", "PORT"), 3333);
-  const host = resolve(argv.flags.host, envStr("FRAMELINK_HOST"), "127.0.0.1");
-  const skipImageDownloads = resolve(
-    argv.flags.skipImageDownloads,
-    envBool("SKIP_IMAGE_DOWNLOADS"),
-    false,
-  );
-  const envImageDir = envStr("IMAGE_DIR");
-  const imageDir = resolve(
-    argv.flags.imageDir ? resolvePath(argv.flags.imageDir) : undefined,
-    envImageDir ? resolvePath(envImageDir) : undefined,
-    process.cwd(),
-  );
+export function resolveAuth(flags: {
+  figmaApiKey?: string;
+  figmaOauthToken?: string;
+}): FigmaAuthOptions {
+  const figmaApiKey = resolve(flags.figmaApiKey, envStr("FIGMA_API_KEY"), "");
+  const figmaOauthToken = resolve(flags.figmaOauthToken, envStr("FIGMA_OAUTH_TOKEN"), "");
 
-  // Only resolve explicit proxy config here. Standard env vars (HTTPS_PROXY, HTTP_PROXY,
-  // NO_PROXY) are handled by undici's EnvHttpProxyAgent at the dispatcher level, which
-  // correctly respects NO_PROXY exclusions.
-  const proxy = resolve(argv.flags.proxy, envStr("FIGMA_PROXY"), undefined);
-
-  // These two don't fit the simple pattern: --json maps to a string enum,
-  // and --stdio has a NODE_ENV backdoor.
-  const outputFormat = resolve<"yaml" | "json">(
-    argv.flags.json ? "json" : undefined,
-    envStr("OUTPUT_FORMAT") as "yaml" | "json" | undefined,
-    "yaml",
-  );
-  const isStdioMode = argv.flags.stdio === true || process.env.NODE_ENV === "cli";
-
-  // Auth
   const useOAuth = Boolean(figmaOauthToken.value);
   const auth: FigmaAuthOptions = {
     figmaApiKey: figmaApiKey.value,
@@ -154,6 +91,48 @@ export function getServerConfig(): ServerConfig {
     );
     process.exit(1);
   }
+
+  return auth;
+}
+
+export function getServerConfig(flags: ServerFlags): ServerConfig {
+  // Load .env before resolving env-backed values
+  const envFilePath = loadEnvFile(flags.env);
+  const envFileSource: Source = flags.env !== undefined ? "cli" : "default";
+
+  // Auth
+  const auth = resolveAuth(flags);
+
+  // Resolve config values: CLI flag → env var → default
+  const figmaApiKey = resolve(flags.figmaApiKey, envStr("FIGMA_API_KEY"), "");
+  const figmaOauthToken = resolve(flags.figmaOauthToken, envStr("FIGMA_OAUTH_TOKEN"), "");
+  const port = resolve(flags.port, envInt("FRAMELINK_PORT", "PORT"), 3333);
+  const host = resolve(flags.host, envStr("FRAMELINK_HOST"), "127.0.0.1");
+  const skipImageDownloads = resolve(
+    flags.skipImageDownloads,
+    envBool("SKIP_IMAGE_DOWNLOADS"),
+    false,
+  );
+  const envImageDir = envStr("IMAGE_DIR");
+  const imageDir = resolve(
+    flags.imageDir ? resolvePath(flags.imageDir) : undefined,
+    envImageDir ? resolvePath(envImageDir) : undefined,
+    process.cwd(),
+  );
+
+  // Only resolve explicit proxy config here. Standard env vars (HTTPS_PROXY, HTTP_PROXY,
+  // NO_PROXY) are handled by undici's EnvHttpProxyAgent at the dispatcher level, which
+  // correctly respects NO_PROXY exclusions.
+  const proxy = resolve(flags.proxy, envStr("FIGMA_PROXY"), undefined);
+
+  // --json maps to a string enum
+  const outputFormat = resolve<"yaml" | "json">(
+    flags.json ? "json" : undefined,
+    envStr("OUTPUT_FORMAT") as "yaml" | "json" | undefined,
+    "yaml",
+  );
+
+  const isStdioMode = flags.stdio === true;
 
   const configSources: Record<string, Source> = {
     envFile: envFileSource,
@@ -170,7 +149,7 @@ export function getServerConfig(): ServerConfig {
   if (!isStdioMode) {
     console.log("\nConfiguration:");
     console.log(`- ENV_FILE: ${envFilePath} (source: ${configSources.envFile})`);
-    if (useOAuth) {
+    if (auth.useOAuth) {
       console.log(
         `- FIGMA_OAUTH_TOKEN: ${maskApiKey(auth.figmaOAuthToken)} (source: ${configSources.figmaOauthToken})`,
       );

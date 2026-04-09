@@ -7,8 +7,8 @@ import {
   collapseSvgContainers,
   getNodesProcessed,
 } from "~/extractors/index.js";
-import yaml from "js-yaml";
 import { Logger, writeLogs } from "~/utils/logger.js";
+import { serializeResult } from "~/utils/serialize.js";
 import { sendProgress, startProgressHeartbeat, type ToolExtra } from "~/mcp/progress.js";
 
 const parameters = {
@@ -108,18 +108,7 @@ async function getFigmaData(
     };
 
     Logger.log(`Generating ${outputFormat.toUpperCase()} result from extracted data`);
-    const formattedResult =
-      outputFormat === "json"
-        ? JSON.stringify(result, null, 2)
-        : // Output goes to LLMs, not human editors — optimize for speed over readability.
-          // noRefs skips O(n²) reference detection; lineWidth:-1 skips line-folding;
-          // JSON_SCHEMA reduces per-string implicit type checks.
-          yaml.dump(result, {
-            noRefs: true,
-            lineWidth: -1,
-            noCompatMode: true,
-            schema: yaml.JSON_SCHEMA,
-          });
+    const formattedResult = serializeResult(result, outputFormat);
 
     await sendProgress(extra, 3, 4, "Serialized, sending response");
 

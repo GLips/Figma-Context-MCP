@@ -4,6 +4,7 @@ import { createServer } from "../mcp/index.js";
 import { startHttpServer, stopHttpServer } from "../server.js";
 import type { AddressInfo } from "net";
 import type { FigmaAuthOptions } from "../services/figma.js";
+import { spawn, type ChildProcess } from "child_process";
 
 const dummyAuth: FigmaAuthOptions = {
   figmaApiKey: "test-key-not-used",
@@ -178,4 +179,76 @@ describe("Server lifecycle", () => {
 
     expect(result).toBe("stopped");
   }, 15_000);
+});
+
+describe("Process-level HTTP startup", () => {
+  const TEST_PORT = 19876;
+  let child: ChildProcess;
+
+  afterEach(() => {
+    if (child?.pid && !child.killed) {
+      child.kill("SIGTERM");
+    }
+  });
+
+  /** Spawn bin.ts and resolve once the server logs that it's listening. */
+  function spawnAndWaitForReady(): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      child = spawn("tsx", ["src/bin.ts", `--figma-api-key=test-key`, `--port=${TEST_PORT}`], {
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+
+      const timeout = setTimeout(() => {
+        reject(new Error("Server did not become ready within 15 seconds"));
+      }, 15_000);
+
+      // Logger.isHTTP is not set until the first request, so startup logs
+      // go to stderr. The config block logs to stdout via console.log.
+      // Watch both streams to catch the "listening" message regardless.
+      const onData = (chunk: Buffer) => {
+        if (chunk.toString().includes(`HTTP server listening on port ${TEST_PORT}`)) {
+          clearTimeout(timeout);
+          resolve();
+        }
+      };
+      child.stdout?.on("data", onData);
+      child.stderr?.on("data", onData);
+
+      child.on("error", (err) => {
+        clearTimeout(timeout);
+        reject(err);
+      });
+
+      child.on("exit", (code) => {
+        clearTimeout(timeout);
+        reject(new Error(`Process exited unexpectedly with code ${code}`));
+      });
+    });
+  }
+
+  it("starts HTTP server and accepts MCP initialize request", async () => {
+    await spawnAndWaitForReady();
+
+    const res = await fetch(`http://127.0.0.1:${TEST_PORT}/mcp`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json, text/event-stream",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        method: "initialize",
+        params: {
+          protocolVersion: "2025-03-26",
+          capabilities: {},
+          clientInfo: { name: "test", version: "1.0.0" },
+        },
+        id: 1,
+      }),
+    });
+
+    expect(res.ok).toBe(true);
+    const text = await res.text();
+    expect(text).toContain("serverInfo");
+  }, 30_000);
 });
