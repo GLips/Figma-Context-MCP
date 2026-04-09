@@ -1,5 +1,19 @@
 # figma-developer-mcp
 
+## [0.9.0](https://github.com/GLips/Figma-Context-MCP/compare/v0.8.1...v0.9.0) (2026-04-09)
+
+
+### Features
+
+* add component property support (BOOLEAN & TEXT) ([#340](https://github.com/GLips/Figma-Context-MCP/issues/340)) ([b0f9efc](https://github.com/GLips/Figma-Context-MCP/commit/b0f9efcc0680012eac4a760ec6826a7605b38fb6))
+* add proxy support for managed networks ([#338](https://github.com/GLips/Figma-Context-MCP/issues/338)) ([32d5779](https://github.com/GLips/Figma-Context-MCP/commit/32d57790317e57a35dfc8df0de4c6ac830268b31))
+* add support for using as a CLI via `fetch` subcommand to retrieve design data directly ([#331](https://github.com/GLips/Figma-Context-MCP/issues/331)) ([dd237c8](https://github.com/GLips/Figma-Context-MCP/commit/dd237c8e87565cee42d706b8f374fc4bc411066b))
+
+
+### Bug Fixes
+
+* **layout:** suppress computed gap values when using SPACE_BETWEEN ([#341](https://github.com/GLips/Figma-Context-MCP/issues/341)) ([309c60e](https://github.com/GLips/Figma-Context-MCP/commit/309c60e6d59eb2fb8fdc0acc85dd81b1644b1f12)), closes [#169](https://github.com/GLips/Figma-Context-MCP/issues/169)
+
 ## [0.8.1](https://github.com/GLips/Figma-Context-MCP/compare/v0.8.0...v0.8.1) (2026-04-07)
 
 ### Bug Fixes
