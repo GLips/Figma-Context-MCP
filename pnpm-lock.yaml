@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       '@figma/rest-api-spec':
-        specifier: ^0.33.0
-        version: 0.33.0
+        specifier: ^0.37.0
+        version: 0.37.0
       '@jimp/core':
         specifier: ^1.6.0
         version: 1.6.0
@@ -300,8 +300,8 @@ packages:
     resolution: {integrity: sha512-43/qtrDUokr7LJqoF2c3+RInu/t4zfrpYdoSDfYyhg52rwLV6TnOvdG4fXm7IkSB3wErkcmJS9iEhjVtOSEjjA==}
     engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
 
-  '@figma/rest-api-spec@0.33.0':
-    resolution: {integrity: sha512-T/hxrxvnAejDHVzHr5av7eM09vCniyeyLy77QUMmnavUIZe+jA/Ex5mpFhMS6DHVAy/zuBUDJDZRMZ4t8OBwFg==}
+  '@figma/rest-api-spec@0.37.0':
+    resolution: {integrity: sha512-KKeCgSRiO2gajT/sKCAsn48ubl8NRbYqyIvfkk5+NPK2ar+DVuLKg3fl3/cR1WharC5Dg4V5a9JzDsYv04k50g==}
 
   '@hono/node-server@1.19.10':
     resolution: {integrity: sha512-hZ7nOssGqRgyV3FVVQdfi+U4q02uB23bpnYpdvNXkYTRRyWx84b7yf1ans+dnJ/7h41sGL3CeQTfO+ZGxuO+Iw==}
@@ -2032,7 +2032,7 @@ snapshots:
       '@eslint/core': 0.17.0
       levn: 0.4.1
 
-  '@figma/rest-api-spec@0.33.0': {}
+  '@figma/rest-api-spec@0.37.0': {}
 
   '@hono/node-server@1.19.10(hono@4.12.5)':
     dependencies:

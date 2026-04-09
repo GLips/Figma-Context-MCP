@@ -27,7 +27,12 @@ export async function startServer(config: ServerConfig): Promise<void> {
   } else {
     // EnvHttpProxyAgent automatically respects HTTP_PROXY/HTTPS_PROXY/NO_PROXY
     // env vars when present, and falls through to direct connections when absent.
+    // Suppress the UNDICI-EHPA experimental warning — the API is stable
+    // enough for our use case and the warning is noise for end users.
+    const { emitWarning } = process;
+    process.emitWarning = () => {};
     setGlobalDispatcher(new EnvHttpProxyAgent());
+    process.emitWarning = emitWarning;
   }
 
   const serverOptions = {
