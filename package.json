@@ -28,7 +28,7 @@
     "prepack": "pnpm build"
   },
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=20.20.0"
   },
   "packageManager": "pnpm@10.10.0",
   "pnpm": {
