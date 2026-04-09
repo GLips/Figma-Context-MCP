@@ -10,6 +10,7 @@ import {
 import { Logger, writeLogs } from "~/utils/logger.js";
 import { serializeResult } from "~/utils/serialize.js";
 import { sendProgress, startProgressHeartbeat, type ToolExtra } from "~/mcp/progress.js";
+import { captureToolCall, type AuthMode, type Transport } from "~/services/telemetry.js";
 
 const parameters = {
   fileKey: z
@@ -44,10 +45,25 @@ async function getFigmaData(
   params: GetFigmaDataParams,
   figmaService: FigmaService,
   outputFormat: "yaml" | "json",
+  transport: Transport,
+  authMode: AuthMode,
   extra: ToolExtra,
 ) {
+  const startedAt = Date.now();
+  let isError = false;
+  let errorType: string | undefined;
+  let errorMessage: string | undefined;
+  let rawSizeKb: number | undefined;
+  let simplifiedSizeKb: number | undefined;
+  let nodeCount: number | undefined;
+  // Defaults cover the parse-failure path where these values were never bound.
+  let depthForEvent: number | null = null;
+  let hasNodeIdForEvent = false;
+
   try {
     const { fileKey, nodeId: rawNodeId, depth } = parametersSchema.parse(params);
+    depthForEvent = depth ?? null;
+    hasNodeIdForEvent = Boolean(rawNodeId);
 
     // Replace - with : in nodeId for our query—Figma API expects :
     const nodeId = rawNodeId?.replace(/-/g, ":");
@@ -63,12 +79,15 @@ async function getFigmaData(
 
     // Get raw Figma API response
     let rawApiResponse: GetFileResponse | GetFileNodesResponse;
+    let rawResult: { data: GetFileResponse | GetFileNodesResponse; rawSize: number };
     try {
       if (nodeId) {
-        rawApiResponse = await figmaService.getRawNode(fileKey, nodeId, depth);
+        rawResult = await figmaService.getRawNode(fileKey, nodeId, depth);
       } else {
-        rawApiResponse = await figmaService.getRawFile(fileKey, depth);
+        rawResult = await figmaService.getRawFile(fileKey, depth);
       }
+      rawApiResponse = rawResult.data;
+      rawSizeKb = rawResult.rawSize / 1024;
     } finally {
       stopHeartbeat();
     }
@@ -90,6 +109,8 @@ async function getFigmaData(
       stopSimplifyHeartbeat();
     }
 
+    nodeCount = simplifiedDesign.nodes.length;
+
     writeLogs("figma-simplified.json", simplifiedDesign);
 
     Logger.log(
@@ -109,6 +130,7 @@ async function getFigmaData(
 
     Logger.log(`Generating ${outputFormat.toUpperCase()} result from extracted data`);
     const formattedResult = serializeResult(result, outputFormat);
+    simplifiedSizeKb = Buffer.byteLength(formattedResult, "utf8") / 1024;
 
     await sendProgress(extra, 3, 4, "Serialized, sending response");
 
@@ -117,12 +139,31 @@ async function getFigmaData(
       content: [{ type: "text" as const, text: formattedResult }],
     };
   } catch (error) {
+    isError = true;
+    errorType = error instanceof Error ? error.constructor.name : "Unknown";
+    errorMessage = error instanceof Error ? error.message : String(error);
     const message = error instanceof Error ? error.message : JSON.stringify(error);
     Logger.error(`Error fetching file ${params.fileKey}:`, message);
     return {
       isError: true,
       content: [{ type: "text" as const, text: `Error fetching file: ${message}` }],
     };
+  } finally {
+    captureToolCall({
+      tool: "get_figma_data",
+      duration_ms: Date.now() - startedAt,
+      transport,
+      output_format: outputFormat,
+      auth_mode: authMode,
+      is_error: isError,
+      error_type: errorType,
+      error_message: errorMessage,
+      raw_size_kb: rawSizeKb,
+      simplified_size_kb: simplifiedSizeKb,
+      node_count: nodeCount,
+      depth: depthForEvent,
+      has_node_id: hasNodeIdForEvent,
+    });
   }
 }
 

@@ -1,5 +1,5 @@
 import { type Command, command } from "cleye";
-import { loadEnvFile, resolveAuth } from "~/config.js";
+import { loadEnvFile, resolveAuth, resolveTelemetryEnabled } from "~/config.js";
 import { FigmaService } from "~/services/figma.js";
 import {
   simplifyRawFigmaObject,
@@ -8,6 +8,7 @@ import {
 } from "~/extractors/index.js";
 import { serializeResult } from "~/utils/serialize.js";
 import { parseFigmaUrl } from "~/utils/figma-url.js";
+import { initTelemetry, captureToolCall, shutdown } from "~/services/telemetry.js";
 
 export const fetchCommand: Command = command(
   {
@@ -43,13 +44,19 @@ export const fetchCommand: Command = command(
         type: String,
         description: "Path to .env file",
       },
+      noTelemetry: {
+        type: Boolean,
+        description: "Disable anonymous usage telemetry",
+      },
     },
   },
   (argv) => {
-    run(argv.flags, argv._).catch((error) => {
-      console.error(error instanceof Error ? error.message : String(error));
-      process.exit(1);
-    });
+    run(argv.flags, argv._)
+      .catch((error) => {
+        console.error(error instanceof Error ? error.message : String(error));
+        process.exitCode = 1;
+      })
+      .finally(() => shutdown());
   },
 );
 
@@ -62,6 +69,7 @@ async function run(
     figmaApiKey?: string;
     figmaOauthToken?: string;
     env?: string;
+    noTelemetry?: boolean;
   },
   positionals: string[],
 ) {
@@ -87,21 +95,69 @@ async function run(
 
   loadEnvFile(flags.env);
   const auth = resolveAuth(flags);
+  const telemetryEnabled = resolveTelemetryEnabled(flags.noTelemetry);
   const figmaService = new FigmaService(auth);
 
   const depth = flags.depth;
-  const rawApiResponse = nodeId
-    ? await figmaService.getRawNode(fileKey, nodeId, depth)
-    : await figmaService.getRawFile(fileKey, depth);
+  const outputFormat = flags.json ? "json" : "yaml";
 
-  const simplifiedDesign = await simplifyRawFigmaObject(rawApiResponse, allExtractors, {
-    maxDepth: depth,
-    afterChildren: collapseSvgContainers,
+  // Initialize telemetry only after input validation succeeds, so every
+  // captured event corresponds to an actual fetch attempt (not a usage error).
+  initTelemetry({
+    enabled: telemetryEnabled,
+    figmaApiKey: auth.figmaApiKey,
+    figmaOAuthToken: auth.figmaOAuthToken,
+    immediateFlush: true,
   });
 
-  const { nodes, globalVars, ...metadata } = simplifiedDesign;
-  const result = { metadata, nodes, globalVars };
+  const startedAt = Date.now();
+  let isError = false;
+  let errorType: string | undefined;
+  let errorMessage: string | undefined;
+  let rawSizeKb: number | undefined;
+  let simplifiedSizeKb: number | undefined;
+  let nodeCount: number | undefined;
 
-  const outputFormat = flags.json ? "json" : "yaml";
-  console.log(serializeResult(result, outputFormat));
+  try {
+    const rawResult = nodeId
+      ? await figmaService.getRawNode(fileKey, nodeId, depth)
+      : await figmaService.getRawFile(fileKey, depth);
+    const rawApiResponse = rawResult.data;
+    rawSizeKb = rawResult.rawSize / 1024;
+
+    const simplifiedDesign = await simplifyRawFigmaObject(rawApiResponse, allExtractors, {
+      maxDepth: depth,
+      afterChildren: collapseSvgContainers,
+    });
+    nodeCount = simplifiedDesign.nodes.length;
+
+    const { nodes, globalVars, ...metadata } = simplifiedDesign;
+    const result = { metadata, nodes, globalVars };
+
+    const serialized = serializeResult(result, outputFormat);
+    simplifiedSizeKb = Buffer.byteLength(serialized, "utf8") / 1024;
+
+    console.log(serialized);
+  } catch (error) {
+    isError = true;
+    errorType = error instanceof Error ? error.constructor.name : "Unknown";
+    errorMessage = error instanceof Error ? error.message : String(error);
+    throw error;
+  } finally {
+    captureToolCall({
+      tool: "get_figma_data",
+      duration_ms: Date.now() - startedAt,
+      transport: "cli",
+      output_format: outputFormat,
+      auth_mode: auth.useOAuth ? "oauth" : "api_key",
+      is_error: isError,
+      error_type: errorType,
+      error_message: errorMessage,
+      raw_size_kb: rawSizeKb,
+      simplified_size_kb: simplifiedSizeKb,
+      node_count: nodeCount,
+      depth: flags.depth ?? null,
+      has_node_id: Boolean(nodeId),
+    });
+  }
 }

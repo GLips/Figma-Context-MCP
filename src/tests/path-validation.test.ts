@@ -27,6 +27,9 @@ describe("download path validation", () => {
       { ...validParams, localPath: "../../etc" },
       stubFigmaService,
       imageDir,
+      "yaml",
+      "stdio",
+      "api_key",
       stubExtra,
     );
 
@@ -40,6 +43,9 @@ describe("download path validation", () => {
       { ...validParams, localPath: "/../../etc" },
       stubFigmaService,
       imageDir,
+      "yaml",
+      "stdio",
+      "api_key",
       stubExtra,
     );
 
@@ -52,6 +58,9 @@ describe("download path validation", () => {
       { ...validParams, localPath: "public/images" },
       stubFigmaService,
       imageDir,
+      "yaml",
+      "stdio",
+      "api_key",
       stubExtra,
     );
 
@@ -67,6 +76,9 @@ describe("download path validation", () => {
       { ...validParams, localPath: "project/src/static/images/test" },
       stubFigmaService,
       driveRoot,
+      "yaml",
+      "stdio",
+      "api_key",
       stubExtra,
     );
 
@@ -78,6 +90,9 @@ describe("download path validation", () => {
       { ...validParams, localPath: "/public/images" },
       stubFigmaService,
       imageDir,
+      "yaml",
+      "stdio",
+      "api_key",
       stubExtra,
     );
 

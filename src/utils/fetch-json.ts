@@ -18,14 +18,20 @@ const CONNECTION_ERROR_CODES = new Set([
 export async function fetchJSON<T extends { status?: number }>(
   url: string,
   options: RequestOptions = {},
-): Promise<T> {
+): Promise<{ data: T; rawSize: number }> {
   try {
     const response = await fetch(url, options);
 
     if (!response.ok) {
       throw new Error(`Fetch failed with status ${response.status}: ${response.statusText}`);
     }
-    return (await response.json()) as T;
+    // Read as text first so we can measure the raw body size for telemetry,
+    // then parse. This is the same work response.json() does internally, just
+    // split so we can observe the byte count before parsing.
+    const text = await response.text();
+    const rawSize = Buffer.byteLength(text, "utf8");
+    const data = JSON.parse(text) as T;
+    return { data, rawSize };
   } catch (error: unknown) {
     if (isConnectionError(error)) {
       const message = error instanceof Error ? error.message : String(error);

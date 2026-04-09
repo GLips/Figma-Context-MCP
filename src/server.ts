@@ -9,6 +9,7 @@ import { createServer } from "./mcp/index.js";
 import type { ServerConfig } from "./config.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { ErrorCode } from "@modelcontextprotocol/sdk/types.js";
+import * as telemetry from "./services/telemetry.js";
 
 let httpServer: Server | null = null;
 
@@ -35,8 +36,23 @@ export async function startServer(config: ServerConfig): Promise<void> {
     process.emitWarning = emitWarning;
   }
 
+  telemetry.initTelemetry({
+    enabled: config.telemetryEnabled,
+    figmaApiKey: config.auth.figmaApiKey,
+    figmaOAuthToken: config.auth.figmaOAuthToken,
+  });
+
+  if (config.telemetryEnabled) {
+    // stderr (not Logger.log) because in HTTP mode Logger.log writes to stdout,
+    // and in stdio mode stdout is reserved for MCP protocol messages. stderr
+    // is safe in both modes.
+    process.stderr.write(
+      "Anonymous telemetry enabled. Disable: FRAMELINK_TELEMETRY=off or DO_NOT_TRACK=1\n",
+    );
+  }
+
   const serverOptions = {
-    isHTTP: !config.isStdioMode,
+    transport: config.isStdioMode ? ("stdio" as const) : ("http" as const),
     outputFormat: config.outputFormat as "yaml" | "json",
     skipImageDownloads: config.skipImageDownloads,
     imageDir: config.imageDir,
@@ -46,18 +62,39 @@ export async function startServer(config: ServerConfig): Promise<void> {
     const server = createServer(config.auth, serverOptions);
     const transport = new StdioServerTransport();
     await server.connect(transport);
+    registerShutdownHandlers(async () => {});
   } else {
     const createMcpServer = () => createServer(config.auth, serverOptions);
     console.log(`Initializing Figma MCP Server in HTTP mode on ${config.host}:${config.port}...`);
     await startHttpServer(config.host, config.port, createMcpServer);
 
-    process.on("SIGINT", async () => {
+    registerShutdownHandlers(async () => {
       Logger.log("Shutting down server...");
       await stopHttpServer();
       Logger.log("Server shutdown complete");
-      process.exit(0);
     });
   }
+}
+
+/**
+ * Register SIGINT + SIGTERM handlers that run mode-specific cleanup and then
+ * flush telemetry before exiting. MCP hosts commonly send SIGTERM, so both
+ * signals must be handled in both transport modes.
+ *
+ * Idempotent: if both signals fire (or a signal fires twice) the second
+ * invocation is ignored so we never double-shutdown.
+ */
+function registerShutdownHandlers(onShutdown: () => Promise<void>): void {
+  let shuttingDown = false;
+  const handle = async () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    await onShutdown();
+    await telemetry.shutdown();
+    process.exit(0);
+  };
+  process.on("SIGINT", handle);
+  process.on("SIGTERM", handle);
 }
 
 export async function startHttpServer(

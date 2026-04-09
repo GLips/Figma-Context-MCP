@@ -57,6 +57,17 @@ export class FigmaService {
   }
 
   private async request<T>(endpoint: string): Promise<T> {
+    const { data } = await this.requestWithSize<T>(endpoint);
+    return data;
+  }
+
+  /**
+   * Like `request`, but also surfaces the raw response body size so callers
+   * can record it for telemetry. Only used by endpoints whose payload size
+   * we care about (`getRawFile` / `getRawNode`); image-fetching endpoints
+   * continue to use `request` unchanged.
+   */
+  private async requestWithSize<T>(endpoint: string): Promise<{ data: T; rawSize: number }> {
     try {
       Logger.log(`Calling ${this.baseUrl}${endpoint}`);
       const headers = this.getAuthHeaders();
@@ -273,34 +284,43 @@ export class FigmaService {
   }
 
   /**
-   * Get raw Figma API response for a file (for use with flexible extractors)
+   * Get raw Figma API response for a file (for use with flexible extractors).
+   *
+   * Returns the parsed body alongside the raw body size in bytes so callers
+   * can record payload size in telemetry.
    */
-  async getRawFile(fileKey: string, depth?: number | null): Promise<GetFileResponse> {
+  async getRawFile(
+    fileKey: string,
+    depth?: number | null,
+  ): Promise<{ data: GetFileResponse; rawSize: number }> {
     const endpoint = `/files/${fileKey}${depth ? `?depth=${depth}` : ""}`;
     Logger.log(`Retrieving raw Figma file: ${fileKey} (depth: ${depth ?? "default"})`);
 
-    const response = await this.request<GetFileResponse>(endpoint);
-    writeLogs("figma-raw.json", response);
+    const result = await this.requestWithSize<GetFileResponse>(endpoint);
+    writeLogs("figma-raw.json", result.data);
 
-    return response;
+    return result;
   }
 
   /**
-   * Get raw Figma API response for specific nodes (for use with flexible extractors)
+   * Get raw Figma API response for specific nodes (for use with flexible extractors).
+   *
+   * Returns the parsed body alongside the raw body size in bytes so callers
+   * can record payload size in telemetry.
    */
   async getRawNode(
     fileKey: string,
     nodeId: string,
     depth?: number | null,
-  ): Promise<GetFileNodesResponse> {
+  ): Promise<{ data: GetFileNodesResponse; rawSize: number }> {
     const endpoint = `/files/${fileKey}/nodes?ids=${nodeId}${depth ? `&depth=${depth}` : ""}`;
     Logger.log(
       `Retrieving raw Figma node: ${nodeId} from ${fileKey} (depth: ${depth ?? "default"})`,
     );
 
-    const response = await this.request<GetFileNodesResponse>(endpoint);
-    writeLogs("figma-raw.json", response);
+    const result = await this.requestWithSize<GetFileNodesResponse>(endpoint);
+    writeLogs("figma-raw.json", result.data);
 
-    return response;
+    return result;
   }
 }

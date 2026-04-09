@@ -2,6 +2,7 @@ import path from "path";
 import { z } from "zod";
 import { FigmaService } from "../../services/figma.js";
 import { Logger } from "../../utils/logger.js";
+import { captureToolCall, type AuthMode, type Transport } from "../../services/telemetry.js";
 import { sendProgress, startProgressHeartbeat, type ToolExtra } from "../progress.js";
 
 const parameters = {
@@ -87,8 +88,19 @@ async function downloadFigmaImages(
   params: DownloadImagesParams,
   figmaService: FigmaService,
   imageDir: string | undefined,
+  outputFormat: "yaml" | "json",
+  transport: Transport,
+  authMode: AuthMode,
   extra: ToolExtra,
 ) {
+  const startedAt = Date.now();
+  // image_count is read from raw params so it's still captured when parse throws.
+  const imageCount = params.nodes?.length ?? 0;
+  let isError = false;
+  let errorType: string | undefined;
+  let errorMessage: string | undefined;
+  let successCount: number | undefined;
+
   try {
     const { fileKey, nodes, localPath, pngScale = 2 } = parametersSchema.parse(params);
 
@@ -100,6 +112,9 @@ async function downloadFigmaImages(
     // Drive roots (e.g. E:\) already end with a separator — avoid doubling it
     const baseDirPrefix = baseDir.endsWith(path.sep) ? baseDir : baseDir + path.sep;
     if (resolvedPath !== baseDir && !resolvedPath.startsWith(baseDirPrefix)) {
+      isError = true;
+      errorType = "InvalidPath";
+      errorMessage = `Invalid path: "${localPath}" resolves outside the allowed image directory "${baseDir}".`;
       return {
         isError: true,
         content: [
@@ -187,7 +202,7 @@ async function downloadFigmaImages(
       stopHeartbeat();
     }
 
-    const successCount = allDownloads.filter(Boolean).length;
+    successCount = allDownloads.filter(Boolean).length;
     await sendProgress(extra, 2, 3, `Downloaded ${successCount} images, formatting response`);
 
     // Format results with aliases
@@ -221,16 +236,32 @@ async function downloadFigmaImages(
       ],
     };
   } catch (error) {
+    isError = true;
+    errorType = error instanceof Error ? error.constructor.name : "Unknown";
+    errorMessage = error instanceof Error ? error.message : String(error);
     Logger.error(`Error downloading images from ${params.fileKey}:`, error);
     return {
       isError: true,
       content: [
         {
           type: "text" as const,
-          text: `Failed to download images: ${error instanceof Error ? error.message : String(error)}`,
+          text: `Failed to download images: ${errorMessage}`,
         },
       ],
     };
+  } finally {
+    captureToolCall({
+      tool: "download_figma_images",
+      duration_ms: Date.now() - startedAt,
+      transport,
+      output_format: outputFormat,
+      auth_mode: authMode,
+      is_error: isError,
+      error_type: errorType,
+      error_message: errorMessage,
+      image_count: imageCount,
+      success_count: successCount,
+    });
   }
 }
 
