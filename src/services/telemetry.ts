@@ -62,7 +62,7 @@ type GetFigmaDataCall = CommonCallProps & {
   raw_node_count?: number;
   simplified_node_count?: number;
   max_depth?: number;
-  style_count?: number;
+  named_style_count?: number;
   component_count?: number;
   instance_count?: number;
   text_node_count?: number;
@@ -193,7 +193,7 @@ function toGetFigmaDataEvent(
     raw_node_count: outcome.metrics?.rawNodeCount,
     simplified_node_count: outcome.metrics?.simplifiedNodeCount,
     max_depth: outcome.metrics?.maxDepth,
-    style_count: outcome.metrics?.styleCount,
+    named_style_count: outcome.metrics?.namedStyleCount,
     component_count: outcome.metrics?.componentCount,
     instance_count: outcome.metrics?.instanceCount,
     text_node_count: outcome.metrics?.textNodeCount,

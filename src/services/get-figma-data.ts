@@ -28,8 +28,12 @@ export type GetFigmaDataMetrics = {
    * Maximum depth of the simplified output tree. Root nodes are at depth 1.
    */
   maxDepth: number;
-  /** Number of deduplicated style entries in `globalVars.styles`. */
-  styleCount: number;
+  /**
+   * Number of named (published) styles defined on the raw Figma response —
+   * i.e. reusable styles the user created in the Figma Styles panel (fills,
+   * text, effects, grids). High count is a design-system maturity signal.
+   */
+  namedStyleCount: number;
   /** Total component + component set definitions on the simplified design. */
   componentCount: number;
   /** Simplified nodes with `type === "INSTANCE"`. */
@@ -90,7 +94,6 @@ function measureSimplifiedDesign(design: SimplifiedDesign): {
   textNodeCount: number;
   imageNodeCount: number;
   componentPropertyCount: number;
-  styleCount: number;
   componentCount: number;
 } {
   const imageStyleKeys = collectImageStyleKeys(design);
@@ -129,10 +132,26 @@ function measureSimplifiedDesign(design: SimplifiedDesign): {
     textNodeCount,
     imageNodeCount,
     componentPropertyCount,
-    styleCount: Object.keys(design.globalVars.styles).length,
     componentCount:
       Object.keys(design.components).length + Object.keys(design.componentSets).length,
   };
+}
+
+/**
+ * Count the named (published) styles referenced in the raw Figma response.
+ * `GetFileResponse` carries the full `styles` dict at the root; `GetFileNodesResponse`
+ * carries one `styles` dict per requested node entry, so we merge them by style ID
+ * so a style referenced by multiple nodes counts once.
+ */
+function countNamedStyles(raw: GetFileResponse | GetFileNodesResponse): number {
+  if ("document" in raw) {
+    return Object.keys(raw.styles ?? {}).length;
+  }
+  const seen = new Set<string>();
+  for (const entry of Object.values(raw.nodes)) {
+    for (const id of Object.keys(entry.styles ?? {})) seen.add(id);
+  }
+  return seen.size;
 }
 
 /**
@@ -254,6 +273,7 @@ export async function getFigmaData(
     // walker's module-level counter still reflects this call.
     const rawNodeCount = getNodesProcessed();
     const hasVariables = detectVariables(rawApiResponse);
+    const namedStyleCount = countNamedStyles(rawApiResponse);
     const measured = measureSimplifiedDesign(simplifiedDesign);
 
     await hooks.onSerializeStart?.();
@@ -268,7 +288,7 @@ export async function getFigmaData(
       rawNodeCount,
       simplifiedNodeCount: measured.simplifiedNodeCount,
       maxDepth: measured.maxDepth,
-      styleCount: measured.styleCount,
+      namedStyleCount,
       componentCount: measured.componentCount,
       instanceCount: measured.instanceCount,
       textNodeCount: measured.textNodeCount,
