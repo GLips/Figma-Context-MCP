@@ -1,6 +1,7 @@
 import { config as loadEnv } from "dotenv";
 import { resolve as resolvePath } from "path";
 import type { FigmaAuthOptions } from "./services/figma.js";
+import { resolveTelemetryEnabled } from "./services/telemetry.js";
 
 export type Source = "cli" | "env" | "default";
 
@@ -32,7 +33,7 @@ export interface ServerConfig {
   skipImageDownloads: boolean;
   imageDir: string;
   isStdioMode: boolean;
-  telemetryEnabled: boolean;
+  noTelemetry: boolean;
   configSources: Record<string, Source>;
 }
 
@@ -60,30 +61,6 @@ export function envBool(name: string): boolean | undefined {
   if (val === "true") return true;
   if (val === "false") return false;
   return undefined;
-}
-
-/**
- * Telemetry is enabled by default. Any single opt-out signal disables it —
- * --no-telemetry, FRAMELINK_TELEMETRY=off, or a truthy DO_NOT_TRACK. Signals
- * are OR'd, not prioritized, so users can't accidentally re-enable telemetry
- * by setting one variable when another is already opting out.
- *
- * DO_NOT_TRACK follows the https://consoledonottrack.com/ convention: any
- * non-empty value other than "0" means opt-out.
- *
- * Note on the flag shape: cleye (and its underlying type-flag parser) does
- * not support the `--no-foo` negation convention for boolean flags defined
- * with `default: true` — the only way to set a boolean false is
- * `--foo=false`. We therefore expose the opt-out as its own `noTelemetry`
- * flag (which cleye maps to `--no-telemetry` on the CLI), so `true` here
- * means "user asked to disable telemetry".
- */
-export function resolveTelemetryEnabled(noTelemetryFlag: boolean | undefined): boolean {
-  if (noTelemetryFlag === true) return false;
-  if (process.env.FRAMELINK_TELEMETRY === "off") return false;
-  const doNotTrack = process.env.DO_NOT_TRACK;
-  if (doNotTrack && doNotTrack !== "0") return false;
-  return true;
 }
 
 function maskApiKey(key: string): string {
@@ -160,7 +137,7 @@ export function getServerConfig(flags: ServerFlags): ServerConfig {
 
   const isStdioMode = flags.stdio === true;
 
-  const telemetryEnabled = resolveTelemetryEnabled(flags.noTelemetry);
+  const noTelemetry = flags.noTelemetry ?? false;
   const telemetrySource: Source =
     flags.noTelemetry === true
       ? "cli"
@@ -203,6 +180,7 @@ export function getServerConfig(flags: ServerFlags): ServerConfig {
       `- SKIP_IMAGE_DOWNLOADS: ${skipImageDownloads.value} (source: ${configSources.skipImageDownloads})`,
     );
     console.log(`- IMAGE_DIR: ${imageDir.value} (source: ${configSources.imageDir})`);
+    const telemetryEnabled = resolveTelemetryEnabled(noTelemetry);
     console.log(
       `- TELEMETRY: ${telemetryEnabled ? "enabled" : "disabled"} (source: ${configSources.telemetry})`,
     );
@@ -218,7 +196,7 @@ export function getServerConfig(flags: ServerFlags): ServerConfig {
     skipImageDownloads: skipImageDownloads.value,
     imageDir: imageDir.value,
     isStdioMode,
-    telemetryEnabled,
+    noTelemetry,
     configSources,
   };
 }

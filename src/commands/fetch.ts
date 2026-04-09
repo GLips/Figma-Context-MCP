@@ -1,5 +1,5 @@
 import { type Command, command } from "cleye";
-import { loadEnvFile, resolveAuth, resolveTelemetryEnabled } from "~/config.js";
+import { loadEnvFile, resolveAuth } from "~/config.js";
 import { FigmaService } from "~/services/figma.js";
 import { parseFigmaUrl } from "~/utils/figma-url.js";
 import {
@@ -99,10 +99,9 @@ async function run(
   // Initialize telemetry only after input validation succeeds, so every
   // captured event corresponds to an actual fetch attempt (not a usage error).
   initTelemetry({
-    enabled: resolveTelemetryEnabled(flags.noTelemetry),
-    figmaApiKey: auth.figmaApiKey,
-    figmaOAuthToken: auth.figmaOAuthToken,
+    optOut: flags.noTelemetry,
     immediateFlush: true,
+    redactFromErrors: [auth.figmaApiKey, auth.figmaOAuthToken],
   });
 
   const authMode: AuthMode = auth.useOAuth ? "oauth" : "api_key";

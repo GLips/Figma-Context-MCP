@@ -13,15 +13,36 @@ export type Transport = "stdio" | "http" | "cli";
 export type AuthMode = "oauth" | "api_key";
 
 export interface InitTelemetryOptions {
-  enabled: boolean;
-  figmaApiKey: string;
-  figmaOAuthToken: string;
+  optOut?: boolean;
   /**
    * Flush events immediately instead of batching. For short-lived processes
    * (e.g. the `fetch` CLI command) that would otherwise exit before the
    * default flush interval fires and drop the event.
    */
   immediateFlush?: boolean;
+  /**
+   * Strings to scrub from `error_message` before sending events to PostHog.
+   * The shell passes whatever it considers sensitive (API keys, OAuth tokens,
+   * etc). Empty strings are filtered automatically so callers don't have to.
+   */
+  redactFromErrors?: string[];
+}
+
+/**
+ * Telemetry is enabled by default. Any single opt-out signal disables it —
+ * the `optOut` flag (CLI), FRAMELINK_TELEMETRY=off, or a truthy DO_NOT_TRACK.
+ * Signals are OR'd, not prioritized, so users can't accidentally re-enable
+ * telemetry by setting one variable when another is already opting out.
+ *
+ * DO_NOT_TRACK follows the https://consoledonottrack.com/ convention: any
+ * non-empty value other than "0" means opt-out.
+ */
+export function resolveTelemetryEnabled(optOut?: boolean): boolean {
+  if (optOut === true) return false;
+  if (process.env.FRAMELINK_TELEMETRY === "off") return false;
+  const doNotTrack = process.env.DO_NOT_TRACK;
+  if (doNotTrack && doNotTrack !== "0") return false;
+  return true;
 }
 
 type CommonCallProps = {
@@ -80,22 +101,18 @@ function redactErrorMessage(message: string): string {
   return result;
 }
 
-export function initTelemetry(opts: InitTelemetryOptions): void {
-  if (initialized) return;
+export function initTelemetry(opts?: InitTelemetryOptions): boolean {
+  if (initialized) return !disabled;
   initialized = true;
 
-  if (!opts.enabled) {
+  if (!resolveTelemetryEnabled(opts?.optOut)) {
     disabled = true;
-    return;
+    return false;
   }
 
   disabled = false;
   sessionId = randomUUID();
-  // Short strings would garble unrelated text via collisions; real Figma
-  // tokens are well over 8 chars.
-  redactionSecrets = [opts.figmaApiKey, opts.figmaOAuthToken].filter(
-    (secret) => secret.length >= 8,
-  );
+  redactionSecrets = (opts?.redactFromErrors ?? []).filter(Boolean);
 
   commonProps = {
     server_version: process.env.NPM_PACKAGE_VERSION ?? "unknown",
@@ -109,8 +126,10 @@ export function initTelemetry(opts: InitTelemetryOptions): void {
   client = new PostHog(POSTHOG_API_KEY, {
     host: POSTHOG_HOST,
     disableGeoip: false,
-    ...(opts.immediateFlush ? { flushAt: 1, flushInterval: 0 } : {}),
+    ...(opts?.immediateFlush ? { flushAt: 1, flushInterval: 0 } : {}),
   });
+
+  return true;
 }
 
 function captureToolCall(props: ToolCallProperties): void {

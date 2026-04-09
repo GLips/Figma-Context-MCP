@@ -36,13 +36,12 @@ export async function startServer(config: ServerConfig): Promise<void> {
     process.emitWarning = emitWarning;
   }
 
-  telemetry.initTelemetry({
-    enabled: config.telemetryEnabled,
-    figmaApiKey: config.auth.figmaApiKey,
-    figmaOAuthToken: config.auth.figmaOAuthToken,
+  const telemetryEnabled = telemetry.initTelemetry({
+    optOut: config.noTelemetry,
+    redactFromErrors: [config.auth.figmaApiKey, config.auth.figmaOAuthToken],
   });
 
-  if (config.telemetryEnabled) {
+  if (telemetryEnabled) {
     // stderr (not Logger.log) because in HTTP mode Logger.log writes to stdout,
     // and in stdio mode stdout is reserved for MCP protocol messages. stderr
     // is safe in both modes.
