@@ -3,7 +3,7 @@ import { FigmaService } from "~/services/figma.js";
 import { getNodesProcessed } from "~/extractors/index.js";
 import { Logger } from "~/utils/logger.js";
 import { sendProgress, startProgressHeartbeat, type ToolExtra } from "~/mcp/progress.js";
-import { captureToolCall, type AuthMode, type Transport } from "~/services/telemetry.js";
+import { captureGetFigmaDataCall, type AuthMode, type Transport } from "~/services/telemetry.js";
 import { getFigmaData as runGetFigmaData } from "~/services/get-figma-data.js";
 
 const parameters = {
@@ -42,21 +42,8 @@ async function getFigmaData(
   authMode: AuthMode,
   extra: ToolExtra,
 ) {
-  const startedAt = Date.now();
-  let isError = false;
-  let errorType: string | undefined;
-  let errorMessage: string | undefined;
-  let rawSizeKb: number | undefined;
-  let simplifiedSizeKb: number | undefined;
-  let nodeCount: number | undefined;
-  // Defaults cover the parse-failure path where these values were never bound.
-  let depthForEvent: number | null = null;
-  let hasNodeIdForEvent = false;
-
   try {
     const { fileKey, nodeId: rawNodeId, depth } = parametersSchema.parse(params);
-    depthForEvent = depth ?? null;
-    hasNodeIdForEvent = Boolean(rawNodeId);
 
     // Replace - with : in nodeId for our query — Figma API expects :.
     // MCP-specific input quirk, so it lives here rather than in the shared core.
@@ -92,13 +79,10 @@ async function getFigmaData(
       onSerializeStart: async () => {
         await sendProgress(extra, 2, 4, "Simplified design, serializing response");
       },
+      onComplete: (outcome) => captureGetFigmaDataCall(outcome, { transport, authMode }),
     });
 
-    rawSizeKb = result.metrics.rawSizeKb;
-    simplifiedSizeKb = result.metrics.simplifiedSizeKb;
-    nodeCount = result.metrics.nodeCount;
-
-    Logger.log(`Successfully extracted data: ${nodeCount} nodes`);
+    Logger.log(`Successfully extracted data: ${result.metrics.nodeCount} nodes`);
     await sendProgress(extra, 3, 4, "Serialized, sending response");
     Logger.log("Sending result to client");
 
@@ -106,31 +90,12 @@ async function getFigmaData(
       content: [{ type: "text" as const, text: result.formatted }],
     };
   } catch (error) {
-    isError = true;
-    errorType = error instanceof Error ? error.constructor.name : "Unknown";
-    errorMessage = error instanceof Error ? error.message : String(error);
     const message = error instanceof Error ? error.message : JSON.stringify(error);
     Logger.error(`Error fetching file ${params.fileKey}:`, message);
     return {
       isError: true,
       content: [{ type: "text" as const, text: `Error fetching file: ${message}` }],
     };
-  } finally {
-    captureToolCall({
-      tool: "get_figma_data",
-      duration_ms: Date.now() - startedAt,
-      transport,
-      output_format: outputFormat,
-      auth_mode: authMode,
-      is_error: isError,
-      error_type: errorType,
-      error_message: errorMessage,
-      raw_size_kb: rawSizeKb,
-      simplified_size_kb: simplifiedSizeKb,
-      node_count: nodeCount,
-      depth: depthForEvent,
-      has_node_id: hasNodeIdForEvent,
-    });
   }
 }
 

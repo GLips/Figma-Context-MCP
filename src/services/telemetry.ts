@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { PostHog } from "posthog-node";
+import type { GetFigmaDataOutcome } from "~/services/get-figma-data.js";
+import type { DownloadImagesOutcome } from "~/services/download-figma-images.js";
 
 // Write-only project key for the Framelink MCP analytics project.
 // This is intentionally embedded in the published package — it's a public
@@ -31,7 +33,7 @@ type CommonCallProps = {
   error_message?: string;
 };
 
-export type GetFigmaDataCall = CommonCallProps & {
+type GetFigmaDataCall = CommonCallProps & {
   tool: "get_figma_data";
   output_format: "yaml" | "json";
   raw_size_kb?: number;
@@ -41,13 +43,15 @@ export type GetFigmaDataCall = CommonCallProps & {
   has_node_id: boolean;
 };
 
-export type DownloadFigmaImagesCall = CommonCallProps & {
+type DownloadFigmaImagesCall = CommonCallProps & {
   tool: "download_figma_images";
   image_count: number;
   success_count?: number;
 };
 
-export type ToolCallProperties = GetFigmaDataCall | DownloadFigmaImagesCall;
+type ToolCallProperties = GetFigmaDataCall | DownloadFigmaImagesCall;
+
+type ToolCallContext = { transport: Transport; authMode: AuthMode };
 
 type CommonProperties = {
   server_version: string;
@@ -109,7 +113,7 @@ export function initTelemetry(opts: InitTelemetryOptions): void {
   });
 }
 
-export function captureToolCall(props: ToolCallProperties): void {
+function captureToolCall(props: ToolCallProperties): void {
   if (disabled || !client || !sessionId || !commonProps) return;
 
   const { error_message } = props;
@@ -118,10 +122,10 @@ export function captureToolCall(props: ToolCallProperties): void {
       ? { ...props, error_message: redactErrorMessage(error_message) }
       : props;
 
-  // Telemetry must never surface errors to callers — this runs inside tool
-  // handler `finally` blocks, where throwing would mask the tool's real
-  // return value (or its original error). Swallow silently; no logging
-  // because telemetry is supposed to be invisible.
+  // Telemetry must never surface errors to callers — this runs inside a
+  // lifecycle observer where throwing would mask the tool's real return
+  // value (or its original error). Swallow silently; no logging because
+  // telemetry is supposed to be invisible.
   try {
     client.capture({
       distinctId: sessionId,
@@ -131,6 +135,65 @@ export function captureToolCall(props: ToolCallProperties): void {
   } catch {
     // intentionally empty
   }
+}
+
+function errorFields(
+  error: unknown,
+): Pick<CommonCallProps, "is_error" | "error_type" | "error_message"> {
+  if (error === undefined) return { is_error: false };
+  return {
+    is_error: true,
+    error_type: error instanceof Error ? error.constructor.name : "Unknown",
+    error_message: error instanceof Error ? error.message : String(error),
+  };
+}
+
+function toGetFigmaDataEvent(
+  outcome: GetFigmaDataOutcome,
+  context: ToolCallContext,
+): GetFigmaDataCall {
+  return {
+    tool: "get_figma_data",
+    duration_ms: outcome.durationMs,
+    transport: context.transport,
+    auth_mode: context.authMode,
+    output_format: outcome.outputFormat,
+    depth: outcome.input.depth ?? null,
+    has_node_id: Boolean(outcome.input.nodeId),
+    raw_size_kb: outcome.metrics?.rawSizeKb,
+    simplified_size_kb: outcome.metrics?.simplifiedSizeKb,
+    node_count: outcome.metrics?.nodeCount,
+    ...errorFields(outcome.error),
+  };
+}
+
+function toDownloadImagesEvent(
+  outcome: DownloadImagesOutcome,
+  context: ToolCallContext,
+): DownloadFigmaImagesCall {
+  return {
+    tool: "download_figma_images",
+    duration_ms: outcome.durationMs,
+    transport: context.transport,
+    auth_mode: context.authMode,
+    image_count: outcome.imageCount,
+    success_count: outcome.successCount,
+    ...errorFields(outcome.error),
+  };
+}
+
+export function captureGetFigmaDataCall(
+  outcome: GetFigmaDataOutcome,
+  context: ToolCallContext,
+): void {
+  captureToolCall(toGetFigmaDataEvent(outcome, context));
+}
+
+export function captureDownloadImagesCall(
+  outcome: DownloadImagesOutcome,
+  context: ToolCallContext,
+): void {
+  captureToolCall(toDownloadImagesEvent(outcome, context));
 }
 
 export async function shutdown(): Promise<void> {
