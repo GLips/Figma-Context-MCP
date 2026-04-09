@@ -21,7 +21,7 @@ const parameters = {
     )
     .optional()
     .describe(
-      "The ID of the node to fetch, often found as URL parameter node-id=<nodeId>, always use if provided. Use format '1234:5678' or 'I5666:180910;1:10515;1:10336' for multiple nodes.",
+      "The ID of the node to fetch, often found as URL parameter node-id=<nodeId>, always use if provided. Use format '1234:5678' for a standard node, or 'I5666:180910;1:10515;1:10336' for a deeply nested instance node (the semicolon-joined path represents the instance override chain — it's still a single node ID, not multiple nodes).",
     ),
   depth: z
     .number()
@@ -82,7 +82,7 @@ async function getFigmaData(
       onComplete: (outcome) => captureGetFigmaDataCall(outcome, { transport, authMode }),
     });
 
-    Logger.log(`Successfully extracted data: ${result.metrics.nodeCount} nodes`);
+    Logger.log(`Successfully extracted data: ${result.metrics.simplifiedNodeCount} nodes`);
     await sendProgress(extra, 3, 4, "Serialized, sending response");
     Logger.log("Sending result to client");
 

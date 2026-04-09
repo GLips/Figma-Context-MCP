@@ -6,7 +6,7 @@ import type { DownloadImagesOutcome } from "~/services/download-figma-images.js"
 // Write-only project key for the Framelink MCP analytics project.
 // This is intentionally embedded in the published package — it's a public
 // ingest key that cannot read data, only send events.
-const POSTHOG_API_KEY = "phc_REPLACE_ME_WITH_REAL_KEY";
+const POSTHOG_API_KEY = "phc_w69pYvKwGNLsUHU4TGGpgAiscm8nhjudHgAJzAdzXkJV";
 const POSTHOG_HOST = "https://us.i.posthog.com";
 
 export type Transport = "stdio" | "http" | "cli";
@@ -59,7 +59,16 @@ type GetFigmaDataCall = CommonCallProps & {
   output_format: "yaml" | "json";
   raw_size_kb?: number;
   simplified_size_kb?: number;
-  node_count?: number;
+  raw_node_count?: number;
+  simplified_node_count?: number;
+  max_depth?: number;
+  style_count?: number;
+  component_count?: number;
+  instance_count?: number;
+  text_node_count?: number;
+  image_node_count?: number;
+  component_property_count?: number;
+  has_variables?: boolean;
   depth: number | null;
   has_node_id: boolean;
 };
@@ -77,7 +86,7 @@ type ToolCallContext = { transport: Transport; authMode: AuthMode };
 type CommonProperties = {
   server_version: string;
   os_platform: NodeJS.Platform;
-  node_major: number;
+  nodejs_major: number;
   is_ci: boolean;
 };
 
@@ -117,7 +126,7 @@ export function initTelemetry(opts?: InitTelemetryOptions): boolean {
   commonProps = {
     server_version: process.env.NPM_PACKAGE_VERSION ?? "unknown",
     os_platform: process.platform,
-    node_major: parseNodeMajor(process.versions.node),
+    nodejs_major: parseNodeMajor(process.versions.node),
     is_ci: Boolean(process.env.CI),
   };
 
@@ -181,7 +190,16 @@ function toGetFigmaDataEvent(
     has_node_id: Boolean(outcome.input.nodeId),
     raw_size_kb: outcome.metrics?.rawSizeKb,
     simplified_size_kb: outcome.metrics?.simplifiedSizeKb,
-    node_count: outcome.metrics?.nodeCount,
+    raw_node_count: outcome.metrics?.rawNodeCount,
+    simplified_node_count: outcome.metrics?.simplifiedNodeCount,
+    max_depth: outcome.metrics?.maxDepth,
+    style_count: outcome.metrics?.styleCount,
+    component_count: outcome.metrics?.componentCount,
+    instance_count: outcome.metrics?.instanceCount,
+    text_node_count: outcome.metrics?.textNodeCount,
+    image_node_count: outcome.metrics?.imageNodeCount,
+    component_property_count: outcome.metrics?.componentPropertyCount,
+    has_variables: outcome.metrics?.hasVariables,
     ...errorFields(outcome.error),
   };
 }
