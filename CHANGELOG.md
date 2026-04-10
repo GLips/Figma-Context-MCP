@@ -1,5 +1,12 @@
 # figma-developer-mcp
 
+## [0.10.0](https://github.com/GLips/Figma-Context-MCP/compare/v0.9.0...v0.10.0) (2026-04-10)
+
+
+### Features
+
+* add anonymous PostHog telemetry ([#342](https://github.com/GLips/Figma-Context-MCP/issues/342)) ([6c0666a](https://github.com/GLips/Figma-Context-MCP/commit/6c0666a7c96e62b39f730a96d24eacb8f3a35cf6))
+
 ## [0.9.0](https://github.com/GLips/Figma-Context-MCP/compare/v0.8.1...v0.9.0) (2026-04-09)
 
 
