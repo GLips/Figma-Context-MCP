@@ -9,7 +9,7 @@ import { createServer } from "./mcp/index.js";
 import type { ServerConfig } from "./config.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { ErrorCode } from "@modelcontextprotocol/sdk/types.js";
-import * as telemetry from "./services/telemetry.js";
+import * as telemetry from "./telemetry/index.js";
 
 let httpServer: Server | null = null;
 
@@ -46,7 +46,7 @@ export async function startServer(config: ServerConfig): Promise<void> {
     // and in stdio mode stdout is reserved for MCP protocol messages. stderr
     // is safe in both modes.
     process.stderr.write(
-      "Anonymous telemetry enabled. Disable: FRAMELINK_TELEMETRY=off or DO_NOT_TRACK=1\n",
+      "Usage telemetry enabled. Disable: FRAMELINK_TELEMETRY=off or DO_NOT_TRACK=1\n",
     );
   }
 
@@ -89,7 +89,7 @@ function registerShutdownHandlers(onShutdown: () => Promise<void>): void {
     if (shuttingDown) return;
     shuttingDown = true;
     // onShutdown may throw (e.g. stopHttpServer failures); telemetry.shutdown
-    // swallows its own errors (see src/services/telemetry.ts). Use try/finally
+    // swallows its own errors (see src/telemetry/client.ts). Use try/finally
     // so process.exit(0) always runs regardless of onShutdown failure.
     try {
       await onShutdown();

@@ -7,7 +7,7 @@ import {
   captureGetFigmaDataCall,
   shutdown,
   type AuthMode,
-} from "~/services/telemetry.js";
+} from "~/telemetry/index.js";
 import { getFigmaData } from "~/services/get-figma-data.js";
 
 export const fetchCommand: Command = command(
@@ -46,7 +46,7 @@ export const fetchCommand: Command = command(
       },
       noTelemetry: {
         type: Boolean,
-        description: "Disable anonymous usage telemetry",
+        description: "Disable usage telemetry",
       },
     },
   },

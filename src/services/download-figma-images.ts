@@ -1,6 +1,7 @@
 import type { Transform } from "@figma/rest-api-spec";
 import type { FigmaService } from "~/services/figma.js";
 import type { ImageProcessingResult } from "~/utils/image-processing.js";
+import { tagError } from "~/utils/error-meta.js";
 
 /**
  * Structural shape for a single download request. Matches the relevant
@@ -146,6 +147,8 @@ export async function downloadFigmaImages(
       allDownloads = await figmaService.downloadImages(fileKey, localPath, downloadItems, {
         pngScale,
       });
+    } catch (error) {
+      tagError(error, { phase: "download" });
     } finally {
       hooks.onDownloadComplete?.();
     }

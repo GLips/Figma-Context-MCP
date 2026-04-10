@@ -1,9 +1,13 @@
 import { z } from "zod";
 import { FigmaService } from "~/services/figma.js";
-import { getNodesProcessed } from "~/extractors/index.js";
 import { Logger } from "~/utils/logger.js";
 import { sendProgress, startProgressHeartbeat, type ToolExtra } from "~/mcp/progress.js";
-import { captureGetFigmaDataCall, type AuthMode, type Transport } from "~/services/telemetry.js";
+import {
+  captureGetFigmaDataCall,
+  type AuthMode,
+  type ClientInfo,
+  type Transport,
+} from "~/telemetry/index.js";
 import { getFigmaData as runGetFigmaData } from "~/services/get-figma-data.js";
 
 const parameters = {
@@ -40,6 +44,7 @@ async function getFigmaData(
   outputFormat: "yaml" | "json",
   transport: Transport,
   authMode: AuthMode,
+  clientInfo: ClientInfo | undefined,
   extra: ToolExtra,
 ) {
   try {
@@ -66,11 +71,11 @@ async function getFigmaData(
       onFetchComplete: () => {
         stopFetchHeartbeat?.();
       },
-      onSimplifyStart: async () => {
+      onSimplifyStart: async (progress) => {
         await sendProgress(extra, 1, 4, "Fetched design data, simplifying");
         stopSimplifyHeartbeat = startProgressHeartbeat(
           extra,
-          () => `Simplifying design data (${getNodesProcessed()} nodes processed)`,
+          () => `Simplifying design data (${progress.getNodeCount()} nodes processed)`,
         );
       },
       onSimplifyComplete: () => {
@@ -79,7 +84,8 @@ async function getFigmaData(
       onSerializeStart: async () => {
         await sendProgress(extra, 2, 4, "Simplified design, serializing response");
       },
-      onComplete: (outcome) => captureGetFigmaDataCall(outcome, { transport, authMode }),
+      onComplete: (outcome) =>
+        captureGetFigmaDataCall(outcome, { transport, authMode, clientInfo }),
     });
 
     Logger.log(`Successfully extracted data: ${result.metrics.simplifiedNodeCount} nodes`);

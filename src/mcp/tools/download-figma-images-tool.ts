@@ -4,9 +4,11 @@ import { FigmaService } from "../../services/figma.js";
 import { Logger } from "../../utils/logger.js";
 import {
   captureDownloadImagesCall,
+  captureValidationReject,
   type AuthMode,
+  type ClientInfo,
   type Transport,
-} from "../../services/telemetry.js";
+} from "~/telemetry/index.js";
 import { downloadFigmaImages as runDownloadFigmaImages } from "../../services/download-figma-images.js";
 import { sendProgress, startProgressHeartbeat, type ToolExtra } from "../progress.js";
 
@@ -94,6 +96,7 @@ async function downloadFigmaImages(
   imageDir: string | undefined,
   transport: Transport,
   authMode: AuthMode,
+  clientInfo: ClientInfo | undefined,
   extra: ToolExtra,
 ) {
   try {
@@ -109,8 +112,18 @@ async function downloadFigmaImages(
     // Drive roots (e.g. E:\) already end with a separator — avoid doubling it
     const baseDirPrefix = baseDir.endsWith(path.sep) ? baseDir : baseDir + path.sep;
     if (resolvedPath !== baseDir && !resolvedPath.startsWith(baseDirPrefix)) {
-      // Early return does not fire onComplete — the core never ran, so there's
-      // no outcome to report. Capturing invalid-path attempts is out of scope.
+      // Path-traversal rejection happens after schema validation, so the SDK
+      // wrapper in mcp/index.ts never sees it. Capture it here as a validation
+      // reject so we can track how often LLMs trip over the localPath contract.
+      captureValidationReject(
+        {
+          tool: "download_figma_images",
+          field: "localPath",
+          rule: "path_traversal",
+          message: `Path resolves outside allowed image directory: ${localPath}`,
+        },
+        { transport, authMode, clientInfo },
+      );
       return {
         isError: true,
         content: [
@@ -136,7 +149,8 @@ async function downloadFigmaImages(
         onDownloadComplete: () => {
           stopHeartbeat?.();
         },
-        onComplete: (outcome) => captureDownloadImagesCall(outcome, { transport, authMode }),
+        onComplete: (outcome) =>
+          captureDownloadImagesCall(outcome, { transport, authMode, clientInfo }),
       },
     );
 

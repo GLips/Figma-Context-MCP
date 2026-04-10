@@ -8,6 +8,7 @@ import type {
 import { downloadAndProcessImage, type ImageProcessingResult } from "~/utils/image-processing.js";
 import { Logger, writeLogs } from "~/utils/logger.js";
 import { fetchJSON } from "~/utils/fetch-json.js";
+import { getErrorMeta } from "~/utils/error-meta.js";
 
 export type FigmaAuthOptions = {
   figmaApiKey: string;
@@ -76,9 +77,21 @@ export class FigmaService {
         headers,
       });
     } catch (error) {
+      const meta = getErrorMeta(error);
+      if (meta.http_status === 429) {
+        throw new Error(
+          `Figma API rate limit hit (429). ` +
+            `Free Figma plans are limited to ~5 file API requests per month — ` +
+            `you'll need to upgrade to a paid Figma plan to make more requests. ` +
+            `Paid plans: wait a few seconds and try again. ` +
+            `See https://developers.figma.com/docs/rest-api/rate-limits/`,
+          { cause: error },
+        );
+      }
       const errorMessage = error instanceof Error ? error.message : String(error);
       throw new Error(
         `Failed to make request to Figma API endpoint '${endpoint}': ${errorMessage}`,
+        { cause: error },
       );
     }
   }

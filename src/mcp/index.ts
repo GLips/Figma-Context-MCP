@@ -1,7 +1,8 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { FigmaService, type FigmaAuthOptions } from "../services/figma.js";
 import { Logger } from "../utils/logger.js";
-import type { AuthMode, Transport } from "../services/telemetry.js";
+import { type AuthMode, type ClientInfo, type Transport } from "~/telemetry/index.js";
+import { installValidationRejectCapture } from "./validation-capture.js";
 import type { ToolExtra } from "./progress.js";
 import {
   downloadFigmaImagesTool,
@@ -33,29 +34,42 @@ function createServer(
   const server = new McpServer(serverInfo);
   const figmaService = new FigmaService(authOptions);
   const authMode: AuthMode = authOptions.useOAuth ? "oauth" : "api_key";
+
+  const getClientInfo = (): ClientInfo | undefined => {
+    const info = server.server.getClientVersion();
+    if (!info) return undefined;
+    return { name: info.name, version: info.version };
+  };
+
   registerTools(server, figmaService, {
     transport,
     authMode,
     outputFormat,
     skipImageDownloads,
     imageDir,
+    getClientInfo,
   });
+
+  installValidationRejectCapture(server, { transport, authMode, getClientInfo });
 
   Logger.isHTTP = transport !== "stdio";
 
   return server;
 }
 
+type RegisterToolsOptions = {
+  transport: ServerTransport;
+  authMode: AuthMode;
+  outputFormat: "yaml" | "json";
+  skipImageDownloads: boolean;
+  imageDir?: string;
+  getClientInfo: () => ClientInfo | undefined;
+};
+
 function registerTools(
   server: McpServer,
   figmaService: FigmaService,
-  options: {
-    transport: ServerTransport;
-    authMode: AuthMode;
-    outputFormat: "yaml" | "json";
-    skipImageDownloads: boolean;
-    imageDir?: string;
-  },
+  options: RegisterToolsOptions,
 ): void {
   server.registerTool(
     getFigmaDataTool.name,
@@ -72,6 +86,7 @@ function registerTools(
         options.outputFormat,
         options.transport,
         options.authMode,
+        options.getClientInfo(),
         extra,
       ),
   );
@@ -92,6 +107,7 @@ function registerTools(
           options.imageDir,
           options.transport,
           options.authMode,
+          options.getClientInfo(),
           extra,
         ),
     );

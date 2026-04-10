@@ -1,7 +1,7 @@
 import { config as loadEnv } from "dotenv";
 import { resolve as resolvePath } from "path";
 import type { FigmaAuthOptions } from "./services/figma.js";
-import { resolveTelemetryEnabled } from "./services/telemetry.js";
+import { resolveTelemetryEnabled } from "./telemetry/index.js";
 
 export type Source = "cli" | "env" | "default";
 
