@@ -17,7 +17,7 @@ describe("StreamableHTTP transport", () => {
 
   beforeAll(async () => {
     const httpServer = await startHttpServer("127.0.0.1", 0, () =>
-      createServer(dummyAuth, { isHTTP: true }),
+      createServer(dummyAuth, { transport: "http" }),
     );
     port = (httpServer.address() as AddressInfo).port;
   }, 15_000);
@@ -87,7 +87,7 @@ describe("Method not allowed", () => {
 
   beforeAll(async () => {
     const httpServer = await startHttpServer("127.0.0.1", 0, () =>
-      createServer(dummyAuth, { isHTTP: true }),
+      createServer(dummyAuth, { transport: "http" }),
     );
     port = (httpServer.address() as AddressInfo).port;
   }, 15_000);
@@ -126,7 +126,7 @@ describe("Multi-client test", () => {
 
   beforeAll(async () => {
     const httpServer = await startHttpServer("127.0.0.1", 0, () =>
-      createServer(dummyAuth, { isHTTP: true }),
+      createServer(dummyAuth, { transport: "http" }),
     );
     port = (httpServer.address() as AddressInfo).port;
   }, 15_000);
@@ -160,7 +160,7 @@ describe("Multi-client test", () => {
 describe("Server lifecycle", () => {
   it("starts and listens on assigned port", async () => {
     const httpServer = await startHttpServer("127.0.0.1", 0, () =>
-      createServer(dummyAuth, { isHTTP: true }),
+      createServer(dummyAuth, { transport: "http" }),
     );
     const port = (httpServer.address() as AddressInfo).port;
 
@@ -170,7 +170,7 @@ describe("Server lifecycle", () => {
   }, 15_000);
 
   it("stopHttpServer shuts down cleanly without hanging", async () => {
-    await startHttpServer("127.0.0.1", 0, () => createServer(dummyAuth, { isHTTP: true }));
+    await startHttpServer("127.0.0.1", 0, () => createServer(dummyAuth, { transport: "http" }));
 
     const timeout = new Promise<"timeout">((resolve) =>
       setTimeout(() => resolve("timeout"), 5_000).unref(),

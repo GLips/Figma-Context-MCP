@@ -1,8 +1,18 @@
 import path from "path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi, beforeEach } from "vitest";
+
+vi.mock("~/telemetry/index.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("~/telemetry/index.js")>();
+  return {
+    ...actual,
+    captureValidationReject: vi.fn(),
+  };
+});
+
 import { downloadFigmaImagesTool } from "~/mcp/tools/download-figma-images-tool.js";
 import { downloadFigmaImage } from "~/utils/common.js";
 import type { ToolExtra } from "~/mcp/progress.js";
+import * as telemetry from "~/telemetry/index.js";
 
 const stubFigmaService = {
   downloadImages: () => Promise.resolve([]),
@@ -22,11 +32,43 @@ const validParams = {
 describe("download path validation", () => {
   const imageDir = "/project/root";
 
+  beforeEach(() => {
+    vi.mocked(telemetry.captureValidationReject).mockClear();
+  });
+
+  it("captures path-traversal attempts as validation rejects", async () => {
+    const result = await downloadFigmaImagesTool.handler(
+      { ...validParams, localPath: "../../etc" },
+      stubFigmaService,
+      imageDir,
+      "stdio",
+      "api_key",
+      undefined,
+      stubExtra,
+    );
+
+    // The handler still returns the existing user-facing error
+    expect(result.isError).toBe(true);
+
+    // And the rejection is recorded with structured field/rule
+    const captureSpy = vi.mocked(telemetry.captureValidationReject);
+    expect(captureSpy).toHaveBeenCalledOnce();
+    const [input, context] = captureSpy.mock.calls[0];
+    expect(input.tool).toBe("download_figma_images");
+    expect(input.field).toBe("localPath");
+    expect(input.rule).toBe("path_traversal");
+    expect(context.transport).toBe("stdio");
+    expect(context.authMode).toBe("api_key");
+  });
+
   it("rejects localPath that traverses outside imageDir", async () => {
     const result = await downloadFigmaImagesTool.handler(
       { ...validParams, localPath: "../../etc" },
       stubFigmaService,
       imageDir,
+      "stdio",
+      "api_key",
+      undefined,
       stubExtra,
     );
 
@@ -40,6 +82,9 @@ describe("download path validation", () => {
       { ...validParams, localPath: "/../../etc" },
       stubFigmaService,
       imageDir,
+      "stdio",
+      "api_key",
+      undefined,
       stubExtra,
     );
 
@@ -52,6 +97,9 @@ describe("download path validation", () => {
       { ...validParams, localPath: "public/images" },
       stubFigmaService,
       imageDir,
+      "stdio",
+      "api_key",
+      undefined,
       stubExtra,
     );
 
@@ -67,6 +115,9 @@ describe("download path validation", () => {
       { ...validParams, localPath: "project/src/static/images/test" },
       stubFigmaService,
       driveRoot,
+      "stdio",
+      "api_key",
+      undefined,
       stubExtra,
     );
 
@@ -78,6 +129,9 @@ describe("download path validation", () => {
       { ...validParams, localPath: "/public/images" },
       stubFigmaService,
       imageDir,
+      "stdio",
+      "api_key",
+      undefined,
       stubExtra,
     );
 

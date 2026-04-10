@@ -1,6 +1,7 @@
 import { config as loadEnv } from "dotenv";
 import { resolve as resolvePath } from "path";
 import type { FigmaAuthOptions } from "./services/figma.js";
+import { resolveTelemetryEnabled } from "./telemetry/index.js";
 
 export type Source = "cli" | "env" | "default";
 
@@ -20,6 +21,7 @@ export interface ServerFlags {
   imageDir?: string;
   proxy?: string;
   stdio?: boolean;
+  noTelemetry?: boolean;
 }
 
 export interface ServerConfig {
@@ -31,6 +33,7 @@ export interface ServerConfig {
   skipImageDownloads: boolean;
   imageDir: string;
   isStdioMode: boolean;
+  noTelemetry: boolean;
   configSources: Record<string, Source>;
 }
 
@@ -134,6 +137,14 @@ export function getServerConfig(flags: ServerFlags): ServerConfig {
 
   const isStdioMode = flags.stdio === true;
 
+  const noTelemetry = flags.noTelemetry ?? false;
+  const telemetrySource: Source =
+    flags.noTelemetry === true
+      ? "cli"
+      : process.env.FRAMELINK_TELEMETRY !== undefined || process.env.DO_NOT_TRACK !== undefined
+        ? "env"
+        : "default";
+
   const configSources: Record<string, Source> = {
     envFile: envFileSource,
     figmaApiKey: figmaApiKey.source,
@@ -144,6 +155,7 @@ export function getServerConfig(flags: ServerFlags): ServerConfig {
     outputFormat: outputFormat.source,
     skipImageDownloads: skipImageDownloads.source,
     imageDir: imageDir.source,
+    telemetry: telemetrySource,
   };
 
   if (!isStdioMode) {
@@ -168,6 +180,10 @@ export function getServerConfig(flags: ServerFlags): ServerConfig {
       `- SKIP_IMAGE_DOWNLOADS: ${skipImageDownloads.value} (source: ${configSources.skipImageDownloads})`,
     );
     console.log(`- IMAGE_DIR: ${imageDir.value} (source: ${configSources.imageDir})`);
+    const telemetryEnabled = resolveTelemetryEnabled(noTelemetry);
+    console.log(
+      `- TELEMETRY: ${telemetryEnabled ? "enabled" : "disabled"} (source: ${configSources.telemetry})`,
+    );
     console.log();
   }
 
@@ -180,6 +196,7 @@ export function getServerConfig(flags: ServerFlags): ServerConfig {
     skipImageDownloads: skipImageDownloads.value,
     imageDir: imageDir.value,
     isStdioMode,
+    noTelemetry,
     configSources,
   };
 }

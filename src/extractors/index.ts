@@ -1,6 +1,7 @@
 // Types
 export type {
   ExtractorFn,
+  NodeCounter,
   SimplifiedNode,
   TraversalContext,
   TraversalOptions,
@@ -10,7 +11,7 @@ export type {
 } from "./types.js";
 
 // Core traversal function
-export { extractFromDesign, getNodesProcessed } from "./node-walker.js";
+export { extractFromDesign } from "./node-walker.js";
 
 // Design-level extraction (unified nodes + components)
 export { simplifyRawFigmaObject } from "./design-extractor.js";

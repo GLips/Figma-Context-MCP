@@ -4,6 +4,7 @@ import { hasValue } from "~/utils/identity.js";
 import type { Style } from "@figma/rest-api-spec";
 import type {
   ExtractorFn,
+  NodeCounter,
   TraversalContext,
   TraversalOptions,
   TraversalState,
@@ -13,18 +14,11 @@ import type {
 
 // Yield the event loop every N nodes so heartbeats, SIGINT, and
 // other async work can run during large file processing.
-// Yield the event loop every N nodes so heartbeats, SIGINT, and
-// other async work can run during large file processing.
 const YIELD_INTERVAL = 100;
-let nodesProcessed = 0;
 
-export function getNodesProcessed(): number {
-  return nodesProcessed;
-}
-
-async function maybeYield(): Promise<void> {
-  nodesProcessed++;
-  if (nodesProcessed % YIELD_INTERVAL === 0) {
+async function maybeYield(counter: NodeCounter): Promise<void> {
+  counter.count++;
+  if (counter.count % YIELD_INTERVAL === 0) {
     await new Promise<void>((resolve) => setImmediate(resolve));
   }
 }
@@ -54,9 +48,8 @@ export async function extractFromDesign(
     extraStyles,
     currentDepth: 0,
     traversalState: { componentPropertyDefinitions: {} },
+    nodeCounter: options.nodeCounter ?? { count: 0 },
   };
-
-  nodesProcessed = 0;
 
   const processedNodes: SimplifiedNode[] = [];
   for (const node of nodes) {
@@ -85,7 +78,7 @@ async function processNodeWithExtractors(
     return null;
   }
 
-  await maybeYield();
+  await maybeYield(context.nodeCounter);
 
   // Always include base metadata
   const result: SimplifiedNode = {
@@ -170,7 +163,7 @@ function shouldProcessNode(
  * Determine if we should traverse into a node's children.
  */
 function shouldTraverseChildren(
-  node: FigmaDocumentNode,
+  _node: FigmaDocumentNode,
   context: TraversalContext,
   options: TraversalOptions,
 ): boolean {

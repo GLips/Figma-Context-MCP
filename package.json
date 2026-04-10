@@ -28,7 +28,7 @@
     "prepack": "pnpm build"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=20.20.0"
   },
   "packageManager": "pnpm@10.10.0",
   "pnpm": {
@@ -56,12 +56,13 @@
     "@jimp/js-jpeg": "^1.6.0",
     "@jimp/js-png": "^1.6.0",
     "@jimp/plugin-crop": "^1.6.0",
-    "@modelcontextprotocol/sdk": "^1.27.1",
+    "@modelcontextprotocol/sdk": "1.29.0",
     "cleye": "^2.2.1",
     "cross-env": "^7.0.3",
     "dotenv": "^16.4.7",
     "express": "^5.2.1",
     "js-yaml": "^4.1.1",
+    "posthog-node": "^5.29.2",
     "remeda": "^2.20.1",
     "undici": "^6.24.1",
     "zod": "^3.25.76"

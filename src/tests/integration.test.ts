@@ -20,11 +20,14 @@ describeOrSkip("Figma MCP Server Tests", () => {
     figmaApiKey = process.env.FIGMA_API_KEY || "";
     figmaFileKey = process.env.FIGMA_FILE_KEY || "";
 
-    server = createServer({
-      figmaApiKey,
-      figmaOAuthToken: "",
-      useOAuth: false,
-    });
+    server = createServer(
+      {
+        figmaApiKey,
+        figmaOAuthToken: "",
+        useOAuth: false,
+      },
+      { transport: "stdio" },
+    );
 
     client = new Client({
       name: "figma-test-client",

@@ -1,13 +1,14 @@
 import { type Command, command } from "cleye";
 import { loadEnvFile, resolveAuth } from "~/config.js";
 import { FigmaService } from "~/services/figma.js";
-import {
-  simplifyRawFigmaObject,
-  allExtractors,
-  collapseSvgContainers,
-} from "~/extractors/index.js";
-import { serializeResult } from "~/utils/serialize.js";
 import { parseFigmaUrl } from "~/utils/figma-url.js";
+import {
+  initTelemetry,
+  captureGetFigmaDataCall,
+  shutdown,
+  type AuthMode,
+} from "~/telemetry/index.js";
+import { getFigmaData } from "~/services/get-figma-data.js";
 
 export const fetchCommand: Command = command(
   {
@@ -43,13 +44,19 @@ export const fetchCommand: Command = command(
         type: String,
         description: "Path to .env file",
       },
+      noTelemetry: {
+        type: Boolean,
+        description: "Disable usage telemetry",
+      },
     },
   },
   (argv) => {
-    run(argv.flags, argv._).catch((error) => {
-      console.error(error instanceof Error ? error.message : String(error));
-      process.exit(1);
-    });
+    run(argv.flags, argv._)
+      .catch((error) => {
+        console.error(error instanceof Error ? error.message : String(error));
+        process.exitCode = 1;
+      })
+      .finally(() => shutdown());
   },
 );
 
@@ -62,6 +69,7 @@ async function run(
     figmaApiKey?: string;
     figmaOauthToken?: string;
     env?: string;
+    noTelemetry?: boolean;
   },
   positionals: string[],
 ) {
@@ -87,21 +95,25 @@ async function run(
 
   loadEnvFile(flags.env);
   const auth = resolveAuth(flags);
-  const figmaService = new FigmaService(auth);
 
-  const depth = flags.depth;
-  const rawApiResponse = nodeId
-    ? await figmaService.getRawNode(fileKey, nodeId, depth)
-    : await figmaService.getRawFile(fileKey, depth);
-
-  const simplifiedDesign = await simplifyRawFigmaObject(rawApiResponse, allExtractors, {
-    maxDepth: depth,
-    afterChildren: collapseSvgContainers,
+  // Initialize telemetry only after input validation succeeds, so every
+  // captured event corresponds to an actual fetch attempt (not a usage error).
+  initTelemetry({
+    optOut: flags.noTelemetry,
+    immediateFlush: true,
+    redactFromErrors: [auth.figmaApiKey, auth.figmaOAuthToken],
   });
 
-  const { nodes, globalVars, ...metadata } = simplifiedDesign;
-  const result = { metadata, nodes, globalVars };
-
+  const authMode: AuthMode = auth.useOAuth ? "oauth" : "api_key";
   const outputFormat = flags.json ? "json" : "yaml";
-  console.log(serializeResult(result, outputFormat));
+
+  const result = await getFigmaData(
+    new FigmaService(auth),
+    { fileKey, nodeId, depth: flags.depth },
+    outputFormat,
+    {
+      onComplete: (outcome) => captureGetFigmaDataCall(outcome, { transport: "cli", authMode }),
+    },
+  );
+  console.log(result.formatted);
 }

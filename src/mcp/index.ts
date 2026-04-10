@@ -1,6 +1,8 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { FigmaService, type FigmaAuthOptions } from "../services/figma.js";
 import { Logger } from "../utils/logger.js";
+import { type AuthMode, type ClientInfo, type Transport } from "~/telemetry/index.js";
+import { installValidationRejectCapture } from "./validation-capture.js";
 import type { ToolExtra } from "./progress.js";
 import {
   downloadFigmaImagesTool,
@@ -16,8 +18,10 @@ const serverInfo = {
     "Gives AI coding agents access to Figma design data, providing layout, styling, and content information for implementing designs.",
 };
 
+type ServerTransport = Extract<Transport, "stdio" | "http">;
+
 type CreateServerOptions = {
-  isHTTP?: boolean;
+  transport: ServerTransport;
   outputFormat?: "yaml" | "json";
   skipImageDownloads?: boolean;
   imageDir?: string;
@@ -25,30 +29,47 @@ type CreateServerOptions = {
 
 function createServer(
   authOptions: FigmaAuthOptions,
-  {
-    isHTTP = false,
-    outputFormat = "yaml",
-    skipImageDownloads = false,
-    imageDir,
-  }: CreateServerOptions = {},
+  { transport, outputFormat = "yaml", skipImageDownloads = false, imageDir }: CreateServerOptions,
 ) {
   const server = new McpServer(serverInfo);
   const figmaService = new FigmaService(authOptions);
-  registerTools(server, figmaService, { outputFormat, skipImageDownloads, imageDir });
+  const authMode: AuthMode = authOptions.useOAuth ? "oauth" : "api_key";
 
-  Logger.isHTTP = isHTTP;
+  const getClientInfo = (): ClientInfo | undefined => {
+    const info = server.server.getClientVersion();
+    if (!info) return undefined;
+    return { name: info.name, version: info.version };
+  };
+
+  registerTools(server, figmaService, {
+    transport,
+    authMode,
+    outputFormat,
+    skipImageDownloads,
+    imageDir,
+    getClientInfo,
+  });
+
+  installValidationRejectCapture(server, { transport, authMode, getClientInfo });
+
+  Logger.isHTTP = transport !== "stdio";
 
   return server;
 }
 
+type RegisterToolsOptions = {
+  transport: ServerTransport;
+  authMode: AuthMode;
+  outputFormat: "yaml" | "json";
+  skipImageDownloads: boolean;
+  imageDir?: string;
+  getClientInfo: () => ClientInfo | undefined;
+};
+
 function registerTools(
   server: McpServer,
   figmaService: FigmaService,
-  options: {
-    outputFormat: "yaml" | "json";
-    skipImageDownloads: boolean;
-    imageDir?: string;
-  },
+  options: RegisterToolsOptions,
 ): void {
   server.registerTool(
     getFigmaDataTool.name,
@@ -59,7 +80,15 @@ function registerTools(
       annotations: { readOnlyHint: true },
     },
     (params: GetFigmaDataParams, extra: ToolExtra) =>
-      getFigmaDataTool.handler(params, figmaService, options.outputFormat, extra),
+      getFigmaDataTool.handler(
+        params,
+        figmaService,
+        options.outputFormat,
+        options.transport,
+        options.authMode,
+        options.getClientInfo(),
+        extra,
+      ),
   );
 
   if (!options.skipImageDownloads) {
@@ -72,7 +101,15 @@ function registerTools(
         annotations: { openWorldHint: true },
       },
       (params: DownloadImagesParams, extra: ToolExtra) =>
-        downloadFigmaImagesTool.handler(params, figmaService, options.imageDir, extra),
+        downloadFigmaImagesTool.handler(
+          params,
+          figmaService,
+          options.imageDir,
+          options.transport,
+          options.authMode,
+          options.getClientInfo(),
+          extra,
+        ),
     );
   }
 }

@@ -8,6 +8,8 @@ import type {
 import { downloadAndProcessImage, type ImageProcessingResult } from "~/utils/image-processing.js";
 import { Logger, writeLogs } from "~/utils/logger.js";
 import { fetchJSON } from "~/utils/fetch-json.js";
+import { getErrorMeta } from "~/utils/error-meta.js";
+import type { HttpError } from "~/utils/fetch-json.js";
 
 export type FigmaAuthOptions = {
   figmaApiKey: string;
@@ -57,6 +59,17 @@ export class FigmaService {
   }
 
   private async request<T>(endpoint: string): Promise<T> {
+    const { data } = await this.requestWithSize<T>(endpoint);
+    return data;
+  }
+
+  /**
+   * Like `request`, but also surfaces the raw response body size so callers
+   * can record it for telemetry. Only used by endpoints whose payload size
+   * we care about (`getRawFile` / `getRawNode`); image-fetching endpoints
+   * continue to use `request` unchanged.
+   */
+  private async requestWithSize<T>(endpoint: string): Promise<{ data: T; rawSize: number }> {
     try {
       Logger.log(`Calling ${this.baseUrl}${endpoint}`);
       const headers = this.getAuthHeaders();
@@ -65,9 +78,14 @@ export class FigmaService {
         headers,
       });
     } catch (error) {
+      const meta = getErrorMeta(error);
+      if (meta.http_status === 429) {
+        throw new Error(buildRateLimitMessage(error), { cause: error });
+      }
       const errorMessage = error instanceof Error ? error.message : String(error);
       throw new Error(
         `Failed to make request to Figma API endpoint '${endpoint}': ${errorMessage}`,
+        { cause: error },
       );
     }
   }
@@ -273,34 +291,80 @@ export class FigmaService {
   }
 
   /**
-   * Get raw Figma API response for a file (for use with flexible extractors)
+   * Get raw Figma API response for a file (for use with flexible extractors).
+   *
+   * Returns the parsed body alongside the raw body size in bytes so callers
+   * can record payload size in telemetry.
    */
-  async getRawFile(fileKey: string, depth?: number | null): Promise<GetFileResponse> {
+  async getRawFile(
+    fileKey: string,
+    depth?: number | null,
+  ): Promise<{ data: GetFileResponse; rawSize: number }> {
     const endpoint = `/files/${fileKey}${depth ? `?depth=${depth}` : ""}`;
     Logger.log(`Retrieving raw Figma file: ${fileKey} (depth: ${depth ?? "default"})`);
 
-    const response = await this.request<GetFileResponse>(endpoint);
-    writeLogs("figma-raw.json", response);
+    const result = await this.requestWithSize<GetFileResponse>(endpoint);
+    writeLogs("figma-raw.json", result.data);
 
-    return response;
+    return result;
   }
 
   /**
-   * Get raw Figma API response for specific nodes (for use with flexible extractors)
+   * Get raw Figma API response for specific nodes (for use with flexible extractors).
+   *
+   * Returns the parsed body alongside the raw body size in bytes so callers
+   * can record payload size in telemetry.
    */
   async getRawNode(
     fileKey: string,
     nodeId: string,
     depth?: number | null,
-  ): Promise<GetFileNodesResponse> {
+  ): Promise<{ data: GetFileNodesResponse; rawSize: number }> {
     const endpoint = `/files/${fileKey}/nodes?ids=${nodeId}${depth ? `&depth=${depth}` : ""}`;
     Logger.log(
       `Retrieving raw Figma node: ${nodeId} from ${fileKey} (depth: ${depth ?? "default"})`,
     );
 
-    const response = await this.request<GetFileNodesResponse>(endpoint);
-    writeLogs("figma-raw.json", response);
+    const result = await this.requestWithSize<GetFileNodesResponse>(endpoint);
+    writeLogs("figma-raw.json", result.data);
 
-    return response;
+    return result;
   }
+}
+
+/**
+ * Build a user-facing 429 message from the Figma rate-limit response headers.
+ * Figma includes plan tier, seat-level limit type, retry-after, and an upgrade
+ * link — all of which let us give targeted guidance instead of a generic
+ * "try again later."
+ *
+ * See https://developers.figma.com/docs/rest-api/rate-limits/
+ */
+function buildRateLimitMessage(error: unknown): string {
+  const headers = (error as HttpError)?.responseHeaders ?? {};
+  const retryAfter = headers["retry-after"];
+  const planTier = headers["x-figma-plan-tier"];
+  const limitType = headers["x-figma-rate-limit-type"];
+  const upgradeLink = headers["x-figma-upgrade-link"];
+
+  let message = "Figma API rate limit hit (429).";
+
+  if (retryAfter) {
+    message += ` Retry after ${retryAfter} seconds.`;
+  }
+
+  if (limitType === "low") {
+    message += " Your Figma seat type (Viewer or Collaborator) has a lower API rate limit.";
+  }
+
+  if (planTier === "starter" || planTier === "student") {
+    message += ` Your ${planTier} plan has limited API access.`;
+  }
+
+  if (upgradeLink) {
+    message += ` Upgrade: ${upgradeLink}`;
+  }
+
+  message += " See https://developers.figma.com/docs/rest-api/rate-limits/";
+  return message;
 }

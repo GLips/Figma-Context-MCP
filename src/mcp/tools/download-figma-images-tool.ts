@@ -2,6 +2,14 @@ import path from "path";
 import { z } from "zod";
 import { FigmaService } from "../../services/figma.js";
 import { Logger } from "../../utils/logger.js";
+import {
+  captureDownloadImagesCall,
+  captureValidationReject,
+  type AuthMode,
+  type ClientInfo,
+  type Transport,
+} from "~/telemetry/index.js";
+import { downloadFigmaImages as runDownloadFigmaImages } from "../../services/download-figma-images.js";
 import { sendProgress, startProgressHeartbeat, type ToolExtra } from "../progress.js";
 
 const parameters = {
@@ -82,24 +90,40 @@ const parameters = {
 const parametersSchema = z.object(parameters);
 export type DownloadImagesParams = z.infer<typeof parametersSchema>;
 
-// Enhanced handler function with image processing support
 async function downloadFigmaImages(
   params: DownloadImagesParams,
   figmaService: FigmaService,
   imageDir: string | undefined,
+  transport: Transport,
+  authMode: AuthMode,
+  clientInfo: ClientInfo | undefined,
   extra: ToolExtra,
 ) {
   try {
-    const { fileKey, nodes, localPath, pngScale = 2 } = parametersSchema.parse(params);
+    const { fileKey, nodes, localPath, pngScale } = parametersSchema.parse(params);
 
     // Resolve localPath relative to the configured image directory.
     // path.join (not path.resolve) so a leading "/" is treated as relative, not absolute —
     // LLMs frequently produce paths like "/public/images" when they mean "public/images".
+    // This is a security boundary tied to server config, so it lives at the edge rather
+    // than in the shared core.
     const baseDir = imageDir ?? process.cwd();
     const resolvedPath = path.resolve(path.join(baseDir, localPath));
     // Drive roots (e.g. E:\) already end with a separator — avoid doubling it
     const baseDirPrefix = baseDir.endsWith(path.sep) ? baseDir : baseDir + path.sep;
     if (resolvedPath !== baseDir && !resolvedPath.startsWith(baseDirPrefix)) {
+      // Path-traversal rejection happens after schema validation, so the SDK
+      // wrapper in mcp/index.ts never sees it. Capture it here as a validation
+      // reject so we can track how often LLMs trip over the localPath contract.
+      captureValidationReject(
+        {
+          tool: "download_figma_images",
+          field: "localPath",
+          rule: "path_traversal",
+          message: `Path resolves outside allowed image directory: ${localPath}`,
+        },
+        { transport, authMode, clientInfo },
+      );
       return {
         isError: true,
         content: [
@@ -113,86 +137,27 @@ async function downloadFigmaImages(
 
     await sendProgress(extra, 0, 3, "Resolving image downloads");
 
-    // Process nodes: collect unique downloads and track which requests they satisfy
-    const downloadItems = [];
-    const downloadToRequests = new Map<number, string[]>(); // download index -> requested filenames
-    const seenDownloads = new Map<string, number>(); // uniqueKey -> download index
+    let stopHeartbeat: (() => void) | undefined;
+    const { downloads, successCount } = await runDownloadFigmaImages(
+      figmaService,
+      { fileKey, nodes, localPath: resolvedPath, pngScale },
+      {
+        onDownloadStart: async (downloadCount) => {
+          await sendProgress(extra, 1, 3, `Resolved ${downloadCount} images, downloading`);
+          stopHeartbeat = startProgressHeartbeat(extra, "Downloading images");
+        },
+        onDownloadComplete: () => {
+          stopHeartbeat?.();
+        },
+        onComplete: (outcome) =>
+          captureDownloadImagesCall(outcome, { transport, authMode, clientInfo }),
+      },
+    );
 
-    for (const rawNode of nodes) {
-      const { nodeId: rawNodeId, ...node } = rawNode;
-
-      // Replace - with : in nodeId for our query—Figma API expects :
-      const nodeId = rawNodeId?.replace(/-/g, ":");
-
-      // Apply filename suffix if provided
-      let finalFileName = node.fileName;
-      if (node.filenameSuffix && !finalFileName.includes(node.filenameSuffix)) {
-        const ext = finalFileName.split(".").pop();
-        const nameWithoutExt = finalFileName.substring(0, finalFileName.lastIndexOf("."));
-        finalFileName = `${nameWithoutExt}-${node.filenameSuffix}.${ext}`;
-      }
-
-      const downloadItem = {
-        fileName: finalFileName,
-        needsCropping: node.needsCropping || false,
-        cropTransform: node.cropTransform,
-        requiresImageDimensions: node.requiresImageDimensions || false,
-      };
-
-      if (node.gifRef) {
-        // GIF fills are always unique downloads (animated, no dedup needed)
-        const downloadIndex = downloadItems.length;
-        downloadItems.push({ ...downloadItem, gifRef: node.gifRef });
-        downloadToRequests.set(downloadIndex, [finalFileName]);
-      } else if (node.imageRef) {
-        // For imageRefs, check if we've already planned to download this
-        const uniqueKey = `${node.imageRef}-${node.filenameSuffix || "none"}`;
-
-        if (!node.filenameSuffix && seenDownloads.has(uniqueKey)) {
-          // Already planning to download this, just add to the requests list
-          const downloadIndex = seenDownloads.get(uniqueKey)!;
-          const requests = downloadToRequests.get(downloadIndex)!;
-          if (!requests.includes(finalFileName)) {
-            requests.push(finalFileName);
-          }
-
-          // Update requiresImageDimensions if needed
-          if (downloadItem.requiresImageDimensions) {
-            downloadItems[downloadIndex].requiresImageDimensions = true;
-          }
-        } else {
-          // New unique download
-          const downloadIndex = downloadItems.length;
-          downloadItems.push({ ...downloadItem, imageRef: node.imageRef });
-          downloadToRequests.set(downloadIndex, [finalFileName]);
-          seenDownloads.set(uniqueKey, downloadIndex);
-        }
-      } else {
-        // Rendered nodes are always unique
-        const downloadIndex = downloadItems.length;
-        downloadItems.push({ ...downloadItem, nodeId });
-        downloadToRequests.set(downloadIndex, [finalFileName]);
-      }
-    }
-
-    await sendProgress(extra, 1, 3, `Resolved ${downloadItems.length} images, downloading`);
-    const stopHeartbeat = startProgressHeartbeat(extra, "Downloading images");
-
-    let allDownloads;
-    try {
-      allDownloads = await figmaService.downloadImages(fileKey, resolvedPath, downloadItems, {
-        pngScale,
-      });
-    } finally {
-      stopHeartbeat();
-    }
-
-    const successCount = allDownloads.filter(Boolean).length;
     await sendProgress(extra, 2, 3, `Downloaded ${successCount} images, formatting response`);
 
-    // Format results with aliases
-    const imagesList = allDownloads
-      .map((result, index) => {
+    const imagesList = downloads
+      .map(({ result, requestedFileNames }) => {
         const fileName = result.filePath.split("/").pop() || result.filePath;
         const dimensions = `${result.finalDimensions.width}x${result.finalDimensions.height}`;
         const cropStatus = result.wasCropped ? " (cropped)" : "";
@@ -201,11 +166,9 @@ async function downloadFigmaImages(
           ? `${dimensions} | ${result.cssVariables}`
           : dimensions;
 
-        // Show all the filenames that were requested for this download
-        const requestedNames = downloadToRequests.get(index) || [fileName];
         const aliasText =
-          requestedNames.length > 1
-            ? ` (also requested as: ${requestedNames.filter((name: string) => name !== fileName).join(", ")})`
+          requestedFileNames.length > 1
+            ? ` (also requested as: ${requestedFileNames.filter((name) => name !== fileName).join(", ")})`
             : "";
 
         return `- ${fileName}: ${dimensionInfo}${cropStatus}${aliasText}`;
@@ -221,13 +184,14 @@ async function downloadFigmaImages(
       ],
     };
   } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
     Logger.error(`Error downloading images from ${params.fileKey}:`, error);
     return {
       isError: true,
       content: [
         {
           type: "text" as const,
-          text: `Failed to download images: ${error instanceof Error ? error.message : String(error)}`,
+          text: `Failed to download images: ${message}`,
         },
       ],
     };
