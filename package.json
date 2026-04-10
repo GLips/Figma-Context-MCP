@@ -56,7 +56,7 @@
     "@jimp/js-jpeg": "^1.6.0",
     "@jimp/js-png": "^1.6.0",
     "@jimp/plugin-crop": "^1.6.0",
-    "@modelcontextprotocol/sdk": "1.27.1",
+    "@modelcontextprotocol/sdk": "1.29.0",
     "cleye": "^2.2.1",
     "cross-env": "^7.0.3",
     "dotenv": "^16.4.7",
