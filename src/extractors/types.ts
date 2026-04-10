@@ -28,7 +28,21 @@ export interface TraversalContext {
   parent?: FigmaDocumentNode;
   insideComponentDefinition?: boolean;
   traversalState: TraversalState;
+  /**
+   * Per-call mutable counter shared with the caller. Lives on the context so
+   * walker recursion can increment it without touching module-global state —
+   * concurrent extractFromDesign calls (e.g. overlapping HTTP requests) each
+   * own their counter and never collide.
+   */
+  nodeCounter: NodeCounter;
 }
+
+/**
+ * Mutable progress counter passed into traversal. Callers can read `count`
+ * during traversal (for live progress indicators) and after it returns
+ * (as the final node-walked metric).
+ */
+export type NodeCounter = { count: number };
 
 export interface TraversalState {
   componentPropertyDefinitions: Record<string, Record<string, SimplifiedPropertyDefinition>>;
@@ -51,6 +65,13 @@ export interface TraversalOptions {
     result: SimplifiedNode,
     children: SimplifiedNode[],
   ) => SimplifiedNode[];
+  /**
+   * Optional caller-supplied counter. The walker increments it as it processes
+   * nodes, so callers that need a live readout (e.g. progress heartbeats) or a
+   * post-call metric can read from the same object. If omitted, the walker
+   * creates its own internal counter.
+   */
+  nodeCounter?: NodeCounter;
 }
 
 /**

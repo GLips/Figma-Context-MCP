@@ -52,7 +52,7 @@ const argv = cli({
     },
     noTelemetry: {
       type: Boolean,
-      description: "Disable anonymous usage telemetry (telemetry is on by default)",
+      description: "Disable usage telemetry (telemetry is on by default)",
     },
   },
   commands: [fetchCommand],
