@@ -7,6 +7,7 @@ import type {
   Style,
 } from "@figma/rest-api-spec";
 import { simplifyComponents, simplifyComponentSets } from "~/transformers/component.js";
+import { tagError } from "~/utils/error-meta.js";
 import type { ExtractorFn, TraversalOptions, SimplifiedDesign } from "./types.js";
 import { extractFromDesign } from "./node-walker.js";
 
@@ -54,10 +55,13 @@ function parseAPIResponse(data: GetFileResponse | GetFileNodesResponse) {
     // GetFileNodesResponse
     const [nodeId, nodeData] = Object.entries(data.nodes)[0];
     if (nodeData === null) {
-      throw new Error(
-        `Node ${nodeId} was not found in the Figma file. ` +
-          `It may have been deleted or the link may be outdated. ` +
-          `Try copying a fresh link from the Figma file.`,
+      tagError(
+        new Error(
+          `Node ${nodeId} was not found in the Figma file. ` +
+            `It may have been deleted or the link may be outdated. ` +
+            `Try copying a fresh link from the Figma file.`,
+        ),
+        { category: "not_found" },
       );
     }
 

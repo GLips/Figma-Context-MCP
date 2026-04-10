@@ -1,5 +1,6 @@
 import fs from "fs";
 import path from "path";
+import { tagError } from "~/utils/error-meta.js";
 
 export type StyleId = `${string}_${string}` & { __brand: "StyleId" };
 
@@ -26,7 +27,9 @@ export async function downloadFigmaImage(
     const fullPath = path.resolve(path.join(localPath, fileName));
     const resolvedLocalPath = path.resolve(localPath);
     if (!fullPath.startsWith(resolvedLocalPath + path.sep)) {
-      throw new Error(`File path escapes target directory: ${fileName}`);
+      tagError(new Error(`File path escapes target directory: ${fileName}`), {
+        category: "invalid_input",
+      });
     }
 
     // Use fetch to download the image
@@ -35,7 +38,9 @@ export async function downloadFigmaImage(
     });
 
     if (!response.ok) {
-      throw new Error(`Failed to download image: ${response.statusText}`);
+      tagError(new Error(`Failed to download image: ${response.statusText}`), {
+        category: "image_download",
+      });
     }
 
     // Create write stream
@@ -44,7 +49,7 @@ export async function downloadFigmaImage(
     // Get the response as a readable stream and pipe it to the file
     const reader = response.body?.getReader();
     if (!reader) {
-      throw new Error("Failed to get response body");
+      tagError(new Error("Failed to get response body"), { category: "image_download" });
     }
 
     return new Promise((resolve, reject) => {
@@ -81,7 +86,7 @@ export async function downloadFigmaImage(
     });
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
-    throw new Error(`Error downloading image: ${errorMessage}`);
+    throw new Error(`Error downloading image: ${errorMessage}`, { cause: error });
   }
 }
 

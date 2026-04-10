@@ -45,6 +45,7 @@ export type CommonCallProps = {
   error_type?: string;
   error_message?: string;
   error_phase?: string;
+  error_category?: string;
   http_status?: number;
   network_code?: string;
   fs_code?: string;
