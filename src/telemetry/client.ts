@@ -95,20 +95,33 @@ export function initTelemetry(opts?: InitTelemetryOptions): boolean {
  * original error). Swallow silently; no logging because telemetry is supposed
  * to be invisible.
  */
+const MAX_ERROR_MESSAGE_LENGTH = 2000;
+
+function truncateForTelemetry(message: string): string {
+  return message.length > MAX_ERROR_MESSAGE_LENGTH
+    ? message.slice(0, MAX_ERROR_MESSAGE_LENGTH) + "…[truncated]"
+    : message;
+}
+
 export function captureEvent(event: string, properties: Record<string, unknown>): void {
   if (disabled || !client || !sessionId || !commonProps) return;
 
+  // Redact secrets BEFORE truncating so a token straddling the cut point
+  // can't survive as a partial match.
   const errorMessage = properties.error_message;
-  const redacted =
+  const processed =
     typeof errorMessage === "string"
-      ? { ...properties, error_message: redactErrorMessage(errorMessage) }
+      ? {
+          ...properties,
+          error_message: truncateForTelemetry(redactErrorMessage(errorMessage)),
+        }
       : properties;
 
   try {
     client.capture({
       distinctId: sessionId,
       event,
-      properties: { ...commonProps, ...redacted },
+      properties: { ...commonProps, ...processed },
     });
   } catch {
     // intentionally empty

@@ -9,6 +9,13 @@ type RequestOptions = RequestInit & {
   headers?: Record<string, string>;
 };
 
+/**
+ * Error thrown on HTTP failures. Carries response headers so callers (e.g.
+ * figma.ts) can read rate-limit metadata without needing access to the
+ * original Response object.
+ */
+export type HttpError = Error & { responseHeaders?: Record<string, string> };
+
 const CONNECTION_ERROR_CODES = new Set([
   "ECONNRESET",
   "ECONNREFUSED",
@@ -29,8 +36,13 @@ export async function fetchJSON<T extends { status?: number }>(
     const response = await fetch(url, options);
 
     if (!response.ok) {
-      const httpError = new Error(
-        `Fetch failed with status ${response.status}: ${response.statusText}`,
+      const responseHeaders: Record<string, string> = {};
+      response.headers.forEach((value, key) => {
+        responseHeaders[key] = value;
+      });
+      const httpError: HttpError = Object.assign(
+        new Error(`Fetch failed with status ${response.status}: ${response.statusText}`),
+        { responseHeaders },
       );
       tagError(httpError, {
         http_status: response.status,

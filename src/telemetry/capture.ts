@@ -11,14 +11,6 @@ import type {
   ValidationRejectInput,
 } from "./types.js";
 
-const MAX_ERROR_MESSAGE_LENGTH = 2000;
-
-function truncateForTelemetry(message: string): string {
-  return message.length > MAX_ERROR_MESSAGE_LENGTH
-    ? message.slice(0, MAX_ERROR_MESSAGE_LENGTH) + "…[truncated]"
-    : message;
-}
-
 function captureToolCall(props: ToolCallProperties): void {
   captureEvent("tool_called", props as unknown as Record<string, unknown>);
 }
@@ -42,7 +34,7 @@ function errorFields(
   return {
     is_error: true,
     error_type: error instanceof Error ? error.constructor.name : "Unknown",
-    error_message: truncateForTelemetry(rawMessage),
+    error_message: rawMessage,
     error_phase: meta.phase,
     http_status: meta.http_status,
     network_code: meta.network_code,
@@ -133,7 +125,7 @@ export function captureValidationReject(
     client_version: context.clientInfo?.version,
     is_error: true,
     error_type: "ValidationError",
-    error_message: truncateForTelemetry(input.message),
+    error_message: input.message,
     error_phase: "validate",
     validation_field: input.field,
     validation_rule: input.rule,
