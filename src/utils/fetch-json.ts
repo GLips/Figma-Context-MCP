@@ -1,4 +1,4 @@
-import { tagError } from "~/utils/error-meta.js";
+import { tagError, type ErrorCategory } from "~/utils/error-meta.js";
 
 type RequestOptions = RequestInit & {
   /**
@@ -46,6 +46,7 @@ export async function fetchJSON<T extends { status?: number }>(
       );
       tagError(httpError, {
         http_status: response.status,
+        category: httpStatusCategory(response.status),
         is_retryable: RETRYABLE_STATUSES.has(response.status),
       });
     }
@@ -66,7 +67,7 @@ export async function fetchJSON<T extends { status?: number }>(
           `to your proxy URL (e.g. http://proxy:8080).`,
         { cause: error },
       );
-      tagError(wrapped, { network_code: networkCode, is_retryable: true });
+      tagError(wrapped, { network_code: networkCode, category: "network", is_retryable: true });
     }
     throw error;
   }
@@ -77,4 +78,10 @@ function getConnectionErrorCode(error: unknown): string | undefined {
   const cause = (error as { cause?: { code?: string } }).cause;
   if (cause?.code && CONNECTION_ERROR_CODES.has(cause.code)) return cause.code;
   return undefined;
+}
+
+function httpStatusCategory(status: number): ErrorCategory {
+  if (status === 429) return "rate_limit";
+  if (status === 401 || status === 403) return "auth";
+  return "figma_api";
 }

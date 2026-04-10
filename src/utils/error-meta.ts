@@ -23,8 +23,19 @@ export type ErrorPhase =
   | "download"
   | "format_response";
 
+export type ErrorCategory =
+  | "rate_limit"
+  | "auth"
+  | "not_found"
+  | "invalid_input"
+  | "network"
+  | "figma_api"
+  | "image_download"
+  | "internal";
+
 export type ErrorMeta = {
   phase?: ErrorPhase;
+  category?: ErrorCategory;
   http_status?: number;
   network_code?: string;
   fs_code?: string;

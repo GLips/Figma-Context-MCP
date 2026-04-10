@@ -23,6 +23,7 @@ function errorFields(
   | "error_type"
   | "error_message"
   | "error_phase"
+  | "error_category"
   | "http_status"
   | "network_code"
   | "fs_code"
@@ -36,6 +37,7 @@ function errorFields(
     error_type: error instanceof Error ? error.constructor.name : "Unknown",
     error_message: rawMessage,
     error_phase: meta.phase,
+    error_category: meta.category,
     http_status: meta.http_status,
     network_code: meta.network_code,
     fs_code: meta.fs_code,
@@ -127,6 +129,7 @@ export function captureValidationReject(
     error_type: "ValidationError",
     error_message: input.message,
     error_phase: "validate",
+    error_category: "invalid_input",
     validation_field: input.field,
     validation_rule: input.rule,
   };

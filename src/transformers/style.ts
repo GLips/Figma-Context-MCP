@@ -6,6 +6,7 @@ import type {
   Transform,
 } from "@figma/rest-api-spec";
 import { generateCSSShorthand, isVisible } from "~/utils/common.js";
+import { tagError } from "~/utils/error-meta.js";
 import { hasValue, isStrokeWeights } from "~/utils/identity.js";
 
 export type CSSRGBAColor = `rgba(${number}, ${number}, ${number}, ${number})`;
@@ -324,7 +325,7 @@ export function parsePaint(raw: Paint, hasChildren: boolean = false): Simplified
       gradient: convertGradientToCss(raw),
     };
   } else {
-    throw new Error(`Unknown paint type: ${raw.type}`);
+    tagError(new Error(`Unknown paint type: ${raw.type}`), { category: "internal" });
   }
 }
 

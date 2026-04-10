@@ -7,6 +7,7 @@ import type {
   Style,
 } from "@figma/rest-api-spec";
 import { simplifyComponents, simplifyComponentSets } from "~/transformers/component.js";
+import { tagError } from "~/utils/error-meta.js";
 import type { ExtractorFn, TraversalOptions, SimplifiedDesign } from "./types.js";
 import { extractFromDesign } from "./node-walker.js";
 
@@ -52,19 +53,24 @@ function parseAPIResponse(data: GetFileResponse | GetFileNodesResponse) {
 
   if ("nodes" in data) {
     // GetFileNodesResponse
-    const nodeResponses = Object.values(data.nodes);
-    nodeResponses.forEach((nodeResponse) => {
-      if (nodeResponse.components) {
-        Object.assign(aggregatedComponents, nodeResponse.components);
-      }
-      if (nodeResponse.componentSets) {
-        Object.assign(aggregatedComponentSets, nodeResponse.componentSets);
-      }
-      if (nodeResponse.styles) {
-        Object.assign(extraStyles, nodeResponse.styles);
-      }
-    });
-    nodesToParse = nodeResponses.map((n) => n.document);
+    const [nodeId, nodeData] = Object.entries(data.nodes)[0];
+    if (nodeData === null) {
+      tagError(
+        new Error(
+          `Node ${nodeId} was not found in the Figma file. ` +
+            `It may have been deleted or the link may be outdated. ` +
+            `Try copying a fresh link from the Figma file.`,
+        ),
+        { category: "not_found" },
+      );
+    }
+
+    Object.assign(aggregatedComponents, nodeData.components);
+    Object.assign(aggregatedComponentSets, nodeData.componentSets);
+    if (nodeData.styles) {
+      Object.assign(extraStyles, nodeData.styles);
+    }
+    nodesToParse = [nodeData.document];
   } else {
     // GetFileResponse
     Object.assign(aggregatedComponents, data.components);

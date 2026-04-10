@@ -1,3 +1,5 @@
+import { tagError } from "~/utils/error-meta.js";
+
 export interface FigmaUrlParts {
   fileKey: string;
   nodeId: string | undefined;
@@ -9,12 +11,14 @@ export function parseFigmaUrl(input: string): FigmaUrlParts {
   const url = new URL(input);
 
   if (url.hostname !== "figma.com" && !url.hostname.endsWith(".figma.com")) {
-    throw new Error(`Not a Figma URL: ${input}`);
+    tagError(new Error(`Not a Figma URL: ${input}`), { category: "invalid_input" });
   }
 
   const match = url.pathname.match(FIGMA_PATH_PATTERN);
   if (!match) {
-    throw new Error(`Could not extract file key from Figma URL: ${input}`);
+    tagError(new Error(`Could not extract file key from Figma URL: ${input}`), {
+      category: "invalid_input",
+    });
   }
 
   const fileKey = match[2];
