@@ -1,5 +1,13 @@
 # figma-developer-mcp
 
+## [0.10.1](https://github.com/GLips/Figma-Context-MCP/compare/v0.10.0...v0.10.1) (2026-04-10)
+
+
+### Bug Fixes
+
+* add actionable 403 error message with troubleshooting link ([9230bd0](https://github.com/GLips/Figma-Context-MCP/commit/9230bd02a63085d88ca5d3687275f2cba9557309))
+* throw actionable error for missing nodes, add error_category to telemetry ([#344](https://github.com/GLips/Figma-Context-MCP/issues/344)) ([334ae2b](https://github.com/GLips/Figma-Context-MCP/commit/334ae2bbecbd3583922098787877448337acf6cb))
+
 ## [0.10.0](https://github.com/GLips/Figma-Context-MCP/compare/v0.9.0...v0.10.0) (2026-04-10)
 
 
