@@ -1,7 +1,7 @@
 import { getErrorMeta } from "~/utils/error-meta.js";
 import type { GetFigmaDataOutcome } from "~/services/get-figma-data.js";
 import type { DownloadImagesOutcome } from "~/services/download-figma-images.js";
-import { captureEvent } from "./client.js";
+import { captureEvent, captureException } from "./client.js";
 import type {
   CommonCallProps,
   GetFigmaDataCall,
@@ -36,6 +36,18 @@ function errorFields(
     is_error: true,
     error_type: error instanceof Error ? error.constructor.name : "Unknown",
     error_message: rawMessage,
+    error_phase: meta.phase,
+    error_category: meta.category,
+    http_status: meta.http_status,
+    network_code: meta.network_code,
+    fs_code: meta.fs_code,
+    is_retryable: meta.is_retryable,
+  };
+}
+
+function exceptionMeta(error: unknown): Record<string, unknown> {
+  const meta = getErrorMeta(error);
+  return {
     error_phase: meta.phase,
     error_category: meta.category,
     http_status: meta.http_status,
@@ -100,6 +112,12 @@ export function captureGetFigmaDataCall(
   context: ToolCallContext,
 ): void {
   captureToolCall(toGetFigmaDataEvent(outcome, context));
+  if (outcome.error !== undefined) {
+    captureException(outcome.error, {
+      tool: "get_figma_data",
+      ...exceptionMeta(outcome.error),
+    });
+  }
 }
 
 export function captureDownloadImagesCall(
@@ -107,6 +125,12 @@ export function captureDownloadImagesCall(
   context: ToolCallContext,
 ): void {
   captureToolCall(toDownloadImagesEvent(outcome, context));
+  if (outcome.error !== undefined) {
+    captureException(outcome.error, {
+      tool: "download_figma_images",
+      ...exceptionMeta(outcome.error),
+    });
+  }
 }
 
 /**

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { PostHog } from "posthog-node";
+import type { EventMessage } from "posthog-node";
 import type { InitTelemetryOptions } from "./types.js";
 
 // Write-only project key for the Framelink MCP analytics project.
@@ -26,12 +27,20 @@ function parseNodeMajor(version: string): number {
   return Number.parseInt(version.split(".")[0], 10);
 }
 
+const MAX_ERROR_MESSAGE_LENGTH = 2000;
+
 function redactErrorMessage(message: string): string {
   let result = message;
   for (const secret of redactionSecrets) {
     result = result.replaceAll(secret, "[REDACTED]");
   }
   return result;
+}
+
+function truncateForTelemetry(message: string): string {
+  return message.length > MAX_ERROR_MESSAGE_LENGTH
+    ? message.slice(0, MAX_ERROR_MESSAGE_LENGTH) + "…[truncated]"
+    : message;
 }
 
 /**
@@ -79,6 +88,7 @@ export function initTelemetry(opts?: InitTelemetryOptions): boolean {
   client = new PostHog(POSTHOG_API_KEY, {
     host: POSTHOG_HOST,
     disableGeoip: false,
+    before_send: redactEvent,
     ...(opts?.immediateFlush ? { flushAt: 1, flushInterval: 0 } : {}),
   });
 
@@ -86,42 +96,71 @@ export function initTelemetry(opts?: InitTelemetryOptions): boolean {
 }
 
 /**
- * Low-level event capture. Handles disabled state, redaction, and common
- * property merging. Capture functions in capture.ts shape the event and
- * delegate here.
+ * Centralised redaction for all outbound PostHog events. Runs as a
+ * `before_send` hook so every event type is covered — no call site needs to
+ * remember to redact manually.
+ *
+ * - `error_message` (flat property on `tool_called` events)
+ * - `$exception_list[*].value` (built internally by the SDK for `$exception`
+ *   events — we can't redact before handing the Error over without losing the
+ *   original stack trace, so we intercept here)
+ */
+function redactEvent(event: EventMessage | null): EventMessage | null {
+  if (!event || redactionSecrets.length === 0) return event;
+
+  const props = event.properties;
+  if (!props) return event;
+
+  if (typeof props.error_message === "string") {
+    props.error_message = truncateForTelemetry(redactErrorMessage(props.error_message));
+  }
+
+  const list = props.$exception_list;
+  if (Array.isArray(list)) {
+    for (const entry of list) {
+      if (typeof entry.value === "string") {
+        entry.value = truncateForTelemetry(redactErrorMessage(entry.value));
+      }
+    }
+  }
+
+  return event;
+}
+
+/**
+ * Low-level event capture. Handles disabled state and common property merging.
+ * Capture functions in capture.ts shape the event and delegate here; secret
+ * redaction runs centrally in the `before_send` hook.
  *
  * Telemetry must never surface errors to callers — this runs inside lifecycle
  * observers where throwing would mask the tool's real return value (or its
  * original error). Swallow silently; no logging because telemetry is supposed
  * to be invisible.
  */
-const MAX_ERROR_MESSAGE_LENGTH = 2000;
-
-function truncateForTelemetry(message: string): string {
-  return message.length > MAX_ERROR_MESSAGE_LENGTH
-    ? message.slice(0, MAX_ERROR_MESSAGE_LENGTH) + "…[truncated]"
-    : message;
-}
-
 export function captureEvent(event: string, properties: Record<string, unknown>): void {
   if (disabled || !client || !sessionId || !commonProps) return;
-
-  // Redact secrets BEFORE truncating so a token straddling the cut point
-  // can't survive as a partial match.
-  const errorMessage = properties.error_message;
-  const processed =
-    typeof errorMessage === "string"
-      ? {
-          ...properties,
-          error_message: truncateForTelemetry(redactErrorMessage(errorMessage)),
-        }
-      : properties;
 
   try {
     client.capture({
       distinctId: sessionId,
       event,
-      properties: { ...commonProps, ...processed },
+      properties: { ...commonProps, ...properties },
+    });
+  } catch {
+    // intentionally empty
+  }
+}
+
+export function captureException(
+  error: unknown,
+  additionalProperties?: Record<string, unknown>,
+): void {
+  if (disabled || !client || !sessionId || !commonProps) return;
+
+  try {
+    client.captureException(error, sessionId, {
+      ...commonProps,
+      ...additionalProperties,
     });
   } catch {
     // intentionally empty
