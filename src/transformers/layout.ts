@@ -7,12 +7,17 @@ import type {
 import { generateCSSShorthand, pixelRound } from "~/utils/common.js";
 
 export interface SimplifiedLayout {
-  mode: "none" | "row" | "column";
+  mode: "none" | "row" | "column" | "grid";
   justifyContent?: "flex-start" | "flex-end" | "center" | "space-between" | "baseline" | "stretch";
   alignItems?: "flex-start" | "flex-end" | "center" | "space-between" | "baseline" | "stretch";
-  alignSelf?: "flex-start" | "flex-end" | "center" | "stretch";
+  alignSelf?: "flex-start" | "flex-end" | "center" | "stretch" | "start" | "end";
   wrap?: boolean;
   gap?: string;
+  gridTemplateColumns?: string;
+  gridTemplateRows?: string;
+  gridColumn?: string;
+  gridRow?: string;
+  justifySelf?: "start" | "end" | "center";
   locationRelativeToParent?: {
     x: number;
     y: number;
@@ -60,7 +65,7 @@ function convertJustifyContent(align?: HasFramePropertiesTrait["primaryAxisAlign
 function convertAlignItems(
   align: HasFramePropertiesTrait["counterAxisAlignItems"] | undefined,
   children: FigmaDocumentNode[],
-  mode: "row" | "column",
+  mode: SimplifiedLayout["mode"],
 ) {
   // Row cross-axis is vertical; column cross-axis is horizontal
   const crossSizing = mode === "row" ? "layoutSizingVertical" : "layoutSizingHorizontal";
@@ -105,7 +110,7 @@ function convertSelfAlign(align?: HasLayoutTrait["layoutAlign"]) {
 
 // SPACE_BETWEEN computes gaps dynamically — the API returns stale spacing
 // values, but Figma's UI shows "Auto". Suppress the affected axis.
-function buildGap(n: HasFramePropertiesTrait, mode: "row" | "column"): string | undefined {
+function buildGap(n: HasFramePropertiesTrait, mode: SimplifiedLayout["mode"]): string | undefined {
   const primaryGap = n.primaryAxisAlignItems === "SPACE_BETWEEN" ? undefined : n.itemSpacing;
   const counterGap =
     n.layoutWrap !== "WRAP" || n.counterAxisAlignContent === "SPACE_BETWEEN"
@@ -120,8 +125,8 @@ function buildGap(n: HasFramePropertiesTrait, mode: "row" | "column"): string | 
 }
 
 function gapShorthand(row?: number, col?: number): string | undefined {
-  if (!row && !col) return undefined;
-  if (row && col) return row === col ? `${row}px` : `${row}px ${col}px`;
+  if (row === undefined && col === undefined) return undefined;
+  if (row !== undefined && col !== undefined) return row === col ? `${row}px` : `${row}px ${col}px`;
   return `${(row ?? col)!}px`;
 }
 
@@ -185,7 +190,7 @@ function buildSimplifiedFrameValues(n: FigmaDocumentNode): SimplifiedLayout | { 
 function buildSimplifiedLayoutValues(
   n: FigmaDocumentNode,
   parent: FigmaDocumentNode | undefined,
-  mode: "row" | "column" | "none",
+  mode: SimplifiedLayout["mode"],
 ): SimplifiedLayout | undefined {
   if (!isLayout(n)) return undefined;
 
