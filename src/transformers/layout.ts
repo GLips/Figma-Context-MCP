@@ -151,7 +151,9 @@ function buildSimplifiedFrameValues(n: FigmaDocumentNode): SimplifiedLayout | { 
         ? "none"
         : n.layoutMode === "HORIZONTAL"
           ? "row"
-          : "column",
+          : n.layoutMode === "GRID"
+            ? "grid"
+            : "column",
   };
 
   const overflowScroll: SimplifiedLayout["overflowScroll"] = [];
@@ -160,6 +162,28 @@ function buildSimplifiedFrameValues(n: FigmaDocumentNode): SimplifiedLayout | { 
   if (overflowScroll.length > 0) frameValues.overflowScroll = overflowScroll;
 
   if (frameValues.mode === "none") {
+    return frameValues;
+  }
+
+  if (frameValues.mode === "grid" && isLayout(n)) {
+    const cols = n.gridColumnsSizing?.trim();
+    if (cols) frameValues.gridTemplateColumns = cols;
+
+    const rows = n.gridRowsSizing?.trim();
+    if (rows) frameValues.gridTemplateRows = rows;
+
+    frameValues.gap = gapShorthand(n.gridRowGap, n.gridColumnGap);
+    frameValues.alignSelf = convertSelfAlign(n.layoutAlign);
+
+    if (n.paddingTop || n.paddingBottom || n.paddingLeft || n.paddingRight) {
+      frameValues.padding = generateCSSShorthand({
+        top: n.paddingTop ?? 0,
+        right: n.paddingRight ?? 0,
+        bottom: n.paddingBottom ?? 0,
+        left: n.paddingLeft ?? 0,
+      });
+    }
+
     return frameValues;
   }
 
