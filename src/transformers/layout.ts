@@ -173,10 +173,16 @@ function buildGap(n: HasFramePropertiesTrait, mode: "row" | "column"): string | 
   return gapShorthand(rowGap, colGap);
 }
 
+// Zero is only meaningful as one half of a two-value shorthand (e.g. "0px 16px").
+// As a single value it's the CSS default — omit to match the project's convention.
 function gapShorthand(row?: number, col?: number): string | undefined {
   if (row === undefined && col === undefined) return undefined;
-  if (row !== undefined && col !== undefined) return row === col ? `${row}px` : `${row}px ${col}px`;
-  return `${(row ?? col)!}px`;
+  if (row !== undefined && col !== undefined) {
+    if (row === 0 && col === 0) return undefined;
+    return row === col ? `${row}px` : `${row}px ${col}px`;
+  }
+  const single = (row ?? col)!;
+  return single ? `${single}px` : undefined;
 }
 
 // interpret sizing

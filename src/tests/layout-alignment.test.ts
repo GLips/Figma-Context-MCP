@@ -432,14 +432,14 @@ describe("grid layout", () => {
       expect(buildSimplifiedLayout(node).gap).toBe("0px 16px");
     });
 
-    test("both gaps zero produces single value", () => {
+    test("both gaps zero is omitted (CSS default)", () => {
       const node = makeFrame({
         layoutMode: "GRID",
         absoluteBoundingBox: { x: 0, y: 0, width: 300, height: 200 },
         gridRowGap: 0,
         gridColumnGap: 0,
       });
-      expect(buildSimplifiedLayout(node).gap).toBe("0px");
+      expect(buildSimplifiedLayout(node).gap).toBeUndefined();
     });
   });
 
