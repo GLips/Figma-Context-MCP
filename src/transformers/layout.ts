@@ -42,7 +42,12 @@ export function buildSimplifiedLayout(
   parent?: FigmaDocumentNode,
 ): SimplifiedLayout {
   const frameValues = buildSimplifiedFrameValues(n);
-  const layoutValues = buildSimplifiedLayoutValues(n, parent, frameValues.mode) || {};
+  const parentGridPacked =
+    isFrame(parent) && parent.layoutMode === "GRID" && "children" in parent
+      ? isPackedGrid(parent.children as FigmaDocumentNode[])
+      : undefined;
+  const layoutValues =
+    buildSimplifiedLayoutValues(n, parent, frameValues.mode, parentGridPacked) || {};
 
   return { ...frameValues, ...layoutValues };
 }
@@ -65,7 +70,7 @@ function convertJustifyContent(align?: HasFramePropertiesTrait["primaryAxisAlign
 function convertAlignItems(
   align: HasFramePropertiesTrait["counterAxisAlignItems"] | undefined,
   children: FigmaDocumentNode[],
-  mode: SimplifiedLayout["mode"],
+  mode: "row" | "column",
 ) {
   // Row cross-axis is vertical; column cross-axis is horizontal
   const crossSizing = mode === "row" ? "layoutSizingVertical" : "layoutSizingHorizontal";
@@ -154,7 +159,7 @@ function isPackedGrid(children: FigmaDocumentNode[]): boolean {
 
 // SPACE_BETWEEN computes gaps dynamically — the API returns stale spacing
 // values, but Figma's UI shows "Auto". Suppress the affected axis.
-function buildGap(n: HasFramePropertiesTrait, mode: SimplifiedLayout["mode"]): string | undefined {
+function buildGap(n: HasFramePropertiesTrait, mode: "row" | "column"): string | undefined {
   const primaryGap = n.primaryAxisAlignItems === "SPACE_BETWEEN" ? undefined : n.itemSpacing;
   const counterGap =
     n.layoutWrap !== "WRAP" || n.counterAxisAlignContent === "SPACE_BETWEEN"
@@ -205,44 +210,13 @@ function buildSimplifiedFrameValues(n: FigmaDocumentNode): SimplifiedLayout | { 
   if (n.overflowDirection?.includes("VERTICAL")) overflowScroll.push("y");
   if (overflowScroll.length > 0) frameValues.overflowScroll = overflowScroll;
 
-  if (frameValues.mode === "none") {
+  const { mode } = frameValues;
+  if (mode === "none") {
     return frameValues;
   }
 
-  if (frameValues.mode === "grid" && isLayout(n)) {
-    const cols = n.gridColumnsSizing?.trim();
-    if (cols) frameValues.gridTemplateColumns = cols;
-
-    const rows = n.gridRowsSizing?.trim();
-    if (rows) frameValues.gridTemplateRows = rows;
-
-    frameValues.gap = gapShorthand(n.gridRowGap, n.gridColumnGap);
-    frameValues.alignSelf = convertSelfAlign(n.layoutAlign);
-
-    if (n.paddingTop || n.paddingBottom || n.paddingLeft || n.paddingRight) {
-      frameValues.padding = generateCSSShorthand({
-        top: n.paddingTop ?? 0,
-        right: n.paddingRight ?? 0,
-        bottom: n.paddingBottom ?? 0,
-        left: n.paddingLeft ?? 0,
-      });
-    }
-
-    return frameValues;
-  }
-
-  frameValues.justifyContent = convertJustifyContent(n.primaryAxisAlignItems ?? "MIN");
-  frameValues.alignItems = convertAlignItems(
-    n.counterAxisAlignItems ?? "MIN",
-    n.children,
-    frameValues.mode,
-  );
+  // Shared across grid and flex containers
   frameValues.alignSelf = convertSelfAlign(n.layoutAlign);
-
-  // Only include wrap if it's set to WRAP, since flex layouts don't default to wrapping
-  frameValues.wrap = n.layoutWrap === "WRAP" ? true : undefined;
-  frameValues.gap = buildGap(n, frameValues.mode);
-  // gather padding
   if (n.paddingTop || n.paddingBottom || n.paddingLeft || n.paddingRight) {
     frameValues.padding = generateCSSShorthand({
       top: n.paddingTop ?? 0,
@@ -252,6 +226,26 @@ function buildSimplifiedFrameValues(n: FigmaDocumentNode): SimplifiedLayout | { 
     });
   }
 
+  if (mode === "grid") {
+    // Grid template/gap properties live on HasLayoutTrait; GRID frames always
+    // carry both traits, so the cast is safe.
+    const ln = n as unknown as HasLayoutTrait;
+    const cols = ln.gridColumnsSizing?.trim();
+    if (cols) frameValues.gridTemplateColumns = cols;
+
+    const rows = ln.gridRowsSizing?.trim();
+    if (rows) frameValues.gridTemplateRows = rows;
+
+    frameValues.gap = gapShorthand(ln.gridRowGap, ln.gridColumnGap);
+    return frameValues;
+  }
+
+  // Flex-specific — mode is narrowed to "row" | "column" after grid early-return
+  frameValues.justifyContent = convertJustifyContent(n.primaryAxisAlignItems ?? "MIN");
+  frameValues.alignItems = convertAlignItems(n.counterAxisAlignItems ?? "MIN", n.children, mode);
+  frameValues.wrap = n.layoutWrap === "WRAP" ? true : undefined;
+  frameValues.gap = buildGap(n, mode);
+
   return frameValues;
 }
 
@@ -259,6 +253,7 @@ function buildSimplifiedLayoutValues(
   n: FigmaDocumentNode,
   parent: FigmaDocumentNode | undefined,
   mode: SimplifiedLayout["mode"],
+  parentGridPacked?: boolean,
 ): SimplifiedLayout | undefined {
   if (!isLayout(n)) return undefined;
 
@@ -287,9 +282,9 @@ function buildSimplifiedLayoutValues(
   }
 
   // Grid child properties: positioning, spans, and alignment
-  if (isFrame(parent) && parent.layoutMode === "GRID" && n.layoutPositioning !== "ABSOLUTE") {
-    const children = "children" in parent ? (parent.children as FigmaDocumentNode[]) : [];
-    const gapped = !isPackedGrid(children);
+  const parentIsGrid = parentGridPacked !== undefined;
+  if (parentIsGrid && n.layoutPositioning !== "ABSOLUTE") {
+    const gapped = !parentGridPacked;
 
     const colSpan = n.gridColumnSpan ?? 1;
     const rowSpan = n.gridRowSpan ?? 1;
@@ -320,15 +315,15 @@ function buildSimplifiedLayoutValues(
     const dimensions: { width?: number; height?: number; aspectRatio?: number } = {};
 
     // Grid children use fixed-only dimension logic regardless of their own layout mode
-    const parentIsGrid = isFrame(parent) && parent.layoutMode === "GRID";
+    const dimensionMode = parentIsGrid ? "none" : mode;
 
-    if (!parentIsGrid && mode === "row") {
+    if (dimensionMode === "row") {
       // AutoLayout row, only include dimensions if the node is not growing
       if (!n.layoutGrow && n.layoutSizingHorizontal == "FIXED")
         dimensions.width = n.absoluteBoundingBox.width;
       if (n.layoutAlign !== "STRETCH" && n.layoutSizingVertical == "FIXED")
         dimensions.height = n.absoluteBoundingBox.height;
-    } else if (!parentIsGrid && mode === "column") {
+    } else if (dimensionMode === "column") {
       // AutoLayout column, only include dimensions if the node is not growing
       if (n.layoutAlign !== "STRETCH" && n.layoutSizingHorizontal == "FIXED")
         dimensions.width = n.absoluteBoundingBox.width;

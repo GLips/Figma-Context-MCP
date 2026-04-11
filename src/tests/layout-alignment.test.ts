@@ -248,6 +248,31 @@ describe("layout alignment", () => {
 });
 
 describe("grid layout", () => {
+  function makeGridParent(overrides: Record<string, unknown> = {}) {
+    return makeFrame({
+      layoutMode: "GRID",
+      gridColumnsSizing: "repeat(3,minmax(0,1fr))",
+      gridRowsSizing: "auto",
+      children: [],
+      ...overrides,
+    });
+  }
+
+  function makeGridChild(overrides: Record<string, unknown> = {}) {
+    return {
+      absoluteBoundingBox: { x: 0, y: 0, width: 100, height: 50 },
+      layoutSizingHorizontal: "FIXED",
+      layoutSizingVertical: "FIXED",
+      gridColumnAnchorIndex: 0,
+      gridRowAnchorIndex: 0,
+      gridColumnSpan: 1,
+      gridRowSpan: 1,
+      gridChildHorizontalAlign: "AUTO",
+      gridChildVerticalAlign: "AUTO",
+      ...overrides,
+    } as unknown as FigmaDocumentNode;
+  }
+
   describe("grid container", () => {
     test("basic grid container output", () => {
       const node = makeFrame({
@@ -305,31 +330,6 @@ describe("grid layout", () => {
   });
 
   describe("grid child properties", () => {
-    function makeGridParent(overrides: Record<string, unknown> = {}) {
-      return makeFrame({
-        layoutMode: "GRID",
-        gridColumnsSizing: "repeat(3,minmax(0,1fr))",
-        gridRowsSizing: "auto",
-        children: [],
-        ...overrides,
-      });
-    }
-
-    function makeGridChild(overrides: Record<string, unknown> = {}) {
-      return {
-        absoluteBoundingBox: { x: 0, y: 0, width: 100, height: 50 },
-        layoutSizingHorizontal: "FIXED",
-        layoutSizingVertical: "FIXED",
-        gridColumnAnchorIndex: 0,
-        gridRowAnchorIndex: 0,
-        gridColumnSpan: 1,
-        gridRowSpan: 1,
-        gridChildHorizontalAlign: "AUTO",
-        gridChildVerticalAlign: "AUTO",
-        ...overrides,
-      } as unknown as FigmaDocumentNode;
-    }
-
     test("default grid child (span 1, AUTO align, packed) produces no grid props", () => {
       const child = makeGridChild();
       const parent = makeGridParent({ children: [child] });
@@ -380,31 +380,6 @@ describe("grid layout", () => {
   });
 
   describe("packed vs gapped grid positions", () => {
-    function makeGridParent(overrides: Record<string, unknown> = {}) {
-      return makeFrame({
-        layoutMode: "GRID",
-        gridColumnsSizing: "repeat(3,minmax(0,1fr))",
-        gridRowsSizing: "auto auto",
-        children: [],
-        ...overrides,
-      });
-    }
-
-    function makeGridChild(overrides: Record<string, unknown> = {}) {
-      return {
-        absoluteBoundingBox: { x: 0, y: 0, width: 100, height: 50 },
-        layoutSizingHorizontal: "FIXED",
-        layoutSizingVertical: "FIXED",
-        gridColumnAnchorIndex: 0,
-        gridRowAnchorIndex: 0,
-        gridColumnSpan: 1,
-        gridRowSpan: 1,
-        gridChildHorizontalAlign: "AUTO",
-        gridChildVerticalAlign: "AUTO",
-        ...overrides,
-      } as unknown as FigmaDocumentNode;
-    }
-
     test("packed grid: no explicit positions emitted", () => {
       // 3 children filling a 3-column grid sequentially
       const c1 = makeGridChild({ gridColumnAnchorIndex: 0, gridRowAnchorIndex: 0 });
