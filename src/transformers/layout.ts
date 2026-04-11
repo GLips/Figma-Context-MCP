@@ -108,6 +108,50 @@ function convertSelfAlign(align?: HasLayoutTrait["layoutAlign"]) {
   }
 }
 
+function convertGridAlign(align: "MIN" | "CENTER" | "MAX"): "start" | "end" | "center" {
+  switch (align) {
+    case "MIN":
+      return "start";
+    case "MAX":
+      return "end";
+    case "CENTER":
+      return "center";
+  }
+}
+
+/** Check whether children fill a packed sequence with no empty cells. */
+function isPackedGrid(children: FigmaDocumentNode[]): boolean {
+  const occupied = new Set<string>();
+
+  for (const child of children) {
+    if (!isLayout(child) || child.layoutPositioning === "ABSOLUTE") continue;
+
+    const colAnchor = child.gridColumnAnchorIndex ?? 0;
+    const rowAnchor = child.gridRowAnchorIndex ?? 0;
+    const colSpan = child.gridColumnSpan ?? 1;
+    const rowSpan = child.gridRowSpan ?? 1;
+
+    for (let r = rowAnchor; r < rowAnchor + rowSpan; r++) {
+      for (let c = colAnchor; c < colAnchor + colSpan; c++) {
+        occupied.add(`${r},${c}`);
+      }
+    }
+  }
+
+  if (occupied.size === 0) return true;
+
+  let maxRow = 0;
+  let maxCol = 0;
+  for (const key of occupied) {
+    const [r, c] = key.split(",").map(Number);
+    maxRow = Math.max(maxRow, r);
+    maxCol = Math.max(maxCol, c);
+  }
+
+  // Packed means every cell in the bounding rectangle is occupied
+  return occupied.size === (maxRow + 1) * (maxCol + 1);
+}
+
 // SPACE_BETWEEN computes gaps dynamically — the API returns stale spacing
 // values, but Figma's UI shows "Auto". Suppress the affected axis.
 function buildGap(n: HasFramePropertiesTrait, mode: SimplifiedLayout["mode"]): string | undefined {
@@ -242,18 +286,49 @@ function buildSimplifiedLayoutValues(
     }
   }
 
+  // Grid child properties: positioning, spans, and alignment
+  if (isFrame(parent) && parent.layoutMode === "GRID" && n.layoutPositioning !== "ABSOLUTE") {
+    const children = "children" in parent ? (parent.children as FigmaDocumentNode[]) : [];
+    const gapped = !isPackedGrid(children);
+
+    const colSpan = n.gridColumnSpan ?? 1;
+    const rowSpan = n.gridRowSpan ?? 1;
+
+    if (gapped) {
+      const col = (n.gridColumnAnchorIndex ?? 0) + 1; // CSS grid is 1-based
+      const row = (n.gridRowAnchorIndex ?? 0) + 1;
+      layoutValues.gridColumn = colSpan > 1 ? `${col} / span ${colSpan}` : `${col}`;
+      layoutValues.gridRow = rowSpan > 1 ? `${row} / span ${rowSpan}` : `${row}`;
+    } else {
+      if (colSpan > 1) layoutValues.gridColumn = `span ${colSpan}`;
+      if (rowSpan > 1) layoutValues.gridRow = `span ${rowSpan}`;
+    }
+
+    const hAlign = n.gridChildHorizontalAlign;
+    if (hAlign && hAlign !== "AUTO") {
+      layoutValues.justifySelf = convertGridAlign(hAlign);
+    }
+
+    const vAlign = n.gridChildVerticalAlign;
+    if (vAlign && vAlign !== "AUTO") {
+      layoutValues.alignSelf = convertGridAlign(vAlign);
+    }
+  }
+
   // Handle dimensions based on layout growth and alignment
   if (isRectangle("absoluteBoundingBox", n)) {
     const dimensions: { width?: number; height?: number; aspectRatio?: number } = {};
 
-    // Only include dimensions that aren't meant to stretch
-    if (mode === "row") {
+    // Grid children use fixed-only dimension logic regardless of their own layout mode
+    const parentIsGrid = isFrame(parent) && parent.layoutMode === "GRID";
+
+    if (!parentIsGrid && mode === "row") {
       // AutoLayout row, only include dimensions if the node is not growing
       if (!n.layoutGrow && n.layoutSizingHorizontal == "FIXED")
         dimensions.width = n.absoluteBoundingBox.width;
       if (n.layoutAlign !== "STRETCH" && n.layoutSizingVertical == "FIXED")
         dimensions.height = n.absoluteBoundingBox.height;
-    } else if (mode === "column") {
+    } else if (!parentIsGrid && mode === "column") {
       // AutoLayout column, only include dimensions if the node is not growing
       if (n.layoutAlign !== "STRETCH" && n.layoutSizingHorizontal == "FIXED")
         dimensions.width = n.absoluteBoundingBox.width;
@@ -264,7 +339,7 @@ function buildSimplifiedLayoutValues(
         dimensions.aspectRatio = n.absoluteBoundingBox?.width / n.absoluteBoundingBox?.height;
       }
     } else {
-      // Node is not an AutoLayout. Include dimensions if the node is not growing (which it should never be)
+      // Grid children or non-auto-layout nodes: include FIXED dimensions only
       if (!n.layoutSizingHorizontal || n.layoutSizingHorizontal === "FIXED") {
         dimensions.width = n.absoluteBoundingBox.width;
       }
