@@ -294,6 +294,117 @@ describe("buildFormattedText — cross-node dedup and edge cases", () => {
   });
 });
 
+describe("buildFormattedText — reviewer regression coverage", () => {
+  it("clears inherited underline when a run switches to strikethrough", async () => {
+    const { nodes, globalVars } = await extract([
+      makeText({
+        characters: "ab",
+        style: {
+          fontFamily: "Inter",
+          fontWeight: 400,
+          fontSize: 16,
+          textDecoration: "UNDERLINE",
+        },
+        characterStyleOverrides: [0, 1],
+        styleOverrideTable: { "1": { textDecoration: "STRIKETHROUGH" } },
+      }),
+    ]);
+    expect(nodes[0].text).toBe("a{ts1}~~b~~{/ts1}");
+    expect(globalVars.styles["ts1"]).toEqual({ textDecoration: "STRIKETHROUGH" });
+  });
+
+  it("emits an inverse-decoration delta when a run clears the base decoration", async () => {
+    const { nodes, globalVars } = await extract([
+      makeText({
+        characters: "ab",
+        style: {
+          fontFamily: "Inter",
+          fontWeight: 400,
+          fontSize: 16,
+          textDecoration: "UNDERLINE",
+        },
+        characterStyleOverrides: [0, 1],
+        styleOverrideTable: { "1": { textDecoration: "NONE" } },
+      }),
+    ]);
+    expect(nodes[0].text).toBe("a{ts1}b{/ts1}");
+    expect(globalVars.styles["ts1"]).toEqual({ textDecoration: "NONE" });
+  });
+
+  it("pulls whitespace outside markdown emphasis markers", async () => {
+    const { nodes } = await extract([
+      makeText({
+        characters: "a bold ",
+        characterStyleOverrides: [0, 0, 1, 1, 1, 1, 1],
+        styleOverrideTable: { "1": { fontWeight: 700 } },
+      }),
+    ]);
+    // The trailing space lives OUTSIDE the `**` so markdown renders correctly.
+    expect(nodes[0].text).toBe("a **bold** ");
+  });
+
+  it("escapes URL destinations that contain parens or whitespace", async () => {
+    const { nodes } = await extract([
+      makeText({
+        characters: "link",
+        characterStyleOverrides: [1, 1, 1, 1],
+        styleOverrideTable: {
+          "1": { hyperlink: { type: "URL", url: "https://a.com/(x)" } },
+        },
+      }),
+    ]);
+    // `(` and `)` are percent-encoded so they don't close the destination.
+    expect(nodes[0].text).toBe("[link](https://a.com/%28x%29)");
+  });
+
+  it("merges runs whose deltas differ only in key order", async () => {
+    const { nodes, globalVars } = await extract([
+      makeText({
+        characters: "ab",
+        characterStyleOverrides: [1, 2],
+        styleOverrideTable: {
+          "1": { fontSize: 24, fontFamily: "Inter" },
+          "2": { fontFamily: "Inter", fontSize: 24 },
+        },
+      }),
+    ]);
+    expect(nodes[0].text).toBe("{ts1}ab{/ts1}");
+    const tsKeys = Object.keys(globalVars.styles).filter((k) => k.startsWith("ts"));
+    expect(tsKeys).toEqual(["ts1"]);
+  });
+
+  it("keeps inline ts refs in their own namespace even if a base style shares the shape", async () => {
+    // Node A has a base textStyle with only { fontSize: 24 } — the exact
+    // shape some inline deltas produce. Node B uses an inline delta with the
+    // same shape. The inline ref must still be a `ts*` ID, not the base
+    // style's ID. Without a separate cache namespace the second caller would
+    // get back the first caller's style_* ID.
+    const { nodes, globalVars } = await extract([
+      makeText({
+        id: "t1",
+        name: "base only",
+        characters: "x",
+        style: { fontSize: 24 },
+      }),
+      makeText({
+        id: "t2",
+        name: "with inline",
+        characters: "ab",
+        style: { fontFamily: "Inter", fontWeight: 400, fontSize: 16 },
+        characterStyleOverrides: [1, 1],
+        styleOverrideTable: { "1": { fontSize: 24 } },
+      }),
+    ]);
+    // Base-only node: textStyle is a `style_*` ID (or a named style).
+    expect(nodes[0].textStyle).toMatch(/^style_/);
+    // Inline node: text uses a `ts*` ID and its globalVars entry matches.
+    expect(nodes[1].text).toBe("{ts1}ab{/ts1}");
+    expect(globalVars.styles["ts1"]).toEqual({ fontSize: 24 });
+    // The two IDs do NOT collide.
+    expect(nodes[0].textStyle).not.toBe("ts1");
+  });
+});
+
 describe("extractTextStyle — broadened base style capture", () => {
   it("includes italic / textDecoration / hyperlink on a fully-styled text node", async () => {
     const { nodes, globalVars } = await extract([

@@ -1,10 +1,11 @@
 import type { Hyperlink, Node as FigmaDocumentNode, TypeStyle, Paint } from "@figma/rest-api-spec";
-import { isVisible } from "~/utils/common.js";
+import { isVisible, stableStringify } from "~/utils/common.js";
 import { hasValue } from "~/utils/identity.js";
 import { parsePaint, type SimplifiedFill } from "~/transformers/style.js";
 
 export type SimplifiedTextStyle = Partial<{
   fontFamily: string;
+  fontStyle: string;
   fontWeight: number;
   fontSize: number;
   lineHeight: string;
@@ -13,7 +14,10 @@ export type SimplifiedTextStyle = Partial<{
   textAlignHorizontal: string;
   textAlignVertical: string;
   italic: boolean;
-  textDecoration: "STRIKETHROUGH" | "UNDERLINE";
+  // "NONE" appears on inline deltas only — it represents an inverse override
+  // where the base style has underline/strike and a per-character run clears
+  // it. The base textStyle never emits NONE (defaults drop out).
+  textDecoration: "STRIKETHROUGH" | "UNDERLINE" | "NONE";
   hyperlink: Hyperlink;
   // Only non-zero flags are emitted; defaults stay out of the ref so two nodes
   // that differ only in default flag values still dedupe.
@@ -46,6 +50,7 @@ export function extractTextStyle(n: FigmaDocumentNode) {
     const style = n.style;
     const textStyle: SimplifiedTextStyle = {
       fontFamily: style.fontFamily,
+      fontStyle: "fontStyle" in style && style.fontStyle ? style.fontStyle : undefined,
       fontWeight: style.fontWeight,
       fontSize: style.fontSize,
       lineHeight:
@@ -105,9 +110,9 @@ function pickNonZeroFlags(
  * in the output. Keeping the side effects (ID generation, globalVars mutation,
  * dedup) in the caller lets this module stay a near-pure transformer.
  */
-export type RegisterInlineTextStyle = (delta: SimplifiedTextStyle) => string;
+type RegisterInlineTextStyle = (delta: SimplifiedTextStyle) => string;
 
-export type BuildFormattedTextResult = {
+type BuildFormattedTextResult = {
   text: string;
   /**
    * Numeric font weight that `**` maps to in `text`. Only present when the
@@ -124,7 +129,6 @@ type Run = {
    * without splitting surrogate pairs when handling emoji / astral chars.
    */
   text: string;
-  overrideId: number;
   /** Deduped delta against the base style (only properties that actually differ). */
   delta: Partial<TypeStyle>;
 };
@@ -186,14 +190,18 @@ export function buildFormattedText(
     return { text: "" };
   }
 
+  // Fast path: no per-character overrides means we can skip the entire run
+  // algorithm. Also covers the "malformed synthetic node with no style" case
+  // that shows up in the older tree-walker fixtures.
+  const overrides = node.characterStyleOverrides ?? [];
+  if (overrides.length === 0 || overrides.every((id) => id === 0)) {
+    return { text: escapeMarkdown(characters) };
+  }
+
   // Split characters into code points so a surrogate pair stays with its run.
   const codePoints = Array.from(characters);
-  const overrides = node.characterStyleOverrides ?? [];
   const overrideTable = (node.styleOverrideTable ?? {}) as Record<string, TypeStyle>;
-  // Mock/test fixtures can omit `style` on text nodes. Treat that as an empty
-  // base style so the algorithm still works (every override becomes its own
-  // delta against `{}`).
-  const baseStyle = ((node as { style?: TypeStyle }).style ?? {}) as TypeStyle;
+  const baseStyle: TypeStyle = node.style;
 
   // --- Step 1+2: runs with per-run deltas ---------------------------------
   const rawRuns: Run[] = [];
@@ -204,10 +212,9 @@ export function buildFormattedText(
     // is -1 so we always close the final run on the last iteration.
     const currentId = i < codePoints.length ? (overrides[i] ?? 0) : -1;
     const startId = runStart < codePoints.length ? (overrides[runStart] ?? 0) : 0;
-    if (i === codePoints.length || currentId !== startId) {
+    if ((i === codePoints.length || currentId !== startId) && i > runStart) {
       rawRuns.push({
         text: codePoints.slice(runStart, i).join(""),
-        overrideId: startId,
         delta: computeDelta(startId, overrideTable, baseStyle),
       });
       runStart = i;
@@ -267,7 +274,7 @@ function computeDelta(
 }
 
 function deltasEqual(a: Partial<TypeStyle>, b: Partial<TypeStyle>): boolean {
-  return JSON.stringify(a) === JSON.stringify(b);
+  return stableStringify(a) === stableStringify(b);
 }
 
 /**
@@ -360,15 +367,27 @@ function classifyRun(
       }
       case "textDecoration": {
         const td = value as "NONE" | "STRIKETHROUGH" | "UNDERLINE";
+        const baseDecoration = (baseStyle as { textDecoration?: string }).textDecoration;
         if (td === "STRIKETHROUGH") {
           c.isStrike = true;
+          // If the base had UNDERLINE, the inherited underline still applies
+          // on top of our `~~` — clear it explicitly so the run is only
+          // strikethrough, matching the designer's intent.
+          if (baseDecoration === "UNDERLINE") {
+            refDelta.textDecoration = "STRIKETHROUGH";
+            hasRefProps = true;
+          }
         } else if (td === "UNDERLINE") {
           refDelta.textDecoration = "UNDERLINE";
           hasRefProps = true;
+        } else if (td === "NONE" && baseDecoration) {
+          // Inverse override: the base had decoration and this run removes
+          // it. Markdown can't express decoration removal, so emit an
+          // explicit `NONE` delta that the consumer can use to suppress the
+          // inherited base.
+          refDelta.textDecoration = "NONE";
+          hasRefProps = true;
         }
-        // `NONE` as an override slipped past computeDelta only if the base
-        // had decoration; it's a no-op for our output in that case because we
-        // render on top of the base, not instead of it.
         break;
       }
       case "hyperlink": {
@@ -397,6 +416,14 @@ function classifyRun(
       }
       case "fontFamily": {
         refDelta.fontFamily = value as string;
+        hasRefProps = true;
+        break;
+      }
+      case "fontStyle": {
+        // Figma's fontStyle is the named variant like "Bold Italic". It's
+        // informational — italic/fontWeight carry the actual visual data.
+        // Pass through so the consumer sees the exact variant name.
+        refDelta.fontStyle = value as string;
         hasRefProps = true;
         break;
       }
@@ -493,6 +520,31 @@ function escapeMarkdown(text: string): string {
 }
 
 /**
+ * CommonMark emphasis markers can't have whitespace flanking the inner text
+ * (e.g. `** bold**` isn't bold). Pull any leading/trailing whitespace out of
+ * the run before applying markdown wrappers so the markers hug the text.
+ */
+function splitEdgeWhitespace(text: string): { leading: string; core: string; trailing: string } {
+  const match = /^(\s*)([\s\S]*?)(\s*)$/.exec(text);
+  if (!match) return { leading: "", core: text, trailing: "" };
+  return { leading: match[1], core: match[2], trailing: match[3] };
+}
+
+/**
+ * Escape a URL for use as a markdown link destination. Parens would close the
+ * destination early, and whitespace ends the URL in CommonMark — percent-
+ * encode both. Note `encodeURIComponent` itself leaves `(` and `)` alone, so
+ * we map them explicitly.
+ */
+function escapeLinkUrl(url: string): string {
+  return url.replace(/[()\s]/g, (ch) => {
+    if (ch === "(") return "%28";
+    if (ch === ")") return "%29";
+    return encodeURIComponent(ch);
+  });
+}
+
+/**
  * Render a single run with wrappers applied outer-to-inner:
  *   {tsN} → [...]( ) → ~~ → ** → *
  *
@@ -505,18 +557,25 @@ function renderRun(
   c: Classification,
   registerStyle: RegisterInlineTextStyle,
 ): string {
-  // A purely empty classification on empty text collapses to nothing; on
-  // non-empty text we still emit the escaped characters so whitespace and
-  // line breaks are preserved verbatim.
-  let inner = escapeMarkdown(rawText);
+  const hasMarkdownWrap = c.isItalic || c.isBold || c.isStrike || c.urlLink !== undefined;
+  // Pull whitespace outside any markdown wrappers so `**bold** ` instead of
+  // `**bold **`. Skip the split when there's no wrapping — escaping the raw
+  // string directly is all we need.
+  const { leading, core, trailing } = hasMarkdownWrap
+    ? splitEdgeWhitespace(rawText)
+    : { leading: "", core: rawText, trailing: "" };
 
+  let inner = escapeMarkdown(core);
   if (c.isItalic) inner = `*${inner}*`;
   if (c.isBold) inner = `**${inner}**`;
   if (c.isStrike) inner = `~~${inner}~~`;
-  if (c.urlLink) inner = `[${inner}](${c.urlLink})`;
+  if (c.urlLink) inner = `[${inner}](${escapeLinkUrl(c.urlLink)})`;
+
+  let output = `${escapeMarkdown(leading)}${inner}${escapeMarkdown(trailing)}`;
+
   if (c.refDelta) {
     const id = registerStyle(c.refDelta);
-    inner = `{${id}}${inner}{/${id}}`;
+    output = `{${id}}${output}{/${id}}`;
   }
-  return inner;
+  return output;
 }
