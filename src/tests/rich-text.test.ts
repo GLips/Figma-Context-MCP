@@ -16,6 +16,8 @@ function makeText(opts: {
   style?: Partial<TypeStyle>;
   characterStyleOverrides?: number[];
   styleOverrideTable?: Record<string, Partial<TypeStyle>>;
+  lineTypes?: Array<"NONE" | "ORDERED" | "UNORDERED">;
+  lineIndentations?: number[];
 }): FigmaNode {
   return {
     id: opts.id ?? "text:1",
@@ -26,6 +28,8 @@ function makeText(opts: {
     style: opts.style ?? { fontFamily: "Inter", fontWeight: 400, fontSize: 16 },
     characterStyleOverrides: opts.characterStyleOverrides ?? [],
     styleOverrideTable: opts.styleOverrideTable ?? {},
+    lineTypes: opts.lineTypes ?? [],
+    lineIndentations: opts.lineIndentations ?? [],
   } as unknown as FigmaNode;
 }
 
@@ -406,6 +410,147 @@ describe("buildFormattedText — reviewer regression coverage", () => {
     expect(globalVars.styles["ts1"]).toEqual({ fontSize: 24 });
     // The two IDs do NOT collide.
     expect(nodes[0].textStyle).not.toBe("ts1");
+  });
+});
+
+describe("buildFormattedText — newline escaping", () => {
+  it("escapes real newlines as literal backslash-n in plain text", async () => {
+    const { nodes } = await extract([makeText({ characters: "line one\nline two" })]);
+    // Literal `\n` (two chars) — prevents YAML block-scalar emission.
+    expect(nodes[0].text).toBe("line one\\nline two");
+  });
+
+  it("escapes paragraph separator U+2029 the same way", async () => {
+    const { nodes } = await extract([makeText({ characters: "a\u2029b" })]);
+    expect(nodes[0].text).toBe("a\\nb");
+  });
+
+  it("escapes newlines in styled runs too", async () => {
+    const { nodes } = await extract([
+      makeText({
+        // "bold" chars 0–3, newline char 4, "tail" chars 5–8.
+        characters: "bold\ntail",
+        characterStyleOverrides: [1, 1, 1, 1],
+        styleOverrideTable: { "1": { fontWeight: 700 } },
+      }),
+    ]);
+    expect(nodes[0].text).toBe("**bold**\\ntail");
+  });
+});
+
+describe("buildFormattedText — list formatting", () => {
+  it("produces 1. / 2. / 3. prefixes for ordered lists", async () => {
+    const { nodes } = await extract([
+      makeText({
+        characters: "one\ntwo\nthree",
+        lineTypes: ["ORDERED", "ORDERED", "ORDERED"],
+        lineIndentations: [0, 0, 0],
+      }),
+    ]);
+    expect(nodes[0].text).toBe("1. one\\n2. two\\n3. three");
+  });
+
+  it("produces - prefixes for unordered lists", async () => {
+    const { nodes } = await extract([
+      makeText({
+        characters: "a\nb",
+        lineTypes: ["UNORDERED", "UNORDERED"],
+        lineIndentations: [0, 0],
+      }),
+    ]);
+    expect(nodes[0].text).toBe("- a\\n- b");
+  });
+
+  it("nests list levels with 2-space CommonMark indentation", async () => {
+    const { nodes } = await extract([
+      makeText({
+        characters: "outer\ninner\nback",
+        lineTypes: ["ORDERED", "ORDERED", "ORDERED"],
+        lineIndentations: [0, 1, 0],
+      }),
+    ]);
+    // Outer ordered list continues across the nested level.
+    expect(nodes[0].text).toBe("1. outer\\n  1. inner\\n2. back");
+  });
+
+  it("resets nested counters when the outer list advances", async () => {
+    // Verifies that moving back up and then down again restarts the deeper
+    // counter rather than resuming where it left off.
+    const { nodes } = await extract([
+      makeText({
+        characters: "a\nx\ny\nb\nz",
+        lineTypes: ["ORDERED", "ORDERED", "ORDERED", "ORDERED", "ORDERED"],
+        lineIndentations: [0, 1, 1, 0, 1],
+      }),
+    ]);
+    expect(nodes[0].text).toBe("1. a\\n  1. x\\n  2. y\\n2. b\\n  1. z");
+  });
+
+  it("preserves inline markdown inside list items", async () => {
+    const { nodes } = await extract([
+      makeText({
+        // Chars: "a" "\n" "b" "o" "l" "d" — overrides length 6 (with newline).
+        characters: "a\nbold",
+        characterStyleOverrides: [0, 0, 1, 1, 1, 1],
+        styleOverrideTable: { "1": { fontWeight: 700 } },
+        lineTypes: ["UNORDERED", "UNORDERED"],
+        lineIndentations: [0, 0],
+      }),
+    ]);
+    expect(nodes[0].text).toBe("- a\\n- **bold**");
+    expect(nodes[0].boldWeight).toBe(700);
+  });
+
+  it("handles mixed ordered and unordered list types", async () => {
+    const { nodes } = await extract([
+      makeText({
+        characters: "one\ntwo\nbullet",
+        lineTypes: ["ORDERED", "ORDERED", "UNORDERED"],
+        lineIndentations: [0, 0, 0],
+      }),
+    ]);
+    expect(nodes[0].text).toBe("1. one\\n2. two\\n- bullet");
+  });
+
+  it("renders NONE lines between list items as plain paragraphs and resets ordering", async () => {
+    const { nodes } = await extract([
+      makeText({
+        characters: "item one\nbreak\nitem two",
+        lineTypes: ["ORDERED", "NONE", "ORDERED"],
+        lineIndentations: [0, 0, 0],
+      }),
+    ]);
+    // A non-ORDERED line at the same depth breaks the list — the next
+    // ORDERED item restarts at 1.
+    expect(nodes[0].text).toBe("1. item one\\nbreak\\n1. item two");
+  });
+
+  it("preserves empty lines", async () => {
+    const { nodes } = await extract([
+      makeText({
+        characters: "a\n\nb",
+        lineTypes: ["NONE", "NONE", "NONE"],
+        lineIndentations: [0, 0, 0],
+      }),
+    ]);
+    expect(nodes[0].text).toBe("a\\n\\nb");
+  });
+
+  it("detects boldWeight across all lines of a list", async () => {
+    const { nodes, globalVars } = await extract([
+      makeText({
+        // "a" "\n" "big" — "big" is bold 800.
+        characters: "a\nbig",
+        characterStyleOverrides: [0, 0, 1, 1, 1],
+        styleOverrideTable: { "1": { fontWeight: 800 } },
+        lineTypes: ["UNORDERED", "UNORDERED"],
+        lineIndentations: [0, 0],
+      }),
+    ]);
+    expect(nodes[0].text).toBe("- a\\n- **big**");
+    expect(nodes[0].boldWeight).toBe(800);
+    // The bold run matches the canonical boldWeight, so no ts ref is needed.
+    expect(Object.keys(globalVars.styles).some((k) => k.startsWith("ts"))).toBe(false);
   });
 });
 

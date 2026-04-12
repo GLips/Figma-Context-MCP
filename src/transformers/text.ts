@@ -203,16 +203,25 @@ const IGNORED_TYPE_STYLE_FIELDS = new Set([
  * node's mixed character formatting.
  *
  * Algorithm (matches `docs/plans/2026-04-08-feat-rich-text-styling-plan.md`):
- *   1. Split characters into runs based on `characterStyleOverrides`.
- *   2. For each run, compute its delta against the base `style` (dropping any
- *      override property that equals the base — those are no-ops).
- *   3. Merge adjacent runs whose deltas are identical.
- *   4. Determine the canonical `boldWeight` — the heavier fontWeight that
- *      appears across the most characters. This is what plain `**` maps to.
- *   5. Classify each run's delta into markdown (bold/italic/strike/URL link)
- *      + residual style-ref properties.
- *   6. Render each run: escape raw text, wrap style-ref deltas on the outside,
- *      markdown markers on the inside.
+ *   1. Split characters by newline / paragraph-separator into lines, carrying
+ *      a per-line slice of `characterStyleOverrides`.
+ *   2. For each line: split into runs based on the line's overrides, compute
+ *      each run's delta against the base `style` (dropping no-op overrides),
+ *      and merge adjacent identical runs.
+ *   3. Determine the canonical `boldWeight` — the heavier fontWeight that
+ *      appears across the most characters across all lines. This is what
+ *      plain `**` maps to.
+ *   4. Classify each run's delta into markdown (bold/italic/strike/URL link)
+ *      + residual style-ref properties, then render: escape raw text, wrap
+ *      style-ref deltas on the outside, markdown markers on the inside.
+ *   5. Prepend a list marker to each line based on `lineTypes` /
+ *      `lineIndentations` (ordered `1.`, unordered `-`, nested with 2-space
+ *      CommonMark indent).
+ *   6. Join lines with a literal `\n` (two characters, backslash + n). Real
+ *      newlines in the output would cause the YAML serializer to emit a
+ *      block scalar with per-line indentation — one indent level per nesting
+ *      depth, multiplied by every line. Literal `\n` keeps the entire string
+ *      on a single YAML plain scalar.
  *
  * Why markdown on the inside: `{ts1}**text**{/ts1}` keeps markdown markers
  * contiguous and lets the style ref describe a visual region decorated by
@@ -231,20 +240,102 @@ export function buildFormattedText(
     return { text: "" };
   }
 
-  // Fast path: no per-character overrides means we can skip the entire run
-  // algorithm. Also covers the "malformed synthetic node with no style" case
-  // that shows up in the older tree-walker fixtures.
   const overrides = node.characterStyleOverrides ?? [];
-  if (overrides.length === 0 || overrides.every((id) => id === 0)) {
+  const lineTypes: Array<"NONE" | "ORDERED" | "UNORDERED"> =
+    "lineTypes" in node && Array.isArray(node.lineTypes) ? node.lineTypes : [];
+  const lineIndentations: number[] =
+    "lineIndentations" in node && Array.isArray(node.lineIndentations) ? node.lineIndentations : [];
+
+  const hasOverrides = overrides.some((id) => id !== 0);
+  const hasList = lineTypes.some((t) => t === "ORDERED" || t === "UNORDERED");
+
+  // Fast path: no per-character overrides and no list formatting means we can
+  // skip the entire run algorithm. `escapeMarkdown` also converts real
+  // newlines into literal `\n` for YAML compactness.
+  // Also covers the "malformed synthetic node with no style" case that shows
+  // up in older tree-walker fixtures — without a base style we can't run the
+  // delta pipeline at all.
+  if ((!hasOverrides && !hasList) || !node.style) {
     return { text: escapeMarkdown(characters) };
   }
 
-  // Split characters into code points so a surrogate pair stays with its run.
+  // Split into code points so a surrogate pair stays with its run.
   const codePoints = Array.from(characters);
   const overrideTable = (node.styleOverrideTable ?? {}) as Record<string, TypeStyle>;
   const baseStyle: TypeStyle = node.style;
 
-  // --- Step 1+2: runs with per-run deltas ---------------------------------
+  // --- Step 1: split into lines -------------------------------------------
+  const lines = splitLines(codePoints, overrides);
+
+  // --- Step 2: compute runs per line --------------------------------------
+  const perLineRuns: Run[][] = lines.map((line) =>
+    computeRunsForLine(line.codePoints, line.overrides, overrideTable, baseStyle),
+  );
+
+  // --- Step 3: determine boldWeight across all runs in all lines ----------
+  const allRuns = perLineRuns.flat();
+  const boldWeight = detectBoldWeight(allRuns, baseStyle);
+
+  // --- Step 4+5: render each line, then prepend list markers --------------
+  const listState = new ListState();
+  const renderedLines: string[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    let lineOutput = "";
+    for (const run of perLineRuns[i]) {
+      const classification = classifyRun(run.delta, baseStyle, boldWeight);
+      lineOutput += renderRun(run.text, classification, registerStyle);
+    }
+    const type = lineTypes[i] ?? "NONE";
+    const depth = lineIndentations[i] ?? 0;
+    renderedLines.push(listState.nextPrefix(type, depth) + lineOutput);
+  }
+
+  // --- Step 6: join with literal \n (two chars) ---------------------------
+  const text = renderedLines.join("\\n");
+  return boldWeight !== undefined ? { text, boldWeight } : { text };
+}
+
+/**
+ * Split characters into lines at `\n` / `\u2029` (paragraph separator — the
+ * Figma API allows both). Each line carries its slice of the overrides
+ * array. The newline character itself is discarded along with its override.
+ *
+ * The returned line count matches what Figma's `lineTypes` /
+ * `lineIndentations` arrays expect: a trailing newline produces an empty
+ * final line.
+ */
+function splitLines(
+  codePoints: string[],
+  overrides: number[],
+): Array<{ codePoints: string[]; overrides: number[] }> {
+  const lines: Array<{ codePoints: string[]; overrides: number[] }> = [];
+  let lineStart = 0;
+  for (let i = 0; i <= codePoints.length; i++) {
+    const ch = i < codePoints.length ? codePoints[i] : null;
+    if (ch === "\n" || ch === "\u2029" || ch === null) {
+      lines.push({
+        codePoints: codePoints.slice(lineStart, i),
+        overrides: overrides.slice(lineStart, i),
+      });
+      lineStart = i + 1;
+    }
+  }
+  return lines;
+}
+
+/**
+ * Compute the merged run list for a single line. Identical to what the
+ * former single-line algorithm did — split by override boundaries, diff each
+ * range against the base style, merge adjacent runs with equal deltas.
+ */
+function computeRunsForLine(
+  codePoints: string[],
+  overrides: number[],
+  overrideTable: Record<string, TypeStyle>,
+  baseStyle: TypeStyle,
+): Run[] {
+  if (codePoints.length === 0) return [];
+
   const rawRuns: Run[] = [];
   let runStart = 0;
   for (let i = 0; i <= codePoints.length; i++) {
@@ -262,7 +353,6 @@ export function buildFormattedText(
     }
   }
 
-  // --- Step 3: merge adjacent runs with identical deltas ------------------
   const runs: Run[] = [];
   for (const run of rawRuns) {
     const prev = runs[runs.length - 1];
@@ -272,18 +362,47 @@ export function buildFormattedText(
       runs.push({ ...run });
     }
   }
+  return runs;
+}
 
-  // --- Step 4: determine boldWeight ---------------------------------------
-  const boldWeight = detectBoldWeight(runs, baseStyle);
+/**
+ * Tracks ordered-list counters across lines so `1. / 2. / 3.` numbering is
+ * correct even with nested lists and non-list interruptions.
+ *
+ * Counter scope rules:
+ *   - Counters at depths *deeper* than the current line are cleared — moving
+ *     shallower closes any nested lists below.
+ *   - A non-ORDERED line at depth d (UNORDERED or NONE) clears depth d's
+ *     counter, so a subsequent ORDERED line there restarts at 1.
+ *   - Counters at depths *shallower* than the current line are untouched —
+ *     an outer ordered list continues across nested interruptions.
+ */
+class ListState {
+  private counters = new Map<number, number>();
 
-  // --- Step 5+6: classify + render ----------------------------------------
-  let output = "";
-  for (const run of runs) {
-    const classification = classifyRun(run.delta, baseStyle, boldWeight);
-    output += renderRun(run.text, classification, registerStyle);
+  nextPrefix(type: "NONE" | "ORDERED" | "UNORDERED", depth: number): string {
+    for (const k of Array.from(this.counters.keys())) {
+      if (k > depth) this.counters.delete(k);
+    }
+
+    // CommonMark nests lists with 2-space indentation per level. Plain
+    // (NONE) lines are not indented — list-adjacent prose sits at column 0.
+    const indent = "  ".repeat(depth);
+
+    if (type === "ORDERED") {
+      const n = (this.counters.get(depth) ?? 0) + 1;
+      this.counters.set(depth, n);
+      return `${indent}${n}. `;
+    }
+
+    if (type === "UNORDERED") {
+      this.counters.delete(depth);
+      return `${indent}- `;
+    }
+
+    this.counters.delete(depth);
+    return "";
   }
-
-  return boldWeight !== undefined ? { text: output, boldWeight } : { text: output };
 }
 
 /**
@@ -571,11 +690,20 @@ function classifyRun(
  * from user text would become an accidental italic marker once wrapped.
  * Backslash is included so `\` in user text doesn't merge with our own
  * escapes.
+ *
+ * Real newlines and paragraph separators get rewritten to a literal `\n`
+ * (two characters, backslash + n). Emitting real newlines would force the
+ * YAML serializer to wrap the value in a block scalar whose every line
+ * inherits the parent's indentation — for a text node 4 levels deep
+ * that's 8+ wasted spaces per line. The literal form keeps the whole
+ * string on a single YAML plain scalar regardless of nesting depth.
+ * Backslash is already escaped by the first pass so user content that
+ * literally contains `\n` stays unambiguous (it becomes `\\n`).
  */
 const MARKDOWN_ESCAPE_CHARS = /[\\*_~[\](){}]/g;
 
 function escapeMarkdown(text: string): string {
-  return text.replace(MARKDOWN_ESCAPE_CHARS, "\\$&");
+  return text.replace(MARKDOWN_ESCAPE_CHARS, "\\$&").replace(/[\n\u2029]/g, "\\n");
 }
 
 /**
