@@ -40,3 +40,7 @@ Thumbs.db
 
 # mcp-publisher CLI tool files
 .mcpregistry*
+
+# Private planning / brainstorm / ideas workspace — version-controlled in a
+# separate private repo (FramelinkAI/mcp-docs) cloned to this path.
+/docs/
