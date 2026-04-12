@@ -246,16 +246,20 @@ export function buildFormattedText(
   const lineIndentations: number[] =
     "lineIndentations" in node && Array.isArray(node.lineIndentations) ? node.lineIndentations : [];
 
+  // Defensive: synthetic test fixtures sometimes lack a base style. The
+  // delta pipeline can't run without one, so emit characters as-is.
+  // (Real Figma TEXT nodes always have `style` per the API spec.)
+  if (!node.style) {
+    return { text: escapeMarkdown(characters) };
+  }
+
   const hasOverrides = overrides.some((id) => id !== 0);
   const hasList = lineTypes.some((t) => t === "ORDERED" || t === "UNORDERED");
 
-  // Fast path: no per-character overrides and no list formatting means we can
-  // skip the entire run algorithm. `escapeMarkdown` also converts real
-  // newlines into literal `\n` for YAML compactness.
-  // Also covers the "malformed synthetic node with no style" case that shows
-  // up in older tree-walker fixtures — without a base style we can't run the
-  // delta pipeline at all.
-  if ((!hasOverrides && !hasList) || !node.style) {
+  // Fast path: nothing to format. `escapeMarkdown` still rewrites real
+  // newlines to a literal `\n` so multi-line plain text stays compact in
+  // YAML output.
+  if (!hasOverrides && !hasList) {
     return { text: escapeMarkdown(characters) };
   }
 
@@ -264,19 +268,15 @@ export function buildFormattedText(
   const overrideTable = (node.styleOverrideTable ?? {}) as Record<string, TypeStyle>;
   const baseStyle: TypeStyle = node.style;
 
-  // --- Step 1: split into lines -------------------------------------------
   const lines = splitLines(codePoints, overrides);
-
-  // --- Step 2: compute runs per line --------------------------------------
   const perLineRuns: Run[][] = lines.map((line) =>
     computeRunsForLine(line.codePoints, line.overrides, overrideTable, baseStyle),
   );
 
-  // --- Step 3: determine boldWeight across all runs in all lines ----------
-  const allRuns = perLineRuns.flat();
-  const boldWeight = detectBoldWeight(allRuns, baseStyle);
+  // boldWeight is detected once across every run in every line — `**` maps
+  // to a single canonical weight for the whole text node, not per-line.
+  const boldWeight = detectBoldWeight(perLineRuns.flat(), baseStyle);
 
-  // --- Step 4+5: render each line, then prepend list markers --------------
   const listState = new ListState();
   const renderedLines: string[] = [];
   for (let i = 0; i < lines.length; i++) {
@@ -287,10 +287,11 @@ export function buildFormattedText(
     }
     const type = lineTypes[i] ?? "NONE";
     const depth = lineIndentations[i] ?? 0;
-    renderedLines.push(listState.nextPrefix(type, depth) + lineOutput);
+    renderedLines.push(listState.advance(type, depth) + lineOutput);
   }
 
-  // --- Step 6: join with literal \n (two chars) ---------------------------
+  // Join with a literal `\n` (backslash + n, two chars). See the
+  // `escapeMarkdown` comment for why real newlines aren't used.
   const text = renderedLines.join("\\n");
   return boldWeight !== undefined ? { text, boldWeight } : { text };
 }
@@ -324,9 +325,14 @@ function splitLines(
 }
 
 /**
- * Compute the merged run list for a single line. Identical to what the
- * former single-line algorithm did — split by override boundaries, diff each
- * range against the base style, merge adjacent runs with equal deltas.
+ * Compute the merged run list for a single line — split by override
+ * boundaries, diff each range against the base style, merge adjacent runs
+ * with equal deltas.
+ *
+ * Kept separate from `buildFormattedText` so the list-aware caller can run
+ * the run pipeline once per line without duplicating the merge logic, and
+ * so the trailing-zero handling (`overrides[i] ?? 0`) operates on the
+ * caller's per-line slice of the overrides array rather than the whole.
  */
 function computeRunsForLine(
   codePoints: string[],
@@ -380,7 +386,13 @@ function computeRunsForLine(
 class ListState {
   private counters = new Map<number, number>();
 
-  nextPrefix(type: "NONE" | "ORDERED" | "UNORDERED", depth: number): string {
+  /**
+   * Mutates the counter state and returns the list prefix for the next line.
+   * Named `advance` (not `nextPrefix`) to telegraph the side effect — two
+   * calls with the same arguments return different strings as the counter
+   * increments.
+   */
+  advance(type: "NONE" | "ORDERED" | "UNORDERED", depth: number): string {
     for (const k of Array.from(this.counters.keys())) {
       if (k > depth) this.counters.delete(k);
     }
@@ -649,6 +661,13 @@ function classifyRun(
         }
         break;
       }
+      // paragraphSpacing / paragraphIndent / listSpacing are passed through
+      // to the textStyle ref but intentionally NOT consumed during the
+      // markdown rendering itself. Markdown has no representation for
+      // pixel-valued vertical whitespace, and conflating `paragraphIndent`
+      // with the list-nesting indent we already use for `lineIndentations`
+      // would corrupt list structure. Consumers that need these values read
+      // them off the ref directly.
       case "paragraphSpacing": {
         if (typeof value === "number" && value > 0) {
           refDelta.paragraphSpacing = value;
