@@ -46,6 +46,13 @@ export type NodeCounter = { count: number };
 
 export interface TraversalState {
   componentPropertyDefinitions: Record<string, Record<string, SimplifiedPropertyDefinition>>;
+  /**
+   * Sequential counter for inline text-style override IDs (`ts1`, `ts2`, ...).
+   * Lives on the traversal state so every text node in a run shares the same
+   * namespace, which lets `{tsN}…{/tsN}` references appear inline in text
+   * content with short, readable identifiers.
+   */
+  tsCounter: number;
 }
 
 export interface TraversalOptions {
@@ -102,6 +109,12 @@ export interface SimplifiedNode {
   // text
   text?: string;
   textStyle?: string;
+  /**
+   * The numeric font weight that `**bold**` inside `text` maps to. Only emitted
+   * when a text node has per-character bold overrides heavier than its base
+   * `style.fontWeight`, so the consumer knows how to realize markdown bold.
+   */
+  boldWeight?: number;
   // appearance
   fills?: string;
   styles?: string;

@@ -9,10 +9,11 @@ import { buildSimplifiedLayout } from "~/transformers/layout.js";
 import { buildSimplifiedStrokes, parsePaint } from "~/transformers/style.js";
 import { buildSimplifiedEffects } from "~/transformers/effects.js";
 import {
-  extractNodeText,
+  buildFormattedText,
   extractTextStyle,
   hasTextStyle,
   isTextNode,
+  type SimplifiedTextStyle,
 } from "~/transformers/text.js";
 import {
   simplifyComponentProperties,
@@ -84,12 +85,39 @@ export const layoutExtractor: ExtractorFn = (node, result, context) => {
 };
 
 /**
+ * Register an inline text-style override delta and return its short ID
+ * (`ts1`, `ts2`, …). Unlike `registerStyle`, these IDs come from a sequential
+ * counter on the traversal state — they appear inline in formatted text
+ * (`{ts1}…{/ts1}`), where short IDs matter for token efficiency and readability.
+ * Dedup is handled through the same globalVars style cache as other refs, so
+ * two nodes that produce the same delta share a single entry.
+ */
+function registerInlineTextStyle(context: TraversalContext, delta: SimplifiedTextStyle): string {
+  const cache = getStyleCache(context.globalVars);
+  const key = JSON.stringify(delta);
+  const existing = cache.get(key);
+  if (existing) return existing;
+  context.traversalState.tsCounter += 1;
+  const id = `ts${context.traversalState.tsCounter}`;
+  context.globalVars.styles[id] = delta;
+  cache.set(key, id);
+  return id;
+}
+
+/**
  * Extracts text content and text styling from a node.
  */
 export const textExtractor: ExtractorFn = (node, result, context) => {
-  // Extract text content
+  // Extract text content — formatted with markdown + inline style refs when
+  // the node has per-character overrides, otherwise just the raw string.
   if (isTextNode(node)) {
-    result.text = extractNodeText(node);
+    const rich = buildFormattedText(node, (delta) => registerInlineTextStyle(context, delta));
+    if (rich.text) {
+      result.text = rich.text;
+    }
+    if (rich.boldWeight !== undefined) {
+      result.boldWeight = rich.boldWeight;
+    }
   }
 
   // Extract text style
