@@ -409,6 +409,67 @@ describe("buildFormattedText — reviewer regression coverage", () => {
   });
 });
 
+describe("extractTextStyle — line height", () => {
+  it("omits lineHeight when the node uses Figma's auto (INTRINSIC_%) mode", async () => {
+    // Real Figma shape: auto line height still reports a `lineHeightPx` (the
+    // computed intrinsic value for the current font). Before the fix this
+    // leaked out as an em string like "1.2102272851126534em".
+    const { nodes, globalVars } = await extract([
+      makeText({
+        characters: "auto",
+        style: {
+          fontFamily: "Inter",
+          fontWeight: 400,
+          fontSize: 14,
+          lineHeightPx: 16.94318199157715,
+          lineHeightPercent: 100,
+          lineHeightUnit: "INTRINSIC_%",
+        } as never,
+      }),
+    ]);
+    const styleRef = nodes[0].textStyle!;
+    const style = globalVars.styles[styleRef] as SimplifiedTextStyle;
+    expect(style.lineHeight).toBeUndefined();
+  });
+
+  it("emits explicit pixel line heights as px, rounded", async () => {
+    const { nodes, globalVars } = await extract([
+      makeText({
+        characters: "explicit",
+        style: {
+          fontFamily: "Inter",
+          fontWeight: 400,
+          fontSize: 14,
+          lineHeightPx: 16.94318199157715,
+          lineHeightUnit: "PIXELS",
+        } as never,
+      }),
+    ]);
+    const styleRef = nodes[0].textStyle!;
+    const style = globalVars.styles[styleRef] as SimplifiedTextStyle;
+    expect(style.lineHeight).toBe("16.94px");
+  });
+
+  it("emits explicit percentage line heights as % using lineHeightPercentFontSize", async () => {
+    const { nodes, globalVars } = await extract([
+      makeText({
+        characters: "pct",
+        style: {
+          fontFamily: "Inter",
+          fontWeight: 400,
+          fontSize: 14,
+          lineHeightPx: 21,
+          lineHeightPercentFontSize: 150,
+          lineHeightUnit: "FONT_SIZE_%",
+        } as never,
+      }),
+    ]);
+    const styleRef = nodes[0].textStyle!;
+    const style = globalVars.styles[styleRef] as SimplifiedTextStyle;
+    expect(style.lineHeight).toBe("150%");
+  });
+});
+
 describe("extractTextStyle — broadened base style capture", () => {
   it("includes italic / textDecoration / hyperlink on a fully-styled text node", async () => {
     const { nodes, globalVars } = await extract([

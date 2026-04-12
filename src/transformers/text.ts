@@ -1,5 +1,5 @@
 import type { Hyperlink, Node as FigmaDocumentNode, TypeStyle, Paint } from "@figma/rest-api-spec";
-import { isVisible, stableStringify } from "~/utils/common.js";
+import { isVisible, pixelRound, stableStringify } from "~/utils/common.js";
 import { hasValue } from "~/utils/identity.js";
 import { parsePaint, type SimplifiedFill } from "~/transformers/style.js";
 
@@ -53,13 +53,10 @@ export function extractTextStyle(n: FigmaDocumentNode) {
       fontStyle: "fontStyle" in style && style.fontStyle ? style.fontStyle : undefined,
       fontWeight: style.fontWeight,
       fontSize: style.fontSize,
-      lineHeight:
-        "lineHeightPx" in style && style.lineHeightPx && style.fontSize
-          ? `${style.lineHeightPx / style.fontSize}em`
-          : undefined,
+      lineHeight: formatLineHeight(style as LineHeightSource, style.fontSize),
       letterSpacing:
         style.letterSpacing && style.letterSpacing !== 0 && style.fontSize
-          ? `${(style.letterSpacing / style.fontSize) * 100}%`
+          ? `${pixelRound((style.letterSpacing / style.fontSize) * 100)}%`
           : undefined,
       textCase: style.textCase,
       textAlignHorizontal: style.textAlignHorizontal,
@@ -98,6 +95,50 @@ function pickNonZeroFlags(
     if (v) nonZero[k] = v;
   }
   return Object.keys(nonZero).length ? nonZero : undefined;
+}
+
+/**
+ * Format Figma's line-height fields into a CSS string that preserves the
+ * unit the designer actually specified, or omit when the text uses "auto".
+ *
+ *   INTRINSIC_% → undefined (auto — follows the font's intrinsic metrics;
+ *                 `lineHeightPx` is just the computed value for whichever
+ *                 font the node happens to use, not user intent)
+ *   PIXELS      → "24px"  from `lineHeightPx`
+ *   FONT_SIZE_% → "150%"  from `lineHeightPercentFontSize`
+ *
+ * Falls back to an em conversion when the unit is missing (older API
+ * responses) so the output is never worse than before. All numeric values
+ * are rounded via `pixelRound` so floating-point noise like Figma's
+ * `16.94318199157715` doesn't leak through.
+ */
+type LineHeightSource = {
+  lineHeightPx?: number;
+  lineHeightUnit?: string;
+  lineHeightPercentFontSize?: number;
+};
+
+function formatLineHeight(
+  source: LineHeightSource,
+  fontSize: number | undefined,
+): string | undefined {
+  const { lineHeightUnit, lineHeightPx, lineHeightPercentFontSize } = source;
+
+  if (lineHeightUnit === "INTRINSIC_%") return undefined;
+
+  if (lineHeightUnit === "PIXELS" && lineHeightPx) {
+    return `${pixelRound(lineHeightPx)}px`;
+  }
+
+  if (lineHeightUnit === "FONT_SIZE_%" && lineHeightPercentFontSize) {
+    return `${pixelRound(lineHeightPercentFontSize)}%`;
+  }
+
+  if (lineHeightPx && fontSize) {
+    return `${pixelRound(lineHeightPx / fontSize)}em`;
+  }
+
+  return undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -435,15 +476,33 @@ function classifyRun(
       case "letterSpacing": {
         const ls = value as number;
         if (ls && effectiveFontSize) {
-          refDelta.letterSpacing = `${(ls / effectiveFontSize) * 100}%`;
+          refDelta.letterSpacing = `${pixelRound((ls / effectiveFontSize) * 100)}%`;
           hasRefProps = true;
         }
         break;
       }
-      case "lineHeightPx": {
-        const lh = value as number;
-        if (lh && effectiveFontSize) {
-          refDelta.lineHeight = `${lh / effectiveFontSize}em`;
+      case "lineHeightPx":
+      case "lineHeightUnit":
+      case "lineHeightPercent":
+      case "lineHeightPercentFontSize": {
+        // Line-height is a multi-field concept (px/unit/%). Any of the four
+        // landing in the delta means the run's effective line-height
+        // differs from the base. Resolve the merged shape (override wins
+        // per field) and format once — running `formatLineHeight` on each
+        // case would emit duplicate refs for the same logical change.
+        if (refDelta.lineHeight !== undefined) break;
+        const merged: LineHeightSource = {
+          lineHeightPx: delta.lineHeightPx ?? (baseStyle as LineHeightSource).lineHeightPx,
+          lineHeightUnit:
+            (delta as LineHeightSource).lineHeightUnit ??
+            (baseStyle as LineHeightSource).lineHeightUnit,
+          lineHeightPercentFontSize:
+            (delta as LineHeightSource).lineHeightPercentFontSize ??
+            (baseStyle as LineHeightSource).lineHeightPercentFontSize,
+        };
+        const formatted = formatLineHeight(merged, effectiveFontSize);
+        if (formatted) {
+          refDelta.lineHeight = formatted;
           hasRefProps = true;
         }
         break;
