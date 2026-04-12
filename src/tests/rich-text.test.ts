@@ -358,9 +358,13 @@ describe("buildFormattedText — reviewer regression coverage", () => {
   });
 
   it("merges runs whose deltas differ only in key order", async () => {
+    // Base uses Roboto/16 so both fontFamily AND fontSize overrides survive
+    // computeDelta's no-op filter and actually end up in the two runs'
+    // delta objects in different property orders.
     const { nodes, globalVars } = await extract([
       makeText({
         characters: "ab",
+        style: { fontFamily: "Roboto", fontWeight: 400, fontSize: 16 },
         characterStyleOverrides: [1, 2],
         styleOverrideTable: {
           "1": { fontSize: 24, fontFamily: "Inter" },
