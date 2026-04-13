@@ -221,6 +221,9 @@ function getStyleMatch(
   return undefined;
 }
 
+// Figma style names aren't unique — a file can use a local style and an imported
+// library style that share a name (e.g., "Heading / Large"). Collapse same-name
+// same-value entries; disambiguate same-name different-value by appending the id.
 function resolveStyleKey(
   context: TraversalContext,
   styleMatch: StyleMatch,
