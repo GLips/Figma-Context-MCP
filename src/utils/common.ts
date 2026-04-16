@@ -223,3 +223,22 @@ export function pixelRound(num: number): number {
   }
   return Number(Number(num).toFixed(2));
 }
+
+/**
+ * Serialize a value to JSON with sorted object keys so two equal-but-
+ * differently-ordered objects produce the same string. Used for cache keys
+ * and deep-equality checks where property order isn't a stable guarantee
+ * (e.g. partial TypeStyle entries from Figma's styleOverrideTable).
+ */
+export function stableStringify(value: unknown): string {
+  return JSON.stringify(value, (_key, v) => {
+    if (v && typeof v === "object" && !Array.isArray(v)) {
+      const sorted: Record<string, unknown> = {};
+      for (const k of Object.keys(v as Record<string, unknown>).sort()) {
+        sorted[k] = (v as Record<string, unknown>)[k];
+      }
+      return sorted;
+    }
+    return v;
+  });
+}

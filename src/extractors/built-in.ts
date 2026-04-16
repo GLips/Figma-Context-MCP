@@ -9,10 +9,11 @@ import { buildSimplifiedLayout } from "~/transformers/layout.js";
 import { buildSimplifiedStrokes, parsePaint } from "~/transformers/style.js";
 import { buildSimplifiedEffects } from "~/transformers/effects.js";
 import {
-  extractNodeText,
+  buildFormattedText,
   extractTextStyle,
   hasTextStyle,
   isTextNode,
+  type SimplifiedTextStyle,
 } from "~/transformers/text.js";
 import {
   simplifyComponentProperties,
@@ -20,13 +21,20 @@ import {
   simplifyPropertyReferences,
 } from "~/transformers/component.js";
 import { hasValue, isRectangleCornerRadii } from "~/utils/identity.js";
-import { generateVarId, isVisible } from "~/utils/common.js";
+import { generateVarId, isVisible, stableStringify } from "~/utils/common.js";
 import type { Node as FigmaDocumentNode } from "@figma/rest-api-spec";
 
 // Reverse lookup cache: serialized style value → varId.
 // Keyed on the GlobalVars instance so it's automatically scoped to each
 // extraction run and garbage-collected when the run's context is released.
 const styleCaches = new WeakMap<GlobalVars, Map<string, string>>();
+
+// Separate cache for inline text-style override refs. Kept distinct from
+// `styleCaches` so the `ts` namespace never aliases with `style_*`, `fill_*`,
+// etc. — a base textStyle that happens to serialize identically to an inline
+// delta would otherwise return the wrong prefix, bleeding `style_XXXXXX` IDs
+// into the middle of `text` strings and vice versa.
+const inlineTextStyleCaches = new WeakMap<GlobalVars, Map<string, string>>();
 
 function getStyleCache(globalVars: GlobalVars): Map<string, string> {
   let cache = styleCaches.get(globalVars);
@@ -37,12 +45,21 @@ function getStyleCache(globalVars: GlobalVars): Map<string, string> {
   return cache;
 }
 
+function getInlineTextStyleCache(globalVars: GlobalVars): Map<string, string> {
+  let cache = inlineTextStyleCaches.get(globalVars);
+  if (!cache) {
+    cache = new Map();
+    inlineTextStyleCaches.set(globalVars, cache);
+  }
+  return cache;
+}
+
 /**
  * Find an existing global style variable with the same value, or create one.
  */
 function findOrCreateVar(globalVars: GlobalVars, value: StyleTypes, prefix: string): string {
   const cache = getStyleCache(globalVars);
-  const key = JSON.stringify(value);
+  const key = stableStringify(value);
 
   const existing = cache.get(key);
   if (existing) return existing;
@@ -84,12 +101,42 @@ export const layoutExtractor: ExtractorFn = (node, result, context) => {
 };
 
 /**
+ * Register an inline text-style override delta and return its short ID
+ * (`ts1`, `ts2`, …). Unlike `registerStyle`, these IDs come from a sequential
+ * counter on the traversal state — they appear inline in formatted text
+ * (`{ts1}…{/ts1}`), where short IDs matter for token efficiency and readability.
+ *
+ * Uses its own dedup cache (`inlineTextStyleCaches`), separate from the
+ * generic `styleCaches`. The two namespaces must not alias: if a base
+ * textStyle serializes identically to an inline delta, the inline caller must
+ * still get a `tsN` ID, not a `style_XXXXXX` ID that happens to be cached.
+ */
+function registerInlineTextStyle(context: TraversalContext, delta: SimplifiedTextStyle): string {
+  const cache = getInlineTextStyleCache(context.globalVars);
+  const key = stableStringify(delta);
+  const existing = cache.get(key);
+  if (existing) return existing;
+  context.traversalState.tsCounter += 1;
+  const id = `ts${context.traversalState.tsCounter}`;
+  context.globalVars.styles[id] = delta;
+  cache.set(key, id);
+  return id;
+}
+
+/**
  * Extracts text content and text styling from a node.
  */
 export const textExtractor: ExtractorFn = (node, result, context) => {
-  // Extract text content
+  // Extract text content — formatted with markdown + inline style refs when
+  // the node has per-character overrides, otherwise just the raw string.
   if (isTextNode(node)) {
-    result.text = extractNodeText(node);
+    const rich = buildFormattedText(node, (delta) => registerInlineTextStyle(context, delta));
+    if (rich.text) {
+      result.text = rich.text;
+    }
+    if (rich.boldWeight !== undefined) {
+      result.boldWeight = rich.boldWeight;
+    }
   }
 
   // Extract text style

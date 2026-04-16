@@ -47,7 +47,7 @@ export async function extractFromDesign(
     globalVars,
     extraStyles,
     currentDepth: 0,
-    traversalState: { componentPropertyDefinitions: {} },
+    traversalState: { componentPropertyDefinitions: {}, tsCounter: 0 },
     nodeCounter: options.nodeCounter ?? { count: 0 },
   };
 
