@@ -166,6 +166,9 @@ export const visualsExtractor: ExtractorFn = (node, result, context) => {
   }
 
   // strokes
+  // Only the stroke color array is registered as a (potentially named) shared style.
+  // Figma named styles only apply to paint, not to stroke width / dashes / per-side
+  // weights, so those stay as plain sibling fields and are never deduplicated.
   const strokes = buildSimplifiedStrokes(node, hasChildren);
   if (strokes.colors.length) {
     result.strokes = registerStyle(node, context, strokes.colors, ["stroke", "strokes"], "fill");
@@ -268,6 +271,9 @@ function getStyleMatch(
   return undefined;
 }
 
+// Figma style names aren't unique — a file can use a local style and an imported
+// library style that share a name (e.g., "Heading / Large"). Collapse same-name
+// same-value entries; disambiguate same-name different-value by appending the id.
 function resolveStyleKey(
   context: TraversalContext,
   styleMatch: StyleMatch,

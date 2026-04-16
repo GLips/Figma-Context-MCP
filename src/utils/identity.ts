@@ -56,7 +56,7 @@ export function isLayout(val: unknown): val is HasLayoutTrait {
  * @returns True if the node is a child of an auto layout frame, false otherwise.
  */
 export function isInAutoLayoutFlow(node: unknown, parent: unknown): boolean {
-  const autoLayoutModes = ["HORIZONTAL", "VERTICAL"];
+  const autoLayoutModes = ["HORIZONTAL", "VERTICAL", "GRID"];
   return (
     isFrame(parent) &&
     autoLayoutModes.includes(parent.layoutMode ?? "NONE") &&
