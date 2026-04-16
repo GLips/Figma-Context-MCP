@@ -1,8 +1,8 @@
 import path from "path";
+import fs from "fs";
 import { z } from "zod";
 import { FigmaService } from "../../services/figma.js";
 import { Logger } from "../../utils/logger.js";
-import { canonicalizePath, isWithinDirectory } from "~/utils/common.js";
 import {
   captureDownloadImagesCall,
   captureValidationReject,
@@ -90,6 +90,29 @@ const parameters = {
 
 const parametersSchema = z.object(parameters);
 export type DownloadImagesParams = z.infer<typeof parametersSchema>;
+
+function canonicalizePath(inputPath: string): string {
+  const resolvedPath = path.resolve(inputPath);
+  let existingPath = resolvedPath;
+  const missingSegments: string[] = [];
+
+  while (!fs.existsSync(existingPath)) {
+    const parent = path.dirname(existingPath);
+    if (parent === existingPath) break;
+    missingSegments.unshift(path.basename(existingPath));
+    existingPath = parent;
+  }
+
+  const realExistingPath = fs.realpathSync(existingPath);
+  return missingSegments.length > 0
+    ? path.join(realExistingPath, ...missingSegments)
+    : realExistingPath;
+}
+
+function isWithinDirectory(basePath: string, candidatePath: string): boolean {
+  const relative = path.relative(basePath, candidatePath);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
 
 async function downloadFigmaImages(
   params: DownloadImagesParams,

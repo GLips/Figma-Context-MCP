@@ -25,9 +25,8 @@ export async function downloadFigmaImage(
 
     // Build the complete file path and verify it stays within localPath
     const fullPath = path.resolve(path.join(localPath, fileName));
-    const canonicalFullPath = canonicalizePath(fullPath);
-    const canonicalLocalPath = canonicalizePath(localPath);
-    if (!isWithinDirectory(canonicalLocalPath, canonicalFullPath)) {
+    const resolvedLocalPath = path.resolve(localPath);
+    if (!fullPath.startsWith(resolvedLocalPath + path.sep)) {
       tagError(new Error(`File path escapes target directory: ${fileName}`), {
         category: "invalid_input",
       });
@@ -132,34 +131,6 @@ export function removeEmptyKeys<T>(input: T): T {
   }
 
   return result;
-}
-
-/**
- * Resolve a path while following symlinks in the portion that already exists.
- * Missing tail segments are preserved lexically so callers can validate paths
- * before creating new directories or files.
- */
-export function canonicalizePath(inputPath: string): string {
-  const resolvedPath = path.resolve(inputPath);
-  let existingPath = resolvedPath;
-  const missingSegments: string[] = [];
-
-  while (!fs.existsSync(existingPath)) {
-    const parent = path.dirname(existingPath);
-    if (parent === existingPath) break;
-    missingSegments.unshift(path.basename(existingPath));
-    existingPath = parent;
-  }
-
-  const realExistingPath = fs.realpathSync(existingPath);
-  return missingSegments.length > 0
-    ? path.join(realExistingPath, ...missingSegments)
-    : realExistingPath;
-}
-
-export function isWithinDirectory(basePath: string, candidatePath: string): boolean {
-  const relative = path.relative(basePath, candidatePath);
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
 /**
