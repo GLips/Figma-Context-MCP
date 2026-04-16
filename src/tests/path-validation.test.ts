@@ -140,6 +140,24 @@ describe("download path validation", () => {
     expect(result.isError).toBeUndefined();
   });
 
+  it("accepts a non-existent nested path whose existing prefix stays within imageDir", async () => {
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), "path-validation-base-"));
+
+    const result = await downloadFigmaImagesTool.handler(
+      { ...validParams, localPath: "nested/assets/icons" },
+      stubFigmaService,
+      base,
+      "stdio",
+      "api_key",
+      undefined,
+      stubExtra,
+    );
+
+    expect(result.isError).toBeUndefined();
+
+    fs.rmSync(base, { recursive: true, force: true });
+  });
+
   it("rejects localPath when a symlinked segment escapes imageDir", async () => {
     const base = fs.mkdtempSync(path.join(os.tmpdir(), "path-validation-base-"));
     const outside = fs.mkdtempSync(path.join(os.tmpdir(), "path-validation-outside-"));
