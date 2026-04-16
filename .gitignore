@@ -45,5 +45,5 @@ Thumbs.db
 # separate private repo (FramelinkAI/mcp-docs) cloned to this path.
 /docs/
 
-# Throwaway HTML/CSS renders of MCP output, created by the /trial command
+# Local experiment scratchpad
 /trials/
