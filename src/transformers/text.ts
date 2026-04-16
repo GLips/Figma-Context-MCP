@@ -1,8 +1,11 @@
-import type { Node as FigmaDocumentNode } from "@figma/rest-api-spec";
-import { hasValue, isTruthy } from "~/utils/identity.js";
+import type { Hyperlink, Node as FigmaDocumentNode, TypeStyle, Paint } from "@figma/rest-api-spec";
+import { isVisible, pixelRound, stableStringify } from "~/utils/common.js";
+import { hasValue } from "~/utils/identity.js";
+import { parsePaint, type SimplifiedFill } from "~/transformers/style.js";
 
 export type SimplifiedTextStyle = Partial<{
   fontFamily: string;
+  fontStyle: string;
   fontWeight: number;
   fontSize: number;
   lineHeight: string;
@@ -10,6 +13,23 @@ export type SimplifiedTextStyle = Partial<{
   textCase: string;
   textAlignHorizontal: string;
   textAlignVertical: string;
+  italic: boolean;
+  // "NONE" appears on inline deltas only — it represents an inverse override
+  // where the base style has underline/strike and a per-character run clears
+  // it. The base textStyle never emits NONE (defaults drop out).
+  textDecoration: "STRIKETHROUGH" | "UNDERLINE" | "NONE";
+  hyperlink: Hyperlink;
+  // Only non-zero flags are emitted; defaults stay out of the ref so two nodes
+  // that differ only in default flag values still dedupe.
+  opentypeFlags: Record<string, number>;
+  paragraphSpacing: number;
+  paragraphIndent: number;
+  listSpacing: number;
+  // Text color overrides — only used on inline style-ref deltas, not the base
+  // textStyle (the node's `fills` handles color for the whole text node via
+  // visualsExtractor). Inline deltas need their own fills field because a
+  // styled run can override text color within a single node.
+  fills: SimplifiedFill[];
 }>;
 
 export function isTextNode(
@@ -25,32 +45,743 @@ export function hasTextStyle(
   return hasValue("style", n) && Object.keys(n.style).length > 0;
 }
 
-// Keep other simple properties directly
-export function extractNodeText(n: FigmaDocumentNode) {
-  if (hasValue("characters", n, isTruthy)) {
-    return n.characters;
-  }
-}
-
 export function extractTextStyle(n: FigmaDocumentNode) {
   if (hasTextStyle(n)) {
     const style = n.style;
     const textStyle: SimplifiedTextStyle = {
       fontFamily: style.fontFamily,
+      fontStyle: "fontStyle" in style && style.fontStyle ? style.fontStyle : undefined,
       fontWeight: style.fontWeight,
       fontSize: style.fontSize,
-      lineHeight:
-        "lineHeightPx" in style && style.lineHeightPx && style.fontSize
-          ? `${style.lineHeightPx / style.fontSize}em`
-          : undefined,
+      lineHeight: formatLineHeight(style as LineHeightSource, style.fontSize),
       letterSpacing:
         style.letterSpacing && style.letterSpacing !== 0 && style.fontSize
-          ? `${(style.letterSpacing / style.fontSize) * 100}%`
+          ? `${pixelRound((style.letterSpacing / style.fontSize) * 100)}%`
           : undefined,
       textCase: style.textCase,
       textAlignHorizontal: style.textAlignHorizontal,
       textAlignVertical: style.textAlignVertical,
+      italic: "italic" in style && style.italic ? true : undefined,
+      textDecoration:
+        "textDecoration" in style &&
+        (style.textDecoration === "STRIKETHROUGH" || style.textDecoration === "UNDERLINE")
+          ? style.textDecoration
+          : undefined,
+      hyperlink: "hyperlink" in style && style.hyperlink ? style.hyperlink : undefined,
+      opentypeFlags: pickNonZeroFlags("opentypeFlags" in style ? style.opentypeFlags : undefined),
+      paragraphSpacing:
+        "paragraphSpacing" in style && style.paragraphSpacing && style.paragraphSpacing > 0
+          ? style.paragraphSpacing
+          : undefined,
+      paragraphIndent:
+        "paragraphIndent" in style && style.paragraphIndent && style.paragraphIndent > 0
+          ? style.paragraphIndent
+          : undefined,
+      listSpacing:
+        "listSpacing" in style && style.listSpacing && style.listSpacing > 0
+          ? style.listSpacing
+          : undefined,
     };
     return textStyle;
   }
+}
+
+function pickNonZeroFlags(
+  flags: Record<string, number> | undefined,
+): Record<string, number> | undefined {
+  if (!flags) return undefined;
+  const nonZero: Record<string, number> = {};
+  for (const [k, v] of Object.entries(flags)) {
+    if (v) nonZero[k] = v;
+  }
+  return Object.keys(nonZero).length ? nonZero : undefined;
+}
+
+/**
+ * Format Figma's line-height fields into a CSS string that preserves the
+ * unit the designer actually specified, or omit when the text uses "auto".
+ *
+ *   INTRINSIC_% → undefined (auto — follows the font's intrinsic metrics;
+ *                 `lineHeightPx` is just the computed value for whichever
+ *                 font the node happens to use, not user intent)
+ *   PIXELS      → "24px"  from `lineHeightPx`
+ *   FONT_SIZE_% → "150%"  from `lineHeightPercentFontSize`
+ *
+ * Falls back to an em conversion when the unit is missing (older API
+ * responses) so the output is never worse than before. All numeric values
+ * are rounded via `pixelRound` so floating-point noise like Figma's
+ * `16.94318199157715` doesn't leak through.
+ */
+type LineHeightSource = {
+  lineHeightPx?: number;
+  lineHeightUnit?: string;
+  lineHeightPercentFontSize?: number;
+};
+
+function formatLineHeight(
+  source: LineHeightSource,
+  fontSize: number | undefined,
+): string | undefined {
+  const { lineHeightUnit, lineHeightPx, lineHeightPercentFontSize } = source;
+
+  if (lineHeightUnit === "INTRINSIC_%") return undefined;
+
+  if (lineHeightUnit === "PIXELS" && lineHeightPx) {
+    return `${pixelRound(lineHeightPx)}px`;
+  }
+
+  if (lineHeightUnit === "FONT_SIZE_%" && lineHeightPercentFontSize) {
+    return `${pixelRound(lineHeightPercentFontSize)}%`;
+  }
+
+  if (lineHeightPx && fontSize) {
+    return `${pixelRound(lineHeightPx / fontSize)}em`;
+  }
+
+  return undefined;
+}
+
+// ---------------------------------------------------------------------------
+// Rich text (inline formatting)
+// ---------------------------------------------------------------------------
+
+/**
+ * Callback used by `buildFormattedText` to register a style-ref delta for a
+ * styled run and receive the inline ID (e.g. `ts1`) that should wrap the run
+ * in the output. Keeping the side effects (ID generation, globalVars mutation,
+ * dedup) in the caller lets this module stay a near-pure transformer.
+ */
+type RegisterInlineTextStyle = (delta: SimplifiedTextStyle) => string;
+
+type BuildFormattedTextResult = {
+  text: string;
+  /**
+   * Numeric font weight that `**` maps to in `text`. Only present when the
+   * node has per-character bold overrides, so the consumer knows what weight
+   * the markdown bold represents.
+   */
+  boldWeight?: number;
+};
+
+type Run = {
+  /**
+   * Raw character range for this run — not yet escaped or wrapped.
+   * Stored as an array of code points so we can slice the characters string
+   * without splitting surrogate pairs when handling emoji / astral chars.
+   */
+  text: string;
+  /** Deduped delta against the base style (only properties that actually differ). */
+  delta: Partial<TypeStyle>;
+};
+
+type Classification = {
+  isBold: boolean;
+  isItalic: boolean;
+  isStrike: boolean;
+  /** URL for `[text](url)` rendering — only set for `type: "URL"` hyperlinks. */
+  urlLink?: string;
+  /** Delta to wrap in `{tsN}...{/tsN}` — undefined when no style-ref props remain. */
+  refDelta?: SimplifiedTextStyle;
+};
+
+/**
+ * Fields ignored by the delta computation. These are either book-keeping
+ * (semanticWeight, semanticItalic, isOverrideOverTextStyle) that don't affect
+ * visual output, or fields we explicitly don't carry into the simplified
+ * representation (fontPostScriptName, boundVariables).
+ */
+const IGNORED_TYPE_STYLE_FIELDS = new Set([
+  "semanticWeight",
+  "semanticItalic",
+  "isOverrideOverTextStyle",
+  "fontPostScriptName",
+  "boundVariables",
+]);
+
+/**
+ * Build a formatted markdown + inline style-ref representation of a text
+ * node's mixed character formatting.
+ *
+ * Algorithm (matches `docs/plans/2026-04-08-feat-rich-text-styling-plan.md`):
+ *   1. Split characters by newline / paragraph-separator into lines, carrying
+ *      a per-line slice of `characterStyleOverrides`.
+ *   2. For each line: split into runs based on the line's overrides, compute
+ *      each run's delta against the base `style` (dropping no-op overrides),
+ *      and merge adjacent identical runs.
+ *   3. Determine the canonical `boldWeight` — the heavier fontWeight that
+ *      appears across the most characters across all lines. This is what
+ *      plain `**` maps to.
+ *   4. Classify each run's delta into markdown (bold/italic/strike/URL link)
+ *      + residual style-ref properties, then render: escape raw text, wrap
+ *      style-ref deltas on the outside, markdown markers on the inside.
+ *   5. Prepend a list marker to each line based on `lineTypes` /
+ *      `lineIndentations` (ordered `1.`, unordered `-`, nested with 2-space
+ *      CommonMark indent).
+ *   6. Join lines with a literal `\n` (two characters, backslash + n). Real
+ *      newlines in the output would cause the YAML serializer to emit a
+ *      block scalar with per-line indentation — one indent level per nesting
+ *      depth, multiplied by every line. Literal `\n` keeps the entire string
+ *      on a single YAML plain scalar.
+ *
+ * Why markdown on the inside: `{ts1}**text**{/ts1}` keeps markdown markers
+ * contiguous and lets the style ref describe a visual region decorated by
+ * markdown within it. The reverse nesting would fragment markdown across
+ * every style boundary.
+ */
+export function buildFormattedText(
+  node: FigmaDocumentNode,
+  registerStyle: RegisterInlineTextStyle,
+): BuildFormattedTextResult {
+  if (!isTextNode(node)) {
+    return { text: "" };
+  }
+  const characters = node.characters ?? "";
+  if (characters.length === 0) {
+    return { text: "" };
+  }
+
+  const overrides = node.characterStyleOverrides ?? [];
+  const lineTypes: Array<"NONE" | "ORDERED" | "UNORDERED"> =
+    "lineTypes" in node && Array.isArray(node.lineTypes) ? node.lineTypes : [];
+  const lineIndentations: number[] =
+    "lineIndentations" in node && Array.isArray(node.lineIndentations) ? node.lineIndentations : [];
+
+  // Defensive: synthetic test fixtures sometimes lack a base style. The
+  // delta pipeline can't run without one, so emit characters as-is.
+  // (Real Figma TEXT nodes always have `style` per the API spec.)
+  if (!node.style) {
+    return { text: escapeMarkdown(characters) };
+  }
+
+  const hasOverrides = overrides.some((id) => id !== 0);
+  const hasList = lineTypes.some((t) => t === "ORDERED" || t === "UNORDERED");
+
+  // Fast path: nothing to format. `escapeMarkdown` still rewrites real
+  // newlines to a literal `\n` so multi-line plain text stays compact in
+  // YAML output.
+  if (!hasOverrides && !hasList) {
+    return { text: escapeMarkdown(characters) };
+  }
+
+  // Split into code points so a surrogate pair stays with its run.
+  const codePoints = Array.from(characters);
+  const overrideTable = (node.styleOverrideTable ?? {}) as Record<string, TypeStyle>;
+  const baseStyle: TypeStyle = node.style;
+
+  const lines = splitLines(codePoints, overrides);
+  const perLineRuns: Run[][] = lines.map((line) =>
+    computeRunsForLine(line.codePoints, line.overrides, overrideTable, baseStyle),
+  );
+
+  // boldWeight is detected once across every run in every line — `**` maps
+  // to a single canonical weight for the whole text node, not per-line.
+  const boldWeight = detectBoldWeight(perLineRuns.flat(), baseStyle);
+
+  const listState = new ListState();
+  const renderedLines: string[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    let lineOutput = "";
+    for (const run of perLineRuns[i]) {
+      const classification = classifyRun(run.delta, baseStyle, boldWeight);
+      lineOutput += renderRun(run.text, classification, registerStyle);
+    }
+    const type = lineTypes[i] ?? "NONE";
+    const depth = lineIndentations[i] ?? 0;
+    renderedLines.push(listState.advance(type, depth) + lineOutput);
+  }
+
+  // Join with a literal `\n` (backslash + n, two chars). See the
+  // `escapeMarkdown` comment for why real newlines aren't used.
+  const text = renderedLines.join("\\n");
+  return boldWeight !== undefined ? { text, boldWeight } : { text };
+}
+
+/**
+ * Split characters into lines at `\n` / `\u2029` (paragraph separator — the
+ * Figma API allows both). Each line carries its slice of the overrides
+ * array. The newline character itself is discarded along with its override.
+ *
+ * The returned line count matches what Figma's `lineTypes` /
+ * `lineIndentations` arrays expect: a trailing newline produces an empty
+ * final line.
+ */
+function splitLines(
+  codePoints: string[],
+  overrides: number[],
+): Array<{ codePoints: string[]; overrides: number[] }> {
+  const lines: Array<{ codePoints: string[]; overrides: number[] }> = [];
+  let lineStart = 0;
+  for (let i = 0; i <= codePoints.length; i++) {
+    const ch = i < codePoints.length ? codePoints[i] : null;
+    if (ch === "\n" || ch === "\u2029" || ch === null) {
+      lines.push({
+        codePoints: codePoints.slice(lineStart, i),
+        overrides: overrides.slice(lineStart, i),
+      });
+      lineStart = i + 1;
+    }
+  }
+  return lines;
+}
+
+/**
+ * Compute the merged run list for a single line — split by override
+ * boundaries, diff each range against the base style, merge adjacent runs
+ * with equal deltas.
+ *
+ * Kept separate from `buildFormattedText` so the list-aware caller can run
+ * the run pipeline once per line without duplicating the merge logic, and
+ * so the trailing-zero handling (`overrides[i] ?? 0`) operates on the
+ * caller's per-line slice of the overrides array rather than the whole.
+ */
+function computeRunsForLine(
+  codePoints: string[],
+  overrides: number[],
+  overrideTable: Record<string, TypeStyle>,
+  baseStyle: TypeStyle,
+): Run[] {
+  if (codePoints.length === 0) return [];
+
+  const rawRuns: Run[] = [];
+  let runStart = 0;
+  for (let i = 0; i <= codePoints.length; i++) {
+    // Trailing entries of characterStyleOverrides can be omitted, in which
+    // case they implicitly mean override ID 0 (base style). Past-end sentinel
+    // is -1 so we always close the final run on the last iteration.
+    const currentId = i < codePoints.length ? (overrides[i] ?? 0) : -1;
+    const startId = runStart < codePoints.length ? (overrides[runStart] ?? 0) : 0;
+    if ((i === codePoints.length || currentId !== startId) && i > runStart) {
+      rawRuns.push({
+        text: codePoints.slice(runStart, i).join(""),
+        delta: computeDelta(startId, overrideTable, baseStyle),
+      });
+      runStart = i;
+    }
+  }
+
+  const runs: Run[] = [];
+  for (const run of rawRuns) {
+    const prev = runs[runs.length - 1];
+    if (prev && deltasEqual(prev.delta, run.delta)) {
+      prev.text += run.text;
+    } else {
+      runs.push({ ...run });
+    }
+  }
+  return runs;
+}
+
+/**
+ * Tracks ordered-list counters across lines so `1. / 2. / 3.` numbering is
+ * correct even with nested lists and non-list interruptions.
+ *
+ * Counter scope rules:
+ *   - Counters at depths *deeper* than the current line are cleared — moving
+ *     shallower closes any nested lists below.
+ *   - A non-ORDERED line at depth d (UNORDERED or NONE) clears depth d's
+ *     counter, so a subsequent ORDERED line there restarts at 1.
+ *   - Counters at depths *shallower* than the current line are untouched —
+ *     an outer ordered list continues across nested interruptions.
+ */
+class ListState {
+  private counters = new Map<number, number>();
+
+  /**
+   * Mutates the counter state and returns the list prefix for the next line.
+   * Named `advance` (not `nextPrefix`) to telegraph the side effect — two
+   * calls with the same arguments return different strings as the counter
+   * increments.
+   */
+  advance(type: "NONE" | "ORDERED" | "UNORDERED", depth: number): string {
+    for (const k of Array.from(this.counters.keys())) {
+      if (k > depth) this.counters.delete(k);
+    }
+
+    // CommonMark nests lists with 2-space indentation per level. Plain
+    // (NONE) lines are not indented — list-adjacent prose sits at column 0.
+    const indent = "  ".repeat(depth);
+
+    if (type === "ORDERED") {
+      const n = (this.counters.get(depth) ?? 0) + 1;
+      this.counters.set(depth, n);
+      return `${indent}${n}. `;
+    }
+
+    if (type === "UNORDERED") {
+      this.counters.delete(depth);
+      return `${indent}- `;
+    }
+
+    this.counters.delete(depth);
+    return "";
+  }
+}
+
+/**
+ * Compute the delta for an override ID against the base style.
+ *
+ * Returns only the properties that differ from the base. Override ID 0 and
+ * missing entries both mean "no delta". We filter out no-op overrides — e.g.
+ * a leftover `fontWeight: 400` in the override table when the base is already
+ * 400 — because they would otherwise produce empty style refs.
+ */
+function computeDelta(
+  overrideId: number,
+  overrideTable: Record<string, TypeStyle>,
+  baseStyle: TypeStyle,
+): Partial<TypeStyle> {
+  if (overrideId === 0) return {};
+  const override = overrideTable[String(overrideId)];
+  if (!override) return {};
+
+  const delta: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(override)) {
+    if (IGNORED_TYPE_STYLE_FIELDS.has(key)) continue;
+    if (value === undefined) continue;
+    const baseValue = (baseStyle as Record<string, unknown>)[key];
+    if (JSON.stringify(baseValue) === JSON.stringify(value)) continue;
+    delta[key] = value;
+  }
+  return delta as Partial<TypeStyle>;
+}
+
+function deltasEqual(a: Partial<TypeStyle>, b: Partial<TypeStyle>): boolean {
+  return stableStringify(a) === stableStringify(b);
+}
+
+/**
+ * Pick the numeric weight that `**` should map to when a node has bold
+ * overrides: the heavier-than-base weight that covers the most characters.
+ * Ties break toward the heavier weight so `600 vs 800` at equal usage picks
+ * `800`.
+ */
+function detectBoldWeight(runs: Run[], baseStyle: TypeStyle): number | undefined {
+  const baseWeight = baseStyle.fontWeight ?? 400;
+  const counts = new Map<number, number>();
+  for (const run of runs) {
+    const w = run.delta.fontWeight;
+    if (typeof w === "number" && w > baseWeight) {
+      counts.set(w, (counts.get(w) ?? 0) + run.text.length);
+    }
+  }
+  if (counts.size === 0) return undefined;
+  let bestWeight: number | undefined;
+  let bestCount = -1;
+  for (const [weight, count] of counts) {
+    if (count > bestCount || (count === bestCount && weight > (bestWeight ?? 0))) {
+      bestWeight = weight;
+      bestCount = count;
+    }
+  }
+  return bestWeight;
+}
+
+/**
+ * Split a run's delta into markdown decorations and residual style-ref props.
+ *
+ * Markdown handles: bold (fontWeight > base), italic (italic:true when base is
+ * not italic), strikethrough, URL hyperlinks. A run can fall into *both*
+ * buckets — bold + red text produces `{ts1}**text**{/ts1}` where `ts1` carries
+ * the fills delta.
+ *
+ * Inverse overrides (regular on a bold base, non-italic on an italic base)
+ * can't be expressed in markdown, so they fall through into the style-ref
+ * delta as explicit `fontWeight` / `italic` properties.
+ */
+function classifyRun(
+  delta: Partial<TypeStyle>,
+  baseStyle: TypeStyle,
+  boldWeight: number | undefined,
+): Classification {
+  const c: Classification = { isBold: false, isItalic: false, isStrike: false };
+  const refDelta: SimplifiedTextStyle = {};
+  let hasRefProps = false;
+
+  const baseWeight = baseStyle.fontWeight ?? 400;
+  const baseItalic = baseStyle.italic === true;
+
+  // Effective fontSize for unit conversions (em, %) — the override may carry
+  // its own fontSize, otherwise fall back to the base.
+  const effectiveFontSize =
+    typeof delta.fontSize === "number" ? delta.fontSize : (baseStyle.fontSize ?? 0);
+
+  for (const [key, rawValue] of Object.entries(delta)) {
+    const value = rawValue as unknown;
+    switch (key) {
+      case "fontWeight": {
+        const w = value as number;
+        if (w > baseWeight) {
+          c.isBold = true;
+          // A heavy weight that doesn't match the canonical bold weight still
+          // renders as `**`, but also carries an explicit fontWeight in the
+          // ref so the consumer can realize the actual weight.
+          if (boldWeight !== undefined && w !== boldWeight) {
+            refDelta.fontWeight = w;
+            hasRefProps = true;
+          }
+        } else {
+          // Lighter-than-base override — markdown can't remove bold, so emit
+          // as a style ref with the explicit weight.
+          refDelta.fontWeight = w;
+          hasRefProps = true;
+        }
+        break;
+      }
+      case "italic": {
+        const italic = value as boolean;
+        if (italic && !baseItalic) {
+          c.isItalic = true;
+        } else if (!italic && baseItalic) {
+          refDelta.italic = false;
+          hasRefProps = true;
+        }
+        break;
+      }
+      case "textDecoration": {
+        const td = value as "NONE" | "STRIKETHROUGH" | "UNDERLINE";
+        const baseDecoration = (baseStyle as { textDecoration?: string }).textDecoration;
+        if (td === "STRIKETHROUGH") {
+          c.isStrike = true;
+          // If the base had UNDERLINE, the inherited underline still applies
+          // on top of our `~~` — clear it explicitly so the run is only
+          // strikethrough, matching the designer's intent.
+          if (baseDecoration === "UNDERLINE") {
+            refDelta.textDecoration = "STRIKETHROUGH";
+            hasRefProps = true;
+          }
+        } else if (td === "UNDERLINE") {
+          refDelta.textDecoration = "UNDERLINE";
+          hasRefProps = true;
+        } else if (td === "NONE" && baseDecoration) {
+          // Inverse override: the base had decoration and this run removes
+          // it. Markdown can't express decoration removal, so emit an
+          // explicit `NONE` delta that the consumer can use to suppress the
+          // inherited base.
+          refDelta.textDecoration = "NONE";
+          hasRefProps = true;
+        }
+        break;
+      }
+      case "hyperlink": {
+        const link = value as Hyperlink;
+        if (link.type === "URL" && link.url) {
+          c.urlLink = link.url;
+        } else {
+          // NODE hyperlinks have no markdown equivalent — carry through as a
+          // style-ref property so the consumer can at least see the link.
+          refDelta.hyperlink = link;
+          hasRefProps = true;
+        }
+        break;
+      }
+      case "fills": {
+        const paints = value as Paint[];
+        const fills = paints
+          .filter(isVisible)
+          .map((p) => parsePaint(p, false))
+          .reverse();
+        if (fills.length) {
+          refDelta.fills = fills;
+          hasRefProps = true;
+        }
+        break;
+      }
+      case "fontFamily": {
+        refDelta.fontFamily = value as string;
+        hasRefProps = true;
+        break;
+      }
+      case "fontStyle": {
+        // Figma's fontStyle is the named variant like "Bold Italic". It's
+        // informational — italic/fontWeight carry the actual visual data.
+        // Pass through so the consumer sees the exact variant name.
+        refDelta.fontStyle = value as string;
+        hasRefProps = true;
+        break;
+      }
+      case "fontSize": {
+        refDelta.fontSize = value as number;
+        hasRefProps = true;
+        break;
+      }
+      case "letterSpacing": {
+        const ls = value as number;
+        if (ls && effectiveFontSize) {
+          refDelta.letterSpacing = `${pixelRound((ls / effectiveFontSize) * 100)}%`;
+          hasRefProps = true;
+        }
+        break;
+      }
+      case "lineHeightPx":
+      case "lineHeightUnit":
+      case "lineHeightPercent":
+      case "lineHeightPercentFontSize": {
+        // Line-height is a multi-field concept (px/unit/%). Any of the four
+        // landing in the delta means the run's effective line-height
+        // differs from the base. Resolve the merged shape (override wins
+        // per field) and format once — running `formatLineHeight` on each
+        // case would emit duplicate refs for the same logical change.
+        if (refDelta.lineHeight !== undefined) break;
+        const merged: LineHeightSource = {
+          lineHeightPx: delta.lineHeightPx ?? (baseStyle as LineHeightSource).lineHeightPx,
+          lineHeightUnit:
+            (delta as LineHeightSource).lineHeightUnit ??
+            (baseStyle as LineHeightSource).lineHeightUnit,
+          lineHeightPercentFontSize:
+            (delta as LineHeightSource).lineHeightPercentFontSize ??
+            (baseStyle as LineHeightSource).lineHeightPercentFontSize,
+        };
+        const formatted = formatLineHeight(merged, effectiveFontSize);
+        if (formatted) {
+          refDelta.lineHeight = formatted;
+          hasRefProps = true;
+        }
+        break;
+      }
+      case "textCase": {
+        refDelta.textCase = value as string;
+        hasRefProps = true;
+        break;
+      }
+      case "textAlignHorizontal": {
+        refDelta.textAlignHorizontal = value as string;
+        hasRefProps = true;
+        break;
+      }
+      case "textAlignVertical": {
+        refDelta.textAlignVertical = value as string;
+        hasRefProps = true;
+        break;
+      }
+      case "opentypeFlags": {
+        const nonZero = pickNonZeroFlags(value as Record<string, number>);
+        if (nonZero) {
+          refDelta.opentypeFlags = nonZero;
+          hasRefProps = true;
+        }
+        break;
+      }
+      // paragraphSpacing / paragraphIndent / listSpacing are passed through
+      // to the textStyle ref but intentionally NOT consumed during the
+      // markdown rendering itself. Markdown has no representation for
+      // pixel-valued vertical whitespace, and conflating `paragraphIndent`
+      // with the list-nesting indent we already use for `lineIndentations`
+      // would corrupt list structure. Consumers that need these values read
+      // them off the ref directly.
+      case "paragraphSpacing": {
+        if (typeof value === "number" && value > 0) {
+          refDelta.paragraphSpacing = value;
+          hasRefProps = true;
+        }
+        break;
+      }
+      case "paragraphIndent": {
+        if (typeof value === "number" && value > 0) {
+          refDelta.paragraphIndent = value;
+          hasRefProps = true;
+        }
+        break;
+      }
+      case "listSpacing": {
+        if (typeof value === "number" && value > 0) {
+          refDelta.listSpacing = value;
+          hasRefProps = true;
+        }
+        break;
+      }
+      // Unknown / unmapped TypeStyle fields are ignored — they either don't
+      // have a visual effect we preserve today (e.g. textAutoResize) or
+      // don't appear as per-run overrides in practice.
+      default:
+        break;
+    }
+  }
+
+  if (hasRefProps) c.refDelta = refDelta;
+  return c;
+}
+
+/**
+ * Characters that must be escaped to avoid being interpreted as markdown
+ * (or as the inline style-ref delimiter).
+ *
+ * Escaping happens BEFORE wrappers are inserted — otherwise a literal `*`
+ * from user text would become an accidental italic marker once wrapped.
+ * Backslash is included so `\` in user text doesn't merge with our own
+ * escapes.
+ *
+ * Real newlines and paragraph separators get rewritten to a literal `\n`
+ * (two characters, backslash + n). Emitting real newlines would force the
+ * YAML serializer to wrap the value in a block scalar whose every line
+ * inherits the parent's indentation — for a text node 4 levels deep
+ * that's 8+ wasted spaces per line. The literal form keeps the whole
+ * string on a single YAML plain scalar regardless of nesting depth.
+ * Backslash is already escaped by the first pass so user content that
+ * literally contains `\n` stays unambiguous (it becomes `\\n`).
+ */
+const MARKDOWN_ESCAPE_CHARS = /[\\*_~[\](){}]/g;
+
+function escapeMarkdown(text: string): string {
+  return text.replace(MARKDOWN_ESCAPE_CHARS, "\\$&").replace(/[\n\u2029]/g, "\\n");
+}
+
+/**
+ * CommonMark emphasis markers can't have whitespace flanking the inner text
+ * (e.g. `** bold**` isn't bold). Pull any leading/trailing whitespace out of
+ * the run before applying markdown wrappers so the markers hug the text.
+ */
+function splitEdgeWhitespace(text: string): { leading: string; core: string; trailing: string } {
+  const match = /^(\s*)([\s\S]*?)(\s*)$/.exec(text);
+  if (!match) return { leading: "", core: text, trailing: "" };
+  return { leading: match[1], core: match[2], trailing: match[3] };
+}
+
+/**
+ * Escape a URL for use as a markdown link destination. Parens would close the
+ * destination early, and whitespace ends the URL in CommonMark — percent-
+ * encode both. Note `encodeURIComponent` itself leaves `(` and `)` alone, so
+ * we map them explicitly.
+ */
+function escapeLinkUrl(url: string): string {
+  return url.replace(/[()\s]/g, (ch) => {
+    if (ch === "(") return "%28";
+    if (ch === ")") return "%29";
+    return encodeURIComponent(ch);
+  });
+}
+
+/**
+ * Render a single run with wrappers applied outer-to-inner:
+ *   {tsN} → [...]( ) → ~~ → ** → *
+ *
+ * This ordering ensures that when two decorations collide on one run, the
+ * broader visual region (the style ref) surrounds the narrower markdown
+ * decoration, and the link text contains the formatted content.
+ */
+function renderRun(
+  rawText: string,
+  c: Classification,
+  registerStyle: RegisterInlineTextStyle,
+): string {
+  const hasMarkdownWrap = c.isItalic || c.isBold || c.isStrike || c.urlLink !== undefined;
+  // Pull whitespace outside any markdown wrappers so `**bold** ` instead of
+  // `**bold **`. Skip the split when there's no wrapping — escaping the raw
+  // string directly is all we need.
+  const { leading, core, trailing } = hasMarkdownWrap
+    ? splitEdgeWhitespace(rawText)
+    : { leading: "", core: rawText, trailing: "" };
+
+  let inner = escapeMarkdown(core);
+  if (c.isItalic) inner = `*${inner}*`;
+  if (c.isBold) inner = `**${inner}**`;
+  if (c.isStrike) inner = `~~${inner}~~`;
+  if (c.urlLink) inner = `[${inner}](${escapeLinkUrl(c.urlLink)})`;
+
+  let output = `${escapeMarkdown(leading)}${inner}${escapeMarkdown(trailing)}`;
+
+  if (c.refDelta) {
+    const id = registerStyle(c.refDelta);
+    output = `{${id}}${output}{/${id}}`;
+  }
+  return output;
 }
