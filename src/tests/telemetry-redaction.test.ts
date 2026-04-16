@@ -47,6 +47,31 @@ describe("telemetry error redaction", () => {
     expect(String(capturedEvents[0].properties.error_message)).not.toContain("secret-token");
   });
 
+  it("redacts file keys and ids query params from image endpoint errors", async () => {
+    const telemetry = await import("~/telemetry/index.js");
+    telemetry.initTelemetry();
+
+    telemetry.captureGetFigmaDataCall(
+      {
+        input: { fileKey: "abc123", nodeId: "1:2" },
+        outputFormat: "yaml",
+        durationMs: 1,
+        error: new Error(
+          "Failed to make request to Figma API endpoint '/images/abc123?ids=1:2,3:4&format=png': Fetch failed with status 403: Forbidden",
+        ),
+      },
+      { transport: "cli", authMode: "api_key" },
+    );
+
+    expect(capturedEvents).toHaveLength(1);
+    expect(String(capturedEvents[0].properties.error_message)).toContain(
+      "/images/[REDACTED_FILE_KEY]",
+    );
+    expect(String(capturedEvents[0].properties.error_message)).toContain("ids=[REDACTED_NODE_ID]");
+    expect(String(capturedEvents[0].properties.error_message)).not.toContain("abc123");
+    expect(String(capturedEvents[0].properties.error_message)).not.toContain("1:2,3:4");
+  });
+
   it("redacts node IDs from missing-node error messages", async () => {
     const telemetry = await import("~/telemetry/index.js");
     telemetry.initTelemetry();
