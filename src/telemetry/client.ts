@@ -27,11 +27,18 @@ function parseNodeMajor(version: string): number {
 }
 
 function redactErrorMessage(message: string): string {
-  let result = message;
+  let result = sanitizeTelemetryIdentifiers(message);
   for (const secret of redactionSecrets) {
     result = result.replaceAll(secret, "[REDACTED]");
   }
   return result;
+}
+
+function sanitizeTelemetryIdentifiers(message: string): string {
+  return message
+    .replace(/\/(files|images)\/[a-zA-Z0-9]+/g, "/$1/[REDACTED_FILE_KEY]")
+    .replace(/([?&](?:ids|node-id)=)[^&\s]+/g, "$1[REDACTED_NODE_ID]")
+    .replace(/\bNode\s+I?\d+(?::|-)\d+(?:;\d+(?::|-)\d+)*\b/g, "Node [REDACTED_NODE_ID]");
 }
 
 /**
