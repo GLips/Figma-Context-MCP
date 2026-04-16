@@ -1,4 +1,6 @@
 import path from "path";
+import fs from "fs";
+import os from "os";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
 vi.mock("~/telemetry/index.js", async (importOriginal) => {
@@ -136,6 +138,28 @@ describe("download path validation", () => {
     );
 
     expect(result.isError).toBeUndefined();
+  });
+
+  it("rejects localPath when a symlinked segment escapes imageDir", async () => {
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), "path-validation-base-"));
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), "path-validation-outside-"));
+    fs.symlinkSync(outside, path.join(base, "linked"), "dir");
+
+    const result = await downloadFigmaImagesTool.handler(
+      { ...validParams, localPath: "linked" },
+      stubFigmaService,
+      base,
+      "stdio",
+      "api_key",
+      undefined,
+      stubExtra,
+    );
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("resolves outside the allowed image directory");
+
+    fs.rmSync(base, { recursive: true, force: true });
+    fs.rmSync(outside, { recursive: true, force: true });
   });
 });
 

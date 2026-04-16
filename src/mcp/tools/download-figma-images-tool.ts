@@ -2,6 +2,7 @@ import path from "path";
 import { z } from "zod";
 import { FigmaService } from "../../services/figma.js";
 import { Logger } from "../../utils/logger.js";
+import { canonicalizePath, isWithinDirectory } from "~/utils/common.js";
 import {
   captureDownloadImagesCall,
   captureValidationReject,
@@ -109,9 +110,9 @@ async function downloadFigmaImages(
     // than in the shared core.
     const baseDir = imageDir ?? process.cwd();
     const resolvedPath = path.resolve(path.join(baseDir, localPath));
-    // Drive roots (e.g. E:\) already end with a separator — avoid doubling it
-    const baseDirPrefix = baseDir.endsWith(path.sep) ? baseDir : baseDir + path.sep;
-    if (resolvedPath !== baseDir && !resolvedPath.startsWith(baseDirPrefix)) {
+    const canonicalBaseDir = canonicalizePath(baseDir);
+    const canonicalResolvedPath = canonicalizePath(resolvedPath);
+    if (!isWithinDirectory(canonicalBaseDir, canonicalResolvedPath)) {
       // Path-traversal rejection happens after schema validation, so the SDK
       // wrapper in mcp/index.ts never sees it. Capture it here as a validation
       // reject so we can track how often LLMs trip over the localPath contract.
