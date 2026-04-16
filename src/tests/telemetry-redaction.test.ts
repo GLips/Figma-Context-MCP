@@ -82,7 +82,7 @@ describe("telemetry error redaction", () => {
         outputFormat: "yaml",
         durationMs: 1,
         error: new Error(
-          "Node 1:2 was not found in the Figma file. Try copying a fresh link from /files/abc123?node-id=1-2",
+          "Node 1:2 was not found in the Figma file. Try copying a fresh link from /files/abc123?node-id=1-2&ids=1:2,1:3",
         ),
       },
       { transport: "cli", authMode: "api_key" },
@@ -98,8 +98,12 @@ describe("telemetry error redaction", () => {
     expect(String(capturedEvents[0].properties.error_message)).toContain(
       "node-id=[REDACTED_NODE_ID]",
     );
+    expect(String(capturedEvents[0].properties.error_message)).toContain(
+      "ids=[REDACTED_NODE_ID]",
+    );
     expect(String(capturedEvents[0].properties.error_message)).not.toContain("abc123");
     expect(String(capturedEvents[0].properties.error_message)).not.toContain("1:2");
     expect(String(capturedEvents[0].properties.error_message)).not.toContain("1-2");
+    expect(String(capturedEvents[0].properties.error_message)).not.toContain("1:3");
   });
 });
