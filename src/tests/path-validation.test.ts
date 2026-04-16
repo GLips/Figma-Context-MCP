@@ -161,6 +161,29 @@ describe("download path validation", () => {
     fs.rmSync(base, { recursive: true, force: true });
     fs.rmSync(outside, { recursive: true, force: true });
   });
+
+  it("rejects localPath when an intermediate symlinked segment escapes imageDir", async () => {
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), "path-validation-base-"));
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), "path-validation-outside-"));
+    fs.mkdirSync(path.join(base, "nested"), { recursive: true });
+    fs.symlinkSync(outside, path.join(base, "nested", "linked"), "dir");
+
+    const result = await downloadFigmaImagesTool.handler(
+      { ...validParams, localPath: "nested/linked/assets" },
+      stubFigmaService,
+      base,
+      "stdio",
+      "api_key",
+      undefined,
+      stubExtra,
+    );
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("resolves outside the allowed image directory");
+
+    fs.rmSync(base, { recursive: true, force: true });
+    fs.rmSync(outside, { recursive: true, force: true });
+  });
 });
 
 describe("downloadFigmaImage filename validation", () => {
