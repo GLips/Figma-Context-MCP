@@ -338,23 +338,33 @@ export class FigmaService {
 }
 
 /**
- * Build a user-facing 403 message. Includes the raw response body (redacted +
- * truncated by fetchJSON) because corporate proxies/firewalls frequently
- * reject requests with their own 403 HTML before they ever reach Figma, and
- * that body is the fastest way for a user to recognize "oh, this is Zscaler."
+ * Build a user-facing 403 message. Figma returns distinct `err` strings for
+ * distinct causes (missing PAT scopes, expired OAuth token, un-exportable
+ * file, etc.) and each has a different fix. When we have the response body,
+ * we surface it verbatim and direct the consuming LLM to act on it — rather
+ * than string-matching here (fragile as Figma's wording drifts) or dumping a
+ * canned list of guesses (often wrong for the specific case). The generic
+ * fallback only runs when the body was unavailable.
  */
 function buildForbiddenMessage(endpoint: string, error: unknown): string {
   const body = (error as HttpError).responseBody;
   const parts = [`Request to Figma API endpoint '${endpoint}' returned 403 Forbidden.`];
-  if (body) parts.push(`Response body: ${body}`);
-  parts.push(
-    "This is typically one of:",
-    "- The access token doesn't have permission to this file (it must be owned by or explicitly shared with the token's account)",
-    "- The file's share settings don't allow viewers to copy/share/export",
-    "- For team/org files, the API token may not have access to that team",
-    "- An HTTP intermediary (corporate proxy, firewall, VPN) rejected the request before it reached Figma — check the response body above for clues",
-    "Troubleshooting guide: https://www.framelink.ai/docs/troubleshooting#cannot-access-file",
-  );
+  if (body) {
+    parts.push(
+      `Response body: ${body}`,
+      "",
+      "Instructions: explain the specific reason from the response body above to the user in plain language and walk them through resolving it. See https://www.framelink.ai/docs/troubleshooting#cannot-access-file for current, per-error resolution steps.",
+    );
+  } else {
+    parts.push(
+      "This is typically one of:",
+      "- The access token doesn't have permission to this file (it must be owned by or explicitly shared with the token's account)",
+      "- The file's share settings don't allow viewers to copy/share/export",
+      "- For team/org files, the API token may not have access to that team",
+      "- An HTTP intermediary (corporate proxy, firewall, VPN) rejected the request before it reached Figma",
+      "Troubleshooting guide: https://www.framelink.ai/docs/troubleshooting#cannot-access-file",
+    );
+  }
   const mode = proxyMode();
   if (mode === "explicit") {
     parts.push(
