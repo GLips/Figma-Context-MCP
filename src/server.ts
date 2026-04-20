@@ -5,7 +5,7 @@ import { Server } from "http";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ProxyAgent, EnvHttpProxyAgent, setGlobalDispatcher } from "undici";
 import { Logger } from "./utils/logger.js";
-import { hasProxyEnv } from "./utils/proxy-env.js";
+import { hasProxyEnv, setProxyMode } from "./utils/proxy-env.js";
 import { createServer } from "./mcp/index.js";
 import type { ServerConfig } from "./config.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -26,6 +26,7 @@ const activeConnections = new Set<ActiveConnection>();
 export async function startServer(config: ServerConfig): Promise<void> {
   if (config.proxy) {
     setGlobalDispatcher(new ProxyAgent(config.proxy));
+    setProxyMode("explicit");
   } else if (hasProxyEnv()) {
     // EnvHttpProxyAgent automatically respects HTTP_PROXY/HTTPS_PROXY/NO_PROXY
     // env vars. We only swap Node's default dispatcher when at least one of
@@ -40,6 +41,7 @@ export async function startServer(config: ServerConfig): Promise<void> {
     process.emitWarning = () => {};
     setGlobalDispatcher(new EnvHttpProxyAgent());
     process.emitWarning = emitWarning;
+    setProxyMode("env");
   }
 
   const telemetryEnabled = telemetry.initTelemetry({

@@ -9,6 +9,7 @@ import { downloadAndProcessImage, type ImageProcessingResult } from "~/utils/ima
 import { Logger, writeLogs } from "~/utils/logger.js";
 import { fetchJSON } from "~/utils/fetch-json.js";
 import { getErrorMeta } from "~/utils/error-meta.js";
+import { proxyMode } from "~/utils/proxy-env.js";
 import type { HttpError } from "~/utils/fetch-json.js";
 
 export type FigmaAuthOptions = {
@@ -358,6 +359,15 @@ function buildForbiddenMessage(endpoint: string, error: unknown): string {
     "- An HTTP intermediary (corporate proxy, firewall, VPN) rejected the request before it reached Figma — check the response body above for clues",
     "Troubleshooting guide: https://www.framelink.ai/docs/troubleshooting#cannot-access-file",
   );
+  const mode = proxyMode();
+  if (mode !== "none") {
+    parts.push(
+      "",
+      mode === "explicit"
+        ? "Note: this server is configured to route requests through an explicit proxy (--proxy/FIGMA_PROXY). If the proxy may be the source of the 403, unset it or bypass it for this host."
+        : "Note: this server picked up a proxy from HTTP_PROXY/HTTPS_PROXY in your environment. If the proxy may be the source of the 403, set NO_PROXY=api.figma.com or unset HTTP_PROXY/HTTPS_PROXY.",
+    );
+  }
   return parts.join("\n");
 }
 
