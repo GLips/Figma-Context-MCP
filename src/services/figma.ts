@@ -84,7 +84,7 @@ export class FigmaService {
         throw new Error(buildRateLimitMessage(error), { cause: error });
       }
       if (meta.http_status === 403) {
-        throw new Error(buildForbiddenMessage(endpoint), { cause: error });
+        throw new Error(buildForbiddenMessage(endpoint, error), { cause: error });
       }
       const errorMessage = error instanceof Error ? error.message : String(error);
       throw new Error(
@@ -344,15 +344,21 @@ export class FigmaService {
  *
  * See https://developers.figma.com/docs/rest-api/rate-limits/
  */
-function buildForbiddenMessage(endpoint: string): string {
-  return [
-    `Figma API returned 403 Forbidden for '${endpoint}'.`,
-    "This usually means one of:",
+function buildForbiddenMessage(endpoint: string, error: unknown): string {
+  const body = (error as HttpError)?.responseBody;
+  const parts = [`Request to Figma API endpoint '${endpoint}' returned 403 Forbidden.`];
+  if (body) {
+    parts.push(`Response body: ${body}`);
+  }
+  parts.push(
+    "This is typically one of:",
     "- The access token doesn't have permission to this file (it must be owned by or explicitly shared with the token's account)",
     "- The file's share settings don't allow viewers to copy/share/export",
     "- For team/org files, the API token may not have access to that team",
+    "- An HTTP intermediary (corporate proxy, firewall, VPN) rejected the request before it reached Figma — check the response body above for clues",
     "Troubleshooting guide: https://www.framelink.ai/docs/troubleshooting#cannot-access-file",
-  ].join("\n");
+  );
+  return parts.join("\n");
 }
 
 function buildRateLimitMessage(error: unknown): string {
