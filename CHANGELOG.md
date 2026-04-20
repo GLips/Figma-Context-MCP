@@ -1,5 +1,17 @@
 # figma-developer-mcp
 
+## [0.11.0](https://github.com/GLips/Figma-Context-MCP/compare/v0.10.1...v0.11.0) (2026-04-20)
+
+
+### Features
+
+* rich text styling ([#351](https://github.com/GLips/Figma-Context-MCP/issues/351)) ([759d0e4](https://github.com/GLips/Figma-Context-MCP/commit/759d0e4f7877677980d9cee18c8f895bee655394))
+
+
+### Bug Fixes
+
+* stop routing all traffic through EnvHttpProxyAgent by default ([#359](https://github.com/GLips/Figma-Context-MCP/issues/359)) ([a22f28f](https://github.com/GLips/Figma-Context-MCP/commit/a22f28f23f9cf5444d509b9d041d3c162e1cefd6))
+
 ## [0.10.1](https://github.com/GLips/Figma-Context-MCP/compare/v0.10.0...v0.10.1) (2026-04-10)
 
 
