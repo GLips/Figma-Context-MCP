@@ -364,8 +364,8 @@ function buildForbiddenMessage(endpoint: string, error: unknown): string {
     parts.push(
       "",
       mode === "explicit"
-        ? "Note: this server is configured to route requests through an explicit proxy (--proxy/FIGMA_PROXY). If the proxy may be the source of the 403, unset it or bypass it for this host."
-        : "Note: this server picked up a proxy from HTTP_PROXY/HTTPS_PROXY in your environment. If the proxy may be the source of the 403, set NO_PROXY=api.figma.com or unset HTTP_PROXY/HTTPS_PROXY.",
+        ? "Note: this server is configured to route requests through an explicit proxy (--proxy/FIGMA_PROXY). If the proxy may be the source of the 403, unset it, change it to --proxy=none, or bypass it for this host."
+        : "Note: this server picked up a proxy from HTTP_PROXY/HTTPS_PROXY in your environment. If the proxy may be the source of the 403, set NO_PROXY=api.figma.com, pass --proxy=none, or unset HTTP_PROXY/HTTPS_PROXY.",
     );
   }
   return parts.join("\n");

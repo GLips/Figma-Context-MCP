@@ -24,7 +24,12 @@ const activeConnections = new Set<ActiveConnection>();
  * Start the MCP server in either stdio or HTTP mode.
  */
 export async function startServer(config: ServerConfig): Promise<void> {
-  if (config.proxy) {
+  if (config.proxy === "none") {
+    // Explicit opt-out: caller wants Node's default dispatcher regardless of
+    // what's in HTTP_PROXY/HTTPS_PROXY. Useful when a system-level proxy is
+    // misbehaving for api.figma.com specifically and the user can't easily
+    // unset it (MCP client config, inherited shell env, etc).
+  } else if (config.proxy) {
     setGlobalDispatcher(new ProxyAgent(config.proxy));
     setProxyMode("explicit");
   } else if (hasProxyEnv()) {
