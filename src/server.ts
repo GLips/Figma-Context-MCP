@@ -5,6 +5,7 @@ import { Server } from "http";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ProxyAgent, EnvHttpProxyAgent, setGlobalDispatcher } from "undici";
 import { Logger } from "./utils/logger.js";
+import { hasProxyEnv } from "./utils/proxy-env.js";
 import { createServer } from "./mcp/index.js";
 import type { ServerConfig } from "./config.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -197,9 +198,4 @@ export async function stopHttpServer(): Promise<void> {
     });
     httpServer!.closeAllConnections();
   });
-}
-
-function hasProxyEnv(): boolean {
-  const names = ["HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY"];
-  return names.some((n) => !!process.env[n] || !!process.env[n.toLowerCase()]);
 }
