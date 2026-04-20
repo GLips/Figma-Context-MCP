@@ -338,19 +338,15 @@ export class FigmaService {
 }
 
 /**
- * Build a user-facing 429 message from the Figma rate-limit response headers.
- * Figma includes plan tier, seat-level limit type, retry-after, and an upgrade
- * link — all of which let us give targeted guidance instead of a generic
- * "try again later."
- *
- * See https://developers.figma.com/docs/rest-api/rate-limits/
+ * Build a user-facing 403 message. Includes the raw response body (redacted +
+ * truncated by fetchJSON) because corporate proxies/firewalls frequently
+ * reject requests with their own 403 HTML before they ever reach Figma, and
+ * that body is the fastest way for a user to recognize "oh, this is Zscaler."
  */
 function buildForbiddenMessage(endpoint: string, error: unknown): string {
-  const body = (error as HttpError)?.responseBody;
+  const body = (error as HttpError).responseBody;
   const parts = [`Request to Figma API endpoint '${endpoint}' returned 403 Forbidden.`];
-  if (body) {
-    parts.push(`Response body: ${body}`);
-  }
+  if (body) parts.push(`Response body: ${body}`);
   parts.push(
     "This is typically one of:",
     "- The access token doesn't have permission to this file (it must be owned by or explicitly shared with the token's account)",
@@ -360,19 +356,30 @@ function buildForbiddenMessage(endpoint: string, error: unknown): string {
     "Troubleshooting guide: https://www.framelink.ai/docs/troubleshooting#cannot-access-file",
   );
   const mode = proxyMode();
-  if (mode !== "none") {
+  if (mode === "explicit") {
     parts.push(
       "",
-      mode === "explicit"
-        ? "Note: this server is configured to route requests through an explicit proxy (--proxy/FIGMA_PROXY). If the proxy may be the source of the 403, unset it, change it to --proxy=none, or bypass it for this host."
-        : "Note: this server picked up a proxy from HTTP_PROXY/HTTPS_PROXY in your environment. If the proxy may be the source of the 403, set NO_PROXY=api.figma.com, pass --proxy=none, or unset HTTP_PROXY/HTTPS_PROXY.",
+      "Note: this server is configured to route requests through an explicit proxy (--proxy/FIGMA_PROXY). If the proxy may be the source of the 403, unset it, change it to --proxy=none, or bypass it for this host.",
+    );
+  } else if (mode === "env") {
+    parts.push(
+      "",
+      "Note: this server picked up a proxy from HTTP_PROXY/HTTPS_PROXY in your environment. If the proxy may be the source of the 403, set NO_PROXY=api.figma.com, pass --proxy=none, or unset HTTP_PROXY/HTTPS_PROXY.",
     );
   }
   return parts.join("\n");
 }
 
+/**
+ * Build a user-facing 429 message from the Figma rate-limit response headers.
+ * Figma includes plan tier, seat-level limit type, retry-after, and an upgrade
+ * link — all of which let us give targeted guidance instead of a generic
+ * "try again later."
+ *
+ * See https://developers.figma.com/docs/rest-api/rate-limits/
+ */
 function buildRateLimitMessage(error: unknown): string {
-  const headers = (error as HttpError)?.responseHeaders ?? {};
+  const headers = (error as HttpError).responseHeaders ?? {};
   const retryAfter = headers["retry-after"];
   const planTier = headers["x-figma-plan-tier"];
   const limitType = headers["x-figma-rate-limit-type"];

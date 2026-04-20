@@ -47,7 +47,7 @@ export async function fetchJSON<T extends { status?: number }>(
   url: string,
   options: RequestOptions = {},
 ): Promise<{ data: T; rawSize: number }> {
-  const { redactFromErrorBody, ...fetchOptions } = options;
+  const { redactFromErrorBody = [], ...fetchOptions } = options;
   try {
     const response = await fetch(url, fetchOptions);
 
@@ -56,7 +56,7 @@ export async function fetchJSON<T extends { status?: number }>(
       response.headers.forEach((value, key) => {
         responseHeaders[key] = value;
       });
-      const responseBody = await readErrorBody(response, redactFromErrorBody);
+      const responseBody = await readErrorBody(response, redactFromErrorBody.filter(Boolean));
       const bodySuffix = responseBody ? `\nResponse body: ${responseBody}` : "";
       const httpError: HttpError = Object.assign(
         new Error(
@@ -108,11 +108,11 @@ function httpStatusCategory(status: number): ErrorCategory {
 
 async function readErrorBody(
   response: Response,
-  redactSecrets: string[] | undefined,
+  redactSecrets: string[],
 ): Promise<string | undefined> {
-  // Body read can fail if the connection is killed mid-response; that's
-  // fine — we'd rather throw the status/headers we already have than mask
-  // the HTTP error with a body-read error.
+  // Body read can fail if the connection is killed mid-response; we'd rather
+  // surface the status/headers we already have than mask it with a body-read
+  // error.
   let text: string;
   try {
     text = await response.text();
@@ -121,13 +121,10 @@ async function readErrorBody(
   }
   if (!text) return undefined;
 
-  // Collapse whitespace so HTML error pages read as one line when surfaced
-  // in an error message.
+  // Collapse whitespace so HTML error pages read as one line in error messages.
   let result = text.replace(/\s+/g, " ").trim();
-  if (redactSecrets) {
-    for (const secret of redactSecrets) {
-      if (secret) result = result.replaceAll(secret, "[REDACTED]");
-    }
+  for (const secret of redactSecrets) {
+    result = result.replaceAll(secret, "[REDACTED]");
   }
   if (result.length > MAX_ERROR_BODY_CHARS) {
     result = result.slice(0, MAX_ERROR_BODY_CHARS) + "… [truncated]";

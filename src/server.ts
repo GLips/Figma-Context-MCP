@@ -24,28 +24,20 @@ const activeConnections = new Set<ActiveConnection>();
  * Start the MCP server in either stdio or HTTP mode.
  */
 export async function startServer(config: ServerConfig): Promise<void> {
-  if (config.proxy === "none") {
-    // Explicit opt-out: caller wants Node's default dispatcher regardless of
-    // what's in HTTP_PROXY/HTTPS_PROXY. Useful when a system-level proxy is
-    // misbehaving for api.figma.com specifically and the user can't easily
-    // unset it (MCP client config, inherited shell env, etc).
-  } else if (config.proxy) {
+  // Three outcomes: explicit proxy URL → ProxyAgent; no proxy but env vars set
+  // → EnvHttpProxyAgent; otherwise Node's default (includes `--proxy=none`,
+  // which lets users opt out of system-level proxy vars misbehaving for
+  // api.figma.com — see issue #358).
+  //
+  // We deliberately do NOT install EnvHttpProxyAgent when no proxy vars are
+  // present, so a stale or incidental var in the user's shell (VPN client,
+  // old dev setup) can't silently route Figma traffic through an intermediary
+  // that may return 403.
+  if (config.proxy && config.proxy !== "none") {
     setGlobalDispatcher(new ProxyAgent(config.proxy));
     setProxyMode("explicit");
-  } else if (hasProxyEnv()) {
-    // EnvHttpProxyAgent automatically respects HTTP_PROXY/HTTPS_PROXY/NO_PROXY
-    // env vars. We only swap Node's default dispatcher when at least one of
-    // these is actually set — otherwise a stale or incidental proxy var in
-    // the user's shell (from a VPN client, old dev setup, etc.) would silently
-    // route Figma API traffic through an intermediary that can return 403.
-    // See issue #358.
-    //
-    // Suppress the UNDICI-EHPA experimental warning — the API is stable
-    // enough for our use case and the warning is noise for end users.
-    const { emitWarning } = process;
-    process.emitWarning = () => {};
+  } else if (!config.proxy && hasProxyEnv()) {
     setGlobalDispatcher(new EnvHttpProxyAgent());
-    process.emitWarning = emitWarning;
     setProxyMode("env");
   }
 
