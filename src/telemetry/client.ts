@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { PostHog } from "posthog-node";
+import { proxyMode, type ProxyMode } from "~/utils/proxy-env.js";
 import type { InitTelemetryOptions } from "./types.js";
 
 // Write-only project key for the Framelink MCP analytics project.
@@ -13,6 +14,16 @@ type CommonProperties = {
   os_platform: NodeJS.Platform;
   nodejs_major: number;
   is_ci: boolean;
+  /**
+   * Which dispatcher the server installed for outbound fetches:
+   * `none` (Node default), `explicit` (--proxy/FIGMA_PROXY), or `env`
+   * (EnvHttpProxyAgent driven by HTTP_PROXY/HTTPS_PROXY/NO_PROXY).
+   *
+   * Lets us correlate failure rates (especially auth-category 403s — see
+   * issue #358) with the proxy configuration a user was actually running
+   * under, without logging the proxy URL itself.
+   */
+  proxy_mode: ProxyMode;
 };
 
 let client: PostHog | undefined;
@@ -72,6 +83,7 @@ export function initTelemetry(opts?: InitTelemetryOptions): boolean {
     os_platform: process.platform,
     nodejs_major: parseNodeMajor(process.versions.node),
     is_ci: Boolean(process.env.CI),
+    proxy_mode: proxyMode(),
   };
 
   // disableGeoip: false is load-bearing — the Node SDK defaults GeoIP to off,

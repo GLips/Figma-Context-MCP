@@ -44,7 +44,8 @@ const argv = cli({
     },
     proxy: {
       type: String,
-      description: "HTTP proxy URL for networks that require a proxy (e.g. http://proxy:8080)",
+      description:
+        "HTTP proxy URL for networks that require a proxy (e.g. http://proxy:8080). Pass 'none' to ignore HTTP_PROXY/HTTPS_PROXY from the environment and connect directly.",
     },
     stdio: {
       type: Boolean,

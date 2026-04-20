@@ -5,6 +5,7 @@ import { Server } from "http";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ProxyAgent, EnvHttpProxyAgent, setGlobalDispatcher } from "undici";
 import { Logger } from "./utils/logger.js";
+import { hasProxyEnv, setProxyMode } from "./utils/proxy-env.js";
 import { createServer } from "./mcp/index.js";
 import type { ServerConfig } from "./config.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -23,17 +24,21 @@ const activeConnections = new Set<ActiveConnection>();
  * Start the MCP server in either stdio or HTTP mode.
  */
 export async function startServer(config: ServerConfig): Promise<void> {
-  if (config.proxy) {
+  // Three outcomes: explicit proxy URL → ProxyAgent; no proxy but env vars set
+  // → EnvHttpProxyAgent; otherwise Node's default (includes `--proxy=none`,
+  // which lets users opt out of system-level proxy vars misbehaving for
+  // api.figma.com — see issue #358).
+  //
+  // We deliberately do NOT install EnvHttpProxyAgent when no proxy vars are
+  // present, so a stale or incidental var in the user's shell (VPN client,
+  // old dev setup) can't silently route Figma traffic through an intermediary
+  // that may return 403.
+  if (config.proxy && config.proxy !== "none") {
     setGlobalDispatcher(new ProxyAgent(config.proxy));
-  } else {
-    // EnvHttpProxyAgent automatically respects HTTP_PROXY/HTTPS_PROXY/NO_PROXY
-    // env vars when present, and falls through to direct connections when absent.
-    // Suppress the UNDICI-EHPA experimental warning — the API is stable
-    // enough for our use case and the warning is noise for end users.
-    const { emitWarning } = process;
-    process.emitWarning = () => {};
+    setProxyMode("explicit");
+  } else if (!config.proxy && hasProxyEnv()) {
     setGlobalDispatcher(new EnvHttpProxyAgent());
-    process.emitWarning = emitWarning;
+    setProxyMode("env");
   }
 
   const telemetryEnabled = telemetry.initTelemetry({
