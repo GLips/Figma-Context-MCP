@@ -64,7 +64,7 @@
     "js-yaml": "^4.1.1",
     "posthog-node": "^5.29.2",
     "remeda": "^2.20.1",
-    "undici": "^6.24.1",
+    "undici": "^7.25.0",
     "zod": "^3.25.76"
   },
   "devDependencies": {
