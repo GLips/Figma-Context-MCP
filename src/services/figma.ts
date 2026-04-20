@@ -76,6 +76,7 @@ export class FigmaService {
 
       return await fetchJSON<T & { status?: number }>(`${this.baseUrl}${endpoint}`, {
         headers,
+        redactFromErrorBody: [this.apiKey, this.oauthToken],
       });
     } catch (error) {
       const meta = getErrorMeta(error);
