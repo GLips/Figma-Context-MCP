@@ -7,10 +7,9 @@ import type {
 } from "@figma/rest-api-spec";
 import { downloadAndProcessImage, type ImageProcessingResult } from "~/utils/image-processing.js";
 import { Logger, writeLogs } from "~/utils/logger.js";
-import { fetchJSON } from "~/utils/fetch-json.js";
+import { fetchJSON, HttpError } from "~/utils/fetch-json.js";
 import { getErrorMeta } from "~/utils/error-meta.js";
 import { proxyMode } from "~/utils/proxy-env.js";
-import type { HttpError } from "~/utils/fetch-json.js";
 
 export type FigmaAuthOptions = {
   figmaApiKey: string;
@@ -77,7 +76,7 @@ export class FigmaService {
 
       return await fetchJSON<T & { status?: number }>(`${this.baseUrl}${endpoint}`, {
         headers,
-        redactFromErrorBody: [this.apiKey, this.oauthToken],
+        redactFromResponseBody: [this.apiKey, this.oauthToken],
       });
     } catch (error) {
       const meta = getErrorMeta(error);
@@ -340,29 +339,36 @@ export class FigmaService {
 /**
  * Build a user-facing 403 message. Figma returns distinct `err` strings for
  * distinct causes (missing PAT scopes, expired OAuth token, un-exportable
- * file, etc.) and each has a different fix. When we have the response body,
- * we surface it verbatim and direct the consuming LLM to act on it — rather
- * than string-matching here (fragile as Figma's wording drifts) or dumping a
- * canned list of guesses (often wrong for the specific case). The generic
- * fallback only runs when the body was unavailable.
+ * file, etc.) and each has a different fix. We surface the response body
+ * verbatim when we have it and list the common causes it could map to —
+ * rather than string-matching here (fragile as Figma's wording drifts) or
+ * dumping only a canned list (which is often generic for the specific case).
+ * Full per-error resolution steps live in the docs so they can be updated
+ * without a release.
  */
 function buildForbiddenMessage(endpoint: string, error: unknown): string {
-  const body = (error as HttpError).responseBody;
+  const body = error instanceof HttpError ? error.responseBody : undefined;
   const parts = [`Request to Figma API endpoint '${endpoint}' returned 403 Forbidden.`];
   if (body) {
+    parts.push(`Response body: ${body}`);
+  }
+  parts.push(
+    "",
+    body
+      ? "Depending on the specific error message above, the issue may be one of the following:"
+      : "The issue is typically one of the following:",
+    "- The access token is missing required scopes (File content: Read, Dev resources: Read)",
+    "- The access token has been revoked, mistyped, or (for OAuth) expired — PATs don't expire, OAuth tokens do",
+    "- The access token doesn't have permission to this specific file — it must be owned by or shared with the token's account, and for team/org files the account must belong to that team",
+    "- The file's share settings don't allow viewers to copy/share/export",
+    "- An HTTP intermediary (corporate proxy, firewall, VPN) rejected the request before it reached Figma",
+    "",
+    "Troubleshooting guide: https://www.framelink.ai/docs/troubleshooting#cannot-access-file",
+  );
+  if (body) {
     parts.push(
-      `Response body: ${body}`,
       "",
-      "Instructions: explain the specific reason from the response body above to the user in plain language and walk them through resolving it. See https://www.framelink.ai/docs/troubleshooting#cannot-access-file for current, per-error resolution steps.",
-    );
-  } else {
-    parts.push(
-      "This is typically one of:",
-      "- The access token doesn't have permission to this file (it must be owned by or explicitly shared with the token's account)",
-      "- The file's share settings don't allow viewers to copy/share/export",
-      "- For team/org files, the API token may not have access to that team",
-      "- An HTTP intermediary (corporate proxy, firewall, VPN) rejected the request before it reached Figma",
-      "Troubleshooting guide: https://www.framelink.ai/docs/troubleshooting#cannot-access-file",
+      "Instructions: explain the specific reason from the response body above to the user in plain language and walk them through resolving it.",
     );
   }
   const mode = proxyMode();
@@ -389,7 +395,7 @@ function buildForbiddenMessage(endpoint: string, error: unknown): string {
  * See https://developers.figma.com/docs/rest-api/rate-limits/
  */
 function buildRateLimitMessage(error: unknown): string {
-  const headers = (error as HttpError).responseHeaders ?? {};
+  const headers = error instanceof HttpError ? error.responseHeaders : {};
   const retryAfter = headers["retry-after"];
   const planTier = headers["x-figma-plan-tier"];
   const limitType = headers["x-figma-rate-limit-type"];

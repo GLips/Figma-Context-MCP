@@ -8,24 +8,37 @@ type RequestOptions = RequestInit & {
    */
   headers?: Record<string, string>;
   /**
-   * Secrets to scrub from the response body attached to thrown HTTP errors.
-   * Defense in depth: api.figma.com never echoes credentials, but HTTP
-   * intermediaries (corporate proxies, MITM filters) sometimes mirror
+   * Secrets to scrub from the response body before it's attached to a thrown
+   * HttpError. Defense in depth: api.figma.com never echoes credentials, but
+   * HTTP intermediaries (corporate proxies, MITM filters) sometimes mirror
    * request metadata into error pages.
    */
-  redactFromErrorBody?: string[];
+  redactFromResponseBody?: string[];
 };
 
 /**
- * Error thrown on HTTP failures. Carries response headers so callers (e.g.
- * figma.ts) can read rate-limit metadata without needing access to the
- * original Response object, plus the (possibly-truncated, redacted) response
- * body so callers can distinguish Figma errors from proxy/intermediary errors.
+ * Error thrown on HTTP failures. Carries the response headers so callers can
+ * read rate-limit metadata without needing the original Response object, plus
+ * the (whitespace-collapsed, secret-redacted, truncated) response body so
+ * callers can distinguish Figma errors from proxy/intermediary errors.
+ *
+ * Modeled as a class rather than a structural Error extension so consumers
+ * get a real `instanceof HttpError` check instead of an unsafe cast.
  */
-export type HttpError = Error & {
-  responseHeaders?: Record<string, string>;
-  responseBody?: string;
-};
+export class HttpError extends Error {
+  readonly responseHeaders: Record<string, string>;
+  readonly responseBody: string | undefined;
+
+  constructor(
+    message: string,
+    opts: { responseHeaders: Record<string, string>; responseBody: string | undefined },
+  ) {
+    super(message);
+    this.name = "HttpError";
+    this.responseHeaders = opts.responseHeaders;
+    this.responseBody = opts.responseBody;
+  }
+}
 
 const CONNECTION_ERROR_CODES = new Set([
   "ECONNRESET",
@@ -39,15 +52,15 @@ const CONNECTION_ERROR_CODES = new Set([
 // server-side failures. 4xx other than 429 are caller errors and not retryable.
 const RETRYABLE_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504]);
 
-// Cap the attached error body. Corp-firewall HTML blocks can be 50KB+;
+// Cap the attached response body. Corp-firewall HTML blocks can be 50KB+;
 // we only need enough to identify the origin ("Blocked by Zscaler", etc.).
-const MAX_ERROR_BODY_CHARS = 500;
+const MAX_RESPONSE_BODY_CHARS = 500;
 
 export async function fetchJSON<T extends { status?: number }>(
   url: string,
   options: RequestOptions = {},
 ): Promise<{ data: T; rawSize: number }> {
-  const { redactFromErrorBody = [], ...fetchOptions } = options;
+  const { redactFromResponseBody = [], ...fetchOptions } = options;
   try {
     const response = await fetch(url, fetchOptions);
 
@@ -56,12 +69,10 @@ export async function fetchJSON<T extends { status?: number }>(
       response.headers.forEach((value, key) => {
         responseHeaders[key] = value;
       });
-      const responseBody = await readErrorBody(response, redactFromErrorBody.filter(Boolean));
+      const responseBody = await readResponseBody(response, redactFromResponseBody.filter(Boolean));
       const bodySuffix = responseBody ? `\nResponse body: ${responseBody}` : "";
-      const httpError: HttpError = Object.assign(
-        new Error(
-          `Fetch failed with status ${response.status}: ${response.statusText}${bodySuffix}`,
-        ),
+      const httpError = new HttpError(
+        `Fetch failed with status ${response.status}: ${response.statusText}${bodySuffix}`,
         { responseHeaders, responseBody },
       );
       tagError(httpError, {
@@ -106,7 +117,7 @@ function httpStatusCategory(status: number): ErrorCategory {
   return "figma_api";
 }
 
-async function readErrorBody(
+async function readResponseBody(
   response: Response,
   redactSecrets: string[],
 ): Promise<string | undefined> {
@@ -126,8 +137,8 @@ async function readErrorBody(
   for (const secret of redactSecrets) {
     result = result.replaceAll(secret, "[REDACTED]");
   }
-  if (result.length > MAX_ERROR_BODY_CHARS) {
-    result = result.slice(0, MAX_ERROR_BODY_CHARS) + "… [truncated]";
+  if (result.length > MAX_RESPONSE_BODY_CHARS) {
+    result = result.slice(0, MAX_RESPONSE_BODY_CHARS) + "… [truncated]";
   }
   return result;
 }
