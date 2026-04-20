@@ -25,9 +25,14 @@ const activeConnections = new Set<ActiveConnection>();
 export async function startServer(config: ServerConfig): Promise<void> {
   if (config.proxy) {
     setGlobalDispatcher(new ProxyAgent(config.proxy));
-  } else {
+  } else if (hasProxyEnv()) {
     // EnvHttpProxyAgent automatically respects HTTP_PROXY/HTTPS_PROXY/NO_PROXY
-    // env vars when present, and falls through to direct connections when absent.
+    // env vars. We only swap Node's default dispatcher when at least one of
+    // these is actually set — otherwise a stale or incidental proxy var in
+    // the user's shell (from a VPN client, old dev setup, etc.) would silently
+    // route Figma API traffic through an intermediary that can return 403.
+    // See issue #358.
+    //
     // Suppress the UNDICI-EHPA experimental warning — the API is stable
     // enough for our use case and the warning is noise for end users.
     const { emitWarning } = process;
@@ -192,4 +197,9 @@ export async function stopHttpServer(): Promise<void> {
     });
     httpServer!.closeAllConnections();
   });
+}
+
+function hasProxyEnv(): boolean {
+  const names = ["HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY"];
+  return names.some((n) => !!process.env[n] || !!process.env[n.toLowerCase()]);
 }
