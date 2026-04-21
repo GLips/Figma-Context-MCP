@@ -48,6 +48,10 @@ export async function fetchJSON<T extends { status?: number }>(
         http_status: response.status,
         category: httpStatusCategory(response.status),
         is_retryable: RETRYABLE_STATUSES.has(response.status),
+        // Template is structurally identifier-free (status code only), so no
+        // file key / node ID can survive even if a future caller reshapes
+        // `error.message` around the same status.
+        safe_message: `Fetch failed with status ${response.status}`,
       });
     }
     // Read as text first so we can measure the raw body size for telemetry,
@@ -67,7 +71,15 @@ export async function fetchJSON<T extends { status?: number }>(
           `to your proxy URL (e.g. http://proxy:8080).`,
         { cause: error },
       );
-      tagError(wrapped, { network_code: networkCode, category: "network", is_retryable: true });
+      tagError(wrapped, {
+        network_code: networkCode,
+        category: "network",
+        is_retryable: true,
+        // Safe template: no URL, no headers — just the syscall-level code that
+        // already lived in `network_code`. Users still see the proxy hint in
+        // `error.message`; telemetry gets the sanitized version.
+        safe_message: `Network connection failed (${networkCode})`,
+      });
     }
     throw error;
   }

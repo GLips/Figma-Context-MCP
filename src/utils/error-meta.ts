@@ -40,6 +40,15 @@ export type ErrorMeta = {
   network_code?: string;
   fs_code?: string;
   is_retryable?: boolean;
+  /**
+   * Identifier-free message template used by telemetry in place of
+   * `error.message`. Producers that know their error string can contain Figma
+   * file keys or node IDs attach a safe template here at throw time, so
+   * telemetry never has to guess at redaction by parsing the final message.
+   * The regex pass in `telemetry/client.ts` remains as a belt-and-braces
+   * fallback for untagged errors.
+   */
+  safe_message?: string;
 };
 
 const META = Symbol.for("framelink.errorMeta");

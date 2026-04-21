@@ -61,7 +61,15 @@ function parseAPIResponse(data: GetFileResponse | GetFileNodesResponse) {
             `It may have been deleted or the link may be outdated. ` +
             `Try copying a fresh link from the Figma file.`,
         ),
-        { category: "not_found" },
+        {
+          category: "not_found",
+          // Tests assert the category+template contract so a future rewording
+          // ("Could not find node X", etc.) cannot silently reopen the leak:
+          // `error.message` can drift freely, `safe_message` is what telemetry
+          // emits and what the regression tests verify.
+          safe_message:
+            "Figma node was not found in the file. It may have been deleted or the link may be outdated.",
+        },
       );
     }
 

@@ -8,7 +8,7 @@ import type {
 import { downloadAndProcessImage, type ImageProcessingResult } from "~/utils/image-processing.js";
 import { Logger, writeLogs } from "~/utils/logger.js";
 import { fetchJSON } from "~/utils/fetch-json.js";
-import { getErrorMeta } from "~/utils/error-meta.js";
+import { getErrorMeta, tagError } from "~/utils/error-meta.js";
 import type { HttpError } from "~/utils/fetch-json.js";
 
 export type FigmaAuthOptions = {
@@ -80,15 +80,29 @@ export class FigmaService {
     } catch (error) {
       const meta = getErrorMeta(error);
       if (meta.http_status === 429) {
-        throw new Error(buildRateLimitMessage(error), { cause: error });
+        // Rate-limit wrap. User-facing message preserves the actionable
+        // response-header guidance; telemetry receives an endpoint-free
+        // template so file keys can't leak via `error_message`.
+        tagError(new Error(buildRateLimitMessage(error), { cause: error }), {
+          safe_message: "Figma API rate limit hit (429)",
+        });
       }
       if (meta.http_status === 403) {
-        throw new Error(buildForbiddenMessage(endpoint), { cause: error });
+        // 403 wrap. Same split as 429: user still sees the endpoint in the
+        // thrown message for debugging, but telemetry only ever sees the
+        // templated form.
+        tagError(new Error(buildForbiddenMessage(endpoint), { cause: error }), {
+          safe_message: "Figma API returned 403 Forbidden for a Figma endpoint",
+        });
       }
       const errorMessage = error instanceof Error ? error.message : String(error);
-      throw new Error(
-        `Failed to make request to Figma API endpoint '${endpoint}': ${errorMessage}`,
-        { cause: error },
+      tagError(
+        new Error(`Failed to make request to Figma API endpoint '${endpoint}': ${errorMessage}`, {
+          cause: error,
+        }),
+        {
+          safe_message: "Failed to make request to Figma API endpoint",
+        },
       );
     }
   }

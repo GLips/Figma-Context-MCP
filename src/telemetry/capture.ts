@@ -32,10 +32,15 @@ function errorFields(
   if (error === undefined) return { is_error: false };
   const meta = getErrorMeta(error);
   const rawMessage = error instanceof Error ? error.message : String(error);
+  // Prefer the structured safe-message template producers attach at throw
+  // time. The regex pass in `client.ts` still runs as a belt-and-braces
+  // fallback for any error path that forgets to tag one (or that we don't
+  // own, e.g. third-party libraries).
+  const errorMessage = meta.safe_message ?? rawMessage;
   return {
     is_error: true,
     error_type: error instanceof Error ? error.constructor.name : "Unknown",
-    error_message: rawMessage,
+    error_message: errorMessage,
     error_phase: meta.phase,
     error_category: meta.category,
     http_status: meta.http_status,
