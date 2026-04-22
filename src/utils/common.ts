@@ -1,5 +1,6 @@
 import fs from "fs";
 import path from "path";
+import { tagError } from "~/utils/error-meta.js";
 
 export type StyleId = `${string}_${string}` & { __brand: "StyleId" };
 
@@ -22,8 +23,14 @@ export async function downloadFigmaImage(
       fs.mkdirSync(localPath, { recursive: true });
     }
 
-    // Build the complete file path
-    const fullPath = path.join(localPath, fileName);
+    // Build the complete file path and verify it stays within localPath
+    const fullPath = path.resolve(path.join(localPath, fileName));
+    const resolvedLocalPath = path.resolve(localPath);
+    if (!fullPath.startsWith(resolvedLocalPath + path.sep)) {
+      tagError(new Error(`File path escapes target directory: ${fileName}`), {
+        category: "invalid_input",
+      });
+    }
 
     // Use fetch to download the image
     const response = await fetch(imageUrl, {
@@ -31,7 +38,9 @@ export async function downloadFigmaImage(
     });
 
     if (!response.ok) {
-      throw new Error(`Failed to download image: ${response.statusText}`);
+      tagError(new Error(`Failed to download image: ${response.statusText}`), {
+        category: "image_download",
+      });
     }
 
     // Create write stream
@@ -40,7 +49,7 @@ export async function downloadFigmaImage(
     // Get the response as a readable stream and pipe it to the file
     const reader = response.body?.getReader();
     if (!reader) {
-      throw new Error("Failed to get response body");
+      tagError(new Error("Failed to get response body"), { category: "image_download" });
     }
 
     return new Promise((resolve, reject) => {
@@ -77,7 +86,7 @@ export async function downloadFigmaImage(
     });
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
-    throw new Error(`Error downloading image: ${errorMessage}`);
+    throw new Error(`Error downloading image: ${errorMessage}`, { cause: error });
   }
 }
 
@@ -213,4 +222,23 @@ export function pixelRound(num: number): number {
     throw new TypeError(`Input must be a valid number`);
   }
   return Number(Number(num).toFixed(2));
+}
+
+/**
+ * Serialize a value to JSON with sorted object keys so two equal-but-
+ * differently-ordered objects produce the same string. Used for cache keys
+ * and deep-equality checks where property order isn't a stable guarantee
+ * (e.g. partial TypeStyle entries from Figma's styleOverrideTable).
+ */
+export function stableStringify(value: unknown): string {
+  return JSON.stringify(value, (_key, v) => {
+    if (v && typeof v === "object" && !Array.isArray(v)) {
+      const sorted: Record<string, unknown> = {};
+      for (const k of Object.keys(v as Record<string, unknown>).sort()) {
+        sorted[k] = (v as Record<string, unknown>)[k];
+      }
+      return sorted;
+    }
+    return v;
+  });
 }

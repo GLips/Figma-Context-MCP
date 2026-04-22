@@ -1,6 +1,11 @@
-import fs from "fs";
-import sharp from "sharp";
+import { createJimp } from "@jimp/core";
+import png from "@jimp/js-png";
+import jpeg from "@jimp/js-jpeg";
+import gif from "@jimp/js-gif";
+import * as crop from "@jimp/plugin-crop";
 import type { Transform } from "@figma/rest-api-spec";
+
+const Jimp = createJimp({ formats: [png, jpeg, gif], plugins: [crop.methods] });
 
 /**
  * Apply crop transform to an image based on Figma's transformation matrix
@@ -21,15 +26,8 @@ export async function applyCropTransform(
     const scaleY = cropTransform[1]?.[1] ?? 1;
     const translateY = cropTransform[1]?.[2] ?? 0;
 
-    // Load the image and get metadata
-    const image = sharp(imagePath);
-    const metadata = await image.metadata();
-
-    if (!metadata.width || !metadata.height) {
-      throw new Error(`Could not get image dimensions for ${imagePath}`);
-    }
-
-    const { width, height } = metadata;
+    const image = await Jimp.read(imagePath);
+    const { width, height } = image;
 
     // Calculate crop region based on transform matrix
     // Figma's transform matrix represents how the image is positioned within its container
@@ -44,27 +42,13 @@ export async function applyCropTransform(
     const cropWidth = Math.min(width - cropLeft, Math.round(scaleX * width));
     const cropHeight = Math.min(height - cropTop, Math.round(scaleY * height));
 
-    // Validate crop dimensions
     if (cropWidth <= 0 || cropHeight <= 0) {
       Logger.log(`Invalid crop dimensions for ${imagePath}, using original image`);
       return imagePath;
     }
 
-    // Overwrite the original file with the cropped version
-    const tempPath = imagePath + ".tmp";
-
-    // Apply crop transformation to temporary file first
-    await image
-      .extract({
-        left: cropLeft,
-        top: cropTop,
-        width: cropWidth,
-        height: cropHeight,
-      })
-      .toFile(tempPath);
-
-    // Replace original file with cropped version
-    fs.renameSync(tempPath, imagePath);
+    image.crop({ x: cropLeft, y: cropTop, w: cropWidth, h: cropHeight });
+    await image.write(imagePath as `${string}.${string}`);
 
     Logger.log(`Cropped image saved (overwritten): ${imagePath}`);
     Logger.log(
@@ -74,7 +58,6 @@ export async function applyCropTransform(
     return imagePath;
   } catch (error) {
     Logger.error(`Error cropping image ${imagePath}:`, error);
-    // Return original path if cropping fails
     return imagePath;
   }
 }
@@ -88,24 +71,8 @@ export async function getImageDimensions(imagePath: string): Promise<{
   width: number;
   height: number;
 }> {
-  const { Logger } = await import("./logger.js");
-
-  try {
-    const metadata = await sharp(imagePath).metadata();
-
-    if (!metadata.width || !metadata.height) {
-      throw new Error(`Could not get image dimensions for ${imagePath}`);
-    }
-
-    return {
-      width: metadata.width,
-      height: metadata.height,
-    };
-  } catch (error) {
-    Logger.error(`Error getting image dimensions for ${imagePath}:`, error);
-    // Return default dimensions if reading fails
-    return { width: 1000, height: 1000 };
-  }
+  const image = await Jimp.read(imagePath);
+  return { width: image.width, height: image.height };
 }
 
 export type ImageProcessingResult = {
@@ -144,6 +111,18 @@ export async function downloadAndProcessImage(
   const originalPath = await downloadFigmaImage(fileName, localPath, imageUrl);
   Logger.log(`Downloaded original image: ${originalPath}`);
 
+  // SVGs are vector — jimp can't read them and cropping/dimensions don't apply
+  const isSvg = fileName.toLowerCase().endsWith(".svg");
+  if (isSvg) {
+    return {
+      filePath: originalPath,
+      originalDimensions: { width: 0, height: 0 },
+      finalDimensions: { width: 0, height: 0 },
+      wasCropped: false,
+      processingLog,
+    };
+  }
+
   // Get original dimensions before any processing
   const originalDimensions = await getImageDimensions(originalPath);
   Logger.log(`Original dimensions: ${originalDimensions.width}x${originalDimensions.height}`);
@@ -152,8 +131,8 @@ export async function downloadAndProcessImage(
   let wasCropped = false;
   let cropRegion: { left: number; top: number; width: number; height: number } | undefined;
 
-  // Apply crop transform if needed
-  if (needsCropping && cropTransform) {
+  // Apply crop transform if needed (skip for GIFs — cropping destroys animation frames)
+  if (needsCropping && cropTransform && !fileName.toLowerCase().endsWith(".gif")) {
     Logger.log("Applying crop transform...");
 
     // Extract crop region info before applying transform

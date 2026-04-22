@@ -49,11 +49,10 @@ PRs are squash-merged, so the PR title becomes the commit message that release-p
 
 ### Transport Modes
 
-The server supports three transports (all configured in `src/server.ts`):
+The server supports two transports (configured in `src/server.ts`):
 
 - **stdio** — For direct MCP client integration (activated with `--stdio` flag or `NODE_ENV=cli`)
-- **StreamableHTTP** — Modern HTTP transport at `/mcp`
-- **SSE** — Legacy HTTP transport at `/sse` + `/messages`
+- **StreamableHTTP** — Stateless HTTP transport at `/mcp` (also served at `/sse` for backward compatibility with existing client configs)
 
 ### Core Data Flow
 

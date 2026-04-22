@@ -1,18 +1,102 @@
 # figma-developer-mcp
 
-## [0.6.6](https://github.com/GLips/Figma-Context-MCP/compare/v0.6.5...v0.6.6) (2026-03-04)
+## [0.11.0](https://github.com/GLips/Figma-Context-MCP/compare/v0.10.1...v0.11.0) (2026-04-20)
 
+### Features
+
+- rich text styling ([#351](https://github.com/GLips/Figma-Context-MCP/issues/351)) ([759d0e4](https://github.com/GLips/Figma-Context-MCP/commit/759d0e4f7877677980d9cee18c8f895bee655394))
 
 ### Bug Fixes
 
-* use Node 24 in release workflow for npm OIDC support ([11ba7c6](https://github.com/GLips/Figma-Context-MCP/commit/11ba7c6a2e22910c483592ba7cdc1966fcdc9166))
+- stop routing all traffic through EnvHttpProxyAgent by default ([#359](https://github.com/GLips/Figma-Context-MCP/issues/359)) ([a22f28f](https://github.com/GLips/Figma-Context-MCP/commit/a22f28f23f9cf5444d509b9d041d3c162e1cefd6))
+
+## [0.10.1](https://github.com/GLips/Figma-Context-MCP/compare/v0.10.0...v0.10.1) (2026-04-10)
+
+### Bug Fixes
+
+- add actionable 403 error message with troubleshooting link ([9230bd0](https://github.com/GLips/Figma-Context-MCP/commit/9230bd02a63085d88ca5d3687275f2cba9557309))
+- throw actionable error for missing nodes, add error_category to telemetry ([#344](https://github.com/GLips/Figma-Context-MCP/issues/344)) ([334ae2b](https://github.com/GLips/Figma-Context-MCP/commit/334ae2bbecbd3583922098787877448337acf6cb))
+
+## [0.10.0](https://github.com/GLips/Figma-Context-MCP/compare/v0.9.0...v0.10.0) (2026-04-10)
+
+### Features
+
+- add anonymous PostHog telemetry ([#342](https://github.com/GLips/Figma-Context-MCP/issues/342)) ([6c0666a](https://github.com/GLips/Figma-Context-MCP/commit/6c0666a7c96e62b39f730a96d24eacb8f3a35cf6))
+
+## [0.9.0](https://github.com/GLips/Figma-Context-MCP/compare/v0.8.1...v0.9.0) (2026-04-09)
+
+### Features
+
+- add component property support (BOOLEAN & TEXT) ([#340](https://github.com/GLips/Figma-Context-MCP/issues/340)) ([b0f9efc](https://github.com/GLips/Figma-Context-MCP/commit/b0f9efcc0680012eac4a760ec6826a7605b38fb6))
+- add proxy support for managed networks ([#338](https://github.com/GLips/Figma-Context-MCP/issues/338)) ([32d5779](https://github.com/GLips/Figma-Context-MCP/commit/32d57790317e57a35dfc8df0de4c6ac830268b31))
+- add support for using as a CLI via `fetch` subcommand to retrieve design data directly ([#331](https://github.com/GLips/Figma-Context-MCP/issues/331)) ([dd237c8](https://github.com/GLips/Figma-Context-MCP/commit/dd237c8e87565cee42d706b8f374fc4bc411066b))
+
+### Bug Fixes
+
+- **layout:** suppress computed gap values when using SPACE_BETWEEN ([#341](https://github.com/GLips/Figma-Context-MCP/issues/341)) ([309c60e](https://github.com/GLips/Figma-Context-MCP/commit/309c60e6d59eb2fb8fdc0acc85dd81b1644b1f12)), closes [#169](https://github.com/GLips/Figma-Context-MCP/issues/169)
+
+## [0.8.1](https://github.com/GLips/Figma-Context-MCP/compare/v0.8.0...v0.8.1) (2026-04-07)
+
+### Bug Fixes
+
+- disambiguate named styles with duplicate names ([#319](https://github.com/GLips/Figma-Context-MCP/issues/319)) ([a077ace](https://github.com/GLips/Figma-Context-MCP/commit/a077ace9809bf6b14c4e4a9906065fb3cea2d24f))
+- include BOOLEAN_OPERATION in SVG container collapse ([354679e](https://github.com/GLips/Figma-Context-MCP/commit/354679eab17389c551a435ca7c5224a250446301))
+- include BOOLEAN_OPERATION in SVG container collapse ([19c50b3](https://github.com/GLips/Figma-Context-MCP/commit/19c50b3ad3ecf12ce4b4bedc0aefff718b3b89f9))
+- replace jimp with selective @jimp/\* imports to fix ESM crash ([#333](https://github.com/GLips/Figma-Context-MCP/issues/333)) ([dd47ebf](https://github.com/GLips/Figma-Context-MCP/commit/dd47ebf82520c6147b913415db99c3b4caaa40b2)), closes [#329](https://github.com/GLips/Figma-Context-MCP/issues/329)
+
+## [0.8.0](https://github.com/GLips/Figma-Context-MCP/compare/v0.7.1...v0.8.0) (2026-03-24)
+
+### ⚠ BREAKING CHANGES
+
+- switch to stateless HTTP transport ([#304](https://github.com/GLips/Figma-Context-MCP/issues/304))
+
+### Features
+
+- add progress notifications and async tree walker ([#305](https://github.com/GLips/Figma-Context-MCP/issues/305)) ([b5724ad](https://github.com/GLips/Figma-Context-MCP/commit/b5724ade8234e73fe94467c6bfad5e020552f0e2))
+
+### Performance Improvements
+
+- fix O(n²) bottlenecks in simplification and YAML serialization ([#307](https://github.com/GLips/Figma-Context-MCP/issues/307)) ([29cff0c](https://github.com/GLips/Figma-Context-MCP/commit/29cff0cbd6d2fd0459900e9c3cbc49f64e47075d))
+
+### Code Refactoring
+
+- switch to stateless HTTP transport ([#304](https://github.com/GLips/Figma-Context-MCP/issues/304)) ([9dfb1cb](https://github.com/GLips/Figma-Context-MCP/commit/9dfb1cb65a081655d7dca5f076ab76f5d7e9edc0))
+
+## [0.7.1](https://github.com/GLips/Figma-Context-MCP/compare/v0.7.0...v0.7.1) (2026-03-20)
+
+### Bug Fixes
+
+- handle drive root paths in image directory security check ([#301](https://github.com/GLips/Figma-Context-MCP/issues/301)) ([9f32616](https://github.com/GLips/Figma-Context-MCP/commit/9f32616caa29b1dbdd5c5a9dcfafa3dd717070a3))
+
+## [0.7.0](https://github.com/GLips/Figma-Context-MCP/compare/v0.6.6...v0.7.0) (2026-03-19)
+
+### ⚠ BREAKING CHANGES
+
+- getServerConfig() no longer takes an isStdioMode parameter. It now detects stdio mode internally and returns it as part of ServerConfig.
+
+### Features
+
+- add --image-dir config for image download path control ([#297](https://github.com/GLips/Figma-Context-MCP/issues/297)) ([0417766](https://github.com/GLips/Figma-Context-MCP/commit/0417766eb5fc1e0b76e55da497961f9aee2f62f7))
+- replace yargs with cleye for CLI flag parsing ([#285](https://github.com/GLips/Figma-Context-MCP/issues/285)) ([0092ee7](https://github.com/GLips/Figma-Context-MCP/commit/0092ee789fce01b9ef1dab5e8f32c52e71107dbb))
+- support gifRef for downloading animated GIF embeds ([#286](https://github.com/GLips/Figma-Context-MCP/issues/286)) ([f1ec913](https://github.com/GLips/Figma-Context-MCP/commit/f1ec9133c31a351b55651126c20ea2f842c0a9ee))
+
+### Bug Fixes
+
+- remove inline release-type so release-please reads config file ([a03cd68](https://github.com/GLips/Figma-Context-MCP/commit/a03cd68826da1c1596273a223a612eb919832397))
+- replace sharp dependency with js-native jimp for image manipulation ([#289](https://github.com/GLips/Figma-Context-MCP/issues/289)) ([62b9f94](https://github.com/GLips/Figma-Context-MCP/commit/62b9f94b1607dd08daeaa90e8ace0a896fe6eb50))
+- skip jimp processing for SVGs and prevent image-fill collapse ([#298](https://github.com/GLips/Figma-Context-MCP/issues/298)) ([a4a4b13](https://github.com/GLips/Figma-Context-MCP/commit/a4a4b13ec7cae5d603022b1c8719cc717749195b))
+
+## [0.6.6](https://github.com/GLips/Figma-Context-MCP/compare/v0.6.5...v0.6.6) (2026-03-04)
+
+### Bug Fixes
+
+- use Node 24 in release workflow for npm OIDC support ([11ba7c6](https://github.com/GLips/Figma-Context-MCP/commit/11ba7c6a2e22910c483592ba7cdc1966fcdc9166))
 
 ## [0.6.5](https://github.com/GLips/Figma-Context-MCP/compare/v0.6.4...v0.6.5) (2026-03-04)
 
-
 ### Bug Fixes
 
-* upgrade MCP SDK to 1.27.1 and modernize tool registration ([#282](https://github.com/GLips/Figma-Context-MCP/issues/282)) ([4153e5f](https://github.com/GLips/Figma-Context-MCP/commit/4153e5f857aa708ee9ee10156e553c1289f03cf7))
+- upgrade MCP SDK to 1.27.1 and modernize tool registration ([#282](https://github.com/GLips/Figma-Context-MCP/issues/282)) ([4153e5f](https://github.com/GLips/Figma-Context-MCP/commit/4153e5f857aa708ee9ee10156e553c1289f03cf7))
 
 ## 0.6.4
 

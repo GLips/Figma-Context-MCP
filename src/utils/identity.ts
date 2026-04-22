@@ -20,6 +20,9 @@ export function hasValue<K extends PropertyKey, T>(
   return typeGuard ? typeGuard(val) : val !== undefined;
 }
 
+// Checks for frame *traits*, not node type. Many node types (FRAME, COMPONENT,
+// INSTANCE, SECTION, etc.) carry frame properties. Structural checking via
+// `clipsContent` covers all of them without maintaining a type-string list.
 export function isFrame(val: unknown): val is HasFramePropertiesTrait {
   return (
     typeof val === "object" &&

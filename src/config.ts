@@ -1,43 +1,43 @@
 import { config as loadEnv } from "dotenv";
-import yargs from "yargs";
-import { hideBin } from "yargs/helpers";
 import os from "os";
-import { isAbsolute, join, resolve } from "path";
+import { isAbsolute, join, resolve as resolvePath } from "path";
 import type { FigmaAuthOptions } from "./services/figma.js";
 import type { FigmaCachingOptions } from "./services/figma-file-cache.js";
+import { resolveTelemetryEnabled } from "./telemetry/index.js";
 
-interface ServerConfig {
-  auth: FigmaAuthOptions;
-  port: number;
-  host: string;
-  outputFormat: "yaml" | "json";
-  skipImageDownloads?: boolean;
-  caching?: FigmaCachingOptions;
-  configSources: {
-    figmaApiKey: "cli" | "env";
-    figmaOAuthToken: "cli" | "env" | "none";
-    port: "cli" | "env" | "default";
-    host: "cli" | "env" | "default";
-    outputFormat: "cli" | "env" | "default";
-    envFile: "cli" | "default";
-    skipImageDownloads?: "cli" | "env" | "default";
-    caching?: "env";
-  };
+export type Source = "cli" | "env" | "default";
+
+export interface Resolved<T> {
+  value: T;
+  source: Source;
 }
 
-function maskApiKey(key: string): string {
-  if (!key || key.length <= 4) return "****";
-  return `****${key.slice(-4)}`;
-}
-
-interface CliArgs {
-  "figma-api-key"?: string;
-  "figma-oauth-token"?: string;
+export interface ServerFlags {
+  figmaApiKey?: string;
+  figmaOauthToken?: string;
   env?: string;
   port?: number;
   host?: string;
   json?: boolean;
-  "skip-image-downloads"?: boolean;
+  skipImageDownloads?: boolean;
+  imageDir?: string;
+  proxy?: string;
+  stdio?: boolean;
+  noTelemetry?: boolean;
+}
+
+export interface ServerConfig {
+  auth: FigmaAuthOptions;
+  port: number;
+  host: string;
+  proxy: string | undefined;
+  outputFormat: "yaml" | "json";
+  skipImageDownloads: boolean;
+  imageDir: string;
+  isStdioMode: boolean;
+  noTelemetry: boolean;
+  caching?: FigmaCachingOptions;
+  configSources: Record<string, Source>;
 }
 
 type DurationUnit = "ms" | "s" | "m" | "h" | "d";
@@ -50,151 +50,57 @@ const DURATION_IN_MS: Record<DurationUnit, number> = {
   d: 24 * 60 * 60 * 1000,
 };
 
-export function getServerConfig(isStdioMode: boolean): ServerConfig {
-  // Parse command line arguments
-  const argv = yargs(hideBin(process.argv))
-    .options({
-      "figma-api-key": {
-        type: "string",
-        description: "Figma API key (Personal Access Token)",
-      },
-      "figma-oauth-token": {
-        type: "string",
-        description: "Figma OAuth Bearer token",
-      },
-      env: {
-        type: "string",
-        description: "Path to custom .env file to load environment variables from",
-      },
-      port: {
-        type: "number",
-        description: "Port to run the server on",
-      },
-      host: {
-        type: "string",
-        description: "Host to run the server on",
-      },
-      json: {
-        type: "boolean",
-        description: "Output data from tools in JSON format instead of YAML",
-        default: false,
-      },
-      "skip-image-downloads": {
-        type: "boolean",
-        description: "Do not register the download_figma_images tool (skip image downloads)",
-        default: false,
-      },
-    })
-    .help()
-    .version(process.env.NPM_PACKAGE_VERSION ?? "unknown")
-    .parseSync() as CliArgs;
+/** Resolve a config value through the priority chain: CLI flag -> env var -> default. */
+export function resolve<T>(flag: T | undefined, env: T | undefined, fallback: T): Resolved<T> {
+  if (flag !== undefined) return { value: flag, source: "cli" };
+  if (env !== undefined) return { value: env, source: "env" };
+  return { value: fallback, source: "default" };
+}
 
-  // Load environment variables ASAP from custom path or default
-  let envFilePath: string;
-  let envFileSource: "cli" | "default";
+export function envStr(name: string): string | undefined {
+  return process.env[name] || undefined;
+}
 
-  if (argv["env"]) {
-    envFilePath = resolve(argv["env"]);
-    envFileSource = "cli";
-  } else {
-    envFilePath = resolve(process.cwd(), ".env");
-    envFileSource = "default";
+export function envInt(...names: string[]): number | undefined {
+  for (const name of names) {
+    const val = process.env[name];
+    if (val) return parseInt(val, 10);
   }
+  return undefined;
+}
 
-  // Override anything auto-loaded from .env if a custom file is provided.
+export function envBool(name: string): boolean | undefined {
+  const val = process.env[name];
+  if (val === "true") return true;
+  if (val === "false") return false;
+  return undefined;
+}
+
+function maskApiKey(key: string): string {
+  if (!key || key.length <= 4) return "****";
+  return `****${key.slice(-4)}`;
+}
+
+export function loadEnvFile(envPath?: string): string {
+  const envFilePath = envPath ? resolvePath(envPath) : resolvePath(process.cwd(), ".env");
   loadEnv({ path: envFilePath, override: true });
+  return envFilePath;
+}
 
+export function resolveAuth(flags: {
+  figmaApiKey?: string;
+  figmaOauthToken?: string;
+}): FigmaAuthOptions {
+  const figmaApiKey = resolve(flags.figmaApiKey, envStr("FIGMA_API_KEY"), "");
+  const figmaOauthToken = resolve(flags.figmaOauthToken, envStr("FIGMA_OAUTH_TOKEN"), "");
+
+  const useOAuth = Boolean(figmaOauthToken.value);
   const auth: FigmaAuthOptions = {
-    figmaApiKey: "",
-    figmaOAuthToken: "",
-    useOAuth: false,
+    figmaApiKey: figmaApiKey.value,
+    figmaOAuthToken: figmaOauthToken.value,
+    useOAuth,
   };
 
-  const config: Omit<ServerConfig, "auth"> = {
-    port: 3333,
-    host: "127.0.0.1",
-    outputFormat: "yaml",
-    skipImageDownloads: false,
-    caching: undefined,
-    configSources: {
-      figmaApiKey: "env",
-      figmaOAuthToken: "none",
-      port: "default",
-      host: "default",
-      outputFormat: "default",
-      envFile: envFileSource,
-      skipImageDownloads: "default",
-      caching: undefined,
-    },
-  };
-
-  // Handle FIGMA_API_KEY
-  if (argv["figma-api-key"]) {
-    auth.figmaApiKey = argv["figma-api-key"];
-    config.configSources.figmaApiKey = "cli";
-  } else if (process.env.FIGMA_API_KEY) {
-    auth.figmaApiKey = process.env.FIGMA_API_KEY;
-    config.configSources.figmaApiKey = "env";
-  }
-
-  // Handle FIGMA_OAUTH_TOKEN
-  if (argv["figma-oauth-token"]) {
-    auth.figmaOAuthToken = argv["figma-oauth-token"];
-    config.configSources.figmaOAuthToken = "cli";
-    auth.useOAuth = true;
-  } else if (process.env.FIGMA_OAUTH_TOKEN) {
-    auth.figmaOAuthToken = process.env.FIGMA_OAUTH_TOKEN;
-    config.configSources.figmaOAuthToken = "env";
-    auth.useOAuth = true;
-  }
-
-  // Handle PORT (FRAMELINK_PORT takes precedence, PORT is fallback for backwards compatibility)
-  if (argv.port) {
-    config.port = argv.port;
-    config.configSources.port = "cli";
-  } else if (process.env.FRAMELINK_PORT) {
-    config.port = parseInt(process.env.FRAMELINK_PORT, 10);
-    config.configSources.port = "env";
-  } else if (process.env.PORT) {
-    config.port = parseInt(process.env.PORT, 10);
-    config.configSources.port = "env";
-  }
-
-  // Handle HOST
-  if (argv.host) {
-    config.host = argv.host;
-    config.configSources.host = "cli";
-  } else if (process.env.FRAMELINK_HOST) {
-    config.host = process.env.FRAMELINK_HOST;
-    config.configSources.host = "env";
-  }
-
-  // Handle JSON output format
-  if (argv.json) {
-    config.outputFormat = "json";
-    config.configSources.outputFormat = "cli";
-  } else if (process.env.OUTPUT_FORMAT) {
-    config.outputFormat = process.env.OUTPUT_FORMAT as "yaml" | "json";
-    config.configSources.outputFormat = "env";
-  }
-
-  // Handle skipImageDownloads
-  if (argv["skip-image-downloads"]) {
-    config.skipImageDownloads = true;
-    config.configSources.skipImageDownloads = "cli";
-  } else if (process.env.SKIP_IMAGE_DOWNLOADS === "true") {
-    config.skipImageDownloads = true;
-    config.configSources.skipImageDownloads = "env";
-  }
-
-  // Handle FIGMA_CACHING
-  const cachingConfig = parseCachingConfig(process.env.FIGMA_CACHING);
-  if (cachingConfig) {
-    config.caching = cachingConfig;
-    config.configSources.caching = "env";
-  }
-
-  // Validate configuration
   if (!auth.figmaApiKey && !auth.figmaOAuthToken) {
     console.error(
       "Either FIGMA_API_KEY or FIGMA_OAUTH_TOKEN is required (via CLI argument or .env file)",
@@ -202,38 +108,109 @@ export function getServerConfig(isStdioMode: boolean): ServerConfig {
     process.exit(1);
   }
 
-  // Log configuration sources
+  return auth;
+}
+
+export function getServerConfig(flags: ServerFlags): ServerConfig {
+  const envFilePath = loadEnvFile(flags.env);
+  const envFileSource: Source = flags.env !== undefined ? "cli" : "default";
+
+  const auth = resolveAuth(flags);
+
+  const figmaApiKey = resolve(flags.figmaApiKey, envStr("FIGMA_API_KEY"), "");
+  const figmaOauthToken = resolve(flags.figmaOauthToken, envStr("FIGMA_OAUTH_TOKEN"), "");
+  const port = resolve(flags.port, envInt("FRAMELINK_PORT", "PORT"), 3333);
+  const host = resolve(flags.host, envStr("FRAMELINK_HOST"), "127.0.0.1");
+  const skipImageDownloads = resolve(
+    flags.skipImageDownloads,
+    envBool("SKIP_IMAGE_DOWNLOADS"),
+    false,
+  );
+  const envImageDir = envStr("IMAGE_DIR");
+  const imageDir = resolve(
+    flags.imageDir ? resolvePath(flags.imageDir) : undefined,
+    envImageDir ? resolvePath(envImageDir) : undefined,
+    process.cwd(),
+  );
+  const proxy = resolve(flags.proxy, envStr("FIGMA_PROXY"), undefined);
+  const outputFormat = resolve<"yaml" | "json">(
+    flags.json ? "json" : undefined,
+    envStr("OUTPUT_FORMAT") as "yaml" | "json" | undefined,
+    "yaml",
+  );
+  const caching = resolve<FigmaCachingOptions | undefined>(
+    undefined,
+    parseCachingConfig(process.env.FIGMA_CACHING),
+    undefined,
+  );
+
+  const isStdioMode = flags.stdio === true;
+  const noTelemetry = flags.noTelemetry ?? false;
+  const telemetrySource: Source =
+    flags.noTelemetry === true
+      ? "cli"
+      : process.env.FRAMELINK_TELEMETRY !== undefined || process.env.DO_NOT_TRACK !== undefined
+        ? "env"
+        : "default";
+
+  const configSources: Record<string, Source> = {
+    envFile: envFileSource,
+    figmaApiKey: figmaApiKey.source,
+    figmaOauthToken: figmaOauthToken.source,
+    port: port.source,
+    host: host.source,
+    proxy: proxy.source,
+    outputFormat: outputFormat.source,
+    skipImageDownloads: skipImageDownloads.source,
+    imageDir: imageDir.source,
+    telemetry: telemetrySource,
+    caching: caching.source,
+  };
+
   if (!isStdioMode) {
     console.log("\nConfiguration:");
-    console.log(`- ENV_FILE: ${envFilePath} (source: ${config.configSources.envFile})`);
+    console.log(`- ENV_FILE: ${envFilePath} (source: ${configSources.envFile})`);
     if (auth.useOAuth) {
       console.log(
-        `- FIGMA_OAUTH_TOKEN: ${maskApiKey(auth.figmaOAuthToken)} (source: ${config.configSources.figmaOAuthToken})`,
+        `- FIGMA_OAUTH_TOKEN: ${maskApiKey(auth.figmaOAuthToken)} (source: ${configSources.figmaOauthToken})`,
       );
       console.log("- Authentication Method: OAuth Bearer Token");
     } else {
       console.log(
-        `- FIGMA_API_KEY: ${maskApiKey(auth.figmaApiKey)} (source: ${config.configSources.figmaApiKey})`,
+        `- FIGMA_API_KEY: ${maskApiKey(auth.figmaApiKey)} (source: ${configSources.figmaApiKey})`,
       );
       console.log("- Authentication Method: Personal Access Token (X-Figma-Token)");
     }
-    console.log(`- FRAMELINK_PORT: ${config.port} (source: ${config.configSources.port})`);
-    console.log(`- FRAMELINK_HOST: ${config.host} (source: ${config.configSources.host})`);
+    console.log(`- FRAMELINK_PORT: ${port.value} (source: ${configSources.port})`);
+    console.log(`- FRAMELINK_HOST: ${host.value} (source: ${configSources.host})`);
+    console.log(`- PROXY: ${proxy.value ? "configured" : "none"} (source: ${configSources.proxy})`);
+    console.log(`- OUTPUT_FORMAT: ${outputFormat.value} (source: ${configSources.outputFormat})`);
     console.log(
-      `- OUTPUT_FORMAT: ${config.outputFormat} (source: ${config.configSources.outputFormat})`,
+      `- SKIP_IMAGE_DOWNLOADS: ${skipImageDownloads.value} (source: ${configSources.skipImageDownloads})`,
+    );
+    console.log(`- IMAGE_DIR: ${imageDir.value} (source: ${configSources.imageDir})`);
+    const telemetryEnabled = resolveTelemetryEnabled(noTelemetry);
+    console.log(
+      `- TELEMETRY: ${telemetryEnabled ? "enabled" : "disabled"} (source: ${configSources.telemetry})`,
     );
     console.log(
-      `- SKIP_IMAGE_DOWNLOADS: ${config.skipImageDownloads} (source: ${config.configSources.skipImageDownloads})`,
+      `- FIGMA_CACHING: ${caching.value ? JSON.stringify({ cacheDir: caching.value.cacheDir, ttlMs: caching.value.ttlMs }) : "disabled"} (source: ${configSources.caching})`,
     );
-    console.log(
-      `- FIGMA_CACHING: ${config.caching ? JSON.stringify({ cacheDir: config.caching.cacheDir, ttlMs: config.caching.ttlMs }) : "disabled"}`,
-    );
-    console.log(); // Empty line for better readability
+    console.log();
   }
 
   return {
-    ...config,
     auth,
+    port: port.value,
+    host: host.value,
+    proxy: proxy.value,
+    outputFormat: outputFormat.value,
+    skipImageDownloads: skipImageDownloads.value,
+    imageDir: imageDir.value,
+    isStdioMode,
+    noTelemetry,
+    caching: caching.value,
+    configSources,
   };
 }
 
@@ -264,10 +241,7 @@ function parseCachingConfig(rawValue: string | undefined): FigmaCachingOptions |
     const ttlMs = parsed.ttl.value * DURATION_IN_MS[parsed.ttl.unit];
     const cacheDir = resolveCacheDir(parsed.cacheDir);
 
-    return {
-      cacheDir,
-      ttlMs,
-    };
+    return { cacheDir, ttlMs };
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
     console.error(`Failed to parse FIGMA_CACHING: ${message}`);
@@ -285,7 +259,7 @@ function resolveCacheDir(inputPath?: string): string {
   if (isAbsolute(expanded)) {
     return expanded;
   }
-  return resolve(process.cwd(), expanded);
+  return resolvePath(process.cwd(), expanded);
 }
 
 function expandHomeDir(targetPath: string): string {
@@ -294,7 +268,7 @@ function expandHomeDir(targetPath: string): string {
   }
 
   if (targetPath.startsWith("~/")) {
-    return resolve(os.homedir(), targetPath.slice(2));
+    return resolvePath(os.homedir(), targetPath.slice(2));
   }
 
   return targetPath;
@@ -303,7 +277,7 @@ function expandHomeDir(targetPath: string): string {
 function getDefaultCacheDir(): string {
   const platform = process.platform;
   if (platform === "win32") {
-    const base = process.env.LOCALAPPDATA || resolve(os.homedir(), "AppData", "Local");
+    const base = process.env.LOCALAPPDATA || resolvePath(os.homedir(), "AppData", "Local");
     return join(base, "FigmaMcpCache");
   }
 
@@ -311,7 +285,6 @@ function getDefaultCacheDir(): string {
     return join(os.homedir(), "Library", "Caches", "FigmaMcp");
   }
 
-  // linux and others -> use XDG cache dir
   const xdgCache = process.env.XDG_CACHE_HOME || join(os.homedir(), ".cache");
   return join(xdgCache, "figma-mcp");
 }

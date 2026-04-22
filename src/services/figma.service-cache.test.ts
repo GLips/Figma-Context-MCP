@@ -58,7 +58,7 @@ describe("FigmaService caching", () => {
   it("reuses cached files for repeated getRawFile calls", async () => {
     const cacheDir = await createCacheDir();
     const sample = createSampleFile();
-    const requestSpy = spyOnRequest().mockResolvedValue(sample);
+    const requestSpy = spyOnRequestWithSize(sample);
 
     try {
       const service = new FigmaService(AUTH_OPTIONS, { cacheDir, ttlMs: 60_000 });
@@ -77,7 +77,7 @@ describe("FigmaService caching", () => {
   it("serves node lookups from cached file without extra API calls", async () => {
     const cacheDir = await createCacheDir();
     const sample = createSampleFile();
-    const requestSpy = spyOnRequest().mockResolvedValue(sample);
+    const requestSpy = spyOnRequestWithSize(sample);
 
     try {
       const service = new FigmaService(AUTH_OPTIONS, { cacheDir, ttlMs: 60_000 });
@@ -95,11 +95,16 @@ describe("FigmaService caching", () => {
     }
   });
 });
-function spyOnRequest() {
-  return vi.spyOn(
-    FigmaService.prototype as unknown as {
-      request: (endpoint: string) => Promise<unknown>;
-    },
-    "request",
-  );
+function spyOnRequestWithSize(sample: GetFileResponse) {
+  return vi
+    .spyOn(
+      FigmaService.prototype as unknown as {
+        requestWithSize: (endpoint: string) => Promise<unknown>;
+      },
+      "requestWithSize",
+    )
+    .mockResolvedValue({
+      data: sample,
+      rawSize: Buffer.byteLength(JSON.stringify(sample), "utf8"),
+    });
 }

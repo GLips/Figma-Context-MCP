@@ -9,33 +9,85 @@ import { buildSimplifiedLayout } from "~/transformers/layout.js";
 import { buildSimplifiedStrokes, parsePaint } from "~/transformers/style.js";
 import { buildSimplifiedEffects } from "~/transformers/effects.js";
 import {
-  extractNodeText,
+  buildFormattedText,
   extractTextStyle,
   hasTextStyle,
   isTextNode,
+  type SimplifiedTextStyle,
 } from "~/transformers/text.js";
+import {
+  simplifyComponentProperties,
+  simplifyPropertyDefinitions,
+  simplifyPropertyReferences,
+} from "~/transformers/component.js";
 import { hasValue, isRectangleCornerRadii } from "~/utils/identity.js";
-import { generateVarId } from "~/utils/common.js";
+import { generateVarId, isVisible, stableStringify } from "~/utils/common.js";
 import type { Node as FigmaDocumentNode } from "@figma/rest-api-spec";
 
+// Reverse lookup cache: serialized style value → varId.
+// Keyed on the GlobalVars instance so it's automatically scoped to each
+// extraction run and garbage-collected when the run's context is released.
+const styleCaches = new WeakMap<GlobalVars, Map<string, string>>();
+
+// Separate cache for inline text-style override refs. Kept distinct from
+// `styleCaches` so the `ts` namespace never aliases with `style_*`, `fill_*`,
+// etc. — a base textStyle that happens to serialize identically to an inline
+// delta would otherwise return the wrong prefix, bleeding `style_XXXXXX` IDs
+// into the middle of `text` strings and vice versa.
+const inlineTextStyleCaches = new WeakMap<GlobalVars, Map<string, string>>();
+
+function getStyleCache(globalVars: GlobalVars): Map<string, string> {
+  let cache = styleCaches.get(globalVars);
+  if (!cache) {
+    cache = new Map();
+    styleCaches.set(globalVars, cache);
+  }
+  return cache;
+}
+
+function getInlineTextStyleCache(globalVars: GlobalVars): Map<string, string> {
+  let cache = inlineTextStyleCaches.get(globalVars);
+  if (!cache) {
+    cache = new Map();
+    inlineTextStyleCaches.set(globalVars, cache);
+  }
+  return cache;
+}
+
 /**
- * Helper function to find or create a global variable.
+ * Find an existing global style variable with the same value, or create one.
  */
 function findOrCreateVar(globalVars: GlobalVars, value: StyleTypes, prefix: string): string {
-  // Check if the same value already exists
-  const [existingVarId] =
-    Object.entries(globalVars.styles).find(
-      ([_, existingValue]) => JSON.stringify(existingValue) === JSON.stringify(value),
-    ) ?? [];
+  const cache = getStyleCache(globalVars);
+  const key = stableStringify(value);
 
-  if (existingVarId) {
-    return existingVarId;
-  }
+  const existing = cache.get(key);
+  if (existing) return existing;
 
-  // Create a new variable if it doesn't exist
   const varId = generateVarId(prefix);
   globalVars.styles[varId] = value;
+  cache.set(key, varId);
   return varId;
+}
+
+/**
+ * Register a style value, preferring a Figma named style when available.
+ * Falls back to an auto-generated deduplicating variable ID.
+ */
+function registerStyle(
+  node: FigmaDocumentNode,
+  context: TraversalContext,
+  value: StyleTypes,
+  styleKeys: string[],
+  prefix: string,
+): string {
+  const styleMatch = getStyleMatch(node, context, styleKeys);
+  if (styleMatch) {
+    const styleKey = resolveStyleKey(context, styleMatch, value);
+    context.globalVars.styles[styleKey] = value;
+    return styleKey;
+  }
+  return findOrCreateVar(context.globalVars, value, prefix);
 }
 
 /**
@@ -49,26 +101,49 @@ export const layoutExtractor: ExtractorFn = (node, result, context) => {
 };
 
 /**
+ * Register an inline text-style override delta and return its short ID
+ * (`ts1`, `ts2`, …). Unlike `registerStyle`, these IDs come from a sequential
+ * counter on the traversal state — they appear inline in formatted text
+ * (`{ts1}…{/ts1}`), where short IDs matter for token efficiency and readability.
+ *
+ * Uses its own dedup cache (`inlineTextStyleCaches`), separate from the
+ * generic `styleCaches`. The two namespaces must not alias: if a base
+ * textStyle serializes identically to an inline delta, the inline caller must
+ * still get a `tsN` ID, not a `style_XXXXXX` ID that happens to be cached.
+ */
+function registerInlineTextStyle(context: TraversalContext, delta: SimplifiedTextStyle): string {
+  const cache = getInlineTextStyleCache(context.globalVars);
+  const key = stableStringify(delta);
+  const existing = cache.get(key);
+  if (existing) return existing;
+  context.traversalState.tsCounter += 1;
+  const id = `ts${context.traversalState.tsCounter}`;
+  context.globalVars.styles[id] = delta;
+  cache.set(key, id);
+  return id;
+}
+
+/**
  * Extracts text content and text styling from a node.
  */
 export const textExtractor: ExtractorFn = (node, result, context) => {
-  // Extract text content
+  // Extract text content — formatted with markdown + inline style refs when
+  // the node has per-character overrides, otherwise just the raw string.
   if (isTextNode(node)) {
-    result.text = extractNodeText(node);
+    const rich = buildFormattedText(node, (delta) => registerInlineTextStyle(context, delta));
+    if (rich.text) {
+      result.text = rich.text;
+    }
+    if (rich.boldWeight !== undefined) {
+      result.boldWeight = rich.boldWeight;
+    }
   }
 
   // Extract text style
   if (hasTextStyle(node)) {
     const textStyle = extractTextStyle(node);
     if (textStyle) {
-      // Prefer Figma named style when available
-      const styleName = getStyleName(node, context, ["text", "typography"]);
-      if (styleName) {
-        context.globalVars.styles[styleName] = textStyle;
-        result.textStyle = styleName;
-      } else {
-        result.textStyle = findOrCreateVar(context.globalVars, textStyle, "style");
-      }
+      result.textStyle = registerStyle(node, context, textStyle, ["text", "typography"], "style");
     }
   }
 };
@@ -83,43 +158,26 @@ export const visualsExtractor: ExtractorFn = (node, result, context) => {
 
   // fills
   if (hasValue("fills", node) && Array.isArray(node.fills) && node.fills.length) {
-    const fills = node.fills.map((fill) => parsePaint(fill, hasChildren)).reverse();
-    const styleName = getStyleName(node, context, ["fill", "fills"]);
-    if (styleName) {
-      context.globalVars.styles[styleName] = fills;
-      result.fills = styleName;
-    } else {
-      result.fills = findOrCreateVar(context.globalVars, fills, "fill");
-    }
+    const fills = node.fills
+      .filter(isVisible)
+      .map((fill) => parsePaint(fill, hasChildren))
+      .reverse();
+    result.fills = registerStyle(node, context, fills, ["fill", "fills"], "fill");
   }
 
   // strokes
   const strokes = buildSimplifiedStrokes(node, hasChildren);
   if (strokes.colors.length) {
-    const styleName = getStyleName(node, context, ["stroke", "strokes"]);
-    if (styleName) {
-      // Only colors are stylable; keep other stroke props on the node
-      context.globalVars.styles[styleName] = strokes.colors;
-      result.strokes = styleName;
-      if (strokes.strokeWeight) result.strokeWeight = strokes.strokeWeight;
-      if (strokes.strokeDashes) result.strokeDashes = strokes.strokeDashes;
-      if (strokes.strokeWeights) result.strokeWeights = strokes.strokeWeights;
-    } else {
-      result.strokes = findOrCreateVar(context.globalVars, strokes, "stroke");
-    }
+    result.strokes = registerStyle(node, context, strokes.colors, ["stroke", "strokes"], "fill");
+    if (strokes.strokeWeight) result.strokeWeight = strokes.strokeWeight;
+    if (strokes.strokeDashes) result.strokeDashes = strokes.strokeDashes;
+    if (strokes.strokeWeights) result.strokeWeights = strokes.strokeWeights;
   }
 
   // effects
   const effects = buildSimplifiedEffects(node);
   if (Object.keys(effects).length) {
-    const styleName = getStyleName(node, context, ["effect", "effects"]);
-    if (styleName) {
-      // Effects styles store only the effect values
-      context.globalVars.styles[styleName] = effects;
-      result.effects = styleName;
-    } else {
-      result.effects = findOrCreateVar(context.globalVars, effects, "effect");
-    }
+    result.effects = registerStyle(node, context, effects, ["effect", "effects"], "effect");
   }
 
   // opacity
@@ -137,43 +195,89 @@ export const visualsExtractor: ExtractorFn = (node, result, context) => {
 };
 
 /**
- * Extracts component-related properties from INSTANCE nodes.
+ * Extracts component-related properties from nodes.
+ * Handles three cases: INSTANCE property values, property references on any node,
+ * and property definitions on COMPONENT/COMPONENT_SET nodes.
  */
-export const componentExtractor: ExtractorFn = (node, result, _context) => {
+export const componentExtractor: ExtractorFn = (node, result, context) => {
+  // Instance nodes: componentId + simplified componentProperties
   if (node.type === "INSTANCE") {
     if (hasValue("componentId", node)) {
       result.componentId = node.componentId;
     }
-
-    // Add specific properties for instances of components
     if (hasValue("componentProperties", node)) {
-      result.componentProperties = Object.entries(node.componentProperties ?? {}).map(
-        ([name, { value, type }]) => ({
-          name,
-          value: value.toString(),
-          type,
-        }),
+      const props = simplifyComponentProperties(
+        node.componentProperties as Record<string, { type: string; value: boolean | string }>,
       );
+      if (Object.keys(props).length > 0) {
+        result.componentProperties = props;
+      }
+    }
+  }
+
+  // Any node with property references: annotate with simplified refs
+  if (
+    "componentPropertyReferences" in node &&
+    node.componentPropertyReferences &&
+    typeof node.componentPropertyReferences === "object"
+  ) {
+    const refs = simplifyPropertyReferences(
+      node.componentPropertyReferences as Record<string, string>,
+    );
+    if (Object.keys(refs).length > 0) {
+      result.componentPropertyReferences = refs;
+    }
+  }
+
+  // Component/ComponentSet definitions: collect property definitions
+  if (
+    (node.type === "COMPONENT" || node.type === "COMPONENT_SET") &&
+    "componentPropertyDefinitions" in node &&
+    node.componentPropertyDefinitions &&
+    typeof node.componentPropertyDefinitions === "object"
+  ) {
+    const defs = simplifyPropertyDefinitions(
+      node.componentPropertyDefinitions as Record<
+        string,
+        { type: string; defaultValue: boolean | string }
+      >,
+    );
+    if (Object.keys(defs).length > 0) {
+      context.traversalState.componentPropertyDefinitions[node.id] = defs;
     }
   }
 };
 
+type StyleMatch = { name: string; id: string };
+
 // Helper to fetch a Figma style name for specific style keys on a node
-function getStyleName(
+function getStyleMatch(
   node: FigmaDocumentNode,
   context: TraversalContext,
   keys: string[],
-): string | undefined {
+): StyleMatch | undefined {
   if (!hasValue("styles", node)) return undefined;
   const styleMap = node.styles as Record<string, string>;
   for (const key of keys) {
     const styleId = styleMap[key];
     if (styleId) {
-      const meta = context.globalVars.extraStyles?.[styleId];
-      if (meta?.name) return meta.name;
+      const meta = context.extraStyles?.[styleId];
+      if (meta?.name) return { name: meta.name, id: styleId };
     }
   }
   return undefined;
+}
+
+function resolveStyleKey(
+  context: TraversalContext,
+  styleMatch: StyleMatch,
+  value: StyleTypes,
+): string {
+  const existing = context.globalVars.styles[styleMatch.name];
+  if (!existing) return styleMatch.name;
+  if (JSON.stringify(existing) === JSON.stringify(value)) return styleMatch.name;
+
+  return `${styleMatch.name} (${styleMatch.id})`;
 }
 
 // -------------------- CONVENIENCE COMBINATIONS --------------------
@@ -207,11 +311,13 @@ export const layoutOnly = [layoutExtractor];
 
 /**
  * Node types that can be exported as SVG images.
- * When a FRAME, GROUP, or INSTANCE contains only these types, we can collapse it to IMAGE-SVG.
- * Note: FRAME/GROUP/INSTANCE are NOT included here—they're only eligible if collapsed to IMAGE-SVG.
+ * When a FRAME, GROUP, INSTANCE, or BOOLEAN_OPERATION contains only these types, we can collapse
+ * it to IMAGE-SVG. BOOLEAN_OPERATION is included because it's both a collapsible container AND
+ * SVG-eligible as a child (boolean ops always produce vector output).
  */
 export const SVG_ELIGIBLE_TYPES = new Set([
   "IMAGE-SVG", // VECTOR nodes are converted to IMAGE-SVG, or containers that were collapsed
+  "BOOLEAN_OPERATION",
   "STAR",
   "LINE",
   "ELLIPSE",
@@ -222,7 +328,7 @@ export const SVG_ELIGIBLE_TYPES = new Set([
 /**
  * afterChildren callback that collapses SVG-heavy containers to IMAGE-SVG.
  *
- * If a FRAME, GROUP, or INSTANCE contains only SVG-eligible children, the parent
+ * If a FRAME, GROUP, INSTANCE, or BOOLEAN_OPERATION contains only SVG-eligible children, the parent
  * is marked as IMAGE-SVG and children are omitted, reducing payload size.
  *
  * @param node - Original Figma node
@@ -238,8 +344,12 @@ export function collapseSvgContainers(
   const allChildrenAreSvgEligible = children.every((child) => SVG_ELIGIBLE_TYPES.has(child.type));
 
   if (
-    (node.type === "FRAME" || node.type === "GROUP" || node.type === "INSTANCE") &&
-    allChildrenAreSvgEligible
+    (node.type === "FRAME" ||
+      node.type === "GROUP" ||
+      node.type === "INSTANCE" ||
+      node.type === "BOOLEAN_OPERATION") &&
+    allChildrenAreSvgEligible &&
+    !hasImageFillInChildren(node)
   ) {
     // Collapse to IMAGE-SVG and omit children
     result.type = "IMAGE-SVG";
@@ -248,4 +358,23 @@ export function collapseSvgContainers(
 
   // Include all children normally
   return children;
+}
+
+/**
+ * Check whether a node or its direct children have image fills.
+ *
+ * Only direct children need checking because afterChildren runs bottom-up:
+ * if a deeper descendant has image fills, its parent won't collapse (stays FRAME),
+ * and FRAME isn't SVG-eligible, so the chain breaks naturally at each level.
+ */
+function hasImageFillInChildren(node: FigmaDocumentNode): boolean {
+  if (hasValue("fills", node) && node.fills.some((fill) => fill.type === "IMAGE")) {
+    return true;
+  }
+  if (hasValue("children", node)) {
+    return node.children.some(
+      (child) => hasValue("fills", child) && child.fills.some((fill) => fill.type === "IMAGE"),
+    );
+  }
+  return false;
 }

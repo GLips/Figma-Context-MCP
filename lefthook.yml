@@ -7,3 +7,9 @@ pre-commit:
     lint:
       glob: "*.{ts,js}"
       run: pnpm eslint {staged_files}
+    type-check:
+      glob: "*.{ts,js}"
+      run: pnpm type-check
+    scan-hidden-chars:
+      glob: "*.{ts,js,mjs,cjs,json,md,yml,yaml}"
+      run: node scripts/scan-hidden-chars.mjs {staged_files}

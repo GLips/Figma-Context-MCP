@@ -56,11 +56,10 @@ Configuration:
 - FIGMA_API_KEY: ****8pXg (source: cli)
 - PORT: 3333 (source: default)
 
-Initializing Figma MCP Server in HTTP mode on port 3333...
+Initializing Figma MCP Server in HTTP mode on 127.0.0.1:3333...
 HTTP server listening on port 3333
-SSE endpoint available at http://localhost:3333/sse
-Message endpoint available at http://localhost:3333/messages
-New SSE connection established
+StreamableHTTP endpoint available at http://127.0.0.1:3333/mcp
+StreamableHTTP endpoint available at http://127.0.0.1:3333/sse (backward compat)
 ```
 
 **MCP Logs**

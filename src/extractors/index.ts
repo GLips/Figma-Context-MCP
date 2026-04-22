@@ -1,8 +1,11 @@
 // Types
 export type {
   ExtractorFn,
+  NodeCounter,
+  SimplifiedNode,
   TraversalContext,
   TraversalOptions,
+  TraversalState,
   GlobalVars,
   StyleTypes,
 } from "./types.js";

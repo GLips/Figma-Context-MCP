@@ -14,11 +14,11 @@ jobs:
   release-please:
     if: ${{ github.repository_owner == 'GLips' }}
     runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
       - uses: googleapis/release-please-action@v4
         id: release
-        with:
-          release-type: node
 
       - uses: actions/checkout@v4
         if: ${{ steps.release.outputs.release_created }}

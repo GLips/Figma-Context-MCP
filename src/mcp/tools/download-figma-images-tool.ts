@@ -1,6 +1,16 @@
+import path from "path";
 import { z } from "zod";
 import { FigmaService } from "../../services/figma.js";
 import { Logger } from "../../utils/logger.js";
+import {
+  captureDownloadImagesCall,
+  captureValidationReject,
+  type AuthMode,
+  type ClientInfo,
+  type Transport,
+} from "~/telemetry/index.js";
+import { downloadFigmaImages as runDownloadFigmaImages } from "../../services/download-figma-images.js";
+import { sendProgress, startProgressHeartbeat, type ToolExtra } from "../progress.js";
 
 const parameters = {
   fileKey: z
@@ -20,16 +30,22 @@ const parameters = {
         .string()
         .optional()
         .describe(
-          "If a node has an imageRef fill, you must include this variable. Leave blank when downloading Vector SVG images.",
+          "If a node has an imageRef fill, you must include this variable. Leave blank when downloading Vector SVG images or animated GIFs (use gifRef instead).",
+        ),
+      gifRef: z
+        .string()
+        .optional()
+        .describe(
+          "If a node has a gifRef fill (animated GIF), you must include this variable to download the animated GIF. When gifRef is present in the Figma data, use it instead of imageRef to get the animated file rather than a static snapshot.",
         ),
       fileName: z
         .string()
         .regex(
-          /^[a-zA-Z0-9_.-]+\.(png|svg)$/,
-          "File names must contain only letters, numbers, underscores, dots, or hyphens, and end with .png or .svg.",
+          /^[a-zA-Z0-9_.-]+\.(png|svg|gif)$/,
+          "File names must contain only letters, numbers, underscores, dots, or hyphens, and end with .png, .svg, or .gif.",
         )
         .describe(
-          "The local name for saving the fetched file, including extension. Either png or svg.",
+          "The local name for saving the fetched file, including extension. png, svg, or gif.",
         ),
       needsCropping: z
         .boolean()
@@ -45,6 +61,10 @@ const parameters = {
         .describe("Whether this image requires dimension information for CSS variables"),
       filenameSuffix: z
         .string()
+        .regex(
+          /^[a-zA-Z0-9_-]+$/,
+          "Suffix must contain only letters, numbers, underscores, or hyphens",
+        )
         .optional()
         .describe(
           "Suffix to add to filename for unique cropped images, provided in the Figma data (e.g., 'abc123')",
@@ -63,84 +83,81 @@ const parameters = {
   localPath: z
     .string()
     .describe(
-      "The absolute path to the directory where images are stored in the project. If the directory does not exist, it will be created. The format of this path should respect the directory format of the operating system you are running on. Don't use any special character escaping in the path name either.",
+      "The path to the directory where images should be saved, relative to the project root. If the directory does not exist, it will be created. Use forward slashes for path separators (e.g., 'public/images' or 'assets/icons').",
     ),
 };
 
 const parametersSchema = z.object(parameters);
 export type DownloadImagesParams = z.infer<typeof parametersSchema>;
 
-// Enhanced handler function with image processing support
-async function downloadFigmaImages(params: DownloadImagesParams, figmaService: FigmaService) {
+async function downloadFigmaImages(
+  params: DownloadImagesParams,
+  figmaService: FigmaService,
+  imageDir: string | undefined,
+  transport: Transport,
+  authMode: AuthMode,
+  clientInfo: ClientInfo | undefined,
+  extra: ToolExtra,
+) {
   try {
-    const { fileKey, nodes, localPath, pngScale = 2 } = parametersSchema.parse(params);
+    const { fileKey, nodes, localPath, pngScale } = parametersSchema.parse(params);
 
-    // Process nodes: collect unique downloads and track which requests they satisfy
-    const downloadItems = [];
-    const downloadToRequests = new Map<number, string[]>(); // download index -> requested filenames
-    const seenDownloads = new Map<string, number>(); // uniqueKey -> download index
-
-    for (const rawNode of nodes) {
-      const { nodeId: rawNodeId, ...node } = rawNode;
-
-      // Replace - with : in nodeId for our query—Figma API expects :
-      const nodeId = rawNodeId?.replace(/-/g, ":");
-
-      // Apply filename suffix if provided
-      let finalFileName = node.fileName;
-      if (node.filenameSuffix && !finalFileName.includes(node.filenameSuffix)) {
-        const ext = finalFileName.split(".").pop();
-        const nameWithoutExt = finalFileName.substring(0, finalFileName.lastIndexOf("."));
-        finalFileName = `${nameWithoutExt}-${node.filenameSuffix}.${ext}`;
-      }
-
-      const downloadItem = {
-        fileName: finalFileName,
-        needsCropping: node.needsCropping || false,
-        cropTransform: node.cropTransform,
-        requiresImageDimensions: node.requiresImageDimensions || false,
+    // Resolve localPath relative to the configured image directory.
+    // path.join (not path.resolve) so a leading "/" is treated as relative, not absolute —
+    // LLMs frequently produce paths like "/public/images" when they mean "public/images".
+    // This is a security boundary tied to server config, so it lives at the edge rather
+    // than in the shared core.
+    const baseDir = imageDir ?? process.cwd();
+    const resolvedPath = path.resolve(path.join(baseDir, localPath));
+    // Drive roots (e.g. E:\) already end with a separator — avoid doubling it
+    const baseDirPrefix = baseDir.endsWith(path.sep) ? baseDir : baseDir + path.sep;
+    if (resolvedPath !== baseDir && !resolvedPath.startsWith(baseDirPrefix)) {
+      // Path-traversal rejection happens after schema validation, so the SDK
+      // wrapper in mcp/index.ts never sees it. Capture it here as a validation
+      // reject so we can track how often LLMs trip over the localPath contract.
+      captureValidationReject(
+        {
+          tool: "download_figma_images",
+          field: "localPath",
+          rule: "path_traversal",
+          message: `Path resolves outside allowed image directory: ${localPath}`,
+        },
+        { transport, authMode, clientInfo },
+      );
+      return {
+        isError: true,
+        content: [
+          {
+            type: "text" as const,
+            text: `Invalid path: "${localPath}" resolves outside the allowed image directory. The server's image directory is "${baseDir}". Provide a path relative to this directory (e.g., "public/images" or "assets/icons").`,
+          },
+        ],
       };
-
-      if (node.imageRef) {
-        // For imageRefs, check if we've already planned to download this
-        const uniqueKey = `${node.imageRef}-${node.filenameSuffix || "none"}`;
-
-        if (!node.filenameSuffix && seenDownloads.has(uniqueKey)) {
-          // Already planning to download this, just add to the requests list
-          const downloadIndex = seenDownloads.get(uniqueKey)!;
-          const requests = downloadToRequests.get(downloadIndex)!;
-          if (!requests.includes(finalFileName)) {
-            requests.push(finalFileName);
-          }
-
-          // Update requiresImageDimensions if needed
-          if (downloadItem.requiresImageDimensions) {
-            downloadItems[downloadIndex].requiresImageDimensions = true;
-          }
-        } else {
-          // New unique download
-          const downloadIndex = downloadItems.length;
-          downloadItems.push({ ...downloadItem, imageRef: node.imageRef });
-          downloadToRequests.set(downloadIndex, [finalFileName]);
-          seenDownloads.set(uniqueKey, downloadIndex);
-        }
-      } else {
-        // Rendered nodes are always unique
-        const downloadIndex = downloadItems.length;
-        downloadItems.push({ ...downloadItem, nodeId });
-        downloadToRequests.set(downloadIndex, [finalFileName]);
-      }
     }
 
-    const allDownloads = await figmaService.downloadImages(fileKey, localPath, downloadItems, {
-      pngScale,
-    });
+    await sendProgress(extra, 0, 3, "Resolving image downloads");
 
-    const successCount = allDownloads.filter(Boolean).length;
+    let stopHeartbeat: (() => void) | undefined;
+    const { downloads, successCount } = await runDownloadFigmaImages(
+      figmaService,
+      { fileKey, nodes, localPath: resolvedPath, pngScale },
+      {
+        onDownloadStart: async (downloadCount) => {
+          await sendProgress(extra, 1, 3, `Resolved ${downloadCount} images, downloading`);
+          stopHeartbeat = startProgressHeartbeat(extra, "Downloading images");
+        },
+        onDownloadComplete: () => {
+          stopHeartbeat?.();
+        },
+        onComplete: (outcome) =>
+          captureDownloadImagesCall(outcome, { transport, authMode, clientInfo }),
+      },
+    );
 
-    // Format results with aliases
-    const imagesList = allDownloads
-      .map((result, index) => {
+    await sendProgress(extra, 2, 3, `Downloaded ${successCount} images, formatting response`);
+
+    const imagesList = downloads
+      .map(({ result, requestedFileNames }) => {
         const fileName = result.filePath.split("/").pop() || result.filePath;
         const dimensions = `${result.finalDimensions.width}x${result.finalDimensions.height}`;
         const cropStatus = result.wasCropped ? " (cropped)" : "";
@@ -149,11 +166,9 @@ async function downloadFigmaImages(params: DownloadImagesParams, figmaService: F
           ? `${dimensions} | ${result.cssVariables}`
           : dimensions;
 
-        // Show all the filenames that were requested for this download
-        const requestedNames = downloadToRequests.get(index) || [fileName];
         const aliasText =
-          requestedNames.length > 1
-            ? ` (also requested as: ${requestedNames.filter((name: string) => name !== fileName).join(", ")})`
+          requestedFileNames.length > 1
+            ? ` (also requested as: ${requestedFileNames.filter((name) => name !== fileName).join(", ")})`
             : "";
 
         return `- ${fileName}: ${dimensionInfo}${cropStatus}${aliasText}`;
@@ -169,24 +184,29 @@ async function downloadFigmaImages(params: DownloadImagesParams, figmaService: F
       ],
     };
   } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
     Logger.error(`Error downloading images from ${params.fileKey}:`, error);
     return {
       isError: true,
       content: [
         {
           type: "text" as const,
-          text: `Failed to download images: ${error instanceof Error ? error.message : String(error)}`,
+          text: `Failed to download images: ${message}`,
         },
       ],
     };
   }
 }
 
+function getDescription(imageDir?: string) {
+  const baseDir = imageDir ?? process.cwd();
+  return `Download SVG and PNG images used in a Figma file based on the IDs of image or icon nodes. Images will be saved relative to the server's image directory: ${baseDir}`;
+}
+
 // Export tool configuration
 export const downloadFigmaImagesTool = {
   name: "download_figma_images",
-  description:
-    "Download SVG and PNG images used in a Figma file based on the IDs of image or icon nodes",
+  getDescription,
   parametersSchema,
   handler: downloadFigmaImages,
 } as const;

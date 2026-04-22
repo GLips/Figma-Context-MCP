@@ -1,13 +1,14 @@
 import { z } from "zod";
-import type { GetFileResponse, GetFileNodesResponse } from "@figma/rest-api-spec";
-import { FigmaService, type CacheInfo } from "~/services/figma.js";
+import { FigmaService } from "~/services/figma.js";
+import { Logger } from "~/utils/logger.js";
+import { sendProgress, startProgressHeartbeat, type ToolExtra } from "~/mcp/progress.js";
 import {
-  simplifyRawFigmaObject,
-  allExtractors,
-  collapseSvgContainers,
-} from "~/extractors/index.js";
-import yaml from "js-yaml";
-import { Logger, writeLogs } from "~/utils/logger.js";
+  captureGetFigmaDataCall,
+  type AuthMode,
+  type ClientInfo,
+  type Transport,
+} from "~/telemetry/index.js";
+import { getFigmaData as runGetFigmaData } from "~/services/get-figma-data.js";
 
 const parameters = {
   fileKey: z
@@ -24,7 +25,7 @@ const parameters = {
     )
     .optional()
     .describe(
-      "The ID of the node to fetch, often found as URL parameter node-id=<nodeId>, always use if provided. Use format '1234:5678' or 'I5666:180910;1:10515;1:10336' for multiple nodes.",
+      "The ID of the node to fetch, often found as URL parameter node-id=<nodeId>, always use if provided. Use format '1234:5678' for a standard node, or 'I5666:180910;1:10515;1:10336' for a deeply nested instance node (the semicolon-joined path represents the instance override chain - it's still a single node ID, not multiple nodes).",
     ),
   depth: z
     .number()
@@ -37,11 +38,9 @@ const parameters = {
 const parametersSchema = z.object(parameters);
 export type GetFigmaDataParams = z.infer<typeof parametersSchema>;
 
-// Format a human-readable cache notice
 function formatCacheNotice(cachedAt: number, ttlMs: number): string {
-  const now = Date.now();
-  const age = now - cachedAt;
-  const remaining = ttlMs - age;
+  const age = Date.now() - cachedAt;
+  const remaining = Math.max(ttlMs - age, 0);
 
   const formatDuration = (ms: number): string => {
     const seconds = Math.floor(ms / 1000);
@@ -55,19 +54,21 @@ function formatCacheNotice(cachedAt: number, ttlMs: number): string {
     return `${seconds}s`;
   };
 
-  return `ℹ️ Note: Using cached Figma data (fetched ${formatDuration(age)} ago, expires in ${formatDuration(remaining)}) due to FIGMA_CACHING environment variable.`;
+  return `Note: Using cached Figma data (fetched ${formatDuration(age)} ago, expires in ${formatDuration(remaining)}) due to FIGMA_CACHING.`;
 }
 
-// Simplified handler function
 async function getFigmaData(
   params: GetFigmaDataParams,
   figmaService: FigmaService,
   outputFormat: "yaml" | "json",
+  transport: Transport,
+  authMode: AuthMode,
+  clientInfo: ClientInfo | undefined,
+  extra: ToolExtra,
 ) {
   try {
     const { fileKey, nodeId: rawNodeId, depth } = parametersSchema.parse(params);
 
-    // Replace - with : in nodeId for our query—Figma API expects :
     const nodeId = rawNodeId?.replace(/-/g, ":");
 
     Logger.log(
@@ -76,53 +77,45 @@ async function getFigmaData(
       } ${fileKey}`,
     );
 
-    // Get raw Figma API response
-    let rawApiResponse: GetFileResponse | GetFileNodesResponse;
-    let cacheInfo: CacheInfo;
-    if (nodeId) {
-      const result = await figmaService.getRawNode(fileKey, nodeId, depth);
-      rawApiResponse = result.data;
-      cacheInfo = result.cacheInfo;
-    } else {
-      const result = await figmaService.getRawFile(fileKey, depth);
-      rawApiResponse = result.data;
-      cacheInfo = result.cacheInfo;
-    }
+    let stopFetchHeartbeat: (() => void) | undefined;
+    let stopSimplifyHeartbeat: (() => void) | undefined;
 
-    // Use unified design extraction (handles nodes + components consistently)
-    const simplifiedDesign = simplifyRawFigmaObject(rawApiResponse, allExtractors, {
-      maxDepth: depth,
-      afterChildren: collapseSvgContainers,
+    const result = await runGetFigmaData(figmaService, { fileKey, nodeId, depth }, outputFormat, {
+      onFetchStart: async () => {
+        await sendProgress(extra, 0, 4, "Fetching design data from Figma API");
+        stopFetchHeartbeat = startProgressHeartbeat(extra, "Waiting for Figma API response");
+      },
+      onFetchComplete: () => {
+        stopFetchHeartbeat?.();
+      },
+      onSimplifyStart: async (progress) => {
+        await sendProgress(extra, 1, 4, "Fetched design data, simplifying");
+        stopSimplifyHeartbeat = startProgressHeartbeat(
+          extra,
+          () => `Simplifying design data (${progress.getNodeCount()} nodes processed)`,
+        );
+      },
+      onSimplifyComplete: () => {
+        stopSimplifyHeartbeat?.();
+      },
+      onSerializeStart: async () => {
+        await sendProgress(extra, 2, 4, "Simplified design, serializing response");
+      },
+      onComplete: (outcome) =>
+        captureGetFigmaDataCall(outcome, { transport, authMode, clientInfo }),
     });
 
-    writeLogs("figma-simplified.json", simplifiedDesign);
-
-    Logger.log(
-      `Successfully extracted data: ${simplifiedDesign.nodes.length} nodes, ${
-        Object.keys(simplifiedDesign.globalVars.styles).length
-      } styles`,
-    );
-
-    const { nodes, globalVars, ...metadata } = simplifiedDesign;
-    const result = {
-      metadata,
-      nodes,
-      globalVars,
-    };
-
-    Logger.log(`Generating ${outputFormat.toUpperCase()} result from extracted data`);
-    let formattedResult =
-      outputFormat === "json" ? JSON.stringify(result, null, 2) : yaml.dump(result);
-
-    // Prepend cache notice if data came from cache
-    if (cacheInfo.usedCache && cacheInfo.cachedAt && cacheInfo.ttlMs) {
-      const cacheNotice = formatCacheNotice(cacheInfo.cachedAt, cacheInfo.ttlMs);
-      formattedResult = `${cacheNotice}\n\n${formattedResult}`;
+    let formatted = result.formatted;
+    if (result.cacheInfo?.usedCache && result.cacheInfo.cachedAt && result.cacheInfo.ttlMs) {
+      formatted = `${formatCacheNotice(result.cacheInfo.cachedAt, result.cacheInfo.ttlMs)}\n\n${formatted}`;
     }
 
+    Logger.log(`Successfully extracted data: ${result.metrics.simplifiedNodeCount} nodes`);
+    await sendProgress(extra, 3, 4, "Serialized, sending response");
     Logger.log("Sending result to client");
+
     return {
-      content: [{ type: "text" as const, text: formattedResult }],
+      content: [{ type: "text" as const, text: formatted }],
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : JSON.stringify(error);
@@ -134,7 +127,6 @@ async function getFigmaData(
   }
 }
 
-// Export tool configuration
 export const getFigmaDataTool = {
   name: "get_figma_data",
   description:

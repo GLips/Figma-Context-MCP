@@ -6,6 +6,7 @@ import type {
   Transform,
 } from "@figma/rest-api-spec";
 import { generateCSSShorthand, isVisible } from "~/utils/common.js";
+import { tagError } from "~/utils/error-meta.js";
 import { hasValue, isStrokeWeights } from "~/utils/identity.js";
 
 export type CSSRGBAColor = `rgba(${number}, ${number}, ${number}, ${number})`;
@@ -27,6 +28,12 @@ export interface ColorValue {
 export type SimplifiedImageFill = {
   type: "IMAGE";
   imageRef: string;
+  /**
+   * Present when the fill is an animated GIF. Use this ref (instead of imageRef) when calling
+   * download_figma_images to retrieve the animated GIF file; imageRef only points to a static
+   * snapshot frame.
+   */
+  gifRef?: string;
   scaleMode: "FILL" | "FIT" | "TILE" | "STRETCH";
   /**
    * For TILE mode, the scaling factor relative to original image size
@@ -228,7 +235,11 @@ export function buildSimplifiedStrokes(
 ): SimplifiedStroke {
   let strokes: SimplifiedStroke = { colors: [] };
   if (hasValue("strokes", n) && Array.isArray(n.strokes) && n.strokes.length) {
-    strokes.colors = n.strokes.filter(isVisible).map((stroke) => parsePaint(stroke, hasChildren));
+    // Reverse to match CSS stacking order (Figma layers bottom-to-top, CSS top-to-bottom)
+    strokes.colors = n.strokes
+      .filter(isVisible)
+      .map((stroke) => parsePaint(stroke, hasChildren))
+      .reverse();
   }
 
   if (hasValue("strokeWeight", n) && typeof n.strokeWeight === "number" && n.strokeWeight > 0) {
@@ -257,6 +268,7 @@ export function parsePaint(raw: Paint, hasChildren: boolean = false): Simplified
     const baseImageFill: SimplifiedImageFill = {
       type: "IMAGE",
       imageRef: raw.imageRef,
+      ...(raw.gifRef ? { gifRef: raw.gifRef } : {}),
       scaleMode: raw.scaleMode as "FILL" | "FIT" | "TILE" | "STRETCH",
       scalingFactor: raw.scalingFactor,
     };
@@ -313,7 +325,7 @@ export function parsePaint(raw: Paint, hasChildren: boolean = false): Simplified
       gradient: convertGradientToCss(raw),
     };
   } else {
-    throw new Error(`Unknown paint type: ${raw.type}`);
+    tagError(new Error(`Unknown paint type: ${raw.type}`), { category: "internal" });
   }
 }
 

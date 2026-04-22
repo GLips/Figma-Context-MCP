@@ -42,42 +42,9 @@ export function buildSimplifiedLayout(
   return { ...frameValues, ...layoutValues };
 }
 
-// For flex layouts, process alignment and sizing
-function convertAlign(
-  axisAlign?:
-    | HasFramePropertiesTrait["primaryAxisAlignItems"]
-    | HasFramePropertiesTrait["counterAxisAlignItems"],
-  stretch?: {
-    children: FigmaDocumentNode[];
-    axis: "primary" | "counter";
-    mode: "row" | "column" | "none";
-  },
-) {
-  if (stretch && stretch.mode !== "none") {
-    const { children, mode, axis } = stretch;
-
-    // Compute whether to check horizontally or vertically based on axis and direction
-    const direction = getDirection(axis, mode);
-
-    const shouldStretch =
-      children.length > 0 &&
-      children.reduce((shouldStretch, c) => {
-        if (!shouldStretch) return false;
-        if ("layoutPositioning" in c && c.layoutPositioning === "ABSOLUTE") return true;
-        if (direction === "horizontal") {
-          return "layoutSizingHorizontal" in c && c.layoutSizingHorizontal === "FILL";
-        } else if (direction === "vertical") {
-          return "layoutSizingVertical" in c && c.layoutSizingVertical === "FILL";
-        }
-        return false;
-      }, true);
-
-    if (shouldStretch) return "stretch";
-  }
-
-  switch (axisAlign) {
+function convertJustifyContent(align?: HasFramePropertiesTrait["primaryAxisAlignItems"]) {
+  switch (align) {
     case "MIN":
-      // MIN, AKA flex-start, is the default alignment
       return undefined;
     case "MAX":
       return "flex-end";
@@ -85,6 +52,34 @@ function convertAlign(
       return "center";
     case "SPACE_BETWEEN":
       return "space-between";
+    default:
+      return undefined;
+  }
+}
+
+function convertAlignItems(
+  align: HasFramePropertiesTrait["counterAxisAlignItems"] | undefined,
+  children: FigmaDocumentNode[],
+  mode: "row" | "column",
+) {
+  // Row cross-axis is vertical; column cross-axis is horizontal
+  const crossSizing = mode === "row" ? "layoutSizingVertical" : "layoutSizingHorizontal";
+  const allStretch =
+    children.length > 0 &&
+    children.every(
+      (c) =>
+        ("layoutPositioning" in c && c.layoutPositioning === "ABSOLUTE") ||
+        (crossSizing in c && (c as Record<string, unknown>)[crossSizing] === "FILL"),
+    );
+  if (allStretch) return "stretch";
+
+  switch (align) {
+    case "MIN":
+      return undefined;
+    case "MAX":
+      return "flex-end";
+    case "CENTER":
+      return "center";
     case "BASELINE":
       return "baseline";
     default:
@@ -108,6 +103,28 @@ function convertSelfAlign(align?: HasLayoutTrait["layoutAlign"]) {
   }
 }
 
+// SPACE_BETWEEN computes gaps dynamically — the API returns stale spacing
+// values, but Figma's UI shows "Auto". Suppress the affected axis.
+function buildGap(n: HasFramePropertiesTrait, mode: "row" | "column"): string | undefined {
+  const primaryGap = n.primaryAxisAlignItems === "SPACE_BETWEEN" ? undefined : n.itemSpacing;
+  const counterGap =
+    n.layoutWrap !== "WRAP" || n.counterAxisAlignContent === "SPACE_BETWEEN"
+      ? undefined
+      : n.counterAxisSpacing;
+
+  // Map Figma's primary/counter axes to CSS's row/column axes
+  const rowGap = mode === "row" ? counterGap : primaryGap;
+  const colGap = mode === "row" ? primaryGap : counterGap;
+
+  return gapShorthand(rowGap, colGap);
+}
+
+function gapShorthand(row?: number, col?: number): string | undefined {
+  if (!row && !col) return undefined;
+  if (row && col) return row === col ? `${row}px` : `${row}px ${col}px`;
+  return `${(row ?? col)!}px`;
+}
+
 // interpret sizing
 function convertSizing(
   s?: HasLayoutTrait["layoutSizingHorizontal"] | HasLayoutTrait["layoutSizingVertical"],
@@ -116,29 +133,6 @@ function convertSizing(
   if (s === "FILL") return "fill";
   if (s === "HUG") return "hug";
   return undefined;
-}
-
-function getDirection(
-  axis: "primary" | "counter",
-  mode: "row" | "column",
-): "horizontal" | "vertical" {
-  switch (axis) {
-    case "primary":
-      switch (mode) {
-        case "row":
-          return "horizontal";
-        case "column":
-          return "vertical";
-      }
-      break;
-    case "counter":
-      switch (mode) {
-        case "row":
-          return "vertical";
-        case "column":
-          return "horizontal";
-      }
-  }
 }
 
 function buildSimplifiedFrameValues(n: FigmaDocumentNode): SimplifiedLayout | { mode: "none" } {
@@ -164,22 +158,17 @@ function buildSimplifiedFrameValues(n: FigmaDocumentNode): SimplifiedLayout | { 
     return frameValues;
   }
 
-  // TODO: convertAlign should be two functions, one for justifyContent and one for alignItems
-  frameValues.justifyContent = convertAlign(n.primaryAxisAlignItems ?? "MIN", {
-    children: n.children,
-    axis: "primary",
-    mode: frameValues.mode,
-  });
-  frameValues.alignItems = convertAlign(n.counterAxisAlignItems ?? "MIN", {
-    children: n.children,
-    axis: "counter",
-    mode: frameValues.mode,
-  });
+  frameValues.justifyContent = convertJustifyContent(n.primaryAxisAlignItems ?? "MIN");
+  frameValues.alignItems = convertAlignItems(
+    n.counterAxisAlignItems ?? "MIN",
+    n.children,
+    frameValues.mode,
+  );
   frameValues.alignSelf = convertSelfAlign(n.layoutAlign);
 
   // Only include wrap if it's set to WRAP, since flex layouts don't default to wrapping
   frameValues.wrap = n.layoutWrap === "WRAP" ? true : undefined;
-  frameValues.gap = n.itemSpacing ? `${n.itemSpacing ?? 0}px` : undefined;
+  frameValues.gap = buildGap(n, frameValues.mode);
   // gather padding
   if (n.paddingTop || n.paddingBottom || n.paddingLeft || n.paddingRight) {
     frameValues.padding = generateCSSShorthand({

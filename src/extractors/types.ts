@@ -4,9 +4,9 @@ import type { SimplifiedLayout } from "~/transformers/layout.js";
 import type { SimplifiedFill, SimplifiedStroke } from "~/transformers/style.js";
 import type { SimplifiedEffects } from "~/transformers/effects.js";
 import type {
-  ComponentProperties,
   SimplifiedComponentDefinition,
   SimplifiedComponentSetDefinition,
+  SimplifiedPropertyDefinition,
 } from "~/transformers/component.js";
 
 export type StyleTypes =
@@ -22,9 +22,37 @@ export type GlobalVars = {
 };
 
 export interface TraversalContext {
-  globalVars: GlobalVars & { extraStyles?: Record<string, Style> };
+  globalVars: GlobalVars;
+  extraStyles?: Record<string, Style>;
   currentDepth: number;
   parent?: FigmaDocumentNode;
+  insideComponentDefinition?: boolean;
+  traversalState: TraversalState;
+  /**
+   * Per-call mutable counter shared with the caller. Lives on the context so
+   * walker recursion can increment it without touching module-global state —
+   * concurrent extractFromDesign calls (e.g. overlapping HTTP requests) each
+   * own their counter and never collide.
+   */
+  nodeCounter: NodeCounter;
+}
+
+/**
+ * Mutable progress counter passed into traversal. Callers can read `count`
+ * during traversal (for live progress indicators) and after it returns
+ * (as the final node-walked metric).
+ */
+export type NodeCounter = { count: number };
+
+export interface TraversalState {
+  componentPropertyDefinitions: Record<string, Record<string, SimplifiedPropertyDefinition>>;
+  /**
+   * Sequential counter for inline text-style override IDs (`ts1`, `ts2`, ...).
+   * Lives on the traversal state so every text node in a run shares the same
+   * namespace, which lets `{tsN}…{/tsN}` references appear inline in text
+   * content with short, readable identifiers.
+   */
+  tsCounter: number;
 }
 
 export interface TraversalOptions {
@@ -44,6 +72,13 @@ export interface TraversalOptions {
     result: SimplifiedNode,
     children: SimplifiedNode[],
   ) => SimplifiedNode[];
+  /**
+   * Optional caller-supplied counter. The walker increments it as it processes
+   * nodes, so callers that need a live readout (e.g. progress heartbeats) or a
+   * post-call metric can read from the same object. If omitted, the walker
+   * creates its own internal counter.
+   */
+  nodeCounter?: NodeCounter;
 }
 
 /**
@@ -74,6 +109,12 @@ export interface SimplifiedNode {
   // text
   text?: string;
   textStyle?: string;
+  /**
+   * The numeric font weight that `**bold**` inside `text` maps to. Only emitted
+   * when a text node has per-character bold overrides heavier than its base
+   * `style.fontWeight`, so the consumer knows how to realize markdown bold.
+   */
+  boldWeight?: number;
   // appearance
   fills?: string;
   styles?: string;
@@ -87,9 +128,9 @@ export interface SimplifiedNode {
   borderRadius?: string;
   // layout & alignment
   layout?: string;
-  // for rect-specific strokes, etc.
   componentId?: string;
-  componentProperties?: ComponentProperties[];
+  componentProperties?: Record<string, boolean | string>;
+  componentPropertyReferences?: Record<string, string>;
   // children
   children?: SimplifiedNode[];
 }

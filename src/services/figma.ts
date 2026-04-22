@@ -1,4 +1,3 @@
-import path from "path";
 import type {
   GetImagesResponse,
   GetFileResponse,
@@ -10,7 +9,9 @@ import type {
 } from "@figma/rest-api-spec";
 import { downloadAndProcessImage, type ImageProcessingResult } from "~/utils/image-processing.js";
 import { Logger, writeLogs } from "~/utils/logger.js";
-import { fetchWithRetry } from "~/utils/fetch-with-retry.js";
+import { fetchJSON } from "~/utils/fetch-json.js";
+import { getErrorMeta } from "~/utils/error-meta.js";
+import { buildForbiddenMessage, buildRateLimitMessage } from "./errors/index.js";
 import { FigmaFileCache, type FigmaCachingOptions } from "./figma-file-cache.js";
 
 export type FigmaAuthOptions = {
@@ -60,9 +61,6 @@ export class FigmaService {
     }
   }
 
-  /**
-   * Filters out null values from Figma image responses. This ensures we only work with valid image URLs.
-   */
   private filterValidImages(
     images: { [key: string]: string | null } | undefined,
   ): Record<string, string> {
@@ -74,24 +72,35 @@ export class FigmaService {
   }
 
   private async request<T>(endpoint: string): Promise<T> {
+    const { data } = await this.requestWithSize<T>(endpoint);
+    return data;
+  }
+
+  private async requestWithSize<T>(endpoint: string): Promise<{ data: T; rawSize: number }> {
     try {
       Logger.log(`Calling ${this.baseUrl}${endpoint}`);
       const headers = this.getAuthHeaders();
 
-      return await fetchWithRetry<T & { status?: number }>(`${this.baseUrl}${endpoint}`, {
+      return await fetchJSON<T & { status?: number }>(`${this.baseUrl}${endpoint}`, {
         headers,
+        redactFromResponseBody: [this.apiKey, this.oauthToken],
       });
     } catch (error) {
+      const meta = getErrorMeta(error);
+      if (meta.http_status === 429) {
+        throw new Error(buildRateLimitMessage(error), { cause: error });
+      }
+      if (meta.http_status === 403) {
+        throw new Error(buildForbiddenMessage(endpoint, error), { cause: error });
+      }
       const errorMessage = error instanceof Error ? error.message : String(error);
       throw new Error(
         `Failed to make request to Figma API endpoint '${endpoint}': ${errorMessage}`,
+        { cause: error },
       );
     }
   }
 
-  /**
-   * Builds URL query parameters for SVG image requests.
-   */
   private buildSvgQueryParams(svgIds: string[], svgOptions: SvgOptions): string {
     const params = new URLSearchParams({
       ids: svgIds.join(","),
@@ -103,22 +112,12 @@ export class FigmaService {
     return params.toString();
   }
 
-  /**
-   * Gets download URLs for image fills without downloading them.
-   *
-   * @returns Map of imageRef to download URL
-   */
   async getImageFillUrls(fileKey: string): Promise<Record<string, string>> {
     const endpoint = `/files/${fileKey}/images`;
     const response = await this.request<GetImageFillsResponse>(endpoint);
     return response.meta.images || {};
   }
 
-  /**
-   * Gets download URLs for rendered nodes without downloading them.
-   *
-   * @returns Map of node ID to download URL
-   */
   async getNodeRenderUrls(
     fileKey: string,
     nodeIds: string[],
@@ -145,22 +144,12 @@ export class FigmaService {
     }
   }
 
-  /**
-   * Download images method with post-processing support for cropping and returning image dimensions.
-   *
-   * Supports:
-   * - Image fills vs rendered nodes (based on imageRef vs nodeId)
-   * - PNG vs SVG format (based on filename extension)
-   * - Image cropping based on transform matrices
-   * - CSS variable generation for image dimensions
-   *
-   * @returns Array of local file paths for successfully downloaded images
-   */
   async downloadImages(
     fileKey: string,
     localPath: string,
     items: Array<{
       imageRef?: string;
+      gifRef?: string;
       nodeId?: string;
       fileName: string;
       needsCropping?: boolean;
@@ -171,40 +160,44 @@ export class FigmaService {
   ): Promise<ImageProcessingResult[]> {
     if (items.length === 0) return [];
 
-    const sanitizedPath = path.normalize(localPath).replace(/^(\.\.(\/|\\|$))+/, "");
-    const resolvedPath = path.resolve(sanitizedPath);
-    if (!resolvedPath.startsWith(path.resolve(process.cwd()))) {
-      throw new Error("Invalid path specified. Directory traversal is not allowed.");
-    }
-
+    const resolvedPath = localPath;
     const { pngScale = 2, svgOptions } = options;
     const downloadPromises: Promise<ImageProcessingResult[]>[] = [];
 
-    // Separate items by type
     const imageFills = items.filter(
-      (item): item is typeof item & { imageRef: string } => !!item.imageRef,
+      (item): item is typeof item & ({ imageRef: string } | { gifRef: string }) =>
+        !!item.imageRef || !!item.gifRef,
     );
     const renderNodes = items.filter(
       (item): item is typeof item & { nodeId: string } => !!item.nodeId,
     );
 
-    // Download image fills with processing
     if (imageFills.length > 0) {
       const fillUrls = await this.getImageFillUrls(fileKey);
       const fillDownloads = imageFills
-        .map(({ imageRef, fileName, needsCropping, cropTransform, requiresImageDimensions }) => {
-          const imageUrl = fillUrls[imageRef];
-          return imageUrl
-            ? downloadAndProcessImage(
-                fileName,
-                resolvedPath,
-                imageUrl,
-                needsCropping,
-                cropTransform,
-                requiresImageDimensions,
-              )
-            : null;
-        })
+        .map(
+          ({
+            imageRef,
+            gifRef,
+            fileName,
+            needsCropping,
+            cropTransform,
+            requiresImageDimensions,
+          }) => {
+            const fillRef = gifRef ?? imageRef;
+            const imageUrl = fillRef ? fillUrls[fillRef] : undefined;
+            return imageUrl
+              ? downloadAndProcessImage(
+                  fileName,
+                  resolvedPath,
+                  imageUrl,
+                  needsCropping,
+                  cropTransform,
+                  requiresImageDimensions,
+                )
+              : null;
+          },
+        )
         .filter((promise): promise is Promise<ImageProcessingResult> => promise !== null);
 
       if (fillDownloads.length > 0) {
@@ -212,12 +205,10 @@ export class FigmaService {
       }
     }
 
-    // Download rendered nodes with processing
     if (renderNodes.length > 0) {
       const pngNodes = renderNodes.filter((node) => !node.fileName.toLowerCase().endsWith(".svg"));
       const svgNodes = renderNodes.filter((node) => node.fileName.toLowerCase().endsWith(".svg"));
 
-      // Download PNG renders
       if (pngNodes.length > 0) {
         const pngUrls = await this.getNodeRenderUrls(
           fileKey,
@@ -246,7 +237,6 @@ export class FigmaService {
         }
       }
 
-      // Download SVG renders
       if (svgNodes.length > 0) {
         const svgUrls = await this.getNodeRenderUrls(
           fileKey,
@@ -280,48 +270,45 @@ export class FigmaService {
     return results.flat();
   }
 
-  /**
-   * Get raw Figma API response for a file (for use with flexible extractors)
-   */
   async getRawFile(
     fileKey: string,
     depth?: number | null,
-  ): Promise<{ data: GetFileResponse; cacheInfo: CacheInfo }> {
-    let response: GetFileResponse;
-    let cacheInfo: CacheInfo;
-
+  ): Promise<{ data: GetFileResponse; rawSize: number; cacheInfo: CacheInfo }> {
     if (this.fileCache) {
       const cacheResult = await this.loadFileFromCache(fileKey);
-      response = cacheResult.data;
-      cacheInfo = cacheResult.cacheInfo;
-
       if (typeof depth === "number") {
-        const truncated = cloneFileResponseWithDepth(response, depth);
+        const truncated = cloneFileResponseWithDepth(cacheResult.data, depth);
         writeLogs("figma-raw.json", truncated);
-        return { data: truncated, cacheInfo };
+        return {
+          data: truncated,
+          rawSize: measureRawSize(truncated),
+          cacheInfo: cacheResult.cacheInfo,
+        };
       }
-      writeLogs("figma-raw.json", response);
-      return { data: response, cacheInfo };
+
+      writeLogs("figma-raw.json", cacheResult.data);
+      return cacheResult;
     }
 
-    response = await this.fetchFileFromApi(fileKey, depth);
-    writeLogs("figma-raw.json", response);
-    return { data: response, cacheInfo: { usedCache: false } };
+    const result = await this.fetchFileFromApi(fileKey, depth);
+    writeLogs("figma-raw.json", result.data);
+    return { ...result, cacheInfo: { usedCache: false } };
   }
 
-  /**
-   * Get raw Figma API response for specific nodes (for use with flexible extractors)
-   */
   async getRawNode(
     fileKey: string,
     nodeId: string,
     depth?: number | null,
-  ): Promise<{ data: GetFileNodesResponse; cacheInfo: CacheInfo }> {
+  ): Promise<{ data: GetFileNodesResponse; rawSize: number; cacheInfo: CacheInfo }> {
     if (this.fileCache) {
       const cacheResult = await this.loadFileFromCache(fileKey);
       const nodeResponse = buildNodeResponseFromFile(cacheResult.data, nodeId, depth);
       writeLogs("figma-raw.json", nodeResponse);
-      return { data: nodeResponse, cacheInfo: cacheResult.cacheInfo };
+      return {
+        data: nodeResponse,
+        rawSize: measureRawSize(nodeResponse),
+        cacheInfo: cacheResult.cacheInfo,
+      };
     }
 
     const endpoint = `/files/${fileKey}/nodes?ids=${nodeId}${depth ? `&depth=${depth}` : ""}`;
@@ -329,24 +316,20 @@ export class FigmaService {
       `Retrieving raw Figma node: ${nodeId} from ${fileKey} (depth: ${depth ?? "default"})`,
     );
 
-    const response = await this.request<GetFileNodesResponse>(endpoint);
-    writeLogs("figma-raw.json", response);
+    const result = await this.requestWithSize<GetFileNodesResponse>(endpoint);
+    writeLogs("figma-raw.json", result.data);
 
-    return { data: response, cacheInfo: { usedCache: false } };
+    return { ...result, cacheInfo: { usedCache: false } };
   }
 
   private async loadFileFromCache(
     fileKey: string,
-  ): Promise<{ data: GetFileResponse; cacheInfo: CacheInfo }> {
-    if (!this.fileCache) {
-      const data = await this.fetchFileFromApi(fileKey);
-      return { data, cacheInfo: { usedCache: false } };
-    }
-
-    const cacheResult = await this.fileCache.get(fileKey);
+  ): Promise<{ data: GetFileResponse; rawSize: number; cacheInfo: CacheInfo }> {
+    const cacheResult = await this.fileCache?.get(fileKey);
     if (cacheResult) {
       return {
         data: cacheResult.data,
+        rawSize: measureRawSize(cacheResult.data),
         cacheInfo: {
           usedCache: true,
           cachedAt: cacheResult.cachedAt,
@@ -356,30 +339,21 @@ export class FigmaService {
     }
 
     const fresh = await this.fetchFileFromApi(fileKey);
-    await this.fileCache.set(fileKey, fresh);
-    return {
-      data: fresh,
-      cacheInfo: {
-        usedCache: false,
-      },
-    };
+    await this.fileCache?.set(fileKey, fresh.data);
+    return { ...fresh, cacheInfo: { usedCache: false } };
   }
 
-  private async fetchFileFromApi(fileKey: string, depth?: number | null): Promise<GetFileResponse> {
+  private async fetchFileFromApi(
+    fileKey: string,
+    depth?: number | null,
+  ): Promise<{ data: GetFileResponse; rawSize: number }> {
     const endpoint = `/files/${fileKey}${depth ? `?depth=${depth}` : ""}`;
-    Logger.log(
-      `Retrieving raw Figma file: ${fileKey} (depth: ${depth ?? (this.fileCache ? "full" : "default")})`,
-    );
-
-    return this.request<GetFileResponse>(endpoint);
+    Logger.log(`Retrieving raw Figma file: ${fileKey} (depth: ${depth ?? "default"})`);
+    return this.requestWithSize<GetFileResponse>(endpoint);
   }
 }
 
 function cloneFileResponseWithDepth(file: GetFileResponse, depth: number): GetFileResponse {
-  if (depth === undefined || depth === null) {
-    return file;
-  }
-
   return {
     ...file,
     document: cloneNode(file.document, depth) as DocumentNode,
@@ -405,7 +379,6 @@ function cloneNode<T extends FigmaNode>(node: T, depth?: number): T {
   }
 
   clone.children = node.children.map((child) => cloneNode(child, depth - 1));
-
   return clone;
 }
 
@@ -465,6 +438,10 @@ function findNodesById(root: DocumentNode, targetIds: Set<string>): Map<string, 
   }
 
   return result;
+}
+
+function measureRawSize(value: unknown): number {
+  return Buffer.byteLength(JSON.stringify(value), "utf8");
 }
 
 type NodeWithChildren = FigmaNode & { children: FigmaNode[] };
