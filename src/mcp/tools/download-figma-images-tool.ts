@@ -85,6 +85,13 @@ const parameters = {
     .describe(
       "The path to the directory where images should be saved, relative to the project root. If the directory does not exist, it will be created. Use forward slashes for path separators (e.g., 'public/images' or 'assets/icons').",
     ),
+  figma_api_key: z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      "Optional Figma Personal Access Token for this tool call. Overrides server-level API key or OAuth authentication for this request only.",
+    ),
 };
 
 const parametersSchema = z.object(parameters);
@@ -100,7 +107,9 @@ async function downloadFigmaImages(
   extra: ToolExtra,
 ) {
   try {
-    const { fileKey, nodes, localPath, pngScale } = parametersSchema.parse(params);
+    const { fileKey, nodes, localPath, pngScale, figma_api_key } = parametersSchema.parse(params);
+    const callFigmaService = figma_api_key ? figmaService.withApiKey(figma_api_key) : figmaService;
+    const callAuthMode: AuthMode = figma_api_key ? "api_key" : authMode;
 
     // Resolve localPath relative to the configured image directory.
     // path.join (not path.resolve) so a leading "/" is treated as relative, not absolute —
@@ -139,7 +148,7 @@ async function downloadFigmaImages(
 
     let stopHeartbeat: (() => void) | undefined;
     const { downloads, successCount } = await runDownloadFigmaImages(
-      figmaService,
+      callFigmaService,
       { fileKey, nodes, localPath: resolvedPath, pngScale },
       {
         onDownloadStart: async (downloadCount) => {
@@ -150,7 +159,7 @@ async function downloadFigmaImages(
           stopHeartbeat?.();
         },
         onComplete: (outcome) =>
-          captureDownloadImagesCall(outcome, { transport, authMode, clientInfo }),
+          captureDownloadImagesCall(outcome, { transport, authMode: callAuthMode, clientInfo }),
       },
     );
 

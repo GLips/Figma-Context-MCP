@@ -88,13 +88,6 @@ export function resolveAuth(flags: {
     useOAuth,
   };
 
-  if (!auth.figmaApiKey && !auth.figmaOAuthToken) {
-    console.error(
-      "Either FIGMA_API_KEY or FIGMA_OAUTH_TOKEN is required (via CLI argument or .env file)",
-    );
-    process.exit(1);
-  }
-
   return auth;
 }
 
@@ -166,11 +159,13 @@ export function getServerConfig(flags: ServerFlags): ServerConfig {
         `- FIGMA_OAUTH_TOKEN: ${maskApiKey(auth.figmaOAuthToken)} (source: ${configSources.figmaOauthToken})`,
       );
       console.log("- Authentication Method: OAuth Bearer Token");
-    } else {
+    } else if (auth.figmaApiKey) {
       console.log(
         `- FIGMA_API_KEY: ${maskApiKey(auth.figmaApiKey)} (source: ${configSources.figmaApiKey})`,
       );
       console.log("- Authentication Method: Personal Access Token (X-Figma-Token)");
+    } else {
+      console.log("- Authentication Method: Per-tool-call figma_api_key");
     }
     console.log(`- FRAMELINK_PORT: ${port.value} (source: ${configSources.port})`);
     console.log(`- FRAMELINK_HOST: ${host.value} (source: ${configSources.host})`);

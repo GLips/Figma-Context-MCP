@@ -33,6 +33,13 @@ const parameters = {
     .describe(
       "OPTIONAL. Do NOT use unless explicitly requested by the user. Controls how many levels deep to traverse the node tree.",
     ),
+  figma_api_key: z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      "Optional Figma Personal Access Token for this tool call. Overrides server-level API key or OAuth authentication for this request only.",
+    ),
 };
 
 const parametersSchema = z.object(parameters);
@@ -48,7 +55,9 @@ async function getFigmaData(
   extra: ToolExtra,
 ) {
   try {
-    const { fileKey, nodeId: rawNodeId, depth } = parametersSchema.parse(params);
+    const { fileKey, nodeId: rawNodeId, depth, figma_api_key } = parametersSchema.parse(params);
+    const callFigmaService = figma_api_key ? figmaService.withApiKey(figma_api_key) : figmaService;
+    const callAuthMode: AuthMode = figma_api_key ? "api_key" : authMode;
 
     // Replace - with : in nodeId for our query — Figma API expects :.
     // MCP-specific input quirk, so it lives here rather than in the shared core.
@@ -63,30 +72,35 @@ async function getFigmaData(
     let stopFetchHeartbeat: (() => void) | undefined;
     let stopSimplifyHeartbeat: (() => void) | undefined;
 
-    const result = await runGetFigmaData(figmaService, { fileKey, nodeId, depth }, outputFormat, {
-      onFetchStart: async () => {
-        await sendProgress(extra, 0, 4, "Fetching design data from Figma API");
-        stopFetchHeartbeat = startProgressHeartbeat(extra, "Waiting for Figma API response");
+    const result = await runGetFigmaData(
+      callFigmaService,
+      { fileKey, nodeId, depth },
+      outputFormat,
+      {
+        onFetchStart: async () => {
+          await sendProgress(extra, 0, 4, "Fetching design data from Figma API");
+          stopFetchHeartbeat = startProgressHeartbeat(extra, "Waiting for Figma API response");
+        },
+        onFetchComplete: () => {
+          stopFetchHeartbeat?.();
+        },
+        onSimplifyStart: async (progress) => {
+          await sendProgress(extra, 1, 4, "Fetched design data, simplifying");
+          stopSimplifyHeartbeat = startProgressHeartbeat(
+            extra,
+            () => `Simplifying design data (${progress.getNodeCount()} nodes processed)`,
+          );
+        },
+        onSimplifyComplete: () => {
+          stopSimplifyHeartbeat?.();
+        },
+        onSerializeStart: async () => {
+          await sendProgress(extra, 2, 4, "Simplified design, serializing response");
+        },
+        onComplete: (outcome) =>
+          captureGetFigmaDataCall(outcome, { transport, authMode: callAuthMode, clientInfo }),
       },
-      onFetchComplete: () => {
-        stopFetchHeartbeat?.();
-      },
-      onSimplifyStart: async (progress) => {
-        await sendProgress(extra, 1, 4, "Fetched design data, simplifying");
-        stopSimplifyHeartbeat = startProgressHeartbeat(
-          extra,
-          () => `Simplifying design data (${progress.getNodeCount()} nodes processed)`,
-        );
-      },
-      onSimplifyComplete: () => {
-        stopSimplifyHeartbeat?.();
-      },
-      onSerializeStart: async () => {
-        await sendProgress(extra, 2, 4, "Simplified design, serializing response");
-      },
-      onComplete: (outcome) =>
-        captureGetFigmaDataCall(outcome, { transport, authMode, clientInfo }),
-    });
+    );
 
     Logger.log(`Successfully extracted data: ${result.metrics.simplifiedNodeCount} nodes`);
     await sendProgress(extra, 3, 4, "Serialized, sending response");
