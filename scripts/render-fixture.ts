@@ -8,7 +8,8 @@
  */
 import { readFileSync, writeFileSync } from "node:fs";
 import { parseArgs } from "node:util";
-import { serializeResult, type OutputFormat } from "../src/utils/serialize.js";
+import { serializeResult, isOutputFormat, VALID_OUTPUT_FORMATS } from "../src/utils/serialize.js";
+import { wrapForSerialization } from "../src/utils/serializable-design.js";
 import type { SimplifiedDesign } from "../src/extractors/types.js";
 
 const { values } = parseArgs({
@@ -26,14 +27,15 @@ if (!values.input || !values.output) {
   process.exit(1);
 }
 
-const format = values.format as OutputFormat;
-if (!["yaml", "json", "tree"].includes(format)) {
-  console.error(`Invalid format: ${format}`);
+if (!isOutputFormat(values.format!)) {
+  console.error(
+    `Invalid format: ${values.format}. Expected one of: ${VALID_OUTPUT_FORMATS.join(", ")}`,
+  );
   process.exit(1);
 }
 
 const design = JSON.parse(readFileSync(values.input, "utf8")) as SimplifiedDesign;
-const output = serializeResult(design, format);
+const output = serializeResult(wrapForSerialization(design), values.format);
 writeFileSync(values.output, output);
 
 console.error(

@@ -7,6 +7,7 @@ import {
 } from "~/extractors/index.js";
 import { writeLogs } from "~/utils/logger.js";
 import { serializeResult, type OutputFormat } from "~/utils/serialize.js";
+import { wrapForSerialization } from "~/utils/serializable-design.js";
 import { tagError } from "~/utils/error-meta.js";
 import {
   type GetFigmaDataMetrics,
@@ -129,9 +130,7 @@ export async function getFigmaData(
     const serializeStart = Date.now();
     let formatted: string;
     try {
-      const { nodes, globalVars, ...metadata } = simplifiedDesign;
-      const result = { metadata, nodes, globalVars };
-      formatted = serializeResult(result, outputFormat);
+      formatted = serializeResult(wrapForSerialization(simplifiedDesign), outputFormat);
     } catch (error) {
       tagError(error, { phase: "serialize" });
     }

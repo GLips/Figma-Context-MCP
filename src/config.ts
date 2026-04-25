@@ -2,7 +2,7 @@ import { config as loadEnv } from "dotenv";
 import { resolve as resolvePath } from "path";
 import type { FigmaAuthOptions } from "./services/figma.js";
 import { resolveTelemetryEnabled } from "./telemetry/index.js";
-import type { OutputFormat } from "./utils/serialize.js";
+import { VALID_OUTPUT_FORMATS, isOutputFormat, type OutputFormat } from "./utils/serialize.js";
 
 export type Source = "cli" | "env" | "default";
 
@@ -65,20 +65,19 @@ export function envBool(name: string): boolean | undefined {
   return undefined;
 }
 
-const VALID_OUTPUT_FORMATS: readonly OutputFormat[] = ["yaml", "json", "tree"];
-
+// Throws on invalid input so callers control how the failure surfaces — the
+// server entry point exits the process, but the `fetch` CLI command needs to
+// run its `finally` (telemetry shutdown) before exiting, which `process.exit`
+// would bypass.
 export function parseOutputFormat(
   value: string | undefined,
   source: string,
 ): OutputFormat | undefined {
   if (value === undefined) return undefined;
-  if ((VALID_OUTPUT_FORMATS as readonly string[]).includes(value)) {
-    return value as OutputFormat;
-  }
-  console.error(
+  if (isOutputFormat(value)) return value;
+  throw new Error(
     `Invalid ${source} value '${value}'. Expected one of: ${VALID_OUTPUT_FORMATS.join(", ")}`,
   );
-  process.exit(1);
 }
 
 function maskApiKey(key: string): string {

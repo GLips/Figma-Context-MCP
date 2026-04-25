@@ -10,14 +10,16 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { resolve, dirname, basename } from "node:path";
 import { serializeResult } from "../src/utils/serialize.js";
+import { wrapForSerialization } from "../src/utils/serializable-design.js";
 import type { SimplifiedDesign, SimplifiedNode } from "../src/extractors/types.js";
 
 const inputPath = resolve(process.argv[2] ?? "logs/figma-simplified.json");
 const design = JSON.parse(readFileSync(inputPath, "utf8")) as SimplifiedDesign;
+const wrapped = wrapForSerialization(design);
 
-const yamlOut = serializeResult(design, "yaml");
-const jsonOut = serializeResult(design, "json");
-const treeOut = serializeResult(design, "tree");
+const yamlOut = serializeResult(wrapped, "yaml");
+const jsonOut = serializeResult(wrapped, "json");
+const treeOut = serializeResult(wrapped, "tree");
 
 const outDir = dirname(inputPath);
 const stem = basename(inputPath, ".json");

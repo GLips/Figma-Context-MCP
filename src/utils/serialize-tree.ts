@@ -1,5 +1,6 @@
 import yaml from "js-yaml";
-import type { SimplifiedDesign, SimplifiedNode } from "~/extractors/types.js";
+import type { SimplifiedNode } from "~/extractors/types.js";
+import type { SerializableDesign } from "./serializable-design.js";
 
 /**
  * Render the simplified design as a token-efficient indented tree.
@@ -15,21 +16,23 @@ import type { SimplifiedDesign, SimplifiedNode } from "~/extractors/types.js";
  *
  * All SimplifiedNode fields are preserved; this is a serialization change only.
  */
-export function serializeAsTree(design: SimplifiedDesign): string {
+export function serializeAsTree(design: SerializableDesign): string {
   const sections: string[] = [];
 
-  sections.push(`NAME: ${design.name}`);
+  // Quote the design name — designers can use anything, including ":" or
+  // whitespace, which would otherwise produce a malformed `NAME: foo: bar` line.
+  sections.push(`NAME: ${quote(design.metadata.name)}`);
 
   if (Object.keys(design.globalVars.styles).length > 0) {
     sections.push(`\nGLOBAL_VARS:\n${dumpYaml(design.globalVars.styles)}`);
   }
 
-  if (Object.keys(design.components).length > 0) {
-    sections.push(`COMPONENTS:\n${dumpYaml(design.components)}`);
+  if (Object.keys(design.metadata.components).length > 0) {
+    sections.push(`COMPONENTS:\n${dumpYaml(design.metadata.components)}`);
   }
 
-  if (Object.keys(design.componentSets).length > 0) {
-    sections.push(`COMPONENT_SETS:\n${dumpYaml(design.componentSets)}`);
+  if (Object.keys(design.metadata.componentSets).length > 0) {
+    sections.push(`COMPONENT_SETS:\n${dumpYaml(design.metadata.componentSets)}`);
   }
 
   const lines: string[] = ["NODES:"];
@@ -103,12 +106,14 @@ function maybeQuote(s: string): string {
   return /[\s"]/.test(s) ? JSON.stringify(s) : s;
 }
 
-// Inline a Record as key:val pairs joined by commas. Values that contain commas
-// or colons (rare in component property names/values, but possible) are quoted.
+// Encode a record as compact JSON, escaping any whitespace inside keys/values
+// to `\uXXXX` so the result is a single whitespace-free token. Figma allows
+// free-form component property names like "On Sale" — without this, a literal
+// space inside the JSON breaks the space-delimited node-line parse contract.
+// The consumer round-trips by passing the value to `JSON.parse` directly.
 function encodeRecord(record: Record<string, string | boolean>): string {
-  const entries = Object.entries(record).map(([k, v]) => {
-    const val = typeof v === "string" && /[,:\s"]/.test(v) ? JSON.stringify(v) : String(v);
-    return `${k}:${val}`;
-  });
-  return entries.join(",");
+  return JSON.stringify(record).replace(
+    /\s/g,
+    (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`,
+  );
 }

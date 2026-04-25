@@ -69,7 +69,13 @@ const argv = cli({
 if (!argv.command) {
   // NODE_ENV=cli is a legacy backdoor for stdio mode
   const isStdio = argv.flags.stdio === true || process.env.NODE_ENV === "cli";
-  const config = getServerConfig({ ...argv.flags, stdio: isStdio });
+  let config;
+  try {
+    config = getServerConfig({ ...argv.flags, stdio: isStdio });
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  }
   startServer(config).catch((error) => {
     console.error("Failed to start server:", error);
     process.exit(1);

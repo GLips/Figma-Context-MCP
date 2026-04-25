@@ -6,6 +6,7 @@ import {
   type Transport,
   type AuthMode,
 } from "~/telemetry/index.js";
+import type { OutputFormat } from "~/utils/serialize.js";
 
 /**
  * The MCP SDK validates tool input against the registered zod schema BEFORE
@@ -37,6 +38,7 @@ export function installValidationRejectCapture(
   context: {
     transport: Transport;
     authMode: AuthMode;
+    outputFormat: OutputFormat;
     getClientInfo: () => ClientInfo | undefined;
   },
 ): void {
@@ -77,6 +79,7 @@ export function installValidationRejectCapture(
               field: normalizeFieldPath(issue?.path),
               rule: issue?.code ?? "unknown",
               message: issue?.message ?? error.message,
+              outputFormat: context.outputFormat,
             },
             {
               transport: context.transport,

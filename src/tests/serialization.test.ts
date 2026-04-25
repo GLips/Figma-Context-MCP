@@ -1,5 +1,7 @@
 import yaml from "js-yaml";
 import { serializeResult } from "~/utils/serialize.js";
+import { wrapForSerialization } from "~/utils/serializable-design.js";
+import type { SimplifiedDesign } from "~/extractors/types.js";
 
 describe("result serialization", () => {
   describe("YAML format", () => {
@@ -90,6 +92,65 @@ describe("result serialization", () => {
       const parsed = JSON.parse(output);
 
       expect(parsed).toEqual(data);
+    });
+  });
+
+  describe("tree format", () => {
+    // The production pipeline wraps the SimplifiedDesign before calling
+    // serializeResult. The tree renderer must read from that wrapped shape;
+    // a regression here silently broke the production --format=tree path.
+    it("renders the wrapped design shape produced by getFigmaData", () => {
+      const design: SimplifiedDesign = {
+        name: "Test File",
+        components: {},
+        componentSets: {},
+        globalVars: { styles: {} },
+        nodes: [
+          {
+            id: "1:1",
+            name: "Card",
+            type: "FRAME",
+            borderRadius: "12px",
+          },
+        ],
+      };
+
+      const output = serializeResult(wrapForSerialization(design), "tree");
+
+      expect(output).toContain('NAME: "Test File"');
+      expect(output).toContain("NODES:");
+      expect(output).toMatch(/\[FRAME\] "Card" #1:1 borderRadius=12px/);
+    });
+
+    // Figma allows free-form component property names. A name with whitespace
+    // would break the space-delimited `key=value` contract on the node line.
+    it("encodes componentProperties safely when keys contain whitespace", () => {
+      const design: SimplifiedDesign = {
+        name: "Test",
+        components: {},
+        componentSets: {},
+        globalVars: { styles: {} },
+        nodes: [
+          {
+            id: "1:1",
+            name: "Btn",
+            type: "INSTANCE",
+            componentId: "abc",
+            componentProperties: { "On Sale": true, Size: "md" },
+          },
+        ],
+      };
+
+      const output = serializeResult(wrapForSerialization(design), "tree");
+      const nodeLine = output.split("\n").find((l) => l.includes("[INSTANCE]"))!;
+      // The whole field=value pair must be one whitespace-free token, so
+      // splitting the line on whitespace correctly isolates it.
+      const tokens = nodeLine.trim().split(/\s+/);
+      const propsToken = tokens.find((t) => t.startsWith("componentProperties="))!;
+      expect(propsToken).toBeDefined();
+      // Round-trip the inner value to confirm the data survives encoding.
+      const rawValue = propsToken.slice("componentProperties=".length);
+      expect(JSON.parse(rawValue)).toEqual({ "On Sale": true, Size: "md" });
     });
   });
 });

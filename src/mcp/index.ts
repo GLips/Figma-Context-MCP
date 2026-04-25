@@ -51,7 +51,7 @@ function createServer(
     getClientInfo,
   });
 
-  installValidationRejectCapture(server, { transport, authMode, getClientInfo });
+  installValidationRejectCapture(server, { transport, authMode, outputFormat, getClientInfo });
 
   Logger.isHTTP = transport !== "stdio";
 
