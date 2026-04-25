@@ -157,24 +157,24 @@ describe("resolveLocalPath", () => {
       expect(result).toEqual({ ok: false, reason: "outside_image_dir" });
     });
 
-    it("rejects backslash paths because backslashes aren't separators on POSIX", () => {
+    it("rejects backslash drive-letter paths on POSIX", () => {
       const result = resolveLocalPath("C:\\Users\\xl\\Desktop\\figma\\public", base, posix);
-      expect(result).toEqual({ ok: false, reason: "windows_path_on_posix" });
+      expect(result).toEqual({ ok: false, reason: "drive_letter_on_posix" });
     });
 
     it("rejects forward-slash drive-letter paths on POSIX", () => {
       // path.posix.isAbsolute("C:/Users/...") returns false, so without an
       // explicit check this would resolve to "<base>/C:/Users/..." and miswrite.
       const result = resolveLocalPath("C:/Users/xl/Desktop/figma/public", base, posix);
-      expect(result).toEqual({ ok: false, reason: "windows_path_on_posix" });
+      expect(result).toEqual({ ok: false, reason: "drive_letter_on_posix" });
     });
 
-    it("rejects relative paths with backslashes on POSIX", () => {
-      // Without the guard, path.posix.resolve("/home/user/project", "local\\root")
-      // produces "/home/user/project/local\root" — one literal directory
-      // named "local\root". Same silent-miswrite class as the absolute case.
-      const result = resolveLocalPath("local\\root", base, posix);
-      expect(result).toEqual({ ok: false, reason: "windows_path_on_posix" });
+    it("normalizes backslashes in relative paths to forward slashes on POSIX", () => {
+      // LLMs frequently send Windows-style separators regardless of host OS.
+      // Drive-letter paths still reject (above) — only pure separator
+      // mismatches normalize.
+      const result = resolveLocalPath("local\\nested\\dir", base, posix);
+      expect(result).toEqual({ ok: true, resolvedPath: "/project/root/local/nested/dir" });
     });
   });
 

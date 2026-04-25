@@ -24,10 +24,6 @@ export async function downloadFigmaImage(
       fs.mkdirSync(localPath, { recursive: true });
     }
 
-    // Build the complete file path and verify it stays within localPath.
-    // isWithin uses path.relative — correct for drive roots where
-    // startsWith(localPath + path.sep) would double-count the trailing
-    // separator and falsely reject valid paths.
     const fullPath = path.resolve(path.join(localPath, fileName));
     if (!isWithin(localPath, fullPath)) {
       tagError(new Error(`File path escapes target directory: ${fileName}`), {

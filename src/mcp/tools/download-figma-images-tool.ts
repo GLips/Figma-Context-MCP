@@ -84,7 +84,7 @@ const parameters = {
   localPath: z
     .string()
     .describe(
-      "The directory to save images in. Provide a path relative to the server's image directory (e.g., 'public/images' or 'assets/icons') using forward slashes. Absolute paths are accepted only if they point inside the image directory. The directory is created if missing.",
+      "The directory to save images in. Provide a path relative to the server's image directory (e.g., 'public/images' or 'assets/icons'). Either separator works. Absolute paths are accepted only if they point inside the image directory. The directory is created if missing.",
     ),
 };
 
@@ -153,7 +153,6 @@ async function downloadFigmaImages(
 
     const imagesList = downloads
       .map(({ result, requestedFileNames }) => {
-        // path.basename, not split("/"), so this works with backslash paths on Windows.
         const fileName = path.basename(result.filePath);
         const dimensions = `${result.finalDimensions.width}x${result.finalDimensions.height}`;
         const cropStatus = result.wasCropped ? " (cropped)" : "";
@@ -210,13 +209,13 @@ function rejectionDetails(
   baseDir: string,
 ): { rule: ResolveLocalPathFailureReason; userMessage: string; telemetryMessage: string } {
   switch (reason) {
-    case "windows_path_on_posix":
+    case "drive_letter_on_posix":
       return {
         rule: reason,
-        telemetryMessage: `Windows-style path on POSIX server: ${localPath}`,
+        telemetryMessage: `Drive-letter path on POSIX server: ${localPath}`,
         userMessage:
-          `Invalid path: "${localPath}" looks like a Windows path (backslash separator or drive letter), but this server is running on POSIX where those aren't path separators. ` +
-          `Use forward slashes only. The server's image directory is "${baseDir}"; pass a path relative to it (e.g., "public/images").`,
+          `Invalid path: "${localPath}" starts with a Windows drive letter, but this server is running on POSIX where drive letters don't exist. ` +
+          `The server's image directory is "${baseDir}"; pass a path relative to it (e.g., "public/images").`,
       };
     case "outside_image_dir": {
       // Leading-slash inputs used to be silently re-interpreted as relative

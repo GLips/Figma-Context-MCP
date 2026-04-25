@@ -1,6 +1,6 @@
 import path from "path";
 
-export type ResolveLocalPathFailureReason = "outside_image_dir" | "windows_path_on_posix";
+export type ResolveLocalPathFailureReason = "outside_image_dir" | "drive_letter_on_posix";
 export type ResolveLocalPathResult =
   | { ok: true; resolvedPath: string }
   | { ok: false; reason: ResolveLocalPathFailureReason };
@@ -23,9 +23,11 @@ type PathImpl = Pick<typeof path, "sep" | "resolve" | "isAbsolute" | "relative">
  * reported success and the file was never where the user expected.
  *
  * This resolver makes ambiguous inputs loud:
- *   - On POSIX servers, backslashes are not separators and drive letters
- *     ("C:/...") are not recognized as absolute. Either form would otherwise
- *     resolve to a literal "C:" directory under the base. Reject both.
+ *   - On POSIX servers, backslashes are normalized to forward slashes so an
+ *     LLM can use either separator. Drive-letter prefixes ("C:/..." or
+ *     "C:\\...") still reject loudly though — they aren't recognized as
+ *     absolute by path.posix.isAbsolute, so they'd otherwise resolve to
+ *     "<base>/C:/..." and silently miswrite.
  *   - Absolute paths must lexically resolve inside the base directory.
  *     Naturally accepts "user pasted a full path that happens to be inside
  *     the project" while rejecting absolute paths pointing elsewhere.
@@ -43,25 +45,26 @@ export function resolveLocalPath(
   baseDir: string,
   pathImpl: PathImpl = path,
 ): ResolveLocalPathResult {
+  let normalized = rawPath;
   if (pathImpl.sep === "/") {
-    // Backslashes on POSIX are valid filename characters, not separators —
-    // a "Windows path" would become a single literal directory name.
-    if (rawPath.includes("\\")) {
-      return { ok: false, reason: "windows_path_on_posix" };
-    }
-    // Drive letters with forward slashes ("C:/Users/...") aren't recognized
-    // as absolute by POSIX path.isAbsolute, so they'd resolve to
-    // "<base>/C:/Users/..." and silently miswrite. Treat them like the
-    // backslash case for the same reason.
+    // Drive-letter prefixes aren't recognized as absolute by path.posix, so
+    // "C:\\Users\\..." or "C:/Users/..." would resolve to "<base>/C:/Users/..."
+    // and silently miswrite. The path is meaningless on POSIX regardless.
     if (/^[A-Za-z]:[/\\]/.test(rawPath)) {
-      return { ok: false, reason: "windows_path_on_posix" };
+      return { ok: false, reason: "drive_letter_on_posix" };
     }
+    // Otherwise normalize backslashes to forward slashes so an LLM can use
+    // either separator without thinking about host OS. Backslashes are valid
+    // filename characters on POSIX in theory, but real-world filenames
+    // virtually never contain them and the common case (LLM mixing styles)
+    // is far more important.
+    normalized = rawPath.replace(/\\/g, "/");
   }
 
   const base = pathImpl.resolve(baseDir);
-  const candidate = pathImpl.isAbsolute(rawPath)
-    ? pathImpl.resolve(rawPath)
-    : pathImpl.resolve(base, rawPath);
+  const candidate = pathImpl.isAbsolute(normalized)
+    ? pathImpl.resolve(normalized)
+    : pathImpl.resolve(base, normalized);
 
   if (!isWithin(base, candidate, pathImpl)) {
     return { ok: false, reason: "outside_image_dir" };
