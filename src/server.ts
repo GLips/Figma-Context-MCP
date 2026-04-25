@@ -63,6 +63,15 @@ export async function startServer(config: ServerConfig): Promise<void> {
   };
 
   if (config.isStdioMode) {
+    // MCP clients spawn stdio servers with whatever cwd they were started in,
+    // which is rarely the user's project root. Warn so a missing --image-dir
+    // doesn't silently send images to e.g. the client's install directory.
+    if (config.configSources.imageDir === "default") {
+      process.stderr.write(
+        `Warning: --image-dir not set; download_figma_images will save under the server's cwd (${config.imageDir}). ` +
+          `MCP clients often launch the server outside your project root — set IMAGE_DIR or pass --image-dir to make this explicit.\n`,
+      );
+    }
     const server = createServer(config.auth, serverOptions);
     const transport = new StdioServerTransport();
     await server.connect(transport);

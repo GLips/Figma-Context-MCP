@@ -1,6 +1,7 @@
 import fs from "fs";
 import path from "path";
 import { tagError } from "~/utils/error-meta.js";
+import { isWithin } from "~/utils/local-path.js";
 
 export type StyleId = `${string}_${string}` & { __brand: "StyleId" };
 
@@ -23,10 +24,12 @@ export async function downloadFigmaImage(
       fs.mkdirSync(localPath, { recursive: true });
     }
 
-    // Build the complete file path and verify it stays within localPath
+    // Build the complete file path and verify it stays within localPath.
+    // isWithin uses path.relative — correct for drive roots where
+    // startsWith(localPath + path.sep) would double-count the trailing
+    // separator and falsely reject valid paths.
     const fullPath = path.resolve(path.join(localPath, fileName));
-    const resolvedLocalPath = path.resolve(localPath);
-    if (!fullPath.startsWith(resolvedLocalPath + path.sep)) {
+    if (!isWithin(localPath, fullPath)) {
       tagError(new Error(`File path escapes target directory: ${fileName}`), {
         category: "invalid_input",
       });
