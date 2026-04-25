@@ -8,6 +8,7 @@ import { Logger } from "./utils/logger.js";
 import { hasProxyEnv, setProxyMode } from "./utils/proxy-env.js";
 import { createServer } from "./mcp/index.js";
 import type { ServerConfig } from "./config.js";
+import type { FigmaAuthOptions } from "./services/figma.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { ErrorCode } from "@modelcontextprotocol/sdk/types.js";
 import * as telemetry from "./telemetry/index.js";
@@ -68,7 +69,8 @@ export async function startServer(config: ServerConfig): Promise<void> {
     await server.connect(transport);
     registerShutdownHandlers(async () => {});
   } else {
-    const createMcpServer = () => createServer(config.auth, serverOptions);
+    const createMcpServer = (req: Request) =>
+      createServer(resolveHttpRequestAuth(config.auth, req), serverOptions);
     console.log(`Initializing Figma MCP Server in HTTP mode on ${config.host}:${config.port}...`);
     await startHttpServer(config.host, config.port, createMcpServer);
 
@@ -110,7 +112,7 @@ function registerShutdownHandlers(onShutdown: () => Promise<void>): void {
 export async function startHttpServer(
   host: string,
   port: number,
-  createMcpServer: () => McpServer,
+  createMcpServer: (req: Request) => McpServer,
 ): Promise<Server> {
   if (httpServer) {
     throw new Error("HTTP server is already running");
@@ -121,7 +123,7 @@ export async function startHttpServer(
   const handlePost = async (req: Request, res: Response) => {
     Logger.log("Received StreamableHTTP request");
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
-    const mcpServer = createMcpServer();
+    const mcpServer = createMcpServer(req);
     const conn: ActiveConnection = { transport, server: mcpServer };
     activeConnections.add(conn);
     res.on("close", () => {
@@ -175,6 +177,23 @@ export async function startHttpServer(
     });
     httpServer = server;
   });
+}
+
+export function resolveHttpRequestAuth(baseAuth: FigmaAuthOptions, req: Request): FigmaAuthOptions {
+  const requestApiKey = getSingleHeader(req, "x-figma-token");
+  if (!requestApiKey) return baseAuth;
+
+  return {
+    figmaApiKey: requestApiKey,
+    figmaOAuthToken: "",
+    useOAuth: false,
+  };
+}
+
+function getSingleHeader(req: Request, name: string): string | undefined {
+  const value = req.headers[name];
+  if (Array.isArray(value)) return value[0]?.trim() || undefined;
+  return value?.trim() || undefined;
 }
 
 export async function stopHttpServer(): Promise<void> {

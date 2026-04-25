@@ -93,7 +93,7 @@ describe("resolveAuth", () => {
     vi.unstubAllEnvs();
   });
 
-  it("allows startup without global credentials for per-tool-call authentication", () => {
+  it("allows startup without global credentials for per-request authentication", () => {
     expect(resolveAuth({})).toEqual({
       figmaApiKey: "",
       figmaOAuthToken: "",

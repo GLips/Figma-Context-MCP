@@ -35,14 +35,6 @@ export class FigmaService {
     this.useOAuth = !!useOAuth && !!this.oauthToken;
   }
 
-  withApiKey(apiKey: string): FigmaService {
-    return new FigmaService({
-      figmaApiKey: apiKey,
-      figmaOAuthToken: "",
-      useOAuth: false,
-    });
-  }
-
   private getAuthHeaders(): Record<string, string> {
     if (this.useOAuth) {
       Logger.log("Using OAuth Bearer token for authentication");
@@ -51,7 +43,7 @@ export class FigmaService {
 
     if (!this.apiKey) {
       throw new Error(
-        "Figma API authentication is required. Configure FIGMA_API_KEY or FIGMA_OAUTH_TOKEN on the server, or pass figma_api_key in the tool call.",
+        "Figma API authentication is required. Configure FIGMA_API_KEY or FIGMA_OAUTH_TOKEN on the server, or send X-Figma-Token on the HTTP request.",
       );
     }
 

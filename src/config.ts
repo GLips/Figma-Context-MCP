@@ -165,7 +165,7 @@ export function getServerConfig(flags: ServerFlags): ServerConfig {
       );
       console.log("- Authentication Method: Personal Access Token (X-Figma-Token)");
     } else {
-      console.log("- Authentication Method: Per-tool-call figma_api_key");
+      console.log("- Authentication Method: Per-request X-Figma-Token header");
     }
     console.log(`- FRAMELINK_PORT: ${port.value} (source: ${configSources.port})`);
     console.log(`- FRAMELINK_HOST: ${host.value} (source: ${configSources.host})`);
