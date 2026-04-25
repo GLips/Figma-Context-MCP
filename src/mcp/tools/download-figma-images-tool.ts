@@ -1,17 +1,17 @@
 import path from "path";
 import { z } from "zod";
-import { FigmaService } from "../../services/figma.js";
-import { Logger } from "../../utils/logger.js";
 import {
-  captureDownloadImagesCall,
-  captureValidationReject,
   type AuthMode,
   type ClientInfo,
+  captureDownloadImagesCall,
+  captureValidationReject,
   type Transport,
 } from "~/telemetry/index.js";
 import { downloadFigmaImages as runDownloadFigmaImages } from "../../services/download-figma-images.js";
+import type { FigmaService } from "../../services/figma.js";
+import { type ResolveLocalPathFailureReason, resolveLocalPath } from "../../utils/local-path.js";
+import { Logger } from "../../utils/logger.js";
 import { sendProgress, startProgressHeartbeat, type ToolExtra } from "../progress.js";
-import { resolveLocalPath, type ResolveLocalPathFailureReason } from "../../utils/local-path.js";
 
 const parameters = {
   fileKey: z
@@ -31,7 +31,7 @@ const parameters = {
         .string()
         .optional()
         .describe(
-          "If a node has an imageRef fill, you must include this variable. Leave blank when downloading Vector SVG images or animated GIFs (use gifRef instead).",
+          "If a node has an imageRef fill, you must include this variable. Leave blank when downloading Vector SVG images or animated GIFs (use gifRef instead), or when an IMAGE fill is present without an imageRef — in that case the node is rendered as PNG via nodeId.",
         ),
       gifRef: z
         .string()
@@ -145,7 +145,11 @@ async function downloadFigmaImages(
           stopHeartbeat?.();
         },
         onComplete: (outcome) =>
-          captureDownloadImagesCall(outcome, { transport, authMode, clientInfo }),
+          captureDownloadImagesCall(outcome, {
+            transport,
+            authMode,
+            clientInfo,
+          }),
       },
     );
 
@@ -207,7 +211,11 @@ function rejectionDetails(
   reason: ResolveLocalPathFailureReason,
   localPath: string,
   baseDir: string,
-): { rule: ResolveLocalPathFailureReason; userMessage: string; telemetryMessage: string } {
+): {
+  rule: ResolveLocalPathFailureReason;
+  userMessage: string;
+  telemetryMessage: string;
+} {
   switch (reason) {
     case "drive_letter_on_posix":
       return {

@@ -27,7 +27,14 @@ export interface ColorValue {
  */
 export type SimplifiedImageFill = {
   type: "IMAGE";
-  imageRef: string;
+  /**
+   * Reference to the embedded image asset. Omitted when Figma returns a null
+   * imageRef — typically images pasted in from a file you don't own, where the
+   * asset still renders in the editor (it's reachable from the source file)
+   * but isn't registered against your file. In that case download_figma_images
+   * falls back to rendering the containing node as a PNG via its nodeId.
+   */
+  imageRef?: string;
   /**
    * Present when the fill is an animated GIF. Use this ref (instead of imageRef) when calling
    * download_figma_images to retrieve the animated GIF file; imageRef only points to a static
@@ -265,9 +272,14 @@ export function buildSimplifiedStrokes(
  */
 export function parsePaint(raw: Paint, hasChildren: boolean = false): SimplifiedFill {
   if (raw.type === "IMAGE") {
+    // Figma's spec types imageRef as a required string, but in practice it can
+    // come back null for IMAGE paints whose asset lives in another file (e.g.
+    // pasted from a file you don't own). Omit the field in that case so the
+    // LLM doesn't pass a null/"null" through to download_figma_images — the
+    // downloader will fall back to rendering the containing node by nodeId.
     const baseImageFill: SimplifiedImageFill = {
       type: "IMAGE",
-      imageRef: raw.imageRef,
+      ...(raw.imageRef ? { imageRef: raw.imageRef } : {}),
       ...(raw.gifRef ? { gifRef: raw.gifRef } : {}),
       scaleMode: raw.scaleMode as "FILL" | "FIT" | "TILE" | "STRETCH",
       scalingFactor: raw.scalingFactor,
