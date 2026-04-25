@@ -168,6 +168,14 @@ describe("resolveLocalPath", () => {
       const result = resolveLocalPath("C:/Users/xl/Desktop/figma/public", base, posix);
       expect(result).toEqual({ ok: false, reason: "windows_path_on_posix" });
     });
+
+    it("rejects relative paths with backslashes on POSIX", () => {
+      // Without the guard, path.posix.resolve("/home/user/project", "local\\root")
+      // produces "/home/user/project/local\root" — one literal directory
+      // named "local\root". Same silent-miswrite class as the absolute case.
+      const result = resolveLocalPath("local\\root", base, posix);
+      expect(result).toEqual({ ok: false, reason: "windows_path_on_posix" });
+    });
   });
 
   describe("with Windows semantics (path.win32)", () => {
@@ -197,6 +205,17 @@ describe("resolveLocalPath", () => {
       expect(result).toEqual({
         ok: true,
         resolvedPath: "C:\\Users\\xl\\Desktop\\figma\\public\\images",
+      });
+    });
+
+    it("normalizes forward slashes from the LLM into Windows separators", () => {
+      // LLMs frequently emit forward slashes regardless of host OS.
+      // path.win32.resolve normalizes them — verify the joined path is
+      // backslash-canonical and lands inside base.
+      const result = resolveLocalPath("public/images/icons", base, win32);
+      expect(result).toEqual({
+        ok: true,
+        resolvedPath: "C:\\Users\\xl\\Desktop\\figma\\public\\images\\icons",
       });
     });
 

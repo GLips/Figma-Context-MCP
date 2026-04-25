@@ -1,18 +1,14 @@
 import path from "path";
 
-export type ResolveLocalPathSuccess = { ok: true; resolvedPath: string };
-export type ResolveLocalPathFailure = {
-  ok: false;
-  reason: "outside_image_dir" | "windows_path_on_posix";
-};
-export type ResolveLocalPathResult = ResolveLocalPathSuccess | ResolveLocalPathFailure;
+export type ResolveLocalPathFailureReason = "outside_image_dir" | "windows_path_on_posix";
+export type ResolveLocalPathResult =
+  | { ok: true; resolvedPath: string }
+  | { ok: false; reason: ResolveLocalPathFailureReason };
 
-/**
- * Subset of the `path` module we actually use. Both `path.posix` and
- * `path.win32` satisfy this shape, so callers (mostly tests) can exercise
- * cross-platform behavior on a single host.
- */
-export type PathImpl = Pick<typeof path, "sep" | "resolve" | "isAbsolute" | "relative">;
+// Subset of the `path` module we use. Both `path.posix` and `path.win32`
+// satisfy this shape, so tests can exercise cross-platform behavior on a
+// single host.
+type PathImpl = Pick<typeof path, "sep" | "resolve" | "isAbsolute" | "relative">;
 
 /**
  * Resolve a user-supplied path against an allowed base directory, accepting
