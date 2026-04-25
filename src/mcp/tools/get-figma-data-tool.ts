@@ -9,6 +9,7 @@ import {
   type Transport,
 } from "~/telemetry/index.js";
 import { getFigmaData as runGetFigmaData } from "~/services/get-figma-data.js";
+import type { OutputFormat } from "~/utils/serialize.js";
 
 const parameters = {
   fileKey: z
@@ -41,7 +42,7 @@ export type GetFigmaDataParams = z.infer<typeof parametersSchema>;
 async function getFigmaData(
   params: GetFigmaDataParams,
   figmaService: FigmaService,
-  outputFormat: "yaml" | "json",
+  outputFormat: OutputFormat,
   transport: Transport,
   authMode: AuthMode,
   clientInfo: ClientInfo | undefined,

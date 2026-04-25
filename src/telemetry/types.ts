@@ -1,3 +1,5 @@
+import type { OutputFormat } from "~/utils/serialize.js";
+
 export type Transport = "stdio" | "http" | "cli";
 export type AuthMode = "oauth" | "api_key";
 export type ClientInfo = { name?: string; version?: string };
@@ -30,7 +32,7 @@ export type ValidationRejectInput = {
   field: string;
   rule: string;
   message: string;
-  outputFormat?: "yaml" | "json";
+  outputFormat?: OutputFormat;
 };
 
 // Event schemas — used by capture.ts for shaping PostHog events.
@@ -56,7 +58,7 @@ export type CommonCallProps = {
 
 export type GetFigmaDataCall = CommonCallProps & {
   tool: "get_figma_data";
-  output_format: "yaml" | "json";
+  output_format: OutputFormat;
   raw_size_kb?: number;
   simplified_size_kb?: number;
   raw_node_count?: number;

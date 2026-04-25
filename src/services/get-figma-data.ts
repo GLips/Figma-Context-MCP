@@ -6,7 +6,7 @@ import {
   collapseSvgContainers,
 } from "~/extractors/index.js";
 import { writeLogs } from "~/utils/logger.js";
-import { serializeResult } from "~/utils/serialize.js";
+import { serializeResult, type OutputFormat } from "~/utils/serialize.js";
 import { tagError } from "~/utils/error-meta.js";
 import {
   type GetFigmaDataMetrics,
@@ -30,7 +30,7 @@ export type GetFigmaDataResult = {
 
 export type GetFigmaDataOutcome = {
   input: GetFigmaDataInput;
-  outputFormat: "yaml" | "json";
+  outputFormat: OutputFormat;
   durationMs: number;
   metrics?: GetFigmaDataMetrics;
   error?: unknown;
@@ -72,7 +72,7 @@ export type GetFigmaDataHooks = {
 export async function getFigmaData(
   figmaService: FigmaService,
   input: GetFigmaDataInput,
-  outputFormat: "yaml" | "json",
+  outputFormat: OutputFormat,
   hooks: GetFigmaDataHooks = {},
 ): Promise<GetFigmaDataResult> {
   const { fileKey, nodeId, depth } = input;

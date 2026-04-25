@@ -1,5 +1,5 @@
 import { type Command, command } from "cleye";
-import { loadEnvFile, resolveAuth } from "~/config.js";
+import { loadEnvFile, parseOutputFormat, resolveAuth } from "~/config.js";
 import { FigmaService } from "~/services/figma.js";
 import { parseFigmaUrl } from "~/utils/figma-url.js";
 import {
@@ -9,6 +9,7 @@ import {
   type AuthMode,
 } from "~/telemetry/index.js";
 import { getFigmaData } from "~/services/get-figma-data.js";
+import type { OutputFormat } from "~/utils/serialize.js";
 
 export const fetchCommand: Command = command(
   {
@@ -30,7 +31,11 @@ export const fetchCommand: Command = command(
       },
       json: {
         type: Boolean,
-        description: "Output JSON instead of YAML",
+        description: "Output JSON instead of YAML. Back-compat alias for --format=json.",
+      },
+      format: {
+        type: String,
+        description: "Output format: yaml (default), json, or tree (experimental).",
       },
       figmaApiKey: {
         type: String,
@@ -66,6 +71,7 @@ async function run(
     nodeId?: string;
     depth?: number;
     json?: boolean;
+    format?: string;
     figmaApiKey?: string;
     figmaOauthToken?: string;
     env?: string;
@@ -105,7 +111,8 @@ async function run(
   });
 
   const authMode: AuthMode = auth.useOAuth ? "oauth" : "api_key";
-  const outputFormat = flags.json ? "json" : "yaml";
+  const outputFormat: OutputFormat =
+    parseOutputFormat(flags.format, "--format") ?? (flags.json ? "json" : "yaml");
 
   const result = await getFigmaData(
     new FigmaService(auth),

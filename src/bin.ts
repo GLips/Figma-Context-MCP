@@ -31,7 +31,13 @@ const argv = cli({
     },
     json: {
       type: Boolean,
-      description: "Output data from tools in JSON format instead of YAML",
+      description:
+        "Output data from tools in JSON format instead of YAML. Back-compat alias for --format=json.",
+    },
+    format: {
+      type: String,
+      description:
+        "Output format for design data: yaml (default), json, or tree (experimental compact format).",
     },
     skipImageDownloads: {
       type: Boolean,
