@@ -11,6 +11,7 @@ import {
 } from "~/telemetry/index.js";
 import { downloadFigmaImages as runDownloadFigmaImages } from "../../services/download-figma-images.js";
 import { sendProgress, startProgressHeartbeat, type ToolExtra } from "../progress.js";
+import { resolveLocalPath, type ResolveLocalPathFailureReason } from "../../utils/local-path.js";
 
 const parameters = {
   fileKey: z
@@ -83,7 +84,7 @@ const parameters = {
   localPath: z
     .string()
     .describe(
-      "The path to the directory where images should be saved, relative to the project root. If the directory does not exist, it will be created. Use forward slashes for path separators (e.g., 'public/images' or 'assets/icons').",
+      "The directory to save images in. Provide a path relative to the server's image directory (e.g., 'public/images' or 'assets/icons'). Either separator works. Absolute paths are accepted only if they point inside the image directory. The directory is created if missing.",
     ),
 };
 
@@ -102,38 +103,32 @@ async function downloadFigmaImages(
   try {
     const { fileKey, nodes, localPath, pngScale } = parametersSchema.parse(params);
 
-    // Resolve localPath relative to the configured image directory.
-    // path.join (not path.resolve) so a leading "/" is treated as relative, not absolute —
-    // LLMs frequently produce paths like "/public/images" when they mean "public/images".
-    // This is a security boundary tied to server config, so it lives at the edge rather
-    // than in the shared core.
+    // Resolve localPath against the configured image directory. The resolver
+    // accepts relative paths and absolute paths that fall under imageDir; it
+    // rejects absolute paths pointing elsewhere (which would silently miswrite
+    // under the previous join-based logic). See utils/local-path.ts.
     const baseDir = imageDir ?? process.cwd();
-    const resolvedPath = path.resolve(path.join(baseDir, localPath));
-    // Drive roots (e.g. E:\) already end with a separator — avoid doubling it
-    const baseDirPrefix = baseDir.endsWith(path.sep) ? baseDir : baseDir + path.sep;
-    if (resolvedPath !== baseDir && !resolvedPath.startsWith(baseDirPrefix)) {
+    const resolution = resolveLocalPath(localPath, baseDir);
+    if (!resolution.ok) {
       // Path-traversal rejection happens after schema validation, so the SDK
       // wrapper in mcp/index.ts never sees it. Capture it here as a validation
       // reject so we can track how often LLMs trip over the localPath contract.
+      const details = rejectionDetails(resolution.reason, localPath, baseDir);
       captureValidationReject(
         {
           tool: "download_figma_images",
           field: "localPath",
-          rule: "path_traversal",
-          message: `Path resolves outside allowed image directory: ${localPath}`,
+          rule: details.rule,
+          message: details.telemetryMessage,
         },
         { transport, authMode, clientInfo },
       );
       return {
         isError: true,
-        content: [
-          {
-            type: "text" as const,
-            text: `Invalid path: "${localPath}" resolves outside the allowed image directory. The server's image directory is "${baseDir}". Provide a path relative to this directory (e.g., "public/images" or "assets/icons").`,
-          },
-        ],
+        content: [{ type: "text" as const, text: details.userMessage }],
       };
     }
+    const resolvedPath = resolution.resolvedPath;
 
     await sendProgress(extra, 0, 3, "Resolving image downloads");
 
@@ -158,7 +153,7 @@ async function downloadFigmaImages(
 
     const imagesList = downloads
       .map(({ result, requestedFileNames }) => {
-        const fileName = result.filePath.split("/").pop() || result.filePath;
+        const fileName = path.basename(result.filePath);
         const dimensions = `${result.finalDimensions.width}x${result.finalDimensions.height}`;
         const cropStatus = result.wasCropped ? " (cropped)" : "";
 
@@ -179,7 +174,12 @@ async function downloadFigmaImages(
       content: [
         {
           type: "text" as const,
-          text: `Downloaded ${successCount} images:\n${imagesList}`,
+          // Echo the absolute resolved path so callers can immediately verify
+          // where files landed. If imageDir defaulted to a server cwd that
+          // doesn't match the user's project, this surfaces the mismatch
+          // instead of letting it look like a successful no-op. Code-fenced
+          // so markdown-rendering clients don't fight separator characters.
+          text: `Downloaded ${successCount} images to \`${resolvedPath}\`:\n${imagesList}`,
         },
       ],
     };
@@ -201,6 +201,40 @@ async function downloadFigmaImages(
 function getDescription(imageDir?: string) {
   const baseDir = imageDir ?? process.cwd();
   return `Download SVG and PNG images used in a Figma file based on the IDs of image or icon nodes. Images will be saved relative to the server's image directory: ${baseDir}`;
+}
+
+function rejectionDetails(
+  reason: ResolveLocalPathFailureReason,
+  localPath: string,
+  baseDir: string,
+): { rule: ResolveLocalPathFailureReason; userMessage: string; telemetryMessage: string } {
+  switch (reason) {
+    case "drive_letter_on_posix":
+      return {
+        rule: reason,
+        telemetryMessage: `Drive-letter path on POSIX server: ${localPath}`,
+        userMessage:
+          `Invalid path: "${localPath}" starts with a Windows drive letter, but this server is running on POSIX where drive letters don't exist. ` +
+          `The server's image directory is "${baseDir}"; pass a path relative to it (e.g., "public/images").`,
+      };
+    case "outside_image_dir": {
+      // Leading-slash inputs used to be silently re-interpreted as relative
+      // under the old path.join hack. They now reject; spell out the retry so
+      // an LLM doesn't have to guess that "/public/images" should have been
+      // "public/images".
+      const leadingSlashHint = /^[/\\]/.test(localPath)
+        ? ` If you meant a directory inside the image directory, drop the leading slash (e.g., use "${localPath.replace(/^[/\\]+/, "")}").`
+        : "";
+      return {
+        rule: reason,
+        telemetryMessage: `Path resolves outside allowed image directory: ${localPath}`,
+        userMessage:
+          `Invalid path: "${localPath}" resolves outside the allowed image directory. ` +
+          `The server's image directory is "${baseDir}". Provide a path relative to this directory (e.g., "public/images" or "assets/icons").` +
+          leadingSlashHint,
+      };
+    }
+  }
 }
 
 // Export tool configuration
