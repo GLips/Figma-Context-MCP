@@ -66,7 +66,9 @@ export async function startServer(config: ServerConfig): Promise<void> {
     // MCP clients spawn stdio servers with whatever cwd they were started in,
     // which is rarely the user's project root. Warn so a missing --image-dir
     // doesn't silently send images to e.g. the client's install directory.
-    if (config.configSources.imageDir === "default") {
+    // Gated on !skipImageDownloads — without the download tool the warning
+    // is misleading.
+    if (config.configSources.imageDir === "default" && !config.skipImageDownloads) {
       process.stderr.write(
         `Warning: --image-dir not set; download_figma_images will save under the server's cwd (${config.imageDir}). ` +
           `MCP clients often launch the server outside your project root — set IMAGE_DIR or pass --image-dir to make this explicit.\n`,
