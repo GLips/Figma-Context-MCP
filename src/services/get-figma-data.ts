@@ -47,9 +47,9 @@ export type SimplifyProgress = {
 
 export type GetFigmaDataHooks = {
   onFetchStart?: () => void | Promise<void>;
-  onFetchComplete?: () => void;
+  onFetchComplete?: () => void | Promise<void>;
   onSimplifyStart?: (progress: SimplifyProgress) => void | Promise<void>;
-  onSimplifyComplete?: () => void;
+  onSimplifyComplete?: () => void | Promise<void>;
   onSerializeStart?: () => void | Promise<void>;
   /**
    * Fires exactly once per call, after the pipeline completes (success or
@@ -96,7 +96,7 @@ export async function getFigmaData(
     } catch (error) {
       tagError(error, { phase: "fetch" });
     } finally {
-      hooks.onFetchComplete?.();
+      await hooks.onFetchComplete?.();
     }
     const fetchMs = Date.now() - fetchStart;
     const rawApiResponse = rawResult.data;
@@ -114,7 +114,7 @@ export async function getFigmaData(
     } catch (error) {
       tagError(error, { phase: "simplify" });
     } finally {
-      hooks.onSimplifyComplete?.();
+      await hooks.onSimplifyComplete?.();
     }
     const simplifyMs = Date.now() - simplifyStart;
 
