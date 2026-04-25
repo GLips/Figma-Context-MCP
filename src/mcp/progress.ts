@@ -52,6 +52,6 @@ export function startProgressHeartbeat(
 
   return async () => {
     clearInterval(interval);
-    await lastSend?.catch(() => {});
+    await lastSend;
   };
 }
