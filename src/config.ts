@@ -147,14 +147,10 @@ export function getServerConfig(flags: ServerFlags): ServerConfig {
 
   // --format wins; --json is a back-compat alias for --format=json. Invalid
   // user-supplied values fail loudly at startup rather than silently coercing.
-  const formatFromFlag = parseOutputFormat(flags.format, "--format");
-  const formatFromJsonFlag: OutputFormat | undefined = flags.json ? "json" : undefined;
+  const formatFromFlag =
+    parseOutputFormat(flags.format, "--format") ?? (flags.json ? "json" : undefined);
   const formatFromEnv = parseOutputFormat(envStr("OUTPUT_FORMAT"), "OUTPUT_FORMAT");
-  const outputFormat = resolve<OutputFormat>(
-    formatFromFlag ?? formatFromJsonFlag,
-    formatFromEnv,
-    "yaml",
-  );
+  const outputFormat = resolve<OutputFormat>(formatFromFlag, formatFromEnv, "yaml");
 
   const isStdioMode = flags.stdio === true;
 

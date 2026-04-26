@@ -1,6 +1,6 @@
-import yaml from "js-yaml";
 import type { SimplifiedNode } from "~/extractors/types.js";
 import type { SerializableDesign } from "./serializable-design.js";
+import { dumpYaml } from "./yaml-dump.js";
 
 /**
  * Render the simplified design as a token-efficient indented tree.
@@ -42,15 +42,6 @@ export function serializeAsTree(design: SerializableDesign): string {
   sections.push(lines.join("\n"));
 
   return sections.join("\n");
-}
-
-function dumpYaml(value: unknown): string {
-  return yaml.dump(value, {
-    noRefs: true,
-    lineWidth: -1,
-    noCompatMode: true,
-    schema: yaml.JSON_SCHEMA,
-  });
 }
 
 function renderNode(node: SimplifiedNode, depth: number, out: string[]): void {

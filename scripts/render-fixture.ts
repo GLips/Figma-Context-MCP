@@ -39,5 +39,5 @@ const output = serializeResult(wrapForSerialization(design), values.format);
 writeFileSync(values.output, output);
 
 console.error(
-  `Rendered ${values.input} as ${format} → ${values.output} (${output.length.toLocaleString()} bytes)`,
+  `Rendered ${values.input} as ${values.format} → ${values.output} (${output.length.toLocaleString()} bytes)`,
 );
