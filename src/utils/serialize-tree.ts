@@ -76,10 +76,10 @@ function renderNode(node: SimplifiedNode, depth: number, out: string[]): void {
   if (node.styles !== undefined) parts.push(`styles=${maybeQuote(node.styles)}`);
   if (node.componentId !== undefined) parts.push(`componentId=${node.componentId}`);
   if (node.componentProperties !== undefined) {
-    parts.push(`componentProperties=${encodeRecord(node.componentProperties)}`);
+    parts.push(`componentProperties=${JSON.stringify(node.componentProperties)}`);
   }
   if (node.componentPropertyReferences !== undefined) {
-    parts.push(`componentPropertyReferences=${encodeRecord(node.componentPropertyReferences)}`);
+    parts.push(`componentPropertyReferences=${JSON.stringify(node.componentPropertyReferences)}`);
   }
   if (node.textStyle !== undefined) parts.push(`textStyle=${node.textStyle}`);
   if (node.boldWeight !== undefined) parts.push(`boldWeight=${node.boldWeight}`);
@@ -104,16 +104,4 @@ function quote(s: string): string {
 // `key=value` parse — keeps short scalar refs (`layout_ABC`, `12px`) unquoted.
 function maybeQuote(s: string): string {
   return /[\s"]/.test(s) ? JSON.stringify(s) : s;
-}
-
-// Encode a record as compact JSON, escaping any whitespace inside keys/values
-// to `\uXXXX` so the result is a single whitespace-free token. Figma allows
-// free-form component property names like "On Sale" — without this, a literal
-// space inside the JSON breaks the space-delimited node-line parse contract.
-// The consumer round-trips by passing the value to `JSON.parse` directly.
-function encodeRecord(record: Record<string, string | boolean>): string {
-  return JSON.stringify(record).replace(
-    /\s/g,
-    (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`,
-  );
 }

@@ -122,9 +122,10 @@ describe("result serialization", () => {
       expect(output).toMatch(/\[FRAME\] "Card" #1:1 borderRadius=12px/);
     });
 
-    // Figma allows free-form component property names. A name with whitespace
-    // would break the space-delimited `key=value` contract on the node line.
-    it("encodes componentProperties safely when keys contain whitespace", () => {
+    // Figma allows free-form component property names like "On Sale". The
+    // value must serialize as readable JSON — earlier attempts escaped
+    // whitespace to \uXXXX, which is hostile to the LLM consumer.
+    it("emits componentProperties as readable JSON even when keys contain whitespace", () => {
       const design: SimplifiedDesign = {
         name: "Test",
         components: {},
@@ -142,15 +143,8 @@ describe("result serialization", () => {
       };
 
       const output = serializeResult(wrapForSerialization(design), "tree");
-      const nodeLine = output.split("\n").find((l) => l.includes("[INSTANCE]"))!;
-      // The whole field=value pair must be one whitespace-free token, so
-      // splitting the line on whitespace correctly isolates it.
-      const tokens = nodeLine.trim().split(/\s+/);
-      const propsToken = tokens.find((t) => t.startsWith("componentProperties="))!;
-      expect(propsToken).toBeDefined();
-      // Round-trip the inner value to confirm the data survives encoding.
-      const rawValue = propsToken.slice("componentProperties=".length);
-      expect(JSON.parse(rawValue)).toEqual({ "On Sale": true, Size: "md" });
+
+      expect(output).toContain('componentProperties={"On Sale":true,"Size":"md"}');
     });
   });
 });
