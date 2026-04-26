@@ -2,6 +2,7 @@ import { config as loadEnv } from "dotenv";
 import { resolve as resolvePath } from "path";
 import type { FigmaAuthOptions } from "./services/figma.js";
 import { resolveTelemetryEnabled } from "./telemetry/index.js";
+import { VALID_OUTPUT_FORMATS, isOutputFormat, type OutputFormat } from "./utils/serialize.js";
 
 export type Source = "cli" | "env" | "default";
 
@@ -17,6 +18,7 @@ export interface ServerFlags {
   port?: number;
   host?: string;
   json?: boolean;
+  format?: string;
   skipImageDownloads?: boolean;
   imageDir?: string;
   proxy?: string;
@@ -29,7 +31,7 @@ export interface ServerConfig {
   port: number;
   host: string;
   proxy: string | undefined;
-  outputFormat: "yaml" | "json";
+  outputFormat: OutputFormat;
   skipImageDownloads: boolean;
   imageDir: string;
   isStdioMode: boolean;
@@ -61,6 +63,21 @@ export function envBool(name: string): boolean | undefined {
   if (val === "true") return true;
   if (val === "false") return false;
   return undefined;
+}
+
+// Throws on invalid input so callers control how the failure surfaces — the
+// server entry point exits the process, but the `fetch` CLI command needs to
+// run its `finally` (telemetry shutdown) before exiting, which `process.exit`
+// would bypass.
+export function parseOutputFormat(
+  value: string | undefined,
+  source: string,
+): OutputFormat | undefined {
+  if (value === undefined) return undefined;
+  if (isOutputFormat(value)) return value;
+  throw new Error(
+    `Invalid ${source} value '${value}'. Expected one of: ${VALID_OUTPUT_FORMATS.join(", ")}`,
+  );
 }
 
 function maskApiKey(key: string): string {
@@ -128,12 +145,12 @@ export function getServerConfig(flags: ServerFlags): ServerConfig {
   // correctly respects NO_PROXY exclusions.
   const proxy = resolve(flags.proxy, envStr("FIGMA_PROXY"), undefined);
 
-  // --json maps to a string enum
-  const outputFormat = resolve<"yaml" | "json">(
-    flags.json ? "json" : undefined,
-    envStr("OUTPUT_FORMAT") as "yaml" | "json" | undefined,
-    "yaml",
-  );
+  // --format wins; --json is a back-compat alias for --format=json. Invalid
+  // user-supplied values fail loudly at startup rather than silently coercing.
+  const formatFromFlag =
+    parseOutputFormat(flags.format, "--format") ?? (flags.json ? "json" : undefined);
+  const formatFromEnv = parseOutputFormat(envStr("OUTPUT_FORMAT"), "OUTPUT_FORMAT");
+  const outputFormat = resolve<OutputFormat>(formatFromFlag, formatFromEnv, "yaml");
 
   const isStdioMode = flags.stdio === true;
 
