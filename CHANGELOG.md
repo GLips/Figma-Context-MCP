@@ -2,44 +2,38 @@
 
 ## [0.11.0](https://github.com/GLips/Figma-Context-MCP/compare/v0.10.1...v0.11.0) (2026-04-20)
 
-
 ### Features
 
-* rich text styling ([#351](https://github.com/GLips/Figma-Context-MCP/issues/351)) ([759d0e4](https://github.com/GLips/Figma-Context-MCP/commit/759d0e4f7877677980d9cee18c8f895bee655394))
-
+- rich text styling ([#351](https://github.com/GLips/Figma-Context-MCP/issues/351)) ([759d0e4](https://github.com/GLips/Figma-Context-MCP/commit/759d0e4f7877677980d9cee18c8f895bee655394))
 
 ### Bug Fixes
 
-* stop routing all traffic through EnvHttpProxyAgent by default ([#359](https://github.com/GLips/Figma-Context-MCP/issues/359)) ([a22f28f](https://github.com/GLips/Figma-Context-MCP/commit/a22f28f23f9cf5444d509b9d041d3c162e1cefd6))
+- stop routing all traffic through EnvHttpProxyAgent by default ([#359](https://github.com/GLips/Figma-Context-MCP/issues/359)) ([a22f28f](https://github.com/GLips/Figma-Context-MCP/commit/a22f28f23f9cf5444d509b9d041d3c162e1cefd6))
 
 ## [0.10.1](https://github.com/GLips/Figma-Context-MCP/compare/v0.10.0...v0.10.1) (2026-04-10)
 
-
 ### Bug Fixes
 
-* add actionable 403 error message with troubleshooting link ([9230bd0](https://github.com/GLips/Figma-Context-MCP/commit/9230bd02a63085d88ca5d3687275f2cba9557309))
-* throw actionable error for missing nodes, add error_category to telemetry ([#344](https://github.com/GLips/Figma-Context-MCP/issues/344)) ([334ae2b](https://github.com/GLips/Figma-Context-MCP/commit/334ae2bbecbd3583922098787877448337acf6cb))
+- add actionable 403 error message with troubleshooting link ([9230bd0](https://github.com/GLips/Figma-Context-MCP/commit/9230bd02a63085d88ca5d3687275f2cba9557309))
+- throw actionable error for missing nodes, add error_category to telemetry ([#344](https://github.com/GLips/Figma-Context-MCP/issues/344)) ([334ae2b](https://github.com/GLips/Figma-Context-MCP/commit/334ae2bbecbd3583922098787877448337acf6cb))
 
 ## [0.10.0](https://github.com/GLips/Figma-Context-MCP/compare/v0.9.0...v0.10.0) (2026-04-10)
 
-
 ### Features
 
-* add anonymous PostHog telemetry ([#342](https://github.com/GLips/Figma-Context-MCP/issues/342)) ([6c0666a](https://github.com/GLips/Figma-Context-MCP/commit/6c0666a7c96e62b39f730a96d24eacb8f3a35cf6))
+- add anonymous PostHog telemetry ([#342](https://github.com/GLips/Figma-Context-MCP/issues/342)) ([6c0666a](https://github.com/GLips/Figma-Context-MCP/commit/6c0666a7c96e62b39f730a96d24eacb8f3a35cf6))
 
 ## [0.9.0](https://github.com/GLips/Figma-Context-MCP/compare/v0.8.1...v0.9.0) (2026-04-09)
 
-
 ### Features
 
-* add component property support (BOOLEAN & TEXT) ([#340](https://github.com/GLips/Figma-Context-MCP/issues/340)) ([b0f9efc](https://github.com/GLips/Figma-Context-MCP/commit/b0f9efcc0680012eac4a760ec6826a7605b38fb6))
-* add proxy support for managed networks ([#338](https://github.com/GLips/Figma-Context-MCP/issues/338)) ([32d5779](https://github.com/GLips/Figma-Context-MCP/commit/32d57790317e57a35dfc8df0de4c6ac830268b31))
-* add support for using as a CLI via `fetch` subcommand to retrieve design data directly ([#331](https://github.com/GLips/Figma-Context-MCP/issues/331)) ([dd237c8](https://github.com/GLips/Figma-Context-MCP/commit/dd237c8e87565cee42d706b8f374fc4bc411066b))
-
+- add component property support (BOOLEAN & TEXT) ([#340](https://github.com/GLips/Figma-Context-MCP/issues/340)) ([b0f9efc](https://github.com/GLips/Figma-Context-MCP/commit/b0f9efcc0680012eac4a760ec6826a7605b38fb6))
+- add proxy support for managed networks ([#338](https://github.com/GLips/Figma-Context-MCP/issues/338)) ([32d5779](https://github.com/GLips/Figma-Context-MCP/commit/32d57790317e57a35dfc8df0de4c6ac830268b31))
+- add support for using as a CLI via `fetch` subcommand to retrieve design data directly ([#331](https://github.com/GLips/Figma-Context-MCP/issues/331)) ([dd237c8](https://github.com/GLips/Figma-Context-MCP/commit/dd237c8e87565cee42d706b8f374fc4bc411066b))
 
 ### Bug Fixes
 
-* **layout:** suppress computed gap values when using SPACE_BETWEEN ([#341](https://github.com/GLips/Figma-Context-MCP/issues/341)) ([309c60e](https://github.com/GLips/Figma-Context-MCP/commit/309c60e6d59eb2fb8fdc0acc85dd81b1644b1f12)), closes [#169](https://github.com/GLips/Figma-Context-MCP/issues/169)
+- **layout:** suppress computed gap values when using SPACE_BETWEEN ([#341](https://github.com/GLips/Figma-Context-MCP/issues/341)) ([309c60e](https://github.com/GLips/Figma-Context-MCP/commit/309c60e6d59eb2fb8fdc0acc85dd81b1644b1f12)), closes [#169](https://github.com/GLips/Figma-Context-MCP/issues/169)
 
 ## [0.8.1](https://github.com/GLips/Figma-Context-MCP/compare/v0.8.0...v0.8.1) (2026-04-07)
 

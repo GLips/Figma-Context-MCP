@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { FigmaService, type FigmaAuthOptions } from "../services/figma.js";
 import { Logger } from "../utils/logger.js";
 import { type AuthMode, type ClientInfo, type Transport } from "~/telemetry/index.js";
+import type { FigmaCachingOptions } from "~/services/figma-file-cache.js";
 import { installValidationRejectCapture } from "./validation-capture.js";
 import type { ToolExtra } from "./progress.js";
 import {
@@ -25,14 +26,21 @@ type CreateServerOptions = {
   outputFormat?: "yaml" | "json";
   skipImageDownloads?: boolean;
   imageDir?: string;
+  caching?: FigmaCachingOptions;
 };
 
 function createServer(
   authOptions: FigmaAuthOptions,
-  { transport, outputFormat = "yaml", skipImageDownloads = false, imageDir }: CreateServerOptions,
+  {
+    transport,
+    outputFormat = "yaml",
+    skipImageDownloads = false,
+    imageDir,
+    caching,
+  }: CreateServerOptions,
 ) {
   const server = new McpServer(serverInfo);
-  const figmaService = new FigmaService(authOptions);
+  const figmaService = new FigmaService(authOptions, caching);
   const authMode: AuthMode = authOptions.useOAuth ? "oauth" : "api_key";
 
   const getClientInfo = (): ClientInfo | undefined => {

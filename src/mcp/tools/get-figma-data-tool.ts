@@ -25,7 +25,7 @@ const parameters = {
     )
     .optional()
     .describe(
-      "The ID of the node to fetch, often found as URL parameter node-id=<nodeId>, always use if provided. Use format '1234:5678' for a standard node, or 'I5666:180910;1:10515;1:10336' for a deeply nested instance node (the semicolon-joined path represents the instance override chain — it's still a single node ID, not multiple nodes).",
+      "The ID of the node to fetch, often found as URL parameter node-id=<nodeId>, always use if provided. Use format '1234:5678' for a standard node, or 'I5666:180910;1:10515;1:10336' for a deeply nested instance node (the semicolon-joined path represents the instance override chain - it's still a single node ID, not multiple nodes).",
     ),
   depth: z
     .number()
@@ -37,6 +37,25 @@ const parameters = {
 
 const parametersSchema = z.object(parameters);
 export type GetFigmaDataParams = z.infer<typeof parametersSchema>;
+
+function formatCacheNotice(cachedAt: number, ttlMs: number): string {
+  const age = Date.now() - cachedAt;
+  const remaining = Math.max(ttlMs - age, 0);
+
+  const formatDuration = (ms: number): string => {
+    const seconds = Math.floor(ms / 1000);
+    const minutes = Math.floor(seconds / 60);
+    const hours = Math.floor(minutes / 60);
+    const days = Math.floor(hours / 24);
+
+    if (days > 0) return `${days}d ${hours % 24}h`;
+    if (hours > 0) return `${hours}h ${minutes % 60}m`;
+    if (minutes > 0) return `${minutes}m`;
+    return `${seconds}s`;
+  };
+
+  return `Note: Using cached Figma data (fetched ${formatDuration(age)} ago, expires in ${formatDuration(remaining)}) due to FIGMA_CACHING.`;
+}
 
 async function getFigmaData(
   params: GetFigmaDataParams,
@@ -50,8 +69,6 @@ async function getFigmaData(
   try {
     const { fileKey, nodeId: rawNodeId, depth } = parametersSchema.parse(params);
 
-    // Replace - with : in nodeId for our query — Figma API expects :.
-    // MCP-specific input quirk, so it lives here rather than in the shared core.
     const nodeId = rawNodeId?.replace(/-/g, ":");
 
     Logger.log(
@@ -88,11 +105,16 @@ async function getFigmaData(
         captureGetFigmaDataCall(outcome, { transport, authMode, clientInfo }),
     });
 
+    let formatted = result.formatted;
+    if (result.cacheInfo?.usedCache && result.cacheInfo.cachedAt && result.cacheInfo.ttlMs) {
+      formatted = `${formatCacheNotice(result.cacheInfo.cachedAt, result.cacheInfo.ttlMs)}\n\n${formatted}`;
+    }
+
     Logger.log(`Successfully extracted data: ${result.metrics.simplifiedNodeCount} nodes`);
     Logger.log("Sending result to client");
 
     return {
-      content: [{ type: "text" as const, text: result.formatted }],
+      content: [{ type: "text" as const, text: formatted }],
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : JSON.stringify(error);
@@ -104,7 +126,6 @@ async function getFigmaData(
   }
 }
 
-// Export tool configuration
 export const getFigmaDataTool = {
   name: "get_figma_data",
   description:

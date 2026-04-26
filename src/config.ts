@@ -1,6 +1,8 @@
 import { config as loadEnv } from "dotenv";
-import { resolve as resolvePath } from "path";
+import os from "os";
+import { isAbsolute, join, resolve as resolvePath } from "path";
 import type { FigmaAuthOptions } from "./services/figma.js";
+import type { FigmaCachingOptions } from "./services/figma-file-cache.js";
 import { resolveTelemetryEnabled } from "./telemetry/index.js";
 
 export type Source = "cli" | "env" | "default";
@@ -34,10 +36,21 @@ export interface ServerConfig {
   imageDir: string;
   isStdioMode: boolean;
   noTelemetry: boolean;
+  caching?: FigmaCachingOptions;
   configSources: Record<string, Source>;
 }
 
-/** Resolve a config value through the priority chain: CLI flag → env var → default. */
+type DurationUnit = "ms" | "s" | "m" | "h" | "d";
+
+const DURATION_IN_MS: Record<DurationUnit, number> = {
+  ms: 1,
+  s: 1000,
+  m: 60 * 1000,
+  h: 60 * 60 * 1000,
+  d: 24 * 60 * 60 * 1000,
+};
+
+/** Resolve a config value through the priority chain: CLI flag -> env var -> default. */
 export function resolve<T>(flag: T | undefined, env: T | undefined, fallback: T): Resolved<T> {
   if (flag !== undefined) return { value: flag, source: "cli" };
   if (env !== undefined) return { value: env, source: "env" };
@@ -99,14 +112,11 @@ export function resolveAuth(flags: {
 }
 
 export function getServerConfig(flags: ServerFlags): ServerConfig {
-  // Load .env before resolving env-backed values
   const envFilePath = loadEnvFile(flags.env);
   const envFileSource: Source = flags.env !== undefined ? "cli" : "default";
 
-  // Auth
   const auth = resolveAuth(flags);
 
-  // Resolve config values: CLI flag → env var → default
   const figmaApiKey = resolve(flags.figmaApiKey, envStr("FIGMA_API_KEY"), "");
   const figmaOauthToken = resolve(flags.figmaOauthToken, envStr("FIGMA_OAUTH_TOKEN"), "");
   const port = resolve(flags.port, envInt("FRAMELINK_PORT", "PORT"), 3333);
@@ -122,21 +132,19 @@ export function getServerConfig(flags: ServerFlags): ServerConfig {
     envImageDir ? resolvePath(envImageDir) : undefined,
     process.cwd(),
   );
-
-  // Only resolve explicit proxy config here. Standard env vars (HTTPS_PROXY, HTTP_PROXY,
-  // NO_PROXY) are handled by undici's EnvHttpProxyAgent at the dispatcher level, which
-  // correctly respects NO_PROXY exclusions.
   const proxy = resolve(flags.proxy, envStr("FIGMA_PROXY"), undefined);
-
-  // --json maps to a string enum
   const outputFormat = resolve<"yaml" | "json">(
     flags.json ? "json" : undefined,
     envStr("OUTPUT_FORMAT") as "yaml" | "json" | undefined,
     "yaml",
   );
+  const caching = resolve<FigmaCachingOptions | undefined>(
+    undefined,
+    parseCachingConfig(process.env.FIGMA_CACHING),
+    undefined,
+  );
 
   const isStdioMode = flags.stdio === true;
-
   const noTelemetry = flags.noTelemetry ?? false;
   const telemetrySource: Source =
     flags.noTelemetry === true
@@ -156,6 +164,7 @@ export function getServerConfig(flags: ServerFlags): ServerConfig {
     skipImageDownloads: skipImageDownloads.source,
     imageDir: imageDir.source,
     telemetry: telemetrySource,
+    caching: caching.source,
   };
 
   if (!isStdioMode) {
@@ -184,6 +193,9 @@ export function getServerConfig(flags: ServerFlags): ServerConfig {
     console.log(
       `- TELEMETRY: ${telemetryEnabled ? "enabled" : "disabled"} (source: ${configSources.telemetry})`,
     );
+    console.log(
+      `- FIGMA_CACHING: ${caching.value ? JSON.stringify({ cacheDir: caching.value.cacheDir, ttlMs: caching.value.ttlMs }) : "disabled"} (source: ${configSources.caching})`,
+    );
     console.log();
   }
 
@@ -197,6 +209,82 @@ export function getServerConfig(flags: ServerFlags): ServerConfig {
     imageDir: imageDir.value,
     isStdioMode,
     noTelemetry,
+    caching: caching.value,
     configSources,
   };
+}
+
+function parseCachingConfig(rawValue: string | undefined): FigmaCachingOptions | undefined {
+  if (!rawValue) return undefined;
+
+  try {
+    const parsed = JSON.parse(rawValue) as {
+      cacheDir?: string;
+      ttl: {
+        value: number;
+        unit: DurationUnit;
+      };
+    };
+
+    if (!parsed || typeof parsed !== "object") {
+      throw new Error("FIGMA_CACHING must be a JSON object");
+    }
+
+    if (!parsed.ttl || typeof parsed.ttl.value !== "number" || parsed.ttl.value <= 0) {
+      throw new Error("FIGMA_CACHING.ttl.value must be a positive number");
+    }
+
+    if (!parsed.ttl.unit || !(parsed.ttl.unit in DURATION_IN_MS)) {
+      throw new Error("FIGMA_CACHING.ttl.unit must be one of ms, s, m, h, d");
+    }
+
+    const ttlMs = parsed.ttl.value * DURATION_IN_MS[parsed.ttl.unit];
+    const cacheDir = resolveCacheDir(parsed.cacheDir);
+
+    return { cacheDir, ttlMs };
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`Failed to parse FIGMA_CACHING: ${message}`);
+    process.exit(1);
+  }
+}
+
+function resolveCacheDir(inputPath?: string): string {
+  const defaultDir = getDefaultCacheDir();
+  if (!inputPath) {
+    return defaultDir;
+  }
+
+  const expanded = expandHomeDir(inputPath.trim());
+  if (isAbsolute(expanded)) {
+    return expanded;
+  }
+  return resolvePath(process.cwd(), expanded);
+}
+
+function expandHomeDir(targetPath: string): string {
+  if (targetPath === "~") {
+    return os.homedir();
+  }
+
+  if (targetPath.startsWith("~/")) {
+    return resolvePath(os.homedir(), targetPath.slice(2));
+  }
+
+  return targetPath;
+}
+
+function getDefaultCacheDir(): string {
+  const platform = process.platform;
+  if (platform === "win32") {
+    const base = process.env.LOCALAPPDATA || resolvePath(os.homedir(), "AppData", "Local");
+    return join(base, "FigmaMcpCache");
+  }
+
+  if (platform === "darwin") {
+    return join(os.homedir(), "Library", "Caches", "FigmaMcp");
+  }
+
+  const xdgCache = process.env.XDG_CACHE_HOME || join(os.homedir(), ".cache");
+  return join(xdgCache, "figma-mcp");
 }
