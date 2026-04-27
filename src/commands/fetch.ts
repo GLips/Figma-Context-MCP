@@ -1,13 +1,8 @@
 import { type Command, command } from "cleye";
-import { loadEnvFile, resolveAuth } from "~/config.js";
+import { loadEnvFile, resolveAuth, requireGlobalCredentials } from "~/config.js";
 import { FigmaService } from "~/services/figma.js";
 import { parseFigmaUrl } from "~/utils/figma-url.js";
-import {
-  initTelemetry,
-  captureGetFigmaDataCall,
-  shutdown,
-  type AuthMode,
-} from "~/telemetry/index.js";
+import { authMode, initTelemetry, captureGetFigmaDataCall, shutdown } from "~/telemetry/index.js";
 import { getFigmaData } from "~/services/get-figma-data.js";
 
 export const fetchCommand: Command = command(
@@ -95,6 +90,10 @@ async function run(
 
   loadEnvFile(flags.env);
   const auth = resolveAuth(flags);
+  // The fetch CLI has no per-request credential channel (unlike HTTP mode).
+  // Fail fast so the user gets an actionable error instead of an HTTP-shaped
+  // one from `getAuthHeaders`.
+  requireGlobalCredentials(auth);
 
   // Initialize telemetry only after input validation succeeds, so every
   // captured event corresponds to an actual fetch attempt (not a usage error).
@@ -104,7 +103,7 @@ async function run(
     redactFromErrors: [auth.figmaApiKey, auth.figmaOAuthToken],
   });
 
-  const authMode: AuthMode = auth.useOAuth ? "oauth" : "api_key";
+  const mode = authMode(auth);
   const outputFormat = flags.json ? "json" : "yaml";
 
   const result = await getFigmaData(
@@ -112,7 +111,8 @@ async function run(
     { fileKey, nodeId, depth: flags.depth },
     outputFormat,
     {
-      onComplete: (outcome) => captureGetFigmaDataCall(outcome, { transport: "cli", authMode }),
+      onComplete: (outcome) =>
+        captureGetFigmaDataCall(outcome, { transport: "cli", authMode: mode }),
     },
   );
   console.log(result.formatted);

@@ -39,10 +39,16 @@ export class FigmaService {
     if (this.useOAuth) {
       Logger.log("Using OAuth Bearer token for authentication");
       return { Authorization: `Bearer ${this.oauthToken}` };
-    } else {
-      Logger.log("Using Personal Access Token for authentication");
-      return { "X-Figma-Token": this.apiKey };
     }
+
+    if (!this.apiKey) {
+      throw new Error(
+        "Figma API authentication is required. Configure FIGMA_API_KEY or FIGMA_OAUTH_TOKEN on the server, or send X-Figma-Token on the HTTP request.",
+      );
+    }
+
+    Logger.log("Using Personal Access Token for authentication");
+    return { "X-Figma-Token": this.apiKey };
   }
 
   /**
