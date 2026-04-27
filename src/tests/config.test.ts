@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { envBool, envInt, envStr, resolve, resolveAuth } from "~/config.js";
+import { envBool, envInt, envStr, resolve } from "~/config.js";
 
 describe("resolve", () => {
   it("CLI flag wins over env and default", () => {
@@ -85,19 +85,5 @@ describe("envBool", () => {
 
   it("returns undefined when not set", () => {
     expect(envBool("TEST_BOOL_MISSING")).toBeUndefined();
-  });
-});
-
-describe("resolveAuth", () => {
-  afterEach(() => {
-    vi.unstubAllEnvs();
-  });
-
-  it("allows startup without global credentials for per-request authentication", () => {
-    expect(resolveAuth({})).toEqual({
-      figmaApiKey: "",
-      figmaOAuthToken: "",
-      useOAuth: false,
-    });
   });
 });

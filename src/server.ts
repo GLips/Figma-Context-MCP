@@ -6,8 +6,8 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ProxyAgent, EnvHttpProxyAgent, setGlobalDispatcher } from "undici";
 import { Logger } from "./utils/logger.js";
 import { hasProxyEnv, setProxyMode } from "./utils/proxy-env.js";
-import { createServer } from "./mcp/index.js";
-import type { ServerConfig } from "./config.js";
+import { createServer, type CreateServerOptions } from "./mcp/index.js";
+import { requireGlobalCredentials, type ServerConfig } from "./config.js";
 import type { FigmaAuthOptions } from "./services/figma.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { ErrorCode } from "@modelcontextprotocol/sdk/types.js";
@@ -25,6 +25,14 @@ const activeConnections = new Set<ActiveConnection>();
  * Start the MCP server in either stdio or HTTP mode.
  */
 export async function startServer(config: ServerConfig): Promise<void> {
+  // Stdio has no per-request credential channel, so the server is unusable
+  // without something resolved at startup. Fail fast BEFORE any side effects
+  // (proxy install, telemetry init) — preserves the pre-PR behavior where
+  // resolveAuth() exited early during config resolution.
+  if (config.isStdioMode) {
+    requireGlobalCredentials(config.auth);
+  }
+
   // Three outcomes: explicit proxy URL → ProxyAgent; no proxy but env vars set
   // → EnvHttpProxyAgent; otherwise Node's default (includes `--proxy=none`,
   // which lets users opt out of system-level proxy vars misbehaving for
@@ -69,10 +77,8 @@ export async function startServer(config: ServerConfig): Promise<void> {
     await server.connect(transport);
     registerShutdownHandlers(async () => {});
   } else {
-    const createMcpServer = (req: Request) =>
-      createServer(resolveHttpRequestAuth(config.auth, req), serverOptions);
     console.log(`Initializing Figma MCP Server in HTTP mode on ${config.host}:${config.port}...`);
-    await startHttpServer(config.host, config.port, createMcpServer);
+    await startHttpServer(config.host, config.port, config.auth, serverOptions);
 
     registerShutdownHandlers(async () => {
       Logger.log("Shutting down server...");
@@ -112,7 +118,8 @@ function registerShutdownHandlers(onShutdown: () => Promise<void>): void {
 export async function startHttpServer(
   host: string,
   port: number,
-  createMcpServer: (req: Request) => McpServer,
+  baseAuth: FigmaAuthOptions,
+  serverOptions: Omit<CreateServerOptions, "transport">,
 ): Promise<Server> {
   if (httpServer) {
     throw new Error("HTTP server is already running");
@@ -122,18 +129,28 @@ export async function startHttpServer(
 
   const handlePost = async (req: Request, res: Response) => {
     Logger.log("Received StreamableHTTP request");
-    const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
-    const mcpServer = createMcpServer(req);
-    const conn: ActiveConnection = { transport, server: mcpServer };
-    activeConnections.add(conn);
-    res.on("close", () => {
-      activeConnections.delete(conn);
-      transport.close();
-      mcpServer.close();
+    const requestKey = getRequestApiKey(req);
+    const auth = resolveRequestAuth(baseAuth, requestKey);
+
+    // Per-request X-Figma-Token isn't known to telemetry's init-time redaction
+    // list. Wrapping the handler in `withRequestSecrets` makes the key
+    // available to `redactErrorMessage` via AsyncLocalStorage, so any error
+    // captured during this request gets the per-request token scrubbed before
+    // it ships to PostHog.
+    await telemetry.withRequestSecrets(requestKey ? [requestKey] : [], async () => {
+      const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+      const mcpServer = createServer(auth, { ...serverOptions, transport: "http" });
+      const conn: ActiveConnection = { transport, server: mcpServer };
+      activeConnections.add(conn);
+      res.on("close", () => {
+        activeConnections.delete(conn);
+        transport.close();
+        mcpServer.close();
+      });
+      await mcpServer.connect(transport);
+      await transport.handleRequest(req, res, req.body);
+      Logger.log("StreamableHTTP request handled");
     });
-    await mcpServer.connect(transport);
-    await transport.handleRequest(req, res, req.body);
-    Logger.log("StreamableHTTP request handled");
   };
 
   const handleMethodNotAllowed = (_req: Request, res: Response) => {
@@ -179,19 +196,20 @@ export async function startHttpServer(
   });
 }
 
-export function resolveHttpRequestAuth(baseAuth: FigmaAuthOptions, req: Request): FigmaAuthOptions {
-  const requestApiKey = getSingleHeader(req, "x-figma-token");
-  if (!requestApiKey) return baseAuth;
-
+function resolveRequestAuth(
+  baseAuth: FigmaAuthOptions,
+  requestKey: string | undefined,
+): FigmaAuthOptions {
+  if (!requestKey) return baseAuth;
   return {
-    figmaApiKey: requestApiKey,
+    figmaApiKey: requestKey,
     figmaOAuthToken: "",
     useOAuth: false,
   };
 }
 
-function getSingleHeader(req: Request, name: string): string | undefined {
-  const value = req.headers[name];
+function getRequestApiKey(req: Request): string | undefined {
+  const value = req.headers["x-figma-token"];
   if (Array.isArray(value)) return value[0]?.trim() || undefined;
   return value?.trim() || undefined;
 }

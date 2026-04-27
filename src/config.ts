@@ -91,6 +91,21 @@ export function resolveAuth(flags: {
   return auth;
 }
 
+/**
+ * Fail fast when global credentials are required but missing. HTTP mode skips
+ * this check so it can accept per-request `X-Figma-Token` headers; stdio and
+ * the `fetch` CLI have no way to receive request-time auth and must have
+ * something resolvable at startup or they'd just defer the failure to the
+ * first tool call with a misleading "send X-Figma-Token" message.
+ */
+export function requireGlobalCredentials(auth: FigmaAuthOptions): void {
+  if (auth.figmaApiKey || auth.figmaOAuthToken) return;
+  console.error(
+    "Either FIGMA_API_KEY or FIGMA_OAUTH_TOKEN is required (via CLI argument or .env file)",
+  );
+  process.exit(1);
+}
+
 export function getServerConfig(flags: ServerFlags): ServerConfig {
   // Load .env before resolving env-backed values
   const envFilePath = loadEnvFile(flags.env);

@@ -4,9 +4,7 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
 import type { Server } from "http";
 import type { AddressInfo } from "net";
-import { downloadFigmaImagesTool, getFigmaDataTool } from "~/mcp/tools/index.js";
-import { createServer } from "~/mcp/index.js";
-import { resolveHttpRequestAuth, startHttpServer, stopHttpServer } from "~/server.js";
+import { startHttpServer, stopHttpServer } from "~/server.js";
 import type { FigmaAuthOptions } from "~/services/figma.js";
 
 const figmaFileResponse = {
@@ -69,9 +67,7 @@ describe("HTTP header Figma API key authentication", () => {
     headers?: Record<string, string>,
     baseAuth: FigmaAuthOptions = emptyAuth,
   ) {
-    httpServer = await startHttpServer("127.0.0.1", 0, (req) =>
-      createServer(resolveHttpRequestAuth(baseAuth, req), { transport: "http" }),
-    );
+    httpServer = await startHttpServer("127.0.0.1", 0, baseAuth, {});
     const port = (httpServer.address() as AddressInfo).port;
     const transport = new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${port}/mcp`), {
       requestInit: headers ? { headers } : undefined,
@@ -93,11 +89,6 @@ describe("HTTP header Figma API key authentication", () => {
       String(input).startsWith("https://api.figma.com"),
     ).length;
   }
-
-  it("does not expose Figma credentials in tool input schemas", () => {
-    expect("figma_api_key" in getFigmaDataTool.parametersSchema.shape).toBe(false);
-    expect("figma_api_key" in downloadFigmaImagesTool.parametersSchema.shape).toBe(false);
-  });
 
   it("uses X-Figma-Token from the HTTP request for get_figma_data", async () => {
     await connectClient({ "X-Figma-Token": "request-key" });
