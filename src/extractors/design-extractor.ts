@@ -57,9 +57,13 @@ function parseAPIResponse(data: GetFileResponse | GetFileNodesResponse) {
     if (nodeData === null) {
       tagError(
         new Error(
-          `Node ${nodeId} was not found in the Figma file. ` +
-            `It may have been deleted or the link may be outdated. ` +
-            `Try copying a fresh link from the Figma file.`,
+          `Node ${nodeId} was not found in the Figma file. Likely causes: ` +
+            `(1) The source URL was a /proto/, /figjam/, /slides/, /board/, or /deck/ link — ` +
+            `only /design/ and /file/ URLs are supported by the Figma REST API. ` +
+            `(2) The node is inside a Figma branch — branches have their own fileKey ` +
+            `(the value after /branch/ in the URL), use that instead of the parent file's key. ` +
+            `(3) The link is stale or the node was deleted. ` +
+            `Ask the user for a fresh /design/ URL pointing to the specific frame.`,
         ),
         { category: "not_found" },
       );
