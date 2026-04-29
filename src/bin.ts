@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { cli } from "cleye";
-import { getServerConfig } from "./config.js";
+import { getServerConfig, UsageError } from "./config.js";
 import { startServer } from "./server.js";
 import { fetchCommand } from "./commands/fetch.js";
 
@@ -61,11 +61,19 @@ const argv = cli({
 
 // Subcommand callbacks execute during cli() — only start the server when no subcommand ran.
 if (!argv.command) {
+  main().catch((error) => {
+    if (error instanceof UsageError) {
+      console.error(error.message);
+    } else {
+      console.error("Failed to start server:", error);
+    }
+    process.exit(1);
+  });
+}
+
+async function main(): Promise<void> {
   // NODE_ENV=cli is a legacy backdoor for stdio mode
   const isStdio = argv.flags.stdio === true || process.env.NODE_ENV === "cli";
   const config = getServerConfig({ ...argv.flags, stdio: isStdio });
-  startServer(config).catch((error) => {
-    console.error("Failed to start server:", error);
-    process.exit(1);
-  });
+  await startServer(config);
 }

@@ -1,5 +1,5 @@
 import { type Command, command } from "cleye";
-import { loadEnvFile, resolveAuth, requireGlobalCredentials } from "~/config.js";
+import { loadEnvFile, resolveAuth, requireGlobalCredentials, UsageError } from "~/config.js";
 import { FigmaService } from "~/services/figma.js";
 import { parseFigmaUrl } from "~/utils/figma-url.js";
 import { authMode, initTelemetry, captureGetFigmaDataCall, shutdown } from "~/telemetry/index.js";
@@ -84,8 +84,7 @@ async function run(
   }
 
   if (!fileKey) {
-    console.error("Either a Figma URL or --file-key is required");
-    process.exit(1);
+    throw new UsageError("Either a Figma URL or --file-key is required");
   }
 
   loadEnvFile(flags.env);
