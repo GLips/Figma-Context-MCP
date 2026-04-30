@@ -20,8 +20,10 @@ import type { Server } from "http";
 import type { AddressInfo } from "net";
 import { startHttpServer, stopHttpServer } from "~/server.js";
 import { initTelemetry, shutdown as shutdownTelemetry } from "~/telemetry/index.js";
+import { redactFigmaIdentifiers } from "~/telemetry/client.js";
 
 const PER_REQUEST_KEY = "figd_TENANT_SECRET_xyz789";
+const TEST_FILE_KEY = "lJDkSwHeX0eLHJ8E2qV6Wf";
 
 describe("per-request telemetry redaction", () => {
   let client: Client;
@@ -77,7 +79,7 @@ describe("per-request telemetry redaction", () => {
     const result = await client.request(
       {
         method: "tools/call",
-        params: { name: "get_figma_data", arguments: { fileKey: "abc123" } },
+        params: { name: "get_figma_data", arguments: { fileKey: TEST_FILE_KEY } },
       },
       CallToolResultSchema,
     );
@@ -96,6 +98,58 @@ describe("per-request telemetry redaction", () => {
         PER_REQUEST_KEY,
       );
       expect(message).toContain("[REDACTED]");
+      // The endpoint path FigmaService interpolates into its error message
+      // contains the file key (`/files/<key>`); covered by issue #354.
+      expect(message, `event ${event.event} leaked the file key`).not.toContain(TEST_FILE_KEY);
+      expect(message).toContain("[FILE_KEY]");
     }
+  });
+});
+
+describe("redactFigmaIdentifiers", () => {
+  it("redacts file keys in /files/ paths", () => {
+    expect(
+      redactFigmaIdentifiers("Failed to make request to Figma API endpoint '/files/abc123def'"),
+    ).toBe("Failed to make request to Figma API endpoint '/files/[FILE_KEY]'");
+  });
+
+  it("redacts file keys in /files/<key>/<path> sub-paths", () => {
+    expect(
+      redactFigmaIdentifiers(
+        "Request to Figma API endpoint '/files/lJDkSwHeX0eLHJ8E2qV6Wf/nodes' returned 403",
+      ),
+    ).toBe("Request to Figma API endpoint '/files/[FILE_KEY]/nodes' returned 403");
+  });
+
+  it("redacts file keys in /images/ paths", () => {
+    expect(redactFigmaIdentifiers("/images/lJDkSwHeX0eLHJ8E2qV6Wf?ids=1:2")).toBe(
+      "/images/[FILE_KEY]?ids=[NODE_ID]",
+    );
+  });
+
+  it("redacts node IDs in ?ids=, &node-id=, and &nodeId= query params", () => {
+    expect(redactFigmaIdentifiers("/files/abc123def/nodes?ids=1:2,3:4&depth=2")).toBe(
+      "/files/[FILE_KEY]/nodes?ids=[NODE_ID]&depth=2",
+    );
+    expect(redactFigmaIdentifiers("https://figma.com/file/x?node-id=1-2")).toBe(
+      "https://figma.com/file/x?node-id=[NODE_ID]",
+    );
+    expect(redactFigmaIdentifiers("?nodeId=I123:456;789:0")).toBe("?nodeId=[NODE_ID]");
+  });
+
+  it("redacts bare 'Node <id>' strings from extractor errors", () => {
+    expect(redactFigmaIdentifiers("Node 1:2 was not found in the Figma file.")).toBe(
+      "Node [NODE_ID] was not found in the Figma file.",
+    );
+    expect(redactFigmaIdentifiers("Node I123:456;789:0 was not found")).toBe(
+      "Node [NODE_ID] was not found",
+    );
+  });
+
+  it("does not clobber unrelated short paths", () => {
+    expect(redactFigmaIdentifiers("/files/x not found")).toBe("/files/x not found");
+    expect(redactFigmaIdentifiers("ENOENT: no such file or directory")).toBe(
+      "ENOENT: no such file or directory",
+    );
   });
 });
