@@ -66,7 +66,24 @@ function redactErrorMessage(message: string): string {
   for (const secret of requestSecrets.getStore() ?? []) {
     result = result.replaceAll(secret, "[REDACTED]");
   }
-  return result;
+  return redactFigmaIdentifiers(result);
+}
+
+/**
+ * Strip Figma file keys and node IDs from error messages before they leave
+ * the process. The telemetry rollout (PR #342) committed to "no Figma file
+ * contents, names, or IDs are sent as telemetry," but error messages built
+ * in `services/figma.ts` and `extractors/design-extractor.ts` interpolate the
+ * endpoint path and the unresolved node ID verbatim — issue #354.
+ *
+ * Bounded to 4+ chars so unrelated `/files/x` paths aren't clobbered. Real
+ * Figma file keys are URL-safe ~22-char strings.
+ */
+export function redactFigmaIdentifiers(message: string): string {
+  return message
+    .replace(/\/(files|images)\/[A-Za-z0-9]{4,}/g, "/$1/[FILE_KEY]")
+    .replace(/([?&](?:ids|node-id|nodeId)=)[^&\s'"]+/gi, "$1[NODE_ID]")
+    .replace(/\bNode [A-Z]?\d+:\d+(?:;[A-Z]?\d+:\d+)*\b/g, "Node [NODE_ID]");
 }
 
 /**
