@@ -32,6 +32,12 @@
   },
   "packageManager": "pnpm@10.10.0",
   "pnpm": {
+    "overrides": {
+      "@hono/node-server": "1.19.14",
+      "express-rate-limit": "8.4.1",
+      "hono": "4.12.16",
+      "path-to-regexp": "8.4.2"
+    },
     "onlyBuiltDependencies": [
       "esbuild",
       "lefthook"
@@ -51,11 +57,11 @@
   "license": "MIT",
   "dependencies": {
     "@figma/rest-api-spec": "^0.37.0",
-    "@jimp/core": "^1.6.0",
-    "@jimp/js-gif": "^1.6.0",
-    "@jimp/js-jpeg": "^1.6.0",
-    "@jimp/js-png": "^1.6.0",
-    "@jimp/plugin-crop": "^1.6.0",
+    "@jimp/core": "^1.6.1",
+    "@jimp/js-gif": "^1.6.1",
+    "@jimp/js-jpeg": "^1.6.1",
+    "@jimp/js-png": "^1.6.1",
+    "@jimp/plugin-crop": "^1.6.1",
     "@modelcontextprotocol/sdk": "1.29.0",
     "cleye": "^2.2.1",
     "cross-env": "^7.0.3",
