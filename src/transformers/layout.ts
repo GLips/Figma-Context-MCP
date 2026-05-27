@@ -1,4 +1,10 @@
-import { isInAutoLayoutFlow, isFrame, isLayout, isRectangle } from "~/utils/identity.js";
+import {
+  hasFlexLayout,
+  isInAutoLayoutFlow,
+  isFrame,
+  isLayout,
+  isRectangle,
+} from "~/utils/identity.js";
 import type {
   Node as FigmaDocumentNode,
   HasFramePropertiesTrait,
@@ -141,12 +147,7 @@ function buildSimplifiedFrameValues(n: FigmaDocumentNode): SimplifiedLayout | { 
   }
 
   const frameValues: SimplifiedLayout = {
-    mode:
-      !n.layoutMode || n.layoutMode === "NONE"
-        ? "none"
-        : n.layoutMode === "HORIZONTAL"
-          ? "row"
-          : "column",
+    mode: !hasFlexLayout(n) ? "none" : n.layoutMode === "HORIZONTAL" ? "row" : "column",
   };
 
   const overflowScroll: SimplifiedLayout["overflowScroll"] = [];
@@ -182,6 +183,13 @@ function buildSimplifiedFrameValues(n: FigmaDocumentNode): SimplifiedLayout | { 
   return frameValues;
 }
 
+function getParentAutoLayoutMode(parent?: FigmaDocumentNode): "row" | "column" | undefined {
+  if (!isFrame(parent)) return undefined;
+  if (parent.layoutMode === "HORIZONTAL") return "row";
+  if (parent.layoutMode === "VERTICAL") return "column";
+  return undefined;
+}
+
 function buildSimplifiedLayoutValues(
   n: FigmaDocumentNode,
   parent: FigmaDocumentNode | undefined,
@@ -196,12 +204,11 @@ function buildSimplifiedLayoutValues(
     vertical: convertSizing(n.layoutSizingVertical),
   };
 
-  // Only include positioning-related properties if parent layout isn't flex or if the node is absolute
-  if (
-    // If parent is a frame but not an AutoLayout, or if the node is absolute, include positioning-related properties
-    isFrame(parent) &&
-    !isInAutoLayoutFlow(n, parent)
-  ) {
+  // Emit positioning relative to parent unless the parent's auto-layout already
+  // places this child. `isLayout(parent)` also screens out top-level nodes
+  // (no parent) and parents without bounding boxes (e.g. CANVAS), where
+  // coordinates would be meaningless.
+  if (isLayout(parent) && !isInAutoLayoutFlow(n, parent)) {
     if (n.layoutPositioning === "ABSOLUTE") {
       layoutValues.position = "absolute";
     }
@@ -216,15 +223,18 @@ function buildSimplifiedLayoutValues(
   // Handle dimensions based on layout growth and alignment
   if (isRectangle("absoluteBoundingBox", n)) {
     const dimensions: { width?: number; height?: number; aspectRatio?: number } = {};
+    const sizingMode = isInAutoLayoutFlow(n, parent)
+      ? (getParentAutoLayoutMode(parent) ?? mode)
+      : mode;
 
     // Only include dimensions that aren't meant to stretch
-    if (mode === "row") {
+    if (sizingMode === "row") {
       // AutoLayout row, only include dimensions if the node is not growing
       if (!n.layoutGrow && n.layoutSizingHorizontal == "FIXED")
         dimensions.width = n.absoluteBoundingBox.width;
       if (n.layoutAlign !== "STRETCH" && n.layoutSizingVertical == "FIXED")
         dimensions.height = n.absoluteBoundingBox.height;
-    } else if (mode === "column") {
+    } else if (sizingMode === "column") {
       // AutoLayout column, only include dimensions if the node is not growing
       if (n.layoutAlign !== "STRETCH" && n.layoutSizingHorizontal == "FIXED")
         dimensions.width = n.absoluteBoundingBox.width;

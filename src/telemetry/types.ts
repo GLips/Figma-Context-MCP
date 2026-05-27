@@ -1,7 +1,7 @@
 import type { OutputFormat } from "~/utils/serialize.js";
 
 export type Transport = "stdio" | "http" | "cli";
-export type AuthMode = "oauth" | "api_key";
+export type AuthMode = "oauth" | "api_key" | "none";
 export type ClientInfo = { name?: string; version?: string };
 
 export interface InitTelemetryOptions {

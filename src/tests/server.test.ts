@@ -1,6 +1,5 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import { createServer } from "../mcp/index.js";
 import { startHttpServer, stopHttpServer } from "../server.js";
 import type { AddressInfo } from "net";
 import type { FigmaAuthOptions } from "../services/figma.js";
@@ -16,9 +15,7 @@ describe("StreamableHTTP transport", () => {
   let port: number;
 
   beforeAll(async () => {
-    const httpServer = await startHttpServer("127.0.0.1", 0, () =>
-      createServer(dummyAuth, { transport: "http" }),
-    );
+    const httpServer = await startHttpServer("127.0.0.1", 0, dummyAuth, {});
     port = (httpServer.address() as AddressInfo).port;
   }, 15_000);
 
@@ -86,9 +83,7 @@ describe("Method not allowed", () => {
   let port: number;
 
   beforeAll(async () => {
-    const httpServer = await startHttpServer("127.0.0.1", 0, () =>
-      createServer(dummyAuth, { transport: "http" }),
-    );
+    const httpServer = await startHttpServer("127.0.0.1", 0, dummyAuth, {});
     port = (httpServer.address() as AddressInfo).port;
   }, 15_000);
 
@@ -125,9 +120,7 @@ describe("Multi-client test", () => {
   let port: number;
 
   beforeAll(async () => {
-    const httpServer = await startHttpServer("127.0.0.1", 0, () =>
-      createServer(dummyAuth, { transport: "http" }),
-    );
+    const httpServer = await startHttpServer("127.0.0.1", 0, dummyAuth, {});
     port = (httpServer.address() as AddressInfo).port;
   }, 15_000);
 
@@ -159,9 +152,7 @@ describe("Multi-client test", () => {
 
 describe("Server lifecycle", () => {
   it("starts and listens on assigned port", async () => {
-    const httpServer = await startHttpServer("127.0.0.1", 0, () =>
-      createServer(dummyAuth, { transport: "http" }),
-    );
+    const httpServer = await startHttpServer("127.0.0.1", 0, dummyAuth, {});
     const port = (httpServer.address() as AddressInfo).port;
 
     expect(port).toBeGreaterThan(0);
@@ -170,7 +161,7 @@ describe("Server lifecycle", () => {
   }, 15_000);
 
   it("stopHttpServer shuts down cleanly without hanging", async () => {
-    await startHttpServer("127.0.0.1", 0, () => createServer(dummyAuth, { transport: "http" }));
+    await startHttpServer("127.0.0.1", 0, dummyAuth, {});
 
     const timeout = new Promise<"timeout">((resolve) =>
       setTimeout(() => resolve("timeout"), 5_000).unref(),

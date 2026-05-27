@@ -1,7 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { FigmaService, type FigmaAuthOptions } from "../services/figma.js";
 import { Logger } from "../utils/logger.js";
-import { type AuthMode, type ClientInfo, type Transport } from "~/telemetry/index.js";
+import { authMode, type AuthMode, type ClientInfo, type Transport } from "~/telemetry/index.js";
 import type { OutputFormat } from "~/utils/serialize.js";
 import { installValidationRejectCapture } from "./validation-capture.js";
 import type { ToolExtra } from "./progress.js";
@@ -21,7 +21,7 @@ const serverInfo = {
 
 type ServerTransport = Extract<Transport, "stdio" | "http">;
 
-type CreateServerOptions = {
+export type CreateServerOptions = {
   transport: ServerTransport;
   outputFormat?: OutputFormat;
   skipImageDownloads?: boolean;
@@ -34,7 +34,7 @@ function createServer(
 ) {
   const server = new McpServer(serverInfo);
   const figmaService = new FigmaService(authOptions);
-  const authMode: AuthMode = authOptions.useOAuth ? "oauth" : "api_key";
+  const mode = authMode(authOptions);
 
   const getClientInfo = (): ClientInfo | undefined => {
     const info = server.server.getClientVersion();
@@ -44,14 +44,19 @@ function createServer(
 
   registerTools(server, figmaService, {
     transport,
-    authMode,
+    authMode: mode,
     outputFormat,
     skipImageDownloads,
     imageDir,
     getClientInfo,
   });
 
-  installValidationRejectCapture(server, { transport, authMode, outputFormat, getClientInfo });
+  installValidationRejectCapture(server, {
+    transport,
+    authMode: mode,
+    outputFormat,
+    getClientInfo,
+  });
 
   Logger.isHTTP = transport !== "stdio";
 

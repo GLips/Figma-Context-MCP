@@ -243,6 +243,81 @@ describe("collapseSvgContainers", () => {
     expect(nodes[0].type).toBe("IMAGE-SVG");
     expect(nodes[0].children).toBeUndefined();
   });
+
+  // Auto-layout signals authored structure — the spacing between children is
+  // intentional, so we should preserve the container even when its children
+  // are all SVG-eligible (e.g., bar charts, button rows, layout test frames).
+  it("does not collapse an auto-layout frame whose children are all SVG-eligible", async () => {
+    const autoLayoutRow = makeNode({
+      id: "7:1",
+      name: "Bar Chart",
+      type: "FRAME",
+      clipsContent: false,
+      layoutMode: "HORIZONTAL",
+      itemSpacing: 8,
+      children: [
+        makeNode({ id: "7:2", name: "Bar 1", type: "RECTANGLE" }),
+        makeNode({ id: "7:3", name: "Bar 2", type: "RECTANGLE" }),
+        makeNode({ id: "7:4", name: "Bar 3", type: "RECTANGLE" }),
+      ],
+    });
+
+    const { nodes } = await extractFromDesign([autoLayoutRow], allExtractors, {
+      afterChildren: collapseSvgContainers,
+    });
+
+    expect(nodes).toHaveLength(1);
+    expect(nodes[0].type).toBe("FRAME");
+    expect(nodes[0].children).toHaveLength(3);
+  });
+
+  // Escape hatch for decorative patterns: enough leaf primitives that the
+  // payload cost outweighs the structural value (e.g., dotted backgrounds
+  // built from grids of ellipses).
+  it("collapses an auto-layout frame with many SVG-eligible children", async () => {
+    const dotRow = makeNode({
+      id: "8:1",
+      name: "Dot Row",
+      type: "FRAME",
+      clipsContent: false,
+      layoutMode: "HORIZONTAL",
+      itemSpacing: 4,
+      children: Array.from({ length: 20 }, (_, i) =>
+        makeNode({ id: `8:${i + 2}`, name: `Dot ${i}`, type: "ELLIPSE" }),
+      ),
+    });
+
+    const { nodes } = await extractFromDesign([dotRow], allExtractors, {
+      afterChildren: collapseSvgContainers,
+    });
+
+    expect(nodes).toHaveLength(1);
+    expect(nodes[0].type).toBe("IMAGE-SVG");
+    expect(nodes[0].children).toBeUndefined();
+  });
+
+  // Non-auto-layout container with shape children is the original target case:
+  // hand-drawn icons made of vector primitives. Must keep collapsing.
+  it("still collapses a non-auto-layout frame whose children are all SVG-eligible", async () => {
+    const iconFrame = makeNode({
+      id: "9:1",
+      name: "Icon",
+      type: "FRAME",
+      clipsContent: false,
+      children: [
+        makeNode({ id: "9:2", name: "Circle", type: "ELLIPSE" }),
+        makeNode({ id: "9:3", name: "Rect", type: "RECTANGLE" }),
+      ],
+    });
+
+    const { nodes } = await extractFromDesign([iconFrame], allExtractors, {
+      afterChildren: collapseSvgContainers,
+    });
+
+    expect(nodes).toHaveLength(1);
+    expect(nodes[0].type).toBe("IMAGE-SVG");
+    expect(nodes[0].children).toBeUndefined();
+  });
 });
 
 describe("component property support", () => {
