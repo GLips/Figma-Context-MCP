@@ -5,8 +5,10 @@ import {
   convertSelfAlign,
   convertSizing,
   gapShorthand,
-  getParentAutoLayoutMode,
+  getChildStretch,
   layoutModeToSchema,
+  resolveChildAxis,
+  shouldEmitFixedDimension,
 } from "./layout/common.js";
 import { buildFlexGap, convertAlignItems, convertJustifyContent } from "./layout/flex.js";
 import { buildGridChildPositioning, isPackedGrid } from "./layout/grid.js";
@@ -121,41 +123,26 @@ function buildSimplifiedLayoutValues(
     Object.assign(layoutValues, buildGridChildPositioning(n, parent, parentGridPacked));
   }
 
-  // Handle dimensions based on layout growth and alignment
+  // Emit a dimension only when the child isn't stretching that axis and the
+  // sizing flag permits it. Stretch detection and the "is FIXED?" rule both
+  // depend on whether the parent is flex, grid, or non-auto-layout — see the
+  // helpers in ./layout/common.ts for the per-axis vocabulary mapping.
   if (isRectangle("absoluteBoundingBox", n)) {
     const dimensions: { width?: number; height?: number; aspectRatio?: number } = {};
-    const sizingMode = isInAutoLayoutFlow(n, parent)
-      ? (getParentAutoLayoutMode(parent) ?? mode)
-      : mode;
+    const axis = resolveChildAxis(n, parent, mode, parentIsGrid);
+    const stretch = getChildStretch(n, axis);
 
-    // Grid children use fixed-only dimension logic regardless of their own layout mode
-    const dimensionMode = parentIsGrid ? "none" : sizingMode;
+    if (!stretch.horizontal && shouldEmitFixedDimension(n.layoutSizingHorizontal, axis)) {
+      dimensions.width = n.absoluteBoundingBox.width;
+    }
+    if (!stretch.vertical && shouldEmitFixedDimension(n.layoutSizingVertical, axis)) {
+      dimensions.height = n.absoluteBoundingBox.height;
+    }
 
-    // Only include dimensions that aren't meant to stretch
-    if (dimensionMode === "row") {
-      // AutoLayout row, only include dimensions if the node is not growing
-      if (!n.layoutGrow && n.layoutSizingHorizontal == "FIXED")
-        dimensions.width = n.absoluteBoundingBox.width;
-      if (n.layoutAlign !== "STRETCH" && n.layoutSizingVertical == "FIXED")
-        dimensions.height = n.absoluteBoundingBox.height;
-    } else if (dimensionMode === "column") {
-      // AutoLayout column, only include dimensions if the node is not growing
-      if (n.layoutAlign !== "STRETCH" && n.layoutSizingHorizontal == "FIXED")
-        dimensions.width = n.absoluteBoundingBox.width;
-      if (!n.layoutGrow && n.layoutSizingVertical == "FIXED")
-        dimensions.height = n.absoluteBoundingBox.height;
-
-      if (n.preserveRatio) {
-        dimensions.aspectRatio = n.absoluteBoundingBox?.width / n.absoluteBoundingBox?.height;
-      }
-    } else {
-      // Grid children or non-auto-layout nodes: include FIXED dimensions only
-      if (!n.layoutSizingHorizontal || n.layoutSizingHorizontal === "FIXED") {
-        dimensions.width = n.absoluteBoundingBox.width;
-      }
-      if (!n.layoutSizingVertical || n.layoutSizingVertical === "FIXED") {
-        dimensions.height = n.absoluteBoundingBox.height;
-      }
+    // Preserves historical behavior: aspectRatio is emitted only for
+    // column-parent children. Likely should apply more broadly — pre-existing.
+    if (axis === "column" && n.preserveRatio) {
+      dimensions.aspectRatio = n.absoluteBoundingBox.width / n.absoluteBoundingBox.height;
     }
 
     if (Object.keys(dimensions).length > 0) {
