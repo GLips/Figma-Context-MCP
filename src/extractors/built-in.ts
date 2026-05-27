@@ -337,11 +337,11 @@ const COLLAPSIBLE_CONTAINER_TYPES = new Set(["FRAME", "GROUP", "INSTANCE", "BOOL
  * is a decorative pattern (dotted backgrounds, noise grids) where the payload cost of
  * preserving every leaf outweighs the structural value, and we collapse anyway.
  *
- * Pivot point chosen empirically: real charts and structural displays rarely exceed ~15
+ * Pivot point chosen empirically: real charts and structural displays rarely exceed ~10
  * primitives; decorative patterns typically have many dozens. Tune if real-world output
  * shows either category mis-classified.
  */
-const SVG_COLLAPSE_AUTOLAYOUT_THRESHOLD = 15;
+const SVG_COLLAPSE_AUTOLAYOUT_THRESHOLD = 10;
 
 /**
  * afterChildren callback that collapses SVG-heavy containers to IMAGE-SVG.
