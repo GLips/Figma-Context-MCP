@@ -1,5 +1,5 @@
 import {
-  hasAutoLayout,
+  hasFlexLayout,
   isInAutoLayoutFlow,
   isFrame,
   isLayout,
@@ -147,7 +147,7 @@ function buildSimplifiedFrameValues(n: FigmaDocumentNode): SimplifiedLayout | { 
   }
 
   const frameValues: SimplifiedLayout = {
-    mode: !hasAutoLayout(n) ? "none" : n.layoutMode === "HORIZONTAL" ? "row" : "column",
+    mode: !hasFlexLayout(n) ? "none" : n.layoutMode === "HORIZONTAL" ? "row" : "column",
   };
 
   const overflowScroll: SimplifiedLayout["overflowScroll"] = [];

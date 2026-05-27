@@ -47,24 +47,30 @@ export function isLayout(val: unknown): val is HasLayoutTrait {
 }
 
 /**
- * Whether a node uses auto-layout (HORIZONTAL or VERTICAL layoutMode).
- * Non-frame nodes return false. Frames without layoutMode (or with "NONE") return false.
+ * Whether a node uses flex-style auto-layout (HORIZONTAL or VERTICAL layoutMode).
+ *
+ * Deliberately narrower than Figma's general "auto-layout" concept, which also includes
+ * `layoutMode: "GRID"`. GRID has a different positioning model (gridRowAnchorIndex etc.)
+ * and callers that care about row/column flex semantics specifically should use this;
+ * callers that want "any non-NONE auto-layout" need a separate, broader predicate.
  */
-export function hasAutoLayout(val: unknown): boolean {
+export function hasFlexLayout(val: unknown): boolean {
   return isFrame(val) && (val.layoutMode === "HORIZONTAL" || val.layoutMode === "VERTICAL");
 }
 
 /**
  * Checks if:
- * 1. A node is a child to an auto layout frame
+ * 1. A node is a child to a flex auto-layout frame
  * 2. The child adheres to the auto layout rules—i.e. it's not absolutely positioned
+ *
+ * Does NOT cover GRID auto-layout — see `hasFlexLayout` for why.
  *
  * @param node - The node to check.
  * @param parent - The parent node.
- * @returns True if the node is a child of an auto layout frame, false otherwise.
+ * @returns True if the node is a child of a flex auto-layout frame, false otherwise.
  */
 export function isInAutoLayoutFlow(node: unknown, parent: unknown): boolean {
-  return hasAutoLayout(parent) && isLayout(node) && node.layoutPositioning !== "ABSOLUTE";
+  return hasFlexLayout(parent) && isLayout(node) && node.layoutPositioning !== "ABSOLUTE";
 }
 
 export function isStrokeWeights(val: unknown): val is StrokeWeights {
