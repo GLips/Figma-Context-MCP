@@ -507,16 +507,42 @@ describe("grid layout", () => {
       expect(buildSimplifiedLayout(c3, parent).zIndex).toBeUndefined();
     });
 
-    test("z-order differs from anchor order: sort, emit zIndex on moved children", () => {
+    test("z-order differs from anchor order with overlap: sort, emit zIndex on moved children", () => {
       // Mirrors the "Dynamic - FR" case from the Figma file: 6 children in a 3x2
       // packed grid, where the 100x100 cell-spanning child is z-order-last but
-      // belongs at row 2 col 0 in grid flow.
-      const c0 = makeGridChild({ gridColumnAnchorIndex: 0, gridRowAnchorIndex: 0 });
-      const c1 = makeGridChild({ gridColumnAnchorIndex: 1, gridRowAnchorIndex: 0 });
-      const c2 = makeGridChild({ gridColumnAnchorIndex: 2, gridRowAnchorIndex: 0 });
-      const c3 = makeGridChild({ gridColumnAnchorIndex: 1, gridRowAnchorIndex: 1 });
-      const c4 = makeGridChild({ gridColumnAnchorIndex: 2, gridRowAnchorIndex: 1 });
-      const cBig = makeGridChild({ gridColumnAnchorIndex: 0, gridRowAnchorIndex: 1 });
+      // belongs at row 2 col 0 in grid flow. Children are placed with overlapping
+      // bboxes to verify zIndex is emitted when stacking matters.
+      const overlapBox = { x: 0, y: 0, width: 100, height: 100 };
+      const c0 = makeGridChild({
+        gridColumnAnchorIndex: 0,
+        gridRowAnchorIndex: 0,
+        absoluteBoundingBox: overlapBox,
+      });
+      const c1 = makeGridChild({
+        gridColumnAnchorIndex: 1,
+        gridRowAnchorIndex: 0,
+        absoluteBoundingBox: overlapBox,
+      });
+      const c2 = makeGridChild({
+        gridColumnAnchorIndex: 2,
+        gridRowAnchorIndex: 0,
+        absoluteBoundingBox: overlapBox,
+      });
+      const c3 = makeGridChild({
+        gridColumnAnchorIndex: 1,
+        gridRowAnchorIndex: 1,
+        absoluteBoundingBox: overlapBox,
+      });
+      const c4 = makeGridChild({
+        gridColumnAnchorIndex: 2,
+        gridRowAnchorIndex: 1,
+        absoluteBoundingBox: overlapBox,
+      });
+      const cBig = makeGridChild({
+        gridColumnAnchorIndex: 0,
+        gridRowAnchorIndex: 1,
+        absoluteBoundingBox: overlapBox,
+      });
       const parent = makeGridParent({ children: [c0, c1, c2, c3, c4, cBig] });
 
       // Sorted order is [c0, c1, c2, cBig, c3, c4] → indices [0, 1, 2, 5, 3, 4]
@@ -535,6 +561,62 @@ describe("grid layout", () => {
       // Packed grid → no explicit grid positions emitted; sort handles placement
       expect(buildSimplifiedLayout(cBig, parent).gridColumn).toBeUndefined();
       expect(buildSimplifiedLayout(cBig, parent).gridRow).toBeUndefined();
+    });
+
+    test("sort reorders, but no overlap: skip zIndex (stacking can't affect rendering)", () => {
+      // Array order ≠ anchor order, so sort reorders, but children sit in
+      // distinct screen positions with no overlap — stacking is invisible
+      // and zIndex would be noise.
+      const c0 = makeGridChild({
+        gridColumnAnchorIndex: 0,
+        gridRowAnchorIndex: 0,
+        absoluteBoundingBox: { x: 0, y: 0, width: 50, height: 50 },
+      });
+      // Second in z-order but anchored at (1, 0) — sorts last.
+      const cBottom = makeGridChild({
+        gridColumnAnchorIndex: 0,
+        gridRowAnchorIndex: 1,
+        absoluteBoundingBox: { x: 0, y: 60, width: 50, height: 50 },
+      });
+      // Third in z-order but anchored at (0, 1) — sorts second.
+      const cRight = makeGridChild({
+        gridColumnAnchorIndex: 1,
+        gridRowAnchorIndex: 0,
+        absoluteBoundingBox: { x: 60, y: 0, width: 50, height: 50 },
+      });
+      const parent = makeGridParent({ children: [c0, cBottom, cRight] });
+
+      // Sort still reorders: c0 stays, cRight (idx 2) moves to slot 1, cBottom (idx 1) to slot 2.
+      expect(computeGridChildOrder(parent)).toEqual([0, 2, 1]);
+
+      // But no overlap → no zIndex on anyone, including the moved children.
+      expect(buildSimplifiedLayout(c0, parent).zIndex).toBeUndefined();
+      expect(buildSimplifiedLayout(cBottom, parent).zIndex).toBeUndefined();
+      expect(buildSimplifiedLayout(cRight, parent).zIndex).toBeUndefined();
+    });
+
+    test("adjacent cells touching (gap = 0) are not overlap", () => {
+      // c0 at x=0..50 and cRight at x=50..100 share an edge but don't overlap.
+      // The reordered child still shouldn't get a zIndex.
+      const c0 = makeGridChild({
+        gridColumnAnchorIndex: 0,
+        gridRowAnchorIndex: 0,
+        absoluteBoundingBox: { x: 0, y: 0, width: 50, height: 50 },
+      });
+      const cBottom = makeGridChild({
+        gridColumnAnchorIndex: 0,
+        gridRowAnchorIndex: 1,
+        absoluteBoundingBox: { x: 0, y: 50, width: 50, height: 50 },
+      });
+      const cRight = makeGridChild({
+        gridColumnAnchorIndex: 1,
+        gridRowAnchorIndex: 0,
+        absoluteBoundingBox: { x: 50, y: 0, width: 50, height: 50 },
+      });
+      const parent = makeGridParent({ children: [c0, cBottom, cRight] });
+
+      expect(buildSimplifiedLayout(cBottom, parent).zIndex).toBeUndefined();
+      expect(buildSimplifiedLayout(cRight, parent).zIndex).toBeUndefined();
     });
 
     test("ABSOLUTE children keep their slot; in-flow siblings still sort", () => {

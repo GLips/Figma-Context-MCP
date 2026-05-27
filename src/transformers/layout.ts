@@ -122,6 +122,42 @@ export function computeGridChildOrder(parent: FigmaDocumentNode): number[] | nul
   return result.every((idx, i) => idx === i) ? null : result;
 }
 
+/**
+ * Whether any pair of a grid's in-flow children overlap (AABB intersection on
+ * `absoluteBoundingBox`).
+ *
+ * Used to gate `zIndex` emission: when children don't overlap, their CSS
+ * stacking can't affect what the user sees, so the z-order annotation is
+ * noise. ABSOLUTE-positioned children are excluded — they manage their own
+ * stacking and don't participate in grid flow.
+ *
+ * Edges that merely touch (e.g., adjacent cells with gap = 0) are NOT
+ * overlap; strict inequalities below handle that.
+ */
+function gridChildrenOverlap(parent: FigmaDocumentNode): boolean {
+  if (!hasValue("children", parent)) return false;
+  const boxes = (parent.children as FigmaDocumentNode[])
+    .filter((c) => isLayout(c) && c.layoutPositioning !== "ABSOLUTE")
+    .map((c) => (c as HasLayoutTrait).absoluteBoundingBox)
+    .filter((b): b is NonNullable<typeof b> => b != null);
+
+  for (let i = 0; i < boxes.length; i++) {
+    const a = boxes[i];
+    for (let j = i + 1; j < boxes.length; j++) {
+      const b = boxes[j];
+      if (
+        a.x < b.x + b.width &&
+        a.x + a.width > b.x &&
+        a.y < b.y + b.height &&
+        a.y + a.height > b.y
+      ) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 function convertJustifyContent(align?: HasFramePropertiesTrait["primaryAxisAlignItems"]) {
   switch (align) {
     case "MIN":
@@ -405,12 +441,14 @@ function buildSimplifiedLayoutValues(
       layoutValues.alignSelf = convertGridAlign(vAlign);
     }
 
-    // When sorting moves this child, surface its original Figma stacking position
-    // so the AI can preserve z-order when children overlap. Skipped when sort is
-    // a no-op (parent is null-result), and when this child's slot didn't move.
+    // When sorting moves this child AND siblings actually overlap, surface its
+    // original Figma stacking position so CSS can preserve z-order. Skipped when:
+    //   - sort is a no-op (no reorder happened)
+    //   - this child's slot didn't move
+    //   - no in-flow siblings overlap (stacking can't affect rendering)
     if (parent) {
       const order = computeGridChildOrder(parent);
-      if (order) {
+      if (order && gridChildrenOverlap(parent)) {
         const originalIndex = (parent as { children: FigmaDocumentNode[] }).children.indexOf(n);
         const newIndex = order.indexOf(originalIndex);
         if (originalIndex !== newIndex) {
