@@ -1,16 +1,21 @@
-import yaml from "js-yaml";
+import { serializeAsTree } from "./serialize-tree.js";
+import type { SerializableDesign } from "./serializable-design.js";
+import { dumpYaml } from "./yaml-dump.js";
 
-export function serializeResult(result: unknown, format: "yaml" | "json"): string {
-  if (format === "json") {
-    return JSON.stringify(result, null, 2);
-  }
-  // Output goes to LLMs, not human editors — optimize for speed over readability.
-  // noRefs skips O(n²) reference detection; lineWidth:-1 skips line-folding;
-  // JSON_SCHEMA reduces per-string implicit type checks.
-  return yaml.dump(result, {
-    noRefs: true,
-    lineWidth: -1,
-    noCompatMode: true,
-    schema: yaml.JSON_SCHEMA,
-  });
+export type OutputFormat = "yaml" | "json" | "tree";
+
+export const VALID_OUTPUT_FORMATS: readonly OutputFormat[] = ["yaml", "json", "tree"];
+
+export function isOutputFormat(value: string): value is OutputFormat {
+  return (VALID_OUTPUT_FORMATS as readonly string[]).includes(value);
+}
+
+// Accepts `unknown` so YAML/JSON callers can pass arbitrary structures (tests,
+// debug dumps, partial fixtures); the tree path requires the design wrapper
+// shape and casts at its boundary. Production callers go through
+// `wrapForSerialization` which enforces the contract at compile time.
+export function serializeResult(result: unknown, format: OutputFormat): string {
+  if (format === "json") return JSON.stringify(result, null, 2);
+  if (format === "tree") return serializeAsTree(result as SerializableDesign);
+  return dumpYaml(result);
 }

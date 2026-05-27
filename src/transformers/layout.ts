@@ -269,6 +269,13 @@ function buildSimplifiedFrameValues(n: FigmaDocumentNode): SimplifiedLayout | { 
   return frameValues;
 }
 
+function getParentAutoLayoutMode(parent?: FigmaDocumentNode): "row" | "column" | undefined {
+  if (!isFrame(parent)) return undefined;
+  if (parent.layoutMode === "HORIZONTAL") return "row";
+  if (parent.layoutMode === "VERTICAL") return "column";
+  return undefined;
+}
+
 function buildSimplifiedLayoutValues(
   n: FigmaDocumentNode,
   parent: FigmaDocumentNode | undefined,
@@ -284,12 +291,11 @@ function buildSimplifiedLayoutValues(
     vertical: convertSizing(n.layoutSizingVertical),
   };
 
-  // Only include positioning-related properties if parent layout isn't flex or if the node is absolute
-  if (
-    // If parent is a frame but not an AutoLayout, or if the node is absolute, include positioning-related properties
-    isFrame(parent) &&
-    !isInAutoLayoutFlow(n, parent)
-  ) {
+  // Emit positioning relative to parent unless the parent's auto-layout already
+  // places this child. `isLayout(parent)` also screens out top-level nodes
+  // (no parent) and parents without bounding boxes (e.g. CANVAS), where
+  // coordinates would be meaningless.
+  if (isLayout(parent) && !isInAutoLayoutFlow(n, parent)) {
     if (n.layoutPositioning === "ABSOLUTE") {
       layoutValues.position = "absolute";
     }
@@ -333,10 +339,14 @@ function buildSimplifiedLayoutValues(
   // Handle dimensions based on layout growth and alignment
   if (isRectangle("absoluteBoundingBox", n)) {
     const dimensions: { width?: number; height?: number; aspectRatio?: number } = {};
+    const sizingMode = isInAutoLayoutFlow(n, parent)
+      ? (getParentAutoLayoutMode(parent) ?? mode)
+      : mode;
 
     // Grid children use fixed-only dimension logic regardless of their own layout mode
-    const dimensionMode = parentIsGrid ? "none" : mode;
+    const dimensionMode = parentIsGrid ? "none" : sizingMode;
 
+    // Only include dimensions that aren't meant to stretch
     if (dimensionMode === "row") {
       // AutoLayout row, only include dimensions if the node is not growing
       if (!n.layoutGrow && n.layoutSizingHorizontal == "FIXED")

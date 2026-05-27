@@ -20,9 +20,12 @@ export function hasValue<K extends PropertyKey, T>(
   return typeGuard ? typeGuard(val) : val !== undefined;
 }
 
-// Checks for frame *traits*, not node type. Many node types (FRAME, COMPONENT,
-// INSTANCE, SECTION, etc.) carry frame properties. Structural checking via
-// `clipsContent` covers all of them without maintaining a type-string list.
+// Checks for `HasFramePropertiesTrait`, not node type. This is the FRAME family
+// — FRAME, GROUP, COMPONENT, COMPONENT_SET, INSTANCE — i.e. the nodes that can
+// carry auto-layout properties like `layoutMode`, `paddingTop`, etc. NOT a
+// general "is container" check: SECTION, BOOLEAN_OPERATION, and TABLE all hold
+// children but do not have frame properties. Structural checking via
+// `clipsContent` covers the FRAME family without maintaining a type-string list.
 export function isFrame(val: unknown): val is HasFramePropertiesTrait {
   return (
     typeof val === "object" &&

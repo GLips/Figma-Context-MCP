@@ -1,0 +1,98 @@
+import type { SimplifiedNode } from "~/extractors/types.js";
+import type { SerializableDesign } from "./serializable-design.js";
+import { dumpYaml } from "./yaml-dump.js";
+
+/**
+ * Render the simplified design as a token-efficient indented tree.
+ *
+ * Structural keys (id, name, type, children) are encoded positionally on each
+ * node line, eliminating the YAML/JSON overhead of repeating those keys for
+ * every node. Style values stay deduplicated in a globalVars block at the top,
+ * so identical styling across many nodes still pays once — the win over
+ * inline-only formats grows with how much style reuse the design has.
+ *
+ * Node line format:
+ *   [TYPE] "name" #id key=value key=value ...
+ *
+ * All SimplifiedNode fields are preserved; this is a serialization change only.
+ */
+export function serializeAsTree(design: SerializableDesign): string {
+  const sections: string[] = [];
+
+  // Quote the design name — designers can use anything, including ":" or
+  // whitespace, which would otherwise produce a malformed `NAME: foo: bar` line.
+  sections.push(`NAME: ${quote(design.metadata.name)}`);
+
+  if (Object.keys(design.globalVars.styles).length > 0) {
+    sections.push(`\nGLOBAL_VARS:\n${dumpYaml(design.globalVars.styles)}`);
+  }
+
+  if (Object.keys(design.metadata.components).length > 0) {
+    sections.push(`COMPONENTS:\n${dumpYaml(design.metadata.components)}`);
+  }
+
+  if (Object.keys(design.metadata.componentSets).length > 0) {
+    sections.push(`COMPONENT_SETS:\n${dumpYaml(design.metadata.componentSets)}`);
+  }
+
+  const lines: string[] = ["NODES:"];
+  for (const node of design.nodes) {
+    renderNode(node, 0, lines);
+  }
+  sections.push(lines.join("\n"));
+
+  return sections.join("\n");
+}
+
+function renderNode(node: SimplifiedNode, depth: number, out: string[]): void {
+  const indent = "  ".repeat(depth);
+  const parts: string[] = [];
+
+  parts.push(`[${node.type}]`);
+  parts.push(quote(node.name));
+  parts.push(`#${node.id}`);
+
+  // Order chosen to put high-signal properties first
+  if (node.layout !== undefined) parts.push(`layout=${node.layout}`);
+  if (node.fills !== undefined) parts.push(`fills=${maybeQuote(node.fills)}`);
+  if (node.strokes !== undefined) parts.push(`strokes=${maybeQuote(node.strokes)}`);
+  if (node.strokeWeight !== undefined) parts.push(`strokeWeight=${maybeQuote(node.strokeWeight)}`);
+  if (node.strokeWeights !== undefined) {
+    parts.push(`strokeWeights=${maybeQuote(node.strokeWeights)}`);
+  }
+  if (node.strokeDashes !== undefined) parts.push(`strokeDashes=${node.strokeDashes.join(",")}`);
+  if (node.effects !== undefined) parts.push(`effects=${maybeQuote(node.effects)}`);
+  if (node.opacity !== undefined) parts.push(`opacity=${node.opacity}`);
+  if (node.borderRadius !== undefined) parts.push(`borderRadius=${maybeQuote(node.borderRadius)}`);
+  if (node.styles !== undefined) parts.push(`styles=${maybeQuote(node.styles)}`);
+  if (node.componentId !== undefined) parts.push(`componentId=${node.componentId}`);
+  if (node.componentProperties !== undefined) {
+    parts.push(`componentProperties=${JSON.stringify(node.componentProperties)}`);
+  }
+  if (node.componentPropertyReferences !== undefined) {
+    parts.push(`componentPropertyReferences=${JSON.stringify(node.componentPropertyReferences)}`);
+  }
+  if (node.textStyle !== undefined) parts.push(`textStyle=${node.textStyle}`);
+  if (node.boldWeight !== undefined) parts.push(`boldWeight=${node.boldWeight}`);
+  if (node.text !== undefined) parts.push(`text=${quote(node.text)}`);
+
+  out.push(indent + parts.join(" "));
+
+  if (node.children) {
+    for (const child of node.children) {
+      renderNode(child, depth + 1, out);
+    }
+  }
+}
+
+// Always JSON-quote name and text so embedded whitespace, quotes, or newlines
+// can't break the line-per-node parse contract.
+function quote(s: string): string {
+  return JSON.stringify(s);
+}
+
+// Quote only when the value would otherwise break the space-separated
+// `key=value` parse — keeps short scalar refs (`layout_ABC`, `12px`) unquoted.
+function maybeQuote(s: string): string {
+  return /[\s"]/.test(s) ? JSON.stringify(s) : s;
+}

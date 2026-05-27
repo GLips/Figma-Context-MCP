@@ -1,20 +1,10 @@
-/**
- * Benchmark script for the design simplification pipeline.
- *
- * Reads a raw Figma API response from logs/figma-raw.json and profiles
- * simplifyRawFigmaObject + serialization, reporting wall time, memory,
- * node counts, and output size.
- *
- * Usage:
- *   pnpm benchmark:simplify              # run benchmark
- *   pnpm benchmark:simplify --profile    # run with CPU profiler, writes .cpuprofile
- */
+// Benchmark the design simplification pipeline. Run with --help for flags.
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { performance } from "node:perf_hooks";
 import { Session } from "node:inspector/promises";
-import yaml from "js-yaml";
+import { cli } from "cleye";
 import {
   simplifyRawFigmaObject,
   layoutExtractor,
@@ -22,12 +12,33 @@ import {
   visualsExtractor,
   componentExtractor,
   collapseSvgContainers,
-  getNodesProcessed,
 } from "../src/extractors/index.js";
 import type { ExtractorFn, SimplifiedNode } from "../src/extractors/index.js";
+import { serializeResult } from "../src/utils/serialize.js";
+import { wrapForSerialization } from "../src/utils/serializable-design.js";
 
-const INPUT_PATH = resolve("logs/figma-raw.json");
-const PROFILE_FLAG = process.argv.includes("--profile");
+const argv = cli({
+  name: "benchmark-simplify",
+  flags: {
+    input: {
+      type: String,
+      description: "Path to raw Figma API response JSON",
+      default: "logs/figma-raw.json",
+    },
+    profile: {
+      type: Boolean,
+      description: "Run with the V8 CPU profiler; writes logs/benchmark.cpuprofile",
+      default: false,
+    },
+  },
+  help: {
+    description:
+      "Benchmark the design simplification pipeline. Reads a raw Figma API response and reports wall time, memory, node counts, and output size for YAML/JSON/tree serialization.",
+  },
+});
+
+const INPUT_PATH = resolve(argv.flags.input);
+const PROFILE_FLAG = argv.flags.profile;
 
 interface ExtractorTiming {
   name: string;
@@ -135,32 +146,36 @@ async function main() {
     return out;
   };
 
+  const nodeCounter = { count: 0 };
   const simplifyStart = performance.now();
   const result = await simplifyRawFigmaObject(apiResponse, timedExtractors, {
     afterChildren: timedAfterChildren,
+    nodeCounter,
   });
   const simplifyMs = performance.now() - simplifyStart;
 
   const extractorTotal = extractorTimings.reduce((sum, t) => sum + t.totalMs, 0);
   const overhead = simplifyMs - extractorTotal - afterChildrenTiming.totalMs;
 
-  const nodesProcessed = getNodesProcessed();
+  const nodesProcessed = nodeCounter.count;
   const outputNodeCount = countOutputNodes(result.nodes);
 
+  const wrapped = wrapForSerialization(result);
+
   const yamlStart = performance.now();
-  const yamlOutput = yaml.dump(result, {
-    noRefs: true,
-    lineWidth: -1,
-    noCompatMode: true,
-    schema: yaml.JSON_SCHEMA,
-  });
+  const yamlOutput = serializeResult(wrapped, "yaml");
   const yamlMs = performance.now() - yamlStart;
   const yamlBytes = Buffer.byteLength(yamlOutput, "utf-8");
 
   const jsonStart = performance.now();
-  const jsonOutput = JSON.stringify(result, null, 2);
+  const jsonOutput = serializeResult(wrapped, "json");
   const jsonMs = performance.now() - jsonStart;
   const jsonBytes = Buffer.byteLength(jsonOutput, "utf-8");
+
+  const treeStart = performance.now();
+  const treeOutput = serializeResult(wrapped, "tree");
+  const treeMs = performance.now() - treeStart;
+  const treeBytes = Buffer.byteLength(treeOutput, "utf-8");
 
   const memAfter = process.memoryUsage();
 
@@ -202,9 +217,11 @@ async function main() {
   separator();
   row("YAML serialization", formatMs(yamlMs));
   row("JSON serialization", formatMs(jsonMs));
+  row("Tree serialization", formatMs(treeMs));
   separator();
   row("YAML output size", formatBytes(yamlBytes));
   row("JSON output size", formatBytes(jsonBytes));
+  row("Tree output size", formatBytes(treeBytes));
   separator();
   row("RSS (max sampled)", formatBytes(maxRss));
   row("RSS growth", rssGrowthStr);

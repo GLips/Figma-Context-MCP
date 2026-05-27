@@ -245,6 +245,79 @@ describe("layout alignment", () => {
       expect(buildSimplifiedLayout(node).alignItems).toBe("center");
     });
   });
+
+  describe("dimensions in parent auto layout", () => {
+    test("keeps fixed height when a row child stretches across a column parent", () => {
+      const parent = makeFrame({
+        layoutMode: "VERTICAL",
+        absoluteBoundingBox: { x: 0, y: 0, width: 536, height: 158 },
+      });
+      const child = makeFrame({
+        layoutMode: "HORIZONTAL",
+        absoluteBoundingBox: { x: 0, y: 80, width: 536, height: 78 },
+        layoutAlign: "STRETCH",
+        layoutGrow: 0,
+        layoutSizingHorizontal: "FILL",
+        layoutSizingVertical: "FIXED",
+      });
+
+      expect(buildSimplifiedLayout(child, parent).dimensions).toEqual({ height: 78 });
+    });
+  });
+
+  describe("locationRelativeToParent", () => {
+    // SECTION holds children but has no frame properties (no clipsContent, no
+    // layoutMode), so it can never auto-layout — children are always positioned
+    // absolutely within it. Regression guard: a stricter `isFrame(parent)` gate
+    // previously dropped positions for SECTION children entirely.
+    test("emits position for children of a SECTION parent", () => {
+      const section = {
+        type: "SECTION",
+        absoluteBoundingBox: { x: 100, y: 200, width: 708, height: 245 },
+      } as unknown as FigmaDocumentNode;
+      const child = makeFrame({
+        layoutMode: "NONE",
+        absoluteBoundingBox: { x: 120, y: 210, width: 50, height: 50 },
+      });
+
+      expect(buildSimplifiedLayout(child, section).locationRelativeToParent).toEqual({
+        x: 20,
+        y: 10,
+      });
+    });
+
+    test("omits position for top-level nodes (no parent)", () => {
+      const node = makeFrame({
+        absoluteBoundingBox: { x: 100, y: 200, width: 50, height: 50 },
+      });
+      expect(buildSimplifiedLayout(node).locationRelativeToParent).toBeUndefined();
+    });
+
+    test("omits position for in-flow children of an auto-layout parent", () => {
+      const parent = makeFrame({
+        layoutMode: "HORIZONTAL",
+        absoluteBoundingBox: { x: 0, y: 0, width: 200, height: 100 },
+      });
+      const child = makeFrame({
+        absoluteBoundingBox: { x: 10, y: 10, width: 50, height: 50 },
+      });
+      expect(buildSimplifiedLayout(child, parent).locationRelativeToParent).toBeUndefined();
+    });
+
+    test("emits position for ABSOLUTE children inside an auto-layout parent", () => {
+      const parent = makeFrame({
+        layoutMode: "HORIZONTAL",
+        absoluteBoundingBox: { x: 0, y: 0, width: 200, height: 100 },
+      });
+      const child = makeFrame({
+        layoutPositioning: "ABSOLUTE",
+        absoluteBoundingBox: { x: 30, y: 40, width: 50, height: 50 },
+      });
+      const result = buildSimplifiedLayout(child, parent);
+      expect(result.position).toBe("absolute");
+      expect(result.locationRelativeToParent).toEqual({ x: 30, y: 40 });
+    });
+  });
 });
 
 describe("grid layout", () => {

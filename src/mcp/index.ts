@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { FigmaService, type FigmaAuthOptions } from "../services/figma.js";
 import { Logger } from "../utils/logger.js";
 import { authMode, type AuthMode, type ClientInfo, type Transport } from "~/telemetry/index.js";
+import type { OutputFormat } from "~/utils/serialize.js";
 import { installValidationRejectCapture } from "./validation-capture.js";
 import type { ToolExtra } from "./progress.js";
 import {
@@ -22,7 +23,7 @@ type ServerTransport = Extract<Transport, "stdio" | "http">;
 
 export type CreateServerOptions = {
   transport: ServerTransport;
-  outputFormat?: "yaml" | "json";
+  outputFormat?: OutputFormat;
   skipImageDownloads?: boolean;
   imageDir?: string;
 };
@@ -50,7 +51,12 @@ function createServer(
     getClientInfo,
   });
 
-  installValidationRejectCapture(server, { transport, authMode: mode, getClientInfo });
+  installValidationRejectCapture(server, {
+    transport,
+    authMode: mode,
+    outputFormat,
+    getClientInfo,
+  });
 
   Logger.isHTTP = transport !== "stdio";
 
@@ -60,7 +66,7 @@ function createServer(
 type RegisterToolsOptions = {
   transport: ServerTransport;
   authMode: AuthMode;
-  outputFormat: "yaml" | "json";
+  outputFormat: OutputFormat;
   skipImageDownloads: boolean;
   imageDir?: string;
   getClientInfo: () => ClientInfo | undefined;
