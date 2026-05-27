@@ -20,7 +20,7 @@ import {
   simplifyPropertyDefinitions,
   simplifyPropertyReferences,
 } from "~/transformers/component.js";
-import { hasValue, isRectangleCornerRadii } from "~/utils/identity.js";
+import { hasAutoLayout, hasValue, isRectangleCornerRadii } from "~/utils/identity.js";
 import { generateVarId, isVisible, stableStringify } from "~/utils/common.js";
 import type { Node as FigmaDocumentNode } from "@figma/rest-api-spec";
 
@@ -311,9 +311,11 @@ export const layoutOnly = [layoutExtractor];
 
 /**
  * Node types that can be exported as SVG images.
- * When a FRAME, GROUP, INSTANCE, or BOOLEAN_OPERATION contains only these types, we can collapse
- * it to IMAGE-SVG. BOOLEAN_OPERATION is included because it's both a collapsible container AND
- * SVG-eligible as a child (boolean ops always produce vector output).
+ * When a collapsible container holds only these types, the container can be flattened to
+ * IMAGE-SVG. BOOLEAN_OPERATION is in both this set and the container set below because it's
+ * both collapsible AND SVG-eligible as a child (boolean ops always produce vector output).
+ *
+ * Tightly coupled to node-walker.ts, which renames VECTOR → IMAGE-SVG before this set is consulted.
  */
 export const SVG_ELIGIBLE_TYPES = new Set([
   "IMAGE-SVG", // VECTOR nodes are converted to IMAGE-SVG, or containers that were collapsed
@@ -325,11 +327,34 @@ export const SVG_ELIGIBLE_TYPES = new Set([
   "RECTANGLE",
 ]);
 
+/** Container node types eligible to collapse into a single IMAGE-SVG. */
+const COLLAPSIBLE_CONTAINER_TYPES = new Set(["FRAME", "GROUP", "INSTANCE", "BOOLEAN_OPERATION"]);
+
+/**
+ * Auto-layout signals authored structure — the spacing between children is intentional, so
+ * we normally preserve the container even when all its children are SVG-eligible (charts,
+ * toolbars, layout test frames). Above this many children, though, we assume the container
+ * is a decorative pattern (dotted backgrounds, noise grids) where the payload cost of
+ * preserving every leaf outweighs the structural value, and we collapse anyway.
+ *
+ * Pivot point chosen empirically: real charts and structural displays rarely exceed ~15
+ * primitives; decorative patterns typically have many dozens. Tune if real-world output
+ * shows either category mis-classified.
+ */
+const SVG_COLLAPSE_AUTOLAYOUT_THRESHOLD = 15;
+
 /**
  * afterChildren callback that collapses SVG-heavy containers to IMAGE-SVG.
  *
- * If a FRAME, GROUP, INSTANCE, or BOOLEAN_OPERATION contains only SVG-eligible children, the parent
- * is marked as IMAGE-SVG and children are omitted, reducing payload size.
+ * Collapses when:
+ *   - container is a FRAME, GROUP, INSTANCE, or BOOLEAN_OPERATION
+ *   - all children are SVG-eligible types
+ *   - neither the node nor any direct child has an image fill
+ *   - container is NOT auto-layout, OR child count is past the decorative-pattern threshold
+ *
+ * The auto-layout carve-out preserves authored layouts (bar charts, button rows) that
+ * happen to bottom out in shape primitives. The count threshold reclaims payload for
+ * decorative patterns built with auto-layout grids.
  *
  * @param node - Original Figma node
  * @param result - SimplifiedNode being built
@@ -341,23 +366,16 @@ export function collapseSvgContainers(
   result: SimplifiedNode,
   children: SimplifiedNode[],
 ): SimplifiedNode[] {
-  const allChildrenAreSvgEligible = children.every((child) => SVG_ELIGIBLE_TYPES.has(child.type));
+  if (!COLLAPSIBLE_CONTAINER_TYPES.has(node.type)) return children;
+  if (!children.every((child) => SVG_ELIGIBLE_TYPES.has(child.type))) return children;
+  if (hasImageFillOnSelfOrDirectChildren(node)) return children;
 
-  if (
-    (node.type === "FRAME" ||
-      node.type === "GROUP" ||
-      node.type === "INSTANCE" ||
-      node.type === "BOOLEAN_OPERATION") &&
-    allChildrenAreSvgEligible &&
-    !hasImageFillInChildren(node)
-  ) {
-    // Collapse to IMAGE-SVG and omit children
-    result.type = "IMAGE-SVG";
-    return [];
+  if (hasAutoLayout(node) && children.length < SVG_COLLAPSE_AUTOLAYOUT_THRESHOLD) {
+    return children;
   }
 
-  // Include all children normally
-  return children;
+  result.type = "IMAGE-SVG";
+  return [];
 }
 
 /**
@@ -367,7 +385,7 @@ export function collapseSvgContainers(
  * if a deeper descendant has image fills, its parent won't collapse (stays FRAME),
  * and FRAME isn't SVG-eligible, so the chain breaks naturally at each level.
  */
-function hasImageFillInChildren(node: FigmaDocumentNode): boolean {
+function hasImageFillOnSelfOrDirectChildren(node: FigmaDocumentNode): boolean {
   if (hasValue("fills", node) && node.fills.some((fill) => fill.type === "IMAGE")) {
     return true;
   }

@@ -1,4 +1,10 @@
-import { isInAutoLayoutFlow, isFrame, isLayout, isRectangle } from "~/utils/identity.js";
+import {
+  hasAutoLayout,
+  isInAutoLayoutFlow,
+  isFrame,
+  isLayout,
+  isRectangle,
+} from "~/utils/identity.js";
 import type {
   Node as FigmaDocumentNode,
   HasFramePropertiesTrait,
@@ -141,12 +147,7 @@ function buildSimplifiedFrameValues(n: FigmaDocumentNode): SimplifiedLayout | { 
   }
 
   const frameValues: SimplifiedLayout = {
-    mode:
-      !n.layoutMode || n.layoutMode === "NONE"
-        ? "none"
-        : n.layoutMode === "HORIZONTAL"
-          ? "row"
-          : "column",
+    mode: !hasAutoLayout(n) ? "none" : n.layoutMode === "HORIZONTAL" ? "row" : "column",
   };
 
   const overflowScroll: SimplifiedLayout["overflowScroll"] = [];
