@@ -204,12 +204,11 @@ function buildSimplifiedLayoutValues(
     vertical: convertSizing(n.layoutSizingVertical),
   };
 
-  // Only include positioning-related properties if parent layout isn't flex or if the node is absolute
-  if (
-    // If parent is a frame but not an AutoLayout, or if the node is absolute, include positioning-related properties
-    isFrame(parent) &&
-    !isInAutoLayoutFlow(n, parent)
-  ) {
+  // Emit positioning relative to parent unless the parent's auto-layout already
+  // places this child. `isLayout(parent)` also screens out top-level nodes
+  // (no parent) and parents without bounding boxes (e.g. CANVAS), where
+  // coordinates would be meaningless.
+  if (isLayout(parent) && !isInAutoLayoutFlow(n, parent)) {
     if (n.layoutPositioning === "ABSOLUTE") {
       layoutValues.position = "absolute";
     }
