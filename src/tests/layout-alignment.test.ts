@@ -1,5 +1,5 @@
 import { describe, test, expect } from "vitest";
-import { buildSimplifiedLayout } from "~/transformers/layout.js";
+import { buildSimplifiedLayout, computeGridChildOrder } from "~/transformers/layout.js";
 import type { Node as FigmaDocumentNode } from "@figma/rest-api-spec";
 
 function makeFrame(overrides: Record<string, unknown> = {}) {
@@ -491,6 +491,65 @@ describe("grid layout", () => {
 
       expect(buildSimplifiedLayout(c1, parent).gridColumn).toBe("1 / span 2");
       expect(buildSimplifiedLayout(c1, parent).gridRow).toBe("1");
+    });
+  });
+
+  describe("z-order vs grid-flow order", () => {
+    test("children already in anchor order: no sort, no zIndex", () => {
+      const c1 = makeGridChild({ gridColumnAnchorIndex: 0, gridRowAnchorIndex: 0 });
+      const c2 = makeGridChild({ gridColumnAnchorIndex: 1, gridRowAnchorIndex: 0 });
+      const c3 = makeGridChild({ gridColumnAnchorIndex: 2, gridRowAnchorIndex: 0 });
+      const parent = makeGridParent({ children: [c1, c2, c3] });
+
+      expect(computeGridChildOrder(parent)).toBeNull();
+      expect(buildSimplifiedLayout(c1, parent).zIndex).toBeUndefined();
+      expect(buildSimplifiedLayout(c2, parent).zIndex).toBeUndefined();
+      expect(buildSimplifiedLayout(c3, parent).zIndex).toBeUndefined();
+    });
+
+    test("z-order differs from anchor order: sort, emit zIndex on moved children", () => {
+      // Mirrors the "Dynamic - FR" case from the Figma file: 6 children in a 3x2
+      // packed grid, where the 100x100 cell-spanning child is z-order-last but
+      // belongs at row 2 col 0 in grid flow.
+      const c0 = makeGridChild({ gridColumnAnchorIndex: 0, gridRowAnchorIndex: 0 });
+      const c1 = makeGridChild({ gridColumnAnchorIndex: 1, gridRowAnchorIndex: 0 });
+      const c2 = makeGridChild({ gridColumnAnchorIndex: 2, gridRowAnchorIndex: 0 });
+      const c3 = makeGridChild({ gridColumnAnchorIndex: 1, gridRowAnchorIndex: 1 });
+      const c4 = makeGridChild({ gridColumnAnchorIndex: 2, gridRowAnchorIndex: 1 });
+      const cBig = makeGridChild({ gridColumnAnchorIndex: 0, gridRowAnchorIndex: 1 });
+      const parent = makeGridParent({ children: [c0, c1, c2, c3, c4, cBig] });
+
+      // Sorted order is [c0, c1, c2, cBig, c3, c4] → indices [0, 1, 2, 5, 3, 4]
+      expect(computeGridChildOrder(parent)).toEqual([0, 1, 2, 5, 3, 4]);
+
+      // Unmoved children: no zIndex
+      expect(buildSimplifiedLayout(c0, parent).zIndex).toBeUndefined();
+      expect(buildSimplifiedLayout(c1, parent).zIndex).toBeUndefined();
+      expect(buildSimplifiedLayout(c2, parent).zIndex).toBeUndefined();
+
+      // Moved children: zIndex = original index (Figma z-order)
+      expect(buildSimplifiedLayout(c3, parent).zIndex).toBe(3);
+      expect(buildSimplifiedLayout(c4, parent).zIndex).toBe(4);
+      expect(buildSimplifiedLayout(cBig, parent).zIndex).toBe(5);
+
+      // Packed grid → no explicit grid positions emitted; sort handles placement
+      expect(buildSimplifiedLayout(cBig, parent).gridColumn).toBeUndefined();
+      expect(buildSimplifiedLayout(cBig, parent).gridRow).toBeUndefined();
+    });
+
+    test("ABSOLUTE children keep their slot; in-flow siblings still sort", () => {
+      const c0 = makeGridChild({ gridColumnAnchorIndex: 0, gridRowAnchorIndex: 0 });
+      const cAbs = makeGridChild({
+        layoutPositioning: "ABSOLUTE",
+        gridColumnAnchorIndex: 0,
+        gridRowAnchorIndex: 0,
+      });
+      const c1 = makeGridChild({ gridColumnAnchorIndex: 0, gridRowAnchorIndex: 1 });
+      const c2 = makeGridChild({ gridColumnAnchorIndex: 1, gridRowAnchorIndex: 0 });
+      const parent = makeGridParent({ children: [c0, cAbs, c1, c2] });
+
+      // In-flow indices [0, 2, 3] sort by anchor → [0, 3, 2]; absolute keeps slot 1.
+      expect(computeGridChildOrder(parent)).toEqual([0, 1, 3, 2]);
     });
   });
 

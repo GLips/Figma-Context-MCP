@@ -1,4 +1,11 @@
-import { isInAutoLayoutFlow, isFrame, isLayout, isRectangle } from "~/utils/identity.js";
+import {
+  hasGridLayout,
+  hasValue,
+  isInAutoLayoutFlow,
+  isFrame,
+  isLayout,
+  isRectangle,
+} from "~/utils/identity.js";
 import type {
   Node as FigmaDocumentNode,
   HasFramePropertiesTrait,
@@ -18,6 +25,13 @@ export interface SimplifiedLayout {
   gridColumn?: string;
   gridRow?: string;
   justifySelf?: "start" | "end" | "center";
+  // Emitted on a grid child only when the parent's child array order (Figma z-order,
+  // back-to-front) doesn't match grid-anchor / reading order. The MCP reorders such
+  // children into anchor order so the AI generates idiomatic flowing-grid CSS, then
+  // surfaces the original z-order here so stacking can be preserved with `z-index`
+  // when children overlap. Value is the child's original index in `parent.children`
+  // (higher = drawn on top).
+  zIndex?: number;
   locationRelativeToParent?: {
     x: number;
     y: number;
@@ -50,6 +64,62 @@ export function buildSimplifiedLayout(
     buildSimplifiedLayoutValues(n, parent, frameValues.mode, parentGridPacked) || {};
 
   return { ...frameValues, ...layoutValues };
+}
+
+/**
+ * Compute the order in which a grid container's children should appear so that
+ * array position matches grid-flow (reading) order.
+ *
+ * Why: Figma returns children in z-order (back-to-front), which can differ
+ * from the order their grid anchors place them in. CSS auto-placement uses
+ * DOM order, so emitting children in Figma's z-order lands them in the wrong
+ * cells. Sorting into anchor order lets us emit idiomatic flowing-grid CSS
+ * (no explicit `grid-column` / `grid-row` per child) while keeping rendering
+ * correct. The original z-order is surfaced via {@link SimplifiedLayout.zIndex}
+ * on children whose position changed.
+ *
+ * ABSOLUTE-positioned children don't participate in grid flow, so they keep
+ * their original slot in the array — only in-flow children are reordered
+ * relative to each other.
+ *
+ * Returns null when the parent isn't a grid, has no children, or when the
+ * existing order already matches anchor order (no work to do).
+ */
+export function computeGridChildOrder(parent: FigmaDocumentNode): number[] | null {
+  if (!hasGridLayout(parent) || !hasValue("children", parent)) return null;
+  const children = parent.children as FigmaDocumentNode[];
+  if (children.length < 2) return null;
+
+  const isAbsolute = (c: FigmaDocumentNode) => isLayout(c) && c.layoutPositioning === "ABSOLUTE";
+
+  const inFlow = children
+    .map((_, i) => i)
+    .filter((i) => !isAbsolute(children[i]))
+    .sort((a, b) => {
+      const ca = children[a] as HasLayoutTrait;
+      const cb = children[b] as HasLayoutTrait;
+      const ar = ca.gridRowAnchorIndex ?? 0;
+      const br = cb.gridRowAnchorIndex ?? 0;
+      if (ar !== br) return ar - br;
+      const ac = ca.gridColumnAnchorIndex ?? 0;
+      const bc = cb.gridColumnAnchorIndex ?? 0;
+      if (ac !== bc) return ac - bc;
+      return a - b; // stable on equal anchors
+    });
+
+  // Slot absolute children back into their original positions, and fill the
+  // remaining slots with the sorted in-flow indices.
+  const result: number[] = [];
+  let cursor = 0;
+  for (let i = 0; i < children.length; i++) {
+    if (isAbsolute(children[i])) {
+      result.push(i);
+    } else {
+      result.push(inFlow[cursor++]);
+    }
+  }
+
+  return result.every((idx, i) => idx === i) ? null : result;
 }
 
 function convertJustifyContent(align?: HasFramePropertiesTrait["primaryAxisAlignItems"]) {
@@ -333,6 +403,20 @@ function buildSimplifiedLayoutValues(
     const vAlign = n.gridChildVerticalAlign;
     if (vAlign && vAlign !== "AUTO") {
       layoutValues.alignSelf = convertGridAlign(vAlign);
+    }
+
+    // When sorting moves this child, surface its original Figma stacking position
+    // so the AI can preserve z-order when children overlap. Skipped when sort is
+    // a no-op (parent is null-result), and when this child's slot didn't move.
+    if (parent) {
+      const order = computeGridChildOrder(parent);
+      if (order) {
+        const originalIndex = (parent as { children: FigmaDocumentNode[] }).children.indexOf(n);
+        const newIndex = order.indexOf(originalIndex);
+        if (originalIndex !== newIndex) {
+          layoutValues.zIndex = originalIndex;
+        }
+      }
     }
   }
 
