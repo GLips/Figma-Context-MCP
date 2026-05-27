@@ -1,6 +1,7 @@
 import fs from "fs";
 import path from "path";
 import { tagError } from "~/utils/error-meta.js";
+import { isWithin } from "~/utils/local-path.js";
 
 export type StyleId = `${string}_${string}` & { __brand: "StyleId" };
 
@@ -23,10 +24,8 @@ export async function downloadFigmaImage(
       fs.mkdirSync(localPath, { recursive: true });
     }
 
-    // Build the complete file path and verify it stays within localPath
     const fullPath = path.resolve(path.join(localPath, fileName));
-    const resolvedLocalPath = path.resolve(localPath);
-    if (!fullPath.startsWith(resolvedLocalPath + path.sep)) {
+    if (!isWithin(localPath, fullPath)) {
       tagError(new Error(`File path escapes target directory: ${fileName}`), {
         category: "invalid_input",
       });
@@ -222,6 +221,19 @@ export function pixelRound(num: number): number {
     throw new TypeError(`Input must be a valid number`);
   }
   return Number(Number(num).toFixed(2));
+}
+
+/**
+ * Compile-time exhaustiveness guard for discriminated unions.
+ *
+ * Place in the default branch of a switch over a union: the `value: never` parameter
+ * forces TS to error here if any union member was missed, and the `never` return type
+ * tells control-flow analysis that execution doesn't continue (so callers don't need a
+ * trailing return). Throws at runtime as a defense against type-system bypasses
+ * (`as`, JSON inputs, etc.) — should never actually fire in well-typed code.
+ */
+export function exhaustiveCheck(value: never): never {
+  throw new Error(`Unhandled discriminant: ${String(value)}`);
 }
 
 /**

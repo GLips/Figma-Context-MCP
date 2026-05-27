@@ -1,5 +1,7 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { PostHog } from "posthog-node";
+import { proxyMode, type ProxyMode } from "~/utils/proxy-env.js";
 import type { InitTelemetryOptions } from "./types.js";
 
 // Write-only project key for the Framelink MCP analytics project.
@@ -13,6 +15,16 @@ type CommonProperties = {
   os_platform: NodeJS.Platform;
   nodejs_major: number;
   is_ci: boolean;
+  /**
+   * Which dispatcher the server installed for outbound fetches:
+   * `none` (Node default), `explicit` (--proxy/FIGMA_PROXY), or `env`
+   * (EnvHttpProxyAgent driven by HTTP_PROXY/HTTPS_PROXY/NO_PROXY).
+   *
+   * Lets us correlate failure rates (especially auth-category 403s — see
+   * issue #358) with the proxy configuration a user was actually running
+   * under, without logging the proxy URL itself.
+   */
+  proxy_mode: ProxyMode;
 };
 
 let client: PostHog | undefined;
@@ -22,6 +34,26 @@ let disabled = true;
 let initialized = false;
 let redactionSecrets: string[] = [];
 
+// Per-request redaction context. The init-time `redactionSecrets` list only
+// covers credentials known at startup; with HTTP `X-Figma-Token` auth the
+// real credential arrives per request and must not leak into telemetry. Each
+// HTTP handler runs its body inside `withRequestSecrets(...)`, and capture
+// merges the request-scoped list with the global one. AsyncLocalStorage
+// propagates the value through the request's promise chain without us having
+// to thread it down through every call site.
+const requestSecrets = new AsyncLocalStorage<readonly string[]>();
+
+export function withRequestSecrets<T>(
+  secrets: readonly string[],
+  fn: () => Promise<T>,
+): Promise<T> {
+  // Filter empties to avoid `replaceAll("", ...)`, which loops over every
+  // character of the message and produces nonsense output.
+  const filtered = secrets.filter(Boolean);
+  if (filtered.length === 0) return fn();
+  return requestSecrets.run(filtered, fn);
+}
+
 function parseNodeMajor(version: string): number {
   return Number.parseInt(version.split(".")[0], 10);
 }
@@ -29,6 +61,9 @@ function parseNodeMajor(version: string): number {
 function redactErrorMessage(message: string): string {
   let result = message;
   for (const secret of redactionSecrets) {
+    result = result.replaceAll(secret, "[REDACTED]");
+  }
+  for (const secret of requestSecrets.getStore() ?? []) {
     result = result.replaceAll(secret, "[REDACTED]");
   }
   return result;
@@ -72,6 +107,7 @@ export function initTelemetry(opts?: InitTelemetryOptions): boolean {
     os_platform: process.platform,
     nodejs_major: parseNodeMajor(process.versions.node),
     is_ci: Boolean(process.env.CI),
+    proxy_mode: proxyMode(),
   };
 
   // disableGeoip: false is load-bearing — the Node SDK defaults GeoIP to off,

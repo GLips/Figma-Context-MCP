@@ -4,7 +4,7 @@ import type {
   HasFramePropertiesTrait,
   HasLayoutTrait,
 } from "@figma/rest-api-spec";
-import { generateCSSShorthand, pixelRound } from "~/utils/common.js";
+import { exhaustiveCheck, generateCSSShorthand, pixelRound } from "~/utils/common.js";
 
 export interface SimplifiedLayout {
   mode: "none" | "row" | "column" | "grid";
@@ -195,20 +195,34 @@ function convertSizing(
   return undefined;
 }
 
+// Centralized mapping of Figma's layoutMode to our schema's mode tag.
+// Exhaustive switch — if @figma/rest-api-spec ever adds a new layoutMode value,
+// exhaustiveCheck fails the build until we decide how to map it.
+function layoutModeToSchema(
+  layoutMode: HasFramePropertiesTrait["layoutMode"],
+): SimplifiedLayout["mode"] {
+  switch (layoutMode) {
+    case "HORIZONTAL":
+      return "row";
+    case "VERTICAL":
+      return "column";
+    case "GRID":
+      return "grid";
+    case "NONE":
+    case undefined:
+      return "none";
+    default:
+      return exhaustiveCheck(layoutMode);
+  }
+}
+
 function buildSimplifiedFrameValues(n: FigmaDocumentNode): SimplifiedLayout | { mode: "none" } {
   if (!isFrame(n)) {
     return { mode: "none" };
   }
 
   const frameValues: SimplifiedLayout = {
-    mode:
-      !n.layoutMode || n.layoutMode === "NONE"
-        ? "none"
-        : n.layoutMode === "HORIZONTAL"
-          ? "row"
-          : n.layoutMode === "GRID"
-            ? "grid"
-            : "column",
+    mode: layoutModeToSchema(n.layoutMode),
   };
 
   const overflowScroll: SimplifiedLayout["overflowScroll"] = [];

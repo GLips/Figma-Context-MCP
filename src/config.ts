@@ -88,14 +88,35 @@ export function resolveAuth(flags: {
     useOAuth,
   };
 
-  if (!auth.figmaApiKey && !auth.figmaOAuthToken) {
-    console.error(
-      "Either FIGMA_API_KEY or FIGMA_OAUTH_TOKEN is required (via CLI argument or .env file)",
-    );
-    process.exit(1);
-  }
-
   return auth;
+}
+
+/**
+ * Thrown for user-fixable input errors (missing credentials, missing file key,
+ * etc.). CLI entry points catch this and print the bare message with exit 1,
+ * distinct from unexpected crashes that get a "Failed to start server:" prefix
+ * and stack trace. Throwing (vs. process.exit) keeps validators pure and safe
+ * for library consumers of `~/mcp-server`.
+ */
+export class UsageError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "UsageError";
+  }
+}
+
+/**
+ * Fail fast when global credentials are required but missing. HTTP mode skips
+ * this check so it can accept per-request `X-Figma-Token` headers; stdio and
+ * the `fetch` CLI have no way to receive request-time auth and must have
+ * something resolvable at startup or they'd just defer the failure to the
+ * first tool call with a misleading "send X-Figma-Token" message.
+ */
+export function requireGlobalCredentials(auth: FigmaAuthOptions): void {
+  if (auth.figmaApiKey || auth.figmaOAuthToken) return;
+  throw new UsageError(
+    "Either FIGMA_API_KEY or FIGMA_OAUTH_TOKEN is required (via CLI argument or .env file)",
+  );
 }
 
 export function getServerConfig(flags: ServerFlags): ServerConfig {
@@ -166,11 +187,13 @@ export function getServerConfig(flags: ServerFlags): ServerConfig {
         `- FIGMA_OAUTH_TOKEN: ${maskApiKey(auth.figmaOAuthToken)} (source: ${configSources.figmaOauthToken})`,
       );
       console.log("- Authentication Method: OAuth Bearer Token");
-    } else {
+    } else if (auth.figmaApiKey) {
       console.log(
         `- FIGMA_API_KEY: ${maskApiKey(auth.figmaApiKey)} (source: ${configSources.figmaApiKey})`,
       );
       console.log("- Authentication Method: Personal Access Token (X-Figma-Token)");
+    } else {
+      console.log("- Authentication Method: Per-request X-Figma-Token header");
     }
     console.log(`- FRAMELINK_PORT: ${port.value} (source: ${configSources.port})`);
     console.log(`- FRAMELINK_HOST: ${host.value} (source: ${configSources.host})`);
