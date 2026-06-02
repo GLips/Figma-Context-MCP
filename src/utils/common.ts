@@ -1,6 +1,7 @@
 import fs from "fs";
 import path from "path";
 import { tagError } from "~/utils/error-meta.js";
+import { assertSafeImageUrl } from "~/utils/url-validation.js";
 import { isWithin } from "~/utils/local-path.js";
 
 export type StyleId = `${string}_${string}` & { __brand: "StyleId" };
@@ -30,6 +31,9 @@ export async function downloadFigmaImage(
         category: "invalid_input",
       });
     }
+
+    // Validate URL before fetching — defense-in-depth against SSRF
+    assertSafeImageUrl(imageUrl);
 
     // Use fetch to download the image
     const response = await fetch(imageUrl, {
