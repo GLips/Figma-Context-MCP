@@ -141,14 +141,15 @@ export async function startHttpServer(
   const handlePost = async (req: Request, res: Response) => {
     Logger.log("Received StreamableHTTP request");
     const requestKey = getRequestApiKey(req);
-    const auth = resolveRequestAuth(baseAuth, requestKey);
+    const requestBearerToken = getRequestBearerToken(req);
+    const auth = resolveRequestAuth(baseAuth, requestKey, requestBearerToken);
+    const requestSecrets = [requestKey, requestBearerToken].filter(
+      (secret): secret is string => !!secret,
+    );
 
-    // Per-request X-Figma-Token isn't known to telemetry's init-time redaction
-    // list. Wrapping the handler in `withRequestSecrets` makes the key
-    // available to `redactErrorMessage` via AsyncLocalStorage, so any error
-    // captured during this request gets the per-request token scrubbed before
-    // it ships to PostHog.
-    await telemetry.withRequestSecrets(requestKey ? [requestKey] : [], async () => {
+    // Request-level credentials are not known to telemetry's init-time
+    // redaction list, so make them available only for this request scope.
+    await telemetry.withRequestSecrets(requestSecrets, async () => {
       const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
       const mcpServer = createServer(auth, { ...serverOptions, transport: "http" });
       const conn: ActiveConnection = { transport, server: mcpServer };
@@ -210,19 +211,38 @@ export async function startHttpServer(
 function resolveRequestAuth(
   baseAuth: FigmaAuthOptions,
   requestKey: string | undefined,
+  requestBearerToken: string | undefined,
 ): FigmaAuthOptions {
-  if (!requestKey) return baseAuth;
-  return {
-    figmaApiKey: requestKey,
-    figmaOAuthToken: "",
-    useOAuth: false,
-  };
+  if (requestKey) {
+    return {
+      figmaApiKey: requestKey,
+      figmaOAuthToken: "",
+      useOAuth: false,
+    };
+  }
+
+  if (requestBearerToken) {
+    return {
+      figmaApiKey: "",
+      figmaOAuthToken: requestBearerToken,
+      useOAuth: true,
+    };
+  }
+
+  return baseAuth;
 }
 
 function getRequestApiKey(req: Request): string | undefined {
   const value = req.headers["x-figma-token"];
   if (Array.isArray(value)) return value[0]?.trim() || undefined;
   return value?.trim() || undefined;
+}
+
+function getRequestBearerToken(req: Request): string | undefined {
+  const value = req.headers.authorization;
+  const header = Array.isArray(value) ? value[0] : value;
+  const match = header?.match(/^Bearer\s+(.+)$/i);
+  return match?.[1]?.trim() || undefined;
 }
 
 export async function stopHttpServer(): Promise<void> {

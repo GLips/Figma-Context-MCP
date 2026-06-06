@@ -129,6 +129,49 @@ describe("HTTP header Figma API key authentication", () => {
     expect(firstFigmaRequestHeaders()).toMatchObject({ "X-Figma-Token": "request-key" });
   });
 
+  it("uses Authorization bearer tokens from the HTTP request for get_figma_data", async () => {
+    await connectClient({ Authorization: "Bearer request-oauth-token" });
+
+    const result = await client.request(
+      {
+        method: "tools/call",
+        params: {
+          name: "get_figma_data",
+          arguments: { fileKey: "abc123" },
+        },
+      },
+      CallToolResultSchema,
+    );
+
+    expect(result.isError).toBeUndefined();
+    expect(firstFigmaRequestHeaders()).toMatchObject({
+      Authorization: "Bearer request-oauth-token",
+    });
+  });
+
+  it("uses HTTP Authorization bearer tokens instead of the server API key", async () => {
+    await connectClient(
+      { Authorization: "Bearer request-oauth-token" },
+      { figmaApiKey: "server-key", figmaOAuthToken: "", useOAuth: false },
+    );
+
+    const result = await client.request(
+      {
+        method: "tools/call",
+        params: {
+          name: "get_figma_data",
+          arguments: { fileKey: "abc123" },
+        },
+      },
+      CallToolResultSchema,
+    );
+
+    expect(result.isError).toBeUndefined();
+    expect(firstFigmaRequestHeaders()).toMatchObject({
+      Authorization: "Bearer request-oauth-token",
+    });
+  });
+
   it("returns a tool error when no server or request credentials are available", async () => {
     await connectClient();
 
@@ -146,7 +189,9 @@ describe("HTTP header Figma API key authentication", () => {
     expect(result.isError).toBe(true);
     expect(result.content[0].type).toBe("text");
     if (result.content[0].type === "text") {
-      expect(result.content[0].text).toContain("send X-Figma-Token on the HTTP request");
+      expect(result.content[0].text).toContain(
+        "send X-Figma-Token / Authorization: Bearer on the HTTP request",
+      );
     }
     expect(figmaRequestCount()).toBe(0);
   });
