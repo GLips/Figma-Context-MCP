@@ -150,6 +150,22 @@ describe("extractFromDesign", () => {
     expect(colorEntries[0][0]).toMatch(/^fill_/);
   });
 
+  it("preserves stroke alignment on the simplified node", async () => {
+    const node = makeNode({
+      id: "9:1",
+      name: "Card",
+      type: "FRAME",
+      strokes: [{ type: "SOLID", color: { r: 0.89, g: 0.9, b: 0.9, a: 1 }, visible: true }],
+      strokeWeight: 2,
+      strokeAlign: "OUTSIDE",
+    });
+
+    const { nodes } = await extractFromDesign([node], allExtractors);
+
+    expect(nodes[0].strokeAlign).toBe("OUTSIDE");
+    expect(nodes[0].strokeWeight).toBe("2px");
+  });
+
   it("disambiguates named styles when style names collide", async () => {
     const nodeA = makeNode({
       id: "7:1",

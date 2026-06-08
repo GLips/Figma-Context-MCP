@@ -118,6 +118,7 @@ export type SimplifiedStroke = {
   strokeWeight?: string;
   strokeDashes?: number[];
   strokeWeights?: string;
+  strokeAlign?: "INSIDE" | "OUTSIDE" | "CENTER";
 };
 
 /**
@@ -255,6 +256,13 @@ export function buildSimplifiedStrokes(
 
   if (hasValue("strokeDashes", n) && Array.isArray(n.strokeDashes) && n.strokeDashes.length) {
     strokes.strokeDashes = n.strokeDashes;
+  }
+
+  if (
+    hasValue("strokeAlign", n) &&
+    (n.strokeAlign === "INSIDE" || n.strokeAlign === "OUTSIDE" || n.strokeAlign === "CENTER")
+  ) {
+    strokes.strokeAlign = n.strokeAlign;
   }
 
   if (hasValue("individualStrokeWeights", n, isStrokeWeights)) {

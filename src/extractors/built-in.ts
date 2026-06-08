@@ -172,6 +172,7 @@ export const visualsExtractor: ExtractorFn = (node, result, context) => {
     if (strokes.strokeWeight) result.strokeWeight = strokes.strokeWeight;
     if (strokes.strokeDashes) result.strokeDashes = strokes.strokeDashes;
     if (strokes.strokeWeights) result.strokeWeights = strokes.strokeWeights;
+    if (strokes.strokeAlign) result.strokeAlign = strokes.strokeAlign;
   }
 
   // effects

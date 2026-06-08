@@ -123,6 +123,7 @@ export interface SimplifiedNode {
   strokeWeight?: string;
   strokeDashes?: number[];
   strokeWeights?: string;
+  strokeAlign?: "INSIDE" | "OUTSIDE" | "CENTER";
   effects?: string;
   opacity?: number;
   borderRadius?: string;
