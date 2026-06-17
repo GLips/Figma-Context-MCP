@@ -52,6 +52,19 @@ describe("count-gated style hoisting", () => {
     expect(result.globalVars.styles).toEqual({ "Heading / Large": { fontSize: 24 } });
   });
 
+  it("drops a named style that no surviving node references (orphaned by node removal)", () => {
+    // A named style can reach zero references when its only node is dropped after
+    // registration — e.g. collapseSvgContainers registers a vector child's named
+    // style, then folds the child away. A hoisted entry nothing points to is just
+    // orphan noise, so it must be dropped rather than force-kept as "intent".
+    const nodes = [node({ id: "1", type: "FRAME" })]; // references no style
+    const globalVars: GlobalVars = { styles: { "Heading / Large": { fontSize: 24 } } };
+
+    const result = finalizeDesign(nodes, globalVars, new Set(["Heading / Large"]));
+
+    expect(result.globalVars.styles).toEqual({});
+  });
+
   it("never inlines or drops inline-text-style (ts*) entries — they're referenced from text", () => {
     const nodes = [node({ id: "1", type: "TEXT", text: "a {ts1}b{/ts1}" })];
     const globalVars: GlobalVars = { styles: { ts1: { fontWeight: 700 } } };

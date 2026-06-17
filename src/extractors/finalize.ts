@@ -77,9 +77,20 @@ function inlineSingleUseStyles(
   counts: Map<string, number>,
 ): GlobalVars["styles"] {
   const inlineKeys = new Set<string>();
+  const dropKeys = new Set<string>();
   for (const key of Object.keys(styles)) {
     if (INLINE_TEXT_STYLE_KEY.test(key)) continue; // referenced from text, leave hoisted
-    if (namedStyleKeys.has(key)) continue; // design-system intent, keep hoisted
+    if (namedStyleKeys.has(key)) {
+      // Named styles are design-system intent, normally kept hoisted — but only
+      // while something still references them. A named style can reach zero
+      // references when its only node is dropped after registration (e.g.
+      // collapseSvgContainers registers a vector child's style, then folds the
+      // child away). A hoisted entry nothing points to is orphan noise, so drop
+      // it. (Non-named zero-count styles fall through to inlineKeys below and are
+      // likewise dropped — nothing references them, so nothing gets inlined.)
+      if ((counts.get(key) ?? 0) === 0) dropKeys.add(key);
+      continue;
+    }
     if ((counts.get(key) ?? 0) >= 2) continue; // shared, keep hoisted
     inlineKeys.add(key);
   }
@@ -100,7 +111,7 @@ function inlineSingleUseStyles(
 
   const surviving: GlobalVars["styles"] = {};
   for (const [key, value] of Object.entries(styles)) {
-    if (!inlineKeys.has(key)) surviving[key] = value;
+    if (!inlineKeys.has(key) && !dropKeys.has(key)) surviving[key] = value;
   }
   return surviving;
 }
