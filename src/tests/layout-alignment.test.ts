@@ -1,5 +1,5 @@
 import { describe, test, expect } from "vitest";
-import { buildSimplifiedLayout } from "~/transformers/layout.js";
+import { buildSimplifiedLayout, computeGridChildOrder } from "~/transformers/layout.js";
 import type { Node as FigmaDocumentNode } from "@figma/rest-api-spec";
 
 function makeFrame(overrides: Record<string, unknown> = {}) {
@@ -316,6 +316,395 @@ describe("layout alignment", () => {
       const result = buildSimplifiedLayout(child, parent);
       expect(result.position).toBe("absolute");
       expect(result.locationRelativeToParent).toEqual({ x: 30, y: 40 });
+    });
+  });
+});
+
+describe("grid layout", () => {
+  function makeGridParent(overrides: Record<string, unknown> = {}) {
+    return makeFrame({
+      layoutMode: "GRID",
+      gridColumnsSizing: "repeat(3,minmax(0,1fr))",
+      gridRowsSizing: "auto",
+      children: [],
+      ...overrides,
+    });
+  }
+
+  function makeGridChild(overrides: Record<string, unknown> = {}) {
+    return {
+      absoluteBoundingBox: { x: 0, y: 0, width: 100, height: 50 },
+      layoutSizingHorizontal: "FIXED",
+      layoutSizingVertical: "FIXED",
+      gridColumnAnchorIndex: 0,
+      gridRowAnchorIndex: 0,
+      gridColumnSpan: 1,
+      gridRowSpan: 1,
+      gridChildHorizontalAlign: "AUTO",
+      gridChildVerticalAlign: "AUTO",
+      ...overrides,
+    } as unknown as FigmaDocumentNode;
+  }
+
+  describe("grid container", () => {
+    test("basic grid container output", () => {
+      const node = makeFrame({
+        layoutMode: "GRID",
+        absoluteBoundingBox: { x: 0, y: 0, width: 300, height: 200 },
+        gridColumnsSizing: "repeat(3,minmax(0,1fr))",
+        gridRowsSizing: "auto",
+        gridRowGap: 10,
+        gridColumnGap: 10,
+      });
+      const result = buildSimplifiedLayout(node);
+      expect(result.mode).toBe("grid");
+      expect(result.gridTemplateColumns).toBe("repeat(3,minmax(0,1fr))");
+      expect(result.gridTemplateRows).toBe("auto");
+      expect(result.gap).toBe("10px");
+      // Flex-specific props should NOT be present
+      expect(result.justifyContent).toBeUndefined();
+      expect(result.alignItems).toBeUndefined();
+      expect(result.wrap).toBeUndefined();
+    });
+
+    test("trims whitespace from grid template strings", () => {
+      const node = makeFrame({
+        layoutMode: "GRID",
+        absoluteBoundingBox: { x: 0, y: 0, width: 300, height: 200 },
+        gridColumnsSizing: "  100px 200px  ",
+        gridRowsSizing: "  auto  ",
+      });
+      const result = buildSimplifiedLayout(node);
+      expect(result.gridTemplateColumns).toBe("100px 200px");
+      expect(result.gridTemplateRows).toBe("auto");
+    });
+
+    test("unequal row/column gaps produce CSS shorthand", () => {
+      const node = makeFrame({
+        layoutMode: "GRID",
+        absoluteBoundingBox: { x: 0, y: 0, width: 300, height: 200 },
+        gridRowGap: 10,
+        gridColumnGap: 20,
+      });
+      expect(buildSimplifiedLayout(node).gap).toBe("10px 20px");
+    });
+
+    test("grid container with padding", () => {
+      const node = makeFrame({
+        layoutMode: "GRID",
+        absoluteBoundingBox: { x: 0, y: 0, width: 300, height: 200 },
+        paddingTop: 8,
+        paddingRight: 16,
+        paddingBottom: 8,
+        paddingLeft: 16,
+      });
+      expect(buildSimplifiedLayout(node).padding).toBe("8px 16px");
+    });
+  });
+
+  describe("grid child properties", () => {
+    test("default grid child (span 1, AUTO align, packed) produces no grid props", () => {
+      const child = makeGridChild();
+      const parent = makeGridParent({ children: [child] });
+      const result = buildSimplifiedLayout(child, parent);
+      expect(result.gridColumn).toBeUndefined();
+      expect(result.gridRow).toBeUndefined();
+      expect(result.justifySelf).toBeUndefined();
+      expect(result.alignSelf).toBeUndefined();
+    });
+
+    test("packed grid: column span > 1 emits span shorthand", () => {
+      const child = makeGridChild({ gridColumnSpan: 2 });
+      const parent = makeGridParent({ children: [child] });
+      const result = buildSimplifiedLayout(child, parent);
+      expect(result.gridColumn).toBe("span 2");
+      expect(result.gridRow).toBeUndefined();
+    });
+
+    test("packed grid: row span > 1 emits span shorthand", () => {
+      const child = makeGridChild({ gridRowSpan: 3 });
+      const parent = makeGridParent({ children: [child] });
+      const result = buildSimplifiedLayout(child, parent);
+      expect(result.gridRow).toBe("span 3");
+    });
+
+    test("non-AUTO horizontal alignment emits justifySelf", () => {
+      const child = makeGridChild({ gridChildHorizontalAlign: "CENTER" });
+      const parent = makeGridParent({ children: [child] });
+      expect(buildSimplifiedLayout(child, parent).justifySelf).toBe("center");
+    });
+
+    test("non-AUTO vertical alignment emits alignSelf", () => {
+      const child = makeGridChild({ gridChildVerticalAlign: "MAX" });
+      const parent = makeGridParent({ children: [child] });
+      expect(buildSimplifiedLayout(child, parent).alignSelf).toBe("end");
+    });
+
+    test("MIN alignment maps to start", () => {
+      const child = makeGridChild({
+        gridChildHorizontalAlign: "MIN",
+        gridChildVerticalAlign: "MIN",
+      });
+      const parent = makeGridParent({ children: [child] });
+      const result = buildSimplifiedLayout(child, parent);
+      expect(result.justifySelf).toBe("start");
+      expect(result.alignSelf).toBe("start");
+    });
+  });
+
+  describe("packed vs gapped grid positions", () => {
+    test("packed grid: no explicit positions emitted", () => {
+      // 3 children filling a 3-column grid sequentially
+      const c1 = makeGridChild({ gridColumnAnchorIndex: 0, gridRowAnchorIndex: 0 });
+      const c2 = makeGridChild({ gridColumnAnchorIndex: 1, gridRowAnchorIndex: 0 });
+      const c3 = makeGridChild({ gridColumnAnchorIndex: 2, gridRowAnchorIndex: 0 });
+      const parent = makeGridParent({ children: [c1, c2, c3] });
+
+      expect(buildSimplifiedLayout(c1, parent).gridColumn).toBeUndefined();
+      expect(buildSimplifiedLayout(c2, parent).gridColumn).toBeUndefined();
+      expect(buildSimplifiedLayout(c3, parent).gridColumn).toBeUndefined();
+    });
+
+    test("gapped grid: explicit positions on all children", () => {
+      // 2 children in a 3-column grid with a gap (cell at 0,1 is empty)
+      const c1 = makeGridChild({ gridColumnAnchorIndex: 0, gridRowAnchorIndex: 0 });
+      const c2 = makeGridChild({ gridColumnAnchorIndex: 2, gridRowAnchorIndex: 0 });
+      const parent = makeGridParent({ children: [c1, c2] });
+
+      // CSS is 1-based
+      expect(buildSimplifiedLayout(c1, parent).gridColumn).toBe("1");
+      expect(buildSimplifiedLayout(c1, parent).gridRow).toBe("1");
+      expect(buildSimplifiedLayout(c2, parent).gridColumn).toBe("3");
+      expect(buildSimplifiedLayout(c2, parent).gridRow).toBe("1");
+    });
+
+    test("gapped grid with spans: position includes span", () => {
+      // Child spans 2 columns in a gapped grid
+      const c1 = makeGridChild({
+        gridColumnAnchorIndex: 0,
+        gridRowAnchorIndex: 0,
+        gridColumnSpan: 2,
+      });
+      const c2 = makeGridChild({ gridColumnAnchorIndex: 0, gridRowAnchorIndex: 1 });
+      // c1 occupies (0,0) and (0,1), c2 occupies (1,0) — gapped because (1,1) is empty
+      const parent = makeGridParent({ children: [c1, c2] });
+
+      expect(buildSimplifiedLayout(c1, parent).gridColumn).toBe("1 / span 2");
+      expect(buildSimplifiedLayout(c1, parent).gridRow).toBe("1");
+    });
+  });
+
+  describe("z-order vs grid-flow order", () => {
+    test("children already in anchor order: no sort, no zIndex", () => {
+      const c1 = makeGridChild({ gridColumnAnchorIndex: 0, gridRowAnchorIndex: 0 });
+      const c2 = makeGridChild({ gridColumnAnchorIndex: 1, gridRowAnchorIndex: 0 });
+      const c3 = makeGridChild({ gridColumnAnchorIndex: 2, gridRowAnchorIndex: 0 });
+      const parent = makeGridParent({ children: [c1, c2, c3] });
+
+      expect(computeGridChildOrder(parent)).toBeNull();
+      expect(buildSimplifiedLayout(c1, parent).zIndex).toBeUndefined();
+      expect(buildSimplifiedLayout(c2, parent).zIndex).toBeUndefined();
+      expect(buildSimplifiedLayout(c3, parent).zIndex).toBeUndefined();
+    });
+
+    test("z-order differs from anchor order with overlap: sort, emit zIndex on moved children", () => {
+      // Mirrors the "Dynamic - FR" case from the Figma file: 6 children in a 3x2
+      // packed grid, where the 100x100 cell-spanning child is z-order-last but
+      // belongs at row 2 col 0 in grid flow. Children are placed with overlapping
+      // bboxes to verify zIndex is emitted when stacking matters.
+      const overlapBox = { x: 0, y: 0, width: 100, height: 100 };
+      const c0 = makeGridChild({
+        gridColumnAnchorIndex: 0,
+        gridRowAnchorIndex: 0,
+        absoluteBoundingBox: overlapBox,
+      });
+      const c1 = makeGridChild({
+        gridColumnAnchorIndex: 1,
+        gridRowAnchorIndex: 0,
+        absoluteBoundingBox: overlapBox,
+      });
+      const c2 = makeGridChild({
+        gridColumnAnchorIndex: 2,
+        gridRowAnchorIndex: 0,
+        absoluteBoundingBox: overlapBox,
+      });
+      const c3 = makeGridChild({
+        gridColumnAnchorIndex: 1,
+        gridRowAnchorIndex: 1,
+        absoluteBoundingBox: overlapBox,
+      });
+      const c4 = makeGridChild({
+        gridColumnAnchorIndex: 2,
+        gridRowAnchorIndex: 1,
+        absoluteBoundingBox: overlapBox,
+      });
+      const cBig = makeGridChild({
+        gridColumnAnchorIndex: 0,
+        gridRowAnchorIndex: 1,
+        absoluteBoundingBox: overlapBox,
+      });
+      const parent = makeGridParent({ children: [c0, c1, c2, c3, c4, cBig] });
+
+      // Sorted order is [c0, c1, c2, cBig, c3, c4] → indices [0, 1, 2, 5, 3, 4]
+      expect(computeGridChildOrder(parent)).toEqual([0, 1, 2, 5, 3, 4]);
+
+      // Unmoved children: no zIndex
+      expect(buildSimplifiedLayout(c0, parent).zIndex).toBeUndefined();
+      expect(buildSimplifiedLayout(c1, parent).zIndex).toBeUndefined();
+      expect(buildSimplifiedLayout(c2, parent).zIndex).toBeUndefined();
+
+      // Moved children: zIndex = original index (Figma z-order)
+      expect(buildSimplifiedLayout(c3, parent).zIndex).toBe(3);
+      expect(buildSimplifiedLayout(c4, parent).zIndex).toBe(4);
+      expect(buildSimplifiedLayout(cBig, parent).zIndex).toBe(5);
+
+      // Packed grid → no explicit grid positions emitted; sort handles placement
+      expect(buildSimplifiedLayout(cBig, parent).gridColumn).toBeUndefined();
+      expect(buildSimplifiedLayout(cBig, parent).gridRow).toBeUndefined();
+    });
+
+    test("sort reorders, but no overlap: skip zIndex (stacking can't affect rendering)", () => {
+      // Array order ≠ anchor order, so sort reorders, but children sit in
+      // distinct screen positions with no overlap — stacking is invisible
+      // and zIndex would be noise.
+      const c0 = makeGridChild({
+        gridColumnAnchorIndex: 0,
+        gridRowAnchorIndex: 0,
+        absoluteBoundingBox: { x: 0, y: 0, width: 50, height: 50 },
+      });
+      // Second in z-order but anchored at (1, 0) — sorts last.
+      const cBottom = makeGridChild({
+        gridColumnAnchorIndex: 0,
+        gridRowAnchorIndex: 1,
+        absoluteBoundingBox: { x: 0, y: 60, width: 50, height: 50 },
+      });
+      // Third in z-order but anchored at (0, 1) — sorts second.
+      const cRight = makeGridChild({
+        gridColumnAnchorIndex: 1,
+        gridRowAnchorIndex: 0,
+        absoluteBoundingBox: { x: 60, y: 0, width: 50, height: 50 },
+      });
+      const parent = makeGridParent({ children: [c0, cBottom, cRight] });
+
+      // Sort still reorders: c0 stays, cRight (idx 2) moves to slot 1, cBottom (idx 1) to slot 2.
+      expect(computeGridChildOrder(parent)).toEqual([0, 2, 1]);
+
+      // But no overlap → no zIndex on anyone, including the moved children.
+      expect(buildSimplifiedLayout(c0, parent).zIndex).toBeUndefined();
+      expect(buildSimplifiedLayout(cBottom, parent).zIndex).toBeUndefined();
+      expect(buildSimplifiedLayout(cRight, parent).zIndex).toBeUndefined();
+    });
+
+    test("adjacent cells touching (gap = 0) are not overlap", () => {
+      // c0 at x=0..50 and cRight at x=50..100 share an edge but don't overlap.
+      // The reordered child still shouldn't get a zIndex.
+      const c0 = makeGridChild({
+        gridColumnAnchorIndex: 0,
+        gridRowAnchorIndex: 0,
+        absoluteBoundingBox: { x: 0, y: 0, width: 50, height: 50 },
+      });
+      const cBottom = makeGridChild({
+        gridColumnAnchorIndex: 0,
+        gridRowAnchorIndex: 1,
+        absoluteBoundingBox: { x: 0, y: 50, width: 50, height: 50 },
+      });
+      const cRight = makeGridChild({
+        gridColumnAnchorIndex: 1,
+        gridRowAnchorIndex: 0,
+        absoluteBoundingBox: { x: 50, y: 0, width: 50, height: 50 },
+      });
+      const parent = makeGridParent({ children: [c0, cBottom, cRight] });
+
+      expect(buildSimplifiedLayout(cBottom, parent).zIndex).toBeUndefined();
+      expect(buildSimplifiedLayout(cRight, parent).zIndex).toBeUndefined();
+    });
+
+    test("ABSOLUTE children keep their slot; in-flow siblings still sort", () => {
+      const c0 = makeGridChild({ gridColumnAnchorIndex: 0, gridRowAnchorIndex: 0 });
+      const cAbs = makeGridChild({
+        layoutPositioning: "ABSOLUTE",
+        gridColumnAnchorIndex: 0,
+        gridRowAnchorIndex: 0,
+      });
+      const c1 = makeGridChild({ gridColumnAnchorIndex: 0, gridRowAnchorIndex: 1 });
+      const c2 = makeGridChild({ gridColumnAnchorIndex: 1, gridRowAnchorIndex: 0 });
+      const parent = makeGridParent({ children: [c0, cAbs, c1, c2] });
+
+      // In-flow indices [0, 2, 3] sort by anchor → [0, 3, 2]; absolute keeps slot 1.
+      expect(computeGridChildOrder(parent)).toEqual([0, 1, 3, 2]);
+    });
+  });
+
+  describe("gap shorthand zero handling", () => {
+    test("zero row gap with non-zero column gap", () => {
+      const node = makeFrame({
+        layoutMode: "GRID",
+        absoluteBoundingBox: { x: 0, y: 0, width: 300, height: 200 },
+        gridRowGap: 0,
+        gridColumnGap: 16,
+      });
+      expect(buildSimplifiedLayout(node).gap).toBe("0px 16px");
+    });
+
+    test("both gaps zero is omitted (CSS default)", () => {
+      const node = makeFrame({
+        layoutMode: "GRID",
+        absoluteBoundingBox: { x: 0, y: 0, width: 300, height: 200 },
+        gridRowGap: 0,
+        gridColumnGap: 0,
+      });
+      expect(buildSimplifiedLayout(node).gap).toBeUndefined();
+    });
+  });
+
+  describe("cross-layout nesting", () => {
+    test("grid container inside flex parent retains alignSelf", () => {
+      const gridContainer = makeFrame({
+        layoutMode: "GRID",
+        layoutAlign: "CENTER",
+        gridColumnsSizing: "1fr 1fr",
+        absoluteBoundingBox: { x: 0, y: 0, width: 200, height: 100 },
+        layoutSizingHorizontal: "FIXED",
+        layoutSizingVertical: "FIXED",
+      });
+      const flexParent = makeFrame({
+        layoutMode: "HORIZONTAL",
+        children: [gridContainer],
+      });
+      const result = buildSimplifiedLayout(gridContainer, flexParent);
+      // Container should be grid mode
+      expect(result.mode).toBe("grid");
+      expect(result.gridTemplateColumns).toBe("1fr 1fr");
+      // But should NOT have flex alignment from parent
+      expect(result.justifyContent).toBeUndefined();
+      // alignSelf comes from the container's own layoutAlign
+      expect(result.alignSelf).toBe("center");
+    });
+
+    test("flex container inside grid parent gets grid child props", () => {
+      // A child that is itself a flex row, but sits inside a grid
+      const flexChild = makeFrame({
+        layoutMode: "HORIZONTAL",
+        children: [],
+        gridColumnSpan: 2,
+        gridChildHorizontalAlign: "CENTER",
+        gridColumnAnchorIndex: 0,
+        gridRowAnchorIndex: 0,
+        absoluteBoundingBox: { x: 0, y: 0, width: 200, height: 100 },
+        layoutSizingHorizontal: "FIXED",
+        layoutSizingVertical: "FIXED",
+      });
+      const gridParent = makeFrame({
+        layoutMode: "GRID",
+        gridColumnsSizing: "1fr 1fr 1fr",
+        children: [flexChild],
+      });
+      const result = buildSimplifiedLayout(flexChild, gridParent);
+      // Own layout mode drives the mode
+      expect(result.mode).toBe("row");
+      // Grid child props come from grid parent relationship
+      expect(result.gridColumn).toBe("span 2");
+      expect(result.justifySelf).toBe("center");
     });
   });
 });

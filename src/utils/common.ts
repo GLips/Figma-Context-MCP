@@ -224,6 +224,19 @@ export function pixelRound(num: number): number {
 }
 
 /**
+ * Compile-time exhaustiveness guard for discriminated unions.
+ *
+ * Place in the default branch of a switch over a union: the `value: never` parameter
+ * forces TS to error here if any union member was missed, and the `never` return type
+ * tells control-flow analysis that execution doesn't continue (so callers don't need a
+ * trailing return). Throws at runtime as a defense against type-system bypasses
+ * (`as`, JSON inputs, etc.) — should never actually fire in well-typed code.
+ */
+export function exhaustiveCheck(value: never): never {
+  throw new Error(`Unhandled discriminant: ${String(value)}`);
+}
+
+/**
  * Serialize a value to JSON with sorted object keys so two equal-but-
  * differently-ordered objects produce the same string. Used for cache keys
  * and deep-equality checks where property order isn't a stable guarantee

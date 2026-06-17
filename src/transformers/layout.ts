@@ -1,41 +1,21 @@
-import {
-  hasFlexLayout,
-  isInAutoLayoutFlow,
-  isFrame,
-  isLayout,
-  isRectangle,
-} from "~/utils/identity.js";
-import type {
-  Node as FigmaDocumentNode,
-  HasFramePropertiesTrait,
-  HasLayoutTrait,
-} from "@figma/rest-api-spec";
+import { isInAutoLayoutFlow, isFrame, isLayout, isRectangle } from "~/utils/identity.js";
+import type { Node as FigmaDocumentNode, HasLayoutTrait } from "@figma/rest-api-spec";
 import { generateCSSShorthand, pixelRound } from "~/utils/common.js";
+import {
+  convertSelfAlign,
+  convertSizing,
+  gapShorthand,
+  getChildStretch,
+  layoutModeToSchema,
+  resolveChildAxis,
+  shouldEmitFixedDimension,
+} from "./layout/common.js";
+import { buildFlexGap, convertAlignItems, convertJustifyContent } from "./layout/flex.js";
+import { buildGridChildPositioning, isPackedGrid } from "./layout/grid.js";
+import type { SimplifiedLayout } from "./layout/common.js";
 
-export interface SimplifiedLayout {
-  mode: "none" | "row" | "column";
-  justifyContent?: "flex-start" | "flex-end" | "center" | "space-between" | "baseline" | "stretch";
-  alignItems?: "flex-start" | "flex-end" | "center" | "space-between" | "baseline" | "stretch";
-  alignSelf?: "flex-start" | "flex-end" | "center" | "stretch";
-  wrap?: boolean;
-  gap?: string;
-  locationRelativeToParent?: {
-    x: number;
-    y: number;
-  };
-  dimensions?: {
-    width?: number;
-    height?: number;
-    aspectRatio?: number;
-  };
-  padding?: string;
-  sizing?: {
-    horizontal?: "fixed" | "fill" | "hug";
-    vertical?: "fixed" | "fill" | "hug";
-  };
-  overflowScroll?: ("x" | "y")[];
-  position?: "absolute";
-}
+export type { SimplifiedLayout } from "./layout/common.js";
+export { computeGridChildOrder } from "./layout/grid.js";
 
 // Convert Figma's layout config into a more typical flex-like schema
 export function buildSimplifiedLayout(
@@ -43,102 +23,14 @@ export function buildSimplifiedLayout(
   parent?: FigmaDocumentNode,
 ): SimplifiedLayout {
   const frameValues = buildSimplifiedFrameValues(n);
-  const layoutValues = buildSimplifiedLayoutValues(n, parent, frameValues.mode) || {};
+  const parentGridPacked =
+    isFrame(parent) && parent.layoutMode === "GRID" && "children" in parent
+      ? isPackedGrid(parent.children as FigmaDocumentNode[])
+      : undefined;
+  const layoutValues =
+    buildSimplifiedLayoutValues(n, parent, frameValues.mode, parentGridPacked) || {};
 
   return { ...frameValues, ...layoutValues };
-}
-
-function convertJustifyContent(align?: HasFramePropertiesTrait["primaryAxisAlignItems"]) {
-  switch (align) {
-    case "MIN":
-      return undefined;
-    case "MAX":
-      return "flex-end";
-    case "CENTER":
-      return "center";
-    case "SPACE_BETWEEN":
-      return "space-between";
-    default:
-      return undefined;
-  }
-}
-
-function convertAlignItems(
-  align: HasFramePropertiesTrait["counterAxisAlignItems"] | undefined,
-  children: FigmaDocumentNode[],
-  mode: "row" | "column",
-) {
-  // Row cross-axis is vertical; column cross-axis is horizontal
-  const crossSizing = mode === "row" ? "layoutSizingVertical" : "layoutSizingHorizontal";
-  const allStretch =
-    children.length > 0 &&
-    children.every(
-      (c) =>
-        ("layoutPositioning" in c && c.layoutPositioning === "ABSOLUTE") ||
-        (crossSizing in c && (c as Record<string, unknown>)[crossSizing] === "FILL"),
-    );
-  if (allStretch) return "stretch";
-
-  switch (align) {
-    case "MIN":
-      return undefined;
-    case "MAX":
-      return "flex-end";
-    case "CENTER":
-      return "center";
-    case "BASELINE":
-      return "baseline";
-    default:
-      return undefined;
-  }
-}
-
-function convertSelfAlign(align?: HasLayoutTrait["layoutAlign"]) {
-  switch (align) {
-    case "MIN":
-      // MIN, AKA flex-start, is the default alignment
-      return undefined;
-    case "MAX":
-      return "flex-end";
-    case "CENTER":
-      return "center";
-    case "STRETCH":
-      return "stretch";
-    default:
-      return undefined;
-  }
-}
-
-// SPACE_BETWEEN computes gaps dynamically — the API returns stale spacing
-// values, but Figma's UI shows "Auto". Suppress the affected axis.
-function buildGap(n: HasFramePropertiesTrait, mode: "row" | "column"): string | undefined {
-  const primaryGap = n.primaryAxisAlignItems === "SPACE_BETWEEN" ? undefined : n.itemSpacing;
-  const counterGap =
-    n.layoutWrap !== "WRAP" || n.counterAxisAlignContent === "SPACE_BETWEEN"
-      ? undefined
-      : n.counterAxisSpacing;
-
-  // Map Figma's primary/counter axes to CSS's row/column axes
-  const rowGap = mode === "row" ? counterGap : primaryGap;
-  const colGap = mode === "row" ? primaryGap : counterGap;
-
-  return gapShorthand(rowGap, colGap);
-}
-
-function gapShorthand(row?: number, col?: number): string | undefined {
-  if (!row && !col) return undefined;
-  if (row && col) return row === col ? `${row}px` : `${row}px ${col}px`;
-  return `${(row ?? col)!}px`;
-}
-
-// interpret sizing
-function convertSizing(
-  s?: HasLayoutTrait["layoutSizingHorizontal"] | HasLayoutTrait["layoutSizingVertical"],
-) {
-  if (s === "FIXED") return "fixed";
-  if (s === "FILL") return "fill";
-  if (s === "HUG") return "hug";
-  return undefined;
 }
 
 function buildSimplifiedFrameValues(n: FigmaDocumentNode): SimplifiedLayout | { mode: "none" } {
@@ -147,7 +39,7 @@ function buildSimplifiedFrameValues(n: FigmaDocumentNode): SimplifiedLayout | { 
   }
 
   const frameValues: SimplifiedLayout = {
-    mode: !hasFlexLayout(n) ? "none" : n.layoutMode === "HORIZONTAL" ? "row" : "column",
+    mode: layoutModeToSchema(n.layoutMode),
   };
 
   const overflowScroll: SimplifiedLayout["overflowScroll"] = [];
@@ -155,22 +47,13 @@ function buildSimplifiedFrameValues(n: FigmaDocumentNode): SimplifiedLayout | { 
   if (n.overflowDirection?.includes("VERTICAL")) overflowScroll.push("y");
   if (overflowScroll.length > 0) frameValues.overflowScroll = overflowScroll;
 
-  if (frameValues.mode === "none") {
+  const { mode } = frameValues;
+  if (mode === "none") {
     return frameValues;
   }
 
-  frameValues.justifyContent = convertJustifyContent(n.primaryAxisAlignItems ?? "MIN");
-  frameValues.alignItems = convertAlignItems(
-    n.counterAxisAlignItems ?? "MIN",
-    n.children,
-    frameValues.mode,
-  );
+  // Shared across grid and flex containers
   frameValues.alignSelf = convertSelfAlign(n.layoutAlign);
-
-  // Only include wrap if it's set to WRAP, since flex layouts don't default to wrapping
-  frameValues.wrap = n.layoutWrap === "WRAP" ? true : undefined;
-  frameValues.gap = buildGap(n, frameValues.mode);
-  // gather padding
   if (n.paddingTop || n.paddingBottom || n.paddingLeft || n.paddingRight) {
     frameValues.padding = generateCSSShorthand({
       top: n.paddingTop ?? 0,
@@ -180,20 +63,34 @@ function buildSimplifiedFrameValues(n: FigmaDocumentNode): SimplifiedLayout | { 
     });
   }
 
-  return frameValues;
-}
+  if (mode === "grid") {
+    // Grid template/gap properties live on HasLayoutTrait; GRID frames always
+    // carry both traits, so the cast is safe.
+    const ln = n as unknown as HasLayoutTrait;
+    const cols = ln.gridColumnsSizing?.trim();
+    if (cols) frameValues.gridTemplateColumns = cols;
 
-function getParentAutoLayoutMode(parent?: FigmaDocumentNode): "row" | "column" | undefined {
-  if (!isFrame(parent)) return undefined;
-  if (parent.layoutMode === "HORIZONTAL") return "row";
-  if (parent.layoutMode === "VERTICAL") return "column";
-  return undefined;
+    const rows = ln.gridRowsSizing?.trim();
+    if (rows) frameValues.gridTemplateRows = rows;
+
+    frameValues.gap = gapShorthand(ln.gridRowGap, ln.gridColumnGap);
+    return frameValues;
+  }
+
+  // Flex-specific — mode is narrowed to "row" | "column" after grid early-return
+  frameValues.justifyContent = convertJustifyContent(n.primaryAxisAlignItems ?? "MIN");
+  frameValues.alignItems = convertAlignItems(n.counterAxisAlignItems ?? "MIN", n.children, mode);
+  frameValues.wrap = n.layoutWrap === "WRAP" ? true : undefined;
+  frameValues.gap = buildFlexGap(n, mode);
+
+  return frameValues;
 }
 
 function buildSimplifiedLayoutValues(
   n: FigmaDocumentNode,
   parent: FigmaDocumentNode | undefined,
-  mode: "row" | "column" | "none",
+  mode: SimplifiedLayout["mode"],
+  parentGridPacked?: boolean,
 ): SimplifiedLayout | undefined {
   if (!isLayout(n)) return undefined;
 
@@ -220,38 +117,32 @@ function buildSimplifiedLayoutValues(
     }
   }
 
-  // Handle dimensions based on layout growth and alignment
+  // Grid child properties: positioning, spans, alignment, and z-order
+  const parentIsGrid = parentGridPacked !== undefined;
+  if (parentIsGrid && parent && n.layoutPositioning !== "ABSOLUTE") {
+    Object.assign(layoutValues, buildGridChildPositioning(n, parent, parentGridPacked));
+  }
+
+  // Emit a dimension only when the child isn't stretching that axis and the
+  // sizing flag permits it. Stretch detection and the "is FIXED?" rule both
+  // depend on whether the parent is flex, grid, or non-auto-layout — see the
+  // helpers in ./layout/common.ts for the per-axis vocabulary mapping.
   if (isRectangle("absoluteBoundingBox", n)) {
     const dimensions: { width?: number; height?: number; aspectRatio?: number } = {};
-    const sizingMode = isInAutoLayoutFlow(n, parent)
-      ? (getParentAutoLayoutMode(parent) ?? mode)
-      : mode;
+    const axis = resolveChildAxis(n, parent, mode, parentIsGrid);
+    const stretch = getChildStretch(n, axis);
 
-    // Only include dimensions that aren't meant to stretch
-    if (sizingMode === "row") {
-      // AutoLayout row, only include dimensions if the node is not growing
-      if (!n.layoutGrow && n.layoutSizingHorizontal == "FIXED")
-        dimensions.width = n.absoluteBoundingBox.width;
-      if (n.layoutAlign !== "STRETCH" && n.layoutSizingVertical == "FIXED")
-        dimensions.height = n.absoluteBoundingBox.height;
-    } else if (sizingMode === "column") {
-      // AutoLayout column, only include dimensions if the node is not growing
-      if (n.layoutAlign !== "STRETCH" && n.layoutSizingHorizontal == "FIXED")
-        dimensions.width = n.absoluteBoundingBox.width;
-      if (!n.layoutGrow && n.layoutSizingVertical == "FIXED")
-        dimensions.height = n.absoluteBoundingBox.height;
+    if (!stretch.horizontal && shouldEmitFixedDimension(n.layoutSizingHorizontal, axis)) {
+      dimensions.width = n.absoluteBoundingBox.width;
+    }
+    if (!stretch.vertical && shouldEmitFixedDimension(n.layoutSizingVertical, axis)) {
+      dimensions.height = n.absoluteBoundingBox.height;
+    }
 
-      if (n.preserveRatio) {
-        dimensions.aspectRatio = n.absoluteBoundingBox?.width / n.absoluteBoundingBox?.height;
-      }
-    } else {
-      // Node is not an AutoLayout. Include dimensions if the node is not growing (which it should never be)
-      if (!n.layoutSizingHorizontal || n.layoutSizingHorizontal === "FIXED") {
-        dimensions.width = n.absoluteBoundingBox.width;
-      }
-      if (!n.layoutSizingVertical || n.layoutSizingVertical === "FIXED") {
-        dimensions.height = n.absoluteBoundingBox.height;
-      }
+    // Preserves historical behavior: aspectRatio is emitted only for
+    // column-parent children. Likely should apply more broadly — pre-existing.
+    if (axis === "column" && n.preserveRatio) {
+      dimensions.aspectRatio = n.absoluteBoundingBox.width / n.absoluteBoundingBox.height;
     }
 
     if (Object.keys(dimensions).length > 0) {

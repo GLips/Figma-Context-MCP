@@ -20,7 +20,7 @@ import {
   simplifyPropertyDefinitions,
   simplifyPropertyReferences,
 } from "~/transformers/component.js";
-import { hasFlexLayout, hasValue, isRectangleCornerRadii } from "~/utils/identity.js";
+import { hasAutoLayout, hasValue, isRectangleCornerRadii } from "~/utils/identity.js";
 import { generateVarId, isVisible, stableStringify } from "~/utils/common.js";
 import type { Node as FigmaDocumentNode } from "@figma/rest-api-spec";
 
@@ -166,6 +166,9 @@ export const visualsExtractor: ExtractorFn = (node, result, context) => {
   }
 
   // strokes
+  // Only the stroke color array is registered as a (potentially named) shared style.
+  // Figma named styles only apply to paint, not to stroke width / dashes / per-side
+  // weights, so those stay as plain sibling fields and are never deduplicated.
   const strokes = buildSimplifiedStrokes(node, hasChildren);
   if (strokes.colors.length) {
     result.strokes = registerStyle(node, context, strokes.colors, ["stroke", "strokes"], "fill");
@@ -268,6 +271,9 @@ function getStyleMatch(
   return undefined;
 }
 
+// Figma style names aren't unique — a file can use a local style and an imported
+// library style that share a name (e.g., "Heading / Large"). Collapse same-name
+// same-value entries; disambiguate same-name different-value by appending the id.
 function resolveStyleKey(
   context: TraversalContext,
   styleMatch: StyleMatch,
@@ -331,21 +337,21 @@ export const SVG_ELIGIBLE_TYPES = new Set([
 const COLLAPSIBLE_CONTAINER_TYPES = new Set(["FRAME", "GROUP", "INSTANCE", "BOOLEAN_OPERATION"]);
 
 /**
- * Flex auto-layout signals authored structure — the spacing between children is intentional,
- * so we normally preserve the container even when all its children are SVG-eligible (charts,
- * toolbars, layout test frames). Above this many children, though, we assume the container
- * is a decorative pattern (dotted backgrounds, noise grids) where the payload cost of
- * preserving every leaf outweighs the structural value, and we collapse anyway.
+ * Auto-layout signals authored structure — the spacing/arrangement of children is
+ * intentional, so we normally preserve the container even when all its children are
+ * SVG-eligible (charts, toolbars, layout test frames, swatch grids, tile mosaics).
+ * Above this many children, though, we assume the container is a decorative pattern
+ * (dotted backgrounds, noise grids) where the payload cost of preserving every leaf
+ * outweighs the structural value, and we collapse anyway.
+ *
+ * Applies to both flex (HORIZONTAL/VERTICAL) and GRID auto-layout, since both signal
+ * authored intent.
  *
  * Pivot point chosen empirically: real charts and structural displays rarely exceed ~10
  * primitives; decorative patterns typically have many dozens. Tune if real-world output
  * shows either category mis-classified.
- *
- * Note: this only carves out HORIZONTAL/VERTICAL flex layouts. GRID auto-layout is not yet
- * handled here — when GRID support lands, this guard should likely apply to GRID containers
- * too, since a grid of structural primitives (swatches, tiles) is also authored intent.
  */
-const SVG_COLLAPSE_FLEX_THRESHOLD = 10;
+const SVG_COLLAPSE_AUTOLAYOUT_THRESHOLD = 10;
 
 /**
  * afterChildren callback that collapses SVG-heavy containers to IMAGE-SVG.
@@ -354,11 +360,11 @@ const SVG_COLLAPSE_FLEX_THRESHOLD = 10;
  *   - container is a FRAME, GROUP, INSTANCE, or BOOLEAN_OPERATION
  *   - all children are SVG-eligible types
  *   - neither the node nor any direct child has an image fill
- *   - container is NOT flex auto-layout, OR child count is past the decorative-pattern threshold
+ *   - container is NOT auto-layout, OR child count is past the decorative-pattern threshold
  *
- * The flex-auto-layout carve-out preserves authored layouts (bar charts, button rows) that
- * happen to bottom out in shape primitives. The count threshold reclaims payload for
- * decorative patterns built with flex auto-layout (e.g., grids of dots).
+ * The auto-layout carve-out preserves authored layouts (bar charts, button rows, swatch
+ * grids) that happen to bottom out in shape primitives. The count threshold reclaims
+ * payload for decorative patterns built with auto-layout (e.g., grids of dots).
  *
  * @param node - Original Figma node
  * @param result - SimplifiedNode being built
@@ -374,7 +380,7 @@ export function collapseSvgContainers(
   if (!children.every((child) => SVG_ELIGIBLE_TYPES.has(child.type))) return children;
   if (hasImageFillOnSelfOrDirectChildren(node)) return children;
 
-  if (hasFlexLayout(node) && children.length < SVG_COLLAPSE_FLEX_THRESHOLD) {
+  if (hasAutoLayout(node) && children.length < SVG_COLLAPSE_AUTOLAYOUT_THRESHOLD) {
     return children;
   }
 

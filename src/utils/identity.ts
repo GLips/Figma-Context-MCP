@@ -52,28 +52,51 @@ export function isLayout(val: unknown): val is HasLayoutTrait {
 /**
  * Whether a node uses flex-style auto-layout (HORIZONTAL or VERTICAL layoutMode).
  *
- * Deliberately narrower than Figma's general "auto-layout" concept, which also includes
- * `layoutMode: "GRID"`. GRID has a different positioning model (gridRowAnchorIndex etc.)
- * and callers that care about row/column flex semantics specifically should use this;
- * callers that want "any non-NONE auto-layout" need a separate, broader predicate.
+ * Narrower than the general "auto-layout" concept — does NOT match `layoutMode: "GRID"`.
+ * GRID has a different positioning model (gridRowAnchorIndex etc.) and a different schema
+ * mapping (CSS Grid rather than flex), so callers that care about row/column flex
+ * semantics specifically should use this; callers that want "any non-NONE auto-layout"
+ * should use {@link hasAutoLayout}.
  */
-export function hasFlexLayout(val: unknown): boolean {
+export function hasFlexLayout(val: unknown): val is HasFramePropertiesTrait {
   return isFrame(val) && (val.layoutMode === "HORIZONTAL" || val.layoutMode === "VERTICAL");
 }
 
 /**
- * Checks if:
- * 1. A node is a child to a flex auto-layout frame
- * 2. The child adheres to the auto layout rules—i.e. it's not absolutely positioned
+ * Whether a node uses CSS-grid-style auto-layout (`layoutMode: "GRID"`).
  *
- * Does NOT cover GRID auto-layout — see `hasFlexLayout` for why.
+ * Children of grid frames are positioned via gridRow/ColumnAnchorIndex + gridRow/ColumnSpan
+ * rather than flex flow or absolute coordinates.
+ */
+export function hasGridLayout(val: unknown): val is HasFramePropertiesTrait {
+  return isFrame(val) && val.layoutMode === "GRID";
+}
+
+/**
+ * Whether a node uses any form of Figma auto-layout — flex (HORIZONTAL/VERTICAL) or GRID.
+ *
+ * Use this when the question is "did the designer hand-position children, or did they let
+ * Figma's layout engine do it?" — e.g., deciding whether to skip absolute-positioning
+ * emission, or whether to preserve authored structure when collapsing SVG containers.
+ *
+ * When the answer matters per-mode (e.g., emitting flex vs grid CSS), branch on
+ * `layoutMode` directly or use the narrower {@link hasFlexLayout} / {@link hasGridLayout}.
+ */
+export function hasAutoLayout(val: unknown): val is HasFramePropertiesTrait {
+  return hasFlexLayout(val) || hasGridLayout(val);
+}
+
+/**
+ * Checks if:
+ * 1. A node is a child to an auto-layout frame (flex or grid)
+ * 2. The child adheres to the auto-layout rules—i.e. it's not absolutely positioned
  *
  * @param node - The node to check.
  * @param parent - The parent node.
- * @returns True if the node is a child of a flex auto-layout frame, false otherwise.
+ * @returns True if the node is a child of an auto-layout frame, false otherwise.
  */
 export function isInAutoLayoutFlow(node: unknown, parent: unknown): boolean {
-  return hasFlexLayout(parent) && isLayout(node) && node.layoutPositioning !== "ABSOLUTE";
+  return hasAutoLayout(parent) && isLayout(node) && node.layoutPositioning !== "ABSOLUTE";
 }
 
 export function isStrokeWeights(val: unknown): val is StrokeWeights {
