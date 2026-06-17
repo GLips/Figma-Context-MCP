@@ -75,6 +75,50 @@ export async function getImageDimensions(imagePath: string): Promise<{
   return { width: image.width, height: image.height };
 }
 
+/**
+ * Read an SVG's intrinsic dimensions from its markup.
+ *
+ * jimp only decodes rasters, so the SVG branch can't measure files the way the
+ * raster path does — but an SVG already declares its own size as text. Prefer the
+ * `width`/`height` attributes (Figma exports them as plain user units, e.g.
+ * `width="52"`); fall back to the viewBox's width/height when they're missing or
+ * non-absolute (percentages aren't an intrinsic pixel size). Returns {0,0} only
+ * when the markup carries no usable size at all.
+ */
+export function parseSvgDimensions(svg: string): { width: number; height: number } {
+  const openTag = svg.match(/<svg\b[^>]*>/i)?.[0] ?? "";
+
+  const attr = (name: string): string | undefined =>
+    openTag.match(new RegExp(`\\b${name}\\s*=\\s*["']([^"']*)["']`, "i"))?.[1];
+
+  const parseLength = (raw: string | undefined): number | undefined => {
+    // Percentages (and other relative units) aren't an intrinsic pixel size.
+    if (!raw || raw.includes("%")) return undefined;
+    const n = parseFloat(raw);
+    return Number.isFinite(n) && n > 0 ? n : undefined;
+  };
+
+  const width = parseLength(attr("width"));
+  const height = parseLength(attr("height"));
+  if (width !== undefined && height !== undefined) {
+    return { width, height };
+  }
+
+  // viewBox is "min-x min-y width height" — the last two are the intrinsic size.
+  const viewBox = attr("viewBox");
+  if (viewBox) {
+    const [, , vbWidth, vbHeight] = viewBox
+      .trim()
+      .split(/[\s,]+/)
+      .map(Number);
+    if (vbWidth > 0 && vbHeight > 0) {
+      return { width: vbWidth, height: vbHeight };
+    }
+  }
+
+  return { width: 0, height: 0 };
+}
+
 export type ImageProcessingResult = {
   filePath: string;
   originalDimensions: { width: number; height: number };
@@ -111,14 +155,20 @@ export async function downloadAndProcessImage(
   const originalPath = await downloadFigmaImage(fileName, localPath, imageUrl);
   Logger.log(`Downloaded original image: ${originalPath}`);
 
-  // SVGs are vector — jimp can't read them and cropping/dimensions don't apply
+  // SVGs are vector — jimp can't read them and cropping doesn't apply. Their
+  // intrinsic size is declared in the markup, so read it from there rather than
+  // reporting a misleading 0x0 (which reads like a download failure).
   const isSvg = fileName.toLowerCase().endsWith(".svg");
   if (isSvg) {
+    const { readFile } = await import("node:fs/promises");
+    const dimensions = parseSvgDimensions(await readFile(originalPath, "utf-8"));
+    Logger.log(`SVG dimensions: ${dimensions.width}x${dimensions.height}`);
     return {
       filePath: originalPath,
-      originalDimensions: { width: 0, height: 0 },
-      finalDimensions: { width: 0, height: 0 },
+      originalDimensions: dimensions,
+      finalDimensions: dimensions,
       wasCropped: false,
+      cssVariables: requiresImageDimensions ? generateImageCSSVariables(dimensions) : undefined,
       processingLog,
     };
   }
