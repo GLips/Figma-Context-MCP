@@ -595,7 +595,7 @@ describe("extractTextStyle — line height", () => {
     expect(style.lineHeight).toBe("16.94px");
   });
 
-  it("emits explicit percentage line heights as % using lineHeightPercentFontSize", async () => {
+  it("emits font-size-relative line heights as em (one canonical relative form)", async () => {
     const { nodes, globalVars } = await extract([
       makeText({
         characters: "pct",
@@ -611,7 +611,24 @@ describe("extractTextStyle — line height", () => {
     ]);
     const styleRef = nodes[0].textStyle as string;
     const style = globalVars.styles[styleRef] as SimplifiedTextStyle;
-    expect(style.lineHeight).toBe("150%");
+    expect(style.lineHeight).toBe("1.5em");
+  });
+
+  it("emits letterSpacing as em so it pastes straight into CSS", async () => {
+    const { nodes, globalVars } = await extract([
+      makeText({
+        characters: "tracking",
+        style: {
+          fontFamily: "Inter",
+          fontWeight: 400,
+          fontSize: 16,
+          letterSpacing: -0.32, // -0.32px / 16px = -0.02em
+        } as never,
+      }),
+    ]);
+    const styleRef = nodes[0].textStyle as string;
+    const style = globalVars.styles[styleRef] as SimplifiedTextStyle;
+    expect(style.letterSpacing).toBe("-0.02em");
   });
 });
 

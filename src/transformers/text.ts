@@ -45,6 +45,16 @@ export function hasTextStyle(
   return hasValue("style", n) && Object.keys(n.style).length > 0;
 }
 
+// Letter-spacing is emitted as a font-size-relative `em` so it pastes straight
+// into CSS and lets native targets (iOS/Flutter) resolve to absolute units by
+// multiplying the fontSize in the same textStyle. We round to 4 decimals rather
+// than reuse `pixelRound` (2 dp): letter-spacing fractions are O(0.01), where
+// 0.01em is ~0.16px at a 16px font — coarse enough to visibly shift tracking.
+// 4 dp preserves the precision the old "%" form carried (0.01% = 0.0001em).
+function emRound(value: number): number {
+  return Number(value.toFixed(4));
+}
+
 export function extractTextStyle(n: FigmaDocumentNode) {
   if (hasTextStyle(n)) {
     const style = n.style;
@@ -56,7 +66,7 @@ export function extractTextStyle(n: FigmaDocumentNode) {
       lineHeight: formatLineHeight(style as LineHeightSource, style.fontSize),
       letterSpacing:
         style.letterSpacing && style.letterSpacing !== 0 && style.fontSize
-          ? `${pixelRound((style.letterSpacing / style.fontSize) * 100)}%`
+          ? `${emRound(style.letterSpacing / style.fontSize)}em`
           : undefined,
       textCase: style.textCase,
       textAlignHorizontal: style.textAlignHorizontal,
@@ -105,12 +115,15 @@ function pickNonZeroFlags(
  *                 `lineHeightPx` is just the computed value for whichever
  *                 font the node happens to use, not user intent)
  *   PIXELS      → "24px"  from `lineHeightPx`
- *   FONT_SIZE_% → "150%"  from `lineHeightPercentFontSize`
+ *   FONT_SIZE_% → "1.5em" from `lineHeightPercentFontSize`
  *
- * Falls back to an em conversion when the unit is missing (older API
- * responses) so the output is never worse than before. All numeric values
- * are rounded via `pixelRound` so floating-point noise like Figma's
- * `16.94318199157715` doesn't leak through.
+ * Relative line-height is emitted as `em` (not `%`) to match letterSpacing and
+ * give one canonical font-size-relative form: it pastes straight into CSS and
+ * native targets resolve it by multiplying the fontSize in the same textStyle.
+ * Absolute line-height stays `px`. Falls back to an em conversion when the unit
+ * is missing (older API responses) so the output is never worse than before.
+ * All numeric values are rounded via `pixelRound` so floating-point noise like
+ * Figma's `16.94318199157715` doesn't leak through.
  */
 type LineHeightSource = {
   lineHeightPx?: number;
@@ -131,7 +144,7 @@ function formatLineHeight(
   }
 
   if (lineHeightUnit === "FONT_SIZE_%" && lineHeightPercentFontSize) {
-    return `${pixelRound(lineHeightPercentFontSize)}%`;
+    return `${pixelRound(lineHeightPercentFontSize / 100)}em`;
   }
 
   if (lineHeightPx && fontSize) {
@@ -607,7 +620,7 @@ function classifyRun(
       case "letterSpacing": {
         const ls = value as number;
         if (ls && effectiveFontSize) {
-          refDelta.letterSpacing = `${pixelRound((ls / effectiveFontSize) * 100)}%`;
+          refDelta.letterSpacing = `${emRound(ls / effectiveFontSize)}em`;
           hasRefProps = true;
         }
         break;
