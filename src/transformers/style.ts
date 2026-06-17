@@ -258,10 +258,7 @@ export function buildSimplifiedStrokes(
     strokes.strokeDashes = n.strokeDashes;
   }
 
-  if (
-    hasValue("strokeAlign", n) &&
-    (n.strokeAlign === "INSIDE" || n.strokeAlign === "OUTSIDE" || n.strokeAlign === "CENTER")
-  ) {
+  if (hasValue("strokeAlign", n) && (n.strokeAlign === "OUTSIDE" || n.strokeAlign === "CENTER")) {
     strokes.strokeAlign = n.strokeAlign;
   }
 

@@ -102,6 +102,12 @@ From CONTRIBUTING.md — important context for development:
 2. **Focused Scope** — The server only handles "ingesting designs for AI consumption." Out of scope: image manipulation, CMS syncing, code generation, third-party integrations.
 3. **Project-level Config** — Options unlikely to change between requests should be CLI arguments, not tool parameters.
 
+## Token Efficiency
+
+The simplified output is consumed by LLMs, so every field costs context budget. Keep it lean:
+
+- Omit default values where LLMs can reliably infer the expectation without explicit data — emit only deviations. (e.g. `strokeAlign: INSIDE` matches the default CSS `border` an LLM already produces, so it is dropped; only `OUTSIDE`/`CENTER` are emitted.)
+
 ## Quality
 
 This codebase will outlive you. Every shortcut becomes someone else's burden. Every hack compounds into technical debt that slows the whole team down.
