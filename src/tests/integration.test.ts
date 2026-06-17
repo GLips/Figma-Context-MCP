@@ -26,7 +26,7 @@ describeOrSkip("Figma MCP Server Tests", () => {
         figmaOAuthToken: "",
         useOAuth: false,
       },
-      { transport: "stdio" },
+      { transport: "stdio", outputFormat: "yaml" },
     );
 
     client = new Client({
