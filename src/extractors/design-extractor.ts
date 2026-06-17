@@ -10,6 +10,7 @@ import { simplifyComponents, simplifyComponentSets } from "~/transformers/compon
 import { tagError } from "~/utils/error-meta.js";
 import type { ExtractorFn, TraversalOptions, SimplifiedDesign } from "./types.js";
 import { extractFromDesign } from "./node-walker.js";
+import { finalizeDesign } from "./finalize.js";
 
 /**
  * Extract a complete SimplifiedDesign from raw Figma API response using extractors.
@@ -26,19 +27,29 @@ export async function simplifyRawFigmaObject(
   // Process nodes using the flexible extractor system
   const {
     nodes: extractedNodes,
-    globalVars: finalGlobalVars,
+    globalVars: walkedGlobalVars,
     traversalState,
   } = await extractFromDesign(rawNodes, nodeExtractors, options, { styles: {} }, extraStyles);
 
+  // Finalize pass: count-gate style hoisting (and, later, element dedup). Runs
+  // here, after the full walk, because it needs whole-tree usage counts the
+  // single-pass extractors can't see. See finalize.ts.
+  const { nodes, globalVars, elements } = finalizeDesign(
+    extractedNodes,
+    walkedGlobalVars,
+    traversalState.namedStyleKeys,
+  );
+
   return {
     ...metadata,
-    nodes: extractedNodes,
+    nodes,
     components: simplifyComponents(components, traversalState.componentPropertyDefinitions),
     componentSets: simplifyComponentSets(
       componentSets,
       traversalState.componentPropertyDefinitions,
     ),
-    globalVars: { styles: finalGlobalVars.styles },
+    globalVars,
+    elements,
   };
 }
 

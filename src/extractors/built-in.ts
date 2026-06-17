@@ -21,7 +21,8 @@ import {
   simplifyPropertyReferences,
 } from "~/transformers/component.js";
 import { hasAutoLayout, hasValue, isRectangleCornerRadii } from "~/utils/identity.js";
-import { generateVarId, isVisible, stableStringify } from "~/utils/common.js";
+import { isVisible, stableStringify } from "~/utils/common.js";
+import { createHash } from "node:crypto";
 import type { Node as FigmaDocumentNode } from "@figma/rest-api-spec";
 
 // Reverse lookup cache: serialized style value → varId.
@@ -64,7 +65,23 @@ function findOrCreateVar(globalVars: GlobalVars, value: StyleTypes, prefix: stri
   const existing = cache.get(key);
   if (existing) return existing;
 
-  const varId = generateVarId(prefix);
+  // Content-addressed id so the same value yields the same id across runs, making
+  // output byte-stable (the value→id cache already dedups within a single run).
+  const fullHash = createHash("sha1").update(key).digest("hex");
+
+  // Truncated-hash collision guard. The 8-hex slice (32 bits) keeps refs short but
+  // can alias two different style values. We reached here on a cache miss, so a
+  // taken slot means a genuine collision — reusing the id would overwrite the
+  // other value and every node referencing it would silently resolve to the wrong
+  // style. Lengthen this value's id until the slot is free. Deterministic because
+  // the walk order is stable, so the same file reproduces the same ids.
+  let length = 8;
+  let varId = `${prefix}_${fullHash.slice(0, length)}`;
+  while (globalVars.styles[varId] !== undefined && length < fullHash.length) {
+    length += 4;
+    varId = `${prefix}_${fullHash.slice(0, length)}`;
+  }
+
   globalVars.styles[varId] = value;
   cache.set(key, varId);
   return varId;
@@ -85,6 +102,9 @@ function registerStyle(
   if (styleMatch) {
     const styleKey = resolveStyleKey(context, styleMatch, value);
     context.globalVars.styles[styleKey] = value;
+    // Mark as a named style so the finalize pass keeps it hoisted even if only
+    // one node uses it — a named Figma style is design-system intent, not noise.
+    context.traversalState.namedStyleKeys.add(styleKey);
     return styleKey;
   }
   return findOrCreateVar(context.globalVars, value, prefix);
@@ -377,7 +397,10 @@ export function collapseSvgContainers(
   children: SimplifiedNode[],
 ): SimplifiedNode[] {
   if (!COLLAPSIBLE_CONTAINER_TYPES.has(node.type)) return children;
-  if (!children.every((child) => SVG_ELIGIBLE_TYPES.has(child.type))) return children;
+  // `type` is optional on SimplifiedNode only because post-walk template refs
+  // drop it; at afterChildren time (mid-walk) every child still has a type, so
+  // the `?? ""` is a type-level concession that never matches at runtime.
+  if (!children.every((child) => SVG_ELIGIBLE_TYPES.has(child.type ?? ""))) return children;
   if (hasImageFillOnSelfOrDirectChildren(node)) return children;
 
   if (hasAutoLayout(node) && children.length < SVG_COLLAPSE_AUTOLAYOUT_THRESHOLD) {
