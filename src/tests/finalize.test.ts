@@ -9,6 +9,7 @@ import type { GlobalVars, SimplifiedNode, StyleTypes } from "~/extractors/types.
 
 // Solid fills serialize to hex-string arrays in real output (see style.ts).
 const RED: StyleTypes = ["#FF0000"];
+const BLUE: StyleTypes = ["#0000FF"];
 
 function node(overrides: Partial<SimplifiedNode> & { id: string }): SimplifiedNode {
   return { name: overrides.id, type: "FRAME", ...overrides };
@@ -58,5 +59,90 @@ describe("count-gated style hoisting", () => {
     const result = finalizeDesign(nodes, globalVars, new Set());
 
     expect(result.globalVars.styles).toEqual({ ts1: { fontWeight: 700 } });
+  });
+});
+
+describe("element templates", () => {
+  it("dedupes two identical subtrees into one element entry + two template refs", () => {
+    // Both cards share fill_red (count 2 → stays a ref), so their post-gating
+    // bodies are byte-identical and hash to the same template.
+    const nodes = [
+      node({ id: "1", name: "Card A", fills: "fill_red" }),
+      node({ id: "2", name: "Card B", fills: "fill_red" }),
+    ];
+    const globalVars: GlobalVars = { styles: { fill_red: RED } };
+
+    const result = finalizeDesign(nodes, globalVars, new Set());
+
+    const templates = Object.keys(result.elements);
+    expect(templates).toHaveLength(1);
+    const [hash] = templates;
+    expect(result.elements[hash]).toEqual({ type: "FRAME", fills: "fill_red" });
+
+    // Each occurrence keeps its per-instance id/name, body replaced by the ref.
+    expect(result.nodes[0]).toEqual({ id: "1", name: "Card A", template: hash });
+    expect(result.nodes[1]).toEqual({ id: "2", name: "Card B", template: hash });
+    // The shared style stays hoisted (referenced from the element body).
+    expect(result.globalVars.styles).toEqual({ fill_red: RED });
+  });
+
+  it("leaves a unique subtree inline (no template)", () => {
+    const nodes = [
+      node({ id: "1", name: "Card A", fills: "fill_red" }),
+      node({ id: "2", name: "Card B", fills: "fill_red" }),
+      node({ id: "3", name: "Solo", fills: "fill_blue" }),
+    ];
+    const globalVars: GlobalVars = { styles: { fill_red: RED, fill_blue: BLUE } };
+
+    const result = finalizeDesign(nodes, globalVars, new Set());
+
+    // The solo card's body is unique → no template, and its single-use fill
+    // inlines onto the node.
+    expect(result.nodes[2].template).toBeUndefined();
+    expect(result.nodes[2].fills).toEqual(BLUE);
+    expect(result.nodes[2].type).toBe("FRAME");
+  });
+
+  it("dedupes repeated children while keeping per-instance ids", () => {
+    // A grid of two identical cards, each wrapping an identical icon.
+    const card = (id: string): SimplifiedNode =>
+      node({
+        id,
+        name: `Card ${id}`,
+        fills: "fill_red",
+        children: [node({ id: `${id}-icon`, name: "Icon", type: "IMAGE-SVG", opacity: 0.5 })],
+      });
+    const nodes = [card("1"), card("2")];
+    const globalVars: GlobalVars = { styles: { fill_red: RED } };
+
+    const result = finalizeDesign(nodes, globalVars, new Set());
+
+    // Two distinct templates: the card body and the icon body.
+    expect(Object.keys(result.elements)).toHaveLength(2);
+    expect(result.nodes[0].template).toBe(result.nodes[1].template);
+    expect(result.nodes[0].children?.[0].template).toBe(result.nodes[1].children?.[0].template);
+    expect(result.nodes[0].children?.[0].id).toBe("1-icon");
+    expect(result.nodes[1].children?.[0].id).toBe("2-icon");
+  });
+
+  it("does not dedupe type-only bodies (a template would grow the payload)", () => {
+    const nodes = [node({ id: "1" }), node({ id: "2" })];
+
+    const result = finalizeDesign(nodes, { styles: {} }, new Set());
+
+    expect(result.elements).toEqual({});
+    expect(result.nodes[0].template).toBeUndefined();
+    expect(result.nodes[0].type).toBe("FRAME");
+  });
+
+  it("is deterministic: identical input yields identical template hashes", () => {
+    const build = (): SimplifiedNode[] => [
+      node({ id: "1", fills: "fill_red" }),
+      node({ id: "2", fills: "fill_red" }),
+    ];
+    const a = finalizeDesign(build(), { styles: { fill_red: RED } }, new Set());
+    const b = finalizeDesign(build(), { styles: { fill_red: RED } }, new Set());
+
+    expect(Object.keys(a.elements)).toEqual(Object.keys(b.elements));
   });
 });
