@@ -138,7 +138,7 @@ export function captureValidationReject(
     captureToolCall({
       ...common,
       tool: "get_figma_data",
-      output_format: input.outputFormat ?? "yaml",
+      output_format: input.outputFormat ?? "tree",
       depth: null,
       has_node_id: false,
     });

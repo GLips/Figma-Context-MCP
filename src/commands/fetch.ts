@@ -36,7 +36,7 @@ export const fetchCommand: Command = command(
       },
       format: {
         type: String,
-        description: "Output format: yaml (default), json, or tree (experimental).",
+        description: "Output format: yaml (default), json, or tree.",
       },
       figmaApiKey: {
         type: String,
@@ -115,6 +115,10 @@ async function run(
   });
 
   const mode = authMode(auth);
+  // The fetch CLI stays yaml-by-default (unlike the MCP server, which defaults
+  // to tree): its output is piped into standard tooling (`> out.yaml`, `| jq`),
+  // where tree's bespoke indented format isn't parseable. Tree's token-efficiency
+  // win is for LLM consumers, not shell pipelines.
   const outputFormat: OutputFormat =
     parseOutputFormat(flags.format, "--format") ?? (flags.json ? "json" : "yaml");
 

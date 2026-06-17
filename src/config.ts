@@ -171,7 +171,7 @@ export function getServerConfig(flags: ServerFlags): ServerConfig {
   const formatFromFlag =
     parseOutputFormat(flags.format, "--format") ?? (flags.json ? "json" : undefined);
   const formatFromEnv = parseOutputFormat(envStr("OUTPUT_FORMAT"), "OUTPUT_FORMAT");
-  const outputFormat = resolve<OutputFormat>(formatFromFlag, formatFromEnv, "yaml");
+  const outputFormat = resolve<OutputFormat>(formatFromFlag, formatFromEnv, "tree");
 
   const isStdioMode = flags.stdio === true;
 

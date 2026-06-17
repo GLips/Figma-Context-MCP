@@ -30,7 +30,7 @@ export type CreateServerOptions = {
 
 function createServer(
   authOptions: FigmaAuthOptions,
-  { transport, outputFormat = "yaml", skipImageDownloads = false, imageDir }: CreateServerOptions,
+  { transport, outputFormat = "tree", skipImageDownloads = false, imageDir }: CreateServerOptions,
 ) {
   const server = new McpServer(serverInfo);
   const figmaService = new FigmaService(authOptions);
