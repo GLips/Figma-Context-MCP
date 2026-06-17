@@ -105,6 +105,7 @@ describe("result serialization", () => {
         components: {},
         componentSets: {},
         globalVars: { styles: {} },
+        elements: {},
         nodes: [
           {
             id: "1:1",
@@ -131,6 +132,7 @@ describe("result serialization", () => {
         components: {},
         componentSets: {},
         globalVars: { styles: {} },
+        elements: {},
         nodes: [
           {
             id: "1:1",
@@ -145,6 +147,55 @@ describe("result serialization", () => {
       const output = serializeResult(wrapForSerialization(design), "tree");
 
       expect(output).toContain('componentProperties={"On Sale":true,"Size":"md"}');
+    });
+
+    // After count-gating, single-use style values live inline on the node rather
+    // than as a globalVars ref. The tree renderer must emit them as compact JSON.
+    it("renders inline (non-reference) style values as JSON", () => {
+      const design: SimplifiedDesign = {
+        name: "Test",
+        components: {},
+        componentSets: {},
+        globalVars: { styles: {} },
+        elements: {},
+        nodes: [
+          {
+            id: "1:1",
+            name: "Box",
+            type: "FRAME",
+            fills: ["#FF0000"],
+          },
+        ],
+      };
+
+      const output = serializeResult(wrapForSerialization(design), "tree");
+
+      expect(output).toContain('fills=["#FF0000"]');
+    });
+
+    // Deduplicated nodes carry only id/name/template/children; the type and
+    // styling live in the ELEMENTS block. The renderer resolves the type label
+    // from the element so the line keeps its `[TYPE] "name" #id` shape.
+    it("renders an ELEMENTS block and template-reference nodes", () => {
+      const design: SimplifiedDesign = {
+        name: "Test",
+        components: {},
+        componentSets: {},
+        globalVars: { styles: { fill_red: ["#FF0000"] } },
+        elements: {
+          "EL-abc12345": { type: "FRAME", fills: "fill_red" },
+        },
+        nodes: [
+          { id: "1:1", name: "Card A", template: "EL-abc12345" },
+          { id: "1:2", name: "Card B", template: "EL-abc12345" },
+        ],
+      };
+
+      const output = serializeResult(wrapForSerialization(design), "tree");
+
+      expect(output).toContain("ELEMENTS:");
+      expect(output).toContain('[FRAME] "Card A" #1:1 template=EL-abc12345');
+      expect(output).toContain('[FRAME] "Card B" #1:2 template=EL-abc12345');
     });
   });
 });

@@ -2,64 +2,56 @@
 
 ## [0.12.0](https://github.com/GLips/Figma-Context-MCP/compare/v0.11.0...v0.12.0) (2026-05-27)
 
-
 ### Features
 
-* **serialize:** add experimental tree output format for better token efficiency ([#370](https://github.com/GLips/Figma-Context-MCP/issues/370)) ([9ecbc5a](https://github.com/GLips/Figma-Context-MCP/commit/9ecbc5aec8e71dda2ee3b1804623df82db5663d7))
-* support per-request Figma API keys ([#365](https://github.com/GLips/Figma-Context-MCP/issues/365)) ([fe3b504](https://github.com/GLips/Figma-Context-MCP/commit/fe3b504d75b671896a557188a9ad801b7bac40ee))
-
+- **serialize:** add experimental tree output format for better token efficiency ([#370](https://github.com/GLips/Figma-Context-MCP/issues/370)) ([9ecbc5a](https://github.com/GLips/Figma-Context-MCP/commit/9ecbc5aec8e71dda2ee3b1804623df82db5663d7))
+- support per-request Figma API keys ([#365](https://github.com/GLips/Figma-Context-MCP/issues/365)) ([fe3b504](https://github.com/GLips/Figma-Context-MCP/commit/fe3b504d75b671896a557188a9ad801b7bac40ee))
 
 ### Bug Fixes
 
-* guide LLMs to fix bad node-id errors (proto/branch/figjam URLs) ([#371](https://github.com/GLips/Figma-Context-MCP/issues/371)) ([c6697bc](https://github.com/GLips/Figma-Context-MCP/commit/c6697bc492f0d25c4fff469c471820dede1c7e5c))
-* **images:** omit null imageRef so foreign-pasted images render via nodeId ([#368](https://github.com/GLips/Figma-Context-MCP/issues/368)) ([166f87d](https://github.com/GLips/Figma-Context-MCP/commit/166f87dcc610634a0e067dd5acc03d1fc0c411a4))
-* **layout:** include positions for children of SECTION nodes ([#381](https://github.com/GLips/Figma-Context-MCP/issues/381)) ([5088fba](https://github.com/GLips/Figma-Context-MCP/commit/5088fbafdebabc31feb45b71356dfeb8c669ed15))
-* **layout:** respect parent axis for dimensions ([#379](https://github.com/GLips/Figma-Context-MCP/issues/379)) ([a54cbc2](https://github.com/GLips/Figma-Context-MCP/commit/a54cbc23f36a87912a526444e464fdca4fda5fbd))
-* **mcp:** prevent late progress notifications from crashing stdio clients ([#366](https://github.com/GLips/Figma-Context-MCP/issues/366)) ([b97585c](https://github.com/GLips/Figma-Context-MCP/commit/b97585caf502f0e0b41cfd8f0a2f3f11559e1e77))
-* reject ambiguous localPath inputs in download_figma_images ([#367](https://github.com/GLips/Figma-Context-MCP/issues/367)) ([eaeec68](https://github.com/GLips/Figma-Context-MCP/commit/eaeec68041584114acb23cda05b8838a5e204341))
-* stop collapsing auto-layout frames to a single IMAGE-SVG ([#380](https://github.com/GLips/Figma-Context-MCP/issues/380)) ([c036111](https://github.com/GLips/Figma-Context-MCP/commit/c0361119dabc3b244687e8f455bb37822067db0f))
-* surface Figma 403 response body to help LLMs self-heal based on actual error ([#360](https://github.com/GLips/Figma-Context-MCP/issues/360)) ([12280ba](https://github.com/GLips/Figma-Context-MCP/commit/12280ba22a8d398c35db360a336356430dd0b182))
+- guide LLMs to fix bad node-id errors (proto/branch/figjam URLs) ([#371](https://github.com/GLips/Figma-Context-MCP/issues/371)) ([c6697bc](https://github.com/GLips/Figma-Context-MCP/commit/c6697bc492f0d25c4fff469c471820dede1c7e5c))
+- **images:** omit null imageRef so foreign-pasted images render via nodeId ([#368](https://github.com/GLips/Figma-Context-MCP/issues/368)) ([166f87d](https://github.com/GLips/Figma-Context-MCP/commit/166f87dcc610634a0e067dd5acc03d1fc0c411a4))
+- **layout:** include positions for children of SECTION nodes ([#381](https://github.com/GLips/Figma-Context-MCP/issues/381)) ([5088fba](https://github.com/GLips/Figma-Context-MCP/commit/5088fbafdebabc31feb45b71356dfeb8c669ed15))
+- **layout:** respect parent axis for dimensions ([#379](https://github.com/GLips/Figma-Context-MCP/issues/379)) ([a54cbc2](https://github.com/GLips/Figma-Context-MCP/commit/a54cbc23f36a87912a526444e464fdca4fda5fbd))
+- **mcp:** prevent late progress notifications from crashing stdio clients ([#366](https://github.com/GLips/Figma-Context-MCP/issues/366)) ([b97585c](https://github.com/GLips/Figma-Context-MCP/commit/b97585caf502f0e0b41cfd8f0a2f3f11559e1e77))
+- reject ambiguous localPath inputs in download_figma_images ([#367](https://github.com/GLips/Figma-Context-MCP/issues/367)) ([eaeec68](https://github.com/GLips/Figma-Context-MCP/commit/eaeec68041584114acb23cda05b8838a5e204341))
+- stop collapsing auto-layout frames to a single IMAGE-SVG ([#380](https://github.com/GLips/Figma-Context-MCP/issues/380)) ([c036111](https://github.com/GLips/Figma-Context-MCP/commit/c0361119dabc3b244687e8f455bb37822067db0f))
+- surface Figma 403 response body to help LLMs self-heal based on actual error ([#360](https://github.com/GLips/Figma-Context-MCP/issues/360)) ([12280ba](https://github.com/GLips/Figma-Context-MCP/commit/12280ba22a8d398c35db360a336356430dd0b182))
 
 ## [0.11.0](https://github.com/GLips/Figma-Context-MCP/compare/v0.10.1...v0.11.0) (2026-04-20)
 
-
 ### Features
 
-* rich text styling ([#351](https://github.com/GLips/Figma-Context-MCP/issues/351)) ([759d0e4](https://github.com/GLips/Figma-Context-MCP/commit/759d0e4f7877677980d9cee18c8f895bee655394))
-
+- rich text styling ([#351](https://github.com/GLips/Figma-Context-MCP/issues/351)) ([759d0e4](https://github.com/GLips/Figma-Context-MCP/commit/759d0e4f7877677980d9cee18c8f895bee655394))
 
 ### Bug Fixes
 
-* stop routing all traffic through EnvHttpProxyAgent by default ([#359](https://github.com/GLips/Figma-Context-MCP/issues/359)) ([a22f28f](https://github.com/GLips/Figma-Context-MCP/commit/a22f28f23f9cf5444d509b9d041d3c162e1cefd6))
+- stop routing all traffic through EnvHttpProxyAgent by default ([#359](https://github.com/GLips/Figma-Context-MCP/issues/359)) ([a22f28f](https://github.com/GLips/Figma-Context-MCP/commit/a22f28f23f9cf5444d509b9d041d3c162e1cefd6))
 
 ## [0.10.1](https://github.com/GLips/Figma-Context-MCP/compare/v0.10.0...v0.10.1) (2026-04-10)
 
-
 ### Bug Fixes
 
-* add actionable 403 error message with troubleshooting link ([9230bd0](https://github.com/GLips/Figma-Context-MCP/commit/9230bd02a63085d88ca5d3687275f2cba9557309))
-* throw actionable error for missing nodes, add error_category to telemetry ([#344](https://github.com/GLips/Figma-Context-MCP/issues/344)) ([334ae2b](https://github.com/GLips/Figma-Context-MCP/commit/334ae2bbecbd3583922098787877448337acf6cb))
+- add actionable 403 error message with troubleshooting link ([9230bd0](https://github.com/GLips/Figma-Context-MCP/commit/9230bd02a63085d88ca5d3687275f2cba9557309))
+- throw actionable error for missing nodes, add error_category to telemetry ([#344](https://github.com/GLips/Figma-Context-MCP/issues/344)) ([334ae2b](https://github.com/GLips/Figma-Context-MCP/commit/334ae2bbecbd3583922098787877448337acf6cb))
 
 ## [0.10.0](https://github.com/GLips/Figma-Context-MCP/compare/v0.9.0...v0.10.0) (2026-04-10)
 
-
 ### Features
 
-* add anonymous PostHog telemetry ([#342](https://github.com/GLips/Figma-Context-MCP/issues/342)) ([6c0666a](https://github.com/GLips/Figma-Context-MCP/commit/6c0666a7c96e62b39f730a96d24eacb8f3a35cf6))
+- add anonymous PostHog telemetry ([#342](https://github.com/GLips/Figma-Context-MCP/issues/342)) ([6c0666a](https://github.com/GLips/Figma-Context-MCP/commit/6c0666a7c96e62b39f730a96d24eacb8f3a35cf6))
 
 ## [0.9.0](https://github.com/GLips/Figma-Context-MCP/compare/v0.8.1...v0.9.0) (2026-04-09)
 
-
 ### Features
 
-* add component property support (BOOLEAN & TEXT) ([#340](https://github.com/GLips/Figma-Context-MCP/issues/340)) ([b0f9efc](https://github.com/GLips/Figma-Context-MCP/commit/b0f9efcc0680012eac4a760ec6826a7605b38fb6))
-* add proxy support for managed networks ([#338](https://github.com/GLips/Figma-Context-MCP/issues/338)) ([32d5779](https://github.com/GLips/Figma-Context-MCP/commit/32d57790317e57a35dfc8df0de4c6ac830268b31))
-* add support for using as a CLI via `fetch` subcommand to retrieve design data directly ([#331](https://github.com/GLips/Figma-Context-MCP/issues/331)) ([dd237c8](https://github.com/GLips/Figma-Context-MCP/commit/dd237c8e87565cee42d706b8f374fc4bc411066b))
-
+- add component property support (BOOLEAN & TEXT) ([#340](https://github.com/GLips/Figma-Context-MCP/issues/340)) ([b0f9efc](https://github.com/GLips/Figma-Context-MCP/commit/b0f9efcc0680012eac4a760ec6826a7605b38fb6))
+- add proxy support for managed networks ([#338](https://github.com/GLips/Figma-Context-MCP/issues/338)) ([32d5779](https://github.com/GLips/Figma-Context-MCP/commit/32d57790317e57a35dfc8df0de4c6ac830268b31))
+- add support for using as a CLI via `fetch` subcommand to retrieve design data directly ([#331](https://github.com/GLips/Figma-Context-MCP/issues/331)) ([dd237c8](https://github.com/GLips/Figma-Context-MCP/commit/dd237c8e87565cee42d706b8f374fc4bc411066b))
 
 ### Bug Fixes
 
-* **layout:** suppress computed gap values when using SPACE_BETWEEN ([#341](https://github.com/GLips/Figma-Context-MCP/issues/341)) ([309c60e](https://github.com/GLips/Figma-Context-MCP/commit/309c60e6d59eb2fb8fdc0acc85dd81b1644b1f12)), closes [#169](https://github.com/GLips/Figma-Context-MCP/issues/169)
+- **layout:** suppress computed gap values when using SPACE_BETWEEN ([#341](https://github.com/GLips/Figma-Context-MCP/issues/341)) ([309c60e](https://github.com/GLips/Figma-Context-MCP/commit/309c60e6d59eb2fb8fdc0acc85dd81b1644b1f12)), closes [#169](https://github.com/GLips/Figma-Context-MCP/issues/169)
 
 ## [0.8.1](https://github.com/GLips/Figma-Context-MCP/compare/v0.8.0...v0.8.1) (2026-04-07)
 

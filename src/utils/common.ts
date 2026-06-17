@@ -3,8 +3,6 @@ import path from "path";
 import { tagError } from "~/utils/error-meta.js";
 import { isWithin } from "~/utils/local-path.js";
 
-export type StyleId = `${string}_${string}` & { __brand: "StyleId" };
-
 /**
  * Download Figma image and save it locally
  * @param fileName - The filename to save as
@@ -133,23 +131,6 @@ export function removeEmptyKeys<T>(input: T): T {
 }
 
 /**
- * Generate a 6-character random variable ID
- * @param prefix - ID prefix
- * @returns A 6-character random ID string with prefix
- */
-export function generateVarId(prefix: string = "var"): StyleId {
-  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-  let result = "";
-
-  for (let i = 0; i < 6; i++) {
-    const randomIndex = Math.floor(Math.random() * chars.length);
-    result += chars[randomIndex];
-  }
-
-  return `${prefix}_${result}` as StyleId;
-}
-
-/**
  * Generate a CSS shorthand for values that come with top, right, bottom, and left
  *
  * input: { top: 10, right: 10, bottom: 10, left: 10 }
@@ -221,6 +202,19 @@ export function pixelRound(num: number): number {
     throw new TypeError(`Input must be a valid number`);
   }
   return Number(Number(num).toFixed(2));
+}
+
+/**
+ * Compile-time exhaustiveness guard for discriminated unions.
+ *
+ * Place in the default branch of a switch over a union: the `value: never` parameter
+ * forces TS to error here if any union member was missed, and the `never` return type
+ * tells control-flow analysis that execution doesn't continue (so callers don't need a
+ * trailing return). Throws at runtime as a defense against type-system bypasses
+ * (`as`, JSON inputs, etc.) — should never actually fire in well-typed code.
+ */
+export function exhaustiveCheck(value: never): never {
+  throw new Error(`Unhandled discriminant: ${String(value)}`);
 }
 
 /**

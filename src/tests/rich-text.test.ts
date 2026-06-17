@@ -572,7 +572,7 @@ describe("extractTextStyle — line height", () => {
         } as never,
       }),
     ]);
-    const styleRef = nodes[0].textStyle!;
+    const styleRef = nodes[0].textStyle as string;
     const style = globalVars.styles[styleRef] as SimplifiedTextStyle;
     expect(style.lineHeight).toBeUndefined();
   });
@@ -590,7 +590,7 @@ describe("extractTextStyle — line height", () => {
         } as never,
       }),
     ]);
-    const styleRef = nodes[0].textStyle!;
+    const styleRef = nodes[0].textStyle as string;
     const style = globalVars.styles[styleRef] as SimplifiedTextStyle;
     expect(style.lineHeight).toBe("16.94px");
   });
@@ -609,7 +609,7 @@ describe("extractTextStyle — line height", () => {
         } as never,
       }),
     ]);
-    const styleRef = nodes[0].textStyle!;
+    const styleRef = nodes[0].textStyle as string;
     const style = globalVars.styles[styleRef] as SimplifiedTextStyle;
     expect(style.lineHeight).toBe("150%");
   });
@@ -630,7 +630,7 @@ describe("extractTextStyle — broadened base style capture", () => {
         },
       }),
     ]);
-    const styleRef = nodes[0].textStyle!;
+    const styleRef = nodes[0].textStyle as string;
     const style = globalVars.styles[styleRef] as SimplifiedTextStyle;
     expect(style.italic).toBe(true);
     expect(style.textDecoration).toBe("UNDERLINE");
