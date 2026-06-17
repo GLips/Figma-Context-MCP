@@ -7,7 +7,11 @@ import jpeg from "@jimp/js-jpeg";
 import * as crop from "@jimp/plugin-crop";
 
 const Jimp = createJimp({ formats: [png, jpeg], plugins: [crop.methods] });
-import { getImageDimensions, applyCropTransform } from "../utils/image-processing.js";
+import {
+  getImageDimensions,
+  applyCropTransform,
+  parseSvgDimensions,
+} from "../utils/image-processing.js";
 import type { Transform } from "@figma/rest-api-spec";
 
 describe("image processing", () => {
@@ -39,6 +43,30 @@ describe("image processing", () => {
       const filePath = await createTemp("test-300x150.jpg", 300, 150);
       const dims = await getImageDimensions(filePath);
       expect(dims).toEqual({ width: 300, height: 150 });
+    });
+  });
+
+  describe("parseSvgDimensions", () => {
+    it("reads width/height attributes (Figma's typical export shape)", () => {
+      const svg = `<svg width="52" height="52" viewBox="0 0 52 52" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M0 0h52v52H0z"/></svg>`;
+      expect(parseSvgDimensions(svg)).toEqual({ width: 52, height: 52 });
+    });
+
+    it("falls back to viewBox when width/height are percentages", () => {
+      const svg = `<svg width="100%" height="100%" viewBox="0 0 24 16"><rect/></svg>`;
+      expect(parseSvgDimensions(svg)).toEqual({ width: 24, height: 16 });
+    });
+
+    it("falls back to viewBox when width/height are absent", () => {
+      const svg = `<svg viewBox="0 0 120 80" xmlns="http://www.w3.org/2000/svg"></svg>`;
+      expect(parseSvgDimensions(svg)).toEqual({ width: 120, height: 80 });
+    });
+
+    it("returns 0x0 when no usable size is declared", () => {
+      expect(parseSvgDimensions(`<svg xmlns="http://www.w3.org/2000/svg"></svg>`)).toEqual({
+        width: 0,
+        height: 0,
+      });
     });
   });
 
