@@ -11,7 +11,7 @@ import type { ElementBody, GlobalVars, SimplifiedNode } from "./types.js";
  * composable-extractor model, we run this as a finalize pass over the
  * already-built design, after the walk completes.
  *
- * Two transformations, in this order (the order is load-bearing — see below):
+ * Two transformations, in this order:
  *   1. Count-gated style hoisting — a style stays in globalVars only when 2+
  *      nodes reference it (or it's a named Figma style); single-use styles are
  *      inlined back onto their node, dropping the indirection tax.
@@ -19,13 +19,14 @@ import type { ElementBody, GlobalVars, SimplifiedNode } from "./types.js";
  *      appear 2+ times are emitted once into `elements` and each occurrence is
  *      replaced by a compact `{ id, name, template, children? }` reference.
  *
- * Style gating MUST run before element hashing: gating rewrites single-use refs
- * to inline values, so two structurally-identical subtrees only hash to the same
- * template once their bodies are byte-identical. Any style shared between the two
- * subtrees necessarily has count >= 2, so it stays a (shared) ref in both —
- * identical on each side. Any single-use style is inlined identically on each
- * side. Either way the post-gating bodies match. Hash before gating and the two
- * sides could differ on which refs remained, breaking dedup.
+ * The order is for simplicity (hash bodies that are already gated), NOT a
+ * correctness requirement. Style ids are content-addressed (see findOrCreateVar),
+ * so two structurally-identical subtrees already carry byte-identical refs before
+ * gating — they hash to the same template with or without it. And gating only
+ * rewrites single-use styles, whose lone reference necessarily sits on a unique,
+ * non-repeated body (any repeated body would push the style's count to >= 2), so
+ * gating never touches a node that participates in templating. Hashing before or
+ * after gating yields the same templates either way.
  *
  * A final step (inlineExclusiveStyles) collapses the double indirection that
  * arises when a surviving style turns out to be used only by the instances of a
@@ -128,7 +129,7 @@ function deduplicateElements(nodes: SimplifiedNode[]): {
   elements: Record<string, ElementBody>;
   instanceCounts: Map<string, number>;
 } {
-  const bodiesByHash = new Map<string, { body: ElementBody; count: number }>();
+  const bodiesByHash = new Map<string, { body: ElementBody; str: string; count: number }>();
   const hashByNode = new Map<SimplifiedNode, string>();
   collectElements(nodes, bodiesByHash, hashByNode);
 
@@ -197,7 +198,7 @@ function bodyOf(node: SimplifiedNode): ElementBody {
 
 function collectElements(
   nodes: SimplifiedNode[],
-  bodiesByHash: Map<string, { body: ElementBody; count: number }>,
+  bodiesByHash: Map<string, { body: ElementBody; str: string; count: number }>,
   hashByNode: Map<SimplifiedNode, string>,
 ): void {
   for (const node of nodes) {
@@ -207,18 +208,35 @@ function collectElements(
     // replaces. Dedup must never grow the payload; bodies with any real styling
     // pay for themselves at 2+ uses and scale with repetition.
     if (Object.keys(body).length > 1) {
-      const hash = hashBody(body);
-      const entry = bodiesByHash.get(hash);
+      const str = stableStringify(body);
+      const id = elementId(str, bodiesByHash);
+      const entry = bodiesByHash.get(id);
       if (entry) entry.count += 1;
-      else bodiesByHash.set(hash, { body, count: 1 });
-      hashByNode.set(node, hash);
+      else bodiesByHash.set(id, { body, str, count: 1 });
+      hashByNode.set(node, id);
     }
     if (node.children) collectElements(node.children, bodiesByHash, hashByNode);
   }
 }
 
-function hashBody(body: ElementBody): string {
-  return `EL-${createHash("sha1").update(stableStringify(body)).digest("hex").slice(0, 8)}`;
+/**
+ * Content-addressed element id, with a truncated-hash collision guard. The 8-hex
+ * slice (32 bits) keeps template refs short but can alias two distinct bodies;
+ * letting them share an id would make applyTemplateRefs merge two different
+ * elements into one. On a clash we lengthen this body's id until the slot is free
+ * or already holds the same body. Deterministic because the walk order is stable.
+ */
+function elementId(
+  str: string,
+  bodiesByHash: Map<string, { body: ElementBody; str: string; count: number }>,
+): string {
+  const fullHash = createHash("sha1").update(str).digest("hex");
+  for (let length = 8; length < fullHash.length; length += 4) {
+    const id = `EL-${fullHash.slice(0, length)}`;
+    const entry = bodiesByHash.get(id);
+    if (!entry || entry.str === str) return id;
+  }
+  return `EL-${fullHash}`;
 }
 
 function applyTemplateRefs(

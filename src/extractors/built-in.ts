@@ -67,7 +67,21 @@ function findOrCreateVar(globalVars: GlobalVars, value: StyleTypes, prefix: stri
 
   // Content-addressed id so the same value yields the same id across runs, making
   // output byte-stable (the value→id cache already dedups within a single run).
-  const varId = `${prefix}_${createHash("sha1").update(key).digest("hex").slice(0, 8)}`;
+  const fullHash = createHash("sha1").update(key).digest("hex");
+
+  // Truncated-hash collision guard. The 8-hex slice (32 bits) keeps refs short but
+  // can alias two different style values. We reached here on a cache miss, so a
+  // taken slot means a genuine collision — reusing the id would overwrite the
+  // other value and every node referencing it would silently resolve to the wrong
+  // style. Lengthen this value's id until the slot is free. Deterministic because
+  // the walk order is stable, so the same file reproduces the same ids.
+  let length = 8;
+  let varId = `${prefix}_${fullHash.slice(0, length)}`;
+  while (globalVars.styles[varId] !== undefined && length < fullHash.length) {
+    length += 4;
+    varId = `${prefix}_${fullHash.slice(0, length)}`;
+  }
+
   globalVars.styles[varId] = value;
   cache.set(key, varId);
   return varId;
