@@ -34,10 +34,19 @@ export interface SimplifiedLayout {
     height?: number;
     aspectRatio?: number;
   };
+  // The size the requested root was designed at, surfaced as a non-binding
+  // reference (not a hard width/height). The root's own dimensions are
+  // "contextual" — it fills whatever it's placed in — but absolutely-positioned
+  // children and the fill-chain still need a concrete size to anchor against, so
+  // we keep the designed value here, named so it can't be mistaken for a pin.
+  designedWidth?: string;
+  designedHeight?: string;
   padding?: string;
   sizing?: {
-    horizontal?: "fixed" | "fill" | "hug";
-    vertical?: "fixed" | "fill" | "hug";
+    // "contextual": size is determined by wherever the element is placed (used
+    // for the requested root, whose FIXED size is an artifact of being top-level).
+    horizontal?: "fixed" | "fill" | "hug" | "contextual";
+    vertical?: "fixed" | "fill" | "hug" | "contextual";
   };
   overflowScroll?: ("x" | "y")[];
   position?: "absolute";
