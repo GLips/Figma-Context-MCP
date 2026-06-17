@@ -21,7 +21,8 @@ import {
   simplifyPropertyReferences,
 } from "~/transformers/component.js";
 import { hasAutoLayout, hasValue, isRectangleCornerRadii } from "~/utils/identity.js";
-import { generateVarId, isVisible, stableStringify } from "~/utils/common.js";
+import { isVisible, stableStringify } from "~/utils/common.js";
+import { createHash } from "node:crypto";
 import type { Node as FigmaDocumentNode } from "@figma/rest-api-spec";
 
 // Reverse lookup cache: serialized style value → varId.
@@ -64,7 +65,12 @@ function findOrCreateVar(globalVars: GlobalVars, value: StyleTypes, prefix: stri
   const existing = cache.get(key);
   if (existing) return existing;
 
-  const varId = generateVarId(prefix);
+  // Content-addressed id: identical values collapse to one entry (same as a
+  // random id would, via the cache) AND the output is byte-stable across runs.
+  // Determinism matters here beyond reproducibility — element-template hashes
+  // embed these ids, so a stable id is what lets two identical subtrees hash to
+  // the same template. Mirrors FrameLink's sha1-based style names.
+  const varId = `${prefix}_${createHash("sha1").update(key).digest("hex").slice(0, 8)}`;
   globalVars.styles[varId] = value;
   cache.set(key, varId);
   return varId;
@@ -85,6 +91,9 @@ function registerStyle(
   if (styleMatch) {
     const styleKey = resolveStyleKey(context, styleMatch, value);
     context.globalVars.styles[styleKey] = value;
+    // Mark as a named style so the finalize pass keeps it hoisted even if only
+    // one node uses it — a named Figma style is design-system intent, not noise.
+    context.traversalState.namedStyleKeys.add(styleKey);
     return styleKey;
   }
   return findOrCreateVar(context.globalVars, value, prefix);
@@ -377,7 +386,10 @@ export function collapseSvgContainers(
   children: SimplifiedNode[],
 ): SimplifiedNode[] {
   if (!COLLAPSIBLE_CONTAINER_TYPES.has(node.type)) return children;
-  if (!children.every((child) => SVG_ELIGIBLE_TYPES.has(child.type))) return children;
+  // `type` is optional on SimplifiedNode only because post-walk template refs
+  // drop it; at afterChildren time (mid-walk) every child still has a type, so
+  // the `?? ""` is a type-level concession that never matches at runtime.
+  if (!children.every((child) => SVG_ELIGIBLE_TYPES.has(child.type ?? ""))) return children;
   if (hasImageFillOnSelfOrDirectChildren(node)) return children;
 
   if (hasAutoLayout(node) && children.length < SVG_COLLAPSE_AUTOLAYOUT_THRESHOLD) {

@@ -39,6 +39,7 @@ export async function simplifyRawFigmaObject(
       traversalState.componentPropertyDefinitions,
     ),
     globalVars: { styles: finalGlobalVars.styles },
+    elements: {},
   };
 }
 
