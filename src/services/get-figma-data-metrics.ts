@@ -121,8 +121,10 @@ export function measureSimplifiedDesign(design: SimplifiedDesign): {
     if (isImageStyle(body?.fills) || isImageStyle(body?.strokes)) {
       imageNodeCount++;
     }
-    if (node.componentProperties) {
-      componentPropertyCount += Object.keys(node.componentProperties).length;
+    // Read through `body`: a deduplicated instance keeps only id/name/template,
+    // so its componentProperties live in the shared element, not on the node.
+    if (body?.componentProperties) {
+      componentPropertyCount += Object.keys(body.componentProperties).length;
     }
     if (node.children) {
       for (const child of node.children) walk(child, depth + 1);
