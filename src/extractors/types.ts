@@ -114,7 +114,7 @@ export interface SimplifiedDesign {
    * appears 2+ times, it is emitted here once and each occurrence is replaced by
    * a compact `template` reference. Empty when nothing repeats.
    */
-  elements: Record<string, ElementDefinition>;
+  elements: Record<string, ElementBody>;
 }
 
 /**
@@ -123,7 +123,7 @@ export interface SimplifiedDesign {
  * is part of the body (it's intrinsic to the element), so a template reference
  * carries no `type` of its own — consumers resolve it via the element entry.
  */
-export type ElementDefinition = Omit<SimplifiedNode, "id" | "name" | "children" | "template">;
+export type ElementBody = Omit<SimplifiedNode, "id" | "name" | "children" | "template">;
 
 export interface SimplifiedNode {
   id: string;

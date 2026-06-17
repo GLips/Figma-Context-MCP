@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { stableStringify } from "~/utils/common.js";
-import type { ElementDefinition, GlobalVars, SimplifiedNode } from "./types.js";
+import type { ElementBody, GlobalVars, SimplifiedNode } from "./types.js";
 
 /**
  * Post-walk deduplication pass.
@@ -27,7 +27,7 @@ import type { ElementDefinition, GlobalVars, SimplifiedNode } from "./types.js";
  * side. Either way the post-gating bodies match. Hash before gating and the two
  * sides could differ on which refs remained, breaking dedup.
  *
- * A final step (expandExclusiveStyles) collapses the double indirection that
+ * A final step (inlineExclusiveStyles) collapses the double indirection that
  * arises when a surviving style turns out to be used only by the instances of a
  * single deduplicated element — see below.
  */
@@ -38,7 +38,7 @@ export function finalizeDesign(
 ): {
   nodes: SimplifiedNode[];
   globalVars: GlobalVars;
-  elements: Record<string, ElementDefinition>;
+  elements: Record<string, ElementBody>;
 } {
   // Per-style usage counts, taken before dedup while every node still carries
   // its own style fields. Reused by both the inlining and expansion steps.
@@ -46,7 +46,7 @@ export function finalizeDesign(
 
   const styles = inlineSingleUseStyles(nodes, globalVars.styles, namedStyleKeys, styleCounts);
   const { elements, instanceCounts } = deduplicateElements(nodes);
-  expandExclusiveStyles(elements, instanceCounts, styles, styleCounts, namedStyleKeys);
+  inlineExclusiveStyles(elements, instanceCounts, styles, styleCounts, namedStyleKeys);
 
   return { nodes, globalVars: { styles }, elements };
 }
@@ -125,16 +125,16 @@ function countStyleRefs(nodes: SimplifiedNode[]): Map<string, number> {
  * count. Mutates nodes in place.
  */
 function deduplicateElements(nodes: SimplifiedNode[]): {
-  elements: Record<string, ElementDefinition>;
+  elements: Record<string, ElementBody>;
   instanceCounts: Map<string, number>;
 } {
-  const seen = new Map<string, { body: ElementDefinition; count: number }>();
+  const bodiesByHash = new Map<string, { body: ElementBody; count: number }>();
   const hashByNode = new Map<SimplifiedNode, string>();
-  collectElements(nodes, seen, hashByNode);
+  collectElements(nodes, bodiesByHash, hashByNode);
 
-  const elements: Record<string, ElementDefinition> = {};
+  const elements: Record<string, ElementBody> = {};
   const instanceCounts = new Map<string, number>();
-  for (const [hash, { body, count }] of seen) {
+  for (const [hash, { body, count }] of bodiesByHash) {
     if (count >= 2) {
       elements[hash] = body;
       instanceCounts.set(hash, count);
@@ -158,8 +158,8 @@ function deduplicateElements(nodes: SimplifiedNode[]): {
  * indirection. A style appearing on two fields of the same body (count = 2×
  * instances) simply won't match and stays hoisted; safe, if not optimal.
  */
-function expandExclusiveStyles(
-  elements: Record<string, ElementDefinition>,
+function inlineExclusiveStyles(
+  elements: Record<string, ElementBody>,
   instanceCounts: Map<string, number>,
   styles: GlobalVars["styles"],
   counts: Map<string, number>,
@@ -186,18 +186,18 @@ function expandExclusiveStyles(
 // styling) is intrinsic to the element and gets shared across instances.
 const ELEMENT_OMIT_KEYS = new Set(["id", "name", "children"]);
 
-function bodyOf(node: SimplifiedNode): ElementDefinition {
+function bodyOf(node: SimplifiedNode): ElementBody {
   const source = node as unknown as Record<string, unknown>;
   const body: Record<string, unknown> = {};
   for (const key of Object.keys(source)) {
     if (!ELEMENT_OMIT_KEYS.has(key)) body[key] = source[key];
   }
-  return body as ElementDefinition;
+  return body as ElementBody;
 }
 
 function collectElements(
   nodes: SimplifiedNode[],
-  seen: Map<string, { body: ElementDefinition; count: number }>,
+  bodiesByHash: Map<string, { body: ElementBody; count: number }>,
   hashByNode: Map<SimplifiedNode, string>,
 ): void {
   for (const node of nodes) {
@@ -208,23 +208,23 @@ function collectElements(
     // pay for themselves at 2+ uses and scale with repetition.
     if (Object.keys(body).length > 1) {
       const hash = hashBody(body);
-      const entry = seen.get(hash);
+      const entry = bodiesByHash.get(hash);
       if (entry) entry.count += 1;
-      else seen.set(hash, { body, count: 1 });
+      else bodiesByHash.set(hash, { body, count: 1 });
       hashByNode.set(node, hash);
     }
-    if (node.children) collectElements(node.children, seen, hashByNode);
+    if (node.children) collectElements(node.children, bodiesByHash, hashByNode);
   }
 }
 
-function hashBody(body: ElementDefinition): string {
+function hashBody(body: ElementBody): string {
   return `EL-${createHash("sha1").update(stableStringify(body)).digest("hex").slice(0, 8)}`;
 }
 
 function applyTemplateRefs(
   nodes: SimplifiedNode[],
   hashByNode: Map<SimplifiedNode, string>,
-  elements: Record<string, ElementDefinition>,
+  elements: Record<string, ElementBody>,
 ): void {
   for (let i = 0; i < nodes.length; i++) {
     const node = nodes[i];
