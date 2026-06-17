@@ -265,6 +265,58 @@ describe("layout alignment", () => {
     });
   });
 
+  // The requested root has no parent in the payload, so Figma reports it as
+  // FIXED at its artboard size — an artifact of being top-level. Honoring that
+  // as a hard width/height would pin the whole design and kill responsiveness,
+  // so the root marks such axes "contextual" and keeps the size as a non-binding
+  // designed* reference. Descendants (real parent) keep their fixed semantics.
+  describe("root node contextual sizing", () => {
+    test("rewrites FIXED axes as contextual + designed reference on a top-level node", () => {
+      const root = makeFrame({
+        layoutSizingHorizontal: "FIXED",
+        layoutSizingVertical: "FIXED",
+        absoluteBoundingBox: { x: 0, y: 0, width: 1440, height: 900 },
+      });
+      const layout = buildSimplifiedLayout(root);
+      expect(layout.sizing).toEqual({ horizontal: "contextual", vertical: "contextual" });
+      expect(layout.designedWidth).toBe("1440px");
+      expect(layout.designedHeight).toBe("900px");
+      // No binding dimensions on the root.
+      expect(layout.dimensions).toBeUndefined();
+    });
+
+    test("keeps the same FIXED sizing and dimensions on a non-root child", () => {
+      const parent = makeFrame({
+        layoutMode: "NONE",
+        absoluteBoundingBox: { x: 0, y: 0, width: 1440, height: 900 },
+      });
+      const child = makeFrame({
+        layoutMode: "NONE",
+        layoutSizingHorizontal: "FIXED",
+        layoutSizingVertical: "FIXED",
+        absoluteBoundingBox: { x: 0, y: 0, width: 200, height: 100 },
+      });
+      const layout = buildSimplifiedLayout(child, parent);
+      expect(layout.sizing).toEqual({ horizontal: "fixed", vertical: "fixed" });
+      expect(layout.dimensions).toEqual({ width: 200, height: 100 });
+      expect(layout.designedWidth).toBeUndefined();
+    });
+
+    test("only the FIXED axis becomes contextual; a real HUG axis is left alone", () => {
+      const root = makeFrame({
+        layoutSizingHorizontal: "FIXED",
+        layoutSizingVertical: "HUG",
+        absoluteBoundingBox: { x: 0, y: 0, width: 1440, height: 900 },
+      });
+      const layout = buildSimplifiedLayout(root);
+      // Canonical desktop root: fluid width, content-sized height.
+      expect(layout.sizing).toEqual({ horizontal: "contextual", vertical: "hug" });
+      expect(layout.designedWidth).toBe("1440px");
+      // HUG needs no anchor — height is determined by content.
+      expect(layout.designedHeight).toBeUndefined();
+    });
+  });
+
   describe("locationRelativeToParent", () => {
     // SECTION holds children but has no frame properties (no clipsContent, no
     // layoutMode), so it can never auto-layout — children are always positioned
