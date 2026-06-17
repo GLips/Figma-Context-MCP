@@ -65,7 +65,33 @@ describe("count-gated style hoisting", () => {
 describe("element templates", () => {
   it("dedupes two identical subtrees into one element entry + two template refs", () => {
     // Both cards share fill_red (count 2 → stays a ref), so their post-gating
-    // bodies are byte-identical and hash to the same template.
+    // bodies are byte-identical and hash to the same template. A third node
+    // (distinct body) also uses fill_red so it stays a hoisted ref rather than
+    // being inlined by exclusive-style expansion.
+    const nodes = [
+      node({ id: "1", name: "Card A", fills: "fill_red" }),
+      node({ id: "2", name: "Card B", fills: "fill_red" }),
+      node({ id: "9", name: "Header", type: "RECTANGLE", fills: "fill_red" }),
+    ];
+    const globalVars: GlobalVars = { styles: { fill_red: RED } };
+
+    const result = finalizeDesign(nodes, globalVars, new Set());
+
+    const [hash] = Object.keys(result.elements);
+    expect(Object.keys(result.elements)).toHaveLength(1);
+    expect(result.elements[hash]).toEqual({ type: "FRAME", fills: "fill_red" });
+
+    // Each card keeps its per-instance id/name, body replaced by the ref.
+    expect(result.nodes[0]).toEqual({ id: "1", name: "Card A", template: hash });
+    expect(result.nodes[1]).toEqual({ id: "2", name: "Card B", template: hash });
+    // The shared style stays hoisted (referenced from the element body + Header).
+    expect(result.globalVars.styles).toEqual({ fill_red: RED });
+  });
+
+  it("inlines a style used only by one deduplicated element, dropping the global entry", () => {
+    // fill_red is used by exactly the two cards (count 2) that fold into one
+    // element (2 instances). Exclusive → expanded inline, global entry removed,
+    // collapsing template → ref → value down to template → value.
     const nodes = [
       node({ id: "1", name: "Card A", fills: "fill_red" }),
       node({ id: "2", name: "Card B", fills: "fill_red" }),
@@ -74,16 +100,23 @@ describe("element templates", () => {
 
     const result = finalizeDesign(nodes, globalVars, new Set());
 
-    const templates = Object.keys(result.elements);
-    expect(templates).toHaveLength(1);
-    const [hash] = templates;
-    expect(result.elements[hash]).toEqual({ type: "FRAME", fills: "fill_red" });
+    const [hash] = Object.keys(result.elements);
+    expect(result.elements[hash]).toEqual({ type: "FRAME", fills: RED });
+    expect(result.globalVars.styles).toEqual({});
+  });
 
-    // Each occurrence keeps its per-instance id/name, body replaced by the ref.
-    expect(result.nodes[0]).toEqual({ id: "1", name: "Card A", template: hash });
-    expect(result.nodes[1]).toEqual({ id: "2", name: "Card B", template: hash });
-    // The shared style stays hoisted (referenced from the element body).
-    expect(result.globalVars.styles).toEqual({ fill_red: RED });
+  it("does not expand a named style even when exclusive to one element", () => {
+    const nodes = [
+      node({ id: "1", name: "Card A", type: "TEXT", textStyle: "Heading / Large" }),
+      node({ id: "2", name: "Card B", type: "TEXT", textStyle: "Heading / Large" }),
+    ];
+    const globalVars: GlobalVars = { styles: { "Heading / Large": { fontSize: 24 } } };
+
+    const result = finalizeDesign(nodes, globalVars, new Set(["Heading / Large"]));
+
+    const [hash] = Object.keys(result.elements);
+    expect(result.elements[hash]).toEqual({ type: "TEXT", textStyle: "Heading / Large" });
+    expect(result.globalVars.styles).toEqual({ "Heading / Large": { fontSize: 24 } });
   });
 
   it("leaves a unique subtree inline (no template)", () => {

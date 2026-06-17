@@ -27,6 +27,10 @@ import type { ElementDefinition, GlobalVars, SimplifiedNode } from "./types.js";
  * identical on each side. Any single-use style is inlined identically on each
  * side. Either way the post-gating bodies match. Hash before gating and the two
  * sides could differ on which refs remained, breaking dedup.
+ *
+ * A final step (expandExclusiveStyles) collapses the double indirection that
+ * arises when a surviving style turns out to be used only by the instances of a
+ * single deduplicated element — see below.
  */
 export function finalizeDesign(
   nodes: SimplifiedNode[],
@@ -37,8 +41,15 @@ export function finalizeDesign(
   globalVars: GlobalVars;
   elements: Record<string, ElementDefinition>;
 } {
-  const styles = gateStyles(nodes, globalVars, namedStyleKeys);
-  const elements = deduplicateElements(nodes);
+  // Per-style usage counts, taken before dedup while every node still carries
+  // its own style fields. Reused by both gating and exclusive-style expansion.
+  const counts = new Map<string, number>();
+  countStyleRefs(nodes, counts);
+
+  const styles = gateStyles(nodes, globalVars, namedStyleKeys, counts);
+  const { elements, instanceCounts } = deduplicateElements(nodes);
+  expandExclusiveStyles(elements, instanceCounts, styles, counts, namedStyleKeys);
+
   return { nodes, globalVars: { styles }, elements };
 }
 
@@ -63,10 +74,8 @@ function gateStyles(
   nodes: SimplifiedNode[],
   globalVars: GlobalVars,
   namedStyleKeys: Set<string>,
+  counts: Map<string, number>,
 ): GlobalVars["styles"] {
-  const counts = new Map<string, number>();
-  countStyleRefs(nodes, counts);
-
   const inlineKeys = new Set<string>();
   for (const key of Object.keys(globalVars.styles)) {
     if (INLINE_TEXT_STYLE_KEY.test(key)) continue; // referenced from text, not gated
@@ -114,20 +123,65 @@ function inlineStyleRefs(
 
 /**
  * Feature 2: hash each node body and replace bodies that repeat 2+ times with a
- * template reference, returning the element table. Mutates nodes in place.
+ * template reference, returning the element table and each element's instance
+ * count. Mutates nodes in place.
  */
-function deduplicateElements(nodes: SimplifiedNode[]): Record<string, ElementDefinition> {
+function deduplicateElements(nodes: SimplifiedNode[]): {
+  elements: Record<string, ElementDefinition>;
+  instanceCounts: Map<string, number>;
+} {
   const seen = new Map<string, { body: ElementDefinition; count: number }>();
   const hashByNode = new Map<SimplifiedNode, string>();
   collectElements(nodes, seen, hashByNode);
 
   const elements: Record<string, ElementDefinition> = {};
+  const instanceCounts = new Map<string, number>();
   for (const [hash, { body, count }] of seen) {
-    if (count >= 2) elements[hash] = body;
+    if (count >= 2) {
+      elements[hash] = body;
+      instanceCounts.set(hash, count);
+    }
   }
 
   applyTemplateRefs(nodes, hashByNode, elements);
-  return elements;
+  return { elements, instanceCounts };
+}
+
+/**
+ * Stretch optimization: collapse double indirection. When a surviving style is
+ * referenced only by the instances of a single deduplicated element, the output
+ * pays twice — `template → style ref → value`. Inline the value into the element
+ * body and drop the global entry so it's just `template → value`.
+ *
+ * The test is FrameLink's: a style whose total pre-dedup reference count equals
+ * an element's instance count, and which appears in that element's body, can only
+ * have come from that element's instances (any other use would push the count
+ * higher). Named styles are left hoisted — surfacing design-system intent is
+ * worth the indirection. A style appearing on two fields of the same body (count
+ * = 2× instances) simply won't match and stays hoisted; safe, if not optimal.
+ */
+function expandExclusiveStyles(
+  elements: Record<string, ElementDefinition>,
+  instanceCounts: Map<string, number>,
+  styles: GlobalVars["styles"],
+  counts: Map<string, number>,
+  namedStyleKeys: Set<string>,
+): void {
+  for (const [hash, body] of Object.entries(elements)) {
+    const instanceCount = instanceCounts.get(hash);
+    if (instanceCount === undefined) continue;
+    const writable = body as Record<string, unknown>;
+    for (const field of STYLE_REF_FIELDS) {
+      const ref = writable[field];
+      if (typeof ref !== "string") continue;
+      if (namedStyleKeys.has(ref) || INLINE_TEXT_STYLE_KEY.test(ref)) continue;
+      if (!(ref in styles)) continue;
+      if (counts.get(ref) === instanceCount) {
+        writable[field] = styles[ref];
+        delete styles[ref];
+      }
+    }
+  }
 }
 
 // Per-instance keys excluded from the hashed body. Everything else (type and all
