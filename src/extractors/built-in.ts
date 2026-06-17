@@ -6,7 +6,7 @@ import type {
   SimplifiedNode,
 } from "./types.js";
 import { buildSimplifiedLayout } from "~/transformers/layout.js";
-import { buildSimplifiedStrokes, parsePaint } from "~/transformers/style.js";
+import { buildSimplifiedStrokes, flattenSolidFills, parsePaint } from "~/transformers/style.js";
 import { buildSimplifiedEffects } from "~/transformers/effects.js";
 import {
   buildFormattedText,
@@ -178,10 +178,15 @@ export const visualsExtractor: ExtractorFn = (node, result, context) => {
 
   // fills
   if (hasValue("fills", node) && Array.isArray(node.fills) && node.fills.length) {
-    const fills = node.fills
-      .filter(isVisible)
-      .map((fill) => parsePaint(fill, hasChildren))
-      .reverse();
+    const visibleFills = node.fills.filter(isVisible);
+    // An all-solid stack collapses to the single resolved color a viewer sees,
+    // removing the layer-order ambiguity that misleads LLM consumers. Mixed
+    // stacks (gradient/image/pattern or a non-normal blend) can't be folded and
+    // fall back to the per-paint array, reversed into CSS top-first order.
+    const flattened = flattenSolidFills(visibleFills);
+    const fills = flattened
+      ? [flattened]
+      : visibleFills.map((fill) => parsePaint(fill, hasChildren)).reverse();
     result.fills = registerStyle(node, context, fills, ["fill", "fills"], "fill");
   }
 

@@ -224,6 +224,180 @@ describe("extractFromDesign", () => {
   });
 });
 
+describe("fill flattening", () => {
+  // Resolve a node's registered fills var back to its concrete value.
+  type Extracted = Awaited<ReturnType<typeof extractFromDesign>>;
+  function fillsValue(nodes: Extracted["nodes"], globalVars: Extracted["globalVars"]) {
+    return globalVars.styles[nodes[0].fills as string];
+  }
+
+  // Figma orders the fills array bottom-first, so index 0 is the backdrop and
+  // the last entry is the topmost layer.
+  it("composites an all-solid stack into a single resolved color", async () => {
+    const node = makeNode({
+      id: "f:1",
+      name: "Swatch",
+      type: "FRAME",
+      fills: [
+        { type: "SOLID", color: { r: 1, g: 1, b: 1, a: 1 }, visible: true }, // white backdrop
+        { type: "SOLID", color: { r: 0, g: 0, b: 0, a: 1 }, opacity: 0.2, visible: true }, // black @ 20%
+      ],
+    });
+
+    const { nodes, globalVars } = await extractFromDesign([node], allExtractors);
+
+    expect(fillsValue(nodes, globalVars)).toEqual(["#CCCCCC"]);
+  });
+
+  it("culls layers fully occluded by an opaque paint above them", async () => {
+    const node = makeNode({
+      id: "f:2",
+      name: "Swatch",
+      type: "FRAME",
+      fills: [
+        { type: "SOLID", color: { r: 0, g: 0, b: 1, a: 1 }, visible: true }, // blue backdrop
+        { type: "SOLID", color: { r: 1, g: 0, b: 0, a: 1 }, visible: true }, // opaque red on top
+      ],
+    });
+
+    const { nodes, globalVars } = await extractFromDesign([node], allExtractors);
+
+    // Only the opaque top color survives; the blue beneath contributes nothing.
+    expect(fillsValue(nodes, globalVars)).toEqual(["#FF0000"]);
+  });
+
+  it("folds both color.a and paint.opacity into the effective alpha", async () => {
+    const node = makeNode({
+      id: "f:6",
+      name: "Swatch",
+      type: "FRAME",
+      fills: [
+        { type: "SOLID", color: { r: 1, g: 1, b: 1, a: 1 }, visible: true }, // white backdrop
+        // black at color.a 0.5 × opacity 0.5 = 0.25 effective → 0.75 of white shows through
+        { type: "SOLID", color: { r: 0, g: 0, b: 0, a: 0.5 }, opacity: 0.5, visible: true },
+      ],
+    });
+
+    const { nodes, globalVars } = await extractFromDesign([node], allExtractors);
+
+    expect(fillsValue(nodes, globalVars)).toEqual(["#BFBFBF"]);
+  });
+
+  it("culls everything below a fully-opaque mid-stack paint, compositing only what's above", async () => {
+    const node = makeNode({
+      id: "f:7",
+      name: "Swatch",
+      type: "FRAME",
+      fills: [
+        { type: "SOLID", color: { r: 1, g: 0, b: 0, a: 1 }, visible: true }, // red (culled)
+        { type: "SOLID", color: { r: 0, g: 1, b: 0, a: 1 }, visible: true }, // opaque green
+        { type: "SOLID", color: { r: 0, g: 0, b: 1, a: 1 }, opacity: 0.5, visible: true }, // blue @ 50% on top
+      ],
+    });
+
+    const { nodes, globalVars } = await extractFromDesign([node], allExtractors);
+
+    // Red contributes nothing (opaque green above it); blue@50% blends over green → teal.
+    expect(fillsValue(nodes, globalVars)).toEqual(["#008080"]);
+  });
+
+  it("treats PASS_THROUGH blend as flattenable", async () => {
+    const node = makeNode({
+      id: "f:8",
+      name: "Swatch",
+      type: "FRAME",
+      fills: [
+        {
+          type: "SOLID",
+          color: { r: 1, g: 1, b: 1, a: 1 },
+          blendMode: "PASS_THROUGH",
+          visible: true,
+        },
+        {
+          type: "SOLID",
+          color: { r: 0, g: 0, b: 0, a: 1 },
+          opacity: 0.2,
+          blendMode: "PASS_THROUGH",
+          visible: true,
+        },
+      ],
+    });
+
+    const { nodes, globalVars } = await extractFromDesign([node], allExtractors);
+
+    expect(fillsValue(nodes, globalVars)).toEqual(["#CCCCCC"]);
+  });
+
+  it("emits rgba() when the composited stack is still translucent", async () => {
+    const node = makeNode({
+      id: "f:3",
+      name: "Swatch",
+      type: "FRAME",
+      fills: [
+        { type: "SOLID", color: { r: 1, g: 1, b: 1, a: 0.5 }, visible: true },
+        { type: "SOLID", color: { r: 0, g: 0, b: 0, a: 0.5 }, visible: true },
+      ],
+    });
+
+    const { nodes, globalVars } = await extractFromDesign([node], allExtractors);
+
+    expect(fillsValue(nodes, globalVars)).toEqual(["rgba(85, 85, 85, 0.75)"]);
+  });
+
+  it("leaves a stack untouched when it contains a gradient", async () => {
+    const node = makeNode({
+      id: "f:4",
+      name: "Swatch",
+      type: "FRAME",
+      fills: [
+        {
+          type: "GRADIENT_LINEAR",
+          visible: true,
+          gradientHandlePositions: [
+            { x: 0, y: 0 },
+            { x: 1, y: 1 },
+            { x: 0, y: 1 },
+          ],
+          gradientStops: [
+            { position: 0, color: { r: 1, g: 0, b: 0, a: 1 } },
+            { position: 1, color: { r: 0, g: 0, b: 1, a: 1 } },
+          ],
+        },
+        { type: "SOLID", color: { r: 0, g: 0, b: 0, a: 1 }, opacity: 0.2, visible: true },
+      ],
+    });
+
+    const { nodes, globalVars } = await extractFromDesign([node], allExtractors);
+
+    // Both layers survive, reversed into CSS top-first order: solid first, gradient last.
+    const value = fillsValue(nodes, globalVars) as unknown[];
+    expect(value).toHaveLength(2);
+    expect(value[0]).toBe("rgba(0, 0, 0, 0.2)");
+    expect((value[1] as { type: string }).type).toBe("GRADIENT_LINEAR");
+  });
+
+  it("leaves a stack untouched when any solid uses a non-normal blend mode", async () => {
+    const node = makeNode({
+      id: "f:5",
+      name: "Swatch",
+      type: "FRAME",
+      fills: [
+        { type: "SOLID", color: { r: 1, g: 1, b: 1, a: 1 }, visible: true },
+        {
+          type: "SOLID",
+          color: { r: 0, g: 0, b: 0, a: 0.2 },
+          blendMode: "MULTIPLY",
+          visible: true,
+        },
+      ],
+    });
+
+    const { nodes, globalVars } = await extractFromDesign([node], allExtractors);
+
+    expect(fillsValue(nodes, globalVars)).toHaveLength(2);
+  });
+});
+
 describe("collapseSvgContainers", () => {
   it("collapses BOOLEAN_OPERATION nodes to IMAGE-SVG", async () => {
     const booleanOpNode = makeNode({
