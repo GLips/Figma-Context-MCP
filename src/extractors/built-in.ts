@@ -65,11 +65,8 @@ function findOrCreateVar(globalVars: GlobalVars, value: StyleTypes, prefix: stri
   const existing = cache.get(key);
   if (existing) return existing;
 
-  // Content-addressed id: identical values collapse to one entry (same as a
-  // random id would, via the cache) AND the output is byte-stable across runs.
-  // Determinism matters here beyond reproducibility — element-template hashes
-  // embed these ids, so a stable id is what lets two identical subtrees hash to
-  // the same template. Mirrors FrameLink's sha1-based style names.
+  // Content-addressed id so the same value yields the same id across runs, making
+  // output byte-stable (the value→id cache already dedups within a single run).
   const varId = `${prefix}_${createHash("sha1").update(key).digest("hex").slice(0, 8)}`;
   globalVars.styles[varId] = value;
   cache.set(key, varId);

@@ -9,8 +9,7 @@ import type { ElementDefinition, GlobalVars, SimplifiedNode } from "./types.js";
  * can't have: you can't tell whether a style or a subtree is used once or a
  * hundred times until the whole tree is built. So rather than fight the
  * composable-extractor model, we run this as a finalize pass over the
- * already-built design — mirroring FrameLink's "resolve after the full walk"
- * ordering.
+ * already-built design, after the walk completes.
  *
  * Two transformations, in this order (the order is load-bearing — see below):
  *   1. Count-gated style hoisting — a style stays in globalVars only when 2+
@@ -42,13 +41,12 @@ export function finalizeDesign(
   elements: Record<string, ElementDefinition>;
 } {
   // Per-style usage counts, taken before dedup while every node still carries
-  // its own style fields. Reused by both gating and exclusive-style expansion.
-  const counts = new Map<string, number>();
-  countStyleRefs(nodes, counts);
+  // its own style fields. Reused by both the inlining and expansion steps.
+  const styleCounts = countStyleRefs(nodes);
 
-  const styles = gateStyles(nodes, globalVars, namedStyleKeys, counts);
+  const styles = inlineSingleUseStyles(nodes, globalVars.styles, namedStyleKeys, styleCounts);
   const { elements, instanceCounts } = deduplicateElements(nodes);
-  expandExclusiveStyles(elements, instanceCounts, styles, counts, namedStyleKeys);
+  expandExclusiveStyles(elements, instanceCounts, styles, styleCounts, namedStyleKeys);
 
   return { nodes, globalVars: { styles }, elements };
 }
@@ -65,60 +63,60 @@ const STYLE_REF_FIELDS = ["layout", "fills", "strokes", "effects", "textStyle"] 
 const INLINE_TEXT_STYLE_KEY = /^ts\d+$/;
 
 /**
- * Feature 1: inline single-use styles, returning the surviving globalVars.styles.
+ * Feature 1: replace single-use style refs with their inline value, returning the
+ * styles that stay hoisted in globalVars (used by 2+ nodes, or named styles).
  * Mutates the passed nodes in place (they're owned by this call). A single-use
- * value is referenced by exactly one node, so assigning the shared value object
- * onto that node creates no aliasing.
+ * value is referenced by exactly one node, so sharing the value object on inline
+ * creates no aliasing.
  */
-function gateStyles(
+function inlineSingleUseStyles(
   nodes: SimplifiedNode[],
-  globalVars: GlobalVars,
+  styles: GlobalVars["styles"],
   namedStyleKeys: Set<string>,
   counts: Map<string, number>,
 ): GlobalVars["styles"] {
   const inlineKeys = new Set<string>();
-  for (const key of Object.keys(globalVars.styles)) {
-    if (INLINE_TEXT_STYLE_KEY.test(key)) continue; // referenced from text, not gated
+  for (const key of Object.keys(styles)) {
+    if (INLINE_TEXT_STYLE_KEY.test(key)) continue; // referenced from text, leave hoisted
     if (namedStyleKeys.has(key)) continue; // design-system intent, keep hoisted
     if ((counts.get(key) ?? 0) >= 2) continue; // shared, keep hoisted
     inlineKeys.add(key);
   }
 
-  inlineStyleRefs(nodes, globalVars.styles, inlineKeys);
+  const walk = (ns: SimplifiedNode[]): void => {
+    for (const node of ns) {
+      for (const field of STYLE_REF_FIELDS) {
+        const value = node[field];
+        if (typeof value === "string" && inlineKeys.has(value)) {
+          // Widened SimplifiedNode field types make this legal; TS can't narrow per-field.
+          (node as unknown as Record<string, unknown>)[field] = styles[value];
+        }
+      }
+      if (node.children) walk(node.children);
+    }
+  };
+  walk(nodes);
 
   const surviving: GlobalVars["styles"] = {};
-  for (const [key, value] of Object.entries(globalVars.styles)) {
+  for (const [key, value] of Object.entries(styles)) {
     if (!inlineKeys.has(key)) surviving[key] = value;
   }
   return surviving;
 }
 
-function countStyleRefs(nodes: SimplifiedNode[], counts: Map<string, number>): void {
-  for (const node of nodes) {
-    for (const field of STYLE_REF_FIELDS) {
-      const value = node[field];
-      if (typeof value === "string") counts.set(value, (counts.get(value) ?? 0) + 1);
-    }
-    if (node.children) countStyleRefs(node.children, counts);
-  }
-}
-
-function inlineStyleRefs(
-  nodes: SimplifiedNode[],
-  styles: GlobalVars["styles"],
-  inlineKeys: Set<string>,
-): void {
-  for (const node of nodes) {
-    for (const field of STYLE_REF_FIELDS) {
-      const value = node[field];
-      if (typeof value === "string" && inlineKeys.has(value)) {
-        // Assigning the looked-up value; widened SimplifiedNode field types make
-        // this assignment legal, but TS can't narrow per-field here.
-        (node as unknown as Record<string, unknown>)[field] = styles[value];
+function countStyleRefs(nodes: SimplifiedNode[]): Map<string, number> {
+  const counts = new Map<string, number>();
+  const walk = (ns: SimplifiedNode[]): void => {
+    for (const node of ns) {
+      for (const field of STYLE_REF_FIELDS) {
+        const value = node[field];
+        if (typeof value === "string") counts.set(value, (counts.get(value) ?? 0) + 1);
       }
+      if (node.children) walk(node.children);
     }
-    if (node.children) inlineStyleRefs(node.children, styles, inlineKeys);
-  }
+  };
+  walk(nodes);
+  return counts;
 }
 
 /**
@@ -153,12 +151,12 @@ function deduplicateElements(nodes: SimplifiedNode[]): {
  * pays twice — `template → style ref → value`. Inline the value into the element
  * body and drop the global entry so it's just `template → value`.
  *
- * The test is FrameLink's: a style whose total pre-dedup reference count equals
- * an element's instance count, and which appears in that element's body, can only
- * have come from that element's instances (any other use would push the count
- * higher). Named styles are left hoisted — surfacing design-system intent is
- * worth the indirection. A style appearing on two fields of the same body (count
- * = 2× instances) simply won't match and stays hoisted; safe, if not optimal.
+ * The test: a style whose total pre-dedup reference count equals an element's
+ * instance count, and which appears in that element's body, can only have come
+ * from that element's instances (any other use would push the count higher).
+ * Named styles are left hoisted — surfacing design-system intent is worth the
+ * indirection. A style appearing on two fields of the same body (count = 2×
+ * instances) simply won't match and stays hoisted; safe, if not optimal.
  */
 function expandExclusiveStyles(
   elements: Record<string, ElementDefinition>,
@@ -206,8 +204,7 @@ function collectElements(
     const body = bodyOf(node);
     // Skip type-only bodies. A `{type}` element would cost more than it saves —
     // a `template=EL-xxxx` ref plus a global entry, versus the bare `[TYPE]` it
-    // replaces. This deviates from FrameLink (which dedupes unconditionally) on
-    // purpose: dedup must never grow the payload. Bodies with any real styling
+    // replaces. Dedup must never grow the payload; bodies with any real styling
     // pay for themselves at 2+ uses and scale with repetition.
     if (Object.keys(body).length > 1) {
       const hash = hashBody(body);
