@@ -63,7 +63,9 @@ function renderNode(
   // familiar `[TYPE] "name" #id` shape, then point at the template.
   const element = node.template ? elements?.[node.template] : undefined;
   parts.push(`[${element?.type ?? node.type}]`);
-  parts.push(quote(node.name));
+  // Name is dropped upstream (wrapForSerialization) when it is noise, so the
+  // token is conditional and the line collapses to `[TYPE] #id ...`.
+  if (node.name !== undefined) parts.push(quote(node.name));
   parts.push(`#${node.id}`);
   if (node.template !== undefined) parts.push(`template=${node.template}`);
 
