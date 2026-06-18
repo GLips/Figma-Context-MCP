@@ -14,12 +14,13 @@ type GradientPaint = Extract<
 function mapGradientStops(
   gradient: GradientPaint,
   elementBounds: { width: number; height: number } = { width: 1, height: 1 },
+  paintOpacity: number = 1,
 ): { stops: string; cssGeometry: string } {
   const handles = gradient.gradientHandlePositions;
   if (!handles || handles.length < 2) {
     const stops = gradient.gradientStops
       .map(({ position, color }) => {
-        const cssColor = formatRGBAColor(color, 1);
+        const cssColor = formatRGBAColor(color, paintOpacity);
         return `${cssColor} ${Math.round(position * 100)}%`;
       })
       .join(", ");
@@ -30,21 +31,48 @@ function mapGradientStops(
 
   switch (gradient.type) {
     case "GRADIENT_LINEAR": {
-      return mapLinearGradient(gradient.gradientStops, handle1, handle2, elementBounds);
+      return mapLinearGradient(
+        gradient.gradientStops,
+        handle1,
+        handle2,
+        elementBounds,
+        paintOpacity,
+      );
     }
     case "GRADIENT_RADIAL": {
-      return mapRadialGradient(gradient.gradientStops, handle1, handle2, handle3, elementBounds);
+      return mapRadialGradient(
+        gradient.gradientStops,
+        handle1,
+        handle2,
+        handle3,
+        elementBounds,
+        paintOpacity,
+      );
     }
     case "GRADIENT_ANGULAR": {
-      return mapAngularGradient(gradient.gradientStops, handle1, handle2, handle3, elementBounds);
+      return mapAngularGradient(
+        gradient.gradientStops,
+        handle1,
+        handle2,
+        handle3,
+        elementBounds,
+        paintOpacity,
+      );
     }
     case "GRADIENT_DIAMOND": {
-      return mapDiamondGradient(gradient.gradientStops, handle1, handle2, handle3, elementBounds);
+      return mapDiamondGradient(
+        gradient.gradientStops,
+        handle1,
+        handle2,
+        handle3,
+        elementBounds,
+        paintOpacity,
+      );
     }
     default: {
       const stops = gradient.gradientStops
         .map(({ position, color }) => {
-          const cssColor = formatRGBAColor(color, 1);
+          const cssColor = formatRGBAColor(color, paintOpacity);
           return `${cssColor} ${Math.round(position * 100)}%`;
         })
         .join(", ");
@@ -61,6 +89,7 @@ function mapLinearGradient(
   start: Vector,
   end: Vector,
   _elementBounds: { width: number; height: number },
+  paintOpacity: number = 1,
 ): { stops: string; cssGeometry: string } {
   // Calculate the gradient line in element space
   const dx = end.x - start.x;
@@ -71,7 +100,7 @@ function mapLinearGradient(
   if (gradientLength === 0) {
     const stops = gradientStops
       .map(({ position, color }) => {
-        const cssColor = formatRGBAColor(color, 1);
+        const cssColor = formatRGBAColor(color, paintOpacity);
         return `${cssColor} ${Math.round(position * 100)}%`;
       })
       .join(", ");
@@ -90,7 +119,7 @@ function mapLinearGradient(
     const fullLineEnd = Math.max(extendedIntersections[0], extendedIntersections[1]);
     // Map gradient stops from the Figma line segment to the full CSS line
     const mappedStops = gradientStops.map(({ position, color }) => {
-      const cssColor = formatRGBAColor(color, 1);
+      const cssColor = formatRGBAColor(color, paintOpacity);
 
       // Position along the Figma gradient line (0 = start handle, 1 = end handle)
       const figmaLinePosition = position;
@@ -113,7 +142,7 @@ function mapLinearGradient(
 
   // Fallback to simple gradient if intersection calculation fails
   const mappedStops = gradientStops.map(({ position, color }) => {
-    const cssColor = formatRGBAColor(color, 1);
+    const cssColor = formatRGBAColor(color, paintOpacity);
     return `${cssColor} ${Math.round(position * 100)}%`;
   });
 
@@ -190,13 +219,14 @@ function mapRadialGradient(
   _edge: Vector,
   _widthHandle: Vector,
   _elementBounds: { width: number; height: number },
+  paintOpacity: number = 1,
 ): { stops: string; cssGeometry: string } {
   const centerX = Math.round(center.x * 100);
   const centerY = Math.round(center.y * 100);
 
   const stops = gradientStops
     .map(({ position, color }) => {
-      const cssColor = formatRGBAColor(color, 1);
+      const cssColor = formatRGBAColor(color, paintOpacity);
       return `${cssColor} ${Math.round(position * 100)}%`;
     })
     .join(", ");
@@ -216,6 +246,7 @@ function mapAngularGradient(
   angleHandle: Vector,
   _widthHandle: Vector,
   _elementBounds: { width: number; height: number },
+  paintOpacity: number = 1,
 ): { stops: string; cssGeometry: string } {
   const centerX = Math.round(center.x * 100);
   const centerY = Math.round(center.y * 100);
@@ -225,7 +256,7 @@ function mapAngularGradient(
 
   const stops = gradientStops
     .map(({ position, color }) => {
-      const cssColor = formatRGBAColor(color, 1);
+      const cssColor = formatRGBAColor(color, paintOpacity);
       return `${cssColor} ${Math.round(position * 100)}%`;
     })
     .join(", ");
@@ -245,13 +276,14 @@ function mapDiamondGradient(
   _edge: Vector,
   _widthHandle: Vector,
   _elementBounds: { width: number; height: number },
+  paintOpacity: number = 1,
 ): { stops: string; cssGeometry: string } {
   const centerX = Math.round(center.x * 100);
   const centerY = Math.round(center.y * 100);
 
   const stops = gradientStops
     .map(({ position, color }) => {
-      const cssColor = formatRGBAColor(color, 1);
+      const cssColor = formatRGBAColor(color, paintOpacity);
       return `${cssColor} ${Math.round(position * 100)}%`;
     })
     .join(", ");
@@ -265,7 +297,7 @@ function mapDiamondGradient(
 /**
  * Convert a Figma gradient to CSS gradient syntax
  */
-export function convertGradientToCss(gradient: GradientPaint): string {
+export function convertGradientToCss(gradient: GradientPaint, paintOpacity: number = 1): string {
   // Sort stops by position to ensure proper order
   const sortedGradient = {
     ...gradient,
@@ -273,7 +305,11 @@ export function convertGradientToCss(gradient: GradientPaint): string {
   };
 
   // Map gradient stops using handle-based geometry
-  const { stops, cssGeometry } = mapGradientStops(sortedGradient);
+  const { stops, cssGeometry } = mapGradientStops(
+    sortedGradient,
+    { width: 1, height: 1 },
+    paintOpacity,
+  );
 
   switch (gradient.type) {
     case "GRADIENT_LINEAR": {

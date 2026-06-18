@@ -145,7 +145,7 @@ export function parsePaint(raw: Paint, hasChildren: boolean = false): Simplified
         | "GRADIENT_RADIAL"
         | "GRADIENT_ANGULAR"
         | "GRADIENT_DIAMOND",
-      gradient: convertGradientToCss(raw),
+      gradient: convertGradientToCss(raw, raw.opacity ?? 1),
     };
   } else {
     tagError(new Error(`Unknown paint type: ${raw.type}`), { category: "internal" });
