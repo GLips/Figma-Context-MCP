@@ -1,5 +1,25 @@
 # figma-developer-mcp
 
+## [0.13.0](https://github.com/GLips/Figma-Context-MCP/compare/v0.12.0...v0.13.0) (2026-06-18)
+
+
+### Features
+
+* CSS Grid layout support ([#347](https://github.com/GLips/Figma-Context-MCP/issues/347)) ([5c1da79](https://github.com/GLips/Figma-Context-MCP/commit/5c1da79be91864a1e363566216ac37f7f208388f))
+* **extractors:** deduplicate repeated styles and subtrees to shrink output ([#389](https://github.com/GLips/Figma-Context-MCP/issues/389)) ([a43e465](https://github.com/GLips/Figma-Context-MCP/commit/a43e465186075dad09078ae5c860f662c3ebc5d1))
+* **fills:** flatten all-solid fill stacks into a single resolved color ([#390](https://github.com/GLips/Figma-Context-MCP/issues/390)) ([dcf11d2](https://github.com/GLips/Figma-Context-MCP/commit/dcf11d2a1edecd2640a8421685f5417f10acdaf4))
+* **format:** default output to tree instead of yaml ([#394](https://github.com/GLips/Figma-Context-MCP/issues/394)) ([4e3a08b](https://github.com/GLips/Figma-Context-MCP/commit/4e3a08b7ca343f5edf8da26679394e23579c8733))
+* **layout:** emit the requested root as contextual sizing with a designed reference ([#393](https://github.com/GLips/Figma-Context-MCP/issues/393)) ([ef888b5](https://github.com/GLips/Figma-Context-MCP/commit/ef888b55f345daff1711810b3ae277bbe3876311))
+* **strokes:** include strokeAlign in simplified stroke output ([#386](https://github.com/GLips/Figma-Context-MCP/issues/386)) ([c807a27](https://github.com/GLips/Figma-Context-MCP/commit/c807a276df6f065eecc88534c95777bab8aa18ad))
+* support request bearer oauth tokens over HTTP ([#384](https://github.com/GLips/Figma-Context-MCP/issues/384)) ([22426e6](https://github.com/GLips/Figma-Context-MCP/commit/22426e677d13d87e8564acd3c96407100c93fef6))
+
+
+### Bug Fixes
+
+* **effects:** halve Figma blur radius for CSS and omit zero-radius blur ([#392](https://github.com/GLips/Figma-Context-MCP/issues/392)) ([49a0c73](https://github.com/GLips/Figma-Context-MCP/commit/49a0c7305620b8267b2410e948f271cbcd764c84))
+* **images:** report real SVG dimensions instead of 0x0 ([#396](https://github.com/GLips/Figma-Context-MCP/issues/396)) ([3c7524c](https://github.com/GLips/Figma-Context-MCP/commit/3c7524c87d5fdb7ca3e628218961a5af57ace61b))
+* **text:** emit letterSpacing and relative lineHeight as em, not % ([#391](https://github.com/GLips/Figma-Context-MCP/issues/391)) ([0cb97d0](https://github.com/GLips/Figma-Context-MCP/commit/0cb97d04de2b6ab82e0713bff047237c8867df8c))
+
 ## [0.12.0](https://github.com/GLips/Figma-Context-MCP/compare/v0.11.0...v0.12.0) (2026-05-27)
 
 ### Features
