@@ -8,7 +8,9 @@ export type SimplifiedGradientFill = {
 
 type GradientPaint = Extract<
   Paint,
-  { type: "GRADIENT_LINEAR" | "GRADIENT_RADIAL" | "GRADIENT_ANGULAR" | "GRADIENT_DIAMOND" }
+  {
+    type: "GRADIENT_LINEAR" | "GRADIENT_RADIAL" | "GRADIENT_ANGULAR" | "GRADIENT_DIAMOND";
+  }
 >;
 
 type GradientStop = { position: number; color: RGBA };
@@ -18,7 +20,6 @@ type GradientGeometry = { stops: string; cssGeometry: string };
 type GradientMapper = (
   gradientStops: GradientStop[],
   handles: Vector[],
-  elementBounds: { width: number; height: number },
   paintOpacity: number,
 ) => GradientGeometry;
 
@@ -42,7 +43,6 @@ function formatStops(stops: GradientStop[], paintOpacity: number): string {
 function mapLinearGradient(
   gradientStops: GradientStop[],
   handles: Vector[],
-  _elementBounds: { width: number; height: number },
   paintOpacity: number,
 ): GradientGeometry {
   const [start, end] = handles;
@@ -54,7 +54,10 @@ function mapLinearGradient(
 
   // Handle degenerate case
   if (gradientLength === 0) {
-    return { stops: formatStops(gradientStops, paintOpacity), cssGeometry: "0deg" };
+    return {
+      stops: formatStops(gradientStops, paintOpacity),
+      cssGeometry: "0deg",
+    };
   }
 
   // Calculate angle for CSS
@@ -161,7 +164,6 @@ function findExtendedLineIntersections(start: Vector, end: Vector): number[] {
 function mapRadialGradient(
   gradientStops: GradientStop[],
   handles: Vector[],
-  _elementBounds: { width: number; height: number },
   paintOpacity: number,
 ): GradientGeometry {
   const [center] = handles;
@@ -180,7 +182,6 @@ function mapRadialGradient(
 function mapAngularGradient(
   gradientStops: GradientStop[],
   handles: Vector[],
-  _elementBounds: { width: number; height: number },
   paintOpacity: number,
 ): GradientGeometry {
   const [center, angleHandle] = handles;
@@ -202,7 +203,6 @@ function mapAngularGradient(
 function mapDiamondGradient(
   gradientStops: GradientStop[],
   handles: Vector[],
-  _elementBounds: { width: number; height: number },
   paintOpacity: number,
 ): GradientGeometry {
   const [center] = handles;
@@ -225,10 +225,22 @@ const GRADIENT_RENDERERS: Record<
   GradientPaint["type"],
   { map: GradientMapper; wrap: (geometry: string, stops: string) => string }
 > = {
-  GRADIENT_LINEAR: { map: mapLinearGradient, wrap: (g, s) => `linear-gradient(${g}, ${s})` },
-  GRADIENT_RADIAL: { map: mapRadialGradient, wrap: (g, s) => `radial-gradient(${g}, ${s})` },
-  GRADIENT_ANGULAR: { map: mapAngularGradient, wrap: (g, s) => `conic-gradient(${g}, ${s})` },
-  GRADIENT_DIAMOND: { map: mapDiamondGradient, wrap: (g, s) => `radial-gradient(${g}, ${s})` },
+  GRADIENT_LINEAR: {
+    map: mapLinearGradient,
+    wrap: (g, s) => `linear-gradient(${g}, ${s})`,
+  },
+  GRADIENT_RADIAL: {
+    map: mapRadialGradient,
+    wrap: (g, s) => `radial-gradient(${g}, ${s})`,
+  },
+  GRADIENT_ANGULAR: {
+    map: mapAngularGradient,
+    wrap: (g, s) => `conic-gradient(${g}, ${s})`,
+  },
+  GRADIENT_DIAMOND: {
+    map: mapDiamondGradient,
+    wrap: (g, s) => `radial-gradient(${g}, ${s})`,
+  },
 };
 
 /**
@@ -247,6 +259,6 @@ export function convertGradientToCss(gradient: GradientPaint): string {
     return wrap("0deg", formatStops(sortedStops, paintOpacity));
   }
 
-  const { stops, cssGeometry } = map(sortedStops, handles, { width: 1, height: 1 }, paintOpacity);
+  const { stops, cssGeometry } = map(sortedStops, handles, paintOpacity);
   return wrap(cssGeometry, stops);
 }
