@@ -43,7 +43,7 @@ export class FigmaService {
 
     if (!this.apiKey) {
       throw new Error(
-        "Figma API authentication is required. Configure FIGMA_API_KEY or FIGMA_OAUTH_TOKEN on the server, or send X-Figma-Token on the HTTP request.",
+        "Figma API authentication is required. Configure FIGMA_API_KEY or FIGMA_OAUTH_TOKEN on the server, or send X-Figma-Token / Authorization: Bearer on the HTTP request.",
       );
     }
 
