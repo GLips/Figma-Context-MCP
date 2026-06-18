@@ -15,13 +15,8 @@ type GradientStop = { position: number; color: RGBA };
 
 /**
  * Format stops as CSS `<color> <pos>%` segments at their original positions.
- *
- * `paintOpacity` is folded into every stop's alpha (it multiplies with the
- * stop's own `color.a` inside `formatRGBAColor`). Keeping that fold in one place
- * is deliberate: the paint-level opacity used to be hardcoded per call site, so
- * it was easy to apply in some branches and miss others. Geometry-aware mappers
- * that remap positions (e.g. the linear extended-line case) format inline
- * instead — they still route alpha through `formatRGBAColor` with `paintOpacity`.
+ * `paintOpacity` multiplies each stop's `color.a` (via `formatRGBAColor`).
+ * Mappers that remap positions (e.g. linear's extended-line case) format inline.
  */
 function formatStops(stops: GradientStop[], paintOpacity: number): string {
   return stops
@@ -272,12 +267,8 @@ function mapDiamondGradient(
 }
 
 /**
- * Convert a Figma gradient to CSS gradient syntax.
- *
- * `paintOpacity` defaults to the paint's own `opacity` so the multiplier is
- * sourced from the gradient itself — callers can't accidentally drop it by
- * omitting the argument, which is the bug class this whole pipeline guards
- * against. Pass an explicit value only to override that source.
+ * Convert a Figma gradient to CSS gradient syntax. `paintOpacity` defaults to
+ * the paint's own `opacity`; pass an explicit value only to override it.
  */
 export function convertGradientToCss(
   gradient: GradientPaint,

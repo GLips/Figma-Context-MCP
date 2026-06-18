@@ -27,8 +27,6 @@ function gradientCss(opacity?: number): string {
 }
 
 describe("parsePaint — gradient paint opacity", () => {
-  // The bug: paint-level opacity was applied to SOLID fills but dropped for
-  // gradients, so a 50%-opacity gradient rendered fully opaque.
   it("multiplies paint opacity into each stop's alpha", () => {
     expect(gradientCss(0.5)).toContain("rgba(0, 0, 0, 0.5) 0%");
   });
