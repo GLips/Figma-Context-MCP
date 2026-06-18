@@ -8,32 +8,6 @@ export interface ColorValue {
 }
 
 /**
- * Convert hex color value and opacity to rgba format
- * @param hex - Hexadecimal color value (e.g., "#FF0000" or "#F00")
- * @param opacity - Opacity value (0-1)
- * @returns Color string in rgba format
- */
-export function hexToRgba(hex: string, opacity: number = 1): string {
-  // Remove possible # prefix
-  hex = hex.replace("#", "");
-
-  // Handle shorthand hex values (e.g., #FFF)
-  if (hex.length === 3) {
-    hex = hex[0] + hex[0] + hex[1] + hex[1] + hex[2] + hex[2];
-  }
-
-  // Convert hex to RGB values
-  const r = parseInt(hex.substring(0, 2), 16);
-  const g = parseInt(hex.substring(2, 4), 16);
-  const b = parseInt(hex.substring(4, 6), 16);
-
-  // Ensure opacity is in the 0-1 range
-  const validOpacity = Math.min(Math.max(opacity, 0), 1);
-
-  return `rgba(${r}, ${g}, ${b}, ${validOpacity})`;
-}
-
-/**
  * Convert color from RGBA to { hex, opacity }
  *
  * @param color - The color to convert, including alpha channel
