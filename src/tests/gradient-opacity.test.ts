@@ -75,3 +75,53 @@ describe("parsePaint — gradient paint opacity", () => {
     expect(gradient).toContain("rgba(0, 0, 0, 0.5)");
   });
 });
+
+// Each gradient type maps to a specific CSS function (linear/radial/conic) and a
+// specific geometry string. These pin the full output per type so a refactor of
+// the type→renderer dispatch can't silently swap a wrapper or drop geometry.
+function renderGradient(type: string, handles: { x: number; y: number }[]): string {
+  const paint = {
+    type,
+    gradientHandlePositions: handles,
+    gradientStops: [{ position: 0, color: { r: 0, g: 0, b: 0, a: 1 } }],
+  } as unknown as Paint;
+  return (parsePaint(paint) as { gradient: string }).gradient;
+}
+
+describe("parsePaint — gradient type to CSS function + geometry", () => {
+  // Centered handles shared by the three non-linear types: center, edge, width.
+  const centered = [
+    { x: 0.5, y: 0.5 },
+    { x: 1, y: 0.5 },
+    { x: 0.5, y: 1 },
+  ];
+
+  it("renders a linear gradient with a degree angle", () => {
+    const handles = [
+      { x: 0.5, y: 0 },
+      { x: 0.5, y: 1 },
+      { x: 1, y: 0 },
+    ];
+    expect(renderGradient("GRADIENT_LINEAR", handles)).toBe(
+      "linear-gradient(180deg, rgba(0, 0, 0, 1) 0%)",
+    );
+  });
+
+  it("renders a radial gradient as a circle", () => {
+    expect(renderGradient("GRADIENT_RADIAL", centered)).toBe(
+      "radial-gradient(circle at 50% 50%, rgba(0, 0, 0, 1) 0%)",
+    );
+  });
+
+  it("renders an angular gradient as a conic gradient", () => {
+    expect(renderGradient("GRADIENT_ANGULAR", centered)).toBe(
+      "conic-gradient(from 90deg at 50% 50%, rgba(0, 0, 0, 1) 0%)",
+    );
+  });
+
+  it("renders a diamond gradient as a radial ellipse", () => {
+    expect(renderGradient("GRADIENT_DIAMOND", centered)).toBe(
+      "radial-gradient(ellipse at 50% 50%, rgba(0, 0, 0, 1) 0%)",
+    );
+  });
+});
