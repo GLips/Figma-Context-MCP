@@ -272,9 +272,17 @@ function mapDiamondGradient(
 }
 
 /**
- * Convert a Figma gradient to CSS gradient syntax
+ * Convert a Figma gradient to CSS gradient syntax.
+ *
+ * `paintOpacity` defaults to the paint's own `opacity` so the multiplier is
+ * sourced from the gradient itself — callers can't accidentally drop it by
+ * omitting the argument, which is the bug class this whole pipeline guards
+ * against. Pass an explicit value only to override that source.
  */
-export function convertGradientToCss(gradient: GradientPaint, paintOpacity: number = 1): string {
+export function convertGradientToCss(
+  gradient: GradientPaint,
+  paintOpacity: number = gradient.opacity ?? 1,
+): string {
   // Sort stops by position to ensure proper order
   const sortedGradient = {
     ...gradient,
