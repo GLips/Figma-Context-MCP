@@ -1,5 +1,12 @@
 # figma-developer-mcp
 
+## [0.13.2](https://github.com/GLips/Figma-Context-MCP/compare/v0.13.1...v0.13.2) (2026-06-18)
+
+
+### Bug Fixes
+
+* apply paint-level opacity to gradient fills ([#399](https://github.com/GLips/Figma-Context-MCP/issues/399)) ([7fc8829](https://github.com/GLips/Figma-Context-MCP/commit/7fc8829acef7b3d7ae3deede05d94f109053e976))
+
 ## [0.13.1](https://github.com/GLips/Figma-Context-MCP/compare/v0.13.0...v0.13.1) (2026-06-18)
 
 
