@@ -127,7 +127,10 @@ export type ElementBody = Omit<SimplifiedNode, "id" | "name" | "children" | "tem
 
 export interface SimplifiedNode {
   id: string;
-  name: string;
+  // Always populated during simplification, but the serialization pass drops it
+  // when it is noise (auto-generated like `Rectangle 12`, or redundant with the
+  // node's `text`), so the output shape treats it as optional.
+  name?: string;
   type?: string; // e.g. FRAME, TEXT, INSTANCE, RECTANGLE, etc. Absent on template refs (type lives in the element).
   /**
    * Reference into `SimplifiedDesign.elements`. When set, the node's body lives
