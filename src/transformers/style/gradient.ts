@@ -11,6 +11,27 @@ type GradientPaint = Extract<
   { type: "GRADIENT_LINEAR" | "GRADIENT_RADIAL" | "GRADIENT_ANGULAR" | "GRADIENT_DIAMOND" }
 >;
 
+type GradientStop = { position: number; color: RGBA };
+
+/**
+ * Format stops as CSS `<color> <pos>%` segments at their original positions.
+ *
+ * `paintOpacity` is folded into every stop's alpha (it multiplies with the
+ * stop's own `color.a` inside `formatRGBAColor`). Keeping that fold in one place
+ * is deliberate: the paint-level opacity used to be hardcoded per call site, so
+ * it was easy to apply in some branches and miss others. Geometry-aware mappers
+ * that remap positions (e.g. the linear extended-line case) format inline
+ * instead — they still route alpha through `formatRGBAColor` with `paintOpacity`.
+ */
+function formatStops(stops: GradientStop[], paintOpacity: number): string {
+  return stops
+    .map(
+      ({ position, color }) =>
+        `${formatRGBAColor(color, paintOpacity)} ${Math.round(position * 100)}%`,
+    )
+    .join(", ");
+}
+
 function mapGradientStops(
   gradient: GradientPaint,
   elementBounds: { width: number; height: number } = { width: 1, height: 1 },
@@ -18,13 +39,7 @@ function mapGradientStops(
 ): { stops: string; cssGeometry: string } {
   const handles = gradient.gradientHandlePositions;
   if (!handles || handles.length < 2) {
-    const stops = gradient.gradientStops
-      .map(({ position, color }) => {
-        const cssColor = formatRGBAColor(color, paintOpacity);
-        return `${cssColor} ${Math.round(position * 100)}%`;
-      })
-      .join(", ");
-    return { stops, cssGeometry: "0deg" };
+    return { stops: formatStops(gradient.gradientStops, paintOpacity), cssGeometry: "0deg" };
   }
 
   const [handle1, handle2, handle3] = handles;
@@ -70,13 +85,7 @@ function mapGradientStops(
       );
     }
     default: {
-      const stops = gradient.gradientStops
-        .map(({ position, color }) => {
-          const cssColor = formatRGBAColor(color, paintOpacity);
-          return `${cssColor} ${Math.round(position * 100)}%`;
-        })
-        .join(", ");
-      return { stops, cssGeometry: "0deg" };
+      return { stops: formatStops(gradient.gradientStops, paintOpacity), cssGeometry: "0deg" };
     }
   }
 }
@@ -85,7 +94,7 @@ function mapGradientStops(
  * Map linear gradient from Figma handles to CSS
  */
 function mapLinearGradient(
-  gradientStops: { position: number; color: RGBA }[],
+  gradientStops: GradientStop[],
   start: Vector,
   end: Vector,
   _elementBounds: { width: number; height: number },
@@ -98,13 +107,7 @@ function mapLinearGradient(
 
   // Handle degenerate case
   if (gradientLength === 0) {
-    const stops = gradientStops
-      .map(({ position, color }) => {
-        const cssColor = formatRGBAColor(color, paintOpacity);
-        return `${cssColor} ${Math.round(position * 100)}%`;
-      })
-      .join(", ");
-    return { stops, cssGeometry: "0deg" };
+    return { stops: formatStops(gradientStops, paintOpacity), cssGeometry: "0deg" };
   }
 
   // Calculate angle for CSS
@@ -141,13 +144,8 @@ function mapLinearGradient(
   }
 
   // Fallback to simple gradient if intersection calculation fails
-  const mappedStops = gradientStops.map(({ position, color }) => {
-    const cssColor = formatRGBAColor(color, paintOpacity);
-    return `${cssColor} ${Math.round(position * 100)}%`;
-  });
-
   return {
-    stops: mappedStops.join(", "),
+    stops: formatStops(gradientStops, paintOpacity),
     cssGeometry: `${Math.round(angle)}deg`,
   };
 }
@@ -214,7 +212,7 @@ function findExtendedLineIntersections(start: Vector, end: Vector): number[] {
  * Map radial gradient from Figma handles to CSS
  */
 function mapRadialGradient(
-  gradientStops: { position: number; color: RGBA }[],
+  gradientStops: GradientStop[],
   center: Vector,
   _edge: Vector,
   _widthHandle: Vector,
@@ -224,15 +222,8 @@ function mapRadialGradient(
   const centerX = Math.round(center.x * 100);
   const centerY = Math.round(center.y * 100);
 
-  const stops = gradientStops
-    .map(({ position, color }) => {
-      const cssColor = formatRGBAColor(color, paintOpacity);
-      return `${cssColor} ${Math.round(position * 100)}%`;
-    })
-    .join(", ");
-
   return {
-    stops,
+    stops: formatStops(gradientStops, paintOpacity),
     cssGeometry: `circle at ${centerX}% ${centerY}%`,
   };
 }
@@ -241,7 +232,7 @@ function mapRadialGradient(
  * Map angular gradient from Figma handles to CSS
  */
 function mapAngularGradient(
-  gradientStops: { position: number; color: RGBA }[],
+  gradientStops: GradientStop[],
   center: Vector,
   angleHandle: Vector,
   _widthHandle: Vector,
@@ -254,15 +245,8 @@ function mapAngularGradient(
   const angle =
     Math.atan2(angleHandle.y - center.y, angleHandle.x - center.x) * (180 / Math.PI) + 90;
 
-  const stops = gradientStops
-    .map(({ position, color }) => {
-      const cssColor = formatRGBAColor(color, paintOpacity);
-      return `${cssColor} ${Math.round(position * 100)}%`;
-    })
-    .join(", ");
-
   return {
-    stops,
+    stops: formatStops(gradientStops, paintOpacity),
     cssGeometry: `from ${Math.round(angle)}deg at ${centerX}% ${centerY}%`,
   };
 }
@@ -271,7 +255,7 @@ function mapAngularGradient(
  * Map diamond gradient from Figma handles to CSS (approximate with ellipse)
  */
 function mapDiamondGradient(
-  gradientStops: { position: number; color: RGBA }[],
+  gradientStops: GradientStop[],
   center: Vector,
   _edge: Vector,
   _widthHandle: Vector,
@@ -281,15 +265,8 @@ function mapDiamondGradient(
   const centerX = Math.round(center.x * 100);
   const centerY = Math.round(center.y * 100);
 
-  const stops = gradientStops
-    .map(({ position, color }) => {
-      const cssColor = formatRGBAColor(color, paintOpacity);
-      return `${cssColor} ${Math.round(position * 100)}%`;
-    })
-    .join(", ");
-
   return {
-    stops,
+    stops: formatStops(gradientStops, paintOpacity),
     cssGeometry: `ellipse at ${centerX}% ${centerY}%`,
   };
 }
