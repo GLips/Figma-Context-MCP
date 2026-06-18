@@ -1,5 +1,12 @@
 # figma-developer-mcp
 
+## [0.13.1](https://github.com/GLips/Figma-Context-MCP/compare/v0.13.0...v0.13.1) (2026-06-18)
+
+
+### Bug Fixes
+
+* drop redundant and auto-generated node names from serialized output ([#397](https://github.com/GLips/Figma-Context-MCP/issues/397)) ([b53727a](https://github.com/GLips/Figma-Context-MCP/commit/b53727ad7f4f870ae424f8f6817e9c29cd68cc63))
+
 ## [0.13.0](https://github.com/GLips/Figma-Context-MCP/compare/v0.12.0...v0.13.0) (2026-06-18)
 
 
