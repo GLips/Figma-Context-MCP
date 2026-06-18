@@ -267,10 +267,10 @@ function mapDiamondGradient(
 }
 
 /**
- * Convert a Figma gradient to CSS gradient syntax. The paint's overall
- * `opacity` is multiplied into each stop's own alpha (the two stack).
+ * Convert a Figma gradient to CSS gradient syntax.
  */
 export function convertGradientToCss(gradient: GradientPaint): string {
+  // The paint's overall opacity multiplies into each stop's own alpha (the two stack).
   const paintOpacity = gradient.opacity ?? 1;
 
   // Sort stops by position to ensure proper order
