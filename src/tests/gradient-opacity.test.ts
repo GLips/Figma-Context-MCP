@@ -42,4 +42,38 @@ describe("parsePaint — gradient paint opacity", () => {
   it("emits opaque stops when paint opacity is absent", () => {
     expect(gradientCss(undefined)).toContain("rgba(0, 0, 0, 1) 0%");
   });
+
+  // Paint opacity and a stop's intrinsic alpha are multiplicative, not either-or:
+  // a stop at alpha 0.4 under a 0.5-opacity paint resolves to 0.2.
+  it("multiplies paint opacity with a stop's intrinsic alpha", () => {
+    const paint = {
+      type: "GRADIENT_LINEAR",
+      opacity: 0.5,
+      gradientHandlePositions: [
+        { x: 0.5, y: 0 },
+        { x: 0.5, y: 1 },
+        { x: 1, y: 0 },
+      ],
+      gradientStops: [{ position: 0, color: { r: 0, g: 0, b: 0, a: 0.4 } }],
+    } as unknown as Paint;
+    const { gradient } = parsePaint(paint) as { gradient: string };
+    expect(gradient).toContain("rgba(0, 0, 0, 0.2)");
+  });
+
+  // Non-linear types route stop formatting through a different geometry mapper;
+  // confirm paint opacity reaches a radial gradient's stops too.
+  it("applies paint opacity to non-linear (radial) gradients", () => {
+    const paint = {
+      type: "GRADIENT_RADIAL",
+      opacity: 0.5,
+      gradientHandlePositions: [
+        { x: 0.5, y: 0.5 },
+        { x: 1, y: 0.5 },
+        { x: 0.5, y: 1 },
+      ],
+      gradientStops: [{ position: 0, color: { r: 0, g: 0, b: 0, a: 1 } }],
+    } as unknown as Paint;
+    const { gradient } = parsePaint(paint) as { gradient: string };
+    expect(gradient).toContain("rgba(0, 0, 0, 0.5)");
+  });
 });
