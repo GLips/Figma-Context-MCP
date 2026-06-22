@@ -6,12 +6,12 @@
     "url": "https://github.com/GLips/Figma-Context-MCP",
     "source": "github"
   },
-  "version": "0.6.4",
+  "version": "0.13.2",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "figma-developer-mcp",
-      "version": "0.6.4",
+      "version": "0.13.2",
       "transport": {
         "type": "stdio"
       },
