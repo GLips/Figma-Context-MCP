@@ -87,7 +87,8 @@ The server supports two transports (configured in `src/server.ts`):
 - `FIGMA_API_KEY` or `--figma-api-key` — Personal Access Token
 - `FIGMA_OAUTH_TOKEN` or `--figma-oauth-token` — OAuth Bearer token
 - `PORT` or `--port` — HTTP server port (default: 3333)
-- `--json` — Output JSON instead of YAML
+- `OUTPUT_FORMAT` or `--format` — Output format: `tree` (default), `yaml`, or `json`
+- `--json` — Back-compat alias for `--format=json`
 - `--skip-image-downloads` — Disable image download tool
 
 ### Path Alias
@@ -101,6 +102,12 @@ From CONTRIBUTING.md — important context for development:
 1. **Unix Philosophy** — Tools should have one job and few arguments. Keep tools simple to avoid confusing LLMs.
 2. **Focused Scope** — The server only handles "ingesting designs for AI consumption." Out of scope: image manipulation, CMS syncing, code generation, third-party integrations.
 3. **Project-level Config** — Options unlikely to change between requests should be CLI arguments, not tool parameters.
+
+## Token Efficiency
+
+The simplified output is consumed by LLMs, so every field costs context budget. Keep it lean:
+
+- Omit default values where LLMs can reliably infer the expectation without explicit data — emit only deviations. (e.g. `strokeAlign: INSIDE` matches the default CSS `border` an LLM already produces, so it is dropped; only `OUTSIDE`/`CENTER` are emitted.)
 
 ## Quality
 

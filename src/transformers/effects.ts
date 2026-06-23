@@ -6,6 +6,7 @@ import type {
 } from "@figma/rest-api-spec";
 import { formatRGBAColor } from "~/transformers/style.js";
 import { hasValue } from "~/utils/identity.js";
+import { pixelRound } from "~/utils/common.js";
 
 export type SimplifiedEffects = {
   boxShadow?: string;
@@ -29,16 +30,17 @@ export function buildSimplifiedEffects(n: FigmaDocumentNode): SimplifiedEffects 
 
   const boxShadow = [...dropShadows, ...innerShadows].join(", ");
 
-  // Handle blur effects - separate by CSS property
+  // Handle blur effects - separate by CSS property. A zero-radius blur is a
+  // no-op, so drop it entirely rather than emit a dead `blur(0px)`.
   // Layer blurs use the CSS 'filter' property
   const filterBlurValues = effects
-    .filter((e): e is BlurEffect => e.type === "LAYER_BLUR")
+    .filter((e): e is BlurEffect => e.type === "LAYER_BLUR" && e.radius > 0)
     .map(simplifyBlur)
     .join(" ");
 
   // Background blurs use the CSS 'backdrop-filter' property
   const backdropFilterValues = effects
-    .filter((e): e is BlurEffect => e.type === "BACKGROUND_BLUR")
+    .filter((e): e is BlurEffect => e.type === "BACKGROUND_BLUR" && e.radius > 0)
     .map(simplifyBlur)
     .join(" ");
 
@@ -66,5 +68,8 @@ function simplifyInnerShadow(effect: InnerShadowEffect) {
 }
 
 function simplifyBlur(effect: BlurEffect) {
-  return `blur(${effect.radius}px)`;
+  // Figma's blur radius is ~2x the CSS blur() radius — verified by direct CSS
+  // test and corroborated by Figma's own Dev Mode output (a Figma blur of 32
+  // renders as CSS blur(16px)). Halve it so the emitted value matches CSS.
+  return `blur(${pixelRound(effect.radius / 2)}px)`;
 }

@@ -6,7 +6,7 @@ import type {
   SimplifiedNode,
 } from "./types.js";
 import { buildSimplifiedLayout } from "~/transformers/layout.js";
-import { buildSimplifiedStrokes, parsePaint } from "~/transformers/style.js";
+import { buildSimplifiedStrokes, flattenSolidFills, parsePaint } from "~/transformers/style.js";
 import { buildSimplifiedEffects } from "~/transformers/effects.js";
 import {
   buildFormattedText,
@@ -20,8 +20,9 @@ import {
   simplifyPropertyDefinitions,
   simplifyPropertyReferences,
 } from "~/transformers/component.js";
-import { hasValue, isRectangleCornerRadii } from "~/utils/identity.js";
-import { generateVarId, isVisible, stableStringify } from "~/utils/common.js";
+import { hasAutoLayout, hasValue, isRectangleCornerRadii } from "~/utils/identity.js";
+import { isVisible, stableStringify } from "~/utils/common.js";
+import { createHash } from "node:crypto";
 import type { Node as FigmaDocumentNode } from "@figma/rest-api-spec";
 
 // Reverse lookup cache: serialized style value → varId.
@@ -64,7 +65,23 @@ function findOrCreateVar(globalVars: GlobalVars, value: StyleTypes, prefix: stri
   const existing = cache.get(key);
   if (existing) return existing;
 
-  const varId = generateVarId(prefix);
+  // Content-addressed id so the same value yields the same id across runs, making
+  // output byte-stable (the value→id cache already dedups within a single run).
+  const fullHash = createHash("sha1").update(key).digest("hex");
+
+  // Truncated-hash collision guard. The 8-hex slice (32 bits) keeps refs short but
+  // can alias two different style values. We reached here on a cache miss, so a
+  // taken slot means a genuine collision — reusing the id would overwrite the
+  // other value and every node referencing it would silently resolve to the wrong
+  // style. Lengthen this value's id until the slot is free. Deterministic because
+  // the walk order is stable, so the same file reproduces the same ids.
+  let length = 8;
+  let varId = `${prefix}_${fullHash.slice(0, length)}`;
+  while (globalVars.styles[varId] !== undefined && length < fullHash.length) {
+    length += 4;
+    varId = `${prefix}_${fullHash.slice(0, length)}`;
+  }
+
   globalVars.styles[varId] = value;
   cache.set(key, varId);
   return varId;
@@ -85,6 +102,9 @@ function registerStyle(
   if (styleMatch) {
     const styleKey = resolveStyleKey(context, styleMatch, value);
     context.globalVars.styles[styleKey] = value;
+    // Mark as a named style so the finalize pass keeps it hoisted even if only
+    // one node uses it — a named Figma style is design-system intent, not noise.
+    context.traversalState.namedStyleKeys.add(styleKey);
     return styleKey;
   }
   return findOrCreateVar(context.globalVars, value, prefix);
@@ -158,20 +178,29 @@ export const visualsExtractor: ExtractorFn = (node, result, context) => {
 
   // fills
   if (hasValue("fills", node) && Array.isArray(node.fills) && node.fills.length) {
-    const fills = node.fills
-      .filter(isVisible)
-      .map((fill) => parsePaint(fill, hasChildren))
-      .reverse();
+    const visibleFills = node.fills.filter(isVisible);
+    // An all-solid stack collapses to the single resolved color a viewer sees,
+    // removing the layer-order ambiguity that misleads LLM consumers. Mixed
+    // stacks (gradient/image/pattern or a non-normal blend) can't be folded and
+    // fall back to the per-paint array, reversed into CSS top-first order.
+    const flattened = flattenSolidFills(visibleFills);
+    const fills = flattened
+      ? [flattened]
+      : visibleFills.map((fill) => parsePaint(fill, hasChildren)).reverse();
     result.fills = registerStyle(node, context, fills, ["fill", "fills"], "fill");
   }
 
   // strokes
+  // Only the stroke color array is registered as a (potentially named) shared style.
+  // Figma named styles only apply to paint, not to stroke width / dashes / per-side
+  // weights, so those stay as plain sibling fields and are never deduplicated.
   const strokes = buildSimplifiedStrokes(node, hasChildren);
   if (strokes.colors.length) {
     result.strokes = registerStyle(node, context, strokes.colors, ["stroke", "strokes"], "fill");
     if (strokes.strokeWeight) result.strokeWeight = strokes.strokeWeight;
     if (strokes.strokeDashes) result.strokeDashes = strokes.strokeDashes;
     if (strokes.strokeWeights) result.strokeWeights = strokes.strokeWeights;
+    if (strokes.strokeAlign) result.strokeAlign = strokes.strokeAlign;
   }
 
   // effects
@@ -268,6 +297,9 @@ function getStyleMatch(
   return undefined;
 }
 
+// Figma style names aren't unique — a file can use a local style and an imported
+// library style that share a name (e.g., "Heading / Large"). Collapse same-name
+// same-value entries; disambiguate same-name different-value by appending the id.
 function resolveStyleKey(
   context: TraversalContext,
   styleMatch: StyleMatch,
@@ -311,9 +343,11 @@ export const layoutOnly = [layoutExtractor];
 
 /**
  * Node types that can be exported as SVG images.
- * When a FRAME, GROUP, INSTANCE, or BOOLEAN_OPERATION contains only these types, we can collapse
- * it to IMAGE-SVG. BOOLEAN_OPERATION is included because it's both a collapsible container AND
- * SVG-eligible as a child (boolean ops always produce vector output).
+ * When a collapsible container holds only these types, the container can be flattened to
+ * IMAGE-SVG. BOOLEAN_OPERATION is in both this set and the container set below because it's
+ * both collapsible AND SVG-eligible as a child (boolean ops always produce vector output).
+ *
+ * Tightly coupled to node-walker.ts, which renames VECTOR → IMAGE-SVG before this set is consulted.
  */
 export const SVG_ELIGIBLE_TYPES = new Set([
   "IMAGE-SVG", // VECTOR nodes are converted to IMAGE-SVG, or containers that were collapsed
@@ -325,11 +359,38 @@ export const SVG_ELIGIBLE_TYPES = new Set([
   "RECTANGLE",
 ]);
 
+/** Container node types eligible to collapse into a single IMAGE-SVG. */
+const COLLAPSIBLE_CONTAINER_TYPES = new Set(["FRAME", "GROUP", "INSTANCE", "BOOLEAN_OPERATION"]);
+
+/**
+ * Auto-layout signals authored structure — the spacing/arrangement of children is
+ * intentional, so we normally preserve the container even when all its children are
+ * SVG-eligible (charts, toolbars, layout test frames, swatch grids, tile mosaics).
+ * Above this many children, though, we assume the container is a decorative pattern
+ * (dotted backgrounds, noise grids) where the payload cost of preserving every leaf
+ * outweighs the structural value, and we collapse anyway.
+ *
+ * Applies to both flex (HORIZONTAL/VERTICAL) and GRID auto-layout, since both signal
+ * authored intent.
+ *
+ * Pivot point chosen empirically: real charts and structural displays rarely exceed ~10
+ * primitives; decorative patterns typically have many dozens. Tune if real-world output
+ * shows either category mis-classified.
+ */
+const SVG_COLLAPSE_AUTOLAYOUT_THRESHOLD = 10;
+
 /**
  * afterChildren callback that collapses SVG-heavy containers to IMAGE-SVG.
  *
- * If a FRAME, GROUP, INSTANCE, or BOOLEAN_OPERATION contains only SVG-eligible children, the parent
- * is marked as IMAGE-SVG and children are omitted, reducing payload size.
+ * Collapses when:
+ *   - container is a FRAME, GROUP, INSTANCE, or BOOLEAN_OPERATION
+ *   - all children are SVG-eligible types
+ *   - neither the node nor any direct child has an image fill
+ *   - container is NOT auto-layout, OR child count is past the decorative-pattern threshold
+ *
+ * The auto-layout carve-out preserves authored layouts (bar charts, button rows, swatch
+ * grids) that happen to bottom out in shape primitives. The count threshold reclaims
+ * payload for decorative patterns built with auto-layout (e.g., grids of dots).
  *
  * @param node - Original Figma node
  * @param result - SimplifiedNode being built
@@ -341,23 +402,19 @@ export function collapseSvgContainers(
   result: SimplifiedNode,
   children: SimplifiedNode[],
 ): SimplifiedNode[] {
-  const allChildrenAreSvgEligible = children.every((child) => SVG_ELIGIBLE_TYPES.has(child.type));
+  if (!COLLAPSIBLE_CONTAINER_TYPES.has(node.type)) return children;
+  // `type` is optional on SimplifiedNode only because post-walk template refs
+  // drop it; at afterChildren time (mid-walk) every child still has a type, so
+  // the `?? ""` is a type-level concession that never matches at runtime.
+  if (!children.every((child) => SVG_ELIGIBLE_TYPES.has(child.type ?? ""))) return children;
+  if (hasImageFillOnSelfOrDirectChildren(node)) return children;
 
-  if (
-    (node.type === "FRAME" ||
-      node.type === "GROUP" ||
-      node.type === "INSTANCE" ||
-      node.type === "BOOLEAN_OPERATION") &&
-    allChildrenAreSvgEligible &&
-    !hasImageFillInChildren(node)
-  ) {
-    // Collapse to IMAGE-SVG and omit children
-    result.type = "IMAGE-SVG";
-    return [];
+  if (hasAutoLayout(node) && children.length < SVG_COLLAPSE_AUTOLAYOUT_THRESHOLD) {
+    return children;
   }
 
-  // Include all children normally
-  return children;
+  result.type = "IMAGE-SVG";
+  return [];
 }
 
 /**
@@ -367,7 +424,7 @@ export function collapseSvgContainers(
  * if a deeper descendant has image fills, its parent won't collapse (stays FRAME),
  * and FRAME isn't SVG-eligible, so the chain breaks naturally at each level.
  */
-function hasImageFillInChildren(node: FigmaDocumentNode): boolean {
+function hasImageFillOnSelfOrDirectChildren(node: FigmaDocumentNode): boolean {
   if (hasValue("fills", node) && node.fills.some((fill) => fill.type === "IMAGE")) {
     return true;
   }

@@ -9,6 +9,7 @@ import {
   type Transport,
 } from "~/telemetry/index.js";
 import { getFigmaData as runGetFigmaData } from "~/services/get-figma-data.js";
+import type { OutputFormat } from "~/utils/serialize.js";
 
 const parameters = {
   fileKey: z
@@ -60,7 +61,7 @@ function formatCacheNotice(cachedAt: number, ttlMs: number): string {
 async function getFigmaData(
   params: GetFigmaDataParams,
   figmaService: FigmaService,
-  outputFormat: "yaml" | "json",
+  outputFormat: OutputFormat,
   transport: Transport,
   authMode: AuthMode,
   clientInfo: ClientInfo | undefined,
@@ -77,29 +78,29 @@ async function getFigmaData(
       } ${fileKey}`,
     );
 
-    let stopFetchHeartbeat: (() => void) | undefined;
-    let stopSimplifyHeartbeat: (() => void) | undefined;
+    let stopFetchHeartbeat: (() => Promise<void>) | undefined;
+    let stopSimplifyHeartbeat: (() => Promise<void>) | undefined;
 
     const result = await runGetFigmaData(figmaService, { fileKey, nodeId, depth }, outputFormat, {
       onFetchStart: async () => {
-        await sendProgress(extra, 0, 4, "Fetching design data from Figma API");
+        await sendProgress(extra, 0, 3, "Fetching design data from Figma API");
         stopFetchHeartbeat = startProgressHeartbeat(extra, "Waiting for Figma API response");
       },
-      onFetchComplete: () => {
-        stopFetchHeartbeat?.();
+      onFetchComplete: async () => {
+        await stopFetchHeartbeat?.();
       },
       onSimplifyStart: async (progress) => {
-        await sendProgress(extra, 1, 4, "Fetched design data, simplifying");
+        await sendProgress(extra, 1, 3, "Fetched design data, simplifying");
         stopSimplifyHeartbeat = startProgressHeartbeat(
           extra,
           () => `Simplifying design data (${progress.getNodeCount()} nodes processed)`,
         );
       },
-      onSimplifyComplete: () => {
-        stopSimplifyHeartbeat?.();
+      onSimplifyComplete: async () => {
+        await stopSimplifyHeartbeat?.();
       },
       onSerializeStart: async () => {
-        await sendProgress(extra, 2, 4, "Simplified design, serializing response");
+        await sendProgress(extra, 2, 3, "Simplified design, serializing response");
       },
       onComplete: (outcome) =>
         captureGetFigmaDataCall(outcome, { transport, authMode, clientInfo }),
@@ -111,7 +112,6 @@ async function getFigmaData(
     }
 
     Logger.log(`Successfully extracted data: ${result.metrics.simplifiedNodeCount} nodes`);
-    await sendProgress(extra, 3, 4, "Serialized, sending response");
     Logger.log("Sending result to client");
 
     return {

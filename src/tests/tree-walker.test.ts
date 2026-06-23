@@ -150,6 +150,38 @@ describe("extractFromDesign", () => {
     expect(colorEntries[0][0]).toMatch(/^fill_/);
   });
 
+  it("preserves non-default stroke alignment on the simplified node", async () => {
+    const node = makeNode({
+      id: "9:1",
+      name: "Card",
+      type: "FRAME",
+      strokes: [{ type: "SOLID", color: { r: 0.89, g: 0.9, b: 0.9, a: 1 }, visible: true }],
+      strokeWeight: 2,
+      strokeAlign: "OUTSIDE",
+    });
+
+    const { nodes } = await extractFromDesign([node], allExtractors);
+
+    expect(nodes[0].strokeAlign).toBe("OUTSIDE");
+    expect(nodes[0].strokeWeight).toBe("2px");
+  });
+
+  it("omits INSIDE stroke alignment, the CSS-border default consumers assume", async () => {
+    const node = makeNode({
+      id: "9:2",
+      name: "Card",
+      type: "FRAME",
+      strokes: [{ type: "SOLID", color: { r: 0.89, g: 0.9, b: 0.9, a: 1 }, visible: true }],
+      strokeWeight: 2,
+      strokeAlign: "INSIDE",
+    });
+
+    const { nodes } = await extractFromDesign([node], allExtractors);
+
+    expect(nodes[0].strokeAlign).toBeUndefined();
+    expect(nodes[0].strokeWeight).toBe("2px");
+  });
+
   it("disambiguates named styles when style names collide", async () => {
     const nodeA = makeNode({
       id: "7:1",
@@ -189,6 +221,180 @@ describe("extractFromDesign", () => {
       key.startsWith("Heading / Large"),
     );
     expect(styleKeys).toHaveLength(2);
+  });
+});
+
+describe("fill flattening", () => {
+  // Resolve a node's registered fills var back to its concrete value.
+  type Extracted = Awaited<ReturnType<typeof extractFromDesign>>;
+  function fillsValue(nodes: Extracted["nodes"], globalVars: Extracted["globalVars"]) {
+    return globalVars.styles[nodes[0].fills as string];
+  }
+
+  // Figma orders the fills array bottom-first, so index 0 is the backdrop and
+  // the last entry is the topmost layer.
+  it("composites an all-solid stack into a single resolved color", async () => {
+    const node = makeNode({
+      id: "f:1",
+      name: "Swatch",
+      type: "FRAME",
+      fills: [
+        { type: "SOLID", color: { r: 1, g: 1, b: 1, a: 1 }, visible: true }, // white backdrop
+        { type: "SOLID", color: { r: 0, g: 0, b: 0, a: 1 }, opacity: 0.2, visible: true }, // black @ 20%
+      ],
+    });
+
+    const { nodes, globalVars } = await extractFromDesign([node], allExtractors);
+
+    expect(fillsValue(nodes, globalVars)).toEqual(["#CCCCCC"]);
+  });
+
+  it("culls layers fully occluded by an opaque paint above them", async () => {
+    const node = makeNode({
+      id: "f:2",
+      name: "Swatch",
+      type: "FRAME",
+      fills: [
+        { type: "SOLID", color: { r: 0, g: 0, b: 1, a: 1 }, visible: true }, // blue backdrop
+        { type: "SOLID", color: { r: 1, g: 0, b: 0, a: 1 }, visible: true }, // opaque red on top
+      ],
+    });
+
+    const { nodes, globalVars } = await extractFromDesign([node], allExtractors);
+
+    // Only the opaque top color survives; the blue beneath contributes nothing.
+    expect(fillsValue(nodes, globalVars)).toEqual(["#FF0000"]);
+  });
+
+  it("folds both color.a and paint.opacity into the effective alpha", async () => {
+    const node = makeNode({
+      id: "f:6",
+      name: "Swatch",
+      type: "FRAME",
+      fills: [
+        { type: "SOLID", color: { r: 1, g: 1, b: 1, a: 1 }, visible: true }, // white backdrop
+        // black at color.a 0.5 × opacity 0.5 = 0.25 effective → 0.75 of white shows through
+        { type: "SOLID", color: { r: 0, g: 0, b: 0, a: 0.5 }, opacity: 0.5, visible: true },
+      ],
+    });
+
+    const { nodes, globalVars } = await extractFromDesign([node], allExtractors);
+
+    expect(fillsValue(nodes, globalVars)).toEqual(["#BFBFBF"]);
+  });
+
+  it("culls everything below a fully-opaque mid-stack paint, compositing only what's above", async () => {
+    const node = makeNode({
+      id: "f:7",
+      name: "Swatch",
+      type: "FRAME",
+      fills: [
+        { type: "SOLID", color: { r: 1, g: 0, b: 0, a: 1 }, visible: true }, // red (culled)
+        { type: "SOLID", color: { r: 0, g: 1, b: 0, a: 1 }, visible: true }, // opaque green
+        { type: "SOLID", color: { r: 0, g: 0, b: 1, a: 1 }, opacity: 0.5, visible: true }, // blue @ 50% on top
+      ],
+    });
+
+    const { nodes, globalVars } = await extractFromDesign([node], allExtractors);
+
+    // Red contributes nothing (opaque green above it); blue@50% blends over green → teal.
+    expect(fillsValue(nodes, globalVars)).toEqual(["#008080"]);
+  });
+
+  it("treats PASS_THROUGH blend as flattenable", async () => {
+    const node = makeNode({
+      id: "f:8",
+      name: "Swatch",
+      type: "FRAME",
+      fills: [
+        {
+          type: "SOLID",
+          color: { r: 1, g: 1, b: 1, a: 1 },
+          blendMode: "PASS_THROUGH",
+          visible: true,
+        },
+        {
+          type: "SOLID",
+          color: { r: 0, g: 0, b: 0, a: 1 },
+          opacity: 0.2,
+          blendMode: "PASS_THROUGH",
+          visible: true,
+        },
+      ],
+    });
+
+    const { nodes, globalVars } = await extractFromDesign([node], allExtractors);
+
+    expect(fillsValue(nodes, globalVars)).toEqual(["#CCCCCC"]);
+  });
+
+  it("emits rgba() when the composited stack is still translucent", async () => {
+    const node = makeNode({
+      id: "f:3",
+      name: "Swatch",
+      type: "FRAME",
+      fills: [
+        { type: "SOLID", color: { r: 1, g: 1, b: 1, a: 0.5 }, visible: true },
+        { type: "SOLID", color: { r: 0, g: 0, b: 0, a: 0.5 }, visible: true },
+      ],
+    });
+
+    const { nodes, globalVars } = await extractFromDesign([node], allExtractors);
+
+    expect(fillsValue(nodes, globalVars)).toEqual(["rgba(85, 85, 85, 0.75)"]);
+  });
+
+  it("leaves a stack untouched when it contains a gradient", async () => {
+    const node = makeNode({
+      id: "f:4",
+      name: "Swatch",
+      type: "FRAME",
+      fills: [
+        {
+          type: "GRADIENT_LINEAR",
+          visible: true,
+          gradientHandlePositions: [
+            { x: 0, y: 0 },
+            { x: 1, y: 1 },
+            { x: 0, y: 1 },
+          ],
+          gradientStops: [
+            { position: 0, color: { r: 1, g: 0, b: 0, a: 1 } },
+            { position: 1, color: { r: 0, g: 0, b: 1, a: 1 } },
+          ],
+        },
+        { type: "SOLID", color: { r: 0, g: 0, b: 0, a: 1 }, opacity: 0.2, visible: true },
+      ],
+    });
+
+    const { nodes, globalVars } = await extractFromDesign([node], allExtractors);
+
+    // Both layers survive, reversed into CSS top-first order: solid first, gradient last.
+    const value = fillsValue(nodes, globalVars) as unknown[];
+    expect(value).toHaveLength(2);
+    expect(value[0]).toBe("rgba(0, 0, 0, 0.2)");
+    expect((value[1] as { type: string }).type).toBe("GRADIENT_LINEAR");
+  });
+
+  it("leaves a stack untouched when any solid uses a non-normal blend mode", async () => {
+    const node = makeNode({
+      id: "f:5",
+      name: "Swatch",
+      type: "FRAME",
+      fills: [
+        { type: "SOLID", color: { r: 1, g: 1, b: 1, a: 1 }, visible: true },
+        {
+          type: "SOLID",
+          color: { r: 0, g: 0, b: 0, a: 0.2 },
+          blendMode: "MULTIPLY",
+          visible: true,
+        },
+      ],
+    });
+
+    const { nodes, globalVars } = await extractFromDesign([node], allExtractors);
+
+    expect(fillsValue(nodes, globalVars)).toHaveLength(2);
   });
 });
 
@@ -239,6 +445,81 @@ describe("collapseSvgContainers", () => {
 
     // The BOOLEAN_OPERATION collapses to IMAGE-SVG first (bottom-up),
     // then the FRAME sees all children are SVG-eligible and collapses too.
+    expect(nodes).toHaveLength(1);
+    expect(nodes[0].type).toBe("IMAGE-SVG");
+    expect(nodes[0].children).toBeUndefined();
+  });
+
+  // Auto-layout signals authored structure — the spacing between children is
+  // intentional, so we should preserve the container even when its children
+  // are all SVG-eligible (e.g., bar charts, button rows, layout test frames).
+  it("does not collapse an auto-layout frame whose children are all SVG-eligible", async () => {
+    const autoLayoutRow = makeNode({
+      id: "7:1",
+      name: "Bar Chart",
+      type: "FRAME",
+      clipsContent: false,
+      layoutMode: "HORIZONTAL",
+      itemSpacing: 8,
+      children: [
+        makeNode({ id: "7:2", name: "Bar 1", type: "RECTANGLE" }),
+        makeNode({ id: "7:3", name: "Bar 2", type: "RECTANGLE" }),
+        makeNode({ id: "7:4", name: "Bar 3", type: "RECTANGLE" }),
+      ],
+    });
+
+    const { nodes } = await extractFromDesign([autoLayoutRow], allExtractors, {
+      afterChildren: collapseSvgContainers,
+    });
+
+    expect(nodes).toHaveLength(1);
+    expect(nodes[0].type).toBe("FRAME");
+    expect(nodes[0].children).toHaveLength(3);
+  });
+
+  // Escape hatch for decorative patterns: enough leaf primitives that the
+  // payload cost outweighs the structural value (e.g., dotted backgrounds
+  // built from grids of ellipses).
+  it("collapses an auto-layout frame with many SVG-eligible children", async () => {
+    const dotRow = makeNode({
+      id: "8:1",
+      name: "Dot Row",
+      type: "FRAME",
+      clipsContent: false,
+      layoutMode: "HORIZONTAL",
+      itemSpacing: 4,
+      children: Array.from({ length: 20 }, (_, i) =>
+        makeNode({ id: `8:${i + 2}`, name: `Dot ${i}`, type: "ELLIPSE" }),
+      ),
+    });
+
+    const { nodes } = await extractFromDesign([dotRow], allExtractors, {
+      afterChildren: collapseSvgContainers,
+    });
+
+    expect(nodes).toHaveLength(1);
+    expect(nodes[0].type).toBe("IMAGE-SVG");
+    expect(nodes[0].children).toBeUndefined();
+  });
+
+  // Non-auto-layout container with shape children is the original target case:
+  // hand-drawn icons made of vector primitives. Must keep collapsing.
+  it("still collapses a non-auto-layout frame whose children are all SVG-eligible", async () => {
+    const iconFrame = makeNode({
+      id: "9:1",
+      name: "Icon",
+      type: "FRAME",
+      clipsContent: false,
+      children: [
+        makeNode({ id: "9:2", name: "Circle", type: "ELLIPSE" }),
+        makeNode({ id: "9:3", name: "Rect", type: "RECTANGLE" }),
+      ],
+    });
+
+    const { nodes } = await extractFromDesign([iconFrame], allExtractors, {
+      afterChildren: collapseSvgContainers,
+    });
+
     expect(nodes).toHaveLength(1);
     expect(nodes[0].type).toBe("IMAGE-SVG");
     expect(nodes[0].children).toBeUndefined();

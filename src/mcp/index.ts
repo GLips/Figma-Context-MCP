@@ -1,8 +1,9 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { FigmaService, type FigmaAuthOptions } from "../services/figma.js";
 import { Logger } from "../utils/logger.js";
-import { type AuthMode, type ClientInfo, type Transport } from "~/telemetry/index.js";
+import { authMode, type AuthMode, type ClientInfo, type Transport } from "~/telemetry/index.js";
 import type { FigmaCachingOptions } from "~/services/figma-file-cache.js";
+import type { OutputFormat } from "~/utils/serialize.js";
 import { installValidationRejectCapture } from "./validation-capture.js";
 import type { ToolExtra } from "./progress.js";
 import {
@@ -21,9 +22,9 @@ const serverInfo = {
 
 type ServerTransport = Extract<Transport, "stdio" | "http">;
 
-type CreateServerOptions = {
+export type CreateServerOptions = {
   transport: ServerTransport;
-  outputFormat?: "yaml" | "json";
+  outputFormat?: OutputFormat;
   skipImageDownloads?: boolean;
   imageDir?: string;
   caching?: FigmaCachingOptions;
@@ -33,7 +34,7 @@ function createServer(
   authOptions: FigmaAuthOptions,
   {
     transport,
-    outputFormat = "yaml",
+    outputFormat = "tree",
     skipImageDownloads = false,
     imageDir,
     caching,
@@ -41,7 +42,7 @@ function createServer(
 ) {
   const server = new McpServer(serverInfo);
   const figmaService = new FigmaService(authOptions, caching);
-  const authMode: AuthMode = authOptions.useOAuth ? "oauth" : "api_key";
+  const mode = authMode(authOptions);
 
   const getClientInfo = (): ClientInfo | undefined => {
     const info = server.server.getClientVersion();
@@ -51,14 +52,19 @@ function createServer(
 
   registerTools(server, figmaService, {
     transport,
-    authMode,
+    authMode: mode,
     outputFormat,
     skipImageDownloads,
     imageDir,
     getClientInfo,
   });
 
-  installValidationRejectCapture(server, { transport, authMode, getClientInfo });
+  installValidationRejectCapture(server, {
+    transport,
+    authMode: mode,
+    outputFormat,
+    getClientInfo,
+  });
 
   Logger.isHTTP = transport !== "stdio";
 
@@ -68,7 +74,7 @@ function createServer(
 type RegisterToolsOptions = {
   transport: ServerTransport;
   authMode: AuthMode;
-  outputFormat: "yaml" | "json";
+  outputFormat: OutputFormat;
   skipImageDownloads: boolean;
   imageDir?: string;
   getClientInfo: () => ClientInfo | undefined;

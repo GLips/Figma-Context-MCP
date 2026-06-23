@@ -4,6 +4,7 @@ import { isAbsolute, join, resolve as resolvePath } from "path";
 import type { FigmaAuthOptions } from "./services/figma.js";
 import type { FigmaCachingOptions } from "./services/figma-file-cache.js";
 import { resolveTelemetryEnabled } from "./telemetry/index.js";
+import { VALID_OUTPUT_FORMATS, isOutputFormat, type OutputFormat } from "./utils/serialize.js";
 
 export type Source = "cli" | "env" | "default";
 
@@ -19,6 +20,7 @@ export interface ServerFlags {
   port?: number;
   host?: string;
   json?: boolean;
+  format?: string;
   skipImageDownloads?: boolean;
   imageDir?: string;
   proxy?: string;
@@ -31,7 +33,7 @@ export interface ServerConfig {
   port: number;
   host: string;
   proxy: string | undefined;
-  outputFormat: "yaml" | "json";
+  outputFormat: OutputFormat;
   skipImageDownloads: boolean;
   imageDir: string;
   isStdioMode: boolean;
@@ -76,6 +78,21 @@ export function envBool(name: string): boolean | undefined {
   return undefined;
 }
 
+// Throws on invalid input so callers control how the failure surfaces — the
+// server entry point exits the process, but the `fetch` CLI command needs to
+// run its `finally` (telemetry shutdown) before exiting, which `process.exit`
+// would bypass.
+export function parseOutputFormat(
+  value: string | undefined,
+  source: string,
+): OutputFormat | undefined {
+  if (value === undefined) return undefined;
+  if (isOutputFormat(value)) return value;
+  throw new Error(
+    `Invalid ${source} value '${value}'. Expected one of: ${VALID_OUTPUT_FORMATS.join(", ")}`,
+  );
+}
+
 function maskApiKey(key: string): string {
   if (!key || key.length <= 4) return "****";
   return `****${key.slice(-4)}`;
@@ -101,14 +118,35 @@ export function resolveAuth(flags: {
     useOAuth,
   };
 
-  if (!auth.figmaApiKey && !auth.figmaOAuthToken) {
-    console.error(
-      "Either FIGMA_API_KEY or FIGMA_OAUTH_TOKEN is required (via CLI argument or .env file)",
-    );
-    process.exit(1);
-  }
-
   return auth;
+}
+
+/**
+ * Thrown for user-fixable input errors (missing credentials, missing file key,
+ * etc.). CLI entry points catch this and print the bare message with exit 1,
+ * distinct from unexpected crashes that get a "Failed to start server:" prefix
+ * and stack trace. Throwing (vs. process.exit) keeps validators pure and safe
+ * for library consumers of `~/mcp-server`.
+ */
+export class UsageError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "UsageError";
+  }
+}
+
+/**
+ * Fail fast when global credentials are required but missing. HTTP mode skips
+ * this check so it can accept per-request `X-Figma-Token` headers; stdio and
+ * the `fetch` CLI have no way to receive request-time auth and must have
+ * something resolvable at startup or they'd just defer the failure to the
+ * first tool call with a misleading "send X-Figma-Token" message.
+ */
+export function requireGlobalCredentials(auth: FigmaAuthOptions): void {
+  if (auth.figmaApiKey || auth.figmaOAuthToken) return;
+  throw new UsageError(
+    "Either FIGMA_API_KEY or FIGMA_OAUTH_TOKEN is required (via CLI argument or .env file)",
+  );
 }
 
 export function getServerConfig(flags: ServerFlags): ServerConfig {
@@ -133,11 +171,12 @@ export function getServerConfig(flags: ServerFlags): ServerConfig {
     process.cwd(),
   );
   const proxy = resolve(flags.proxy, envStr("FIGMA_PROXY"), undefined);
-  const outputFormat = resolve<"yaml" | "json">(
-    flags.json ? "json" : undefined,
-    envStr("OUTPUT_FORMAT") as "yaml" | "json" | undefined,
-    "yaml",
-  );
+  // --format wins; --json is a back-compat alias for --format=json. Invalid
+  // user-supplied values fail loudly at startup rather than silently coercing.
+  const formatFromFlag =
+    parseOutputFormat(flags.format, "--format") ?? (flags.json ? "json" : undefined);
+  const formatFromEnv = parseOutputFormat(envStr("OUTPUT_FORMAT"), "OUTPUT_FORMAT");
+  const outputFormat = resolve<OutputFormat>(formatFromFlag, formatFromEnv, "tree");
   const caching = resolve<FigmaCachingOptions | undefined>(
     undefined,
     parseCachingConfig(process.env.FIGMA_CACHING),
@@ -175,11 +214,13 @@ export function getServerConfig(flags: ServerFlags): ServerConfig {
         `- FIGMA_OAUTH_TOKEN: ${maskApiKey(auth.figmaOAuthToken)} (source: ${configSources.figmaOauthToken})`,
       );
       console.log("- Authentication Method: OAuth Bearer Token");
-    } else {
+    } else if (auth.figmaApiKey) {
       console.log(
         `- FIGMA_API_KEY: ${maskApiKey(auth.figmaApiKey)} (source: ${configSources.figmaApiKey})`,
       );
       console.log("- Authentication Method: Personal Access Token (X-Figma-Token)");
+    } else {
+      console.log("- Authentication Method: Per-request X-Figma-Token header");
     }
     console.log(`- FRAMELINK_PORT: ${port.value} (source: ${configSources.port})`);
     console.log(`- FRAMELINK_HOST: ${host.value} (source: ${configSources.host})`);

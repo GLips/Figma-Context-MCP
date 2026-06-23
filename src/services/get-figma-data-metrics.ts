@@ -54,15 +54,17 @@ export type GetFigmaDataMetrics = {
  * whose `colors` array holds fills. Used to classify simplified nodes as
  * "image nodes" via their `fills`/`strokes` key references.
  */
+function hasImageFill(fills: SimplifiedFill[]): boolean {
+  return fills.some(
+    (fill) =>
+      typeof fill === "object" &&
+      fill !== null &&
+      (fill.type === "IMAGE" || fill.type === "PATTERN"),
+  );
+}
+
 function collectImageStyleKeys(design: SimplifiedDesign): Set<string> {
   const keys = new Set<string>();
-  const hasImageFill = (fills: SimplifiedFill[]): boolean =>
-    fills.some(
-      (fill) =>
-        typeof fill === "object" &&
-        fill !== null &&
-        (fill.type === "IMAGE" || fill.type === "PATTERN"),
-    );
 
   for (const [key, value] of Object.entries(design.globalVars.styles)) {
     if (Array.isArray(value)) {
@@ -102,19 +104,27 @@ export function measureSimplifiedDesign(design: SimplifiedDesign): {
   let imageNodeCount = 0;
   let componentPropertyCount = 0;
 
+  // A template reference keeps no body of its own — type, fills, and strokes
+  // live in the shared element. Resolve through it so metrics stay accurate
+  // whether or not a node was deduplicated.
+  const isImageStyle = (value: SimplifiedNode["fills"]): boolean =>
+    typeof value === "string"
+      ? imageStyleKeys.has(value)
+      : Array.isArray(value) && hasImageFill(value);
+
   const walk = (node: SimplifiedNode, depth: number): void => {
     simplifiedNodeCount++;
     if (depth > maxDepth) maxDepth = depth;
-    if (node.type === "INSTANCE") instanceCount++;
-    if (node.type === "TEXT") textNodeCount++;
-    if (
-      (node.fills && imageStyleKeys.has(node.fills)) ||
-      (node.strokes && imageStyleKeys.has(node.strokes))
-    ) {
+    const body = node.template ? design.elements[node.template] : node;
+    if (body?.type === "INSTANCE") instanceCount++;
+    if (body?.type === "TEXT") textNodeCount++;
+    if (isImageStyle(body?.fills) || isImageStyle(body?.strokes)) {
       imageNodeCount++;
     }
-    if (node.componentProperties) {
-      componentPropertyCount += Object.keys(node.componentProperties).length;
+    // Read through `body`: a deduplicated instance keeps only id/name/template,
+    // so its componentProperties live in the shared element, not on the node.
+    if (body?.componentProperties) {
+      componentPropertyCount += Object.keys(body.componentProperties).length;
     }
     if (node.children) {
       for (const child of node.children) walk(child, depth + 1);

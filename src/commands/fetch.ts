@@ -1,14 +1,16 @@
 import { type Command, command } from "cleye";
-import { loadEnvFile, resolveAuth } from "~/config.js";
+import {
+  loadEnvFile,
+  parseOutputFormat,
+  resolveAuth,
+  requireGlobalCredentials,
+  UsageError,
+} from "~/config.js";
 import { FigmaService } from "~/services/figma.js";
 import { parseFigmaUrl } from "~/utils/figma-url.js";
-import {
-  initTelemetry,
-  captureGetFigmaDataCall,
-  shutdown,
-  type AuthMode,
-} from "~/telemetry/index.js";
+import { authMode, initTelemetry, captureGetFigmaDataCall, shutdown } from "~/telemetry/index.js";
 import { getFigmaData } from "~/services/get-figma-data.js";
+import type { OutputFormat } from "~/utils/serialize.js";
 
 export const fetchCommand: Command = command(
   {
@@ -30,7 +32,11 @@ export const fetchCommand: Command = command(
       },
       json: {
         type: Boolean,
-        description: "Output JSON instead of YAML",
+        description: "Output JSON instead of YAML. Back-compat alias for --format=json.",
+      },
+      format: {
+        type: String,
+        description: "Output format: yaml (default), json, or tree.",
       },
       figmaApiKey: {
         type: String,
@@ -66,6 +72,7 @@ async function run(
     nodeId?: string;
     depth?: number;
     json?: boolean;
+    format?: string;
     figmaApiKey?: string;
     figmaOauthToken?: string;
     env?: string;
@@ -89,12 +96,15 @@ async function run(
   }
 
   if (!fileKey) {
-    console.error("Either a Figma URL or --file-key is required");
-    process.exit(1);
+    throw new UsageError("Either a Figma URL or --file-key is required");
   }
 
   loadEnvFile(flags.env);
   const auth = resolveAuth(flags);
+  // The fetch CLI has no per-request credential channel (unlike HTTP mode).
+  // Fail fast so the user gets an actionable error instead of an HTTP-shaped
+  // one from `getAuthHeaders`.
+  requireGlobalCredentials(auth);
 
   // Initialize telemetry only after input validation succeeds, so every
   // captured event corresponds to an actual fetch attempt (not a usage error).
@@ -104,15 +114,21 @@ async function run(
     redactFromErrors: [auth.figmaApiKey, auth.figmaOAuthToken],
   });
 
-  const authMode: AuthMode = auth.useOAuth ? "oauth" : "api_key";
-  const outputFormat = flags.json ? "json" : "yaml";
+  const mode = authMode(auth);
+  // The fetch CLI stays yaml-by-default (unlike the MCP server, which defaults
+  // to tree): its output is piped into standard tooling (`> out.yaml`, `| jq`),
+  // where tree's bespoke indented format isn't parseable. Tree's token-efficiency
+  // win is for LLM consumers, not shell pipelines.
+  const outputFormat: OutputFormat =
+    parseOutputFormat(flags.format, "--format") ?? (flags.json ? "json" : "yaml");
 
   const result = await getFigmaData(
     new FigmaService(auth),
     { fileKey, nodeId, depth: flags.depth },
     outputFormat,
     {
-      onComplete: (outcome) => captureGetFigmaDataCall(outcome, { transport: "cli", authMode }),
+      onComplete: (outcome) =>
+        captureGetFigmaDataCall(outcome, { transport: "cli", authMode: mode }),
     },
   );
   console.log(result.formatted);

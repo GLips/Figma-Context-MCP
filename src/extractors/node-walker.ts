@@ -1,6 +1,7 @@
 import type { Node as FigmaDocumentNode } from "@figma/rest-api-spec";
 import { isVisible } from "~/utils/common.js";
 import { hasValue } from "~/utils/identity.js";
+import { computeGridChildOrder } from "~/transformers/layout.js";
 import type { Style } from "@figma/rest-api-spec";
 import type {
   ExtractorFn,
@@ -47,7 +48,7 @@ export async function extractFromDesign(
     globalVars,
     extraStyles,
     currentDepth: 0,
-    traversalState: { componentPropertyDefinitions: {}, tsCounter: 0 },
+    traversalState: { componentPropertyDefinitions: {}, tsCounter: 0, namedStyleKeys: new Set() },
     nodeCounter: options.nodeCounter ?? { count: 0 },
   };
 
@@ -109,8 +110,13 @@ async function processNodeWithExtractors(
 
     // Use the same pattern as the existing parseNode function
     if (hasValue("children", node) && node.children.length > 0) {
+      // Grid containers: emit children in grid-flow (anchor) order rather than
+      // Figma's z-order, so CSS auto-placement lands them in the right cells.
+      // See computeGridChildOrder for details.
+      const order = computeGridChildOrder(node) ?? node.children.map((_, i) => i);
       const children: SimplifiedNode[] = [];
-      for (const child of node.children) {
+      for (const idx of order) {
+        const child = node.children[idx];
         if (!shouldProcessNode(child, childContext, options)) continue;
         const processed = await processNodeWithExtractors(child, extractors, childContext, options);
         if (processed !== null) children.push(processed);

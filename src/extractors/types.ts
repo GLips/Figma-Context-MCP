@@ -53,6 +53,14 @@ export interface TraversalState {
    * content with short, readable identifiers.
    */
   tsCounter: number;
+  /**
+   * globalVars keys that correspond to named Figma styles (vs. auto-generated
+   * content-hash ids). The finalize pass keeps these hoisted even at a single
+   * use, because a named style encodes design-system intent worth surfacing.
+   * Collected during the walk because the post-walk pass can't otherwise tell a
+   * named-style key apart from an auto-generated one by inspection.
+   */
+  namedStyleKeys: Set<string>;
 }
 
 export interface TraversalOptions {
@@ -100,34 +108,60 @@ export interface SimplifiedDesign {
   components: Record<string, SimplifiedComponentDefinition>;
   componentSets: Record<string, SimplifiedComponentSetDefinition>;
   globalVars: GlobalVars;
+  /**
+   * Deduplicated element bodies, keyed by content hash (`EL-xxxxxxxx`). Populated
+   * by the finalize pass: when a node body (everything except id/name/children)
+   * appears 2+ times, it is emitted here once and each occurrence is replaced by
+   * a compact `template` reference. Empty when nothing repeats.
+   */
+  elements: Record<string, ElementBody>;
 }
+
+/**
+ * A node body with the per-instance keys removed. This is what gets hoisted into
+ * `SimplifiedDesign.elements` and referenced by `SimplifiedNode.template`. `type`
+ * is part of the body (it's intrinsic to the element), so a template reference
+ * carries no `type` of its own — consumers resolve it via the element entry.
+ */
+export type ElementBody = Omit<SimplifiedNode, "id" | "name" | "children" | "template">;
 
 export interface SimplifiedNode {
   id: string;
-  name: string;
-  type: string; // e.g. FRAME, TEXT, INSTANCE, RECTANGLE, etc.
+  // Always populated during simplification, but the serialization pass drops it
+  // when it is noise (auto-generated like `Rectangle 12`, or redundant with the
+  // node's `text`), so the output shape treats it as optional.
+  name?: string;
+  type?: string; // e.g. FRAME, TEXT, INSTANCE, RECTANGLE, etc. Absent on template refs (type lives in the element).
+  /**
+   * Reference into `SimplifiedDesign.elements`. When set, the node's body lives
+   * in the shared element and only id/name/children/template are kept here.
+   */
+  template?: string;
   // text
   text?: string;
-  textStyle?: string;
+  textStyle?: string | SimplifiedTextStyle;
   /**
    * The numeric font weight that `**bold**` inside `text` maps to. Only emitted
    * when a text node has per-character bold overrides heavier than its base
    * `style.fontWeight`, so the consumer knows how to realize markdown bold.
    */
   boldWeight?: number;
-  // appearance
-  fills?: string;
+  // appearance — each style field holds either a globalVars reference (when the
+  // value is shared by 2+ nodes or is a named Figma style) or the inline value
+  // itself (single-use values, after the finalize pass).
+  fills?: string | SimplifiedFill[];
   styles?: string;
-  strokes?: string;
+  strokes?: string | SimplifiedFill[];
   // Non-stylable stroke properties are kept on the node when stroke uses a named color style
   strokeWeight?: string;
   strokeDashes?: number[];
   strokeWeights?: string;
-  effects?: string;
+  strokeAlign?: "INSIDE" | "OUTSIDE" | "CENTER";
+  effects?: string | SimplifiedEffects;
   opacity?: number;
   borderRadius?: string;
   // layout & alignment
-  layout?: string;
+  layout?: string | SimplifiedLayout;
   componentId?: string;
   componentProperties?: Record<string, boolean | string>;
   componentPropertyReferences?: Record<string, string>;
