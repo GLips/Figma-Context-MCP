@@ -156,6 +156,9 @@ export function countNamedStyles(raw: GetFileResponse | GetFileNodesResponse): n
   }
   const seen = new Set<string>();
   for (const entry of Object.values(raw.nodes)) {
+    // A null entry is a requested node the API couldn't resolve (partial miss);
+    // it carries no styles. parseAPIResponse skips these, so metrics must too.
+    if (entry === null) continue;
     for (const id of Object.keys(entry.styles ?? {})) seen.add(id);
   }
   return seen.size;
@@ -169,8 +172,12 @@ export function countNamedStyles(raw: GetFileResponse | GetFileNodesResponse): n
  * presence signal. Walking inline Paint/effect structs would be redundant.
  */
 export function detectVariables(raw: GetFileResponse | GetFileNodesResponse): boolean {
+  // Null entries are requested nodes the API couldn't resolve (partial miss);
+  // skip them rather than dereferencing .document on null.
   const roots: Node[] =
-    "document" in raw ? [raw.document] : Object.values(raw.nodes).map((entry) => entry.document);
+    "document" in raw
+      ? [raw.document]
+      : Object.values(raw.nodes).flatMap((entry) => (entry === null ? [] : [entry.document]));
 
   const visit = (node: Node): boolean => {
     if (
