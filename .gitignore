@@ -47,3 +47,8 @@ Thumbs.db
 
 # Local experiment scratchpad
 /trials/
+
+.mcp.json
+advisor-plans/
+.tk
+scripts/
