@@ -35,7 +35,15 @@
     "onlyBuiltDependencies": [
       "esbuild",
       "lefthook"
-    ]
+    ],
+    "overrides": {
+      "express-rate-limit": ">=8.2.2",
+      "path-to-regexp": ">=8.4.0",
+      "fast-uri": ">=3.1.2 <4",
+      "hono": ">=4.12.25",
+      "@hono/node-server": ">=1.19.13 <2",
+      "qs": ">=6.15.2"
+    }
   },
   "repository": {
     "type": "git",
@@ -61,10 +69,10 @@
     "cross-env": "^7.0.3",
     "dotenv": "^16.4.7",
     "express": "^5.2.1",
-    "js-yaml": "^4.1.1",
+    "js-yaml": "^4.2.0",
     "posthog-node": "^5.29.2",
     "remeda": "^2.20.1",
-    "undici": "^7.25.0",
+    "undici": "^7.28.0",
     "zod": "^3.25.76"
   },
   "devDependencies": {
