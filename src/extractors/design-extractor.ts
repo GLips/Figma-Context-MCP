@@ -63,12 +63,32 @@ function parseAPIResponse(data: GetFileResponse | GetFileNodesResponse) {
   let nodesToParse: Array<FigmaDocumentNode>;
 
   if ("nodes" in data) {
-    // GetFileNodesResponse
-    const [nodeId, nodeData] = Object.entries(data.nodes)[0];
-    if (nodeData === null) {
+    // GetFileNodesResponse — may contain multiple requested nodes when the
+    // caller passed comma-separated ids. Aggregate every node the API returned;
+    // a null entry is a node the API couldn't resolve (deleted/inaccessible/
+    // wrong file) and is skipped. Only error if NONE resolved — that's the
+    // "not found" case the single-node path used to handle.
+    const documents: FigmaDocumentNode[] = [];
+    const missingNodeIds: string[] = [];
+    for (const [nodeId, nodeData] of Object.entries(data.nodes)) {
+      if (nodeData === null) {
+        missingNodeIds.push(nodeId);
+        continue;
+      }
+      Object.assign(aggregatedComponents, nodeData.components);
+      Object.assign(aggregatedComponentSets, nodeData.componentSets);
+      if (nodeData.styles) {
+        Object.assign(extraStyles, nodeData.styles);
+      }
+      documents.push(nodeData.document);
+    }
+
+    if (documents.length === 0) {
+      const requested = Object.keys(data.nodes);
+      const idList = (requested.length ? requested : ["(none returned)"]).join(", ");
       tagError(
         new Error(
-          `Node ${nodeId} was not found in the Figma file. Likely causes: ` +
+          `No requested nodes were found in the Figma file (${idList}). Likely causes: ` +
             `(1) The source URL was a /proto/, /figjam/, /slides/, /board/, or /deck/ link — ` +
             `only /design/ and /file/ URLs are supported by the Figma REST API. ` +
             `(2) The node is inside a Figma branch — branches have their own fileKey ` +
@@ -80,12 +100,7 @@ function parseAPIResponse(data: GetFileResponse | GetFileNodesResponse) {
       );
     }
 
-    Object.assign(aggregatedComponents, nodeData.components);
-    Object.assign(aggregatedComponentSets, nodeData.componentSets);
-    if (nodeData.styles) {
-      Object.assign(extraStyles, nodeData.styles);
-    }
-    nodesToParse = [nodeData.document];
+    nodesToParse = documents;
   } else {
     // GetFileResponse
     Object.assign(aggregatedComponents, data.components);

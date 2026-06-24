@@ -21,12 +21,12 @@ const parameters = {
   nodeId: z
     .string()
     .regex(
-      /^I?\d+[:|-]\d+(?:;\d+[:|-]\d+)*$/,
-      "Node ID must be like '1234:5678' or 'I5666:180910;1:10515;1:10336'",
+      /^I?\d+[:|-]\d+(?:;\d+[:|-]\d+)*(?:,I?\d+[:|-]\d+(?:;\d+[:|-]\d+)*)*$/,
+      "Node ID must be like '1234:5678', a semicolon-joined instance path, or a comma-separated list of these",
     )
     .optional()
     .describe(
-      "The ID of the node to fetch, often found as URL parameter node-id=<nodeId>, always use if provided. Use format '1234:5678' for a standard node, or 'I5666:180910;1:10515;1:10336' for a deeply nested instance node (the semicolon-joined path represents the instance override chain — it's still a single node ID, not multiple nodes).",
+      "The ID(s) of the node(s) to fetch, often found as the URL parameter node-id=<nodeId>; always use if provided. Use '1234:5678' for a standard node. A semicolon-joined value like 'I5666:180910;1:10515;1:10336' is a SINGLE deeply-nested instance node (the override chain), not multiple nodes. To fetch MULTIPLE top-level nodes in one call, comma-separate their ids, e.g. '1:2,3:4'.",
     ),
   depth: z
     .number()
