@@ -20,8 +20,8 @@ Please report security vulnerabilities responsibly.
 ## Supported Versions
 
 | Version | Supported |
-|---------|:---------:|
-| Latest  | ✅        |
+| ------- | :-------: |
+| Latest  |    ✅     |
 
 ## MCP Security Best Practices
 

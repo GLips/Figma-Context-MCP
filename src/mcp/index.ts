@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { FigmaService, type FigmaAuthOptions } from "../services/figma.js";
 import { Logger } from "../utils/logger.js";
 import { authMode, type AuthMode, type ClientInfo, type Transport } from "~/telemetry/index.js";
+import type { FigmaCachingOptions } from "~/services/figma-file-cache.js";
 import type { OutputFormat } from "~/utils/serialize.js";
 import { installValidationRejectCapture } from "./validation-capture.js";
 import type { ToolExtra } from "./progress.js";
@@ -26,14 +27,21 @@ export type CreateServerOptions = {
   outputFormat?: OutputFormat;
   skipImageDownloads?: boolean;
   imageDir?: string;
+  caching?: FigmaCachingOptions;
 };
 
 function createServer(
   authOptions: FigmaAuthOptions,
-  { transport, outputFormat = "tree", skipImageDownloads = false, imageDir }: CreateServerOptions,
+  {
+    transport,
+    outputFormat = "tree",
+    skipImageDownloads = false,
+    imageDir,
+    caching,
+  }: CreateServerOptions,
 ) {
   const server = new McpServer(serverInfo);
-  const figmaService = new FigmaService(authOptions);
+  const figmaService = new FigmaService(authOptions, caching);
   const mode = authMode(authOptions);
 
   const getClientInfo = (): ClientInfo | undefined => {

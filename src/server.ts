@@ -56,9 +56,6 @@ export async function startServer(config: ServerConfig): Promise<void> {
   });
 
   if (telemetryEnabled) {
-    // stderr (not Logger.log) because in HTTP mode Logger.log writes to stdout,
-    // and in stdio mode stdout is reserved for MCP protocol messages. stderr
-    // is safe in both modes.
     process.stderr.write(
       "Usage telemetry enabled. Disable: FRAMELINK_TELEMETRY=off or DO_NOT_TRACK=1\n",
     );
@@ -69,6 +66,7 @@ export async function startServer(config: ServerConfig): Promise<void> {
     outputFormat: config.outputFormat,
     skipImageDownloads: config.skipImageDownloads,
     imageDir: config.imageDir,
+    caching: config.caching,
   };
 
   if (config.isStdioMode) {
@@ -99,22 +97,11 @@ export async function startServer(config: ServerConfig): Promise<void> {
   }
 }
 
-/**
- * Register SIGINT + SIGTERM handlers that run mode-specific cleanup and then
- * flush telemetry before exiting. MCP hosts commonly send SIGTERM, so both
- * signals must be handled in both transport modes.
- *
- * Idempotent: if both signals fire (or a signal fires twice) the second
- * invocation is ignored so we never double-shutdown.
- */
 function registerShutdownHandlers(onShutdown: () => Promise<void>): void {
   let shuttingDown = false;
   const handle = async () => {
     if (shuttingDown) return;
     shuttingDown = true;
-    // onShutdown may throw (e.g. stopHttpServer failures); telemetry.shutdown
-    // swallows its own errors (see src/telemetry/client.ts). Use try/finally
-    // so process.exit(0) always runs regardless of onShutdown failure.
     try {
       await onShutdown();
     } finally {
@@ -169,17 +156,12 @@ export async function startHttpServer(
     res.status(405).set("Allow", "POST").send("Method Not Allowed");
   };
 
-  // Mount stateless StreamableHTTP on both /mcp and /sse.
-  // Serving StreamableHTTP at /sse lets existing client configs keep working —
-  // modern MCP clients probe with a POST before falling back to SSE.
   for (const path of ["/mcp", "/sse"]) {
     app.post(path, handlePost);
     app.get(path, handleMethodNotAllowed);
     app.delete(path, handleMethodNotAllowed);
   }
 
-  // Express 5 forwards rejected promises from async handlers here.
-  // Return a JSON-RPC error instead of Express's default HTML 500.
   app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
     Logger.log("Unhandled error:", err);
     if (!res.headersSent) {
@@ -250,7 +232,6 @@ export async function stopHttpServer(): Promise<void> {
     throw new Error("HTTP server is not running");
   }
 
-  // Gracefully close all active MCP connections before tearing down the server
   for (const conn of activeConnections) {
     await conn.transport.close();
     await conn.server.close();

@@ -1,5 +1,5 @@
 import type { GetFileResponse, GetFileNodesResponse } from "@figma/rest-api-spec";
-import { FigmaService } from "~/services/figma.js";
+import { FigmaService, type CacheInfo } from "~/services/figma.js";
 import {
   simplifyRawFigmaObject,
   allExtractors,
@@ -27,6 +27,7 @@ export type GetFigmaDataInput = {
 export type GetFigmaDataResult = {
   formatted: string;
   metrics: GetFigmaDataMetrics;
+  cacheInfo?: CacheInfo;
 };
 
 export type GetFigmaDataOutcome = {
@@ -86,7 +87,11 @@ export async function getFigmaData(
 
   try {
     await hooks.onFetchStart?.();
-    let rawResult: { data: GetFileResponse | GetFileNodesResponse; rawSize: number };
+    let rawResult: {
+      data: GetFileResponse | GetFileNodesResponse;
+      rawSize: number;
+      cacheInfo?: CacheInfo;
+    };
     const fetchStart = Date.now();
     try {
       if (nodeId) {
@@ -154,7 +159,7 @@ export async function getFigmaData(
       simplifyMs,
       serializeMs,
     };
-    return { formatted, metrics };
+    return { formatted, metrics, cacheInfo: rawResult.cacheInfo };
   } catch (error) {
     caughtError = error;
     throw error;
