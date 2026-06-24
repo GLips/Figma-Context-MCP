@@ -3,6 +3,8 @@ import { simplifyRawFigmaObject } from "~/extractors/design-extractor.js";
 import { allExtractors } from "~/extractors/built-in.js";
 import { getFigmaDataTool } from "~/mcp/tools/get-figma-data-tool.js";
 import { countNamedStyles, detectVariables } from "~/services/get-figma-data-metrics.js";
+import { wrapForSerialization } from "~/utils/serializable-design.js";
+import { serializeAsTree } from "~/utils/serialize-tree.js";
 import { getErrorMeta } from "~/utils/error-meta.js";
 import type { GetFileNodesResponse, Node as FigmaNode, Style } from "@figma/rest-api-spec";
 
@@ -49,7 +51,7 @@ describe("multi-node GetFileNodesResponse handling", () => {
     expect(result.nodes.map((n) => n.id)).toEqual(["1:2", "3:4"]);
   });
 
-  it("skips null entries and resolves with just the found nodes", async () => {
+  it("skips null entries and surfaces the missing ids on the result", async () => {
     const response = makeNodesResponse({
       "1:2": { document: makeNode({ id: "1:2", name: "Frame A", type: "FRAME" }) },
       "9:9": null,
@@ -59,6 +61,19 @@ describe("multi-node GetFileNodesResponse handling", () => {
 
     expect(result.nodes).toHaveLength(1);
     expect(result.nodes[0].name).toBe("Frame A");
+    // Partial miss is reported back, not swallowed — the LLM must know the
+    // result is incomplete.
+    expect(result.missingNodeIds).toEqual(["9:9"]);
+  });
+
+  it("omits missingNodeIds entirely when every requested node resolved", async () => {
+    const response = makeNodesResponse({
+      "1:2": { document: makeNode({ id: "1:2", name: "Frame A", type: "FRAME" }) },
+    });
+
+    const result = await simplifyRawFigmaObject(response, allExtractors);
+
+    expect(result).not.toHaveProperty("missingNodeIds");
   });
 
   it("rejects with a not_found error when every requested node is null", async () => {
@@ -173,6 +188,33 @@ describe("metrics tolerate null node entries (partial miss)", () => {
   it("detectVariables ignores the null entry", () => {
     expect(() => detectVariables(response)).not.toThrow();
     expect(detectVariables(response)).toBe(true);
+  });
+});
+
+describe("partial-miss warning reaches serialized output", () => {
+  it("renders a MISSING_NODES line in the tree format on a partial miss", async () => {
+    const response = makeNodesResponse({
+      "1:2": { document: makeNode({ id: "1:2", name: "Frame A", type: "FRAME" }) },
+      "9:9": null,
+    });
+
+    const tree = serializeAsTree(
+      wrapForSerialization(await simplifyRawFigmaObject(response, allExtractors)),
+    );
+
+    expect(tree).toContain("MISSING_NODES: 9:9");
+  });
+
+  it("emits no MISSING_NODES line when the fetch is complete", async () => {
+    const response = makeNodesResponse({
+      "1:2": { document: makeNode({ id: "1:2", name: "Frame A", type: "FRAME" }) },
+    });
+
+    const tree = serializeAsTree(
+      wrapForSerialization(await simplifyRawFigmaObject(response, allExtractors)),
+    );
+
+    expect(tree).not.toContain("MISSING_NODES");
   });
 });
 

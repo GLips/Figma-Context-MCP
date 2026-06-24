@@ -26,8 +26,9 @@ export async function simplifyRawFigmaObject(
     parseAPIResponse(apiResponse);
 
   // Partial miss: some requested ids didn't resolve but others did. We proceed
-  // with what we have (see parseAPIResponse) and surface the gap here rather than
-  // failing the whole call — the caller asked for several roots and most came back.
+  // with what we have (see parseAPIResponse) rather than failing the whole call —
+  // the caller asked for several roots and most came back. The gap is logged for
+  // operators and carried into the result below so the LLM caller sees it too.
   if (missingNodeIds.length > 0) {
     Logger.log(
       `Skipped ${missingNodeIds.length} unresolved node id(s): ${missingNodeIds.join(", ")}`,
@@ -60,6 +61,8 @@ export async function simplifyRawFigmaObject(
       componentSets,
       traversalState.componentPropertyDefinitions,
     ),
+    // Only present on a partial miss, so the common case pays no tokens for it.
+    ...(missingNodeIds.length > 0 ? { missingNodeIds } : {}),
     globalVars,
     elements,
   };
