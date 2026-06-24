@@ -107,6 +107,13 @@ export interface SimplifiedDesign {
   nodes: SimplifiedNode[];
   components: Record<string, SimplifiedComponentDefinition>;
   componentSets: Record<string, SimplifiedComponentSetDefinition>;
+  /**
+   * Requested node ids the Figma API returned as null (deleted/inaccessible/
+   * wrong file) on a multi-node fetch where at least one other node resolved.
+   * Surfaced so the LLM caller knows the result is partial rather than silently
+   * acting on an incomplete design. Omitted entirely when nothing was missing.
+   */
+  missingNodeIds?: string[];
   globalVars: GlobalVars;
   /**
    * Deduplicated element bodies, keyed by content hash (`EL-xxxxxxxx`). Populated

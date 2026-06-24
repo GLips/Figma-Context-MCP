@@ -23,6 +23,13 @@ export function serializeAsTree(design: SerializableDesign): string {
   // whitespace, which would otherwise produce a malformed `NAME: foo: bar` line.
   sections.push(`NAME: ${quote(design.metadata.name)}`);
 
+  // Partial-miss warning: requested nodes the API couldn't resolve. Present only
+  // on a multi-node fetch where some ids resolved and some didn't, so the LLM
+  // doesn't treat a partial result as complete.
+  if (design.metadata.missingNodeIds && design.metadata.missingNodeIds.length > 0) {
+    sections.push(`MISSING_NODES: ${design.metadata.missingNodeIds.join(", ")}`);
+  }
+
   if (Object.keys(design.globalVars.styles).length > 0) {
     sections.push(`\nGLOBAL_VARS:\n${dumpYaml(design.globalVars.styles)}`);
   }

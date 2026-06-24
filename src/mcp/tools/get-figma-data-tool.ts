@@ -11,6 +11,13 @@ import {
 import { getFigmaData as runGetFigmaData } from "~/services/get-figma-data.js";
 import type { OutputFormat } from "~/utils/serialize.js";
 
+// One Figma node id: the API colon form "1234:5678", the URL dash form
+// "1234-5678", or a semicolon-joined instance-override path
+// "I5666:180910;1:10515;1:10336" (still a SINGLE node). Built from a single-id
+// sub-pattern so the comma-separated list grammar below stays readable.
+const SINGLE_NODE_ID = String.raw`I?\d+(?::|-)\d+(?:;\d+(?::|-)\d+)*`;
+const NODE_ID_LIST = new RegExp(String.raw`^${SINGLE_NODE_ID}(?:,${SINGLE_NODE_ID})*$`);
+
 const parameters = {
   fileKey: z
     .string()
@@ -21,12 +28,12 @@ const parameters = {
   nodeId: z
     .string()
     .regex(
-      /^I?\d+[:|-]\d+(?:;\d+[:|-]\d+)*$/,
-      "Node ID must be like '1234:5678' or 'I5666:180910;1:10515;1:10336'",
+      NODE_ID_LIST,
+      "Node ID must be like '1234:5678', a semicolon-joined instance path, or a comma-separated list of these",
     )
     .optional()
     .describe(
-      "The ID of the node to fetch, often found as URL parameter node-id=<nodeId>, always use if provided. Use format '1234:5678' for a standard node, or 'I5666:180910;1:10515;1:10336' for a deeply nested instance node (the semicolon-joined path represents the instance override chain — it's still a single node ID, not multiple nodes).",
+      "The ID(s) of the node(s) to fetch, often found as the URL parameter node-id=<nodeId>; always use if provided. Use '1234:5678' for a standard node. A semicolon-joined value like 'I5666:180910;1:10515;1:10336' is a SINGLE deeply-nested instance node (the override chain), not multiple nodes. To fetch MULTIPLE top-level nodes in one call, comma-separate their ids, e.g. '1:2,3:4'.",
     ),
   depth: z
     .number()
