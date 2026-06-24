@@ -1,5 +1,12 @@
 # figma-developer-mcp
 
+## [0.13.3](https://github.com/GLips/Figma-Context-MCP/compare/v0.13.2...v0.13.3) (2026-06-24)
+
+
+### Bug Fixes
+
+* use canonical style comparison and guard aspect-ratio divide-by-zero ([#402](https://github.com/GLips/Figma-Context-MCP/issues/402)) ([c083d65](https://github.com/GLips/Figma-Context-MCP/commit/c083d65c7e002923e7cb98f4e3bdafb105e90f6d))
+
 ## [0.13.2](https://github.com/GLips/Figma-Context-MCP/compare/v0.13.1...v0.13.2) (2026-06-18)
 
 
