@@ -307,7 +307,7 @@ function resolveStyleKey(
 ): string {
   const existing = context.globalVars.styles[styleMatch.name];
   if (!existing) return styleMatch.name;
-  if (JSON.stringify(existing) === JSON.stringify(value)) return styleMatch.name;
+  if (stableStringify(existing) === stableStringify(value)) return styleMatch.name;
 
   return `${styleMatch.name} (${styleMatch.id})`;
 }

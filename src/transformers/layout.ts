@@ -163,7 +163,7 @@ function buildSimplifiedLayoutValues(
 
     // Preserves historical behavior: aspectRatio is emitted only for
     // column-parent children. Likely should apply more broadly — pre-existing.
-    if (axis === "column" && n.preserveRatio) {
+    if (axis === "column" && n.preserveRatio && n.absoluteBoundingBox.height !== 0) {
       dimensions.aspectRatio = n.absoluteBoundingBox.width / n.absoluteBoundingBox.height;
     }
 

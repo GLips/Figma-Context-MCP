@@ -760,3 +760,34 @@ describe("grid layout", () => {
     });
   });
 });
+
+describe("aspectRatio zero-height guard", () => {
+  // A zero-height column child would divide width/0 and emit aspectRatio:Infinity
+  // into the LLM-facing output. The guard drops the field rather than emit a
+  // value no consumer can use.
+  // A non-auto-layout parent so the child's own column mode drives the axis.
+  const parent = makeFrame({
+    layoutMode: "NONE",
+    absoluteBoundingBox: { x: 0, y: 0, width: 100, height: 100 },
+  });
+  const columnChild = (height: number) =>
+    makeFrame({
+      layoutMode: "VERTICAL",
+      preserveRatio: true,
+      layoutSizingHorizontal: "FIXED",
+      layoutSizingVertical: "FIXED",
+      absoluteBoundingBox: { x: 0, y: 0, width: 100, height },
+    });
+
+  test("does not emit aspectRatio for a column child with zero height", () => {
+    const result = buildSimplifiedLayout(columnChild(0), parent);
+
+    expect(result.dimensions?.aspectRatio).toBeUndefined();
+  });
+
+  test("still emits aspectRatio for a column child with non-zero height", () => {
+    const result = buildSimplifiedLayout(columnChild(50), parent);
+
+    expect(result.dimensions?.aspectRatio).toBe(2);
+  });
+});
