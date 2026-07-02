@@ -469,7 +469,6 @@ function classifyRun(
 ): Classification {
   const c: Classification = { isBold: false, isItalic: false, isStrike: false };
   const refDelta: SimplifiedTextStyle = {};
-  let hasRefProps = false;
 
   const baseWeight = baseStyle.fontWeight ?? 400;
   const baseItalic = baseStyle.italic === true;
@@ -491,13 +490,11 @@ function classifyRun(
           // delta so the consumer can realize the actual weight.
           if (boldWeight !== undefined && w !== boldWeight) {
             refDelta.fontWeight = w;
-            hasRefProps = true;
           }
         } else {
           // Lighter-than-base override — markdown can't remove bold, so emit
           // the explicit weight in the delta.
           refDelta.fontWeight = w;
-          hasRefProps = true;
         }
         break;
       }
@@ -508,7 +505,6 @@ function classifyRun(
         } else if (!italic && baseItalic) {
           // Inverse override: a non-italic span on an italic base.
           refDelta.fontStyle = "normal";
-          hasRefProps = true;
         }
         break;
       }
@@ -522,17 +518,14 @@ function classifyRun(
           // only strikethrough, matching the designer's intent.
           if (baseDecoration === "UNDERLINE") {
             refDelta.textDecoration = "line-through";
-            hasRefProps = true;
           }
         } else if (td === "UNDERLINE") {
           refDelta.textDecoration = "underline";
-          hasRefProps = true;
         } else if (td === "NONE" && baseDecoration) {
           // Inverse override: the base had decoration and this run removes
           // it. Markdown can't express decoration removal, so emit an
           // explicit "none" the consumer can use to suppress the inherited base.
           refDelta.textDecoration = "none";
-          hasRefProps = true;
         }
         break;
       }
@@ -544,21 +537,18 @@ function classifyRun(
           // NODE hyperlinks have no markdown equivalent — carry through in the
           // delta so the consumer can at least see the link.
           refDelta.hyperlink = link;
-          hasRefProps = true;
         }
         break;
       }
       case "fills": {
-        const color = foldRunColor((value as SnapshotPaint[]).filter(isVisible));
+        const color = foldRunColor(value as SnapshotPaint[]);
         if (color !== undefined) {
           refDelta.color = color;
-          hasRefProps = true;
         }
         break;
       }
       case "fontFamily": {
         refDelta.fontFamily = value as string;
-        hasRefProps = true;
         break;
       }
       case "fontStyle": {
@@ -566,19 +556,16 @@ function classifyRun(
         // informational — italic/fontWeight carry the actual visual data.
         // Pass through so the consumer sees the exact variant name.
         refDelta.fontVariantName = value as string;
-        hasRefProps = true;
         break;
       }
       case "fontSize": {
         refDelta.fontSize = value as number;
-        hasRefProps = true;
         break;
       }
       case "letterSpacing": {
         const ls = value as number;
         if (ls && effectiveFontSize) {
           refDelta.letterSpacing = `${emRound(ls / effectiveFontSize)}em`;
-          hasRefProps = true;
         }
         break;
       }
@@ -601,52 +588,35 @@ function classifyRun(
         const formatted = formatLineHeight(merged, effectiveFontSize);
         if (formatted) {
           refDelta.lineHeight = formatted;
-          hasRefProps = true;
         }
         break;
       }
       case "textCase": {
         const textCase = value as string;
         const { textTransform, fontVariant } = convertTextCase(textCase);
-        if (textTransform) {
-          refDelta.textTransform = textTransform;
-          hasRefProps = true;
-        }
-        if (fontVariant) {
-          refDelta.fontVariant = fontVariant;
-          hasRefProps = true;
-        }
+        if (textTransform) refDelta.textTransform = textTransform;
+        if (fontVariant) refDelta.fontVariant = fontVariant;
         // Inverse override: ORIGINAL over a transformed base clears the
         // inherited transform — CSS "none", mirroring textDecoration's inverse.
         if (textCase === "ORIGINAL" && convertTextCase(baseStyle.textCase).textTransform) {
           refDelta.textTransform = "none";
-          hasRefProps = true;
         }
         break;
       }
       case "textAlignHorizontal": {
         const textAlign = convertTextAlign(value as string);
-        if (textAlign) {
-          // Deltas emit "left" too — it's an inverse override of a non-left base.
-          refDelta.textAlign = textAlign;
-          hasRefProps = true;
-        }
+        // Deltas emit "left" too — it's an inverse override of a non-left base.
+        if (textAlign) refDelta.textAlign = textAlign;
         break;
       }
       case "textAlignVertical": {
         const textAlignVertical = convertTextAlignVertical(value as string);
-        if (textAlignVertical) {
-          refDelta.textAlignVertical = textAlignVertical;
-          hasRefProps = true;
-        }
+        if (textAlignVertical) refDelta.textAlignVertical = textAlignVertical;
         break;
       }
       case "opentypeFlags": {
         const nonZero = pickNonZeroFlags(value as Record<string, number>);
-        if (nonZero) {
-          refDelta.opentypeFlags = nonZero;
-          hasRefProps = true;
-        }
+        if (nonZero) refDelta.opentypeFlags = nonZero;
         break;
       }
       // paragraphSpacing / paragraphIndent / listSpacing are passed through
@@ -657,24 +627,15 @@ function classifyRun(
       // corrupt list structure. Consumers that need these values read them
       // off the delta directly.
       case "paragraphSpacing": {
-        if (typeof value === "number" && value > 0) {
-          refDelta.paragraphSpacing = value;
-          hasRefProps = true;
-        }
+        if (typeof value === "number" && value > 0) refDelta.paragraphSpacing = value;
         break;
       }
       case "paragraphIndent": {
-        if (typeof value === "number" && value > 0) {
-          refDelta.paragraphIndent = value;
-          hasRefProps = true;
-        }
+        if (typeof value === "number" && value > 0) refDelta.paragraphIndent = value;
         break;
       }
       case "listSpacing": {
-        if (typeof value === "number" && value > 0) {
-          refDelta.listSpacing = value;
-          hasRefProps = true;
-        }
+        if (typeof value === "number" && value > 0) refDelta.listSpacing = value;
         break;
       }
       // Unknown / unmapped TypeStyle fields are ignored — they either don't
@@ -685,17 +646,18 @@ function classifyRun(
     }
   }
 
-  if (hasRefProps) c.refDelta = refDelta;
+  if (Object.keys(refDelta).length > 0) c.refDelta = refDelta;
   return c;
 }
 
 /**
- * Fold a run's fill paints into the delta's `color` value. Same folding as
- * node fills — an all-solid stack flattens to the one color a viewer sees —
+ * Fold a run's visible fill paints into the delta's `color` value. Same folding
+ * as node fills — an all-solid stack flattens to the one color a viewer sees —
  * but unlike node `fills` (always an array) a single value unwraps to a bare
  * scalar per the spec: only a genuinely mixed stack stays an array.
  */
-function foldRunColor(paints: SnapshotPaint[]): SimplifiedFill | SimplifiedFill[] | undefined {
+function foldRunColor(runPaints: SnapshotPaint[]): SimplifiedFill | SimplifiedFill[] | undefined {
+  const paints = runPaints.filter(isVisible);
   const flattened = flattenSolidFills(paints);
   if (flattened !== null) return flattened;
   const parsed = paints.map((p) => parsePaint(p, false)).reverse();

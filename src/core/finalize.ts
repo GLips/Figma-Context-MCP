@@ -65,27 +65,21 @@ const STYLE_REF_FIELDS = ["layout", "fills", "strokes", "effects", "textStyle"] 
  */
 function visitStyleRefSlots(
   node: SimplifiedNode | ElementBody,
-  visit: (get: () => unknown, set: (value: unknown) => void) => void,
+  visit: (value: unknown, set: (value: unknown) => void) => void,
 ): void {
   const record = node as unknown as Record<string, unknown>;
   for (const field of STYLE_REF_FIELDS) {
-    visit(
-      () => record[field],
-      (value) => {
-        record[field] = value;
-      },
-    );
+    visit(record[field], (value) => {
+      record[field] = value;
+    });
   }
   const text = record.text;
   if (Array.isArray(text)) {
     for (const run of text) {
       if (Array.isArray(run)) {
-        visit(
-          () => run[1],
-          (value) => {
-            run[1] = value;
-          },
-        );
+        visit(run[1], (value) => {
+          run[1] = value;
+        });
       }
     }
   }
@@ -124,8 +118,7 @@ function inlineSingleUseStyles(
 
   const walk = (ns: SimplifiedNode[]): void => {
     for (const node of ns) {
-      visitStyleRefSlots(node, (get, set) => {
-        const value = get();
+      visitStyleRefSlots(node, (value, set) => {
         if (typeof value === "string" && inlineKeys.has(value)) {
           set(styles[value]);
         }
@@ -146,8 +139,7 @@ function countStyleRefs(nodes: SimplifiedNode[]): Map<string, number> {
   const counts = new Map<string, number>();
   const walk = (ns: SimplifiedNode[]): void => {
     for (const node of ns) {
-      visitStyleRefSlots(node, (get) => {
-        const value = get();
+      visitStyleRefSlots(node, (value) => {
         if (typeof value === "string") counts.set(value, (counts.get(value) ?? 0) + 1);
       });
       if (node.children) walk(node.children);
@@ -206,8 +198,7 @@ function inlineExclusiveStyles(
   for (const [hash, body] of Object.entries(elements)) {
     const instanceCount = instanceCounts.get(hash);
     if (instanceCount === undefined) continue;
-    visitStyleRefSlots(body, (get, set) => {
-      const ref = get();
+    visitStyleRefSlots(body, (ref, set) => {
       if (typeof ref !== "string") return;
       if (namedStyleKeys.has(ref)) return;
       if (!(ref in styles)) return;
