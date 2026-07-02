@@ -1,10 +1,4 @@
-import type {
-  ExtractorFn,
-  GlobalVars,
-  StyleTypes,
-  TraversalContext,
-  SimplifiedNode,
-} from "./types.js";
+import type { ExtractorFn, SimplifiedNode } from "./types.js";
 import { buildSimplifiedLayout } from "~/core/transformers/layout.js";
 import {
   buildSimplifiedStrokes,
@@ -17,7 +11,6 @@ import {
   extractTextStyle,
   hasTextStyle,
   isTextNode,
-  type SimplifiedTextStyle,
 } from "~/core/transformers/text.js";
 import {
   simplifyComponentProperties,
@@ -25,94 +18,8 @@ import {
   simplifyPropertyReferences,
 } from "~/core/transformers/component.js";
 import { hasAutoLayout, isRectangleCornerRadii } from "~/core/identity.js";
-import { isVisible, stableStringify } from "~/core/utils.js";
-import { sha1Hex } from "./sha1.js";
-import type { NodeSnapshot, SnapshotStyleRef } from "./snapshot.js";
-
-// Reverse lookup cache: serialized style value → varId.
-// Keyed on the GlobalVars instance so it's automatically scoped to each
-// extraction run and garbage-collected when the run's context is released.
-const styleCaches = new WeakMap<GlobalVars, Map<string, string>>();
-
-// Separate cache for inline text-style override refs. Kept distinct from
-// `styleCaches` so the `ts` namespace never aliases with `style_*`, `fill_*`,
-// etc. — a base textStyle that happens to serialize identically to an inline
-// delta would otherwise return the wrong prefix, bleeding `style_XXXXXX` IDs
-// into the middle of `text` strings and vice versa.
-const inlineTextStyleCaches = new WeakMap<GlobalVars, Map<string, string>>();
-
-function getStyleCache(globalVars: GlobalVars): Map<string, string> {
-  let cache = styleCaches.get(globalVars);
-  if (!cache) {
-    cache = new Map();
-    styleCaches.set(globalVars, cache);
-  }
-  return cache;
-}
-
-function getInlineTextStyleCache(globalVars: GlobalVars): Map<string, string> {
-  let cache = inlineTextStyleCaches.get(globalVars);
-  if (!cache) {
-    cache = new Map();
-    inlineTextStyleCaches.set(globalVars, cache);
-  }
-  return cache;
-}
-
-/**
- * Find an existing global style variable with the same value, or create one.
- */
-function findOrCreateVar(globalVars: GlobalVars, value: StyleTypes, prefix: string): string {
-  const cache = getStyleCache(globalVars);
-  const key = stableStringify(value);
-
-  const existing = cache.get(key);
-  if (existing) return existing;
-
-  // Content-addressed id so the same value yields the same id across runs, making
-  // output byte-stable (the value→id cache already dedups within a single run).
-  const fullHash = sha1Hex(key);
-
-  // Truncated-hash collision guard. The 8-hex slice (32 bits) keeps refs short but
-  // can alias two different style values. We reached here on a cache miss, so a
-  // taken slot means a genuine collision — reusing the id would overwrite the
-  // other value and every node referencing it would silently resolve to the wrong
-  // style. Lengthen this value's id until the slot is free. Deterministic because
-  // the walk order is stable, so the same file reproduces the same ids.
-  let length = 8;
-  let varId = `${prefix}_${fullHash.slice(0, length)}`;
-  while (globalVars.styles[varId] !== undefined && length < fullHash.length) {
-    length += 4;
-    varId = `${prefix}_${fullHash.slice(0, length)}`;
-  }
-
-  globalVars.styles[varId] = value;
-  cache.set(key, varId);
-  return varId;
-}
-
-/**
- * Register a style value, preferring a Figma named style when available.
- * Falls back to an auto-generated deduplicating variable ID.
- */
-function registerStyle(
-  node: NodeSnapshot,
-  context: TraversalContext,
-  value: StyleTypes,
-  styleKeys: string[],
-  prefix: string,
-): string {
-  const styleMatch = getStyleMatch(node, styleKeys);
-  if (styleMatch) {
-    const styleKey = resolveStyleKey(context, styleMatch, value);
-    context.globalVars.styles[styleKey] = value;
-    // Mark as a named style so the finalize pass keeps it hoisted even if only
-    // one node uses it — a named Figma style is design-system intent, not noise.
-    context.traversalState.namedStyleKeys.add(styleKey);
-    return styleKey;
-  }
-  return findOrCreateVar(context.globalVars, value, prefix);
-}
+import { isVisible } from "~/core/utils.js";
+import type { NodeSnapshot } from "./snapshot.js";
 
 /**
  * Extracts layout-related properties from a node.
@@ -120,32 +27,10 @@ function registerStyle(
 export const layoutExtractor: ExtractorFn = (node, result, context) => {
   const layout = buildSimplifiedLayout(node, context.parent);
   if (Object.keys(layout).length > 1) {
-    result.layout = findOrCreateVar(context.globalVars, layout, "layout");
+    // Layout can't be a Figma named style, so no style slots to check.
+    result.layout = context.styles.register(node, layout, [], "layout");
   }
 };
-
-/**
- * Register an inline text-style override delta and return its short ID
- * (`ts1`, `ts2`, …). Unlike `registerStyle`, these IDs come from a sequential
- * counter on the traversal state — they appear inline in formatted text
- * (`{ts1}…{/ts1}`), where short IDs matter for token efficiency and readability.
- *
- * Uses its own dedup cache (`inlineTextStyleCaches`), separate from the
- * generic `styleCaches`. The two namespaces must not alias: if a base
- * textStyle serializes identically to an inline delta, the inline caller must
- * still get a `tsN` ID, not a `style_XXXXXX` ID that happens to be cached.
- */
-function registerInlineTextStyle(context: TraversalContext, delta: SimplifiedTextStyle): string {
-  const cache = getInlineTextStyleCache(context.globalVars);
-  const key = stableStringify(delta);
-  const existing = cache.get(key);
-  if (existing) return existing;
-  context.traversalState.tsCounter += 1;
-  const id = `ts${context.traversalState.tsCounter}`;
-  context.globalVars.styles[id] = delta;
-  cache.set(key, id);
-  return id;
-}
 
 /**
  * Extracts text content and text styling from a node.
@@ -155,7 +40,7 @@ export const textExtractor: ExtractorFn = (node, result, context) => {
   // the node has per-character overrides, otherwise just the raw string. The
   // wire override tables are already resolved into `node.text` by the adapter.
   if (isTextNode(node)) {
-    const rich = buildFormattedText(node, (delta) => registerInlineTextStyle(context, delta));
+    const rich = buildFormattedText(node, (delta) => context.styles.inlineTextStyle(delta));
     if (rich.text) {
       result.text = rich.text;
     }
@@ -168,7 +53,7 @@ export const textExtractor: ExtractorFn = (node, result, context) => {
   if (hasTextStyle(node)) {
     const textStyle = extractTextStyle(node);
     if (textStyle) {
-      result.textStyle = registerStyle(node, context, textStyle, ["text", "typography"], "style");
+      result.textStyle = context.styles.register(node, textStyle, ["text", "typography"], "style");
     }
   }
 };
@@ -191,7 +76,7 @@ export const visualsExtractor: ExtractorFn = (node, result, context) => {
     const fills = flattened
       ? [flattened]
       : visibleFills.map((fill) => parsePaint(fill, hasChildren)).reverse();
-    result.fills = registerStyle(node, context, fills, ["fill", "fills"], "fill");
+    result.fills = context.styles.register(node, fills, ["fill", "fills"], "fill");
   }
 
   // strokes
@@ -200,7 +85,7 @@ export const visualsExtractor: ExtractorFn = (node, result, context) => {
   // weights, so those stay as plain sibling fields and are never deduplicated.
   const strokes = buildSimplifiedStrokes(node, hasChildren);
   if (strokes.colors.length) {
-    result.strokes = registerStyle(node, context, strokes.colors, ["stroke", "strokes"], "fill");
+    result.strokes = context.styles.register(node, strokes.colors, ["stroke", "strokes"], "fill");
     if (strokes.strokeWeight) result.strokeWeight = strokes.strokeWeight;
     if (strokes.strokeDashes) result.strokeDashes = strokes.strokeDashes;
     if (strokes.strokeWeights) result.strokeWeights = strokes.strokeWeights;
@@ -210,7 +95,7 @@ export const visualsExtractor: ExtractorFn = (node, result, context) => {
   // effects
   const effects = buildSimplifiedEffects(node);
   if (Object.keys(effects).length) {
-    result.effects = registerStyle(node, context, effects, ["effect", "effects"], "effect");
+    result.effects = context.styles.register(node, effects, ["effect", "effects"], "effect");
   }
 
   // opacity
@@ -261,40 +146,10 @@ export const componentExtractor: ExtractorFn = (node, result, context) => {
   ) {
     const defs = simplifyPropertyDefinitions(node.componentPropertyDefinitions);
     if (Object.keys(defs).length > 0) {
-      context.traversalState.componentPropertyDefinitions[node.id] = defs;
+      context.componentDefs[node.id] = defs;
     }
   }
 };
-
-type StyleMatch = SnapshotStyleRef;
-
-// Fetch the resolved named-style ref for the first matching style slot. The
-// adapter already joined `node.styles` with the top-level table (see
-// src/adapters/rest/node-to-snapshot.ts), so this is a plain per-slot lookup — the wire style
-// table never reaches here (Invariant 2).
-function getStyleMatch(node: NodeSnapshot, keys: string[]): StyleMatch | undefined {
-  if (!node.styles) return undefined;
-  for (const key of keys) {
-    const match = node.styles[key];
-    if (match) return match;
-  }
-  return undefined;
-}
-
-// Figma style names aren't unique — a file can use a local style and an imported
-// library style that share a name (e.g., "Heading / Large"). Collapse same-name
-// same-value entries; disambiguate same-name different-value by appending the id.
-function resolveStyleKey(
-  context: TraversalContext,
-  styleMatch: StyleMatch,
-  value: StyleTypes,
-): string {
-  const existing = context.globalVars.styles[styleMatch.name];
-  if (!existing) return styleMatch.name;
-  if (stableStringify(existing) === stableStringify(value)) return styleMatch.name;
-
-  return `${styleMatch.name} (${styleMatch.id})`;
-}
 
 // -------------------- CONVENIENCE COMBINATIONS --------------------
 

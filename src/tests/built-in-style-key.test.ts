@@ -2,8 +2,9 @@ import { describe, expect, it } from "vitest";
 import type { Node as FigmaNode, Style, TypeStyle } from "@figma/rest-api-spec";
 import { extractFromDesign } from "~/core/node-walker.js";
 import { allExtractors } from "~/core/built-in.js";
+import { createRefStyleSink } from "~/core/style-sink.js";
 import { restNodeToSnapshot } from "~/adapters/rest/node-to-snapshot.js";
-import type { GlobalVars } from "~/core/types.js";
+import type { StyleTypes } from "~/core/types.js";
 
 // resolveStyleKey decides whether a node's named Figma style collapses onto an
 // existing same-name entry or gets a disambiguating ` (id)` suffix. The decision
@@ -45,15 +46,15 @@ const extraStyles: Record<string, Style> = {
 };
 
 async function extractWithSeed(seed: Record<string, unknown>) {
-  const globalVars: GlobalVars = { styles: { "Heading / Large": seed } };
-  return extractFromDesign(
+  const sink = createRefStyleSink({ "Heading / Large": seed as StyleTypes });
+  await extractFromDesign(
     [namedTextNode({ fontFamily: "Inter", fontWeight: 700, fontSize: 24 })].map((node) =>
       restNodeToSnapshot(node, extraStyles),
     ),
     allExtractors,
-    {},
-    globalVars,
+    sink,
   );
+  return { globalVars: { styles: sink.styles } };
 }
 
 describe("resolveStyleKey — canonical (order-insensitive) comparison", () => {

@@ -21,12 +21,62 @@ export type GlobalVars = {
   styles: Record<string, StyleTypes>;
 };
 
-export interface TraversalContext {
-  globalVars: GlobalVars;
+/**
+ * Where extractors send the style values they build. The sink decides the
+ * output form, which is what makes compression separable from the walk
+ * (Invariant 3): the compressing sink registers values under content-addressed
+ * refs (hashing DURING the walk), while the inline sink hands the value
+ * straight back for inline emission and never touches a hash. Gating only the
+ * post-walk `finalize` pass would not be enough — refs and sha1 fire inside
+ * the extractors — so the sink is the seam expanded mode swaps.
+ */
+export interface StyleSink {
+  /**
+   * Register a style value for a node. Returns a globalVars ref (compressing
+   * sink) or the value itself (inline sink). `styleKeys` are the node style
+   * slots (e.g. `["fill", "fills"]`) checked for a Figma named style; pass `[]`
+   * for value kinds Figma can't name (layout).
+   */
+  register<T extends StyleTypes>(
+    node: NodeSnapshot,
+    value: T,
+    styleKeys: string[],
+    prefix: string,
+  ): string | T;
+  /**
+   * Register an inline text-style override delta, returning its short id
+   * (`ts1`, `ts2`, …). Unlike `register`, BOTH sinks return a ref here: tsN ids
+   * are embedded inside `text` strings (`{ts1}…{/ts1}`), so there is no inline
+   * form — even expanded output carries the tsN entries in its styles table.
+   */
+  inlineTextStyle(delta: SimplifiedTextStyle): string;
+  /**
+   * Everything the sink hoisted, in registration order. Compressing sink: all
+   * shared styles (pre-finalize). Inline sink: only tsN text-delta entries.
+   */
+  readonly styles: Record<string, StyleTypes>;
+}
+
+/**
+ * Cooperative-yield hook awaited by the walker every N nodes. Injected rather
+ * than hardcoded because the core must not touch Node builtins (Invariant 4):
+ * the REST server passes an event-loop yield (`setImmediate`) so heartbeats and
+ * SIGINT stay live during large files; the plugin bundle omits it or supplies
+ * its own.
+ */
+export type WalkScheduler = () => void | Promise<void>;
+
+/** Per-component-id property definitions collected during the walk. */
+export type ComponentDefinitionMap = Record<string, Record<string, SimplifiedPropertyDefinition>>;
+
+export interface CanonicalizeContext {
+  /** Style-registration sink — the compression seam (see StyleSink). */
+  styles: StyleSink;
+  /** Sink for COMPONENT/COMPONENT_SET property definitions found in the tree. */
+  componentDefs: ComponentDefinitionMap;
   currentDepth: number;
   parent?: NodeSnapshot;
   insideComponentDefinition?: boolean;
-  traversalState: TraversalState;
   /**
    * Per-call mutable counter shared with the caller. Lives on the context so
    * walker recursion can increment it without touching module-global state —
@@ -42,25 +92,6 @@ export interface TraversalContext {
  * (as the final node-walked metric).
  */
 export type NodeCounter = { count: number };
-
-export interface TraversalState {
-  componentPropertyDefinitions: Record<string, Record<string, SimplifiedPropertyDefinition>>;
-  /**
-   * Sequential counter for inline text-style override IDs (`ts1`, `ts2`, ...).
-   * Lives on the traversal state so every text node in a run shares the same
-   * namespace, which lets `{tsN}…{/tsN}` references appear inline in text
-   * content with short, readable identifiers.
-   */
-  tsCounter: number;
-  /**
-   * globalVars keys that correspond to named Figma styles (vs. auto-generated
-   * content-hash ids). The finalize pass keeps these hoisted even at a single
-   * use, because a named style encodes design-system intent worth surfacing.
-   * Collected during the walk because the post-walk pass can't otherwise tell a
-   * named-style key apart from an auto-generated one by inspection.
-   */
-  namedStyleKeys: Set<string>;
-}
 
 export interface TraversalOptions {
   maxDepth?: number;
@@ -86,6 +117,8 @@ export interface TraversalOptions {
    * creates its own internal counter.
    */
   nodeCounter?: NodeCounter;
+  /** Cooperative-yield hook, awaited every YIELD_INTERVAL nodes. No yield when omitted. */
+  scheduler?: WalkScheduler;
 }
 
 /**
@@ -93,12 +126,12 @@ export interface TraversalOptions {
  *
  * @param node - The current node snapshot being processed
  * @param result - SimplifiedNode object being built—this can be mutated inside the extractor
- * @param context - Traversal context including globalVars and parent info. This can also be mutated inside the extractor.
+ * @param context - Traversal context including the style sink and parent info. This can also be mutated inside the extractor.
  */
 export type ExtractorFn = (
   node: NodeSnapshot,
   result: SimplifiedNode,
-  context: TraversalContext,
+  context: CanonicalizeContext,
 ) => void;
 
 export interface SimplifiedDesign {

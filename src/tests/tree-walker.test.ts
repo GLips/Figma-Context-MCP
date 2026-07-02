@@ -3,7 +3,8 @@ import { extractFromDesign } from "~/core/node-walker.js";
 import { allExtractors, collapseSvgContainers } from "~/core/built-in.js";
 import { simplifyRawFigmaObject } from "~/adapters/rest/design-extractor.js";
 import { restNodeToSnapshot } from "~/adapters/rest/node-to-snapshot.js";
-import type { ExtractorFn, GlobalVars, TraversalOptions } from "~/core/types.js";
+import { createRefStyleSink } from "~/core/style-sink.js";
+import type { ExtractorFn, TraversalOptions } from "~/core/types.js";
 import type { GetFileResponse, Style } from "@figma/rest-api-spec";
 import type { Node as FigmaNode } from "@figma/rest-api-spec";
 
@@ -17,19 +18,20 @@ function makeNode(overrides: Record<string, unknown>): FigmaNode {
 // Decode raw fixtures through the REST adapter exactly as production does, so the
 // walker receives snapshots with decoded fills/effects and recursed children.
 // (The adapter is the only place raw REST paint shapes are unpacked.)
-function walk(
+async function walk(
   nodes: FigmaNode[],
   extractors: ExtractorFn[],
   options?: TraversalOptions,
-  globalVars?: GlobalVars,
   extraStyles?: Record<string, Style>,
 ) {
-  return extractFromDesign(
+  const sink = createRefStyleSink();
+  const { nodes: extracted, componentDefs } = await extractFromDesign(
     nodes.map((node) => restNodeToSnapshot(node, extraStyles)),
     extractors,
+    sink,
     options,
-    globalVars,
   );
+  return { nodes: extracted, globalVars: { styles: sink.styles }, componentDefs };
 }
 
 // A small but representative node tree:
@@ -230,7 +232,6 @@ describe("extractFromDesign", () => {
       [nodeA, nodeB],
       allExtractors,
       {},
-      { styles: {} },
       extraStyles,
     );
 
@@ -246,7 +247,7 @@ describe("extractFromDesign", () => {
 
 describe("fill flattening", () => {
   // Resolve a node's registered fills var back to its concrete value.
-  type Extracted = Awaited<ReturnType<typeof extractFromDesign>>;
+  type Extracted = Awaited<ReturnType<typeof walk>>;
   function fillsValue(nodes: Extracted["nodes"], globalVars: Extracted["globalVars"]) {
     return globalVars.styles[nodes[0].fills as string];
   }
@@ -610,13 +611,13 @@ describe("component property support", () => {
       children: [makeNode({ id: "12:2", name: "Title", type: "TEXT", characters: "Product Name" })],
     });
 
-    const { traversalState } = await walk([componentNode], allExtractors);
+    const { componentDefs } = await walk([componentNode], allExtractors);
 
-    expect(traversalState.componentPropertyDefinitions["12:1"]).toEqual({
+    expect(componentDefs["12:1"]).toEqual({
       "On Sale": { type: "boolean", defaultValue: true },
       Title: { type: "text", defaultValue: "Product Name" },
     });
-    expect(traversalState.componentPropertyDefinitions["12:1"]).not.toHaveProperty("Icon");
+    expect(componentDefs["12:1"]).not.toHaveProperty("Icon");
   });
 
   it("annotates componentPropertyReferences with characters→text rename", async () => {

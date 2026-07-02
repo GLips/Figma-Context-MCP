@@ -2,14 +2,21 @@
 export type {
   SimplifiedDesign,
   ExtractorFn,
-  TraversalContext,
+  CanonicalizeContext,
+  CanonicalizeOptions,
+  CanonicalizeResult,
+  StyleSink,
   TraversalOptions,
+  WalkScheduler,
   GlobalVars,
   StyleTypes,
 } from "./core/index.js";
 
 export {
+  canonicalize,
   extractFromDesign,
+  createInlineStyleSink,
+  createRefStyleSink,
   layoutExtractor,
   textExtractor,
   visualsExtractor,

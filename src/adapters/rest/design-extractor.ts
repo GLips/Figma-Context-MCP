@@ -8,10 +8,15 @@ import type {
 } from "@figma/rest-api-spec";
 import { tagError } from "~/utils/error-meta.js";
 import type { ExtractorFn, TraversalOptions, SimplifiedDesign } from "~/core/types.js";
-import { extractFromDesign } from "~/core/node-walker.js";
+import { canonicalize } from "~/core/canonicalize.js";
 import { restNodeToSnapshot } from "./node-to-snapshot.js";
 import { simplifyComponents, simplifyComponentSets } from "./component.js";
-import { finalizeDesign } from "~/core/finalize.js";
+
+// Yield to the Node event loop between walk batches so progress heartbeats,
+// SIGINT, and overlapping HTTP requests stay live during large files. Injected
+// here — not hardcoded in the walker — because the core must stay free of Node
+// builtins (Invariant 4).
+const eventLoopYield = () => new Promise<void>((resolve) => setImmediate(resolve));
 
 /**
  * Extract a complete SimplifiedDesign from raw Figma API response using extractors.
@@ -31,30 +36,20 @@ export async function simplifyRawFigmaObject(
   // against the top-level `styles` table (extraStyles).
   const snapshotNodes = rawNodes.map((node) => restNodeToSnapshot(node, extraStyles));
 
-  // Process nodes using the flexible extractor system
-  const {
-    nodes: extractedNodes,
-    globalVars: walkedGlobalVars,
-    traversalState,
-  } = await extractFromDesign(snapshotNodes, nodeExtractors, options, { styles: {} });
-
-  // Finalize pass: count-gate style hoisting (and, later, element dedup). Runs
-  // here, after the full walk, because it needs whole-tree usage counts the
-  // single-pass extractors can't see. See finalize.ts.
-  const { nodes, globalVars, elements } = finalizeDesign(
-    extractedNodes,
-    walkedGlobalVars,
-    traversalState.namedStyleKeys,
-  );
+  // Run the core with egress compression on: this is the shipped REST tool's
+  // output form (ref-deduplicated styles + element templates).
+  const { nodes, globalVars, elements, componentDefinitions } = await canonicalize(snapshotNodes, {
+    ...options,
+    extractors: nodeExtractors,
+    compress: true,
+    scheduler: eventLoopYield,
+  });
 
   return {
     ...metadata,
     nodes,
-    components: simplifyComponents(components, traversalState.componentPropertyDefinitions),
-    componentSets: simplifyComponentSets(
-      componentSets,
-      traversalState.componentPropertyDefinitions,
-    ),
+    components: simplifyComponents(components, componentDefinitions),
+    componentSets: simplifyComponentSets(componentSets, componentDefinitions),
     globalVars,
     elements,
   };

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Node as FigmaNode, TypeStyle } from "@figma/rest-api-spec";
 import { extractFromDesign } from "~/core/node-walker.js";
 import { allExtractors } from "~/core/built-in.js";
+import { createRefStyleSink } from "~/core/style-sink.js";
 import { restNodeToSnapshot } from "~/adapters/rest/node-to-snapshot.js";
 import type { SimplifiedTextStyle } from "~/core/transformers/text.js";
 
@@ -35,10 +36,13 @@ function makeText(opts: {
 }
 
 async function extract(nodes: FigmaNode[]) {
-  return extractFromDesign(
+  const sink = createRefStyleSink();
+  const { nodes: extracted } = await extractFromDesign(
     nodes.map((node) => restNodeToSnapshot(node)),
     allExtractors,
+    sink,
   );
+  return { nodes: extracted, globalVars: { styles: sink.styles } };
 }
 
 describe("buildFormattedText — plain text passthrough", () => {

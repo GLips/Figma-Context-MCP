@@ -2,49 +2,49 @@ import { isVisible } from "~/core/utils.js";
 import { computeGridChildOrder } from "~/core/transformers/layout.js";
 import type { NodeSnapshot } from "./snapshot.js";
 import type {
+  CanonicalizeContext,
+  ComponentDefinitionMap,
   ExtractorFn,
   NodeCounter,
-  TraversalContext,
+  StyleSink,
   TraversalOptions,
-  TraversalState,
-  GlobalVars,
   SimplifiedNode,
 } from "./types.js";
 
-// Yield the event loop every N nodes so heartbeats, SIGINT, and
-// other async work can run during large file processing.
+// Await the injected scheduler every N nodes so heartbeats, SIGINT, and other
+// async work can run during large file processing — when the caller supplies
+// one. The core itself never touches the event loop (Invariant 4).
 const YIELD_INTERVAL = 100;
 
-async function maybeYield(counter: NodeCounter): Promise<void> {
+async function maybeYield(counter: NodeCounter, options: TraversalOptions): Promise<void> {
   counter.count++;
-  if (counter.count % YIELD_INTERVAL === 0) {
-    await new Promise<void>((resolve) => setImmediate(resolve));
+  if (options.scheduler && counter.count % YIELD_INTERVAL === 0) {
+    await options.scheduler();
   }
 }
 
 /**
  * Extract data from Figma nodes using a flexible, single-pass approach.
  *
- * @param nodes - The Figma nodes to process
+ * @param nodes - The node snapshots to process
  * @param extractors - Array of extractor functions to apply during traversal
- * @param options - Traversal options (filtering, depth limits, etc.)
- * @param globalVars - Global variables for style deduplication
- * @returns Object containing processed nodes and updated global variables
+ * @param styleSink - Where extractors send style values (the compression seam)
+ * @param options - Traversal options (filtering, depth limits, scheduler, etc.)
+ * @returns Processed nodes plus the component definitions found during the walk
  */
 export async function extractFromDesign(
   nodes: NodeSnapshot[],
   extractors: ExtractorFn[],
+  styleSink: StyleSink,
   options: TraversalOptions = {},
-  globalVars: GlobalVars = { styles: {} },
 ): Promise<{
   nodes: SimplifiedNode[];
-  globalVars: GlobalVars;
-  traversalState: TraversalState;
+  componentDefs: ComponentDefinitionMap;
 }> {
-  const context: TraversalContext = {
-    globalVars,
+  const context: CanonicalizeContext = {
+    styles: styleSink,
+    componentDefs: {},
     currentDepth: 0,
-    traversalState: { componentPropertyDefinitions: {}, tsCounter: 0, namedStyleKeys: new Set() },
     nodeCounter: options.nodeCounter ?? { count: 0 },
   };
 
@@ -57,8 +57,7 @@ export async function extractFromDesign(
 
   return {
     nodes: processedNodes,
-    globalVars: context.globalVars,
-    traversalState: context.traversalState,
+    componentDefs: context.componentDefs,
   };
 }
 
@@ -68,14 +67,14 @@ export async function extractFromDesign(
 async function processNodeWithExtractors(
   node: NodeSnapshot,
   extractors: ExtractorFn[],
-  context: TraversalContext,
+  context: CanonicalizeContext,
   options: TraversalOptions,
 ): Promise<SimplifiedNode | null> {
   if (!shouldProcessNode(node, context, options)) {
     return null;
   }
 
-  await maybeYield(context.nodeCounter);
+  await maybeYield(context.nodeCounter, options);
 
   // Always include base metadata
   const result: SimplifiedNode = {
@@ -91,7 +90,7 @@ async function processNodeWithExtractors(
 
   // Handle children recursively
   if (shouldTraverseChildren(node, context, options)) {
-    const childContext: TraversalContext = {
+    const childContext: CanonicalizeContext = {
       ...context,
       currentDepth: context.currentDepth + 1,
       parent: node,
@@ -138,7 +137,7 @@ async function processNodeWithExtractors(
  */
 function shouldProcessNode(
   node: NodeSnapshot,
-  context: TraversalContext,
+  context: CanonicalizeContext,
   options: TraversalOptions,
 ): boolean {
   if (!isVisible(node)) {
@@ -162,7 +161,7 @@ function shouldProcessNode(
  */
 function shouldTraverseChildren(
   _node: NodeSnapshot,
-  context: TraversalContext,
+  context: CanonicalizeContext,
   options: TraversalOptions,
 ): boolean {
   // Check depth limit

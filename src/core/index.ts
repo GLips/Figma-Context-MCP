@@ -1,20 +1,28 @@
 // Types
 export type {
+  CanonicalizeContext,
+  ComponentDefinitionMap,
   ExtractorFn,
   NodeCounter,
   SimplifiedDesign,
   SimplifiedNode,
-  TraversalContext,
+  StyleSink,
   TraversalOptions,
-  TraversalState,
+  WalkScheduler,
   GlobalVars,
   StyleTypes,
 } from "./types.js";
 
-// Core traversal function
-export { extractFromDesign } from "./node-walker.js";
+// The core entry: NodeSnapshot[] → canonical SimplifiedNodes (expanded by
+// default; compression opt-in via { compress: true })
+export { canonicalize } from "./canonicalize.js";
+export type { CanonicalizeOptions, CanonicalizeResult } from "./canonicalize.js";
 
-// Opt-in compression pass (dedup + refs), layered after the walk
+// Composable lower layers: the single-pass walker, the style sinks it writes
+// through, and the opt-in compression pass layered after the walk
+export { extractFromDesign } from "./node-walker.js";
+export { createInlineStyleSink, createRefStyleSink } from "./style-sink.js";
+export type { RefStyleSink } from "./style-sink.js";
 export { finalizeDesign } from "./finalize.js";
 
 // Built-in extractors and afterChildren helpers
