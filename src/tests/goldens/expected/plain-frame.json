@@ -14,8 +14,12 @@
         "designedWidth": "200px",
         "designedHeight": "120px"
       },
-      "fills": ["#E6E6E6"],
-      "strokes": ["#CCCCCC"],
+      "fills": [
+        "#E6E6E6"
+      ],
+      "strokes": [
+        "#CCCCCC"
+      ],
       "strokeWeight": "1px",
       "strokeAlign": "OUTSIDE",
       "effects": {
@@ -52,7 +56,9 @@
             "textAlignHorizontal": "LEFT",
             "textAlignVertical": "TOP"
           },
-          "fills": ["#1A1A1A"]
+          "fills": [
+            "#1A1A1A"
+          ]
         }
       ]
     }

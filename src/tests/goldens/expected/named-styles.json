@@ -40,13 +40,17 @@
         "fontWeight": 400,
         "fontSize": 12
       },
-      "fill_34dc0314": ["#000000"],
+      "fill_34dc0314": [
+        "#000000"
+      ],
       "Heading / Large (161:300)": {
         "fontFamily": "Inter",
         "fontWeight": 600,
         "fontSize": 14
       },
-      "Brand / Orange": ["#FF8000"]
+      "Brand / Orange": [
+        "#FF8000"
+      ]
     }
   },
   "elements": {}

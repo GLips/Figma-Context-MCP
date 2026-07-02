@@ -19,7 +19,9 @@
         "textAlignHorizontal": "LEFT",
         "textAlignVertical": "TOP"
       },
-      "fills": ["#000000"]
+      "fills": [
+        "#000000"
+      ]
     }
   ],
   "components": {},
@@ -28,7 +30,9 @@
     "styles": {
       "ts1": {
         "textDecoration": "UNDERLINE",
-        "fills": ["#0000FF"]
+        "fills": [
+          "#0000FF"
+        ]
       }
     }
   },

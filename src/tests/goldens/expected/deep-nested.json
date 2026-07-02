@@ -74,7 +74,9 @@
           "height": 28
         }
       },
-      "fills": ["#E6E6E6"],
+      "fills": [
+        "#E6E6E6"
+      ],
       "borderRadius": "14px"
     },
     "EL-7ab00d62": {
@@ -97,7 +99,9 @@
         "fontWeight": 500,
         "fontSize": 12
       },
-      "fills": ["#333333"]
+      "fills": [
+        "#333333"
+      ]
     }
   }
 }

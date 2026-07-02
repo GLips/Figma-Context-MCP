@@ -33,7 +33,9 @@
               "height": 36
             }
           },
-          "fills": ["#3366FF"],
+          "fills": [
+            "#3366FF"
+          ],
           "borderRadius": "6px"
         },
         {
@@ -56,7 +58,9 @@
               "height": 24
             }
           },
-          "fills": ["#FF0000"],
+          "fills": [
+            "#FF0000"
+          ],
           "borderRadius": "12px"
         }
       ]

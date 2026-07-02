@@ -55,7 +55,9 @@
                   "height": 20
                 }
               },
-              "fills": ["#FF0000"],
+              "fills": [
+                "#FF0000"
+              ],
               "componentPropertyReferences": {
                 "visible": "On Sale"
               }
@@ -138,7 +140,9 @@
         "textAlignHorizontal": "LEFT",
         "textAlignVertical": "TOP"
       },
-      "fill_34dc0314": ["#000000"]
+      "fill_34dc0314": [
+        "#000000"
+      ]
     }
   },
   "elements": {}

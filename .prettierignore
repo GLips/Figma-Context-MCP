@@ -1,0 +1,4 @@
+# Golden outputs are byte-exact captures of the tool's own serializer
+# (src/tests/goldens/harness.ts). Prettier would re-wrap their arrays and break
+# the byte-order gate, so it must never touch them.
+src/tests/goldens/expected/
