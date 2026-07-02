@@ -185,6 +185,38 @@ export interface SnapshotText {
   lineIndentations: number[];
 }
 
+// ---------------------------------------------------------------------------
+// Named styles — DECODED from the wire. REST scatters this across two places:
+// the node's `styles` map (style-slot → styleId) and the top-level `styles`
+// table (styleId → { name, ... }). The adapter joins them into per-slot resolved
+// names folded on-node; the top-level table never reaches the core (Invariant 2).
+// ---------------------------------------------------------------------------
+
+/** A resolved named-style reference (Figma named style), folded on-node by the adapter. */
+export interface SnapshotStyleRef {
+  name: string;
+  id: string;
+}
+
+// ---------------------------------------------------------------------------
+// Component metadata — ~1:1 structural records (Figma component traits), typed
+// snapshot-locally so the core reads them without a REST import. The top-level
+// components/componentSets *tables* are a separate adapter concern (decoded in
+// rest-component.ts); these are the per-node fields the walker/extractor read.
+// ---------------------------------------------------------------------------
+
+/** An INSTANCE's resolved component-property value (Figma `ComponentPropertyValue` subset). */
+export interface SnapshotComponentPropertyValue {
+  type: string;
+  value: boolean | string;
+}
+
+/** A COMPONENT/COMPONENT_SET property definition (Figma `ComponentPropertyDefinition` subset). */
+export interface SnapshotComponentPropertyDefinition {
+  type: string;
+  defaultValue: boolean | string;
+}
+
 export interface NodeSnapshot {
   id: string;
   name: string;
@@ -264,4 +296,19 @@ export interface NodeSnapshot {
   // into runs (see SnapshotText). Absent on every other node type.
   // ------------------------------------------------------------------------
   text?: SnapshotText;
+
+  // ------------------------------------------------------------------------
+  // Named styles — the adapter joins the node's REST `styles` map with the
+  // top-level styles table into per-slot resolved names (fill/text/effect/…).
+  // Only slots whose style resolved to a name appear here.
+  // ------------------------------------------------------------------------
+  styles?: Record<string, SnapshotStyleRef>;
+
+  // ------------------------------------------------------------------------
+  // Component metadata — raw structural records; present on INSTANCE /
+  // COMPONENT / COMPONENT_SET nodes, absent elsewhere.
+  // ------------------------------------------------------------------------
+  componentId?: string;
+  componentProperties?: Record<string, SnapshotComponentPropertyValue>;
+  componentPropertyDefinitions?: Record<string, SnapshotComponentPropertyDefinition>;
 }

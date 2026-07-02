@@ -1,4 +1,3 @@
-import type { Style } from "@figma/rest-api-spec";
 import { isVisible } from "~/utils/common.js";
 import { computeGridChildOrder } from "~/transformers/layout.js";
 import type { NodeSnapshot } from "./snapshot.js";
@@ -37,7 +36,6 @@ export async function extractFromDesign(
   extractors: ExtractorFn[],
   options: TraversalOptions = {},
   globalVars: GlobalVars = { styles: {} },
-  extraStyles?: Record<string, Style>,
 ): Promise<{
   nodes: SimplifiedNode[];
   globalVars: GlobalVars;
@@ -45,7 +43,6 @@ export async function extractFromDesign(
 }> {
   const context: TraversalContext = {
     globalVars,
-    extraStyles,
     currentDepth: 0,
     traversalState: { componentPropertyDefinitions: {}, tsCounter: 0, namedStyleKeys: new Set() },
     nodeCounter: options.nodeCounter ?? { count: 0 },

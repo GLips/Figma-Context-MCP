@@ -6,11 +6,11 @@ import type {
   ComponentSet,
   Style,
 } from "@figma/rest-api-spec";
-import { simplifyComponents, simplifyComponentSets } from "~/transformers/component.js";
 import { tagError } from "~/utils/error-meta.js";
 import type { ExtractorFn, TraversalOptions, SimplifiedDesign } from "./types.js";
 import { extractFromDesign } from "./node-walker.js";
 import { restNodeToSnapshot } from "./rest-node-to-snapshot.js";
+import { simplifyComponents, simplifyComponentSets } from "./rest-component.js";
 import { finalizeDesign } from "./finalize.js";
 
 /**
@@ -27,15 +27,16 @@ export async function simplifyRawFigmaObject(
 
   // Decode each raw REST node into a plan-neutral NodeSnapshot, then walk.
   // restNodeToSnapshot is the single place REST wire encodings are unpacked so
-  // the core never sees them (Invariant 2).
-  const snapshotNodes = rawNodes.map(restNodeToSnapshot);
+  // the core never sees them (Invariant 2) — including the named-style join
+  // against the top-level `styles` table (extraStyles).
+  const snapshotNodes = rawNodes.map((node) => restNodeToSnapshot(node, extraStyles));
 
   // Process nodes using the flexible extractor system
   const {
     nodes: extractedNodes,
     globalVars: walkedGlobalVars,
     traversalState,
-  } = await extractFromDesign(snapshotNodes, nodeExtractors, options, { styles: {} }, extraStyles);
+  } = await extractFromDesign(snapshotNodes, nodeExtractors, options, { styles: {} });
 
   // Finalize pass: count-gate style hoisting (and, later, element dedup). Runs
   // here, after the full walk, because it needs whole-tree usage counts the

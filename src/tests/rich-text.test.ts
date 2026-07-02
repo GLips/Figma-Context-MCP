@@ -35,7 +35,10 @@ function makeText(opts: {
 }
 
 async function extract(nodes: FigmaNode[]) {
-  return extractFromDesign(nodes.map(restNodeToSnapshot), allExtractors);
+  return extractFromDesign(
+    nodes.map((node) => restNodeToSnapshot(node)),
+    allExtractors,
+  );
 }
 
 describe("buildFormattedText — plain text passthrough", () => {

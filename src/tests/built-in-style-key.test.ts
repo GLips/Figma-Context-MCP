@@ -47,11 +47,12 @@ const extraStyles: Record<string, Style> = {
 async function extractWithSeed(seed: Record<string, unknown>) {
   const globalVars: GlobalVars = { styles: { "Heading / Large": seed } };
   return extractFromDesign(
-    [namedTextNode({ fontFamily: "Inter", fontWeight: 700, fontSize: 24 })].map(restNodeToSnapshot),
+    [namedTextNode({ fontFamily: "Inter", fontWeight: 700, fontSize: 24 })].map((node) =>
+      restNodeToSnapshot(node, extraStyles),
+    ),
     allExtractors,
     {},
     globalVars,
-    extraStyles,
   );
 }
 

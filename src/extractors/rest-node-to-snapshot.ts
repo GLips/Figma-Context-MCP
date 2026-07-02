@@ -1,5 +1,5 @@
-import type { Node as FigmaDocumentNode, Paint, Effect } from "@figma/rest-api-spec";
-import type { NodeSnapshot } from "./snapshot.js";
+import type { Node as FigmaDocumentNode, Paint, Effect, Style } from "@figma/rest-api-spec";
+import type { NodeSnapshot, SnapshotStyleRef } from "./snapshot.js";
 import { decodePaint, decodeEffect } from "./rest-paint.js";
 import { decodeText } from "./rest-text.js";
 
@@ -19,7 +19,10 @@ import { decodeText } from "./rest-text.js";
  * walker only ever sees decoded snapshots and never reaches back into REST
  * shapes.
  */
-export function restNodeToSnapshot(node: FigmaDocumentNode): NodeSnapshot {
+export function restNodeToSnapshot(
+  node: FigmaDocumentNode,
+  extraStyles: Record<string, Style> = {},
+): NodeSnapshot {
   // Read the REST-shaped visual fields off a permissive view: they exist only on
   // some node types, and this adapter is the one place allowed to know their
   // wire shape. Everything else is carried through structurally via the spread.
@@ -35,10 +38,38 @@ export function restNodeToSnapshot(node: FigmaDocumentNode): NodeSnapshot {
   if (raw.fills) snapshot.fills = raw.fills.map(decodePaint);
   if (raw.strokes) snapshot.strokes = raw.strokes.map(decodePaint);
   if (raw.effects) snapshot.effects = raw.effects.map(decodeEffect);
-  if (raw.children) snapshot.children = raw.children.map(restNodeToSnapshot);
+  if (raw.children) snapshot.children = raw.children.map((c) => restNodeToSnapshot(c, extraStyles));
 
   // Text nodes: resolve the wire override tables into runs (undefined otherwise).
   snapshot.text = decodeText(node);
 
+  // Named styles: join the node's `styles` map with the top-level table into
+  // per-slot resolved names. Overwrite the spread's raw string map so the wire
+  // shape never reaches the core; drop it entirely when nothing resolves.
+  const styles = decodeStyles(node, extraStyles);
+  if (styles) snapshot.styles = styles;
+  else delete snapshot.styles;
+
   return snapshot;
+}
+
+/**
+ * Resolve a node's REST `styles` map (style-slot → styleId) against the
+ * top-level `styles` table (styleId → { name }) into per-slot resolved refs.
+ * Only slots whose styleId carries a name survive — an unnamed or unknown
+ * styleId is dropped, exactly as the old in-core lookup skipped it.
+ */
+function decodeStyles(
+  node: FigmaDocumentNode,
+  extraStyles: Record<string, Style>,
+): Record<string, SnapshotStyleRef> | undefined {
+  const styleMap = (node as unknown as { styles?: Record<string, string> }).styles;
+  if (!styleMap) return undefined;
+
+  const resolved: Record<string, SnapshotStyleRef> = {};
+  for (const [slot, styleId] of Object.entries(styleMap)) {
+    const name = extraStyles[styleId]?.name;
+    if (name) resolved[slot] = { name, id: styleId };
+  }
+  return Object.keys(resolved).length ? resolved : undefined;
 }

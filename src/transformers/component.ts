@@ -1,5 +1,3 @@
-import type { Component, ComponentSet } from "@figma/rest-api-spec";
-
 export interface SimplifiedPropertyDefinition {
   type: string;
   defaultValue: boolean | string;
@@ -83,50 +81,4 @@ export function simplifyComponentProperties(
     }
   }
   return result;
-}
-
-/**
- * Remove unnecessary component properties and convert to simplified format.
- */
-export function simplifyComponents(
-  aggregatedComponents: Record<string, Component>,
-  propertyDefinitions?: Record<string, Record<string, SimplifiedPropertyDefinition>>,
-): Record<string, SimplifiedComponentDefinition> {
-  return Object.fromEntries(
-    Object.entries(aggregatedComponents).map(([id, comp]) => [
-      id,
-      {
-        id,
-        key: comp.key,
-        name: comp.name,
-        componentSetId: comp.componentSetId,
-        ...(propertyDefinitions?.[id] && {
-          propertyDefinitions: propertyDefinitions[id],
-        }),
-      },
-    ]),
-  );
-}
-
-/**
- * Remove unnecessary component set properties and convert to simplified format.
- */
-export function simplifyComponentSets(
-  aggregatedComponentSets: Record<string, ComponentSet>,
-  propertyDefinitions?: Record<string, Record<string, SimplifiedPropertyDefinition>>,
-): Record<string, SimplifiedComponentSetDefinition> {
-  return Object.fromEntries(
-    Object.entries(aggregatedComponentSets).map(([id, set]) => [
-      id,
-      {
-        id,
-        key: set.key,
-        name: set.name,
-        description: set.description,
-        ...(propertyDefinitions?.[id] && {
-          propertyDefinitions: propertyDefinitions[id],
-        }),
-      },
-    ]),
-  );
 }

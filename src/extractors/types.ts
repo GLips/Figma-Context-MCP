@@ -1,4 +1,3 @@
-import type { Style } from "@figma/rest-api-spec";
 import type { NodeSnapshot } from "./snapshot.js";
 import type { SimplifiedTextStyle } from "~/transformers/text.js";
 import type { SimplifiedLayout } from "~/transformers/layout.js";
@@ -24,7 +23,6 @@ export type GlobalVars = {
 
 export interface TraversalContext {
   globalVars: GlobalVars;
-  extraStyles?: Record<string, Style>;
   currentDepth: number;
   parent?: NodeSnapshot;
   insideComponentDefinition?: boolean;

@@ -20,11 +20,10 @@ import {
   simplifyPropertyDefinitions,
   simplifyPropertyReferences,
 } from "~/transformers/component.js";
-import { hasAutoLayout, hasValue, isRectangleCornerRadii } from "~/utils/identity.js";
+import { hasAutoLayout, isRectangleCornerRadii } from "~/utils/identity.js";
 import { isVisible, stableStringify } from "~/utils/common.js";
 import { createHash } from "node:crypto";
-import type { Node as FigmaDocumentNode } from "@figma/rest-api-spec";
-import type { NodeSnapshot } from "./snapshot.js";
+import type { NodeSnapshot, SnapshotStyleRef } from "./snapshot.js";
 
 // Reverse lookup cache: serialized style value → varId.
 // Keyed on the GlobalVars instance so it's automatically scoped to each
@@ -93,13 +92,13 @@ function findOrCreateVar(globalVars: GlobalVars, value: StyleTypes, prefix: stri
  * Falls back to an auto-generated deduplicating variable ID.
  */
 function registerStyle(
-  node: FigmaDocumentNode,
+  node: NodeSnapshot,
   context: TraversalContext,
   value: StyleTypes,
   styleKeys: string[],
   prefix: string,
 ): string {
-  const styleMatch = getStyleMatch(node, context, styleKeys);
+  const styleMatch = getStyleMatch(node, styleKeys);
   if (styleMatch) {
     const styleKey = resolveStyleKey(context, styleMatch, value);
     context.globalVars.styles[styleKey] = value;
@@ -165,16 +164,7 @@ export const textExtractor: ExtractorFn = (node, result, context) => {
   if (hasTextStyle(node)) {
     const textStyle = extractTextStyle(node);
     if (textStyle) {
-      // The named-style lookup (`node.styles`) is still REST-shaped; registerStyle
-      // owns it until Slice 6 relocates it to the adapter, so cast at that boundary.
-      const styleNode = node as unknown as FigmaDocumentNode;
-      result.textStyle = registerStyle(
-        styleNode,
-        context,
-        textStyle,
-        ["text", "typography"],
-        "style",
-      );
+      result.textStyle = registerStyle(node, context, textStyle, ["text", "typography"], "style");
     }
   }
 };
@@ -185,10 +175,6 @@ export const textExtractor: ExtractorFn = (node, result, context) => {
 export const visualsExtractor: ExtractorFn = (node, result, context) => {
   // Check if node has children to determine CSS properties
   const hasChildren = !!node.children && node.children.length > 0;
-
-  // The named-style lookup (`node.styles`) is still REST-shaped; registerStyle
-  // owns it until Slice 6 relocates it to the adapter, so cast at that boundary.
-  const styleNode = node as unknown as FigmaDocumentNode;
 
   // fills
   if (node.fills && node.fills.length) {
@@ -201,7 +187,7 @@ export const visualsExtractor: ExtractorFn = (node, result, context) => {
     const fills = flattened
       ? [flattened]
       : visibleFills.map((fill) => parsePaint(fill, hasChildren)).reverse();
-    result.fills = registerStyle(styleNode, context, fills, ["fill", "fills"], "fill");
+    result.fills = registerStyle(node, context, fills, ["fill", "fills"], "fill");
   }
 
   // strokes
@@ -210,13 +196,7 @@ export const visualsExtractor: ExtractorFn = (node, result, context) => {
   // weights, so those stay as plain sibling fields and are never deduplicated.
   const strokes = buildSimplifiedStrokes(node, hasChildren);
   if (strokes.colors.length) {
-    result.strokes = registerStyle(
-      styleNode,
-      context,
-      strokes.colors,
-      ["stroke", "strokes"],
-      "fill",
-    );
+    result.strokes = registerStyle(node, context, strokes.colors, ["stroke", "strokes"], "fill");
     if (strokes.strokeWeight) result.strokeWeight = strokes.strokeWeight;
     if (strokes.strokeDashes) result.strokeDashes = strokes.strokeDashes;
     if (strokes.strokeWeights) result.strokeWeights = strokes.strokeWeights;
@@ -226,7 +206,7 @@ export const visualsExtractor: ExtractorFn = (node, result, context) => {
   // effects
   const effects = buildSimplifiedEffects(node);
   if (Object.keys(effects).length) {
-    result.effects = registerStyle(styleNode, context, effects, ["effect", "effects"], "effect");
+    result.effects = registerStyle(node, context, effects, ["effect", "effects"], "effect");
   }
 
   // opacity
@@ -248,21 +228,14 @@ export const visualsExtractor: ExtractorFn = (node, result, context) => {
  * Handles three cases: INSTANCE property values, property references on any node,
  * and property definitions on COMPONENT/COMPONENT_SET nodes.
  */
-export const componentExtractor: ExtractorFn = (snapshotNode, result, context) => {
-  // Component metadata is still REST-shaped (componentId, componentProperties,
-  // componentPropertyDefinitions); until it migrates onto NodeSnapshot (Slice 6)
-  // cast at the boundary. NodeSnapshot is a structural subset of the Figma node.
-  const node = snapshotNode as unknown as FigmaDocumentNode;
-
+export const componentExtractor: ExtractorFn = (node, result, context) => {
   // Instance nodes: componentId + simplified componentProperties
   if (node.type === "INSTANCE") {
-    if (hasValue("componentId", node)) {
+    if (node.componentId) {
       result.componentId = node.componentId;
     }
-    if (hasValue("componentProperties", node)) {
-      const props = simplifyComponentProperties(
-        node.componentProperties as Record<string, { type: string; value: boolean | string }>,
-      );
+    if (node.componentProperties) {
+      const props = simplifyComponentProperties(node.componentProperties);
       if (Object.keys(props).length > 0) {
         result.componentProperties = props;
       }
@@ -270,14 +243,8 @@ export const componentExtractor: ExtractorFn = (snapshotNode, result, context) =
   }
 
   // Any node with property references: annotate with simplified refs
-  if (
-    "componentPropertyReferences" in node &&
-    node.componentPropertyReferences &&
-    typeof node.componentPropertyReferences === "object"
-  ) {
-    const refs = simplifyPropertyReferences(
-      node.componentPropertyReferences as Record<string, string>,
-    );
+  if (node.componentPropertyReferences) {
+    const refs = simplifyPropertyReferences(node.componentPropertyReferences);
     if (Object.keys(refs).length > 0) {
       result.componentPropertyReferences = refs;
     }
@@ -286,38 +253,26 @@ export const componentExtractor: ExtractorFn = (snapshotNode, result, context) =
   // Component/ComponentSet definitions: collect property definitions
   if (
     (node.type === "COMPONENT" || node.type === "COMPONENT_SET") &&
-    "componentPropertyDefinitions" in node &&
-    node.componentPropertyDefinitions &&
-    typeof node.componentPropertyDefinitions === "object"
+    node.componentPropertyDefinitions
   ) {
-    const defs = simplifyPropertyDefinitions(
-      node.componentPropertyDefinitions as Record<
-        string,
-        { type: string; defaultValue: boolean | string }
-      >,
-    );
+    const defs = simplifyPropertyDefinitions(node.componentPropertyDefinitions);
     if (Object.keys(defs).length > 0) {
       context.traversalState.componentPropertyDefinitions[node.id] = defs;
     }
   }
 };
 
-type StyleMatch = { name: string; id: string };
+type StyleMatch = SnapshotStyleRef;
 
-// Helper to fetch a Figma style name for specific style keys on a node
-function getStyleMatch(
-  node: FigmaDocumentNode,
-  context: TraversalContext,
-  keys: string[],
-): StyleMatch | undefined {
-  if (!hasValue("styles", node)) return undefined;
-  const styleMap = node.styles as Record<string, string>;
+// Fetch the resolved named-style ref for the first matching style slot. The
+// adapter already joined `node.styles` with the top-level table (see
+// rest-node-to-snapshot), so this is a plain per-slot lookup — the wire style
+// table never reaches here (Invariant 2).
+function getStyleMatch(node: NodeSnapshot, keys: string[]): StyleMatch | undefined {
+  if (!node.styles) return undefined;
   for (const key of keys) {
-    const styleId = styleMap[key];
-    if (styleId) {
-      const meta = context.extraStyles?.[styleId];
-      if (meta?.name) return { name: meta.name, id: styleId };
-    }
+    const match = node.styles[key];
+    if (match) return match;
   }
   return undefined;
 }

@@ -25,11 +25,10 @@ function walk(
   extraStyles?: Record<string, Style>,
 ) {
   return extractFromDesign(
-    nodes.map(restNodeToSnapshot),
+    nodes.map((node) => restNodeToSnapshot(node, extraStyles)),
     extractors,
     options,
     globalVars,
-    extraStyles,
   );
 }
 
