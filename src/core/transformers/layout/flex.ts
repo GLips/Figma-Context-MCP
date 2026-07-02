@@ -1,5 +1,5 @@
 import { gapShorthand } from "./common.js";
-import type { NodeSnapshot } from "~/extractors/snapshot.js";
+import type { NodeSnapshot } from "~/core/snapshot.js";
 
 export function convertJustifyContent(align?: NodeSnapshot["primaryAxisAlignItems"]) {
   switch (align) {

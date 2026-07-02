@@ -13,8 +13,8 @@ export type {
 // Core traversal function
 export { extractFromDesign } from "./node-walker.js";
 
-// Design-level extraction (unified nodes + components)
-export { simplifyRawFigmaObject } from "./design-extractor.js";
+// Opt-in compression pass (dedup + refs), layered after the walk
+export { finalizeDesign } from "./finalize.js";
 
 // Built-in extractors and afterChildren helpers
 export {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { buildSimplifiedEffects } from "~/transformers/effects.js";
-import type { NodeSnapshot } from "~/extractors/snapshot.js";
+import { buildSimplifiedEffects } from "~/core/transformers/effects.js";
+import type { NodeSnapshot } from "~/core/snapshot.js";
 
 // Only the effects array is read; cast through unknown like the other walker tests.
 function nodeWithEffects(effects: unknown[]): NodeSnapshot {

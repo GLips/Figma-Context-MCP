@@ -1,6 +1,6 @@
 import type { Node as FigmaDocumentNode, Paint, TypeStyle } from "@figma/rest-api-spec";
-import type { SnapshotText, SnapshotTextRun, SnapshotTextStyle } from "./snapshot.js";
-import { decodePaints } from "./rest-paint.js";
+import type { SnapshotText, SnapshotTextRun, SnapshotTextStyle } from "~/core/snapshot.js";
+import { decodePaints } from "./paint.js";
 import { stableStringify } from "~/utils/common.js";
 
 /**

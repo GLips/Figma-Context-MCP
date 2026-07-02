@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 // Phase 1 Done-when gate (Invariant 2): the `canonicalize` core module graph —
 // everything reachable from the pure transform's entry points — must NOT import
 // `@figma/rest-api-spec`. Every REST wire structure is decoded in the adapter
-// (restNodeToSnapshot + rest-*.ts) so the core only ever sees `NodeSnapshot`.
+// (src/adapters/rest/) so the core only ever sees `NodeSnapshot`.
 // One REST type leaking into the core forks the transform for the future plugin
 // producer, which is the exact failure this carve exists to prevent.
 //
@@ -24,13 +24,12 @@ import { fileURLToPath } from "node:url";
 
 const SRC = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
-// The pure transform's entry surface. `restNodeToSnapshot` and everything above
-// it (design-extractor, services) are the ADAPTER — deliberately not roots.
-const CORE_ROOTS = [
-  "extractors/node-walker.ts",
-  "extractors/built-in.ts",
-  "extractors/finalize.ts",
-];
+// The pure transform's entry surface: the core barrel, which re-exports the
+// walker, built-in extractors, and finalize. `restNodeToSnapshot` and
+// everything above it (src/adapters/rest/, services) are the ADAPTER —
+// deliberately not roots. Phase 2's esbuild purity probe targets this same
+// entry, so anything the barrel doesn't reach isn't part of the core.
+const CORE_ROOTS = ["core/index.ts"];
 
 const FORBIDDEN = "@figma/rest-api-spec";
 

@@ -1,11 +1,8 @@
 import { fileURLToPath } from "node:url";
 import path from "node:path";
-import {
-  simplifyRawFigmaObject,
-  allExtractors,
-  collapseSvgContainers,
-} from "~/extractors/index.js";
-import type { SimplifiedDesign } from "~/extractors/types.js";
+import { allExtractors, collapseSvgContainers } from "~/core/index.js";
+import { simplifyRawFigmaObject } from "~/adapters/rest/design-extractor.js";
+import type { SimplifiedDesign } from "~/core/types.js";
 import type { GoldenFixture } from "./fixtures.js";
 
 // Directory holding the committed golden outputs (one <name>.json per fixture).

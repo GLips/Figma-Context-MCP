@@ -1,5 +1,5 @@
 import { isVisible } from "~/utils/common.js";
-import { computeGridChildOrder } from "~/transformers/layout.js";
+import { computeGridChildOrder } from "~/core/transformers/layout.js";
 import type { NodeSnapshot } from "./snapshot.js";
 import type {
   ExtractorFn,

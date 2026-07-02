@@ -1,6 +1,6 @@
 import { describe, test, expect } from "vitest";
-import { buildSimplifiedLayout, computeGridChildOrder } from "~/transformers/layout.js";
-import type { NodeSnapshot } from "~/extractors/snapshot.js";
+import { buildSimplifiedLayout, computeGridChildOrder } from "~/core/transformers/layout.js";
+import type { NodeSnapshot } from "~/core/snapshot.js";
 
 function makeFrame(overrides: Record<string, unknown> = {}) {
   return {

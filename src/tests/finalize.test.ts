@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { finalizeDesign } from "~/extractors/finalize.js";
-import type { GlobalVars, SimplifiedNode, StyleTypes } from "~/extractors/types.js";
+import { finalizeDesign } from "~/core/finalize.js";
+import type { GlobalVars, SimplifiedNode, StyleTypes } from "~/core/types.js";
 
 // finalizeDesign is the pure functional core of the dedup features: given the
 // already-walked node tree + globalVars (style fields hold globalVars refs, as

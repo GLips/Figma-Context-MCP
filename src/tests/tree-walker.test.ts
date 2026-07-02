@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { extractFromDesign } from "~/extractors/node-walker.js";
-import { allExtractors, collapseSvgContainers } from "~/extractors/built-in.js";
-import { simplifyRawFigmaObject } from "~/extractors/design-extractor.js";
-import { restNodeToSnapshot } from "~/extractors/rest-node-to-snapshot.js";
-import type { ExtractorFn, GlobalVars, TraversalOptions } from "~/extractors/types.js";
+import { extractFromDesign } from "~/core/node-walker.js";
+import { allExtractors, collapseSvgContainers } from "~/core/built-in.js";
+import { simplifyRawFigmaObject } from "~/adapters/rest/design-extractor.js";
+import { restNodeToSnapshot } from "~/adapters/rest/node-to-snapshot.js";
+import type { ExtractorFn, GlobalVars, TraversalOptions } from "~/core/types.js";
 import type { GetFileResponse, Style } from "@figma/rest-api-spec";
 import type { Node as FigmaNode } from "@figma/rest-api-spec";
 

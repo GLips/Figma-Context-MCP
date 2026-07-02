@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { Node as FigmaNode, Style, TypeStyle } from "@figma/rest-api-spec";
-import { extractFromDesign } from "~/extractors/node-walker.js";
-import { allExtractors } from "~/extractors/built-in.js";
-import { restNodeToSnapshot } from "~/extractors/rest-node-to-snapshot.js";
-import type { GlobalVars } from "~/extractors/types.js";
+import { extractFromDesign } from "~/core/node-walker.js";
+import { allExtractors } from "~/core/built-in.js";
+import { restNodeToSnapshot } from "~/adapters/rest/node-to-snapshot.js";
+import type { GlobalVars } from "~/core/types.js";
 
 // resolveStyleKey decides whether a node's named Figma style collapses onto an
 // existing same-name entry or gets a disambiguating ` (id)` suffix. The decision

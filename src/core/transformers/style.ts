@@ -1,4 +1,4 @@
-import type { NodeSnapshot, SnapshotPaint } from "~/extractors/snapshot.js";
+import type { NodeSnapshot, SnapshotPaint } from "~/core/snapshot.js";
 import { generateCSSShorthand, isVisible } from "~/utils/common.js";
 
 import { convertColor, formatRGBAColor } from "./style/color.js";
@@ -8,7 +8,7 @@ import { convertGradientToCss } from "./style/gradient.js";
 
 // The style transformer is split across a style/ subdirectory (color, image,
 // gradient) because gradient geometry alone is ~290 lines. This module stays the
-// single public entry point — `~/transformers/style.js` — so the re-exports below
+// single public entry point — `~/core/transformers/style.js` — so the re-exports below
 // preserve the import surface every caller already uses.
 export type { CSSRGBAColor, CSSHexColor, ColorValue } from "./style/color.js";
 export { convertColor, formatRGBAColor, flattenSolidFills } from "./style/color.js";

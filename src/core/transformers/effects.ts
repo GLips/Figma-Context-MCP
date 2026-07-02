@@ -3,8 +3,8 @@ import type {
   SnapshotColor,
   SnapshotEffect,
   SnapshotVector,
-} from "~/extractors/snapshot.js";
-import { formatRGBAColor } from "~/transformers/style.js";
+} from "~/core/snapshot.js";
+import { formatRGBAColor } from "~/core/transformers/style.js";
 import { pixelRound } from "~/utils/common.js";
 
 export type SimplifiedEffects = {

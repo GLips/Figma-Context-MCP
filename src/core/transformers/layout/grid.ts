@@ -1,5 +1,5 @@
 import { hasGridLayout, isLayout } from "~/utils/identity.js";
-import type { NodeSnapshot } from "~/extractors/snapshot.js";
+import type { NodeSnapshot } from "~/core/snapshot.js";
 import type { SimplifiedLayout } from "./common.js";
 
 /**

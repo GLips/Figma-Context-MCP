@@ -118,8 +118,9 @@ src/
 ├── mcp/                # MCP-specific code
 │   ├── index.ts
 │   └── tools/          # MCP tools
+├── adapters/rest/      # REST wire format → NodeSnapshot
+├── core/               # Canonicalize core (walker, extractors, transformers)
 ├── services/           # Core business logic
-├── transformers/       # Data transformation logic
 ├── utils/              # Utility functions
 └── tests/              # Test files
 ```

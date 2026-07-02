@@ -1,4 +1,4 @@
-import type { SnapshotPatternPaint, SnapshotTransform } from "~/extractors/snapshot.js";
+import type { SnapshotPatternPaint, SnapshotTransform } from "~/core/snapshot.js";
 
 /**
  * Simplified image fill with CSS properties and processing metadata

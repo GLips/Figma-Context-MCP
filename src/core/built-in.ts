@@ -5,21 +5,25 @@ import type {
   TraversalContext,
   SimplifiedNode,
 } from "./types.js";
-import { buildSimplifiedLayout } from "~/transformers/layout.js";
-import { buildSimplifiedStrokes, flattenSolidFills, parsePaint } from "~/transformers/style.js";
-import { buildSimplifiedEffects } from "~/transformers/effects.js";
+import { buildSimplifiedLayout } from "~/core/transformers/layout.js";
+import {
+  buildSimplifiedStrokes,
+  flattenSolidFills,
+  parsePaint,
+} from "~/core/transformers/style.js";
+import { buildSimplifiedEffects } from "~/core/transformers/effects.js";
 import {
   buildFormattedText,
   extractTextStyle,
   hasTextStyle,
   isTextNode,
   type SimplifiedTextStyle,
-} from "~/transformers/text.js";
+} from "~/core/transformers/text.js";
 import {
   simplifyComponentProperties,
   simplifyPropertyDefinitions,
   simplifyPropertyReferences,
-} from "~/transformers/component.js";
+} from "~/core/transformers/component.js";
 import { hasAutoLayout, isRectangleCornerRadii } from "~/utils/identity.js";
 import { isVisible, stableStringify } from "~/utils/common.js";
 import { createHash } from "node:crypto";
@@ -266,7 +270,7 @@ type StyleMatch = SnapshotStyleRef;
 
 // Fetch the resolved named-style ref for the first matching style slot. The
 // adapter already joined `node.styles` with the top-level table (see
-// rest-node-to-snapshot), so this is a plain per-slot lookup — the wire style
+// src/adapters/rest/node-to-snapshot.ts), so this is a plain per-slot lookup — the wire style
 // table never reaches here (Invariant 2).
 function getStyleMatch(node: NodeSnapshot, keys: string[]): StyleMatch | undefined {
   if (!node.styles) return undefined;

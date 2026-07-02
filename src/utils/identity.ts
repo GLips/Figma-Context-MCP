@@ -1,6 +1,6 @@
 import { isTruthy } from "remeda";
-import type { CSSHexColor, CSSRGBAColor } from "~/transformers/style.js";
-import type { NodeSnapshot, SnapshotRect, SnapshotStrokeWeights } from "~/extractors/snapshot.js";
+import type { CSSHexColor, CSSRGBAColor } from "~/core/transformers/style.js";
+import type { NodeSnapshot, SnapshotRect, SnapshotStrokeWeights } from "~/core/snapshot.js";
 
 export { isTruthy };
 

@@ -1,8 +1,4 @@
-import type {
-  SnapshotColor,
-  SnapshotGradientPaint,
-  SnapshotVector,
-} from "~/extractors/snapshot.js";
+import type { SnapshotColor, SnapshotGradientPaint, SnapshotVector } from "~/core/snapshot.js";
 import { formatRGBAColor } from "./color.js";
 
 export type SimplifiedGradientFill = {

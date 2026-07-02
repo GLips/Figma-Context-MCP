@@ -1,7 +1,7 @@
 import type { Node as FigmaDocumentNode, Paint, Effect, Style } from "@figma/rest-api-spec";
-import type { NodeSnapshot, SnapshotStyleRef } from "./snapshot.js";
-import { decodePaints, decodeEffect } from "./rest-paint.js";
-import { decodeText } from "./rest-text.js";
+import type { NodeSnapshot, SnapshotStyleRef } from "~/core/snapshot.js";
+import { decodePaints, decodeEffect } from "./paint.js";
+import { decodeText } from "./text.js";
 
 /**
  * REST adapter: decode a raw Figma REST node into a plan-neutral `NodeSnapshot`

@@ -1,4 +1,4 @@
-import type { SimplifiedDesign, SimplifiedNode } from "~/extractors/types.js";
+import type { SimplifiedDesign, SimplifiedNode } from "~/core/types.js";
 import { isNoiseName } from "./node-names.js";
 
 export function wrapForSerialization(design: SimplifiedDesign) {

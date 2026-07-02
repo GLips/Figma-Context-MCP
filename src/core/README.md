@@ -13,7 +13,7 @@ The system is built in clean layers:
 ## Basic Usage
 
 ```typescript
-import { extractFromDesign, allExtractors, layoutAndText, contentOnly } from "figma-mcp/extractors";
+import { extractFromDesign, allExtractors, layoutAndText, contentOnly } from "figma-developer-mcp";
 
 // Extract everything (equivalent to current parseNode)
 const fullData = extractFromDesign(nodes, allExtractors);
@@ -49,7 +49,7 @@ const textData = extractFromDesign(nodes, contentOnly, {
 ## Creating Custom Extractors
 
 ```typescript
-import type { ExtractorFn } from "figma-mcp/extractors";
+import type { ExtractorFn } from "figma-developer-mcp";
 
 // Custom extractor that identifies design system components
 const designSystemExtractor: ExtractorFn = (node, result, context) => {

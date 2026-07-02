@@ -66,19 +66,22 @@ The server supports two transports (configured in `src/server.ts`):
    - Handles auth (Personal Access Token or OAuth)
    - Methods: `getRawFile()`, `getRawNode()`, `downloadImages()`
 
-3. **Extractor System** (`src/extractors/`) — Transforms raw Figma API responses
+3. **REST Adapter** (`src/adapters/rest/`) — REST wire format → `NodeSnapshot`
 
-   - `design-extractor.ts` — Entry point, parses API response and calls extractors
+   - `design-extractor.ts` — Entry point, parses the API response envelope and calls the core
+   - `node-to-snapshot.ts` — Decodes a raw REST node into a plan-neutral `NodeSnapshot` (with `text.ts`, `paint.ts`, `component.ts` handling wire-specific structures)
+
+4. **Canonicalize Core** (`src/core/`) — Transforms `NodeSnapshot` into simplified output; Figma-type-free (gated by `src/tests/core-figma-free.test.ts`), entry barrel `src/core/index.ts`
+
    - `node-walker.ts` — Recursive traversal applying extractors to each node
-   - `built-in.ts` — Built-in extractors: `layoutExtractor`, `textExtractor`, `visualsExtractor`, `componentExtractor`
-   - Extractors are composable; `allExtractors` combines all built-ins
-
-4. **Transformers** (`src/transformers/`) — Convert specific Figma properties
-   - `layout.ts` — Layout/positioning transforms
-   - `style.ts` — Visual styling (fills, strokes)
-   - `effects.ts` — Effects (shadows, blurs)
-   - `text.ts` — Text content and styling
-   - `component.ts` — Component metadata
+   - `built-in.ts` — Built-in extractors: `layoutExtractor`, `textExtractor`, `visualsExtractor`, `componentExtractor`; extractors are composable, `allExtractors` combines all built-ins
+   - `finalize.ts` — Opt-in compression pass (dedup, style refs)
+   - `transformers/` — Convert specific node properties
+     - `layout.ts` — Layout/positioning transforms
+     - `style.ts` — Visual styling (fills, strokes)
+     - `effects.ts` — Effects (shadows, blurs)
+     - `text.ts` — Text content and styling
+     - `component.ts` — Component metadata
 
 ### Configuration
 

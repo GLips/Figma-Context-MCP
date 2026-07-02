@@ -1,11 +1,16 @@
 import type { Paint, Effect } from "@figma/rest-api-spec";
-import type { SnapshotColor, SnapshotEffect, SnapshotPaint, SnapshotVector } from "./snapshot.js";
+import type {
+  SnapshotColor,
+  SnapshotEffect,
+  SnapshotPaint,
+  SnapshotVector,
+} from "~/core/snapshot.js";
 import { tagError } from "~/utils/error-meta.js";
 
 /**
  * REST paint/effect decode — the wire-shape half of the adapter, split out so
- * both the node adapter (`rest-node-to-snapshot`) and the text adapter
- * (`rest-text`) can share it without an import cycle.
+ * both the node adapter (`node-to-snapshot`) and the text adapter
+ * (`text`) can share it without an import cycle.
  */
 
 /** Decode a paint list, dropping any the boundary can't decode (see decodePaint). */

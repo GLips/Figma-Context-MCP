@@ -7,11 +7,11 @@ import type {
   Style,
 } from "@figma/rest-api-spec";
 import { tagError } from "~/utils/error-meta.js";
-import type { ExtractorFn, TraversalOptions, SimplifiedDesign } from "./types.js";
-import { extractFromDesign } from "./node-walker.js";
-import { restNodeToSnapshot } from "./rest-node-to-snapshot.js";
-import { simplifyComponents, simplifyComponentSets } from "./rest-component.js";
-import { finalizeDesign } from "./finalize.js";
+import type { ExtractorFn, TraversalOptions, SimplifiedDesign } from "~/core/types.js";
+import { extractFromDesign } from "~/core/node-walker.js";
+import { restNodeToSnapshot } from "./node-to-snapshot.js";
+import { simplifyComponents, simplifyComponentSets } from "./component.js";
+import { finalizeDesign } from "~/core/finalize.js";
 
 /**
  * Extract a complete SimplifiedDesign from raw Figma API response using extractors.

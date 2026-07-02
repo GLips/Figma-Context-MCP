@@ -1,5 +1,5 @@
 // Re-export extractor types only
-export type { SimplifiedDesign } from "./extractors/types.js";
+export type { SimplifiedDesign } from "./core/types.js";
 
 // Flexible extractor system
 export type {
@@ -8,11 +8,10 @@ export type {
   TraversalOptions,
   GlobalVars,
   StyleTypes,
-} from "./extractors/index.js";
+} from "./core/index.js";
 
 export {
   extractFromDesign,
-  simplifyRawFigmaObject,
   layoutExtractor,
   textExtractor,
   visualsExtractor,
@@ -23,4 +22,7 @@ export {
   visualsOnly,
   layoutOnly,
   collapseSvgContainers,
-} from "./extractors/index.js";
+} from "./core/index.js";
+
+// REST adapter entry: raw Figma API response → canonical SimplifiedDesign
+export { simplifyRawFigmaObject } from "./adapters/rest/design-extractor.js";

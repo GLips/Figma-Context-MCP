@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { Node as FigmaNode, TypeStyle } from "@figma/rest-api-spec";
-import { extractFromDesign } from "~/extractors/node-walker.js";
-import { allExtractors } from "~/extractors/built-in.js";
-import { restNodeToSnapshot } from "~/extractors/rest-node-to-snapshot.js";
-import type { SimplifiedTextStyle } from "~/transformers/text.js";
+import { extractFromDesign } from "~/core/node-walker.js";
+import { allExtractors } from "~/core/built-in.js";
+import { restNodeToSnapshot } from "~/adapters/rest/node-to-snapshot.js";
+import type { SimplifiedTextStyle } from "~/core/transformers/text.js";
 
 /**
  * Minimal Figma TEXT node factory. Tests only need the fields the text

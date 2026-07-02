@@ -5,9 +5,9 @@ import type {
   SnapshotText,
   SnapshotTextRun,
   SnapshotTextStyle,
-} from "~/extractors/snapshot.js";
+} from "~/core/snapshot.js";
 import { isVisible, pixelRound } from "~/utils/common.js";
-import { parsePaint, type SimplifiedFill } from "~/transformers/style.js";
+import { parsePaint, type SimplifiedFill } from "~/core/transformers/style.js";
 
 export type SimplifiedTextStyle = Partial<{
   fontFamily: string;
@@ -191,7 +191,7 @@ type Classification = {
  * Render a text node's decoded runs as a markdown + inline style-ref string.
  *
  * The wire override tables are already resolved into `node.text` runs by the
- * adapter (see rest-text.ts); this function only:
+ * adapter (see src/adapters/rest/text.ts); this function only:
  *   1. Determines the canonical `boldWeight` — the heavier fontWeight that
  *      appears across the most characters across all lines. This is what
  *      plain `**` maps to.

@@ -1,6 +1,6 @@
 import { exhaustiveCheck } from "~/utils/common.js";
 import { isFrame, isInAutoLayoutFlow } from "~/utils/identity.js";
-import type { NodeSnapshot } from "~/extractors/snapshot.js";
+import type { NodeSnapshot } from "~/core/snapshot.js";
 
 export interface SimplifiedLayout {
   mode: "none" | "row" | "column" | "grid";

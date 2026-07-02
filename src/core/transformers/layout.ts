@@ -1,5 +1,5 @@
 import { isInAutoLayoutFlow, isFrame, isLayout, isRectangle } from "~/utils/identity.js";
-import type { NodeSnapshot } from "~/extractors/snapshot.js";
+import type { NodeSnapshot } from "~/core/snapshot.js";
 import { generateCSSShorthand, pixelRound } from "~/utils/common.js";
 import {
   convertSelfAlign,

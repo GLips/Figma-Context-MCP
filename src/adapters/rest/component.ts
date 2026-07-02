@@ -3,14 +3,14 @@ import type {
   SimplifiedComponentDefinition,
   SimplifiedComponentSetDefinition,
   SimplifiedPropertyDefinition,
-} from "~/transformers/component.js";
+} from "~/core/transformers/component.js";
 
 /**
  * REST adapter: decode the top-level `components` / `componentSets` tables into
  * the simplified definition maps the output carries. These tables are a
  * REST-specific coupling spot (Invariant 2) — they live outside the node tree in
  * the API response, so they're parsed here rather than in the core walk. The
- * per-node component simplifiers stay in transformers/component.ts (Figma-free).
+ * per-node component simplifiers stay in core/transformers/component.ts (Figma-free).
  */
 
 /**

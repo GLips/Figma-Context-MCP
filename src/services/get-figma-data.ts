@@ -1,10 +1,7 @@
 import type { GetFileResponse, GetFileNodesResponse } from "@figma/rest-api-spec";
 import { FigmaService } from "~/services/figma.js";
-import {
-  simplifyRawFigmaObject,
-  allExtractors,
-  collapseSvgContainers,
-} from "~/extractors/index.js";
+import { allExtractors, collapseSvgContainers } from "~/core/index.js";
+import { simplifyRawFigmaObject } from "~/adapters/rest/design-extractor.js";
 import { writeLogs } from "~/utils/logger.js";
 import { serializeResult, type OutputFormat } from "~/utils/serialize.js";
 import { wrapForSerialization } from "~/utils/serializable-design.js";
