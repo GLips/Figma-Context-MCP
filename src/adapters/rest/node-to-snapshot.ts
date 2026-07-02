@@ -46,7 +46,7 @@ export function restNodeToSnapshot(
     children?: FigmaDocumentNode[];
   };
 
-  const snapshot: NodeSnapshot = {
+  return {
     id: node.id,
     name: node.name,
     type: node.type,
@@ -87,7 +87,7 @@ export function restNodeToSnapshot(
     gridRowGap: raw.gridRowGap,
     gridColumnGap: raw.gridColumnGap,
 
-    // Scalar appearance (paints/effects are decoded below)
+    // Scalar appearance
     strokeWeight: raw.strokeWeight,
     strokeDashes: raw.strokeDashes,
     strokeAlign: raw.strokeAlign,
@@ -101,20 +101,20 @@ export function restNodeToSnapshot(
     componentProperties: raw.componentProperties,
     componentPropertyDefinitions: raw.componentPropertyDefinitions,
 
+    // Wire-divergent encodings, decoded rather than carried
+    fills: raw.fills && decodePaints(raw.fills),
+    strokes: raw.strokes && decodePaints(raw.strokes),
+    effects: raw.effects?.map(decodeEffect),
+
     // Text nodes: resolve the wire override tables into runs (undefined otherwise).
     text: decodeText(node),
 
     // Named styles: join the node's `styles` map with the top-level table into
     // per-slot resolved names; the wire shape never reaches the core.
     styles: decodeStyles(node, extraStyles),
+
+    children: raw.children?.map((c) => restNodeToSnapshot(c, extraStyles)),
   };
-
-  if (raw.fills) snapshot.fills = decodePaints(raw.fills);
-  if (raw.strokes) snapshot.strokes = decodePaints(raw.strokes);
-  if (raw.effects) snapshot.effects = raw.effects.map(decodeEffect);
-  if (raw.children) snapshot.children = raw.children.map((c) => restNodeToSnapshot(c, extraStyles));
-
-  return snapshot;
 }
 
 /**

@@ -27,14 +27,9 @@ export interface RefStyleSink extends StyleSink {
   readonly namedStyleKeys: Set<string>;
 }
 
-/**
- * Compressing sink: register style values under deduplicating refs.
- *
- * @param initialStyles - Pre-seeded entries (same-name named-style
- * disambiguation treats them as already registered). Mutated in place.
- */
-export function createRefStyleSink(initialStyles: Record<string, StyleTypes> = {}): RefStyleSink {
-  const styles = initialStyles;
+/** Compressing sink: register style values under deduplicating refs. */
+export function createRefStyleSink(): RefStyleSink {
+  const styles: Record<string, StyleTypes> = {};
   const namedStyleKeys = new Set<string>();
   // Reverse lookup: serialized style value → varId. Scoped to this sink, i.e.
   // to one extraction run. Kept separate from the tsN registrar's cache so the

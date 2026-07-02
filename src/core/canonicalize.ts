@@ -57,8 +57,8 @@ export async function canonicalize(
 ): Promise<CanonicalizeResult> {
   const { extractors = allExtractors, compress = false, ...traversal } = options;
 
-  if (!compress) {
-    const sink = createInlineStyleSink();
+  if (compress) {
+    const sink = createRefStyleSink();
     const { nodes, componentDefs } = await extractFromDesign(
       snapshots,
       extractors,
@@ -66,24 +66,17 @@ export async function canonicalize(
       traversal,
     );
     return {
-      nodes,
-      globalVars: { styles: sink.styles },
-      elements: {},
+      ...finalizeDesign(nodes, { styles: sink.styles }, sink.namedStyleKeys),
       componentDefinitions: componentDefs,
     };
   }
 
-  const sink = createRefStyleSink();
-  const { nodes: walked, componentDefs } = await extractFromDesign(
-    snapshots,
-    extractors,
-    sink,
-    traversal,
-  );
-  const { nodes, globalVars, elements } = finalizeDesign(
-    walked,
-    { styles: sink.styles },
-    sink.namedStyleKeys,
-  );
-  return { nodes, globalVars, elements, componentDefinitions: componentDefs };
+  const sink = createInlineStyleSink();
+  const { nodes, componentDefs } = await extractFromDesign(snapshots, extractors, sink, traversal);
+  return {
+    nodes,
+    globalVars: { styles: sink.styles },
+    elements: {},
+    componentDefinitions: componentDefs,
+  };
 }

@@ -9,6 +9,7 @@ import type {
   StyleSink,
   TraversalOptions,
   SimplifiedNode,
+  WalkScheduler,
 } from "./types.js";
 
 // Await the injected scheduler every N nodes so heartbeats, SIGINT, and other
@@ -16,10 +17,13 @@ import type {
 // one. The core itself never touches the event loop (Invariant 4).
 const YIELD_INTERVAL = 100;
 
-async function maybeYield(counter: NodeCounter, options: TraversalOptions): Promise<void> {
+async function maybeYield(
+  counter: NodeCounter,
+  scheduler: WalkScheduler | undefined,
+): Promise<void> {
   counter.count++;
-  if (options.scheduler && counter.count % YIELD_INTERVAL === 0) {
-    await options.scheduler();
+  if (scheduler && counter.count % YIELD_INTERVAL === 0) {
+    await scheduler();
   }
 }
 
@@ -74,7 +78,7 @@ async function processNodeWithExtractors(
     return null;
   }
 
-  await maybeYield(context.nodeCounter, options);
+  await maybeYield(context.nodeCounter, options.scheduler);
 
   // Always include base metadata
   const result: SimplifiedNode = {

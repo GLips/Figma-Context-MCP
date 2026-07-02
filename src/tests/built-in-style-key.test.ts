@@ -46,7 +46,10 @@ const extraStyles: Record<string, Style> = {
 };
 
 async function extractWithSeed(seed: Record<string, unknown>) {
-  const sink = createRefStyleSink({ "Heading / Large": seed as StyleTypes });
+  // Seed a pre-existing same-name entry straight into the sink's styles table;
+  // resolveStyleKey treats anything already there as registered.
+  const sink = createRefStyleSink();
+  sink.styles["Heading / Large"] = seed as StyleTypes;
   await extractFromDesign(
     [namedTextNode({ fontFamily: "Inter", fontWeight: 700, fontSize: 24 })].map((node) =>
       restNodeToSnapshot(node, extraStyles),
