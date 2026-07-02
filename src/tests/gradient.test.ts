@@ -1,24 +1,25 @@
 import { describe, expect, it } from "vitest";
 import { parsePaint } from "~/transformers/style.js";
-import type { Paint } from "@figma/rest-api-spec";
+import type { SnapshotPaint } from "~/extractors/snapshot.js";
 
 // A vertical (180deg) black→transparent linear gradient. Only `opacity` varies
 // between cases, so any difference in the emitted stops is the paint-level
-// opacity being applied (or dropped).
-function verticalBlackToTransparent(opacity?: number): Paint {
+// opacity being applied (or dropped). Built in decoded snapshot shape
+// ({stops, handles}) — the REST→snapshot decode is covered by the goldens.
+function verticalBlackToTransparent(opacity?: number): SnapshotPaint {
   return {
     type: "GRADIENT_LINEAR",
     ...(opacity === undefined ? {} : { opacity }),
-    gradientHandlePositions: [
+    handles: [
       { x: 0.5, y: 0 },
       { x: 0.5, y: 1 },
       { x: 1, y: 0 },
     ],
-    gradientStops: [
+    stops: [
       { position: 0, color: { r: 0, g: 0, b: 0, a: 1 } },
       { position: 1, color: { r: 0, g: 0, b: 0, a: 0 } },
     ],
-  } as unknown as Paint;
+  };
 }
 
 function gradientCss(opacity?: number): string {
@@ -44,16 +45,16 @@ describe("parsePaint — gradient paint opacity", () => {
   // Paint opacity and a stop's intrinsic alpha are multiplicative, not either-or:
   // a stop at alpha 0.4 under a 0.5-opacity paint resolves to 0.2.
   it("multiplies paint opacity with a stop's intrinsic alpha", () => {
-    const paint = {
+    const paint: SnapshotPaint = {
       type: "GRADIENT_LINEAR",
       opacity: 0.5,
-      gradientHandlePositions: [
+      handles: [
         { x: 0.5, y: 0 },
         { x: 0.5, y: 1 },
         { x: 1, y: 0 },
       ],
-      gradientStops: [{ position: 0, color: { r: 0, g: 0, b: 0, a: 0.4 } }],
-    } as unknown as Paint;
+      stops: [{ position: 0, color: { r: 0, g: 0, b: 0, a: 0.4 } }],
+    };
     const { gradient } = parsePaint(paint) as { gradient: string };
     expect(gradient).toContain("rgba(0, 0, 0, 0.2)");
   });
@@ -61,16 +62,16 @@ describe("parsePaint — gradient paint opacity", () => {
   // Non-linear types route stop formatting through a different geometry mapper;
   // confirm paint opacity reaches a radial gradient's stops too.
   it("applies paint opacity to non-linear (radial) gradients", () => {
-    const paint = {
+    const paint: SnapshotPaint = {
       type: "GRADIENT_RADIAL",
       opacity: 0.5,
-      gradientHandlePositions: [
+      handles: [
         { x: 0.5, y: 0.5 },
         { x: 1, y: 0.5 },
         { x: 0.5, y: 1 },
       ],
-      gradientStops: [{ position: 0, color: { r: 0, g: 0, b: 0, a: 1 } }],
-    } as unknown as Paint;
+      stops: [{ position: 0, color: { r: 0, g: 0, b: 0, a: 1 } }],
+    };
     const { gradient } = parsePaint(paint) as { gradient: string };
     expect(gradient).toContain("rgba(0, 0, 0, 0.5)");
   });
@@ -82,9 +83,9 @@ describe("parsePaint — gradient paint opacity", () => {
 function renderGradient(type: string, handles: { x: number; y: number }[]): string {
   const paint = {
     type,
-    gradientHandlePositions: handles,
-    gradientStops: [{ position: 0, color: { r: 0, g: 0, b: 0, a: 1 } }],
-  } as unknown as Paint;
+    handles,
+    stops: [{ position: 0, color: { r: 0, g: 0, b: 0, a: 1 } }],
+  } as unknown as SnapshotPaint;
   return (parsePaint(paint) as { gradient: string }).gradient;
 }
 

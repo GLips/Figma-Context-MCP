@@ -1,7 +1,5 @@
-import type { Node as FigmaDocumentNode, Paint } from "@figma/rest-api-spec";
+import type { NodeSnapshot, SnapshotPaint } from "~/extractors/snapshot.js";
 import { generateCSSShorthand, isVisible } from "~/utils/common.js";
-import { tagError } from "~/utils/error-meta.js";
-import { hasValue, isStrokeWeights } from "~/utils/identity.js";
 
 import { convertColor, formatRGBAColor } from "./style/color.js";
 import { translateScaleMode, handleImageTransform, parsePatternPaint } from "./style/image.js";
@@ -44,11 +42,11 @@ export type SimplifiedStroke = {
  * @returns Simplified stroke object with colors and properties
  */
 export function buildSimplifiedStrokes(
-  n: FigmaDocumentNode,
+  n: NodeSnapshot,
   hasChildren: boolean = false,
 ): SimplifiedStroke {
   let strokes: SimplifiedStroke = { colors: [] };
-  if (hasValue("strokes", n) && Array.isArray(n.strokes) && n.strokes.length) {
+  if (n.strokes && n.strokes.length) {
     // Reverse to match CSS stacking order (Figma layers bottom-to-top, CSS top-to-bottom)
     strokes.colors = n.strokes
       .filter(isVisible)
@@ -56,19 +54,19 @@ export function buildSimplifiedStrokes(
       .reverse();
   }
 
-  if (hasValue("strokeWeight", n) && typeof n.strokeWeight === "number" && n.strokeWeight > 0) {
+  if (typeof n.strokeWeight === "number" && n.strokeWeight > 0) {
     strokes.strokeWeight = `${n.strokeWeight}px`;
   }
 
-  if (hasValue("strokeDashes", n) && Array.isArray(n.strokeDashes) && n.strokeDashes.length) {
+  if (n.strokeDashes && n.strokeDashes.length) {
     strokes.strokeDashes = n.strokeDashes;
   }
 
-  if (hasValue("strokeAlign", n) && (n.strokeAlign === "OUTSIDE" || n.strokeAlign === "CENTER")) {
+  if (n.strokeAlign === "OUTSIDE" || n.strokeAlign === "CENTER") {
     strokes.strokeAlign = n.strokeAlign;
   }
 
-  if (hasValue("individualStrokeWeights", n, isStrokeWeights)) {
+  if (n.individualStrokeWeights) {
     strokes.strokeWeight = generateCSSShorthand(n.individualStrokeWeights);
   }
 
@@ -81,18 +79,18 @@ export function buildSimplifiedStrokes(
  * @param hasChildren - Whether the node has children (determines CSS properties)
  * @returns The converted SimplifiedFill
  */
-export function parsePaint(raw: Paint, hasChildren: boolean = false): SimplifiedFill {
+export function parsePaint(raw: SnapshotPaint, hasChildren: boolean = false): SimplifiedFill {
   if (raw.type === "IMAGE") {
-    // Figma's spec types imageRef as a required string, but in practice it can
-    // come back null for IMAGE paints whose asset lives in another file (e.g.
-    // pasted from a file you don't own). Omit the field in that case so the
-    // LLM doesn't pass a null/"null" through to download_figma_images — the
-    // downloader will fall back to rendering the containing node by nodeId.
+    // The adapter omits `ref` for IMAGE paints whose asset lives in another file
+    // (e.g. pasted from a file you don't own) — Figma returns a null imageRef there.
+    // Omit the output field in that case so the LLM doesn't pass a null/"null"
+    // through to download_figma_images — the downloader falls back to rendering
+    // the containing node by nodeId.
     const baseImageFill: SimplifiedImageFill = {
       type: "IMAGE",
-      ...(raw.imageRef ? { imageRef: raw.imageRef } : {}),
+      ...(raw.ref ? { imageRef: raw.ref } : {}),
       ...(raw.gifRef ? { gifRef: raw.gifRef } : {}),
-      scaleMode: raw.scaleMode as "FILL" | "FIT" | "TILE" | "STRETCH",
+      scaleMode: raw.scaleMode,
       scalingFactor: raw.scalingFactor,
     };
 
@@ -108,8 +106,8 @@ export function parsePaint(raw: Paint, hasChildren: boolean = false): Simplified
     // Combine scale mode processing with transform processing if needed
     // Transform processing (cropping) takes precedence over scale mode processing
     let finalProcessing = processing;
-    if (raw.imageTransform) {
-      const transformProcessing = handleImageTransform(raw.imageTransform);
+    if (raw.crop) {
+      const transformProcessing = handleImageTransform(raw.crop);
       finalProcessing = {
         ...processing,
         ...transformProcessing,
@@ -125,29 +123,18 @@ export function parsePaint(raw: Paint, hasChildren: boolean = false): Simplified
       imageDownloadArguments: finalProcessing,
     };
   } else if (raw.type === "SOLID") {
-    // treat as SOLID
-    const { hex, opacity } = convertColor(raw.color!, raw.opacity);
+    const { hex, opacity } = convertColor(raw.color, raw.opacity);
     if (opacity === 1) {
       return hex;
     } else {
-      return formatRGBAColor(raw.color!, opacity);
+      return formatRGBAColor(raw.color, opacity);
     }
   } else if (raw.type === "PATTERN") {
     return parsePatternPaint(raw);
-  } else if (
-    ["GRADIENT_LINEAR", "GRADIENT_RADIAL", "GRADIENT_ANGULAR", "GRADIENT_DIAMOND"].includes(
-      raw.type,
-    )
-  ) {
+  } else {
     return {
-      type: raw.type as
-        | "GRADIENT_LINEAR"
-        | "GRADIENT_RADIAL"
-        | "GRADIENT_ANGULAR"
-        | "GRADIENT_DIAMOND",
+      type: raw.type,
       gradient: convertGradientToCss(raw),
     };
-  } else {
-    tagError(new Error(`Unknown paint type: ${raw.type}`), { category: "internal" });
   }
 }

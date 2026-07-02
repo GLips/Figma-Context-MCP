@@ -1,4 +1,4 @@
-import type { Paint, RGBA } from "@figma/rest-api-spec";
+import type { SnapshotColor, SnapshotPaint, SnapshotSolidPaint } from "~/extractors/snapshot.js";
 
 export type CSSRGBAColor = `rgba(${number}, ${number}, ${number}, ${number})`;
 export type CSSHexColor = `#${string}`;
@@ -14,7 +14,7 @@ export interface ColorValue {
  * @param opacity - The opacity of the color, if not included in alpha channel
  * @returns The converted color
  **/
-export function convertColor(color: RGBA, opacity = 1): ColorValue {
+export function convertColor(color: SnapshotColor, opacity = 1): ColorValue {
   const r = Math.round(color.r * 255);
   const g = Math.round(color.g * 255);
   const b = Math.round(color.b * 255);
@@ -35,7 +35,7 @@ export function convertColor(color: RGBA, opacity = 1): ColorValue {
  * @param opacity - The opacity of the color, if not included in alpha channel
  * @returns The converted color
  **/
-export function formatRGBAColor(color: RGBA, opacity = 1): CSSRGBAColor {
+export function formatRGBAColor(color: SnapshotColor, opacity = 1): CSSRGBAColor {
   const r = Math.round(color.r * 255);
   const g = Math.round(color.g * 255);
   const b = Math.round(color.b * 255);
@@ -53,7 +53,7 @@ export function formatRGBAColor(color: RGBA, opacity = 1): CSSRGBAColor {
  * disqualifies the whole stack. A missing blendMode is treated as NORMAL (its
  * Figma default).
  */
-function isFlattenableSolid(paint: Paint): paint is Extract<Paint, { type: "SOLID" }> {
+function isFlattenableSolid(paint: SnapshotPaint): paint is SnapshotSolidPaint {
   return (
     paint.type === "SOLID" &&
     (paint.blendMode === undefined ||
@@ -89,11 +89,11 @@ function compositeOver(top: StraightColor, bottom: StraightColor): StraightColor
  *
  * `paints` must be in Figma order (index 0 = bottom layer).
  */
-export function flattenSolidFills(paints: Paint[]): CSSHexColor | CSSRGBAColor | null {
+export function flattenSolidFills(paints: SnapshotPaint[]): CSSHexColor | CSSRGBAColor | null {
   if (!paints.length || !paints.every(isFlattenableSolid)) return null;
 
   // Fold effective alpha (color.a * paint.opacity) before compositing, bottom to top.
-  const toStraight = (p: Extract<Paint, { type: "SOLID" }>): StraightColor => ({
+  const toStraight = (p: SnapshotSolidPaint): StraightColor => ({
     r: p.color.r,
     g: p.color.g,
     b: p.color.b,
@@ -105,7 +105,7 @@ export function flattenSolidFills(paints: Paint[]): CSSHexColor | CSSRGBAColor |
     acc = compositeOver(toStraight(paints[i]), acc);
   }
 
-  const composited: RGBA = acc;
+  const composited: SnapshotColor = acc;
   const { hex, opacity } = convertColor(composited);
   return opacity === 1 ? hex : formatRGBAColor(composited);
 }

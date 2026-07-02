@@ -1,4 +1,8 @@
-import type { Paint, RGBA, Vector } from "@figma/rest-api-spec";
+import type {
+  SnapshotColor,
+  SnapshotGradientPaint,
+  SnapshotVector,
+} from "~/extractors/snapshot.js";
 import { formatRGBAColor } from "./color.js";
 
 export type SimplifiedGradientFill = {
@@ -6,20 +10,13 @@ export type SimplifiedGradientFill = {
   gradient: string;
 };
 
-type GradientPaint = Extract<
-  Paint,
-  {
-    type: "GRADIENT_LINEAR" | "GRADIENT_RADIAL" | "GRADIENT_ANGULAR" | "GRADIENT_DIAMOND";
-  }
->;
-
-type GradientStop = { position: number; color: RGBA };
+type GradientStop = { position: number; color: SnapshotColor };
 
 type GradientGeometry = { stops: string; cssGeometry: string };
 
 type GradientMapper = (
   gradientStops: GradientStop[],
-  handles: Vector[],
+  handles: SnapshotVector[],
   paintOpacity: number,
 ) => GradientGeometry;
 
@@ -42,7 +39,7 @@ function formatStops(stops: GradientStop[], paintOpacity: number): string {
  */
 function mapLinearGradient(
   gradientStops: GradientStop[],
-  handles: Vector[],
+  handles: SnapshotVector[],
   paintOpacity: number,
 ): GradientGeometry {
   const [start, end] = handles;
@@ -103,7 +100,7 @@ function mapLinearGradient(
 /**
  * Find where the extended gradient line intersects with the element boundaries
  */
-function findExtendedLineIntersections(start: Vector, end: Vector): number[] {
+function findExtendedLineIntersections(start: SnapshotVector, end: SnapshotVector): number[] {
   const dx = end.x - start.x;
   const dy = end.y - start.y;
 
@@ -163,7 +160,7 @@ function findExtendedLineIntersections(start: Vector, end: Vector): number[] {
  */
 function mapRadialGradient(
   gradientStops: GradientStop[],
-  handles: Vector[],
+  handles: SnapshotVector[],
   paintOpacity: number,
 ): GradientGeometry {
   const [center] = handles;
@@ -181,7 +178,7 @@ function mapRadialGradient(
  */
 function mapAngularGradient(
   gradientStops: GradientStop[],
-  handles: Vector[],
+  handles: SnapshotVector[],
   paintOpacity: number,
 ): GradientGeometry {
   const [center, angleHandle] = handles;
@@ -202,7 +199,7 @@ function mapAngularGradient(
  */
 function mapDiamondGradient(
   gradientStops: GradientStop[],
-  handles: Vector[],
+  handles: SnapshotVector[],
   paintOpacity: number,
 ): GradientGeometry {
   const [center] = handles;
@@ -222,7 +219,7 @@ function mapDiamondGradient(
  * were previously two separate switches that had to be kept in sync by hand.
  */
 const GRADIENT_RENDERERS: Record<
-  GradientPaint["type"],
+  SnapshotGradientPaint["type"],
   { map: GradientMapper; wrap: (geometry: string, stops: string) => string }
 > = {
   GRADIENT_LINEAR: {
@@ -246,15 +243,15 @@ const GRADIENT_RENDERERS: Record<
 /**
  * Convert a Figma gradient to CSS gradient syntax.
  */
-export function convertGradientToCss(gradient: GradientPaint): string {
+export function convertGradientToCss(gradient: SnapshotGradientPaint): string {
   // The paint's overall opacity multiplies into each stop's own alpha (the two stack).
   const paintOpacity = gradient.opacity ?? 1;
-  const sortedStops = [...gradient.gradientStops].sort((a, b) => a.position - b.position);
+  const sortedStops = [...gradient.stops].sort((a, b) => a.position - b.position);
   const { map, wrap } = GRADIENT_RENDERERS[gradient.type];
 
   // Without two handles there's no gradient line to map; emit stops at their raw
   // positions and let the per-type wrapper supply a neutral "0deg" geometry.
-  const handles = gradient.gradientHandlePositions;
+  const handles = gradient.handles;
   if (!handles || handles.length < 2) {
     return wrap("0deg", formatStops(sortedStops, paintOpacity));
   }

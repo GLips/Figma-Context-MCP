@@ -2,6 +2,10 @@ import type { Hyperlink, Node as FigmaDocumentNode, TypeStyle, Paint } from "@fi
 import { isVisible, pixelRound, stableStringify } from "~/utils/common.js";
 import { hasValue } from "~/utils/identity.js";
 import { parsePaint, type SimplifiedFill } from "~/transformers/style.js";
+// Temporary boundary: text runs are still REST-shaped (Slice 5 moves them into
+// the adapter). Until then, decode raw override paints here before parsePaint,
+// which now consumes decoded snapshot paints.
+import { decodePaint } from "~/extractors/rest-node-to-snapshot.js";
 
 export type SimplifiedTextStyle = Partial<{
   fontFamily: string;
@@ -591,7 +595,7 @@ function classifyRun(
         const paints = value as Paint[];
         const fills = paints
           .filter(isVisible)
-          .map((p) => parsePaint(p, false))
+          .map((p) => parsePaint(decodePaint(p), false))
           .reverse();
         if (fills.length) {
           refDelta.fills = fills;

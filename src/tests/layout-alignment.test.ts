@@ -1,6 +1,6 @@
 import { describe, test, expect } from "vitest";
 import { buildSimplifiedLayout, computeGridChildOrder } from "~/transformers/layout.js";
-import type { Node as FigmaDocumentNode } from "@figma/rest-api-spec";
+import type { NodeSnapshot } from "~/extractors/snapshot.js";
 
 function makeFrame(overrides: Record<string, unknown> = {}) {
   return {
@@ -10,7 +10,7 @@ function makeFrame(overrides: Record<string, unknown> = {}) {
     primaryAxisAlignItems: "MIN",
     counterAxisAlignItems: "MIN",
     ...overrides,
-  } as unknown as FigmaDocumentNode;
+  } as unknown as NodeSnapshot;
 }
 
 function makeChild(overrides: Record<string, unknown> = {}) {
@@ -326,7 +326,7 @@ describe("layout alignment", () => {
       const section = {
         type: "SECTION",
         absoluteBoundingBox: { x: 100, y: 200, width: 708, height: 245 },
-      } as unknown as FigmaDocumentNode;
+      } as unknown as NodeSnapshot;
       const child = makeFrame({
         layoutMode: "NONE",
         absoluteBoundingBox: { x: 120, y: 210, width: 50, height: 50 },
@@ -395,7 +395,7 @@ describe("grid layout", () => {
       gridChildHorizontalAlign: "AUTO",
       gridChildVerticalAlign: "AUTO",
       ...overrides,
-    } as unknown as FigmaDocumentNode;
+    } as unknown as NodeSnapshot;
   }
 
   describe("grid container", () => {

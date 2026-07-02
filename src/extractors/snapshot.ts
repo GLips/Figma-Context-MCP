@@ -32,6 +32,92 @@ export interface SnapshotStrokeWeights {
   left: number;
 }
 
+/** Straight-alpha RGBA, channels 0..1 (Figma `RGBA`, decoupled). */
+export interface SnapshotColor {
+  r: number;
+  g: number;
+  b: number;
+  a: number;
+}
+
+/** 2D point in normalized (0..1) paint space (Figma `Vector`, decoupled). */
+export interface SnapshotVector {
+  x: number;
+  y: number;
+}
+
+/**
+ * 2x3 affine image-crop matrix, row-major
+ * (`[[scaleX, skewX, translateX], [skewY, scaleY, translateY]]`). Mirrors Figma's
+ * `Transform` (`number[][]`) exactly so the value passes through to the image
+ * download path (which still speaks `Transform`) without conversion.
+ */
+export type SnapshotTransform = number[][];
+
+// ---------------------------------------------------------------------------
+// Paints — DECODED from the wire: solid/pattern map ~1:1, but the image ref is
+// uniform (`ref`, not REST's `imageRef`) and the gradient is normalized to
+// {stops, handles} (not REST's gradientHandlePositions). This is a decode the
+// adapter owns; the plugin adapter (out of scope) derives the same shape from
+// its own wire form. See ADR/plan: {stops, handles} keeps canonicalize's
+// gradient math (which works off handle vectors) behavior-identical.
+// ---------------------------------------------------------------------------
+export interface SnapshotSolidPaint {
+  type: "SOLID";
+  color: SnapshotColor;
+  opacity?: number;
+  /** Figma BlendMode; the core only distinguishes NORMAL/PASS_THROUGH from the rest. */
+  blendMode?: string;
+  visible?: boolean;
+}
+
+export interface SnapshotGradientPaint {
+  type: "GRADIENT_LINEAR" | "GRADIENT_RADIAL" | "GRADIENT_ANGULAR" | "GRADIENT_DIAMOND";
+  stops: { position: number; color: SnapshotColor }[];
+  /** Gradient line/handle vectors in normalized paint space (REST gradientHandlePositions). */
+  handles: SnapshotVector[];
+  opacity?: number;
+  visible?: boolean;
+}
+
+export interface SnapshotImagePaint {
+  type: "IMAGE";
+  /** Uniform image asset ref (REST `imageRef`). */
+  ref?: string;
+  /** Animated-GIF ref (REST `gifRef`). */
+  gifRef?: string;
+  scaleMode: "FILL" | "FIT" | "TILE" | "STRETCH";
+  scalingFactor?: number;
+  /** Crop transform matrix (REST `imageTransform`), present when the image is cropped. */
+  crop?: SnapshotTransform;
+  visible?: boolean;
+}
+
+export interface SnapshotPatternPaint {
+  type: "PATTERN";
+  sourceNodeId: string;
+  scalingFactor: number;
+  horizontalAlignment?: "START" | "CENTER" | "END";
+  verticalAlignment?: "START" | "CENTER" | "END";
+  visible?: boolean;
+}
+
+export type SnapshotPaint =
+  | SnapshotSolidPaint
+  | SnapshotGradientPaint
+  | SnapshotImagePaint
+  | SnapshotPatternPaint;
+
+/** A visual effect (shadow/blur), raw values (Figma `Effect` subset, decoupled). */
+export interface SnapshotEffect {
+  type: string;
+  visible?: boolean;
+  color?: SnapshotColor;
+  offset?: SnapshotVector;
+  radius: number;
+  spread?: number;
+}
+
 export interface NodeSnapshot {
   id: string;
   name: string;
@@ -90,4 +176,19 @@ export interface NodeSnapshot {
   gridRowsSizing?: string;
   gridRowGap?: number;
   gridColumnGap?: number;
+
+  // ------------------------------------------------------------------------
+  // Visuals — paints/effects are decoded (see SnapshotPaint/SnapshotEffect);
+  // the scalar appearance fields are raw ~1:1 structural values.
+  // ------------------------------------------------------------------------
+  fills?: SnapshotPaint[];
+  strokes?: SnapshotPaint[];
+  strokeWeight?: number;
+  strokeDashes?: number[];
+  strokeAlign?: "INSIDE" | "OUTSIDE" | "CENTER";
+  individualStrokeWeights?: SnapshotStrokeWeights;
+  effects?: SnapshotEffect[];
+  opacity?: number;
+  cornerRadius?: number;
+  rectangleCornerRadii?: number[];
 }

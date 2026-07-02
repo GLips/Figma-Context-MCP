@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Node as FigmaNode, Style, TypeStyle } from "@figma/rest-api-spec";
 import { extractFromDesign } from "~/extractors/node-walker.js";
 import { allExtractors } from "~/extractors/built-in.js";
+import { restNodeToSnapshot } from "~/extractors/rest-node-to-snapshot.js";
 import type { GlobalVars } from "~/extractors/types.js";
 
 // resolveStyleKey decides whether a node's named Figma style collapses onto an
@@ -46,7 +47,7 @@ const extraStyles: Record<string, Style> = {
 async function extractWithSeed(seed: Record<string, unknown>) {
   const globalVars: GlobalVars = { styles: { "Heading / Large": seed } };
   return extractFromDesign(
-    [namedTextNode({ fontFamily: "Inter", fontWeight: 700, fontSize: 24 })],
+    [namedTextNode({ fontFamily: "Inter", fontWeight: 700, fontSize: 24 })].map(restNodeToSnapshot),
     allExtractors,
     {},
     globalVars,

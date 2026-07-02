@@ -1,4 +1,4 @@
-import type { Paint, Transform } from "@figma/rest-api-spec";
+import type { SnapshotPatternPaint, SnapshotTransform } from "~/extractors/snapshot.js";
 
 /**
  * Simplified image fill with CSS properties and processing metadata
@@ -57,7 +57,7 @@ export type SimplifiedImageFill = {
     /**
      * Figma's transform matrix for Sharp processing
      */
-    cropTransform?: Transform;
+    cropTransform?: SnapshotTransform;
     /**
      * Suggested filename suffix to make cropped images unique
      * When the same imageRef is used multiple times with different crops,
@@ -158,7 +158,7 @@ export function translateScaleMode(
  * @param transform - The transform matrix to hash
  * @returns Short hash string for filename suffix
  */
-function generateTransformHash(transform: Transform): string {
+function generateTransformHash(transform: SnapshotTransform): string {
   const values = transform.flat();
   const hash = values.reduce((acc, val) => {
     // Simple hash function - convert to string and create checksum
@@ -183,7 +183,7 @@ function generateTransformHash(transform: Transform): string {
  * @returns Processing metadata for image cropping
  */
 export function handleImageTransform(
-  imageTransform: Transform,
+  imageTransform: SnapshotTransform,
 ): NonNullable<SimplifiedImageFill["imageDownloadArguments"]> {
   const transformHash = generateTransformHash(imageTransform);
   return {
@@ -203,7 +203,7 @@ export function handleImageTransform(
  * @param raw - The Figma PatternPaint to convert
  * @returns The converted pattern SimplifiedFill
  */
-export function parsePatternPaint(raw: Extract<Paint, { type: "PATTERN" }>): SimplifiedPatternFill {
+export function parsePatternPaint(raw: SnapshotPatternPaint): SimplifiedPatternFill {
   /**
    * The only CSS-like repeat value supported by Figma is repeat.
    *

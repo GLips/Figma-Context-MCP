@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { buildSimplifiedEffects } from "~/transformers/effects.js";
-import type { Node as FigmaNode } from "@figma/rest-api-spec";
+import type { NodeSnapshot } from "~/extractors/snapshot.js";
 
 // Only the effects array is read; cast through unknown like the other walker tests.
-function nodeWithEffects(effects: unknown[]): FigmaNode {
-  return { type: "FRAME", effects } as unknown as FigmaNode;
+function nodeWithEffects(effects: unknown[]): NodeSnapshot {
+  return { type: "FRAME", effects } as unknown as NodeSnapshot;
 }
 
 describe("buildSimplifiedEffects — blur", () => {

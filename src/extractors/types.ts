@@ -1,4 +1,5 @@
-import type { Node as FigmaDocumentNode, Style } from "@figma/rest-api-spec";
+import type { Style } from "@figma/rest-api-spec";
+import type { NodeSnapshot } from "./snapshot.js";
 import type { SimplifiedTextStyle } from "~/transformers/text.js";
 import type { SimplifiedLayout } from "~/transformers/layout.js";
 import type { SimplifiedFill, SimplifiedStroke } from "~/transformers/style.js";
@@ -25,7 +26,7 @@ export interface TraversalContext {
   globalVars: GlobalVars;
   extraStyles?: Record<string, Style>;
   currentDepth: number;
-  parent?: FigmaDocumentNode;
+  parent?: NodeSnapshot;
   insideComponentDefinition?: boolean;
   traversalState: TraversalState;
   /**
@@ -65,18 +66,18 @@ export interface TraversalState {
 
 export interface TraversalOptions {
   maxDepth?: number;
-  nodeFilter?: (node: FigmaDocumentNode) => boolean;
+  nodeFilter?: (node: NodeSnapshot) => boolean;
   /**
    * Called after children are processed, allowing modification of the parent node
    * and control over which children to include in the output.
    *
-   * @param node - Original Figma node
+   * @param node - The node snapshot being processed
    * @param result - SimplifiedNode being built (can be mutated)
    * @param children - Processed children
    * @returns Children to include (return empty array to omit children)
    */
   afterChildren?: (
-    node: FigmaDocumentNode,
+    node: NodeSnapshot,
     result: SimplifiedNode,
     children: SimplifiedNode[],
   ) => SimplifiedNode[];
@@ -92,12 +93,12 @@ export interface TraversalOptions {
 /**
  * An extractor function that can modify a SimplifiedNode during traversal.
  *
- * @param node - The current Figma node being processed
+ * @param node - The current node snapshot being processed
  * @param result - SimplifiedNode object being built—this can be mutated inside the extractor
  * @param context - Traversal context including globalVars and parent info. This can also be mutated inside the extractor.
  */
 export type ExtractorFn = (
-  node: FigmaDocumentNode,
+  node: NodeSnapshot,
   result: SimplifiedNode,
   context: TraversalContext,
 ) => void;

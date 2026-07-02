@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import { extractFromDesign } from "~/extractors/node-walker.js";
 import { allExtractors, collapseSvgContainers } from "~/extractors/built-in.js";
 import { simplifyRawFigmaObject } from "~/extractors/design-extractor.js";
+import { restNodeToSnapshot } from "~/extractors/rest-node-to-snapshot.js";
+import type { ExtractorFn, GlobalVars, TraversalOptions } from "~/extractors/types.js";
 import type { GetFileResponse, Style } from "@figma/rest-api-spec";
 import type { Node as FigmaNode } from "@figma/rest-api-spec";
 
@@ -10,6 +12,25 @@ import type { Node as FigmaNode } from "@figma/rest-api-spec";
 // because tests only need the subset of fields the walker touches.
 function makeNode(overrides: Record<string, unknown>): FigmaNode {
   return { visible: true, ...overrides } as unknown as FigmaNode;
+}
+
+// Decode raw fixtures through the REST adapter exactly as production does, so the
+// walker receives snapshots with decoded fills/effects and recursed children.
+// (The adapter is the only place raw REST paint shapes are unpacked.)
+function walk(
+  nodes: FigmaNode[],
+  extractors: ExtractorFn[],
+  options?: TraversalOptions,
+  globalVars?: GlobalVars,
+  extraStyles?: Record<string, Style>,
+) {
+  return extractFromDesign(
+    nodes.map(restNodeToSnapshot),
+    extractors,
+    options,
+    globalVars,
+    extraStyles,
+  );
 }
 
 // A small but representative node tree:
@@ -49,7 +70,7 @@ const fixtureNodes: FigmaNode[] = [
 
 describe("extractFromDesign", () => {
   it("produces correct node structure from a nested tree", async () => {
-    const { nodes } = await extractFromDesign(fixtureNodes, allExtractors);
+    const { nodes } = await walk(fixtureNodes, allExtractors);
 
     // Top-level: Header, Body, Icon (3 nodes — Bg is invisible, filtered out)
     expect(nodes).toHaveLength(3);
@@ -76,7 +97,7 @@ describe("extractFromDesign", () => {
   });
 
   it("respects maxDepth option", async () => {
-    const { nodes } = await extractFromDesign(fixtureNodes, allExtractors, { maxDepth: 1 });
+    const { nodes } = await walk(fixtureNodes, allExtractors, { maxDepth: 1 });
 
     // At depth 0 we get top-level nodes, depth 1 gets their direct children, no deeper
     const header = nodes.find((n) => n.name === "Header")!;
@@ -98,7 +119,7 @@ describe("extractFromDesign", () => {
       fills: [{ type: "SOLID", color: { r: 1, g: 0, b: 0, a: 1 }, visible: true }],
     });
 
-    const { globalVars } = await extractFromDesign([styledNode], allExtractors);
+    const { globalVars } = await walk([styledNode], allExtractors);
 
     // The fill should be extracted into a global variable
     expect(Object.keys(globalVars.styles).length).toBeGreaterThan(0);
@@ -110,7 +131,7 @@ describe("extractFromDesign", () => {
     const nodeA = makeNode({ id: "5:1", name: "A", type: "FRAME", fills: sharedFill });
     const nodeB = makeNode({ id: "5:2", name: "B", type: "FRAME", fills: sharedFill });
 
-    const { nodes, globalVars } = await extractFromDesign([nodeA, nodeB], allExtractors);
+    const { nodes, globalVars } = await walk([nodeA, nodeB], allExtractors);
 
     // Both nodes should reference the same fill variable
     expect(nodes[0].fills).toBeDefined();
@@ -135,7 +156,7 @@ describe("extractFromDesign", () => {
     });
     const fillNode = makeNode({ id: "8:2", name: "B", type: "FRAME", fills: sharedColor });
 
-    const { nodes, globalVars } = await extractFromDesign([strokeNode, fillNode], allExtractors);
+    const { nodes, globalVars } = await walk([strokeNode, fillNode], allExtractors);
 
     expect(nodes[0].strokes).toBeDefined();
     expect(nodes[1].fills).toBeDefined();
@@ -160,7 +181,7 @@ describe("extractFromDesign", () => {
       strokeAlign: "OUTSIDE",
     });
 
-    const { nodes } = await extractFromDesign([node], allExtractors);
+    const { nodes } = await walk([node], allExtractors);
 
     expect(nodes[0].strokeAlign).toBe("OUTSIDE");
     expect(nodes[0].strokeWeight).toBe("2px");
@@ -176,7 +197,7 @@ describe("extractFromDesign", () => {
       strokeAlign: "INSIDE",
     });
 
-    const { nodes } = await extractFromDesign([node], allExtractors);
+    const { nodes } = await walk([node], allExtractors);
 
     expect(nodes[0].strokeAlign).toBeUndefined();
     expect(nodes[0].strokeWeight).toBe("2px");
@@ -206,7 +227,7 @@ describe("extractFromDesign", () => {
       "161:300": { name: "Heading / Large" } as Style,
     };
 
-    const { nodes, globalVars: resultVars } = await extractFromDesign(
+    const { nodes, globalVars: resultVars } = await walk(
       [nodeA, nodeB],
       allExtractors,
       {},
@@ -244,7 +265,7 @@ describe("fill flattening", () => {
       ],
     });
 
-    const { nodes, globalVars } = await extractFromDesign([node], allExtractors);
+    const { nodes, globalVars } = await walk([node], allExtractors);
 
     expect(fillsValue(nodes, globalVars)).toEqual(["#CCCCCC"]);
   });
@@ -260,7 +281,7 @@ describe("fill flattening", () => {
       ],
     });
 
-    const { nodes, globalVars } = await extractFromDesign([node], allExtractors);
+    const { nodes, globalVars } = await walk([node], allExtractors);
 
     // Only the opaque top color survives; the blue beneath contributes nothing.
     expect(fillsValue(nodes, globalVars)).toEqual(["#FF0000"]);
@@ -278,7 +299,7 @@ describe("fill flattening", () => {
       ],
     });
 
-    const { nodes, globalVars } = await extractFromDesign([node], allExtractors);
+    const { nodes, globalVars } = await walk([node], allExtractors);
 
     expect(fillsValue(nodes, globalVars)).toEqual(["#BFBFBF"]);
   });
@@ -295,7 +316,7 @@ describe("fill flattening", () => {
       ],
     });
 
-    const { nodes, globalVars } = await extractFromDesign([node], allExtractors);
+    const { nodes, globalVars } = await walk([node], allExtractors);
 
     // Red contributes nothing (opaque green above it); blue@50% blends over green → teal.
     expect(fillsValue(nodes, globalVars)).toEqual(["#008080"]);
@@ -323,7 +344,7 @@ describe("fill flattening", () => {
       ],
     });
 
-    const { nodes, globalVars } = await extractFromDesign([node], allExtractors);
+    const { nodes, globalVars } = await walk([node], allExtractors);
 
     expect(fillsValue(nodes, globalVars)).toEqual(["#CCCCCC"]);
   });
@@ -339,7 +360,7 @@ describe("fill flattening", () => {
       ],
     });
 
-    const { nodes, globalVars } = await extractFromDesign([node], allExtractors);
+    const { nodes, globalVars } = await walk([node], allExtractors);
 
     expect(fillsValue(nodes, globalVars)).toEqual(["rgba(85, 85, 85, 0.75)"]);
   });
@@ -367,7 +388,7 @@ describe("fill flattening", () => {
       ],
     });
 
-    const { nodes, globalVars } = await extractFromDesign([node], allExtractors);
+    const { nodes, globalVars } = await walk([node], allExtractors);
 
     // Both layers survive, reversed into CSS top-first order: solid first, gradient last.
     const value = fillsValue(nodes, globalVars) as unknown[];
@@ -392,7 +413,7 @@ describe("fill flattening", () => {
       ],
     });
 
-    const { nodes, globalVars } = await extractFromDesign([node], allExtractors);
+    const { nodes, globalVars } = await walk([node], allExtractors);
 
     expect(fillsValue(nodes, globalVars)).toHaveLength(2);
   });
@@ -411,7 +432,7 @@ describe("collapseSvgContainers", () => {
       ],
     });
 
-    const { nodes } = await extractFromDesign([booleanOpNode], allExtractors, {
+    const { nodes } = await walk([booleanOpNode], allExtractors, {
       afterChildren: collapseSvgContainers,
     });
 
@@ -439,7 +460,7 @@ describe("collapseSvgContainers", () => {
       ],
     });
 
-    const { nodes } = await extractFromDesign([frameWithBoolOp], allExtractors, {
+    const { nodes } = await walk([frameWithBoolOp], allExtractors, {
       afterChildren: collapseSvgContainers,
     });
 
@@ -468,7 +489,7 @@ describe("collapseSvgContainers", () => {
       ],
     });
 
-    const { nodes } = await extractFromDesign([autoLayoutRow], allExtractors, {
+    const { nodes } = await walk([autoLayoutRow], allExtractors, {
       afterChildren: collapseSvgContainers,
     });
 
@@ -493,7 +514,7 @@ describe("collapseSvgContainers", () => {
       ),
     });
 
-    const { nodes } = await extractFromDesign([dotRow], allExtractors, {
+    const { nodes } = await walk([dotRow], allExtractors, {
       afterChildren: collapseSvgContainers,
     });
 
@@ -516,7 +537,7 @@ describe("collapseSvgContainers", () => {
       ],
     });
 
-    const { nodes } = await extractFromDesign([iconFrame], allExtractors, {
+    const { nodes } = await walk([iconFrame], allExtractors, {
       afterChildren: collapseSvgContainers,
     });
 
@@ -545,7 +566,7 @@ describe("component property support", () => {
       ],
     });
 
-    const { nodes } = await extractFromDesign([componentNode], allExtractors);
+    const { nodes } = await walk([componentNode], allExtractors);
 
     const card = nodes[0];
     expect(card.children).toHaveLength(2);
@@ -570,7 +591,7 @@ describe("component property support", () => {
       ],
     });
 
-    const { nodes } = await extractFromDesign([instanceNode], allExtractors);
+    const { nodes } = await walk([instanceNode], allExtractors);
 
     const instance = nodes[0];
     expect(instance.children).toHaveLength(1);
@@ -590,7 +611,7 @@ describe("component property support", () => {
       children: [makeNode({ id: "12:2", name: "Title", type: "TEXT", characters: "Product Name" })],
     });
 
-    const { traversalState } = await extractFromDesign([componentNode], allExtractors);
+    const { traversalState } = await walk([componentNode], allExtractors);
 
     expect(traversalState.componentPropertyDefinitions["12:1"]).toEqual({
       "On Sale": { type: "boolean", defaultValue: true },
@@ -615,7 +636,7 @@ describe("component property support", () => {
       ],
     });
 
-    const { nodes } = await extractFromDesign([componentNode], allExtractors);
+    const { nodes } = await walk([componentNode], allExtractors);
 
     const label = nodes[0].children![0];
     expect(label.componentPropertyReferences).toEqual({ text: "Button Label" });
@@ -634,7 +655,7 @@ describe("component property support", () => {
       children: [makeNode({ id: "14:2", name: "Content", type: "FRAME" })],
     });
 
-    const { nodes } = await extractFromDesign([instanceNode], allExtractors);
+    const { nodes } = await walk([instanceNode], allExtractors);
 
     expect(nodes[0].componentProperties).toEqual({
       "On Sale": true,
@@ -661,7 +682,7 @@ describe("component property support", () => {
       ],
     });
 
-    const { nodes } = await extractFromDesign([componentNode], allExtractors);
+    const { nodes } = await walk([componentNode], allExtractors);
 
     const nestedInstance = nodes[0].children![0];
     expect(nestedInstance).toBeDefined();

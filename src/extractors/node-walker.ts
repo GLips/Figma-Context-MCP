@@ -1,4 +1,4 @@
-import type { Node as FigmaDocumentNode, Style } from "@figma/rest-api-spec";
+import type { Style } from "@figma/rest-api-spec";
 import { isVisible } from "~/utils/common.js";
 import { computeGridChildOrder } from "~/transformers/layout.js";
 import type { NodeSnapshot } from "./snapshot.js";
@@ -87,15 +87,9 @@ async function processNodeWithExtractors(
     type: node.type === "VECTOR" ? "IMAGE-SVG" : node.type,
   };
 
-  // Extractors and the layout/afterChildren helpers still read Figma-typed
-  // nodes; until they migrate onto NodeSnapshot (later carve slices) we cast at
-  // the boundary. NodeSnapshot is a structural subset of the Figma node, so the
-  // underlying object genuinely carries these fields.
-  const figmaNode = node as unknown as FigmaDocumentNode;
-
   // Apply all extractors to this node in a single pass
   for (const extractor of extractors) {
-    extractor(figmaNode, result, context);
+    extractor(node, result, context);
   }
 
   // Handle children recursively
@@ -103,7 +97,7 @@ async function processNodeWithExtractors(
     const childContext: TraversalContext = {
       ...context,
       currentDepth: context.currentDepth + 1,
-      parent: figmaNode,
+      parent: node,
       // COMPONENT nodes define properties; INSTANCE nodes resolve them
       insideComponentDefinition:
         node.type === "COMPONENT" || node.type === "COMPONENT_SET"
@@ -117,7 +111,7 @@ async function processNodeWithExtractors(
       // Grid containers: emit children in grid-flow (anchor) order rather than
       // Figma's z-order, so CSS auto-placement lands them in the right cells.
       // See computeGridChildOrder for details.
-      const order = computeGridChildOrder(figmaNode) ?? node.children.map((_, i) => i);
+      const order = computeGridChildOrder(node) ?? node.children.map((_, i) => i);
       const children: SimplifiedNode[] = [];
       for (const idx of order) {
         const child = node.children[idx];
@@ -129,7 +123,7 @@ async function processNodeWithExtractors(
       if (children.length > 0) {
         // Allow custom logic to modify parent and control which children to include
         const childrenToInclude = options.afterChildren
-          ? options.afterChildren(figmaNode, result, children)
+          ? options.afterChildren(node, result, children)
           : children;
 
         if (childrenToInclude.length > 0) {
@@ -159,7 +153,7 @@ function shouldProcessNode(
     }
   }
 
-  if (options.nodeFilter && !options.nodeFilter(node as unknown as FigmaDocumentNode)) {
+  if (options.nodeFilter && !options.nodeFilter(node)) {
     return false;
   }
 

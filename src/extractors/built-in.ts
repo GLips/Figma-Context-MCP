@@ -24,6 +24,7 @@ import { hasAutoLayout, hasValue, isRectangleCornerRadii } from "~/utils/identit
 import { isVisible, stableStringify } from "~/utils/common.js";
 import { createHash } from "node:crypto";
 import type { Node as FigmaDocumentNode } from "@figma/rest-api-spec";
+import type { NodeSnapshot } from "./snapshot.js";
 
 // Reverse lookup cache: serialized style value → varId.
 // Keyed on the GlobalVars instance so it's automatically scoped to each
@@ -147,10 +148,15 @@ function registerInlineTextStyle(context: TraversalContext, delta: SimplifiedTex
  * Extracts text content and text styling from a node.
  */
 export const textExtractor: ExtractorFn = (node, result, context) => {
+  // Text transformers still read Figma-typed nodes; until text migrates onto
+  // NodeSnapshot (later carve slice) cast at the boundary. NodeSnapshot is a
+  // structural subset of the Figma node, so the object carries these fields.
+  const figmaNode = node as unknown as FigmaDocumentNode;
+
   // Extract text content — formatted with markdown + inline style refs when
   // the node has per-character overrides, otherwise just the raw string.
-  if (isTextNode(node)) {
-    const rich = buildFormattedText(node, (delta) => registerInlineTextStyle(context, delta));
+  if (isTextNode(figmaNode)) {
+    const rich = buildFormattedText(figmaNode, (delta) => registerInlineTextStyle(context, delta));
     if (rich.text) {
       result.text = rich.text;
     }
@@ -160,10 +166,16 @@ export const textExtractor: ExtractorFn = (node, result, context) => {
   }
 
   // Extract text style
-  if (hasTextStyle(node)) {
-    const textStyle = extractTextStyle(node);
+  if (hasTextStyle(figmaNode)) {
+    const textStyle = extractTextStyle(figmaNode);
     if (textStyle) {
-      result.textStyle = registerStyle(node, context, textStyle, ["text", "typography"], "style");
+      result.textStyle = registerStyle(
+        figmaNode,
+        context,
+        textStyle,
+        ["text", "typography"],
+        "style",
+      );
     }
   }
 };
@@ -173,11 +185,14 @@ export const textExtractor: ExtractorFn = (node, result, context) => {
  */
 export const visualsExtractor: ExtractorFn = (node, result, context) => {
   // Check if node has children to determine CSS properties
-  const hasChildren =
-    hasValue("children", node) && Array.isArray(node.children) && node.children.length > 0;
+  const hasChildren = !!node.children && node.children.length > 0;
+
+  // The named-style lookup (`node.styles`) is still REST-shaped; registerStyle
+  // owns it until Slice 6 relocates it to the adapter, so cast at that boundary.
+  const styleNode = node as unknown as FigmaDocumentNode;
 
   // fills
-  if (hasValue("fills", node) && Array.isArray(node.fills) && node.fills.length) {
+  if (node.fills && node.fills.length) {
     const visibleFills = node.fills.filter(isVisible);
     // An all-solid stack collapses to the single resolved color a viewer sees,
     // removing the layer-order ambiguity that misleads LLM consumers. Mixed
@@ -187,7 +202,7 @@ export const visualsExtractor: ExtractorFn = (node, result, context) => {
     const fills = flattened
       ? [flattened]
       : visibleFills.map((fill) => parsePaint(fill, hasChildren)).reverse();
-    result.fills = registerStyle(node, context, fills, ["fill", "fills"], "fill");
+    result.fills = registerStyle(styleNode, context, fills, ["fill", "fills"], "fill");
   }
 
   // strokes
@@ -196,7 +211,13 @@ export const visualsExtractor: ExtractorFn = (node, result, context) => {
   // weights, so those stay as plain sibling fields and are never deduplicated.
   const strokes = buildSimplifiedStrokes(node, hasChildren);
   if (strokes.colors.length) {
-    result.strokes = registerStyle(node, context, strokes.colors, ["stroke", "strokes"], "fill");
+    result.strokes = registerStyle(
+      styleNode,
+      context,
+      strokes.colors,
+      ["stroke", "strokes"],
+      "fill",
+    );
     if (strokes.strokeWeight) result.strokeWeight = strokes.strokeWeight;
     if (strokes.strokeDashes) result.strokeDashes = strokes.strokeDashes;
     if (strokes.strokeWeights) result.strokeWeights = strokes.strokeWeights;
@@ -206,19 +227,19 @@ export const visualsExtractor: ExtractorFn = (node, result, context) => {
   // effects
   const effects = buildSimplifiedEffects(node);
   if (Object.keys(effects).length) {
-    result.effects = registerStyle(node, context, effects, ["effect", "effects"], "effect");
+    result.effects = registerStyle(styleNode, context, effects, ["effect", "effects"], "effect");
   }
 
   // opacity
-  if (hasValue("opacity", node) && typeof node.opacity === "number" && node.opacity !== 1) {
+  if (typeof node.opacity === "number" && node.opacity !== 1) {
     result.opacity = node.opacity;
   }
 
   // border radius
-  if (hasValue("cornerRadius", node) && typeof node.cornerRadius === "number") {
+  if (typeof node.cornerRadius === "number") {
     result.borderRadius = `${node.cornerRadius}px`;
   }
-  if (hasValue("rectangleCornerRadii", node, isRectangleCornerRadii)) {
+  if (isRectangleCornerRadii(node.rectangleCornerRadii)) {
     result.borderRadius = `${node.rectangleCornerRadii[0]}px ${node.rectangleCornerRadii[1]}px ${node.rectangleCornerRadii[2]}px ${node.rectangleCornerRadii[3]}px`;
   }
 };
@@ -228,7 +249,12 @@ export const visualsExtractor: ExtractorFn = (node, result, context) => {
  * Handles three cases: INSTANCE property values, property references on any node,
  * and property definitions on COMPONENT/COMPONENT_SET nodes.
  */
-export const componentExtractor: ExtractorFn = (node, result, context) => {
+export const componentExtractor: ExtractorFn = (snapshotNode, result, context) => {
+  // Component metadata is still REST-shaped (componentId, componentProperties,
+  // componentPropertyDefinitions); until it migrates onto NodeSnapshot (Slice 6)
+  // cast at the boundary. NodeSnapshot is a structural subset of the Figma node.
+  const node = snapshotNode as unknown as FigmaDocumentNode;
+
   // Instance nodes: componentId + simplified componentProperties
   if (node.type === "INSTANCE") {
     if (hasValue("componentId", node)) {
@@ -398,7 +424,7 @@ const SVG_COLLAPSE_AUTOLAYOUT_THRESHOLD = 10;
  * @returns Children to include (empty array if collapsed)
  */
 export function collapseSvgContainers(
-  node: FigmaDocumentNode,
+  node: NodeSnapshot,
   result: SimplifiedNode,
   children: SimplifiedNode[],
 ): SimplifiedNode[] {
@@ -424,14 +450,12 @@ export function collapseSvgContainers(
  * if a deeper descendant has image fills, its parent won't collapse (stays FRAME),
  * and FRAME isn't SVG-eligible, so the chain breaks naturally at each level.
  */
-function hasImageFillOnSelfOrDirectChildren(node: FigmaDocumentNode): boolean {
-  if (hasValue("fills", node) && node.fills.some((fill) => fill.type === "IMAGE")) {
+function hasImageFillOnSelfOrDirectChildren(node: NodeSnapshot): boolean {
+  if (node.fills?.some((fill) => fill.type === "IMAGE")) {
     return true;
   }
-  if (hasValue("children", node)) {
-    return node.children.some(
-      (child) => hasValue("fills", child) && child.fills.some((fill) => fill.type === "IMAGE"),
-    );
+  if (node.children) {
+    return node.children.some((child) => child.fills?.some((fill) => fill.type === "IMAGE"));
   }
   return false;
 }
