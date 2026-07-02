@@ -13,6 +13,14 @@ import { fileURLToPath } from "node:url";
 // This walks the import graph rather than grepping a hand-maintained file list,
 // so a new core module that pulls in a Figma type fails here automatically —
 // the gate can't rot as the core grows.
+//
+// Scope: this enforces import-cleanliness (no core module *names* a REST type),
+// not value-cleanliness. `restNodeToSnapshot` builds the snapshot by spreading
+// the raw node, so undeclared REST fields still ride through at runtime; the
+// contract that the core only *reads* declared `NodeSnapshot` fields is upheld
+// by the types, not by this test. Tightening that (explicit construction or a
+// runtime shape assertion) is deferred — the spread passthrough is the
+// deliberate incremental-carve mechanism, not an oversight.
 
 const SRC = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -26,15 +34,27 @@ const CORE_ROOTS = [
 
 const FORBIDDEN = "@figma/rest-api-spec";
 
-/** Extract every module specifier from `import`/`export ... from "..."` statements. */
+// Every module-referencing form: static `... from "x"`, bare side-effect
+// `import "x"`, and dynamic / inline-type `import("x")`. The last matters most —
+// an inline `import("@figma/rest-api-spec").Node` type reference reintroduces the
+// forbidden dependency without any top-level import statement, and this test is
+// the sole enforcement of the invariant, so a form it can't see is a false green.
+const SPECIFIER_PATTERNS = [
+  /(?:import|export)[\s\S]*?from\s*["']([^"']+)["']/g, // static import/export ... from
+  /(?:^|[\n;])\s*import\s+["']([^"']+)["']/g, // bare side-effect import "x"
+  /\bimport\s*\(\s*["']([^"']+)["']\s*\)/g, // dynamic / inline-type import("x")
+];
+
+/** Extract every module specifier referenced by `source`, across all import forms. */
 function importSpecifiers(source: string): string[] {
-  const specifiers: string[] = [];
-  const re = /(?:import|export)[\s\S]*?from\s*["']([^"']+)["']/g;
-  let match: RegExpExecArray | null;
-  while ((match = re.exec(source)) !== null) {
-    specifiers.push(match[1]);
+  const specifiers = new Set<string>();
+  for (const re of SPECIFIER_PATTERNS) {
+    let match: RegExpExecArray | null;
+    while ((match = re.exec(source)) !== null) {
+      specifiers.add(match[1]);
+    }
   }
-  return specifiers;
+  return Array.from(specifiers);
 }
 
 /** Resolve a local (`~/` or relative) `.js` specifier to its `.ts` source path; null for externals. */

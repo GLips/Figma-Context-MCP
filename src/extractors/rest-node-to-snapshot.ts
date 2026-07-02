@@ -1,6 +1,6 @@
 import type { Node as FigmaDocumentNode, Paint, Effect, Style } from "@figma/rest-api-spec";
 import type { NodeSnapshot, SnapshotStyleRef } from "./snapshot.js";
-import { decodePaint, decodeEffect } from "./rest-paint.js";
+import { decodePaints, decodeEffect } from "./rest-paint.js";
 import { decodeText } from "./rest-text.js";
 
 /**
@@ -9,11 +9,11 @@ import { decodeText } from "./rest-text.js";
  * (top-level tables, `imageRef`, override tables, `gradientHandlePositions`,
  * `node.styles` lookups) so none of it reaches the core (Invariant 2).
  *
- * Incremental carve: the ~1:1 structural fields (id, layout traits, scalar
- * appearance) still pass through untouched because `NodeSnapshot` is a subset of
- * the Figma node shape. The concerns that have migrated onto decoded snapshot
- * shapes — paints, effects, and text runs — are unpacked here; the rest
- * (component metadata, named-style resolution) is decoded in later carve slices.
+ * The ~1:1 structural fields (id, layout traits, scalar appearance, component
+ * metadata) pass through untouched via the spread because `NodeSnapshot` is a
+ * structural subset of the Figma node shape. The fields whose wire encoding
+ * diverges from the snapshot shape — paints, effects, text runs, named styles —
+ * are decoded explicitly below and overwrite their spread-through raw form.
  *
  * The whole subtree is decoded eagerly: children are mapped recursively so the
  * walker only ever sees decoded snapshots and never reaches back into REST
@@ -35,8 +35,8 @@ export function restNodeToSnapshot(
 
   const snapshot = { ...node } as unknown as NodeSnapshot;
 
-  if (raw.fills) snapshot.fills = raw.fills.map(decodePaint);
-  if (raw.strokes) snapshot.strokes = raw.strokes.map(decodePaint);
+  if (raw.fills) snapshot.fills = decodePaints(raw.fills);
+  if (raw.strokes) snapshot.strokes = decodePaints(raw.strokes);
   if (raw.effects) snapshot.effects = raw.effects.map(decodeEffect);
   if (raw.children) snapshot.children = raw.children.map((c) => restNodeToSnapshot(c, extraStyles));
 
@@ -56,8 +56,8 @@ export function restNodeToSnapshot(
 /**
  * Resolve a node's REST `styles` map (style-slot → styleId) against the
  * top-level `styles` table (styleId → { name }) into per-slot resolved refs.
- * Only slots whose styleId carries a name survive — an unnamed or unknown
- * styleId is dropped, exactly as the old in-core lookup skipped it.
+ * Only slots whose styleId carries a name survive; an unnamed or unknown styleId
+ * is dropped, so `getStyleMatch` never surfaces a style the design didn't name.
  */
 function decodeStyles(
   node: FigmaDocumentNode,

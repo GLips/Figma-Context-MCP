@@ -1,6 +1,6 @@
 import type { Node as FigmaDocumentNode, Paint, TypeStyle } from "@figma/rest-api-spec";
 import type { SnapshotText, SnapshotTextRun, SnapshotTextStyle } from "./snapshot.js";
-import { decodePaint } from "./rest-paint.js";
+import { decodePaints } from "./rest-paint.js";
 import { stableStringify } from "~/utils/common.js";
 
 /**
@@ -11,8 +11,8 @@ import { stableStringify } from "~/utils/common.js";
  * renders these runs.
  *
  * The run algorithm (splitLines → computeRunsForLine → computeDelta → merge) is
- * ported verbatim from the previous in-core text transformer — behavior is
- * gated byte-for-byte by the goldens. Only the boundary moved.
+ * behavior-critical and gated byte-for-byte by the goldens: change it only with
+ * a matching goldens diff, never as a casual cleanup.
  */
 
 /** Internal run carrying the raw wire delta; converted to SnapshotTextRun on emit. */
@@ -89,7 +89,7 @@ function decodeTextStyle(style: Partial<TypeStyle>): SnapshotTextStyle {
   const fills = (style as { fills?: Paint[] }).fills;
   return {
     ...(style as SnapshotTextStyle),
-    ...(fills ? { fills: fills.map(decodePaint) } : {}),
+    ...(fills ? { fills: decodePaints(fills) } : {}),
   };
 }
 

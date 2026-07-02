@@ -1,5 +1,6 @@
 import type { Paint, Effect } from "@figma/rest-api-spec";
 import type { SnapshotColor, SnapshotEffect, SnapshotPaint, SnapshotVector } from "./snapshot.js";
+import { tagError } from "~/utils/error-meta.js";
 
 /**
  * REST paint/effect decode — the wire-shape half of the adapter, split out so
@@ -7,13 +8,28 @@ import type { SnapshotColor, SnapshotEffect, SnapshotPaint, SnapshotVector } fro
  * (`rest-text`) can share it without an import cycle.
  */
 
+/** Decode a paint list, dropping any the boundary can't decode (see decodePaint). */
+export function decodePaints(paints: Paint[]): SnapshotPaint[] {
+  const decoded: SnapshotPaint[] = [];
+  for (const paint of paints) {
+    const p = decodePaint(paint);
+    if (p) decoded.push(p);
+  }
+  return decoded;
+}
+
 /**
  * Decode a REST `Paint` into a `SnapshotPaint`. Solid/pattern map ~1:1; the
  * image ref is uniformized (`imageRef`/`imageTransform` → `ref`/`crop`) and the
  * gradient is normalized to `{stops, handles}` so the core's gradient math works
  * off handle vectors without knowing the wire encoding.
+ *
+ * Returns undefined for a paint whose `type` is outside the REST union — a live
+ * API shipping a paint kind newer than the pinned spec. This is a system
+ * boundary, so we log-and-drop (as the pre-carve `parsePaint` did) rather than
+ * let an undecodable paint reach the core and crash a downstream `isVisible`.
  */
-export function decodePaint(paint: Paint): SnapshotPaint {
+export function decodePaint(paint: Paint): SnapshotPaint | undefined {
   switch (paint.type) {
     case "IMAGE":
       return {
@@ -55,6 +71,11 @@ export function decodePaint(paint: Paint): SnapshotPaint {
         blendMode: paint.blendMode,
         visible: paint.visible,
       };
+    default:
+      tagError(new Error(`Unknown paint type: ${(paint as { type: string }).type}`), {
+        category: "internal",
+      });
+      return undefined;
   }
 }
 

@@ -9,17 +9,6 @@ export type FrameSnapshot = NodeSnapshot & { clipsContent: boolean };
 /** A snapshot known to have a concrete bounding box (participates in layout). */
 export type LayoutSnapshot = NodeSnapshot & { absoluteBoundingBox: SnapshotRect };
 
-export function hasValue<K extends PropertyKey, T>(
-  key: K,
-  obj: unknown,
-  typeGuard?: (val: unknown) => val is T,
-): obj is Record<K, T> {
-  const isObject = typeof obj === "object" && obj !== null;
-  if (!isObject || !(key in obj)) return false;
-  const val = (obj as Record<K, unknown>)[key];
-  return typeGuard ? typeGuard(val) : val !== undefined;
-}
-
 // Checks for `HasFramePropertiesTrait`, not node type. This is the FRAME family
 // — FRAME, GROUP, COMPONENT, COMPONENT_SET, INSTANCE — i.e. the nodes that can
 // carry auto-layout properties like `layoutMode`, `paddingTop`, etc. NOT a

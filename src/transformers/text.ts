@@ -220,17 +220,20 @@ export function buildFormattedText(
     return { text: "" };
   }
 
-  const baseStyle = text.style;
+  const perLineRuns = text.lines;
 
-  // No base style → emit characters as-is (escaped). The adapter leaves `lines`
-  // empty in this case (a text node with no `style` — synthetic fixtures only;
-  // real Figma TEXT nodes always have one). `escapeMarkdown` still rewrites real
-  // newlines to a literal `\n` so multi-line plain text stays compact in YAML.
-  if (Object.keys(baseStyle).length === 0) {
+  // No base style → emit characters as-is (escaped). The adapter signals this by
+  // leaving `lines` empty (a text node with no `style` — synthetic fixtures only;
+  // real Figma TEXT nodes always have one, so the run pipeline runs). Gating on
+  // empty `lines` rather than an empty `style` object keeps a present-but-empty
+  // style running the pipeline, matching the pre-carve `!node.style` check.
+  // `escapeMarkdown` still rewrites real newlines to a literal `\n` so multi-line
+  // plain text stays compact in YAML.
+  if (perLineRuns.length === 0) {
     return { text: escapeMarkdown(text.characters) };
   }
 
-  const perLineRuns = text.lines;
+  const baseStyle = text.style;
 
   // boldWeight is detected once across every run in every line — `**` maps
   // to a single canonical weight for the whole text node, not per-line.
