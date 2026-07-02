@@ -1,11 +1,12 @@
-import type { Hyperlink, Node as FigmaDocumentNode, TypeStyle, Paint } from "@figma/rest-api-spec";
-import { isVisible, pixelRound, stableStringify } from "~/utils/common.js";
-import { hasValue } from "~/utils/identity.js";
+import type {
+  NodeSnapshot,
+  SnapshotHyperlink,
+  SnapshotPaint,
+  SnapshotTextRun,
+  SnapshotTextStyle,
+} from "~/extractors/snapshot.js";
+import { isVisible, pixelRound } from "~/utils/common.js";
 import { parsePaint, type SimplifiedFill } from "~/transformers/style.js";
-// Temporary boundary: text runs are still REST-shaped (Slice 5 moves them into
-// the adapter). Until then, decode raw override paints here before parsePaint,
-// which now consumes decoded snapshot paints.
-import { decodePaint } from "~/extractors/rest-node-to-snapshot.js";
 
 export type SimplifiedTextStyle = Partial<{
   fontFamily: string;
@@ -22,7 +23,7 @@ export type SimplifiedTextStyle = Partial<{
   // where the base style has underline/strike and a per-character run clears
   // it. The base textStyle never emits NONE (defaults drop out).
   textDecoration: "STRIKETHROUGH" | "UNDERLINE" | "NONE";
-  hyperlink: Hyperlink;
+  hyperlink: SnapshotHyperlink;
   // Only non-zero flags are emitted; defaults stay out of the ref so two nodes
   // that differ only in default flag values still dedupe.
   opentypeFlags: Record<string, number>;
@@ -36,17 +37,12 @@ export type SimplifiedTextStyle = Partial<{
   fills: SimplifiedFill[];
 }>;
 
-export function isTextNode(
-  n: FigmaDocumentNode,
-): n is Extract<FigmaDocumentNode, { type: "TEXT" }> {
+export function isTextNode(n: NodeSnapshot): boolean {
   return n.type === "TEXT";
 }
 
-export function hasTextStyle(
-  n: FigmaDocumentNode,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- `any` needed to extract the style variant from the union
-): n is FigmaDocumentNode & { style: Extract<FigmaDocumentNode, { style: any }>["style"] } {
-  return hasValue("style", n) && Object.keys(n.style).length > 0;
+export function hasTextStyle(n: NodeSnapshot): boolean {
+  return !!n.text && Object.keys(n.text.style).length > 0;
 }
 
 // Letter-spacing is emitted as a font-size-relative `em` so it pastes straight
@@ -59,9 +55,9 @@ function emRound(value: number): number {
   return Number(value.toFixed(4));
 }
 
-export function extractTextStyle(n: FigmaDocumentNode) {
+export function extractTextStyle(n: NodeSnapshot) {
   if (hasTextStyle(n)) {
-    const style = n.style;
+    const style = n.text!.style;
     const textStyle: SimplifiedTextStyle = {
       fontFamily: style.fontFamily,
       fontStyle: "fontStyle" in style && style.fontStyle ? style.fontStyle : undefined,
@@ -180,17 +176,6 @@ type BuildFormattedTextResult = {
   boldWeight?: number;
 };
 
-type Run = {
-  /**
-   * Raw character range for this run — not yet escaped or wrapped.
-   * Stored as an array of code points so we can slice the characters string
-   * without splitting surrogate pairs when handling emoji / astral chars.
-   */
-  text: string;
-  /** Deduped delta against the base style (only properties that actually differ). */
-  delta: Partial<TypeStyle>;
-};
-
 type Classification = {
   isBold: boolean;
   isItalic: boolean;
@@ -202,39 +187,20 @@ type Classification = {
 };
 
 /**
- * Fields ignored by the delta computation. These are either book-keeping
- * (semanticWeight, semanticItalic, isOverrideOverTextStyle) that don't affect
- * visual output, or fields we explicitly don't carry into the simplified
- * representation (fontPostScriptName, boundVariables).
- */
-const IGNORED_TYPE_STYLE_FIELDS = new Set([
-  "semanticWeight",
-  "semanticItalic",
-  "isOverrideOverTextStyle",
-  "fontPostScriptName",
-  "boundVariables",
-]);
-
-/**
- * Build a formatted markdown + inline style-ref representation of a text
- * node's mixed character formatting.
+ * Render a text node's decoded runs as a markdown + inline style-ref string.
  *
- * Algorithm (matches `docs/plans/2026-04-08-feat-rich-text-styling-plan.md`):
- *   1. Split characters by newline / paragraph-separator into lines, carrying
- *      a per-line slice of `characterStyleOverrides`.
- *   2. For each line: split into runs based on the line's overrides, compute
- *      each run's delta against the base `style` (dropping no-op overrides),
- *      and merge adjacent identical runs.
- *   3. Determine the canonical `boldWeight` — the heavier fontWeight that
+ * The wire override tables are already resolved into `node.text` runs by the
+ * adapter (see rest-text.ts); this function only:
+ *   1. Determines the canonical `boldWeight` — the heavier fontWeight that
  *      appears across the most characters across all lines. This is what
  *      plain `**` maps to.
- *   4. Classify each run's delta into markdown (bold/italic/strike/URL link)
- *      + residual style-ref properties, then render: escape raw text, wrap
+ *   2. Classifies each run's delta into markdown (bold/italic/strike/URL link)
+ *      + residual style-ref properties, then renders: escape raw text, wrap
  *      style-ref deltas on the outside, markdown markers on the inside.
- *   5. Prepend a list marker to each line based on `lineTypes` /
+ *   3. Prepends a list marker to each line based on `lineTypes` /
  *      `lineIndentations` (ordered `1.`, unordered `-`, nested with 2-space
  *      CommonMark indent).
- *   6. Join lines with a literal `\n` (two characters, backslash + n). Real
+ *   4. Joins lines with a literal `\n` (two characters, backslash + n). Real
  *      newlines in the output would cause the YAML serializer to emit a
  *      block scalar with per-line indentation — one indent level per nesting
  *      depth, multiplied by every line. Literal `\n` keeps the entire string
@@ -246,49 +212,25 @@ const IGNORED_TYPE_STYLE_FIELDS = new Set([
  * every style boundary.
  */
 export function buildFormattedText(
-  node: FigmaDocumentNode,
+  node: NodeSnapshot,
   registerStyle: RegisterInlineTextStyle,
 ): BuildFormattedTextResult {
-  if (!isTextNode(node)) {
-    return { text: "" };
-  }
-  const characters = node.characters ?? "";
-  if (characters.length === 0) {
+  const text = node.text;
+  if (!text || text.characters.length === 0) {
     return { text: "" };
   }
 
-  const overrides = node.characterStyleOverrides ?? [];
-  const lineTypes: Array<"NONE" | "ORDERED" | "UNORDERED"> =
-    "lineTypes" in node && Array.isArray(node.lineTypes) ? node.lineTypes : [];
-  const lineIndentations: number[] =
-    "lineIndentations" in node && Array.isArray(node.lineIndentations) ? node.lineIndentations : [];
+  const baseStyle = text.style;
 
-  // Defensive: synthetic test fixtures sometimes lack a base style. The
-  // delta pipeline can't run without one, so emit characters as-is.
-  // (Real Figma TEXT nodes always have `style` per the API spec.)
-  if (!node.style) {
-    return { text: escapeMarkdown(characters) };
+  // No base style → emit characters as-is (escaped). The adapter leaves `lines`
+  // empty in this case (a text node with no `style` — synthetic fixtures only;
+  // real Figma TEXT nodes always have one). `escapeMarkdown` still rewrites real
+  // newlines to a literal `\n` so multi-line plain text stays compact in YAML.
+  if (Object.keys(baseStyle).length === 0) {
+    return { text: escapeMarkdown(text.characters) };
   }
 
-  const hasOverrides = overrides.some((id) => id !== 0);
-  const hasList = lineTypes.some((t) => t === "ORDERED" || t === "UNORDERED");
-
-  // Fast path: nothing to format. `escapeMarkdown` still rewrites real
-  // newlines to a literal `\n` so multi-line plain text stays compact in
-  // YAML output.
-  if (!hasOverrides && !hasList) {
-    return { text: escapeMarkdown(characters) };
-  }
-
-  // Split into code points so a surrogate pair stays with its run.
-  const codePoints = Array.from(characters);
-  const overrideTable = (node.styleOverrideTable ?? {}) as Record<string, TypeStyle>;
-  const baseStyle: TypeStyle = node.style;
-
-  const lines = splitLines(codePoints, overrides);
-  const perLineRuns: Run[][] = lines.map((line) =>
-    computeRunsForLine(line.codePoints, line.overrides, overrideTable, baseStyle),
-  );
+  const perLineRuns = text.lines;
 
   // boldWeight is detected once across every run in every line — `**` maps
   // to a single canonical weight for the whole text node, not per-line.
@@ -296,96 +238,21 @@ export function buildFormattedText(
 
   const listState = new ListState();
   const renderedLines: string[] = [];
-  for (let i = 0; i < lines.length; i++) {
+  for (let i = 0; i < perLineRuns.length; i++) {
     let lineOutput = "";
     for (const run of perLineRuns[i]) {
       const classification = classifyRun(run.delta, baseStyle, boldWeight);
       lineOutput += renderRun(run.text, classification, registerStyle);
     }
-    const type = lineTypes[i] ?? "NONE";
-    const depth = lineIndentations[i] ?? 0;
+    const type = text.lineTypes[i] ?? "NONE";
+    const depth = text.lineIndentations[i] ?? 0;
     renderedLines.push(listState.advance(type, depth) + lineOutput);
   }
 
   // Join with a literal `\n` (backslash + n, two chars). See the
   // `escapeMarkdown` comment for why real newlines aren't used.
-  const text = renderedLines.join("\\n");
-  return boldWeight !== undefined ? { text, boldWeight } : { text };
-}
-
-/**
- * Split characters into lines at `\n` / `\u2029` (paragraph separator — the
- * Figma API allows both). Each line carries its slice of the overrides
- * array. The newline character itself is discarded along with its override.
- *
- * The returned line count matches what Figma's `lineTypes` /
- * `lineIndentations` arrays expect: a trailing newline produces an empty
- * final line.
- */
-function splitLines(
-  codePoints: string[],
-  overrides: number[],
-): Array<{ codePoints: string[]; overrides: number[] }> {
-  const lines: Array<{ codePoints: string[]; overrides: number[] }> = [];
-  let lineStart = 0;
-  for (let i = 0; i <= codePoints.length; i++) {
-    const ch = i < codePoints.length ? codePoints[i] : null;
-    if (ch === "\n" || ch === "\u2029" || ch === null) {
-      lines.push({
-        codePoints: codePoints.slice(lineStart, i),
-        overrides: overrides.slice(lineStart, i),
-      });
-      lineStart = i + 1;
-    }
-  }
-  return lines;
-}
-
-/**
- * Compute the merged run list for a single line — split by override
- * boundaries, diff each range against the base style, merge adjacent runs
- * with equal deltas.
- *
- * Kept separate from `buildFormattedText` so the list-aware caller can run
- * the run pipeline once per line without duplicating the merge logic, and
- * so the trailing-zero handling (`overrides[i] ?? 0`) operates on the
- * caller's per-line slice of the overrides array rather than the whole.
- */
-function computeRunsForLine(
-  codePoints: string[],
-  overrides: number[],
-  overrideTable: Record<string, TypeStyle>,
-  baseStyle: TypeStyle,
-): Run[] {
-  if (codePoints.length === 0) return [];
-
-  const rawRuns: Run[] = [];
-  let runStart = 0;
-  for (let i = 0; i <= codePoints.length; i++) {
-    // Trailing entries of characterStyleOverrides can be omitted, in which
-    // case they implicitly mean override ID 0 (base style). Past-end sentinel
-    // is -1 so we always close the final run on the last iteration.
-    const currentId = i < codePoints.length ? (overrides[i] ?? 0) : -1;
-    const startId = runStart < codePoints.length ? (overrides[runStart] ?? 0) : 0;
-    if ((i === codePoints.length || currentId !== startId) && i > runStart) {
-      rawRuns.push({
-        text: codePoints.slice(runStart, i).join(""),
-        delta: computeDelta(startId, overrideTable, baseStyle),
-      });
-      runStart = i;
-    }
-  }
-
-  const runs: Run[] = [];
-  for (const run of rawRuns) {
-    const prev = runs[runs.length - 1];
-    if (prev && deltasEqual(prev.delta, run.delta)) {
-      prev.text += run.text;
-    } else {
-      runs.push({ ...run });
-    }
-  }
-  return runs;
+  const joined = renderedLines.join("\\n");
+  return boldWeight !== undefined ? { text: joined, boldWeight } : { text: joined };
 }
 
 /**
@@ -435,44 +302,15 @@ class ListState {
 }
 
 /**
- * Compute the delta for an override ID against the base style.
- *
- * Returns only the properties that differ from the base. Override ID 0 and
- * missing entries both mean "no delta". We filter out no-op overrides — e.g.
- * a leftover `fontWeight: 400` in the override table when the base is already
- * 400 — because they would otherwise produce empty style refs.
- */
-function computeDelta(
-  overrideId: number,
-  overrideTable: Record<string, TypeStyle>,
-  baseStyle: TypeStyle,
-): Partial<TypeStyle> {
-  if (overrideId === 0) return {};
-  const override = overrideTable[String(overrideId)];
-  if (!override) return {};
-
-  const delta: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(override)) {
-    if (IGNORED_TYPE_STYLE_FIELDS.has(key)) continue;
-    if (value === undefined) continue;
-    const baseValue = (baseStyle as Record<string, unknown>)[key];
-    if (JSON.stringify(baseValue) === JSON.stringify(value)) continue;
-    delta[key] = value;
-  }
-  return delta as Partial<TypeStyle>;
-}
-
-function deltasEqual(a: Partial<TypeStyle>, b: Partial<TypeStyle>): boolean {
-  return stableStringify(a) === stableStringify(b);
-}
-
-/**
  * Pick the numeric weight that `**` should map to when a node has bold
  * overrides: the heavier-than-base weight that covers the most characters.
  * Ties break toward the heavier weight so `600 vs 800` at equal usage picks
  * `800`.
  */
-function detectBoldWeight(runs: Run[], baseStyle: TypeStyle): number | undefined {
+function detectBoldWeight(
+  runs: SnapshotTextRun[],
+  baseStyle: SnapshotTextStyle,
+): number | undefined {
   const baseWeight = baseStyle.fontWeight ?? 400;
   const counts = new Map<number, number>();
   for (const run of runs) {
@@ -506,8 +344,8 @@ function detectBoldWeight(runs: Run[], baseStyle: TypeStyle): number | undefined
  * delta as explicit `fontWeight` / `italic` properties.
  */
 function classifyRun(
-  delta: Partial<TypeStyle>,
-  baseStyle: TypeStyle,
+  delta: SnapshotTextStyle,
+  baseStyle: SnapshotTextStyle,
   boldWeight: number | undefined,
 ): Classification {
   const c: Classification = { isBold: false, isItalic: false, isStrike: false };
@@ -580,7 +418,7 @@ function classifyRun(
         break;
       }
       case "hyperlink": {
-        const link = value as Hyperlink;
+        const link = value as SnapshotHyperlink;
         if (link.type === "URL" && link.url) {
           c.urlLink = link.url;
         } else {
@@ -592,10 +430,10 @@ function classifyRun(
         break;
       }
       case "fills": {
-        const paints = value as Paint[];
+        const paints = value as SnapshotPaint[];
         const fills = paints
           .filter(isVisible)
-          .map((p) => parsePaint(decodePaint(p), false))
+          .map((p) => parsePaint(p, false))
           .reverse();
         if (fills.length) {
           refDelta.fills = fills;

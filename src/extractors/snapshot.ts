@@ -118,6 +118,73 @@ export interface SnapshotEffect {
   spread?: number;
 }
 
+// ---------------------------------------------------------------------------
+// Text — DECODED from the wire. The REST override tables
+// (characterStyleOverrides + styleOverrideTable) are resolved by the adapter
+// into per-line runs, each carrying its own style delta against the base; the
+// core only classifies + renders these. The wire tables never reach the core
+// (Invariant 2) — the plugin adapter derives the same runs from its own form
+// rather than faking a REST override table.
+// ---------------------------------------------------------------------------
+
+/** Link on a text run/style (Figma `Hyperlink`, decoupled). */
+export interface SnapshotHyperlink {
+  type: "URL" | "NODE";
+  url?: string;
+  nodeID?: string;
+}
+
+/**
+ * A text style — the subset of Figma `TypeStyle` the text transform reads,
+ * decoupled from the wire type. Used both as a text node's base style and (as a
+ * per-run delta) for the properties a run overrides. `fills` is decoded to
+ * `SnapshotPaint` so the core never touches REST paints. Values are raw (numeric
+ * weights/sizes, enum tags); CSS conversion is the core's job.
+ */
+export interface SnapshotTextStyle {
+  fontFamily?: string;
+  fontStyle?: string;
+  fontWeight?: number;
+  fontSize?: number;
+  lineHeightPx?: number;
+  lineHeightUnit?: string;
+  lineHeightPercent?: number;
+  lineHeightPercentFontSize?: number;
+  letterSpacing?: number;
+  textCase?: string;
+  textAlignHorizontal?: string;
+  textAlignVertical?: string;
+  italic?: boolean;
+  textDecoration?: string;
+  hyperlink?: SnapshotHyperlink;
+  opentypeFlags?: Record<string, number>;
+  paragraphSpacing?: number;
+  paragraphIndent?: number;
+  listSpacing?: number;
+  fills?: SnapshotPaint[];
+}
+
+/** A run of characters sharing one style delta against the node's base style. */
+export interface SnapshotTextRun {
+  text: string;
+  /** Only the properties that differ from the base style. */
+  delta: SnapshotTextStyle;
+}
+
+/**
+ * Decoded text content of a TEXT node. `lines` holds the merged runs per line
+ * (line boundaries at `\n` / paragraph separator), aligned index-for-index with
+ * `lineTypes` / `lineIndentations`. `lines` is empty when the node has no base
+ * style (the core then emits the characters as plain escaped text).
+ */
+export interface SnapshotText {
+  characters: string;
+  style: SnapshotTextStyle;
+  lines: SnapshotTextRun[][];
+  lineTypes: Array<"NONE" | "ORDERED" | "UNORDERED">;
+  lineIndentations: number[];
+}
+
 export interface NodeSnapshot {
   id: string;
   name: string;
@@ -191,4 +258,10 @@ export interface NodeSnapshot {
   opacity?: number;
   cornerRadius?: number;
   rectangleCornerRadii?: number[];
+
+  // ------------------------------------------------------------------------
+  // Text — present on TEXT nodes; the override tables are already resolved
+  // into runs (see SnapshotText). Absent on every other node type.
+  // ------------------------------------------------------------------------
+  text?: SnapshotText;
 }

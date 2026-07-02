@@ -148,15 +148,11 @@ function registerInlineTextStyle(context: TraversalContext, delta: SimplifiedTex
  * Extracts text content and text styling from a node.
  */
 export const textExtractor: ExtractorFn = (node, result, context) => {
-  // Text transformers still read Figma-typed nodes; until text migrates onto
-  // NodeSnapshot (later carve slice) cast at the boundary. NodeSnapshot is a
-  // structural subset of the Figma node, so the object carries these fields.
-  const figmaNode = node as unknown as FigmaDocumentNode;
-
   // Extract text content — formatted with markdown + inline style refs when
-  // the node has per-character overrides, otherwise just the raw string.
-  if (isTextNode(figmaNode)) {
-    const rich = buildFormattedText(figmaNode, (delta) => registerInlineTextStyle(context, delta));
+  // the node has per-character overrides, otherwise just the raw string. The
+  // wire override tables are already resolved into `node.text` by the adapter.
+  if (isTextNode(node)) {
+    const rich = buildFormattedText(node, (delta) => registerInlineTextStyle(context, delta));
     if (rich.text) {
       result.text = rich.text;
     }
@@ -166,11 +162,14 @@ export const textExtractor: ExtractorFn = (node, result, context) => {
   }
 
   // Extract text style
-  if (hasTextStyle(figmaNode)) {
-    const textStyle = extractTextStyle(figmaNode);
+  if (hasTextStyle(node)) {
+    const textStyle = extractTextStyle(node);
     if (textStyle) {
+      // The named-style lookup (`node.styles`) is still REST-shaped; registerStyle
+      // owns it until Slice 6 relocates it to the adapter, so cast at that boundary.
+      const styleNode = node as unknown as FigmaDocumentNode;
       result.textStyle = registerStyle(
-        figmaNode,
+        styleNode,
         context,
         textStyle,
         ["text", "typography"],
