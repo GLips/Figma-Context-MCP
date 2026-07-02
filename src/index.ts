@@ -12,11 +12,12 @@ export type {
   StyleTypes,
 } from "./core/index.js";
 
+// Deliberately NOT exported: extractFromDesign and the style-sink factories.
+// canonicalize is the one transform authority; publishing the walker + raw
+// sinks would hand consumers the toolkit to assemble a divergent walk — the
+// fork the seam exists to prevent. They stay on the in-repo core barrel only.
 export {
   canonicalize,
-  extractFromDesign,
-  createInlineStyleSink,
-  createRefStyleSink,
   layoutExtractor,
   textExtractor,
   visualsExtractor,

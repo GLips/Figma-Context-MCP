@@ -154,7 +154,7 @@ export const componentExtractor: ExtractorFn = (node, result, context) => {
 // -------------------- CONVENIENCE COMBINATIONS --------------------
 
 /**
- * All extractors - replicates the current parseNode behavior.
+ * All extractors — the full canonical output; what production uses.
  */
 export const allExtractors = [layoutExtractor, textExtractor, visualsExtractor, componentExtractor];
 
