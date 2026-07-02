@@ -1,7 +1,7 @@
-import type { Node as FigmaDocumentNode, HasFramePropertiesTrait } from "@figma/rest-api-spec";
 import { gapShorthand } from "./common.js";
+import type { NodeSnapshot } from "~/extractors/snapshot.js";
 
-export function convertJustifyContent(align?: HasFramePropertiesTrait["primaryAxisAlignItems"]) {
+export function convertJustifyContent(align?: NodeSnapshot["primaryAxisAlignItems"]) {
   switch (align) {
     case "MIN":
       return undefined;
@@ -17,19 +17,15 @@ export function convertJustifyContent(align?: HasFramePropertiesTrait["primaryAx
 }
 
 export function convertAlignItems(
-  align: HasFramePropertiesTrait["counterAxisAlignItems"] | undefined,
-  children: FigmaDocumentNode[],
+  align: NodeSnapshot["counterAxisAlignItems"] | undefined,
+  children: NodeSnapshot[],
   mode: "row" | "column",
 ) {
   // Row cross-axis is vertical; column cross-axis is horizontal
   const crossSizing = mode === "row" ? "layoutSizingVertical" : "layoutSizingHorizontal";
   const allStretch =
     children.length > 0 &&
-    children.every(
-      (c) =>
-        ("layoutPositioning" in c && c.layoutPositioning === "ABSOLUTE") ||
-        (crossSizing in c && (c as Record<string, unknown>)[crossSizing] === "FILL"),
-    );
+    children.every((c) => c.layoutPositioning === "ABSOLUTE" || c[crossSizing] === "FILL");
   if (allStretch) return "stretch";
 
   switch (align) {
@@ -48,10 +44,7 @@ export function convertAlignItems(
 
 // SPACE_BETWEEN computes gaps dynamically — the API returns stale spacing
 // values, but Figma's UI shows "Auto". Suppress the affected axis.
-export function buildFlexGap(
-  n: HasFramePropertiesTrait,
-  mode: "row" | "column",
-): string | undefined {
+export function buildFlexGap(n: NodeSnapshot, mode: "row" | "column"): string | undefined {
   const primaryGap = n.primaryAxisAlignItems === "SPACE_BETWEEN" ? undefined : n.itemSpacing;
   const counterGap =
     n.layoutWrap !== "WRAP" || n.counterAxisAlignContent === "SPACE_BETWEEN"

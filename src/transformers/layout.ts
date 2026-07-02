@@ -1,5 +1,5 @@
 import { isInAutoLayoutFlow, isFrame, isLayout, isRectangle } from "~/utils/identity.js";
-import type { Node as FigmaDocumentNode, HasLayoutTrait } from "@figma/rest-api-spec";
+import type { NodeSnapshot } from "~/extractors/snapshot.js";
 import { generateCSSShorthand, pixelRound } from "~/utils/common.js";
 import {
   convertSelfAlign,
@@ -18,14 +18,11 @@ export type { SimplifiedLayout } from "./layout/common.js";
 export { computeGridChildOrder } from "./layout/grid.js";
 
 // Convert Figma's layout config into a more typical flex-like schema
-export function buildSimplifiedLayout(
-  n: FigmaDocumentNode,
-  parent?: FigmaDocumentNode,
-): SimplifiedLayout {
+export function buildSimplifiedLayout(n: NodeSnapshot, parent?: NodeSnapshot): SimplifiedLayout {
   const frameValues = buildSimplifiedFrameValues(n);
   const parentGridPacked =
-    isFrame(parent) && parent.layoutMode === "GRID" && "children" in parent
-      ? isPackedGrid(parent.children as FigmaDocumentNode[])
+    isFrame(parent) && parent.layoutMode === "GRID" && parent.children
+      ? isPackedGrid(parent.children)
       : undefined;
   const layoutValues =
     buildSimplifiedLayoutValues(n, parent, frameValues.mode, parentGridPacked) || {};
@@ -33,7 +30,7 @@ export function buildSimplifiedLayout(
   return { ...frameValues, ...layoutValues };
 }
 
-function buildSimplifiedFrameValues(n: FigmaDocumentNode): SimplifiedLayout | { mode: "none" } {
+function buildSimplifiedFrameValues(n: NodeSnapshot): SimplifiedLayout | { mode: "none" } {
   if (!isFrame(n)) {
     return { mode: "none" };
   }
@@ -64,22 +61,23 @@ function buildSimplifiedFrameValues(n: FigmaDocumentNode): SimplifiedLayout | { 
   }
 
   if (mode === "grid") {
-    // Grid template/gap properties live on HasLayoutTrait; GRID frames always
-    // carry both traits, so the cast is safe.
-    const ln = n as unknown as HasLayoutTrait;
-    const cols = ln.gridColumnsSizing?.trim();
+    const cols = n.gridColumnsSizing?.trim();
     if (cols) frameValues.gridTemplateColumns = cols;
 
-    const rows = ln.gridRowsSizing?.trim();
+    const rows = n.gridRowsSizing?.trim();
     if (rows) frameValues.gridTemplateRows = rows;
 
-    frameValues.gap = gapShorthand(ln.gridRowGap, ln.gridColumnGap);
+    frameValues.gap = gapShorthand(n.gridRowGap, n.gridColumnGap);
     return frameValues;
   }
 
   // Flex-specific — mode is narrowed to "row" | "column" after grid early-return
   frameValues.justifyContent = convertJustifyContent(n.primaryAxisAlignItems ?? "MIN");
-  frameValues.alignItems = convertAlignItems(n.counterAxisAlignItems ?? "MIN", n.children, mode);
+  frameValues.alignItems = convertAlignItems(
+    n.counterAxisAlignItems ?? "MIN",
+    n.children ?? [],
+    mode,
+  );
   frameValues.wrap = n.layoutWrap === "WRAP" ? true : undefined;
   frameValues.gap = buildFlexGap(n, mode);
 
@@ -87,8 +85,8 @@ function buildSimplifiedFrameValues(n: FigmaDocumentNode): SimplifiedLayout | { 
 }
 
 function buildSimplifiedLayoutValues(
-  n: FigmaDocumentNode,
-  parent: FigmaDocumentNode | undefined,
+  n: NodeSnapshot,
+  parent: NodeSnapshot | undefined,
   mode: SimplifiedLayout["mode"],
   parentGridPacked?: boolean,
 ): SimplifiedLayout | undefined {

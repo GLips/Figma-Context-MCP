@@ -1,5 +1,5 @@
-import type { Node as FigmaDocumentNode, HasLayoutTrait } from "@figma/rest-api-spec";
-import { hasGridLayout, hasValue, isLayout } from "~/utils/identity.js";
+import { hasGridLayout, isLayout } from "~/utils/identity.js";
+import type { NodeSnapshot } from "~/extractors/snapshot.js";
 import type { SimplifiedLayout } from "./common.js";
 
 /**
@@ -21,19 +21,19 @@ import type { SimplifiedLayout } from "./common.js";
  * Returns null when the parent isn't a grid, has no children, or when the
  * existing order already matches anchor order (no work to do).
  */
-export function computeGridChildOrder(parent: FigmaDocumentNode): number[] | null {
-  if (!hasGridLayout(parent) || !hasValue("children", parent)) return null;
-  const children = parent.children as FigmaDocumentNode[];
+export function computeGridChildOrder(parent: NodeSnapshot): number[] | null {
+  if (!hasGridLayout(parent) || !parent.children) return null;
+  const children = parent.children;
   if (children.length < 2) return null;
 
-  const isAbsolute = (c: FigmaDocumentNode) => isLayout(c) && c.layoutPositioning === "ABSOLUTE";
+  const isAbsolute = (c: NodeSnapshot) => isLayout(c) && c.layoutPositioning === "ABSOLUTE";
 
   const inFlow = children
     .map((_, i) => i)
     .filter((i) => !isAbsolute(children[i]))
     .sort((a, b) => {
-      const ca = children[a] as HasLayoutTrait;
-      const cb = children[b] as HasLayoutTrait;
+      const ca = children[a];
+      const cb = children[b];
       const ar = ca.gridRowAnchorIndex ?? 0;
       const br = cb.gridRowAnchorIndex ?? 0;
       if (ar !== br) return ar - br;
@@ -59,7 +59,7 @@ export function computeGridChildOrder(parent: FigmaDocumentNode): number[] | nul
 }
 
 /** Check whether a grid's children fill a packed sequence with no empty cells. */
-export function isPackedGrid(children: FigmaDocumentNode[]): boolean {
+export function isPackedGrid(children: NodeSnapshot[]): boolean {
   const occupied = new Set<string>();
 
   for (const child of children) {
@@ -103,11 +103,11 @@ export function isPackedGrid(children: FigmaDocumentNode[]): boolean {
  * Edges that merely touch (e.g., adjacent cells with gap = 0) are NOT
  * overlap; strict inequalities below handle that.
  */
-function gridChildrenOverlap(parent: FigmaDocumentNode): boolean {
-  if (!hasValue("children", parent)) return false;
-  const boxes = (parent.children as FigmaDocumentNode[])
+function gridChildrenOverlap(parent: NodeSnapshot): boolean {
+  if (!parent.children) return false;
+  const boxes = parent.children
     .filter((c) => isLayout(c) && c.layoutPositioning !== "ABSOLUTE")
-    .map((c) => (c as HasLayoutTrait).absoluteBoundingBox)
+    .map((c) => c.absoluteBoundingBox)
     .filter((b): b is NonNullable<typeof b> => b != null);
 
   for (let i = 0; i < boxes.length; i++) {
@@ -147,8 +147,8 @@ function convertGridAlign(align: "MIN" | "CENTER" | "MAX"): "start" | "end" | "c
  * is in-flow (not ABSOLUTE).
  */
 export function buildGridChildPositioning(
-  n: HasLayoutTrait,
-  parent: FigmaDocumentNode,
+  n: NodeSnapshot,
+  parent: NodeSnapshot,
   packed: boolean,
 ): Partial<SimplifiedLayout> {
   const out: Partial<SimplifiedLayout> = {};
@@ -183,9 +183,7 @@ export function buildGridChildPositioning(
   //   - no in-flow siblings overlap (stacking can't affect rendering)
   const order = computeGridChildOrder(parent);
   if (order && gridChildrenOverlap(parent)) {
-    const originalIndex = (parent as { children: FigmaDocumentNode[] }).children.indexOf(
-      n as FigmaDocumentNode,
-    );
+    const originalIndex = parent.children?.indexOf(n) ?? -1;
     const newIndex = order.indexOf(originalIndex);
     if (originalIndex !== newIndex) {
       out.zIndex = originalIndex;

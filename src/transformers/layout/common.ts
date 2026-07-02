@@ -1,10 +1,6 @@
-import type {
-  Node as FigmaDocumentNode,
-  HasFramePropertiesTrait,
-  HasLayoutTrait,
-} from "@figma/rest-api-spec";
 import { exhaustiveCheck } from "~/utils/common.js";
 import { isFrame, isInAutoLayoutFlow } from "~/utils/identity.js";
+import type { NodeSnapshot } from "~/extractors/snapshot.js";
 
 export interface SimplifiedLayout {
   mode: "none" | "row" | "column" | "grid";
@@ -52,16 +48,14 @@ export interface SimplifiedLayout {
   position?: "absolute";
 }
 
-export function convertSizing(
-  s?: HasLayoutTrait["layoutSizingHorizontal"] | HasLayoutTrait["layoutSizingVertical"],
-) {
+export function convertSizing(s?: NodeSnapshot["layoutSizingHorizontal"]) {
   if (s === "FIXED") return "fixed";
   if (s === "FILL") return "fill";
   if (s === "HUG") return "hug";
   return undefined;
 }
 
-export function convertSelfAlign(align?: HasLayoutTrait["layoutAlign"]) {
+export function convertSelfAlign(align?: NodeSnapshot["layoutAlign"]) {
   switch (align) {
     case "MIN":
       // MIN, AKA flex-start, is the default alignment
@@ -77,11 +71,11 @@ export function convertSelfAlign(align?: HasLayoutTrait["layoutAlign"]) {
   }
 }
 
-// Centralized mapping of Figma's layoutMode to our schema's mode tag.
-// Exhaustive switch — if @figma/rest-api-spec ever adds a new layoutMode value,
+// Centralized mapping of the snapshot's layoutMode to our schema's mode tag.
+// Exhaustive switch — if NodeSnapshot["layoutMode"] ever gains a new value,
 // exhaustiveCheck fails the build until we decide how to map it.
 export function layoutModeToSchema(
-  layoutMode: HasFramePropertiesTrait["layoutMode"],
+  layoutMode: NodeSnapshot["layoutMode"],
 ): SimplifiedLayout["mode"] {
   switch (layoutMode) {
     case "HORIZONTAL":
@@ -98,7 +92,7 @@ export function layoutModeToSchema(
   }
 }
 
-export function getParentAutoLayoutMode(parent?: FigmaDocumentNode): "row" | "column" | undefined {
+export function getParentAutoLayoutMode(parent?: NodeSnapshot): "row" | "column" | undefined {
   if (!isFrame(parent)) return undefined;
   if (parent.layoutMode === "HORIZONTAL") return "row";
   if (parent.layoutMode === "VERTICAL") return "column";
@@ -127,8 +121,8 @@ export type StretchFlags = { horizontal: boolean; vertical: boolean };
  * silently mis-emits dimensions (see fix #379).
  */
 export function resolveChildAxis(
-  n: FigmaDocumentNode,
-  parent: FigmaDocumentNode | undefined,
+  n: NodeSnapshot,
+  parent: NodeSnapshot | undefined,
   ownMode: SimplifiedLayout["mode"],
   parentIsGrid: boolean,
 ): ChildAxis {
@@ -153,7 +147,7 @@ export function resolveChildAxis(
  * - Grid children use `layoutSizing{Horizontal,Vertical} === "FILL"` (no
  *   main/cross — properties are axis-named directly).
  */
-export function getChildStretch(n: HasLayoutTrait, axis: ChildAxis): StretchFlags {
+export function getChildStretch(n: NodeSnapshot, axis: ChildAxis): StretchFlags {
   switch (axis) {
     case "grid":
       return {
@@ -180,7 +174,7 @@ export function getChildStretch(n: HasLayoutTrait, axis: ChildAxis): StretchFlag
  * and the historical grid path treated absent as fixed for symmetry.
  */
 export function shouldEmitFixedDimension(
-  sizing: HasLayoutTrait["layoutSizingHorizontal"] | undefined,
+  sizing: NodeSnapshot["layoutSizingHorizontal"] | undefined,
   axis: ChildAxis,
 ): boolean {
   if (axis === "row" || axis === "column") return sizing === "FIXED";

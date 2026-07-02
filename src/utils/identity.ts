@@ -1,13 +1,13 @@
-import type {
-  Rectangle,
-  HasLayoutTrait,
-  StrokeWeights,
-  HasFramePropertiesTrait,
-} from "@figma/rest-api-spec";
 import { isTruthy } from "remeda";
 import type { CSSHexColor, CSSRGBAColor } from "~/transformers/style.js";
+import type { NodeSnapshot, SnapshotRect, SnapshotStrokeWeights } from "~/extractors/snapshot.js";
 
 export { isTruthy };
+
+/** A snapshot known to carry frame/auto-layout traits (has `clipsContent`). */
+export type FrameSnapshot = NodeSnapshot & { clipsContent: boolean };
+/** A snapshot known to have a concrete bounding box (participates in layout). */
+export type LayoutSnapshot = NodeSnapshot & { absoluteBoundingBox: SnapshotRect };
 
 export function hasValue<K extends PropertyKey, T>(
   key: K,
@@ -26,7 +26,7 @@ export function hasValue<K extends PropertyKey, T>(
 // general "is container" check: SECTION, BOOLEAN_OPERATION, and TABLE all hold
 // children but do not have frame properties. Structural checking via
 // `clipsContent` covers the FRAME family without maintaining a type-string list.
-export function isFrame(val: unknown): val is HasFramePropertiesTrait {
+export function isFrame(val: unknown): val is FrameSnapshot {
   return (
     typeof val === "object" &&
     !!val &&
@@ -35,7 +35,7 @@ export function isFrame(val: unknown): val is HasFramePropertiesTrait {
   );
 }
 
-export function isLayout(val: unknown): val is HasLayoutTrait {
+export function isLayout(val: unknown): val is LayoutSnapshot {
   return (
     typeof val === "object" &&
     !!val &&
@@ -58,7 +58,7 @@ export function isLayout(val: unknown): val is HasLayoutTrait {
  * semantics specifically should use this; callers that want "any non-NONE auto-layout"
  * should use {@link hasAutoLayout}.
  */
-export function hasFlexLayout(val: unknown): val is HasFramePropertiesTrait {
+export function hasFlexLayout(val: unknown): val is FrameSnapshot {
   return isFrame(val) && (val.layoutMode === "HORIZONTAL" || val.layoutMode === "VERTICAL");
 }
 
@@ -68,7 +68,7 @@ export function hasFlexLayout(val: unknown): val is HasFramePropertiesTrait {
  * Children of grid frames are positioned via gridRow/ColumnAnchorIndex + gridRow/ColumnSpan
  * rather than flex flow or absolute coordinates.
  */
-export function hasGridLayout(val: unknown): val is HasFramePropertiesTrait {
+export function hasGridLayout(val: unknown): val is FrameSnapshot {
   return isFrame(val) && val.layoutMode === "GRID";
 }
 
@@ -82,7 +82,7 @@ export function hasGridLayout(val: unknown): val is HasFramePropertiesTrait {
  * When the answer matters per-mode (e.g., emitting flex vs grid CSS), branch on
  * `layoutMode` directly or use the narrower {@link hasFlexLayout} / {@link hasGridLayout}.
  */
-export function hasAutoLayout(val: unknown): val is HasFramePropertiesTrait {
+export function hasAutoLayout(val: unknown): val is FrameSnapshot {
   return hasFlexLayout(val) || hasGridLayout(val);
 }
 
@@ -99,7 +99,7 @@ export function isInAutoLayoutFlow(node: unknown, parent: unknown): boolean {
   return hasAutoLayout(parent) && isLayout(node) && node.layoutPositioning !== "ABSOLUTE";
 }
 
-export function isStrokeWeights(val: unknown): val is StrokeWeights {
+export function isStrokeWeights(val: unknown): val is SnapshotStrokeWeights {
   return (
     typeof val === "object" &&
     val !== null &&
@@ -113,7 +113,7 @@ export function isStrokeWeights(val: unknown): val is StrokeWeights {
 export function isRectangle<T, K extends string>(
   key: K,
   obj: T,
-): obj is T & { [P in K]: Rectangle } {
+): obj is T & { [P in K]: SnapshotRect } {
   const recordObj = obj as Record<K, unknown>;
   return (
     typeof obj === "object" &&
