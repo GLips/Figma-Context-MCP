@@ -7,3 +7,9 @@ src/tests/goldens/expected/
 # compared structurally, not by bytes. Keep Prettier off them so a regenerate
 # run's output matches the committed files with no reformatting churn.
 src/tests/parity/snapshots/
+
+# The relocated flcm surface owns its own formatting (its dense single-line
+# enum maps are deliberate). It was never Prettier-managed in its origin repo;
+# reformatting it here would only churn faithfully-moved, well-tested code.
+plugin/
+bridge/

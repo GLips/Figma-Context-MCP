@@ -50,6 +50,12 @@ export default [
     },
   },
   {
-    ignores: ["dist/**", "node_modules/**"],
+    // The relocated flcm surface (plugin/, bridge/) carries its own toolchain —
+    // its own tsconfig/typecheck, its own node:test runner, and the plugin
+    // build's zod-purity guard. It was never linted under this config in its
+    // origin repo; adopting these rules now would flag deliberate patterns
+    // (e.g. bridge.ts's `any` on Figma's SceneNode union). Its quality bar is
+    // typecheck + tests + build guard, run by the root `validate`.
+    ignores: ["dist/**", "node_modules/**", "plugin/**", "bridge/**"],
   },
 ];

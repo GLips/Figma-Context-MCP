@@ -1,0 +1,336 @@
+// An in-memory Figma mock faithful to the AXES the std-lib actually touches — so the harness can run
+// the REAL preamble fragments (plugin/src/preamble/) in pure Node, no plugin and no WS port.
+//
+// It models: node creation, auto-parenting, auto-layout sizing (hug/fixed/fill with the cross-axis
+// rule), fills/strokes/opacity, fontName/loadFontAsync/figma.mixed, getNodeById(Async), pluginData,
+// createComponentFromNode -> createInstance with COMPOSITE-ID sublayers (I<inst>;<mainChild>), and
+// findAll/findAllWithCriteria. It deliberately does NOT model real font metrics or rendering — text
+// size is a crude char-count estimate — so pixel-exact layout still needs a live check (see README).
+
+let __id = 0;
+const nextId = (p) => (p || "") + ++__id + ":" + __id;
+
+const registry = new Map(); // id -> node, for getNodeById / composite-id resolution
+const MIXED = Symbol("figma.mixed");
+const __measuring = new Set(); // (node,dim) keys in-flight, to break the fill<->hug sizing recursion
+
+const clonePaints = (p) => (Array.isArray(p) ? JSON.parse(JSON.stringify(p)) : p);
+
+// The visual/layout props carried across clone (instance) and promote (createComponentFromNode).
+const COPY_FIELDS = ["name", "layoutMode", "itemSpacing", "paddingTop", "paddingRight", "paddingBottom",
+  "paddingLeft", "primaryAxisAlignItems", "counterAxisAlignItems", "primaryAxisSizingMode",
+  "counterAxisSizingMode", "layoutGrow", "layoutAlign", "layoutPositioning", "constraints", "strokeWeight",
+  "cornerRadius", "opacity", "visible", "rotation", "characters", "fontSize", "textAutoResize",
+  "_fixedW", "_fixedH"];
+
+class Node {
+  constructor(type) {
+    this.id = nextId();
+    this.type = type;
+    this.name = type === "FRAME" ? "Frame" : type === "TEXT" ? "Text" : type;
+    this.removed = false;
+    this.parent = null;
+    this.children = [];
+    // auto-layout
+    this.layoutMode = "NONE";
+    this.itemSpacing = 0;
+    this.paddingTop = this.paddingRight = this.paddingBottom = this.paddingLeft = 0;
+    this.primaryAxisAlignItems = "MIN";
+    this.counterAxisAlignItems = "MIN";
+    this.primaryAxisSizingMode = "AUTO";
+    this.counterAxisSizingMode = "AUTO";
+    this.layoutGrow = 0;
+    this.layoutAlign = "INHERIT";
+    // appearance
+    this.fills = [];
+    this.strokes = [];
+    this.strokeWeight = 1;
+    this.cornerRadius = 0;
+    this.opacity = 1;
+    this.visible = true;
+    this.effects = [];
+    this.rotation = 0;
+    this.clipsContent = false;
+    // position: x/y honored directly; layoutPositioning='ABSOLUTE' lifts a child out of an auto-layout
+    // parent's flow (so x/y apply, it can overlap, and it's excluded from the parent's hug measurement).
+    this.x = 0;
+    this.y = 0;
+    this.layoutPositioning = "AUTO";
+    // Per-child pinning rules for how this node reflows when a FREE-FORM parent resizes. Figma's default is
+    // MIN/MIN (pinned to the top-left); the bridge overwrites it for a free-form parent's child.
+    this.constraints = { horizontal: "MIN", vertical: "MIN" };
+    // text
+    this.characters = "";
+    this.fontName = { family: "Inter", style: "Regular" };
+    this.fontSize = 12;
+    this.textDecoration = "NONE";
+    this.textAutoResize = "WIDTH_AND_HEIGHT";
+    // geometry (explicit, from resize). Shapes get an intrinsic default size like the live API.
+    this._fixedW = null;
+    this._fixedH = null;
+    if (type === "RECTANGLE" || type === "ELLIPSE" || type === "POLYGON" || type === "STAR") { this._fixedW = 100; this._fixedH = 100; }
+    if (type === "LINE") { this._fixedW = 100; this._fixedH = 0; }
+    if (type === "VECTOR") { this._fixedW = 24; this._fixedH = 24; this.vectorPaths = []; }
+    this._plugin = {};
+    // prototyping reactions — the mock can't run present mode, but it STORES them so a scenario can
+    // assert the right trigger/action/destination were wired (setReactionsAsync replaces, like live).
+    this._reactions = [];
+    registry.set(this.id, this);
+  }
+
+  get reactions() { return this._reactions; }
+  async setReactionsAsync(reactions) { this._reactions = JSON.parse(JSON.stringify(reactions || [])); }
+
+  get _isAuto() { return this.layoutMode === "HORIZONTAL" || this.layoutMode === "VERTICAL"; }
+
+  appendChild(child) {
+    if (child.parent) child.parent.children = child.parent.children.filter((c) => c !== child);
+    child.parent = this;
+    this.children.push(child);
+  }
+  insertChild(index, child) {
+    // Match live Figma exactly (GROUNDED): when `child` is already in THIS parent, `index` is
+    // interpreted against the PRE-removal array — Figma compensates for the node's own slot, so
+    // insertChild(3, B@1) on [A,B,C,D] yields [A,C,B,D] (lands at 2), and insertChild(2, B@1) is a
+    // no-op. A naive remove-then-splice-at-index (what this used to do) overshoots reorders by one and
+    // does NOT reflect the real API. Cross-parent / new children get no adjustment.
+    const had = child.parent === this ? this.children.indexOf(child) : -1;
+    if (child.parent) child.parent.children = child.parent.children.filter((c) => c !== child);
+    child.parent = this;
+    const idx = had !== -1 && had < index ? index - 1 : index;
+    this.children.splice(idx, 0, child);
+  }
+  resize(w, h) { this._fixedW = w; this._fixedH = h; }
+  remove() {
+    if (this.parent) this.parent.children = this.parent.children.filter((c) => c !== this);
+    this.parent = null;
+    this.removed = true;
+  }
+
+  setPluginData(k, v) { this._plugin[k] = String(v); }
+  getPluginData(k) { return this._plugin[k] || ""; }
+
+  // Rich-text per-range setters. The live API applies a style to characters [start, end); the mock just
+  // records each range so a scenario can assert the runs landed (font/size/fills over the right slice).
+  // A range whose font isn't first loaded throws live — the preamble preloads every run font, so we don't
+  // model that rejection here; resolveFontStrict is what guards the unloaded case in the std-lib.
+  _range(bucket, start, end, value) { (this[bucket] || (this[bucket] = [])).push({ start, end, value }); }
+  setRangeFontName(start, end, value) { this._range("_rangeFonts", start, end, value); }
+  setRangeFontSize(start, end, value) { this._range("_rangeSizes", start, end, value); }
+  setRangeFills(start, end, value) { this._range("_rangeFills", start, end, value); }
+  setRangeLineHeight(start, end, value) { this._range("_rangeLineHeights", start, end, value); }
+  setRangeLetterSpacing(start, end, value) { this._range("_rangeLetterSpacings", start, end, value); }
+  setRangeTextDecoration(start, end, value) { this._range("_rangeDecorations", start, end, value); }
+  setRangeHyperlink(start, end, value) { this._range("_rangeHyperlinks", start, end, value); }
+
+  findAll(pred) {
+    const out = [];
+    const walk = (n) => n.children.forEach((c) => { if (!pred || pred(c)) out.push(c); walk(c); });
+    walk(this);
+    return out;
+  }
+  findOne(pred) {
+    let hit = null;
+    const walk = (n) => n.children.forEach((c) => { if (hit) return; if (pred(c)) { hit = c; return; } walk(c); });
+    walk(this);
+    return hit;
+  }
+  findAllWithCriteria(opts) {
+    const types = (opts && opts.types) || [];
+    return this.findAll((n) => types.indexOf(n.type) !== -1);
+  }
+
+  // --- sizing: width/height as getters so reads during a run reflect current state ---
+  get width() { return this._sizeOf("w"); }
+  get height() { return this._sizeOf("h"); }
+
+  // The sizing resolver is mutually recursive (child fills against parent, parent hugs from children),
+  // and a w:'fill' text inside a w:'fill' row can drive it in a cycle. Guard re-entry per (node,dim):
+  // the second time we ask for a value already being computed on the stack, break with 0.01 instead of
+  // overflowing. (Live Figma renders these fine; this is purely the mock's measurement model.)
+  _sizeOf(dim) {
+    const key = this.id + "|" + dim;
+    if (__measuring.has(key)) return 0.01;
+    __measuring.add(key);
+    try { return this._measure(dim); } finally { __measuring.delete(key); }
+  }
+
+  _measure(dim) {
+    // 1. fill against an auto-layout parent (only against a RESOLVED, non-hug parent dimension)
+    if (this.parent && this.parent._isAuto) {
+      const f = this.parent._fillSizeFor(this, dim);
+      if (f != null) return Math.max(f, 0.01);
+    }
+    // 2. own auto-layout: fixed axis -> resized value; auto axis -> hug content
+    if (this._isAuto) {
+      const isRow = this.layoutMode === "HORIZONTAL";
+      const isPrimary = (dim === "w") === isRow;
+      const mode = isPrimary ? this.primaryAxisSizingMode : this.counterAxisSizingMode;
+      if (mode === "FIXED") return (dim === "w" ? this._fixedW : this._fixedH) ?? this._hug(dim);
+      return this._hug(dim);
+    }
+    // 3. leaf
+    if (this.type === "TEXT") return dim === "w" ? this._textW() : this._textH();
+    return (dim === "w" ? this._fixedW : this._fixedH) ?? 0.01;
+  }
+
+  _padW() { return (this.paddingLeft || 0) + (this.paddingRight || 0); }
+  _padH() { return (this.paddingTop || 0) + (this.paddingBottom || 0); }
+
+  _hug(dim) {
+    const isRow = this.layoutMode === "HORIZONTAL";
+    const dimIsPrimary = (dim === "w") === isRow;
+    const pad = dim === "w" ? this._padW() : this._padH();
+    // Absolutely-positioned children are out of the flow — they don't contribute to the parent's hug.
+    const flow = this.children.filter((k) => k.layoutPositioning !== "ABSOLUTE");
+    if (dimIsPrimary) {
+      let sum = 0;
+      for (const k of flow) sum += k._sizeOf(dim);
+      sum += Math.max(0, flow.length - 1) * (this.itemSpacing || 0);
+      return sum + pad;
+    }
+    let mx = 0;
+    for (const k of flow) mx = Math.max(mx, k._sizeOf(dim));
+    return mx + pad;
+  }
+
+  _fillSizeFor(child, dim) {
+    const isRow = this.layoutMode === "HORIZONTAL";
+    const dimIsParentPrimary = (dim === "w") === isRow;
+    const parentMode = dimIsParentPrimary ? this.primaryAxisSizingMode : this.counterAxisSizingMode;
+    // Only fill against a parent dimension that is itself resolved (FIXED, or filling its own parent);
+    // filling against a hugging axis would be circular, so fall through to the child's own size.
+    const resolved = parentMode === "FIXED" || (this.parent && this.parent._isAuto && this.parent._fillSizeFor(this, dim) != null);
+    if (!resolved) return null;
+    const wantsFill = dimIsParentPrimary ? child.layoutGrow === 1 : child.layoutAlign === "STRETCH";
+    if (!wantsFill) return null;
+    return this._sizeOf(dim) - (dim === "w" ? this._padW() : this._padH());
+  }
+
+  _textW() {
+    if (this.textAutoResize === "HEIGHT" && this._fixedW != null) return this._fixedW; // wrapping, fixed width
+    return Math.max(1, this.characters.length) * this.fontSize * 0.55; // crude estimate (NOT real metrics)
+  }
+  _textH() {
+    if (this.textAutoResize === "HEIGHT" && this._fixedW != null) {
+      const perLine = Math.max(1, Math.floor(this._fixedW / (this.fontSize * 0.55)));
+      return Math.ceil(this.characters.length / perLine) * this.fontSize * 1.3;
+    }
+    return this.fontSize * 1.3;
+  }
+
+  // --- component / instance ---
+  createInstance() {
+    if (this.type !== "COMPONENT") throw new Error("createInstance: not a COMPONENT");
+    const instId = nextId("i");
+    const root = cloneInto(this, instId, true);
+    root.type = "INSTANCE";
+    root.mainComponent = this;
+    figma.currentPage.appendChild(root);
+    return root;
+  }
+  get overrides() { return this._overrides || []; }
+}
+
+// Clone a main subtree into instance sublayers. The root gets a fresh id; descendants get the
+// deterministic composite id I<instId>;<mainChildId> — exactly the format the live API uses and the
+// std-lib's override() builds. Every cloned node is registered so getNodeById resolves it.
+function cloneInto(mainNode, instId, isRoot) {
+  const n = new Node(mainNode.type);
+  registry.delete(n.id); // re-key below
+  n.id = isRoot ? instId : "I" + instId + ";" + mainNode.id;
+  registry.set(n.id, n);
+  for (const k of COPY_FIELDS) n[k] = mainNode[k];
+  n.fills = clonePaints(mainNode.fills);
+  n.strokes = clonePaints(mainNode.strokes);
+  n.effects = clonePaints(mainNode.effects);
+  n.fontName = JSON.parse(JSON.stringify(mainNode.fontName));
+  n.children = [];
+  for (const c of mainNode.children) { const cc = cloneInto(c, instId, false); cc.parent = n; n.children.push(cc); }
+  return n;
+}
+
+export function createFigmaMock() {
+  __id = 0;
+  registry.clear();
+  const page = new Node("PAGE");
+  page.name = "Page 1";
+  registry.delete(page.id); page.id = "0:1"; registry.set(page.id, page);
+
+  const figma = {
+    mixed: MIXED,
+    currentPage: page,
+    root: { children: [page], setPluginData: (k, v) => page.setPluginData(k, v), getPluginData: (k) => page.getPluginData(k) },
+    createFrame() { return new Node("FRAME"); },
+    createText() { const t = new Node("TEXT"); t.fontName = { family: "Inter", style: "Regular" }; return t; },
+    createComponent() { return new Node("COMPONENT"); },
+    createRectangle() { return new Node("RECTANGLE"); },
+    createEllipse() { return new Node("ELLIPSE"); },
+    createLine() { return new Node("LINE"); },
+    createPolygon() { const p = new Node("POLYGON"); p.pointCount = 3; return p; },
+    createStar() { const s = new Node("STAR"); s.pointCount = 5; s.innerRadius = 0.5; return s; },
+    // Live Figma seeds a new vector with a default black 1px stroke (createRectangle/Ellipse get none).
+    // Replicate it so the mock can catch a fill-only path that fails to clear it — otherwise mock-green
+    // hides a real unauthored-outline defect (the render side must actively strip this default).
+    createVector() { const v = new Node("VECTOR"); v.strokes = [{ type: "SOLID", color: { r: 0, g: 0, b: 0 }, opacity: 1 }]; return v; },
+    // Model createNodeFromSvg faithfully to the axes the bridge touches: it returns a FRAME (so it inherits
+    // clipsContent) carrying the parsed vectors as children. We don't parse the markup; we produce a frame
+    // with one vector child so a scenario can assert the frame type, the clip default, and a child landed.
+    // Empty/garbage markup that a real parser would reject isn't modeled here — the bridge's try/catch is
+    // what surfaces the live parser's throw; the mock just records the source.
+    createNodeFromSvg(markup) {
+      const f = new Node("FRAME");
+      f.name = "svg";
+      f._svgSource = String(markup == null ? "" : markup);
+      const child = new Node("VECTOR");
+      child.parent = f;
+      f.children.push(child);
+      return f;
+    },
+    createImage(bytes) { return { hash: "img" + (bytes && bytes.length ? bytes.length : 0) + ":" + ++__id }; },
+    base64Decode(b64) { return Uint8Array.from(Buffer.from(String(b64), "base64")); },
+    createComponentFromNode(node) {
+      // Mirror the live API: produce a NEW COMPONENT node, move the frame's children onto it, replace
+      // the frame in its parent, and remove the old frame. (In-place mutation would leave the old
+      // frame on the page and falsely trip the no-fill-root warning — live replaces the node.)
+      const comp = new Node("COMPONENT");
+      for (const k of COPY_FIELDS) comp[k] = node[k];
+      comp.fills = clonePaints(node.fills);
+      comp.strokes = clonePaints(node.strokes);
+      comp.effects = clonePaints(node.effects);
+      comp.children = node.children;
+      comp.children.forEach((c) => (c.parent = comp));
+      comp.key = "k" + Math.abs(hashStr(node.id)).toString(16).padStart(40, "0").slice(0, 40);
+      comp.remote = false;
+      comp.componentPropertyDefinitions = {};
+      const parent = node.parent;
+      if (parent) {
+        const i = parent.children.indexOf(node);
+        if (i >= 0) parent.children[i] = comp;
+        comp.parent = parent;
+      }
+      node.children = [];
+      node.parent = null;
+      node.removed = true;
+      return comp;
+    },
+    getNodeById(id) { return registry.get(id) || null; },
+    async getNodeByIdAsync(id) { return registry.get(id) || null; },
+    loadFontAsync() { return Promise.resolve(); },
+    // The bundled-Inter weight ladder the real API exposes, so fonts.ts's nearest-style snap has a
+    // realistic family to match against (numeric weights resolve to Thin..Black, not just 4 buckets).
+    // Both the upright and italic ladders are exposed so italic resolution (author `fontStyle`,
+    // markdown `*…*`) has a real italic variant to snap to — Inter's regular italic is named "Italic"
+    // (not "Regular Italic"), matching the live family.
+    listAvailableFontsAsync() {
+      const weights = ["Thin", "Extra Light", "Light", "Regular", "Medium", "Semi Bold", "Bold", "Extra Bold", "Black"];
+      const styles = weights.concat(weights.map((w) => (w === "Regular" ? "Italic" : w + " Italic")));
+      return Promise.resolve(styles.map((style) => ({ fontName: { family: "Inter", style } })));
+    },
+    base64Encode() { return ""; },
+  };
+  globalThis.figma = figma;
+  return figma;
+}
+
+function hashStr(s) { let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0; return h; }

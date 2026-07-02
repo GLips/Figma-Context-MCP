@@ -1,0 +1,32 @@
+{
+  "name": "@framelink/bridge",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "start": "tsx src/index.ts",
+    "contract": "tsx harness/bridge-contract.mjs",
+    "docs:gen": "tsx scripts/gen-flcm-doc.ts",
+    "docs:check": "tsx scripts/gen-flcm-doc.ts check",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@jimp/core": "^1.6.1",
+    "@jimp/js-gif": "^1.6.1",
+    "@jimp/js-jpeg": "^1.6.1",
+    "@jimp/js-png": "^1.6.1",
+    "@jimp/plugin-resize": "^1.6.1",
+    "@modelcontextprotocol/sdk": "1.29.0",
+    "@framelink/plugin": "workspace:*",
+    "ipaddr.js": "^2.4.0",
+    "ws": "^8.21.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^26.0.1",
+    "@types/ws": "^8.18.1",
+    "tsx": "^4.22.4",
+    "typescript": "^6.0.3"
+  }
+}

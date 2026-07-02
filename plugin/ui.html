@@ -1,0 +1,293 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      :root {
+        font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        font-size: 12px;
+        color: #1e1e1e;
+      }
+      body {
+        margin: 0;
+        padding: 16px;
+      }
+      .orientation {
+        background: #f5f5f5;
+        border-radius: 6px;
+        padding: 12px;
+        margin-bottom: 16px;
+      }
+      .orientation-title {
+        font-weight: 600;
+        margin-bottom: 6px;
+      }
+      .orientation-body {
+        color: #555;
+        line-height: 1.45;
+      }
+      .heading {
+        font-weight: 600;
+        margin-bottom: 10px;
+      }
+      .empty {
+        color: #888;
+        padding: 8px 0;
+      }
+      .session {
+        border: 1px solid #e5e5e5;
+        border-radius: 6px;
+        padding: 12px;
+        margin-bottom: 10px;
+      }
+      .session-id {
+        font-weight: 500;
+        word-break: break-all;
+        margin-bottom: 4px;
+      }
+      .session-code {
+        color: #777;
+        margin-bottom: 12px;
+        font-variant-numeric: tabular-nums;
+      }
+      .status {
+        color: #555;
+        font-weight: 500;
+        padding: 6px 0;
+      }
+      .status.active {
+        color: #1a7f37;
+      }
+      .actions {
+        display: flex;
+        gap: 8px;
+      }
+      button {
+        flex: 1;
+        border: none;
+        border-radius: 6px;
+        padding: 8px 0;
+        font-size: 12px;
+        font-weight: 500;
+        cursor: pointer;
+      }
+      button.allow {
+        background: #0d99ff;
+        color: #fff;
+      }
+      button.deny {
+        background: #f0f0f0;
+        color: #333;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="panel"></div>
+    <script>
+      // The plugin's ONLY network context (the sandbox code.js has no WS access), so this iframe
+      // relays server↔sandbox traffic unmodified:
+      //   server  --WS-->            here  --parent.postMessage-->  code.js
+      //   code.js --figma.ui.postMessage-->  here  --WS-->          server
+      //
+      // Since Slice 2.2 it is ALSO the visible arbiter panel: the sandbox raises/dismisses it with
+      // local SHOW_PANEL/HIDE_PANEL control messages (NOT relayed to the WS), and the Allow/Deny
+      // buttons post UI_DECISION back to the sandbox, which owns the approval decision (sole arbiter).
+      // Toggling figma.ui visibility does not reload this iframe, so the WS below survives raise/dismiss.
+      //
+      // Opens ONE persistent connection per port in the block from server/src/config.ts
+      // (WS_PORT_BLOCK). Each running server probe-binds one block port, so scanning the whole block
+      // discovers every live session at once (Slice 3.2). The persistent relay does double duty:
+      // discovery AND disconnect-detection (onclose ⇒ the session's row leaves the panel) — one
+      // mechanism, not a separate poll. This list MUST mirror config's WS_PORT_BLOCK and the
+      // manifest's networkAccess.devAllowedDomains (the contract harness pins the mirror). We dial
+      // `localhost`, not the 127.0.0.1 literal, because Figma's manifest validator rejects raw IP
+      // addresses in devAllowedDomains ("must be a valid URL") — and the allowlist host has to match
+      // the host we dial. The server binds IPv4 loopback (127.0.0.1) only; `localhost` can resolve to
+      // IPv6 `::1` first, but a refused `::1` connect on loopback returns instantly, so Chromium
+      // (Figma's runtime) falls back to 127.0.0.1 with no perceptible delay. Both are loopback, so the
+      // loopback-only boundary still holds. (Don't "fix" this back to 127.0.0.1 — the manifest can't.)
+      var WS_PORT_BLOCK = [
+        9876, 9877, 9878, 9879, 9880, 9881, 9882, 9883,
+        9884, 9885, 9886, 9887, 9888, 9889, 9890, 9891,
+      ];
+      // Every live socket, keyed by its port — the local-only connection key (__connKey) the sandbox
+      // threads through replies so each one goes back out on the socket it arrived on.
+      var sockets = {};
+
+      // Reconnect cadence, per port. A port that has NEVER opened is almost certainly empty (no server
+      // in the block bound it), so we back its retries off 1s → 15s. This is purely to tame console
+      // noise: every doomed connect emits a browser-level "WebSocket connection to … failed" line that
+      // Chromium logs from its network stack — NOT through console.*, so JS cannot catch or mute it. The
+      // initial scan still bursts ~14 failures once at load; backoff turns the *ongoing* flood into one
+      // blip per empty port every ~15s. A port that has opened (a real session) stays on the fast 1s
+      // cadence so a dropped/restarted server reappears in the panel promptly. Late discovery still
+      // works — a server that binds a long-idle port is found within the cap.
+      var BASE_RECONNECT_MS = 1000;
+      var MAX_RECONNECT_MS = 15000;
+      var reconnectDelays = {};
+
+      function connect(port) {
+        var ws = new WebSocket("ws://localhost:" + port);
+        sockets[port] = ws;
+        // Did THIS socket ever open? Most block ports have no server, so their connect fails and fires
+        // onclose without ever opening. We must NOT tell the sandbox about those dead ports — a
+        // WS_CONNECTED/WS_CLOSED per failed retry (~once/sec × ~14 empty ports) would storm the panel's
+        // render/visibility. Only a socket that actually opened represents a real session.
+        var opened = false;
+        ws.onopen = function () {
+          opened = true;
+          // A real server lives here — keep this port on the fast cadence so it rediscovers quickly if
+          // the server drops/restarts.
+          reconnectDelays[port] = BASE_RECONNECT_MS;
+          // Tell the sandbox a FRESH connection opened on THIS port so it drops any binding from the
+          // previous socket on it. A different local server can grab a freed port; without this reset
+          // a write arriving before that server's SESSION_INFO would ride the prior (approved) binding
+          // into the executor — the consent gate's job is to stop exactly that. Tagged with __connKey
+          // so the sandbox resets the right session. onopen fires before any onmessage on this socket,
+          // so the reset lands before the new server's first message. Carries no id: local control.
+          parent.postMessage({ pluginMessage: { type: "WS_CONNECTED", __connKey: port } }, "*");
+        };
+        ws.onmessage = function (event) {
+          // Server → sandbox. Tag the message with its source port (__connKey) so the sandbox keys
+          // its per-connection map and routes the reply back to this socket. __connKey is LOCAL — it
+          // is stripped again before any sandbox reply re-enters the WS (see window.onmessage).
+          var msg = JSON.parse(event.data);
+          msg.__connKey = port;
+          parent.postMessage({ pluginMessage: msg }, "*");
+        };
+        ws.onclose = function () {
+          // Tell the sandbox a real session dropped so its row leaves the panel (disconnect-detection
+          // reuses this persistent relay) — but ONLY if this socket had opened; a dead port that never
+          // connected has no row to remove and must stay silent. Either way, auto-reconnect: the plugin
+          // outlives any single server run, and an empty port keeps its slot warm for a server that may
+          // yet bind it (discovery is the same persistent relay).
+          if (opened) {
+            parent.postMessage({ pluginMessage: { type: "WS_CLOSED", __connKey: port } }, "*");
+          } else {
+            // Never opened ⇒ presumed-empty port: double the backoff (capped) so its doomed retries —
+            // and the un-mutable console line each one emits — slow to a trickle instead of 1/sec.
+            var prev = reconnectDelays[port] || BASE_RECONNECT_MS;
+            reconnectDelays[port] = Math.min(prev * 2, MAX_RECONNECT_MS);
+          }
+          setTimeout(function () {
+            connect(port);
+          }, reconnectDelays[port] || BASE_RECONNECT_MS);
+        };
+      }
+
+      // Sandbox → server relay, EXCEPT local panel-control messages (SHOW_PANEL/HIDE_PANEL), which the
+      // sandbox addresses to THIS iframe, not a server. Everything else carries __connKey — the port
+      // whose socket it must go out on (a reply, or the SESSION_TOKEN Allow handover). Strip __connKey
+      // before ws.send so this LOCAL routing key never rides onto the frozen envelope (the sandbox
+      // also keeps it out of the echo via KNOWN_INBOUND_KEYS — both, per the Phase 3 echo-leak warning).
+      window.onmessage = function (event) {
+        var msg = event.data.pluginMessage;
+        if (!msg) return;
+        if (msg.type === "SHOW_PANEL") {
+          renderPanel(msg);
+          return;
+        }
+        if (msg.type === "HIDE_PANEL") {
+          clearPanel();
+          return;
+        }
+        var port = msg.__connKey;
+        delete msg.__connKey;
+        var ws = sockets[port];
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify(msg));
+        }
+      };
+
+      // Allow / Switch / Deny → the sandbox (sole arbiter), tagged with the row's connection key so
+      // the sandbox routes the decision to the right session. The button carries NO approval logic:
+      // it just reports the human's choice; the sandbox mints/approves the token and sets the active
+      // driver (Slice 2.1b / 3.2).
+      function decide(approve, key) {
+        parent.postMessage({ pluginMessage: { type: "UI_DECISION", approve: approve, __connKey: key } }, "*");
+      }
+
+      // Render the arbiter panel from a SHOW_PANEL payload: an optional one-time orientation banner,
+      // then a LIST of every live session (Phase 3 multi-connection). Each row reflects its state and
+      // offers the matching control (see renderActions). Built with textContent — never innerHTML — so
+      // a project path can't inject markup.
+      function renderPanel(msg) {
+        var root = document.getElementById("panel");
+        root.textContent = "";
+
+        if (msg.showOrientation) {
+          var intro = el("div", "orientation");
+          intro.appendChild(el("div", "orientation-title", "Code-Mode connects an AI agent to this Figma file."));
+          intro.appendChild(
+            el(
+              "div",
+              "orientation-body",
+              "When a session asks to drive your file it appears below. Only approve sessions you " +
+                "started — approving lets that session run code against this document. One session " +
+                "drives at a time; switch the active driver here.",
+            ),
+          );
+          root.appendChild(intro);
+        }
+
+        var sessions = msg.sessions || [];
+        if (!sessions.length) {
+          root.appendChild(el("div", "empty", "Waiting for a session…"));
+          return;
+        }
+
+        root.appendChild(el("div", "heading", sessions.length === 1 ? "Session" : "Sessions"));
+
+        sessions.forEach(function (s) {
+          var card = el("div", "session");
+          card.appendChild(el("div", "session-id", s.identity || "(unknown project)"));
+          card.appendChild(el("div", "session-code", "Pairing code " + (s.pairingCode || "—")));
+          card.appendChild(renderActions(s));
+          root.appendChild(card);
+        });
+      }
+
+      // The per-row controls, by session state — exactly one active driver at a time (the Invariant).
+      // Active: inert "driving" status. Approved-but-idle: a single "Switch to drive" action (the
+      // sandbox treats Allow on an already-approved row as a switch). Unapproved: Allow / Deny.
+      function renderActions(s) {
+        if (s.active) {
+          return el("div", "status active", "● Active — driving this file");
+        }
+        var actions = el("div", "actions");
+        if (s.approved) {
+          var sw = el("button", "allow", "Switch to drive");
+          sw.onclick = function () {
+            decide(true, s.key);
+          };
+          actions.appendChild(sw);
+          return actions;
+        }
+        var allow = el("button", "allow", "Allow");
+        allow.onclick = function () {
+          decide(true, s.key);
+        };
+        var deny = el("button", "deny", "Deny");
+        deny.onclick = function () {
+          decide(false, s.key);
+        };
+        actions.appendChild(allow);
+        actions.appendChild(deny);
+        return actions;
+      }
+
+      function clearPanel() {
+        document.getElementById("panel").textContent = "";
+      }
+
+      function el(tag, className, text) {
+        var node = document.createElement(tag);
+        if (className) node.className = className;
+        if (text != null) node.textContent = text;
+        return node;
+      }
+
+      WS_PORT_BLOCK.forEach(connect);
+    </script>
+  </body>
+</html>

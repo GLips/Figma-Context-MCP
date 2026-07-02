@@ -2,6 +2,15 @@
 
 Framelink MCP for Figma is a Model Context Protocol (MCP) server that gives AI coding tools (Cursor, etc.) access to Figma design data. It fetches Figma files/nodes via the Figma API, simplifies the response to include only relevant layout and styling information, and serves it to AI clients.
 
+## Repo layout (pnpm workspace)
+
+This repo is a pnpm workspace. The **root package `figma-developer-mcp`** is the shipped npm product (REST read tool) — `src/`, tsup build, `files: [dist]`, release-please all unchanged; the workspace is invisible to the tarball. Two `"private": true` workspace members hold the **flcm** surface (the Figma-plugin "code mode" write path, relocated here from the `code-mode-spike` repo):
+
+- **`plugin/`** (`@framelink/plugin`) — the Figma plugin: the `flcm` authoring DSL preamble (`src/preamble/`, an esbuild IIFE bundled into the QuickJS sandbox), `code.ts` host, `manifest.json`, `ui.html`, `build.mjs`. Its schema (`src/preamble/schema.ts`) is the write edge of the canonical vocabulary. flcm design docs (ADRs, plans, sketches) live in **`plugin/docs/`**.
+- **`bridge/`** (`@framelink/bridge`) — the WS bridge + `execute_code` MCP server. Named for what it is; expected to dissolve into `src/mcp` at a later server-surface unification (out of scope here). Generates `plugin/docs/authoring/flcm.md` from the schema (`docs:check` gates drift).
+
+The plugin bundles the pure `src/core` **from source** via esbuild (no npm subpath) — a core change that breaks the plugin bundle fails CI. The relocated surface keeps its own toolchain (its own `tsconfig`/typecheck, a `node:test` runner, the plugin build's zod-purity guard) and is excluded from the root's eslint/prettier.
+
 ## Build & Development Commands
 
 ```bash
@@ -9,12 +18,15 @@ pnpm install          # Install dependencies
 pnpm build            # Build with tsup (outputs to dist/)
 pnpm dev              # Development mode with watch + auto-restart (HTTP)
 pnpm dev:cli          # Development mode (stdio)
-pnpm test             # Run Vitest tests
+pnpm test             # Run Vitest tests (figma-mcp core only; scoped to src/)
 pnpm type-check       # TypeScript type checking only
 pnpm lint             # ESLint
 pnpm format           # Prettier formatting
 pnpm inspect          # Run MCP inspector for debugging
+pnpm validate         # One gate over the whole workspace — run before pushing
 ```
+
+`pnpm validate` is the single CI gate: hidden-char scan, format check, lint, core type-check + Vitest suite (goldens + parity + purity), **and** the flcm surface — `typecheck:flcm`, `test:flcm` (preamble + bridge `node:test`), `build:plugin` (zod-purity guard), `docs:check:flcm` (generated-doc drift).
 
 ### Running the Server
 

@@ -10,5 +10,10 @@ export default defineConfig({
   test: {
     globals: true,
     testTimeout: 30_000,
+    // Scope to figma-mcp's own suite. The relocated flcm surface (plugin/,
+    // bridge/) ships node:test files — a different runner vitest can't parse —
+    // driven by the `test:flcm` script. Without this bound, vitest globs them
+    // and fails with "No test suite found".
+    include: ["src/**/*.test.ts"],
   },
 });

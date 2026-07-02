@@ -51,4 +51,6 @@ Thumbs.db
 .mcp.json
 advisor-plans/
 .tk
-scripts/
+# Root build/bench scripts only — anchored so it does NOT swallow bridge/scripts/
+# (the flcm doc generator, which must stay tracked for docs:check).
+/scripts/

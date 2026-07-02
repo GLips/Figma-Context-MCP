@@ -1,0 +1,21 @@
+{
+  "name": "@framelink/plugin",
+  "version": "0.0.1",
+  "private": true,
+  "scripts": {
+    "build": "node build.mjs",
+    "dogfood": "node harness/dogfood.mjs",
+    "typecheck": "tsc --noEmit"
+  },
+  "exports": {
+    "./schema": "./src/preamble/schema.ts"
+  },
+  "dependencies": {
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@figma/plugin-typings": "^1.130.0",
+    "esbuild": "^0.28.1",
+    "typescript": "^6.0.3"
+  }
+}

@@ -7,23 +7,16 @@ on:
 
 jobs:
   ci:
-    name: Lint, Type Check, Test
+    name: Validate
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup
 
-      - name: Scan for hidden characters
-        run: node scripts/scan-hidden-chars.mjs
-
-      - name: Check formatting
-        run: pnpm prettier --check "src/**/*.ts"
-
-      - name: Lint
-        run: pnpm lint
-
-      - name: Type check
-        run: pnpm type-check
-
-      - name: Test
-        run: pnpm test
+      # One gate over the whole workspace: hidden-char scan, format, lint, and
+      # type-check + test for figma-mcp's core, plus the relocated flcm surface
+      # (plugin typecheck/build with the zod-purity guard, bridge typecheck,
+      # preamble/bridge tests, and the generated-doc drift check). A core change
+      # that breaks the plugin bundle or the parity snapshots fails here.
+      - name: Validate
+        run: pnpm validate

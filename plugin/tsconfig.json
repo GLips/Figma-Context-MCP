@@ -1,0 +1,10 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2017"],
+    "types": ["@figma/plugin-typings"]
+  },
+  "include": ["src"],
+  "//": "Tests are runtime-verified by tsx (node --test), not tsc: they use node:test + the figma mock, which this package's figma-only `types`/`lib` deliberately don't cover. tsx strips types at run time, so type-checking them here would only fight the restricted compile config.",
+  "exclude": ["src/**/*.test.ts"]
+}

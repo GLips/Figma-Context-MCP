@@ -23,9 +23,16 @@
     "dev:cli": "cross-env NODE_ENV=development tsup --watch -- --stdio",
     "lint": "eslint .",
     "format": "prettier --write \"src/**/*.ts\"",
+    "format:check": "prettier --check \"src/**/*.ts\"",
+    "scan-hidden-chars": "node scripts/scan-hidden-chars.mjs",
     "inspect": "pnpx @modelcontextprotocol/inspector",
     "benchmark:simplify": "tsx scripts/benchmark-simplify.ts",
-    "prepack": "pnpm build"
+    "prepack": "pnpm build",
+    "typecheck:flcm": "pnpm --filter @framelink/plugin --filter @framelink/bridge typecheck",
+    "test:flcm": "node --import tsx --test plugin/src/preamble/*.test.ts bridge/src/*.test.ts",
+    "build:plugin": "pnpm --filter @framelink/plugin build",
+    "docs:check:flcm": "pnpm --filter @framelink/bridge docs:check",
+    "validate": "pnpm scan-hidden-chars && pnpm format:check && pnpm lint && pnpm type-check && pnpm typecheck:flcm && pnpm test && pnpm test:flcm && pnpm build:plugin && pnpm docs:check:flcm"
   },
   "engines": {
     "node": ">=20.20.0"
