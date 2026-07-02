@@ -7,36 +7,60 @@ import type {
   SnapshotTextStyle,
 } from "~/core/snapshot.js";
 import { isVisible, pixelRound } from "~/core/utils.js";
-import { parsePaint, type SimplifiedFill } from "~/core/transformers/style.js";
+import { flattenSolidFills, parsePaint, type SimplifiedFill } from "~/core/transformers/style.js";
 
+/**
+ * Canonical text-style vocabulary (see docs/canonical-vocabulary.md). Used both
+ * as a node's base `textStyle` and — as a delta over that base — for a styled
+ * run's residual style. Fields that only make sense as a per-run inverse
+ * override (`fontStyle: "normal"`, `textDecoration: "none"`,
+ * `textTransform: "none"`) never appear on the base, where defaults are omitted.
+ */
 export type SimplifiedTextStyle = Partial<{
   fontFamily: string;
-  fontStyle: string;
   fontWeight: number;
   fontSize: number;
+  fontStyle: "italic" | "normal";
+  // The Figma-named variant ("Bold Italic", "Condensed") — informational.
+  // Renamed from the wire's `fontStyle`, which collided with the CSS meaning.
+  fontVariantName: string;
   lineHeight: string;
   letterSpacing: string;
-  textCase: string;
-  textAlignHorizontal: string;
-  textAlignVertical: string;
-  italic: boolean;
-  // "NONE" appears on inline deltas only — it represents an inverse override
-  // where the base style has underline/strike and a per-character run clears
-  // it. The base textStyle never emits NONE (defaults drop out).
-  textDecoration: "STRIKETHROUGH" | "UNDERLINE" | "NONE";
+  // "left" is the omitted default on the base; run deltas may carry it as an
+  // inverse override.
+  textAlign: "left" | "center" | "right" | "justify";
+  textAlignVertical: "center" | "bottom";
+  textTransform: "uppercase" | "lowercase" | "capitalize" | "none";
+  // CSS font-variant-caps — carries Figma's SMALL_CAPS / SMALL_CAPS_FORCED,
+  // split out of the wire's single textCase enum.
+  fontVariant: "small-caps" | "all-small-caps";
+  textDecoration: "underline" | "line-through" | "none";
   hyperlink: SnapshotHyperlink;
-  // Only non-zero flags are emitted; defaults stay out of the ref so two nodes
+  // Only non-zero flags are emitted; defaults stay out of the value so two nodes
   // that differ only in default flag values still dedupe.
   opentypeFlags: Record<string, number>;
   paragraphSpacing: number;
   paragraphIndent: number;
   listSpacing: number;
-  // Text color overrides — only used on inline style-ref deltas, not the base
-  // textStyle (the node's `fills` handles color for the whole text node via
-  // visualsExtractor). Inline deltas need their own fills field because a
-  // styled run can override text color within a single node.
-  fills: SimplifiedFill[];
+  // Per-run text color override — run deltas only, never the base (a TEXT
+  // node's `fills` carries base color like every other node). An array only for
+  // a genuinely stacked span paint that can't flatten to one color.
+  color: SimplifiedFill | SimplifiedFill[];
 }>;
+
+/**
+ * A run's style slot: a `globalVars` ref string when the delta is shared by 2+
+ * runs (compressed output), or the inline delta object itself.
+ */
+export type TextRunStyle = string | SimplifiedTextStyle;
+
+/**
+ * One segment of a text node's content: a bare string for a plain (or
+ * markdown-expressible) segment, or a `[text, style]` tuple for a span whose
+ * residual style markdown cannot express. Markdown renders inside the tuple's
+ * text; the style is a delta over the node's base `textStyle`.
+ */
+export type TextRun = string | [text: string, style: TextRunStyle];
 
 export function isTextNode(n: NodeSnapshot): boolean {
   return n.type === "TEXT";
@@ -56,45 +80,106 @@ function emRound(value: number): number {
   return Number(value.toFixed(4));
 }
 
-export function extractTextStyle(n: NodeSnapshot) {
-  if (hasTextStyle(n)) {
-    const style = n.text.style;
-    const textStyle: SimplifiedTextStyle = {
-      fontFamily: style.fontFamily,
-      fontStyle: "fontStyle" in style && style.fontStyle ? style.fontStyle : undefined,
-      fontWeight: style.fontWeight,
-      fontSize: style.fontSize,
-      lineHeight: formatLineHeight(style as LineHeightSource, style.fontSize),
-      letterSpacing:
-        style.letterSpacing && style.letterSpacing !== 0 && style.fontSize
-          ? `${emRound(style.letterSpacing / style.fontSize)}em`
-          : undefined,
-      textCase: style.textCase,
-      textAlignHorizontal: style.textAlignHorizontal,
-      textAlignVertical: style.textAlignVertical,
-      italic: "italic" in style && style.italic ? true : undefined,
-      textDecoration:
-        "textDecoration" in style &&
-        (style.textDecoration === "STRIKETHROUGH" || style.textDecoration === "UNDERLINE")
-          ? style.textDecoration
-          : undefined,
-      hyperlink: "hyperlink" in style && style.hyperlink ? style.hyperlink : undefined,
-      opentypeFlags: pickNonZeroFlags("opentypeFlags" in style ? style.opentypeFlags : undefined),
-      paragraphSpacing:
-        "paragraphSpacing" in style && style.paragraphSpacing && style.paragraphSpacing > 0
-          ? style.paragraphSpacing
-          : undefined,
-      paragraphIndent:
-        "paragraphIndent" in style && style.paragraphIndent && style.paragraphIndent > 0
-          ? style.paragraphIndent
-          : undefined,
-      listSpacing:
-        "listSpacing" in style && style.listSpacing && style.listSpacing > 0
-          ? style.listSpacing
-          : undefined,
-    };
-    return textStyle;
+function convertTextAlign(
+  align: string | undefined,
+): "left" | "center" | "right" | "justify" | undefined {
+  switch (align) {
+    case "LEFT":
+      return "left";
+    case "CENTER":
+      return "center";
+    case "RIGHT":
+      return "right";
+    case "JUSTIFIED":
+      return "justify";
+    default:
+      return undefined;
   }
+}
+
+function convertTextAlignVertical(align: string | undefined): "center" | "bottom" | undefined {
+  // "TOP" is the omitted default.
+  if (align === "CENTER") return "center";
+  if (align === "BOTTOM") return "bottom";
+  return undefined;
+}
+
+/**
+ * Split the wire's single textCase enum into the two CSS concepts it conflates:
+ * text-transform (case mapping) and font-variant-caps (small caps).
+ */
+function convertTextCase(textCase: string | undefined): {
+  textTransform?: "uppercase" | "lowercase" | "capitalize";
+  fontVariant?: "small-caps" | "all-small-caps";
+} {
+  switch (textCase) {
+    case "UPPER":
+      return { textTransform: "uppercase" };
+    case "LOWER":
+      return { textTransform: "lowercase" };
+    case "TITLE":
+      return { textTransform: "capitalize" };
+    case "SMALL_CAPS":
+      return { fontVariant: "small-caps" };
+    case "SMALL_CAPS_FORCED":
+      return { fontVariant: "all-small-caps" };
+    default:
+      return {};
+  }
+}
+
+function convertTextDecoration(
+  decoration: string | undefined,
+): "underline" | "line-through" | undefined {
+  if (decoration === "UNDERLINE") return "underline";
+  if (decoration === "STRIKETHROUGH") return "line-through";
+  return undefined;
+}
+
+export function extractTextStyle(n: NodeSnapshot): SimplifiedTextStyle | undefined {
+  if (!hasTextStyle(n)) return undefined;
+  const style = n.text.style;
+  const textStyle: SimplifiedTextStyle = {};
+
+  if (style.fontFamily !== undefined) textStyle.fontFamily = style.fontFamily;
+  if (style.fontWeight !== undefined) textStyle.fontWeight = style.fontWeight;
+  if (style.fontSize !== undefined) textStyle.fontSize = style.fontSize;
+  if (style.italic) textStyle.fontStyle = "italic";
+  if (style.fontStyle) textStyle.fontVariantName = style.fontStyle;
+
+  const lineHeight = formatLineHeight(style, style.fontSize);
+  if (lineHeight) textStyle.lineHeight = lineHeight;
+  if (style.letterSpacing && style.fontSize) {
+    textStyle.letterSpacing = `${emRound(style.letterSpacing / style.fontSize)}em`;
+  }
+
+  const textAlign = convertTextAlign(style.textAlignHorizontal);
+  if (textAlign && textAlign !== "left") textStyle.textAlign = textAlign;
+  const textAlignVertical = convertTextAlignVertical(style.textAlignVertical);
+  if (textAlignVertical) textStyle.textAlignVertical = textAlignVertical;
+
+  const { textTransform, fontVariant } = convertTextCase(style.textCase);
+  if (textTransform) textStyle.textTransform = textTransform;
+  if (fontVariant) textStyle.fontVariant = fontVariant;
+
+  const textDecoration = convertTextDecoration(style.textDecoration);
+  if (textDecoration) textStyle.textDecoration = textDecoration;
+
+  if (style.hyperlink) textStyle.hyperlink = style.hyperlink;
+
+  const opentypeFlags = pickNonZeroFlags(style.opentypeFlags);
+  if (opentypeFlags) textStyle.opentypeFlags = opentypeFlags;
+  if (style.paragraphSpacing && style.paragraphSpacing > 0) {
+    textStyle.paragraphSpacing = style.paragraphSpacing;
+  }
+  if (style.paragraphIndent && style.paragraphIndent > 0) {
+    textStyle.paragraphIndent = style.paragraphIndent;
+  }
+  if (style.listSpacing && style.listSpacing > 0) {
+    textStyle.listSpacing = style.listSpacing;
+  }
+
+  return Object.keys(textStyle).length ? textStyle : undefined;
 }
 
 function pickNonZeroFlags(
@@ -160,15 +245,21 @@ function formatLineHeight(
 // ---------------------------------------------------------------------------
 
 /**
- * Callback used by `buildFormattedText` to register a style-ref delta for a
- * styled run and receive the inline ID (e.g. `ts1`) that should wrap the run
- * in the output. Keeping the side effects (ID generation, globalVars mutation,
- * dedup) in the caller lets this module stay a near-pure transformer.
+ * Callback used by `buildFormattedText` to register a styled run's residual
+ * delta and receive the run tuple's style slot back: a `globalVars` ref string
+ * (compressed output; count-gated by the finalize pass like every other style)
+ * or the delta itself for inline emission. Keeping the side effects (dedup,
+ * globalVars mutation) in the caller lets this module stay a near-pure
+ * transformer.
  */
-type RegisterInlineTextStyle = (delta: SimplifiedTextStyle) => string;
+type RegisterRunStyle = (delta: SimplifiedTextStyle) => TextRunStyle;
 
 type BuildFormattedTextResult = {
-  text: string;
+  /**
+   * Plain (or markdown-only) text degrades to a single string; the run array
+   * appears only when some span carries a style markdown cannot express.
+   */
+  text?: string | TextRun[];
   /**
    * Numeric font weight that `**` maps to in `text`. Only present when the
    * node has per-character bold overrides, so the consumer knows what weight
@@ -183,12 +274,13 @@ type Classification = {
   isStrike: boolean;
   /** URL for `[text](url)` rendering — only set for `type: "URL"` hyperlinks. */
   urlLink?: string;
-  /** Delta to wrap in `{tsN}...{/tsN}` — undefined when no style-ref props remain. */
+  /** Residual delta the run tuple carries — undefined when markdown covers everything. */
   refDelta?: SimplifiedTextStyle;
 };
 
 /**
- * Render a text node's decoded runs as a markdown + inline style-ref string.
+ * Render a text node's decoded runs as markdown text plus `[text, style]`
+ * tuples for the arbitrary-style residual.
  *
  * The wire override tables are already resolved into `node.text` runs by the
  * adapter (see src/adapters/rest/text.ts); this function only:
@@ -196,29 +288,27 @@ type Classification = {
  *      appears across the most characters across all lines. This is what
  *      plain `**` maps to.
  *   2. Classifies each run's delta into markdown (bold/italic/strike/URL link)
- *      + residual style-ref properties, then renders: escape raw text, wrap
- *      style-ref deltas on the outside, markdown markers on the inside.
+ *      + residual delta properties, then renders: escape raw text, apply
+ *      markdown markers, and emit either a plain string segment or a
+ *      `[text, style]` tuple when a residual delta exists. Markdown renders
+ *      inside the tuple's text, so the tuple's style describes the whole
+ *      visual region including its markdown decorations.
  *   3. Prepends a list marker to each line based on `lineTypes` /
  *      `lineIndentations` (ordered `1.`, unordered `-`, nested with 2-space
  *      CommonMark indent).
  *   4. Joins lines with a literal `\n` (two characters, backslash + n). Real
  *      newlines in the output would cause the YAML serializer to emit a
  *      block scalar with per-line indentation — one indent level per nesting
- *      depth, multiplied by every line. Literal `\n` keeps the entire string
- *      on a single YAML plain scalar.
- *
- * Why markdown on the inside: `{ts1}**text**{/ts1}` keeps markdown markers
- * contiguous and lets the style ref describe a visual region decorated by
- * markdown within it. The reverse nesting would fragment markdown across
- * every style boundary.
+ *      depth, multiplied by every line. Literal `\n` keeps each string
+ *      segment on a single YAML plain scalar.
  */
 export function buildFormattedText(
   node: NodeSnapshot,
-  registerStyle: RegisterInlineTextStyle,
+  registerStyle: RegisterRunStyle,
 ): BuildFormattedTextResult {
   const text = node.text;
   if (!text || text.characters.length === 0) {
-    return { text: "" };
+    return {};
   }
 
   const perLineRuns = text.lines;
@@ -241,22 +331,45 @@ export function buildFormattedText(
   const boldWeight = detectBoldWeight(perLineRuns.flat(), baseStyle);
 
   const listState = new ListState();
-  const renderedLines: string[] = [];
-  for (let i = 0; i < perLineRuns.length; i++) {
-    let lineOutput = "";
-    for (const run of perLineRuns[i]) {
-      const classification = classifyRun(run.delta, baseStyle, boldWeight);
-      lineOutput += renderRun(run.text, classification, registerStyle);
+  const segments: TextRun[] = [];
+  // Glue plain text onto a preceding plain segment so line separators and list
+  // markers never spawn their own array entries.
+  const pushPlain = (s: string): void => {
+    if (!s) return;
+    const last = segments[segments.length - 1];
+    if (typeof last === "string") {
+      segments[segments.length - 1] = last + s;
+    } else {
+      segments.push(s);
     }
+  };
+
+  for (let i = 0; i < perLineRuns.length; i++) {
+    // Join lines with a literal `\n` (backslash + n, two chars). See the
+    // `escapeMarkdown` comment for why real newlines aren't used.
+    if (i > 0) pushPlain("\\n");
     const type = text.lineTypes[i] ?? "NONE";
     const depth = text.lineIndentations[i] ?? 0;
-    renderedLines.push(listState.advance(type, depth) + lineOutput);
+    pushPlain(listState.advance(type, depth));
+    for (const run of perLineRuns[i]) {
+      const classification = classifyRun(run.delta, baseStyle, boldWeight);
+      const rendered = renderRunMarkdown(run.text, classification);
+      if (classification.refDelta) {
+        segments.push([rendered, registerStyle(classification.refDelta)]);
+      } else {
+        pushPlain(rendered);
+      }
+    }
   }
 
-  // Join with a literal `\n` (backslash + n, two chars). See the
-  // `escapeMarkdown` comment for why real newlines aren't used.
-  const joined = renderedLines.join("\\n");
-  return boldWeight !== undefined ? { text: joined, boldWeight } : { text: joined };
+  const result: BuildFormattedTextResult = {};
+  if (segments.length === 1 && typeof segments[0] === "string") {
+    result.text = segments[0];
+  } else if (segments.length > 0) {
+    result.text = segments;
+  }
+  if (boldWeight !== undefined) result.boldWeight = boldWeight;
+  return result;
 }
 
 /**
@@ -336,16 +449,18 @@ function detectBoldWeight(
 }
 
 /**
- * Split a run's delta into markdown decorations and residual style-ref props.
+ * Split a run's delta into markdown decorations and the residual delta the run
+ * tuple carries.
  *
  * Markdown handles: bold (fontWeight > base), italic (italic:true when base is
  * not italic), strikethrough, URL hyperlinks. A run can fall into *both*
- * buckets — bold + red text produces `{ts1}**text**{/ts1}` where `ts1` carries
- * the fills delta.
+ * buckets — bold + red text produces `["**text**", { color: "#FF0000" }]`,
+ * where the delta carries the color and markdown carries the bold.
  *
- * Inverse overrides (regular on a bold base, non-italic on an italic base)
- * can't be expressed in markdown, so they fall through into the style-ref
- * delta as explicit `fontWeight` / `italic` properties.
+ * Inverse overrides (regular on a bold base, non-italic on an italic base,
+ * decoration removal) can't be expressed in markdown, so they ride the delta
+ * as explicit `fontWeight` / `fontStyle: "normal"` / `textDecoration: "none"`
+ * properties.
  */
 function classifyRun(
   delta: SnapshotTextStyle,
@@ -373,14 +488,14 @@ function classifyRun(
           c.isBold = true;
           // A heavy weight that doesn't match the canonical bold weight still
           // renders as `**`, but also carries an explicit fontWeight in the
-          // ref so the consumer can realize the actual weight.
+          // delta so the consumer can realize the actual weight.
           if (boldWeight !== undefined && w !== boldWeight) {
             refDelta.fontWeight = w;
             hasRefProps = true;
           }
         } else {
           // Lighter-than-base override — markdown can't remove bold, so emit
-          // as a style ref with the explicit weight.
+          // the explicit weight in the delta.
           refDelta.fontWeight = w;
           hasRefProps = true;
         }
@@ -391,32 +506,32 @@ function classifyRun(
         if (italic && !baseItalic) {
           c.isItalic = true;
         } else if (!italic && baseItalic) {
-          refDelta.italic = false;
+          // Inverse override: a non-italic span on an italic base.
+          refDelta.fontStyle = "normal";
           hasRefProps = true;
         }
         break;
       }
       case "textDecoration": {
         const td = value as "NONE" | "STRIKETHROUGH" | "UNDERLINE";
-        const baseDecoration = (baseStyle as { textDecoration?: string }).textDecoration;
+        const baseDecoration = baseStyle.textDecoration;
         if (td === "STRIKETHROUGH") {
           c.isStrike = true;
           // If the base had UNDERLINE, the inherited underline still applies
-          // on top of our `~~` — clear it explicitly so the run is only
-          // strikethrough, matching the designer's intent.
+          // on top of our `~~` — carry the decoration explicitly so the run is
+          // only strikethrough, matching the designer's intent.
           if (baseDecoration === "UNDERLINE") {
-            refDelta.textDecoration = "STRIKETHROUGH";
+            refDelta.textDecoration = "line-through";
             hasRefProps = true;
           }
         } else if (td === "UNDERLINE") {
-          refDelta.textDecoration = "UNDERLINE";
+          refDelta.textDecoration = "underline";
           hasRefProps = true;
         } else if (td === "NONE" && baseDecoration) {
           // Inverse override: the base had decoration and this run removes
           // it. Markdown can't express decoration removal, so emit an
-          // explicit `NONE` delta that the consumer can use to suppress the
-          // inherited base.
-          refDelta.textDecoration = "NONE";
+          // explicit "none" the consumer can use to suppress the inherited base.
+          refDelta.textDecoration = "none";
           hasRefProps = true;
         }
         break;
@@ -426,21 +541,26 @@ function classifyRun(
         if (link.type === "URL" && link.url) {
           c.urlLink = link.url;
         } else {
-          // NODE hyperlinks have no markdown equivalent — carry through as a
-          // style-ref property so the consumer can at least see the link.
+          // NODE hyperlinks have no markdown equivalent — carry through in the
+          // delta so the consumer can at least see the link.
           refDelta.hyperlink = link;
           hasRefProps = true;
         }
         break;
       }
       case "fills": {
-        const paints = value as SnapshotPaint[];
-        const fills = paints
-          .filter(isVisible)
-          .map((p) => parsePaint(p, false))
-          .reverse();
-        if (fills.length) {
-          refDelta.fills = fills;
+        const paints = (value as SnapshotPaint[]).filter(isVisible);
+        // Same folding as node fills: an all-solid stack flattens to the one
+        // color a viewer sees; only a genuinely mixed stack stays an array.
+        const flattened = flattenSolidFills(paints);
+        const color =
+          flattened ??
+          (() => {
+            const parsed = paints.map((p) => parsePaint(p, false)).reverse();
+            return parsed.length === 0 ? undefined : parsed.length === 1 ? parsed[0] : parsed;
+          })();
+        if (color !== undefined) {
+          refDelta.color = color;
           hasRefProps = true;
         }
         break;
@@ -451,10 +571,10 @@ function classifyRun(
         break;
       }
       case "fontStyle": {
-        // Figma's fontStyle is the named variant like "Bold Italic". It's
+        // The wire's fontStyle is the named variant like "Bold Italic". It's
         // informational — italic/fontWeight carry the actual visual data.
         // Pass through so the consumer sees the exact variant name.
-        refDelta.fontStyle = value as string;
+        refDelta.fontVariantName = value as string;
         hasRefProps = true;
         break;
       }
@@ -479,16 +599,13 @@ function classifyRun(
         // landing in the delta means the run's effective line-height
         // differs from the base. Resolve the merged shape (override wins
         // per field) and format once — running `formatLineHeight` on each
-        // case would emit duplicate refs for the same logical change.
+        // case would emit duplicate deltas for the same logical change.
         if (refDelta.lineHeight !== undefined) break;
         const merged: LineHeightSource = {
-          lineHeightPx: delta.lineHeightPx ?? (baseStyle as LineHeightSource).lineHeightPx,
-          lineHeightUnit:
-            (delta as LineHeightSource).lineHeightUnit ??
-            (baseStyle as LineHeightSource).lineHeightUnit,
+          lineHeightPx: delta.lineHeightPx ?? baseStyle.lineHeightPx,
+          lineHeightUnit: delta.lineHeightUnit ?? baseStyle.lineHeightUnit,
           lineHeightPercentFontSize:
-            (delta as LineHeightSource).lineHeightPercentFontSize ??
-            (baseStyle as LineHeightSource).lineHeightPercentFontSize,
+            delta.lineHeightPercentFontSize ?? baseStyle.lineHeightPercentFontSize,
         };
         const formatted = formatLineHeight(merged, effectiveFontSize);
         if (formatted) {
@@ -498,18 +615,39 @@ function classifyRun(
         break;
       }
       case "textCase": {
-        refDelta.textCase = value as string;
-        hasRefProps = true;
+        const textCase = value as string;
+        const { textTransform, fontVariant } = convertTextCase(textCase);
+        if (textTransform) {
+          refDelta.textTransform = textTransform;
+          hasRefProps = true;
+        }
+        if (fontVariant) {
+          refDelta.fontVariant = fontVariant;
+          hasRefProps = true;
+        }
+        // Inverse override: ORIGINAL over a transformed base clears the
+        // inherited transform — CSS "none", mirroring textDecoration's inverse.
+        if (textCase === "ORIGINAL" && convertTextCase(baseStyle.textCase).textTransform) {
+          refDelta.textTransform = "none";
+          hasRefProps = true;
+        }
         break;
       }
       case "textAlignHorizontal": {
-        refDelta.textAlignHorizontal = value as string;
-        hasRefProps = true;
+        const textAlign = convertTextAlign(value as string);
+        if (textAlign) {
+          // Deltas emit "left" too — it's an inverse override of a non-left base.
+          refDelta.textAlign = textAlign;
+          hasRefProps = true;
+        }
         break;
       }
       case "textAlignVertical": {
-        refDelta.textAlignVertical = value as string;
-        hasRefProps = true;
+        const textAlignVertical = convertTextAlignVertical(value as string);
+        if (textAlignVertical) {
+          refDelta.textAlignVertical = textAlignVertical;
+          hasRefProps = true;
+        }
         break;
       }
       case "opentypeFlags": {
@@ -521,12 +659,12 @@ function classifyRun(
         break;
       }
       // paragraphSpacing / paragraphIndent / listSpacing are passed through
-      // to the textStyle ref but intentionally NOT consumed during the
-      // markdown rendering itself. Markdown has no representation for
-      // pixel-valued vertical whitespace, and conflating `paragraphIndent`
-      // with the list-nesting indent we already use for `lineIndentations`
-      // would corrupt list structure. Consumers that need these values read
-      // them off the ref directly.
+      // to the delta but intentionally NOT consumed during the markdown
+      // rendering itself. Markdown has no representation for pixel-valued
+      // vertical whitespace, and conflating `paragraphIndent` with the
+      // list-nesting indent we already use for `lineIndentations` would
+      // corrupt list structure. Consumers that need these values read them
+      // off the delta directly.
       case "paragraphSpacing": {
         if (typeof value === "number" && value > 0) {
           refDelta.paragraphSpacing = value;
@@ -561,8 +699,7 @@ function classifyRun(
 }
 
 /**
- * Characters that must be escaped to avoid being interpreted as markdown
- * (or as the inline style-ref delimiter).
+ * Characters that must be escaped to avoid being interpreted as markdown.
  *
  * Escaping happens BEFORE wrappers are inserted — otherwise a literal `*`
  * from user text would become an accidental italic marker once wrapped.
@@ -610,18 +747,16 @@ function escapeLinkUrl(url: string): string {
 }
 
 /**
- * Render a single run with wrappers applied outer-to-inner:
- *   {tsN} → [...]( ) → ~~ → ** → *
+ * Render a single run's text with markdown wrappers applied outer-to-inner:
+ *   [...]( ) → ~~ → ** → *
  *
- * This ordering ensures that when two decorations collide on one run, the
- * broader visual region (the style ref) surrounds the narrower markdown
- * decoration, and the link text contains the formatted content.
+ * This ordering ensures that when decorations collide on one run, the link
+ * text contains the formatted content. When the run also carries a residual
+ * delta, the caller wraps this rendered string in a `[text, style]` tuple —
+ * markdown renders inside the tuple's text, so the tuple's style describes the
+ * whole decorated region.
  */
-function renderRun(
-  rawText: string,
-  c: Classification,
-  registerStyle: RegisterInlineTextStyle,
-): string {
+function renderRunMarkdown(rawText: string, c: Classification): string {
   const hasMarkdownWrap = c.isItalic || c.isBold || c.isStrike || c.urlLink !== undefined;
   // Pull whitespace outside any markdown wrappers so `**bold** ` instead of
   // `**bold **`. Skip the split when there's no wrapping — escaping the raw
@@ -636,11 +771,5 @@ function renderRun(
   if (c.isStrike) inner = `~~${inner}~~`;
   if (c.urlLink) inner = `[${inner}](${escapeLinkUrl(c.urlLink)})`;
 
-  let output = `${escapeMarkdown(leading)}${inner}${escapeMarkdown(trailing)}`;
-
-  if (c.refDelta) {
-    const id = registerStyle(c.refDelta);
-    output = `{${id}}${output}{/${id}}`;
-  }
-  return output;
+  return `${escapeMarkdown(leading)}${inner}${escapeMarkdown(trailing)}`;
 }

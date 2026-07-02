@@ -184,8 +184,8 @@ describe("extractFromDesign", () => {
 
     const { nodes } = await walk([node], allExtractors);
 
-    expect(nodes[0].strokeAlign).toBe("OUTSIDE");
-    expect(nodes[0].strokeWeight).toBe("2px");
+    expect(nodes[0].strokeAlign).toBe("outside");
+    expect(nodes[0].strokeWidth).toBe("2px");
   });
 
   it("omits INSIDE stroke alignment, the CSS-border default consumers assume", async () => {
@@ -201,7 +201,7 @@ describe("extractFromDesign", () => {
     const { nodes } = await walk([node], allExtractors);
 
     expect(nodes[0].strokeAlign).toBeUndefined();
-    expect(nodes[0].strokeWeight).toBe("2px");
+    expect(nodes[0].strokeWidth).toBe("2px");
   });
 
   it("disambiguates named styles when style names collide", async () => {

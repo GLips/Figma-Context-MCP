@@ -53,15 +53,43 @@ export function finalizeDesign(
 }
 
 // Node fields that carry a style reference (a globalVars key) and, after gating,
-// may instead carry the inline style value. These are the only fields counted
-// and inlined. `styles` is intentionally excluded — it's never populated.
+// may instead carry the inline style value. Run tuples inside a `text` array
+// carry a ref in their style slot the same way — visitStyleRefSlots covers both.
 const STYLE_REF_FIELDS = ["layout", "fills", "strokes", "effects", "textStyle"] as const;
 
-// Inline text-style deltas live under `ts1`, `ts2`, ... and are referenced from
-// inside `text` strings (`{ts1}…{/ts1}`), not from node style fields. They are
-// their own indirection mechanism with no node-field reference to count, so the
-// gate must leave them alone — never inline or drop them.
-const INLINE_TEXT_STYLE_KEY = /^ts\d+$/;
+/**
+ * Visit every slot on a node (or element body) that can hold a style ref: the
+ * style-valued fields plus each `[text, style]` run tuple's style slot. One
+ * visitor so counting, single-use inlining, and exclusive-style expansion can't
+ * disagree about what a "style slot" is.
+ */
+function visitStyleRefSlots(
+  node: SimplifiedNode | ElementBody,
+  visit: (get: () => unknown, set: (value: unknown) => void) => void,
+): void {
+  const record = node as unknown as Record<string, unknown>;
+  for (const field of STYLE_REF_FIELDS) {
+    visit(
+      () => record[field],
+      (value) => {
+        record[field] = value;
+      },
+    );
+  }
+  const text = record.text;
+  if (Array.isArray(text)) {
+    for (const run of text) {
+      if (Array.isArray(run)) {
+        visit(
+          () => run[1],
+          (value) => {
+            run[1] = value;
+          },
+        );
+      }
+    }
+  }
+}
 
 /**
  * Feature 1: replace single-use style refs with their inline value, returning the
@@ -79,7 +107,6 @@ function inlineSingleUseStyles(
   const inlineKeys = new Set<string>();
   const dropKeys = new Set<string>();
   for (const key of Object.keys(styles)) {
-    if (INLINE_TEXT_STYLE_KEY.test(key)) continue; // referenced from text, leave hoisted
     if (namedStyleKeys.has(key)) {
       // Named styles are design-system intent, normally kept hoisted — but only
       // while something still references them. A named style can reach zero
@@ -97,13 +124,12 @@ function inlineSingleUseStyles(
 
   const walk = (ns: SimplifiedNode[]): void => {
     for (const node of ns) {
-      for (const field of STYLE_REF_FIELDS) {
-        const value = node[field];
+      visitStyleRefSlots(node, (get, set) => {
+        const value = get();
         if (typeof value === "string" && inlineKeys.has(value)) {
-          // Widened SimplifiedNode field types make this legal; TS can't narrow per-field.
-          (node as unknown as Record<string, unknown>)[field] = styles[value];
+          set(styles[value]);
         }
-      }
+      });
       if (node.children) walk(node.children);
     }
   };
@@ -120,10 +146,10 @@ function countStyleRefs(nodes: SimplifiedNode[]): Map<string, number> {
   const counts = new Map<string, number>();
   const walk = (ns: SimplifiedNode[]): void => {
     for (const node of ns) {
-      for (const field of STYLE_REF_FIELDS) {
-        const value = node[field];
+      visitStyleRefSlots(node, (get) => {
+        const value = get();
         if (typeof value === "string") counts.set(value, (counts.get(value) ?? 0) + 1);
-      }
+      });
       if (node.children) walk(node.children);
     }
   };
@@ -180,17 +206,16 @@ function inlineExclusiveStyles(
   for (const [hash, body] of Object.entries(elements)) {
     const instanceCount = instanceCounts.get(hash);
     if (instanceCount === undefined) continue;
-    const writable = body as Record<string, unknown>;
-    for (const field of STYLE_REF_FIELDS) {
-      const ref = writable[field];
-      if (typeof ref !== "string") continue;
-      if (namedStyleKeys.has(ref) || INLINE_TEXT_STYLE_KEY.test(ref)) continue;
-      if (!(ref in styles)) continue;
+    visitStyleRefSlots(body, (get, set) => {
+      const ref = get();
+      if (typeof ref !== "string") return;
+      if (namedStyleKeys.has(ref)) return;
+      if (!(ref in styles)) return;
       if (counts.get(ref) === instanceCount) {
-        writable[field] = styles[ref];
+        set(styles[ref]);
         delete styles[ref];
       }
-    }
+    });
   }
 }
 

@@ -2,6 +2,11 @@ import { exhaustiveCheck } from "~/core/utils.js";
 import { isFrame, isInAutoLayoutFlow } from "~/core/identity.js";
 import type { NodeSnapshot } from "~/core/snapshot.js";
 
+/**
+ * Container config only (the canonical `layout` group). Per-node geometry —
+ * width/height, position, rotation — lives at the node top level as
+ * `NodeGeometry`, per the canonical vocabulary's hybrid structure.
+ */
 export interface SimplifiedLayout {
   mode: "none" | "row" | "column" | "grid";
   justifyContent?: "flex-start" | "flex-end" | "center" | "space-between" | "baseline" | "stretch";
@@ -9,6 +14,7 @@ export interface SimplifiedLayout {
   alignSelf?: "flex-start" | "flex-end" | "center" | "stretch" | "start" | "end";
   wrap?: boolean;
   gap?: string;
+  padding?: string;
   gridTemplateColumns?: string;
   gridTemplateRows?: string;
   gridColumn?: string;
@@ -21,31 +27,37 @@ export interface SimplifiedLayout {
   // when children overlap. Value is the child's original index in `parent.children`
   // (higher = drawn on top).
   zIndex?: number;
-  locationRelativeToParent?: {
-    x: number;
-    y: number;
-  };
-  dimensions?: {
-    width?: number;
-    height?: number;
-    aspectRatio?: number;
-  };
+  overflowScroll?: ("x" | "y")[];
+}
+
+/**
+ * A node's sizing along one axis. A concrete number IS fixed px — there is no
+ * separate `sizing: fixed` flag. "contextual" is read-only and root-only: the
+ * requested root's REST-reported FIXED size is an artifact of being top-level,
+ * not design intent (see resolveAxisDimension in ../layout.ts).
+ */
+export type SimplifiedDimension = number | "fill" | "hug" | "contextual";
+
+/** Per-node geometry, emitted at the node top level (hybrid structure). */
+export interface NodeGeometry {
+  width?: SimplifiedDimension;
+  height?: SimplifiedDimension;
   // The size the requested root was designed at, surfaced as a non-binding
   // reference (not a hard width/height). The root's own dimensions are
   // "contextual" — it fills whatever it's placed in — but absolutely-positioned
   // children and the fill-chain still need a concrete size to anchor against, so
-  // we keep the designed value here, named so it can't be mistaken for a pin.
+  // we keep the designed value here, string-typed with a px suffix so it can't
+  // be mistaken for a binding numeric width.
   designedWidth?: string;
   designedHeight?: string;
-  padding?: string;
-  sizing?: {
-    // "contextual": size is determined by wherever the element is placed (used
-    // for the requested root, whose FIXED size is an artifact of being top-level).
-    horizontal?: "fixed" | "fill" | "hug" | "contextual";
-    vertical?: "fixed" | "fill" | "hug" | "contextual";
-  };
-  overflowScroll?: ("x" | "y")[];
+  aspectRatio?: number;
   position?: "absolute";
+  locationRelativeToParent?: {
+    x: number;
+    y: number;
+  };
+  /** Degrees, clockwise-positive like CSS rotate() (Figma's raw value negated). */
+  rotation?: number;
 }
 
 export function convertSizing(s?: NodeSnapshot["layoutSizingHorizontal"]) {

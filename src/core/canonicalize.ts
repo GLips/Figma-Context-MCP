@@ -28,8 +28,7 @@ export interface CanonicalizeResult {
   nodes: SimplifiedNode[];
   /**
    * Hoisted styles. Compressed: shared + named styles under ref keys.
-   * Expanded: only tsN text-delta entries — those ids are embedded inside
-   * `text` strings (`{ts1}…{/ts1}`), so they have no inline form in either mode.
+   * Expanded: always empty — every value (run deltas included) emits inline.
    */
   globalVars: GlobalVars;
   /** Deduplicated element bodies (compression only; empty when expanded). */

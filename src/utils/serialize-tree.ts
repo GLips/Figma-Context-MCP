@@ -70,18 +70,25 @@ function renderNode(
   if (node.template !== undefined) parts.push(`template=${node.template}`);
 
   // Order chosen to put high-signal properties first
+  if (node.width !== undefined) parts.push(`width=${node.width}`);
+  if (node.height !== undefined) parts.push(`height=${node.height}`);
+  if (node.designedWidth !== undefined) parts.push(`designedWidth=${node.designedWidth}`);
+  if (node.designedHeight !== undefined) parts.push(`designedHeight=${node.designedHeight}`);
+  if (node.aspectRatio !== undefined) parts.push(`aspectRatio=${node.aspectRatio}`);
+  if (node.position !== undefined) parts.push(`position=${node.position}`);
+  if (node.locationRelativeToParent !== undefined) {
+    parts.push(`locationRelativeToParent=${JSON.stringify(node.locationRelativeToParent)}`);
+  }
+  if (node.rotation !== undefined) parts.push(`rotation=${node.rotation}`);
   if (node.layout !== undefined) parts.push(`layout=${renderStyleValue(node.layout)}`);
   if (node.fills !== undefined) parts.push(`fills=${renderStyleValue(node.fills)}`);
   if (node.strokes !== undefined) parts.push(`strokes=${renderStyleValue(node.strokes)}`);
-  if (node.strokeWeight !== undefined) parts.push(`strokeWeight=${maybeQuote(node.strokeWeight)}`);
-  if (node.strokeWeights !== undefined) {
-    parts.push(`strokeWeights=${maybeQuote(node.strokeWeights)}`);
-  }
+  if (node.strokeWidth !== undefined) parts.push(`strokeWidth=${maybeQuote(node.strokeWidth)}`);
   if (node.strokeDashes !== undefined) parts.push(`strokeDashes=${node.strokeDashes.join(",")}`);
+  if (node.strokeAlign !== undefined) parts.push(`strokeAlign=${node.strokeAlign}`);
   if (node.effects !== undefined) parts.push(`effects=${renderStyleValue(node.effects)}`);
   if (node.opacity !== undefined) parts.push(`opacity=${node.opacity}`);
   if (node.borderRadius !== undefined) parts.push(`borderRadius=${maybeQuote(node.borderRadius)}`);
-  if (node.styles !== undefined) parts.push(`styles=${maybeQuote(node.styles)}`);
   if (node.componentId !== undefined) parts.push(`componentId=${node.componentId}`);
   if (node.componentProperties !== undefined) {
     parts.push(`componentProperties=${JSON.stringify(node.componentProperties)}`);
@@ -91,7 +98,13 @@ function renderNode(
   }
   if (node.textStyle !== undefined) parts.push(`textStyle=${renderStyleValue(node.textStyle)}`);
   if (node.boldWeight !== undefined) parts.push(`boldWeight=${node.boldWeight}`);
-  if (node.text !== undefined) parts.push(`text=${quote(node.text)}`);
+  if (node.text !== undefined) {
+    // Plain text quotes as a JSON string; run segments render as a JSON array
+    // (consistent with every other inline structure on the line).
+    parts.push(
+      `text=${typeof node.text === "string" ? quote(node.text) : JSON.stringify(node.text)}`,
+    );
+  }
 
   out.push(indent + parts.join(" "));
 

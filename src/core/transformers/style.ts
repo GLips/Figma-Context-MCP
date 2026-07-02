@@ -28,10 +28,11 @@ export type SimplifiedFill =
 
 export type SimplifiedStroke = {
   colors: SimplifiedFill[];
-  strokeWeight?: string;
+  /** CSS metric string: "1px", or per-side shorthand "1px 2px 3px 4px". */
+  strokeWidth?: string;
   strokeDashes?: number[];
-  strokeWeights?: string;
-  strokeAlign?: "INSIDE" | "OUTSIDE" | "CENTER";
+  /** "inside" is the omitted default — it matches the CSS border an LLM writes. */
+  strokeAlign?: "outside" | "center";
 };
 
 /**
@@ -55,19 +56,18 @@ export function buildSimplifiedStrokes(
   }
 
   if (typeof n.strokeWeight === "number" && n.strokeWeight > 0) {
-    strokes.strokeWeight = `${n.strokeWeight}px`;
+    strokes.strokeWidth = `${n.strokeWeight}px`;
   }
 
   if (n.strokeDashes && n.strokeDashes.length) {
     strokes.strokeDashes = n.strokeDashes;
   }
 
-  if (n.strokeAlign === "OUTSIDE" || n.strokeAlign === "CENTER") {
-    strokes.strokeAlign = n.strokeAlign;
-  }
+  if (n.strokeAlign === "OUTSIDE") strokes.strokeAlign = "outside";
+  if (n.strokeAlign === "CENTER") strokes.strokeAlign = "center";
 
   if (n.individualStrokeWeights) {
-    strokes.strokeWeight = generateCSSShorthand(n.individualStrokeWeights);
+    strokes.strokeWidth = generateCSSShorthand(n.individualStrokeWeights);
   }
 
   return strokes;

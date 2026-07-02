@@ -5,23 +5,18 @@
       "id": "1:1",
       "name": "Card",
       "type": "FRAME",
-      "layout": {
-        "mode": "none",
-        "sizing": {
-          "horizontal": "contextual",
-          "vertical": "contextual"
-        },
-        "designedWidth": "200px",
-        "designedHeight": "120px"
-      },
+      "width": "contextual",
+      "height": "contextual",
+      "designedWidth": "200px",
+      "designedHeight": "120px",
       "fills": [
         "#E6E6E6"
       ],
       "strokes": [
         "#CCCCCC"
       ],
-      "strokeWeight": "1px",
-      "strokeAlign": "OUTSIDE",
+      "strokeWidth": "1px",
+      "strokeAlign": "outside",
       "effects": {
         "boxShadow": "0px 2px 4px 0px rgba(0, 0, 0, 0.25)"
       },
@@ -32,29 +27,18 @@
           "id": "1:3",
           "name": "Title",
           "type": "TEXT",
-          "layout": {
-            "mode": "none",
-            "sizing": {
-              "horizontal": "fixed",
-              "vertical": "fixed"
-            },
-            "locationRelativeToParent": {
-              "x": 16,
-              "y": 16
-            },
-            "dimensions": {
-              "width": 120,
-              "height": 24
-            }
+          "width": 120,
+          "height": 24,
+          "locationRelativeToParent": {
+            "x": 16,
+            "y": 16
           },
           "text": "Hello",
           "textStyle": {
             "fontFamily": "Inter",
             "fontWeight": 600,
             "fontSize": 16,
-            "lineHeight": "24px",
-            "textAlignHorizontal": "LEFT",
-            "textAlignVertical": "TOP"
+            "lineHeight": "24px"
           },
           "fills": [
             "#1A1A1A"

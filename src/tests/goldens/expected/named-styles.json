@@ -5,7 +5,6 @@
       "id": "7:1",
       "name": "Heading A",
       "type": "TEXT",
-      "layout": "layout_f0d651c0",
       "text": "Alpha",
       "textStyle": "Heading / Large",
       "fills": "fill_34dc0314"
@@ -14,7 +13,6 @@
       "id": "7:2",
       "name": "Heading B",
       "type": "TEXT",
-      "layout": "layout_f0d651c0",
       "text": "Beta",
       "textStyle": "Heading / Large (161:300)",
       "fills": "fill_34dc0314"
@@ -23,7 +21,6 @@
       "id": "7:3",
       "name": "Swatch",
       "type": "RECTANGLE",
-      "layout": "layout_f0d651c0",
       "fills": "Brand / Orange"
     }
   ],
@@ -31,10 +28,6 @@
   "componentSets": {},
   "globalVars": {
     "styles": {
-      "layout_f0d651c0": {
-        "mode": "none",
-        "sizing": {}
-      },
       "Heading / Large": {
         "fontFamily": "Inter",
         "fontWeight": 400,

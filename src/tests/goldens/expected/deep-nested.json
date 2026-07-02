@@ -5,50 +5,48 @@
       "id": "8:1",
       "name": "Chip Row",
       "type": "FRAME",
+      "width": "contextual",
+      "height": "contextual",
+      "designedWidth": "220px",
+      "designedHeight": "28px",
       "layout": {
         "mode": "row",
-        "gap": "8px",
-        "sizing": {
-          "horizontal": "contextual",
-          "vertical": "contextual"
-        },
-        "designedWidth": "220px",
-        "designedHeight": "28px"
+        "gap": "8px"
       },
       "children": [
         {
           "id": "8:2",
           "name": "Chip",
-          "template": "EL-4362b8fe",
+          "template": "EL-c9738c88",
           "children": [
             {
               "id": "8:2:t",
               "name": "Tag",
-              "template": "EL-7ab00d62"
+              "template": "EL-b918993c"
             }
           ]
         },
         {
           "id": "8:3",
           "name": "Chip",
-          "template": "EL-4362b8fe",
+          "template": "EL-c9738c88",
           "children": [
             {
               "id": "8:3:t",
               "name": "Tag",
-              "template": "EL-7ab00d62"
+              "template": "EL-b918993c"
             }
           ]
         },
         {
           "id": "8:4",
           "name": "Chip",
-          "template": "EL-4362b8fe",
+          "template": "EL-c9738c88",
           "children": [
             {
               "id": "8:4:t",
               "name": "Tag",
-              "template": "EL-7ab00d62"
+              "template": "EL-b918993c"
             }
           ]
         }
@@ -61,37 +59,22 @@
     "styles": {}
   },
   "elements": {
-    "EL-4362b8fe": {
+    "EL-c9738c88": {
       "type": "FRAME",
-      "layout": {
-        "mode": "none",
-        "sizing": {
-          "horizontal": "fixed",
-          "vertical": "fixed"
-        },
-        "dimensions": {
-          "width": 60,
-          "height": 28
-        }
-      },
+      "width": 60,
+      "height": 28,
       "fills": [
         "#E6E6E6"
       ],
       "borderRadius": "14px"
     },
-    "EL-7ab00d62": {
+    "EL-b918993c": {
       "type": "TEXT",
-      "layout": {
-        "mode": "none",
-        "sizing": {},
-        "locationRelativeToParent": {
-          "x": 8,
-          "y": 6
-        },
-        "dimensions": {
-          "width": 44,
-          "height": 16
-        }
+      "width": 44,
+      "height": 16,
+      "locationRelativeToParent": {
+        "x": 8,
+        "y": 6
       },
       "text": "Tag",
       "textStyle": {

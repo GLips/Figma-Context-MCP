@@ -5,7 +5,6 @@
       "id": "4:1",
       "name": "Linear",
       "type": "RECTANGLE",
-      "layout": "layout_f0d651c0",
       "fills": [
         {
           "type": "GRADIENT_LINEAR",
@@ -17,7 +16,6 @@
       "id": "4:2",
       "name": "Radial",
       "type": "RECTANGLE",
-      "layout": "layout_f0d651c0",
       "fills": [
         {
           "type": "GRADIENT_RADIAL",
@@ -29,12 +27,7 @@
   "components": {},
   "componentSets": {},
   "globalVars": {
-    "styles": {
-      "layout_f0d651c0": {
-        "mode": "none",
-        "sizing": {}
-      }
-    }
+    "styles": {}
   },
   "elements": {}
 }

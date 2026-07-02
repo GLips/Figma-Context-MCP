@@ -1,6 +1,5 @@
 import type { StyleSink, StyleTypes } from "./types.js";
 import type { NodeSnapshot, SnapshotStyleRef } from "./snapshot.js";
-import type { SimplifiedTextStyle } from "./transformers/text.js";
 import { stableStringify } from "./utils.js";
 import { sha1Hex } from "./sha1.js";
 
@@ -12,8 +11,7 @@ import { sha1Hex } from "./sha1.js";
  * values are hoisted under content-addressed (sha1) or named-style keys and
  * extractors emit refs. `createInlineStyleSink` is expanded mode: extractors
  * emit the values themselves, nothing is hoisted, and the hash is never
- * touched — except tsN text-delta ids, which both sinks assign because they
- * are embedded inside `text` strings and have no inline form.
+ * touched.
  */
 
 export interface RefStyleSink extends StyleSink {
@@ -32,11 +30,7 @@ export function createRefStyleSink(): RefStyleSink {
   const styles: Record<string, StyleTypes> = {};
   const namedStyleKeys = new Set<string>();
   // Reverse lookup: serialized style value → varId. Scoped to this sink, i.e.
-  // to one extraction run. Kept separate from the tsN registrar's cache so the
-  // `ts` namespace never aliases with `style_*`, `fill_*`, etc. — a base
-  // textStyle that happens to serialize identically to an inline delta would
-  // otherwise return the wrong prefix, bleeding `style_XXXXXX` IDs into the
-  // middle of `text` strings and vice versa.
+  // to one extraction run.
   const varIdCache = new Map<string, string>();
 
   /** Find an existing style variable with the same value, or create one. */
@@ -95,44 +89,19 @@ export function createRefStyleSink(): RefStyleSink {
       }
       return findOrCreateVar(value, prefix);
     },
-    inlineTextStyle: tsRegistrar(styles),
   };
 }
 
 /**
  * Expanded-mode sink: hand every value straight back for inline emission.
- * Never reaches the hash; `styles` accumulates only the tsN text deltas.
+ * Never reaches the hash; `styles` stays empty.
  */
 export function createInlineStyleSink(): StyleSink {
-  const styles: Record<string, StyleTypes> = {};
-
   return {
-    styles,
+    styles: {},
     register(_node, value) {
       return value;
     },
-    inlineTextStyle: tsRegistrar(styles),
-  };
-}
-
-/**
- * Shared tsN registrar: sequential ids from a per-sink counter, deduplicated by
- * serialized value. tsN ids come from a counter, not the content hash — they
- * appear inline in formatted text (`{ts1}…{/ts1}`), where short ids matter for
- * token efficiency and readability.
- */
-function tsRegistrar(styles: Record<string, StyleTypes>): StyleSink["inlineTextStyle"] {
-  const cache = new Map<string, string>();
-  let counter = 0;
-  return (delta: SimplifiedTextStyle): string => {
-    const key = stableStringify(delta);
-    const existing = cache.get(key);
-    if (existing) return existing;
-    counter += 1;
-    const id = `ts${counter}`;
-    styles[id] = delta;
-    cache.set(key, id);
-    return id;
   };
 }
 

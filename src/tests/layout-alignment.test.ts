@@ -21,6 +21,12 @@ function makeChild(overrides: Record<string, unknown> = {}) {
   };
 }
 
+const layoutOf = (n: NodeSnapshot, parent?: NodeSnapshot) =>
+  buildSimplifiedLayout(n, parent).layout;
+
+const geometryOf = (n: NodeSnapshot, parent?: NodeSnapshot) =>
+  buildSimplifiedLayout(n, parent).geometry;
+
 describe("layout alignment", () => {
   describe("justifyContent (primary axis)", () => {
     const cases: [string, string | undefined][] = [
@@ -35,7 +41,7 @@ describe("layout alignment", () => {
         layoutMode: "HORIZONTAL",
         primaryAxisAlignItems: figmaValue,
       });
-      expect(buildSimplifiedLayout(node).justifyContent).toBe(expected);
+      expect(layoutOf(node).justifyContent).toBe(expected);
     });
 
     test.each(cases)("column: %s → %s", (figmaValue, expected) => {
@@ -43,7 +49,7 @@ describe("layout alignment", () => {
         layoutMode: "VERTICAL",
         primaryAxisAlignItems: figmaValue,
       });
-      expect(buildSimplifiedLayout(node).justifyContent).toBe(expected);
+      expect(layoutOf(node).justifyContent).toBe(expected);
     });
   });
 
@@ -60,7 +66,7 @@ describe("layout alignment", () => {
         layoutMode: "HORIZONTAL",
         counterAxisAlignItems: figmaValue,
       });
-      expect(buildSimplifiedLayout(node).alignItems).toBe(expected);
+      expect(layoutOf(node).alignItems).toBe(expected);
     });
 
     test.each(cases)("column: %s → %s", (figmaValue, expected) => {
@@ -68,7 +74,7 @@ describe("layout alignment", () => {
         layoutMode: "VERTICAL",
         counterAxisAlignItems: figmaValue,
       });
-      expect(buildSimplifiedLayout(node).alignItems).toBe(expected);
+      expect(layoutOf(node).alignItems).toBe(expected);
     });
   });
 
@@ -78,7 +84,7 @@ describe("layout alignment", () => {
         primaryAxisAlignItems: "SPACE_BETWEEN",
         itemSpacing: 10,
       });
-      expect(buildSimplifiedLayout(node).gap).toBeUndefined();
+      expect(layoutOf(node).gap).toBeUndefined();
     });
 
     test("primary: itemSpacing preserved for other alignment modes", () => {
@@ -86,7 +92,7 @@ describe("layout alignment", () => {
         primaryAxisAlignItems: "MIN",
         itemSpacing: 10,
       });
-      expect(buildSimplifiedLayout(node).gap).toBe("10px");
+      expect(layoutOf(node).gap).toBe("10px");
     });
 
     test("counter: counterAxisSpacing suppressed when SPACE_BETWEEN", () => {
@@ -97,7 +103,7 @@ describe("layout alignment", () => {
         primaryAxisAlignItems: "SPACE_BETWEEN",
         itemSpacing: 10,
       });
-      expect(buildSimplifiedLayout(node).gap).toBeUndefined();
+      expect(layoutOf(node).gap).toBeUndefined();
     });
 
     test("counter: counterAxisSpacing preserved when AUTO", () => {
@@ -107,7 +113,7 @@ describe("layout alignment", () => {
         counterAxisSpacing: 24,
         itemSpacing: 10,
       });
-      expect(buildSimplifiedLayout(node).gap).toBe("24px 10px");
+      expect(layoutOf(node).gap).toBe("24px 10px");
     });
 
     test("wrapped row: both gaps emit CSS shorthand (row-gap column-gap)", () => {
@@ -118,7 +124,7 @@ describe("layout alignment", () => {
         counterAxisSpacing: 24,
       });
       // row layout: counterAxisSpacing=row-gap, itemSpacing=column-gap
-      expect(buildSimplifiedLayout(node).gap).toBe("24px 10px");
+      expect(layoutOf(node).gap).toBe("24px 10px");
     });
 
     test("wrapped column: both gaps emit CSS shorthand (row-gap column-gap)", () => {
@@ -129,7 +135,7 @@ describe("layout alignment", () => {
         counterAxisSpacing: 24,
       });
       // column layout: itemSpacing=row-gap, counterAxisSpacing=column-gap
-      expect(buildSimplifiedLayout(node).gap).toBe("10px 24px");
+      expect(layoutOf(node).gap).toBe("10px 24px");
     });
 
     test("wrapped: equal gaps collapse to single value", () => {
@@ -138,7 +144,7 @@ describe("layout alignment", () => {
         itemSpacing: 16,
         counterAxisSpacing: 16,
       });
-      expect(buildSimplifiedLayout(node).gap).toBe("16px");
+      expect(layoutOf(node).gap).toBe("16px");
     });
 
     test("counterAxisSpacing ignored for non-wrapped layouts", () => {
@@ -147,7 +153,7 @@ describe("layout alignment", () => {
         itemSpacing: 10,
         counterAxisSpacing: 24,
       });
-      expect(buildSimplifiedLayout(node).gap).toBe("10px");
+      expect(layoutOf(node).gap).toBe("10px");
     });
   });
 
@@ -160,7 +166,7 @@ describe("layout alignment", () => {
           makeChild({ layoutSizingVertical: "FILL" }),
         ],
       });
-      expect(buildSimplifiedLayout(node).alignItems).toBe("stretch");
+      expect(layoutOf(node).alignItems).toBe("stretch");
     });
 
     test("column: all children fill cross axis → stretch", () => {
@@ -171,7 +177,7 @@ describe("layout alignment", () => {
           makeChild({ layoutSizingHorizontal: "FILL" }),
         ],
       });
-      expect(buildSimplifiedLayout(node).alignItems).toBe("stretch");
+      expect(layoutOf(node).alignItems).toBe("stretch");
     });
 
     test("row: mixed children → falls back to enum value", () => {
@@ -183,7 +189,7 @@ describe("layout alignment", () => {
           makeChild({ layoutSizingVertical: "FIXED" }),
         ],
       });
-      expect(buildSimplifiedLayout(node).alignItems).toBe("center");
+      expect(layoutOf(node).alignItems).toBe("center");
     });
 
     test("column: mixed children → falls back to enum value", () => {
@@ -195,7 +201,7 @@ describe("layout alignment", () => {
           makeChild({ layoutSizingHorizontal: "FIXED" }),
         ],
       });
-      expect(buildSimplifiedLayout(node).alignItems).toBe("flex-end");
+      expect(layoutOf(node).alignItems).toBe("flex-end");
     });
 
     test("absolute children are excluded from stretch check", () => {
@@ -206,7 +212,7 @@ describe("layout alignment", () => {
           makeChild({ layoutPositioning: "ABSOLUTE", layoutSizingVertical: "FIXED" }),
         ],
       });
-      expect(buildSimplifiedLayout(node).alignItems).toBe("stretch");
+      expect(layoutOf(node).alignItems).toBe("stretch");
     });
 
     test("no children → no stretch, uses enum value", () => {
@@ -215,7 +221,7 @@ describe("layout alignment", () => {
         counterAxisAlignItems: "CENTER",
         children: [],
       });
-      expect(buildSimplifiedLayout(node).alignItems).toBe("center");
+      expect(layoutOf(node).alignItems).toBe("center");
     });
 
     // These two tests verify correct cross-axis detection — the bug PR #232 addressed.
@@ -230,7 +236,7 @@ describe("layout alignment", () => {
           makeChild({ layoutSizingHorizontal: "FILL", layoutSizingVertical: "FIXED" }),
         ],
       });
-      expect(buildSimplifiedLayout(node).alignItems).toBe("center");
+      expect(layoutOf(node).alignItems).toBe("center");
     });
 
     test("column: children fill main axis only → no stretch", () => {
@@ -242,7 +248,7 @@ describe("layout alignment", () => {
           makeChild({ layoutSizingVertical: "FILL", layoutSizingHorizontal: "FIXED" }),
         ],
       });
-      expect(buildSimplifiedLayout(node).alignItems).toBe("center");
+      expect(layoutOf(node).alignItems).toBe("center");
     });
   });
 
@@ -261,7 +267,9 @@ describe("layout alignment", () => {
         layoutSizingVertical: "FIXED",
       });
 
-      expect(buildSimplifiedLayout(child, parent).dimensions).toEqual({ height: 78 });
+      const geometry = geometryOf(child, parent);
+      expect(geometry.width).toBe("fill");
+      expect(geometry.height).toBe(78);
     });
   });
 
@@ -277,15 +285,15 @@ describe("layout alignment", () => {
         layoutSizingVertical: "FIXED",
         absoluteBoundingBox: { x: 0, y: 0, width: 1440, height: 900 },
       });
-      const layout = buildSimplifiedLayout(root);
-      expect(layout.sizing).toEqual({ horizontal: "contextual", vertical: "contextual" });
-      expect(layout.designedWidth).toBe("1440px");
-      expect(layout.designedHeight).toBe("900px");
-      // No binding dimensions on the root.
-      expect(layout.dimensions).toBeUndefined();
+      const geometry = geometryOf(root);
+      // No binding numeric dimensions on the root — contextual + designed refs.
+      expect(geometry.width).toBe("contextual");
+      expect(geometry.height).toBe("contextual");
+      expect(geometry.designedWidth).toBe("1440px");
+      expect(geometry.designedHeight).toBe("900px");
     });
 
-    test("keeps the same FIXED sizing and dimensions on a non-root child", () => {
+    test("keeps concrete fixed dimensions on a non-root child", () => {
       const parent = makeFrame({
         layoutMode: "NONE",
         absoluteBoundingBox: { x: 0, y: 0, width: 1440, height: 900 },
@@ -296,10 +304,11 @@ describe("layout alignment", () => {
         layoutSizingVertical: "FIXED",
         absoluteBoundingBox: { x: 0, y: 0, width: 200, height: 100 },
       });
-      const layout = buildSimplifiedLayout(child, parent);
-      expect(layout.sizing).toEqual({ horizontal: "fixed", vertical: "fixed" });
-      expect(layout.dimensions).toEqual({ width: 200, height: 100 });
-      expect(layout.designedWidth).toBeUndefined();
+      const geometry = geometryOf(child, parent);
+      // A concrete number IS fixed — no separate sizing flag.
+      expect(geometry.width).toBe(200);
+      expect(geometry.height).toBe(100);
+      expect(geometry.designedWidth).toBeUndefined();
     });
 
     test("only the FIXED axis becomes contextual; a real HUG axis is left alone", () => {
@@ -308,12 +317,13 @@ describe("layout alignment", () => {
         layoutSizingVertical: "HUG",
         absoluteBoundingBox: { x: 0, y: 0, width: 1440, height: 900 },
       });
-      const layout = buildSimplifiedLayout(root);
+      const geometry = geometryOf(root);
       // Canonical desktop root: fluid width, content-sized height.
-      expect(layout.sizing).toEqual({ horizontal: "contextual", vertical: "hug" });
-      expect(layout.designedWidth).toBe("1440px");
+      expect(geometry.width).toBe("contextual");
+      expect(geometry.height).toBe("hug");
+      expect(geometry.designedWidth).toBe("1440px");
       // HUG needs no anchor — height is determined by content.
-      expect(layout.designedHeight).toBeUndefined();
+      expect(geometry.designedHeight).toBeUndefined();
     });
   });
 
@@ -332,7 +342,7 @@ describe("layout alignment", () => {
         absoluteBoundingBox: { x: 120, y: 210, width: 50, height: 50 },
       });
 
-      expect(buildSimplifiedLayout(child, section).locationRelativeToParent).toEqual({
+      expect(geometryOf(child, section).locationRelativeToParent).toEqual({
         x: 20,
         y: 10,
       });
@@ -342,7 +352,7 @@ describe("layout alignment", () => {
       const node = makeFrame({
         absoluteBoundingBox: { x: 100, y: 200, width: 50, height: 50 },
       });
-      expect(buildSimplifiedLayout(node).locationRelativeToParent).toBeUndefined();
+      expect(geometryOf(node).locationRelativeToParent).toBeUndefined();
     });
 
     test("omits position for in-flow children of an auto-layout parent", () => {
@@ -353,7 +363,7 @@ describe("layout alignment", () => {
       const child = makeFrame({
         absoluteBoundingBox: { x: 10, y: 10, width: 50, height: 50 },
       });
-      expect(buildSimplifiedLayout(child, parent).locationRelativeToParent).toBeUndefined();
+      expect(geometryOf(child, parent).locationRelativeToParent).toBeUndefined();
     });
 
     test("emits position for ABSOLUTE children inside an auto-layout parent", () => {
@@ -365,7 +375,7 @@ describe("layout alignment", () => {
         layoutPositioning: "ABSOLUTE",
         absoluteBoundingBox: { x: 30, y: 40, width: 50, height: 50 },
       });
-      const result = buildSimplifiedLayout(child, parent);
+      const result = geometryOf(child, parent);
       expect(result.position).toBe("absolute");
       expect(result.locationRelativeToParent).toEqual({ x: 30, y: 40 });
     });
@@ -408,7 +418,7 @@ describe("grid layout", () => {
         gridRowGap: 10,
         gridColumnGap: 10,
       });
-      const result = buildSimplifiedLayout(node);
+      const result = layoutOf(node);
       expect(result.mode).toBe("grid");
       expect(result.gridTemplateColumns).toBe("repeat(3,minmax(0,1fr))");
       expect(result.gridTemplateRows).toBe("auto");
@@ -426,7 +436,7 @@ describe("grid layout", () => {
         gridColumnsSizing: "  100px 200px  ",
         gridRowsSizing: "  auto  ",
       });
-      const result = buildSimplifiedLayout(node);
+      const result = layoutOf(node);
       expect(result.gridTemplateColumns).toBe("100px 200px");
       expect(result.gridTemplateRows).toBe("auto");
     });
@@ -438,7 +448,7 @@ describe("grid layout", () => {
         gridRowGap: 10,
         gridColumnGap: 20,
       });
-      expect(buildSimplifiedLayout(node).gap).toBe("10px 20px");
+      expect(layoutOf(node).gap).toBe("10px 20px");
     });
 
     test("grid container with padding", () => {
@@ -450,7 +460,7 @@ describe("grid layout", () => {
         paddingBottom: 8,
         paddingLeft: 16,
       });
-      expect(buildSimplifiedLayout(node).padding).toBe("8px 16px");
+      expect(layoutOf(node).padding).toBe("8px 16px");
     });
   });
 
@@ -458,7 +468,7 @@ describe("grid layout", () => {
     test("default grid child (span 1, AUTO align, packed) produces no grid props", () => {
       const child = makeGridChild();
       const parent = makeGridParent({ children: [child] });
-      const result = buildSimplifiedLayout(child, parent);
+      const result = layoutOf(child, parent);
       expect(result.gridColumn).toBeUndefined();
       expect(result.gridRow).toBeUndefined();
       expect(result.justifySelf).toBeUndefined();
@@ -468,7 +478,7 @@ describe("grid layout", () => {
     test("packed grid: column span > 1 emits span shorthand", () => {
       const child = makeGridChild({ gridColumnSpan: 2 });
       const parent = makeGridParent({ children: [child] });
-      const result = buildSimplifiedLayout(child, parent);
+      const result = layoutOf(child, parent);
       expect(result.gridColumn).toBe("span 2");
       expect(result.gridRow).toBeUndefined();
     });
@@ -476,20 +486,20 @@ describe("grid layout", () => {
     test("packed grid: row span > 1 emits span shorthand", () => {
       const child = makeGridChild({ gridRowSpan: 3 });
       const parent = makeGridParent({ children: [child] });
-      const result = buildSimplifiedLayout(child, parent);
+      const result = layoutOf(child, parent);
       expect(result.gridRow).toBe("span 3");
     });
 
     test("non-AUTO horizontal alignment emits justifySelf", () => {
       const child = makeGridChild({ gridChildHorizontalAlign: "CENTER" });
       const parent = makeGridParent({ children: [child] });
-      expect(buildSimplifiedLayout(child, parent).justifySelf).toBe("center");
+      expect(layoutOf(child, parent).justifySelf).toBe("center");
     });
 
     test("non-AUTO vertical alignment emits alignSelf", () => {
       const child = makeGridChild({ gridChildVerticalAlign: "MAX" });
       const parent = makeGridParent({ children: [child] });
-      expect(buildSimplifiedLayout(child, parent).alignSelf).toBe("end");
+      expect(layoutOf(child, parent).alignSelf).toBe("end");
     });
 
     test("MIN alignment maps to start", () => {
@@ -498,7 +508,7 @@ describe("grid layout", () => {
         gridChildVerticalAlign: "MIN",
       });
       const parent = makeGridParent({ children: [child] });
-      const result = buildSimplifiedLayout(child, parent);
+      const result = layoutOf(child, parent);
       expect(result.justifySelf).toBe("start");
       expect(result.alignSelf).toBe("start");
     });
@@ -512,9 +522,9 @@ describe("grid layout", () => {
       const c3 = makeGridChild({ gridColumnAnchorIndex: 2, gridRowAnchorIndex: 0 });
       const parent = makeGridParent({ children: [c1, c2, c3] });
 
-      expect(buildSimplifiedLayout(c1, parent).gridColumn).toBeUndefined();
-      expect(buildSimplifiedLayout(c2, parent).gridColumn).toBeUndefined();
-      expect(buildSimplifiedLayout(c3, parent).gridColumn).toBeUndefined();
+      expect(layoutOf(c1, parent).gridColumn).toBeUndefined();
+      expect(layoutOf(c2, parent).gridColumn).toBeUndefined();
+      expect(layoutOf(c3, parent).gridColumn).toBeUndefined();
     });
 
     test("gapped grid: explicit positions on all children", () => {
@@ -524,10 +534,10 @@ describe("grid layout", () => {
       const parent = makeGridParent({ children: [c1, c2] });
 
       // CSS is 1-based
-      expect(buildSimplifiedLayout(c1, parent).gridColumn).toBe("1");
-      expect(buildSimplifiedLayout(c1, parent).gridRow).toBe("1");
-      expect(buildSimplifiedLayout(c2, parent).gridColumn).toBe("3");
-      expect(buildSimplifiedLayout(c2, parent).gridRow).toBe("1");
+      expect(layoutOf(c1, parent).gridColumn).toBe("1");
+      expect(layoutOf(c1, parent).gridRow).toBe("1");
+      expect(layoutOf(c2, parent).gridColumn).toBe("3");
+      expect(layoutOf(c2, parent).gridRow).toBe("1");
     });
 
     test("gapped grid with spans: position includes span", () => {
@@ -541,8 +551,8 @@ describe("grid layout", () => {
       // c1 occupies (0,0) and (0,1), c2 occupies (1,0) — gapped because (1,1) is empty
       const parent = makeGridParent({ children: [c1, c2] });
 
-      expect(buildSimplifiedLayout(c1, parent).gridColumn).toBe("1 / span 2");
-      expect(buildSimplifiedLayout(c1, parent).gridRow).toBe("1");
+      expect(layoutOf(c1, parent).gridColumn).toBe("1 / span 2");
+      expect(layoutOf(c1, parent).gridRow).toBe("1");
     });
   });
 
@@ -554,9 +564,9 @@ describe("grid layout", () => {
       const parent = makeGridParent({ children: [c1, c2, c3] });
 
       expect(computeGridChildOrder(parent)).toBeNull();
-      expect(buildSimplifiedLayout(c1, parent).zIndex).toBeUndefined();
-      expect(buildSimplifiedLayout(c2, parent).zIndex).toBeUndefined();
-      expect(buildSimplifiedLayout(c3, parent).zIndex).toBeUndefined();
+      expect(layoutOf(c1, parent).zIndex).toBeUndefined();
+      expect(layoutOf(c2, parent).zIndex).toBeUndefined();
+      expect(layoutOf(c3, parent).zIndex).toBeUndefined();
     });
 
     test("z-order differs from anchor order with overlap: sort, emit zIndex on moved children", () => {
@@ -601,18 +611,18 @@ describe("grid layout", () => {
       expect(computeGridChildOrder(parent)).toEqual([0, 1, 2, 5, 3, 4]);
 
       // Unmoved children: no zIndex
-      expect(buildSimplifiedLayout(c0, parent).zIndex).toBeUndefined();
-      expect(buildSimplifiedLayout(c1, parent).zIndex).toBeUndefined();
-      expect(buildSimplifiedLayout(c2, parent).zIndex).toBeUndefined();
+      expect(layoutOf(c0, parent).zIndex).toBeUndefined();
+      expect(layoutOf(c1, parent).zIndex).toBeUndefined();
+      expect(layoutOf(c2, parent).zIndex).toBeUndefined();
 
       // Moved children: zIndex = original index (Figma z-order)
-      expect(buildSimplifiedLayout(c3, parent).zIndex).toBe(3);
-      expect(buildSimplifiedLayout(c4, parent).zIndex).toBe(4);
-      expect(buildSimplifiedLayout(cBig, parent).zIndex).toBe(5);
+      expect(layoutOf(c3, parent).zIndex).toBe(3);
+      expect(layoutOf(c4, parent).zIndex).toBe(4);
+      expect(layoutOf(cBig, parent).zIndex).toBe(5);
 
       // Packed grid → no explicit grid positions emitted; sort handles placement
-      expect(buildSimplifiedLayout(cBig, parent).gridColumn).toBeUndefined();
-      expect(buildSimplifiedLayout(cBig, parent).gridRow).toBeUndefined();
+      expect(layoutOf(cBig, parent).gridColumn).toBeUndefined();
+      expect(layoutOf(cBig, parent).gridRow).toBeUndefined();
     });
 
     test("sort reorders, but no overlap: skip zIndex (stacking can't affect rendering)", () => {
@@ -642,9 +652,9 @@ describe("grid layout", () => {
       expect(computeGridChildOrder(parent)).toEqual([0, 2, 1]);
 
       // But no overlap → no zIndex on anyone, including the moved children.
-      expect(buildSimplifiedLayout(c0, parent).zIndex).toBeUndefined();
-      expect(buildSimplifiedLayout(cBottom, parent).zIndex).toBeUndefined();
-      expect(buildSimplifiedLayout(cRight, parent).zIndex).toBeUndefined();
+      expect(layoutOf(c0, parent).zIndex).toBeUndefined();
+      expect(layoutOf(cBottom, parent).zIndex).toBeUndefined();
+      expect(layoutOf(cRight, parent).zIndex).toBeUndefined();
     });
 
     test("adjacent cells touching (gap = 0) are not overlap", () => {
@@ -667,8 +677,8 @@ describe("grid layout", () => {
       });
       const parent = makeGridParent({ children: [c0, cBottom, cRight] });
 
-      expect(buildSimplifiedLayout(cBottom, parent).zIndex).toBeUndefined();
-      expect(buildSimplifiedLayout(cRight, parent).zIndex).toBeUndefined();
+      expect(layoutOf(cBottom, parent).zIndex).toBeUndefined();
+      expect(layoutOf(cRight, parent).zIndex).toBeUndefined();
     });
 
     test("ABSOLUTE children keep their slot; in-flow siblings still sort", () => {
@@ -695,7 +705,7 @@ describe("grid layout", () => {
         gridRowGap: 0,
         gridColumnGap: 16,
       });
-      expect(buildSimplifiedLayout(node).gap).toBe("0px 16px");
+      expect(layoutOf(node).gap).toBe("0px 16px");
     });
 
     test("both gaps zero is omitted (CSS default)", () => {
@@ -705,7 +715,7 @@ describe("grid layout", () => {
         gridRowGap: 0,
         gridColumnGap: 0,
       });
-      expect(buildSimplifiedLayout(node).gap).toBeUndefined();
+      expect(layoutOf(node).gap).toBeUndefined();
     });
   });
 
@@ -723,7 +733,7 @@ describe("grid layout", () => {
         layoutMode: "HORIZONTAL",
         children: [gridContainer],
       });
-      const result = buildSimplifiedLayout(gridContainer, flexParent);
+      const result = layoutOf(gridContainer, flexParent);
       // Container should be grid mode
       expect(result.mode).toBe("grid");
       expect(result.gridTemplateColumns).toBe("1fr 1fr");
@@ -751,7 +761,7 @@ describe("grid layout", () => {
         gridColumnsSizing: "1fr 1fr 1fr",
         children: [flexChild],
       });
-      const result = buildSimplifiedLayout(flexChild, gridParent);
+      const result = layoutOf(flexChild, gridParent);
       // Own layout mode drives the mode
       expect(result.mode).toBe("row");
       // Grid child props come from grid parent relationship
@@ -780,14 +790,10 @@ describe("aspectRatio zero-height guard", () => {
     });
 
   test("does not emit aspectRatio for a column child with zero height", () => {
-    const result = buildSimplifiedLayout(columnChild(0), parent);
-
-    expect(result.dimensions?.aspectRatio).toBeUndefined();
+    expect(geometryOf(columnChild(0), parent).aspectRatio).toBeUndefined();
   });
 
   test("still emits aspectRatio for a column child with non-zero height", () => {
-    const result = buildSimplifiedLayout(columnChild(50), parent);
-
-    expect(result.dimensions?.aspectRatio).toBe(2);
+    expect(geometryOf(columnChild(50), parent).aspectRatio).toBe(2);
   });
 });

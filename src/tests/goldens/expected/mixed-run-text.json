@@ -5,19 +5,23 @@
       "id": "3:1",
       "name": "Body",
       "type": "TEXT",
-      "layout": {
-        "mode": "none",
-        "sizing": {}
-      },
-      "text": "Hi **bold** {ts1}[link](https://example.com){/ts1}\\n1. One\\n- Two",
+      "text": [
+        "Hi **bold** ",
+        [
+          "[link](https://example.com)",
+          {
+            "textDecoration": "underline",
+            "color": "#0000FF"
+          }
+        ],
+        "\\n1. One\\n- Two"
+      ],
       "boldWeight": 700,
       "textStyle": {
         "fontFamily": "Inter",
         "fontWeight": 400,
         "fontSize": 14,
-        "lineHeight": "20px",
-        "textAlignHorizontal": "LEFT",
-        "textAlignVertical": "TOP"
+        "lineHeight": "20px"
       },
       "fills": [
         "#000000"
@@ -27,14 +31,7 @@
   "components": {},
   "componentSets": {},
   "globalVars": {
-    "styles": {
-      "ts1": {
-        "textDecoration": "UNDERLINE",
-        "fills": [
-          "#0000FF"
-        ]
-      }
-    }
+    "styles": {}
   },
   "elements": {}
 }

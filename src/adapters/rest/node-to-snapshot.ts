@@ -61,6 +61,7 @@ export function restNodeToSnapshot(
     layoutGrow: raw.layoutGrow,
     layoutPositioning: raw.layoutPositioning,
     preserveRatio: raw.preserveRatio,
+    rotation: raw.rotation,
     gridColumnAnchorIndex: raw.gridColumnAnchorIndex,
     gridRowAnchorIndex: raw.gridRowAnchorIndex,
     gridColumnSpan: raw.gridColumnSpan,

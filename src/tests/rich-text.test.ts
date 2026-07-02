@@ -4,7 +4,7 @@ import { extractFromDesign } from "~/core/node-walker.js";
 import { allExtractors } from "~/core/built-in.js";
 import { createRefStyleSink } from "~/core/style-sink.js";
 import { restNodeToSnapshot } from "~/adapters/rest/node-to-snapshot.js";
-import type { SimplifiedTextStyle } from "~/core/transformers/text.js";
+import type { SimplifiedTextStyle, TextRun } from "~/core/transformers/text.js";
 
 /**
  * Minimal Figma TEXT node factory. Tests only need the fields the text
@@ -45,13 +45,21 @@ async function extract(nodes: FigmaNode[]) {
   return { nodes: extracted, globalVars: { styles: sink.styles } };
 }
 
+/** Assert a run is a `[text, ref]` tuple and return it destructurable. */
+function asTuple(run: TextRun): [string, string] {
+  expect(Array.isArray(run)).toBe(true);
+  const [text, style] = run as [string, unknown];
+  expect(typeof style).toBe("string");
+  return [text, style as string];
+}
+
 describe("buildFormattedText — plain text passthrough", () => {
   it("emits raw text with no boldWeight when there are no overrides", async () => {
-    const { nodes, globalVars } = await extract([makeText({ characters: "Hello world" })]);
+    const { nodes } = await extract([makeText({ characters: "Hello world" })]);
+    // Plain text stays a bare string — the run array only appears for spans
+    // whose style markdown cannot express.
     expect(nodes[0].text).toBe("Hello world");
     expect(nodes[0].boldWeight).toBeUndefined();
-    // No ts refs should appear in globalVars when there are no overrides.
-    expect(Object.keys(globalVars.styles).some((k) => k.startsWith("ts"))).toBe(false);
   });
 
   it("escapes markdown special chars in plain text", async () => {
@@ -126,8 +134,8 @@ describe("buildFormattedText — markdown-expressible overrides", () => {
   });
 });
 
-describe("buildFormattedText — style-ref overrides", () => {
-  it("color (fills) override emits a ts ref with a fills delta", async () => {
+describe("buildFormattedText — run-tuple overrides", () => {
+  it("color (fills) override emits a run tuple with a color delta", async () => {
     const { nodes, globalVars } = await extract([
       makeText({
         characters: "red",
@@ -139,12 +147,14 @@ describe("buildFormattedText — style-ref overrides", () => {
         },
       }),
     ]);
-    expect(nodes[0].text).toMatch(/^\{ts1\}red\{\/ts1\}$/);
-    const delta = globalVars.styles["ts1"] as SimplifiedTextStyle;
-    expect(delta.fills).toEqual(["#FF0000"]);
+    const runs = nodes[0].text as TextRun[];
+    expect(runs).toHaveLength(1);
+    const [text, ref] = asTuple(runs[0]);
+    expect(text).toBe("red");
+    expect(globalVars.styles[ref]).toEqual({ color: "#FF0000" });
   });
 
-  it("fontSize override emits a ts ref with fontSize delta", async () => {
+  it("fontSize override emits a run tuple with a fontSize delta", async () => {
     const { nodes, globalVars } = await extract([
       makeText({
         characters: "big",
@@ -153,11 +163,14 @@ describe("buildFormattedText — style-ref overrides", () => {
         styleOverrideTable: { "1": { fontSize: 24 } },
       }),
     ]);
-    expect(nodes[0].text).toBe("{ts1}big{/ts1}");
-    expect(globalVars.styles["ts1"]).toEqual({ fontSize: 24 });
+    const runs = nodes[0].text as TextRun[];
+    expect(runs).toHaveLength(1);
+    const [text, ref] = asTuple(runs[0]);
+    expect(text).toBe("big");
+    expect(globalVars.styles[ref]).toEqual({ fontSize: 24 });
   });
 
-  it("mixed bold + color nests style ref outside markdown", async () => {
+  it("mixed bold + color renders markdown inside the tuple text", async () => {
     const { nodes, globalVars } = await extract([
       makeText({
         characters: "hot",
@@ -170,13 +183,15 @@ describe("buildFormattedText — style-ref overrides", () => {
         },
       }),
     ]);
-    expect(nodes[0].text).toBe("{ts1}**hot**{/ts1}");
+    const runs = nodes[0].text as TextRun[];
+    const [text, ref] = asTuple(runs[0]);
+    expect(text).toBe("**hot**");
     expect(nodes[0].boldWeight).toBe(700);
-    // The ts ref carries only fills — the bold lives in markdown, not the ref.
-    expect(globalVars.styles["ts1"]).toEqual({ fills: ["#FF0000"] });
+    // The delta carries only color — the bold lives in markdown, not the delta.
+    expect(globalVars.styles[ref]).toEqual({ color: "#FF0000" });
   });
 
-  it("NODE-type hyperlink falls through to a style ref", async () => {
+  it("NODE-type hyperlink falls through to a run-tuple delta", async () => {
     const { nodes, globalVars } = await extract([
       makeText({
         characters: "ref",
@@ -186,8 +201,10 @@ describe("buildFormattedText — style-ref overrides", () => {
         },
       }),
     ]);
-    expect(nodes[0].text).toBe("{ts1}ref{/ts1}");
-    expect(globalVars.styles["ts1"]).toEqual({
+    const runs = nodes[0].text as TextRun[];
+    const [text, ref] = asTuple(runs[0]);
+    expect(text).toBe("ref");
+    expect(globalVars.styles[ref]).toEqual({
       hyperlink: { type: "NODE", nodeID: "42:1" },
     });
   });
@@ -206,10 +223,12 @@ describe("buildFormattedText — run merging and weight detection", () => {
         },
       }),
     ]);
-    expect(nodes[0].text).toBe("{ts1}abcd{/ts1}");
-    // Only one ref registered in globalVars — no ts2.
-    expect(globalVars.styles["ts1"]).toEqual({ fontSize: 24 });
-    expect(globalVars.styles["ts2"]).toBeUndefined();
+    const runs = nodes[0].text as TextRun[];
+    // The adapter merges the equal-delta runs — a single tuple, one ref.
+    expect(runs).toHaveLength(1);
+    const [text, ref] = asTuple(runs[0]);
+    expect(text).toBe("abcd");
+    expect(globalVars.styles[ref]).toEqual({ fontSize: 24 });
   });
 
   it("trailing-zero omission in characterStyleOverrides is handled", async () => {
@@ -238,12 +257,16 @@ describe("buildFormattedText — run merging and weight detection", () => {
       }),
     ]);
     expect(nodes[0].boldWeight).toBe(800);
-    // "AAAAAA" renders as plain **, "BBB" renders as {ts1}**BBB**{/ts1}.
-    expect(nodes[0].text).toBe("**AAAAAA** {ts1}**BBB**{/ts1}");
-    expect(globalVars.styles["ts1"]).toEqual({ fontWeight: 600 });
+    // "AAAAAA" renders as plain **; "BBB" is bold markdown plus an explicit
+    // fontWeight delta since 600 isn't the canonical boldWeight.
+    const runs = nodes[0].text as TextRun[];
+    expect(runs[0]).toBe("**AAAAAA** ");
+    const [text, ref] = asTuple(runs[1]);
+    expect(text).toBe("**BBB**");
+    expect(globalVars.styles[ref]).toEqual({ fontWeight: 600 });
   });
 
-  it("inverse override (lighter than base) becomes a style ref, not markdown", async () => {
+  it("inverse override (lighter than base) becomes a run-tuple delta, not markdown", async () => {
     const { nodes, globalVars } = await extract([
       makeText({
         characters: "ab",
@@ -252,14 +275,17 @@ describe("buildFormattedText — run merging and weight detection", () => {
         styleOverrideTable: { "1": { fontWeight: 400 } },
       }),
     ]);
-    expect(nodes[0].text).toBe("a{ts1}b{/ts1}");
+    const runs = nodes[0].text as TextRun[];
+    expect(runs[0]).toBe("a");
+    const [text, ref] = asTuple(runs[1]);
+    expect(text).toBe("b");
     expect(nodes[0].boldWeight).toBeUndefined();
-    expect(globalVars.styles["ts1"]).toEqual({ fontWeight: 400 });
+    expect(globalVars.styles[ref]).toEqual({ fontWeight: 400 });
   });
 });
 
 describe("buildFormattedText — cross-node dedup and edge cases", () => {
-  it("shares a ts ref across different text nodes with the same delta", async () => {
+  it("shares one ref across different text nodes with the same delta", async () => {
     const { nodes, globalVars } = await extract([
       makeText({
         id: "t1",
@@ -276,15 +302,17 @@ describe("buildFormattedText — cross-node dedup and edge cases", () => {
         styleOverrideTable: { "1": { fontSize: 24 } },
       }),
     ]);
-    expect(nodes[0].text).toBe("{ts1}ab{/ts1}");
-    expect(nodes[1].text).toBe("{ts1}cd{/ts1}");
-    // Only one ts entry registered — deduped via the globalVars style cache.
-    const tsKeys = Object.keys(globalVars.styles).filter((k) => k.startsWith("ts"));
-    expect(tsKeys).toEqual(["ts1"]);
+    const [textA, refA] = asTuple((nodes[0].text as TextRun[])[0]);
+    const [textB, refB] = asTuple((nodes[1].text as TextRun[])[0]);
+    expect(textA).toBe("ab");
+    expect(textB).toBe("cd");
+    // Content-addressed dedup: identical deltas share one globalVars entry.
+    expect(refA).toBe(refB);
+    expect(globalVars.styles[refA]).toEqual({ fontSize: 24 });
   });
 
   it("drops no-op overrides that match the base style", async () => {
-    const { nodes, globalVars } = await extract([
+    const { nodes } = await extract([
       makeText({
         characters: "x",
         style: { fontFamily: "Inter", fontWeight: 400, fontSize: 16 },
@@ -293,9 +321,9 @@ describe("buildFormattedText — cross-node dedup and edge cases", () => {
         styleOverrideTable: { "1": { fontWeight: 400 } },
       }),
     ]);
+    // The no-op delta produces no tuple — the text stays a bare string.
     expect(nodes[0].text).toBe("x");
     expect(nodes[0].boldWeight).toBeUndefined();
-    expect(Object.keys(globalVars.styles).some((k) => k.startsWith("ts"))).toBe(false);
   });
 
   it("handles an empty text node", async () => {
@@ -321,8 +349,12 @@ describe("buildFormattedText — reviewer regression coverage", () => {
         styleOverrideTable: { "1": { textDecoration: "STRIKETHROUGH" } },
       }),
     ]);
-    expect(nodes[0].text).toBe("a{ts1}~~b~~{/ts1}");
-    expect(globalVars.styles["ts1"]).toEqual({ textDecoration: "STRIKETHROUGH" });
+    const runs = nodes[0].text as TextRun[];
+    expect(runs[0]).toBe("a");
+    const [text, ref] = asTuple(runs[1]);
+    expect(text).toBe("~~b~~");
+    // The explicit line-through suppresses the inherited base underline.
+    expect(globalVars.styles[ref]).toEqual({ textDecoration: "line-through" });
   });
 
   it("emits an inverse-decoration delta when a run clears the base decoration", async () => {
@@ -339,8 +371,11 @@ describe("buildFormattedText — reviewer regression coverage", () => {
         styleOverrideTable: { "1": { textDecoration: "NONE" } },
       }),
     ]);
-    expect(nodes[0].text).toBe("a{ts1}b{/ts1}");
-    expect(globalVars.styles["ts1"]).toEqual({ textDecoration: "NONE" });
+    const runs = nodes[0].text as TextRun[];
+    expect(runs[0]).toBe("a");
+    const [text, ref] = asTuple(runs[1]);
+    expect(text).toBe("b");
+    expect(globalVars.styles[ref]).toEqual({ textDecoration: "none" });
   });
 
   it("pulls whitespace outside markdown emphasis markers", async () => {
@@ -384,17 +419,19 @@ describe("buildFormattedText — reviewer regression coverage", () => {
         },
       }),
     ]);
-    expect(nodes[0].text).toBe("{ts1}ab{/ts1}");
-    const tsKeys = Object.keys(globalVars.styles).filter((k) => k.startsWith("ts"));
-    expect(tsKeys).toEqual(["ts1"]);
+    const runs = nodes[0].text as TextRun[];
+    // Key order doesn't split the runs — one merged tuple, one ref.
+    expect(runs).toHaveLength(1);
+    const [text, ref] = asTuple(runs[0]);
+    expect(text).toBe("ab");
+    expect(globalVars.styles[ref]).toEqual({ fontFamily: "Inter", fontSize: 24 });
   });
 
-  it("keeps inline ts refs in their own namespace even if a base style shares the shape", async () => {
-    // Node A has a base textStyle with only { fontSize: 24 } — the exact
-    // shape some inline deltas produce. Node B uses an inline delta with the
-    // same shape. The inline ref must still be a `ts*` ID, not the base
-    // style's ID. Without a separate cache namespace the second caller would
-    // get back the first caller's style_* ID.
+  it("shares one globalVars entry between a base textStyle and an identical run delta", async () => {
+    // Node A's base textStyle is exactly { fontSize: 24 } — the same shape node
+    // B's run delta produces. With {tsN} retired, run deltas register in the
+    // same content-addressed namespace as base styles, so the identical value
+    // dedupes to ONE entry rather than paying for two.
     const { nodes, globalVars } = await extract([
       makeText({
         id: "t1",
@@ -411,13 +448,10 @@ describe("buildFormattedText — reviewer regression coverage", () => {
         styleOverrideTable: { "1": { fontSize: 24 } },
       }),
     ]);
-    // Base-only node: textStyle is a `style_*` ID (or a named style).
-    expect(nodes[0].textStyle).toMatch(/^style_/);
-    // Inline node: text uses a `ts*` ID and its globalVars entry matches.
-    expect(nodes[1].text).toBe("{ts1}ab{/ts1}");
-    expect(globalVars.styles["ts1"]).toEqual({ fontSize: 24 });
-    // The two IDs do NOT collide.
-    expect(nodes[0].textStyle).not.toBe("ts1");
+    const baseRef = nodes[0].textStyle as string;
+    const [, runRef] = asTuple((nodes[1].text as TextRun[])[0]);
+    expect(baseRef).toBe(runRef);
+    expect(globalVars.styles[baseRef]).toEqual({ fontSize: 24 });
   });
 });
 
@@ -545,7 +579,7 @@ describe("buildFormattedText — list formatting", () => {
   });
 
   it("detects boldWeight across all lines of a list", async () => {
-    const { nodes, globalVars } = await extract([
+    const { nodes } = await extract([
       makeText({
         // "a" "\n" "big" — "big" is bold 800.
         characters: "a\nbig",
@@ -555,10 +589,10 @@ describe("buildFormattedText — list formatting", () => {
         lineIndentations: [0, 0],
       }),
     ]);
+    // The bold run matches the canonical boldWeight, so markdown covers it —
+    // no run tuple, the whole text stays one string.
     expect(nodes[0].text).toBe("- a\\n- **big**");
     expect(nodes[0].boldWeight).toBe(800);
-    // The bold run matches the canonical boldWeight, so no ts ref is needed.
-    expect(Object.keys(globalVars.styles).some((k) => k.startsWith("ts"))).toBe(false);
   });
 });
 
@@ -641,7 +675,7 @@ describe("extractTextStyle — line height", () => {
 });
 
 describe("extractTextStyle — broadened base style capture", () => {
-  it("includes italic / textDecoration / hyperlink on a fully-styled text node", async () => {
+  it("includes fontStyle / textDecoration / hyperlink on a fully-styled text node", async () => {
     const { nodes, globalVars } = await extract([
       makeText({
         characters: "fully styled",
@@ -657,8 +691,8 @@ describe("extractTextStyle — broadened base style capture", () => {
     ]);
     const styleRef = nodes[0].textStyle as string;
     const style = globalVars.styles[styleRef] as SimplifiedTextStyle;
-    expect(style.italic).toBe(true);
-    expect(style.textDecoration).toBe("UNDERLINE");
+    expect(style.fontStyle).toBe("italic");
+    expect(style.textDecoration).toBe("underline");
     expect(style.hyperlink).toEqual({ type: "URL", url: "https://framelink.ai" });
   });
 });

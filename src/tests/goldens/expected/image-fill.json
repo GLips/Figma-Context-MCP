@@ -5,7 +5,6 @@
       "id": "5:1",
       "name": "Photo",
       "type": "RECTANGLE",
-      "layout": "layout_f0d651c0",
       "fills": [
         {
           "type": "IMAGE",
@@ -24,7 +23,6 @@
       "id": "5:2",
       "name": "Tiled",
       "type": "FRAME",
-      "layout": "layout_f0d651c0",
       "fills": [
         {
           "type": "IMAGE",
@@ -45,17 +43,11 @@
           "id": "5:3",
           "name": "Cropped",
           "type": "RECTANGLE",
-          "layout": {
-            "mode": "none",
-            "sizing": {},
-            "locationRelativeToParent": {
-              "x": 0,
-              "y": 0
-            },
-            "dimensions": {
-              "width": 50,
-              "height": 50
-            }
+          "width": 50,
+          "height": 50,
+          "locationRelativeToParent": {
+            "x": 0,
+            "y": 0
           },
           "fills": [
             {
@@ -91,12 +83,7 @@
   "components": {},
   "componentSets": {},
   "globalVars": {
-    "styles": {
-      "layout_f0d651c0": {
-        "mode": "none",
-        "sizing": {}
-      }
-    }
+    "styles": {}
   },
   "elements": {}
 }

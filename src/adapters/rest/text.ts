@@ -80,17 +80,41 @@ function toSnapshotRun(run: Run): SnapshotTextRun {
 }
 
 /**
- * Retype a wire style bag to `SnapshotTextStyle`, decoding `fills` (Paint →
- * SnapshotPaint) so the core never touches REST paints. Other fields carry
- * through structurally (raw numeric/enum values); any unmapped keys ride along
- * harmlessly — the core's classifier reads only the ones it knows.
+ * Decode a wire style bag to `SnapshotTextStyle`, field by field against the
+ * declared contract — deliberately NOT a spread — so undeclared raw REST fields
+ * cannot ride through at runtime (the same value-clean seam as
+ * restNodeToSnapshot). `fills` is decoded (Paint → SnapshotPaint) so the core
+ * never touches REST paints; everything else carries raw values (numeric
+ * weights/sizes, enum tags) — CSS conversion is the core's job (Invariant 5).
+ * Keys the wire didn't send are omitted (not set to undefined) because the
+ * core's run classifier iterates a delta's present keys.
  */
 function decodeTextStyle(style: Partial<TypeStyle>): SnapshotTextStyle {
+  const out: SnapshotTextStyle = {};
+  if (style.fontFamily !== undefined) out.fontFamily = style.fontFamily;
+  if (style.fontStyle !== undefined) out.fontStyle = style.fontStyle;
+  if (style.fontWeight !== undefined) out.fontWeight = style.fontWeight;
+  if (style.fontSize !== undefined) out.fontSize = style.fontSize;
+  if (style.lineHeightPx !== undefined) out.lineHeightPx = style.lineHeightPx;
+  if (style.lineHeightUnit !== undefined) out.lineHeightUnit = style.lineHeightUnit;
+  if (style.lineHeightPercent !== undefined) out.lineHeightPercent = style.lineHeightPercent;
+  if (style.lineHeightPercentFontSize !== undefined) {
+    out.lineHeightPercentFontSize = style.lineHeightPercentFontSize;
+  }
+  if (style.letterSpacing !== undefined) out.letterSpacing = style.letterSpacing;
+  if (style.textCase !== undefined) out.textCase = style.textCase;
+  if (style.textAlignHorizontal !== undefined) out.textAlignHorizontal = style.textAlignHorizontal;
+  if (style.textAlignVertical !== undefined) out.textAlignVertical = style.textAlignVertical;
+  if (style.italic !== undefined) out.italic = style.italic;
+  if (style.textDecoration !== undefined) out.textDecoration = style.textDecoration;
+  if (style.hyperlink != null) out.hyperlink = style.hyperlink;
+  if (style.opentypeFlags !== undefined) out.opentypeFlags = style.opentypeFlags;
+  if (style.paragraphSpacing !== undefined) out.paragraphSpacing = style.paragraphSpacing;
+  if (style.paragraphIndent !== undefined) out.paragraphIndent = style.paragraphIndent;
+  if (style.listSpacing !== undefined) out.listSpacing = style.listSpacing;
   const fills = (style as { fills?: Paint[] }).fills;
-  return {
-    ...(style as SnapshotTextStyle),
-    ...(fills ? { fills: decodePaints(fills) } : {}),
-  };
+  if (fills) out.fills = decodePaints(fills);
+  return out;
 }
 
 /**

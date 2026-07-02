@@ -1,7 +1,7 @@
 import type { NodeSnapshot } from "./snapshot.js";
-import type { SimplifiedTextStyle } from "~/core/transformers/text.js";
-import type { SimplifiedLayout } from "~/core/transformers/layout.js";
-import type { SimplifiedFill, SimplifiedStroke } from "~/core/transformers/style.js";
+import type { SimplifiedTextStyle, TextRun } from "~/core/transformers/text.js";
+import type { NodeGeometry, SimplifiedLayout } from "~/core/transformers/layout.js";
+import type { SimplifiedFill } from "~/core/transformers/style.js";
 import type { SimplifiedEffects } from "~/core/transformers/effects.js";
 import type {
   SimplifiedComponentDefinition,
@@ -13,7 +13,6 @@ export type StyleTypes =
   | SimplifiedTextStyle
   | SimplifiedFill[]
   | SimplifiedLayout
-  | SimplifiedStroke
   | SimplifiedEffects
   | string;
 
@@ -44,15 +43,9 @@ export interface StyleSink {
     prefix: string,
   ): string | T;
   /**
-   * Register an inline text-style override delta, returning its short id
-   * (`ts1`, `ts2`, …). Unlike `register`, BOTH sinks return a ref here: tsN ids
-   * are embedded inside `text` strings (`{ts1}…{/ts1}`), so there is no inline
-   * form — even expanded output carries the tsN entries in its styles table.
-   */
-  inlineTextStyle(delta: SimplifiedTextStyle): string;
-  /**
    * Everything the sink hoisted, in registration order. Compressing sink: all
-   * shared styles (pre-finalize). Inline sink: only tsN text-delta entries.
+   * shared styles (pre-finalize). Inline sink: always empty — every value is
+   * handed straight back for inline emission.
    */
   readonly styles: Record<string, StyleTypes>;
 }
@@ -157,7 +150,10 @@ export interface SimplifiedDesign {
  */
 export type ElementBody = Omit<SimplifiedNode, "id" | "name" | "children" | "template">;
 
-export interface SimplifiedNode {
+// Per-node geometry (width/height/position/rotation/…) sits at the node top
+// level per the canonical vocabulary's hybrid structure — inherited from
+// NodeGeometry so the extractor and the type can't drift.
+export interface SimplifiedNode extends NodeGeometry {
   id: string;
   // Always populated during simplification, but the serialization pass drops it
   // when it is noise (auto-generated like `Rectangle 12`, or redundant with the
@@ -169,8 +165,11 @@ export interface SimplifiedNode {
    * in the shared element and only id/name/children/template are kept here.
    */
   template?: string;
-  // text
-  text?: string;
+  // container config (grouped) — a globalVars ref or the inline value
+  layout?: string | SimplifiedLayout;
+  // text — a plain string, or run segments when some span carries a style
+  // markdown can't express (see TextRun)
+  text?: string | TextRun[];
   textStyle?: string | SimplifiedTextStyle;
   /**
    * The numeric font weight that `**bold**` inside `text` maps to. Only emitted
@@ -182,18 +181,14 @@ export interface SimplifiedNode {
   // value is shared by 2+ nodes or is a named Figma style) or the inline value
   // itself (single-use values, after the finalize pass).
   fills?: string | SimplifiedFill[];
-  styles?: string;
   strokes?: string | SimplifiedFill[];
   // Non-stylable stroke properties are kept on the node when stroke uses a named color style
-  strokeWeight?: string;
+  strokeWidth?: string;
   strokeDashes?: number[];
-  strokeWeights?: string;
-  strokeAlign?: "INSIDE" | "OUTSIDE" | "CENTER";
+  strokeAlign?: "outside" | "center";
   effects?: string | SimplifiedEffects;
   opacity?: number;
   borderRadius?: string;
-  // layout & alignment
-  layout?: string | SimplifiedLayout;
   componentId?: string;
   componentProperties?: Record<string, boolean | string>;
   componentPropertyReferences?: Record<string, string>;

@@ -22,10 +22,12 @@ import { isVisible } from "~/core/utils.js";
 import type { NodeSnapshot } from "./snapshot.js";
 
 /**
- * Extracts layout-related properties from a node.
+ * Extracts layout-related properties from a node: per-node geometry onto the
+ * node top level (hybrid structure) and container config as the `layout` group.
  */
 export const layoutExtractor: ExtractorFn = (node, result, context) => {
-  const layout = buildSimplifiedLayout(node, context.parent);
+  const { layout, geometry } = buildSimplifiedLayout(node, context.parent);
+  Object.assign(result, geometry);
   if (Object.keys(layout).length > 1) {
     // Layout can't be a Figma named style, so no style slots to check.
     result.layout = context.styles.register(node, layout, [], "layout");
@@ -36,12 +38,16 @@ export const layoutExtractor: ExtractorFn = (node, result, context) => {
  * Extracts text content and text styling from a node.
  */
 export const textExtractor: ExtractorFn = (node, result, context) => {
-  // Extract text content — formatted with markdown + inline style refs when
-  // the node has per-character overrides, otherwise just the raw string. The
+  // Extract text content — markdown for the common styled cases, `[text, style]`
+  // run tuples for the arbitrary-style residual. Run deltas register through the
+  // ordinary style sink (no special namespace), so the finalize pass count-gates
+  // them like every other style: single-use inlines, shared becomes a ref. The
   // wire override tables are already resolved into `node.text` by the adapter.
   if (isTextNode(node)) {
-    const rich = buildFormattedText(node, (delta) => context.styles.inlineTextStyle(delta));
-    if (rich.text) {
+    const rich = buildFormattedText(node, (delta) =>
+      context.styles.register(node, delta, [], "style"),
+    );
+    if (rich.text !== undefined) {
       result.text = rich.text;
     }
     if (rich.boldWeight !== undefined) {
@@ -86,9 +92,8 @@ export const visualsExtractor: ExtractorFn = (node, result, context) => {
   const strokes = buildSimplifiedStrokes(node, hasChildren);
   if (strokes.colors.length) {
     result.strokes = context.styles.register(node, strokes.colors, ["stroke", "strokes"], "fill");
-    if (strokes.strokeWeight) result.strokeWeight = strokes.strokeWeight;
+    if (strokes.strokeWidth) result.strokeWidth = strokes.strokeWidth;
     if (strokes.strokeDashes) result.strokeDashes = strokes.strokeDashes;
-    if (strokes.strokeWeights) result.strokeWeights = strokes.strokeWeights;
     if (strokes.strokeAlign) result.strokeAlign = strokes.strokeAlign;
   }
 
@@ -103,11 +108,15 @@ export const visualsExtractor: ExtractorFn = (node, result, context) => {
     result.opacity = node.opacity;
   }
 
-  // border radius
-  if (typeof node.cornerRadius === "number") {
+  // border radius — zero is the CSS default, so a literal cornerRadius: 0 (or
+  // all-zero per-corner radii) is omitted rather than emitted as "0px".
+  if (typeof node.cornerRadius === "number" && node.cornerRadius !== 0) {
     result.borderRadius = `${node.cornerRadius}px`;
   }
-  if (isRectangleCornerRadii(node.rectangleCornerRadii)) {
+  if (
+    isRectangleCornerRadii(node.rectangleCornerRadii) &&
+    node.rectangleCornerRadii.some(Boolean)
+  ) {
     result.borderRadius = `${node.rectangleCornerRadii[0]}px ${node.rectangleCornerRadii[1]}px ${node.rectangleCornerRadii[2]}px ${node.rectangleCornerRadii[3]}px`;
   }
 };

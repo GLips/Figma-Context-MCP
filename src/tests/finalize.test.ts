@@ -65,13 +65,28 @@ describe("count-gated style hoisting", () => {
     expect(result.globalVars.styles).toEqual({});
   });
 
-  it("never inlines or drops inline-text-style (ts*) entries — they're referenced from text", () => {
-    const nodes = [node({ id: "1", type: "TEXT", text: "a {ts1}b{/ts1}" })];
-    const globalVars: GlobalVars = { styles: { ts1: { fontWeight: 700 } } };
+  it("inlines a single-use run delta into its tuple's style slot", () => {
+    const nodes = [node({ id: "1", type: "TEXT", text: ["a ", ["b", "style_abc12345"]] })];
+    const globalVars: GlobalVars = { styles: { style_abc12345: { fontWeight: 700 } } };
 
     const result = finalizeDesign(nodes, globalVars, new Set());
 
-    expect(result.globalVars.styles).toEqual({ ts1: { fontWeight: 700 } });
+    expect(result.nodes[0].text).toEqual(["a ", ["b", { fontWeight: 700 }]]);
+    expect(result.globalVars.styles).toEqual({});
+  });
+
+  it("keeps a run delta shared by 2+ tuples hoisted as a ref", () => {
+    const nodes = [
+      node({ id: "1", type: "TEXT", text: [["a", "style_abc12345"]] }),
+      node({ id: "2", type: "TEXT", text: [["b", "style_abc12345"]], opacity: 0.5 }),
+    ];
+    const globalVars: GlobalVars = { styles: { style_abc12345: { fontWeight: 700 } } };
+
+    const result = finalizeDesign(nodes, globalVars, new Set());
+
+    expect(result.nodes[0].text).toEqual([["a", "style_abc12345"]]);
+    expect(result.nodes[1].text).toEqual([["b", "style_abc12345"]]);
+    expect(result.globalVars.styles).toEqual({ style_abc12345: { fontWeight: 700 } });
   });
 });
 

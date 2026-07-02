@@ -244,6 +244,8 @@ export interface NodeSnapshot {
   layoutGrow?: 0 | 1;
   layoutPositioning?: "AUTO" | "ABSOLUTE";
   preserveRatio?: boolean;
+  /** Degrees, counterclockwise-positive (Figma's raw convention; REST default 0). */
+  rotation?: number;
   gridColumnAnchorIndex?: number;
   gridRowAnchorIndex?: number;
   gridColumnSpan?: number;

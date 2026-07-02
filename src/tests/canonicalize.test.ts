@@ -48,7 +48,7 @@ describe("canonicalize — expanded by default", () => {
     expect(elements).toEqual({});
   });
 
-  it("keeps tsN text-delta entries in the styles table (they live inside text strings)", async () => {
+  it("emits run deltas inline in the tuple's style slot — globalVars stays empty", async () => {
     const text = makeNode({
       id: "2:1",
       name: "Text",
@@ -56,7 +56,7 @@ describe("canonicalize — expanded by default", () => {
       characters: "abc bold",
       style: { fontFamily: "Inter", fontWeight: 400, fontSize: 16, italic: true },
       characterStyleOverrides: [0, 0, 0, 0, 1, 1, 1, 1],
-      // fontSize delta is not markdown-expressible, so it becomes {ts1}…{/ts1}
+      // fontSize delta is not markdown-expressible, so it rides a run tuple
       styleOverrideTable: { "1": { fontSize: 32 } },
       lineTypes: [],
       lineIndentations: [],
@@ -64,9 +64,9 @@ describe("canonicalize — expanded by default", () => {
 
     const { nodes, globalVars } = await canonicalize(snapshots([text]));
 
-    expect(nodes[0].text).toContain("{ts1}");
-    expect(Object.keys(globalVars.styles)).toEqual(["ts1"]);
-    // The base text style itself is still inline, not a ref.
+    expect(nodes[0].text).toEqual(["abc ", ["bold", { fontSize: 32 }]]);
+    expect(globalVars.styles).toEqual({});
+    // The base text style itself is also inline, not a ref.
     expect(typeof nodes[0].textStyle).toBe("object");
   });
 

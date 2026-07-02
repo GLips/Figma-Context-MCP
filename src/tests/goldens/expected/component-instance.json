@@ -5,35 +5,30 @@
       "id": "6:1",
       "name": "Group",
       "type": "FRAME",
-      "layout": {
-        "mode": "none",
-        "sizing": {}
-      },
       "children": [
         {
           "id": "6:2",
           "name": "Product Card",
           "type": "COMPONENT",
-          "layout": {
-            "mode": "none",
-            "sizing": {},
-            "locationRelativeToParent": {
-              "x": 0,
-              "y": 0
-            },
-            "dimensions": {
-              "width": 150,
-              "height": 200
-            }
+          "width": 150,
+          "height": 200,
+          "locationRelativeToParent": {
+            "x": 0,
+            "y": 0
           },
           "children": [
             {
               "id": "6:3",
               "name": "Label",
               "type": "TEXT",
-              "layout": "layout_af98f4af",
+              "width": 134,
+              "height": 20,
+              "locationRelativeToParent": {
+                "x": 8,
+                "y": 8
+              },
               "text": "Product Name",
-              "textStyle": "style_ba833a55",
+              "textStyle": "style_9f723b14",
               "fills": "fill_34dc0314",
               "componentPropertyReferences": {
                 "text": "Title"
@@ -43,17 +38,11 @@
               "id": "6:4",
               "name": "Sale Ribbon",
               "type": "FRAME",
-              "layout": {
-                "mode": "none",
-                "sizing": {},
-                "locationRelativeToParent": {
-                  "x": 0,
-                  "y": 0
-                },
-                "dimensions": {
-                  "width": 60,
-                  "height": 20
-                }
+              "width": 60,
+              "height": 20,
+              "locationRelativeToParent": {
+                "x": 0,
+                "y": 0
               },
               "fills": [
                 "#FF0000"
@@ -68,17 +57,11 @@
           "id": "6:5",
           "name": "Card Instance",
           "type": "INSTANCE",
-          "layout": {
-            "mode": "none",
-            "sizing": {},
-            "locationRelativeToParent": {
-              "x": 150,
-              "y": 0
-            },
-            "dimensions": {
-              "width": 150,
-              "height": 200
-            }
+          "width": 150,
+          "height": 200,
+          "locationRelativeToParent": {
+            "x": 150,
+            "y": 0
           },
           "componentId": "6:2",
           "componentProperties": {
@@ -90,9 +73,14 @@
               "id": "6:6",
               "name": "Label",
               "type": "TEXT",
-              "layout": "layout_af98f4af",
+              "width": 134,
+              "height": 20,
+              "locationRelativeToParent": {
+                "x": 8,
+                "y": 8
+              },
               "text": "My Product",
-              "textStyle": "style_ba833a55",
+              "textStyle": "style_9f723b14",
               "fills": "fill_34dc0314"
             }
           ]
@@ -120,25 +108,11 @@
   "componentSets": {},
   "globalVars": {
     "styles": {
-      "layout_af98f4af": {
-        "mode": "none",
-        "sizing": {},
-        "locationRelativeToParent": {
-          "x": 8,
-          "y": 8
-        },
-        "dimensions": {
-          "width": 134,
-          "height": 20
-        }
-      },
-      "style_ba833a55": {
+      "style_9f723b14": {
         "fontFamily": "Inter",
         "fontWeight": 400,
         "fontSize": 14,
-        "lineHeight": "20px",
-        "textAlignHorizontal": "LEFT",
-        "textAlignVertical": "TOP"
+        "lineHeight": "20px"
       },
       "fill_34dc0314": [
         "#000000"
