@@ -2,6 +2,7 @@ import type {
   NodeSnapshot,
   SnapshotHyperlink,
   SnapshotPaint,
+  SnapshotText,
   SnapshotTextRun,
   SnapshotTextStyle,
 } from "~/extractors/snapshot.js";
@@ -41,7 +42,7 @@ export function isTextNode(n: NodeSnapshot): boolean {
   return n.type === "TEXT";
 }
 
-export function hasTextStyle(n: NodeSnapshot): boolean {
+export function hasTextStyle(n: NodeSnapshot): n is NodeSnapshot & { text: SnapshotText } {
   return !!n.text && Object.keys(n.text.style).length > 0;
 }
 
@@ -57,7 +58,7 @@ function emRound(value: number): number {
 
 export function extractTextStyle(n: NodeSnapshot) {
   if (hasTextStyle(n)) {
-    const style = n.text!.style;
+    const style = n.text.style;
     const textStyle: SimplifiedTextStyle = {
       fontFamily: style.fontFamily,
       fontStyle: "fontStyle" in style && style.fontStyle ? style.fontStyle : undefined,
