@@ -6,14 +6,14 @@ import { performance } from "node:perf_hooks";
 import { Session } from "node:inspector/promises";
 import { cli } from "cleye";
 import {
-  simplifyRawFigmaObject,
   layoutExtractor,
   textExtractor,
   visualsExtractor,
   componentExtractor,
   collapseSvgContainers,
-} from "../src/extractors/index.js";
-import type { ExtractorFn, SimplifiedNode } from "../src/extractors/index.js";
+} from "../src/core/index.js";
+import { simplifyRawFigmaObject } from "../src/adapters/rest/design-extractor.js";
+import type { ExtractorFn, SimplifiedNode } from "../src/core/index.js";
 import { serializeResult } from "../src/utils/serialize.js";
 import { wrapForSerialization } from "../src/utils/serializable-design.js";
 

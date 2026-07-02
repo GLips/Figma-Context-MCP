@@ -10,7 +10,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { parseArgs } from "node:util";
 import { serializeResult, isOutputFormat, VALID_OUTPUT_FORMATS } from "../src/utils/serialize.js";
 import { wrapForSerialization } from "../src/utils/serializable-design.js";
-import type { SimplifiedDesign } from "../src/extractors/types.js";
+import type { SimplifiedDesign } from "../src/core/types.js";
 
 const { values } = parseArgs({
   options: {
