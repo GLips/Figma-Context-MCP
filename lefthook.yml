@@ -6,7 +6,10 @@ pre-commit:
       run: pnpm prettier --write {staged_files} && git add {staged_files}
     lint:
       glob: "*.{ts,js}"
-      run: pnpm eslint {staged_files}
+      # --no-warn-ignored: staged plugin/ & bridge/ files are eslint-ignored (the
+      # flcm surface keeps its own toolchain); without this, passing them
+      # explicitly spews a "File ignored" warning per file on every commit.
+      run: pnpm eslint --no-warn-ignored {staged_files}
     type-check:
       glob: "*.{ts,js}"
       run: pnpm type-check
