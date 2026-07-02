@@ -6,6 +6,13 @@ import type { NodeSnapshot } from "~/core/snapshot.js";
  * Container config only (the canonical `layout` group). Per-node geometry —
  * width/height, position, rotation — lives at the node top level as
  * `NodeGeometry`, per the canonical vocabulary's hybrid structure.
+ *
+ * The string-union members below ARE the Figma-realizable subset of each
+ * CSS-named field, shared by both producers: values outside a union are valid
+ * CSS the canvas can't realize (`space-around`, `position: sticky`, …) and the
+ * write edge (flcm's schema) fails loud naming the supported set rather than
+ * emitting a silent no-op. These unions are the canonical definition of those
+ * subsets now that the vocabulary spec is superseded by code.
  */
 export interface SimplifiedLayout {
   mode: "none" | "row" | "column" | "grid";
@@ -56,7 +63,16 @@ export interface NodeGeometry {
     x: number;
     y: number;
   };
-  /** Degrees, clockwise-positive like CSS rotate() (Figma's raw value negated). */
+  /**
+   * Rotation in degrees. The canonical vocabulary is **clockwise-positive**, like
+   * CSS `rotate()`. Figma's raw `node.rotation` is **counterclockwise**-positive
+   * (on the Y-down canvas, `atan2(-m10, m00)` of a visually clockwise rotation is
+   * negative), so both producers negate to cross the convention boundary:
+   *   - **read** negates on emit here (`geometry.rotation = -n.rotation`);
+   *   - **write** negates on set (`node.rotation = -wn.rotation`, plugin bridge).
+   * This is the single source for the sign convention — it used to live in the
+   * (now code-superseded) canonical-vocabulary spec.
+   */
   rotation?: number;
 }
 

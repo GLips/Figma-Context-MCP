@@ -5,6 +5,9 @@ import type {
   SimplifiedNode,
   StyleTypes,
 } from "~/core/types.js";
+// Single-sourced from the compression pass so the parity view resolves EXACTLY
+// the slots finalize can hoist — the two can't silently diverge.
+import { STYLE_REF_FIELDS } from "~/core/finalize.js";
 
 /**
  * The comparator policy for the REST↔plugin parity harness — "shared subset" as
@@ -83,11 +86,6 @@ const IMAGE_REF_SENTINEL = "<image-ref>";
  * `scopeStyleValue` alongside.
  */
 const PLUGIN_ONLY_FIELDS = new Set<string>([]);
-
-// The node fields that can carry a globalVars ref (string) instead of an inline
-// value — mirrors finalize.ts's STYLE_REF_FIELDS. Kept local: the parity view
-// must resolve exactly what the compression pass could have hoisted.
-const STYLE_REF_FIELDS = ["layout", "fills", "strokes", "effects", "textStyle"] as const;
 
 type Rec = Record<string, unknown>;
 

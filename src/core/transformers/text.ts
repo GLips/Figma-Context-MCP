@@ -681,6 +681,14 @@ function foldRunColor(runPaints: SnapshotPaint[]): SimplifiedFill | SimplifiedFi
  * string on a single YAML plain scalar regardless of nesting depth.
  * Backslash is already escaped by the first pass so user content that
  * literally contains `\n` stays unambiguous (it becomes `\\n`).
+ *
+ * Round-trip contract (both producers, now in one repo): flcm's markdown
+ * PARSER on the write edge (`plugin/src/preamble/markdown.ts`) is the exact
+ * inverse — `\*` is a literal asterisk, the two-character `\n` is a line break,
+ * `\\n` is a literal backslash-n. Text read here and re-authored through
+ * `flcm.text()` must reproduce the original characters. This escape set is the
+ * canonical definition of that convention (the vocabulary spec that pinned it
+ * is superseded by this code).
  */
 const MARKDOWN_ESCAPE_CHARS = /[\\*_~[\](){}]/g;
 
