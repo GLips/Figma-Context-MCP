@@ -37,5 +37,15 @@ describe("canonicalize core is bundle-pure (Invariant 4)", () => {
     const inputs = Object.keys(result.metafile.inputs);
     const outsideSrc = inputs.filter((input) => relative(SRC, resolve(input)).startsWith(".."));
     expect(outsideSrc).toEqual([]);
+
+    // Import-graph purity can't see Node GLOBALS used without an import
+    // (process, Buffer, setImmediate…) — they'd bundle fine and then blow up
+    // in QuickJS. Scan the bundled text: esbuild strips regular comments, so
+    // mentions in doc comments don't false-positive; only live code hits.
+    // Scope: the scan covers what actually ships — tree-shaken dead code is
+    // invisible to it, which is fine because it can't run in the sandbox either.
+    const bundled = result.outputFiles[0].text;
+    const nodeGlobals = /\b(process|Buffer|setImmediate|__dirname|__filename|require)\b/;
+    expect(bundled.match(nodeGlobals)).toBeNull();
   });
 });
