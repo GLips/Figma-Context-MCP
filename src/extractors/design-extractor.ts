@@ -10,6 +10,7 @@ import { simplifyComponents, simplifyComponentSets } from "~/transformers/compon
 import { tagError } from "~/utils/error-meta.js";
 import type { ExtractorFn, TraversalOptions, SimplifiedDesign } from "./types.js";
 import { extractFromDesign } from "./node-walker.js";
+import { restNodeToSnapshot } from "./rest-node-to-snapshot.js";
 import { finalizeDesign } from "./finalize.js";
 
 /**
@@ -24,12 +25,17 @@ export async function simplifyRawFigmaObject(
   const { metadata, rawNodes, components, componentSets, extraStyles } =
     parseAPIResponse(apiResponse);
 
+  // Decode each raw REST node into a plan-neutral NodeSnapshot, then walk.
+  // restNodeToSnapshot is the single place REST wire encodings are unpacked so
+  // the core never sees them (Invariant 2).
+  const snapshotNodes = rawNodes.map(restNodeToSnapshot);
+
   // Process nodes using the flexible extractor system
   const {
     nodes: extractedNodes,
     globalVars: walkedGlobalVars,
     traversalState,
-  } = await extractFromDesign(rawNodes, nodeExtractors, options, { styles: {} }, extraStyles);
+  } = await extractFromDesign(snapshotNodes, nodeExtractors, options, { styles: {} }, extraStyles);
 
   // Finalize pass: count-gate style hoisting (and, later, element dedup). Runs
   // here, after the full walk, because it needs whole-tree usage counts the

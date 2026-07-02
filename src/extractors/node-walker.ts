@@ -1,8 +1,7 @@
-import type { Node as FigmaDocumentNode } from "@figma/rest-api-spec";
+import type { Node as FigmaDocumentNode, Style } from "@figma/rest-api-spec";
 import { isVisible } from "~/utils/common.js";
-import { hasValue } from "~/utils/identity.js";
 import { computeGridChildOrder } from "~/transformers/layout.js";
-import type { Style } from "@figma/rest-api-spec";
+import type { NodeSnapshot } from "./snapshot.js";
 import type {
   ExtractorFn,
   NodeCounter,
@@ -34,7 +33,7 @@ async function maybeYield(counter: NodeCounter): Promise<void> {
  * @returns Object containing processed nodes and updated global variables
  */
 export async function extractFromDesign(
-  nodes: FigmaDocumentNode[],
+  nodes: NodeSnapshot[],
   extractors: ExtractorFn[],
   options: TraversalOptions = {},
   globalVars: GlobalVars = { styles: {} },
@@ -70,7 +69,7 @@ export async function extractFromDesign(
  * Process a single node with all provided extractors in one pass.
  */
 async function processNodeWithExtractors(
-  node: FigmaDocumentNode,
+  node: NodeSnapshot,
   extractors: ExtractorFn[],
   context: TraversalContext,
   options: TraversalOptions,
@@ -88,9 +87,15 @@ async function processNodeWithExtractors(
     type: node.type === "VECTOR" ? "IMAGE-SVG" : node.type,
   };
 
+  // Extractors and the layout/afterChildren helpers still read Figma-typed
+  // nodes; until they migrate onto NodeSnapshot (later carve slices) we cast at
+  // the boundary. NodeSnapshot is a structural subset of the Figma node, so the
+  // underlying object genuinely carries these fields.
+  const figmaNode = node as unknown as FigmaDocumentNode;
+
   // Apply all extractors to this node in a single pass
   for (const extractor of extractors) {
-    extractor(node, result, context);
+    extractor(figmaNode, result, context);
   }
 
   // Handle children recursively
@@ -98,7 +103,7 @@ async function processNodeWithExtractors(
     const childContext: TraversalContext = {
       ...context,
       currentDepth: context.currentDepth + 1,
-      parent: node,
+      parent: figmaNode,
       // COMPONENT nodes define properties; INSTANCE nodes resolve them
       insideComponentDefinition:
         node.type === "COMPONENT" || node.type === "COMPONENT_SET"
@@ -108,12 +113,11 @@ async function processNodeWithExtractors(
             : context.insideComponentDefinition,
     };
 
-    // Use the same pattern as the existing parseNode function
-    if (hasValue("children", node) && node.children.length > 0) {
+    if (node.children && node.children.length > 0) {
       // Grid containers: emit children in grid-flow (anchor) order rather than
       // Figma's z-order, so CSS auto-placement lands them in the right cells.
       // See computeGridChildOrder for details.
-      const order = computeGridChildOrder(node) ?? node.children.map((_, i) => i);
+      const order = computeGridChildOrder(figmaNode) ?? node.children.map((_, i) => i);
       const children: SimplifiedNode[] = [];
       for (const idx of order) {
         const child = node.children[idx];
@@ -125,7 +129,7 @@ async function processNodeWithExtractors(
       if (children.length > 0) {
         // Allow custom logic to modify parent and control which children to include
         const childrenToInclude = options.afterChildren
-          ? options.afterChildren(node, result, children)
+          ? options.afterChildren(figmaNode, result, children)
           : children;
 
         if (childrenToInclude.length > 0) {
@@ -142,23 +146,20 @@ async function processNodeWithExtractors(
  * Determine if a node should be processed based on filters.
  */
 function shouldProcessNode(
-  node: FigmaDocumentNode,
+  node: NodeSnapshot,
   context: TraversalContext,
   options: TraversalOptions,
 ): boolean {
   if (!isVisible(node)) {
     // Rescue hidden nodes controlled by a boolean property inside component definitions
     const hasVisibleRef =
-      "componentPropertyReferences" in node &&
-      node.componentPropertyReferences &&
-      typeof node.componentPropertyReferences === "object" &&
-      "visible" in node.componentPropertyReferences;
+      !!node.componentPropertyReferences && "visible" in node.componentPropertyReferences;
     if (!(hasVisibleRef && context.insideComponentDefinition)) {
       return false;
     }
   }
 
-  if (options.nodeFilter && !options.nodeFilter(node)) {
+  if (options.nodeFilter && !options.nodeFilter(node as unknown as FigmaDocumentNode)) {
     return false;
   }
 
@@ -169,7 +170,7 @@ function shouldProcessNode(
  * Determine if we should traverse into a node's children.
  */
 function shouldTraverseChildren(
-  _node: FigmaDocumentNode,
+  _node: NodeSnapshot,
   context: TraversalContext,
   options: TraversalOptions,
 ): boolean {
