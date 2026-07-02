@@ -1,8 +1,6 @@
-// Re-export extractor types only
-export type { SimplifiedDesign } from "./core/types.js";
-
-// Flexible extractor system
+// Canonicalize core: extractor system, built-ins, and output types
 export type {
+  SimplifiedDesign,
   ExtractorFn,
   TraversalContext,
   TraversalOptions,

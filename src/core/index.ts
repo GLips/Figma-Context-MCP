@@ -2,6 +2,7 @@
 export type {
   ExtractorFn,
   NodeCounter,
+  SimplifiedDesign,
   SimplifiedNode,
   TraversalContext,
   TraversalOptions,

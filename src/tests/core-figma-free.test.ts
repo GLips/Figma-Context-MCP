@@ -4,7 +4,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // Phase 1 Done-when gate (Invariant 2): the `canonicalize` core module graph —
-// everything reachable from the pure transform's entry points — must NOT import
+// everything reachable from the pure transform's entry point — must NOT import
 // `@figma/rest-api-spec`. Every REST wire structure is decoded in the adapter
 // (src/adapters/rest/) so the core only ever sees `NodeSnapshot`.
 // One REST type leaking into the core forks the transform for the future plugin
@@ -24,12 +24,12 @@ import { fileURLToPath } from "node:url";
 
 const SRC = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
-// The pure transform's entry surface: the core barrel, which re-exports the
+// The pure transform's single entry: the core barrel, which re-exports the
 // walker, built-in extractors, and finalize. `restNodeToSnapshot` and
 // everything above it (src/adapters/rest/, services) are the ADAPTER —
-// deliberately not roots. Phase 2's esbuild purity probe targets this same
+// deliberately not a root. Phase 2's esbuild purity probe targets this same
 // entry, so anything the barrel doesn't reach isn't part of the core.
-const CORE_ROOTS = ["core/index.ts"];
+const CORE_ROOT = "core/index.ts";
 
 const FORBIDDEN = "@figma/rest-api-spec";
 
@@ -69,10 +69,10 @@ function resolveLocal(specifier: string, fromFile: string): string | null {
   return path.replace(/\.js$/, ".ts");
 }
 
-/** Files reachable from the core roots by following local imports. */
+/** Files reachable from the core root by following local imports. */
 function coreModuleGraph(): string[] {
   const seen = new Set<string>();
-  const queue = CORE_ROOTS.map((r) => resolve(SRC, r));
+  const queue = [resolve(SRC, CORE_ROOT)];
   while (queue.length > 0) {
     const file = queue.shift()!;
     if (seen.has(file)) continue;
@@ -87,7 +87,7 @@ function coreModuleGraph(): string[] {
 }
 
 describe("canonicalize core is Figma-free (Invariant 2)", () => {
-  it("no module reachable from the core roots imports @figma/rest-api-spec", () => {
+  it("no module reachable from the core barrel imports @figma/rest-api-spec", () => {
     const offenders = coreModuleGraph().filter((file) => {
       const source = readFileSync(file, "utf-8");
       return importSpecifiers(source).includes(FORBIDDEN);
