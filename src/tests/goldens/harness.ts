@@ -5,7 +5,6 @@ import {
   allExtractors,
   collapseSvgContainers,
 } from "~/extractors/index.js";
-import { stableStringify } from "~/utils/common.js";
 import type { SimplifiedDesign } from "~/extractors/types.js";
 import type { GoldenFixture } from "./fixtures.js";
 
@@ -26,13 +25,17 @@ export async function runFixture(fixture: GoldenFixture): Promise<SimplifiedDesi
 }
 
 /**
- * Canonicalize a design for comparison: stable-sorted keys via `stableStringify`
- * (the repo's deterministic serializer), re-parsed to a plain object so Vitest's
- * `toEqual` produces a readable structural diff on mismatch. Raw `JSON.stringify`
- * is intentionally avoided — key order isn't a stable guarantee across the carve.
+ * Serialize a design to the exact golden string: insertion-order pretty JSON.
+ *
+ * Insertion order (NOT stable-sorted keys) is deliberate — it's the byte order
+ * the tool actually emits, so the goldens gate key ORDER too, not just semantic
+ * structure. A refactor that reordered output fields changes the bytes an LLM
+ * receives; a key-insensitive `toEqual` would wave that through. The carve was
+ * verified byte-identical (including key order) against pre-carve `main`, so
+ * this order-sensitive form is a faithful, not accidental, baseline.
  */
-export function canonical(design: SimplifiedDesign): unknown {
-  return JSON.parse(stableStringify(design));
+export function serializeGolden(design: SimplifiedDesign): string {
+  return JSON.stringify(design, null, 2) + "\n";
 }
 
 export function expectedPath(name: string): string {

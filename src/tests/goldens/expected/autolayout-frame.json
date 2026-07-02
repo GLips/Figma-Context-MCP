@@ -1,71 +1,71 @@
 {
-  "componentSets": {},
-  "components": {},
-  "elements": {},
-  "globalVars": {
-    "styles": {}
-  },
   "name": "Auto Layout",
   "nodes": [
     {
+      "id": "2:1",
+      "name": "Row",
+      "type": "FRAME",
+      "layout": {
+        "mode": "row",
+        "padding": "12px 16px",
+        "justifyContent": "center",
+        "gap": "8px",
+        "sizing": {
+          "horizontal": "contextual",
+          "vertical": "contextual"
+        },
+        "designedWidth": "300px",
+        "designedHeight": "60px"
+      },
       "children": [
         {
-          "borderRadius": "6px",
-          "fills": ["#3366FF"],
           "id": "2:2",
+          "name": "Primary Button",
+          "type": "FRAME",
           "layout": {
-            "dimensions": {
-              "height": 36,
-              "width": 120
-            },
             "mode": "none",
             "sizing": {
               "horizontal": "fixed",
               "vertical": "fixed"
+            },
+            "dimensions": {
+              "width": 120,
+              "height": 36
             }
           },
-          "name": "Primary Button",
-          "type": "FRAME"
+          "fills": ["#3366FF"],
+          "borderRadius": "6px"
         },
         {
-          "borderRadius": "12px",
-          "fills": ["#FF0000"],
           "id": "2:3",
+          "name": "Badge",
+          "type": "FRAME",
           "layout": {
-            "dimensions": {
-              "height": 24,
-              "width": 24
+            "mode": "none",
+            "sizing": {
+              "horizontal": "fixed",
+              "vertical": "fixed"
             },
+            "position": "absolute",
             "locationRelativeToParent": {
               "x": 260,
               "y": 4
             },
-            "mode": "none",
-            "position": "absolute",
-            "sizing": {
-              "horizontal": "fixed",
-              "vertical": "fixed"
+            "dimensions": {
+              "width": 24,
+              "height": 24
             }
           },
-          "name": "Badge",
-          "type": "FRAME"
+          "fills": ["#FF0000"],
+          "borderRadius": "12px"
         }
-      ],
-      "id": "2:1",
-      "layout": {
-        "designedHeight": "60px",
-        "designedWidth": "300px",
-        "gap": "8px",
-        "justifyContent": "center",
-        "mode": "row",
-        "padding": "12px 16px",
-        "sizing": {
-          "horizontal": "contextual",
-          "vertical": "contextual"
-        }
-      },
-      "name": "Row",
-      "type": "FRAME"
+      ]
     }
-  ]
+  ],
+  "components": {},
+  "componentSets": {},
+  "globalVars": {
+    "styles": {}
+  },
+  "elements": {}
 }

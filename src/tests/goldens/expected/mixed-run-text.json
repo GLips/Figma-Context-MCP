@@ -1,36 +1,36 @@
 {
-  "componentSets": {},
-  "components": {},
-  "elements": {},
-  "globalVars": {
-    "styles": {
-      "ts1": {
-        "fills": ["#0000FF"],
-        "textDecoration": "UNDERLINE"
-      }
-    }
-  },
   "name": "Mixed Run Text",
   "nodes": [
     {
-      "boldWeight": 700,
-      "fills": ["#000000"],
       "id": "3:1",
+      "name": "Body",
+      "type": "TEXT",
       "layout": {
         "mode": "none",
         "sizing": {}
       },
-      "name": "Body",
       "text": "Hi **bold** {ts1}[link](https://example.com){/ts1}\\n1. One\\n- Two",
+      "boldWeight": 700,
       "textStyle": {
         "fontFamily": "Inter",
-        "fontSize": 14,
         "fontWeight": 400,
+        "fontSize": 14,
         "lineHeight": "20px",
         "textAlignHorizontal": "LEFT",
         "textAlignVertical": "TOP"
       },
-      "type": "TEXT"
+      "fills": ["#000000"]
     }
-  ]
+  ],
+  "components": {},
+  "componentSets": {},
+  "globalVars": {
+    "styles": {
+      "ts1": {
+        "textDecoration": "UNDERLINE",
+        "fills": ["#0000FF"]
+      }
+    }
+  },
+  "elements": {}
 }

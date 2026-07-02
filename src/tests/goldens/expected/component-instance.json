@@ -1,5 +1,103 @@
 {
-  "componentSets": {},
+  "name": "Components",
+  "nodes": [
+    {
+      "id": "6:1",
+      "name": "Group",
+      "type": "FRAME",
+      "layout": {
+        "mode": "none",
+        "sizing": {}
+      },
+      "children": [
+        {
+          "id": "6:2",
+          "name": "Product Card",
+          "type": "COMPONENT",
+          "layout": {
+            "mode": "none",
+            "sizing": {},
+            "locationRelativeToParent": {
+              "x": 0,
+              "y": 0
+            },
+            "dimensions": {
+              "width": 150,
+              "height": 200
+            }
+          },
+          "children": [
+            {
+              "id": "6:3",
+              "name": "Label",
+              "type": "TEXT",
+              "layout": "layout_af98f4af",
+              "text": "Product Name",
+              "textStyle": "style_ba833a55",
+              "fills": "fill_34dc0314",
+              "componentPropertyReferences": {
+                "text": "Title"
+              }
+            },
+            {
+              "id": "6:4",
+              "name": "Sale Ribbon",
+              "type": "FRAME",
+              "layout": {
+                "mode": "none",
+                "sizing": {},
+                "locationRelativeToParent": {
+                  "x": 0,
+                  "y": 0
+                },
+                "dimensions": {
+                  "width": 60,
+                  "height": 20
+                }
+              },
+              "fills": ["#FF0000"],
+              "componentPropertyReferences": {
+                "visible": "On Sale"
+              }
+            }
+          ]
+        },
+        {
+          "id": "6:5",
+          "name": "Card Instance",
+          "type": "INSTANCE",
+          "layout": {
+            "mode": "none",
+            "sizing": {},
+            "locationRelativeToParent": {
+              "x": 150,
+              "y": 0
+            },
+            "dimensions": {
+              "width": 150,
+              "height": 200
+            }
+          },
+          "componentId": "6:2",
+          "componentProperties": {
+            "On Sale": false,
+            "Title": "My Product"
+          },
+          "children": [
+            {
+              "id": "6:6",
+              "name": "Label",
+              "type": "TEXT",
+              "layout": "layout_af98f4af",
+              "text": "My Product",
+              "textStyle": "style_ba833a55",
+              "fills": "fill_34dc0314"
+            }
+          ]
+        }
+      ]
+    }
+  ],
   "components": {
     "6:2": {
       "id": "6:2",
@@ -7,139 +105,41 @@
       "name": "Product Card",
       "propertyDefinitions": {
         "On Sale": {
-          "defaultValue": true,
-          "type": "boolean"
+          "type": "boolean",
+          "defaultValue": true
         },
         "Title": {
-          "defaultValue": "Product Name",
-          "type": "text"
+          "type": "text",
+          "defaultValue": "Product Name"
         }
       }
     }
   },
-  "elements": {},
+  "componentSets": {},
   "globalVars": {
     "styles": {
-      "fill_34dc0314": ["#000000"],
       "layout_af98f4af": {
-        "dimensions": {
-          "height": 20,
-          "width": 134
-        },
+        "mode": "none",
+        "sizing": {},
         "locationRelativeToParent": {
           "x": 8,
           "y": 8
         },
-        "mode": "none",
-        "sizing": {}
+        "dimensions": {
+          "width": 134,
+          "height": 20
+        }
       },
       "style_ba833a55": {
         "fontFamily": "Inter",
-        "fontSize": 14,
         "fontWeight": 400,
+        "fontSize": 14,
         "lineHeight": "20px",
         "textAlignHorizontal": "LEFT",
         "textAlignVertical": "TOP"
-      }
+      },
+      "fill_34dc0314": ["#000000"]
     }
   },
-  "name": "Components",
-  "nodes": [
-    {
-      "children": [
-        {
-          "children": [
-            {
-              "componentPropertyReferences": {
-                "text": "Title"
-              },
-              "fills": "fill_34dc0314",
-              "id": "6:3",
-              "layout": "layout_af98f4af",
-              "name": "Label",
-              "text": "Product Name",
-              "textStyle": "style_ba833a55",
-              "type": "TEXT"
-            },
-            {
-              "componentPropertyReferences": {
-                "visible": "On Sale"
-              },
-              "fills": ["#FF0000"],
-              "id": "6:4",
-              "layout": {
-                "dimensions": {
-                  "height": 20,
-                  "width": 60
-                },
-                "locationRelativeToParent": {
-                  "x": 0,
-                  "y": 0
-                },
-                "mode": "none",
-                "sizing": {}
-              },
-              "name": "Sale Ribbon",
-              "type": "FRAME"
-            }
-          ],
-          "id": "6:2",
-          "layout": {
-            "dimensions": {
-              "height": 200,
-              "width": 150
-            },
-            "locationRelativeToParent": {
-              "x": 0,
-              "y": 0
-            },
-            "mode": "none",
-            "sizing": {}
-          },
-          "name": "Product Card",
-          "type": "COMPONENT"
-        },
-        {
-          "children": [
-            {
-              "fills": "fill_34dc0314",
-              "id": "6:6",
-              "layout": "layout_af98f4af",
-              "name": "Label",
-              "text": "My Product",
-              "textStyle": "style_ba833a55",
-              "type": "TEXT"
-            }
-          ],
-          "componentId": "6:2",
-          "componentProperties": {
-            "On Sale": false,
-            "Title": "My Product"
-          },
-          "id": "6:5",
-          "layout": {
-            "dimensions": {
-              "height": 200,
-              "width": 150
-            },
-            "locationRelativeToParent": {
-              "x": 150,
-              "y": 0
-            },
-            "mode": "none",
-            "sizing": {}
-          },
-          "name": "Card Instance",
-          "type": "INSTANCE"
-        }
-      ],
-      "id": "6:1",
-      "layout": {
-        "mode": "none",
-        "sizing": {}
-      },
-      "name": "Group",
-      "type": "FRAME"
-    }
-  ]
+  "elements": {}
 }

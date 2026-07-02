@@ -11,13 +11,12 @@
  */
 import { mkdirSync, writeFileSync } from "node:fs";
 import { GOLDEN_FIXTURES } from "./fixtures.js";
-import { runFixture, canonical, expectedPath, EXPECTED_DIR } from "./harness.js";
+import { runFixture, serializeGolden, expectedPath, EXPECTED_DIR } from "./harness.js";
 
 mkdirSync(EXPECTED_DIR, { recursive: true });
 
 for (const fixture of GOLDEN_FIXTURES) {
-  const design = await runFixture(fixture);
-  const json = JSON.stringify(canonical(design), null, 2);
-  writeFileSync(expectedPath(fixture.name), json + "\n");
-  console.error(`Wrote golden: ${fixture.name} (${json.length.toLocaleString()} bytes)`);
+  const golden = serializeGolden(await runFixture(fixture));
+  writeFileSync(expectedPath(fixture.name), golden);
+  console.error(`Wrote golden: ${fixture.name} (${golden.length.toLocaleString()} bytes)`);
 }

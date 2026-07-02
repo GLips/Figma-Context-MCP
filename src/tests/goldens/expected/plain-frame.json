@@ -1,66 +1,66 @@
 {
-  "componentSets": {},
-  "components": {},
-  "elements": {},
-  "globalVars": {
-    "styles": {}
-  },
   "name": "Plain Frame",
   "nodes": [
     {
+      "id": "1:1",
+      "name": "Card",
+      "type": "FRAME",
+      "layout": {
+        "mode": "none",
+        "sizing": {
+          "horizontal": "contextual",
+          "vertical": "contextual"
+        },
+        "designedWidth": "200px",
+        "designedHeight": "120px"
+      },
+      "fills": ["#E6E6E6"],
+      "strokes": ["#CCCCCC"],
+      "strokeWeight": "1px",
+      "strokeAlign": "OUTSIDE",
+      "effects": {
+        "boxShadow": "0px 2px 4px 0px rgba(0, 0, 0, 0.25)"
+      },
+      "opacity": 0.9,
       "borderRadius": "8px",
       "children": [
         {
-          "fills": ["#1A1A1A"],
           "id": "1:3",
+          "name": "Title",
+          "type": "TEXT",
           "layout": {
-            "dimensions": {
-              "height": 24,
-              "width": 120
+            "mode": "none",
+            "sizing": {
+              "horizontal": "fixed",
+              "vertical": "fixed"
             },
             "locationRelativeToParent": {
               "x": 16,
               "y": 16
             },
-            "mode": "none",
-            "sizing": {
-              "horizontal": "fixed",
-              "vertical": "fixed"
+            "dimensions": {
+              "width": 120,
+              "height": 24
             }
           },
-          "name": "Title",
           "text": "Hello",
           "textStyle": {
             "fontFamily": "Inter",
-            "fontSize": 16,
             "fontWeight": 600,
+            "fontSize": 16,
             "lineHeight": "24px",
             "textAlignHorizontal": "LEFT",
             "textAlignVertical": "TOP"
           },
-          "type": "TEXT"
+          "fills": ["#1A1A1A"]
         }
-      ],
-      "effects": {
-        "boxShadow": "0px 2px 4px 0px rgba(0, 0, 0, 0.25)"
-      },
-      "fills": ["#E6E6E6"],
-      "id": "1:1",
-      "layout": {
-        "designedHeight": "120px",
-        "designedWidth": "200px",
-        "mode": "none",
-        "sizing": {
-          "horizontal": "contextual",
-          "vertical": "contextual"
-        }
-      },
-      "name": "Card",
-      "opacity": 0.9,
-      "strokeAlign": "OUTSIDE",
-      "strokeWeight": "1px",
-      "strokes": ["#CCCCCC"],
-      "type": "FRAME"
+      ]
     }
-  ]
+  ],
+  "components": {},
+  "componentSets": {},
+  "globalVars": {
+    "styles": {}
+  },
+  "elements": {}
 }
