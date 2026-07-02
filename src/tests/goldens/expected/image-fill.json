@@ -1,0 +1,94 @@
+{
+  "componentSets": {},
+  "components": {},
+  "elements": {},
+  "globalVars": {
+    "styles": {
+      "layout_f0d651c0": {
+        "mode": "none",
+        "sizing": {}
+      }
+    }
+  },
+  "name": "Image Fill",
+  "nodes": [
+    {
+      "fills": [
+        {
+          "imageDownloadArguments": {
+            "needsCropping": false,
+            "requiresImageDimensions": false
+          },
+          "imageRef": "abc123def456",
+          "isBackground": false,
+          "objectFit": "cover",
+          "scaleMode": "FILL",
+          "type": "IMAGE"
+        }
+      ],
+      "id": "5:1",
+      "layout": "layout_f0d651c0",
+      "name": "Photo",
+      "type": "RECTANGLE"
+    },
+    {
+      "children": [
+        {
+          "fills": [
+            {
+              "gifRef": "gif777",
+              "imageDownloadArguments": {
+                "cropTransform": [
+                  [1, 0, 0.1],
+                  [0, 1, 0.2]
+                ],
+                "filenameSuffix": "1f2c9a",
+                "needsCropping": true,
+                "requiresImageDimensions": false
+              },
+              "imageRef": "crop555",
+              "isBackground": false,
+              "objectFit": "cover",
+              "scaleMode": "FILL",
+              "type": "IMAGE"
+            }
+          ],
+          "id": "5:3",
+          "layout": {
+            "dimensions": {
+              "height": 50,
+              "width": 50
+            },
+            "locationRelativeToParent": {
+              "x": 0,
+              "y": 0
+            },
+            "mode": "none",
+            "sizing": {}
+          },
+          "name": "Cropped",
+          "type": "RECTANGLE"
+        }
+      ],
+      "fills": [
+        {
+          "backgroundRepeat": "repeat",
+          "backgroundSize": "calc(var(--original-width) * 0.5) calc(var(--original-height) * 0.5)",
+          "imageDownloadArguments": {
+            "needsCropping": false,
+            "requiresImageDimensions": true
+          },
+          "imageRef": "tile999",
+          "isBackground": true,
+          "scaleMode": "TILE",
+          "scalingFactor": 0.5,
+          "type": "IMAGE"
+        }
+      ],
+      "id": "5:2",
+      "layout": "layout_f0d651c0",
+      "name": "Tiled",
+      "type": "FRAME"
+    }
+  ]
+}

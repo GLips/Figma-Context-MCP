@@ -1,0 +1,71 @@
+{
+  "componentSets": {},
+  "components": {},
+  "elements": {},
+  "globalVars": {
+    "styles": {}
+  },
+  "name": "Auto Layout",
+  "nodes": [
+    {
+      "children": [
+        {
+          "borderRadius": "6px",
+          "fills": ["#3366FF"],
+          "id": "2:2",
+          "layout": {
+            "dimensions": {
+              "height": 36,
+              "width": 120
+            },
+            "mode": "none",
+            "sizing": {
+              "horizontal": "fixed",
+              "vertical": "fixed"
+            }
+          },
+          "name": "Primary Button",
+          "type": "FRAME"
+        },
+        {
+          "borderRadius": "12px",
+          "fills": ["#FF0000"],
+          "id": "2:3",
+          "layout": {
+            "dimensions": {
+              "height": 24,
+              "width": 24
+            },
+            "locationRelativeToParent": {
+              "x": 260,
+              "y": 4
+            },
+            "mode": "none",
+            "position": "absolute",
+            "sizing": {
+              "horizontal": "fixed",
+              "vertical": "fixed"
+            }
+          },
+          "name": "Badge",
+          "type": "FRAME"
+        }
+      ],
+      "id": "2:1",
+      "layout": {
+        "designedHeight": "60px",
+        "designedWidth": "300px",
+        "gap": "8px",
+        "justifyContent": "center",
+        "mode": "row",
+        "padding": "12px 16px",
+        "sizing": {
+          "horizontal": "contextual",
+          "vertical": "contextual"
+        }
+      },
+      "name": "Row",
+      "type": "FRAME"
+    }
+  ]
+}

@@ -1,0 +1,66 @@
+{
+  "componentSets": {},
+  "components": {},
+  "elements": {},
+  "globalVars": {
+    "styles": {}
+  },
+  "name": "Plain Frame",
+  "nodes": [
+    {
+      "borderRadius": "8px",
+      "children": [
+        {
+          "fills": ["#1A1A1A"],
+          "id": "1:3",
+          "layout": {
+            "dimensions": {
+              "height": 24,
+              "width": 120
+            },
+            "locationRelativeToParent": {
+              "x": 16,
+              "y": 16
+            },
+            "mode": "none",
+            "sizing": {
+              "horizontal": "fixed",
+              "vertical": "fixed"
+            }
+          },
+          "name": "Title",
+          "text": "Hello",
+          "textStyle": {
+            "fontFamily": "Inter",
+            "fontSize": 16,
+            "fontWeight": 600,
+            "lineHeight": "24px",
+            "textAlignHorizontal": "LEFT",
+            "textAlignVertical": "TOP"
+          },
+          "type": "TEXT"
+        }
+      ],
+      "effects": {
+        "boxShadow": "0px 2px 4px 0px rgba(0, 0, 0, 0.25)"
+      },
+      "fills": ["#E6E6E6"],
+      "id": "1:1",
+      "layout": {
+        "designedHeight": "120px",
+        "designedWidth": "200px",
+        "mode": "none",
+        "sizing": {
+          "horizontal": "contextual",
+          "vertical": "contextual"
+        }
+      },
+      "name": "Card",
+      "opacity": 0.9,
+      "strokeAlign": "OUTSIDE",
+      "strokeWeight": "1px",
+      "strokes": ["#CCCCCC"],
+      "type": "FRAME"
+    }
+  ]
+}

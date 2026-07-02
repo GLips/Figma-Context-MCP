@@ -1,0 +1,53 @@
+{
+  "componentSets": {},
+  "components": {},
+  "elements": {},
+  "globalVars": {
+    "styles": {
+      "Brand / Orange": ["#FF8000"],
+      "Heading / Large": {
+        "fontFamily": "Inter",
+        "fontSize": 12,
+        "fontWeight": 400
+      },
+      "Heading / Large (161:300)": {
+        "fontFamily": "Inter",
+        "fontSize": 14,
+        "fontWeight": 600
+      },
+      "fill_34dc0314": ["#000000"],
+      "layout_f0d651c0": {
+        "mode": "none",
+        "sizing": {}
+      }
+    }
+  },
+  "name": "Named Styles",
+  "nodes": [
+    {
+      "fills": "fill_34dc0314",
+      "id": "7:1",
+      "layout": "layout_f0d651c0",
+      "name": "Heading A",
+      "text": "Alpha",
+      "textStyle": "Heading / Large",
+      "type": "TEXT"
+    },
+    {
+      "fills": "fill_34dc0314",
+      "id": "7:2",
+      "layout": "layout_f0d651c0",
+      "name": "Heading B",
+      "text": "Beta",
+      "textStyle": "Heading / Large (161:300)",
+      "type": "TEXT"
+    },
+    {
+      "fills": "Brand / Orange",
+      "id": "7:3",
+      "layout": "layout_f0d651c0",
+      "name": "Swatch",
+      "type": "RECTANGLE"
+    }
+  ]
+}

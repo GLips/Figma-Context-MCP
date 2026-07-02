@@ -1,0 +1,103 @@
+{
+  "componentSets": {},
+  "components": {},
+  "elements": {
+    "EL-4362b8fe": {
+      "borderRadius": "14px",
+      "fills": ["#E6E6E6"],
+      "layout": {
+        "dimensions": {
+          "height": 28,
+          "width": 60
+        },
+        "mode": "none",
+        "sizing": {
+          "horizontal": "fixed",
+          "vertical": "fixed"
+        }
+      },
+      "type": "FRAME"
+    },
+    "EL-7ab00d62": {
+      "fills": ["#333333"],
+      "layout": {
+        "dimensions": {
+          "height": 16,
+          "width": 44
+        },
+        "locationRelativeToParent": {
+          "x": 8,
+          "y": 6
+        },
+        "mode": "none",
+        "sizing": {}
+      },
+      "text": "Tag",
+      "textStyle": {
+        "fontFamily": "Inter",
+        "fontSize": 12,
+        "fontWeight": 500
+      },
+      "type": "TEXT"
+    }
+  },
+  "globalVars": {
+    "styles": {}
+  },
+  "name": "Deep Nested",
+  "nodes": [
+    {
+      "children": [
+        {
+          "children": [
+            {
+              "id": "8:2:t",
+              "name": "Tag",
+              "template": "EL-7ab00d62"
+            }
+          ],
+          "id": "8:2",
+          "name": "Chip",
+          "template": "EL-4362b8fe"
+        },
+        {
+          "children": [
+            {
+              "id": "8:3:t",
+              "name": "Tag",
+              "template": "EL-7ab00d62"
+            }
+          ],
+          "id": "8:3",
+          "name": "Chip",
+          "template": "EL-4362b8fe"
+        },
+        {
+          "children": [
+            {
+              "id": "8:4:t",
+              "name": "Tag",
+              "template": "EL-7ab00d62"
+            }
+          ],
+          "id": "8:4",
+          "name": "Chip",
+          "template": "EL-4362b8fe"
+        }
+      ],
+      "id": "8:1",
+      "layout": {
+        "designedHeight": "28px",
+        "designedWidth": "220px",
+        "gap": "8px",
+        "mode": "row",
+        "sizing": {
+          "horizontal": "contextual",
+          "vertical": "contextual"
+        }
+      },
+      "name": "Chip Row",
+      "type": "FRAME"
+    }
+  ]
+}

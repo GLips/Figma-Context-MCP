@@ -1,0 +1,40 @@
+{
+  "componentSets": {},
+  "components": {},
+  "elements": {},
+  "globalVars": {
+    "styles": {
+      "layout_f0d651c0": {
+        "mode": "none",
+        "sizing": {}
+      }
+    }
+  },
+  "name": "Gradient Fill",
+  "nodes": [
+    {
+      "fills": [
+        {
+          "gradient": "linear-gradient(135deg, rgba(255, 0, 0, 1) 0%, rgba(0, 0, 255, 1) 100%)",
+          "type": "GRADIENT_LINEAR"
+        }
+      ],
+      "id": "4:1",
+      "layout": "layout_f0d651c0",
+      "name": "Linear",
+      "type": "RECTANGLE"
+    },
+    {
+      "fills": [
+        {
+          "gradient": "radial-gradient(circle at 50% 50%, rgba(255, 255, 255, 0.8) 0%, rgba(0, 0, 0, 0.8) 100%)",
+          "type": "GRADIENT_RADIAL"
+        }
+      ],
+      "id": "4:2",
+      "layout": "layout_f0d651c0",
+      "name": "Radial",
+      "type": "RECTANGLE"
+    }
+  ]
+}
