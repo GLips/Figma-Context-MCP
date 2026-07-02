@@ -26,7 +26,7 @@ import {
 } from "~/core/transformers/component.js";
 import { hasAutoLayout, isRectangleCornerRadii } from "~/core/identity.js";
 import { isVisible, stableStringify } from "~/core/utils.js";
-import { createHash } from "node:crypto";
+import { sha1Hex } from "./sha1.js";
 import type { NodeSnapshot, SnapshotStyleRef } from "./snapshot.js";
 
 // Reverse lookup cache: serialized style value → varId.
@@ -71,7 +71,7 @@ function findOrCreateVar(globalVars: GlobalVars, value: StyleTypes, prefix: stri
 
   // Content-addressed id so the same value yields the same id across runs, making
   // output byte-stable (the value→id cache already dedups within a single run).
-  const fullHash = createHash("sha1").update(key).digest("hex");
+  const fullHash = sha1Hex(key);
 
   // Truncated-hash collision guard. The 8-hex slice (32 bits) keeps refs short but
   // can alias two different style values. We reached here on a cache miss, so a

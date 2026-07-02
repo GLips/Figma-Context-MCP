@@ -1,5 +1,5 @@
-import { createHash } from "node:crypto";
 import { stableStringify } from "~/core/utils.js";
+import { sha1Hex } from "./sha1.js";
 import type { ElementBody, GlobalVars, SimplifiedNode } from "./types.js";
 
 /**
@@ -241,7 +241,7 @@ function elementId(
   str: string,
   bodiesByHash: Map<string, { body: ElementBody; str: string; count: number }>,
 ): string {
-  const fullHash = createHash("sha1").update(str).digest("hex");
+  const fullHash = sha1Hex(str);
   for (let length = 8; length < fullHash.length; length += 4) {
     const id = `EL-${fullHash.slice(0, length)}`;
     const entry = bodiesByHash.get(id);
