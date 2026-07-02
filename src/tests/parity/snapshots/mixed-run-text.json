@@ -1,0 +1,100 @@
+[
+  {
+    "id": "3:1",
+    "name": "Body",
+    "type": "TEXT",
+    "visible": true,
+    "absoluteBoundingBox": {
+      "x": 0,
+      "y": 0,
+      "width": 240,
+      "height": 80
+    },
+    "fills": [
+      {
+        "type": "SOLID",
+        "color": {
+          "r": 0,
+          "g": 0,
+          "b": 0,
+          "a": 1
+        },
+        "visible": true
+      }
+    ],
+    "text": {
+      "characters": "Hi bold link\nOne\nTwo",
+      "style": {
+        "fontFamily": "Inter",
+        "fontWeight": 400,
+        "fontSize": 14,
+        "lineHeightPx": 20,
+        "lineHeightUnit": "PIXELS",
+        "textAlignHorizontal": "LEFT",
+        "textAlignVertical": "TOP"
+      },
+      "lines": [
+        [
+          {
+            "text": "Hi ",
+            "delta": {}
+          },
+          {
+            "text": "bold",
+            "delta": {
+              "fontWeight": 700
+            }
+          },
+          {
+            "text": " ",
+            "delta": {}
+          },
+          {
+            "text": "link",
+            "delta": {
+              "textDecoration": "UNDERLINE",
+              "hyperlink": {
+                "type": "URL",
+                "url": "https://example.com"
+              },
+              "fills": [
+                {
+                  "type": "SOLID",
+                  "color": {
+                    "r": 0,
+                    "g": 0,
+                    "b": 1,
+                    "a": 1
+                  },
+                  "visible": true
+                }
+              ]
+            }
+          }
+        ],
+        [
+          {
+            "text": "One",
+            "delta": {}
+          }
+        ],
+        [
+          {
+            "text": "Two",
+            "delta": {}
+          }
+        ]
+      ],
+      "lineTypes": [
+        "NONE",
+        "ORDERED",
+        "UNORDERED"
+      ],
+      "lineIndentations": [
+        0,
+        0,
+        0
+      ]
+    }
+  }
+]

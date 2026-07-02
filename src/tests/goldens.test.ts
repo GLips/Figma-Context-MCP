@@ -14,6 +14,11 @@ import { runFixture, serializeGolden, expectedPath } from "./goldens/harness.js"
  * MANUAL script (`src/tests/goldens/regenerate.ts`) — deliberately NOT vitest's
  * auto-updating `toMatchSnapshot`, so a reflexive `-u` can never silently
  * re-baseline a regression and defeat the safety net.
+ *
+ * This is the STRICT byte-exact gate on the REST producer. The cross-producer
+ * REST↔plugin parity harness (parity.test.ts) promotes these same goldens into
+ * the shared target both producers must hit, comparing the SHARED SUBSET rather
+ * than exact bytes so legitimate producer differences don't read as regressions.
  */
 describe("canonicalize goldens", () => {
   for (const fixture of GOLDEN_FIXTURES) {

@@ -1,0 +1,107 @@
+[
+  {
+    "id": "4:1",
+    "name": "Linear",
+    "type": "RECTANGLE",
+    "visible": true,
+    "absoluteBoundingBox": {
+      "x": 0,
+      "y": 0,
+      "width": 100,
+      "height": 100
+    },
+    "fills": [
+      {
+        "type": "GRADIENT_LINEAR",
+        "stops": [
+          {
+            "position": 0,
+            "color": {
+              "r": 1,
+              "g": 0,
+              "b": 0,
+              "a": 1
+            }
+          },
+          {
+            "position": 1,
+            "color": {
+              "r": 0,
+              "g": 0,
+              "b": 1,
+              "a": 1
+            }
+          }
+        ],
+        "handles": [
+          {
+            "x": 0,
+            "y": 0
+          },
+          {
+            "x": 1,
+            "y": 1
+          },
+          {
+            "x": 0,
+            "y": 1
+          }
+        ],
+        "visible": true
+      }
+    ]
+  },
+  {
+    "id": "4:2",
+    "name": "Radial",
+    "type": "RECTANGLE",
+    "visible": true,
+    "absoluteBoundingBox": {
+      "x": 0,
+      "y": 120,
+      "width": 100,
+      "height": 100
+    },
+    "fills": [
+      {
+        "type": "GRADIENT_RADIAL",
+        "stops": [
+          {
+            "position": 0,
+            "color": {
+              "r": 1,
+              "g": 1,
+              "b": 1,
+              "a": 1
+            }
+          },
+          {
+            "position": 1,
+            "color": {
+              "r": 0,
+              "g": 0,
+              "b": 0,
+              "a": 1
+            }
+          }
+        ],
+        "handles": [
+          {
+            "x": 0.5,
+            "y": 0.5
+          },
+          {
+            "x": 1,
+            "y": 0.5
+          },
+          {
+            "x": 0.5,
+            "y": 1
+          }
+        ],
+        "opacity": 0.8,
+        "visible": true
+      }
+    ]
+  }
+]
