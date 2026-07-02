@@ -151,7 +151,7 @@ export async function downloadAndProcessImage(
   const processingLog: string[] = [];
 
   // First download the original image
-  const { downloadFigmaImage } = await import("./common.js");
+  const { downloadFigmaImage } = await import("./download-figma-image.js");
   const originalPath = await downloadFigmaImage(fileName, localPath, imageUrl);
   Logger.log(`Downloaded original image: ${originalPath}`);
 

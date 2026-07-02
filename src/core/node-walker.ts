@@ -1,4 +1,4 @@
-import { isVisible } from "~/utils/common.js";
+import { isVisible } from "~/core/utils.js";
 import { computeGridChildOrder } from "~/core/transformers/layout.js";
 import type { NodeSnapshot } from "./snapshot.js";
 import type {

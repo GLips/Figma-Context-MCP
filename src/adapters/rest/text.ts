@@ -1,7 +1,7 @@
 import type { Node as FigmaDocumentNode, Paint, TypeStyle } from "@figma/rest-api-spec";
 import type { SnapshotText, SnapshotTextRun, SnapshotTextStyle } from "~/core/snapshot.js";
 import { decodePaints } from "./paint.js";
-import { stableStringify } from "~/utils/common.js";
+import { stableStringify } from "~/core/utils.js";
 
 /**
  * REST text decode — the adapter half that resolves a TEXT node's wire override

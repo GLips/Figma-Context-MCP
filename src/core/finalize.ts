@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { stableStringify } from "~/utils/common.js";
+import { stableStringify } from "~/core/utils.js";
 import type { ElementBody, GlobalVars, SimplifiedNode } from "./types.js";
 
 /**

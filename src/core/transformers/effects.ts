@@ -5,7 +5,7 @@ import type {
   SnapshotVector,
 } from "~/core/snapshot.js";
 import { formatRGBAColor } from "~/core/transformers/style.js";
-import { pixelRound } from "~/utils/common.js";
+import { pixelRound } from "~/core/utils.js";
 
 export type SimplifiedEffects = {
   boxShadow?: string;

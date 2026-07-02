@@ -6,7 +6,7 @@ import type {
   SnapshotTextRun,
   SnapshotTextStyle,
 } from "~/core/snapshot.js";
-import { isVisible, pixelRound } from "~/utils/common.js";
+import { isVisible, pixelRound } from "~/core/utils.js";
 import { parsePaint, type SimplifiedFill } from "~/core/transformers/style.js";
 
 export type SimplifiedTextStyle = Partial<{

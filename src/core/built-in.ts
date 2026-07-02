@@ -24,8 +24,8 @@ import {
   simplifyPropertyDefinitions,
   simplifyPropertyReferences,
 } from "~/core/transformers/component.js";
-import { hasAutoLayout, isRectangleCornerRadii } from "~/utils/identity.js";
-import { isVisible, stableStringify } from "~/utils/common.js";
+import { hasAutoLayout, isRectangleCornerRadii } from "~/core/identity.js";
+import { isVisible, stableStringify } from "~/core/utils.js";
 import { createHash } from "node:crypto";
 import type { NodeSnapshot, SnapshotStyleRef } from "./snapshot.js";
 

@@ -1,5 +1,5 @@
-import { exhaustiveCheck } from "~/utils/common.js";
-import { isFrame, isInAutoLayoutFlow } from "~/utils/identity.js";
+import { exhaustiveCheck } from "~/core/utils.js";
+import { isFrame, isInAutoLayoutFlow } from "~/core/identity.js";
 import type { NodeSnapshot } from "~/core/snapshot.js";
 
 export interface SimplifiedLayout {

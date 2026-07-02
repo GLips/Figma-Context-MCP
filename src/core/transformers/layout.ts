@@ -1,6 +1,6 @@
-import { isInAutoLayoutFlow, isFrame, isLayout, isRectangle } from "~/utils/identity.js";
+import { isInAutoLayoutFlow, isFrame, isLayout, isRectangle } from "~/core/identity.js";
 import type { NodeSnapshot } from "~/core/snapshot.js";
-import { generateCSSShorthand, pixelRound } from "~/utils/common.js";
+import { generateCSSShorthand, pixelRound } from "~/core/utils.js";
 import {
   convertSelfAlign,
   convertSizing,

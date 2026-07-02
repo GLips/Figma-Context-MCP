@@ -10,7 +10,7 @@ vi.mock("~/telemetry/index.js", async (importOriginal) => {
 });
 
 import { downloadFigmaImagesTool } from "~/mcp/tools/download-figma-images-tool.js";
-import { downloadFigmaImage } from "~/utils/common.js";
+import { downloadFigmaImage } from "~/utils/download-figma-image.js";
 import { resolveLocalPath, isWithin } from "~/utils/local-path.js";
 import type { ToolExtra } from "~/mcp/progress.js";
 import * as telemetry from "~/telemetry/index.js";

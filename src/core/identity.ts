@@ -1,8 +1,5 @@
-import { isTruthy } from "remeda";
 import type { CSSHexColor, CSSRGBAColor } from "~/core/transformers/style.js";
 import type { NodeSnapshot, SnapshotRect, SnapshotStrokeWeights } from "~/core/snapshot.js";
-
-export { isTruthy };
 
 /** A snapshot known to carry frame/auto-layout traits (has `clipsContent`). */
 export type FrameSnapshot = NodeSnapshot & { clipsContent: boolean };

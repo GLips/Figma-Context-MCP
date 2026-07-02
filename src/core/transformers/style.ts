@@ -1,5 +1,5 @@
 import type { NodeSnapshot, SnapshotPaint } from "~/core/snapshot.js";
-import { generateCSSShorthand, isVisible } from "~/utils/common.js";
+import { generateCSSShorthand, isVisible } from "~/core/utils.js";
 
 import { convertColor, formatRGBAColor } from "./style/color.js";
 import { translateScaleMode, handleImageTransform, parsePatternPaint } from "./style/image.js";
