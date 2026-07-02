@@ -1,5 +1,5 @@
 {
-  "name": "Figma Code-Mode Spike",
+  "name": "Framelink",
   "id": "framelink-code-mode-spike",
   "api": "1.0.0",
   "main": "dist/code.js",
@@ -25,6 +25,6 @@
       "ws://localhost:9890",
       "ws://localhost:9891"
     ],
-    "reasoning": "Dev-mode only: connects to the local code-mode-spike MCP server over WebSocket on a loopback port block (each session probe-binds the first free port; see server/src/config.ts WS_PORT_BLOCK, which this list must mirror). Entries use the `localhost` hostname, not the 127.0.0.1 literal: Figma's manifest validator rejects raw IP addresses in devAllowedDomains ('must be a valid URL'), and the allowlist host must match the host ui.html dials. Figma has no port wildcard/range, so every port is enumerated. No production network access."
+    "reasoning": "Dev-mode only: connects to the local code-mode-spike MCP server over WebSocket on a loopback port block (each session probe-binds the first free port; see bridge/src/config.ts WS_PORT_BLOCK, which this list must mirror). Entries use the `localhost` hostname, not the 127.0.0.1 literal: Figma's manifest validator rejects raw IP addresses in devAllowedDomains ('must be a valid URL'), and the allowlist host must match the host ui.html dials. Figma has no port wildcard/range, so every port is enumerated. No production network access."
   }
 }

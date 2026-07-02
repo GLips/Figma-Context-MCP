@@ -94,7 +94,7 @@
       // buttons post UI_DECISION back to the sandbox, which owns the approval decision (sole arbiter).
       // Toggling figma.ui visibility does not reload this iframe, so the WS below survives raise/dismiss.
       //
-      // Opens ONE persistent connection per port in the block from server/src/config.ts
+      // Opens ONE persistent connection per port in the block from bridge/src/config.ts
       // (WS_PORT_BLOCK). Each running server probe-binds one block port, so scanning the whole block
       // discovers every live session at once (Slice 3.2). The persistent relay does double duty:
       // discovery AND disconnect-detection (onclose ⇒ the session's row leaves the panel) — one
