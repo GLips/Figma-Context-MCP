@@ -7,7 +7,7 @@ single-live-session constraint: `server/src/index.ts` binds WS 9876 + stdio MCP 
 ```
 node plugin/harness/dogfood.mjs <file.js>
 # or
-pnpm --filter @spike/plugin dogfood harness/scenarios/settings-panel.js
+pnpm --filter @framelink/plugin dogfood harness/scenarios/settings-panel.js
 ```
 
 It prints a compact tree (type / name / size / layout / text / fills) plus captured `console` output

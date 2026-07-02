@@ -5,7 +5,8 @@
   "scripts": {
     "build": "node build.mjs",
     "dogfood": "node harness/dogfood.mjs",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test \"src/**/*.test.ts\""
   },
   "exports": {
     "./schema": "./src/preamble/schema.ts"

@@ -9,7 +9,8 @@
     "contract": "tsx harness/bridge-contract.mjs",
     "docs:gen": "tsx scripts/gen-flcm-doc.ts",
     "docs:check": "tsx scripts/gen-flcm-doc.ts check",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test \"src/**/*.test.ts\""
   },
   "dependencies": {
     "@jimp/core": "^1.6.1",

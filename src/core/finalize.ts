@@ -52,14 +52,13 @@ export function finalizeDesign(
   return { nodes, globalVars: { styles }, elements };
 }
 
-// Node fields that carry a style reference (a globalVars key) and, after gating,
-// may instead carry the inline style value. Run tuples inside a `text` array
-// carry a ref in their style slot the same way — visitStyleRefSlots covers both.
 /**
  * The node fields that can carry a globalVars style ref (a string key) instead
- * of an inline value. This is the authoritative list of what compression hoists;
- * the parity comparator imports it so its expand-then-compare view can't drift
- * from what this pass actually refs.
+ * of the inline style value (after gating). This is the authoritative list of
+ * what compression hoists; the parity comparator imports it so its
+ * expand-then-compare view can't drift from what this pass actually refs. Run
+ * tuples inside a `text` array carry a ref the same way — visitStyleRefSlots
+ * covers both.
  */
 export const STYLE_REF_FIELDS = ["layout", "fills", "strokes", "effects", "textStyle"] as const;
 

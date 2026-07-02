@@ -37,7 +37,7 @@ if (mode === "check") {
   const actual = readFileSync(DOC_PATH, "utf8");
   if (actual !== expected) {
     console.error(
-      `docs/authoring/flcm.md is stale — it no longer matches the generated reference.\n` +
+      `plugin/docs/authoring/flcm.md is stale — it no longer matches the generated reference.\n` +
         `Run \`pnpm --filter @framelink/bridge docs:gen\` and commit the result.`,
     );
     process.exit(1);

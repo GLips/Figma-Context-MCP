@@ -289,7 +289,7 @@ export class PluginBridge {
     const socket = this.socket;
     if (!socket || socket.readyState !== WebSocket.OPEN) {
       return Promise.reject(
-        new Error("No Figma plugin connected. Open the spike plugin in Figma desktop and try again."),
+        new Error("No Figma plugin connected. Open the Framelink plugin in Figma desktop and try again."),
       );
     }
     const id = `req-${++this.nextId}`;

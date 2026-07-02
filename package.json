@@ -29,10 +29,11 @@
     "benchmark:simplify": "tsx scripts/benchmark-simplify.ts",
     "prepack": "pnpm build",
     "typecheck:flcm": "pnpm --filter @framelink/plugin --filter @framelink/bridge typecheck",
-    "test:flcm": "node --import tsx --test plugin/src/preamble/*.test.ts bridge/src/*.test.ts",
+    "test:flcm": "pnpm --filter @framelink/plugin --filter @framelink/bridge test",
     "build:plugin": "pnpm --filter @framelink/plugin build",
     "docs:check:flcm": "pnpm --filter @framelink/bridge docs:check",
-    "validate": "pnpm scan-hidden-chars && pnpm format:check && pnpm lint && pnpm type-check && pnpm typecheck:flcm && pnpm test && pnpm test:flcm && pnpm build:plugin && pnpm docs:check:flcm"
+    "contract:flcm": "pnpm --filter @framelink/bridge contract",
+    "validate": "pnpm scan-hidden-chars && pnpm format:check && pnpm lint && pnpm type-check && pnpm typecheck:flcm && pnpm test && pnpm test:flcm && pnpm contract:flcm && pnpm build:plugin && pnpm docs:check:flcm"
   },
   "engines": {
     "node": ">=20.20.0"

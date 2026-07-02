@@ -170,7 +170,7 @@ function withSkewNote<T>(content: T[]): (T | { type: "text"; text: string })[] {
   return note ? [...content, { type: "text" as const, text: note }] : content;
 }
 
-const server = new McpServer({ name: "figma-code-mode-spike", version: "0.0.1" });
+const server = new McpServer({ name: "figma-framelink-bridge", version: "0.0.1" });
 
 // The execute_code description is the generated quick-start (buildQuickStart, via tool-docs.ts), assembled
 // from the schema single-source + narrative — so the agent-facing contract can't drift from the code
