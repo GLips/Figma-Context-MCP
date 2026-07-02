@@ -71,7 +71,7 @@ import type {
  */
 
 /** Every image paint's ref collapses to this — parity is over presence, not id. */
-export const IMAGE_REF_SENTINEL = "<image-ref>";
+const IMAGE_REF_SENTINEL = "<image-ref>";
 
 /**
  * Node fields the plugin will additively emit beyond the REST-shared CSS subset
@@ -82,7 +82,7 @@ export const IMAGE_REF_SENTINEL = "<image-ref>";
  * inside a style value rather than a top-level node field, extend the scope in
  * `scopeStyleValue` alongside.
  */
-export const PLUGIN_ONLY_FIELDS = new Set<string>([]);
+const PLUGIN_ONLY_FIELDS = new Set<string>([]);
 
 // The node fields that can carry a globalVars ref (string) instead of an inline
 // value — mirrors finalize.ts's STYLE_REF_FIELDS. Kept local: the parity view
