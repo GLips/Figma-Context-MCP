@@ -549,16 +549,7 @@ function classifyRun(
         break;
       }
       case "fills": {
-        const paints = (value as SnapshotPaint[]).filter(isVisible);
-        // Same folding as node fills: an all-solid stack flattens to the one
-        // color a viewer sees; only a genuinely mixed stack stays an array.
-        const flattened = flattenSolidFills(paints);
-        const color =
-          flattened ??
-          (() => {
-            const parsed = paints.map((p) => parsePaint(p, false)).reverse();
-            return parsed.length === 0 ? undefined : parsed.length === 1 ? parsed[0] : parsed;
-          })();
+        const color = foldRunColor((value as SnapshotPaint[]).filter(isVisible));
         if (color !== undefined) {
           refDelta.color = color;
           hasRefProps = true;
@@ -696,6 +687,20 @@ function classifyRun(
 
   if (hasRefProps) c.refDelta = refDelta;
   return c;
+}
+
+/**
+ * Fold a run's fill paints into the delta's `color` value. Same folding as
+ * node fills — an all-solid stack flattens to the one color a viewer sees —
+ * but unlike node `fills` (always an array) a single value unwraps to a bare
+ * scalar per the spec: only a genuinely mixed stack stays an array.
+ */
+function foldRunColor(paints: SnapshotPaint[]): SimplifiedFill | SimplifiedFill[] | undefined {
+  const flattened = flattenSolidFills(paints);
+  if (flattened !== null) return flattened;
+  const parsed = paints.map((p) => parsePaint(p, false)).reverse();
+  if (parsed.length === 0) return undefined;
+  return parsed.length === 1 ? parsed[0] : parsed;
 }
 
 /**

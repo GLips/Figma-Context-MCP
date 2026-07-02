@@ -380,6 +380,40 @@ describe("layout alignment", () => {
       expect(result.locationRelativeToParent).toEqual({ x: 30, y: 40 });
     });
   });
+
+  describe("rotation", () => {
+    // Figma reports rotation counterclockwise-positive; the canonical value is
+    // CSS rotate() clockwise-positive, so the emitted value is the negation.
+    test("negates Figma's CCW-positive raw value to CSS clockwise-positive", () => {
+      const node = makeFrame({
+        rotation: 45,
+        absoluteBoundingBox: { x: 0, y: 0, width: 100, height: 100 },
+      });
+      expect(geometryOf(node).rotation).toBe(-45);
+    });
+
+    test("omits rotation at 0", () => {
+      const node = makeFrame({
+        rotation: 0,
+        absoluteBoundingBox: { x: 0, y: 0, width: 100, height: 100 },
+      });
+      expect(geometryOf(node).rotation).toBeUndefined();
+    });
+
+    test("rounds floating-point noise and drops values that round to 0", () => {
+      const noisy = makeFrame({
+        rotation: -29.999999999999996,
+        absoluteBoundingBox: { x: 0, y: 0, width: 100, height: 100 },
+      });
+      expect(geometryOf(noisy).rotation).toBe(30);
+
+      const nearZero = makeFrame({
+        rotation: 0.0001,
+        absoluteBoundingBox: { x: 0, y: 0, width: 100, height: 100 },
+      });
+      expect(geometryOf(nearZero).rotation).toBeUndefined();
+    });
+  });
 });
 
 describe("grid layout", () => {
