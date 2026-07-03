@@ -51,6 +51,12 @@ Thumbs.db
 .mcp.json
 advisor-plans/
 .tk
-# Root build/bench scripts only — anchored so it does NOT swallow bridge/scripts/
-# (the flcm doc generator, which must stay tracked for docs:check).
-/scripts/
+# Personal local helper scripts — untracked by design, listed per-file so new
+# scripts/ files (CI-load-bearing ones like the flcm doc generator) commit by default.
+/scripts/analyze-templates.ts
+/scripts/debug-fetch.ts
+/scripts/decompose.ts
+/scripts/fetch-raw.ts
+/scripts/measure-dedup.ts
+/scripts/measure-format-default.ts
+/scripts/perf-bench.ts
