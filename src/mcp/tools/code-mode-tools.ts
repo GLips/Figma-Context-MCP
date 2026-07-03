@@ -2,7 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { PluginBridgeRuntime } from "~/services/plugin-bridge/index.js";
 import { fetchAndProcessImage } from "~/services/plugin-bridge/images.js";
-import { executeWithImages, type GatedResult } from "~/services/plugin-bridge/execute-images.js";
+import { executeWithImages, type GatedResult } from "~/services/plugin-bridge/execute.js";
 import type { ServerTransport } from "~/mcp/index.js";
 import { buildQuickStart, buildReferenceSections, SECTION_IDS } from "./flcm-docs/reference.js";
 

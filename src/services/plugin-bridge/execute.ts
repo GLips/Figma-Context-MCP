@@ -3,7 +3,7 @@ import { z } from "zod";
 // Owns the whole figma_execute_code orchestration — the reply schema, consent gating, and result
 // shaping — not just images; the two-pass IMAGE path (fetch bytes server-side, inject, re-run once)
 // is the interesting case, and holding it here with its bridge/gate/fetch seams injected makes that
-// state machine testable off-network. The figma-execute-code tool wires the real seams.
+// state machine testable off-network. The code-mode tool registration wires the real seams.
 
 // Bound on distinct image urls one figma_execute_code call may request, and on how many fetch/decode concurrently
 // — the pair caps peak server memory (each in-flight fetch holds a decoded raster) to FETCH_CONCURRENCY

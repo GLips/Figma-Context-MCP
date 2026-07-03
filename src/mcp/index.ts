@@ -6,7 +6,7 @@ import type { OutputFormat } from "~/utils/serialize.js";
 import { installValidationRejectCapture } from "./validation-capture.js";
 import type { ToolExtra } from "./progress.js";
 import type { PluginBridgeRuntime } from "~/services/plugin-bridge/index.js";
-import { registerCodeModeTools } from "./tools/figma-execute-code-tool.js";
+import { registerCodeModeTools } from "./tools/code-mode-tools.js";
 import {
   downloadFigmaImagesTool,
   getFigmaDataTool,

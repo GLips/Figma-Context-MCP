@@ -7,7 +7,7 @@ import {
   executeWithImages,
   injectImageBytes,
   type ExecuteDeps,
-} from "~/services/plugin-bridge/execute-images.js";
+} from "~/services/plugin-bridge/execute.js";
 
 const okReply = (result: unknown) => ({
   type: "EXECUTE_CODE_RESULT",
