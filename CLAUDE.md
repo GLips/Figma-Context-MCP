@@ -115,6 +115,10 @@ The server supports two transports (configured in `src/server.ts`):
 - `--skip-image-downloads` — Disable image download tool
 - `FIGMA_CODE_MODE` or `--code-mode` — Always advertise the code-mode write tools (default: advertised only once the Figma plugin connects)
 
+The durable-approval store (`src/services/plugin-bridge/approval-store.ts`) reads one env var directly, outside `config.ts`:
+
+- `FRAMELINK_STATE_DIR` — where the approved session token is persisted (default: `$XDG_STATE_HOME/framelink` or `~/.framelink`). One 0600 file per project (keyed by cwd) so a single Allow survives a server restart; the file carries a sliding 24h TTL and is deleted on Revoke.
+
 ### Path Alias
 
 The codebase uses `~/` as an alias for `src/` (configured in tsconfig.json and vitest.config.ts).

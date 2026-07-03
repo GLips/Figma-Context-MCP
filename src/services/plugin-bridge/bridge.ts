@@ -1,5 +1,6 @@
 import { WebSocketServer, WebSocket } from "ws";
-import { mintPairingCode } from "./approval.js";
+import { mintPairingCode, SESSION_IDENTITY } from "./approval.js";
+import { ApprovalStore } from "./approval-store.js";
 import { Logger } from "~/utils/logger.js";
 
 export interface BridgeRequest {
@@ -87,12 +88,20 @@ export class PluginBridge {
   // FIRST bridge field that must SURVIVE reconnects — it is deliberately NOT part of the
   // connection-scoped cluster above (socket/skewNote/pairingCode/handshaked/socketAlive/epoch),
   // all of which reset on connect/disconnect. It is this server's proof of a prior approval:
-  // echoed in every SESSION_INFO so the sandbox re-keys sticky approval to it, surviving until
-  // the process exits. A same-path squatter is a different process whose token starts null, so
-  // it echoes none and the sandbox re-prompts (Invariant: approval keys on the token, not the
-  // forgeable identity). Mirror of the Phase 2 warning that sticky approval can't reuse the
-  // connection-scoped pattern — same reasoning, server side.
+  // echoed in every SESSION_INFO so the sandbox re-keys sticky approval to it. A same-path squatter
+  // is a different process whose token starts null, so it echoes none and the sandbox re-prompts
+  // (Invariant: approval keys on the token, not the forgeable identity). Mirror of the Phase 2
+  // warning that sticky approval can't reuse the connection-scoped pattern — same reasoning, server
+  // side.
+  //
+  // Held in memory here AND persisted through `store`, so it survives a server-process RESTART (not
+  // just a WS reconnect). A restart is exactly what used to drop this back to null and re-prompt with
+  // a fresh pairing code; loading it on start closes that gap (see approval-store.ts).
   private sessionToken: string | null = null;
+
+  // Injectable so the contract harness / tests isolate persistence to a temp dir instead of touching
+  // the real ~/.framelink. Production constructs the default store.
+  constructor(private readonly store: ApprovalStore = new ApprovalStore()) {}
 
   /**
    * Probe-bind the first free port in the block, advancing on `EADDRINUSE`. The OS guarantees no
@@ -103,6 +112,11 @@ export class PluginBridge {
    * only the winner's ever fire; the heartbeat is installed in `listening`, so it is winner-only.
    */
   start(ports: number[], onConnect?: () => void): void {
+    // Reload a prior approval BEFORE binding, so a plugin that reconnects the instant we come up
+    // already gets the persisted token echoed in its first SESSION_INFO — no re-prompt on restart.
+    this.sessionToken = this.store.load(Date.now());
+    if (this.sessionToken)
+      Logger.log("Reloaded a persisted session approval — a prior Allow still holds");
     this.tryBind(ports, 0, onConnect);
   }
 
@@ -269,6 +283,15 @@ export class PluginBridge {
   }
 
   /**
+   * Slide the persisted approval's TTL forward after a successful write, so an actively-used session is
+   * never pruned mid-work. No-op when nothing is persisted (unapproved, or approval-less runs). Called
+   * from the tool handler on the success path, not from `request()` — only a real write should count as use.
+   */
+  touchApproval(): void {
+    this.store.touch(Date.now());
+  }
+
+  /**
    * Monotonic id of the current connection; changes on every connect/reclaim. Capture it
    * before a connection-scoped await and re-check after, so a late result can't clobber a
    * newer connection's state (see the `epoch` field).
@@ -326,7 +349,18 @@ export class PluginBridge {
     // later SESSION_INFO echoes it and the sandbox re-keys sticky approval to the token.
     if (msg.type === "SESSION_TOKEN" && typeof msg.sessionToken === "string") {
       this.sessionToken = msg.sessionToken;
-      Logger.log("Stored session token handed over by the sandbox after Allow");
+      // Persist so the approval survives a server restart, not just this connection (approval-store.ts).
+      this.store.save(msg.sessionToken, SESSION_IDENTITY, Date.now());
+      Logger.log("Stored session token handed over by the sandbox after Allow (persisted)");
+      return;
+    }
+    // The human revoked in the arbiter panel. Also unsolicited (id-less) — forget the token both in
+    // memory and on disk so no future SESSION_INFO can re-approve; the plugin already cleared its own
+    // approvedTokens entry, so the next write re-prompts.
+    if (msg.type === "REVOKE_SESSION") {
+      this.sessionToken = null;
+      this.store.clear();
+      Logger.log("Session approval revoked by the human — cleared the persisted token");
       return;
     }
     if (typeof msg.id !== "string") return;

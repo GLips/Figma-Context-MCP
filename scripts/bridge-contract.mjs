@@ -63,10 +63,12 @@
 
 import { WebSocket } from "ws";
 import assert from "node:assert";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { PluginBridge } from "../src/services/plugin-bridge/bridge.ts";
+import { ApprovalStore } from "../src/services/plugin-bridge/approval-store.ts";
 import { detectSkew, MIN_PROTOCOL_VERSION } from "../src/services/plugin-bridge/version.ts";
 import { SESSION_IDENTITY } from "../src/services/plugin-bridge/approval.ts";
 import { WS_PORT_BLOCK } from "../src/services/plugin-bridge/ports.ts";
@@ -75,6 +77,13 @@ const PORT = 19876;
 const URL = `ws://127.0.0.1:${PORT}`;
 const KNOWN = new Set(["id", "type", "code", "nodeId", "payload", "message", "identity", "pairingCode", "sessionToken"]);
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Every bridge gets its OWN empty persistence dir, so the durable-approval store (keyed by cwd, one
+// file shared by all bridges in this one process) can't cross-contaminate the WS-contract tests — a
+// token `bridge` persists on Allow must NOT be reloaded by `squatBridge`, whose whole point is holding
+// no token. The dedicated restart test below opts INTO a shared dir on purpose. `mkdtempSync` never
+// touches the real ~/.framelink.
+const isolatedStore = () => new ApprovalStore(process.cwd(), mkdtempSync(join(tmpdir(), "flcm-approval-")));
 
 // A modeled plugin sandbox's persistent approval state — ONE per Figma plugin, surviving the WS
 // reconnects that plugin makes (code.ts's module-level `approvedTokens` Set + `currentToken` both
@@ -139,7 +148,7 @@ function fakePlugin(origin, { version, wsOptions, url = URL, state = sandbox } =
 const refusedOrOpened = (ws) =>
   new Promise((res) => { ws.on("error", () => res("refused")); ws.on("open", () => res("opened")); });
 
-const bridge = new PluginBridge();
+const bridge = new PluginBridge(isolatedStore());
 let connected = 0;
 bridge.start([PORT], () => connected++);
 await wait(150);
@@ -238,7 +247,7 @@ assert.ok(
   "precondition: the shared sandbox is approved (a token was minted and is currently bound)",
 );
 const PORT_SQUAT = 19878;
-const squatBridge = new PluginBridge();
+const squatBridge = new PluginBridge(isolatedStore());
 squatBridge.start([PORT_SQUAT]);
 await wait(150);
 const squatPlugin = fakePlugin("null", { url: `ws://127.0.0.1:${PORT_SQUAT}`, state: sandbox });
@@ -275,6 +284,62 @@ assert.equal(nakedWrite.type, "PENDING_APPROVAL", "write before SESSION_INFO is 
 console.log("✅ Write before SESSION_INFO on a fresh connection is gated (no stale-identity bypass)");
 naked.close();
 await wait(150);
+
+// --- Durable approval: a restarted server reloads the persisted token; Revoke clears it (this cycle) ---
+// The bug this closes: `sessionToken` was in-memory only, so a SERVER restart (dev-watch save-restart,
+// or a crash/respawn) lost it and re-prompted — even though the plugin still remembered the token. A
+// shared persistence dir models "same project, restarted process": each fresh PluginBridge on that dir
+// must reload the token the first one was handed, and re-approve WITHOUT a second Allow. The same
+// sandbox is reused across the "restart" — its approvedTokens still holds the token, which is why the
+// reloaded echo re-keys approval. Then Revoke must clear the persisted copy so it can't re-approve.
+//
+// Each "restarted" server binds a FRESH port, not the original: the harness can't free the first
+// server's port without a real process exit (there's no stop() — the WSS lingers), and persistence is
+// keyed by the project CWD, not the port, so a different port faithfully models what actually carries
+// approval across a restart. (Port identity only governs the plugin-side active-driver row, verified in
+// Figma by hand — the fake sandbox here gates on the token alone, exactly the server contract this pins.)
+const sharedDir = mkdtempSync(join(tmpdir(), "flcm-approval-restart-"));
+const restartState = makeSandbox();
+const bridgeR1 = new PluginBridge(new ApprovalStore(process.cwd(), sharedDir));
+bridgeR1.start([19879]);
+await wait(150);
+const r1 = fakePlugin("null", { url: "ws://127.0.0.1:19879", state: restartState });
+await new Promise((res) => r1.on("open", res));
+await bridgeR1.request({ type: "SESSION_INFO", identity: SESSION_IDENTITY, pairingCode: bridgeR1.getPairingCode(), sessionToken: bridgeR1.getSessionToken() });
+r1.allow();
+await wait(50);
+const persistedToken = bridgeR1.getSessionToken();
+assert.match(String(persistedToken), /^tok-/, "the approved server persisted the handed-over token");
+r1.close();
+await wait(150);
+
+// Restart: a brand-new PluginBridge on the SAME store dir + cwd, as if the process relaunched.
+const bridgeR2 = new PluginBridge(new ApprovalStore(process.cwd(), sharedDir));
+bridgeR2.start([19881]);
+await wait(150);
+assert.equal(bridgeR2.getSessionToken(), persistedToken, "a restarted server reloads the persisted token from disk (not null)");
+const r2 = fakePlugin("null", { url: "ws://127.0.0.1:19881", state: restartState });
+await new Promise((res) => r2.on("open", res));
+await bridgeR2.request({ type: "SESSION_INFO", identity: SESSION_IDENTITY, pairingCode: bridgeR2.getPairingCode(), sessionToken: bridgeR2.getSessionToken() });
+assert.equal(
+  (await bridgeR2.request({ type: "EXECUTE_CODE", code: "return 1" })).result,
+  "ok",
+  "after a server restart the reloaded token re-approves the same sandbox — no second Allow, no re-prompt",
+);
+console.log("✅ Durable approval survives a server restart (persisted token reloaded, no re-prompt)");
+
+// Revoke clears the persisted token: the sandbox sends id-less REVOKE_SESSION over the relay; a THIRD
+// bridge on the same store dir then reloads nothing, so the next connect re-prompts.
+r2.send(JSON.stringify({ type: "REVOKE_SESSION" }));
+await wait(50);
+assert.equal(bridgeR2.getSessionToken(), null, "REVOKE_SESSION clears the in-memory token");
+r2.close();
+await wait(150);
+const bridgeR3 = new PluginBridge(new ApprovalStore(process.cwd(), sharedDir));
+bridgeR3.start([19882]);
+await wait(150);
+assert.equal(bridgeR3.getSessionToken(), null, "after Revoke, a restarted server reloads nothing — approval was truly cleared");
+console.log("✅ Revoke deletes the persisted token so it can't silently re-approve on the next restart");
 
 // --- Version handshake + skew policy (Slice 1.2) ---
 
@@ -364,7 +429,7 @@ await wait(150);
 // would reject that fresh handshake. A dedicated bridge whose onConnect fires a request exercises it.
 const PORT2 = 19877;
 const URL2 = `ws://127.0.0.1:${PORT2}`;
-const bridge2 = new PluginBridge();
+const bridge2 = new PluginBridge(isolatedStore());
 const handshakes = [];
 bridge2.start([PORT2], () => {
   handshakes.push(
@@ -417,10 +482,10 @@ await wait(150);
 // EADDRINUSE and advances to the next free port. The OS guarantees no double-bind, so this only ever
 // advances — it is what lets N concurrent sessions land on N distinct ports for the plugin to scan.
 const BLOCK = [19890, 19891];
-const bridgeA = new PluginBridge();
+const bridgeA = new PluginBridge(isolatedStore());
 bridgeA.start(BLOCK);
 await wait(150);
-const bridgeB = new PluginBridge();
+const bridgeB = new PluginBridge(isolatedStore());
 bridgeB.start(BLOCK); // base already held by bridgeA → EADDRINUSE → advance to BLOCK[1]
 await wait(250); // let the EADDRINUSE error fire and the retry bind
 const onBase = new WebSocket(`ws://127.0.0.1:${BLOCK[0]}`, { origin: "null" });

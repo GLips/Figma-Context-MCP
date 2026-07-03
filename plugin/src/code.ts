@@ -292,6 +292,26 @@ function applyDecision(key: ConnKey, approve: boolean): void {
   hideArbiterPanel();
 }
 
+/**
+ * The human clicked Revoke on an approved row. Forget the token so this session (and any later
+ * reconnect echoing it) is no longer approved, drop it as the active driver, and tell that row's
+ * server to delete its PERSISTED copy (REVOKE_SESSION over the same relay as the Allow handover) —
+ * otherwise a durable on-disk token would silently re-approve on the next connect. Deleting the token
+ * from approvedTokens is what actually closes the gate: a reconnect re-binds the token, but isApproved
+ * is false once the Set no longer holds it. The row stays in the panel, now unapproved (Allow/Deny
+ * again) — this is a de-authorization, not a disconnect.
+ */
+function revokeSession(key: ConnKey): void {
+  const conn = connections.get(key);
+  if (conn && conn.token) {
+    approvedTokens.delete(conn.token);
+    figma.ui.postMessage({ type: "REVOKE_SESSION", __connKey: key });
+    conn.token = null;
+  }
+  if (activeKey === key) activeKey = null;
+  renderPanel();
+}
+
 figma.ui.onmessage = (msg: InboundMessage) => {
   // Local CONTROL messages from ui.html and the arbiter panel are id-less: they never traverse
   // the WS, so they carry no server correlation id and get no reply. The server, by contrast,
@@ -329,6 +349,9 @@ figma.ui.onmessage = (msg: InboundMessage) => {
       // same sandbox→ui.html→WS relay as any reply (ui.html forwards it verbatim); it carries no id
       // — it's unsolicited, not a reply.
       applyDecision(key, msg.approve === true);
+    } else if (msg.type === "UI_REVOKE") {
+      // The human clicked Revoke on an approved row — de-authorize it and clear the server's persisted token.
+      revokeSession(key);
     }
     return;
   }

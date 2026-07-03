@@ -248,11 +248,18 @@
       }
 
       // The per-row controls, by session state — exactly one active driver at a time (the Invariant).
-      // Active: inert "driving" status. Approved-but-idle: a single "Switch to drive" action (the
-      // sandbox treats Allow on an already-approved row as a switch). Unapproved: Allow / Deny.
+      // Active: "driving" status + Revoke. Approved-but-idle: "Switch to drive" + Revoke (Allow on an
+      // already-approved row is a switch). Unapproved: Allow / Deny. Revoke de-authorizes an approved
+      // session and tells its server to drop the durable on-disk token, so approval doesn't silently
+      // outlive the human's intent (durable-approval, this cycle).
       function renderActions(s) {
         if (s.active) {
-          return el("div", "status active", "● Active — driving this file");
+          var wrap = el("div");
+          wrap.appendChild(el("div", "status active", "● Active — driving this file"));
+          var revokeActive = el("div", "actions");
+          revokeActive.appendChild(revokeButton(s.key));
+          wrap.appendChild(revokeActive);
+          return wrap;
         }
         var actions = el("div", "actions");
         if (s.approved) {
@@ -261,6 +268,7 @@
             decide(true, s.key);
           };
           actions.appendChild(sw);
+          actions.appendChild(revokeButton(s.key));
           return actions;
         }
         var allow = el("button", "allow", "Allow");
@@ -274,6 +282,14 @@
         actions.appendChild(allow);
         actions.appendChild(deny);
         return actions;
+      }
+
+      function revokeButton(key) {
+        var revoke = el("button", "deny", "Revoke");
+        revoke.onclick = function () {
+          parent.postMessage({ pluginMessage: { type: "UI_REVOKE", __connKey: key } }, "*");
+        };
+        return revoke;
       }
 
       function clearPanel() {

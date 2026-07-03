@@ -164,6 +164,9 @@ export function registerCodeModeTools(
             isError: true,
           };
         }
+        // A write actually ran: slide the persisted approval's TTL forward so an active session never
+        // lapses mid-work (durable-approval, this cycle). No-op when the session isn't persisted.
+        bridge.touchApproval();
         return {
           content: withSkewNote([{ type: "text", text: JSON.stringify(outcome.reply, null, 2) }]),
         };
