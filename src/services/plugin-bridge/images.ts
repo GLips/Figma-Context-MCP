@@ -8,6 +8,7 @@
 // figma-mcp only ever fetches from Figma's own trusted CDN, so it has no SSRF/type defense to port. jimp is
 // the shared piece — the modular @jimp/* build, downscaling to Figma's 4096px createImage cap.
 import { lookup } from "node:dns/promises";
+import { Agent, fetch, type Response } from "undici";
 import { createJimp } from "@jimp/core";
 import png from "@jimp/js-png";
 import jpeg from "@jimp/js-jpeg";
@@ -16,6 +17,15 @@ import * as resize from "@jimp/plugin-resize";
 import ipaddr from "ipaddr.js";
 
 const Jimp = createJimp({ formats: [png, jpeg, gif], plugins: [resize.methods] });
+
+// The guard validates addresses with the LOCAL resolver, so this fetch must dial direct. Server startup
+// may install a global proxy dispatcher for Figma API traffic (src/server.ts), and a proxy does its own
+// DNS — a split-horizon hostname could validate as public here yet resolve private at the proxy, walking
+// the request past every range check. Pinning a plain Agent keeps "what we validate is what gets dialed"
+// true regardless of proxy config (and matches the pre-dissolution bridge process, which never proxied).
+// Cost: in a mandatory-egress-proxy environment flcm.image goes direct and may fail loudly — acceptable;
+// routing it through a proxy would need equivalent validation at the proxy's egress, which we can't do.
+const directDispatcher = new Agent();
 
 // Figma's createImage rejects any dimension over 4096px, so downscale the longest side to fit before the
 // bytes ever leave the server — also the mitigation for the multi-MB-base64-over-loopback bridge-timeout risk.
@@ -197,6 +207,7 @@ async function guardedFetch(rawUrl: string): Promise<Uint8Array> {
     const url = parseHttpUrl(target);
     await assertPublicHost(url.hostname);
     const res = await fetch(url, {
+      dispatcher: directDispatcher,
       redirect: "manual",
       signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
     });
