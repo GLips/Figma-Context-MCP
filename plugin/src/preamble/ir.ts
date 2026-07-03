@@ -174,7 +174,11 @@ export interface WriteLayout {
   // child (which reflows via fill/hug instead).
   pin?: { x?: PinX; y?: PinY };
   position?: "absolute";
-  locationRelativeToParent?: { x: number; y: number };
+  // Offset from the parent's top-left corner — the write-side spelling of the read output's left/top,
+  // one vocabulary across read and write. Always both set when position is "absolute" (percent axes seed
+  // 0 here; bridge.resolvePercents overwrites them once the parent's realized size is readable).
+  left?: number;
+  top?: number;
 }
 
 export interface WriteNode {

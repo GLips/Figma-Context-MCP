@@ -87,17 +87,17 @@ function applyAbsolute(layout: WriteLayout, props: SizeProps): void {
   layout.position = "absolute";
   // A percent x/y resolves to px against the parent axis at render (percentPos); a number is the location
   // directly. The percent axes seed 0 here and the bridge overwrites them once the parent size is known.
-  const loc: { x: number; y: number } = { x: 0, y: 0 };
+  layout.left = 0;
+  layout.top = 0;
   const pct: { x?: number; y?: number } = {};
-  const axis = (val: number | string | undefined, key: "x" | "y") => {
+  const axis = (val: number | string | undefined, key: "x" | "y", side: "left" | "top") => {
     if (val == null) return;
-    if (typeof val === "number") loc[key] = val;
+    if (typeof val === "number") layout[side] = val;
     else if (isPercent(val)) pct[key] = percent(val);
     else throw new Error("flcm: absolute." + key + ' must be a number or "N%" — got ' + JSON.stringify(val) + ".");
   };
-  axis(props.absolute.x, "x");
-  axis(props.absolute.y, "y");
-  layout.locationRelativeToParent = loc;
+  axis(props.absolute.x, "x", "left");
+  axis(props.absolute.y, "y", "top");
   if (pct.x != null || pct.y != null) layout.percentPos = pct;
   applyAnchor(layout, props.absolute.anchor);
 }

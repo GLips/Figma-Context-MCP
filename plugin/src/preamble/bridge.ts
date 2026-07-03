@@ -221,11 +221,8 @@ function applyChildPosition(parent: any, child: any, layout: WriteLayout): void 
   if (parent.layoutMode === "HORIZONTAL" || parent.layoutMode === "VERTICAL") {
     try { child.layoutPositioning = "ABSOLUTE"; } catch (e) { /* instance may resist */ }
   }
-  const loc = layout.locationRelativeToParent;
-  if (loc) {
-    if (typeof loc.x === "number") child.x = loc.x;
-    if (typeof loc.y === "number") child.y = loc.y;
-  }
+  if (typeof layout.left === "number") child.x = layout.left;
+  if (typeof layout.top === "number") child.y = layout.top;
 }
 
 // Figma's per-axis constraint enum keyed by the author's directional `pin` (ir.ts PinX/PinY). Two maps
@@ -322,10 +319,9 @@ function resolveOne(p: PendingResolve): void {
   // (percent → px against the parent, else the authored number), then shift by the anchor so the child's
   // anchor point (not its top-left) lands on x/y.
   if (layout.position === "absolute" && (layout.percentPos || layout.anchor)) {
-    const loc = layout.locationRelativeToParent || { x: 0, y: 0 };
     const pp = layout.percentPos || {};
-    let x = pp.x != null ? pctOf(pp.x, parent.width) : loc.x;
-    let y = pp.y != null ? pctOf(pp.y, parent.height) : loc.y;
+    let x = pp.x != null ? pctOf(pp.x, parent.width) : (layout.left ?? 0);
+    let y = pp.y != null ? pctOf(pp.y, parent.height) : (layout.top ?? 0);
     const a = layout.anchor;
     if (a) {
       if (a.x === "center") x -= node.width / 2;
