@@ -5,15 +5,8 @@ import { resolve } from "node:path";
 import { performance } from "node:perf_hooks";
 import { Session } from "node:inspector/promises";
 import { cli } from "cleye";
-import {
-  layoutExtractor,
-  textExtractor,
-  visualsExtractor,
-  componentExtractor,
-  collapseSvgContainers,
-} from "../src/core/index.js";
-import { simplifyRawFigmaObject } from "../src/adapters/rest/design-extractor.js";
-import type { ExtractorFn, SimplifiedNode } from "../src/core/index.js";
+import { simplifyRestResponse } from "../src/adapters/rest/rest.js";
+import type { NodeCounter, SimplifiedNode } from "../src/core/index.js";
 import { serializeResult } from "../src/utils/serialize.js";
 import { wrapForSerialization } from "../src/utils/serializable-design.js";
 
@@ -39,21 +32,6 @@ const argv = cli({
 
 const INPUT_PATH = resolve(argv.flags.input);
 const PROFILE_FLAG = argv.flags.profile;
-
-interface ExtractorTiming {
-  name: string;
-  totalMs: number;
-  calls: number;
-}
-
-function timedExtractor(fn: ExtractorFn, timing: ExtractorTiming): ExtractorFn {
-  return (node, result, context) => {
-    const start = performance.now();
-    fn(node, result, context);
-    timing.totalMs += performance.now() - start;
-    timing.calls++;
-  };
-}
 
 function countOutputNodes(nodes: SimplifiedNode[]): number {
   let count = 0;
@@ -123,41 +101,11 @@ async function main() {
 
   const memBefore = process.memoryUsage();
 
-  const extractorTimings: ExtractorTiming[] = [
-    { name: "layout", totalMs: 0, calls: 0 },
-    { name: "text", totalMs: 0, calls: 0 },
-    { name: "visuals", totalMs: 0, calls: 0 },
-    { name: "component", totalMs: 0, calls: 0 },
-  ];
-
-  const timedExtractors = [
-    timedExtractor(layoutExtractor, extractorTimings[0]),
-    timedExtractor(textExtractor, extractorTimings[1]),
-    timedExtractor(visualsExtractor, extractorTimings[2]),
-    timedExtractor(componentExtractor, extractorTimings[3]),
-  ];
-
-  const afterChildrenTiming = { totalMs: 0, calls: 0 };
-  const timedAfterChildren: typeof collapseSvgContainers = (node, result, children) => {
-    const start = performance.now();
-    const out = collapseSvgContainers(node, result, children);
-    afterChildrenTiming.totalMs += performance.now() - start;
-    afterChildrenTiming.calls++;
-    return out;
-  };
-
-  const nodeCounter = { count: 0 };
+  const nodeCounter: NodeCounter = { count: 0 };
   const simplifyStart = performance.now();
-  const result = await simplifyRawFigmaObject(apiResponse, timedExtractors, {
-    afterChildren: timedAfterChildren,
-    nodeCounter,
-  });
+  const result = await simplifyRestResponse(apiResponse, { nodeCounter });
   const simplifyMs = performance.now() - simplifyStart;
 
-  const extractorTotal = extractorTimings.reduce((sum, t) => sum + t.totalMs, 0);
-  const overhead = simplifyMs - extractorTotal - afterChildrenTiming.totalMs;
-
-  const nodesProcessed = nodeCounter.count;
   const outputNodeCount = countOutputNodes(result.nodes);
 
   const wrapped = wrapForSerialization(result);
@@ -202,18 +150,10 @@ async function main() {
   separator();
   row("Input file size", formatBytes(inputBytes));
   row("Input nodes (raw)", String(inputNodeCount));
-  row("Nodes walked", String(nodesProcessed));
+  row("Nodes walked", String(nodeCounter.count));
   row("Output nodes", String(outputNodeCount));
   separator();
   row("Simplification time", formatMs(simplifyMs));
-  for (const t of extractorTimings) {
-    const pct = ((t.totalMs / simplifyMs) * 100).toFixed(1);
-    row(`  ${t.name} extractor`, `${formatMs(t.totalMs)} (${pct}%)`);
-  }
-  const afterPct = ((afterChildrenTiming.totalMs / simplifyMs) * 100).toFixed(1);
-  row("  afterChildren", `${formatMs(afterChildrenTiming.totalMs)} (${afterPct}%)`);
-  const overheadPct = ((overhead / simplifyMs) * 100).toFixed(1);
-  row("  overhead (walk+yield)", `${formatMs(overhead)} (${overheadPct}%)`);
   separator();
   row("YAML serialization", formatMs(yamlMs));
   row("JSON serialization", formatMs(jsonMs));

@@ -84,21 +84,27 @@ const BANNER =
   "> Source: `plugin/src/preamble/schema.ts` (verbs/props) + `src/mcp/tools/flcm-docs/{narrative,examples}`.\n\n";
 
 const mode = process.argv[2];
-const expectedExamplesModule = buildExamplesModule();
 
-if (mode === "check") {
-  const actualModule = readFileSync(EXAMPLES_MODULE_PATH, "utf8");
-  if (actualModule !== expectedExamplesModule) {
-    console.error(
-      `src/mcp/tools/flcm-docs/examples-code.generated.ts is stale — it no longer matches the ` +
-        `marked regions of the example sources.\nRun \`pnpm docs:gen\` and commit the result.`,
-    );
-    process.exit(1);
+// In check mode, fail if the committed artifact no longer matches what the generator produces;
+// otherwise (re)write it.
+function syncArtifact(path: string, expected: string, staleReason: string): void {
+  if (mode === "check") {
+    if (readFileSync(path, "utf8") !== expected) {
+      console.error(`${staleReason}\nRun \`pnpm docs:gen\` and commit the result.`);
+      process.exit(1);
+    }
+  } else {
+    writeFileSync(path, expected);
+    console.log(`Wrote ${path}`);
   }
-} else {
-  writeFileSync(EXAMPLES_MODULE_PATH, expectedExamplesModule);
-  console.log(`Wrote ${EXAMPLES_MODULE_PATH}`);
 }
+
+syncArtifact(
+  EXAMPLES_MODULE_PATH,
+  buildExamplesModule(),
+  "src/mcp/tools/flcm-docs/examples-code.generated.ts is stale — it no longer matches the " +
+    "marked regions of the example sources.",
+);
 
 // Import the reference builders only now: they read the generated examples module, which the gen
 // path just rewrote (and the check path just verified fresh) — a static import would render the
@@ -116,19 +122,9 @@ buildQuickStart();
 // fails validate here, not at runtime as a silently-truncated tool result in an agent's context.
 buildReferenceSections(["all"]);
 
-const expected = BANNER + buildFullReference();
-
-if (mode === "check") {
-  const actual = readFileSync(DOC_PATH, "utf8");
-  if (actual !== expected) {
-    console.error(
-      `plugin/docs/authoring/flcm.md is stale — it no longer matches the generated reference.\n` +
-        `Run \`pnpm docs:gen\` and commit the result.`,
-    );
-    process.exit(1);
-  }
-  console.log("flcm docs are in sync with the schema.");
-} else {
-  writeFileSync(DOC_PATH, expected);
-  console.log(`Wrote ${DOC_PATH}`);
-}
+syncArtifact(
+  DOC_PATH,
+  BANNER + buildFullReference(),
+  "plugin/docs/authoring/flcm.md is stale — it no longer matches the generated reference.",
+);
+if (mode === "check") console.log("flcm docs are in sync with the schema.");

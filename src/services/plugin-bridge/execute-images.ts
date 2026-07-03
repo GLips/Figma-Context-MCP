@@ -26,7 +26,7 @@ export const ExecuteCodeReply = z.object({
 
 export type ExecuteCodeReplyT = z.infer<typeof ExecuteCodeReply>;
 
-type GatedResult = { content: { type: "text"; text: string }[] };
+export type GatedResult = { content: { type: "text"; text: string }[] };
 
 export type ExecuteOutcome =
   | { kind: "gated"; result: GatedResult }

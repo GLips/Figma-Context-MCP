@@ -5,8 +5,6 @@ import { WS_PORT_BLOCK } from "./ports.js";
 import { SESSION_IDENTITY } from "./approval.js";
 import { detectSkew } from "./version.js";
 
-export { PluginBridge } from "./bridge.js";
-
 /**
  * The running WS relay plus the code-mode advertisement latch. The relay starts with the server in
  * BOTH transports (one loopback port from the block; negligible when unused), but the code-mode
@@ -41,8 +39,9 @@ const VersionReply = z.object({
  */
 export function startPluginBridge(): PluginBridgeRuntime {
   const bridge = new PluginBridge();
-  let everConnected = false;
-  let firstConnectCallbacks: (() => void)[] = [];
+  // Callbacks awaiting the first plugin connection; null once it has happened (the latch fired).
+  // One variable, not a boolean + array pair, so "latched but callbacks still queued" can't exist.
+  let pendingFirstConnect: (() => void)[] | null = [];
 
   bridge.start(WS_PORT_BLOCK, () => {
     // Connection smoke test: the instant a plugin connects, prove the full loop
@@ -56,22 +55,21 @@ export function startPluginBridge(): PluginBridgeRuntime {
       .catch((err: Error) => Logger.log(`❌ Bridge smoke test failed: ${err.message}`));
 
     void handshakeVersion(bridge);
-    void sendSessionInfo(bridge);
+    sendSessionInfo(bridge);
 
-    if (!everConnected) {
-      everConnected = true;
-      const callbacks = firstConnectCallbacks;
-      firstConnectCallbacks = [];
+    if (pendingFirstConnect) {
+      const callbacks = pendingFirstConnect;
+      pendingFirstConnect = null;
       for (const cb of callbacks) cb();
     }
   });
 
   return {
     bridge,
-    hasEverConnected: () => everConnected,
+    hasEverConnected: () => pendingFirstConnect === null,
     onFirstConnect: (cb) => {
-      if (everConnected) cb();
-      else firstConnectCallbacks.push(cb);
+      if (pendingFirstConnect) pendingFirstConnect.push(cb);
+      else cb();
     },
   };
 }
@@ -86,10 +84,10 @@ export function startPluginBridge(): PluginBridgeRuntime {
  * hang to its 15s timeout. The plugin owns the approval decision; this just hands it what to
  * display and the token that proves a prior approval.
  */
-async function sendSessionInfo(bridge: PluginBridge): Promise<void> {
+function sendSessionInfo(bridge: PluginBridge): void {
   const pairingCode = bridge.getPairingCode();
   const sessionToken = bridge.getSessionToken();
-  await bridge
+  bridge
     .request({ type: "SESSION_INFO", identity: SESSION_IDENTITY, pairingCode, sessionToken })
     .catch(() => {});
 }

@@ -21,7 +21,7 @@ const serverInfo = {
     "Gives AI coding agents access to Figma design data, providing layout, styling, and content information for implementing designs.",
 };
 
-type ServerTransport = Extract<Transport, "stdio" | "http">;
+export type ServerTransport = Extract<Transport, "stdio" | "http">;
 
 export type CreateServerOptions = {
   transport: ServerTransport;

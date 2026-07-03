@@ -1,8 +1,9 @@
-import { McpServer, type RegisteredTool } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { PluginBridgeRuntime } from "~/services/plugin-bridge/index.js";
 import { fetchAndProcessImage } from "~/services/plugin-bridge/images.js";
-import { executeWithImages } from "~/services/plugin-bridge/execute-images.js";
+import { executeWithImages, type GatedResult } from "~/services/plugin-bridge/execute-images.js";
+import type { ServerTransport } from "~/mcp/index.js";
 import { buildQuickStart, buildReferenceSections, SECTION_IDS } from "./flcm-docs/reference.js";
 
 // The figma_execute_code description is the GENERATED quick-start (buildQuickStart), assembled from
@@ -11,12 +12,19 @@ import { buildQuickStart, buildReferenceSections, SECTION_IDS } from "./flcm-doc
 // description (not a separate resource) so it is ALWAYS in the agent's context when it writes code —
 // the whole bet is that one tool + this contract beats dozens of granular tools. Full docs live in
 // get_flcm_reference.
-export const EXECUTE_CODE_DESCRIPTION = buildQuickStart();
+const EXECUTE_CODE_DESCRIPTION = buildQuickStart();
 
-export type CodeModeToolsOptions = {
+// The sandbox posts exactly one of these (see screenshot() in code.ts): `image`
+// (base64 PNG) on success, `errors` on the failure path — never both, never neither.
+const ScreenshotReply = z.union([
+  z.object({ image: z.string() }),
+  z.object({ errors: z.string() }),
+]);
+
+type CodeModeToolsOptions = {
   /** Force the tools to be advertised from startup (`--code-mode`) instead of waiting for a plugin. */
   codeMode: boolean;
-  transport: "stdio" | "http";
+  transport: ServerTransport;
 };
 
 /**
@@ -46,7 +54,7 @@ export function registerCodeModeTools(
    * Both name this server's own per-connection pairing code (single source), so it always matches the
    * row the panel shows. Returns null when the reply isn't a gated one.
    */
-  function gateResult(reply: unknown): { content: { type: "text"; text: string }[] } | null {
+  function gateResult(reply: unknown): GatedResult | null {
     if (typeof reply !== "object" || reply === null || !("type" in reply)) return null;
     const code = bridge.getPairingCode();
     if (reply.type === "PENDING_APPROVAL") {
@@ -69,7 +77,7 @@ export function registerCodeModeTools(
     return null;
   }
 
-  function gateText(text: string): { content: { type: "text"; text: string }[] } {
+  function gateText(text: string): GatedResult {
     return { content: [{ type: "text", text }] };
   }
 
@@ -127,9 +135,7 @@ export function registerCodeModeTools(
     return note ? [...content, { type: "text" as const, text: note }] : content;
   }
 
-  const tools: RegisteredTool[] = [];
-
-  tools.push(
+  const tools = [
     server.registerTool(
       "figma_execute_code",
       {
@@ -163,14 +169,12 @@ export function registerCodeModeTools(
         };
       },
     ),
-  );
 
-  // The full flcm authoring reference, delivered as a TOOL (not a resource): the ~18.5K contract can't fit
-  // the 2KB figma_execute_code description, and MCP resources are user-gated / unevenly supported across
-  // clients. A tool is the universal, autonomously-callable channel — the established pattern for shipping
-  // docs to agents. Sectioned so a single call stays well under the ~25K tool-result budget as the surface
-  // grows.
-  tools.push(
+    // The full flcm authoring reference, delivered as a TOOL (not a resource): the ~18.5K contract can't fit
+    // the 2KB figma_execute_code description, and MCP resources are user-gated / unevenly supported across
+    // clients. A tool is the universal, autonomously-callable channel — the established pattern for shipping
+    // docs to agents. Sectioned so a single call stays well under the ~25K tool-result budget as the surface
+    // grows.
     server.registerTool(
       "get_flcm_reference",
       {
@@ -196,16 +200,7 @@ export function registerCodeModeTools(
         ],
       }),
     ),
-  );
 
-  // The sandbox posts exactly one of these (see screenshot() in code.ts): `image`
-  // (base64 PNG) on success, `errors` on the failure path — never both, never neither.
-  const ScreenshotReply = z.union([
-    z.object({ image: z.string() }),
-    z.object({ errors: z.string() }),
-  ]);
-
-  tools.push(
     server.registerTool(
       "get_screenshot",
       {
@@ -232,7 +227,7 @@ Pass a nodeId (e.g. a frame's id returned from figma_execute_code) to screenshot
         };
       },
     ),
-  );
+  ];
 
   if (codeMode || runtime.hasEverConnected()) return;
 
