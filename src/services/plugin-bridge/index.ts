@@ -1,8 +1,10 @@
 import { z } from "zod";
+import { join } from "node:path";
 import { Logger } from "~/utils/logger.js";
 import { PluginBridge } from "./bridge.js";
 import { WS_PORT_BLOCK } from "./ports.js";
 import { SESSION_IDENTITY } from "./approval.js";
+import { resolveStateDir } from "./approval-store.js";
 import { detectSkew } from "./version.js";
 
 /**
@@ -39,6 +41,9 @@ const VersionReply = z.object({
  */
 export function startPluginBridge(): PluginBridgeRuntime {
   const bridge = new PluginBridge();
+  // Surface where the durable-approval token file lives — it is a security-adjacent 0600 credential, so
+  // an operator should be able to see (and locate/inspect) it at startup. Override via FRAMELINK_STATE_DIR.
+  Logger.log(`Session approvals persisted under ${join(resolveStateDir(), "approvals")}`);
   // Callbacks awaiting the first plugin connection; null once it has happened (the latch fired).
   // One variable, not a boolean + array pair, so "latched but callbacks still queued" can't exist.
   let pendingFirstConnect: (() => void)[] | null = [];

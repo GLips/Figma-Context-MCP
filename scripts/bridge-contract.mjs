@@ -288,22 +288,25 @@ await wait(150);
 // --- Durable approval: a restarted server reloads the persisted token; Revoke clears it (this cycle) ---
 // The bug this closes: `sessionToken` was in-memory only, so a SERVER restart (dev-watch save-restart,
 // or a crash/respawn) lost it and re-prompted — even though the plugin still remembered the token. A
-// shared persistence dir models "same project, restarted process": each fresh PluginBridge on that dir
-// must reload the token the first one was handed, and re-approve WITHOUT a second Allow. The same
-// sandbox is reused across the "restart" — its approvedTokens still holds the token, which is why the
-// reloaded echo re-keys approval. Then Revoke must clear the persisted copy so it can't re-approve.
+// shared persistence dir + the SAME port models "same project, restarted process": a fresh PluginBridge
+// that rebinds that port must reload the token the first one was handed, and re-approve WITHOUT a second
+// Allow. The same sandbox is reused across the "restart" — its approvedTokens still holds the token,
+// which is why the reloaded echo re-keys approval. Then Revoke must clear the persisted copy.
 //
-// Each "restarted" server binds a FRESH port, not the original: the harness can't free the first
-// server's port without a real process exit (there's no stop() — the WSS lingers), and persistence is
-// keyed by the project CWD, not the port, so a different port faithfully models what actually carries
-// approval across a restart. (Port identity only governs the plugin-side active-driver row, verified in
-// Figma by hand — the fake sandbox here gates on the token alone, exactly the server contract this pins.)
+// The restart rebinds the SAME port on purpose: persistence keys on (cwd, PORT), so the restarted
+// server only reloads if it reclaims its port — exactly what a real single-server restart does (it frees
+// the port on exit and re-probes to the same base). `bridgeR1.stop()` frees the port so `bridgeR2` can
+// reclaim it, the honest way to model this in-process. Note the fake sandbox gates on the token alone;
+// the plugin's real active-driver (activeKey-by-port) gate is verified in Figma by hand — so a restart
+// that instead landed on a DIFFERENT port would reload nothing here (re-prompt), and in production would
+// surface as approved-but-inactive (INACTIVE_SESSION → "Switch to drive"), not a fresh Allow.
 const sharedDir = mkdtempSync(join(tmpdir(), "flcm-approval-restart-"));
+const RESTART_PORT = 19879;
 const restartState = makeSandbox();
 const bridgeR1 = new PluginBridge(new ApprovalStore(process.cwd(), sharedDir));
-bridgeR1.start([19879]);
+bridgeR1.start([RESTART_PORT]);
 await wait(150);
-const r1 = fakePlugin("null", { url: "ws://127.0.0.1:19879", state: restartState });
+const r1 = fakePlugin("null", { url: `ws://127.0.0.1:${RESTART_PORT}`, state: restartState });
 await new Promise((res) => r1.on("open", res));
 await bridgeR1.request({ type: "SESSION_INFO", identity: SESSION_IDENTITY, pairingCode: bridgeR1.getPairingCode(), sessionToken: bridgeR1.getSessionToken() });
 r1.allow();
@@ -311,14 +314,15 @@ await wait(50);
 const persistedToken = bridgeR1.getSessionToken();
 assert.match(String(persistedToken), /^tok-/, "the approved server persisted the handed-over token");
 r1.close();
+bridgeR1.stop(); // free the port so the "restarted" server can reclaim it
 await wait(150);
 
-// Restart: a brand-new PluginBridge on the SAME store dir + cwd, as if the process relaunched.
+// Restart: a brand-new PluginBridge on the SAME store dir + cwd, rebinding the SAME port.
 const bridgeR2 = new PluginBridge(new ApprovalStore(process.cwd(), sharedDir));
-bridgeR2.start([19881]);
+bridgeR2.start([RESTART_PORT]);
 await wait(150);
-assert.equal(bridgeR2.getSessionToken(), persistedToken, "a restarted server reloads the persisted token from disk (not null)");
-const r2 = fakePlugin("null", { url: "ws://127.0.0.1:19881", state: restartState });
+assert.equal(bridgeR2.getSessionToken(), persistedToken, "a restarted server reclaiming its port reloads the persisted token (not null)");
+const r2 = fakePlugin("null", { url: `ws://127.0.0.1:${RESTART_PORT}`, state: restartState });
 await new Promise((res) => r2.on("open", res));
 await bridgeR2.request({ type: "SESSION_INFO", identity: SESSION_IDENTITY, pairingCode: bridgeR2.getPairingCode(), sessionToken: bridgeR2.getSessionToken() });
 assert.equal(
@@ -326,20 +330,31 @@ assert.equal(
   "ok",
   "after a server restart the reloaded token re-approves the same sandbox — no second Allow, no re-prompt",
 );
-console.log("✅ Durable approval survives a server restart (persisted token reloaded, no re-prompt)");
+console.log("✅ Durable approval survives a same-port server restart (persisted token reloaded, no re-prompt)");
+
+// A concurrent same-cwd sibling on a DIFFERENT port must NOT inherit the approval (the F1 fix): its
+// (cwd, port) key points at a file that was never written, so it reloads nothing and re-prompts.
+const bridgeSibling = new PluginBridge(new ApprovalStore(process.cwd(), sharedDir));
+bridgeSibling.start([19883]);
+await wait(150);
+assert.equal(bridgeSibling.getSessionToken(), null, "a concurrent same-cwd server on another port inherits no approval");
+console.log("✅ A concurrent same-cwd sibling on another port does not inherit approval (keyed by cwd+port)");
+bridgeSibling.stop();
 
 // Revoke clears the persisted token: the sandbox sends id-less REVOKE_SESSION over the relay; a THIRD
-// bridge on the same store dir then reloads nothing, so the next connect re-prompts.
+// bridge reclaiming the same port then reloads nothing, so the next connect re-prompts.
 r2.send(JSON.stringify({ type: "REVOKE_SESSION" }));
 await wait(50);
 assert.equal(bridgeR2.getSessionToken(), null, "REVOKE_SESSION clears the in-memory token");
 r2.close();
+bridgeR2.stop();
 await wait(150);
 const bridgeR3 = new PluginBridge(new ApprovalStore(process.cwd(), sharedDir));
-bridgeR3.start([19882]);
+bridgeR3.start([RESTART_PORT]);
 await wait(150);
 assert.equal(bridgeR3.getSessionToken(), null, "after Revoke, a restarted server reloads nothing — approval was truly cleared");
 console.log("✅ Revoke deletes the persisted token so it can't silently re-approve on the next restart");
+bridgeR3.stop();
 
 // --- Version handshake + skew policy (Slice 1.2) ---
 

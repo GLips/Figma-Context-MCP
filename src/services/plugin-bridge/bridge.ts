@@ -96,8 +96,14 @@ export class PluginBridge {
   //
   // Held in memory here AND persisted through `store`, so it survives a server-process RESTART (not
   // just a WS reconnect). A restart is exactly what used to drop this back to null and re-prompt with
-  // a fresh pairing code; loading it on start closes that gap (see approval-store.ts).
+  // a fresh pairing code; reloading it once the port binds closes that gap (see approval-store.ts).
   private sessionToken: string | null = null;
+  // The port this server won its probe-bind on, or null before `listening`. Persistence keys on it —
+  // (cwd, port) — so concurrent same-cwd servers never share an approval file (see approval-store.ts).
+  private boundPort: number | null = null;
+  // The winning WebSocketServer, retained only so `stop()` can close it (free the port). The relay is
+  // otherwise process-lifetime; stop() exists for tests that model a restart by freeing then rebinding.
+  private wss: WebSocketServer | null = null;
 
   // Injectable so the contract harness / tests isolate persistence to a temp dir instead of touching
   // the real ~/.framelink. Production constructs the default store.
@@ -112,11 +118,6 @@ export class PluginBridge {
    * only the winner's ever fire; the heartbeat is installed in `listening`, so it is winner-only.
    */
   start(ports: number[], onConnect?: () => void): void {
-    // Reload a prior approval BEFORE binding, so a plugin that reconnects the instant we come up
-    // already gets the persisted token echoed in its first SESSION_INFO — no re-prompt on restart.
-    this.sessionToken = this.store.load(Date.now());
-    if (this.sessionToken)
-      Logger.log("Reloaded a persisted session approval — a prior Allow still holds");
     this.tryBind(ports, 0, onConnect);
   }
 
@@ -178,6 +179,16 @@ export class PluginBridge {
     });
     wss.on("listening", () => {
       Logger.log(`WS bridge listening on ws://127.0.0.1:${port}`);
+      // Record the winning port + server so persistence keys on (cwd, port) and stop() can free it.
+      this.boundPort = port;
+      this.wss = wss;
+      // Reload a prior approval the instant the port is bound — before any connection can be accepted
+      // (and thus before the first SESSION_INFO), so a plugin reconnecting onto this port immediately
+      // gets the persisted token echoed and is not re-prompted. Keyed by THIS port: a concurrent
+      // sibling on another port, or a restart that landed elsewhere, reloads nothing (fail-closed).
+      this.sessionToken = this.store.load(port, Date.now());
+      if (this.sessionToken)
+        Logger.log("Reloaded a persisted session approval — a prior Allow still holds");
       // Install the heartbeat here in `listening` (not eagerly in tryBind) so only the server that
       // WON its bind gets one — a probe that lost to EADDRINUSE never reaches here. unref'd and never
       // cleared: it lives for the whole process, like the bridge itself. (What it reaps: see HEARTBEAT_INTERVAL_MS.)
@@ -285,10 +296,25 @@ export class PluginBridge {
   /**
    * Slide the persisted approval's TTL forward after a successful write, so an actively-used session is
    * never pruned mid-work. No-op when nothing is persisted (unapproved, or approval-less runs). Called
-   * from the tool handler on the success path, not from `request()` — only a real write should count as use.
+   * from the tool handler on the success path, not from `request()` — only a real write should count as
+   * use. Passes the live token so the store's compare-and-set refuses to roll back a peer's newer file.
    */
   touchApproval(): void {
-    this.store.touch(Date.now());
+    if (this.boundPort !== null && this.sessionToken)
+      this.store.touch(this.boundPort, this.sessionToken, Date.now());
+  }
+
+  /**
+   * Close the WS server (freeing its port) and drop the current socket. NOT part of the normal server
+   * lifecycle — the relay is meant to live for the whole process. It exists so tests can model a server
+   * RESTART honestly: free the port, then rebind it with a fresh bridge that reloads the persisted token.
+   * Under (cwd, port) keying, a faithful restart test must reclaim the same port, which requires this.
+   */
+  stop(): void {
+    this.socket?.terminate();
+    this.socket = null;
+    this.wss?.close();
+    this.wss = null;
   }
 
   /**
@@ -350,7 +376,9 @@ export class PluginBridge {
     if (msg.type === "SESSION_TOKEN" && typeof msg.sessionToken === "string") {
       this.sessionToken = msg.sessionToken;
       // Persist so the approval survives a server restart, not just this connection (approval-store.ts).
-      this.store.save(msg.sessionToken, SESSION_IDENTITY, Date.now());
+      // boundPort is set by `listening`, which precedes any connection, so it is non-null here.
+      if (this.boundPort !== null)
+        this.store.save(this.boundPort, msg.sessionToken, SESSION_IDENTITY, Date.now());
       Logger.log("Stored session token handed over by the sandbox after Allow (persisted)");
       return;
     }
@@ -359,7 +387,7 @@ export class PluginBridge {
     // approvedTokens entry, so the next write re-prompts.
     if (msg.type === "REVOKE_SESSION") {
       this.sessionToken = null;
-      this.store.clear();
+      if (this.boundPort !== null) this.store.clear(this.boundPort);
       Logger.log("Session approval revoked by the human — cleared the persisted token");
       return;
     }
