@@ -15,7 +15,7 @@ import { fileURLToPath } from "node:url";
 
 const SRC = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
-describe("canonicalize core is bundle-pure (Invariant 4)", () => {
+describe("simplify core is bundle-pure (Invariant 4)", () => {
   it("bundles under platform:'neutral' entirely from src/ — no builtins, no packages", async () => {
     // Throws (failing the test) if any Node builtin is reachable, since
     // neutral has no builtin resolution.

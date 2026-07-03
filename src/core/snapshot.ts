@@ -1,11 +1,11 @@
 /**
- * `NodeSnapshot` — the plan-neutral, core-owned INPUT to `canonicalize`.
+ * `NodeSnapshot` — the plan-neutral, core-owned INPUT to `simplify`.
  *
  * This is the raw structural form the transform consumes: the wire encodings are
  * decoded (text as runs, uniform image ref, normalized gradient, resolved
  * style/component metadata, no top-level tables), but the values are still raw
  * (RGBA floats, numeric sizes, raw layout traits) — CSS conversion + dedup is
- * `canonicalize`'s sole job, never an adapter's (Invariant 5). One core, two
+ * `simplify`'s sole job, never an adapter's (Invariant 5). One core, two
  * producers: `restNodeToSnapshot` (server) and `sceneNodeToSnapshot` (plugin,
  * out of scope here) both feed this identical shape (Invariant 2).
  *
@@ -59,7 +59,7 @@ export type SnapshotTransform = number[][];
 // uniform (`ref`, not REST's `imageRef`) and the gradient is normalized to
 // {stops, handles} (not REST's gradientHandlePositions). This is a decode the
 // adapter owns; the plugin adapter (out of scope) derives the same shape from
-// its own wire form. See ADR/plan: {stops, handles} keeps canonicalize's
+// its own wire form. See ADR/plan: {stops, handles} keeps simplify's
 // gradient math (which works off handle vectors) behavior-identical.
 // ---------------------------------------------------------------------------
 export interface SnapshotSolidPaint {
@@ -235,7 +235,7 @@ export interface NodeSnapshot {
   // Layout traits — a node's own box and how it sits in its parent's layout.
   // Field names/unions mirror Figma's HasLayoutTrait so raw REST nodes stay
   // structurally assignable during the carve; the values are raw (px numbers,
-  // enum tags), and the CSS mapping is canonicalize's job (Invariant 5).
+  // enum tags), and the CSS mapping is simplify's job (Invariant 5).
   // ------------------------------------------------------------------------
   absoluteBoundingBox?: SnapshotRect | null;
   layoutSizingHorizontal?: "FIXED" | "HUG" | "FILL";

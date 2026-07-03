@@ -3,13 +3,12 @@ import { sha1Hex } from "./sha1.js";
 import type { ElementBody, GlobalVars, SimplifiedNode } from "./types.js";
 
 /**
- * Post-walk deduplication pass.
+ * Post-walk compression pass.
  *
- * Both features here need GLOBAL knowledge that the single-pass extractor walk
- * can't have: you can't tell whether a style or a subtree is used once or a
- * hundred times until the whole tree is built. So rather than fight the
- * composable-extractor model, we run this as a finalize pass over the
- * already-built design, after the walk completes.
+ * Both features here need GLOBAL knowledge that the single-pass walk can't
+ * have: you can't tell whether a style or a subtree is used once or a hundred
+ * times until the whole tree is built, so this runs over the already-built
+ * design, after the walk completes.
  *
  * Two transformations, in this order:
  *   1. Count-gated style hoisting — a style stays in globalVars only when 2+
@@ -20,19 +19,20 @@ import type { ElementBody, GlobalVars, SimplifiedNode } from "./types.js";
  *      replaced by a compact `{ id, name, template, children? }` reference.
  *
  * The order is for simplicity (hash bodies that are already gated), NOT a
- * correctness requirement. Style ids are content-addressed (see findOrCreateVar),
- * so two structurally-identical subtrees already carry byte-identical refs before
- * gating — they hash to the same template with or without it. And gating only
- * rewrites single-use styles, whose lone reference necessarily sits on a unique,
- * non-repeated body (any repeated body would push the style's count to >= 2), so
- * gating never touches a node that participates in templating. Hashing before or
- * after gating yields the same templates either way.
+ * correctness requirement. Style ids are content-addressed (see the ref style
+ * table's intern), so two structurally-identical subtrees already carry
+ * byte-identical refs before gating — they hash to the same template with or
+ * without it. And gating only rewrites single-use styles, whose lone reference
+ * necessarily sits on a unique, non-repeated body (any repeated body would push
+ * the style's count to >= 2), so gating never touches a node that participates
+ * in templating. Hashing before or after gating yields the same templates
+ * either way.
  *
  * A final step (inlineExclusiveStyles) collapses the double indirection that
  * arises when a surviving style turns out to be used only by the instances of a
  * single deduplicated element — see below.
  */
-export function finalizeDesign(
+export function compressDesign(
   nodes: SimplifiedNode[],
   globalVars: GlobalVars,
   namedStyleKeys: Set<string>,
@@ -92,10 +92,10 @@ function visitStyleRefSlots(
 
 /**
  * Feature 1: replace single-use style refs with their inline value, returning the
- * styles that stay hoisted in globalVars (used by 2+ nodes, or named styles).
- * Mutates the passed nodes in place (they're owned by this call). A single-use
- * value is referenced by exactly one node, so sharing the value object on inline
- * creates no aliasing.
+ * styles that stay hoisted (used by 2+ nodes, or named styles). Mutates the
+ * passed nodes in place (they're owned by this call). A single-use value is
+ * referenced by exactly one node, so sharing the value object on inline creates
+ * no aliasing.
  */
 function inlineSingleUseStyles(
   nodes: SimplifiedNode[],
@@ -255,19 +255,18 @@ function collectElements(
  * Content-addressed element id, with a truncated-hash collision guard. The 8-hex
  * slice (32 bits) keeps template refs short but can alias two distinct bodies;
  * letting them share an id would make applyTemplateRefs merge two different
- * elements into one. On a clash we lengthen this body's id until the slot is free
- * or already holds the same body. Deterministic because the walk order is stable.
+ * elements into one. On a clash with a DIFFERENT body we fall back to the full
+ * 40-hex hash (matching the ref style table's collision policy), which cannot
+ * alias. Deterministic because the walk order is stable.
  */
 function elementId(
   str: string,
   bodiesByHash: Map<string, { body: ElementBody; str: string; count: number }>,
 ): string {
   const fullHash = sha1Hex(str);
-  for (let length = 8; length < fullHash.length; length += 4) {
-    const id = `EL-${fullHash.slice(0, length)}`;
-    const entry = bodiesByHash.get(id);
-    if (!entry || entry.str === str) return id;
-  }
+  const short = `EL-${fullHash.slice(0, 8)}`;
+  const entry = bodiesByHash.get(short);
+  if (!entry || entry.str === str) return short;
   return `EL-${fullHash}`;
 }
 

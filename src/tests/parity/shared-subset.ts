@@ -3,11 +3,11 @@ import type {
   GlobalVars,
   SimplifiedDesign,
   SimplifiedNode,
-  StyleTypes,
+  StyleValue,
 } from "~/core/types.js";
 // Single-sourced from the compression pass so the parity view resolves EXACTLY
-// the slots finalize can hoist — the two can't silently diverge.
-import { STYLE_REF_FIELDS } from "~/core/finalize.js";
+// the slots the compression pass can hoist — the two can't silently diverge.
+import { STYLE_REF_FIELDS } from "~/core/compress.js";
 
 /**
  * The comparator policy for the REST↔plugin parity harness — "shared subset" as
@@ -51,7 +51,7 @@ import { STYLE_REF_FIELDS } from "~/core/finalize.js";
  *     own. We reduce both tables to a single id→`{propertyDefinitions}` map, which
  *     also erases the components-vs-sets split (itself an assembly choice).
  *
- *  3. SAME-NAME STYLE DISAMBIGUATION (`resolveStyleKey`, `core/style-sink.ts`).
+ *  3. SAME-NAME STYLE DISAMBIGUATION (`resolveStyleKey`, `core/style-table.ts`).
  *     The `Name (id)` suffix only exists as a globalVars KEY. Expansion resolves
  *     refs to values, so the key — and any producer disagreement about it —
  *     is gone before comparison.
@@ -64,9 +64,9 @@ import { STYLE_REF_FIELDS } from "~/core/finalize.js";
  *     here so a future producer that reads a different selection root is a known,
  *     out-of-scope divergence, not a mystery.
  *
- *  5. SVG COLLAPSE (`collapseSvgContainers`, `core/built-in.ts`) and
+ *  5. SVG COLLAPSE (`collapseSvgContainers`, `core/simplify.ts`) and
  *  6. HIDDEN COMPONENT-PROPERTY NODES (`shouldProcessNode`,
- *     `core/node-walker.ts`) are both pure CORE behavior over the snapshot —
+ *     `core/simplify.ts`) are both pure CORE behavior over the snapshot —
  *     identical for identical snapshots, so parity holds by construction. No
  *     normalization; the fixtures exercise them (the component-instance fixture's
  *     hidden Sale Ribbon is rescued by rule 6) so a regression in the shared core
@@ -89,7 +89,7 @@ const PLUGIN_ONLY_FIELDS = new Set<string>([]);
 
 type Rec = Record<string, unknown>;
 
-function resolveRef(value: unknown, styles: Record<string, StyleTypes>): unknown {
+function resolveRef(value: unknown, styles: Record<string, StyleValue>): unknown {
   return typeof value === "string" && value in styles ? styles[value] : value;
 }
 
@@ -114,7 +114,7 @@ function scopeStyleValue(value: unknown): unknown {
  */
 function viewNode(
   node: SimplifiedNode,
-  styles: Record<string, StyleTypes>,
+  styles: Record<string, StyleValue>,
   elements: Record<string, ElementBody>,
 ): Rec {
   const source = node as unknown as Rec;

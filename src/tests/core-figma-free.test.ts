@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-// Phase 1 Done-when gate (Invariant 2): the `canonicalize` core module graph —
+// Phase 1 Done-when gate (Invariant 2): the simplify core module graph —
 // everything reachable from the pure transform's entry point — must NOT import
 // `@figma/rest-api-spec`. Every REST wire structure is decoded in the adapter
 // (src/adapters/rest/) so the core only ever sees `NodeSnapshot`.
@@ -25,7 +25,7 @@ import { fileURLToPath } from "node:url";
 const SRC = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 // The pure transform's single entry: the core barrel, which re-exports the
-// walker, built-in extractors, and finalize. `restNodeToSnapshot` and
+// walk, transformers, and compression pass. `restNodeToSnapshot` and
 // everything above it (src/adapters/rest/, services) are the ADAPTER —
 // deliberately not a root. Phase 2's esbuild purity probe targets this same
 // entry, so anything the barrel doesn't reach isn't part of the core.
@@ -86,7 +86,7 @@ function coreModuleGraph(): string[] {
   return Array.from(seen);
 }
 
-describe("canonicalize core is Figma-free (Invariant 2)", () => {
+describe("simplify core is Figma-free (Invariant 2)", () => {
   it("no module reachable from the core barrel imports @figma/rest-api-spec", () => {
     const offenders = coreModuleGraph().filter((file) => {
       const source = readFileSync(file, "utf-8");

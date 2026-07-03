@@ -247,7 +247,7 @@ function formatLineHeight(
 /**
  * Callback used by `buildFormattedText` to register a styled run's residual
  * delta and receive the run tuple's style slot back: a `globalVars` ref string
- * (compressed output; count-gated by the finalize pass like every other style)
+ * (compressed output; count-gated by the compression pass like every other style)
  * or the delta itself for inline emission. Keeping the side effects (dedup,
  * globalVars mutation) in the caller lets this module stay a near-pure
  * transformer.

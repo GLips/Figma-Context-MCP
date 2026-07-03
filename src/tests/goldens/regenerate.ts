@@ -1,5 +1,5 @@
 /**
- * Manually regenerate the committed golden outputs for the canonicalize carve.
+ * Manually regenerate the committed golden outputs for the simplify core.
  *
  *   pnpm tsx src/tests/goldens/regenerate.ts
  *

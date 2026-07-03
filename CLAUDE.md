@@ -82,14 +82,14 @@ The server supports two transports (configured in `src/server.ts`):
 
 3. **REST Adapter** (`src/adapters/rest/`) — REST wire format → `NodeSnapshot`
 
-   - `design-extractor.ts` — Entry point, parses the API response envelope and calls the core
-   - `node-to-snapshot.ts` — Decodes a raw REST node into a plan-neutral `NodeSnapshot` (with `text.ts`, `paint.ts`, `component.ts` handling wire-specific structures)
+   - `rest.ts` — Entry point (`simplifyRestResponse`): parses the API response envelope, decodes the component tables, and calls the core
+   - `node-to-snapshot.ts` — Decodes a raw REST node into a plan-neutral `NodeSnapshot` (with `text.ts`, `paint.ts` handling wire-specific structures)
 
-4. **Canonicalize Core** (`src/core/`) — Transforms `NodeSnapshot` into simplified output; Figma-type-free (gated by `src/tests/core-figma-free.test.ts`), entry barrel `src/core/index.ts`
+4. **Simplify Core** (`src/core/`) — Transforms `NodeSnapshot` into simplified output; Figma-type-free (gated by `src/tests/core-figma-free.test.ts`), entry barrel `src/core/index.ts`
 
-   - `node-walker.ts` — Recursive traversal applying extractors to each node
-   - `built-in.ts` — Built-in extractors: `layoutExtractor`, `textExtractor`, `visualsExtractor`, `componentExtractor`; extractors are composable, `allExtractors` combines all built-ins
-   - `finalize.ts` — Opt-in compression pass (dedup, style refs)
+   - `simplify.ts` — The whole spine: `simplify()` picks a style table, then a single-pass walk extracts geometry/layout, text, visuals, and component data per node (and collapses SVG-heavy containers)
+   - `style-table.ts` — Where the walk interns style values: inline emission (expanded) vs content-addressed refs (compressing)
+   - `compress.ts` — Opt-in egress compression pass (count-gated style hoisting, element templates)
    - `transformers/` — Convert specific node properties
      - `layout.ts` — Layout/positioning transforms
      - `style.ts` — Visual styling (fills, strokes)

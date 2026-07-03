@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { extractFromDesign } from "~/core/node-walker.js";
-import { simplifyRawFigmaObject } from "~/adapters/rest/design-extractor.js";
+import { walkNodes } from "~/core/simplify.js";
+import { simplifyRestResponse } from "~/adapters/rest/rest.js";
 import { restNodeToSnapshot } from "~/adapters/rest/node-to-snapshot.js";
-import { createRefStyleSink } from "~/core/style-sink.js";
+import { createRefStyleTable } from "~/core/style-table.js";
 import type { TraversalOptions } from "~/core/types.js";
 import type { GetFileResponse, Style } from "@figma/rest-api-spec";
 import type { Node as FigmaNode } from "@figma/rest-api-spec";
@@ -22,8 +22,8 @@ async function walk(
   options?: TraversalOptions,
   extraStyles?: Record<string, Style>,
 ) {
-  const sink = createRefStyleSink();
-  const { nodes: extracted, componentDefs } = await extractFromDesign(
+  const sink = createRefStyleTable();
+  const { nodes: extracted, componentDefs } = await walkNodes(
     nodes.map((node) => restNodeToSnapshot(node, extraStyles)),
     sink,
     options,
@@ -66,7 +66,7 @@ const fixtureNodes: FigmaNode[] = [
   makeNode({ id: "3:1", name: "Icon", type: "VECTOR" }),
 ];
 
-describe("extractFromDesign", () => {
+describe("walkNodes", () => {
   it("produces correct node structure from a nested tree", async () => {
     const { nodes } = await walk(fixtureNodes);
 
@@ -674,7 +674,7 @@ describe("component property support", () => {
   });
 });
 
-describe("simplifyRawFigmaObject", () => {
+describe("simplifyRestResponse", () => {
   it("produces a complete SimplifiedDesign from a mock API response", async () => {
     const mockResponse = {
       name: "Test File",
@@ -696,7 +696,7 @@ describe("simplifyRawFigmaObject", () => {
       editorType: "figma",
     } as unknown as GetFileResponse;
 
-    const result = await simplifyRawFigmaObject(mockResponse);
+    const result = await simplifyRestResponse(mockResponse);
 
     expect(result.name).toBe("Test File");
     expect(result.nodes).toHaveLength(3);
@@ -742,7 +742,7 @@ describe("simplifyRawFigmaObject", () => {
       editorType: "figma",
     } as unknown as GetFileResponse;
 
-    const result = await simplifyRawFigmaObject(mockResponse);
+    const result = await simplifyRestResponse(mockResponse);
 
     expect(result.components["20:1"].propertyDefinitions).toEqual({
       "On Sale": { type: "boolean", defaultValue: true },

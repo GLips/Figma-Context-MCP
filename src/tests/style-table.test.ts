@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { Node as FigmaNode, Style, TypeStyle } from "@figma/rest-api-spec";
-import { extractFromDesign } from "~/core/node-walker.js";
-import { createRefStyleSink } from "~/core/style-sink.js";
+import { walkNodes } from "~/core/simplify.js";
+import { createRefStyleTable } from "~/core/style-table.js";
 import { restNodeToSnapshot } from "~/adapters/rest/node-to-snapshot.js";
-import type { StyleTypes } from "~/core/types.js";
+import type { StyleValue } from "~/core/types.js";
 
 // resolveStyleKey decides whether a node's named Figma style collapses onto an
 // existing same-name entry or gets a disambiguating ` (id)` suffix. The decision
@@ -47,9 +47,9 @@ const extraStyles: Record<string, Style> = {
 async function extractWithSeed(seed: Record<string, unknown>) {
   // Seed a pre-existing same-name entry straight into the sink's styles table;
   // resolveStyleKey treats anything already there as registered.
-  const sink = createRefStyleSink();
-  sink.styles["Heading / Large"] = seed as StyleTypes;
-  await extractFromDesign(
+  const sink = createRefStyleTable();
+  sink.styles["Heading / Large"] = seed as StyleValue;
+  await walkNodes(
     [namedTextNode({ fontFamily: "Inter", fontWeight: 700, fontSize: 24 })].map((node) =>
       restNodeToSnapshot(node, extraStyles),
     ),

@@ -1,5 +1,4 @@
-import { exhaustiveCheck } from "~/core/utils.js";
-import { isFrame, isInAutoLayoutFlow } from "~/core/identity.js";
+import { exhaustiveCheck, isFrame, isInAutoLayoutFlow } from "~/core/utils.js";
 import type { NodeSnapshot } from "~/core/snapshot.js";
 
 /**

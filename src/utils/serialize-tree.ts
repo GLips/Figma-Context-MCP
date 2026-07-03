@@ -116,7 +116,7 @@ function renderNode(
 }
 
 // Style fields hold either a globalVars reference (a short scalar id) or, for
-// single-use values after the finalize pass, the inline value itself. Refs render
+// single-use values after the compression pass, the inline value itself. Refs render
 // bare; inline objects/arrays render as compact JSON (consistent with how
 // componentProperties is rendered), keeping the whole node on one line.
 function renderStyleValue(value: unknown): string {

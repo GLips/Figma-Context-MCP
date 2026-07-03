@@ -1,8 +1,8 @@
 import type { GetFileResponse, GetFileNodesResponse } from "@figma/rest-api-spec";
 import type { NodeSnapshot } from "~/core/snapshot.js";
 import type { SimplifiedDesign } from "~/core/types.js";
-import { canonicalize } from "~/core/canonicalize.js";
-import { simplifyRawFigmaObject } from "~/adapters/rest/design-extractor.js";
+import { simplify } from "~/core/simplify.js";
+import { simplifyRestResponse } from "~/adapters/rest/rest.js";
 
 /**
  * One case in the parity harness: a shared golden and the per-producer inputs
@@ -38,7 +38,7 @@ export interface ParityProducer {
  */
 const restProducer: ParityProducer = {
   id: "rest",
-  produce: (parityCase) => simplifyRawFigmaObject(parityCase.rest),
+  produce: (parityCase) => simplifyRestResponse(parityCase.rest),
 };
 
 /**
@@ -57,7 +57,7 @@ const restProducer: ParityProducer = {
 const snapshotProducer: ParityProducer = {
   id: "snapshot",
   produce: async (parityCase) => {
-    const { nodes, globalVars, elements, componentDefinitions } = await canonicalize(
+    const { nodes, globalVars, elements, componentDefinitions } = await simplify(
       parityCase.snapshot,
       { compress: true },
     );

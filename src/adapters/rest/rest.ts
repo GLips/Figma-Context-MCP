@@ -9,20 +9,25 @@ import type {
 import { tagError } from "~/utils/error-meta.js";
 import type { TraversalOptions, SimplifiedDesign } from "~/core/types.js";
 import type { NodeSnapshot } from "~/core/snapshot.js";
-import { canonicalize } from "~/core/canonicalize.js";
+import { simplify } from "~/core/simplify.js";
 import { restNodeToSnapshot } from "./node-to-snapshot.js";
-import { simplifyComponents, simplifyComponentSets } from "./component.js";
+import type {
+  SimplifiedComponentDefinition,
+  SimplifiedComponentSetDefinition,
+  SimplifiedPropertyDefinition,
+} from "~/core/transformers/component.js";
 
 // Yield to the Node event loop between walk batches so progress heartbeats,
 // SIGINT, and overlapping HTTP requests stay live during large files. Injected
-// here — not hardcoded in the walker — because the core must stay free of Node
+// here — not hardcoded in the walk — because the core must stay free of Node
 // builtins (Invariant 4).
 const eventLoopYield = () => new Promise<void>((resolve) => setImmediate(resolve));
 
 /**
- * Extract a complete SimplifiedDesign from a raw Figma API response.
+ * The REST adapter entry: a complete SimplifiedDesign from a raw Figma API
+ * response.
  */
-export async function simplifyRawFigmaObject(
+export async function simplifyRestResponse(
   apiResponse: GetFileResponse | GetFileNodesResponse,
   options: TraversalOptions = {},
 ): Promise<SimplifiedDesign> {
@@ -32,7 +37,7 @@ export async function simplifyRawFigmaObject(
 
   // Run the core with egress compression on: this is the shipped REST tool's
   // output form (ref-deduplicated styles + element templates).
-  const { nodes, globalVars, elements, componentDefinitions } = await canonicalize(snapshots, {
+  const { nodes, globalVars, elements, componentDefinitions } = await simplify(snapshots, {
     ...options,
     compress: true,
     scheduler: eventLoopYield,
@@ -56,7 +61,7 @@ export async function simplifyRawFigmaObject(
  * unwraps the response envelope and the top-level `styles`/component tables — so
  * nothing REST-shaped reaches the core (Invariant 2).
  *
- * Split out from `simplifyRawFigmaObject` so the parity harness and its snapshot
+ * Split out from `simplifyRestResponse` so the parity harness and its snapshot
  * regenerator feed the identical decode the shipped tool uses, rather than
  * re-deriving it and drifting.
  */
@@ -130,4 +135,59 @@ function parseAPIResponse(data: GetFileResponse | GetFileNodesResponse) {
     components: aggregatedComponents,
     componentSets: aggregatedComponentSets,
   };
+}
+
+/*
+ * Decode the top-level `components` / `componentSets` tables into the
+ * simplified definition maps the output carries. These tables are a
+ * REST-specific coupling spot (Invariant 2) — they live outside the node tree
+ * in the API response, so they're parsed here rather than in the core walk. The
+ * per-node component simplifiers stay in core/transformers/component.ts
+ * (Figma-free).
+ */
+
+/**
+ * Remove unnecessary component properties and convert to simplified format.
+ */
+function simplifyComponents(
+  aggregatedComponents: Record<string, Component>,
+  propertyDefinitions?: Record<string, Record<string, SimplifiedPropertyDefinition>>,
+): Record<string, SimplifiedComponentDefinition> {
+  return Object.fromEntries(
+    Object.entries(aggregatedComponents).map(([id, comp]) => [
+      id,
+      {
+        id,
+        key: comp.key,
+        name: comp.name,
+        componentSetId: comp.componentSetId,
+        ...(propertyDefinitions?.[id] && {
+          propertyDefinitions: propertyDefinitions[id],
+        }),
+      },
+    ]),
+  );
+}
+
+/**
+ * Remove unnecessary component set properties and convert to simplified format.
+ */
+function simplifyComponentSets(
+  aggregatedComponentSets: Record<string, ComponentSet>,
+  propertyDefinitions?: Record<string, Record<string, SimplifiedPropertyDefinition>>,
+): Record<string, SimplifiedComponentSetDefinition> {
+  return Object.fromEntries(
+    Object.entries(aggregatedComponentSets).map(([id, set]) => [
+      id,
+      {
+        id,
+        key: set.key,
+        name: set.name,
+        description: set.description,
+        ...(propertyDefinitions?.[id] && {
+          propertyDefinitions: propertyDefinitions[id],
+        }),
+      },
+    ]),
+  );
 }

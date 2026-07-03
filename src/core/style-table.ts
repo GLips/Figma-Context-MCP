@@ -1,42 +1,43 @@
-import type { StyleSink, StyleTypes } from "./types.js";
+import type { StyleTable, StyleValue } from "./types.js";
 import type { NodeSnapshot, SnapshotStyleRef } from "./snapshot.js";
 import { stableStringify } from "./utils.js";
 import { sha1Hex } from "./sha1.js";
 
 /**
- * The two StyleSink implementations — the seam that makes compression
+ * The two StyleTable implementations — the seam that makes compression
  * separable from the walk (Invariant 3).
  *
- * `createRefStyleSink` reproduces the shipped register-then-finalize behavior:
+ * `createRefStyleTable` reproduces the shipped intern-then-compress behavior:
  * values are hoisted under content-addressed (sha1) or named-style keys and
- * extractors emit refs. `createInlineStyleSink` is expanded mode: extractors
- * emit the values themselves, nothing is hoisted, and the hash is never
+ * the walk emits refs. `createInlineStyleTable` is expanded mode: the walk
+ * emits the values themselves, nothing is hoisted, and the hash is never
  * touched.
  */
 
-export interface RefStyleSink extends StyleSink {
+export interface RefStyleTable extends StyleTable {
   /**
    * Keys in `styles` that are named Figma styles (vs. auto-generated
-   * content-hash ids). The finalize pass keeps these hoisted even at a single
-   * use, because a named style encodes design-system intent worth surfacing.
-   * Collected during the walk because the post-walk pass can't otherwise tell
-   * a named-style key apart from an auto-generated one by inspection.
+   * content-hash ids). The compression pass keeps these hoisted even at a
+   * single use, because a named style encodes design-system intent worth
+   * surfacing. Collected during the walk because the post-walk pass can't
+   * otherwise tell a named-style key apart from an auto-generated one by
+   * inspection.
    */
   readonly namedStyleKeys: Set<string>;
 }
 
-/** Compressing sink: register style values under deduplicating refs. */
-export function createRefStyleSink(): RefStyleSink {
-  const styles: Record<string, StyleTypes> = {};
+/** Compressing table: intern style values under deduplicating refs. */
+export function createRefStyleTable(): RefStyleTable {
+  const styles: Record<string, StyleValue> = {};
   const namedStyleKeys = new Set<string>();
-  // Reverse lookup: serialized style value → varId. Scoped to this sink, i.e.
-  // to one extraction run.
-  const varIdCache = new Map<string, string>();
+  // Reverse lookup: serialized style value → ref id. Scoped to this table,
+  // i.e. to one walk.
+  const refIdCache = new Map<string, string>();
 
-  /** Find an existing style variable with the same value, or create one. */
-  function findOrCreateVar(value: StyleTypes, prefix: string): string {
+  /** Find an existing ref with the same value, or mint one. */
+  function internByContent(value: StyleValue, prefix: string): string {
     const key = stableStringify(value);
-    const existing = varIdCache.get(key);
+    const existing = refIdCache.get(key);
     if (existing) return existing;
 
     // Content-addressed id so the same value yields the same id across runs, making
@@ -47,24 +48,24 @@ export function createRefStyleSink(): RefStyleSink {
     // can alias two different style values. We reached here on a cache miss, so a
     // taken slot means a genuine collision — reusing the id would overwrite the
     // other value and every node referencing it would silently resolve to the wrong
-    // style. Lengthen this value's id until the slot is free. Deterministic because
-    // the walk order is stable, so the same file reproduces the same ids.
-    let length = 8;
-    let varId = `${prefix}_${fullHash.slice(0, length)}`;
-    while (styles[varId] !== undefined && length < fullHash.length) {
-      length += 4;
-      varId = `${prefix}_${fullHash.slice(0, length)}`;
+    // style. Fall back to the full 40-hex hash, which cannot collide with any
+    // truncated id (different length) and not with another full id (that would be
+    // a sha1 collision of distinct values). Deterministic because the walk order
+    // is stable, so the same file reproduces the same ids.
+    let refId = `${prefix}_${fullHash.slice(0, 8)}`;
+    if (styles[refId] !== undefined) {
+      refId = `${prefix}_${fullHash}`;
     }
 
-    styles[varId] = value;
-    varIdCache.set(key, varId);
-    return varId;
+    styles[refId] = value;
+    refIdCache.set(key, refId);
+    return refId;
   }
 
   // Figma style names aren't unique — a file can use a local style and an imported
   // library style that share a name (e.g., "Heading / Large"). Collapse same-name
   // same-value entries; disambiguate same-name different-value by appending the id.
-  function resolveStyleKey(styleMatch: SnapshotStyleRef, value: StyleTypes): string {
+  function resolveStyleKey(styleMatch: SnapshotStyleRef, value: StyleValue): string {
     const existing = styles[styleMatch.name];
     if (!existing) return styleMatch.name;
     if (stableStringify(existing) === stableStringify(value)) return styleMatch.name;
@@ -76,30 +77,31 @@ export function createRefStyleSink(): RefStyleSink {
     styles,
     namedStyleKeys,
     // Prefer a Figma named style when the node carries one; fall back to an
-    // auto-generated deduplicating variable id.
-    register(node, value, styleKeys, prefix) {
+    // auto-generated deduplicating content-addressed id.
+    intern(node, value, styleKeys, prefix) {
       const styleMatch = getStyleMatch(node, styleKeys);
       if (styleMatch) {
         const styleKey = resolveStyleKey(styleMatch, value);
         styles[styleKey] = value;
-        // Mark as a named style so the finalize pass keeps it hoisted even if only
-        // one node uses it — a named Figma style is design-system intent, not noise.
+        // Mark as a named style so the compression pass keeps it hoisted even if
+        // only one node uses it — a named Figma style is design-system intent,
+        // not noise.
         namedStyleKeys.add(styleKey);
         return styleKey;
       }
-      return findOrCreateVar(value, prefix);
+      return internByContent(value, prefix);
     },
   };
 }
 
 /**
- * Expanded-mode sink: hand every value straight back for inline emission.
+ * Expanded-mode table: hand every value straight back for inline emission.
  * Never reaches the hash; `styles` stays empty.
  */
-export function createInlineStyleSink(): StyleSink {
+export function createInlineStyleTable(): StyleTable {
   return {
     styles: {},
-    register(_node, value) {
+    intern(_node, value) {
       return value;
     },
   };

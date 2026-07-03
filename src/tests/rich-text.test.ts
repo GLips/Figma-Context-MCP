@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Node as FigmaNode, TypeStyle } from "@figma/rest-api-spec";
-import { extractFromDesign } from "~/core/node-walker.js";
-import { createRefStyleSink } from "~/core/style-sink.js";
+import { walkNodes } from "~/core/simplify.js";
+import { createRefStyleTable } from "~/core/style-table.js";
 import { restNodeToSnapshot } from "~/adapters/rest/node-to-snapshot.js";
 import type { SimplifiedTextStyle, TextRun } from "~/core/transformers/text.js";
 
@@ -35,8 +35,8 @@ function makeText(opts: {
 }
 
 async function extract(nodes: FigmaNode[]) {
-  const sink = createRefStyleSink();
-  const { nodes: extracted } = await extractFromDesign(
+  const sink = createRefStyleTable();
+  const { nodes: extracted } = await walkNodes(
     nodes.map((node) => restNodeToSnapshot(node)),
     sink,
   );

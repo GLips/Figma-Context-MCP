@@ -20,7 +20,7 @@ type RawStructuralFields = Partial<
 
 /**
  * REST adapter: decode a raw Figma REST node into a plan-neutral `NodeSnapshot`
- * for `canonicalize`. This is where every REST-specific structure is unpacked
+ * for `simplify`. This is where every REST-specific structure is unpacked
  * (top-level tables, `imageRef`, override tables, `gradientHandlePositions`,
  * `node.styles` lookups) so none of it reaches the core (Invariant 2).
  *

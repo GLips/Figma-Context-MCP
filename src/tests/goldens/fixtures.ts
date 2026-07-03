@@ -5,7 +5,7 @@ import type {
 } from "@figma/rest-api-spec";
 
 /**
- * Baseline golden fixtures for the canonicalize carve (Invariant 1).
+ * Baseline golden fixtures for the simplify core (Invariant 1).
  *
  * These are synthetic `GetFileResponse` / `GetFileNodesResponse` inputs that
  * deliberately exercise each REST-coupling spot the carve relocates into
@@ -460,7 +460,7 @@ const namedStyles = fileResponse(
 
 // ---------------------------------------------------------------------------
 // 8. Deep-nested + dedup — three structurally identical "Chip" subtrees so the
-//    finalize pass hoists a shared style and emits element templates.
+//    compression pass hoists a shared style and emits element templates.
 // ---------------------------------------------------------------------------
 function chip(id: string, x: number): FigmaNode {
   return node({

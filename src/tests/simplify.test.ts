@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { Node as FigmaNode } from "@figma/rest-api-spec";
-import { canonicalize } from "~/core/canonicalize.js";
+import { simplify } from "~/core/simplify.js";
 import { restNodeToSnapshot } from "~/adapters/rest/node-to-snapshot.js";
 
-// Phase 2 Done-when (Invariant 3): canonicalize with defaults emits EXPANDED
+// Phase 2 Done-when (Invariant 3): simplify with defaults emits EXPANDED
 // output — every style value inline on its node, no globalVars refs, no element
 // templates — because the plugin consumes it in-sandbox where ref indirection
 // is pure overhead. Compression is the opt-in egress form.
@@ -36,9 +36,9 @@ function twoRedRects(): FigmaNode[] {
 
 const snapshots = (nodes: FigmaNode[]) => nodes.map((n) => restNodeToSnapshot(n));
 
-describe("canonicalize — expanded by default", () => {
+describe("simplify — expanded by default", () => {
   it("emits shared style values inline on every node, with nothing hoisted", async () => {
-    const { nodes, globalVars, elements } = await canonicalize(snapshots(twoRedRects()));
+    const { nodes, globalVars, elements } = await simplify(snapshots(twoRedRects()));
 
     // Both nodes carry the concrete value — no string ref, even though the
     // value repeats (dedup is compression's job, not the walk's).
@@ -62,7 +62,7 @@ describe("canonicalize — expanded by default", () => {
       lineIndentations: [],
     });
 
-    const { nodes, globalVars } = await canonicalize(snapshots([text]));
+    const { nodes, globalVars } = await simplify(snapshots([text]));
 
     expect(nodes[0].text).toEqual(["abc ", ["bold", { fontSize: 32 }]]);
     expect(globalVars.styles).toEqual({});
@@ -71,7 +71,7 @@ describe("canonicalize — expanded by default", () => {
   });
 
   it("compress: true restores the egress form — refs plus hoisted shared styles", async () => {
-    const { nodes, globalVars } = await canonicalize(snapshots(twoRedRects()), {
+    const { nodes, globalVars } = await simplify(snapshots(twoRedRects()), {
       compress: true,
     });
 

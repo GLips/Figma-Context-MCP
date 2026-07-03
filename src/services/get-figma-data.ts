@@ -1,6 +1,6 @@
 import type { GetFileResponse, GetFileNodesResponse } from "@figma/rest-api-spec";
 import { FigmaService } from "~/services/figma.js";
-import { simplifyRawFigmaObject } from "~/adapters/rest/design-extractor.js";
+import { simplifyRestResponse } from "~/adapters/rest/rest.js";
 import { writeLogs } from "~/utils/logger.js";
 import { serializeResult, type OutputFormat } from "~/utils/serialize.js";
 import { wrapForSerialization } from "~/utils/serializable-design.js";
@@ -103,7 +103,7 @@ export async function getFigmaData(
     let simplifiedDesign;
     const simplifyStart = Date.now();
     try {
-      simplifiedDesign = await simplifyRawFigmaObject(rawApiResponse, {
+      simplifiedDesign = await simplifyRestResponse(rawApiResponse, {
         maxDepth: depth,
         nodeCounter,
       });

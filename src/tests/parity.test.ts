@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import type { SimplifiedDesign } from "~/core/types.js";
-import { restResponseToSnapshots } from "~/adapters/rest/design-extractor.js";
+import { restResponseToSnapshots } from "~/adapters/rest/rest.js";
 import { GOLDEN_FIXTURES } from "./goldens/fixtures.js";
 import { expectedPath } from "./goldens/harness.js";
 import { PARITY_CASES } from "./parity/cases.js";

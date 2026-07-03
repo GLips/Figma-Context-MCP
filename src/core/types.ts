@@ -9,7 +9,7 @@ import type {
   SimplifiedPropertyDefinition,
 } from "~/core/transformers/component.js";
 
-export type StyleTypes =
+export type StyleValue =
   | SimplifiedTextStyle
   | SimplifiedFill[]
   | SimplifiedLayout
@@ -17,37 +17,37 @@ export type StyleTypes =
   | string;
 
 export type GlobalVars = {
-  styles: Record<string, StyleTypes>;
+  styles: Record<string, StyleValue>;
 };
 
 /**
- * Where extractors send the style values they build. The sink decides the
+ * Where the walk sends the style values it builds. The table decides the
  * output form, which is what makes compression separable from the walk
- * (Invariant 3): the compressing sink registers values under content-addressed
- * refs (hashing DURING the walk), while the inline sink hands the value
+ * (Invariant 3): the compressing table interns values under content-addressed
+ * refs (hashing DURING the walk), while the inline table hands the value
  * straight back for inline emission and never touches a hash. Gating only the
- * post-walk `finalize` pass would not be enough — refs and sha1 fire inside
- * the extractors — so the sink is the seam expanded mode swaps.
+ * post-walk compression pass would not be enough — refs and sha1 fire inside
+ * the walk — so the table is the seam expanded mode swaps.
  */
-export interface StyleSink {
+export interface StyleTable {
   /**
-   * Register a style value for a node. Returns a globalVars ref (compressing
-   * sink) or the value itself (inline sink). `styleKeys` are the node style
-   * slots (e.g. `["fill", "fills"]`) checked for a Figma named style; pass `[]`
-   * for value kinds Figma can't name (layout).
+   * Intern a style value for a node. Returns a ref key (compressing table) or
+   * the value itself (inline table). `styleKeys` are the node style slots
+   * (e.g. `["fill", "fills"]`) checked for a Figma named style; pass `[]` for
+   * value kinds Figma can't name (layout).
    */
-  register<T extends StyleTypes>(
+  intern<T extends StyleValue>(
     node: NodeSnapshot,
     value: T,
     styleKeys: string[],
     prefix: string,
   ): string | T;
   /**
-   * Everything the sink hoisted, in registration order. Compressing sink: all
-   * shared styles (pre-finalize). Inline sink: always empty — every value is
-   * handed straight back for inline emission.
+   * Everything the table hoisted, in interning order. Compressing table: all
+   * shared styles (pre-compression). Inline table: always empty — every value
+   * is handed straight back for inline emission.
    */
-  readonly styles: Record<string, StyleTypes>;
+  readonly styles: Record<string, StyleValue>;
 }
 
 /**
@@ -61,23 +61,6 @@ export type WalkScheduler = () => void | Promise<void>;
 
 /** Per-component-id property definitions collected during the walk. */
 export type ComponentDefinitionMap = Record<string, Record<string, SimplifiedPropertyDefinition>>;
-
-export interface CanonicalizeContext {
-  /** Style-registration sink — the compression seam (see StyleSink). */
-  styles: StyleSink;
-  /** Sink for COMPONENT/COMPONENT_SET property definitions found in the tree. */
-  componentDefs: ComponentDefinitionMap;
-  currentDepth: number;
-  parent?: NodeSnapshot;
-  insideComponentDefinition?: boolean;
-  /**
-   * Per-call mutable counter shared with the caller. Lives on the context so
-   * walker recursion can increment it without touching module-global state —
-   * concurrent extractFromDesign calls (e.g. overlapping HTTP requests) each
-   * own their counter and never collide.
-   */
-  nodeCounter: NodeCounter;
-}
 
 /**
  * Mutable progress counter passed into traversal. Callers can read `count`
@@ -107,7 +90,7 @@ export interface SimplifiedDesign {
   globalVars: GlobalVars;
   /**
    * Deduplicated element bodies, keyed by content hash (`EL-xxxxxxxx`). Populated
-   * by the finalize pass: when a node body (everything except id/name/children)
+   * by the compression pass: when a node body (everything except id/name/children)
    * appears 2+ times, it is emitted here once and each occurrence is replaced by
    * a compact `template` reference. Empty when nothing repeats.
    */
@@ -151,7 +134,7 @@ export interface SimplifiedNode extends NodeGeometry {
   boldWeight?: number;
   // appearance — each style field holds either a globalVars reference (when the
   // value is shared by 2+ nodes or is a named Figma style) or the inline value
-  // itself (single-use values, after the finalize pass).
+  // itself (single-use values, after the compression pass).
   fills?: string | SimplifiedFill[];
   strokes?: string | SimplifiedFill[];
   // Non-stylable stroke properties are kept on the node when stroke uses a named color style

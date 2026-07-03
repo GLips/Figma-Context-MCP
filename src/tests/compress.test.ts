@@ -1,15 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { finalizeDesign } from "~/core/finalize.js";
-import type { GlobalVars, SimplifiedNode, StyleTypes } from "~/core/types.js";
+import { compressDesign } from "~/core/compress.js";
+import type { GlobalVars, SimplifiedNode, StyleValue } from "~/core/types.js";
 
-// finalizeDesign is the pure functional core of the dedup features: given the
+// compressDesign is the pure functional core of the dedup features: given the
 // already-walked node tree + globalVars (style fields hold globalVars refs, as
 // the walker emits them), it gates single-use styles inline. Testing it directly
 // keeps these fast and free of Figma-fixture noise.
 
 // Solid fills serialize to hex-string arrays in real output (see style.ts).
-const RED: StyleTypes = ["#FF0000"];
-const BLUE: StyleTypes = ["#0000FF"];
+const RED: StyleValue = ["#FF0000"];
+const BLUE: StyleValue = ["#0000FF"];
 
 function node(overrides: Partial<SimplifiedNode> & { id: string }): SimplifiedNode {
   return { name: overrides.id, type: "FRAME", ...overrides };
@@ -20,7 +20,7 @@ describe("count-gated style hoisting", () => {
     const nodes = [node({ id: "1", fills: "fill_red" })];
     const globalVars: GlobalVars = { styles: { fill_red: RED } };
 
-    const result = finalizeDesign(nodes, globalVars, new Set());
+    const result = compressDesign(nodes, globalVars, new Set());
 
     expect(result.nodes[0].fills).toEqual(RED);
     expect(result.globalVars.styles).toEqual({});
@@ -35,7 +35,7 @@ describe("count-gated style hoisting", () => {
     ];
     const globalVars: GlobalVars = { styles: { fill_red: RED } };
 
-    const result = finalizeDesign(nodes, globalVars, new Set());
+    const result = compressDesign(nodes, globalVars, new Set());
 
     expect(result.nodes[0].fills).toBe("fill_red");
     expect(result.nodes[1].fills).toBe("fill_red");
@@ -46,7 +46,7 @@ describe("count-gated style hoisting", () => {
     const nodes = [node({ id: "1", type: "TEXT", textStyle: "Heading / Large" })];
     const globalVars: GlobalVars = { styles: { "Heading / Large": { fontSize: 24 } } };
 
-    const result = finalizeDesign(nodes, globalVars, new Set(["Heading / Large"]));
+    const result = compressDesign(nodes, globalVars, new Set(["Heading / Large"]));
 
     expect(result.nodes[0].textStyle).toBe("Heading / Large");
     expect(result.globalVars.styles).toEqual({ "Heading / Large": { fontSize: 24 } });
@@ -60,7 +60,7 @@ describe("count-gated style hoisting", () => {
     const nodes = [node({ id: "1", type: "FRAME" })]; // references no style
     const globalVars: GlobalVars = { styles: { "Heading / Large": { fontSize: 24 } } };
 
-    const result = finalizeDesign(nodes, globalVars, new Set(["Heading / Large"]));
+    const result = compressDesign(nodes, globalVars, new Set(["Heading / Large"]));
 
     expect(result.globalVars.styles).toEqual({});
   });
@@ -69,7 +69,7 @@ describe("count-gated style hoisting", () => {
     const nodes = [node({ id: "1", type: "TEXT", text: ["a ", ["b", "style_abc12345"]] })];
     const globalVars: GlobalVars = { styles: { style_abc12345: { fontWeight: 700 } } };
 
-    const result = finalizeDesign(nodes, globalVars, new Set());
+    const result = compressDesign(nodes, globalVars, new Set());
 
     expect(result.nodes[0].text).toEqual(["a ", ["b", { fontWeight: 700 }]]);
     expect(result.globalVars.styles).toEqual({});
@@ -82,7 +82,7 @@ describe("count-gated style hoisting", () => {
     ];
     const globalVars: GlobalVars = { styles: { style_abc12345: { fontWeight: 700 } } };
 
-    const result = finalizeDesign(nodes, globalVars, new Set());
+    const result = compressDesign(nodes, globalVars, new Set());
 
     expect(result.nodes[0].text).toEqual([["a", "style_abc12345"]]);
     expect(result.nodes[1].text).toEqual([["b", "style_abc12345"]]);
@@ -103,7 +103,7 @@ describe("element templates", () => {
     ];
     const globalVars: GlobalVars = { styles: { fill_red: RED } };
 
-    const result = finalizeDesign(nodes, globalVars, new Set());
+    const result = compressDesign(nodes, globalVars, new Set());
 
     const [hash] = Object.keys(result.elements);
     expect(Object.keys(result.elements)).toHaveLength(1);
@@ -126,7 +126,7 @@ describe("element templates", () => {
     ];
     const globalVars: GlobalVars = { styles: { fill_red: RED } };
 
-    const result = finalizeDesign(nodes, globalVars, new Set());
+    const result = compressDesign(nodes, globalVars, new Set());
 
     const [hash] = Object.keys(result.elements);
     expect(result.elements[hash]).toEqual({ type: "FRAME", fills: RED });
@@ -140,7 +140,7 @@ describe("element templates", () => {
     ];
     const globalVars: GlobalVars = { styles: { "Heading / Large": { fontSize: 24 } } };
 
-    const result = finalizeDesign(nodes, globalVars, new Set(["Heading / Large"]));
+    const result = compressDesign(nodes, globalVars, new Set(["Heading / Large"]));
 
     const [hash] = Object.keys(result.elements);
     expect(result.elements[hash]).toEqual({ type: "TEXT", textStyle: "Heading / Large" });
@@ -155,7 +155,7 @@ describe("element templates", () => {
     ];
     const globalVars: GlobalVars = { styles: { fill_red: RED, fill_blue: BLUE } };
 
-    const result = finalizeDesign(nodes, globalVars, new Set());
+    const result = compressDesign(nodes, globalVars, new Set());
 
     // The solo card's body is unique → no template, and its single-use fill
     // inlines onto the node.
@@ -176,7 +176,7 @@ describe("element templates", () => {
     const nodes = [card("1"), card("2")];
     const globalVars: GlobalVars = { styles: { fill_red: RED } };
 
-    const result = finalizeDesign(nodes, globalVars, new Set());
+    const result = compressDesign(nodes, globalVars, new Set());
 
     // Two distinct templates: the card body and the icon body.
     expect(Object.keys(result.elements)).toHaveLength(2);
@@ -189,7 +189,7 @@ describe("element templates", () => {
   it("does not dedupe type-only bodies (a template would grow the payload)", () => {
     const nodes = [node({ id: "1" }), node({ id: "2" })];
 
-    const result = finalizeDesign(nodes, { styles: {} }, new Set());
+    const result = compressDesign(nodes, { styles: {} }, new Set());
 
     expect(result.elements).toEqual({});
     expect(result.nodes[0].template).toBeUndefined();
@@ -201,8 +201,8 @@ describe("element templates", () => {
       node({ id: "1", fills: "fill_red" }),
       node({ id: "2", fills: "fill_red" }),
     ];
-    const a = finalizeDesign(build(), { styles: { fill_red: RED } }, new Set());
-    const b = finalizeDesign(build(), { styles: { fill_red: RED } }, new Set());
+    const a = compressDesign(build(), { styles: { fill_red: RED } }, new Set());
+    const b = compressDesign(build(), { styles: { fill_red: RED } }, new Set());
 
     expect(Object.keys(a.elements)).toEqual(Object.keys(b.elements));
   });

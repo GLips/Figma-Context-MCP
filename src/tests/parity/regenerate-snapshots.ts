@@ -12,7 +12,7 @@
  */
 import { mkdirSync, writeFileSync } from "node:fs";
 import { GOLDEN_FIXTURES } from "../goldens/fixtures.js";
-import { restResponseToSnapshots } from "~/adapters/rest/design-extractor.js";
+import { restResponseToSnapshots } from "~/adapters/rest/rest.js";
 import { SNAPSHOTS_DIR, snapshotPath } from "./snapshots-io.js";
 
 mkdirSync(SNAPSHOTS_DIR, { recursive: true });

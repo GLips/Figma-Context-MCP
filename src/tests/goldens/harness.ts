@@ -1,6 +1,6 @@
 import { fileURLToPath } from "node:url";
 import path from "node:path";
-import { simplifyRawFigmaObject } from "~/adapters/rest/design-extractor.js";
+import { simplifyRestResponse } from "~/adapters/rest/rest.js";
 import type { SimplifiedDesign } from "~/core/types.js";
 import type { GoldenFixture } from "./fixtures.js";
 
@@ -14,7 +14,7 @@ export const EXPECTED_DIR = path.join(path.dirname(fileURLToPath(import.meta.url
  * refactors gutting everything underneath.
  */
 export async function runFixture(fixture: GoldenFixture): Promise<SimplifiedDesign> {
-  return simplifyRawFigmaObject(fixture.response);
+  return simplifyRestResponse(fixture.response);
 }
 
 /**
