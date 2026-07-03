@@ -1,4 +1,4 @@
-import type { StyleTable, StyleValue } from "./types.js";
+import type { StyleRefPrefix, StyleTable, StyleValue } from "./types.js";
 import type { NodeSnapshot, SnapshotStyleRef } from "./snapshot.js";
 import { stableStringify } from "./utils.js";
 import { sha1Hex } from "./sha1.js";
@@ -35,7 +35,7 @@ export function createRefStyleTable(): RefStyleTable {
   const refIdCache = new Map<string, string>();
 
   /** Find an existing ref with the same value, or mint one. */
-  function internByContent(value: StyleValue, prefix: string): string {
+  function internByContent(value: StyleValue, prefix: StyleRefPrefix): string {
     const key = stableStringify(value);
     const existing = refIdCache.get(key);
     if (existing) return existing;

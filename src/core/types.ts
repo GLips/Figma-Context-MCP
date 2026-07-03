@@ -17,6 +17,12 @@ export type StyleValue =
   | string;
 
 /**
+ * The namespaces auto-generated style ref ids are minted under
+ * (`fill_a1b2c3d4`). Closed set: the four value kinds the walk interns.
+ */
+export type StyleRefPrefix = "layout" | "style" | "fill" | "effect";
+
+/**
  * Where the walk sends the style values it builds. The table decides the
  * output form, which is what makes compression separable from the walk
  * (Invariant 3): the compressing table interns values under content-addressed
@@ -36,7 +42,7 @@ export interface StyleTable {
     node: NodeSnapshot,
     value: T,
     styleKeys: string[],
-    prefix: string,
+    prefix: StyleRefPrefix,
   ): string | T;
   /**
    * Everything the table hoisted, in interning order. Compressing table: all

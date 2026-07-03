@@ -90,14 +90,14 @@ function applyAbsolute(layout: WriteLayout, props: SizeProps): void {
   layout.left = 0;
   layout.top = 0;
   const pct: { x?: number; y?: number } = {};
-  const axis = (val: number | string | undefined, key: "x" | "y", side: "left" | "top") => {
+  const axis = (val: number | string | undefined, key: "x" | "y") => {
     if (val == null) return;
-    if (typeof val === "number") layout[side] = val;
+    if (typeof val === "number") layout[key === "x" ? "left" : "top"] = val;
     else if (isPercent(val)) pct[key] = percent(val);
     else throw new Error("flcm: absolute." + key + ' must be a number or "N%" — got ' + JSON.stringify(val) + ".");
   };
-  axis(props.absolute.x, "x", "left");
-  axis(props.absolute.y, "y", "top");
+  axis(props.absolute.x, "x");
+  axis(props.absolute.y, "y");
   if (pct.x != null || pct.y != null) layout.percentPos = pct;
   applyAnchor(layout, props.absolute.anchor);
 }

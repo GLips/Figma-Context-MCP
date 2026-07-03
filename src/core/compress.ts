@@ -1,4 +1,4 @@
-import { stableStringify } from "~/core/utils.js";
+import { stableStringify } from "./utils.js";
 import { sha1Hex } from "./sha1.js";
 import type { SimplifiedNode, StyleValue, TemplateBody } from "./types.js";
 
@@ -155,6 +155,9 @@ function countStyleRefs(nodes: SimplifiedNode[]): Map<string, number> {
   return counts;
 }
 
+/** A candidate template during collection: the body, its stable-serialized form, and how many nodes carry it. */
+type TemplateCandidate = { body: TemplateBody; str: string; count: number };
+
 /**
  * Feature 2: hash each node body and replace bodies that repeat 2+ times with a
  * template reference, returning the template table and each template's instance
@@ -164,7 +167,7 @@ function deduplicateTemplates(nodes: SimplifiedNode[]): {
   templates: Record<string, TemplateBody>;
   instanceCounts: Map<string, number>;
 } {
-  const bodiesByHash = new Map<string, { body: TemplateBody; str: string; count: number }>();
+  const bodiesByHash = new Map<string, TemplateCandidate>();
   const hashByNode = new Map<SimplifiedNode, string>();
   collectTemplateBodies(nodes, bodiesByHash, hashByNode);
 
@@ -231,7 +234,7 @@ function bodyOf(node: SimplifiedNode): TemplateBody {
 
 function collectTemplateBodies(
   nodes: SimplifiedNode[],
-  bodiesByHash: Map<string, { body: TemplateBody; str: string; count: number }>,
+  bodiesByHash: Map<string, TemplateCandidate>,
   hashByNode: Map<SimplifiedNode, string>,
 ): void {
   for (const node of nodes) {
@@ -261,10 +264,7 @@ function collectTemplateBodies(
  * 40-hex hash (matching the ref style table's collision policy), which cannot
  * alias. Deterministic because the walk order is stable.
  */
-function templateId(
-  str: string,
-  bodiesByHash: Map<string, { body: TemplateBody; str: string; count: number }>,
-): string {
+function templateId(str: string, bodiesByHash: Map<string, TemplateCandidate>): string {
   const fullHash = sha1Hex(str);
   const short = `EL-${fullHash.slice(0, 8)}`;
   const entry = bodiesByHash.get(short);

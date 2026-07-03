@@ -71,14 +71,13 @@ export function restResponseToSnapshots(apiResponse: GetFileResponse | GetFileNo
   components: Record<string, Component>;
   componentSets: Record<string, ComponentSet>;
 } {
-  const { metadata, rawNodes, components, componentSets, extraStyles } =
-    parseAPIResponse(apiResponse);
+  const { name, rawNodes, components, componentSets, extraStyles } = parseAPIResponse(apiResponse);
 
   // restNodeToSnapshot is the single place REST wire encodings are unpacked,
   // including the named-style join against the top-level `styles` table.
   const snapshots = rawNodes.map((node) => restNodeToSnapshot(node, extraStyles));
 
-  return { name: metadata.name, snapshots, components, componentSets };
+  return { name, snapshots, components, componentSets };
 }
 
 /**
@@ -124,12 +123,8 @@ function parseAPIResponse(data: GetFileResponse | GetFileNodesResponse) {
     nodesToParse = data.document.children;
   }
 
-  const { name } = data;
-
   return {
-    metadata: {
-      name,
-    },
+    name: data.name,
     rawNodes: nodesToParse,
     extraStyles,
     components: aggregatedComponents,

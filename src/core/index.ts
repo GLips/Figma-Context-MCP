@@ -4,6 +4,7 @@ export type {
   NodeCounter,
   SimplifiedDesign,
   SimplifiedNode,
+  StyleRefPrefix,
   StyleTable,
   TraversalOptions,
   WalkScheduler,

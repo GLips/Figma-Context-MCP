@@ -100,7 +100,7 @@ interface SimplifyContext {
   componentDefs: ComponentDefinitionMap;
   currentDepth: number;
   parent?: NodeSnapshot;
-  insideComponentDefinition?: boolean;
+  insideComponentDefinition: boolean;
   /**
    * Per-call mutable counter shared with the caller. Lives on the context so
    * the recursion can increment it without touching module-global state —
@@ -149,6 +149,7 @@ export async function walkNodes(
     styles: styleTable,
     componentDefs: {},
     currentDepth: 0,
+    insideComponentDefinition: false,
     nodeCounter: options.nodeCounter ?? { count: 0 },
   };
 
@@ -234,7 +235,7 @@ function shouldProcessNode(node: NodeSnapshot, context: SimplifyContext): boolea
   if (isVisible(node)) return true;
   const hasVisibleRef =
     !!node.componentPropertyReferences && "visible" in node.componentPropertyReferences;
-  return hasVisibleRef && !!context.insideComponentDefinition;
+  return hasVisibleRef && context.insideComponentDefinition;
 }
 
 // ---------------------------------------------------------------------------
