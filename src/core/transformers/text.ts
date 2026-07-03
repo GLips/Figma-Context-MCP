@@ -49,7 +49,7 @@ export type SimplifiedTextStyle = Partial<{
 }>;
 
 /**
- * A run's style slot: a `globalVars` ref string when the delta is shared by 2+
+ * A run's style slot: a styles-table ref string when the delta is shared by 2+
  * runs (compressed output), or the inline delta object itself.
  */
 export type TextRunStyle = string | SimplifiedTextStyle;
@@ -246,10 +246,10 @@ function formatLineHeight(
 
 /**
  * Callback used by `buildFormattedText` to register a styled run's residual
- * delta and receive the run tuple's style slot back: a `globalVars` ref string
+ * delta and receive the run tuple's style slot back: a styles-table ref string
  * (compressed output; count-gated by the compression pass like every other style)
  * or the delta itself for inline emission. Keeping the side effects (dedup,
- * globalVars mutation) in the caller lets this module stay a near-pure
+ * styles-table mutation) in the caller lets this module stay a near-pure
  * transformer.
  */
 type RegisterRunStyle = (delta: SimplifiedTextStyle) => TextRunStyle;

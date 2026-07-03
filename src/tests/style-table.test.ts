@@ -55,7 +55,7 @@ async function extractWithSeed(seed: Record<string, unknown>) {
     ),
     sink,
   );
-  return { globalVars: { styles: sink.styles } };
+  return { styles: sink.styles };
 }
 
 describe("resolveStyleKey — canonical (order-insensitive) comparison", () => {
@@ -63,23 +63,23 @@ describe("resolveStyleKey — canonical (order-insensitive) comparison", () => {
     // The node's extracted text style serializes to fontFamily/fontWeight/fontSize
     // (insertion order). The pre-existing entry holds the same values with keys in
     // a different order — a key-order-sensitive compare would split these.
-    const { globalVars } = await extractWithSeed({
+    const { styles } = await extractWithSeed({
       fontFamily: "Inter",
       fontSize: 24,
       fontWeight: 700,
     });
 
-    expect(Object.keys(globalVars.styles)).toEqual(["Heading / Large"]);
+    expect(Object.keys(styles)).toEqual(["Heading / Large"]);
   });
 
   it("disambiguates a same-name style with genuinely different values", async () => {
-    const { globalVars } = await extractWithSeed({
+    const { styles } = await extractWithSeed({
       fontFamily: "Inter",
       fontSize: 99,
       fontWeight: 700,
     });
 
-    const keys = Object.keys(globalVars.styles);
+    const keys = Object.keys(styles);
     expect(keys).toContain("Heading / Large");
     expect(keys).toContain(`Heading / Large (${STYLE_ID})`);
     expect(keys).toHaveLength(2);

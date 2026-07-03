@@ -28,7 +28,7 @@ async function walk(
     sink,
     options,
   );
-  return { nodes: extracted, globalVars: { styles: sink.styles }, componentDefs };
+  return { nodes: extracted, styles: sink.styles, componentDefs };
 }
 
 // A small but representative node tree:
@@ -117,10 +117,10 @@ describe("walkNodes", () => {
       fills: [{ type: "SOLID", color: { r: 1, g: 0, b: 0, a: 1 }, visible: true }],
     });
 
-    const { globalVars } = await walk([styledNode]);
+    const { styles } = await walk([styledNode]);
 
     // The fill should be extracted into a global variable
-    expect(Object.keys(globalVars.styles).length).toBeGreaterThan(0);
+    expect(Object.keys(styles).length).toBeGreaterThan(0);
   });
 
   it("deduplicates identical styles across nodes into a single global variable", async () => {
@@ -129,14 +129,14 @@ describe("walkNodes", () => {
     const nodeA = makeNode({ id: "5:1", name: "A", type: "FRAME", fills: sharedFill });
     const nodeB = makeNode({ id: "5:2", name: "B", type: "FRAME", fills: sharedFill });
 
-    const { nodes, globalVars } = await walk([nodeA, nodeB]);
+    const { nodes, styles } = await walk([nodeA, nodeB]);
 
     // Both nodes should reference the same fill variable
     expect(nodes[0].fills).toBeDefined();
     expect(nodes[0].fills).toBe(nodes[1].fills);
 
-    // Only one fill entry should exist in globalVars
-    const fillEntries = Object.entries(globalVars.styles).filter(([key]) => key.startsWith("fill"));
+    // Only one fill entry should exist in the styles table
+    const fillEntries = Object.entries(styles).filter(([key]) => key.startsWith("fill"));
     expect(fillEntries).toHaveLength(1);
   });
 
@@ -154,7 +154,7 @@ describe("walkNodes", () => {
     });
     const fillNode = makeNode({ id: "8:2", name: "B", type: "FRAME", fills: sharedColor });
 
-    const { nodes, globalVars } = await walk([strokeNode, fillNode]);
+    const { nodes, styles } = await walk([strokeNode, fillNode]);
 
     expect(nodes[0].strokes).toBeDefined();
     expect(nodes[1].fills).toBeDefined();
@@ -162,7 +162,7 @@ describe("walkNodes", () => {
 
     // The shared var should use the fill prefix since stroke colors are
     // structurally identical to fill colors in Figma (both are FILL-type styles).
-    const colorEntries = Object.entries(globalVars.styles).filter(
+    const colorEntries = Object.entries(styles).filter(
       ([, value]) => JSON.stringify(value) === JSON.stringify(["#FF0000"]),
     );
     expect(colorEntries).toHaveLength(1);
@@ -225,14 +225,12 @@ describe("walkNodes", () => {
       "161:300": { name: "Heading / Large" } as Style,
     };
 
-    const { nodes, globalVars: resultVars } = await walk([nodeA, nodeB], {}, extraStyles);
+    const { nodes, styles: resultVars } = await walk([nodeA, nodeB], {}, extraStyles);
 
     expect(nodes[0].textStyle).toBe("Heading / Large");
     expect(nodes[1].textStyle).toBe("Heading / Large (161:300)");
 
-    const styleKeys = Object.keys(resultVars.styles).filter((key) =>
-      key.startsWith("Heading / Large"),
-    );
+    const styleKeys = Object.keys(resultVars).filter((key) => key.startsWith("Heading / Large"));
     expect(styleKeys).toHaveLength(2);
   });
 });
@@ -240,8 +238,8 @@ describe("walkNodes", () => {
 describe("fill flattening", () => {
   // Resolve a node's registered fills var back to its concrete value.
   type Extracted = Awaited<ReturnType<typeof walk>>;
-  function fillsValue(nodes: Extracted["nodes"], globalVars: Extracted["globalVars"]) {
-    return globalVars.styles[nodes[0].fills as string];
+  function fillsValue(nodes: Extracted["nodes"], styles: Extracted["styles"]) {
+    return styles[nodes[0].fills as string];
   }
 
   // Figma orders the fills array bottom-first, so index 0 is the backdrop and
@@ -257,9 +255,9 @@ describe("fill flattening", () => {
       ],
     });
 
-    const { nodes, globalVars } = await walk([node]);
+    const { nodes, styles } = await walk([node]);
 
-    expect(fillsValue(nodes, globalVars)).toEqual(["#CCCCCC"]);
+    expect(fillsValue(nodes, styles)).toEqual(["#CCCCCC"]);
   });
 
   it("culls layers fully occluded by an opaque paint above them", async () => {
@@ -273,10 +271,10 @@ describe("fill flattening", () => {
       ],
     });
 
-    const { nodes, globalVars } = await walk([node]);
+    const { nodes, styles } = await walk([node]);
 
     // Only the opaque top color survives; the blue beneath contributes nothing.
-    expect(fillsValue(nodes, globalVars)).toEqual(["#FF0000"]);
+    expect(fillsValue(nodes, styles)).toEqual(["#FF0000"]);
   });
 
   it("folds both color.a and paint.opacity into the effective alpha", async () => {
@@ -291,9 +289,9 @@ describe("fill flattening", () => {
       ],
     });
 
-    const { nodes, globalVars } = await walk([node]);
+    const { nodes, styles } = await walk([node]);
 
-    expect(fillsValue(nodes, globalVars)).toEqual(["#BFBFBF"]);
+    expect(fillsValue(nodes, styles)).toEqual(["#BFBFBF"]);
   });
 
   it("culls everything below a fully-opaque mid-stack paint, compositing only what's above", async () => {
@@ -308,10 +306,10 @@ describe("fill flattening", () => {
       ],
     });
 
-    const { nodes, globalVars } = await walk([node]);
+    const { nodes, styles } = await walk([node]);
 
     // Red contributes nothing (opaque green above it); blue@50% blends over green → teal.
-    expect(fillsValue(nodes, globalVars)).toEqual(["#008080"]);
+    expect(fillsValue(nodes, styles)).toEqual(["#008080"]);
   });
 
   it("treats PASS_THROUGH blend as flattenable", async () => {
@@ -336,9 +334,9 @@ describe("fill flattening", () => {
       ],
     });
 
-    const { nodes, globalVars } = await walk([node]);
+    const { nodes, styles } = await walk([node]);
 
-    expect(fillsValue(nodes, globalVars)).toEqual(["#CCCCCC"]);
+    expect(fillsValue(nodes, styles)).toEqual(["#CCCCCC"]);
   });
 
   it("emits rgba() when the composited stack is still translucent", async () => {
@@ -352,9 +350,9 @@ describe("fill flattening", () => {
       ],
     });
 
-    const { nodes, globalVars } = await walk([node]);
+    const { nodes, styles } = await walk([node]);
 
-    expect(fillsValue(nodes, globalVars)).toEqual(["rgba(85, 85, 85, 0.75)"]);
+    expect(fillsValue(nodes, styles)).toEqual(["rgba(85, 85, 85, 0.75)"]);
   });
 
   it("leaves a stack untouched when it contains a gradient", async () => {
@@ -380,10 +378,10 @@ describe("fill flattening", () => {
       ],
     });
 
-    const { nodes, globalVars } = await walk([node]);
+    const { nodes, styles } = await walk([node]);
 
     // Both layers survive, reversed into CSS top-first order: solid first, gradient last.
-    const value = fillsValue(nodes, globalVars) as unknown[];
+    const value = fillsValue(nodes, styles) as unknown[];
     expect(value).toHaveLength(2);
     expect(value[0]).toBe("rgba(0, 0, 0, 0.2)");
     expect((value[1] as { type: string }).type).toBe("GRADIENT_LINEAR");
@@ -405,9 +403,9 @@ describe("fill flattening", () => {
       ],
     });
 
-    const { nodes, globalVars } = await walk([node]);
+    const { nodes, styles } = await walk([node]);
 
-    expect(fillsValue(nodes, globalVars)).toHaveLength(2);
+    expect(fillsValue(nodes, styles)).toHaveLength(2);
   });
 });
 

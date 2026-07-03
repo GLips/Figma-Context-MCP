@@ -161,10 +161,8 @@ function buildNodeGeometry(
     if (n.layoutPositioning === "ABSOLUTE") {
       geometry.position = "absolute";
     }
-    geometry.locationRelativeToParent = {
-      x: pixelRound(n.absoluteBoundingBox.x - parent.absoluteBoundingBox.x),
-      y: pixelRound(n.absoluteBoundingBox.y - parent.absoluteBoundingBox.y),
-    };
+    geometry.left = pixelRound(n.absoluteBoundingBox.x - parent.absoluteBoundingBox.x);
+    geometry.top = pixelRound(n.absoluteBoundingBox.y - parent.absoluteBoundingBox.y);
   }
 
   // Figma reports rotation in degrees, counterclockwise-positive; CSS rotate()

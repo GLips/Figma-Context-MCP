@@ -29,10 +29,8 @@
           "type": "TEXT",
           "width": 120,
           "height": 24,
-          "locationRelativeToParent": {
-            "x": 16,
-            "y": 16
-          },
+          "left": 16,
+          "top": 16,
           "text": "Hello",
           "textStyle": {
             "fontFamily": "Inter",
@@ -49,8 +47,6 @@
   ],
   "components": {},
   "componentSets": {},
-  "globalVars": {
-    "styles": {}
-  },
-  "elements": {}
+  "styles": {},
+  "templates": {}
 }

@@ -30,8 +30,6 @@
   ],
   "components": {},
   "componentSets": {},
-  "globalVars": {
-    "styles": {}
-  },
-  "elements": {}
+  "styles": {},
+  "templates": {}
 }

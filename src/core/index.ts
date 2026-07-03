@@ -7,8 +7,8 @@ export type {
   StyleTable,
   TraversalOptions,
   WalkScheduler,
-  GlobalVars,
   StyleValue,
+  TemplateBody,
 } from "./types.js";
 
 // The core entry: NodeSnapshot[] → canonical SimplifiedNodes (expanded by

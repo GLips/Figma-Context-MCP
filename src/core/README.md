@@ -18,8 +18,8 @@ import { simplify } from "figma-developer-mcp";
 // Expanded output (default): every style value inline, no refs, no crypto
 const { nodes } = await simplify(snapshots);
 
-// Egress form: deduplicated style refs + element templates (what the REST tool ships)
-const { nodes, globalVars, elements } = await simplify(snapshots, { compress: true });
+// Egress form: deduplicated style refs + templates (what the REST tool ships)
+const { nodes, styles, templates } = await simplify(snapshots, { compress: true });
 ```
 
 `simplify` is async: it awaits an injectable cooperative-yield scheduler

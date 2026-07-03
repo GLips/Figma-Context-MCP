@@ -36,8 +36,8 @@ export async function simplifyRestResponse(
   const { name, snapshots, components, componentSets } = restResponseToSnapshots(apiResponse);
 
   // Run the core with egress compression on: this is the shipped REST tool's
-  // output form (ref-deduplicated styles + element templates).
-  const { nodes, globalVars, elements, componentDefinitions } = await simplify(snapshots, {
+  // output form (ref-deduplicated styles + templates).
+  const { nodes, styles, templates, componentDefinitions } = await simplify(snapshots, {
     ...options,
     compress: true,
     scheduler: eventLoopYield,
@@ -48,8 +48,8 @@ export async function simplifyRestResponse(
     nodes,
     components: simplifyComponents(components, componentDefinitions),
     componentSets: simplifyComponentSets(componentSets, componentDefinitions),
-    globalVars,
-    elements,
+    styles,
+    templates,
   };
 }
 

@@ -16,10 +16,6 @@ export type StyleValue =
   | SimplifiedEffects
   | string;
 
-export type GlobalVars = {
-  styles: Record<string, StyleValue>;
-};
-
 /**
  * Where the walk sends the style values it builds. The table decides the
  * output form, which is what makes compression separable from the walk
@@ -87,23 +83,24 @@ export interface SimplifiedDesign {
   nodes: SimplifiedNode[];
   components: Record<string, SimplifiedComponentDefinition>;
   componentSets: Record<string, SimplifiedComponentSetDefinition>;
-  globalVars: GlobalVars;
+  /** Hoisted styles: shared + named styles under ref keys. */
+  styles: Record<string, StyleValue>;
   /**
-   * Deduplicated element bodies, keyed by content hash (`EL-xxxxxxxx`). Populated
+   * Deduplicated node bodies, keyed by content hash (`EL-xxxxxxxx`). Populated
    * by the compression pass: when a node body (everything except id/name/children)
    * appears 2+ times, it is emitted here once and each occurrence is replaced by
    * a compact `template` reference. Empty when nothing repeats.
    */
-  elements: Record<string, ElementBody>;
+  templates: Record<string, TemplateBody>;
 }
 
 /**
  * A node body with the per-instance keys removed. This is what gets hoisted into
- * `SimplifiedDesign.elements` and referenced by `SimplifiedNode.template`. `type`
- * is part of the body (it's intrinsic to the element), so a template reference
- * carries no `type` of its own — consumers resolve it via the element entry.
+ * `SimplifiedDesign.templates` and referenced by `SimplifiedNode.template`. `type`
+ * is part of the body (it's intrinsic to the template), so a template reference
+ * carries no `type` of its own — consumers resolve it via the template entry.
  */
-export type ElementBody = Omit<SimplifiedNode, "id" | "name" | "children" | "template">;
+export type TemplateBody = Omit<SimplifiedNode, "id" | "name" | "children" | "template">;
 
 // Per-node geometry (width/height/position/rotation/…) sits at the node top
 // level per the canonical vocabulary's hybrid structure — inherited from
@@ -114,13 +111,13 @@ export interface SimplifiedNode extends NodeGeometry {
   // when it is noise (auto-generated like `Rectangle 12`, or redundant with the
   // node's `text`), so the output shape treats it as optional.
   name?: string;
-  type?: string; // e.g. FRAME, TEXT, INSTANCE, RECTANGLE, etc. Absent on template refs (type lives in the element).
+  type?: string; // e.g. FRAME, TEXT, INSTANCE, RECTANGLE, etc. Absent on template refs (type lives in the template body).
   /**
-   * Reference into `SimplifiedDesign.elements`. When set, the node's body lives
-   * in the shared element and only id/name/children/template are kept here.
+   * Reference into `SimplifiedDesign.templates`. When set, the node's body lives
+   * in the shared template and only id/name/children/template are kept here.
    */
   template?: string;
-  // container config (grouped) — a globalVars ref or the inline value
+  // container config (grouped) — a styles ref or the inline value
   layout?: string | SimplifiedLayout;
   // text — a plain string, or run segments when some span carries a style
   // markdown can't express (see TextRun)
@@ -132,9 +129,9 @@ export interface SimplifiedNode extends NodeGeometry {
    * `style.fontWeight`, so the consumer knows how to realize markdown bold.
    */
   boldWeight?: number;
-  // appearance — each style field holds either a globalVars reference (when the
-  // value is shared by 2+ nodes or is a named Figma style) or the inline value
-  // itself (single-use values, after the compression pass).
+  // appearance — each style field holds either a styles-table reference (when
+  // the value is shared by 2+ nodes or is a named Figma style) or the inline
+  // value itself (single-use values, after the compression pass).
   fills?: string | SimplifiedFill[];
   strokes?: string | SimplifiedFill[];
   // Non-stylable stroke properties are kept on the node when stroke uses a named color style

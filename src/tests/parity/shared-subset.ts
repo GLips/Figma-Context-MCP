@@ -1,10 +1,4 @@
-import type {
-  ElementBody,
-  GlobalVars,
-  SimplifiedDesign,
-  SimplifiedNode,
-  StyleValue,
-} from "~/core/types.js";
+import type { TemplateBody, SimplifiedDesign, SimplifiedNode, StyleValue } from "~/core/types.js";
 // Single-sourced from the compression pass so the parity view resolves EXACTLY
 // the slots the compression pass can hoist — the two can't silently diverge.
 import { STYLE_REF_FIELDS } from "~/core/compress.js";
@@ -21,7 +15,7 @@ import { STYLE_REF_FIELDS } from "~/core/compress.js";
  * false alarm from a difference the producers are allowed to have.
  *
  * `parityView` does two things, in order:
- *   1. EXPAND (`expandInline`) — resolve every `globalVars`/`elements` ref back
+ *   1. EXPAND (`expandInline`) — resolve every `styles`/`templates` ref back
  *      to its inline value. This is load-bearing: the compression pass keys
  *      styles by a content hash of their value and disambiguates same-name
  *      styles with an id suffix, so two producers whose style values differ in
@@ -52,7 +46,7 @@ import { STYLE_REF_FIELDS } from "~/core/compress.js";
  *     also erases the components-vs-sets split (itself an assembly choice).
  *
  *  3. SAME-NAME STYLE DISAMBIGUATION (`resolveStyleKey`, `core/style-table.ts`).
- *     The `Name (id)` suffix only exists as a globalVars KEY. Expansion resolves
+ *     The `Name (id)` suffix only exists as a styles-table KEY. Expansion resolves
  *     refs to values, so the key — and any producer disagreement about it —
  *     is gone before comparison.
  *
@@ -115,14 +109,18 @@ function scopeStyleValue(value: unknown): unknown {
 function viewNode(
   node: SimplifiedNode,
   styles: Record<string, StyleValue>,
-  elements: Record<string, ElementBody>,
+  templates: Record<string, TemplateBody>,
 ): Rec {
   const source = node as unknown as Rec;
 
-  // Templated bodies live in `elements`; the ref node keeps only id/name/children.
+  // Templated bodies live in `templates`; the ref node keeps only id/name/children.
   let merged: Rec = source;
-  if (typeof source.template === "string" && elements[source.template]) {
-    merged = { ...(elements[source.template] as unknown as Rec), id: source.id, name: source.name };
+  if (typeof source.template === "string" && templates[source.template]) {
+    merged = {
+      ...(templates[source.template] as unknown as Rec),
+      id: source.id,
+      name: source.name,
+    };
     if (source.children) merged.children = source.children;
   }
 
@@ -144,7 +142,9 @@ function viewNode(
   }
 
   if (Array.isArray(out.children)) {
-    out.children = out.children.map((child) => viewNode(child as SimplifiedNode, styles, elements));
+    out.children = out.children.map((child) =>
+      viewNode(child as SimplifiedNode, styles, templates),
+    );
   }
 
   return out;
@@ -177,16 +177,16 @@ function scopeComponentTables(design: SimplifiedDesign): Record<string, Rec> {
  * The shared view a design reduces to for cross-producer comparison. Two
  * producers pass parity iff their views are deep-equal. Excludes the top-level
  * design `name` (file/page metadata, provenance-divergent and gated elsewhere)
- * and the now-empty `globalVars`/`elements` (folded inline by expansion).
+ * and the now-empty `styles`/`templates` (folded inline by expansion).
  */
 export function parityView(design: SimplifiedDesign): {
   nodes: Rec[];
   components: Record<string, Rec>;
 } {
-  const styles: GlobalVars["styles"] = design.globalVars?.styles ?? {};
-  const elements = design.elements ?? {};
+  const styles: Record<string, StyleValue> = design.styles ?? {};
+  const templates = design.templates ?? {};
   return {
-    nodes: design.nodes.map((node) => viewNode(node, styles, elements)),
+    nodes: design.nodes.map((node) => viewNode(node, styles, templates)),
     components: scopeComponentTables(design),
   };
 }

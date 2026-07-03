@@ -7,7 +7,7 @@ import { dumpYaml } from "./yaml-dump.js";
  *
  * Structural keys (id, name, type, children) are encoded positionally on each
  * node line, eliminating the YAML/JSON overhead of repeating those keys for
- * every node. Style values stay deduplicated in a globalVars block at the top,
+ * every node. Style values stay deduplicated in a STYLES block at the top,
  * so identical styling across many nodes still pays once — the win over
  * inline-only formats grows with how much style reuse the design has.
  *
@@ -23,13 +23,13 @@ export function serializeAsTree(design: SerializableDesign): string {
   // whitespace, which would otherwise produce a malformed `NAME: foo: bar` line.
   sections.push(`NAME: ${quote(design.metadata.name)}`);
 
-  if (Object.keys(design.globalVars.styles).length > 0) {
-    sections.push(`\nGLOBAL_VARS:\n${dumpYaml(design.globalVars.styles)}`);
+  if (Object.keys(design.styles).length > 0) {
+    sections.push(`\nSTYLES:\n${dumpYaml(design.styles)}`);
   }
 
-  // Deduplicated element bodies referenced by node `template=` fields below.
-  if (design.elements && Object.keys(design.elements).length > 0) {
-    sections.push(`ELEMENTS:\n${dumpYaml(design.elements)}`);
+  // Deduplicated node bodies referenced by node `template=` fields below.
+  if (design.templates && Object.keys(design.templates).length > 0) {
+    sections.push(`TEMPLATES:\n${dumpYaml(design.templates)}`);
   }
 
   if (Object.keys(design.metadata.components).length > 0) {
@@ -42,7 +42,7 @@ export function serializeAsTree(design: SerializableDesign): string {
 
   const lines: string[] = ["NODES:"];
   for (const node of design.nodes) {
-    renderNode(node, 0, lines, design.elements);
+    renderNode(node, 0, lines, design.templates);
   }
   sections.push(lines.join("\n"));
 
@@ -53,16 +53,16 @@ function renderNode(
   node: SimplifiedNode,
   depth: number,
   out: string[],
-  elements: SerializableDesign["elements"],
+  templates: SerializableDesign["templates"],
 ): void {
   const indent = "  ".repeat(depth);
   const parts: string[] = [];
 
   // A template reference carries no body of its own — its type and styling live
-  // in the shared element. Render the type label from there so the line keeps the
-  // familiar `[TYPE] "name" #id` shape, then point at the template.
-  const element = node.template ? elements?.[node.template] : undefined;
-  parts.push(`[${element?.type ?? node.type}]`);
+  // in the shared template. Render the type label from there so the line keeps
+  // the familiar `[TYPE] "name" #id` shape, then point at the template.
+  const template = node.template ? templates?.[node.template] : undefined;
+  parts.push(`[${template?.type ?? node.type}]`);
   // Name is dropped upstream (wrapForSerialization) when it is noise, so the
   // token is conditional and the line collapses to `[TYPE] #id ...`.
   if (node.name !== undefined) parts.push(quote(node.name));
@@ -76,9 +76,8 @@ function renderNode(
   if (node.designedHeight !== undefined) parts.push(`designedHeight=${node.designedHeight}`);
   if (node.aspectRatio !== undefined) parts.push(`aspectRatio=${node.aspectRatio}`);
   if (node.position !== undefined) parts.push(`position=${node.position}`);
-  if (node.locationRelativeToParent !== undefined) {
-    parts.push(`locationRelativeToParent=${JSON.stringify(node.locationRelativeToParent)}`);
-  }
+  if (node.left !== undefined) parts.push(`left=${node.left}`);
+  if (node.top !== undefined) parts.push(`top=${node.top}`);
   if (node.rotation !== undefined) parts.push(`rotation=${node.rotation}`);
   if (node.layout !== undefined) parts.push(`layout=${renderStyleValue(node.layout)}`);
   if (node.fills !== undefined) parts.push(`fills=${renderStyleValue(node.fills)}`);
@@ -110,12 +109,12 @@ function renderNode(
 
   if (node.children) {
     for (const child of node.children) {
-      renderNode(child, depth + 1, out, elements);
+      renderNode(child, depth + 1, out, templates);
     }
   }
 }
 
-// Style fields hold either a globalVars reference (a short scalar id) or, for
+// Style fields hold either a styles-table reference (a short scalar id) or, for
 // single-use values after the compression pass, the inline value itself. Refs render
 // bare; inline objects/arrays render as compact JSON (consistent with how
 // componentProperties is rendered), keeping the whole node on one line.

@@ -4,7 +4,7 @@ import { simplify } from "~/core/simplify.js";
 import { restNodeToSnapshot } from "~/adapters/rest/node-to-snapshot.js";
 
 // Phase 2 Done-when (Invariant 3): simplify with defaults emits EXPANDED
-// output — every style value inline on its node, no globalVars refs, no element
+// output — every style value inline on its node, no style refs, no
 // templates — because the plugin consumes it in-sandbox where ref indirection
 // is pure overhead. Compression is the opt-in egress form.
 
@@ -38,17 +38,17 @@ const snapshots = (nodes: FigmaNode[]) => nodes.map((n) => restNodeToSnapshot(n)
 
 describe("simplify — expanded by default", () => {
   it("emits shared style values inline on every node, with nothing hoisted", async () => {
-    const { nodes, globalVars, elements } = await simplify(snapshots(twoRedRects()));
+    const { nodes, styles, templates } = await simplify(snapshots(twoRedRects()));
 
     // Both nodes carry the concrete value — no string ref, even though the
     // value repeats (dedup is compression's job, not the walk's).
     expect(nodes[0].fills).toEqual(["#FF0000"]);
     expect(nodes[1].fills).toEqual(["#FF0000"]);
-    expect(globalVars.styles).toEqual({});
-    expect(elements).toEqual({});
+    expect(styles).toEqual({});
+    expect(templates).toEqual({});
   });
 
-  it("emits run deltas inline in the tuple's style slot — globalVars stays empty", async () => {
+  it("emits run deltas inline in the tuple's style slot — styles stays empty", async () => {
     const text = makeNode({
       id: "2:1",
       name: "Text",
@@ -62,21 +62,21 @@ describe("simplify — expanded by default", () => {
       lineIndentations: [],
     });
 
-    const { nodes, globalVars } = await simplify(snapshots([text]));
+    const { nodes, styles } = await simplify(snapshots([text]));
 
     expect(nodes[0].text).toEqual(["abc ", ["bold", { fontSize: 32 }]]);
-    expect(globalVars.styles).toEqual({});
+    expect(styles).toEqual({});
     // The base text style itself is also inline, not a ref.
     expect(typeof nodes[0].textStyle).toBe("object");
   });
 
   it("compress: true restores the egress form — refs plus hoisted shared styles", async () => {
-    const { nodes, globalVars } = await simplify(snapshots(twoRedRects()), {
+    const { nodes, styles } = await simplify(snapshots(twoRedRects()), {
       compress: true,
     });
 
     expect(typeof nodes[0].fills).toBe("string");
     expect(nodes[1].fills).toBe(nodes[0].fills);
-    expect(globalVars.styles[nodes[0].fills as string]).toEqual(["#FF0000"]);
+    expect(styles[nodes[0].fills as string]).toEqual(["#FF0000"]);
   });
 });

@@ -7,8 +7,8 @@ export type {
   TraversalOptions,
   WalkScheduler,
   NodeCounter,
-  GlobalVars,
   StyleValue,
+  TemplateBody,
 } from "./core/index.js";
 
 // Deliberately NOT exported: the internal walk and the style-table factories.

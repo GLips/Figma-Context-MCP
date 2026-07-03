@@ -58,10 +58,11 @@ export interface NodeGeometry {
   designedHeight?: string;
   aspectRatio?: number;
   position?: "absolute";
-  locationRelativeToParent?: {
-    x: number;
-    y: number;
-  };
+  // Offset from the parent's top-left corner, matching the numeric emission
+  // convention of the sibling geometry fields (width/height). Emitted only when
+  // the parent's auto-layout doesn't already place this node.
+  left?: number;
+  top?: number;
   /**
    * Rotation in degrees. The canonical vocabulary is **clockwise-positive**, like
    * CSS `rotate()`. Figma's raw `node.rotation` is **counterclockwise**-positive

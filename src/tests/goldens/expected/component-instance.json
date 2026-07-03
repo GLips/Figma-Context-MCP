@@ -12,10 +12,8 @@
           "type": "COMPONENT",
           "width": 150,
           "height": 200,
-          "locationRelativeToParent": {
-            "x": 0,
-            "y": 0
-          },
+          "left": 0,
+          "top": 0,
           "children": [
             {
               "id": "6:3",
@@ -23,10 +21,8 @@
               "type": "TEXT",
               "width": 134,
               "height": 20,
-              "locationRelativeToParent": {
-                "x": 8,
-                "y": 8
-              },
+              "left": 8,
+              "top": 8,
               "text": "Product Name",
               "textStyle": "style_9f723b14",
               "fills": "fill_34dc0314",
@@ -40,10 +36,8 @@
               "type": "FRAME",
               "width": 60,
               "height": 20,
-              "locationRelativeToParent": {
-                "x": 0,
-                "y": 0
-              },
+              "left": 0,
+              "top": 0,
               "fills": [
                 "#FF0000"
               ],
@@ -59,10 +53,8 @@
           "type": "INSTANCE",
           "width": 150,
           "height": 200,
-          "locationRelativeToParent": {
-            "x": 150,
-            "y": 0
-          },
+          "left": 150,
+          "top": 0,
           "componentId": "6:2",
           "componentProperties": {
             "On Sale": false,
@@ -75,10 +67,8 @@
               "type": "TEXT",
               "width": 134,
               "height": 20,
-              "locationRelativeToParent": {
-                "x": 8,
-                "y": 8
-              },
+              "left": 8,
+              "top": 8,
               "text": "My Product",
               "textStyle": "style_9f723b14",
               "fills": "fill_34dc0314"
@@ -106,18 +96,16 @@
     }
   },
   "componentSets": {},
-  "globalVars": {
-    "styles": {
-      "style_9f723b14": {
-        "fontFamily": "Inter",
-        "fontWeight": 400,
-        "fontSize": 14,
-        "lineHeight": "20px"
-      },
-      "fill_34dc0314": [
-        "#000000"
-      ]
-    }
+  "styles": {
+    "style_9f723b14": {
+      "fontFamily": "Inter",
+      "fontWeight": 400,
+      "fontSize": 14,
+      "lineHeight": "20px"
+    },
+    "fill_34dc0314": [
+      "#000000"
+    ]
   },
-  "elements": {}
+  "templates": {}
 }

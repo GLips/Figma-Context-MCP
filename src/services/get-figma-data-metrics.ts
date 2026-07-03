@@ -32,7 +32,7 @@ export type GetFigmaDataMetrics = {
   /** Simplified nodes with `type === "TEXT"`. */
   textNodeCount: number;
   /**
-   * Simplified nodes whose fills or strokes reference a globalVars style
+   * Simplified nodes whose fills or strokes reference a hoisted style
    * containing at least one image-backed fill (IMAGE or PATTERN).
    */
   imageNodeCount: number;
@@ -49,7 +49,7 @@ export type GetFigmaDataMetrics = {
 };
 
 /**
- * Collect globalVars style keys whose value contains at least one image-backed
+ * Collect style-table keys whose value contains at least one image-backed
  * fill (IMAGE or PATTERN). Covers both plain fill arrays and stroke objects
  * whose `colors` array holds fills. Used to classify simplified nodes as
  * "image nodes" via their `fills`/`strokes` key references.
@@ -66,7 +66,7 @@ function hasImageFill(fills: SimplifiedFill[]): boolean {
 function collectImageStyleKeys(design: SimplifiedDesign): Set<string> {
   const keys = new Set<string>();
 
-  for (const [key, value] of Object.entries(design.globalVars.styles)) {
+  for (const [key, value] of Object.entries(design.styles)) {
     if (Array.isArray(value)) {
       if (hasImageFill(value)) keys.add(key);
     } else if (
@@ -115,7 +115,7 @@ export function measureSimplifiedDesign(design: SimplifiedDesign): {
   const walk = (node: SimplifiedNode, depth: number): void => {
     simplifiedNodeCount++;
     if (depth > maxDepth) maxDepth = depth;
-    const body = node.template ? design.elements[node.template] : node;
+    const body = node.template ? design.templates[node.template] : node;
     if (body?.type === "INSTANCE") instanceCount++;
     if (body?.type === "TEXT") textNodeCount++;
     if (isImageStyle(body?.fills) || isImageStyle(body?.strokes)) {

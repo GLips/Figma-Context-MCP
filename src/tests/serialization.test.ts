@@ -104,8 +104,8 @@ describe("result serialization", () => {
         name: "Test File",
         components: {},
         componentSets: {},
-        globalVars: { styles: {} },
-        elements: {},
+        styles: {},
+        templates: {},
         nodes: [
           {
             id: "1:1",
@@ -131,8 +131,8 @@ describe("result serialization", () => {
         name: "Test",
         components: {},
         componentSets: {},
-        globalVars: { styles: {} },
-        elements: {},
+        styles: {},
+        templates: {},
         nodes: [
           {
             id: "1:1",
@@ -150,14 +150,14 @@ describe("result serialization", () => {
     });
 
     // After count-gating, single-use style values live inline on the node rather
-    // than as a globalVars ref. The tree renderer must emit them as compact JSON.
+    // than as a styles-table ref. The tree renderer must emit them as compact JSON.
     it("renders inline (non-reference) style values as JSON", () => {
       const design: SimplifiedDesign = {
         name: "Test",
         components: {},
         componentSets: {},
-        globalVars: { styles: {} },
-        elements: {},
+        styles: {},
+        templates: {},
         nodes: [
           {
             id: "1:1",
@@ -174,15 +174,15 @@ describe("result serialization", () => {
     });
 
     // Deduplicated nodes carry only id/name/template/children; the type and
-    // styling live in the ELEMENTS block. The renderer resolves the type label
-    // from the element so the line keeps its `[TYPE] "name" #id` shape.
-    it("renders an ELEMENTS block and template-reference nodes", () => {
+    // styling live in the TEMPLATES block. The renderer resolves the type label
+    // from the template so the line keeps its `[TYPE] "name" #id` shape.
+    it("renders a TEMPLATES block and template-reference nodes", () => {
       const design: SimplifiedDesign = {
         name: "Test",
         components: {},
         componentSets: {},
-        globalVars: { styles: { fill_red: ["#FF0000"] } },
-        elements: {
+        styles: { fill_red: ["#FF0000"] },
+        templates: {
           "EL-abc12345": { type: "FRAME", fills: "fill_red" },
         },
         nodes: [
@@ -193,7 +193,7 @@ describe("result serialization", () => {
 
       const output = serializeResult(wrapForSerialization(design), "tree");
 
-      expect(output).toContain("ELEMENTS:");
+      expect(output).toContain("TEMPLATES:");
       expect(output).toContain('[FRAME] "Card A" #1:1 template=EL-abc12345');
       expect(output).toContain('[FRAME] "Card B" #1:2 template=EL-abc12345');
     });
@@ -209,8 +209,8 @@ describe("result serialization", () => {
         name: "Test",
         components: {},
         componentSets: {},
-        globalVars: { styles: {} },
-        elements: {},
+        styles: {},
+        templates: {},
         nodes: [node],
       };
     }
@@ -264,15 +264,15 @@ describe("result serialization", () => {
       expect(output).toContain('[FRAME] "Submit Button" #1:1');
     });
 
-    it("drops a templated TEXT node name by resolving its type from the element", () => {
+    it("drops a templated TEXT node name by resolving its type from the template", () => {
       // A template-ref node carries no `type`; without resolving it from the
-      // element, a stale templated-text name would leak through.
+      // template, a stale templated-text name would leak through.
       const wrapped = wrapForSerialization({
         name: "Test",
         components: {},
         componentSets: {},
-        globalVars: { styles: {} },
-        elements: { "EL-abc12345": { type: "TEXT", text: "Buy now" } },
+        styles: {},
+        templates: { "EL-abc12345": { type: "TEXT", text: "Buy now" } },
         nodes: [{ id: "1:1", name: "Stale label", template: "EL-abc12345" }],
       });
       const output = serializeResult(wrapped, "tree");

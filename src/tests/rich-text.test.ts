@@ -40,7 +40,7 @@ async function extract(nodes: FigmaNode[]) {
     nodes.map((node) => restNodeToSnapshot(node)),
     sink,
   );
-  return { nodes: extracted, globalVars: { styles: sink.styles } };
+  return { nodes: extracted, styles: sink.styles };
 }
 
 /** Assert a run is a `[text, ref]` tuple and return it destructurable. */
@@ -134,7 +134,7 @@ describe("buildFormattedText — markdown-expressible overrides", () => {
 
 describe("buildFormattedText — run-tuple overrides", () => {
   it("color (fills) override emits a run tuple with a color delta", async () => {
-    const { nodes, globalVars } = await extract([
+    const { nodes, styles } = await extract([
       makeText({
         characters: "red",
         characterStyleOverrides: [1, 1, 1],
@@ -149,11 +149,11 @@ describe("buildFormattedText — run-tuple overrides", () => {
     expect(runs).toHaveLength(1);
     const [text, ref] = asTuple(runs[0]);
     expect(text).toBe("red");
-    expect(globalVars.styles[ref]).toEqual({ color: "#FF0000" });
+    expect(styles[ref]).toEqual({ color: "#FF0000" });
   });
 
   it("fontSize override emits a run tuple with a fontSize delta", async () => {
-    const { nodes, globalVars } = await extract([
+    const { nodes, styles } = await extract([
       makeText({
         characters: "big",
         style: { fontFamily: "Inter", fontWeight: 400, fontSize: 16 },
@@ -165,11 +165,11 @@ describe("buildFormattedText — run-tuple overrides", () => {
     expect(runs).toHaveLength(1);
     const [text, ref] = asTuple(runs[0]);
     expect(text).toBe("big");
-    expect(globalVars.styles[ref]).toEqual({ fontSize: 24 });
+    expect(styles[ref]).toEqual({ fontSize: 24 });
   });
 
   it("mixed bold + color renders markdown inside the tuple text", async () => {
-    const { nodes, globalVars } = await extract([
+    const { nodes, styles } = await extract([
       makeText({
         characters: "hot",
         characterStyleOverrides: [1, 1, 1],
@@ -186,11 +186,11 @@ describe("buildFormattedText — run-tuple overrides", () => {
     expect(text).toBe("**hot**");
     expect(nodes[0].boldWeight).toBe(700);
     // The delta carries only color — the bold lives in markdown, not the delta.
-    expect(globalVars.styles[ref]).toEqual({ color: "#FF0000" });
+    expect(styles[ref]).toEqual({ color: "#FF0000" });
   });
 
   it("NODE-type hyperlink falls through to a run-tuple delta", async () => {
-    const { nodes, globalVars } = await extract([
+    const { nodes, styles } = await extract([
       makeText({
         characters: "ref",
         characterStyleOverrides: [1, 1, 1],
@@ -202,7 +202,7 @@ describe("buildFormattedText — run-tuple overrides", () => {
     const runs = nodes[0].text as TextRun[];
     const [text, ref] = asTuple(runs[0]);
     expect(text).toBe("ref");
-    expect(globalVars.styles[ref]).toEqual({
+    expect(styles[ref]).toEqual({
       hyperlink: { type: "NODE", nodeID: "42:1" },
     });
   });
@@ -211,7 +211,7 @@ describe("buildFormattedText — run-tuple overrides", () => {
 describe("buildFormattedText — run merging and weight detection", () => {
   it("merges adjacent runs with identical deltas from different override IDs", async () => {
     // Two override entries with visually identical deltas should collapse.
-    const { nodes, globalVars } = await extract([
+    const { nodes, styles } = await extract([
       makeText({
         characters: "abcd",
         characterStyleOverrides: [1, 1, 2, 2],
@@ -226,7 +226,7 @@ describe("buildFormattedText — run merging and weight detection", () => {
     expect(runs).toHaveLength(1);
     const [text, ref] = asTuple(runs[0]);
     expect(text).toBe("abcd");
-    expect(globalVars.styles[ref]).toEqual({ fontSize: 24 });
+    expect(styles[ref]).toEqual({ fontSize: 24 });
   });
 
   it("trailing-zero omission in characterStyleOverrides is handled", async () => {
@@ -244,7 +244,7 @@ describe("buildFormattedText — run merging and weight detection", () => {
   it("picks the most-frequent heavier weight as boldWeight", async () => {
     // 6 chars at weight 800, 3 chars at weight 600 → boldWeight = 800.
     // The 600 run also gets `**` but carries an explicit fontWeight in its ref.
-    const { nodes, globalVars } = await extract([
+    const { nodes, styles } = await extract([
       makeText({
         characters: "AAAAAA BBB",
         characterStyleOverrides: [1, 1, 1, 1, 1, 1, 0, 2, 2, 2],
@@ -261,11 +261,11 @@ describe("buildFormattedText — run merging and weight detection", () => {
     expect(runs[0]).toBe("**AAAAAA** ");
     const [text, ref] = asTuple(runs[1]);
     expect(text).toBe("**BBB**");
-    expect(globalVars.styles[ref]).toEqual({ fontWeight: 600 });
+    expect(styles[ref]).toEqual({ fontWeight: 600 });
   });
 
   it("inverse override (lighter than base) becomes a run-tuple delta, not markdown", async () => {
-    const { nodes, globalVars } = await extract([
+    const { nodes, styles } = await extract([
       makeText({
         characters: "ab",
         style: { fontFamily: "Inter", fontWeight: 700, fontSize: 16 },
@@ -278,13 +278,13 @@ describe("buildFormattedText — run merging and weight detection", () => {
     const [text, ref] = asTuple(runs[1]);
     expect(text).toBe("b");
     expect(nodes[0].boldWeight).toBeUndefined();
-    expect(globalVars.styles[ref]).toEqual({ fontWeight: 400 });
+    expect(styles[ref]).toEqual({ fontWeight: 400 });
   });
 });
 
 describe("buildFormattedText — cross-node dedup and edge cases", () => {
   it("shares one ref across different text nodes with the same delta", async () => {
-    const { nodes, globalVars } = await extract([
+    const { nodes, styles } = await extract([
       makeText({
         id: "t1",
         name: "One",
@@ -304,9 +304,9 @@ describe("buildFormattedText — cross-node dedup and edge cases", () => {
     const [textB, refB] = asTuple((nodes[1].text as TextRun[])[0]);
     expect(textA).toBe("ab");
     expect(textB).toBe("cd");
-    // Content-addressed dedup: identical deltas share one globalVars entry.
+    // Content-addressed dedup: identical deltas share one styles entry.
     expect(refA).toBe(refB);
-    expect(globalVars.styles[refA]).toEqual({ fontSize: 24 });
+    expect(styles[refA]).toEqual({ fontSize: 24 });
   });
 
   it("drops no-op overrides that match the base style", async () => {
@@ -334,7 +334,7 @@ describe("buildFormattedText — cross-node dedup and edge cases", () => {
 
 describe("buildFormattedText — reviewer regression coverage", () => {
   it("clears inherited underline when a run switches to strikethrough", async () => {
-    const { nodes, globalVars } = await extract([
+    const { nodes, styles } = await extract([
       makeText({
         characters: "ab",
         style: {
@@ -352,11 +352,11 @@ describe("buildFormattedText — reviewer regression coverage", () => {
     const [text, ref] = asTuple(runs[1]);
     expect(text).toBe("~~b~~");
     // The explicit line-through suppresses the inherited base underline.
-    expect(globalVars.styles[ref]).toEqual({ textDecoration: "line-through" });
+    expect(styles[ref]).toEqual({ textDecoration: "line-through" });
   });
 
   it("emits an inverse-decoration delta when a run clears the base decoration", async () => {
-    const { nodes, globalVars } = await extract([
+    const { nodes, styles } = await extract([
       makeText({
         characters: "ab",
         style: {
@@ -373,7 +373,7 @@ describe("buildFormattedText — reviewer regression coverage", () => {
     expect(runs[0]).toBe("a");
     const [text, ref] = asTuple(runs[1]);
     expect(text).toBe("b");
-    expect(globalVars.styles[ref]).toEqual({ textDecoration: "none" });
+    expect(styles[ref]).toEqual({ textDecoration: "none" });
   });
 
   it("pulls whitespace outside markdown emphasis markers", async () => {
@@ -406,7 +406,7 @@ describe("buildFormattedText — reviewer regression coverage", () => {
     // Base uses Roboto/16 so both fontFamily AND fontSize overrides survive
     // computeDelta's no-op filter and actually end up in the two runs'
     // delta objects in different property orders.
-    const { nodes, globalVars } = await extract([
+    const { nodes, styles } = await extract([
       makeText({
         characters: "ab",
         style: { fontFamily: "Roboto", fontWeight: 400, fontSize: 16 },
@@ -422,15 +422,15 @@ describe("buildFormattedText — reviewer regression coverage", () => {
     expect(runs).toHaveLength(1);
     const [text, ref] = asTuple(runs[0]);
     expect(text).toBe("ab");
-    expect(globalVars.styles[ref]).toEqual({ fontFamily: "Inter", fontSize: 24 });
+    expect(styles[ref]).toEqual({ fontFamily: "Inter", fontSize: 24 });
   });
 
-  it("shares one globalVars entry between a base textStyle and an identical run delta", async () => {
+  it("shares one styles entry between a base textStyle and an identical run delta", async () => {
     // Node A's base textStyle is exactly { fontSize: 24 } — the same shape node
     // B's run delta produces. With {tsN} retired, run deltas register in the
     // same content-addressed namespace as base styles, so the identical value
     // dedupes to ONE entry rather than paying for two.
-    const { nodes, globalVars } = await extract([
+    const { nodes, styles } = await extract([
       makeText({
         id: "t1",
         name: "base only",
@@ -449,7 +449,7 @@ describe("buildFormattedText — reviewer regression coverage", () => {
     const baseRef = nodes[0].textStyle as string;
     const [, runRef] = asTuple((nodes[1].text as TextRun[])[0]);
     expect(baseRef).toBe(runRef);
-    expect(globalVars.styles[baseRef]).toEqual({ fontSize: 24 });
+    expect(styles[baseRef]).toEqual({ fontSize: 24 });
   });
 });
 
@@ -599,7 +599,7 @@ describe("extractTextStyle — line height", () => {
     // Real Figma shape: auto line height still reports a `lineHeightPx` (the
     // computed intrinsic value for the current font). Before the fix this
     // leaked out as an em string like "1.2102272851126534em".
-    const { nodes, globalVars } = await extract([
+    const { nodes, styles } = await extract([
       makeText({
         characters: "auto",
         style: {
@@ -613,12 +613,12 @@ describe("extractTextStyle — line height", () => {
       }),
     ]);
     const styleRef = nodes[0].textStyle as string;
-    const style = globalVars.styles[styleRef] as SimplifiedTextStyle;
+    const style = styles[styleRef] as SimplifiedTextStyle;
     expect(style.lineHeight).toBeUndefined();
   });
 
   it("emits explicit pixel line heights as px, rounded", async () => {
-    const { nodes, globalVars } = await extract([
+    const { nodes, styles } = await extract([
       makeText({
         characters: "explicit",
         style: {
@@ -631,12 +631,12 @@ describe("extractTextStyle — line height", () => {
       }),
     ]);
     const styleRef = nodes[0].textStyle as string;
-    const style = globalVars.styles[styleRef] as SimplifiedTextStyle;
+    const style = styles[styleRef] as SimplifiedTextStyle;
     expect(style.lineHeight).toBe("16.94px");
   });
 
   it("emits font-size-relative line heights as em (one canonical relative form)", async () => {
-    const { nodes, globalVars } = await extract([
+    const { nodes, styles } = await extract([
       makeText({
         characters: "pct",
         style: {
@@ -650,12 +650,12 @@ describe("extractTextStyle — line height", () => {
       }),
     ]);
     const styleRef = nodes[0].textStyle as string;
-    const style = globalVars.styles[styleRef] as SimplifiedTextStyle;
+    const style = styles[styleRef] as SimplifiedTextStyle;
     expect(style.lineHeight).toBe("1.5em");
   });
 
   it("emits letterSpacing as em so it pastes straight into CSS", async () => {
-    const { nodes, globalVars } = await extract([
+    const { nodes, styles } = await extract([
       makeText({
         characters: "tracking",
         style: {
@@ -667,14 +667,14 @@ describe("extractTextStyle — line height", () => {
       }),
     ]);
     const styleRef = nodes[0].textStyle as string;
-    const style = globalVars.styles[styleRef] as SimplifiedTextStyle;
+    const style = styles[styleRef] as SimplifiedTextStyle;
     expect(style.letterSpacing).toBe("-0.02em");
   });
 });
 
 describe("extractTextStyle — broadened base style capture", () => {
   it("includes fontStyle / textDecoration / hyperlink on a fully-styled text node", async () => {
-    const { nodes, globalVars } = await extract([
+    const { nodes, styles } = await extract([
       makeText({
         characters: "fully styled",
         style: {
@@ -688,7 +688,7 @@ describe("extractTextStyle — broadened base style capture", () => {
       }),
     ]);
     const styleRef = nodes[0].textStyle as string;
-    const style = globalVars.styles[styleRef] as SimplifiedTextStyle;
+    const style = styles[styleRef] as SimplifiedTextStyle;
     expect(style.fontStyle).toBe("italic");
     expect(style.textDecoration).toBe("underline");
     expect(style.hyperlink).toEqual({ type: "URL", url: "https://framelink.ai" });

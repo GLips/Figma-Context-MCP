@@ -22,7 +22,7 @@
             {
               "id": "8:2:t",
               "name": "Tag",
-              "template": "EL-b918993c"
+              "template": "EL-de777a3d"
             }
           ]
         },
@@ -34,7 +34,7 @@
             {
               "id": "8:3:t",
               "name": "Tag",
-              "template": "EL-b918993c"
+              "template": "EL-de777a3d"
             }
           ]
         },
@@ -46,7 +46,7 @@
             {
               "id": "8:4:t",
               "name": "Tag",
-              "template": "EL-b918993c"
+              "template": "EL-de777a3d"
             }
           ]
         }
@@ -55,10 +55,8 @@
   ],
   "components": {},
   "componentSets": {},
-  "globalVars": {
-    "styles": {}
-  },
-  "elements": {
+  "styles": {},
+  "templates": {
     "EL-c9738c88": {
       "type": "FRAME",
       "width": 60,
@@ -68,14 +66,12 @@
       ],
       "borderRadius": "14px"
     },
-    "EL-b918993c": {
+    "EL-de777a3d": {
       "type": "TEXT",
       "width": 44,
       "height": 16,
-      "locationRelativeToParent": {
-        "x": 8,
-        "y": 6
-      },
+      "left": 8,
+      "top": 6,
       "text": "Tag",
       "textStyle": {
         "fontFamily": "Inter",

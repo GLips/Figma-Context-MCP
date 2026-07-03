@@ -327,7 +327,7 @@ describe("layout alignment", () => {
     });
   });
 
-  describe("locationRelativeToParent", () => {
+  describe("left/top offsets", () => {
     // SECTION holds children but has no frame properties (no clipsContent, no
     // layoutMode), so it can never auto-layout — children are always positioned
     // absolutely within it. Regression guard: a stricter `isFrame(parent)` gate
@@ -342,17 +342,18 @@ describe("layout alignment", () => {
         absoluteBoundingBox: { x: 120, y: 210, width: 50, height: 50 },
       });
 
-      expect(geometryOf(child, section).locationRelativeToParent).toEqual({
-        x: 20,
-        y: 10,
-      });
+      const geometry = geometryOf(child, section);
+      expect(geometry.left).toBe(20);
+      expect(geometry.top).toBe(10);
     });
 
     test("omits position for top-level nodes (no parent)", () => {
       const node = makeFrame({
         absoluteBoundingBox: { x: 100, y: 200, width: 50, height: 50 },
       });
-      expect(geometryOf(node).locationRelativeToParent).toBeUndefined();
+      const geometry = geometryOf(node);
+      expect(geometry.left).toBeUndefined();
+      expect(geometry.top).toBeUndefined();
     });
 
     test("omits position for in-flow children of an auto-layout parent", () => {
@@ -363,7 +364,9 @@ describe("layout alignment", () => {
       const child = makeFrame({
         absoluteBoundingBox: { x: 10, y: 10, width: 50, height: 50 },
       });
-      expect(geometryOf(child, parent).locationRelativeToParent).toBeUndefined();
+      const geometry = geometryOf(child, parent);
+      expect(geometry.left).toBeUndefined();
+      expect(geometry.top).toBeUndefined();
     });
 
     test("emits position for ABSOLUTE children inside an auto-layout parent", () => {
@@ -377,7 +380,8 @@ describe("layout alignment", () => {
       });
       const result = geometryOf(child, parent);
       expect(result.position).toBe("absolute");
-      expect(result.locationRelativeToParent).toEqual({ x: 30, y: 40 });
+      expect(result.left).toBe(30);
+      expect(result.top).toBe(40);
     });
   });
 

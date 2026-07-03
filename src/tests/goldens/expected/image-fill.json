@@ -45,10 +45,8 @@
           "type": "RECTANGLE",
           "width": 50,
           "height": 50,
-          "locationRelativeToParent": {
-            "x": 0,
-            "y": 0
-          },
+          "left": 0,
+          "top": 0,
           "fills": [
             {
               "type": "IMAGE",
@@ -82,8 +80,6 @@
   ],
   "components": {},
   "componentSets": {},
-  "globalVars": {
-    "styles": {}
-  },
-  "elements": {}
+  "styles": {},
+  "templates": {}
 }

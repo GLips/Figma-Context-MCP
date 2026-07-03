@@ -2,12 +2,12 @@ import type { SimplifiedDesign, SimplifiedNode } from "~/core/types.js";
 import { isNoiseName } from "./node-names.js";
 
 export function wrapForSerialization(design: SimplifiedDesign) {
-  const { nodes, globalVars, elements, ...metadata } = design;
+  const { nodes, styles, templates, ...metadata } = design;
   return {
     metadata,
-    nodes: nodes.map((node) => stripNoiseName(node, elements)),
-    globalVars,
-    elements,
+    nodes: nodes.map((node) => stripNoiseName(node, templates)),
+    styles,
+    templates,
   };
 }
 
@@ -18,15 +18,15 @@ export function wrapForSerialization(design: SimplifiedDesign) {
  * the source, since the simplified design may be read again (e.g. logs/metrics).
  *
  * A template-ref node carries no `type` of its own (it lives in the shared
- * element), so resolve it from `elements` to catch templated TEXT nodes too.
+ * template), so resolve it from `templates` to catch templated TEXT nodes too.
  */
 function stripNoiseName(
   node: SimplifiedNode,
-  elements: SimplifiedDesign["elements"],
+  templates: SimplifiedDesign["templates"],
 ): SimplifiedNode {
-  const children = node.children?.map((child) => stripNoiseName(child, elements));
+  const children = node.children?.map((child) => stripNoiseName(child, templates));
   const next: SimplifiedNode = children ? { ...node, children } : { ...node };
-  const type = node.type ?? (node.template ? elements[node.template]?.type : undefined);
+  const type = node.type ?? (node.template ? templates[node.template]?.type : undefined);
   if (next.name !== undefined && isNoiseName(next.name, type)) {
     delete next.name;
   }

@@ -1,6 +1,6 @@
 import { stableStringify } from "~/core/utils.js";
 import { sha1Hex } from "./sha1.js";
-import type { ElementBody, GlobalVars, SimplifiedNode } from "./types.js";
+import type { SimplifiedNode, StyleValue, TemplateBody } from "./types.js";
 
 /**
  * Post-walk compression pass.
@@ -11,11 +11,12 @@ import type { ElementBody, GlobalVars, SimplifiedNode } from "./types.js";
  * design, after the walk completes.
  *
  * Two transformations, in this order:
- *   1. Count-gated style hoisting — a style stays in globalVars only when 2+
- *      nodes reference it (or it's a named Figma style); single-use styles are
- *      inlined back onto their node, dropping the indirection tax.
- *   2. Element templates — node bodies (everything except id/name/children) that
- *      appear 2+ times are emitted once into `elements` and each occurrence is
+ *   1. Count-gated style hoisting — a style stays in the top-level `styles`
+ *      table only when 2+ nodes reference it (or it's a named Figma style);
+ *      single-use styles are inlined back onto their node, dropping the
+ *      indirection tax.
+ *   2. Templates — node bodies (everything except id/name/children) that
+ *      appear 2+ times are emitted once into `templates` and each occurrence is
  *      replaced by a compact `{ id, name, template, children? }` reference.
  *
  * The order is for simplicity (hash bodies that are already gated), NOT a
@@ -30,30 +31,30 @@ import type { ElementBody, GlobalVars, SimplifiedNode } from "./types.js";
  *
  * A final step (inlineExclusiveStyles) collapses the double indirection that
  * arises when a surviving style turns out to be used only by the instances of a
- * single deduplicated element — see below.
+ * single template — see below.
  */
 export function compressDesign(
   nodes: SimplifiedNode[],
-  globalVars: GlobalVars,
+  styles: Record<string, StyleValue>,
   namedStyleKeys: Set<string>,
 ): {
   nodes: SimplifiedNode[];
-  globalVars: GlobalVars;
-  elements: Record<string, ElementBody>;
+  styles: Record<string, StyleValue>;
+  templates: Record<string, TemplateBody>;
 } {
   // Per-style usage counts, taken before dedup while every node still carries
   // its own style fields. Reused by both the inlining and expansion steps.
   const styleCounts = countStyleRefs(nodes);
 
-  const styles = inlineSingleUseStyles(nodes, globalVars.styles, namedStyleKeys, styleCounts);
-  const { elements, instanceCounts } = deduplicateElements(nodes);
-  inlineExclusiveStyles(elements, instanceCounts, styles, styleCounts, namedStyleKeys);
+  const surviving = inlineSingleUseStyles(nodes, styles, namedStyleKeys, styleCounts);
+  const { templates, instanceCounts } = deduplicateTemplates(nodes);
+  inlineExclusiveStyles(templates, instanceCounts, surviving, styleCounts, namedStyleKeys);
 
-  return { nodes, globalVars: { styles }, elements };
+  return { nodes, styles: surviving, templates };
 }
 
 /**
- * The node fields that can carry a globalVars style ref (a string key) instead
+ * The node fields that can carry a styles-table ref (a string key) instead
  * of the inline style value (after gating). This is the authoritative list of
  * what compression hoists; the parity comparator imports it so its
  * expand-then-compare view can't drift from what this pass actually refs. Run
@@ -63,13 +64,13 @@ export function compressDesign(
 export const STYLE_REF_FIELDS = ["layout", "fills", "strokes", "effects", "textStyle"] as const;
 
 /**
- * Visit every slot on a node (or element body) that can hold a style ref: the
+ * Visit every slot on a node (or template body) that can hold a style ref: the
  * style-valued fields plus each `[text, style]` run tuple's style slot. One
  * visitor so counting, single-use inlining, and exclusive-style expansion can't
  * disagree about what a "style slot" is.
  */
 function visitStyleRefSlots(
-  node: SimplifiedNode | ElementBody,
+  node: SimplifiedNode | TemplateBody,
   visit: (value: unknown, set: (value: unknown) => void) => void,
 ): void {
   const record = node as unknown as Record<string, unknown>;
@@ -99,10 +100,10 @@ function visitStyleRefSlots(
  */
 function inlineSingleUseStyles(
   nodes: SimplifiedNode[],
-  styles: GlobalVars["styles"],
+  styles: Record<string, StyleValue>,
   namedStyleKeys: Set<string>,
   counts: Map<string, number>,
-): GlobalVars["styles"] {
+): Record<string, StyleValue> {
   const inlineKeys = new Set<string>();
   const dropKeys = new Set<string>();
   for (const key of Object.keys(styles)) {
@@ -133,7 +134,7 @@ function inlineSingleUseStyles(
   };
   walk(nodes);
 
-  const surviving: GlobalVars["styles"] = {};
+  const surviving: Record<string, StyleValue> = {};
   for (const [key, value] of Object.entries(styles)) {
     if (!inlineKeys.has(key) && !dropKeys.has(key)) surviving[key] = value;
   }
@@ -156,51 +157,51 @@ function countStyleRefs(nodes: SimplifiedNode[]): Map<string, number> {
 
 /**
  * Feature 2: hash each node body and replace bodies that repeat 2+ times with a
- * template reference, returning the element table and each element's instance
+ * template reference, returning the template table and each template's instance
  * count. Mutates nodes in place.
  */
-function deduplicateElements(nodes: SimplifiedNode[]): {
-  elements: Record<string, ElementBody>;
+function deduplicateTemplates(nodes: SimplifiedNode[]): {
+  templates: Record<string, TemplateBody>;
   instanceCounts: Map<string, number>;
 } {
-  const bodiesByHash = new Map<string, { body: ElementBody; str: string; count: number }>();
+  const bodiesByHash = new Map<string, { body: TemplateBody; str: string; count: number }>();
   const hashByNode = new Map<SimplifiedNode, string>();
-  collectElements(nodes, bodiesByHash, hashByNode);
+  collectTemplateBodies(nodes, bodiesByHash, hashByNode);
 
-  const elements: Record<string, ElementBody> = {};
+  const templates: Record<string, TemplateBody> = {};
   const instanceCounts = new Map<string, number>();
   for (const [hash, { body, count }] of bodiesByHash) {
     if (count >= 2) {
-      elements[hash] = body;
+      templates[hash] = body;
       instanceCounts.set(hash, count);
     }
   }
 
-  applyTemplateRefs(nodes, hashByNode, elements);
-  return { elements, instanceCounts };
+  applyTemplateRefs(nodes, hashByNode, templates);
+  return { templates, instanceCounts };
 }
 
 /**
  * Stretch optimization: collapse double indirection. When a surviving style is
- * referenced only by the instances of a single deduplicated element, the output
- * pays twice — `template → style ref → value`. Inline the value into the element
+ * referenced only by the instances of a single template, the output
+ * pays twice — `template → style ref → value`. Inline the value into the template
  * body and drop the global entry so it's just `template → value`.
  *
- * The test: a style whose total pre-dedup reference count equals an element's
- * instance count, and which appears in that element's body, can only have come
- * from that element's instances (any other use would push the count higher).
+ * The test: a style whose total pre-dedup reference count equals a template's
+ * instance count, and which appears in that template's body, can only have come
+ * from that template's instances (any other use would push the count higher).
  * Named styles are left hoisted — surfacing design-system intent is worth the
  * indirection. A style appearing on two fields of the same body (count = 2×
  * instances) simply won't match and stays hoisted; safe, if not optimal.
  */
 function inlineExclusiveStyles(
-  elements: Record<string, ElementBody>,
+  templates: Record<string, TemplateBody>,
   instanceCounts: Map<string, number>,
-  styles: GlobalVars["styles"],
+  styles: Record<string, StyleValue>,
   counts: Map<string, number>,
   namedStyleKeys: Set<string>,
 ): void {
-  for (const [hash, body] of Object.entries(elements)) {
+  for (const [hash, body] of Object.entries(templates)) {
     const instanceCount = instanceCounts.get(hash);
     if (instanceCount === undefined) continue;
     visitStyleRefSlots(body, (ref, set) => {
@@ -216,52 +217,53 @@ function inlineExclusiveStyles(
 }
 
 // Per-instance keys excluded from the hashed body. Everything else (type and all
-// styling) is intrinsic to the element and gets shared across instances.
-const ELEMENT_OMIT_KEYS = new Set(["id", "name", "children"]);
+// styling) is intrinsic to the template and gets shared across instances.
+const TEMPLATE_OMIT_KEYS = new Set(["id", "name", "children"]);
 
-function bodyOf(node: SimplifiedNode): ElementBody {
+function bodyOf(node: SimplifiedNode): TemplateBody {
   const source = node as unknown as Record<string, unknown>;
   const body: Record<string, unknown> = {};
   for (const key of Object.keys(source)) {
-    if (!ELEMENT_OMIT_KEYS.has(key)) body[key] = source[key];
+    if (!TEMPLATE_OMIT_KEYS.has(key)) body[key] = source[key];
   }
-  return body as ElementBody;
+  return body as TemplateBody;
 }
 
-function collectElements(
+function collectTemplateBodies(
   nodes: SimplifiedNode[],
-  bodiesByHash: Map<string, { body: ElementBody; str: string; count: number }>,
+  bodiesByHash: Map<string, { body: TemplateBody; str: string; count: number }>,
   hashByNode: Map<SimplifiedNode, string>,
 ): void {
   for (const node of nodes) {
     const body = bodyOf(node);
-    // Skip type-only bodies. A `{type}` element would cost more than it saves —
+    // Skip type-only bodies. A `{type}` template would cost more than it saves —
     // a `template=EL-xxxx` ref plus a global entry, versus the bare `[TYPE]` it
     // replaces. Dedup must never grow the payload; bodies with any real styling
     // pay for themselves at 2+ uses and scale with repetition.
     if (Object.keys(body).length > 1) {
       const str = stableStringify(body);
-      const id = elementId(str, bodiesByHash);
+      const id = templateId(str, bodiesByHash);
       const entry = bodiesByHash.get(id);
       if (entry) entry.count += 1;
       else bodiesByHash.set(id, { body, str, count: 1 });
       hashByNode.set(node, id);
     }
-    if (node.children) collectElements(node.children, bodiesByHash, hashByNode);
+    if (node.children) collectTemplateBodies(node.children, bodiesByHash, hashByNode);
   }
 }
 
 /**
- * Content-addressed element id, with a truncated-hash collision guard. The 8-hex
+ * Content-addressed template id (legacy `EL-` prefix), with a truncated-hash
+ * collision guard. The 8-hex
  * slice (32 bits) keeps template refs short but can alias two distinct bodies;
  * letting them share an id would make applyTemplateRefs merge two different
- * elements into one. On a clash with a DIFFERENT body we fall back to the full
+ * templates into one. On a clash with a DIFFERENT body we fall back to the full
  * 40-hex hash (matching the ref style table's collision policy), which cannot
  * alias. Deterministic because the walk order is stable.
  */
-function elementId(
+function templateId(
   str: string,
-  bodiesByHash: Map<string, { body: ElementBody; str: string; count: number }>,
+  bodiesByHash: Map<string, { body: TemplateBody; str: string; count: number }>,
 ): string {
   const fullHash = sha1Hex(str);
   const short = `EL-${fullHash.slice(0, 8)}`;
@@ -273,14 +275,14 @@ function elementId(
 function applyTemplateRefs(
   nodes: SimplifiedNode[],
   hashByNode: Map<SimplifiedNode, string>,
-  elements: Record<string, ElementBody>,
+  templates: Record<string, TemplateBody>,
 ): void {
   for (let i = 0; i < nodes.length; i++) {
     const node = nodes[i];
-    if (node.children) applyTemplateRefs(node.children, hashByNode, elements);
+    if (node.children) applyTemplateRefs(node.children, hashByNode, templates);
 
     const hash = hashByNode.get(node);
-    if (hash && elements[hash]) {
+    if (hash && templates[hash]) {
       const ref: SimplifiedNode = { id: node.id, name: node.name, template: hash };
       if (node.children && node.children.length > 0) ref.children = node.children;
       nodes[i] = ref;

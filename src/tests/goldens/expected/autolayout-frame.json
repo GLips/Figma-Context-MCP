@@ -34,10 +34,8 @@
           "width": 24,
           "height": 24,
           "position": "absolute",
-          "locationRelativeToParent": {
-            "x": 260,
-            "y": 4
-          },
+          "left": 260,
+          "top": 4,
           "fills": [
             "#FF0000"
           ],
@@ -48,8 +46,6 @@
   ],
   "components": {},
   "componentSets": {},
-  "globalVars": {
-    "styles": {}
-  },
-  "elements": {}
+  "styles": {},
+  "templates": {}
 }

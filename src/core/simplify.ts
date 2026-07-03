@@ -18,11 +18,11 @@ import { createInlineStyleTable, createRefStyleTable } from "./style-table.js";
 import type { NodeSnapshot } from "./snapshot.js";
 import type {
   ComponentDefinitionMap,
-  ElementBody,
-  GlobalVars,
   NodeCounter,
   SimplifiedNode,
   StyleTable,
+  StyleValue,
+  TemplateBody,
   TraversalOptions,
   WalkScheduler,
 } from "./types.js";
@@ -43,9 +43,9 @@ export interface SimplifyResult {
    * Hoisted styles. Compressed: shared + named styles under ref keys.
    * Expanded: always empty — every value (run deltas included) emits inline.
    */
-  globalVars: GlobalVars;
-  /** Deduplicated element bodies (compression only; empty when expanded). */
-  elements: Record<string, ElementBody>;
+  styles: Record<string, StyleValue>;
+  /** Deduplicated node bodies (compression only; empty when expanded). */
+  templates: Record<string, TemplateBody>;
   /** Property definitions from COMPONENT/COMPONENT_SET nodes in the tree. */
   componentDefinitions: ComponentDefinitionMap;
 }
@@ -73,7 +73,7 @@ export async function simplify(
     const table = createRefStyleTable();
     const { nodes, componentDefs } = await walkNodes(snapshots, table, traversal);
     return {
-      ...compressDesign(nodes, { styles: table.styles }, table.namedStyleKeys),
+      ...compressDesign(nodes, table.styles, table.namedStyleKeys),
       componentDefinitions: componentDefs,
     };
   }
@@ -82,8 +82,8 @@ export async function simplify(
   const { nodes, componentDefs } = await walkNodes(snapshots, table, traversal);
   return {
     nodes,
-    globalVars: { styles: table.styles },
-    elements: {},
+    styles: table.styles,
+    templates: {},
     componentDefinitions: componentDefs,
   };
 }

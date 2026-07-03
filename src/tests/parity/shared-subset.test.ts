@@ -16,8 +16,8 @@ function design(parts: Partial<SimplifiedDesign>): SimplifiedDesign {
     nodes: [],
     components: {},
     componentSets: {},
-    globalVars: { styles: {} },
-    elements: {},
+    styles: {},
+    templates: {},
     ...parts,
   } as SimplifiedDesign;
 }
@@ -101,7 +101,7 @@ describe("parityView comparator policy", () => {
   it("expands a hoisted style ref so it matches the same value inlined", () => {
     const hoisted = design({
       nodes: [{ id: "1", name: "T", type: "TEXT", fills: "fill_abc" }],
-      globalVars: { styles: { fill_abc: ["#123456"] } },
+      styles: { fill_abc: ["#123456"] },
     } as unknown as Partial<SimplifiedDesign>);
     const inlined = design({
       nodes: [{ id: "1", name: "T", type: "TEXT", fills: ["#123456"] }],
@@ -115,11 +115,11 @@ describe("parityView comparator policy", () => {
     // one id-disambiguated). After expansion the keys are gone; values match.
     const plainKey = design({
       nodes: [{ id: "1", name: "H", type: "TEXT", textStyle: "Heading / Large" }],
-      globalVars: { styles: { "Heading / Large": { fontSize: 14 } } },
+      styles: { "Heading / Large": { fontSize: 14 } },
     } as unknown as Partial<SimplifiedDesign>);
     const suffixedKey = design({
       nodes: [{ id: "1", name: "H", type: "TEXT", textStyle: "Heading / Large (161:300)" }],
-      globalVars: { styles: { "Heading / Large (161:300)": { fontSize: 14 } } },
+      styles: { "Heading / Large (161:300)": { fontSize: 14 } },
     } as unknown as Partial<SimplifiedDesign>);
 
     expect(parityView(plainKey)).toEqual(parityView(suffixedKey));
@@ -131,7 +131,7 @@ describe("parityView comparator policy", () => {
         { id: "1", name: "a", template: "EL-x" },
         { id: "2", name: "b", template: "EL-x" },
       ],
-      elements: { "EL-x": { type: "FRAME", fills: ["#FFFFFF"] } },
+      templates: { "EL-x": { type: "FRAME", fills: ["#FFFFFF"] } },
     } as unknown as Partial<SimplifiedDesign>);
     const inline = design({
       nodes: [

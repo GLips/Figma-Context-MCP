@@ -57,10 +57,9 @@ const restProducer: ParityProducer = {
 const snapshotProducer: ParityProducer = {
   id: "snapshot",
   produce: async (parityCase) => {
-    const { nodes, globalVars, elements, componentDefinitions } = await simplify(
-      parityCase.snapshot,
-      { compress: true },
-    );
+    const { nodes, styles, templates, componentDefinitions } = await simplify(parityCase.snapshot, {
+      compress: true,
+    });
     return {
       // `name` is scoped out of the parity view — no source name in a snapshot.
       name: "",
@@ -72,8 +71,8 @@ const snapshotProducer: ParityProducer = {
         ]),
       ),
       componentSets: {},
-      globalVars,
-      elements,
+      styles,
+      templates,
     } as SimplifiedDesign;
   },
 };
