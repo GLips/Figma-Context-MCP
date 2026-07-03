@@ -154,7 +154,7 @@ function viewNode(
  * Reduce both component tables to the shared id→{propertyDefinitions} view.
  *
  * Only ids that carry `propertyDefinitions` survive — that set is exactly what
- * the core WALK produces (`componentExtractor` records a def only for an in-tree
+ * the core WALK produces (`extractComponent` records a def only for an in-tree
  * COMPONENT/COMPONENT_SET with non-empty BOOLEAN/TEXT props). REST's envelope
  * tables ALSO list components with no shared props (variant/instance-swap-only,
  * or a master on another page); those reduce to nothing shared, so we DROP them

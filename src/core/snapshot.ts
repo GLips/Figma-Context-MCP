@@ -202,7 +202,7 @@ export interface SnapshotStyleRef {
 // Component metadata — ~1:1 structural records (Figma component traits), typed
 // snapshot-locally so the core reads them without a REST import. The top-level
 // components/componentSets *tables* are a separate adapter concern (decoded in
-// src/adapters/rest/component.ts); these are the per-node fields the walker/extractor read.
+// src/adapters/rest/rest.ts); these are the per-node fields the walk reads.
 // ---------------------------------------------------------------------------
 
 /** An INSTANCE's resolved component-property value (Figma `ComponentPropertyValue` subset). */

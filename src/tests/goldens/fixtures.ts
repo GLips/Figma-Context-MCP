@@ -15,10 +15,10 @@ import type {
  * comparator cases (plain/autolayout frame, component + instance, named-style
  * disambiguation, deep-nested dedup).
  *
- * The golden test runs each through the PUBLIC entry (`simplifyRawFigmaObject`)
+ * The golden test runs each through the PUBLIC entry (`simplifyRestResponse`)
  * so it survives the carve gutting the internals: the committed golden output
  * is whatever the current transform produces, and the carve must reproduce it
- * byte-for-byte. Fixtures are synthetic (the tree-walker.test.ts pattern) — they
+ * byte-for-byte. Fixtures are synthetic (the walk.test.ts pattern) — they
  * only need to hit the code paths, not be faithful Figma exports.
  */
 

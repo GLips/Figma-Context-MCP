@@ -35,4 +35,4 @@ Callers without that need just await the promise.
    inline emission (expanded) vs content-addressed refs (compressing)
 3. `compress.ts` — opt-in egress compression: count-gated style hoisting +
    element templates (needs whole-tree counts, so it runs after the walk)
-4. `transformers/` — pure per-property conversions (layout, text, style, effects)
+4. `transformers/` — pure per-property conversions (layout, text, style, effects, component)

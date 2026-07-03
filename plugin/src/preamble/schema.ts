@@ -237,7 +237,7 @@ export type StyleDeltaInput = z.infer<typeof RunStyleSchema>;
 
 // A run is a bare string (a plain segment) or a `[text, style]` tuple (a styled span) — the canonical run
 // model, identical to the read side's `Run = string | [text, style]`. The tuple's style is always an inline
-// StyleDelta (never a globalVars ref — refs are read-only).
+// StyleDelta (never a styles-table ref — refs are read-only).
 export type TextRunInput = string | [text: string, style: StyleDeltaInput];
 
 // A line sizes ONLY along its length: the constructor honors numeric `length`/`w` and `absolute`, and

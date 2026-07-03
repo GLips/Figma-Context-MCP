@@ -12,7 +12,7 @@
 // `get` result (a SimplifiedNode of CSS strings) NORMALIZES through css.ts into this typed WriteNode
 // before render — mechanically, in one place — rather than being rendered string-for-string.
 //
-// Phase-1 scope: only create/render fields. Read-compression refs (globalVars/template/styles),
+// Phase-1 scope: only create/render fields. Read-compression refs (styles/template tables),
 // components, prototype, variables, images, and rich text are deliberately absent.
 
 // The node types createable through the plugin API, enumerated explicitly. Not every figma-mcp/REST
