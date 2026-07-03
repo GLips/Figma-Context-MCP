@@ -6,8 +6,10 @@ Framelink MCP for Figma is a Model Context Protocol (MCP) server that gives AI c
 
 This repo is a pnpm workspace. The **root package `figma-developer-mcp`** is the shipped npm product (REST read tool) — `src/`, tsup build, `files: [dist]`, release-please all unchanged; the workspace is invisible to the tarball. Two `"private": true` workspace members hold the **flcm** surface (the Figma-plugin "code mode" write path, relocated here from the `code-mode-spike` repo):
 
-- **`plugin/`** (`@framelink/plugin`) — the Figma plugin: the `flcm` authoring DSL preamble (`src/preamble/`, an esbuild IIFE bundled into the QuickJS sandbox), `code.ts` host, `manifest.json`, `ui.html`, `build.mjs`. Its schema (`src/preamble/schema.ts`) is the write edge of the canonical vocabulary. flcm design docs (ADRs, plans, sketches) live in **`plugin/docs/`**.
+- **`plugin/`** (`@framelink/plugin`) — the Figma plugin: the `flcm` authoring DSL preamble (`src/preamble/`, an esbuild IIFE bundled into the QuickJS sandbox), `code.ts` host, `manifest.json`, `ui.html`, `build.mjs`. Its schema (`src/preamble/schema.ts`) is the write edge of the canonical vocabulary.
 - **`bridge/`** (`@framelink/bridge`) — the WS bridge + `execute_code` MCP server. Named for what it is; expected to dissolve into `src/mcp` at a later server-surface unification (out of scope here). Generates `plugin/docs/authoring/flcm.md` from the schema (`docs:check` gates drift).
+
+flcm design docs (ADRs, plans, sketches, solutions) live in **`docs/flcm/`** — note `docs/` is a separate private repo (FramelinkAI/mcp-docs) cloned at that path and gitignored here; design docs must not be committed to this public repo. The only doc tracked here is the generated `plugin/docs/authoring/flcm.md` (CI-gated, regenerated from code).
 
 The relocation puts `src/core` in-repo so the plugin **will** bundle it from source via esbuild (no npm subpath) once the read surface lands — that import doesn't exist yet (it's the read plan). Today the flcm CI guard covers the plugin build's **zod-purity gate** and the REST↔plugin **parity snapshots** (core-coupled: a core change that alters output fails goldens + parity). The relocated surface keeps its own toolchain (its own `tsconfig`/typecheck, a `node:test` runner) and is excluded from the root's eslint/prettier.
 
