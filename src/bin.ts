@@ -55,6 +55,11 @@ const argv = cli({
       type: Boolean,
       description: "Run in stdio transport mode for MCP clients",
     },
+    codeMode: {
+      type: Boolean,
+      description:
+        "Always advertise the figma_execute_code write tools. By default they are hidden until the Framelink Figma plugin connects; use this for MCP clients that cache the tool list.",
+    },
     noTelemetry: {
       type: Boolean,
       description: "Disable usage telemetry (telemetry is on by default)",

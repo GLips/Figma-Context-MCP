@@ -5,6 +5,8 @@ import { authMode, type AuthMode, type ClientInfo, type Transport } from "~/tele
 import type { OutputFormat } from "~/utils/serialize.js";
 import { installValidationRejectCapture } from "./validation-capture.js";
 import type { ToolExtra } from "./progress.js";
+import type { PluginBridgeRuntime } from "~/services/plugin-bridge/index.js";
+import { registerCodeModeTools } from "./tools/figma-execute-code-tool.js";
 import {
   downloadFigmaImagesTool,
   getFigmaDataTool,
@@ -26,11 +28,26 @@ export type CreateServerOptions = {
   outputFormat?: OutputFormat;
   skipImageDownloads?: boolean;
   imageDir?: string;
+  /**
+   * The process-wide WS relay to the Figma plugin (started once by `startServer`). When present,
+   * the code-mode write tools are registered — advertised dynamically once a plugin connects.
+   * Absent for library consumers of `createServer`, which get the read-only surface unchanged.
+   */
+  pluginBridge?: PluginBridgeRuntime;
+  /** Force the code-mode tools to be advertised from startup (`--code-mode`). */
+  codeMode?: boolean;
 };
 
 function createServer(
   authOptions: FigmaAuthOptions,
-  { transport, outputFormat = "tree", skipImageDownloads = false, imageDir }: CreateServerOptions,
+  {
+    transport,
+    outputFormat = "tree",
+    skipImageDownloads = false,
+    imageDir,
+    pluginBridge,
+    codeMode = false,
+  }: CreateServerOptions,
 ) {
   const server = new McpServer(serverInfo);
   const figmaService = new FigmaService(authOptions);
@@ -50,6 +67,10 @@ function createServer(
     imageDir,
     getClientInfo,
   });
+
+  if (pluginBridge) {
+    registerCodeModeTools(server, pluginBridge, { codeMode, transport });
+  }
 
   installValidationRejectCapture(server, {
     transport,

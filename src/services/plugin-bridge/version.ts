@@ -31,7 +31,9 @@ export interface PeerVersion {
 export function detectSkew(version: PeerVersion): string | null {
   const protocol = version.protocolVersion ?? 0;
   if (protocol >= MIN_PROTOCOL_VERSION) return null;
-  const reported = version.pluginVersion ? `plugin v${version.pluginVersion}` : "the connected plugin";
+  const reported = version.pluginVersion
+    ? `plugin v${version.pluginVersion}`
+    : "the connected plugin";
   return (
     `⚠️ Update the Figma Code-Mode plugin: this server needs protocol v${MIN_PROTOCOL_VERSION}, but ` +
     `${reported} predates it. Re-import the latest plugin from its manifest in Figma to stay current.`

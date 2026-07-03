@@ -40,11 +40,24 @@ type ImageType = "image/png" | "image/jpeg" | "image/gif";
 // or a server-supplied Content-Type, both attacker-controlled. A url that 200s with an HTML error page or a
 // disguised payload fails here instead of reaching figma.createImage as garbage.
 function detectImageType(bytes: Uint8Array): ImageType | null {
-  if (bytes.length >= 8 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) {
+  if (
+    bytes.length >= 8 &&
+    bytes[0] === 0x89 &&
+    bytes[1] === 0x50 &&
+    bytes[2] === 0x4e &&
+    bytes[3] === 0x47
+  ) {
     return "image/png";
   }
-  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "image/jpeg";
-  if (bytes.length >= 6 && bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x38) {
+  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff)
+    return "image/jpeg";
+  if (
+    bytes.length >= 6 &&
+    bytes[0] === 0x47 &&
+    bytes[1] === 0x49 &&
+    bytes[2] === 0x46 &&
+    bytes[3] === 0x38
+  ) {
     return "image/gif";
   }
   return null;
@@ -54,7 +67,10 @@ function detectImageType(bytes: Uint8Array): ImageType | null {
 // decode that a decompression bomb weaponizes (see MAX_PIXELS). Returns null when the header can't be read
 // (an exotic/truncated variant); the caller treats null as "can't pre-check" and lets jimp attempt it. PNG
 // and GIF carry dimensions at fixed offsets, so those — the compressible-bomb formats — are always covered.
-function headerDimensions(bytes: Uint8Array, type: ImageType): { width: number; height: number } | null {
+function headerDimensions(
+  bytes: Uint8Array,
+  type: ImageType,
+): { width: number; height: number } | null {
   const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   if (type === "image/png") {
     // IHDR is always the first chunk after the 8-byte signature: [4 len][4 "IHDR"][4 width][4 height].
@@ -79,7 +95,12 @@ function headerDimensions(bytes: Uint8Array, type: ImageType): { width: number; 
       return { height: dv.getUint16(offset + 5), width: dv.getUint16(offset + 7) };
     }
     // Standalone markers (SOI/EOI/RSTn/TEM) carry no length payload — step over the 2 marker bytes.
-    if (marker === 0xd8 || marker === 0xd9 || (marker >= 0xd0 && marker <= 0xd7) || marker === 0x01) {
+    if (
+      marker === 0xd8 ||
+      marker === 0xd9 ||
+      (marker >= 0xd0 && marker <= 0xd7) ||
+      marker === 0x01
+    ) {
       offset += 2;
       continue;
     }
@@ -117,7 +138,9 @@ async function assertPublicHost(hostname: string): Promise<void> {
   if (records.length === 0) throw new Error(`could not resolve host "${host}"`);
   for (const { address } of records) {
     if (isBlockedAddress(address)) {
-      throw new Error(`host "${host}" resolves to a blocked (private/loopback/link-local) address ${address}`);
+      throw new Error(
+        `host "${host}" resolves to a blocked (private/loopback/link-local) address ${address}`,
+      );
     }
   }
 }
@@ -130,7 +153,9 @@ function parseHttpUrl(raw: string): URL {
     throw new Error(`not a valid url: ${JSON.stringify(raw)}`);
   }
   if (url.protocol !== "http:" && url.protocol !== "https:") {
-    throw new Error(`unsupported url scheme "${url.protocol}" — only http/https images are fetched`);
+    throw new Error(
+      `unsupported url scheme "${url.protocol}" — only http/https images are fetched`,
+    );
   }
   return url;
 }
@@ -171,7 +196,10 @@ async function guardedFetch(rawUrl: string): Promise<Uint8Array> {
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
     const url = parseHttpUrl(target);
     await assertPublicHost(url.hostname);
-    const res = await fetch(url, { redirect: "manual", signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
+    const res = await fetch(url, {
+      redirect: "manual",
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    });
     if (res.status >= 300 && res.status < 400) {
       const location = res.headers.get("location");
       if (!location) throw new Error(`redirect (${res.status}) with no Location header`);
@@ -209,7 +237,8 @@ export async function processImageBytes(bytes: Uint8Array): Promise<string> {
   }
   // Scale the longer side to the cap; jimp derives the other side to preserve aspect ratio. A downscaled GIF
   // flattens to its first frame — acceptable for an oversize animation, which is an exotic case.
-  const resized = width >= height ? image.resize({ w: MAX_DIMENSION }) : image.resize({ h: MAX_DIMENSION });
+  const resized =
+    width >= height ? image.resize({ w: MAX_DIMENSION }) : image.resize({ h: MAX_DIMENSION });
   const encoded = await resized.getBuffer(type === "image/gif" ? "image/png" : type);
   return encoded.toString("base64");
 }

@@ -28,12 +28,13 @@
     "inspect": "pnpx @modelcontextprotocol/inspector",
     "benchmark:simplify": "tsx scripts/benchmark-simplify.ts",
     "prepack": "pnpm build",
-    "typecheck:flcm": "pnpm --filter @framelink/plugin --filter @framelink/bridge typecheck",
-    "test:flcm": "pnpm --filter @framelink/plugin --filter @framelink/bridge test",
+    "typecheck:plugin": "pnpm --filter @framelink/plugin typecheck",
+    "test:plugin": "pnpm --filter @framelink/plugin test",
     "build:plugin": "pnpm --filter @framelink/plugin build",
-    "docs:check:flcm": "pnpm --filter @framelink/bridge docs:check",
-    "contract:flcm": "pnpm --filter @framelink/bridge contract",
-    "validate": "pnpm scan-hidden-chars && pnpm format:check && pnpm lint && pnpm type-check && pnpm typecheck:flcm && pnpm test && pnpm test:flcm && pnpm contract:flcm && pnpm build:plugin && pnpm docs:check:flcm"
+    "contract": "tsx scripts/bridge-contract.mjs",
+    "docs:gen": "tsx scripts/gen-flcm-doc.ts",
+    "docs:check": "tsx scripts/gen-flcm-doc.ts check",
+    "validate": "pnpm scan-hidden-chars && pnpm format:check && pnpm lint && pnpm type-check && pnpm typecheck:plugin && pnpm test && pnpm test:plugin && pnpm contract && pnpm build:plugin && pnpm docs:check"
   },
   "engines": {
     "node": ">=20.20.0"

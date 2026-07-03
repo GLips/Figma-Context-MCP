@@ -4,14 +4,17 @@ Framelink MCP for Figma is a Model Context Protocol (MCP) server that gives AI c
 
 ## Repo layout (pnpm workspace)
 
-This repo is a pnpm workspace. The **root package `figma-developer-mcp`** is the shipped npm product (REST read tool) — `src/`, tsup build, `files: [dist]`, release-please all unchanged; the workspace is invisible to the tarball. Two `"private": true` workspace members hold the **flcm** surface (the Figma-plugin "code mode" write path, relocated here from the `code-mode-spike` repo):
+This repo is a pnpm workspace. The **root package `figma-developer-mcp`** is the shipped npm product: one MCP server carrying both the REST read tools and the **flcm** write path ("code mode"). One `"private": true` workspace member remains:
 
-- **`plugin/`** (`@framelink/plugin`) — the Figma plugin: the `flcm` authoring DSL preamble (`src/preamble/`, an esbuild IIFE bundled into the QuickJS sandbox), `code.ts` host, `manifest.json`, `ui.html`, `build.mjs`. Its schema (`src/preamble/schema.ts`) is the write edge of the canonical vocabulary.
-- **`bridge/`** (`@framelink/bridge`) — the WS bridge + `execute_code` MCP server. Named for what it is; expected to dissolve into `src/mcp` at a later server-surface unification (out of scope here). Generates `plugin/docs/authoring/flcm.md` from the schema (`docs:check` gates drift).
+- **`plugin/`** (`@framelink/plugin`) — the Figma plugin: the `flcm` authoring DSL preamble (`src/preamble/`, an esbuild IIFE bundled into the QuickJS sandbox), `code.ts` host, `manifest.json`, `ui.html`, `build.mjs`. Its schema (`src/preamble/schema.ts`) is the write edge of the canonical vocabulary — the root build bundles it into `dist` via tsup `noExternal` (the package itself is never published).
 
-flcm design docs (ADRs, plans, sketches, solutions) live in **`docs/flcm/`** — note `docs/` is a separate private repo (FramelinkAI/mcp-docs) cloned at that path and gitignored here; design docs must not be committed to this public repo. The only doc tracked here is the generated `plugin/docs/authoring/flcm.md` (CI-gated, regenerated from code).
+The write path lives in the root `src/`: `src/services/plugin-bridge/` is the WS relay to the plugin (port block, approval gate, version-skew policy, the trusted image fetch), and `src/mcp/tools/figma-execute-code-tool.ts` registers the code-mode tools (`figma_execute_code`, `get_flcm_reference`, `get_screenshot`). The relay starts with the server in both transports; the tools are **dynamically advertised** — disabled until a plugin connects (latched on for the process lifetime; `--code-mode` forces always-on). `src/mcp/tools/flcm-docs/` generates the tool docs from the schema; `scripts/gen-flcm-doc.ts` regenerates the committed artifacts (`pnpm docs:gen`, drift-gated by `pnpm docs:check`).
 
-The relocation puts `src/core` in-repo so the plugin **will** bundle it from source via esbuild (no npm subpath) once the read surface lands — that import doesn't exist yet (it's the read plan). Today the flcm CI guard covers the plugin build's **zod-purity gate** and the REST↔plugin **parity snapshots** (core-coupled: a core change that alters output fails goldens + parity). The relocated surface keeps its own toolchain (its own `tsconfig`/typecheck, a `node:test` runner) and is excluded from the root's eslint/prettier.
+flcm design docs (ADRs, plans, sketches, solutions) live in **`docs/flcm/`** — note `docs/` is a separate private repo (FramelinkAI/mcp-docs) cloned at that path and gitignored here; design docs must not be committed to this public repo. The tracked generated docs are `plugin/docs/authoring/flcm.md` and `src/mcp/tools/flcm-docs/examples-code.generated.ts` (CI-gated, regenerated from code).
+
+The relocation puts `src/core` in-repo so the plugin **will** bundle it from source via esbuild (no npm subpath) once the read surface lands — that import doesn't exist yet (it's the read plan). Today the flcm CI guard covers the plugin build's **zod-purity gate** and the REST↔plugin **parity snapshots** (core-coupled: a core change that alters output fails goldens + parity). The plugin keeps its own toolchain (its own `tsconfig`/typecheck, a `node:test` runner) and is excluded from the root's eslint/prettier; the relocated bridge code is ordinary `src/` code under the root toolchain.
+
+zod note: the root dependency is zod 4. The flcm surface (and the bundled plugin schema) uses the v4 API from `"zod"`; the pre-existing read-tool schemas import `"zod/v3"` (the classic API zod 4 still ships) — migrate them deliberately, not incidentally.
 
 ## Build & Development Commands
 
@@ -28,7 +31,7 @@ pnpm inspect          # Run MCP inspector for debugging
 pnpm validate         # One gate over the whole workspace — run before pushing
 ```
 
-`pnpm validate` is the single CI gate: hidden-char scan, format check, lint, core type-check + Vitest suite (goldens + parity + purity), **and** the flcm surface — `typecheck:flcm`, `test:flcm` (preamble + bridge `node:test`), `build:plugin` (zod-purity guard), `docs:check:flcm` (generated-doc drift).
+`pnpm validate` is the single CI gate: hidden-char scan, format check, lint, root type-check + Vitest suite (goldens + parity + purity + the relocated bridge tests), the plugin (`typecheck:plugin`, `test:plugin`, `build:plugin` with its zod-purity guard), the WS `contract` harness, and `docs:check` (generated-doc drift).
 
 ### Running the Server
 
@@ -74,6 +77,9 @@ The server supports two transports (configured in `src/server.ts`):
 
    - `get_figma_data` — Fetches and simplifies Figma design data
    - `download_figma_images` — Downloads images from Figma
+   - `figma_execute_code` / `get_flcm_reference` / `get_screenshot` — the code-mode write path,
+     served over the WS relay (`src/services/plugin-bridge/`); hidden from `tools/list` until the
+     Figma plugin connects (or `--code-mode`)
 
 2. **Figma Service** (`src/services/figma.ts`) — API client for Figma REST API
 
@@ -107,6 +113,7 @@ The server supports two transports (configured in `src/server.ts`):
 - `OUTPUT_FORMAT` or `--format` — Output format: `tree` (default), `yaml`, or `json`
 - `--json` — Back-compat alias for `--format=json`
 - `--skip-image-downloads` — Disable image download tool
+- `FIGMA_CODE_MODE` or `--code-mode` — Always advertise the code-mode write tools (default: advertised only once the Figma plugin connects)
 
 ### Path Alias
 

@@ -1,13 +1,26 @@
-// The execute_code two-pass image state machine (Phase 3.2). Its branches are non-obvious and could regress
+// The figma_execute_code two-pass image state machine (Phase 3.2). Its branches are non-obvious and could regress
 // silently — the one-rerun cap, the fetch-fails-before-any-rerun abort, and the "injection channel didn't
 // take" error that stops a fetch/re-run loop dead. Driven here with fake bridge/gate/fetch seams so the
 // orchestration is pinned without a live plugin or the network.
-import { test } from "node:test";
 import assert from "node:assert/strict";
-import { executeWithImages, injectImageBytes, type ExecuteDeps } from "./execute-images.js";
+import {
+  executeWithImages,
+  injectImageBytes,
+  type ExecuteDeps,
+} from "~/services/plugin-bridge/execute-images.js";
 
-const okReply = (result: unknown) => ({ type: "EXECUTE_CODE_RESULT", result, console: [], errors: null });
-const needReply = (urls: string[]) => ({ type: "EXECUTE_CODE_RESULT", imagesNeeded: urls, console: [], errors: null });
+const okReply = (result: unknown) => ({
+  type: "EXECUTE_CODE_RESULT",
+  result,
+  console: [],
+  errors: null,
+});
+const needReply = (urls: string[]) => ({
+  type: "EXECUTE_CODE_RESULT",
+  imagesNeeded: urls,
+  console: [],
+  errors: null,
+});
 
 // A scripted bridge: returns the next queued reply per request and records every code string it ran.
 function scriptedRequest(replies: unknown[]): { request: ExecuteDeps["request"]; codes: string[] } {
@@ -26,7 +39,11 @@ const noGate: ExecuteDeps["gate"] = () => null;
 
 test("no image fills: returns the reply after a single run", async () => {
   const { request, codes } = scriptedRequest([okReply(42)]);
-  const outcome = await executeWithImages("code", { request, gate: noGate, fetchImage: async () => "x" });
+  const outcome = await executeWithImages("code", {
+    request,
+    gate: noGate,
+    fetchImage: async () => "x",
+  });
   assert.equal(outcome.kind, "reply");
   assert.equal(codes.length, 1, "no re-run when nothing is needed");
 });
@@ -57,7 +74,7 @@ test("a fetch failure fails loud and aborts BEFORE any re-run", async () => {
     request,
     gate: noGate,
     fetchImage: async () => {
-      throw new Error("flcm.image could not load \"bad\": blocked range");
+      throw new Error('flcm.image could not load "bad": blocked range');
     },
   });
   assert(outcome.kind === "error");
@@ -68,7 +85,11 @@ test("a fetch failure fails loud and aborts BEFORE any re-run", async () => {
 test("a still-needed re-run reports the injection channel failure — never a second re-run", async () => {
   // Both runs report images needed (e.g. globalThis not writable in the sandbox). Capped at one re-run.
   const { request, codes } = scriptedRequest([needReply(["u1"]), needReply(["u1"])]);
-  const outcome = await executeWithImages("code", { request, gate: noGate, fetchImage: async () => "b64" });
+  const outcome = await executeWithImages("code", {
+    request,
+    gate: noGate,
+    fetchImage: async () => "b64",
+  });
   assert(outcome.kind === "error");
   assert.match(outcome.message, /injection channel did not take/);
   assert.equal(codes.length, 2, "still capped at one re-run even when unresolved");

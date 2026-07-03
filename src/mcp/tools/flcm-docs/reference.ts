@@ -1,6 +1,6 @@
 // reference — the doc generator. It turns the schema (the single source: every verb/prop/type/one-liner)
 // plus the hand-written narrative fragments plus the compile-checked examples into two deliverables:
-//   • buildQuickStart()          → the ≤2KB execute_code description (critical-first, signatures generated).
+//   • buildQuickStart()          → the ≤2KB figma_execute_code description (critical-first, signatures generated).
 //   • buildReferenceSections(s?) → the get_flcm_reference tool output (index+cheat-sheet, named sections, or all).
 // buildFullReference() concatenates every section for the committed human doc (slice: flcm.md regen), so
 // the repo doc and the served doc are assembled from the SAME source and cannot drift.
@@ -11,8 +11,17 @@
 import { z } from "zod";
 import { VERBS, FIELD_GROUPS } from "@framelink/plugin/schema";
 import {
-  MENTAL_MODEL, CHILDREN, RICH_TEXT, PERCENT_SIZING, VECTOR_INTRO, PAINT_INTRO, IMAGE_INTRO, EFFECTS_INTRO,
-  RENDER_KEYS, CSS_SUBSET, FAILS_LOUD,
+  MENTAL_MODEL,
+  CHILDREN,
+  RICH_TEXT,
+  PERCENT_SIZING,
+  VECTOR_INTRO,
+  PAINT_INTRO,
+  IMAGE_INTRO,
+  EFFECTS_INTRO,
+  RENDER_KEYS,
+  CSS_SUBSET,
+  FAILS_LOUD,
 } from "./narrative.js";
 import { EXAMPLES } from "./examples.js";
 
@@ -34,31 +43,48 @@ const cell = (s: string) => s.replace(/\|/g, "\\|").trim();
 function typeLabel(field: z.ZodType): string {
   const meta = field.meta() as { type?: string } | undefined;
   if (meta?.type) return meta.type;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- zod's internal def is untyped by design here
   const derived = deriveLabel((field as unknown as { _zod: { def: any } })._zod.def);
   if (derived) return derived;
   const kind = (field as unknown as { _zod: { def: { type: string } } })._zod.def.type;
-  throw new Error(`flcm docgen: schema field of kind '${kind}' has no .meta({ type }) and isn't derivable.`);
+  throw new Error(
+    `flcm docgen: schema field of kind '${kind}' has no .meta({ type }) and isn't derivable.`,
+  );
 }
 
 // Render a zod def as a type label, or "" when the shape isn't self-documenting (z.custom, object) and a
-// hand-authored .meta label should win instead.
+// hand-authored .meta label should win instead. `any` throughout: this walks zod's private def tree,
+// which has no public type — the header comment's docs:check gate is what pins the shape.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function deriveLabel(def: any): string {
-  while (def.type === "optional" || def.type === "nullable" || def.type === "default") def = def.innerType._zod.def;
+  while (def.type === "optional" || def.type === "nullable" || def.type === "default")
+    def = def.innerType._zod.def;
   switch (def.type) {
-    case "string": return "string";
-    case "number": return "number";
-    case "boolean": return "boolean";
-    case "enum": return Object.keys(def.entries).map((v) => `"${v}"`).join(" | ");
-    case "literal": return def.values.map((v: unknown) => JSON.stringify(v)).join(" | ");
-    case "union": return def.options.map((o: any) => deriveLabel(o._zod.def)).join(" | ");
-    default: return "";
+    case "string":
+      return "string";
+    case "number":
+      return "number";
+    case "boolean":
+      return "boolean";
+    case "enum":
+      return Object.keys(def.entries)
+        .map((v) => `"${v}"`)
+        .join(" | ");
+    case "literal":
+      return def.values.map((v: unknown) => JSON.stringify(v)).join(" | ");
+    case "union":
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- see deriveLabel
+      return def.options.map((o: any) => deriveLabel(o._zod.def)).join(" | ");
+    default:
+      return "";
   }
 }
 
 // Render a field group (name/key/opacity, size, a verb's props, …) as a markdown prop table.
 function propTable(fields: Fields): string {
   const rows = Object.entries(fields).map(
-    ([name, field]) => `| \`${name}\` | ${cell(typeLabel(field))} | ${cell(field.description ?? "")} |`,
+    ([name, field]) =>
+      `| \`${name}\` | ${cell(typeLabel(field))} | ${cell(field.description ?? "")} |`,
   );
   return ["| Prop | Type | Notes |", "| --- | --- | --- |", ...rows].join("\n");
 }
@@ -99,7 +125,7 @@ const SECTIONS: Section[] = [
       "not white).\n\n" +
       `### Shared by every node\n\n${propTable(FIELD_GROUPS.shared)}\n\n` +
       "### Size & position (frame, text, rect, ellipse)\n\n" +
-      "(A `line` sizes differently — it takes a numeric `length`/`w` and ignores `h`/`\"fill\"`/`\"hug\"`.)\n\n" +
+      '(A `line` sizes differently — it takes a numeric `length`/`w` and ignores `h`/`"fill"`/`"hug"`.)\n\n' +
       `${propTable(FIELD_GROUPS.size)}\n\n` +
       `#### Percent sizing\n\n${PERCENT_SIZING}\n\n` +
       `### flcm.frame — container props\n\n${propTable({ ...FIELD_GROUPS.appearance, ...FIELD_GROUPS.frame })}\n\n` +
@@ -160,7 +186,9 @@ const SECTIONS: Section[] = [
     title: "Worked examples",
     blurb: "complete flcm trees exercising most of the surface",
     body: () =>
-      EXAMPLES.map((ex) => `### ${ex.title}\n\n${ex.intro}\n\n\`\`\`js\n${ex.code}\n\`\`\``).join("\n\n"),
+      EXAMPLES.map((ex) => `### ${ex.title}\n\n${ex.intro}\n\n\`\`\`js\n${ex.code}\n\`\`\``).join(
+        "\n\n",
+      ),
   },
 ];
 
@@ -172,7 +200,7 @@ const SECTION_IDS = SECTIONS.map((s) => s.id);
 // verbs grows the string, so this throws loud at startup / in validate if the quick-start ever overflows.
 const QUICKSTART_LIMIT_BYTES = 2048;
 
-// ---- The ≤2KB quick-start = the execute_code description. Critical-first: execution model, generated
+// ---- The ≤2KB quick-start = the figma_execute_code description. Critical-first: execution model, generated
 // verb signatures, the must-knows, the pointer to the reference tool. ----
 export function buildQuickStart(): string {
   const verbLines = VERBS.map((v) => `  ${v.signature} — ${v.builds}`).join("\n");
@@ -202,7 +230,7 @@ Raw figma.*: fills are 0–1, assigned as a NEW array; load a font before settin
   const bytes = Buffer.byteLength(quickStart, "utf8");
   if (bytes > QUICKSTART_LIMIT_BYTES) {
     throw new Error(
-      `flcm quick-start is ${bytes} bytes, over the ${QUICKSTART_LIMIT_BYTES}B execute_code description cap — ` +
+      `flcm quick-start is ${bytes} bytes, over the ${QUICKSTART_LIMIT_BYTES}B figma_execute_code description cap — ` +
         `the truncated tail (return envelope, raw-figma guidance) is what an agent needs. Trim the prose or ` +
         `move detail into a get_flcm_reference section.`,
     );
@@ -238,7 +266,9 @@ export function buildReferenceSections(sections?: string[]): string {
   const wanted = sections.map((s) => s.trim().toLowerCase());
   if (wanted.includes("all")) return capped(buildFullReference());
   const chosen = SECTIONS.filter((s) => wanted.includes(s.id)); // canonical order + dedupe
-  const unknown = wanted.filter((w) => w !== "index" && w !== "overview" && !SECTION_IDS.includes(w));
+  const unknown = wanted.filter(
+    (w) => w !== "index" && w !== "overview" && !SECTION_IDS.includes(w),
+  );
   if (!chosen.length) {
     const note = unknown.length
       ? `No section ${unknown.map((u) => `"${u}"`).join(", ")}. Valid sections: ${SECTION_IDS.join(", ")}.\n\n`
@@ -247,7 +277,9 @@ export function buildReferenceSections(sections?: string[]): string {
   }
   const parts = chosen.map((s) => `# flcm reference — ${s.title}\n\n${s.body()}`);
   if (unknown.length) {
-    parts.push(`_Ignored unknown section${unknown.length > 1 ? "s" : ""}: ${unknown.map((u) => `"${u}"`).join(", ")}. Valid: ${SECTION_IDS.join(", ")}._`);
+    parts.push(
+      `_Ignored unknown section${unknown.length > 1 ? "s" : ""}: ${unknown.map((u) => `"${u}"`).join(", ")}. Valid: ${SECTION_IDS.join(", ")}._`,
+    );
   }
   return capped(parts.join("\n\n---\n\n"));
 }

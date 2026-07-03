@@ -13,7 +13,12 @@ export async function captionExample(flcm: Flcm) {
       " summited at golden hour — the whole valley lit up. ",
       ["more", { color: "#8E8E93" }],
     ],
-    { key: "caption", color: "#111827", width: 340, textStyle: { fontSize: 15, lineHeight: "20px" } },
+    {
+      key: "caption",
+      color: "#111827",
+      width: 340,
+      textStyle: { fontSize: 15, lineHeight: "20px" },
+    },
   );
 
   const out = await flcm.render(caption);

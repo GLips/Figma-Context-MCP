@@ -24,6 +24,7 @@ export interface ServerFlags {
   proxy?: string;
   stdio?: boolean;
   noTelemetry?: boolean;
+  codeMode?: boolean;
 }
 
 export interface ServerConfig {
@@ -36,6 +37,7 @@ export interface ServerConfig {
   imageDir: string;
   isStdioMode: boolean;
   noTelemetry: boolean;
+  codeMode: boolean;
   configSources: Record<string, Source>;
 }
 
@@ -175,6 +177,10 @@ export function getServerConfig(flags: ServerFlags): ServerConfig {
 
   const isStdioMode = flags.stdio === true;
 
+  // Escape hatch for MCP clients that cache tools/list and ignore list_changed: force the
+  // code-mode tools to be advertised from startup instead of waiting for a plugin connection.
+  const codeMode = resolve(flags.codeMode, envBool("FIGMA_CODE_MODE"), false);
+
   const noTelemetry = flags.noTelemetry ?? false;
   const telemetrySource: Source =
     flags.noTelemetry === true
@@ -193,6 +199,7 @@ export function getServerConfig(flags: ServerFlags): ServerConfig {
     outputFormat: outputFormat.source,
     skipImageDownloads: skipImageDownloads.source,
     imageDir: imageDir.source,
+    codeMode: codeMode.source,
     telemetry: telemetrySource,
   };
 
@@ -220,6 +227,7 @@ export function getServerConfig(flags: ServerFlags): ServerConfig {
       `- SKIP_IMAGE_DOWNLOADS: ${skipImageDownloads.value} (source: ${configSources.skipImageDownloads})`,
     );
     console.log(`- IMAGE_DIR: ${imageDir.value} (source: ${configSources.imageDir})`);
+    console.log(`- CODE_MODE: ${codeMode.value} (source: ${configSources.codeMode})`);
     const telemetryEnabled = resolveTelemetryEnabled(noTelemetry);
     console.log(
       `- TELEMETRY: ${telemetryEnabled ? "enabled" : "disabled"} (source: ${configSources.telemetry})`,
@@ -237,6 +245,7 @@ export function getServerConfig(flags: ServerFlags): ServerConfig {
     imageDir: imageDir.value,
     isStdioMode,
     noTelemetry,
+    codeMode: codeMode.value,
     configSources,
   };
 }

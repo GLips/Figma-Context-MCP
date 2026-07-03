@@ -118,52 +118,6 @@ importers:
         specifier: ^4.0.18
         version: 4.0.18(@types/node@25.3.3)(tsx@4.22.5)
 
-  bridge:
-    dependencies:
-      '@framelink/plugin':
-        specifier: workspace:*
-        version: link:../plugin
-      '@jimp/core':
-        specifier: ^1.6.1
-        version: 1.6.1
-      '@jimp/js-gif':
-        specifier: ^1.6.1
-        version: 1.6.1
-      '@jimp/js-jpeg':
-        specifier: ^1.6.1
-        version: 1.6.1
-      '@jimp/js-png':
-        specifier: ^1.6.1
-        version: 1.6.1
-      '@jimp/plugin-resize':
-        specifier: ^1.6.1
-        version: 1.6.1
-      '@modelcontextprotocol/sdk':
-        specifier: 1.29.0
-        version: 1.29.0(zod@4.4.3)
-      ipaddr.js:
-        specifier: ^2.4.0
-        version: 2.4.0
-      ws:
-        specifier: ^8.21.0
-        version: 8.21.0
-      zod:
-        specifier: ^4.4.3
-        version: 4.4.3
-    devDependencies:
-      '@types/node':
-        specifier: ^26.0.1
-        version: 26.1.0
-      '@types/ws':
-        specifier: ^8.18.1
-        version: 8.18.1
-      tsx:
-        specifier: ^4.22.4
-        version: 4.22.5
-      typescript:
-        specifier: ^6.0.3
-        version: 6.0.3
-
   plugin:
     dependencies:
       zod:

@@ -55,7 +55,7 @@
 //   • A new connection reclaims the slot from a non-handshaking holder (then handshakes and drives).
 //   • A reclaimed connection's late handshake result can't clobber the newcomer (epoch guard).
 //
-// Usage:  pnpm --filter @framelink/bridge contract   (or: npx tsx harness/bridge-contract.mjs)
+// Usage:  pnpm contract   (or: npx tsx scripts/bridge-contract.mjs)
 //
 // The fake plugin re-implements code.ts's reply shape rather than importing it —
 // code.ts runs only inside Figma's sandbox (figma.* globals, preamble eval), so
@@ -66,10 +66,10 @@ import assert from "node:assert";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { PluginBridge } from "../src/bridge.ts";
-import { detectSkew, MIN_PROTOCOL_VERSION } from "../src/version.ts";
-import { SESSION_IDENTITY } from "../src/approval.ts";
-import { WS_PORT_BLOCK } from "../src/config.ts";
+import { PluginBridge } from "../src/services/plugin-bridge/bridge.ts";
+import { detectSkew, MIN_PROTOCOL_VERSION } from "../src/services/plugin-bridge/version.ts";
+import { SESSION_IDENTITY } from "../src/services/plugin-bridge/approval.ts";
+import { WS_PORT_BLOCK } from "../src/services/plugin-bridge/ports.ts";
 
 const PORT = 19876;
 const URL = `ws://127.0.0.1:${PORT}`;
@@ -444,7 +444,7 @@ await wait(150);
 // fail the contract here instead of in a live Figma re-import nobody runs in the build loop.
 // fileURLToPath, not `new URL(...)`: this module shadows the global URL with a `const URL` (the WS
 // address) up top, so `new URL` would throw. Resolve plugin files relative to this harness file.
-const pluginDir = join(dirname(fileURLToPath(import.meta.url)), "../../plugin");
+const pluginDir = join(dirname(fileURLToPath(import.meta.url)), "../plugin");
 const manifest = JSON.parse(readFileSync(join(pluginDir, "manifest.json"), "utf8"));
 const devDomains = new Set(manifest.networkAccess.devAllowedDomains);
 for (const port of WS_PORT_BLOCK) {

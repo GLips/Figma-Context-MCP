@@ -7,6 +7,7 @@ import { ProxyAgent, EnvHttpProxyAgent, setGlobalDispatcher } from "undici";
 import { Logger } from "./utils/logger.js";
 import { hasProxyEnv, setProxyMode } from "./utils/proxy-env.js";
 import { createServer, type CreateServerOptions } from "./mcp/index.js";
+import { startPluginBridge } from "./services/plugin-bridge/index.js";
 import { requireGlobalCredentials, type ServerConfig } from "./config.js";
 import type { FigmaAuthOptions } from "./services/figma.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -64,11 +65,18 @@ export async function startServer(config: ServerConfig): Promise<void> {
     );
   }
 
+  // The WS relay to the Figma plugin always starts with the server, both transports: the plugin's
+  // ui.html holds a persistent socket open whenever the plugin runs in Figma, and its connection is
+  // what advertises the code-mode tools. One loopback port from the block; negligible when unused.
+  const pluginBridge = startPluginBridge();
+
   const serverOptions = {
     transport: config.isStdioMode ? ("stdio" as const) : ("http" as const),
     outputFormat: config.outputFormat,
     skipImageDownloads: config.skipImageDownloads,
     imageDir: config.imageDir,
+    pluginBridge,
+    codeMode: config.codeMode,
   };
 
   if (config.isStdioMode) {

@@ -1,6 +1,6 @@
 import { WebSocketServer, WebSocket } from "ws";
 import { mintPairingCode } from "./approval.js";
-import { log } from "./logger.js";
+import { Logger } from "~/utils/logger.js";
 
 export interface BridgeRequest {
   type: string;
@@ -108,7 +108,9 @@ export class PluginBridge {
 
   private tryBind(ports: number[], index: number, onConnect?: () => void): void {
     if (index >= ports.length) {
-      log(`No free port in the WS block [${ports[0]}..${ports[ports.length - 1]}] — is the block full?`);
+      Logger.log(
+        `No free port in the WS block [${ports[0]}..${ports[ports.length - 1]}] — is the block full?`,
+      );
       return;
     }
     const port = ports[index];
@@ -124,7 +126,7 @@ export class PluginBridge {
       // when an ESTABLISHED plugin holds the channel (anti-hijack — see below).
       verifyClient: ({ origin }: { origin?: string }) => {
         if (!isAllowedOrigin(origin)) {
-          log(`Refused WS connection from web origin ${origin}`);
+          Logger.log(`Refused WS connection from web origin ${origin}`);
           return false;
         }
         // Anti-hijack (Slice 1.1), now liveness-aware (Slice 1.3). An ESTABLISHED holder —
@@ -140,7 +142,7 @@ export class PluginBridge {
         // half-open holder that DID handshake looks established here and is reaped separately by
         // the heartbeat, freeing the slot.
         if (this.socket && this.socket.readyState === WebSocket.OPEN && this.handshaked) {
-          log("Refused second WS connection — an established plugin holds the channel");
+          Logger.log("Refused second WS connection — an established plugin holds the channel");
           return false;
         }
         return true;
@@ -157,11 +159,11 @@ export class PluginBridge {
         this.tryBind(ports, index + 1, onConnect);
         return;
       }
-      log(`Unexpected WS bind error on port ${port}: ${err.message}`);
+      Logger.log(`Unexpected WS bind error on port ${port}: ${err.message}`);
       throw err;
     });
     wss.on("listening", () => {
-      log(`WS bridge listening on ws://127.0.0.1:${port}`);
+      Logger.log(`WS bridge listening on ws://127.0.0.1:${port}`);
       // Install the heartbeat here in `listening` (not eagerly in tryBind) so only the server that
       // WON its bind gets one — a probe that lost to EADDRINUSE never reaches here. unref'd and never
       // cleared: it lives for the whole process, like the bridge itself. (What it reaps: see HEARTBEAT_INTERVAL_MS.)
@@ -173,8 +175,7 @@ export class PluginBridge {
       // pre-consent squatter or a half-open dead socket). Reclaim the slot for the newcomer,
       // which will complete its own handshake. An established holder never reaches here — it's
       // refused at verifyClient — so this can't displace a live, responsive plugin.
-      const stale =
-        this.socket && this.socket.readyState === WebSocket.OPEN ? this.socket : null;
+      const stale = this.socket && this.socket.readyState === WebSocket.OPEN ? this.socket : null;
 
       this.socket = socket;
       this.epoch++;
@@ -204,7 +205,7 @@ export class PluginBridge {
         // not the current socket; the displaced socket's own stragglers (server-fired
         // handshakes to a squatter) fall to their 15s timeout — fire-and-forget, harmless.
         if (this.socket !== socket) {
-          log("Displaced WS socket closed");
+          Logger.log("Displaced WS socket closed");
           return;
         }
         this.socket = null;
@@ -215,16 +216,16 @@ export class PluginBridge {
         // them now instead of letting each hang to its 15s timeout — same "never a silent
         // hang" contract as the frozen envelope.
         this.failPending("Figma plugin disconnected before replying.");
-        log("Plugin disconnected from WS bridge");
+        Logger.log("Plugin disconnected from WS bridge");
       });
 
       if (stale) {
         // terminate() fires `stale`'s close handler, but this.socket already points at the
         // newcomer, so the `this.socket === socket` guard there leaves the new slot intact.
-        log("Reclaiming WS slot from a non-handshaked holder for a new connection");
+        Logger.log("Reclaiming WS slot from a non-handshaked holder for a new connection");
         stale.terminate();
       }
-      log("Plugin connected to WS bridge");
+      Logger.log("Plugin connected to WS bridge");
       onConnect?.();
     });
   }
@@ -239,7 +240,7 @@ export class PluginBridge {
     const socket = this.socket;
     if (!socket || socket.readyState !== WebSocket.OPEN) return;
     if (!this.socketAlive) {
-      log("Heartbeat: holder missed a pong — terminating the half-open socket");
+      Logger.log("Heartbeat: holder missed a pong — terminating the half-open socket");
       socket.terminate();
       return;
     }
@@ -289,14 +290,20 @@ export class PluginBridge {
     const socket = this.socket;
     if (!socket || socket.readyState !== WebSocket.OPEN) {
       return Promise.reject(
-        new Error("No Figma plugin connected. Open the Framelink plugin in Figma desktop and try again."),
+        new Error(
+          "No Figma plugin connected. Open the Framelink plugin in Figma desktop and try again.",
+        ),
       );
     }
     const id = `req-${++this.nextId}`;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
-        reject(new Error(`Bridge request ${id} (${payload.type}) timed out after ${DEFAULT_TIMEOUT_MS}ms`));
+        reject(
+          new Error(
+            `Bridge request ${id} (${payload.type}) timed out after ${DEFAULT_TIMEOUT_MS}ms`,
+          ),
+        );
       }, DEFAULT_TIMEOUT_MS);
       this.pending.set(id, { resolve, reject, timer });
       // `id` last: the generated correlation id is authoritative and a payload field
@@ -310,7 +317,7 @@ export class PluginBridge {
     try {
       msg = JSON.parse(raw);
     } catch {
-      log(`Ignoring non-JSON message from plugin: ${raw.slice(0, 120)}`);
+      Logger.log(`Ignoring non-JSON message from plugin: ${raw.slice(0, 120)}`);
       return;
     }
     // Token handover from the sandbox after Allow: unsolicited (no id — it's not a reply to any
@@ -319,7 +326,7 @@ export class PluginBridge {
     // later SESSION_INFO echoes it and the sandbox re-keys sticky approval to the token.
     if (msg.type === "SESSION_TOKEN" && typeof msg.sessionToken === "string") {
       this.sessionToken = msg.sessionToken;
-      log("Stored session token handed over by the sandbox after Allow");
+      Logger.log("Stored session token handed over by the sandbox after Allow");
       return;
     }
     if (typeof msg.id !== "string") return;

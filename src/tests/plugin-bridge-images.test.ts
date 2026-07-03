@@ -3,11 +3,10 @@
 // point of the guard) against literal IPs, and processImageBytes (magic-byte type check + 4096px downscale)
 // against jimp-built buffers. A regression in either is exactly the silent-hole class the guard exists to
 // stop, so both earn a test. The DNS/redirect/streaming plumbing around them is verified by hand + review.
-import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createJimp } from "@jimp/core";
 import png from "@jimp/js-png";
-import { isBlockedAddress, processImageBytes } from "./images.js";
+import { isBlockedAddress, processImageBytes } from "~/services/plugin-bridge/images.js";
 
 const Jimp = createJimp({ formats: [png] });
 
@@ -40,15 +39,25 @@ test("isBlockedAddress blocks loopback, private, link-local, CGNAT, and v4-mappe
 });
 
 test("processImageBytes rejects a non-image payload by magic bytes", async () => {
-  await assert.rejects(() => processImageBytes(new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8])), /magic-byte check failed/);
+  await assert.rejects(
+    () => processImageBytes(new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8])),
+    /magic-byte check failed/,
+  );
   // An HTML error page served with a 200 must not pass as an image.
-  await assert.rejects(() => processImageBytes(new TextEncoder().encode("<!DOCTYPE html><html>...")), /not a PNG/);
+  await assert.rejects(
+    () => processImageBytes(new TextEncoder().encode("<!DOCTYPE html><html>...")),
+    /not a PNG/,
+  );
 });
 
 test("processImageBytes passes an in-bounds image through byte-for-byte", async () => {
   const bytes = await makePng(64, 48);
   const b64 = await processImageBytes(bytes);
-  assert.equal(b64, Buffer.from(bytes).toString("base64"), "in-bounds image should not be re-encoded");
+  assert.equal(
+    b64,
+    Buffer.from(bytes).toString("base64"),
+    "in-bounds image should not be re-encoded",
+  );
 });
 
 test("processImageBytes downscales an oversize image's longest side to the 4096 cap", async () => {

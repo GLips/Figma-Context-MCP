@@ -1,11 +1,11 @@
 import { z } from "zod";
 
-// Owns the whole execute_code orchestration — the reply schema, consent gating, and result shaping — not
-// just images; it was extracted from index.ts because the two-pass IMAGE path (fetch bytes server-side,
-// inject, re-run once) is the interesting case, and pulling it here with its bridge/gate/fetch seams
-// injected makes that state machine testable off-network. index.ts wires the real seams.
+// Owns the whole figma_execute_code orchestration — the reply schema, consent gating, and result
+// shaping — not just images; the two-pass IMAGE path (fetch bytes server-side, inject, re-run once)
+// is the interesting case, and holding it here with its bridge/gate/fetch seams injected makes that
+// state machine testable off-network. The figma-execute-code tool wires the real seams.
 
-// Bound on distinct image urls one execute_code call may request, and on how many fetch/decode concurrently
+// Bound on distinct image urls one figma_execute_code call may request, and on how many fetch/decode concurrently
 // — the pair caps peak server memory (each in-flight fetch holds a decoded raster) to FETCH_CONCURRENCY
 // rasters regardless of how many the agent's code asks for.
 const MAX_IMAGES_PER_RUN = 64;
@@ -51,7 +51,9 @@ export interface ExecuteDeps {
 // contains them; a url key theoretically could. This is the ONE injection line the live-grounding checkbox
 // covers: if globalThis is absent/read-only in the real QuickJS sandbox, only this line needs to change.
 export function injectImageBytes(code: string, bytes: Record<string, string>): string {
-  const literal = JSON.stringify(bytes).replace(/\u2028/g, "\\u2028").replace(/\u2029/g, "\\u2029");
+  const literal = JSON.stringify(bytes)
+    .replace(/\u2028/g, "\\u2028")
+    .replace(/\u2029/g, "\\u2029");
   return `globalThis.__flcmImageBytes = ${literal};\n${code}`;
 }
 
@@ -80,7 +82,7 @@ export async function executeWithImages(code: string, deps: ExecuteDeps): Promis
     return {
       kind: "error",
       message:
-        `flcm.image: ${reply.imagesNeeded.length} distinct image urls requested in one execute_code call, over ` +
+        `flcm.image: ${reply.imagesNeeded.length} distinct image urls requested in one figma_execute_code call, over ` +
         `the ${MAX_IMAGES_PER_RUN} cap — split the build across calls.`,
     };
   }
@@ -117,7 +119,11 @@ export async function executeWithImages(code: string, deps: ExecuteDeps): Promis
 // Run `fn` over `items` with at most `limit` in flight at once. `limit` workers pull from a shared cursor
 // until the list is drained; the first rejection propagates through Promise.all (in-flight peers finish, but
 // the caller's try/catch already owns the failure). Small local helper — no need for a concurrency dep.
-async function mapWithConcurrency<T>(items: T[], limit: number, fn: (item: T) => Promise<void>): Promise<void> {
+async function mapWithConcurrency<T>(
+  items: T[],
+  limit: number,
+  fn: (item: T) => Promise<void>,
+): Promise<void> {
   let cursor = 0;
   const worker = async (): Promise<void> => {
     while (cursor < items.length) {

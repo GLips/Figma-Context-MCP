@@ -10,7 +10,11 @@ export async function imageExample(flcm: Flcm) {
   const post = flcm.frame({ layout: { mode: "column", gap: 8 }, width: 390 }, [
     flcm.rect({ width: 390, height: 260, fill: flcm.image("https://example.com/photo.jpg") }),
     flcm.frame({ layout: { mode: "row", gap: 8, padding: 12, alignItems: "center" } }, [
-      flcm.ellipse({ width: 40, height: 40, fill: flcm.image("https://example.com/avatar.jpg", { scaleMode: "FILL" }) }),
+      flcm.ellipse({
+        width: 40,
+        height: 40,
+        fill: flcm.image("https://example.com/avatar.jpg", { scaleMode: "FILL" }),
+      }),
       flcm.text("@ridgeline", { textStyle: { fontWeight: "semibold", fontSize: 14 } }),
     ]),
   ]);
