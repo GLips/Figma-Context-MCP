@@ -1,5 +1,6 @@
 import path from "path";
-import { z } from "zod";
+// zod/v3 — see get-figma-data-tool.ts: classic-API schemas kept as-is across the zod-4 bump.
+import { z } from "zod/v3";
 import {
   type AuthMode,
   type ClientInfo,

@@ -1,4 +1,7 @@
-import { z } from "zod";
+// zod/v3, not "zod": this tool's schemas stay on the classic v3 API (the same classic
+// implementation zod@4 still ships) across the workspace's zod-4 main-line bump; the MCP SDK
+// accepts both. Migrating them to v4 is its own change, not a side effect of a dependency bump.
+import { z } from "zod/v3";
 import { FigmaService } from "~/services/figma.js";
 import { Logger } from "~/utils/logger.js";
 import { sendProgress, startProgressHeartbeat, type ToolExtra } from "~/mcp/progress.js";
