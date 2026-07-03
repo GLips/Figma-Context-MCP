@@ -1,4 +1,4 @@
-import type { ExtractorFn, SimplifiedNode } from "./types.js";
+import type { CanonicalizeContext, SimplifiedNode } from "./types.js";
 import { buildSimplifiedLayout } from "~/core/transformers/layout.js";
 import {
   buildSimplifiedStrokes,
@@ -25,19 +25,27 @@ import type { NodeSnapshot } from "./snapshot.js";
  * Extracts layout-related properties from a node: per-node geometry onto the
  * node top level (hybrid structure) and container config as the `layout` group.
  */
-export const layoutExtractor: ExtractorFn = (node, result, context) => {
+export function layoutExtractor(
+  node: NodeSnapshot,
+  result: SimplifiedNode,
+  context: CanonicalizeContext,
+): void {
   const { layout, geometry } = buildSimplifiedLayout(node, context.parent);
   Object.assign(result, geometry);
   if (Object.keys(layout).length > 1) {
     // Layout can't be a Figma named style, so no style slots to check.
     result.layout = context.styles.register(node, layout, [], "layout");
   }
-};
+}
 
 /**
  * Extracts text content and text styling from a node.
  */
-export const textExtractor: ExtractorFn = (node, result, context) => {
+export function textExtractor(
+  node: NodeSnapshot,
+  result: SimplifiedNode,
+  context: CanonicalizeContext,
+): void {
   // Extract text content — markdown for the common styled cases, `[text, style]`
   // run tuples for the arbitrary-style residual. Run deltas register through the
   // ordinary style sink (no special namespace), so the finalize pass count-gates
@@ -62,12 +70,16 @@ export const textExtractor: ExtractorFn = (node, result, context) => {
       result.textStyle = context.styles.register(node, textStyle, ["text", "typography"], "style");
     }
   }
-};
+}
 
 /**
  * Extracts visual appearance properties (fills, strokes, effects, opacity, border radius).
  */
-export const visualsExtractor: ExtractorFn = (node, result, context) => {
+export function visualsExtractor(
+  node: NodeSnapshot,
+  result: SimplifiedNode,
+  context: CanonicalizeContext,
+): void {
   // Check if node has children to determine CSS properties
   const hasChildren = !!node.children && node.children.length > 0;
 
@@ -119,14 +131,18 @@ export const visualsExtractor: ExtractorFn = (node, result, context) => {
   ) {
     result.borderRadius = `${node.rectangleCornerRadii[0]}px ${node.rectangleCornerRadii[1]}px ${node.rectangleCornerRadii[2]}px ${node.rectangleCornerRadii[3]}px`;
   }
-};
+}
 
 /**
  * Extracts component-related properties from nodes.
  * Handles three cases: INSTANCE property values, property references on any node,
  * and property definitions on COMPONENT/COMPONENT_SET nodes.
  */
-export const componentExtractor: ExtractorFn = (node, result, context) => {
+export function componentExtractor(
+  node: NodeSnapshot,
+  result: SimplifiedNode,
+  context: CanonicalizeContext,
+): void {
   // Instance nodes: componentId + simplified componentProperties
   if (node.type === "INSTANCE") {
     if (node.componentId) {
@@ -158,36 +174,9 @@ export const componentExtractor: ExtractorFn = (node, result, context) => {
       context.componentDefs[node.id] = defs;
     }
   }
-};
+}
 
-// -------------------- CONVENIENCE COMBINATIONS --------------------
-
-/**
- * All extractors — the full canonical output; what production uses.
- */
-export const allExtractors = [layoutExtractor, textExtractor, visualsExtractor, componentExtractor];
-
-/**
- * Layout and text only - useful for content analysis and layout planning.
- */
-export const layoutAndText = [layoutExtractor, textExtractor];
-
-/**
- * Text content only - useful for content audits and copy extraction.
- */
-export const contentOnly = [textExtractor];
-
-/**
- * Visuals only - useful for design system analysis and style extraction.
- */
-export const visualsOnly = [visualsExtractor];
-
-/**
- * Layout only - useful for structure analysis.
- */
-export const layoutOnly = [layoutExtractor];
-
-// -------------------- AFTER CHILDREN HELPERS --------------------
+// -------------------- SVG CONTAINER COLLAPSE --------------------
 
 /**
  * Node types that can be exported as SVG images.
@@ -197,7 +186,7 @@ export const layoutOnly = [layoutExtractor];
  *
  * Tightly coupled to node-walker.ts, which renames VECTOR → IMAGE-SVG before this set is consulted.
  */
-export const SVG_ELIGIBLE_TYPES = new Set([
+const SVG_ELIGIBLE_TYPES = new Set([
   "IMAGE-SVG", // VECTOR nodes are converted to IMAGE-SVG, or containers that were collapsed
   "BOOLEAN_OPERATION",
   "STAR",
@@ -228,7 +217,9 @@ const COLLAPSIBLE_CONTAINER_TYPES = new Set(["FRAME", "GROUP", "INSTANCE", "BOOL
 const SVG_COLLAPSE_AUTOLAYOUT_THRESHOLD = 10;
 
 /**
- * afterChildren callback that collapses SVG-heavy containers to IMAGE-SVG.
+ * Collapse SVG-heavy containers to IMAGE-SVG. Called by the walker after a
+ * node's children are processed (bottom-up), so nested containers collapse
+ * innermost-first.
  *
  * Collapses when:
  *   - container is a FRAME, GROUP, INSTANCE, or BOOLEAN_OPERATION
@@ -252,8 +243,8 @@ export function collapseSvgContainers(
 ): SimplifiedNode[] {
   if (!COLLAPSIBLE_CONTAINER_TYPES.has(node.type)) return children;
   // `type` is optional on SimplifiedNode only because post-walk template refs
-  // drop it; at afterChildren time (mid-walk) every child still has a type, so
-  // the `?? ""` is a type-level concession that never matches at runtime.
+  // drop it; mid-walk every child still has a type, so the `?? ""` is a
+  // type-level concession that never matches at runtime.
   if (!children.every((child) => SVG_ELIGIBLE_TYPES.has(child.type ?? ""))) return children;
   if (hasImageFillOnSelfOrDirectChildren(node)) return children;
 
@@ -268,7 +259,7 @@ export function collapseSvgContainers(
 /**
  * Check whether a node or its direct children have image fills.
  *
- * Only direct children need checking because afterChildren runs bottom-up:
+ * Only direct children need checking because the collapse runs bottom-up:
  * if a deeper descendant has image fills, its parent won't collapse (stays FRAME),
  * and FRAME isn't SVG-eligible, so the chain breaks naturally at each level.
  */

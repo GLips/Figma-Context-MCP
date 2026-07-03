@@ -1,10 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { extractFromDesign } from "~/core/node-walker.js";
-import { allExtractors, collapseSvgContainers } from "~/core/built-in.js";
 import { simplifyRawFigmaObject } from "~/adapters/rest/design-extractor.js";
 import { restNodeToSnapshot } from "~/adapters/rest/node-to-snapshot.js";
 import { createRefStyleSink } from "~/core/style-sink.js";
-import type { ExtractorFn, TraversalOptions } from "~/core/types.js";
+import type { TraversalOptions } from "~/core/types.js";
 import type { GetFileResponse, Style } from "@figma/rest-api-spec";
 import type { Node as FigmaNode } from "@figma/rest-api-spec";
 
@@ -20,14 +19,12 @@ function makeNode(overrides: Record<string, unknown>): FigmaNode {
 // (The adapter is the only place raw REST paint shapes are unpacked.)
 async function walk(
   nodes: FigmaNode[],
-  extractors: ExtractorFn[],
   options?: TraversalOptions,
   extraStyles?: Record<string, Style>,
 ) {
   const sink = createRefStyleSink();
   const { nodes: extracted, componentDefs } = await extractFromDesign(
     nodes.map((node) => restNodeToSnapshot(node, extraStyles)),
-    extractors,
     sink,
     options,
   );
@@ -71,7 +68,7 @@ const fixtureNodes: FigmaNode[] = [
 
 describe("extractFromDesign", () => {
   it("produces correct node structure from a nested tree", async () => {
-    const { nodes } = await walk(fixtureNodes, allExtractors);
+    const { nodes } = await walk(fixtureNodes);
 
     // Top-level: Header, Body, Icon (3 nodes — Bg is invisible, filtered out)
     expect(nodes).toHaveLength(3);
@@ -98,7 +95,7 @@ describe("extractFromDesign", () => {
   });
 
   it("respects maxDepth option", async () => {
-    const { nodes } = await walk(fixtureNodes, allExtractors, { maxDepth: 1 });
+    const { nodes } = await walk(fixtureNodes, { maxDepth: 1 });
 
     // At depth 0 we get top-level nodes, depth 1 gets their direct children, no deeper
     const header = nodes.find((n) => n.name === "Header")!;
@@ -120,7 +117,7 @@ describe("extractFromDesign", () => {
       fills: [{ type: "SOLID", color: { r: 1, g: 0, b: 0, a: 1 }, visible: true }],
     });
 
-    const { globalVars } = await walk([styledNode], allExtractors);
+    const { globalVars } = await walk([styledNode]);
 
     // The fill should be extracted into a global variable
     expect(Object.keys(globalVars.styles).length).toBeGreaterThan(0);
@@ -132,7 +129,7 @@ describe("extractFromDesign", () => {
     const nodeA = makeNode({ id: "5:1", name: "A", type: "FRAME", fills: sharedFill });
     const nodeB = makeNode({ id: "5:2", name: "B", type: "FRAME", fills: sharedFill });
 
-    const { nodes, globalVars } = await walk([nodeA, nodeB], allExtractors);
+    const { nodes, globalVars } = await walk([nodeA, nodeB]);
 
     // Both nodes should reference the same fill variable
     expect(nodes[0].fills).toBeDefined();
@@ -157,7 +154,7 @@ describe("extractFromDesign", () => {
     });
     const fillNode = makeNode({ id: "8:2", name: "B", type: "FRAME", fills: sharedColor });
 
-    const { nodes, globalVars } = await walk([strokeNode, fillNode], allExtractors);
+    const { nodes, globalVars } = await walk([strokeNode, fillNode]);
 
     expect(nodes[0].strokes).toBeDefined();
     expect(nodes[1].fills).toBeDefined();
@@ -182,7 +179,7 @@ describe("extractFromDesign", () => {
       strokeAlign: "OUTSIDE",
     });
 
-    const { nodes } = await walk([node], allExtractors);
+    const { nodes } = await walk([node]);
 
     expect(nodes[0].strokeAlign).toBe("outside");
     expect(nodes[0].strokeWidth).toBe("2px");
@@ -198,7 +195,7 @@ describe("extractFromDesign", () => {
       strokeAlign: "INSIDE",
     });
 
-    const { nodes } = await walk([node], allExtractors);
+    const { nodes } = await walk([node]);
 
     expect(nodes[0].strokeAlign).toBeUndefined();
     expect(nodes[0].strokeWidth).toBe("2px");
@@ -228,12 +225,7 @@ describe("extractFromDesign", () => {
       "161:300": { name: "Heading / Large" } as Style,
     };
 
-    const { nodes, globalVars: resultVars } = await walk(
-      [nodeA, nodeB],
-      allExtractors,
-      {},
-      extraStyles,
-    );
+    const { nodes, globalVars: resultVars } = await walk([nodeA, nodeB], {}, extraStyles);
 
     expect(nodes[0].textStyle).toBe("Heading / Large");
     expect(nodes[1].textStyle).toBe("Heading / Large (161:300)");
@@ -265,7 +257,7 @@ describe("fill flattening", () => {
       ],
     });
 
-    const { nodes, globalVars } = await walk([node], allExtractors);
+    const { nodes, globalVars } = await walk([node]);
 
     expect(fillsValue(nodes, globalVars)).toEqual(["#CCCCCC"]);
   });
@@ -281,7 +273,7 @@ describe("fill flattening", () => {
       ],
     });
 
-    const { nodes, globalVars } = await walk([node], allExtractors);
+    const { nodes, globalVars } = await walk([node]);
 
     // Only the opaque top color survives; the blue beneath contributes nothing.
     expect(fillsValue(nodes, globalVars)).toEqual(["#FF0000"]);
@@ -299,7 +291,7 @@ describe("fill flattening", () => {
       ],
     });
 
-    const { nodes, globalVars } = await walk([node], allExtractors);
+    const { nodes, globalVars } = await walk([node]);
 
     expect(fillsValue(nodes, globalVars)).toEqual(["#BFBFBF"]);
   });
@@ -316,7 +308,7 @@ describe("fill flattening", () => {
       ],
     });
 
-    const { nodes, globalVars } = await walk([node], allExtractors);
+    const { nodes, globalVars } = await walk([node]);
 
     // Red contributes nothing (opaque green above it); blue@50% blends over green → teal.
     expect(fillsValue(nodes, globalVars)).toEqual(["#008080"]);
@@ -344,7 +336,7 @@ describe("fill flattening", () => {
       ],
     });
 
-    const { nodes, globalVars } = await walk([node], allExtractors);
+    const { nodes, globalVars } = await walk([node]);
 
     expect(fillsValue(nodes, globalVars)).toEqual(["#CCCCCC"]);
   });
@@ -360,7 +352,7 @@ describe("fill flattening", () => {
       ],
     });
 
-    const { nodes, globalVars } = await walk([node], allExtractors);
+    const { nodes, globalVars } = await walk([node]);
 
     expect(fillsValue(nodes, globalVars)).toEqual(["rgba(85, 85, 85, 0.75)"]);
   });
@@ -388,7 +380,7 @@ describe("fill flattening", () => {
       ],
     });
 
-    const { nodes, globalVars } = await walk([node], allExtractors);
+    const { nodes, globalVars } = await walk([node]);
 
     // Both layers survive, reversed into CSS top-first order: solid first, gradient last.
     const value = fillsValue(nodes, globalVars) as unknown[];
@@ -413,13 +405,13 @@ describe("fill flattening", () => {
       ],
     });
 
-    const { nodes, globalVars } = await walk([node], allExtractors);
+    const { nodes, globalVars } = await walk([node]);
 
     expect(fillsValue(nodes, globalVars)).toHaveLength(2);
   });
 });
 
-describe("collapseSvgContainers", () => {
+describe("SVG container collapse", () => {
   it("collapses BOOLEAN_OPERATION nodes to IMAGE-SVG", async () => {
     const booleanOpNode = makeNode({
       id: "5:1",
@@ -432,9 +424,7 @@ describe("collapseSvgContainers", () => {
       ],
     });
 
-    const { nodes } = await walk([booleanOpNode], allExtractors, {
-      afterChildren: collapseSvgContainers,
-    });
+    const { nodes } = await walk([booleanOpNode]);
 
     expect(nodes).toHaveLength(1);
     expect(nodes[0].type).toBe("IMAGE-SVG");
@@ -460,9 +450,7 @@ describe("collapseSvgContainers", () => {
       ],
     });
 
-    const { nodes } = await walk([frameWithBoolOp], allExtractors, {
-      afterChildren: collapseSvgContainers,
-    });
+    const { nodes } = await walk([frameWithBoolOp]);
 
     // The BOOLEAN_OPERATION collapses to IMAGE-SVG first (bottom-up),
     // then the FRAME sees all children are SVG-eligible and collapses too.
@@ -489,9 +477,7 @@ describe("collapseSvgContainers", () => {
       ],
     });
 
-    const { nodes } = await walk([autoLayoutRow], allExtractors, {
-      afterChildren: collapseSvgContainers,
-    });
+    const { nodes } = await walk([autoLayoutRow]);
 
     expect(nodes).toHaveLength(1);
     expect(nodes[0].type).toBe("FRAME");
@@ -514,9 +500,7 @@ describe("collapseSvgContainers", () => {
       ),
     });
 
-    const { nodes } = await walk([dotRow], allExtractors, {
-      afterChildren: collapseSvgContainers,
-    });
+    const { nodes } = await walk([dotRow]);
 
     expect(nodes).toHaveLength(1);
     expect(nodes[0].type).toBe("IMAGE-SVG");
@@ -537,9 +521,7 @@ describe("collapseSvgContainers", () => {
       ],
     });
 
-    const { nodes } = await walk([iconFrame], allExtractors, {
-      afterChildren: collapseSvgContainers,
-    });
+    const { nodes } = await walk([iconFrame]);
 
     expect(nodes).toHaveLength(1);
     expect(nodes[0].type).toBe("IMAGE-SVG");
@@ -566,7 +548,7 @@ describe("component property support", () => {
       ],
     });
 
-    const { nodes } = await walk([componentNode], allExtractors);
+    const { nodes } = await walk([componentNode]);
 
     const card = nodes[0];
     expect(card.children).toHaveLength(2);
@@ -591,7 +573,7 @@ describe("component property support", () => {
       ],
     });
 
-    const { nodes } = await walk([instanceNode], allExtractors);
+    const { nodes } = await walk([instanceNode]);
 
     const instance = nodes[0];
     expect(instance.children).toHaveLength(1);
@@ -611,7 +593,7 @@ describe("component property support", () => {
       children: [makeNode({ id: "12:2", name: "Title", type: "TEXT", characters: "Product Name" })],
     });
 
-    const { componentDefs } = await walk([componentNode], allExtractors);
+    const { componentDefs } = await walk([componentNode]);
 
     expect(componentDefs["12:1"]).toEqual({
       "On Sale": { type: "boolean", defaultValue: true },
@@ -636,7 +618,7 @@ describe("component property support", () => {
       ],
     });
 
-    const { nodes } = await walk([componentNode], allExtractors);
+    const { nodes } = await walk([componentNode]);
 
     const label = nodes[0].children![0];
     expect(label.componentPropertyReferences).toEqual({ text: "Button Label" });
@@ -655,7 +637,7 @@ describe("component property support", () => {
       children: [makeNode({ id: "14:2", name: "Content", type: "FRAME" })],
     });
 
-    const { nodes } = await walk([instanceNode], allExtractors);
+    const { nodes } = await walk([instanceNode]);
 
     expect(nodes[0].componentProperties).toEqual({
       "On Sale": true,
@@ -682,7 +664,7 @@ describe("component property support", () => {
       ],
     });
 
-    const { nodes } = await walk([componentNode], allExtractors);
+    const { nodes } = await walk([componentNode]);
 
     const nestedInstance = nodes[0].children![0];
     expect(nestedInstance).toBeDefined();
@@ -714,9 +696,7 @@ describe("simplifyRawFigmaObject", () => {
       editorType: "figma",
     } as unknown as GetFileResponse;
 
-    const result = await simplifyRawFigmaObject(mockResponse, allExtractors, {
-      afterChildren: collapseSvgContainers,
-    });
+    const result = await simplifyRawFigmaObject(mockResponse);
 
     expect(result.name).toBe("Test File");
     expect(result.nodes).toHaveLength(3);
@@ -762,7 +742,7 @@ describe("simplifyRawFigmaObject", () => {
       editorType: "figma",
     } as unknown as GetFileResponse;
 
-    const result = await simplifyRawFigmaObject(mockResponse, allExtractors);
+    const result = await simplifyRawFigmaObject(mockResponse);
 
     expect(result.components["20:1"].propertyDefinitions).toEqual({
       "On Sale": { type: "boolean", defaultValue: true },

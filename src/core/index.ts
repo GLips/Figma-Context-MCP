@@ -2,7 +2,6 @@
 export type {
   CanonicalizeContext,
   ComponentDefinitionMap,
-  ExtractorFn,
   NodeCounter,
   SimplifiedDesign,
   SimplifiedNode,
@@ -24,20 +23,3 @@ export { extractFromDesign } from "./node-walker.js";
 export { createInlineStyleSink, createRefStyleSink } from "./style-sink.js";
 export type { RefStyleSink } from "./style-sink.js";
 export { finalizeDesign } from "./finalize.js";
-
-// Built-in extractors and afterChildren helpers
-export {
-  layoutExtractor,
-  textExtractor,
-  visualsExtractor,
-  componentExtractor,
-  // Convenience combinations
-  allExtractors,
-  layoutAndText,
-  contentOnly,
-  visualsOnly,
-  layoutOnly,
-  // afterChildren helpers
-  collapseSvgContainers,
-  SVG_ELIGIBLE_TYPES,
-} from "./built-in.js";

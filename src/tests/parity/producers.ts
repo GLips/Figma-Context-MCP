@@ -2,7 +2,6 @@ import type { GetFileResponse, GetFileNodesResponse } from "@figma/rest-api-spec
 import type { NodeSnapshot } from "~/core/snapshot.js";
 import type { SimplifiedDesign } from "~/core/types.js";
 import { canonicalize } from "~/core/canonicalize.js";
-import { allExtractors, collapseSvgContainers } from "~/core/index.js";
 import { simplifyRawFigmaObject } from "~/adapters/rest/design-extractor.js";
 
 /**
@@ -39,10 +38,7 @@ export interface ParityProducer {
  */
 const restProducer: ParityProducer = {
   id: "rest",
-  produce: (parityCase) =>
-    simplifyRawFigmaObject(parityCase.rest, allExtractors, {
-      afterChildren: collapseSvgContainers,
-    }),
+  produce: (parityCase) => simplifyRawFigmaObject(parityCase.rest),
 };
 
 /**
@@ -63,7 +59,7 @@ const snapshotProducer: ParityProducer = {
   produce: async (parityCase) => {
     const { nodes, globalVars, elements, componentDefinitions } = await canonicalize(
       parityCase.snapshot,
-      { extractors: allExtractors, compress: true, afterChildren: collapseSvgContainers },
+      { compress: true },
     );
     return {
       // `name` is scoped out of the parity view — no source name in a snapshot.

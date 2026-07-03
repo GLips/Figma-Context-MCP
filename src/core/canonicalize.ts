@@ -2,19 +2,15 @@ import type { NodeSnapshot } from "./snapshot.js";
 import type {
   ComponentDefinitionMap,
   ElementBody,
-  ExtractorFn,
   GlobalVars,
   SimplifiedNode,
   TraversalOptions,
 } from "./types.js";
 import { extractFromDesign } from "./node-walker.js";
 import { finalizeDesign } from "./finalize.js";
-import { allExtractors } from "./built-in.js";
 import { createInlineStyleSink, createRefStyleSink } from "./style-sink.js";
 
 export interface CanonicalizeOptions extends TraversalOptions {
-  /** Extractors to apply per node. Defaults to all built-ins. */
-  extractors?: ExtractorFn[];
   /**
    * Opt into the egress compression pass: styles register under deduplicating
    * refs during the walk, then `finalize` count-gates hoisting and templates
@@ -54,16 +50,11 @@ export async function canonicalize(
   snapshots: NodeSnapshot[],
   options: CanonicalizeOptions = {},
 ): Promise<CanonicalizeResult> {
-  const { extractors = allExtractors, compress = false, ...traversal } = options;
+  const { compress = false, ...traversal } = options;
 
   if (compress) {
     const sink = createRefStyleSink();
-    const { nodes, componentDefs } = await extractFromDesign(
-      snapshots,
-      extractors,
-      sink,
-      traversal,
-    );
+    const { nodes, componentDefs } = await extractFromDesign(snapshots, sink, traversal);
     return {
       ...finalizeDesign(nodes, { styles: sink.styles }, sink.namedStyleKeys),
       componentDefinitions: componentDefs,
@@ -71,7 +62,7 @@ export async function canonicalize(
   }
 
   const sink = createInlineStyleSink();
-  const { nodes, componentDefs } = await extractFromDesign(snapshots, extractors, sink, traversal);
+  const { nodes, componentDefs } = await extractFromDesign(snapshots, sink, traversal);
   return {
     nodes,
     globalVars: { styles: sink.styles },

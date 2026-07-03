@@ -1,6 +1,5 @@
 import { fileURLToPath } from "node:url";
 import path from "node:path";
-import { allExtractors, collapseSvgContainers } from "~/core/index.js";
 import { simplifyRawFigmaObject } from "~/adapters/rest/design-extractor.js";
 import type { SimplifiedDesign } from "~/core/types.js";
 import type { GoldenFixture } from "./fixtures.js";
@@ -9,16 +8,13 @@ import type { GoldenFixture } from "./fixtures.js";
 export const EXPECTED_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "expected");
 
 /**
- * Run a fixture through the PUBLIC simplify entry with the exact options
- * production uses (`getFigmaData` calls it with `afterChildren:
- * collapseSvgContainers`). Targeting the public entry — not the extractor
- * internals — is what lets these goldens survive the carve gutting everything
- * underneath.
+ * Run a fixture through the PUBLIC simplify entry exactly as production does
+ * (`getFigmaData` passes only depth/progress options). Targeting the public
+ * entry — not the walk internals — is what lets these goldens survive
+ * refactors gutting everything underneath.
  */
 export async function runFixture(fixture: GoldenFixture): Promise<SimplifiedDesign> {
-  return simplifyRawFigmaObject(fixture.response, allExtractors, {
-    afterChildren: collapseSvgContainers,
-  });
+  return simplifyRawFigmaObject(fixture.response);
 }
 
 /**

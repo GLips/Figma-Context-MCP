@@ -1,10 +1,16 @@
 import { isVisible } from "~/core/utils.js";
 import { computeGridChildOrder } from "~/core/transformers/layout.js";
 import type { NodeSnapshot } from "./snapshot.js";
+import {
+  layoutExtractor,
+  textExtractor,
+  visualsExtractor,
+  componentExtractor,
+  collapseSvgContainers,
+} from "./built-in.js";
 import type {
   CanonicalizeContext,
   ComponentDefinitionMap,
-  ExtractorFn,
   NodeCounter,
   StyleSink,
   TraversalOptions,
@@ -28,17 +34,17 @@ async function maybeYield(
 }
 
 /**
- * Extract data from Figma nodes using a flexible, single-pass approach.
+ * The single-pass walk: geometry/layout, text, visuals, and component data are
+ * extracted from every visible node, depth-first, writing style values through
+ * the injected sink (the compression seam).
  *
  * @param nodes - The node snapshots to process
- * @param extractors - Array of extractor functions to apply during traversal
- * @param styleSink - Where extractors send style values (the compression seam)
- * @param options - Traversal options (filtering, depth limits, scheduler, etc.)
+ * @param styleSink - Where style values are sent (the compression seam)
+ * @param options - Traversal options (depth limit, scheduler, progress counter)
  * @returns Processed nodes plus the component definitions found during the walk
  */
 export async function extractFromDesign(
   nodes: NodeSnapshot[],
-  extractors: ExtractorFn[],
   styleSink: StyleSink,
   options: TraversalOptions = {},
 ): Promise<{
@@ -54,9 +60,8 @@ export async function extractFromDesign(
 
   const processedNodes: SimplifiedNode[] = [];
   for (const node of nodes) {
-    if (!shouldProcessNode(node, context, options)) continue;
-    const result = await processNodeWithExtractors(node, extractors, context, options);
-    if (result !== null) processedNodes.push(result);
+    if (!shouldProcessNode(node, context)) continue;
+    processedNodes.push(await processNode(node, context, options));
   }
 
   return {
@@ -66,34 +71,30 @@ export async function extractFromDesign(
 }
 
 /**
- * Process a single node with all provided extractors in one pass.
+ * Extract one node: base metadata, then the four domain extractions in
+ * sequence, then children.
  */
-async function processNodeWithExtractors(
+async function processNode(
   node: NodeSnapshot,
-  extractors: ExtractorFn[],
   context: CanonicalizeContext,
   options: TraversalOptions,
-): Promise<SimplifiedNode | null> {
-  if (!shouldProcessNode(node, context, options)) {
-    return null;
-  }
-
+): Promise<SimplifiedNode> {
   await maybeYield(context.nodeCounter, options.scheduler);
 
-  // Always include base metadata
   const result: SimplifiedNode = {
     id: node.id,
     name: node.name,
     type: node.type === "VECTOR" ? "IMAGE-SVG" : node.type,
   };
 
-  // Apply all extractors to this node in a single pass
-  for (const extractor of extractors) {
-    extractor(node, result, context);
-  }
+  layoutExtractor(node, result, context);
+  textExtractor(node, result, context);
+  visualsExtractor(node, result, context);
+  componentExtractor(node, result, context);
 
-  // Handle children recursively
-  if (shouldTraverseChildren(node, context, options)) {
+  // Handle children recursively, unless the depth limit cuts traversal here.
+  const atDepthLimit = options.maxDepth !== undefined && context.currentDepth >= options.maxDepth;
+  if (!atDepthLimit && node.children && node.children.length > 0) {
     const childContext: CanonicalizeContext = {
       ...context,
       currentDepth: context.currentDepth + 1,
@@ -107,28 +108,23 @@ async function processNodeWithExtractors(
             : context.insideComponentDefinition,
     };
 
-    if (node.children && node.children.length > 0) {
-      // Grid containers: emit children in grid-flow (anchor) order rather than
-      // Figma's z-order, so CSS auto-placement lands them in the right cells.
-      // See computeGridChildOrder for details.
-      const order = computeGridChildOrder(node) ?? node.children.map((_, i) => i);
-      const children: SimplifiedNode[] = [];
-      for (const idx of order) {
-        const child = node.children[idx];
-        if (!shouldProcessNode(child, childContext, options)) continue;
-        const processed = await processNodeWithExtractors(child, extractors, childContext, options);
-        if (processed !== null) children.push(processed);
-      }
+    // Grid containers: emit children in grid-flow (anchor) order rather than
+    // Figma's z-order, so CSS auto-placement lands them in the right cells.
+    // See computeGridChildOrder for details.
+    const order = computeGridChildOrder(node) ?? node.children.map((_, i) => i);
+    const children: SimplifiedNode[] = [];
+    for (const idx of order) {
+      const child = node.children[idx];
+      if (!shouldProcessNode(child, childContext)) continue;
+      children.push(await processNode(child, childContext, options));
+    }
 
-      if (children.length > 0) {
-        // Allow custom logic to modify parent and control which children to include
-        const childrenToInclude = options.afterChildren
-          ? options.afterChildren(node, result, children)
-          : children;
-
-        if (childrenToInclude.length > 0) {
-          result.children = childrenToInclude;
-        }
+    if (children.length > 0) {
+      // Runs bottom-up (children already processed), so nested SVG containers
+      // collapse innermost-first.
+      const childrenToInclude = collapseSvgContainers(node, result, children);
+      if (childrenToInclude.length > 0) {
+        result.children = childrenToInclude;
       }
     }
   }
@@ -137,41 +133,12 @@ async function processNodeWithExtractors(
 }
 
 /**
- * Determine if a node should be processed based on filters.
+ * Determine if a node should be processed: visible nodes only, except hidden
+ * nodes controlled by a boolean property inside component definitions.
  */
-function shouldProcessNode(
-  node: NodeSnapshot,
-  context: CanonicalizeContext,
-  options: TraversalOptions,
-): boolean {
-  if (!isVisible(node)) {
-    // Rescue hidden nodes controlled by a boolean property inside component definitions
-    const hasVisibleRef =
-      !!node.componentPropertyReferences && "visible" in node.componentPropertyReferences;
-    if (!(hasVisibleRef && context.insideComponentDefinition)) {
-      return false;
-    }
-  }
-
-  if (options.nodeFilter && !options.nodeFilter(node)) {
-    return false;
-  }
-
-  return true;
-}
-
-/**
- * Determine if we should traverse into a node's children.
- */
-function shouldTraverseChildren(
-  _node: NodeSnapshot,
-  context: CanonicalizeContext,
-  options: TraversalOptions,
-): boolean {
-  // Check depth limit
-  if (options.maxDepth !== undefined && context.currentDepth >= options.maxDepth) {
-    return false;
-  }
-
-  return true;
+function shouldProcessNode(node: NodeSnapshot, context: CanonicalizeContext): boolean {
+  if (isVisible(node)) return true;
+  const hasVisibleRef =
+    !!node.componentPropertyReferences && "visible" in node.componentPropertyReferences;
+  return hasVisibleRef && !!context.insideComponentDefinition;
 }

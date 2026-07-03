@@ -7,7 +7,7 @@ import type {
   Style,
 } from "@figma/rest-api-spec";
 import { tagError } from "~/utils/error-meta.js";
-import type { ExtractorFn, TraversalOptions, SimplifiedDesign } from "~/core/types.js";
+import type { TraversalOptions, SimplifiedDesign } from "~/core/types.js";
 import type { NodeSnapshot } from "~/core/snapshot.js";
 import { canonicalize } from "~/core/canonicalize.js";
 import { restNodeToSnapshot } from "./node-to-snapshot.js";
@@ -20,11 +20,10 @@ import { simplifyComponents, simplifyComponentSets } from "./component.js";
 const eventLoopYield = () => new Promise<void>((resolve) => setImmediate(resolve));
 
 /**
- * Extract a complete SimplifiedDesign from raw Figma API response using extractors.
+ * Extract a complete SimplifiedDesign from a raw Figma API response.
  */
 export async function simplifyRawFigmaObject(
   apiResponse: GetFileResponse | GetFileNodesResponse,
-  nodeExtractors: ExtractorFn[],
   options: TraversalOptions = {},
 ): Promise<SimplifiedDesign> {
   // Decode the response into plan-neutral snapshots + the REST-table metadata
@@ -35,7 +34,6 @@ export async function simplifyRawFigmaObject(
   // output form (ref-deduplicated styles + element templates).
   const { nodes, globalVars, elements, componentDefinitions } = await canonicalize(snapshots, {
     ...options,
-    extractors: nodeExtractors,
     compress: true,
     scheduler: eventLoopYield,
   });

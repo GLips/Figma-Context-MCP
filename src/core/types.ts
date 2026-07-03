@@ -88,21 +88,6 @@ export type NodeCounter = { count: number };
 
 export interface TraversalOptions {
   maxDepth?: number;
-  nodeFilter?: (node: NodeSnapshot) => boolean;
-  /**
-   * Called after children are processed, allowing modification of the parent node
-   * and control over which children to include in the output.
-   *
-   * @param node - The node snapshot being processed
-   * @param result - SimplifiedNode being built (can be mutated)
-   * @param children - Processed children
-   * @returns Children to include (return empty array to omit children)
-   */
-  afterChildren?: (
-    node: NodeSnapshot,
-    result: SimplifiedNode,
-    children: SimplifiedNode[],
-  ) => SimplifiedNode[];
   /**
    * Optional caller-supplied counter. The walker increments it as it processes
    * nodes, so callers that need a live readout (e.g. progress heartbeats) or a
@@ -113,19 +98,6 @@ export interface TraversalOptions {
   /** Cooperative-yield hook, awaited every YIELD_INTERVAL nodes. No yield when omitted. */
   scheduler?: WalkScheduler;
 }
-
-/**
- * An extractor function that can modify a SimplifiedNode during traversal.
- *
- * @param node - The current node snapshot being processed
- * @param result - SimplifiedNode object being built—this can be mutated inside the extractor
- * @param context - Traversal context including the style sink and parent info. This can also be mutated inside the extractor.
- */
-export type ExtractorFn = (
-  node: NodeSnapshot,
-  result: SimplifiedNode,
-  context: CanonicalizeContext,
-) => void;
 
 export interface SimplifiedDesign {
   name: string;

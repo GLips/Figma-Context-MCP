@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Node as FigmaNode, Style, TypeStyle } from "@figma/rest-api-spec";
 import { extractFromDesign } from "~/core/node-walker.js";
-import { allExtractors } from "~/core/built-in.js";
 import { createRefStyleSink } from "~/core/style-sink.js";
 import { restNodeToSnapshot } from "~/adapters/rest/node-to-snapshot.js";
 import type { StyleTypes } from "~/core/types.js";
@@ -54,7 +53,6 @@ async function extractWithSeed(seed: Record<string, unknown>) {
     [namedTextNode({ fontFamily: "Inter", fontWeight: 700, fontSize: 24 })].map((node) =>
       restNodeToSnapshot(node, extraStyles),
     ),
-    allExtractors,
     sink,
   );
   return { globalVars: { styles: sink.styles } };
