@@ -16,7 +16,7 @@ function textNode(segments: SceneTextSegment[]): SceneNodeLike {
     type: "TEXT",
     characters: segments.map((s) => s.characters).join(""),
     getStyledTextSegments: () => segments,
-  } as unknown as SceneNodeLike;
+  };
 }
 
 const resolveNothing = async () => null;

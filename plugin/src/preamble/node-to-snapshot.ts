@@ -431,7 +431,7 @@ function toSnapshotTransform(transform: SceneTransform): SnapshotTransform {
 // ---------------------------------------------------------------------------
 
 /** The segment fields the decode requests — every run-diffable style the snapshot carries. */
-const TEXT_SEGMENT_FIELDS: ReadonlyArray<string> = [
+const TEXT_SEGMENT_FIELDS: ReadonlyArray<keyof Omit<SceneTextSegment, "characters">> = [
   "fontName",
   "fontStyle",
   "fontWeight",
@@ -473,21 +473,24 @@ function decodeSceneText(node: SceneNodeLike): SnapshotText {
   if (node.textAlignHorizontal !== undefined) base.textAlignHorizontal = node.textAlignHorizontal;
   if (node.textAlignVertical !== undefined) base.textAlignVertical = node.textAlignVertical;
 
-  const lines: SnapshotTextRun[][] = [[]];
-  const lineTypes: Array<"NONE" | "ORDERED" | "UNORDERED"> = ["NONE"];
-  const lineIndentations: number[] = [0];
-  let lineHasMeta = false;
+  // Accumulated per line, projected onto SnapshotText's parallel arrays at the end.
+  interface SceneLine {
+    runs: SnapshotTextRun[];
+    type: SnapshotText["lineTypes"][number];
+    indentation: number;
+    /** Whether a segment has already claimed this line's list membership. */
+    hasMeta: boolean;
+  }
+  const newLine = (): SceneLine => ({ runs: [], type: "NONE", indentation: 0, hasMeta: false });
+  const lines: SceneLine[] = [newLine()];
 
   for (const segment of segments) {
     const delta = styleDelta(decodeSegmentStyle(segment), base);
     const parts = segment.characters.split(LINE_BREAKS);
     for (let i = 0; i < parts.length; i++) {
-      if (i > 0) {
-        lines.push([]);
-        lineTypes.push("NONE");
-        lineIndentations.push(0);
-        lineHasMeta = false;
-      }
+      if (i > 0) lines.push(newLine());
+      const part = parts[i];
+      const line = lines[lines.length - 1];
       // A line's list membership comes from the segment covering its first
       // character — list options only change at paragraph boundaries, so that
       // segment speaks for the whole line. An EMPTY line's first character is
@@ -496,23 +499,28 @@ function decodeSceneText(node: SceneNodeLike): SnapshotText {
       // REST reads off the wire's per-line arrays. A trailing empty final
       // paragraph has no characters at all, so its membership is unknowable
       // from segments and keeps the NONE/0 defaults.
-      if (!lineHasMeta && (parts[i] !== "" || i < parts.length - 1)) {
-        lineTypes[lineTypes.length - 1] = segment.listOptions?.type ?? "NONE";
-        lineIndentations[lineIndentations.length - 1] = segment.indentation ?? 0;
-        lineHasMeta = true;
+      if (!line.hasMeta && (part !== "" || i < parts.length - 1)) {
+        line.type = segment.listOptions?.type ?? "NONE";
+        line.indentation = segment.indentation ?? 0;
+        line.hasMeta = true;
       }
-      if (!parts[i]) continue;
-      const line = lines[lines.length - 1];
-      const previous = line[line.length - 1];
+      if (!part) continue;
+      const previous = line.runs[line.runs.length - 1];
       if (previous && JSON.stringify(previous.delta) === JSON.stringify(delta)) {
-        previous.text += parts[i];
+        previous.text += part;
       } else {
-        line.push({ text: parts[i], delta });
+        line.runs.push({ text: part, delta });
       }
     }
   }
 
-  return { characters, style: base, lines, lineTypes, lineIndentations };
+  return {
+    characters,
+    style: base,
+    lines: lines.map((line) => line.runs),
+    lineTypes: lines.map((line) => line.type),
+    lineIndentations: lines.map((line) => line.indentation),
+  };
 }
 
 /**
