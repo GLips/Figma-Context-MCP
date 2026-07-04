@@ -1,6 +1,8 @@
 // Plugin sandbox entry. This is the only context where `figma.*` lives. It never
 // touches the network — it talks to the headless ui.html bridge via postMessage.
 
+import { safeSerialize, guardReturnValue } from "./serialize.js";
+
 // The std-lib source string, generated from the typed preamble/ fragments and baked in at build time
 // by build.mjs via esbuild `define` (it can't be generated in-sandbox — flattening runs esbuild).
 declare const SANDBOX_PREAMBLE: string;
@@ -496,52 +498,6 @@ async function screenshot(to: ReplyTo, nodeId: string | undefined): Promise<void
   }
 }
 
-/**
- * A live Figma node, for the return-path guard. The id+type pair alone is too loose
- * (an agent's own `{ id, type }` data object would trip it), so we also require
- * `removed` — present on every BaseNode, absent on plain JSON the agent builds.
- */
-function looksLikeNode(value: unknown): boolean {
-  if (!value || typeof value !== "object") return false;
-  const o = value as Record<string, unknown>;
-  return typeof o.id === "string" && typeof o.type === "string" && "removed" in o;
-}
-
-function findLiveNode(value: unknown, path: string, depth: number): { path: string; type: string } | null {
-  if (depth > 6 || value === null || typeof value !== "object") return null;
-  // Stop at a node — never recurse into its (huge, circular) internals.
-  if (looksLikeNode(value)) return { path, type: String((value as Record<string, unknown>).type) };
-  if (Array.isArray(value)) {
-    for (let i = 0; i < value.length; i++) {
-      const hit = findLiveNode(value[i], `${path}[${i}]`, depth + 1);
-      if (hit) return hit;
-    }
-    return null;
-  }
-  for (const key of Object.keys(value as object)) {
-    const hit = findLiveNode((value as Record<string, unknown>)[key], path ? `${path}.${key}` : key, depth + 1);
-    if (hit) return hit;
-  }
-  return null;
-}
-
-/**
- * Reject a return value that is — or contains — a live node, loudly. The bridge
- * JSON-serializes everything, so a node would come back as a bare { id } with every
- * other property dropped and no signal that it happened. Better a clear error that
- * teaches the id pattern than silent loss the agent debugs blind.
- */
-function guardReturnValue(value: unknown): void {
-  const hit = findLiveNode(value, "", 0);
-  if (!hit) return;
-  const where = hit.path ? ` (at return value ${hit.path.startsWith("[") ? hit.path : `.${hit.path}`})` : "";
-  throw new Error(
-    `You returned a live Figma node${where}: a ${hit.type}. Live nodes can't cross the bridge — ` +
-      `they collapse to { id } and you lose every other property. Return the id string instead: ` +
-      "`return node.id` (or `return { id: node.id }`, or an array of ids).",
-  );
-}
-
 function formatError(err: unknown): string {
   if (err instanceof Error) {
     return err.stack ? `${err.name}: ${err.message}\n${err.stack}` : `${err.name}: ${err.message}`;
@@ -553,53 +509,4 @@ function stringifyArg(value: unknown): string {
   if (typeof value === "string") return value;
   const serialized = safeSerialize(value);
   return typeof serialized === "string" ? serialized : JSON.stringify(serialized);
-}
-
-/**
- * Converts an arbitrary eval result into something safe to send over
- * postMessage/WS. Live Figma node objects are NOT plain JSON — sending one
- * produces opaque failures — so any object that looks like a node collapses to
- * `{id,name,type}`. Everything else is recursed with a depth cap to defang
- * deep/circular structures.
- */
-function safeSerialize(value: unknown, depth = 0): unknown {
-  if (value === null || value === undefined) return value;
-  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") return value;
-  if (typeof value === "bigint") return value.toString();
-  if (typeof value === "function") return `[Function ${value.name || "anonymous"}]`;
-  if (typeof value === "symbol") return value.toString();
-
-  if (depth >= 4) return "[…]";
-
-  if (Array.isArray(value)) {
-    return value.slice(0, 100).map((v) => safeSerialize(v, depth + 1));
-  }
-
-  // A live Figma node: has a string `id` and `type`. Return a stable handle the
-  // agent can thread into later execute_code calls via figma.getNodeById.
-  const obj = value as Record<string, unknown>;
-  if (typeof obj.id === "string" && typeof obj.type === "string") {
-    const out: Record<string, unknown> = {
-      id: obj.id,
-      name: typeof obj.name === "string" ? obj.name : undefined,
-      type: obj.type,
-    };
-    // flcm.render() returns Handles (plain POJOs that trip this same id+type heuristic) carrying the
-    // author's `key` and a text node's resolved `text`. Carry both across the bridge so the agent can
-    // read out.keyed[...].key / out.root.text agent-side. A live Figma node surfaces neither as a plain
-    // prop (its identity lives in pluginData, its text in `characters`), so this only enriches handles.
-    if (typeof obj.key === "string") out.key = obj.key;
-    if (typeof obj.text === "string") out.text = obj.text;
-    return out;
-  }
-
-  const out: Record<string, unknown> = {};
-  for (const key of Object.keys(obj)) {
-    try {
-      out[key] = safeSerialize(obj[key], depth + 1);
-    } catch {
-      out[key] = "[unserializable]";
-    }
-  }
-  return out;
 }

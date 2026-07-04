@@ -233,3 +233,13 @@ export interface BoundingBox { x: number; y: number; width: number; height: numb
 // render()'s return without importing bridge.ts (which speaks figma.*). `boundingBox` is the node's
 // resolved geometry, settled by render()'s post-walk read-back (see bridge.readBackGeometry).
 export interface Handle { id: string; type: string; name: string; key?: string; text?: string; boundingBox: BoundingBox }
+
+// An explicit raw-id target — the escape hatch flcm.id(id) returns. Tagged (not a bare string) so the
+// resolver treats it as a live-node id and NEVER as an flcm/key: the one way to force id resolution when a
+// string could be read either way. Inert data, like a WriteNode.
+export interface RawIdRef { __flcmId: string }
+
+// What any target-taking verb (get/find/edit — later plans) accepts, resolved by shape (read.resolveTarget):
+// a bare string (auto-detected node id or flcm/key), an explicit id via flcm.id(id), or any handle-shaped
+// object carrying an `id` (a render Handle, a slim handle, a read POJO).
+export type Target = string | RawIdRef | Handle;

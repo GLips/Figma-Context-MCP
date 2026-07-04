@@ -86,5 +86,5 @@ factor mirrors figma-mcp's effects transformer; see `../../findings.md` (Round 2
 
 The bundled IIFE runs in QuickJS as a function-body statement (eval'd inside `code.ts`'s async IIFE).
 No `import`/`export` reaches the runtime (esbuild strips them) and there is no top-level await. The
-host-side return-path guard (`guardReturnValue`) and `safeSerialize` stay in `code.ts` — they're TS host
-code, not sandbox source.
+host-side return-path guard (`guardReturnValue`) and `safeSerialize` live in `../serialize.ts` (imported by
+`code.ts`) — they're pure TS host code, not sandbox source, so they unit-test without a figma mock.

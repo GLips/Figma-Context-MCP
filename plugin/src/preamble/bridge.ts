@@ -13,6 +13,7 @@ import { toFigmaPaint } from "./paint.js";
 import { toFigmaEffects } from "./effects.js";
 import { resolveFont, resolveFontStrict, FontMap } from "./fonts.js";
 import { normalizePathData } from "./path.js";
+import { writeKey } from "./identity.js";
 
 // `images` is the url → base64 map render() threads through the walk (bytes the server fetched+validated
 // and injected between the two passes); an image PaintSpec resolves to a plugin ImagePaint against it.
@@ -71,7 +72,7 @@ export function readBackGeometry(root: Handle, keyed: Record<string, Handle>): v
 function stampKey(node: any, wn: WriteNode, ctx: RenderCtx): void {
   if (typeof wn.key !== "string") return;
   if (wn.key in ctx.keyed) throw new Error('flcm.render: duplicate key "' + wn.key + '" — keys must be unique within a render.');
-  node.setPluginData("flcm/key", wn.key);
+  writeKey(node, wn.key);
   ctx.keyed[wn.key] = handle(node, wn.key);
 }
 

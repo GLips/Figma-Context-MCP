@@ -18,7 +18,7 @@
 import {
   WriteNode, WriteChild, WriteLayout, WriteTextStyle, WriteTextRun, PaintSpec,
   GradientStop, EffectSpec, Sizing, Edges, Handle, WriteCssEffects, PinX, PinY, AnchorX, AnchorY,
-  Justify, Align, TextAlign, TextDecoration,
+  Justify, Align, TextAlign, TextDecoration, RawIdRef,
 } from "./ir.js";
 import { loadFontsForTree } from "./fonts.js";
 import { parseInlineMarkdown, MdSegment } from "./markdown.js";
@@ -707,6 +707,18 @@ async function render(tree: WriteNode): Promise<{ root: Handle; keyed: Record<st
   return { root: rootHandle, keyed: ctx.keyed };
 }
 
+// flcm.id(id) — the target escape hatch. Wraps a raw node id so a target-taking verb (get/find/edit) treats
+// it as a live-node id and never scans it as an flcm/key (the one string a bare target could be read either
+// way). An inert POJO constructor like the others; the resolver (read.resolveTarget) unwraps it. Not yet on
+// the public `flcm` global — it joins runtime.ts's export set (and the Flcm surface / VERBS) with the
+// target-taking verbs that consume it; exported here now so the resolver and its tests can build one.
+function id(nodeId: unknown): RawIdRef {
+  if (typeof nodeId !== "string" || !nodeId.trim()) {
+    throw new Error('flcm.id: expected a node id string, e.g. flcm.id("12:34") — got ' + JSON.stringify(nodeId) + ".");
+  }
+  return { __flcmId: nodeId };
+}
+
 // Tier-1 drift guard: assert the real constructors match the typed public surface (Flcm) that schema.ts
 // exports and the reference/example generators author against. If a verb's signature here diverges from
 // Flcm, plugin typecheck fails — so the docs can't describe a shape the code doesn't have. `satisfies`
@@ -714,7 +726,12 @@ async function render(tree: WriteNode): Promise<{ root: Handle; keyed: Record<st
 const _flcmShape = { frame, text, rect, ellipse, line, svg, path, gradient, image, effects, render } satisfies Flcm;
 void _flcmShape;
 
-// Exported individually so the IIFE bundle's `globalName: flcm` collects them into the public
-// `flcm.frame` / `flcm.render` / … surface. runtime.ts (the bundle entry) re-exports exactly this set;
-// nothing else in the preamble is re-exported, so every other helper stays closure-private.
+// The public verb surface — runtime.ts (the bundle entry) re-exports EXACTLY this set onto the
+// `globalName: flcm` global, and nothing else in the preamble is re-exported, so every other helper stays
+// closure-private. This list must mirror runtime.ts's re-export (and the _flcmShape/Flcm guard above).
 export { frame, text, rect, ellipse, line, svg, path, render, gradient, image, effects };
+
+// NOT on the public global yet: `id` joins the list above (and runtime.ts / Flcm / VERBS) in Phase 2, with
+// the target-taking verbs (get/find) that consume its RawIdRef. Exported now only so the resolver's tests
+// can build one — production code (read.resolveTarget) unwraps `__flcmId` structurally, not via this.
+export { id };
