@@ -90,16 +90,11 @@ const snapshotProducer: ParityProducer = {
  */
 const sceneProducer: ParityProducer = {
   id: "scene",
-  produce: (parityCase) => {
-    const scene = parityCase.scene;
+  produce: ({ scene }) => {
     if (!scene) return null;
-    return (async () => {
-      const snapshots: NodeSnapshot[] = [];
-      for (const root of scene) {
-        snapshots.push(await sceneNodeToSnapshot(root, async () => null));
-      }
-      return designFromSnapshots(snapshots);
-    })();
+    return Promise.all(scene.map((root) => sceneNodeToSnapshot(root, async () => null))).then(
+      designFromSnapshots,
+    );
   },
 };
 

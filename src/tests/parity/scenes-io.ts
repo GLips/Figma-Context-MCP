@@ -12,7 +12,7 @@ import type { SceneNodeLike } from "@framelink/plugin/node-to-snapshot";
  * A case without a fixture returns null and the producer skips it (the harness's documented
  * light-up-as-they-land contract); fixtures accrete as the adapter grows (TEXT lands in slice 2b).
  */
-export const SCENES_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "scenes");
+const SCENES_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "scenes");
 
 export function loadScene(name: string): SceneNodeLike[] | null {
   const file = path.join(SCENES_DIR, `${name}.json`);

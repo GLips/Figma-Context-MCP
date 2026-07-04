@@ -36,6 +36,12 @@ interface SceneRGB {
   b: number;
 }
 
+/** Plugin `Transform`: a 2x3 row-major affine matrix `[[a, b, tx], [c, d, ty]]`. */
+type SceneTransform = readonly [
+  readonly [number, number, number],
+  readonly [number, number, number],
+];
+
 export interface SceneSolidPaint {
   type: "SOLID";
   /** Plugin solids carry alpha on the paint's `opacity`, never in the color. */
@@ -47,8 +53,8 @@ export interface SceneSolidPaint {
 
 export interface SceneGradientPaint {
   type: "GRADIENT_LINEAR" | "GRADIENT_RADIAL" | "GRADIENT_ANGULAR" | "GRADIENT_DIAMOND";
-  /** 2x3 affine, normalized object space → gradient space (see handlesFromTransform). */
-  gradientTransform: ReadonlyArray<ReadonlyArray<number>>;
+  /** Normalized object space → gradient space (see handlesFromTransform). */
+  gradientTransform: SceneTransform;
   gradientStops: ReadonlyArray<{ position: number; color: SnapshotColor }>;
   opacity?: number;
   visible?: boolean;
@@ -57,9 +63,9 @@ export interface SceneGradientPaint {
 export interface SceneImagePaint {
   type: "IMAGE";
   imageHash: string | null;
-  scaleMode: string;
+  scaleMode: "FILL" | "FIT" | "CROP" | "TILE";
   scalingFactor?: number | null;
-  imageTransform?: ReadonlyArray<ReadonlyArray<number>>;
+  imageTransform?: SceneTransform;
   visible?: boolean;
 }
 
@@ -114,8 +120,8 @@ export interface SceneNodeLike {
   // Frame / auto-layout container traits
   readonly clipsContent?: boolean;
   readonly layoutMode?: "NONE" | "HORIZONTAL" | "VERTICAL" | "GRID";
-  /** Plugin overflow words ("NONE"/"HORIZONTAL"/"VERTICAL"/"BOTH"), mapped to REST's *_SCROLLING. */
-  readonly overflowDirection?: string;
+  /** Plugin overflow words, mapped to REST's *_SCROLLING. */
+  readonly overflowDirection?: "NONE" | "HORIZONTAL" | "VERTICAL" | "BOTH";
   readonly paddingTop?: number;
   readonly paddingRight?: number;
   readonly paddingBottom?: number;
@@ -185,10 +191,9 @@ export async function sceneNodeToSnapshot(
     throw new Error("flcm: sceneNodeToSnapshot does not decode TEXT nodes yet (read-surface slice 2b).");
   }
 
-  const children: NodeSnapshot[] = [];
-  for (const child of node.children ?? []) {
-    children.push(await sceneNodeToSnapshot(child, resolveStyle));
-  }
+  const children = await Promise.all(
+    (node.children ?? []).map((child) => sceneNodeToSnapshot(child, resolveStyle)),
+  );
 
   return {
     id: node.id,
@@ -204,8 +209,8 @@ export async function sceneNodeToSnapshot(
     layoutAlign: node.layoutAlign,
     layoutGrow: node.layoutGrow === 1 ? 1 : undefined,
     layoutPositioning: node.layoutPositioning,
-    preserveRatio: node.constrainProportions === true ? true : undefined,
-    rotation: node.rotation !== undefined && node.rotation !== 0 ? node.rotation : undefined,
+    preserveRatio: node.constrainProportions || undefined,
+    rotation: node.rotation || undefined,
     gridColumnAnchorIndex: node.gridColumnAnchorIndex,
     gridRowAnchorIndex: node.gridRowAnchorIndex,
     gridColumnSpan: node.gridColumnSpan,
@@ -245,7 +250,7 @@ export async function sceneNodeToSnapshot(
 
     // Component metadata
     componentId: await mainComponentId(node),
-    componentProperties: node.type === "INSTANCE" ? decodeComponentProps(node) : undefined,
+    componentProperties: decodeComponentProps(node),
     componentPropertyDefinitions: decodePropertyDefinitions(node),
 
     // Wire-divergent encodings, decoded rather than carried
@@ -309,11 +314,7 @@ function decodeScenePaint(paint: ScenePaint): SnapshotPaint | undefined {
         type: "IMAGE",
         ref: paint.imageHash ?? undefined,
         // The plugin's CROP is REST's STRETCH — same rendering, two wire words.
-        scaleMode: (paint.scaleMode === "CROP" ? "STRETCH" : paint.scaleMode) as
-          | "FILL"
-          | "FIT"
-          | "TILE"
-          | "STRETCH",
+        scaleMode: paint.scaleMode === "CROP" ? "STRETCH" : paint.scaleMode,
         scalingFactor: paint.scalingFactor ?? undefined,
         crop: paint.imageTransform ? toSnapshotTransform(paint.imageTransform) : undefined,
         visible: paint.visible,
@@ -345,7 +346,7 @@ function decodeScenePaint(paint: ScenePaint): SnapshotPaint | undefined {
  */
 function handlesFromTransform(
   type: SceneGradientPaint["type"],
-  transform: ReadonlyArray<ReadonlyArray<number>>,
+  transform: SceneTransform,
 ): SnapshotVector[] {
   const probes: SnapshotVector[] =
     type === "GRADIENT_LINEAR"
@@ -360,11 +361,7 @@ function handlesFromTransform(
           { x: 0.5, y: 1 },
         ];
 
-  const [[a, b, tx], [c, d, ty]] = [transform[0] ?? [], transform[1] ?? []].map((row) => [
-    row[0] ?? 1,
-    row[1] ?? 0,
-    row[2] ?? 0,
-  ]);
+  const [[a, b, tx], [c, d, ty]] = transform;
   const det = a * d - b * c;
   if (det === 0) return probes;
 
@@ -374,7 +371,7 @@ function handlesFromTransform(
   }));
 }
 
-function toSnapshotTransform(transform: ReadonlyArray<ReadonlyArray<number>>): SnapshotTransform {
+function toSnapshotTransform(transform: SceneTransform): SnapshotTransform {
   return transform.map((row) => [...row]);
 }
 
@@ -412,7 +409,9 @@ function decodePerCornerRadii(node: SceneNodeLike): number[] {
   ];
 }
 
-function decodeOverflow(direction: string | undefined): NodeSnapshot["overflowDirection"] {
+function decodeOverflow(
+  direction: SceneNodeLike["overflowDirection"],
+): NodeSnapshot["overflowDirection"] {
   switch (direction) {
     case "HORIZONTAL":
       return "HORIZONTAL_SCROLLING";
@@ -436,10 +435,10 @@ async function mainComponentId(node: SceneNodeLike): Promise<string | undefined>
 }
 
 function decodeComponentProps(node: SceneNodeLike): NodeSnapshot["componentProperties"] {
-  if (!node.componentProperties) return undefined;
+  if (node.type !== "INSTANCE" || !node.componentProperties) return undefined;
   const out: Record<string, { type: string; value: boolean | string }> = {};
-  for (const [key, prop] of Object.entries(node.componentProperties)) {
-    out[key] = { type: prop.type, value: prop.value };
+  for (const [key, { type, value }] of Object.entries(node.componentProperties)) {
+    out[key] = { type, value };
   }
   return Object.keys(out).length ? out : undefined;
 }
@@ -455,8 +454,8 @@ function decodePropertyDefinitions(node: SceneNodeLike): NodeSnapshot["component
     (node.type === "COMPONENT" && node.parent?.type !== "COMPONENT_SET");
   if (!owns || !node.componentPropertyDefinitions) return undefined;
   const out: Record<string, { type: string; defaultValue: boolean | string }> = {};
-  for (const [key, def] of Object.entries(node.componentPropertyDefinitions)) {
-    out[key] = { type: def.type, defaultValue: def.defaultValue };
+  for (const [key, { type, defaultValue }] of Object.entries(node.componentPropertyDefinitions)) {
+    out[key] = { type, defaultValue };
   }
   return Object.keys(out).length ? out : undefined;
 }
