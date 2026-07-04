@@ -21,6 +21,9 @@ import type {
   SnapshotEffect,
   SnapshotPaint,
   SnapshotStyleRef,
+  SnapshotText,
+  SnapshotTextRun,
+  SnapshotTextStyle,
   SnapshotTransform,
   SnapshotVector,
 } from "../../../src/core/snapshot.js";
@@ -89,6 +92,34 @@ export interface SceneEffect {
   spread?: number;
 }
 
+/**
+ * One styled range from `getStyledTextSegments` — the plugin's resolved
+ * equivalent of REST's override tables. Every style field is optional so
+ * committed fixtures can stay as sparse as the synthetic REST fixtures they
+ * must reduce identically to; a live segment carries every requested field.
+ */
+export interface SceneTextSegment {
+  characters: string;
+  /** `family` is the CSS font-family; `style` is the variant name ("Bold Italic"). */
+  fontName?: { family?: string; style?: string };
+  /** Unlike `fontName.style`, a two-value italic discriminator. */
+  fontStyle?: "REGULAR" | "ITALIC";
+  fontWeight?: number;
+  fontSize?: number;
+  textDecoration?: "NONE" | "UNDERLINE" | "STRIKETHROUGH";
+  textCase?: string;
+  lineHeight?: { unit: "PIXELS" | "PERCENT" | "AUTO"; value?: number };
+  letterSpacing?: { unit: "PIXELS" | "PERCENT"; value: number };
+  fills?: ReadonlyArray<ScenePaint>;
+  hyperlink?: { type: "URL" | "NODE"; value: string } | null;
+  openTypeFeatures?: { readonly [feature: string]: boolean };
+  listOptions?: { type?: "ORDERED" | "UNORDERED" | "NONE" };
+  indentation?: number;
+  paragraphSpacing?: number;
+  paragraphIndent?: number;
+  listSpacing?: number;
+}
+
 export interface SceneNodeLike {
   readonly id: string;
   readonly name: string;
@@ -153,6 +184,17 @@ export interface SceneNodeLike {
   readonly bottomRightRadius?: number;
   readonly bottomLeftRadius?: number;
 
+  // Text traits (TEXT nodes). The run-diffable styles come through
+  // getStyledTextSegments; only the properties that cannot vary per run stay
+  // node-level. paragraphSpacing/paragraphIndent/listSpacing CAN be mixed
+  // node-level, so they are read per-segment instead.
+  readonly characters?: string;
+  readonly textAlignHorizontal?: string;
+  readonly textAlignVertical?: string;
+  readonly getStyledTextSegments?: (
+    fields: ReadonlyArray<string>,
+  ) => ReadonlyArray<SceneTextSegment>;
+
   // Named-style slots — style ids resolved to names through the injected resolver
   readonly fillStyleId?: string | symbol;
   readonly strokeStyleId?: string;
@@ -187,9 +229,7 @@ export async function sceneNodeToSnapshot(
   node: SceneNodeLike,
   resolveStyle: SceneStyleResolver,
 ): Promise<NodeSnapshot> {
-  if (node.type === "TEXT") {
-    throw new Error("flcm: sceneNodeToSnapshot does not decode TEXT nodes yet (read-surface slice 2b).");
-  }
+  const text = node.type === "TEXT" ? decodeSceneText(node) : undefined;
 
   const children = await Promise.all(
     (node.children ?? []).map((child) => sceneNodeToSnapshot(child, resolveStyle)),
@@ -253,10 +293,17 @@ export async function sceneNodeToSnapshot(
     componentProperties: decodeComponentProps(node),
     componentPropertyDefinitions: decodePropertyDefinitions(node),
 
-    // Wire-divergent encodings, decoded rather than carried
-    fills: decodeScenePaints(node.fills),
+    // Wire-divergent encodings, decoded rather than carried. Mixed TEXT fills
+    // (per-run colors) fall back to the base run's fills — REST does the same,
+    // carrying the base color on the node and the divergent runs as overrides.
+    fills:
+      typeof node.fills === "symbol" ? text?.style.fills : decodeScenePaints(node.fills),
     strokes: decodeScenePaints(node.strokes),
     effects: node.effects?.length ? node.effects.map(decodeSceneEffect) : undefined,
+
+    // Text — override tables have no plugin spelling; the resolved segments
+    // decode straight into per-line runs (Invariant 2)
+    text,
 
     // Named styles: per-slot resolved names via the injected resolver
     styles: await decodeStyleSlots(node, resolveStyle),
@@ -272,7 +319,8 @@ export async function sceneNodeToSnapshot(
 function decodeScenePaints(
   paints: ReadonlyArray<ScenePaint> | symbol | undefined,
 ): SnapshotPaint[] | undefined {
-  // Mixed fills only occur on TEXT nodes whose runs disagree; per-run fills carry them (slice 2b).
+  // Mixed fills only occur on TEXT nodes whose runs disagree; the caller falls
+  // back to the text decode's base fills for that case.
   if (!paints || typeof paints === "symbol" || !paints.length) return undefined;
   const decoded: SnapshotPaint[] = [];
   for (const paint of paints) {
@@ -373,6 +421,186 @@ function handlesFromTransform(
 
 function toSnapshotTransform(transform: SceneTransform): SnapshotTransform {
   return transform.map((row) => [...row]);
+}
+
+// ---------------------------------------------------------------------------
+// Text — getStyledTextSegments → per-line runs with deltas against a base.
+// The counterpart of the REST adapter's override-table resolution
+// (src/adapters/rest/text.ts): both producers must land on the same base/delta
+// split, so the run shape and merge behavior mirror that module.
+// ---------------------------------------------------------------------------
+
+/** The segment fields the decode requests — every run-diffable style the snapshot carries. */
+const TEXT_SEGMENT_FIELDS: ReadonlyArray<string> = [
+  "fontName",
+  "fontStyle",
+  "fontWeight",
+  "fontSize",
+  "textDecoration",
+  "textCase",
+  "lineHeight",
+  "letterSpacing",
+  "fills",
+  "hyperlink",
+  "openTypeFeatures",
+  "listOptions",
+  "indentation",
+  "paragraphSpacing",
+  "paragraphIndent",
+  "listSpacing",
+];
+
+const LINE_BREAKS = /[\n\u2029]/;
+
+/**
+ * Decode a TEXT node's styled segments into `SnapshotText`.
+ *
+ * Base choice: the FIRST segment's style. When a node-level property isn't
+ * `figma.mixed` every segment agrees with it, so this reads the same values as
+ * the node; when it IS mixed there is no node-level truth, and the first run is
+ * the deterministic stand-in (its delta is always empty) — matching how REST's
+ * base style relates to override id 0 in the committed parity fixtures. The
+ * properties that cannot vary per run (alignment) join the base from the node.
+ */
+function decodeSceneText(node: SceneNodeLike): SnapshotText {
+  if (!node.getStyledTextSegments) {
+    throw new Error("flcm: TEXT node without getStyledTextSegments (scene fixture missing segments?)");
+  }
+  const characters = node.characters ?? "";
+  const segments = node.getStyledTextSegments(TEXT_SEGMENT_FIELDS);
+
+  const base: SnapshotTextStyle = segments.length ? decodeSegmentStyle(segments[0]) : {};
+  if (node.textAlignHorizontal !== undefined) base.textAlignHorizontal = node.textAlignHorizontal;
+  if (node.textAlignVertical !== undefined) base.textAlignVertical = node.textAlignVertical;
+
+  const lines: SnapshotTextRun[][] = [[]];
+  const lineTypes: Array<"NONE" | "ORDERED" | "UNORDERED"> = ["NONE"];
+  const lineIndentations: number[] = [0];
+  let lineHasMeta = false;
+
+  for (const segment of segments) {
+    const delta = styleDelta(decodeSegmentStyle(segment), base);
+    const parts = segment.characters.split(LINE_BREAKS);
+    for (let i = 0; i < parts.length; i++) {
+      if (i > 0) {
+        lines.push([]);
+        lineTypes.push("NONE");
+        lineIndentations.push(0);
+        lineHasMeta = false;
+      }
+      // A line's list membership comes from the segment covering its first
+      // character — list options only change at paragraph boundaries, so that
+      // segment speaks for the whole line. An EMPTY line's first character is
+      // its own terminating newline, which this segment covers whenever more
+      // parts follow (i < last); that keeps an empty list item's bullet, which
+      // REST reads off the wire's per-line arrays. A trailing empty final
+      // paragraph has no characters at all, so its membership is unknowable
+      // from segments and keeps the NONE/0 defaults.
+      if (!lineHasMeta && (parts[i] !== "" || i < parts.length - 1)) {
+        lineTypes[lineTypes.length - 1] = segment.listOptions?.type ?? "NONE";
+        lineIndentations[lineIndentations.length - 1] = segment.indentation ?? 0;
+        lineHasMeta = true;
+      }
+      if (!parts[i]) continue;
+      const line = lines[lines.length - 1];
+      const previous = line[line.length - 1];
+      if (previous && JSON.stringify(previous.delta) === JSON.stringify(delta)) {
+        previous.text += parts[i];
+      } else {
+        line.push({ text: parts[i], delta });
+      }
+    }
+  }
+
+  return { characters, style: base, lines, lineTypes, lineIndentations };
+}
+
+/**
+ * Decode one segment's plugin-native fields into the snapshot's raw text style.
+ * Only fields the segment carries are emitted (the REST decode's present-keys
+ * rule — the delta diff and the core's run classifier iterate present keys).
+ */
+function decodeSegmentStyle(segment: SceneTextSegment): SnapshotTextStyle {
+  const out: SnapshotTextStyle = {};
+  if (segment.fontName?.family !== undefined) out.fontFamily = segment.fontName.family;
+  // The variant name ("Bold Italic") is what REST calls `fontStyle`; the
+  // segment's own two-value `fontStyle` is REST's `italic` boolean. `false` is
+  // emitted too — a regular run inside an italic base needs the explicit
+  // `italic: false` delta to trigger the core's inverse-italic override.
+  if (segment.fontName?.style !== undefined) out.fontStyle = segment.fontName.style;
+  if (segment.fontStyle !== undefined) out.italic = segment.fontStyle === "ITALIC";
+  if (segment.fontWeight !== undefined) out.fontWeight = segment.fontWeight;
+  if (segment.fontSize !== undefined) out.fontSize = segment.fontSize;
+  if (segment.lineHeight) {
+    // Plugin LineHeight → REST's spelling the core's formatter reads. AUTO is
+    // REST's INTRINSIC_% (follow the font's metrics), which formats to nothing.
+    if (segment.lineHeight.unit === "PIXELS") {
+      out.lineHeightPx = segment.lineHeight.value;
+      out.lineHeightUnit = "PIXELS";
+    } else if (segment.lineHeight.unit === "PERCENT") {
+      out.lineHeightPercentFontSize = segment.lineHeight.value;
+      out.lineHeightUnit = "FONT_SIZE_%";
+    } else {
+      out.lineHeightUnit = "INTRINSIC_%";
+    }
+  }
+  if (segment.letterSpacing) {
+    // REST letter-spacing is absolute px; PERCENT is relative to the segment's
+    // own font size.
+    out.letterSpacing =
+      segment.letterSpacing.unit === "PERCENT"
+        ? ((segment.fontSize ?? 0) * segment.letterSpacing.value) / 100
+        : segment.letterSpacing.value;
+  }
+  if (segment.textCase !== undefined) out.textCase = segment.textCase;
+  if (segment.textDecoration !== undefined) out.textDecoration = segment.textDecoration;
+  if (segment.hyperlink) {
+    out.hyperlink =
+      segment.hyperlink.type === "URL"
+        ? { type: "URL", url: segment.hyperlink.value }
+        : { type: "NODE", nodeID: segment.hyperlink.value };
+  }
+  if (segment.openTypeFeatures) {
+    const flags = decodeOpenTypeFeatures(segment.openTypeFeatures);
+    if (flags) out.opentypeFlags = flags;
+  }
+  if (segment.paragraphSpacing !== undefined) out.paragraphSpacing = segment.paragraphSpacing;
+  if (segment.paragraphIndent !== undefined) out.paragraphIndent = segment.paragraphIndent;
+  if (segment.listSpacing !== undefined) out.listSpacing = segment.listSpacing;
+  const fills = segment.fills ? decodeScenePaints(segment.fills) : undefined;
+  if (fills) out.fills = fills;
+  return out;
+}
+
+/**
+ * REST spells enabled OpenType features as numeric flags. Only enabled features
+ * are carried (the core drops zero flags), and keys are sorted so two segments'
+ * flag objects stringify identically for the delta compare.
+ */
+function decodeOpenTypeFeatures(features: {
+  readonly [feature: string]: boolean;
+}): Record<string, number> | undefined {
+  const enabled = Object.keys(features)
+    .filter((feature) => features[feature])
+    .sort();
+  if (!enabled.length) return undefined;
+  const flags: Record<string, number> = {};
+  for (const feature of enabled) flags[feature] = 1;
+  return flags;
+}
+
+/**
+ * A run's delta: the segment-style keys whose value differs from the base.
+ * JSON.stringify equality is sound here because both sides come from
+ * `decodeSegmentStyle`, which emits keys in one fixed order.
+ */
+function styleDelta(style: SnapshotTextStyle, base: SnapshotTextStyle): SnapshotTextStyle {
+  const delta: Record<string, unknown> = {};
+  const baseRecord = base as Record<string, unknown>;
+  for (const [key, value] of Object.entries(style)) {
+    if (JSON.stringify(value) !== JSON.stringify(baseRecord[key])) delta[key] = value;
+  }
+  return delta as SnapshotTextStyle;
 }
 
 // ---------------------------------------------------------------------------

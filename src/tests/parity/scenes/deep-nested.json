@@ -1,0 +1,212 @@
+{
+  "nodes": [
+    {
+      "id": "8:1",
+      "name": "Chip Row",
+      "type": "FRAME",
+      "visible": true,
+      "absoluteBoundingBox": {
+        "x": 0,
+        "y": 0,
+        "width": 220,
+        "height": 28
+      },
+      "layoutSizingHorizontal": "FIXED",
+      "layoutSizingVertical": "FIXED",
+      "clipsContent": true,
+      "layoutMode": "HORIZONTAL",
+      "itemSpacing": 8,
+      "children": [
+        {
+          "id": "8:2",
+          "name": "Chip",
+          "type": "FRAME",
+          "visible": true,
+          "absoluteBoundingBox": {
+            "x": 0,
+            "y": 0,
+            "width": 60,
+            "height": 28
+          },
+          "layoutSizingHorizontal": "FIXED",
+          "layoutSizingVertical": "FIXED",
+          "clipsContent": true,
+          "cornerRadius": 14,
+          "fills": [
+            {
+              "type": "SOLID",
+              "color": {
+                "r": 0.9,
+                "g": 0.9,
+                "b": 0.9
+              },
+              "visible": true
+            }
+          ],
+          "children": [
+            {
+              "id": "8:2:t",
+              "name": "Tag",
+              "type": "TEXT",
+              "visible": true,
+              "absoluteBoundingBox": {
+                "x": 8,
+                "y": 6,
+                "width": 44,
+                "height": 16
+              },
+              "fills": [
+                {
+                  "type": "SOLID",
+                  "color": {
+                    "r": 0.2,
+                    "g": 0.2,
+                    "b": 0.2
+                  },
+                  "visible": true
+                }
+              ],
+              "characters": "Tag",
+              "styledTextSegments": [
+                {
+                  "characters": "Tag",
+                  "fontName": {
+                    "family": "Inter"
+                  },
+                  "fontWeight": 500,
+                  "fontSize": 12
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "8:3",
+          "name": "Chip",
+          "type": "FRAME",
+          "visible": true,
+          "absoluteBoundingBox": {
+            "x": 68,
+            "y": 0,
+            "width": 60,
+            "height": 28
+          },
+          "layoutSizingHorizontal": "FIXED",
+          "layoutSizingVertical": "FIXED",
+          "clipsContent": true,
+          "cornerRadius": 14,
+          "fills": [
+            {
+              "type": "SOLID",
+              "color": {
+                "r": 0.9,
+                "g": 0.9,
+                "b": 0.9
+              },
+              "visible": true
+            }
+          ],
+          "children": [
+            {
+              "id": "8:3:t",
+              "name": "Tag",
+              "type": "TEXT",
+              "visible": true,
+              "absoluteBoundingBox": {
+                "x": 76,
+                "y": 6,
+                "width": 44,
+                "height": 16
+              },
+              "fills": [
+                {
+                  "type": "SOLID",
+                  "color": {
+                    "r": 0.2,
+                    "g": 0.2,
+                    "b": 0.2
+                  },
+                  "visible": true
+                }
+              ],
+              "characters": "Tag",
+              "styledTextSegments": [
+                {
+                  "characters": "Tag",
+                  "fontName": {
+                    "family": "Inter"
+                  },
+                  "fontWeight": 500,
+                  "fontSize": 12
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "8:4",
+          "name": "Chip",
+          "type": "FRAME",
+          "visible": true,
+          "absoluteBoundingBox": {
+            "x": 136,
+            "y": 0,
+            "width": 60,
+            "height": 28
+          },
+          "layoutSizingHorizontal": "FIXED",
+          "layoutSizingVertical": "FIXED",
+          "clipsContent": true,
+          "cornerRadius": 14,
+          "fills": [
+            {
+              "type": "SOLID",
+              "color": {
+                "r": 0.9,
+                "g": 0.9,
+                "b": 0.9
+              },
+              "visible": true
+            }
+          ],
+          "children": [
+            {
+              "id": "8:4:t",
+              "name": "Tag",
+              "type": "TEXT",
+              "visible": true,
+              "absoluteBoundingBox": {
+                "x": 144,
+                "y": 6,
+                "width": 44,
+                "height": 16
+              },
+              "fills": [
+                {
+                  "type": "SOLID",
+                  "color": {
+                    "r": 0.2,
+                    "g": 0.2,
+                    "b": 0.2
+                  },
+                  "visible": true
+                }
+              ],
+              "characters": "Tag",
+              "styledTextSegments": [
+                {
+                  "characters": "Tag",
+                  "fontName": {
+                    "family": "Inter"
+                  },
+                  "fontWeight": 500,
+                  "fontSize": 12
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

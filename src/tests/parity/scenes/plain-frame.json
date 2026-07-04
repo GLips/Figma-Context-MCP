@@ -1,0 +1,129 @@
+{
+  "nodes": [
+    {
+      "id": "1:1",
+      "name": "Card",
+      "type": "FRAME",
+      "visible": true,
+      "absoluteBoundingBox": {
+        "x": 0,
+        "y": 0,
+        "width": 200,
+        "height": 120
+      },
+      "layoutSizingHorizontal": "FIXED",
+      "layoutSizingVertical": "FIXED",
+      "clipsContent": true,
+      "strokeWeight": 1,
+      "strokeAlign": "OUTSIDE",
+      "opacity": 0.9,
+      "cornerRadius": 8,
+      "fills": [
+        {
+          "type": "SOLID",
+          "color": {
+            "r": 1,
+            "g": 1,
+            "b": 1
+          },
+          "visible": true
+        },
+        {
+          "type": "SOLID",
+          "color": {
+            "r": 0,
+            "g": 0,
+            "b": 0
+          },
+          "opacity": 0.1,
+          "visible": true
+        }
+      ],
+      "strokes": [
+        {
+          "type": "SOLID",
+          "color": {
+            "r": 0.8,
+            "g": 0.8,
+            "b": 0.8
+          },
+          "visible": true
+        }
+      ],
+      "effects": [
+        {
+          "type": "DROP_SHADOW",
+          "visible": true,
+          "color": {
+            "r": 0,
+            "g": 0,
+            "b": 0,
+            "a": 0.25
+          },
+          "offset": {
+            "x": 0,
+            "y": 2
+          },
+          "radius": 4,
+          "spread": 0
+        }
+      ],
+      "children": [
+        {
+          "id": "1:2",
+          "name": "Bg",
+          "type": "RECTANGLE",
+          "visible": false,
+          "absoluteBoundingBox": {
+            "x": 0,
+            "y": 0,
+            "width": 200,
+            "height": 120
+          }
+        },
+        {
+          "id": "1:3",
+          "name": "Title",
+          "type": "TEXT",
+          "visible": true,
+          "absoluteBoundingBox": {
+            "x": 16,
+            "y": 16,
+            "width": 120,
+            "height": 24
+          },
+          "layoutSizingHorizontal": "FIXED",
+          "layoutSizingVertical": "FIXED",
+          "fills": [
+            {
+              "type": "SOLID",
+              "color": {
+                "r": 0.1,
+                "g": 0.1,
+                "b": 0.1
+              },
+              "visible": true
+            }
+          ],
+          "characters": "Hello",
+          "textAlignHorizontal": "LEFT",
+          "textAlignVertical": "TOP",
+          "styledTextSegments": [
+            {
+              "characters": "Hello",
+              "fontName": {
+                "family": "Inter"
+              },
+              "fontWeight": 600,
+              "fontSize": 16,
+              "lineHeight": {
+                "unit": "PIXELS",
+                "value": 24
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

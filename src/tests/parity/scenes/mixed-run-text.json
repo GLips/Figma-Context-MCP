@@ -1,0 +1,189 @@
+{
+  "nodes": [
+    {
+      "id": "3:1",
+      "name": "Body",
+      "type": "TEXT",
+      "visible": true,
+      "absoluteBoundingBox": {
+        "x": 0,
+        "y": 0,
+        "width": 240,
+        "height": 80
+      },
+      "fills": "figma:mixed",
+      "characters": "Hi bold link\nOne\nTwo",
+      "textAlignHorizontal": "LEFT",
+      "textAlignVertical": "TOP",
+      "styledTextSegments": [
+        {
+          "characters": "Hi ",
+          "fontName": {
+            "family": "Inter"
+          },
+          "fontWeight": 400,
+          "fontSize": 14,
+          "lineHeight": {
+            "unit": "PIXELS",
+            "value": 20
+          },
+          "fills": [
+            {
+              "type": "SOLID",
+              "color": {
+                "r": 0,
+                "g": 0,
+                "b": 0
+              },
+              "visible": true
+            }
+          ],
+          "listOptions": {
+            "type": "NONE"
+          },
+          "indentation": 0
+        },
+        {
+          "characters": "bold",
+          "fontName": {
+            "family": "Inter"
+          },
+          "fontWeight": 700,
+          "fontSize": 14,
+          "lineHeight": {
+            "unit": "PIXELS",
+            "value": 20
+          },
+          "fills": [
+            {
+              "type": "SOLID",
+              "color": {
+                "r": 0,
+                "g": 0,
+                "b": 0
+              },
+              "visible": true
+            }
+          ],
+          "listOptions": {
+            "type": "NONE"
+          },
+          "indentation": 0
+        },
+        {
+          "characters": " ",
+          "fontName": {
+            "family": "Inter"
+          },
+          "fontWeight": 400,
+          "fontSize": 14,
+          "lineHeight": {
+            "unit": "PIXELS",
+            "value": 20
+          },
+          "fills": [
+            {
+              "type": "SOLID",
+              "color": {
+                "r": 0,
+                "g": 0,
+                "b": 0
+              },
+              "visible": true
+            }
+          ],
+          "listOptions": {
+            "type": "NONE"
+          },
+          "indentation": 0
+        },
+        {
+          "characters": "link",
+          "fontName": {
+            "family": "Inter"
+          },
+          "fontWeight": 400,
+          "fontSize": 14,
+          "lineHeight": {
+            "unit": "PIXELS",
+            "value": 20
+          },
+          "textDecoration": "UNDERLINE",
+          "hyperlink": {
+            "type": "URL",
+            "value": "https://example.com"
+          },
+          "fills": [
+            {
+              "type": "SOLID",
+              "color": {
+                "r": 0,
+                "g": 0,
+                "b": 1
+              },
+              "visible": true
+            }
+          ],
+          "listOptions": {
+            "type": "NONE"
+          },
+          "indentation": 0
+        },
+        {
+          "characters": "\nOne",
+          "fontName": {
+            "family": "Inter"
+          },
+          "fontWeight": 400,
+          "fontSize": 14,
+          "lineHeight": {
+            "unit": "PIXELS",
+            "value": 20
+          },
+          "fills": [
+            {
+              "type": "SOLID",
+              "color": {
+                "r": 0,
+                "g": 0,
+                "b": 0
+              },
+              "visible": true
+            }
+          ],
+          "listOptions": {
+            "type": "ORDERED"
+          },
+          "indentation": 0
+        },
+        {
+          "characters": "\nTwo",
+          "fontName": {
+            "family": "Inter"
+          },
+          "fontWeight": 400,
+          "fontSize": 14,
+          "lineHeight": {
+            "unit": "PIXELS",
+            "value": 20
+          },
+          "fills": [
+            {
+              "type": "SOLID",
+              "color": {
+                "r": 0,
+                "g": 0,
+                "b": 0
+              },
+              "visible": true
+            }
+          ],
+          "listOptions": {
+            "type": "UNORDERED"
+          },
+          "indentation": 0
+        }
+      ]
+    }
+  ]
+}

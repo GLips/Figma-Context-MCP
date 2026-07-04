@@ -1,25 +1,25 @@
 import type { GetFileResponse, GetFileNodesResponse } from "@figma/rest-api-spec";
-import type { SceneNodeLike } from "@framelink/plugin/node-to-snapshot";
 import { sceneNodeToSnapshot } from "@framelink/plugin/node-to-snapshot";
 import type { NodeSnapshot } from "~/core/snapshot.js";
 import type { SimplifiedDesign } from "~/core/types.js";
 import { simplify } from "~/core/simplify.js";
 import { simplifyRestResponse } from "~/adapters/rest/rest.js";
+import type { LoadedScene } from "./scenes-io.js";
 
 /**
  * One case in the parity harness: a shared golden and the per-producer inputs
  * that must all reduce to it. `rest` is the REST wire response; `snapshot` is the
  * plan-neutral `NodeSnapshot[]` the plugin adapter produces (committed as the
  * read plan's concrete target — see snapshots/); `scene` is the plugin-native
- * fixture fed through the real `sceneNodeToSnapshot` (null until a case's
- * fixture lands — see scenes-io.ts).
+ * fixture (roots + its style resolver) fed through the real `sceneNodeToSnapshot`
+ * (null until a case's fixture lands — see scenes-io.ts).
  */
 export interface ParityCase {
   /** Golden basename in ../goldens/expected and the snapshots/ fixture name. */
   name: string;
   rest: GetFileResponse | GetFileNodesResponse;
   snapshot: NodeSnapshot[];
-  scene: SceneNodeLike[] | null;
+  scene: LoadedScene | null;
 }
 
 /**
@@ -85,16 +85,16 @@ const snapshotProducer: ParityProducer = {
 /**
  * Scene producer — the plugin path proper: a committed plugin-native fixture
  * through the REAL `sceneNodeToSnapshot`, then the same core. The style resolver
- * is a fixture-table stub until the named-styles scene fixture lands (slice 2b).
+ * reads the fixture's styles table, standing in for `figma.getStyleByIdAsync`.
  * Returns null (case skipped) until a case's fixture exists.
  */
 const sceneProducer: ParityProducer = {
   id: "scene",
   produce: ({ scene }) => {
     if (!scene) return null;
-    return Promise.all(scene.map((root) => sceneNodeToSnapshot(root, async () => null))).then(
-      designFromSnapshots,
-    );
+    return Promise.all(
+      scene.roots.map((root) => sceneNodeToSnapshot(root, scene.resolveStyle)),
+    ).then(designFromSnapshots);
   },
 };
 

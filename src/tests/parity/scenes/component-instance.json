@@ -1,0 +1,187 @@
+{
+  "nodes": [
+    {
+      "id": "6:1",
+      "name": "Group",
+      "type": "FRAME",
+      "visible": true,
+      "absoluteBoundingBox": {
+        "x": 0,
+        "y": 0,
+        "width": 300,
+        "height": 200
+      },
+      "clipsContent": true,
+      "children": [
+        {
+          "id": "6:2",
+          "name": "Product Card",
+          "type": "COMPONENT",
+          "visible": true,
+          "parent": {
+            "type": "FRAME"
+          },
+          "absoluteBoundingBox": {
+            "x": 0,
+            "y": 0,
+            "width": 150,
+            "height": 200
+          },
+          "clipsContent": true,
+          "componentPropertyDefinitions": {
+            "On Sale#341:0": {
+              "type": "BOOLEAN",
+              "defaultValue": true
+            },
+            "Title#341:1": {
+              "type": "TEXT",
+              "defaultValue": "Product Name"
+            },
+            "Icon#341:2": {
+              "type": "INSTANCE_SWAP",
+              "defaultValue": "999:1"
+            }
+          },
+          "children": [
+            {
+              "id": "6:3",
+              "name": "Label",
+              "type": "TEXT",
+              "visible": true,
+              "componentPropertyReferences": {
+                "characters": "Title#341:1"
+              },
+              "absoluteBoundingBox": {
+                "x": 8,
+                "y": 8,
+                "width": 134,
+                "height": 20
+              },
+              "fills": [
+                {
+                  "type": "SOLID",
+                  "color": {
+                    "r": 0,
+                    "g": 0,
+                    "b": 0
+                  },
+                  "visible": true
+                }
+              ],
+              "characters": "Product Name",
+              "textAlignHorizontal": "LEFT",
+              "textAlignVertical": "TOP",
+              "styledTextSegments": [
+                {
+                  "characters": "Product Name",
+                  "fontName": {
+                    "family": "Inter"
+                  },
+                  "fontWeight": 400,
+                  "fontSize": 14,
+                  "lineHeight": {
+                    "unit": "PIXELS",
+                    "value": 20
+                  }
+                }
+              ]
+            },
+            {
+              "id": "6:4",
+              "name": "Sale Ribbon",
+              "type": "FRAME",
+              "visible": false,
+              "componentPropertyReferences": {
+                "visible": "On Sale#341:0"
+              },
+              "absoluteBoundingBox": {
+                "x": 0,
+                "y": 0,
+                "width": 60,
+                "height": 20
+              },
+              "clipsContent": true,
+              "fills": [
+                {
+                  "type": "SOLID",
+                  "color": {
+                    "r": 1,
+                    "g": 0,
+                    "b": 0
+                  },
+                  "visible": true
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "6:5",
+          "name": "Card Instance",
+          "type": "INSTANCE",
+          "visible": true,
+          "absoluteBoundingBox": {
+            "x": 150,
+            "y": 0,
+            "width": 150,
+            "height": 200
+          },
+          "clipsContent": true,
+          "mainComponentId": "6:2",
+          "componentProperties": {
+            "On Sale": {
+              "type": "BOOLEAN",
+              "value": false
+            },
+            "Title": {
+              "type": "TEXT",
+              "value": "My Product"
+            }
+          },
+          "children": [
+            {
+              "id": "6:6",
+              "name": "Label",
+              "type": "TEXT",
+              "visible": true,
+              "absoluteBoundingBox": {
+                "x": 158,
+                "y": 8,
+                "width": 134,
+                "height": 20
+              },
+              "fills": [
+                {
+                  "type": "SOLID",
+                  "color": {
+                    "r": 0,
+                    "g": 0,
+                    "b": 0
+                  },
+                  "visible": true
+                }
+              ],
+              "characters": "My Product",
+              "textAlignHorizontal": "LEFT",
+              "textAlignVertical": "TOP",
+              "styledTextSegments": [
+                {
+                  "characters": "My Product",
+                  "fontName": {
+                    "family": "Inter"
+                  },
+                  "fontWeight": 400,
+                  "fontSize": 14,
+                  "lineHeight": {
+                    "unit": "PIXELS",
+                    "value": 20
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

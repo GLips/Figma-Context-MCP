@@ -1,45 +1,89 @@
-[
-  {
-    "id": "4:1",
-    "name": "Linear",
-    "type": "RECTANGLE",
-    "visible": true,
-    "absoluteBoundingBox": { "x": 0, "y": 0, "width": 100, "height": 100 },
-    "fills": [
-      {
-        "type": "GRADIENT_LINEAR",
-        "gradientTransform": [
-          [1, 0, 0],
-          [-0.5, 0.5, 0.5]
-        ],
-        "gradientStops": [
-          { "position": 0, "color": { "r": 1, "g": 0, "b": 0, "a": 1 } },
-          { "position": 1, "color": { "r": 0, "g": 0, "b": 1, "a": 1 } }
-        ],
-        "visible": true
-      }
-    ]
-  },
-  {
-    "id": "4:2",
-    "name": "Radial",
-    "type": "RECTANGLE",
-    "visible": true,
-    "absoluteBoundingBox": { "x": 0, "y": 120, "width": 100, "height": 100 },
-    "fills": [
-      {
-        "type": "GRADIENT_RADIAL",
-        "gradientTransform": [
-          [1, 0, 0],
-          [0, 1, 0]
-        ],
-        "gradientStops": [
-          { "position": 0, "color": { "r": 1, "g": 1, "b": 1, "a": 1 } },
-          { "position": 1, "color": { "r": 0, "g": 0, "b": 0, "a": 1 } }
-        ],
-        "opacity": 0.8,
-        "visible": true
-      }
-    ]
-  }
-]
+{
+  "nodes": [
+    {
+      "id": "4:1",
+      "name": "Linear",
+      "type": "RECTANGLE",
+      "visible": true,
+      "absoluteBoundingBox": {
+        "x": 0,
+        "y": 0,
+        "width": 100,
+        "height": 100
+      },
+      "fills": [
+        {
+          "type": "GRADIENT_LINEAR",
+          "gradientTransform": [
+            [1, 0, 0],
+            [-0.5, 0.5, 0.5]
+          ],
+          "gradientStops": [
+            {
+              "position": 0,
+              "color": {
+                "r": 1,
+                "g": 0,
+                "b": 0,
+                "a": 1
+              }
+            },
+            {
+              "position": 1,
+              "color": {
+                "r": 0,
+                "g": 0,
+                "b": 1,
+                "a": 1
+              }
+            }
+          ],
+          "visible": true
+        }
+      ]
+    },
+    {
+      "id": "4:2",
+      "name": "Radial",
+      "type": "RECTANGLE",
+      "visible": true,
+      "absoluteBoundingBox": {
+        "x": 0,
+        "y": 120,
+        "width": 100,
+        "height": 100
+      },
+      "fills": [
+        {
+          "type": "GRADIENT_RADIAL",
+          "gradientTransform": [
+            [1, 0, 0],
+            [0, 1, 0]
+          ],
+          "gradientStops": [
+            {
+              "position": 0,
+              "color": {
+                "r": 1,
+                "g": 1,
+                "b": 1,
+                "a": 1
+              }
+            },
+            {
+              "position": 1,
+              "color": {
+                "r": 0,
+                "g": 0,
+                "b": 0,
+                "a": 1
+              }
+            }
+          ],
+          "opacity": 0.8,
+          "visible": true
+        }
+      ]
+    }
+  ]
+}
