@@ -32,10 +32,12 @@ import { STYLE_REF_FIELDS } from "~/core/compress.js";
  *  1. IMAGE REFS (`imageRef`/`gifRef`). The two producers name the same asset
  *     with different ids (REST's file-scoped `imageRef` vs the plugin's own
  *     handle), so we compare by PRESENCE, not literal id: every image paint's
- *     ref is rewritten to a sentinel. Refs can hide inside a hoisted, hashed
- *     fill — hence expansion runs first, surfacing them onto the node where the
- *     sentinel rewrite reaches them. (`decodePaint`/`parsePaint`,
- *     `core/transformers/style.ts`.)
+ *     ref is rewritten to a sentinel. `gifRef` goes further and is dropped
+ *     entirely — the plugin API has no gif visibility at all (an ImagePaint
+ *     carries only `imageHash`), so even its presence is producer-specific.
+ *     Refs can hide inside a hoisted, hashed fill — hence expansion runs first,
+ *     surfacing them onto the node where the rewrite reaches them.
+ *     (`decodePaint`/`parsePaint`, `core/transformers/style.ts`.)
  *
  *  2. COMPONENT-TABLE METADATA. The shared part of the `components`/
  *     `componentSets` tables is exactly what the core WALK produces — an id and
@@ -94,7 +96,7 @@ function scopeStyleValue(value: unknown): unknown {
     if (entry && typeof entry === "object" && (entry as Rec).type === "IMAGE") {
       const fill = { ...(entry as Rec) };
       if ("imageRef" in fill) fill.imageRef = IMAGE_REF_SENTINEL;
-      if ("gifRef" in fill) fill.gifRef = IMAGE_REF_SENTINEL;
+      delete fill.gifRef;
       return fill;
     }
     return entry;

@@ -10,7 +10,8 @@
     "test": "node --import tsx --test \"src/**/*.test.ts\""
   },
   "exports": {
-    "./schema": "./src/preamble/schema.ts"
+    "./schema": "./src/preamble/schema.ts",
+    "./node-to-snapshot": "./src/preamble/node-to-snapshot.ts"
   },
   "dependencies": {
     "zod": "^4.4.3"

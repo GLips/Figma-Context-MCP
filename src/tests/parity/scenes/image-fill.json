@@ -1,0 +1,55 @@
+[
+  {
+    "id": "5:1",
+    "name": "Photo",
+    "type": "RECTANGLE",
+    "visible": true,
+    "absoluteBoundingBox": { "x": 0, "y": 0, "width": 100, "height": 100 },
+    "fills": [
+      {
+        "type": "IMAGE",
+        "imageHash": "abc123def456",
+        "scaleMode": "FILL",
+        "visible": true
+      }
+    ]
+  },
+  {
+    "id": "5:2",
+    "name": "Tiled",
+    "type": "FRAME",
+    "visible": true,
+    "absoluteBoundingBox": { "x": 0, "y": 120, "width": 100, "height": 100 },
+    "clipsContent": true,
+    "fills": [
+      {
+        "type": "IMAGE",
+        "imageHash": "tile999",
+        "scaleMode": "TILE",
+        "scalingFactor": 0.5,
+        "visible": true
+      }
+    ],
+    "children": [
+      {
+        "id": "5:3",
+        "name": "Cropped",
+        "type": "RECTANGLE",
+        "visible": true,
+        "absoluteBoundingBox": { "x": 0, "y": 120, "width": 50, "height": 50 },
+        "fills": [
+          {
+            "type": "IMAGE",
+            "imageHash": "crop555",
+            "scaleMode": "FILL",
+            "imageTransform": [
+              [1, 0, 0.1],
+              [0, 1, 0.2]
+            ],
+            "visible": true
+          }
+        ]
+      }
+    ]
+  }
+]

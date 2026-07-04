@@ -1,4 +1,6 @@
 import type { GetFileResponse, GetFileNodesResponse } from "@figma/rest-api-spec";
+import type { SceneNodeLike } from "@framelink/plugin/node-to-snapshot";
+import { sceneNodeToSnapshot } from "@framelink/plugin/node-to-snapshot";
 import type { NodeSnapshot } from "~/core/snapshot.js";
 import type { SimplifiedDesign } from "~/core/types.js";
 import { simplify } from "~/core/simplify.js";
@@ -7,16 +9,17 @@ import { simplifyRestResponse } from "~/adapters/rest/rest.js";
 /**
  * One case in the parity harness: a shared golden and the per-producer inputs
  * that must all reduce to it. `rest` is the REST wire response; `snapshot` is the
- * plan-neutral `NodeSnapshot[]` the plugin adapter will one day produce (committed
- * as the read plan's concrete target — see snapshots/). A `scene` input is the
- * read-plan slot: when `sceneNodeToSnapshot` exists, add the plugin's native
- * fixture here and a producer that consumes it.
+ * plan-neutral `NodeSnapshot[]` the plugin adapter produces (committed as the
+ * read plan's concrete target — see snapshots/); `scene` is the plugin-native
+ * fixture fed through the real `sceneNodeToSnapshot` (null until a case's
+ * fixture lands — see scenes-io.ts).
  */
 export interface ParityCase {
   /** Golden basename in ../goldens/expected and the snapshots/ fixture name. */
   name: string;
   rest: GetFileResponse | GetFileNodesResponse;
   snapshot: NodeSnapshot[];
+  scene: SceneNodeLike[] | null;
 }
 
 /**
@@ -42,45 +45,63 @@ const restProducer: ParityProducer = {
 };
 
 /**
- * Snapshot producer — the plugin STAND-IN. It skips the REST wire entirely and
- * feeds the committed plan-neutral `NodeSnapshot[]` straight into the same core,
- * exactly as the plugin's `sceneNodeToSnapshot` output will. Until that adapter
- * exists, the committed snapshot plays its role: it proves the core turns a
- * neutral snapshot into the shared output, so "one output, two producers" is
- * enforced today over the REST decode AND a pre-decoded snapshot.
- *
- * It assembles the component tables from the WALK's `componentDefinitions` only
- * (no published-library metadata to read), which is precisely the shared subset
- * the comparator scopes to — so the REST producer's richer tables and this one's
- * lean tables reduce to the same parity view.
+ * Assemble a `SimplifiedDesign` from snapshots the way the plugin path does: the
+ * one shared core, component tables built from the WALK's `componentDefinitions`
+ * only (no published-library metadata to read) — precisely the shared subset the
+ * comparator scopes to, so the REST producer's richer tables and these lean
+ * tables reduce to the same parity view.
+ */
+async function designFromSnapshots(snapshots: NodeSnapshot[]): Promise<SimplifiedDesign> {
+  const { nodes, styles, templates, componentDefinitions } = await simplify(snapshots, {
+    compress: true,
+  });
+  return {
+    // `name` is scoped out of the parity view — no source name in a snapshot.
+    name: "",
+    nodes,
+    components: Object.fromEntries(
+      Object.entries(componentDefinitions).map(([id, propertyDefinitions]) => [
+        id,
+        { id, propertyDefinitions },
+      ]),
+    ),
+    componentSets: {},
+    styles,
+    templates,
+  } as SimplifiedDesign;
+}
+
+/**
+ * Snapshot producer — feeds the committed plan-neutral `NodeSnapshot[]` straight
+ * into the same core. It proves the core turns a neutral snapshot into the
+ * shared output independent of any adapter, so a `scene` failure localizes to
+ * the adapter's decode rather than the core.
  */
 const snapshotProducer: ParityProducer = {
   id: "snapshot",
-  produce: async (parityCase) => {
-    const { nodes, styles, templates, componentDefinitions } = await simplify(parityCase.snapshot, {
-      compress: true,
-    });
-    return {
-      // `name` is scoped out of the parity view — no source name in a snapshot.
-      name: "",
-      nodes,
-      components: Object.fromEntries(
-        Object.entries(componentDefinitions).map(([id, propertyDefinitions]) => [
-          id,
-          { id, propertyDefinitions },
-        ]),
-      ),
-      componentSets: {},
-      styles,
-      templates,
-    } as SimplifiedDesign;
-  },
+  produce: (parityCase) => designFromSnapshots(parityCase.snapshot),
 };
 
 /**
- * The registered producers. The read plan adds a `plugin` producer here that
- * reads a `scene` fixture off the case through `sceneNodeToSnapshot`; the harness
- * fans over whatever is registered, so no harness change is needed — the plugin
- * row lights up as soon as it returns non-null.
+ * Scene producer — the plugin path proper: a committed plugin-native fixture
+ * through the REAL `sceneNodeToSnapshot`, then the same core. The style resolver
+ * is a fixture-table stub until the named-styles scene fixture lands (slice 2b).
+ * Returns null (case skipped) until a case's fixture exists.
  */
-export const PARITY_PRODUCERS: ParityProducer[] = [restProducer, snapshotProducer];
+const sceneProducer: ParityProducer = {
+  id: "scene",
+  produce: (parityCase) => {
+    const scene = parityCase.scene;
+    if (!scene) return null;
+    return (async () => {
+      const snapshots: NodeSnapshot[] = [];
+      for (const root of scene) {
+        snapshots.push(await sceneNodeToSnapshot(root, async () => null));
+      }
+      return designFromSnapshots(snapshots);
+    })();
+  },
+};
+
+/** The registered producers; the harness fans over whatever is here. */
+export const PARITY_PRODUCERS: ParityProducer[] = [restProducer, snapshotProducer, sceneProducer];

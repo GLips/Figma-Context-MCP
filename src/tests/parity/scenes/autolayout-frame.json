@@ -1,0 +1,59 @@
+[
+  {
+    "id": "2:1",
+    "name": "Row",
+    "type": "FRAME",
+    "visible": true,
+    "absoluteBoundingBox": { "x": 0, "y": 0, "width": 300, "height": 60 },
+    "layoutSizingHorizontal": "FIXED",
+    "layoutSizingVertical": "FIXED",
+    "clipsContent": true,
+    "layoutMode": "HORIZONTAL",
+    "paddingTop": 12,
+    "paddingRight": 16,
+    "paddingBottom": 12,
+    "paddingLeft": 16,
+    "primaryAxisAlignItems": "CENTER",
+    "counterAxisAlignItems": "MIN",
+    "itemSpacing": 8,
+    "children": [
+      {
+        "id": "2:2",
+        "name": "Primary Button",
+        "type": "FRAME",
+        "visible": true,
+        "absoluteBoundingBox": { "x": 16, "y": 12, "width": 120, "height": 36 },
+        "layoutSizingHorizontal": "FIXED",
+        "layoutSizingVertical": "FIXED",
+        "clipsContent": true,
+        "cornerRadius": 6,
+        "fills": [
+          {
+            "type": "SOLID",
+            "color": { "r": 0.2, "g": 0.4, "b": 1 },
+            "visible": true
+          }
+        ]
+      },
+      {
+        "id": "2:3",
+        "name": "Badge",
+        "type": "FRAME",
+        "visible": true,
+        "absoluteBoundingBox": { "x": 260, "y": 4, "width": 24, "height": 24 },
+        "layoutSizingHorizontal": "FIXED",
+        "layoutSizingVertical": "FIXED",
+        "layoutPositioning": "ABSOLUTE",
+        "clipsContent": true,
+        "cornerRadius": 12,
+        "fills": [
+          {
+            "type": "SOLID",
+            "color": { "r": 1, "g": 0, "b": 0 },
+            "visible": true
+          }
+        ]
+      }
+    ]
+  }
+]

@@ -24,14 +24,14 @@ function design(parts: Partial<SimplifiedDesign>): SimplifiedDesign {
 
 describe("parityView comparator policy", () => {
   it("collapses differing image refs to the same view (compare by presence)", () => {
-    const withRef = (imageRef: string, gifRef: string) =>
+    const withRef = (imageRef: string, gifRef?: string) =>
       design({
         nodes: [
           {
             id: "1",
             name: "Photo",
             type: "RECTANGLE",
-            fills: [{ type: "IMAGE", imageRef, gifRef, scaleMode: "FILL" }],
+            fills: [{ type: "IMAGE", imageRef, ...(gifRef ? { gifRef } : {}), scaleMode: "FILL" }],
           },
         ],
       } as unknown as Partial<SimplifiedDesign>);
@@ -39,6 +39,9 @@ describe("parityView comparator policy", () => {
     expect(parityView(withRef("rest-abc", "rest-gif"))).toEqual(
       parityView(withRef("plugin-xyz", "plugin-gif")),
     );
+    // gifRef presence itself is producer-specific (the plugin can't see gif
+    // refs), so a REST-only gifRef must scope away entirely.
+    expect(parityView(withRef("rest-abc", "rest-gif"))).toEqual(parityView(withRef("plugin-xyz")));
   });
 
   it("does NOT collapse a difference in a real fill color (shared field floor)", () => {
