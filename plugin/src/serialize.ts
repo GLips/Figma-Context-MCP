@@ -15,7 +15,9 @@
  * verbs return. This single discriminator is what lets safeSerialize collapse a live node while passing
  * every agent/handle/read shape through untouched.
  */
-export function looksLikeNode(value: unknown): boolean {
+export function looksLikeNode(
+  value: unknown,
+): value is { id: string; type: string; name?: unknown; removed: unknown } {
   if (!value || typeof value !== "object") return false;
   const o = value as Record<string, unknown>;
   return typeof o.id === "string" && typeof o.type === "string" && "removed" in o;
@@ -24,7 +26,7 @@ export function looksLikeNode(value: unknown): boolean {
 function findLiveNode(value: unknown, path: string, depth: number): { path: string; type: string } | null {
   if (depth > 6 || value === null || typeof value !== "object") return null;
   // Stop at a node — never recurse into its (huge, circular) internals.
-  if (looksLikeNode(value)) return { path, type: String((value as Record<string, unknown>).type) };
+  if (looksLikeNode(value)) return { path, type: value.type };
   if (Array.isArray(value)) {
     for (let i = 0; i < value.length; i++) {
       const hit = findLiveNode(value[i], `${path}[${i}]`, depth + 1);
@@ -95,11 +97,10 @@ export function safeSerialize(value: unknown, depth = 0): unknown {
   // figma.getNodeById. Gated on the removed-carrying discriminator, NOT a bare id+type shape, so a render
   // Handle / SlimHandle / read POJO (which carry id+type but no `removed`) falls through and round-trips whole.
   if (looksLikeNode(value)) {
-    const obj = value as Record<string, unknown>;
     return {
-      id: obj.id,
-      name: typeof obj.name === "string" ? obj.name : undefined,
-      type: obj.type,
+      id: value.id,
+      name: typeof value.name === "string" ? value.name : undefined,
+      type: value.type,
     };
   }
 
