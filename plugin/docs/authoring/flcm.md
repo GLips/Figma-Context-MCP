@@ -28,8 +28,8 @@ There is no autocomplete and no type-checking where your code runs (a QuickJS sa
 | `flcm.effects({...})` | an effects value | an { shadow, blur, backgroundBlur } bag |
 | `await flcm.render(tree)` | live nodes | returns { root, keyed } |
 | `await flcm.get(target)` | a node's full read spec (values inline) | target: an flcm/key, a node id, flcm.id(id), or a handle |
-| `await flcm.find(query?)` | matching nodes as slim handles | { type?, name?, key?, within? }, AND-combined (default scope: current page) |
-| `await flcm.findOne(query?)` | exactly one slim handle (throws on 0 or >1) | same query as find |
+| `await flcm.find(query?, predicate?)` | matching nodes as slim handles | query { type?, name?, key?, within? } AND-combined; optional predicate over the full read shape (n => n.fills?.[0] === '#FFF') |
+| `await flcm.findOne(query?, predicate?)` | exactly one slim handle (throws on 0 or >1) | same query + predicate as find |
 | `await flcm.selection()` | the current selection as slim handles | no args |
 | `flcm.id(nodeId)` | a raw-id target ref | a node id string — resolved as an id, never scanned as an flcm/key |
 

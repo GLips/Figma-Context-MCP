@@ -129,6 +129,83 @@ test("find excludes hidden nodes — the read shape covers the rendered document
   assert.deepEqual(await find({ type: "RECTANGLE" }), []);
 });
 
+test("find with a predicate keeps only nodes it accepts, against inline styling values", async () => {
+  createFigmaMock();
+  await render(
+    frame({ key: "wrap", width: 200, height: 100, layout: { mode: "row", gap: 8 } }, [
+      rect({ key: "white", width: 40, height: 40, fill: "#ffffff" }),
+      rect({ key: "black", width: 40, height: 40, fill: "#000000" }),
+    ]),
+  );
+
+  // The predicate reads the EXPANDED read shape — fills are inline hex values, not "fill_…" refs.
+  const whites = await find({ type: "RECTANGLE" }, (n) => Array.isArray(n.fills) && n.fills[0] === "#FFFFFF");
+  assert.deepEqual(whites.map((h) => h.key), ["white"]);
+  // Matches still come back as SlimHandles (find's contract holds) — identity + layout world-model.
+  assert.equal(whites[0].type, "RECTANGLE");
+  assert.equal(whites[0].width, 40);
+});
+
+test("a predicate-only find (no query facets) materializes every rendered candidate", async () => {
+  createFigmaMock();
+  await render(
+    frame({ key: "wrap", width: 100, height: 100, layout: { mode: "column" }, fill: "#112233" }, [
+      rect({ key: "opaque", width: 10, height: 10 }),
+      rect({ key: "faded", width: 10, height: 10, opacity: 0.5 }),
+    ]),
+  );
+
+  const faded = await find({}, (n) => n.opacity !== undefined && n.opacity < 1);
+  assert.deepEqual(faded.map((h) => h.key), ["faded"]);
+});
+
+test("query pre-filter narrows what the predicate sees (hybrid filter)", async () => {
+  createFigmaMock();
+  await render(
+    frame({ key: "wrap", width: 200, height: 100, layout: { mode: "row", gap: 8 } }, [
+      frame({ key: "panel", width: 40, height: 40, fill: "#ffffff" }),
+      rect({ key: "chip", width: 40, height: 40, fill: "#ffffff" }),
+    ]),
+  );
+
+  // Same fill predicate, but the query facet restricts candidates to FRAMEs — the rect is never tested.
+  const whiteFrames = await find({ type: "FRAME" }, (n) => Array.isArray(n.fills) && n.fills[0] === "#FFFFFF");
+  assert.deepEqual(whiteFrames.map((h) => h.key), ["panel"]);
+});
+
+test("findOne threads the predicate and keeps its cardinality guard", async () => {
+  createFigmaMock();
+  await render(
+    frame({ key: "wrap", width: 200, height: 100, layout: { mode: "row", gap: 8 } }, [
+      rect({ key: "white", width: 40, height: 40, fill: "#ffffff" }),
+      rect({ key: "black", width: 40, height: 40, fill: "#000000" }),
+    ]),
+  );
+
+  const one = await findOne({ type: "RECTANGLE" }, (n) => Array.isArray(n.fills) && n.fills[0] === "#FFFFFF");
+  assert.equal(one.key, "white");
+  // No white ellipse → 0 matches → the count-naming throw still fires.
+  await assert.rejects(
+    findOne({ type: "ELLIPSE" }, (n) => Array.isArray(n.fills) && n.fills[0] === "#FFFFFF"),
+    /expected exactly one match.*found 0/s,
+  );
+});
+
+test("a predicate-only find fails loud past the materialization cap, naming it", async () => {
+  const figma = createFigmaMock();
+  await render(frame({ key: "wrap", width: 100, height: 100, layout: { mode: "column" } }, []));
+
+  // Force the candidate count over the cap without building a 5000-node fixture: the query pre-filter
+  // counts whatever findAll returns, so a stub scan root standing in for a huge page trips the guard.
+  const huge = new Array(5001).fill(null).map((_, i) => ({ id: `n${i}`, type: "RECTANGLE", name: `r${i}`, visible: true, parent: null }));
+  figma.currentPage.findAll = () => huge;
+
+  await assert.rejects(
+    find({}, () => true),
+    /5001 candidate nodes, over the 5000-node materialization cap/s,
+  );
+});
+
 test("a hit inside a core-collapsed SVG container still projects identity (no geometry)", async () => {
   // The shared core collapses an SVG-heavy container (a free-form frame whose children are all shape
   // primitives) into one IMAGE-SVG node, dropping the descendants — the same egress behavior REST's read
@@ -142,4 +219,8 @@ test("a hit inside a core-collapsed SVG container still projects identity (no ge
   assert.equal(dot.key, "dot");
   assert.equal(dot.type, "RECTANGLE");
   assert.equal(dot.width, undefined);
+
+  // With a predicate, that same shapeless candidate has no full read shape to test, so it is excluded —
+  // never handed an `undefined` the closure would crash dereferencing.
+  assert.deepEqual(await find({ key: "dot" }, (n) => Array.isArray(n.fills)), []);
 });

@@ -6,7 +6,7 @@
 // both throw, naming the target and (for a key clash) the count — a blind agent must never silently act on
 // the wrong node.
 
-import { Target, RawIdRef, FindQuery, SlimHandle } from "./ir.js";
+import { Target, RawIdRef, FindQuery, SlimHandle, ReadPredicate } from "./ir.js";
 import { readKey, identityOf } from "./identity.js";
 import { sceneNodeToSnapshot, type SceneNodeLike, type SceneStyleResolver } from "./node-to-snapshot.js";
 import { rejectUnknownKeys } from "./validate.js";
@@ -220,26 +220,63 @@ async function projectHits(hits: SceneNode[], indexRoot: ScanRoot): Promise<Slim
   return hits.map((node) => projectSlim(node, index.get(node.id)));
 }
 
+// The predicate materialization cap (ratified decision 2). A predicate-only find makes every rendered node a
+// candidate, so without a ceiling it would silently churn a whole real design; past the cap it fails loud,
+// naming the number. The cap is on CANDIDATES (the query survivors the predicate must see a full read shape
+// for), checked BEFORE any simplify so an over-broad find rejects without materializing anything. It is
+// deliberately high and tunable — the fail-loud contract is the point, not the number. If materialization is
+// too slow at that scale the fix is the ALGORITHM, not a lower cap: Figma's live-read speed is the only cost
+// we don't control, so we don't paper over it by refusing to look at real designs.
+const MATERIALIZE_CAP = 5000;
+
+// The predicate path of find (the hybrid filter). The declarative query has already pre-filtered live nodes
+// cheaply; each surviving candidate now needs its FULL EXPANDED read shape to hand to the predicate. That
+// shape is the same core-simplified SimplifiedNode projectHits reads for the slim projection, so ONE
+// whole-scope simplify feeds both — the predicate adds no second per-candidate materialization pass. A
+// candidate the core dropped (a collapsed-SVG interior with no standalone read shape) can't satisfy a
+// styling predicate and is excluded rather than handed an `undefined` the closure would crash dereferencing.
+async function filterByPredicate(hits: SceneNode[], root: ScanRoot, predicate: ReadPredicate): Promise<SlimHandle[]> {
+  if (hits.length > MATERIALIZE_CAP) {
+    throw new Error(
+      `flcm.find: the query matched ${hits.length} candidate nodes, over the ${MATERIALIZE_CAP}-node materialization cap — running the predicate would read that many full node shapes. ` +
+        `Narrow the query (type/name/key/within) so fewer nodes reach the predicate.`,
+    );
+  }
+  if (!hits.length) return [];
+  const index = await simplifiedIndex(root);
+  const survivors = hits.filter((hit) => {
+    const spec = index.get(hit.id);
+    return spec ? !!predicate(spec) : false;
+  });
+  return survivors.map((node) => projectSlim(node, index.get(node.id)));
+}
+
 /**
  * flcm.find — locate every RENDERED node matching the query, as SlimHandles (may be empty). The declarative
  * facets (type/name/key/within) AND-combine; `within` scopes the scan (default: current page). Hidden nodes
  * are excluded (the read shape covers the rendered document, like `get`). Returns the cheap layout
  * world-model, not full styling — dive into a hit with `get`.
+ *
+ * An optional `predicate` filters by anything in the full read shape ("every frame with a white fill"): the
+ * query pre-filters cheaply, then only the survivors are materialized as the EXPANDED canonical shape (inline
+ * values, so `n.fills?.[0]` is a value) and tested. A predicate-only find (no facets) materializes every
+ * rendered candidate, up to a hard cap past which it fails loud (see MATERIALIZE_CAP).
  */
-export async function find(query: FindQuery = {}): Promise<SlimHandle[]> {
+export async function find(query: FindQuery = {}, predicate?: ReadPredicate): Promise<SlimHandle[]> {
   rejectUnknownKeys(query, FIND_KEY_SET, "flcm.find", "query key");
   const root = scanRoot(query.within);
   const hits = root.findAll((node) => matchesQuery(node, query) && isRendered(node));
-  return projectHits(hits, root);
+  if (!predicate) return projectHits(hits, root);
+  return filterByPredicate(hits, root, predicate);
 }
 
 /**
  * flcm.findOne — exactly one hit or throw. The cardinality guard (naming the count) is the whole point: a
  * blind agent must never over-trust a fuzzy name and silently act on the first of several matches. Narrow
- * with type/key/within when it throws on >1.
+ * with type/key/within (or the predicate) when it throws on >1. Same query+predicate as `find`.
  */
-export async function findOne(query: FindQuery = {}): Promise<SlimHandle> {
-  const hits = await find(query);
+export async function findOne(query: FindQuery = {}, predicate?: ReadPredicate): Promise<SlimHandle> {
+  const hits = await find(query, predicate);
   if (hits.length !== 1) {
     throw new Error(
       `flcm.findOne: expected exactly one match for ${JSON.stringify(query)} but found ${hits.length}. ` +

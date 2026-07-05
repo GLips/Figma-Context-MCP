@@ -23,7 +23,7 @@
 import { z } from "zod";
 import type {
   FillInput, WriteCssEffects, PaintSpec, EffectSpec, GradientStop, WriteNode, WriteChild, Handle,
-  PinX, PinY, Target, RawIdRef, SlimHandle, FindQuery,
+  PinX, PinY, Target, RawIdRef, SlimHandle, FindQuery, ReadPredicate,
 } from "./ir.js";
 // The read verbs return the canonical read shape the shared simplify core emits. Relative (not ~/) so the
 // root toolchain, which imports this module for docs generation, resolves it without the plugin's paths.
@@ -384,11 +384,13 @@ export interface Flcm {
   // figma-mcp's REST read emits, every value inline (no styles refs), for any node type.
   get(target: Target): Promise<SimplifiedNode>;
   // Locate: every node matching the query, as slim handles (identity + a cheap layout world-model). May be
-  // empty; AND-combines type/name/key/within (default scope: current page). Dive into a hit with `get`.
-  find(query?: FindQuery): Promise<SlimHandle[]>;
+  // empty; AND-combines type/name/key/within (default scope: current page). Dive into a hit with `get`. An
+  // optional predicate filters by anything in the full read shape (values inline: `n.fills?.[0] === '#FFF'`);
+  // the query pre-filters cheaply, only survivors are materialized (a predicate-only find has a hard cap).
+  find(query?: FindQuery, predicate?: ReadPredicate): Promise<SlimHandle[]>;
   // Locate exactly one — throws on 0 or >1, naming the count (a blind agent must never silently act on the
-  // first of several fuzzy-name matches).
-  findOne(query?: FindQuery): Promise<SlimHandle>;
+  // first of several fuzzy-name matches). Same query+predicate as find.
+  findOne(query?: FindQuery, predicate?: ReadPredicate): Promise<SlimHandle>;
   // The user's current selection, as slim handles (same shape as find) — the on-ramp for "edit the selected …".
   selection(): Promise<SlimHandle[]>;
   // The target escape hatch: wraps a raw node id so target resolution treats it as an id, never an flcm/key.
@@ -422,8 +424,8 @@ export const VERBS: VerbDoc[] = [
   { category: "value", signature: "flcm.effects({...})", builds: "an effects value", args: "an { shadow, blur, backgroundBlur } bag", schema: EffectsSchema },
   { category: "render", signature: "await flcm.render(tree)", builds: "live nodes", args: "returns { root, keyed }" },
   { category: "read", signature: "await flcm.get(target)", builds: "a node's full read spec (values inline)", args: "target: an flcm/key, a node id, flcm.id(id), or a handle" },
-  { category: "read", signature: "await flcm.find(query?)", builds: "matching nodes as slim handles", args: "{ type?, name?, key?, within? }, AND-combined (default scope: current page)" },
-  { category: "read", signature: "await flcm.findOne(query?)", builds: "exactly one slim handle (throws on 0 or >1)", args: "same query as find" },
+  { category: "read", signature: "await flcm.find(query?, predicate?)", builds: "matching nodes as slim handles", args: "query { type?, name?, key?, within? } AND-combined; optional predicate over the full read shape (n => n.fills?.[0] === '#FFF')" },
+  { category: "read", signature: "await flcm.findOne(query?, predicate?)", builds: "exactly one slim handle (throws on 0 or >1)", args: "same query + predicate as find" },
   { category: "read", signature: "await flcm.selection()", builds: "the current selection as slim handles", args: "no args" },
   { category: "target", signature: "flcm.id(nodeId)", builds: "a raw-id target ref", args: "a node id string — resolved as an id, never scanned as an flcm/key" },
 ];

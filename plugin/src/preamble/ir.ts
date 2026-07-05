@@ -21,7 +21,7 @@
 
 // Type-only reach into the core's canonical vocabulary, for the read shapes (SlimHandle) the locate verbs
 // return. Erased at build (esbuild drops `import type`), so the figma-free type hub gains no runtime edge.
-import type { SimplifiedDimension, SimplifiedLayout } from "~/core/index.js";
+import type { SimplifiedDimension, SimplifiedLayout, SimplifiedNode } from "~/core/index.js";
 
 // The node types createable through the plugin API, enumerated explicitly. Not every figma-mcp/REST
 // `type` round-trips to a create call, so the set is closed: bridge.ts's BUILDERS table is typed
@@ -272,6 +272,13 @@ export interface SlimHandle extends Identity {
 // `name` is a case-insensitive substring (layer names are fuzzy — findOne's cardinality guard catches an
 // over-broad match). `within` scopes the scan to a subtree (target-by-shape, default: current page).
 export interface FindQuery { type?: string; name?: string; key?: string; within?: Target }
+
+// find's optional second arg: a caller closure over a candidate's FULL EXPANDED read shape — the same
+// SimplifiedNode `get` returns, with values inline (Invariant 3), so `n.fills?.[0]` is a value (a hex like
+// "#FFFFFF") and never a "fill_…" styles ref. It runs in-sandbox; the query pre-filter narrows what reaches
+// it, and only candidates the core actually materialized are passed (a dropped/collapsed node never is).
+// Returns anything truthy — an ordinary JS predicate, never shipped anywhere.
+export type ReadPredicate = (node: SimplifiedNode) => unknown;
 
 // An explicit raw-id target — the escape hatch flcm.id(id) returns. Tagged (not a bare string) so the
 // resolver treats it as a live-node id and NEVER as an flcm/key: the one way to force id resolution when a
