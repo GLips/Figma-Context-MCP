@@ -9,7 +9,7 @@
 // prop that isn't in the schema can't appear in any output, and a deleted one vanishes everywhere at once.
 
 import { z } from "zod";
-import { VERBS, FIELD_GROUPS } from "@framelink/plugin/schema";
+import { VERBS, FIELD_GROUPS, type VerbCategory } from "@framelink/plugin/schema";
 import {
   MENTAL_MODEL,
   CHILDREN,
@@ -204,7 +204,9 @@ const QUICKSTART_LIMIT_BYTES = 2048;
 // afford a line-plus-description per verb once the read verbs land. Grouping walks VERBS in order (so a new
 // category can't be silently dropped — it just prints under its own key) and the byte guard below still
 // fires on overflow. The full per-verb table lives in the reference tool, unaffected.
-const CATEGORY_LABELS: Record<string, string> = {
+// Typed by VerbCategory so a new category fails typecheck until it has a label — the trailing padding keeps
+// the quick-start's category column aligned.
+const CATEGORY_LABELS: Record<VerbCategory, string> = {
   build: "build ",
   value: "value ",
   render: "render",
@@ -213,8 +215,8 @@ const CATEGORY_LABELS: Record<string, string> = {
 };
 
 function quickStartVerbLines(): string {
-  const order: string[] = [];
-  const byCategory = new Map<string, string[]>();
+  const order: VerbCategory[] = [];
+  const byCategory = new Map<VerbCategory, string[]>();
   for (const v of VERBS) {
     if (!byCategory.has(v.category)) {
       byCategory.set(v.category, []);
@@ -223,7 +225,7 @@ function quickStartVerbLines(): string {
     byCategory.get(v.category)!.push(v.signature);
   }
   return order
-    .map((cat) => `  ${CATEGORY_LABELS[cat] ?? cat}: ${byCategory.get(cat)!.join(", ")}`)
+    .map((cat) => `  ${CATEGORY_LABELS[cat]}: ${byCategory.get(cat)!.join(", ")}`)
     .join("\n");
 }
 

@@ -88,21 +88,27 @@ function resolveString(target: string, within?: Target): SceneNode {
 // resolve drops the slot (null), mirroring the REST adapter's only-named-styles-survive rule.
 const resolveStyle: SceneStyleResolver = (styleId) => figma.getStyleByIdAsync(styleId);
 
+// Materialize a live node's subtree through the ONE shared read pipeline — the plugin adapter (all figma.*
+// liveness) then the shared simplify core over pure data — so the output is exactly the vocabulary
+// figma-mcp's REST path emits (Invariant 2). No compress flag: the result is EXPANDED (every value inline,
+// no styles refs), the form in-sandbox predicates and same-run consumers read (Invariant 3). The ONE
+// deliberate boundary cast lives here (shared by get and the locate index): the adapter's structural view
+// narrows the plugin typings to the axes it reads (its paint union omits VideoPaint, its segment getter
+// drops the field-generic overload), so tsc can't prove a live node assignable to it.
+async function simplifyScene(node: BaseNode): Promise<SimplifiedNode[]> {
+  const snapshot = await sceneNodeToSnapshot(node as unknown as SceneNodeLike, resolveStyle);
+  const { nodes } = await simplify([snapshot]);
+  return nodes;
+}
+
 /**
- * flcm.get — full inspect. Resolves the target, materializes its subtree as plan-neutral snapshots
- * (all figma.* liveness lives in the adapter), and runs the ONE shared simplify core over pure data —
- * so this emits exactly the vocabulary figma-mcp's REST path emits (Invariant 2). No compress flag:
- * the result is EXPANDED (every value inline, no styles refs), the form in-sandbox predicates and
- * same-run consumers can read (Invariant 3); compression stays server-side, off the verb path.
+ * flcm.get — full inspect. Resolves the target and simplifies its subtree to the EXPANDED canonical read
+ * shape (see simplifyScene). A hidden target yields no root node — the read shape covers the rendered
+ * document — so throw rather than return nothing.
  */
 export async function get(target: Target): Promise<SimplifiedNode> {
   const node = resolveTarget(target);
-  // The one deliberate boundary cast: the adapter's structural view deliberately narrows the plugin
-  // typings to the axes it reads (its paint union omits VideoPaint, its segment getter drops the
-  // field-generic overload), so tsc can't prove a live SceneNode assignable to it.
-  const snapshot = await sceneNodeToSnapshot(node as unknown as SceneNodeLike, resolveStyle);
-  const { nodes } = await simplify([snapshot]);
-  const spec = nodes[0];
+  const [spec] = await simplifyScene(node);
   if (!spec) {
     throw new Error(
       `flcm.get: node ${JSON.stringify(node.name)} (id ${JSON.stringify(node.id)}) is hidden (visible: false) — the read shape covers the rendered document. Unhide it or target a visible node.`,
@@ -135,6 +141,11 @@ function scanRoot(within: Target | undefined): ScanRoot {
 // scopes the scan today.
 
 const FIND_KEYS = ["type", "name", "key", "within"] as const;
+// Tie the runtime allow-list to FindQuery: a new facet on the type that isn't listed here fails typecheck,
+// so the fail-loud check can't silently start rejecting a legitimate new query key.
+type _FindKeysCoverFindQuery = keyof FindQuery extends (typeof FIND_KEYS)[number] ? true : never;
+const _findKeysExhaustive: _FindKeysCoverFindQuery = true;
+void _findKeysExhaustive;
 
 // A locate query is agent input at a system boundary, so an unknown facet (a typo'd `tpye`) FAILS LOUD
 // rather than silently matching every node — the ADR-0003 fail-loud contract, surface-wide. Only own
@@ -162,8 +173,7 @@ function matchesQuery(node: SceneNode, query: FindQuery): boolean {
 // A node the core dropped (e.g. an SVG-heavy container it collapsed) is simply absent — projectSlim falls
 // back to identity-only for it.
 async function simplifiedIndex(root: ScanRoot): Promise<Map<string, SimplifiedNode>> {
-  const snapshot = await sceneNodeToSnapshot(root as unknown as SceneNodeLike, resolveStyle);
-  const { nodes } = await simplify([snapshot]);
+  const nodes = await simplifyScene(root);
   const index = new Map<string, SimplifiedNode>();
   const walk = (node: SimplifiedNode): void => {
     index.set(node.id, node);

@@ -12,8 +12,12 @@
 // `get` result (a SimplifiedNode of CSS strings) NORMALIZES through css.ts into this typed WriteNode
 // before render — mechanically, in one place — rather than being rendered string-for-string.
 //
-// Phase-1 scope: only create/render fields. Read-compression refs (styles/template tables),
-// components, prototype, variables, images, and rich text are deliberately absent.
+// Phase-1 scope for the WriteNode currency: only create/render fields. Read-compression refs
+// (styles/template tables), components, prototype, variables, images, and rich text are deliberately absent.
+//
+// This module is also the figma-free type hub for the agent-facing RETURN and QUERY shapes — Identity /
+// Handle (render) and SlimHandle / FindQuery (the read verbs) — so schema.ts can type the public surface
+// and read.ts (which speaks figma.*) supplies only the runtime. It's not purely the write currency.
 
 // Type-only reach into the core's canonical vocabulary, for the read shapes (SlimHandle) the locate verbs
 // return. Erased at build (esbuild drops `import type`), so the figma-free type hub gains no runtime edge.
