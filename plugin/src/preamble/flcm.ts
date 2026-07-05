@@ -38,6 +38,75 @@ import type {
   GlassSugar, NoiseSugar, TextureSugar, ProgressiveBlurSugar, Flcm,
 } from "./schema.js";
 
+// ---- Unknown-prop rejection (ratified decision 1: fail loud, surface-wide, at construction) ----
+//
+// The write path used to silently drop any authoring prop it didn't read from a positive list — a typo'd
+// `textTransform` on a run, a stray `background` on a frame, just vanished, and the agent got a node that
+// quietly ignored what it asked for. That ends here: every constructor and every nested authoring object
+// rejects unknown keys at construction — BEFORE render/edit touches the canvas — so the whole call fails
+// atomically (nothing partial lands) and the agent can `catch` the error and fix the typo.
+//
+// The known-key sets live HERE, not sourced from schema.ts's zod: that zod must never enter the QuickJS
+// bundle (the purity gate). They mirror schema.ts's FIELD_GROUPS exactly — a tier-2 drift test
+// (unknown-props.test.ts) asserts each group == Object.keys of its schema group, so a prop added to (or
+// dropped from) the schema can't drift out of sync here. This is the runtime, surface-wide sibling of
+// read.ts's assertQueryKeys (the locate-query precedent).
+export const KNOWN_KEYS = {
+  shared: ["name", "key", "opacity", "mixBlendMode"],
+  size: ["width", "height", "absolute", "pin"],
+  appearance: ["fill", "stroke", "strokeWidth", "borderRadius", "effects", "rotation"],
+  frame: ["layout", "clip"],
+  layout: ["mode", "gap", "padding", "justifyContent", "alignItems"],
+  text: ["textStyle", "color"],
+  textStyle: ["fontFamily", "fontWeight", "fontSize", "fontStyle", "lineHeight", "letterSpacing", "textDecoration", "textAlign", "lineClamp"],
+  run: ["fontWeight", "fontSize", "fontFamily", "fontStyle", "lineHeight", "letterSpacing", "textDecoration", "color", "hyperlink"],
+  line: ["stroke", "color", "strokeWidth", "length", "w", "rotation", "absolute", "pin"],
+  path: ["d", "fill", "stroke", "strokeWidth", "effects", "rotation"],
+  image: ["scaleMode", "placeholder"],
+  gradient: ["type", "stops", "angle", "at"],
+  effects: ["shadow", "blur", "backgroundBlur", "glass", "noise", "texture", "progressiveBlur"],
+} as const;
+
+function keySet(...groups: readonly (readonly string[])[]): ReadonlySet<string> {
+  const all: string[] = [];
+  for (const g of groups) for (const k of g) all.push(k);
+  return new Set(all);
+}
+
+// Per-verb known-key sets, COMPOSED from the guarded group atoms above (so a verb set can't drift once the
+// groups are). Each mirrors the verb's composed schema — FrameSchema = shared+size+appearance+frame, etc.
+const FRAME_KEYS = keySet(KNOWN_KEYS.shared, KNOWN_KEYS.size, KNOWN_KEYS.appearance, KNOWN_KEYS.frame);
+const TEXT_KEYS = keySet(KNOWN_KEYS.shared, KNOWN_KEYS.size, KNOWN_KEYS.text);
+const SHAPE_KEYS = keySet(KNOWN_KEYS.shared, KNOWN_KEYS.size, KNOWN_KEYS.appearance);
+const LINE_KEYS = keySet(KNOWN_KEYS.shared, KNOWN_KEYS.line);
+const PATH_KEYS = keySet(KNOWN_KEYS.shared, KNOWN_KEYS.size, KNOWN_KEYS.path);
+const SVG_KEYS = keySet(KNOWN_KEYS.shared, KNOWN_KEYS.size);
+const LAYOUT_KEYS = keySet(KNOWN_KEYS.layout);
+const TEXTSTYLE_KEYS = keySet(KNOWN_KEYS.textStyle);
+const RUN_KEYS = keySet(KNOWN_KEYS.run);
+const IMAGE_KEYS = keySet(KNOWN_KEYS.image);
+const GRADIENT_KEYS = keySet(KNOWN_KEYS.gradient);
+const EFFECTS_KEYS = keySet(KNOWN_KEYS.effects);
+// The directional nested shapes are defined INLINE in schema.ts (SIZE_FIELDS.absolute/.pin), not as their
+// own FIELD_GROUP — and `pin` is a z.custom with no zod shape to reflect on — so this pair is the one the
+// drift test can't reach. They're frozen {x, y(, anchor)} points; kept here with the rest for a single home.
+const ABSOLUTE_KEYS = keySet(["x", "y", "anchor"]);
+const DIRECTIONAL_KEYS = keySet(["x", "y"]); // pin and absolute.anchor
+
+// Reject any own key not in `known`, naming the offender(s) and their path. `path` locates the object (e.g.
+// "flcm.frame", "flcm.text.textStyle", "flcm.text run[2]"); the message lists the allowed keys so the agent
+// can find the one it meant. Mirrors read.ts's assertQueryKeys; one helper for every constructor + the
+// future `edit` verb's up-front spec validation.
+function rejectUnknownKeys(obj: object, known: ReadonlySet<string>, path: string): void {
+  const unknown = Object.keys(obj).filter((k) => !known.has(k));
+  if (unknown.length) {
+    throw new Error(
+      `flcm: unknown ${unknown.length > 1 ? "props" : "prop"} ${unknown.map((k) => JSON.stringify(k)).join(", ")} on ${path} — ` +
+        `${path} takes only ${[...known].map((k) => JSON.stringify(k)).join(", ")}.`,
+    );
+  }
+}
+
 // ---- shared prop -> WriteNode compilers ----
 
 // terse pad (number | {x,y} | {top,right,bottom,left}) -> typed edges. pad takes NUMBERS, not "px"
@@ -85,6 +154,7 @@ function applySizing(props: SizeProps, layout: WriteLayout): void {
 
 function applyAbsolute(layout: WriteLayout, props: SizeProps): void {
   if (!props.absolute) return;
+  rejectUnknownKeys(props.absolute, ABSOLUTE_KEYS, "absolute");
   layout.position = "absolute";
   // A percent x/y resolves to px against the parent axis at render (percentPos); a number is the location
   // directly. The percent axes seed 0 here and the bridge overwrites them once the parent size is known.
@@ -152,6 +222,7 @@ function parseDirectional<X extends string, Y extends string>(
     throw new Error("flcm: " + name + " must be an object like { x, y } — got " + JSON.stringify(raw) + ".");
   }
   const r = raw as { x?: string; y?: string };
+  rejectUnknownKeys(r, DIRECTIONAL_KEYS, name);
   const out: { x?: X; y?: Y } = {};
   if (r.x != null) {
     if (!oneOf(xSet, r.x)) throw new Error("flcm: " + name + ".x must be one of " + words(xSet) + " — got " + JSON.stringify(r.x) + ".");
@@ -193,6 +264,7 @@ function buildLayout(props: FrameProps, isFrame: boolean): WriteLayout {
   const layout: WriteLayout = {};
   if (isFrame) {
     const cfg = props.layout || {};
+    rejectUnknownKeys(cfg, LAYOUT_KEYS, "flcm.frame.layout");
     layout.mode = cfg.mode == null ? "none" : assertEnum("layout.mode", cfg.mode, LAYOUT_MODE);
     if (cfg.gap != null) layout.gap = length(cfg.gap);
     if (cfg.padding != null) layout.padding = padEdges(cfg.padding);
@@ -229,6 +301,7 @@ function appearance(wn: WriteNode, props: AppearanceProps, opts: { radius?: bool
 
 function frame(props: FrameProps = {}, children?: WriteChild | WriteChild[]): WriteNode {
   props = props || {};
+  rejectUnknownKeys(props, FRAME_KEYS, "flcm.frame");
   const wn: WriteNode = { type: "FRAME" };
   appearance(wn, props, { radius: true, clip: true });
   wn.layout = buildLayout(props, true);
@@ -238,12 +311,14 @@ function frame(props: FrameProps = {}, children?: WriteChild | WriteChild[]): Wr
 
 function text(content: unknown, props: TextProps = {}): WriteNode {
   props = props || {};
+  rejectUnknownKeys(props, TEXT_KEYS, "flcm.text");
   const wn: WriteNode = { type: "TEXT" };
   base(wn, props);
   // `color` is a top-level node-level sugar prop (compiles to the text node's fill), NOT part of textStyle —
   // base color lives in `fills` like every other node, and the grouped `textStyle` is the type base only.
   if (props.color != null) wn.fills = [parseFill(props.color, "color")];
   const cfg = props.textStyle || {};
+  rejectUnknownKeys(cfg, TEXTSTYLE_KEYS, "flcm.text.textStyle");
   const ts: WriteTextStyle = {};
   if (cfg.fontSize != null) ts.fontSize = cfg.fontSize;
   if (cfg.fontWeight != null) ts.fontWeight = cfg.fontWeight;
@@ -348,7 +423,8 @@ function compileRuns(runs: TextRunInput[], baseStyle: WriteTextStyle): WriteText
     throw new Error("flcm.text: a runs array must be non-empty — pass at least one run (a string or a [text, style] tuple).");
   }
   const out: WriteTextRun[] = [];
-  for (const run of runs) {
+  for (let i = 0; i < runs.length; i++) {
+    const run = runs[i];
     let raw: string;
     let delta: StyleDeltaInput;
     if (typeof run === "string") { raw = run; delta = {}; }
@@ -356,6 +432,9 @@ function compileRuns(runs: TextRunInput[], baseStyle: WriteTextStyle): WriteText
     else {
       throw new Error('flcm.text: each run is a plain string or a [text, style] tuple like ["bold bit", { fontWeight: 700 }] — got ' + JSON.stringify(run) + ".");
     }
+    // The run delta is the grounded silent-drop site: compileRun reads a positive list and never looked at
+    // the rest, so a typo'd `textTransform` on a run vanished. Reject it here, on the raw author delta.
+    rejectUnknownKeys(delta, RUN_KEYS, `flcm.text run[${i}]`);
     for (const seg of parseInlineMarkdown(assertNotReadToken(raw))) {
       out.push(compileRun(seg.text, mergeDelta(seg, delta), baseStyle));
     }
@@ -413,6 +492,7 @@ function assertHyperlink(url: unknown): string {
 
 function shape(type: "RECTANGLE" | "ELLIPSE", props: ShapeProps = {}): WriteNode {
   props = props || {};
+  rejectUnknownKeys(props, SHAPE_KEYS, type === "RECTANGLE" ? "flcm.rect" : "flcm.ellipse");
   const wn: WriteNode = { type };
   appearance(wn, props, { radius: type === "RECTANGLE" });
   const layout = buildLayout(props as FrameProps, false);
@@ -425,6 +505,7 @@ function ellipse(props?: ShapeProps): WriteNode { return shape("ELLIPSE", props)
 
 function line(props: LineProps = {}): WriteNode {
   props = props || {};
+  rejectUnknownKeys(props, LINE_KEYS, "flcm.line");
   const wn: WriteNode = { type: "LINE" };
   base(wn, props);
   const paint = props.stroke != null ? props.stroke : props.color;
@@ -456,6 +537,8 @@ function svg(markup: unknown, props: SvgProps = {}): WriteNode {
   if (p.fill != null || p.stroke != null) {
     throw new Error("flcm.svg: colors are baked into the SVG markup — fill/stroke don't apply. Edit the markup's own colors, or use flcm.path({ d, fill }) for a themeable vector.");
   }
+  // After the fill/stroke special-case (its tailored message beats a generic "unknown prop") — reject the rest.
+  rejectUnknownKeys(props, SVG_KEYS, "flcm.svg");
   const wn: WriteNode = { type: "VECTOR", svg: markup };
   base(wn, props);
   const layout = buildLayout(props as FrameProps, false);
@@ -474,6 +557,7 @@ function path(props: PathProps): WriteNode {
   if (typeof d !== "string" || !d.trim()) {
     throw new Error("flcm.path: `d` (SVG path data) must be a non-empty string — got " + JSON.stringify(d) + ".");
   }
+  rejectUnknownKeys(props, PATH_KEYS, "flcm.path");
   const wn: WriteNode = { type: "VECTOR", pathData: d };
   appearance(wn, props, {}); // fill/stroke/strokeWidth/effects/rotation + base; radius/clip off for a vector
   const layout = buildLayout(props as FrameProps, false);
@@ -486,6 +570,8 @@ function path(props: PathProps): WriteNode {
 // GradientSugar / GradientStopInput are defined in schema.ts (the authoring-surface source). ----
 
 function gradient(a: GradientSugar | "linear" | "radial", b?: GradientStopInput[], c?: number): PaintSpec {
+  // Only the object form carries author-supplied keys to check; the positional form builds a closed spec.
+  if (a && typeof a === "object") rejectUnknownKeys(a, GRADIENT_KEYS, "flcm.gradient");
   const spec: GradientSugar = a && typeof a === "object" ? a : { type: a, stops: b, angle: c };
   const stops = gradientStops(spec.stops);
   const type = spec.type || "linear";
@@ -530,6 +616,7 @@ function image(url: unknown, opts: ImageOpts = {}): PaintSpec {
     throw new Error("flcm.image: expected an image url string, e.g. flcm.image(\"https://example.com/photo.jpg\") — got " + JSON.stringify(url) + ".");
   }
   opts = opts || {};
+  rejectUnknownKeys(opts, IMAGE_KEYS, "flcm.image opts");
   const scaleMode = opts.scaleMode != null ? opts.scaleMode : "FILL";
   if (!IMAGE_SCALE_MODES.has(scaleMode)) {
     throw new Error('flcm.image: scaleMode must be one of "FILL", "FIT", "CROP", "TILE" — got ' + JSON.stringify(scaleMode) + ".");
@@ -545,6 +632,7 @@ function effects(spec: EffectsSugar): EffectSpec[] {
   if (!spec || typeof spec !== "object") {
     throw new Error("flcm.effects: expected { shadow?, blur?, backgroundBlur?, glass?, noise?, texture?, progressiveBlur? } — got " + JSON.stringify(spec) + ".");
   }
+  rejectUnknownKeys(spec, EFFECTS_KEYS, "flcm.effects");
   const out: EffectSpec[] = [];
   if (spec.shadow !== undefined) out.push(...sugarShadows(spec.shadow));
   if (spec.blur !== undefined) out.push(layerBlurFromCssPx(blurRadius(spec.blur)));

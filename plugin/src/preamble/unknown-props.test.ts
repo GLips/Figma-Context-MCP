@@ -1,0 +1,74 @@
+// Unknown-prop rejection (ratified decision 1): the authoring surface fails loud on an unknown prop —
+// surface-wide, at construction, before render touches the canvas — instead of silently dropping it. Two
+// concerns pinned here:
+//   1. The tier-2 DRIFT GUARD — each runtime KNOWN_KEYS group equals Object.keys of its schema FIELD_GROUP.
+//      The runtime sets can't be sourced from schema.ts's zod (it must never enter the QuickJS bundle — the
+//      purity gate), so they're hand-mirrored; this test is what keeps them honest when a prop is added.
+//   2. The REJECT FIRES loud, with the offender + path named, at every verb and nested object.
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { createFigmaMock } from "../../harness/figma-mock.mjs";
+import { KNOWN_KEYS, frame, text, rect, line, svg, path, gradient, image, effects } from "./flcm.js";
+import { FIELD_GROUPS } from "./schema.js";
+
+// Constructors are inert POJO builders (figma untouched), but flcm.ts imports the bridge — install the mock.
+createFigmaMock();
+
+test("KNOWN_KEYS mirrors schema.ts FIELD_GROUPS exactly (drift guard)", () => {
+  // Same group set on both sides — neither a stray runtime group nor a missing one.
+  assert.deepEqual(Object.keys(KNOWN_KEYS).sort(), Object.keys(FIELD_GROUPS).sort());
+  for (const group of Object.keys(FIELD_GROUPS) as (keyof typeof FIELD_GROUPS)[]) {
+    assert.deepEqual(
+      [...KNOWN_KEYS[group]].sort(),
+      Object.keys(FIELD_GROUPS[group]).sort(),
+      `runtime KNOWN_KEYS.${group} drifted from schema FIELD_GROUPS.${group} — add the new prop to both, or neither`,
+    );
+  }
+});
+
+test("verbs reject an unknown top-level prop, naming it and the verb", () => {
+  assert.throws(() => frame({ background: "#fff" } as never), /unknown prop "background" on flcm\.frame/);
+  assert.throws(() => text("hi", { textTransform: "upper" } as never), /unknown prop "textTransform" on flcm\.text/);
+  assert.throws(() => rect({ radius: 4 } as never), /unknown prop "radius" on flcm\.rect/); // it's borderRadius
+  assert.throws(() => line({ height: 10 } as never), /unknown prop "height" on flcm\.line/); // a line sizes on length only
+  assert.throws(() => path({ d: "M0 0 L1 1", borderRadius: 2 } as never), /unknown prop "borderRadius" on flcm\.path/);
+  assert.throws(() => gradient({ type: "linear", stops: ["#000", "#fff"], colors: [] } as never), /unknown prop "colors" on flcm\.gradient/);
+  assert.throws(() => image("https://x/y.png", { scale: "FILL" } as never), /unknown prop "scale" on flcm\.image opts/);
+  assert.throws(() => effects({ dropShadow: true } as never), /unknown prop "dropShadow" on flcm\.effects/);
+});
+
+test("nested authoring objects reject unknown keys with a path-threaded error", () => {
+  assert.throws(() => frame({ layout: { mode: "row", wrap: "nowrap" } as never }), /unknown prop "wrap" on flcm\.frame\.layout/);
+  assert.throws(() => text("hi", { textStyle: { fontVariant: "small-caps" } as never }), /unknown prop "fontVariant" on flcm\.text\.textStyle/);
+  assert.throws(() => frame({ absolute: { x: 1, z: 2 } as never }), /unknown prop "z" on absolute/);
+  assert.throws(() => frame({ absolute: { x: 1, anchor: { z: "left" } } as never }), /unknown prop "z" on absolute\.anchor/);
+  assert.throws(() => frame({ pin: { z: "left" } as never }), /unknown prop "z" on pin/);
+});
+
+test("a run delta rejects an unknown key (the grounded silent-drop site), naming the run index", () => {
+  // compileRun read a positive list and never looked at the rest — textTransform on a run just vanished.
+  assert.throws(
+    () => text(["ok", ["styled", { textTransform: "upper" }] as never]),
+    /unknown prop "textTransform" on flcm\.text run\[1\]/,
+  );
+});
+
+test("plural offenders are all named", () => {
+  assert.throws(() => frame({ foo: 1, bar: 2 } as never), /unknown props "foo", "bar" on flcm\.frame/);
+});
+
+test("known props on every verb still construct (the reject is closed, not over-broad)", () => {
+  // A representative spread of real props per verb — none should trip the reject.
+  assert.doesNotThrow(() =>
+    frame({ name: "n", width: 100, height: "hug", fill: "#fff", layout: { mode: "row", gap: 8, padding: 4 }, absolute: { x: 1, y: 2, anchor: { x: "center" } }, pin: { x: "left" } }),
+  );
+  assert.doesNotThrow(() => text("hi", { color: "#000", textStyle: { fontSize: 14, fontWeight: "bold", textAlign: "center" } }));
+  assert.doesNotThrow(() => text([["b", { fontWeight: "bold", color: "#f00", hyperlink: "https://x" }]]));
+  assert.doesNotThrow(() => rect({ fill: "#fff", borderRadius: 4, strokeWidth: 1 }));
+  assert.doesNotThrow(() => line({ stroke: "#000", length: 40, strokeWidth: 2 }));
+  assert.doesNotThrow(() => path({ d: "M0 0 L1 1", fill: "#000" }));
+  assert.doesNotThrow(() => svg('<svg viewBox="0 0 1 1"></svg>', { width: 24 }));
+  assert.doesNotThrow(() => gradient({ type: "radial", stops: ["#000", "#fff"], at: { x: 50, y: 50 } }));
+  assert.doesNotThrow(() => image("https://x/y.png", { scaleMode: "FIT", placeholder: true }));
+  assert.doesNotThrow(() => effects({ shadow: true, blur: 4, glass: true }));
+});
