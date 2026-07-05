@@ -200,10 +200,37 @@ const SECTION_IDS = SECTIONS.map((s) => s.id);
 // verbs grows the string, so this throws loud at startup / in validate if the quick-start ever overflows.
 const QUICKSTART_LIMIT_BYTES = 2048;
 
+// Quick-start verb rendering groups signatures by category, one line per group — the ≤2KB budget can't
+// afford a line-plus-description per verb once the read verbs land. Grouping walks VERBS in order (so a new
+// category can't be silently dropped — it just prints under its own key) and the byte guard below still
+// fires on overflow. The full per-verb table lives in the reference tool, unaffected.
+const CATEGORY_LABELS: Record<string, string> = {
+  build: "build ",
+  value: "value ",
+  render: "render",
+  read: "read  ",
+  target: "target",
+};
+
+function quickStartVerbLines(): string {
+  const order: string[] = [];
+  const byCategory = new Map<string, string[]>();
+  for (const v of VERBS) {
+    if (!byCategory.has(v.category)) {
+      byCategory.set(v.category, []);
+      order.push(v.category);
+    }
+    byCategory.get(v.category)!.push(v.signature);
+  }
+  return order
+    .map((cat) => `  ${CATEGORY_LABELS[cat] ?? cat}: ${byCategory.get(cat)!.join(", ")}`)
+    .join("\n");
+}
+
 // ---- The ≤2KB quick-start = the figma_execute_code description. Critical-first: execution model, generated
 // verb signatures, the must-knows, the pointer to the reference tool. ----
 export function buildQuickStart(): string {
-  const verbLines = VERBS.map((v) => `  ${v.signature} — ${v.builds}`).join("\n");
+  const verbLines = quickStartVerbLines();
   const quickStart = `Execute JavaScript against the live Figma Plugin API (figma.*) in the plugin sandbox. The \`flcm\` DSL is already in scope — prefer it over raw figma.*.
 
 EXECUTION MODEL — your code runs in an async function body: use \`await\` directly and \`return <value>\`. Each call runs in its OWN scope — thread state by returning ids/keys and re-targeting them (flcm.get).

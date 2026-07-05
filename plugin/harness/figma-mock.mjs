@@ -329,6 +329,9 @@ export function createFigmaMock() {
   const page = new Node("PAGE");
   page.name = "Page 1";
   registry.delete(page.id); page.id = "0:1"; registry.set(page.id, page);
+  // The user's current selection — what flcm.selection() reads. A plain array a scenario sets directly
+  // (figma.currentPage.selection = [node, …]); empty by default, like a fresh page.
+  page.selection = [];
 
   const figma = {
     mixed: MIXED,

@@ -13,7 +13,7 @@ import { toFigmaPaint } from "./paint.js";
 import { toFigmaEffects } from "./effects.js";
 import { resolveFont, resolveFontStrict, FontMap } from "./fonts.js";
 import { normalizePathData } from "./path.js";
-import { writeKey } from "./identity.js";
+import { writeKey, identityOf } from "./identity.js";
 
 // `images` is the url → base64 map render() threads through the walk (bytes the server fetched+validated
 // and injected between the two passes); an image PaintSpec resolves to a plugin ImagePaint against it.
@@ -48,13 +48,13 @@ function boxOf(node: any): BoundingBox {
   return { x: node.x, y: node.y, width: node.width, height: node.height };
 }
 
-export function handle(node: any, key?: string): Handle {
-  // boundingBox is provisional at walk time (see readBackGeometry) — render() re-reads it once the tree
-  // settles, so the value captured here is a placeholder every returned handle overwrites.
-  const h: Handle = { id: node.id, name: node.name, type: node.type, boundingBox: boxOf(node) };
-  if (key) h.key = key;
-  if (node.type === "TEXT") h.text = node.characters;
-  return h;
+export function handle(node: any): Handle {
+  // Identity (id/name/type/key/text) comes from identityOf — the shared reader, so a render Handle and a
+  // read SlimHandle can't disagree on how key/text are pulled. `key` is read from pluginData (stampKey
+  // writes it BEFORE calling handle, so it's present by now). boundingBox is provisional at walk time (see
+  // readBackGeometry) — render() re-reads it once the tree settles, so the value captured here is a
+  // placeholder every returned handle overwrites.
+  return { ...identityOf(node), boundingBox: boxOf(node) };
 }
 
 // Read each returned handle's settled geometry once render()'s walk is done. A node's final size/position
@@ -73,7 +73,7 @@ function stampKey(node: any, wn: WriteNode, ctx: RenderCtx): void {
   if (typeof wn.key !== "string") return;
   if (wn.key in ctx.keyed) throw new Error('flcm.render: duplicate key "' + wn.key + '" — keys must be unique within a render.');
   writeKey(node, wn.key);
-  ctx.keyed[wn.key] = handle(node, wn.key);
+  ctx.keyed[wn.key] = handle(node);
 }
 
 // Resolve one PaintSpec to a plugin Paint. An image spec needs raster BYTES (the server fetched them and

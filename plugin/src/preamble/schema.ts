@@ -23,7 +23,7 @@
 import { z } from "zod";
 import type {
   FillInput, WriteCssEffects, PaintSpec, EffectSpec, GradientStop, WriteNode, WriteChild, Handle,
-  PinX, PinY, Target, RawIdRef,
+  PinX, PinY, Target, RawIdRef, SlimHandle, FindQuery,
 } from "./ir.js";
 // The read verbs return the canonical read shape the shared simplify core emits. Relative (not ~/) so the
 // root toolchain, which imports this module for docs generation, resolves it without the plugin's paths.
@@ -383,33 +383,49 @@ export interface Flcm {
   // Full inspect: the node's styling as the EXPANDED canonical read shape — the same vocabulary
   // figma-mcp's REST read emits, every value inline (no styles refs), for any node type.
   get(target: Target): Promise<SimplifiedNode>;
+  // Locate: every node matching the query, as slim handles (identity + a cheap layout world-model). May be
+  // empty; AND-combines type/name/key/within (default scope: current page). Dive into a hit with `get`.
+  find(query?: FindQuery): Promise<SlimHandle[]>;
+  // Locate exactly one — throws on 0 or >1, naming the count (a blind agent must never silently act on the
+  // first of several fuzzy-name matches).
+  findOne(query?: FindQuery): Promise<SlimHandle>;
+  // The user's current selection, as slim handles (same shape as find) — the on-ramp for "edit the selected …".
+  selection(): Promise<SlimHandle[]>;
   // The target escape hatch: wraps a raw node id so target resolution treats it as an id, never an flcm/key.
   id(nodeId: string): RawIdRef;
 }
 
 // ---- Verb registry — the canonical verb list, for the verb table and the quick-start signatures.
 // `schema` links a verb to the prop schema whose fields the reference renders under it. ----
+// `category` groups verbs for the quick-start's compact per-group rendering (the ≤2KB budget can't afford a
+// line per verb). The verb TABLE still lists each verb in full — only the quick-start groups.
+export type VerbCategory = "build" | "value" | "render" | "read" | "target";
+
 export interface VerbDoc {
   signature: string;
   builds: string;
   args: string;
+  category: VerbCategory;
   schema?: z.ZodObject;
 }
 
 export const VERBS: VerbDoc[] = [
-  { signature: "flcm.frame(props?, children?)", builds: "a FRAME (container)", args: "props object, then an array of children", schema: FrameSchema },
-  { signature: "flcm.text(content, props?)", builds: "a TEXT node", args: "content (a string or a runs array) first, then props", schema: TextSchema },
-  { signature: "flcm.rect(props?)", builds: "a RECTANGLE", args: "props object", schema: ShapeSchema },
-  { signature: "flcm.ellipse(props?)", builds: "an ELLIPSE", args: "props object", schema: ShapeSchema },
-  { signature: "flcm.line(props?)", builds: "a LINE", args: "props object", schema: LineSchema },
-  { signature: "flcm.svg(markup, props?)", builds: "a VECTOR from SVG markup", args: "SVG markup string first, then size/position props", schema: SvgSchema },
-  { signature: "flcm.path(props)", builds: "a themeable VECTOR", args: "props object including `d` (path data)", schema: PathSchema },
-  { signature: "flcm.gradient(...)", builds: "a gradient fill value", args: "object or positional form", schema: GradientSchema },
-  { signature: "flcm.image(url, opts?)", builds: "an image fill value", args: "the image url first, then { scaleMode?, placeholder? }", schema: ImageSchema },
-  { signature: "flcm.effects({...})", builds: "an effects value", args: "an { shadow, blur, backgroundBlur } bag", schema: EffectsSchema },
-  { signature: "await flcm.render(tree)", builds: "live nodes", args: "returns { root, keyed }" },
-  { signature: "await flcm.get(target)", builds: "a node's full read spec (values inline)", args: "target: an flcm/key, a node id, flcm.id(id), or a handle" },
-  { signature: "flcm.id(nodeId)", builds: "a raw-id target ref", args: "a node id string — resolved as an id, never scanned as an flcm/key" },
+  { category: "build", signature: "flcm.frame(props?, children?)", builds: "a FRAME (container)", args: "props object, then an array of children", schema: FrameSchema },
+  { category: "build", signature: "flcm.text(content, props?)", builds: "a TEXT node", args: "content (a string or a runs array) first, then props", schema: TextSchema },
+  { category: "build", signature: "flcm.rect(props?)", builds: "a RECTANGLE", args: "props object", schema: ShapeSchema },
+  { category: "build", signature: "flcm.ellipse(props?)", builds: "an ELLIPSE", args: "props object", schema: ShapeSchema },
+  { category: "build", signature: "flcm.line(props?)", builds: "a LINE", args: "props object", schema: LineSchema },
+  { category: "build", signature: "flcm.svg(markup, props?)", builds: "a VECTOR from SVG markup", args: "SVG markup string first, then size/position props", schema: SvgSchema },
+  { category: "build", signature: "flcm.path(props)", builds: "a themeable VECTOR", args: "props object including `d` (path data)", schema: PathSchema },
+  { category: "value", signature: "flcm.gradient(...)", builds: "a gradient fill value", args: "object or positional form", schema: GradientSchema },
+  { category: "value", signature: "flcm.image(url, opts?)", builds: "an image fill value", args: "the image url first, then { scaleMode?, placeholder? }", schema: ImageSchema },
+  { category: "value", signature: "flcm.effects({...})", builds: "an effects value", args: "an { shadow, blur, backgroundBlur } bag", schema: EffectsSchema },
+  { category: "render", signature: "await flcm.render(tree)", builds: "live nodes", args: "returns { root, keyed }" },
+  { category: "read", signature: "await flcm.get(target)", builds: "a node's full read spec (values inline)", args: "target: an flcm/key, a node id, flcm.id(id), or a handle" },
+  { category: "read", signature: "await flcm.find(query?)", builds: "matching nodes as slim handles", args: "{ type?, name?, key?, within? }, AND-combined (default scope: current page)" },
+  { category: "read", signature: "await flcm.findOne(query?)", builds: "exactly one slim handle (throws on 0 or >1)", args: "same query as find" },
+  { category: "read", signature: "await flcm.selection()", builds: "the current selection as slim handles", args: "no args" },
+  { category: "target", signature: "flcm.id(nodeId)", builds: "a raw-id target ref", args: "a node id string — resolved as an id, never scanned as an flcm/key" },
 ];
 
 // ---- Field-group registry — how the reference groups props into tables. Each verb's full schema drives

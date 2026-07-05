@@ -6,8 +6,8 @@
 // both throw, naming the target and (for a key clash) the count — a blind agent must never silently act on
 // the wrong node.
 
-import { Target, RawIdRef } from "./ir.js";
-import { readKey } from "./identity.js";
+import { Target, RawIdRef, FindQuery, SlimHandle } from "./ir.js";
+import { readKey, identityOf } from "./identity.js";
 import { sceneNodeToSnapshot, type SceneNodeLike, type SceneStyleResolver } from "./node-to-snapshot.js";
 import { simplify, type SimplifiedNode } from "~/core/index.js";
 
@@ -118,4 +118,119 @@ function scanRoot(within: Target | undefined): ScanRoot {
     throw new Error(`flcm: \`within\` target resolved to a ${node.type} with no children to search — pass a container (frame/group/section) or a page.`);
   }
   return node as ScanRoot;
+}
+
+// ---- locate: find / findOne / selection → SlimHandle[] ----
+//
+// The slim shape is a SPARSE PROJECTION of `get`'s full canonical shape (Invariant 1): every sizing/layout
+// leaf is the ONE core's own output, so slim and get can't drift. To get each hit its IN-CONTEXT geometry
+// (a real px on an authored-fixed axis, "fill"/"hug" intent otherwise, out-of-flow position/left/top), the
+// core must see the hit with its real parent — so we simplify the whole scan-root subtree ONCE and index
+// every node by id, rather than rooting each hit on its own (which would make every hit "contextual" and
+// strip its position, the way `get(target)` roots the requested node). `findAll` only ever returns
+// DESCENDANTS of the scan root, so every hit is a non-root node in that index and reads in-context.
+//
+// v1 cost: a query find still materializes the whole scan scope to build the index. Phase 4's hybrid filter
+// (declarative query pre-filters cheaply; only survivors materialize) is where that gets cut — `within`
+// scopes the scan today.
+
+const FIND_KEYS = ["type", "name", "key", "within"] as const;
+
+// A locate query is agent input at a system boundary, so an unknown facet (a typo'd `tpye`) FAILS LOUD
+// rather than silently matching every node — the ADR-0003 fail-loud contract, surface-wide. Only own
+// enumerable keys are checked; a present-but-undefined key is inert.
+function assertQueryKeys(query: FindQuery): void {
+  const unknown = Object.keys(query).filter((k) => !(FIND_KEYS as readonly string[]).includes(k));
+  if (unknown.length) {
+    throw new Error(
+      `flcm.find: unknown query ${unknown.length > 1 ? "keys" : "key"} ${unknown.map((k) => JSON.stringify(k)).join(", ")} — ` +
+        `a locate query takes only ${FIND_KEYS.map((k) => JSON.stringify(k)).join(", ")}.`,
+    );
+  }
+}
+
+// AND-combine the query facets. Empty-string facets are treated as "unset" (an empty substring would match
+// everything). `type`/`key` exact; `name` case-insensitive substring.
+function matchesQuery(node: SceneNode, query: FindQuery): boolean {
+  if (query.type && node.type !== query.type) return false;
+  if (query.key && readKey(node) !== query.key) return false;
+  if (query.name && !node.name.toLowerCase().includes(query.name.toLowerCase())) return false;
+  return true;
+}
+
+// Simplify the scan-root subtree through the SAME pipeline `get` uses, and index every produced node by id.
+// A node the core dropped (e.g. an SVG-heavy container it collapsed) is simply absent — projectSlim falls
+// back to identity-only for it.
+async function simplifiedIndex(root: ScanRoot): Promise<Map<string, SimplifiedNode>> {
+  const snapshot = await sceneNodeToSnapshot(root as unknown as SceneNodeLike, resolveStyle);
+  const { nodes } = await simplify([snapshot]);
+  const index = new Map<string, SimplifiedNode>();
+  const walk = (node: SimplifiedNode): void => {
+    index.set(node.id, node);
+    node.children?.forEach(walk);
+  };
+  nodes.forEach(walk);
+  return index;
+}
+
+// Project a live hit + its core-simplified twin into a SlimHandle. Identity comes from the live node
+// (childCount too — the truest "is this a container" signal, undimmed by any core-side child dropping);
+// width/height/layout.mode/position/left/top are the core's own leaves, so slim reads exactly like the
+// matching fields of `get`. Only the container mode survives from `layout`; a leaf (mode "none") drops it.
+function projectSlim(node: SceneNode, spec: SimplifiedNode | undefined): SlimHandle {
+  const slim: SlimHandle = identityOf(node);
+  if (spec) {
+    if (spec.width !== undefined) slim.width = spec.width;
+    if (spec.height !== undefined) slim.height = spec.height;
+    const mode = typeof spec.layout === "object" ? spec.layout.mode : undefined;
+    if (mode && mode !== "none") slim.layout = { mode };
+    if (spec.position === "absolute") slim.position = "absolute";
+    if (spec.left !== undefined) slim.left = spec.left;
+    if (spec.top !== undefined) slim.top = spec.top;
+  }
+  const childCount = "children" in node ? node.children.length : 0;
+  if (childCount) slim.childCount = childCount;
+  return slim;
+}
+
+/**
+ * flcm.find — locate every node matching the query, as SlimHandles (may be empty). The declarative facets
+ * (type/name/key/within) AND-combine; `within` scopes the scan (default: current page). Returns the cheap
+ * layout world-model, not full styling — dive into a hit with `get`.
+ */
+export async function find(query: FindQuery = {}): Promise<SlimHandle[]> {
+  assertQueryKeys(query);
+  const root = scanRoot(query.within);
+  const hits = root.findAll((node) => matchesQuery(node, query));
+  if (!hits.length) return [];
+  const index = await simplifiedIndex(root);
+  return hits.map((node) => projectSlim(node, index.get(node.id)));
+}
+
+/**
+ * flcm.findOne — exactly one hit or throw. The cardinality guard (naming the count) is the whole point: a
+ * blind agent must never over-trust a fuzzy name and silently act on the first of several matches. Narrow
+ * with type/key/within when it throws on >1.
+ */
+export async function findOne(query: FindQuery = {}): Promise<SlimHandle> {
+  const hits = await find(query);
+  if (hits.length !== 1) {
+    throw new Error(
+      `flcm.findOne: expected exactly one match for ${JSON.stringify(query)} but found ${hits.length}. ` +
+        `Use flcm.find for zero-or-many, or narrow the query (type/name/key/within).`,
+    );
+  }
+  return hits[0];
+}
+
+/**
+ * flcm.selection — the user's current selection as SlimHandles (same shape as find). The primary on-ramp
+ * for "edit the selected frame/button/text" tasks. Selection lives on the current page, so the index is
+ * built over the page; selected nodes are its descendants and read in-context.
+ */
+export async function selection(): Promise<SlimHandle[]> {
+  const selected = figma.currentPage.selection;
+  if (!selected.length) return [];
+  const index = await simplifiedIndex(figma.currentPage);
+  return selected.map((node) => projectSlim(node, index.get(node.id)));
 }

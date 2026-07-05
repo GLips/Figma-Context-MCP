@@ -15,6 +15,10 @@
 // Phase-1 scope: only create/render fields. Read-compression refs (styles/template tables),
 // components, prototype, variables, images, and rich text are deliberately absent.
 
+// Type-only reach into the core's canonical vocabulary, for the read shapes (SlimHandle) the locate verbs
+// return. Erased at build (esbuild drops `import type`), so the figma-free type hub gains no runtime edge.
+import type { SimplifiedDimension, SimplifiedLayout } from "~/core/index.js";
+
 // The node types createable through the plugin API, enumerated explicitly. Not every figma-mcp/REST
 // `type` round-trips to a create call, so the set is closed: bridge.ts's BUILDERS table is typed
 // `Record<WriteType, …>` (TS enforces a builder per type) and render() rejects anything outside it with
@@ -228,11 +232,42 @@ export type WriteChild = WriteNode | null | false | undefined;
 // Figma's node.x/node.y.
 export interface BoundingBox { x: number; y: number; width: number; height: number }
 
+// A node's stable identity — the fields every returned reference shares, pulled out of the live node by
+// identity.identityOf so render's Handle and the read verbs' SlimHandle can't drift on how they read
+// name/key/text. `key` is our pluginData flcm/key (only on nodes stamped with one); `text` is present for
+// TEXT nodes. Deliberately NO `removed` field beside id/type — safeSerialize's live-node collapse keys on
+// `"removed" in value`, so a read shape that exposed it would be wrongly collapsed in transit.
+export interface Identity { id: string; type: string; name: string; key?: string; text?: string }
+
 // A Handle is the JSON-safe reference render() returns for a node: what crosses the bridge back to the
 // agent in place of a live (unserializable) Figma node. Defined here so the schema module can type
 // render()'s return without importing bridge.ts (which speaks figma.*). `boundingBox` is the node's
 // resolved geometry, settled by render()'s post-walk read-back (see bridge.readBackGeometry).
-export interface Handle { id: string; type: string; name: string; key?: string; text?: string; boundingBox: BoundingBox }
+export interface Handle extends Identity { boundingBox: BoundingBox }
+
+// A SlimHandle is what the locate verbs (find/findOne/selection) return: the identity core plus a cheap
+// layout world-model, so an agent gets the lay of the land (containers, sizing intent, out-of-flow
+// positioning) without paying for a full `get`. It is a SPARSE PROJECTION of the same canonical read shape
+// `get` emits (Invariant 1) — every field's name and leaf format is the core's own: width/height are the
+// vocabulary's SimplifiedDimension (a px number ONLY on an authored-fixed axis; "fill"/"hug"/"contextual"
+// carry intent, never a misleading computed px), layout carries just the container mode, and
+// position/left/top mirror NodeGeometry, emitted only when the node is out of its parent's auto-layout flow.
+// Distinct from the write-side Handle: slim carries sizing INTENT and no resolved boundingBox; Handle
+// carries the resolved box and no intent.
+export interface SlimHandle extends Identity {
+  width?: SimplifiedDimension;
+  height?: SimplifiedDimension;
+  layout?: { mode: SimplifiedLayout["mode"] };
+  position?: "absolute";
+  left?: number;
+  top?: number;
+  childCount?: number;
+}
+
+// A locate query: the declarative facets find/findOne match, AND-combined. `type` and `key` are exact;
+// `name` is a case-insensitive substring (layer names are fuzzy — findOne's cardinality guard catches an
+// over-broad match). `within` scopes the scan to a subtree (target-by-shape, default: current page).
+export interface FindQuery { type?: string; name?: string; key?: string; within?: Target }
 
 // An explicit raw-id target — the escape hatch flcm.id(id) returns. Tagged (not a bare string) so the
 // resolver treats it as a live-node id and NEVER as an flcm/key: the one way to force id resolution when a

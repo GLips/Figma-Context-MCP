@@ -26,7 +26,7 @@ import { linearGradient, radialGradient } from "./paint.js";
 import { layerBlurFromCssPx, backgroundBlurFromCssPx, shadow, glass, noise, texture, progressiveBlur } from "./effects.js";
 import { parseColor, parseFill, parseCssEffects, parseBlendMode, length, lineHeight, letterSpacing, isPercent, percent } from "./css.js";
 import { buildNode, handle, readBackGeometry, resolvePercents, RenderCtx } from "./bridge.js";
-import { get } from "./read.js";
+import { get, find, findOne, selection } from "./read.js";
 
 // The authoring surface (verb Props + gradient/effects sugar) is defined ONCE in schema.ts as zod schemas
 // with per-field docs; these are the z.infer'd types. Imported `import type` ONLY so schema.ts's zod is
@@ -701,7 +701,7 @@ async function render(tree: WriteNode): Promise<{ root: Handle; keyed: Record<st
   // pixels against each parent's now-realized size in one post-walk pass (bridge.resolvePercents).
   const root = buildNode(tree, ctx);
   resolvePercents(ctx);
-  const rootHandle = handle(root, tree.key);
+  const rootHandle = handle(root);
   // Geometry settles only after the whole tree is laid out — read it back into every handle now (see
   // bridge.readBackGeometry). Walk-time boundingBox on these handles is provisional until this runs.
   readBackGeometry(rootHandle, ctx.keyed);
@@ -723,12 +723,12 @@ function id(nodeId: unknown): RawIdRef {
 // exports and the reference/example generators author against. If a verb's signature here diverges from
 // Flcm, plugin typecheck fails — so the docs can't describe a shape the code doesn't have. `satisfies`
 // checks without widening and the local is DCE'd from the bundle (pure init, unreferenced).
-const _flcmShape = { frame, text, rect, ellipse, line, svg, path, gradient, image, effects, render, get, id } satisfies Flcm;
+const _flcmShape = { frame, text, rect, ellipse, line, svg, path, gradient, image, effects, render, get, find, findOne, selection, id } satisfies Flcm;
 void _flcmShape;
 
 // The public verb surface — runtime.ts (the bundle entry) re-exports EXACTLY this set onto the
 // `globalName: flcm` global, and nothing else in the preamble is re-exported, so every other helper stays
 // closure-private. This list must mirror runtime.ts's re-export (and the _flcmShape/Flcm guard above).
-// `get` is defined in read.ts (the figma.*-speaking read walk) and surfaces here, the way render's live
-// work lives in bridge.ts.
-export { frame, text, rect, ellipse, line, svg, path, render, gradient, image, effects, get, id };
+// `get`/`find`/`findOne`/`selection` are defined in read.ts (the figma.*-speaking read walk) and surface
+// here, the way render's live work lives in bridge.ts.
+export { frame, text, rect, ellipse, line, svg, path, render, gradient, image, effects, get, find, findOne, selection, id };
