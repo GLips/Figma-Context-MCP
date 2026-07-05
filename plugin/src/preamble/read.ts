@@ -8,10 +8,8 @@
 
 import { Target, RawIdRef } from "./ir.js";
 import { readKey } from "./identity.js";
-import { sceneNodeToSnapshot } from "./node-to-snapshot.js";
-import type { SceneNodeLike, SceneStyleResolver } from "./node-to-snapshot.js";
-import { simplify } from "~/core/index.js";
-import type { SimplifiedNode } from "~/core/index.js";
+import { sceneNodeToSnapshot, type SceneNodeLike, type SceneStyleResolver } from "./node-to-snapshot.js";
+import { simplify, type SimplifiedNode } from "~/core/index.js";
 
 // A pluginData scan searches this. Default is the current page; a verb's `within` narrows it (resolved by the
 // same shape rules). PageNode and any container SceneNode both satisfy this.
@@ -99,9 +97,9 @@ const resolveStyle: SceneStyleResolver = (styleId) => figma.getStyleByIdAsync(st
  */
 export async function get(target: Target): Promise<SimplifiedNode> {
   const node = resolveTarget(target);
-  // The one deliberate boundary cast: a live SceneNode satisfies the adapter's structural view, but
-  // tsc can't prove it — getStyledTextSegments' field-generic overload doesn't structurally match the
-  // view's plain (fields) => segments signature.
+  // The one deliberate boundary cast: the adapter's structural view deliberately narrows the plugin
+  // typings to the axes it reads (its paint union omits VideoPaint, its segment getter drops the
+  // field-generic overload), so tsc can't prove a live SceneNode assignable to it.
   const snapshot = await sceneNodeToSnapshot(node as unknown as SceneNodeLike, resolveStyle);
   const { nodes } = await simplify([snapshot]);
   const spec = nodes[0];

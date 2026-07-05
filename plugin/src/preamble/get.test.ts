@@ -41,11 +41,10 @@ test("get on a text node reads back content and text style", async () => {
   // whether real REST emits the same residual is on the plan's dogfood-verify list; a deliberate
   // change there updates this pin.
   assert.deepEqual(spec.text, ["Hello ", ["**world**", { fontVariantName: "Bold" }]]);
-  assert.equal(typeof spec.textStyle, "object");
-  const style = spec.textStyle as Record<string, unknown>;
-  assert.equal(style.fontSize, 16);
-  assert.equal(style.fontFamily, "Inter");
-  assert.equal(style.fontWeight, 400);
+  assert.ok(typeof spec.textStyle === "object");
+  assert.equal(spec.textStyle.fontSize, 16);
+  assert.equal(spec.textStyle.fontFamily, "Inter");
+  assert.equal(spec.textStyle.fontWeight, 400);
 });
 
 test("get on an instance carries an honest type and its componentId", async () => {
