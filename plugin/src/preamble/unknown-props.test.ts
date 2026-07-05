@@ -8,8 +8,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
-import { KNOWN_KEYS, frame, text, rect, line, svg, path, gradient, image, effects } from "./flcm.js";
-import { FIELD_GROUPS } from "./schema.js";
+import { KNOWN_KEYS, ABSOLUTE_KEYS, DIRECTIONAL_KEYS, frame, text, rect, line, svg, path, gradient, image, effects } from "./flcm.js";
+import { FIELD_GROUPS, SizeSchema } from "./schema.js";
 
 // Constructors are inert POJO builders (figma untouched), but flcm.ts imports the bridge — install the mock.
 createFigmaMock();
@@ -24,6 +24,16 @@ test("KNOWN_KEYS mirrors schema.ts FIELD_GROUPS exactly (drift guard)", () => {
       `runtime KNOWN_KEYS.${group} drifted from schema FIELD_GROUPS.${group} — add the new prop to both, or neither`,
     );
   }
+});
+
+test("directional nested sets (absolute/anchor) match their inline schema shapes (drift guard)", () => {
+  // absolute/pin/anchor are defined inline in SIZE_FIELDS, not as their own FIELD_GROUP — so guard them by
+  // unwrapping the zod objects directly. prop() wraps each field in .optional(); .unwrap() peels it.
+  const absShape = (SizeSchema as unknown as { shape: { absolute: { unwrap(): { shape: Record<string, unknown> } } } }).shape.absolute.unwrap();
+  assert.deepEqual([...ABSOLUTE_KEYS].sort(), Object.keys(absShape.shape).sort());
+  const anchorShape = (absShape.shape.anchor as { unwrap(): { shape: Record<string, unknown> } }).unwrap();
+  assert.deepEqual([...DIRECTIONAL_KEYS].sort(), Object.keys(anchorShape.shape).sort());
+  // `pin` reuses DIRECTIONAL_KEYS (z.custom — no zod shape to reflect on), so the anchor guard covers it too.
 });
 
 test("verbs reject an unknown top-level prop, naming it and the verb", () => {
@@ -51,6 +61,17 @@ test("a run delta rejects an unknown key (the grounded silent-drop site), naming
     () => text(["ok", ["styled", { textTransform: "upper" }] as never]),
     /unknown prop "textTransform" on flcm\.text run\[1\]/,
   );
+});
+
+test("the CSS effects bag (a node's `effects:` prop) rejects an unknown key too — surface-wide policy", () => {
+  // parseCssEffects reads a positive list, so a typo alongside a real CSS key used to vanish silently.
+  // The bag routes through normalizeEffects (isCss branch) when passed as a node's `effects:` prop.
+  const shadow = "0px 4px 8px rgba(0,0,0,0.25)";
+  assert.throws(() => frame({ effects: { boxShadow: shadow, foo: 2 } as never }), /unknown prop "foo" on effects \(CSS bag\)/);
+  assert.throws(() => rect({ effects: { filter: "blur(4px)", bar: 1 } as never }), /unknown prop "bar" on effects \(CSS bag\)/);
+  // A clean CSS bag still parses. (flcm.effects({...}) itself is the SUGAR form — a CSS key there is rejected
+  // by the sugar reject above, correctly: CSS strings belong in the `effects:` prop, not flcm.effects().)
+  assert.doesNotThrow(() => frame({ effects: { boxShadow: shadow } }));
 });
 
 test("plural offenders are all named", () => {

@@ -87,11 +87,16 @@ const RUN_KEYS = keySet(KNOWN_KEYS.run);
 const IMAGE_KEYS = keySet(KNOWN_KEYS.image);
 const GRADIENT_KEYS = keySet(KNOWN_KEYS.gradient);
 const EFFECTS_KEYS = keySet(KNOWN_KEYS.effects);
-// The directional nested shapes are defined INLINE in schema.ts (SIZE_FIELDS.absolute/.pin), not as their
-// own FIELD_GROUP — and `pin` is a z.custom with no zod shape to reflect on — so this pair is the one the
-// drift test can't reach. They're frozen {x, y(, anchor)} points; kept here with the rest for a single home.
-const ABSOLUTE_KEYS = keySet(["x", "y", "anchor"]);
-const DIRECTIONAL_KEYS = keySet(["x", "y"]); // pin and absolute.anchor
+// The CSS-effects bag (WriteCssEffects) — the string form of `effects`, routed to parseCssEffects. Its keys
+// are an ir.ts interface, not a schema FIELD_GROUP, so no runtime drift test reaches them; but they're the
+// frozen CSS spellings, and this ONE list drives both the is-this-CSS detection and the reject (normalizeEffects).
+const CSS_EFFECTS_KEYS = keySet(["boxShadow", "filter", "backdropFilter", "textShadow"]);
+// The directional nested shapes are defined INLINE in schema.ts's SIZE_FIELDS (not their own FIELD_GROUP).
+// The drift test still guards them by unwrapping the zod objects directly — ABSOLUTE_KEYS against the
+// `absolute` shape, DIRECTIONAL_KEYS against the `anchor` shape. `pin` reuses DIRECTIONAL_KEYS: it's a
+// z.custom with no zod shape of its own, but its keys ARE anchor's, so the anchor guard covers it too.
+export const ABSOLUTE_KEYS = keySet(["x", "y", "anchor"]);
+export const DIRECTIONAL_KEYS = keySet(["x", "y"]); // pin and absolute.anchor
 
 // Reject any own key not in `known`, naming the offender(s) and their path. `path` locates the object (e.g.
 // "flcm.frame", "flcm.text.textStyle", "flcm.text run[2]"); the message lists the allowed keys so the agent
@@ -720,8 +725,15 @@ function blurRadius(b: BlurSugar): number {
 function normalizeEffects(v: EffectsInput): EffectSpec[] {
   if (Array.isArray(v)) return v;
   if (!v || typeof v !== "object") throw new Error("flcm: effects must be an object — got " + JSON.stringify(v) + ".");
-  const isCss = (["boxShadow", "filter", "backdropFilter", "textShadow"] as const).some((f) => f in v);
-  return isCss ? parseCssEffects(v as WriteCssEffects) : effects(v as EffectsSugar);
+  // A bag carrying any CSS-effect key is the CSS form. Reject its unknown keys too — parseCssEffects reads a
+  // positive list, so a typo'd key would otherwise silently vanish (the same closed-set policy as the sugar
+  // bag, surface-wide). A bag with NO CSS key routes to the sugar path, whose own EFFECTS_KEYS reject fires.
+  const isCss = [...CSS_EFFECTS_KEYS].some((f) => f in v);
+  if (isCss) {
+    rejectUnknownKeys(v, CSS_EFFECTS_KEYS, "effects (CSS bag)");
+    return parseCssEffects(v as WriteCssEffects);
+  }
+  return effects(v as EffectsSugar);
 }
 
 // The server injects the raster bytes for image fills on this global between the two render passes (a
