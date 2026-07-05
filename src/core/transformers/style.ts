@@ -11,7 +11,12 @@ import { convertGradientToCss } from "./style/gradient.js";
 // single public entry point — `~/core/transformers/style.js` — so the re-exports below
 // preserve the import surface every caller already uses.
 export type { CSSRGBAColor, CSSHexColor, ColorValue } from "./style/color.js";
-export { convertColor, formatRGBAColor, flattenSolidFills } from "./style/color.js";
+export {
+  convertColor,
+  formatRGBAColor,
+  formatSolidColor,
+  flattenSolidFills,
+} from "./style/color.js";
 export type { SimplifiedImageFill, SimplifiedPatternFill } from "./style/image.js";
 export type { SimplifiedGradientFill } from "./style/gradient.js";
 

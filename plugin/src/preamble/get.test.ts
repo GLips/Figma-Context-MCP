@@ -5,7 +5,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
-import { frame, text, rect, render, id, get } from "./flcm.js";
+import { frame, text, rect, render, id, get, effects } from "./flcm.js";
 
 test("get on a frame returns the expanded canonical shape — values inline, children included", async () => {
   createFigmaMock();
@@ -57,6 +57,49 @@ test("get on an instance carries an honest type and its componentId", async () =
   const spec = await get(id(inst.id));
   assert.equal(spec.type, "INSTANCE");
   assert.equal(spec.componentId, comp.id);
+});
+
+// Beyond-CSS effects round-trip: what flcm.effects({...}) authors reads back as the same object form
+// (ADR-0002). This drives the whole plugin read path — the adapter's beyond-CSS decode + the core's
+// object-form emission — over the live-ish mock, complementing the core unit pins in src/tests/effects.test.ts.
+test("get reads beyond-CSS effects back as the flcm.effects object form", async () => {
+  createFigmaMock();
+  await render(
+    rect({
+      key: "pane",
+      width: 100,
+      height: 100,
+      effects: effects({ glass: true, noise: true, texture: true, progressiveBlur: 24 }),
+    }),
+  );
+
+  const spec = await get("pane");
+  const fx = spec.effects;
+  // Expanded read: effects is the inline object, never a "effect_…" styles ref (also narrows the type).
+  if (typeof fx !== "object") throw new Error(`expected an inline effects object, got ${JSON.stringify(fx)}`);
+  assert.deepEqual(fx.glass, {
+    lightIntensity: 0.5,
+    lightAngle: 130,
+    refraction: 0.25,
+    depth: 12,
+    dispersion: 0.08,
+    radius: 4,
+  });
+  assert.deepEqual(fx.noise, {
+    type: "monotone",
+    color: "rgba(0, 0, 0, 0.4)",
+    noiseSize: 1,
+    density: 0.2,
+  });
+  assert.deepEqual(fx.texture, { noiseSize: 3, radius: 6, clipToShape: true });
+  assert.deepEqual(fx.progressiveBlur, {
+    startRadius: 0,
+    endRadius: 24,
+    startOffset: { x: 0, y: 0 },
+    endOffset: { x: 0, y: 1 },
+  });
+  // A progressive blur is not a plain CSS blur — it must not also surface as `filter`.
+  assert.equal(fx.filter, undefined);
 });
 
 test("get on a hidden node fails loud instead of returning nothing", async () => {

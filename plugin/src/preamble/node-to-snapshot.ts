@@ -90,6 +90,25 @@ export interface SceneEffect {
   offset?: SnapshotVector;
   radius?: number;
   spread?: number;
+
+  // Beyond-CSS effect fields the live plugin carries (GLASS / NOISE / TEXTURE / PROGRESSIVE layer blur).
+  // REST never sees these; the read walk decodes them straight onto the snapshot's beyond-CSS fields so
+  // the core can emit the flcm.effects({...}) object form. `radius`/`color` above are reused.
+  lightIntensity?: number;
+  lightAngle?: number;
+  refraction?: number;
+  depth?: number;
+  dispersion?: number;
+  noiseType?: string;
+  noiseSize?: number;
+  density?: number;
+  secondaryColor?: SnapshotColor;
+  opacity?: number;
+  clipToShape?: boolean;
+  blurType?: string;
+  startRadius?: number;
+  startOffset?: SnapshotVector;
+  endOffset?: SnapshotVector;
 }
 
 /**
@@ -623,6 +642,23 @@ function decodeSceneEffect(effect: SceneEffect): SnapshotEffect {
     offset: effect.offset,
     radius: effect.radius ?? 0,
     spread: effect.spread,
+    // Beyond-CSS fields — carried straight through (raw Figma-domain). Undefined on ordinary
+    // shadow/blur effects; the core reads only the ones its per-type branch needs.
+    lightIntensity: effect.lightIntensity,
+    lightAngle: effect.lightAngle,
+    refraction: effect.refraction,
+    depth: effect.depth,
+    dispersion: effect.dispersion,
+    noiseType: effect.noiseType,
+    noiseSize: effect.noiseSize,
+    density: effect.density,
+    secondaryColor: effect.secondaryColor,
+    opacity: effect.opacity,
+    clipToShape: effect.clipToShape,
+    blurType: effect.blurType,
+    startRadius: effect.startRadius,
+    startOffset: effect.startOffset,
+    endOffset: effect.endOffset,
   };
 }
 

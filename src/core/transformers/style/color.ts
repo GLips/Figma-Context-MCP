@@ -46,6 +46,17 @@ export function formatRGBAColor(color: SnapshotColor, opacity = 1): CSSRGBAColor
 }
 
 /**
+ * The read vocabulary's spelling for a single solid color: `#RRGGBB` when fully
+ * opaque, `rgba(...)` otherwise. This is the convention solid fills emit; hoisted
+ * here so other producers of a lone color (a noise grain's tint) speak it too,
+ * rather than re-inlining the hex-vs-rgba branch.
+ */
+export function formatSolidColor(color: SnapshotColor, opacity = 1): CSSHexColor | CSSRGBAColor {
+  const { hex, opacity: a } = convertColor(color, opacity);
+  return a === 1 ? hex : formatRGBAColor(color, opacity);
+}
+
+/**
  * A solid paint participates in flattening only when it blends normally with
  * what's behind it. PASS_THROUGH (groups) and NORMAL both composite with plain
  * source-over; every other blend mode (MULTIPLY, SCREEN, …) needs the backdrop
@@ -106,6 +117,5 @@ export function flattenSolidFills(paints: SnapshotPaint[]): CSSHexColor | CSSRGB
   }
 
   const composited: SnapshotColor = acc;
-  const { hex, opacity } = convertColor(composited);
-  return opacity === 1 ? hex : formatRGBAColor(composited);
+  return formatSolidColor(composited);
 }

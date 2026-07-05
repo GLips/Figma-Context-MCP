@@ -4,20 +4,98 @@ import type {
   SnapshotEffect,
   SnapshotVector,
 } from "~/core/snapshot.js";
-import { formatRGBAColor } from "~/core/transformers/style.js";
+import { formatRGBAColor, formatSolidColor } from "~/core/transformers/style.js";
 import { pixelRound } from "~/core/utils.js";
 
-export type SimplifiedEffects = {
+/** Object form of the beyond-CSS effects — read == create (each mirrors its flcm.effects sugar). */
+export interface SimplifiedGlass {
+  lightIntensity: number;
+  lightAngle: number;
+  refraction: number;
+  depth: number;
+  dispersion: number;
+  radius: number;
+}
+export interface SimplifiedNoise {
+  type: "monotone" | "duotone" | "multitone";
+  color: string;
+  noiseSize: number;
+  density: number;
+  secondaryColor?: string;
+  opacity?: number;
+}
+export interface SimplifiedTexture {
+  noiseSize: number;
+  radius: number;
+  clipToShape: boolean;
+}
+export interface SimplifiedProgressiveBlur {
+  startRadius: number;
+  endRadius: number;
+  startOffset: { x: number; y: number };
+  endOffset: { x: number; y: number };
+}
+
+/** CSS-representable effects: shadow → boxShadow/textShadow, blur → filter/backdropFilter. */
+interface CssEffects {
   boxShadow?: string;
   filter?: string;
   backdropFilter?: string;
   textShadow?: string;
-};
+}
 
-// DROP_SHADOW/INNER_SHADOW always carry an offset and color (the adapter decodes
-// them from Figma's shadow effects, which require both). The snapshot types them
-// optional to accommodate blurs, so narrow here to keep the simplifiers total.
+/**
+ * The beyond-CSS effects — no CSS spelling, so they read back as the flcm.effects({...}) OBJECT form
+ * (ADR-0002 symmetry: read object-form == create object-form). Split out from the CSS half so the two
+ * effect vocabularies are a structural distinction, and the enumerable set below can derive from these
+ * keys rather than a hand-kept list that could drift out of sync with the type.
+ */
+interface BeyondCssEffects {
+  glass?: SimplifiedGlass;
+  noise?: SimplifiedNoise;
+  texture?: SimplifiedTexture;
+  progressiveBlur?: SimplifiedProgressiveBlur;
+}
+
+export type SimplifiedEffects = CssEffects & BeyondCssEffects;
+export type BeyondCssEffect = keyof BeyondCssEffects;
+
+// The runtime enumerable of the beyond-CSS set. Derived from a Record over BeyondCssEffect, so adding or
+// removing an effect on the type forces this table to match in BOTH directions (a missing key fails the
+// Record, an extra key isn't a BeyondCssEffect) — the set can't silently go stale.
+const BEYOND_CSS_EFFECT_TABLE: Record<BeyondCssEffect, true> = {
+  glass: true,
+  noise: true,
+  texture: true,
+  progressiveBlur: true,
+};
+export const BEYOND_CSS_EFFECTS = Object.keys(BEYOND_CSS_EFFECT_TABLE) as BeyondCssEffect[];
+
+// Per-effect narrowing aliases. Each Figma effect type always carries its own fields (create always sets
+// them and the live runtime carries them), but the snapshot types them optional to share one bag across
+// every effect. The type-predicate `find`s below assert the fields for a matched type — the same pattern
+// SnapshotShadowEffect uses — so the simplifiers read total inputs instead of papering over the optionality
+// with `?? 0` (which would silently emit a wrong explicit value, e.g. a `0` angle, if a field were absent).
 type SnapshotShadowEffect = SnapshotEffect & { offset: SnapshotVector; color: SnapshotColor };
+type SnapshotGlassEffect = SnapshotEffect & {
+  lightIntensity: number;
+  lightAngle: number;
+  refraction: number;
+  depth: number;
+  dispersion: number;
+};
+type SnapshotNoiseEffect = SnapshotEffect & {
+  noiseType: string;
+  color: SnapshotColor;
+  noiseSize: number;
+  density: number;
+};
+type SnapshotTextureEffect = SnapshotEffect & { noiseSize: number; clipToShape: boolean };
+type SnapshotProgressiveEffect = SnapshotEffect & {
+  startRadius: number;
+  startOffset: SnapshotVector;
+  endOffset: SnapshotVector;
+};
 
 export function buildSimplifiedEffects(n: NodeSnapshot): SimplifiedEffects {
   if (!n.effects) return {};
@@ -35,16 +113,19 @@ export function buildSimplifiedEffects(n: NodeSnapshot): SimplifiedEffects {
   const boxShadow = [...dropShadows, ...innerShadows].join(", ");
 
   // Handle blur effects - separate by CSS property. A zero-radius blur is a
-  // no-op, so drop it entirely rather than emit a dead `blur(0px)`.
+  // no-op, so drop it entirely rather than emit a dead `blur(0px)`. A PROGRESSIVE
+  // blur (of EITHER kind — the runtime allows a progressive BACKGROUND_BLUR too)
+  // is beyond-CSS (handled below), so both plain-blur paths exclude it rather than
+  // flatten it into a plain, wrong `blur()` at half the radius.
   // Layer blurs use the CSS 'filter' property
   const filterBlurValues = effects
-    .filter((e) => e.type === "LAYER_BLUR" && e.radius > 0)
+    .filter((e) => e.type === "LAYER_BLUR" && e.blurType !== "PROGRESSIVE" && e.radius > 0)
     .map(simplifyBlur)
     .join(" ");
 
   // Background blurs use the CSS 'backdrop-filter' property
   const backdropFilterValues = effects
-    .filter((e) => e.type === "BACKGROUND_BLUR" && e.radius > 0)
+    .filter((e) => e.type === "BACKGROUND_BLUR" && e.blurType !== "PROGRESSIVE" && e.radius > 0)
     .map(simplifyBlur)
     .join(" ");
 
@@ -60,7 +141,67 @@ export function buildSimplifiedEffects(n: NodeSnapshot): SimplifiedEffects {
   if (filterBlurValues) result.filter = filterBlurValues;
   if (backdropFilterValues) result.backdropFilter = backdropFilterValues;
 
+  // Beyond-CSS effects — the object form. Each is singular in the sugar (one glass, one noise, …), so we
+  // emit the first visible occurrence of each type; a design that stacks two of the same reads back the
+  // first (the write surface can't author two anyway).
+  const glass = effects.find((e): e is SnapshotGlassEffect => e.type === "GLASS");
+  if (glass) result.glass = simplifyGlass(glass);
+
+  const noise = effects.find((e): e is SnapshotNoiseEffect => e.type === "NOISE");
+  if (noise) result.noise = simplifyNoise(noise);
+
+  const texture = effects.find((e): e is SnapshotTextureEffect => e.type === "TEXTURE");
+  if (texture) result.texture = simplifyTexture(texture);
+
+  // Keyed off `blurType` alone — only blur effects carry it, and a PROGRESSIVE blur reads as the object
+  // form whether it's a LAYER_BLUR or a BACKGROUND_BLUR (both are typed progressive). The create surface
+  // only authors the LAYER_BLUR variant, so a background-progressive re-creates as a layer one — a
+  // create-side limitation for the edit plan, still far more faithful than a halved plain CSS blur.
+  const progressive = effects.find(
+    (e): e is SnapshotProgressiveEffect => e.blurType === "PROGRESSIVE",
+  );
+  if (progressive) result.progressiveBlur = simplifyProgressiveBlur(progressive);
+
   return result;
+}
+
+// The beyond-CSS radii/values are RAW Figma-domain — no CSS-px halving (see simplifyBlur / effects.ts:
+// the ×2 factor is a CSS-blur-only artifact).
+function simplifyGlass(e: SnapshotGlassEffect): SimplifiedGlass {
+  return {
+    lightIntensity: e.lightIntensity,
+    lightAngle: e.lightAngle,
+    refraction: e.refraction,
+    depth: e.depth,
+    dispersion: e.dispersion,
+    radius: e.radius,
+  };
+}
+
+function simplifyNoise(e: SnapshotNoiseEffect): SimplifiedNoise {
+  const noise: SimplifiedNoise = {
+    // Figma spells the type MONOTONE/DUOTONE/MULTITONE; the sugar takes the lowercase word.
+    type: e.noiseType.toLowerCase() as SimplifiedNoise["type"],
+    color: formatSolidColor(e.color),
+    noiseSize: e.noiseSize,
+    density: e.density,
+  };
+  if (e.secondaryColor) noise.secondaryColor = formatSolidColor(e.secondaryColor);
+  if (e.opacity != null) noise.opacity = e.opacity;
+  return noise;
+}
+
+function simplifyTexture(e: SnapshotTextureEffect): SimplifiedTexture {
+  return { noiseSize: e.noiseSize, radius: e.radius, clipToShape: e.clipToShape };
+}
+
+function simplifyProgressiveBlur(e: SnapshotProgressiveEffect): SimplifiedProgressiveBlur {
+  return {
+    startRadius: e.startRadius,
+    endRadius: e.radius,
+    startOffset: { x: e.startOffset.x, y: e.startOffset.y },
+    endOffset: { x: e.endOffset.x, y: e.endOffset.y },
+  };
 }
 
 function simplifyDropShadow(effect: SnapshotShadowEffect) {

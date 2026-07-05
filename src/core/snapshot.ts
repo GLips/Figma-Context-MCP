@@ -116,6 +116,33 @@ export interface SnapshotEffect {
   offset?: SnapshotVector;
   radius: number;
   spread?: number;
+
+  // Beyond-CSS effects (GLASS / NOISE / TEXTURE, and the PROGRESSIVE variant of a LAYER_BLUR) — the
+  // newest Figma effects, which have no CSS spelling and read back as the flcm.effects({...}) object
+  // form. Only the plugin adapter (`sceneNodeToSnapshot`) populates these; REST can't see them, so
+  // `restNodeToSnapshot` leaves them absent. All values are raw Figma-domain — `radius` here is a Figma
+  // radius, NOT halved the way a plain LAYER_BLUR/BACKGROUND_BLUR radius is (there is no CSS px to scale
+  // from). Fields are grouped by the effect that carries them; `radius`/`color` above are reused.
+  // glass
+  lightIntensity?: number;
+  lightAngle?: number;
+  refraction?: number;
+  depth?: number;
+  dispersion?: number;
+  // noise (MONOTONE / DUOTONE / MULTITONE); `color` above is the primary grain color
+  noiseType?: string;
+  noiseSize?: number;
+  density?: number;
+  secondaryColor?: SnapshotColor;
+  opacity?: number;
+  // texture reuses `noiseSize` + `radius`
+  clipToShape?: boolean;
+  // progressive layer-blur: `radius` above is the END radius, ramped from `startRadius` along the
+  // `startOffset`→`endOffset` axis (offsets normalized to the node's 0–1 object space)
+  blurType?: string;
+  startRadius?: number;
+  startOffset?: SnapshotVector;
+  endOffset?: SnapshotVector;
 }
 
 // ---------------------------------------------------------------------------

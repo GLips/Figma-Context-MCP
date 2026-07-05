@@ -15,6 +15,15 @@ export type {
 // container-config shape. Re-exported here so consumers (the plugin's slim
 // read projection) source them from the core barrel, not a deep path.
 export type { SimplifiedDimension, SimplifiedLayout } from "./transformers/layout.js";
+// Beyond-CSS effect object forms — re-exported so the plugin sources them from the barrel for the
+// read↔create symmetry guard (see plugin effects.test.ts). BEYOND_CSS_EFFECTS / BeyondCssEffect stay
+// module-local in transformers/effects.ts until a consumer needs them.
+export type {
+  SimplifiedGlass,
+  SimplifiedNoise,
+  SimplifiedTexture,
+  SimplifiedProgressiveBlur,
+} from "./transformers/effects.js";
 
 // The core entry: NodeSnapshot[] → canonical SimplifiedNodes (expanded by
 // default; compression opt-in via { compress: true })

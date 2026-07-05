@@ -7,6 +7,30 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { effects } from "./flcm.js";
 import { toFigmaEffects } from "./effects.js";
+import type {
+  SimplifiedGlass,
+  SimplifiedNoise,
+  SimplifiedTexture,
+  SimplifiedProgressiveBlur,
+} from "~/core/index.js";
+import type { GlassSugar, NoiseSugar, TextureSugar, ProgressiveBlurSugar } from "./schema.js";
+
+// ADR-0002 read↔create symmetry, tier-2: the core's beyond-CSS OBJECT form (what `get` emits) must feed
+// straight back into the create sugar (what flcm.effects({...}) accepts) — two toolchains, no shared type.
+// The check has two halves, because assignability ALONE is too weak: every sugar field is optional, so a
+// read-side field RENAME would be an excess property on the read type and still `extends` the sugar. So we
+// also assert every read key has a create-side counterpart — then a rename (read emits `glassDepth`, create
+// still reads `depth`) fails to compile here rather than silently round-tripping to a create default.
+type ReadMatchesCreate<Read, Sugar> = (Read extends Sugar ? true : never) &
+  (keyof Read extends keyof (Sugar & object) ? true : never);
+const _glassSym: ReadMatchesCreate<SimplifiedGlass, GlassSugar> = true;
+const _noiseSym: ReadMatchesCreate<SimplifiedNoise, NoiseSugar> = true;
+const _textureSym: ReadMatchesCreate<SimplifiedTexture, TextureSugar> = true;
+const _progressiveSym: ReadMatchesCreate<SimplifiedProgressiveBlur, ProgressiveBlurSugar> = true;
+void _glassSym;
+void _noiseSym;
+void _textureSym;
+void _progressiveSym;
 
 test("effects sugar: glass/noise/texture/progressiveBlur build with defaults from `true`/number", () => {
   const specs = effects({ glass: true, noise: true, texture: true, progressiveBlur: 24 });
