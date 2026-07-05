@@ -244,11 +244,12 @@ async function filterByPredicate(hits: SceneNode[], root: ScanRoot, predicate: R
   }
   if (!hits.length) return [];
   const index = await simplifiedIndex(root);
-  const survivors = hits.filter((hit) => {
+  const survivors: SlimHandle[] = [];
+  for (const hit of hits) {
     const spec = index.get(hit.id);
-    return spec ? !!predicate(spec) : false;
-  });
-  return survivors.map((node) => projectSlim(node, index.get(node.id)));
+    if (spec && predicate(spec)) survivors.push(projectSlim(hit, spec));
+  }
+  return survivors;
 }
 
 /**
