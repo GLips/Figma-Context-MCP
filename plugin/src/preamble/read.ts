@@ -175,7 +175,7 @@ function matchesQuery(node: SceneNode, query: FindQuery): boolean {
 // collapsed-SVG fallback. Locate excludes it up front, so find never hands back a node `get` would refuse.
 function isRendered(node: SceneNode): boolean {
   for (let n: BaseNode | null = node; n && "visible" in n; n = n.parent) {
-    if ((n as SceneNode).visible === false) return false;
+    if (n.visible === false) return false;
   }
   return true;
 }
@@ -219,6 +219,14 @@ function projectSlim(node: SceneNode, spec: SimplifiedNode | undefined): SlimHan
   return slim;
 }
 
+// Project a set of hits into SlimHandles against ONE simplify index built over `indexRoot` (the hits'
+// common ancestor, so each reads in-context). Empty stays empty without paying to materialize the scope.
+async function projectHits(hits: SceneNode[], indexRoot: ScanRoot): Promise<SlimHandle[]> {
+  if (!hits.length) return [];
+  const index = await simplifiedIndex(indexRoot);
+  return hits.map((node) => projectSlim(node, index.get(node.id)));
+}
+
 /**
  * flcm.find — locate every RENDERED node matching the query, as SlimHandles (may be empty). The declarative
  * facets (type/name/key/within) AND-combine; `within` scopes the scan (default: current page). Hidden nodes
@@ -229,9 +237,7 @@ export async function find(query: FindQuery = {}): Promise<SlimHandle[]> {
   assertQueryKeys(query);
   const root = scanRoot(query.within);
   const hits = root.findAll((node) => matchesQuery(node, query) && isRendered(node));
-  if (!hits.length) return [];
-  const index = await simplifiedIndex(root);
-  return hits.map((node) => projectSlim(node, index.get(node.id)));
+  return projectHits(hits, root);
 }
 
 /**
@@ -257,7 +263,5 @@ export async function findOne(query: FindQuery = {}): Promise<SlimHandle> {
  */
 export async function selection(): Promise<SlimHandle[]> {
   const selected = figma.currentPage.selection.filter(isRendered);
-  if (!selected.length) return [];
-  const index = await simplifiedIndex(figma.currentPage);
-  return selected.map((node) => projectSlim(node, index.get(node.id)));
+  return projectHits(selected, figma.currentPage);
 }

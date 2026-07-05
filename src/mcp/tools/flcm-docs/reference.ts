@@ -215,17 +215,15 @@ const CATEGORY_LABELS: Record<VerbCategory, string> = {
 };
 
 function quickStartVerbLines(): string {
-  const order: VerbCategory[] = [];
+  // Map preserves insertion order, so categories print in first-seen VERBS order (no separate order array).
   const byCategory = new Map<VerbCategory, string[]>();
   for (const v of VERBS) {
-    if (!byCategory.has(v.category)) {
-      byCategory.set(v.category, []);
-      order.push(v.category);
-    }
-    byCategory.get(v.category)!.push(v.signature);
+    const sigs = byCategory.get(v.category);
+    if (sigs) sigs.push(v.signature);
+    else byCategory.set(v.category, [v.signature]);
   }
-  return order
-    .map((cat) => `  ${CATEGORY_LABELS[cat]}: ${byCategory.get(cat)!.join(", ")}`)
+  return [...byCategory]
+    .map(([cat, sigs]) => `  ${CATEGORY_LABELS[cat]}: ${sigs.join(", ")}`)
     .join("\n");
 }
 
