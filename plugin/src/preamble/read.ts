@@ -169,6 +169,17 @@ function matchesQuery(node: SceneNode, query: FindQuery): boolean {
   return true;
 }
 
+// Whether a node renders in the document — it and every ancestor visible. The read shape covers the RENDERED
+// document (`get` throws on a hidden target for exactly this reason), and the simplify core drops hidden
+// nodes, so a hidden hit would otherwise slip through as an identity-only handle indistinguishable from the
+// collapsed-SVG fallback. Locate excludes it up front, so find never hands back a node `get` would refuse.
+function isRendered(node: SceneNode): boolean {
+  for (let n: BaseNode | null = node; n && "visible" in n; n = n.parent) {
+    if ((n as SceneNode).visible === false) return false;
+  }
+  return true;
+}
+
 // Simplify the scan-root subtree through the SAME pipeline `get` uses, and index every produced node by id.
 // A node the core dropped (e.g. an SVG-heavy container it collapsed) is simply absent — projectSlim falls
 // back to identity-only for it.
@@ -183,10 +194,15 @@ async function simplifiedIndex(root: ScanRoot): Promise<Map<string, SimplifiedNo
   return index;
 }
 
-// Project a live hit + its core-simplified twin into a SlimHandle. Identity comes from the live node
-// (childCount too — the truest "is this a container" signal, undimmed by any core-side child dropping);
-// width/height/layout.mode/position/left/top are the core's own leaves, so slim reads exactly like the
-// matching fields of `get`. Only the container mode survives from `layout`; a leaf (mode "none") drops it.
+// Project a live hit + its core-simplified twin into a SlimHandle. IDENTITY (id/type/name/key/text) comes
+// from the LIVE node via identityOf — deliberately, not from the simplified spec: a SlimHandle IS a Handle
+// (plus a layout world-model), and the whole handle family reports live identity, so slim.type is the live
+// type you queried on (e.g. "VECTOR", not the egress-canonical "IMAGE-SVG" get emits for a collapsed icon)
+// and slim.text is the plain characters, a cheap locate label rather than get's rich run structure. childCount
+// is live too — the truest "is this a container" signal, undimmed by any core-side child dropping. Only the
+// LAYOUT WORLD-MODEL (width/height/layout.mode/position/left/top) is the core's own output — that is where
+// Invariant 1's "one vocabulary" bites, and it reads exactly like the matching fields of `get`. Only the
+// container mode survives from `layout`; a leaf (mode "none") drops it.
 function projectSlim(node: SceneNode, spec: SimplifiedNode | undefined): SlimHandle {
   const slim: SlimHandle = identityOf(node);
   if (spec) {
@@ -204,14 +220,15 @@ function projectSlim(node: SceneNode, spec: SimplifiedNode | undefined): SlimHan
 }
 
 /**
- * flcm.find — locate every node matching the query, as SlimHandles (may be empty). The declarative facets
- * (type/name/key/within) AND-combine; `within` scopes the scan (default: current page). Returns the cheap
- * layout world-model, not full styling — dive into a hit with `get`.
+ * flcm.find — locate every RENDERED node matching the query, as SlimHandles (may be empty). The declarative
+ * facets (type/name/key/within) AND-combine; `within` scopes the scan (default: current page). Hidden nodes
+ * are excluded (the read shape covers the rendered document, like `get`). Returns the cheap layout
+ * world-model, not full styling — dive into a hit with `get`.
  */
 export async function find(query: FindQuery = {}): Promise<SlimHandle[]> {
   assertQueryKeys(query);
   const root = scanRoot(query.within);
-  const hits = root.findAll((node) => matchesQuery(node, query));
+  const hits = root.findAll((node) => matchesQuery(node, query) && isRendered(node));
   if (!hits.length) return [];
   const index = await simplifiedIndex(root);
   return hits.map((node) => projectSlim(node, index.get(node.id)));
@@ -239,7 +256,7 @@ export async function findOne(query: FindQuery = {}): Promise<SlimHandle> {
  * built over the page; selected nodes are its descendants and read in-context.
  */
 export async function selection(): Promise<SlimHandle[]> {
-  const selected = figma.currentPage.selection;
+  const selected = figma.currentPage.selection.filter(isRendered);
   if (!selected.length) return [];
   const index = await simplifiedIndex(figma.currentPage);
   return selected.map((node) => projectSlim(node, index.get(node.id)));

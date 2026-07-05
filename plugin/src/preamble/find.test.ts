@@ -109,6 +109,26 @@ test("selection returns the current selection as slim handles; empty when nothin
   assert.equal(sel[0].width, 20);
 });
 
+test("find excludes hidden nodes — the read shape covers the rendered document, like get", async () => {
+  const figma = createFigmaMock();
+  const out = await render(
+    frame({ key: "wrap", width: 100, height: 100, layout: { mode: "column" } }, [
+      rect({ key: "shown", width: 10, height: 10 }),
+      rect({ key: "gone", width: 10, height: 10 }),
+    ]),
+  );
+  figma.getNodeById(out.keyed.gone.id).visible = false;
+
+  const rects = await find({ type: "RECTANGLE" });
+  assert.deepEqual(
+    rects.map((h) => h.key),
+    ["shown"],
+  );
+  // A hit whose ancestor is hidden is also unrendered.
+  figma.getNodeById(out.keyed.wrap.id).visible = false;
+  assert.deepEqual(await find({ type: "RECTANGLE" }), []);
+});
+
 test("a hit inside a core-collapsed SVG container still projects identity (no geometry)", async () => {
   // The shared core collapses an SVG-heavy container (a free-form frame whose children are all shape
   // primitives) into one IMAGE-SVG node, dropping the descendants — the same egress behavior REST's read
