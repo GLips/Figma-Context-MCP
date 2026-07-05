@@ -65,6 +65,8 @@ class Node {
     this.fontSize = 12;
     this.textDecoration = "NONE";
     this.textAutoResize = "WIDTH_AND_HEIGHT";
+    this.textAlignHorizontal = "LEFT";
+    this.textAlignVertical = "TOP";
     // geometry (explicit, from resize). Shapes get an intrinsic default size like the live API.
     this._fixedW = null;
     this._fixedH = null;
@@ -122,6 +124,77 @@ class Node {
   setRangeLetterSpacing(start, end, value) { this._range("_rangeLetterSpacings", start, end, value); }
   setRangeTextDecoration(start, end, value) { this._range("_rangeDecorations", start, end, value); }
   setRangeHyperlink(start, end, value) { this._range("_rangeHyperlinks", start, end, value); }
+
+  // --- read-path surface (what sceneNodeToSnapshot consumes) ---
+
+  get absoluteBoundingBox() {
+    let x = this.x, y = this.y;
+    for (let p = this.parent; p && p.type !== "PAGE"; p = p.parent) { x += p.x; y += p.y; }
+    return { x, y, width: this.width, height: this.height };
+  }
+
+  // The live API's derived sizing words, reconstructed from the mock's sizing model: FILL when the
+  // parent's auto-layout stretches this child on the axis, else the node's own FIXED/HUG.
+  get layoutSizingHorizontal() { return this._layoutSizing("w"); }
+  get layoutSizingVertical() { return this._layoutSizing("h"); }
+  _layoutSizing(dim) {
+    if (this.parent && this.parent._isAuto && this.layoutPositioning !== "ABSOLUTE") {
+      const primary = (dim === "w") === (this.parent.layoutMode === "HORIZONTAL");
+      if (primary ? this.layoutGrow === 1 : this.layoutAlign === "STRETCH") return "FILL";
+    }
+    if (this._isAuto) {
+      const primary = (dim === "w") === (this.layoutMode === "HORIZONTAL");
+      const mode = primary ? this.primaryAxisSizingMode : this.counterAxisSizingMode;
+      return mode === "FIXED" ? "FIXED" : "HUG";
+    }
+    if (this.type === "TEXT") {
+      if (this.textAutoResize === "WIDTH_AND_HEIGHT") return "HUG";
+      if (this.textAutoResize === "HEIGHT") return dim === "w" ? "FIXED" : "HUG";
+      return "FIXED";
+    }
+    return "FIXED";
+  }
+
+  async getMainComponentAsync() { return this.mainComponent || null; }
+
+  // Resolved styled segments, live-shaped: per-character effective style (base node value, overridden
+  // by the LAST recorded setRange* covering the character — matching apply order), merged into runs of
+  // equal style. Only the axes the mock models are emitted; sparse segments are within the adapter's
+  // contract (it reads present keys only).
+  getStyledTextSegments() {
+    const chars = this.characters;
+    const at = (bucket, i, base) => {
+      let v = base;
+      for (const r of this[bucket] || []) if (r.start <= i && i < r.end) v = r.value;
+      return v;
+    };
+    const styleAt = (i) => {
+      const fontName = at("_rangeFonts", i, this.fontName);
+      const seg = {
+        fontName,
+        fontWeight: weightOfStyle(fontName.style),
+        fontStyle: /\bItalic\b/.test(fontName.style) ? "ITALIC" : "REGULAR",
+        fontSize: at("_rangeSizes", i, this.fontSize),
+        textDecoration: at("_rangeDecorations", i, this.textDecoration),
+        fills: at("_rangeFills", i, this.fills),
+      };
+      const lineHeight = at("_rangeLineHeights", i, this.lineHeight);
+      if (lineHeight !== undefined) seg.lineHeight = lineHeight;
+      const letterSpacing = at("_rangeLetterSpacings", i, this.letterSpacing);
+      if (letterSpacing !== undefined) seg.letterSpacing = letterSpacing;
+      const hyperlink = at("_rangeHyperlinks", i, null);
+      if (hyperlink) seg.hyperlink = hyperlink;
+      return seg;
+    };
+    const runs = [];
+    for (let i = 0; i < chars.length; i++) {
+      const style = styleAt(i);
+      const prev = runs[runs.length - 1];
+      if (prev && JSON.stringify(prev.style) === JSON.stringify(style)) prev.characters += chars[i];
+      else runs.push({ characters: chars[i], style });
+    }
+    return runs.map(({ characters, style }) => ({ characters, ...style }));
+  }
 
   findAll(pred) {
     const out = [];
@@ -316,6 +389,9 @@ export function createFigmaMock() {
     },
     getNodeById(id) { return registry.get(id) || null; },
     async getNodeByIdAsync(id) { return registry.get(id) || null; },
+    // The mock models no shared styles — nodes never carry a fill/text/effectStyleId, so the read
+    // path's resolver treats every lookup as unresolvable (dropping the slot, like live).
+    async getStyleByIdAsync() { return null; },
     loadFontAsync() { return Promise.resolve(); },
     // The bundled-Inter weight ladder the real API exposes, so fonts.ts's nearest-style snap has a
     // realistic family to match against (numeric weights resolve to Thin..Black, not just 4 buckets).
@@ -334,3 +410,12 @@ export function createFigmaMock() {
 }
 
 function hashStr(s) { let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0; return h; }
+
+// Style name -> numeric weight, the inverse of the Inter ladder listAvailableFontsAsync exposes — so a
+// resolved segment carries the fontWeight the live API would report for the snapped style.
+const STYLE_WEIGHTS = { "Thin": 100, "Extra Light": 200, "Light": 300, "Regular": 400, "Medium": 500,
+  "Semi Bold": 600, "Bold": 700, "Extra Bold": 800, "Black": 900 };
+function weightOfStyle(style) {
+  const upright = style === "Italic" ? "Regular" : style.replace(/ Italic$/, "");
+  return STYLE_WEIGHTS[upright] ?? 400;
+}

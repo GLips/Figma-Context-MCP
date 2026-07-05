@@ -204,9 +204,9 @@ const QUICKSTART_LIMIT_BYTES = 2048;
 // verb signatures, the must-knows, the pointer to the reference tool. ----
 export function buildQuickStart(): string {
   const verbLines = VERBS.map((v) => `  ${v.signature} — ${v.builds}`).join("\n");
-  const quickStart = `Execute JavaScript against the live Figma Plugin API (figma.*) in the plugin sandbox. A high-level DSL, \`flcm\`, is already in scope — prefer it over raw figma.*.
+  const quickStart = `Execute JavaScript against the live Figma Plugin API (figma.*) in the plugin sandbox. The \`flcm\` DSL is already in scope — prefer it over raw figma.*.
 
-EXECUTION MODEL — your code runs in an async function body: use \`await\` directly and \`return <value>\`. Each call runs in its OWN scope; variables don't persist. Thread state by returning ids and re-resolving via figma.getNodeById(id).
+EXECUTION MODEL — your code runs in an async function body: use \`await\` directly and \`return <value>\`. Each call runs in its OWN scope — thread state by returning ids/keys and re-targeting them (flcm.get).
 
 DESCRIBE an inert tree, then RENDER once:
   const t = flcm.frame({ layout:{ mode:"column", gap:16 } }, [ flcm.text("Hi",{ color:"#111" }) ]);
@@ -218,12 +218,12 @@ ${verbLines}
 MUST-KNOW
 - Constructors are inert — only \`await flcm.render(tree)\` creates anything.
 - Return ids/handles, NEVER live Figma nodes (they can't cross the bridge).
-- width/height & layout.gap/padding are px NUMBERS (width/height also "fill"/"hug"). Colors/gradients/shadows ARE CSS strings.
-- Anything outside the documented CSS subset FAILS LOUD (a specific error), never wrong pixels.
+- width/height & layout.gap/padding are px NUMBERS (w/h also "fill"/"hug"); colors/gradients/shadows ARE CSS strings.
+- Anything outside the documented CSS subset FAILS LOUD, never wrong pixels.
 
-FULL DOCS — call get_flcm_reference(sections?). Sections: ${SECTION_IDS.join(", ")}. Pass ["all"] for all, or omit for the index.
+FULL DOCS — get_flcm_reference(sections?): ${SECTION_IDS.join(", ")} (["all"] = everything).
 
-RETURNS { result, console, errors } — result: your returned value, JSON-safe (live nodes collapse to { id, name, type }); console: captured console.*; errors: your error string, else null.
+RETURNS { result, console, errors } — result: your value, JSON-safe (live nodes collapse to { id, name, type }); console: captured console.*; errors: the error string, else null.
 
 Raw figma.*: fills are 0–1, assigned as a NEW array; load a font before setting characters; a node is invisible until appended.`;
 

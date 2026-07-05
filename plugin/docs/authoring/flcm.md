@@ -27,6 +27,8 @@ There is no autocomplete and no type-checking where your code runs (a QuickJS sa
 | `flcm.image(url, opts?)` | an image fill value | the image url first, then { scaleMode?, placeholder? } |
 | `flcm.effects({...})` | an effects value | an { shadow, blur, backgroundBlur } bag |
 | `await flcm.render(tree)` | live nodes | returns { root, keyed } |
+| `await flcm.get(target)` | a node's full read spec (values inline) | target: an flcm/key, a node id, flcm.id(id), or a handle |
+| `flcm.id(nodeId)` | a raw-id target ref | a node id string — resolved as an id, never scanned as an flcm/key |
 
 `FRAME`, `TEXT`, `RECTANGLE`, `ELLIPSE`, `LINE`, and `VECTOR` (via `flcm.svg`/`flcm.path`) are the **only** node types you can create — anything else fails loud at render. `flcm.gradient` and `flcm.effects` don't build nodes; they build *values* you pass to a `fill`/`effects` prop (you can also write the equivalent CSS string directly).
 

@@ -6,4 +6,4 @@
 // isolation is why no internal helper needs a name prefix.
 //
 // The agent calls `flcm.frame(...)`, `await flcm.render(...)`, etc. — these are the only public verbs.
-export { frame, text, rect, ellipse, line, svg, path, render, gradient, image, effects } from "./flcm.js";
+export { frame, text, rect, ellipse, line, svg, path, render, gradient, image, effects, get, id } from "./flcm.js";

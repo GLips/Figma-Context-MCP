@@ -27,6 +27,8 @@ export async function buildSandboxPreamble() {
   const bundled = await esbuild.build({
     entryPoints: [resolve(here, "runtime.ts")],
     bundle: true, write: false, format: "iife", globalName: "flcm", target: "esnext", platform: "neutral",
+    // The read path bundles the repo-root simplify core, whose internal imports use the root's ~/ alias.
+    alias: { "~": resolve(here, "../../../src") },
   });
   const code = bundled.outputFiles[0].text;
 

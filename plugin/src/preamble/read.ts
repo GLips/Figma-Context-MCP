@@ -8,6 +8,10 @@
 
 import { Target, RawIdRef } from "./ir.js";
 import { readKey } from "./identity.js";
+import { sceneNodeToSnapshot } from "./node-to-snapshot.js";
+import type { SceneNodeLike, SceneStyleResolver } from "./node-to-snapshot.js";
+import { simplify } from "~/core/index.js";
+import type { SimplifiedNode } from "~/core/index.js";
 
 // A pluginData scan searches this. Default is the current page; a verb's `within` narrows it (resolved by the
 // same shape rules). PageNode and any container SceneNode both satisfy this.
@@ -80,6 +84,33 @@ function resolveString(target: string, within?: Target): SceneNode {
   throw new Error(
     `flcm: no node found for target ${JSON.stringify(target)} — no live node has that id, and no node carries it as an flcm/key on the searched root.`,
   );
+}
+
+// The live style resolver: the one snapshot lookup that isn't node-local. A style the document can't
+// resolve drops the slot (null), mirroring the REST adapter's only-named-styles-survive rule.
+const resolveStyle: SceneStyleResolver = (styleId) => figma.getStyleByIdAsync(styleId);
+
+/**
+ * flcm.get — full inspect. Resolves the target, materializes its subtree as plan-neutral snapshots
+ * (all figma.* liveness lives in the adapter), and runs the ONE shared simplify core over pure data —
+ * so this emits exactly the vocabulary figma-mcp's REST path emits (Invariant 2). No compress flag:
+ * the result is EXPANDED (every value inline, no styles refs), the form in-sandbox predicates and
+ * same-run consumers can read (Invariant 3); compression stays server-side, off the verb path.
+ */
+export async function get(target: Target): Promise<SimplifiedNode> {
+  const node = resolveTarget(target);
+  // The one deliberate boundary cast: a live SceneNode satisfies the adapter's structural view, but
+  // tsc can't prove it — getStyledTextSegments' field-generic overload doesn't structurally match the
+  // view's plain (fields) => segments signature.
+  const snapshot = await sceneNodeToSnapshot(node as unknown as SceneNodeLike, resolveStyle);
+  const { nodes } = await simplify([snapshot]);
+  const spec = nodes[0];
+  if (!spec) {
+    throw new Error(
+      `flcm.get: node ${JSON.stringify(node.name)} (id ${JSON.stringify(node.id)}) is hidden (visible: false) — the read shape covers the rendered document. Unhide it or target a visible node.`,
+    );
+  }
+  return spec;
 }
 
 function scanRoot(within: Target | undefined): ScanRoot {

@@ -1,8 +1,12 @@
 {
   "extends": "../tsconfig.base.json",
   "compilerOptions": {
-    "lib": ["ES2017"],
-    "types": ["@figma/plugin-typings"]
+    // ES2019 (was ES2017): the bundled simplify core uses Array.flat. A typings floor only — Figma's
+    // QuickJS sandbox implements it (and get() on any text node exercises .flat() live).
+    "lib": ["ES2019"],
+    "types": ["@figma/plugin-typings"],
+    // The preamble bundles the repo-root core (src/core), whose internal imports use the root's ~/ alias.
+    "paths": { "~/*": ["../src/*"] }
   },
   "include": ["src"],
   "//": "Tests are runtime-verified by tsx (node --test), not tsc: they use node:test + the figma mock, which this package's figma-only `types`/`lib` deliberately don't cover. tsx strips types at run time, so type-checking them here would only fight the restricted compile config.",

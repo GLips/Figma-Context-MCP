@@ -26,6 +26,7 @@ import { linearGradient, radialGradient } from "./paint.js";
 import { layerBlurFromCssPx, backgroundBlurFromCssPx, shadow, glass, noise, texture, progressiveBlur } from "./effects.js";
 import { parseColor, parseFill, parseCssEffects, parseBlendMode, length, lineHeight, letterSpacing, isPercent, percent } from "./css.js";
 import { buildNode, handle, readBackGeometry, resolvePercents, RenderCtx } from "./bridge.js";
+import { get } from "./read.js";
 
 // The authoring surface (verb Props + gradient/effects sugar) is defined ONCE in schema.ts as zod schemas
 // with per-field docs; these are the z.infer'd types. Imported `import type` ONLY so schema.ts's zod is
@@ -709,9 +710,8 @@ async function render(tree: WriteNode): Promise<{ root: Handle; keyed: Record<st
 
 // flcm.id(id) — the target escape hatch. Wraps a raw node id so a target-taking verb (get/find/edit) treats
 // it as a live-node id and never scans it as an flcm/key (the one string a bare target could be read either
-// way). An inert POJO constructor like the others; the resolver (read.resolveTarget) unwraps it. Not yet on
-// the public `flcm` global — it joins runtime.ts's export set (and the Flcm surface / VERBS) with the
-// target-taking verbs that consume it; exported here now so the resolver and its tests can build one.
+// way). An inert POJO constructor like the others; the resolver (read.resolveTarget) unwraps it —
+// production code unwraps `__flcmId` structurally, not via this function.
 function id(nodeId: unknown): RawIdRef {
   if (typeof nodeId !== "string" || !nodeId.trim()) {
     throw new Error('flcm.id: expected a node id string, e.g. flcm.id("12:34") — got ' + JSON.stringify(nodeId) + ".");
@@ -723,15 +723,12 @@ function id(nodeId: unknown): RawIdRef {
 // exports and the reference/example generators author against. If a verb's signature here diverges from
 // Flcm, plugin typecheck fails — so the docs can't describe a shape the code doesn't have. `satisfies`
 // checks without widening and the local is DCE'd from the bundle (pure init, unreferenced).
-const _flcmShape = { frame, text, rect, ellipse, line, svg, path, gradient, image, effects, render } satisfies Flcm;
+const _flcmShape = { frame, text, rect, ellipse, line, svg, path, gradient, image, effects, render, get, id } satisfies Flcm;
 void _flcmShape;
 
 // The public verb surface — runtime.ts (the bundle entry) re-exports EXACTLY this set onto the
 // `globalName: flcm` global, and nothing else in the preamble is re-exported, so every other helper stays
 // closure-private. This list must mirror runtime.ts's re-export (and the _flcmShape/Flcm guard above).
-export { frame, text, rect, ellipse, line, svg, path, render, gradient, image, effects };
-
-// NOT on the public global yet: `id` joins the list above (and runtime.ts / Flcm / VERBS) in Phase 2, with
-// the target-taking verbs (get/find) that consume its RawIdRef. Exported now only so the resolver's tests
-// can build one — production code (read.resolveTarget) unwraps `__flcmId` structurally, not via this.
-export { id };
+// `get` is defined in read.ts (the figma.*-speaking read walk) and surfaces here, the way render's live
+// work lives in bridge.ts.
+export { frame, text, rect, ellipse, line, svg, path, render, gradient, image, effects, get, id };

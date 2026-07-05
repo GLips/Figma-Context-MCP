@@ -23,8 +23,11 @@
 import { z } from "zod";
 import type {
   FillInput, WriteCssEffects, PaintSpec, EffectSpec, GradientStop, WriteNode, WriteChild, Handle,
-  PinX, PinY,
+  PinX, PinY, Target, RawIdRef,
 } from "./ir.js";
+// The read verbs return the canonical read shape the shared simplify core emits. Relative (not ~/) so the
+// root toolchain, which imports this module for docs generation, resolves it without the plugin's paths.
+import type { SimplifiedNode } from "../../../src/core/types.js";
 
 // ---- Author leaf-input types the schema references but can't structurally model in zod (they're loose
 // on purpose, or reference the typed currency). `z.custom<T>()` infers exactly T with no runtime check —
@@ -377,6 +380,11 @@ export interface Flcm {
   image(url: string, opts?: ImageOpts): PaintSpec;
   effects(spec: EffectsSugar): EffectSpec[];
   render(tree: WriteNode): Promise<{ root: Handle; keyed: Record<string, Handle> }>;
+  // Full inspect: the node's styling as the EXPANDED canonical read shape — the same vocabulary
+  // figma-mcp's REST read emits, every value inline (no styles refs), for any node type.
+  get(target: Target): Promise<SimplifiedNode>;
+  // The target escape hatch: wraps a raw node id so target resolution treats it as an id, never an flcm/key.
+  id(nodeId: string): RawIdRef;
 }
 
 // ---- Verb registry — the canonical verb list, for the verb table and the quick-start signatures.
@@ -400,6 +408,8 @@ export const VERBS: VerbDoc[] = [
   { signature: "flcm.image(url, opts?)", builds: "an image fill value", args: "the image url first, then { scaleMode?, placeholder? }", schema: ImageSchema },
   { signature: "flcm.effects({...})", builds: "an effects value", args: "an { shadow, blur, backgroundBlur } bag", schema: EffectsSchema },
   { signature: "await flcm.render(tree)", builds: "live nodes", args: "returns { root, keyed }" },
+  { signature: "await flcm.get(target)", builds: "a node's full read spec (values inline)", args: "target: an flcm/key, a node id, flcm.id(id), or a handle" },
+  { signature: "flcm.id(nodeId)", builds: "a raw-id target ref", args: "a node id string — resolved as an id, never scanned as an flcm/key" },
 ];
 
 // ---- Field-group registry — how the reference groups props into tables. Each verb's full schema drives
