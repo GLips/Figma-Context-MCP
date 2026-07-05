@@ -27,6 +27,7 @@ import { layerBlurFromCssPx, backgroundBlurFromCssPx, shadow, glass, noise, text
 import { parseColor, parseFill, parseCssEffects, parseBlendMode, length, lineHeight, letterSpacing, isPercent, percent } from "./css.js";
 import { buildNode, handle, readBackGeometry, resolvePercents, RenderCtx } from "./bridge.js";
 import { get, find, findOne, selection } from "./read.js";
+import { rejectUnknownKeys } from "./validate.js";
 
 // The authoring surface (verb Props + gradient/effects sugar) is defined ONCE in schema.ts as zod schemas
 // with per-field docs; these are the z.infer'd types. Imported `import type` ONLY so schema.ts's zod is
@@ -49,8 +50,8 @@ import type {
 // The known-key sets live HERE, not sourced from schema.ts's zod: that zod must never enter the QuickJS
 // bundle (the purity gate). They mirror schema.ts's FIELD_GROUPS exactly — a tier-2 drift test
 // (unknown-props.test.ts) asserts each group == Object.keys of its schema group, so a prop added to (or
-// dropped from) the schema can't drift out of sync here. This is the runtime, surface-wide sibling of
-// read.ts's assertQueryKeys (the locate-query precedent).
+// dropped from) the schema can't drift out of sync here. The reject itself is the shared closed-set gate in
+// validate.ts, the same one read.ts's locate query fails loud with.
 export const KNOWN_KEYS = {
   shared: ["name", "key", "opacity", "mixBlendMode"],
   size: ["width", "height", "absolute", "pin"],
@@ -68,9 +69,7 @@ export const KNOWN_KEYS = {
 } as const;
 
 function keySet(...groups: readonly (readonly string[])[]): ReadonlySet<string> {
-  const all: string[] = [];
-  for (const g of groups) for (const k of g) all.push(k);
-  return new Set(all);
+  return new Set(groups.flat());
 }
 
 // Per-verb known-key sets, COMPOSED from the guarded group atoms above (so a verb set can't drift once the
@@ -98,19 +97,8 @@ const CSS_EFFECTS_KEYS = keySet(["boxShadow", "filter", "backdropFilter", "textS
 export const ABSOLUTE_KEYS = keySet(["x", "y", "anchor"]);
 export const DIRECTIONAL_KEYS = keySet(["x", "y"]); // pin and absolute.anchor
 
-// Reject any own key not in `known`, naming the offender(s) and their path. `path` locates the object (e.g.
-// "flcm.frame", "flcm.text.textStyle", "flcm.text run[2]"); the message lists the allowed keys so the agent
-// can find the one it meant. Mirrors read.ts's assertQueryKeys; one helper for every constructor + the
-// future `edit` verb's up-front spec validation.
-function rejectUnknownKeys(obj: object, known: ReadonlySet<string>, path: string): void {
-  const unknown = Object.keys(obj).filter((k) => !known.has(k));
-  if (unknown.length) {
-    throw new Error(
-      `flcm: unknown ${unknown.length > 1 ? "props" : "prop"} ${unknown.map((k) => JSON.stringify(k)).join(", ")} on ${path} — ` +
-        `${path} takes only ${[...known].map((k) => JSON.stringify(k)).join(", ")}.`,
-    );
-  }
-}
+// The closed-set reject (rejectUnknownKeys) lives in validate.ts — one gate shared with read.ts's locate
+// query. Every constructor + nested object below passes its verb name / path as the `subject`.
 
 // ---- shared prop -> WriteNode compilers ----
 

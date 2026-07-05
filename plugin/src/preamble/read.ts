@@ -9,6 +9,7 @@
 import { Target, RawIdRef, FindQuery, SlimHandle } from "./ir.js";
 import { readKey, identityOf } from "./identity.js";
 import { sceneNodeToSnapshot, type SceneNodeLike, type SceneStyleResolver } from "./node-to-snapshot.js";
+import { rejectUnknownKeys } from "./validate.js";
 import { simplify, type SimplifiedNode } from "~/core/index.js";
 
 // A pluginData scan searches this. Default is the current page; a verb's `within` narrows it (resolved by the
@@ -148,17 +149,9 @@ const _findKeysExhaustive: _FindKeysCoverFindQuery = true;
 void _findKeysExhaustive;
 
 // A locate query is agent input at a system boundary, so an unknown facet (a typo'd `tpye`) FAILS LOUD
-// rather than silently matching every node — the ADR-0003 fail-loud contract, surface-wide. Only own
-// enumerable keys are checked; a present-but-undefined key is inert.
-function assertQueryKeys(query: FindQuery): void {
-  const unknown = Object.keys(query).filter((k) => !(FIND_KEYS as readonly string[]).includes(k));
-  if (unknown.length) {
-    throw new Error(
-      `flcm.find: unknown query ${unknown.length > 1 ? "keys" : "key"} ${unknown.map((k) => JSON.stringify(k)).join(", ")} — ` +
-        `a locate query takes only ${FIND_KEYS.map((k) => JSON.stringify(k)).join(", ")}.`,
-    );
-  }
-}
+// rather than silently matching every node — the ADR-0003 fail-loud contract, via the same closed-set gate
+// (validate.rejectUnknownKeys) the authoring constructors use, just with "query key" wording. Built once.
+const FIND_KEY_SET: ReadonlySet<string> = new Set(FIND_KEYS);
 
 // AND-combine the query facets. Empty-string facets are treated as "unset" (an empty substring would match
 // everything). `type`/`key` exact; `name` case-insensitive substring.
@@ -234,7 +227,7 @@ async function projectHits(hits: SceneNode[], indexRoot: ScanRoot): Promise<Slim
  * world-model, not full styling — dive into a hit with `get`.
  */
 export async function find(query: FindQuery = {}): Promise<SlimHandle[]> {
-  assertQueryKeys(query);
+  rejectUnknownKeys(query, FIND_KEY_SET, "flcm.find", "query key");
   const root = scanRoot(query.within);
   const hits = root.findAll((node) => matchesQuery(node, query) && isRendered(node));
   return projectHits(hits, root);
