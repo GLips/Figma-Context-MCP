@@ -51,9 +51,9 @@ export function formatRGBAColor(color: SnapshotColor, opacity = 1): CSSRGBAColor
  * here so other producers of a lone color (a noise grain's tint) speak it too,
  * rather than re-inlining the hex-vs-rgba branch.
  */
-export function formatSolidColor(color: SnapshotColor, opacity = 1): CSSHexColor | CSSRGBAColor {
-  const { hex, opacity: a } = convertColor(color, opacity);
-  return a === 1 ? hex : formatRGBAColor(color, opacity);
+export function formatSolidColor(color: SnapshotColor): CSSHexColor | CSSRGBAColor {
+  const { hex, opacity } = convertColor(color);
+  return opacity === 1 ? hex : formatRGBAColor(color);
 }
 
 /**

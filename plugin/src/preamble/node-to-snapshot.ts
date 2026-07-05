@@ -635,31 +635,10 @@ function styleDelta(style: SnapshotTextStyle, base: SnapshotTextStyle): Snapshot
 // ---------------------------------------------------------------------------
 
 function decodeSceneEffect(effect: SceneEffect): SnapshotEffect {
-  return {
-    type: effect.type,
-    visible: effect.visible,
-    color: effect.color,
-    offset: effect.offset,
-    radius: effect.radius ?? 0,
-    spread: effect.spread,
-    // Beyond-CSS fields — carried straight through (raw Figma-domain). Undefined on ordinary
-    // shadow/blur effects; the core reads only the ones its per-type branch needs.
-    lightIntensity: effect.lightIntensity,
-    lightAngle: effect.lightAngle,
-    refraction: effect.refraction,
-    depth: effect.depth,
-    dispersion: effect.dispersion,
-    noiseType: effect.noiseType,
-    noiseSize: effect.noiseSize,
-    density: effect.density,
-    secondaryColor: effect.secondaryColor,
-    opacity: effect.opacity,
-    clipToShape: effect.clipToShape,
-    blurType: effect.blurType,
-    startRadius: effect.startRadius,
-    startOffset: effect.startOffset,
-    endOffset: effect.endOffset,
-  };
+  // SceneEffect carries exactly SnapshotEffect's fields (base + the beyond-CSS bag, all raw Figma-domain),
+  // so spread it through; only `radius` needs a default. The core reads only the fields its per-type
+  // branch needs.
+  return { ...effect, radius: effect.radius ?? 0 };
 }
 
 function decodePerSideWeights(node: SceneNodeLike): NodeSnapshot["individualStrokeWeights"] {

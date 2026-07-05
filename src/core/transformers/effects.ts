@@ -47,8 +47,7 @@ interface CssEffects {
 /**
  * The beyond-CSS effects — no CSS spelling, so they read back as the flcm.effects({...}) OBJECT form
  * (ADR-0002 symmetry: read object-form == create object-form). Split out from the CSS half so the two
- * effect vocabularies are a structural distinction, and the enumerable set below can derive from these
- * keys rather than a hand-kept list that could drift out of sync with the type.
+ * effect vocabularies stay a structural distinction.
  */
 interface BeyondCssEffects {
   glass?: SimplifiedGlass;
@@ -60,9 +59,12 @@ interface BeyondCssEffects {
 export type SimplifiedEffects = CssEffects & BeyondCssEffects;
 export type BeyondCssEffect = keyof BeyondCssEffects;
 
-// The runtime enumerable of the beyond-CSS set. Derived from a Record over BeyondCssEffect, so adding or
-// removing an effect on the type forces this table to match in BOTH directions (a missing key fails the
-// Record, an extra key isn't a BeyondCssEffect) — the set can't silently go stale.
+// The runtime enumerable of the beyond-CSS set — a ratified Phase 5 Done-when ("the non-CSS effect set is
+// enumerable in code"), for the edit plan and future read tooling that must tell the two effect vocabularies
+// apart. LOOKS UNUSED: nothing in this repo iterates it yet — its consumers land with the edit surface —
+// so don't cut it as dead code; it's the public handle on the set. Derived from a Record over
+// BeyondCssEffect, so adding/removing an effect on the type forces this table to match in BOTH directions
+// (a missing key fails the Record, an extra key isn't a BeyondCssEffect) — the set can't silently drift.
 const BEYOND_CSS_EFFECT_TABLE: Record<BeyondCssEffect, true> = {
   glass: true,
   noise: true,
@@ -85,7 +87,7 @@ type SnapshotGlassEffect = SnapshotEffect & {
   dispersion: number;
 };
 type SnapshotNoiseEffect = SnapshotEffect & {
-  noiseType: string;
+  noiseType: "MONOTONE" | "DUOTONE" | "MULTITONE";
   color: SnapshotColor;
   noiseSize: number;
   density: number;
@@ -178,10 +180,16 @@ function simplifyGlass(e: SnapshotGlassEffect): SimplifiedGlass {
   };
 }
 
+// Figma spells the noise type in uppercase; the sugar takes the lowercase word.
+const NOISE_TYPE: Record<SnapshotNoiseEffect["noiseType"], SimplifiedNoise["type"]> = {
+  MONOTONE: "monotone",
+  DUOTONE: "duotone",
+  MULTITONE: "multitone",
+};
+
 function simplifyNoise(e: SnapshotNoiseEffect): SimplifiedNoise {
   const noise: SimplifiedNoise = {
-    // Figma spells the type MONOTONE/DUOTONE/MULTITONE; the sugar takes the lowercase word.
-    type: e.noiseType.toLowerCase() as SimplifiedNoise["type"],
+    type: NOISE_TYPE[e.noiseType],
     color: formatSolidColor(e.color),
     noiseSize: e.noiseSize,
     density: e.density,
@@ -199,8 +207,8 @@ function simplifyProgressiveBlur(e: SnapshotProgressiveEffect): SimplifiedProgre
   return {
     startRadius: e.startRadius,
     endRadius: e.radius,
-    startOffset: { x: e.startOffset.x, y: e.startOffset.y },
-    endOffset: { x: e.endOffset.x, y: e.endOffset.y },
+    startOffset: e.startOffset,
+    endOffset: e.endOffset,
   };
 }
 
