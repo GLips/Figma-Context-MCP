@@ -53,7 +53,10 @@ export function envStr(name: string): string | undefined {
 export function envInt(...names: string[]): number | undefined {
   for (const name of names) {
     const val = process.env[name];
-    if (val) return parseInt(val, 10);
+    if (val) {
+      const n = parseInt(val, 10);
+      if (!isNaN(n)) return n;
+    }
   }
   return undefined;
 }
