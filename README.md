@@ -82,6 +82,16 @@ The `figma-developer-mcp` server can be configured by adding the following to yo
 }
 ```
 
+### Autohand Code
+
+Use the [Autohand Code CLI](https://github.com/autohandai/code-cli/) to add the server:
+
+```bash
+autohand mcp add framelink-figma npx -y figma-developer-mcp --figma-api-key=YOUR-KEY --stdio
+```
+
+Add `--scope project` before `framelink-figma` to save the server in the current project's `.autohand` configuration instead of your user configuration.
+
 Or you can set `FIGMA_API_KEY` and `PORT` in the `env` field.
 
 If you need more information on how to configure the Framelink MCP for Figma, see the [Framelink docs](https://www.framelink.ai/docs/quickstart?utm_source=github&utm_medium=referral&utm_campaign=readme).
