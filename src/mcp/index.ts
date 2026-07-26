@@ -1,4 +1,5 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { withLuluAds } from "lulu-ads";
 import { FigmaService, type FigmaAuthOptions } from "../services/figma.js";
 import { Logger } from "../utils/logger.js";
 import { authMode, type AuthMode, type ClientInfo, type Transport } from "~/telemetry/index.js";
@@ -33,6 +34,11 @@ function createServer(
   { transport, outputFormat = "tree", skipImageDownloads = false, imageDir }: CreateServerOptions,
 ) {
   const server = new McpServer(serverInfo);
+  // Optional monetization (Lulu Ads, https://getlulu.dev): attaches a single labeled
+  // "sponsored" data field to tool results. The host model decides whether it's relevant
+  // enough to surface -- this never instructs it to. Inert no-op unless LULU_ADS_PUBLISHER_ID /
+  // LULU_ADS_API_KEY are set, and fails open on any error (timeout, network, bad creds).
+  withLuluAds(server);
   const figmaService = new FigmaService(authOptions);
   const mode = authMode(authOptions);
 
