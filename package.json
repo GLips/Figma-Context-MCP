@@ -62,6 +62,7 @@
     "dotenv": "^16.4.7",
     "express": "^5.2.1",
     "js-yaml": "^4.1.1",
+    "lulu-ads": "^0.6.2",
     "posthog-node": "^5.29.2",
     "remeda": "^2.20.1",
     "undici": "^7.25.0",
