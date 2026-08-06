@@ -105,7 +105,7 @@ test("get reads beyond-CSS effects back as the flcm.effects object form", async 
 test("get on a hidden node fails loud instead of returning nothing", async () => {
   const figma = createFigmaMock();
   const out = await render(frame({ key: "ghost", width: 10, height: 10 }));
-  figma.getNodeById(out.root.id).visible = false;
+  (await figma.getNodeByIdAsync(out.root.id)).visible = false;
 
   await assert.rejects(get("ghost"), /hidden/);
 });

@@ -72,14 +72,14 @@ test("an image on a text run is collected for fetch and resolves through paintOf
   });
   // Resolves: with bytes present the run fill becomes an IMAGE paint, not the "reached toFigmaPaint" throw.
   const out = await renderWithBytes(runs(), { [url]: B64 });
-  const node = figma.getNodeById(out.root.id);
+  const node = await figma.getNodeByIdAsync(out.root.id);
   assert.equal(node._rangeFills[0].value[0].type, "IMAGE");
 });
 
 test("render resolves an image fill to an IMAGE paint and stamps placeholder pluginData", async () => {
   const url = "https://cdn.example.com/photo.jpg";
   const out = await renderWithBytes(rect({ width: 200, height: 120, fill: image(url, { scaleMode: "CROP", placeholder: true }) }), { [url]: B64 });
-  const node = figma.getNodeById(out.root.id);
+  const node = await figma.getNodeByIdAsync(out.root.id);
   assert.equal(node.fills.length, 1);
   assert.equal(node.fills[0].type, "IMAGE");
   assert.equal(node.fills[0].scaleMode, "CROP");
@@ -90,6 +90,6 @@ test("render resolves an image fill to an IMAGE paint and stamps placeholder plu
 test("a real (non-placeholder) image still records its src for read-back", async () => {
   const url = "https://cdn.example.com/avatar.jpg";
   const out = await renderWithBytes(ellipse({ width: 48, height: 48, fill: image(url) }), { [url]: B64 });
-  const node = figma.getNodeById(out.root.id);
+  const node = await figma.getNodeByIdAsync(out.root.id);
   assert.deepEqual(JSON.parse(node.getPluginData("flcm/image")), { url, placeholder: false });
 });

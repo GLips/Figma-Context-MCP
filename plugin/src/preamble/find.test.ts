@@ -101,7 +101,7 @@ test("selection returns the current selection as slim handles; empty when nothin
 
   assert.deepEqual(await selection(), []);
 
-  const chipNode = figma.getNodeById(out.keyed.chip.id);
+  const chipNode = await figma.getNodeByIdAsync(out.keyed.chip.id);
   figma.currentPage.selection = [chipNode];
   const sel = await selection();
   assert.equal(sel.length, 1);
@@ -117,7 +117,7 @@ test("find excludes hidden nodes — the read shape covers the rendered document
       rect({ key: "gone", width: 10, height: 10 }),
     ]),
   );
-  figma.getNodeById(out.keyed.gone.id).visible = false;
+  (await figma.getNodeByIdAsync(out.keyed.gone.id)).visible = false;
 
   const rects = await find({ type: "RECTANGLE" });
   assert.deepEqual(
@@ -125,7 +125,7 @@ test("find excludes hidden nodes — the read shape covers the rendered document
     ["shown"],
   );
   // A hit whose ancestor is hidden is also unrendered.
-  figma.getNodeById(out.keyed.wrap.id).visible = false;
+  (await figma.getNodeByIdAsync(out.keyed.wrap.id)).visible = false;
   assert.deepEqual(await find({ type: "RECTANGLE" }), []);
 });
 

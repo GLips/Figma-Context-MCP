@@ -25,11 +25,13 @@ function hasId(value: unknown): value is { id: string } {
   return !!value && typeof value === "object" && typeof (value as { id: string }).id === "string";
 }
 
-// getNodeById, treating a removed node as absent (live getNodeById already returns null for removed; the
-// guard keeps the mock and any stale reference honest). Cast to SceneNode — every resolvable target is one
-// in practice, and the read/edit verbs that consume this operate on scene nodes.
-function byId(id: string): SceneNode | null {
-  const node = figma.getNodeById(id);
+// getNodeByIdAsync, treating a removed node as absent (the live API already returns null for removed; the
+// guard keeps the mock and any stale reference honest). Async because the manifest declares
+// `documentAccess: dynamic-page` — the sync getNodeById throws under it — which is what makes every
+// target-taking verb below async. Cast to SceneNode — every resolvable target is one in practice, and the
+// read/edit verbs that consume this operate on scene nodes.
+async function byId(id: string): Promise<SceneNode | null> {
+  const node = await figma.getNodeByIdAsync(id);
   return node && !node.removed ? (node as SceneNode) : null;
 }
 
@@ -39,15 +41,15 @@ function scanKey(key: string, root: ScanRoot): SceneNode[] {
 
 // Resolve a target to a live node, or throw. `within` scopes the key scan (default: current page); it is
 // itself a target, resolved by the same rules, so `within: 'card'` searches inside the node keyed "card".
-export function resolveTarget(target: Target, within?: Target): SceneNode {
+export async function resolveTarget(target: Target, within?: Target): Promise<SceneNode> {
   if (isRawIdRef(target)) {
-    const node = byId(target.__flcmId);
+    const node = await byId(target.__flcmId);
     if (!node) throw new Error(`flcm: no live node with id ${JSON.stringify(target.__flcmId)} (flcm.id(...)).`);
     return node;
   }
   if (typeof target === "string") return resolveString(target, within);
   if (hasId(target)) {
-    const node = byId(target.id);
+    const node = await byId(target.id);
     if (!node) throw new Error(`flcm: the handle's node (id ${JSON.stringify(target.id)}) no longer exists — it may have been deleted.`);
     return node;
   }
@@ -58,12 +60,12 @@ export function resolveTarget(target: Target, within?: Target): SceneNode {
 // as an flcm/key, then resolve by the single match. Checking both is what makes the pathological
 // id-that-is-also-a-key case fail loud instead of silently picking one. (Common paths — a handle or
 // flcm.id(...) — skip the key scan entirely; only a bare string pays it.)
-function resolveString(target: string, within?: Target): SceneNode {
+async function resolveString(target: string, within?: Target): Promise<SceneNode> {
   if (!target.trim()) {
     throw new Error("flcm: empty target — pass a node id, an flcm/key, flcm.id(id), or a handle.");
   }
-  const root = scanRoot(within);
-  const byIdNode = byId(target);
+  const root = await scanRoot(within);
+  const byIdNode = await byId(target);
   const byKey = scanKey(target, root);
 
   if (byIdNode && byKey.length) {
@@ -108,7 +110,7 @@ async function simplifyScene(node: BaseNode): Promise<SimplifiedNode[]> {
  * document — so throw rather than return nothing.
  */
 export async function get(target: Target): Promise<SimplifiedNode> {
-  const node = resolveTarget(target);
+  const node = await resolveTarget(target);
   const [spec] = await simplifyScene(node);
   if (!spec) {
     throw new Error(
@@ -118,9 +120,9 @@ export async function get(target: Target): Promise<SimplifiedNode> {
   return spec;
 }
 
-function scanRoot(within: Target | undefined): ScanRoot {
+async function scanRoot(within: Target | undefined): Promise<ScanRoot> {
   if (within == null) return figma.currentPage;
-  const node = resolveTarget(within);
+  const node = await resolveTarget(within);
   if (!("findAll" in node)) {
     throw new Error(`flcm: \`within\` target resolved to a ${node.type} with no children to search — pass a container (frame/group/section) or a page.`);
   }
@@ -265,7 +267,7 @@ async function filterByPredicate(hits: SceneNode[], root: ScanRoot, predicate: R
  */
 export async function find(query: FindQuery = {}, predicate?: ReadPredicate): Promise<SlimHandle[]> {
   rejectUnknownKeys(query, FIND_KEY_SET, "flcm.find", "query key");
-  const root = scanRoot(query.within);
+  const root = await scanRoot(query.within);
   const hits = root.findAll((node) => matchesQuery(node, query) && isRendered(node));
   if (!predicate) return projectHits(hits, root);
   return filterByPredicate(hits, root, predicate);

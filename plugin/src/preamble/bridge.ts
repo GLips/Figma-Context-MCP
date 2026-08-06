@@ -63,9 +63,9 @@ export function handle(node: any): Handle {
 // covered child still holds its provisional hug size at stampKey time. Capturing boundingBox during the
 // walk would freeze that stale geometry, so instead re-read every returned handle (root + keyed) from its
 // live node here, after the walk returns. id/name/type are stable at walk time and need no re-read.
-export function readBackGeometry(root: Handle, keyed: Record<string, Handle>): void {
+export async function readBackGeometry(root: Handle, keyed: Record<string, Handle>): Promise<void> {
   for (const h of [root, ...Object.values(keyed)]) {
-    h.boundingBox = boxOf(figma.getNodeById(h.id));
+    h.boundingBox = boxOf(await figma.getNodeByIdAsync(h.id));
   }
 }
 

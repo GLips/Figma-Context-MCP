@@ -792,7 +792,7 @@ async function render(tree: WriteNode): Promise<{ root: Handle; keyed: Record<st
   const rootHandle = handle(root);
   // Geometry settles only after the whole tree is laid out — read it back into every handle now (see
   // bridge.readBackGeometry). Walk-time boundingBox on these handles is provisional until this runs.
-  readBackGeometry(rootHandle, ctx.keyed);
+  await readBackGeometry(rootHandle, ctx.keyed);
   return { root: rootHandle, keyed: ctx.keyed };
 }
 

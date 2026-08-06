@@ -2,7 +2,7 @@
 // the REAL preamble fragments (plugin/src/preamble/) in pure Node, no plugin and no WS port.
 //
 // It models: node creation, auto-parenting, auto-layout sizing (hug/fixed/fill with the cross-axis
-// rule), fills/strokes/opacity, fontName/loadFontAsync/figma.mixed, getNodeById(Async), pluginData,
+// rule), fills/strokes/opacity, fontName/loadFontAsync/figma.mixed, getNodeByIdAsync, pluginData,
 // createComponentFromNode -> createInstance with COMPOSITE-ID sublayers (I<inst>;<mainChild>), and
 // findAll/findAllWithCriteria. It deliberately does NOT model real font metrics or rendering — text
 // size is a crude char-count estimate — so pixel-exact layout still needs a live check (see README).
@@ -10,7 +10,7 @@
 let __id = 0;
 const nextId = (p) => (p || "") + ++__id + ":" + __id;
 
-const registry = new Map(); // id -> node, for getNodeById / composite-id resolution
+const registry = new Map(); // id -> node, for getNodeByIdAsync / composite-id resolution
 const MIXED = Symbol("figma.mixed");
 const __measuring = new Set(); // (node,dim) keys in-flight, to break the fill<->hug sizing recursion
 
@@ -307,7 +307,7 @@ class Node {
 
 // Clone a main subtree into instance sublayers. The root gets a fresh id; descendants get the
 // deterministic composite id I<instId>;<mainChildId> — exactly the format the live API uses and the
-// std-lib's override() builds. Every cloned node is registered so getNodeById resolves it.
+// std-lib's override() builds. Every cloned node is registered so getNodeByIdAsync resolves it.
 function cloneInto(mainNode, instId, isRoot) {
   const n = new Node(mainNode.type);
   registry.delete(n.id); // re-key below
@@ -390,7 +390,9 @@ export function createFigmaMock() {
       node.removed = true;
       return comp;
     },
-    getNodeById(id) { return registry.get(id) || null; },
+    // No sync getNodeById, deliberately: the manifest declares `documentAccess: dynamic-page`, under which
+    // the live API throws on it. Omitting it from the mock is what keeps that enforced — a call site that
+    // regresses to the sync form fails here instead of only in a real Figma file.
     async getNodeByIdAsync(id) { return registry.get(id) || null; },
     // The mock models no shared styles — nodes never carry a fill/text/effectStyleId, so the read
     // path's resolver treats every lookup as unresolvable (dropping the slot, like live).

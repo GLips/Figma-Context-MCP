@@ -15,7 +15,7 @@ test('percent w/h resolves to a fraction of a free-form parent\'s fixed size', a
       rect({ key: "bar", width: "35%", height: "50%" }),
     ]),
   );
-  const bar = figma.getNodeById(out.keyed.bar.id);
+  const bar = await figma.getNodeByIdAsync(out.keyed.bar.id);
   assert.equal(bar.width, 105); // 35% of 300
   assert.equal(bar.height, 100); // 50% of 200
 });
@@ -28,8 +28,8 @@ test("percent resolves against a percent-sized ancestor (chained)", async () => 
       ]),
     ]),
   );
-  assert.equal(figma.getNodeById(out.keyed.mid.id).width, 200); // 50% of 400
-  assert.equal(figma.getNodeById(out.keyed.leaf.id).width, 100); // 50% of the resolved 200
+  assert.equal((await figma.getNodeByIdAsync(out.keyed.mid.id)).width, 200); // 50% of 400
+  assert.equal((await figma.getNodeByIdAsync(out.keyed.leaf.id)).width, 100); // 50% of the resolved 200
 });
 
 test("percent absolute x/y resolves against the parent box", async () => {
@@ -38,7 +38,7 @@ test("percent absolute x/y resolves against the parent box", async () => {
       rect({ key: "badge", width: 40, height: 40, absolute: { x: "50%", y: "50%" } }),
     ]),
   );
-  const badge = figma.getNodeById(out.keyed.badge.id);
+  const badge = await figma.getNodeByIdAsync(out.keyed.badge.id);
   assert.equal(badge.x, 100); // 50% of 200
   assert.equal(badge.y, 50); // 50% of 100
 });
@@ -49,7 +49,7 @@ test("percent absolute position works inside an auto-layout parent (out of flow)
       rect({ key: "pin", width: 20, height: 20, absolute: { x: "25%" } }),
     ]),
   );
-  const pin = figma.getNodeById(out.keyed.pin.id);
+  const pin = await figma.getNodeByIdAsync(out.keyed.pin.id);
   assert.equal(pin.x, 50); // 25% of 200 — position isn't tied to layout mode
   assert.equal(pin.layoutPositioning, "ABSOLUTE");
 });
@@ -61,7 +61,7 @@ test("percent SIZE on an IN-FLOW child of a FIXED auto-layout parent resolves (s
   const out = await render(
     frame({ layout: { mode: "row" }, width: 300, height: 40 }, [rect({ key: "half", width: "50%", height: 20 })]),
   );
-  assert.equal(figma.getNodeById(out.keyed.half.id).width, 150); // 50% of the fixed 300
+  assert.equal((await figma.getNodeByIdAsync(out.keyed.half.id)).width, 150); // 50% of the fixed 300
 });
 
 test("percent SIZE on an IN-FLOW child of a HUGGING auto-layout parent fails loud (true cycle)", async () => {
@@ -80,8 +80,8 @@ test('percent SIZE resolves against a "fill" parent\'s realized size (the scrub-
       frame({ key: "track", width: "fill", height: 8 }, [rect({ key: "play", width: "40%", height: 8 })]),
     ]),
   );
-  assert.equal(figma.getNodeById(out.keyed.track.id).width, 400); // fills the row
-  assert.equal(figma.getNodeById(out.keyed.play.id).width, 160); // 40% of the realized 400
+  assert.equal((await figma.getNodeByIdAsync(out.keyed.track.id)).width, 400); // fills the row
+  assert.equal((await figma.getNodeByIdAsync(out.keyed.play.id)).width, 160); // 40% of the realized 400
 });
 
 test("percent-width TEXT wraps at the resolved width (not silently ignored)", async () => {
@@ -92,7 +92,7 @@ test("percent-width TEXT wraps at the resolved width (not silently ignored)", as
       text("a fairly long headline that would overflow if it never wrapped", { key: "t", width: "50%" }),
     ]),
   );
-  assert.equal(figma.getNodeById(out.keyed.t.id).width, 150); // 50% of 300, wrapping
+  assert.equal((await figma.getNodeByIdAsync(out.keyed.t.id)).width, 150); // 50% of 300, wrapping
 });
 
 test("percent SIZE on an ABSOLUTE (out-of-flow) child resolves inside an auto-layout parent", async () => {
@@ -103,7 +103,7 @@ test("percent SIZE on an ABSOLUTE (out-of-flow) child resolves inside an auto-la
       rect({ key: "overlay", width: "50%", height: 40, absolute: { x: 10, y: 10 } }),
     ]),
   );
-  assert.equal(figma.getNodeById(out.keyed.overlay.id).width, 150); // 50% of 300
+  assert.equal((await figma.getNodeByIdAsync(out.keyed.overlay.id)).width, 150); // 50% of 300
 });
 
 test("percent on the root node (no parent) fails loud", async () => {
@@ -118,7 +118,7 @@ test("anchor centres a child on the resolved point (no half-width offset)", asyn
       rect({ key: "knob", width: 40, height: 40, absolute: { x: "50%", y: "50%", anchor: { x: "center", y: "center" } } }),
     ]),
   );
-  const knob = figma.getNodeById(out.keyed.knob.id);
+  const knob = await figma.getNodeByIdAsync(out.keyed.knob.id);
   assert.equal(knob.x, 80); // 50% of 200 = 100, minus half the 40px width
   assert.equal(knob.y, 30); // 50% of 100 = 50, minus half the 40px height
 });
@@ -129,7 +129,7 @@ test("anchor right/bottom pins a child's far edge to the point", async () => {
       rect({ key: "badge", width: 24, height: 24, absolute: { x: "100%", y: 0, anchor: { x: "right", y: "top" } } }),
     ]),
   );
-  const badge = figma.getNodeById(out.keyed.badge.id);
+  const badge = await figma.getNodeByIdAsync(out.keyed.badge.id);
   assert.equal(badge.x, 276); // right edge at 100% (300) → x = 300 - 24
   assert.equal(badge.y, 0); // top anchor: no offset
 });
@@ -138,7 +138,7 @@ test("anchor works with a numeric position too (no percent required)", async () 
   const out = await render(
     frame({ width: 200, height: 100 }, [rect({ key: "dot", width: 10, height: 10, absolute: { x: 100, anchor: { x: "center" } } })]),
   );
-  assert.equal(figma.getNodeById(out.keyed.dot.id).x, 95); // 100 - half of 10
+  assert.equal((await figma.getNodeByIdAsync(out.keyed.dot.id)).x, 95); // 100 - half of 10
 });
 
 test("a bad anchor value fails loud", () => {
@@ -158,17 +158,17 @@ test("a free-form child's constraints derive from its size/position intent", asy
       rect({ key: "numPos", width: 40, height: 40, absolute: { x: 20, y: 20 } }),       // numeric position → MIN
     ]),
   );
-  const c = (k: string) => figma.getNodeById(out.keyed[k].id).constraints;
-  assert.deepEqual(c("plain"), { horizontal: "MIN", vertical: "MIN" });
-  assert.equal(c("fillW").horizontal, "STRETCH");
-  assert.equal(c("pctW").horizontal, "SCALE");
-  assert.deepEqual(c("pctPos"), { horizontal: "CENTER", vertical: "CENTER" });
-  assert.deepEqual(c("numPos"), { horizontal: "MIN", vertical: "MIN" });
+  const c = async (k: string) => (await figma.getNodeByIdAsync(out.keyed[k].id)).constraints;
+  assert.deepEqual(await c("plain"), { horizontal: "MIN", vertical: "MIN" });
+  assert.equal((await c("fillW")).horizontal, "STRETCH");
+  assert.equal((await c("pctW")).horizontal, "SCALE");
+  assert.deepEqual(await c("pctPos"), { horizontal: "CENTER", vertical: "CENTER" });
+  assert.deepEqual(await c("numPos"), { horizontal: "MIN", vertical: "MIN" });
 });
 
 test('free-form width:"fill" actually stretches to the parent box (no warn-and-ignore)', async () => {
   const out = await render(frame({ width: 300, height: 200 }, [rect({ key: "bar", width: "fill", height: 12 })]));
-  assert.equal(figma.getNodeById(out.keyed.bar.id).width, 300);
+  assert.equal((await figma.getNodeByIdAsync(out.keyed.bar.id)).width, 300);
 });
 
 test("`pin` overrides the auto-derived constraint per axis", async () => {
@@ -178,8 +178,8 @@ test("`pin` overrides the auto-derived constraint per axis", async () => {
       rect({ key: "c", width: 40, height: 40, absolute: { x: 10, y: 10 }, pin: { x: "center", y: "scale" } } as never),
     ]),
   );
-  assert.deepEqual(figma.getNodeById(out.keyed.r.id).constraints, { horizontal: "MAX", vertical: "MAX" });
-  assert.deepEqual(figma.getNodeById(out.keyed.c.id).constraints, { horizontal: "CENTER", vertical: "SCALE" });
+  assert.deepEqual((await figma.getNodeByIdAsync(out.keyed.r.id)).constraints, { horizontal: "MAX", vertical: "MAX" });
+  assert.deepEqual((await figma.getNodeByIdAsync(out.keyed.c.id)).constraints, { horizontal: "CENTER", vertical: "SCALE" });
 });
 
 test("an IN-FLOW auto-layout child ignores pin (it reflows via layoutGrow/stretch)", async () => {
@@ -188,7 +188,7 @@ test("an IN-FLOW auto-layout child ignores pin (it reflows via layoutGrow/stretc
       rect({ key: "grow", width: "fill", height: 40, pin: { x: "right" } } as never),
     ]),
   );
-  const node = figma.getNodeById(out.keyed.grow.id);
+  const node = await figma.getNodeByIdAsync(out.keyed.grow.id);
   assert.equal(node.layoutGrow, 1); // fill still rides layoutGrow, unchanged
   assert.deepEqual(node.constraints, { horizontal: "MIN", vertical: "MIN" }); // pin ignored, default untouched
 });
@@ -201,7 +201,7 @@ test("an ABSOLUTE child of an auto-layout parent honors pin/constraints (out of 
       rect({ key: "badge", width: 28, height: 28, absolute: { x: 284, y: 12 }, pin: { x: "right", y: "top" } } as never),
     ]),
   );
-  assert.deepEqual(figma.getNodeById(out.keyed.badge.id).constraints, { horizontal: "MAX", vertical: "MIN" });
+  assert.deepEqual((await figma.getNodeByIdAsync(out.keyed.badge.id)).constraints, { horizontal: "MAX", vertical: "MIN" });
 });
 
 test("a bad `pin` value fails loud", () => {

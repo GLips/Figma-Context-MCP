@@ -26,8 +26,8 @@ test('cross:"stretch" stretches an auto-sized child but leaves a fixed counter-a
       ellipse({ key: "fixed", height: 50 }), // explicit counter-axis size -> keeps it, no stretch
     ]),
   );
-  const auto = figma.getNodeById(out.keyed.auto.id);
-  const fixed = figma.getNodeById(out.keyed.fixed.id);
+  const auto = await figma.getNodeByIdAsync(out.keyed.auto.id);
+  const fixed = await figma.getNodeByIdAsync(out.keyed.fixed.id);
   assert.equal(auto.layoutAlign, "STRETCH");
   assert.notEqual(fixed.layoutAlign, "STRETCH");
 });
@@ -63,8 +63,8 @@ test("blend: a CSS mix-blend-mode name maps to the Figma enum on any node; unkno
   assert.throws(() => frame({ mixBlendMode: "plus-lighter" }), /unsupported blend/); // real CSS keyword, no Figma mapping
   // Applied once in the shared dispatch (buildNode), so every node kind gets it live.
   const out = await render(frame({ mixBlendMode: "overlay" }, [ellipse({ key: "dot", mixBlendMode: "screen" })]));
-  assert.equal(figma.getNodeById(out.root.id).blendMode, "OVERLAY");
-  assert.equal(figma.getNodeById(out.keyed.dot.id).blendMode, "SCREEN");
+  assert.equal((await figma.getNodeByIdAsync(out.root.id)).blendMode, "OVERLAY");
+  assert.equal((await figma.getNodeByIdAsync(out.keyed.dot.id)).blendMode, "SCREEN");
 });
 
 test("maxLines: clamps to N lines against a bounded width; unbounded or non-integer fails loud", async () => {
@@ -78,15 +78,15 @@ test("maxLines: clamps to N lines against a bounded width; unbounded or non-inte
   assert.throws(() => text("t", { textStyle: { lineClamp: 0 }, width: 200 }), /whole number/);
   assert.throws(() => text("t", { textStyle: { lineClamp: 1.5 }, width: 200 }), /whole number/);
   // Sets the plugin truncation props at render (textTruncation:"ENDING" gives the automatic ellipsis).
-  const t = figma.getNodeById((await render(text("A very long title indeed", { textStyle: { lineClamp: 2 }, width: 120 }))).root.id);
+  const t = await figma.getNodeByIdAsync((await render(text("A very long title indeed", { textStyle: { lineClamp: 2 }, width: 120 }))).root.id);
   assert.equal(t.maxLines, 2);
   assert.equal(t.textTruncation, "ENDING");
 });
 
 test("frames don't clip by default; clip:true opts in", async () => {
-  const def = figma.getNodeById((await render(frame({}))).root.id);
-  const on = figma.getNodeById((await render(frame({ clip: true }))).root.id);
-  const off = figma.getNodeById((await render(frame({ clip: false }))).root.id);
+  const def = await figma.getNodeByIdAsync((await render(frame({}))).root.id);
+  const on = await figma.getNodeByIdAsync((await render(frame({ clip: true }))).root.id);
+  const off = await figma.getNodeByIdAsync((await render(frame({ clip: false }))).root.id);
   assert.equal(def.clipsContent, false);
   assert.equal(on.clipsContent, true);
   assert.equal(off.clipsContent, false);

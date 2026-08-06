@@ -76,7 +76,7 @@ const MAX_SERIALIZE_DEPTH = 200;
 /**
  * Converts an arbitrary eval result into something safe to send over postMessage/WS. A live Figma node is
  * NOT plain JSON (sending one produces opaque failures), so any object that looks like a node (looksLikeNode)
- * collapses to `{ id, name, type }` — a stable handle the agent can thread back via figma.getNodeById.
+ * collapses to `{ id, name, type }` — a stable handle the agent can thread back via figma.getNodeByIdAsync.
  * Every other value — including render Handles and full read POJOs, none of which carry `removed` — is
  * recursed and round-trips whole, bounded only by the cycle backstop above.
  */
@@ -94,7 +94,7 @@ export function safeSerialize(value: unknown, depth = 0): unknown {
   }
 
   // A live Figma node collapses to a stable handle the agent can thread into later execute_code calls via
-  // figma.getNodeById. Gated on the removed-carrying discriminator, NOT a bare id+type shape, so a render
+  // figma.getNodeByIdAsync. Gated on the removed-carrying discriminator, NOT a bare id+type shape, so a render
   // Handle / SlimHandle / read POJO (which carry id+type but no `removed`) falls through and round-trips whole.
   if (looksLikeNode(value)) {
     return {

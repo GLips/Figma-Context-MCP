@@ -27,9 +27,9 @@ as `executeCode` in `code.ts`. So a green run validates the real `frame`/`text`/
   `primaryAxisSizingMode FIXED` when the filled dimension is the child's own primary axis).
 - `layoutMode`, primary/counter align + sizing modes, padding, itemSpacing, `resize`.
 - Fills / strokes / opacity / cornerRadius; `fontName` / `loadFontAsync` / `figma.mixed`.
-- `getNodeById` / `getNodeByIdAsync`; `setPluginData` / `getPluginData`.
+- `getNodeByIdAsync`; `setPluginData` / `getPluginData`.
 - `createComponentFromNode` → `createInstance`, with instance sublayers keyed by the real
-  **composite-id format** `I<instanceId>;<mainChildId>` and resolvable via `getNodeById` — so
+  **composite-id format** `I<instanceId>;<mainChildId>` and resolvable via `getNodeByIdAsync` — so
   `override()` and the reconcile diff exercise their true code paths.
 - `findAll` / `findAllWithCriteria`; component `key` / `remote`.
 - **Shapes**: `createEllipse` / `createLine` / `createPolygon` / `createStar` with intrinsic default

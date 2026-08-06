@@ -488,7 +488,7 @@ async function executeCode(to: ReplyTo, code: string): Promise<void> {
  */
 async function screenshot(to: ReplyTo, nodeId: string | undefined): Promise<void> {
   try {
-    const node = nodeId ? figma.getNodeById(nodeId) : figma.currentPage;
+    const node = nodeId ? await figma.getNodeByIdAsync(nodeId) : figma.currentPage;
     if (!node) throw new Error(`No node found with id ${nodeId}`);
     if (!("exportAsync" in node)) throw new Error(`Node ${node.type} (${node.id}) is not exportable`);
     const bytes = await node.exportAsync({ format: "PNG" });
