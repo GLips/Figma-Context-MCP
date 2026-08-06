@@ -61,7 +61,8 @@ function unknownParamReply(tool: string, unknown: string[], known: string[]): Ca
   const suggestions = unknown
     .map((bad) => {
       const match = known.find((k) => normalizeParamName(k) === normalizeParamName(bad));
-      return match ? `"${bad}" → "${match}"` : null;
+      // With one bad key the pairing is obvious from the sentence; with several, spell out which is which.
+      return match ? (unknown.length > 1 ? `"${bad}" → "${match}"` : `"${match}"`) : null;
     })
     .filter((s): s is string => s !== null);
   const didYouMean = suggestions.length ? ` Did you mean ${suggestions.join(", ")}?` : "";
