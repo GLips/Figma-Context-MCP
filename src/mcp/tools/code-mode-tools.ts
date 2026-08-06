@@ -3,6 +3,11 @@ import { z } from "zod";
 import type { PluginBridgeRuntime } from "~/services/plugin-bridge/index.js";
 import { fetchAndProcessImage } from "~/services/plugin-bridge/images.js";
 import { executeWithImages, type GatedResult } from "~/services/plugin-bridge/execute.js";
+import {
+  requestUntilApproved,
+  isPendingApproval,
+  APPROVAL_WAIT_MS,
+} from "~/services/plugin-bridge/await-approval.js";
 import type { ServerTransport } from "~/mcp/index.js";
 import { registerFailLoudTool, retryableToolReply } from "~/mcp/fail-loud-params.js";
 import { buildQuickStart, buildReferenceSections, SECTION_IDS } from "./flcm-docs/reference.js";
@@ -52,35 +57,30 @@ export function registerCodeModeTools(
   const { bridge } = runtime;
 
   /**
-   * The sandbox gates a write two ways — both RETRYABLE (deliberately not `isError`: the agent should
-   * relay the situation to the human and try again, not treat it as terminal):
-   *   • PENDING_APPROVAL — the session isn't approved yet. Name the pairing code so the human can Allow.
-   *   • INACTIVE_SESSION — the session is approved but another session is the active driver (Invariant:
-   *     one writer at a time). Tell the agent to have the human switch the active driver to this session.
-   * Both name this server's own per-connection pairing code (single source), so it always matches the
-   * row the panel shows. Returns null when the reply isn't a gated one.
+   * The sandbox gates a write exactly ONE way — consent — and the gate is RETRYABLE (deliberately not
+   * `isError`: the agent should relay the situation to the human and try again, not treat it as
+   * terminal). PENDING_APPROVAL means the session isn't approved yet; the text names this server's own
+   * per-connection pairing code (single source) so it always matches the row the plugin shows.
+   *
+   * Reaching here now means the call ALREADY waited out requestUntilApproved's full window — the agent
+   * only sees this text when the human didn't click within it, so the wording says so. The common case
+   * (a human at the keyboard) never produces this result at all; the wait returns the real one.
+   *
+   * Negative space: there is no "another session is driving" gate. An approved session takes the
+   * driving baton by writing, so a second approved agent never has to ask the human to switch —
+   * exclusion between them is the plugin's write queue, not a refusal the agent must relay.
+   * Returns null when the reply isn't a gated one.
    */
   function gateResult(reply: unknown): GatedResult | null {
-    if (typeof reply !== "object" || reply === null || !("type" in reply)) return null;
+    if (!isPendingApproval(reply)) return null;
     const code = bridge.getPairingCode();
-    if (reply.type === "PENDING_APPROVAL") {
-      return gateText(
-        `This Figma session is not approved yet, so this call did not run. In Figma, open the ` +
-          `Code-Mode plugin and click Allow to approve session ${code}. Then retry this exact call — ` +
-          `it will run once approved. This is NOT a failure: relay the code "${code}" to the user, ` +
-          `wait for them to approve in Figma, and try again.`,
-      );
-    }
-    if (reply.type === "INACTIVE_SESSION") {
-      return gateText(
-        `This Figma session is approved but another session is currently the active driver, so ` +
-          `this call did not run — only one session writes at a time. In Figma, open the Code-Mode ` +
-          `plugin and switch the active driver to this session (pairing code ${code}). Then retry ` +
-          `this exact call. This is NOT a failure: relay this to the user, wait for them to switch ` +
-          `in Figma, and try again.`,
-      );
-    }
-    return null;
+    return gateText(
+      `This Figma session is not approved yet, so this call did not run — the server held the call open ` +
+        `for ${Math.round(APPROVAL_WAIT_MS / 1000)}s waiting for approval and it didn't arrive. In Figma, open ` +
+        `the Framelink plugin and click Allow to approve session ${code}, then retry this exact call — it ` +
+        `will run as soon as it's approved. This is NOT a failure: relay the code "${code}" to the user, ` +
+        `make sure they've approved it in Figma, and try again.`,
+    );
   }
 
   function gateText(text: string): GatedResult {
@@ -110,23 +110,25 @@ export function registerCodeModeTools(
     const code = bridge.getPairingCode();
     if (!code) {
       return (
-        `**No Figma plugin is connected yet, so there's no pairing code.** Ask the user to open the Code-Mode ` +
+        `**No Figma plugin is connected yet, so there's no pairing code.** Ask the user to open the Framelink ` +
         `plugin in Figma; a pairing code is issued once it connects, and \`figma_execute_code\` has no sandbox ` +
         `to run in until then.\n\n` +
-        `Once it connects, call get_flcm_reference again for the code, relay it to the user, and wait for them ` +
-        `to click Allow in Figma before your first \`figma_execute_code\`. If a call replies that the session is ` +
-        `"not approved yet", that's the expected approval handshake, NOT a failure — get it approved and retry ` +
-        `the exact call. The code is per-session and can rotate, so a later re-approval prompt is also normal.`
+        `Once it connects, call get_flcm_reference again for the code and relay it to the user before your ` +
+        `first \`figma_execute_code\`. An unapproved call doesn't fail — the server holds it open while it ` +
+        `waits for the user to click Allow — so relaying the code FIRST is what keeps that wait short. ` +
+        `The code is per-session and can rotate, so a later re-approval prompt is also normal.`
       );
     }
     const pairingLine =
       `**Pairing code ${code}.** Relay this to the user before your first \`figma_execute_code\` — they'll see ` +
-      `it in the Code-Mode plugin's panel in Figma and click Allow to approve this session.`;
+      `it on the Framelink plugin's status strip in Figma and click Allow to approve this session.`;
     const gateLine =
-      `Your first \`figma_execute_code\` may reply that this Figma session is "not approved yet" — that is the ` +
-      `expected approval handshake, NOT a failure: relay the pairing code, wait for the user to click Allow ` +
-      `in Figma, then retry the exact call. The code is per-session and can rotate, so being asked to ` +
-      `re-approve later in the session is also normal — re-read this reference for the current code if so.`;
+      `If the session isn't approved yet, your \`figma_execute_code\` call does NOT come back with an error — the ` +
+      `server holds it open for up to ${Math.round(APPROVAL_WAIT_MS / 1000)}s and runs it the moment the user ` +
+      `clicks Allow, so a single call is usually all you need. That's why relaying the pairing code BEFORE you ` +
+      `call matters: the user should already be looking at Figma. Only if the wait runs out do you get a ` +
+      `"not approved yet" reply, which is retryable, NOT a failure. The code is per-session and can rotate, so ` +
+      `being asked to re-approve later is also normal — re-read this reference for the current code if so.`;
     return `${pairingLine}\n\n${gateLine}`;
   }
 
@@ -163,7 +165,11 @@ export function registerCodeModeTools(
         // fetch + re-execute two-pass is owned by executeWithImages — this handler wires the real
         // bridge/gate/fetch seams and shapes the outcome into a tool reply.
         const outcome = await executeWithImages(code, {
-          request: (c) => bridge.request({ type: "EXECUTE_CODE", code: c }),
+          // Hold the call open across the human's Allow rather than returning "not approved yet" for the
+          // agent to retry — see requestUntilApproved. Only the FIRST pass waits: by the time the image
+          // re-run fires, the session is necessarily approved (the first pass ran to produce imagesNeeded).
+          request: (c) =>
+            requestUntilApproved(() => bridge.request({ type: "EXECUTE_CODE", code: c })),
           gate: gateResult,
           fetchImage: fetchAndProcessImage,
         });
@@ -269,7 +275,9 @@ Returns a PNG image.`,
               `in range (2–4 is plenty for inspecting fine detail).`,
           );
         }
-        const raw = await bridge.request({ type: "SCREENSHOT", nodeId, key, scale });
+        const raw = await requestUntilApproved(() =>
+          bridge.request({ type: "SCREENSHOT", nodeId, key, scale }),
+        );
         const gated = gateResult(raw);
         if (gated) return gated;
         const reply = ScreenshotReply.parse(raw);

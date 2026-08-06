@@ -1,0 +1,97 @@
+import { describe, it, expect } from "vitest";
+import {
+  requestUntilApproved,
+  isPendingApproval,
+} from "~/services/plugin-bridge/await-approval.js";
+
+// A fake clock so the deadline is exercised without waiting real seconds: `sleep` advances it rather
+// than scheduling a timer, which makes the poll/expiry behaviour deterministic.
+function fakeClock() {
+  let t = 0;
+  return {
+    now: () => t,
+    sleep: async (ms: number) => {
+      t += ms;
+    },
+    advance: (ms: number) => {
+      t += ms;
+    },
+  };
+}
+
+const PENDING = { type: "PENDING_APPROVAL" };
+
+describe("holding a gated call open across the human's Allow", () => {
+  it("returns the real result from the poll that sees the approval, without the agent retrying", async () => {
+    const clock = fakeClock();
+    let calls = 0;
+    // Approval lands on the 4th send — the human clicked partway through the wait.
+    const send = async () => {
+      calls += 1;
+      return calls < 4 ? PENDING : { result: "ok", console: [], errors: null };
+    };
+
+    const reply = await requestUntilApproved(send, {
+      now: clock.now,
+      sleep: clock.sleep,
+      pollMs: 750,
+    });
+
+    expect(reply).toEqual({ result: "ok", console: [], errors: null });
+    expect(calls).toBe(4);
+  });
+
+  it("gives up at the deadline and hands back the gated reply for the caller to shape", async () => {
+    const clock = fakeClock();
+    let calls = 0;
+    const send = async () => {
+      calls += 1;
+      return PENDING; // the human never clicks
+    };
+
+    const reply = await requestUntilApproved(send, {
+      now: clock.now,
+      sleep: clock.sleep,
+      waitMs: 3_000,
+      pollMs: 1_000,
+    });
+
+    expect(isPendingApproval(reply)).toBe(true);
+    // Bounded by wall-clock, so it stops rather than spinning: sends at t=0,1000,2000,3000.
+    expect(calls).toBe(4);
+  });
+
+  it("does not poll at all when the session is already approved", async () => {
+    const clock = fakeClock();
+    let calls = 0;
+    const send = async () => {
+      calls += 1;
+      return { result: 42, console: [], errors: null };
+    };
+
+    await requestUntilApproved(send, { now: clock.now, sleep: clock.sleep });
+
+    expect(calls).toBe(1);
+  });
+
+  it("counts time spent inside a slow send against the deadline, not just the sleeps", async () => {
+    const clock = fakeClock();
+    let calls = 0;
+    // Each send itself burns 2s — with an attempt-count bound this would overshoot the window badly.
+    const send = async () => {
+      calls += 1;
+      clock.advance(2_000);
+      return PENDING;
+    };
+
+    await requestUntilApproved(send, {
+      now: clock.now,
+      sleep: clock.sleep,
+      waitMs: 5_000,
+      pollMs: 500,
+    });
+
+    // t after each round: 2000, 4500, 7000 — the third send crosses the 5s deadline and stops.
+    expect(calls).toBe(3);
+  });
+});
