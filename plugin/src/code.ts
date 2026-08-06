@@ -8,12 +8,30 @@ import { resolveScreenshotTarget, type ScreenshotTarget } from "./screenshot-tar
 // by build.mjs via esbuild `define` (it can't be generated in-sandbox — flattening runs esbuild).
 declare const SANDBOX_PREAMBLE: string;
 
-// Load the bridge iframe. It is BOTH the network transport (the only context with WS access —
-// the sandbox has none) AND, since Slice 2.2, the visible arbiter panel the human uses to
-// Allow/Deny a connecting session. It starts hidden and is raised (figma.ui.show) only when an
-// unapproved session needs a decision. show/hide toggles visibility WITHOUT reloading the iframe,
-// so the WS relay underneath survives every raise/dismiss.
-figma.showUI(__html__, { visible: false, width: 340, height: 420 });
+// The window is a fixed-width strip whose HEIGHT is whatever the iframe measures after each render
+// (UI_HEIGHT) — so "collapsed" and "expanded" are CSS states over there, not two magic numbers here.
+// The bounds exist only so a render bug can't produce a 0px or screen-filling window.
+const UI_WIDTH = 320;
+const UI_MIN_HEIGHT = 40;
+const UI_MAX_HEIGHT = 560;
+
+// Load the bridge iframe. It is BOTH the network transport (the only context with WS access — the
+// sandbox has none) AND the plugin's only human surface: an always-visible status strip that
+// expands into the session list.
+//
+// It starts VISIBLE and is never hidden. A running plugin's only summonable surface is its own
+// iframe — a menu command re-RUNS the plugin, which would tear down this relay and every in-memory
+// approval — so a hidden window leaves the human no way to check whether a session is connected or
+// to reach Revoke. They could only act at moments WE chose to interrupt them. An always-on strip
+// inverts that: state is ambient, and the human opens the list whenever they want.
+// themeColors gives the iframe Figma's light/dark variables, which an always-on window needs.
+figma.showUI(__html__, {
+  visible: true,
+  width: UI_WIDTH,
+  height: UI_MIN_HEIGHT,
+  themeColors: true,
+  title: "Framelink",
+});
 
 // Versions reported to the server over the frozen envelope on connect (server-initiated
 // GET_VERSION handshake). These are the SOURCE OF TRUTH for the plugin's wire identity:
@@ -60,12 +78,15 @@ interface SessionConn {
 type ConnKey = number;
 const connections = new Map<ConnKey, SessionConn>();
 
-// The one active driver (Invariant: exactly one session writes at a time). Only this key's writes
-// reach the executor; every other approved session is gated short of it (gateWrite). Set on
-// Allow/switch — a human action in the panel — and null until the first Allow. Deliberately NOT
-// cleared when the active port's socket drops: a same-port reconnect reclaims active status with no
-// re-prompt, and because isApproved() is checked BEFORE this key at the gate, a token-less squatter
-// that grabs the freed port can't inherit the active slot.
+// Who holds the driving baton — the approved session whose write ran most recently. It is a LABEL
+// for the human ("● Driving this file"), not a gate: any approved session takes the baton simply by
+// writing (takeBaton). Which of the human's own approved agents writes next is a lock, not a
+// security decision, so it needs no human mediation; exclusion between them is enforced by
+// serializing their writes (enqueueWrite), not by refusing them.
+//
+// Deliberately NOT cleared when the active port's socket drops: a same-port reconnect keeps showing
+// as the driver rather than blinking, and it grants nothing on its own — every write still passes
+// isApproved() first, so a token-less squatter grabbing the freed port inherits nothing.
 let activeKey: ConnKey | null = null;
 
 function isApproved(key: ConnKey): boolean {
@@ -127,6 +148,8 @@ const KNOWN_INBOUND_KEYS = new Set([
   "type",
   "code",
   "nodeId",
+  "key",
+  "scale",
   "payload",
   "message",
   "identity",
@@ -159,13 +182,13 @@ function reply(to: ReplyTo, body: Record<string, unknown>): void {
   figma.ui.postMessage({ ...to.echo, ...body, id: to.id, __connKey: to.connKey });
 }
 
-// First-run orientation. The arbiter panel shows a one-time explainer (what the plugin does;
-// "only approve sessions you started") the FIRST time it is ever raised, then never again. This
-// is the ONE durable bit of plugin state — it persists across plugin reopens via clientStorage,
+// First-run orientation. The session list shows a one-time explainer (what the plugin does; "only
+// approve sessions you started") the FIRST time it is ever expanded, then never again. This is the
+// ONE durable bit of plugin state — it persists across plugin reopens via clientStorage,
 // deliberately distinct from the per-session approval Set (in-memory, clears on reopen). Read once
-// at startup into a sync flag so panel-raise stays synchronous (no await in the hot path); the
+// at startup into a sync flag so expanding stays synchronous (no await in the hot path); the
 // write-back is fire-and-forget. The startup read resolves long before any session connects (it's
-// local; SESSION_INFO needs a WS round-trip), so the flag is settled by the first raise.
+// local; SESSION_INFO needs a WS round-trip), so the flag is settled by the first expand.
 const ORIENTATION_STORAGE_KEY = "code-mode:has-seen-orientation";
 let hasSeenOrientation = false;
 void figma.clientStorage.getAsync(ORIENTATION_STORAGE_KEY).then((seen) => {
@@ -173,9 +196,9 @@ void figma.clientStorage.getAsync(ORIENTATION_STORAGE_KEY).then((seen) => {
 });
 
 /**
- * Whether to show first-run orientation THIS raise — true once ever, then never again. Consuming
+ * Whether to show first-run orientation THIS expand — true once ever, then never again. Consuming
  * it flips the in-memory flag and persists the durable "seen" bit (fire-and-forget). Split out of
- * showArbiterPanel so the durable, once-ever write isn't buried behind a per-raise "show" verb.
+ * setExpanded so the durable, once-ever write isn't buried behind a per-render "expand" verb.
  */
 function consumeFirstRunOrientation(): boolean {
   if (hasSeenOrientation) return false;
@@ -185,14 +208,26 @@ function consumeFirstRunOrientation(): boolean {
 }
 
 /**
- * One panel row per live session, derived from the connection map. Forwards {identity, pairingCode}
- * plus the per-row state the panel renders from — `approved` (token in approvedTokens) and `active`
- * (the one active driver) — and `key` so the row's Allow/Deny/switch routes back to the right
+ * The short, glanceable name for a session: the last segment of its identity (a project path). The
+ * strip and the takeover toast have one line to work with; the expanded row still shows the FULL
+ * identity, which is what the human actually approves.
+ */
+function sessionLabel(identity: string | null): string {
+  if (identity === null) return "A session";
+  const segments = identity.split("/").filter((segment) => segment.length > 0);
+  return segments.length > 0 ? segments[segments.length - 1] : identity;
+}
+
+/**
+ * One row per live session, derived from the connection map. Forwards {identity, label, pairingCode}
+ * plus the per-row state the UI renders from — `approved` (token in approvedTokens) and `active`
+ * (holds the driving baton) — and `key` so the row's Allow/Deny/Revoke routes back to the right
  * connection. NEVER the session token, a localhost bearer credential (Slice 2.1b) not for display.
  */
 function panelSessions(): Array<{
   key: ConnKey;
   identity: string | null;
+  label: string;
   pairingCode: string | null;
   approved: boolean;
   active: boolean;
@@ -202,6 +237,7 @@ function panelSessions(): Array<{
     sessions.push({
       key,
       identity: conn.identity,
+      label: sessionLabel(conn.identity),
       pairingCode: conn.pairingCode,
       approved: isApproved(key),
       active: key === activeKey,
@@ -210,99 +246,115 @@ function panelSessions(): Array<{
   return sessions;
 }
 
+// Whether the strip is expanded into the session list. Collapsed is the resting state — one line of
+// ambient status. It expands when the human asks (clicking the strip) or when a session needs a
+// decision, which is now the ONLY moment the plugin interrupts anyone.
+let expanded = false;
+
 /**
- * Re-render the panel's row list WITHOUT touching iframe visibility. SHOW_PANEL only updates the
- * (possibly hidden) DOM; figma.ui.show()/hide() is what raises/lowers the iframe — so this keeps a
- * visible panel's rows current (a session joined/left/changed state) without raising a hidden one.
- * `showOrientation:false` — the once-ever banner is consumed only on an actual raise (below), never
- * on a silent refresh.
+ * Push the current state to the strip — the single render path (there is no separate "raise"; the
+ * window is always visible). The iframe re-measures itself after painting and reports its height
+ * back (UI_HEIGHT), which is what resizes the window, so render and resize are one flow.
  */
-function renderPanel(): void {
-  figma.ui.postMessage({ type: "SHOW_PANEL", sessions: panelSessions(), showOrientation: false });
+function renderUi(showOrientation = false): void {
+  figma.ui.postMessage({ type: "RENDER", sessions: panelSessions(), expanded, showOrientation });
 }
 
 /**
- * Raise the arbiter panel (and refresh its rows). The panel RENDER is a session LIST (Slice 2.2
- * pre-invest); Phase 3 fills it with N rows. Consumes first-run orientation here, on the actual
- * raise. Idempotent: safe to call on each gated write, so a write blocked after a dismiss re-surfaces
- * the panel. Visibility is driven EXPLICITLY (raise on a pending decision, lower on resolution) — NOT
- * derived from approval state, which can't see a non-active approved session's pending switch request.
+ * Expand or collapse the strip. Consumes first-run orientation on the first expand ever — the one
+ * durable "seen" bit, spent the first time the human is actually shown the list. Idempotent, so a
+ * write blocked after a collapse re-opens the list.
  */
-function showArbiterPanel(): void {
-  figma.ui.postMessage({
-    type: "SHOW_PANEL",
-    sessions: panelSessions(),
-    showOrientation: consumeFirstRunOrientation(),
-  });
-  figma.ui.show();
-}
-
-/** Dismiss the arbiter panel (a decision was made, or the last session left). WS relay unaffected
- * — hiding doesn't reload the iframe (see the showUI note up top). A still-pending session re-raises
- * it on its agent's next gated write (gateWrite). */
-function hideArbiterPanel(): void {
-  figma.ui.postMessage({ type: "HIDE_PANEL" });
-  figma.ui.hide();
+function setExpanded(next: boolean): void {
+  expanded = next;
+  renderUi(next ? consumeFirstRunOrientation() : false);
 }
 
 /**
- * The single write-gate decision and the enforcement point for BOTH the consent and the
- * one-active-driver Invariants — owned in one place so EXECUTE_CODE and SCREENSHOT (and any future
- * write verb) can't drift. Returns true only when the write may run; otherwise it raises the panel
- * for the human and replies with the right gate, and returns false:
- *   • unapproved (or no source port — the fail-closed default) → PENDING_APPROVAL (approve via Allow)
- *   • approved but not the active driver → INACTIVE_SESSION (switch the active driver to it)
- * Raising the panel here is what surfaces a non-active approved session's switch request, so the
- * human can act on it.
+ * The single write-gate decision and the enforcement point for the consent Invariant — owned in one
+ * place so EXECUTE_CODE and SCREENSHOT (and any future write verb) can't drift. Consent is the ONLY
+ * human decision: an unapproved session (or one with no source port — the fail-closed default) is
+ * refused with PENDING_APPROVAL, and the strip expands so the human can Allow.
+ *
+ * An approved session that isn't the current driver simply TAKES the baton. Why NOT the old
+ * INACTIVE_SESSION refusal: it made handoff reactive — the second session had to bump into a wall
+ * before the human was even shown that it wanted to drive, and the human then had to click a switch
+ * they never asked to arbitrate. Approval is the security boundary; ordering between the human's own
+ * approved agents is a lock, and locks are the machine's job (see enqueueWrite).
  */
 function gateWrite(to: ReplyTo): boolean {
   if (to.connKey === undefined || !isApproved(to.connKey)) {
-    showArbiterPanel();
+    setExpanded(true);
     reply(to, { type: "PENDING_APPROVAL" });
     return false;
   }
-  if (to.connKey !== activeKey) {
-    showArbiterPanel();
-    reply(to, { type: "INACTIVE_SESSION" });
-    return false;
-  }
+  if (to.connKey !== activeKey) takeBaton(to.connKey);
   return true;
 }
 
 /**
- * Apply the human's panel decision to a specific session (keyed by its port). Allow on an
- * unapproved row mints a session token, remembers it as approved, binds it to that connection, and
- * hands it to that row's server (routed by __connKey) so the server can echo it on reconnect —
- * approval keys on the minted token, never the forgeable identity (Invariant). Allow on an
- * already-approved row mints nothing; it's a SWITCH. Either Allow makes the row the active driver
- * (the one session whose writes reach the executor). Deny (approve !== true) changes no state.
- * Either way the panel is dismissed (soft): a still-pending session re-raises it on its agent's
- * next gated write (gateWrite), so Deny means "not now," not a permanent block.
+ * Hand the driving baton to an approved session, on its own write. A takeover the human didn't ask
+ * for is worth a toast — but ONLY when a different live session was driving; the first write of a
+ * lone session, or one reclaiming the baton after the previous driver's row left, is not news.
  */
-function applyDecision(key: ConnKey, approve: boolean): void {
-  const conn = connections.get(key);
-  if (conn && approve) {
-    if (!isApproved(key)) {
-      const token = mintToken();
-      approvedTokens.add(token);
-      conn.token = token;
-      // Same field name (`sessionToken`) the server echoes back in SESSION_INFO — one vocabulary in
-      // both directions. __connKey routes the unsolicited handover to THIS row's socket.
-      figma.ui.postMessage({ type: "SESSION_TOKEN", sessionToken: token, __connKey: key });
-    }
-    activeKey = key;
+function takeBaton(key: ConnKey): void {
+  const displaced = activeKey !== null ? connections.get(activeKey) : undefined;
+  const taking = connections.get(key);
+  activeKey = key;
+  if (displaced !== undefined && taking !== undefined) {
+    figma.notify(`${sessionLabel(taking.identity)} is now driving this file.`, { timeout: 4000 });
   }
-  hideArbiterPanel();
+  renderUi();
 }
 
 /**
- * The human clicked Revoke on an approved row. Forget the token so this session (and any later
- * reconnect echoing it) is no longer approved, drop it as the active driver, and tell that row's
- * server to delete its PERSISTED copy (REVOKE_SESSION over the same relay as the Allow handover) —
- * otherwise a durable on-disk token would silently re-approve on the next connect. Deleting the token
- * from approvedTokens is what actually closes the gate: a reconnect re-binds the token, but isApproved
- * is false once the Set no longer holds it. The row stays in the panel, now unapproved (Allow/Deny
- * again) — this is a de-authorization, not a disconnect.
+ * One writer at a time (Invariant) — enforced by SERIALIZING writes rather than refusing the
+ * non-driving session. Two approved agents can now both have work in flight, and without this chain
+ * their executions would interleave at every `await` inside the document (loadFontAsync,
+ * exportAsync), which is the interleaving the one-active-driver rule existed to prevent.
+ *
+ * The `catch` is not defensive noise: one rejection anywhere in the chain would poison it and
+ * silently brick EVERY later write for the life of the plugin. Both handlers already reply on their
+ * own error paths, so swallowing here loses nothing a caller could act on.
+ */
+let writeChain: Promise<void> = Promise.resolve();
+function enqueueWrite(run: () => Promise<void>): void {
+  writeChain = writeChain.then(run).catch(() => {});
+}
+
+/**
+ * Apply the human's Allow/Deny to a specific session (keyed by its port). Allow mints a session
+ * token, remembers it as approved, binds it to that connection, and hands it to that row's server
+ * (routed by __connKey) so the server can echo it on reconnect — approval keys on the minted token,
+ * never the forgeable identity (Invariant). Deny (approve !== true) changes no state: it means "not
+ * now", so the session's next write re-opens the list.
+ *
+ * Approving does NOT make the row the driver. Driving follows WRITES (takeBaton), so there is
+ * exactly one rule for who holds the baton and the human never arbitrates it. Either way the list
+ * collapses — the decision is made, and the strip still reports anything left pending.
+ */
+function applyDecision(key: ConnKey, approve: boolean): void {
+  const conn = connections.get(key);
+  if (conn !== undefined && approve && !isApproved(key)) {
+    const token = mintToken();
+    approvedTokens.add(token);
+    conn.token = token;
+    // Same field name (`sessionToken`) the server echoes back in SESSION_INFO — one vocabulary in
+    // both directions. __connKey routes the unsolicited handover to THIS row's socket.
+    figma.ui.postMessage({ type: "SESSION_TOKEN", sessionToken: token, __connKey: key });
+  }
+  setExpanded(false);
+}
+
+/**
+ * The human clicked "Revoke access" on an approved row. Forget the token so this session (and any
+ * later reconnect echoing it) is no longer approved, drop its baton, and tell that row's server to
+ * delete its PERSISTED copy (REVOKE_SESSION over the same relay as the Allow handover) — otherwise a
+ * durable on-disk token would silently re-approve on the next connect. Deleting the token from
+ * approvedTokens is what actually closes the gate: a reconnect re-binds the token, but isApproved is
+ * false once the Set no longer holds it. The row stays in the list, now unapproved (Allow/Deny
+ * again) — this is a de-authorization, not a disconnect, which is why the button doesn't say
+ * "Disconnect": the socket is untouched and the agent can ask again.
  */
 function revokeSession(key: ConnKey): void {
   const conn = connections.get(key);
@@ -312,7 +364,7 @@ function revokeSession(key: ConnKey): void {
     conn.token = null;
   }
   if (activeKey === key) activeKey = null;
-  renderPanel();
+  renderUi();
 }
 
 figma.ui.onmessage = (msg: InboundMessage) => {
@@ -323,11 +375,29 @@ figma.ui.onmessage = (msg: InboundMessage) => {
   // envelope path below (and its ERROR reply for unknown types), preserving the frozen-envelope
   // "every id-carrying message gets exactly one reply" invariant.
   if (msg.id === undefined) {
-    // Local CONTROL from ui.html, all keyed by __connKey (the source port) so the right session is
+    // Surface control first — these address the WINDOW, not a session, so they carry no __connKey.
+    if (msg.type === "UI_READY") {
+      // The iframe asks for its first paint once it has loaded; the sandbox can't render into a
+      // document that doesn't exist yet.
+      renderUi();
+      return;
+    }
+    if (msg.type === "UI_TOGGLE") {
+      setExpanded(!expanded);
+      return;
+    }
+    if (msg.type === "UI_HEIGHT") {
+      // The iframe measured itself after painting. Clamped, so a render bug can't leave a 0px or
+      // screen-filling window; the width never changes.
+      const measured = typeof msg.height === "number" ? Math.round(msg.height) : UI_MIN_HEIGHT;
+      figma.ui.resize(UI_WIDTH, Math.max(UI_MIN_HEIGHT, Math.min(UI_MAX_HEIGHT, measured)));
+      return;
+    }
+    // The rest is local CONTROL keyed by __connKey (the source port) so the right session is
     // addressed. WS_CONNECTED/WS_CLOSED are the persistent relay's discovery + disconnect signals —
     // ui.html fires them ONLY for a socket that actually opened (never for the dead block ports it
     // also dials), so they arrive only for real sessions. UI_DECISION carries the row the human clicked.
-    // Every local control message is port-tagged; one with no key is malformed — drop it (fail closed).
+    // A session-scoped control with no key is malformed — drop it (fail closed).
     const key = connKeyOf(msg);
     if (key === undefined) return;
     if (msg.type === "WS_CONNECTED") {
@@ -342,18 +412,19 @@ figma.ui.onmessage = (msg: InboundMessage) => {
       // The socket dropped — remove the session's row (disconnect-detection reuses this persistent
       // relay). Keep activeKey even if it pointed here: a same-port reconnect reclaims active status,
       // and with no socket there are no writes meanwhile. ui.html auto-reconnects the port after this.
-      // Refresh the row list; lower the panel only once the LAST session is gone (nothing left to act
-      // on) — a departure mustn't tear down a panel another session raised for a pending decision.
+      // Refresh the list; collapse only once the LAST session is gone (nothing left to act on) — a
+      // departure mustn't close a list another session opened for a pending decision.
       connections.delete(key);
-      if (connections.size === 0) hideArbiterPanel();
-      else renderPanel();
+      if (connections.size === 0) setExpanded(false);
+      else renderUi();
     } else if (msg.type === "UI_DECISION") {
-      // The human clicked Allow / Switch / Deny on a specific row. The handover (on Allow) rides the
-      // same sandbox→ui.html→WS relay as any reply (ui.html forwards it verbatim); it carries no id
-      // — it's unsolicited, not a reply.
+      // The human clicked Allow / Deny on a specific row. The handover (on Allow) rides the same
+      // sandbox→ui.html→WS relay as any reply (ui.html forwards it verbatim); it carries no id — it's
+      // unsolicited, not a reply.
       applyDecision(key, msg.approve === true);
     } else if (msg.type === "UI_REVOKE") {
-      // The human clicked Revoke on an approved row — de-authorize it and clear the server's persisted token.
+      // The human clicked "Revoke access" on an approved row — de-authorize it and clear the server's
+      // persisted token.
       revokeSession(key);
     }
     return;
@@ -378,23 +449,25 @@ figma.ui.onmessage = (msg: InboundMessage) => {
       });
     }
     reply(to, { type: "SESSION_INFO_ACK" });
-    // Raise the panel for an unapproved session so the human can Allow/Deny; for an already-approved
-    // reconnect (its token echoed back here) just refresh the rows without raising, so it does NOT
-    // re-prompt (Done-when #3) and doesn't disturb a panel another session may have raised.
-    if (to.connKey !== undefined && !isApproved(to.connKey)) showArbiterPanel();
-    else renderPanel();
+    // Open the list for an unapproved session so the human can Allow/Deny; for an already-approved
+    // reconnect (its token echoed back here) just refresh, so it does NOT re-prompt (Done-when #3)
+    // and doesn't disturb a list another session opened.
+    if (to.connKey !== undefined && !isApproved(to.connKey)) setExpanded(true);
+    else renderUi();
   } else if (msg.type === "EXECUTE_CODE") {
-    // Sandbox-side gate (the Invariants' enforcement point): gateWrite runs the write only for the
-    // approved, active-driver session — otherwise it replies PENDING_APPROVAL or INACTIVE_SESSION and
-    // the write never reaches the executor.
-    if (gateWrite(to)) void executeCode(to, typeof msg.code === "string" ? msg.code : "");
+    // Sandbox-side gate (the consent Invariant's enforcement point): gateWrite runs the write only
+    // for an approved session — otherwise it replies PENDING_APPROVAL and the write never reaches the
+    // executor. Queued, not awaited here, so a second session's write can't interleave with this one.
+    if (gateWrite(to)) enqueueWrite(() => executeCode(to, typeof msg.code === "string" ? msg.code : ""));
   } else if (msg.type === "SCREENSHOT") {
     if (gateWrite(to))
-      void screenshot(to, {
-        nodeId: typeof msg.nodeId === "string" ? msg.nodeId : undefined,
-        key: typeof msg.key === "string" ? msg.key : undefined,
-        scale: typeof msg.scale === "number" ? msg.scale : undefined,
-      });
+      enqueueWrite(() =>
+        screenshot(to, {
+          nodeId: typeof msg.nodeId === "string" ? msg.nodeId : undefined,
+          key: typeof msg.key === "string" ? msg.key : undefined,
+          scale: typeof msg.scale === "number" ? msg.scale : undefined,
+        }),
+      );
   } else if (msg.type === "GET_VERSION") {
     // Server-initiated version handshake. The constants live here in the sandbox (not in
     // ui.html, which owns the WS connect but doesn't know them), so the server asks and we
