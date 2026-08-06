@@ -4,6 +4,7 @@ import type { PluginBridgeRuntime } from "~/services/plugin-bridge/index.js";
 import { fetchAndProcessImage } from "~/services/plugin-bridge/images.js";
 import { executeWithImages, type GatedResult } from "~/services/plugin-bridge/execute.js";
 import type { ServerTransport } from "~/mcp/index.js";
+import { registerFailLoudTool, retryableToolReply } from "~/mcp/fail-loud-params.js";
 import { buildQuickStart, buildReferenceSections, SECTION_IDS } from "./flcm-docs/reference.js";
 
 // The figma_execute_code description is the GENERATED quick-start (buildQuickStart), assembled from
@@ -20,6 +21,11 @@ const ScreenshotReply = z.union([
   z.object({ image: z.string() }),
   z.object({ errors: z.string() }),
 ]);
+
+// Upper cap on the screenshot export scale, so a fat-fingered `scale: 40` can't ask Figma to export a
+// page-sized PNG at absurd resolution (and blow the agent's image budget on the way back). 4x already
+// resolves hairlines and grain, and matches the top of Figma's own export-scale UI.
+const MAX_SCREENSHOT_SCALE = 4;
 
 type CodeModeToolsOptions = {
   /** Force the tools to be advertised from startup (`--code-mode`) instead of waiting for a plugin. */
@@ -135,8 +141,12 @@ export function registerCodeModeTools(
     return note ? [...content, { type: "text" as const, text: note }] : content;
   }
 
+  // Every code-mode tool registers through registerFailLoudTool, not server.registerTool: a mistyped
+  // param must come back as a named, retryable error instead of being silently stripped (see
+  // fail-loud-params.ts).
   const tools = [
-    server.registerTool(
+    registerFailLoudTool(
+      server,
       "figma_execute_code",
       {
         description: EXECUTE_CODE_DESCRIPTION,
@@ -178,7 +188,8 @@ export function registerCodeModeTools(
     // clients. A tool is the universal, autonomously-callable channel — the established pattern for shipping
     // docs to agents. Sectioned so a single call stays well under the ~25K tool-result budget as the surface
     // grows.
-    server.registerTool(
+    registerFailLoudTool(
+      server,
       "get_flcm_reference",
       {
         description:
@@ -204,21 +215,61 @@ export function registerCodeModeTools(
       }),
     ),
 
-    server.registerTool(
+    registerFailLoudTool(
+      server,
       "get_screenshot",
       {
-        description: `Capture a PNG of what you've built so you can see it and self-correct.
+        description: `Capture a PNG of what you've built so you can see it and self-correct. Build → screenshot → look → fix.
 
-Pass a nodeId (e.g. a frame's id returned from figma_execute_code) to screenshot just that node; omit it to snapshot the whole current page. Returns a PNG image.`,
+Target ONE node, or omit both targets to snapshot the whole current page:
+- nodeId — a node's id. Copy it from a figma_execute_code result: \`(await flcm.render(tree)).root.id\`, or any handle's \`.id\` in \`.keyed\`.
+- key — a key you authored on a node (\`flcm.frame({ key: "card" }, …)\`). An unknown key, or one matching several nodes (duplicating a node copies its key), fails loud rather than guessing.
+
+Passing both nodeId and key is ambiguous and fails loud. A failed lookup NEVER falls back to the whole page.
+
+scale (default 1, max 4) multiplies the export resolution — use scale: 2–4 to inspect detail you can't resolve at 1x: hairline borders, 1px strokes, grain, glass refraction, small type.
+
+Returns a PNG image.`,
         inputSchema: {
           nodeId: z
             .string()
             .optional()
-            .describe("Id of the node to screenshot. Omit to capture the whole current page."),
+            .describe(
+              "Id of the node to screenshot (from a render handle's .id). Omit both nodeId and key to capture the whole current page.",
+            ),
+          key: z
+            .string()
+            .optional()
+            .describe(
+              "Key of the node to screenshot, as authored via a node's `key` prop. Mutually exclusive with nodeId.",
+            ),
+          scale: z
+            .number()
+            .optional()
+            .describe(
+              `Export resolution multiplier, greater than 0 and at most ${MAX_SCREENSHOT_SCALE} (default 1). Raise it to inspect fine detail.`,
+            ),
         },
       },
-      async ({ nodeId }) => {
-        const raw = await bridge.request({ type: "SCREENSHOT", nodeId });
+      async ({ nodeId, key, scale }) => {
+        // Value-level target checks (Phase 1 covers UNKNOWN keys; nodeId/key/scale are all known, so
+        // their misuse is checked here). Same retryable shape: the agent can fix the call and retry.
+        if (nodeId !== undefined && key !== undefined) {
+          return retryableToolReply(
+            `get_screenshot got both nodeId ("${nodeId}") and key ("${key}"), which is ambiguous, so ` +
+              `this call did not run. Pass exactly one target — or neither, to capture the whole current ` +
+              `page. This is NOT a failure: retry with a single target.`,
+          );
+        }
+        if (scale !== undefined && !(scale > 0 && scale <= MAX_SCREENSHOT_SCALE)) {
+          return retryableToolReply(
+            `get_screenshot got scale ${scale}, which is outside the supported range (greater than 0, at ` +
+              `most ${MAX_SCREENSHOT_SCALE}), so this call did not run — an unbounded scale can try to ` +
+              `export a page-sized image at absurd resolution. This is NOT a failure: retry with a scale ` +
+              `in range (2–4 is plenty for inspecting fine detail).`,
+          );
+        }
+        const raw = await bridge.request({ type: "SCREENSHOT", nodeId, key, scale });
         const gated = gateResult(raw);
         if (gated) return gated;
         const reply = ScreenshotReply.parse(raw);

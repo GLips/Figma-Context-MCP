@@ -2,6 +2,7 @@
 // touches the network — it talks to the headless ui.html bridge via postMessage.
 
 import { safeSerialize, guardReturnValue } from "./serialize.js";
+import { resolveScreenshotTarget, type ScreenshotTarget } from "./screenshot-target.js";
 
 // The std-lib source string, generated from the typed preamble/ fragments and baked in at build time
 // by build.mjs via esbuild `define` (it can't be generated in-sandbox — flattening runs esbuild).
@@ -388,7 +389,12 @@ figma.ui.onmessage = (msg: InboundMessage) => {
     // the write never reaches the executor.
     if (gateWrite(to)) void executeCode(to, typeof msg.code === "string" ? msg.code : "");
   } else if (msg.type === "SCREENSHOT") {
-    if (gateWrite(to)) void screenshot(to, typeof msg.nodeId === "string" ? msg.nodeId : undefined);
+    if (gateWrite(to))
+      void screenshot(to, {
+        nodeId: typeof msg.nodeId === "string" ? msg.nodeId : undefined,
+        key: typeof msg.key === "string" ? msg.key : undefined,
+        scale: typeof msg.scale === "number" ? msg.scale : undefined,
+      });
   } else if (msg.type === "GET_VERSION") {
     // Server-initiated version handshake. The constants live here in the sandbox (not in
     // ui.html, which owns the WS connect but doesn't know them), so the server asks and we
@@ -477,8 +483,9 @@ async function executeCode(to: ReplyTo, code: string): Promise<void> {
 
 /**
  * Exports a node as PNG and posts back exactly one of `{ id, image }` (a base64
- * string) or `{ id, errors }` — never both. With no nodeId, snapshots the whole
- * current page.
+ * string) or `{ id, errors }` — never both. With no target, snapshots the whole
+ * current page. `scale` (already range-checked server-side) multiplies the export
+ * resolution so the agent can inspect detail it can't resolve at 1x.
  *
  * The base64 encoding MUST happen here, not on the server: `exportAsync` returns a
  * Uint8Array, and ui.html JSON.stringifies every outbound message — which turns a
@@ -486,17 +493,21 @@ async function executeCode(to: ReplyTo, code: string): Promise<void> {
  * safeSerialize guards against for nodes). QuickJS has no Buffer, so we use the
  * sandbox's own `figma.base64Encode` to get a clean string across the wire.
  */
-async function screenshot(to: ReplyTo, nodeId: string | undefined): Promise<void> {
+async function screenshot(to: ReplyTo, target: ScreenshotTarget): Promise<void> {
   try {
-    const node = nodeId ? await figma.getNodeByIdAsync(nodeId) : figma.currentPage;
-    if (!node) throw new Error(`No node found with id ${nodeId}`);
+    const node = await resolveScreenshotTarget(target);
     if (!("exportAsync" in node)) throw new Error(`Node ${node.type} (${node.id}) is not exportable`);
-    const bytes = await node.exportAsync({ format: "PNG" });
+    const bytes = await node.exportAsync(
+      target.scale === undefined
+        ? { format: "PNG" }
+        : { format: "PNG", constraint: { type: "SCALE", value: target.scale } },
+    );
     reply(to, { type: "SCREENSHOT_RESULT", image: figma.base64Encode(bytes) });
   } catch (err) {
     reply(to, { type: "SCREENSHOT_RESULT", errors: formatError(err) });
   }
 }
+
 
 function formatError(err: unknown): string {
   if (err instanceof Error) {
