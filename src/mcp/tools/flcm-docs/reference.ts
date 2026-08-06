@@ -20,6 +20,7 @@ import {
   IMAGE_INTRO,
   EFFECTS_INTRO,
   RENDER_KEYS,
+  VERIFY_READBACK,
   CSS_SUBSET,
   FAILS_LOUD,
 } from "./narrative.js";
@@ -168,6 +169,12 @@ const SECTIONS: Section[] = [
     title: "render(), keys & handles",
     blurb: "creating nodes, addressing them, returning results",
     body: () => RENDER_KEYS,
+  },
+  {
+    id: "verify",
+    title: "Seeing what you built (get_screenshot)",
+    blurb: "the build → screenshot → look → fix loop, and the raw figma.* escape hatch",
+    body: () => VERIFY_READBACK,
   },
   {
     id: "css-subset",

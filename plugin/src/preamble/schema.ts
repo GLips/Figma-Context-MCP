@@ -345,7 +345,7 @@ export const EffectsSchema = z.object({
   ),
   noise: prop(
     z.custom<NoiseSugar>(),
-    'Grain overlay — object form only. `true` for a default monotone grain, or { type: "monotone"|"duotone"|"multitone", color, secondaryColor (duotone), opacity (multitone), noiseSize, density }. Note: the running runtime does not accept a per-noise blendMode (typing-ahead-of-runtime), so it is not exposed.',
+    'Grain overlay — object form only. `true` for a default monotone grain, or { type: "monotone"|"duotone"|"multitone", color, secondaryColor, opacity, noiseSize, density }. Two fields are scoped to one `type` and are REJECTED on any other: `secondaryColor` is **duotone only**, and `opacity` is **multitone only** — on the default monotone grain it fails, so vary `density`/`color` alpha instead. Note: the running runtime does not accept a per-noise blendMode (typing-ahead-of-runtime), so it is not exposed.',
     "true | object",
   ),
   texture: prop(

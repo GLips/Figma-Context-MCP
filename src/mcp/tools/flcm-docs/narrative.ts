@@ -161,7 +161,9 @@ flcm.frame({ effects: flcm.effects({ shadow: { y: 12, blur: 32, color: "rgba(0,0
 flcm.frame({ effects: { boxShadow: "0px 12px 32px rgba(0,0,0,0.18)", backdropFilter: "blur(16px)" } });
 \`\`\`
 
-Blur values are written in **CSS px** — you always write the CSS number and we map it to Figma's scale for you.`;
+Blur values are written in **CSS px** — you always write the CSS number and we map it to Figma's scale for you.
+
+**\`glass\` needs a high-frequency backdrop to read as glass.** \`refraction\` and \`dispersion\` bend what is *behind* the pane, so over a flat fill or a smooth gradient there is nothing to bend and the result looks like a plain frosted tint — that's the physics of the scene, not a broken effect. Put busy content behind it (an image, dense text, an icon grid, a sharp-edged shape) and the refraction becomes visible.`;
 
 export const RENDER_KEYS = `\`render\` is **async** — always \`await\` it. It loads the fonts your text needs, walks the tree creating live nodes, stamps each \`key\`, and returns:
 
@@ -184,6 +186,47 @@ out.keyed["email:input"].id;  // a nested keyed node
 \`\`\`
 
 **Return ids or handles, never live Figma nodes.** A live node can't cross the bridge (it collapses to a bare \`{ id }\`), so returning one is a loud error telling you to return the id instead. The handles from \`render\` are safe to return as-is.`;
+
+// The one fragment that documents a *tool* rather than a DSL verb. That crossing is deliberate: the
+// build→see→fix loop spans both layers, and this reference is the agent's whole map — a loop documented
+// only on one side is the loop an agent never runs. The wording keeps the layer distinction explicit so
+// it can't read as "get_screenshot is part of flcm".
+export const VERIFY_READBACK = `You cannot judge what you built from the code you wrote — hairlines, grain, glass, 1px strokes, and unrenderable glyphs all *look* fine in source. **Build → screenshot → look → fix.**
+
+\`get_screenshot\` is a separate **MCP tool**, a sibling of \`figma_execute_code\` — **not** an \`flcm\` verb. There is no \`flcm.screenshot\`. Each \`figma_execute_code\` call runs in its own sandbox scope, so a live handle can't be handed to another tool call; what crosses is a **string you copy** out of the render result.
+
+\`\`\`js
+// call 1 — figma_execute_code
+const out = await flcm.render(card);
+return { id: out.root.id, bar: out.keyed.transportBar.id };
+\`\`\`
+
+\`\`\`
+// call 2 — get_screenshot
+{ "nodeId": "12:345" }             // the id you just returned
+{ "key": "transportBar" }          // or a key you authored — resolved on the current page
+{ "nodeId": "12:345", "scale": 3 } // 3× resolution, to inspect fine detail
+\`\`\`
+
+- **\`nodeId\`** — any handle's \`.id\` from \`render\` (\`out.root.id\`, \`out.keyed.<key>.id\`), or an id from a read verb.
+- **\`key\`** — a \`key\` you authored, resolved against \`pluginData("flcm/key")\` on the current page. A key matching **no** node, or **more than one** (duplicating a node copies its key), fails loud naming the problem — a failed lookup never quietly falls back to a page-wide capture.
+- **Omit both** to capture the whole current page.
+- **\`scale\`** (>0, ≤4; default 1) multiplies export resolution. Detail below ~24px — a 1px stroke, a hairline divider, grain, glass refraction, small type — is not reliably judgeable at 1×; screenshot it at 2–4×.
+
+Pass a param name the tool doesn't know and it says so, naming the key and the valid ones. It does **not** silently ignore it, so a typo costs one retry rather than a wrong conclusion.
+
+### The raw \`figma.*\` escape hatch
+
+The full Figma plugin API global is in scope inside \`figma_execute_code\`, alongside \`flcm\`. **Author with \`flcm\`** — it's the surface that fails loud instead of rendering wrong pixels. **Drop to \`figma.*\`** for the things the DSL deliberately doesn't cover: page and viewport operations (\`figma.currentPage\`, \`figma.viewport.scrollAndZoomIntoView([node])\`), selection, node deletion, and anything else about the *document* rather than the *design*.
+
+\`\`\`js
+const out = await flcm.render(screen);                                  // author with flcm
+const node = await figma.getNodeByIdAsync(out.root.id);                 // drop out for document ops
+figma.viewport.scrollAndZoomIntoView([node]);
+return out.root.id;
+\`\`\`
+
+Raw \`figma.*\` gives up every guarantee this DSL makes (fills are 0–1 and must be assigned as a new array, fonts must be loaded before \`characters\`, a node is invisible until appended) — so use it for *plumbing*, and come back to \`flcm\` to author.`;
 
 export const CSS_SUBSET = `Leaf values are CSS-familiar, but only a **documented subset** is supported. Anything outside it throws a specific error naming what went wrong — it never renders wrong pixels.
 
