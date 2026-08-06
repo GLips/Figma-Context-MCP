@@ -19,8 +19,8 @@ test("looksLikeNode fires on a live node but not on a handle/read POJO (id+type 
   assert.equal(looksLikeNode({ foo: 1 }), false);
 });
 
-test("a render Handle round-trips WHOLE — boundingBox and key survive (the old id+type collapse dropped them)", () => {
-  const handle = { id: "1:2", type: "TEXT", name: "Title", key: "title", text: "Hi", boundingBox: { x: 0, y: 0, width: 100, height: 20 } };
+test("a render Handle round-trips WHOLE — geometry and key survive (the old id+type collapse dropped them)", () => {
+  const handle = { id: "1:2", type: "TEXT", name: "Title", key: "title", text: "Hi", width: 100, height: 20, left: 0, top: 0 };
   assert.deepEqual(safeSerialize(handle), handle);
 });
 

@@ -24,6 +24,10 @@ export type {
   SimplifiedProgressiveBlur,
 } from "./transformers/effects.js";
 
+// The rounding every emitted number passes through. Exported from the barrel so the plugin's write side
+// (render's handle geometry) rounds identically to the read side — one numeric currency at the agent edge.
+export { pixelRound } from "./utils.js";
+
 // The core entry: NodeSnapshot[] → canonical SimplifiedNodes (expanded by
 // default; compression opt-in via { compress: true })
 export { simplify } from "./simplify.js";

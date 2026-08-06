@@ -230,12 +230,6 @@ export interface WriteNode {
 // A child slot may be falsy so `cond && flcm.text(...)` composes; the bridge skips falsy entries.
 export type WriteChild = WriteNode | null | false | undefined;
 
-// A node's resolved geometry, in figma-mcp's read-side { x, y, width, height } shape — deliberately NOT
-// the author-sugar w/h names — so an authoring handle and a future read/edit round-trip speak one currency
-// (a divergence here would force a migration when the read path lands). x/y are parent-relative, like
-// Figma's node.x/node.y.
-export interface BoundingBox { x: number; y: number; width: number; height: number }
-
 // A node's stable identity — the fields every returned reference shares, pulled out of the live node by
 // identity.identityOf so render's Handle and the read verbs' SlimHandle can't drift on how they read
 // name/key/text. `key` is our pluginData flcm/key (only on nodes stamped with one); `text` is present for
@@ -245,9 +239,22 @@ export interface Identity { id: string; type: string; name: string; key?: string
 
 // A Handle is the JSON-safe reference render() returns for a node: what crosses the bridge back to the
 // agent in place of a live (unserializable) Figma node. Defined here so the schema module can type
-// render()'s return without importing bridge.ts (which speaks figma.*). `boundingBox` is the node's
-// resolved geometry, settled by render()'s post-walk read-back (see bridge.readBackGeometry).
-export interface Handle extends Identity { boundingBox: BoundingBox }
+// render()'s return without importing bridge.ts (which speaks figma.*). Geometry is spelled EXACTLY as the
+// read side spells it (SlimHandle below, and `get`'s NodeGeometry): flat width/height, and left/top only
+// when the parent's auto-layout doesn't already place the node. One vocabulary at the agent boundary is the
+// point — an agent that measures what it rendered and an agent that locates an existing node read the same
+// field names. The values are settled by render()'s post-walk minting pass (bridge.settleHandles).
+export interface Handle extends Identity {
+  // MEASURED px, always — the deliberate divergence from SlimHandle's sizing intent. render() just laid the
+  // tree out, so the settled number is ground truth and the whole reason to look: a 35%-wide bar's real
+  // width, a hugged frame's real height. A located node gets intent instead, because there a computed px
+  // would read as authored-fixed and invite an agent to pin what the layout owns.
+  width: number;
+  height: number;
+  position?: "absolute";
+  left?: number;
+  top?: number;
+}
 
 // A SlimHandle is what the locate verbs (find/findOne/selection) return: the identity core plus a cheap
 // layout world-model, so an agent gets the lay of the land (containers, sizing intent, out-of-flow
@@ -256,8 +263,8 @@ export interface Handle extends Identity { boundingBox: BoundingBox }
 // vocabulary's SimplifiedDimension (a px number ONLY on an authored-fixed axis; "fill"/"hug"/"contextual"
 // carry intent, never a misleading computed px), layout carries just the container mode, and
 // position/left/top mirror NodeGeometry, emitted only when the node is out of its parent's auto-layout flow.
-// Distinct from the write-side Handle: slim carries sizing INTENT and no resolved boundingBox; Handle
-// carries the resolved box and no intent.
+// Same geometry spelling as the write-side Handle, on the same emission rules; the one difference is what a
+// size MEANS — slim carries sizing intent, a render Handle carries measured px (see Handle above).
 export interface SlimHandle extends Identity {
   width?: SimplifiedDimension;
   height?: SimplifiedDimension;

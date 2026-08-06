@@ -174,7 +174,11 @@ export const RENDER_KEYS = `\`render\` is **async** — always \`await\` it. It 
 }
 \`\`\`
 
-A **Handle** is a small plain object safe to return or log: \`{ id, type, name, boundingBox, key?, text? }\` (\`text\` on text nodes, \`key\` when the node had one). \`boundingBox\` is the node's **resolved** geometry — \`{ x, y, width, height }\`, measured after the whole tree is laid out, with \`x\`/\`y\` relative to the parent — so you can read a computed size (a 35%-wide bar, a hugged frame's real height) instead of assuming a parent width.
+A **Handle** is a small plain object safe to return or log: \`{ id, type, name, width, height, key?, text?, position?, left?, top? }\` (\`text\` on text nodes, \`key\` when the node had one).
+
+Its geometry is **measured**, read after the whole tree is laid out — so \`width\`/\`height\` are the real px a 35%-wide bar or a hugged frame came out at, not what you assumed. \`left\`/\`top\` are the offset inside the parent, and appear **only when the parent doesn't place the node** (a child of a plain frame, or one you positioned with \`absolute\`); under \`row\`/\`column\` the parent decides the position, so there is nothing to report. An \`absolute\` child of a \`row\`/\`column\` parent also carries \`position: "absolute"\`.
+
+This is the same geometry spelling the read verbs use (\`get\`, \`find\`), so a node you just rendered and a node you looked up read alike. The one difference: a rendered handle reports **measured px on every axis**, while a found node reports sizing **intent** (\`"fill"\`/\`"hug"\`) on an axis it doesn't fix.
 
 **Keys are opt-in addressing.** Only keyed nodes appear in \`out.keyed\`; unkeyed nodes stay anonymous. Keys must be **unique within a single render** (a duplicate is a loud error) and are global to the render — namespace by hand (\`"email:input"\`). The key is stored on the node (\`pluginData("flcm/key")\`).
 

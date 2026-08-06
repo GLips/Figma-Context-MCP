@@ -25,7 +25,7 @@ import { parseInlineMarkdown, MdSegment } from "./markdown.js";
 import { linearGradient, radialGradient } from "./paint.js";
 import { layerBlurFromCssPx, backgroundBlurFromCssPx, shadow, glass, noise, texture, progressiveBlur } from "./effects.js";
 import { parseColor, parseFill, parseCssEffects, parseBlendMode, length, lineHeight, letterSpacing, isPercent, percent } from "./css.js";
-import { buildNode, handle, readBackGeometry, resolvePercents, RenderCtx } from "./bridge.js";
+import { buildNode, settleHandles, resolvePercents, RenderCtx } from "./bridge.js";
 import { get, find, findOne, selection } from "./read.js";
 import { rejectUnknownKeys } from "./validate.js";
 
@@ -789,11 +789,8 @@ async function render(tree: WriteNode): Promise<{ root: Handle; keyed: Record<st
   // pixels against each parent's now-realized size in one post-walk pass (bridge.resolvePercents).
   const root = buildNode(tree, ctx);
   resolvePercents(ctx);
-  const rootHandle = handle(root);
-  // Geometry settles only after the whole tree is laid out — read it back into every handle now (see
-  // bridge.readBackGeometry). Walk-time boundingBox on these handles is provisional until this runs.
-  await readBackGeometry(rootHandle, ctx.keyed);
-  return { root: rootHandle, keyed: ctx.keyed };
+  // Handles are minted only now: geometry settles once the whole tree is laid out (bridge.settleHandles).
+  return settleHandles(root, ctx.keyed);
 }
 
 // flcm.id(id) — the target escape hatch. Wraps a raw node id so a target-taking verb (get/find/edit) treats

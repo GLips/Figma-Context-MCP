@@ -8,19 +8,23 @@
 // walk applies a small additive vocabulary guarded by `'prop' in node` / try-catch, so fighting the
 // union with casts at every line would add noise without safety.
 
-import { WriteType, WriteNode, WriteLayout, Justify, Align, TextAlign, TextDecoration, Sizing, Handle, BoundingBox, PaintSpec, ImageSpec } from "./ir.js";
+import { WriteType, WriteNode, WriteLayout, Justify, Align, TextAlign, TextDecoration, Sizing, Identity, Handle, PaintSpec, ImageSpec } from "./ir.js";
 import { toFigmaPaint } from "./paint.js";
 import { toFigmaEffects } from "./effects.js";
 import { resolveFont, resolveFontStrict, FontMap } from "./fonts.js";
 import { normalizePathData } from "./path.js";
 import { writeKey, identityOf } from "./identity.js";
+import { pixelRound } from "~/core/index.js";
 
 // `images` is the url → base64 map render() threads through the walk (bytes the server fetched+validated
 // and injected between the two passes); an image PaintSpec resolves to a plugin ImagePaint against it.
 // `pending` accumulates every percent/anchor child during the walk, resolved in one post-walk pass once
 // the tree's fill/hug sizes have settled (see resolvePercents).
+//
+// `keyed` collects LIVE NODES, not Handles: nothing about a node's geometry is trustworthy mid-walk (see
+// settleHandles), so handles are minted in one pass after the walk instead of stamped and then patched.
 export interface RenderCtx {
-  keyed: Record<string, Handle>;
+  keyed: Record<string, any>;
   fonts: FontMap;
   images: Record<string, string>;
   pending: PendingResolve[];
@@ -43,37 +47,50 @@ const TEXT_ALIGN: Record<TextAlign, "LEFT" | "CENTER" | "RIGHT" | "JUSTIFIED"> =
 // per-run inverse override that clears an inherited base decoration.
 const DECORATION: Record<TextDecoration, "UNDERLINE" | "STRIKETHROUGH" | "NONE"> = { underline: "UNDERLINE", "line-through": "STRIKETHROUGH", none: "NONE" };
 
-// A node's geometry in the read-side shape. x/y are parent-relative (Figma's node.x/node.y).
-function boxOf(node: any): BoundingBox {
-  return { x: node.x, y: node.y, width: node.width, height: node.height };
-}
+// The frame layoutModes that place their own children — the plugin-side spelling of the core's hasAutoLayout.
+const AUTO_LAYOUT_MODES = ["HORIZONTAL", "VERTICAL", "GRID"];
 
-export function handle(node: any): Handle {
-  // Identity (id/name/type/key/text) comes from identityOf — the shared reader, so a render Handle and a
-  // read SlimHandle can't disagree on how key/text are pulled. `key` is read from pluginData (stampKey
-  // writes it BEFORE calling handle, so it's present by now). boundingBox is provisional at walk time (see
-  // readBackGeometry) — render() re-reads it once the tree settles, so the value captured here is a
-  // placeholder every returned handle overwrites.
-  return { ...identityOf(node), boundingBox: boxOf(node) };
-}
-
-// Read each returned handle's settled geometry once render()'s walk is done. A node's final size/position
-// isn't known while the tree is being built: buildFrame re-covers fill/percent/absolute children in the
-// post-applyOwnSize `covers` pass, and frames hug their content bottom-up as the walk unwinds — so a
-// covered child still holds its provisional hug size at stampKey time. Capturing boundingBox during the
-// walk would freeze that stale geometry, so instead re-read every returned handle (root + keyed) from its
-// live node here, after the walk returns. id/name/type are stable at walk time and need no re-read.
-export async function readBackGeometry(root: Handle, keyed: Record<string, Handle>): Promise<void> {
-  for (const h of [root, ...Object.values(keyed)]) {
-    h.boundingBox = boxOf(await figma.getNodeByIdAsync(h.id));
+// A node's geometry in the read verbs' spelling (ir.Handle). width/height are the measured px, rounded the
+// way the core rounds every number it emits so both producers hand the agent one currency. left/top (and
+// the `position` marker) are emitted ONLY when the parent's auto-layout doesn't already place the node —
+// the exact rule read.projectSlim inherits from core's NodeGeometry (isInAutoLayoutFlow). A page child gets
+// neither: its parent has no box to be relative to, so the coordinates would be canvas trivia.
+function geometryOf(node: any): Omit<Handle, keyof Identity> {
+  const geometry: Omit<Handle, keyof Identity> = { width: pixelRound(node.width), height: pixelRound(node.height) };
+  const parent = node.parent;
+  const parentPlacesIt = !!parent && AUTO_LAYOUT_MODES.indexOf(parent.layoutMode) !== -1 && node.layoutPositioning !== "ABSOLUTE";
+  if (parent && parent.type !== "PAGE" && !parentPlacesIt) {
+    if (node.layoutPositioning === "ABSOLUTE") geometry.position = "absolute";
+    geometry.left = pixelRound(node.x);
+    geometry.top = pixelRound(node.y);
   }
+  return geometry;
+}
+
+// Mint the JSON-safe reference for one live node. Identity (id/name/type/key/text) comes from identityOf —
+// the shared reader, so a render Handle and a read SlimHandle can't disagree on how key/text are pulled;
+// `key` is read back from the pluginData stampKey wrote during the walk.
+function handle(node: any): Handle {
+  return { ...identityOf(node), ...geometryOf(node) };
+}
+
+// Mint every handle render() returns, AFTER the walk. Timing is the whole point: nothing geometric is
+// settled while the tree is being built — buildFrame re-covers fill/percent/absolute children in the
+// post-applyOwnSize `covers` pass, frames hug their content bottom-up as the walk unwinds, and every node
+// is created as a page child and reparented only when it's appended (so mid-walk even "does the parent
+// place this node?" — which decides whether left/top exist at all — answers wrong). Minting once here is
+// what keeps a returned handle from ever carrying a provisional value.
+export function settleHandles(root: any, keyed: Record<string, any>): { root: Handle; keyed: Record<string, Handle> } {
+  const handles: Record<string, Handle> = {};
+  for (const key of Object.keys(keyed)) handles[key] = handle(keyed[key]);
+  return { root: handle(root), keyed: handles };
 }
 
 function stampKey(node: any, wn: WriteNode, ctx: RenderCtx): void {
   if (typeof wn.key !== "string") return;
   if (wn.key in ctx.keyed) throw new Error('flcm.render: duplicate key "' + wn.key + '" — keys must be unique within a render.');
   writeKey(node, wn.key);
-  ctx.keyed[wn.key] = handle(node);
+  ctx.keyed[wn.key] = node;
 }
 
 // Resolve one PaintSpec to a plugin Paint. An image spec needs raster BYTES (the server fetched them and
