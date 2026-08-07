@@ -35,10 +35,11 @@ figma.showUI(__html__, {
 
 // Versions reported to the server over the frozen envelope on connect (server-initiated
 // GET_VERSION handshake). These are the SOURCE OF TRUTH for the plugin's wire identity:
-//   • PROTOCOL_VERSION — the frozen forward-compat envelope contract. The server GATES on
-//     this; bump it ONLY on a breaking envelope change (and the server's MIN with it).
-//   • PLUGIN_VERSION — the plugin release, shown to the human in a skew nudge. Informational.
-const PROTOCOL_VERSION = 1;
+//   • PROTOCOL_VERSION — the envelope contract. The server GATES on this; bump it ONLY on a
+//     breaking envelope change (and the server's MIN with it). v2 = the mid-run image
+//     protocol (plugin-issued IMAGES_REQUEST/IMAGES_REPLY + run-scoped CANCEL).
+//   • PLUGIN_VERSION — the plugin release, shown to the human in a skew refusal. Informational.
+const PROTOCOL_VERSION = 2;
 const PLUGIN_VERSION = "0.1.0";
 
 // Phase 2 consent gate. The sandbox is the SOLE ARBITER (Invariant): it holds the durable

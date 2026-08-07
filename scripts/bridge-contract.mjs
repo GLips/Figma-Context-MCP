@@ -12,8 +12,9 @@
 //
 // Slice 1.2 adds the version handshake, which rides that same envelope:
 //   • GET_VERSION round-trips {pluginVersion, protocolVersion} from a current plugin.
-//   • detectSkew treats a missing version as the floor (nudge), a current one as clean —
-//     never rejects, so it can't brick the stale plugin the nudge exists to rescue.
+//   • detectSkew treats a missing version as the floor, a current one as clean. Since protocol
+//     v2 (mid-run images) the skew text is a REFUSAL — code-mode tools return it instead of
+//     running — because a v1 plugin genuinely cannot speak the reverse-request envelope.
 //   • The bridge's per-connection skew note clears on disconnect.
 //
 // Slice 2.1 adds the consent gate over the same envelope:
@@ -363,20 +364,20 @@ bridgeR3.stop();
 // --- Version handshake + skew policy (Slice 1.2) ---
 
 // Skew policy is pure logic, so assert it directly: a current protocol is clean; a missing
-// or sub-minimum one nudges. The "missing → floor → nudge, never reject" rule is the
-// load-bearing one (rejecting would brick the stale plugin), so pin it explicitly.
-assert.equal(detectSkew({ protocolVersion: MIN_PROTOCOL_VERSION }), null, "current protocol → no nudge");
-assert.ok(detectSkew({}), "missing version → nudge (floor), not silence");
-assert.ok(detectSkew({ protocolVersion: MIN_PROTOCOL_VERSION - 1 }), "below-minimum protocol → nudge");
-console.log("✅ detectSkew: current is clean; missing/old nudges (never rejects)");
+// or sub-minimum one yields the refusal text the write tools return instead of running.
+// "Missing → floor → refusal" is load-bearing: a pre-handshake plugin must be refused too.
+assert.equal(detectSkew({ protocolVersion: MIN_PROTOCOL_VERSION }), null, "current protocol → clean");
+assert.ok(detectSkew({}), "missing version → floor → refusal text, not silence");
+assert.match(String(detectSkew({ protocolVersion: MIN_PROTOCOL_VERSION - 1 })), /re-import/i, "below-minimum protocol → refusal naming the re-import fix");
+console.log("✅ detectSkew: current is clean; missing/old yields the re-import refusal");
 
 // GET_VERSION rides the frozen envelope like any other request. Connect a CURRENT plugin
 // onto the slot the terminated mute socket just freed.
 await wait(150);
-const current = fakePlugin("null", { version: { pluginVersion: "0.1.0", protocolVersion: 1 } });
+const current = fakePlugin("null", { version: { pluginVersion: "0.1.0", protocolVersion: MIN_PROTOCOL_VERSION } });
 await new Promise((res) => current.on("open", res));
 const ver = await bridge.request({ type: "GET_VERSION" });
-assert.equal(ver.protocolVersion, 1, "GET_VERSION round-trips protocolVersion");
+assert.equal(ver.protocolVersion, MIN_PROTOCOL_VERSION, "GET_VERSION round-trips protocolVersion");
 assert.equal(ver.pluginVersion, "0.1.0", "GET_VERSION round-trips pluginVersion");
 console.log("✅ Version handshake round-trips {pluginVersion, protocolVersion}");
 
@@ -396,9 +397,9 @@ console.log("✅ Skew note is connection-scoped (cleared on disconnect)");
 // The established holder rightly still blocks a 2nd connection (1.1); only the heartbeat,
 // detecting the missed pong, reaps it and frees the slot for the live plugin's reconnect.
 await wait(150);
-const dead = fakePlugin("null", { version: { pluginVersion: "0.1.0", protocolVersion: 1 }, wsOptions: { autoPong: false } });
+const dead = fakePlugin("null", { version: { pluginVersion: "0.1.0", protocolVersion: MIN_PROTOCOL_VERSION }, wsOptions: { autoPong: false } });
 await new Promise((res) => dead.on("open", res));
-assert.equal((await bridge.request({ type: "GET_VERSION" })).protocolVersion, 1, "the half-open holder handshakes first");
+assert.equal((await bridge.request({ type: "GET_VERSION" })).protocolVersion, MIN_PROTOCOL_VERSION, "the half-open holder handshakes first");
 assert.equal(
   await refusedOrOpened(fakePlugin("null")),
   "refused",
@@ -484,7 +485,7 @@ const ghost = new WebSocket(URL, { origin: "null" }); // squatter grabs the slot
 await new Promise((res) => ghost.on("open", res));
 const ghostEpoch = bridge.currentEpoch();
 bridge.request({ type: "GET_VERSION" }).catch(() => {}); // orphans on reclaim, resolves late
-const heir = fakePlugin("null", { version: { pluginVersion: "0.1.0", protocolVersion: 1 } });
+const heir = fakePlugin("null", { version: { pluginVersion: "0.1.0", protocolVersion: MIN_PROTOCOL_VERSION } });
 await new Promise((res) => heir.on("open", res));
 const heirEpoch = bridge.currentEpoch();
 assert.notEqual(heirEpoch, ghostEpoch, "a reclaim bumps the connection epoch");

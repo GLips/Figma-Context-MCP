@@ -100,11 +100,13 @@ function sendSessionInfo(bridge: PluginBridge): void {
 /**
  * Server-initiated version handshake (fires on every connect, alongside the PING). Asks
  * the sandbox for its versions over the frozen envelope, gates them against the supported
- * minimum, and — on skew — arms BOTH nudge channels: a figma.notify toast (human, routed
- * back through the sandbox) and the agent note appended to subsequent tool results.
+ * minimum, and — on skew — arms BOTH refusal channels: a figma.notify toast (human, routed
+ * back through the sandbox) and the note the code-mode write tools return INSTEAD of running
+ * (skewRefusal in code-mode-tools.ts — protocol v2 refuses, it doesn't nudge).
  *
  * A plugin predating the handshake answers GET_VERSION with an envelope ERROR; we catch
- * that into an empty record so detectSkew treats it as the floor and nudges, never rejects.
+ * that into an empty record so detectSkew treats it as the floor and refuses with the
+ * re-import fix named.
  */
 async function handshakeVersion(bridge: PluginBridge): Promise<void> {
   const epoch = bridge.currentEpoch();
@@ -117,7 +119,9 @@ async function handshakeVersion(bridge: PluginBridge): Promise<void> {
   const note = detectSkew(version);
   bridge.setSkewNote(note);
   if (!note) return;
-  Logger.log(`⚠️ Version skew — plugin reported ${JSON.stringify(version)}; nudging both channels`);
+  Logger.log(
+    `⚠️ Version skew — plugin reported ${JSON.stringify(version)}; refusing code-mode calls until re-import`,
+  );
   // Fire-and-forget: a plugin predating the NOTIFY handler answers with an envelope ERROR
   // (rejecting this request) and the toast is silently dropped — expected, that plugin still
   // gets the agent channel. Don't chase a toast on a pre-v1 plugin.

@@ -129,14 +129,19 @@ export function registerCodeModeTools(
   }
 
   /**
-   * Append the connection's version-skew nudge to a tool result so the agent sees it and
-   * relays the upgrade prompt to the human. No-op when the plugin is current. This is the
-   * agent half of the dual-channel nudge — the half that reaches even a pre-v1 plugin, which
-   * can't render the human toast.
+   * The protocol gate: a plugin below MIN_PROTOCOL_VERSION cannot speak the mid-run image
+   * protocol (the DSL runtime ships in the plugin bundle), so write tools REFUSE outright and
+   * name the re-import fix — no compat path, nothing shipped before v2. The refusal is the
+   * agent half of the dual-channel skew message (the human half is the connect toast); it
+   * reaches even a pre-handshake plugin, which can't render the toast.
+   *
+   * Known soft edge: the note is set by the connect-time GET_VERSION handshake, so a write
+   * racing in before that handshake resolves slips past this gate. The stale-plugin tripwire
+   * in executeAgentCode (the retired imagesNeeded sentinel) catches the case where it matters.
    */
-  function withSkewNote<T>(content: T[]): (T | { type: "text"; text: string })[] {
+  function skewRefusal(): { content: { type: "text"; text: string }[]; isError: true } | null {
     const note = bridge.getSkewNote();
-    return note ? [...content, { type: "text" as const, text: note }] : content;
+    return note ? { content: [{ type: "text" as const, text: note }], isError: true } : null;
   }
 
   // Every code-mode tool registers through registerFailLoudTool, not server.registerTool: a mistyped
@@ -157,6 +162,8 @@ export function registerCodeModeTools(
         },
       },
       async ({ code }) => {
+        const refused = skewRefusal();
+        if (refused) return refused;
         // Correlation ids and the "no plugin connected" rejection are owned by PluginBridge; the image
         // fetch + re-execute two-pass is owned by executeWithImages — this handler wires the real
         // bridge/gate/fetch seams and shapes the outcome into a tool reply.
@@ -173,7 +180,7 @@ export function registerCodeModeTools(
         if (outcome.kind === "gated") return outcome.result;
         if (outcome.kind === "error") {
           return {
-            content: withSkewNote([{ type: "text", text: outcome.message }]),
+            content: [{ type: "text", text: outcome.message }],
             isError: true,
           };
         }
@@ -181,7 +188,7 @@ export function registerCodeModeTools(
         // lapses mid-work (durable-approval, this cycle). No-op when the session isn't persisted.
         bridge.touchApproval();
         return {
-          content: withSkewNote([{ type: "text", text: JSON.stringify(outcome.reply, null, 2) }]),
+          content: [{ type: "text", text: JSON.stringify(outcome.reply, null, 2) }],
         };
       },
     ),
@@ -210,12 +217,18 @@ export function registerCodeModeTools(
             ),
         },
       },
-      async ({ sections }) => ({
-        content: [
-          { type: "text", text: referencePreamble() },
-          { type: "text", text: buildReferenceSections(sections) },
-        ],
-      }),
+      async ({ sections }) => {
+        // Docs still serve on a stale plugin — but lead with the refusal text so the agent learns
+        // the re-import fix here, before its first (refused) write.
+        const note = bridge.getSkewNote();
+        return {
+          content: [
+            ...(note ? [{ type: "text" as const, text: note }] : []),
+            { type: "text" as const, text: referencePreamble() },
+            { type: "text" as const, text: buildReferenceSections(sections) },
+          ],
+        };
+      },
     ),
 
     registerFailLoudTool(
@@ -255,6 +268,8 @@ Returns a PNG image.`,
         },
       },
       async ({ nodeId, key, scale }) => {
+        const refused = skewRefusal();
+        if (refused) return refused;
         // Value-level target checks (Phase 1 covers UNKNOWN keys; nodeId/key/scale are all known, so
         // their misuse is checked here). Same retryable shape: the agent can fix the call and retry.
         if (nodeId !== undefined && key !== undefined) {
@@ -282,7 +297,7 @@ Returns a PNG image.`,
           return { content: [{ type: "text", text: reply.errors }], isError: true };
         }
         return {
-          content: withSkewNote([{ type: "image", data: reply.image, mimeType: "image/png" }]),
+          content: [{ type: "image", data: reply.image, mimeType: "image/png" }],
         };
       },
     ),
