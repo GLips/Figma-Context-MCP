@@ -24,6 +24,12 @@
 // body → success commit; failure → figma.triggerUndo — so verbs pass only their body and the
 // scaffold exists exactly once. If the probe shows adjacent commits mint empty undo steps, the
 // adaptation happens here, in one place, not per verb.
+//
+// GROUNDED (2026-08-07, hand-verified live): figma.triggerUndo() reverts the last COMMITTED step,
+// swallowing uncommitted trailing writes with it — bare triggerUndo over a failed verb's writes
+// overreaches into the previous step. So the scaffold's shape is: entry seal → body →
+// figma.commitUndo() UNCONDITIONALLY (success commit and failure seal are the same call) →
+// figma.triggerUndo() only on failure, popping exactly the step just committed.
 
 // Host-installed cancellation flag — code.ts binds it to this run's CANCEL state. Like
 // __flcmRequestImages it arrives as a PARAMETER of the eval'd wrapper (build.mjs pins the pairing);
