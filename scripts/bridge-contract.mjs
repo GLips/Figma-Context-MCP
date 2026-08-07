@@ -7,7 +7,8 @@
 //   • A second connection does NOT displace an established one (anti-hijack).
 //   • An unrecognized message type round-trips a readable error FAST — never the
 //     15s timeout, never a silent drop.
-//   • Routing metadata the plugin doesn't recognize echoes back unchanged.
+//   • A reply carries nothing back from its request but the correlation id — the server
+//     correlates by id alone and must never depend on pass-through metadata.
 //
 // Slice 1.2 adds the version handshake, which rides that same envelope:
 //   • GET_VERSION round-trips {pluginVersion, protocolVersion} from a current plugin.
@@ -75,7 +76,6 @@ import { WS_PORT_BLOCK } from "../src/services/plugin-bridge/ports.ts";
 
 const PORT = 19876;
 const URL = `ws://127.0.0.1:${PORT}`;
-const KNOWN = new Set(["id", "type", "code", "nodeId", "payload", "message", "identity", "pairingCode", "sessionToken"]);
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // Every bridge gets its OWN empty persistence dir, so the durable-approval store (keyed by cwd, one
@@ -125,9 +125,9 @@ function fakePlugin(origin, { version, wsOptions, url = URL, state = sandbox } =
   ws.on("message", (raw) => {
     const msg = JSON.parse(raw.toString());
     if (typeof msg.id !== "string") return;
-    const echo = {};
-    for (const k of Object.keys(msg)) if (!KNOWN.has(k)) echo[k] = msg[k];
-    const send = (body) => ws.send(JSON.stringify({ ...echo, ...body, id: msg.id }));
+    // Mirrors code.ts's replyEnvelope: the handler's body plus the correlation id, and nothing
+    // else carried over from the request (reply-envelope.ts owns that invariant plugin-side).
+    const send = (body) => ws.send(JSON.stringify({ ...body, id: msg.id }));
     if (msg.type === "SESSION_INFO") {
       state.currentToken = typeof msg.sessionToken === "string" ? msg.sessionToken : null;
       send({ type: "SESSION_INFO_ACK" });
@@ -186,9 +186,14 @@ assert.match(rejected.message, /Unsupported message type/, "readable error");
 assert.ok(Date.now() - t0 < 1000, "rejects fast, not on 15s timeout");
 console.log(`✅ Unknown type rejects in ${Date.now() - t0}ms (not a 15s hang)`);
 
-const echoed = await bridge.request({ type: "EXECUTE_CODE", code: "return 1", sessionId: "abc-123" });
-assert.equal(echoed.sessionId, "abc-123", "unknown routing key echoed back");
-console.log("✅ Routing metadata (sessionId) echoes back through the reply");
+// The reply is a function of the plugin's handler body plus the correlation id — nothing the server
+// attached to the request comes back. Pinned from the server side because the alternative (a general
+// echo of unrecognized fields) silently turns a field the PLUGIN consumes into what looks like
+// metadata a newer server sent. Correlation is by id alone, so no server code may depend on this.
+const replied = await bridge.request({ type: "EXECUTE_CODE", code: "return 1", sessionId: "abc-123" });
+assert.equal(replied.result, "ok", "the request still resolves — correlation is by id alone");
+assert.equal(replied.sessionId, undefined, "a field the server attached must not come back on the reply");
+console.log("✅ Replies carry nothing back from the request but its correlation id");
 
 assert.equal(await refusedOrOpened(new WebSocket(URL, { origin: "https://evil.example.com" })), "refused", "web origin refused");
 // A real figma.com origin is a script on a figma.com page (web app / extension), NOT

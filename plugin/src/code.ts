@@ -3,6 +3,14 @@
 
 import { safeSerialize, guardReturnValue } from "./serialize.js";
 import { resolveScreenshotTarget, type ScreenshotTarget } from "./screenshot-target.js";
+import {
+  connKeyOf,
+  replyTarget,
+  replyEnvelope,
+  type ConnKey,
+  type InboundMessage,
+  type ReplyTo,
+} from "./reply-envelope.js";
 
 // The std-lib source string, generated from the typed preamble/ fragments and baked in at build time
 // by build.mjs via esbuild `define` (it can't be generated in-sandbox — flattening runs esbuild).
@@ -75,7 +83,6 @@ interface SessionConn {
 // ui.html owns the sockets, so the port is the natural stable key. approvedTokens (above) stays a
 // flat module Set — sticky approval keys on the minted TOKEN, not the connection, so it must
 // outlive any single port's connection entry (Slice 2.1b).
-type ConnKey = number;
 const connections = new Map<ConnKey, SessionConn>();
 
 // Who holds the driving baton — the approved session whose write ran most recently. It is a LABEL
@@ -117,69 +124,10 @@ function mintToken(): string {
   );
 }
 
-interface InboundMessage {
-  id?: string;
-  type?: string;
-  [key: string]: unknown;
-}
-
-// Everything needed to reply to one inbound message, derived from it once at dispatch:
-// the correlation `id`, the opaque routing metadata to echo back, and `connKey` — the local
-// source-port tag ui.html attached, stamped back onto the reply so ui.html sends it on the right
-// socket. Bundled so every handler threads a single value instead of three co-varying params.
-interface ReplyTo {
-  id: string | undefined;
-  echo: Record<string, unknown>;
-  connKey: ConnKey | undefined;
-}
-
-// The inbound keys this plugin version actually consumes. Everything else is opaque
-// routing metadata a newer server may attach (e.g. a future `sessionId` a broker uses
-// to fan out across sessions) — we echo those keys back untouched on the reply so the
-// server can correlate without ANY plugin change. This is the forward-compat pre-invest
-// that keeps the eventual multi-session upgrade server-only.
-//
-// `__connKey` is the local-only exception: ui.html adds it to tag a message's source socket, and
-// it MUST be in this set so replyTarget keeps it OUT of the echoed metadata — otherwise the
-// frozen-envelope echo would ride this routing key back onto the WS (ui.html strips it too, but
-// registering it here is the first half of the belt-and-suspenders the Phase 3 warning demands).
-const KNOWN_INBOUND_KEYS = new Set([
-  "id",
-  "type",
-  "code",
-  "nodeId",
-  "key",
-  "scale",
-  "payload",
-  "message",
-  "identity",
-  "pairingCode",
-  "sessionToken",
-  "__connKey",
-]);
-
-/** The source-port tag ui.html attached, or undefined if absent — one parse site for the routing
- * key, so the "is it a number" check and its absent-sentinel are defined once. */
-function connKeyOf(msg: InboundMessage): ConnKey | undefined {
-  return typeof msg.__connKey === "number" ? msg.__connKey : undefined;
-}
-
-function replyTarget(msg: InboundMessage): ReplyTo {
-  const echo: Record<string, unknown> = {};
-  for (const key of Object.keys(msg)) {
-    if (!KNOWN_INBOUND_KEYS.has(key)) echo[key] = msg[key];
-  }
-  return { id: msg.id, echo, connKey: connKeyOf(msg) };
-}
-
-/**
- * The single reply path. Spreads echoed routing metadata first, the reply body next, and stamps
- * the correlation `id` and `__connKey` last so neither can clobber them — every reply carries the
- * id back (frozen-envelope Invariant) and the source-port tag so ui.html routes it to the right
- * socket. `__connKey` is LOCAL: it never reaches a server because ui.html strips it before ws.send.
- */
+/** The single reply path — the envelope's shape (and what it deliberately does NOT carry over from
+ * the request) lives in reply-envelope.ts; this is just the postMessage that sends it. */
 function reply(to: ReplyTo, body: Record<string, unknown>): void {
-  figma.ui.postMessage({ ...to.echo, ...body, id: to.id, __connKey: to.connKey });
+  figma.ui.postMessage(replyEnvelope(to, body));
 }
 
 // First-run orientation. The session list shows a one-time explainer (what the plugin does; "only
