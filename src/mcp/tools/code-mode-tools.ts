@@ -1,8 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { PluginBridgeRuntime } from "~/services/plugin-bridge/index.js";
-import { fetchAndProcessImage } from "~/services/plugin-bridge/images.js";
-import { executeWithImages, type GatedResult } from "~/services/plugin-bridge/execute.js";
+import { executeAgentCode, type GatedResult } from "~/services/plugin-bridge/execute.js";
 import {
   requestUntilApproved,
   isPendingApproval,
@@ -164,18 +163,15 @@ export function registerCodeModeTools(
       async ({ code }) => {
         const refused = skewRefusal();
         if (refused) return refused;
-        // Correlation ids and the "no plugin connected" rejection are owned by PluginBridge; the image
-        // fetch + re-execute two-pass is owned by executeWithImages — this handler wires the real
-        // bridge/gate/fetch seams and shapes the outcome into a tool reply.
-        const outcome = await executeWithImages(code, {
-          // Hold the call open across the human's Allow rather than returning "not approved yet" for the
-          // agent to retry — see requestUntilApproved. Both passes go through it, but only the first can
-          // actually wait: the image re-run fires only after a pass RAN to produce imagesNeeded, which
-          // proves the session is already approved.
+        // Correlation ids and the "no plugin connected" rejection are owned by PluginBridge; mid-run
+        // image fetches ride the bridge underneath the single execute (serveImagesRequest) — this
+        // handler wires the real bridge/gate seams and shapes the outcome into a tool reply.
+        const outcome = await executeAgentCode(code, {
+          // Hold the call open across the human's Allow rather than returning "not approved yet" for
+          // the agent to retry — see requestUntilApproved.
           request: (c) =>
             requestUntilApproved(() => bridge.request({ type: "EXECUTE_CODE", code: c })),
           gate: gateResult,
-          fetchImage: fetchAndProcessImage,
         });
         if (outcome.kind === "gated") return outcome.result;
         if (outcome.kind === "error") {

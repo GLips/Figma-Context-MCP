@@ -1,8 +1,8 @@
 // The trusted server-side image fetch — the ONE network trust boundary in the write path. The Figma
 // sandbox holds manifest allowedDomains:["none"] and can reach nothing, so agent-authored `flcm.image(url)`
-// fills are inert until this module fetches, validates, and downscales the bytes; the executor then injects
-// them back into the sandbox (globalThis.__flcmImageBytes) and re-runs the code (see index.ts). Because the
-// model picks the url, every guard here defends against a hostile one: SSRF ranges, byte-size, payload type.
+// fills are inert until this module fetches, validates, and downscales the bytes; the bridge answers the
+// sandbox's mid-run IMAGES_REQUEST with them (see image-requests.ts). Because the model picks the url,
+// every guard here defends against a hostile one: SSRF ranges, byte-size, payload type.
 //
 // Ported in spirit from production figma-mcp (downloadAndProcessImage/jimp), but the guard is net-new:
 // figma-mcp only ever fetches from Figma's own trusted CDN, so it has no SSRF/type defense to port. jimp is
