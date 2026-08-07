@@ -332,6 +332,10 @@ export function createFigmaMock() {
   // The user's current selection — what flcm.selection() reads. A plain array a scenario sets directly
   // (figma.currentPage.selection = [node, …]); empty by default, like a fresh page.
   page.selection = [];
+  // Under `documentAccess: dynamic-page` a PageNode must be loadAsync'd before exportAsync reads it.
+  // The current page is always loaded in live Figma, so this resolves immediately — it exists so a
+  // caller that correctly awaits it isn't punished by the mock for doing the right thing.
+  page.loadAsync = async () => {};
 
   const figma = {
     mixed: MIXED,

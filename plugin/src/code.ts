@@ -441,11 +441,14 @@ figma.ui.onmessage = (msg: InboundMessage) => {
   } else if (msg.type === "SCREENSHOT") {
     if (gateWrite(to))
       enqueueWrite(() =>
-        screenshot(to, {
-          nodeId: typeof msg.nodeId === "string" ? msg.nodeId : undefined,
-          key: typeof msg.key === "string" ? msg.key : undefined,
-          scale: typeof msg.scale === "number" ? msg.scale : undefined,
-        }),
+        screenshot(
+          to,
+          {
+            nodeId: typeof msg.nodeId === "string" ? msg.nodeId : undefined,
+            key: typeof msg.key === "string" ? msg.key : undefined,
+          },
+          typeof msg.scale === "number" ? msg.scale : undefined,
+        ),
       );
   } else if (msg.type === "GET_VERSION") {
     // Server-initiated version handshake. The constants live here in the sandbox (not in
@@ -545,15 +548,18 @@ async function executeCode(to: ReplyTo, code: string): Promise<void> {
  * safeSerialize guards against for nodes). QuickJS has no Buffer, so we use the
  * sandbox's own `figma.base64Encode` to get a clean string across the wire.
  */
-async function screenshot(to: ReplyTo, target: ScreenshotTarget): Promise<void> {
+async function screenshot(
+  to: ReplyTo,
+  target: ScreenshotTarget,
+  scale: number | undefined,
+): Promise<void> {
   try {
     const node = await resolveScreenshotTarget(target);
     if (!("exportAsync" in node)) throw new Error(`Node ${node.type} (${node.id}) is not exportable`);
-    const bytes = await node.exportAsync(
-      target.scale === undefined
-        ? { format: "PNG" }
-        : { format: "PNG", constraint: { type: "SCALE", value: target.scale } },
-    );
+    const bytes = await node.exportAsync({
+      format: "PNG",
+      constraint: { type: "SCALE", value: scale ?? 1 },
+    });
     reply(to, { type: "SCREENSHOT_RESULT", image: figma.base64Encode(bytes) });
   } catch (err) {
     reply(to, { type: "SCREENSHOT_RESULT", errors: formatError(err) });

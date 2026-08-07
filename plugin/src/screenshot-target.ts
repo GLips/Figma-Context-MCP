@@ -9,7 +9,6 @@ import { readKey } from "./preamble/identity.js";
 export interface ScreenshotTarget {
   nodeId?: string;
   key?: string;
-  scale?: number;
 }
 
 /**
@@ -28,7 +27,15 @@ export async function resolveScreenshotTarget({ nodeId, key }: ScreenshotTarget)
     if (!node) throw new Error(`No node found with id ${nodeId}`);
     return node;
   }
-  if (key === undefined) return figma.currentPage;
+  if (key === undefined) {
+    // [verified] @figma/plugin-typings 1.133.0 on ExportMixin.exportAsync: under
+    // `documentAccess: dynamic-page` — which this plugin's manifest declares — exporting a PageNode
+    // requires loadAsync() first. currentPage is always loaded, so this is very likely a no-op, but
+    // the typing states the requirement unconditionally and loadAsync on a loaded page costs nothing.
+    // Cheaper to call it than to leave the whole-page default resting on an untested exemption.
+    await figma.currentPage.loadAsync();
+    return figma.currentPage;
+  }
   const matches = figma.currentPage.findAll((n) => readKey(n) === key);
   if (!matches.length) {
     throw new Error(

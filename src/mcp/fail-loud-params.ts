@@ -38,10 +38,12 @@ export function registerFailLoudTool<Shape extends z.ZodRawShape>(
   return server.registerTool(
     name,
     { description: config.description, inputSchema: z.looseObject(config.inputSchema) },
-    async (args: Record<string, unknown>) => {
+    // The intersection IS the loose parse's output: the tool's own params plus whatever unknown keys
+    // survived — so the filter below has something to read and the handler takes `args` unchanged.
+    async (args: z.infer<z.ZodObject<Shape>> & Record<string, unknown>) => {
       const unknown = Object.keys(args).filter((key) => !known.includes(key));
       if (unknown.length) return unknownParamReply(name, unknown, known);
-      return handler(args as z.infer<z.ZodObject<Shape>>);
+      return handler(args);
     },
   );
 }
@@ -57,22 +59,20 @@ export function retryableToolReply(text: string): CallToolResult {
 }
 
 function unknownParamReply(tool: string, unknown: string[], known: string[]): CallToolResult {
+  const several = unknown.length > 1;
   const named = unknown.map((k) => `"${k}"`).join(", ");
-  const suggestions = unknown
-    .map((bad) => {
-      const match = known.find((k) => normalizeParamName(k) === normalizeParamName(bad));
-      // With one bad key the pairing is obvious from the sentence; with several, spell out which is which.
-      return match ? (unknown.length > 1 ? `"${bad}" → "${match}"` : `"${match}"`) : null;
-    })
-    .filter((s): s is string => s !== null);
+  const suggestions = unknown.flatMap((bad) => {
+    const match = known.find((k) => normalizeParamName(k) === normalizeParamName(bad));
+    if (!match) return [];
+    // With one bad key the pairing is obvious from the sentence; with several, spell out which is which.
+    return several ? `"${bad}" → "${match}"` : `"${match}"`;
+  });
   const didYouMean = suggestions.length ? ` Did you mean ${suggestions.join(", ")}?` : "";
-  const valid = known.length
-    ? `Valid parameter${known.length > 1 ? "s" : ""}: ${known.join(", ")}.`
-    : "It takes no parameters.";
+  const valid = `Valid parameter${known.length > 1 ? "s" : ""}: ${known.join(", ")}.`;
   return retryableToolReply(
-    `${tool} received unknown parameter${unknown.length > 1 ? "s" : ""} ${named}, so this call ` +
-      `did not run.${didYouMean} ${valid} This is NOT a failure: retry this exact call with the ` +
-      `parameter name${unknown.length > 1 ? "s" : ""} corrected.`,
+    `${tool} received unknown parameter${several ? "s" : ""} ${named}, so this call did not run.` +
+      `${didYouMean} ${valid} This is NOT a failure: retry this exact call with the parameter ` +
+      `name${several ? "s" : ""} corrected.`,
   );
 }
 
