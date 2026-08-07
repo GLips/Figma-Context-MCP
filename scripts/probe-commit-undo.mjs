@@ -4,21 +4,29 @@
 // headless harness can answer this; the mock has no undo history.
 //
 // What it grounds (the plan marks the contract [directional] until this passes):
-//   1. ROLLBACK — figma.triggerUndo() reverts to the LAST figma.commitUndo() state, so a failed
-//      verb erases exactly its own writes: foreign raw writes made BEFORE the verb's entry seal
-//      survive, including on a session's first verb (scenario 1).
+//   1. ROLLBACK — a failed verb can erase exactly its own writes, leaving foreign writes made
+//      BEFORE its entry seal intact. Two candidate shapes, probed independently: BARE (scenario 1:
+//      triggerUndo directly over the verb's uncommitted trailing writes) and COMMIT-THEN-UNDO
+//      (scenario 1b: seal the partial writes into their own step, then pop it). Invariant 2 needs
+//      at least one to hold; slice 2.3 builds whichever measured true.
 //   2. CHUNKING — two verbs each emitting [entry seal → writes → success commit] cost the user ONE
 //      undo step each: adjacent commits don't mint empty steps (scenario 2), and the per-verb
 //      steps hold ACROSS runs in one plugin session (scenario 3).
+//
+// Each scenario proves its own setup (a `pre` liveness sample) before asserting anything about
+// undo — a creation failure and a broken rollback otherwise both read as "everything false", and
+// the first live run returned exactly that uniform nothing. "PRECONDITION NOT MET" is a distinct
+// verdict from "rollback is broken".
 //
 // Runbook (no plugin rebuild needed — the probe speaks raw figma.*):
 //   1. Open the Framelink plugin in a SCRATCH Figma file (the probe drives real undo history).
 //   2. pnpm probe:commit-undo
 //   3. When the plugin strip shows this session, click Allow.
 //
-// Run it in a SCRATCH file, really: the probe triggers at most 4 undos, each only after a
-// probe-owned commitUndo seal — but seal semantics are exactly the thing under test, so a FAIL
-// verdict means that bound may not have held and an undo may have reached the file's own history.
+// Run it in a SCRATCH file, really: the probe triggers at most 12 undos (1 each in scenarios
+// 1/1b; the capped counting loops in 2/3 walk up to 5 each), every one after a probe-owned
+// commitUndo seal — but seal semantics are exactly the thing under test, so a FAIL verdict means
+// that bound may not have held and an undo may have reached the file's own history.
 // On a normal exit (PASS or FAIL) every probe node is removed and the removal committed; a probe
 // that dies mid-scenario leaves nodes named "flcm-undo-probe-*" to delete by hand.
 //
@@ -26,7 +34,10 @@
 // the canvas may be partially applied; re-read before reasoning). Record the verdict below and the
 // observed matrix in the plan; slice 2.3's seal placement is built from it.
 //
-// Live verdict: (pending — record PASS/FAIL + date + the observed matrix here after each run)
+// Live verdict: SPLIT as of 2026-08-07 run 1 (pre-precondition probe) — CHUNKING CONFIRMED
+// (s2 {undosForB:1, aSurvivedB:true, undosForA:1}; s3 {undosForY:1, xSurvivedY:true, undosForX:1});
+// bare rollback reported all-false but that run could not distinguish setup failure from broken
+// undo. Re-run pending with preconditions + scenario 1b; record the settled matrix here.
 
 import { PluginBridge } from "../src/services/plugin-bridge/bridge.ts";
 import { WS_PORT_BLOCK } from "../src/services/plugin-bridge/ports.ts";
@@ -55,20 +66,43 @@ const undosToRemove = async (id, cap) => {
 };
 `;
 
-// Scenario 1 — rollback to the entry seal, with foreign writes sealed before the verb. `foreign`
-// stands in for anything the verb didn't write (a human's edit, raw figma.* between verbs, or a
-// first verb's empty history): rollback must never erase it.
+// Scenario 1 — bare rollback to the entry seal, with foreign writes sealed before the verb.
+// `foreign` stands in for anything the verb didn't write (a human's edit, raw figma.* between
+// verbs, or a first verb's empty history): rollback must never erase it.
 const SCENARIO_1 = HELPERS + `
 const ids = {};
 ids.foreign = mk("flcm-undo-probe-foreign");
+const foreignBorn = await alive(ids.foreign);
 figma.commitUndo();                       // the verb's ENTRY seal
 ids.own1 = mk("flcm-undo-probe-own1");    // the verb's own writes
 ids.own2 = mk("flcm-undo-probe-own2");
+const pre = await sample(ids);            // prove the setup, or return a distinct verdict
+if (!foreignBorn || !pre.foreign || !pre.own1 || !pre.own2) return { precondition: { foreignBorn, pre } };
 figma.triggerUndo();                      // the failure path: roll back to the entry seal
 const now = await sample(ids);
 await tick(100);
 const later = await sample(ids);
-return { now, later };
+return { pre, now, later };
+`;
+
+// Scenario 1b — the same failed verb, but the rollback path SEALS the partial writes first and
+// then undoes that one step ("commit-then-undo"). Scenario 1 is the only sequence that triggers
+// undo over UNCOMMITTED trailing writes; this variant rides the committed-step semantics scenario
+// 2 measures. If 1 fails and 1b holds, invariant 2's rollback is implementable — the failure path
+// just commits before triggering.
+const SCENARIO_1B = HELPERS + `
+const ids = {};
+ids.foreign = mk("flcm-undo-probe-1b-foreign");
+figma.commitUndo();                       // the verb's ENTRY seal
+ids.own1 = mk("flcm-undo-probe-1b-own1");
+ids.own2 = mk("flcm-undo-probe-1b-own2");
+const pre = await sample(ids);
+if (!pre.foreign || !pre.own1 || !pre.own2) return { precondition: { pre } };
+figma.commitUndo();                       // seal the failed verb's writes into their own step
+figma.triggerUndo();                      // pop exactly that step
+await tick(100);
+const later = await sample(ids);
+return { pre, later };
 `;
 
 // Scenario 2 — per-verb chunking within one run: two verbs exactly as the contract will emit them,
@@ -163,30 +197,64 @@ async function runProbe() {
   try {
     const findings = [];
     let pass = true;
+    // Which rollback shape holds: "bare" (triggerUndo over uncommitted writes), "commit-then-undo"
+    // (seal first, then trigger), or null. Invariant 2 needs SOME shape; slice 2.3 builds the one
+    // that measured true.
+    let rollbackShape = null;
 
-    // Scenario 1: rollback.
+    // Scenario 1: bare rollback.
     const s1 = await exec(SCENARIO_1);
-    const rollback = s1.later.foreign === true && s1.later.own1 === false && s1.later.own2 === false;
-    const syncApply = s1.now.own1 === false && s1.now.own2 === false;
-    log(`scenario 1 (rollback): now=${JSON.stringify(s1.now)} later=${JSON.stringify(s1.later)}`);
-    if (rollback) {
+    log(`scenario 1 (bare rollback): ${JSON.stringify(s1)}`);
+    let setupBroken = false;
+    let undoInert = false;
+    if (s1.precondition) {
+      // A distinct verdict from "rollback is broken": the setup writes never became observable,
+      // so this scenario measured nothing about undo.
+      pass = false;
+      setupBroken = true;
       findings.push(
-        `rollback: triggerUndo reverted exactly the verb's own writes (foreign write survived); ` +
-          `applies ${syncApply ? "synchronously in-run" : "only after a tick — rollback paths must await one"}.`,
+        `scenario 1 PRECONDITION NOT MET (${JSON.stringify(s1.precondition)}) — creation/readback failed before any undo was triggered; rollback is UNVERDICTED. Fix the probe or the figma.* path first.`,
+      );
+    } else if (s1.later.foreign === true && s1.later.own1 === false && s1.later.own2 === false) {
+      rollbackShape = "bare";
+      const syncApply = s1.now.own1 === false && s1.now.own2 === false;
+      findings.push(
+        `rollback (bare triggerUndo): reverted exactly the verb's own writes; applies ${syncApply ? "synchronously in-run" : "only after a tick — rollback paths must await one"}.`,
       );
     } else {
-      pass = false;
-      findings.push(`rollback FAILED: observed ${JSON.stringify(s1.later)} — a failed verb cannot cleanly revert. Fall back to invariant 2's honest partial-state error contract.`);
+      undoInert = s1.later.foreign === true && s1.later.own1 === true && s1.later.own2 === true;
+      findings.push(
+        `rollback (bare triggerUndo) FAILED: later=${JSON.stringify(s1.later)} — ` +
+          (undoInert
+            ? "triggerUndo did not apply in-run at all."
+            : "the undo reached past the entry seal (foreign write erased) or reverted partially."),
+      );
     }
 
-    if (!rollback && s1.later.own1 === true) {
-      // triggerUndo never applied in-run at all — the counting loops below would walk blind into
-      // real history. Bail to cleanup with the one finding that matters.
+    if (setupBroken || undoInert) {
       pass = false;
-      findings.push(
-        "triggerUndo did not apply within the run — scenarios 2/3 skipped; the whole in-run rollback design needs rethinking (multi-run probing next).",
-      );
+      findings.push("scenarios 1b/2/3 skipped — their counting loops would walk blind without working in-run creation + undo.");
     } else {
+      // Scenario 1b: commit-then-undo rollback — the implementable shape if bare failed.
+      const s1b = await exec(SCENARIO_1B);
+      log(`scenario 1b (commit-then-undo): ${JSON.stringify(s1b)}`);
+      if (s1b.precondition) {
+        pass = false;
+        findings.push(`scenario 1b PRECONDITION NOT MET (${JSON.stringify(s1b.precondition)}) — unverdicted.`);
+      } else if (s1b.later.foreign === true && s1b.later.own1 === false && s1b.later.own2 === false) {
+        if (!rollbackShape) rollbackShape = "commit-then-undo";
+        findings.push(
+          "rollback (commit-then-undo): sealing the failed writes then one triggerUndo reverted exactly them — invariant 2's failure path is implementable as commit-then-undo.",
+        );
+      } else {
+        findings.push(`rollback (commit-then-undo) FAILED: later=${JSON.stringify(s1b.later)}.`);
+      }
+      if (!rollbackShape) {
+        pass = false;
+        findings.push(
+          "NO rollback shape holds — invariant 2 falls back to the honest partial-state error contract (a failed verb reports the canvas may be partially applied).",
+        );
+      }
       // Scenario 2: per-verb chunking in one run, counted (1 undo per verb = clean; 2 for the
       // older verb = an empty step hides between adjacent commits).
       const s2 = await exec(SCENARIO_2);
@@ -223,8 +291,9 @@ async function runProbe() {
     for (const f of findings) console.log(`  • ${f}`);
     if (pass) {
       console.log(
-        "\nInvariant 2's rollback and invariant 4's one-undo-step-per-verb are CONFIRMED live — " +
-          "record the [directional] markers as [verified] in the plan.",
+        `\nRollback shape: ${rollbackShape}. Invariant 2's rollback (via that shape) and invariant 4's ` +
+          "one-undo-step-per-verb are CONFIRMED live — record the [directional] markers as [verified] " +
+          "in the plan, naming the shape slice 2.3 must build.",
       );
     } else {
       console.log("\nRecord the observed matrix in the plan and shape slice 2.3's seal placement from it.");
