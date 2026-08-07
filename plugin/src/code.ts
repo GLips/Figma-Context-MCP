@@ -124,19 +124,18 @@ interface InboundMessage {
 }
 
 /**
- * Everything needed to reply to one inbound message, derived from it once at dispatch: the
- * correlation `id`, and `connKey` — the local source-port tag ui.html attached, stamped back onto
- * the reply so ui.html sends it out on the socket the message arrived on.
+ * Everything a reply inherits from its request, derived once at dispatch: the correlation `id`, and
+ * `connKey` — the local source-port tag ui.html attached, stamped back so the reply goes out on the
+ * socket the request arrived on.
  *
- * Negative space: nothing else from the inbound message reaches the reply, and there is deliberately
- * no pass-through namespace to put it in. The server correlates purely by `id`, and each session
- * already has its own socket (ui.html holds one per block port), so no message-level routing tag is
- * needed. Keeping a reply a function of the handler's body alone is what makes it structurally
- * impossible for a field the sandbox CONSUMES to ride back out onto the wire as if a newer server
- * had attached it — don't reintroduce a general echo without a consumer that demands one.
+ * Negative space: nothing else crosses over, and there is deliberately no pass-through namespace to
+ * put it in. The server correlates by `id` alone, and each session already has its own socket, so a
+ * reply being a function of the handler's body is what makes it structurally impossible for a field
+ * the sandbox CONSUMES to ride back out as if a newer server had attached it. Don't reintroduce a
+ * general echo without a consumer that demands one.
  */
 interface ReplyTo {
-  id: string | undefined;
+  id: string;
   connKey: ConnKey | undefined;
 }
 
@@ -146,16 +145,10 @@ function connKeyOf(msg: InboundMessage): ConnKey | undefined {
   return typeof msg.__connKey === "number" ? msg.__connKey : undefined;
 }
 
-/** The single derivation site: the two — and only two — things a reply inherits from its request. */
-function replyTarget(msg: InboundMessage): ReplyTo {
-  return { id: msg.id, connKey: connKeyOf(msg) };
-}
-
 /**
- * The single reply path: the handler's body, with the correlation `id` and `__connKey` stamped last
- * so a body field can't clobber either — every reply carries the id back (frozen-envelope Invariant)
- * and the source-port tag so ui.html routes it to the right socket. `__connKey` is LOCAL: it never
- * reaches a server, because ui.html strips it before ws.send.
+ * The single reply path: the handler's body, with the correlation `id` (the frozen-envelope
+ * Invariant) and the source-port tag stamped last so a body field can't clobber either.
+ * `__connKey` is LOCAL — ui.html strips it before ws.send, so it never reaches a server.
  */
 function reply(to: ReplyTo, body: Record<string, unknown>): void {
   figma.ui.postMessage({ ...body, id: to.id, __connKey: to.connKey });
@@ -408,7 +401,7 @@ figma.ui.onmessage = (msg: InboundMessage) => {
     }
     return;
   }
-  const to = replyTarget(msg);
+  const to: ReplyTo = { id: msg.id, connKey: connKeyOf(msg) };
   if (msg.type === "PING") {
     // Smoke test: echo back, including a live `figma.*` read to prove the API is
     // reachable from inside the sandbox (not just that the bytes round-tripped).

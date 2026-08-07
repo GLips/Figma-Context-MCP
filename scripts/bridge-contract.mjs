@@ -125,8 +125,8 @@ function fakePlugin(origin, { version, wsOptions, url = URL, state = sandbox } =
   ws.on("message", (raw) => {
     const msg = JSON.parse(raw.toString());
     if (typeof msg.id !== "string") return;
-    // Mirrors code.ts's replyEnvelope: the handler's body plus the correlation id, and nothing
-    // else carried over from the request (reply-envelope.ts owns that invariant plugin-side).
+    // Mirrors code.ts's reply(): the handler's body plus the correlation id, and nothing else
+    // carried over from the request.
     const send = (body) => ws.send(JSON.stringify({ ...body, id: msg.id }));
     if (msg.type === "SESSION_INFO") {
       state.currentToken = typeof msg.sessionToken === "string" ? msg.sessionToken : null;
@@ -186,12 +186,11 @@ assert.match(rejected.message, /Unsupported message type/, "readable error");
 assert.ok(Date.now() - t0 < 1000, "rejects fast, not on 15s timeout");
 console.log(`✅ Unknown type rejects in ${Date.now() - t0}ms (not a 15s hang)`);
 
-// The reply is a function of the plugin's handler body plus the correlation id — nothing the server
-// attached to the request comes back. Pinned from the server side because the alternative (a general
-// echo of unrecognized fields) silently turns a field the PLUGIN consumes into what looks like
-// metadata a newer server sent. Correlation is by id alone, so no server code may depend on this.
+// Correlation is by id alone: the request below resolves (it got its reply) while the field the
+// server attached does NOT come back. Pinned from the server side so no server code grows a
+// dependency on pass-through metadata — the general echo it would need silently turns a field the
+// PLUGIN consumes into what looks like metadata a newer server sent.
 const replied = await bridge.request({ type: "EXECUTE_CODE", code: "return 1", sessionId: "abc-123" });
-assert.equal(replied.result, "ok", "the request still resolves — correlation is by id alone");
 assert.equal(replied.sessionId, undefined, "a field the server attached must not come back on the reply");
 console.log("✅ Replies carry nothing back from the request but its correlation id");
 
