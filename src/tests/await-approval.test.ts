@@ -106,6 +106,32 @@ describe("holding a gated call open across the human's Allow", () => {
     expect(clock.now()).toBe(0); // never slept
   });
 
+  it("lets a reconnecting plugin land before the first send, instead of reporting none connected", async () => {
+    const clock = fakeClock();
+    // The server restarted: the relay is bound and holds the reloaded token, but ui.html hasn't
+    // redialed yet, so a send right now would hit the bridge's hard rejection.
+    let pluginConnected = false;
+    let calls = 0;
+    const send = async () => {
+      calls += 1;
+      if (!pluginConnected) throw new Error("No Figma plugin connected.");
+      return { result: "ok", console: [], errors: null };
+    };
+
+    const reply = await requestUntilApproved(send, {
+      now: clock.now,
+      sleep: clock.sleep,
+      awaitPluginConnection: async () => {
+        pluginConnected = true;
+      },
+    });
+
+    expect(reply).toEqual({ result: "ok", console: [], errors: null });
+    // One send, and none of the human's approval budget spent on the machine's reconnect.
+    expect(calls).toBe(1);
+    expect(clock.now()).toBe(0);
+  });
+
   it("surfaces the transport error, not a consent message, when the wait ends with the plugin gone", async () => {
     const clock = fakeClock();
     let calls = 0;

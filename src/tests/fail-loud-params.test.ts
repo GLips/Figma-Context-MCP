@@ -17,6 +17,8 @@ function connectedServer(request = vi.fn().mockResolvedValue({ image: "iVBORw0KG
     getPairingCode: () => "1234",
     getSkewNote: () => null,
     touchApproval: () => {},
+    // A plugin is already connected in these tests, so the post-restart reconnect wait is a no-op.
+    waitForPluginConnection: () => Promise.resolve(),
   } as unknown as PluginBridge;
   const runtime: PluginBridgeRuntime = {
     bridge,

@@ -134,6 +134,11 @@ export class PluginBridge {
   // The winning WebSocketServer, retained only so `stop()` can close it (free the port). The relay is
   // otherwise process-lifetime; stop() exists for tests that model a restart by freeing then rebinding.
   private wss: WebSocketServer | null = null;
+  // Callers parked in `waitForPluginConnection` — code-mode calls that arrived while no socket was up.
+  // Drained by the connection handler. Each waiter also owns a timeout and settles at most once, so a
+  // waiter whose bound expired before any plugin arrived is inert rather than stranded; it is dropped
+  // on the next drain. Empty in the steady state — the wait short-circuits when a plugin is connected.
+  private connectWaiters: (() => void)[] = [];
 
   // How long a pending request may sit with no run traffic before it is cancelled (see
   // DEFAULT_TIMEOUT_MS). Set once at construction.
@@ -250,7 +255,9 @@ export class PluginBridge {
       // sibling on another port, or a restart that landed elsewhere, reloads nothing (fail-closed).
       this.sessionToken = this.store.load(port, Date.now());
       if (this.sessionToken)
-        Logger.log("Reloaded a persisted session approval — a prior Allow still holds");
+        Logger.log(
+          "Reloaded a persisted session token — it will be offered on the next SESSION_INFO; the plugin decides whether the prior Allow still holds",
+        );
       // Install the heartbeat here in `listening` (not eagerly in tryBind) so only the server that
       // WON its bind gets one — a probe that lost to EADDRINUSE never reaches here. unref'd and never
       // cleared: it lives for the whole process, like the bridge itself. (What it reaps: see HEARTBEAT_INTERVAL_MS.)
@@ -314,6 +321,47 @@ export class PluginBridge {
       }
       Logger.log("Plugin connected to WS bridge");
       onConnect?.();
+      // Release the parked calls LAST, after onConnect has queued SESSION_INFO on this socket — see
+      // waitForPluginConnection for why that ordering is the point.
+      const waiters = this.connectWaiters;
+      this.connectWaiters = [];
+      for (const release of waiters) release();
+    });
+  }
+
+  /**
+   * Resolve as soon as a plugin socket is up, or after `timeoutMs` if none arrives — the window a
+   * code-mode call has to survive across a SERVER RESTART.
+   *
+   * Why this exists: the plugin's ui.html redials on a ~1s cadence, so a restarted server binds its
+   * port (reloading the persisted approval token) a beat or two BEFORE the plugin is back. Measured on
+   * a dev-watch rebuild: port free at t=2.1s, server listening at t=3.1s, plugin socket back at t=5.9s.
+   * A call landing in that gap hit `request()`'s hard "No Figma plugin connected" rejection, which
+   * tells the agent the plugin isn't open — the wrong instruction, and one whose obvious remedy (close
+   * and reopen the plugin) clears the sandbox's in-memory approvedTokens and costs a real, avoidable
+   * Allow. The approval never lapsed; the call was just early. Waiting the gap out is the whole fix.
+   *
+   * Bounded, never open-ended: nothing guarantees a plugin will ever connect, and the caller is
+   * spending one MCP request's budget. Past the bound the caller sends anyway and gets the honest
+   * rejection, which is the right answer when no plugin really is open.
+   *
+   * ORDERING IS LOAD-BEARING: waiters are released from the connection handler AFTER `onConnect`, so
+   * SESSION_INFO — carrying the reloaded token — is already queued on the new socket when the parked
+   * call sends. The sandbox therefore binds the token before it gates the write, and a call that
+   * waited can't beat its own re-approval to the gate.
+   */
+  waitForPluginConnection(timeoutMs: number): Promise<void> {
+    if (this.socket && this.socket.readyState === WebSocket.OPEN) return Promise.resolve();
+    return new Promise((resolve) => {
+      let settled = false;
+      const settle = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve();
+      };
+      const timer = setTimeout(settle, timeoutMs);
+      this.connectWaiters.push(settle);
     });
   }
 

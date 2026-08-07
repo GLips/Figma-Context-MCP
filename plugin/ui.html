@@ -237,6 +237,16 @@
       var BASE_RECONNECT_MS = 1000;
       var MAX_RECONNECT_MS = 15000;
       var reconnectDelays = {};
+      // Ports that have EVER hosted a real session, so they are exempt from the backoff for good.
+      // Resetting the delay in `onopen` alone did NOT deliver the fast cadence promised above: when a
+      // server restarts, the first retry lands in the rebuild gap (the port is genuinely unbound for a
+      // second or two), that socket never opens, and the doubling kicks in — pushing a port we KNOW
+      // hosts a server onto the 15s cadence at the one moment it must be rediscovered promptly. The
+      // window that opens is the whole bug behind "a call right after a save demands a fresh Allow"
+      // (server side: PluginBridge.waitForPluginConnection). The cost is one un-mutable console line
+      // per second for a session that has ended for good — bounded by ports that actually had a
+      // server, never the ~14 empty ones the backoff was written for.
+      var everOpened = {};
 
       function connect(port) {
         var ws = new WebSocket("ws://localhost:" + port);
@@ -249,7 +259,8 @@
         ws.onopen = function () {
           opened = true;
           // A real server lives here — keep this port on the fast cadence so it rediscovers quickly if
-          // the server drops/restarts.
+          // the server drops/restarts, now and on every later retry (see everOpened).
+          everOpened[port] = true;
           reconnectDelays[port] = BASE_RECONNECT_MS;
           // Tell the sandbox a FRESH connection opened on THIS port so it drops any binding from the
           // previous socket on it. A different local server can grab a freed port; without this reset
@@ -275,9 +286,11 @@
           // yet bind it (discovery is the same persistent relay).
           if (opened) {
             parent.postMessage({ pluginMessage: { type: "WS_CLOSED", __connKey: port } }, "*");
-          } else {
-            // Never opened ⇒ presumed-empty port: double the backoff (capped) so its doomed retries —
-            // and the un-mutable console line each one emits — slow to a trickle instead of 1/sec.
+          } else if (!everOpened[port]) {
+            // Never opened, and no server has ever lived here ⇒ presumed-empty port: double the backoff
+            // (capped) so its doomed retries — and the un-mutable console line each one emits — slow to
+            // a trickle instead of 1/sec. A port that HAS hosted a session skips this and stays fast,
+            // even while its server is mid-restart and unbindable.
             var prev = reconnectDelays[port] || BASE_RECONNECT_MS;
             reconnectDelays[port] = Math.min(prev * 2, MAX_RECONNECT_MS);
           }

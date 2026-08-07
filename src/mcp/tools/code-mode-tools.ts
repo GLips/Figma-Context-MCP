@@ -5,6 +5,7 @@ import {
   requestUntilApproved,
   isPendingApproval,
   APPROVAL_WAIT_MS,
+  PLUGIN_CONNECT_WAIT_MS,
 } from "~/services/plugin-bridge/await-approval.js";
 import type { ServerTransport } from "~/mcp/index.js";
 import { registerFailLoudTool, retryableToolReply } from "~/mcp/fail-loud-params.js";
@@ -69,6 +70,17 @@ export function registerCodeModeTools(
   { codeMode, transport }: CodeModeToolsOptions,
 ): void {
   const { bridge } = runtime;
+
+  /**
+   * Every write-path request goes out through both holds, wired to this bridge: first the post-restart
+   * reconnect wait (a call can arrive before the plugin has redialed the freshly bound relay), then the
+   * approval hold across the human's Allow. One place, so the two write tools can't drift on either.
+   */
+  function requestHeldOpen(send: () => Promise<unknown>): Promise<unknown> {
+    return requestUntilApproved(send, {
+      awaitPluginConnection: () => bridge.waitForPluginConnection(PLUGIN_CONNECT_WAIT_MS),
+    });
+  }
 
   /**
    * The sandbox gates a write exactly ONE way — consent — and the gate is RETRYABLE (deliberately not
@@ -181,11 +193,9 @@ export function registerCodeModeTools(
         if (refused) return refused;
         // Correlation ids and the "no plugin connected" rejection are owned by PluginBridge; mid-run
         // image fetches ride the bridge underneath this single execute (serveImagesRequest). The
-        // wait holds the call open across the human's Allow rather than returning "not approved
-        // yet" for the agent to retry — see requestUntilApproved.
-        const raw = await requestUntilApproved(() =>
-          bridge.request({ type: "EXECUTE_CODE", code }),
-        );
+        // wait holds the call open across a plugin reconnect and then across the human's Allow,
+        // rather than returning "not approved yet" for the agent to retry — see requestHeldOpen.
+        const raw = await requestHeldOpen(() => bridge.request({ type: "EXECUTE_CODE", code }));
         const gated = gateResult(raw);
         if (gated) return gated;
         const reply = ExecuteCodeReply.parse(raw);
@@ -292,7 +302,7 @@ Returns a PNG image.`,
               `in range (2–4 is plenty for inspecting fine detail).`,
           );
         }
-        const raw = await requestUntilApproved(() =>
+        const raw = await requestHeldOpen(() =>
           bridge.request({ type: "SCREENSHOT", nodeId, key, scale }),
         );
         const gated = gateResult(raw);
