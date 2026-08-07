@@ -1,7 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { PluginBridgeRuntime } from "~/services/plugin-bridge/index.js";
-import { ExecuteCodeReply } from "~/services/plugin-bridge/execute.js";
 import {
   requestUntilApproved,
   isPendingApproval,
@@ -18,6 +17,18 @@ import { buildQuickStart, buildReferenceSections, SECTION_IDS } from "./flcm-doc
 // the whole bet is that one tool + this contract beats dozens of granular tools. Full docs live in
 // get_flcm_reference.
 const EXECUTE_CODE_DESCRIPTION = buildQuickStart();
+
+// The plugin always replies to EXECUTE_CODE with this exact shape; parse it once so the handler
+// trusts the type instead of re-checking each field. `result` is absent when the code returns
+// nothing or throws: undefined isn't JSON, so it's dropped crossing the WS — optional, not
+// required (a missing key is the error/void path). Since protocol 2, images are fetched MID-RUN
+// (PluginBridge.serveImagesRequest), so a script executes exactly once and this reply is the
+// whole story — no re-run signals, no second pass.
+const ExecuteCodeReply = z.object({
+  result: z.unknown().optional(),
+  console: z.array(z.string()),
+  errors: z.string().nullable(),
+});
 
 // The sandbox posts exactly one of these (see screenshot() in code.ts): `image`
 // (base64 PNG) on success, `errors` on the failure path — never both, never neither.

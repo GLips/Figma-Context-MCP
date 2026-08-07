@@ -8,12 +8,16 @@ export interface BridgeRequest {
   [key: string]: unknown;
 }
 
+/** Answers the plugin's mid-run IMAGES_REQUEST with url→base64 bytes (see image-requests.ts). */
+export type ImagesRequestHandler = (urls: string[]) => Promise<Record<string, string>>;
+
 interface Pending {
   resolve: (value: unknown) => void;
   reject: (err: Error) => void;
-  timer: ReturnType<typeof setTimeout> | undefined;
+  /** The inactivity deadline (see DEFAULT_TIMEOUT_MS) — suspended and re-armed by run traffic. */
+  timer: ReturnType<typeof setTimeout>;
   /** The absolute per-run ceiling (armed once, never reset by traffic — see DEFAULT_RUN_CEILING_MS). */
-  ceilingTimer: ReturnType<typeof setTimeout> | undefined;
+  ceilingTimer: ReturnType<typeof setTimeout>;
   /** The request's payload type: names what stalled in the timeout rejection, and gates which
    * pending ids the reverse direction will serve (only EXECUTE_CODE runs — see serveImagesRequest). */
   payloadType: string;
@@ -140,9 +144,7 @@ export class PluginBridge {
   // Answers the plugin's mid-run IMAGES_REQUEST frames (protocol 2's reverse direction). Fixed at
   // construction (index.ts wires the guarded fetch path + the session image cache); bridges built
   // without one — the contract harness's non-image sections — refuse the frames with IMAGES_ERROR.
-  private readonly imagesRequestHandler:
-    | ((urls: string[]) => Promise<Record<string, string>>)
-    | null;
+  private readonly imagesRequestHandler: ImagesRequestHandler | null;
   // How many image services each run has in flight right now. The run's inactivity deadline stays
   // suspended while ANY service is running and re-arms only when the count returns to zero —
   // a lone clearTimeout/re-arm pair breaks under concurrent services (the first reply would
@@ -161,7 +163,7 @@ export class PluginBridge {
     }: {
       requestTimeoutMs?: number;
       runCeilingMs?: number;
-      imagesRequestHandler?: ((urls: string[]) => Promise<Record<string, string>>) | null;
+      imagesRequestHandler?: ImagesRequestHandler | null;
     } = {},
   ) {
     this.requestTimeoutMs = requestTimeoutMs;
@@ -388,14 +390,22 @@ export class PluginBridge {
 
   /** Reject and clear every pending request — used when the socket they were sent on dies. */
   private failPending(reason: string): void {
-    for (const [id, pending] of this.pending) {
-      clearTimeout(pending.timer);
-      clearTimeout(pending.ceilingTimer);
-      this.pending.delete(id);
-      pending.reject(new Error(reason));
+    for (const id of this.pending.keys()) {
+      this.takePending(id)?.reject(new Error(reason));
     }
-    // With no runs left, no suspension is owed — straggler fetches find no count and no-op.
-    this.inFlightImageServices.clear();
+  }
+
+  /** Remove a pending request and stop its clocks — every settle path (reply, deadline, socket
+   * death) funnels through here, so none can leak a timer or an in-flight image-service count
+   * (a straggler fetch then finds no count and no-ops). */
+  private takePending(id: string): Pending | undefined {
+    const pending = this.pending.get(id);
+    if (!pending) return undefined;
+    clearTimeout(pending.timer);
+    clearTimeout(pending.ceilingTimer);
+    this.pending.delete(id);
+    this.inFlightImageServices.delete(id);
+    return pending;
   }
 
   request(payload: BridgeRequest): Promise<unknown> {
@@ -409,31 +419,17 @@ export class PluginBridge {
     }
     const id = `req-${++this.nextId}`;
     return new Promise((resolve, reject) => {
-      const pending: Pending = {
+      this.pending.set(id, {
         resolve,
         reject,
-        timer: undefined,
-        ceilingTimer: undefined,
+        timer: setTimeout(() => this.timeoutPending(id, "inactivity"), this.requestTimeoutMs),
+        ceilingTimer: setTimeout(() => this.timeoutPending(id, "ceiling"), this.runCeilingMs),
         payloadType: payload.type,
-      };
-      this.pending.set(id, pending);
-      this.armPendingTimer(id);
-      pending.ceilingTimer = setTimeout(
-        () => this.timeoutPending(id, "ceiling"),
-        this.runCeilingMs,
-      );
+      });
       // `id` last: the generated correlation id is authoritative and a payload field
       // must never overwrite it, or the reply could never be matched to this pending.
       socket.send(JSON.stringify({ ...payload, id }));
     });
-  }
-
-  /** (Re)start a pending request's inactivity deadline — run traffic calls this to push it out. */
-  private armPendingTimer(id: string): void {
-    const pending = this.pending.get(id);
-    if (!pending) return;
-    clearTimeout(pending.timer);
-    pending.timer = setTimeout(() => this.timeoutPending(id, "inactivity"), this.requestTimeoutMs);
   }
 
   /**
@@ -450,12 +446,8 @@ export class PluginBridge {
    * could itself time out and cancel, recursively.
    */
   private timeoutPending(id: string, cause: "inactivity" | "ceiling"): void {
-    const pending = this.pending.get(id);
+    const pending = this.takePending(id);
     if (!pending) return;
-    clearTimeout(pending.timer);
-    clearTimeout(pending.ceilingTimer);
-    this.pending.delete(id);
-    this.inFlightImageServices.delete(id);
     if (this.socket && this.socket.readyState === WebSocket.OPEN) {
       this.socket.send(JSON.stringify({ type: "CANCEL", runId: id }));
     }
@@ -516,16 +508,12 @@ export class PluginBridge {
       return;
     }
     if (typeof msg.id !== "string") return;
-    const pending = this.pending.get(msg.id);
+    const pending = this.takePending(msg.id);
     if (!pending) return;
     // A reply matching a pending request proves the holder speaks the frozen envelope — it's
     // a real plugin (current, or a stale one that envelope-ERRORs), not a dead/silent squatter.
     // This is what makes the holder "established" and thus protected from slot-reclaim.
     this.handshaked = true;
-    clearTimeout(pending.timer);
-    clearTimeout(pending.ceilingTimer);
-    this.pending.delete(msg.id);
-    this.inFlightImageServices.delete(msg.id);
     // Frozen-envelope error path: a plugin replies `{ type:"ERROR", error }` to any
     // message type it doesn't recognize — the case a newer server hits against an
     // older, un-updatable plugin. Surface it as an immediate rejection so the caller
@@ -541,7 +529,8 @@ export class PluginBridge {
    * Service a plugin-issued IMAGES_REQUEST (protocol 2). Traffic-as-heartbeat: the run's
    * inactivity deadline is SUSPENDED while WE are the side doing the work (our fetch is bounded by
    * images.ts's own timeouts and caps, and the run ceiling never suspends) and re-armed when the
-   * run's last in-flight service settles — the deadline only ever counts plugin-side silence. A request naming a run this bridge no longer tracks (timed
+   * run's last in-flight service settles — the deadline only ever counts plugin-side silence.
+   * A request naming a run this bridge no longer tracks (timed
    * out, cancelled, already resolved) is refused instead of served: the refusal rejects the run's
    * suspended await plugin-side, so a zombie run can never resume into canvas writes after the
    * agent was told nothing happened. That refusal is the authoritative half of the policy; the
@@ -610,13 +599,15 @@ export class PluginBridge {
     // reply must not restart the run's clock while a second fetch is still the server's work.
     const settleService = (): void => {
       const count = this.inFlightImageServices.get(runId);
-      if (count === undefined) return; // the run settled meanwhile and cleared its counts
-      if (count <= 1) {
-        this.inFlightImageServices.delete(runId);
-        this.armPendingTimer(runId);
-      } else {
+      if (count === undefined) return; // the run settled meanwhile and cleared its count
+      if (count > 1) {
         this.inFlightImageServices.set(runId, count - 1);
+        return;
       }
+      this.inFlightImageServices.delete(runId);
+      // A live count implies the run is still pending (counts only exist for pending runs, and
+      // ids are never reused), so re-arming the captured `run` directly is safe.
+      run.timer = setTimeout(() => this.timeoutPending(runId, "inactivity"), this.requestTimeoutMs);
     };
     void this.imagesRequestHandler(urls)
       .then((images) => {

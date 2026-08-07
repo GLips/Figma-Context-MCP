@@ -201,12 +201,20 @@ function requestServerImages(to: ReplyTo, urls: string[]): Promise<Record<string
  * other local server (approved or not — approval gates writes, not this direction) could inject
  * bytes into an approved session's in-flight render, bypassing the trusted fetch path. */
 function settleImagesFetch(msg: InboundMessage): void {
-  const pending = typeof msg.id === "string" ? pendingImagesFetches.get(msg.id) : undefined;
-  if (!pending || typeof msg.id !== "string") return;
+  if (typeof msg.id !== "string") return;
+  const pending = pendingImagesFetches.get(msg.id);
+  if (!pending) return;
   if (pending.connKey !== connKeyOf(msg)) return;
   pendingImagesFetches.delete(msg.id);
   if (msg.type === "IMAGES_REPLY" && msg.images && typeof msg.images === "object") {
-    pending.resolve(msg.images as Record<string, string>);
+    // Boundary-parse the url→base64 record here, where reverse-reply bytes enter the sandbox: keep
+    // string entries only, so downstream imagePaint can trust every value it finds (a dropped
+    // entry surfaces there as the fail-loud missing-bytes error, naming its url).
+    const images: Record<string, string> = {};
+    for (const [url, b64] of Object.entries(msg.images)) {
+      if (typeof b64 === "string") images[url] = b64;
+    }
+    pending.resolve(images);
   } else {
     pending.reject(
       new Error(

@@ -7,6 +7,7 @@
 // concurrency are enforced where the fetching actually happens. They are PER-REQUEST bounds — the
 // bridge separately caps how many requests one run may have in flight (bridge.ts
 // MAX_INFLIGHT_IMAGE_SERVICES_PER_RUN), so neither alone bounds a whole run.
+import type { ImagesRequestHandler } from "./bridge.js";
 
 // Bound on distinct image urls one request may carry, and on how many fetch/decode concurrently —
 // the pair caps peak server memory (each in-flight fetch holds a decoded raster) to
@@ -78,9 +79,7 @@ export interface ImagesRequestDeps {
  * single failure (blocked range, oversize, non-image, unreachable) rejects the whole request — the
  * plugin turns that into the run's error, so a blocked url never renders as a blank fill.
  */
-export function createImagesRequestHandler(
-  deps: ImagesRequestDeps,
-): (urls: string[]) => Promise<Record<string, string>> {
+export function createImagesRequestHandler(deps: ImagesRequestDeps): ImagesRequestHandler {
   return async (urls) => {
     // The plugin dedupes before asking, but it is the untrusted side — dedupe again so the cap
     // below counts distinct urls no matter what was sent.
