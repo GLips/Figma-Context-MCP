@@ -48,6 +48,9 @@ Thumbs.db
 # Local experiment scratchpad
 /trials/
 
+# External repos cloned for reference reading — never ours to commit
+/.agent_cache/
+
 .mcp.json
 advisor-plans/
 .tk

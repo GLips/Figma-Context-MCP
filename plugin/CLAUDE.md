@@ -8,4 +8,4 @@ The Framelink Figma plugin — hosts **flcm**, the authoring DSL for the "code m
 - `harness/` — live-Figma ergonomics flows (`pnpm dogfood`); not part of CI.
 - `docs/authoring/flcm.md` — **generated** from the schema by the repo-root `scripts/gen-flcm-doc.ts`; never hand-edit (`pnpm docs:check` gates drift).
 
-Tests: `pnpm test:plugin` from the repo root (node:test, not vitest). Design docs (ADRs, plans) live in the repo-root `docs/flcm/` — a private repo clone, gitignored; don't commit design docs here.
+Tests: `pnpm test:plugin` from the repo root (node:test, not vitest).
