@@ -68,7 +68,7 @@ export async function startServer(config: ServerConfig): Promise<void> {
   // The WS relay to the Figma plugin always starts with the server, both transports: the plugin's
   // ui.html holds a persistent socket open whenever the plugin runs in Figma, and its connection is
   // what advertises the code-mode tools. One loopback port from the block; negligible when unused.
-  const pluginBridge = startPluginBridge();
+  const pluginBridge = startPluginBridge({ assetRoot: config.assetRoot });
 
   const serverOptions = {
     transport: config.isStdioMode ? ("stdio" as const) : ("http" as const),

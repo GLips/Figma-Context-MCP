@@ -25,6 +25,7 @@ export interface ServerFlags {
   stdio?: boolean;
   noTelemetry?: boolean;
   codeMode?: boolean;
+  assetRoot?: string;
 }
 
 export interface ServerConfig {
@@ -38,6 +39,7 @@ export interface ServerConfig {
   isStdioMode: boolean;
   noTelemetry: boolean;
   codeMode: boolean;
+  assetRoot: string;
   configSources: Record<string, Source>;
 }
 
@@ -181,6 +183,16 @@ export function getServerConfig(flags: ServerFlags): ServerConfig {
   // code-mode tools to be advertised from startup instead of waiting for a plugin connection.
   const codeMode = resolve(flags.codeMode, envBool("FIGMA_CODE_MODE"), false);
 
+  // The directory local flcm.image() file paths are confined to — a security boundary, not a
+  // convenience (see plugin-bridge/images.ts readLocalImage). Defaults to cwd, which is the agent's
+  // repo in the common launch shape.
+  const envAssetRoot = envStr("FRAMELINK_ASSET_ROOT");
+  const assetRoot = resolve(
+    flags.assetRoot ? resolvePath(flags.assetRoot) : undefined,
+    envAssetRoot ? resolvePath(envAssetRoot) : undefined,
+    process.cwd(),
+  );
+
   const noTelemetry = flags.noTelemetry ?? false;
   const telemetrySource: Source =
     flags.noTelemetry === true
@@ -200,6 +212,7 @@ export function getServerConfig(flags: ServerFlags): ServerConfig {
     skipImageDownloads: skipImageDownloads.source,
     imageDir: imageDir.source,
     codeMode: codeMode.source,
+    assetRoot: assetRoot.source,
     telemetry: telemetrySource,
   };
 
@@ -228,6 +241,7 @@ export function getServerConfig(flags: ServerFlags): ServerConfig {
     );
     console.log(`- IMAGE_DIR: ${imageDir.value} (source: ${configSources.imageDir})`);
     console.log(`- CODE_MODE: ${codeMode.value} (source: ${configSources.codeMode})`);
+    console.log(`- ASSET_ROOT: ${assetRoot.value} (source: ${configSources.assetRoot})`);
     const telemetryEnabled = resolveTelemetryEnabled(noTelemetry);
     console.log(
       `- TELEMETRY: ${telemetryEnabled ? "enabled" : "disabled"} (source: ${configSources.telemetry})`,
@@ -246,6 +260,7 @@ export function getServerConfig(flags: ServerFlags): ServerConfig {
     isStdioMode,
     noTelemetry,
     codeMode: codeMode.value,
+    assetRoot: assetRoot.value,
     configSources,
   };
 }

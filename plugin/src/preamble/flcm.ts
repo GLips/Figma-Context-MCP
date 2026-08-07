@@ -596,17 +596,19 @@ function stopPercent(raw: { pos?: number; position?: number }, i: number, n: num
   return n > 1 ? (i / (n - 1)) * 100 : 0;
 }
 
-// ---- image() paint constructor: a url + intent -> an inert image PaintSpec (a fill value, like
-// flcm.gradient). The sandbox NEVER fetches — the spec carries only the source; the trusted server fetches
-// + validates the bytes and the bridge resolves them to a plugin ImagePaint at render (keyed by url).
-// `placeholder` marks a stand-in so a later read can tell it from a real asset (bridge persists it on the
-// node). Fails loud on a non-string/empty url or a scaleMode outside the set — never a silent blank fill.
+// ---- image() paint constructor: a source + intent -> an inert image PaintSpec (a fill value, like
+// flcm.gradient). The source is an https url or a local file path (CSS url() takes both; the server
+// confines paths to its asset root). The sandbox NEVER touches network or disk — the spec carries only the
+// source string; the trusted server loads + validates the bytes and the bridge resolves them to a plugin
+// ImagePaint at render (keyed by source). `placeholder` marks a stand-in so a later read can tell it from a
+// real asset (bridge persists it on the node). Fails loud on a non-string/empty source or a scaleMode
+// outside the set — never a silent blank fill.
 
 const IMAGE_SCALE_MODES = new Set(["FILL", "FIT", "CROP", "TILE"]);
 
 function image(url: unknown, opts: ImageOpts = {}): PaintSpec {
   if (typeof url !== "string" || !url.trim()) {
-    throw new Error("flcm.image: expected an image url string, e.g. flcm.image(\"https://example.com/photo.jpg\") — got " + JSON.stringify(url) + ".");
+    throw new Error("flcm.image: expected an image url or local file path string, e.g. flcm.image(\"https://example.com/photo.jpg\") or flcm.image(\"assets/logo.png\") — got " + JSON.stringify(url) + ".");
   }
   opts = opts || {};
   rejectUnknownKeys(opts, IMAGE_KEYS, "flcm.image opts");

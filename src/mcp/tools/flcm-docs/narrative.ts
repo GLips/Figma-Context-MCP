@@ -122,7 +122,7 @@ export const PAINT_INTRO = `A paint value (for \`fill\`, \`stroke\`, \`color\`) 
 - a **solid color string** — \`"#FF0000"\`, \`"#FF0000AA"\`, \`"rgba(255,0,0,0.5)"\`;
 - a **gradient string** — \`"linear-gradient(…)"\` / \`"radial-gradient(…)"\`;
 - the result of \`flcm.gradient(...)\` (below); or
-- the result of \`flcm.image(url)\` — a raster image fill (see **Images**).
+- the result of \`flcm.image(src)\` — a raster image fill from a url or local file path (see **Images**).
 
 \`\`\`js
 flcm.frame({ fill: "#0B1020" });
@@ -139,18 +139,22 @@ flcm.gradient("linear" | "radial", stops, angle);   // positional form
 
 export const IMAGE_INTRO = `Place a **real raster image** — feed media, an avatar, a thumbnail — instead of faking it with a gradient or solid fill (which carries no signal it was ever meant to be an image).
 
-\`flcm.image(url, opts?)\` is a **paint value**, like \`flcm.gradient\` — not a node type. An image in Figma is a fill, so **any shape carries one**: a \`rect\` for a photo, an \`ellipse\` for a circular avatar, a \`frame\` for a hero.
+\`flcm.image(src, opts?)\` is a **paint value**, like \`flcm.gradient\` — not a node type. An image in Figma is a fill, so **any shape carries one**: a \`rect\` for a photo, an \`ellipse\` for a circular avatar, a \`frame\` for a hero. The source is an **https url** or a **local file path** — like CSS \`url()\`, both work in the same place.
 
 \`\`\`js
 // a circular avatar: an ellipse filled with an image
 flcm.ellipse({ width: 48, height: 48, fill: flcm.image("https://example.com/face.jpg") });
 
+// a project asset by relative path — resolved against the server's asset root
+flcm.rect({ width: 120, height: 40, fill: flcm.image("public/logo.png", { scaleMode: "FIT" }) });
+
 // a feed photo, explicit scaleMode; mark a stand-in as a placeholder
 flcm.rect({ width: 390, height: 260, fill: flcm.image("https://example.com/photo.jpg", { scaleMode: "FILL", placeholder: true }) });
 \`\`\`
 
-- **The server fetches the bytes — your code never touches the network.** You pass a url; the trusted server fetches, validates, and downscales it, then the image renders. Any *public* http(s) url works.
-- An **unfetchable, blocked (private/loopback range), oversize, or non-image url fails loud** — never a silent blank fill.
+- **The server loads the bytes — your code never touches the network or the filesystem.** You pass a source; the trusted server fetches (or reads), validates, and downscales it, then the image renders. Any *public* http(s) url works.
+- **Local paths are confined to the server's asset root** (\`--asset-root\`, defaulting to the directory the server was started in). A path that resolves outside it is refused, naming the root — use it for assets already in the project (\`public/logo.png\`, \`assets/icons/star.png\`).
+- An **unfetchable, blocked (private/loopback range), outside-the-root, oversize, or non-image source fails loud** — never a silent blank fill.
 
 \`opts\` (\`scaleMode\`, \`placeholder\`) are documented in the field table below.`;
 
@@ -300,7 +304,7 @@ export const FAILS_LOUD = `The whole point of accepting CSS is fidelity, so the 
 | --- | --- |
 | A color / gradient / effect outside the [CSS subset](#the-css-subset) | A parse error naming the offending value and why. |
 | A **read-artifact image fill** (\`{ type: "IMAGE", imageRef, … }\`) on \`fill\`/\`stroke\`/\`color\` | Rejected: it's a ref to bytes we don't have. Author an image with \`flcm.image(url)\` instead. |
-| An \`flcm.image\` url that is unfetchable, blocked (private/loopback range), oversize, or not a real image | Rejected server-side: never a silent blank fill. |
+| An \`flcm.image\` source that is unfetchable, blocked (private/loopback range), a local path outside the server's asset root, oversize, or not a real image | Rejected server-side, naming the reason (and, for a path, the root): never a silent blank fill. |
 | A \`flcm.text\` value that is neither a plain string nor a runs array (a structured read object), or text carrying figma-mcp style-ref tokens (\`{ts1}…{/ts1}\`) | Rejected: those are read artifacts. Author styled text as **markdown** or a **runs array** (see Rich text). A plain-string \`**\` is now **markdown** (bold), not literal — backslash-escape (\`\\\\*\\\\*\`) for a literal. |
 | Markdown **image** syntax \`![alt](url)\` inside a \`flcm.text\` string, or an unrealizable \`fontStyle\`/\`textDecoration\` value (e.g. \`"oblique"\`, \`"overline"\`) | Rejected: text can't embed an image (use \`flcm.image(url)\`); the enum value names the supported set. |
 | A **duplicate \`key\`** within one render | Rejected: keys must be unique per render. |

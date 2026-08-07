@@ -1,6 +1,7 @@
 // Serves the plugin's mid-run image requests (the protocol-2 reverse direction): the sandbox's
-// render() awaits ONE batched fetch per verb, and this module answers it from the guarded fetch path
-// plus a session-lifetime URL→bytes cache, so repeated renders of the same asset never re-download.
+// render() awaits ONE batched fetch per verb, and this module answers it from the guarded byte
+// sources plus a session-lifetime URL→bytes cache, so repeated renders of the same remote asset
+// never re-download. Local file paths bypass the cache — see the miss loop below.
 //
 // These bounds live HERE, on the server, because the plugin is the untrusted half of this
 // exchange: a compromised or stale plugin could ask for anything, so the url cap and the fetch
@@ -8,6 +9,7 @@
 // bridge separately caps how many requests one run may have in flight (bridge.ts
 // MAX_INFLIGHT_IMAGE_SERVICES_PER_RUN), so neither alone bounds a whole run.
 import type { ImagesRequestHandler } from "./bridge.js";
+import { isLocalImageSource } from "./images.js";
 
 // Bound on distinct image urls one request may carry, and on how many fetch/decode concurrently —
 // the pair caps peak server memory (each in-flight fetch holds a decoded raster) to
@@ -68,7 +70,11 @@ export class ImageByteCache {
 }
 
 export interface ImagesRequestDeps {
-  /** The guarded server-side fetch (fetchAndProcessImage): SSRF allowlist, byte caps, type checks. */
+  /**
+   * The guarded server-side byte source, dispatched by scheme (plugin-bridge/index.ts): https urls
+   * through fetchAndProcessImage (SSRF allowlist, byte caps), local paths through readLocalImage
+   * (asset-root containment). Both validate and downscale before returning base64.
+   */
   fetchImage: (url: string) => Promise<string>;
   cache: ImageByteCache;
 }
@@ -104,13 +110,16 @@ export function createImagesRequestHandler(deps: ImagesRequestDeps): ImagesReque
     };
     const misses: string[] = [];
     for (const url of distinct) {
-      const hit = deps.cache.get(url);
+      // Local files bypass the cache entirely: the cache key is the source string, and a local file
+      // goes stale the moment the user tweaks it between renders — a cached read would silently
+      // paint the old bytes. Re-reading from disk each time is cheap; staleness is not.
+      const hit = isLocalImageSource(url) ? undefined : deps.cache.get(url);
       if (hit !== undefined) addBytes(url, hit);
       else misses.push(url);
     }
     await mapWithConcurrency(misses, FETCH_CONCURRENCY, async (url) => {
       const fetched = await deps.fetchImage(url);
-      deps.cache.set(url, fetched);
+      if (!isLocalImageSource(url)) deps.cache.set(url, fetched);
       addBytes(url, fetched);
     });
     return bytes;

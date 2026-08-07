@@ -10,6 +10,9 @@ import {
 } from "~/services/plugin-bridge/image-requests.js";
 
 test("cache: a repeated url is served without a second fetch", async () => {
+  // Real https urls — only remote sources are cached (a bare string classifies as a local path).
+  const u1 = "https://cdn.example.com/u1.png";
+  const u2 = "https://cdn.example.com/u2.png";
   const fetched: string[] = [];
   const handler = createImagesRequestHandler({
     cache: new ImageByteCache(),
@@ -18,9 +21,27 @@ test("cache: a repeated url is served without a second fetch", async () => {
       return `b64(${url})`;
     },
   });
-  assert.deepEqual(await handler(["u1"]), { u1: "b64(u1)" });
-  assert.deepEqual(await handler(["u1", "u2"]), { u1: "b64(u1)", u2: "b64(u2)" });
-  assert.deepEqual(fetched, ["u1", "u2"], "u1 was fetched exactly once");
+  assert.deepEqual(await handler([u1]), { [u1]: `b64(${u1})` });
+  assert.deepEqual(await handler([u1, u2]), { [u1]: `b64(${u1})`, [u2]: `b64(${u2})` });
+  assert.deepEqual(fetched, [u1, u2], "u1 was fetched exactly once");
+});
+
+test("cache: a local file path is never cached — each request re-reads from disk", async () => {
+  const fetched: string[] = [];
+  const handler = createImagesRequestHandler({
+    cache: new ImageByteCache(),
+    fetchImage: async (url) => {
+      fetched.push(url);
+      return `b64(${url})`;
+    },
+  });
+  await handler(["assets/logo.png"]);
+  await handler(["assets/logo.png"]);
+  assert.deepEqual(
+    fetched,
+    ["assets/logo.png", "assets/logo.png"],
+    "a local path is read fresh on every request — a cached read would paint stale bytes after the user edits the file",
+  );
 });
 
 test("cache: evicts least-recently-used entries once the byte cap is exceeded", () => {

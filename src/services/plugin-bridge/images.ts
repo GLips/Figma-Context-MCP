@@ -1,13 +1,18 @@
-// The trusted server-side image fetch — the ONE network trust boundary in the write path. The Figma
-// sandbox holds manifest allowedDomains:["none"] and can reach nothing, so agent-authored `flcm.image(url)`
-// fills are inert until this module fetches, validates, and downscales the bytes; the bridge answers the
-// sandbox's mid-run IMAGES_REQUEST with them (see image-requests.ts). Because the model picks the url,
-// every guard here defends against a hostile one: SSRF ranges, byte-size, payload type.
+// The trusted server-side image byte sources — the trust boundary in the write path. The Figma
+// sandbox holds manifest allowedDomains:["none"] and can reach nothing, so agent-authored `flcm.image(src)`
+// fills are inert until this module loads, validates, and downscales the bytes; the bridge answers the
+// sandbox's mid-run IMAGES_REQUEST with them (see image-requests.ts). Two sources feed one processing
+// pipeline: an http(s) url through the guarded fetch (SSRF ranges, byte cap, redirect re-guarding), or a
+// LOCAL FILE PATH through the asset-root guard (readLocalImage). Because the model — via the untrusted
+// plugin — picks the source, every guard here defends against a hostile one; "read a file the plugin
+// names" is an arbitrary-file-read primitive unless the root check holds.
 //
 // Ported in spirit from production figma-mcp (downloadAndProcessImage/jimp), but the guard is net-new:
 // figma-mcp only ever fetches from Figma's own trusted CDN, so it has no SSRF/type defense to port. jimp is
 // the shared piece — the modular @jimp/* build, downscaling to Figma's 4096px createImage cap.
 import { lookup } from "node:dns/promises";
+import { realpath, stat, readFile } from "node:fs/promises";
+import { resolve as resolvePath, sep as pathSep } from "node:path";
 import { Agent, fetch, type Response } from "undici";
 import { createJimp } from "@jimp/core";
 import png from "@jimp/js-png";
@@ -265,5 +270,54 @@ export async function fetchAndProcessImage(url: string): Promise<string> {
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
     throw new Error(`flcm.image could not load ${JSON.stringify(url)}: ${reason}`);
+  }
+}
+
+// The scheme split for flcm.image sources, mirroring CSS url(): an http(s) url is fetched, anything else
+// is a local file path served from the asset root. One classifier, imported by both the source dispatch
+// (plugin-bridge/index.ts) and the cache-skip rule (image-requests.ts), so they can't disagree.
+export function isLocalImageSource(source: string): boolean {
+  return !/^https?:\/\//i.test(source);
+}
+
+/**
+ * Read a local image file and return validated, downscaled base64 — the filesystem twin of
+ * fetchAndProcessImage, feeding the same processing pipeline.
+ *
+ * THE ROOT IS THE CONTROL, not the magic-byte check (plenty of real images hold secrets, and the bytes
+ * land in a cloud-synced Figma document). The path arrives from the untrusted plugin, so this is an
+ * arbitrary-file-read primitive unless contained: resolve against the root, then verify the resolved
+ * REALPATH sits inside the root's realpath — post-resolution, which is what defeats both `../` traversal
+ * and a symlink pointing out of the root (a pre-resolution string check catches neither). The reverse
+ * channel's EXECUTE_CODE payload gate makes every path attributable to an approved run — defense in
+ * depth, not a substitute for this check.
+ *
+ * Errors name the root explicitly: "./assets/logo.png" is ambiguous when the server's cwd differs from
+ * the repo the agent is working in.
+ */
+export async function readLocalImage(source: string, assetRoot: string): Promise<string> {
+  try {
+    const rootReal = await realpath(assetRoot);
+    let fileReal: string;
+    try {
+      fileReal = await realpath(resolvePath(rootReal, source));
+    } catch {
+      throw new Error(`no such file under the asset root (${assetRoot})`);
+    }
+    if (fileReal !== rootReal && !fileReal.startsWith(rootReal + pathSep)) {
+      throw new Error(
+        `the path resolves outside the asset root (${assetRoot}) — only files under that root can be ` +
+          `placed. Start the server with --asset-root pointed at your project if the root is wrong.`,
+      );
+    }
+    const info = await stat(fileReal);
+    if (!info.isFile()) throw new Error(`the path is not a file (asset root: ${assetRoot})`);
+    if (info.size > MAX_BYTES) {
+      throw new Error(`file is ${info.size} bytes, over the ${MAX_BYTES}-byte cap`);
+    }
+    return await processImageBytes(await readFile(fileReal));
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    throw new Error(`flcm.image could not load ${JSON.stringify(source)}: ${reason}`);
   }
 }

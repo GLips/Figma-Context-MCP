@@ -45,8 +45,8 @@ test("flcm.image carries scaleMode + placeholder overrides", () => {
 });
 
 test("flcm.image rejects a non-string/empty url and a bad scaleMode (fail loud)", () => {
-  assert.throws(() => image(42), /expected an image url string/);
-  assert.throws(() => image("   "), /expected an image url string/);
+  assert.throws(() => image(42), /expected an image url or local file path/);
+  assert.throws(() => image("   "), /expected an image url or local file path/);
   assert.throws(() => image("https://x/y.jpg", { scaleMode: "STRETCH" } as never), /scaleMode must be one of/);
 });
 

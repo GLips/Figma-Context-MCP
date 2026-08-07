@@ -2,7 +2,7 @@ import { z } from "zod";
 import { join } from "node:path";
 import { Logger } from "~/utils/logger.js";
 import { PluginBridge } from "./bridge.js";
-import { fetchAndProcessImage } from "./images.js";
+import { fetchAndProcessImage, isLocalImageSource, readLocalImage } from "./images.js";
 import { ImageByteCache, createImagesRequestHandler } from "./image-requests.js";
 import { WS_PORT_BLOCK } from "./ports.js";
 import { SESSION_IDENTITY } from "./approval.js";
@@ -41,13 +41,16 @@ const VersionReply = z.object({
  * process from server startup; every MCP server instance (one for stdio, one per stateless HTTP
  * request) shares the returned runtime.
  */
-export function startPluginBridge(): PluginBridgeRuntime {
-  // The images handler answers the plugin's mid-run image requests (protocol 2) from the guarded
-  // fetch path plus a session-lifetime URL→bytes cache — repeated renders of one asset never
-  // re-download.
+export function startPluginBridge({ assetRoot }: { assetRoot: string }): PluginBridgeRuntime {
+  // The images handler answers the plugin's mid-run image requests (protocol 2). Sources split by
+  // scheme: https urls go through the guarded fetch plus a session-lifetime URL→bytes cache, local
+  // paths through the asset-root-contained file read (uncached — see image-requests.ts).
   const bridge = new PluginBridge(undefined, {
     imagesRequestHandler: createImagesRequestHandler({
-      fetchImage: fetchAndProcessImage,
+      fetchImage: (source) =>
+        isLocalImageSource(source)
+          ? readLocalImage(source, assetRoot)
+          : fetchAndProcessImage(source),
       cache: new ImageByteCache(),
     }),
   });

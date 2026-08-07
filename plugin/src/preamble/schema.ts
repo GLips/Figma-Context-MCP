@@ -303,8 +303,9 @@ export type LineProps = z.infer<typeof LineSchema>;
 export type PathProps = z.infer<typeof PathSchema>;
 export type SvgProps = z.infer<typeof SvgSchema>;
 
-// flcm.image(url, opts?) options — the second, optional arg to the image paint constructor. `url` is the
-// positional first arg (like text's `content` / svg's `markup`), so it isn't a prop field here.
+// flcm.image(src, opts?) options — the second, optional arg to the image paint constructor. `src` (an
+// https url or a local file path under the server's asset root) is the positional first arg (like text's
+// `content` / svg's `markup`), so it isn't a prop field here.
 const IMAGE_FIELDS = {
   scaleMode: prop(
     z.enum(["FILL", "FIT", "CROP", "TILE"]),
@@ -420,7 +421,7 @@ export const VERBS: VerbDoc[] = [
   { category: "build", signature: "flcm.svg(markup, props?)", builds: "a VECTOR from SVG markup", args: "SVG markup string first, then size/position props", schema: SvgSchema },
   { category: "build", signature: "flcm.path(props)", builds: "a themeable VECTOR", args: "props object including `d` (path data)", schema: PathSchema },
   { category: "value", signature: "flcm.gradient(...)", builds: "a gradient fill value", args: "object or positional form", schema: GradientSchema },
-  { category: "value", signature: "flcm.image(url, opts?)", builds: "an image fill value", args: "the image url first, then { scaleMode?, placeholder? }", schema: ImageSchema },
+  { category: "value", signature: "flcm.image(src, opts?)", builds: "an image fill value", args: "an https url or a local file path (under the server's asset root) first, then { scaleMode?, placeholder? }", schema: ImageSchema },
   { category: "value", signature: "flcm.effects({...})", builds: "an effects value", args: "an { shadow, blur, backgroundBlur } bag", schema: EffectsSchema },
   { category: "render", signature: "await flcm.render(tree)", builds: "live nodes", args: "returns { root, keyed }" },
   { category: "read", signature: "await flcm.get(target)", builds: "a node's full read spec (values inline)", args: "target: an flcm/key, a node id, flcm.id(id), or a handle" },

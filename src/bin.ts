@@ -55,6 +55,11 @@ const argv = cli({
       type: Boolean,
       description: "Run in stdio transport mode for MCP clients",
     },
+    assetRoot: {
+      type: String,
+      description:
+        "Root directory for local flcm.image() file paths. Only files within this directory can be placed as image fills. Defaults to the current working directory.",
+    },
     codeMode: {
       type: Boolean,
       description:
