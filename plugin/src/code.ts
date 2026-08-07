@@ -3,14 +3,6 @@
 
 import { safeSerialize, guardReturnValue } from "./serialize.js";
 import { resolveScreenshotTarget, type ScreenshotTarget } from "./screenshot-target.js";
-import {
-  connKeyOf,
-  replyTarget,
-  replyEnvelope,
-  type ConnKey,
-  type InboundMessage,
-  type ReplyTo,
-} from "./reply-envelope.js";
 
 // The std-lib source string, generated from the typed preamble/ fragments and baked in at build time
 // by build.mjs via esbuild `define` (it can't be generated in-sandbox — flattening runs esbuild).
@@ -83,6 +75,7 @@ interface SessionConn {
 // ui.html owns the sockets, so the port is the natural stable key. approvedTokens (above) stays a
 // flat module Set — sticky approval keys on the minted TOKEN, not the connection, so it must
 // outlive any single port's connection entry (Slice 2.1b).
+type ConnKey = number;
 const connections = new Map<ConnKey, SessionConn>();
 
 // Who holds the driving baton — the approved session whose write ran most recently. It is a LABEL
@@ -124,10 +117,48 @@ function mintToken(): string {
   );
 }
 
-/** The single reply path — the envelope's shape (and what it deliberately does NOT carry over from
- * the request) lives in reply-envelope.ts; this is just the postMessage that sends it. */
+interface InboundMessage {
+  id?: string;
+  type?: string;
+  [key: string]: unknown;
+}
+
+/**
+ * Everything needed to reply to one inbound message, derived from it once at dispatch: the
+ * correlation `id`, and `connKey` — the local source-port tag ui.html attached, stamped back onto
+ * the reply so ui.html sends it out on the socket the message arrived on.
+ *
+ * Negative space: nothing else from the inbound message reaches the reply, and there is deliberately
+ * no pass-through namespace to put it in. The server correlates purely by `id`, and each session
+ * already has its own socket (ui.html holds one per block port), so no message-level routing tag is
+ * needed. Keeping a reply a function of the handler's body alone is what makes it structurally
+ * impossible for a field the sandbox CONSUMES to ride back out onto the wire as if a newer server
+ * had attached it — don't reintroduce a general echo without a consumer that demands one.
+ */
+interface ReplyTo {
+  id: string | undefined;
+  connKey: ConnKey | undefined;
+}
+
+/** The source-port tag ui.html attached, or undefined if absent — one parse site for the routing
+ * key, so the "is it a number" check and its absent-sentinel are defined once. */
+function connKeyOf(msg: InboundMessage): ConnKey | undefined {
+  return typeof msg.__connKey === "number" ? msg.__connKey : undefined;
+}
+
+/** The single derivation site: the two — and only two — things a reply inherits from its request. */
+function replyTarget(msg: InboundMessage): ReplyTo {
+  return { id: msg.id, connKey: connKeyOf(msg) };
+}
+
+/**
+ * The single reply path: the handler's body, with the correlation `id` and `__connKey` stamped last
+ * so a body field can't clobber either — every reply carries the id back (frozen-envelope Invariant)
+ * and the source-port tag so ui.html routes it to the right socket. `__connKey` is LOCAL: it never
+ * reaches a server, because ui.html strips it before ws.send.
+ */
 function reply(to: ReplyTo, body: Record<string, unknown>): void {
-  figma.ui.postMessage(replyEnvelope(to, body));
+  figma.ui.postMessage({ ...body, id: to.id, __connKey: to.connKey });
 }
 
 // First-run orientation. The session list shows a one-time explainer (what the plugin does; "only
