@@ -56,13 +56,13 @@ type CodeModeToolsOptions = {
 /**
  * Register the code-mode (write-path) tools: figma_execute_code, get_flcm_reference, get_screenshot.
  *
- * Dynamic exposure: the tools are registered but DISABLED until a Figma plugin connects to the WS
- * relay, so the many read-only users of this server never see write tools in tools/list. On stdio —
- * a single long-lived connection — the first plugin connection enables them live and the SDK emits
- * notifications/tools/list_changed. On stateless HTTP every request builds a fresh server, so the
- * latch is simply read at construction time; there is no long-lived connection to notify (GETs are
- * 405'd — no SSE stream exists to carry a notification). `--code-mode` forces always-on registration
- * for list-caching clients that ignore list_changed.
+ * Dynamic exposure: the tools are registered but DISABLED until a plugin is connected or expected
+ * (expectsPluginConnection), so the many read-only users of this server never see write tools in
+ * tools/list. On stdio — a single long-lived connection — the first plugin connection enables them
+ * live and the SDK emits notifications/tools/list_changed. On stateless HTTP every request builds a
+ * fresh server, so the decision is simply re-read at construction time; there is no long-lived
+ * connection to notify (GETs are 405'd — no SSE stream exists to carry a notification).
+ * `--code-mode` forces always-on registration for list-caching clients that ignore list_changed.
  */
 export function registerCodeModeTools(
   server: McpServer,
@@ -72,13 +72,39 @@ export function registerCodeModeTools(
   const { bridge } = runtime;
 
   /**
+   * Is a plugin connected, or plausibly about to be? The one question behind BOTH decisions this file
+   * makes about a missing plugin — whether to advertise the write tools at all, and whether a call
+   * should wait for a socket instead of reporting none.
+   *
+   * Two sources, because neither alone spans a server restart:
+   *   • the connection latch — true once a plugin has connected IN THIS PROCESS. Authoritative while
+   *     the process lives, and reset to false by every restart.
+   *   • a reloaded persisted approval — a plugin approved this (cwd, port) within the store's TTL.
+   *     Survives the restart precisely because it lives on disk, so it carries the fact the latch
+   *     just dropped.
+   *
+   * False, then, means what it says: no plugin has connected here and none was approved here recently
+   * — a genuine cold start, where hiding the tools and failing fast is right. It is NOT the answer for
+   * a dev-watch restart, which is the case that used to look identical.
+   */
+  function expectsPluginConnection(): boolean {
+    return runtime.hasEverConnected() || bridge.hasReloadedApproval();
+  }
+
+  /**
    * Every write-path request goes out through both holds, wired to this bridge: first the post-restart
    * reconnect wait (a call can arrive before the plugin has redialed the freshly bound relay), then the
    * approval hold across the human's Allow. One place, so the two write tools can't drift on either.
+   *
+   * The reconnect wait is skipped when no plugin is expected at all — a `--code-mode` server whose
+   * plugin was never opened should say so immediately, not stall for the bound first.
    */
   function requestHeldOpen(send: () => Promise<unknown>): Promise<unknown> {
     return requestUntilApproved(send, {
-      awaitPluginConnection: () => bridge.waitForPluginConnection(PLUGIN_CONNECT_WAIT_MS),
+      awaitPluginConnection: () =>
+        expectsPluginConnection()
+          ? bridge.waitForPluginConnection(PLUGIN_CONNECT_WAIT_MS)
+          : Promise.resolve(),
     });
   }
 
@@ -318,13 +344,23 @@ Returns a PNG image.`,
     ),
   ];
 
-  if (codeMode || runtime.hasEverConnected()) return;
+  // Advertised whenever a plugin is connected OR expected — NOT only once one has connected in this
+  // process. The narrower rule made a dev-watch restart look like a cold start: for the seconds before
+  // the plugin redialed, a stateless-HTTP request built a server with the write tools disabled and the
+  // call came back "Tool figma_execute_code disabled" — a hard MCP error (-32602) with no path
+  // forward. That is strictly worse than the approval prompt this cycle removed: an agent told the
+  // capability does not exist stops trying, and cannot know that five seconds would have fixed it. The
+  // restart is exactly when the reloaded approval says a plugin IS there, so advertise and let the
+  // handler's bounded wait resolve it — a hidden tool has no seam to wait in.
+  if (codeMode || expectsPluginConnection()) return;
 
   // Hidden until a plugin proves the write path exists. disable() before the transport connects is
   // a silent flag flip (the SDK skips the list_changed notification when disconnected), so clients
   // never see a flap. Only stdio subscribes to the latch: its one server outlives the whole session,
-  // while stateless HTTP builds a fresh server per request — each request re-reads the latch above,
+  // while stateless HTTP builds a fresh server per request — each request re-reads the decision above,
   // and subscribing those short-lived servers would accumulate dead closures until first connect.
+  // (Stdio also registers before the relay has finished binding, so `hasReloadedApproval` is still
+  // false here for it — the latch subscription below is what enables its tools either way.)
   for (const tool of tools) tool.disable();
   if (transport === "stdio") {
     runtime.onFirstConnect(() => {

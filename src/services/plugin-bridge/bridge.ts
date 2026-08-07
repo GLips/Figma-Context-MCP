@@ -131,6 +131,11 @@ export class PluginBridge {
   // The port this server won its probe-bind on, or null before `listening`. Persistence keys on it —
   // (cwd, port) — so concurrent same-cwd servers never share an approval file (see approval-store.ts).
   private boundPort: number | null = null;
+  // Whether binding the port turned up a persisted approval for it. Latched at `listening` and never
+  // cleared, so it keeps answering "was a plugin approved here recently?" after the token itself moves
+  // on (a fresh Allow, a revoke). Distinct from `sessionToken !== null`, which also goes true on a
+  // live handover — this one is specifically the CROSS-PROCESS breadcrumb (see hasReloadedApproval).
+  private reloadedApproval = false;
   // The winning WebSocketServer, retained only so `stop()` can close it (free the port). The relay is
   // otherwise process-lifetime; stop() exists for tests that model a restart by freeing then rebinding.
   private wss: WebSocketServer | null = null;
@@ -254,6 +259,7 @@ export class PluginBridge {
       // gets the persisted token echoed and is not re-prompted. Keyed by THIS port: a concurrent
       // sibling on another port, or a restart that landed elsewhere, reloads nothing (fail-closed).
       this.sessionToken = this.store.load(port, Date.now());
+      this.reloadedApproval = this.sessionToken !== null;
       if (this.sessionToken)
         Logger.log(
           "Reloaded a persisted session token — it will be offered on the next SESSION_INFO; the plugin decides whether the prior Allow still holds",
@@ -401,6 +407,23 @@ export class PluginBridge {
   /** The session token handed over on Allow, or null until one arrives; survives reconnects so SESSION_INFO can echo it. */
   getSessionToken(): string | null {
     return this.sessionToken;
+  }
+
+  /**
+   * Did this server bind its port onto a persisted approval? True ⟹ a plugin approved THIS (cwd, port)
+   * within the store's TTL, so one is plausibly open in Figma and redialing right now.
+   *
+   * This is the ONLY cross-process evidence the relay has that a plugin exists. Everything else about
+   * the plugin — the connection latch, the socket, the pairing code — is per-process state that a
+   * restart resets to "no plugin has ever been here", which is indistinguishable from a genuine cold
+   * start and yet means the opposite. Callers deciding whether to WAIT for a plugin rather than
+   * declare the write path absent need exactly this distinction (see code-mode-tools.ts).
+   *
+   * Deliberately not a liveness check: the plugin may have been closed since. It answers "is waiting
+   * worth it?", never "is a plugin there?" — the bounded wait that follows settles that honestly.
+   */
+  hasReloadedApproval(): boolean {
+    return this.reloadedApproval;
   }
 
   /**
