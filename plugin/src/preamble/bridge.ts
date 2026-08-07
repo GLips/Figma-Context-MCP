@@ -55,6 +55,13 @@ const AUTO_LAYOUT_MODES = ["HORIZONTAL", "VERTICAL", "GRID"];
 // the `position` marker) are emitted ONLY when the parent's auto-layout doesn't already place the node —
 // the exact rule read.projectSlim inherits from core's NodeGeometry (isInAutoLayoutFlow). A page child gets
 // neither: its parent has no box to be relative to, so the coordinates would be canvas trivia.
+//
+// The numbers are the node's OWN geometry — width/height exclude rotation (relativeTransform has unit axes,
+// so a rotated node's size is unchanged) and x/y are its container-parent offset. The read side instead
+// derives both from `absoluteBoundingBox`, the page-space AABB, which for a ROTATED node is a larger box at
+// a different origin: the two agree on every unrotated node and diverge on a rotated one. Deliberate — a
+// 40px-wide rect rotated 15° is 40 wide, and the AABB's 44.85 is the read side's to fix (see fig-0qsz),
+// not a number to reproduce here.
 function geometryOf(node: any): Omit<Handle, keyof Identity> {
   const geometry: Omit<Handle, keyof Identity> = { width: pixelRound(node.width), height: pixelRound(node.height) };
   const parent = node.parent;

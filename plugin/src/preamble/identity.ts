@@ -30,8 +30,8 @@ interface IdentifiableNode {
 
 // Pull a node's stable identity — the fields render's Handle and the read verbs' SlimHandle share. ONE place
 // reads name/key/text so the two consumers can't drift. `key` comes from pluginData (present only on stamped
-// nodes); `text` only from TEXT nodes. Reads no geometry — that's each consumer's own concern (Handle's
-// resolved box, SlimHandle's sizing intent).
+// nodes); `text` only from TEXT nodes. Reads no geometry — the two spell it alike but source it differently
+// (Handle's measured px off the live node, SlimHandle's sizing intent out of the core).
 export function identityOf(node: IdentifiableNode): Identity {
   const identity: Identity = { id: node.id, type: node.type, name: node.name };
   const key = readKey(node);
