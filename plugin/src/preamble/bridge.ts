@@ -1,12 +1,20 @@
-// bridge — the render walk: a WriteNode tree -> live Figma nodes via the plugin API. This is where the
-// typed IR currency is mapped onto plugin calls. It consumes ONLY the typed currency — it never sees a
-// CSS string leaf and never imports css.ts; the boundary parsed everything into types upstream, so here
-// a gap is already a number, a fill already a PaintSpec, an effect already an EffectSpec. It is the one
-// place nodes are created/mutated; the constructors in flcm.ts only build inert POJOs.
+// bridge — the ONE mutation authority: every property lands on a live Figma node through the appliers
+// here, whether the node was just built (the render walk below) or resolved as a live edit target.
+// Every mutating verb drives these same exported appliers — never a parallel application path, so a
+// paint compiled for create and for edit cannot diverge. It consumes ONLY the typed IR currency — it
+// never sees a CSS string leaf and never imports css.ts; the boundary parsed everything into types
+// upstream, so here a gap is already a number, a fill already a PaintSpec, an effect already an
+// EffectSpec. The constructors in flcm.ts only build inert POJOs.
+//
+// Appliers touch only the fields PRESENT on their spec, and a `'prop' in node` guard skips only
+// vocabulary a node KIND lacks (an ellipse has no cornerRadius). A Figma refusal on a field the node
+// does carry THROWS — the plugin's own error names the setter — and the aftermath belongs to the
+// mutating-verb scaffold (mutation-lock.ts, where the commit-then-undo rollback lands), never to a
+// catch here. A deliberate skip must be a named, documented rule, never a swallowed catch.
 //
 // Nodes are typed `any` deliberately: the plugin typings model dozens of SceneNode variants, but the
-// walk applies a small additive vocabulary guarded by `'prop' in node` / try-catch, so fighting the
-// union with casts at every line would add noise without safety.
+// appliers cover a small additive vocabulary, so fighting the union with casts at every line would add
+// noise without safety.
 
 import { WriteType, WriteNode, WriteLayout, Justify, Align, TextAlign, TextDecoration, Sizing, Identity, Handle, PaintSpec, ImageSpec } from "./ir.js";
 import { toFigmaPaint } from "./paint.js";
@@ -16,17 +24,22 @@ import { normalizePathData } from "./path.js";
 import { writeKey, identityOf } from "./identity.js";
 import { pixelRound, convertSizing } from "~/core/index.js";
 
-// `images` is the url → base64 map render() threads through the walk (bytes the server fetched+validated
-// and injected between the two passes); an image PaintSpec resolves to a plugin ImagePaint against it.
-// `pending` accumulates every percent/anchor child during the walk, resolved in one post-walk pass once
-// the tree's fill/hug sizes have settled (see resolvePercents).
-//
-// `keyed` collects LIVE NODES, not Handles: nothing about a node's geometry is trustworthy mid-walk (see
-// settleHandles), so handles are minted in one pass after the walk instead of stamped and then patched.
-export interface RenderCtx {
-  keyed: Record<string, any>;
+// The resource half of the walk context — what an applier resolves against, split out so an exported
+// applier demands only what it reads: `fonts` is the preloaded FontMap, `images` the url → base64 map
+// of bytes the server fetched+validated (an image PaintSpec resolves to a plugin ImagePaint against
+// it). An edit caller supplies these for a live target without fabricating walk state.
+export interface RenderResources {
   fonts: FontMap;
   images: Record<string, string>;
+}
+
+// The full walk context: resources plus render-only accumulation. `pending` collects every
+// percent/anchor child during the walk, resolved in one post-walk pass once the tree's fill/hug sizes
+// have settled (see resolvePercents). `keyed` collects LIVE NODES, not Handles: nothing about a node's
+// geometry is trustworthy mid-walk (see settleHandles), so handles are minted in one pass after the
+// walk instead of stamped and then patched.
+export interface RenderCtx extends RenderResources {
+  keyed: Record<string, any>;
   pending: PendingResolve[];
 }
 
@@ -49,6 +62,16 @@ const DECORATION: Record<TextDecoration, "UNDERLINE" | "STRIKETHROUGH" | "NONE">
 
 // The frame layoutModes that place their own children — the plugin-side spelling of the core's hasAutoLayout.
 const AUTO_LAYOUT_MODES = ["HORIZONTAL", "VERTICAL", "GRID"];
+
+// The one write-side answer to "does this node lay out flow children along an axis pair?"
+// (layoutGrow/layoutAlign, primary/counter sizing modes, ABSOLUTE lifting). GRID is deliberately
+// OUTSIDE: it has no authoring word, so create never produces it, and the edit context matrix hasn't
+// assigned its cells — when it does, this predicate is where the rule lands, not six inlined
+// comparisons. AUTO_LAYOUT_MODES above differs on purpose: for read-side geometry a GRID parent DOES
+// place its children, so left/top stay omitted.
+export function isRowColumnAutoLayout(node: any): boolean {
+  return node.layoutMode === "HORIZONTAL" || node.layoutMode === "VERTICAL";
+}
 
 // A node's geometry in the read verbs' spelling (ir.Handle). width/height are the measured px, rounded the
 // way the core rounds every number it emits so both producers hand the agent one currency. left/top (and
@@ -120,12 +143,12 @@ function stampKey(node: any, wn: WriteNode, ctx: RenderCtx): void {
 // Resolve one PaintSpec to a plugin Paint. An image spec needs raster BYTES (render() awaited them from
 // the server mid-run into ctx.images, keyed by url) turned into an imageHash via figma.createImage — a
 // figma.* call, so it lives HERE in the bridge, not in the figma-free paint.ts. Every other spec maps purely.
-function paintOf(spec: PaintSpec, ctx: RenderCtx): Paint {
+function paintOf(spec: PaintSpec, ctx: RenderResources): Paint {
   if (spec.kind === "image") return imagePaint(spec, ctx);
   return toFigmaPaint(spec);
 }
 
-function imagePaint(spec: ImageSpec, ctx: RenderCtx): Paint {
+function imagePaint(spec: ImageSpec, ctx: RenderResources): Paint {
   const b64 = ctx.images[spec.url];
   if (typeof b64 !== "string") {
     // render() collects and awaits every image url before any node is built, so the bytes are always
@@ -147,8 +170,10 @@ function stampImageData(node: any, wn: WriteNode): void {
 }
 
 // Additive appearance: only fields present on the WriteNode are touched. Property guards skip what a node
-// kind lacks (an ellipse has no cornerRadius). v1 still paints a single fill/stroke.
-function applyPaint(node: any, wn: WriteNode, ctx: RenderCtx): void {
+// kind lacks (an ellipse has no cornerRadius). v1 still paints a single fill/stroke. Creation defaults
+// (omitted fill -> transparent) live in the builders, NOT here — so an edit patch through this applier
+// can never turn key-absence into a write.
+export function applyPaint(node: any, wn: WriteNode, ctx: RenderResources): void {
   if (wn.fills && wn.fills.length) node.fills = [paintOf(wn.fills[0], ctx)];
   if (wn.strokes && wn.strokes.length) node.strokes = [paintOf(wn.strokes[0], ctx)];
   if (wn.strokeWeight != null && "strokeWeight" in node) node.strokeWeight = wn.strokeWeight;
@@ -159,10 +184,15 @@ function applyPaint(node: any, wn: WriteNode, ctx: RenderCtx): void {
   stampImageData(node, wn);
 }
 
-function applyContainer(f: any, layout: WriteLayout): void {
+// Layout mode + container props. The mode applies when PRESENT — including "none", which switches
+// auto-layout OFF (children convert per Figma's own semantics; canvas is truth). The container props
+// (gap/pad/justify/align) gate on the LIVE mode, not the spec's: a delta naming only `gap` lands on
+// an already-auto frame instead of silently skipping — spec-gating was create-only truth.
+export function applyContainer(f: any, layout: WriteLayout): void {
   const mode = layout.mode;
-  if (mode !== "row" && mode !== "column") return; // gap/pad/align are inert without auto-layout
-  f.layoutMode = mode === "row" ? "HORIZONTAL" : "VERTICAL";
+  if (mode === "row" || mode === "column") f.layoutMode = mode === "row" ? "HORIZONTAL" : "VERTICAL";
+  else if (mode === "none") f.layoutMode = "NONE";
+  if (!isRowColumnAutoLayout(f)) return; // gap/pad/align are inert without auto-layout
   if (layout.gap != null) f.itemSpacing = layout.gap;
   if (layout.padding) {
     const e = layout.padding;
@@ -176,21 +206,25 @@ function applyContainer(f: any, layout: WriteLayout): void {
 
 // Own-axis sizing, applied AFTER children so a `hug` axis measures real content. Maps the IR's
 // sizing/dimensions onto the plugin's primary/counter sizing modes (which axis is which depends on the
-// frame's own direction) and resizes the fixed axes.
-function applyOwnSize(f: any, layout: WriteLayout): void {
+// frame's own direction) and resizes the fixed axes. Direction comes from the LIVE node, not the spec:
+// at create time applyContainer already set layoutMode so the two agree, and an edit delta naming only
+// sizing carries no mode at all. Presence-preserving per axis — an axis the spec doesn't name keeps
+// its live sizing mode; the fresh-frame hug default is the BUILDER's to inject (see buildFrame).
+export function applyOwnSize(f: any, layout: WriteLayout): void {
   const sizing = layout.sizing || {};
   const dims = layout.dimensions || {};
-  const isAuto = layout.mode === "row" || layout.mode === "column";
+  const isAuto = isRowColumnAutoLayout(f);
 
   if (isAuto) {
-    const isRow = layout.mode === "row";
+    const isRow = f.layoutMode === "HORIZONTAL";
     const setMode = function (val: any, isWidth: boolean) {
+      if (val == null) return; // axis not named — leave the live mode alone
       if (val === "fill") return; // resolved by the parent against its own axis
       const isPrimary = isWidth === isRow;
       f[isPrimary ? "primaryAxisSizingMode" : "counterAxisSizingMode"] = val === "fixed" ? "FIXED" : "AUTO";
     };
-    setMode(sizing.horizontal || "hug", true);
-    setMode(sizing.vertical || "hug", false);
+    setMode(sizing.horizontal, true);
+    setMode(sizing.vertical, false);
   }
 
   // Auto frames resize only their FIXED axes (fill/hug are computed by layout); a non-auto frame honors
@@ -209,20 +243,22 @@ function applyOwnSize(f: any, layout: WriteLayout): void {
 // filled dimension is the CHILD's own primary axis, the child hugs its content there and hug WINS over
 // STRETCH — so the child's primaryAxisSizingMode must be pinned FIXED or the fill silently still hugs.
 // (Grounded live in the prior spike; preserved here.)
-function applyChildFill(parent: any, child: any, layout: WriteLayout, parentMode: string | undefined, crossStretch: boolean): void {
+// PRECONDITION the caller routes, this function trusts: `parent` is a row/column auto-layout frame.
+// A free-form parent's children take coverChild + applyConstraints instead (that's the class split
+// buildFrame walks and edit re-derives); called with a free-form parent the flow props land inert.
+// `crossStretch` is a parameter because container-level stretch intent is never stored — not by
+// Figma, not by us — so only the caller knows it (create reads the authored alignItems; edit's
+// stretch child-walk passes its own verdict).
+export function applyChildFill(parent: any, child: any, layout: WriteLayout, crossStretch: boolean): void {
   const s = layout.sizing || {};
-  // Only reached for an auto-layout parent (buildFrame routes free-form children through coverChild +
-  // applyConstraints instead — a free-form w/h:"fill" now actually stretches, no warn-and-ignore).
-  const pIsRow = parentMode === "row";
+  const pIsRow = parent.layoutMode === "HORIZONTAL";
   const fillDim = function (dim: string) {
     const alongPrimary = (dim === "width") === pIsRow;
     if (alongPrimary) child.layoutGrow = 1;
     else child.layoutAlign = "STRETCH";
-    if (child.layoutMode === "HORIZONTAL" || child.layoutMode === "VERTICAL") {
+    if (isRowColumnAutoLayout(child)) {
       const childIsRow = child.layoutMode === "HORIZONTAL";
-      if ((dim === "width") === childIsRow) {
-        try { child.primaryAxisSizingMode = "FIXED"; } catch (e) { /* some nodes resist */ }
-      }
+      if ((dim === "width") === childIsRow) child.primaryAxisSizingMode = "FIXED";
     }
   };
   if (s.horizontal === "fill") fillDim("width");
@@ -243,26 +279,28 @@ function applyChildFill(parent: any, child: any, layout: WriteLayout, parentMode
 // fill is the natural full-bleed cover / scrim), and any child of a FREE-FORM parent (no auto-layout to
 // grow against). Run once at append (against the parent's provisional hug size) and again after
 // applyOwnSize gives the parent its final size.
-function coverChild(parent: any, child: any, layout: WriteLayout): void {
+export function coverChild(parent: any, child: any, layout: WriteLayout): void {
   const s = layout.sizing || {};
   if (s.horizontal !== "fill" && s.vertical !== "fill") return;
-  if (child.layoutMode === "HORIZONTAL" || child.layoutMode === "VERTICAL") {
+  if (isRowColumnAutoLayout(child)) {
     const isRow = child.layoutMode === "HORIZONTAL";
     if (s.horizontal === "fill") child[isRow ? "primaryAxisSizingMode" : "counterAxisSizingMode"] = "FIXED";
     if (s.vertical === "fill") child[isRow ? "counterAxisSizingMode" : "primaryAxisSizingMode"] = "FIXED";
   }
   const cw = s.horizontal === "fill" ? parent.width : child.width;
   const ch = s.vertical === "fill" ? parent.height : child.height;
-  try { child.resize(Math.max(cw, 0.01), Math.max(ch, 0.01)); } catch (e) { /* some nodes resist resize */ }
+  // A LINE's height is exactly 0 by Figma contract — resize throws on anything else [verified,
+  // plugin-typings 1.133] — so the 0.01 floor (there to keep degenerate fills from the resize(0)
+  // throw on area nodes) must not touch it: w:"fill" on a line is a legal full-width rule. Vertical
+  // fill on a line can't be authored (LineSchema has no height word), so no rule is needed for it.
+  child.resize(Math.max(cw, 0.01), child.type === "LINE" ? 0 : Math.max(ch, 0.01));
 }
 
 // Lift an absolute child out of an auto-layout parent's flow (so x/y are honored, it can overlap
 // siblings, and it extends past a clip) and apply its location. Outside auto-layout, x/y are native.
-function applyChildPosition(parent: any, child: any, layout: WriteLayout): void {
+export function applyChildPosition(parent: any, child: any, layout: WriteLayout): void {
   if (layout.position !== "absolute") return;
-  if (parent.layoutMode === "HORIZONTAL" || parent.layoutMode === "VERTICAL") {
-    try { child.layoutPositioning = "ABSOLUTE"; } catch (e) { /* instance may resist */ }
-  }
+  if (isRowColumnAutoLayout(parent)) child.layoutPositioning = "ABSOLUTE";
   if (typeof layout.left === "number") child.x = layout.left;
   if (typeof layout.top === "number") child.y = layout.top;
 }
@@ -291,7 +329,7 @@ function axisConstraint(sizing: Sizing | undefined, percentSize: number | undefi
 // inert on it). Keys off the percent* / sizing INTENT (percentSize→SCALE, percentPos→CENTER, fill→STRETCH),
 // which is why percent resolution never mutates the layout in place — the intent stays readable here even
 // though the live node has already been resized to a fixed px by resolvePercents.
-function applyConstraints(child: any, rawLayout: WriteLayout | undefined): void {
+export function applyConstraints(child: any, rawLayout: WriteLayout | undefined): void {
   if (!("constraints" in child)) return; // an exotic node without the constraint mixin
   const l = rawLayout || {};
   const sizing = l.sizing || {};
@@ -307,18 +345,19 @@ function applyConstraints(child: any, rawLayout: WriteLayout | undefined): void 
 // Reject the ONE percent case a runtime read can't break: an IN-FLOW `%`-SIZE child of an auto-layout
 // parent that HUGS the same axis. The child's size both defines the hug and depends on it — a true cycle,
 // so fail loud (ADR-0003) rather than snapshot a bogus number. Everything else resolves against the
-// parent's realized size (see resolvePercents): a fixed/`fill` auto parent, ANY free-form parent, and an
-// ABSOLUTE child (out of flow — it doesn't feed the hug, so it sizes against the hug's realized value like
-// a percent position does). Called at build time (before the child node exists) so the throw doesn't
-// orphan it. `parentSizing` is the parent frame's own sizing intent.
-function assertPercentResolvable(childLayout: WriteLayout, parentMode: string | undefined, parentSizing: WriteLayout["sizing"]): void {
+// parent's realized size (see resolvePercentLayout): a fixed/`fill` auto parent, ANY free-form parent,
+// and an ABSOLUTE child (out of flow — it doesn't feed the hug, so it sizes against the hug's realized
+// value like a percent position does).
+//
+// Takes the parent as BOOLEAN FACTS, not a node or a spec, because the two callers know them from
+// different places: the create walk asks before the child (or the parent's sizing modes) exists, so it
+// answers from the authored spec; the edit path answers from the live flags (isRowColumnAutoLayout +
+// convertSizing of layoutSizingHorizontal/Vertical). Reading a parent here would break the first caller.
+export function assertPercentResolvable(childLayout: WriteLayout, parentIsAutoLayout: boolean, parentHugsW: boolean, parentHugsH: boolean): void {
   const ps = childLayout.percentSize;
   if (!ps) return;
-  const isAuto = parentMode === "row" || parentMode === "column";
-  if (!isAuto || childLayout.position === "absolute") return;
-  const hugsW = !parentSizing || !parentSizing.horizontal || parentSizing.horizontal === "hug";
-  const hugsH = !parentSizing || !parentSizing.vertical || parentSizing.vertical === "hug";
-  if ((ps.width != null && hugsW) || (ps.height != null && hugsH)) {
+  if (!parentIsAutoLayout || childLayout.position === "absolute") return;
+  if ((ps.width != null && parentHugsW) || (ps.height != null && parentHugsH)) {
     throw new Error('flcm: a percent w/h ("N%") on an in-flow child of an auto-layout (row/column) parent that HUGS that axis is a cycle — the child\'s size both sets and depends on the parent\'s. Give the parent a fixed or "fill" size on that axis, use "fill"/"hug" on the child, or lift it out with `absolute`.');
   }
 }
@@ -330,7 +369,7 @@ function assertPercentResolvable(childLayout: WriteLayout, parentMode: string | 
 // (shallowest depth first) so a percent child of a percent parent reads its parent's already-resolved px.
 export function resolvePercents(ctx: RenderCtx): void {
   ctx.pending.sort((a, b) => depthOf(a.node) - depthOf(b.node));
-  for (const p of ctx.pending) resolveOne(p);
+  for (const p of ctx.pending) resolvePercentLayout(p.parent, p.node, p.layout);
 }
 
 function depthOf(node: any): number {
@@ -344,18 +383,21 @@ function pctOf(pct: number, parentDim: number): number {
   return (pct / 100) * parentDim;
 }
 
-function resolveOne(p: PendingResolve): void {
-  const { node, layout, parent } = p;
+// Fold one child's percent size / percent position / anchor into concrete pixels against its parent's
+// realized size. Render calls this through the deferred resolvePercents pass above; the edit path
+// calls it directly — at edit time the parent's realized size already exists, so there is no deferral
+// to ride. Parameter order matches the sibling child-appliers (parent, child, layout).
+export function resolvePercentLayout(parent: any, child: any, layout: WriteLayout): void {
   // SIZE first — anchor placement below reads the child's resolved width/height.
   if (layout.percentSize) {
     const ps = layout.percentSize;
-    const w = ps.width != null ? pctOf(ps.width, parent.width) : node.width;
-    const h = ps.height != null ? pctOf(ps.height, parent.height) : node.height;
+    const w = ps.width != null ? pctOf(ps.width, parent.width) : child.width;
+    const h = ps.height != null ? pctOf(ps.height, parent.height) : child.height;
     // A text node ignores a width resize while it auto-sizes width (WIDTH_AND_HEIGHT) — it would just keep
     // hugging its content. Mirror buildText's fixed-width handshake so a percent-width text wraps at the
     // resolved width (height auto-fits) instead of silently dropping the percent (ADR-0003 silent-wrong).
-    if (node.type === "TEXT" && ps.width != null) node.textAutoResize = "HEIGHT";
-    node.resize(Math.max(w, 0.01), Math.max(h, 0.01));
+    if (child.type === "TEXT" && ps.width != null) child.textAutoResize = "HEIGHT";
+    child.resize(Math.max(w, 0.01), Math.max(h, 0.01));
   }
   // POSITION + ANCHOR — absolute children only (percentPos/anchor never set otherwise). Resolve each axis
   // (percent → px against the parent, else the authored number), then shift by the anchor so the child's
@@ -366,13 +408,13 @@ function resolveOne(p: PendingResolve): void {
     let y = pp.y != null ? pctOf(pp.y, parent.height) : (layout.top ?? 0);
     const a = layout.anchor;
     if (a) {
-      if (a.x === "center") x -= node.width / 2;
-      else if (a.x === "right") x -= node.width;
-      if (a.y === "center") y -= node.height / 2;
-      else if (a.y === "bottom") y -= node.height;
+      if (a.x === "center") x -= child.width / 2;
+      else if (a.x === "right") x -= child.width;
+      if (a.y === "center") y -= child.height / 2;
+      else if (a.y === "bottom") y -= child.height;
     }
-    node.x = x;
-    node.y = y;
+    child.x = x;
+    child.y = y;
   }
 }
 
@@ -391,6 +433,11 @@ function buildFrame(wn: WriteNode, ctx: RenderCtx): any {
   const mode = layout.mode;
   const crossStretch = layout.alignItems === "stretch";
   const isAutoParent = mode === "row" || mode === "column";
+  // The hug facts answer from the AUTHORED spec — the frame's live sizing modes don't exist until
+  // applyOwnSize runs after the children (see assertPercentResolvable's contract).
+  const specSizing = layout.sizing || {};
+  const parentHugsW = !specSizing.horizontal || specSizing.horizontal === "hug";
+  const parentHugsH = !specSizing.vertical || specSizing.vertical === "hug";
   // Children whose w/h:"fill" must be re-resized after the frame gets its FINAL size (at append it was
   // hug-sized): every covered child, absolute or free-form. coverChild no-ops without a fill.
   const covers: { child: any; layout: WriteLayout }[] = [];
@@ -401,7 +448,7 @@ function buildFrame(wn: WriteNode, ctx: RenderCtx): any {
     // Fail loud on the one unresolvable percent (in-flow %-size against a hugging auto-layout parent)
     // before building the node, so a bad spec doesn't orphan a live node on the canvas. Every other
     // percent/anchor is recorded and resolved in the post-walk pass (resolvePercents) against realized size.
-    assertPercentResolvable(cl, mode, layout.sizing);
+    assertPercentResolvable(cl, isAutoParent, parentHugsW, parentHugsH);
     const child = buildNode(rawSpec, ctx);
     f.appendChild(child);
     if (cl.percentSize || cl.percentPos || (cl.position === "absolute" && cl.anchor)) {
@@ -418,11 +465,14 @@ function buildFrame(wn: WriteNode, ctx: RenderCtx): any {
       covers.push({ child, layout: cl });
       applyConstraints(child, rawSpec.layout);
     } else {
-      applyChildFill(f, child, cl, mode, crossStretch);
+      applyChildFill(f, child, cl, crossStretch);
     }
   }
 
-  applyOwnSize(f, layout);
+  // Creation default: a fresh auto-layout frame HUGS both axes (CSS fit-content). Like the
+  // transparent-fill default above, it's the builder's to inject — the applier itself never turns
+  // key-absence into a write, so an edit delta omitting an axis leaves it alone.
+  applyOwnSize(f, { ...layout, sizing: { horizontal: specSizing.horizontal || "hug", vertical: specSizing.vertical || "hug" } });
   // Re-cover every fill child now that the frame has its final size (at append it was hug-sized).
   for (const c of covers) coverChild(f, c.child, c.layout);
   return f;
@@ -432,7 +482,7 @@ function buildFrame(wn: WriteNode, ctx: RenderCtx): any {
 // API. Offsets track the concatenation order the runs were joined in (buildText). A run only carries the
 // fields it overrides, so we touch only those ranges — the rest inherit the node's base style. A run's font
 // resolves STRICTLY (resolveFontStrict): an unloaded run font fails loud rather than silently rendering base.
-function applyRuns(t: any, runs: NonNullable<WriteNode["runs"]>, ctx: RenderCtx): void {
+function applyRuns(t: any, runs: NonNullable<WriteNode["runs"]>, ctx: RenderResources): void {
   let start = 0;
   for (const run of runs) {
     const end = start + run.text.length;
