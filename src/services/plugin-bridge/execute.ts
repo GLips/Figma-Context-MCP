@@ -34,8 +34,8 @@ export type ExecuteOutcome =
   | { kind: "error"; message: string };
 
 // The seams executeWithImages drives, injected so the two-pass state machine is testable without a live
-// bridge or the network: `request` runs code in the sandbox, `gate` maps a consent/active-driver reply to
-// its agent-facing text (or null), `fetchImage` is the guarded server-side fetch (fetchAndProcessImage).
+// bridge or the network: `request` runs code in the sandbox, `gate` maps a consent refusal to its
+// agent-facing text (or null), `fetchImage` is the guarded server-side fetch (fetchAndProcessImage).
 export interface ExecuteDeps {
   request: (code: string) => Promise<unknown>;
   gate: (reply: unknown) => GatedResult | null;

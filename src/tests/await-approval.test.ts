@@ -8,15 +8,10 @@ import {
 // than scheduling a timer, which makes the poll/expiry behaviour deterministic.
 function fakeClock() {
   let t = 0;
-  return {
-    now: () => t,
-    sleep: async (ms: number) => {
-      t += ms;
-    },
-    advance: (ms: number) => {
-      t += ms;
-    },
+  const advance = (ms: number) => {
+    t += ms;
   };
+  return { now: () => t, advance, sleep: async (ms: number) => advance(ms) };
 }
 
 const PENDING = { type: "PENDING_APPROVAL" };

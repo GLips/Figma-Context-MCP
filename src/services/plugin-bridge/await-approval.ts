@@ -16,8 +16,7 @@
 // defaulting to FALSE (shared/protocol.js: `options?.resetTimeoutOnProgress ?? false`), and the spec says
 // implementations "MAY choose to reset the timeout clock", not SHOULD. A server cannot turn it on. So the
 // wait must simply FIT INSIDE the client's timeout rather than try to extend it, and correctness here
-// rests on the ceiling below — not on any client honoring a heartbeat. (registerFailLoudTool not
-// forwarding `extra` is an incidental gap, cheap to close — it is NOT the reason we skip heartbeats.)
+// rests on the ceiling below — not on any client honoring a heartbeat.
 
 /** The plugin's refusal for a session the human hasn't approved (plugin/src/code.ts gateWrite). */
 export function isPendingApproval(reply: unknown): boolean {
@@ -25,21 +24,22 @@ export function isPendingApproval(reply: unknown): boolean {
     typeof reply === "object" &&
     reply !== null &&
     "type" in reply &&
-    (reply as { type: unknown }).type === "PENDING_APPROVAL"
+    reply.type === "PENDING_APPROVAL"
   );
 }
 
-// The ceiling on how long one gated call waits for the human. Sits well under the MCP client's 60s
-// default request timeout, leaving headroom for the code to actually RUN after approval lands — the
-// wait and the execution share one tool call's budget. Past this the caller falls back to the retryable
-// "not approved yet" text, which is still the right answer for a human who stepped away.
-export const APPROVAL_WAIT_MS = 45_000;
+// The ceiling on how long one gated call waits for the human. The wait and the execution that follows it
+// share ONE tool call's budget, so the worst case — the last poll starting just under the ceiling, then a
+// run that burns the bridge's full 15s per-request timeout — must still land inside the MCP client's 60s
+// default. Past the ceiling the caller falls back to the retryable "not approved yet" text, which is
+// still the right answer for a human who stepped away.
+export const APPROVAL_WAIT_MS = 40_000;
 
 // How often to re-offer the request while waiting. Fast enough that clicking Allow feels immediate,
-// slow enough that a 45s wait is ~60 cheap loopback round-trips rather than a spin.
+// slow enough that the wait is ~50 cheap loopback round-trips rather than a spin.
 const APPROVAL_POLL_MS = 750;
 
-export interface ApprovalWaitDeps {
+interface ApprovalWaitDeps {
   waitMs?: number;
   pollMs?: number;
   now?: () => number;
@@ -57,10 +57,9 @@ export interface ApprovalWaitDeps {
  * RIDES THROUGH A MID-WAIT RECONNECT, and that is load-bearing rather than defensive. The plugin's
  * socket drops routinely (a Figma reload, a server restart, a laptop blip) and ui.html redials on a ~1s
  * cadence; PluginBridge answers a drop by rejecting every in-flight request (failPending) and rejects
- * fresh ones with "No Figma plugin connected" until the socket is back. Waiting 45s instead of issuing
- * one quick request widens that window enormously, so a hold that propagated the first transport error
- * would die on exactly the blip it is supposed to outlast. Instead a send that throws mid-wait is
- * treated as transient and the loop keeps going to the deadline.
+ * fresh ones with "No Figma plugin connected" until the socket is back. Holding for the whole window
+ * instead of issuing one quick request widens that window enormously, so propagating the first transport
+ * error would die on exactly the blip this exists to outlast.
  *
  * The FIRST send is deliberately NOT shielded: when no plugin is connected at all, that must fail fast
  * with the bridge's own message instead of hanging the agent for the full window. Only after one
@@ -92,7 +91,7 @@ export async function requestUntilApproved(
       transportError = err; // the socket is down mid-wait; ui.html redials, so keep waiting
     }
   }
-  if (transportError) throw transportError;
+  if (transportError !== null) throw transportError;
   return reply;
 }
 
