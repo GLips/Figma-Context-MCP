@@ -50,6 +50,13 @@ const MAX_INFLIGHT_IMAGE_SERVICES_PER_RUN = 4;
 // reconnect cadence so the live plugin reclaims the freed slot on its very next retry.
 const HEARTBEAT_INTERVAL_MS = 10_000;
 
+// How recently a persisted approval must have been USED for this server to treat a plugin as probably
+// around — the window `hasRecentApproval` measures against. Sized to span the quiet gaps inside one
+// working session (an agent writes, the human looks at Figma and thinks, then asks for a tweak) while
+// expiring long before "closed Figma and moved on". Deliberately unrelated to the store's 24h TTL:
+// that one answers "must the human re-approve?", this one answers "is a plugin plausibly there?".
+const RECENT_APPROVAL_MS = 30 * 60 * 1000;
+
 /**
  * Gate connections by `Origin`. A Figma plugin UI runs in a sandboxed iframe, so its
  * WebSocket handshake carries `Origin: null` (or no Origin header for non-browser
@@ -131,19 +138,14 @@ export class PluginBridge {
   // The port this server won its probe-bind on, or null before `listening`. Persistence keys on it —
   // (cwd, port) — so concurrent same-cwd servers never share an approval file (see approval-store.ts).
   private boundPort: number | null = null;
-  // Whether binding the port turned up a persisted approval for it. Latched at `listening` and never
-  // cleared, so it keeps answering "was a plugin approved here recently?" after the token itself moves
-  // on (a fresh Allow, a revoke). Distinct from `sessionToken !== null`, which also goes true on a
-  // live handover — this one is specifically the CROSS-PROCESS breadcrumb (see hasReloadedApproval).
-  private reloadedApproval = false;
+  // `lastUsedAt` of the approval this server found when it bound its port, or null if it found none.
+  // Fixed at `listening` and never refreshed: it answers "when was code mode last used HERE, before
+  // this process existed", and once a plugin connects the connection latch answers everything better
+  // (see hasRecentApproval).
+  private reloadedApprovalLastUsedAt: number | null = null;
   // The winning WebSocketServer, retained only so `stop()` can close it (free the port). The relay is
   // otherwise process-lifetime; stop() exists for tests that model a restart by freeing then rebinding.
   private wss: WebSocketServer | null = null;
-  // Callers parked in `waitForPluginConnection` — code-mode calls that arrived while no socket was up.
-  // Drained by the connection handler. Each waiter also owns a timeout and settles at most once, so a
-  // waiter whose bound expired before any plugin arrived is inert rather than stranded; it is dropped
-  // on the next drain. Empty in the steady state — the wait short-circuits when a plugin is connected.
-  private connectWaiters: (() => void)[] = [];
 
   // How long a pending request may sit with no run traffic before it is cancelled (see
   // DEFAULT_TIMEOUT_MS). Set once at construction.
@@ -258,8 +260,9 @@ export class PluginBridge {
       // (and thus before the first SESSION_INFO), so a plugin reconnecting onto this port immediately
       // gets the persisted token echoed and is not re-prompted. Keyed by THIS port: a concurrent
       // sibling on another port, or a restart that landed elsewhere, reloads nothing (fail-closed).
-      this.sessionToken = this.store.load(port, Date.now());
-      this.reloadedApproval = this.sessionToken !== null;
+      const reloaded = this.store.loadRecord(port, Date.now());
+      this.sessionToken = reloaded?.token ?? null;
+      this.reloadedApprovalLastUsedAt = reloaded?.lastUsedAt ?? null;
       if (this.sessionToken)
         Logger.log(
           "Reloaded a persisted session token — it will be offered on the next SESSION_INFO; the plugin decides whether the prior Allow still holds",
@@ -327,47 +330,6 @@ export class PluginBridge {
       }
       Logger.log("Plugin connected to WS bridge");
       onConnect?.();
-      // Release the parked calls LAST, after onConnect has queued SESSION_INFO on this socket — see
-      // waitForPluginConnection for why that ordering is the point.
-      const waiters = this.connectWaiters;
-      this.connectWaiters = [];
-      for (const release of waiters) release();
-    });
-  }
-
-  /**
-   * Resolve as soon as a plugin socket is up, or after `timeoutMs` if none arrives — the window a
-   * code-mode call has to survive across a SERVER RESTART.
-   *
-   * Why this exists: the plugin's ui.html redials on a ~1s cadence, so a restarted server binds its
-   * port (reloading the persisted approval token) a beat or two BEFORE the plugin is back. Measured on
-   * a dev-watch rebuild: port free at t=2.1s, server listening at t=3.1s, plugin socket back at t=5.9s.
-   * A call landing in that gap hit `request()`'s hard "No Figma plugin connected" rejection, which
-   * tells the agent the plugin isn't open — the wrong instruction, and one whose obvious remedy (close
-   * and reopen the plugin) clears the sandbox's in-memory approvedTokens and costs a real, avoidable
-   * Allow. The approval never lapsed; the call was just early. Waiting the gap out is the whole fix.
-   *
-   * Bounded, never open-ended: nothing guarantees a plugin will ever connect, and the caller is
-   * spending one MCP request's budget. Past the bound the caller sends anyway and gets the honest
-   * rejection, which is the right answer when no plugin really is open.
-   *
-   * ORDERING IS LOAD-BEARING: waiters are released from the connection handler AFTER `onConnect`, so
-   * SESSION_INFO — carrying the reloaded token — is already queued on the new socket when the parked
-   * call sends. The sandbox therefore binds the token before it gates the write, and a call that
-   * waited can't beat its own re-approval to the gate.
-   */
-  waitForPluginConnection(timeoutMs: number): Promise<void> {
-    if (this.socket && this.socket.readyState === WebSocket.OPEN) return Promise.resolve();
-    return new Promise((resolve) => {
-      let settled = false;
-      const settle = () => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        resolve();
-      };
-      const timer = setTimeout(settle, timeoutMs);
-      this.connectWaiters.push(settle);
     });
   }
 
@@ -409,21 +371,33 @@ export class PluginBridge {
     return this.sessionToken;
   }
 
+  /** Is a plugin on the wire right now? The plain liveness question, with no approval in it. */
+  isPluginConnected(): boolean {
+    return this.socket !== null && this.socket.readyState === WebSocket.OPEN;
+  }
+
   /**
-   * Did this server bind its port onto a persisted approval? True ⟹ a plugin approved THIS (cwd, port)
-   * within the store's TTL, so one is plausibly open in Figma and redialing right now.
+   * Was code mode used on this (cwd, port) within the last few minutes, according to the approval this
+   * server found when it bound? The ONLY cross-process evidence the relay has that a plugin is around:
+   * every other signal — the connection latch, the socket, the pairing code — is per-process state that
+   * a restart clears to "no plugin has ever been here", which is indistinguishable from a genuine cold
+   * start and means the opposite.
    *
-   * This is the ONLY cross-process evidence the relay has that a plugin exists. Everything else about
-   * the plugin — the connection latch, the socket, the pairing code — is per-process state that a
-   * restart resets to "no plugin has ever been here", which is indistinguishable from a genuine cold
-   * start and yet means the opposite. Callers deciding whether to WAIT for a plugin rather than
-   * declare the write path absent need exactly this distinction (see code-mode-tools.ts).
+   * WHY RECENCY AND NOT MERE PRESENCE, which is what this first shipped as: the store's own expiry is a
+   * 24h sliding TTL, sized for "don't re-prompt an active human", and reading it as "a plugin is around"
+   * quietly turned approval storage into feature-enable storage — someone who approved code mode once
+   * yesterday, then closed Figma, kept getting write tools advertised on every later server process all
+   * day. A much shorter window answers the question actually being asked.
    *
-   * Deliberately not a liveness check: the plugin may have been closed since. It answers "is waiting
-   * worth it?", never "is a plugin there?" — the bounded wait that follows settles that honestly.
+   * It is still a PROXY, and deliberately a cheap one. The asymmetry that makes it safe: too generous
+   * only shows a few extra tools to someone who used code mode minutes ago, while too strict reports a
+   * live capability as absent — so the window leans long, and either way it stops mattering the instant
+   * a plugin connects and the latch takes over. Not refreshed on use: once a plugin has connected, no
+   * caller consults this.
    */
-  hasReloadedApproval(): boolean {
-    return this.reloadedApproval;
+  hasRecentApproval(): boolean {
+    if (this.reloadedApprovalLastUsedAt === null) return false;
+    return Date.now() - this.reloadedApprovalLastUsedAt <= RECENT_APPROVAL_MS;
   }
 
   /**

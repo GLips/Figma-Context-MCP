@@ -46,22 +46,22 @@ describe("ApprovalStore", () => {
 
   it("round-trips a saved token", () => {
     store().save(PORT, "tok-abc", "id", 1000);
-    expect(store().load(PORT, 2000)).toBe("tok-abc");
+    expect(store().loadRecord(PORT, 2000)?.token).toBe("tok-abc");
   });
 
   it("isolates by port — a different port on the same cwd reloads nothing", () => {
     store().save(PORT, "tok-abc", "id", 1000);
     // The F1 fix: a concurrent same-cwd server on another port must NOT inherit this token.
-    expect(store().load(PORT + 1, 2000)).toBeNull();
+    expect(store().loadRecord(PORT + 1, 2000)?.token ?? null).toBeNull();
   });
 
   it("returns null when nothing is persisted", () => {
-    expect(store().load(PORT, 1000)).toBeNull();
+    expect(store().loadRecord(PORT, 1000)?.token ?? null).toBeNull();
   });
 
   it("prunes and returns null once the TTL lapses", () => {
     store().save(PORT, "tok-abc", "id", 1000);
-    expect(store().load(PORT, 1000 + TTL_MS + 1)).toBeNull();
+    expect(store().loadRecord(PORT, 1000 + TTL_MS + 1)?.token ?? null).toBeNull();
     // The file is gone, not merely ignored — a later load with a valid clock still finds nothing.
     expect(readdirSync(join(dir, "approvals"))).toHaveLength(0);
   });
@@ -70,28 +70,28 @@ describe("ApprovalStore", () => {
     store().save(PORT, "tok-abc", "id", 1000);
     // A use just before expiry pushes lastUsedAt forward; the original deadline no longer applies.
     store().touch(PORT, "tok-abc", 1000 + TTL_MS - 1);
-    expect(store().load(PORT, 1000 + TTL_MS + 1)).toBe("tok-abc");
+    expect(store().loadRecord(PORT, 1000 + TTL_MS + 1)?.token).toBe("tok-abc");
   });
 
   it("touch is a no-op when the file holds a different token (no rollback of a peer's write)", () => {
     store().save(PORT, "tok-new", "id", 5000);
     // A slow peer still holding the old token must not roll the file back or resurrect it.
     store().touch(PORT, "tok-old", 6000);
-    expect(store().load(PORT, 6000)).toBe("tok-new");
+    expect(store().loadRecord(PORT, 6000)?.token).toBe("tok-new");
   });
 
   it("clear forgets the token (revoke)", () => {
     store().save(PORT, "tok-abc", "id", 1000);
     store().clear(PORT);
-    expect(store().load(PORT, 2000)).toBeNull();
+    expect(store().loadRecord(PORT, 2000)?.token ?? null).toBeNull();
   });
 
   it("degrades to null on a corrupt file rather than throwing", () => {
     store().save(PORT, "tok-abc", "id", 1000);
     const file = join(dir, "approvals", `${keyForCwd(cwd)}-${PORT}.json`);
     writeFileSync(file, "{ not json");
-    expect(() => store().load(PORT, 2000)).not.toThrow();
-    expect(store().load(PORT, 2000)).toBeNull();
+    expect(() => store().loadRecord(PORT, 2000)).not.toThrow();
+    expect(store().loadRecord(PORT, 2000)?.token ?? null).toBeNull();
   });
 
   it("enforces 0600 even over a pre-existing looser-mode file", () => {
@@ -108,6 +108,6 @@ describe("ApprovalStore", () => {
     writeFileSync(wall, "x");
     const store = new ApprovalStore(cwd, join(wall, "state"));
     expect(() => store.save(PORT, "tok-abc", "id", 1000)).not.toThrow();
-    expect(store.load(PORT, 2000)).toBeNull();
+    expect(store.loadRecord(PORT, 2000)?.token ?? null).toBeNull();
   });
 });

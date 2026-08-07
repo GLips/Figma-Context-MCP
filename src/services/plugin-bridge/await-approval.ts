@@ -43,23 +43,11 @@ export const APPROVAL_WAIT_MS = 40_000;
 // slow enough that the wait is ~50 cheap loopback round-trips rather than a spin.
 const APPROVAL_POLL_MS = 750;
 
-// How long the first send waits for a plugin socket when none is up yet (PluginBridge's
-// waitForPluginConnection, which explains the window). Sized for the one situation that produces it —
-// a server restart, where the plugin is already redialing on a ~1s cadence and simply hasn't landed —
-// with enough slack to absorb a slow rebuild. Deliberately far short of APPROVAL_WAIT_MS: this is
-// waiting on a machine that reconnects in seconds, not on a human.
-export const PLUGIN_CONNECT_WAIT_MS = 8_000;
-
 interface ApprovalWaitDeps {
   waitMs?: number;
   pollMs?: number;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
-  /**
-   * Park until a plugin socket is up, bounded (PluginBridge.waitForPluginConnection). Defaults to not
-   * waiting so tests and any non-bridge caller keep the plain send-now behaviour.
-   */
-  awaitPluginConnection?: () => Promise<void>;
 }
 
 /**
@@ -77,17 +65,17 @@ interface ApprovalWaitDeps {
  * instead of issuing one quick request widens that window enormously, so propagating the first transport
  * error would die on exactly the blip this exists to outlast.
  *
- * BEFORE the first send, `awaitPluginConnection` absorbs the OTHER window a call can land in: the
- * seconds after a server restart when the relay is bound and holding its reloaded approval token but
- * the plugin's socket hasn't redialed yet. That is a distinct failure from lacking consent, so it gets
- * its own (much shorter) bound and is settled first — it must not spend the human's approval budget.
+ * The FIRST send is deliberately NOT shielded: when no plugin is connected at all, that must fail fast
+ * with the bridge's own message instead of hanging the agent for the full window. Only after one
+ * PENDING_APPROVAL — which proves a plugin was there and the session merely lacks consent — do errors
+ * become rideable. If the wait then ends still broken, the transport error is rethrown rather than
+ * swallowed into a consent message: "not approved yet" would be a lie about a plugin that went away.
  *
- * The FIRST send is still deliberately NOT shielded: once the connect wait is over, no plugin means no
- * plugin, and that must fail fast with the bridge's own message instead of hanging the agent for the
- * full window. Only after one PENDING_APPROVAL — which proves a plugin was there and the session merely
- * lacks consent — do errors become rideable. If the wait then ends still broken, the transport error is
- * rethrown rather than swallowed into a consent message: "not approved yet" would be a lie about a
- * plugin that went away.
+ * This deliberately does NOT wait for a plugin to (re)connect. A restart leaves a window where the
+ * relay is up and the plugin has not yet redialed, and an earlier cut of this file parked here for it;
+ * that was the wrong layer. Consent is a human-scale wait, transport is a machine-scale one, and the
+ * disconnect is answered where the caller can say something true about it instead — see
+ * code-mode-tools.ts's pluginUnavailableReply.
  */
 export async function requestUntilApproved(
   send: () => Promise<unknown>,
@@ -96,11 +84,8 @@ export async function requestUntilApproved(
     pollMs = APPROVAL_POLL_MS,
     now = Date.now,
     sleep = sleepMs,
-    awaitPluginConnection = noPluginWait,
   }: ApprovalWaitDeps = {},
 ): Promise<unknown> {
-  // Ahead of the deadline, so a reconnect never eats into the window reserved for the human.
-  await awaitPluginConnection();
   const deadline = now() + waitMs;
   let reply = await send();
   if (!isPendingApproval(reply)) return reply;
@@ -122,8 +107,4 @@ export async function requestUntilApproved(
 
 function sleepMs(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function noPluginWait(): Promise<void> {
-  return Promise.resolve();
 }

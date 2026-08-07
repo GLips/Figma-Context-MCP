@@ -1,11 +1,11 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import type { PluginBridgeRuntime } from "~/services/plugin-bridge/index.js";
 import {
   requestUntilApproved,
   isPendingApproval,
   APPROVAL_WAIT_MS,
-  PLUGIN_CONNECT_WAIT_MS,
 } from "~/services/plugin-bridge/await-approval.js";
 import type { ServerTransport } from "~/mcp/index.js";
 import { registerFailLoudTool, retryableToolReply } from "~/mcp/fail-loud-params.js";
@@ -72,40 +72,52 @@ export function registerCodeModeTools(
   const { bridge } = runtime;
 
   /**
-   * Is a plugin connected, or plausibly about to be? The one question behind BOTH decisions this file
-   * makes about a missing plugin — whether to advertise the write tools at all, and whether a call
-   * should wait for a socket instead of reporting none.
+   * Is a plugin around — connected, or plausibly between sockets? One question, two synchronous
+   * readers: whether to advertise the write tools at all, and which disconnect message tells the truth.
    *
    * Two sources, because neither alone spans a server restart:
    *   • the connection latch — true once a plugin has connected IN THIS PROCESS. Authoritative while
    *     the process lives, and reset to false by every restart.
-   *   • a reloaded persisted approval — a plugin approved this (cwd, port) within the store's TTL.
-   *     Survives the restart precisely because it lives on disk, so it carries the fact the latch
-   *     just dropped.
+   *   • a recently-used persisted approval — code mode was used on this (cwd, port) minutes ago. It
+   *     lives on disk, so it survives the restart that just cleared the latch.
    *
-   * False, then, means what it says: no plugin has connected here and none was approved here recently
-   * — a genuine cold start, where hiding the tools and failing fast is right. It is NOT the answer for
+   * False means what it says: no plugin has connected here and none was used here recently — a genuine
+   * cold start, where hiding the tools and saying "open the plugin" is right. It is NOT the answer for
    * a dev-watch restart, which is the case that used to look identical.
    */
   function expectsPluginConnection(): boolean {
-    return runtime.hasEverConnected() || bridge.hasReloadedApproval();
+    return runtime.hasEverConnected() || bridge.hasRecentApproval();
   }
 
   /**
-   * Every write-path request goes out through both holds, wired to this bridge: first the post-restart
-   * reconnect wait (a call can arrive before the plugin has redialed the freshly bound relay), then the
-   * approval hold across the human's Allow. One place, so the two write tools can't drift on either.
+   * The reply for a write call that arrives with no plugin on the wire, or null when one is connected.
    *
-   * The reconnect wait is skipped when no plugin is expected at all — a `--code-mode` server whose
-   * plugin was never opened should say so immediately, not stall for the bound first.
+   * This is where the restart window is ANSWERED rather than waited out. `bridge.request` would reject
+   * with "No Figma plugin connected. Open the Framelink plugin in Figma desktop" — true about the
+   * socket, wrong about the remedy during a reconnect, and expensive: the human obeys, reopening
+   * re-runs plugin/src/code.ts, which clears its in-memory approvedTokens and costs a real Allow. That
+   * instruction cost a dozen Allow clicks in one afternoon. So the two cases get different text, and
+   * the reconnect case says plainly NOT to reopen.
+   *
+   * Retryable, never `isError`: a socket that is a second from returning is a "try again", and an agent
+   * that reads a terminal failure abandons the tool.
    */
-  function requestHeldOpen(send: () => Promise<unknown>): Promise<unknown> {
-    return requestUntilApproved(send, {
-      awaitPluginConnection: () =>
-        expectsPluginConnection()
-          ? bridge.waitForPluginConnection(PLUGIN_CONNECT_WAIT_MS)
-          : Promise.resolve(),
-    });
+  function pluginUnavailableReply(): CallToolResult | null {
+    if (bridge.isPluginConnected()) return null;
+    if (expectsPluginConnection()) {
+      return retryableToolReply(
+        `The Figma plugin is momentarily disconnected — the server restarted and the plugin reconnects ` +
+          `on its own within a second or two, so this call did not run. Retry this exact call. This is ` +
+          `NOT a failure, and it does NOT mean the plugin is closed: do NOT ask the user to reopen or ` +
+          `re-import the Framelink plugin, which would throw away their approval and make them click ` +
+          `Allow again for no reason. Just retry.`,
+      );
+    }
+    return retryableToolReply(
+      `No Figma plugin is connected, so this call did not run — nothing has connected to this server ` +
+        `and code mode has no sandbox to run in. Ask the user to open the Framelink plugin in Figma ` +
+        `desktop, then retry this exact call. This is NOT a failure: it is the normal first step.`,
+    );
   }
 
   /**
@@ -217,11 +229,15 @@ export function registerCodeModeTools(
       async ({ code }) => {
         const refused = skewRefusal();
         if (refused) return refused;
-        // Correlation ids and the "no plugin connected" rejection are owned by PluginBridge; mid-run
-        // image fetches ride the bridge underneath this single execute (serveImagesRequest). The
-        // wait holds the call open across a plugin reconnect and then across the human's Allow,
-        // rather than returning "not approved yet" for the agent to retry — see requestHeldOpen.
-        const raw = await requestHeldOpen(() => bridge.request({ type: "EXECUTE_CODE", code }));
+        const unavailable = pluginUnavailableReply();
+        if (unavailable) return unavailable;
+        // Correlation ids are owned by PluginBridge; mid-run image fetches ride the bridge underneath
+        // this single execute (serveImagesRequest). The wait holds the call open across the human's
+        // Allow rather than returning "not approved yet" for the agent to retry — see
+        // requestUntilApproved.
+        const raw = await requestUntilApproved(() =>
+          bridge.request({ type: "EXECUTE_CODE", code }),
+        );
         const gated = gateResult(raw);
         if (gated) return gated;
         const reply = ExecuteCodeReply.parse(raw);
@@ -328,7 +344,9 @@ Returns a PNG image.`,
               `in range (2–4 is plenty for inspecting fine detail).`,
           );
         }
-        const raw = await requestHeldOpen(() =>
+        const unavailable = pluginUnavailableReply();
+        if (unavailable) return unavailable;
+        const raw = await requestUntilApproved(() =>
           bridge.request({ type: "SCREENSHOT", nodeId, key, scale }),
         );
         const gated = gateResult(raw);
@@ -348,10 +366,9 @@ Returns a PNG image.`,
   // process. The narrower rule made a dev-watch restart look like a cold start: for the seconds before
   // the plugin redialed, a stateless-HTTP request built a server with the write tools disabled and the
   // call came back "Tool figma_execute_code disabled" — a hard MCP error (-32602) with no path
-  // forward. That is strictly worse than the approval prompt this cycle removed: an agent told the
-  // capability does not exist stops trying, and cannot know that five seconds would have fixed it. The
-  // restart is exactly when the reloaded approval says a plugin IS there, so advertise and let the
-  // handler's bounded wait resolve it — a hidden tool has no seam to wait in.
+  // forward. That is strictly worse than a slow answer: an agent told the capability does not exist
+  // stops trying, and cannot know that a retry would have worked. A hidden tool also has no handler in
+  // which to say anything better, which is why this decision has to come first.
   if (codeMode || expectsPluginConnection()) return;
 
   // Hidden until a plugin proves the write path exists. disable() before the transport connects is
@@ -359,7 +376,7 @@ Returns a PNG image.`,
   // never see a flap. Only stdio subscribes to the latch: its one server outlives the whole session,
   // while stateless HTTP builds a fresh server per request — each request re-reads the decision above,
   // and subscribing those short-lived servers would accumulate dead closures until first connect.
-  // (Stdio also registers before the relay has finished binding, so `hasReloadedApproval` is still
+  // (Stdio also registers before the relay has finished binding, so `hasRecentApproval` is still
   // false here for it — the latch subscription below is what enables its tools either way.)
   for (const tool of tools) tool.disable();
   if (transport === "stdio") {

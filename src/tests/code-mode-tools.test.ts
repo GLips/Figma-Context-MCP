@@ -13,18 +13,18 @@ import type { PluginBridgeRuntime } from "~/services/plugin-bridge/index.js";
  */
 function listToolsWith({
   hasEverConnected,
-  hasReloadedApproval,
+  hasRecentApproval,
 }: {
   hasEverConnected: boolean;
-  hasReloadedApproval: boolean;
+  hasRecentApproval: boolean;
 }) {
   const bridge = {
     request: vi.fn(),
     getPairingCode: () => null,
     getSkewNote: () => null,
     touchApproval: () => {},
-    waitForPluginConnection: () => Promise.resolve(),
-    hasReloadedApproval: () => hasReloadedApproval,
+    isPluginConnected: () => false,
+    hasRecentApproval: () => hasRecentApproval,
   } as unknown as PluginBridge;
   const runtime: PluginBridgeRuntime = {
     bridge,
@@ -47,13 +47,13 @@ function listToolsWith({
 }
 
 describe("code-mode write tools are advertised whenever a plugin is expected", () => {
-  it("advertises across a server restart, when only the persisted approval remembers the plugin", async () => {
-    // A dev-watch restart: fresh process (latch off), relay rebound onto its persisted approval, and
-    // the plugin a second or two from redialing. Hiding the tools here answered a call that was merely
-    // early with "Tool figma_execute_code disabled" — a hard error an agent can't retry its way out of.
+  it("advertises across a server restart, when only the recent approval remembers the plugin", async () => {
+    // A dev-watch restart: fresh process (latch off), relay rebound onto an approval used minutes ago,
+    // and the plugin a second or two from redialing. Hiding the tools here answered a call that was
+    // merely early with "Tool figma_execute_code disabled" — a hard error an agent can't retry past.
     const { names, close } = listToolsWith({
       hasEverConnected: false,
-      hasReloadedApproval: true,
+      hasRecentApproval: true,
     });
 
     expect(await names()).toContain("figma_execute_code");
@@ -63,7 +63,7 @@ describe("code-mode write tools are advertised whenever a plugin is expected", (
   it("stays hidden on a genuine cold start, so read-only users never see write tools", async () => {
     const { names, close } = listToolsWith({
       hasEverConnected: false,
-      hasReloadedApproval: false,
+      hasRecentApproval: false,
     });
 
     const tools = await names();
