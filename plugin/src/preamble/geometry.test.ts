@@ -74,11 +74,36 @@ test("a render handle and a found handle describe one node in one spelling", asy
   );
 });
 
-test("a hugging node reports measured px on a render handle, sizing intent on a found one", async () => {
+test("a hugging node reports measured px AND the rule behind it; find folds both into one field", async () => {
   createFigmaMock();
   const out = await render(frame({ layout: { mode: "row" } }, [text("hi", { key: "label" })]));
-  // The deliberate divergence in the shared spelling: render just laid the node out, so it hands back the
-  // number it settled on; a located node reports intent, since a computed px would read as authored-fixed.
+  // width is always the number, so `label.width + 8` is always right; the rule sits beside it, spelled the
+  // read side's way. find has only one field for both, so it reports the rule and withholds the px.
   assert.equal(typeof out.keyed.label.width, "number");
+  assert.deepEqual(out.keyed.label.intent, { width: "hug", height: "hug" });
   assert.equal((await findOne({ key: "label" })).width, "hug");
+});
+
+test("a fill axis is named too; a plainly fixed axis says nothing", async () => {
+  createFigmaMock();
+  const out = await render(
+    frame({ width: 300, height: 200, layout: { mode: "column" } }, [
+      rect({ key: "bar", width: "fill", height: 12 }),
+      rect({ key: "chip", width: 40, height: 24 }),
+    ]),
+  );
+  // The measurement is a snapshot on a fill axis (it re-measures with the parent) and ground truth on a
+  // fixed one — which is the whole reason to say so on one and stay quiet on the other.
+  assert.equal(out.keyed.bar.width, 300);
+  assert.deepEqual(out.keyed.bar.intent, { width: "fill" });
+  assert.equal(out.keyed.chip.intent, undefined);
+});
+
+test("render's intent and find's width are the same word for the same axis", async () => {
+  createFigmaMock();
+  const out = await render(
+    frame({ width: 300, height: 200, layout: { mode: "column" } }, [rect({ key: "bar", width: "fill", height: 12 })]),
+  );
+  // Both sides reach the word through the core's convertSizing, so this can't drift into two vocabularies.
+  assert.equal(out.keyed.bar.intent?.width, (await findOne({ key: "bar" })).width);
 });

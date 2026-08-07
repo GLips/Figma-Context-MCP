@@ -28,6 +28,12 @@ export type {
 // (render's handle geometry) rounds identically to the read side — one numeric currency at the agent edge.
 export { pixelRound } from "./utils.js";
 
+// Figma's per-axis sizing flag → the canonical fill/hug/fixed word. Exported for the plugin's write side,
+// which reports a rendered node's sizing intent (bridge.intentOf) off the live node: resolveAxisDimension
+// takes the fill/hug word straight from this mapper, so sourcing it here rather than re-deriving it is what
+// makes render's `intent` and find's `width`/`height` the same answer by construction.
+export { convertSizing } from "./transformers/layout/common.js";
+
 // The core entry: NodeSnapshot[] → canonical SimplifiedNodes (expanded by
 // default; compression opt-in via { compress: true })
 export { simplify } from "./simplify.js";

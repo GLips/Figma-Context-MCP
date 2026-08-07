@@ -20,7 +20,7 @@ test("looksLikeNode fires on a live node but not on a handle/read POJO (id+type 
 });
 
 test("a render Handle round-trips WHOLE — geometry and key survive (the old id+type collapse dropped them)", () => {
-  const handle = { id: "1:2", type: "TEXT", name: "Title", key: "title", text: "Hi", width: 100, height: 20, left: 0, top: 0 };
+  const handle = { id: "1:2", type: "TEXT", name: "Title", key: "title", text: "Hi", width: 100, height: 20, intent: { height: "hug" }, left: 0, top: 0 };
   assert.deepEqual(safeSerialize(handle), handle);
 });
 

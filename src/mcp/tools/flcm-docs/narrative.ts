@@ -174,11 +174,21 @@ export const RENDER_KEYS = `\`render\` is **async** — always \`await\` it. It 
 }
 \`\`\`
 
-A **Handle** is a small plain object safe to return or log: \`{ id, type, name, width, height, key?, text?, position?, left?, top? }\` (\`text\` on text nodes, \`key\` when the node had one).
+A **Handle** is a small plain object safe to return or log: \`{ id, type, name, width, height, key?, text?, intent?, position?, left?, top? }\` (\`text\` on text nodes, \`key\` when the node had one).
 
-Its geometry is **measured**, read after the whole tree is laid out — so \`width\`/\`height\` are the real px a 35%-wide bar or a hugged frame came out at, not what you assumed. They are the node's **own** size, unaffected by any \`rotate\` you applied. \`left\`/\`top\` are the offset inside the parent, and appear **only when the parent doesn't place the node** (a child of a plain frame, or one you positioned with \`absolute\`); under \`row\`/\`column\` the parent decides the position, so there is nothing to report. An \`absolute\` child of a \`row\`/\`column\` parent also carries \`position: "absolute"\`.
+\`width\`/\`height\` are **always numbers** — the real px measured after the whole tree is laid out, so \`bar.width + 8\` always works. They are the node's **own** size, unaffected by any \`rotate\` you applied.
 
-This is the same geometry spelling the read verbs use (\`get\`, \`find\`), so a node you just rendered and a node you looked up read alike. The one difference is what a **size** means: a rendered handle always reports measured px, while a found node reports sizing **intent** on an axis it doesn't fix — render the same hugging label and you get \`width: 137.42\` from \`render\` and \`width: "hug"\` from \`find\`.
+\`\`\`js
+out.keyed.bar.width;      // 320       — what it came out at
+out.keyed.bar.intent;     // { width: "fill" }
+out.keyed.chip.intent;    // undefined — a plainly fixed node
+\`\`\`
+
+**\`intent\` tells you whether that number is yours to keep.** It appears only on an axis the *layout* owns — one you sized \`"fill"\` or \`"hug"\` — because such an axis re-measures whenever its parent or content changes. Reading \`320\` off a \`"fill"\` bar and hardcoding \`w: 320\` is how a responsive design silently becomes a fixed one. On a plainly fixed axis there is no \`intent\`: the measurement *is* what you asked for.
+
+\`left\`/\`top\` are the offset inside the parent, and appear **only when the parent doesn't place the node** (a child of a plain frame, or one you positioned with \`absolute\`); under \`row\`/\`column\` the parent decides the position, so there is nothing to report. An \`absolute\` child of a \`row\`/\`column\` parent also carries \`position: "absolute"\`.
+
+The read verbs (\`get\`, \`find\`) name geometry the same way, so a node you just rendered and a node you looked up read alike. They differ in one place: having only just measured it, \`render\` can hand you the number *and* the rule, while \`find\` has one field for both — it reports \`width: "fill"\` and withholds the px, so nothing tempts you to pin a size the design didn't fix.
 
 **Keys are opt-in addressing.** Only keyed nodes appear in \`out.keyed\`; unkeyed nodes stay anonymous. Keys must be **unique within a single render** (a duplicate is a loud error) and are global to the render — namespace by hand (\`"email:input"\`). The key is stored on the node (\`pluginData("flcm/key")\`).
 

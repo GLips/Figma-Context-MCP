@@ -245,12 +245,22 @@ export interface Identity { id: string; type: string; name: string; key?: string
 // point — an agent that measures what it rendered and an agent that locates an existing node read the same
 // field names. The values are settled by render()'s post-walk minting pass (bridge.settleHandles).
 export interface Handle extends Identity {
-  // MEASURED px, always — the deliberate divergence from SlimHandle's sizing intent. render() just laid the
-  // tree out, so the settled number is ground truth and the whole reason to look: a 35%-wide bar's real
-  // width, a hugged frame's real height. A located node gets intent instead, because there a computed px
-  // would read as authored-fixed and invite an agent to pin what the layout owns.
+  // MEASURED px, always. render() just laid the tree out, so the settled number is ground truth and the
+  // whole reason to look: a 35%-wide bar's real width, a hugged frame's real height. Always a number so the
+  // obvious reach — `bar.width + 8` — is always right; the sizing RULE behind it lives in `intent`, where it
+  // can't be mistaken for a measurement (the same split the read side makes with width vs designedWidth).
   width: number;
   height: number;
+  // The sizing rule on an axis the LAYOUT owns, so an agent can tell a measurement it may reuse from one it
+  // would be freezing: a "fill"/"hug" axis re-measures whenever its parent or content changes, and pinning
+  // this number is how a responsive design becomes a fixed one. Absent on an axis that is plainly fixed —
+  // there the measurement IS the intent, and a second field would only cost context.
+  //
+  // The words are the read side's own (core SimplifiedDimension), taken from the same mapper `find` uses
+  // (core convertSizing), so `render`'s intent and `find`'s width/height can't disagree. Numbers and
+  // "contextual" are excluded: a number is what `width` above already carries, and "contextual" describes a
+  // root the read path SEVERED from its parent — a rendered root is a real page child, never that.
+  intent?: { width?: Extract<SimplifiedDimension, "fill" | "hug">; height?: Extract<SimplifiedDimension, "fill" | "hug"> };
   position?: "absolute";
   left?: number;
   top?: number;
@@ -263,8 +273,11 @@ export interface Handle extends Identity {
 // vocabulary's SimplifiedDimension (a px number ONLY on an authored-fixed axis; "fill"/"hug"/"contextual"
 // carry intent, never a misleading computed px), layout carries just the container mode, and
 // position/left/top mirror NodeGeometry, emitted only when the node is out of its parent's auto-layout flow.
-// Same geometry spelling as the write-side Handle, on the same emission rules; the one difference is what a
-// size MEANS — slim carries sizing intent, a render Handle carries measured px (see Handle above).
+// Same geometry spelling as the write-side Handle, on the same emission rules. Where they part is the SHAPE
+// of a size: slim folds intent and px into one field (a hugging axis reports "hug" and no number, because a
+// computed px would mislead a codegen consumer into pinning it), while a Handle splits them — always a
+// measured number in width/height, the rule beside it in `intent`. A render just measured what it built, so
+// it can hand over both; a locate has only the design's own intent to report (see Handle above).
 export interface SlimHandle extends Identity {
   width?: SimplifiedDimension;
   height?: SimplifiedDimension;

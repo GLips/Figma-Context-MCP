@@ -14,7 +14,7 @@ import { toFigmaEffects } from "./effects.js";
 import { resolveFont, resolveFontStrict, FontMap } from "./fonts.js";
 import { normalizePathData } from "./path.js";
 import { writeKey, identityOf } from "./identity.js";
-import { pixelRound } from "~/core/index.js";
+import { pixelRound, convertSizing } from "~/core/index.js";
 
 // `images` is the url → base64 map render() threads through the walk (bytes the server fetched+validated
 // and injected between the two passes); an image PaintSpec resolves to a plugin ImagePaint against it.
@@ -64,6 +64,8 @@ const AUTO_LAYOUT_MODES = ["HORIZONTAL", "VERTICAL", "GRID"];
 // not a number to reproduce here.
 function geometryOf(node: any): Omit<Handle, keyof Identity> {
   const geometry: Omit<Handle, keyof Identity> = { width: pixelRound(node.width), height: pixelRound(node.height) };
+  const intent = intentOf(node);
+  if (intent) geometry.intent = intent;
   const parent = node.parent;
   const parentPlacesIt = !!parent && AUTO_LAYOUT_MODES.indexOf(parent.layoutMode) !== -1 && node.layoutPositioning !== "ABSOLUTE";
   if (parent && parent.type !== "PAGE" && !parentPlacesIt) {
@@ -72,6 +74,21 @@ function geometryOf(node: any): Omit<Handle, keyof Identity> {
     geometry.top = pixelRound(node.y);
   }
   return geometry;
+}
+
+// The sizing rule behind a node's measured size, on the axes the layout owns. Only "fill" and "hug" are
+// reported: those are the axes that will re-measure on their own, so an agent needs to know the number it's
+// holding is a snapshot. A FIXED axis says nothing (the measurement is the intent) and neither does an axis
+// Figma reports nothing for. The words come from the core's own convertSizing over the live sizing flags,
+// which is EXACTLY how the read side reaches fill/hug (resolveAxisDimension returns the word before any of
+// its fixed/root machinery runs) — so this is the same answer `find` gives, not a parallel derivation.
+function intentOf(node: any): Handle["intent"] {
+  const intent: NonNullable<Handle["intent"]> = {};
+  const horizontal = convertSizing(node.layoutSizingHorizontal);
+  const vertical = convertSizing(node.layoutSizingVertical);
+  if (horizontal === "fill" || horizontal === "hug") intent.width = horizontal;
+  if (vertical === "fill" || vertical === "hug") intent.height = vertical;
+  return intent.width || intent.height ? intent : undefined;
 }
 
 // Mint the JSON-safe reference for one live node. Identity (id/name/type/key/text) comes from identityOf —
