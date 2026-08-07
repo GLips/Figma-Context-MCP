@@ -21,8 +21,10 @@ test("cache: a repeated url is served without a second fetch", async () => {
       return `b64(${url})`;
     },
   });
-  assert.deepEqual(await handler([u1]), { [u1]: `b64(${u1})` });
-  assert.deepEqual(await handler([u1, u2]), { [u1]: `b64(${u1})`, [u2]: `b64(${u2})` });
+  // Spread: the reply map is null-prototype (attacker-chosen keys), which strict deepEqual would
+  // otherwise flag against a plain object literal.
+  assert.deepEqual({ ...(await handler([u1])) }, { [u1]: `b64(${u1})` });
+  assert.deepEqual({ ...(await handler([u1, u2])) }, { [u1]: `b64(${u1})`, [u2]: `b64(${u2})` });
   assert.deepEqual(fetched, [u1, u2], "u1 was fetched exactly once");
 });
 

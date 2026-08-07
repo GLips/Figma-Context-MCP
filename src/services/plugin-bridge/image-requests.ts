@@ -96,7 +96,10 @@ export function createImagesRequestHandler(deps: ImagesRequestDeps): ImagesReque
           `${MAX_IMAGES_PER_REQUEST} cap — split the build across calls.`,
       );
     }
-    const bytes: Record<string, string> = {};
+    // Null-prototype: the keys are attacker-chosen source strings, and local paths made ordinary
+    // filenames into keys. `bytes["__proto__"] = b64` on a plain object silently sets nothing, so a
+    // file legitimately named __proto__ would vanish from the reply.
+    const bytes: Record<string, string> = Object.create(null) as Record<string, string>;
     let replyChars = 0;
     const addBytes = (url: string, base64: string): void => {
       bytes[url] = base64;

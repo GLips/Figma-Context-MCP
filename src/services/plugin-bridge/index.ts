@@ -2,7 +2,7 @@ import { z } from "zod";
 import { join } from "node:path";
 import { Logger } from "~/utils/logger.js";
 import { PluginBridge } from "./bridge.js";
-import { fetchAndProcessImage, isLocalImageSource, readLocalImage } from "./images.js";
+import { fetchAndProcessImage, isLocalImageSource, createLocalImageReader } from "./images.js";
 import { ImageByteCache, createImagesRequestHandler } from "./image-requests.js";
 import { WS_PORT_BLOCK } from "./ports.js";
 import { SESSION_IDENTITY } from "./approval.js";
@@ -45,12 +45,13 @@ export function startPluginBridge({ assetRoot }: { assetRoot: string }): PluginB
   // The images handler answers the plugin's mid-run image requests (protocol 2). Sources split by
   // scheme: https urls go through the guarded fetch plus a session-lifetime URL→bytes cache, local
   // paths through the asset-root-contained file read (uncached — see image-requests.ts).
+  // One reader per process: it pins the canonical asset root on first use, so the authorization
+  // boundary can't shift under a retargeted root symlink mid-session.
+  const readLocalImage = createLocalImageReader(assetRoot);
   const bridge = new PluginBridge(undefined, {
     imagesRequestHandler: createImagesRequestHandler({
       fetchImage: (source) =>
-        isLocalImageSource(source)
-          ? readLocalImage(source, assetRoot)
-          : fetchAndProcessImage(source),
+        isLocalImageSource(source) ? readLocalImage(source) : fetchAndProcessImage(source),
       cache: new ImageByteCache(),
     }),
   });

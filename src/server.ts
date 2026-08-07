@@ -91,6 +91,16 @@ export async function startServer(config: ServerConfig): Promise<void> {
           `MCP clients often launch the server outside your project root — set IMAGE_DIR or pass --image-dir to make this explicit.\n`,
       );
     }
+    // The asset root is a READ boundary — it decides which of the user's files flcm.image can place
+    // into a cloud-synced Figma document. An MCP client picks the cwd, so a defaulted root may be a
+    // directory the user never chose to expose. Warn unconditionally (unlike --image-dir's warning):
+    // the code-mode tools can latch on later in the process, so "no plugin yet" proves nothing.
+    if (config.configSources.assetRoot === "default") {
+      process.stderr.write(
+        `Warning: --asset-root not set; flcm.image local file paths resolve under the server's cwd (${config.assetRoot}). ` +
+          `MCP clients often launch the server outside your project root — set FRAMELINK_ASSET_ROOT or pass --asset-root to choose the boundary deliberately.\n`,
+      );
+    }
     const server = createServer(config.auth, serverOptions);
     const transport = new StdioServerTransport();
     await server.connect(transport);
