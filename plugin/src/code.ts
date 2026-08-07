@@ -155,6 +155,64 @@ function reply(to: ReplyTo, body: Record<string, unknown>): void {
   figma.ui.postMessage({ ...body, id: to.id, __connKey: to.connKey });
 }
 
+// ---- Mid-run image fetch: the plugin→server reverse-request direction (protocol 2). ----
+// The sandbox's render() suspends on an await while the server fetches image bytes; these tables
+// correlate the plugin-ISSUED requests with the server's typed replies. Deliberately a separate id
+// namespace ("preq-") and a separate pending table from the server's own requests: each side owns
+// its ids, and reverse replies are matched by TYPE (IMAGES_REPLY/IMAGES_ERROR) before the envelope
+// dispatch, so neither end ever has to guess who minted an id.
+let nextImagesRequestId = 0;
+interface PendingImagesFetch {
+  resolve: (images: Record<string, string>) => void;
+  reject: (err: Error) => void;
+  runId: string;
+  connKey: ConnKey | undefined;
+}
+const pendingImagesFetches = new Map<string, PendingImagesFetch>();
+
+/**
+ * Ask the run's server for image bytes (url → base64) and await its typed reply. Tagged with the
+ * run's correlation id so the server can (a) suspend the run's inactivity deadline while IT is the
+ * side doing the work, and (b) refuse a request for a run it no longer tracks (cancelled/timed
+ * out) — that refusal rejects this promise, which is what makes a zombie run die at its
+ * suspension point instead of resuming into canvas writes.
+ */
+function requestServerImages(to: ReplyTo, urls: string[]): Promise<Record<string, string>> {
+  return new Promise((resolve, reject) => {
+    const id = "preq-" + ++nextImagesRequestId;
+    pendingImagesFetches.set(id, { resolve, reject, runId: to.id, connKey: to.connKey });
+    figma.ui.postMessage({ type: "IMAGES_REQUEST", id, runId: to.id, urls, __connKey: to.connKey });
+  });
+}
+
+/** Settle a plugin-issued image request from the server's typed reply. An unknown id is dropped —
+ * that fetch was already rejected by a CANCEL or a disconnect. */
+function settleImagesFetch(msg: InboundMessage): void {
+  const pending = typeof msg.id === "string" ? pendingImagesFetches.get(msg.id) : undefined;
+  if (!pending || typeof msg.id !== "string") return;
+  pendingImagesFetches.delete(msg.id);
+  if (msg.type === "IMAGES_REPLY" && msg.images && typeof msg.images === "object") {
+    pending.resolve(msg.images as Record<string, string>);
+  } else {
+    pending.reject(
+      new Error(
+        typeof msg.error === "string" ? msg.error : "flcm.image: the server's image reply was malformed.",
+      ),
+    );
+  }
+}
+
+/** Reject matching pending image fetches. A rejected fetch kills its suspended run at the await —
+ * the mechanism behind both CANCEL (deadline fired) and WS_CLOSED (server went away), and what
+ * keeps the write queue from wedging on a fetch whose reply can never arrive. */
+function rejectImagesFetches(match: (p: PendingImagesFetch) => boolean, reason: string): void {
+  for (const [id, pending] of pendingImagesFetches) {
+    if (!match(pending)) continue;
+    pendingImagesFetches.delete(id);
+    pending.reject(new Error(reason));
+  }
+}
+
 // First-run orientation. The session list shows a one-time explainer (what the plugin does; "only
 // approve sessions you started") the FIRST time it is ever expanded, then never again. This is the
 // ONE durable bit of plugin state — it persists across plugin reopens via clientStorage,
@@ -404,6 +462,12 @@ figma.ui.onmessage = (msg: InboundMessage) => {
       // and with no socket there are no writes meanwhile. ui.html auto-reconnects the port after this.
       // Refresh the list; collapse only once the LAST session is gone (nothing left to act on) — a
       // departure mustn't close a list another session opened for a pending decision.
+      // First, kill this session's suspended runs: a reply to their image fetches can never arrive,
+      // and an unrejected fetch would wedge the write queue for the life of the plugin.
+      rejectImagesFetches(
+        (p) => p.connKey === key,
+        "flcm: the server disconnected mid-run — the image fetch was abandoned and the script stops here.",
+      );
       connections.delete(key);
       if (connections.size === 0) setExpanded(false);
       else renderUi();
@@ -416,7 +480,28 @@ figma.ui.onmessage = (msg: InboundMessage) => {
       // The human clicked "Revoke access" on an approved row — de-authorize it and clear the server's
       // persisted token.
       revokeSession(key);
+    } else if (msg.type === "CANCEL") {
+      // The server's inactivity deadline fired for this run (id-less, run-scoped, one-way — the
+      // server-side mirror of SESSION_TOKEN's direction). Reject the run's pending awaits so the
+      // suspended script dies at its await instead of resuming into canvas writes the agent was
+      // told never happened. Scoped to BOTH the run id and this source port: correlation ids are
+      // per-server counters, so two connected servers can mint colliding run ids.
+      const runId = typeof msg.runId === "string" ? msg.runId : null;
+      if (runId) {
+        rejectImagesFetches(
+          (p) => p.runId === runId && p.connKey === key,
+          "flcm: this run was cancelled by the server (its deadline passed with no traffic) — the script stops here.",
+        );
+      }
     }
+    return;
+  }
+  // Reverse-direction replies (protocol 2): typed answers to PLUGIN-issued requests, matched by
+  // type + plugin id and consumed here. They are replies, so they must not fall through to the
+  // envelope dispatch below — its contract is "every id-carrying SERVER request gets one reply",
+  // and its ids are a different namespace.
+  if (msg.type === "IMAGES_REPLY" || msg.type === "IMAGES_ERROR") {
+    settleImagesFetch(msg);
     return;
   }
   const to: ReplyTo = { id: msg.id, connKey: connKeyOf(msg) };
@@ -517,11 +602,13 @@ async function executeCode(to: ReplyTo, code: string): Promise<void> {
 
   let result: unknown;
   let errorMessage: string | null = null;
-  // The two-pass image path: flcm.render() throws this sentinel (carrying the urls) BEFORE creating any
-  // node when the server hasn't yet injected the image bytes. It's not an error — it's a request for the
-  // server to fetch+validate those urls and re-run this same code with the bytes injected. Surfaced on the
-  // normal result envelope so the frozen wire shape is untouched.
-  let imagesNeeded: string[] | null = null;
+  // The preamble's mid-run image channel: a LOCAL in this function's scope, visible to the direct
+  // eval below through the ordinary scope chain (esbuild never renames identifiers in a scope
+  // containing direct eval, so the free reference in the preamble bundle resolves here). Bound to
+  // `to` so every request carries the run's correlation id and source port.
+  const __flcmRequestImages = (urls: string[]): Promise<Record<string, string>> =>
+    requestServerImages(to, urls);
+  void __flcmRequestImages;
   try {
     // The preamble bundle rides INSIDE the same async IIFE as the user's code, so its single
     // `flcm` global (flcm.frame/text/render/…) is simply in scope. The leading preamble also
@@ -532,9 +619,7 @@ async function executeCode(to: ReplyTo, code: string): Promise<void> {
     guardReturnValue(raw);
     result = raw;
   } catch (err) {
-    const needed = err && typeof err === "object" ? (err as { __flcmImagesNeeded?: unknown }).__flcmImagesNeeded : undefined;
-    if (Array.isArray(needed)) imagesNeeded = needed.filter((u): u is string => typeof u === "string");
-    else errorMessage = formatError(err);
+    errorMessage = formatError(err);
   } finally {
     console.log = originalConsole.log;
     console.info = originalConsole.info;
@@ -542,9 +627,7 @@ async function executeCode(to: ReplyTo, code: string): Promise<void> {
     console.error = originalConsole.error;
   }
 
-  reply(to, imagesNeeded
-    ? { type: "EXECUTE_CODE_RESULT", imagesNeeded, console: consoleLog, errors: null }
-    : { type: "EXECUTE_CODE_RESULT", result: safeSerialize(result), console: consoleLog, errors: errorMessage });
+  reply(to, { type: "EXECUTE_CODE_RESULT", result: safeSerialize(result), console: consoleLog, errors: errorMessage });
 }
 
 /**

@@ -114,6 +114,9 @@ export class PluginBridge {
   // How long a pending request may sit with no run traffic before it is cancelled (see
   // DEFAULT_TIMEOUT_MS). Set once at construction.
   private readonly requestTimeoutMs: number;
+  // Answers the plugin's mid-run IMAGES_REQUEST frames (protocol 2's reverse direction). Wired once
+  // at startup (index.ts) to the guarded fetch path + the session image cache.
+  private imagesRequestHandler: ((urls: string[]) => Promise<Record<string, string>>) | null = null;
 
   // Injectable so the contract harness / tests isolate persistence to a temp dir instead of touching
   // the real ~/.framelink, and drive timeouts without real 15s waits. Production uses the defaults.
@@ -236,7 +239,7 @@ export class PluginBridge {
       socket.on("pong", () => {
         if (this.socket === socket) this.socketAlive = true;
       });
-      socket.on("message", (data) => this.handleMessage(data.toString()));
+      socket.on("message", (data) => this.handleMessage(socket, data.toString()));
       socket.on("close", () => {
         // A socket displaced by slot-reclaim is no longer current — this.socket already
         // points at the newcomer, whose fresh handshake requests are queued synchronously
@@ -288,7 +291,12 @@ export class PluginBridge {
     socket.ping();
   }
 
-  /** Set the current connection's version-skew nudge (null = plugin is current). */
+  /** Register the answerer for plugin-issued IMAGES_REQUEST frames (protocol 2's reverse direction). */
+  onImagesRequest(handler: (urls: string[]) => Promise<Record<string, string>>): void {
+    this.imagesRequestHandler = handler;
+  }
+
+  /** Set the current connection's version-skew refusal (null = plugin is current). */
   setSkewNote(note: string | null): void {
     this.skewNote = note;
   }
@@ -402,8 +410,15 @@ export class PluginBridge {
     );
   }
 
-  private handleMessage(raw: string): void {
-    let msg: { id?: unknown; type?: unknown; error?: unknown; sessionToken?: unknown };
+  private handleMessage(socket: WebSocket, raw: string): void {
+    let msg: {
+      id?: unknown;
+      type?: unknown;
+      error?: unknown;
+      sessionToken?: unknown;
+      runId?: unknown;
+      urls?: unknown;
+    };
     try {
       msg = JSON.parse(raw);
     } catch {
@@ -432,6 +447,13 @@ export class PluginBridge {
       Logger.log("Session approval revoked by the human — cleared the persisted token");
       return;
     }
+    // Protocol 2 reverse direction: the plugin asks US for image bytes mid-run. Its ids live in the
+    // plugin's own namespace, so this must dispatch by TYPE before the pending-reply match below —
+    // which only knows server-issued ids and would silently drop these frames.
+    if (msg.type === "IMAGES_REQUEST") {
+      this.serveImagesRequest(socket, msg);
+      return;
+    }
     if (typeof msg.id !== "string") return;
     const pending = this.pending.get(msg.id);
     if (!pending) return;
@@ -450,5 +472,70 @@ export class PluginBridge {
       return;
     }
     pending.resolve(msg);
+  }
+
+  /**
+   * Service a plugin-issued IMAGES_REQUEST (protocol 2). Traffic-as-heartbeat: the run's
+   * inactivity deadline is SUSPENDED while WE are the side doing the work (our fetch is bounded by
+   * images.ts's own timeouts and caps) and re-armed when the reply goes out — the deadline only
+   * ever counts plugin-side silence. A request naming a run this bridge no longer tracks (timed
+   * out, cancelled, already resolved) is refused instead of served: the refusal rejects the run's
+   * suspended await plugin-side, so a zombie run can never resume into canvas writes after the
+   * agent was told nothing happened. That refusal is the authoritative half of the policy; the
+   * CANCEL frame on timeout is the prompt half.
+   */
+  private serveImagesRequest(
+    socket: WebSocket,
+    msg: { id?: unknown; runId?: unknown; urls?: unknown },
+  ): void {
+    if (typeof msg.id !== "string") return; // unanswerable — nothing to correlate a reply to
+    const id = msg.id;
+    // A reverse request proves the holder speaks the envelope, exactly like a matched reply.
+    this.handshaked = true;
+    const runId = typeof msg.runId === "string" ? msg.runId : null;
+    const urls = Array.isArray(msg.urls)
+      ? msg.urls.filter((u): u is string => typeof u === "string")
+      : [];
+    // Reply on the socket the request arrived on, and only while it is still the current one — a
+    // displaced or dead socket's fetch result must not leak onto a newer connection.
+    const send = (body: Record<string, unknown>): void => {
+      if (this.socket === socket && socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ ...body, id }));
+      }
+    };
+    if (!runId || !this.pending.has(runId)) {
+      send({
+        type: "IMAGES_ERROR",
+        error: `flcm.image: run ${runId ?? "(unknown)"} is no longer active on this server (cancelled, timed out, or already finished) — the image request was refused.`,
+      });
+      return;
+    }
+    if (!this.imagesRequestHandler) {
+      send({
+        type: "IMAGES_ERROR",
+        error:
+          "flcm.image: this server has no image handler wired — image bytes cannot be fetched.",
+      });
+      return;
+    }
+    const run = this.pending.get(runId);
+    if (run) clearTimeout(run.timer); // suspend: the server is the side working now
+    void this.imagesRequestHandler(urls)
+      .then((images) => {
+        if (!this.pending.has(runId)) {
+          // The run died while we fetched — withhold the bytes rather than resume a zombie.
+          send({
+            type: "IMAGES_ERROR",
+            error: `flcm.image: run ${runId} is no longer active on this server — the image reply was withheld.`,
+          });
+          return;
+        }
+        send({ type: "IMAGES_REPLY", images });
+        this.armPendingTimer(runId); // the plugin's clock restarts: build + reply within the deadline
+      })
+      .catch((err: unknown) => {
+        send({ type: "IMAGES_ERROR", error: err instanceof Error ? err.message : String(err) });
+        this.armPendingTimer(runId); // no-op if the run died meanwhile
+      });
   }
 }

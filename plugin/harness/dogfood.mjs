@@ -22,6 +22,12 @@ const SANDBOX_PREAMBLE = await buildSandboxPreamble();
 
 // 2. Mock figma + capture console (mirrors code.ts's console capture for parity).
 createFigmaMock();
+// Mid-run image channel (protocol 2): the live sandbox awaits the server over the WS bridge; the
+// harness answers instantly with stand-in bytes so image scenarios run headless. Installed on
+// globalThis because the indirect eval below runs in global scope (the live path resolves the same
+// free identifier to executeCode's direct-eval local instead).
+globalThis.__flcmRequestImages = async (urls) =>
+  Object.fromEntries(urls.map((u) => [u, Buffer.from("harness-image-bytes").toString("base64")]));
 const userCode = readFileSync(resolve(process.cwd(), fileArg), "utf8");
 const log = [];
 const real = { ...console };

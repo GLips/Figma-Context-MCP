@@ -117,9 +117,9 @@ function stampKey(node: any, wn: WriteNode, ctx: RenderCtx): void {
   ctx.keyed[wn.key] = node;
 }
 
-// Resolve one PaintSpec to a plugin Paint. An image spec needs raster BYTES (the server fetched them and
-// injected ctx.images, keyed by url) turned into an imageHash via figma.createImage — a figma.* call, so
-// it lives HERE in the bridge, not in the figma-free paint.ts. Every other spec maps purely.
+// Resolve one PaintSpec to a plugin Paint. An image spec needs raster BYTES (render() awaited them from
+// the server mid-run into ctx.images, keyed by url) turned into an imageHash via figma.createImage — a
+// figma.* call, so it lives HERE in the bridge, not in the figma-free paint.ts. Every other spec maps purely.
 function paintOf(spec: PaintSpec, ctx: RenderCtx): Paint {
   if (spec.kind === "image") return imagePaint(spec, ctx);
   return toFigmaPaint(spec);
@@ -128,9 +128,9 @@ function paintOf(spec: PaintSpec, ctx: RenderCtx): Paint {
 function imagePaint(spec: ImageSpec, ctx: RenderCtx): Paint {
   const b64 = ctx.images[spec.url];
   if (typeof b64 !== "string") {
-    // render() collects every image url and signals "images needed" before any node is built, so the bytes
-    // are always present here on the render pass. A miss means the tree changed between passes — fail loud
-    // rather than paint a blank fill.
+    // render() collects and awaits every image url before any node is built, so the bytes are always
+    // present here. A miss means collectImageUrls missed a paint site paintOf resolves (the lockstep
+    // warning on collectImageUrls) — fail loud rather than paint a blank fill.
     throw new Error('flcm.image: no fetched bytes for "' + spec.url + '" — the image was not resolved before render.');
   }
   const img = figma.createImage(figma.base64Decode(b64));

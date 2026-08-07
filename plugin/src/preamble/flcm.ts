@@ -724,19 +724,14 @@ function normalizeEffects(v: EffectsInput): EffectSpec[] {
   return effects(v as EffectsSugar);
 }
 
-// The server injects the raster bytes for image fills on this global between the two render passes (a
-// Record keyed by url → base64). It's the ONE channel that reaches into the preamble: the preamble is its
-// own IIFE closure, so a var declared in the agent-code scope wouldn't be visible here. Declared because
-// the sandbox's ES2017 lib predates the globalThis TYPE; the `typeof` guard makes the READ safe even in an
-// engine where the identifier is truly absent (typeof never throws on an undeclared name). Absent on the
-// first pass (and whenever no image fills are used); a Record on the re-run.
-declare const globalThis: { __flcmImageBytes?: Record<string, string> } | undefined;
-
-function injectedImageBytes(): Record<string, string> {
-  const g = typeof globalThis !== "undefined" ? globalThis : undefined;
-  const bag = g && g.__flcmImageBytes;
-  return bag && typeof bag === "object" ? bag : {};
-}
+// The host-installed mid-run image channel (protocol 2). executeCode (code.ts) defines this as a
+// LOCAL in the direct-eval scope this preamble runs in, so the reference resolves through the eval
+// scope chain — no globalThis dependency in QuickJS. The harness and preamble unit tests run via
+// indirect eval / plain import (global scope) and install it on globalThis instead; both paths
+// resolve the same free identifier, and `typeof` keeps the probe safe where it's truly absent.
+declare const __flcmRequestImages:
+  | ((urls: string[]) => Promise<Record<string, string>>)
+  | undefined;
 
 // Gather every image url in the tree — from EVERY paint-bearing location the bridge later resolves through
 // paintOf (node fills/strokes AND per-run fills), so render() can check which still need server-fetched
@@ -771,17 +766,18 @@ async function render(tree: WriteNode): Promise<{ root: Handle; keyed: Record<st
   if (tree.layout && (tree.layout.percentSize || tree.layout.percentPos)) {
     throw new Error("flcm: a percent w/h/x/y on the root node has no parent to resolve against — the root node sizes in px. Put the percent on a child, against its parent.");
   }
-  // Two-pass image path: collect every image url and, if the server hasn't injected its bytes yet, signal
-  // "images needed" BEFORE creating any node (flcm builds an inert tree then renders, so nothing has run
-  // yet — the re-run can't double any side effect). The executor turns this throw into an imagesNeeded
-  // reply; the server fetches+validates and re-runs this same code with bytes injected, and this pass then
-  // finds them present. Dedupe so the server never fetches one url twice.
-  const images = injectedImageBytes();
-  const missing = collectImageUrls(tree).filter((url) => !(url in images));
-  if (missing.length) {
-    const err: Error & { __flcmImagesNeeded?: string[] } = new Error("flcm.render: image bytes not fetched yet — the server supplies them and re-runs this code.");
-    err.__flcmImagesNeeded = Array.from(new Set(missing));
-    throw err;
+  // Mid-run image fetch (protocol 2): batch every image url in the tree into ONE deduped, awaitable
+  // request, BEFORE any node is created — a fetch failure (blocked url, oversize, unreachable) aborts
+  // with zero canvas writes. The await is the run's suspension point: the sandbox suspends here while
+  // the plugin main thread relays the WS round-trip and the server answers (session-cached); a
+  // cancelled or disconnected run dies here when the host rejects its pending fetch.
+  const urls = Array.from(new Set(collectImageUrls(tree)));
+  let images: Record<string, string> = {};
+  if (urls.length) {
+    if (typeof __flcmRequestImages !== "function") {
+      throw new Error("flcm.image: this runtime has no image channel (__flcmRequestImages) — image fills need the live plugin bridge.");
+    }
+    images = await __flcmRequestImages(urls);
   }
   const fonts = await loadFontsForTree(tree);
   const ctx: RenderCtx = { keyed: {}, fonts, images, pending: [] };

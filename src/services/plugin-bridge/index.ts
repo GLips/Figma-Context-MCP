@@ -2,6 +2,8 @@ import { z } from "zod";
 import { join } from "node:path";
 import { Logger } from "~/utils/logger.js";
 import { PluginBridge } from "./bridge.js";
+import { fetchAndProcessImage } from "./images.js";
+import { SessionImageCache, createImagesRequestHandler } from "./image-requests.js";
 import { WS_PORT_BLOCK } from "./ports.js";
 import { SESSION_IDENTITY } from "./approval.js";
 import { resolveStateDir } from "./approval-store.js";
@@ -41,6 +43,14 @@ const VersionReply = z.object({
  */
 export function startPluginBridge(): PluginBridgeRuntime {
   const bridge = new PluginBridge();
+  // Answer the plugin's mid-run image requests (protocol 2) from the guarded fetch path plus a
+  // session-lifetime URL→bytes cache — repeated renders of one asset never re-download.
+  bridge.onImagesRequest(
+    createImagesRequestHandler({
+      fetchImage: fetchAndProcessImage,
+      cache: new SessionImageCache(),
+    }),
+  );
   // Surface where the durable-approval token file lives — it is a security-adjacent 0600 credential, so
   // an operator should be able to see (and locate/inspect) it at startup. Override via FRAMELINK_STATE_DIR.
   Logger.log(`Session approvals persisted under ${join(resolveStateDir(), "approvals")}`);

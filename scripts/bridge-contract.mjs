@@ -603,5 +603,75 @@ silent.close();
 bridgeT.stop();
 await wait(150);
 
+// --- Phase 1 (edit surface): the reverse-request direction — mid-run image fetch ---
+// The plugin issues IMAGES_REQUEST with its OWN id namespace ("preq-") tagged with the run's id;
+// the server answers with typed IMAGES_REPLY/IMAGES_ERROR, SUSPENDS the run's inactivity deadline
+// while it is the side doing the work (traffic-as-heartbeat), and refuses requests for runs it no
+// longer tracks (zombie-run defense). Driven with a raw socket speaking the plugin's half.
+const PORT_I = 19885;
+const bridgeI = new PluginBridge(isolatedStore(), { requestTimeoutMs: 500 });
+const servedBatches = [];
+bridgeI.onImagesRequest(async (urls) => {
+  servedBatches.push(urls);
+  if (urls.includes("boom")) throw new Error('flcm.image could not load "boom": blocked range');
+  await wait(700); // longer than the whole deadline: the service window must not count against the run
+  return Object.fromEntries(urls.map((u) => [u, "b64-" + u]));
+});
+bridgeI.start([PORT_I]);
+await wait(150);
+const framesImg = [];
+let imagesReply = null;
+const pluginImg = new WebSocket(`ws://127.0.0.1:${PORT_I}`, { origin: "null" });
+pluginImg.on("message", (raw) => {
+  const msg = JSON.parse(raw.toString());
+  framesImg.push(msg);
+  if (msg.type === "EXECUTE_CODE") {
+    // The modeled run suspends on its image await and asks the server for bytes mid-run. The urls
+    // deliberately repeat one entry: the SERVER dedupes again (the plugin is untrusted).
+    const urls = msg.code === "boom run" ? ["boom"] : ["u1", "u1", "u2"];
+    const preqId = msg.code === "boom run" ? "preq-2" : "preq-1";
+    setTimeout(() => {
+      pluginImg.send(JSON.stringify({ type: "IMAGES_REQUEST", id: preqId, runId: msg.id, urls }));
+    }, 100);
+    pluginImg.runId = msg.id;
+  }
+  if (msg.type === "IMAGES_REPLY") {
+    imagesReply = msg;
+    // Resume: build for a bit, then answer the run — well past the original 500ms deadline in total.
+    setTimeout(() => {
+      pluginImg.send(JSON.stringify({ type: "EXECUTE_CODE_RESULT", id: pluginImg.runId, result: msg.images, console: [], errors: null }));
+    }, 100);
+  }
+  if (msg.type === "IMAGES_ERROR" && msg.id === "preq-2") {
+    // The modeled sandbox turns the rejected await into the run's error, like executeCode's catch.
+    pluginImg.send(JSON.stringify({ type: "EXECUTE_CODE_RESULT", id: pluginImg.runId, console: [], errors: msg.error }));
+  }
+});
+await new Promise((res) => pluginImg.on("open", res));
+
+const imgRun = await bridgeI.request({ type: "EXECUTE_CODE", code: "render with images" });
+assert.deepEqual(imgRun.result, { u1: "b64-u1", u2: "b64-u2" }, "the run completed with the fetched bytes");
+assert.equal(imagesReply.id, "preq-1", "the reply carries the PLUGIN-issued id (own namespace)");
+assert.deepEqual(servedBatches[0], ["u1", "u1", "u2"], "the handler received the raw batch (dedupe is its job)");
+console.log("✅ Mid-run image fetch round-trips in ONE run — no re-execution, plugin-issued ids answered by type");
+// The wall clock ran 100 (ask) + 700 (fetch) + 100 (build) ≈ 900ms against a 500ms deadline — only
+// the suspend-while-serving + re-arm-on-reply policy lets that succeed.
+console.log("✅ The service window suspends the run's deadline (traffic-as-heartbeat)");
+
+// A fetch failure comes back as a typed IMAGES_ERROR, and the run surfaces it as its own error.
+const boomRun = await bridgeI.request({ type: "EXECUTE_CODE", code: "boom run" });
+assert.match(String(boomRun.errors), /could not load "boom"/, "a fetch failure reaches the run as its error, naming the url");
+console.log("✅ A failed fetch rejects the run's await via typed IMAGES_ERROR");
+
+// Zombie-run defense: an IMAGES_REQUEST naming a run the server no longer tracks is refused.
+pluginImg.send(JSON.stringify({ type: "IMAGES_REQUEST", id: "preq-9", runId: "req-9999", urls: ["u3"] }));
+await wait(100);
+const refusal = framesImg.find((f) => f.type === "IMAGES_ERROR" && f.id === "preq-9");
+assert.ok(refusal && /no longer active/.test(refusal.error), "an image request for an untracked run is refused, not served");
+console.log("✅ An image request for a dead run is refused (zombie runs die at their await)");
+pluginImg.close();
+bridgeI.stop();
+await wait(150);
+
 console.log("\nAll frozen-envelope + hardening + version-handshake + consent-gate + port-range checks passed.");
 process.exit(0);
