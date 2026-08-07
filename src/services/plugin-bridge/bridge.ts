@@ -434,14 +434,13 @@ export class PluginBridge {
 
   /**
    * A deadline fired — the inactivity timeout or the absolute run ceiling: tell the plugin to
-   * cancel the run, then reject the caller — cancel, never silently abandon. CANCEL is ADVISORY
-   * today: it rejects the run's suspended mid-run image await (the one suspension point that
-   * exists), so a run stalled there dies without touching the canvas — but a run busy elsewhere
-   * in its script is not interrupted and may still finish its writes. The zombie-refusal in
-   * serveImagesRequest closes the image path authoritatively; real cancellation enforcement — a
-   * cancelled run refused at the mutation lock (plan invariant 4) — arrives with Phase 2's lock.
-   * Don't re-add a second enforcement path here; the lock is where it lives. The frame is a
-   * run-scoped, id-less one-way notification — the reverse mirror of the plugin's
+   * cancel the run, then reject the caller — cancel, never silently abandon. Plugin-side the
+   * CANCEL is enforced (Phase 2): the run is recorded as cancelled, a still-queued run is refused
+   * at dequeue, an executing run is refused before its next mutating verb (the preamble mutation
+   * lock, plan invariant 4), and a run suspended at its image await has that await rejected. The
+   * zombie-refusal in serveImagesRequest stays the server's own half (image requests naming a
+   * dead run are refused). Don't add a second enforcement path here; the lock owns it. The frame
+   * is a run-scoped, id-less one-way notification — the reverse mirror of the plugin's
    * SESSION_TOKEN/REVOKE_SESSION — and deliberately not a request: a CANCEL that awaited a reply
    * could itself time out and cancel, recursively.
    */
@@ -533,8 +532,8 @@ export class PluginBridge {
    * A request naming a run this bridge no longer tracks (timed
    * out, cancelled, already resolved) is refused instead of served: the refusal rejects the run's
    * suspended await plugin-side, so a zombie run can never resume into canvas writes after the
-   * agent was told nothing happened. That refusal is the authoritative half of the policy; the
-   * CANCEL frame on timeout is the prompt half.
+   * agent was told nothing happened. That refusal is the server's own half of the policy; the
+   * plugin's run-cancellation registry enforces the rest (see timeoutPending).
    */
   private serveImagesRequest(
     socket: WebSocket,

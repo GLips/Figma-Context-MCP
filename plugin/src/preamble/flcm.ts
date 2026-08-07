@@ -26,6 +26,7 @@ import { linearGradient, radialGradient } from "./paint.js";
 import { layerBlurFromCssPx, backgroundBlurFromCssPx, shadow, glass, noise, texture, progressiveBlur } from "./effects.js";
 import { parseColor, parseFill, parseCssEffects, parseBlendMode, length, lineHeight, letterSpacing, isPercent, percent } from "./css.js";
 import { buildNode, settleHandles, resolvePercents, RenderCtx } from "./bridge.js";
+import { enterMutatingVerb } from "./mutation-lock.js";
 import { get, find, findOne, selection } from "./read.js";
 import { rejectUnknownKeys } from "./validate.js";
 
@@ -784,13 +785,18 @@ async function render(tree: WriteNode): Promise<{ root: Handle; keyed: Record<st
     images = await __flcmRequestImages(urls);
   }
   const fonts = await loadFontsForTree(tree);
-  const ctx: RenderCtx = { keyed: {}, fonts, images, pending: [] };
-  // Build the tree (percent children land at a provisional size), then fold every percent/anchor into
-  // pixels against each parent's now-realized size in one post-walk pass (bridge.resolvePercents).
-  const root = buildNode(tree, ctx);
-  resolvePercents(ctx);
-  // Handles are minted only now: geometry settles once the whole tree is laid out (bridge.settleHandles).
-  return settleHandles(root, ctx.keyed);
+  // Only the MUTATING span enters the mutation lock (invariant 4): the image/font awaits above are
+  // read-only and may overlap between concurrent renders, but node creation must serialize — and a
+  // run the server cancelled is refused at the lock, before its first canvas write.
+  return enterMutatingVerb("render", async () => {
+    const ctx: RenderCtx = { keyed: {}, fonts, images, pending: [] };
+    // Build the tree (percent children land at a provisional size), then fold every percent/anchor into
+    // pixels against each parent's now-realized size in one post-walk pass (bridge.resolvePercents).
+    const root = buildNode(tree, ctx);
+    resolvePercents(ctx);
+    // Handles are minted only now: geometry settles once the whole tree is laid out (bridge.settleHandles).
+    return settleHandles(root, ctx.keyed);
+  });
 }
 
 // flcm.id(id) — the target escape hatch. Wraps a raw node id so a target-taking verb (get/find/edit) treats

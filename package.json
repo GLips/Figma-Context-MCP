@@ -33,6 +33,7 @@
     "build:plugin": "pnpm --filter @framelink/plugin build",
     "contract": "tsx scripts/bridge-contract.mjs",
     "probe:midrun-await": "tsx scripts/probe-midrun-await.mjs",
+    "probe:commit-undo": "tsx scripts/probe-commit-undo.mjs",
     "docs:gen": "tsx scripts/gen-flcm-doc.ts",
     "docs:check": "tsx scripts/gen-flcm-doc.ts check",
     "validate": "pnpm scan-hidden-chars && pnpm format:check && pnpm lint && pnpm type-check && pnpm typecheck:plugin && pnpm test && pnpm test:plugin && pnpm contract && pnpm build:plugin && pnpm docs:check"
