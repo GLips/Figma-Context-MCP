@@ -20,10 +20,10 @@
 // The probe renders one small frame with two image fills, verifies the suspension, deletes the
 // frame again, and prints PASS/FAIL. Safe to re-run.
 //
-// If it FAILS on the suspension assert: the envelope + two-pass-deletion commits must be revisited
-// — the sandbox cannot await across the bridge, and Phase 1 needs a different design (see the
-// plan's step-zero note). The earlier commits (timeout/cancel policy, skew gate, session cache)
-// stand either way.
+// First live PASS: 2026-08-07 — 4113ms suspension across a 4000ms-held reply, one execute, one
+// image request, no re-execution; a second run then cleaned up (the loop survived). If a future
+// run FAILS on the suspension assert, whatever changed the eval wrapper / image await / WS
+// dispatch broke the suspension the whole protocol rests on — that change must be revisited.
 
 import { PluginBridge } from "../src/services/plugin-bridge/bridge.ts";
 import { WS_PORT_BLOCK } from "../src/services/plugin-bridge/ports.ts";
@@ -52,9 +52,9 @@ const bridge = new PluginBridge(undefined, {
 const PROBE_CODE = `
 const t0 = Date.now();
 const built = await flcm.render(
-  flcm.frame({ key: "flcm-probe", w: 120, h: 60, layout: { mode: "row", gap: 8, pad: 8 } }, [
-    flcm.rect({ w: 40, h: 40, fill: flcm.image("https://probe.invalid/a.png") }),
-    flcm.rect({ w: 40, h: 40, fill: flcm.image("https://probe.invalid/b.png") }),
+  flcm.frame({ key: "flcm-probe", width: 120, height: 60, layout: { mode: "row", gap: 8, padding: 8 } }, [
+    flcm.rect({ width: 40, height: 40, fill: flcm.image("https://probe.invalid/a.png") }),
+    flcm.rect({ width: 40, height: 40, fill: flcm.image("https://probe.invalid/b.png") }),
   ]),
 );
 return { elapsedMs: Date.now() - t0, rootId: built.root.id };
