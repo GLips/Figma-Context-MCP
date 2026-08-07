@@ -65,6 +65,32 @@ test("handler: over the distinct-url cap fails loud naming the cap", async () =>
   await assert.rejects(handler(urls), new RegExp(`over the ${MAX_IMAGES_PER_REQUEST} cap`));
 });
 
+test("handler: after one fetch fails, workers claim no new urls (bounded tail work)", async () => {
+  const fetched: string[] = [];
+  const handler = createImagesRequestHandler({
+    cache: new ImageByteCache(),
+    fetchImage: async (url) => {
+      fetched.push(url);
+      if (url === "bad") throw new Error("boom");
+      await new Promise((r) => setTimeout(r, 20));
+      return "b";
+    },
+  });
+  const urls = ["bad", ...Array.from({ length: 12 }, (_, i) => `u${i}`)];
+  await assert.rejects(handler(urls), /boom/);
+  // Only the fetches already in flight when "bad" failed may run — the concurrency width, not the
+  // whole remaining list.
+  assert.ok(fetched.length <= 4, `expected at most 4 started fetches, saw ${fetched.length}`);
+});
+
+test("handler: a reply exceeding the aggregate byte cap fails loud naming the budget", async () => {
+  const handler = createImagesRequestHandler({
+    cache: new ImageByteCache(),
+    fetchImage: async () => "x".repeat(30 * 1024 * 1024),
+  });
+  await assert.rejects(handler(["u1", "u2", "u3"]), /total over 64MiB/);
+});
+
 test("handler: a single fetch failure rejects the whole request", async () => {
   const handler = createImagesRequestHandler({
     cache: new ImageByteCache(),

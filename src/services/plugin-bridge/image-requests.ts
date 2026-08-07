@@ -20,6 +20,12 @@ const FETCH_CONCURRENCY = 4;
 // can't grow without bound.
 const MAX_CACHE_CHARS = 64 * 1024 * 1024;
 
+// Cap on ONE reply's total base64 payload. The url cap alone doesn't bound bytes — 64 urls at the
+// per-image wire cap is around a GiB of base64 per request, and the plugin (untrusted) picks the
+// urls. Checked during accumulation, cache hits included, so an over-budget request fails at the
+// crossing entry instead of after building the whole reply.
+const MAX_REPLY_CHARS = 64 * 1024 * 1024;
+
 /**
  * Session-lifetime URL→base64 cache with LRU eviction under a byte cap. One instance lives for the
  * server process (constructed at bridge startup), deliberately not per-connection: the plugin
@@ -86,34 +92,54 @@ export function createImagesRequestHandler(
       );
     }
     const bytes: Record<string, string> = {};
+    let replyChars = 0;
+    const addBytes = (url: string, base64: string): void => {
+      bytes[url] = base64;
+      replyChars += base64.length;
+      if (replyChars > MAX_REPLY_CHARS) {
+        throw new Error(
+          `flcm.image: the requested images total over ${Math.round(MAX_REPLY_CHARS / (1024 * 1024))}MiB ` +
+            `of encoded bytes in one request — use fewer or smaller images.`,
+        );
+      }
+    };
     const misses: string[] = [];
     for (const url of distinct) {
       const hit = deps.cache.get(url);
-      if (hit !== undefined) bytes[url] = hit;
+      if (hit !== undefined) addBytes(url, hit);
       else misses.push(url);
     }
     await mapWithConcurrency(misses, FETCH_CONCURRENCY, async (url) => {
       const fetched = await deps.fetchImage(url);
       deps.cache.set(url, fetched);
-      bytes[url] = fetched;
+      addBytes(url, fetched);
     });
     return bytes;
   };
 }
 
 // Run `fn` over `items` with at most `limit` in flight at once. `limit` workers pull from a shared
-// cursor until the list is drained; the first rejection propagates through Promise.all (in-flight
-// peers finish, but the caller already owns the failure). Small local helper — no concurrency dep.
+// cursor until the list is drained or any item FAILS: after a failure no new item is claimed, and
+// the rejection surfaces only once every already-started item has settled. That late surfacing is
+// load-bearing, not politeness — the bridge re-arms the run's inactivity deadline when the handler
+// settles (serveImagesRequest), so "settled" must mean no fetch is still running on the run's
+// behalf. Small local helper — no concurrency dep.
 async function mapWithConcurrency<T>(
   items: T[],
   limit: number,
   fn: (item: T) => Promise<void>,
 ): Promise<void> {
   let cursor = 0;
+  const failures: unknown[] = [];
   const worker = async (): Promise<void> => {
-    while (cursor < items.length) {
-      await fn(items[cursor++]);
+    while (failures.length === 0 && cursor < items.length) {
+      try {
+        await fn(items[cursor++]);
+      } catch (err) {
+        failures.push(err);
+      }
     }
   };
   await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  if (failures.length > 0) throw failures[0];
 }
