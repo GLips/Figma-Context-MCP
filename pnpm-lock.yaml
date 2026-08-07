@@ -125,8 +125,8 @@ importers:
         version: 4.4.3
     devDependencies:
       '@figma/plugin-typings':
-        specifier: ^1.130.0
-        version: 1.130.0
+        specifier: ^1.133.0
+        version: 1.133.0
       esbuild:
         specifier: ^0.28.1
         version: 0.28.1
@@ -489,8 +489,8 @@ packages:
     resolution: {integrity: sha512-43/qtrDUokr7LJqoF2c3+RInu/t4zfrpYdoSDfYyhg52rwLV6TnOvdG4fXm7IkSB3wErkcmJS9iEhjVtOSEjjA==}
     engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
 
-  '@figma/plugin-typings@1.130.0':
-    resolution: {integrity: sha512-kz+eU4TXBr99YrMyF2/WtcsdS6K4Ksy3datZZtuCUUSDPRknJAVLZpjhBESCd0tCtHRWKeo4l/I7Aze6lHB52A==}
+  '@figma/plugin-typings@1.133.0':
+    resolution: {integrity: sha512-MAM1zACY7JB18gO6B0ZaMquCk/xPhbk4Dkug3KGTN7H/M3fO2tZ0h/05b1umDiKA/P1ZEXbLraNyffaVFkFpXw==}
 
   '@figma/rest-api-spec@0.37.0':
     resolution: {integrity: sha512-KKeCgSRiO2gajT/sKCAsn48ubl8NRbYqyIvfkk5+NPK2ar+DVuLKg3fl3/cR1WharC5Dg4V5a9JzDsYv04k50g==}
@@ -2357,7 +2357,7 @@ snapshots:
       '@eslint/core': 0.17.0
       levn: 0.4.1
 
-  '@figma/plugin-typings@1.130.0': {}
+  '@figma/plugin-typings@1.133.0': {}
 
   '@figma/rest-api-spec@0.37.0': {}
 
