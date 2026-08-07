@@ -3,66 +3,152 @@
   <head>
     <meta charset="utf-8" />
     <style>
+      /* Colors come from Figma's themeColors variables (showUI themeColors:true) so an ALWAYS-ON
+         window follows the editor's light/dark theme instead of glaring white over a dark canvas.
+         Every var() carries a light-theme fallback, so a renamed/absent variable degrades to the
+         old palette rather than to unreadable defaults. */
       :root {
         font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
         font-size: 12px;
-        color: #1e1e1e;
       }
       body {
         margin: 0;
-        padding: 16px;
+        color: var(--figma-color-text, #1e1e1e);
+        background: var(--figma-color-bg, #fff);
+      }
+      /* The resting state: one line, always visible. A real <button> (reset to look like a bar), not
+         a clickable div — this is the plugin's primary control, so it has to be focusable and
+         keyboard-operable, and the whole bar is the hit area: a big target beats a 12px chevron.
+         Hover/active wash with currentColor rather than a fixed tint, so ONE rule reads correctly in
+         both themes (dark text darkens the light theme; light text lightens the dark one). */
+      #strip {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        box-sizing: border-box;
+        width: 100%;
+        height: 40px;
+        padding: 0 12px;
+        border: none;
+        background: none;
+        color: inherit;
+        font: inherit;
+        text-align: left;
+        cursor: pointer;
+        user-select: none;
+      }
+      #strip:hover {
+        background: color-mix(in srgb, currentColor 6%, transparent);
+      }
+      #strip:active {
+        background: color-mix(in srgb, currentColor 10%, transparent);
+      }
+      :focus-visible {
+        outline: 2px solid var(--figma-color-border-selected, #0d99ff);
+        outline-offset: -2px;
+      }
+      #dot {
+        flex: none;
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: var(--figma-color-border, #ccc);
+      }
+      #dot.live {
+        background: var(--figma-color-icon-success, #1a7f37);
+      }
+      #dot.wants {
+        background: var(--figma-color-icon-warning, #d19d00);
+      }
+      #dot.ready {
+        background: var(--figma-color-text-secondary, #888);
+      }
+      #status {
+        flex: 1;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      /* ONE glyph for both states, rotated — swapping ⌄ for ⌃ swaps the optical weight and baseline
+         too, so the mark visibly jumps every toggle. */
+      #chevron {
+        flex: none;
+        font-size: 9px;
+        color: var(--figma-color-text-secondary, #888);
+        transition: transform 120ms ease;
+      }
+      #chevron.up {
+        transform: rotate(180deg);
+      }
+      /* Collapsed ⇒ render() sets display:none EXPLICITLY, rather than relying on
+         `#detail:empty { display: none }` to infer it from an emptied node. The measured height is
+         load-bearing here, so the thing that removes this block from layout should be stated, not
+         derived from a selector that silently stops matching if a stray text node ever lands here. */
+      #detail {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        padding: 12px;
+        border-top: 1px solid var(--figma-color-border, #e5e5e5);
       }
       .orientation {
-        background: #f5f5f5;
+        background: var(--figma-color-bg-secondary, #f5f5f5);
         border-radius: 6px;
         padding: 12px;
-        margin-bottom: 16px;
+        line-height: 1.45;
+        color: var(--figma-color-text-secondary, #555);
       }
       .orientation-title {
         font-weight: 600;
-        margin-bottom: 6px;
-      }
-      .orientation-body {
-        color: #555;
-        line-height: 1.45;
-      }
-      .heading {
-        font-weight: 600;
-        margin-bottom: 10px;
+        color: var(--figma-color-text, #1e1e1e);
+        padding-bottom: 4px;
       }
       .empty {
-        color: #888;
-        padding: 8px 0;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        align-items: flex-start;
+        color: var(--figma-color-text-secondary, #888);
+        line-height: 1.45;
       }
+      .empty-link {
+        color: var(--figma-color-text-brand, #0d99ff);
+      }
+      /* Two gaps, not one: the text lines are a group (4px) and the actions row is separate (8px).
+         A single uniform gap makes the row read as four unrelated lines. */
       .session {
-        border: 1px solid #e5e5e5;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        border: 1px solid var(--figma-color-border, #e5e5e5);
         border-radius: 6px;
         padding: 12px;
-        margin-bottom: 10px;
+      }
+      .session-lines {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
       }
       .session-id {
         font-weight: 500;
         word-break: break-all;
-        margin-bottom: 4px;
       }
       .session-code {
-        color: #777;
-        margin-bottom: 12px;
+        color: var(--figma-color-text-secondary, #777);
         font-variant-numeric: tabular-nums;
       }
-      .status {
-        color: #555;
-        font-weight: 500;
-        padding: 6px 0;
+      .status-line {
+        color: var(--figma-color-text-secondary, #555);
       }
-      .status.active {
-        color: #1a7f37;
+      .status-line.driving {
+        color: var(--figma-color-icon-success, #1a7f37);
+        font-weight: 500;
       }
       .actions {
         display: flex;
         gap: 8px;
       }
-      button {
+      #detail button {
         flex: 1;
         border: none;
         border-radius: 6px;
@@ -71,28 +157,54 @@
         font-weight: 500;
         cursor: pointer;
       }
-      button.allow {
-        background: #0d99ff;
-        color: #fff;
+      /* A lone action (Revoke access) is a SECONDARY control — stretched to the full card width it
+         reads as the row's primary one. Only a paired Allow/Deny splits the width. */
+      #detail button:only-child {
+        flex: 0 0 auto;
+        padding: 8px 12px;
       }
-      button.deny {
-        background: #f0f0f0;
-        color: #333;
+      /* Same currentColor wash as the strip: on the brand button currentColor is white (lightens the
+         blue), on the secondary it's the text color (darkens in light theme, lightens in dark). */
+      #detail button:hover {
+        box-shadow: inset 0 0 0 999px color-mix(in srgb, currentColor 10%, transparent);
+      }
+      #detail button:active {
+        box-shadow: inset 0 0 0 999px color-mix(in srgb, currentColor 18%, transparent);
+      }
+      #detail button.allow {
+        background: var(--figma-color-bg-brand, #0d99ff);
+        color: var(--figma-color-text-onbrand, #fff);
+      }
+      #detail button.deny {
+        background: var(--figma-color-bg-secondary, #f0f0f0);
+        color: var(--figma-color-text, #333);
       }
     </style>
   </head>
   <body>
-    <div id="panel"></div>
+    <!-- Everything lives in #root, and #root is what gets measured. The BODY cannot be measured:
+         Figma's injected page styles stretch it to the window, so it never reports a height smaller
+         than the current window — collapse would measure the old expanded size and ask for exactly
+         the size it already had. A plain in-flow div is content-height, so it can shrink. -->
+    <div id="root">
+      <button id="strip" type="button" aria-expanded="false">
+        <span id="dot"></span>
+        <span id="status">Waiting for a session…</span>
+        <span id="chevron">▾</span>
+      </button>
+      <div id="detail" style="display: none"></div>
+    </div>
     <script>
       // The plugin's ONLY network context (the sandbox code.js has no WS access), so this iframe
       // relays server↔sandbox traffic unmodified:
       //   server  --WS-->            here  --parent.postMessage-->  code.js
       //   code.js --figma.ui.postMessage-->  here  --WS-->          server
       //
-      // Since Slice 2.2 it is ALSO the visible arbiter panel: the sandbox raises/dismisses it with
-      // local SHOW_PANEL/HIDE_PANEL control messages (NOT relayed to the WS), and the Allow/Deny
-      // buttons post UI_DECISION back to the sandbox, which owns the approval decision (sole arbiter).
-      // Toggling figma.ui visibility does not reload this iframe, so the WS below survives raise/dismiss.
+      // It is ALSO the plugin's only human surface: an always-visible status strip that expands into
+      // the session list. The sandbox drives it with one local RENDER control message (NOT relayed to
+      // the WS) and owns every decision (sole arbiter); this file only reports clicks (UI_DECISION /
+      // UI_REVOKE / UI_TOGGLE) and its own measured height (UI_HEIGHT). Resizing does not reload the
+      // iframe, so the WS connections below survive every expand/collapse.
       //
       // Opens ONE persistent connection per port in the block from bridge/src/config.ts
       // (WS_PORT_BLOCK). Each running server probe-binds one block port, so scanning the whole block
@@ -175,20 +287,16 @@
         };
       }
 
-      // Sandbox → server relay, EXCEPT local panel-control messages (SHOW_PANEL/HIDE_PANEL), which the
-      // sandbox addresses to THIS iframe, not a server. Everything else carries __connKey — the port
-      // whose socket it must go out on (a reply, or the SESSION_TOKEN Allow handover). Strip __connKey
-      // before ws.send so this LOCAL routing key never rides onto the frozen envelope (the sandbox
-      // also keeps it out of the echo via KNOWN_INBOUND_KEYS — both, per the Phase 3 echo-leak warning).
+      // Sandbox → server relay, EXCEPT local control messages (RENDER, and the panel-control
+      // SHOW/HIDE verbs it replaced), which the sandbox addresses to THIS iframe, not a server.
+      // Everything else carries __connKey — the port whose socket it must go out on (a reply, or the
+      // SESSION_TOKEN Allow handover). Strip __connKey before ws.send so this LOCAL routing key never
+      // rides onto the frozen envelope.
       window.onmessage = function (event) {
         var msg = event.data.pluginMessage;
         if (!msg) return;
-        if (msg.type === "SHOW_PANEL") {
-          renderPanel(msg);
-          return;
-        }
-        if (msg.type === "HIDE_PANEL") {
-          clearPanel();
+        if (msg.type === "RENDER") {
+          render(msg);
           return;
         }
         var port = msg.__connKey;
@@ -199,101 +307,163 @@
         }
       };
 
-      // Allow / Switch / Deny → the sandbox (sole arbiter), tagged with the row's connection key so
-      // the sandbox routes the decision to the right session. The button carries NO approval logic:
-      // it just reports the human's choice; the sandbox mints/approves the token and sets the active
-      // driver (Slice 2.1b / 3.2).
+      // Allow / Deny → the sandbox (sole arbiter), tagged with the row's connection key so the
+      // sandbox routes the decision to the right session. The button carries NO approval logic: it
+      // just reports the human's choice; the sandbox mints the token (Slice 2.1b / 3.2).
       function decide(approve, key) {
         parent.postMessage({ pluginMessage: { type: "UI_DECISION", approve: approve, __connKey: key } }, "*");
       }
 
-      // Render the arbiter panel from a SHOW_PANEL payload: an optional one-time orientation banner,
-      // then a LIST of every live session (Phase 3 multi-connection). Each row reflects its state and
-      // offers the matching control (see renderActions). Built with textContent — never innerHTML — so
-      // a project path can't inject markup.
-      function renderPanel(msg) {
-        var root = document.getElementById("panel");
-        root.textContent = "";
+      document.getElementById("strip").onclick = function () {
+        parent.postMessage({ pluginMessage: { type: "UI_TOGGLE" } }, "*");
+      };
 
-        if (msg.showOrientation) {
-          var intro = el("div", "orientation");
-          intro.appendChild(el("div", "orientation-title", "Code-Mode connects an AI agent to this Figma file."));
-          intro.appendChild(
-            el(
-              "div",
-              "orientation-body",
-              "When a session asks to drive your file it appears below. Only approve sessions you " +
-                "started — approving lets that session run code against this document. One session " +
-                "drives at a time; switch the active driver here.",
-            ),
-          );
-          root.appendChild(intro);
-        }
-
+      // Render the whole surface from one RENDER payload: the always-on strip, plus — when expanded —
+      // the session list. Built with textContent, never innerHTML, so a project path can't inject
+      // markup.
+      function render(msg) {
         var sessions = msg.sessions || [];
-        if (!sessions.length) {
-          root.appendChild(el("div", "empty", "Waiting for a session…"));
-          return;
+        renderStrip(sessions, msg.expanded);
+
+        var detail = document.getElementById("detail");
+        detail.textContent = "";
+        detail.style.display = msg.expanded ? "flex" : "none";
+        if (msg.expanded) {
+          if (msg.showOrientation) detail.appendChild(orientationBanner());
+          if (!sessions.length) detail.appendChild(emptyState());
+          sessions.forEach(function (s) {
+            detail.appendChild(sessionCard(s));
+          });
         }
-
-        root.appendChild(el("div", "heading", sessions.length === 1 ? "Session" : "Sessions"));
-
-        sessions.forEach(function (s) {
-          var card = el("div", "session");
-          card.appendChild(el("div", "session-id", s.identity || "(unknown project)"));
-          card.appendChild(el("div", "session-code", "Pairing code " + (s.pairingCode || "—")));
-          card.appendChild(renderActions(s));
-          root.appendChild(card);
-        });
+        reportHeight();
       }
 
-      // The per-row controls, by session state — exactly one active driver at a time (the Invariant).
-      // Active: "driving" status + Revoke. Approved-but-idle: "Switch to drive" + Revoke (Allow on an
-      // already-approved row is a switch). Unapproved: Allow / Deny. Revoke de-authorizes an approved
-      // session and tells its server to drop the durable on-disk token, so approval doesn't silently
-      // outlive the human's intent (durable-approval, this cycle).
-      function renderActions(s) {
-        if (s.active) {
-          var wrap = el("div");
-          wrap.appendChild(el("div", "status active", "● Active — driving this file"));
-          var revokeActive = el("div", "actions");
-          revokeActive.appendChild(revokeButton(s.key));
-          wrap.appendChild(revokeActive);
-          return wrap;
+      // One glanceable line, in priority order: a decision you owe > who is driving > who is ready.
+      // Pending approval is what the human must act on, so it outranks everything else.
+      function renderStrip(sessions, expanded) {
+        var wants = 0;
+        var approved = 0;
+        var active = null;
+        sessions.forEach(function (s) {
+          if (!s.approved) wants++;
+          else approved++;
+          if (s.active) active = s;
+        });
+
+        var text;
+        var tone;
+        if (wants) {
+          text = wants === 1 ? "A session wants to connect" : wants + " sessions want to connect";
+          tone = "wants";
+        } else if (active) {
+          text = active.label + " — driving";
+          tone = "live";
+        } else if (approved === 1) {
+          text = approvedLabel(sessions) + " — ready";
+          tone = "ready";
+        } else if (approved) {
+          text = approved + " sessions ready";
+          tone = "ready";
+        } else {
+          text = "Waiting for a session…";
+          tone = "";
         }
+
+        document.getElementById("dot").className = tone;
+        document.getElementById("status").textContent = text;
+        document.getElementById("chevron").className = expanded ? "up" : "";
+        document.getElementById("strip").setAttribute("aria-expanded", expanded ? "true" : "false");
+      }
+
+      function approvedLabel(sessions) {
+        for (var i = 0; i < sessions.length; i++) {
+          if (sessions[i].approved) return sessions[i].label;
+        }
+        return "A session";
+      }
+
+      // Shown once, ever. It carries the one thing the buttons can't: what Allow actually costs.
+      // Everything else a first-timer might wonder (who's driving, when it changed hands) is
+      // answered where it happens — the strip and the takeover toast — not pre-explained here.
+      function orientationBanner() {
+        var intro = el("div", "orientation");
+        intro.appendChild(
+          el("div", "orientation-title", "Framelink connects an AI agent to this file."),
+        );
+        intro.appendChild(
+          el(
+            "div",
+            null,
+            "Approving a session lets it run code against this document — only approve sessions " +
+              "you started.",
+          ),
+        );
+        return intro;
+      }
+
+      // Someone can land here having never heard of Framelink — a teammate who opened a plugin they
+      // found in the file, or a first run before any server exists. So the empty state carries the
+      // one link out. An <a target="_blank"> is the supported way to leave the plugin: window.open
+      // works only from this iframe, never from the sandbox, and navigation isn't governed by the
+      // manifest's networkAccess (which covers requests).
+      function emptyState() {
+        var wrap = el("div", "empty");
+        wrap.appendChild(
+          el(
+            "div",
+            null,
+            "No sessions yet. Start the Framelink MCP server in your project and it'll appear here.",
+          ),
+        );
+        var link = el("a", "empty-link", "What is Framelink?");
+        link.href = "https://framelink.ai";
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+        wrap.appendChild(link);
+        return wrap;
+      }
+
+      // A row per live session: what it is, the pairing code to glance-compare against the agent's
+      // message, its state, and the one control that state offers.
+      function sessionCard(s) {
+        var card = el("div", "session");
+        var lines = el("div", "session-lines");
+        lines.appendChild(el("div", "session-id", s.identity || "(unknown project)"));
+        lines.appendChild(el("div", "session-code", "Pairing code " + (s.pairingCode || "—")));
+        card.appendChild(lines);
+
         var actions = el("div", "actions");
-        if (s.approved) {
-          var sw = el("button", "allow", "Switch to drive");
-          sw.onclick = function () {
+        if (!s.approved) {
+          // No "waiting for your approval" line — Allow and Deny sitting there already say it.
+          var allow = el("button", "allow", "Allow");
+          allow.onclick = function () {
             decide(true, s.key);
           };
-          actions.appendChild(sw);
-          actions.appendChild(revokeButton(s.key));
-          return actions;
+          var deny = el("button", "deny", "Deny");
+          deny.onclick = function () {
+            decide(false, s.key);
+          };
+          actions.appendChild(allow);
+          actions.appendChild(deny);
+        } else {
+          lines.appendChild(
+            el(
+              "div",
+              s.active ? "status-line driving" : "status-line",
+              s.active ? "● Driving this file" : "Approved — ready to drive",
+            ),
+          );
+          // Revoke, not disconnect — the socket and the row both stay. What goes away is this
+          // session's PERMISSION (here and in the server's persisted token), so its next write asks
+          // again.
+          var revoke = el("button", "deny", "Revoke access");
+          revoke.onclick = function () {
+            parent.postMessage({ pluginMessage: { type: "UI_REVOKE", __connKey: s.key } }, "*");
+          };
+          actions.appendChild(revoke);
         }
-        var allow = el("button", "allow", "Allow");
-        allow.onclick = function () {
-          decide(true, s.key);
-        };
-        var deny = el("button", "deny", "Deny");
-        deny.onclick = function () {
-          decide(false, s.key);
-        };
-        actions.appendChild(allow);
-        actions.appendChild(deny);
-        return actions;
-      }
-
-      function revokeButton(key) {
-        var revoke = el("button", "deny", "Revoke");
-        revoke.onclick = function () {
-          parent.postMessage({ pluginMessage: { type: "UI_REVOKE", __connKey: key } }, "*");
-        };
-        return revoke;
-      }
-
-      function clearPanel() {
-        document.getElementById("panel").textContent = "";
+        card.appendChild(actions);
+        return card;
       }
 
       function el(tag, className, text) {
@@ -303,6 +473,30 @@
         return node;
       }
 
+      // The window is sized from what this document actually measures, so the sandbox never has to
+      // guess a height per state (and the strip stays exactly one line tall when collapsed).
+      //
+      // Reported on EVERY render, never deduped against the last reported value. This document
+      // cannot observe whether a resize was actually honored — Figma drops some of them (see
+      // resizeWindow in code.ts) — so a "we already asked for 220" cache silently wedges the window
+      // at whatever size it really has: collapse reports 40, the resize is dropped, and the next
+      // expand measures 220, matches the cache, and sends nothing. A redundant resize costs nothing;
+      // a suppressed one strands the window.
+      // Measured inside rAF — after the browser has laid the new DOM out, rather than forcing a
+      // synchronous reflow the instant we mutate it.
+      function reportHeight() {
+        // Measured inside rAF — after the browser has laid the new DOM out, rather than forcing a
+        // synchronous reflow the instant we mutate it. #root, never document.body: see the note on
+        // the element itself. This is why the window can shrink at all.
+        requestAnimationFrame(function () {
+          var height = document.getElementById("root").offsetHeight;
+          parent.postMessage({ pluginMessage: { type: "UI_HEIGHT", height: height } }, "*");
+        });
+      }
+
+      // The sandbox can't render into an iframe that hasn't loaded, so this document asks for its
+      // first paint rather than the sandbox firing one into the void at startup.
+      parent.postMessage({ pluginMessage: { type: "UI_READY" } }, "*");
       WS_PORT_BLOCK.forEach(connect);
     </script>
   </body>

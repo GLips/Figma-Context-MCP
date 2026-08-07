@@ -243,6 +243,23 @@ function setExpanded(next: boolean): void {
 }
 
 /**
+ * Resize the window, outside the current message-handler turn.
+ *
+ * Figma has no auto-sizing — `figma.ui.resize` is the only lever, so the height is relayed from the
+ * iframe's own measurement of #root (UI_HEIGHT). The measurement is the load-bearing part: `document.
+ * body` is stretched to the window by Figma's injected page styles and therefore can never report a
+ * height SMALLER than the current window, so measuring it made the window grow but never shrink.
+ *
+ * The setTimeout is one turn of separation, not a workaround for anything measured: resizes issued
+ * from this handler have been observed to apply either way. It is here because a resize called
+ * synchronously from inside an in-flight `figma_execute_code` run coincided with that request losing
+ * its reply. Cheap insurance; drop it if that's ever traced to something else.
+ */
+function resizeWindow(height: number): void {
+  setTimeout(() => figma.ui.resize(UI_WIDTH, height), 0);
+}
+
+/**
  * The single write-gate decision and the enforcement point for the consent Invariant — owned in one
  * place so EXECUTE_CODE and SCREENSHOT (and any future write verb) can't drift. Consent is the ONLY
  * human decision: an unapproved session (or one with no source port — the fail-closed default) is
@@ -362,7 +379,7 @@ figma.ui.onmessage = (msg: InboundMessage) => {
       // The iframe measured itself after painting. Clamped, so a render bug can't leave a 0px or
       // screen-filling window; the width never changes.
       const measured = typeof msg.height === "number" ? Math.round(msg.height) : UI_MIN_HEIGHT;
-      figma.ui.resize(UI_WIDTH, Math.max(UI_MIN_HEIGHT, Math.min(UI_MAX_HEIGHT, measured)));
+      resizeWindow(Math.max(UI_MIN_HEIGHT, Math.min(UI_MAX_HEIGHT, measured)));
       return;
     }
     // The rest is local CONTROL keyed by __connKey (the source port) so the right session is
