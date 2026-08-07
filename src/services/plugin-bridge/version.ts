@@ -35,7 +35,7 @@ export function detectSkew(version: PeerVersion): string | null {
     ? `plugin v${version.pluginVersion}`
     : "the connected plugin";
   return (
-    `⚠️ Update the Figma Code-Mode plugin: this server needs protocol v${MIN_PROTOCOL_VERSION}, but ` +
+    `⚠️ Update the Framelink Figma plugin: this server needs protocol v${MIN_PROTOCOL_VERSION}, but ` +
     `${reported} predates it. Re-import the latest plugin from its manifest in Figma to stay current.`
   );
 }

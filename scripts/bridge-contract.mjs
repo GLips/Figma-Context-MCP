@@ -43,10 +43,11 @@
 //     session on any block port needs no manifest edit (Done-when #2).
 //
 // Phase 3 Slice 3.2 adds the plugin-side multi-connection model (ui.html scans the whole block;
-// the sandbox keys a per-connection map by source port; one active driver writes). That logic lives
-// entirely in the sandbox↔ui.html postMessage path (the __connKey routing, the connection map, the
-// active-driver gate) and runs only in Figma, so it is verified by hand, not pinned here — the WS
-// envelope the server sees is UNCHANGED (ui.html strips __connKey before ws.send). The one thing
+// the sandbox keys a per-connection map by source port; approved sessions take the driving baton by
+// writing and their writes are serialized). That logic lives entirely in the sandbox↔ui.html
+// postMessage path (the __connKey routing, the connection map, the consent gate, the write queue) and
+// runs only in Figma, so it is verified by hand, not pinned here — the WS envelope the server sees is
+// UNCHANGED (ui.html strips __connKey before ws.send). The one thing
 // this harness can pin is the mechanical mirror: ui.html now carries its own WS_PORT_BLOCK literal
 // (it scans every port), checked against config's block exactly like the manifest above.
 //
@@ -301,9 +302,8 @@ await wait(150);
 // server only reloads if it reclaims its port — exactly what a real single-server restart does (it frees
 // the port on exit and re-probes to the same base). `bridgeR1.stop()` frees the port so `bridgeR2` can
 // reclaim it, the honest way to model this in-process. Note the fake sandbox gates on the token alone;
-// the plugin's real active-driver (activeKey-by-port) gate is verified in Figma by hand — so a restart
-// that instead landed on a DIFFERENT port would reload nothing here (re-prompt), and in production would
-// surface as approved-but-inactive (INACTIVE_SESSION → "Switch to drive"), not a fresh Allow.
+// the plugin binds approval per port — so a restart that instead landed on a DIFFERENT port would
+// reload nothing here, and in production would surface as a fresh Allow prompt on the new port.
 const sharedDir = mkdtempSync(join(tmpdir(), "flcm-approval-restart-"));
 const RESTART_PORT = 19879;
 const restartState = makeSandbox();
