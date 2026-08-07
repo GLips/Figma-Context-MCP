@@ -74,6 +74,63 @@ describe("holding a gated call open across the human's Allow", () => {
     expect(calls).toBe(1);
   });
 
+  it("rides through a socket drop mid-wait instead of dying on the blip it exists to outlast", async () => {
+    const clock = fakeClock();
+    let calls = 0;
+    // The plugin's socket drops on sends 2–4 (PluginBridge rejects in-flight and fresh requests while
+    // it's down), then ui.html redials and the human's Allow lands.
+    const send = async () => {
+      calls += 1;
+      if (calls === 1) return PENDING;
+      if (calls <= 4) throw new Error("Figma plugin disconnected before replying.");
+      return { result: "survived", console: [], errors: null };
+    };
+
+    const reply = await requestUntilApproved(send, {
+      now: clock.now,
+      sleep: clock.sleep,
+      waitMs: 30_000,
+      pollMs: 750,
+    });
+
+    expect(reply).toEqual({ result: "survived", console: [], errors: null });
+  });
+
+  it("fails fast when no plugin is connected at all, rather than hanging for the whole window", async () => {
+    const clock = fakeClock();
+    let calls = 0;
+    const send = async () => {
+      calls += 1;
+      throw new Error("No Figma plugin connected. Open the Framelink plugin in Figma desktop.");
+    };
+
+    await expect(
+      requestUntilApproved(send, { now: clock.now, sleep: clock.sleep }),
+    ).rejects.toThrow(/No Figma plugin connected/);
+    expect(calls).toBe(1);
+    expect(clock.now()).toBe(0); // never slept
+  });
+
+  it("surfaces the transport error, not a consent message, when the wait ends with the plugin gone", async () => {
+    const clock = fakeClock();
+    let calls = 0;
+    const send = async () => {
+      calls += 1;
+      if (calls === 1) return PENDING;
+      throw new Error("Figma plugin disconnected before replying.");
+    };
+
+    // "not approved yet" would be a lie about a plugin that went away.
+    await expect(
+      requestUntilApproved(send, {
+        now: clock.now,
+        sleep: clock.sleep,
+        waitMs: 3_000,
+        pollMs: 1_000,
+      }),
+    ).rejects.toThrow(/disconnected before replying/);
+  });
+
   it("counts time spent inside a slow send against the deadline, not just the sleeps", async () => {
     const clock = fakeClock();
     let calls = 0;

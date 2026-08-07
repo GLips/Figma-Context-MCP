@@ -16,7 +16,8 @@
 // defaulting to FALSE (shared/protocol.js: `options?.resetTimeoutOnProgress ?? false`), and the spec says
 // implementations "MAY choose to reset the timeout clock", not SHOULD. A server cannot turn it on. So the
 // wait must simply FIT INSIDE the client's timeout rather than try to extend it, and correctness here
-// rests on the ceiling below — not on any client honoring a heartbeat.
+// rests on the ceiling below — not on any client honoring a heartbeat. (registerFailLoudTool not
+// forwarding `extra` is an incidental gap, cheap to close — it is NOT the reason we skip heartbeats.)
 
 /** The plugin's refusal for a session the human hasn't approved (plugin/src/code.ts gateWrite). */
 export function isPendingApproval(reply: unknown): boolean {
@@ -52,6 +53,20 @@ export interface ApprovalWaitDeps {
  *
  * The deadline is WALL-CLOCK, not an attempt count: each send costs real time too, and the whole point
  * of the bound is fitting inside the client's request timeout.
+ *
+ * RIDES THROUGH A MID-WAIT RECONNECT, and that is load-bearing rather than defensive. The plugin's
+ * socket drops routinely (a Figma reload, a server restart, a laptop blip) and ui.html redials on a ~1s
+ * cadence; PluginBridge answers a drop by rejecting every in-flight request (failPending) and rejects
+ * fresh ones with "No Figma plugin connected" until the socket is back. Waiting 45s instead of issuing
+ * one quick request widens that window enormously, so a hold that propagated the first transport error
+ * would die on exactly the blip it is supposed to outlast. Instead a send that throws mid-wait is
+ * treated as transient and the loop keeps going to the deadline.
+ *
+ * The FIRST send is deliberately NOT shielded: when no plugin is connected at all, that must fail fast
+ * with the bridge's own message instead of hanging the agent for the full window. Only after one
+ * PENDING_APPROVAL — which proves a plugin was there and the session merely lacks consent — do errors
+ * become rideable. If the wait then ends still broken, the transport error is rethrown rather than
+ * swallowed into a consent message: "not approved yet" would be a lie about a plugin that went away.
  */
 export async function requestUntilApproved(
   send: () => Promise<unknown>,
@@ -64,10 +79,20 @@ export async function requestUntilApproved(
 ): Promise<unknown> {
   const deadline = now() + waitMs;
   let reply = await send();
-  while (isPendingApproval(reply) && now() < deadline) {
+  if (!isPendingApproval(reply)) return reply;
+
+  let transportError: unknown = null;
+  while (now() < deadline) {
     await sleep(pollMs);
-    reply = await send();
+    try {
+      reply = await send();
+      transportError = null;
+      if (!isPendingApproval(reply)) return reply;
+    } catch (err) {
+      transportError = err; // the socket is down mid-wait; ui.html redials, so keep waiting
+    }
   }
+  if (transportError) throw transportError;
   return reply;
 }
 
