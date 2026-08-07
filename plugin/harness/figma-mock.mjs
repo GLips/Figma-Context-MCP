@@ -47,6 +47,9 @@ class Node {
     this.strokeWeight = 1;
     this.cornerRadius = 0;
     this.opacity = 1;
+    // Every live SceneNode (bar SLICE) carries a blendMode; the appliers' `"blendMode" in node`
+    // guards key off its presence, so the mock must declare it like the live API does.
+    this.blendMode = "NORMAL";
     this.visible = true;
     this.effects = [];
     this.rotation = 0;
@@ -341,9 +344,16 @@ export function createFigmaMock() {
     mixed: MIXED,
     currentPage: page,
     root: { children: [page], setPluginData: (k, v) => page.setPluginData(k, v), getPluginData: (k) => page.getPluginData(k) },
+    // Undo API: RECORDED, not emulated — real history semantics are the live probe's to ground
+    // (scripts/probe-commit-undo.mjs). Tests assert the SEQUENCE of calls the verb scaffold makes
+    // (entry seal / success commit / failure commit+trigger), never that anything reverts.
+    undoLog: [],
+    commitUndo() { this.undoLog.push("commit"); },
+    triggerUndo() { this.undoLog.push("trigger"); },
     createFrame() { return new Node("FRAME"); },
     createText() { const t = new Node("TEXT"); t.fontName = { family: "Inter", style: "Regular" }; return t; },
     createComponent() { return new Node("COMPONENT"); },
+    createSlice() { return new Node("SLICE"); },
     createRectangle() { return new Node("RECTANGLE"); },
     createEllipse() { return new Node("ELLIPSE"); },
     createLine() { return new Node("LINE"); },

@@ -27,6 +27,7 @@ There is no autocomplete and no type-checking where your code runs (a QuickJS sa
 | `flcm.image(src, opts?)` | an image fill value | an https url or a local file path (under the server's asset root) first, then { scaleMode?, placeholder? } |
 | `flcm.effects({...})` | an effects value | an { shadow, blur, backgroundBlur } bag |
 | `await flcm.render(tree)` | live nodes | returns { root, keyed } |
+| `await flcm.edit(target, changes)` | a nudged existing node (returns its updated Handle) | target (an flcm/key, node id, flcm.id(id), or handle), then a partial delta in the same vocabulary as create |
 | `await flcm.get(target)` | a node's full read spec (values inline) | target: an flcm/key, a node id, flcm.id(id), or a handle |
 | `await flcm.find(query?, predicate?)` | matching nodes as slim handles | query { type?, name?, key?, within? } AND-combined; optional predicate over the full read shape (n => n.fills?.[0] === '#FFF') |
 | `await flcm.findOne(query?, predicate?)` | exactly one slim handle (throws on 0 or >1) | same query + predicate as find |
@@ -53,6 +54,8 @@ Every prop is optional; an omitted prop is simply not applied (a frame with no `
 | `key` | string | An address for this node — only keyed nodes come back in render()'s `keyed` map. Author-unique per render. |
 | `opacity` | number (0–1) | Whole-node opacity, 0–1. |
 | `mixBlendMode` | "normal" \| "multiply" \| "screen" \| "overlay" \| "soft-light" \| … (CSS mix-blend-mode) | Blend mode — a CSS mix-blend-mode name (multiply, screen, overlay, soft-light, color-dodge, …). Composites this node against what's behind it. An unknown name fails loud. |
+| `visible` | boolean | Layer visibility. A hidden node is invisible to the read verbs too — find/get cover the RENDERED document — so re-target it by id, not by a fresh find. |
+| `locked` | boolean | Lock the layer against USER pointer edits in the Figma UI. The API (and flcm.edit) still writes to a locked node. |
 
 ### Size & position (frame, text, rect, ellipse)
 
@@ -388,6 +391,38 @@ out.keyed["email:input"].id;  // a nested keyed node
 ```
 
 **Return ids or handles, never live Figma nodes.** A live node can't cross the bridge (it collapses to a bare `{ id }`), so returning one is a loud error telling you to return the id instead. The handles from `render` are safe to return as-is.
+
+## edit() — changing existing nodes
+
+`await flcm.edit(target, changes)` applies a partial delta to one existing node and returns its updated handle. The target is anything the read verbs accept: an flcm/key, a node id, `flcm.id(id)`, or a handle from `render`/`find`. The delta uses the **same words as create** — there is no separate edit dialect — and only the fields you pass change; everything else on the node is untouched.
+
+### Editable fields
+
+| Prop | Type | Notes |
+| --- | --- | --- |
+| `name` | string | The node's layer name in Figma. |
+| `opacity` | number (0–1) | Whole-node opacity, 0–1. |
+| `mixBlendMode` | "normal" \| "multiply" \| "screen" \| "overlay" \| "soft-light" \| … (CSS mix-blend-mode) | Blend mode — a CSS mix-blend-mode name (multiply, screen, overlay, soft-light, color-dodge, …). Composites this node against what's behind it. An unknown name fails loud. |
+| `visible` | boolean | Layer visibility. A hidden node is invisible to the read verbs too — find/get cover the RENDERED document — so re-target it by id, not by a fresh find. |
+| `locked` | boolean | Lock the layer against USER pointer edits in the Figma UI. The API (and flcm.edit) still writes to a locked node. |
+| `fill` | color / gradient | Background paint — a color/gradient string, or flcm.gradient(...). |
+| `stroke` | color / gradient | Border paint. |
+| `strokeWidth` | number \| "Npx" | Border thickness. |
+| `borderRadius` | number \| "Npx" | Corner radius. Frames and rectangles only (ellipses ignore it). |
+| `effects` | effects value | Shadows / blur — flcm.effects({...}), or a CSS-string bag. |
+| `rotation` | number (deg) | Rotation in degrees. |
+| `clip` | boolean | Clip children to the frame's bounds (clipsContent). Default false — like CSS, overflow is visible unless you set clip:true. |
+
+On a node type flcm can't create (GROUP, INSTANCE, COMPONENT, …) only the shared words apply: `name`, `opacity`, `mixBlendMode`, `visible`, `locked`.
+
+### Rules
+
+- **A node type takes exactly the words create accepts for it.** `fill` on a LINE, `clip` on a TEXT, `borderRadius` on a VECTOR — each rejects loud naming the prop, the node type, and that type's editable words, the same way the constructor would.
+- **`key` is immutable.** Keys are set at creation and are how later calls address the node — re-keying could mint a duplicate address. To rename what you see in the layers panel, set `name`.
+- **No bare `x`/`y`, and no layout/size words yet** — they land on edit in a later slice (spelled `absolute`/`pin`/`width`/`height`, the create-side words).
+- **An empty delta is rejected**, not silently committed — an empty edit would still mint an undo step.
+- **Each edit is one undo step.** The whole delta validates before the first write; if Figma refuses a write mid-apply, the edit rolls back to how the node was and the error carries the target's identity, Figma's reason, and how many earlier mutating calls in the run still stand.
+- Delta values are **absolute** (a fill, an opacity), never relative (`+10`) — re-running the same edit converges instead of compounding.
 
 ## Seeing what you built (get_screenshot)
 

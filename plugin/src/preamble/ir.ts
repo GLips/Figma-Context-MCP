@@ -189,8 +189,10 @@ export interface WriteLayout {
   top?: number;
 }
 
-export interface WriteNode {
-  type: WriteType;
+// A WriteNode's props without the `type` discriminant — the shape edit's partial delta compiles to
+// (a delta nudges an existing node, so it never carries a createable type), and what the prop
+// appliers/walkers consume (they read fields, never dispatch on type).
+export interface WriteProps {
   name?: string;
   // Our pluginData('flcm/key') identity — the one field write ADDS over read. Optional in v1
   // (reconcile deferred): key the nodes you'll address, leave the rest anonymous.
@@ -223,8 +225,17 @@ export interface WriteNode {
   borderRadius?: number;
   clip?: boolean;     // clipsContent
   rotation?: number;  // degrees (write-add; read does not surface it)
+  // On every SceneNode, like blendMode — part of the shared vocabulary edit allows even on node
+  // types flcm can't create (GROUP/INSTANCE/…). The read side never surfaces either: find/get
+  // cover the RENDERED document, so a hidden node is invisible to reads by design.
+  visible?: boolean;
+  locked?: boolean;
   layout?: WriteLayout;
   children?: WriteChild[];
+}
+
+export interface WriteNode extends WriteProps {
+  type: WriteType;
 }
 
 // A child slot may be falsy so `cond && flcm.text(...)` composes; the bridge skips falsy entries.
@@ -305,7 +316,9 @@ export type ReadPredicate = (node: SimplifiedNode) => unknown;
 // string could be read either way. Inert data, like a WriteNode.
 export interface RawIdRef { __flcmId: string }
 
-// What any target-taking verb (get/find/edit — later plans) accepts, resolved by shape (read.resolveTarget):
-// a bare string (auto-detected node id or flcm/key), an explicit id via flcm.id(id), or any handle-shaped
-// object carrying an `id` (a render Handle, a slim handle, a read POJO).
-export type Target = string | RawIdRef | Handle;
+// What any target-taking verb (get/find/edit) accepts, resolved by shape (read.resolveTarget):
+// a bare string (auto-detected node id or flcm/key), an explicit id via flcm.id(id), or any
+// handle-shaped object carrying an `id` — a render Handle, a find/selection SlimHandle, a read
+// POJO. SlimHandle is named in the union (not just assignable) because it's what the locate verbs
+// actually return, and the runtime accepts any `{ id }` regardless.
+export type Target = string | RawIdRef | Handle | SlimHandle;

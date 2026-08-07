@@ -16,7 +16,7 @@
 // appliers cover a small additive vocabulary, so fighting the union with casts at every line would add
 // noise without safety.
 
-import { WriteType, WriteNode, WriteLayout, Justify, Align, TextAlign, TextDecoration, Sizing, Identity, Handle, PaintSpec, ImageSpec } from "./ir.js";
+import { WriteType, WriteNode, WriteProps, WriteLayout, Justify, Align, TextAlign, TextDecoration, Sizing, Identity, Handle, PaintSpec, ImageSpec } from "./ir.js";
 import { toFigmaPaint } from "./paint.js";
 import { toFigmaEffects } from "./effects.js";
 import { resolveFont, resolveFontStrict, FontMap } from "./fonts.js";
@@ -116,8 +116,9 @@ function intentOf(node: any): Handle["intent"] {
 
 // Mint the JSON-safe reference for one live node. Identity (id/name/type/key/text) comes from identityOf —
 // the shared reader, so a render Handle and a read SlimHandle can't disagree on how key/text are pulled;
-// `key` is read back from the pluginData stampKey wrote during the walk.
-function handle(node: any): Handle {
+// `key` is read back from the pluginData stampKey wrote during the walk. Exported for edit, which
+// returns the target's handle with FRESH post-apply geometry — same mint, one currency.
+export function mintHandle(node: any): Handle {
   return { ...identityOf(node), ...geometryOf(node) };
 }
 
@@ -129,8 +130,8 @@ function handle(node: any): Handle {
 // what keeps a returned handle from ever carrying a provisional value.
 export function settleHandles(root: any, keyed: Record<string, any>): { root: Handle; keyed: Record<string, Handle> } {
   const handles: Record<string, Handle> = {};
-  for (const key of Object.keys(keyed)) handles[key] = handle(keyed[key]);
-  return { root: handle(root), keyed: handles };
+  for (const key of Object.keys(keyed)) handles[key] = mintHandle(keyed[key]);
+  return { root: mintHandle(root), keyed: handles };
 }
 
 function stampKey(node: any, wn: WriteNode, ctx: RenderCtx): void {
@@ -163,9 +164,15 @@ function imagePaint(spec: ImageSpec, ctx: RenderResources): Paint {
 // Persist an image fill's source + placeholder flag on the node (pluginData) so a later read/codegen pass
 // can tell a stand-in from a real asset and recover its src — the one content case whose semantics don't
 // survive geometry alone. Only the fill (a node's background) is recorded; an image stroke is exotic.
-function stampImageData(node: any, wn: WriteNode): void {
+function stampImageData(node: any, wn: WriteProps): void {
   const fill = wn.fills && wn.fills[0];
-  if (!fill || fill.kind !== "image") return;
+  if (!fill) return; // no fill in this write — whatever provenance exists still describes the live paint
+  if (fill.kind !== "image") {
+    // An edit replaced an image fill with a solid/gradient: the provenance no longer describes the
+    // live paint, so wipe it ("" deletes the pluginData entry) instead of leaving a stale url.
+    node.setPluginData("flcm/image", "");
+    return;
+  }
   node.setPluginData("flcm/image", JSON.stringify({ url: fill.url, placeholder: fill.placeholder }));
 }
 
@@ -173,13 +180,14 @@ function stampImageData(node: any, wn: WriteNode): void {
 // kind lacks (an ellipse has no cornerRadius). v1 still paints a single fill/stroke. Creation defaults
 // (omitted fill -> transparent) live in the builders, NOT here — so an edit patch through this applier
 // can never turn key-absence into a write.
-export function applyPaint(node: any, wn: WriteNode, ctx: RenderResources): void {
+export function applyPaint(node: any, wn: WriteProps, ctx: RenderResources): void {
   if (wn.fills && wn.fills.length) node.fills = [paintOf(wn.fills[0], ctx)];
   if (wn.strokes && wn.strokes.length) node.strokes = [paintOf(wn.strokes[0], ctx)];
   if (wn.strokeWeight != null && "strokeWeight" in node) node.strokeWeight = wn.strokeWeight;
   if (wn.borderRadius != null && "cornerRadius" in node) node.cornerRadius = wn.borderRadius;
   if (wn.effects && "effects" in node) node.effects = toFigmaEffects(wn.effects);
-  if (typeof wn.opacity === "number") node.opacity = wn.opacity;
+  // The `in` guard matters for edit targets: a SliceNode carries no MinimalBlendMixin at all.
+  if (typeof wn.opacity === "number" && "opacity" in node) node.opacity = wn.opacity;
   if (typeof wn.clip === "boolean" && "clipsContent" in node) node.clipsContent = wn.clip;
   stampImageData(node, wn);
 }
@@ -644,19 +652,24 @@ export function buildNode(wn: WriteNode, ctx: RenderCtx): any {
     throw new Error('flcm: cannot create a "' + wn.type + '" node — createable types are ' + Object.keys(BUILDERS).join(", ") + ".");
   }
   const node = build(wn, ctx);
-  if (typeof wn.name === "string") node.name = wn.name;
-  // blendMode is on every SceneNode (BlendMixin), so the shared dispatch is its single application point —
-  // no per-builder repetition (unlike opacity, which predates this). The value is already the Figma enum.
-  if (typeof wn.blendMode === "string") node.blendMode = wn.blendMode;
-  applyRotation(node, wn);
+  applySceneProps(node, wn);
   stampKey(node, wn, ctx);
   return node;
 }
 
-// rotation is on every SceneNode (LayoutMixin), so — like blendMode — it applies once here after the node
-// is built and sized, not per-builder. The canonical (authored) value is CSS clockwise-positive, but
-// Figma's raw `node.rotation` is COUNTERclockwise-positive, so NEGATE on write: the read side negates
-// Figma→CSS on emit (figma-mcp), and a read value re-authored verbatim must not flip. Omitted at 0.
-function applyRotation(node: any, wn: WriteNode): void {
+// The props every SceneNode carries (name/blendMode/rotation/visible/locked), applied once after the
+// node is built and sized — never per-builder. Create reaches this through buildNode; edit drives it
+// directly on a resolved target (this is the applier a GROUP/INSTANCE edit lands through — the
+// non-createable subset is mostly these words).
+export function applySceneProps(node: any, wn: WriteProps): void {
+  if (typeof wn.name === "string") node.name = wn.name;
+  // The value is already the Figma enum (parseBlendMode mapped the CSS spelling at the boundary).
+  // The `in` guard: a SliceNode has no blendMode (no MinimalBlendMixin).
+  if (typeof wn.blendMode === "string" && "blendMode" in node) node.blendMode = wn.blendMode;
+  // The canonical (authored) rotation is CSS clockwise-positive, but Figma's raw `node.rotation` is
+  // COUNTERclockwise-positive, so NEGATE on write: the read side negates Figma→CSS on emit
+  // (figma-mcp), and a read value re-authored verbatim must not flip. Omitted at 0.
   if (typeof wn.rotation === "number" && "rotation" in node) node.rotation = -wn.rotation;
+  if (typeof wn.visible === "boolean") node.visible = wn.visible;
+  if (typeof wn.locked === "boolean") node.locked = wn.locked;
 }

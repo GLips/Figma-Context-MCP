@@ -93,6 +93,8 @@ const SHARED_FIELDS = {
     "Blend mode — a CSS mix-blend-mode name (multiply, screen, overlay, soft-light, color-dodge, …). Composites this node against what's behind it. An unknown name fails loud.",
     '"normal" | "multiply" | "screen" | "overlay" | "soft-light" | … (CSS mix-blend-mode)',
   ),
+  visible: prop(z.boolean(), "Layer visibility. A hidden node is invisible to the read verbs too — find/get cover the RENDERED document — so re-target it by id, not by a fresh find."),
+  locked: prop(z.boolean(), "Lock the layer against USER pointer edits in the Figma UI. The API (and flcm.edit) still writes to a locked node."),
 };
 
 const SIZE_FIELDS = {
@@ -303,6 +305,29 @@ export type LineProps = z.infer<typeof LineSchema>;
 export type PathProps = z.infer<typeof PathSchema>;
 export type SvgProps = z.infer<typeof SvgSchema>;
 
+// The flcm.edit(target, changes) delta — the node-local subset of the ONE authoring vocabulary (no
+// second dialect, invariant: same spellings, same parsers as create). Entries REUSE the create field
+// objects (the RUN_FIELDS pattern), so a prop can't mean something different under edit. Two absences
+// are the contract, not an oversight: `key` is immutable under edit (a delta naming it fails loud —
+// re-keying could mint a duplicate address), and layout/size/text words land in later slices — an
+// unknown key fails loud naming this closed set.
+const EDIT_FIELDS = {
+  name: SHARED_FIELDS.name,
+  opacity: SHARED_FIELDS.opacity,
+  mixBlendMode: SHARED_FIELDS.mixBlendMode,
+  visible: SHARED_FIELDS.visible,
+  locked: SHARED_FIELDS.locked,
+  fill: APPEARANCE_FIELDS.fill,
+  stroke: APPEARANCE_FIELDS.stroke,
+  strokeWidth: APPEARANCE_FIELDS.strokeWidth,
+  borderRadius: APPEARANCE_FIELDS.borderRadius,
+  effects: APPEARANCE_FIELDS.effects,
+  rotation: APPEARANCE_FIELDS.rotation,
+  clip: FRAME_FIELDS.clip,
+};
+export const EditSchema = z.object(EDIT_FIELDS);
+export type EditDelta = z.infer<typeof EditSchema>;
+
 // flcm.image(src, opts?) options — the second, optional arg to the image paint constructor. `src` (an
 // https url or a local file path under the server's asset root) is the positional first arg (like text's
 // `content` / svg's `markup`), so it isn't a prop field here.
@@ -381,6 +406,11 @@ export interface Flcm {
   image(url: string, opts?: ImageOpts): PaintSpec;
   effects(spec: EffectsSugar): EffectSpec[];
   render(tree: WriteNode): Promise<{ root: Handle; keyed: Record<string, Handle> }>;
+  // Nudge an existing node: apply a partial delta (same vocabulary as create — node-local props in
+  // this slice) to the resolved target and return its updated Handle with fresh geometry. Atomic per
+  // call: the whole delta validates before the first write, and a post-validation Figma refusal
+  // rolls the verb back (commit-then-undo) — the canvas is never half-a-verb.
+  edit(target: Target, changes: EditDelta): Promise<Handle>;
   // Full inspect: the node's styling as the EXPANDED canonical read shape — the same vocabulary
   // figma-mcp's REST read emits, every value inline (no styles refs), for any node type.
   get(target: Target): Promise<SimplifiedNode>;
@@ -402,7 +432,7 @@ export interface Flcm {
 // `schema` links a verb to the prop schema whose fields the reference renders under it. ----
 // `category` groups verbs for the quick-start's compact per-group rendering (the ≤2KB budget can't afford a
 // line per verb). The verb TABLE still lists each verb in full — only the quick-start groups.
-export type VerbCategory = "build" | "value" | "render" | "read" | "target";
+export type VerbCategory = "build" | "value" | "render" | "edit" | "read" | "target";
 
 export interface VerbDoc {
   signature: string;
@@ -424,6 +454,7 @@ export const VERBS: VerbDoc[] = [
   { category: "value", signature: "flcm.image(src, opts?)", builds: "an image fill value", args: "an https url or a local file path (under the server's asset root) first, then { scaleMode?, placeholder? }", schema: ImageSchema },
   { category: "value", signature: "flcm.effects({...})", builds: "an effects value", args: "an { shadow, blur, backgroundBlur } bag", schema: EffectsSchema },
   { category: "render", signature: "await flcm.render(tree)", builds: "live nodes", args: "returns { root, keyed }" },
+  { category: "edit", signature: "await flcm.edit(target, changes)", builds: "a nudged existing node (returns its updated Handle)", args: "target (an flcm/key, node id, flcm.id(id), or handle), then a partial delta in the same vocabulary as create", schema: EditSchema },
   { category: "read", signature: "await flcm.get(target)", builds: "a node's full read spec (values inline)", args: "target: an flcm/key, a node id, flcm.id(id), or a handle" },
   { category: "read", signature: "await flcm.find(query?, predicate?)", builds: "matching nodes as slim handles", args: "query { type?, name?, key?, within? } AND-combined; optional predicate over the full read shape (n => n.fills?.[0] === '#FFF')" },
   { category: "read", signature: "await flcm.findOne(query?, predicate?)", builds: "exactly one slim handle (throws on 0 or >1)", args: "same query + predicate as find" },
@@ -444,6 +475,7 @@ export const FIELD_GROUPS = {
   run: RUN_FIELDS,
   line: LINE_FIELDS,
   path: PATH_FIELDS,
+  edit: EDIT_FIELDS,
   image: IMAGE_FIELDS,
   gradient: GradientSchema.shape,
   effects: EffectsSchema.shape,

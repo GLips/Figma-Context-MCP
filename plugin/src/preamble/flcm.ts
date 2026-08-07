@@ -16,7 +16,7 @@
 // closure-private in the IIFE bundle — which is why nothing in this preamble needs a name prefix.
 
 import {
-  WriteNode, WriteChild, WriteLayout, WriteTextStyle, WriteTextRun, PaintSpec,
+  WriteNode, WriteProps, WriteChild, WriteLayout, WriteTextStyle, WriteTextRun, PaintSpec,
   GradientStop, EffectSpec, Sizing, Edges, Handle, WriteCssEffects, PinX, PinY, AnchorX, AnchorY,
   Justify, Align, TextAlign, TextDecoration, RawIdRef,
 } from "./ir.js";
@@ -37,7 +37,7 @@ import type {
   BaseProps, SizeProps, AppearanceProps, FrameProps, TextProps, TextRunInput, StyleDeltaInput,
   ShapeProps, LineProps, PathProps, SvgProps, ImageOpts,
   PadInput, EffectsInput, GradientSugar, GradientStopInput, EffectsSugar, ShadowSugar, BlurSugar,
-  GlassSugar, NoiseSugar, TextureSugar, ProgressiveBlurSugar, Flcm,
+  GlassSugar, NoiseSugar, TextureSugar, ProgressiveBlurSugar,
 } from "./schema.js";
 
 // ---- Unknown-prop rejection (ratified decision 1: fail loud, surface-wide, at construction) ----
@@ -54,7 +54,8 @@ import type {
 // dropped from) the schema can't drift out of sync here. The reject itself is the shared closed-set gate in
 // validate.ts, the same one read.ts's locate query fails loud with.
 export const KNOWN_KEYS = {
-  shared: ["name", "key", "opacity", "mixBlendMode"],
+  shared: ["name", "key", "opacity", "mixBlendMode", "visible", "locked"],
+  edit: ["name", "opacity", "mixBlendMode", "visible", "locked", "fill", "stroke", "strokeWidth", "borderRadius", "effects", "rotation", "clip"],
   size: ["width", "height", "absolute", "pin"],
   appearance: ["fill", "stroke", "strokeWidth", "borderRadius", "effects", "rotation"],
   frame: ["layout", "clip"],
@@ -272,32 +273,47 @@ function buildLayout(props: FrameProps, isFrame: boolean): WriteLayout {
   return layout;
 }
 
-// name/key/opacity — present on every node kind. Additive: only present props land on the WriteNode.
-function base(wn: WriteNode, props: BaseProps): void {
-  if (typeof props.name === "string") wn.name = props.name;
-  if (typeof props.key === "string") wn.key = props.key;
-  if (typeof props.opacity === "number") wn.opacity = props.opacity;
-  if (props.mixBlendMode != null) wn.blendMode = parseBlendMode(props.mixBlendMode);
+// The QuickJS boundary has no type checking, so a present-but-mistyped scalar must reject LOUD —
+// a bare typeof guard would silently drop it, committing the rest of the props as a partial write
+// (the ADR-0003 silent no-op, and for edit a broken whole-delta validation). null/undefined still
+// mean "absent": presence-preserving stays intact.
+function assertScalarType(value: unknown, want: "string" | "number" | "boolean", prop: string): void {
+  if (typeof value !== want) {
+    throw new Error("flcm: `" + prop + "` must be a " + want + " — got " + JSON.stringify(value) + ".");
+  }
 }
 
-// Appearance props shared by frame/rect/ellipse, on top of base(). Every CSS-shaped leaf is normalized
-// to the typed currency through css.ts here.
-function appearance(wn: WriteNode, props: AppearanceProps, opts: { radius?: boolean; clip?: boolean }): void {
+// The shared-by-every-node props. Additive: only present props land on the WriteNode.
+function base(wn: WriteProps, props: BaseProps): void {
+  if (props.name != null) { assertScalarType(props.name, "string", "name"); wn.name = props.name; }
+  if (props.key != null) { assertScalarType(props.key, "string", "key"); wn.key = props.key; }
+  if (props.opacity != null) { assertScalarType(props.opacity, "number", "opacity"); wn.opacity = props.opacity; }
+  if (props.mixBlendMode != null) wn.blendMode = parseBlendMode(props.mixBlendMode);
+  if (props.visible != null) { assertScalarType(props.visible, "boolean", "visible"); wn.visible = props.visible; }
+  if (props.locked != null) { assertScalarType(props.locked, "boolean", "locked"); wn.locked = props.locked; }
+}
+
+// Appearance props shared by frame/rect/ellipse (and edit's delta compile), on top of base(). Every
+// CSS-shaped leaf is normalized to the typed currency through css.ts here — presence-preserving by
+// construction, so it doubles as the edit patch compiler's core: only present keys produce writes.
+// Exported for edit.ts (which imports FROM here; flcm.ts never imports edit.ts — no cycle).
+export function compileNodeLocalProps(wn: WriteProps, props: AppearanceProps, opts: { radius?: boolean; clip?: boolean }): void {
   base(wn, props);
   if (props.fill != null) wn.fills = [parseFill(props.fill, "fill")];
   if (props.stroke != null) wn.strokes = [parseFill(props.stroke, "stroke")];
   if (props.strokeWidth != null) wn.strokeWeight = length(props.strokeWidth);
   if (props.effects != null) wn.effects = normalizeEffects(props.effects);
   if (opts.radius && props.borderRadius != null) wn.borderRadius = length(props.borderRadius);
-  if (opts.clip && typeof (props as FrameProps).clip === "boolean") wn.clip = (props as FrameProps).clip;
-  if (typeof props.rotation === "number") wn.rotation = props.rotation;
+  const clip = (props as FrameProps).clip;
+  if (opts.clip && clip != null) { assertScalarType(clip, "boolean", "clip"); wn.clip = clip; }
+  if (props.rotation != null) { assertScalarType(props.rotation, "number", "rotation"); wn.rotation = props.rotation; }
 }
 
 function frame(props: FrameProps = {}, children?: WriteChild | WriteChild[]): WriteNode {
   props = props || {};
   rejectUnknownKeys(props, FRAME_KEYS, "flcm.frame");
   const wn: WriteNode = { type: "FRAME" };
-  appearance(wn, props, { radius: true, clip: true });
+  compileNodeLocalProps(wn, props, { radius: true, clip: true });
   wn.layout = buildLayout(props, true);
   wn.children = Array.isArray(children) ? children : children ? [children] : [];
   return wn;
@@ -488,7 +504,7 @@ function shape(type: "RECTANGLE" | "ELLIPSE", props: ShapeProps = {}): WriteNode
   props = props || {};
   rejectUnknownKeys(props, SHAPE_KEYS, type === "RECTANGLE" ? "flcm.rect" : "flcm.ellipse");
   const wn: WriteNode = { type };
-  appearance(wn, props, { radius: type === "RECTANGLE" });
+  compileNodeLocalProps(wn, props, { radius: type === "RECTANGLE" });
   const layout = buildLayout(props as FrameProps, false);
   if (Object.keys(layout).length) wn.layout = layout;
   return wn;
@@ -511,7 +527,7 @@ function line(props: LineProps = {}): WriteNode {
   applyAbsolute(layout, props);
   applyPin(layout, props);
   if (Object.keys(layout).length) wn.layout = layout;
-  if (typeof props.rotation === "number") wn.rotation = props.rotation;
+  if (props.rotation != null) { assertScalarType(props.rotation, "number", "rotation"); wn.rotation = props.rotation; }
   return wn;
 }
 
@@ -541,7 +557,7 @@ function svg(markup: unknown, props: SvgProps = {}): WriteNode {
 }
 
 // flcm.path({ d, ... }) -> a VECTOR node carrying the path data (createVector + vectorPaths at render). Takes
-// the shared appearance props via appearance() (radius off — a vector has none), so it themes like a rect.
+// the shared appearance props via compileNodeLocalProps() (radius off — a vector has none), so it themes like a rect.
 // `d` is required and must be a non-empty string; bad path data fails loud again at render (bridge).
 function path(props: PathProps): WriteNode {
   if (!props || typeof props !== "object") {
@@ -553,7 +569,7 @@ function path(props: PathProps): WriteNode {
   }
   rejectUnknownKeys(props, PATH_KEYS, "flcm.path");
   const wn: WriteNode = { type: "VECTOR", pathData: d };
-  appearance(wn, props, {}); // fill/stroke/strokeWidth/effects/rotation + base; radius/clip off for a vector
+  compileNodeLocalProps(wn, props, {}); // fill/stroke/strokeWidth/effects/rotation + base; radius/clip off for a vector
   const layout = buildLayout(props as FrameProps, false);
   if (Object.keys(layout).length) wn.layout = layout;
   return wn;
@@ -742,12 +758,12 @@ declare const __flcmRequestImages:
 // paintOf (node fills/strokes AND per-run fills), so render() can check which still need server-fetched
 // bytes before it creates a single node. This must stay in lockstep with paintOf's coverage: a paint site
 // paintOf resolves but this misses would fetch nothing, then hit the "no bytes" throw at render.
-function collectImageUrls(tree: WriteNode): string[] {
+function collectImageUrls(tree: WriteProps): string[] {
   const urls: string[] = [];
   const addFrom = (paints: readonly PaintSpec[] | undefined): void => {
     if (paints) for (const spec of paints) if (spec && spec.kind === "image") urls.push(spec.url);
   };
-  const visit = (wn: WriteChild): void => {
+  const visit = (wn: WriteChild | WriteProps): void => {
     if (!wn || typeof wn !== "object") return;
     addFrom(wn.fills);
     addFrom(wn.strokes);
@@ -756,6 +772,21 @@ function collectImageUrls(tree: WriteNode): string[] {
   };
   visit(tree);
   return urls;
+}
+
+// Fetch bytes for every image paint in `tree` through the host channel (protocol 2), in ONE deduped
+// awaitable request, BEFORE any canvas write — a fetch failure (blocked url, oversize, unreachable)
+// aborts with zero mutations. The await is the run's suspension point (the sandbox suspends while the
+// plugin relays the WS round-trip); a cancelled or disconnected run dies here when the host rejects
+// its pending fetch. Shared by render (whole tree) and edit (a delta's fill/stroke) — the walk reads
+// only paint sites, so WriteProps (no type discriminant) is the honest input.
+export async function fetchTreeImages(tree: WriteProps): Promise<Record<string, string>> {
+  const urls = Array.from(new Set(collectImageUrls(tree)));
+  if (!urls.length) return {};
+  if (typeof __flcmRequestImages !== "function") {
+    throw new Error("flcm.image: this runtime has no image channel (__flcmRequestImages) — image fills need the live plugin bridge.");
+  }
+  return __flcmRequestImages(urls);
 }
 
 // render(tree) — the one place nodes are created. Loads fonts, walks the WriteNode tree, stamps each
@@ -771,19 +802,7 @@ async function render(tree: WriteNode): Promise<{ root: Handle; keyed: Record<st
   if (tree.layout && (tree.layout.percentSize || tree.layout.percentPos)) {
     throw new Error("flcm: a percent w/h/x/y on the root node has no parent to resolve against — the root node sizes in px. Put the percent on a child, against its parent.");
   }
-  // Mid-run image fetch (protocol 2): batch every image url in the tree into ONE deduped, awaitable
-  // request, BEFORE any node is created — a fetch failure (blocked url, oversize, unreachable) aborts
-  // with zero canvas writes. The await is the run's suspension point: the sandbox suspends here while
-  // the plugin main thread relays the WS round-trip and the server answers (session-cached); a
-  // cancelled or disconnected run dies here when the host rejects its pending fetch.
-  const urls = Array.from(new Set(collectImageUrls(tree)));
-  let images: Record<string, string> = {};
-  if (urls.length) {
-    if (typeof __flcmRequestImages !== "function") {
-      throw new Error("flcm.image: this runtime has no image channel (__flcmRequestImages) — image fills need the live plugin bridge.");
-    }
-    images = await __flcmRequestImages(urls);
-  }
+  const images = await fetchTreeImages(tree);
   const fonts = await loadFontsForTree(tree);
   // Only the MUTATING span enters the mutation lock (invariant 4): the image/font awaits above are
   // read-only and may overlap between concurrent renders, but node creation must serialize — and a
@@ -810,16 +829,10 @@ function id(nodeId: unknown): RawIdRef {
   return { __flcmId: nodeId };
 }
 
-// Tier-1 drift guard: assert the real constructors match the typed public surface (Flcm) that schema.ts
-// exports and the reference/example generators author against. If a verb's signature here diverges from
-// Flcm, plugin typecheck fails — so the docs can't describe a shape the code doesn't have. `satisfies`
-// checks without widening and the local is DCE'd from the bundle (pure init, unreferenced).
-const _flcmShape = { frame, text, rect, ellipse, line, svg, path, gradient, image, effects, render, get, find, findOne, selection, id } satisfies Flcm;
-void _flcmShape;
-
-// The public verb surface — runtime.ts (the bundle entry) re-exports EXACTLY this set onto the
-// `globalName: flcm` global, and nothing else in the preamble is re-exported, so every other helper stays
-// closure-private. This list must mirror runtime.ts's re-export (and the _flcmShape/Flcm guard above).
+// The verbs this module contributes to the public surface — runtime.ts (the bundle entry) re-exports
+// these plus `edit` (which lives in edit.ts: it imports FROM this module, so defining it here would be
+// a cycle) and holds the one exhaustive `satisfies Flcm` drift guard against the schema's typed
+// surface. Nothing else in the preamble is re-exported, so every other helper stays closure-private.
 // `get`/`find`/`findOne`/`selection` are defined in read.ts (the figma.*-speaking read walk) and surface
 // here, the way render's live work lives in bridge.ts.
 export { frame, text, rect, ellipse, line, svg, path, render, gradient, image, effects, get, find, findOne, selection, id };

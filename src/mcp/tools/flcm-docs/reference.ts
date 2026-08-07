@@ -23,6 +23,8 @@ import {
   VERIFY_READBACK,
   CSS_SUBSET,
   FAILS_LOUD,
+  EDIT_INTRO,
+  EDIT_RULES,
 } from "./narrative.js";
 import { EXAMPLES } from "./examples.js";
 
@@ -171,6 +173,21 @@ const SECTIONS: Section[] = [
     body: () => RENDER_KEYS,
   },
   {
+    id: "edit",
+    title: "edit() — changing existing nodes",
+    blurb: "partial deltas against live nodes, and the rollback contract",
+    body: () =>
+      `${EDIT_INTRO}\n\n### Editable fields\n\n${propTable(FIELD_GROUPS.edit)}\n\n` +
+      // Derived from the schema's shared group (minus key, which is never editable) so this sentence
+      // can't drift from the runtime's non-createable gate, which composes from the same group.
+      "On a node type flcm can't create (GROUP, INSTANCE, COMPONENT, …) only the shared words apply: " +
+      `${Object.keys(FIELD_GROUPS.shared)
+        .filter((k) => k !== "key")
+        .map((k) => `\`${k}\``)
+        .join(", ")}.\n\n` +
+      EDIT_RULES,
+  },
+  {
     id: "verify",
     title: "Seeing what you built (get_screenshot)",
     blurb: "the build → screenshot → look → fix loop, and the raw figma.* escape hatch",
@@ -217,6 +234,7 @@ const CATEGORY_LABELS: Record<VerbCategory, string> = {
   build: "build ",
   value: "value ",
   render: "render",
+  edit: "edit  ",
   read: "read  ",
   target: "target",
 };

@@ -4,7 +4,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
-import { frame, text, ellipse, render } from "./flcm.js";
+import { frame, text, ellipse, line, rect, render } from "./flcm.js";
 
 // The bridge reads figma.* only inside render(); constructors never touch it. Install the mock before any
 // render runs. (flcm.js imports are figma-free at module load, so static import above is safe.)
@@ -17,6 +17,12 @@ test("pad: numbers and edge objects compile; a px-string or non-numeric edge rej
   // The silent-zero bug this fixes: "24px" is neither a number nor an edge object, and used to yield 0 pad.
   assert.throws(() => frame({ layout: { padding: "24px" as never } }), /pad must be a number or an object/);
   assert.throws(() => frame({ layout: { padding: { x: "24px" } as never } }), /pad\.x must be a number/);
+});
+
+test("a present-but-mistyped scalar rejects loud on the constructor paths (QuickJS has no type checking)", () => {
+  // The silent-drop bug this pins: a typeof guard used to skip the bad value and commit the rest.
+  assert.throws(() => rect({ opacity: "bad" as never }), /`opacity` must be a number/);
+  assert.throws(() => line({ rotation: "bad" as never }), /`rotation` must be a number/);
 });
 
 test('cross:"stretch" stretches an auto-sized child but leaves a fixed counter-axis child alone', async () => {

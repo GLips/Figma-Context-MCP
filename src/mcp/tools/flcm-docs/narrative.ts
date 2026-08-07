@@ -324,3 +324,14 @@ Components, variables, and prototype interactions are deliberately **out of v1**
 ### The one silent exception: unrenderable glyphs
 
 Everything above fails **loud**. There is exactly one case that does not, because the Figma plugin API exposes no glyph-coverage check to key it off: **a character the resolved font can't render draws as nothing** — no glyph, no tofu box, no error. This bites emoji and private-use codepoints (e.g. SF Symbols) in fonts like Inter that don't carry them. If text you set renders blank, suspect a missing glyph before anything else, and switch to a font that covers the codepoint. This is the sole place the surface can silently whiff; treat unusual codepoints with suspicion until you've eyeballed a screenshot.`;
+
+export const EDIT_INTRO = `\`await flcm.edit(target, changes)\` applies a partial delta to one existing node and returns its updated handle. The target is anything the read verbs accept: an flcm/key, a node id, \`flcm.id(id)\`, or a handle from \`render\`/\`find\`. The delta uses the **same words as create** — there is no separate edit dialect — and only the fields you pass change; everything else on the node is untouched.`;
+
+export const EDIT_RULES = `### Rules
+
+- **A node type takes exactly the words create accepts for it.** \`fill\` on a LINE, \`clip\` on a TEXT, \`borderRadius\` on a VECTOR — each rejects loud naming the prop, the node type, and that type's editable words, the same way the constructor would.
+- **\`key\` is immutable.** Keys are set at creation and are how later calls address the node — re-keying could mint a duplicate address. To rename what you see in the layers panel, set \`name\`.
+- **No bare \`x\`/\`y\`, and no layout/size words yet** — they land on edit in a later slice (spelled \`absolute\`/\`pin\`/\`width\`/\`height\`, the create-side words).
+- **An empty delta is rejected**, not silently committed — an empty edit would still mint an undo step.
+- **Each edit is one undo step.** The whole delta validates before the first write; if Figma refuses a write mid-apply, the edit rolls back to how the node was and the error carries the target's identity, Figma's reason, and how many earlier mutating calls in the run still stand.
+- Delta values are **absolute** (a fill, an opacity), never relative (\`+10\`) — re-running the same edit converges instead of compounding.`;
