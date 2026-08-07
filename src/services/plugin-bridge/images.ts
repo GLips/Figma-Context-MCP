@@ -302,6 +302,13 @@ const CONTAINED_OPEN_FLAGS =
  * channel's EXECUTE_CODE payload gate makes every path attributable to an approved run — defense in
  * depth, not a substitute for this check.
  *
+ * Negative space: a HARDLINK inside the root to a file outside it passes containment, deliberately.
+ * realpath structurally cannot see through one — there is no link to resolve, just a second name for
+ * the same inode, and both names are equally real. It grants no capability either, because minting one
+ * needs write access inside the asset root, and anyone holding that could copy the file in instead. Do
+ * not "fix" it with an inode or link-count check: it buys nothing and would refuse the ordinary
+ * hardlinked assets that build tools produce.
+ *
  * The root is canonicalized ONCE and pinned for the process: re-resolving it per request would let a
  * root that is a symlink be retargeted mid-session, silently moving the authorization boundary the
  * operator chose at startup.
