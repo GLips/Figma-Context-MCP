@@ -570,5 +570,38 @@ assert.deepEqual(
 );
 console.log(`✅ ui.html WS_PORT_BLOCK mirrors config's WS_PORT_BLOCK exactly (${WS_PORT_BLOCK.length} ports)`);
 
+// --- Phase 1 (edit surface): timeout policy — cancel, never abandon ---
+// A run that stalls (no reply, no run traffic) is CANCELLED, not abandoned: the server emits a
+// run-scoped, id-less CANCEL frame so the plugin rejects the run's pending awaits (a timed-out run
+// must never resume and mutate), then rejects the caller. Driven with a short-deadline bridge and a
+// plugin that goes silent on EXECUTE_CODE.
+const PORT_T = 19884;
+const bridgeT = new PluginBridge(isolatedStore(), { requestTimeoutMs: 400 });
+bridgeT.start([PORT_T]);
+await wait(150);
+const framesT = [];
+const silent = new WebSocket(`ws://127.0.0.1:${PORT_T}`, { origin: "null" });
+silent.on("message", (raw) => framesT.push(JSON.parse(raw.toString())));
+await new Promise((res) => silent.on("open", res));
+const tStall = Date.now();
+let timeoutErr = null;
+try {
+  await bridgeT.request({ type: "EXECUTE_CODE", code: "stall forever" });
+} catch (e) {
+  timeoutErr = e;
+}
+assert.ok(timeoutErr && /no traffic/.test(timeoutErr.message), "a stalled run rejects with the inactivity message");
+assert.ok(Date.now() - tStall < 2000, "the injected short deadline fired, not the 15s default");
+await wait(50);
+const cancelFrame = framesT.find((f) => f.type === "CANCEL");
+const stalledExecute = framesT.find((f) => f.type === "EXECUTE_CODE");
+assert.ok(cancelFrame, "a timed-out run emits a CANCEL frame to the plugin");
+assert.equal(cancelFrame.runId, stalledExecute.id, "the CANCEL is scoped to the stalled run's id");
+assert.equal(cancelFrame.id, undefined, "CANCEL is id-less — a one-way notification, never a request");
+console.log("✅ A stalled run is cancelled (run-scoped, id-less CANCEL), then rejected");
+silent.close();
+bridgeT.stop();
+await wait(150);
+
 console.log("\nAll frozen-envelope + hardening + version-handshake + consent-gate + port-range checks passed.");
 process.exit(0);

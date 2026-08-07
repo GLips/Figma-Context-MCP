@@ -11,9 +11,15 @@ export interface BridgeRequest {
 interface Pending {
   resolve: (value: unknown) => void;
   reject: (err: Error) => void;
-  timer: ReturnType<typeof setTimeout>;
+  timer: ReturnType<typeof setTimeout> | undefined;
+  /** The request's payload type, kept so the timeout rejection can name what stalled. */
+  payloadType: string;
 }
 
+// The per-request INACTIVITY deadline, not a hard cap (protocol 2): run-scoped traffic — today,
+// servicing the run's mid-run image request — suspends and re-arms it (serveImagesRequest), so a
+// run only dies when neither side is doing its work. Injectable via the constructor so the
+// contract harness can drive timeouts without waiting out 15 real seconds.
 const DEFAULT_TIMEOUT_MS = 15_000;
 
 // How often the server pings the holder to prove the socket is still alive. A half-open
@@ -105,9 +111,18 @@ export class PluginBridge {
   // otherwise process-lifetime; stop() exists for tests that model a restart by freeing then rebinding.
   private wss: WebSocketServer | null = null;
 
+  // How long a pending request may sit with no run traffic before it is cancelled (see
+  // DEFAULT_TIMEOUT_MS). Set once at construction.
+  private readonly requestTimeoutMs: number;
+
   // Injectable so the contract harness / tests isolate persistence to a temp dir instead of touching
-  // the real ~/.framelink. Production constructs the default store.
-  constructor(private readonly store: ApprovalStore = new ApprovalStore()) {}
+  // the real ~/.framelink, and drive timeouts without real 15s waits. Production uses the defaults.
+  constructor(
+    private readonly store: ApprovalStore = new ApprovalStore(),
+    { requestTimeoutMs = DEFAULT_TIMEOUT_MS }: { requestTimeoutMs?: number } = {},
+  ) {
+    this.requestTimeoutMs = requestTimeoutMs;
+  }
 
   /**
    * Probe-bind the first free port in the block, advancing on `EADDRINUSE`. The OS guarantees no
@@ -346,19 +361,45 @@ export class PluginBridge {
     }
     const id = `req-${++this.nextId}`;
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.pending.delete(id);
-        reject(
-          new Error(
-            `Bridge request ${id} (${payload.type}) timed out after ${DEFAULT_TIMEOUT_MS}ms`,
-          ),
-        );
-      }, DEFAULT_TIMEOUT_MS);
-      this.pending.set(id, { resolve, reject, timer });
+      this.pending.set(id, { resolve, reject, timer: undefined, payloadType: payload.type });
+      this.armPendingTimer(id);
       // `id` last: the generated correlation id is authoritative and a payload field
       // must never overwrite it, or the reply could never be matched to this pending.
       socket.send(JSON.stringify({ ...payload, id }));
     });
+  }
+
+  /** (Re)start a pending request's inactivity deadline — run traffic calls this to push it out. */
+  private armPendingTimer(id: string): void {
+    const pending = this.pending.get(id);
+    if (!pending) return;
+    clearTimeout(pending.timer);
+    pending.timer = setTimeout(() => this.timeoutPending(id), this.requestTimeoutMs);
+  }
+
+  /**
+   * The inactivity deadline fired: cancel the run plugin-side, then reject the caller — cancel,
+   * never abandon. A timed-out run must never resume and mutate a canvas the agent was told is
+   * unchanged, so the plugin rejects the run's pending awaits on CANCEL (its mid-run image await
+   * is the suspension point) and the script dies there. The frame is a run-scoped, id-less
+   * one-way notification — the reverse mirror of the plugin's SESSION_TOKEN/REVOKE_SESSION — and
+   * deliberately not a request: a CANCEL that awaited a reply could itself time out and cancel,
+   * recursively. A v1 plugin drops unknown id-less types silently, which is safe: it has no
+   * mid-run awaits to cancel.
+   */
+  private timeoutPending(id: string): void {
+    const pending = this.pending.get(id);
+    if (!pending) return;
+    this.pending.delete(id);
+    if (this.socket && this.socket.readyState === WebSocket.OPEN) {
+      this.socket.send(JSON.stringify({ type: "CANCEL", runId: id }));
+    }
+    pending.reject(
+      new Error(
+        `Bridge request ${id} (${pending.payloadType}) saw no traffic for ${this.requestTimeoutMs}ms — ` +
+          `the run was cancelled. The canvas holds whatever completed before the stall.`,
+      ),
+    );
   }
 
   private handleMessage(raw: string): void {
