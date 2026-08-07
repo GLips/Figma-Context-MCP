@@ -1,22 +1,29 @@
-// STEP-ZERO LIVE PROBE for the mid-run image protocol (flcm edit surface, Phase 1).
+// LIVE PROBE for protocol 2's load-bearing runtime assumption (flcm edit surface, Phase 1 step
+// zero) — a standing runbook, not a one-shot: re-run it whenever the eval wrapper, the preamble's
+// image await, or the plugin's WS dispatch changes shape, since no headless harness can answer this.
 //
-// The one load-bearing assumption everything in protocol 2 rests on: the QuickJS sandbox can
-// SUSPEND on an await while the plugin main thread round-trips the WS bridge (postMessage →
-// ui.html → server) and resumes when the reply arrives — including a deliberately SLOW
-// (multi-second) reply. This script drives exactly that against the REAL plugin and prints a
-// clear PASS/FAIL. It fetches no network images: the server-side image handler is stubbed to
-// wait 4s and answer with an inline 1×1 PNG, so the delay is the thing under test.
+// The assumption everything in protocol 2 rests on: the QuickJS sandbox can SUSPEND on an await
+// while the plugin main thread round-trips the WS bridge (postMessage → ui.html → server) and
+// resumes when the reply arrives — including a deliberately SLOW (multi-second) reply. This script
+// drives exactly that against the REAL plugin and prints a clear PASS/FAIL. It fetches no network
+// images: the server-side image handler is stubbed to wait 4s and answer with an inline 1×1 PNG,
+// so the delay itself is the thing under test.
 //
-// Morning checklist (minutes, not a rebuild):
-//   1. pnpm build:plugin                     (from this worktree)
+// Runbook (minutes, not a rebuild):
+//   1. pnpm build:plugin                     (from the checkout under test)
 //   2. Figma desktop → Plugins → Development → Import plugin from manifest…
-//        → <this worktree>/plugin/manifest.json      (re-import even if already imported —
-//          the probe needs THIS worktree's protocol-2 build, not the main checkout's)
+//        → <that checkout>/plugin/manifest.json     (re-import even if already imported —
+//          the probe needs the build you just made, not whatever Figma has cached)
 //   3. Open the Framelink plugin in any (scratch) file.
 //   4. pnpm probe:midrun-await               (this script)
-//   5. When the plugin strip shows this worktree's session, click Allow.
+//   5. When the plugin strip shows this session, click Allow.
 // The probe renders one small frame with two image fills, verifies the suspension, deletes the
 // frame again, and prints PASS/FAIL. Safe to re-run.
+//
+// If it FAILS on the suspension assert: the envelope + two-pass-deletion commits must be revisited
+// — the sandbox cannot await across the bridge, and Phase 1 needs a different design (see the
+// plan's step-zero note). The earlier commits (timeout/cancel policy, skew gate, session cache)
+// stand either way.
 
 import { PluginBridge } from "../src/services/plugin-bridge/bridge.ts";
 import { WS_PORT_BLOCK } from "../src/services/plugin-bridge/ports.ts";
@@ -32,13 +39,14 @@ const log = (msg) => console.log(`[probe +${((Date.now() - t0) / 1000).toFixed(1
 const t0 = Date.now();
 
 let imagesRequests = 0;
-const bridge = new PluginBridge();
-bridge.onImagesRequest(async (urls) => {
-  imagesRequests++;
-  log(`plugin asked for ${urls.length} image url(s) MID-RUN — holding the reply ${SLOW_REPLY_MS}ms…`);
-  await new Promise((r) => setTimeout(r, SLOW_REPLY_MS));
-  log("releasing the image reply");
-  return Object.fromEntries(urls.map((u) => [u, TINY_PNG_B64]));
+const bridge = new PluginBridge(undefined, {
+  imagesRequestHandler: async (urls) => {
+    imagesRequests++;
+    log(`plugin asked for ${urls.length} image url(s) MID-RUN — holding the reply ${SLOW_REPLY_MS}ms…`);
+    await new Promise((r) => setTimeout(r, SLOW_REPLY_MS));
+    log("releasing the image reply");
+    return Object.fromEntries(urls.map((u) => [u, TINY_PNG_B64]));
+  },
 });
 
 const PROBE_CODE = `

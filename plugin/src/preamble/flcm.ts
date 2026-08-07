@@ -724,11 +724,13 @@ function normalizeEffects(v: EffectsInput): EffectSpec[] {
   return effects(v as EffectsSugar);
 }
 
-// The host-installed mid-run image channel (protocol 2). executeCode (code.ts) defines this as a
-// LOCAL in the direct-eval scope this preamble runs in, so the reference resolves through the eval
-// scope chain — no globalThis dependency in QuickJS. The harness and preamble unit tests run via
-// indirect eval / plain import (global scope) and install it on globalThis instead; both paths
-// resolve the same free identifier, and `typeof` keeps the probe safe where it's truly absent.
+// The host-installed mid-run image channel (protocol 2). executeCode (code.ts) passes this as the
+// PARAMETER of the eval'd async wrapper this preamble runs inside, so the reference resolves as a
+// function argument — no globalThis dependency in QuickJS, and immune to bundler renaming (both
+// names live inside eval'd strings; build.mjs greps the bundle for the wrapper head to pin the
+// pairing). The harness and preamble unit tests run via indirect eval / plain import (global
+// scope) and install it on globalThis instead; both paths resolve the same free identifier, and
+// `typeof` keeps the probe safe where it's truly absent.
 declare const __flcmRequestImages:
   | ((urls: string[]) => Promise<Record<string, string>>)
   | undefined;

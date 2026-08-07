@@ -1,8 +1,8 @@
 // Images, sandbox side: flcm.image is an inert paint value; render() batches every image url into
 // ONE deduped mid-run request (protocol 2), awaits the bytes, and resolves each spec to a plugin
 // ImagePaint. The channel is the host-installed __flcmRequestImages free identifier — in the live
-// plugin it's a local in executeCode's direct-eval scope; here (plain import → module scope chains
-// to global) we install it on globalThis, exactly as the dogfood harness does.
+// plugin it's the parameter of the eval'd wrapper executeCode builds; here (plain import → module
+// scope chains to global) we install it on globalThis, exactly as the dogfood harness does.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";

@@ -12,7 +12,10 @@ interface Pending {
   resolve: (value: unknown) => void;
   reject: (err: Error) => void;
   timer: ReturnType<typeof setTimeout> | undefined;
-  /** The request's payload type, kept so the timeout rejection can name what stalled. */
+  /** The absolute per-run ceiling (armed once, never reset by traffic — see DEFAULT_RUN_CEILING_MS). */
+  ceilingTimer: ReturnType<typeof setTimeout> | undefined;
+  /** The request's payload type: names what stalled in the timeout rejection, and gates which
+   * pending ids the reverse direction will serve (only EXECUTE_CODE runs — see serveImagesRequest). */
   payloadType: string;
 }
 
@@ -21,6 +24,21 @@ interface Pending {
 // run only dies when neither side is doing its work. Injectable via the constructor so the
 // contract harness can drive timeouts without waiting out 15 real seconds.
 const DEFAULT_TIMEOUT_MS = 15_000;
+
+// The absolute wall-clock ceiling on one request, cancellation included — the backstop the
+// inactivity deadline deliberately isn't. Without it, a cold-cache many-image render (or an agent
+// looping renders) could legitimately re-arm the inactivity deadline for minutes while the MCP
+// client abandoned the call at its own ~60s default — the agent told "failed" about a canvas still
+// being written, exactly the dishonesty this protocol exists to remove. Sized to fit the client's
+// 60s budget in the common (already-approved) case; a run that genuinely needs longer should split
+// its work. await-approval.ts reasons against this number — keep them in sync.
+const DEFAULT_RUN_CEILING_MS = 45_000;
+
+// How many IMAGES_REQUEST services one run may have in flight at once. A well-behaved preamble
+// issues ONE batched, deduped request per render(); a small allowance covers a script that renders
+// concurrently. Beyond that is a runaway or hostile holder using the reverse channel to pin the
+// run's inactivity clock in permanent suspension or flood the fetch path — refused, not queued.
+const MAX_INFLIGHT_IMAGE_SERVICES_PER_RUN = 4;
 
 // How often the server pings the holder to prove the socket is still alive. A half-open
 // socket (Figma crash / laptop sleep sends no TCP FIN, so `close` never fires and the
@@ -53,11 +71,13 @@ function isAllowedOrigin(origin: string | undefined): boolean {
 
 /**
  * Owns the single WebSocket connection to the Figma plugin and the request/response
- * correlation. `request()` is the ONLY send path: it stamps every outbound message
+ * correlation. `request()` is the only REQUEST path: it stamps every outbound request
  * with a fresh id and resolves when a reply carrying that same id arrives. Replies
  * without a matching pending id are dropped. This is where the plan's "every WS
  * request carries a correlation id" invariant is enforced — callers never deal with
- * ids themselves.
+ * ids themselves. Two server→plugin frames live OUTSIDE it by design: the id-less
+ * one-way CANCEL on timeout, and IMAGES_REPLY/IMAGES_ERROR, which answer the PLUGIN's
+ * ids (protocol 2's reverse direction, serveImagesRequest).
  */
 export class PluginBridge {
   private socket: WebSocket | null = null;
@@ -114,17 +134,39 @@ export class PluginBridge {
   // How long a pending request may sit with no run traffic before it is cancelled (see
   // DEFAULT_TIMEOUT_MS). Set once at construction.
   private readonly requestTimeoutMs: number;
-  // Answers the plugin's mid-run IMAGES_REQUEST frames (protocol 2's reverse direction). Wired once
-  // at startup (index.ts) to the guarded fetch path + the session image cache.
-  private imagesRequestHandler: ((urls: string[]) => Promise<Record<string, string>>) | null = null;
+  // The absolute wall-clock cap on one request (see DEFAULT_RUN_CEILING_MS) — never suspended,
+  // never re-armed. Set once at construction.
+  private readonly runCeilingMs: number;
+  // Answers the plugin's mid-run IMAGES_REQUEST frames (protocol 2's reverse direction). Fixed at
+  // construction (index.ts wires the guarded fetch path + the session image cache); bridges built
+  // without one — the contract harness's non-image sections — refuse the frames with IMAGES_ERROR.
+  private readonly imagesRequestHandler:
+    | ((urls: string[]) => Promise<Record<string, string>>)
+    | null;
+  // How many image services each run has in flight right now. The run's inactivity deadline stays
+  // suspended while ANY service is running and re-arms only when the count returns to zero —
+  // a lone clearTimeout/re-arm pair breaks under concurrent services (the first reply would
+  // restart the clock while the second fetch is still ours to finish). Entries are cleared when
+  // the run settles (reply, timeout, failPending), so a straggler fetch finds no count and no-ops.
+  private readonly inFlightImageServices = new Map<string, number>();
 
   // Injectable so the contract harness / tests isolate persistence to a temp dir instead of touching
   // the real ~/.framelink, and drive timeouts without real 15s waits. Production uses the defaults.
   constructor(
     private readonly store: ApprovalStore = new ApprovalStore(),
-    { requestTimeoutMs = DEFAULT_TIMEOUT_MS }: { requestTimeoutMs?: number } = {},
+    {
+      requestTimeoutMs = DEFAULT_TIMEOUT_MS,
+      runCeilingMs = DEFAULT_RUN_CEILING_MS,
+      imagesRequestHandler = null,
+    }: {
+      requestTimeoutMs?: number;
+      runCeilingMs?: number;
+      imagesRequestHandler?: ((urls: string[]) => Promise<Record<string, string>>) | null;
+    } = {},
   ) {
     this.requestTimeoutMs = requestTimeoutMs;
+    this.runCeilingMs = runCeilingMs;
+    this.imagesRequestHandler = imagesRequestHandler;
   }
 
   /**
@@ -291,11 +333,6 @@ export class PluginBridge {
     socket.ping();
   }
 
-  /** Register the answerer for plugin-issued IMAGES_REQUEST frames (protocol 2's reverse direction). */
-  onImagesRequest(handler: (urls: string[]) => Promise<Record<string, string>>): void {
-    this.imagesRequestHandler = handler;
-  }
-
   /** Set the current connection's version-skew refusal (null = plugin is current). */
   setSkewNote(note: string | null): void {
     this.skewNote = note;
@@ -353,9 +390,12 @@ export class PluginBridge {
   private failPending(reason: string): void {
     for (const [id, pending] of this.pending) {
       clearTimeout(pending.timer);
+      clearTimeout(pending.ceilingTimer);
       this.pending.delete(id);
       pending.reject(new Error(reason));
     }
+    // With no runs left, no suspension is owed — straggler fetches find no count and no-op.
+    this.inFlightImageServices.clear();
   }
 
   request(payload: BridgeRequest): Promise<unknown> {
@@ -369,8 +409,19 @@ export class PluginBridge {
     }
     const id = `req-${++this.nextId}`;
     return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject, timer: undefined, payloadType: payload.type });
+      const pending: Pending = {
+        resolve,
+        reject,
+        timer: undefined,
+        ceilingTimer: undefined,
+        payloadType: payload.type,
+      };
+      this.pending.set(id, pending);
       this.armPendingTimer(id);
+      pending.ceilingTimer = setTimeout(
+        () => this.timeoutPending(id, "ceiling"),
+        this.runCeilingMs,
+      );
       // `id` last: the generated correlation id is authoritative and a payload field
       // must never overwrite it, or the reply could never be matched to this pending.
       socket.send(JSON.stringify({ ...payload, id }));
@@ -382,30 +433,40 @@ export class PluginBridge {
     const pending = this.pending.get(id);
     if (!pending) return;
     clearTimeout(pending.timer);
-    pending.timer = setTimeout(() => this.timeoutPending(id), this.requestTimeoutMs);
+    pending.timer = setTimeout(() => this.timeoutPending(id, "inactivity"), this.requestTimeoutMs);
   }
 
   /**
-   * The inactivity deadline fired: cancel the run plugin-side, then reject the caller — cancel,
-   * never abandon. A timed-out run must never resume and mutate a canvas the agent was told is
-   * unchanged, so the plugin rejects the run's pending awaits on CANCEL (its mid-run image await
-   * is the suspension point) and the script dies there. The frame is a run-scoped, id-less
-   * one-way notification — the reverse mirror of the plugin's SESSION_TOKEN/REVOKE_SESSION — and
-   * deliberately not a request: a CANCEL that awaited a reply could itself time out and cancel,
-   * recursively. A v1 plugin drops unknown id-less types silently, which is safe: it has no
-   * mid-run awaits to cancel.
+   * A deadline fired — the inactivity timeout or the absolute run ceiling: tell the plugin to
+   * cancel the run, then reject the caller — cancel, never silently abandon. CANCEL is ADVISORY
+   * today: it rejects the run's suspended mid-run image await (the one suspension point that
+   * exists), so a run stalled there dies without touching the canvas — but a run busy elsewhere
+   * in its script is not interrupted and may still finish its writes. The zombie-refusal in
+   * serveImagesRequest closes the image path authoritatively; real cancellation enforcement — a
+   * cancelled run refused at the mutation lock (plan invariant 4) — arrives with Phase 2's lock.
+   * Don't re-add a second enforcement path here; the lock is where it lives. The frame is a
+   * run-scoped, id-less one-way notification — the reverse mirror of the plugin's
+   * SESSION_TOKEN/REVOKE_SESSION — and deliberately not a request: a CANCEL that awaited a reply
+   * could itself time out and cancel, recursively.
    */
-  private timeoutPending(id: string): void {
+  private timeoutPending(id: string, cause: "inactivity" | "ceiling"): void {
     const pending = this.pending.get(id);
     if (!pending) return;
+    clearTimeout(pending.timer);
+    clearTimeout(pending.ceilingTimer);
     this.pending.delete(id);
+    this.inFlightImageServices.delete(id);
     if (this.socket && this.socket.readyState === WebSocket.OPEN) {
       this.socket.send(JSON.stringify({ type: "CANCEL", runId: id }));
     }
+    const why =
+      cause === "inactivity"
+        ? `saw no traffic for ${this.requestTimeoutMs}ms`
+        : `exceeded the absolute ${this.runCeilingMs}ms run ceiling`;
     pending.reject(
       new Error(
-        `Bridge request ${id} (${pending.payloadType}) saw no traffic for ${this.requestTimeoutMs}ms — ` +
-          `the run was cancelled. The canvas holds whatever completed before the stall.`,
+        `Bridge request ${id} (${pending.payloadType}) ${why} — ` +
+          `the run was cancelled. The canvas holds whatever completed before that.`,
       ),
     );
   }
@@ -462,7 +523,9 @@ export class PluginBridge {
     // This is what makes the holder "established" and thus protected from slot-reclaim.
     this.handshaked = true;
     clearTimeout(pending.timer);
+    clearTimeout(pending.ceilingTimer);
     this.pending.delete(msg.id);
+    this.inFlightImageServices.delete(msg.id);
     // Frozen-envelope error path: a plugin replies `{ type:"ERROR", error }` to any
     // message type it doesn't recognize — the case a newer server hits against an
     // older, un-updatable plugin. Surface it as an immediate rejection so the caller
@@ -477,8 +540,8 @@ export class PluginBridge {
   /**
    * Service a plugin-issued IMAGES_REQUEST (protocol 2). Traffic-as-heartbeat: the run's
    * inactivity deadline is SUSPENDED while WE are the side doing the work (our fetch is bounded by
-   * images.ts's own timeouts and caps) and re-armed when the reply goes out — the deadline only
-   * ever counts plugin-side silence. A request naming a run this bridge no longer tracks (timed
+   * images.ts's own timeouts and caps, and the run ceiling never suspends) and re-armed when the
+   * run's last in-flight service settles — the deadline only ever counts plugin-side silence. A request naming a run this bridge no longer tracks (timed
    * out, cancelled, already resolved) is refused instead of served: the refusal rejects the run's
    * suspended await plugin-side, so a zombie run can never resume into canvas writes after the
    * agent was told nothing happened. That refusal is the authoritative half of the policy; the
@@ -488,6 +551,10 @@ export class PluginBridge {
     socket: WebSocket,
     msg: { id?: unknown; runId?: unknown; urls?: unknown },
   ): void {
+    // Only the current holder may draw on the reverse channel. A displaced or dead socket knows
+    // live run ids (it carried them), so without this a stale holder could suspend or answer the
+    // current connection's runs from the grave.
+    if (this.socket !== socket) return;
     if (typeof msg.id !== "string") return; // unanswerable — nothing to correlate a reply to
     const id = msg.id;
     // A reverse request proves the holder speaks the envelope, exactly like a matched reply.
@@ -503,10 +570,21 @@ export class PluginBridge {
         socket.send(JSON.stringify({ ...body, id }));
       }
     };
-    if (!runId || !this.pending.has(runId)) {
+    const run = runId ? this.pending.get(runId) : undefined;
+    if (!runId || !run) {
       send({
         type: "IMAGES_ERROR",
         error: `flcm.image: run ${runId ?? "(unknown)"} is no longer active on this server (cancelled, timed out, or already finished) — the image request was refused.`,
+      });
+      return;
+    }
+    // Only a code run may pull bytes. Server-issued handshake requests (SESSION_INFO, GET_VERSION)
+    // share the req-N id namespace, so without this gate a holder could burn network fetches — and
+    // hold a suspension — against a pending it was never granted a run for.
+    if (run.payloadType !== "EXECUTE_CODE") {
+      send({
+        type: "IMAGES_ERROR",
+        error: `flcm.image: run ${runId} is not a code run — only EXECUTE_CODE runs may request images.`,
       });
       return;
     }
@@ -518,8 +596,28 @@ export class PluginBridge {
       });
       return;
     }
-    const run = this.pending.get(runId);
-    if (run) clearTimeout(run.timer); // suspend: the server is the side working now
+    const inFlight = this.inFlightImageServices.get(runId) ?? 0;
+    if (inFlight >= MAX_INFLIGHT_IMAGE_SERVICES_PER_RUN) {
+      send({
+        type: "IMAGES_ERROR",
+        error: `flcm.image: run ${runId} already has ${inFlight} image requests in flight — this one was refused.`,
+      });
+      return;
+    }
+    this.inFlightImageServices.set(runId, inFlight + 1);
+    clearTimeout(run.timer); // suspend: the server is the side working now
+    // Re-arm only when the LAST in-flight service settles — with concurrent services, the first
+    // reply must not restart the run's clock while a second fetch is still the server's work.
+    const settleService = (): void => {
+      const count = this.inFlightImageServices.get(runId);
+      if (count === undefined) return; // the run settled meanwhile and cleared its counts
+      if (count <= 1) {
+        this.inFlightImageServices.delete(runId);
+        this.armPendingTimer(runId);
+      } else {
+        this.inFlightImageServices.set(runId, count - 1);
+      }
+    };
     void this.imagesRequestHandler(urls)
       .then((images) => {
         if (!this.pending.has(runId)) {
@@ -531,11 +629,10 @@ export class PluginBridge {
           return;
         }
         send({ type: "IMAGES_REPLY", images });
-        this.armPendingTimer(runId); // the plugin's clock restarts: build + reply within the deadline
       })
       .catch((err: unknown) => {
         send({ type: "IMAGES_ERROR", error: err instanceof Error ? err.message : String(err) });
-        this.armPendingTimer(runId); // no-op if the run died meanwhile
-      });
+      })
+      .finally(settleService);
   }
 }

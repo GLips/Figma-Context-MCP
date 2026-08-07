@@ -178,6 +178,16 @@ const pendingImagesFetches = new Map<string, PendingImagesFetch>();
  * suspension point instead of resuming into canvas writes.
  */
 function requestServerImages(to: ReplyTo, urls: string[]): Promise<Record<string, string>> {
+  // Fail closed at issue time: with no live socket for this run's port, ui.html would silently drop
+  // the frame and this promise could never settle — wedging the write chain (the run never
+  // resolves, so no later write ever dispatches) for the life of the plugin. WS_CLOSED /
+  // WS_CONNECTED reject the fetches that were already pending; this covers the run that reaches
+  // its fetch only AFTER the drop.
+  if (to.connKey === undefined || !connections.has(to.connKey)) {
+    return Promise.reject(
+      new Error("flcm: the server for this run is not connected — the image fetch cannot be issued and the script stops here."),
+    );
+  }
   return new Promise((resolve, reject) => {
     const id = "preq-" + ++nextImagesRequestId;
     pendingImagesFetches.set(id, { resolve, reject, runId: to.id, connKey: to.connKey });
@@ -186,10 +196,14 @@ function requestServerImages(to: ReplyTo, urls: string[]): Promise<Record<string
 }
 
 /** Settle a plugin-issued image request from the server's typed reply. An unknown id is dropped —
- * that fetch was already rejected by a CANCEL or a disconnect. */
+ * that fetch was already rejected by a CANCEL or a disconnect. The reply must arrive on the SAME
+ * port the request went out on: ui.html holds a socket per block port, so without this check any
+ * other local server (approved or not — approval gates writes, not this direction) could inject
+ * bytes into an approved session's in-flight render, bypassing the trusted fetch path. */
 function settleImagesFetch(msg: InboundMessage): void {
   const pending = typeof msg.id === "string" ? pendingImagesFetches.get(msg.id) : undefined;
   if (!pending || typeof msg.id !== "string") return;
+  if (pending.connKey !== connKeyOf(msg)) return;
   pendingImagesFetches.delete(msg.id);
   if (msg.type === "IMAGES_REPLY" && msg.images && typeof msg.images === "object") {
     pending.resolve(msg.images as Record<string, string>);
@@ -417,11 +431,12 @@ function revokeSession(key: ConnKey): void {
 
 figma.ui.onmessage = (msg: InboundMessage) => {
   // Local CONTROL messages from ui.html and the arbiter panel are id-less: they never traverse
-  // the WS, so they carry no server correlation id and get no reply. The server, by contrast,
-  // stamps an id on every message (PluginBridge.request), so id-less ⟺ local control. Handle
-  // those here and return; an id-CARRYING message of any type falls through to the normal
-  // envelope path below (and its ERROR reply for unknown types), preserving the frozen-envelope
-  // "every id-carrying message gets exactly one reply" invariant.
+  // the WS, so they carry no server correlation id and get no reply. Server REQUESTS all carry ids
+  // (PluginBridge.request); since protocol 2 the server also emits ONE id-less one-way frame,
+  // CANCEL, handled in this branch beside the session-scoped controls because it is likewise
+  // reply-less and __connKey-routed. An id-CARRYING message falls through to the reverse-reply
+  // intercept and then the envelope path below (ERROR reply for unknown types), preserving the
+  // "every id-carrying server request gets exactly one reply" invariant.
   if (msg.id === undefined) {
     // Surface control first — these address the WINDOW, not a session, so they carry no __connKey.
     if (msg.type === "UI_READY") {
@@ -455,6 +470,13 @@ figma.ui.onmessage = (msg: InboundMessage) => {
       // executor. approvedTokens stays intact (sticky); a legit reconnect re-binds via the echoed
       // token in its SESSION_INFO. ui.html fires this on ws.onopen, before any server message on the
       // new socket. activeKey is left alone — see its declaration for why a reconnect keeps it.
+      // Any image fetch still pending against this port belonged to the PREVIOUS socket's server —
+      // the new one doesn't know its preq ids, so a reply can never arrive: reject now or the
+      // suspended run (and the write chain behind it) waits forever.
+      rejectImagesFetches(
+        (p) => p.connKey === key,
+        "flcm: the server connection for this run was replaced mid-run — the image fetch was abandoned and the script stops here.",
+      );
       connections.set(key, { token: null, identity: null, pairingCode: null });
     } else if (msg.type === "WS_CLOSED") {
       // The socket dropped — remove the session's row (disconnect-detection reuses this persistent
@@ -481,16 +503,21 @@ figma.ui.onmessage = (msg: InboundMessage) => {
       // persisted token.
       revokeSession(key);
     } else if (msg.type === "CANCEL") {
-      // The server's inactivity deadline fired for this run (id-less, run-scoped, one-way — the
-      // server-side mirror of SESSION_TOKEN's direction). Reject the run's pending awaits so the
-      // suspended script dies at its await instead of resuming into canvas writes the agent was
-      // told never happened. Scoped to BOTH the run id and this source port: correlation ids are
-      // per-server counters, so two connected servers can mint colliding run ids.
+      // The server's deadline fired for this run (id-less, run-scoped, one-way — the server-side
+      // mirror of SESSION_TOKEN's direction). What this actually guarantees: the run's pending
+      // image fetches reject, so a run suspended at its await dies there. What it does NOT
+      // guarantee: a run past its await (or one whose script catches the rejection, or one with no
+      // image fills at all) can still write — CANCEL is advisory today. Authoritative refusal is
+      // Phase 2's mutation lock ("a cancelled run is refused at the lock", invariant 4); don't
+      // build a second enforcement path here, it would be deleted then. The server's own
+      // zombie-run defense (image requests for a dead run are refused) covers the other half.
+      // Scoped to BOTH the run id and this source port: correlation ids are per-server counters,
+      // so two connected servers can mint colliding run ids.
       const runId = typeof msg.runId === "string" ? msg.runId : null;
       if (runId) {
         rejectImagesFetches(
           (p) => p.runId === runId && p.connKey === key,
-          "flcm: this run was cancelled by the server (its deadline passed with no traffic) — the script stops here.",
+          "flcm: this run was cancelled by the server (its deadline passed) — the script stops here.",
         );
       }
     }
@@ -602,18 +629,19 @@ async function executeCode(to: ReplyTo, code: string): Promise<void> {
 
   let result: unknown;
   let errorMessage: string | null = null;
-  // The preamble's mid-run image channel: a LOCAL in this function's scope, visible to the direct
-  // eval below through the ordinary scope chain (esbuild never renames identifiers in a scope
-  // containing direct eval, so the free reference in the preamble bundle resolves here). Bound to
-  // `to` so every request carries the run's correlation id and source port.
-  const __flcmRequestImages = (urls: string[]): Promise<Record<string, string>> =>
-    requestServerImages(to, urls);
-  void __flcmRequestImages;
   try {
-    // The preamble bundle rides INSIDE the same async IIFE as the user's code, so its single
+    // The preamble bundle rides INSIDE the same async wrapper as the user's code, so its single
     // `flcm` global (flcm.frame/text/render/…) is simply in scope. The leading preamble also
-    // preloads fonts (an `await`), which is why the IIFE must be async.
-    const raw = await eval("(async function(){ " + SANDBOX_PREAMBLE + "\n;\n" + code + "\n })()");
+    // preloads fonts (an `await`), which is why the wrapper must be async.
+    //
+    // The mid-run image channel rides in as a PARAMETER of the wrapper: the preamble references
+    // the free identifier `__flcmRequestImages`, which resolves to this argument. A parameter
+    // inside the eval'd STRING, not a scope-chain local, so no bundler pass can ever rename the
+    // binding away from the preamble's reference (build.mjs pins the string survives verbatim).
+    // Bound to `to` so every request carries the run's correlation id and source port.
+    const raw = await eval(
+      "(async function(__flcmRequestImages){ " + SANDBOX_PREAMBLE + "\n;\n" + code + "\n })",
+    )((urls: string[]) => requestServerImages(to, urls));
     // Return-path node guard (R2): a returned live node would otherwise collapse to
     // { id } and silently drop everything else. Make that loud instead of lossy.
     guardReturnValue(raw);

@@ -25,7 +25,7 @@ createFigmaMock();
 // Mid-run image channel (protocol 2): the live sandbox awaits the server over the WS bridge; the
 // harness answers instantly with stand-in bytes so image scenarios run headless. Installed on
 // globalThis because the indirect eval below runs in global scope (the live path resolves the same
-// free identifier to executeCode's direct-eval local instead).
+// free identifier to the eval'd wrapper's parameter instead — see executeCode in code.ts).
 globalThis.__flcmRequestImages = async (urls) =>
   Object.fromEntries(urls.map((u) => [u, Buffer.from("harness-image-bytes").toString("base64")]));
 const userCode = readFileSync(resolve(process.cwd(), fileArg), "utf8");

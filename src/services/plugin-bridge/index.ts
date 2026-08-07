@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { Logger } from "~/utils/logger.js";
 import { PluginBridge } from "./bridge.js";
 import { fetchAndProcessImage } from "./images.js";
-import { SessionImageCache, createImagesRequestHandler } from "./image-requests.js";
+import { ImageByteCache, createImagesRequestHandler } from "./image-requests.js";
 import { WS_PORT_BLOCK } from "./ports.js";
 import { SESSION_IDENTITY } from "./approval.js";
 import { resolveStateDir } from "./approval-store.js";
@@ -42,15 +42,15 @@ const VersionReply = z.object({
  * request) shares the returned runtime.
  */
 export function startPluginBridge(): PluginBridgeRuntime {
-  const bridge = new PluginBridge();
-  // Answer the plugin's mid-run image requests (protocol 2) from the guarded fetch path plus a
-  // session-lifetime URL→bytes cache — repeated renders of one asset never re-download.
-  bridge.onImagesRequest(
-    createImagesRequestHandler({
+  // The images handler answers the plugin's mid-run image requests (protocol 2) from the guarded
+  // fetch path plus a session-lifetime URL→bytes cache — repeated renders of one asset never
+  // re-download.
+  const bridge = new PluginBridge(undefined, {
+    imagesRequestHandler: createImagesRequestHandler({
       fetchImage: fetchAndProcessImage,
-      cache: new SessionImageCache(),
+      cache: new ImageByteCache(),
     }),
-  );
+  });
   // Surface where the durable-approval token file lives — it is a security-adjacent 0600 credential, so
   // an operator should be able to see (and locate/inspect) it at startup. Override via FRAMELINK_STATE_DIR.
   Logger.log(`Session approvals persisted under ${join(resolveStateDir(), "approvals")}`);
@@ -114,16 +114,27 @@ function sendSessionInfo(bridge: PluginBridge): void {
  * back through the sandbox) and the note the code-mode write tools return INSTEAD of running
  * (skewRefusal in code-mode-tools.ts — protocol v2 refuses, it doesn't nudge).
  *
- * A plugin predating the handshake answers GET_VERSION with an envelope ERROR; we catch
- * that into an empty record so detectSkew treats it as the floor and refuses with the
- * re-import fix named.
+ * A plugin predating the handshake answers GET_VERSION with an envelope ERROR ("Unsupported
+ * message type…") — the one rejection that PROVES the holder is old, so it becomes the version
+ * floor and refuses with the re-import fix named. Any other rejection (disconnect mid-request,
+ * timeout) proves nothing about age: those leave the note untouched — the current plugin keeps
+ * running, and the plugin's ~1s reconnect re-fires this handshake for a fresh verdict.
  */
 async function handshakeVersion(bridge: PluginBridge): Promise<void> {
   const epoch = bridge.currentEpoch();
-  const reply = await bridge.request({ type: "GET_VERSION" }).catch(() => ({}));
+  let reply: unknown;
+  try {
+    reply = await bridge.request({ type: "GET_VERSION" });
+  } catch (err) {
+    if (!(err instanceof Error) || !err.message.includes("Unsupported message type")) {
+      Logger.log(`Version handshake did not complete (${String(err)}) — retrying on reconnect`);
+      return;
+    }
+    reply = {};
+  }
   // If the slot was reclaimed/reconnected while we awaited, a DIFFERENT connection now owns it
   // and runs its own handshake. Bail so this stale connection's result — e.g. a displaced
-  // squatter's GET_VERSION timing out to {} → nudge — can't clobber the current plugin's note.
+  // squatter's GET_VERSION dying mid-await — can't clobber the current plugin's note.
   if (bridge.currentEpoch() !== epoch) return;
   const version = VersionReply.safeParse(reply).data ?? {};
   const note = detectSkew(version);

@@ -58,6 +58,18 @@
 //   • A new connection reclaims the slot from a non-handshaking holder (then handshakes and drives).
 //   • A reclaimed connection's late handshake result can't clobber the newcomer (epoch guard).
 //
+// Phase 1 (edit surface) replaces the two-pass image re-run with protocol 2's mid-run
+// reverse-request envelope — a script executes exactly ONCE:
+//   • Timeout policy: the per-request deadline is an INACTIVITY deadline; a stalled run is
+//     CANCELLED (run-scoped, id-less CANCEL frame), never silently abandoned.
+//   • Reverse direction: the plugin's IMAGES_REQUEST (own "preq-" id namespace, tagged with the
+//     run's id) is answered by typed IMAGES_REPLY/IMAGES_ERROR; the service window SUSPENDS the
+//     run's deadline (traffic-as-heartbeat); a request naming an untracked run is refused
+//     (zombie-run defense).
+//   • Reverse-channel guards: only an EXECUTE_CODE pending may be drawn on (the req-N namespace
+//     also holds handshake requests), and concurrent services share ONE suspension via a per-run
+//     refcount — the deadline re-arms only when the LAST service settles.
+//
 // Usage:  pnpm contract   (or: npx tsx scripts/bridge-contract.mjs)
 //
 // The fake plugin re-implements code.ts's reply shape rather than importing it —
@@ -609,13 +621,15 @@ await wait(150);
 // while it is the side doing the work (traffic-as-heartbeat), and refuses requests for runs it no
 // longer tracks (zombie-run defense). Driven with a raw socket speaking the plugin's half.
 const PORT_I = 19885;
-const bridgeI = new PluginBridge(isolatedStore(), { requestTimeoutMs: 500 });
 const servedBatches = [];
-bridgeI.onImagesRequest(async (urls) => {
-  servedBatches.push(urls);
-  if (urls.includes("boom")) throw new Error('flcm.image could not load "boom": blocked range');
-  await wait(700); // longer than the whole deadline: the service window must not count against the run
-  return Object.fromEntries(urls.map((u) => [u, "b64-" + u]));
+const bridgeI = new PluginBridge(isolatedStore(), {
+  requestTimeoutMs: 500,
+  imagesRequestHandler: async (urls) => {
+    servedBatches.push(urls);
+    if (urls.includes("boom")) throw new Error('flcm.image could not load "boom": blocked range');
+    await wait(700); // longer than the whole deadline: the service window must not count against the run
+    return Object.fromEntries(urls.map((u) => [u, "b64-" + u]));
+  },
 });
 bridgeI.start([PORT_I]);
 await wait(150);
@@ -671,6 +685,60 @@ assert.ok(refusal && /no longer active/.test(refusal.error), "an image request f
 console.log("✅ An image request for a dead run is refused (zombie runs die at their await)");
 pluginImg.close();
 bridgeI.stop();
+await wait(150);
+
+// --- Phase 1 (edit surface): reverse-channel guards — payload gate + refcounted suspension ---
+// A dedicated bridge whose handler's service time depends on the url, so a fast and a slow fetch
+// can overlap inside one run.
+const PORT_C = 19886;
+const bridgeC = new PluginBridge(isolatedStore(), {
+  requestTimeoutMs: 500,
+  imagesRequestHandler: async (urls) => {
+    await wait(urls.includes("slow") ? 1200 : 50);
+    return Object.fromEntries(urls.map((u) => [u, "b64-" + u]));
+  },
+});
+bridgeC.start([PORT_C]);
+await wait(150);
+const framesC = [];
+const pluginC = new WebSocket(`ws://127.0.0.1:${PORT_C}`, { origin: "null" });
+pluginC.on("message", (raw) => framesC.push(JSON.parse(raw.toString())));
+await new Promise((res) => pluginC.on("open", res));
+
+// Payload gate: the req-N namespace also holds server-issued handshake requests (SESSION_INFO,
+// GET_VERSION). An IMAGES_REQUEST naming one of THOSE pendings must be refused — otherwise a
+// hostile holder could burn fetches (and hold a suspension) against a pending it was never
+// granted a run for — and the refusal must not disturb the pending itself.
+const verP = bridgeC.request({ type: "GET_VERSION" }).then((r) => r, (e) => e);
+await wait(50);
+const verId = framesC.find((f) => f.type === "GET_VERSION").id;
+pluginC.send(JSON.stringify({ type: "IMAGES_REQUEST", id: "preq-g", runId: verId, urls: ["u1"] }));
+await wait(100);
+const gateRefusal = framesC.find((f) => f.type === "IMAGES_ERROR" && f.id === "preq-g");
+assert.ok(gateRefusal && /not a code run/.test(gateRefusal.error), "an image request against a non-EXECUTE_CODE pending is refused");
+pluginC.send(JSON.stringify({ type: "VERSION", id: verId, pluginVersion: "0.1.0", protocolVersion: MIN_PROTOCOL_VERSION }));
+assert.equal((await verP).protocolVersion, MIN_PROTOCOL_VERSION, "the refused image request left the GET_VERSION pending intact");
+console.log("✅ Only an EXECUTE_CODE pending can be drawn on by the reverse channel (payload gate)");
+
+// Refcounted suspension: two overlapping services for ONE run. The fast one settles first — with a
+// naive re-arm that would restart the run's 500ms clock while the slow fetch (1200ms) is still the
+// server's work, cancelling the run mid-service. The refcount re-arms only when the LAST service
+// settles, so the run must survive and finish.
+const runP = bridgeC.request({ type: "EXECUTE_CODE", code: "two fetches" }).then((r) => r, (e) => e);
+await wait(50);
+const runIdC = framesC.find((f) => f.type === "EXECUTE_CODE").id;
+pluginC.send(JSON.stringify({ type: "IMAGES_REQUEST", id: "preq-f", runId: runIdC, urls: ["fast"] }));
+await wait(20);
+pluginC.send(JSON.stringify({ type: "IMAGES_REQUEST", id: "preq-s", runId: runIdC, urls: ["slow"] }));
+await wait(1400); // fast settles ~120ms in; slow ~1270ms in — well past a naively re-armed deadline
+assert.ok(framesC.some((f) => f.type === "IMAGES_REPLY" && f.id === "preq-f"), "the fast service replied");
+assert.ok(framesC.some((f) => f.type === "IMAGES_REPLY" && f.id === "preq-s"), "the slow service replied after the fast one settled");
+assert.ok(!framesC.some((f) => f.type === "CANCEL"), "no CANCEL fired while any service was still in flight");
+pluginC.send(JSON.stringify({ type: "EXECUTE_CODE_RESULT", id: runIdC, result: "built", console: [], errors: null }));
+assert.equal((await runP).result, "built", "the run finished after both services settled");
+console.log("✅ Concurrent services hold ONE suspension (per-run refcount; re-arm only on the last settle)");
+pluginC.close();
+bridgeC.stop();
 await wait(150);
 
 console.log("\nAll frozen-envelope + hardening + version-handshake + consent-gate + port-range checks passed.");

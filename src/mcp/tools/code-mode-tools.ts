@@ -1,7 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { PluginBridgeRuntime } from "~/services/plugin-bridge/index.js";
-import { executeAgentCode, type GatedResult } from "~/services/plugin-bridge/execute.js";
+import { ExecuteCodeReply } from "~/services/plugin-bridge/execute.js";
 import {
   requestUntilApproved,
   isPendingApproval,
@@ -70,7 +70,7 @@ export function registerCodeModeTools(
    * sees this text when the human didn't click within it, so the wording says so. The common case (a
    * human at the keyboard) never produces this result at all; the wait returns the real one.
    */
-  function gateResult(reply: unknown): GatedResult | null {
+  function gateResult(reply: unknown): { content: { type: "text"; text: string }[] } | null {
     if (!isPendingApproval(reply)) return null;
     const code = bridge.getPairingCode();
     const text =
@@ -134,9 +134,14 @@ export function registerCodeModeTools(
    * agent half of the dual-channel skew message (the human half is the connect toast); it
    * reaches even a pre-handshake plugin, which can't render the toast.
    *
-   * Known soft edge: the note is set by the connect-time GET_VERSION handshake, so a write
-   * racing in before that handshake resolves slips past this gate. The stale-plugin tripwire
-   * in executeAgentCode (the retired imagesNeeded sentinel) catches the case where it matters.
+   * The rule for which tools it guards: a tool that TOUCHES THE CANVAS (or reads it — screenshots)
+   * is refused outright; a docs tool still serves, with the note PREPENDED (get_flcm_reference).
+   * One refusal moment with one fix beats a tool-by-tool capability matrix, and docs can't corrupt
+   * anything — annotating them is how the agent learns the fix before its first refused write.
+   *
+   * Known soft edge, accepted: the note is set by the connect-time GET_VERSION handshake, so a
+   * write racing into the few-ms window before that resolves slips past this gate. Real agent
+   * writes arrive seconds after connect at the earliest.
    */
   function skewRefusal(): { content: { type: "text"; text: string }[]; isError: true } | null {
     const note = bridge.getSkewNote();
@@ -164,27 +169,20 @@ export function registerCodeModeTools(
         const refused = skewRefusal();
         if (refused) return refused;
         // Correlation ids and the "no plugin connected" rejection are owned by PluginBridge; mid-run
-        // image fetches ride the bridge underneath the single execute (serveImagesRequest) — this
-        // handler wires the real bridge/gate seams and shapes the outcome into a tool reply.
-        const outcome = await executeAgentCode(code, {
-          // Hold the call open across the human's Allow rather than returning "not approved yet" for
-          // the agent to retry — see requestUntilApproved.
-          request: (c) =>
-            requestUntilApproved(() => bridge.request({ type: "EXECUTE_CODE", code: c })),
-          gate: gateResult,
-        });
-        if (outcome.kind === "gated") return outcome.result;
-        if (outcome.kind === "error") {
-          return {
-            content: [{ type: "text", text: outcome.message }],
-            isError: true,
-          };
-        }
+        // image fetches ride the bridge underneath this single execute (serveImagesRequest). The
+        // wait holds the call open across the human's Allow rather than returning "not approved
+        // yet" for the agent to retry — see requestUntilApproved.
+        const raw = await requestUntilApproved(() =>
+          bridge.request({ type: "EXECUTE_CODE", code }),
+        );
+        const gated = gateResult(raw);
+        if (gated) return gated;
+        const reply = ExecuteCodeReply.parse(raw);
         // A write actually ran: slide the persisted approval's TTL forward so an active session never
         // lapses mid-work (durable-approval, this cycle). No-op when the session isn't persisted.
         bridge.touchApproval();
         return {
-          content: [{ type: "text", text: JSON.stringify(outcome.reply, null, 2) }],
+          content: [{ type: "text", text: JSON.stringify(reply, null, 2) }],
         };
       },
     ),

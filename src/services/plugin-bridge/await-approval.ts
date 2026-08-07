@@ -29,10 +29,14 @@ export function isPendingApproval(reply: unknown): boolean {
 }
 
 // The ceiling on how long one gated call waits for the human. The wait and the execution that follows it
-// share ONE tool call's budget, so the worst case — the last poll starting just under the ceiling, then a
-// run that burns the bridge's full 15s per-request timeout — must still land inside the MCP client's 60s
-// default. Past the ceiling the caller falls back to the retryable "not approved yet" text, which is
-// still the right answer for a human who stepped away.
+// share ONE tool call's budget against the MCP client's 60s default. Since protocol 2, execution is not
+// a flat 15s worst case: the inactivity deadline re-arms on run traffic, and the true cap is the bridge's
+// 45s run ceiling (bridge.ts DEFAULT_RUN_CEILING_MS — keep the two in sync) — so this wait plus a
+// worst-case run cannot BOTH fit inside 60s, and that is accepted deliberately: a long wait means the
+// human just clicked Allow on a fresh session, and the first run after Allow is interactive and short; a
+// run that needs its full ceiling happens on an already-approved session where the wait is zero. Past
+// the ceiling the caller falls back to the retryable "not approved yet" text, which is still the right
+// answer for a human who stepped away.
 export const APPROVAL_WAIT_MS = 40_000;
 
 // How often to re-offer the request while waiting. Fast enough that clicking Allow feels immediate,

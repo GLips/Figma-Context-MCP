@@ -25,9 +25,22 @@ await esbuild.build({
 // preamble imports schema-derived things as `import type` only, so esbuild erases them — but a future
 // *value* import from schema.ts is valid TS that silently bundles zod. Grep the output and fail the build
 // if it slips in, turning the acceptance criterion into a gate rather than a manual check.
-if (readFileSync("dist/code.js", "utf8").includes("zod")) {
+const bundle = readFileSync("dist/code.js", "utf8");
+if (bundle.includes("zod")) {
   throw new Error(
     "zod leaked into the sandbox bundle (dist/code.js). The preamble must import schema.ts things as " +
       "`import type` ONLY — a runtime value import from schema.ts pulls zod into QuickJS. Find it and make it type-only.",
+  );
+}
+
+// The mid-run image channel rides on the eval'd wrapper's PARAMETER name matching the free
+// identifier the preamble references (`__flcmRequestImages` in preamble/flcm.ts). Both live inside
+// string/eval'd code, so no bundler or type checker connects them — a rename on either side breaks
+// image fills only at runtime, inside live Figma. Grep the shipped bundle for the wrapper head so
+// that drift fails the build instead.
+if (!bundle.includes("async function(__flcmRequestImages)")) {
+  throw new Error(
+    "dist/code.js lost the `async function(__flcmRequestImages)` eval wrapper — the preamble's image " +
+      "channel would silently detach. Check executeCode in src/code.ts and the declare in preamble/flcm.ts.",
   );
 }

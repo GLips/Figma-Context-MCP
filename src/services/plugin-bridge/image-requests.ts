@@ -2,14 +2,16 @@
 // render() awaits ONE batched fetch per verb, and this module answers it from the guarded fetch path
 // plus a session-lifetime URL→bytes cache, so repeated renders of the same asset never re-download.
 //
-// The per-run bounds live HERE, on the server, because the plugin is the untrusted half of this
+// These bounds live HERE, on the server, because the plugin is the untrusted half of this
 // exchange: a compromised or stale plugin could ask for anything, so the url cap and the fetch
-// concurrency are enforced where the fetching actually happens.
+// concurrency are enforced where the fetching actually happens. They are PER-REQUEST bounds — the
+// bridge separately caps how many requests one run may have in flight (bridge.ts
+// MAX_INFLIGHT_IMAGE_SERVICES_PER_RUN), so neither alone bounds a whole run.
 
-// Bound on distinct image urls one run may request, and on how many fetch/decode concurrently — the
-// pair caps peak server memory (each in-flight fetch holds a decoded raster) to FETCH_CONCURRENCY
-// rasters regardless of how many the agent's code asks for.
-export const MAX_IMAGES_PER_RUN = 64;
+// Bound on distinct image urls one request may carry, and on how many fetch/decode concurrently —
+// the pair caps peak server memory (each in-flight fetch holds a decoded raster) to
+// FETCH_CONCURRENCY rasters regardless of how many the agent's code asks for.
+export const MAX_IMAGES_PER_REQUEST = 64;
 const FETCH_CONCURRENCY = 4;
 
 // Cap on the cache's total base64 payload. Base64 is latin1, which V8 stores one byte per char, so
@@ -23,7 +25,7 @@ const MAX_CACHE_CHARS = 64 * 1024 * 1024;
  * server process (constructed at bridge startup), deliberately not per-connection: the plugin
  * reconnects on every Figma reload, and the assets it renders don't change identity across that.
  */
-export class SessionImageCache {
+export class ImageByteCache {
   private entries = new Map<string, string>();
   private totalChars = 0;
 
@@ -61,14 +63,14 @@ export class SessionImageCache {
 export interface ImagesRequestDeps {
   /** The guarded server-side fetch (fetchAndProcessImage): SSRF allowlist, byte caps, type checks. */
   fetchImage: (url: string) => Promise<string>;
-  cache: SessionImageCache;
+  cache: ImageByteCache;
 }
 
 /**
  * Build the handler PluginBridge invokes for each inbound IMAGES_REQUEST. Dedupes, enforces the
- * per-run cap, answers hits from the cache, and fetches misses with bounded concurrency. Any single
- * failure (blocked range, oversize, non-image, unreachable) rejects the whole request — the plugin
- * turns that into the run's error, so a blocked url never renders as a blank fill.
+ * per-request cap, answers hits from the cache, and fetches misses with bounded concurrency. Any
+ * single failure (blocked range, oversize, non-image, unreachable) rejects the whole request — the
+ * plugin turns that into the run's error, so a blocked url never renders as a blank fill.
  */
 export function createImagesRequestHandler(
   deps: ImagesRequestDeps,
@@ -77,10 +79,10 @@ export function createImagesRequestHandler(
     // The plugin dedupes before asking, but it is the untrusted side — dedupe again so the cap
     // below counts distinct urls no matter what was sent.
     const distinct = Array.from(new Set(urls));
-    if (distinct.length > MAX_IMAGES_PER_RUN) {
+    if (distinct.length > MAX_IMAGES_PER_REQUEST) {
       throw new Error(
-        `flcm.image: ${distinct.length} distinct image urls requested in one run, over the ` +
-          `${MAX_IMAGES_PER_RUN} cap — split the build across calls.`,
+        `flcm.image: ${distinct.length} distinct image urls requested at once, over the ` +
+          `${MAX_IMAGES_PER_REQUEST} cap — split the build across calls.`,
       );
     }
     const bytes: Record<string, string> = {};
