@@ -55,12 +55,13 @@ import type {
 // validate.ts, the same one read.ts's locate query fails loud with.
 export const KNOWN_KEYS = {
   shared: ["name", "key", "opacity", "mixBlendMode", "visible", "locked"],
-  edit: ["name", "opacity", "mixBlendMode", "visible", "locked", "fill", "stroke", "strokeWidth", "borderRadius", "effects", "rotation", "clip", "width", "height", "absolute", "pin", "layout", "length", "w"],
+  edit: ["name", "opacity", "mixBlendMode", "visible", "locked", "fill", "stroke", "strokeWidth", "borderRadius", "effects", "rotation", "clip", "width", "height", "absolute", "pin", "layout", "length", "w", "content", "textStyle", "color"],
   size: ["width", "height", "absolute", "pin"],
   appearance: ["fill", "stroke", "strokeWidth", "borderRadius", "effects", "rotation"],
   frame: ["layout", "clip"],
   layout: ["mode", "gap", "padding", "justifyContent", "alignItems"],
   text: ["textStyle", "color"],
+  textContent: ["content"], // edit-only spelling of flcm.text's positional content arg
   textStyle: ["fontFamily", "fontWeight", "fontSize", "fontStyle", "lineHeight", "letterSpacing", "textDecoration", "textAlign", "lineClamp"],
   run: ["fontWeight", "fontSize", "fontFamily", "fontStyle", "lineHeight", "letterSpacing", "textDecoration", "color", "hyperlink"],
   line: ["stroke", "color", "strokeWidth", "length", "w", "rotation", "absolute", "pin"],
@@ -320,6 +321,9 @@ export function compileSizeWords(props: SizeProps): WriteLayout | undefined {
 // A LINE sizes on one word — `length`, alias `w` — compiled here so flcm.line and an edit delta
 // reject a mistyped value with the SAME error, naming the prop the author actually wrote.
 export function compileLineLength(props: Pick<LineProps, "length" | "w">): WriteLayout | undefined {
+  // Validate BOTH spellings when both are present — a malformed value must reject the whole call
+  // even when its alias shadows it (present-but-malformed never reads as absence).
+  if (props.w != null) assertScalarType(props.w, "number", "w");
   const prop = props.length != null ? "length" : props.w != null ? "w" : null;
   if (!prop) return undefined;
   const len = props[prop];
@@ -369,17 +373,34 @@ function base(wn: WriteProps, props: BaseProps): void {
 // Exported for edit.ts (which imports FROM here; flcm.ts never imports edit.ts — no cycle).
 export function compileNodeLocalProps(wn: WriteProps, props: AppearanceProps, opts: { radius?: boolean; clip?: boolean }): void {
   base(wn, props);
-  // "none" is the removal word (CSS's own absence spelling): an EMPTY array is the compiled form of
-  // "clear this" — distinct from an ABSENT array, which means "don't touch it". Create writing []
-  // onto a fresh node is a harmless no-op; the distinction exists for edit.
-  if (props.fill != null) wn.fills = props.fill === "none" ? [] : [parseFill(props.fill, "fill")];
-  if (props.stroke != null) wn.strokes = props.stroke === "none" ? [] : [parseFill(props.stroke, "stroke")];
+  if (props.fill != null) wn.fills = compilePaintWord(props.fill, "fill");
+  if (props.stroke != null) wn.strokes = compilePaintWord(props.stroke, "stroke");
   if (props.strokeWidth != null) wn.strokeWeight = length(props.strokeWidth);
   if (props.effects != null) wn.effects = props.effects === "none" ? [] : normalizeEffects(props.effects);
   if (opts.radius && props.borderRadius != null) wn.borderRadius = length(props.borderRadius);
   const clip = (props as FrameProps).clip;
   if (opts.clip && clip != null) { assertScalarType(clip, "boolean", "clip"); wn.clip = clip; }
   if (props.rotation != null) { assertScalarType(props.rotation, "number", "rotation"); wn.rotation = props.rotation; }
+}
+
+// THE paint-word compile, shared by every constructor and edit's deltas so values and rejections
+// can't drift between verbs. "none" is the removal word (CSS's own absence spelling): an EMPTY
+// array is the compiled "clear this" — distinct from an ABSENT array, which means "don't touch it".
+// Create writing [] onto a fresh node clears a live seeded default; the distinction exists for edit.
+export function compilePaintWord(value: NonNullable<AppearanceProps["fill"]>, subject: string): NonNullable<WriteProps["fills"]> {
+  return value === "none" ? [] : [parseFill(value, subject)];
+}
+
+// `color` is the line's stroke alias (`stroke` wins when both are present) — one compile shared by
+// flcm.line and edit's LINE delta so the precedence and the "none" clear can't drift. The error
+// names the word the author actually wrote.
+export function compileLineStroke(props: Pick<LineProps, "stroke" | "color">): WriteProps["strokes"] {
+  // The shadowed alias still validates: a malformed `color` beside a good `stroke` rejects the
+  // whole call rather than riding the precedence into silence.
+  if (props.color != null) compilePaintWord(props.color, "color");
+  const word = props.stroke != null ? "stroke" : "color";
+  const paint = props.stroke != null ? props.stroke : props.color;
+  return paint == null ? undefined : compilePaintWord(paint, word);
 }
 
 function frame(props: FrameProps = {}, children?: WriteChild | WriteChild[]): WriteNode {
@@ -392,6 +413,54 @@ function frame(props: FrameProps = {}, children?: WriteChild | WriteChild[]): Wr
   return wn;
 }
 
+// The textStyle word compile every text carrier rides — flcm.text's base and an edit delta alike
+// (one vocabulary, one parser). lineClamp is deliberately NOT compiled here: it validates against
+// a width the two callers know differently (create: the authored width; edit: the live wrap
+// state), so each reads cfg.lineClamp itself. Exported for edit.ts.
+export function compileTextStyleWords(cfg: unknown, subject: string): WriteTextStyle {
+  // QuickJS boundary: a present-but-malformed value must reject the whole call, not read as absence.
+  if (typeof cfg !== "object" || cfg === null || Array.isArray(cfg)) {
+    throw new Error("flcm: " + subject + " must be an object like { fontSize, fontWeight, … } — got " + JSON.stringify(cfg) + ".");
+  }
+  const c = cfg as NonNullable<TextProps["textStyle"]>;
+  rejectUnknownKeys(c, TEXTSTYLE_KEYS, subject);
+  const ts: WriteTextStyle = {};
+  if (c.fontSize != null) { assertScalarType(c.fontSize, "number", "textStyle.fontSize"); ts.fontSize = c.fontSize; }
+  // The one non-scalar-typed leaf: a number (700) or a name ("bold"). Anything else must reject —
+  // wantWeight would silently read it as 400, a whole-node reset to regular.
+  if (c.fontWeight != null) {
+    if (typeof c.fontWeight !== "number" && typeof c.fontWeight !== "string") {
+      throw new Error('flcm: textStyle.fontWeight must be a number (400, 700) or a weight name ("bold", "semibold") — got ' + JSON.stringify(c.fontWeight) + ".");
+    }
+    ts.fontWeight = c.fontWeight;
+  }
+  if (c.fontFamily != null) { assertScalarType(c.fontFamily, "string", "textStyle.fontFamily"); ts.fontFamily = c.fontFamily; }
+  if (c.fontStyle != null) ts.fontStyle = assertEnum("textStyle.fontStyle", c.fontStyle, FONT_STYLE);
+  if (c.lineHeight != null) ts.lineHeight = lineHeight(c.lineHeight);
+  if (c.letterSpacing != null) ts.letterSpacing = letterSpacing(c.letterSpacing);
+  if (c.textDecoration != null) ts.textDecoration = assertEnum("textStyle.textDecoration", c.textDecoration, TEXT_DECORATION);
+  if (c.textAlign != null) ts.textAlign = assertEnum("textStyle.textAlign", c.textAlign, TEXT_ALIGN);
+  return ts;
+}
+
+// Content -> { text | runs }, the ONE parser behind flcm.text's positional arg and edit's `content`
+// word. Both the runs-array and plain-string forms flow through the markdown parser (markdown.ts):
+// a plain string may carry `**bold**` or literal escapes; a runs-array entry's text is markdown
+// too. `base` is the style each styled run layers over (create: the authored textStyle; edit: the
+// delta's textStyle enriched with the live node's font identity, so a run that only bolds inherits
+// the family the node actually uses). A plain string that parses to a single flagless segment
+// stays plain `text`; anything richer becomes `runs`. Exported for edit.ts.
+export function compileTextContent(content: unknown, base: WriteTextStyle): { text?: string; runs?: WriteTextRun[] } {
+  if (Array.isArray(content)) {
+    const runs = compileRuns(content, base);
+    return runs.length ? { runs } : { text: "" };
+  }
+  const segs = parseInlineMarkdown(assertNotReadToken(plainString(content)));
+  if (segs.length === 1 && isPlainSeg(segs[0])) return { text: segs[0].text };
+  if (!segs.length) return { text: "" };
+  return { runs: segs.map((seg) => compileRun(seg.text, mergeDelta(seg, {}), base)) };
+}
+
 function text(content: unknown, props: TextProps = {}): WriteNode {
   props = props || {};
   rejectUnknownKeys(props, TEXT_KEYS, "flcm.text");
@@ -399,54 +468,40 @@ function text(content: unknown, props: TextProps = {}): WriteNode {
   base(wn, props);
   // `color` is a top-level node-level sugar prop (compiles to the text node's fill), NOT part of textStyle —
   // base color lives in `fills` like every other node, and the grouped `textStyle` is the type base only.
-  if (props.color != null) wn.fills = [parseFill(props.color, "color")];
-  const cfg = props.textStyle || {};
-  rejectUnknownKeys(cfg, TEXTSTYLE_KEYS, "flcm.text.textStyle");
-  const ts: WriteTextStyle = {};
-  if (cfg.fontSize != null) ts.fontSize = cfg.fontSize;
-  if (cfg.fontWeight != null) ts.fontWeight = cfg.fontWeight;
-  if (typeof cfg.fontFamily === "string") ts.fontFamily = cfg.fontFamily;
-  if (cfg.fontStyle != null) ts.fontStyle = assertEnum("textStyle.fontStyle", cfg.fontStyle, FONT_STYLE);
-  if (cfg.lineHeight != null) ts.lineHeight = lineHeight(cfg.lineHeight);
-  if (cfg.letterSpacing != null) ts.letterSpacing = letterSpacing(cfg.letterSpacing);
-  if (cfg.textDecoration != null) ts.textDecoration = assertEnum("textStyle.textDecoration", cfg.textDecoration, TEXT_DECORATION);
-  if (cfg.textAlign != null) ts.textAlign = assertEnum("textStyle.textAlign", cfg.textAlign, TEXT_ALIGN);
+  // "none" is the same removal word edit takes — one vocabulary means create accepts it too.
+  if (props.color != null) wn.fills = compilePaintWord(props.color, "color");
+  const cfg = (props.textStyle ?? {}) as NonNullable<TextProps["textStyle"]>;
+  const ts = compileTextStyleWords(cfg, "flcm.text.textStyle");
   if (Object.keys(ts).length) wn.textStyle = ts;
-  // Content is either the rich-text runs array or a plain string, and BOTH flow through the markdown
-  // parser now (markdown.ts). A plain string may carry markdown (`**bold**`) or literal escapes (`\*`);
-  // a runs-array entry's text is markdown too (read renders a run's decorations INSIDE its text). The
-  // base textStyle above is the default each run layers over. A plain string that parses to a single
-  // flagless segment stays a plain `text`; anything richer becomes `runs`.
-  if (Array.isArray(content)) {
-    const runs = compileRuns(content, ts);
-    if (runs.length) wn.runs = runs;
-    else wn.text = "";
-  } else {
-    const segs = parseInlineMarkdown(assertNotReadToken(plainString(content)));
-    if (segs.length === 1 && isPlainSeg(segs[0])) wn.text = segs[0].text;
-    else if (!segs.length) wn.text = "";
-    else wn.runs = segs.map((seg) => compileRun(seg.text, mergeDelta(seg, {}), ts));
-  }
-  if (cfg.lineClamp != null) wn.maxLines = assertLineClamp(cfg.lineClamp, props.width);
+  Object.assign(wn, compileTextContent(content, ts));
+  // lineClamp "none" at create is the explicit default — no clamp to remove, nothing lands.
+  if (cfg.lineClamp != null && cfg.lineClamp !== "none") wn.maxLines = assertLineClamp(cfg.lineClamp, props.width);
   const layout = buildLayout(props as FrameProps, false);
   if (Object.keys(layout).length) wn.layout = layout;
   return wn;
 }
 
+// N's shape gate, shared by create and edit so one author mistake reads one error. "none" is each
+// caller's, before this: create skips it (the explicit default), edit compiles it to the removal.
+// Boundedness is also the caller's — create knows the authored width, edit the live wrap state.
+export function assertLineClampCount(lineClamp: unknown, subject: string): number {
+  if (typeof lineClamp !== "number" || !Number.isInteger(lineClamp) || lineClamp < 1) {
+    throw new Error(subject + ': textStyle.lineClamp must be a whole number ≥ 1 or "none" — got ' + JSON.stringify(lineClamp) + ".");
+  }
+  return lineClamp;
+}
+
 // lineClamp clamps a text to N lines with an ending ellipsis, but truncation only bites when the text has a
 // bounded width to wrap against — buildText wires a fixed/`"fill"`/`"N%"` width to height-only auto-resize,
 // giving it a wrap; a width-hugging text grows sideways on one line, so there's nothing to clamp. Rather
-// than let `lineClamp` be a silent no-op there (ADR-0003), reject it loud and name the fix. N must be a
-// whole number ≥ 1. (A `"hug"` or absent `width` is the unbounded case.)
+// than let `lineClamp` be a silent no-op there (ADR-0003), reject it loud and name the fix.
 function assertLineClamp(lineClamp: unknown, width: TextProps["width"]): number {
-  if (typeof lineClamp !== "number" || !Number.isInteger(lineClamp) || lineClamp < 1) {
-    throw new Error("flcm.text: textStyle.lineClamp must be a whole number ≥ 1 — got " + JSON.stringify(lineClamp) + ".");
-  }
+  const n = assertLineClampCount(lineClamp, "flcm.text");
   const bounded = typeof width === "number" || width === "fill" || isPercent(width);
   if (!bounded) {
     throw new Error('flcm.text: textStyle.lineClamp needs a bounded width to truncate against — set width to a number, "fill", or "N%". A width-hugging text grows on one line, so there is nothing to wrap and clamp.');
   }
-  return lineClamp;
+  return n;
 }
 
 // Realizable subsets for the two enum-valued text-style leaves. zod's enums (schema.ts) are type/doc only
@@ -552,6 +607,10 @@ function compileRun(str: string, delta: StyleDeltaInput, baseStyle: WriteTextSty
     ? assertEnum("run fontStyle", delta.fontStyle, FONT_STYLE)
     : baseStyle.fontStyle;
   if (delta.fontFamily != null || delta.fontWeight != null || delta.fontStyle != null) {
+    // CONTRACT: a run changing any of the (family, weight, slant) triple carries the COMPLETE
+    // effective triple — fontFamily is assigned even when the base has none (the key is present
+    // with an undefined value). Edit's mixed-base guard reads exactly that presence; don't "tidy"
+    // the undefined assignment away.
     style.fontFamily = delta.fontFamily != null ? delta.fontFamily : baseStyle.fontFamily;
     style.fontWeight = delta.fontWeight != null ? delta.fontWeight : baseStyle.fontWeight;
     if (italic != null) style.fontStyle = italic;
@@ -561,7 +620,7 @@ function compileRun(str: string, delta: StyleDeltaInput, baseStyle: WriteTextSty
   if (delta.letterSpacing != null) style.letterSpacing = letterSpacing(delta.letterSpacing);
   if (delta.textDecoration != null) style.textDecoration = assertEnum("run textDecoration", delta.textDecoration, TEXT_DECORATION);
   if (Object.keys(style).length) out.style = style;
-  if (delta.color != null) out.fills = [parseFill(delta.color, "color")];
+  if (delta.color != null) out.fills = compilePaintWord(delta.color, "color");
   if (delta.hyperlink != null) out.hyperlink = assertHyperlink(delta.hyperlink);
   return out;
 }
@@ -591,12 +650,8 @@ function line(props: LineProps = {}): WriteNode {
   rejectUnknownKeys(props, LINE_KEYS, "flcm.line");
   const wn: WriteNode = { type: "LINE" };
   base(wn, props);
-  const paint = props.stroke != null ? props.stroke : props.color;
-  // "none" is the surface-wide removal/explicit-default word — compile it to the present-but-empty
-  // strokes array here too, or flcm.line({ stroke: "none" }) would throw where an edit's
-  // stroke: "none" clears (the one-vocabulary invariant).
-  if (paint === "none") wn.strokes = [];
-  else if (paint != null) wn.strokes = [parseFill(paint, "stroke")];
+  const strokes = compileLineStroke(props);
+  if (strokes) wn.strokes = strokes;
   if (props.strokeWidth != null) wn.strokeWeight = length(props.strokeWidth);
   const layout: WriteLayout = { ...(compileLineLength(props) || {}) };
   applyAbsolute(layout, props);

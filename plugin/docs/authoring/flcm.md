@@ -166,7 +166,7 @@ flcm.frame({ width: 320, height: 8, borderRadius: 4, fill: "#E5E7EB" }, [
 | `letterSpacing` | number(px) \| "Npx" \| "N%" \| "Nem" | Tracking. em/% are relative to font size. |
 | `textDecoration` | "underline" \| "line-through" \| "none" | CSS text-decoration-line — "underline" \| "line-through" \| "none". On the base only "underline"/"line-through"; "none" is a run-delta inverse override clearing an inherited decoration. (Strikethrough is also authorable inline as ~~text~~.) |
 | `textAlign` | "left" \| "center" \| "right" \| "justify" | Horizontal text alignment (CSS text-align). |
-| `lineClamp` | number (≥1) | Clamp the text to at most N lines, truncating with an ellipsis (…). Needs a bounded width — a fixed/`"fill"`/`"N%"` `width` — so the text wraps; on a width-hugging text there is nothing to truncate and it fails loud. N must be a whole number ≥ 1. |
+| `lineClamp` | number (≥1) \| "none" | Clamp the text to at most N lines, truncating with an ellipsis (…). Needs a bounded width — a fixed/`"fill"`/`"N%"` `width` — so the text wraps; on a width-hugging text there is nothing to truncate and it fails loud. N must be a whole number ≥ 1. `"none"` removes an existing clamp (under edit; at create it is the explicit default). |
 
 ### flcm.text — rich text (runs)
 
@@ -419,13 +419,16 @@ out.keyed["email:input"].id;  // a nested keyed node
 | `layout` | { mode?, gap?, padding?, justifyContent?, alignItems? } | Auto-layout container config (mode/gap/padding/justifyContent/alignItems). Omitted or mode:"none" = free-form (children position absolutely). |
 | `length` | number | The line's length in px. |
 | `w` | number | The line's length in px — alias for `length` (`length` wins if both are set). |
+| `content` | string \| run[] | Replacement text: a plain string (markdown inline styling works: **bold**, *italic*, ~~strike~~, [link](url)) or an array of styled runs — exactly what flcm.text takes as its first argument. Replaces the node's whole content. |
+| `textStyle` | { fontFamily?, fontWeight?, fontSize?, fontStyle?, lineHeight?, letterSpacing?, textDecoration?, textAlign?, lineClamp? } | Text style base (fontFamily/fontWeight/fontSize/fontStyle/lineHeight/letterSpacing/textDecoration/textAlign/lineClamp). Runs layer over it. |
+| `color` | color / gradient | Text color (a solid color, normally) — a node-level sugar prop compiling to the text node's fill. |
 
 ### Words by node type
 
 - **FRAME** — `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `width`, `height`, `absolute`, `pin`, `fill`, `stroke`, `strokeWidth`, `borderRadius`, `effects`, `rotation`, `layout`, `clip`
-- **TEXT** — `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `width`, `height`, `absolute`, `pin`
+- **TEXT** — `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `width`, `height`, `absolute`, `pin`, `textStyle`, `color`, `content`
 - **RECTANGLE / ELLIPSE** — `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `width`, `height`, `absolute`, `pin`, `fill`, `stroke`, `strokeWidth`, `borderRadius`, `effects`, `rotation`
-- **LINE** — `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `stroke`, `strokeWidth`, `length`, `w`, `rotation`, `absolute`, `pin`
+- **LINE** — `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `stroke`, `color`, `strokeWidth`, `length`, `w`, `rotation`, `absolute`, `pin`
 - **VECTOR (path- or svg-born)** — `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `width`, `height`, `absolute`, `pin`, `fill`, `stroke`, `strokeWidth`, `effects`, `rotation`
 
 On a node type flcm can't create (GROUP, INSTANCE, COMPONENT, …) only the shared words apply: `name`, `opacity`, `mixBlendMode`, `visible`, `locked`.
@@ -441,6 +444,8 @@ On a node type flcm can't create (GROUP, INSTANCE, COMPONENT, …) only the shar
 - **Un-filling really un-fills.** `width: 80` or `"hug"` on a child that was `"fill"` clears the grow/stretch marks fill installed — the new size governs, not the old fill.
 - **Container edits ripple by stated rules.** `layout.alignItems: "stretch"` walks the live children setting their stretch marks; writing any other alignItems clears every stretch mark (Figma doesn't store which child stretched because of the container — a child that should keep filling gets its own `height: "fill"` edit after; an un-stretched child keeps its current size rather than re-hugging). Changing the layout direction — row↔column, or `"none"` to either — clears both flow marks (grow and stretch) on every in-flow child: the axes they meant just moved.
 - **Percents resolve immediately** against the live parent's size. Rejected loud, before any write: a percent on an in-flow child of an auto-layout parent that hugs that axis (a cycle), `"fill"`/`"N%"` on a node whose parent is the page (no bounded size), `"hug"` on a node with nothing to measure (not an auto-layout container or text), a fixed/hug `height` on TEXT (its height follows content — edit `width`, or use `height: "fill"`), and container words (`gap`/`padding`/`justifyContent`/`alignItems`) on a frame that isn't — or after this delta won't be — a row/column container.
+- **Text words read the LIVE node.** `content` replaces the whole text (a string or run array, markdown included; re-running the same edit converges). Figma preserves prior per-range styling positionally across the rewrite — only attributes the edit explicitly re-states are guaranteed to change, so pass `textStyle` or styled runs in the same edit to spell out what the new text should carry. `textStyle` naming part of the font triple keeps the live rest (`fontWeight: "bold"` on an italic Roboto stays bold italic Roboto). A text that already MIXES fonts has no single base: a partial font change or a styled `content` run without its own `fontFamily` rejects loud — anchor `textStyle.fontFamily` in the same edit (a whole-node reset), or give each run its family. `lineClamp` needs a bounded width to truncate against (set `width` in the same edit if the text hugs), and `lineClamp: "none"` removes the clamp.
+- **Edits inside a component INSTANCE apply as overrides.** A property Figma forbids overriding rejects with an error naming the instance — edit the main component instead (flcm never auto-detaches an instance).
 - **`key` is immutable.** Keys are set at creation and are how later calls address the node — re-keying could mint a duplicate address. To rename what you see in the layers panel, set `name`.
 - **No bare `x`/`y`** — position is spelled `absolute: { x, y }`, resize behavior is `pin`.
 - **An empty delta is rejected**, not silently committed — an empty edit would still mint an undo step.

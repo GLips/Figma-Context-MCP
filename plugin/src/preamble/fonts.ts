@@ -16,7 +16,7 @@
 // The load pass returns a FontMap that render() threads on the RenderCtx through the build walk — load
 // and resolve agree on the `key()` of each (family, weight) by construction, with no module-level state.
 
-import { WriteNode, WriteChild } from "./ir.js";
+import { WriteNode, WriteChild, WriteProps, WriteTextStyle, namesFontIdentity } from "./ir.js";
 
 // A resolved-and-loaded style per (family, weight) key — the output of the load pass, consumed by the
 // build walk via resolveFont.
@@ -74,6 +74,35 @@ function key(family: string | undefined, weight: number | string | undefined, it
 }
 
 interface FontNeed { family?: string; weight?: number | string; italic?: boolean }
+
+// A live FontName decoded into authored font words — the ONLY translation from Figma's combined
+// style label ("Bold Italic" carries weight AND slant in one string) back into the (family, weight,
+// slant) triple this module keys on. Label grammar lives here, beside NAMED/styleWeight, so a new
+// label shape is handled once — edit's live-node enrichment must ride this, never re-parse.
+export function liveFontWords(fontName: { family: string; style: string }): WriteTextStyle {
+  return {
+    fontFamily: fontName.family,
+    fontWeight: styleWeight(fontName.style),
+    fontStyle: isItalic(fontName.style) ? "italic" : "normal",
+  };
+}
+
+// Every font an edit's mutating span will touch, loaded BEFORE the mutation lock: fonts gate every
+// reflowing text mutation, not just characters — size, clamp, and style writes throw on an unloaded
+// font too. Two halves: the LIVE fonts (all range fonts when mixed — the reflow re-lays existing
+// ranges), and the AUTHORED triples the appliers will resolve (loadFontsForTree over a synthetic
+// one-node tree, so edit preloads exactly the way render does).
+export async function loadFontsForTextEdit(node: TextNode, patch: WriteProps): Promise<FontMap> {
+  const reflows =
+    patch.text != null || patch.runs || patch.textStyle || patch.maxLines != null ||
+    (patch.layout && (patch.layout.sizing || patch.layout.dimensions || patch.layout.percentSize));
+  if (!reflows) return {};
+  const live = node.fontName === figma.mixed ? node.getRangeAllFontNames(0, node.characters.length) : [node.fontName as FontName];
+  await Promise.all(live.map((f) => figma.loadFontAsync(f)));
+  const needsAuthored = namesFontIdentity(patch.textStyle) || (patch.runs || []).some((r) => namesFontIdentity(r.style));
+  if (!needsAuthored) return {};
+  return loadFontsForTree({ type: "TEXT", textStyle: patch.textStyle, runs: patch.runs });
+}
 
 export async function loadFontsForTree(tree: WriteNode): Promise<FontMap> {
   const avail = await figma.listAvailableFontsAsync();

@@ -497,3 +497,172 @@ test("a Figma refusal mid-apply rolls back and the error is a pointer: identity 
     return true;
   });
 });
+
+// ——— slice 2.5: the TEXT words (content / textStyle / color) and LINE's color alias ———
+
+async function renderKeyedText(content: Parameters<typeof text>[0] = "hello", props: Parameters<typeof text>[1] = {}) {
+  const out = await render(frame({ width: 300, height: 100 }, [text(content, { key: "label", ...props })]));
+  return figma.getNodeByIdAsync(out.keyed.label.id);
+}
+
+test("`content` with a plain string replaces the whole text, preloading the live font first", async () => {
+  const node = await renderKeyedText("hello");
+  figma.fontLoads.length = 0;
+  await edit("label", { content: "goodbye" });
+  assert.equal(node.characters, "goodbye");
+  // The reflow re-lays the existing font — loaded before the mutating span, like create's preload.
+  assert.deepEqual(figma.fontLoads[0], { family: "Inter", style: "Regular" });
+});
+
+test("a fontSize/lineHeight nudge lands WITHOUT re-writing the base font — presence-gated, unlike create", async () => {
+  const node = await renderKeyedText("hello", { textStyle: { fontWeight: "bold" } });
+  assert.deepEqual(node.fontName, { family: "Inter", style: "Bold" });
+  await edit("label", { textStyle: { fontSize: 24 } });
+  assert.equal(node.fontSize, 24);
+  // The hazard applyTextProps's presence gate exists for: an unenriched default-triple write here
+  // would reset Bold to Regular.
+  assert.deepEqual(node.fontName, { family: "Inter", style: "Bold" });
+});
+
+test("a weight-only delta enriches the rest of the triple from the LIVE font — the italic survives", async () => {
+  const node = await renderKeyedText("hello", { textStyle: { fontStyle: "italic" } });
+  assert.deepEqual(node.fontName, { family: "Inter", style: "Italic" });
+  await edit("label", { textStyle: { fontWeight: "bold" } });
+  // Without enrichment the resolve would key (default family, bold, upright) and land plain "Bold".
+  assert.deepEqual(node.fontName, { family: "Inter", style: "Bold Italic" });
+});
+
+test("enrichment decodes a COMBINED live label: a family-anchor on Bold Italic keeps both axes", async () => {
+  const node = await renderKeyedText("hello", { textStyle: { fontWeight: 700, fontStyle: "italic" } });
+  assert.deepEqual(node.fontName, { family: "Inter", style: "Bold Italic" });
+  await edit("label", { textStyle: { fontFamily: "Inter" } });
+  // "Bold Italic" carries weight AND slant in one label — a naive weight lookup on the whole
+  // string reads 400 and silently de-bolds (the liveFontWords regression).
+  assert.deepEqual(node.fontName, { family: "Inter", style: "Bold Italic" });
+});
+
+test("a malformed fontWeight rejects the whole delta instead of silently resetting to regular", async () => {
+  const node = await renderKeyedText("hello", { textStyle: { fontWeight: 700 } });
+  await assert.rejects(edit("label", { textStyle: { fontWeight: true } } as never), /fontWeight must be a number/);
+  assert.deepEqual(node.fontName, { family: "Inter", style: "Bold" }); // wantWeight never saw the boolean
+});
+
+test("a partial font delta on a MIXED text rejects; anchoring fontFamily makes it a whole-node reset", async () => {
+  const node = await renderKeyedText("plain **bold**");
+  assert.equal(node.fontName, figma.mixed); // markdown bold made the ranges diverge
+  await assert.rejects(edit("label", { textStyle: { fontWeight: 600 } }), /mixes fonts/);
+  assert.equal(node.fontName, figma.mixed); // rejected pre-lock — still mixed
+  await edit("label", { textStyle: { fontFamily: "Inter", fontWeight: 600 } });
+  assert.deepEqual(node.fontName, { family: "Inter", style: "Semi Bold" }); // uniform again
+});
+
+test("`content` markdown compiles runs over the live base family, per-range fonts landing on the right slice", async () => {
+  const node = await renderKeyedText("hello");
+  await edit("label", { content: "plain **bold**" });
+  assert.equal(node.characters, "plain bold");
+  assert.deepEqual(node._rangeFonts, [{ start: 6, end: 10, value: { family: "Inter", style: "Bold" } }]);
+  assert.equal(node.fontName, figma.mixed); // the edit's own runs made it mixed — live-faithful
+});
+
+test("a plain-string `content` on a MIXED text succeeds, preloading EVERY range font for the reflow", async () => {
+  const node = await renderKeyedText("plain **bold**");
+  figma.fontLoads.length = 0;
+  await edit("label", { content: "flat" });
+  assert.equal(node.characters, "flat");
+  assert.deepEqual(figma.fontLoads, [
+    { family: "Inter", style: "Regular" },
+    { family: "Inter", style: "Bold" },
+  ]);
+});
+
+test("a styled run in `content` on a MIXED text has no base family — rejects instead of landing in the default", async () => {
+  await renderKeyedText("plain **bold**");
+  await assert.rejects(
+    edit("label", { content: ["a ", ["b", { fontWeight: "bold" }]] }),
+    /no base family to resolve against/,
+  );
+});
+
+test("`color` is the TEXT fill sugar and the LINE stroke alias; \"none\" clears both", async () => {
+  const node = await renderKeyedText("hello", { color: "#0000ff" });
+  await edit("label", { color: "#ff0000" });
+  assert.deepEqual(node.fills[0].color, { r: 1, g: 0, b: 0 });
+  await edit("label", { color: "none" });
+  assert.deepEqual(node.fills, []);
+  const out = await render(frame({ width: 100, height: 100 }, [line({ key: "rule", length: 80 })]));
+  const rule = await figma.getNodeByIdAsync(out.keyed.rule.id);
+  await edit("rule", { color: "#00ff00" });
+  assert.deepEqual(rule.strokes[0].color, { r: 0, g: 1, b: 0 });
+});
+
+test("lineClamp needs a bounded width: hug rejects, a width in the same edit legalizes, \"none\" removes", async () => {
+  const node = await renderKeyedText("a long line of words that would wrap");
+  await assert.rejects(edit("label", { textStyle: { lineClamp: 2 } }), /bounded width/);
+  await assert.rejects(edit("label", { textStyle: { lineClamp: 0 }, width: 120 }), /whole number/);
+  await edit("label", { textStyle: { lineClamp: 2 }, width: 120 });
+  assert.equal(node.textTruncation, "ENDING");
+  assert.equal(node.maxLines, 2);
+  // The width is now live-fixed, so a follow-up clamp needs no width word.
+  await edit("label", { textStyle: { lineClamp: 3 } });
+  assert.equal(node.maxLines, 3);
+  await edit("label", { textStyle: { lineClamp: "none" } });
+  assert.equal(node.maxLines, null);
+  assert.equal(node.textTruncation, "DISABLED");
+});
+
+test("a Figma refusal on an instance child names the instance — and never auto-detaches", async () => {
+  const component = figma.createComponent();
+  component.name = "Card";
+  const inner = figma.createRectangle();
+  component.appendChild(inner);
+  const inst = component.createInstance();
+  figma.currentPage.appendChild(inst);
+  const child = inst.children[0];
+  Object.defineProperty(child, "fills", {
+    set() { throw new Error("in set_fills: this property cannot be overridden on an instance sublayer"); },
+  });
+  await assert.rejects(edit(id(child.id), { fill: "#ff0000" }), (err: Error) => {
+    assert.match(err.message, /lives inside instance "Card"/);
+    assert.match(err.message, /never auto-detaches/);
+    return true;
+  });
+});
+
+test("a present-but-malformed textStyle rejects the WHOLE delta — the fill beside it never lands", async () => {
+  const node = await renderKeyedText("hello");
+  await assert.rejects(edit("label", { color: "#ff0000", textStyle: false } as never), /must be an object/);
+  await assert.rejects(edit("label", { textStyle: { wat: 1 } } as never), /unknown prop "wat"/);
+  assert.equal(node.fills[0].color.r, 0); // created black — the rejected recolor never landed
+});
+
+test('flcm.text({ color: "none" }) constructs the explicit no-fill — the same word edit speaks', async () => {
+  const out = await render(
+    frame({ width: 100, height: 100 }, [text("ghost", { key: "ghost", color: "none" }), text("plain", { key: "plain" })]),
+  );
+  const ghost = await figma.getNodeByIdAsync(out.keyed.ghost.id);
+  assert.deepEqual(ghost.fills, []); // the clear is written over createText's default black
+  const plain = await figma.getNodeByIdAsync(out.keyed.plain.id);
+  assert.equal(plain.fills.length, 1); // an OMITTED color keeps the live default — absence isn't removal
+});
+
+test("content + an anchored absolute in ONE edit resolves against the POST-reflow size", async () => {
+  const node = await renderKeyedText("hi");
+  await edit("label", { content: "a much longer line of text", absolute: { x: 100, anchor: { x: "center" } } });
+  // Text applies before layout (create's order): the anchor subtracts the NEW width. The old
+  // order centered the pre-reflow width and only converged on a second identical edit.
+  assert.equal(node.x + node.width / 2, 100);
+});
+
+test("a malformed value behind its alias still rejects the whole delta — precedence is not a blind spot", async () => {
+  const out = await render(frame({ width: 100, height: 100 }, [line({ key: "rule", length: 80 })]));
+  const rule = await figma.getNodeByIdAsync(out.keyed.rule.id);
+  await assert.rejects(edit("rule", { length: 60, w: "bad" } as never), /`w` must be a number/);
+  await assert.rejects(edit("rule", { stroke: "#ffffff", color: "wat" } as never), /color/);
+  assert.equal(rule.width, 80); // both deltas rejected whole — the good halves never landed
+});
+
+test('a run\'s color: "none" compiles to a real transparent range write, not a reject or a skip', async () => {
+  const node = await renderKeyedText("hello");
+  await edit("label", { content: [["ghost", { color: "none" }], " rest"] });
+  assert.deepEqual(node._rangeFills, [{ start: 0, end: 5, value: [] }]);
+});

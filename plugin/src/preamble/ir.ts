@@ -38,7 +38,7 @@ export type WriteType = "FRAME" | "TEXT" | "RECTANGLE" | "ELLIPSE" | "LINE" | "V
 // because ir.ts is the one module both sides already import type-safely with no zod and no figma.
 export const EDIT_TYPE_WORD_GROUPS = {
   FRAME: ["shared", "size", "appearance", "frame"],
-  TEXT: ["shared", "size", "text"],
+  TEXT: ["shared", "size", "text", "textContent"],
   RECTANGLE: ["shared", "size", "appearance"],
   ELLIPSE: ["shared", "size", "appearance"],
   LINE: ["shared", "line"],
@@ -121,6 +121,14 @@ export interface WriteTextStyle {
   // IR field NAMES mirror CSS; only the VALUES stay terse where a terse form exists — here the CSS values
   // (left/center/right/justify) already are the canonical spelling, so name and value both align.
   textAlign?: TextAlign;
+}
+
+// THE presence predicate behind "presence-gated" font writes, surface-wide: whether a style names any
+// of the (family, weight, slant) triple — the trigger for writing a base/range fontName, enriching an
+// edit delta from the live node, and preloading authored triples. One name so the three-field check
+// can't decay into partial copies at its call sites.
+export function namesFontIdentity(style: WriteTextStyle | undefined): style is WriteTextStyle {
+  return !!style && (style.fontFamily !== undefined || style.fontWeight !== undefined || style.fontStyle !== undefined);
 }
 
 // ---- Rich text: a styled span within one text node. A `runs` array on a TEXT WriteNode carries the
@@ -236,7 +244,8 @@ export interface WriteProps {
   // TEXT only: clamp the node to at most N lines, truncating with an ending ellipsis (textTruncation:
   // "ENDING" + maxLines:N in the bridge). The author boundary (flcm.text) rejects it on a width-hugging
   // text — truncation needs a bounded width to wrap against — so a value here always has a wrap to bite.
-  maxLines?: number;
+  // "none" is edit's removal spelling: truncation DISABLED, maxLines null (create never compiles it).
+  maxLines?: number | "none";
   fills?: PaintSpec[];
   strokes?: PaintSpec[];
   strokeWeight?: number;

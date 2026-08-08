@@ -16,7 +16,7 @@
 // appliers cover a small additive vocabulary, so fighting the union with casts at every line would add
 // noise without safety.
 
-import { WriteType, WriteNode, WriteProps, WriteLayout, Justify, Align, TextAlign, TextDecoration, Sizing, Identity, Handle, PaintSpec, ImageSpec } from "./ir.js";
+import { WriteType, WriteNode, WriteProps, WriteLayout, Justify, Align, TextAlign, TextDecoration, Sizing, Identity, Handle, PaintSpec, ImageSpec, namesFontIdentity } from "./ir.js";
 import { toFigmaPaint } from "./paint.js";
 import { toFigmaEffects } from "./effects.js";
 import { resolveFont, resolveFontStrict, FontMap } from "./fonts.js";
@@ -741,7 +741,7 @@ function applyRuns(t: any, runs: NonNullable<WriteNode["runs"]>, ctx: RenderReso
         // Italic is a font-name concern in Figma (the style string, e.g. "Bold Italic"), so a run that
         // changes family, weight, OR slant needs a per-range font — resolved STRICTLY against the exact
         // (family, weight, italic) fonts.ts preloaded.
-        if (s.fontFamily !== undefined || s.fontWeight !== undefined || s.fontStyle !== undefined) {
+        if (namesFontIdentity(s)) {
           t.setRangeFontName(start, end, resolveFontStrict(ctx.fonts, s.fontFamily, s.fontWeight, s.fontStyle === "italic"));
         }
         if (typeof s.fontSize === "number") t.setRangeFontSize(start, end, s.fontSize);
@@ -749,39 +749,72 @@ function applyRuns(t: any, runs: NonNullable<WriteNode["runs"]>, ctx: RenderReso
         if (s.letterSpacing) t.setRangeLetterSpacing(start, end, s.letterSpacing);
         if (s.textDecoration) t.setRangeTextDecoration(start, end, DECORATION[s.textDecoration]);
       }
-      if (run.fills && run.fills.length) t.setRangeFills(start, end, [paintOf(run.fills[0], ctx)]);
+      // Present-but-empty is the compiled "none" — a real transparent write over the slice, not a skip.
+      if (run.fills) t.setRangeFills(start, end, run.fills.length ? [paintOf(run.fills[0], ctx)] : []);
       if (run.hyperlink) t.setRangeHyperlink(start, end, { type: "URL", value: run.hyperlink });
     }
     start = end;
   }
 }
 
-function buildText(wn: WriteNode, ctx: RenderCtx): any {
-  const t = figma.createText();
-  figma.currentPage.appendChild(t);
+// The text-word applier both carriers ride — buildText for a fresh node, edit for a live one —
+// so a text style compiled for create and for edit cannot land differently. Presence-only: the
+// base font writes ONLY when the style names a font-identity word (an edit's fontSize nudge must
+// not re-write fontName from a default triple; buildText writes the creation default itself when
+// the spec names none). Order is load-bearing: font before characters (Figma refuses characters on
+// an unloaded font; the caller preloaded exactly this triple), characters before runs (the setRange
+// offsets address slices of them). Node-level fills are applyPaint's — the caller must run it
+// BEFORE this so range fills land over, not under, the base fill.
+export function applyTextProps(t: any, wn: WriteProps, ctx: RenderResources): void {
   const ts = wn.textStyle || {};
-  t.fontName = resolveFont(ctx.fonts, ts.fontFamily, ts.fontWeight, ts.fontStyle === "italic"); // loadFontsForTree preloaded this exact (family, weight, italic)
-  // Characters come from the runs (concatenated) when present, else the plain string. The base font above
-  // must be loaded before this assignment; runs then layer per-range over the base (applyRuns).
-  t.characters = wn.runs ? wn.runs.map((r) => r.text).join("") : String(wn.text == null ? "" : wn.text);
+  if (namesFontIdentity(ts)) {
+    t.fontName = resolveFont(ctx.fonts, ts.fontFamily, ts.fontWeight, ts.fontStyle === "italic");
+  }
+  if (wn.runs) t.characters = wn.runs.map((r) => r.text).join("");
+  else if (wn.text != null) t.characters = String(wn.text);
   if (typeof ts.fontSize === "number") t.fontSize = ts.fontSize;
   if (ts.lineHeight) t.lineHeight = ts.lineHeight;
   if (ts.letterSpacing) t.letterSpacing = ts.letterSpacing;
-  if (wn.fills && wn.fills.length) { t.fills = [paintOf(wn.fills[0], ctx)]; stampImageData(t, wn); }
-  if (wn.effects) t.effects = toFigmaEffects(wn.effects);
   if (ts.textAlign && TEXT_ALIGN[ts.textAlign]) t.textAlignHorizontal = TEXT_ALIGN[ts.textAlign];
   // Base decoration first (whole node); runs then override their slice via setRangeTextDecoration.
   if (ts.textDecoration) t.textDecoration = DECORATION[ts.textDecoration];
   if (wn.runs) applyRuns(t, wn.runs, ctx);
+}
 
-  applyLeafSize(t, wn.layout || {});
-  // Clamp to N lines with an ending ellipsis. flcm.text guarantees a bounded width when maxLines is set
-  // (the handshake above gave it a wrap), so the truncation always has real lines to bite. textTruncation
-  // must be "ENDING" BEFORE maxLines — Figma rejects a non-null maxLines while truncation is "DISABLED".
-  if (typeof wn.maxLines === "number") {
-    t.textTruncation = "ENDING";
-    t.maxLines = wn.maxLines;
+// TEXT clamp writes, applied AFTER sizing (truncation needs the wrap to exist). Setting: "ENDING"
+// must precede maxLines — Figma rejects a non-null maxLines while truncation is "DISABLED".
+// Removal ("none", edit's word) reverses that order: null the count while truncation still
+// stands, then disable.
+export function applyTextClamp(t: any, maxLines: WriteProps["maxLines"]): void {
+  if (maxLines == null) return;
+  if (maxLines === "none") {
+    t.maxLines = null;
+    t.textTruncation = "DISABLED";
+    return;
   }
+  t.textTruncation = "ENDING";
+  t.maxLines = maxLines;
+}
+
+function buildText(wn: WriteNode, ctx: RenderCtx): any {
+  const t = figma.createText();
+  figma.currentPage.appendChild(t);
+  // The creation default is the builder's: a fresh text ALWAYS ends up with a written base font —
+  // applyTextProps's font write is presence-gated (edit's rule), so when the spec names no identity
+  // word, create writes the resolveFont fallback triple itself (loadFontsForTree preloaded it).
+  if (!namesFontIdentity(wn.textStyle)) t.fontName = resolveFont(ctx.fonts, undefined, undefined, false);
+  // Present-but-empty is the compiled "none" — write the clear (live createText seeds a default
+  // black fill, so skipping would leave the "unfilled" text black).
+  if (wn.fills) {
+    t.fills = wn.fills.length ? [paintOf(wn.fills[0], ctx)] : [];
+    if (wn.fills.length) stampImageData(t, wn);
+  }
+  if (wn.effects) t.effects = toFigmaEffects(wn.effects);
+  applyTextProps(t, { ...wn, text: wn.text == null ? "" : wn.text }, ctx);
+  applyLeafSize(t, wn.layout || {});
+  // flcm.text guarantees a bounded width when maxLines is set (the handshake above gave it a
+  // wrap), so the truncation always has real lines to bite.
+  applyTextClamp(t, wn.maxLines);
   if (typeof wn.opacity === "number") t.opacity = wn.opacity;
   return t;
 }

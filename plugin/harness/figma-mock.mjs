@@ -128,14 +128,31 @@ class Node {
   setRangeTextDecoration(start, end, value) { this._range("_rangeDecorations", start, end, value); }
   setRangeHyperlink(start, end, value) { this._range("_rangeHyperlinks", start, end, value); }
 
+  // Live Figma reports figma.mixed when the characters don't all share one font — recorded
+  // setRangeFontName ranges that diverge from the base make this node mixed the same way. Writing
+  // fontName is a whole-node font reset live (every range takes the new font), so the setter wipes
+  // the per-range variation. A `characters` write deliberately does NOT wipe them: live Figma
+  // preserves per-range styling across a characters assignment on a best-effort positional diff,
+  // and stale-ranges-by-offset is the closest cheap model — whether a FULL replacement re-uniforms
+  // live is unverified (queued for live dogfood); revisit here if it does.
+  get fontName() {
+    if (this.type === "TEXT" && (this._rangeFonts || []).length && this.characters.length) {
+      const fonts = this.getRangeAllFontNames(0, this.characters.length);
+      if (fonts.length > 1) return MIXED;
+      if (fonts.length === 1) return fonts[0];
+    }
+    return this._fontName;
+  }
+  set fontName(v) { this._fontName = v; this._rangeFonts = []; }
+
   // Every distinct font over [start, end) — resolved from the recorded ranges the same way
   // getStyledTextSegments does (last range covering the char wins, base fontName otherwise).
-  // Edit's TEXT-size preload walks this when fontName is figma.mixed.
+  // Edit's TEXT preload walks this when fontName is figma.mixed.
   getRangeAllFontNames(start, end) {
     const names = [];
     const seen = new Set();
     for (let i = start; i < end; i++) {
-      let f = this.fontName;
+      let f = this._fontName;
       for (const r of this._rangeFonts || []) if (r.start <= i && i < r.end) f = r.value;
       const key = f.family + "|" + f.style;
       if (!seen.has(key)) { seen.add(key); names.push(f); }
@@ -187,7 +204,7 @@ class Node {
       return v;
     };
     const styleAt = (i) => {
-      const fontName = at("_rangeFonts", i, this.fontName);
+      const fontName = at("_rangeFonts", i, this._fontName);
       const seg = {
         fontName,
         fontWeight: weightOfStyle(fontName.style),
@@ -335,7 +352,8 @@ function cloneInto(mainNode, instId, isRoot) {
   n.fills = clonePaints(mainNode.fills);
   n.strokes = clonePaints(mainNode.strokes);
   n.effects = clonePaints(mainNode.effects);
-  n.fontName = JSON.parse(JSON.stringify(mainNode.fontName));
+  n.fontName = JSON.parse(JSON.stringify(mainNode._fontName));
+  n._rangeFonts = JSON.parse(JSON.stringify(mainNode._rangeFonts || []));
   n.children = [];
   for (const c of mainNode.children) { const cc = cloneInto(c, instId, false); cc.parent = n; n.children.push(cc); }
   return n;
@@ -366,7 +384,14 @@ export function createFigmaMock() {
     commitUndo() { this.undoLog.push("commit"); },
     triggerUndo() { this.undoLog.push("trigger"); },
     createFrame() { return new Node("FRAME"); },
-    createText() { const t = new Node("TEXT"); t.fontName = { family: "Inter", style: "Regular" }; return t; },
+    // Live createText seeds a default black fill — buildText's present-empty fills clear ("none")
+    // only means something against it.
+    createText() {
+      const t = new Node("TEXT");
+      t.fontName = { family: "Inter", style: "Regular" };
+      t.fills = [{ type: "SOLID", color: { r: 0, g: 0, b: 0 } }];
+      return t;
+    },
     createComponent() { return new Node("COMPONENT"); },
     createSlice() { return new Node("SLICE"); },
     createRectangle() { return new Node("RECTANGLE"); },

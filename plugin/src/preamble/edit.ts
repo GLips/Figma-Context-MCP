@@ -12,16 +12,30 @@
 // vocabulary is ABSOLUTE values (a fill, an opacity — never "+10"), so a duplicate apply converges
 // to the same canvas; the residue is a duplicate undo step, not divergent state. Keep it that way:
 // a relative delta word would turn that accepted race into canvas corruption.
+//
+// Validation is ENTRY-time, not apply-time: the live-state gates (layout resolvability, clamp
+// boundedness, font enrichment) read the canvas before this call joins the mutation queue, so a
+// run that races its own edits (Promise.all over the same node) can validate both against the
+// pre-race state — the writes still serialize and each edit alone converges, but one edit's gate
+// can be stale by the time it applies. Moving those gates inside the lock would make every reject
+// mint-and-roll-back an undo step (today rejects leave zero undo residue, and the suite pins
+// that). Known, unresolved trade — do not quietly re-home the gates without deciding it.
 
-import { WriteProps, WriteType, WriteLayout, Target, Handle, EDIT_TYPE_WORD_GROUPS } from "./ir.js";
+import { WriteProps, WriteType, WriteLayout, WriteTextStyle, Target, Handle, EDIT_TYPE_WORD_GROUPS, namesFontIdentity } from "./ir.js";
 import { resolveTarget } from "./read.js";
 import { enterMutatingVerb, committedVerbCount } from "./mutation-lock.js";
-import { applyPaint, applySceneProps, mintHandle, applyLiveNodeLayout, assertLayoutDeltaResolvable } from "./bridge.js";
+import {
+  applyPaint, applySceneProps, mintHandle, applyLiveNodeLayout, assertLayoutDeltaResolvable,
+  applyTextProps, applyTextClamp,
+} from "./bridge.js";
 import { toFigmaEffects } from "./effects.js";
 import { identityOf } from "./identity.js";
 import { rejectUnknownKeys } from "./validate.js";
+import { liveFontWords, loadFontsForTextEdit } from "./fonts.js";
 import {
-  KNOWN_KEYS, compileNodeLocalProps, compileSizeWords, compileContainerWords, compileLineLength, fetchTreeImages,
+  KNOWN_KEYS, compileNodeLocalProps, compileSizeWords, compileContainerWords, compileLineLength,
+  compileLineStroke, compilePaintWord, compileTextStyleWords, compileTextContent, assertLineClampCount,
+  fetchTreeImages,
 } from "./flcm.js";
 import type { EditDelta, FrameProps, LineProps } from "./schema.js";
 
@@ -100,20 +114,56 @@ function assertDeltaLegalForType(node: SceneNode, changes: EditDelta): ReadonlyS
   return legal;
 }
 
+// A textStyle delta naming SOME font-identity word resolves the rest of the triple against the
+// LIVE node: `fontWeight: "bold"` on a Roboto text must stay Roboto — resolveFont keys the whole
+// (family, weight, italic) triple, and an unenriched partial would key the default family. The
+// live label decodes through fonts.ts's own grammar (liveFontWords — "Bold Italic" is weight AND
+// slant in one string). A MIXED node has no single live identity to enrich from, so a partial
+// triple rejects loud; naming fontFamily makes the delta a complete absolute reset and lands.
+function enrichFontIdentity(ts: WriteTextStyle, node: TextNode): WriteTextStyle {
+  if (!namesFontIdentity(ts)) return ts;
+  if (node.fontName === figma.mixed) {
+    if (ts.fontFamily === undefined) {
+      throw new Error(
+        "flcm.edit: this text mixes fonts (fontName is mixed), so a partial font change has no single base to resolve against — name textStyle.fontFamily in the same edit (unnamed weight resets to regular), or restyle spans via `content` runs.",
+      );
+    }
+    return ts; // a family-anchored delta is an absolute whole-node reset — legal on mixed
+  }
+  return { ...liveFontWords(node.fontName as FontName), ...ts };
+}
+
+// The base style `content` runs layer over: the delta's own (enriched) font identity when it
+// names one, else the live node's — so `content: ["a ", ["b", { fontWeight: "bold" }]]` bolds in
+// the family the node actually uses. A mixed node has no single base; that case is gated by the
+// caller (a styled run without a resolvable family would silently land in the default family).
+function liveBaseStyle(node: TextNode): WriteTextStyle {
+  return node.fontName === figma.mixed ? {} : liveFontWords(node.fontName as FontName);
+}
+
 // Compile the delta to a typed patch through create's own parsers, then pre-flight the one compiled
 // form those parsers don't fully close: a raw EffectSpec[] passes normalizeEffects untouched, and an
 // unknown kind would otherwise surface mid-apply as a fake "Figma refused". toFigmaEffects is pure
 // (figma-free), so running it here keeps every vocabulary failure ahead of the first canvas write.
-function compileDeltaPatch(changes: EditDelta, legal: ReadonlySet<string>, nodeType: string): WriteProps {
+// Takes the LIVE node (not just its type): text words compile against live facts — font identity
+// enrichment, the runs' base style, and lineClamp's bounded-width gate all read it.
+function compileDeltaPatch(changes: EditDelta, legal: ReadonlySet<string>, node: SceneNode): WriteProps {
   const patch: WriteProps = {};
   compileNodeLocalProps(patch, changes, { radius: legal.has("borderRadius"), clip: legal.has("clip") });
   if (patch.effects) toFigmaEffects(patch.effects);
   // Layout words compile through the same helpers every constructor rides — never buildLayout,
   // whose creation default (omitted mode → "none") would turn a gap nudge into an auto-layout kill.
   const layout: WriteLayout = { ...(compileSizeWords(changes) || {}) };
-  if (nodeType === "LINE") Object.assign(layout, compileLineLength(changes as Pick<LineProps, "length" | "w">) || {});
+  if (node.type === "LINE") {
+    Object.assign(layout, compileLineLength(changes) || {});
+    // flcm.line's own stroke compile carries the `stroke`-wins-over-`color` precedence; when only
+    // `stroke` was named this re-lands what compileNodeLocalProps already wrote — same compile.
+    const strokes = compileLineStroke(changes);
+    if (strokes) patch.strokes = strokes;
+  }
   if (changes.layout != null) Object.assign(layout, compileContainerWords(changes.layout as NonNullable<FrameProps["layout"]>, "flcm.edit.layout"));
   if (Object.keys(layout).length) patch.layout = layout;
+  if (node.type === "TEXT") compileTextDeltaWords(changes, patch, node as TextNode);
   // Every named word compiled to nothing (all values null/undefined) — same hazard as `{}`: the
   // verb would mint an undo step for zero writes.
   if (Object.keys(patch).length === 0) {
@@ -122,21 +172,76 @@ function compileDeltaPatch(changes: EditDelta, legal: ReadonlySet<string>, nodeT
   return patch;
 }
 
+// The TEXT words: textStyle (create's own compile + live font-identity enrichment), lineClamp
+// (create's shape gate; the bounded-width fact here is live-or-this-delta, not authored width),
+// color (the text-fill sugar, exactly as flcm.text reads it), and content (create's own parser
+// over an enriched base). Runs after the layout words land on the patch — lineClamp's gate reads
+// the compiled sizing.
+function compileTextDeltaWords(changes: EditDelta, patch: WriteProps, node: TextNode): void {
+  if (changes.textStyle != null) {
+    const ts = compileTextStyleWords(changes.textStyle, "flcm.edit.textStyle");
+    if (Object.keys(ts).length) patch.textStyle = enrichFontIdentity(ts, node);
+    const clamp = changes.textStyle.lineClamp;
+    if (clamp != null) {
+      patch.maxLines = clamp === "none" ? clamp : assertLineClampCount(clamp, "flcm.edit");
+      // A clamp only bites against a bounded width (create rejects the same no-op). The bound is
+      // whichever wins after this edit: a sizing named in the same delta, else the live wrap mode.
+      if (patch.maxLines !== "none") {
+        const named = patch.layout && patch.layout.sizing ? patch.layout.sizing.horizontal : undefined;
+        const bounded = named !== undefined ? named !== "hug" : node.textAutoResize !== "WIDTH_AND_HEIGHT";
+        if (!bounded) {
+          throw new Error(
+            'flcm.edit: textStyle.lineClamp needs a bounded width to truncate against — this text hugs its width. Set width (a number, "fill", or "N%") in the same edit.',
+          );
+        }
+      }
+    }
+  }
+  if (changes.color != null) patch.fills = compilePaintWord(changes.color, "color");
+  if (changes.content != null) {
+    const base = namesFontIdentity(patch.textStyle) ? patch.textStyle : liveBaseStyle(node);
+    const compiled = compileTextContent(changes.content, base);
+    // A styled run that changes font identity with no family anywhere (no run family, no delta
+    // textStyle, mixed live base) would silently land in the DEFAULT family — reject instead.
+    if (compiled.runs && compiled.runs.some((r) => namesFontIdentity(r.style) && r.style.fontFamily === undefined)) {
+      throw new Error(
+        "flcm.edit: this text mixes fonts, so a styled run has no base family to resolve against — name textStyle.fontFamily in the same edit, or give each styled run its own fontFamily.",
+      );
+    }
+    Object.assign(patch, compiled);
+  }
+}
+
 // The invariant-2 pointer error: the verb, how much of the run stands, the target's identity (the
 // same fields a find hit carries, so the agent re-targets without re-reading), and the cause. A
 // Figma refusal names its own setter ("in set_fills: …"); an flcm-prefixed cause is our own throw,
-// so don't pin it on Figma.
-function editPointerError(identity: ReturnType<typeof identityOf>, cause: unknown): Error {
+// so don't pin it on Figma. A refusal on a node inside an INSTANCE names the instance: many props
+// are legal overrides but Figma rejects the rest ("cannot be overridden"), and the fix is editing
+// the main component — flcm never auto-detaches (detach churns ids, killing the agent's handles).
+function editPointerError(identity: ReturnType<typeof identityOf>, cause: unknown, node: SceneNode): Error {
   const message = cause instanceof Error ? cause.message : String(cause);
   const who =
     identity.type + " " + JSON.stringify(identity.name) + " (id " + JSON.stringify(identity.id) +
     (identity.key ? ", key " + JSON.stringify(identity.key) : "") + ")";
-  const refusal = message.startsWith("flcm") ? "failed mid-apply on " : "Figma refused a write on ";
+  const isFigmaRefusal = !message.startsWith("flcm");
+  const refusal = isFigmaRefusal ? "Figma refused a write on " : "failed mid-apply on ";
+  const instanceHost = isFigmaRefusal ? instanceAncestorOf(node) : null;
+  const instanceNote = instanceHost
+    ? " The target lives inside instance " + JSON.stringify(instanceHost.name) + " (id " + JSON.stringify(instanceHost.id) +
+      ") — Figma forbids overriding some properties on instance children; edit the component it comes from (flcm never auto-detaches)."
+    : "";
   return new Error(
     "flcm.edit: " + refusal + who + " — " + message + ". " +
       "This edit rolled back to its entry seal (the canvas holds none of it); the " + committedVerbCount() +
-      " mutating call(s) before it in this run committed and stand.",
+      " mutating call(s) before it in this run committed and stand." + instanceNote,
   );
+}
+
+function instanceAncestorOf(node: SceneNode): SceneNode | null {
+  for (let p = (node as { parent?: BaseNode | null }).parent; p && p.type !== "PAGE"; p = p.parent) {
+    if (p.type === "INSTANCE") return p as SceneNode;
+  }
+  return null;
 }
 
 /**
@@ -149,19 +254,13 @@ export async function edit(target: Target, changes: EditDelta): Promise<Handle> 
   rejectNonDeltaWords(changes);
   const node = await resolveTarget(target);
   const legal = assertDeltaLegalForType(node, changes);
-  const patch = compileDeltaPatch(changes, legal, node.type);
+  const patch = compileDeltaPatch(changes, legal, node);
   // Layout words that only mean something against the live tree (a page parent, hug legality, the
   // hug-cycle percent) reject pre-lock like every other validation — zero writes on failure.
   if (patch.layout) assertLayoutDeltaResolvable(node, patch.layout);
-  // A size word on TEXT writes textAutoResize/resize, which Figma refuses on an unloaded font —
-  // the same preload create rides (loadFontsForTree), narrowed to the live node's own font(s);
-  // a run-styled node reports figma.mixed and loads every range font. Read-only, so it stays
-  // outside the lock like the image fetch below.
-  if (node.type === "TEXT" && patch.layout && (patch.layout.sizing || patch.layout.dimensions || patch.layout.percentSize)) {
-    const t = node as TextNode;
-    const fonts = t.fontName === figma.mixed ? t.getRangeAllFontNames(0, t.characters.length) : [t.fontName as FontName];
-    await Promise.all(fonts.map((f) => figma.loadFontAsync(f)));
-  }
+  // Fonts gate every reflowing text mutation, not just characters — loaded before the lock
+  // (read-only, may await the font service), like the image fetch below.
+  const fonts = node.type === "TEXT" ? await loadFontsForTextEdit(node as TextNode, patch) : {};
   // An image fill in the delta needs bytes before the mutating span — the fetch is read-only and
   // stays outside the lock, like render's.
   const images = await fetchTreeImages(patch);
@@ -170,11 +269,18 @@ export async function edit(target: Target, changes: EditDelta): Promise<Handle> 
     // otherwise point at the NEW name — which the rollback is about to remove from the canvas.
     const identity = identityOf(node);
     try {
-      applyPaint(node, patch, { fonts: {}, images });
+      applyPaint(node, patch, { fonts, images });
       applySceneProps(node, patch);
+      // Text BEFORE layout — create's own order (buildText: characters, then applyLeafSize): an
+      // anchor or percent in the same delta must resolve against the POST-reflow metrics, or a
+      // center anchor lands off by the text-size change and only converges on a second run. Fills
+      // still precede runs (applyPaint above), and clamp goes last — it clips against the wrap
+      // the sizing/content writes just produced.
+      if (node.type === "TEXT") applyTextProps(node as TextNode, patch, { fonts, images });
       if (patch.layout) applyLiveNodeLayout(node, patch.layout);
+      if (node.type === "TEXT") applyTextClamp(node as TextNode, patch.maxLines);
     } catch (cause) {
-      throw editPointerError(identity, cause);
+      throw editPointerError(identity, cause, node);
     }
     return mintHandle(node);
   });

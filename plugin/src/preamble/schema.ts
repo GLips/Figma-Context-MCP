@@ -209,9 +209,9 @@ const TEXTSTYLE_FIELDS = {
   ),
   textAlign: prop(z.enum(["left", "center", "right", "justify"]), "Horizontal text alignment (CSS text-align)."),
   lineClamp: prop(
-    z.number(),
-    'Clamp the text to at most N lines, truncating with an ellipsis (…). Needs a bounded width — a fixed/`"fill"`/`"N%"` `width` — so the text wraps; on a width-hugging text there is nothing to truncate and it fails loud. N must be a whole number ≥ 1.',
-    "number (≥1)",
+    z.union([z.number(), z.literal("none")]),
+    'Clamp the text to at most N lines, truncating with an ellipsis (…). Needs a bounded width — a fixed/`"fill"`/`"N%"` `width` — so the text wraps; on a width-hugging text there is nothing to truncate and it fails loud. N must be a whole number ≥ 1. `"none"` removes an existing clamp (under edit; at create it is the explicit default).',
+    'number (≥1) | "none"',
   ),
 };
 
@@ -222,6 +222,17 @@ const TEXT_FIELDS = {
     "{ fontFamily?, fontWeight?, fontSize?, fontStyle?, lineHeight?, letterSpacing?, textDecoration?, textAlign?, lineClamp? }",
   ),
   color: color("Text color (a solid color, normally) — a node-level sugar prop compiling to the text node's fill."),
+};
+
+// At create, text CONTENT is the positional first arg of flcm.text — this group exists for edit,
+// where the delta is one object and the content needs a prop name. Same input shape and the same
+// markdown/run parser as the positional arg; a whole-content replacement, never a splice.
+const TEXTCONTENT_FIELDS = {
+  content: prop(
+    z.custom<string | TextRunInput[]>(),
+    "Replacement text: a plain string (markdown inline styling works: **bold**, *italic*, ~~strike~~, [link](url)) or an array of styled runs — exactly what flcm.text takes as its first argument. Replaces the node's whole content.",
+    "string | run[]",
+  ),
 };
 
 // The rich-text run's style delta — the second element of a `[text, style]` run tuple (the array form of
@@ -310,14 +321,14 @@ export type LineProps = z.infer<typeof LineSchema>;
 export type PathProps = z.infer<typeof PathSchema>;
 export type SvgProps = z.infer<typeof SvgSchema>;
 
-// The flcm.edit(target, changes) delta — the ONE authoring vocabulary minus text words (no second
-// dialect, invariant: same spellings, same parsers as create). Entries REUSE the create field
-// objects (the RUN_FIELDS pattern), so a prop can't mean something different under edit. Which
-// words apply to which node type is the runtime's per-type gate (edit.ts DELTA_KEYS_BY_TYPE,
-// composed from the same KNOWN_KEYS atoms) — this schema is the flat closed set an unknown key
-// fails loud against. Two absences are the contract, not an oversight: `key` is immutable under
-// edit (a delta naming it fails loud — re-keying could mint a duplicate address), and text words
-// (content, textStyle, color) land in the text slice.
+// The flcm.edit(target, changes) delta — the ONE authoring vocabulary (no second dialect,
+// invariant: same spellings, same parsers as create). Entries REUSE the create field objects (the
+// RUN_FIELDS pattern), so a prop can't mean something different under edit. Which words apply to
+// which node type is the runtime's per-type gate (edit.ts DELTA_KEYS_BY_TYPE, composed from the
+// same KNOWN_KEYS atoms) — this schema is the flat closed set an unknown key fails loud against.
+// One absence is the contract, not an oversight: `key` is immutable under edit (a delta naming it
+// fails loud — re-keying could mint a duplicate address). `content` is the one edit-only spelling:
+// at create the same input is flcm.text's positional first argument.
 const EDIT_FIELDS = {
   name: SHARED_FIELDS.name,
   opacity: SHARED_FIELDS.opacity,
@@ -338,6 +349,9 @@ const EDIT_FIELDS = {
   layout: FRAME_FIELDS.layout,
   length: LINE_FIELDS.length,
   w: LINE_FIELDS.w,
+  content: TEXTCONTENT_FIELDS.content,
+  textStyle: TEXT_FIELDS.textStyle,
+  color: TEXT_FIELDS.color,
 };
 export const EditSchema = z.object(EDIT_FIELDS);
 export type EditDelta = z.infer<typeof EditSchema>;
@@ -490,6 +504,7 @@ export const FIELD_GROUPS = {
   frame: FRAME_FIELDS,
   layout: LAYOUT_FIELDS,
   text: TEXT_FIELDS,
+  textContent: TEXTCONTENT_FIELDS,
   textStyle: TEXTSTYLE_FIELDS,
   run: RUN_FIELDS,
   line: LINE_FIELDS,
