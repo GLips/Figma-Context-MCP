@@ -182,7 +182,10 @@ test("`pin` overrides the auto-derived constraint per axis", async () => {
   assert.deepEqual((await figma.getNodeByIdAsync(out.keyed.c.id)).constraints, { horizontal: "CENTER", vertical: "SCALE" });
 });
 
-test("an IN-FLOW auto-layout child ignores pin (it reflows via layoutGrow/stretch)", async () => {
+test("an IN-FLOW auto-layout child STORES an explicit pin (inert in flow, governs if it leaves)", async () => {
+  // Flow behavior is untouched — the child reflows via layoutGrow/stretch, on which constraints
+  // are inert — but the word is written, because edit's applyPinDelta writes it unconditionally
+  // and the same pin must land identically per verb (layout-legality's charter).
   const out = await render(
     frame({ layout: { mode: "row" }, width: 300, height: 80 }, [
       rect({ key: "grow", width: "fill", height: 40, pin: { x: "right" } } as never),
@@ -190,7 +193,7 @@ test("an IN-FLOW auto-layout child ignores pin (it reflows via layoutGrow/stretc
   );
   const node = await figma.getNodeByIdAsync(out.keyed.grow.id);
   assert.equal(node.layoutGrow, 1); // fill still rides layoutGrow, unchanged
-  assert.deepEqual(node.constraints, { horizontal: "MIN", vertical: "MIN" }); // pin ignored, default untouched
+  assert.deepEqual(node.constraints, { horizontal: "MAX", vertical: "MIN" }); // pin.x explicit → MAX; y unnamed → untouched default (presence-preserving, like edit)
 });
 
 test("an ABSOLUTE child of an auto-layout parent honors pin/constraints (out of flow)", async () => {

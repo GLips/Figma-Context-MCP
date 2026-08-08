@@ -125,15 +125,21 @@ class Node {
   // model that rejection here; resolveFontStrict is what guards the unloaded case in the std-lib.
   _range(bucket, start, end, value) { (this[bucket] || (this[bucket] = [])).push({ start, end, value }); }
 
-  // A `characters` write re-uniforms the text — VERIFIED live 2026-08-08 (full replacement on a
-  // mixed node: fontName came back a single non-mixed value, one distinct style across every
-  // char). WHICH style survives is only half-grounded: the live repro's first char was unstyled,
-  // so base and leading-run were indistinguishable (community reports say the leading run wins);
-  // this mock falls back to the base. Probe a bold-FIRST-span replacement before leaning on the
-  // post-write font. Range styling only exists if the same edit re-applies runs AFTER the write,
-  // which is the bridge's order (buildText/applyTextProps: characters, then setRange*).
+  // A `characters` write collapses the node to its LEADING run's style — VERIFIED live
+  // 2026-08-08, twice: a full replacement re-uniforms (one distinct style across every char, not
+  // figma.mixed), and the disambiguating bold-FIRST-span repro came back whole-node Bold — the
+  // first run's style wins, not the base. Only the FONT collapse is live-verified: the other
+  // range buckets are cleared without promoting their char-0 values (unverified — extend the
+  // collapse if a scenario ever keys on post-write size/fill). Range styling exists after a
+  // write only if the same edit re-applies runs, which is the bridge's order
+  // (buildText/applyTextProps: characters, then setRange*).
   get characters() { return this._characters; }
   set characters(v) {
+    if (this.type === "TEXT" && (this._rangeFonts || []).length && (this._characters || "").length) {
+      let lead = this._fontName;
+      for (const r of this._rangeFonts) if (r.start <= 0 && 0 < r.end) lead = r.value; // last range covering char 0 wins, like getRangeAllFontNames
+      this._fontName = lead;
+    }
     this._characters = v;
     for (const b of RANGE_BUCKETS) this[b] = [];
   }

@@ -4,19 +4,95 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
-import { frame, text, ellipse, line, rect, render } from "./flcm.js";
+import { frame, text, ellipse, line, rect, render, gradient, effects } from "./flcm.js";
 
 // The bridge reads figma.* only inside render(); constructors never touch it. Install the mock before any
 // render runs. (flcm.js imports are figma-free at module load, so static import above is safe.)
 createFigmaMock();
 
 test("pad: numbers and edge objects compile; a px-string or non-numeric edge rejects", () => {
-  assert.deepEqual(frame({ layout: { padding: 24 } }).layout!.padding, { top: 24, right: 24, bottom: 24, left: 24 });
-  assert.deepEqual(frame({ layout: { padding: { x: 8, y: 16 } } }).layout!.padding, { top: 16, right: 8, bottom: 16, left: 8 });
-  assert.deepEqual(frame({ layout: { padding: { top: 4, left: 2 } } }).layout!.padding, { top: 4, right: 0, bottom: 0, left: 2 });
+  // mode named on the positives: padding without a row/column mode rejects at create (the shared
+  // realizability gate), so the pad-compile assertions need a legal container.
+  assert.deepEqual(frame({ layout: { mode: "row", padding: 24 } }).layout!.padding, { top: 24, right: 24, bottom: 24, left: 24 });
+  assert.deepEqual(frame({ layout: { mode: "row", padding: { x: 8, y: 16 } } }).layout!.padding, { top: 16, right: 8, bottom: 16, left: 8 });
+  assert.deepEqual(frame({ layout: { mode: "row", padding: { top: 4, left: 2 } } }).layout!.padding, { top: 4, right: 0, bottom: 0, left: 2 });
   // The silent-zero bug this fixes: "24px" is neither a number nor an edge object, and used to yield 0 pad.
   assert.throws(() => frame({ layout: { padding: "24px" as never } }), /pad must be a number or an object/);
   assert.throws(() => frame({ layout: { padding: { x: "24px" } as never } }), /pad\.x must be a number/);
+});
+
+test("create rejects layout words the type can't realize — the SAME gate edit consults (no asymmetry)", () => {
+  // One authority answers for both verbs (layout-legality.ts assertLayoutRealizableForType), so
+  // the pin is one test per rule, not per verb — a rule can't be strict in edit and lax in create.
+  assert.throws(() => text("hi", { height: 80 }), /a TEXT's height follows its content/);
+  assert.throws(() => text("hi", { height: "hug" }), /a TEXT's height follows its content/);
+  assert.throws(() => rect({ width: "hug" }), /"hug" sizes to content/);
+  assert.throws(() => frame({ width: "hug" }), /"hug" sizes to content/);
+  assert.throws(() => frame({ layout: { gap: 12 } }), /need an auto-layout/);
+  // The words themselves stay legal where the type can realize them.
+  assert.doesNotThrow(() => frame({ width: "hug", layout: { mode: "row", gap: 12 } }));
+  assert.doesNotThrow(() => text("hi", { width: "hug" }));
+});
+
+test("hand-built node POJOs reject whole — the compiled IR is not an authoring surface", async () => {
+  // A hand-built object can state cross-field combinations the constructors' compile can never
+  // produce (a dimension without its sizing twin, a mode on a shape), and each would land as a
+  // silent partial write — so the dialect is refused at the door, root and child alike.
+  await assert.rejects(render({ type: "RECTANGLE", layout: { mode: "row", gap: 12 } } as never), /hand-built "RECTANGLE" object/);
+  await assert.rejects(
+    render(frame({ width: 300, height: 200 }, [{ type: "TEXT", text: "hi", layout: { percentSize: { height: 50 } } } as never])),
+    /hand-built "TEXT" object/,
+  );
+  // Provenance is WeakSet identity, so no lookalike passes: a spread-copy and a prototype child
+  // are different objects from anything the constructors minted.
+  await assert.rejects(render({ ...frame({ width: 100, height: 100 }) } as never), /hand-built "FRAME" object/);
+  await assert.rejects(render(Object.create(frame({ width: 100, height: 100 })) as never), /hand-built "FRAME" object/);
+  // Constructor output is deep-frozen: post-hoc mutation cannot smuggle unvalidated IR past the
+  // gate (strict mode makes the write itself throw).
+  const sealed = frame({ width: 100, height: 100 });
+  assert.throws(() => { (sealed as { layout?: unknown }).layout = { mode: "row", gap: 12 }; }, TypeError);
+});
+
+test("the seal clones caller inputs — nothing caller-reachable is frozen, nothing mutable leaks in", () => {
+  // The caller's own effects array survives the seal unfrozen (the node froze a clone)…
+  const fx = effects({ shadow: "0 4px 8px #00000022" });
+  rect({ width: 10, height: 10, effects: fx });
+  assert.doesNotThrow(() => fx.push(fx[0]));
+  // …and a caller-frozen SHELL can't shield mutable descendants: the node keeps a clone, so
+  // mutating the original spec's stops after construction changes nothing the node will render.
+  const g = gradient("linear", [{ color: "#000000" }, { color: "#ffffff" }]);
+  Object.freeze(g); // shallow — g.stops entries stay mutable in the caller's hands
+  const wn = rect({ width: 10, height: 10, fill: g });
+  const before = JSON.stringify(wn.fills![0]);
+  (g as { stops: { color: { r: number } }[] }).stops[0].color.r = 0.75;
+  assert.equal(JSON.stringify(wn.fills![0]), before);
+  // The one exception: a passed CHILDREN array is frozen IN PLACE — a push after frame() would
+  // otherwise build a node the author believes has children and silently render an empty frame.
+  const kids = [rect({ width: 5, height: 5 })];
+  frame({ width: 50, height: 50 }, kids);
+  assert.throws(() => kids.push(rect({ width: 5, height: 5 })), TypeError);
+});
+
+test("root position words land on the page; an in-flow child's explicit pin is stored", async () => {
+  // Both are create/edit symmetry pins: edit applies absolute x/y to a page child and writes an
+  // explicit pin unconditionally, so create dropping either would diverge the verbs.
+  const out = await render(frame({ width: 40, height: 40, absolute: { x: 42, y: 17 }, layout: { mode: "row", gap: 4 } }, [
+    rect({ width: 10, height: 10, pin: { x: "right" } }),
+  ]));
+  const root = await figma.getNodeByIdAsync(out.root.id);
+  assert.equal(root.x, 42);
+  assert.equal(root.y, 17);
+  assert.equal(root.children[0].constraints.horizontal, "MAX");
+});
+
+test('parent-relative strictness at render: a root "fill" and an out-of-flow TEXT height:"fill" reject', async () => {
+  // Same rules as edit's live gates, shared predicates in layout-legality.ts — the root sits on
+  // the page (no bounded size), and out of flow a text's fill-height would silently not stick.
+  await assert.rejects(render(frame({ width: "fill", layout: { mode: "row" } })), /root node's parent is the page/);
+  await assert.rejects(
+    render(frame({ width: 300, height: 200 }, [text("t", { height: "fill" })])),
+    /in-flow child of a row\/column auto-layout parent/,
+  );
 });
 
 test("a present-but-mistyped scalar rejects loud on the constructor paths (QuickJS has no type checking)", () => {

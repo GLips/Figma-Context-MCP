@@ -66,9 +66,9 @@ CSS strings exist for read↔write unity with figma-mcp's `SimplifiedNode` (an a
 CSS-string-bearing JSON and writes it back), but that unity only matters at the **agent I/O boundary**.
 So CSS-string parsing is quarantined to `css.ts` — the one module that knows the syntax. Authors write
 CSS-shaped leaves (a `#hex` color, a `linear-gradient(...)` string, a `"32px"` metric); `css.ts` parses
-each **once, at construction**, into the typed currency. A future `get` result (a `SimplifiedNode` of
-CSS strings) will normalize through the same boundary into a typed `WriteNode` before render — so the
-port promise is "SimplifiedNode normalizes mechanically into typed WriteNode," not "render it
+each **once, at construction**, into the typed currency. A future `get`-result port would rebuild
+through the constructors (the one validated compile — render refuses IR they didn't mint), so the
+port promise is "SimplifiedNode maps mechanically onto constructor calls," not "render it
 string-for-string." (See `docs/adr/0001-…`.)
 
 ## Phase-1 scope (this build)

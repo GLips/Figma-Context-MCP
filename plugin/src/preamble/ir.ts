@@ -9,8 +9,8 @@
 // matters at the AGENT I/O BOUNDARY; internally the string form forced a number→string→number round-trip
 // on the only path that ships today (authoring). So strings are now quarantined to css.ts (the input
 // boundary), and the currency here is typed. The read-port promise is re-framed accordingly: a future
-// `get` result (a SimplifiedNode of CSS strings) NORMALIZES through css.ts into this typed WriteNode
-// before render — mechanically, in one place — rather than being rendered string-for-string.
+// `get` result (a SimplifiedNode of CSS strings) REBUILDS through the flcm constructors — the one
+// validated compile; render refuses IR they didn't mint — rather than being rendered string-for-string.
 //
 // Phase-1 scope for the WriteNode currency: only create/render fields. Read-compression refs
 // (styles/template tables), components, prototype, variables, images, and rich text are deliberately absent.
@@ -267,6 +267,9 @@ export interface WriteProps {
 export interface WriteNode extends WriteProps {
   type: WriteType;
 }
+
+// Constructor provenance (the WeakSet, the tree gate) lives in provenance.ts — one home for
+// "did an flcm constructor build this node", and why the IR is not an authoring surface.
 
 // A child slot may be falsy so `cond && flcm.text(...)` composes; the bridge skips falsy entries.
 export type WriteChild = WriteNode | null | false | undefined;

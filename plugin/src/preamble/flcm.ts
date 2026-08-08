@@ -5,8 +5,9 @@
 // The constructors take TERSE sugar props (w/h/pad/gap/align/cross/absolute/radius/fill/...) and compile
 // them into the typed WriteNode currency here. Author CSS-shaped leaves (a #hex color, a gradient string,
 // a "32px" metric) are normalized ONCE through css.ts at construction — the bridge only ever sees the
-// typed currency, never a string. A raw WriteNode (e.g. a future tweaked `get` result, normalized through
-// css.ts first) is the same typed shape a constructor emits, so it renders too.
+// typed currency, never a string. The constructors are the ONLY way to make a renderable node:
+// their output is provenance-tracked and deep-frozen (mintWriteNode/sealWriteNode below), and the
+// bridge refuses anything else — hand-built IR could state combinations the compile forbids.
 //
 // Props types are precise so the bundle's own authors get checking, while the public entry points stay
 // runtime-lenient (agent code runs in QuickJS, not tsc): a bad value still fails loud at the parsers
@@ -18,14 +19,16 @@
 import {
   WriteNode, WriteProps, WriteChild, WriteLayout, WriteTextStyle, WriteTextRun, PaintSpec,
   GradientStop, EffectSpec, Sizing, Edges, Handle, WriteCssEffects, PinX, PinY, AnchorX, AnchorY,
-  Justify, Align, TextAlign, TextDecoration, RawIdRef,
+  Justify, Align, TextAlign, TextDecoration, RawIdRef, WriteType,
 } from "./ir.js";
+import { markConstructorBuilt, isConstructorBuilt, assertConstructorBuiltTree } from "./provenance.js";
+import { assertLayoutRealizableForType, assertSizingResolvesAgainstParentFrame } from "./layout-legality.js";
 import { loadFontsForTree } from "./fonts.js";
 import { parseInlineMarkdown, MdSegment } from "./markdown.js";
 import { linearGradient, radialGradient } from "./paint.js";
 import { layerBlurFromCssPx, backgroundBlurFromCssPx, shadow, glass, noise, texture, progressiveBlur } from "./effects.js";
 import { parseColor, parseFill, parseCssEffects, parseBlendMode, length, lineHeight, letterSpacing, isPercent, percent } from "./css.js";
-import { buildNode, settleHandles, resolvePercents, RenderCtx } from "./bridge.js";
+import { buildNode, placeRootOnPage, settleHandles, resolvePercents, RenderCtx } from "./bridge.js";
 import { enterMutatingVerb } from "./mutation-lock.js";
 import { get, find, findOne, selection } from "./read.js";
 import { rejectUnknownKeys } from "./validate.js";
@@ -334,9 +337,9 @@ export function compileLineLength(props: Pick<LineProps, "length" | "w">): Write
   return { sizing: { horizontal: "fixed" }, dimensions: { width: len as number } };
 }
 
-function buildLayout(props: FrameProps, isFrame: boolean): WriteLayout {
+function buildLayout(props: FrameProps, nodeType: WriteType, subject: string): WriteLayout {
   const layout: WriteLayout = {};
-  if (isFrame) {
+  if (nodeType === "FRAME") {
     // ?? not ||: a falsy-but-present layout (false, 0) must reach the compile's malformed-value reject.
     Object.assign(layout, compileContainerWords(props.layout ?? {}, "flcm.frame.layout"));
     if (layout.mode == null) layout.mode = "none"; // the creation default: an omitted mode is free-form
@@ -344,6 +347,9 @@ function buildLayout(props: FrameProps, isFrame: boolean): WriteLayout {
   // The size/position words ride the same compile edit does — the container words above and the
   // creation default are the only create-side extras.
   Object.assign(layout, compileSizeWords(props) || {});
+  // The shared per-type legality authority (layout-legality.ts) — the same call edit's live gate
+  // makes, so a word that rejects on edit rejects identically here instead of silently not landing.
+  assertLayoutRealizableForType(nodeType, layout, false, subject);
   return layout;
 }
 
@@ -403,6 +409,41 @@ export function compileLineStroke(props: Pick<LineProps, "stroke" | "color">): W
   return paint == null ? undefined : compilePaintWord(paint, word);
 }
 
+// Every constructor births its WriteNode here (WeakSet provenance — see provenance.ts on why
+// the IR is not an authoring surface) and returns it through sealWriteNode below. A spread-copy
+// ({ ...flcm.rect() }) is a different object and rejects at render — clone a node by re-calling
+// its constructor, the only validated path.
+function mintWriteNode(type: WriteType): WriteNode {
+  const wn: WriteNode = { type };
+  markConstructorBuilt(wn);
+  return wn;
+}
+
+// Seal the finished compile so provenance stays MEANINGFUL: without it, membership only proves
+// the node was once constructor-built, while `node.layout.gap = 12` after the fact would smuggle
+// unvalidated IR through the gate. Sealing CLONES as it freezes — the compile retains
+// caller-passed structures (a gradient PaintSpec, an effects array), and freezing those in place
+// would break the caller's own reuse of them, while a caller-frozen shell would shield its
+// mutable descendants from an isFrozen-pruned walk. Cloning severs both: the sealed node shares
+// nothing caller-reachable except child nodes, which are constructor-sealed themselves (the
+// provenance check is the prune — never isFrozen). One traversal does both so the prune rule
+// can't drift between a clone pass and a freeze pass.
+function cloneAndFreeze(v: unknown): unknown {
+  if (v === null || typeof v !== "object") return v;
+  if (isConstructorBuilt(v)) return v; // a child node: already sealed, shared by design
+  if (Array.isArray(v)) return Object.freeze(v.map(cloneAndFreeze));
+  const out: Record<string, unknown> = {};
+  for (const k of Object.keys(v)) out[k] = cloneAndFreeze((v as Record<string, unknown>)[k]);
+  return Object.freeze(out);
+}
+
+function sealWriteNode(wn: WriteNode): WriteNode {
+  const bag = wn as unknown as Record<string, unknown>;
+  for (const k of Object.keys(bag)) bag[k] = cloneAndFreeze(bag[k]);
+  Object.freeze(wn);
+  return wn;
+}
+
 function frame(props: FrameProps = {}, children?: WriteChild | WriteChild[]): WriteNode {
   // ?? not || (here and in every constructor): null/undefined mean "no props" (the pinned absence
   // convention), but a present falsy non-object (false, 0, "") is malformed and must reach the
@@ -414,11 +455,17 @@ function frame(props: FrameProps = {}, children?: WriteChild | WriteChild[]): Wr
     throw new Error('flcm.frame takes (props, children) — children are the second argument: flcm.frame({}, [...]).');
   }
   rejectUnknownKeys(props, FRAME_KEYS, "flcm.frame");
-  const wn: WriteNode = { type: "FRAME" };
+  const wn = mintWriteNode("FRAME");
   compileNodeLocalProps(wn, props, { radius: true, clip: true });
-  wn.layout = buildLayout(props, true);
-  wn.children = Array.isArray(children) ? children : children ? [children] : [];
-  return wn;
+  wn.layout = buildLayout(props, "FRAME", "flcm.frame");
+  // The children array is frozen IN PLACE — the one deliberate exception to the seal's
+  // clone-don't-freeze rule (cloneAndFreeze). A children list is the tree itself, and the
+  // aliasing accident is push-AFTER-frame(): with a silent clone that push builds a node the
+  // author believes has children and renders an empty frame; frozen, the push throws (agent
+  // code runs strict). Reusable specs (a gradient, an effects array) keep the clone rule —
+  // sharing those across nodes is legitimate, appending to a handed-over children list is not.
+  wn.children = Object.freeze(Array.isArray(children) ? children : children ? [children] : []) as WriteChild[];
+  return sealWriteNode(wn);
 }
 
 // The textStyle word compile every text carrier rides — flcm.text's base and an edit delta alike
@@ -472,7 +519,7 @@ export function compileTextContent(content: unknown, base: WriteTextStyle): { te
 function text(content: unknown, props: TextProps = {}): WriteNode {
   props = props ?? {};
   rejectUnknownKeys(props, TEXT_KEYS, "flcm.text");
-  const wn: WriteNode = { type: "TEXT" };
+  const wn = mintWriteNode("TEXT");
   base(wn, props);
   // `color` is a top-level node-level sugar prop (compiles to the text node's fill), NOT part of textStyle —
   // base color lives in `fills` like every other node, and the grouped `textStyle` is the type base only.
@@ -484,9 +531,9 @@ function text(content: unknown, props: TextProps = {}): WriteNode {
   Object.assign(wn, compileTextContent(content, ts));
   // lineClamp "none" at create is the explicit default — no clamp to remove, nothing lands.
   if (cfg.lineClamp != null && cfg.lineClamp !== "none") wn.maxLines = assertLineClamp(cfg.lineClamp, props.width);
-  const layout = buildLayout(props as FrameProps, false);
+  const layout = buildLayout(props as FrameProps, "TEXT", "flcm.text");
   if (Object.keys(layout).length) wn.layout = layout;
-  return wn;
+  return sealWriteNode(wn);
 }
 
 // N's shape gate, shared by create and edit so one author mistake reads one error. "none" is each
@@ -642,12 +689,13 @@ function assertHyperlink(url: unknown): string {
 
 function shape(type: "RECTANGLE" | "ELLIPSE", props: ShapeProps = {}): WriteNode {
   props = props ?? {};
-  rejectUnknownKeys(props, SHAPE_KEYS, type === "RECTANGLE" ? "flcm.rect" : "flcm.ellipse");
-  const wn: WriteNode = { type };
+  const subject = type === "RECTANGLE" ? "flcm.rect" : "flcm.ellipse";
+  rejectUnknownKeys(props, SHAPE_KEYS, subject);
+  const wn = mintWriteNode(type);
   compileNodeLocalProps(wn, props, { radius: type === "RECTANGLE" });
-  const layout = buildLayout(props as FrameProps, false);
+  const layout = buildLayout(props as FrameProps, type, subject);
   if (Object.keys(layout).length) wn.layout = layout;
-  return wn;
+  return sealWriteNode(wn);
 }
 
 function rect(props?: ShapeProps): WriteNode { return shape("RECTANGLE", props); }
@@ -656,7 +704,7 @@ function ellipse(props?: ShapeProps): WriteNode { return shape("ELLIPSE", props)
 function line(props: LineProps = {}): WriteNode {
   props = props ?? {};
   rejectUnknownKeys(props, LINE_KEYS, "flcm.line");
-  const wn: WriteNode = { type: "LINE" };
+  const wn = mintWriteNode("LINE");
   base(wn, props);
   const strokes = compileLineStroke(props);
   if (strokes) wn.strokes = strokes;
@@ -664,9 +712,13 @@ function line(props: LineProps = {}): WriteNode {
   const layout: WriteLayout = { ...(compileLineLength(props) || {}) };
   applyAbsolute(layout, props);
   applyPin(layout, props);
+  // line() is the one constructor that doesn't ride buildLayout (length-only vocabulary), so it
+  // consults the shared authority itself — no rule fires on a length-only layout today, but a
+  // future LINE-keyed rule must not end up edit-only (the asymmetry this module forbids).
+  assertLayoutRealizableForType("LINE", layout, false, "flcm.line");
   if (Object.keys(layout).length) wn.layout = layout;
   if (props.rotation != null) { assertScalarType(props.rotation, "number", "rotation"); wn.rotation = props.rotation; }
-  return wn;
+  return sealWriteNode(wn);
 }
 
 // ---- Vector verbs. Two contracts, deliberately not interchangeable (see ir.ts WriteNode.svg/pathData):
@@ -687,11 +739,12 @@ function svg(markup: unknown, props: SvgProps = {}): WriteNode {
   }
   // After the fill/stroke special-case (its tailored message beats a generic "unknown prop") — reject the rest.
   rejectUnknownKeys(props, SVG_KEYS, "flcm.svg");
-  const wn: WriteNode = { type: "VECTOR", svg: markup };
+  const wn = mintWriteNode("VECTOR");
+  wn.svg = markup;
   base(wn, props);
-  const layout = buildLayout(props as FrameProps, false);
+  const layout = buildLayout(props as FrameProps, "VECTOR", "flcm.svg");
   if (Object.keys(layout).length) wn.layout = layout;
-  return wn;
+  return sealWriteNode(wn);
 }
 
 // flcm.path({ d, ... }) -> a VECTOR node carrying the path data (createVector + vectorPaths at render). Takes
@@ -706,11 +759,12 @@ function path(props: PathProps): WriteNode {
     throw new Error("flcm.path: `d` (SVG path data) must be a non-empty string — got " + JSON.stringify(d) + ".");
   }
   rejectUnknownKeys(props, PATH_KEYS, "flcm.path");
-  const wn: WriteNode = { type: "VECTOR", pathData: d };
+  const wn = mintWriteNode("VECTOR");
+  wn.pathData = d;
   compileNodeLocalProps(wn, props, {}); // fill/stroke/strokeWidth/effects/rotation + base; radius/clip off for a vector
-  const layout = buildLayout(props as FrameProps, false);
+  const layout = buildLayout(props as FrameProps, "VECTOR", "flcm.path");
   if (Object.keys(layout).length) wn.layout = layout;
-  return wn;
+  return sealWriteNode(wn);
 }
 
 // ---- gradient() sugar: structured spec -> typed PaintSpec (no string round-trip). The transform math
@@ -947,13 +1001,18 @@ function render(tree: WriteNode): Promise<{ root: Handle; keyed: Record<string, 
     // Promise.all of image renders.
     async () => {
       if (!tree || typeof tree !== "object" || typeof tree.type !== "string") {
-        throw new Error("flcm.render: expected a node from flcm.frame()/text()/rect()/ellipse()/line() (or a raw WriteNode), got " + JSON.stringify(tree) + ".");
+        throw new Error("flcm.render: expected a node from flcm.frame()/text()/rect()/ellipse()/line()/svg()/path(), got " + JSON.stringify(tree) + ".");
       }
-      // The root has no parent to resolve a percent against, so reject it before the image
-      // round-trip (this check needs no bytes) and before buildNode, which only guards a percent
-      // on a *child*. A percent w/h/x/y belongs on a child, against its parent.
-      if (tree.layout && (tree.layout.percentSize || tree.layout.percentPos)) {
-        throw new Error("flcm: a percent w/h/x/y on the root node has no parent to resolve against — the root node sizes in px. Put the percent on a child, against its parent.");
+      // Authenticate provenance for the WHOLE tree before the resource loads below — a hand-built
+      // node must reject with its own message, not surface as a confusing image/font error after
+      // a wasted host round-trip.
+      assertConstructorBuiltTree(tree);
+      // The root lands on the page, which has no bounded size to resolve "fill" or a percent
+      // against — reject before the image round-trip (this check needs no bytes) and before
+      // buildNode, which only guards a percent on a *child*. The rule is edit's page-parent gate,
+      // shared (assertSizingResolvesAgainstParentFrame), so the two verbs answer identically.
+      if (tree.layout) {
+        assertSizingResolvesAgainstParentFrame(tree.layout, true, "flcm");
       }
       // Settle BOTH before this slot resolves or rejects (hand-rolled: the tsconfig lib pins the
       // QuickJS floor below ES2020's allSettled). A fail-fast Promise.all would release the queue
@@ -988,6 +1047,9 @@ function render(tree: WriteNode): Promise<{ root: Handle; keyed: Record<string, 
       // Build the tree (percent children land at a provisional size), then fold every percent/anchor into
       // pixels against each parent's now-realized size in one post-walk pass (bridge.resolvePercents).
       const root = buildNode(tree, ctx);
+      // The root's own position words (absolute x/y, pin, anchor) apply against the page — the
+      // walk above only positions CHILDREN, and edit applies the same words to a page child.
+      if (tree.layout) placeRootOnPage(root, tree.layout, ctx);
       resolvePercents(ctx);
       // Handles are minted only now: geometry settles once the whole tree is laid out (bridge.settleHandles).
       return settleHandles(root, ctx.keyed);

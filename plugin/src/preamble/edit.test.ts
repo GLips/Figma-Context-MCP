@@ -377,7 +377,7 @@ test("container words on a frame that isn't (or won't be) row/column reject; nam
   await assert.rejects(edit("free", { layout: { gap: 24 } }), /need an auto-layout/);
   // Killing auto-layout and spacing it in the same breath is a contradiction — reject that too.
   const row = await renderKeyedRowFrame();
-  await assert.rejects(edit("card", { layout: { mode: "none", gap: 24 } }), /won't be one after mode/);
+  await assert.rejects(edit("card", { layout: { mode: "none", gap: 24 } }), /leaves this frame free-form/);
   assert.equal(row.layoutMode, "HORIZONTAL");
   await edit("free", { layout: { mode: "row", gap: 24 } });
   assert.equal(free.layoutMode, "HORIZONTAL");
@@ -569,15 +569,25 @@ test("a plain-string `content` on a MIXED text succeeds, preloading EVERY range 
   figma.fontLoads.length = 0;
   await edit("label", { content: "flat" });
   assert.equal(node.characters, "flat");
-  // Verified live 2026-08-08: a whole-content replacement RE-UNIFORMS the text (no positional
-  // carry-over of old range styling). Base and leading-run styles coincide here (char 0 is
-  // unstyled), so this assertion holds under either candidate rule for WHICH style survives —
-  // the bold-first-span case is deliberately unpinned until a live probe settles it.
+  // Verified live 2026-08-08: a whole-content replacement collapses the text to its LEADING
+  // run's style (no positional carry-over of old range styling). Char 0 is unstyled here, so
+  // the collapse lands on Regular; the leading-BOLD case is pinned by the next test.
   assert.deepEqual(node.fontName, { family: "Inter", style: "Regular" });
   assert.deepEqual(figma.fontLoads, [
     { family: "Inter", style: "Regular" },
     { family: "Inter", style: "Bold" },
   ]);
+});
+
+test("a content replacement collapses a MIXED text to its LEADING run's style — not the base", async () => {
+  // The disambiguating live repro (2026-08-08): leading run BOLD, so base-style-wins and
+  // leading-run-wins predict different results — live came back whole-node Bold. A mock falling
+  // back to the base would pass the unstyled-first-char test above and diverge from Figma on
+  // exactly the fact the mixed-font gates key on.
+  const node = await renderKeyedText("**bold** plain tail");
+  assert.equal(node.fontName, figma.mixed);
+  await edit("label", { content: "0123456789 replacement" });
+  assert.deepEqual(node.fontName, { family: "Inter", style: "Bold" });
 });
 
 test("a styled run in `content` on a MIXED text has no base family — rejects instead of landing in the default", async () => {

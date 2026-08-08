@@ -17,6 +17,10 @@
 // noise without safety.
 
 import { WriteType, WriteNode, WriteProps, WriteLayout, Justify, Align, TextAlign, TextDecoration, Sizing, Identity, Handle, PaintSpec, ImageSpec, namesFontIdentity } from "./ir.js";
+import {
+  assertLayoutRealizableForType, assertPercentResolvable, assertSizingResolvesAgainstParentFrame, assertNoParentRelativeWordsUnderGrid, ParentFlowFacts,
+  assertTextFillHeightInFlow,
+} from "./layout-legality.js";
 import { toFigmaPaint } from "./paint.js";
 import { toFigmaEffects } from "./effects.js";
 import { resolveFont, resolveFontStrict, FontMap } from "./fonts.js";
@@ -217,9 +221,9 @@ function applyContainer(f: any, layout: WriteLayout): void {
     const e = layout.padding;
     f.paddingTop = e.top; f.paddingRight = e.right; f.paddingBottom = e.bottom; f.paddingLeft = e.left;
   }
-  // Unrealizable justify words are rejected at the constructor gate (flcm.ts mapLayoutWord), so for typed
-  // input JUSTIFY is total and "MIN" never fires — it's only a sane default for a hand-built raw WriteNode.
-  if (layout.justifyContent) f.primaryAxisAlignItems = JUSTIFY[layout.justifyContent] || "MIN";
+  // Unrealizable justify words are rejected at the constructor gate (flcm.ts mapLayoutWord), so
+  // JUSTIFY is total over everything that can arrive here.
+  if (layout.justifyContent) f.primaryAxisAlignItems = JUSTIFY[layout.justifyContent];
   if (layout.alignItems) {
     // "stretch" has no counterAxisAlignItems enum — it's synthesized per-child (see the walk).
     // Writing any OTHER value clears every child mark: container-stretch intent is never stored
@@ -463,8 +467,10 @@ function clearChildFlowFill(parent: any, child: any, layout: WriteLayout): void 
 
 // THE sizing home for leaf nodes (no own auto-layout) — create's builders and edit's delta path
 // both land here, so the per-kind rules can't fork: TEXT's wrap handshake (a controlled width
-// wraps; "hug" restores grow-sideways; height is ignored exactly as fixed-height text always was)
-// and LINE's zero height. Generic shapes resize only the named dims, floored at Figma's 0.01.
+// wraps; "hug" restores grow-sideways) and LINE's zero height. Generic shapes resize only the
+// named dims, floored at Figma's 0.01. The TEXT branch reads no height ON PURPOSE: an authored TEXT height rejects upstream
+// (layout-legality.ts assertLayoutRealizableForType, consulted by buildLayout and edit alike),
+// so none reaches here; the branch shape just makes ignoring it structural.
 function applyLeafSize(node: any, layout: WriteLayout): void {
   const sizing = layout.sizing || {};
   const dims = layout.dimensions || {};
@@ -484,25 +490,8 @@ function applyLeafSize(node: any, layout: WriteLayout): void {
   }
 }
 
-// Reject the ONE percent case a runtime read can't break: an IN-FLOW `%`-SIZE child of an auto-layout
-// parent that HUGS the same axis. The child's size both defines the hug and depends on it — a true cycle,
-// so fail loud (ADR-0003) rather than snapshot a bogus number. Everything else resolves against the
-// parent's realized size (see resolvePercentLayout): a fixed/`fill` auto parent, ANY free-form parent,
-// and an ABSOLUTE child (out of flow — it doesn't feed the hug, so it sizes against the hug's realized
-// value like a percent position does).
-//
-// Takes the parent as BOOLEAN FACTS, not a node or a spec, because the two callers know them from
-// different places: the create walk asks before the child (or the parent's sizing modes) exists, so it
-// answers from the authored spec; the edit path answers from the live flags (isRowColumnAutoLayout +
-// convertSizing of layoutSizingHorizontal/Vertical). Reading a parent here would break the first caller.
-function assertPercentResolvable(childLayout: WriteLayout, parentIsAutoLayout: boolean, parentHugsW: boolean, parentHugsH: boolean): void {
-  const ps = childLayout.percentSize;
-  if (!ps) return;
-  if (!parentIsAutoLayout || childLayout.position === "absolute") return;
-  if ((ps.width != null && parentHugsW) || (ps.height != null && parentHugsH)) {
-    throw new Error('flcm: a percent w/h ("N%") on an in-flow child of an auto-layout (row/column) parent that HUGS that axis is a cycle — the child\'s size both sets and depends on the parent\'s. Give the parent a fixed or "fill" size on that axis, use "fill"/"hug" on the child, or lift it out with `absolute`.');
-  }
-}
+// (The layout legality rules — percent-hug cycle, page-parent fill/percent, TEXT fill-height,
+// per-type realizability — live in layout-legality.ts, the one home both verbs consult.)
 
 // Post-walk pass: fold every collected percent size / percent position / anchor into concrete pixels
 // against each parent's REALIZED size. Runs after the whole tree is built and appended, so a `fill`/`hug`
@@ -599,7 +588,7 @@ export function applyLiveNodeLayout(node: any, wl: WriteLayout): void {
 // modes: an AUTO-mode axis that the grandparent stretches reports FILL — the parent's size is
 // realized from above, the child's percent resolves against it, and no cycle exists. Reading
 // primary/counterAxisSizingMode here would reject that valid case as a hug.
-function parentHugFacts(parent: any): { parentIsAuto: boolean; hugW: boolean; hugH: boolean } {
+function parentHugFacts(parent: any): ParentFlowFacts {
   const parentIsAuto = !!parent && isRowColumnAutoLayout(parent);
   if (!parentIsAuto) return { parentIsAuto: false, hugW: false, hugH: false };
   return {
@@ -609,62 +598,24 @@ function parentHugFacts(parent: any): { parentIsAuto: boolean; hugW: boolean; hu
   };
 }
 
-// The edit path's prepare-phase gate (before the entry seal) for layout words that only mean
-// something against the LIVE tree —
-// every reject fires before the first canvas write. The live facts a pure compile can't see:
-//   - "fill"/"N%" resolve against a parent's bounded size, and a PAGE has none (page.width doesn't
-//     exist — the resize would be NaN, and Figma's throw wouldn't name the real mistake);
-//   - "hug" sizes to measured content, which only an auto-layout container or TEXT has — anywhere
-//     else it would silently mean nothing (create tolerates that historic looseness; edit rejects);
-//   - a TEXT's own height follows content + wrap (create silently drops an authored text height —
-//     a pre-existing create quirk — but an edit accepting one would mint a no-op undo step);
-//   - container words are inert without auto-layout (applyContainer gates on the live mode), so a
-//     gap-only delta on a free-form or grid frame must reject, not silently commit;
-//   - the hug-cycle percent guard needs the child's EFFECTIVE flow position: a delta rarely names
-//     `absolute`, so an already-ABSOLUTE child threads its live positioning — out of flow it
-//     doesn't feed the parent's hug, and the cycle can't form.
+// The edit path's prepare-phase gate (before the entry seal) — every reject fires before the
+// first canvas write. The RULES all live in layout-legality.ts (the one authority both verbs
+// consult, so they cannot drift); this function's job is purely to supply the LIVE facts the
+// pure rules can't read: the page-shaped parent, the delta-or-live container mode, the child's
+// EFFECTIVE flow position (a delta rarely names `absolute`, so an already-ABSOLUTE child threads
+// its live positioning — out of flow it doesn't feed the parent's hug, and the cycle can't form).
 export function assertLayoutDeltaResolvable(node: any, wl: WriteLayout): void {
   const parent = node.parent;
-  const s = wl.sizing || {};
-  if (parent && parent.type === "PAGE" && (s.horizontal === "fill" || s.vertical === "fill" || wl.percentSize || wl.percentPos)) {
-    throw new Error('flcm.edit: "fill" and "N%" resolve against a parent frame, and this node\'s parent is the page — a page has no bounded size. Use pixel dimensions, or move the node into a frame first.');
+  if (parent && parent.type === "PAGE") {
+    assertSizingResolvesAgainstParentFrame(wl, false, "flcm.edit");
   }
-  const willBeAuto = wl.mode === "row" || wl.mode === "column" || (wl.mode == null && isRowColumnAutoLayout(node));
-  if (s.horizontal === "hug" || s.vertical === "hug") {
-    if (!willBeAuto && node.type !== "TEXT") {
-      throw new Error('flcm.edit: "hug" sizes to content, which only an auto-layout (row/column) container or text can measure — a ' + node.type + " without auto-layout has no content size. Use pixel dimensions, or set layout: { mode: \"row\"|\"column\" } in the same edit.");
-    }
-  }
-  if (node.type === "TEXT" && (s.vertical === "fixed" || s.vertical === "hug")) {
-    throw new Error("flcm.edit: a TEXT's height follows its content and wrap — edit `width` (the text re-wraps and the height follows), or use height: \"fill\" inside an auto-layout parent.");
-  }
-  // TEXT height:"fill" is realized by the parent's flow (layoutGrow/STRETCH). Out of flow —
-  // free-form parent, or absolute — it would fall to coverChild's resize, which a text node in
-  // WIDTH_AND_HEIGHT ignores: the height silently doesn't stick, so reject instead.
-  if (node.type === "TEXT" && s.vertical === "fill") {
-    const willBeAbsolute = wl.position === "absolute" || (wl.position !== "none" && node.layoutPositioning === "ABSOLUTE");
-    if (!parent || !isRowColumnAutoLayout(parent) || willBeAbsolute) {
-      throw new Error('flcm.edit: a TEXT can only fill its height as an in-flow child of a row/column auto-layout parent — out of flow its height follows content. Edit `width`, or return it to flow first.');
-    }
-  }
-  if (wl.gap != null || wl.padding || wl.justifyContent || wl.alignItems) {
-    if (!willBeAuto) {
-      throw new Error('flcm.edit: layout gap/padding/justifyContent/alignItems need an auto-layout (row/column) container — this frame ' + (wl.mode === "none" ? 'won\'t be one after mode: "none"' : "isn't one") + '. Name layout: { mode: "row" } (or "column") in the same edit.');
-    }
-  }
-  // GRID is outside the authored context matrix (see isRowColumnAutoLayout's note): flcm can't
-  // create one, and its cells' semantics are unassigned — so the PARENT-RELATIVE words reject
-  // under a grid parent rather than silently landing with free-form semantics ("fill" would cover
-  // the whole grid frame). Node-local words (fixed px, "hug", own container props) stay legal.
-  if (parent && parent.layoutMode === "GRID") {
-    if (s.horizontal === "fill" || s.vertical === "fill" || wl.percentSize || wl.percentPos || wl.position || wl.pin || wl.anchor) {
-      throw new Error('flcm.edit: this node\'s parent is a GRID container, which the edit vocabulary doesn\'t cover — "fill", percents, absolute, and pin have no assigned meaning there. Use fixed pixel sizes, or edit the parent.');
-    }
-  }
+  assertLayoutRealizableForType(node.type, wl, isRowColumnAutoLayout(node), "flcm.edit");
+  const willBeAbsolute = wl.position === "absolute" || (wl.position !== "none" && node.layoutPositioning === "ABSOLUTE");
+  assertTextFillHeightInFlow(node.type, wl, !!parent && isRowColumnAutoLayout(parent), willBeAbsolute, "flcm.edit");
+  assertNoParentRelativeWordsUnderGrid(wl, !!parent && parent.layoutMode === "GRID", "flcm.edit");
   if (wl.percentSize) {
-    const facts = parentHugFacts(parent);
     const position = wl.position != null ? wl.position : node.layoutPositioning === "ABSOLUTE" ? "absolute" : undefined;
-    assertPercentResolvable({ ...wl, position }, facts.parentIsAuto, facts.hugW, facts.hugH);
+    assertPercentResolvable({ ...wl, position }, parentHugFacts(parent), "flcm.edit");
   }
 }
 
@@ -698,7 +649,8 @@ function buildFrame(wn: WriteNode, ctx: RenderCtx): any {
     // Fail loud on the one unresolvable percent (in-flow %-size against a hugging auto-layout parent)
     // before building the node, so a bad spec doesn't orphan a live node on the canvas. Every other
     // percent/anchor is recorded and resolved in the post-walk pass (resolvePercents) against realized size.
-    assertPercentResolvable(cl, isAutoParent, parentHugsW, parentHugsH);
+    assertPercentResolvable(cl, { parentIsAuto: isAutoParent, hugW: parentHugsW, hugH: parentHugsH }, "flcm");
+    assertTextFillHeightInFlow(rawSpec.type, cl, isAutoParent, cl.position === "absolute", "flcm");
     const child = buildNode(rawSpec, ctx);
     f.appendChild(child);
     if (cl.percentSize || cl.percentPos || (cl.position === "absolute" && cl.anchor)) {
@@ -716,6 +668,12 @@ function buildFrame(wn: WriteNode, ctx: RenderCtx): any {
       applyConstraints(child, rawSpec.layout);
     } else {
       applyChildFill(f, child, cl, crossStretch);
+      // An explicit pin is STORED even in flow — constraints are inert on an in-flow auto-layout
+      // child, but they govern the moment it leaves the flow, and edit's applyPinDelta writes the
+      // word unconditionally. applyPinDelta, NOT applyConstraints: in flow, fill rides layoutGrow,
+      // so deriving the unnamed axis from sizing intent (fill→STRETCH) would store a constraint
+      // the author never spoke — and one the same pin through edit would leave at the default.
+      if (cl.pin) applyPinDelta(child, cl.pin);
     }
   }
 
@@ -911,10 +869,28 @@ export function buildNode(wn: WriteNode, ctx: RenderCtx): any {
   if (!build) {
     throw new Error('flcm: cannot create a "' + wn.type + '" node — createable types are ' + Object.keys(BUILDERS).join(", ") + ".");
   }
+  // Provenance was authenticated tree-wide in render's PREPARE (assertConstructorBuiltTree),
+  // before any resource load — and the constructors deep-freeze their output, so the tree apply
+  // walks here is byte-for-byte the one prepare authenticated. No re-check per node.
   const node = build(wn, ctx);
   applySceneProps(node, wn);
   stampKey(node, wn, ctx);
   return node;
+}
+
+// The root is the page's child, and the page is a free-form parent — so the SAME child-side
+// appliers run for it that buildFrame runs for a free-form child: absolute x/y land as canvas
+// coordinates, an explicit pin is stored (inert until the root is dragged into a frame, like any
+// page child's constraints), an anchor rides the pending pass. Without this, position words on
+// the root would validate fine and silently not land — while edit applies the same words to a
+// page child, the exact per-verb divergence layout-legality.ts exists to forbid. ("fill" and
+// percents on the root reject upstream in render's page-parent check; they never reach here.)
+export function placeRootOnPage(root: any, wl: WriteLayout, ctx: RenderCtx): void {
+  if (wl.position === "absolute") {
+    applyChildPosition(figma.currentPage, root, wl);
+    if (wl.anchor) ctx.pending.push({ node: root, layout: wl, parent: figma.currentPage });
+  }
+  if (wl.pin) applyConstraints(root, wl);
 }
 
 // The props every SceneNode carries (name/blendMode/rotation/visible/locked), applied once after the

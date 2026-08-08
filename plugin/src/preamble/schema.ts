@@ -104,12 +104,12 @@ const SIZE_FIELDS = {
   // literals in the inferred type — hence an explicit .meta label to keep the doc precise.
   width: prop(
     z.union([z.number(), z.string()]),
-    'Width. A number is fixed px; "N%" is a percent of the parent on this axis (free-form parent with a fixed size only). "fill" stretches to the parent (needs an auto-layout parent); "hug" shrinks to content. Not a "px" string.',
+    'Width. A number is fixed px; "N%" is a percent of the parent on this axis (free-form parent with a fixed size only). "fill" stretches to the parent (any parent frame — rejected on the root, whose parent is the page); "hug" shrinks to content, which only a row/column container or text can measure (rejected elsewhere). Not a "px" string.',
     'number | "fill" | "hug" | "N%"',
   ),
   height: prop(
     z.union([z.number(), z.string()]),
-    "Height. Same rules as width.",
+    'Height. Same rules as width — except on TEXT, whose height follows its content and wrap: set `width` (the height follows) or use "fill" in-flow; a fixed, "hug", or percent height is rejected.',
     'number | "fill" | "hug" | "N%"',
   ),
   absolute: prop(
@@ -131,7 +131,7 @@ const SIZE_FIELDS = {
   ),
   pin: prop(
     z.custom<{ x?: PinX; y?: PinY } | "none">(),
-    'Constraint override — how this node responds when its parent resizes. Overrides the auto choice (w:"fill"→stretch, "N%"→scale, percent absolute position→center, else pinned to the near edge). x: "left"|"center"|"right"|"stretch"|"scale"; y: "top"|"center"|"bottom"|"stretch"|"scale". Honored for a child of a free-form parent and for any `absolute` child; ignored on an in-flow auto-layout child (which reflows via fill/hug instead). In flcm.edit, "none" on an axis (or the whole prop) restores the default near-edge pin.',
+    'Constraint override — how this node responds when its parent resizes. Overrides the auto choice (w:"fill"→stretch, "N%"→scale, percent absolute position→center, else pinned to the near edge). x: "left"|"center"|"right"|"stretch"|"scale"; y: "top"|"center"|"bottom"|"stretch"|"scale". Honored for a child of a free-form parent and for any `absolute` child; inert on an in-flow auto-layout child (which reflows via fill/hug instead) — stored, and governs if the node later leaves the flow. In flcm.edit, "none" on an axis (or the whole prop) restores the default near-edge pin.',
     '{ x?, y? } | "none" — x: left/center/right/stretch/scale/none, y: top/center/bottom/stretch/scale/none',
   ),
 };
@@ -151,7 +151,7 @@ const APPEARANCE_FIELDS = {
 // realizable subset of `justify-content`/`align-items`; the sugar boundary (flcm.ts) maps them to the
 // terse render intent, and rejects any valid-CSS-but-unrealizable spelling (space-around/-evenly) loud.
 const LAYOUT_FIELDS = {
-  mode: prop(z.enum(["row", "column", "none"]), 'Auto-layout direction. Default "none" (free-form; gap/padding/justifyContent/alignItems then do nothing). flcm cannot author grid — a "grid" attempt fails loud.'),
+  mode: prop(z.enum(["row", "column", "none"]), 'Auto-layout direction. Default "none" (free-form; gap/padding/justifyContent/alignItems then reject loud — name mode: "row"|"column" to use them). flcm cannot author grid — a "grid" attempt fails loud.'),
   gap: metric("Space between children."),
   padding: prop(
     z.custom<PadInput>(),
