@@ -69,7 +69,7 @@ const AUTO_LAYOUT_MODES = ["HORIZONTAL", "VERTICAL", "GRID"];
 // assigned its cells — when it does, this predicate is where the rule lands, not six inlined
 // comparisons. AUTO_LAYOUT_MODES above differs on purpose: for read-side geometry a GRID parent DOES
 // place its children, so left/top stay omitted.
-export function isRowColumnAutoLayout(node: any): boolean {
+function isRowColumnAutoLayout(node: any): boolean {
   return node.layoutMode === "HORIZONTAL" || node.layoutMode === "VERTICAL";
 }
 
@@ -165,11 +165,12 @@ function imagePaint(spec: ImageSpec, ctx: RenderResources): Paint {
 // can tell a stand-in from a real asset and recover its src — the one content case whose semantics don't
 // survive geometry alone. Only the fill (a node's background) is recorded; an image stroke is exotic.
 function stampImageData(node: any, wn: WriteProps): void {
-  const fill = wn.fills && wn.fills[0];
-  if (!fill) return; // no fill in this write — whatever provenance exists still describes the live paint
-  if (fill.kind !== "image") {
-    // An edit replaced an image fill with a solid/gradient: the provenance no longer describes the
-    // live paint, so wipe it ("" deletes the pluginData entry) instead of leaving a stale url.
+  if (!wn.fills) return; // no fill in this write — whatever provenance exists still describes the live paint
+  const fill = wn.fills[0];
+  if (!fill || fill.kind !== "image") {
+    // An edit replaced an image fill with a solid/gradient — or cleared it (fill:"none" compiles to
+    // an empty array): the provenance no longer describes the live paint, so wipe it ("" deletes
+    // the pluginData entry) instead of leaving a stale url.
     node.setPluginData("flcm/image", "");
     return;
   }
@@ -181,8 +182,10 @@ function stampImageData(node: any, wn: WriteProps): void {
 // (omitted fill -> transparent) live in the builders, NOT here — so an edit patch through this applier
 // can never turn key-absence into a write.
 export function applyPaint(node: any, wn: WriteProps, ctx: RenderResources): void {
-  if (wn.fills && wn.fills.length) node.fills = [paintOf(wn.fills[0], ctx)];
-  if (wn.strokes && wn.strokes.length) node.strokes = [paintOf(wn.strokes[0], ctx)];
+  // A PRESENT-but-empty array is the compiled removal word ("none") — write the clear; skipping
+  // empties would make removal an unspeakable intent (the ADR-0003 silent no-op).
+  if (wn.fills) node.fills = wn.fills.length ? [paintOf(wn.fills[0], ctx)] : [];
+  if (wn.strokes) node.strokes = wn.strokes.length ? [paintOf(wn.strokes[0], ctx)] : [];
   if (wn.strokeWeight != null && "strokeWeight" in node) node.strokeWeight = wn.strokeWeight;
   if (wn.borderRadius != null && "cornerRadius" in node) node.cornerRadius = wn.borderRadius;
   if (wn.effects && "effects" in node) node.effects = toFigmaEffects(wn.effects);
@@ -196,10 +199,18 @@ export function applyPaint(node: any, wn: WriteProps, ctx: RenderResources): voi
 // auto-layout OFF (children convert per Figma's own semantics; canvas is truth). The container props
 // (gap/pad/justify/align) gate on the LIVE mode, not the spec's: a delta naming only `gap` lands on
 // an already-auto frame instead of silently skipping — spec-gating was create-only truth.
-export function applyContainer(f: any, layout: WriteLayout): void {
+function applyContainer(f: any, layout: WriteLayout): void {
   const mode = layout.mode;
-  if (mode === "row" || mode === "column") f.layoutMode = mode === "row" ? "HORIZONTAL" : "VERTICAL";
-  else if (mode === "none") f.layoutMode = "NONE";
+  if (mode === "row" || mode === "column") {
+    const next = mode === "row" ? "HORIZONTAL" : "VERTICAL";
+    // Any direction-establishing write — row↔column flip, or NONE→row/column over children still
+    // carrying marks from an earlier auto-layout life — re-aims the stored flow marks: layoutGrow
+    // and STRETCH keep meaning "primary"/"counter", and those axes just moved. Clear BOTH under the
+    // OLD mode before the write. A stated rule, not a derivation; create never triggers it (a
+    // fresh frame has no children when its mode is set).
+    if (f.layoutMode !== next) clearContainerFlowMarks(f);
+    f.layoutMode = next;
+  } else if (mode === "none") f.layoutMode = "NONE";
   if (!isRowColumnAutoLayout(f)) return; // gap/pad/align are inert without auto-layout
   if (layout.gap != null) f.itemSpacing = layout.gap;
   if (layout.padding) {
@@ -209,7 +220,65 @@ export function applyContainer(f: any, layout: WriteLayout): void {
   // Unrealizable justify words are rejected at the constructor gate (flcm.ts mapLayoutWord), so for typed
   // input JUSTIFY is total and "MIN" never fires — it's only a sane default for a hand-built raw WriteNode.
   if (layout.justifyContent) f.primaryAxisAlignItems = JUSTIFY[layout.justifyContent] || "MIN";
-  if (layout.alignItems && ALIGN[layout.alignItems]) f.counterAxisAlignItems = ALIGN[layout.alignItems];
+  if (layout.alignItems) {
+    // "stretch" has no counterAxisAlignItems enum — it's synthesized per-child (see the walk).
+    // Writing any OTHER value clears every child mark: container-stretch intent is never stored
+    // (not by Figma, not by us), so "was stretch" is unknowable and the clear is unconditional.
+    if (layout.alignItems === "stretch") setContainerStretchMarks(f);
+    else {
+      clearContainerStretchMarks(f);
+      if (ALIGN[layout.alignItems]) f.counterAxisAlignItems = ALIGN[layout.alignItems];
+    }
+  }
+}
+
+// The edit-side semantics of alignItems:"stretch" — create synthesizes the per-child marks at build
+// (applyChildFill's crossStretch), so at create time this walks zero children and the per-child path
+// does the work; at edit time the children exist and this re-synthesizes over them. Setting marks
+// EVERY in-flow child (a child that must keep a fixed counter size gets its own fixed edit after) —
+// Figma state cannot distinguish a container-stretched child from one that asked for counter-axis
+// fill (create deliberately routes both through fillDim), so the rule is stated, not derived. The
+// hug-beats-stretch pin fillDim installs on a child whose own primary axis is the parent's counter
+// axis is set alongside.
+function setContainerStretchMarks(f: any): void {
+  const pIsRow = f.layoutMode === "HORIZONTAL";
+  for (const child of f.children || []) {
+    if (child.layoutPositioning === "ABSOLUTE") continue;
+    child.layoutAlign = "STRETCH";
+    if (isRowColumnAutoLayout(child) && (child.layoutMode === "HORIZONTAL") !== pIsRow) child.primaryAxisSizingMode = "FIXED";
+  }
+}
+
+// The inverse under the SAME stated rule: a non-stretch alignItems clears EVERY counter-axis
+// STRETCH mark (container-stretch intent is never stored, so "was stretch" is unknowable), and
+// lifts the crossing-child hug-beats-stretch pin it installed. ABSOLUTE children included —
+// unlike the SET walk, which skips them (stretch never governs out-of-flow), the CLEAR must reach
+// a mark parked on an absolute child, or absolute:"none" later resurrects a stretch the container
+// no longer asks for.
+function clearContainerStretchMarks(f: any): void {
+  const pIsRow = f.layoutMode === "HORIZONTAL";
+  for (const child of f.children || []) {
+    if (child.layoutAlign !== "STRETCH") continue;
+    child.layoutAlign = "INHERIT";
+    if (isRowColumnAutoLayout(child) && (child.layoutMode === "HORIZONTAL") !== pIsRow) child.primaryAxisSizingMode = "AUTO";
+  }
+}
+
+// Direction-change cleanup (see applyContainer's mode write): both flow marks — layoutGrow along
+// the old primary AND STRETCH along the old counter — go, on EVERY child, ABSOLUTE ones included:
+// a mark parked on an out-of-flow child is inert now but would rejoin the flow via absolute:"none"
+// meaning the NEW direction's axis. The crossing-child pin is lifted only when the OLD mode names
+// a real direction; under NONE that FIXED is indistinguishable from an authored fixed size, so it
+// stays (the same live-state ambiguity that makes the stretch rules stated, not derived).
+function clearContainerFlowMarks(f: any): void {
+  const oldIsAuto = isRowColumnAutoLayout(f);
+  const pIsRow = f.layoutMode === "HORIZONTAL";
+  for (const child of f.children || []) {
+    child.layoutGrow = 0;
+    if (child.layoutAlign !== "STRETCH") continue;
+    child.layoutAlign = "INHERIT";
+    if (oldIsAuto && isRowColumnAutoLayout(child) && (child.layoutMode === "HORIZONTAL") !== pIsRow) child.primaryAxisSizingMode = "AUTO";
+  }
 }
 
 // Own-axis sizing, applied AFTER children so a `hug` axis measures real content. Maps the IR's
@@ -218,7 +287,7 @@ export function applyContainer(f: any, layout: WriteLayout): void {
 // at create time applyContainer already set layoutMode so the two agree, and an edit delta naming only
 // sizing carries no mode at all. Presence-preserving per axis — an axis the spec doesn't name keeps
 // its live sizing mode; the fresh-frame hug default is the BUILDER's to inject (see buildFrame).
-export function applyOwnSize(f: any, layout: WriteLayout): void {
+function applyOwnSize(f: any, layout: WriteLayout): void {
   const sizing = layout.sizing || {};
   const dims = layout.dimensions || {};
   const isAuto = isRowColumnAutoLayout(f);
@@ -257,7 +326,7 @@ export function applyOwnSize(f: any, layout: WriteLayout): void {
 // `crossStretch` is a parameter because container-level stretch intent is never stored — not by
 // Figma, not by us — so only the caller knows it (create reads the authored alignItems; edit's
 // stretch child-walk passes its own verdict).
-export function applyChildFill(parent: any, child: any, layout: WriteLayout, crossStretch: boolean): void {
+function applyChildFill(parent: any, child: any, layout: WriteLayout, crossStretch: boolean): void {
   const s = layout.sizing || {};
   const pIsRow = parent.layoutMode === "HORIZONTAL";
   const fillDim = function (dim: string) {
@@ -287,7 +356,7 @@ export function applyChildFill(parent: any, child: any, layout: WriteLayout, cro
 // fill is the natural full-bleed cover / scrim), and any child of a FREE-FORM parent (no auto-layout to
 // grow against). Run once at append (against the parent's provisional hug size) and again after
 // applyOwnSize gives the parent its final size.
-export function coverChild(parent: any, child: any, layout: WriteLayout): void {
+function coverChild(parent: any, child: any, layout: WriteLayout): void {
   const s = layout.sizing || {};
   if (s.horizontal !== "fill" && s.vertical !== "fill") return;
   if (isRowColumnAutoLayout(child)) {
@@ -306,7 +375,13 @@ export function coverChild(parent: any, child: any, layout: WriteLayout): void {
 
 // Lift an absolute child out of an auto-layout parent's flow (so x/y are honored, it can overlap
 // siblings, and it extends past a clip) and apply its location. Outside auto-layout, x/y are native.
-export function applyChildPosition(parent: any, child: any, layout: WriteLayout): void {
+// position:"none" (edit's absolute:"none") is the inverse: the child rejoins the flow and the
+// layout re-places it — in a free-form parent there is no flow to rejoin, so it's inert there.
+function applyChildPosition(parent: any, child: any, layout: WriteLayout): void {
+  if (layout.position === "none") {
+    if ("layoutPositioning" in child) child.layoutPositioning = "AUTO";
+    return;
+  }
   if (layout.position !== "absolute") return;
   if (isRowColumnAutoLayout(parent)) child.layoutPositioning = "ABSOLUTE";
   if (typeof layout.left === "number") child.x = layout.left;
@@ -316,8 +391,10 @@ export function applyChildPosition(parent: any, child: any, layout: WriteLayout)
 // Figma's per-axis constraint enum keyed by the author's directional `pin` (ir.ts PinX/PinY). Two maps
 // because the axis-neutral words (center/stretch/scale) sit alongside axis-specific edges (left/right on x,
 // top/bottom on y). This terse→enum mapping is the bridge's to own, like JUSTIFY/ALIGN above.
-const PIN_H: Record<string, string> = { left: "MIN", center: "CENTER", right: "MAX", stretch: "STRETCH", scale: "SCALE" };
-const PIN_V: Record<string, string> = { top: "MIN", center: "CENTER", bottom: "MAX", stretch: "STRETCH", scale: "SCALE" };
+// "none" → MIN: clearing a pin restores Figma's default (near-edge). The auto-derived constraint
+// create chose isn't stored anywhere live, so the default is the stated inverse, not a recovery.
+const PIN_H: Record<string, string> = { left: "MIN", center: "CENTER", right: "MAX", stretch: "STRETCH", scale: "SCALE", none: "MIN" };
+const PIN_V: Record<string, string> = { top: "MIN", center: "CENTER", bottom: "MAX", stretch: "STRETCH", scale: "SCALE", none: "MIN" };
 
 // Derive one axis's Figma constraint from the child's ORIGINAL size/position intent, so a resized free-form
 // parent reflows it sensibly: fill→STRETCH (grows with the parent), a percent size→SCALE (scales
@@ -337,7 +414,7 @@ function axisConstraint(sizing: Sizing | undefined, percentSize: number | undefi
 // inert on it). Keys off the percent* / sizing INTENT (percentSize→SCALE, percentPos→CENTER, fill→STRETCH),
 // which is why percent resolution never mutates the layout in place — the intent stays readable here even
 // though the live node has already been resized to a fixed px by resolvePercents.
-export function applyConstraints(child: any, rawLayout: WriteLayout | undefined): void {
+function applyConstraints(child: any, rawLayout: WriteLayout | undefined): void {
   if (!("constraints" in child)) return; // an exotic node without the constraint mixin
   const l = rawLayout || {};
   const sizing = l.sizing || {};
@@ -348,6 +425,63 @@ export function applyConstraints(child: any, rawLayout: WriteLayout | undefined)
     horizontal: axisConstraint(sizing.horizontal, pSize.width, pPos.x, pin.x, PIN_H),
     vertical: axisConstraint(sizing.vertical, pSize.height, pPos.y, pin.y, PIN_V),
   };
+}
+
+// Edit-side constraint delta, presence-preserving per axis: applyConstraints above derives and
+// writes BOTH axes from create-time intent, so an edit naming only pin.x would silently reset
+// pin.y — this reads the untouched axis and re-writes it unchanged instead.
+// Deliberately NEVER re-derives constraints from a delta's size/position words the way create's
+// applyConstraints does (fill→STRETCH, "N%"→SCALE): a live node may carry an authored pin, and a
+// width edit that silently rewrote it would clobber intent the delta never spoke. Under edit,
+// only an explicit `pin` word touches constraints.
+function applyPinDelta(child: any, pin: NonNullable<WriteLayout["pin"]>): void {
+  if (!("constraints" in child)) return; // an exotic node without the constraint mixin
+  const cur = child.constraints;
+  child.constraints = {
+    horizontal: pin.x != null ? PIN_H[pin.x] : cur.horizontal,
+    vertical: pin.y != null ? PIN_V[pin.y] : cur.vertical,
+  };
+}
+
+// The unset inverse of applyChildFill — create only ever SETS the flow-fill marks, so edit adds the
+// deliberate reverse: an axis explicitly re-sized to fixed/hug clears the mark fill installed there
+// (layoutGrow along the parent's primary axis, layoutAlign STRETCH on its counter), or the old fill
+// keeps governing and the new size is a lie. The hug-beats-stretch primary-axis pin fillDim
+// installed is NOT lifted here — applyOwnSize runs after and maps the named axis's sizing onto the
+// child's own mode, which is exactly that lift. Presence-preserving: only axes the delta names.
+function clearChildFlowFill(parent: any, child: any, layout: WriteLayout): void {
+  const s = layout.sizing || {};
+  const pIsRow = parent.layoutMode === "HORIZONTAL";
+  const clearDim = (dim: "width" | "height", val: Sizing | undefined): void => {
+    if (val !== "fixed" && val !== "hug") return;
+    if ((dim === "width") === pIsRow) child.layoutGrow = 0;
+    else if (child.layoutAlign === "STRETCH") child.layoutAlign = "INHERIT";
+  };
+  clearDim("width", s.horizontal);
+  clearDim("height", s.vertical);
+}
+
+// THE sizing home for leaf nodes (no own auto-layout) — create's builders and edit's delta path
+// both land here, so the per-kind rules can't fork: TEXT's wrap handshake (a controlled width
+// wraps; "hug" restores grow-sideways; height is ignored exactly as fixed-height text always was)
+// and LINE's zero height. Generic shapes resize only the named dims, floored at Figma's 0.01.
+function applyLeafSize(node: any, layout: WriteLayout): void {
+  const sizing = layout.sizing || {};
+  const dims = layout.dimensions || {};
+  if (node.type === "TEXT") {
+    if (sizing.horizontal === "fixed" || sizing.horizontal === "fill") node.textAutoResize = "HEIGHT";
+    else if (sizing.horizontal === "hug") node.textAutoResize = "WIDTH_AND_HEIGHT";
+    if (typeof dims.width === "number") node.resize(Math.max(dims.width, 0.01), node.height);
+    return;
+  }
+  if (node.type === "LINE") {
+    if (typeof dims.width === "number") node.resize(Math.max(dims.width, 0.01), 0);
+    return;
+  }
+  if (typeof dims.width === "number" || typeof dims.height === "number") {
+    node.resize(Math.max(typeof dims.width === "number" ? dims.width : node.width, 0.01),
+                Math.max(typeof dims.height === "number" ? dims.height : node.height, 0.01));
+  }
 }
 
 // Reject the ONE percent case a runtime read can't break: an IN-FLOW `%`-SIZE child of an auto-layout
@@ -361,7 +495,7 @@ export function applyConstraints(child: any, rawLayout: WriteLayout | undefined)
 // different places: the create walk asks before the child (or the parent's sizing modes) exists, so it
 // answers from the authored spec; the edit path answers from the live flags (isRowColumnAutoLayout +
 // convertSizing of layoutSizingHorizontal/Vertical). Reading a parent here would break the first caller.
-export function assertPercentResolvable(childLayout: WriteLayout, parentIsAutoLayout: boolean, parentHugsW: boolean, parentHugsH: boolean): void {
+function assertPercentResolvable(childLayout: WriteLayout, parentIsAutoLayout: boolean, parentHugsW: boolean, parentHugsH: boolean): void {
   const ps = childLayout.percentSize;
   if (!ps) return;
   if (!parentIsAutoLayout || childLayout.position === "absolute") return;
@@ -395,7 +529,7 @@ function pctOf(pct: number, parentDim: number): number {
 // realized size. Render calls this through the deferred resolvePercents pass above; the edit path
 // calls it directly — at edit time the parent's realized size already exists, so there is no deferral
 // to ride. Parameter order matches the sibling child-appliers (parent, child, layout).
-export function resolvePercentLayout(parent: any, child: any, layout: WriteLayout): void {
+function resolvePercentLayout(parent: any, child: any, layout: WriteLayout): void {
   // SIZE first — anchor placement below reads the child's resolved width/height.
   if (layout.percentSize) {
     const ps = layout.percentSize;
@@ -409,20 +543,127 @@ export function resolvePercentLayout(parent: any, child: any, layout: WriteLayou
   }
   // POSITION + ANCHOR — absolute children only (percentPos/anchor never set otherwise). Resolve each axis
   // (percent → px against the parent, else the authored number), then shift by the anchor so the child's
-  // anchor point (not its top-left) lands on x/y.
+  // anchor point (not its top-left) lands on x/y. STRICTLY per axis: an axis with no authored coordinate
+  // is never touched — anchoring off the LIVE coordinate would subtract the offset again on every
+  // re-apply (the relative-delta drift the absolute-values contract forbids), and applyAbsolute rejects
+  // an anchor axis without its coordinate for the same reason.
   if (layout.position === "absolute" && (layout.percentPos || layout.anchor)) {
     const pp = layout.percentPos || {};
-    let x = pp.x != null ? pctOf(pp.x, parent.width) : (layout.left ?? 0);
-    let y = pp.y != null ? pctOf(pp.y, parent.height) : (layout.top ?? 0);
-    const a = layout.anchor;
-    if (a) {
+    const a = layout.anchor || {};
+    if (pp.x != null || layout.left != null) {
+      let x = pp.x != null ? pctOf(pp.x, parent.width) : layout.left!;
       if (a.x === "center") x -= child.width / 2;
       else if (a.x === "right") x -= child.width;
+      child.x = x;
+    }
+    if (pp.y != null || layout.top != null) {
+      let y = pp.y != null ? pctOf(pp.y, parent.height) : layout.top!;
       if (a.y === "center") y -= child.height / 2;
       else if (a.y === "bottom") y -= child.height;
+      child.y = y;
     }
-    child.x = x;
-    child.y = y;
+  }
+}
+
+// Apply a layout delta to a LIVE node the way the create walk applies a fresh child — the SAME
+// appliers in the same roles, re-run against the live parent (which is why percents resolve
+// directly here: the parent's realized size already exists, no deferred pass to ride). Order
+// matters and mirrors buildFrame's walk: container words first (they may change the node's own
+// direction, which own-size mapping reads), then position (in/out of flow decides which appliers
+// govern the node), flow fills and their unset inverses, own/leaf sizing, cover, percents, pin.
+export function applyLiveNodeLayout(node: any, wl: WriteLayout): void {
+  const parent = node.parent;
+  applyContainer(node, wl);
+  if (!parent) return; // a parentless node (the page itself can't get here) has no child-side context
+  const parentIsAuto = isRowColumnAutoLayout(parent);
+  // Un-fill BEFORE the position write, and regardless of the child's CURRENT positioning: an axis
+  // the delta re-sizes to fixed/hug must lose the grow/stretch mark fill installed there, even when
+  // the mark sits parked and inert on an absolute child — otherwise `width: 80` on it (or
+  // `{ absolute: "none", width: 80 }` in one delta) leaves the mark to resurrect the fill the delta
+  // explicitly replaced. Clearing an inert mark is free; clearChildFlowFill touches only named axes.
+  if (parentIsAuto) clearChildFlowFill(parent, node, wl);
+  applyChildPosition(parent, node, wl);
+  const inFlowAuto = parentIsAuto && node.layoutPositioning !== "ABSOLUTE";
+  if (inFlowAuto) {
+    applyChildFill(parent, node, wl, false); // crossStretch is the container's own alignItems edit, never a child's
+  }
+  if (isRowColumnAutoLayout(node) || node.type === "FRAME") applyOwnSize(node, wl);
+  else applyLeafSize(node, wl);
+  if (!inFlowAuto) coverChild(parent, node, wl);
+  if (wl.percentSize || wl.percentPos || wl.anchor) resolvePercentLayout(parent, node, wl);
+  if (wl.pin) applyPinDelta(node, wl.pin);
+}
+
+// The live-parent facts assertPercentResolvable needs (create computes them from the authored
+// spec; edit reads them off the canvas). EFFECTIVE sizing (layoutSizing*), not the internal axis
+// modes: an AUTO-mode axis that the grandparent stretches reports FILL — the parent's size is
+// realized from above, the child's percent resolves against it, and no cycle exists. Reading
+// primary/counterAxisSizingMode here would reject that valid case as a hug.
+function parentHugFacts(parent: any): { parentIsAuto: boolean; hugW: boolean; hugH: boolean } {
+  const parentIsAuto = !!parent && isRowColumnAutoLayout(parent);
+  if (!parentIsAuto) return { parentIsAuto: false, hugW: false, hugH: false };
+  return {
+    parentIsAuto,
+    hugW: convertSizing(parent.layoutSizingHorizontal) === "hug",
+    hugH: convertSizing(parent.layoutSizingVertical) === "hug",
+  };
+}
+
+// The edit path's pre-lock gate for layout words that only mean something against the LIVE tree —
+// every reject fires before the first canvas write. The live facts a pure compile can't see:
+//   - "fill"/"N%" resolve against a parent's bounded size, and a PAGE has none (page.width doesn't
+//     exist — the resize would be NaN, and Figma's throw wouldn't name the real mistake);
+//   - "hug" sizes to measured content, which only an auto-layout container or TEXT has — anywhere
+//     else it would silently mean nothing (create tolerates that historic looseness; edit rejects);
+//   - a TEXT's own height follows content + wrap (create silently drops an authored text height —
+//     a pre-existing create quirk — but an edit accepting one would mint a no-op undo step);
+//   - container words are inert without auto-layout (applyContainer gates on the live mode), so a
+//     gap-only delta on a free-form or grid frame must reject, not silently commit;
+//   - the hug-cycle percent guard needs the child's EFFECTIVE flow position: a delta rarely names
+//     `absolute`, so an already-ABSOLUTE child threads its live positioning — out of flow it
+//     doesn't feed the parent's hug, and the cycle can't form.
+export function assertLayoutDeltaResolvable(node: any, wl: WriteLayout): void {
+  const parent = node.parent;
+  const s = wl.sizing || {};
+  if (parent && parent.type === "PAGE" && (s.horizontal === "fill" || s.vertical === "fill" || wl.percentSize || wl.percentPos)) {
+    throw new Error('flcm.edit: "fill" and "N%" resolve against a parent frame, and this node\'s parent is the page — a page has no bounded size. Use pixel dimensions, or move the node into a frame first.');
+  }
+  const willBeAuto = wl.mode === "row" || wl.mode === "column" || (wl.mode == null && isRowColumnAutoLayout(node));
+  if (s.horizontal === "hug" || s.vertical === "hug") {
+    if (!willBeAuto && node.type !== "TEXT") {
+      throw new Error('flcm.edit: "hug" sizes to content, which only an auto-layout (row/column) container or text can measure — a ' + node.type + " without auto-layout has no content size. Use pixel dimensions, or set layout: { mode: \"row\"|\"column\" } in the same edit.");
+    }
+  }
+  if (node.type === "TEXT" && (s.vertical === "fixed" || s.vertical === "hug")) {
+    throw new Error("flcm.edit: a TEXT's height follows its content and wrap — edit `width` (the text re-wraps and the height follows), or use height: \"fill\" inside an auto-layout parent.");
+  }
+  // TEXT height:"fill" is realized by the parent's flow (layoutGrow/STRETCH). Out of flow —
+  // free-form parent, or absolute — it would fall to coverChild's resize, which a text node in
+  // WIDTH_AND_HEIGHT ignores: the height silently doesn't stick, so reject instead.
+  if (node.type === "TEXT" && s.vertical === "fill") {
+    const willBeAbsolute = wl.position === "absolute" || (wl.position !== "none" && node.layoutPositioning === "ABSOLUTE");
+    if (!parent || !isRowColumnAutoLayout(parent) || willBeAbsolute) {
+      throw new Error('flcm.edit: a TEXT can only fill its height as an in-flow child of a row/column auto-layout parent — out of flow its height follows content. Edit `width`, or return it to flow first.');
+    }
+  }
+  if (wl.gap != null || wl.padding || wl.justifyContent || wl.alignItems) {
+    if (!willBeAuto) {
+      throw new Error('flcm.edit: layout gap/padding/justifyContent/alignItems need an auto-layout (row/column) container — this frame ' + (wl.mode === "none" ? 'won\'t be one after mode: "none"' : "isn't one") + '. Name layout: { mode: "row" } (or "column") in the same edit.');
+    }
+  }
+  // GRID is outside the authored context matrix (see isRowColumnAutoLayout's note): flcm can't
+  // create one, and its cells' semantics are unassigned — so the PARENT-RELATIVE words reject
+  // under a grid parent rather than silently landing with free-form semantics ("fill" would cover
+  // the whole grid frame). Node-local words (fixed px, "hug", own container props) stay legal.
+  if (parent && parent.layoutMode === "GRID") {
+    if (s.horizontal === "fill" || s.vertical === "fill" || wl.percentSize || wl.percentPos || wl.position || wl.pin || wl.anchor) {
+      throw new Error('flcm.edit: this node\'s parent is a GRID container, which the edit vocabulary doesn\'t cover — "fill", percents, absolute, and pin have no assigned meaning there. Use fixed pixel sizes, or edit the parent.');
+    }
+  }
+  if (wl.percentSize) {
+    const facts = parentHugFacts(parent);
+    const position = wl.position != null ? wl.position : node.layoutPositioning === "ABSOLUTE" ? "absolute" : undefined;
+    assertPercentResolvable({ ...wl, position }, facts.parentIsAuto, facts.hugW, facts.hugH);
   }
 }
 
@@ -533,15 +774,7 @@ function buildText(wn: WriteNode, ctx: RenderCtx): any {
   if (ts.textDecoration) t.textDecoration = DECORATION[ts.textDecoration];
   if (wn.runs) applyRuns(t, wn.runs, ctx);
 
-  // A controlled width means the text should wrap (height-only auto-resize) rather than grow sideways.
-  const sizing = (wn.layout && wn.layout.sizing) || {};
-  const dims = (wn.layout && wn.layout.dimensions) || {};
-  if (sizing.horizontal === "fixed" && typeof dims.width === "number") {
-    t.textAutoResize = "HEIGHT";
-    t.resize(Math.max(dims.width, 0.01), t.height);
-  } else if (sizing.horizontal === "fill") {
-    t.textAutoResize = "HEIGHT";
-  }
+  applyLeafSize(t, wn.layout || {});
   // Clamp to N lines with an ending ellipsis. flcm.text guarantees a bounded width when maxLines is set
   // (the handshake above gave it a wrap), so the truncation always has real lines to bite. textTruncation
   // must be "ENDING" BEFORE maxLines — Figma rejects a non-null maxLines while truncation is "DISABLED".
@@ -553,30 +786,23 @@ function buildText(wn: WriteNode, ctx: RenderCtx): any {
   return t;
 }
 
-// Resize to any authored fixed dimensions, keeping the node's measured size on an omitted axis. The 0.01
-// floor is Figma's minimum — resize(0, …) throws. Shared by every non-auto-layout leaf (shape/svg/path).
-function resizeToDims(node: any, wn: WriteNode): void {
-  const dims = (wn.layout && wn.layout.dimensions) || {};
-  if (typeof dims.width !== "number" && typeof dims.height !== "number") return;
-  node.resize(Math.max(typeof dims.width === "number" ? dims.width : node.width, 0.01),
-              Math.max(typeof dims.height === "number" ? dims.height : node.height, 0.01));
-}
 
 function buildShape(node: any, wn: WriteNode, ctx: RenderCtx): any {
   figma.currentPage.appendChild(node);
   if (!wn.fills) node.fills = []; // omitted fill -> transparent
   applyPaint(node, wn, ctx);
-  resizeToDims(node, wn);
+  applyLeafSize(node, wn.layout || {});
   return node;
 }
 
 function buildLine(wn: WriteNode, ctx: RenderCtx): any {
   const l = figma.createLine();
   figma.currentPage.appendChild(l);
-  if (wn.strokes && wn.strokes.length) l.strokes = [paintOf(wn.strokes[0], ctx)];
+  // Present-but-empty is the compiled "none" — write the clear (live createLine seeds a default
+  // black stroke, so skipping would leave the line stroked, not unstroked).
+  if (wn.strokes) l.strokes = wn.strokes.length ? [paintOf(wn.strokes[0], ctx)] : [];
   l.strokeWeight = wn.strokeWeight != null ? wn.strokeWeight : 1;
-  const dims = (wn.layout && wn.layout.dimensions) || {};
-  if (typeof dims.width === "number") l.resize(Math.max(dims.width, 0.01), 0); // a line is width-as-length, zero height
+  applyLeafSize(l, wn.layout || {});
   if (typeof wn.opacity === "number") l.opacity = wn.opacity;
   return l;
 }
@@ -604,7 +830,7 @@ function buildSvg(wn: WriteNode, markup: string): any {
   // createFrame path); this frame never traverses it, so clear it here too (CSS overflow is visible by
   // default). See buildFrame for the rationale.
   frame.clipsContent = false;
-  resizeToDims(frame, wn);
+  applyLeafSize(frame, wn.layout || {});
   if (typeof wn.opacity === "number") frame.opacity = wn.opacity;
   return frame;
 }
@@ -627,7 +853,7 @@ function buildPath(wn: WriteNode, pathData: string, ctx: RenderCtx): any {
     throw new Error('flcm.path: Figma could not parse the path data "' + pathData + '" — ' + (e && e.message ? e.message : String(e)));
   }
   applyPaint(v, wn, ctx);
-  resizeToDims(v, wn);
+  applyLeafSize(v, wn.layout || {});
   return v;
 }
 

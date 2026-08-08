@@ -9,7 +9,12 @@
 // prop that isn't in the schema can't appear in any output, and a deleted one vanishes everywhere at once.
 
 import { z } from "zod";
-import { VERBS, FIELD_GROUPS, type VerbCategory } from "@framelink/plugin/schema";
+import {
+  VERBS,
+  FIELD_GROUPS,
+  EDIT_TYPE_WORD_GROUPS,
+  type VerbCategory,
+} from "@framelink/plugin/schema";
 import {
   MENTAL_MODEL,
   CHILDREN,
@@ -24,6 +29,7 @@ import {
   CSS_SUBSET,
   FAILS_LOUD,
   EDIT_INTRO,
+  EDIT_REMOVAL,
   EDIT_RULES,
 } from "./narrative.js";
 import { EXAMPLES } from "./examples.js";
@@ -90,6 +96,30 @@ function propTable(fields: Fields): string {
       `| \`${name}\` | ${cell(typeLabel(field))} | ${cell(field.description ?? "")} |`,
   );
   return ["| Prop | Type | Notes |", "| --- | --- | --- |", ...rows].join("\n");
+}
+
+// The per-type editable-word lists, composed from EDIT_TYPE_WORD_GROUPS — the SAME table the
+// runtime legality gate composes from (edit.ts DELTA_KEYS_BY_TYPE), intersected with the edit
+// field set the same way, so the doc can't promise a word the gate rejects. RECTANGLE/ELLIPSE
+// share one line (identical compositions by construction).
+function editTypeWordLines(): string {
+  const editWords = new Set(Object.keys(FIELD_GROUPS.edit));
+  const lines: string[] = [];
+  const labels: Partial<Record<keyof typeof EDIT_TYPE_WORD_GROUPS, string>> = {
+    RECTANGLE: "RECTANGLE / ELLIPSE",
+    VECTOR: "VECTOR (path- or svg-born)",
+  };
+  for (const t of Object.keys(EDIT_TYPE_WORD_GROUPS) as (keyof typeof EDIT_TYPE_WORD_GROUPS)[]) {
+    if (t === "ELLIPSE") continue;
+    const words = [
+      ...new Set(EDIT_TYPE_WORD_GROUPS[t].flatMap((g) => Object.keys(FIELD_GROUPS[g]))),
+    ]
+      .filter((k) => editWords.has(k))
+      .map((k) => `\`${k}\``)
+      .join(", ");
+    lines.push(`- **${labels[t] ?? t}** — ${words}`);
+  }
+  return lines.join("\n");
 }
 
 function verbTable(): string {
@@ -178,6 +208,7 @@ const SECTIONS: Section[] = [
     blurb: "partial deltas against live nodes, and the rollback contract",
     body: () =>
       `${EDIT_INTRO}\n\n### Editable fields\n\n${propTable(FIELD_GROUPS.edit)}\n\n` +
+      `### Words by node type\n\n${editTypeWordLines()}\n\n` +
       // Derived from the schema's shared group (minus key, which is never editable) so this sentence
       // can't drift from the runtime's non-createable gate, which composes from the same group.
       "On a node type flcm can't create (GROUP, INSTANCE, COMPONENT, …) only the shared words apply: " +
@@ -185,7 +216,7 @@ const SECTIONS: Section[] = [
         .filter((k) => k !== "key")
         .map((k) => `\`${k}\``)
         .join(", ")}.\n\n` +
-      EDIT_RULES,
+      `${EDIT_REMOVAL}\n\n${EDIT_RULES}`,
   },
   {
     id: "verify",

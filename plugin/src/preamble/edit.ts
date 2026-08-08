@@ -13,15 +13,17 @@
 // to the same canvas; the residue is a duplicate undo step, not divergent state. Keep it that way:
 // a relative delta word would turn that accepted race into canvas corruption.
 
-import { WriteProps, WriteType, Target, Handle } from "./ir.js";
+import { WriteProps, WriteType, WriteLayout, Target, Handle, EDIT_TYPE_WORD_GROUPS } from "./ir.js";
 import { resolveTarget } from "./read.js";
 import { enterMutatingVerb, committedVerbCount } from "./mutation-lock.js";
-import { applyPaint, applySceneProps, mintHandle } from "./bridge.js";
+import { applyPaint, applySceneProps, mintHandle, applyLiveNodeLayout, assertLayoutDeltaResolvable } from "./bridge.js";
 import { toFigmaEffects } from "./effects.js";
 import { identityOf } from "./identity.js";
 import { rejectUnknownKeys } from "./validate.js";
-import { KNOWN_KEYS, compileNodeLocalProps, fetchTreeImages } from "./flcm.js";
-import type { EditDelta } from "./schema.js";
+import {
+  KNOWN_KEYS, compileNodeLocalProps, compileSizeWords, compileContainerWords, compileLineLength, fetchTreeImages,
+} from "./flcm.js";
+import type { EditDelta, FrameProps, LineProps } from "./schema.js";
 
 const EDIT_KEYS: ReadonlySet<string> = new Set(KNOWN_KEYS.edit);
 
@@ -32,21 +34,18 @@ function editableWords(...groups: readonly (readonly string[])[]): ReadonlySet<s
   return new Set(groups.flat().filter((k) => EDIT_KEYS.has(k)));
 }
 
-// What each node type's delta may name — the SAME group compositions as flcm.ts's per-verb key sets
-// (FRAME_KEYS/TEXT_KEYS/…), so edit accepts on a node exactly the words create accepts for its type
-// (invariant 1: one vocabulary, no permissive edit dialect — `fill` on a LINE rejects here the way
-// flcm.line rejects it, instead of landing on a property Figma never renders). Keyed by WriteType so
-// TS pins this to the same createable set as bridge's BUILDERS table — neither can drift alone.
-// VECTOR uses flcm.path's words: an svg-born vector shares the type, but path's words are the only
-// authored vocabulary the type has.
-const DELTA_KEYS_BY_TYPE: Record<WriteType, ReadonlySet<string>> = {
-  FRAME: editableWords(KNOWN_KEYS.shared, KNOWN_KEYS.size, KNOWN_KEYS.appearance, KNOWN_KEYS.frame),
-  TEXT: editableWords(KNOWN_KEYS.shared, KNOWN_KEYS.size, KNOWN_KEYS.text),
-  RECTANGLE: editableWords(KNOWN_KEYS.shared, KNOWN_KEYS.size, KNOWN_KEYS.appearance),
-  ELLIPSE: editableWords(KNOWN_KEYS.shared, KNOWN_KEYS.size, KNOWN_KEYS.appearance),
-  LINE: editableWords(KNOWN_KEYS.shared, KNOWN_KEYS.line),
-  VECTOR: editableWords(KNOWN_KEYS.shared, KNOWN_KEYS.size, KNOWN_KEYS.path),
-};
+// What each node type's delta may name — composed from EDIT_TYPE_WORD_GROUPS (ir.ts), the single
+// source the generated per-type doc lists also render, so edit accepts on a node exactly the words
+// create accepts for its type (invariant 1: one vocabulary, no permissive edit dialect — `fill` on
+// a LINE rejects here the way flcm.line rejects it, instead of landing on a property Figma never
+// renders). VECTOR uses flcm.path's words: an svg-born vector shares the type, but path's words
+// are the only authored vocabulary the type has.
+const DELTA_KEYS_BY_TYPE = Object.fromEntries(
+  (Object.keys(EDIT_TYPE_WORD_GROUPS) as WriteType[]).map((t) => [
+    t,
+    editableWords(...EDIT_TYPE_WORD_GROUPS[t].map((g) => KNOWN_KEYS[g])),
+  ]),
+) as Record<WriteType, ReadonlySet<string>>;
 
 // A node type flcm can't create (GROUP, INSTANCE, COMPONENT, …) takes the shared words (minus `key`,
 // which isn't editable anywhere). Deliberately a conservative floor, not a mixin-derived ceiling:
@@ -72,7 +71,7 @@ function rejectNonDeltaWords(changes: EditDelta): void {
   }
   if ("x" in changes || "y" in changes) {
     throw new Error(
-      "flcm.edit: position and layout words are not on edit yet (they land in a later slice) — this delta takes appearance and scene words only. When position lands it will be spelled `absolute: { x, y }` / `pin`, the create-side words, not bare x/y.",
+      "flcm.edit: position is not spelled with bare x/y — use `absolute: { x, y }` to place the node out of flow (or `absolute: \"none\"` to return it to flow), and `pin` for how it responds to a parent resize.",
     );
   }
   rejectUnknownKeys(changes, EDIT_KEYS, "flcm.edit");
@@ -105,10 +104,16 @@ function assertDeltaLegalForType(node: SceneNode, changes: EditDelta): ReadonlyS
 // form those parsers don't fully close: a raw EffectSpec[] passes normalizeEffects untouched, and an
 // unknown kind would otherwise surface mid-apply as a fake "Figma refused". toFigmaEffects is pure
 // (figma-free), so running it here keeps every vocabulary failure ahead of the first canvas write.
-function compileDeltaPatch(changes: EditDelta, legal: ReadonlySet<string>): WriteProps {
+function compileDeltaPatch(changes: EditDelta, legal: ReadonlySet<string>, nodeType: string): WriteProps {
   const patch: WriteProps = {};
   compileNodeLocalProps(patch, changes, { radius: legal.has("borderRadius"), clip: legal.has("clip") });
   if (patch.effects) toFigmaEffects(patch.effects);
+  // Layout words compile through the same helpers every constructor rides — never buildLayout,
+  // whose creation default (omitted mode → "none") would turn a gap nudge into an auto-layout kill.
+  const layout: WriteLayout = { ...(compileSizeWords(changes) || {}) };
+  if (nodeType === "LINE") Object.assign(layout, compileLineLength(changes as Pick<LineProps, "length" | "w">) || {});
+  if (changes.layout != null) Object.assign(layout, compileContainerWords(changes.layout as NonNullable<FrameProps["layout"]>, "flcm.edit.layout"));
+  if (Object.keys(layout).length) patch.layout = layout;
   // Every named word compiled to nothing (all values null/undefined) — same hazard as `{}`: the
   // verb would mint an undo step for zero writes.
   if (Object.keys(patch).length === 0) {
@@ -144,7 +149,19 @@ export async function edit(target: Target, changes: EditDelta): Promise<Handle> 
   rejectNonDeltaWords(changes);
   const node = await resolveTarget(target);
   const legal = assertDeltaLegalForType(node, changes);
-  const patch = compileDeltaPatch(changes, legal);
+  const patch = compileDeltaPatch(changes, legal, node.type);
+  // Layout words that only mean something against the live tree (a page parent, hug legality, the
+  // hug-cycle percent) reject pre-lock like every other validation — zero writes on failure.
+  if (patch.layout) assertLayoutDeltaResolvable(node, patch.layout);
+  // A size word on TEXT writes textAutoResize/resize, which Figma refuses on an unloaded font —
+  // the same preload create rides (loadFontsForTree), narrowed to the live node's own font(s);
+  // a run-styled node reports figma.mixed and loads every range font. Read-only, so it stays
+  // outside the lock like the image fetch below.
+  if (node.type === "TEXT" && patch.layout && (patch.layout.sizing || patch.layout.dimensions || patch.layout.percentSize)) {
+    const t = node as TextNode;
+    const fonts = t.fontName === figma.mixed ? t.getRangeAllFontNames(0, t.characters.length) : [t.fontName as FontName];
+    await Promise.all(fonts.map((f) => figma.loadFontAsync(f)));
+  }
   // An image fill in the delta needs bytes before the mutating span — the fetch is read-only and
   // stays outside the lock, like render's.
   const images = await fetchTreeImages(patch);
@@ -155,6 +172,7 @@ export async function edit(target: Target, changes: EditDelta): Promise<Handle> 
     try {
       applyPaint(node, patch, { fonts: {}, images });
       applySceneProps(node, patch);
+      if (patch.layout) applyLiveNodeLayout(node, patch.layout);
     } catch (cause) {
       throw editPointerError(identity, cause);
     }

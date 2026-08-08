@@ -55,7 +55,7 @@ import type {
 // validate.ts, the same one read.ts's locate query fails loud with.
 export const KNOWN_KEYS = {
   shared: ["name", "key", "opacity", "mixBlendMode", "visible", "locked"],
-  edit: ["name", "opacity", "mixBlendMode", "visible", "locked", "fill", "stroke", "strokeWidth", "borderRadius", "effects", "rotation", "clip"],
+  edit: ["name", "opacity", "mixBlendMode", "visible", "locked", "fill", "stroke", "strokeWidth", "borderRadius", "effects", "rotation", "clip", "width", "height", "absolute", "pin", "layout", "length", "w"],
   size: ["width", "height", "absolute", "pin"],
   appearance: ["fill", "stroke", "strokeWidth", "borderRadius", "effects", "rotation"],
   frame: ["layout", "clip"],
@@ -108,11 +108,14 @@ export const DIRECTIONAL_KEYS = keySet(["x", "y"]); // pin and absolute.anchor
 // strings: a string like "24px" is neither a number nor an edge object, and the old code silently
 // dropped it to zero padding on every side. Reject a non-number/non-object, and a non-numeric edge
 // field, rather than emit a silent zero (ADR-0003 fail-loud).
+const PAD_KEYS = keySet(["x", "y", "top", "right", "bottom", "left"]);
+
 function padEdges(pad: PadInput): Edges {
   if (typeof pad === "number") return { top: pad, right: pad, bottom: pad, left: pad };
-  if (pad == null || typeof pad !== "object") {
+  if (pad == null || typeof pad !== "object" || Array.isArray(pad)) {
     throw new Error("flcm: pad must be a number or an object ({ x, y } or { top, right, bottom, left }) — got " + JSON.stringify(pad) + '. pad takes numbers, not "px" strings.');
   }
+  rejectUnknownKeys(pad, PAD_KEYS, "pad");
   const edge = (v: number | undefined, name: string): number | undefined => {
     if (v == null) return undefined;
     if (typeof v !== "number") throw new Error("flcm: pad." + name + " must be a number, got " + JSON.stringify(v) + ' (pad takes numbers, not "px" strings).');
@@ -148,13 +151,24 @@ function applySizing(props: SizeProps, layout: WriteLayout): void {
 }
 
 function applyAbsolute(layout: WriteLayout, props: SizeProps): void {
-  if (!props.absolute) return;
+  if (props.absolute == null) return;
+  // absolute:"none" is edit's return-to-flow word — no x/y ride it (a node rejoining the flow is
+  // positioned by the layout, not by coordinates).
+  if (props.absolute === "none") {
+    layout.position = "none";
+    return;
+  }
+  // QuickJS boundary: a present-but-malformed value (false, a number, an array) must reject the
+  // whole call, not read as absence and let the rest of the props land as a partial write.
+  if (typeof props.absolute !== "object" || Array.isArray(props.absolute)) {
+    throw new Error('flcm: absolute must be an object like { x, y, anchor } or "none" — got ' + JSON.stringify(props.absolute) + ".");
+  }
   rejectUnknownKeys(props.absolute, ABSOLUTE_KEYS, "absolute");
   layout.position = "absolute";
-  // A percent x/y resolves to px against the parent axis at render (percentPos); a number is the location
-  // directly. The percent axes seed 0 here and the bridge overwrites them once the parent size is known.
-  layout.left = 0;
-  layout.top = 0;
+  // A percent x/y resolves to px against the parent axis at render (percentPos); a number is the
+  // location directly. Presence-preserving per axis: an unnamed axis compiles to NOTHING — a fresh
+  // node sits at Figma's own 0, and an edit naming only `absolute: { x }` must not teleport the y
+  // it didn't speak (the bridge falls back to the live coordinate where it needs one).
   const pct: { x?: number; y?: number } = {};
   const axis = (val: number | string | undefined, key: "x" | "y") => {
     if (val == null) return;
@@ -166,14 +180,26 @@ function applyAbsolute(layout: WriteLayout, props: SizeProps): void {
   axis(props.absolute.y, "y");
   if (pct.x != null || pct.y != null) layout.percentPos = pct;
   applyAnchor(layout, props.absolute.anchor);
+  // An anchor axis without its coordinate has nothing to land on. Rejected rather than anchored
+  // against the live coordinate: subtracting the anchor offset from wherever the node sits would
+  // move it again on every re-apply — the relative-delta drift the absolute-values contract forbids.
+  const a = layout.anchor;
+  if (a) {
+    if (a.x != null && layout.left == null && pct.x == null) {
+      throw new Error("flcm: absolute.anchor.x names which point of the node lands on x — name absolute.x alongside it.");
+    }
+    if (a.y != null && layout.top == null && pct.y == null) {
+      throw new Error("flcm: absolute.anchor.y names which point of the node lands on y — name absolute.y alongside it.");
+    }
+  }
 }
 
 // pin and anchor are the two directional `{ x?, y? }` props: same shape, different vocabularies. Both
 // validate each axis at the boundary (a bad value fails loud, ADR-0003) so the bridge can trust the words —
 // pin's map to Figma's constraint enum, anchor's to an offset. anchor's words are a subset of pin's (no
 // stretch/scale: an anchor is a point, not a resize rule).
-const PIN_X = new Set<PinX>(["left", "center", "right", "stretch", "scale"]);
-const PIN_Y = new Set<PinY>(["top", "center", "bottom", "stretch", "scale"]);
+const PIN_X = new Set<PinX>(["left", "center", "right", "stretch", "scale", "none"]);
+const PIN_Y = new Set<PinY>(["top", "center", "bottom", "stretch", "scale", "none"]);
 const ANCHOR_X = new Set<AnchorX>(["left", "center", "right"]);
 const ANCHOR_Y = new Set<AnchorY>(["top", "center", "bottom"]);
 
@@ -213,7 +239,7 @@ function parseDirectional<X extends string, Y extends string>(
   name: string, raw: unknown, xSet: ReadonlySet<X>, ySet: ReadonlySet<Y>,
 ): { x?: X; y?: Y } | undefined {
   if (raw == null) return undefined;
-  if (typeof raw !== "object") {
+  if (typeof raw !== "object" || Array.isArray(raw)) {
     throw new Error("flcm: " + name + " must be an object like { x, y } — got " + JSON.stringify(raw) + ".");
   }
   const r = raw as { x?: string; y?: string };
@@ -251,25 +277,69 @@ function applyAnchor(layout: WriteLayout, anchor: { x?: AnchorX; y?: AnchorY } |
 // pin -> constraint-override intent on the layout. Only meaningful for a free-form parent's child;
 // harmlessly ignored under auto-layout.
 function applyPin(layout: WriteLayout, props: SizeProps): void {
-  const pin = parseDirectional("pin", props.pin, PIN_X, PIN_Y);
+  // `pin: "none"` is shorthand for clearing both axes; per-axis "none" rides parseDirectional.
+  const raw = props.pin === "none" ? { x: "none", y: "none" } : props.pin;
+  const pin = parseDirectional("pin", raw, PIN_X, PIN_Y);
   if (pin) layout.pin = pin;
+}
+
+// Compile the container words (`layout: { mode, gap, padding, justifyContent, alignItems }`) into a
+// WriteLayout — presence-preserving: a word the author didn't write compiles to nothing. The
+// creation default (an omitted mode means free-form) is buildLayout's to inject, NOT this
+// function's: edit compiles through here directly, and a defaulted mode would turn a gap nudge
+// into an auto-layout kill. Exported for edit.ts.
+export function compileContainerWords(cfg: NonNullable<FrameProps["layout"]>, subject: string): WriteLayout {
+  // QuickJS boundary: a present-but-malformed value (false, a number, an array) must reject the
+  // whole call — Object.keys on it would read as "no words named" and the rest would partially apply.
+  if (typeof cfg !== "object" || cfg === null || Array.isArray(cfg)) {
+    throw new Error("flcm: " + subject + " must be an object like { mode, gap, padding, justifyContent, alignItems } — got " + JSON.stringify(cfg) + ".");
+  }
+  rejectUnknownKeys(cfg, LAYOUT_KEYS, subject);
+  const layout: WriteLayout = {};
+  if (cfg.mode != null) layout.mode = assertEnum("layout.mode", cfg.mode, LAYOUT_MODE);
+  if (cfg.gap != null) layout.gap = length(cfg.gap);
+  if (cfg.padding != null) layout.padding = padEdges(cfg.padding);
+  // The space-around/evenly hint is primary-axis-only (a justify-content notion), so only justifyContent carries it.
+  if (cfg.justifyContent != null) layout.justifyContent = mapLayoutWord("layout.justifyContent", cfg.justifyContent, JUSTIFY_CONTENT, " Figma auto-layout can't realize CSS space-around/space-evenly; add gap/padding for spacing instead.");
+  if (cfg.alignItems != null) layout.alignItems = mapLayoutWord("layout.alignItems", cfg.alignItems, ALIGN_ITEMS);
+  return layout;
+}
+
+// Compile the child-side size/position words (width/height, absolute, pin) into a WriteLayout —
+// the same trio every constructor rides. Presence-preserving like the container compile; the
+// return is undefined when no word was written, so callers can gate on "was any layout named".
+// Exported for edit.ts.
+export function compileSizeWords(props: SizeProps): WriteLayout | undefined {
+  const layout: WriteLayout = {};
+  applySizing(props, layout);
+  applyAbsolute(layout, props);
+  applyPin(layout, props);
+  return Object.keys(layout).length ? layout : undefined;
+}
+
+// A LINE sizes on one word — `length`, alias `w` — compiled here so flcm.line and an edit delta
+// reject a mistyped value with the SAME error, naming the prop the author actually wrote.
+export function compileLineLength(props: Pick<LineProps, "length" | "w">): WriteLayout | undefined {
+  const prop = props.length != null ? "length" : props.w != null ? "w" : null;
+  if (!prop) return undefined;
+  const len = props[prop];
+  assertScalarType(len, "number", prop);
+  // A length is a FIXED width, and the sizing intent must say so: clearChildFlowFill keys the
+  // un-fill off sizing "fixed", so a length edit on a live line someone set to grow (layoutGrow 1
+  // — authorable in the Figma UI, not in flcm) actually takes over from the fill.
+  return { sizing: { horizontal: "fixed" }, dimensions: { width: len as number } };
 }
 
 function buildLayout(props: FrameProps, isFrame: boolean): WriteLayout {
   const layout: WriteLayout = {};
   if (isFrame) {
-    const cfg = props.layout || {};
-    rejectUnknownKeys(cfg, LAYOUT_KEYS, "flcm.frame.layout");
-    layout.mode = cfg.mode == null ? "none" : assertEnum("layout.mode", cfg.mode, LAYOUT_MODE);
-    if (cfg.gap != null) layout.gap = length(cfg.gap);
-    if (cfg.padding != null) layout.padding = padEdges(cfg.padding);
-    // The space-around/evenly hint is primary-axis-only (a justify-content notion), so only justifyContent carries it.
-    if (cfg.justifyContent != null) layout.justifyContent = mapLayoutWord("layout.justifyContent", cfg.justifyContent, JUSTIFY_CONTENT, " Figma auto-layout can't realize CSS space-around/space-evenly; add gap/padding for spacing instead.");
-    if (cfg.alignItems != null) layout.alignItems = mapLayoutWord("layout.alignItems", cfg.alignItems, ALIGN_ITEMS);
+    // ?? not ||: a falsy-but-present layout (false, 0) must reach the compile's malformed-value reject.
+    Object.assign(layout, compileContainerWords(props.layout ?? {}, "flcm.frame.layout"));
+    if (layout.mode == null) layout.mode = "none"; // the creation default: an omitted mode is free-form
   }
-  applySizing(props, layout);
-  applyAbsolute(layout, props);
-  applyPin(layout, props);
+  // The size/position words ride the same compile edit does — the container words above and the
+  // creation default are the only create-side extras.
+  Object.assign(layout, compileSizeWords(props) || {});
   return layout;
 }
 
@@ -299,10 +369,13 @@ function base(wn: WriteProps, props: BaseProps): void {
 // Exported for edit.ts (which imports FROM here; flcm.ts never imports edit.ts — no cycle).
 export function compileNodeLocalProps(wn: WriteProps, props: AppearanceProps, opts: { radius?: boolean; clip?: boolean }): void {
   base(wn, props);
-  if (props.fill != null) wn.fills = [parseFill(props.fill, "fill")];
-  if (props.stroke != null) wn.strokes = [parseFill(props.stroke, "stroke")];
+  // "none" is the removal word (CSS's own absence spelling): an EMPTY array is the compiled form of
+  // "clear this" — distinct from an ABSENT array, which means "don't touch it". Create writing []
+  // onto a fresh node is a harmless no-op; the distinction exists for edit.
+  if (props.fill != null) wn.fills = props.fill === "none" ? [] : [parseFill(props.fill, "fill")];
+  if (props.stroke != null) wn.strokes = props.stroke === "none" ? [] : [parseFill(props.stroke, "stroke")];
   if (props.strokeWidth != null) wn.strokeWeight = length(props.strokeWidth);
-  if (props.effects != null) wn.effects = normalizeEffects(props.effects);
+  if (props.effects != null) wn.effects = props.effects === "none" ? [] : normalizeEffects(props.effects);
   if (opts.radius && props.borderRadius != null) wn.borderRadius = length(props.borderRadius);
   const clip = (props as FrameProps).clip;
   if (opts.clip && clip != null) { assertScalarType(clip, "boolean", "clip"); wn.clip = clip; }
@@ -519,11 +592,13 @@ function line(props: LineProps = {}): WriteNode {
   const wn: WriteNode = { type: "LINE" };
   base(wn, props);
   const paint = props.stroke != null ? props.stroke : props.color;
-  if (paint != null) wn.strokes = [parseFill(paint, "stroke")];
+  // "none" is the surface-wide removal/explicit-default word — compile it to the present-but-empty
+  // strokes array here too, or flcm.line({ stroke: "none" }) would throw where an edit's
+  // stroke: "none" clears (the one-vocabulary invariant).
+  if (paint === "none") wn.strokes = [];
+  else if (paint != null) wn.strokes = [parseFill(paint, "stroke")];
   if (props.strokeWidth != null) wn.strokeWeight = length(props.strokeWidth);
-  const len = props.length != null ? props.length : props.w;
-  const layout: WriteLayout = {};
-  if (typeof len === "number") layout.dimensions = { width: len };
+  const layout: WriteLayout = { ...(compileLineLength(props) || {}) };
   applyAbsolute(layout, props);
   applyPin(layout, props);
   if (Object.keys(layout).length) wn.layout = layout;

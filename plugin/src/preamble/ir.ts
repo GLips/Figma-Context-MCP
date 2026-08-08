@@ -29,6 +29,22 @@ import type { SimplifiedDimension, SimplifiedLayout, SimplifiedNode } from "~/co
 // a specific error rather than letting a confusing plugin-API throw surface.
 export type WriteType = "FRAME" | "TEXT" | "RECTANGLE" | "ELLIPSE" | "LINE" | "VECTOR";
 
+// Which schema word GROUPS compose each createable type's edit surface — the same compositions as
+// the per-verb create key sets (flcm.ts FRAME_KEYS = shared+size+appearance+frame, etc.), named
+// once so the two consumers can't drift: edit.ts builds the runtime legality gate from it (via
+// KNOWN_KEYS, intersected with the edit surface) and reference.ts renders the per-type doc lists
+// from it (via schema.ts's FIELD_GROUPS). Both index their group tables with these literals, so a
+// misspelled group name is a compile error on each side. Lives here, not in flcm.ts or schema.ts,
+// because ir.ts is the one module both sides already import type-safely with no zod and no figma.
+export const EDIT_TYPE_WORD_GROUPS = {
+  FRAME: ["shared", "size", "appearance", "frame"],
+  TEXT: ["shared", "size", "text"],
+  RECTANGLE: ["shared", "size", "appearance"],
+  ELLIPSE: ["shared", "size", "appearance"],
+  LINE: ["shared", "line"],
+  VECTOR: ["shared", "size", "path"],
+} as const satisfies Record<WriteType, readonly string[]>;
+
 export interface Rgb { r: number; g: number; b: number }
 export interface Rgba { r: number; g: number; b: number; a: number }
 
@@ -137,8 +153,11 @@ export interface Edges { top: number; right: number; bottom: number; left: numbe
 // (x names an edge on the horizontal axis, y on the vertical); the bridge maps each to Figma's per-axis
 // constraint enum. Governs how a positioned child reflows when its parent resizes — a free-form parent's
 // children and an absolute child of any parent; inert on an in-flow auto-layout child. ----
-export type PinX = "left" | "center" | "right" | "stretch" | "scale";
-export type PinY = "top" | "center" | "bottom" | "stretch" | "scale";
+// "none" is edit's per-axis clearing word: it restores MIN (Figma's default, pinned to the near
+// edge) — the auto-derived constraint create chose isn't stored anywhere live, so the default is
+// the stated inverse, not a recovered intent.
+export type PinX = "left" | "center" | "right" | "stretch" | "scale" | "none";
+export type PinY = "top" | "center" | "bottom" | "stretch" | "scale" | "none";
 
 // ---- Blend mode (author `blend`). The CSS mix-blend-mode names normalize to Figma's BlendMode enum at
 // the css.ts boundary; this is the resolved Figma-domain currency. A SUBSET of Figma's BlendMode — only the
@@ -181,10 +200,12 @@ export interface WriteLayout {
   // `pin`. Honored for a free-form parent's child and an absolute child; inert on an in-flow auto-layout
   // child (which reflows via fill/hug instead).
   pin?: { x?: PinX; y?: PinY };
-  position?: "absolute";
+  // "none" is edit's return-to-flow word (absolute:"none"): the node rejoins its auto-layout
+  // parent's flow (layoutPositioning AUTO). Create only ever sets "absolute".
+  position?: "absolute" | "none";
   // Offset from the parent's top-left corner — the write-side spelling of the read output's left/top,
-  // one vocabulary across read and write. Always both set when position is "absolute" (percent axes seed
-  // 0 here; bridge.resolvePercents overwrites them once the parent's realized size is readable).
+  // one vocabulary across read and write. Presence-preserving per axis: an axis the author didn't name
+  // (or spelled as "N%" — see percentPos) is absent, and the bridge leaves/reads the live coordinate.
   left?: number;
   top?: number;
 }

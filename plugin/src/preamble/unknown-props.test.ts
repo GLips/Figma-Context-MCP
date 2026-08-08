@@ -29,7 +29,10 @@ test("KNOWN_KEYS mirrors schema.ts FIELD_GROUPS exactly (drift guard)", () => {
 test("directional nested sets (absolute/anchor) match their inline schema shapes (drift guard)", () => {
   // absolute/pin/anchor are defined inline in SIZE_FIELDS, not as their own FIELD_GROUP — so guard them by
   // unwrapping the zod objects directly. prop() wraps each field in .optional(); .unwrap() peels it.
-  const absShape = (SizeSchema as unknown as { shape: { absolute: { unwrap(): { shape: Record<string, unknown> } } } }).shape.absolute.unwrap();
+  // absolute is a union since edit's removal word landed ({ x, y, anchor } | "none") — the object
+  // option carries the shape to guard.
+  const absField = (SizeSchema as unknown as { shape: { absolute: { unwrap(): { options: Array<{ shape?: Record<string, unknown> }> } } } }).shape.absolute.unwrap();
+  const absShape = absField.options.find((o) => o.shape) as { shape: Record<string, unknown> };
   assert.deepEqual([...ABSOLUTE_KEYS].sort(), Object.keys(absShape.shape).sort());
   const anchorShape = (absShape.shape.anchor as { unwrap(): { shape: Record<string, unknown> } }).unwrap();
   assert.deepEqual([...DIRECTIONAL_KEYS].sort(), Object.keys(anchorShape.shape).sort());

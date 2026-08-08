@@ -128,6 +128,21 @@ class Node {
   setRangeTextDecoration(start, end, value) { this._range("_rangeDecorations", start, end, value); }
   setRangeHyperlink(start, end, value) { this._range("_rangeHyperlinks", start, end, value); }
 
+  // Every distinct font over [start, end) — resolved from the recorded ranges the same way
+  // getStyledTextSegments does (last range covering the char wins, base fontName otherwise).
+  // Edit's TEXT-size preload walks this when fontName is figma.mixed.
+  getRangeAllFontNames(start, end) {
+    const names = [];
+    const seen = new Set();
+    for (let i = start; i < end; i++) {
+      let f = this.fontName;
+      for (const r of this._rangeFonts || []) if (r.start <= i && i < r.end) f = r.value;
+      const key = f.family + "|" + f.style;
+      if (!seen.has(key)) { seen.add(key); names.push(f); }
+    }
+    return names;
+  }
+
   // --- read-path surface (what sceneNodeToSnapshot consumes) ---
 
   get absoluteBoundingBox() {
@@ -356,7 +371,9 @@ export function createFigmaMock() {
     createSlice() { return new Node("SLICE"); },
     createRectangle() { return new Node("RECTANGLE"); },
     createEllipse() { return new Node("ELLIPSE"); },
-    createLine() { return new Node("LINE"); },
+    // Live createLine seeds a default black stroke (like createVector below) — model it so a
+    // stroke:"none" line that fails to write the clear shows up stroked here, not falsely bare.
+    createLine() { const l = new Node("LINE"); l.strokes = [{ type: "SOLID", color: { r: 0, g: 0, b: 0 }, opacity: 1 }]; return l; },
     createPolygon() { const p = new Node("POLYGON"); p.pointCount = 3; return p; },
     createStar() { const s = new Node("STAR"); s.pointCount = 5; s.innerRadius = 0.5; return s; },
     // Live Figma seeds a new vector with a default black 1px stroke (createRectangle/Ellipse get none).
@@ -411,7 +428,10 @@ export function createFigmaMock() {
     // The mock models no shared styles — nodes never carry a fill/text/effectStyleId, so the read
     // path's resolver treats every lookup as unresolvable (dropping the slot, like live).
     async getStyleByIdAsync() { return null; },
-    loadFontAsync() { return Promise.resolve(); },
+    // RECORDED like undo: tests assert a font was preloaded before a size write, not that Figma
+    // would have refused without it (that rejection is live behavior, grounded by probe).
+    fontLoads: [],
+    loadFontAsync(font) { this.fontLoads.push(font); return Promise.resolve(); },
     // The bundled-Inter weight ladder the real API exposes, so fonts.ts's nearest-style snap has a
     // realistic family to match against (numeric weights resolve to Thin..Black, not just 4 buckets).
     // Both the upright and italic ladders are exposed so italic resolution (author `fontStyle`,

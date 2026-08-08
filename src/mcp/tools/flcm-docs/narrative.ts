@@ -327,11 +327,19 @@ Everything above fails **loud**. There is exactly one case that does not, becaus
 
 export const EDIT_INTRO = `\`await flcm.edit(target, changes)\` applies a partial delta to one existing node and returns its updated handle. The target is anything the read verbs accept: an flcm/key, a node id, \`flcm.id(id)\`, or a handle from \`render\`/\`find\`. The delta uses the **same words as create** — there is no separate edit dialect — and only the fields you pass change; everything else on the node is untouched.`;
 
+export const EDIT_REMOVAL = `### Removal — the \`"none"\` word
+
+\`"none"\` (CSS's own absence spelling) is the one removal word, surface-wide: \`fill: "none"\` / \`stroke: "none"\` clear the paint, \`effects: "none"\` clears all effects, \`absolute: "none"\` returns the node to its parent's flow, \`pin: "none"\` (or \`pin: { x: "none" }\` per axis) restores the default near-edge pin, \`layout: { mode: "none" }\` switches auto-layout off (children convert per Figma's own semantics — look, then nudge). The same spellings are legal at create, where they mean the explicit default (a transparent fill, free-form layout). Sizes are never *removed*, only replaced within the number/\`"fill"\`/\`"hug"\` trio: \`width: "hug"\` is how a fixed or filled width comes off.`;
+
 export const EDIT_RULES = `### Rules
 
 - **A node type takes exactly the words create accepts for it.** \`fill\` on a LINE, \`clip\` on a TEXT, \`borderRadius\` on a VECTOR — each rejects loud naming the prop, the node type, and that type's editable words, the same way the constructor would.
+- **Only the fields you pass change — per axis, too.** \`pin: { x: "center" }\` keeps the y pin; \`absolute: { x: 10 }\` keeps the live y; \`width: "hug"\` leaves the height's sizing alone.
+- **Un-filling really un-fills.** \`width: 80\` or \`"hug"\` on a child that was \`"fill"\` clears the grow/stretch marks fill installed — the new size governs, not the old fill.
+- **Container edits ripple by stated rules.** \`layout.alignItems: "stretch"\` walks the live children setting their stretch marks; writing any other alignItems clears every stretch mark (Figma doesn't store which child stretched because of the container — a child that should keep filling gets its own \`height: "fill"\` edit after; an un-stretched child keeps its current size rather than re-hugging). Changing the layout direction — row↔column, or \`"none"\` to either — clears both flow marks (grow and stretch) on every in-flow child: the axes they meant just moved.
+- **Percents resolve immediately** against the live parent's size. Rejected loud, before any write: a percent on an in-flow child of an auto-layout parent that hugs that axis (a cycle), \`"fill"\`/\`"N%"\` on a node whose parent is the page (no bounded size), \`"hug"\` on a node with nothing to measure (not an auto-layout container or text), a fixed/hug \`height\` on TEXT (its height follows content — edit \`width\`, or use \`height: "fill"\`), and container words (\`gap\`/\`padding\`/\`justifyContent\`/\`alignItems\`) on a frame that isn't — or after this delta won't be — a row/column container.
 - **\`key\` is immutable.** Keys are set at creation and are how later calls address the node — re-keying could mint a duplicate address. To rename what you see in the layers panel, set \`name\`.
-- **No bare \`x\`/\`y\`, and no layout/size words yet** — they land on edit in a later slice (spelled \`absolute\`/\`pin\`/\`width\`/\`height\`, the create-side words).
+- **No bare \`x\`/\`y\`** — position is spelled \`absolute: { x, y }\`, resize behavior is \`pin\`.
 - **An empty delta is rejected**, not silently committed — an empty edit would still mint an undo step.
 - **Each edit is one undo step.** The whole delta validates before the first write; if Figma refuses a write mid-apply, the edit rolls back to how the node was and the error carries the target's identity, Figma's reason, and how many earlier mutating calls in the run still stand.
 - Delta values are **absolute** (a fill, an opacity), never relative (\`+10\`) — re-running the same edit converges instead of compounding.`;

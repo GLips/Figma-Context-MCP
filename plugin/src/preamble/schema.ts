@@ -68,7 +68,9 @@ export type EffectsSugar = {
 
 // The `effects` prop accepts the sugar bag, an already-typed EffectSpec[] (what flcm.effects returns), or
 // a CSS-string bag.
-export type EffectsInput = EffectSpec[] | WriteCssEffects | EffectsSugar;
+// "none" is the surface-wide removal word (CSS's own absence spelling): effects:"none" clears the
+// node's effects, the same way fill/stroke:"none" clear paint.
+export type EffectsInput = EffectSpec[] | WriteCssEffects | EffectsSugar | "none";
 
 // ---- prop() — one optional field carrying its note (.describe) and, when the shown type should differ
 // from the inferred one, a display label (.meta.type). The generator reads .description + .meta().type. ----
@@ -111,32 +113,35 @@ const SIZE_FIELDS = {
     'number | "fill" | "hug" | "N%"',
   ),
   absolute: prop(
-    z.object({
-      x: z.union([z.number(), z.string()]).optional(),
-      y: z.union([z.number(), z.string()]).optional(),
-      anchor: z
-        .object({
-          x: z.enum(["left", "center", "right"]).optional(),
-          y: z.enum(["top", "center", "bottom"]).optional(),
-        })
-        .optional(),
-    }),
-    'Lifts the node out of its parent\'s auto-layout flow and pins it at x/y relative to the parent. Use for overlays, badges, decorations. x/y are px numbers or "N%" (percent of the parent axis). `anchor` picks which point of the node lands on x/y — x: "left"|"center"|"right", y: "top"|"center"|"bottom" (default { left, top }); e.g. anchor:{ x:"center" } with x:"50%" centres the node on the midpoint instead of offsetting it by its own width.',
-    '{ x?, y?, anchor?: { x?, y? } } — x/y number or "N%"',
+    z.union([
+      z.object({
+        x: z.union([z.number(), z.string()]).optional(),
+        y: z.union([z.number(), z.string()]).optional(),
+        anchor: z
+          .object({
+            x: z.enum(["left", "center", "right"]).optional(),
+            y: z.enum(["top", "center", "bottom"]).optional(),
+          })
+          .optional(),
+      }),
+      z.literal("none"),
+    ]),
+    'Lifts the node out of its parent\'s auto-layout flow and pins it at x/y relative to the parent. Use for overlays, badges, decorations. x/y are px numbers or "N%" (percent of the parent axis). `anchor` picks which point of the node lands on x/y — x: "left"|"center"|"right", y: "top"|"center"|"bottom" (default { left, top }); e.g. anchor:{ x:"center" } with x:"50%" centres the node on the midpoint instead of offsetting it by its own width. In flcm.edit, "none" returns the node to its parent\'s flow.',
+    '{ x?, y?, anchor?: { x?, y? } } | "none" — x/y number or "N%"',
   ),
   pin: prop(
-    z.custom<{ x?: PinX; y?: PinY }>(),
-    'Constraint override — how this node responds when its parent resizes. Overrides the auto choice (w:"fill"→stretch, "N%"→scale, percent absolute position→center, else pinned to the near edge). x: "left"|"center"|"right"|"stretch"|"scale"; y: "top"|"center"|"bottom"|"stretch"|"scale". Honored for a child of a free-form parent and for any `absolute` child; ignored on an in-flow auto-layout child (which reflows via fill/hug instead).',
-    '{ x?, y? } — x: left/center/right/stretch/scale, y: top/center/bottom/stretch/scale',
+    z.custom<{ x?: PinX; y?: PinY } | "none">(),
+    'Constraint override — how this node responds when its parent resizes. Overrides the auto choice (w:"fill"→stretch, "N%"→scale, percent absolute position→center, else pinned to the near edge). x: "left"|"center"|"right"|"stretch"|"scale"; y: "top"|"center"|"bottom"|"stretch"|"scale". Honored for a child of a free-form parent and for any `absolute` child; ignored on an in-flow auto-layout child (which reflows via fill/hug instead). In flcm.edit, "none" on an axis (or the whole prop) restores the default near-edge pin.',
+    '{ x?, y? } | "none" — x: left/center/right/stretch/scale/none, y: top/center/bottom/stretch/scale/none',
   ),
 };
 
 const APPEARANCE_FIELDS = {
-  fill: color("Background paint — a color/gradient string, or flcm.gradient(...)."),
-  stroke: color("Border paint."),
+  fill: color('Background paint — a color/gradient string, or flcm.gradient(...). "none" removes the paint.'),
+  stroke: color('Border paint. "none" removes it.'),
   strokeWidth: metric("Border thickness."),
   borderRadius: metric("Corner radius. Frames and rectangles only (ellipses ignore it)."),
-  effects: prop(z.custom<EffectsInput>(), "Shadows / blur — flcm.effects({...}), or a CSS-string bag.", "effects value"),
+  effects: prop(z.custom<EffectsInput>(), 'Shadows / blur — flcm.effects({...}), or a CSS-string bag. "none" removes all effects.', "effects value"),
   rotation: degrees("Rotation in degrees."),
 };
 
@@ -305,12 +310,14 @@ export type LineProps = z.infer<typeof LineSchema>;
 export type PathProps = z.infer<typeof PathSchema>;
 export type SvgProps = z.infer<typeof SvgSchema>;
 
-// The flcm.edit(target, changes) delta — the node-local subset of the ONE authoring vocabulary (no
-// second dialect, invariant: same spellings, same parsers as create). Entries REUSE the create field
-// objects (the RUN_FIELDS pattern), so a prop can't mean something different under edit. Two absences
-// are the contract, not an oversight: `key` is immutable under edit (a delta naming it fails loud —
-// re-keying could mint a duplicate address), and layout/size/text words land in later slices — an
-// unknown key fails loud naming this closed set.
+// The flcm.edit(target, changes) delta — the ONE authoring vocabulary minus text words (no second
+// dialect, invariant: same spellings, same parsers as create). Entries REUSE the create field
+// objects (the RUN_FIELDS pattern), so a prop can't mean something different under edit. Which
+// words apply to which node type is the runtime's per-type gate (edit.ts DELTA_KEYS_BY_TYPE,
+// composed from the same KNOWN_KEYS atoms) — this schema is the flat closed set an unknown key
+// fails loud against. Two absences are the contract, not an oversight: `key` is immutable under
+// edit (a delta naming it fails loud — re-keying could mint a duplicate address), and text words
+// (content, textStyle, color) land in the text slice.
 const EDIT_FIELDS = {
   name: SHARED_FIELDS.name,
   opacity: SHARED_FIELDS.opacity,
@@ -324,6 +331,13 @@ const EDIT_FIELDS = {
   effects: APPEARANCE_FIELDS.effects,
   rotation: APPEARANCE_FIELDS.rotation,
   clip: FRAME_FIELDS.clip,
+  width: SIZE_FIELDS.width,
+  height: SIZE_FIELDS.height,
+  absolute: SIZE_FIELDS.absolute,
+  pin: SIZE_FIELDS.pin,
+  layout: FRAME_FIELDS.layout,
+  length: LINE_FIELDS.length,
+  w: LINE_FIELDS.w,
 };
 export const EditSchema = z.object(EDIT_FIELDS);
 export type EditDelta = z.infer<typeof EditSchema>;
@@ -461,6 +475,11 @@ export const VERBS: VerbDoc[] = [
   { category: "read", signature: "await flcm.selection()", builds: "the current selection as slim handles", args: "no args" },
   { category: "target", signature: "flcm.id(nodeId)", builds: "a raw-id target ref", args: "a node id string — resolved as an id, never scanned as an flcm/key" },
 ];
+
+// Re-exported for the doc generator: which FIELD_GROUPS compose each node type's edit surface —
+// the same table edit.ts builds its runtime legality gate from, so the per-type doc lists and the
+// gate cannot drift. (A runtime value, but from zod-free ir.ts — the purity gate is unaffected.)
+export { EDIT_TYPE_WORD_GROUPS } from "./ir.js";
 
 // ---- Field-group registry — how the reference groups props into tables. Each verb's full schema drives
 // its TYPE; these groups drive its DOC layout (shared/size tables once, verb-specific tables per verb). ----

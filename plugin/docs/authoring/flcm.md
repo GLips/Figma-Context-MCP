@@ -65,8 +65,8 @@ Every prop is optional; an omitted prop is simply not applied (a frame with no `
 | --- | --- | --- |
 | `width` | number \| "fill" \| "hug" \| "N%" | Width. A number is fixed px; "N%" is a percent of the parent on this axis (free-form parent with a fixed size only). "fill" stretches to the parent (needs an auto-layout parent); "hug" shrinks to content. Not a "px" string. |
 | `height` | number \| "fill" \| "hug" \| "N%" | Height. Same rules as width. |
-| `absolute` | { x?, y?, anchor?: { x?, y? } } — x/y number or "N%" | Lifts the node out of its parent's auto-layout flow and pins it at x/y relative to the parent. Use for overlays, badges, decorations. x/y are px numbers or "N%" (percent of the parent axis). `anchor` picks which point of the node lands on x/y — x: "left"\|"center"\|"right", y: "top"\|"center"\|"bottom" (default { left, top }); e.g. anchor:{ x:"center" } with x:"50%" centres the node on the midpoint instead of offsetting it by its own width. |
-| `pin` | { x?, y? } — x: left/center/right/stretch/scale, y: top/center/bottom/stretch/scale | Constraint override — how this node responds when its parent resizes. Overrides the auto choice (w:"fill"→stretch, "N%"→scale, percent absolute position→center, else pinned to the near edge). x: "left"\|"center"\|"right"\|"stretch"\|"scale"; y: "top"\|"center"\|"bottom"\|"stretch"\|"scale". Honored for a child of a free-form parent and for any `absolute` child; ignored on an in-flow auto-layout child (which reflows via fill/hug instead). |
+| `absolute` | { x?, y?, anchor?: { x?, y? } } \| "none" — x/y number or "N%" | Lifts the node out of its parent's auto-layout flow and pins it at x/y relative to the parent. Use for overlays, badges, decorations. x/y are px numbers or "N%" (percent of the parent axis). `anchor` picks which point of the node lands on x/y — x: "left"\|"center"\|"right", y: "top"\|"center"\|"bottom" (default { left, top }); e.g. anchor:{ x:"center" } with x:"50%" centres the node on the midpoint instead of offsetting it by its own width. In flcm.edit, "none" returns the node to its parent's flow. |
+| `pin` | { x?, y? } \| "none" — x: left/center/right/stretch/scale/none, y: top/center/bottom/stretch/scale/none | Constraint override — how this node responds when its parent resizes. Overrides the auto choice (w:"fill"→stretch, "N%"→scale, percent absolute position→center, else pinned to the near edge). x: "left"\|"center"\|"right"\|"stretch"\|"scale"; y: "top"\|"center"\|"bottom"\|"stretch"\|"scale". Honored for a child of a free-form parent and for any `absolute` child; ignored on an in-flow auto-layout child (which reflows via fill/hug instead). In flcm.edit, "none" on an axis (or the whole prop) restores the default near-edge pin. |
 
 #### Percent sizing
 
@@ -126,11 +126,11 @@ flcm.frame({ width: 320, height: 8, borderRadius: 4, fill: "#E5E7EB" }, [
 
 | Prop | Type | Notes |
 | --- | --- | --- |
-| `fill` | color / gradient | Background paint — a color/gradient string, or flcm.gradient(...). |
-| `stroke` | color / gradient | Border paint. |
+| `fill` | color / gradient | Background paint — a color/gradient string, or flcm.gradient(...). "none" removes the paint. |
+| `stroke` | color / gradient | Border paint. "none" removes it. |
 | `strokeWidth` | number \| "Npx" | Border thickness. |
 | `borderRadius` | number \| "Npx" | Corner radius. Frames and rectangles only (ellipses ignore it). |
-| `effects` | effects value | Shadows / blur — flcm.effects({...}), or a CSS-string bag. |
+| `effects` | effects value | Shadows / blur — flcm.effects({...}), or a CSS-string bag. "none" removes all effects. |
 | `rotation` | number (deg) | Rotation in degrees. |
 | `layout` | { mode?, gap?, padding?, justifyContent?, alignItems? } | Auto-layout container config (mode/gap/padding/justifyContent/alignItems). Omitted or mode:"none" = free-form (children position absolutely). |
 | `clip` | boolean | Clip children to the frame's bounds (clipsContent). Default false — like CSS, overflow is visible unless you set clip:true. |
@@ -212,11 +212,11 @@ Each styled run's delta fields:
 
 | Prop | Type | Notes |
 | --- | --- | --- |
-| `fill` | color / gradient | Background paint — a color/gradient string, or flcm.gradient(...). |
-| `stroke` | color / gradient | Border paint. |
+| `fill` | color / gradient | Background paint — a color/gradient string, or flcm.gradient(...). "none" removes the paint. |
+| `stroke` | color / gradient | Border paint. "none" removes it. |
 | `strokeWidth` | number \| "Npx" | Border thickness. |
 | `borderRadius` | number \| "Npx" | Corner radius. Frames and rectangles only (ellipses ignore it). |
-| `effects` | effects value | Shadows / blur — flcm.effects({...}), or a CSS-string bag. |
+| `effects` | effects value | Shadows / blur — flcm.effects({...}), or a CSS-string bag. "none" removes all effects. |
 | `rotation` | number (deg) | Rotation in degrees. |
 
 ### flcm.line — line props
@@ -229,8 +229,8 @@ Each styled run's delta fields:
 | `length` | number | The line's length in px. |
 | `w` | number | The line's length in px — alias for `length` (`length` wins if both are set). |
 | `rotation` | number (deg) | Degrees. A horizontal line rotated 90° becomes vertical. |
-| `absolute` | { x?, y?, anchor?: { x?, y? } } — x/y number or "N%" | Lifts the node out of its parent's auto-layout flow and pins it at x/y relative to the parent. Use for overlays, badges, decorations. x/y are px numbers or "N%" (percent of the parent axis). `anchor` picks which point of the node lands on x/y — x: "left"\|"center"\|"right", y: "top"\|"center"\|"bottom" (default { left, top }); e.g. anchor:{ x:"center" } with x:"50%" centres the node on the midpoint instead of offsetting it by its own width. |
-| `pin` | { x?, y? } — x: left/center/right/stretch/scale, y: top/center/bottom/stretch/scale | Constraint override — how this node responds when its parent resizes. Overrides the auto choice (w:"fill"→stretch, "N%"→scale, percent absolute position→center, else pinned to the near edge). x: "left"\|"center"\|"right"\|"stretch"\|"scale"; y: "top"\|"center"\|"bottom"\|"stretch"\|"scale". Honored for a child of a free-form parent and for any `absolute` child; ignored on an in-flow auto-layout child (which reflows via fill/hug instead). |
+| `absolute` | { x?, y?, anchor?: { x?, y? } } \| "none" — x/y number or "N%" | Lifts the node out of its parent's auto-layout flow and pins it at x/y relative to the parent. Use for overlays, badges, decorations. x/y are px numbers or "N%" (percent of the parent axis). `anchor` picks which point of the node lands on x/y — x: "left"\|"center"\|"right", y: "top"\|"center"\|"bottom" (default { left, top }); e.g. anchor:{ x:"center" } with x:"50%" centres the node on the midpoint instead of offsetting it by its own width. In flcm.edit, "none" returns the node to its parent's flow. |
+| `pin` | { x?, y? } \| "none" — x: left/center/right/stretch/scale/none, y: top/center/bottom/stretch/scale/none | Constraint override — how this node responds when its parent resizes. Overrides the auto choice (w:"fill"→stretch, "N%"→scale, percent absolute position→center, else pinned to the near edge). x: "left"\|"center"\|"right"\|"stretch"\|"scale"; y: "top"\|"center"\|"bottom"\|"stretch"\|"scale". Honored for a child of a free-form parent and for any `absolute` child; ignored on an in-flow auto-layout child (which reflows via fill/hug instead). In flcm.edit, "none" on an axis (or the whole prop) restores the default near-edge pin. |
 
 ### flcm.path — vector props
 
@@ -239,10 +239,10 @@ Each styled run's delta fields:
 | Prop | Type | Notes |
 | --- | --- | --- |
 | `d` | string | SVG path data — the `d` attribute string, e.g. "M12 2 L22 20 L2 20 Z". Any standard command works (H V S T A and relative/lowercase are auto-normalized); only genuinely malformed data fails. Required. |
-| `fill` | color / gradient | Background paint — a color/gradient string, or flcm.gradient(...). |
-| `stroke` | color / gradient | Border paint. |
+| `fill` | color / gradient | Background paint — a color/gradient string, or flcm.gradient(...). "none" removes the paint. |
+| `stroke` | color / gradient | Border paint. "none" removes it. |
 | `strokeWidth` | number \| "Npx" | Border thickness. |
-| `effects` | effects value | Shadows / blur — flcm.effects({...}), or a CSS-string bag. |
+| `effects` | effects value | Shadows / blur — flcm.effects({...}), or a CSS-string bag. "none" removes all effects. |
 | `rotation` | number (deg) | Rotation in degrees. |
 
 ## Vector art (svg & path)
@@ -405,21 +405,44 @@ out.keyed["email:input"].id;  // a nested keyed node
 | `mixBlendMode` | "normal" \| "multiply" \| "screen" \| "overlay" \| "soft-light" \| … (CSS mix-blend-mode) | Blend mode — a CSS mix-blend-mode name (multiply, screen, overlay, soft-light, color-dodge, …). Composites this node against what's behind it. An unknown name fails loud. |
 | `visible` | boolean | Layer visibility. A hidden node is invisible to the read verbs too — find/get cover the RENDERED document — so re-target it by id, not by a fresh find. |
 | `locked` | boolean | Lock the layer against USER pointer edits in the Figma UI. The API (and flcm.edit) still writes to a locked node. |
-| `fill` | color / gradient | Background paint — a color/gradient string, or flcm.gradient(...). |
-| `stroke` | color / gradient | Border paint. |
+| `fill` | color / gradient | Background paint — a color/gradient string, or flcm.gradient(...). "none" removes the paint. |
+| `stroke` | color / gradient | Border paint. "none" removes it. |
 | `strokeWidth` | number \| "Npx" | Border thickness. |
 | `borderRadius` | number \| "Npx" | Corner radius. Frames and rectangles only (ellipses ignore it). |
-| `effects` | effects value | Shadows / blur — flcm.effects({...}), or a CSS-string bag. |
+| `effects` | effects value | Shadows / blur — flcm.effects({...}), or a CSS-string bag. "none" removes all effects. |
 | `rotation` | number (deg) | Rotation in degrees. |
 | `clip` | boolean | Clip children to the frame's bounds (clipsContent). Default false — like CSS, overflow is visible unless you set clip:true. |
+| `width` | number \| "fill" \| "hug" \| "N%" | Width. A number is fixed px; "N%" is a percent of the parent on this axis (free-form parent with a fixed size only). "fill" stretches to the parent (needs an auto-layout parent); "hug" shrinks to content. Not a "px" string. |
+| `height` | number \| "fill" \| "hug" \| "N%" | Height. Same rules as width. |
+| `absolute` | { x?, y?, anchor?: { x?, y? } } \| "none" — x/y number or "N%" | Lifts the node out of its parent's auto-layout flow and pins it at x/y relative to the parent. Use for overlays, badges, decorations. x/y are px numbers or "N%" (percent of the parent axis). `anchor` picks which point of the node lands on x/y — x: "left"\|"center"\|"right", y: "top"\|"center"\|"bottom" (default { left, top }); e.g. anchor:{ x:"center" } with x:"50%" centres the node on the midpoint instead of offsetting it by its own width. In flcm.edit, "none" returns the node to its parent's flow. |
+| `pin` | { x?, y? } \| "none" — x: left/center/right/stretch/scale/none, y: top/center/bottom/stretch/scale/none | Constraint override — how this node responds when its parent resizes. Overrides the auto choice (w:"fill"→stretch, "N%"→scale, percent absolute position→center, else pinned to the near edge). x: "left"\|"center"\|"right"\|"stretch"\|"scale"; y: "top"\|"center"\|"bottom"\|"stretch"\|"scale". Honored for a child of a free-form parent and for any `absolute` child; ignored on an in-flow auto-layout child (which reflows via fill/hug instead). In flcm.edit, "none" on an axis (or the whole prop) restores the default near-edge pin. |
+| `layout` | { mode?, gap?, padding?, justifyContent?, alignItems? } | Auto-layout container config (mode/gap/padding/justifyContent/alignItems). Omitted or mode:"none" = free-form (children position absolutely). |
+| `length` | number | The line's length in px. |
+| `w` | number | The line's length in px — alias for `length` (`length` wins if both are set). |
+
+### Words by node type
+
+- **FRAME** — `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `width`, `height`, `absolute`, `pin`, `fill`, `stroke`, `strokeWidth`, `borderRadius`, `effects`, `rotation`, `layout`, `clip`
+- **TEXT** — `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `width`, `height`, `absolute`, `pin`
+- **RECTANGLE / ELLIPSE** — `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `width`, `height`, `absolute`, `pin`, `fill`, `stroke`, `strokeWidth`, `borderRadius`, `effects`, `rotation`
+- **LINE** — `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `stroke`, `strokeWidth`, `length`, `w`, `rotation`, `absolute`, `pin`
+- **VECTOR (path- or svg-born)** — `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `width`, `height`, `absolute`, `pin`, `fill`, `stroke`, `strokeWidth`, `effects`, `rotation`
 
 On a node type flcm can't create (GROUP, INSTANCE, COMPONENT, …) only the shared words apply: `name`, `opacity`, `mixBlendMode`, `visible`, `locked`.
+
+### Removal — the `"none"` word
+
+`"none"` (CSS's own absence spelling) is the one removal word, surface-wide: `fill: "none"` / `stroke: "none"` clear the paint, `effects: "none"` clears all effects, `absolute: "none"` returns the node to its parent's flow, `pin: "none"` (or `pin: { x: "none" }` per axis) restores the default near-edge pin, `layout: { mode: "none" }` switches auto-layout off (children convert per Figma's own semantics — look, then nudge). The same spellings are legal at create, where they mean the explicit default (a transparent fill, free-form layout). Sizes are never *removed*, only replaced within the number/`"fill"`/`"hug"` trio: `width: "hug"` is how a fixed or filled width comes off.
 
 ### Rules
 
 - **A node type takes exactly the words create accepts for it.** `fill` on a LINE, `clip` on a TEXT, `borderRadius` on a VECTOR — each rejects loud naming the prop, the node type, and that type's editable words, the same way the constructor would.
+- **Only the fields you pass change — per axis, too.** `pin: { x: "center" }` keeps the y pin; `absolute: { x: 10 }` keeps the live y; `width: "hug"` leaves the height's sizing alone.
+- **Un-filling really un-fills.** `width: 80` or `"hug"` on a child that was `"fill"` clears the grow/stretch marks fill installed — the new size governs, not the old fill.
+- **Container edits ripple by stated rules.** `layout.alignItems: "stretch"` walks the live children setting their stretch marks; writing any other alignItems clears every stretch mark (Figma doesn't store which child stretched because of the container — a child that should keep filling gets its own `height: "fill"` edit after; an un-stretched child keeps its current size rather than re-hugging). Changing the layout direction — row↔column, or `"none"` to either — clears both flow marks (grow and stretch) on every in-flow child: the axes they meant just moved.
+- **Percents resolve immediately** against the live parent's size. Rejected loud, before any write: a percent on an in-flow child of an auto-layout parent that hugs that axis (a cycle), `"fill"`/`"N%"` on a node whose parent is the page (no bounded size), `"hug"` on a node with nothing to measure (not an auto-layout container or text), a fixed/hug `height` on TEXT (its height follows content — edit `width`, or use `height: "fill"`), and container words (`gap`/`padding`/`justifyContent`/`alignItems`) on a frame that isn't — or after this delta won't be — a row/column container.
 - **`key` is immutable.** Keys are set at creation and are how later calls address the node — re-keying could mint a duplicate address. To rename what you see in the layers panel, set `name`.
-- **No bare `x`/`y`, and no layout/size words yet** — they land on edit in a later slice (spelled `absolute`/`pin`/`width`/`height`, the create-side words).
+- **No bare `x`/`y`** — position is spelled `absolute: { x, y }`, resize behavior is `pin`.
 - **An empty delta is rejected**, not silently committed — an empty edit would still mint an undo step.
 - **Each edit is one undo step.** The whole delta validates before the first write; if Figma refuses a write mid-apply, the edit rolls back to how the node was and the error carries the target's identity, Figma's reason, and how many earlier mutating calls in the run still stand.
 - Delta values are **absolute** (a fill, an opacity), never relative (`+10`) — re-running the same edit converges instead of compounding.
