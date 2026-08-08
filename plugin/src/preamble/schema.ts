@@ -443,7 +443,9 @@ export interface Flcm {
   // figma-mcp's REST read emits, every value inline (no styles refs), for any node type.
   get(target: Target): Promise<SimplifiedNode>;
   // Locate: every node matching the query, as slim handles (identity + a cheap layout world-model). May be
-  // empty; AND-combines type/name/key/within (default scope: current page). Dive into a hit with `get`. An
+  // empty; AND-combines type/name/key/within (default scope: current page). The query is a FILTER, not an
+  // address — only `within` takes a target (id/key/handle); the other facets are match conditions, and a
+  // bare string is rejected rather than guessed at. Dive into a hit with `get`. An
   // optional predicate filters by anything in the full read shape (values inline: `n.fills?.[0] === '#FFF'`);
   // the query pre-filters cheaply, only survivors are materialized (a predicate-only find has a hard cap).
   find(query?: FindQuery, predicate?: ReadPredicate): Promise<SlimHandle[]>;
@@ -484,7 +486,7 @@ export const VERBS: VerbDoc[] = [
   { category: "render", signature: "await flcm.render(tree)", builds: "live nodes", args: "returns { root, keyed }" },
   { category: "edit", signature: "await flcm.edit(target, changes)", builds: "a nudged existing node (returns its updated Handle)", args: "target (an flcm/key, node id, flcm.id(id), or handle), then a partial delta in the same vocabulary as create", schema: EditSchema },
   { category: "read", signature: "await flcm.get(target)", builds: "a node's full read spec (values inline)", args: "target: an flcm/key, a node id, flcm.id(id), or a handle" },
-  { category: "read", signature: "await flcm.find(query?, predicate?)", builds: "matching nodes as slim handles", args: "query { type?, name?, key?, within? } AND-combined; optional predicate over the full read shape (n => n.fills?.[0] === '#FFF')" },
+  { category: "read", signature: "await flcm.find(query?, predicate?)", builds: "matching nodes as slim handles", args: "query { type?, name?, key?, within? } AND-combined — a filter, not an address; only `within` takes a target. Optional predicate over the full read shape (n => n.fills?.[0] === '#FFF')" },
   { category: "read", signature: "await flcm.findOne(query?, predicate?)", builds: "exactly one slim handle (throws on 0 or >1)", args: "same query + predicate as find" },
   { category: "read", signature: "await flcm.selection()", builds: "the current selection as slim handles", args: "no args" },
   { category: "target", signature: "flcm.id(nodeId)", builds: "a raw-id target ref", args: "a node id string — resolved as an id, never scanned as an flcm/key" },

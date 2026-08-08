@@ -404,7 +404,15 @@ export function compileLineStroke(props: Pick<LineProps, "stroke" | "color">): W
 }
 
 function frame(props: FrameProps = {}, children?: WriteChild | WriteChild[]): WriteNode {
-  props = props || {};
+  // ?? not || (here and in every constructor): null/undefined mean "no props" (the pinned absence
+  // convention), but a present falsy non-object (false, 0, "") is malformed and must reach the
+  // gate's non-object reject, not read as absence.
+  props = props ?? {};
+  // An array arriving first is almost always the children — steer to the real fix rather than
+  // letting the generic non-object reject imply a props problem.
+  if (Array.isArray(props)) {
+    throw new Error('flcm.frame takes (props, children) — children are the second argument: flcm.frame({}, [...]).');
+  }
   rejectUnknownKeys(props, FRAME_KEYS, "flcm.frame");
   const wn: WriteNode = { type: "FRAME" };
   compileNodeLocalProps(wn, props, { radius: true, clip: true });
@@ -462,7 +470,7 @@ export function compileTextContent(content: unknown, base: WriteTextStyle): { te
 }
 
 function text(content: unknown, props: TextProps = {}): WriteNode {
-  props = props || {};
+  props = props ?? {};
   rejectUnknownKeys(props, TEXT_KEYS, "flcm.text");
   const wn: WriteNode = { type: "TEXT" };
   base(wn, props);
@@ -566,7 +574,7 @@ function compileRuns(runs: TextRunInput[], baseStyle: WriteTextStyle): WriteText
     let raw: string;
     let delta: StyleDeltaInput;
     if (typeof run === "string") { raw = run; delta = {}; }
-    else if (Array.isArray(run) && typeof run[0] === "string") { raw = run[0]; delta = run[1] || {}; }
+    else if (Array.isArray(run) && typeof run[0] === "string") { raw = run[0]; delta = run[1] ?? {}; }
     else {
       throw new Error('flcm.text: each run is a plain string or a [text, style] tuple like ["bold bit", { fontWeight: 700 }] — got ' + JSON.stringify(run) + ".");
     }
@@ -633,7 +641,7 @@ function assertHyperlink(url: unknown): string {
 }
 
 function shape(type: "RECTANGLE" | "ELLIPSE", props: ShapeProps = {}): WriteNode {
-  props = props || {};
+  props = props ?? {};
   rejectUnknownKeys(props, SHAPE_KEYS, type === "RECTANGLE" ? "flcm.rect" : "flcm.ellipse");
   const wn: WriteNode = { type };
   compileNodeLocalProps(wn, props, { radius: type === "RECTANGLE" });
@@ -646,7 +654,7 @@ function rect(props?: ShapeProps): WriteNode { return shape("RECTANGLE", props);
 function ellipse(props?: ShapeProps): WriteNode { return shape("ELLIPSE", props); }
 
 function line(props: LineProps = {}): WriteNode {
-  props = props || {};
+  props = props ?? {};
   rejectUnknownKeys(props, LINE_KEYS, "flcm.line");
   const wn: WriteNode = { type: "LINE" };
   base(wn, props);
@@ -669,7 +677,7 @@ function line(props: LineProps = {}): WriteNode {
 // ADR-0003 forbids, so reject them loud. The markup must look like an <svg> document (catches a URL/path
 // passed by mistake); the render-time parse (bridge) is the second, authoritative fail-loud.
 function svg(markup: unknown, props: SvgProps = {}): WriteNode {
-  props = props || {};
+  props = props ?? {};
   if (typeof markup !== "string" || !/<svg[\s>]/i.test(markup)) {
     throw new Error("flcm.svg: expected SVG markup containing an <svg> element — got " + JSON.stringify(markup) + ". For a themeable single-path vector use flcm.path({ d }) instead.");
   }
@@ -757,7 +765,7 @@ function image(url: unknown, opts: ImageOpts = {}): PaintSpec {
   if (typeof url !== "string" || !url.trim()) {
     throw new Error("flcm.image: expected an image url or local file path string, e.g. flcm.image(\"https://example.com/photo.jpg\") or flcm.image(\"assets/logo.png\") — got " + JSON.stringify(url) + ".");
   }
-  opts = opts || {};
+  opts = opts ?? {};
   rejectUnknownKeys(opts, IMAGE_KEYS, "flcm.image opts");
   const scaleMode = opts.scaleMode != null ? opts.scaleMode : "FILL";
   if (!IMAGE_SCALE_MODES.has(scaleMode)) {

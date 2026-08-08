@@ -254,6 +254,24 @@ async function filterByPredicate(hits: SceneNode[], root: ScanRoot, predicate: R
   return survivors;
 }
 
+// A bare string is deliberately NOT accepted as a query (ruled 2026-08-08). Target resolution can
+// afford one because EXISTENCE disambiguates — id, key, or neither, all checkable against the
+// document, ambiguity fails loud (resolveString). A query string has no tiebreak: "TEXT" is a
+// valid type, a plausible name, and a plausible key, and no amount of looking at the document
+// tells you which was meant. And the failure modes aren't symmetric — a wrong target guess is a
+// loud "no node found"; a wrong query guess is an EMPTY RESULT SET, a silently wrong answer.
+// So: steer to the object spelling, never guess. (A query is a FILTER; the target-shaped field
+// is `within` — the docs say the same.)
+function rejectStringQuery(query: unknown, verb: string): void {
+  if (typeof query === "string") {
+    throw new Error(
+      `${verb} takes a query object; got a string. Did you mean ${verb}({ type: ${JSON.stringify(query)} }) — ` +
+        `or filter by name/key? The query keys are ${[...FIND_KEY_SET].map((k) => JSON.stringify(k)).join(", ")} ` +
+        `(within is the target-shaped scope).`,
+    );
+  }
+}
+
 /**
  * flcm.find — locate every RENDERED node matching the query, as SlimHandles (may be empty). The declarative
  * facets (type/name/key/within) AND-combine; `within` scopes the scan (default: current page). Hidden nodes
@@ -266,6 +284,7 @@ async function filterByPredicate(hits: SceneNode[], root: ScanRoot, predicate: R
  * rendered candidate, up to a hard cap past which it fails loud (see MATERIALIZE_CAP).
  */
 export async function find(query: FindQuery = {}, predicate?: ReadPredicate): Promise<SlimHandle[]> {
+  rejectStringQuery(query, "flcm.find");
   rejectUnknownKeys(query, FIND_KEY_SET, "flcm.find", "query key");
   const root = await scanRoot(query.within);
   const hits = root.findAll((node) => matchesQuery(node, query) && isRendered(node));
@@ -279,6 +298,7 @@ export async function find(query: FindQuery = {}, predicate?: ReadPredicate): Pr
  * with type/key/within (or the predicate) when it throws on >1. Same query+predicate as `find`.
  */
 export async function findOne(query: FindQuery = {}, predicate?: ReadPredicate): Promise<SlimHandle> {
+  rejectStringQuery(query, "flcm.findOne");
   const hits = await find(query, predicate);
   if (hits.length !== 1) {
     throw new Error(

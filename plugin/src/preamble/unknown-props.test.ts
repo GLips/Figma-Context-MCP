@@ -9,6 +9,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
 import { KNOWN_KEYS, ABSOLUTE_KEYS, DIRECTIONAL_KEYS, frame, text, rect, line, svg, path, gradient, image, effects } from "./flcm.js";
+import { find } from "./read.js";
 import { FIELD_GROUPS, SizeSchema } from "./schema.js";
 
 // Constructors are inert POJO builders (figma untouched), but flcm.ts imports the bridge — install the mock.
@@ -48,6 +49,25 @@ test("verbs reject an unknown top-level prop, naming it and the verb", () => {
   assert.throws(() => gradient({ type: "linear", stops: ["#000", "#fff"], colors: [] } as never), /unknown prop "colors" on flcm\.gradient/);
   assert.throws(() => image("https://x/y.png", { scale: "FILL" } as never), /unknown prop "scale" on flcm\.image opts/);
   assert.throws(() => effects({ dropShadow: true } as never), /unknown prop "dropShadow" on flcm\.effects/);
+});
+
+test("a non-object where a props/query object belongs names THAT mistake, not the string's indices", async () => {
+  // find refuses a bare string with steering (a query has no existence tiebreak, unlike a Target —
+  // the ruling lives on read.ts's rejectStringQuery); the author's own value is echoed into the fix.
+  await assert.rejects(find("TEXT" as never), (err: Error) => {
+    assert.match(err.message, /flcm\.find takes a query object; got a string/);
+    assert.match(err.message, /Did you mean flcm\.find\(\{ type: "TEXT" \}\)/);
+    return true;
+  });
+  // Every other props bag rides the shared gate's non-object backstop; frame's array slip gets
+  // its own steering (children are positional, so "fix your props" would misdiagnose it).
+  assert.throws(() => rect("red" as never), /flcm\.rect takes an object \(props: .*— got "red"/s);
+  assert.throws(() => frame([1, 2] as never), /children are the second argument/);
+  // A present falsy non-object is malformed, not absence — `props ?? {}` (never `||`) is what
+  // keeps false/0/"" flowing into the gate while null/undefined still mean "no props".
+  assert.throws(() => frame(false as never), /flcm\.frame takes an object .*— got false/s);
+  assert.throws(() => text([["s", false]] as never), /run\[0\] takes an object .*— got false/s);
+  assert.doesNotThrow(() => rect(null as never));
 });
 
 test("nested authoring objects reject unknown keys with a path-threaded error", () => {

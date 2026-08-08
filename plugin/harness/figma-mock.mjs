@@ -23,6 +23,10 @@ const COPY_FIELDS = ["name", "layoutMode", "itemSpacing", "paddingTop", "padding
   "cornerRadius", "opacity", "visible", "rotation", "characters", "fontSize", "textAutoResize",
   "_fixedW", "_fixedH"];
 
+// Every per-range styling bucket the setRange* recorders write — the set a `characters` write clears.
+const RANGE_BUCKETS = ["_rangeFonts", "_rangeSizes", "_rangeFills", "_rangeLineHeights",
+  "_rangeLetterSpacings", "_rangeDecorations", "_rangeHyperlinks"];
+
 class Node {
   constructor(type) {
     this.id = nextId();
@@ -120,6 +124,19 @@ class Node {
   // A range whose font isn't first loaded throws live — the preamble preloads every run font, so we don't
   // model that rejection here; resolveFontStrict is what guards the unloaded case in the std-lib.
   _range(bucket, start, end, value) { (this[bucket] || (this[bucket] = [])).push({ start, end, value }); }
+
+  // A `characters` write re-uniforms the text — VERIFIED live 2026-08-08 (full replacement on a
+  // mixed node: fontName came back a single non-mixed value, one distinct style across every
+  // char). WHICH style survives is only half-grounded: the live repro's first char was unstyled,
+  // so base and leading-run were indistinguishable (community reports say the leading run wins);
+  // this mock falls back to the base. Probe a bold-FIRST-span replacement before leaning on the
+  // post-write font. Range styling only exists if the same edit re-applies runs AFTER the write,
+  // which is the bridge's order (buildText/applyTextProps: characters, then setRange*).
+  get characters() { return this._characters; }
+  set characters(v) {
+    this._characters = v;
+    for (const b of RANGE_BUCKETS) this[b] = [];
+  }
   setRangeFontName(start, end, value) { this._range("_rangeFonts", start, end, value); }
   setRangeFontSize(start, end, value) { this._range("_rangeSizes", start, end, value); }
   setRangeFills(start, end, value) { this._range("_rangeFills", start, end, value); }
@@ -131,10 +148,7 @@ class Node {
   // Live Figma reports figma.mixed when the characters don't all share one font — recorded
   // setRangeFontName ranges that diverge from the base make this node mixed the same way. Writing
   // fontName is a whole-node font reset live (every range takes the new font), so the setter wipes
-  // the per-range variation. A `characters` write deliberately does NOT wipe them: live Figma
-  // preserves per-range styling across a characters assignment on a best-effort positional diff,
-  // and stale-ranges-by-offset is the closest cheap model — whether a FULL replacement re-uniforms
-  // live is unverified (queued for live dogfood); revisit here if it does.
+  // the per-range variation — and so does a `characters` write (see the characters setter above).
   get fontName() {
     if (this.type === "TEXT" && (this._rangeFonts || []).length && this.characters.length) {
       const fonts = this.getRangeAllFontNames(0, this.characters.length);

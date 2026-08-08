@@ -569,6 +569,11 @@ test("a plain-string `content` on a MIXED text succeeds, preloading EVERY range 
   figma.fontLoads.length = 0;
   await edit("label", { content: "flat" });
   assert.equal(node.characters, "flat");
+  // Verified live 2026-08-08: a whole-content replacement RE-UNIFORMS the text (no positional
+  // carry-over of old range styling). Base and leading-run styles coincide here (char 0 is
+  // unstyled), so this assertion holds under either candidate rule for WHICH style survives —
+  // the bold-first-span case is deliberately unpinned until a live probe settles it.
+  assert.deepEqual(node.fontName, { family: "Inter", style: "Regular" });
   assert.deepEqual(figma.fontLoads, [
     { family: "Inter", style: "Regular" },
     { family: "Inter", style: "Bold" },
