@@ -87,11 +87,12 @@ export function liveFontWords(fontName: { family: string; style: string }): Writ
   };
 }
 
-// Every font an edit's mutating span will touch, loaded BEFORE the mutation lock: fonts gate every
-// reflowing text mutation, not just characters — size, clamp, and style writes throw on an unloaded
-// font too. Two halves: the LIVE fonts (all range fonts when mixed — the reflow re-lays existing
-// ranges), and the AUTHORED triples the appliers will resolve (loadFontsForTree over a synthetic
-// one-node tree, so edit preloads exactly the way render does).
+// Every font an edit's mutating span will touch, loaded in the verb's read-only PREPARE phase
+// (before the entry seal): fonts gate every reflowing text mutation, not just characters — size,
+// clamp, and style writes throw on an unloaded font too. Two halves: the LIVE fonts (all range
+// fonts when mixed — the reflow re-lays existing ranges), and the AUTHORED triples the appliers
+// will resolve (loadFontsForTree over a synthetic one-node tree, so edit preloads exactly the way
+// render does).
 export async function loadFontsForTextEdit(node: TextNode, patch: WriteProps): Promise<FontMap> {
   const reflows =
     patch.text != null || patch.runs || patch.textStyle || patch.maxLines != null ||

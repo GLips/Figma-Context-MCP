@@ -13,13 +13,12 @@
 // to the same canvas; the residue is a duplicate undo step, not divergent state. Keep it that way:
 // a relative delta word would turn that accepted race into canvas corruption.
 //
-// Validation is ENTRY-time, not apply-time: the live-state gates (layout resolvability, clamp
-// boundedness, font enrichment) read the canvas before this call joins the mutation queue, so a
-// run that races its own edits (Promise.all over the same node) can validate both against the
-// pre-race state — the writes still serialize and each edit alone converges, but one edit's gate
-// can be stale by the time it applies. Moving those gates inside the lock would make every reject
-// mint-and-roll-back an undo step (today rejects leave zero undo residue, and the suite pins
-// that). Known, unresolved trade — do not quietly re-home the gates without deciding it.
+// Validation is APPLY-time-fresh: the whole delta pipeline — vocabulary, target resolution, the
+// layout gates, clamp boundedness, font-identity enrichment, the font/image loads — runs as the
+// verb's serialized PREPARE phase inside the lock's queue slot (reserved synchronously; edit() is
+// a single enterMutatingVerb expression), so a run racing its own edits still has each edit's
+// gates read the canvas exactly as that edit will find it. A prepare reject leaves zero undo
+// residue; only the sealed apply span can mint a step.
 
 import { WriteProps, WriteType, WriteLayout, WriteTextStyle, Target, Handle, EDIT_TYPE_WORD_GROUPS, namesFontIdentity } from "./ir.js";
 import { resolveTarget } from "./read.js";
@@ -97,7 +96,7 @@ function rejectNonDeltaWords(changes: EditDelta): void {
   }
 }
 
-// The per-type legality gate (runs after resolve, before the lock, so an illegal word rejects with
+// The per-type legality gate (prepare phase, after resolve and before the entry seal, so an illegal word rejects with
 // zero writes). Returns the type's word set so the compile step can flag radius/clip from it.
 function assertDeltaLegalForType(node: SceneNode, changes: EditDelta): ReadonlySet<string> {
   const legal =
@@ -197,6 +196,19 @@ function compileTextDeltaWords(changes: EditDelta, patch: WriteProps, node: Text
       }
     }
   }
+  // The clamp gate's REVERSE: un-bounding the width while a live clamp stands would leave
+  // maxLines set on a text that never wraps — the same silent no-op, reached from the other
+  // side (clamp-then-hug instead of hug-then-clamp). Both orders must reject for the lock's
+  // sequential-order guarantee to mean the bad state is unreachable.
+  if (
+    patch.layout && patch.layout.sizing && patch.layout.sizing.horizontal === "hug" &&
+    node.maxLines != null && patch.maxLines !== "none"
+  ) {
+    throw new Error(
+      'flcm.edit: width:"hug" would unbound a clamped text — its live lineClamp (' + node.maxLines +
+        ') would never truncate again. Clear it in the same edit (textStyle: { lineClamp: "none" }) or keep a bounded width.',
+    );
+  }
   if (changes.color != null) patch.fills = compilePaintWord(changes.color, "color");
   if (changes.content != null) {
     const base = namesFontIdentity(patch.textStyle) ? patch.textStyle : liveBaseStyle(node);
@@ -250,38 +262,48 @@ function instanceAncestorOf(node: SceneNode): SceneNode | null {
  * appliers under the mutation lock (one undo step; a Figma refusal rolls back commit-then-undo),
  * and returns the node's updated Handle with fresh geometry.
  */
-export async function edit(target: Target, changes: EditDelta): Promise<Handle> {
-  rejectNonDeltaWords(changes);
-  const node = await resolveTarget(target);
-  const legal = assertDeltaLegalForType(node, changes);
-  const patch = compileDeltaPatch(changes, legal, node);
-  // Layout words that only mean something against the live tree (a page parent, hug legality, the
-  // hug-cycle percent) reject pre-lock like every other validation — zero writes on failure.
-  if (patch.layout) assertLayoutDeltaResolvable(node, patch.layout);
-  // Fonts gate every reflowing text mutation, not just characters — loaded before the lock
-  // (read-only, may await the font service), like the image fetch below.
-  const fonts = node.type === "TEXT" ? await loadFontsForTextEdit(node as TextNode, patch) : {};
-  // An image fill in the delta needs bytes before the mutating span — the fetch is read-only and
-  // stays outside the lock, like render's.
-  const images = await fetchTreeImages(patch);
-  return enterMutatingVerb("edit", async () => {
-    // Snapshot identity before the first write: a delta that renames and then hits a refusal would
-    // otherwise point at the NEW name — which the rollback is about to remove from the canvas.
-    const identity = identityOf(node);
-    try {
-      applyPaint(node, patch, { fonts, images });
-      applySceneProps(node, patch);
-      // Text BEFORE layout — create's own order (buildText: characters, then applyLeafSize): an
-      // anchor or percent in the same delta must resolve against the POST-reflow metrics, or a
-      // center anchor lands off by the text-size change and only converges on a second run. Fills
-      // still precede runs (applyPaint above), and clamp goes last — it clips against the wrap
-      // the sizing/content writes just produced.
-      if (node.type === "TEXT") applyTextProps(node as TextNode, patch, { fonts, images });
-      if (patch.layout) applyLiveNodeLayout(node, patch.layout);
-      if (node.type === "TEXT") applyTextClamp(node as TextNode, patch.maxLines);
-    } catch (cause) {
-      throw editPointerError(identity, cause, node);
-    }
-    return mintHandle(node);
-  });
+// A single expression on purpose: the queue slot is reserved before edit() can possibly yield,
+// which is the lock's invocation-order guarantee (see enterMutatingVerb) — don't add work above it.
+export function edit(target: Target, changes: EditDelta): Promise<Handle> {
+  return enterMutatingVerb(
+    "edit",
+    // Prepare — serialized, read-only, apply-time-fresh: every validation and canvas read
+    // (vocabulary, resolve, gates, enrichment) and every await (fonts, images) lives here; a
+    // throw rejects the verb with zero writes and zero undo residue.
+    async () => {
+      rejectNonDeltaWords(changes);
+      const node = await resolveTarget(target);
+      const legal = assertDeltaLegalForType(node, changes);
+      const patch = compileDeltaPatch(changes, legal, node);
+      // Layout words that only mean something against the live tree (a page parent, hug legality,
+      // the hug-cycle percent) reject here like every other validation — zero writes on failure.
+      if (patch.layout) assertLayoutDeltaResolvable(node, patch.layout);
+      // Fonts gate every reflowing text mutation, not just characters — loaded before the seal,
+      // like the image fetch below.
+      const fonts = node.type === "TEXT" ? await loadFontsForTextEdit(node as TextNode, patch) : {};
+      const images = await fetchTreeImages(patch);
+      return { node, patch, fonts, images };
+    },
+    // Apply — the sealed span: all writes, no awaits.
+    ({ node, patch, fonts, images }) => {
+      // Snapshot identity before the first write: a delta that renames and then hits a refusal
+      // would otherwise point at the NEW name — which the rollback is about to remove.
+      const identity = identityOf(node);
+      try {
+        applyPaint(node, patch, { fonts, images });
+        applySceneProps(node, patch);
+        // Text BEFORE layout — create's own order (buildText: characters, then applyLeafSize): an
+        // anchor or percent in the same delta must resolve against the POST-reflow metrics, or a
+        // center anchor lands off by the text-size change and only converges on a second run.
+        // Fills still precede runs (applyPaint above), and clamp goes last — it clips against the
+        // wrap the sizing/content writes just produced.
+        if (node.type === "TEXT") applyTextProps(node as TextNode, patch, { fonts, images });
+        if (patch.layout) applyLiveNodeLayout(node, patch.layout);
+        if (node.type === "TEXT") applyTextClamp(node as TextNode, patch.maxLines);
+      } catch (cause) {
+        throw editPointerError(identity, cause, node);
+      }
+      return mintHandle(node);
+    },
+  );
 }

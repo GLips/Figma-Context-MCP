@@ -922,30 +922,69 @@ export async function fetchTreeImages(tree: WriteProps): Promise<Record<string, 
 // render(tree) — the one place nodes are created. Loads fonts, walks the WriteNode tree, stamps each
 // `key` into pluginData('flcm/key'), and returns the root handle plus a map of every keyed node. Only
 // keyed nodes appear in `keyed`; a duplicate key within one render is a loud error (in bridge).
-async function render(tree: WriteNode): Promise<{ root: Handle; keyed: Record<string, Handle> }> {
-  if (!tree || typeof tree !== "object" || typeof tree.type !== "string") {
-    throw new Error("flcm.render: expected a node from flcm.frame()/text()/rect()/ellipse()/line() (or a raw WriteNode), got " + JSON.stringify(tree) + ".");
-  }
-  // The root has no parent to resolve a percent against, so reject it up front — before the image round-trip
-  // below (this check needs no bytes), and before buildNode, which only guards a percent on a *child*. A
-  // percent w/h/x/y belongs on a child, against its parent.
-  if (tree.layout && (tree.layout.percentSize || tree.layout.percentPos)) {
-    throw new Error("flcm: a percent w/h/x/y on the root node has no parent to resolve against — the root node sizes in px. Put the percent on a child, against its parent.");
-  }
-  const images = await fetchTreeImages(tree);
-  const fonts = await loadFontsForTree(tree);
-  // Only the MUTATING span enters the mutation lock (invariant 4): the image/font awaits above are
-  // read-only and may overlap between concurrent renders, but node creation must serialize — and a
-  // run the server cancelled is refused at the lock, before its first canvas write.
-  return enterMutatingVerb("render", async () => {
-    const ctx: RenderCtx = { keyed: {}, fonts, images, pending: [] };
-    // Build the tree (percent children land at a provisional size), then fold every percent/anchor into
-    // pixels against each parent's now-realized size in one post-walk pass (bridge.resolvePercents).
-    const root = buildNode(tree, ctx);
-    resolvePercents(ctx);
-    // Handles are minted only now: geometry settles once the whole tree is laid out (bridge.settleHandles).
-    return settleHandles(root, ctx.keyed);
-  });
+// A single expression on purpose: the queue slot is reserved before render() can possibly yield,
+// which is the lock's invocation-order guarantee (see enterMutatingVerb) — don't add work above it.
+function render(tree: WriteNode): Promise<{ root: Handle; keyed: Record<string, Handle> }> {
+  return enterMutatingVerb(
+    "render",
+    // Prepare — spec checks, then the read-only resource loads (parallel: neither depends on the
+    // other, and they're the run's two slowest awaits). A reject here — bad spec, blocked url,
+    // oversize, unreachable — exits with zero mutations and zero undo residue, and a run the
+    // server cancelled during the awaits is refused before the entry seal. Deliberate cost:
+    // concurrent renders' prepares now SUM (each waits its turn in the queue slot) against the
+    // server's never-suspended 45s run ceiling — and font-only prepares, which emit no bridge
+    // traffic, against the 15s inactivity deadline too — where they used to overlap. The price
+    // of one entry shape for every verb; a run that genuinely needs many cold fetches should
+    // split its work. Upside: the per-run in-flight image cap can no longer refuse a
+    // Promise.all of image renders.
+    async () => {
+      if (!tree || typeof tree !== "object" || typeof tree.type !== "string") {
+        throw new Error("flcm.render: expected a node from flcm.frame()/text()/rect()/ellipse()/line() (or a raw WriteNode), got " + JSON.stringify(tree) + ".");
+      }
+      // The root has no parent to resolve a percent against, so reject it before the image
+      // round-trip (this check needs no bytes) and before buildNode, which only guards a percent
+      // on a *child*. A percent w/h/x/y belongs on a child, against its parent.
+      if (tree.layout && (tree.layout.percentSize || tree.layout.percentPos)) {
+        throw new Error("flcm: a percent w/h/x/y on the root node has no parent to resolve against — the root node sizes in px. Put the percent on a child, against its parent.");
+      }
+      // Settle BOTH before this slot resolves or rejects (hand-rolled: the tsconfig lib pins the
+      // QuickJS floor below ES2020's allSettled). A fail-fast Promise.all would release the queue
+      // slot while the sibling await is still in flight — the next verb's prepare could then
+      // issue a second image request beside the orphaned one, breaking "one in-flight fetch per
+      // run" (the host comment relies on it).
+      // A separate `failed` flag, not a sentinel on the reason: a promise can legally reject
+      // with undefined, and mistaking that for success would carry a missing resource map into
+      // the SEALED apply span. Both catch handlers attach before either await — attaching the
+      // second only after the first settles would leave an early font rejection briefly
+      // unhandled and mis-order which failure wins.
+      let failed = false;
+      let firstFailure: unknown;
+      const settled = <V>(p: Promise<V>) =>
+        p.catch((err: unknown) => {
+          if (!failed) {
+            failed = true;
+            firstFailure = err;
+          }
+          return undefined as unknown as V;
+        });
+      const settledImages = settled(fetchTreeImages(tree));
+      const settledFonts = settled(loadFontsForTree(tree));
+      const images = await settledImages;
+      const fonts = await settledFonts;
+      if (failed) throw firstFailure;
+      return { images, fonts };
+    },
+    // Apply — node creation, sealed as one undo step.
+    ({ images, fonts }) => {
+      const ctx: RenderCtx = { keyed: {}, fonts, images, pending: [] };
+      // Build the tree (percent children land at a provisional size), then fold every percent/anchor into
+      // pixels against each parent's now-realized size in one post-walk pass (bridge.resolvePercents).
+      const root = buildNode(tree, ctx);
+      resolvePercents(ctx);
+      // Handles are minted only now: geometry settles once the whole tree is laid out (bridge.settleHandles).
+      return settleHandles(root, ctx.keyed);
+    },
+  );
 }
 
 // flcm.id(id) — the target escape hatch. Wraps a raw node id so a target-taking verb (get/find/edit) treats

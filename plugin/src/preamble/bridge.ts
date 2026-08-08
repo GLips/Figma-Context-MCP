@@ -609,7 +609,8 @@ function parentHugFacts(parent: any): { parentIsAuto: boolean; hugW: boolean; hu
   };
 }
 
-// The edit path's pre-lock gate for layout words that only mean something against the LIVE tree —
+// The edit path's prepare-phase gate (before the entry seal) for layout words that only mean
+// something against the LIVE tree —
 // every reject fires before the first canvas write. The live facts a pure compile can't see:
 //   - "fill"/"N%" resolve against a parent's bounded size, and a PAGE has none (page.width doesn't
 //     exist — the resize would be NaN, and Figma's throw wouldn't name the real mistake);

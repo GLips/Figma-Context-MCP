@@ -56,7 +56,7 @@ test("vocabulary rejections happen before any write: unknown prop, key, bare x/y
   await assert.rejects(edit("card", { fill: "#ff0000", opacity: "bad" } as never), /`opacity` must be a number/);
   // Named words whose values are all null/undefined compile to nothing — same hazard as {}.
   await assert.rejects(edit("card", { fill: undefined }), /compiled to nothing/);
-  // All rejected pre-lock: no undo activity, node untouched.
+  // All rejected in prepare, before the entry seal: no undo activity, node untouched.
   assert.deepEqual(figma.undoLog, logBefore);
   assert.deepEqual(node.fills[0].color, { r: 0, g: 0, b: 1 });
 });
@@ -551,7 +551,7 @@ test("a partial font delta on a MIXED text rejects; anchoring fontFamily makes i
   const node = await renderKeyedText("plain **bold**");
   assert.equal(node.fontName, figma.mixed); // markdown bold made the ranges diverge
   await assert.rejects(edit("label", { textStyle: { fontWeight: 600 } }), /mixes fonts/);
-  assert.equal(node.fontName, figma.mixed); // rejected pre-lock — still mixed
+  assert.equal(node.fontName, figma.mixed); // rejected in prepare, before any write — still mixed
   await edit("label", { textStyle: { fontFamily: "Inter", fontWeight: 600 } });
   assert.deepEqual(node.fontName, { family: "Inter", style: "Semi Bold" }); // uniform again
 });
@@ -665,4 +665,33 @@ test('a run\'s color: "none" compiles to a real transparent range write, not a r
   const node = await renderKeyedText("hello");
   await edit("label", { content: [["ghost", { color: "none" }], " rest"] });
   assert.deepEqual(node._rangeFills, [{ start: 0, end: 5, value: [] }]);
+});
+
+test("racing your own edits: a queued edit's gates read the canvas AFTER the earlier edit applied", async () => {
+  const node = await renderKeyedText("a long line of words that would wrap", { width: 160 });
+  // The entry-time-staleness repro: under the old shape both edits validated against the
+  // pre-race canvas (width still bounded), and the clamp landed on a hug-width text — the
+  // unbounded no-op sequential order rejects. Preparation now serializes in invocation order.
+  const [hug, clamp] = await Promise.allSettled([
+    edit("label", { width: "hug" }),
+    edit("label", { textStyle: { lineClamp: 2 } }),
+  ]);
+  assert.equal(hug.status, "fulfilled");
+  assert.equal(clamp.status, "rejected");
+  assert.match((clamp as PromiseRejectedResult).reason.message, /bounded width/);
+  assert.equal(node.textAutoResize, "WIDTH_AND_HEIGHT");
+  assert.equal(node.maxLines, undefined); // the stale clamp never landed
+});
+
+test('the clamp gate holds from BOTH sides: width:"hug" on a live-clamped text rejects; clearing in the same edit legalizes', async () => {
+  const node = await renderKeyedText("a long line of words that would wrap", { width: 160, textStyle: { lineClamp: 2 } });
+  assert.equal(node.maxLines, 2);
+  // The sequential twin of the race test: clamp-then-hug must reject like hug-then-clamp does,
+  // or the lock's "outcomes equal some sequential order" guarantee still admits the no-op state.
+  await assert.rejects(edit("label", { width: "hug" }), /would unbound a clamped text/);
+  assert.equal(node.maxLines, 2);
+  await edit("label", { width: "hug", textStyle: { lineClamp: "none" } });
+  assert.equal(node.maxLines, null);
+  assert.equal(node.textTruncation, "DISABLED");
+  assert.equal(node.textAutoResize, "WIDTH_AND_HEIGHT");
 });

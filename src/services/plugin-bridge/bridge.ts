@@ -38,10 +38,12 @@ const DEFAULT_TIMEOUT_MS = 15_000;
 // its work. await-approval.ts reasons against this number — keep them in sync.
 const DEFAULT_RUN_CEILING_MS = 45_000;
 
-// How many IMAGES_REQUEST services one run may have in flight at once. A well-behaved preamble
-// issues ONE batched, deduped request per render(); a small allowance covers a script that renders
-// concurrently. Beyond that is a runaway or hostile holder using the reverse channel to pin the
-// run's inactivity clock in permanent suspension or flood the fetch path — refused, not queued.
+// How many IMAGES_REQUEST services one run may have in flight at once. The shipped preamble can
+// only ever have ONE in flight — every mutating verb's image fetch runs inside its serialized
+// queue slot (mutation-lock.ts) — so the allowance above 1 is headroom for skewed/older preambles,
+// not a shape the current one produces. Beyond it is a runaway or hostile holder using the reverse
+// channel to pin the run's inactivity clock in permanent suspension or flood the fetch path —
+// refused, not queued.
 const MAX_INFLIGHT_IMAGE_SERVICES_PER_RUN = 4;
 
 // How often the server pings the holder to prove the socket is still alive. A half-open

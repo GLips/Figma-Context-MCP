@@ -3,17 +3,24 @@
 // place — serialize verbs, enforce cancellation, own the undo scaffold (the seal/commit/rollback
 // shape lives on enterMutatingVerb, exactly once, never per verb):
 //
-//   • Serialize mutating verbs WITHIN a run. Agent code can legally Promise.all two verbs, and every
-//     verb awaits internally (fonts, targets, images), so unserialized verbs would interleave at
-//     those awaits — moving the shared undo checkpoint (the commitUndo entry seal, invariant 2) out
-//     from under each other's rollback. The preamble is eval'd fresh inside each run's wrapper, so
-//     this chain is per-run state; exclusion BETWEEN runs is the host's writeChain (code.ts
-//     enqueueWrite).
+//   • Serialize mutating verbs WITHIN a run — the WHOLE verb, preparation included. Agent code can
+//     legally Promise.all two verbs, and every verb awaits internally (fonts, targets, images), so
+//     an unserialized preparation would read the canvas BEFORE an earlier queued verb's writes and
+//     validate against a state that no longer holds when its own turn arrives (width:"hug" and
+//     lineClamp racing each other would both "validate", landing an unbounded clamp sequential
+//     order rejects). The chain slot is reserved synchronously at call time, so gates always read
+//     the canvas in invocation order. Whole-verb serialization is REQUIRED only for canvas-reading
+//     preparations (edit's); render's resource loads read no document state and pay the
+//     serialization purely for the one shared entry shape — accepted, not required. Per-run state —
+//     the preamble is eval'd fresh inside each run's wrapper; exclusion BETWEEN runs is the host's
+//     writeChain (code.ts enqueueWrite).
 //
 //   • Enforce cancellation during execution: once the host records this run's CANCEL, no further
-//     verb STARTS — checked below as each verb's turn arrives, so a zombie run can never mutate a
-//     canvas the agent was already told is unchanged. The full policy and its other refusal points
-//     live on the host's registry (plugin/src/run-cancellation.ts).
+//     verb STARTS — checked as each verb's turn arrives AND again after its preparation (the
+//     font/image awaits are the run's long suspension points; a cancel that lands during them
+//     refuses before the entry seal), so a zombie run can never mutate a canvas the agent was
+//     already told is unchanged. The full policy and its other refusal points live on the host's
+//     registry (plugin/src/run-cancellation.ts).
 //
 // Verbs are non-reentrant BY DESIGN: a verb that awaits another public verb inside its body would
 // deadlock on its own chain. No runtime guard is possible — QuickJS has no async context, so a
@@ -40,17 +47,27 @@ export function committedVerbCount(): number {
   return committedVerbs;
 }
 
-function runCancelled(): boolean {
-  return typeof __flcmRunCancelled === "function" && __flcmRunCancelled();
+function refuseIfCancelled(verb: string): void {
+  if (typeof __flcmRunCancelled === "function" && __flcmRunCancelled()) {
+    throw new Error(
+      "flcm." + verb + ": this run was cancelled by the server (its deadline passed) — no further " +
+        "mutating verbs start. The canvas holds what completed before the cancellation.",
+    );
+  }
 }
 
 /**
- * Run one mutating verb's body under the lock: queued behind every earlier verb in this run,
- * refused — fail closed, before any canvas write — if the run was cancelled by the time its turn
- * arrives, and wrapped in the invariant-2/4 undo scaffold:
+ * Run one mutating verb under the lock, in two phases that share the verb's single queue slot:
  *
- *   entry seal → body → success commit          (the verb is exactly one undo step)
- *   entry seal → body throws → commit + trigger (seal the partial writes, pop exactly that step)
+ *   prepare — read-only: resolve targets, compile, validate live facts, load fonts/images. Runs
+ *   serialized behind every earlier verb, so its gates read the canvas exactly as this verb will
+ *   find it. A throw here exits with ZERO undo calls — a rejected verb leaves no undo residue.
+ *
+ *   apply — the mutating span, wrapped in the invariant-2/4 undo scaffold:
+ *     entry seal → apply → success commit          (the verb is exactly one undo step)
+ *     entry seal → apply throws → commit + trigger (seal the partial writes, pop exactly that step)
+ *   apply is SYNCHRONOUS BY TYPE: the sealed span cannot suspend, so nothing can interleave
+ *   between the seal and its commit. Anything a verb wants to await belongs in prepare.
  *
  * The failure path's commit is LOAD-BEARING, not a bookkeeping nicety: figma.triggerUndo() reverts
  * the last COMMITTED step and swallows uncommitted trailing writes with it (hand-verified
@@ -58,18 +75,32 @@ function runCancelled(): boolean {
  * failed verb's writes would eat the previous step too. The entry seal is what bounds the pop:
  * whatever preceded the verb — earlier verbs, raw figma.* writes, a human's edit — is already
  * sealed into its own step, so rollback can only ever erase the failed verb's own writes.
+ *
+ * A verb IS a single call to this function — its public entry does nothing before it (even pure
+ * input checks live in prepare). The invocation-order freshness guarantee is the slot reservation
+ * happening before the caller ever yields; an await upstream of this call would reopen the
+ * staleness window whole-verb serialization exists to close.
  */
-export function enterMutatingVerb<T>(verb: string, body: () => Promise<T>): Promise<T> {
+// The type-level teeth behind "apply is synchronous": a plain `(p: P) => T` would happily infer
+// T = Promise<X> for an async apply — which returns at its FIRST await, letting the success
+// commit run mid-writes and later failures escape the rollback entirely. Resolving to `never`
+// makes that a compile error (pinned by a @ts-expect-error test).
+type SyncOnly<T> = T extends PromiseLike<unknown> ? never : T;
+
+export function enterMutatingVerb<P, T>(
+  verb: string,
+  prepare: () => Promise<P>,
+  apply: (prepared: P) => SyncOnly<T>,
+): Promise<T> {
   const turn = verbChain.then(async () => {
-    if (runCancelled()) {
-      throw new Error(
-        "flcm." + verb + ": this run was cancelled by the server (its deadline passed) — no further " +
-          "mutating verbs start. The canvas holds what completed before the cancellation.",
-      );
-    }
+    refuseIfCancelled(verb);
+    const prepared = await prepare();
+    // Prepare's awaits are the run's suspension points — a CANCEL that arrived during them must
+    // fail closed here, before the seal, not mutate on a dead run's behalf.
+    refuseIfCancelled(verb);
     figma.commitUndo();
     try {
-      const result = await body();
+      const result = apply(prepared);
       figma.commitUndo();
       committedVerbs++;
       return result;
@@ -80,8 +111,8 @@ export function enterMutatingVerb<T>(verb: string, body: () => Promise<T>): Prom
     }
   });
   // A failed verb must not poison the chain — the failure belongs to its caller (via `turn`);
-  // later verbs proceed against the rolled-back canvas the scaffold left. (Same swallow as the
-  // host's writeChain, code.ts enqueueWrite.)
+  // later verbs proceed against the rolled-back (or, on a prepare reject, untouched) canvas.
+  // (Same swallow as the host's writeChain, code.ts enqueueWrite.)
   verbChain = turn.catch(() => {});
   return turn;
 }
