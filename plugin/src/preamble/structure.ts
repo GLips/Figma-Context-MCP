@@ -160,10 +160,10 @@ async function resolveDestination(subject: string, anchor: Target, placement: Pl
     const offset = placement === "after" ? 1 : 0;
     return {
       parent,
-      // The sibling's index is read at APPLY time: insertChild interprets it against the
-      // pre-removal array when the node is already this parent's child (Figma compensates for the
-      // node's own slot), which is exactly what makes a same-parent reorder land where the verb
-      // name says it does.
+      // The sibling's index is read at APPLY time, never in prepare: the awaits between the two
+      // (target resolution, fonts, images) can leave a prepare-time index pointing anywhere.
+      // The same-parent case rides Figma compensating for the node's own slot — [directional],
+      // undefined in the typings and on the live checklist; a reorder is what would expose it.
       place: (node) => parent.insertChild(parent.children.indexOf(anchorNode) + offset, node),
     };
   }

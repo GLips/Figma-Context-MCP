@@ -113,7 +113,9 @@ class Node {
     this.children.push(child);
   }
   _insertChild(index, child) {
-    // Match live Figma exactly (GROUNDED): when `child` is already in THIS parent, `index` is
+    // [directional — on the live checklist]: neither the typings nor the published docs define the
+    // same-parent case, so this models the behavior Figma's UI shows rather than a cited contract.
+    // When `child` is already in THIS parent, `index` is
     // interpreted against the PRE-removal array — Figma compensates for the node's own slot, so
     // insertChild(3, B@1) on [A,B,C,D] yields [A,C,B,D] (lands at 2), and insertChild(2, B@1) is a
     // no-op. A naive remove-then-splice-at-index (what this used to do) overshoots reorders by one and
