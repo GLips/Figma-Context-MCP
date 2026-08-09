@@ -666,10 +666,11 @@ function liveDirectionWord(f: any): "row" | "column" | "none" {
  * stores the mark and silently never honors it, the one outcome this surface rejects everywhere
  * else. Answering from the pre-batch canvas gets both backwards.
  *
- * TWO levels deep, and no further: the parent's own delta, plus the grandparent's for the one
- * question the parent cannot answer about itself (does its fill survive). Projecting the whole
- * chain would mean simulating the batch; depth-ordered apply lands the rest correctly, and anything
- * still wrong is an apply-time refusal under invariant 2.
+ * TWO levels deep, and no further (ADR-0013): the parent's own delta, plus the grandparent's for
+ * the one question the parent cannot answer about itself (does its fill survive). Projecting the
+ * whole chain would mean simulating the batch; depth-ordered apply lands the rest correctly, and
+ * anything still wrong is an apply-time refusal under invariant 2. A stated rule, not a derivation
+ * — a verb that widens it re-argues the ADR rather than extending this function.
  */
 function projectedParentLayoutFacts(parent: any, deltas: BatchLayoutDeltas | undefined): ParentLayoutFacts {
   const live = liveParentLayoutFacts(parent);
