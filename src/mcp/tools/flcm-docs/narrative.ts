@@ -355,6 +355,10 @@ export const STRUCTURE_INTRO = `Tree shape is its own set of verbs, and **positi
 - a **constructor spec** — \`flcm.frame(...)\`, \`flcm.text(...)\`, an inert tree — which is built inside the destination. Returns \`{ root, keyed, parent }\`: the same \`root\`/\`keyed\` \`render\` gives you, plus the attach point.
 - a **target naming a live node** (an flcm/key, a node id, \`flcm.id(id)\`, or a handle) — which **moves** that node there, exactly as \`appendChild\` moves an attached DOM node. Returns \`{ node, from, to }\`.
 
+Three more complete the set: \`flcm.move(target, parent)\` is the plain reparent (the node lands last inside \`parent\` — the same placement \`append\` does, with the subject named first), \`flcm.remove(target)\` deletes a node and its subtree, and \`flcm.clone(target, parent?)\` duplicates one.
+
+**\`clone\` is the copy path for subtrees a rebuild can't reproduce** — anything containing a component INSTANCE, which is most real content. It duplicates the LIVE node rather than re-authoring it, so nothing is lost in translation, and the copy comes back **key-less**: a raw \`node.clone()\` copies the original's \`flcm/key\` too, quietly giving two live nodes one address. Key the copy yourself if you want to address it later.
+
 Every return carries the subject plus each container whose geometry the operation could have changed — a hugging parent reflows whenever its children change, and those are the nodes you would otherwise have to re-read. They are flat handles with fresh geometry, never nested trees; \`get\` is still how you dive. A container field is absent when that container is the page (a page has no box to measure), and \`from\` is absent when you reordered inside one parent.`;
 
 export const STRUCTURE_RULES = `### Rules
@@ -365,4 +369,17 @@ export const STRUCTURE_RULES = `### Rules
 - **A stretch container does not stretch what you insert.** Figma stores no container-level \`alignItems: "stretch"\` — a stretched child is indistinguishable from one that asked for counter-axis \`"fill"\` itself — so an inserted child doesn't inherit it. Re-assert it with \`flcm.edit(parent, { layout: { alignItems: "stretch" } })\`, which re-synthesizes the marks over every child including the new one.
 - **Component instances are closed to structural writes.** Placing into (or moving out of) an instance or anything inside one rejects loud, naming the instance: Figma won't let a plugin change an instance's tree shape. Edit the main component it comes from — flcm never auto-detaches.
 - **A node can't be placed inside itself or its own subtree**, and the refusal names both nodes rather than surfacing Figma's own cycle error.
-- **Each call is one undo step**, with the same contract as \`edit\`: everything validates before the first write, and a Figma refusal mid-apply rolls the whole call back.`;
+- **Each call is one undo step**, with the same contract as \`edit\`: everything validates before the first write, and a Figma refusal mid-apply rolls the whole call back.
+
+### Cut, copy, paste
+
+There is no separate clipboard API — the verbs compose into one:
+
+| You want | Use |
+| --- | --- |
+| cut & paste | \`flcm.move(target, parent)\` |
+| paste a faithful copy | \`flcm.clone(target, parent?)\` — works on any subtree, instances included |
+| paste with modifications | \`flcm.clone(...)\`, then \`flcm.edit\` the copy |
+| delete | \`flcm.remove(target)\` |
+
+A \`get\` result is **not** yet authoring input — you can't feed a read spec back to \`append\`. Duplicate with \`clone\` and nudge the copy, or re-author the subtree with the constructors.`;

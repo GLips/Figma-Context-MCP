@@ -18,6 +18,25 @@ export function writeKey(node: { setPluginData(key: string, value: string): void
   node.setPluginData(FLCM_KEY, key);
 }
 
+// A node whose subtree can be walked to clear flcm keys. Structural (a live leaf simply has no
+// `children`), so this module stays free of the plugin ambients like the rest of it.
+interface KeyedTree {
+  getPluginData(key: string): string;
+  setPluginData(key: string, value: string): void;
+  children?: readonly KeyedTree[];
+}
+
+// Strip the flcm key from a node and its whole subtree — what `clone` owes the document. A live
+// duplicate carries the original's pluginData, so a copied key would give TWO live nodes one
+// address: every later target naming it then fails loud as ambiguous (correct, but the agent is
+// stuck) or, worse, is silently the wrong node if one copy is deleted. The copy is left key-LESS
+// rather than re-keyed, because only the author knows what the new node should be called. ("" is
+// Figma's own spelling for deleting a pluginData entry.)
+export function clearKeysDeep(node: KeyedTree): void {
+  if (readKey(node)) node.setPluginData(FLCM_KEY, "");
+  for (const child of node.children || []) clearKeysDeep(child);
+}
+
 // The minimal live-node shape identityOf reads. Every SceneNode satisfies it; typed structurally so this
 // module (and its callers in the figma-free type graph) needn't name the plugin ambients.
 interface IdentifiableNode {

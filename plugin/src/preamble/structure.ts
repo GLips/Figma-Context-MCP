@@ -17,7 +17,7 @@
 // scaffold (entry seal / success commit / commit-then-undo rollback) is the lock's — each verb is
 // a single enterMutatingVerb expression, so its queue slot is reserved before it can yield.
 
-import { WriteNode, WriteLayout, Target, Handle, InsertResult, MoveResult } from "./ir.js";
+import { WriteNode, WriteLayout, Target, Handle, InsertResult, MoveResult, CloneResult, RemoveResult } from "./ir.js";
 import { resolveTarget } from "./read.js";
 import { enterMutatingVerb } from "./mutation-lock.js";
 import {
@@ -27,7 +27,7 @@ import {
 } from "./bridge.js";
 import { assertConstructorBuiltTree } from "./provenance.js";
 import { loadTreeResources } from "./flcm.js";
-import { identityOf } from "./identity.js";
+import { identityOf, clearKeysDeep } from "./identity.js";
 import { mutatingVerbError, instanceAncestorOf } from "./verb-error.js";
 
 // Where a placement verb puts its subject inside the destination. `place` is deliberately a
@@ -185,10 +185,11 @@ function applyMove(verb: string, { dest, node, words }: PreparedMove): MoveResul
 
 type Placement = "end" | "start" | "before" | "after";
 
-// The one body behind append/prepend/insertBefore/insertAfter: the four differ only in how their
+// The one body behind append/prepend/insertBefore/insertAfter — and `move`, which is the same
+// placement with the subject named first and a spec refused. The verbs differ only in how their
 // anchor names a destination. A single enterMutatingVerb expression on purpose — the queue slot is
 // reserved before anything can yield, which is the lock's invocation-order guarantee.
-function placeVerb(verb: string, anchor: Target, thing: unknown, placement: Placement): Promise<InsertResult | MoveResult> {
+function placeVerb(verb: string, anchor: Target, thing: unknown, placement: Placement, liveOnly = false): Promise<InsertResult | MoveResult> {
   const subject = "flcm." + verb;
   return enterMutatingVerb(
     verb,
@@ -204,6 +205,12 @@ function placeVerb(verb: string, anchor: Target, thing: unknown, placement: Plac
         const words = liveParentRelativeWords(node);
         assertLayoutLandsUnderParent(dest.parent, node.type, words, isRowColumnAutoLayout(node), words.position === "absolute", subject);
         return { kind: "move", dest, node, words };
+      }
+      if (liveOnly) {
+        throw new Error(
+          subject + " moves a node that already exists — its first argument is a target (an flcm/key, a node id, " +
+            "flcm.id(id), or a handle), not a spec. To CREATE a node inside a parent, use flcm.append(parent, spec).",
+        );
       }
       assertPlaceableSpec(subject, thing);
       const layout = thing.layout || {};
@@ -237,4 +244,82 @@ export function insertBefore(sibling: Target, thing: WriteNode | Target): Promis
 /** flcm.insertAfter(sibling, thing) — place `thing` immediately after `sibling`, in its parent. */
 export function insertAfter(sibling: Target, thing: WriteNode | Target): Promise<InsertResult | MoveResult> {
   return placeVerb("insertAfter", sibling, thing, "after");
+}
+
+/**
+ * flcm.move(target, parent) — the plain reparent: the node lands as `parent`'s last child. Same
+ * placement `append` does, with the subject named first (the way the sentence reads) and a spec
+ * refused — creating is `append`'s job.
+ */
+export function move(target: Target, parent: Target): Promise<MoveResult> {
+  return placeVerb("move", parent, target, "end", true) as Promise<MoveResult>;
+}
+
+/**
+ * flcm.remove(target) — delete a node and its subtree. Returns the id it deleted (so the agent can
+ * scrub any handle it still holds) plus the parent's fresh geometry, since a hug parent reflows.
+ */
+export function remove(target: Target): Promise<RemoveResult> {
+  return enterMutatingVerb(
+    "remove",
+    async () => {
+      const node: any = await resolveTarget(target);
+      assertOutsideInstance("flcm.remove", node, "node being removed");
+      return { node, parent: node.parent };
+    },
+    ({ node, parent }) => {
+      const identity = identityOf(node);
+      try {
+        node.remove();
+      } catch (cause) {
+        throw mutatingVerbError("remove", identity, cause, node);
+      }
+      return { removedId: identity.id, parent: containerHandle(parent) };
+    },
+  );
+}
+
+/**
+ * flcm.clone(target, parent?) — a faithful duplicate, landing at the end of `parent` (beside the
+ * original when omitted). This is the copy path for a subtree a spec REBUILD can't reproduce —
+ * anything holding an INSTANCE, which is most real content — because it duplicates the live node
+ * rather than re-authoring it. `get` → `append` remains the copy-WITH-modifications path.
+ *
+ * It is also why agents shouldn't reach for `node.clone()` themselves: a raw clone copies the
+ * original's `flcm/key` and quietly mints a duplicate address (see clearKeysDeep). The copy comes
+ * back key-less; key it yourself if you want to address it later.
+ */
+export function clone(target: Target, parent?: Target): Promise<CloneResult> {
+  return enterMutatingVerb(
+    "clone",
+    async () => {
+      const node: any = await resolveTarget(target);
+      const destination: any = parent != null ? await resolveTarget(parent) : node.parent;
+      if (!destination) {
+        throw new Error(
+          "flcm.clone: " + JSON.stringify(node.name) + " (id " + JSON.stringify(node.id) +
+            ") has no parent for the copy to land beside — name a parent: flcm.clone(target, parent).",
+        );
+      }
+      assertDestinationIsContainer("flcm.clone", destination);
+      assertOutsideInstance("flcm.clone", destination, "destination");
+      // The ORIGINAL's parent-relative intent: the copy is born carrying the same flow marks, and
+      // they mean the old parent's axes exactly as a move's do.
+      const words = liveParentRelativeWords(node);
+      assertLayoutLandsUnderParent(destination, node.type, words, isRowColumnAutoLayout(node), words.position === "absolute", "flcm.clone");
+      return { node, destination, words };
+    },
+    ({ node, destination, words }) => {
+      const identity = identityOf(node);
+      try {
+        const copy = node.clone();
+        clearKeysDeep(copy);
+        destination.appendChild(copy);
+        resettleMovedNode(copy, words);
+        return { node: mintHandle(copy), parent: containerHandle(destination) };
+      } catch (cause) {
+        throw mutatingVerbError("clone", identity, cause, node);
+      }
+    },
+  );
 }

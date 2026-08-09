@@ -32,6 +32,9 @@ There is no autocomplete and no type-checking where your code runs (a QuickJS sa
 | `await flcm.prepend(parent, thing)` | the same, placed FIRST | same as append |
 | `await flcm.insertBefore(sibling, thing)` | `thing` placed just before `sibling` | a SIBLING target (the parent is inferred from it), then a spec or a live target |
 | `await flcm.insertAfter(sibling, thing)` | `thing` placed just after `sibling` | same as insertBefore |
+| `await flcm.move(target, parent)` | the node reparented as `parent`'s last child | a live target, then a parent target. Creating is append's job — a spec here fails loud |
+| `await flcm.remove(target)` | nothing — deletes the node and its subtree | a target; returns { removedId, parent } |
+| `await flcm.clone(target, parent?)` | a faithful live duplicate (key-less) | a target, and optionally where the copy lands (default: beside the original). The copy path for subtrees a spec rebuild can't reproduce — anything holding an INSTANCE |
 | `await flcm.get(target)` | a node's full read spec (values inline) | target: an flcm/key, a node id, flcm.id(id), or a handle |
 | `await flcm.find(query?, predicate?)` | matching nodes as slim handles | query { type?, name?, key?, within? } AND-combined — a filter, not an address; only `within` takes a target. Optional predicate over the full read shape (n => n.fills?.[0] === '#FFF') |
 | `await flcm.findOne(query?, predicate?)` | exactly one slim handle (throws on 0 or >1) | same query + predicate as find |
@@ -465,6 +468,10 @@ Tree shape is its own set of verbs, and **position is the verb** — there is no
 - a **constructor spec** — `flcm.frame(...)`, `flcm.text(...)`, an inert tree — which is built inside the destination. Returns `{ root, keyed, parent }`: the same `root`/`keyed` `render` gives you, plus the attach point.
 - a **target naming a live node** (an flcm/key, a node id, `flcm.id(id)`, or a handle) — which **moves** that node there, exactly as `appendChild` moves an attached DOM node. Returns `{ node, from, to }`.
 
+Three more complete the set: `flcm.move(target, parent)` is the plain reparent (the node lands last inside `parent` — the same placement `append` does, with the subject named first), `flcm.remove(target)` deletes a node and its subtree, and `flcm.clone(target, parent?)` duplicates one.
+
+**`clone` is the copy path for subtrees a rebuild can't reproduce** — anything containing a component INSTANCE, which is most real content. It duplicates the LIVE node rather than re-authoring it, so nothing is lost in translation, and the copy comes back **key-less**: a raw `node.clone()` copies the original's `flcm/key` too, quietly giving two live nodes one address. Key the copy yourself if you want to address it later.
+
 Every return carries the subject plus each container whose geometry the operation could have changed — a hugging parent reflows whenever its children change, and those are the nodes you would otherwise have to re-read. They are flat handles with fresh geometry, never nested trees; `get` is still how you dive. A container field is absent when that container is the page (a page has no box to measure), and `from` is absent when you reordered inside one parent.
 
 ### Rules
@@ -476,6 +483,19 @@ Every return carries the subject plus each container whose geometry the operatio
 - **Component instances are closed to structural writes.** Placing into (or moving out of) an instance or anything inside one rejects loud, naming the instance: Figma won't let a plugin change an instance's tree shape. Edit the main component it comes from — flcm never auto-detaches.
 - **A node can't be placed inside itself or its own subtree**, and the refusal names both nodes rather than surfacing Figma's own cycle error.
 - **Each call is one undo step**, with the same contract as `edit`: everything validates before the first write, and a Figma refusal mid-apply rolls the whole call back.
+
+### Cut, copy, paste
+
+There is no separate clipboard API — the verbs compose into one:
+
+| You want | Use |
+| --- | --- |
+| cut & paste | `flcm.move(target, parent)` |
+| paste a faithful copy | `flcm.clone(target, parent?)` — works on any subtree, instances included |
+| paste with modifications | `flcm.clone(...)`, then `flcm.edit` the copy |
+| delete | `flcm.remove(target)` |
+
+A `get` result is **not** yet authoring input — you can't feed a read spec back to `append`. Duplicate with `clone` and nudge the copy, or re-author the subtree with the constructors.
 
 ## Seeing what you built (get_screenshot)
 

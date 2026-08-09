@@ -23,7 +23,7 @@
 import { z } from "zod";
 import type {
   FillInput, WriteCssEffects, PaintSpec, EffectSpec, GradientStop, WriteNode, WriteChild, Handle,
-  PinX, PinY, Target, RawIdRef, SlimHandle, FindQuery, ReadPredicate, InsertResult, MoveResult,
+  PinX, PinY, Target, RawIdRef, SlimHandle, FindQuery, ReadPredicate, InsertResult, MoveResult, CloneResult, RemoveResult,
 } from "./ir.js";
 // The read verbs return the canonical read shape the shared simplify core emits. Relative (not ~/) so the
 // root toolchain, which imports this module for docs generation, resolves it without the plugin's paths.
@@ -448,6 +448,13 @@ export interface Flcm {
   prepend(parent: Target, thing: WriteNode | Target): Promise<InsertResult | MoveResult>;
   insertBefore(sibling: Target, thing: WriteNode | Target): Promise<InsertResult | MoveResult>;
   insertAfter(sibling: Target, thing: WriteNode | Target): Promise<InsertResult | MoveResult>;
+  // The plain reparent: the node lands as `parent`'s last child.
+  move(target: Target, parent: Target): Promise<MoveResult>;
+  remove(target: Target): Promise<RemoveResult>;
+  // A faithful live duplicate — the copy path for subtrees a spec rebuild can't reproduce (anything
+  // holding an INSTANCE). Lands at the end of `parent`, beside the original when omitted, and comes
+  // back key-less: a raw node.clone() would copy the flcm/key and mint a duplicate address.
+  clone(target: Target, parent?: Target): Promise<CloneResult>;
   // Full inspect: the node's styling as the EXPANDED canonical read shape — the same vocabulary
   // figma-mcp's REST read emits, every value inline (no styles refs), for any node type.
   get(target: Target): Promise<SimplifiedNode>;
@@ -503,6 +510,9 @@ export const VERBS: VerbDoc[] = [
   { category: "structure", signature: "await flcm.prepend(parent, thing)", builds: "the same, placed FIRST", args: "same as append", short: "" },
   { category: "structure", signature: "await flcm.insertBefore(sibling, thing)", builds: "`thing` placed just before `sibling`", args: "a SIBLING target (the parent is inferred from it), then a spec or a live target", short: "await insertBefore/insertAfter(sibling, spec|target)" },
   { category: "structure", signature: "await flcm.insertAfter(sibling, thing)", builds: "`thing` placed just after `sibling`", args: "same as insertBefore", short: "" },
+  { category: "structure", signature: "await flcm.move(target, parent)", builds: "the node reparented as `parent`'s last child", args: "a live target, then a parent target. Creating is append's job — a spec here fails loud", short: "await move(target, parent)" },
+  { category: "structure", signature: "await flcm.remove(target)", builds: "nothing — deletes the node and its subtree", args: "a target; returns { removedId, parent }", short: "await remove(target)" },
+  { category: "structure", signature: "await flcm.clone(target, parent?)", builds: "a faithful live duplicate (key-less)", args: "a target, and optionally where the copy lands (default: beside the original). The copy path for subtrees a spec rebuild can't reproduce — anything holding an INSTANCE", short: "await clone(target, parent?)" },
   { category: "read", signature: "await flcm.get(target)", builds: "a node's full read spec (values inline)", args: "target: an flcm/key, a node id, flcm.id(id), or a handle" },
   { category: "read", signature: "await flcm.find(query?, predicate?)", builds: "matching nodes as slim handles", args: "query { type?, name?, key?, within? } AND-combined — a filter, not an address; only `within` takes a target. Optional predicate over the full read shape (n => n.fills?.[0] === '#FFF')" },
   { category: "read", signature: "await flcm.findOne(query?, predicate?)", builds: "exactly one slim handle (throws on 0 or >1)", args: "same query + predicate as find" },

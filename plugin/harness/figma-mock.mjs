@@ -121,6 +121,17 @@ class Node {
     const idx = had !== -1 && had < index ? index - 1 : index;
     this.children.splice(idx, 0, child);
   }
+  // Duplicate this node and its subtree, parented under the current page — [verified,
+  // plugin-typings 1.133: "Duplicates the node. By default, the duplicate will be parented under
+  // figma.currentPage"], which is why flcm.clone always places the copy explicitly afterwards.
+  // pluginData IS copied here: whether live clone() carries it is [directional] (the typings
+  // don't say), and modelling the carrying case is what makes the flcm/key strip testable — if
+  // live turns out not to copy, the strip is simply a no-op and the same test holds.
+  clone() {
+    const copy = cloneSubtree(this);
+    figma.currentPage.appendChild(copy);
+    return copy;
+  }
   resize(w, h) { this._fixedW = w; this._fixedH = h; }
   remove() {
     if (this.parent) this.parent.children = this.parent.children.filter((c) => c !== this);
@@ -370,6 +381,25 @@ class Node {
     return root;
   }
   get overrides() { return this._overrides || []; }
+}
+
+// A free-standing duplicate of a subtree (Node.clone): fresh ids, its own copies of the mutable
+// bags, and its own pluginData — nothing aliases the original. Distinct from cloneInto below,
+// which mints INSTANCE sublayers under the composite-id scheme.
+function cloneSubtree(src) {
+  const n = new Node(src.type);
+  for (const k of COPY_FIELDS) n[k] = src[k];
+  n.fills = clonePaints(src.fills);
+  n.strokes = clonePaints(src.strokes);
+  n.effects = clonePaints(src.effects);
+  n.constraints = { ...src.constraints };
+  n._fontName = JSON.parse(JSON.stringify(src._fontName));
+  n._rangeFonts = JSON.parse(JSON.stringify(src._rangeFonts || []));
+  n._plugin = { ...src._plugin };
+  // A copied INSTANCE keeps pointing at the same main component, as live clone() does.
+  n.mainComponent = src.mainComponent;
+  for (const c of src.children) { const cc = cloneSubtree(c); cc.parent = n; n.children.push(cc); }
+  return n;
 }
 
 // Clone a main subtree into instance sublayers. The root gets a fresh id; descendants get the

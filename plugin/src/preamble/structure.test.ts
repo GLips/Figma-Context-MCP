@@ -7,7 +7,9 @@ import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
 import { frame, rect, text, render, id } from "./flcm.js";
-import { append, prepend, insertBefore, insertAfter } from "./structure.js";
+import { append, prepend, insertBefore, insertAfter, move, remove, clone } from "./structure.js";
+import { get } from "./read.js";
+import { readKey } from "./identity.js";
 
 let figma = createFigmaMock();
 
@@ -125,6 +127,71 @@ test("prepare rejects a non-container destination, a cycle, and a hand-built spe
   await assert.rejects(append("row", [rect({}), rect({})]), /one node per call/);
   assert.deepEqual(names(row), ["RECTANGLE", "Frame"]);
   assert.deepEqual(figma.undoLog, before);
+});
+
+test("move reparents a live node, and refuses a spec — creating is append's job", async () => {
+  const out = await render(
+    frame({ key: "board", width: 400, height: 400 }, [
+      frame({ key: "row", width: 300, height: 100, layout: { mode: "row" } }, [
+        rect({ key: "chip", width: 40, height: 40 }),
+      ]),
+      frame({ key: "tray", width: 200, height: 200 }),
+    ]),
+  );
+  const chip = await figma.getNodeByIdAsync(out.keyed.chip.id);
+  const moved = await move("chip", "tray");
+  assert.equal(chip.parent.id, out.keyed.tray.id);
+  assert.equal(moved.node.id, chip.id);
+  assert.equal(moved.from.key, "row");
+  assert.equal(moved.to.key, "tray");
+  const before = [...figma.undoLog];
+  await assert.rejects(move(rect({}), "tray"), /moves a node that already exists/);
+  assert.deepEqual(figma.undoLog, before);
+});
+
+test("remove deletes the subtree and reports the id plus the reflowed parent", async () => {
+  const out = await render(
+    frame({ key: "row", layout: { mode: "row", gap: 10 } }, [
+      rect({ key: "a", width: 40, height: 40 }),
+      rect({ key: "b", width: 40, height: 40 }),
+    ]),
+  );
+  const row = await figma.getNodeByIdAsync(out.keyed.row.id);
+  const a = await figma.getNodeByIdAsync(out.keyed.a.id);
+  assert.equal(row.width, 90); // 40 + 10 gap + 40, hugged
+  const gone = await remove("a");
+  assert.equal(gone.removedId, a.id);
+  assert.equal(a.removed, true);
+  assert.deepEqual(row.children.map((c) => c.id), [out.keyed.b.id]);
+  // Why remove reports the parent at all: a hug parent reflows the moment a child leaves.
+  assert.equal(gone.parent.width, 40);
+});
+
+test("clone duplicates an INSTANCE-bearing subtree and strips every flcm/key from the copy", async () => {
+  // A component instance is the case a spec REBUILD can't reproduce — the reason clone exists.
+  const src = await render(frame({ key: "badge", width: 60, height: 60 }, [rect({ width: 20, height: 20 })]));
+  const component = figma.createComponentFromNode(await figma.getNodeByIdAsync(src.keyed.badge.id));
+  const out = await render(
+    frame({ key: "card", width: 200, height: 200 }, [text("Hi", { key: "title" })]),
+  );
+  const card = await figma.getNodeByIdAsync(out.keyed.card.id);
+  card.appendChild(component.createInstance());
+  const tray = await render(frame({ key: "tray", width: 300, height: 300 }));
+
+  const copied = await clone("card", "tray");
+  const copy = await figma.getNodeByIdAsync(copied.node.id);
+  assert.equal(copy.parent.id, tray.keyed.tray.id);
+  assert.equal(copied.parent.id, tray.keyed.tray.id);
+  // Faithful: the same children in the same order, the instance still an instance of the same main.
+  assert.deepEqual(copy.children.map((c) => c.type), ["TEXT", "INSTANCE"]);
+  assert.equal(copy.children[0].characters, "Hi");
+  assert.equal(copy.children[1].mainComponent.id, component.id);
+  // Key-less, all the way down — a copied key would mint a second node at the same address.
+  const keysUnder = (n) => [readKey(n), ...n.children.flatMap(keysUnder)];
+  assert.deepEqual(keysUnder(copy).filter(Boolean), []);
+  // …and so the originals' keys still resolve, each to exactly one node (resolveTarget throws on a clash).
+  assert.equal((await get("card")).id, card.id);
+  assert.equal((await get("title")).id, out.keyed.title.id);
 });
 
 test("an instance is closed to structural writes, in both directions, naming the instance", async () => {
