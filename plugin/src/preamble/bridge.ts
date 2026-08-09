@@ -521,7 +521,12 @@ function pctOf(pct: number, parentDim: number): number {
 // calls it directly — at edit time the parent's realized size already exists, so there is no deferral
 // to ride. Parameter order matches the sibling child-appliers (parent, child, layout).
 function resolvePercentLayout(parent: any, child: any, layout: WriteLayout): void {
-  // SIZE first — anchor placement below reads the child's resolved width/height.
+  resolvePercentSize(parent, child, layout);
+  resolvePercentPosition(parent, child, layout);
+}
+
+// The SIZE half — it PRODUCES geometry, so it runs before anything that measures.
+function resolvePercentSize(parent: any, child: any, layout: WriteLayout): void {
   if (layout.percentSize) {
     const ps = layout.percentSize;
     const w = ps.width != null ? pctOf(ps.width, parent.width) : child.width;
@@ -532,6 +537,11 @@ function resolvePercentLayout(parent: any, child: any, layout: WriteLayout): voi
     if (child.type === "TEXT" && ps.width != null) child.textAutoResize = "HEIGHT";
     child.resize(Math.max(w, 0.01), Math.max(h, 0.01));
   }
+}
+
+// The POSITION half — it CONSUMES geometry (the parent's realized size, and the node's own for the
+// anchor shift), so it runs last of everything.
+function resolvePercentPosition(parent: any, child: any, layout: WriteLayout): void {
   // POSITION + ANCHOR — absolute children only (percentPos/anchor never set otherwise). Resolve each axis
   // (percent → px against the parent, else the authored number), then shift by the anchor so the child's
   // anchor point (not its top-left) lands on x/y. STRICTLY per axis: an axis with no authored coordinate
@@ -557,11 +567,12 @@ function resolvePercentLayout(parent: any, child: any, layout: WriteLayout): voi
 }
 
 // Apply a layout delta to a LIVE node the way the create walk applies a fresh child — the SAME
-// appliers in the same roles, re-run against the live parent (which is why percents resolve
-// directly here: the parent's realized size already exists, no deferred pass to ride). Order
-// matters and mirrors buildFrame's walk: container words first (they may change the node's own
-// direction, which own-size mapping reads), then position (in/out of flow decides which appliers
-// govern the node), flow fills and their unset inverses, own/leaf sizing, cover, percents, pin.
+// appliers in the same roles, re-run against the live parent. Order matters and mirrors buildFrame's
+// walk: container words first (they may change the node's own direction, which own-size mapping
+// reads), then position (in/out of flow decides which appliers govern the node), flow fills and
+// their unset inverses, own/leaf sizing, cover, pin. The percent/anchor tail is
+// settleLiveNodePercentSize/Position, deliberately NOT called here — both measure, so the caller
+// owns when they run (see those functions).
 export function applyLiveNodeLayout(node: any, wl: WriteLayout): void {
   const parent = node.parent;
   applyContainer(node, wl);
@@ -581,8 +592,26 @@ export function applyLiveNodeLayout(node: any, wl: WriteLayout): void {
   if (isRowColumnAutoLayout(node) || node.type === "FRAME") applyOwnSize(node, wl);
   else applyLeafSize(node, wl);
   if (!inFlowAuto) coverChild(parent, node, wl);
-  if (wl.percentSize || wl.percentPos || wl.anchor) resolvePercentLayout(parent, node, wl);
   if (wl.pin) applyPinDelta(node, wl.pin);
+}
+
+/**
+ * The two halves of a live layout delta's percent/anchor tail, split out so a verb can order them
+ * across MORE than one node. Everything that resolves a percent or an anchor is a measurement, and
+ * a measurement taken while writes are still landing is a number about to move: an entry centering
+ * a hugging panel reads a width that another entry's content change is about to grow, and the
+ * panel ends up centered on the size it used to be.
+ *
+ * The split is by what each half does to geometry — size PRODUCES it, position CONSUMES it — which
+ * is what lets a batch interleave the text clamp (also a producer) between them. `flcm.edit` calls
+ * the pair in order and sees exactly the behavior it always had.
+ */
+export function settleLiveNodePercentSize(node: any, wl: WriteLayout): void {
+  if (node.parent && wl.percentSize) resolvePercentSize(node.parent, node, wl);
+}
+
+export function settleLiveNodePercentPosition(node: any, wl: WriteLayout): void {
+  if (node.parent && (wl.percentPos || wl.anchor)) resolvePercentPosition(node.parent, node, wl);
 }
 
 // The live-parent facts assertPercentResolvable needs (create computes them from the authored
@@ -600,41 +629,134 @@ function parentHugFacts(parent: any): ParentFlowFacts {
   };
 }
 
+// Every parent-side fact the shared layout rules consult, gathered into one value. It exists
+// because the parent a child is judged against is not always the parent on the canvas: inside a
+// batch the SAME call may be changing that parent, and the entries must be legal against the
+// canvas the batch is creating, not the one it found.
+export interface ParentLayoutFacts extends ParentFlowFacts { isGrid: boolean; isPage: boolean }
+
+function liveParentLayoutFacts(parent: any): ParentLayoutFacts {
+  return {
+    ...parentHugFacts(parent),
+    isGrid: !!parent && parent.layoutMode === "GRID",
+    isPage: !!parent && parent.type === "PAGE",
+  };
+}
+
+// Every layout delta the current verb is applying, by node id. A batch hands the WHOLE map rather
+// than one parent's delta because the projection below has to reach the grandparent: a container's
+// direction write clears its children's flow marks, so whether a parent's `fill` survives is the
+// grandparent's answer, not the parent's.
+export type BatchLayoutDeltas = Record<string, WriteLayout>;
+
+// A container's direction as the layout vocabulary spells it. GRID reads "none" on purpose: the
+// vocabulary can only say none/row/column, so any authored mode replaces a grid outright.
+function liveDirectionWord(f: any): "row" | "column" | "none" {
+  if (!f) return "none";
+  return f.layoutMode === "HORIZONTAL" ? "row" : f.layoutMode === "VERTICAL" ? "column" : "none";
+}
+
+/**
+ * The parent's facts as they will stand once the verb's own deltas have landed. With no delta for
+ * this parent it is exactly the live reading.
+ *
+ * Both directions matter and neither is cosmetic. A child set to `"fill"` under a parent the batch
+ * turns into a row is LEGAL and must not be refused (the plan's done-when: order doesn't matter);
+ * the same child under a parent the batch turns free-form is NOT, and Figma won't say so — it
+ * stores the mark and silently never honors it, the one outcome this surface rejects everywhere
+ * else. Answering from the pre-batch canvas gets both backwards.
+ *
+ * TWO levels deep, and no further: the parent's own delta, plus the grandparent's for the one
+ * question the parent cannot answer about itself (does its fill survive). Projecting the whole
+ * chain would mean simulating the batch; depth-ordered apply lands the rest correctly, and anything
+ * still wrong is an apply-time refusal under invariant 2.
+ */
+function projectedParentLayoutFacts(parent: any, deltas: BatchLayoutDeltas | undefined): ParentLayoutFacts {
+  const live = liveParentLayoutFacts(parent);
+  const parentDelta = parent && deltas ? deltas[parent.id] : undefined;
+  if (!parentDelta) return live;
+  const parentIsAuto = parentDelta.mode != null ? parentDelta.mode !== "none" : live.parentIsAuto;
+  const sizing = parentDelta.sizing || {};
+  // Does the delta ESTABLISH a direction (off→row/column, or a row↔column flip)? Then the live
+  // effective sizing is the wrong reading for an axis the delta doesn't name, in the one direction
+  // that matters: it was measured under the OLD direction. A free-form frame reports "hugs nothing"
+  // (nothing hugs off auto-layout) while its primary/counterAxisSizingMode sit at Figma's AUTO
+  // default — so the instant `mode:"row"` lands it hugs BOTH axes, and a sibling entry's percent
+  // against it is the cycle assertPercentResolvable exists to name. Same swap on a row↔column flip:
+  // the axis each raw mode governs moves with the direction.
+  const establishesDirection = parentIsAuto && parentDelta.mode != null && parentDelta.mode !== liveDirectionWord(parent);
+  const nextIsRow = parentDelta.mode != null ? parentDelta.mode === "row" : parent.layoutMode === "HORIZONTAL";
+  // A fill is a MARK on the parent, honored by the grandparent's flow — so a grandparent whose own
+  // delta re-aims that flow (any direction change: applyContainer clears every child's flow marks,
+  // and "none" leaves them parked and inert) stops honoring it, and the parent falls back to its
+  // raw axis mode. Read from the batch, not the canvas, or the carve-out below saves a parent the
+  // batch is about to un-fill.
+  const grandparent = parent ? parent.parent : null;
+  const grandparentDelta = grandparent && deltas ? deltas[grandparent.id] : undefined;
+  const fillSurvives =
+    !grandparentDelta || grandparentDelta.mode == null || grandparentDelta.mode === liveDirectionWord(grandparent);
+  const unnamedAxisHugs = function (isWidth: boolean): boolean {
+    if (!parentIsAuto) return false; // hug is meaningless off auto-layout
+    // The live effective reading holds unless the batch invalidates what produced it — either the
+    // parent's own direction moved (so each raw mode governs a different axis now) or its fill
+    // stopped being honored. Then read the raw modes, exactly as applyOwnSize will.
+    if (!establishesDirection && fillSurvives) return isWidth ? live.hugW : live.hugH;
+    // Fill is realized from ABOVE, so where it survives it still isn't a hug (the same case
+    // parentHugFacts reads effective sizing for).
+    if (fillSurvives && convertSizing(parent[isWidth ? "layoutSizingHorizontal" : "layoutSizingVertical"]) === "fill") return false;
+    const isPrimary = isWidth === nextIsRow;
+    return parent[isPrimary ? "primaryAxisSizingMode" : "counterAxisSizingMode"] === "AUTO";
+  };
+  return {
+    isPage: live.isPage, // a props-only delta never reparents
+    // Any authored mode replaces GRID: the vocabulary can only spell none/row/column.
+    isGrid: live.isGrid && parentDelta.mode == null,
+    parentIsAuto,
+    hugW: sizing.horizontal !== undefined ? parentIsAuto && sizing.horizontal === "hug" : unnamedAxisHugs(true),
+    hugH: sizing.vertical !== undefined ? parentIsAuto && sizing.vertical === "hug" : unnamedAxisHugs(false),
+  };
+}
+
 // The live-facts gate every mutating verb consults before its entry seal — one question ("can
 // these layout words land on this node under THAT parent?"), asked against an EXPLICIT
 // destination. The RULES all live in layout-legality.ts (the one authority, so verbs cannot
-// drift); this function's job is purely to supply the LIVE facts the pure rules can't read.
-// The parent is a PARAMETER, not `node.parent`, because that is exactly what a structural verb
-// changes: a moved node's layout was legal where it sat, not necessarily where it lands.
+// drift); this function's job is purely to supply the facts the pure rules can't read.
+// The parent's facts are a PARAMETER, not read from `node.parent`, because that is exactly what a
+// structural verb changes — a moved node's layout was legal where it sat, not necessarily where it
+// lands — and what a batch verb projects.
 //
 //   `isContainer`   — will the node itself lay out row/column children (edit: live-or-delta mode).
 //   `isOutOfFlow`   — the node's EFFECTIVE positioning after this call. A delta rarely names
 //                     `absolute`, so an already-ABSOLUTE child threads its live positioning: out
 //                     of flow it doesn't feed the parent's hug, and the percent cycle can't form.
 function assertLayoutLandsUnderParent(
-  parent: any, nodeType: string, wl: WriteLayout, isContainer: boolean, isOutOfFlow: boolean, subject: string,
+  parent: ParentLayoutFacts, nodeType: string, wl: WriteLayout, isContainer: boolean, isOutOfFlow: boolean, subject: string,
 ): void {
-  if (parent && parent.type === "PAGE") {
+  if (parent.isPage) {
     assertSizingResolvesAgainstParentFrame(wl, false, subject);
   }
   assertLayoutRealizableForType(nodeType, wl, isContainer, subject);
-  assertTextFillHeightInFlow(nodeType, wl, !!parent && isRowColumnAutoLayout(parent), isOutOfFlow, subject);
-  assertNoParentRelativeWordsUnderGrid(wl, !!parent && parent.layoutMode === "GRID", subject);
+  assertTextFillHeightInFlow(nodeType, wl, parent.parentIsAuto, isOutOfFlow, subject);
+  assertNoParentRelativeWordsUnderGrid(wl, parent.isGrid, subject);
   if (wl.percentSize) {
-    assertPercentResolvable({ ...wl, position: isOutOfFlow ? "absolute" : wl.position }, parentHugFacts(parent), subject);
+    assertPercentResolvable({ ...wl, position: isOutOfFlow ? "absolute" : wl.position }, parent, subject);
   }
 }
 
-// ---- The three verb-facing spellings of the gate. Each derives the live facts itself, so a
-// caller never assembles them (two adjacent booleans a call site could swap) and never needs the
+// ---- The three verb-facing spellings of the gate. Each derives the facts itself, so a caller
+// never assembles them (two adjacent booleans a call site could swap) and never needs the
 // primitives above. ----
 
 // Edit: the destination is where the node already sits. `subject` names the calling verb the way
 // the other two spellings take it — `edit` and `editMany` compile through one pipeline, and an
-// entry rejected inside a batch must say which verb the agent actually called.
-export function assertLayoutDeltaResolvable(node: any, wl: WriteLayout, subject: string): void {
+// entry rejected inside a batch must say which verb the agent actually called. `deltas` is every
+// layout delta THIS verb is applying, keyed by node id, so the ancestors this node is judged
+// against are the ones the call is creating (see projectedParentLayoutFacts); a lone `edit` passes
+// none and is judged against the live canvas.
+export function assertLayoutDeltaResolvable(node: any, wl: WriteLayout, subject: string, deltas?: BatchLayoutDeltas): void {
   const outOfFlow = wl.position === "absolute" || (wl.position !== "none" && node.layoutPositioning === "ABSOLUTE");
-  assertLayoutLandsUnderParent(node.parent, node.type, wl, isRowColumnAutoLayout(node), outOfFlow, subject);
+  const parent = projectedParentLayoutFacts(node.parent, deltas);
+  assertLayoutLandsUnderParent(parent, node.type, wl, isRowColumnAutoLayout(node), outOfFlow, subject);
 }
 
 // A structural verb placing a LIVE node: ask whether the words it already wears stay legal under
@@ -642,7 +764,7 @@ export function assertLayoutDeltaResolvable(node: any, wl: WriteLayout, subject:
 // them twice would risk reading them AFTER the reparent, when they no longer mean the old axes.
 export function assertLiveNodeLandsUnderParent(node: any, destination: any, subject: string): WriteLayout {
   const wl = liveParentRelativeWords(node);
-  assertLayoutLandsUnderParent(destination, node.type, wl, isRowColumnAutoLayout(node), wl.position === "absolute", subject);
+  assertLayoutLandsUnderParent(liveParentLayoutFacts(destination), node.type, wl, isRowColumnAutoLayout(node), wl.position === "absolute", subject);
   return wl;
 }
 
@@ -650,7 +772,7 @@ export function assertLiveNodeLandsUnderParent(node: any, destination: any, subj
 // are checked against their own authored parents inside the build walk, exactly as at create.
 export function assertSpecRootLandsUnderParent(destination: any, wn: WriteNode, subject: string): void {
   const wl = wn.layout || {};
-  assertLayoutLandsUnderParent(destination, wn.type, wl, wl.mode === "row" || wl.mode === "column", wl.position === "absolute", subject);
+  assertLayoutLandsUnderParent(liveParentLayoutFacts(destination), wn.type, wl, wl.mode === "row" || wl.mode === "column", wl.position === "absolute", subject);
 }
 
 // The layout words a LIVE node carries that MEAN SOMETHING ABOUT ITS PARENT — the only intent a
@@ -681,6 +803,8 @@ export function resettleMovedNode(node: any, wl: WriteLayout): void {
   node.layoutGrow = 0;
   if (node.layoutAlign === "STRETCH") node.layoutAlign = "INHERIT";
   applyLiveNodeLayout(node, wl);
+  settleLiveNodePercentSize(node, wl);
+  settleLiveNodePercentPosition(node, wl);
 }
 
 // Which appliers govern a child under a given parent: a POSITIONED child (any ABSOLUTE child, or

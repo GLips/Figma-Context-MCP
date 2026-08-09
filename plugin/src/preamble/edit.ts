@@ -20,16 +20,21 @@
 // gates read the canvas exactly as that edit will find it. A prepare reject leaves zero undo
 // residue; only the sealed apply span can mint a step.
 //
-// The pipeline is FOUR NAMED STAGES because `editMany` drives the same ones N times over one queue
+// The pipeline is FIVE NAMED STAGES because `editMany` drives the same ones N times over one queue
 // slot (invariant 4: a batch verb takes the lock once and rides the internal appliers, never the
 // public verb). Their ORDER is the contract, not their bodies:
 //
 //   1. rejectNonDeltaWords    pure — no document read at all, so it can run for every entry first
 //   2. compileEditPlan        the compile, which reads the LIVE node (font identity, wrap mode)
-//   3. …the verb's resource awaits…
-//   4. assertEditPlanStillApplies  the live gates, AFTER the last await — plus proof that the facts
-//                             stage 2 read still hold (see LiveTextFacts)
-//   5. applyEditPlan          the sealed, commit-free span
+//   3. loadEditResources      the verb's ONLY awaits: one font load, one image request
+//   4. assertEditPlanStillApplies  the live gates, AFTER the last await — plus proof that the node
+//                             still exists and the facts stage 2 read still hold (readLiveTextFacts)
+//   5a. applyEditPlanWrites     the sealed, commit-free span: everything that CHANGES the node
+//   5b. settleEditPlanSizes      what still PRODUCES geometry: percent size, then the text clamp
+//   5c. settleEditPlanPositions  what CONSUMES it: percent position and anchor, last of all
+//
+// 5a/5b/5c are one span, split only so a BATCH can run each across every entry before starting the
+// next: a size read while another entry still has writes to land is a number about to move.
 //
 // Stage 4 is why stage 2's live reads are safe to make early. Loading fonts and image bytes
 // suspends the run for a WS round trip while the user has the document open, and a batch stacks one
@@ -42,12 +47,13 @@ import { resolveTarget } from "./read.js";
 import { enterMutatingVerb } from "./mutation-lock.js";
 import { beginMutatingApply } from "./verb-error.js";
 import {
-  applyPaint, applySceneProps, mintHandle, applyLiveNodeLayout, assertLayoutDeltaResolvable,
-  applyTextProps, applyTextClamp, RenderResources,
+  applyPaint, applySceneProps, mintHandle, applyLiveNodeLayout, settleLiveNodePercentSize,
+  settleLiveNodePercentPosition, assertLayoutDeltaResolvable, applyTextProps, applyTextClamp,
+  RenderResources, BatchLayoutDeltas,
 } from "./bridge.js";
 import { toFigmaEffects } from "./effects.js";
 import { rejectUnknownKeys } from "./validate.js";
-import { liveFontWords, loadFontsForTextEdits, TextEditFontNeed } from "./fonts.js";
+import { liveFontWords, loadFontsForTextEdits } from "./fonts.js";
 import {
   KNOWN_KEYS, compileNodeLocalProps, compileSizeWords, compileContainerWords, compileLineLength,
   compileLineStroke, compilePaintWord, compileTextStyleWords, compileTextContent, assertLineClampCount,
@@ -55,6 +61,7 @@ import {
 } from "./flcm.js";
 import type { EditDelta, FrameProps, LineProps } from "./schema.js";
 
+const SUBJECT = "flcm.edit";
 const EDIT_KEYS: ReadonlySet<string> = new Set(KNOWN_KEYS.edit);
 
 // A create-verb's word groups, intersected with the current edit surface. The intersection is what
@@ -245,37 +252,42 @@ function compileTextDeltaWords(changes: EditDelta, patch: WriteProps, node: Text
 // batch (edit-many.ts), which is what keeps every entry's gates reading the canvas at the same
 // moment. Everything below is preamble-internal — the IIFE bundle exports only the public verbs. ----
 
-// The LIVE facts a compile reads off a TEXT node, snapshotted so the post-await stage can prove
-// they still hold. Only TEXT has any: every other live read the compile makes is `node.type`, which
-// a live node cannot change. Not stored as the raw values — `fontName` is a symbol when mixed, and
-// a comparable string is what the check actually needs.
-interface LiveTextFacts { font: string; autoResize: string; maxLines: number | null }
-
-function readLiveTextFacts(node: SceneNode): LiveTextFacts | undefined {
+// Every LIVE fact a compile reads off a TEXT node, as ONE comparable string — so recording the
+// facts and comparing them are the same code, and a fact added here is re-verified by
+// construction. (Only TEXT has any: the compile's other live read is `node.type`, which a live node
+// cannot change.) The mixed branch spells out the RANGE fonts rather than a "mixed" token, because
+// those are what the font preload reads — a retype that leaves the node mixed but swaps one range's
+// font would otherwise slip past stage 4 and surface as a generic apply-time refusal instead.
+function readLiveTextFacts(node: SceneNode): string | undefined {
   if (node.type !== "TEXT") return undefined;
   const t = node as TextNode;
-  const fn = t.fontName;
-  return {
-    font: fn === figma.mixed ? " mixed" : (fn as FontName).family + "|" + (fn as FontName).style,
-    autoResize: t.textAutoResize,
-    maxLines: t.maxLines == null ? null : t.maxLines,
-  };
+  const font =
+    t.fontName === figma.mixed
+      ? t.getRangeAllFontNames(0, t.characters.length).map((f) => f.family + " " + f.style).join(",")
+      : (t.fontName as FontName).family + " " + (t.fontName as FontName).style;
+  return font + "|" + t.textAutoResize + "|" + t.maxLines;
 }
 
 /** One entry's compiled, ready-to-apply delta, plus what the compile read to produce it. */
-export interface EditPlan { node: SceneNode; patch: WriteProps; liveFacts: LiveTextFacts | undefined }
+export interface EditPlan { node: SceneNode; patch: WriteProps; liveTextFacts: string | undefined }
 
 /** Stage 2 — compile against the live node, recording every mutable fact the compile consulted. */
 export function compileEditPlan(node: SceneNode, changes: EditDelta, subject: string): EditPlan {
   const legal = assertDeltaLegalForType(node, changes, subject);
   // Snapshot BEFORE the compile, so the recorded facts are the ones it goes on to read.
-  const liveFacts = readLiveTextFacts(node);
-  return { node, patch: compileDeltaPatch(changes, legal, node, subject), liveFacts };
+  const liveTextFacts = readLiveTextFacts(node);
+  return { node, patch: compileDeltaPatch(changes, legal, node, subject), liveTextFacts };
 }
 
-/** The text half of a verb's font load, or nothing when this entry touches no text. */
-export function textFontNeedOf(plan: EditPlan): TextEditFontNeed | undefined {
-  return plan.node.type === "TEXT" ? { node: plan.node as TextNode, patch: plan.patch } : undefined;
+/**
+ * Stage 3 — the verb's resource awaits, and the only suspension between the compiles and the seal.
+ * ONE font load and ONE image request however many entries there are: a batch is one verb, so it
+ * owes one round trip, and every extra suspension is another instant the user can edit across.
+ */
+export async function loadEditResources(plans: readonly EditPlan[]): Promise<RenderResources> {
+  const fonts = await loadFontsForTextEdits(plans);
+  const images = await fetchImagesForTrees(plans.map((plan) => plan.patch));
+  return { fonts, images };
 }
 
 /**
@@ -284,11 +296,23 @@ export function textFontNeedOf(plan: EditPlan): TextEditFontNeed | undefined {
  * survived the resource round trips. A mismatch is refused rather than papered over: the delta was
  * enriched against a font that is gone, or gated against a wrap that has changed, so applying it
  * would land something the agent never asked for. Zero writes either way.
+ *
+ * `deltas` is every layout delta the SAME verb is applying, by node id — a batch judges its entries
+ * against the canvas it is creating, not the one it found.
  */
-export function assertEditPlanStillApplies(plan: EditPlan, subject: string): void {
-  const { node, liveFacts } = plan;
-  const now = readLiveTextFacts(node);
-  if (liveFacts && now && (now.font !== liveFacts.font || now.autoResize !== liveFacts.autoResize || now.maxLines !== liveFacts.maxLines)) {
+export function assertEditPlanStillApplies(plan: EditPlan, subject: string, deltas?: BatchLayoutDeltas): void {
+  const { node } = plan;
+  // EXISTENCE first, and unconditionally — it is the one live fact every delta depends on, including
+  // the ones that read nothing else off the node. A node deleted during the round trip still accepts
+  // writes (Figma detaches it rather than throwing on every setter), so without this a fill delta on
+  // a deleted node reports success, mints a handle, and paints an object no longer on the canvas.
+  if (node.removed) {
+    throw new Error(
+      subject + ": " + JSON.stringify(node.name) + " (id " + JSON.stringify(node.id) +
+        ") was deleted while this call was loading fonts and images, so it is no longer on the canvas. Nothing was applied — re-run the call without it.",
+    );
+  }
+  if (plan.liveTextFacts !== undefined && readLiveTextFacts(node) !== plan.liveTextFacts) {
     throw new Error(
       subject + ": the text of " + JSON.stringify(node.name) + " (id " + JSON.stringify(node.id) +
         ") changed while this call was loading fonts and images, so the delta was resolved against a node that no longer exists in that state. Nothing was applied — re-run the call.",
@@ -296,23 +320,61 @@ export function assertEditPlanStillApplies(plan: EditPlan, subject: string): voi
   }
   // Layout words that only mean something against the live tree (a page parent, hug legality, the
   // hug-cycle percent) reject here like every other validation — zero writes on failure.
-  if (plan.patch.layout) assertLayoutDeltaResolvable(node, plan.patch.layout, subject);
+  if (plan.patch.layout) assertLayoutDeltaResolvable(node, plan.patch.layout, subject, deltas);
 }
 
-/** Stage 5 — the sealed, commit-free write span for one entry. No awaits, by the lock's contract. */
-export function applyEditPlan(verb: string, { node, patch }: EditPlan, resources: RenderResources): void {
-  const fail = beginMutatingApply(verb, node);
+/**
+ * The failure builder for one entry's apply, obtained ONCE for all three stages. The identity is
+ * snapshotted here (see beginMutatingApply) and stage 5a may rename the node, so re-opening the
+ * span per stage would report a name the rollback is about to erase.
+ */
+export type EditPlanFailure = (cause: unknown) => Error;
+
+export function openEditPlanApply(verb: string, plan: EditPlan): EditPlanFailure {
+  return beginMutatingApply(verb, plan.node);
+}
+
+/**
+ * Stage 5a — the sealed, commit-free write span for one entry: everything that CHANGES the node.
+ * No awaits, by the lock's contract.
+ */
+export function applyEditPlanWrites(fail: EditPlanFailure, { node, patch }: EditPlan, resources: RenderResources): void {
   try {
     applyPaint(node, patch, resources);
     applySceneProps(node, patch);
     // Text BEFORE layout — create's own order (buildText: characters, then applyLeafSize): an
     // anchor or percent in the same delta must resolve against the POST-reflow metrics, or a
     // center anchor lands off by the text-size change and only converges on a second run.
-    // Fills still precede runs (applyPaint above), and clamp goes last — it clips against the
-    // wrap the sizing/content writes just produced.
+    // Fills still precede runs (applyPaint above).
     if (node.type === "TEXT") applyTextProps(node as TextNode, patch, resources);
     if (patch.layout) applyLiveNodeLayout(node, patch.layout);
+  } catch (cause) {
+    throw fail(cause);
+  }
+}
+
+/**
+ * Stage 5b — what still PRODUCES geometry after the writes: the percent SIZE, then the clamp that
+ * clips against the wrap that size produced (the ordering `edit` has always had, and the reason
+ * clamp isn't simply last).
+ */
+export function settleEditPlanSizes(fail: EditPlanFailure, { node, patch }: EditPlan): void {
+  try {
+    if (patch.layout) settleLiveNodePercentSize(node, patch.layout);
     if (node.type === "TEXT") applyTextClamp(node as TextNode, patch.maxLines);
+  } catch (cause) {
+    throw fail(cause);
+  }
+}
+
+/**
+ * Stage 5c — what CONSUMES geometry: percent position and anchor, which read the parent's realized
+ * size and the node's own. Dead last, so in a batch they measure a canvas where every entry's
+ * sizes have already settled.
+ */
+export function settleEditPlanPositions(fail: EditPlanFailure, { node, patch }: EditPlan): void {
+  try {
+    if (patch.layout) settleLiveNodePercentPosition(node, patch.layout);
   } catch (cause) {
     throw fail(cause);
   }
@@ -327,24 +389,24 @@ export function applyEditPlan(verb: string, { node, patch }: EditPlan, resources
 // A single expression on purpose: the queue slot is reserved before edit() can possibly yield,
 // which is the lock's invocation-order guarantee (see enterMutatingVerb) — don't add work above it.
 export function edit(target: Target, changes: EditDelta): Promise<Handle> {
-  const subject = "flcm.edit";
   return enterMutatingVerb(
     "edit",
     // Prepare — serialized, read-only, apply-time-fresh: every validation and canvas read
     // (vocabulary, resolve, gates, enrichment) and every await (fonts, images) lives here; a
     // throw rejects the verb with zero writes and zero undo residue.
     async () => {
-      rejectNonDeltaWords(changes, subject);
-      const plan = compileEditPlan(await resolveTarget(target), changes, subject);
-      const need = textFontNeedOf(plan);
-      const fonts = need ? await loadFontsForTextEdits([need]) : {};
-      const images = await fetchImagesForTrees([plan.patch]);
-      assertEditPlanStillApplies(plan, subject);
-      return { plan, resources: { fonts, images } };
+      rejectNonDeltaWords(changes, SUBJECT);
+      const plan = compileEditPlan(await resolveTarget(target), changes, SUBJECT);
+      const resources = await loadEditResources([plan]);
+      assertEditPlanStillApplies(plan, SUBJECT);
+      return { plan, resources };
     },
     // Apply — the sealed span: all writes, no awaits.
     ({ plan, resources }) => {
-      applyEditPlan("edit", plan, resources);
+      const fail = openEditPlanApply("edit", plan);
+      applyEditPlanWrites(fail, plan, resources);
+      settleEditPlanSizes(fail, plan);
+      settleEditPlanPositions(fail, plan);
       return mintHandle(plan.node);
     },
   );

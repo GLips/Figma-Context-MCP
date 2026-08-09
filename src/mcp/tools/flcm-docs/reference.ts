@@ -31,6 +31,7 @@ import {
   EDIT_INTRO,
   EDIT_REMOVAL,
   EDIT_RULES,
+  EDIT_MANY,
   STRUCTURE_INTRO,
   STRUCTURE_RULES,
 } from "./narrative.js";
@@ -206,8 +207,8 @@ const SECTIONS: Section[] = [
   },
   {
     id: "edit",
-    title: "edit() — changing existing nodes",
-    blurb: "partial deltas against live nodes, and the rollback contract",
+    title: "edit() / editMany() — changing existing nodes",
+    blurb: "partial deltas against live nodes, batching them atomically, and the rollback contract",
     body: () =>
       `${EDIT_INTRO}\n\n### Editable fields\n\n${propTable(FIELD_GROUPS.edit)}\n\n` +
       `### Words by node type\n\n${editTypeWordLines()}\n\n` +
@@ -218,7 +219,7 @@ const SECTIONS: Section[] = [
         .filter((k) => k !== "key")
         .map((k) => `\`${k}\``)
         .join(", ")}.\n\n` +
-      `${EDIT_REMOVAL}\n\n${EDIT_RULES}`,
+      `${EDIT_REMOVAL}\n\n${EDIT_RULES}\n\n${EDIT_MANY}`,
   },
   {
     id: "structure",

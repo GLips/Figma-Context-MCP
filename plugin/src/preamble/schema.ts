@@ -356,6 +356,18 @@ const EDIT_FIELDS = {
 export const EditSchema = z.object(EDIT_FIELDS);
 export type EditDelta = z.infer<typeof EditSchema>;
 
+// One entry of an flcm.editMany batch. An ARRAY of { target, changes } rather than the sketch's
+// string-keyed map, because each `target` takes the full target grammar — a key, a node id,
+// flcm.id(), or a handle straight from find/selection (the main edit on-ramp) — and a map's string
+// keys could carry only the first two. Structural ops deliberately never fold in here: mixing
+// tree-shape and prop ops in one list is the `flcm.change` non-goal.
+export interface EditEntry { target: Target; changes: EditDelta }
+
+// editMany's optional second argument. Named (not a bare positional target) because every other
+// verb's second target argument means WHERE something goes — `within` is a search scope, and the
+// read verbs already spell it as a named field on their query.
+export interface EditManyScope { within?: Target }
+
 // flcm.image(src, opts?) options — the second, optional arg to the image paint constructor. `src` (an
 // https url or a local file path under the server's asset root) is the positional first arg (like text's
 // `content` / svg's `markup`), so it isn't a prop field here.
@@ -439,6 +451,11 @@ export interface Flcm {
   // call: the whole delta validates before the first write, and a post-validation Figma refusal
   // rolls the verb back (commit-then-undo) — the canvas is never half-a-verb.
   edit(target: Target, changes: EditDelta): Promise<Handle>;
+  // The atomic batch form: every target resolves and every delta validates before the first write,
+  // so one invalid entry leaves the canvas untouched and the rejection names EVERY failing entry.
+  // The whole set is one undo step, and cross-entry order doesn't matter (a parent turned
+  // auto-layout settles before a child set to "fill", whichever way round they were written).
+  editMany(entries: EditEntry[], scope?: EditManyScope): Promise<Handle[]>;
   // Tree shape, DOM-style — position is the verb, and the thing placed is either a constructor
   // spec (built there) or a target naming a live node (MOVED there, like the DOM). append/prepend
   // take the parent; insertBefore/insertAfter take a sibling and infer the parent from it. A spec
@@ -506,7 +523,8 @@ export const VERBS: VerbDoc[] = [
   { category: "value", signature: "flcm.image(src, opts?)", builds: "an image fill value", args: "an https url or a local file path (under the server's asset root) first, then { scaleMode?, placeholder? }", schema: ImageSchema },
   { category: "value", signature: "flcm.effects({...})", builds: "an effects value", args: "an { shadow, blur, backgroundBlur } bag", schema: EffectsSchema },
   { category: "render", signature: "await flcm.render(tree)", builds: "live nodes", args: "returns { root, keyed }" },
-  { category: "edit", signature: "await flcm.edit(target, changes)", builds: "a nudged existing node (returns its updated Handle)", args: "target (an flcm/key, node id, flcm.id(id), or handle), then a partial delta in the same vocabulary as create", schema: EditSchema },
+  { category: "edit", signature: "await flcm.edit(target, changes)", builds: "a nudged existing node (returns its updated Handle)", args: "target (an flcm/key, node id, flcm.id(id), or handle), then a partial delta in the same vocabulary as create", schema: EditSchema, quickStart: "await flcm.edit(target, changes) / flcm.editMany([{ target, changes }, …])" },
+  { category: "edit", signature: "await flcm.editMany(entries, scope?)", builds: "a whole set of nudges, applied atomically (returns a Handle per entry, in order)", args: "an array of { target, changes } — the same delta vocabulary as flcm.edit — and optionally { within } to scope key resolution. One invalid entry rejects the batch naming every offender, and nothing is applied", quickStart: null },
   { category: "structure", signature: "await flcm.append(parent, thing)", builds: "`thing` placed as the LAST child of `parent`", args: "a parent target, then either a constructor spec (built there → { root, keyed, parent }) or a target naming a live node (MOVED there → { node, from, to })", quickStart: "await flcm.append/prepend(parent, spec|target)" },
   { category: "structure", signature: "await flcm.prepend(parent, thing)", builds: "the same, placed FIRST", args: "same as append", quickStart: null },
   { category: "structure", signature: "await flcm.insertBefore(sibling, thing)", builds: "`thing` placed just before `sibling`", args: "a SIBLING target (the parent is inferred from it), then a spec or a live target", quickStart: "await flcm.insertBefore/insertAfter(sibling, spec|target)" },

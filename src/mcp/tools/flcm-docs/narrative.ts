@@ -348,6 +348,20 @@ export const EDIT_RULES = `### Rules
 - **Each edit is one undo step.** The whole delta validates before the first write; if Figma refuses a write mid-apply, the edit rolls back to how the node was and the error carries the target's identity, Figma's reason, and how many earlier mutating calls in the run still stand.
 - Delta values are **absolute** (a fill, an opacity), never relative (\`+10\`) — re-running the same edit converges instead of compounding.`;
 
+export const EDIT_MANY = `### Many at once — \`flcm.editMany\`
+
+\`await flcm.editMany([{ target, changes }, …], { within? })\` applies a whole set of deltas as **one** call, and returns a handle per entry in the order you wrote them. Each \`changes\` is exactly an \`flcm.edit\` delta — same words, same rules as everything above.
+
+Reach for it whenever you're nudging more than one node, because a loop over \`flcm.edit\` is **not** the same thing:
+
+- **The set is atomic, not just each call.** Every target resolves and every delta validates before the first write. A loop would already have mutated entries 1–3 by the time entry 4's typo surfaced; here nothing moves and the canvas is exactly as you found it.
+- **One rejection names every bad entry**, indexed — \`[2] …\`, \`[5] …\` — so you fix the whole batch in one pass instead of one round trip per mistake.
+- **The whole batch is one undo step.** Your user steps back over the change they asked for, not over nine of them.
+- **Order doesn't matter.** Entries settle ancestors-first, so turning a parent into a row *and* setting its child to \`width: "fill"\` works whichever way round you write them.
+- **Two entries for the same node reject** rather than silently last-wins — put both fields in one entry.
+
+Only props: tree shape stays with \`append\`/\`move\`/\`remove\`/\`clone\`, one call each.`;
+
 export const STRUCTURE_INTRO = `Tree shape is its own set of verbs, and **position is the verb** — there is no index argument and no options bag. \`flcm.append(parent, thing)\` and \`flcm.prepend(parent, thing)\` take the parent; \`flcm.insertBefore(sibling, thing)\` and \`flcm.insertAfter(sibling, thing)\` take a **sibling** and work out the parent from it.
 
 \`thing\` is either of two things, and they mean what they mean in the DOM:

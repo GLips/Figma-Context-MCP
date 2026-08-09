@@ -87,9 +87,10 @@ export function liveFontWords(fontName: { family: string; style: string }): Writ
   };
 }
 
-// One text edit's node + compiled delta — the unit the load below works over. A batch hands in one
-// per entry, a single `edit` hands in one; either way the loads happen ONCE for the whole verb.
-export interface TextEditFontNeed { node: TextNode; patch: WriteProps }
+// One edit entry's node + compiled delta — the unit the load below works over. Deliberately ANY
+// SceneNode, not just TEXT: the filter belongs here, beside the reflow filter it sits next to, so
+// no caller has to know that a non-text entry contributes nothing.
+export interface EditFontNeed { node: SceneNode; patch: WriteProps }
 
 // Whether a compiled delta re-lays the text: fonts gate every reflowing text mutation, not just
 // characters — size, clamp, and style writes throw on an unloaded font too.
@@ -109,13 +110,14 @@ function textEditReflows(patch: WriteProps): boolean {
 // loadFontsForTree and one Promise.all over the live fonts, instead of paying a serial round trip
 // per entry. Each of those round trips is a suspension point the user can edit the document
 // across, so collapsing them is not just speed (see edit.ts's live-facts freshness check).
-export async function loadFontsForTextEdits(edits: readonly TextEditFontNeed[]): Promise<FontMap> {
-  const reflowing = edits.filter(({ patch }) => textEditReflows(patch));
+export async function loadFontsForTextEdits(edits: readonly EditFontNeed[]): Promise<FontMap> {
+  const reflowing = edits.filter(({ node, patch }) => node.type === "TEXT" && textEditReflows(patch));
   if (!reflowing.length) return {};
   const live: FontName[] = [];
   for (const { node } of reflowing) {
-    if (node.fontName === figma.mixed) live.push(...node.getRangeAllFontNames(0, node.characters.length));
-    else live.push(node.fontName as FontName);
+    const t = node as TextNode;
+    if (t.fontName === figma.mixed) live.push(...t.getRangeAllFontNames(0, t.characters.length));
+    else live.push(t.fontName as FontName);
   }
   await Promise.all(live.map((f) => figma.loadFontAsync(f)));
   const authored = reflowing.filter(

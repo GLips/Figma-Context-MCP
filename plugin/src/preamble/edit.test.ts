@@ -715,7 +715,6 @@ test('the clamp gate holds from BOTH sides: width:"hug" on a live-clamped text r
 
 test("a live fact that changed during the resource round trip refuses the whole call — zero writes", async () => {
   const node = await renderKeyedText("hello", { textStyle: { fontWeight: "bold" } });
-  const before = { ...node.fontName };
   const logBefore = [...figma.undoLog];
   // The image fetch is the run's suspension point, and the user has the document open across it.
   // Standing in for that user: the channel retypes the node's font before handing the bytes back.
@@ -734,7 +733,7 @@ test("a live fact that changed during the resource round trip refuses the whole 
   } finally {
     delete g.__flcmRequestImages;
   }
-  assert.deepEqual(before, { family: "Inter", style: "Bold" });
+  assert.deepEqual(node.fontName, { family: "Inter", style: "Regular" }); // the user's own retype stands
   assert.equal(node.fontSize, 12); // the delta never landed — still the default size
   assert.deepEqual(figma.undoLog, logBefore); // refused in prepare: no seal, no rollback
 });

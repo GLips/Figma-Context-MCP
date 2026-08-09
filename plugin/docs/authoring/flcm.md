@@ -28,6 +28,7 @@ There is no autocomplete and no type-checking where your code runs (a QuickJS sa
 | `flcm.effects({...})` | an effects value | an { shadow, blur, backgroundBlur } bag |
 | `await flcm.render(tree)` | live nodes | returns { root, keyed } |
 | `await flcm.edit(target, changes)` | a nudged existing node (returns its updated Handle) | target (an flcm/key, node id, flcm.id(id), or handle), then a partial delta in the same vocabulary as create |
+| `await flcm.editMany(entries, scope?)` | a whole set of nudges, applied atomically (returns a Handle per entry, in order) | an array of { target, changes } — the same delta vocabulary as flcm.edit — and optionally { within } to scope key resolution. One invalid entry rejects the batch naming every offender, and nothing is applied |
 | `await flcm.append(parent, thing)` | `thing` placed as the LAST child of `parent` | a parent target, then either a constructor spec (built there → { root, keyed, parent }) or a target naming a live node (MOVED there → { node, from, to }) |
 | `await flcm.prepend(parent, thing)` | the same, placed FIRST | same as append |
 | `await flcm.insertBefore(sibling, thing)` | `thing` placed just before `sibling` | a SIBLING target (the parent is inferred from it), then a spec or a live target |
@@ -399,7 +400,7 @@ out.keyed["email:input"].id;  // a nested keyed node
 
 **Return ids or handles, never live Figma nodes.** A live node can't cross the bridge (it collapses to a bare `{ id }`), so returning one is a loud error telling you to return the id instead. The handles from `render` are safe to return as-is.
 
-## edit() — changing existing nodes
+## edit() / editMany() — changing existing nodes
 
 `await flcm.edit(target, changes)` applies a partial delta to one existing node and returns its updated handle. The target is anything the read verbs accept: an flcm/key, a node id, `flcm.id(id)`, or a handle from `render`/`find`. The delta uses the **same words as create** — there is no separate edit dialect — and only the fields you pass change; everything else on the node is untouched.
 
@@ -458,6 +459,20 @@ On a node type flcm can't create (GROUP, INSTANCE, COMPONENT, …) only the shar
 - **An empty delta is rejected**, not silently committed — an empty edit would still mint an undo step.
 - **Each edit is one undo step.** The whole delta validates before the first write; if Figma refuses a write mid-apply, the edit rolls back to how the node was and the error carries the target's identity, Figma's reason, and how many earlier mutating calls in the run still stand.
 - Delta values are **absolute** (a fill, an opacity), never relative (`+10`) — re-running the same edit converges instead of compounding.
+
+### Many at once — `flcm.editMany`
+
+`await flcm.editMany([{ target, changes }, …], { within? })` applies a whole set of deltas as **one** call, and returns a handle per entry in the order you wrote them. Each `changes` is exactly an `flcm.edit` delta — same words, same rules as everything above.
+
+Reach for it whenever you're nudging more than one node, because a loop over `flcm.edit` is **not** the same thing:
+
+- **The set is atomic, not just each call.** Every target resolves and every delta validates before the first write. A loop would already have mutated entries 1–3 by the time entry 4's typo surfaced; here nothing moves and the canvas is exactly as you found it.
+- **One rejection names every bad entry**, indexed — `[2] …`, `[5] …` — so you fix the whole batch in one pass instead of one round trip per mistake.
+- **The whole batch is one undo step.** Your user steps back over the change they asked for, not over nine of them.
+- **Order doesn't matter.** Entries settle ancestors-first, so turning a parent into a row *and* setting its child to `width: "fill"` works whichever way round you write them.
+- **Two entries for the same node reject** rather than silently last-wins — put both fields in one entry.
+
+Only props: tree shape stays with `append`/`move`/`remove`/`clone`, one call each.
 
 ## Tree shape — placing, moving, removing
 
