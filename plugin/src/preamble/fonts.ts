@@ -94,6 +94,11 @@ export interface EditFontNeed { node: SceneNode; patch: WriteProps }
 
 // Whether a compiled delta re-lays the text: fonts gate every reflowing text mutation, not just
 // characters — size, clamp, and style writes throw on an unloaded font too.
+//
+// Deliberately keyed on the WORD GROUP (`patch.textStyle` whole), not on individual style leaves:
+// a new text word added inside textStyle is covered the day it lands, and cannot ship as a write
+// that throws at apply time because nobody remembered to register it here. A new TOP-LEVEL text
+// word (a sibling of `text`/`runs`/`maxLines`) gets no such cover and MUST be added below.
 function textEditReflows(patch: WriteProps): boolean {
   return (
     patch.text != null || !!patch.runs || !!patch.textStyle || patch.maxLines != null ||

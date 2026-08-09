@@ -157,7 +157,7 @@ flcm.frame({ width: 320, height: 8, borderRadius: 4, fill: "#E5E7EB" }, [
 
 | Prop | Type | Notes |
 | --- | --- | --- |
-| `textStyle` | { fontFamily?, fontWeight?, fontSize?, fontStyle?, lineHeight?, letterSpacing?, textDecoration?, textAlign?, lineClamp? } | Text style base (fontFamily/fontWeight/fontSize/fontStyle/lineHeight/letterSpacing/textDecoration/textAlign/lineClamp). Runs layer over it. |
+| `textStyle` | { fontFamily?, fontWeight?, fontSize?, fontStyle?, lineHeight?, letterSpacing?, textDecoration?, textTransform?, fontVariant?, textAlign?, textAlignVertical?, paragraphSpacing?, paragraphIndent?, listSpacing?, hyperlink?, lineClamp? } | Text style base (font identity, metrics, casing, paragraph spacing, alignment, lineClamp). Runs layer over it. |
 | `color` | color / gradient | Text color (a solid color, normally) — a node-level sugar prop compiling to the text node's fill. |
 
 `content` is passed first: a plain string, or an array of styled runs (below). A fixed `width` makes it wrap (grows in height); otherwise it grows sideways.
@@ -174,6 +174,13 @@ flcm.frame({ width: 320, height: 8, borderRadius: 4, fill: "#E5E7EB" }, [
 | `letterSpacing` | number(px) \| "Npx" \| "N%" \| "Nem" | Tracking. em/% are relative to font size. |
 | `textDecoration` | "underline" \| "line-through" \| "none" | CSS text-decoration-line — "underline" \| "line-through" \| "none". On the base only "underline"/"line-through"; "none" is a run-delta inverse override clearing an inherited decoration. (Strikethrough is also authorable inline as ~~text~~.) |
 | `textAlign` | "left" \| "center" \| "right" \| "justify" | Horizontal text alignment (CSS text-align). |
+| `textAlignVertical` | "top" \| "center" \| "bottom" | Vertical alignment inside the text box. Default "top". Whole-node only — a styled run cannot set it. |
+| `textTransform` | "uppercase" \| "lowercase" \| "capitalize" \| "none" | CSS text-transform — re-cases the rendered glyphs without changing the characters. "none" restores the original casing (and clears a fontVariant small-caps, which Figma stores in the same slot). |
+| `fontVariant` | "small-caps" \| "all-small-caps" | CSS font-variant-caps. Shares Figma's single `textCase` slot with `textTransform`, so naming both in one style fails loud — pick one. |
+| `paragraphSpacing` | number \| "Npx" | Space between paragraphs (after each newline). |
+| `paragraphIndent` | number \| "Npx" | First-line indent of each paragraph. |
+| `listSpacing` | number \| "Npx" | Space between list items. |
+| `hyperlink` | string (url) \| { type: "URL", url } | A URL link over the whole text node. Takes a url string, or the read form { type: "URL", url } so a `get` result round-trips. A design's NODE links (a link to another node) are read-only and fail loud. |
 | `lineClamp` | number (≥1) \| "none" | Clamp the text to at most N lines, truncating with an ellipsis (…). Needs a bounded width — a fixed/`"fill"`/`"N%"` `width` — so the text wraps; on a width-hugging text there is nothing to truncate and it fails loud. N must be a whole number ≥ 1. `"none"` removes an existing clamp (under edit; at create it is the explicit default). |
 
 ### flcm.text — rich text (runs)
@@ -213,8 +220,13 @@ Each styled run's delta fields:
 | `lineHeight` | number(px) \| "Npx" \| "N%" \| "Nem" \| "auto" | Line height. "auto"/"normal" = the font default. em/% are relative to font size. |
 | `letterSpacing` | number(px) \| "Npx" \| "N%" \| "Nem" | Tracking. em/% are relative to font size. |
 | `textDecoration` | "underline" \| "line-through" \| "none" | CSS text-decoration-line — "underline" \| "line-through" \| "none". On the base only "underline"/"line-through"; "none" is a run-delta inverse override clearing an inherited decoration. (Strikethrough is also authorable inline as ~~text~~.) |
+| `textTransform` | "uppercase" \| "lowercase" \| "capitalize" \| "none" | CSS text-transform — re-cases the rendered glyphs without changing the characters. "none" restores the original casing (and clears a fontVariant small-caps, which Figma stores in the same slot). |
+| `fontVariant` | "small-caps" \| "all-small-caps" | CSS font-variant-caps. Shares Figma's single `textCase` slot with `textTransform`, so naming both in one style fails loud — pick one. |
+| `paragraphSpacing` | number \| "Npx" | Space between paragraphs (after each newline). |
+| `paragraphIndent` | number \| "Npx" | First-line indent of each paragraph. |
+| `listSpacing` | number \| "Npx" | Space between list items. |
 | `color` | color / gradient | Per-span text color. |
-| `hyperlink` | string (url) | URL hyperlink over this span. The inline form [text](url) is usually simpler; this sets it explicitly on a tuple. URL only (a design's NODE links are read-only). |
+| `hyperlink` | string (url) \| { type: "URL", url } | A URL link over the whole text node. Takes a url string, or the read form { type: "URL", url } so a `get` result round-trips. A design's NODE links (a link to another node) are read-only and fail loud. |
 
 ### flcm.rect / flcm.ellipse — shape props
 
@@ -428,7 +440,7 @@ out.keyed["email:input"].id;  // a nested keyed node
 | `length` | number | The line's length in px. |
 | `w` | number | The line's length in px — alias for `length` (`length` wins if both are set). |
 | `content` | string \| run[] | Replacement text: a plain string (markdown inline styling works: **bold**, *italic*, ~~strike~~, [link](url)) or an array of styled runs — exactly what flcm.text takes as its first argument. Replaces the node's whole content. |
-| `textStyle` | { fontFamily?, fontWeight?, fontSize?, fontStyle?, lineHeight?, letterSpacing?, textDecoration?, textAlign?, lineClamp? } | Text style base (fontFamily/fontWeight/fontSize/fontStyle/lineHeight/letterSpacing/textDecoration/textAlign/lineClamp). Runs layer over it. |
+| `textStyle` | { fontFamily?, fontWeight?, fontSize?, fontStyle?, lineHeight?, letterSpacing?, textDecoration?, textTransform?, fontVariant?, textAlign?, textAlignVertical?, paragraphSpacing?, paragraphIndent?, listSpacing?, hyperlink?, lineClamp? } | Text style base (font identity, metrics, casing, paragraph spacing, alignment, lineClamp). Runs layer over it. |
 | `color` | color / gradient | Text color (a solid color, normally) — a node-level sugar prop compiling to the text node's fill. |
 
 ### Words by node type

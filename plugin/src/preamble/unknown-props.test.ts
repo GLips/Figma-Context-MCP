@@ -72,17 +72,17 @@ test("a non-object where a props/query object belongs names THAT mistake, not th
 
 test("nested authoring objects reject unknown keys with a path-threaded error", () => {
   assert.throws(() => frame({ layout: { mode: "row", wrap: "nowrap" } as never }), /unknown prop "wrap" on flcm\.frame\.layout/);
-  assert.throws(() => text("hi", { textStyle: { fontVariant: "small-caps" } as never }), /unknown prop "fontVariant" on flcm\.text\.textStyle/);
+  assert.throws(() => text("hi", { textStyle: { fontVarient: "small-caps" } as never }), /unknown prop "fontVarient" on flcm\.text\.textStyle/);
   assert.throws(() => frame({ absolute: { x: 1, z: 2 } as never }), /unknown prop "z" on absolute/);
   assert.throws(() => frame({ absolute: { x: 1, anchor: { z: "left" } } as never }), /unknown prop "z" on absolute\.anchor/);
   assert.throws(() => frame({ pin: { z: "left" } as never }), /unknown prop "z" on pin/);
 });
 
 test("a run delta rejects an unknown key (the grounded silent-drop site), naming the run index", () => {
-  // compileRun read a positive list and never looked at the rest — textTransform on a run just vanished.
+  // compileRun read a positive list and never looked at the rest — a typo'd word on a run just vanished.
   assert.throws(
-    () => text(["ok", ["styled", { textTransform: "upper" }] as never]),
-    /unknown prop "textTransform" on flcm\.text run\[1\]/,
+    () => text(["ok", ["styled", { textTransfrom: "uppercase" }] as never]),
+    /unknown prop "textTransfrom" on flcm\.text run\[1\]/,
   );
 });
 

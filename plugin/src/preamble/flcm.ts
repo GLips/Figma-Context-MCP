@@ -19,7 +19,7 @@
 import {
   WriteNode, WriteProps, WriteChild, WriteLayout, WriteTextStyle, WriteTextRun, PaintSpec,
   GradientStop, EffectSpec, Sizing, Edges, Handle, WriteCssEffects, PinX, PinY, AnchorX, AnchorY,
-  Justify, Align, TextAlign, TextDecoration, RawIdRef, WriteType,
+  Justify, Align, TextAlign, TextDecoration, WriteTextCase, RawIdRef, WriteType,
 } from "./ir.js";
 import { markConstructorBuilt, isConstructorBuilt, assertConstructorBuiltTree } from "./provenance.js";
 import { assertLayoutRealizableForType, assertSizingResolvesAgainstParentFrame } from "./layout-legality.js";
@@ -65,8 +65,8 @@ export const KNOWN_KEYS = {
   layout: ["mode", "gap", "padding", "justifyContent", "alignItems"],
   text: ["textStyle", "color"],
   textContent: ["content"], // edit-only spelling of flcm.text's positional content arg
-  textStyle: ["fontFamily", "fontWeight", "fontSize", "fontStyle", "lineHeight", "letterSpacing", "textDecoration", "textAlign", "lineClamp"],
-  run: ["fontWeight", "fontSize", "fontFamily", "fontStyle", "lineHeight", "letterSpacing", "textDecoration", "color", "hyperlink"],
+  textStyle: ["fontFamily", "fontWeight", "fontSize", "fontStyle", "lineHeight", "letterSpacing", "textDecoration", "textTransform", "fontVariant", "textAlign", "textAlignVertical", "paragraphSpacing", "paragraphIndent", "listSpacing", "hyperlink", "lineClamp"],
+  run: ["fontWeight", "fontSize", "fontFamily", "fontStyle", "lineHeight", "letterSpacing", "textDecoration", "textTransform", "fontVariant", "paragraphSpacing", "paragraphIndent", "listSpacing", "color", "hyperlink"],
   line: ["stroke", "color", "strokeWidth", "length", "w", "rotation", "absolute", "pin"],
   path: ["d", "fill", "stroke", "strokeWidth", "effects", "rotation"],
   image: ["scaleMode", "placeholder"],
@@ -87,8 +87,6 @@ const LINE_KEYS = keySet(KNOWN_KEYS.shared, KNOWN_KEYS.line);
 const PATH_KEYS = keySet(KNOWN_KEYS.shared, KNOWN_KEYS.size, KNOWN_KEYS.path);
 const SVG_KEYS = keySet(KNOWN_KEYS.shared, KNOWN_KEYS.size);
 const LAYOUT_KEYS = keySet(KNOWN_KEYS.layout);
-const TEXTSTYLE_KEYS = keySet(KNOWN_KEYS.textStyle);
-const RUN_KEYS = keySet(KNOWN_KEYS.run);
 const IMAGE_KEYS = keySet(KNOWN_KEYS.image);
 const GRADIENT_KEYS = keySet(KNOWN_KEYS.gradient);
 const EFFECTS_KEYS = keySet(KNOWN_KEYS.effects);
@@ -260,10 +258,11 @@ function parseDirectional<X extends string, Y extends string>(
   return out.x != null || out.y != null ? out : undefined;
 }
 
-// Map a CSS-total container word (justifyContent/alignItems) to the terse render intent via its table (see
-// JUSTIFY_CONTENT/ALIGN_ITEMS for why this gate exists). `hint` appends prop-specific guidance; the shared
-// body names the realizable CSS spellings.
-function mapLayoutWord<T extends string>(name: string, raw: unknown, table: Record<string, T>, hint = ""): T {
+// Map a CSS-total author word to the Figma-domain value its table names — the container words
+// (justifyContent/alignItems, see JUSTIFY_CONTENT/ALIGN_ITEMS for why this gate exists) and the text
+// casing words (textTransform/fontVariant). `hint` appends prop-specific guidance; the shared body
+// names the realizable CSS spellings.
+function mapCssWord<T extends string>(name: string, raw: unknown, table: Record<string, T>, hint = ""): T {
   const mapped = typeof raw === "string" ? table[raw] : undefined;
   if (!mapped) {
     const allowed = Object.keys(table).map((w) => '"' + w + '"').join(", ");
@@ -304,8 +303,8 @@ export function compileContainerWords(cfg: NonNullable<FrameProps["layout"]>, su
   if (cfg.gap != null) layout.gap = length(cfg.gap);
   if (cfg.padding != null) layout.padding = padEdges(cfg.padding);
   // The space-around/evenly hint is primary-axis-only (a justify-content notion), so only justifyContent carries it.
-  if (cfg.justifyContent != null) layout.justifyContent = mapLayoutWord("layout.justifyContent", cfg.justifyContent, JUSTIFY_CONTENT, " Figma auto-layout can't realize CSS space-around/space-evenly; add gap/padding for spacing instead.");
-  if (cfg.alignItems != null) layout.alignItems = mapLayoutWord("layout.alignItems", cfg.alignItems, ALIGN_ITEMS);
+  if (cfg.justifyContent != null) layout.justifyContent = mapCssWord("layout.justifyContent", cfg.justifyContent, JUSTIFY_CONTENT, " Figma auto-layout can't realize CSS space-around/space-evenly; add gap/padding for spacing instead.");
+  if (cfg.alignItems != null) layout.alignItems = mapCssWord("layout.alignItems", cfg.alignItems, ALIGN_ITEMS);
   return layout;
 }
 
@@ -468,6 +467,82 @@ function frame(props: FrameProps = {}, children?: WriteChild | WriteChild[]): Wr
   return sealWriteNode(wn);
 }
 
+// CSS text-transform / font-variant-caps -> Figma's ONE textCase enum. Two author words, one slot,
+// which is why compileTextCase refuses a style naming both rather than letting the later key win.
+const TEXT_TRANSFORM: Record<string, WriteTextCase> = {
+  uppercase: "UPPER", lowercase: "LOWER", capitalize: "TITLE", none: "ORIGINAL",
+};
+const FONT_VARIANT: Record<string, WriteTextCase> = {
+  "small-caps": "SMALL_CAPS", "all-small-caps": "SMALL_CAPS_FORCED",
+};
+
+function compileTextCase(c: { textTransform?: unknown; fontVariant?: unknown }, subject: string): WriteTextCase | undefined {
+  if (c.textTransform != null && c.fontVariant != null) {
+    throw new Error(
+      subject + ": textTransform and fontVariant are two CSS words for Figma's ONE textCase slot, so they can't both be set — name whichever you mean. " +
+        '(To clear a small-caps, use textTransform: "none".)',
+    );
+  }
+  if (c.textTransform != null) return mapCssWord(subject + ".textTransform", c.textTransform, TEXT_TRANSFORM);
+  if (c.fontVariant != null) return mapCssWord(subject + ".fontVariant", c.fontVariant, FONT_VARIANT);
+  return undefined;
+}
+
+const TEXT_ALIGN_VERTICAL = new Set<NonNullable<WriteTextStyle["textAlignVertical"]>>(["top", "center", "bottom"]);
+
+// A hyperlink leaf: an author URL string, or the read form ({ type: "URL", url }) so a `get` result
+// round-trips without the caller unwrapping it. A NODE link — Figma's other kind, a jump to another
+// node in the design — has no authored form at all, so it rejects BY NAME instead of dropping the
+// link silently and handing back a node the agent believes still carries it.
+function parseHyperlink(value: unknown, subject: string): string {
+  if (typeof value === "string" && value.trim()) return value;
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    const h = value as { type?: unknown; url?: unknown };
+    if (h.type === "URL" && typeof h.url === "string" && h.url.trim()) return h.url;
+    if (h.type === "NODE") {
+      throw new Error(subject + ": that is a NODE hyperlink (a jump to another node in the design) — Figma has no way for a plugin to author one. Point it at a URL, or drop the field.");
+    }
+  }
+  throw new Error(subject + ': hyperlink must be a non-empty URL string, or the read form { type: "URL", url } — got ' + JSON.stringify(value) + ".");
+}
+
+// Read-shape text leaves that are NOT authoring input, so a spread `{ ...spec.textStyle, fontSize: 18 }`
+// still compiles instead of dying on the closed-set gate. Two dispositions, deliberately different:
+//   • IGNORED — purely DERIVED, its information already elsewhere in the same style, so dropping it
+//     loses nothing. `fontVariantName` ("Bold Italic") IS fontWeight + fontStyle, restated as Figma's
+//     own label; there is nothing to write that the triple doesn't already say.
+//   • REFUSED — real state the plugin API cannot write. Named with its reason, because silently
+//     dropping it would hand back a node the agent believes carries it (ADR-0003).
+const IGNORED_READ_TEXT_LEAVES = ["fontVariantName"];
+const REFUSED_READ_TEXT_LEAVES: Record<string, string> = {
+  opentypeFlags: "OpenType features are read-only to a plugin — TextNode.openTypeFeatures has no setter and no setRange* counterpart [verified, plugin-typings 1.133]",
+};
+
+// The closed set each text-style carrier accepts as INPUT: its own words plus the derived read leaves
+// it drops. Built from KNOWN_KEYS (schema-mirrored, drift-guarded) so the tolerated extras stay
+// visibly separate from the authoring surface — they are not props, and the docs must not list them.
+const TEXTSTYLE_INPUT_KEYS = keySet(KNOWN_KEYS.textStyle, IGNORED_READ_TEXT_LEAVES);
+const RUN_INPUT_KEYS = keySet(KNOWN_KEYS.run, IGNORED_READ_TEXT_LEAVES);
+
+function rejectUnauthorableTextLeaves(c: object, subject: string): void {
+  for (const leaf of Object.keys(REFUSED_READ_TEXT_LEAVES)) {
+    if (c.hasOwnProperty(leaf)) {
+      throw new Error(subject + ": `" + leaf + "` is a read-only field — " + REFUSED_READ_TEXT_LEAVES[leaf] + ". Drop it from the style.");
+    }
+  }
+}
+
+// The text words a BASE style and a RUN delta share — casing, paragraph metrics, links. Written once
+// because Figma applies every one of them per range (setRangeTextCase/setRangeParagraph*/…), so the
+// two carriers differ only in which range they cover, never in what the word means.
+function compileSharedTextWords(c: Record<string, unknown>, ts: WriteTextStyle, subject: string): void {
+  const textCase = compileTextCase(c, subject);
+  if (textCase) ts.textCase = textCase;
+  if (c.paragraphSpacing != null) ts.paragraphSpacing = length(c.paragraphSpacing as number | string);
+  if (c.paragraphIndent != null) ts.paragraphIndent = length(c.paragraphIndent as number | string);
+  if (c.listSpacing != null) ts.listSpacing = length(c.listSpacing as number | string);
+}
+
 // The textStyle word compile every text carrier rides — flcm.text's base and an edit delta alike
 // (one vocabulary, one parser). lineClamp is deliberately NOT compiled here: it validates against
 // a width the two callers know differently (create: the authored width; edit: the live wrap
@@ -478,7 +553,8 @@ export function compileTextStyleWords(cfg: unknown, subject: string): WriteTextS
     throw new Error("flcm: " + subject + " must be an object like { fontSize, fontWeight, … } — got " + JSON.stringify(cfg) + ".");
   }
   const c = cfg as NonNullable<TextProps["textStyle"]>;
-  rejectUnknownKeys(c, TEXTSTYLE_KEYS, subject);
+  rejectUnauthorableTextLeaves(c, subject);
+  rejectUnknownKeys(c, TEXTSTYLE_INPUT_KEYS, subject);
   const ts: WriteTextStyle = {};
   if (c.fontSize != null) { assertScalarType(c.fontSize, "number", "textStyle.fontSize"); ts.fontSize = c.fontSize; }
   // The one non-scalar-typed leaf: a number (700) or a name ("bold"). Anything else must reject —
@@ -495,6 +571,9 @@ export function compileTextStyleWords(cfg: unknown, subject: string): WriteTextS
   if (c.letterSpacing != null) ts.letterSpacing = letterSpacing(c.letterSpacing);
   if (c.textDecoration != null) ts.textDecoration = assertEnum("textStyle.textDecoration", c.textDecoration, TEXT_DECORATION);
   if (c.textAlign != null) ts.textAlign = assertEnum("textStyle.textAlign", c.textAlign, TEXT_ALIGN);
+  if (c.textAlignVertical != null) ts.textAlignVertical = assertEnum("textStyle.textAlignVertical", c.textAlignVertical, TEXT_ALIGN_VERTICAL);
+  if (c.hyperlink != null) ts.hyperlink = parseHyperlink(c.hyperlink, subject + ".hyperlink");
+  compileSharedTextWords(c as Record<string, unknown>, ts, subject);
   return ts;
 }
 
@@ -513,7 +592,7 @@ export function compileTextContent(content: unknown, base: WriteTextStyle): { te
   const segs = parseInlineMarkdown(assertNotReadToken(plainString(content)));
   if (segs.length === 1 && isPlainSeg(segs[0])) return { text: segs[0].text };
   if (!segs.length) return { text: "" };
-  return { runs: segs.map((seg) => compileRun(seg.text, mergeDelta(seg, {}), base)) };
+  return { runs: segs.map((seg) => compileRun(seg.text, mergeDelta(seg, {}), base, "flcm.text run")) };
 }
 
 function text(content: unknown, props: TextProps = {}): WriteNode {
@@ -626,10 +705,11 @@ function compileRuns(runs: TextRunInput[], baseStyle: WriteTextStyle): WriteText
       throw new Error('flcm.text: each run is a plain string or a [text, style] tuple like ["bold bit", { fontWeight: 700 }] — got ' + JSON.stringify(run) + ".");
     }
     // The run delta is the grounded silent-drop site: compileRun reads a positive list and never looked at
-    // the rest, so a typo'd `textTransform` on a run vanished. Reject it here, on the raw author delta.
-    rejectUnknownKeys(delta, RUN_KEYS, `flcm.text run[${i}]`);
+    // the rest, so a typo'd `textTransfrom` on a run vanished. Reject it here, on the raw author delta.
+    rejectUnauthorableTextLeaves(delta, `flcm.text run[${i}]`);
+    rejectUnknownKeys(delta, RUN_INPUT_KEYS, `flcm.text run[${i}]`);
     for (const seg of parseInlineMarkdown(assertNotReadToken(raw))) {
-      out.push(compileRun(seg.text, mergeDelta(seg, delta), baseStyle));
+      out.push(compileRun(seg.text, mergeDelta(seg, delta), baseStyle, `flcm.text run[${i}]`));
     }
   }
   return out;
@@ -655,7 +735,7 @@ function mergeDelta(seg: MdSegment, explicit: StyleDeltaInput): StyleDeltaInput 
 // base italic carries no per-range font (the base font is already italic). textDecoration and hyperlink are
 // independent Figma calls. The `{tsN}` guard is NOT re-run here — the text is already decoded (see
 // assertNotReadToken); it was checked on the raw input in compileRuns / text().
-function compileRun(str: string, delta: StyleDeltaInput, baseStyle: WriteTextStyle): WriteTextRun {
+function compileRun(str: string, delta: StyleDeltaInput, baseStyle: WriteTextStyle, subject: string): WriteTextRun {
   const out: WriteTextRun = { text: str };
   const style: WriteTextStyle = {};
   const italic = delta.fontStyle != null
@@ -674,17 +754,13 @@ function compileRun(str: string, delta: StyleDeltaInput, baseStyle: WriteTextSty
   if (delta.lineHeight != null) style.lineHeight = lineHeight(delta.lineHeight);
   if (delta.letterSpacing != null) style.letterSpacing = letterSpacing(delta.letterSpacing);
   if (delta.textDecoration != null) style.textDecoration = assertEnum("run textDecoration", delta.textDecoration, TEXT_DECORATION);
+  compileSharedTextWords(delta as Record<string, unknown>, style, subject);
   if (Object.keys(style).length) out.style = style;
   if (delta.color != null) out.fills = compilePaintWord(delta.color, "color");
-  if (delta.hyperlink != null) out.hyperlink = assertHyperlink(delta.hyperlink);
+  // A run's link lives on the RUN, not its style: the span already IS the range setRangeHyperlink
+  // needs, so it takes no per-field range of its own.
+  if (delta.hyperlink != null) out.hyperlink = parseHyperlink(delta.hyperlink, subject + ".hyperlink");
   return out;
-}
-
-function assertHyperlink(url: unknown): string {
-  if (typeof url !== "string" || !url.trim()) {
-    throw new Error("flcm.text: hyperlink must be a non-empty URL string — got " + JSON.stringify(url) + ".");
-  }
-  return url;
 }
 
 function shape(type: "RECTANGLE" | "ELLIPSE", props: ShapeProps = {}): WriteNode {

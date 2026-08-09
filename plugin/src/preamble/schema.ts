@@ -208,6 +208,26 @@ const TEXTSTYLE_FIELDS = {
     'CSS text-decoration-line — "underline" | "line-through" | "none". On the base only "underline"/"line-through"; "none" is a run-delta inverse override clearing an inherited decoration. (Strikethrough is also authorable inline as ~~text~~.)',
   ),
   textAlign: prop(z.enum(["left", "center", "right", "justify"]), "Horizontal text alignment (CSS text-align)."),
+  textAlignVertical: prop(
+    z.enum(["top", "center", "bottom"]),
+    'Vertical alignment inside the text box. Default "top". Whole-node only — a styled run cannot set it.',
+  ),
+  textTransform: prop(
+    z.enum(["uppercase", "lowercase", "capitalize", "none"]),
+    'CSS text-transform — re-cases the rendered glyphs without changing the characters. "none" restores the original casing (and clears a fontVariant small-caps, which Figma stores in the same slot).',
+  ),
+  fontVariant: prop(
+    z.enum(["small-caps", "all-small-caps"]),
+    'CSS font-variant-caps. Shares Figma\'s single `textCase` slot with `textTransform`, so naming both in one style fails loud — pick one.',
+  ),
+  paragraphSpacing: metric("Space between paragraphs (after each newline)."),
+  paragraphIndent: metric("First-line indent of each paragraph."),
+  listSpacing: metric("Space between list items."),
+  hyperlink: prop(
+    z.custom<string | { type: "URL"; url: string }>(),
+    'A URL link over the whole text node. Takes a url string, or the read form { type: "URL", url } so a `get` result round-trips. A design\'s NODE links (a link to another node) are read-only and fail loud.',
+    'string (url) | { type: "URL", url }',
+  ),
   lineClamp: prop(
     z.union([z.number(), z.literal("none")]),
     'Clamp the text to at most N lines, truncating with an ellipsis (…). Needs a bounded width — a fixed/`"fill"`/`"N%"` `width` — so the text wraps; on a width-hugging text there is nothing to truncate and it fails loud. N must be a whole number ≥ 1. `"none"` removes an existing clamp (under edit; at create it is the explicit default).',
@@ -218,8 +238,8 @@ const TEXTSTYLE_FIELDS = {
 const TEXT_FIELDS = {
   textStyle: prop(
     z.object(TEXTSTYLE_FIELDS),
-    "Text style base (fontFamily/fontWeight/fontSize/fontStyle/lineHeight/letterSpacing/textDecoration/textAlign/lineClamp). Runs layer over it.",
-    "{ fontFamily?, fontWeight?, fontSize?, fontStyle?, lineHeight?, letterSpacing?, textDecoration?, textAlign?, lineClamp? }",
+    "Text style base (font identity, metrics, casing, paragraph spacing, alignment, lineClamp). Runs layer over it.",
+    "{ fontFamily?, fontWeight?, fontSize?, fontStyle?, lineHeight?, letterSpacing?, textDecoration?, textTransform?, fontVariant?, textAlign?, textAlignVertical?, paragraphSpacing?, paragraphIndent?, listSpacing?, hyperlink?, lineClamp? }",
   ),
   color: color("Text color (a solid color, normally) — a node-level sugar prop compiling to the text node's fill."),
 };
@@ -238,9 +258,10 @@ const TEXTCONTENT_FIELDS = {
 // The rich-text run's style delta — the second element of a `[text, style]` run tuple (the array form of
 // flcm.text). Every field overrides the node-level `textStyle` base for just that span, so a run carries
 // only what it changes. Canonical StyleDelta field names (fontWeight, not weight), reusing the TEXTSTYLE
-// entries so a run styles exactly like the base and the two can't drift. `textAlign`/`lineClamp` are absent:
-// alignment and clamping are whole-node properties, not per-run. `color` and `hyperlink` are the delta-only
-// fields the base lacks (base color lives in the node's fill; base links are a read-only artifact).
+// entries so a run styles exactly like the base and the two can't drift. `textAlign`,
+// `textAlignVertical` and `lineClamp` are absent: alignment and clamping are whole-node properties in
+// Figma (no setRange* exists for them), not per-run. `color` is the one delta-only field the base
+// lacks — base color lives in the node's `fills`, like every other node's.
 const RUN_FIELDS = {
   fontWeight: TEXTSTYLE_FIELDS.fontWeight,
   fontSize: TEXTSTYLE_FIELDS.fontSize,
@@ -249,8 +270,13 @@ const RUN_FIELDS = {
   lineHeight: TEXTSTYLE_FIELDS.lineHeight,
   letterSpacing: TEXTSTYLE_FIELDS.letterSpacing,
   textDecoration: TEXTSTYLE_FIELDS.textDecoration,
+  textTransform: TEXTSTYLE_FIELDS.textTransform,
+  fontVariant: TEXTSTYLE_FIELDS.fontVariant,
+  paragraphSpacing: TEXTSTYLE_FIELDS.paragraphSpacing,
+  paragraphIndent: TEXTSTYLE_FIELDS.paragraphIndent,
+  listSpacing: TEXTSTYLE_FIELDS.listSpacing,
   color: color("Per-span text color."),
-  hyperlink: prop(z.string(), "URL hyperlink over this span. The inline form [text](url) is usually simpler; this sets it explicitly on a tuple. URL only (a design's NODE links are read-only).", "string (url)"),
+  hyperlink: TEXTSTYLE_FIELDS.hyperlink,
 };
 
 const RunStyleSchema = z.object(RUN_FIELDS);

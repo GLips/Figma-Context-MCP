@@ -63,6 +63,9 @@ const TEXT_ALIGN: Record<TextAlign, "LEFT" | "CENTER" | "RIGHT" | "JUSTIFIED"> =
 // CSS text-decoration-line → Figma's TextDecoration enum. "none" is the enum's own NONE, used by a
 // per-run inverse override that clears an inherited base decoration.
 const DECORATION: Record<TextDecoration, "UNDERLINE" | "STRIKETHROUGH" | "NONE"> = { underline: "UNDERLINE", "line-through": "STRIKETHROUGH", none: "NONE" };
+// The author's vertical-alignment words → Figma's enum. Node-level only (no setRange* counterpart),
+// unlike every other text word here — see WriteTextStyle.textAlignVertical.
+const VERTICAL_ALIGN: Record<"top" | "center" | "bottom", "TOP" | "CENTER" | "BOTTOM"> = { top: "TOP", center: "CENTER", bottom: "BOTTOM" };
 
 // The frame layoutModes that place their own children — the plugin-side spelling of the core's hasAutoLayout.
 const AUTO_LAYOUT_MODES = ["HORIZONTAL", "VERTICAL", "GRID"];
@@ -223,7 +226,7 @@ function applyContainer(f: any, layout: WriteLayout): void {
     const e = layout.padding;
     f.paddingTop = e.top; f.paddingRight = e.right; f.paddingBottom = e.bottom; f.paddingLeft = e.left;
   }
-  // Unrealizable justify words are rejected at the constructor gate (flcm.ts mapLayoutWord), so
+  // Unrealizable justify words are rejected at the constructor gate (flcm.ts mapCssWord), so
   // JUSTIFY is total over everything that can arrive here.
   if (layout.justifyContent) f.primaryAxisAlignItems = JUSTIFY[layout.justifyContent];
   if (layout.alignItems) {
@@ -939,6 +942,12 @@ function applyRuns(t: any, runs: NonNullable<WriteNode["runs"]>, ctx: RenderReso
         if (s.lineHeight) t.setRangeLineHeight(start, end, s.lineHeight);
         if (s.letterSpacing) t.setRangeLetterSpacing(start, end, s.letterSpacing);
         if (s.textDecoration) t.setRangeTextDecoration(start, end, DECORATION[s.textDecoration]);
+        // Casing and paragraph metrics are per-range in Figma exactly as the font is, which is why
+        // they are run words at all (the read side surfaces them per segment for the same reason).
+        if (s.textCase) t.setRangeTextCase(start, end, s.textCase);
+        if (typeof s.paragraphSpacing === "number") t.setRangeParagraphSpacing(start, end, s.paragraphSpacing);
+        if (typeof s.paragraphIndent === "number") t.setRangeParagraphIndent(start, end, s.paragraphIndent);
+        if (typeof s.listSpacing === "number") t.setRangeListSpacing(start, end, s.listSpacing);
       }
       // Present-but-empty is the compiled "none" — a real transparent write over the slice, not a skip.
       if (run.fills) t.setRangeFills(start, end, run.fills.length ? [paintOf(run.fills[0], ctx)] : []);
@@ -967,8 +976,17 @@ export function applyTextProps(t: any, wn: WriteProps, ctx: RenderResources): vo
   if (ts.lineHeight) t.lineHeight = ts.lineHeight;
   if (ts.letterSpacing) t.letterSpacing = ts.letterSpacing;
   if (ts.textAlign && TEXT_ALIGN[ts.textAlign]) t.textAlignHorizontal = TEXT_ALIGN[ts.textAlign];
-  // Base decoration first (whole node); runs then override their slice via setRangeTextDecoration.
+  if (ts.textAlignVertical) t.textAlignVertical = VERTICAL_ALIGN[ts.textAlignVertical];
+  // Base decoration/casing/paragraph metrics first (whole node); runs then override their slice via
+  // the matching setRange* below.
   if (ts.textDecoration) t.textDecoration = DECORATION[ts.textDecoration];
+  if (ts.textCase) t.textCase = ts.textCase;
+  if (typeof ts.paragraphSpacing === "number") t.paragraphSpacing = ts.paragraphSpacing;
+  if (typeof ts.paragraphIndent === "number") t.paragraphIndent = ts.paragraphIndent;
+  if (typeof ts.listSpacing === "number") t.listSpacing = ts.listSpacing;
+  // A whole-node link is a range write like a run's — over every character. Guarded on non-empty
+  // characters because Figma refuses a zero-width range, and an empty text has nothing to link.
+  if (ts.hyperlink && t.characters.length) t.setRangeHyperlink(0, t.characters.length, { type: "URL", value: ts.hyperlink });
   if (wn.runs) applyRuns(t, wn.runs, ctx);
 }
 

@@ -104,6 +104,11 @@ export type TextAlign = "left" | "center" | "right" | "justify";
 // (clearing an inherited base decoration) — the base omits it; the bridge maps each to Figma's
 // TextDecoration enum (UNDERLINE/STRIKETHROUGH/NONE).
 export type TextDecoration = "underline" | "line-through" | "none";
+// Figma conflates CSS `text-transform` and `font-variant-caps` into ONE `textCase` enum, so the
+// author's two words (`textTransform`, `fontVariant`) resolve to this single Figma-domain field at
+// the css/sugar boundary — the same shape `blend` → `blendMode` takes. Resolving there is what makes
+// "both named at once" unrepresentable in the currency instead of a rule the bridge re-checks.
+export type WriteTextCase = "ORIGINAL" | "UPPER" | "LOWER" | "TITLE" | "SMALL_CAPS" | "SMALL_CAPS_FORCED";
 export interface WriteTextStyle {
   fontFamily?: string;
   fontWeight?: number | string;
@@ -121,6 +126,20 @@ export interface WriteTextStyle {
   // IR field NAMES mirror CSS; only the VALUES stay terse where a terse form exists — here the CSS values
   // (left/center/right/justify) already are the canonical spelling, so name and value both align.
   textAlign?: TextAlign;
+  // Applied per range (setRangeTextCase), so a run carries it too. Requires the font loaded — the
+  // reason a delta naming any text word preloads (fonts.ts textEditReflows).
+  textCase?: WriteTextCase;
+  // Vertical alignment inside the text box. Node-level in Figma — there is no setRangeTextAlignVertical
+  // — so this is a BASE word only; a run delta naming it would have nowhere to land.
+  textAlignVertical?: "top" | "center" | "bottom";
+  // Paragraph metrics in px. Per-range in Figma (setRangeParagraph*/setRangeListSpacing), which is
+  // why the read side surfaces them on run deltas and why runs carry them here.
+  paragraphSpacing?: number;
+  paragraphIndent?: number;
+  listSpacing?: number;
+  // A URL link over the whole node (setRangeHyperlink across every character). A RUN's own link lives
+  // on WriteTextRun.hyperlink instead — there the span already IS the range, so it isn't a style leaf.
+  hyperlink?: string;
 }
 
 // THE presence predicate behind "presence-gated" font writes, surface-wide: whether a style names any

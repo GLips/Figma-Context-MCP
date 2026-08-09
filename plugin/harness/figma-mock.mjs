@@ -32,7 +32,8 @@ const CONTAINER_TYPES = ["PAGE", "FRAME", "GROUP", "COMPONENT", "COMPONENT_SET",
 
 // Every per-range styling bucket the setRange* recorders write — the set a `characters` write clears.
 const RANGE_BUCKETS = ["_rangeFonts", "_rangeSizes", "_rangeFills", "_rangeLineHeights",
-  "_rangeLetterSpacings", "_rangeDecorations", "_rangeHyperlinks"];
+  "_rangeLetterSpacings", "_rangeDecorations", "_rangeHyperlinks", "_rangeCases",
+  "_rangeParagraphSpacings", "_rangeParagraphIndents", "_rangeListSpacings"];
 
 class Node {
   constructor(type) {
@@ -81,6 +82,10 @@ class Node {
     this.textAutoResize = "WIDTH_AND_HEIGHT";
     this.textAlignHorizontal = "LEFT";
     this.textAlignVertical = "TOP";
+    this.textCase = "ORIGINAL";
+    this.paragraphSpacing = 0;
+    this.paragraphIndent = 0;
+    this.listSpacing = 0;
     // geometry (explicit, from resize). Shapes get an intrinsic default size like the live API.
     this._fixedW = null;
     this._fixedH = null;
@@ -178,6 +183,10 @@ class Node {
   setRangeLetterSpacing(start, end, value) { this._range("_rangeLetterSpacings", start, end, value); }
   setRangeTextDecoration(start, end, value) { this._range("_rangeDecorations", start, end, value); }
   setRangeHyperlink(start, end, value) { this._range("_rangeHyperlinks", start, end, value); }
+  setRangeTextCase(start, end, value) { this._range("_rangeCases", start, end, value); }
+  setRangeParagraphSpacing(start, end, value) { this._range("_rangeParagraphSpacings", start, end, value); }
+  setRangeParagraphIndent(start, end, value) { this._range("_rangeParagraphIndents", start, end, value); }
+  setRangeListSpacing(start, end, value) { this._range("_rangeListSpacings", start, end, value); }
 
   // Live Figma reports figma.mixed when the characters don't all share one font — recorded
   // setRangeFontName ranges that diverge from the base make this node mixed the same way. Writing
@@ -259,6 +268,10 @@ class Node {
         fontStyle: /\bItalic\b/.test(fontName.style) ? "ITALIC" : "REGULAR",
         fontSize: at("_rangeSizes", i, this.fontSize),
         textDecoration: at("_rangeDecorations", i, this.textDecoration),
+        textCase: at("_rangeCases", i, this.textCase),
+        paragraphSpacing: at("_rangeParagraphSpacings", i, this.paragraphSpacing),
+        paragraphIndent: at("_rangeParagraphIndents", i, this.paragraphIndent),
+        listSpacing: at("_rangeListSpacings", i, this.listSpacing),
         fills: at("_rangeFills", i, this.fills),
       };
       const lineHeight = at("_rangeLineHeights", i, this.lineHeight);
