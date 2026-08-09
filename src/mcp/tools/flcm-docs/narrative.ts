@@ -393,7 +393,9 @@ There is no separate clipboard API — the verbs compose into one:
 | --- | --- |
 | cut & paste | \`flcm.move(target, parent)\` |
 | paste a faithful copy | \`flcm.clone(target, parent?)\` — works on any subtree, instances included |
-| paste with modifications | \`flcm.clone(...)\`, then \`flcm.edit\` the copy |
+| paste with modifications | \`flcm.append(parent, flcm.fromRead(spec))\` — or \`flcm.clone(...)\` then \`flcm.edit\` the copy |
 | delete | \`flcm.remove(target)\` |
 
-A \`get\` result is **not** yet authoring input: passing a read spec to \`append\` is rejected, not quietly treated as a move. Duplicate with \`clone\` and nudge the copy, or re-author the subtree with the constructors.`;
+A \`get\` result is not authoring input **on its own**: passing a bare read spec to \`append\` is rejected, not quietly treated as a move — the spec carries a live \`id\` exactly as a handle does, so only you can say whether you mean copy or move. \`flcm.fromRead(spec)\` is how you say copy: it re-authors the subtree through the constructors, so you can edit the spec first (\`{ ...spec, width: 320 }\`) and paste the result anywhere.
+
+\`fromRead\` rebuilds; \`clone\` duplicates. Rebuilding only reaches what flcm can author, so anything it can't — an INSTANCE, a stacked paint, a grid container, a flattened \`IMAGE-SVG\` — fails loud naming the field, and \`clone\` is the answer for those.`;

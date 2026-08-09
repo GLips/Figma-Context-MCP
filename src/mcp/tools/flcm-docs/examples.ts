@@ -47,6 +47,13 @@ const EXAMPLE_META: Record<ExampleId, { title: string; intro: string }> = {
       "A feed post with a real photo as a `rect` fill and a circular avatar as an `ellipse` filled with an " +
       "image. `flcm.image(url)` is a paint value, so any shape carries one; the server fetches the bytes.",
   },
+  reuse: {
+    title: "Copying what's already on the canvas (get → fromRead)",
+    intro:
+      "The read↔write seam: `flcm.get` reads a live subtree as the canonical shape, you edit that shape " +
+      "like any object, and `flcm.fromRead` re-authors it through the constructors so a structural verb " +
+      "places a COPY. `flcm.clone` stays the faithful duplicate for subtrees a rebuild can't reproduce.",
+  },
 };
 
 // Rendered in the generated module's key order, which the generator emits in EXAMPLE_IDS order.

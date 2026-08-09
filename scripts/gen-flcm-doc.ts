@@ -24,7 +24,7 @@ const EXAMPLES_MODULE_PATH = fileURLToPath(new URL("examples-code.generated.ts",
 
 // Keys double as file names: examples/<id>.ts. Adding an example = add the file, add its id here,
 // add its title/intro in examples.ts, run docs:gen.
-const EXAMPLE_IDS = ["login", "caption", "vector", "image"] as const;
+const EXAMPLE_IDS = ["login", "caption", "vector", "image", "reuse"] as const;
 
 const START = "// example:start";
 const END = "// example:end";

@@ -533,6 +533,16 @@ const IGNORED_READ_TEXT_LEAVES = ["fontVariantName"];
 const REFUSED_READ_TEXT_LEAVES: Record<string, string> = {
   opentypeFlags: "OpenType features are read-only to a plugin — TextNode.openTypeFeatures has no setter and no setRange* counterpart [verified, plugin-typings 1.133]",
 };
+// A RUN's refusals add the two alignment words. Both are legal on the BASE (they're whole-node
+// properties, which is exactly the point) but a run delta can carry them too — the read side emits them
+// as inverse overrides of a non-default base — and Figma has no setRangeTextAlignHorizontal/Vertical
+// [verified, plugin-typings 1.133], so one span cannot align differently from its node. Named here rather
+// than left to the unknown-prop gate, which would diagnose a real read leaf as a typo.
+const REFUSED_RUN_TEXT_LEAVES: Record<string, string> = {
+  ...REFUSED_READ_TEXT_LEAVES,
+  textAlign: "horizontal alignment is a whole-node property in Figma (no setRangeTextAlignHorizontal), so a single run can't set it — move it to the node's textStyle",
+  textAlignVertical: "vertical alignment is a whole-node property in Figma (no setRangeTextAlignVertical), so a single run can't set it — move it to the node's textStyle",
+};
 
 // The closed set each text-style carrier accepts as INPUT: its own words plus the derived read leaves
 // it drops. Built from KNOWN_KEYS (schema-mirrored, drift-guarded) so the tolerated extras stay
@@ -540,10 +550,10 @@ const REFUSED_READ_TEXT_LEAVES: Record<string, string> = {
 const TEXTSTYLE_INPUT_KEYS = keySet(KNOWN_KEYS.textStyle, IGNORED_READ_TEXT_LEAVES);
 const RUN_INPUT_KEYS = keySet(KNOWN_KEYS.run, IGNORED_READ_TEXT_LEAVES);
 
-function rejectUnauthorableTextLeaves(c: object, subject: string): void {
-  for (const leaf of Object.keys(REFUSED_READ_TEXT_LEAVES)) {
+function rejectUnauthorableTextLeaves(c: object, subject: string, refused: Record<string, string> = REFUSED_READ_TEXT_LEAVES): void {
+  for (const leaf of Object.keys(refused)) {
     if (c.hasOwnProperty(leaf)) {
-      throw new Error(subject + ": `" + leaf + "` is a read-only field — " + REFUSED_READ_TEXT_LEAVES[leaf] + ". Drop it from the style.");
+      throw new Error(subject + ": `" + leaf + "` is a read-only field — " + refused[leaf] + ". Drop it from the style.");
     }
   }
 }
@@ -722,7 +732,7 @@ function compileRuns(runs: TextRunInput[], baseStyle: WriteTextStyle): WriteText
     }
     // The run delta is the grounded silent-drop site: compileRun reads a positive list and never looked at
     // the rest, so a typo'd `textTransfrom` on a run vanished. Reject it here, on the raw author delta.
-    rejectUnauthorableTextLeaves(delta, `flcm.text run[${i}]`);
+    rejectUnauthorableTextLeaves(delta, `flcm.text run[${i}]`, REFUSED_RUN_TEXT_LEAVES);
     rejectUnknownKeys(delta, RUN_INPUT_KEYS, `flcm.text run[${i}]`);
     for (const seg of parseInlineMarkdown(assertNotReadToken(raw))) {
       out.push(compileRun(seg.text, mergeDelta(seg, delta), baseStyle, `flcm.text run[${i}]`));
@@ -1012,19 +1022,24 @@ function blurRadius(b: BlurSugar): number {
 }
 
 // Accept the sugar spec ({ shadow, blur, backgroundBlur }), an already-typed EffectSpec[] (what
-// flcm.effects returns), or a hand-written CSS WriteEffects bag — all converge on EffectSpec[].
+// flcm.effects returns), or a CSS WriteEffects bag — all converge on EffectSpec[].
+//
+// The two string/object vocabularies are SPLIT, not routed: one read `effects` value carries both at once
+// (a frame with a drop shadow AND native glass reads back as { boxShadow, glass }), so picking a single
+// path by "does this look CSS?" would reject exactly the shape `get` hands back. Each half keeps its own
+// closed-set reject — a key in neither set lands in the sugar half and fails there — so a typo still can't
+// vanish silently, which is why parseCssEffects (a positive-list reader) needs the gate at all.
 function normalizeEffects(v: EffectsInput): EffectSpec[] {
   if (Array.isArray(v)) return v;
   if (!v || typeof v !== "object") throw new Error("flcm: effects must be an object — got " + JSON.stringify(v) + ".");
-  // A bag carrying any CSS-effect key is the CSS form. Reject its unknown keys too — parseCssEffects reads a
-  // positive list, so a typo'd key would otherwise silently vanish (the same closed-set policy as the sugar
-  // bag, surface-wide). A bag with NO CSS key routes to the sugar path, whose own EFFECTS_KEYS reject fires.
-  const isCss = [...CSS_EFFECTS_KEYS].some((f) => f in v);
-  if (isCss) {
-    rejectUnknownKeys(v, CSS_EFFECTS_KEYS, "effects (CSS bag)");
-    return parseCssEffects(v as WriteCssEffects);
-  }
-  return effects(v as EffectsSugar);
+  const bag = v as Record<string, unknown>;
+  const css: Record<string, unknown> = {};
+  const sugar: Record<string, unknown> = {};
+  for (const k of Object.keys(bag)) (CSS_EFFECTS_KEYS.has(k) ? css : sugar)[k] = bag[k];
+  const out: EffectSpec[] = [];
+  if (Object.keys(css).length) out.push(...parseCssEffects(css as WriteCssEffects));
+  if (Object.keys(sugar).length) out.push(...effects(sugar as EffectsSugar));
+  return out;
 }
 
 // The host-installed mid-run image channel (protocol 2). executeCode (code.ts) passes this as the

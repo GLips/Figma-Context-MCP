@@ -97,9 +97,10 @@ const READ_SPEC_FIELDS = ["children", "fills", "strokes", "effects", "textStyle"
 function assertNotReadSpec(subject: string, thing: Record<string, unknown>): void {
   if (!isReadSpec(thing) && !READ_SPEC_FIELDS.some((f) => f in thing)) return;
   throw new Error(
-    subject + ": that is a `get` result, and a read spec is not authoring input — placing it would " +
-      "MOVE the node you read, not copy it. To duplicate a live node use flcm.clone(target, parent) " +
-      "and flcm.edit the copy; to author something new, build it with the flcm constructors.",
+    subject + ": that is a `get` result, and a read spec is not authoring input on its own — placing it " +
+      "would MOVE the node you read, not copy it. Wrap it to say you mean a COPY: " +
+      subject + "(…, flcm.fromRead(spec)). To duplicate a live node whole (instances, paint stacks, " +
+      "anything a spec can't rebuild) use flcm.clone(target, parent) instead.",
   );
 }
 

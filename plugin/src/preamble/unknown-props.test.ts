@@ -87,11 +87,12 @@ test("a run delta rejects an unknown key (the grounded silent-drop site), naming
 });
 
 test("the CSS effects bag (a node's `effects:` prop) rejects an unknown key too — surface-wide policy", () => {
-  // parseCssEffects reads a positive list, so a typo alongside a real CSS key used to vanish silently.
-  // The bag routes through normalizeEffects (isCss branch) when passed as a node's `effects:` prop.
+  // parseCssEffects reads a positive list, so a typo alongside a real CSS key would vanish silently.
+  // normalizeEffects splits a bag into its CSS and object halves (one read `effects` carries both), and a
+  // key in neither closed set lands in the object half, where flcm.effects' own reject names it.
   const shadow = "0px 4px 8px rgba(0,0,0,0.25)";
-  assert.throws(() => frame({ effects: { boxShadow: shadow, foo: 2 } as never }), /unknown prop "foo" on effects \(CSS bag\)/);
-  assert.throws(() => rect({ effects: { filter: "blur(4px)", bar: 1 } as never }), /unknown prop "bar" on effects \(CSS bag\)/);
+  assert.throws(() => frame({ effects: { boxShadow: shadow, foo: 2 } as never }), /unknown prop "foo" on flcm\.effects/);
+  assert.throws(() => rect({ effects: { filter: "blur(4px)", bar: 1 } as never }), /unknown prop "bar" on flcm\.effects/);
   // A clean CSS bag still parses. (flcm.effects({...}) itself is the SUGAR form — a CSS key there is rejected
   // by the sugar reject above, correctly: CSS strings belong in the `effects:` prop, not flcm.effects().)
   assert.doesNotThrow(() => frame({ effects: { boxShadow: shadow } }));

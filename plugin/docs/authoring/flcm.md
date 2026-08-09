@@ -36,6 +36,7 @@ There is no autocomplete and no type-checking where your code runs (a QuickJS sa
 | `await flcm.move(target, parent)` | the node reparented as `parent`'s last child | a live target, then a parent target. Creating is append's job — a spec here fails loud |
 | `await flcm.remove(target)` | nothing — deletes the node and its subtree | a target; returns { removedId, parent } |
 | `await flcm.clone(target, parent?)` | a faithful live duplicate (key-less) | a target, and optionally where the copy lands (default: beside the original). The copy path for subtrees a spec rebuild can't reproduce — anything holding an INSTANCE |
+| `flcm.fromRead(spec)` | a `get` result re-authored as a buildable spec | a spec from flcm.get. Returns a constructor-built node — render it, or place it with append/prepend/insertBefore/insertAfter. Anything the read shape carries that flcm has no word for (an INSTANCE, a paint stack, a grid) fails loud by name; flcm.clone is the faithful copy for those |
 | `await flcm.get(target)` | a node's full read spec (values inline) | target: an flcm/key, a node id, flcm.id(id), or a handle |
 | `await flcm.find(query?, predicate?)` | matching nodes as slim handles | query { type?, name?, key?, within? } AND-combined — a filter, not an address; only `within` takes a target. Optional predicate over the full read shape (n => n.fills?.[0] === '#FFF') |
 | `await flcm.findOne(query?, predicate?)` | exactly one slim handle (throws on 0 or >1) | same query + predicate as find |
@@ -519,10 +520,12 @@ There is no separate clipboard API — the verbs compose into one:
 | --- | --- |
 | cut & paste | `flcm.move(target, parent)` |
 | paste a faithful copy | `flcm.clone(target, parent?)` — works on any subtree, instances included |
-| paste with modifications | `flcm.clone(...)`, then `flcm.edit` the copy |
+| paste with modifications | `flcm.append(parent, flcm.fromRead(spec))` — or `flcm.clone(...)` then `flcm.edit` the copy |
 | delete | `flcm.remove(target)` |
 
-A `get` result is **not** yet authoring input: passing a read spec to `append` is rejected, not quietly treated as a move. Duplicate with `clone` and nudge the copy, or re-author the subtree with the constructors.
+A `get` result is not authoring input **on its own**: passing a bare read spec to `append` is rejected, not quietly treated as a move — the spec carries a live `id` exactly as a handle does, so only you can say whether you mean copy or move. `flcm.fromRead(spec)` is how you say copy: it re-authors the subtree through the constructors, so you can edit the spec first (`{ ...spec, width: 320 }`) and paste the result anywhere.
+
+`fromRead` rebuilds; `clone` duplicates. Rebuilding only reaches what flcm can author, so anything it can't — an INSTANCE, a stacked paint, a grid container, a flattened `IMAGE-SVG` — fails loud naming the field, and `clone` is the answer for those.
 
 ## Seeing what you built (get_screenshot)
 
@@ -821,4 +824,23 @@ const post = flcm.frame({ layout: { mode: "column", gap: 8 }, width: 390 }, [
 
 const out = await flcm.render(post);
 return out.root.id;
+```
+
+### Copying what's already on the canvas (get → fromRead)
+
+The read↔write seam: `flcm.get` reads a live subtree as the canonical shape, you edit that shape like any object, and `flcm.fromRead` re-authors it through the constructors so a structural verb places a COPY. `flcm.clone` stays the faithful duplicate for subtrees a rebuild can't reproduce.
+
+```js
+// Copy a card that already exists on the canvas into a different container, widened on the way.
+// `get` reads it as the canonical shape; `fromRead` re-authors that shape through the constructors,
+// which is what makes it a COPY. A bare read spec carries the original's live id, so passing one
+// straight to `append` is refused rather than read as "move the node I just looked at".
+const spec = await flcm.get("card");
+const wider = flcm.fromRead({ ...spec, width: 480, name: "Card (wide)" });
+const placed = await flcm.append("sidebar", wider);
+
+// fromRead REBUILDS, so it reaches only what flcm can author: an INSTANCE, a stacked paint, or a grid
+// container fails loud naming the field. flcm.clone(target, parent) duplicates the live node whole —
+// faithful, but not editable as a spec first.
+return placed;
 ```

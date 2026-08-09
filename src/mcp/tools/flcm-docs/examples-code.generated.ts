@@ -148,4 +148,16 @@ const post = flcm.frame({ layout: { mode: "column", gap: 8 }, width: 390 }, [
 
 const out = await flcm.render(post);
 return out.root.id;`,
+  reuse: `// Copy a card that already exists on the canvas into a different container, widened on the way.
+// \`get\` reads it as the canonical shape; \`fromRead\` re-authors that shape through the constructors,
+// which is what makes it a COPY. A bare read spec carries the original's live id, so passing one
+// straight to \`append\` is refused rather than read as "move the node I just looked at".
+const spec = await flcm.get("card");
+const wider = flcm.fromRead({ ...spec, width: 480, name: "Card (wide)" });
+const placed = await flcm.append("sidebar", wider);
+
+// fromRead REBUILDS, so it reaches only what flcm can author: an INSTANCE, a stacked paint, or a grid
+// container fails loud naming the field. flcm.clone(target, parent) duplicates the live node whole —
+// faithful, but not editable as a spec first.
+return placed;`,
 } as const;

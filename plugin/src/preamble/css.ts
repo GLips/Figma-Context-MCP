@@ -9,7 +9,7 @@
 
 import {
   PaintSpec, ImageHashSpec, ImageScaleMode, GradientType, GradientStop, Rgba,
-  EffectSpec, WriteLineHeight, WriteLetterSpacing,
+  EffectSpec, WriteLineHeight, WriteLetterSpacing, Edges,
   FillLeaf, WriteGradientFill, WriteCssEffects, WriteBlendMode,
 } from "./ir.js";
 import { solid, linearGradient, radialGradient } from "./paint.js";
@@ -306,6 +306,22 @@ export function length(v: number | string): number {
   const m = /^(-?\d+(\.\d+)?)px$/.exec(String(v).trim());
   if (!m) throw new Error('flcm: expected a number or "Npx" (e.g. 24 or "24px"), got ' + JSON.stringify(v) + " — em/%/rem and bare numeric strings are not coerced.");
   return parseFloat(m[1]);
+}
+
+// A CSS 1–4 value box shorthand ("12px" | "12px 16px" | "12px 16px 8px" | "12px 16px 8px 4px") -> typed
+// Edges, following CSS's own fill-in rules. The READ shape spells padding this way (one string, per
+// core/utils generateCSSShorthand) while flcm's `padding` prop takes numbers, so the read→write
+// normalizer needs the decode; nothing else authors padding as a string. Each value rides `length`, so a
+// non-px unit fails loud there rather than coercing to wrong pixels.
+export function boxShorthand(value: string, field: string): Edges {
+  const parts = String(value).trim().split(/\s+/).filter((p) => p.length);
+  if (!parts.length || parts.length > 4) {
+    throw new Error("flcm: " + field + ' must be a CSS box shorthand of 1–4 values (e.g. "12px" or "12px 16px") — got ' + JSON.stringify(value) + ".");
+  }
+  const n = parts.map((p) => length(p));
+  const top = n[0];
+  const right = n.length > 1 ? n[1] : top;
+  return { top, right, bottom: n.length > 2 ? n[2] : top, left: n.length > 3 ? n[3] : right };
 }
 
 // A "N%" size/position leaf. Percent has no CSS→Figma string parse (it resolves against the parent at
