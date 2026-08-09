@@ -119,3 +119,48 @@ test("a real (non-placeholder) image still records its src for read-back", async
   const node = await figma.getNodeByIdAsync(out.root.id);
   assert.deepEqual(JSON.parse(node.getPluginData("flcm/image")), { url, placeholder: false });
 });
+
+// ---- Read-form image fills (Phase 5.2). A `get` result names an image by the imageHash already in
+// the document, so rebuilding it needs no server round trip and no url the agent never had. ----
+
+test("a read-form image fill paints from the live hash — no fetch, no channel needed", async () => {
+  // No __flcmRequestImages installed: reaching the fetch at all would fail loud, which is the point.
+  const out = await render(
+    rect({
+      width: 200,
+      height: 120,
+      fill: { type: "IMAGE", imageRef: "abc123hash", scaleMode: "FILL" } as never,
+    }),
+  );
+  const node = await figma.getNodeByIdAsync(out.root.id);
+  assert.deepEqual(node.fills[0], { type: "IMAGE", scaleMode: "FILL", imageHash: "abc123hash" });
+  // Nothing to record: the read shape carries no source url, and a stale one would name the wrong asset.
+  assert.equal(node.getPluginData("flcm/image"), "");
+});
+
+test("a TILE read fill keeps its repeat scale; STRETCH and a ref-less fill fail loud", async () => {
+  const tiled = await render(
+    rect({ fill: { type: "IMAGE", imageRef: "tile1", scaleMode: "TILE", scalingFactor: 0.5 } as never }),
+  );
+  assert.equal((await figma.getNodeByIdAsync(tiled.root.id)).fills[0].scalingFactor, 0.5);
+  // STRETCH is the read spelling of the plugin's CROP, whose crop lives in a transform matrix the
+  // read shape never surfaces — reproducing it would silently un-crop the image.
+  assert.throws(
+    () => rect({ fill: { type: "IMAGE", imageRef: "x", scaleMode: "STRETCH" } as never }),
+    /cropped image fill .* flcm\.clone/s,
+  );
+  // A null imageRef (an asset living in a file you don't own) leaves nothing to point at.
+  assert.throws(() => rect({ fill: { type: "IMAGE", scaleMode: "FILL" } as never }), /no imageRef/);
+});
+
+test("a paint slot takes the read shape's ARRAY spelling; a stack fails loud naming the count", async () => {
+  const out = await render(rect({ fill: ["#112233"] as never }));
+  assert.equal((await figma.getNodeByIdAsync(out.root.id)).fills.length, 1);
+  // An empty array is the read spelling of "no paint" — same as "none".
+  const bare = await render(rect({ fill: [] as never }));
+  assert.deepEqual((await figma.getNodeByIdAsync(bare.root.id)).fills, []);
+  assert.throws(
+    () => rect({ fill: ["#000", "linear-gradient(#fff, #000)"] as never }),
+    /has 2 stacked paints, and flcm paints one/,
+  );
+});

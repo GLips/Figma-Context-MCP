@@ -159,6 +159,13 @@ function paintOf(spec: PaintSpec, ctx: RenderResources): Paint {
 }
 
 function imagePaint(spec: ImageSpec, ctx: RenderResources): Paint {
+  // A hash-backed spec names bytes the document already holds (a read-form fill rebuilt through the
+  // constructors), so there is nothing to fetch and nothing to create — the paint just points at it.
+  if ("hash" in spec) {
+    return spec.scalingFactor != null
+      ? { type: "IMAGE", scaleMode: spec.scaleMode, imageHash: spec.hash, scalingFactor: spec.scalingFactor }
+      : { type: "IMAGE", scaleMode: spec.scaleMode, imageHash: spec.hash };
+  }
   const b64 = ctx.images[spec.url];
   if (typeof b64 !== "string") {
     // render() collects and awaits every image url before any node is built, so the bytes are always
@@ -176,10 +183,12 @@ function imagePaint(spec: ImageSpec, ctx: RenderResources): Paint {
 function stampImageData(node: any, wn: WriteProps): void {
   if (!wn.fills) return; // no fill in this write — whatever provenance exists still describes the live paint
   const fill = wn.fills[0];
-  if (!fill || fill.kind !== "image") {
+  if (!fill || fill.kind !== "image" || !("url" in fill)) {
     // An edit replaced an image fill with a solid/gradient — or cleared it (fill:"none" compiles to
     // an empty array): the provenance no longer describes the live paint, so wipe it ("" deletes
-    // the pluginData entry) instead of leaving a stale url.
+    // the pluginData entry) instead of leaving a stale url. A HASH-backed image lands here too, and
+    // deliberately: it was rebuilt from a read shape, which carries no source url, so there is no
+    // src to record — and leaving the previous node's url would describe the wrong asset.
     node.setPluginData("flcm/image", "");
     return;
   }

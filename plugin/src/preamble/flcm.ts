@@ -392,8 +392,24 @@ export function compileNodeLocalProps(wn: WriteProps, props: AppearanceProps, op
 // can't drift between verbs. "none" is the removal word (CSS's own absence spelling): an EMPTY
 // array is the compiled "clear this" — distinct from an ABSENT array, which means "don't touch it".
 // Create writing [] onto a fresh node clears a live seeded default; the distinction exists for edit.
+//
+// An ARRAY is the read shape's own spelling of a paint slot (`fills: ["#FFF"]`), accepted so a `get`
+// result feeds straight back in. Exactly one paint is authorable: flcm paints a single fill/stroke,
+// and a STACK — a gradient over a solid, an image over a tint — has no write vocabulary at all, so
+// it fails loud naming the count instead of quietly dropping every layer but one. An empty array is
+// the read spelling of "no paint", identical to "none".
 export function compilePaintWord(value: NonNullable<AppearanceProps["fill"]>, subject: string): NonNullable<WriteProps["fills"]> {
-  return value === "none" ? [] : [parseFill(value, subject)];
+  if (value === "none") return [];
+  if (Array.isArray(value)) {
+    if (value.length > 1) {
+      throw new Error(
+        "flcm: " + subject + " has " + value.length + " stacked paints, and flcm paints one — there is no authored form for a paint stack. " +
+          "Pass the single paint you want, or duplicate the node with flcm.clone to keep the stack.",
+      );
+    }
+    return value.length ? [parseFill(value[0], subject)] : [];
+  }
+  return [parseFill(value, subject)];
 }
 
 // `color` is the line's stroke alias (`stroke` wins when both are present) — one compile shared by
@@ -1029,7 +1045,9 @@ declare const __flcmRequestImages:
 function collectImageUrls(tree: WriteProps): string[] {
   const urls: string[] = [];
   const addFrom = (paints: readonly PaintSpec[] | undefined): void => {
-    if (paints) for (const spec of paints) if (spec && spec.kind === "image") urls.push(spec.url);
+    // `"url" in spec` is the whole hash-vs-url branch: a hash-backed image already names bytes in the
+    // document, so including it here would ask the server to fetch a string that is not a source.
+    if (paints) for (const spec of paints) if (spec && spec.kind === "image" && "url" in spec) urls.push(spec.url);
   };
   const visit = (wn: WriteChild | WriteProps): void => {
     if (!wn || typeof wn !== "object") return;

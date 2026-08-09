@@ -64,7 +64,22 @@ export interface GradientSpec { kind: "gradient"; type: GradientType; transform:
 // and injected. `placeholder` records stand-in-vs-real; the bridge persists it on the node (pluginData) so
 // a later read can tell them apart — the one content case whose semantics don't recover from geometry. ----
 export type ImageScaleMode = "FILL" | "FIT" | "CROP" | "TILE";
-export interface ImageSpec { kind: "image"; url: string; scaleMode: ImageScaleMode; placeholder: boolean }
+export interface ImageUrlSpec { kind: "image"; url: string; scaleMode: ImageScaleMode; placeholder: boolean }
+// ---- The OTHER image source: a paint whose bytes are already in the document, named by the
+// imageHash a read shape carries (`{ type: "IMAGE", imageRef }`). Nothing needs fetching — in-plugin a
+// paint can reference an existing hash directly — which is what lets a `get` result rebuild an image
+// fill with no server round trip and no url the agent never had. The two forms are separate interfaces,
+// not one shape with two optional sources, so "which source is this" is answered by the type
+// (`"url" in spec`) and a byte collector cannot silently include a hash-backed paint. ----
+export interface ImageHashSpec {
+  kind: "image";
+  hash: string;
+  scaleMode: ImageScaleMode;
+  // TILE's repeat scale, carried only because the read shape does — a tile reproduced at natural size
+  // is a visible divergence. Absent for every other scale mode.
+  scalingFactor?: number;
+}
+export type ImageSpec = ImageUrlSpec | ImageHashSpec;
 export type PaintSpec = SolidSpec | GradientSpec | ImageSpec;
 
 // ---- Author input shapes for a fill/stroke leaf. An author passes a CSS color/gradient string, the
@@ -72,7 +87,15 @@ export type PaintSpec = SolidSpec | GradientSpec | ImageSpec;
 // These live here (the figma-free type hub) rather than in css.ts so the schema module can source them
 // via `import type` without dragging css.ts's parsers — and their Figma-typings — into a typecheck. ----
 export interface WriteGradientFill { type: GradientType; gradient: string }
-export type FillInput = string | WriteGradientFill | PaintSpec;
+// The read shape's image-fill leaf. Named here (rather than sniffed inline at the parser) so the
+// normalizer can type what it hands back; the extra read-only keys it carries (css hints,
+// imageDownloadArguments) are irrelevant to the parse and deliberately unnamed.
+export interface ReadImageFill { type: "IMAGE"; imageRef?: string; scaleMode?: string; scalingFactor?: number }
+export type FillLeaf = string | WriteGradientFill | ReadImageFill | PaintSpec;
+// A paint slot takes one leaf, or the read shape's own ARRAY spelling of the same slot — so a `get`
+// result's `fills` feeds straight back in. More than one entry fails loud (compilePaintWord): flcm
+// paints a single fill/stroke and a stack has no authored form.
+export type FillInput = FillLeaf | FillLeaf[];
 
 // ---- Effect currency (Figma-domain). A blur's radius is ALREADY the Figma radius — the ×2 CSS-blur
 // factor (see effects.ts) is applied when the spec is built, never here and never in the bridge, so a

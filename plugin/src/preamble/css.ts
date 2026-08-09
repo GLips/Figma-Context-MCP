@@ -8,9 +8,9 @@
 // fidelity is the whole risk of accepting CSS-shaped input, so the edges are strict.
 
 import {
-  PaintSpec, GradientType, GradientStop, Rgba,
+  PaintSpec, ImageHashSpec, ImageScaleMode, GradientType, GradientStop, Rgba,
   EffectSpec, WriteLineHeight, WriteLetterSpacing,
-  FillInput, WriteCssEffects, WriteBlendMode,
+  FillLeaf, WriteGradientFill, WriteCssEffects, WriteBlendMode,
 } from "./ir.js";
 import { solid, linearGradient, radialGradient } from "./paint.js";
 import { shadow, layerBlurFromCssPx, backgroundBlurFromCssPx } from "./effects.js";
@@ -61,12 +61,15 @@ export function parseColor(input: string): Rgba {
 }
 
 // ---- Fills (color string | gradient string | read-form { type, gradient }) -> PaintSpec ----
-export function parseFill(value: FillInput, field: string): PaintSpec {
+// Takes ONE leaf. The read shape's array spelling is unwrapped upstream (flcm.compilePaintWord),
+// where the stacked-paints refusal lives — a parser that also un-nested would have to own that rule.
+export function parseFill(value: FillLeaf, field: string): PaintSpec {
   if (value && typeof value === "object") {
     if ("kind" in value) return value; // already a typed PaintSpec (what flcm.gradient() returns)
-    if (isImageFill(value)) throw imageFillRejected(field, value);
-    if (typeof value.gradient === "string" && typeof value.type === "string" && value.type.indexOf("GRADIENT_") === 0) {
-      return parseGradientString(value.gradient);
+    if (isImageFill(value)) return readImagePaint(value, field);
+    const g = value as WriteGradientFill;
+    if (typeof g.gradient === "string" && typeof g.type === "string" && g.type.indexOf("GRADIENT_") === 0) {
+      return parseGradientString(g.gradient);
     }
     throw badFill(field, value);
   }
@@ -79,19 +82,42 @@ function badFill(field: string, value: unknown): Error {
   return new Error("flcm: " + field + " must be a color string, a gradient string (linear-gradient(...) / radial-gradient(...)), or a gradient leaf { type, gradient }. Got " + JSON.stringify(value) + ".");
 }
 
-// A read-artifact image fill (figma-mcp read's SimplifiedImageFill: { type:'IMAGE', imageRef|gifRef,
-// scaleMode }) is a REF to bytes we don't have — distinct from an AUTHORED image, which comes in as a typed
-// ImageSpec ({ kind:'image', url }) and returns early above via the `"kind" in value` path, never reaching
-// here. `type:'IMAGE'` is the always-present discriminator (imageRef itself can be omitted when Figma
-// returns a null ref). Reject loud here — pointing at flcm.image(url), the real write path — rather than
-// dropping the fill silently or letting a confusing plugin-API throw surface downstream.
+// A read-form image fill (the read shape's SimplifiedImageFill: { type:'IMAGE', imageRef|gifRef,
+// scaleMode }) names bytes ALREADY IN THE DOCUMENT, so in-plugin it needs no fetch and no url — the
+// imageRef IS the paint's imageHash [verified: node-to-snapshot maps `ref: paint.imageHash`]. It is
+// distinct from an AUTHORED image, which arrives as a typed ImageSpec ({ kind:'image', url }) and
+// returns early above via the `"kind" in value` path, never reaching here. `type:'IMAGE'` is the
+// always-present discriminator; the ref itself can be missing (Figma returns a null imageRef for an
+// asset that lives in a file you don't own), and THAT case still has nothing to point at.
 function isImageFill(value: object): boolean {
   const o = value as Record<string, unknown>;
   return o.type === "IMAGE" || typeof o.imageRef === "string" || typeof o.gifRef === "string";
 }
 
-function imageFillRejected(field: string, value: unknown): Error {
-  return new Error("flcm: " + field + " is a read-artifact image fill — a ref to bytes we don't have (" + JSON.stringify(value) + "). Author an image with flcm.image(url) instead.");
+// The read shape's scale-mode words → the plugin's. "STRETCH" is REST's spelling of the plugin's CROP
+// (node-to-snapshot maps it on the way out), and it is the one mode that CANNOT come back: the crop is
+// carried by the paint's imageTransform matrix, which the read shape never surfaces, so rebuilding it
+// would silently un-crop the image. Refused by name below rather than reproduced wrong.
+const READ_SCALE_MODES: Record<string, ImageScaleMode> = { FILL: "FILL", FIT: "FIT", TILE: "TILE" };
+
+function readImagePaint(value: object, field: string): ImageHashSpec {
+  const o = value as { imageRef?: unknown; gifRef?: unknown; scaleMode?: unknown; scalingFactor?: unknown };
+  const hash = typeof o.imageRef === "string" && o.imageRef ? o.imageRef : undefined;
+  if (!hash) {
+    throw new Error(
+      "flcm: " + field + " is an image fill with no imageRef — Figma reports a null ref for an asset that lives in a file you don't own, so there is nothing to point the new paint at (" +
+        JSON.stringify(value) + "). Duplicate the node with flcm.clone instead, or author your own image with flcm.image(url).",
+    );
+  }
+  const scaleMode = READ_SCALE_MODES[String(o.scaleMode)];
+  if (!scaleMode) {
+    throw new Error(
+      "flcm: " + field + ' is a cropped image fill (scaleMode "' + String(o.scaleMode) + '"). The crop lives in the paint\'s transform matrix, which the read shape does not carry, so rebuilding it would silently un-crop the image. Duplicate the node with flcm.clone to keep the crop.',
+    );
+  }
+  const spec: ImageHashSpec = { kind: "image", hash, scaleMode };
+  if (scaleMode === "TILE" && typeof o.scalingFactor === "number") spec.scalingFactor = o.scalingFactor;
+  return spec;
 }
 
 // ---- Blend mode (CSS mix-blend-mode name -> Figma BlendMode). Only the CSS-named modes are reachable;
