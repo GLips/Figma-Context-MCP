@@ -34,3 +34,20 @@ export function assertConstructorBuiltTree(wn: WriteNode): void {
     if (child) assertConstructorBuiltTree(child);
   }
 }
+
+// ---- The read side's own provenance. Same WeakSet trick, opposite purpose: not "may this be
+// built" but "this must never be MISTAKEN for something to build". ----
+
+const readSpecs = new WeakSet<object>();
+
+// Brand what `get` hands back. A read spec and a handle both carry a live string `id` — deliberate,
+// one vocabulary at the agent boundary — so a structural verb asked to place one cannot tell them
+// apart by shape, and guessing wrong MOVES the node the agent meant to copy. Object identity can
+// tell them apart, so it does.
+export function markReadSpec(spec: object): void {
+  readSpecs.add(spec);
+}
+
+export function isReadSpec(value: object): boolean {
+  return readSpecs.has(value);
+}

@@ -10,6 +10,7 @@ import { Target, RawIdRef, FindQuery, SlimHandle, ReadPredicate } from "./ir.js"
 import { readKey, identityOf } from "./identity.js";
 import { sceneNodeToSnapshot, type SceneNodeLike, type SceneStyleResolver } from "./node-to-snapshot.js";
 import { rejectUnknownKeys } from "./validate.js";
+import { markReadSpec } from "./provenance.js";
 import { simplify, type SimplifiedNode } from "~/core/index.js";
 
 // A pluginData scan searches this. Default is the current page; a verb's `within` narrows it (resolved by the
@@ -117,6 +118,9 @@ export async function get(target: Target): Promise<SimplifiedNode> {
       `flcm.get: node ${JSON.stringify(node.name)} (id ${JSON.stringify(node.id)}) is hidden (visible: false) — the read shape covers the rendered document. Unhide it or target a visible node.`,
     );
   }
+  // Brand it, so a structural verb handed this back can refuse it instead of reading its live `id`
+  // as a move target — the read shape is not authoring input until Phase 5's normalizer exists.
+  markReadSpec(spec);
   return spec;
 }
 

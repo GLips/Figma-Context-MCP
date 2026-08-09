@@ -124,6 +124,12 @@ test("prepare rejects a non-container destination, a cycle, and a hand-built spe
   await assert.rejects(append("row", "row"), /can't be placed inside itself/);
   await assert.rejects(append("inner", "row"), /its own descendant/);
   await assert.rejects(append("row", { type: "FRAME" }), /flcm constructors/);
+  // The whole tree is authenticated, not just the root a constructor happened to mint: a
+  // hand-built CHILD states cross-field combinations the compile can never produce (ADR-0012).
+  await assert.rejects(
+    append("row", frame({ width: 40, height: 40 }, [{ type: "RECTANGLE" }])),
+    /hand-built "RECTANGLE"/,
+  );
   await assert.rejects(append("row", [rect({}), rect({})]), /one node per call/);
   assert.deepEqual(names(row), ["RECTANGLE", "Frame"]);
   assert.deepEqual(figma.undoLog, before);
@@ -217,15 +223,21 @@ test("an instance's CHILD LIST is closed, but the instance itself is an ordinary
 
 test("a `get` result is refused rather than silently moving the node it describes", async () => {
   const out = await render(
-    frame({ key: "card", width: 200, height: 100, fill: "#fff" }, [rect({ width: 20, height: 20 })]),
+    frame({ key: "card", width: 200, height: 100, fill: "#fff" }, [
+      rect({ key: "plain", width: 20, height: 20 }),
+    ]),
   );
   const card = await figma.getNodeByIdAsync(out.keyed.card.id);
+  const plain = await figma.getNodeByIdAsync(out.keyed.plain.id);
   await render(frame({ key: "tray", width: 300, height: 300 }));
-  const spec = await get("card");
   // The trap this closes: a read spec carries a live `id`, exactly as a handle does, so a
-  // shape-based dispatch would have taken this for a target and CUT the card out of its parent.
-  await assert.rejects(append("tray", spec), /looks like a `get` result/);
+  // shape-based dispatch would have taken this for a target and CUT the node out of its parent.
+  await assert.rejects(append("tray", await get("card")), /is a `get` result/);
+  // …including the bare read shape that carries no styling at all to give it away. That one is
+  // caught by identity (the read-side brand), which is why the field sniff can stay a fallback.
+  await assert.rejects(append("tray", await get("plain")), /is a `get` result/);
   assert.equal(card.parent.id, figma.currentPage.id);
+  assert.equal(plain.parent.id, card.id);
 });
 
 test("clone with no parent lands the copy on the original's own coordinates", async () => {

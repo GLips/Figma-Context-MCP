@@ -27,7 +27,7 @@ import {
   attachSpecChild, mintHandle, settleHandles, resolvePercents, RenderCtx, RenderResources,
   liveParentSpecFacts, assertLiveNodeLandsUnderParent, assertSpecRootLandsUnderParent, resettleMovedNode,
 } from "./bridge.js";
-import { assertConstructorBuiltTree, isConstructorBuilt } from "./provenance.js";
+import { assertConstructorBuiltTree, isConstructorBuilt, isReadSpec } from "./provenance.js";
 import { loadTreeResources } from "./flcm.js";
 import { clearKeysDeep, instanceAncestorOf } from "./identity.js";
 import { beginMutatingApply } from "./verb-error.js";
@@ -86,20 +86,19 @@ function assertNoCycle(subject: string, node: any, destination: any): void {
   }
 }
 
-// A `get` result, told apart from a handle by fields no handle carries. A handle and a read spec
-// BOTH carry a string id — that is deliberate, one vocabulary at the agent boundary — so the read
-// shape has to be named here or it routes to the target branch and MOVES the node the agent asked
-// to copy: silently wrong, the one outcome flcm never ships. Not total (a styleless, childless
-// frame's read spec is genuinely indistinguishable from a SlimHandle) and it doesn't need to be:
-// Phase 5 mints read specs through the constructors, at which point isConstructorBuilt decides
-// this on its own and this check goes away.
-const READ_SPEC_FIELDS = ["children", "fills", "strokes", "effects", "textStyle", "opacity", "borderRadius"];
+// A `get` result must never be mistaken for a target. It carries a live string `id` exactly as a
+// handle does — deliberate, one vocabulary at the agent boundary — so shape can't tell them apart,
+// and guessing wrong MOVES the node the agent asked to copy: silently wrong, the one outcome flcm
+// never ships. Object identity CAN tell them apart, so the primary test is the read-side brand
+// (provenance.markReadSpec). The field sniff behind it is the fallback for a spec that lost its
+// identity crossing JSON — a heuristic on purpose, and only ever additive to the brand.
+const READ_SPEC_FIELDS = ["children", "fills", "strokes", "effects", "textStyle", "designedWidth", "designedHeight"];
 
 function assertNotReadSpec(subject: string, thing: Record<string, unknown>): void {
-  if (!READ_SPEC_FIELDS.some((f) => f in thing)) return;
+  if (!isReadSpec(thing) && !READ_SPEC_FIELDS.some((f) => f in thing)) return;
   throw new Error(
-    subject + ": that looks like a `get` result, and a read spec is not authoring input — placing it " +
-      "would MOVE the node you read, not copy it. To duplicate a live node use flcm.clone(target, parent) " +
+    subject + ": that is a `get` result, and a read spec is not authoring input — placing it would " +
+      "MOVE the node you read, not copy it. To duplicate a live node use flcm.clone(target, parent) " +
       "and flcm.edit the copy; to author something new, build it with the flcm constructors.",
   );
 }
@@ -139,8 +138,17 @@ function classifyPlaceable(subject: string, thing: unknown): "spec" | "target" {
 
 // ---- destination resolution ----
 
+// Under the manifest's `documentAccess: dynamic-page`, a PageNode's `children`/`appendChild`/
+// `insertChild` all throw until the page is loaded — [verified, plugin-typings 1.133: the note on
+// each of those members]. Every other destination is a scene node the target resolution already
+// materialized. Nothing is written here, so this belongs in prepare with the rest of the reads.
+async function loadPageDestination(node: any): Promise<void> {
+  if (node && node.type === "PAGE") await node.loadAsync();
+}
+
 async function resolveDestination(subject: string, anchor: Target, placement: Placement): Promise<Destination> {
   const anchorNode: any = await resolveTarget(anchor);
+  await loadPageDestination(placement === "before" || placement === "after" ? anchorNode.parent : anchorNode);
   if (placement === "before" || placement === "after") {
     const parent = anchorNode.parent;
     if (!parent) {
@@ -226,9 +234,10 @@ type Placement = "end" | "start" | "before" | "after";
 
 // Everything a live subject owes its destination before it may be placed there. Shared by the move
 // branch and by `clone`, so a gate added here reaches both — they are the same operation on a node
-// that already exists, differing only in whether that node was born a moment ago.
-async function prepareLivePlacement(subject: string, dest: Destination, target: Target): Promise<PreparedPlacement> {
-  const node: any = await resolveTarget(target);
+// that already exists, differing only in whether that node was born a moment ago. Synchronous by
+// type on purpose: every fact it reads is live, so it must run after its caller's LAST await.
+function prepareLivePlacement(subject: string, dest: Destination, node: any): PreparedPlacement {
+  assertInstanceChildListUntouched(subject, dest.parent, "destination");
   assertInstanceChildListUntouched(subject, node, "subject");
   assertNoCycle(subject, node, dest.parent);
   return { kind: "placement", dest, node, words: assertLiveNodeLandsUnderParent(node, dest.parent, subject) };
@@ -242,12 +251,23 @@ function placeVerb(verb: string, anchor: Target, thing: unknown, placement: Plac
   return enterMutatingVerb(
     verb,
     async (): Promise<PreparedInsert | PreparedPlacement> => {
+      if (classifyPlaceable(subject, thing) === "target") {
+        const node: any = await resolveTarget(thing as Target);
+        return prepareLivePlacement(subject, await resolveDestination(subject, anchor, placement), node);
+      }
+      // Whole tree, before the resource round-trip: a hand-built child rejects without a font or
+      // image fetch, and a sealed tree can't change between here and the build (ADR-0012).
+      const spec = thing as WriteNode;
+      assertConstructorBuiltTree(spec);
+      // Resources BEFORE the destination, and this order is load-bearing: fonts and images are the
+      // long await in this prepare, and the user has the document open the whole time. Every live
+      // fact the gates below read — the parent's layout mode, its hug axes, its instance ancestry —
+      // must be read AFTER the last yield, or the verb validates against a canvas that has moved on.
+      const resources = await loadTreeResources(spec);
       const dest = await resolveDestination(subject, anchor, placement);
       assertInstanceChildListUntouched(subject, dest.parent, "destination");
-      if (classifyPlaceable(subject, thing) === "target") return prepareLivePlacement(subject, dest, thing as Target);
-      const spec = thing as WriteNode;
       assertSpecRootLandsUnderParent(dest.parent, spec, subject);
-      return { kind: "insert", dest, spec, resources: await loadTreeResources(spec) };
+      return { kind: "insert", dest, spec, resources };
     },
     (prepared) => (prepared.kind === "insert" ? applyInsert(verb, prepared) : applyPlacement(verb, prepared)),
   );
@@ -291,7 +311,8 @@ export function move(target: Target, parent: Target): Promise<MoveResult> {
             "flcm.id(id), or a handle), not a spec. To CREATE a node inside a parent, use flcm.append(parent, spec).",
         );
       }
-      return prepareLivePlacement("flcm.move", await resolveDestination("flcm.move", parent, "end"), target);
+      const node: any = await resolveTarget(target);
+      return prepareLivePlacement("flcm.move", await resolveDestination("flcm.move", parent, "end"), node);
     },
     (prepared) => applyPlacement("move", prepared),
   );
@@ -342,7 +363,13 @@ export function clone(target: Target, parent?: Target): Promise<CloneResult> {
     "clone",
     async () => {
       const node: any = await resolveTarget(target);
-      const dest = parent != null ? await resolveDestination("flcm.clone", parent, "end") : endOf(node.parent);
+      let dest: Destination;
+      if (parent != null) {
+        dest = await resolveDestination("flcm.clone", parent, "end");
+      } else {
+        await loadPageDestination(node.parent);
+        dest = endOf(node.parent);
+      }
       if (!dest.parent) {
         throw new Error(
           "flcm.clone: " + JSON.stringify(node.name) + " (id " + JSON.stringify(node.id) +
