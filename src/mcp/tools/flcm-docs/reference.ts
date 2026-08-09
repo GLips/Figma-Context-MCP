@@ -281,17 +281,18 @@ const CATEGORY_LABELS: Record<VerbCategory, string> = {
 
 // The `flcm.` prefix is stated ONCE in the block header rather than repeated per verb: at 24 verbs
 // that repetition alone costs ~120 bytes of a 2048-byte budget, and the budget is the binding
-// constraint (see QUICKSTART_LIMIT_BYTES). A verb whose `short` is "" folds into a sibling's
-// combined spelling and prints nothing.
+// constraint (see QUICKSTART_LIMIT_BYTES). A verb whose `quickStart` is null is already covered by
+// the previous entry's combined spelling and prints nothing.
 function quickStartVerbLines(): string {
   // Map preserves insertion order, so categories print in first-seen VERBS order (no separate order array).
   const byCategory = new Map<VerbCategory, string[]>();
   for (const v of VERBS) {
-    const spelling = (v.short ?? v.signature).replace(/\bflcm\./g, "");
-    if (!spelling) continue;
+    const spelling = v.quickStart === undefined ? v.signature : v.quickStart;
+    if (spelling === null) continue;
+    const stripped = spelling.replace(/\bflcm\./g, "");
     const sigs = byCategory.get(v.category);
-    if (sigs) sigs.push(spelling);
-    else byCategory.set(v.category, [spelling]);
+    if (sigs) sigs.push(stripped);
+    else byCategory.set(v.category, [stripped]);
   }
   return [...byCategory]
     .map(([cat, sigs]) => `  ${CATEGORY_LABELS[cat]}: ${sigs.join(", ")}`)

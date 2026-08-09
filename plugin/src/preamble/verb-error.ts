@@ -10,25 +10,28 @@
 // import the other; the message shape is the contract, so one home is what keeps them identical.
 
 import { Identity } from "./ir.js";
+import { identityOf, instanceAncestorOf } from "./identity.js";
 import { committedVerbCount } from "./mutation-lock.js";
 
-// The nearest INSTANCE ancestor, or null. Figma restricts what may change on an instance's
-// children — some props can't be overridden, and the tree shape can't change at all — and the fix
-// is always "edit the component it comes from", so both the structural gates and this error walk
-// the same chain. Stops at the page: an instance is always inside one.
-export function instanceAncestorOf(node: SceneNode): SceneNode | null {
-  for (let p = (node as { parent?: BaseNode | null }).parent; p && p.type !== "PAGE"; p = p.parent) {
-    if (p.type === "INSTANCE") return p as SceneNode;
-  }
-  return null;
+/**
+ * Open a mutating verb's sealed apply span and get back the failure builder for it. Call this as
+ * the FIRST line of the apply, before any write: the identity is snapshotted here, which is the
+ * whole point of the two-step shape. A verb that renamed a node and then hit a refusal would
+ * otherwise report the NEW name — the one the rollback is about to erase — and the agent would go
+ * looking for a node that never existed. Making the snapshot the cost of obtaining `fail` is what
+ * keeps that ordering from being prose every verb has to remember.
+ *
+ *   const fail = beginMutatingApply("edit", node);
+ *   try { …writes… } catch (cause) { throw fail(cause); }
+ */
+export function beginMutatingApply(verb: string, node: SceneNode): (cause: unknown) => Error {
+  const identity = identityOf(node);
+  return (cause) => mutatingVerbError(verb, identity, cause, node);
 }
 
-// Build the pointer error for a post-validation failure inside `verb`'s sealed apply span. A Figma
-// refusal names its own setter ("in set_fills: …"); an flcm-prefixed cause is our own throw, so
-// don't pin it on Figma. `identity` is snapshotted BEFORE the first write on purpose — a delta
-// that renames and then hits a refusal would otherwise point at the NEW name, which the rollback
-// is about to remove.
-export function mutatingVerbError(verb: string, identity: Identity, cause: unknown, node: SceneNode): Error {
+// A Figma refusal names its own setter ("in set_fills: …"); an flcm-prefixed cause is our own
+// throw, so don't pin it on Figma.
+function mutatingVerbError(verb: string, identity: Identity, cause: unknown, node: SceneNode): Error {
   const message = cause instanceof Error ? cause.message : String(cause);
   const who =
     identity.type + " " + JSON.stringify(identity.name) + " (id " + JSON.stringify(identity.id) +

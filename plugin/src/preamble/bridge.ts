@@ -73,7 +73,7 @@ const AUTO_LAYOUT_MODES = ["HORIZONTAL", "VERTICAL", "GRID"];
 // assigned its cells — when it does, this predicate is where the rule lands, not six inlined
 // comparisons. AUTO_LAYOUT_MODES above differs on purpose: for read-side geometry a GRID parent DOES
 // place its children, so left/top stay omitted.
-export function isRowColumnAutoLayout(node: any): boolean {
+function isRowColumnAutoLayout(node: any): boolean {
   return node.layoutMode === "HORIZONTAL" || node.layoutMode === "VERTICAL";
 }
 
@@ -140,7 +140,9 @@ export function settleHandles(root: any, keyed: Record<string, any>): { root: Ha
 
 function stampKey(node: any, wn: WriteNode, ctx: RenderCtx): void {
   if (typeof wn.key !== "string") return;
-  if (wn.key in ctx.keyed) throw new Error('flcm.render: duplicate key "' + wn.key + '" — keys must be unique within a render.');
+  // No verb name: the same walk runs under render AND under every structural insert verb, and
+  // naming the wrong one sends the agent looking at a call it didn't make.
+  if (wn.key in ctx.keyed) throw new Error('flcm: duplicate key "' + wn.key + '" — keys must be unique within one call.');
   writeKey(node, wn.key);
   ctx.keyed[wn.key] = node;
 }
@@ -588,7 +590,7 @@ export function applyLiveNodeLayout(node: any, wl: WriteLayout): void {
 // modes: an AUTO-mode axis that the grandparent stretches reports FILL — the parent's size is
 // realized from above, the child's percent resolves against it, and no cycle exists. Reading
 // primary/counterAxisSizingMode here would reject that valid case as a hug.
-export function parentHugFacts(parent: any): ParentFlowFacts {
+function parentHugFacts(parent: any): ParentFlowFacts {
   const parentIsAuto = !!parent && isRowColumnAutoLayout(parent);
   if (!parentIsAuto) return { parentIsAuto: false, hugW: false, hugH: false };
   return {
@@ -609,7 +611,7 @@ export function parentHugFacts(parent: any): ParentFlowFacts {
 //   `isOutOfFlow`   — the node's EFFECTIVE positioning after this call. A delta rarely names
 //                     `absolute`, so an already-ABSOLUTE child threads its live positioning: out
 //                     of flow it doesn't feed the parent's hug, and the percent cycle can't form.
-export function assertLayoutLandsUnderParent(
+function assertLayoutLandsUnderParent(
   parent: any, nodeType: string, wl: WriteLayout, isContainer: boolean, isOutOfFlow: boolean, subject: string,
 ): void {
   if (parent && parent.type === "PAGE") {
@@ -623,10 +625,30 @@ export function assertLayoutLandsUnderParent(
   }
 }
 
-// Edit's spelling of the gate above: the destination is where the node already sits.
+// ---- The three verb-facing spellings of the gate. Each derives the live facts itself, so a
+// caller never assembles them (two adjacent booleans a call site could swap) and never needs the
+// primitives above. ----
+
+// Edit: the destination is where the node already sits.
 export function assertLayoutDeltaResolvable(node: any, wl: WriteLayout): void {
   const outOfFlow = wl.position === "absolute" || (wl.position !== "none" && node.layoutPositioning === "ABSOLUTE");
   assertLayoutLandsUnderParent(node.parent, node.type, wl, isRowColumnAutoLayout(node), outOfFlow, "flcm.edit");
+}
+
+// A structural verb placing a LIVE node: ask whether the words it already wears stay legal under
+// `destination`, and hand them back — they're also what the post-move re-aim replays, and reading
+// them twice would risk reading them AFTER the reparent, when they no longer mean the old axes.
+export function assertLiveNodeLandsUnderParent(node: any, destination: any, subject: string): WriteLayout {
+  const wl = liveParentRelativeWords(node);
+  assertLayoutLandsUnderParent(destination, node.type, wl, isRowColumnAutoLayout(node), wl.position === "absolute", subject);
+  return wl;
+}
+
+// A structural verb placing a SPEC: only its ROOT meets the destination — the interior children
+// are checked against their own authored parents inside the build walk, exactly as at create.
+export function assertSpecRootLandsUnderParent(destination: any, wn: WriteNode, subject: string): void {
+  const wl = wn.layout || {};
+  assertLayoutLandsUnderParent(destination, wn.type, wl, wl.mode === "row" || wl.mode === "column", wl.position === "absolute", subject);
 }
 
 // The layout words a LIVE node carries that MEAN SOMETHING ABOUT ITS PARENT — the only intent a
@@ -635,7 +657,7 @@ export function assertLayoutDeltaResolvable(node: any, wl: WriteLayout): void {
 // layoutPositioning; a percent was folded to pixels at apply and a fixed/hug axis is node-local,
 // so neither is here. Feeds both halves of a structural move: the destination gate above, and the
 // re-aim that re-applies the intent against the new parent's axes.
-export function liveParentRelativeWords(node: any): WriteLayout {
+function liveParentRelativeWords(node: any): WriteLayout {
   const wl: WriteLayout = {};
   const sizing: { horizontal?: Sizing; vertical?: Sizing } = {};
   if (convertSizing(node.layoutSizingHorizontal) === "fill") sizing.horizontal = "fill";
@@ -675,6 +697,15 @@ function isPositionedChild(parentIsAuto: boolean, cl: WriteLayout): boolean {
 export interface SpecParentFacts extends ParentFlowFacts {
   crossStretch: boolean;
   subject: string; // the verb name the shared legality rules prefix their rejections with
+}
+
+// The same facts read off a LIVE destination, for the structural insert verbs. `crossStretch` is
+// FALSE here and that is a stated rule, not a reading gap: an inserted child does NOT inherit a
+// stretch container's stretch, because there is nothing to inherit FROM — see SpecParentFacts
+// above. The remedy is `edit(parent, { layout: { alignItems: "stretch" } })`, which re-synthesizes
+// the marks over every child including the new one.
+export function liveParentSpecFacts(parent: any, subject: string): SpecParentFacts {
+  return { ...parentHugFacts(parent), crossStretch: false, subject };
 }
 
 // THE attach-then-size entry: build one spec child and settle it into `parent`. Shared by the

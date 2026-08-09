@@ -23,13 +23,12 @@
 import { WriteProps, WriteType, WriteLayout, WriteTextStyle, Target, Handle, EDIT_TYPE_WORD_GROUPS, namesFontIdentity } from "./ir.js";
 import { resolveTarget } from "./read.js";
 import { enterMutatingVerb } from "./mutation-lock.js";
-import { mutatingVerbError } from "./verb-error.js";
+import { beginMutatingApply } from "./verb-error.js";
 import {
   applyPaint, applySceneProps, mintHandle, applyLiveNodeLayout, assertLayoutDeltaResolvable,
   applyTextProps, applyTextClamp,
 } from "./bridge.js";
 import { toFigmaEffects } from "./effects.js";
-import { identityOf } from "./identity.js";
 import { rejectUnknownKeys } from "./validate.js";
 import { liveFontWords, loadFontsForTextEdit } from "./fonts.js";
 import {
@@ -255,9 +254,7 @@ export function edit(target: Target, changes: EditDelta): Promise<Handle> {
     },
     // Apply — the sealed span: all writes, no awaits.
     ({ node, patch, fonts, images }) => {
-      // Snapshot identity before the first write: a delta that renames and then hits a refusal
-      // would otherwise point at the NEW name — which the rollback is about to remove.
-      const identity = identityOf(node);
+      const fail = beginMutatingApply("edit", node);
       try {
         applyPaint(node, patch, { fonts, images });
         applySceneProps(node, patch);
@@ -270,7 +267,7 @@ export function edit(target: Target, changes: EditDelta): Promise<Handle> {
         if (patch.layout) applyLiveNodeLayout(node, patch.layout);
         if (node.type === "TEXT") applyTextClamp(node as TextNode, patch.maxLines);
       } catch (cause) {
-        throw mutatingVerbError("edit", identity, cause, node);
+        throw fail(cause);
       }
       return mintHandle(node);
     },

@@ -21,7 +21,10 @@ const COPY_FIELDS = ["name", "layoutMode", "itemSpacing", "paddingTop", "padding
   "paddingLeft", "primaryAxisAlignItems", "counterAxisAlignItems", "primaryAxisSizingMode",
   "counterAxisSizingMode", "layoutGrow", "layoutAlign", "layoutPositioning", "constraints", "strokeWeight",
   "cornerRadius", "opacity", "visible", "rotation", "characters", "fontSize", "textAutoResize",
-  "_fixedW", "_fixedH"];
+  // x/y ride along because a live clone() preserves position: without them the mock can't show
+  // that flcm.clone with no parent lands the copy exactly ON TOP of the original in a free-form
+  // parent — real behavior that would otherwise be invisible here.
+  "x", "y", "_fixedW", "_fixedH"];
 
 // The node types that hold children (Figma's ChildrenMixin). See the constructor: only these get
 // appendChild/insertChild, because a leaf node genuinely has neither.

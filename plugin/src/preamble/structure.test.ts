@@ -42,8 +42,8 @@ test("append builds a spec into the destination and sizes it THERE — fill fill
   // render's own return shape, plus the attach point with fresh geometry.
   assert.equal(out.root.id, filler.id);
   assert.equal(out.keyed.filler.id, filler.id);
-  assert.equal(out.parent.id, row.id);
-  assert.equal(out.parent.width, 300);
+  assert.equal(out.to.id, row.id);
+  assert.equal(out.to.width, 300);
 });
 
 test("a percent size on an inserted spec resolves against the live destination", async () => {
@@ -164,7 +164,7 @@ test("remove deletes the subtree and reports the id plus the reflowed parent", a
   assert.equal(a.removed, true);
   assert.deepEqual(row.children.map((c) => c.id), [out.keyed.b.id]);
   // Why remove reports the parent at all: a hug parent reflows the moment a child leaves.
-  assert.equal(gone.parent.width, 40);
+  assert.equal(gone.from.width, 40);
 });
 
 test("clone duplicates an INSTANCE-bearing subtree and strips every flcm/key from the copy", async () => {
@@ -181,7 +181,7 @@ test("clone duplicates an INSTANCE-bearing subtree and strips every flcm/key fro
   const copied = await clone("card", "tray");
   const copy = await figma.getNodeByIdAsync(copied.node.id);
   assert.equal(copy.parent.id, tray.keyed.tray.id);
-  assert.equal(copied.parent.id, tray.keyed.tray.id);
+  assert.equal(copied.to.id, tray.keyed.tray.id);
   // Faithful: the same children in the same order, the instance still an instance of the same main.
   assert.deepEqual(copy.children.map((c) => c.type), ["TEXT", "INSTANCE"]);
   assert.equal(copy.children[0].characters, "Hi");
@@ -194,7 +194,7 @@ test("clone duplicates an INSTANCE-bearing subtree and strips every flcm/key fro
   assert.equal((await get("title")).id, out.keyed.title.id);
 });
 
-test("an instance is closed to structural writes, in both directions, naming the instance", async () => {
+test("an instance's CHILD LIST is closed, but the instance itself is an ordinary node", async () => {
   const out = await render(
     frame({ key: "src", width: 60, height: 60 }, [frame({ key: "slot", width: 20, height: 20 })]),
   );
@@ -202,8 +202,40 @@ test("an instance is closed to structural writes, in both directions, naming the
   const component = figma.createComponentFromNode(src);
   const instance = component.createInstance();
   instance.name = "Card instance";
-  await render(frame({ key: "dest", width: 100, height: 100 }));
+  const dest = await render(frame({ key: "dest", width: 100, height: 100 }));
   await assert.rejects(append(id(instance.id), rect({})), /inside component instance "Card instance"/);
   await assert.rejects(append(id(instance.children[0].id), rect({})), /inside component instance "Card instance"/);
-  await assert.rejects(append("dest", id(instance.children[0].id)), /node being moved is inside component instance/);
+  await assert.rejects(append("dest", id(instance.children[0].id)), /node being moved or removed is inside component instance/);
+  // …and the other half of the rule: Figma freezes an instance's CHILDREN, not the instance, which
+  // is a normal child of its own parent. Moving and deleting one are everyday operations.
+  await move(id(instance.id), "dest");
+  assert.equal(instance.parent.id, dest.keyed.dest.id);
+  const second = component.createInstance();
+  const gone = await remove(id(second.id));
+  assert.equal(gone.removedId, second.id);
+});
+
+test("a `get` result is refused rather than silently moving the node it describes", async () => {
+  const out = await render(
+    frame({ key: "card", width: 200, height: 100, fill: "#fff" }, [rect({ width: 20, height: 20 })]),
+  );
+  const card = await figma.getNodeByIdAsync(out.keyed.card.id);
+  await render(frame({ key: "tray", width: 300, height: 300 }));
+  const spec = await get("card");
+  // The trap this closes: a read spec carries a live `id`, exactly as a handle does, so a
+  // shape-based dispatch would have taken this for a target and CUT the card out of its parent.
+  await assert.rejects(append("tray", spec), /looks like a `get` result/);
+  assert.equal(card.parent.id, figma.currentPage.id);
+});
+
+test("clone with no parent lands the copy on the original's own coordinates", async () => {
+  const out = await render(frame({ key: "board", width: 400, height: 400 }, [
+    rect({ key: "chip", width: 40, height: 40, absolute: { x: 30, y: 50 } }),
+  ]));
+  const copied = await clone("chip");
+  const copy = await figma.getNodeByIdAsync(copied.node.id);
+  assert.equal(copy.parent.id, out.keyed.board.id); // no parent named ⇒ the original's own
+  assert.equal(copied.to.id, out.keyed.board.id);
+  // Faithful means faithful: in a free-form parent the copy sits exactly on top of the original.
+  assert.deepEqual([copy.x, copy.y], [30, 50]);
 });

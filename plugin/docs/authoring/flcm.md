@@ -465,14 +465,14 @@ Tree shape is its own set of verbs, and **position is the verb** — there is no
 
 `thing` is either of two things, and they mean what they mean in the DOM:
 
-- a **constructor spec** — `flcm.frame(...)`, `flcm.text(...)`, an inert tree — which is built inside the destination. Returns `{ root, keyed, parent }`: the same `root`/`keyed` `render` gives you, plus the attach point.
+- a **constructor spec** — `flcm.frame(...)`, `flcm.text(...)`, an inert tree — which is built inside the destination. Returns `{ root, keyed, to }`: the same `root`/`keyed` `render` gives you, plus the container it landed in.
 - a **target naming a live node** (an flcm/key, a node id, `flcm.id(id)`, or a handle) — which **moves** that node there, exactly as `appendChild` moves an attached DOM node. Returns `{ node, from, to }`.
 
 Three more complete the set: `flcm.move(target, parent)` is the plain reparent (the node lands last inside `parent` — the same placement `append` does, with the subject named first), `flcm.remove(target)` deletes a node and its subtree, and `flcm.clone(target, parent?)` duplicates one.
 
-**`clone` is the copy path for subtrees a rebuild can't reproduce** — anything containing a component INSTANCE, which is most real content. It duplicates the LIVE node rather than re-authoring it, so nothing is lost in translation, and the copy comes back **key-less**: a raw `node.clone()` copies the original's `flcm/key` too, quietly giving two live nodes one address. Key the copy yourself if you want to address it later.
+**`clone` is the copy path for subtrees a rebuild can't reproduce** — anything containing a component INSTANCE, which is most real content. It duplicates the LIVE node rather than re-authoring it, so nothing is lost in translation, and the copy comes back **key-less**: a raw `node.clone()` copies the original's `flcm/key` too, quietly giving two live nodes one address. Key the copy yourself if you want to address it later. The copy is faithful down to its coordinates, so in a **free-form** parent it lands directly on top of the original — `flcm.edit` its `absolute` position to separate them. (In a row/column parent it simply lands last.)
 
-Every return carries the subject plus each container whose geometry the operation could have changed — a hugging parent reflows whenever its children change, and those are the nodes you would otherwise have to re-read. They are flat handles with fresh geometry, never nested trees; `get` is still how you dive. A container field is absent when that container is the page (a page has no box to measure), and `from` is absent when you reordered inside one parent.
+Every return carries the subject plus each container whose geometry the operation could have changed — a hugging parent reflows whenever its children change, and those are the nodes you would otherwise have to re-read. They are flat handles with fresh geometry, never nested trees; `get` is still how you dive. Containers are always named `to` (where things ended up) and `from` (one something left), so `out.to` reads the same whichever kind of `thing` you placed. Either is absent when that container is the page (a page has no box to measure), and `from` is absent when you reordered inside one parent.
 
 ### Rules
 
@@ -480,7 +480,7 @@ Every return carries the subject plus each container whose geometry the operatio
 - **Layout legality is re-asked against the DESTINATION.** The same rule set create and edit enforce, with the new parent's facts: `"fill"`/`"N%"` into a page parent, a TEXT `height: "fill"` landing out of a row/column flow, a percent child of a hugging auto-layout parent, or any parent-relative word under a GRID parent each reject loud, before anything moves. A layout that was legal where a node sat is not automatically legal where it lands.
 - **A move re-aims the moved node's fill.** `"fill"` is stored as a mark on the parent's *primary* or *counter* axis, and those axes move with the node — so a moved node's fill is cleared and re-applied against the new parent (filling a row's width becomes filling a column's width, and a fill into a free-form parent covers its box). Fixed sizes are untouched.
 - **A stretch container does not stretch what you insert.** Figma stores no container-level `alignItems: "stretch"` — a stretched child is indistinguishable from one that asked for counter-axis `"fill"` itself — so an inserted child doesn't inherit it. Re-assert it with `flcm.edit(parent, { layout: { alignItems: "stretch" } })`, which re-synthesizes the marks over every child including the new one.
-- **Component instances are closed to structural writes.** Placing into (or moving out of) an instance or anything inside one rejects loud, naming the instance: Figma won't let a plugin change an instance's tree shape. Edit the main component it comes from — flcm never auto-detaches.
+- **An instance's CHILD LIST is closed.** Placing into an instance (or anything inside one), and moving or removing one of its children, both reject loud and name the instance: those children come from the main component, so edit that instead — flcm never auto-detaches. The instance **itself** is an ordinary node in its own parent: moving, removing and cloning it are all fine.
 - **A node can't be placed inside itself or its own subtree**, and the refusal names both nodes rather than surfacing Figma's own cycle error.
 - **Each call is one undo step**, with the same contract as `edit`: everything validates before the first write, and a Figma refusal mid-apply rolls the whole call back.
 
@@ -495,7 +495,7 @@ There is no separate clipboard API — the verbs compose into one:
 | paste with modifications | `flcm.clone(...)`, then `flcm.edit` the copy |
 | delete | `flcm.remove(target)` |
 
-A `get` result is **not** yet authoring input — you can't feed a read spec back to `append`. Duplicate with `clone` and nudge the copy, or re-author the subtree with the constructors.
+A `get` result is **not** yet authoring input: passing a read spec to `append` is rejected, not quietly treated as a move. Duplicate with `clone` and nudge the copy, or re-author the subtree with the constructors.
 
 ## Seeing what you built (get_screenshot)
 

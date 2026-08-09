@@ -486,11 +486,12 @@ export interface VerbDoc {
   args: string;
   category: VerbCategory;
   schema?: z.ZodObject;
-  // The ≤2KB quick-start spelling, when the full signature doesn't fit its budget. Verbs that
-  // differ only in WHERE they place (append/prepend, insertBefore/insertAfter) fold into one
-  // entry: the first of the pair carries the combined form, the second carries "" and prints
-  // nothing. The verb TABLE below is unaffected — it always renders the full `signature`.
-  short?: string;
+  // The ≤2KB quick-start spelling, when the full signature doesn't fit its budget — written in the
+  // same `flcm.`-prefixed form as `signature`, since the renderer strips the prefix from both.
+  // `null` means "folded into the PREVIOUS entry's combined spelling": verbs that differ only in
+  // where they place (append/prepend, insertBefore/insertAfter) print as one line. The verb TABLE
+  // is unaffected — it always renders the full `signature`.
+  quickStart?: string | null;
 }
 
 export const VERBS: VerbDoc[] = [
@@ -506,13 +507,13 @@ export const VERBS: VerbDoc[] = [
   { category: "value", signature: "flcm.effects({...})", builds: "an effects value", args: "an { shadow, blur, backgroundBlur } bag", schema: EffectsSchema },
   { category: "render", signature: "await flcm.render(tree)", builds: "live nodes", args: "returns { root, keyed }" },
   { category: "edit", signature: "await flcm.edit(target, changes)", builds: "a nudged existing node (returns its updated Handle)", args: "target (an flcm/key, node id, flcm.id(id), or handle), then a partial delta in the same vocabulary as create", schema: EditSchema },
-  { category: "structure", signature: "await flcm.append(parent, thing)", builds: "`thing` placed as the LAST child of `parent`", args: "a parent target, then either a constructor spec (built there → { root, keyed, parent }) or a target naming a live node (MOVED there → { node, from, to })", short: "await append/prepend(parent, spec|target)" },
-  { category: "structure", signature: "await flcm.prepend(parent, thing)", builds: "the same, placed FIRST", args: "same as append", short: "" },
-  { category: "structure", signature: "await flcm.insertBefore(sibling, thing)", builds: "`thing` placed just before `sibling`", args: "a SIBLING target (the parent is inferred from it), then a spec or a live target", short: "await insertBefore/insertAfter(sibling, spec|target)" },
-  { category: "structure", signature: "await flcm.insertAfter(sibling, thing)", builds: "`thing` placed just after `sibling`", args: "same as insertBefore", short: "" },
-  { category: "structure", signature: "await flcm.move(target, parent)", builds: "the node reparented as `parent`'s last child", args: "a live target, then a parent target. Creating is append's job — a spec here fails loud", short: "await move(target, parent)" },
-  { category: "structure", signature: "await flcm.remove(target)", builds: "nothing — deletes the node and its subtree", args: "a target; returns { removedId, parent }", short: "await remove(target)" },
-  { category: "structure", signature: "await flcm.clone(target, parent?)", builds: "a faithful live duplicate (key-less)", args: "a target, and optionally where the copy lands (default: beside the original). The copy path for subtrees a spec rebuild can't reproduce — anything holding an INSTANCE", short: "await clone(target, parent?)" },
+  { category: "structure", signature: "await flcm.append(parent, thing)", builds: "`thing` placed as the LAST child of `parent`", args: "a parent target, then either a constructor spec (built there → { root, keyed, parent }) or a target naming a live node (MOVED there → { node, from, to })", quickStart: "await flcm.append/prepend(parent, spec|target)" },
+  { category: "structure", signature: "await flcm.prepend(parent, thing)", builds: "the same, placed FIRST", args: "same as append", quickStart: null },
+  { category: "structure", signature: "await flcm.insertBefore(sibling, thing)", builds: "`thing` placed just before `sibling`", args: "a SIBLING target (the parent is inferred from it), then a spec or a live target", quickStart: "await flcm.insertBefore/insertAfter(sibling, spec|target)" },
+  { category: "structure", signature: "await flcm.insertAfter(sibling, thing)", builds: "`thing` placed just after `sibling`", args: "same as insertBefore", quickStart: null },
+  { category: "structure", signature: "await flcm.move(target, parent)", builds: "the node reparented as `parent`'s last child", args: "a live target, then a parent target. Creating is append's job — a spec here fails loud", quickStart: "await flcm.move(target, parent)" },
+  { category: "structure", signature: "await flcm.remove(target)", builds: "nothing — deletes the node and its subtree", args: "a target; returns { removedId, parent }", quickStart: "await flcm.remove(target)" },
+  { category: "structure", signature: "await flcm.clone(target, parent?)", builds: "a faithful live duplicate (key-less)", args: "a target, and optionally where the copy lands (default: beside the original). The copy path for subtrees a spec rebuild can't reproduce — anything holding an INSTANCE", quickStart: "await flcm.clone(target, parent?)" },
   { category: "read", signature: "await flcm.get(target)", builds: "a node's full read spec (values inline)", args: "target: an flcm/key, a node id, flcm.id(id), or a handle" },
   { category: "read", signature: "await flcm.find(query?, predicate?)", builds: "matching nodes as slim handles", args: "query { type?, name?, key?, within? } AND-combined — a filter, not an address; only `within` takes a target. Optional predicate over the full read shape (n => n.fills?.[0] === '#FFF')" },
   { category: "read", signature: "await flcm.findOne(query?, predicate?)", builds: "exactly one slim handle (throws on 0 or >1)", args: "same query + predicate as find" },

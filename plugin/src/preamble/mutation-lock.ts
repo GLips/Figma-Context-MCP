@@ -1,5 +1,5 @@
-// mutation-lock — the single entry point every mutating verb takes (plan invariant 4): render and
-// edit today; editMany and the structural verbs enter through it as they land. Three jobs, one
+// mutation-lock — the single entry point every mutating verb takes (plan invariant 4): render, edit
+// and the structural verbs today; editMany enters through it as it lands. Three jobs, one
 // place — serialize verbs, enforce cancellation, own the undo scaffold (the seal/commit/rollback
 // shape lives on enterMutatingVerb, exactly once, never per verb):
 //

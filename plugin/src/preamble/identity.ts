@@ -18,6 +18,23 @@ export function writeKey(node: { setPluginData(key: string, value: string): void
   node.setPluginData(FLCM_KEY, key);
 }
 
+// A node whose ancestor chain can be walked. Structural, like everything here.
+interface ParentedNode {
+  type: string;
+  parent?: ParentedNode | null;
+}
+
+// The nearest INSTANCE ancestor, or null. Figma restricts what may change on an instance's
+// children — some props can't be overridden, and the tree shape can't change at all — and the fix
+// is always "edit the component it comes from", so the structural gates and the mutating-verb
+// error walk the same chain. Stops at the page: an instance is always inside one.
+export function instanceAncestorOf<T extends ParentedNode>(node: T): T | null {
+  for (let p = node.parent; p && p.type !== "PAGE"; p = p.parent) {
+    if (p.type === "INSTANCE") return p as T;
+  }
+  return null;
+}
+
 // A node whose subtree can be walked to clear flcm keys. Structural (a live leaf simply has no
 // `children`), so this module stays free of the plugin ambients like the rest of it.
 interface KeyedTree {
