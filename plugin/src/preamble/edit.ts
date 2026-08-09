@@ -19,6 +19,23 @@
 // a single enterMutatingVerb expression), so a run racing its own edits still has each edit's
 // gates read the canvas exactly as that edit will find it. A prepare reject leaves zero undo
 // residue; only the sealed apply span can mint a step.
+//
+// The pipeline is FOUR NAMED STAGES because `editMany` drives the same ones N times over one queue
+// slot (invariant 4: a batch verb takes the lock once and rides the internal appliers, never the
+// public verb). Their ORDER is the contract, not their bodies:
+//
+//   1. rejectNonDeltaWords    pure — no document read at all, so it can run for every entry first
+//   2. compileEditPlan        the compile, which reads the LIVE node (font identity, wrap mode)
+//   3. …the verb's resource awaits…
+//   4. assertEditPlanStillApplies  the live gates, AFTER the last await — plus proof that the facts
+//                             stage 2 read still hold (see LiveTextFacts)
+//   5. applyEditPlan          the sealed, commit-free span
+//
+// Stage 4 is why stage 2's live reads are safe to make early. Loading fonts and image bytes
+// suspends the run for a WS round trip while the user has the document open, and a batch stacks one
+// suspension per entry — so a fact read before them is a guess by the time the seal lands. Rather
+// than trust it, the compile SNAPSHOTS what it read and stage 4 re-reads and compares. (The
+// dependency can't simply be reordered away: which fonts to load is derived from the live node.)
 
 import { WriteProps, WriteType, WriteLayout, WriteTextStyle, Target, Handle, EDIT_TYPE_WORD_GROUPS, namesFontIdentity } from "./ir.js";
 import { resolveTarget } from "./read.js";
@@ -26,15 +43,15 @@ import { enterMutatingVerb } from "./mutation-lock.js";
 import { beginMutatingApply } from "./verb-error.js";
 import {
   applyPaint, applySceneProps, mintHandle, applyLiveNodeLayout, assertLayoutDeltaResolvable,
-  applyTextProps, applyTextClamp,
+  applyTextProps, applyTextClamp, RenderResources,
 } from "./bridge.js";
 import { toFigmaEffects } from "./effects.js";
 import { rejectUnknownKeys } from "./validate.js";
-import { liveFontWords, loadFontsForTextEdit } from "./fonts.js";
+import { liveFontWords, loadFontsForTextEdits, TextEditFontNeed } from "./fonts.js";
 import {
   KNOWN_KEYS, compileNodeLocalProps, compileSizeWords, compileContainerWords, compileLineLength,
   compileLineStroke, compilePaintWord, compileTextStyleWords, compileTextContent, assertLineClampCount,
-  fetchTreeImages,
+  fetchImagesForTrees,
 } from "./flcm.js";
 import type { EditDelta, FrameProps, LineProps } from "./schema.js";
 
@@ -73,24 +90,24 @@ const SLICE_DELTA_KEYS = editableWords(["name", "visible", "locked"]);
 // the target is even resolved, so a misspelled word reads "unknown prop" no matter what it targets).
 // `key` and bare `x`/`y` get steering messages ahead of the generic closed-set reject — they're the
 // two mistakes an agent is most likely to make, and "unknown prop" would misdiagnose both.
-function rejectNonDeltaWords(changes: EditDelta): void {
+export function rejectNonDeltaWords(changes: EditDelta, subject: string): void {
   if (changes == null || typeof changes !== "object") {
-    throw new Error("flcm.edit: changes must be an object of props to apply — got " + JSON.stringify(changes) + ".");
+    throw new Error(subject + ": changes must be an object of props to apply — got " + JSON.stringify(changes) + ".");
   }
   if ("key" in changes) {
     throw new Error(
-      "flcm.edit: `key` is not editable — keys are set at creation and are how later calls address this node; re-keying could mint a duplicate address. Set `key` in the render that creates a node.",
+      subject + ": `key` is not editable — keys are set at creation and are how later calls address this node; re-keying could mint a duplicate address. Set `key` in the render that creates a node.",
     );
   }
   if ("x" in changes || "y" in changes) {
     throw new Error(
-      "flcm.edit: position is not spelled with bare x/y — use `absolute: { x, y }` to place the node out of flow (or `absolute: \"none\"` to return it to flow), and `pin` for how it responds to a parent resize.",
+      subject + ": position is not spelled with bare x/y — use `absolute: { x, y }` to place the node out of flow (or `absolute: \"none\"` to return it to flow), and `pin` for how it responds to a parent resize.",
     );
   }
-  rejectUnknownKeys(changes, EDIT_KEYS, "flcm.edit");
+  rejectUnknownKeys(changes, EDIT_KEYS, subject);
   if (Object.keys(changes).length === 0) {
     throw new Error(
-      "flcm.edit: the changes object is empty — nothing to apply (an empty edit would still mint an undo step). Editable words: " +
+      subject + ": the changes object is empty — nothing to apply (an empty edit would still mint an undo step). Editable words: " +
         [...EDIT_KEYS].join(", ") + ".",
     );
   }
@@ -98,14 +115,14 @@ function rejectNonDeltaWords(changes: EditDelta): void {
 
 // The per-type legality gate (prepare phase, after resolve and before the entry seal, so an illegal word rejects with
 // zero writes). Returns the type's word set so the compile step can flag radius/clip from it.
-function assertDeltaLegalForType(node: SceneNode, changes: EditDelta): ReadonlySet<string> {
+function assertDeltaLegalForType(node: SceneNode, changes: EditDelta, subject: string): ReadonlySet<string> {
   const legal =
     (DELTA_KEYS_BY_TYPE as Record<string, ReadonlySet<string>>)[node.type] ||
     (node.type === "SLICE" ? SLICE_DELTA_KEYS : SHARED_DELTA_KEYS);
   for (const prop of Object.keys(changes)) {
     if (!legal.has(prop)) {
       throw new Error(
-        "flcm.edit: `" + prop + "` is not a " + node.type + " word — a " + node.type + " edit takes only " +
+        subject + ": `" + prop + "` is not a " + node.type + " word — a " + node.type + " edit takes only " +
           [...legal].join(", ") + ".",
       );
     }
@@ -119,12 +136,12 @@ function assertDeltaLegalForType(node: SceneNode, changes: EditDelta): ReadonlyS
 // live label decodes through fonts.ts's own grammar (liveFontWords — "Bold Italic" is weight AND
 // slant in one string). A MIXED node has no single live identity to enrich from, so a partial
 // triple rejects loud; naming fontFamily makes the delta a complete absolute reset and lands.
-function enrichFontIdentity(ts: WriteTextStyle, node: TextNode): WriteTextStyle {
+function enrichFontIdentity(ts: WriteTextStyle, node: TextNode, subject: string): WriteTextStyle {
   if (!namesFontIdentity(ts)) return ts;
   if (node.fontName === figma.mixed) {
     if (ts.fontFamily === undefined) {
       throw new Error(
-        "flcm.edit: this text mixes fonts (fontName is mixed), so a partial font change has no single base to resolve against — name textStyle.fontFamily in the same edit (unnamed weight resets to regular), or restyle spans via `content` runs.",
+        subject + ": this text mixes fonts (fontName is mixed), so a partial font change has no single base to resolve against — name textStyle.fontFamily in the same edit (unnamed weight resets to regular), or restyle spans via `content` runs.",
       );
     }
     return ts; // a family-anchored delta is an absolute whole-node reset — legal on mixed
@@ -146,7 +163,7 @@ function liveBaseStyle(node: TextNode): WriteTextStyle {
 // (figma-free), so running it here keeps every vocabulary failure ahead of the first canvas write.
 // Takes the LIVE node (not just its type): text words compile against live facts — font identity
 // enrichment, the runs' base style, and lineClamp's bounded-width gate all read it.
-function compileDeltaPatch(changes: EditDelta, legal: ReadonlySet<string>, node: SceneNode): WriteProps {
+function compileDeltaPatch(changes: EditDelta, legal: ReadonlySet<string>, node: SceneNode, subject: string): WriteProps {
   const patch: WriteProps = {};
   compileNodeLocalProps(patch, changes, { radius: legal.has("borderRadius"), clip: legal.has("clip") });
   if (patch.effects) toFigmaEffects(patch.effects);
@@ -160,13 +177,13 @@ function compileDeltaPatch(changes: EditDelta, legal: ReadonlySet<string>, node:
     const strokes = compileLineStroke(changes);
     if (strokes) patch.strokes = strokes;
   }
-  if (changes.layout != null) Object.assign(layout, compileContainerWords(changes.layout as NonNullable<FrameProps["layout"]>, "flcm.edit.layout"));
+  if (changes.layout != null) Object.assign(layout, compileContainerWords(changes.layout as NonNullable<FrameProps["layout"]>, subject + ".layout"));
   if (Object.keys(layout).length) patch.layout = layout;
-  if (node.type === "TEXT") compileTextDeltaWords(changes, patch, node as TextNode);
+  if (node.type === "TEXT") compileTextDeltaWords(changes, patch, node as TextNode, subject);
   // Every named word compiled to nothing (all values null/undefined) — same hazard as `{}`: the
   // verb would mint an undo step for zero writes.
   if (Object.keys(patch).length === 0) {
-    throw new Error("flcm.edit: the delta compiled to nothing — every value was null/undefined. Pass a real value, or omit the prop.");
+    throw new Error(subject + ": the delta compiled to nothing — every value was null/undefined. Pass a real value, or omit the prop.");
   }
   return patch;
 }
@@ -176,13 +193,13 @@ function compileDeltaPatch(changes: EditDelta, legal: ReadonlySet<string>, node:
 // color (the text-fill sugar, exactly as flcm.text reads it), and content (create's own parser
 // over an enriched base). Runs after the layout words land on the patch — lineClamp's gate reads
 // the compiled sizing.
-function compileTextDeltaWords(changes: EditDelta, patch: WriteProps, node: TextNode): void {
+function compileTextDeltaWords(changes: EditDelta, patch: WriteProps, node: TextNode, subject: string): void {
   if (changes.textStyle != null) {
-    const ts = compileTextStyleWords(changes.textStyle, "flcm.edit.textStyle");
-    if (Object.keys(ts).length) patch.textStyle = enrichFontIdentity(ts, node);
+    const ts = compileTextStyleWords(changes.textStyle, subject + ".textStyle");
+    if (Object.keys(ts).length) patch.textStyle = enrichFontIdentity(ts, node, subject);
     const clamp = changes.textStyle.lineClamp;
     if (clamp != null) {
-      patch.maxLines = clamp === "none" ? clamp : assertLineClampCount(clamp, "flcm.edit");
+      patch.maxLines = clamp === "none" ? clamp : assertLineClampCount(clamp, subject);
       // A clamp only bites against a bounded width (create rejects the same no-op). The bound is
       // whichever wins after this edit: a sizing named in the same delta, else the live wrap mode.
       if (patch.maxLines !== "none") {
@@ -190,7 +207,7 @@ function compileTextDeltaWords(changes: EditDelta, patch: WriteProps, node: Text
         const bounded = named !== undefined ? named !== "hug" : node.textAutoResize !== "WIDTH_AND_HEIGHT";
         if (!bounded) {
           throw new Error(
-            'flcm.edit: textStyle.lineClamp needs a bounded width to truncate against — this text hugs its width. Set width (a number, "fill", or "N%") in the same edit.',
+            subject + ': textStyle.lineClamp needs a bounded width to truncate against — this text hugs its width. Set width (a number, "fill", or "N%") in the same edit.',
           );
         }
       }
@@ -205,7 +222,7 @@ function compileTextDeltaWords(changes: EditDelta, patch: WriteProps, node: Text
     node.maxLines != null && patch.maxLines !== "none"
   ) {
     throw new Error(
-      'flcm.edit: width:"hug" would unbound a clamped text — its live lineClamp (' + node.maxLines +
+      subject + ': width:"hug" would unbound a clamped text — its live lineClamp (' + node.maxLines +
         ') would never truncate again. Clear it in the same edit (textStyle: { lineClamp: "none" }) or keep a bounded width.',
     );
   }
@@ -217,10 +234,87 @@ function compileTextDeltaWords(changes: EditDelta, patch: WriteProps, node: Text
     // textStyle, mixed live base) would silently land in the DEFAULT family — reject instead.
     if (compiled.runs && compiled.runs.some((r) => namesFontIdentity(r.style) && r.style.fontFamily === undefined)) {
       throw new Error(
-        "flcm.edit: this text mixes fonts, so a styled run has no base family to resolve against — name textStyle.fontFamily in the same edit, or give each styled run its own fontFamily.",
+        subject + ": this text mixes fonts, so a styled run has no base family to resolve against — name textStyle.fontFamily in the same edit, or give each styled run its own fontFamily.",
       );
     }
     Object.assign(patch, compiled);
+  }
+}
+
+// ---- The staged pipeline. `edit` drives it once; `editMany` drives each stage across the whole
+// batch (edit-many.ts), which is what keeps every entry's gates reading the canvas at the same
+// moment. Everything below is preamble-internal — the IIFE bundle exports only the public verbs. ----
+
+// The LIVE facts a compile reads off a TEXT node, snapshotted so the post-await stage can prove
+// they still hold. Only TEXT has any: every other live read the compile makes is `node.type`, which
+// a live node cannot change. Not stored as the raw values — `fontName` is a symbol when mixed, and
+// a comparable string is what the check actually needs.
+interface LiveTextFacts { font: string; autoResize: string; maxLines: number | null }
+
+function readLiveTextFacts(node: SceneNode): LiveTextFacts | undefined {
+  if (node.type !== "TEXT") return undefined;
+  const t = node as TextNode;
+  const fn = t.fontName;
+  return {
+    font: fn === figma.mixed ? " mixed" : (fn as FontName).family + "|" + (fn as FontName).style,
+    autoResize: t.textAutoResize,
+    maxLines: t.maxLines == null ? null : t.maxLines,
+  };
+}
+
+/** One entry's compiled, ready-to-apply delta, plus what the compile read to produce it. */
+export interface EditPlan { node: SceneNode; patch: WriteProps; liveFacts: LiveTextFacts | undefined }
+
+/** Stage 2 — compile against the live node, recording every mutable fact the compile consulted. */
+export function compileEditPlan(node: SceneNode, changes: EditDelta, subject: string): EditPlan {
+  const legal = assertDeltaLegalForType(node, changes, subject);
+  // Snapshot BEFORE the compile, so the recorded facts are the ones it goes on to read.
+  const liveFacts = readLiveTextFacts(node);
+  return { node, patch: compileDeltaPatch(changes, legal, node, subject), liveFacts };
+}
+
+/** The text half of a verb's font load, or nothing when this entry touches no text. */
+export function textFontNeedOf(plan: EditPlan): TextEditFontNeed | undefined {
+  return plan.node.type === "TEXT" ? { node: plan.node as TextNode, patch: plan.patch } : undefined;
+}
+
+/**
+ * Stage 4 — everything that must read the document AFTER the verb's last await: the live-parent
+ * layout gate, and proof that the facts the compile went on (font identity, wrap mode, live clamp)
+ * survived the resource round trips. A mismatch is refused rather than papered over: the delta was
+ * enriched against a font that is gone, or gated against a wrap that has changed, so applying it
+ * would land something the agent never asked for. Zero writes either way.
+ */
+export function assertEditPlanStillApplies(plan: EditPlan, subject: string): void {
+  const { node, liveFacts } = plan;
+  const now = readLiveTextFacts(node);
+  if (liveFacts && now && (now.font !== liveFacts.font || now.autoResize !== liveFacts.autoResize || now.maxLines !== liveFacts.maxLines)) {
+    throw new Error(
+      subject + ": the text of " + JSON.stringify(node.name) + " (id " + JSON.stringify(node.id) +
+        ") changed while this call was loading fonts and images, so the delta was resolved against a node that no longer exists in that state. Nothing was applied — re-run the call.",
+    );
+  }
+  // Layout words that only mean something against the live tree (a page parent, hug legality, the
+  // hug-cycle percent) reject here like every other validation — zero writes on failure.
+  if (plan.patch.layout) assertLayoutDeltaResolvable(node, plan.patch.layout, subject);
+}
+
+/** Stage 5 — the sealed, commit-free write span for one entry. No awaits, by the lock's contract. */
+export function applyEditPlan(verb: string, { node, patch }: EditPlan, resources: RenderResources): void {
+  const fail = beginMutatingApply(verb, node);
+  try {
+    applyPaint(node, patch, resources);
+    applySceneProps(node, patch);
+    // Text BEFORE layout — create's own order (buildText: characters, then applyLeafSize): an
+    // anchor or percent in the same delta must resolve against the POST-reflow metrics, or a
+    // center anchor lands off by the text-size change and only converges on a second run.
+    // Fills still precede runs (applyPaint above), and clamp goes last — it clips against the
+    // wrap the sizing/content writes just produced.
+    if (node.type === "TEXT") applyTextProps(node as TextNode, patch, resources);
+    if (patch.layout) applyLiveNodeLayout(node, patch.layout);
+    if (node.type === "TEXT") applyTextClamp(node as TextNode, patch.maxLines);
+  } catch (cause) {
+    throw fail(cause);
   }
 }
 
@@ -233,43 +327,25 @@ function compileTextDeltaWords(changes: EditDelta, patch: WriteProps, node: Text
 // A single expression on purpose: the queue slot is reserved before edit() can possibly yield,
 // which is the lock's invocation-order guarantee (see enterMutatingVerb) — don't add work above it.
 export function edit(target: Target, changes: EditDelta): Promise<Handle> {
+  const subject = "flcm.edit";
   return enterMutatingVerb(
     "edit",
     // Prepare — serialized, read-only, apply-time-fresh: every validation and canvas read
     // (vocabulary, resolve, gates, enrichment) and every await (fonts, images) lives here; a
     // throw rejects the verb with zero writes and zero undo residue.
     async () => {
-      rejectNonDeltaWords(changes);
-      const node = await resolveTarget(target);
-      const legal = assertDeltaLegalForType(node, changes);
-      const patch = compileDeltaPatch(changes, legal, node);
-      // Layout words that only mean something against the live tree (a page parent, hug legality,
-      // the hug-cycle percent) reject here like every other validation — zero writes on failure.
-      if (patch.layout) assertLayoutDeltaResolvable(node, patch.layout);
-      // Fonts gate every reflowing text mutation, not just characters — loaded before the seal,
-      // like the image fetch below.
-      const fonts = node.type === "TEXT" ? await loadFontsForTextEdit(node as TextNode, patch) : {};
-      const images = await fetchTreeImages(patch);
-      return { node, patch, fonts, images };
+      rejectNonDeltaWords(changes, subject);
+      const plan = compileEditPlan(await resolveTarget(target), changes, subject);
+      const need = textFontNeedOf(plan);
+      const fonts = need ? await loadFontsForTextEdits([need]) : {};
+      const images = await fetchImagesForTrees([plan.patch]);
+      assertEditPlanStillApplies(plan, subject);
+      return { plan, resources: { fonts, images } };
     },
     // Apply — the sealed span: all writes, no awaits.
-    ({ node, patch, fonts, images }) => {
-      const fail = beginMutatingApply("edit", node);
-      try {
-        applyPaint(node, patch, { fonts, images });
-        applySceneProps(node, patch);
-        // Text BEFORE layout — create's own order (buildText: characters, then applyLeafSize): an
-        // anchor or percent in the same delta must resolve against the POST-reflow metrics, or a
-        // center anchor lands off by the text-size change and only converges on a second run.
-        // Fills still precede runs (applyPaint above), and clamp goes last — it clips against the
-        // wrap the sizing/content writes just produced.
-        if (node.type === "TEXT") applyTextProps(node as TextNode, patch, { fonts, images });
-        if (patch.layout) applyLiveNodeLayout(node, patch.layout);
-        if (node.type === "TEXT") applyTextClamp(node as TextNode, patch.maxLines);
-      } catch (cause) {
-        throw fail(cause);
-      }
-      return mintHandle(node);
+    ({ plan, resources }) => {
+      applyEditPlan("edit", plan, resources);
+      return mintHandle(plan.node);
     },
   );
 }

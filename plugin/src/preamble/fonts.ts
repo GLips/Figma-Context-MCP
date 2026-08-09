@@ -87,22 +87,45 @@ export function liveFontWords(fontName: { family: string; style: string }): Writ
   };
 }
 
-// Every font an edit's mutating span will touch, loaded in the verb's read-only PREPARE phase
-// (before the entry seal): fonts gate every reflowing text mutation, not just characters — size,
-// clamp, and style writes throw on an unloaded font too. Two halves: the LIVE fonts (all range
-// fonts when mixed — the reflow re-lays existing ranges), and the AUTHORED triples the appliers
-// will resolve (loadFontsForTree over a synthetic one-node tree, so edit preloads exactly the way
-// render does).
-export async function loadFontsForTextEdit(node: TextNode, patch: WriteProps): Promise<FontMap> {
-  const reflows =
-    patch.text != null || patch.runs || patch.textStyle || patch.maxLines != null ||
-    (patch.layout && (patch.layout.sizing || patch.layout.dimensions || patch.layout.percentSize));
-  if (!reflows) return {};
-  const live = node.fontName === figma.mixed ? node.getRangeAllFontNames(0, node.characters.length) : [node.fontName as FontName];
+// One text edit's node + compiled delta — the unit the load below works over. A batch hands in one
+// per entry, a single `edit` hands in one; either way the loads happen ONCE for the whole verb.
+export interface TextEditFontNeed { node: TextNode; patch: WriteProps }
+
+// Whether a compiled delta re-lays the text: fonts gate every reflowing text mutation, not just
+// characters — size, clamp, and style writes throw on an unloaded font too.
+function textEditReflows(patch: WriteProps): boolean {
+  return (
+    patch.text != null || !!patch.runs || !!patch.textStyle || patch.maxLines != null ||
+    !!(patch.layout && (patch.layout.sizing || patch.layout.dimensions || patch.layout.percentSize))
+  );
+}
+
+// Every font a mutating verb's span will touch, loaded in its read-only PREPARE phase (before the
+// entry seal). Two halves: the LIVE fonts (all range fonts when mixed — the reflow re-lays existing
+// ranges), and the AUTHORED triples the appliers will resolve (loadFontsForTree over a synthetic
+// tree, so an edit preloads exactly the way render does).
+//
+// Plural because a BATCH is one verb: N entries share one listAvailableFontsAsync inside
+// loadFontsForTree and one Promise.all over the live fonts, instead of paying a serial round trip
+// per entry. Each of those round trips is a suspension point the user can edit the document
+// across, so collapsing them is not just speed (see edit.ts's live-facts freshness check).
+export async function loadFontsForTextEdits(edits: readonly TextEditFontNeed[]): Promise<FontMap> {
+  const reflowing = edits.filter(({ patch }) => textEditReflows(patch));
+  if (!reflowing.length) return {};
+  const live: FontName[] = [];
+  for (const { node } of reflowing) {
+    if (node.fontName === figma.mixed) live.push(...node.getRangeAllFontNames(0, node.characters.length));
+    else live.push(node.fontName as FontName);
+  }
   await Promise.all(live.map((f) => figma.loadFontAsync(f)));
-  const needsAuthored = namesFontIdentity(patch.textStyle) || (patch.runs || []).some((r) => namesFontIdentity(r.style));
-  if (!needsAuthored) return {};
-  return loadFontsForTree({ type: "TEXT", textStyle: patch.textStyle, runs: patch.runs });
+  const authored = reflowing.filter(
+    ({ patch }) => namesFontIdentity(patch.textStyle) || (patch.runs || []).some((r) => namesFontIdentity(r.style)),
+  );
+  if (!authored.length) return {};
+  return loadFontsForTree({
+    type: "FRAME",
+    children: authored.map(({ patch }) => ({ type: "TEXT", textStyle: patch.textStyle, runs: patch.runs })),
+  });
 }
 
 export async function loadFontsForTree(tree: WriteNode): Promise<FontMap> {

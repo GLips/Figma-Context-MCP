@@ -966,14 +966,19 @@ function collectImageUrls(tree: WriteProps): string[] {
   return urls;
 }
 
-// Fetch bytes for every image paint in `tree` through the host channel (protocol 2), in ONE deduped
+// Fetch bytes for every image paint in `trees` through the host channel (protocol 2), in ONE deduped
 // awaitable request, BEFORE any canvas write — a fetch failure (blocked url, oversize, unreachable)
 // aborts with zero mutations. The await is the run's suspension point (the sandbox suspends while the
 // plugin relays the WS round-trip); a cancelled or disconnected run dies here when the host rejects
-// its pending fetch. Shared by render (whole tree) and edit (a delta's fill/stroke) — the walk reads
-// only paint sites, so WriteProps (no type discriminant) is the honest input.
-export async function fetchTreeImages(tree: WriteProps): Promise<Record<string, string>> {
-  const urls = Array.from(new Set(collectImageUrls(tree)));
+// its pending fetch. Shared by render (one tree) and the edit verbs (a delta's fill/stroke) — the
+// walk reads only paint sites, so WriteProps (no type discriminant) is the honest input.
+//
+// Plural because ONE VERB OWES ONE ROUND TRIP: a batch of deltas dedupes across every entry, so ten
+// entries sharing an image url fetch it once and the batch has a single suspension point.
+export async function fetchImagesForTrees(trees: readonly WriteProps[]): Promise<Record<string, string>> {
+  const all: string[] = [];
+  for (const tree of trees) for (const url of collectImageUrls(tree)) all.push(url);
+  const urls = Array.from(new Set(all));
   if (!urls.length) return {};
   if (typeof __flcmRequestImages !== "function") {
     throw new Error("flcm.image: this runtime has no image channel (__flcmRequestImages) — image fills need the live plugin bridge.");
@@ -1006,7 +1011,7 @@ export async function loadTreeResources(tree: WriteNode): Promise<RenderResource
       }
       return undefined as unknown as V;
     });
-  const settledImages = settled(fetchTreeImages(tree));
+  const settledImages = settled(fetchImagesForTrees([tree]));
   const settledFonts = settled(loadFontsForTree(tree));
   const images = await settledImages;
   const fonts = await settledFonts;

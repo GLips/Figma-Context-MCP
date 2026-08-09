@@ -710,3 +710,31 @@ test('the clamp gate holds from BOTH sides: width:"hug" on a live-clamped text r
   assert.equal(node.textTruncation, "DISABLED");
   assert.equal(node.textAutoResize, "WIDTH_AND_HEIGHT");
 });
+
+// ——— slice 4.1: the live facts a compile reads must still hold at the seal ———
+
+test("a live fact that changed during the resource round trip refuses the whole call — zero writes", async () => {
+  const node = await renderKeyedText("hello", { textStyle: { fontWeight: "bold" } });
+  const before = { ...node.fontName };
+  const logBefore = [...figma.undoLog];
+  // The image fetch is the run's suspension point, and the user has the document open across it.
+  // Standing in for that user: the channel retypes the node's font before handing the bytes back.
+  const g = globalThis as { __flcmRequestImages?: unknown };
+  g.__flcmRequestImages = async (urls: string[]) => {
+    node.fontName = { family: "Inter", style: "Regular" };
+    return Object.fromEntries(urls.map((u) => [u, Buffer.from("bytes").toString("base64")]));
+  };
+  try {
+    // fontWeight was enriched against the live (bold) identity, which is gone by the time the
+    // bytes land — so the delta describes a node that no longer exists in that state.
+    await assert.rejects(
+      edit("label", { color: image("https://cdn.example.com/a.jpg"), textStyle: { fontSize: 20 } }),
+      /changed while this call was loading fonts and images/,
+    );
+  } finally {
+    delete g.__flcmRequestImages;
+  }
+  assert.deepEqual(before, { family: "Inter", style: "Bold" });
+  assert.equal(node.fontSize, 12); // the delta never landed — still the default size
+  assert.deepEqual(figma.undoLog, logBefore); // refused in prepare: no seal, no rollback
+});

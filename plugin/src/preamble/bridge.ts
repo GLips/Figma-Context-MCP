@@ -629,10 +629,12 @@ function assertLayoutLandsUnderParent(
 // caller never assembles them (two adjacent booleans a call site could swap) and never needs the
 // primitives above. ----
 
-// Edit: the destination is where the node already sits.
-export function assertLayoutDeltaResolvable(node: any, wl: WriteLayout): void {
+// Edit: the destination is where the node already sits. `subject` names the calling verb the way
+// the other two spellings take it — `edit` and `editMany` compile through one pipeline, and an
+// entry rejected inside a batch must say which verb the agent actually called.
+export function assertLayoutDeltaResolvable(node: any, wl: WriteLayout, subject: string): void {
   const outOfFlow = wl.position === "absolute" || (wl.position !== "none" && node.layoutPositioning === "ABSOLUTE");
-  assertLayoutLandsUnderParent(node.parent, node.type, wl, isRowColumnAutoLayout(node), outOfFlow, "flcm.edit");
+  assertLayoutLandsUnderParent(node.parent, node.type, wl, isRowColumnAutoLayout(node), outOfFlow, subject);
 }
 
 // A structural verb placing a LIVE node: ask whether the words it already wears stay legal under
