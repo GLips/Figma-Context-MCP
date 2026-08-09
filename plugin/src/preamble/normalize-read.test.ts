@@ -166,8 +166,28 @@ test("beyond-CSS and CSS effects arrive in ONE read bag, and both halves land", 
 
   const out = await render(fromRead(read));
   const copy = await figma.getNodeByIdAsync(out.root.id);
-  assert.deepEqual(
-    copy.effects.map((e: { type: string }) => e.type).sort(),
-    ["DROP_SHADOW", "GLASS"],
-  );
+  // NOT sorted, on purpose: order is visible effect state, and the copy's is the READ shape's fixed key
+  // order (shadows, blurs, then the beyond-CSS forms — core/transformers/effects.ts buckets by TYPE and
+  // keeps no stack order), not the order the original carried. A design whose glass sits UNDER its shadow
+  // rebuilds with them swapped. That loss is upstream of this module — there is nothing in the spec to
+  // refuse on — so it is pinned here rather than hidden behind a sort. See the plan's Left open.
+  assert.deepEqual(copy.effects.map((e: { type: string }) => e.type), ["DROP_SHADOW", "GLASS"]);
+});
+
+test("the closed sets are actually closed — a prototype key is not a member of any of them", async () => {
+  createFigmaMock();
+  // `table[key]` on an agent-supplied string reaches Object.prototype: `type: "toString"` passed the type
+  // gate and fell out of the switch as the raw STRING, which a structural verb then reads as a live
+  // target — a copy request that moves the node instead.
+  assert.throws(() => fromRead(spec({ type: "toString" })), /toString nodes have no authored form/);
+  assert.throws(() => fromRead(spec({ type: "RECTANGLE", constructor: "x" })), /unknown read field `constructor`/);
+  assert.throws(() => fromRead(spec({ type: "FRAME", layout: { mode: "row", constructor: 1 } })), /unknown word `constructor`/);
+  // Same hazard one layer down, in the value tables css.ts keys by an agent string.
+  assert.throws(() => rect({ fill: { type: "IMAGE", imageRef: "x", scaleMode: "constructor" } }), /cropped image fill/);
+
+  // A "use" disposition still has to be a word the CONSTRUCTOR reads: an ellipse has no corners, so
+  // borderRadius is refused by name rather than accepted and dropped by compileNodeLocalProps.
+  assert.throws(() => fromRead(spec({ type: "ELLIPSE", borderRadius: "8px" })), /this ELLIPSE carries `borderRadius`/);
+  // `position` has exactly one read spelling; anything else is malformed input, not absence.
+  assert.throws(() => fromRead(spec({ type: "RECTANGLE", position: "relative" })), /spells only "absolute"/);
 });

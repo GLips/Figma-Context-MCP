@@ -117,7 +117,7 @@ function readImagePaint(value: object, field: string): ImageHashSpec {
         JSON.stringify(value) + "). Duplicate the node with flcm.clone instead, or author your own image with flcm.image(url).",
     );
   }
-  const scaleMode = READ_SCALE_MODES[String(o.scaleMode)];
+  const scaleMode = ownEntry(READ_SCALE_MODES, String(o.scaleMode));
   if (!scaleMode) {
     throw new Error(
       "flcm: " + field + ' is a cropped image fill (scaleMode "' + String(o.scaleMode) + '"). The crop lives in the paint\'s transform matrix, which the read shape does not carry, so rebuilding it would silently un-crop the image. Duplicate the node with flcm.clone to keep the crop.',
@@ -126,6 +126,13 @@ function readImagePaint(value: object, field: string): ImageHashSpec {
   const spec: ImageHashSpec = { kind: "image", hash, scaleMode };
   if (scaleMode === "TILE" && typeof o.scalingFactor === "number") spec.scalingFactor = o.scalingFactor;
   return spec;
+}
+
+// Both word tables below are indexed by an AGENT-SUPPLIED string, and a plain `table[key]` reaches
+// Object.prototype — `blendMode: "constructor"` would resolve to a function and sail through the
+// unknown-word reject. Own-property only.
+function ownEntry<T>(table: Record<string, T>, key: string): T | undefined {
+  return Object.prototype.hasOwnProperty.call(table, key) ? table[key] : undefined;
 }
 
 // ---- Blend mode (CSS mix-blend-mode name -> Figma BlendMode). Only the CSS-named modes are reachable;
@@ -151,7 +158,7 @@ const BLEND_MODES: Record<string, WriteBlendMode> = {
 };
 
 export function parseBlendMode(input: string): WriteBlendMode {
-  const mode = BLEND_MODES[String(input).trim().toLowerCase()];
+  const mode = ownEntry(BLEND_MODES, String(input).trim().toLowerCase());
   if (!mode) {
     throw new Error('flcm: unsupported blend "' + input + '" — use one of these CSS mix-blend-mode names: ' + Object.keys(BLEND_MODES).join(", ") + ". (Figma has no equivalent for pass-through or plus-lighter/plus-darker.)");
   }

@@ -26,6 +26,13 @@
 // LOUD by name, pointing at flcm.clone — the live-duplicate path that copies a node whole. The only
 // silent drops are fields that are purely DERIVED (their information is already elsewhere in the same
 // spec), each named in READ_FIELD_DISPOSITIONS with why.
+//
+// THE CEILING, stated so it isn't mistaken for a promise: this module can only refuse what the read shape
+// CARRIES. State the READ side already dropped is invisible here and rebuilds as the flcm default with no
+// error — `clipsContent`, a paint's blendMode, an image paint's opacity/rotation/filters, and the ORDER of
+// a node's effect stack are all known cases (each recorded in the plan's Left open, each a read-side fix).
+// A node whose fidelity depends on one of them is a flcm.clone case, and the agent has no way to tell from
+// the spec. Do not add a guess here to paper over one: the fix belongs where the information was lost.
 
 import { WriteNode, WriteChild } from "./ir.js";
 import { frame, text, rect, ellipse, line } from "./flcm.js";
@@ -115,14 +122,18 @@ const READ_FIELD_DISPOSITIONS: Record<keyof SimplifiedNode, ReadFieldDisposition
 // whole geometry group — are handled for every type and deliberately absent here; this table is only the
 // per-type half, so a `strokes` on a TEXT (whose vocabulary is textStyle + color) fails by name instead
 // of vanishing.
-const SHAPE_FIELDS = ["fills", "strokes", "strokeWidth", "borderRadius", "effects", "rotation"];
+const SHAPE_FIELDS = ["fills", "strokes", "strokeWidth", "effects", "rotation"];
 
 const AUTHORABLE_BY_TYPE: Record<AuthorableReadType, readonly string[]> = {
-  FRAME: [...SHAPE_FIELDS, "layout", "children"],
+  FRAME: [...SHAPE_FIELDS, "borderRadius", "layout", "children"],
   // A TEXT's paint is its `color` word, and its vocabulary is otherwise the text one: no stroke, no
   // radius, no effects, no rotation (schema.ts TextSchema = shared + size + text).
   TEXT: ["fills", "text", "textStyle", "boldWeight"],
-  RECTANGLE: SHAPE_FIELDS,
+  RECTANGLE: [...SHAPE_FIELDS, "borderRadius"],
+  // An ELLIPSE has no corners: `ellipse()` compiles with radius DISABLED (compileNodeLocalProps), so
+  // listing borderRadius here would accept a read value the constructor then drops on the floor. This
+  // is the Record's stated limit in live code — the table forces a disposition, not a consumer, so a
+  // per-type list has to match what the constructor actually reads.
   ELLIPSE: SHAPE_FIELDS,
   // A LINE paints with `stroke` and sizes on `length` alone (schema.ts LineSchema).
   LINE: ["strokes", "strokeWidth", "rotation"],
@@ -157,6 +168,13 @@ const LAYOUT_WORD_DISPOSITIONS: Record<keyof SimplifiedLayout, ReadFieldDisposit
 
 const CLONE_REMEDY = "Duplicate the live node with flcm.clone(target, parent) instead — it copies the node whole.";
 
+// Every table in this module is indexed by an AGENT-SUPPLIED string, so a plain `table[key]` reaches
+// Object.prototype: `{ type: "toString" }` passed the type gate and `{ constructor: 1 }` passed the field
+// gate, both silently. Own-property only — a closed set has to actually be closed.
+function own<T>(table: Record<string, T>, key: string): T | undefined {
+  return Object.prototype.hasOwnProperty.call(table, key) ? table[key] : undefined;
+}
+
 // ---- the verb ----
 
 /**
@@ -173,7 +191,7 @@ function buildFromRead(spec: unknown, subject: string): WriteNode {
   }
   const n = spec as Record<string, unknown> & SimplifiedNode;
   const type = assertAuthorableType(n.type, subject);
-  assertDispositions(n, READ_FIELD_DISPOSITIONS as Record<string, ReadFieldDisposition | undefined>, subject, "read field", {
+  assertDispositions(n, READ_FIELD_DISPOSITIONS as Record<string, ReadFieldDisposition>, subject, "read field", {
     type,
     authorable: AUTHORABLE_BY_TYPE[type],
   });
@@ -229,8 +247,8 @@ function assertAuthorableType(type: unknown, subject: string): AuthorableReadTyp
   if (typeof type !== "string" || !type) {
     throw new Error(subject + ": the spec has no `type` — pass a node from flcm.get (the read shape always names its type).");
   }
-  if (type in AUTHORABLE_BY_TYPE) return type as AuthorableReadType;
-  const why = UNAUTHORABLE_TYPES[type];
+  if (own(AUTHORABLE_BY_TYPE as Record<string, readonly string[]>, type)) return type as AuthorableReadType;
+  const why = own(UNAUTHORABLE_TYPES, type);
   throw new Error(
     subject + ": " + type + " nodes have no authored form — " +
       (why || "flcm's constructors build FRAME/TEXT/RECTANGLE/ELLIPSE/LINE (plus svg/path from markup you supply), and this is none of them") +
@@ -249,14 +267,14 @@ function refuse(subject: string, what: string, why: string): Error {
 // gate needs and the layout gate doesn't (a layout word means the same thing on every container).
 function assertDispositions(
   bag: Record<string, unknown>,
-  table: Record<string, ReadFieldDisposition | undefined>,
+  table: Record<string, ReadFieldDisposition>,
   subject: string,
   noun: string,
   scoped?: { type: AuthorableReadType; authorable: readonly string[] },
 ): void {
   for (const field of Object.keys(bag)) {
     if (bag[field] == null) continue; // an explicitly-undefined key is absence, not a claim
-    const disposition = table[field];
+    const disposition = own(table, field);
     if (!disposition) {
       throw new Error(
         subject + ": unknown " + noun + " `" + field + "` — that is not part of the read shape flcm.get returns. " +
@@ -302,6 +320,9 @@ function sizeProps(n: SimplifiedNode, type: AuthorableReadType, subject: string)
   // ABSOLUTE positioning flag is inert (bridge.applyChildPosition). `position` is read explicitly rather
   // than inferred from left/top: the two travel together out of a real `get`, but the module advertises
   // spread-and-modify, where a hand-set `position` must not silently do nothing.
+  if (n.position != null && n.position !== "absolute") {
+    throw new Error(subject + '.position: the read shape spells only "absolute" (a node the parent\'s auto-layout does not place) — got ' + JSON.stringify(n.position) + ".");
+  }
   if (n.left != null || n.top != null || n.position === "absolute") {
     const absolute: { x?: number; y?: number } = {};
     if (n.left != null) absolute.x = n.left;
@@ -388,7 +409,7 @@ function layoutProps(raw: unknown, subject: string): Record<string, unknown> {
   }
   for (const word of Object.keys(l)) {
     if (l[word] == null) continue;
-    const disposition = (LAYOUT_WORD_DISPOSITIONS as Record<string, ReadFieldDisposition | undefined>)[word];
+    const disposition = own(LAYOUT_WORD_DISPOSITIONS as Record<string, ReadFieldDisposition>, word);
     if (!disposition) {
       throw new Error(subject + ".layout: unknown word `" + word + "` — that is not part of the read shape's layout group.");
     }
