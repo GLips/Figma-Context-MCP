@@ -28,6 +28,10 @@ There is no autocomplete and no type-checking where your code runs (a QuickJS sa
 | `flcm.effects({...})` | an effects value | an { shadow, blur, backgroundBlur } bag |
 | `await flcm.render(tree)` | live nodes | returns { root, keyed } |
 | `await flcm.edit(target, changes)` | a nudged existing node (returns its updated Handle) | target (an flcm/key, node id, flcm.id(id), or handle), then a partial delta in the same vocabulary as create |
+| `await flcm.append(parent, thing)` | `thing` placed as the LAST child of `parent` | a parent target, then either a constructor spec (built there → { root, keyed, parent }) or a target naming a live node (MOVED there → { node, from, to }) |
+| `await flcm.prepend(parent, thing)` | the same, placed FIRST | same as append |
+| `await flcm.insertBefore(sibling, thing)` | `thing` placed just before `sibling` | a SIBLING target (the parent is inferred from it), then a spec or a live target |
+| `await flcm.insertAfter(sibling, thing)` | `thing` placed just after `sibling` | same as insertBefore |
 | `await flcm.get(target)` | a node's full read spec (values inline) | target: an flcm/key, a node id, flcm.id(id), or a handle |
 | `await flcm.find(query?, predicate?)` | matching nodes as slim handles | query { type?, name?, key?, within? } AND-combined — a filter, not an address; only `within` takes a target. Optional predicate over the full read shape (n => n.fills?.[0] === '#FFF') |
 | `await flcm.findOne(query?, predicate?)` | exactly one slim handle (throws on 0 or >1) | same query + predicate as find |
@@ -451,6 +455,27 @@ On a node type flcm can't create (GROUP, INSTANCE, COMPONENT, …) only the shar
 - **An empty delta is rejected**, not silently committed — an empty edit would still mint an undo step.
 - **Each edit is one undo step.** The whole delta validates before the first write; if Figma refuses a write mid-apply, the edit rolls back to how the node was and the error carries the target's identity, Figma's reason, and how many earlier mutating calls in the run still stand.
 - Delta values are **absolute** (a fill, an opacity), never relative (`+10`) — re-running the same edit converges instead of compounding.
+
+## Tree shape — placing, moving, removing
+
+Tree shape is its own set of verbs, and **position is the verb** — there is no index argument and no options bag. `flcm.append(parent, thing)` and `flcm.prepend(parent, thing)` take the parent; `flcm.insertBefore(sibling, thing)` and `flcm.insertAfter(sibling, thing)` take a **sibling** and work out the parent from it.
+
+`thing` is either of two things, and they mean what they mean in the DOM:
+
+- a **constructor spec** — `flcm.frame(...)`, `flcm.text(...)`, an inert tree — which is built inside the destination. Returns `{ root, keyed, parent }`: the same `root`/`keyed` `render` gives you, plus the attach point.
+- a **target naming a live node** (an flcm/key, a node id, `flcm.id(id)`, or a handle) — which **moves** that node there, exactly as `appendChild` moves an attached DOM node. Returns `{ node, from, to }`.
+
+Every return carries the subject plus each container whose geometry the operation could have changed — a hugging parent reflows whenever its children change, and those are the nodes you would otherwise have to re-read. They are flat handles with fresh geometry, never nested trees; `get` is still how you dive. A container field is absent when that container is the page (a page has no box to measure), and `from` is absent when you reordered inside one parent.
+
+### Rules
+
+- **Sizing that depends on the parent works on insert.** The node is attached *before* it is sized, so `width: "fill"` on an appended spec fills the destination — the ordering hazard is handled for you, not something to work around.
+- **Layout legality is re-asked against the DESTINATION.** The same rule set create and edit enforce, with the new parent's facts: `"fill"`/`"N%"` into a page parent, a TEXT `height: "fill"` landing out of a row/column flow, a percent child of a hugging auto-layout parent, or any parent-relative word under a GRID parent each reject loud, before anything moves. A layout that was legal where a node sat is not automatically legal where it lands.
+- **A move re-aims the moved node's fill.** `"fill"` is stored as a mark on the parent's *primary* or *counter* axis, and those axes move with the node — so a moved node's fill is cleared and re-applied against the new parent (filling a row's width becomes filling a column's width, and a fill into a free-form parent covers its box). Fixed sizes are untouched.
+- **A stretch container does not stretch what you insert.** Figma stores no container-level `alignItems: "stretch"` — a stretched child is indistinguishable from one that asked for counter-axis `"fill"` itself — so an inserted child doesn't inherit it. Re-assert it with `flcm.edit(parent, { layout: { alignItems: "stretch" } })`, which re-synthesizes the marks over every child including the new one.
+- **Component instances are closed to structural writes.** Placing into (or moving out of) an instance or anything inside one rejects loud, naming the instance: Figma won't let a plugin change an instance's tree shape. Edit the main component it comes from — flcm never auto-detaches.
+- **A node can't be placed inside itself or its own subtree**, and the refusal names both nodes rather than surfacing Figma's own cycle error.
+- **Each call is one undo step**, with the same contract as `edit`: everything validates before the first write, and a Figma refusal mid-apply rolls the whole call back.
 
 ## Seeing what you built (get_screenshot)
 

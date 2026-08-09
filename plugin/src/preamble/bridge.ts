@@ -73,7 +73,7 @@ const AUTO_LAYOUT_MODES = ["HORIZONTAL", "VERTICAL", "GRID"];
 // assigned its cells — when it does, this predicate is where the rule lands, not six inlined
 // comparisons. AUTO_LAYOUT_MODES above differs on purpose: for read-side geometry a GRID parent DOES
 // place its children, so left/top stay omitted.
-function isRowColumnAutoLayout(node: any): boolean {
+export function isRowColumnAutoLayout(node: any): boolean {
   return node.layoutMode === "HORIZONTAL" || node.layoutMode === "VERTICAL";
 }
 

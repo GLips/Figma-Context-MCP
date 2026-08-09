@@ -23,7 +23,7 @@
 import { z } from "zod";
 import type {
   FillInput, WriteCssEffects, PaintSpec, EffectSpec, GradientStop, WriteNode, WriteChild, Handle,
-  PinX, PinY, Target, RawIdRef, SlimHandle, FindQuery, ReadPredicate,
+  PinX, PinY, Target, RawIdRef, SlimHandle, FindQuery, ReadPredicate, InsertResult, MoveResult,
 } from "./ir.js";
 // The read verbs return the canonical read shape the shared simplify core emits. Relative (not ~/) so the
 // root toolchain, which imports this module for docs generation, resolves it without the plugin's paths.
@@ -439,6 +439,15 @@ export interface Flcm {
   // call: the whole delta validates before the first write, and a post-validation Figma refusal
   // rolls the verb back (commit-then-undo) — the canvas is never half-a-verb.
   edit(target: Target, changes: EditDelta): Promise<Handle>;
+  // Tree shape, DOM-style — position is the verb, and the thing placed is either a constructor
+  // spec (built there) or a target naming a live node (MOVED there, like the DOM). append/prepend
+  // take the parent; insertBefore/insertAfter take a sibling and infer the parent from it. A spec
+  // returns render's `{ root, keyed }` plus the attach point; a live node returns
+  // `{ node, from, to }`.
+  append(parent: Target, thing: WriteNode | Target): Promise<InsertResult | MoveResult>;
+  prepend(parent: Target, thing: WriteNode | Target): Promise<InsertResult | MoveResult>;
+  insertBefore(sibling: Target, thing: WriteNode | Target): Promise<InsertResult | MoveResult>;
+  insertAfter(sibling: Target, thing: WriteNode | Target): Promise<InsertResult | MoveResult>;
   // Full inspect: the node's styling as the EXPANDED canonical read shape — the same vocabulary
   // figma-mcp's REST read emits, every value inline (no styles refs), for any node type.
   get(target: Target): Promise<SimplifiedNode>;
@@ -462,7 +471,7 @@ export interface Flcm {
 // `schema` links a verb to the prop schema whose fields the reference renders under it. ----
 // `category` groups verbs for the quick-start's compact per-group rendering (the ≤2KB budget can't afford a
 // line per verb). The verb TABLE still lists each verb in full — only the quick-start groups.
-export type VerbCategory = "build" | "value" | "render" | "edit" | "read" | "target";
+export type VerbCategory = "build" | "value" | "render" | "edit" | "structure" | "read" | "target";
 
 export interface VerbDoc {
   signature: string;
@@ -470,6 +479,11 @@ export interface VerbDoc {
   args: string;
   category: VerbCategory;
   schema?: z.ZodObject;
+  // The ≤2KB quick-start spelling, when the full signature doesn't fit its budget. Verbs that
+  // differ only in WHERE they place (append/prepend, insertBefore/insertAfter) fold into one
+  // entry: the first of the pair carries the combined form, the second carries "" and prints
+  // nothing. The verb TABLE below is unaffected — it always renders the full `signature`.
+  short?: string;
 }
 
 export const VERBS: VerbDoc[] = [
@@ -485,6 +499,10 @@ export const VERBS: VerbDoc[] = [
   { category: "value", signature: "flcm.effects({...})", builds: "an effects value", args: "an { shadow, blur, backgroundBlur } bag", schema: EffectsSchema },
   { category: "render", signature: "await flcm.render(tree)", builds: "live nodes", args: "returns { root, keyed }" },
   { category: "edit", signature: "await flcm.edit(target, changes)", builds: "a nudged existing node (returns its updated Handle)", args: "target (an flcm/key, node id, flcm.id(id), or handle), then a partial delta in the same vocabulary as create", schema: EditSchema },
+  { category: "structure", signature: "await flcm.append(parent, thing)", builds: "`thing` placed as the LAST child of `parent`", args: "a parent target, then either a constructor spec (built there → { root, keyed, parent }) or a target naming a live node (MOVED there → { node, from, to })", short: "await append/prepend(parent, spec|target)" },
+  { category: "structure", signature: "await flcm.prepend(parent, thing)", builds: "the same, placed FIRST", args: "same as append", short: "" },
+  { category: "structure", signature: "await flcm.insertBefore(sibling, thing)", builds: "`thing` placed just before `sibling`", args: "a SIBLING target (the parent is inferred from it), then a spec or a live target", short: "await insertBefore/insertAfter(sibling, spec|target)" },
+  { category: "structure", signature: "await flcm.insertAfter(sibling, thing)", builds: "`thing` placed just after `sibling`", args: "same as insertBefore", short: "" },
   { category: "read", signature: "await flcm.get(target)", builds: "a node's full read spec (values inline)", args: "target: an flcm/key, a node id, flcm.id(id), or a handle" },
   { category: "read", signature: "await flcm.find(query?, predicate?)", builds: "matching nodes as slim handles", args: "query { type?, name?, key?, within? } AND-combined — a filter, not an address; only `within` takes a target. Optional predicate over the full read shape (n => n.fills?.[0] === '#FFF')" },
   { category: "read", signature: "await flcm.findOne(query?, predicate?)", builds: "exactly one slim handle (throws on 0 or >1)", args: "same query + predicate as find" },

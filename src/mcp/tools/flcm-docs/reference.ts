@@ -31,6 +31,8 @@ import {
   EDIT_INTRO,
   EDIT_REMOVAL,
   EDIT_RULES,
+  STRUCTURE_INTRO,
+  STRUCTURE_RULES,
 } from "./narrative.js";
 import { EXAMPLES } from "./examples.js";
 
@@ -219,6 +221,12 @@ const SECTIONS: Section[] = [
       `${EDIT_REMOVAL}\n\n${EDIT_RULES}`,
   },
   {
+    id: "structure",
+    title: "Tree shape — placing, moving, removing",
+    blurb: "append/prepend/insertBefore/insertAfter against live nodes",
+    body: () => `${STRUCTURE_INTRO}\n\n${STRUCTURE_RULES}`,
+  },
+  {
     id: "verify",
     title: "Seeing what you built (get_screenshot)",
     blurb: "the build → screenshot → look → fix loop, and the raw figma.* escape hatch",
@@ -266,17 +274,24 @@ const CATEGORY_LABELS: Record<VerbCategory, string> = {
   value: "value ",
   render: "render",
   edit: "edit  ",
+  structure: "tree  ",
   read: "read  ",
   target: "target",
 };
 
+// The `flcm.` prefix is stated ONCE in the block header rather than repeated per verb: at 24 verbs
+// that repetition alone costs ~120 bytes of a 2048-byte budget, and the budget is the binding
+// constraint (see QUICKSTART_LIMIT_BYTES). A verb whose `short` is "" folds into a sibling's
+// combined spelling and prints nothing.
 function quickStartVerbLines(): string {
   // Map preserves insertion order, so categories print in first-seen VERBS order (no separate order array).
   const byCategory = new Map<VerbCategory, string[]>();
   for (const v of VERBS) {
+    const spelling = (v.short ?? v.signature).replace(/\bflcm\./g, "");
+    if (!spelling) continue;
     const sigs = byCategory.get(v.category);
-    if (sigs) sigs.push(v.signature);
-    else byCategory.set(v.category, [v.signature]);
+    if (sigs) sigs.push(spelling);
+    else byCategory.set(v.category, [spelling]);
   }
   return [...byCategory]
     .map(([cat, sigs]) => `  ${CATEGORY_LABELS[cat]}: ${sigs.join(", ")}`)
@@ -295,11 +310,10 @@ DESCRIBE an inert tree, then RENDER once:
   const t = flcm.frame({ layout:{ mode:"column", gap:16 } }, [ flcm.text("Hi",{ color:"#111" }) ]);
   const out = await flcm.render(t);   // creates nodes → { root, keyed }
 
-VERBS (nothing else is on \`flcm\`):
+VERBS — all on \`flcm.\`, nothing else is:
 ${verbLines}
 
 MUST-KNOW
-- Constructors are inert — only \`await flcm.render(tree)\` creates anything.
 - Return ids/handles, NEVER live Figma nodes (they can't cross the bridge).
 - width/height & layout.gap/padding are px NUMBERS (w/h also "fill"/"hug"); colors/gradients/shadows ARE CSS strings.
 - Anything outside the documented CSS subset FAILS LOUD, never wrong pixels.

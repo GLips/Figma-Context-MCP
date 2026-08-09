@@ -28,7 +28,7 @@ import { parseInlineMarkdown, MdSegment } from "./markdown.js";
 import { linearGradient, radialGradient } from "./paint.js";
 import { layerBlurFromCssPx, backgroundBlurFromCssPx, shadow, glass, noise, texture, progressiveBlur } from "./effects.js";
 import { parseColor, parseFill, parseCssEffects, parseBlendMode, length, lineHeight, letterSpacing, isPercent, percent } from "./css.js";
-import { buildNode, placeRootOnPage, settleHandles, resolvePercents, RenderCtx } from "./bridge.js";
+import { buildNode, placeRootOnPage, settleHandles, resolvePercents, RenderCtx, RenderResources } from "./bridge.js";
 import { enterMutatingVerb } from "./mutation-lock.js";
 import { get, find, findOne, selection } from "./read.js";
 import { rejectUnknownKeys } from "./validate.js";
@@ -981,6 +981,39 @@ export async function fetchTreeImages(tree: WriteProps): Promise<Record<string, 
   return __flcmRequestImages(urls);
 }
 
+// The two read-only resource loads a tree needs before ANY node is created — fonts and image
+// bytes, in parallel (neither depends on the other, and they're a run's two slowest awaits).
+// Shared by render and the structural insert verbs, which owe the same guarantee: a blocked url,
+// an oversize image, or an unreachable host aborts with zero mutations.
+//
+// Both settle BEFORE this resolves or rejects (hand-rolled: the tsconfig lib pins the QuickJS
+// floor below ES2020's allSettled). A fail-fast Promise.all would release the verb's queue slot
+// while the sibling await is still in flight — the next verb's prepare could then issue a second
+// image request beside the orphaned one, breaking "one in-flight fetch per run" (the host comment
+// relies on it). A separate `failed` flag, not a sentinel on the reason: a promise can legally
+// reject with undefined, and mistaking that for success would carry a missing resource map into
+// the SEALED apply span. Both catch handlers attach before either await — attaching the second
+// only after the first settles would leave an early font rejection briefly unhandled and
+// mis-order which failure wins.
+export async function loadTreeResources(tree: WriteNode): Promise<RenderResources> {
+  let failed = false;
+  let firstFailure: unknown;
+  const settled = <V>(p: Promise<V>) =>
+    p.catch((err: unknown) => {
+      if (!failed) {
+        failed = true;
+        firstFailure = err;
+      }
+      return undefined as unknown as V;
+    });
+  const settledImages = settled(fetchTreeImages(tree));
+  const settledFonts = settled(loadFontsForTree(tree));
+  const images = await settledImages;
+  const fonts = await settledFonts;
+  if (failed) throw firstFailure;
+  return { images, fonts };
+}
+
 // render(tree) — the one place nodes are created. Loads fonts, walks the WriteNode tree, stamps each
 // `key` into pluginData('flcm/key'), and returns the root handle plus a map of every keyed node. Only
 // keyed nodes appear in `keyed`; a duplicate key within one render is a loud error (in bridge).
@@ -1014,32 +1047,7 @@ function render(tree: WriteNode): Promise<{ root: Handle; keyed: Record<string, 
       if (tree.layout) {
         assertSizingResolvesAgainstParentFrame(tree.layout, true, "flcm");
       }
-      // Settle BOTH before this slot resolves or rejects (hand-rolled: the tsconfig lib pins the
-      // QuickJS floor below ES2020's allSettled). A fail-fast Promise.all would release the queue
-      // slot while the sibling await is still in flight — the next verb's prepare could then
-      // issue a second image request beside the orphaned one, breaking "one in-flight fetch per
-      // run" (the host comment relies on it).
-      // A separate `failed` flag, not a sentinel on the reason: a promise can legally reject
-      // with undefined, and mistaking that for success would carry a missing resource map into
-      // the SEALED apply span. Both catch handlers attach before either await — attaching the
-      // second only after the first settles would leave an early font rejection briefly
-      // unhandled and mis-order which failure wins.
-      let failed = false;
-      let firstFailure: unknown;
-      const settled = <V>(p: Promise<V>) =>
-        p.catch((err: unknown) => {
-          if (!failed) {
-            failed = true;
-            firstFailure = err;
-          }
-          return undefined as unknown as V;
-        });
-      const settledImages = settled(fetchTreeImages(tree));
-      const settledFonts = settled(loadFontsForTree(tree));
-      const images = await settledImages;
-      const fonts = await settledFonts;
-      if (failed) throw firstFailure;
-      return { images, fonts };
+      return loadTreeResources(tree);
     },
     // Apply — node creation, sealed as one undo step.
     ({ images, fonts }) => {

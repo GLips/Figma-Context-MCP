@@ -23,6 +23,10 @@ const COPY_FIELDS = ["name", "layoutMode", "itemSpacing", "paddingTop", "padding
   "cornerRadius", "opacity", "visible", "rotation", "characters", "fontSize", "textAutoResize",
   "_fixedW", "_fixedH"];
 
+// The node types that hold children (Figma's ChildrenMixin). See the constructor: only these get
+// appendChild/insertChild, because a leaf node genuinely has neither.
+const CONTAINER_TYPES = ["PAGE", "FRAME", "GROUP", "COMPONENT", "COMPONENT_SET", "INSTANCE", "SECTION"];
+
 // Every per-range styling bucket the setRange* recorders write — the set a `characters` write clears.
 const RANGE_BUCKETS = ["_rangeFonts", "_rangeSizes", "_rangeFills", "_rangeLineHeights",
   "_rangeLetterSpacings", "_rangeDecorations", "_rangeHyperlinks"];
@@ -80,6 +84,14 @@ class Node {
     if (type === "RECTANGLE" || type === "ELLIPSE" || type === "POLYGON" || type === "STAR") { this._fixedW = 100; this._fixedH = 100; }
     if (type === "LINE") { this._fixedW = 100; this._fixedH = 0; }
     if (type === "VECTOR") { this._fixedW = 24; this._fixedH = 24; this.vectorPaths = []; }
+    // Only a ChildrenMixin node carries appendChild/insertChild — a live RectangleNode has
+    // neither, and the structural verbs' container gate keys on exactly that, so a mock that
+    // handed them to every node would let "append into a rect" pass here and fail in Figma.
+    // Bound per instance (not on the prototype) because that presence IS the modelled fact.
+    if (CONTAINER_TYPES.indexOf(type) !== -1) {
+      this.appendChild = (child) => this._appendChild(child);
+      this.insertChild = (index, child) => this._insertChild(index, child);
+    }
     this._plugin = {};
     // prototyping reactions — the mock can't run present mode, but it STORES them so a scenario can
     // assert the right trigger/action/destination were wired (setReactionsAsync replaces, like live).
@@ -92,12 +104,12 @@ class Node {
 
   get _isAuto() { return this.layoutMode === "HORIZONTAL" || this.layoutMode === "VERTICAL"; }
 
-  appendChild(child) {
+  _appendChild(child) {
     if (child.parent) child.parent.children = child.parent.children.filter((c) => c !== child);
     child.parent = this;
     this.children.push(child);
   }
-  insertChild(index, child) {
+  _insertChild(index, child) {
     // Match live Figma exactly (GROUNDED): when `child` is already in THIS parent, `index` is
     // interpreted against the PRE-removal array — Figma compensates for the node's own slot, so
     // insertChild(3, B@1) on [A,B,C,D] yields [A,C,B,D] (lands at 2), and insertChild(2, B@1) is a

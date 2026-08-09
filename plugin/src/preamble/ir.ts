@@ -332,6 +332,26 @@ export interface SlimHandle extends Identity {
   childCount?: number;
 }
 
+// ---- What the structural verbs return. Every one carries the SUBJECT plus each container whose
+// geometry the operation could have moved — a hug parent reflows whenever its children change, and
+// those are exactly the nodes an agent would otherwise re-read. Flat handles with fresh geometry,
+// a few dozen tokens each; never nested trees (dive with `get`). A container field is ABSENT when
+// the container is the page: a page has no box to measure. ----
+
+// Placing a constructor spec: render's own `{ root, keyed }` (one vocabulary — an agent that
+// renders and an agent that appends read the same fields) plus the attach point.
+export interface InsertResult { root: Handle; keyed: Record<string, Handle>; parent?: Handle }
+
+// Placing (or `move`-ing) a LIVE node: the node plus both ends of the reparent. `from` is absent
+// on a reorder inside one parent — `to` already names it.
+export interface MoveResult { node: Handle; from?: Handle; to?: Handle }
+
+export interface CloneResult { node: Handle; parent?: Handle }
+
+// `remove` can't hand back a handle for a node that no longer exists, so it names the id it
+// deleted — enough for the agent to scrub any handle it was still holding.
+export interface RemoveResult { removedId: string; parent?: Handle }
+
 // A locate query: the declarative facets find/findOne match, AND-combined. `type` and `key` are exact;
 // `name` is a case-insensitive substring (layer names are fuzzy — findOne's cardinality guard catches an
 // over-broad match). `within` scopes the scan to a subtree (target-by-shape, default: current page).
