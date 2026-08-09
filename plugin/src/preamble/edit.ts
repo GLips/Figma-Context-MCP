@@ -22,7 +22,8 @@
 
 import { WriteProps, WriteType, WriteLayout, WriteTextStyle, Target, Handle, EDIT_TYPE_WORD_GROUPS, namesFontIdentity } from "./ir.js";
 import { resolveTarget } from "./read.js";
-import { enterMutatingVerb, committedVerbCount } from "./mutation-lock.js";
+import { enterMutatingVerb } from "./mutation-lock.js";
+import { mutatingVerbError } from "./verb-error.js";
 import {
   applyPaint, applySceneProps, mintHandle, applyLiveNodeLayout, assertLayoutDeltaResolvable,
   applyTextProps, applyTextClamp,
@@ -224,38 +225,6 @@ function compileTextDeltaWords(changes: EditDelta, patch: WriteProps, node: Text
   }
 }
 
-// The invariant-2 pointer error: the verb, how much of the run stands, the target's identity (the
-// same fields a find hit carries, so the agent re-targets without re-reading), and the cause. A
-// Figma refusal names its own setter ("in set_fills: …"); an flcm-prefixed cause is our own throw,
-// so don't pin it on Figma. A refusal on a node inside an INSTANCE names the instance: many props
-// are legal overrides but Figma rejects the rest ("cannot be overridden"), and the fix is editing
-// the main component — flcm never auto-detaches (detach churns ids, killing the agent's handles).
-function editPointerError(identity: ReturnType<typeof identityOf>, cause: unknown, node: SceneNode): Error {
-  const message = cause instanceof Error ? cause.message : String(cause);
-  const who =
-    identity.type + " " + JSON.stringify(identity.name) + " (id " + JSON.stringify(identity.id) +
-    (identity.key ? ", key " + JSON.stringify(identity.key) : "") + ")";
-  const isFigmaRefusal = !message.startsWith("flcm");
-  const refusal = isFigmaRefusal ? "Figma refused a write on " : "failed mid-apply on ";
-  const instanceHost = isFigmaRefusal ? instanceAncestorOf(node) : null;
-  const instanceNote = instanceHost
-    ? " The target lives inside instance " + JSON.stringify(instanceHost.name) + " (id " + JSON.stringify(instanceHost.id) +
-      ") — Figma forbids overriding some properties on instance children; edit the component it comes from (flcm never auto-detaches)."
-    : "";
-  return new Error(
-    "flcm.edit: " + refusal + who + " — " + message + ". " +
-      "This edit rolled back to its entry seal (the canvas holds none of it); the " + committedVerbCount() +
-      " mutating call(s) before it in this run committed and stand." + instanceNote,
-  );
-}
-
-function instanceAncestorOf(node: SceneNode): SceneNode | null {
-  for (let p = (node as { parent?: BaseNode | null }).parent; p && p.type !== "PAGE"; p = p.parent) {
-    if (p.type === "INSTANCE") return p as SceneNode;
-  }
-  return null;
-}
-
 /**
  * flcm.edit(target, changes) — nudge an existing node. Resolves the target (key | id | flcm.id() |
  * handle), validates the whole delta before the first write, applies it through the bridge's
@@ -301,7 +270,7 @@ export function edit(target: Target, changes: EditDelta): Promise<Handle> {
         if (patch.layout) applyLiveNodeLayout(node, patch.layout);
         if (node.type === "TEXT") applyTextClamp(node as TextNode, patch.maxLines);
       } catch (cause) {
-        throw editPointerError(identity, cause, node);
+        throw mutatingVerbError("edit", identity, cause, node);
       }
       return mintHandle(node);
     },

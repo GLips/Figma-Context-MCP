@@ -588,7 +588,7 @@ export function applyLiveNodeLayout(node: any, wl: WriteLayout): void {
 // modes: an AUTO-mode axis that the grandparent stretches reports FILL — the parent's size is
 // realized from above, the child's percent resolves against it, and no cycle exists. Reading
 // primary/counterAxisSizingMode here would reject that valid case as a hug.
-function parentHugFacts(parent: any): ParentFlowFacts {
+export function parentHugFacts(parent: any): ParentFlowFacts {
   const parentIsAuto = !!parent && isRowColumnAutoLayout(parent);
   if (!parentIsAuto) return { parentIsAuto: false, hugW: false, hugH: false };
   return {
@@ -598,25 +598,122 @@ function parentHugFacts(parent: any): ParentFlowFacts {
   };
 }
 
-// The edit path's prepare-phase gate (before the entry seal) — every reject fires before the
-// first canvas write. The RULES all live in layout-legality.ts (the one authority both verbs
-// consult, so they cannot drift); this function's job is purely to supply the LIVE facts the
-// pure rules can't read: the page-shaped parent, the delta-or-live container mode, the child's
-// EFFECTIVE flow position (a delta rarely names `absolute`, so an already-ABSOLUTE child threads
-// its live positioning — out of flow it doesn't feed the parent's hug, and the cycle can't form).
-export function assertLayoutDeltaResolvable(node: any, wl: WriteLayout): void {
-  const parent = node.parent;
+// The live-facts gate every mutating verb consults before its entry seal — one question ("can
+// these layout words land on this node under THAT parent?"), asked against an EXPLICIT
+// destination. The RULES all live in layout-legality.ts (the one authority, so verbs cannot
+// drift); this function's job is purely to supply the LIVE facts the pure rules can't read.
+// The parent is a PARAMETER, not `node.parent`, because that is exactly what a structural verb
+// changes: a moved node's layout was legal where it sat, not necessarily where it lands.
+//
+//   `isContainer`   — will the node itself lay out row/column children (edit: live-or-delta mode).
+//   `isOutOfFlow`   — the node's EFFECTIVE positioning after this call. A delta rarely names
+//                     `absolute`, so an already-ABSOLUTE child threads its live positioning: out
+//                     of flow it doesn't feed the parent's hug, and the percent cycle can't form.
+export function assertLayoutLandsUnderParent(
+  parent: any, nodeType: string, wl: WriteLayout, isContainer: boolean, isOutOfFlow: boolean, subject: string,
+): void {
   if (parent && parent.type === "PAGE") {
-    assertSizingResolvesAgainstParentFrame(wl, false, "flcm.edit");
+    assertSizingResolvesAgainstParentFrame(wl, false, subject);
   }
-  assertLayoutRealizableForType(node.type, wl, isRowColumnAutoLayout(node), "flcm.edit");
-  const willBeAbsolute = wl.position === "absolute" || (wl.position !== "none" && node.layoutPositioning === "ABSOLUTE");
-  assertTextFillHeightInFlow(node.type, wl, !!parent && isRowColumnAutoLayout(parent), willBeAbsolute, "flcm.edit");
-  assertNoParentRelativeWordsUnderGrid(wl, !!parent && parent.layoutMode === "GRID", "flcm.edit");
+  assertLayoutRealizableForType(nodeType, wl, isContainer, subject);
+  assertTextFillHeightInFlow(nodeType, wl, !!parent && isRowColumnAutoLayout(parent), isOutOfFlow, subject);
+  assertNoParentRelativeWordsUnderGrid(wl, !!parent && parent.layoutMode === "GRID", subject);
   if (wl.percentSize) {
-    const position = wl.position != null ? wl.position : node.layoutPositioning === "ABSOLUTE" ? "absolute" : undefined;
-    assertPercentResolvable({ ...wl, position }, parentHugFacts(parent), "flcm.edit");
+    assertPercentResolvable({ ...wl, position: isOutOfFlow ? "absolute" : wl.position }, parentHugFacts(parent), subject);
   }
+}
+
+// Edit's spelling of the gate above: the destination is where the node already sits.
+export function assertLayoutDeltaResolvable(node: any, wl: WriteLayout): void {
+  const outOfFlow = wl.position === "absolute" || (wl.position !== "none" && node.layoutPositioning === "ABSOLUTE");
+  assertLayoutLandsUnderParent(node.parent, node.type, wl, isRowColumnAutoLayout(node), outOfFlow, "flcm.edit");
+}
+
+// The layout words a LIVE node carries that MEAN SOMETHING ABOUT ITS PARENT — the only intent a
+// reparent invalidates, and the only intent readable back off the canvas. "fill" survives as the
+// flow marks (layoutGrow/STRETCH, reported through layoutSizing*) and out-of-flow survives as
+// layoutPositioning; a percent was folded to pixels at apply and a fixed/hug axis is node-local,
+// so neither is here. Feeds both halves of a structural move: the destination gate above, and the
+// re-aim that re-applies the intent against the new parent's axes.
+export function liveParentRelativeWords(node: any): WriteLayout {
+  const wl: WriteLayout = {};
+  const sizing: { horizontal?: Sizing; vertical?: Sizing } = {};
+  if (convertSizing(node.layoutSizingHorizontal) === "fill") sizing.horizontal = "fill";
+  if (convertSizing(node.layoutSizingVertical) === "fill") sizing.vertical = "fill";
+  if (sizing.horizontal || sizing.vertical) wl.sizing = sizing;
+  if (node.layoutPositioning === "ABSOLUTE") wl.position = "absolute";
+  return wl;
+}
+
+// Settle a node that just changed parents: drop the flow marks it wore under its OLD parent, then
+// re-apply its parent-relative intent against the new one through the create/edit appliers. The
+// clear is load-bearing and unconditional — layoutGrow means "the parent's PRIMARY axis" and
+// STRETCH means "its COUNTER axis", so a row→column move silently re-aims a width-fill into a
+// height-fill unless both marks go first (the same re-aim clearContainerFlowMarks does when a
+// container flips direction). NOT lifted, for the same reason it isn't there: the
+// hug-beats-stretch primaryAxisSizingMode pin, which is indistinguishable from an authored fixed
+// size once written.
+export function resettleMovedNode(node: any, wl: WriteLayout): void {
+  node.layoutGrow = 0;
+  if (node.layoutAlign === "STRETCH") node.layoutAlign = "INHERIT";
+  applyLiveNodeLayout(node, wl);
+}
+
+// Which appliers govern a child under a given parent: a POSITIONED child (any ABSOLUTE child, or
+// any child of a free-form parent) is covered + constrained; an IN-FLOW auto-layout child reflows
+// via layoutGrow/STRETCH instead, on which constraints are inert. One predicate, because the
+// create walk both routes on it and records the covered children for its second cover pass.
+function isPositionedChild(parentIsAuto: boolean, cl: WriteLayout): boolean {
+  return cl.position === "absolute" || !parentIsAuto;
+}
+
+// The parent-side facts a spec child is settled against. The flow facts are ParentFlowFacts (the
+// percent rule's own shape); `crossStretch` rides along because container-level `alignItems:
+// "stretch"` intent is never stored — not by Figma, not by us (see setContainerStretchMarks) — so
+// only a caller holding the parent's SPEC can state it. A caller inserting into a LIVE parent
+// passes false and says so in its docs: the marks are re-synthesized by editing the container.
+export interface SpecParentFacts extends ParentFlowFacts {
+  crossStretch: boolean;
+  subject: string; // the verb name the shared legality rules prefix their rejections with
+}
+
+// THE attach-then-size entry: build one spec child and settle it into `parent`. Shared by the
+// create walk (parent = the frame it is assembling) and the structural insert verbs (parent = a
+// live destination), so a subtree lands the same way whichever verb placed it.
+//
+// The ORDER is invariant 3's hazard in miniature and the whole reason this is one function: the
+// child is attached BEFORE any child-side sizing runs, because "fill"/"hug" are only legal once
+// the node is inside the parent that resolves them. `place` performs the attachment — appending
+// at the end for create, at an index for prepend/insertBefore — so WHERE stays the caller's while
+// the ordering stays here.
+export function attachSpecChild(
+  parent: any, wn: WriteNode, ctx: RenderCtx, facts: SpecParentFacts, place: (child: any) => void,
+): any {
+  const cl = wn.layout || {};
+  // Fail loud on the one unresolvable percent (in-flow %-size against a hugging auto-layout parent)
+  // before building the node, so a bad spec doesn't orphan a live node on the canvas. Every other
+  // percent/anchor is recorded and resolved in the post-walk pass (resolvePercents) against realized size.
+  assertPercentResolvable(cl, facts, facts.subject);
+  assertTextFillHeightInFlow(wn.type, cl, facts.parentIsAuto, cl.position === "absolute", facts.subject);
+  const child = buildNode(wn, ctx);
+  place(child);
+  if (cl.percentSize || cl.percentPos || (cl.position === "absolute" && cl.anchor)) {
+    ctx.pending.push({ node: child, layout: cl, parent });
+  }
+  if (cl.position === "absolute") applyChildPosition(parent, child, cl);
+  if (isPositionedChild(facts.parentIsAuto, cl)) {
+    coverChild(parent, child, cl);
+    applyConstraints(child, wn.layout);
+  } else {
+    applyChildFill(parent, child, cl, facts.crossStretch);
+    // An explicit pin is STORED even in flow — constraints are inert on an in-flow auto-layout
+    // child, but they govern the moment it leaves the flow, and edit's applyPinDelta writes the
+    // word unconditionally. applyPinDelta, NOT applyConstraints: in flow, fill rides layoutGrow,
+    // so deriving the unnamed axis from sizing intent (fill→STRETCH) would store a constraint
+    // the author never spoke — and one the same pin through edit would leave at the default.
+    if (cl.pin) applyPinDelta(child, cl.pin);
+  }
+  return child;
 }
 
 function buildFrame(wn: WriteNode, ctx: RenderCtx): any {
@@ -632,49 +729,26 @@ function buildFrame(wn: WriteNode, ctx: RenderCtx): any {
   applyPaint(f, wn, ctx);
 
   const mode = layout.mode;
-  const crossStretch = layout.alignItems === "stretch";
   const isAutoParent = mode === "row" || mode === "column";
   // The hug facts answer from the AUTHORED spec — the frame's live sizing modes don't exist until
   // applyOwnSize runs after the children (see assertPercentResolvable's contract).
   const specSizing = layout.sizing || {};
-  const parentHugsW = !specSizing.horizontal || specSizing.horizontal === "hug";
-  const parentHugsH = !specSizing.vertical || specSizing.vertical === "hug";
+  const facts: SpecParentFacts = {
+    parentIsAuto: isAutoParent,
+    hugW: !specSizing.horizontal || specSizing.horizontal === "hug",
+    hugH: !specSizing.vertical || specSizing.vertical === "hug",
+    crossStretch: layout.alignItems === "stretch",
+    subject: "flcm",
+  };
   // Children whose w/h:"fill" must be re-resized after the frame gets its FINAL size (at append it was
-  // hug-sized): every covered child, absolute or free-form. coverChild no-ops without a fill.
+  // hug-sized): every covered child, absolute or free-form. coverChild no-ops without a fill. An
+  // INSERT into a live parent needs no such pass — its destination is already sized.
   const covers: { child: any; layout: WriteLayout }[] = [];
-  const kids = wn.children || [];
-  for (const rawSpec of kids) {
+  for (const rawSpec of wn.children || []) {
     if (!rawSpec) continue; // falsy child entries skipped, so `cond && flcm.text(...)` works
     const cl = rawSpec.layout || {};
-    // Fail loud on the one unresolvable percent (in-flow %-size against a hugging auto-layout parent)
-    // before building the node, so a bad spec doesn't orphan a live node on the canvas. Every other
-    // percent/anchor is recorded and resolved in the post-walk pass (resolvePercents) against realized size.
-    assertPercentResolvable(cl, { parentIsAuto: isAutoParent, hugW: parentHugsW, hugH: parentHugsH }, "flcm");
-    assertTextFillHeightInFlow(rawSpec.type, cl, isAutoParent, cl.position === "absolute", "flcm");
-    const child = buildNode(rawSpec, ctx);
-    f.appendChild(child);
-    if (cl.percentSize || cl.percentPos || (cl.position === "absolute" && cl.anchor)) {
-      ctx.pending.push({ node: child, layout: cl, parent: f });
-    }
-    if (cl.position === "absolute") applyChildPosition(f, child, cl);
-    // A positioned child is governed by Figma constraints: any ABSOLUTE child (lifted out of flow, so it
-    // honors constraints even under auto-layout — that's how a badge pins to a corner), or any child of a
-    // FREE-FORM parent. It's covered (w/h:"fill" stretches to the parent box) and gets constraints derived
-    // from its raw layout. An IN-FLOW auto-layout child instead reflows via layoutGrow/STRETCH
-    // (applyChildFill), on which constraints are inert.
-    if (cl.position === "absolute" || !isAutoParent) {
-      coverChild(f, child, cl);
-      covers.push({ child, layout: cl });
-      applyConstraints(child, rawSpec.layout);
-    } else {
-      applyChildFill(f, child, cl, crossStretch);
-      // An explicit pin is STORED even in flow — constraints are inert on an in-flow auto-layout
-      // child, but they govern the moment it leaves the flow, and edit's applyPinDelta writes the
-      // word unconditionally. applyPinDelta, NOT applyConstraints: in flow, fill rides layoutGrow,
-      // so deriving the unnamed axis from sizing intent (fill→STRETCH) would store a constraint
-      // the author never spoke — and one the same pin through edit would leave at the default.
-      if (cl.pin) applyPinDelta(child, cl.pin);
-    }
+    const child = attachSpecChild(f, rawSpec, ctx, facts, (c) => f.appendChild(c));
+    if (isPositionedChild(isAutoParent, cl)) covers.push({ child, layout: cl });
   }
 
   // Creation default: a fresh auto-layout frame HUGS both axes (CSS fit-content). Like the
