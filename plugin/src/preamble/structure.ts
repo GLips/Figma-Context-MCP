@@ -92,6 +92,12 @@ function assertNoCycle(subject: string, node: any, destination: any): void {
 // never ships. Object identity CAN tell them apart, so the primary test is the read-side brand
 // (provenance.markReadSpec). The field sniff behind it is the fallback for a spec that lost its
 // identity crossing JSON — a heuristic on purpose, and only ever additive to the brand.
+//
+// This brand and its refusal are LOAD-BEARING and permanent — ADR-0014. They look redundant next to
+// constructor provenance (fromRead's output is constructor-built, so it never reaches here), and the
+// plan that added fromRead originally said to delete them for exactly that reason. It doesn't follow:
+// provenance correctly reports a RAW spec as not-constructor-built, and the next test in the chain is
+// "does it look like a target?" — which a `get` result passes, because it has an `id`. Silent move.
 const READ_SPEC_FIELDS = ["children", "fills", "strokes", "effects", "textStyle", "designedWidth", "designedHeight"];
 
 function assertNotReadSpec(subject: string, thing: Record<string, unknown>): void {
