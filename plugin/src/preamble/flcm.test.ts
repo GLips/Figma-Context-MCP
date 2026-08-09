@@ -10,15 +10,21 @@ import { frame, text, ellipse, line, rect, render, gradient, effects } from "./f
 // render runs. (flcm.js imports are figma-free at module load, so static import above is safe.)
 createFigmaMock();
 
-test("pad: numbers and edge objects compile; a px-string or non-numeric edge rejects", () => {
+test("pad: numbers, the CSS box shorthand and edge objects compile; a non-numeric edge rejects", () => {
   // mode named on the positives: padding without a row/column mode rejects at create (the shared
   // realizability gate), so the pad-compile assertions need a legal container.
   assert.deepEqual(frame({ layout: { mode: "row", padding: 24 } }).layout!.padding, { top: 24, right: 24, bottom: 24, left: 24 });
   assert.deepEqual(frame({ layout: { mode: "row", padding: { x: 8, y: 16 } } }).layout!.padding, { top: 16, right: 8, bottom: 16, left: 8 });
   assert.deepEqual(frame({ layout: { mode: "row", padding: { top: 4, left: 2 } } }).layout!.padding, { top: 4, right: 0, bottom: 0, left: 2 });
-  // The silent-zero bug this fixes: "24px" is neither a number nor an edge object, and used to yield 0 pad.
-  assert.throws(() => frame({ layout: { padding: "24px" as never } }), /pad must be a number or an object/);
+  // The read shape's own spelling: `get` returns padding as a CSS box shorthand, so a spec re-authors
+  // as-is. All four CSS arities, since the 1/2/3-part forms mirror sides rather than defaulting to 0.
+  assert.deepEqual(frame({ layout: { mode: "row", padding: "24px" } }).layout!.padding, { top: 24, right: 24, bottom: 24, left: 24 });
+  assert.deepEqual(frame({ layout: { mode: "row", padding: "12px 16px" } }).layout!.padding, { top: 12, right: 16, bottom: 12, left: 16 });
+  assert.deepEqual(frame({ layout: { mode: "row", padding: "1px 2px 3px" } }).layout!.padding, { top: 1, right: 2, bottom: 3, left: 2 });
+  assert.deepEqual(frame({ layout: { mode: "row", padding: "1px 2px 3px 4px" } }).layout!.padding, { top: 1, right: 2, bottom: 3, left: 4 });
+  // Inside the OBJECT form the edges are still numbers — the silent-zero bug that reject exists for.
   assert.throws(() => frame({ layout: { padding: { x: "24px" } as never } }), /pad\.x must be a number/);
+  assert.throws(() => frame({ layout: { padding: [] as never } }), /pad must be a number, a CSS box shorthand/);
 });
 
 test("create rejects layout words the type can't realize — the SAME gate edit consults (no asymmetry)", () => {

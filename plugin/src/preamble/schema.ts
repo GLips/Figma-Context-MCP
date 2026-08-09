@@ -35,6 +35,7 @@ import type { SimplifiedNode } from "../../../src/core/types.js";
 export type LengthInput = number | string; // a number or "Npx"
 export type PadInput =
   | number
+  | string // the CSS box shorthand, in read's spelling: "12px" | "12px 16px" | "8px 8px 0px 0px"
   | { x?: number; y?: number; top?: number; right?: number; bottom?: number; left?: number };
 
 export type GradientStopInput = string | { color: string; pos?: number; position?: number };
@@ -155,8 +156,8 @@ const LAYOUT_FIELDS = {
   gap: metric("Space between children."),
   padding: prop(
     z.custom<PadInput>(),
-    "Padding, in numbers (not \"px\" strings). { x, y } is shorthand: x→left+right, y→top+bottom.",
-    "number | { x?, y? } | { top?, right?, bottom?, left? }",
+    'Padding. A number, or { x, y } shorthand (x→left+right, y→top+bottom), or per-edge. Also takes the read shape\'s CSS box shorthand string ("12px", "12px 16px") so a `get` result\'s layout re-authors as-is.',
+    'number | "12px 16px" | { x?, y? } | { top?, right?, bottom?, left? }',
   ),
   justifyContent: prop(
     z.enum(["flex-start", "flex-end", "center", "space-between"]),
@@ -228,6 +229,11 @@ const TEXTSTYLE_FIELDS = {
     'A URL link over the whole text node. Takes a url string, or the read form { type: "URL", url } so a `get` result round-trips. A design\'s NODE links (a link to another node) are read-only and fail loud.',
     'string (url) | { type: "URL", url }',
   ),
+  boldWeight: prop(
+    z.union([z.number(), z.string()]),
+    'The weight `**bold**` resolves to in THIS node. Default "bold" (700). A design that emphasizes with Semi Bold reads back `boldWeight: 600` — pass it through and the copy emphasizes the same way instead of jumping to 700. Same spellings as fontWeight.',
+    "number (100–900) | name",
+  ),
   lineClamp: prop(
     z.union([z.number(), z.literal("none")]),
     'Clamp the text to at most N lines, truncating with an ellipsis (…). Needs a bounded width — a fixed/`"fill"`/`"N%"` `width` — so the text wraps; on a width-hugging text there is nothing to truncate and it fails loud. N must be a whole number ≥ 1. `"none"` removes an existing clamp (under edit; at create it is the explicit default).',
@@ -239,7 +245,7 @@ const TEXT_FIELDS = {
   textStyle: prop(
     z.object(TEXTSTYLE_FIELDS),
     "Text style base (font identity, metrics, casing, paragraph spacing, alignment, lineClamp). Runs layer over it.",
-    "{ fontFamily?, fontWeight?, fontSize?, fontStyle?, lineHeight?, letterSpacing?, textDecoration?, textTransform?, fontVariant?, textAlign?, textAlignVertical?, paragraphSpacing?, paragraphIndent?, listSpacing?, hyperlink?, lineClamp? }",
+    "{ fontFamily?, fontWeight?, fontSize?, fontStyle?, lineHeight?, letterSpacing?, textDecoration?, textTransform?, fontVariant?, textAlign?, textAlignVertical?, paragraphSpacing?, paragraphIndent?, listSpacing?, hyperlink?, boldWeight?, lineClamp? }",
   ),
   color: color("Text color (a solid color, normally) — a node-level sugar prop compiling to the text node's fill."),
 };
@@ -276,7 +282,13 @@ const RUN_FIELDS = {
   paragraphIndent: TEXTSTYLE_FIELDS.paragraphIndent,
   listSpacing: TEXTSTYLE_FIELDS.listSpacing,
   color: color("Per-span text color."),
-  hyperlink: TEXTSTYLE_FIELDS.hyperlink,
+  // NOT TEXTSTYLE_FIELDS.hyperlink: `prop()` couples type and prose, and the base's prose says "over the
+  // whole text node" — the opposite of what a run delta does (the bridge ranges it over this span alone).
+  hyperlink: prop(
+    z.custom<string | { type: "URL"; url: string }>(),
+    'A URL link over THIS span. Takes a url string, or the read form { type: "URL", url } so a `get` result round-trips. The inline `[text](url)` markdown spelling is usually simpler. A design\'s NODE links are read-only and fail loud.',
+    'string (url) | { type: "URL", url }',
+  ),
 };
 
 const RunStyleSchema = z.object(RUN_FIELDS);
@@ -563,7 +575,7 @@ export const VERBS: VerbDoc[] = [
   { category: "structure", signature: "await flcm.move(target, parent)", builds: "the node reparented as `parent`'s last child", args: "a live target, then a parent target. Creating is append's job — a spec here fails loud", quickStart: "await flcm.move(target, parent)" },
   { category: "structure", signature: "await flcm.remove(target)", builds: "nothing — deletes the node and its subtree", args: "a target; returns { removedId, parent }", quickStart: "await flcm.remove(target)" },
   { category: "structure", signature: "await flcm.clone(target, parent?)", builds: "a faithful live duplicate (key-less)", args: "a target, and optionally where the copy lands (default: beside the original). The copy path for subtrees a spec rebuild can't reproduce — anything holding an INSTANCE", quickStart: "await flcm.clone(target, parent?)" },
-  { category: "structure", signature: "flcm.fromRead(spec)", builds: "a `get` result re-authored as a buildable spec", args: "a spec from flcm.get. Returns a constructor-built node — render it, or place it with append/prepend/insertBefore/insertAfter. Anything the read shape carries that flcm has no word for (an INSTANCE, a paint stack, a grid) fails loud by name; flcm.clone is the faithful copy for those", quickStart: "flcm.fromRead(spec)" },
+  { category: "build", signature: "flcm.fromRead(spec)", builds: "a `get` result re-authored as a buildable spec", args: "a spec from flcm.get. Returns a constructor-built node — render it, or place it with append/prepend/insertBefore/insertAfter. Anything the read shape carries that flcm has no word for (an INSTANCE, a paint stack, a grid) fails loud by name; flcm.clone is the faithful copy for those", quickStart: "flcm.fromRead(spec)" },
   { category: "read", signature: "await flcm.get(target)", builds: "a node's full read spec (values inline)", args: "target: an flcm/key, a node id, flcm.id(id), or a handle" },
   { category: "read", signature: "await flcm.find(query?, predicate?)", builds: "matching nodes as slim handles", args: "query { type?, name?, key?, within? } AND-combined — a filter, not an address; only `within` takes a target. Optional predicate over the full read shape (n => n.fills?.[0] === '#FFF')" },
   { category: "read", signature: "await flcm.findOne(query?, predicate?)", builds: "exactly one slim handle (throws on 0 or >1)", args: "same query + predicate as find" },

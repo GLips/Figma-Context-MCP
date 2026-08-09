@@ -102,6 +102,14 @@ const READ_SCALE_MODES: Record<string, ImageScaleMode> = { FILL: "FILL", FIT: "F
 
 function readImagePaint(value: object, field: string): ImageHashSpec {
   const o = value as { imageRef?: unknown; gifRef?: unknown; scaleMode?: unknown; scalingFactor?: unknown };
+  // An animated GIF carries BOTH refs, and its `imageRef` points at the static snapshot frame — so the
+  // one path that looks like it works is exactly the one that silently strips the animation. There is no
+  // hash to point a new paint at (the GIF's own bytes live behind gifRef, which is not an image hash).
+  if (typeof o.gifRef === "string" && o.gifRef) {
+    throw new Error(
+      "flcm: " + field + " is an animated GIF fill, and its `imageRef` is only the static snapshot frame — rebuilding from it would drop the animation. Duplicate the node with flcm.clone to keep the GIF.",
+    );
+  }
   const hash = typeof o.imageRef === "string" && o.imageRef ? o.imageRef : undefined;
   if (!hash) {
     throw new Error(

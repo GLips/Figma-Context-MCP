@@ -76,6 +76,13 @@ test("a spread-and-modified read spec is the paste-with-modifications path", asy
   assert.equal(copy.name, "Wide copy");
   // Read the copy back through the same pipeline: the paint survived the rebuild unchanged.
   assert.deepEqual((await get(id(out.root.id))).fills, ["#123456"]);
+
+  // `position` is its own word in the read shape, so a hand-set one must not be a silent no-op — out of a
+  // real `get` it travels with left/top, but this module's whole pitch is spread-and-modify.
+  const row = await render(frame({ key: "row", width: 300, height: 100, layout: { mode: "row" } }));
+  await append("row", fromRead(spec({ ...read, left: undefined, top: undefined, position: "absolute" })));
+  const child = (await figma.getNodeByIdAsync(row.root.id)).children[0];
+  assert.equal(child.layoutPositioning, "ABSOLUTE");
 });
 
 test("a type with no authored form fails loud by name, pointing at flcm.clone", async () => {
@@ -103,20 +110,47 @@ test("real state flcm can't author fails by name; derived fields drop silently",
   assert.throws(() => fromRead(spec({ type: "FRAME", template: "EL-abcd1234" })), /COMPRESSED read/);
   // A word that IS in the read shape but not on this node's type names the type, not "unknown prop".
   assert.throws(() => fromRead(spec({ type: "TEXT", effects: { boxShadow: "0 1px 2px #000" } })), /this TEXT carries `effects`/);
-  // Derived: boldWeight is the weight `**` stands for, already implied by the runs it annotates.
-  assert.doesNotThrow(() => fromRead(spec({ type: "TEXT", text: "hi", boldWeight: 700 })));
   // A genuinely unknown field still throws — tolerating the derived leaves didn't open the set.
   assert.throws(() => fromRead(spec({ type: "RECTANGLE", fillz: ["#FFF"] })), /unknown read field `fillz`/);
+});
+
+test("`**` re-emphasizes at the node's OWN bold weight, not a hardcoded 700", async () => {
+  createFigmaMock();
+  // The silent-wrong shape this closes: read compresses a bold span to markdown and reports the weight it
+  // stood for ONCE, at node level — omitting the run's own fontWeight exactly when it matches. So a design
+  // that emphasizes with Semi Bold has `boldWeight` as the SOLE carrier of 600, and dropping it re-rendered
+  // every emphasis at 700: right characters, wrong pixels, no error.
+  await render(frame({ key: "card", width: 200, height: 80 }, [text("Hello **world**", { key: "line", textStyle: { boldWeight: 600 } })]));
+  const read = await get("card");
+  const original = read.children![0] as SimplifiedNode;
+  assert.equal(original.boldWeight, 600);
+
+  const out = await render(fromRead(read));
+  const copy = (await get(id(out.root.id))).children![0] as SimplifiedNode;
+  // Read the copy back through the same pipeline: content AND the weight it emphasizes at are unchanged.
+  assert.deepEqual([copy.text, copy.boldWeight], [original.text, 600]);
+});
+
+test("a size the read shape can't attribute to the node itself is refused, not guessed", async () => {
+  createFigmaMock();
+  // Read's width/height are the AXIS-ALIGNED bounds, so on a rotated node they are not the node's own
+  // size — rebuilding from them would land a differently-shaped node with no error.
+  assert.throws(() => fromRead(spec({ type: "RECTANGLE", width: 100, height: 20, rotation: 45 })), /axis-aligned BOUNDS/);
+  assert.doesNotThrow(() => fromRead(spec({ type: "RECTANGLE", width: 100, height: 20 })));
+  // A LINE authors along `length` alone, so a SIZING INTENT on its cross axis has nowhere to go. (A
+  // NUMBER there is the line's ~0 bbox height and drops — that one really is derived.)
+  assert.throws(() => fromRead(spec({ type: "LINE", width: 80, height: "fill" })), /LINE sizes only along its length/);
+  assert.doesNotThrow(() => fromRead(spec({ type: "LINE", width: 80, height: 0 })));
 });
 
 test("layout words flcm has no vocabulary for fail loud; a grid names itself", async () => {
   createFigmaMock();
   assert.throws(
     () => fromRead(spec({ type: "FRAME", layout: { mode: "grid", gridTemplateColumns: "1fr 1fr" } })),
-    /gridTemplateColumns has no authored form/,
+    /`gridTemplateColumns` has no authored form/,
   );
   assert.throws(() => fromRead(spec({ type: "FRAME", layout: { mode: "grid" } })), /cannot author a GRID container/);
-  assert.throws(() => fromRead(spec({ type: "FRAME", layout: { mode: "row", wrap: true } })), /layout\.wrap has no authored form/);
+  assert.throws(() => fromRead(spec({ type: "FRAME", layout: { mode: "row", wrap: true } })), /layout: `wrap` has no authored form/);
   // flcm has one gap and one radius — the multi-value CSS forms are state, not something to average.
   assert.throws(() => fromRead(spec({ type: "FRAME", layout: { mode: "row", gap: "8px 12px" } })), /flcm authors one gap/);
   assert.throws(() => fromRead(spec({ type: "RECTANGLE", borderRadius: "8px 8px 0px 0px" })), /one uniform corner radius/);

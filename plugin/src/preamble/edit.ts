@@ -236,7 +236,7 @@ function compileTextDeltaWords(changes: EditDelta, patch: WriteProps, node: Text
   if (changes.color != null) patch.fills = compilePaintWord(changes.color, "color");
   if (changes.content != null) {
     const base = namesFontIdentity(patch.textStyle) ? patch.textStyle : liveBaseStyle(node);
-    const compiled = compileTextContent(changes.content, base);
+    const compiled = compileTextContent(changes.content, base, changes.textStyle && changes.textStyle.boldWeight);
     // A styled run that changes font identity with no family anywhere (no run family, no delta
     // textStyle, mixed live base) would silently land in the DEFAULT family — reject instead.
     if (compiled.runs && compiled.runs.some((r) => namesFontIdentity(r.style) && r.style.fontFamily === undefined)) {

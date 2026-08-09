@@ -90,7 +90,7 @@ export interface WriteGradientFill { type: GradientType; gradient: string }
 // The read shape's image-fill leaf. Named here (rather than sniffed inline at the parser) so the
 // normalizer can type what it hands back; the extra read-only keys it carries (css hints,
 // imageDownloadArguments) are irrelevant to the parse and deliberately unnamed.
-export interface ReadImageFill { type: "IMAGE"; imageRef?: string; scaleMode?: string; scalingFactor?: number }
+export interface ReadImageFill { type: "IMAGE"; imageRef?: string; gifRef?: string; scaleMode?: string; scalingFactor?: number }
 export type FillLeaf = string | WriteGradientFill | ReadImageFill | PaintSpec;
 // A paint slot takes one leaf, or the read shape's own ARRAY spelling of the same slot — so a `get`
 // result's `fills` feeds straight back in. More than one entry fails loud (compilePaintWord): flcm

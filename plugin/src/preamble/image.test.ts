@@ -129,7 +129,7 @@ test("a read-form image fill paints from the live hash — no fetch, no channel 
     rect({
       width: 200,
       height: 120,
-      fill: { type: "IMAGE", imageRef: "abc123hash", scaleMode: "FILL" } as never,
+      fill: { type: "IMAGE", imageRef: "abc123hash", scaleMode: "FILL" },
     }),
   );
   const node = await figma.getNodeByIdAsync(out.root.id);
@@ -140,27 +140,33 @@ test("a read-form image fill paints from the live hash — no fetch, no channel 
 
 test("a TILE read fill keeps its repeat scale; STRETCH and a ref-less fill fail loud", async () => {
   const tiled = await render(
-    rect({ fill: { type: "IMAGE", imageRef: "tile1", scaleMode: "TILE", scalingFactor: 0.5 } as never }),
+    rect({ fill: { type: "IMAGE", imageRef: "tile1", scaleMode: "TILE", scalingFactor: 0.5 } }),
   );
   assert.equal((await figma.getNodeByIdAsync(tiled.root.id)).fills[0].scalingFactor, 0.5);
   // STRETCH is the read spelling of the plugin's CROP, whose crop lives in a transform matrix the
   // read shape never surfaces — reproducing it would silently un-crop the image.
   assert.throws(
-    () => rect({ fill: { type: "IMAGE", imageRef: "x", scaleMode: "STRETCH" } as never }),
+    () => rect({ fill: { type: "IMAGE", imageRef: "x", scaleMode: "STRETCH" } }),
     /cropped image fill .* flcm\.clone/s,
   );
   // A null imageRef (an asset living in a file you don't own) leaves nothing to point at.
-  assert.throws(() => rect({ fill: { type: "IMAGE", scaleMode: "FILL" } as never }), /no imageRef/);
+  assert.throws(() => rect({ fill: { type: "IMAGE", scaleMode: "FILL" } }), /no imageRef/);
+  // An animated GIF carries BOTH refs, and its imageRef is only the static snapshot frame — the one
+  // path that looks like it works is exactly the one that drops the animation.
+  assert.throws(
+    () => rect({ fill: { type: "IMAGE", imageRef: "frame1", gifRef: "gif1", scaleMode: "FILL" } }),
+    /animated GIF fill.*flcm\.clone/s,
+  );
 });
 
 test("a paint slot takes the read shape's ARRAY spelling; a stack fails loud naming the count", async () => {
-  const out = await render(rect({ fill: ["#112233"] as never }));
+  const out = await render(rect({ fill: ["#112233"] }));
   assert.equal((await figma.getNodeByIdAsync(out.root.id)).fills.length, 1);
   // An empty array is the read spelling of "no paint" — same as "none".
-  const bare = await render(rect({ fill: [] as never }));
+  const bare = await render(rect({ fill: [] }));
   assert.deepEqual((await figma.getNodeByIdAsync(bare.root.id)).fills, []);
   assert.throws(
-    () => rect({ fill: ["#000", "linear-gradient(#fff, #000)"] as never }),
+    () => rect({ fill: ["#000", "linear-gradient(#fff, #000)"] }),
     /has 2 stacked paints, and flcm paints one/,
   );
 });

@@ -88,14 +88,14 @@ test("a run delta rejects an unknown key (the grounded silent-drop site), naming
 
 test("the CSS effects bag (a node's `effects:` prop) rejects an unknown key too — surface-wide policy", () => {
   // parseCssEffects reads a positive list, so a typo alongside a real CSS key would vanish silently.
-  // normalizeEffects splits a bag into its CSS and object halves (one read `effects` carries both), and a
-  // key in neither closed set lands in the object half, where flcm.effects' own reject names it.
+  // The `effects:` prop takes BOTH vocabularies in one bag (a read `effects` carries CSS strings and
+  // native-effect sugar at once), so the reject runs over their union and names `effects` — the place the
+  // author wrote the typo — rather than whichever half the split happened to drop it into.
   const shadow = "0px 4px 8px rgba(0,0,0,0.25)";
-  assert.throws(() => frame({ effects: { boxShadow: shadow, foo: 2 } as never }), /unknown prop "foo" on flcm\.effects/);
-  assert.throws(() => rect({ effects: { filter: "blur(4px)", bar: 1 } as never }), /unknown prop "bar" on flcm\.effects/);
-  // A clean CSS bag still parses. (flcm.effects({...}) itself is the SUGAR form — a CSS key there is rejected
-  // by the sugar reject above, correctly: CSS strings belong in the `effects:` prop, not flcm.effects().)
-  assert.doesNotThrow(() => frame({ effects: { boxShadow: shadow } }));
+  assert.throws(() => frame({ effects: { boxShadow: shadow, foo: 2 } as never }), /unknown prop "foo" on effects/);
+  assert.throws(() => rect({ effects: { filter: "blur(4px)", bar: 1 } as never }), /unknown prop "bar" on effects/);
+  // Both vocabularies in one bag still parse — the shape `get` hands back.
+  assert.doesNotThrow(() => frame({ effects: { boxShadow: shadow, blur: 4 } }));
 });
 
 test("plural offenders are all named", () => {

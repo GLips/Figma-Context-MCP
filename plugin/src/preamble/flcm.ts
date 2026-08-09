@@ -27,7 +27,7 @@ import { loadFontsForTree } from "./fonts.js";
 import { parseInlineMarkdown, MdSegment } from "./markdown.js";
 import { linearGradient, radialGradient } from "./paint.js";
 import { layerBlurFromCssPx, backgroundBlurFromCssPx, shadow, glass, noise, texture, progressiveBlur } from "./effects.js";
-import { parseColor, parseFill, parseCssEffects, parseBlendMode, length, lineHeight, letterSpacing, isPercent, percent } from "./css.js";
+import { parseColor, parseFill, parseCssEffects, parseBlendMode, boxShorthand, length, lineHeight, letterSpacing, isPercent, percent } from "./css.js";
 import { buildNode, placeRootOnPage, settleHandles, resolvePercents, RenderCtx, RenderResources } from "./bridge.js";
 import { enterMutatingVerb } from "./mutation-lock.js";
 import { get, find, findOne, selection } from "./read.js";
@@ -65,7 +65,7 @@ export const KNOWN_KEYS = {
   layout: ["mode", "gap", "padding", "justifyContent", "alignItems"],
   text: ["textStyle", "color"],
   textContent: ["content"], // edit-only spelling of flcm.text's positional content arg
-  textStyle: ["fontFamily", "fontWeight", "fontSize", "fontStyle", "lineHeight", "letterSpacing", "textDecoration", "textTransform", "fontVariant", "textAlign", "textAlignVertical", "paragraphSpacing", "paragraphIndent", "listSpacing", "hyperlink", "lineClamp"],
+  textStyle: ["fontFamily", "fontWeight", "fontSize", "fontStyle", "lineHeight", "letterSpacing", "textDecoration", "textTransform", "fontVariant", "textAlign", "textAlignVertical", "paragraphSpacing", "paragraphIndent", "listSpacing", "hyperlink", "boldWeight", "lineClamp"],
   run: ["fontWeight", "fontSize", "fontFamily", "fontStyle", "lineHeight", "letterSpacing", "textDecoration", "textTransform", "fontVariant", "paragraphSpacing", "paragraphIndent", "listSpacing", "color", "hyperlink"],
   line: ["stroke", "color", "strokeWidth", "length", "w", "rotation", "absolute", "pin"],
   path: ["d", "fill", "stroke", "strokeWidth", "effects", "rotation"],
@@ -93,7 +93,12 @@ const EFFECTS_KEYS = keySet(KNOWN_KEYS.effects);
 // The CSS-effects bag (WriteCssEffects) — the string form of `effects`, routed to parseCssEffects. Its keys
 // are an ir.ts interface, not a schema FIELD_GROUP, so no runtime drift test reaches them; but they're the
 // frozen CSS spellings, and this ONE list drives both the is-this-CSS detection and the reject (normalizeEffects).
-const CSS_EFFECTS_KEYS = keySet(["boxShadow", "filter", "backdropFilter", "textShadow"]);
+const CSS_EFFECTS_WORDS = ["boxShadow", "filter", "backdropFilter", "textShadow"] as const;
+const CSS_EFFECTS_KEYS = keySet(CSS_EFFECTS_WORDS);
+// The `effects:` prop accepts EITHER vocabulary in one bag, so its closed set is the union — the reject
+// has to run before the split, or a typo lands in whichever half claims it and gets named by that half's
+// gate instead of by `effects` (which is where the author wrote it).
+const EFFECTS_INPUT_KEYS = keySet(KNOWN_KEYS.effects, CSS_EFFECTS_WORDS);
 // The directional nested shapes are defined INLINE in schema.ts's SIZE_FIELDS (not their own FIELD_GROUP).
 // The drift test still guards them by unwrapping the zod objects directly — ABSOLUTE_KEYS against the
 // `absolute` shape, DIRECTIONAL_KEYS against the `anchor` shape. `pin` reuses DIRECTIONAL_KEYS: it's a
@@ -106,16 +111,17 @@ export const DIRECTIONAL_KEYS = keySet(["x", "y"]); // pin and absolute.anchor
 
 // ---- shared prop -> WriteNode compilers ----
 
-// terse pad (number | {x,y} | {top,right,bottom,left}) -> typed edges. pad takes NUMBERS, not "px"
-// strings: a string like "24px" is neither a number nor an edge object, and the old code silently
-// dropped it to zero padding on every side. Reject a non-number/non-object, and a non-numeric edge
-// field, rather than emit a silent zero (ADR-0003 fail-loud).
+// terse pad (number | CSS box shorthand | {x,y} | {top,right,bottom,left}) -> typed edges. The string
+// form is the READ shape's spelling ("12px 16px"): `get` returns padding as a CSS shorthand, and without
+// it here a spec's own layout wouldn't re-author. Inside the object form the edges stay NUMBERS — a "24px"
+// there once dropped silently to zero on every side, and that reject stays (ADR-0003 fail-loud).
 const PAD_KEYS = keySet(["x", "y", "top", "right", "bottom", "left"]);
 
 function padEdges(pad: PadInput): Edges {
   if (typeof pad === "number") return { top: pad, right: pad, bottom: pad, left: pad };
+  if (typeof pad === "string") return boxShorthand(pad, "pad");
   if (pad == null || typeof pad !== "object" || Array.isArray(pad)) {
-    throw new Error("flcm: pad must be a number or an object ({ x, y } or { top, right, bottom, left }) — got " + JSON.stringify(pad) + '. pad takes numbers, not "px" strings.');
+    throw new Error('flcm: pad must be a number, a CSS box shorthand string ("12px 16px"), or an object ({ x, y } or { top, right, bottom, left }) — got ' + JSON.stringify(pad) + ".");
   }
   rejectUnknownKeys(pad, PAD_KEYS, "pad");
   const edge = (v: number | undefined, name: string): number | undefined => {
@@ -570,9 +576,14 @@ function compileSharedTextWords(c: Record<string, unknown>, ts: WriteTextStyle, 
 }
 
 // The textStyle word compile every text carrier rides — flcm.text's base and an edit delta alike
-// (one vocabulary, one parser). lineClamp is deliberately NOT compiled here: it validates against
-// a width the two callers know differently (create: the authored width; edit: the live wrap
-// state), so each reads cfg.lineClamp itself. Exported for edit.ts.
+// (one vocabulary, one parser). Two words in the group are deliberately NOT compiled here, because
+// neither is a Figma property this returns:
+//   • lineClamp validates against a width the two callers know differently (create: the authored
+//     width; edit: the live wrap state), so each reads cfg.lineClamp itself.
+//   • boldWeight is a CONTENT-compile convention — what `**` resolves to — so it rides into
+//     compileTextContent, not onto the node's style. Letting it land here would put a non-property
+//     on the IR the bridge would have to know to ignore.
+// Exported for edit.ts.
 export function compileTextStyleWords(cfg: unknown, subject: string): WriteTextStyle {
   // QuickJS boundary: a present-but-malformed value must reject the whole call, not read as absence.
   if (typeof cfg !== "object" || cfg === null || Array.isArray(cfg)) {
@@ -610,15 +621,15 @@ export function compileTextStyleWords(cfg: unknown, subject: string): WriteTextS
 // delta's textStyle enriched with the live node's font identity, so a run that only bolds inherits
 // the family the node actually uses). A plain string that parses to a single flagless segment
 // stays plain `text`; anything richer becomes `runs`. Exported for edit.ts.
-export function compileTextContent(content: unknown, base: WriteTextStyle): { text?: string; runs?: WriteTextRun[] } {
+export function compileTextContent(content: unknown, base: WriteTextStyle, boldWeight?: number | string): { text?: string; runs?: WriteTextRun[] } {
   if (Array.isArray(content)) {
-    const runs = compileRuns(content, base);
+    const runs = compileRuns(content, base, boldWeight);
     return runs.length ? { runs } : { text: "" };
   }
   const segs = parseInlineMarkdown(assertNotReadToken(plainString(content)));
   if (segs.length === 1 && isPlainSeg(segs[0])) return { text: segs[0].text };
   if (!segs.length) return { text: "" };
-  return { runs: segs.map((seg) => compileRun(seg.text, mergeDelta(seg, {}), base, "flcm.text run")) };
+  return { runs: segs.map((seg) => compileRun(seg.text, mergeDelta(seg, {}, boldWeight), base, "flcm.text run")) };
 }
 
 function text(content: unknown, props: TextProps = {}): WriteNode {
@@ -633,7 +644,7 @@ function text(content: unknown, props: TextProps = {}): WriteNode {
   const cfg = (props.textStyle ?? {}) as NonNullable<TextProps["textStyle"]>;
   const ts = compileTextStyleWords(cfg, "flcm.text.textStyle");
   if (Object.keys(ts).length) wn.textStyle = ts;
-  Object.assign(wn, compileTextContent(content, ts));
+  Object.assign(wn, compileTextContent(content, ts, cfg.boldWeight));
   // lineClamp "none" at create is the explicit default — no clamp to remove, nothing lands.
   if (cfg.lineClamp != null && cfg.lineClamp !== "none") wn.maxLines = assertLineClamp(cfg.lineClamp, props.width);
   const layout = buildLayout(props as FrameProps, "TEXT", "flcm.text");
@@ -716,7 +727,7 @@ const isPlainSeg = (seg: MdSegment): boolean => !seg.bold && !seg.italic && !seg
 // is parsed and may expand to several runs; each carries the entry's residual StyleDelta merged UNDER the
 // markdown flags (an explicit delta field wins over the field the markdown implied — e.g. a non-canonical
 // heavy weight overrides the plain `**` bold). The `{tsN}` rejection runs on the raw entry text, pre-decode.
-function compileRuns(runs: TextRunInput[], baseStyle: WriteTextStyle): WriteTextRun[] {
+function compileRuns(runs: TextRunInput[], baseStyle: WriteTextStyle, boldWeight?: number | string): WriteTextRun[] {
   if (!runs.length) {
     throw new Error("flcm.text: a runs array must be non-empty — pass at least one run (a string or a [text, style] tuple).");
   }
@@ -735,19 +746,23 @@ function compileRuns(runs: TextRunInput[], baseStyle: WriteTextStyle): WriteText
     rejectUnauthorableTextLeaves(delta, `flcm.text run[${i}]`, REFUSED_RUN_TEXT_LEAVES);
     rejectUnknownKeys(delta, RUN_INPUT_KEYS, `flcm.text run[${i}]`);
     for (const seg of parseInlineMarkdown(assertNotReadToken(raw))) {
-      out.push(compileRun(seg.text, mergeDelta(seg, delta), baseStyle, `flcm.text run[${i}]`));
+      out.push(compileRun(seg.text, mergeDelta(seg, delta, boldWeight), baseStyle, `flcm.text run[${i}]`));
     }
   }
   return out;
 }
 
 // Markdown flags → StyleDelta fields, then overlay the tuple's explicit delta so an explicit field wins
-// over the one the markdown implied. Bold maps to the default bold weight ("bold", snapped by fonts.ts);
-// a read run whose weight isn't the canonical bold carries an explicit `fontWeight` in its delta that
-// overrides this. `\n`-decoded newlines and every other char already live in seg.text.
-function mergeDelta(seg: MdSegment, explicit: StyleDeltaInput): StyleDeltaInput {
+// over the one the markdown implied. `\n`-decoded newlines and every other char already live in seg.text.
+//
+// `**` resolves to the NODE's bold weight, not a global 700. The read side compresses a bold span to
+// markdown and reports the weight it stood for ONCE, on the node (`boldWeight`) — it deliberately omits
+// the per-run `fontWeight` when the run matches that weight, so the node-level word is the only carrier.
+// Defaulting to "bold" here regardless would re-render a Semi Bold (600) emphasis at 700: silently wrong
+// pixels on the commonest mixed-weight text there is.
+function mergeDelta(seg: MdSegment, explicit: StyleDeltaInput, boldWeight?: number | string): StyleDeltaInput {
   const d: StyleDeltaInput = {};
-  if (seg.bold) d.fontWeight = "bold";
+  if (seg.bold) d.fontWeight = boldWeight != null ? boldWeight : "bold";
   if (seg.italic) d.fontStyle = "italic";
   if (seg.strike) d.textDecoration = "line-through";
   if (seg.hyperlink !== undefined) d.hyperlink = seg.hyperlink;
@@ -1026,12 +1041,14 @@ function blurRadius(b: BlurSugar): number {
 //
 // The two string/object vocabularies are SPLIT, not routed: one read `effects` value carries both at once
 // (a frame with a drop shadow AND native glass reads back as { boxShadow, glass }), so picking a single
-// path by "does this look CSS?" would reject exactly the shape `get` hands back. Each half keeps its own
-// closed-set reject — a key in neither set lands in the sugar half and fails there — so a typo still can't
-// vanish silently, which is why parseCssEffects (a positive-list reader) needs the gate at all.
+// path by "does this look CSS?" would reject exactly the shape `get` hands back. The closed-set reject runs
+// ONCE over the union first — parseCssEffects reads a positive list, so without a gate a typo beside a real
+// CSS key would vanish silently; and gating after the split would name the half the typo fell into rather
+// than `effects`, where it was written, with only half the legal vocabulary listed.
 function normalizeEffects(v: EffectsInput): EffectSpec[] {
   if (Array.isArray(v)) return v;
   if (!v || typeof v !== "object") throw new Error("flcm: effects must be an object — got " + JSON.stringify(v) + ".");
+  rejectUnknownKeys(v, EFFECTS_INPUT_KEYS, "effects");
   const bag = v as Record<string, unknown>;
   const css: Record<string, unknown> = {};
   const sugar: Record<string, unknown> = {};

@@ -150,7 +150,7 @@ flcm.frame({ width: 320, height: 8, borderRadius: 4, fill: "#E5E7EB" }, [
 | --- | --- | --- |
 | `mode` | "row" \| "column" \| "none" | Auto-layout direction. Default "none" (free-form; gap/padding/justifyContent/alignItems then reject loud — name mode: "row"\|"column" to use them). flcm cannot author grid — a "grid" attempt fails loud. |
 | `gap` | number \| "Npx" | Space between children. |
-| `padding` | number \| { x?, y? } \| { top?, right?, bottom?, left? } | Padding, in numbers (not "px" strings). { x, y } is shorthand: x→left+right, y→top+bottom. |
+| `padding` | number \| "12px 16px" \| { x?, y? } \| { top?, right?, bottom?, left? } | Padding. A number, or { x, y } shorthand (x→left+right, y→top+bottom), or per-edge. Also takes the read shape's CSS box shorthand string ("12px", "12px 16px") so a `get` result's layout re-authors as-is. |
 | `justifyContent` | "flex-start" \| "flex-end" \| "center" \| "space-between" | Distribution along the main axis (CSS justify-content). Realizable subset: "flex-start" (default) \| "flex-end" \| "center" \| "space-between". Figma auto-layout has no space-around/space-evenly — those fail loud. |
 | `alignItems` | "flex-start" \| "flex-end" \| "center" \| "stretch" | Alignment on the cross axis (CSS align-items). "stretch" stretches every auto-sized child across the cross axis; a child with a fixed cross-axis size keeps it. (You can also stretch a single child by setting its width/height to "fill".) |
 
@@ -158,7 +158,7 @@ flcm.frame({ width: 320, height: 8, borderRadius: 4, fill: "#E5E7EB" }, [
 
 | Prop | Type | Notes |
 | --- | --- | --- |
-| `textStyle` | { fontFamily?, fontWeight?, fontSize?, fontStyle?, lineHeight?, letterSpacing?, textDecoration?, textTransform?, fontVariant?, textAlign?, textAlignVertical?, paragraphSpacing?, paragraphIndent?, listSpacing?, hyperlink?, lineClamp? } | Text style base (font identity, metrics, casing, paragraph spacing, alignment, lineClamp). Runs layer over it. |
+| `textStyle` | { fontFamily?, fontWeight?, fontSize?, fontStyle?, lineHeight?, letterSpacing?, textDecoration?, textTransform?, fontVariant?, textAlign?, textAlignVertical?, paragraphSpacing?, paragraphIndent?, listSpacing?, hyperlink?, boldWeight?, lineClamp? } | Text style base (font identity, metrics, casing, paragraph spacing, alignment, lineClamp). Runs layer over it. |
 | `color` | color / gradient | Text color (a solid color, normally) — a node-level sugar prop compiling to the text node's fill. |
 
 `content` is passed first: a plain string, or an array of styled runs (below). A fixed `width` makes it wrap (grows in height); otherwise it grows sideways.
@@ -182,6 +182,7 @@ flcm.frame({ width: 320, height: 8, borderRadius: 4, fill: "#E5E7EB" }, [
 | `paragraphIndent` | number \| "Npx" | First-line indent of each paragraph. |
 | `listSpacing` | number \| "Npx" | Space between list items. |
 | `hyperlink` | string (url) \| { type: "URL", url } | A URL link over the whole text node. Takes a url string, or the read form { type: "URL", url } so a `get` result round-trips. A design's NODE links (a link to another node) are read-only and fail loud. |
+| `boldWeight` | number (100–900) \| name | The weight `**bold**` resolves to in THIS node. Default "bold" (700). A design that emphasizes with Semi Bold reads back `boldWeight: 600` — pass it through and the copy emphasizes the same way instead of jumping to 700. Same spellings as fontWeight. |
 | `lineClamp` | number (≥1) \| "none" | Clamp the text to at most N lines, truncating with an ellipsis (…). Needs a bounded width — a fixed/`"fill"`/`"N%"` `width` — so the text wraps; on a width-hugging text there is nothing to truncate and it fails loud. N must be a whole number ≥ 1. `"none"` removes an existing clamp (under edit; at create it is the explicit default). |
 
 ### flcm.text — rich text (runs)
@@ -227,7 +228,7 @@ Each styled run's delta fields:
 | `paragraphIndent` | number \| "Npx" | First-line indent of each paragraph. |
 | `listSpacing` | number \| "Npx" | Space between list items. |
 | `color` | color / gradient | Per-span text color. |
-| `hyperlink` | string (url) \| { type: "URL", url } | A URL link over the whole text node. Takes a url string, or the read form { type: "URL", url } so a `get` result round-trips. A design's NODE links (a link to another node) are read-only and fail loud. |
+| `hyperlink` | string (url) \| { type: "URL", url } | A URL link over THIS span. Takes a url string, or the read form { type: "URL", url } so a `get` result round-trips. The inline `[text](url)` markdown spelling is usually simpler. A design's NODE links are read-only and fail loud. |
 
 ### flcm.rect / flcm.ellipse — shape props
 
@@ -441,7 +442,7 @@ out.keyed["email:input"].id;  // a nested keyed node
 | `length` | number | The line's length in px. |
 | `w` | number | The line's length in px — alias for `length` (`length` wins if both are set). |
 | `content` | string \| run[] | Replacement text: a plain string (markdown inline styling works: **bold**, *italic*, ~~strike~~, [link](url)) or an array of styled runs — exactly what flcm.text takes as its first argument. Replaces the node's whole content. |
-| `textStyle` | { fontFamily?, fontWeight?, fontSize?, fontStyle?, lineHeight?, letterSpacing?, textDecoration?, textTransform?, fontVariant?, textAlign?, textAlignVertical?, paragraphSpacing?, paragraphIndent?, listSpacing?, hyperlink?, lineClamp? } | Text style base (font identity, metrics, casing, paragraph spacing, alignment, lineClamp). Runs layer over it. |
+| `textStyle` | { fontFamily?, fontWeight?, fontSize?, fontStyle?, lineHeight?, letterSpacing?, textDecoration?, textTransform?, fontVariant?, textAlign?, textAlignVertical?, paragraphSpacing?, paragraphIndent?, listSpacing?, hyperlink?, boldWeight?, lineClamp? } | Text style base (font identity, metrics, casing, paragraph spacing, alignment, lineClamp). Runs layer over it. |
 | `color` | color / gradient | Text color (a solid color, normally) — a node-level sugar prop compiling to the text node's fill. |
 
 ### Words by node type

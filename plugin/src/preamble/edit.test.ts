@@ -366,7 +366,7 @@ test("a present-but-malformed structured value rejects the WHOLE delta — no pa
   const node = await renderKeyedRowFrame();
   await assert.rejects(edit("card", { fill: "#ff0000", absolute: false } as never), /absolute must be an object/);
   await assert.rejects(edit("card", { fill: "#ff0000", layout: false } as never), /flcm\.edit\.layout must be an object/);
-  await assert.rejects(edit("card", { fill: "#ff0000", layout: { padding: [] } } as never), /pad must be a number or an object/);
+  await assert.rejects(edit("card", { fill: "#ff0000", layout: { padding: [] } } as never), /pad must be a number, a CSS box shorthand/);
   await assert.rejects(edit("card", { fill: "#ff0000", pin: [] } as never), /pin must be an object/);
   assert.deepEqual(node.fills[0].color, { r: 0, g: 0, b: 1 }); // the valid fill beside them never landed
 });
