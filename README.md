@@ -88,7 +88,7 @@ If you need more information on how to configure the Framelink MCP for Figma, se
 
 ## Star History
 
-<a href="https://star-history.com/#GLips/Figma-Context-MCP"><img src="https://api.star-history.com/svg?repos=GLips/Figma-Context-MCP&type=Date" alt="Star History Chart" width="600" /></a>
+<a href="https://star-history.dera.page/#GLips/Figma-Context-MCP"><img src="https://star-history.dera.page/svg?repos=GLips/Figma-Context-MCP&type=Date" alt="Star History Chart" width="600" /></a>
 
 ## Learn More
 
