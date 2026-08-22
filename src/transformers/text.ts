@@ -310,8 +310,9 @@ export function buildFormattedText(
 }
 
 /**
- * Split characters into lines at `\n` / `\u2029` (paragraph separator — the
- * Figma API allows both). Each line carries its slice of the overrides
+ * Split characters into lines at `\n` / `\u2028` (line separator — what
+ * Shift+Return inserts) / `\u2029` (paragraph separator — the Figma API
+ * allows all three). Each line carries its slice of the overrides
  * array. The newline character itself is discarded along with its override.
  *
  * The returned line count matches what Figma's `lineTypes` /
@@ -326,7 +327,7 @@ function splitLines(
   let lineStart = 0;
   for (let i = 0; i <= codePoints.length; i++) {
     const ch = i < codePoints.length ? codePoints[i] : null;
-    if (ch === "\n" || ch === "\u2029" || ch === null) {
+    if (ch === "\n" || ch === "\u2028" || ch === "\u2029" || ch === null) {
       lines.push({
         codePoints: codePoints.slice(lineStart, i),
         overrides: overrides.slice(lineStart, i),
@@ -735,7 +736,7 @@ function classifyRun(
 const MARKDOWN_ESCAPE_CHARS = /[\\*_~[\](){}]/g;
 
 function escapeMarkdown(text: string): string {
-  return text.replace(MARKDOWN_ESCAPE_CHARS, "\\$&").replace(/[\n\u2029]/g, "\\n");
+  return text.replace(MARKDOWN_ESCAPE_CHARS, "\\$&").replace(/[\n\u2028\u2029]/g, "\\n");
 }
 
 /**

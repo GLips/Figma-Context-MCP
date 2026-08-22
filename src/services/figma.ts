@@ -310,7 +310,7 @@ export class FigmaService {
     fileKey: string,
     depth?: number | null,
   ): Promise<{ data: GetFileResponse; rawSize: number }> {
-    const endpoint = `/files/${fileKey}${depth ? `?depth=${depth}` : ""}`;
+    const endpoint = `/files/${fileKey}?geometry=paths${depth ? `&depth=${depth}` : ""}`;
     Logger.log(`Retrieving raw Figma file: ${fileKey} (depth: ${depth ?? "default"})`);
 
     const result = await this.requestWithSize<GetFileResponse>(endpoint);
@@ -330,7 +330,7 @@ export class FigmaService {
     nodeId: string,
     depth?: number | null,
   ): Promise<{ data: GetFileNodesResponse; rawSize: number }> {
-    const endpoint = `/files/${fileKey}/nodes?ids=${nodeId}${depth ? `&depth=${depth}` : ""}`;
+    const endpoint = `/files/${fileKey}/nodes?ids=${nodeId}&geometry=paths${depth ? `&depth=${depth}` : ""}`;
     Logger.log(
       `Retrieving raw Figma node: ${nodeId} from ${fileKey} (depth: ${depth ?? "default"})`,
     );
