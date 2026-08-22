@@ -1,7 +1,7 @@
 import type { Node as FigmaDocumentNode, Paint } from "@figma/rest-api-spec";
 import { generateCSSShorthand, isVisible } from "~/utils/common.js";
-import { tagError } from "~/utils/error-meta.js";
 import { hasValue, isStrokeWeights } from "~/utils/identity.js";
+import { Logger } from "~/utils/logger.js";
 
 import { convertColor, formatRGBAColor } from "./style/color.js";
 import { translateScaleMode, handleImageTransform, parsePatternPaint } from "./style/image.js";
@@ -21,10 +21,22 @@ import type { CSSRGBAColor, CSSHexColor } from "./style/color.js";
 import type { SimplifiedPatternFill } from "./style/image.js";
 import type { SimplifiedGradientFill } from "./style/gradient.js";
 
+/**
+ * A paint whose type this transformer does not recognize, passed through
+ * marked instead of dropped or thrown on. `raw` is the untouched Figma paint,
+ * so consumers that learn a new type later lose nothing in the meantime.
+ */
+export type SimplifiedUnknownFill = {
+  type: string;
+  unknownPaint: true;
+  raw: Paint;
+};
+
 export type SimplifiedFill =
   | SimplifiedImageFill
   | SimplifiedGradientFill
   | SimplifiedPatternFill
+  | SimplifiedUnknownFill
   | CSSRGBAColor
   | CSSHexColor;
 
@@ -148,6 +160,12 @@ export function parsePaint(raw: Paint, hasChildren: boolean = false): Simplified
       gradient: convertGradientToCss(raw),
     };
   } else {
-    tagError(new Error(`Unknown paint type: ${raw.type}`), { category: "internal" });
+    // Figma ships paint types faster than this transformer learns them (live
+    // example: code-component CUSTOM paints, which are absent from the REST
+    // spec). Throwing here failed an entire get_figma_data response over one
+    // paint on one node, so unknown types degrade instead: marked, with the
+    // raw paint preserved, and the rest of the simplification stays usable.
+    Logger.error(`Unknown paint type "${raw.type}" passed through unparsed.`);
+    return { type: raw.type, unknownPaint: true, raw };
   }
 }
