@@ -1,5 +1,5 @@
 import { isInAutoLayoutFlow, isFrame, isLayout, isRectangle } from "~/utils/identity.js";
-import type { Node as FigmaDocumentNode, HasLayoutTrait } from "@figma/rest-api-spec";
+import type { Node as FigmaDocumentNode, HasLayoutTrait, Transform } from "@figma/rest-api-spec";
 import { generateCSSShorthand, pixelRound } from "~/utils/common.js";
 import {
   convertSelfAlign,
@@ -178,5 +178,87 @@ function buildSimplifiedLayoutValues(
     }
   }
 
+  // When geometry=paths supplies true transforms, undo the axis-aligned
+  // flattening for rotated nodes: absoluteBoundingBox is the box AROUND a
+  // rotated node — inflated and corner-anchored — which mis-sizes and
+  // mis-places anything tilted (a 100x148.75 cover at -18.3° reads as an
+  // unrotated 141.6x172.6). Emit the unrotated size, the pre-rotation
+  // top-left (the relativeTransform translation, already parent-relative),
+  // and the angle itself. Children of rotated groups take this path even
+  // when unrotated locally, so nested transforms compose.
+  const ln = n as unknown as HasLayoutTrait;
+  const pln = parent as unknown as HasLayoutTrait | undefined;
+  if (ln.relativeTransform && ln.size) {
+    const rotation = matrixRotationDeg(ln.relativeTransform);
+    const parentRotation = pln?.relativeTransform ? matrixRotationDeg(pln.relativeTransform) : 0;
+    if (
+      Math.abs(rotation) > ROTATION_EPSILON_DEG ||
+      Math.abs(parentRotation) > ROTATION_EPSILON_DEG
+    ) {
+      if (Math.abs(rotation) > ROTATION_EPSILON_DEG) {
+        layoutValues.rotation = pixelRound(rotation);
+      }
+      layoutValues.dimensions = {
+        width: pixelRound(ln.size.x),
+        height: pixelRound(ln.size.y),
+      };
+      layoutValues.locationRelativeToParent = {
+        x: pixelRound(ln.relativeTransform[0][2]),
+        y: pixelRound(ln.relativeTransform[1][2]),
+      };
+    }
+  }
+
+  // Vector-class nodes can render ink well inside their layout box — a
+  // text-on-path node's box says nothing about where the glyphs sit, so an
+  // exported asset placed at the box lands in the wrong place. Surface the
+  // ink bounds parent-relative when they differ materially from the box.
+  const rb = (
+    n as { absoluteRenderBounds?: { x: number; y: number; width: number; height: number } | null }
+  ).absoluteRenderBounds;
+  if (
+    rb &&
+    ln.absoluteBoundingBox &&
+    pln?.absoluteBoundingBox &&
+    VECTOR_RENDER_BOUND_TYPES.has(n.type)
+  ) {
+    const bb = ln.absoluteBoundingBox;
+    const differs =
+      Math.abs(rb.x - bb.x) > 1 ||
+      Math.abs(rb.y - bb.y) > 1 ||
+      Math.abs(rb.width - bb.width) > 1 ||
+      Math.abs(rb.height - bb.height) > 1;
+    if (differs) {
+      layoutValues.renderBounds = {
+        x: pixelRound(rb.x - pln.absoluteBoundingBox.x),
+        y: pixelRound(rb.y - pln.absoluteBoundingBox.y),
+        width: pixelRound(rb.width),
+        height: pixelRound(rb.height),
+      };
+    }
+  }
+
   return layoutValues;
+}
+
+// Below this, rounding noise in exported files produces spurious sub-pixel
+// "rotations"; at or under it a node is treated as upright.
+const ROTATION_EPSILON_DEG = 0.05;
+
+// Node types whose ink routinely diverges from their layout box. TEXT_PATH is
+// compared as a string because @figma/rest-api-spec predates it.
+const VECTOR_RENDER_BOUND_TYPES = new Set<string>([
+  "TEXT_PATH",
+  "VECTOR",
+  "BOOLEAN_OPERATION",
+  "STAR",
+  "LINE",
+  "POLYGON",
+]);
+
+// Rotation angle encoded in a Figma transform, in degrees with Figma's sign
+// convention (counter-clockwise positive). For a rotation by θ the matrix rows
+// are [[cos θ, sin θ, tx], [-sin θ, cos θ, ty]].
+function matrixRotationDeg(t: Transform): number {
+  return (Math.atan2(t[0][1], t[0][0]) * 180) / Math.PI;
 }

@@ -50,6 +50,22 @@ export interface SimplifiedLayout {
   };
   overflowScroll?: ("x" | "y")[];
   position?: "absolute";
+  // Present only when the node is rotated (or sits inside a rotated group,
+  // so nested transforms compose). Degrees, Figma sign convention:
+  // counter-clockwise positive — the CSS equivalent is
+  // `transform: rotate(-<rotation>deg)` with `transform-origin: top left`.
+  // When the rotated path is taken, `dimensions` and
+  // `locationRelativeToParent` describe the UNROTATED box and its
+  // pre-rotation top-left in the parent's coordinate space, not the
+  // axis-aligned bounds (which are inflated and corner-anchored for any
+  // tilted node). Requires `relativeTransform`/`size` in the REST payload
+  // (`geometry=paths`).
+  rotation?: number;
+  // Ink bounds (absoluteRenderBounds) relative to the parent's bounding box,
+  // emitted for vector-class nodes whose rendered ink differs from their
+  // layout box (e.g. text-on-path, where the box says nothing about where
+  // the glyphs sit). Lets an exported derivative be placed exactly.
+  renderBounds?: { x: number; y: number; width: number; height: number };
 }
 
 export function convertSizing(
