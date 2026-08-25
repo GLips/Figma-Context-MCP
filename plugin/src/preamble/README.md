@@ -1,9 +1,11 @@
 # `preamble/` — the `flcm` std-lib
 
 This directory is the sandbox std-lib that rides inside every `execute_code` call. Each fragment is a
-**real typed ES module**; `index.mjs`'s `buildSandboxPreamble()` esbuild-bundles them into one string,
-`SANDBOX_PREAMBLE`, which `code.ts` prepends to the agent's code inside the wrapping
-`(async function(){ … })()`.
+**real typed ES module**; `index.mjs`'s `buildSandboxPreamble()` esbuild-bundles them into one string
+and wraps it as a **factory expression** — `(function (__flcmHost) { … return flcm })`. The **server**
+holds that string (ADR-0010: the plugin no longer bundles the DSL) and sends it with every
+`EXECUTE_CODE`; `code.ts` evaluates it, calls it with the run's `FlcmHost`, and hands the resulting
+`flcm` to the agent's code as a parameter.
 
 ## Two layers: typed modules at authoring time, one IIFE at runtime
 
@@ -13,17 +15,17 @@ The fragments are authored as ordinary ES modules — they `import` helpers from
 
 The sandbox itself is QuickJS with **no module system**. So `buildSandboxPreamble()` runs esbuild to
 bundle `runtime.ts` at **`format: 'iife'` + `globalName: 'flcm'`**. That wraps the whole module graph
-in one IIFE that assigns a single `flcm` global. The agent calls `flcm.frame(...)`,
-`await flcm.render(...)`, etc.
+in one IIFE assigning a single `flcm` var, which the surrounding factory returns. The agent calls
+`flcm.frame(...)`, `await flcm.render(...)`, etc.
 
 ### Why this gives clean, prefix-free internals
 
 Only the names `runtime.ts` re-exports become members of the `flcm` global. Every other
 declaration — `toFigmaPaint`, `buildFrame`, `parseFill`, the boundary parsers — is reachable from those
 roots (so esbuild keeps it in the bundle) but stays **closure-private inside the IIFE**. It is invisible
-to, and uncollidable with, the agent's code that runs in the same eval scope. So **internal helpers use
-plain names with no collision-safety prefix** — the closure is the namespace a module system would
-otherwise provide.
+to, and uncollidable with, the agent's code — which sees nothing of this bundle but the one `flcm`
+object handed to it. So **internal helpers use plain names with no collision-safety prefix** — the
+closure is the namespace a module system would otherwise provide.
 
 > This replaced an earlier `format: 'esm'` bundle that emitted bare top-level declarations sharing one
 > flat scope with the agent's code, which is why internals used to carry a `__cm*` prefix. The only

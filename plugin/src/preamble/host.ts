@@ -12,8 +12,9 @@
 // cost nothing to change.
 //
 // Both halves import this type, so renaming a method or changing its shape is a tsc error on BOTH
-// sides. Only the binding name `__flcmHost` crosses the eval boundary no compiler can see — one
-// string, greped out of the built bundle by build.mjs, and the whole of the residual drift risk.
+// sides. Only the binding name `__flcmHost` crosses the eval boundary no compiler can see — and its
+// other end is the factory wrapper index.mjs writes around this bundle, which refuses to emit one
+// that doesn't reference the name. Rename it here alone and the generator throws.
 // No optional members, deliberately: a host either exists or it doesn't, and one that exists
 // answers for everything. That is what lets the accessors below check presence ONCE instead of
 // probing each method — and what makes a partial host a test bug rather than a supported shape.

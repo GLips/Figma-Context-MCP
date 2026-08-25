@@ -48,10 +48,29 @@ export default defineConfig({
       // bother returning one.
       name: "flcm-preamble",
       setup(build) {
+        let injected = false;
         build.onLoad(
           { filter: /[/\\]services[/\\]plugin-bridge[/\\]sandbox-preamble\.ts$/ },
-          async () => ({ contents: await buildSandboxPreambleModule(), loader: "ts" }),
+          async () => {
+            injected = true;
+            return { contents: await buildSandboxPreambleModule(), loader: "ts" };
+          },
         );
+        // The failure this exists for is SILENT: if the filter above stops matching — the module
+        // moves, the path separators differ, tsup reorders its plugins — esbuild happily loads the
+        // on-disk placeholder, the build succeeds, every test stays green (vitest runs its own
+        // injection), and the published package throws on the first execute_code a user makes.
+        // Nothing downstream of here can tell the two builds apart, so say it at the only moment
+        // that can.
+        build.onEnd(() => {
+          if (!injected) {
+            throw new Error(
+              "the flcm std-lib was never injected — the onLoad filter above matched nothing, so " +
+                "dist ships the fail-loud placeholder in src/services/plugin-bridge/sandbox-preamble.ts " +
+                "and every execute_code would die on it. Check that the module still lives at that path.",
+            );
+          }
+        });
       },
     } satisfies Plugin,
   ],

@@ -3,10 +3,34 @@ import { mintPairingCode, SESSION_IDENTITY } from "./approval.js";
 import { ApprovalStore } from "./approval-store.js";
 import { Logger } from "~/utils/logger.js";
 
-export interface BridgeRequest {
-  type: string;
-  [key: string]: unknown;
-}
+/**
+ * Every request the server can send the plugin, as a closed union rather than `{ type: string }` plus
+ * an index signature.
+ *
+ * The open shape typechecked the one call this whole design exists to forbid: since ADR-0010 the flcm
+ * std-lib rides on EXECUTE_CODE, so a `preamble`-less one is a request the plugin must refuse. Making
+ * that a compile error is cheaper than discovering it as a runtime ERROR envelope.
+ *
+ * The plugin still validates what arrives, and should — JSON off a socket is untrusted however this
+ * end is typed. This closes the SENDING side, which is the side a refactor can quietly break.
+ *
+ * `id` is deliberately absent: request() mints the correlation id and appends it last, so no payload
+ * field can overwrite it.
+ */
+export type BridgeRequest =
+  | { type: "PING"; payload: string }
+  | { type: "GET_VERSION" }
+  | { type: "NOTIFY"; message: string }
+  // Both nullable on purpose, matching SessionConn on the plugin side: the pairing code is null with
+  // no connection, and the session token is null until the human's first Allow mints one.
+  | {
+      type: "SESSION_INFO";
+      identity: string;
+      pairingCode: string | null;
+      sessionToken: string | null;
+    }
+  | { type: "EXECUTE_CODE"; code: string; preamble: string }
+  | { type: "SCREENSHOT"; nodeId?: string; key?: string; scale?: number };
 
 /** Answers the plugin's mid-run IMAGES_REQUEST with url→base64 bytes (see image-requests.ts). */
 export type ImagesRequestHandler = (urls: string[]) => Promise<Record<string, string>>;

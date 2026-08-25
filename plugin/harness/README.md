@@ -15,9 +15,9 @@ and the file's return value, so a tester can eyeball correctness without pixels.
 
 ## It runs the REAL preamble — not a fork
 
-`dogfood.mjs` esbuild-bundles `src/preamble/index.ts` fresh each run to get the actual
-`SANDBOX_PREAMBLE`, then executes the file in the same `(async function(){ PREAMBLE; code })()` shape
-as `executeCode` in `code.ts`. So a green run validates the real `frame`/`text`/`defineComponent`/
+`dogfood.mjs` calls `buildSandboxPreamble()` fresh each run to get the actual std-lib the server
+ships, then runs the file in the same two-eval shape as `executeCode` in `code.ts`: call the factory
+with a stand-in `FlcmHost`, hand the resulting `flcm` to the scenario. So a green run validates the real `frame`/`text`/`defineComponent`/
 `override`/`find`/`hex`/reconcile/guards — if a fragment changes, the harness changes with it.
 
 ## What the mock DOES model (faithful enough to trust a green run)

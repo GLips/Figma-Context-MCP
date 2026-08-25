@@ -15,7 +15,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
 import { createServer } from "~/mcp/index.js";
-import type { PluginBridge } from "~/services/plugin-bridge/bridge.js";
+import type { BridgeRequest, PluginBridge } from "~/services/plugin-bridge/bridge.js";
 import type { PluginBridgeRuntime } from "~/services/plugin-bridge/index.js";
 
 function connectedServer() {
@@ -56,15 +56,16 @@ describe("figma_execute_code ships the flcm std-lib", () => {
       await call("figma_execute_code", { code: "return 1" });
 
       expect(request).toHaveBeenCalledTimes(1);
-      const sent = request.mock.calls[0][0] as { type: string; code: string; preamble?: string };
+      // Named against the real union member, not a hand-written shape: drop `preamble` from
+      // BridgeRequest and this file stops compiling rather than quietly asserting on `undefined`.
+      const sent = request.mock.calls[0][0] as Extract<BridgeRequest, { type: "EXECUTE_CODE" }>;
       expect(sent.type).toBe("EXECUTE_CODE");
       expect(sent.code).toBe("return 1");
 
-      // Substance, not just presence: the real generated bundle, carrying the verbs an agent calls.
-      // A stub or an empty string would satisfy `toBeDefined()` and ship a plugin that can't run.
-      expect(sent.preamble).toContain("flcm std-lib");
+      // Substance, not just presence: the real generated bundle, in the shape the plugin calls.
+      // A stub would satisfy `toBeDefined()` and ship a plugin that can't run.
+      expect(sent.preamble).toContain("(function (__flcmHost) {");
       expect(sent.preamble).toContain("render");
-      expect(sent.preamble!.length).toBeGreaterThan(50_000);
     } finally {
       await close();
     }

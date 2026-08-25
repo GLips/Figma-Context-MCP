@@ -190,11 +190,12 @@ export function registerCodeModeTools(
   }
 
   /**
-   * The protocol gate: a plugin below MIN_PROTOCOL_VERSION cannot speak the mid-run image
-   * protocol (the DSL runtime ships in the plugin bundle), so write tools REFUSE outright and
-   * name the re-import fix — no compat path, nothing shipped before v2. The refusal is the
-   * agent half of the dual-channel skew message (the human half is the connect toast); it
-   * reaches even a pre-handshake plugin, which can't render the toast.
+   * The protocol gate: a plugin below MIN_PROTOCOL_VERSION cannot host what this server sends — it
+   * either predates the mid-run image protocol or still carries its own bundled DSL and ignores the
+   * preamble on the wire. So write tools REFUSE outright and name the re-import fix — no compat
+   * path, nothing was ever shipped. The refusal is the agent half of the dual-channel skew message
+   * (the human half is the connect toast); it reaches even a pre-handshake plugin, which can't
+   * render the toast.
    *
    * The rule for which tools it guards: a tool that TOUCHES THE CANVAS (or reads it — screenshots)
    * is refused outright; a docs tool still serves, with the note PREPENDED (get_flcm_reference).

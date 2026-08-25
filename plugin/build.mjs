@@ -1,5 +1,4 @@
 import * as esbuild from "esbuild";
-import { readFileSync } from "node:fs";
 
 // Figma's plugin sandbox loads a single classic script as `main`. Bundle code.ts into an IIFE so it
 // runs there directly. Neither the agent's code NOR the flcm std-lib is bundled here — both travel
@@ -15,24 +14,12 @@ await esbuild.build({
   logLevel: "info",
 });
 
-// The one unpinnable seam in the host↔preamble interface. The host passes its FlcmHost capability
-// object as a parameter of a function that exists only inside an eval'd STRING, and the preamble
-// picks it up as the free identifier `__flcmHost` — so no bundler or type checker connects the two
-// sides, and a rename would detach image fills and cancellation enforcement with no symptom until
-// live Figma. Grep the shipped bundle so that drift fails the build instead.
+// Negative space, both deliberate: this build asserts nothing about the bundle afterwards.
 //
-// Only the NAME needs this. The object's methods are pinned by types: both halves import FlcmHost
-// (src/preamble/host.ts), so renaming or reshaping one is a tsc error on both sides. That is the
-// whole reason the interface was collapsed from two loose identifiers into one named object.
+// No zod check — the preamble isn't in here anymore, so grepping this output for it would be
+// vacuous. It moved to the seam that PRODUCES the preamble (src/preamble/index.mjs).
 //
-// Negative space: there is deliberately no zod check here anymore. It moved to the seam that
-// PRODUCES the preamble (buildSandboxPreamble, src/preamble/index.mjs) — asserting it on this
-// bundle would be vacuous now that the preamble isn't in it.
-const bundle = readFileSync("dist/code.js", "utf8");
-if (!bundle.includes("async function(__flcmHost)")) {
-  throw new Error(
-    "dist/code.js lost the `async function(__flcmHost)` eval wrapper — the preamble's host channel " +
-      "(images, run cancellation) would silently detach. Check executeCode in src/code.ts against the " +
-      "`__flcmHost` declare in src/preamble/host.ts.",
-  );
-}
+// No `__flcmHost` check either. code.ts calls the std-lib factory positionally and never names that
+// identifier; the wrapper that binds it and the bundle that reads it are both emitted by
+// index.mjs, which asserts they agree. A grep here could only re-check one end of a seam whose ends
+// no longer live apart.

@@ -1,22 +1,23 @@
-// SANDBOX_PREAMBLE generator — the sole seam every consumer goes through. The SERVER build
+// The flcm std-lib generator — the sole seam every consumer goes through. The SERVER build
 // (tsup.config.ts, which injects the result into the shipped bundle) and harness/dogfood.mjs each
 // call buildSandboxPreamble(); neither learns the fragment layout or order. The plugin no longer
 // calls it at all — ADR-0010 moved the runtime onto the server so DSL changes skip the re-import.
 //
-// The preamble is the std-lib source string injected ahead of the agent's code inside the one async
-// IIFE that wraps every execute_code call (see executeCode in code.ts). It defines a single `flcm`
-// global; the agent calls flcm.frame()/flcm.render()/etc.
+// What it emits is a FACTORY EXPRESSION, not a paste-in blob: `eval(preamble)(host)` takes the
+// FlcmHost and returns the `flcm` surface the agent calls (flcm.frame()/flcm.render()/…). That shape
+// is what keeps `__flcmHost` — the one identifier no compiler can follow across eval — entirely
+// inside this directory. This file writes the wrapper that BINDS it and asserts the bundle READS it
+// (see below); the consumers only ever call the factory positionally, so none of them can drift.
 //
 // The fragments are authored as real typed ES modules (so tsc checks the shipped JS), but QuickJS has
 // no module system — so esbuild bundles runtime.ts as an IIFE with globalName 'flcm'. That wraps the
 // whole module graph in one closure: only the verbs runtime.ts re-exports land on the `flcm` global,
-// and every internal helper is closure-private — uncollidable with the agent's code in the shared eval
-// scope, which is why no helper needs a name prefix.
+// and every internal helper is closure-private — uncollidable with the agent's code, which is why no
+// helper needs a name prefix.
 //
 // Why a generator and not a plain string export: bundling requires running esbuild, which can't happen
 // inside the Figma sandbox — so the string is produced at the server's build time and fresh each
-// dogfood run, both by calling this one function. It returns the input graph alongside the string so
-// a watching build can rebuild when a fragment changes.
+// dogfood run, both by calling this one function.
 import * as esbuild from "esbuild";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
@@ -32,8 +33,7 @@ export async function buildSandboxPreamble() {
     bundle: true, write: false, format: "iife", globalName: "flcm", target: "esnext", platform: "neutral",
     // The read path bundles the repo-root simplify core, whose internal imports use the root's ~/ alias.
     alias: { "~": resolve(here, "../../../src") },
-    // Powers the zod gate below and the watch list callers need — both want the real input graph,
-    // not a guess at it.
+    // Powers the zod gate below: it asks the real input graph rather than guessing from the output.
     metafile: true,
   });
   const code = bundled.outputFiles[0].text;
@@ -64,9 +64,30 @@ export async function buildSandboxPreamble() {
     );
   }
 
+  // The other load-bearing invariant, and the reason the wrapper below is written HERE rather than
+  // in code.ts: `__flcmHost` is the single identifier that crosses an eval boundary, so no bundler
+  // or type checker connects the binding to the read. Emitting both ends from one file reduces that
+  // to a check this generator can make itself — the bundle it just produced must actually reference
+  // the name the wrapper is about to bind. Rename it in host.ts alone and this throws; rename it in
+  // both and nothing outside this directory needs to know.
+  if (!code.includes("__flcmHost")) {
+    throw new Error(
+      "the flcm std-lib bundle never references `__flcmHost` — src/preamble/host.ts must read that " +
+        "exact free identifier, since it is the name the factory wrapper binds. Image fills and run " +
+        "cancellation would detach silently in live Figma.",
+    );
+  }
+
+  // Wrapped as a callable expression: `eval(preamble)(host)` → the `flcm` surface. `flcm` is the var
+  // esbuild's globalName emits, declared inside this function rather than in whatever scope the
+  // consumer eval'd from — so the std-lib's single global never leaks into the agent's scope by
+  // accident; the caller hands it to the agent's code deliberately.
   return [
     "// ===== flcm std-lib (injected) =====",
+    "(function (__flcmHost) {",
     code,
+    "return flcm;",
+    "})",
     "// ===== end std-lib =====",
   ].join("\n");
 }

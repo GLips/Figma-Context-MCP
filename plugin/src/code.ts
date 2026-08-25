@@ -8,6 +8,9 @@ import { createRunCancellationRegistry } from "./run-cancellation.js";
 // interface to the preamble half, and it must stay erasable — a value import from preamble/ would
 // drag the whole std-lib back into this bundle, which is exactly what ADR-0010 removed.
 import type { FlcmHost } from "./preamble/host.js";
+// Likewise type-only: the shape the std-lib factory hands back, so the agent's `flcm` parameter is
+// the real surface rather than `any`. Names what runtime.ts re-exports — nothing more.
+import type * as FlcmRuntime from "./preamble/runtime.js";
 
 // The window is a fixed-width strip whose HEIGHT is whatever the iframe measures after each render
 // (UI_HEIGHT) — so "collapsed" and "expanded" are CSS states over there, not two magic numbers here.
@@ -682,23 +685,25 @@ async function executeCode(to: ReplyTo, code: string, preamble: string): Promise
   let result: unknown;
   let errorMessage: string | null = null;
   try {
-    // The preamble bundle rides INSIDE the same async wrapper as the user's code, so its single
-    // `flcm` global (flcm.frame/text/render/…) is simply in scope. The leading preamble also
-    // preloads fonts (an `await`), which is why the wrapper must be async.
+    // Two evals, and the split is the point. The std-lib the server sent is a FACTORY expression
+    // (buildSandboxPreamble, src/preamble/index.mjs): call it with the host, get the `flcm` surface
+    // back, hand that to the agent's code as a named parameter. Nothing HERE knows how the preamble
+    // binds its host — the one identifier that crosses that eval boundary lives wholly inside
+    // preamble/, bound and asserted by the single file that emits both ends of it.
     //
-    // The host capability object rides in as the single PARAMETER of the wrapper: the preamble
-    // references the free identifier `__flcmHost`, which resolves to this argument. A parameter
-    // inside the eval'd STRING, not a scope-chain local, so no bundler pass can rename the binding
-    // away from the preamble's reference (build.mjs pins that the wrapper head survives verbatim).
-    // Its METHODS need no such pinning — both sides import the FlcmHost type, so tsc catches a
-    // rename there. Bound to `to`, so it answers for THIS run's correlation id and source port.
+    // The host is bound to `to`, so it answers for THIS run's correlation id and source port. Its
+    // methods need no pinning of their own: both sides import FlcmHost, so tsc catches a reshape.
+    //
+    // Giving the agent's code its own wrapper also keeps its line numbers its own — a thrown error
+    // reports where the AGENT wrote it, not an offset into ~230 KiB of std-lib. That wrapper is
+    // async because the agent awaits flcm.render(); the factory itself is synchronous (the font
+    // preload runs inside render(), not at module top level).
     const host: FlcmHost = {
       requestImages: (urls: string[]) => requestServerImages(to, urls),
       isRunCancelled: () => cancelledRuns.isCancelled(to),
     };
-    const raw = await eval(
-      "(async function(__flcmHost){ " + preamble + "\n;\n" + code + "\n })",
-    )(host);
+    const flcm = (eval(preamble) as (host: FlcmHost) => typeof FlcmRuntime)(host);
+    const raw = await eval("(async function(flcm){ " + code + "\n })")(flcm);
     // Return-path node guard (R2): a returned live node would otherwise collapse to
     // { id } and silently drop everything else. Make that loud instead of lossy.
     guardReturnValue(raw);
