@@ -276,10 +276,12 @@ test("a node deleted during the resource round trip refuses the whole batch — 
   // The image fetch is the batch's suspension point; standing in for the user, the channel deletes
   // one entry's target before handing the bytes back. Figma keeps accepting writes to a removed
   // node, so nothing downstream would notice — it would just paint an object off the canvas.
-  const g = globalThis as { __flcmRequestImages?: unknown };
-  g.__flcmRequestImages = async (urls: string[]) => {
-    a.remove();
-    return Object.fromEntries(urls.map((u) => [u, Buffer.from("bytes").toString("base64")]));
+  const g = globalThis as { __flcmHost?: unknown };
+  g.__flcmHost = {
+    requestImages: async (urls: string[]) => {
+      a.remove();
+      return Object.fromEntries(urls.map((u) => [u, Buffer.from("bytes").toString("base64")]));
+    },
   };
   try {
     await assert.rejects(
@@ -290,7 +292,7 @@ test("a node deleted during the resource round trip refuses the whole batch — 
       /\[0\].*was deleted while this call was loading fonts and images/s,
     );
   } finally {
-    delete g.__flcmRequestImages;
+    delete g.__flcmHost;
   }
   assert.equal(b.opacity, 1); // the surviving entry never landed either — the set is atomic
   assert.deepEqual(figma.undoLog, logBefore);

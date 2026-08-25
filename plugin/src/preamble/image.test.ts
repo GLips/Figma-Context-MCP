@@ -1,6 +1,6 @@
 // Images, sandbox side: flcm.image is an inert paint value; render() batches every image url into
 // ONE deduped mid-run request (protocol 2), awaits the bytes, and resolves each spec to a plugin
-// ImagePaint. The channel is the host-installed __flcmRequestImages free identifier — in the live
+// ImagePaint. The channel is FlcmHost.requestImages, off the host-installed __flcmHost — in the live
 // plugin it's the parameter of the eval'd wrapper executeCode builds; here (plain import → module
 // scope chains to global) we install it on globalThis, exactly as the dogfood harness does.
 import { test } from "node:test";
@@ -19,15 +19,17 @@ async function renderWithImages(
   respond: (urls: string[]) => Promise<Record<string, string>>,
 ): Promise<{ out: Awaited<ReturnType<typeof render>>; batches: string[][] }> {
   const batches: string[][] = [];
-  const g = globalThis as { __flcmRequestImages?: unknown };
-  g.__flcmRequestImages = async (urls: string[]) => {
-    batches.push(urls);
-    return respond(urls);
+  const g = globalThis as { __flcmHost?: unknown };
+  g.__flcmHost = {
+    requestImages: async (urls: string[]) => {
+      batches.push(urls);
+      return respond(urls);
+    },
   };
   try {
     return { out: await render(tree), batches };
   } finally {
-    delete g.__flcmRequestImages;
+    delete g.__flcmHost;
   }
 }
 
@@ -86,7 +88,7 @@ test("a failed image fetch rejects the render with zero canvas writes", async ()
 test("render without a host image channel fails loud naming the channel", async () => {
   await assert.rejects(
     render(rect({ width: 10, height: 10, fill: image("https://cdn.example.com/a.jpg") })),
-    /no image channel \(__flcmRequestImages\)/,
+    /no host image channel \(FlcmHost.requestImages\)/,
   );
 });
 
@@ -124,7 +126,7 @@ test("a real (non-placeholder) image still records its src for read-back", async
 // the document, so rebuilding it needs no server round trip and no url the agent never had. ----
 
 test("a read-form image fill paints from the live hash — no fetch, no channel needed", async () => {
-  // No __flcmRequestImages installed: reaching the fetch at all would fail loud, which is the point.
+  // No __flcmHost installed: reaching the fetch at all would fail loud, which is the point.
   const out = await render(
     rect({
       width: 200,

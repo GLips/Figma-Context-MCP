@@ -28,11 +28,7 @@
 // is the rule itself: a batch verb (editMany) takes the lock once and drives the commit-free
 // internal appliers, never the public verbs (invariant 4).
 
-// Host-installed cancellation flag — code.ts binds it to this run's CANCEL state. Like
-// __flcmRequestImages it arrives as a PARAMETER of the eval'd wrapper (build.mjs pins the pairing);
-// the typeof guard keeps the harness and unit tests (which run in global scope and may not install
-// it) alive.
-declare const __flcmRunCancelled: (() => boolean) | undefined;
+import { hostRunCancelled } from "./host.js";
 
 let verbChain: Promise<unknown> = Promise.resolve();
 
@@ -48,7 +44,7 @@ export function committedVerbCount(): number {
 }
 
 function refuseIfCancelled(verb: string): void {
-  if (typeof __flcmRunCancelled === "function" && __flcmRunCancelled()) {
+  if (hostRunCancelled()) {
     throw new Error(
       "flcm." + verb + ": this run was cancelled by the server (its deadline passed) — no further " +
         "mutating verbs start. The canvas holds what completed before the cancellation.",

@@ -12,12 +12,24 @@
 // Lowest protocol the server will drive. Bump in the same change that makes a server feature
 // require a newer plugin envelope.
 //
+// What the compatibility boundary actually is, since v3: the envelope PLUS the FlcmHost interface
+// (plugin/src/preamble/host.ts) — the handful of capabilities the host passes into the eval'd
+// preamble. Everything else about the DSL ships from the server and needs no bump at all. An
+// incompatible change to either half is what earns a new number here.
+//
 // v2: the mid-run image protocol — plugin-issued IMAGES_REQUEST/IMAGES_REPLY reverse direction
-// and the run-scoped CANCEL frame, replacing the two-pass re-run. The DSL runtime lives in the
-// PLUGIN bundle, so a v1 plugin genuinely cannot speak this: its render() still throws the
-// retired imagesNeeded sentinel and it drops CANCEL frames. Nothing shipped before v2, so
-// there is deliberately NO compat path — the fix is a re-import, and the refusal names it.
-export const MIN_PROTOCOL_VERSION = 2;
+// and the run-scoped CANCEL frame, replacing the two-pass re-run. A v1 plugin genuinely cannot
+// speak this: its render() still throws the retired imagesNeeded sentinel and it drops CANCEL
+// frames.
+//
+// v3: EXECUTE_CODE carries the flcm std-lib and the plugin holds none of its own (ADR-0010), so a
+// v2 plugin handed a v3 request would silently ignore the field and run its OWN bundled runtime —
+// stale results with no error, which is why the gate must refuse rather than nudge. The same bump
+// covers collapsing the two host free identifiers into the single `__flcmHost` FlcmHost object.
+//
+// Nothing has ever shipped, at any version, so there is deliberately NO compat path — the fix is
+// always a re-import, and the refusal names it.
+export const MIN_PROTOCOL_VERSION = 3;
 
 export interface PeerVersion {
   pluginVersion?: string;

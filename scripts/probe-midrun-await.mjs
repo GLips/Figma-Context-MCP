@@ -29,6 +29,14 @@ import { PluginBridge } from "../src/services/plugin-bridge/bridge.ts";
 import { WS_PORT_BLOCK } from "../src/services/plugin-bridge/ports.ts";
 import { SESSION_IDENTITY } from "../src/services/plugin-bridge/approval.ts";
 import { requestUntilApproved } from "../src/services/plugin-bridge/await-approval.ts";
+import { MIN_PROTOCOL_VERSION } from "../src/services/plugin-bridge/version.ts";
+import { buildSandboxPreamble } from "../plugin/src/preamble/index.mjs";
+
+// These probes drive a REAL plugin, which holds no runtime of its own (ADR-0010) — so they must
+// ship the actual std-lib, not a stand-in. Built once here through the same seam the server build
+// uses; the contract harness, whose fake plugin never evals anything, uses a stub instead.
+const { preamble: PREAMBLE } = await buildSandboxPreamble();
+
 
 const SLOW_REPLY_MS = 4000;
 // A valid 1×1 transparent PNG — figma.createImage validates real image bytes.
@@ -74,19 +82,21 @@ async function runProbe() {
     });
 
     const version = await bridge.request({ type: "GET_VERSION" }).catch(() => ({}));
-    if (version.protocolVersion !== 2) {
+    // Gate on the server's own minimum rather than a literal, so a protocol bump doesn't silently
+    // leave this probe asserting a version nobody speaks anymore.
+    if (version.protocolVersion !== MIN_PROTOCOL_VERSION) {
       fail(
-        `the connected plugin reports protocol ${version.protocolVersion ?? "(none)"}, not 2 — it was ` +
-          `imported from an old build. Run \`pnpm build:plugin\` in THIS worktree and re-import ` +
-          `plugin/manifest.json from here, then re-run the probe.`,
+        `the connected plugin reports protocol ${version.protocolVersion ?? "(none)"}, not ` +
+          `${MIN_PROTOCOL_VERSION} — it was imported from an old build. Run \`pnpm build:plugin\` in ` +
+          `THIS worktree and re-import plugin/manifest.json from here, then re-run the probe.`,
       );
     }
-    log(`plugin speaks protocol 2 (v${version.pluginVersion}) ✓`);
+    log(`plugin speaks protocol ${version.protocolVersion} (v${version.pluginVersion}) ✓`);
     log(`sending the probe render — if the strip asks, click Allow (pairing code ${bridge.getPairingCode()})`);
 
     const runStart = Date.now();
     const reply = await requestUntilApproved(() =>
-      bridge.request({ type: "EXECUTE_CODE", code: PROBE_CODE }),
+      bridge.request({ type: "EXECUTE_CODE", code: PROBE_CODE, preamble: PREAMBLE }),
     );
     if (reply?.type === "PENDING_APPROVAL") {
       fail("the session was never approved — click Allow on the Framelink strip and re-run the probe.");
@@ -115,6 +125,7 @@ async function runProbe() {
     const cleanup = await bridge.request({
       type: "EXECUTE_CODE",
       code: `const n = await figma.getNodeByIdAsync(${JSON.stringify(rootId)}); if (n) n.remove(); return "cleaned";`,
+      preamble: PREAMBLE,
     });
     if (cleanup?.result !== "cleaned") {
       log(`⚠️ cleanup run returned ${JSON.stringify(cleanup?.result)} — delete the small "flcm-probe" frame by hand.`);

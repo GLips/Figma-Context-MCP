@@ -8,7 +8,7 @@
 //   the agent has already been told those runs failed). A cancelled run is refused wherever it
 //   next surfaces: at DEQUEUE, when its queued turn arrives (the sharp case — a run that timed
 //   out while queued must not later execute in full), and DURING execution, before each mutating
-//   verb starts (the preamble's mutation lock reads `isCancelled` through the __flcmRunCancelled
+//   verb starts (the preamble's mutation lock reads `isCancelled` through FlcmHost, the __flcmHost
 //   eval-wrapper parameter). A run suspended at its mid-run image await is additionally killed
 //   there (code.ts rejectImagesFetches); the server's own half refuses image requests naming a
 //   dead run.

@@ -84,13 +84,15 @@ test("a non-createable node type takes only the shared words, and the error name
 test("an image fill in a delta fetches bytes through the host channel and stamps flcm/image", async () => {
   const node = await renderKeyedRowFrame();
   const url = "https://cdn.example.com/a.jpg";
-  const g = globalThis as { __flcmRequestImages?: unknown };
-  g.__flcmRequestImages = async (urls: string[]) =>
-    Object.fromEntries(urls.map((u) => [u, Buffer.from("fake-image-bytes").toString("base64")]));
+  const g = globalThis as { __flcmHost?: unknown };
+  g.__flcmHost = {
+    requestImages: async (urls: string[]) =>
+      Object.fromEntries(urls.map((u) => [u, Buffer.from("fake-image-bytes").toString("base64")])),
+  };
   try {
     await edit("card", { fill: image(url) });
   } finally {
-    delete g.__flcmRequestImages;
+    delete g.__flcmHost;
   }
   assert.equal(node.fills[0].type, "IMAGE");
   assert.equal(JSON.parse(node.getPluginData("flcm/image")).url, url);
@@ -117,13 +119,15 @@ test('"none" is the removal word: fill/stroke/effects clear with a real write, n
 
 test('clearing an image fill with "none" wipes the flcm/image provenance too', async () => {
   const node = await renderKeyedRowFrame();
-  const g = globalThis as { __flcmRequestImages?: unknown };
-  g.__flcmRequestImages = async (urls: string[]) =>
-    Object.fromEntries(urls.map((u) => [u, Buffer.from("fake-image-bytes").toString("base64")]));
+  const g = globalThis as { __flcmHost?: unknown };
+  g.__flcmHost = {
+    requestImages: async (urls: string[]) =>
+      Object.fromEntries(urls.map((u) => [u, Buffer.from("fake-image-bytes").toString("base64")])),
+  };
   try {
     await edit("card", { fill: image("https://cdn.example.com/b.jpg") });
   } finally {
-    delete g.__flcmRequestImages;
+    delete g.__flcmHost;
   }
   assert.notEqual(node.getPluginData("flcm/image"), "");
   await edit("card", { fill: "none" });
@@ -718,10 +722,12 @@ test("a live fact that changed during the resource round trip refuses the whole 
   const logBefore = [...figma.undoLog];
   // The image fetch is the run's suspension point, and the user has the document open across it.
   // Standing in for that user: the channel retypes the node's font before handing the bytes back.
-  const g = globalThis as { __flcmRequestImages?: unknown };
-  g.__flcmRequestImages = async (urls: string[]) => {
-    node.fontName = { family: "Inter", style: "Regular" };
-    return Object.fromEntries(urls.map((u) => [u, Buffer.from("bytes").toString("base64")]));
+  const g = globalThis as { __flcmHost?: unknown };
+  g.__flcmHost = {
+    requestImages: async (urls: string[]) => {
+      node.fontName = { family: "Inter", style: "Regular" };
+      return Object.fromEntries(urls.map((u) => [u, Buffer.from("bytes").toString("base64")]));
+    },
   };
   try {
     // fontWeight was enriched against the live (bold) identity, which is gone by the time the
@@ -731,7 +737,7 @@ test("a live fact that changed during the resource round trip refuses the whole 
       /changed while this call was loading fonts and images/,
     );
   } finally {
-    delete g.__flcmRequestImages;
+    delete g.__flcmHost;
   }
   assert.deepEqual(node.fontName, { family: "Inter", style: "Regular" }); // the user's own retype stands
   assert.equal(node.fontSize, 12); // the delta never landed — still the default size

@@ -30,6 +30,7 @@ import { layerBlurFromCssPx, backgroundBlurFromCssPx, shadow, glass, noise, text
 import { parseColor, parseFill, parseCssEffects, parseBlendMode, boxShorthand, length, lineHeight, letterSpacing, isPercent, percent } from "./css.js";
 import { buildNode, placeRootOnPage, settleHandles, resolvePercents, RenderCtx, RenderResources } from "./bridge.js";
 import { enterMutatingVerb } from "./mutation-lock.js";
+import { requestHostImages } from "./host.js";
 import { get, find, findOne, selection } from "./read.js";
 import { rejectUnknownKeys } from "./validate.js";
 
@@ -1059,17 +1060,6 @@ function normalizeEffects(v: EffectsInput): EffectSpec[] {
   return out;
 }
 
-// The host-installed mid-run image channel (protocol 2). executeCode (code.ts) passes this as the
-// PARAMETER of the eval'd async wrapper this preamble runs inside, so the reference resolves as a
-// function argument — no globalThis dependency in QuickJS, and immune to bundler renaming (both
-// names live inside eval'd strings; build.mjs greps the bundle for the wrapper head to pin the
-// pairing). The harness and preamble unit tests run via indirect eval / plain import (global
-// scope) and install it on globalThis instead; both paths resolve the same free identifier, and
-// `typeof` keeps the probe safe where it's truly absent.
-declare const __flcmRequestImages:
-  | ((urls: string[]) => Promise<Record<string, string>>)
-  | undefined;
-
 // Gather every image url in the tree — from EVERY paint-bearing location the bridge later resolves through
 // paintOf (node fills/strokes AND per-run fills), so render() can check which still need server-fetched
 // bytes before it creates a single node. This must stay in lockstep with paintOf's coverage: a paint site
@@ -1106,10 +1096,7 @@ export async function fetchImagesForTrees(trees: readonly WriteProps[]): Promise
   for (const tree of trees) for (const url of collectImageUrls(tree)) all.push(url);
   const urls = Array.from(new Set(all));
   if (!urls.length) return {};
-  if (typeof __flcmRequestImages !== "function") {
-    throw new Error("flcm.image: this runtime has no image channel (__flcmRequestImages) — image fills need the live plugin bridge.");
-  }
-  return __flcmRequestImages(urls);
+  return requestHostImages(urls);
 }
 
 // The two read-only resource loads a tree needs before ANY node is created — fonts and image

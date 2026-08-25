@@ -115,6 +115,13 @@ function makeSandbox() {
 const sandbox = makeSandbox();
 let mintCounter = 0;
 
+// Every EXECUTE_CODE carries the flcm std-lib (ADR-0010) — the server ships the runtime and the
+// plugin holds none. A stand-in string, not the real ~230 KiB bundle: this harness pins the ENVELOPE
+// (the field is always present, and its absence is refused before consent), and its fake plugin
+// never evals anything, so building the real preamble here would only re-test esbuild. The live
+// probes, which drive a real plugin, do build the real one.
+const PREAMBLE = "/* flcm std-lib stand-in */";
+
 // A faithful stand-in for code.ts's reply contract. Pass `version` to model a CURRENT
 // plugin (answers GET_VERSION/NOTIFY); omit it to model a spike-era plugin that predates
 // those handlers and falls through to the envelope ERROR — the skew case the nudge rescues.
@@ -146,7 +153,11 @@ function fakePlugin(origin, { version, wsOptions, url = URL, state = sandbox } =
       state.currentToken = typeof msg.sessionToken === "string" ? msg.sessionToken : null;
       send({ type: "SESSION_INFO_ACK" });
     } else if (msg.type === "EXECUTE_CODE") {
-      if (state.currentToken && state.approvedTokens.has(state.currentToken)) send({ type: "EXECUTE_CODE_RESULT", result: "ok", console: [], errors: null });
+      // Mirrors code.ts's order exactly: a request with no std-lib can never execute, so it is
+      // refused as a protocol ERROR BEFORE the consent gate — asking a human to approve a doomed
+      // write would be asking consent for nothing.
+      if (typeof msg.preamble !== "string" || !msg.preamble) send({ type: "ERROR", error: "the server sent no flcm std-lib — update the server and restart it" });
+      else if (state.currentToken && state.approvedTokens.has(state.currentToken)) send({ type: "EXECUTE_CODE_RESULT", result: "ok", console: [], errors: null });
       else send({ type: "PENDING_APPROVAL" });
     } else if (version && msg.type === "GET_VERSION") {
       send({ type: "VERSION", ...version });
@@ -179,7 +190,7 @@ const pairingCode = bridge.getPairingCode();
 assert.match(String(pairingCode), /^\d{4}$/, "a 4-digit pairing code is minted per connection");
 assert.equal(bridge.getSessionToken(), null, "no session token before the first Allow");
 await bridge.request({ type: "SESSION_INFO", identity: SESSION_IDENTITY, pairingCode, sessionToken: bridge.getSessionToken() });
-const preApproval = await bridge.request({ type: "EXECUTE_CODE", code: "return 1" });
+const preApproval = await bridge.request({ type: "EXECUTE_CODE", code: "return 1", preamble: PREAMBLE });
 assert.equal(preApproval.type, "PENDING_APPROVAL", "write before approval is gated, not run");
 console.log(`✅ Pre-approval write returns PENDING_APPROVAL (code ${pairingCode} minted, identity introduced)`);
 
@@ -189,8 +200,21 @@ console.log(`✅ Pre-approval write returns PENDING_APPROVAL (code ${pairingCode
 plugin.allow();
 await wait(50); // let the handed-over SESSION_TOKEN reach and persist on the bridge
 assert.match(String(bridge.getSessionToken()), /^tok-/, "the bridge persisted the handed-over session token");
-assert.equal((await bridge.request({ type: "EXECUTE_CODE", code: "return 1" })).result, "ok", "approved write runs");
+assert.equal((await bridge.request({ type: "EXECUTE_CODE", code: "return 1", preamble: PREAMBLE })).result, "ok", "approved write runs");
 console.log("✅ After Allow, the same write runs (server persisted the minted token)");
+
+// ADR-0010, the server half: EXECUTE_CODE carries the flcm std-lib, and a request without one is
+// refused as a protocol error naming the fix — never a bare eval against a missing `flcm`. Pinned
+// because this field is what makes the plugin a dumb host; drop it and every write dies inside the
+// sandbox with "flcm is not defined" instead.
+// An envelope ERROR REJECTS the request rather than resolving it (bridge.handleMessage) — which is
+// the point: this is a protocol failure, so it surfaces as a thrown error and can never be mistaken
+// for a run that completed with no result.
+let noPreamble = null;
+try { await bridge.request({ type: "EXECUTE_CODE", code: "return 1" }); } catch (e) { noPreamble = e; }
+assert.ok(noPreamble, "a preamble-less write rejects, rather than resolving as a run result");
+assert.match(noPreamble.message, /update the server/, "the refusal names the fix");
+console.log("✅ EXECUTE_CODE carries the flcm std-lib; its absence is refused before consent");
 
 const t0 = Date.now();
 let rejected = null;
@@ -204,7 +228,7 @@ console.log(`✅ Unknown type rejects in ${Date.now() - t0}ms (not a 15s hang)`)
 // server attached does NOT come back. Pinned from the server side so no server code grows a
 // dependency on pass-through metadata — the general echo it would need silently turns a field the
 // PLUGIN consumes into what looks like metadata a newer server sent.
-const replied = await bridge.request({ type: "EXECUTE_CODE", code: "return 1", sessionId: "abc-123" });
+const replied = await bridge.request({ type: "EXECUTE_CODE", code: "return 1", preamble: PREAMBLE, sessionId: "abc-123" });
 assert.equal(replied.sessionId, undefined, "a field the server attached must not come back on the reply");
 console.log("✅ Replies carry nothing back from the request but its correlation id");
 
@@ -216,7 +240,7 @@ assert.equal(connected, 1, "web origins must not reach the connection handler");
 console.log("✅ Web-origin (incl. figma.com) connections refused");
 
 assert.equal(await refusedOrOpened(fakePlugin("null")), "refused", "second connection refused");
-assert.equal((await bridge.request({ type: "EXECUTE_CODE", code: "return 1" })).result, "ok", "original plugin still drives");
+assert.equal((await bridge.request({ type: "EXECUTE_CODE", code: "return 1", preamble: PREAMBLE })).result, "ok", "original plugin still drives");
 console.log("✅ Second connection refused; established plugin keeps the channel");
 
 // A disconnect mid-request rejects the in-flight call immediately, rather than letting
@@ -226,7 +250,7 @@ await wait(150);
 const mute = new WebSocket(URL, { origin: "null" });
 await new Promise((res) => mute.on("open", res));
 const t1 = Date.now();
-const inflight = bridge.request({ type: "EXECUTE_CODE", code: "return 1" }).then(() => null, (e) => e);
+const inflight = bridge.request({ type: "EXECUTE_CODE", code: "return 1", preamble: PREAMBLE }).then(() => null, (e) => e);
 await wait(50); // let request() register the pending entry before we kill the socket
 mute.terminate();
 const discErr = await inflight;
@@ -245,7 +269,7 @@ const reconnect = fakePlugin("null");
 await new Promise((res) => reconnect.on("open", res));
 await bridge.request({ type: "SESSION_INFO", identity: SESSION_IDENTITY, pairingCode: bridge.getPairingCode(), sessionToken: bridge.getSessionToken() });
 assert.equal(
-  (await bridge.request({ type: "EXECUTE_CODE", code: "return 1" })).result,
+  (await bridge.request({ type: "EXECUTE_CODE", code: "return 1", preamble: PREAMBLE })).result,
   "ok",
   "reconnect within the same Figma session stays approved (server echoes the token → no re-prompt)",
 );
@@ -282,7 +306,7 @@ await squatBridge.request({
   pairingCode: squatBridge.getPairingCode(),
   sessionToken: squatBridge.getSessionToken(), // null — never approved
 });
-const squatWrite = await squatBridge.request({ type: "EXECUTE_CODE", code: "return 1" });
+const squatWrite = await squatBridge.request({ type: "EXECUTE_CODE", code: "return 1", preamble: PREAMBLE });
 assert.equal(
   squatWrite.type,
   "PENDING_APPROVAL",
@@ -297,7 +321,7 @@ await wait(150);
 // gated. Guards the reconnect/squatter bypass where a different local server grabs the freed port.
 const naked = fakePlugin("null");
 await new Promise((res) => naked.on("open", res));
-const nakedWrite = await bridge.request({ type: "EXECUTE_CODE", code: "return 1" });
+const nakedWrite = await bridge.request({ type: "EXECUTE_CODE", code: "return 1", preamble: PREAMBLE });
 assert.equal(nakedWrite.type, "PENDING_APPROVAL", "write before SESSION_INFO is gated, not run on a stale approval");
 console.log("✅ Write before SESSION_INFO on a fresh connection is gated (no stale-identity bypass)");
 naked.close();
@@ -343,7 +367,7 @@ const r2 = fakePlugin("null", { url: `ws://127.0.0.1:${RESTART_PORT}`, state: re
 await new Promise((res) => r2.on("open", res));
 await bridgeR2.request({ type: "SESSION_INFO", identity: SESSION_IDENTITY, pairingCode: bridgeR2.getPairingCode(), sessionToken: bridgeR2.getSessionToken() });
 assert.equal(
-  (await bridgeR2.request({ type: "EXECUTE_CODE", code: "return 1" })).result,
+  (await bridgeR2.request({ type: "EXECUTE_CODE", code: "return 1", preamble: PREAMBLE })).result,
   "ok",
   "after a server restart the reloaded token re-approves the same sandbox — no second Allow, no re-prompt",
 );
@@ -441,7 +465,7 @@ await new Promise((res) => reclaimer.on("open", res));
 await bridge.request({ type: "SESSION_INFO", identity: SESSION_IDENTITY, pairingCode: bridge.getPairingCode(), sessionToken: bridge.getSessionToken() });
 reclaimer.allow();
 assert.equal(
-  (await bridge.request({ type: "EXECUTE_CODE", code: "return 1" })).result,
+  (await bridge.request({ type: "EXECUTE_CODE", code: "return 1", preamble: PREAMBLE })).result,
   "ok",
   "a new connection reclaims the slot from a non-handshaking squatter and drives once it handshakes",
 );
@@ -598,7 +622,7 @@ await new Promise((res) => silent.on("open", res));
 const tStall = Date.now();
 let timeoutErr = null;
 try {
-  await bridgeT.request({ type: "EXECUTE_CODE", code: "stall forever" });
+  await bridgeT.request({ type: "EXECUTE_CODE", code: "stall forever", preamble: PREAMBLE });
 } catch (e) {
   timeoutErr = e;
 }
@@ -663,7 +687,7 @@ pluginImg.on("message", (raw) => {
 });
 await new Promise((res) => pluginImg.on("open", res));
 
-const imgRun = await bridgeI.request({ type: "EXECUTE_CODE", code: "render with images" });
+const imgRun = await bridgeI.request({ type: "EXECUTE_CODE", code: "render with images", preamble: PREAMBLE });
 assert.deepEqual(imgRun.result, { u1: "b64-u1", u2: "b64-u2" }, "the run completed with the fetched bytes");
 assert.equal(imagesReply.id, "preq-1", "the reply carries the PLUGIN-issued id (own namespace)");
 assert.deepEqual(servedBatches[0], ["u1", "u1", "u2"], "the handler received the raw batch (dedupe is its job)");
@@ -673,7 +697,7 @@ console.log("✅ Mid-run image fetch round-trips in ONE run — no re-execution,
 console.log("✅ The service window suspends the run's deadline (traffic-as-heartbeat)");
 
 // A fetch failure comes back as a typed IMAGES_ERROR, and the run surfaces it as its own error.
-const boomRun = await bridgeI.request({ type: "EXECUTE_CODE", code: "boom run" });
+const boomRun = await bridgeI.request({ type: "EXECUTE_CODE", code: "boom run", preamble: PREAMBLE });
 assert.match(String(boomRun.errors), /could not load "boom"/, "a fetch failure reaches the run as its error, naming the url");
 console.log("✅ A failed fetch rejects the run's await via typed IMAGES_ERROR");
 
@@ -724,7 +748,7 @@ console.log("✅ Only an EXECUTE_CODE pending can be drawn on by the reverse cha
 // naive re-arm that would restart the run's 500ms clock while the slow fetch (1200ms) is still the
 // server's work, cancelling the run mid-service. The refcount re-arms only when the LAST service
 // settles, so the run must survive and finish.
-const runP = bridgeC.request({ type: "EXECUTE_CODE", code: "two fetches" }).then((r) => r, (e) => e);
+const runP = bridgeC.request({ type: "EXECUTE_CODE", code: "two fetches", preamble: PREAMBLE }).then((r) => r, (e) => e);
 await wait(50);
 const runIdC = framesC.find((f) => f.type === "EXECUTE_CODE").id;
 pluginC.send(JSON.stringify({ type: "IMAGES_REQUEST", id: "preq-f", runId: runIdC, urls: ["fast"] }));

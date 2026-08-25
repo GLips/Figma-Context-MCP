@@ -16,18 +16,22 @@ import { buildSandboxPreamble } from "../src/preamble/index.mjs";
 const fileArg = process.argv[2];
 if (!fileArg) { console.error("usage: node harness/dogfood.mjs <file.js>"); process.exit(2); }
 
-// 1. Generate SANDBOX_PREAMBLE through the one seam (same string the plugin ships) — the generator
+// 1. Generate SANDBOX_PREAMBLE through the one seam (same string the server ships) — the generator
 //    owns fragment layout, order, and the esbuild flatten; this consumer just asks for the string.
-const SANDBOX_PREAMBLE = await buildSandboxPreamble();
+const { preamble: SANDBOX_PREAMBLE } = await buildSandboxPreamble();
 
 // 2. Mock figma + capture console (mirrors code.ts's console capture for parity).
 createFigmaMock();
-// Mid-run image channel (protocol 2): the live sandbox awaits the server over the WS bridge; the
-// harness answers instantly with stand-in bytes so image scenarios run headless. Installed on
-// globalThis because the indirect eval below runs in global scope (the live path resolves the same
-// free identifier to the eval'd wrapper's parameter instead — see executeCode in code.ts).
-globalThis.__flcmRequestImages = async (urls) =>
-  Object.fromEntries(urls.map((u) => [u, Buffer.from("harness-image-bytes").toString("base64")]));
+// The host capability object (FlcmHost, preamble/host.ts): the live sandbox awaits the server over
+// the WS bridge for images and reads the run's real CANCEL state; the harness answers instantly with
+// stand-in bytes and never cancels, so scenarios run headless. Installed on globalThis because the
+// indirect eval below runs in global scope (the live path resolves the same free identifier to the
+// eval'd wrapper's parameter instead — see executeCode in code.ts).
+globalThis.__flcmHost = {
+  requestImages: async (urls) =>
+    Object.fromEntries(urls.map((u) => [u, Buffer.from("harness-image-bytes").toString("base64")])),
+  isRunCancelled: () => false,
+};
 const userCode = readFileSync(resolve(process.cwd(), fileArg), "utf8");
 const log = [];
 const real = { ...console };

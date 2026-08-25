@@ -9,6 +9,7 @@ import {
 } from "~/services/plugin-bridge/await-approval.js";
 import type { ServerTransport } from "~/mcp/index.js";
 import { registerFailLoudTool, retryableToolReply } from "~/mcp/fail-loud-params.js";
+import { flcmSandboxPreamble } from "~/services/plugin-bridge/sandbox-preamble.js";
 import { buildQuickStart, buildReferenceSections, SECTION_IDS } from "./flcm-docs/reference.js";
 
 // The figma_execute_code description is the GENERATED quick-start (buildQuickStart), assembled from
@@ -235,8 +236,14 @@ export function registerCodeModeTools(
         // this single execute (serveImagesRequest). The wait holds the call open across the human's
         // Allow rather than returning "not approved yet" for the agent to retry — see
         // requestUntilApproved.
+        //
+        // The flcm std-lib rides along on EVERY call (ADR-0010): the plugin holds no runtime of its
+        // own, so this field IS the DSL the code runs against. Sent every time rather than cached by
+        // hash — the sandbox already re-evals the whole string per call, so it costs transfer only,
+        // and a preamble sent every time is definitionally the one that ran, leaving no drift to
+        // detect and nothing to put in the version handshake.
         const raw = await requestUntilApproved(() =>
-          bridge.request({ type: "EXECUTE_CODE", code }),
+          bridge.request({ type: "EXECUTE_CODE", code, preamble: flcmSandboxPreamble() }),
         );
         const gated = gateResult(raw);
         if (gated) return gated;

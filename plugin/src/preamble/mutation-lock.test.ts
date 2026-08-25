@@ -4,9 +4,10 @@
 // first canvas write (and again after preparation's awaits, before the seal), and the invariant-2
 // undo scaffold emits the exact call SEQUENCE the live contract needs (the mock records
 // commitUndo/triggerUndo calls; their semantics are the live probe's to ground). The host normally
-// passes __flcmRunCancelled as an eval-wrapper parameter; these tests run in global scope, so they
-// install it on globalThis (same free-identifier resolution — the pattern the harness uses for
-// __flcmRequestImages).
+// passes its FlcmHost as the eval-wrapper parameter __flcmHost; these tests run in global scope, so
+// they install it on globalThis instead (same free-identifier resolution — the pattern the harness
+// uses too). Each helper below adds only the capability its tests exercise: host.ts probes per
+// method, so a partial host is legal and a test never stubs what it doesn't use.
 import { test, afterEach, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
@@ -19,17 +20,23 @@ beforeEach(() => {
   figma = createFigmaMock();
 });
 
+// One shared slot so a test can install both capabilities without the second clobbering the first.
+const hostSlot = (): Record<string, unknown> => {
+  const g = globalThis as Record<string, unknown>;
+  if (!g.__flcmHost) g.__flcmHost = {};
+  return g.__flcmHost as Record<string, unknown>;
+};
+
 const installCancelFlag = (check: () => boolean): void => {
-  (globalThis as Record<string, unknown>).__flcmRunCancelled = check;
+  hostSlot().isRunCancelled = check;
 };
 
 afterEach(() => {
-  delete (globalThis as Record<string, unknown>).__flcmRunCancelled;
-  delete (globalThis as Record<string, unknown>).__flcmRequestImages;
+  delete (globalThis as Record<string, unknown>).__flcmHost;
 });
 
 const installImageChannel = (respond: () => Promise<Record<string, string>>): void => {
-  (globalThis as Record<string, unknown>).__flcmRequestImages = respond;
+  hostSlot().requestImages = respond;
 };
 
 const noPrep = async (): Promise<void> => undefined;

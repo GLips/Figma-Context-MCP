@@ -4,10 +4,10 @@
 import { safeSerialize, guardReturnValue } from "./serialize.js";
 import { resolveScreenshotTarget, type ScreenshotTarget } from "./screenshot-target.js";
 import { createRunCancellationRegistry } from "./run-cancellation.js";
-
-// The std-lib source string, generated from the typed preamble/ fragments and baked in at build time
-// by build.mjs via esbuild `define` (it can't be generated in-sandbox — flattening runs esbuild).
-declare const SANDBOX_PREAMBLE: string;
+// TYPE-ONLY on purpose: this is the one shared declaration binding the host half of the flcm
+// interface to the preamble half, and it must stay erasable — a value import from preamble/ would
+// drag the whole std-lib back into this bundle, which is exactly what ADR-0010 removed.
+import type { FlcmHost } from "./preamble/host.js";
 
 // The window is a fixed-width strip whose HEIGHT is whatever the iframe measures after each render
 // (UI_HEIGHT) — so "collapsed" and "expanded" are CSS states over there, not two magic numbers here.
@@ -36,11 +36,13 @@ figma.showUI(__html__, {
 
 // Versions reported to the server over the frozen envelope on connect (server-initiated
 // GET_VERSION handshake). These are the SOURCE OF TRUTH for the plugin's wire identity:
-//   • PROTOCOL_VERSION — the envelope contract. The server GATES on this; bump it ONLY on a
-//     breaking envelope change (and the server's MIN with it). v2 = the mid-run image
-//     protocol (plugin-issued IMAGES_REQUEST/IMAGES_REPLY + run-scoped CANCEL).
+//   • PROTOCOL_VERSION — the envelope contract, plus the FlcmHost interface this host hands the
+//     preamble (preamble/host.ts). The server GATES on this; bump it ONLY on a breaking change to
+//     either (and the server's MIN with it). v2 = the mid-run image protocol (plugin-issued
+//     IMAGES_REQUEST/IMAGES_REPLY + run-scoped CANCEL). v3 = the server ships the flcm std-lib
+//     (ADR-0010), and the host capabilities collapse into the one `__flcmHost` object.
 //   • PLUGIN_VERSION — the plugin release, shown to the human in a skew refusal. Informational.
-const PROTOCOL_VERSION = 2;
+const PROTOCOL_VERSION = 3;
 const PLUGIN_VERSION = "0.1.0";
 
 // Phase 2 consent gate. The sandbox is the SOLE ARBITER (Invariant): it holds the durable
@@ -571,6 +573,21 @@ figma.ui.onmessage = (msg: InboundMessage) => {
     if (to.connKey !== undefined && !isApproved(to.connKey)) setExpanded(true);
     else renderUi();
   } else if (msg.type === "EXECUTE_CODE") {
+    // Protocol validation comes BEFORE the consent gate, deliberately: a malformed request can never
+    // execute, so making the human click Allow for it would be asking consent for nothing. An empty
+    // string is rejected with the absent case — it would otherwise reach eval and die as the useless
+    // "flcm is not defined". This is an envelope ERROR, not an EXECUTE_CODE_RESULT: nothing ran.
+    const preamble = typeof msg.preamble === "string" ? msg.preamble : "";
+    if (!preamble) {
+      reply(to, {
+        type: "ERROR",
+        error:
+          "This plugin expects the flcm std-lib to arrive with the code, but the server sent none — it " +
+          "predates the server-shipped runtime. Update the server (`npx figma-developer-mcp@latest`) and " +
+          "restart it.",
+      });
+      return;
+    }
     // Sandbox-side gate (the consent Invariant's enforcement point): gateWrite runs the write only
     // for an approved session — otherwise it replies PENDING_APPROVAL and the write never reaches the
     // executor. Queued, not awaited here, so a second session's write can't interleave with this one.
@@ -578,7 +595,7 @@ figma.ui.onmessage = (msg: InboundMessage) => {
     // a run can be cancelled while it still sits in the queue.
     if (gateWrite(to)) {
       cancelledRuns.enqueue(to);
-      enqueueWrite(() => executeCode(to, typeof msg.code === "string" ? msg.code : ""));
+      enqueueWrite(() => executeCode(to, typeof msg.code === "string" ? msg.code : "", preamble));
     }
   } else if (msg.type === "SCREENSHOT") {
     if (gateWrite(to)) {
@@ -628,7 +645,7 @@ figma.ui.onmessage = (msg: InboundMessage) => {
  * is what buys the agent `await` (e.g. `figma.loadFontAsync`) for free. A bare
  * `eval(code)` would break the moment the agent writes `await`.
  */
-async function executeCode(to: ReplyTo, code: string): Promise<void> {
+async function executeCode(to: ReplyTo, code: string, preamble: string): Promise<void> {
   // The dequeue refusal — the queued-zombie case (run-cancellation.ts): a run cancelled while it
   // sat queued behind writeChain must not execute now, mutating a canvas the agent was told is
   // unchanged. The refusal reply is harmless (the server already dropped the run's pending).
@@ -669,22 +686,19 @@ async function executeCode(to: ReplyTo, code: string): Promise<void> {
     // `flcm` global (flcm.frame/text/render/…) is simply in scope. The leading preamble also
     // preloads fonts (an `await`), which is why the wrapper must be async.
     //
-    // The mid-run image channel and the run's live cancellation flag ride in as PARAMETERS of the
-    // wrapper: the preamble references the free identifiers `__flcmRequestImages` and
-    // `__flcmRunCancelled`, which resolve to these arguments. Parameters inside the eval'd STRING,
-    // not scope-chain locals, so no bundler pass can ever rename the bindings away from the
-    // preamble's references (build.mjs pins the wrapper head survives verbatim). Both are bound to
-    // `to` so they answer for THIS run's correlation id and source port.
+    // The host capability object rides in as the single PARAMETER of the wrapper: the preamble
+    // references the free identifier `__flcmHost`, which resolves to this argument. A parameter
+    // inside the eval'd STRING, not a scope-chain local, so no bundler pass can rename the binding
+    // away from the preamble's reference (build.mjs pins that the wrapper head survives verbatim).
+    // Its METHODS need no such pinning — both sides import the FlcmHost type, so tsc catches a
+    // rename there. Bound to `to`, so it answers for THIS run's correlation id and source port.
+    const host: FlcmHost = {
+      requestImages: (urls: string[]) => requestServerImages(to, urls),
+      isRunCancelled: () => cancelledRuns.isCancelled(to),
+    };
     const raw = await eval(
-      "(async function(__flcmRequestImages, __flcmRunCancelled){ " +
-        SANDBOX_PREAMBLE +
-        "\n;\n" +
-        code +
-        "\n })",
-    )(
-      (urls: string[]) => requestServerImages(to, urls),
-      () => cancelledRuns.isCancelled(to),
-    );
+      "(async function(__flcmHost){ " + preamble + "\n;\n" + code + "\n })",
+    )(host);
     // Return-path node guard (R2): a returned live node would otherwise collapse to
     // { id } and silently drop everything else. Make that loud instead of lossy.
     guardReturnValue(raw);

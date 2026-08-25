@@ -49,6 +49,13 @@ import { PluginBridge } from "../src/services/plugin-bridge/bridge.ts";
 import { WS_PORT_BLOCK } from "../src/services/plugin-bridge/ports.ts";
 import { SESSION_IDENTITY } from "../src/services/plugin-bridge/approval.ts";
 import { requestUntilApproved } from "../src/services/plugin-bridge/await-approval.ts";
+import { buildSandboxPreamble } from "../plugin/src/preamble/index.mjs";
+
+// These probes drive a REAL plugin, which holds no runtime of its own (ADR-0010) — so they must
+// ship the actual std-lib, not a stand-in. Built once here through the same seam the server build
+// uses; the contract harness, whose fake plugin never evals anything, uses a stub instead.
+const { preamble: PREAMBLE } = await buildSandboxPreamble();
+
 
 const log = (msg) => console.log(`[probe +${((Date.now() - t0) / 1000).toFixed(1)}s] ${msg}`);
 const t0 = Date.now();
@@ -170,7 +177,7 @@ let approvedOnce = false;
 
 async function exec(code) {
   const reply = await requestUntilApproved(
-    () => bridge.request({ type: "EXECUTE_CODE", code }),
+    () => bridge.request({ type: "EXECUTE_CODE", code, preamble: PREAMBLE }),
     { waitMs: APPROVAL_WINDOW_MS },
   );
   if (reply?.type === "PENDING_APPROVAL") {
