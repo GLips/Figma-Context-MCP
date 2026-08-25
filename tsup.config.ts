@@ -1,6 +1,7 @@
 import { defineConfig } from "tsup";
+import type { Plugin } from "esbuild";
 // @ts-expect-error — plain .mjs generator with no declarations; this config is outside tsconfig's `include`.
-import { buildSandboxPreamble } from "./plugin/src/preamble/index.mjs";
+import { buildSandboxPreambleModule } from "./plugin/src/preamble/index.mjs";
 
 const isDev = (process.env.npm_lifecycle_event ?? "").startsWith("dev");
 const packageVersion = process.env.npm_package_version;
@@ -37,28 +38,21 @@ export default defineConfig({
       // manual manifest re-import. Generate it here and swap it into sandbox-preamble.ts, whose
       // on-disk body is a fail-loud placeholder.
       //
-      // An onLoad hook rather than a `define` constant, for two reasons that both bite in dev:
-      //   • `define` is captured once when this config is evaluated, and tsup loads the config a
-      //     single time. Under `--watch` a preamble edit would keep shipping the string as it was at
-      //     startup — silently, the DSL change simply not appearing in Figma. This hook re-runs the
-      //     generator on every rebuild.
-      // What TRIGGERS that rebuild is the explicit `watch` list above, not the `watchFiles` below —
-      // tsup drives its own chokidar and never reads esbuild's watch signals. watchFiles is returned
-      // anyway because it is the honest answer for an onLoad whose output depends on other files.
+      // An onLoad hook rather than a `define` constant: `define` is captured once when this config
+      // is evaluated, and tsup loads the config a single time — so under watch a preamble edit
+      // would keep shipping the string as it was at startup, silently, the DSL change simply not
+      // appearing in Figma. This hook re-runs the generator on every rebuild.
+      //
+      // What TRIGGERS that rebuild is the explicit `watch` list above. Not esbuild's own watchFiles
+      // signal — tsup drives its own chokidar and never reads it, which is why this hook doesn't
+      // bother returning one.
       name: "flcm-preamble",
-      setup(build: { onLoad: (o: { filter: RegExp }, cb: () => Promise<unknown>) => void }) {
+      setup(build) {
         build.onLoad(
           { filter: /[/\\]services[/\\]plugin-bridge[/\\]sandbox-preamble\.ts$/ },
-          async () => {
-            const { preamble, watchFiles } = await buildSandboxPreamble();
-            return {
-              contents: `export function flcmSandboxPreamble() { return ${JSON.stringify(preamble)}; }`,
-              loader: "ts",
-              watchFiles,
-            };
-          },
+          async () => ({ contents: await buildSandboxPreambleModule(), loader: "ts" }),
         );
       },
-    },
+    } satisfies Plugin,
   ],
 });

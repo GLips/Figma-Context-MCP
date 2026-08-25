@@ -6,6 +6,10 @@
 // the TOOL quietly stops attaching one. This closes that: a real Client/Server pair, a mocked
 // bridge, and an assertion about the outgoing request. Delete the `preamble:` field from
 // code-mode-tools.ts and this is what fails.
+//
+// It also carries the generator's own invariants, which is why they need no separate test: vitest
+// builds the REAL preamble for this file (the hook in vitest.config.ts), and buildSandboxPreamble
+// throws on a zod leak or an unresolvable fragment — so either one fails the run right here.
 import { describe, expect, it, vi } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
@@ -61,10 +65,6 @@ describe("figma_execute_code ships the flcm std-lib", () => {
       expect(sent.preamble).toContain("flcm std-lib");
       expect(sent.preamble).toContain("render");
       expect(sent.preamble!.length).toBeGreaterThan(50_000);
-
-      // The invariant that can't be checked on the server's own bundle, because the server
-      // legitimately contains zod: what goes to QuickJS must not.
-      expect(sent.preamble).not.toContain("ZodObject");
     } finally {
       await close();
     }

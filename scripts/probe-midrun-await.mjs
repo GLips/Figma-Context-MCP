@@ -35,7 +35,7 @@ import { buildSandboxPreamble } from "../plugin/src/preamble/index.mjs";
 // These probes drive a REAL plugin, which holds no runtime of its own (ADR-0010) — so they must
 // ship the actual std-lib, not a stand-in. Built once here through the same seam the server build
 // uses; the contract harness, whose fake plugin never evals anything, uses a stub instead.
-const { preamble: PREAMBLE } = await buildSandboxPreamble();
+const PREAMBLE = await buildSandboxPreamble();
 
 
 const SLOW_REPLY_MS = 4000;

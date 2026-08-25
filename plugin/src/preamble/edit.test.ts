@@ -88,6 +88,7 @@ test("an image fill in a delta fetches bytes through the host channel and stamps
   g.__flcmHost = {
     requestImages: async (urls: string[]) =>
       Object.fromEntries(urls.map((u) => [u, Buffer.from("fake-image-bytes").toString("base64")])),
+    isRunCancelled: () => false,
   };
   try {
     await edit("card", { fill: image(url) });
@@ -123,6 +124,7 @@ test('clearing an image fill with "none" wipes the flcm/image provenance too', a
   g.__flcmHost = {
     requestImages: async (urls: string[]) =>
       Object.fromEntries(urls.map((u) => [u, Buffer.from("fake-image-bytes").toString("base64")])),
+    isRunCancelled: () => false,
   };
   try {
     await edit("card", { fill: image("https://cdn.example.com/b.jpg") });
@@ -728,6 +730,7 @@ test("a live fact that changed during the resource round trip refuses the whole 
       node.fontName = { family: "Inter", style: "Regular" };
       return Object.fromEntries(urls.map((u) => [u, Buffer.from("bytes").toString("base64")]));
     },
+    isRunCancelled: () => false,
   };
   try {
     // fontWeight was enriched against the live (bold) identity, which is gone by the time the

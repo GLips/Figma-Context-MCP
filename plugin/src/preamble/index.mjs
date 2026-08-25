@@ -64,15 +64,20 @@ export async function buildSandboxPreamble() {
     );
   }
 
-  return {
-    preamble: [
-      "// ===== flcm std-lib (injected) =====",
-      code,
-      "// ===== end std-lib =====",
-    ].join("\n"),
-    // Every file the preamble is built FROM. The server build watches these so that editing a verb
-    // rebuilds the string it injects — without this, `tsup --watch` serves a preamble frozen at
-    // config-load time and a DSL edit shows no effect in Figma, silently.
-    watchFiles: inputs.map((f) => resolve(process.cwd(), f)),
-  };
+  return [
+    "// ===== flcm std-lib (injected) =====",
+    code,
+    "// ===== end std-lib =====",
+  ].join("\n");
+}
+
+/**
+ * The preamble as a drop-in replacement for src/services/plugin-bridge/sandbox-preamble.ts, whose
+ * on-disk body is a fail-loud placeholder. Both bundlers that inject it — tsup for the shipped
+ * server, vite for the test run — go through here so the generated module's SHAPE lives in one
+ * place; each config only knows its own hook API.
+ */
+export async function buildSandboxPreambleModule() {
+  const preamble = await buildSandboxPreamble();
+  return `export function flcmSandboxPreamble() { return ${JSON.stringify(preamble)}; }`;
 }

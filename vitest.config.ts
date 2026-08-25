@@ -1,7 +1,7 @@
 import { defineConfig } from "vitest/config";
 import path from "path";
 // @ts-expect-error — plain .mjs generator with no declarations.
-import { buildSandboxPreamble } from "./plugin/src/preamble/index.mjs";
+import { buildSandboxPreambleModule } from "./plugin/src/preamble/index.mjs";
 
 const SANDBOX_PREAMBLE_MODULE = path.resolve(
   __dirname,
@@ -19,13 +19,12 @@ export default defineConfig({
     // rather than the on-disk fail-loud placeholder. That matters for the test asserting
     // figma_execute_code actually attaches the std-lib to its outgoing request: against a stub it
     // would pass while shipping nothing. Also means a zod leak fails the test run, since
-    // buildSandboxPreamble throws on one.
+    // the generator throws on one.
     {
       name: "flcm-preamble",
       async load(id: string) {
         if (id !== SANDBOX_PREAMBLE_MODULE) return null;
-        const { preamble } = await buildSandboxPreamble();
-        return `export function flcmSandboxPreamble() { return ${JSON.stringify(preamble)}; }`;
+        return await buildSandboxPreambleModule();
       },
     },
   ],

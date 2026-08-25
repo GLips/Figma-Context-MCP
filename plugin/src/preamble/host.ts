@@ -14,6 +14,9 @@
 // Both halves import this type, so renaming a method or changing its shape is a tsc error on BOTH
 // sides. Only the binding name `__flcmHost` crosses the eval boundary no compiler can see — one
 // string, greped out of the built bundle by build.mjs, and the whole of the residual drift risk.
+// No optional members, deliberately: a host either exists or it doesn't, and one that exists
+// answers for everything. That is what lets the accessors below check presence ONCE instead of
+// probing each method — and what makes a partial host a test bug rather than a supported shape.
 export interface FlcmHost {
   /** Fetch bytes for image urls through the server. The sandbox has no network of its own. */
   requestImages(urls: string[]): Promise<Record<string, string>>;
@@ -38,14 +41,13 @@ function currentHost(): FlcmHost | undefined {
  * The mid-run image channel (protocol 2): one deduped round trip to the server for image bytes.
  *
  * Absence is FATAL — an image fill with no channel would silently paint nothing, so this throws and
- * names the missing piece. Tests install a host carrying only the methods they exercise, which is
- * why the method is probed rather than assumed present on a host that exists.
+ * names what's missing.
  */
 export function requestHostImages(urls: string[]): Promise<Record<string, string>> {
   const host = currentHost();
-  if (!host || typeof host.requestImages !== "function") {
+  if (!host) {
     throw new Error(
-      "flcm.image: this runtime has no host image channel (FlcmHost.requestImages) — image fills need the live plugin bridge.",
+      "flcm.image: this runtime has no host (FlcmHost) — image fills need the live plugin bridge.",
     );
   }
   return host.requestImages(urls);
@@ -57,5 +59,5 @@ export function requestHostImages(urls: string[]): Promise<Record<string, string
  */
 export function hostRunCancelled(): boolean {
   const host = currentHost();
-  return !!host && typeof host.isRunCancelled === "function" && host.isRunCancelled();
+  return host ? host.isRunCancelled() : false;
 }

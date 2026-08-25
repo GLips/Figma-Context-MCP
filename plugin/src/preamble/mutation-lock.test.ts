@@ -6,8 +6,7 @@
 // commitUndo/triggerUndo calls; their semantics are the live probe's to ground). The host normally
 // passes its FlcmHost as the eval-wrapper parameter __flcmHost; these tests run in global scope, so
 // they install it on globalThis instead (same free-identifier resolution — the pattern the harness
-// uses too). Each helper below adds only the capability its tests exercise: host.ts probes per
-// method, so a partial host is legal and a test never stubs what it doesn't use.
+// uses too).
 import { test, afterEach, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
@@ -20,10 +19,15 @@ beforeEach(() => {
   figma = createFigmaMock();
 });
 
-// One shared slot so a test can install both capabilities without the second clobbering the first.
+// One shared slot so a test can install both capabilities without the second clobbering the first,
+// seeded COMPLETE: FlcmHost has no optional members, so the preamble is entitled to call either
+// method on any host that exists. The seeds are the inert answers — no images, never cancelled —
+// and each helper below overrides only the one its tests exercise.
 const hostSlot = (): Record<string, unknown> => {
   const g = globalThis as Record<string, unknown>;
-  if (!g.__flcmHost) g.__flcmHost = {};
+  if (!g.__flcmHost) {
+    g.__flcmHost = { requestImages: async () => ({}), isRunCancelled: () => false };
+  }
   return g.__flcmHost as Record<string, unknown>;
 };
 

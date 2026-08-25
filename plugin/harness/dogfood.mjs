@@ -18,7 +18,7 @@ if (!fileArg) { console.error("usage: node harness/dogfood.mjs <file.js>"); proc
 
 // 1. Generate SANDBOX_PREAMBLE through the one seam (same string the server ships) — the generator
 //    owns fragment layout, order, and the esbuild flatten; this consumer just asks for the string.
-const { preamble: SANDBOX_PREAMBLE } = await buildSandboxPreamble();
+const SANDBOX_PREAMBLE = await buildSandboxPreamble();
 
 // 2. Mock figma + capture console (mirrors code.ts's console capture for parity).
 createFigmaMock();

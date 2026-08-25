@@ -25,6 +25,7 @@ async function renderWithImages(
       batches.push(urls);
       return respond(urls);
     },
+    isRunCancelled: () => false,
   };
   try {
     return { out: await render(tree), batches };
@@ -85,10 +86,10 @@ test("a failed image fetch rejects the render with zero canvas writes", async ()
   assert.equal(figma.currentPage.children.length, before, "a failed fetch created nothing");
 });
 
-test("render without a host image channel fails loud naming the channel", async () => {
+test("render without a host fails loud naming what is missing", async () => {
   await assert.rejects(
     render(rect({ width: 10, height: 10, fill: image("https://cdn.example.com/a.jpg") })),
-    /no host image channel \(FlcmHost.requestImages\)/,
+    /no host \(FlcmHost\)/,
   );
 });
 
