@@ -127,7 +127,7 @@ const SIZE_FIELDS = {
       }),
       z.literal("none"),
     ]),
-    'Lifts the node out of its parent\'s auto-layout flow and pins it at x/y relative to the parent. Use for overlays, badges, decorations. x/y are px numbers or "N%" (percent of the parent axis). `anchor` picks which point of the node lands on x/y — x: "left"|"center"|"right", y: "top"|"center"|"bottom" (default { left, top }); e.g. anchor:{ x:"center" } with x:"50%" centres the node on the midpoint instead of offsetting it by its own width. In flcm.edit, "none" returns the node to its parent\'s flow.',
+    'Pins the node at x/y relative to its parent — inside a frame that means lifting it out of the parent\'s auto-layout flow (overlays, badges, decorations); on a render root, whose parent is the page, it is where on the page the tree lands. Without it a root goes to the page origin, so successive renders stack. x/y are px numbers or "N%" (percent of the parent axis). `anchor` picks which point of the node lands on x/y — x: "left"|"center"|"right", y: "top"|"center"|"bottom" (default { left, top }); e.g. anchor:{ x:"center" } with x:"50%" centres the node on the midpoint instead of offsetting it by its own width. In flcm.edit, "none" returns the node to its parent\'s flow.',
     '{ x?, y?, anchor?: { x?, y? } } | "none" — x/y number or "N%"',
   ),
   pin: prop(
