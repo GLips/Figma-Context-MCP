@@ -29,6 +29,7 @@ import { linearGradient, radialGradient } from "./paint.js";
 import { layerBlurFromCssPx, backgroundBlurFromCssPx, shadow, glass, noise, texture, progressiveBlur } from "./effects.js";
 import { parseColor, parseFill, parseCssEffects, parseBlendMode, boxShorthand, length, lineHeight, letterSpacing, isPercent, percent } from "./css.js";
 import { buildNode, placeRootOnPage, settleHandles, resolvePercents, RenderCtx, RenderResources } from "./bridge.js";
+import { describeRootOverlap } from "./root-overlap.js";
 import { enterMutatingVerb } from "./mutation-lock.js";
 import { requestHostImages } from "./host.js";
 import { get, find, findOne, selection } from "./read.js";
@@ -1177,6 +1178,12 @@ function render(tree: WriteNode): Promise<{ root: Handle; keyed: Record<string, 
       // walk above only positions CHILDREN, and edit applies the same words to a page child.
       if (tree.layout) placeRootOnPage(root, tree.layout, ctx);
       resolvePercents(ctx);
+      // After resolvePercents, so the root's bounds are final — and through the CONSOLE channel,
+      // which every already-installed plugin already returns. A new field on EXECUTE_CODE_RESULT
+      // would be a protocol bump, i.e. a manual manifest re-import for every user, to say something
+      // this advisory. ADR-0010 buys exactly this: placement feedback ships with the server.
+      const overlap = describeRootOverlap(root);
+      if (overlap) console.log(overlap);
       // Handles are minted only now: geometry settles once the whole tree is laid out (bridge.settleHandles).
       return settleHandles(root, ctx.keyed);
     },
