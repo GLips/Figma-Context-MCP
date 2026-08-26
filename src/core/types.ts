@@ -153,10 +153,3 @@ export interface SimplifiedNode extends NodeGeometry {
   // children
   children?: SimplifiedNode[];
 }
-
-export interface BoundingBox {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-}

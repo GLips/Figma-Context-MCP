@@ -1,4 +1,5 @@
 import { hasGridLayout, isLayout } from "~/core/utils.js";
+import { anyRectsOverlap } from "~/core/rect.js";
 import type { NodeSnapshot } from "~/core/snapshot.js";
 import type { SimplifiedLayout } from "./common.js";
 
@@ -101,30 +102,16 @@ export function isPackedGrid(children: NodeSnapshot[]): boolean {
  * stacking and don't participate in grid flow.
  *
  * Edges that merely touch (e.g., adjacent cells with gap = 0) are NOT
- * overlap; strict inequalities below handle that.
+ * overlap; core/rect.js owns that edge case for both directions.
  */
 function gridChildrenOverlap(parent: NodeSnapshot): boolean {
   if (!parent.children) return false;
-  const boxes = parent.children
-    .filter((c) => isLayout(c) && c.layoutPositioning !== "ABSOLUTE")
-    .map((c) => c.absoluteBoundingBox)
-    .filter((b): b is NonNullable<typeof b> => b != null);
-
-  for (let i = 0; i < boxes.length; i++) {
-    const a = boxes[i];
-    for (let j = i + 1; j < boxes.length; j++) {
-      const b = boxes[j];
-      if (
-        a.x < b.x + b.width &&
-        a.x + a.width > b.x &&
-        a.y < b.y + b.height &&
-        a.y + a.height > b.y
-      ) {
-        return true;
-      }
-    }
-  }
-  return false;
+  return anyRectsOverlap(
+    parent.children
+      .filter((c) => isLayout(c) && c.layoutPositioning !== "ABSOLUTE")
+      .map((c) => c.absoluteBoundingBox)
+      .filter((b): b is NonNullable<typeof b> => b != null),
+  );
 }
 
 function convertGridAlign(align: "MIN" | "CENTER" | "MAX"): "start" | "end" | "center" {

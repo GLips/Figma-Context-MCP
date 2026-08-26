@@ -13,6 +13,9 @@
 // any of this either: this is feedback about a placement you just made, not a property of the
 // document, and re-deriving it on every get() would be pure context tax.
 
+import { rectIntersectionArea } from "~/core/index.js";
+import type { SnapshotRect } from "~/core/snapshot.js";
+
 /** How much of the new root must be buried before it's worth a line. A hairline kiss between
  *  neighbouring artboards is normal layout; 5% is past "adjacent" and into "one is hiding the other". */
 const OVERLAP_NOTE_FLOOR = 0.05;
@@ -21,18 +24,10 @@ const OVERLAP_NOTE_FLOOR = 0.05;
  *  agent needs enough to move it, not an inventory. The rest are counted, never silently dropped. */
 const OVERLAP_NOTE_MAX_NAMED = 3;
 
-type Box = { x: number; y: number; width: number; height: number };
-
-function intersectionArea(a: Box, b: Box): number {
-  const w = Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x);
-  const h = Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y);
-  return w > 0 && h > 0 ? w * h : 0;
-}
-
 // absoluteBoundingBox rather than x/y/width/height: it is the ROTATED bounds, and a rotated node's
 // raw width/height describe a box that isn't where the pixels are. Null for a node with no geometry
 // (and on some degenerate vectors), which is why every caller here treats absence as "skip", not 0.
-function boundsOf(node: any): Box | null {
+function boundsOf(node: any): SnapshotRect | null {
   const box = node.absoluteBoundingBox;
   if (!box || !(box.width > 0) || !(box.height > 0)) return null;
   return { x: box.x, y: box.y, width: box.width, height: box.height };
@@ -40,7 +35,7 @@ function boundsOf(node: any): Box | null {
 
 const px = (n: number): string => String(Math.round(n));
 
-const describeBox = (name: string, b: Box): string =>
+const describeBox = (name: string, b: SnapshotRect): string =>
   '"' + name + '" at ' + px(b.x) + "," + px(b.y) + " (" + px(b.width) + "×" + px(b.height) + ")";
 
 /**
@@ -62,7 +57,7 @@ export function describeRootOverlap(root: any): string | null {
     if (sibling === root || sibling.visible === false) continue;
     const box = boundsOf(sibling);
     if (!box) continue;
-    const share = intersectionArea(rootBox, box) / rootArea;
+    const share = rectIntersectionArea(rootBox, box) / rootArea;
     if (share < OVERLAP_NOTE_FLOOR) continue;
     hits.push({ text: describeBox(sibling.name, box), share });
   }
