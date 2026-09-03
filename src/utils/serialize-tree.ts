@@ -92,6 +92,9 @@ function renderNode(
   if (node.textStyle !== undefined) parts.push(`textStyle=${renderStyleValue(node.textStyle)}`);
   if (node.boldWeight !== undefined) parts.push(`boldWeight=${node.boldWeight}`);
   if (node.text !== undefined) parts.push(`text=${quote(node.text)}`);
+  if (node.annotations !== undefined) {
+    parts.push(`annotations=${JSON.stringify(node.annotations)}`);
+  }
 
   out.push(indent + parts.join(" "));
 

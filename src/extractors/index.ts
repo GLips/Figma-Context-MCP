@@ -22,6 +22,7 @@ export {
   textExtractor,
   visualsExtractor,
   componentExtractor,
+  annotationExtractor,
   // Convenience combinations
   allExtractors,
   layoutAndText,

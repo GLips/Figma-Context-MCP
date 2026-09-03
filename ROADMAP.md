@@ -113,7 +113,7 @@ _Investigate feasibility / value_
   - [ ] Component dependency graphs
 - [ ] **Figma File Metadata**
   - [ ] Investigate how we can use frames that are marked "Ready for Dev"
-  - [ ] Investigate feasibility of pulling in annotations via the Figma API
+  - [x] Investigate feasibility of pulling in annotations via the Figma API — done, see `annotationExtractor`
   - [ ] Investigate feasibility/value of using—and even modifying—"Dev Resources" links via Figma API
 
 ## Contributing

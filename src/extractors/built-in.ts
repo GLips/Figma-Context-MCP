@@ -20,6 +20,7 @@ import {
   simplifyPropertyDefinitions,
   simplifyPropertyReferences,
 } from "~/transformers/component.js";
+import { isAnnotationArray, simplifyAnnotations } from "~/transformers/annotation.js";
 import { hasAutoLayout, hasValue, isRectangleCornerRadii } from "~/utils/identity.js";
 import { isVisible, stableStringify } from "~/utils/common.js";
 import { createHash } from "node:crypto";
@@ -277,6 +278,22 @@ export const componentExtractor: ExtractorFn = (node, result, context) => {
   }
 };
 
+/**
+ * Extracts Dev Mode annotations (designer notes and pinned properties) from a node.
+ *
+ * `@figma/rest-api-spec` doesn't type the `annotations` field — its
+ * `AnnotationsTrait` is published as an empty `object` — so this reads it via
+ * `hasValue`'s runtime guard rather than a static field access.
+ */
+export const annotationExtractor: ExtractorFn = (node, result, _context) => {
+  if (!hasValue("annotations", node, isAnnotationArray) || node.annotations.length === 0) return;
+
+  const simplified = simplifyAnnotations(node.annotations);
+  if (simplified.length > 0) {
+    result.annotations = simplified;
+  }
+};
+
 type StyleMatch = { name: string; id: string };
 
 // Helper to fetch a Figma style name for specific style keys on a node
@@ -317,7 +334,13 @@ function resolveStyleKey(
 /**
  * All extractors - replicates the current parseNode behavior.
  */
-export const allExtractors = [layoutExtractor, textExtractor, visualsExtractor, componentExtractor];
+export const allExtractors = [
+  layoutExtractor,
+  textExtractor,
+  visualsExtractor,
+  componentExtractor,
+  annotationExtractor,
+];
 
 /**
  * Layout and text only - useful for content analysis and layout planning.

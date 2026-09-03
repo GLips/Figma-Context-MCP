@@ -671,6 +671,54 @@ describe("component property support", () => {
   });
 });
 
+describe("annotationExtractor", () => {
+  it("simplifies a Dev Mode annotation to label + pinned property names", async () => {
+    const node = makeNode({
+      id: "20:1",
+      name: "Card",
+      type: "FRAME",
+      annotations: [
+        {
+          labelMarkdown: "Use the **primary** token here",
+          properties: [{ type: "fills" }, { type: "cornerRadius" }],
+          categoryId: "a1",
+        },
+      ],
+    });
+
+    const { nodes } = await extractFromDesign([node], allExtractors);
+
+    expect(nodes[0].annotations).toEqual([
+      {
+        label: "Use the **primary** token here",
+        properties: ["fills", "cornerRadius"],
+        categoryId: "a1",
+      },
+    ]);
+  });
+
+  it("prefers plain label when labelMarkdown is absent", async () => {
+    const node = makeNode({
+      id: "20:2",
+      name: "Icon",
+      type: "VECTOR",
+      annotations: [{ label: "Export at 2x" }],
+    });
+
+    const { nodes } = await extractFromDesign([node], allExtractors);
+
+    expect(nodes[0].annotations).toEqual([{ label: "Export at 2x" }]);
+  });
+
+  it("omits annotations when the node has none", async () => {
+    const node = makeNode({ id: "20:3", name: "Plain", type: "FRAME" });
+
+    const { nodes } = await extractFromDesign([node], allExtractors);
+
+    expect(nodes[0].annotations).toBeUndefined();
+  });
+});
+
 describe("simplifyRawFigmaObject", () => {
   it("produces a complete SimplifiedDesign from a mock API response", async () => {
     const mockResponse = {

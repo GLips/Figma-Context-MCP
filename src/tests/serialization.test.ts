@@ -149,6 +149,34 @@ describe("result serialization", () => {
       expect(output).toContain('componentProperties={"On Sale":true,"Size":"md"}');
     });
 
+    // Regression: annotations were added to SimplifiedNode and the extractor
+    // but the tree renderer's field whitelist wasn't updated, so Dev Mode
+    // annotations silently vanished from the default (tree) output format
+    // despite being present on the SimplifiedNode object.
+    it("emits annotations", () => {
+      const design: SimplifiedDesign = {
+        name: "Test",
+        components: {},
+        componentSets: {},
+        globalVars: { styles: {} },
+        elements: {},
+        nodes: [
+          {
+            id: "1:1",
+            name: "Label",
+            type: "TEXT",
+            annotations: [{ label: "Needs i18n string", properties: ["fills"] }],
+          },
+        ],
+      };
+
+      const output = serializeResult(wrapForSerialization(design), "tree");
+
+      expect(output).toContain(
+        'annotations=[{"label":"Needs i18n string","properties":["fills"]}]',
+      );
+    });
+
     // After count-gating, single-use style values live inline on the node rather
     // than as a globalVars ref. The tree renderer must emit them as compact JSON.
     it("renders inline (non-reference) style values as JSON", () => {
