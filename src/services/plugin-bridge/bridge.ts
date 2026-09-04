@@ -161,6 +161,14 @@ export class PluginBridge {
   // stopped bridge would come back to life when the timer fired — binding the port it was just told to
   // release and reloading the persisted token onto an object the caller believes is dead.
   private reclaimTimer: ReturnType<typeof setTimeout> | null = null;
+  // Whether `stop()` has run without a `start()` since. Every step of the probe checks it, because a
+  // probe is spread across three turns of the event loop — the retry timer, the `tryBind` call it
+  // makes, and the `listening` callback for a bind libuv has already accepted — and `stop()` can land
+  // between any two of them. Cancelling only the timer leaves the other two: a `WebSocketServer`
+  // constructed but not yet listening will still take the port, overwrite the `wss` handle `stop()`
+  // just nulled (so nothing can ever close it), and reload the persisted token onto a bridge the
+  // caller has discarded.
+  private stopped = false;
 
   // All three injectable for the contract harness, which drives real sockets: `store` isolates
   // persistence to a temp dir instead of touching the real ~/.framelink; `requestTimeoutMs` lets it pin
@@ -184,11 +192,13 @@ export class PluginBridge {
    * only the winner's ever fire; the heartbeat is installed in `listening`, so it is winner-only.
    */
   start(ports: number[], onConnect?: () => void): void {
+    this.stopped = false;
     this.reclaimDeadline = Date.now() + this.reclaimWindowMs;
     this.tryBind(ports, 0, onConnect);
   }
 
   private tryBind(ports: number[], index: number, onConnect?: () => void): void {
+    if (this.stopped) return;
     if (index >= ports.length) {
       Logger.log(
         `No free port in the WS block [${ports[0]}..${ports[ports.length - 1]}] — is the block full?`,
@@ -243,8 +253,8 @@ export class PluginBridge {
           // Re-probe the SAME index rather than advancing: the holder is very likely the dying
           // predecessor of this very server, and landing elsewhere would silently cost the human a
           // fresh Allow. unref'd so a server whose port never frees can't hold the process open, and
-          // retained so `stop()` can cancel it — a probe still in flight is the one way a stopped
-          // bridge could otherwise rebind.
+          // retained so `stop()` can cancel it rather than leaving a discarded bridge to rebind on a
+          // later tick (`stopped` covers the rest of that hazard).
           this.reclaimTimer = setTimeout(() => {
             this.reclaimTimer = null;
             this.tryBind(ports, index, onConnect);
@@ -259,6 +269,13 @@ export class PluginBridge {
       throw err;
     });
     wss.on("listening", () => {
+      // A bind libuv had already accepted when `stop()` ran: hand the port straight back rather than
+      // installing it. Nothing below this line may run on a stopped bridge — it would claim the port,
+      // replace the `wss` handle stop() nulled, and reload the approval onto a discarded object.
+      if (this.stopped) {
+        wss.close();
+        return;
+      }
       Logger.log(`WS bridge listening on ws://127.0.0.1:${port}`);
       // Record the winning port + server so persistence keys on (cwd, port) and stop() can free it.
       this.boundPort = port;
@@ -467,9 +484,11 @@ export class PluginBridge {
    * Under (cwd, port) keying, a faithful restart test must reclaim the same port, which requires this.
    */
   stop(): void {
-    // Cancel any in-flight reclaim re-probe FIRST and burn the budget, so a bridge told to stop can't
-    // rebind the port a moment later — closing `wss` alone leaves the pending timer free to bind and
-    // reload the persisted token onto a bridge the caller has already discarded.
+    // Shut the probe down FIRST, on all three of its paths: latch `stopped` (checked by `tryBind` and
+    // by `listening`), cancel a scheduled re-probe, and burn the budget. Closing `wss` alone is not
+    // enough — it only disposes the bind that already WON, leaving anything still in flight free to
+    // take the port and reload the persisted token onto a bridge the caller has discarded.
+    this.stopped = true;
     if (this.reclaimTimer) clearTimeout(this.reclaimTimer);
     this.reclaimTimer = null;
     this.reclaimDeadline = 0;

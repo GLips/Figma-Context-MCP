@@ -429,9 +429,12 @@ await wait(150);
 const NOAPP_PORT = 19880;
 const noAppHolder = net.createServer();
 await new Promise((res) => noAppHolder.listen(NOAPP_PORT, "127.0.0.1", res));
-const bridgeNoApp = new PluginBridge(new ApprovalStore(process.cwd(), sharedDir)); // production 2s window
+// A 5s window, injected rather than inherited: the point of this case is that the wait DIDN'T happen,
+// so the budget must be unambiguously longer than the sleep below. Left at the production constant it
+// would silently stop discriminating the day that constant dropped under 250ms.
+const bridgeNoApp = new PluginBridge(new ApprovalStore(process.cwd(), sharedDir), 15_000, 5_000);
 bridgeNoApp.start([NOAPP_PORT, NOAPP_PORT + 1]);
-await wait(250); // a small fraction of the window — only an immediate advance can have bound by now
+await wait(250); // a twentieth of the window — only an immediate advance can have bound by now
 const advancedAtOnce = new WebSocket(`ws://127.0.0.1:${NOAPP_PORT + 1}`, { origin: "null" });
 assert.equal(
   await refusedOrOpened(advancedAtOnce),
@@ -502,6 +505,25 @@ assert.equal(
   "a stopped bridge leaves its port free — the reclaim retry it had in flight was cancelled",
 );
 console.log("✅ stop() cancels an in-flight reclaim retry (a stopped bridge cannot rebind its port)");
+await wait(150);
+
+// (d) …and it disowns a bind the OS has already accepted. Cancelling the retry timer only covers the
+// reclaim path; a plain start-then-stop leaves a WebSocketServer mid-`listen`, and its `listening`
+// callback fires afterwards regardless. Unlatched, it takes the port, overwrites the `wss` handle
+// stop() just nulled — so nothing can ever close it again — and reloads the persisted approval onto a
+// bridge nobody holds. No approval is needed to reach this: it is the ordinary bind path.
+const FREE_PORT = 19886;
+const bridgeD4 = new PluginBridge(new ApprovalStore(process.cwd(), sharedDir));
+bridgeD4.start([FREE_PORT]);
+bridgeD4.stop(); // same tick — the bind is in flight and cannot be cancelled, only disowned
+await wait(300); // long past the point where `listening` would have fired
+const neverBound = new WebSocket(`ws://127.0.0.1:${FREE_PORT}`, { origin: "null" });
+assert.equal(
+  await refusedOrOpened(neverBound),
+  "refused",
+  "a bridge stopped while its bind was in flight leaves the port free instead of claiming it unclosably",
+);
+console.log("✅ stop() disowns a bind already in flight (no unclosable listener on a discarded bridge)");
 
 // --- Version handshake + compatibility policy (Slice 1.2, tightened by fig-41) ---
 // The policy itself (current is clean, missing or sub-minimum is refused) is pinned END TO END below,
@@ -509,7 +531,7 @@ console.log("✅ stop() cancels an in-flight reclaim retry (a stopped bridge can
 // `currentRacer` for "a current plugin is only delayed, not refused". Asserting refuseProtocolSkew's
 // return value directly here as well would restate those same three branches without a wire in them.
 
-// Connect a CURRENT plugin onto the slot the terminated mute socket just freed.
+// Connect a CURRENT plugin onto the slot the sticky-approval reconnect left free.
 await wait(150);
 const current = fakePlugin("null");
 await new Promise((res) => current.on("open", res));
@@ -699,7 +721,15 @@ try {
   raceErr = e;
 }
 assert.ok(raceErr, "a write issued inside the handshake window must not run");
-assert.match(raceErr.message, /protocol v/, "it is refused with the update-the-plugin message");
+// Match the WHOLE refusal, not just "protocol v": the plugin version in it comes from the peer's
+// GET_VERSION reply, and `refuseProtocolSkew` degrades silently to "the connected plugin" when that
+// field is missing. Pinning the full text is what keeps `pluginVersion` round-tripping — a reply,
+// parse, or message change that dropped it would otherwise pass every check in this file.
+assert.match(
+  raceErr.message,
+  /plugin v0\.0\.1 \(protocol v0\)/,
+  "it is refused with the update-the-plugin message, naming the plugin version it round-tripped",
+);
 assert.equal(raceBridge.protocolCompatibility(), "incompatible", "the verdict landed while the write was held");
 assert.ok(!stalePlugin.received.includes("EXECUTE_CODE"), "the stale plugin never received the code");
 console.log("✅ A write racing the version handshake HOLDS, then is refused — the stale plugin never receives it");
