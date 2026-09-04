@@ -22,6 +22,27 @@ const DEFAULT_TIMEOUT_MS = 15_000;
 // reconnect cadence so the live plugin reclaims the freed slot on its very next retry.
 const HEARTBEAT_INTERVAL_MS = 10_000;
 
+// How long a starting server keeps re-probing a busy port that THIS project already holds a persisted
+// approval for, before giving up and advancing to the next port in the block.
+//
+// Why this exists: durable approval keys on (cwd, PORT), so a restart only reloads its token if it
+// reclaims its own port — and a dev-watch save-restart is a photo finish. Measured on the real
+// `pnpm dev` loop: the predecessor releases the port ~145ms after SIGTERM and the successor binds
+// ~280ms later. Anything that slows the predecessor's exit past the rebuild+spawn (a telemetry flush
+// on a slow network, a loaded machine, an in-flight request) inverts that margin, the successor
+// probe-advances to the next port, finds an EMPTY approval slot there, echoes `sessionToken: null`,
+// and the plugin — whose own gate is per-connection — correctly treats it as a brand-new session and
+// re-prompts with a fresh pairing code. The human sees "why is it asking again?" after a save they
+// didn't think was a restart.
+//
+// Waiting is gated on a PERSISTED APPROVAL for that exact port, which is the only evidence a server
+// has that the port is plausibly its own former slot — so a genuinely-concurrent second session (no
+// approval on the holder's port) still advances instantly and never pays this. The budget is a single
+// deadline for the whole probe (not per port), so worst-case added startup is bounded by the window
+// once, however many held-and-approved ports the block contains.
+const RECLAIM_WINDOW_MS = 2_000;
+const RECLAIM_RETRY_MS = 100;
+
 /**
  * Gate connections by `Origin`. A Figma plugin UI runs in a sandboxed iframe, so its
  * WebSocket handshake carries `Origin: null` (or no Origin header for non-browser
@@ -104,6 +125,10 @@ export class PluginBridge {
   // The winning WebSocketServer, retained only so `stop()` can close it (free the port). The relay is
   // otherwise process-lifetime; stop() exists for tests that model a restart by freeing then rebinding.
   private wss: WebSocketServer | null = null;
+  // Wall-clock cutoff for waiting on a busy-but-ours port during the initial probe (see
+  // RECLAIM_WINDOW_MS). One budget for the whole probe, stamped in `start()`; 0 means "never wait",
+  // which is what a bridge that was never started reads as.
+  private reclaimDeadline = 0;
 
   // Injectable so the contract harness / tests isolate persistence to a temp dir instead of touching
   // the real ~/.framelink. Production constructs the default store.
@@ -118,6 +143,7 @@ export class PluginBridge {
    * only the winner's ever fire; the heartbeat is installed in `listening`, so it is winner-only.
    */
   start(ports: number[], onConnect?: () => void): void {
+    this.reclaimDeadline = Date.now() + RECLAIM_WINDOW_MS;
     this.tryBind(ports, 0, onConnect);
   }
 
@@ -164,13 +190,21 @@ export class PluginBridge {
       },
     });
     // EADDRINUSE means another session already holds this port — advance to the next and try
-    // again (close this loser first so its half-open listener doesn't linger). Any OTHER bind
+    // again (close this loser first so its half-open listener doesn't linger), EXCEPT while this
+    // port still looks like our own former slot: see RECLAIM_WINDOW_MS. Any OTHER bind
     // error (EACCES, EADDRNOTAVAIL …) is genuinely exceptional, NOT a "block full" condition, so
     // crash loud rather than degrade quietly: a deliberate asymmetry with the soft block-exhaustion
     // path above (which logs and survives serverless). Log first so the reason survives the crash.
     wss.on("error", (err: NodeJS.ErrnoException) => {
       if (err.code === "EADDRINUSE") {
         wss.close();
+        if (this.shouldWaitToReclaim(port)) {
+          // Re-probe the SAME index rather than advancing: the holder is very likely the dying
+          // predecessor of this very server, and landing elsewhere would silently cost the human a
+          // fresh Allow. unref'd so a server whose port never frees can't hold the process open.
+          setTimeout(() => this.tryBind(ports, index, onConnect), RECLAIM_RETRY_MS).unref();
+          return;
+        }
         this.tryBind(ports, index + 1, onConnect);
         return;
       }
@@ -253,6 +287,19 @@ export class PluginBridge {
       Logger.log("Plugin connected to WS bridge");
       onConnect?.();
     });
+  }
+
+  /**
+   * Whether a busy port is worth re-probing instead of advancing past: only while the probe's reclaim
+   * budget is unspent AND this project holds an unexpired approval for that exact port. The approval
+   * is the evidence — it means a human already Allowed a server of ours on this port, so the holder is
+   * most likely our own not-yet-dead predecessor, and landing elsewhere would cost a fresh Allow.
+   *
+   * `store.load` is the right probe rather than a bespoke peek: it applies the same TTL and prunes the
+   * same expired file the eventual `listening` handler would, so a stale slot can't hold up startup.
+   */
+  private shouldWaitToReclaim(port: number): boolean {
+    return Date.now() < this.reclaimDeadline && this.store.load(port, Date.now()) !== null;
   }
 
   /**

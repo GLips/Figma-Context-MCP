@@ -65,6 +65,7 @@
 
 import { WebSocket } from "ws";
 import assert from "node:assert";
+import net from "node:net";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -302,8 +303,9 @@ await wait(150);
 // server only reloads if it reclaims its port — exactly what a real single-server restart does (it frees
 // the port on exit and re-probes to the same base). `bridgeR1.stop()` frees the port so `bridgeR2` can
 // reclaim it, the honest way to model this in-process. Note the fake sandbox gates on the token alone;
-// the plugin binds approval per port — so a restart that instead landed on a DIFFERENT port would
-// reload nothing here, and in production would surface as a fresh Allow prompt on the new port.
+// the plugin binds approval per port — so a restart that instead landed on a DIFFERENT port reloads
+// nothing here, and in production surfaces as a fresh Allow prompt on the new port. That slip is the
+// fig-43 failure, and the reclaim-window scenario further down is what keeps it from happening.
 const sharedDir = mkdtempSync(join(tmpdir(), "flcm-approval-restart-"));
 const RESTART_PORT = 19879;
 const restartState = makeSandbox();
@@ -359,6 +361,48 @@ await wait(150);
 assert.equal(bridgeR3.getSessionToken(), null, "after Revoke, a restarted server reloads nothing — approval was truly cleared");
 console.log("✅ Revoke deletes the persisted token so it can't silently re-approve on the next restart");
 bridgeR3.stop();
+
+// --- A restart that races its own dying predecessor must reclaim its port, not slip to the next ---
+// The field failure this closes (fig-43): a dev-watch save-restart is a photo finish — the predecessor
+// releases the port ~145ms after SIGTERM while the successor binds ~280ms later, so anything that slows
+// the old process's exit inverts the margin. The successor then probe-advances one port, finds an EMPTY
+// approval slot, echoes `sessionToken: null`, and the human gets a fresh pairing code after a save they
+// never thought was a restart. A plain TCP listener on the port models the not-yet-exited predecessor
+// faithfully: the bind fails with the same EADDRINUSE either way.
+const SLIP_PORT = 19884;
+const slipState = makeSandbox();
+const bridgeS1 = new PluginBridge(new ApprovalStore(process.cwd(), sharedDir));
+bridgeS1.start([SLIP_PORT, SLIP_PORT + 1]);
+await wait(150);
+const s1 = fakePlugin("null", { url: `ws://127.0.0.1:${SLIP_PORT}`, state: slipState });
+await new Promise((res) => s1.on("open", res));
+await bridgeS1.request({ type: "SESSION_INFO", identity: SESSION_IDENTITY, pairingCode: bridgeS1.getPairingCode(), sessionToken: bridgeS1.getSessionToken() });
+s1.allow();
+await wait(50);
+const slipToken = bridgeS1.getSessionToken();
+assert.match(String(slipToken), /^tok-/, "the pre-restart server on the base port was approved and persisted");
+s1.close();
+bridgeS1.stop();
+await wait(150);
+
+const predecessor = net.createServer();
+await new Promise((res) => predecessor.listen(SLIP_PORT, "127.0.0.1", res));
+const bridgeS2 = new PluginBridge(new ApprovalStore(process.cwd(), sharedDir));
+bridgeS2.start([SLIP_PORT, SLIP_PORT + 1]);
+await wait(300);
+// Nothing bound yet: a null token here means it is still re-probing SLIP_PORT. Had it advanced, it
+// would have bound SLIP_PORT+1 — also null, which is exactly why the assertion that MATTERS is the
+// one after the release: only a bind on SLIP_PORT can produce the persisted token.
+assert.equal(bridgeS2.getSessionToken(), null, "the successor holds off while its own port is still occupied");
+await new Promise((res) => predecessor.close(res));
+await wait(400);
+assert.equal(
+  bridgeS2.getSessionToken(),
+  slipToken,
+  "a restart racing its dying predecessor waits out the port and reloads its approval, instead of slipping to the next port and re-prompting",
+);
+console.log("✅ A restart racing its dying predecessor reclaims its own port — no slip, no fresh Allow");
+bridgeS2.stop();
 
 // --- Version handshake + skew policy (Slice 1.2) ---
 
