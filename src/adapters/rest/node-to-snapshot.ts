@@ -1,5 +1,6 @@
 import type { Node as FigmaDocumentNode, Paint, Effect, Style } from "@figma/rest-api-spec";
 import type { NodeSnapshot, SnapshotStyleRef } from "~/core/snapshot.js";
+import { ROOT_SPACE, solveOwnBox, toParentSpacePoint, type RestParentSpace } from "./own-box.js";
 import { decodePaints, decodeEffect } from "./paint.js";
 import { decodeText } from "./text.js";
 
@@ -39,12 +40,32 @@ export function restNodeToSnapshot(
   node: FigmaDocumentNode,
   extraStyles: Record<string, Style> = {},
 ): NodeSnapshot {
+  return restSubtreeToSnapshot(node, extraStyles, ROOT_SPACE);
+}
+
+/**
+ * The recursive body. `parentSpace` is walk state, not an argument any caller
+ * outside this module could supply — a node's own box is only recoverable
+ * relative to what its ancestors resolved to, so it threads down rather than
+ * widening the entry point above.
+ */
+function restSubtreeToSnapshot(
+  node: FigmaDocumentNode,
+  extraStyles: Record<string, Style>,
+  parentSpace: RestParentSpace,
+): NodeSnapshot {
   const raw = node as unknown as RawStructuralFields & {
     fills?: Paint[];
     strokes?: Paint[];
     effects?: Effect[];
     children?: FigmaDocumentNode[];
   };
+
+  // The node's own box, recovered from the page-space AABB (see ./own-box.ts), plus
+  // the space this node's own children will be resolved against.
+  const pageRotation = parentSpace.pageRotation + (raw.rotation ?? 0);
+  const own = solveOwnBox(raw.absoluteBoundingBox, pageRotation);
+  const childSpace: RestParentSpace = { pageRotation, originOnPage: own?.originOnPage };
 
   return {
     id: node.id,
@@ -55,6 +76,14 @@ export function restNodeToSnapshot(
 
     // Layout traits
     absoluteBoundingBox: raw.absoluteBoundingBox,
+    ownSize: own?.size,
+    ownOrigin:
+      own?.originOnPage && parentSpace.originOnPage
+        ? toParentSpacePoint(own.originOnPage, {
+            pageRotation: parentSpace.pageRotation,
+            originOnPage: parentSpace.originOnPage,
+          })
+        : undefined,
     layoutSizingHorizontal: raw.layoutSizingHorizontal,
     layoutSizingVertical: raw.layoutSizingVertical,
     layoutAlign: raw.layoutAlign,
@@ -114,7 +143,7 @@ export function restNodeToSnapshot(
     // per-slot resolved names; the wire shape never reaches the core.
     styles: decodeStyles(node, extraStyles),
 
-    children: raw.children?.map((c) => restNodeToSnapshot(c, extraStyles)),
+    children: raw.children?.map((c) => restSubtreeToSnapshot(c, extraStyles, childSpace)),
   };
 }
 

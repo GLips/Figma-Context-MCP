@@ -10,6 +10,10 @@
       "width": 300,
       "height": 200
     },
+    "ownSize": {
+      "width": 300,
+      "height": 200
+    },
     "clipsContent": true,
     "children": [
       {
@@ -22,6 +26,14 @@
           "y": 0,
           "width": 150,
           "height": 200
+        },
+        "ownSize": {
+          "width": 150,
+          "height": 200
+        },
+        "ownOrigin": {
+          "x": 0,
+          "y": 0
         },
         "clipsContent": true,
         "componentPropertyDefinitions": {
@@ -52,6 +64,14 @@
               "y": 8,
               "width": 134,
               "height": 20
+            },
+            "ownSize": {
+              "width": 134,
+              "height": 20
+            },
+            "ownOrigin": {
+              "x": 8,
+              "y": 8
             },
             "fills": [
               {
@@ -102,6 +122,14 @@
               "width": 60,
               "height": 20
             },
+            "ownSize": {
+              "width": 60,
+              "height": 20
+            },
+            "ownOrigin": {
+              "x": 0,
+              "y": 0
+            },
             "clipsContent": true,
             "fills": [
               {
@@ -129,6 +157,14 @@
           "width": 150,
           "height": 200
         },
+        "ownSize": {
+          "width": 150,
+          "height": 200
+        },
+        "ownOrigin": {
+          "x": 150,
+          "y": 0
+        },
         "clipsContent": true,
         "componentId": "6:2",
         "componentProperties": {
@@ -152,6 +188,14 @@
               "y": 8,
               "width": 134,
               "height": 20
+            },
+            "ownSize": {
+              "width": 134,
+              "height": 20
+            },
+            "ownOrigin": {
+              "x": 8,
+              "y": 8
             },
             "fills": [
               {

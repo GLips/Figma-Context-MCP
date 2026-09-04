@@ -27,7 +27,7 @@ import { STYLE_REF_FIELDS } from "~/core/compress.js";
  *   2. SCOPE — normalize/drop the enumerated spots where producers legitimately
  *      differ (see the per-spot pins below).
  *
- * ── The six legitimate-difference spots (plan Phase 4), each pinned ──
+ * ── The seven legitimate-difference spots (plan Phase 4), each pinned ──
  *
  *  1. IMAGE REFS (`imageRef`/`gifRef`). The two producers name the same asset
  *     with different ids (REST's file-scoped `imageRef` vs the plugin's own
@@ -67,6 +67,32 @@ import { STYLE_REF_FIELDS } from "~/core/compress.js";
  *     normalization; the fixtures exercise them (the component-instance fixture's
  *     hidden Sale Ribbon is rescued by rule 6) so a regression in the shared core
  *     still fails the harness.
+ *
+ *  7. ROTATIONS REST CAN'T INVERT (`solveOwnBox`, `adapters/rest/own-box.ts`).
+ *     The plugin READS a node's own size and origin off the live node; REST has to
+ *     invert them out of the page-space AABB, and two families of angle defeat that.
+ *
+ *     At odd multiples of 45° the inversion has no solution at all (see
+ *     `DEGENERATE_DETERMINANT` there) and REST emits the AABB numbers, so the
+ *     producers disagree on `width`/`height`/`left`/`top` for the node itself.
+ *
+ *     At a HALF-TURN the size still inverts, but the corner doesn't: `rotation` is
+ *     `atan2(-m10, m00)`, which reads a horizontally flipped node as 180° too, and
+ *     the two place the origin a full height apart. REST withholds the origin rather
+ *     than guess, so the producers disagree on `left`/`top` only.
+ *
+ *     Either way a node whose own corner REST couldn't place takes its children's
+ *     `left`/`top` down with it — those are measured against that corner. We drop
+ *     exactly those fields on exactly those nodes; everything else about a rotated
+ *     node, `rotation` included, still has to match. The rotated-nodes fixture
+ *     carries one of each, plus a child under each.
+ *
+ *     Residual, deliberately NOT normalized: a flip COMBINED with a rotation reads
+ *     as θ−180° and looks like an ordinary angle, so REST solves an origin that is
+ *     wrong by the node's height. A rule keyed on `rotation` can't detect it either
+ *     — the payload doesn't carry the transform's determinant — so pinning it would
+ *     mean forgiving `left`/`top` at every angle. A mirrored-and-rotated fixture is
+ *     expected to fail here; that is this note, not a mystery.
  */
 
 /** Every image paint's ref collapses to this — parity is over presence, not id. */
@@ -104,14 +130,49 @@ function scopeStyleValue(value: unknown): unknown {
 }
 
 /**
+ * `|cos 2θ|` below which the REST producer refuses to invert an AABB back into
+ * the node's own box — the same threshold `solveOwnBox` holds (see pin 7). Kept
+ * as a literal rather than imported: the comparator states the policy the
+ * producers must satisfy, and importing the adapter's constant would let a
+ * widened band silently widen what parity forgives.
+ */
+const DEGENERATE_DETERMINANT = 0.0105;
+
+/** Mirrors `HALF_TURN_TOLERANCE_DEG` in the adapter, for the same reason. */
+const HALF_TURN_TOLERANCE_DEG = 0.01;
+
+/**
+ * Whether a node's rotation puts the REST inversion in the unsolvable band, and so
+ * costs its SIZE as well as its corner. The angle is the node's PAGE rotation (its
+ * own plus every ancestor's), because the AABB REST inverts is page-axis-aligned;
+ * the emitted sign convention doesn't matter, `cos 2θ` is even.
+ */
+function inDegenerateBand(pageRotationDeg: number): boolean {
+  return Math.abs(Math.cos((2 * pageRotationDeg * Math.PI) / 180)) < DEGENERATE_DETERMINANT;
+}
+
+/** Whether a rotation is the half-turn a horizontal flip forges, costing the corner. */
+function isHalfTurn(pageRotationDeg: number): boolean {
+  const wrapped = Math.abs(((pageRotationDeg % 360) + 360) % 360);
+  return Math.abs(wrapped - 180) < HALF_TURN_TOLERANCE_DEG;
+}
+
+/**
  * Reduce one node to its shared parity view: expand its template + style refs,
  * normalize image refs, drop plugin-only fields, recurse. One pass so expansion
  * and scoping can't disagree about a node's shape.
+ *
+ * `space` carries what pin 7 needs from the ancestors: the accumulated page
+ * rotation, and whether the immediate parent's own corner was placeable at all.
  */
 function viewNode(
   node: SimplifiedNode,
   styles: Record<string, StyleValue>,
   templates: Record<string, TemplateBody>,
+  space: { pageRotation: number; parentCornerUnplaceable: boolean } = {
+    pageRotation: 0,
+    parentCornerUnplaceable: false,
+  },
 ): Rec {
   const source = node as unknown as Rec;
 
@@ -143,9 +204,29 @@ function viewNode(
     );
   }
 
+  // Pin 7. In the degenerate band REST substitutes the AABB for the whole own box,
+  // so the SIZE goes too; at a half-turn only the corner is unrecoverable. Either
+  // way a direct child's parent-relative origin goes with the parent's corner.
+  // Dropped from both views — the disagreement is legitimate, and anything else
+  // about these nodes (`rotation` above all) still has to match.
+  const pageRotation = space.pageRotation + (typeof out.rotation === "number" ? out.rotation : 0);
+  const degenerate = inDegenerateBand(pageRotation);
+  const cornerUnplaceable = degenerate || isHalfTurn(pageRotation);
+  if (degenerate) {
+    delete out.width;
+    delete out.height;
+  }
+  if (cornerUnplaceable || space.parentCornerUnplaceable) {
+    delete out.left;
+    delete out.top;
+  }
+
   if (Array.isArray(out.children)) {
     out.children = out.children.map((child) =>
-      viewNode(child as SimplifiedNode, styles, templates),
+      viewNode(child as SimplifiedNode, styles, templates, {
+        pageRotation,
+        parentCornerUnplaceable: cornerUnplaceable,
+      }),
     );
   }
 

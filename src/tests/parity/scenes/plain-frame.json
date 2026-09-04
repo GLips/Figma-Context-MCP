@@ -11,6 +11,10 @@
         "width": 200,
         "height": 120
       },
+      "width": 200,
+      "height": 120,
+      "x": 0,
+      "y": 0,
       "layoutSizingHorizontal": "FIXED",
       "layoutSizingVertical": "FIXED",
       "clipsContent": true,
@@ -79,7 +83,11 @@
             "y": 0,
             "width": 200,
             "height": 120
-          }
+          },
+          "width": 200,
+          "height": 120,
+          "x": 0,
+          "y": 0
         },
         {
           "id": "1:3",
@@ -92,6 +100,10 @@
             "width": 120,
             "height": 24
           },
+          "width": 120,
+          "height": 24,
+          "x": 16,
+          "y": 16,
           "layoutSizingHorizontal": "FIXED",
           "layoutSizingVertical": "FIXED",
           "fills": [

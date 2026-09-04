@@ -16,13 +16,25 @@
  * (Invariant 2 / Phase 1 Done-when). The type grows one concern at a time as
  * each transformer migrates off Figma types onto the snapshot.
  */
-/** Axis-aligned box in absolute coordinates (Figma `Rectangle`, decoupled). */
-export interface SnapshotRect {
-  x: number;
-  y: number;
+/** A node's own width/height in px (Figma plugin `node.width`/`node.height`). */
+export interface SnapshotSize {
   width: number;
   height: number;
 }
+
+/** A point in px within some node's coordinate space (Figma plugin `node.x`/`node.y`). */
+export interface SnapshotPoint {
+  x: number;
+  y: number;
+}
+
+/**
+ * Axis-aligned box in absolute coordinates (Figma `Rectangle`, decoupled). Its
+ * two halves are the vocabulary above, declared rather than restated: a producer
+ * that can supply only one half (`ownSize` without `ownOrigin`, say) still hands
+ * the core a value the same call sites accept.
+ */
+export interface SnapshotRect extends SnapshotPoint, SnapshotSize {}
 
 /** Per-side stroke weights (Figma `StrokeWeights`, decoupled). */
 export interface SnapshotStrokeWeights {
@@ -265,6 +277,29 @@ export interface NodeSnapshot {
   // enum tags), and the CSS mapping is simplify's job (Invariant 5).
   // ------------------------------------------------------------------------
   absoluteBoundingBox?: SnapshotRect | null;
+  /**
+   * The node's OWN size, in its own (pre-rotation) frame — what it was authored
+   * at. Distinct from `absoluteBoundingBox`, which is the page-space
+   * axis-aligned box: for a rotated node that box is the node's shadow, wider
+   * and taller than the node itself. This is the canonical source for the
+   * emitted `width`/`height` (see `NodeGeometry`); the AABB stays the source for
+   * page-space questions like grid child-overlap.
+   *
+   * Optional because the REST producer has to SOLVE for it — the wire carries no
+   * `size` without `geometry=paths`, and that inversion has no answer near every
+   * odd multiple of 45° (see `DEGENERATE_DETERMINANT`, `adapters/rest/own-box.ts`).
+   * The plugin producer reads it straight off the live node. Absent → consumers
+   * fall back to the AABB.
+   */
+  ownSize?: SnapshotSize;
+  /**
+   * The node's own top-left corner in its PARENT's frame — the plugin API's
+   * `node.x`/`node.y`. Like `ownSize`, this names the node rather than its
+   * shadow: the page-space AABB delta puts a rotated node's `left`/`top` at a
+   * corner the node doesn't have. Absent → consumers fall back to the AABB
+   * delta.
+   */
+  ownOrigin?: SnapshotPoint;
   layoutSizingHorizontal?: "FIXED" | "HUG" | "FILL";
   layoutSizingVertical?: "FIXED" | "HUG" | "FILL";
   layoutAlign?: "INHERIT" | "STRETCH" | "MIN" | "CENTER" | "MAX";

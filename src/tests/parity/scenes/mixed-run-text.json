@@ -11,6 +11,10 @@
         "width": 240,
         "height": 80
       },
+      "width": 240,
+      "height": 80,
+      "x": 0,
+      "y": 0,
       "fills": "figma:mixed",
       "characters": "Hi bold link\nOne\nTwo",
       "textAlignHorizontal": "LEFT",

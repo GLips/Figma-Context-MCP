@@ -11,6 +11,10 @@
         "width": 100,
         "height": 100
       },
+      "width": 100,
+      "height": 100,
+      "x": 0,
+      "y": 0,
       "fills": [
         {
           "type": "IMAGE",
@@ -31,6 +35,10 @@
         "width": 100,
         "height": 100
       },
+      "width": 100,
+      "height": 100,
+      "x": 0,
+      "y": 120,
       "clipsContent": true,
       "fills": [
         {
@@ -53,6 +61,10 @@
             "width": 50,
             "height": 50
           },
+          "width": 50,
+          "height": 50,
+          "x": 0,
+          "y": 0,
           "fills": [
             {
               "type": "IMAGE",

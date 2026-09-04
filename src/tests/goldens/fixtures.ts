@@ -501,6 +501,120 @@ const deepNested = fileResponse("Deep Nested", [
   }),
 ]);
 
+// ---------------------------------------------------------------------------
+// 9. Rotated nodes — the own-size inversion (fig-8). Every `absoluteBoundingBox`
+//    below is the page-space AABB Figma would report for the geometry named in
+//    the comment beside it, so the REST producer has to invert its way back to
+//    the authored numbers. Covers a plain angle, the degenerate 45° band (where
+//    the inversion is unsolvable and the AABB stands in), a node UNDER a
+//    degenerate one (size solvable, origin not), and a rotation nested inside a
+//    rotation (page rotation 10° + 20°, which is what the AABB is aligned to).
+// ---------------------------------------------------------------------------
+const rotatedNodes = fileResponse("Rotated Nodes", [
+  node({
+    id: "9:1",
+    name: "Rotation Board",
+    type: "FRAME",
+    clipsContent: true,
+    absoluteBoundingBox: { x: 0, y: 0, width: 400, height: 300 },
+    layoutSizingHorizontal: "FIXED",
+    layoutSizingVertical: "FIXED",
+    fills: [{ type: "SOLID", color: { r: 1, g: 1, b: 1, a: 1 }, visible: true }],
+    children: [
+      node({
+        id: "9:2",
+        name: "Tilted Card",
+        type: "FRAME",
+        // 40x24 at (100, 60), rotated 15deg
+        absoluteBoundingBox: { x: 100, y: 49.6472, width: 44.8487, height: 33.535 },
+        rotation: 15,
+        layoutSizingHorizontal: "FIXED",
+        layoutSizingVertical: "FIXED",
+        fills: [{ type: "SOLID", color: { r: 0.2, g: 0.4, b: 0.9, a: 1 }, visible: true }],
+      }),
+      node({
+        id: "9:3",
+        name: "Diagonal Chip",
+        type: "FRAME",
+        // 60x20 at (220, 80), rotated 45deg — the degenerate band, where the
+        // inversion has no answer and the AABB stands in.
+        absoluteBoundingBox: { x: 220, y: 37.5736, width: 56.5685, height: 56.5685 },
+        rotation: 45,
+        layoutSizingHorizontal: "FIXED",
+        layoutSizingVertical: "FIXED",
+        fills: [{ type: "SOLID", color: { r: 0.9, g: 0.4, b: 0.2, a: 1 }, visible: true }],
+        children: [
+          node({
+            id: "9:6",
+            name: "Chip Label",
+            type: "FRAME",
+            // 20x8 at (6, 6) inside the chip, rotated -45deg — back to square with
+            // the page, so its SIZE inverts cleanly even though its origin can't.
+            absoluteBoundingBox: { x: 228.4853, y: 80, width: 20, height: 8 },
+            rotation: -45,
+            layoutSizingHorizontal: "FIXED",
+            layoutSizingVertical: "FIXED",
+            fills: [{ type: "SOLID", color: { r: 1, g: 1, b: 1, a: 1 }, visible: true }],
+          }),
+        ],
+      }),
+      node({
+        id: "9:9",
+        name: "Tilted Rule",
+        type: "LINE",
+        // 80x0 at (60, 250), rotated 15deg — a zero side is a real authored size,
+        // not a failed solve. The inversion reaches it by cancellation, so the
+        // residual is signed: at THIS angle it lands negative, which is why the
+        // solve tolerates a sub-pixel negative instead of testing `>= 0`.
+        absoluteBoundingBox: { x: 60, y: 229.2945, width: 77.2741, height: 20.7055 },
+        rotation: 15,
+        layoutSizingHorizontal: "FIXED",
+        layoutSizingVertical: "FIXED",
+        strokes: [{ type: "SOLID", color: { r: 0, g: 0, b: 0, a: 1 }, visible: true }],
+        strokeWeight: 1,
+      }),
+      node({
+        id: "9:7",
+        name: "Upside Down",
+        type: "FRAME",
+        // 50x30 at (300, 200), rotated a half-turn. REST reports 180deg for a
+        // HORIZONTALLY FLIPPED node too and can't tell the two apart, so it
+        // withholds the origin here and falls back to the AABB corner.
+        absoluteBoundingBox: { x: 250, y: 170, width: 50, height: 30 },
+        rotation: 180,
+        layoutSizingHorizontal: "FIXED",
+        layoutSizingVertical: "FIXED",
+        fills: [{ type: "SOLID", color: { r: 0.6, g: 0.3, b: 0.8, a: 1 }, visible: true }],
+      }),
+      node({
+        id: "9:4",
+        name: "Tilted Group",
+        type: "FRAME",
+        // 120x90 at (40, 150), rotated 10deg
+        absoluteBoundingBox: { x: 40, y: 129.1622, width: 133.8053, height: 109.4705 },
+        rotation: 10,
+        layoutSizingHorizontal: "FIXED",
+        layoutSizingVertical: "FIXED",
+        fills: [{ type: "SOLID", color: { r: 0.95, g: 0.95, b: 0.95, a: 1 }, visible: true }],
+        children: [
+          node({
+            id: "9:5",
+            name: "Inner Tilt",
+            type: "FRAME",
+            // 30x18 at (12, 9) inside the group, rotated a further 20deg — 30deg
+            // against the page, which is the angle the AABB is aligned to.
+            absoluteBoundingBox: { x: 53.3805, y: 141.7795, width: 34.9808, height: 30.5885 },
+            rotation: 20,
+            layoutSizingHorizontal: "FIXED",
+            layoutSizingVertical: "FIXED",
+            fills: [{ type: "SOLID", color: { r: 0.1, g: 0.7, b: 0.4, a: 1 }, visible: true }],
+          }),
+        ],
+      }),
+    ],
+  }),
+]);
+
 export type GoldenFixture = {
   name: string;
   response: GetFileResponse | GetFileNodesResponse;
@@ -515,4 +629,5 @@ export const GOLDEN_FIXTURES: GoldenFixture[] = [
   { name: "component-instance", response: componentInstance },
   { name: "named-styles", response: namedStyles },
   { name: "deep-nested", response: deepNested },
+  { name: "rotated-nodes", response: rotatedNodes },
 ];

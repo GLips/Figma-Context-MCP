@@ -10,6 +10,10 @@
       "width": 300,
       "height": 60
     },
+    "ownSize": {
+      "width": 300,
+      "height": 60
+    },
     "layoutSizingHorizontal": "FIXED",
     "layoutSizingVertical": "FIXED",
     "clipsContent": true,
@@ -32,6 +36,14 @@
           "y": 12,
           "width": 120,
           "height": 36
+        },
+        "ownSize": {
+          "width": 120,
+          "height": 36
+        },
+        "ownOrigin": {
+          "x": 16,
+          "y": 12
         },
         "layoutSizingHorizontal": "FIXED",
         "layoutSizingVertical": "FIXED",
@@ -60,6 +72,14 @@
           "y": 4,
           "width": 24,
           "height": 24
+        },
+        "ownSize": {
+          "width": 24,
+          "height": 24
+        },
+        "ownOrigin": {
+          "x": 260,
+          "y": 4
         },
         "layoutSizingHorizontal": "FIXED",
         "layoutSizingVertical": "FIXED",

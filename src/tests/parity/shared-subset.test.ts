@@ -146,6 +146,90 @@ describe("parityView comparator policy", () => {
     expect(parityView(templated)).toEqual(parityView(inline));
   });
 
+  it("forgives the degenerate 45deg band on the node and its children's origin", () => {
+    // REST can't invert a 45deg node's AABB, so it emits the square shadow's
+    // numbers where the plugin reports the authored box — and the child's origin
+    // is measured from a corner REST never placed.
+    const chip = (own: Record<string, number>, label: Record<string, number>) =>
+      design({
+        nodes: [
+          {
+            id: "1",
+            name: "Chip",
+            type: "FRAME",
+            rotation: -45,
+            ...own,
+            children: [
+              {
+                id: "2",
+                name: "Label",
+                type: "FRAME",
+                rotation: 45,
+                width: 20,
+                height: 8,
+                ...label,
+              },
+            ],
+          },
+        ],
+      } as unknown as Partial<SimplifiedDesign>);
+
+    const rest = chip(
+      { width: 56.57, height: 56.57, left: 220, top: 37.57 },
+      { left: 8.49, top: 42.43 },
+    );
+    const plugin = chip({ width: 60, height: 20, left: 220, top: 80 }, { left: 6, top: 6 });
+    expect(parityView(rest)).toEqual(parityView(plugin));
+  });
+
+  it("does NOT forgive a size difference on a rotated node outside the band", () => {
+    // 15deg inverts cleanly, so the producers have no excuse. Same for a child
+    // that rotates back square with the page: only its ORIGIN is unrecoverable
+    // under a degenerate parent, never its size.
+    const card = (width: number) =>
+      design({
+        nodes: [{ id: "1", name: "Card", type: "FRAME", rotation: -15, width, height: 24 }],
+      } as unknown as Partial<SimplifiedDesign>);
+    expect(parityView(card(40))).not.toEqual(parityView(card(44.85)));
+
+    const labelUnderChip = (width: number) =>
+      design({
+        nodes: [
+          {
+            id: "1",
+            name: "Chip",
+            type: "FRAME",
+            rotation: -45,
+            children: [{ id: "2", name: "Label", type: "FRAME", rotation: 45, width, height: 8 }],
+          },
+        ],
+      } as unknown as Partial<SimplifiedDesign>);
+    expect(parityView(labelUnderChip(20))).not.toEqual(parityView(labelUnderChip(28.28)));
+  });
+
+  it("forgives a half-turn's origin but never its size", () => {
+    // REST can't tell a half-turn from a horizontal flip, so it withholds the
+    // corner — but the size inverts fine at 180deg, so that still has to match.
+    const flipped = (left: number, top: number, width = 50) =>
+      design({
+        nodes: [
+          {
+            id: "1",
+            name: "Upside Down",
+            type: "FRAME",
+            rotation: -180,
+            width,
+            height: 30,
+            left,
+            top,
+          },
+        ],
+      } as unknown as Partial<SimplifiedDesign>);
+
+    expect(parityView(flipped(250, 170))).toEqual(parityView(flipped(300, 200)));
+    expect(parityView(flipped(250, 170, 50))).not.toEqual(parityView(flipped(250, 170, 62)));
+  });
+
   it("ignores the top-level design name (provenance metadata)", () => {
     expect(parityView(design({ name: "From REST" }))).toEqual(
       parityView(design({ name: "From plugin" })),

@@ -130,15 +130,19 @@ function buildNodeGeometry(
   // non-auto-layout — see ./layout/common.ts for the per-axis vocabulary mapping.
   const axis = resolveChildAxis(n, parent, mode, parentIsGrid);
   const stretch = getChildStretch(n, axis);
+  // The node's OWN size is what width/height mean (see NodeGeometry); the AABB is
+  // the fallback for a producer that couldn't determine it (see NodeSnapshot.ownSize),
+  // and the two are the same box on every unrotated node.
+  const size = n.ownSize ?? n.absoluteBoundingBox;
   const horizontal = resolveAxisDimension(
     convertSizing(n.layoutSizingHorizontal),
-    n.absoluteBoundingBox.width,
+    size.width,
     isRoot,
     !stretch.horizontal && shouldEmitFixedDimension(n.layoutSizingHorizontal, axis),
   );
   const vertical = resolveAxisDimension(
     convertSizing(n.layoutSizingVertical),
-    n.absoluteBoundingBox.height,
+    size.height,
     isRoot,
     !stretch.vertical && shouldEmitFixedDimension(n.layoutSizingVertical, axis),
   );
@@ -161,8 +165,14 @@ function buildNodeGeometry(
     if (n.layoutPositioning === "ABSOLUTE") {
       geometry.position = "absolute";
     }
-    geometry.left = pixelRound(n.absoluteBoundingBox.x - parent.absoluteBoundingBox.x);
-    geometry.top = pixelRound(n.absoluteBoundingBox.y - parent.absoluteBoundingBox.y);
+    // `ownOrigin` is already parent-relative; the AABB fallback subtracts the
+    // parent's box, which is the same point whenever neither node is rotated.
+    const origin = n.ownOrigin ?? {
+      x: n.absoluteBoundingBox.x - parent.absoluteBoundingBox.x,
+      y: n.absoluteBoundingBox.y - parent.absoluteBoundingBox.y,
+    };
+    geometry.left = pixelRound(origin.x);
+    geometry.top = pixelRound(origin.y);
   }
 
   // Figma reports rotation in degrees, counterclockwise-positive; CSS rotate()

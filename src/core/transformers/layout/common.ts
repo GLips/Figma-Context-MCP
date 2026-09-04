@@ -44,7 +44,24 @@ export interface SimplifiedLayout {
  */
 export type SimplifiedDimension = number | "fill" | "hug" | "contextual";
 
-/** Per-node geometry, emitted at the node top level (hybrid structure). */
+/**
+ * Per-node geometry, emitted at the node top level (hybrid structure).
+ *
+ * CANONICAL MEANING OF `width`/`height`: the node's OWN size — the number it was
+ * authored at, in its own pre-rotation frame — never the page-space axis-aligned
+ * box that contains it. The two differ only for a rotated node, and only the own
+ * size composes with `rotation` the way CSS composes `width` with `rotate()`: a
+ * 40x24 rect at 15° is `width: 40px; transform: rotate(15deg)`, and the AABB's
+ * 44.85 is a fact about its shadow on the page. `left`/`top` follow the same
+ * rule — they name the node's own top-left corner in the parent's frame, not the
+ * AABB's corner (which a rotated node doesn't even have). This matches how the
+ * write path spells the same numbers (`geometryOf`, plugin bridge), so a shape
+ * read back can be written straight out again.
+ *
+ * The source is `NodeSnapshot.ownSize`/`ownOrigin`; both fall back to
+ * `absoluteBoundingBox` when the producer couldn't determine the node's own box.
+ * `aspectRatio` deliberately stays on the AABB.
+ */
 export interface NodeGeometry {
   width?: SimplifiedDimension;
   height?: SimplifiedDimension;

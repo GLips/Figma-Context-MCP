@@ -10,6 +10,10 @@
       "width": 100,
       "height": 100
     },
+    "ownSize": {
+      "width": 100,
+      "height": 100
+    },
     "fills": [
       {
         "type": "IMAGE",
@@ -27,6 +31,10 @@
     "absoluteBoundingBox": {
       "x": 0,
       "y": 120,
+      "width": 100,
+      "height": 100
+    },
+    "ownSize": {
       "width": 100,
       "height": 100
     },
@@ -51,6 +59,14 @@
           "y": 120,
           "width": 50,
           "height": 50
+        },
+        "ownSize": {
+          "width": 50,
+          "height": 50
+        },
+        "ownOrigin": {
+          "x": 0,
+          "y": 0
         },
         "fills": [
           {

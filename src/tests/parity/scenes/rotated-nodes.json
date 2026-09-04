@@ -1,0 +1,251 @@
+{
+  "nodes": [
+    {
+      "id": "9:1",
+      "name": "Rotation Board",
+      "type": "FRAME",
+      "visible": true,
+      "absoluteBoundingBox": {
+        "x": 0,
+        "y": 0,
+        "width": 400,
+        "height": 300
+      },
+      "width": 400,
+      "height": 300,
+      "x": 0,
+      "y": 0,
+      "layoutSizingHorizontal": "FIXED",
+      "layoutSizingVertical": "FIXED",
+      "clipsContent": true,
+      "fills": [
+        {
+          "type": "SOLID",
+          "color": {
+            "r": 1,
+            "g": 1,
+            "b": 1
+          },
+          "visible": true
+        }
+      ],
+      "children": [
+        {
+          "id": "9:2",
+          "name": "Tilted Card",
+          "type": "FRAME",
+          "visible": true,
+          "absoluteBoundingBox": {
+            "x": 100,
+            "y": 49.6472,
+            "width": 44.8487,
+            "height": 33.535
+          },
+          "width": 40,
+          "height": 24,
+          "x": 100,
+          "y": 60,
+          "rotation": 15,
+          "layoutSizingHorizontal": "FIXED",
+          "layoutSizingVertical": "FIXED",
+          "fills": [
+            {
+              "type": "SOLID",
+              "color": {
+                "r": 0.2,
+                "g": 0.4,
+                "b": 0.9
+              },
+              "visible": true
+            }
+          ]
+        },
+        {
+          "id": "9:3",
+          "name": "Diagonal Chip",
+          "type": "FRAME",
+          "visible": true,
+          "absoluteBoundingBox": {
+            "x": 220,
+            "y": 37.5736,
+            "width": 56.5685,
+            "height": 56.5685
+          },
+          "width": 60,
+          "height": 20,
+          "x": 220,
+          "y": 80,
+          "rotation": 45,
+          "layoutSizingHorizontal": "FIXED",
+          "layoutSizingVertical": "FIXED",
+          "fills": [
+            {
+              "type": "SOLID",
+              "color": {
+                "r": 0.9,
+                "g": 0.4,
+                "b": 0.2
+              },
+              "visible": true
+            }
+          ],
+          "children": [
+            {
+              "id": "9:6",
+              "name": "Chip Label",
+              "type": "FRAME",
+              "visible": true,
+              "absoluteBoundingBox": {
+                "x": 228.4853,
+                "y": 80,
+                "width": 20,
+                "height": 8
+              },
+              "width": 20,
+              "height": 8,
+              "x": 6,
+              "y": 6,
+              "rotation": -45,
+              "layoutSizingHorizontal": "FIXED",
+              "layoutSizingVertical": "FIXED",
+              "fills": [
+                {
+                  "type": "SOLID",
+                  "color": {
+                    "r": 1,
+                    "g": 1,
+                    "b": 1
+                  },
+                  "visible": true
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "9:9",
+          "name": "Tilted Rule",
+          "type": "LINE",
+          "visible": true,
+          "absoluteBoundingBox": {
+            "x": 60,
+            "y": 229.2945,
+            "width": 77.2741,
+            "height": 20.7055
+          },
+          "width": 80,
+          "height": 0,
+          "x": 60,
+          "y": 250,
+          "rotation": 15,
+          "layoutSizingHorizontal": "FIXED",
+          "layoutSizingVertical": "FIXED",
+          "strokes": [
+            {
+              "type": "SOLID",
+              "color": {
+                "r": 0,
+                "g": 0,
+                "b": 0
+              },
+              "visible": true
+            }
+          ],
+          "strokeWeight": 1
+        },
+        {
+          "id": "9:7",
+          "name": "Upside Down",
+          "type": "FRAME",
+          "visible": true,
+          "absoluteBoundingBox": {
+            "x": 250,
+            "y": 170,
+            "width": 50,
+            "height": 30
+          },
+          "width": 50,
+          "height": 30,
+          "x": 300,
+          "y": 200,
+          "rotation": 180,
+          "layoutSizingHorizontal": "FIXED",
+          "layoutSizingVertical": "FIXED",
+          "fills": [
+            {
+              "type": "SOLID",
+              "color": {
+                "r": 0.6,
+                "g": 0.3,
+                "b": 0.8
+              },
+              "visible": true
+            }
+          ]
+        },
+        {
+          "id": "9:4",
+          "name": "Tilted Group",
+          "type": "FRAME",
+          "visible": true,
+          "absoluteBoundingBox": {
+            "x": 40,
+            "y": 129.1622,
+            "width": 133.8053,
+            "height": 109.4705
+          },
+          "width": 120,
+          "height": 90,
+          "x": 40,
+          "y": 150,
+          "rotation": 10,
+          "layoutSizingHorizontal": "FIXED",
+          "layoutSizingVertical": "FIXED",
+          "fills": [
+            {
+              "type": "SOLID",
+              "color": {
+                "r": 0.95,
+                "g": 0.95,
+                "b": 0.95
+              },
+              "visible": true
+            }
+          ],
+          "children": [
+            {
+              "id": "9:5",
+              "name": "Inner Tilt",
+              "type": "FRAME",
+              "visible": true,
+              "absoluteBoundingBox": {
+                "x": 53.3805,
+                "y": 141.7795,
+                "width": 34.9808,
+                "height": 30.5885
+              },
+              "width": 30,
+              "height": 18,
+              "x": 12,
+              "y": 9,
+              "rotation": 20,
+              "layoutSizingHorizontal": "FIXED",
+              "layoutSizingVertical": "FIXED",
+              "fills": [
+                {
+                  "type": "SOLID",
+                  "color": {
+                    "r": 0.1,
+                    "g": 0.7,
+                    "b": 0.4
+                  },
+                  "visible": true
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

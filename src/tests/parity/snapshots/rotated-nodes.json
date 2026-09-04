@@ -1,0 +1,269 @@
+[
+  {
+    "id": "9:1",
+    "name": "Rotation Board",
+    "type": "FRAME",
+    "visible": true,
+    "absoluteBoundingBox": {
+      "x": 0,
+      "y": 0,
+      "width": 400,
+      "height": 300
+    },
+    "ownSize": {
+      "width": 400,
+      "height": 300
+    },
+    "layoutSizingHorizontal": "FIXED",
+    "layoutSizingVertical": "FIXED",
+    "clipsContent": true,
+    "fills": [
+      {
+        "type": "SOLID",
+        "color": {
+          "r": 1,
+          "g": 1,
+          "b": 1,
+          "a": 1
+        },
+        "visible": true
+      }
+    ],
+    "children": [
+      {
+        "id": "9:2",
+        "name": "Tilted Card",
+        "type": "FRAME",
+        "visible": true,
+        "absoluteBoundingBox": {
+          "x": 100,
+          "y": 49.6472,
+          "width": 44.8487,
+          "height": 33.535
+        },
+        "ownSize": {
+          "width": 40.00000551554255,
+          "height": 24.000017534922055
+        },
+        "ownOrigin": {
+          "x": 100,
+          "y": 59.999963231628286
+        },
+        "layoutSizingHorizontal": "FIXED",
+        "layoutSizingVertical": "FIXED",
+        "rotation": 15,
+        "fills": [
+          {
+            "type": "SOLID",
+            "color": {
+              "r": 0.2,
+              "g": 0.4,
+              "b": 0.9,
+              "a": 1
+            },
+            "visible": true
+          }
+        ]
+      },
+      {
+        "id": "9:3",
+        "name": "Diagonal Chip",
+        "type": "FRAME",
+        "visible": true,
+        "absoluteBoundingBox": {
+          "x": 220,
+          "y": 37.5736,
+          "width": 56.5685,
+          "height": 56.5685
+        },
+        "layoutSizingHorizontal": "FIXED",
+        "layoutSizingVertical": "FIXED",
+        "rotation": 45,
+        "fills": [
+          {
+            "type": "SOLID",
+            "color": {
+              "r": 0.9,
+              "g": 0.4,
+              "b": 0.2,
+              "a": 1
+            },
+            "visible": true
+          }
+        ],
+        "children": [
+          {
+            "id": "9:6",
+            "name": "Chip Label",
+            "type": "FRAME",
+            "visible": true,
+            "absoluteBoundingBox": {
+              "x": 228.4853,
+              "y": 80,
+              "width": 20,
+              "height": 8
+            },
+            "ownSize": {
+              "width": 20,
+              "height": 8
+            },
+            "layoutSizingHorizontal": "FIXED",
+            "layoutSizingVertical": "FIXED",
+            "rotation": -45,
+            "fills": [
+              {
+                "type": "SOLID",
+                "color": {
+                  "r": 1,
+                  "g": 1,
+                  "b": 1,
+                  "a": 1
+                },
+                "visible": true
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "9:9",
+        "name": "Tilted Rule",
+        "type": "LINE",
+        "visible": true,
+        "absoluteBoundingBox": {
+          "x": 60,
+          "y": 229.2945,
+          "width": 77.2741,
+          "height": 20.7055
+        },
+        "ownSize": {
+          "width": 80.00004486256246,
+          "height": 0
+        },
+        "ownOrigin": {
+          "x": 60,
+          "y": 250.00003521948724
+        },
+        "layoutSizingHorizontal": "FIXED",
+        "layoutSizingVertical": "FIXED",
+        "rotation": 15,
+        "strokeWeight": 1,
+        "strokes": [
+          {
+            "type": "SOLID",
+            "color": {
+              "r": 0,
+              "g": 0,
+              "b": 0,
+              "a": 1
+            },
+            "visible": true
+          }
+        ]
+      },
+      {
+        "id": "9:7",
+        "name": "Upside Down",
+        "type": "FRAME",
+        "visible": true,
+        "absoluteBoundingBox": {
+          "x": 250,
+          "y": 170,
+          "width": 50,
+          "height": 30
+        },
+        "ownSize": {
+          "width": 49.99999999999999,
+          "height": 29.999999999999993
+        },
+        "layoutSizingHorizontal": "FIXED",
+        "layoutSizingVertical": "FIXED",
+        "rotation": 180,
+        "fills": [
+          {
+            "type": "SOLID",
+            "color": {
+              "r": 0.6,
+              "g": 0.3,
+              "b": 0.8,
+              "a": 1
+            },
+            "visible": true
+          }
+        ]
+      },
+      {
+        "id": "9:4",
+        "name": "Tilted Group",
+        "type": "FRAME",
+        "visible": true,
+        "absoluteBoundingBox": {
+          "x": 40,
+          "y": 129.1622,
+          "width": 133.8053,
+          "height": 109.4705
+        },
+        "ownSize": {
+          "width": 120.0000314001909,
+          "height": 90.00001569472181
+        },
+        "ownOrigin": {
+          "x": 40,
+          "y": 149.99998677261758
+        },
+        "layoutSizingHorizontal": "FIXED",
+        "layoutSizingVertical": "FIXED",
+        "rotation": 10,
+        "fills": [
+          {
+            "type": "SOLID",
+            "color": {
+              "r": 0.95,
+              "g": 0.95,
+              "b": 0.95,
+              "a": 1
+            },
+            "visible": true
+          }
+        ],
+        "children": [
+          {
+            "id": "9:5",
+            "name": "Inner Tilt",
+            "type": "FRAME",
+            "visible": true,
+            "absoluteBoundingBox": {
+              "x": 53.3805,
+              "y": 141.7795,
+              "width": 34.9808,
+              "height": 30.5885
+            },
+            "ownSize": {
+              "width": 30.00002288940538,
+              "height": 18.000036127320605
+            },
+            "ownOrigin": {
+              "x": 11.99996803442427,
+              "y": 9.000027900079345
+            },
+            "layoutSizingHorizontal": "FIXED",
+            "layoutSizingVertical": "FIXED",
+            "rotation": 20,
+            "fills": [
+              {
+                "type": "SOLID",
+                "color": {
+                  "r": 0.1,
+                  "g": 0.7,
+                  "b": 0.4,
+                  "a": 1
+                },
+                "visible": true
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+]

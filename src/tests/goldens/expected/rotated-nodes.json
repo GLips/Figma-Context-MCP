@@ -1,0 +1,119 @@
+{
+  "name": "Rotated Nodes",
+  "nodes": [
+    {
+      "id": "9:1",
+      "name": "Rotation Board",
+      "type": "FRAME",
+      "width": "contextual",
+      "height": "contextual",
+      "designedWidth": "400px",
+      "designedHeight": "300px",
+      "fills": "fill_658ab2fa",
+      "children": [
+        {
+          "id": "9:2",
+          "name": "Tilted Card",
+          "type": "FRAME",
+          "width": 40,
+          "height": 24,
+          "left": 100,
+          "top": 60,
+          "rotation": -15,
+          "fills": [
+            "#3366E6"
+          ]
+        },
+        {
+          "id": "9:3",
+          "name": "Diagonal Chip",
+          "type": "FRAME",
+          "width": 56.57,
+          "height": 56.57,
+          "left": 220,
+          "top": 37.57,
+          "rotation": -45,
+          "fills": [
+            "#E66633"
+          ],
+          "children": [
+            {
+              "id": "9:6",
+              "name": "Chip Label",
+              "type": "FRAME",
+              "width": 20,
+              "height": 8,
+              "left": 8.49,
+              "top": 42.43,
+              "rotation": 45,
+              "fills": "fill_658ab2fa"
+            }
+          ]
+        },
+        {
+          "id": "9:9",
+          "name": "Tilted Rule",
+          "type": "LINE",
+          "width": 80,
+          "height": 0,
+          "left": 60,
+          "top": 250,
+          "rotation": -15,
+          "strokes": [
+            "#000000"
+          ],
+          "strokeWidth": "1px"
+        },
+        {
+          "id": "9:7",
+          "name": "Upside Down",
+          "type": "FRAME",
+          "width": 50,
+          "height": 30,
+          "left": 250,
+          "top": 170,
+          "rotation": -180,
+          "fills": [
+            "#994DCC"
+          ]
+        },
+        {
+          "id": "9:4",
+          "name": "Tilted Group",
+          "type": "FRAME",
+          "width": 120,
+          "height": 90,
+          "left": 40,
+          "top": 150,
+          "rotation": -10,
+          "fills": [
+            "#F2F2F2"
+          ],
+          "children": [
+            {
+              "id": "9:5",
+              "name": "Inner Tilt",
+              "type": "FRAME",
+              "width": 30,
+              "height": 18,
+              "left": 12,
+              "top": 9,
+              "rotation": -20,
+              "fills": [
+                "#1AB366"
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "components": {},
+  "componentSets": {},
+  "styles": {
+    "fill_658ab2fa": [
+      "#FFFFFF"
+    ]
+  },
+  "templates": {}
+}

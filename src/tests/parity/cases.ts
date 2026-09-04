@@ -4,7 +4,7 @@ import { loadSnapshot } from "./snapshots-io.js";
 import { loadScene } from "./scenes-io.js";
 
 /**
- * The parity cases: the 8 golden fixtures, each paired with its committed
+ * The parity cases: the 9 golden fixtures, each paired with its committed
  * plan-neutral snapshot and (where one exists yet) its plugin-native scene
  * fixture. The producer inputs must all reduce to the same shared view of the
  * golden. Reuses GOLDEN_FIXTURES so the parity target can never drift from the

@@ -151,6 +151,12 @@ export interface SceneNodeLike {
 
   // Layout traits
   readonly absoluteBoundingBox?: { x: number; y: number; width: number; height: number } | null;
+  /** The node's own size — unchanged by rotation, unlike absoluteBoundingBox. */
+  readonly width?: number;
+  readonly height?: number;
+  /** The node's own top-left corner in its parent's frame (relativeTransform's translation). */
+  readonly x?: number;
+  readonly y?: number;
   readonly layoutSizingHorizontal?: "FIXED" | "HUG" | "FILL";
   readonly layoutSizingVertical?: "FIXED" | "HUG" | "FILL";
   readonly layoutAlign?: "INHERIT" | "STRETCH" | "MIN" | "CENTER" | "MAX";
@@ -263,6 +269,17 @@ export async function sceneNodeToSnapshot(
 
     // Layout traits
     absoluteBoundingBox: node.absoluteBoundingBox,
+    // The node's own geometry, straight off the live node — the read side's answer to
+    // width/height/left/top, and the same numbers `geometryOf` writes back (bridge.ts).
+    // No inversion needed here: rotation lives in relativeTransform, not in these.
+    ownSize:
+      typeof node.width === "number" && typeof node.height === "number"
+        ? { width: node.width, height: node.height }
+        : undefined,
+    ownOrigin:
+      typeof node.x === "number" && typeof node.y === "number"
+        ? { x: node.x, y: node.y }
+        : undefined,
     layoutSizingHorizontal: node.layoutSizingHorizontal,
     layoutSizingVertical: node.layoutSizingVertical,
     layoutAlign: node.layoutAlign,

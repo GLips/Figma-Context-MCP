@@ -11,6 +11,10 @@
         "width": 220,
         "height": 28
       },
+      "width": 220,
+      "height": 28,
+      "x": 0,
+      "y": 0,
       "layoutSizingHorizontal": "FIXED",
       "layoutSizingVertical": "FIXED",
       "clipsContent": true,
@@ -28,6 +32,10 @@
             "width": 60,
             "height": 28
           },
+          "width": 60,
+          "height": 28,
+          "x": 0,
+          "y": 0,
           "layoutSizingHorizontal": "FIXED",
           "layoutSizingVertical": "FIXED",
           "clipsContent": true,
@@ -55,6 +63,10 @@
                 "width": 44,
                 "height": 16
               },
+              "width": 44,
+              "height": 16,
+              "x": 8,
+              "y": 6,
               "fills": [
                 {
                   "type": "SOLID",
@@ -91,6 +103,10 @@
             "width": 60,
             "height": 28
           },
+          "width": 60,
+          "height": 28,
+          "x": 68,
+          "y": 0,
           "layoutSizingHorizontal": "FIXED",
           "layoutSizingVertical": "FIXED",
           "clipsContent": true,
@@ -118,6 +134,10 @@
                 "width": 44,
                 "height": 16
               },
+              "width": 44,
+              "height": 16,
+              "x": 8,
+              "y": 6,
               "fills": [
                 {
                   "type": "SOLID",
@@ -154,6 +174,10 @@
             "width": 60,
             "height": 28
           },
+          "width": 60,
+          "height": 28,
+          "x": 136,
+          "y": 0,
           "layoutSizingHorizontal": "FIXED",
           "layoutSizingVertical": "FIXED",
           "clipsContent": true,
@@ -181,6 +205,10 @@
                 "width": 44,
                 "height": 16
               },
+              "width": 44,
+              "height": 16,
+              "x": 8,
+              "y": 6,
               "fills": [
                 {
                   "type": "SOLID",

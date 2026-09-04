@@ -10,6 +10,10 @@
       "width": 240,
       "height": 80
     },
+    "ownSize": {
+      "width": 240,
+      "height": 80
+    },
     "fills": [
       {
         "type": "SOLID",
