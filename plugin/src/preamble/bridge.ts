@@ -61,6 +61,12 @@ const AUTO_LAYOUT_MODES = ["HORIZONTAL", "VERTICAL", "GRID"];
 // side means by width/height/left/top, so a 40px-wide rect rotated 15° reads back 40 wide and writes back
 // 40 wide. The page-space AABB (44.85 for that rect) belongs to neither side: read carries it separately on
 // the snapshot for the questions that genuinely want a page-space box.
+//
+// That container-parent offset is the raw node.x/node.y, which Figma states relative to the nearest FRAME
+// and NOT to an intervening GROUP — where the read side subtracts the group's own corner instead. The two
+// can't disagree here: every node render creates enters the doc on the page and is reparented only into a
+// frame render built itself, so a minted handle never has a group above it. find/get take their left/top
+// from the core's simplified spec (read.projectSlim), which is already the group-aware answer.
 function geometryOf(node: any): Omit<Handle, keyof Identity> {
   const geometry: Omit<Handle, keyof Identity> = { width: pixelRound(node.width), height: pixelRound(node.height) };
   const intent = intentOf(node);

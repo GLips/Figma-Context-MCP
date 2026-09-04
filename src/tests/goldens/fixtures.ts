@@ -713,7 +713,8 @@ const groupedNodes = fileResponse("Grouped Nodes", [
         // A ROTATED group, where the two halves of the parent space split. Its children
         // already carry its 25deg (Figma states their rotation against the frame), so the
         // solve must NOT accumulate it again — and their left/top is measured in the
-        // group's own tilted frame, the same frame its 131x102 own size is measured in.
+        // group's own tilted frame — the frame its 117.08x58.91 own size is
+        // measured in (the 131x102 above is the page-space box that one casts).
         name: "Tilted Group",
         type: "GROUP",
         clipsContent: false,

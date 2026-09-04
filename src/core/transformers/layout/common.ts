@@ -59,7 +59,11 @@ export type SimplifiedDimension = number | "fill" | "hug" | "contextual";
  * so the CSS composes only under `transform-origin: 0 0`; at the default centre
  * origin the rotation walks the box off its `left`/`top`. This matches how the
  * write path spells the same numbers (`geometryOf`, plugin bridge), so a shape
- * read back can be written straight out again.
+ * read back can be written straight out again — with one spelling the two would
+ * differ on if they could ever meet: under a GROUP, read measures `left`/`top` in
+ * the group's own frame, where `geometryOf` reports the raw container-parent offset
+ * Figma states. They don't meet, because render parents only into frames it built
+ * itself, so no handle it mints has a group above it.
  *
  * The source is `NodeSnapshot.ownSize`/`ownOrigin`; both fall back to
  * `absoluteBoundingBox` when the producer couldn't determine the node's own box.

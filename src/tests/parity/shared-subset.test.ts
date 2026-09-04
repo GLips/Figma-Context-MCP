@@ -244,10 +244,13 @@ describe("parityView comparator policy", () => {
     expect(parityView(chip(56.57))).toEqual(parityView(chip(60)));
     expect(parityView(chip("fill"))).not.toEqual(parityView(chip("hug")));
     expect(parityView(chip("fill"))).not.toEqual(parityView(chip(60)));
-    // designedWidth/Height are the root's measurement in string clothing, fed from the
-    // same solved size, so they go with the numbers.
+    // designedWidth/Height and aspectRatio are the same solved size in other clothing —
+    // a string, and its two axes divided — so they go with the numbers.
     expect(parityView(chip("contextual", { designedWidth: "56.57px" }))).toEqual(
       parityView(chip("contextual", { designedWidth: "60px" })),
+    );
+    expect(parityView(chip(56.57, { aspectRatio: 1 }))).toEqual(
+      parityView(chip(60, { aspectRatio: 3 })),
     );
   });
 

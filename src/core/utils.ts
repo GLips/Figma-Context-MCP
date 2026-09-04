@@ -158,10 +158,15 @@ export function isFrame(val: unknown): val is FrameSnapshot {
  * Figma's rationale: groups and boolean operations resize to fit their children, so
  * a child-relative transform would be self-referential.
  *
- * SECTION is deliberately NOT in this set. It holds children without being a frame,
- * which makes it look like a group, but it is explicitly resizable rather than
- * fit-to-children — Figma's stated reason for the exception doesn't apply, and the
- * exception names only groups and boolean operations.
+ * SECTION is deliberately NOT in this set, and that is a reasoned bet rather than a
+ * documented fact: Figma's paragraph names only groups and boolean operations in the
+ * exception, yet enumerates container parents as "canvas, frame, component, instance"
+ * — a section is in neither list. It sits outside on the rationale above, which a
+ * section fails: it is explicitly resizable rather than fit-to-children. Only its
+ * children's ORIGIN was ever at stake either way, since a section cannot rotate
+ * (SectionNode carries no LayoutMixin). One live plugin read settles it — a frame's
+ * `x` inside a section, against the section's own `x`: equal means transparent and
+ * this set is missing a member; offset means container and it is right as it stands.
  */
 const COORDINATE_TRANSPARENT_TYPES = new Set(["GROUP", "BOOLEAN_OPERATION"]);
 

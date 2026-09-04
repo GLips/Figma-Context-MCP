@@ -86,9 +86,10 @@ import { isCoordinateTransparentType } from "~/core/utils.js";
  *
  *     Either way a node whose own corner REST couldn't place takes its children's
  *     `left`/`top` down with it — those are measured against that corner. We drop
- *     exactly those fields on exactly those nodes, and only where they are
- *     MEASUREMENTS: the sizing words that share the `width`/`height` slot are read
- *     off the sizing flags, not solved, so a divergence in those is real. Everything
+ *     exactly those fields on exactly those nodes, plus everything else fed from the
+ *     solved size (`designedWidth`/`designedHeight`, `aspectRatio`) — and only where
+ *     they are MEASUREMENTS: the sizing words that share the `width`/`height` slot are
+ *     read off the sizing flags, not solved, so a divergence there is real. Everything
  *     else about a rotated node, `rotation` above all, still has to match. The
  *     rotated-nodes fixture carries one of each, plus a child under each.
  *
@@ -223,8 +224,9 @@ function viewNode(
   // Only MEASUREMENTS drop. `width`/`height` also carry the sizing words
   // ("fill"/"hug"/"contextual"), which are read off the sizing flags and owe nothing
   // to the inversion — forgiving those would let a real sizing-intent divergence hide
-  // inside the band. `designedWidth`/`designedHeight` are the root's measurement in
-  // string clothing, fed from the same solved size, so they go with the numbers.
+  // inside the band. `designedWidth`/`designedHeight` (the root's measurement in string
+  // clothing) and `aspectRatio` (that same measurement's two axes divided) are fed from
+  // the solved size, so they go with the numbers.
   const pageRotation = space.pageRotation + (typeof out.rotation === "number" ? out.rotation : 0);
   const degenerate = inDegenerateBand(pageRotation);
   const cornerUnplaceable = degenerate || isHalfTurn(pageRotation);
@@ -233,6 +235,7 @@ function viewNode(
     if (typeof out.height === "number") delete out.height;
     delete out.designedWidth;
     delete out.designedHeight;
+    delete out.aspectRatio;
   }
   if (cornerUnplaceable || space.parentCornerUnplaceable) {
     delete out.left;
