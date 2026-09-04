@@ -78,7 +78,12 @@ export function pixelRound(num: number): number {
   if (isNaN(num)) {
     throw new TypeError(`Input must be a valid number`);
   }
-  return Number(Number(num).toFixed(2));
+  const rounded = Number(Number(num).toFixed(2));
+  // Collapse -0 onto 0. It is the same pixel and JSON writes it as 0 either way, but the
+  // in-memory sign survives a deep-equal — so a coordinate two producers reach by
+  // different routes (REST inverting an AABB, the plugin reading `node.x`) fails parity
+  // over a minus sign nothing can render.
+  return rounded === 0 ? 0 : rounded;
 }
 
 /**
@@ -135,6 +140,34 @@ export function isFrame(val: unknown): val is FrameSnapshot {
     "clipsContent" in val &&
     typeof val.clipsContent === "boolean"
   );
+}
+
+/**
+ * Node types whose children's coordinates SKIP them — Figma's "container parent"
+ * exception, and the reason a group child needs special handling in BOTH producers.
+ *
+ * Figma states a node's position and rotation against its container parent (canvas,
+ * frame, component, instance), not necessarily its direct parent: a GROUP or
+ * BOOLEAN_OPERATION is not a coordinate space of its own, so its children's
+ * `x`/`y`/`rotation` are already expressed in the container ABOVE it. Two
+ * consequences, both of which the producers have to honor:
+ *   - a child of a rotated group already carries the group's angle, so accumulating
+ *     the group's rotation on top of it double-counts;
+ *   - the child's origin is a sibling of the group's own, not an offset from it, so
+ *     a parent-relative `left`/`top` means subtracting the group's own corner.
+ * Figma's rationale: groups and boolean operations resize to fit their children, so
+ * a child-relative transform would be self-referential.
+ *
+ * SECTION is deliberately NOT in this set. It holds children without being a frame,
+ * which makes it look like a group, but it is explicitly resizable rather than
+ * fit-to-children — Figma's stated reason for the exception doesn't apply, and the
+ * exception names only groups and boolean operations.
+ */
+const COORDINATE_TRANSPARENT_TYPES = new Set(["GROUP", "BOOLEAN_OPERATION"]);
+
+/** Whether a node type is one its children's coordinates skip (see above). */
+export function isCoordinateTransparentType(nodeType: string | undefined): boolean {
+  return !!nodeType && COORDINATE_TRANSPARENT_TYPES.has(nodeType);
 }
 
 export function isLayout(val: unknown): val is LayoutSnapshot {

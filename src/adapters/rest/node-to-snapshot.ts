@@ -1,5 +1,6 @@
 import type { Node as FigmaDocumentNode, Paint, Effect, Style } from "@figma/rest-api-spec";
 import type { NodeSnapshot, SnapshotStyleRef } from "~/core/snapshot.js";
+import { isCoordinateTransparentType } from "~/core/utils.js";
 import { ROOT_SPACE, solveOwnBox, toParentSpacePoint, type RestParentSpace } from "./own-box.js";
 import { decodePaints, decodeEffect } from "./paint.js";
 import { decodeText } from "./text.js";
@@ -61,11 +62,25 @@ function restSubtreeToSnapshot(
     children?: FigmaDocumentNode[];
   };
 
+  const rotation = degreesFromWireRotation(raw.rotation);
+
   // The node's own box, recovered from the page-space AABB (see ./own-box.ts), plus
   // the space this node's own children will be resolved against.
-  const pageRotation = parentSpace.pageRotation + (raw.rotation ?? 0);
+  //
+  // The two halves of that space part company under a GROUP/BOOLEAN_OPERATION. Its
+  // children's `rotation` is stated against the container ABOVE it, so they inherit
+  // this node's `containerPageRotation` unchanged — adding the group's degrees again
+  // would invert every descendant's AABB at twice the angle. Their `left`/`top`, on
+  // the other hand, are measured in the group's OWN frame, the same frame the group's
+  // own width/height are measured in. See `RestParentSpace`.
+  const pageRotation = parentSpace.containerPageRotation + (rotation ?? 0);
   const own = solveOwnBox(raw.absoluteBoundingBox, pageRotation);
-  const childSpace: RestParentSpace = { pageRotation, originOnPage: own?.originOnPage };
+  const childSpace: RestParentSpace = {
+    containerPageRotation: isCoordinateTransparentType(node.type)
+      ? parentSpace.containerPageRotation
+      : pageRotation,
+    emittedParentFrame: own?.originOnPage && { originOnPage: own.originOnPage, pageRotation },
+  };
 
   return {
     id: node.id,
@@ -78,11 +93,8 @@ function restSubtreeToSnapshot(
     absoluteBoundingBox: raw.absoluteBoundingBox,
     ownSize: own?.size,
     ownOrigin:
-      own?.originOnPage && parentSpace.originOnPage
-        ? toParentSpacePoint(own.originOnPage, {
-            pageRotation: parentSpace.pageRotation,
-            originOnPage: parentSpace.originOnPage,
-          })
+      own?.originOnPage && parentSpace.emittedParentFrame
+        ? toParentSpacePoint(own.originOnPage, parentSpace.emittedParentFrame)
         : undefined,
     layoutSizingHorizontal: raw.layoutSizingHorizontal,
     layoutSizingVertical: raw.layoutSizingVertical,
@@ -90,7 +102,7 @@ function restSubtreeToSnapshot(
     layoutGrow: raw.layoutGrow,
     layoutPositioning: raw.layoutPositioning,
     preserveRatio: raw.preserveRatio,
-    rotation: raw.rotation,
+    rotation,
     gridColumnAnchorIndex: raw.gridColumnAnchorIndex,
     gridRowAnchorIndex: raw.gridRowAnchorIndex,
     gridColumnSpan: raw.gridColumnSpan,
@@ -145,6 +157,28 @@ function restSubtreeToSnapshot(
 
     children: raw.children?.map((c) => restSubtreeToSnapshot(c, extraStyles, childSpace)),
   };
+}
+
+/**
+ * REST states `rotation` in RADIANS. The plugin API states it in degrees, and so does
+ * `NodeSnapshot` — so this is the adapter's job, and it has to happen before anything
+ * reads the angle (Invariant 2: no wire convention past this file).
+ *
+ * The wire spec says only "The rotation of the node, if not 0" and names no unit, so
+ * this is grounded in live data rather than docs (file `Framelink`, page `0:1`,
+ * fetched 2026-09-04):
+ *   - a LINE with `rotation: 0.54774` and a 300x183 AABB. A LINE is 0 tall by
+ *     construction; inverting at 0.54774 RAD gives 351.41 x 0 — exactly
+ *     sqrt(300^2 + 183^2), the diagonal it is drawn along. At 0.54774 DEG it gives
+ *     298.29 x 180.16, a shape no LINE can have.
+ *   - an icon INSTANCE with `rotation: 0.7853981633974483` — pi/4 to every digit —
+ *     and a square 33.9411 AABB, which is 24 x sqrt(2): a 24x24 icon turned 45deg.
+ *   - icon VECTORs at exactly pi/2 and pi, sitting axis-aligned in their AABBs.
+ * Read as degrees, all of those are sub-degree nudges that no AABB in the file agrees
+ * with.
+ */
+function degreesFromWireRotation(radians: number | undefined): number | undefined {
+  return radians === undefined ? undefined : (radians * 180) / Math.PI;
 }
 
 /**

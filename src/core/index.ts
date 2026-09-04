@@ -28,6 +28,11 @@ export type {
 // (render's handle geometry) rounds identically to the read side — one numeric currency at the agent edge.
 export { pixelRound } from "./utils.js";
 
+// Figma's "container parent" exception, exported from the barrel for the same reason:
+// the plugin adapter and the REST adapter must agree on which node types their children's
+// coordinates skip, or the two producers place every group child differently.
+export { isCoordinateTransparentType } from "./utils.js";
+
 // Figma's per-axis sizing flag → the canonical fill/hug/fixed word. Exported for the plugin's write side,
 // which reports a rendered node's sizing intent (bridge.intentOf) off the live node: resolveAxisDimension
 // takes the fill/hug word straight from this mapper, so sourcing it here rather than re-deriving it is what

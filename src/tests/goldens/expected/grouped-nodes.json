@@ -1,0 +1,131 @@
+{
+  "name": "Grouped Nodes",
+  "nodes": [
+    {
+      "id": "8:1",
+      "name": "Group Board",
+      "type": "FRAME",
+      "width": "contextual",
+      "height": "contextual",
+      "designedWidth": "400px",
+      "designedHeight": "300px",
+      "fills": [
+        "#FFFFFF"
+      ],
+      "children": [
+        {
+          "id": "8:2",
+          "name": "Plain Group",
+          "type": "GROUP",
+          "width": 82,
+          "height": 110,
+          "left": 45,
+          "top": 50,
+          "children": [
+            {
+              "id": "8:3",
+              "name": "Chip A",
+              "type": "FRAME",
+              "width": 60,
+              "height": 40,
+              "left": 15,
+              "top": 0,
+              "fills": [
+                "#3366E6"
+              ]
+            },
+            {
+              "id": "8:4",
+              "name": "Chip B",
+              "type": "FRAME",
+              "width": 50,
+              "height": 30,
+              "left": 0,
+              "top": 45,
+              "fills": [
+                "#E66633"
+              ]
+            },
+            {
+              "id": "8:5",
+              "name": "Inner Group",
+              "type": "GROUP",
+              "width": 57,
+              "height": 28,
+              "left": 25,
+              "top": 82,
+              "children": [
+                {
+                  "id": "8:6",
+                  "name": "Nested Chip",
+                  "type": "FRAME",
+                  "width": 30,
+                  "height": 20,
+                  "left": 0,
+                  "top": 8,
+                  "fills": [
+                    "#1AB366"
+                  ]
+                },
+                {
+                  "id": "8:7",
+                  "name": "Nested Pin",
+                  "type": "FRAME",
+                  "width": 12,
+                  "height": 12,
+                  "left": 45,
+                  "top": 0,
+                  "fills": [
+                    "#E6B31A"
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "8:8",
+          "name": "Tilted Group",
+          "type": "GROUP",
+          "width": 117.08,
+          "height": 58.91,
+          "left": 198.27,
+          "top": 94.12,
+          "rotation": -25,
+          "children": [
+            {
+              "id": "8:9",
+              "name": "Tile",
+              "type": "FRAME",
+              "width": 60,
+              "height": 40,
+              "left": 57.08,
+              "top": 0,
+              "rotation": -25,
+              "fills": [
+                "#994DCC"
+              ]
+            },
+            {
+              "id": "8:10",
+              "name": "Skew Tile",
+              "type": "FRAME",
+              "width": 80,
+              "height": 20,
+              "left": 0,
+              "top": 39.59,
+              "rotation": -40,
+              "fills": [
+                "#33B3CC"
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "components": {},
+  "componentSets": {},
+  "styles": {},
+  "templates": {}
+}

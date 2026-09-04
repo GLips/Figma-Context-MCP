@@ -11,19 +11,33 @@ import type { SnapshotPoint, SnapshotRect, SnapshotSize } from "~/core/snapshot.
  * The plugin producer has no such problem: it reads `node.width`/`x` directly.
  */
 
+/** A node's own coordinate frame on the page: where its origin sits and how it is turned. */
+export interface PageFrame {
+  originOnPage: SnapshotPoint;
+  /** Degrees, counterclockwise-positive — this frame's total rotation against the page. */
+  pageRotation: number;
+}
+
 /**
- * The parent space a node's own box is resolved against: the accumulated
- * page-space rotation of the ancestor chain, and the parent's own top-left corner
- * on the page (absent when the parent's solve failed, or at the top of the payload
- * where there is no parent).
+ * What the walk carries down to resolve a node's own box. Two halves, and they come
+ * from DIFFERENT ancestors whenever a group is in the chain — which is the whole
+ * reason this is a record and not one number:
  *
- * "Space" and not "frame" on purpose — `frame` means the Figma FRAME node type
- * everywhere else in this codebase.
+ *   - `containerPageRotation` is what the node's own `rotation` is measured from. A
+ *     GROUP/BOOLEAN_OPERATION is coordinate-transparent (`isCoordinateTransparentType`),
+ *     so its children's angles are already stated against the container above it;
+ *     accumulating the group's would invert their AABBs at twice the angle.
+ *   - `emittedParentFrame` is the frame `left`/`top` are expressed in — the parent the
+ *     SNAPSHOT emits, group included. Its rotation is the group's own, so a child of a
+ *     rotated group lands inside the group's box rather than beside it.
+ *
+ * "Space"/"frame" and not "parent frame" on purpose — `frame` alone means the Figma
+ * FRAME node type everywhere else in this codebase.
  */
 export interface RestParentSpace {
-  /** Degrees, counterclockwise-positive — the sum of this node's ancestors' rotations. */
-  pageRotation: number;
-  originOnPage?: SnapshotPoint;
+  containerPageRotation: number;
+  /** Absent at the top of the payload, and when the parent's own corner couldn't be solved. */
+  emittedParentFrame?: PageFrame;
 }
 
 /**
@@ -32,7 +46,7 @@ export interface RestParentSpace {
  * rotated one would throw off every descendant's solve. Rare enough to accept —
  * and unknowable from the payload either way.
  */
-export const ROOT_SPACE: RestParentSpace = { pageRotation: 0 };
+export const ROOT_SPACE: RestParentSpace = { containerPageRotation: 0 };
 
 /**
  * How ill-conditioned the inversion may get before we refuse to answer.
@@ -97,22 +111,25 @@ export interface OwnBox {
  * the AABB's min corner is the node's origin plus whichever corner offsets are
  * negative, so subtracting those recovers the origin.
  *
- * `θ` must be the node's PAGE rotation (its own plus every ancestor's), because the
- * AABB is page-axis-aligned. Returns null when the size is unusable — no box, the
+ * `θ` must be the node's PAGE rotation (its own plus every ancestor's whose space it
+ * is stated in — a GROUP's is already folded into it, see `RestParentSpace`), because
+ * the AABB is page-axis-aligned. Returns null when the size is unusable — no box, the
  * degenerate band, or a meaningfully negative side.
  *
  * MIRRORING. `rotation` is `atan2(-m10, m00)`, which cannot tell a rotation from a
  * reflection, and the payload doesn't carry the transform's determinant — so a
  * mirrored node is undeterminable here rather than unhandled. The SIZE is immune
  * (a reflection preserves both AABB extents, and |cos|/|sin| are the same either
- * way), so only the corner is at stake, and only two readings collide in practice:
- * a VERTICAL flip reports 0°, where this formula already returns the AABB corner
- * and so agrees with the pre-inversion answer; a HORIZONTAL flip reports 180°,
- * where it would move the corner by the node's own height. Since a half-turn buys
- * nothing for the size (at 180° the AABB extents ARE the own size) and Shift+H is
- * far commoner than an exact half-turn, we withhold the origin there instead of
- * guessing. A flip COMBINED with a rotation (which reads as θ−180°) still slips
- * through; see parity pin 7.
+ * way), so only the corner is at stake. A HORIZONTAL flip reports 180°, where solving
+ * would move the corner by the node's own height. Since a half-turn buys nothing for
+ * the size (at 180° the AABB extents ARE the own size) and Shift+H is far commoner
+ * than an exact half-turn, we withhold the origin there instead of guessing.
+ *
+ * Two mirror readings still slip through, both pinned as residuals on parity pin 7
+ * rather than handled: a VERTICAL flip reports 0°, where this formula returns the AABB
+ * corner while the plugin reads a `node.y` a full height lower; and a flip COMBINED
+ * with a rotation reads as θ−180°, an ordinary-looking angle whose solved corner is
+ * off by the node's height. Neither is detectable from `rotation` alone.
  */
 export function solveOwnBox(
   box: SnapshotRect | null | undefined,
@@ -153,14 +170,11 @@ function isHalfTurn(degrees: number): boolean {
 }
 
 /**
- * Express a page-space point in the parent's space — the spelling `node.x`/`node.y`
+ * Express a page-space point in the parent's own frame — the spelling `node.x`/`node.y`
  * has in the plugin API. Undoing the parent's page rotation is what keeps the two
  * producers agreeing when a rotated node sits inside a rotated one.
  */
-export function toParentSpacePoint(
-  pointOnPage: SnapshotPoint,
-  parent: Required<RestParentSpace>,
-): SnapshotPoint {
+export function toParentSpacePoint(pointOnPage: SnapshotPoint, parent: PageFrame): SnapshotPoint {
   const dx = pointOnPage.x - parent.originOnPage.x;
   const dy = pointOnPage.y - parent.originOnPage.y;
   const theta = (parent.pageRotation * Math.PI) / 180;

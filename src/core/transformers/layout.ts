@@ -153,8 +153,11 @@ function buildNodeGeometry(
 
   // Preserves historical behavior: aspectRatio is emitted only for
   // column-parent children. Likely should apply more broadly — pre-existing.
-  if (!isRoot && axis === "column" && n.preserveRatio && n.absoluteBoundingBox.height !== 0) {
-    geometry.aspectRatio = n.absoluteBoundingBox.width / n.absoluteBoundingBox.height;
+  // Measured on the OWN size, the same box width/height come from: the ratio sits
+  // beside them and describes the same node, so reading it off the page-space AABB
+  // would put a rotated node's shadow ratio next to its authored dimensions.
+  if (!isRoot && axis === "column" && n.preserveRatio && size.height !== 0) {
+    geometry.aspectRatio = size.width / size.height;
   }
 
   // Emit positioning relative to parent unless the parent's auto-layout already

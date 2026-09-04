@@ -51,7 +51,7 @@
         },
         "layoutSizingHorizontal": "FIXED",
         "layoutSizingVertical": "FIXED",
-        "rotation": 15,
+        "rotation": 14.999999999999998,
         "fills": [
           {
             "type": "SOLID",
@@ -146,7 +146,7 @@
         },
         "layoutSizingHorizontal": "FIXED",
         "layoutSizingVertical": "FIXED",
-        "rotation": 15,
+        "rotation": 14.999999999999998,
         "strokeWeight": 1,
         "strokes": [
           {

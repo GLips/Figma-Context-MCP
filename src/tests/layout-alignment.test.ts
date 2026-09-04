@@ -834,4 +834,20 @@ describe("aspectRatio zero-height guard", () => {
   test("still emits aspectRatio for a column child with non-zero height", () => {
     expect(geometryOf(columnChild(50), parent).aspectRatio).toBe(2);
   });
+
+  test("measures aspectRatio on the node's own size, not its rotated shadow", () => {
+    // A 40x20 node at 30deg casts a 44.64x34.64 page-space box. The ratio sits beside
+    // the emitted width/height, which are the OWN size, so it has to describe the same
+    // box — 2, not the shadow's 1.29.
+    const rotated = makeFrame({
+      layoutMode: "VERTICAL",
+      preserveRatio: true,
+      layoutSizingHorizontal: "FIXED",
+      layoutSizingVertical: "FIXED",
+      rotation: 30,
+      absoluteBoundingBox: { x: 0, y: 0, width: 44.641, height: 34.641 },
+      ownSize: { width: 40, height: 20 },
+    });
+    expect(geometryOf(rotated, parent).aspectRatio).toBe(2);
+  });
 });

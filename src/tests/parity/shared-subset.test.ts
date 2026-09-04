@@ -230,6 +230,57 @@ describe("parityView comparator policy", () => {
     expect(parityView(flipped(250, 170, 50))).not.toEqual(parityView(flipped(250, 170, 62)));
   });
 
+  it("forgives only the MEASUREMENT in the degenerate band, never the sizing word", () => {
+    // The band costs REST the solved number. It does not cost either producer the
+    // fill/hug/contextual word, which is read off the sizing flags — forgiving that
+    // would let a real sizing-intent divergence hide behind a 45deg rotation.
+    const chip = (width: unknown, extra: Record<string, unknown> = {}) =>
+      design({
+        nodes: [
+          { id: "1", name: "Chip", type: "FRAME", rotation: -45, width, height: 20, ...extra },
+        ],
+      } as unknown as Partial<SimplifiedDesign>);
+
+    expect(parityView(chip(56.57))).toEqual(parityView(chip(60)));
+    expect(parityView(chip("fill"))).not.toEqual(parityView(chip("hug")));
+    expect(parityView(chip("fill"))).not.toEqual(parityView(chip(60)));
+    // designedWidth/Height are the root's measurement in string clothing, fed from the
+    // same solved size, so they go with the numbers.
+    expect(parityView(chip("contextual", { designedWidth: "56.57px" }))).toEqual(
+      parityView(chip("contextual", { designedWidth: "60px" })),
+    );
+  });
+
+  it("does not accumulate a group's rotation into its children's band", () => {
+    // A group is coordinate-transparent: its child's emitted rotation ALREADY carries
+    // the group's, so accumulating it again would read this child as sitting at 45deg
+    // and forgive a size difference the producers have no excuse for.
+    const inGroup = (childWidth: number) =>
+      design({
+        nodes: [
+          {
+            id: "1",
+            name: "Tilted Group",
+            type: "GROUP",
+            rotation: -25,
+            children: [
+              {
+                id: "2",
+                name: "Skew Tile",
+                type: "FRAME",
+                rotation: -20,
+                width: childWidth,
+                height: 20,
+              },
+            ],
+          },
+        ],
+      } as unknown as Partial<SimplifiedDesign>);
+
+    // -25 + -20 would be -45, the band. The child's own -20 is nowhere near it.
+    expect(parityView(inGroup(80))).not.toEqual(parityView(inGroup(88)));
+  });
+
   it("ignores the top-level design name (provenance metadata)", () => {
     expect(parityView(design({ name: "From REST" }))).toEqual(
       parityView(design({ name: "From plugin" })),

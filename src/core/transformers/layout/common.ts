@@ -51,16 +51,21 @@ export type SimplifiedDimension = number | "fill" | "hug" | "contextual";
  * authored at, in its own pre-rotation frame — never the page-space axis-aligned
  * box that contains it. The two differ only for a rotated node, and only the own
  * size composes with `rotation` the way CSS composes `width` with `rotate()`: a
- * 40x24 rect at 15° is `width: 40px; transform: rotate(15deg)`, and the AABB's
- * 44.85 is a fact about its shadow on the page. `left`/`top` follow the same
- * rule — they name the node's own top-left corner in the parent's frame, not the
- * AABB's corner (which a rotated node doesn't even have). This matches how the
+ * 40x24 rect authored at 15° emits `width: 40, height: 24, rotation: -15`, which
+ * pastes as `width: 40px; transform: rotate(-15deg)`, and the AABB's 44.85 is a
+ * fact about its shadow on the page. `left`/`top` follow the same rule — they name
+ * the node's own top-left corner in the parent's frame, not the AABB's corner
+ * (which a rotated node doesn't even have). Figma rotates about that same corner,
+ * so the CSS composes only under `transform-origin: 0 0`; at the default centre
+ * origin the rotation walks the box off its `left`/`top`. This matches how the
  * write path spells the same numbers (`geometryOf`, plugin bridge), so a shape
  * read back can be written straight out again.
  *
  * The source is `NodeSnapshot.ownSize`/`ownOrigin`; both fall back to
  * `absoluteBoundingBox` when the producer couldn't determine the node's own box.
- * `aspectRatio` deliberately stays on the AABB.
+ * `aspectRatio` is measured on the same own size — it describes the node beside
+ * it, not the node's shadow. Page-space questions that genuinely want the AABB
+ * (grid child-overlap) read it off the snapshot directly.
  */
 export interface NodeGeometry {
   width?: SimplifiedDimension;

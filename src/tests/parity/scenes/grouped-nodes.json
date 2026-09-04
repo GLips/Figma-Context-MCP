@@ -1,0 +1,279 @@
+{
+  "nodes": [
+    {
+      "id": "8:1",
+      "name": "Group Board",
+      "type": "FRAME",
+      "visible": true,
+      "absoluteBoundingBox": {
+        "x": 0,
+        "y": 0,
+        "width": 400,
+        "height": 300
+      },
+      "width": 400,
+      "height": 300,
+      "x": 0,
+      "y": 0,
+      "clipsContent": false,
+      "layoutSizingHorizontal": "FIXED",
+      "layoutSizingVertical": "FIXED",
+      "fills": [
+        {
+          "type": "SOLID",
+          "color": {
+            "r": 1,
+            "g": 1,
+            "b": 1
+          },
+          "visible": true
+        }
+      ],
+      "children": [
+        {
+          "id": "8:2",
+          "name": "Plain Group",
+          "type": "GROUP",
+          "visible": true,
+          "absoluteBoundingBox": {
+            "x": 45,
+            "y": 50,
+            "width": 82,
+            "height": 110
+          },
+          "width": 82,
+          "height": 110,
+          "x": 45,
+          "y": 50,
+          "layoutSizingHorizontal": "FIXED",
+          "layoutSizingVertical": "FIXED",
+          "children": [
+            {
+              "id": "8:3",
+              "name": "Chip A",
+              "type": "FRAME",
+              "visible": true,
+              "absoluteBoundingBox": {
+                "x": 60,
+                "y": 50,
+                "width": 60,
+                "height": 40
+              },
+              "width": 60,
+              "height": 40,
+              "x": 60,
+              "y": 50,
+              "clipsContent": false,
+              "layoutSizingHorizontal": "FIXED",
+              "layoutSizingVertical": "FIXED",
+              "fills": [
+                {
+                  "type": "SOLID",
+                  "color": {
+                    "r": 0.2,
+                    "g": 0.4,
+                    "b": 0.9
+                  },
+                  "visible": true
+                }
+              ]
+            },
+            {
+              "id": "8:4",
+              "name": "Chip B",
+              "type": "FRAME",
+              "visible": true,
+              "absoluteBoundingBox": {
+                "x": 45,
+                "y": 95,
+                "width": 50,
+                "height": 30
+              },
+              "width": 50,
+              "height": 30,
+              "x": 45,
+              "y": 95,
+              "clipsContent": false,
+              "layoutSizingHorizontal": "FIXED",
+              "layoutSizingVertical": "FIXED",
+              "fills": [
+                {
+                  "type": "SOLID",
+                  "color": {
+                    "r": 0.9,
+                    "g": 0.4,
+                    "b": 0.2
+                  },
+                  "visible": true
+                }
+              ]
+            },
+            {
+              "id": "8:5",
+              "name": "Inner Group",
+              "type": "GROUP",
+              "visible": true,
+              "absoluteBoundingBox": {
+                "x": 70,
+                "y": 132,
+                "width": 57,
+                "height": 28
+              },
+              "width": 57,
+              "height": 28,
+              "x": 70,
+              "y": 132,
+              "layoutSizingHorizontal": "FIXED",
+              "layoutSizingVertical": "FIXED",
+              "children": [
+                {
+                  "id": "8:6",
+                  "name": "Nested Chip",
+                  "type": "FRAME",
+                  "visible": true,
+                  "absoluteBoundingBox": {
+                    "x": 70,
+                    "y": 140,
+                    "width": 30,
+                    "height": 20
+                  },
+                  "width": 30,
+                  "height": 20,
+                  "x": 70,
+                  "y": 140,
+                  "clipsContent": false,
+                  "layoutSizingHorizontal": "FIXED",
+                  "layoutSizingVertical": "FIXED",
+                  "fills": [
+                    {
+                      "type": "SOLID",
+                      "color": {
+                        "r": 0.1,
+                        "g": 0.7,
+                        "b": 0.4
+                      },
+                      "visible": true
+                    }
+                  ]
+                },
+                {
+                  "id": "8:7",
+                  "name": "Nested Pin",
+                  "type": "FRAME",
+                  "visible": true,
+                  "absoluteBoundingBox": {
+                    "x": 115,
+                    "y": 132,
+                    "width": 12,
+                    "height": 12
+                  },
+                  "width": 12,
+                  "height": 12,
+                  "x": 115,
+                  "y": 132,
+                  "clipsContent": false,
+                  "layoutSizingHorizontal": "FIXED",
+                  "layoutSizingVertical": "FIXED",
+                  "fills": [
+                    {
+                      "type": "SOLID",
+                      "color": {
+                        "r": 0.9,
+                        "g": 0.7,
+                        "b": 0.1
+                      },
+                      "visible": true
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "8:8",
+          "name": "Tilted Group",
+          "type": "GROUP",
+          "visible": true,
+          "absoluteBoundingBox": {
+            "x": 198.2699,
+            "y": 44.6429,
+            "width": 131.0031,
+            "height": 102.8656
+          },
+          "width": 117.0779,
+          "height": 58.9053,
+          "x": 198.2699,
+          "y": 94.1221,
+          "rotation": 25,
+          "layoutSizingHorizontal": "FIXED",
+          "layoutSizingVertical": "FIXED",
+          "children": [
+            {
+              "id": "8:9",
+              "name": "Tile",
+              "type": "FRAME",
+              "visible": true,
+              "absoluteBoundingBox": {
+                "x": 250,
+                "y": 44.6429,
+                "width": 71.2832,
+                "height": 61.6094
+              },
+              "width": 60,
+              "height": 40,
+              "x": 250,
+              "y": 70,
+              "rotation": 25,
+              "clipsContent": false,
+              "layoutSizingHorizontal": "FIXED",
+              "layoutSizingVertical": "FIXED",
+              "fills": [
+                {
+                  "type": "SOLID",
+                  "color": {
+                    "r": 0.6,
+                    "g": 0.3,
+                    "b": 0.8
+                  },
+                  "visible": true
+                }
+              ]
+            },
+            {
+              "id": "8:10",
+              "name": "Skew Tile",
+              "type": "FRAME",
+              "visible": true,
+              "absoluteBoundingBox": {
+                "x": 215,
+                "y": 78.577,
+                "width": 74.1393,
+                "height": 66.7439
+              },
+              "width": 80,
+              "height": 20,
+              "x": 215,
+              "y": 130,
+              "rotation": 40,
+              "clipsContent": false,
+              "layoutSizingHorizontal": "FIXED",
+              "layoutSizingVertical": "FIXED",
+              "fills": [
+                {
+                  "type": "SOLID",
+                  "color": {
+                    "r": 0.2,
+                    "g": 0.7,
+                    "b": 0.8
+                  },
+                  "visible": true
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -306,7 +306,11 @@ export interface NodeSnapshot {
   layoutGrow?: 0 | 1;
   layoutPositioning?: "AUTO" | "ABSOLUTE";
   preserveRatio?: boolean;
-  /** Degrees, counterclockwise-positive (Figma's raw convention; REST default 0). */
+  /**
+   * Degrees, counterclockwise-positive (the plugin API's convention; absent, not 0,
+   * when unrotated). The REST WIRE states this in radians — the REST adapter converts
+   * on the way in (`degreesFromWireRotation`), so nothing downstream sees two units.
+   */
   rotation?: number;
   gridColumnAnchorIndex?: number;
   gridRowAnchorIndex?: number;

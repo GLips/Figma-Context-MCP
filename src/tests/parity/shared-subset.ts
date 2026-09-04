@@ -2,6 +2,9 @@ import type { TemplateBody, SimplifiedDesign, SimplifiedNode, StyleValue } from 
 // Single-sourced from the compression pass so the parity view resolves EXACTLY
 // the slots the compression pass can hoist — the two can't silently diverge.
 import { STYLE_REF_FIELDS } from "~/core/compress.js";
+// Same reason: the comparator has to skip a group's rotation exactly where the two
+// producers skip it, or it classifies a group child into the wrong band.
+import { isCoordinateTransparentType } from "~/core/utils.js";
 
 /**
  * The comparator policy for the REST↔plugin parity harness — "shared subset" as
@@ -83,16 +86,23 @@ import { STYLE_REF_FIELDS } from "~/core/compress.js";
  *
  *     Either way a node whose own corner REST couldn't place takes its children's
  *     `left`/`top` down with it — those are measured against that corner. We drop
- *     exactly those fields on exactly those nodes; everything else about a rotated
- *     node, `rotation` included, still has to match. The rotated-nodes fixture
- *     carries one of each, plus a child under each.
+ *     exactly those fields on exactly those nodes, and only where they are
+ *     MEASUREMENTS: the sizing words that share the `width`/`height` slot are read
+ *     off the sizing flags, not solved, so a divergence in those is real. Everything
+ *     else about a rotated node, `rotation` above all, still has to match. The
+ *     rotated-nodes fixture carries one of each, plus a child under each.
  *
- *     Residual, deliberately NOT normalized: a flip COMBINED with a rotation reads
- *     as θ−180° and looks like an ordinary angle, so REST solves an origin that is
- *     wrong by the node's height. A rule keyed on `rotation` can't detect it either
- *     — the payload doesn't carry the transform's determinant — so pinning it would
- *     mean forgiving `left`/`top` at every angle. A mirrored-and-rotated fixture is
- *     expected to fail here; that is this note, not a mystery.
+ *     Residuals, deliberately NOT normalized — both are mirrors REST cannot see,
+ *     since the payload carries no transform determinant and `rotation` alone can't
+ *     betray a reflection:
+ *       - a VERTICAL flip reads 0°, where REST returns the AABB corner while the
+ *         plugin reads a `node.y` one full height lower (Shift+V puts the transform's
+ *         translation at the visual bottom-left);
+ *       - a flip COMBINED with a rotation reads as θ−180°, an ordinary-looking angle
+ *         whose solved origin is wrong by the node's height.
+ *     A rule keyed on `rotation` can't detect either, so pinning them would mean
+ *     forgiving `left`/`top` at 0° and at every angle. A mirrored fixture is expected
+ *     to fail here; that is this note, not a mystery.
  */
 
 /** Every image paint's ref collapses to this — parity is over presence, not id. */
@@ -209,12 +219,20 @@ function viewNode(
   // way a direct child's parent-relative origin goes with the parent's corner.
   // Dropped from both views — the disagreement is legitimate, and anything else
   // about these nodes (`rotation` above all) still has to match.
+  //
+  // Only MEASUREMENTS drop. `width`/`height` also carry the sizing words
+  // ("fill"/"hug"/"contextual"), which are read off the sizing flags and owe nothing
+  // to the inversion — forgiving those would let a real sizing-intent divergence hide
+  // inside the band. `designedWidth`/`designedHeight` are the root's measurement in
+  // string clothing, fed from the same solved size, so they go with the numbers.
   const pageRotation = space.pageRotation + (typeof out.rotation === "number" ? out.rotation : 0);
   const degenerate = inDegenerateBand(pageRotation);
   const cornerUnplaceable = degenerate || isHalfTurn(pageRotation);
   if (degenerate) {
-    delete out.width;
-    delete out.height;
+    if (typeof out.width === "number") delete out.width;
+    if (typeof out.height === "number") delete out.height;
+    delete out.designedWidth;
+    delete out.designedHeight;
   }
   if (cornerUnplaceable || space.parentCornerUnplaceable) {
     delete out.left;
@@ -222,9 +240,16 @@ function viewNode(
   }
 
   if (Array.isArray(out.children)) {
+    // A coordinate-transparent parent (GROUP/BOOLEAN_OPERATION) is not a rotation of
+    // its own as far as its children are concerned — their emitted `rotation` is already
+    // stated against the container above it, so accumulating the group's again would put
+    // the wrong angle into the band test. The producers skip it for the same reason.
+    const childPageRotation = isCoordinateTransparentType(out.type as string | undefined)
+      ? space.pageRotation
+      : pageRotation;
     out.children = out.children.map((child) =>
       viewNode(child as SimplifiedNode, styles, templates, {
-        pageRotation,
+        pageRotation: childPageRotation,
         parentCornerUnplaceable: cornerUnplaceable,
       }),
     );

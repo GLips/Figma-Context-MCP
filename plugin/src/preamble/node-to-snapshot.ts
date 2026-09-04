@@ -15,11 +15,13 @@
 // Like the REST adapter, the snapshot is constructed field-by-field against the declared contract —
 // deliberately NOT a `{...node}` spread — so undeclared plugin fields cannot ride through at runtime.
 
+import { isCoordinateTransparentType } from "~/core/index.js";
 import type {
   NodeSnapshot,
   SnapshotColor,
   SnapshotEffect,
   SnapshotPaint,
+  SnapshotPoint,
   SnapshotStyleRef,
   SnapshotText,
   SnapshotTextRun,
@@ -237,6 +239,41 @@ export interface SceneNodeLike {
   readonly getMainComponentAsync?: () => Promise<{ readonly id: string } | null>;
 }
 
+/** The node's own top-left corner as the live node states it, or undefined if it has none. */
+function ownXY(node: SceneNodeLike): SnapshotPoint | undefined {
+  return typeof node.x === "number" && typeof node.y === "number"
+    ? { x: node.x, y: node.y }
+    : undefined;
+}
+
+/**
+ * A node's own corner expressed against the parent the snapshot emits.
+ *
+ * `node.x`/`node.y` are stated in the CONTAINER parent, which is the emitted parent
+ * everywhere except under a group or boolean operation. There, the child and the group
+ * are siblings in one space, so the group's corner has to subtract out — without this
+ * the snapshot hands the core a container-relative number that it reads as an offset
+ * from the group, and every group child lands at its frame-relative position.
+ *
+ * The delta is then turned into the group's OWN frame, because that is the frame the
+ * group's emitted width/height are measured in: a child of a group tilted 25° belongs
+ * inside its box, not beside it. Undoing Figma's `[[cos, sin], [-sin, cos]]` is a
+ * multiply by its transpose. An unrotated group — the common case — leaves the delta
+ * exactly as it is.
+ */
+function ownOriginIn(node: SceneNodeLike, parentSpace: SceneParentSpace): SnapshotPoint | undefined {
+  const own = ownXY(node);
+  if (!own || !parentSpace.transparent) return own;
+  if (!parentSpace.origin) return undefined;
+  const dx = own.x - parentSpace.origin.x;
+  const dy = own.y - parentSpace.origin.y;
+  if (!parentSpace.rotation) return { x: dx, y: dy };
+  const theta = (parentSpace.rotation * Math.PI) / 180;
+  const cos = Math.cos(theta);
+  const sin = Math.sin(theta);
+  return { x: dx * cos - dy * sin, y: dx * sin + dy * cos };
+}
+
 /**
  * Resolves a style id to its published name (`figma.getStyleByIdAsync` on the live path; a fixture
  * table in the parity harness). Injected because it is the one lookup that isn't node-local, and this
@@ -254,10 +291,53 @@ export async function sceneNodeToSnapshot(
   node: SceneNodeLike,
   resolveStyle: SceneStyleResolver,
 ): Promise<NodeSnapshot> {
+  return sceneSubtreeToSnapshot(node, resolveStyle, CONTAINER_PARENT_SPACE);
+}
+
+/**
+ * Where a node's `x`/`y` are measured from, relative to the parent the snapshot
+ * EMITS. They are the same point whenever the emitted parent is a container parent
+ * — which is the common case, and what `CONTAINER_PARENT_SPACE` says.
+ *
+ * They part company under a coordinate-transparent parent (see
+ * `isCoordinateTransparentType`): a group child's `x`/`y` are stated in the
+ * container above the group, so they are a SIBLING of the group's own `x`/`y`
+ * rather than an offset from it, and the group's corner has to come out.
+ */
+interface SceneParentSpace {
+  /** Whether the emitted parent is coordinate-transparent. */
+  readonly transparent: boolean;
+  /**
+   * A transparent parent's own corner, in the space it shares with its children.
+   * Absent when that parent carried no `x`/`y` at all — the corner is unknown, so
+   * children withhold `ownOrigin` and the core falls back to the AABB delta rather
+   * than emitting an unsubtracted, container-relative number.
+   */
+  readonly origin?: SnapshotPoint;
+  /** That parent's own rotation in degrees, the frame its children's offsets land in. */
+  readonly rotation: number;
+}
+
+/** The ordinary case: the emitted parent IS the container parent, so `x`/`y` need no fixup. */
+const CONTAINER_PARENT_SPACE: SceneParentSpace = { transparent: false, rotation: 0 };
+
+/**
+ * The recursive body. `parentSpace` is walk state rather than a caller-supplied
+ * argument — like the REST adapter's `RestParentSpace`, a node's parent-relative
+ * origin is only knowable from what its parent resolved to.
+ */
+async function sceneSubtreeToSnapshot(
+  node: SceneNodeLike,
+  resolveStyle: SceneStyleResolver,
+  parentSpace: SceneParentSpace,
+): Promise<NodeSnapshot> {
   const text = node.type === "TEXT" ? decodeSceneText(node) : undefined;
 
+  const childSpace: SceneParentSpace = isCoordinateTransparentType(node.type)
+    ? { transparent: true, origin: ownXY(node), rotation: node.rotation ?? 0 }
+    : CONTAINER_PARENT_SPACE;
   const children = await Promise.all(
-    (node.children ?? []).map((child) => sceneNodeToSnapshot(child, resolveStyle)),
+    (node.children ?? []).map((child) => sceneSubtreeToSnapshot(child, resolveStyle, childSpace)),
   );
 
   return {
@@ -271,15 +351,13 @@ export async function sceneNodeToSnapshot(
     absoluteBoundingBox: node.absoluteBoundingBox,
     // The node's own geometry, straight off the live node — the read side's answer to
     // width/height/left/top, and the same numbers `geometryOf` writes back (bridge.ts).
-    // No inversion needed here: rotation lives in relativeTransform, not in these.
+    // No inversion needed here: rotation lives in relativeTransform, not in these. The
+    // origin is the one value that needs a parent to interpret it — see `ownOriginIn`.
     ownSize:
       typeof node.width === "number" && typeof node.height === "number"
         ? { width: node.width, height: node.height }
         : undefined,
-    ownOrigin:
-      typeof node.x === "number" && typeof node.y === "number"
-        ? { x: node.x, y: node.y }
-        : undefined,
+    ownOrigin: ownOriginIn(node, parentSpace),
     layoutSizingHorizontal: node.layoutSizingHorizontal,
     layoutSizingVertical: node.layoutSizingVertical,
     layoutAlign: node.layoutAlign,

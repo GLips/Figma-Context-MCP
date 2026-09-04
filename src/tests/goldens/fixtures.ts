@@ -22,6 +22,14 @@ import type {
  * only need to hit the code paths, not be faithful Figma exports.
  */
 
+/**
+ * Degrees a designer would type → the RADIANS the REST wire actually carries (verified
+ * live; see `degreesFromWireRotation` in the adapter). Fixtures state the authored angle
+ * so they stay readable, and convert here so the bytes are the bytes Figma sends — which
+ * is what makes the adapter's unit conversion something these goldens can gate.
+ */
+const wireRotation = (degrees: number): number => (degrees * Math.PI) / 180;
+
 // Only the fields the transform reads are populated; the Figma node type is a
 // deeply discriminated union, so we cast through unknown as the existing tests do.
 function node(overrides: Record<string, unknown>): FigmaNode {
@@ -527,7 +535,7 @@ const rotatedNodes = fileResponse("Rotated Nodes", [
         type: "FRAME",
         // 40x24 at (100, 60), rotated 15deg
         absoluteBoundingBox: { x: 100, y: 49.6472, width: 44.8487, height: 33.535 },
-        rotation: 15,
+        rotation: wireRotation(15),
         layoutSizingHorizontal: "FIXED",
         layoutSizingVertical: "FIXED",
         fills: [{ type: "SOLID", color: { r: 0.2, g: 0.4, b: 0.9, a: 1 }, visible: true }],
@@ -539,7 +547,7 @@ const rotatedNodes = fileResponse("Rotated Nodes", [
         // 60x20 at (220, 80), rotated 45deg — the degenerate band, where the
         // inversion has no answer and the AABB stands in.
         absoluteBoundingBox: { x: 220, y: 37.5736, width: 56.5685, height: 56.5685 },
-        rotation: 45,
+        rotation: wireRotation(45),
         layoutSizingHorizontal: "FIXED",
         layoutSizingVertical: "FIXED",
         fills: [{ type: "SOLID", color: { r: 0.9, g: 0.4, b: 0.2, a: 1 }, visible: true }],
@@ -551,7 +559,7 @@ const rotatedNodes = fileResponse("Rotated Nodes", [
             // 20x8 at (6, 6) inside the chip, rotated -45deg — back to square with
             // the page, so its SIZE inverts cleanly even though its origin can't.
             absoluteBoundingBox: { x: 228.4853, y: 80, width: 20, height: 8 },
-            rotation: -45,
+            rotation: wireRotation(-45),
             layoutSizingHorizontal: "FIXED",
             layoutSizingVertical: "FIXED",
             fills: [{ type: "SOLID", color: { r: 1, g: 1, b: 1, a: 1 }, visible: true }],
@@ -567,7 +575,7 @@ const rotatedNodes = fileResponse("Rotated Nodes", [
         // residual is signed: at THIS angle it lands negative, which is why the
         // solve tolerates a sub-pixel negative instead of testing `>= 0`.
         absoluteBoundingBox: { x: 60, y: 229.2945, width: 77.2741, height: 20.7055 },
-        rotation: 15,
+        rotation: wireRotation(15),
         layoutSizingHorizontal: "FIXED",
         layoutSizingVertical: "FIXED",
         strokes: [{ type: "SOLID", color: { r: 0, g: 0, b: 0, a: 1 }, visible: true }],
@@ -581,7 +589,7 @@ const rotatedNodes = fileResponse("Rotated Nodes", [
         // HORIZONTALLY FLIPPED node too and can't tell the two apart, so it
         // withholds the origin here and falls back to the AABB corner.
         absoluteBoundingBox: { x: 250, y: 170, width: 50, height: 30 },
-        rotation: 180,
+        rotation: wireRotation(180),
         layoutSizingHorizontal: "FIXED",
         layoutSizingVertical: "FIXED",
         fills: [{ type: "SOLID", color: { r: 0.6, g: 0.3, b: 0.8, a: 1 }, visible: true }],
@@ -592,7 +600,7 @@ const rotatedNodes = fileResponse("Rotated Nodes", [
         type: "FRAME",
         // 120x90 at (40, 150), rotated 10deg
         absoluteBoundingBox: { x: 40, y: 129.1622, width: 133.8053, height: 109.4705 },
-        rotation: 10,
+        rotation: wireRotation(10),
         layoutSizingHorizontal: "FIXED",
         layoutSizingVertical: "FIXED",
         fills: [{ type: "SOLID", color: { r: 0.95, g: 0.95, b: 0.95, a: 1 }, visible: true }],
@@ -604,10 +612,140 @@ const rotatedNodes = fileResponse("Rotated Nodes", [
             // 30x18 at (12, 9) inside the group, rotated a further 20deg — 30deg
             // against the page, which is the angle the AABB is aligned to.
             absoluteBoundingBox: { x: 53.3805, y: 141.7795, width: 34.9808, height: 30.5885 },
-            rotation: 20,
+            rotation: wireRotation(20),
             layoutSizingHorizontal: "FIXED",
             layoutSizingVertical: "FIXED",
             fills: [{ type: "SOLID", color: { r: 0.1, g: 0.7, b: 0.4, a: 1 }, visible: true }],
+          }),
+        ],
+      }),
+    ],
+  }),
+]);
+
+// ---------------------------------------------------------------------------
+// 10. Grouped nodes — Figma's "container parent" exception. A GROUP is not a
+//     coordinate space of its own: Figma states its children's position AND
+//     rotation against the frame above it, so both producers have to subtract
+//     the group's own corner and must not accumulate the group's angle twice.
+//     Covers a plain group, a group nested in one, and a rotated group.
+// ---------------------------------------------------------------------------
+const groupedNodes = fileResponse("Grouped Nodes", [
+  node({
+    id: "8:1",
+    name: "Group Board",
+    type: "FRAME",
+    clipsContent: false,
+    absoluteBoundingBox: { x: 0, y: 0, width: 400, height: 300 },
+    layoutSizingHorizontal: "FIXED",
+    layoutSizingVertical: "FIXED",
+    fills: [{ type: "SOLID", color: { r: 1, g: 1, b: 1, a: 1 }, visible: true }],
+    children: [
+      node({
+        id: "8:2",
+        // An UNROTATED group. Its children's x/y are stated in the FRAME above it, not
+        // in the group, so their left/top is the delta from the group's own corner —
+        // (15, 0) and (0, 45), not the (60, 50) / (45, 95) the frame sees.
+        name: "Plain Group",
+        type: "GROUP",
+        clipsContent: false,
+        absoluteBoundingBox: { x: 45, y: 50, width: 82, height: 110 },
+        layoutSizingHorizontal: "FIXED",
+        layoutSizingVertical: "FIXED",
+        children: [
+          node({
+            id: "8:3",
+            name: "Chip A",
+            type: "FRAME",
+            clipsContent: false,
+            absoluteBoundingBox: { x: 60, y: 50, width: 60, height: 40 },
+            layoutSizingHorizontal: "FIXED",
+            layoutSizingVertical: "FIXED",
+            fills: [{ type: "SOLID", color: { r: 0.2, g: 0.4, b: 0.9, a: 1 }, visible: true }],
+          }),
+          node({
+            id: "8:4",
+            name: "Chip B",
+            type: "FRAME",
+            clipsContent: false,
+            absoluteBoundingBox: { x: 45, y: 95, width: 50, height: 30 },
+            layoutSizingHorizontal: "FIXED",
+            layoutSizingVertical: "FIXED",
+            fills: [{ type: "SOLID", color: { r: 0.9, g: 0.4, b: 0.2, a: 1 }, visible: true }],
+          }),
+          node({
+            id: "8:5",
+            // A group inside a group: still stated in the FRAME, still measured from the
+            // group that EMITS it. Its own left/top is (25, 82).
+            name: "Inner Group",
+            type: "GROUP",
+            clipsContent: false,
+            absoluteBoundingBox: { x: 70, y: 132, width: 57, height: 28 },
+            layoutSizingHorizontal: "FIXED",
+            layoutSizingVertical: "FIXED",
+            children: [
+              node({
+                id: "8:6",
+                name: "Nested Chip",
+                type: "FRAME",
+                clipsContent: false,
+                absoluteBoundingBox: { x: 70, y: 140, width: 30, height: 20 },
+                layoutSizingHorizontal: "FIXED",
+                layoutSizingVertical: "FIXED",
+                fills: [{ type: "SOLID", color: { r: 0.1, g: 0.7, b: 0.4, a: 1 }, visible: true }],
+              }),
+              node({
+                id: "8:7",
+                name: "Nested Pin",
+                type: "FRAME",
+                clipsContent: false,
+                absoluteBoundingBox: { x: 115, y: 132, width: 12, height: 12 },
+                layoutSizingHorizontal: "FIXED",
+                layoutSizingVertical: "FIXED",
+                fills: [{ type: "SOLID", color: { r: 0.9, g: 0.7, b: 0.1, a: 1 }, visible: true }],
+              }),
+            ],
+          }),
+        ],
+      }),
+      node({
+        id: "8:8",
+        // A ROTATED group, where the two halves of the parent space split. Its children
+        // already carry its 25deg (Figma states their rotation against the frame), so the
+        // solve must NOT accumulate it again — and their left/top is measured in the
+        // group's own tilted frame, the same frame its 131x102 own size is measured in.
+        name: "Tilted Group",
+        type: "GROUP",
+        clipsContent: false,
+        absoluteBoundingBox: { x: 198.2699, y: 44.6429, width: 131.0031, height: 102.8656 },
+        rotation: wireRotation(25),
+        layoutSizingHorizontal: "FIXED",
+        layoutSizingVertical: "FIXED",
+        children: [
+          node({
+            id: "8:9",
+            name: "Tile",
+            type: "FRAME",
+            clipsContent: false,
+            absoluteBoundingBox: { x: 250, y: 44.6429, width: 71.2832, height: 61.6094 },
+            rotation: wireRotation(25),
+            layoutSizingHorizontal: "FIXED",
+            layoutSizingVertical: "FIXED",
+            fills: [{ type: "SOLID", color: { r: 0.6, g: 0.3, b: 0.8, a: 1 }, visible: true }],
+          }),
+          node({
+            id: "8:10",
+            // 40deg against the FRAME = a further 15deg inside the group. Accumulating the
+            // group's rotation would invert this AABB at 65deg and report a size the node
+            // was never authored at.
+            name: "Skew Tile",
+            type: "FRAME",
+            clipsContent: false,
+            absoluteBoundingBox: { x: 215, y: 78.577, width: 74.1393, height: 66.7439 },
+            rotation: wireRotation(40),
+            layoutSizingHorizontal: "FIXED",
+            layoutSizingVertical: "FIXED",
+            fills: [{ type: "SOLID", color: { r: 0.2, g: 0.7, b: 0.8, a: 1 }, visible: true }],
           }),
         ],
       }),
@@ -630,4 +768,5 @@ export const GOLDEN_FIXTURES: GoldenFixture[] = [
   { name: "named-styles", response: namedStyles },
   { name: "deep-nested", response: deepNested },
   { name: "rotated-nodes", response: rotatedNodes },
+  { name: "grouped-nodes", response: groupedNodes },
 ];
