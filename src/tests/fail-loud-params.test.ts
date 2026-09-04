@@ -15,7 +15,6 @@ function connectedServer(request = vi.fn().mockResolvedValue({ image: "iVBORw0KG
   const bridge = {
     request,
     getPairingCode: () => "1234",
-    getSkewNote: () => null,
     touchApproval: () => {},
   } as unknown as PluginBridge;
   const runtime: PluginBridgeRuntime = {

@@ -12,9 +12,11 @@
 //
 // Slice 1.2 adds the version handshake, which rides that same envelope:
 //   • GET_VERSION round-trips {pluginVersion, protocolVersion} from a current plugin.
-//   • detectSkew treats a missing version as the floor (nudge), a current one as clean —
-//     never rejects, so it can't brick the stale plugin the nudge exists to rescue.
-//   • The bridge's per-connection skew note clears on disconnect.
+//   • refuseProtocolSkew treats a missing version as the floor and refuses it, like any other
+//     under-minimum plugin — a runtime that can't name its wire contract must not run agent code.
+//   • The connection's compatibility verdict is connection-scoped (back to `checking` on disconnect).
+//   • fig-41: a canvas request issued INSIDE the handshake window HOLDS for the verdict instead of
+//     being sent, so a stale plugin never receives agent code — the race the refusal defeats.
 //
 // Slice 2.1 adds the consent gate over the same envelope:
 //   • A 4-digit pairing code is minted per connection; SESSION_INFO introduces the identity.
@@ -72,7 +74,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { PluginBridge } from "../src/services/plugin-bridge/bridge.ts";
 import { ApprovalStore } from "../src/services/plugin-bridge/approval-store.ts";
-import { detectSkew, MIN_PROTOCOL_VERSION } from "../src/services/plugin-bridge/version.ts";
+import { refuseProtocolSkew, MIN_PROTOCOL_VERSION } from "../src/services/plugin-bridge/version.ts";
 import { SESSION_IDENTITY } from "../src/services/plugin-bridge/approval.ts";
 import { WS_PORT_BLOCK } from "../src/services/plugin-bridge/ports.ts";
 
@@ -103,14 +105,27 @@ function makeSandbox() {
 const sandbox = makeSandbox();
 let mintCounter = 0;
 
-// A faithful stand-in for code.ts's reply contract. Pass `version` to model a CURRENT
-// plugin (answers GET_VERSION/NOTIFY); omit it to model a spike-era plugin that predates
-// those handlers and falls through to the envelope ERROR — the skew case the nudge rescues.
+// The version a modeled plugin reports unless the caller says otherwise — CURRENT, so every test
+// that isn't ABOUT version skew gets a plugin the server will actually drive. (Since fig-41 the
+// bridge holds canvas requests until the handshake settles, so a plugin with no version would be
+// refused rather than merely nudged.)
+const CURRENT_VERSION = { pluginVersion: "0.1.0", protocolVersion: MIN_PROTOCOL_VERSION };
+
+// A faithful stand-in for code.ts's reply contract. `version` defaults to CURRENT_VERSION; pass an
+// older one to model a stale plugin, or `null` to model a spike-era plugin that predates the
+// GET_VERSION/NOTIFY handlers entirely and falls through to the envelope ERROR. `versionDelayMs`
+// holds the handshake window open on purpose (the fig-41 race); `ignoreTypes` names message types the
+// plugin drops without replying, modeling a plugin that goes silent mid-request.
 // Mirrors the Phase 2 sandbox gate: SESSION_INFO binds the connection's token, EXECUTE_CODE is
 // gated on it, and `ws.allow()` stands in for the human clicking Allow in the arbiter panel —
 // minting a token, approving it, and handing it to the server over the WS (SESSION_TOKEN). Pass
 // `state` to share one persistent sandbox across reconnects (defaults to the shared `sandbox`).
-function fakePlugin(origin, { version, wsOptions, url = URL, state = sandbox } = {}) {
+// `ws.received` records every message type the plugin was actually SENT, so a test can assert that
+// something never reached it.
+function fakePlugin(
+  origin,
+  { version = CURRENT_VERSION, versionDelayMs = 0, ignoreTypes = [], wsOptions, url = URL, state = sandbox } = {},
+) {
   const ws = new WebSocket(url, { origin, ...wsOptions });
   // Models ui.html's WS_CONNECTED reset: a fresh socket drops the previous connection's token
   // so a write before the new SESSION_INFO can't ride a stale-but-approved binding. The sticky
@@ -124,9 +139,12 @@ function fakePlugin(origin, { version, wsOptions, url = URL, state = sandbox } =
     // forwarded verbatim by ui.html. The server persists it and echoes it in later SESSION_INFOs.
     ws.send(JSON.stringify({ type: "SESSION_TOKEN", sessionToken: token }));
   };
+  ws.received = [];
   ws.on("message", (raw) => {
     const msg = JSON.parse(raw.toString());
     if (typeof msg.id !== "string") return;
+    ws.received.push(msg.type);
+    if (ignoreTypes.includes(msg.type)) return;
     // Mirrors code.ts's reply(): the handler's body plus the correlation id, and nothing else
     // carried over from the request.
     const send = (body) => ws.send(JSON.stringify({ ...body, id: msg.id }));
@@ -137,7 +155,8 @@ function fakePlugin(origin, { version, wsOptions, url = URL, state = sandbox } =
       if (state.currentToken && state.approvedTokens.has(state.currentToken)) send({ type: "EXECUTE_CODE_RESULT", result: "ok", console: [], errors: null });
       else send({ type: "PENDING_APPROVAL" });
     } else if (version && msg.type === "GET_VERSION") {
-      send({ type: "VERSION", ...version });
+      if (versionDelayMs) setTimeout(() => send({ type: "VERSION", ...version }), versionDelayMs);
+      else send({ type: "VERSION", ...version });
     } else if (version && msg.type === "NOTIFY") {
       send({ type: "NOTIFY_RESULT" });
     } else {
@@ -208,11 +227,13 @@ assert.equal((await bridge.request({ type: "EXECUTE_CODE", code: "return 1" })).
 console.log("✅ Second connection refused; established plugin keeps the channel");
 
 // A disconnect mid-request rejects the in-flight call immediately, rather than letting
-// it hang to the 15s timeout. Drive it with a mute plugin that connects but never replies.
+// it hang to the 15s timeout. Drive it with a plugin that handshakes (so the write is actually SENT
+// rather than held on the fig-41 compatibility gate) but never answers the write itself.
 plugin.close();
 await wait(150);
-const mute = new WebSocket(URL, { origin: "null" });
+const mute = fakePlugin("null", { ignoreTypes: ["EXECUTE_CODE"] });
 await new Promise((res) => mute.on("open", res));
+await wait(50); // let the connection's GET_VERSION handshake settle, so the write is not held
 const t1 = Date.now();
 const inflight = bridge.request({ type: "EXECUTE_CODE", code: "return 1" }).then(() => null, (e) => e);
 await wait(50); // let request() register the pending entry before we kill the socket
@@ -404,34 +425,35 @@ assert.equal(
 console.log("✅ A restart racing its dying predecessor reclaims its own port — no slip, no fresh Allow");
 bridgeS2.stop();
 
-// --- Version handshake + skew policy (Slice 1.2) ---
+// --- Version handshake + compatibility policy (Slice 1.2, tightened by fig-41) ---
 
-// Skew policy is pure logic, so assert it directly: a current protocol is clean; a missing
-// or sub-minimum one nudges. The "missing → floor → nudge, never reject" rule is the
-// load-bearing one (rejecting would brick the stale plugin), so pin it explicitly.
-assert.equal(detectSkew({ protocolVersion: MIN_PROTOCOL_VERSION }), null, "current protocol → no nudge");
-assert.ok(detectSkew({}), "missing version → nudge (floor), not silence");
-assert.ok(detectSkew({ protocolVersion: MIN_PROTOCOL_VERSION - 1 }), "below-minimum protocol → nudge");
-console.log("✅ detectSkew: current is clean; missing/old nudges (never rejects)");
+// The policy is pure logic, so assert it directly: a current protocol is clean, a missing or
+// sub-minimum one is REFUSED. "Missing → floor → refuse" is the load-bearing rule — a plugin that
+// answers the version question with an envelope ERROR is exactly the vintage that must not receive
+// agent code — so pin it explicitly.
+assert.equal(refuseProtocolSkew({ protocolVersion: MIN_PROTOCOL_VERSION }), null, "current protocol → no refusal");
+assert.ok(refuseProtocolSkew({}), "missing version → floor → refused, not silently driven");
+assert.ok(refuseProtocolSkew({ protocolVersion: MIN_PROTOCOL_VERSION - 1 }), "below-minimum protocol → refused");
+console.log("✅ refuseProtocolSkew: current is clean; missing/old are refused");
 
 // GET_VERSION rides the frozen envelope like any other request. Connect a CURRENT plugin
 // onto the slot the terminated mute socket just freed.
 await wait(150);
-const current = fakePlugin("null", { version: { pluginVersion: "0.1.0", protocolVersion: 1 } });
+const current = fakePlugin("null");
 await new Promise((res) => current.on("open", res));
 const ver = await bridge.request({ type: "GET_VERSION" });
-assert.equal(ver.protocolVersion, 1, "GET_VERSION round-trips protocolVersion");
+assert.equal(ver.protocolVersion, MIN_PROTOCOL_VERSION, "GET_VERSION round-trips protocolVersion");
 assert.equal(ver.pluginVersion, "0.1.0", "GET_VERSION round-trips pluginVersion");
 console.log("✅ Version handshake round-trips {pluginVersion, protocolVersion}");
 
-// The skew note is connection-scoped: set while connected, cleared on disconnect so a
-// newer plugin reconnecting onto the freed slot can't inherit a stale nudge.
-bridge.setSkewNote("update me");
-assert.equal(bridge.getSkewNote(), "update me", "skew note readable while connected");
+// The verdict is connection-scoped: the bridge's own handshake settles it on connect, and a
+// disconnect drops it back to `checking` so a newer plugin on the freed slot can't inherit it.
+await wait(50);
+assert.equal(bridge.protocolCompatibility(), "compatible", "the bridge runs its own handshake and settles the verdict");
 current.close();
 await wait(150);
-assert.equal(bridge.getSkewNote(), null, "skew note cleared on disconnect");
-console.log("✅ Skew note is connection-scoped (cleared on disconnect)");
+assert.equal(bridge.protocolCompatibility(), "checking", "the verdict resets on disconnect");
+console.log("✅ The compatibility verdict is connection-scoped (back to `checking` on disconnect)");
 
 // --- Slice 1.3: heartbeat reaps a half-open holder ---
 // A handshaked plugin whose socket goes half-open (Figma crash / laptop sleep: no TCP FIN,
@@ -514,30 +536,109 @@ sq2.close();
 real2.close();
 await wait(150);
 
-// --- Slice 1.3: a reclaimed connection's late handshake result can't clobber the newcomer ---
-// Production hazard: index.ts fires GET_VERSION at every connection. A squatter's GET_VERSION
-// orphans when the real plugin reclaims (the close-guard can't fail it without hitting the
-// newcomer's pending), so it resolves LATE (15s timeout → {} → a skew nudge). index.ts guards
-// that with a connection epoch — captured before the await, re-checked after. Mirror that guard
-// here and prove the stale result bails instead of stamping a nudge on the current plugin.
-const applyHandshakeResult = (capturedEpoch, note) => {
-  if (bridge.currentEpoch() !== capturedEpoch) return; // stale connection — a newer one owns the slot
-  bridge.setSkewNote(note);
-};
-const ghost = new WebSocket(URL, { origin: "null" }); // squatter grabs the slot, never replies
+// --- Slice 1.3: a reclaimed connection's late handshake verdict can't clobber the newcomer ---
+// Production hazard: the bridge fires GET_VERSION at every connection. A mute squatter's GET_VERSION
+// ORPHANS when the real plugin reclaims the slot (the close-guard can't fail it without hitting the
+// newcomer's pending too), so it resolves LATE — on its timeout, as an empty record, which reads as
+// the protocol floor. Since fig-41 that verdict GATES canvas requests, so a late one landing on the
+// newcomer would refuse every write to a perfectly current plugin. The bridge guards it with the
+// connection epoch, captured before the await and re-checked after.
+//
+// A dedicated bridge with a short request timeout makes the orphan resolve in 200ms instead of 15s.
+const GHOST_PORT = 19887;
+const ghostBridge = new PluginBridge(isolatedStore(), 200);
+ghostBridge.start([GHOST_PORT]);
+await wait(150);
+const ghost = new WebSocket(`ws://127.0.0.1:${GHOST_PORT}`, { origin: "null" }); // grabs the slot, never replies
 await new Promise((res) => ghost.on("open", res));
-const ghostEpoch = bridge.currentEpoch();
-bridge.request({ type: "GET_VERSION" }).catch(() => {}); // orphans on reclaim, resolves late
-const heir = fakePlugin("null", { version: { pluginVersion: "0.1.0", protocolVersion: 1 } });
+await wait(30); // the server installs the socket and fires the GET_VERSION that will orphan
+const ghostEpoch = ghostBridge.currentEpoch();
+const heir = fakePlugin("null", { url: `ws://127.0.0.1:${GHOST_PORT}`, state: makeSandbox() });
 await new Promise((res) => heir.on("open", res));
-const heirEpoch = bridge.currentEpoch();
-assert.notEqual(heirEpoch, ghostEpoch, "a reclaim bumps the connection epoch");
-await bridge.request({ type: "GET_VERSION" }); // heir handshakes
-applyHandshakeResult(heirEpoch, null); // heir is current → no nudge (what index.ts sets)
-applyHandshakeResult(ghostEpoch, "STALE NUDGE — must never land"); // the ghost's late result must bail
-assert.equal(bridge.getSkewNote(), null, "a displaced connection's late handshake result can't clobber the current plugin's skew note");
+assert.notEqual(ghostBridge.currentEpoch(), ghostEpoch, "a reclaim bumps the connection epoch");
+await wait(300); // outlast the orphaned handshake's timeout — the moment the stale verdict would land
+assert.equal(
+  ghostBridge.protocolCompatibility(),
+  "compatible",
+  "a displaced connection's late handshake verdict can't clobber the current plugin's compatibility",
+);
 console.log("✅ Connection epoch guards a reclaimed connection's late handshake from clobbering the current plugin");
 heir.close();
+ghost.close();
+await wait(150);
+
+// --- fig-41: a canvas request racing the version handshake is HELD, then refused ---
+// GET_VERSION is asked the instant a plugin connects, but the answer is a round-trip away. Before
+// this gate a figma_execute_code landing inside that window was sent straight through, so a plugin
+// below MIN_PROTOCOL_VERSION RECEIVED the agent's code and ran it — the refusal the minimum exists to
+// produce never got the chance to fire. The connection now carries a compatibility state, and a
+// canvas request holds while it is `checking`.
+//
+// `versionDelayMs` holds the window open long enough to fire inside it deterministically.
+const RACE_PORT = 19888;
+const raceBridge = new PluginBridge(isolatedStore(), 500);
+raceBridge.start([RACE_PORT]);
+await wait(150);
+const raceUrl = `ws://127.0.0.1:${RACE_PORT}`;
+const raceState = makeSandbox();
+const stalePlugin = fakePlugin("null", {
+  url: raceUrl,
+  state: raceState,
+  version: { pluginVersion: "0.0.1", protocolVersion: MIN_PROTOCOL_VERSION - 1 },
+  versionDelayMs: 250,
+});
+await new Promise((res) => stalePlugin.on("open", res));
+await wait(30); // let the server install the socket and fire its GET_VERSION — still deep inside the window
+assert.equal(raceBridge.protocolCompatibility(), "checking", "a just-connected plugin's protocol is not known yet");
+let raceErr = null;
+try {
+  // Fired INSIDE the window, before the verdict can possibly have landed — the exact call fig-41 is about.
+  await raceBridge.request({ type: "EXECUTE_CODE", code: "return 1" });
+} catch (e) {
+  raceErr = e;
+}
+assert.ok(raceErr, "a write issued inside the handshake window must not run");
+assert.match(raceErr.message, /protocol v/, "it is refused with the update-the-plugin message");
+assert.equal(raceBridge.protocolCompatibility(), "incompatible", "the verdict landed while the write was held");
+assert.ok(!stalePlugin.received.includes("EXECUTE_CODE"), "the stale plugin never received the code");
+console.log("✅ A write racing the version handshake HOLDS, then is refused — the stale plugin never receives it");
+
+// …and it stays refused once the verdict is in, so the race is closed at both ends.
+raceErr = null;
+try { await raceBridge.request({ type: "EXECUTE_CODE", code: "return 1" }); } catch (e) { raceErr = e; }
+assert.ok(raceErr && /protocol v/.test(raceErr.message), "an under-minimum plugin stays refused after the verdict lands");
+assert.ok(!stalePlugin.received.includes("EXECUTE_CODE"), "still never sent");
+console.log("✅ An under-minimum plugin stays refused after its verdict lands");
+stalePlugin.close();
+await wait(150);
+
+// A plugin predating the handshake entirely (envelope-ERRORs GET_VERSION) is the protocol floor, and
+// is refused on the same rule — no special case for "couldn't tell us".
+const spikeEra = fakePlugin("null", { url: raceUrl, state: raceState, version: null });
+await new Promise((res) => spikeEra.on("open", res));
+await wait(30);
+raceErr = null;
+try { await raceBridge.request({ type: "EXECUTE_CODE", code: "return 1" }); } catch (e) { raceErr = e; }
+assert.ok(raceErr && /protocol v/.test(raceErr.message), "a plugin that can't answer GET_VERSION is refused, not driven");
+assert.ok(!spikeEra.received.includes("EXECUTE_CODE"), "the pre-handshake plugin never received the code");
+console.log("✅ A plugin predating the handshake is refused (missing version → floor)");
+spikeEra.close();
+await wait(150);
+
+// The gate DELAYS a current plugin, it doesn't break it: the same immediately-issued write holds for
+// the verdict and then runs. Without this, "refuse while checking" would look like a passing test.
+const currentRacer = fakePlugin("null", { url: raceUrl, state: raceState, versionDelayMs: 250 });
+await new Promise((res) => currentRacer.on("open", res));
+await wait(30);
+await raceBridge.request({ type: "SESSION_INFO", identity: SESSION_IDENTITY, pairingCode: raceBridge.getPairingCode(), sessionToken: raceBridge.getSessionToken() });
+currentRacer.allow();
+assert.equal(raceBridge.protocolCompatibility(), "checking", "still inside the handshake window");
+const heldThenRan = await raceBridge.request({ type: "EXECUTE_CODE", code: "return 1" });
+assert.equal(heldThenRan.result, "ok", "a current plugin's write holds for the verdict and then runs");
+console.log("✅ The hold only delays a current plugin — its write runs once the verdict lands");
+currentRacer.close();
+raceBridge.stop();
+ghostBridge.stop();
 await wait(150);
 
 // --- Phase 3, Slice 3.1: server probe-binds the first free port in the block (advance on EADDRINUSE) ---

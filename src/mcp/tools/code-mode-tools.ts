@@ -128,17 +128,6 @@ export function registerCodeModeTools(
     return `${pairingLine}\n\n${gateLine}`;
   }
 
-  /**
-   * Append the connection's version-skew nudge to a tool result so the agent sees it and
-   * relays the upgrade prompt to the human. No-op when the plugin is current. This is the
-   * agent half of the dual-channel nudge — the half that reaches even a pre-v1 plugin, which
-   * can't render the human toast.
-   */
-  function withSkewNote<T>(content: T[]): (T | { type: "text"; text: string })[] {
-    const note = bridge.getSkewNote();
-    return note ? [...content, { type: "text" as const, text: note }] : content;
-  }
-
   // Every code-mode tool registers through registerFailLoudTool, not server.registerTool: a mistyped
   // param must come back as a named, retryable error instead of being silently stripped (see
   // fail-loud-params.ts).
@@ -173,7 +162,7 @@ export function registerCodeModeTools(
         if (outcome.kind === "gated") return outcome.result;
         if (outcome.kind === "error") {
           return {
-            content: withSkewNote([{ type: "text", text: outcome.message }]),
+            content: [{ type: "text", text: outcome.message }],
             isError: true,
           };
         }
@@ -181,7 +170,7 @@ export function registerCodeModeTools(
         // lapses mid-work (durable-approval, this cycle). No-op when the session isn't persisted.
         bridge.touchApproval();
         return {
-          content: withSkewNote([{ type: "text", text: JSON.stringify(outcome.reply, null, 2) }]),
+          content: [{ type: "text", text: JSON.stringify(outcome.reply, null, 2) }],
         };
       },
     ),
@@ -282,7 +271,7 @@ Returns a PNG image.`,
           return { content: [{ type: "text", text: reply.errors }], isError: true };
         }
         return {
-          content: withSkewNote([{ type: "image", data: reply.image, mimeType: "image/png" }]),
+          content: [{ type: "image", data: reply.image, mimeType: "image/png" }],
         };
       },
     ),

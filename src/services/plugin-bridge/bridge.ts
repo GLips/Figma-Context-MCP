@@ -1,6 +1,7 @@
 import { WebSocketServer, WebSocket } from "ws";
 import { mintPairingCode, SESSION_IDENTITY } from "./approval.js";
 import { ApprovalStore } from "./approval-store.js";
+import { parsePeerVersion, refuseProtocolSkew, type ProtocolCompatibility } from "./version.js";
 import { Logger } from "~/utils/logger.js";
 
 export interface BridgeRequest {
@@ -15,6 +16,16 @@ interface Pending {
 }
 
 const DEFAULT_TIMEOUT_MS = 15_000;
+
+// The message types the SERVER sends to establish a connection, before it knows what it is talking
+// to. They are the ONLY ones exempt from the compatibility hold in `request()` — the handshake can't
+// wait on its own answer. Everything else reaches the canvas (EXECUTE_CODE, SCREENSHOT, …) and must
+// not be sent until the plugin's protocol is known to be supported.
+//
+// Deny-by-default on purpose: a canvas message type added later is gated the day it's added, without
+// anyone having to remember to gate it. Adding a type HERE is the load-bearing decision — it means
+// "this is safe to send to a plugin of unknown, possibly unsupported, vintage".
+const HANDSHAKE_REQUEST_TYPES = new Set(["PING", "GET_VERSION", "SESSION_INFO", "NOTIFY"]);
 
 // How often the server pings the holder to prove the socket is still alive. A half-open
 // socket (Figma crash / laptop sleep sends no TCP FIN, so `close` never fires and the
@@ -73,19 +84,34 @@ function isAllowedOrigin(origin: string | undefined): boolean {
  * without a matching pending id are dropped. This is where the plan's "every WS
  * request carries a correlation id" invariant is enforced — callers never deal with
  * ids themselves.
+ *
+ * It is also where the version gate lives: every connection runs its own GET_VERSION handshake, and
+ * a request that isn't part of that handshake is held until the verdict lands, then sent or refused
+ * (see HANDSHAKE_REQUEST_TYPES and `sendOnceCompatible`).
  */
 export class PluginBridge {
   private socket: WebSocket | null = null;
   private pending = new Map<string, Pending>();
   private nextId = 0;
-  // The agent-facing version-skew nudge for the CURRENT connection, or null when the
-  // plugin is current. Connection-scoped on purpose: set by the connect handshake, read
-  // by tool handlers to append the note, and cleared on disconnect so a newer plugin
-  // reconnecting onto the freed slot starts clean instead of inheriting a stale nudge.
-  private skewNote: string | null = null;
+  // Where the CURRENT connection stands with the version handshake, and the refusal text when it came
+  // back under the minimum. Connection-scoped on purpose: reset to `checking` the moment a socket is
+  // installed, so a newer plugin reconnecting onto the freed slot starts clean instead of inheriting
+  // its predecessor's verdict.
+  //
+  // `checking` HOLDS canvas requests rather than letting them through — that hold is the whole point.
+  // GET_VERSION is asked on connect but answered a round-trip later, and a tool call can land inside
+  // that window; sending it there is how a plugin below MIN_PROTOCOL_VERSION receives agent code and
+  // runs it instead of being refused.
+  private compatibility: ProtocolCompatibility = "checking";
+  private skewRefusal: string | null = null;
+  // Resolves when the current connection's verdict lands, or when its socket dies with the verdict
+  // still unknown. Re-created per connection; the hold re-reads this field on every pass so a
+  // reconnect mid-hold waits on the NEW connection's promise instead of one nobody will ever settle.
+  private verdictSettled: Promise<void> = Promise.resolve();
+  private settleVerdict: () => void = () => {};
   // The pairing code for the CURRENT connection — minted fresh on connect, read by the
   // SESSION_INFO handshake (shown in the panel) and by the tool handlers (shown in the
-  // pending-approval result). Connection-scoped like the skew note: a fresh socket gets a
+  // pending-approval result). Connection-scoped like the compatibility verdict: a fresh socket gets a
   // fresh code, and disconnect clears it so the next connection can't surface a stale one.
   private pairingCode: string | null = null;
   // Whether the current holder has answered the server over the frozen envelope (any reply
@@ -98,16 +124,16 @@ export class PluginBridge {
   // sets it true. A holder that misses a ping is half-open (dead but no FIN) and gets reaped.
   private socketAlive = false;
   // Monotonic id for the current connection, bumped each time a socket is installed (connect
-  // OR reclaim). A connection-scoped async side effect (index.ts's version handshake → skew
-  // note) captures this before awaiting and re-checks it after, so a result that lands AFTER a
+  // OR reclaim). A connection-scoped async side effect (the version handshake → compatibility
+  // verdict) captures this before awaiting and re-checks it after, so a result that lands AFTER a
   // reclaim/reconnect can't clobber the newer connection's state. Without it, a displaced
   // squatter's GET_VERSION pending — orphaned by the close-guard below, since failing it would
-  // hit the newcomer's pending too — times out 15s later and stamps a stale nudge on the real
-  // plugin that took the slot.
+  // hit the newcomer's pending too — times out 15s later and condemns the real plugin that took
+  // the slot as incompatible.
   private epoch = 0;
   // The session token the sandbox minted on Allow and handed back over the WS. This is the
   // FIRST bridge field that must SURVIVE reconnects — it is deliberately NOT part of the
-  // connection-scoped cluster above (socket/skewNote/pairingCode/handshaked/socketAlive/epoch),
+  // connection-scoped cluster above (socket/compatibility/pairingCode/handshaked/socketAlive/epoch),
   // all of which reset on connect/disconnect. It is this server's proof of a prior approval:
   // echoed in every SESSION_INFO so the sandbox re-keys sticky approval to it. A same-path squatter
   // is a different process whose token starts null, so it echoes none and the sandbox re-prompts
@@ -130,9 +156,15 @@ export class PluginBridge {
   // which is what a bridge that was never started reads as.
   private reclaimDeadline = 0;
 
-  // Injectable so the contract harness / tests isolate persistence to a temp dir instead of touching
-  // the real ~/.framelink. Production constructs the default store.
-  constructor(private readonly store: ApprovalStore = new ApprovalStore()) {}
+  // Both injectable for the contract harness, which drives real sockets: `store` isolates persistence
+  // to a temp dir instead of touching the real ~/.framelink, and `requestTimeoutMs` lets it pin
+  // behaviour that only shows up when a request times out — a silent plugin's version handshake, and
+  // a displaced squatter's orphaned one resolving late — without waiting out the real 15s. Production
+  // takes both defaults.
+  constructor(
+    private readonly store: ApprovalStore = new ApprovalStore(),
+    private readonly requestTimeoutMs: number = DEFAULT_TIMEOUT_MS,
+  ) {}
 
   /**
    * Probe-bind the first free port in the block, advancing on `EADDRINUSE`. The OS guarantees no
@@ -238,12 +270,16 @@ export class PluginBridge {
 
       this.socket = socket;
       this.epoch++;
-      // Start every connection with a clean skew note. The close handler also clears it,
-      // but clearing only on close leaves a window: if a prior connection drops mid-handshake,
-      // its awaited setSkewNote() can land AFTER close cleared the slot, stranding a stale
-      // nudge that the next (current) plugin would then inherit. Clearing on connect closes
-      // that window — a fresh connection nudges only once its OWN handshake proves skew.
-      this.skewNote = null;
+      // Start every connection back at `checking`, with a fresh promise for canvas requests to hold
+      // on. The close handler also resets this, but resetting only on close leaves a window: if a
+      // prior connection drops mid-handshake, its awaited verdict can land AFTER close cleared the
+      // slot, stranding a stale one the next plugin would inherit. Resetting on connect closes that
+      // window — a fresh connection is driven only once its OWN handshake vouches for it.
+      this.compatibility = "checking";
+      this.skewRefusal = null;
+      this.verdictSettled = new Promise((resolve) => {
+        this.settleVerdict = resolve;
+      });
       // A fresh socket is unproven (no reply yet) and presumed alive (so the first heartbeat
       // tick pings rather than reaps it). It earns `handshaked` on its first matched reply.
       this.handshaked = false;
@@ -268,9 +304,15 @@ export class PluginBridge {
           return;
         }
         this.socket = null;
-        this.skewNote = null;
         this.pairingCode = null;
         this.handshaked = false;
+        // Wake anything holding for a verdict that will now never arrive. The hold re-checks the
+        // socket, finds it gone, and falls through to the "No Figma plugin connected" rejection —
+        // which the approval wait rides out across the plugin's ~1s redial, exactly as it does for
+        // any other mid-wait drop.
+        this.compatibility = "checking";
+        this.skewRefusal = null;
+        this.settleVerdict();
         // Every in-flight request was sent on THIS (current, now-closed) socket, so reject
         // them now instead of letting each hang to its 15s timeout — same "never a silent
         // hang" contract as the frozen envelope.
@@ -285,6 +327,11 @@ export class PluginBridge {
         stale.terminate();
       }
       Logger.log("Plugin connected to WS bridge");
+      // Ask what we're talking to FIRST. Fired from here rather than left to the caller that started
+      // the bridge: holding canvas requests until a verdict lands is only safe if a verdict ALWAYS
+      // lands, and the only way to guarantee that is for the connection itself to run the handshake.
+      // Anything onConnect fires is a handshake message, which rides past the hold anyway.
+      void this.handshakeProtocolVersion();
       onConnect?.();
     });
   }
@@ -320,14 +367,44 @@ export class PluginBridge {
     socket.ping();
   }
 
-  /** Set the current connection's version-skew nudge (null = plugin is current). */
-  setSkewNote(note: string | null): void {
-    this.skewNote = note;
+  /**
+   * Ask the fresh connection for its versions and settle this connection's compatibility verdict,
+   * releasing any canvas request holding for it. Runs once per connection, fired from the connection
+   * handler.
+   *
+   * A plugin predating the handshake answers GET_VERSION with an envelope ERROR (the request rejects)
+   * and a silent one times out — both catch into an empty record, which reads as the protocol floor
+   * and is refused. So every path settles: a held request is never held forever.
+   */
+  private async handshakeProtocolVersion(): Promise<void> {
+    const epoch = this.epoch;
+    const reply = await this.request({ type: "GET_VERSION" }).catch(() => ({}));
+    // The slot was reclaimed or reconnected while we awaited: a DIFFERENT connection owns it and is
+    // running its own handshake. Bail rather than stamping this connection's verdict on the newcomer
+    // — a displaced squatter's orphaned GET_VERSION resolves 15s late and would otherwise condemn the
+    // real plugin that took the slot.
+    if (this.epoch !== epoch) return;
+    const version = parsePeerVersion(reply);
+    this.skewRefusal = refuseProtocolSkew(version);
+    this.compatibility = this.skewRefusal ? "incompatible" : "compatible";
+    this.settleVerdict();
+    if (!this.skewRefusal) return;
+    Logger.log(
+      `⚠️ Version skew — plugin reported ${JSON.stringify(version)}; refusing canvas requests`,
+    );
+    // Human channel: a figma.notify toast. Fire-and-forget — a plugin predating the NOTIFY handler
+    // envelope-ERRORs and the toast is silently dropped, which is fine; the agent still gets this
+    // same text as the rejection on every canvas call it tries.
+    this.request({ type: "NOTIFY", message: this.skewRefusal }).catch(() => {});
   }
 
-  /** The current connection's skew nudge, or null. Read by tool handlers to append it. */
-  getSkewNote(): string | null {
-    return this.skewNote;
+  /**
+   * Where the current connection stands with the version handshake — `checking` until its GET_VERSION
+   * resolves, then `compatible` or `incompatible`. Canvas requests hold on the first and are refused
+   * on the last; read directly only for diagnostics and by the bridge contract harness.
+   */
+  protocolCompatibility(): ProtocolCompatibility {
+    return this.compatibility;
   }
 
   /** The current connection's pairing code, or null when no plugin is connected. */
@@ -383,6 +460,36 @@ export class PluginBridge {
   }
 
   request(payload: BridgeRequest): Promise<unknown> {
+    // Handshake messages send SYNCHRONOUSLY (no await before the socket.send): the connection
+    // contract depends on the newcomer's handshake being in flight before a displaced socket's close
+    // fires a tick later. Everything else goes through the compatibility hold.
+    if (HANDSHAKE_REQUEST_TYPES.has(payload.type)) return this.sendCorrelated(payload);
+    return this.sendOnceCompatible(payload);
+  }
+
+  /**
+   * Send a canvas request, but only once this connection's protocol is known to be supported: hold
+   * while the verdict is still `checking`, refuse outright when it came back under the minimum.
+   *
+   * The hold re-reads `verdictSettled` on every pass because a reconnect mid-hold swaps in a new
+   * promise; awaiting the captured one would wait on a connection nobody will ever settle. A socket
+   * that dies while we hold drops out of the loop and falls through to `sendCorrelated`'s own "no
+   * plugin connected" rejection.
+   */
+  private async sendOnceCompatible(payload: BridgeRequest): Promise<unknown> {
+    while (this.compatibility === "checking" && this.socket?.readyState === WebSocket.OPEN) {
+      await this.verdictSettled;
+    }
+    // Refuse rather than send. A stale plugin executing agent code against a wire contract the server
+    // no longer speaks is the failure the minimum exists to prevent, and a refusal the agent relays
+    // beats a nudge stapled to a result the wrong runtime already produced.
+    const refusal = this.compatibility === "incompatible" ? this.skewRefusal : null;
+    if (refusal) throw new Error(refusal);
+    return this.sendCorrelated(payload);
+  }
+
+  /** Stamp a correlation id on the payload, send it, and resolve when the reply carrying that id lands. */
+  private sendCorrelated(payload: BridgeRequest): Promise<unknown> {
     const socket = this.socket;
     if (!socket || socket.readyState !== WebSocket.OPEN) {
       return Promise.reject(
@@ -397,10 +504,10 @@ export class PluginBridge {
         this.pending.delete(id);
         reject(
           new Error(
-            `Bridge request ${id} (${payload.type}) timed out after ${DEFAULT_TIMEOUT_MS}ms`,
+            `Bridge request ${id} (${payload.type}) timed out after ${this.requestTimeoutMs}ms`,
           ),
         );
-      }, DEFAULT_TIMEOUT_MS);
+      }, this.requestTimeoutMs);
       this.pending.set(id, { resolve, reject, timer });
       // `id` last: the generated correlation id is authoritative and a payload field
       // must never overwrite it, or the reply could never be matched to this pending.
