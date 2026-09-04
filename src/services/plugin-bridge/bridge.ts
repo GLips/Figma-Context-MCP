@@ -104,9 +104,12 @@ export class PluginBridge {
   // runs it instead of being refused.
   private compatibility: ProtocolCompatibility = "checking";
   private skewRefusal: string | null = null;
-  // Resolves when the current connection's verdict lands, or when its socket dies with the verdict
-  // still unknown. Re-created per connection; the hold re-reads this field on every pass so a
-  // reconnect mid-hold waits on the NEW connection's promise instead of one nobody will ever settle.
+  // Resolves when the current connection's verdict lands, or when that connection is abandoned with
+  // the verdict still unknown. Re-created per connection, and the INVARIANT that makes the hold safe
+  // is that every path which abandons a connection settles this first: disconnect (`close`), reclaim
+  // (settled before the swap in the connection handler), and `stop()`. A holder is suspended on one
+  // specific promise object, so dropping a resolver without calling it strands that holder for good —
+  // no timeout covers it, because the request was never sent.
   private verdictSettled: Promise<void> = Promise.resolve();
   private settleVerdict: () => void = () => {};
   // The pairing code for the CURRENT connection — minted fresh on connect, read by the
@@ -123,17 +126,9 @@ export class PluginBridge {
   // Heartbeat liveness for the current socket. Each ping sets it false; the holder's pong
   // sets it true. A holder that misses a ping is half-open (dead but no FIN) and gets reaped.
   private socketAlive = false;
-  // Monotonic id for the current connection, bumped each time a socket is installed (connect
-  // OR reclaim). A connection-scoped async side effect (the version handshake → compatibility
-  // verdict) captures this before awaiting and re-checks it after, so a result that lands AFTER a
-  // reclaim/reconnect can't clobber the newer connection's state. Without it, a displaced
-  // squatter's GET_VERSION pending — orphaned by the close-guard below, since failing it would
-  // hit the newcomer's pending too — times out 15s later and condemns the real plugin that took
-  // the slot as incompatible.
-  private epoch = 0;
   // The session token the sandbox minted on Allow and handed back over the WS. This is the
   // FIRST bridge field that must SURVIVE reconnects — it is deliberately NOT part of the
-  // connection-scoped cluster above (socket/compatibility/pairingCode/handshaked/socketAlive/epoch),
+  // connection-scoped cluster above (socket/compatibility/pairingCode/handshaked/socketAlive),
   // all of which reset on connect/disconnect. It is this server's proof of a prior approval:
   // echoed in every SESSION_INFO so the sandbox re-keys sticky approval to it. A same-path squatter
   // is a different process whose token starts null, so it echoes none and the sandbox re-prompts
@@ -268,8 +263,15 @@ export class PluginBridge {
       // refused at verifyClient — so this can't displace a live, responsive plugin.
       const stale = this.socket && this.socket.readyState === WebSocket.OPEN ? this.socket : null;
 
+      // Settle the OUTGOING connection's gate before swapping in this one's. A canvas request holding
+      // for the displaced connection is suspended on that promise, and we are about to drop the only
+      // resolver for it — without this it waits forever, because the displaced socket's `close` bails
+      // below and its handshake bails on the identity guard, so neither settles. Waking it here lets
+      // it re-read the field and hold for the NEWCOMER's verdict instead, which is what it wanted all
+      // along. (This is also why the displaced-socket branch of `close` must NOT settle: by then the
+      // field points at the newcomer's gate, and settling it would release holders early.)
+      this.settleVerdict();
       this.socket = socket;
-      this.epoch++;
       // Start every connection back at `checking`, with a fresh promise for canvas requests to hold
       // on. The close handler also resets this, but resetting only on close leaves a window: if a
       // prior connection drops mid-handshake, its awaited verdict can land AFTER close cleared the
@@ -331,7 +333,7 @@ export class PluginBridge {
       // the bridge: holding canvas requests until a verdict lands is only safe if a verdict ALWAYS
       // lands, and the only way to guarantee that is for the connection itself to run the handshake.
       // Anything onConnect fires is a handshake message, which rides past the hold anyway.
-      void this.handshakeProtocolVersion();
+      void this.handshakeProtocolVersion(socket);
       onConnect?.();
     });
   }
@@ -370,20 +372,25 @@ export class PluginBridge {
   /**
    * Ask the fresh connection for its versions and settle this connection's compatibility verdict,
    * releasing any canvas request holding for it. Runs once per connection, fired from the connection
-   * handler.
+   * handler with that connection's own socket.
    *
    * A plugin predating the handshake answers GET_VERSION with an envelope ERROR (the request rejects)
    * and a silent one times out — both catch into an empty record, which reads as the protocol floor
    * and is refused. So every path settles: a held request is never held forever.
    */
-  private async handshakeProtocolVersion(): Promise<void> {
-    const epoch = this.epoch;
+  private async handshakeProtocolVersion(socket: WebSocket): Promise<void> {
     const reply = await this.request({ type: "GET_VERSION" }).catch(() => ({}));
-    // The slot was reclaimed or reconnected while we awaited: a DIFFERENT connection owns it and is
-    // running its own handshake. Bail rather than stamping this connection's verdict on the newcomer
-    // — a displaced squatter's orphaned GET_VERSION resolves 15s late and would otherwise condemn the
-    // real plugin that took the slot.
-    if (this.epoch !== epoch) return;
+    // We are no longer the current connection, so this answer is about a socket nobody is driving.
+    // Two ways to get here, and BOTH must bail:
+    //   • Reclaimed/reconnected — a displaced squatter's orphaned GET_VERSION resolves on its timeout,
+    //     long after a real plugin took the slot, and would otherwise condemn it as incompatible.
+    //   • Disconnected — `close` fails the pending GET_VERSION, so this resolves a microtask later
+    //     with an empty record. Reading that as the floor would leave a bridge with NO plugin sitting
+    //     in `incompatible`, telling the agent to reinstall the plugin when the truth is that nothing
+    //     is connected.
+    // Socket identity catches both; the connection epoch only catches the first (it doesn't move on a
+    // disconnect), which is why the guard is on the socket.
+    if (this.socket !== socket) return;
     const version = parsePeerVersion(reply);
     this.skewRefusal = refuseProtocolSkew(version);
     this.compatibility = this.skewRefusal ? "incompatible" : "compatible";
@@ -437,17 +444,14 @@ export class PluginBridge {
   stop(): void {
     this.socket?.terminate();
     this.socket = null;
+    // Nulling the socket makes the terminate()-driven `close` bail as "displaced", so it never runs
+    // the disconnect reset — do it here, or a canvas request holding for a verdict is stranded on a
+    // promise this stop just orphaned. Waking it drops it through to "No Figma plugin connected".
+    this.compatibility = "checking";
+    this.skewRefusal = null;
+    this.settleVerdict();
     this.wss?.close();
     this.wss = null;
-  }
-
-  /**
-   * Monotonic id of the current connection; changes on every connect/reclaim. Capture it
-   * before a connection-scoped await and re-check after, so a late result can't clobber a
-   * newer connection's state (see the `epoch` field).
-   */
-  currentEpoch(): number {
-    return this.epoch;
   }
 
   /** Reject and clear every pending request — used when the socket they were sent on dies. */
@@ -471,10 +475,10 @@ export class PluginBridge {
    * Send a canvas request, but only once this connection's protocol is known to be supported: hold
    * while the verdict is still `checking`, refuse outright when it came back under the minimum.
    *
-   * The hold re-reads `verdictSettled` on every pass because a reconnect mid-hold swaps in a new
-   * promise; awaiting the captured one would wait on a connection nobody will ever settle. A socket
-   * that dies while we hold drops out of the loop and falls through to `sendCorrelated`'s own "no
-   * plugin connected" rejection.
+   * A LOOP, not a single await: each abandonment settles the gate (see `verdictSettled`), which wakes
+   * us to re-read the field. A reclaim mid-hold puts us back to `checking` on the newcomer, so we hold
+   * again and ultimately run against whoever ends up driving; a socket that dies drops out of the loop
+   * and falls through to `sendCorrelated`'s own "no plugin connected" rejection.
    */
   private async sendOnceCompatible(payload: BridgeRequest): Promise<unknown> {
     while (this.compatibility === "checking" && this.socket?.readyState === WebSocket.OPEN) {

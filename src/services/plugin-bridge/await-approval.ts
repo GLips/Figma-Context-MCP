@@ -33,6 +33,14 @@ export function isPendingApproval(reply: unknown): boolean {
 // run that burns the bridge's full 15s per-request timeout — must still land inside the MCP client's 60s
 // default. Past the ceiling the caller falls back to the retryable "not approved yet" text, which is
 // still the right answer for a human who stepped away.
+//
+// One case exceeds that arithmetic and is accepted rather than designed around: a poll that lands on a
+// plugin which has just reconnected holds on the bridge's compatibility gate (bridge.ts), and that hold
+// ends only when the new connection's GET_VERSION answers or times out — so a plugin that connects and
+// then goes silent can add a second 15s, putting the worst case past 60s. It needs a mid-wait reconnect
+// to a plugin that speaks WS but never answers the handshake; the common reconnect answers in a
+// round-trip and costs nothing. Widening the ceiling's guarantee to cover it would mean bounding the
+// hold against the remaining budget, which is not worth the machinery for this shape.
 export const APPROVAL_WAIT_MS = 40_000;
 
 // How often to re-offer the request while waiting. Fast enough that clicking Allow feels immediate,

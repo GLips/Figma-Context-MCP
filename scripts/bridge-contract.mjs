@@ -57,7 +57,7 @@
 //   • Heartbeat reaps a half-open holder (handshaked but no pong) so the live plugin reconnects;
 //     an established holder still blocks a 2nd connection until then (1.1 anti-hijack preserved).
 //   • A new connection reclaims the slot from a non-handshaking holder (then handshakes and drives).
-//   • A reclaimed connection's late handshake result can't clobber the newcomer (epoch guard).
+//   • A reclaimed connection's late handshake result can't clobber the newcomer (identity guard).
 //
 // Usage:  pnpm contract   (or: npx tsx scripts/bridge-contract.mjs)
 //
@@ -542,7 +542,7 @@ await wait(150);
 // newcomer's pending too), so it resolves LATE — on its timeout, as an empty record, which reads as
 // the protocol floor. Since fig-41 that verdict GATES canvas requests, so a late one landing on the
 // newcomer would refuse every write to a perfectly current plugin. The bridge guards it with the
-// connection epoch, captured before the await and re-checked after.
+// socket it was fired for, re-checked after the await.
 //
 // A dedicated bridge with a short request timeout makes the orphan resolve in 200ms instead of 15s.
 const GHOST_PORT = 19887;
@@ -552,19 +552,52 @@ await wait(150);
 const ghost = new WebSocket(`ws://127.0.0.1:${GHOST_PORT}`, { origin: "null" }); // grabs the slot, never replies
 await new Promise((res) => ghost.on("open", res));
 await wait(30); // the server installs the socket and fires the GET_VERSION that will orphan
-const ghostEpoch = ghostBridge.currentEpoch();
 const heir = fakePlugin("null", { url: `ws://127.0.0.1:${GHOST_PORT}`, state: makeSandbox() });
 await new Promise((res) => heir.on("open", res));
-assert.notEqual(ghostBridge.currentEpoch(), ghostEpoch, "a reclaim bumps the connection epoch");
 await wait(300); // outlast the orphaned handshake's timeout — the moment the stale verdict would land
 assert.equal(
   ghostBridge.protocolCompatibility(),
   "compatible",
   "a displaced connection's late handshake verdict can't clobber the current plugin's compatibility",
 );
-console.log("✅ Connection epoch guards a reclaimed connection's late handshake from clobbering the current plugin");
+console.log("✅ Connection identity guards a reclaimed connection's late handshake from clobbering the current plugin");
 heir.close();
 ghost.close();
+await wait(150);
+
+// --- fig-41: a request held across a slot reclaim runs on the newcomer, instead of hanging ---
+// The hold suspends on ONE promise object. A reclaim installs the newcomer's promise and drops the
+// resolver for the old one, so unless the outgoing connection's gate is settled at the swap, the held
+// request waits forever — and nothing rescues it, because it was never sent and so has no timeout.
+// Sequence: a mute squatter takes the slot (verdict stays `checking`), a write is issued and holds,
+// then the real plugin reclaims and handshakes. The write must run against the newcomer.
+const RECLAIM_PORT = 19889;
+const reclaimBridge = new PluginBridge(isolatedStore(), 5_000); // long timeout: only the settle can free it
+reclaimBridge.start([RECLAIM_PORT]);
+await wait(150);
+const reclaimUrl = `ws://127.0.0.1:${RECLAIM_PORT}`;
+const reclaimState = makeSandbox();
+const muteSquatter = new WebSocket(reclaimUrl, { origin: "null" }); // never replies, so never handshakes
+await new Promise((res) => muteSquatter.on("open", res));
+await wait(30);
+assert.equal(reclaimBridge.protocolCompatibility(), "checking", "the squatter's protocol is unknown, so a write holds");
+let heldSettled = false;
+const heldWrite = reclaimBridge
+  .request({ type: "EXECUTE_CODE", code: "return 1" })
+  .then((r) => { heldSettled = true; return r; }, (e) => { heldSettled = true; return e; });
+await wait(50);
+assert.equal(heldSettled, false, "the write is held, not sent, while the holder's protocol is unknown");
+const takeover = fakePlugin("null", { url: reclaimUrl, state: reclaimState });
+await new Promise((res) => takeover.on("open", res));
+await reclaimBridge.request({ type: "SESSION_INFO", identity: SESSION_IDENTITY, pairingCode: reclaimBridge.getPairingCode(), sessionToken: reclaimBridge.getSessionToken() });
+takeover.allow();
+const heldResult = await Promise.race([heldWrite, wait(1500).then(() => "HUNG")]);
+assert.notEqual(heldResult, "HUNG", "a write held across a slot reclaim must not hang — the reclaim settles the old gate");
+assert.equal(heldResult.result, "ok", "it runs against the plugin that took the slot");
+console.log("✅ A write held across a slot reclaim runs on the newcomer instead of hanging");
+takeover.close();
+muteSquatter.close();
+reclaimBridge.stop();
 await wait(150);
 
 // --- fig-41: a canvas request racing the version handshake is HELD, then refused ---
@@ -637,6 +670,33 @@ const heldThenRan = await raceBridge.request({ type: "EXECUTE_CODE", code: "retu
 assert.equal(heldThenRan.result, "ok", "a current plugin's write holds for the verdict and then runs");
 console.log("✅ The hold only delays a current plugin — its write runs once the verdict lands");
 currentRacer.close();
+await wait(150);
+
+// A disconnect INSIDE the handshake window must not leave a false `incompatible` behind. `close` fails
+// the in-flight GET_VERSION, so the handshake's catch runs a microtask later with an empty record —
+// the protocol floor. Applying that would park a bridge with NO plugin in `incompatible`, and every
+// canvas call would then tell the agent to reinstall the plugin when the truth is that nothing is
+// connected. The handshake bails on socket identity, which (unlike a connection epoch) also moves on
+// a disconnect.
+const dropper = fakePlugin("null", { url: raceUrl, state: raceState, versionDelayMs: 5_000 });
+await new Promise((res) => dropper.on("open", res));
+await wait(30);
+assert.equal(raceBridge.protocolCompatibility(), "checking", "still inside the handshake window");
+dropper.close();
+await wait(100); // let close fail the pending GET_VERSION and its catch run
+assert.equal(
+  raceBridge.protocolCompatibility(),
+  "checking",
+  "a disconnect inside the handshake window leaves no verdict behind",
+);
+let goneErr = null;
+try { await raceBridge.request({ type: "EXECUTE_CODE", code: "return 1" }); } catch (e) { goneErr = e; }
+assert.match(
+  goneErr.message,
+  /No Figma plugin connected/,
+  "with nothing connected the agent is told exactly that — not to go reinstall a plugin",
+);
+console.log("✅ A disconnect inside the handshake window leaves no false `incompatible` behind");
 raceBridge.stop();
 ghostBridge.stop();
 await wait(150);
