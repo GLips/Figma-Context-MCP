@@ -1,6 +1,5 @@
 // Types
 export type {
-  ComponentDefinitionMap,
   NodeCounter,
   SimplifiedDesign,
   SimplifiedNode,

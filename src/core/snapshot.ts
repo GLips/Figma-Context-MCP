@@ -244,16 +244,47 @@ export interface SnapshotStyleRef {
 // src/adapters/rest/rest.ts); these are the per-node fields the walk reads.
 // ---------------------------------------------------------------------------
 
-/** An INSTANCE's resolved component-property value (Figma `ComponentPropertyValue` subset). */
+/**
+ * An INSTANCE's resolved component-property value (Figma `ComponentPropertyValue` subset).
+ * `type` is BOOLEAN / TEXT / INSTANCE_SWAP / VARIANT. An INSTANCE_SWAP value is the main
+ * component's node id on both producers (REST verified live; the plugin's `setProperties`
+ * takes the same id).
+ *
+ * SLOT entries never reach the snapshot: the wire value is a `{ guid }` object naming the
+ * slot's content container, and the SLOT node in the instance's subtree already IS that
+ * content. Both adapters drop them.
+ */
 export interface SnapshotComponentPropertyValue {
   type: string;
   value: boolean | string;
 }
 
-/** A COMPONENT/COMPONENT_SET property definition (Figma `ComponentPropertyDefinition` subset). */
+/**
+ * A COMPONENT/COMPONENT_SET property definition (Figma `ComponentPropertyDefinition` subset).
+ * `type` is BOOLEAN / TEXT / INSTANCE_SWAP / VARIANT / SLOT. Figma keeps these on the SET for
+ * a variant's properties — a variant COMPONENT under a set carries none on either producer.
+ */
 export interface SnapshotComponentPropertyDefinition {
   type: string;
-  defaultValue: boolean | string;
+  /**
+   * Absent on SLOT: the wire default is a `{ guid }` object (REST) that names no value an
+   * agent can set. Present on every other type.
+   */
+  defaultValue?: boolean | string;
+  /** VARIANT only: every value this axis can take. */
+  variantOptions?: string[];
+}
+
+/**
+ * One sublayer of an INSTANCE that the designer changed by hand, and which of its
+ * wire fields differ from the main component (Figma `Overrides`, decoupled). Field
+ * names are the PRODUCER's spelling — REST says `characterStyleOverrides`, the plugin
+ * says `styledTextSegments` — the core maps them onto output fields.
+ */
+export interface SnapshotOverride {
+  /** The overridden node's id — the instance itself, or a descendant (`I<inst>;<child>`). */
+  id: string;
+  fields: string[];
 }
 
 export interface NodeSnapshot {
@@ -263,9 +294,13 @@ export interface NodeSnapshot {
   type: string;
   visible?: boolean;
   /**
-   * Component-property references (e.g. `{ visible: "Show Badge#341:0" }`). The
-   * walker reads `visible` to rescue hidden nodes inside component definitions;
-   * the component extractor simplifies the rest.
+   * Component-property references, node field → property name
+   * (e.g. `{ visible: "Show Badge#341:0" }`). Four fields occur on the wire:
+   * `visible`, `characters`, `mainComponent` (a nested INSTANCE driven by an
+   * INSTANCE_SWAP prop) and `slotContentId` (a SLOT node → its SLOT prop; on both
+   * producers live, though neither spec lists it). The walker reads `visible` to
+   * rescue hidden nodes inside component definitions; the component extractor
+   * renames the rest onto the output fields they drive.
    */
   componentPropertyReferences?: Record<string, string>;
   children?: NodeSnapshot[];
@@ -379,4 +414,10 @@ export interface NodeSnapshot {
   componentId?: string;
   componentProperties?: Record<string, SnapshotComponentPropertyValue>;
   componentPropertyDefinitions?: Record<string, SnapshotComponentPropertyDefinition>;
+  /**
+   * INSTANCE only: the DIRECT overrides on this instance's sublayers — inherited ones
+   * (from an enclosing instance) are not listed, on either producer. The core hands
+   * each entry to the sublayer it names.
+   */
+  overrides?: SnapshotOverride[];
 }

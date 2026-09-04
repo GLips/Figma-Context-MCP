@@ -1,5 +1,10 @@
 import type { Node as FigmaDocumentNode, Paint, Effect, Style } from "@figma/rest-api-spec";
-import type { NodeSnapshot, SnapshotStyleRef } from "~/core/snapshot.js";
+import type {
+  NodeSnapshot,
+  SnapshotComponentPropertyDefinition,
+  SnapshotComponentPropertyValue,
+  SnapshotStyleRef,
+} from "~/core/snapshot.js";
 import { isCoordinateTransparentType } from "~/core/utils.js";
 import { ROOT_SPACE, solveOwnBox, toParentSpacePoint, type RestParentSpace } from "./own-box.js";
 import { decodePaints, decodeEffect } from "./paint.js";
@@ -16,9 +21,37 @@ import { decodeText } from "./text.js";
 type RawStructuralFields = Partial<
   Omit<
     NodeSnapshot,
-    "id" | "name" | "type" | "fills" | "strokes" | "effects" | "children" | "text" | "styles"
+    | "id"
+    | "name"
+    | "type"
+    | "fills"
+    | "strokes"
+    | "effects"
+    | "children"
+    | "text"
+    | "styles"
+    | "componentProperties"
+    | "componentPropertyDefinitions"
+    | "overrides"
   >
 >;
+
+/**
+ * The wire shape of component properties, as REST actually sends it — wider than
+ * `@figma/rest-api-spec` 0.37.0 declares. Grounded live (file `Framelink`, 2026-09-04):
+ * a SLOT property (`type: "SLOT"`, absent from the spec's union) carries a `{ guid }`
+ * OBJECT as its `defaultValue` / `value`, not a scalar, and `componentPropertyReferences`
+ * carries a `slotContentId` key the spec doesn't list either. Typed here so the decode
+ * below is honest about what it filters.
+ */
+interface RawComponentProperty {
+  type: string;
+  value?: unknown;
+  defaultValue?: unknown;
+  variantOptions?: string[];
+}
+
+type RawComponentPropertyMap = Record<string, RawComponentProperty>;
 
 /**
  * REST adapter: decode a raw Figma REST node into a plan-neutral `NodeSnapshot`
@@ -60,6 +93,9 @@ function restSubtreeToSnapshot(
     strokes?: Paint[];
     effects?: Effect[];
     children?: FigmaDocumentNode[];
+    componentProperties?: RawComponentPropertyMap;
+    componentPropertyDefinitions?: RawComponentPropertyMap;
+    overrides?: { id: string; overriddenFields: string[] }[];
   };
 
   const rotation = degreesFromWireRotation(raw.rotation);
@@ -140,8 +176,14 @@ function restSubtreeToSnapshot(
 
     // Component metadata
     componentId: raw.componentId,
-    componentProperties: raw.componentProperties,
-    componentPropertyDefinitions: raw.componentPropertyDefinitions,
+    componentProperties:
+      raw.componentProperties && decodeComponentProperties(raw.componentProperties),
+    componentPropertyDefinitions:
+      raw.componentPropertyDefinitions &&
+      decodePropertyDefinitions(raw.componentPropertyDefinitions),
+    overrides: raw.overrides?.length
+      ? raw.overrides.map((entry) => ({ id: entry.id, fields: entry.overriddenFields }))
+      : undefined,
 
     // Wire-divergent encodings, decoded rather than carried
     fills: raw.fills && decodePaints(raw.fills),
@@ -179,6 +221,44 @@ function restSubtreeToSnapshot(
  */
 function degreesFromWireRotation(radians: number | undefined): number | undefined {
   return radians === undefined ? undefined : (radians * 180) / Math.PI;
+}
+
+function isScalarPropertyValue(value: unknown): value is boolean | string {
+  return typeof value === "boolean" || typeof value === "string";
+}
+
+/**
+ * An instance's property values, minus SLOT entries: their `{ guid }` value names the
+ * slot's content container, which is already the SLOT node in this instance's subtree
+ * (see `SnapshotComponentPropertyValue`).
+ */
+function decodeComponentProperties(
+  wire: RawComponentPropertyMap,
+): Record<string, SnapshotComponentPropertyValue> | undefined {
+  const out: Record<string, SnapshotComponentPropertyValue> = {};
+  for (const [name, prop] of Object.entries(wire)) {
+    if (isScalarPropertyValue(prop.value)) out[name] = { type: prop.type, value: prop.value };
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
+/**
+ * Property definitions, field-by-field. Every type survives (a SLOT def keeps its
+ * type and loses only its `{ guid }` default); `variantOptions` rides along for VARIANT.
+ * `preferredValues` (a picker palette) is deliberately not carried — nothing downstream
+ * needs it to reproduce or modify an instance.
+ */
+function decodePropertyDefinitions(
+  wire: RawComponentPropertyMap,
+): Record<string, SnapshotComponentPropertyDefinition> | undefined {
+  const out: Record<string, SnapshotComponentPropertyDefinition> = {};
+  for (const [name, def] of Object.entries(wire)) {
+    const decoded: SnapshotComponentPropertyDefinition = { type: def.type };
+    if (isScalarPropertyValue(def.defaultValue)) decoded.defaultValue = def.defaultValue;
+    if (def.variantOptions) decoded.variantOptions = def.variantOptions;
+    out[name] = decoded;
+  }
+  return Object.keys(out).length ? out : undefined;
 }
 
 /**

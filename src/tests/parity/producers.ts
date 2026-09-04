@@ -46,29 +46,22 @@ const restProducer: ParityProducer = {
 
 /**
  * Assemble a `SimplifiedDesign` from snapshots the way the plugin path does: the
- * one shared core, component tables built from the WALK's `componentDefinitions`
- * only (no published-library metadata to read) — precisely the shared subset the
- * comparator scopes to, so the REST producer's richer tables and these lean
- * tables reduce to the same parity view.
+ * one shared core and nothing else. The component tables stay empty — they are
+ * REST response-envelope provenance the plugin has no source for, and the
+ * comparator scopes them out (pin 2). Property definitions travel on the defining
+ * NODE, so they are compared as part of `nodes` like every other field.
  */
 async function designFromSnapshots(snapshots: NodeSnapshot[]): Promise<SimplifiedDesign> {
-  const { nodes, styles, templates, componentDefinitions } = await simplify(snapshots, {
-    compress: true,
-  });
+  const { nodes, styles, templates } = await simplify(snapshots, { compress: true });
   return {
     // `name` is scoped out of the parity view — no source name in a snapshot.
     name: "",
     nodes,
-    components: Object.fromEntries(
-      Object.entries(componentDefinitions).map(([id, propertyDefinitions]) => [
-        id,
-        { id, propertyDefinitions },
-      ]),
-    ),
+    components: {},
     componentSets: {},
     styles,
     templates,
-  } as SimplifiedDesign;
+  };
 }
 
 /**

@@ -95,6 +95,10 @@ function renderNode(
   if (node.componentPropertyReferences !== undefined) {
     parts.push(`componentPropertyReferences=${JSON.stringify(node.componentPropertyReferences)}`);
   }
+  if (node.propertyDefinitions !== undefined) {
+    parts.push(`propertyDefinitions=${JSON.stringify(node.propertyDefinitions)}`);
+  }
+  if (node.overrides !== undefined) parts.push(`overrides=${node.overrides.join(",")}`);
   if (node.textStyle !== undefined) parts.push(`textStyle=${renderStyleValue(node.textStyle)}`);
   if (node.boldWeight !== undefined) parts.push(`boldWeight=${node.boldWeight}`);
   if (node.text !== undefined) {

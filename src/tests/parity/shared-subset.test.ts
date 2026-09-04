@@ -53,52 +53,36 @@ describe("parityView comparator policy", () => {
     expect(parityView(withColor("#000000"))).not.toEqual(parityView(withColor("#FFFFFF")));
   });
 
-  it("reduces component/componentSet tables to id → propertyDefinitions", () => {
-    const propertyDefinitions = { Title: { type: "text", defaultValue: "x" } };
+  it("scopes the component tables out entirely — they are envelope provenance (pin 2)", () => {
+    // REST fills the tables from the response envelope; the plugin has no envelope
+    // and leaves them empty. Neither carries anything the core produced, so a
+    // fully populated table and an empty one must reduce to the same view.
     const rich = design({
-      components: {
-        "1:1": {
-          id: "1:1",
-          key: "libkey",
-          name: "Card",
-          componentSetId: "9:9",
-          propertyDefinitions,
-        },
-      },
-    } as unknown as Partial<SimplifiedDesign>);
-    // Same semantics, different provenance: no publish key/name, and assembled
-    // into componentSets rather than components.
-    const lean = design({
-      componentSets: { "1:1": { id: "1:1", propertyDefinitions } },
-    } as unknown as Partial<SimplifiedDesign>);
+      components: { "1:1": { id: "1:1", key: "libkey", name: "Card", componentSetId: "9:9" } },
+      componentSets: { "9:9": { id: "9:9", key: "setkey", name: "Cards", description: "" } },
+    });
+    const empty = design({});
 
-    expect(parityView(rich)).toEqual(parityView(lean));
+    expect(parityView(rich)).toEqual(parityView(empty));
   });
 
-  it("drops envelope-only components with no shared propertyDefinitions", () => {
-    // REST lists every component in the response envelope, including ones the
-    // core walk never produces (variant/instance-swap-only props, or a master on
-    // another page) — those carry no propertyDefinitions. The plugin producer,
-    // which builds its table from the walk alone, can't produce them, so they
-    // must scope away rather than fail parity on table membership.
-    const withEnvelopeOnly = design({
-      components: {
-        "1:1": {
-          id: "1:1",
-          key: "k",
-          name: "Card",
-          propertyDefinitions: { P: { type: "boolean", defaultValue: true } },
-        },
-        "2:2": { id: "2:2", key: "k2", name: "Off-page master" }, // no propertyDefinitions
-      },
-    } as unknown as Partial<SimplifiedDesign>);
-    const walkOnly = design({
-      components: {
-        "1:1": { id: "1:1", propertyDefinitions: { P: { type: "boolean", defaultValue: true } } },
-      },
-    } as unknown as Partial<SimplifiedDesign>);
+  it("does NOT scope a defining node's propertyDefinitions — they compare as node fields", () => {
+    const withDefs = (defaultValue: string) =>
+      design({
+        nodes: [
+          {
+            id: "1:1",
+            name: "Button",
+            type: "COMPONENT_SET",
+            propertyDefinitions: {
+              Variant: { type: "variant", defaultValue, variantOptions: ["Primary", "Secondary"] },
+            },
+          },
+        ],
+      } as unknown as Partial<SimplifiedDesign>);
 
-    expect(parityView(withEnvelopeOnly)).toEqual(parityView(walkOnly));
+    expect(parityView(withDefs("Primary"))).toEqual(parityView(withDefs("Primary")));
+    expect(parityView(withDefs("Primary"))).not.toEqual(parityView(withDefs("Secondary")));
   });
 
   it("expands a hoisted style ref so it matches the same value inlined", () => {

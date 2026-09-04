@@ -61,9 +61,6 @@ export interface StyleTable {
  */
 export type WalkScheduler = () => void | Promise<void>;
 
-/** Per-component-id property definitions collected during the walk. */
-export type ComponentDefinitionMap = Record<string, Record<string, SimplifiedPropertyDefinition>>;
-
 /**
  * Mutable progress counter passed into traversal. Callers can read `count`
  * during traversal (for live progress indicators) and after it returns
@@ -147,9 +144,22 @@ export interface SimplifiedNode extends NodeGeometry {
   effects?: string | SimplifiedEffects;
   opacity?: number;
   borderRadius?: string;
+  // component data — an INSTANCE names its main component and the property values
+  // it resolved; a COMPONENT / COMPONENT_SET carries the definitions it owns
+  // (Figma keeps a variant's definitions on the SET, so a variant COMPONENT has
+  // none); any component sublayer names the property that drives one of its
+  // fields, keyed by that output field (`visible` / `text` / `componentId` / `slot`).
   componentId?: string;
   componentProperties?: Record<string, boolean | string>;
   componentPropertyReferences?: Record<string, string>;
+  propertyDefinitions?: Record<string, SimplifiedPropertyDefinition>;
+  /**
+   * On an instance sublayer (or the instance itself): the output fields the designer
+   * changed by hand on THIS node, against the main component. Named by output field
+   * (`fills`, `text`, `layout`, …) so the reader can tell an authored deviation from
+   * inherited component content without a second fetch.
+   */
+  overrides?: string[];
   // children
   children?: SimplifiedNode[];
 }

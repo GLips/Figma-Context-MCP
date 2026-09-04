@@ -36,7 +36,7 @@ function makeText(opts: {
 
 async function extract(nodes: FigmaNode[]) {
   const sink = createRefStyleTable();
-  const { nodes: extracted } = await walkNodes(
+  const extracted = await walkNodes(
     nodes.map((node) => restNodeToSnapshot(node)),
     sink,
   );

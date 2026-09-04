@@ -42,13 +42,14 @@ import { isCoordinateTransparentType } from "~/core/utils.js";
  *     surfacing them onto the node where the rewrite reaches them.
  *     (`decodePaint`/`parsePaint`, `core/transformers/style.ts`.)
  *
- *  2. COMPONENT-TABLE METADATA. The shared part of the `components`/
- *     `componentSets` tables is exactly what the core WALK produces — an id and
- *     its `propertyDefinitions`. The table's `name`/`key`/`description`/
- *     `componentSetId` are producer-ASSEMBLY provenance: REST reads them from the
- *     published-library tables in the response envelope; the plugin assembles its
- *     own. We reduce both tables to a single id→`{propertyDefinitions}` map, which
- *     also erases the components-vs-sets split (itself an assembly choice).
+ *  2. COMPONENT TABLES. The `components`/`componentSets` tables are producer-
+ *     ASSEMBLY provenance and nothing else: REST reads `key`/`name`/`description`/
+ *     `componentSetId` from the published-library tables in the response envelope;
+ *     the plugin has no envelope and leaves them empty. Nothing in them is core
+ *     output, so the view drops both tables whole. Property definitions are NOT
+ *     table data — the core emits them on the defining node
+ *     (`SimplifiedNode.propertyDefinitions`), where both producers carry them and
+ *     the node comparison gates them like any other field.
  *
  *  3. SAME-NAME STYLE DISAMBIGUATION (`resolveStyleKey`, `core/style-table.ts`).
  *     The `Name (id)` suffix only exists as a styles-table KEY. Expansion resolves
@@ -104,6 +105,17 @@ import { isCoordinateTransparentType } from "~/core/utils.js";
  *     A rule keyed on `rotation` can't detect either, so pinning them would mean
  *     forgiving `left`/`top` at 0° and at every angle. A mirrored fixture is expected
  *     to fail here; that is this note, not a mystery.
+ *
+ *  8. SLOTS — NOT a divergence, recorded so nobody pins one. `@figma/rest-api-spec`
+ *     0.37.0 has no SLOT node type and no SLOT property type, but the wire does
+ *     (verified live, file `Framelink`, 2026-09-04): REST emits `type: "SLOT"` nodes,
+ *     links each to its property through `componentPropertyReferences.slotContentId`,
+ *     and carries the SLOT definition on the owning COMPONENT — the same three things
+ *     the plugin API exposes. Both adapters drop the two values only the wire has and
+ *     an agent can't set (the `{ guid }` `defaultValue` on the definition and the
+ *     `{ guid }` `value` on the instance), so the SLOT node, its `slot` reference and
+ *     its `slot`-typed definition all compare as ordinary node fields. Plugin-only
+ *     slot data (`slotSettings`, `limitViolations`) is not carried by either producer.
  */
 
 /** Every image paint's ref collapses to this — parity is over presence, not id. */
@@ -262,42 +274,14 @@ function viewNode(
 }
 
 /**
- * Reduce both component tables to the shared id→{propertyDefinitions} view.
- *
- * Only ids that carry `propertyDefinitions` survive — that set is exactly what
- * the core WALK produces (`extractComponent` records a def only for an in-tree
- * COMPONENT/COMPONENT_SET with non-empty BOOLEAN/TEXT props). REST's envelope
- * tables ALSO list components with no shared props (variant/instance-swap-only,
- * or a master on another page); those reduce to nothing shared, so we DROP them
- * rather than keep a `{}` entry the plugin producer — which builds its table from
- * the walk alone — could never match. Keeping them would fail parity on table
- * membership even when the producers agree on every shared field.
- */
-function scopeComponentTables(design: SimplifiedDesign): Record<string, Rec> {
-  const out: Record<string, Rec> = {};
-  for (const table of [design.components, design.componentSets]) {
-    for (const [id, def] of Object.entries(table ?? {})) {
-      const propertyDefinitions = (def as Rec).propertyDefinitions;
-      if (propertyDefinitions) out[id] = { propertyDefinitions };
-    }
-  }
-  return out;
-}
-
-/**
  * The shared view a design reduces to for cross-producer comparison. Two
  * producers pass parity iff their views are deep-equal. Excludes the top-level
- * design `name` (file/page metadata, provenance-divergent and gated elsewhere)
- * and the now-empty `styles`/`templates` (folded inline by expansion).
+ * design `name` (file/page metadata, provenance-divergent and gated elsewhere),
+ * the `components`/`componentSets` tables (envelope provenance, pin 2) and the
+ * now-empty `styles`/`templates` (folded inline by expansion).
  */
-export function parityView(design: SimplifiedDesign): {
-  nodes: Rec[];
-  components: Record<string, Rec>;
-} {
+export function parityView(design: SimplifiedDesign): { nodes: Rec[] } {
   const styles: Record<string, StyleValue> = design.styles ?? {};
   const templates = design.templates ?? {};
-  return {
-    nodes: design.nodes.map((node) => viewNode(node, styles, templates)),
-    components: scopeComponentTables(design),
-  };
+  return { nodes: design.nodes.map((node) => viewNode(node, styles, templates)) };
 }

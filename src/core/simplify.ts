@@ -10,6 +10,7 @@ import {
 } from "./transformers/text.js";
 import {
   simplifyComponentProperties,
+  simplifyOverriddenFields,
   simplifyPropertyDefinitions,
   simplifyPropertyReferences,
 } from "./transformers/component.js";
@@ -17,7 +18,6 @@ import { compressDesign } from "./compress.js";
 import { createInlineStyleTable, createRefStyleTable } from "./style-table.js";
 import type { NodeSnapshot } from "./snapshot.js";
 import type {
-  ComponentDefinitionMap,
   NodeCounter,
   SimplifiedNode,
   StyleTable,
@@ -46,8 +46,6 @@ export interface SimplifyResult {
   styles: Record<string, StyleValue>;
   /** Deduplicated node bodies (compression only; empty when expanded). */
   templates: Record<string, TemplateBody>;
-  /** Property definitions from COMPONENT/COMPONENT_SET nodes in the tree. */
-  componentDefinitions: ComponentDefinitionMap;
 }
 
 /**
@@ -71,21 +69,13 @@ export async function simplify(
 
   if (compress) {
     const table = createRefStyleTable();
-    const { nodes, componentDefs } = await walkNodes(snapshots, table, traversal);
-    return {
-      ...compressDesign(nodes, table.styles, table.namedStyleKeys),
-      componentDefinitions: componentDefs,
-    };
+    const nodes = await walkNodes(snapshots, table, traversal);
+    return compressDesign(nodes, table.styles, table.namedStyleKeys);
   }
 
   const table = createInlineStyleTable();
-  const { nodes, componentDefs } = await walkNodes(snapshots, table, traversal);
-  return {
-    nodes,
-    styles: table.styles,
-    templates: {},
-    componentDefinitions: componentDefs,
-  };
+  const nodes = await walkNodes(snapshots, table, traversal);
+  return { nodes, styles: table.styles, templates: {} };
 }
 
 // ---------------------------------------------------------------------------
@@ -96,11 +86,16 @@ export async function simplify(
 interface SimplifyContext {
   /** Style-interning table — the compression seam (see StyleTable). */
   styles: StyleTable;
-  /** Sink for COMPONENT/COMPONENT_SET property definitions found in the tree. */
-  componentDefs: ComponentDefinitionMap;
   currentDepth: number;
   parent?: NodeSnapshot;
   insideComponentDefinition: boolean;
+  /**
+   * The nearest enclosing INSTANCE's direct overrides, id → wire fields, so each
+   * sublayer can pick up its own entry. Replaced (not merged) at every INSTANCE:
+   * Figma lists only direct overrides per instance level, so a nested instance's
+   * list is complete for its own sublayers.
+   */
+  overrides: ReadonlyMap<string, string[]>;
   /**
    * Per-call mutable counter shared with the caller. Lives on the context so
    * the recursion can increment it without touching module-global state —
@@ -135,34 +130,32 @@ async function maybeYield(
  * @param nodes - The node snapshots to process
  * @param styleTable - Where style values are interned (the compression seam)
  * @param options - Traversal options (depth limit, scheduler, progress counter)
- * @returns Processed nodes plus the component definitions found during the walk
+ * @returns The processed nodes
  */
 export async function walkNodes(
   nodes: NodeSnapshot[],
   styleTable: StyleTable,
   options: TraversalOptions = {},
-): Promise<{
-  nodes: SimplifiedNode[];
-  componentDefs: ComponentDefinitionMap;
-}> {
+): Promise<SimplifiedNode[]> {
   const context: SimplifyContext = {
     styles: styleTable,
-    componentDefs: {},
     currentDepth: 0,
     insideComponentDefinition: false,
+    overrides: NO_OVERRIDES,
     nodeCounter: options.nodeCounter ?? { count: 0 },
   };
 
   const processedNodes: SimplifiedNode[] = [];
   for (const node of nodes) {
     if (!shouldProcessNode(node, context)) continue;
-    processedNodes.push(await extractNode(node, context, options));
+    // A root INSTANCE's own override entry lives in its own list — install it before
+    // extraction so the instance node itself reads it like any sublayer would.
+    processedNodes.push(
+      await extractNode(node, { ...context, overrides: overridesOf(node, context) }, options),
+    );
   }
 
-  return {
-    nodes: processedNodes,
-    componentDefs: context.componentDefs,
-  };
+  return processedNodes;
 }
 
 /**
@@ -211,7 +204,13 @@ async function extractNode(
     for (const idx of order) {
       const child = node.children[idx];
       if (!shouldProcessNode(child, childContext)) continue;
-      children.push(await extractNode(child, childContext, options));
+      children.push(
+        await extractNode(
+          child,
+          { ...childContext, overrides: overridesOf(child, childContext) },
+          options,
+        ),
+      );
     }
 
     if (children.length > 0) {
@@ -225,6 +224,19 @@ async function extractNode(
   }
 
   return result;
+}
+
+const NO_OVERRIDES: ReadonlyMap<string, string[]> = new Map();
+
+/**
+ * The override map a node and its subtree read from: an INSTANCE installs its own
+ * list (replacing the enclosing one — see `SimplifyContext.overrides`); every other
+ * node inherits the enclosing instance's.
+ */
+function overridesOf(node: NodeSnapshot, context: SimplifyContext): ReadonlyMap<string, string[]> {
+  if (node.type !== "INSTANCE") return context.overrides;
+  if (!node.overrides?.length) return NO_OVERRIDES;
+  return new Map(node.overrides.map((entry) => [entry.id, entry.fields]));
 }
 
 /**
@@ -349,8 +361,9 @@ function extractVisuals(
 
 /**
  * Extracts component-related properties from nodes.
- * Handles three cases: INSTANCE property values, property references on any node,
- * and property definitions on COMPONENT/COMPONENT_SET nodes.
+ * Handles four cases: INSTANCE property values, property references on any node,
+ * property definitions on COMPONENT/COMPONENT_SET nodes, and the override marker on
+ * any node the enclosing instance lists.
  */
 function extractComponent(
   node: NodeSnapshot,
@@ -378,15 +391,23 @@ function extractComponent(
     }
   }
 
-  // Component/ComponentSet definitions: collect property definitions
+  // Component/ComponentSet definitions stay on the defining node — the one place
+  // both producers can put them (the plugin has no response envelope to fill).
   if (
     (node.type === "COMPONENT" || node.type === "COMPONENT_SET") &&
     node.componentPropertyDefinitions
   ) {
     const defs = simplifyPropertyDefinitions(node.componentPropertyDefinitions);
     if (Object.keys(defs).length > 0) {
-      context.componentDefs[node.id] = defs;
+      result.propertyDefinitions = defs;
     }
+  }
+
+  // Override marker: the output fields the designer changed on this node.
+  const overridden = context.overrides.get(node.id);
+  if (overridden) {
+    const fields = simplifyOverriddenFields(overridden);
+    if (fields.length > 0) result.overrides = fields;
   }
 }
 

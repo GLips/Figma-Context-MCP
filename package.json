@@ -59,7 +59,7 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
-    "@figma/rest-api-spec": "^0.37.0",
+    "@figma/rest-api-spec": "^0.42.0",
     "@jimp/core": "^1.6.0",
     "@jimp/js-gif": "^1.6.0",
     "@jimp/js-jpeg": "^1.6.0",

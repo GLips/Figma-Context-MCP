@@ -14,7 +14,6 @@ import { restNodeToSnapshot } from "./node-to-snapshot.js";
 import type {
   SimplifiedComponentDefinition,
   SimplifiedComponentSetDefinition,
-  SimplifiedPropertyDefinition,
 } from "~/core/transformers/component.js";
 
 // Yield to the Node event loop between walk batches so progress heartbeats,
@@ -37,7 +36,7 @@ export async function simplifyRestResponse(
 
   // Run the core with egress compression on: this is the shipped REST tool's
   // output form (ref-deduplicated styles + templates).
-  const { nodes, styles, templates, componentDefinitions } = await simplify(snapshots, {
+  const { nodes, styles, templates } = await simplify(snapshots, {
     ...options,
     compress: true,
     scheduler: eventLoopYield,
@@ -46,8 +45,8 @@ export async function simplifyRestResponse(
   return {
     name,
     nodes,
-    components: simplifyComponents(components, componentDefinitions),
-    componentSets: simplifyComponentSets(componentSets, componentDefinitions),
+    components: simplifyComponents(components),
+    componentSets: simplifyComponentSets(componentSets),
     styles,
     templates,
   };
@@ -133,56 +132,33 @@ function parseAPIResponse(data: GetFileResponse | GetFileNodesResponse) {
 }
 
 /*
- * Decode the top-level `components` / `componentSets` tables into the
- * simplified definition maps the output carries. These tables are a
- * REST-specific coupling spot (Invariant 2) — they live outside the node tree
- * in the API response, so they're parsed here rather than in the core walk. The
- * per-node component simplifiers stay in core/transformers/component.ts
- * (Figma-free).
+ * Decode the top-level `components` / `componentSets` tables into the provenance
+ * maps the output carries. These tables are a REST-specific coupling spot
+ * (Invariant 2) — they live outside the node tree in the API response, so
+ * they're parsed here rather than in the core walk. They carry NO property
+ * definitions: the wire never has them here (only on the defining node in the
+ * tree, where the core emits them), so a component outside the fetched subtree
+ * is nameable from this table but its properties are not visible.
  */
 
-/**
- * Remove unnecessary component properties and convert to simplified format.
- */
 function simplifyComponents(
   aggregatedComponents: Record<string, Component>,
-  propertyDefinitions?: Record<string, Record<string, SimplifiedPropertyDefinition>>,
 ): Record<string, SimplifiedComponentDefinition> {
   return Object.fromEntries(
     Object.entries(aggregatedComponents).map(([id, comp]) => [
       id,
-      {
-        id,
-        key: comp.key,
-        name: comp.name,
-        componentSetId: comp.componentSetId,
-        ...(propertyDefinitions?.[id] && {
-          propertyDefinitions: propertyDefinitions[id],
-        }),
-      },
+      { id, key: comp.key, name: comp.name, componentSetId: comp.componentSetId },
     ]),
   );
 }
 
-/**
- * Remove unnecessary component set properties and convert to simplified format.
- */
 function simplifyComponentSets(
   aggregatedComponentSets: Record<string, ComponentSet>,
-  propertyDefinitions?: Record<string, Record<string, SimplifiedPropertyDefinition>>,
 ): Record<string, SimplifiedComponentSetDefinition> {
   return Object.fromEntries(
     Object.entries(aggregatedComponentSets).map(([id, set]) => [
       id,
-      {
-        id,
-        key: set.key,
-        name: set.name,
-        description: set.description,
-        ...(propertyDefinitions?.[id] && {
-          propertyDefinitions: propertyDefinitions[id],
-        }),
-      },
+      { id, key: set.key, name: set.name, description: set.description },
     ]),
   );
 }

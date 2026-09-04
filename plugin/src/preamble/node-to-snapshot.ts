@@ -229,14 +229,22 @@ export interface SceneNodeLike {
   readonly effectStyleId?: string;
   readonly gridStyleId?: string;
 
-  // Component metadata
+  // Component metadata. The value/defaultValue are `unknown` on purpose: a SLOT property's is a
+  // `{ guid }` object on the wire (REST verified live; the plugin typings still say `string | boolean`),
+  // and the decode below keeps only the scalars.
   readonly componentProperties?: {
-    readonly [key: string]: { readonly type: string; readonly value: boolean | string };
+    readonly [key: string]: { readonly type: string; readonly value: unknown };
   };
   readonly componentPropertyDefinitions?: {
-    readonly [key: string]: { readonly type: string; readonly defaultValue: boolean | string };
+    readonly [key: string]: {
+      readonly type: string;
+      readonly defaultValue: unknown;
+      readonly variantOptions?: ReadonlyArray<string>;
+    };
   };
   readonly getMainComponentAsync?: () => Promise<{ readonly id: string } | null>;
+  /** INSTANCE: direct overrides on its sublayers, plugin field spellings (`NodeChangeProperty`). */
+  readonly overrides?: ReadonlyArray<{ readonly id: string; readonly overriddenFields: ReadonlyArray<string> }>;
 }
 
 /** The node's own top-left corner as the live node states it, or undefined if it has none. */
@@ -406,6 +414,10 @@ async function sceneSubtreeToSnapshot(
     componentId: await mainComponentId(node),
     componentProperties: decodeComponentProps(node),
     componentPropertyDefinitions: decodePropertyDefinitions(node),
+    overrides:
+      node.type === "INSTANCE" && node.overrides?.length
+        ? node.overrides.map((entry) => ({ id: entry.id, fields: [...entry.overriddenFields] }))
+        : undefined,
 
     // Wire-divergent encodings, decoded rather than carried. Mixed TEXT fills
     // (per-run colors) fall back to the base run's fills — REST does the same,
@@ -780,11 +792,20 @@ async function mainComponentId(node: SceneNodeLike): Promise<string | undefined>
   return main?.id;
 }
 
+function isScalarPropertyValue(value: unknown): value is boolean | string {
+  return typeof value === "boolean" || typeof value === "string";
+}
+
+/**
+ * An instance's property values, minus SLOT entries: their `{ guid }` value names the slot's content
+ * container, which is already the SLOT node in this instance's subtree — the REST adapter drops them
+ * the same way.
+ */
 function decodeComponentProps(node: SceneNodeLike): NodeSnapshot["componentProperties"] {
   if (node.type !== "INSTANCE" || !node.componentProperties) return undefined;
   const out: Record<string, { type: string; value: boolean | string }> = {};
   for (const [key, { type, value }] of Object.entries(node.componentProperties)) {
-    out[key] = { type, value };
+    if (isScalarPropertyValue(value)) out[key] = { type, value };
   }
   return Object.keys(out).length ? out : undefined;
 }
@@ -792,16 +813,23 @@ function decodeComponentProps(node: SceneNodeLike): NodeSnapshot["componentPrope
 /**
  * Property definitions live on a COMPONENT_SET or a standalone COMPONENT — reading the property on a
  * set's variant COMPONENT throws in the live API (the set owns them), so the variant case is skipped
- * by parent check before the access.
+ * by parent check before the access. REST agrees: a variant carries none on the wire either.
+ *
+ * Every type survives, a SLOT def keeping its type and losing only its `{ guid }` default;
+ * `variantOptions` rides along for VARIANT. `preferredValues` / `slotSettings` / `description` are
+ * deliberately not carried — nothing downstream needs them to reproduce or modify an instance.
  */
 function decodePropertyDefinitions(node: SceneNodeLike): NodeSnapshot["componentPropertyDefinitions"] {
   const owns =
     node.type === "COMPONENT_SET" ||
     (node.type === "COMPONENT" && node.parent?.type !== "COMPONENT_SET");
   if (!owns || !node.componentPropertyDefinitions) return undefined;
-  const out: Record<string, { type: string; defaultValue: boolean | string }> = {};
-  for (const [key, { type, defaultValue }] of Object.entries(node.componentPropertyDefinitions)) {
-    out[key] = { type, defaultValue };
+  const out: NonNullable<NodeSnapshot["componentPropertyDefinitions"]> = {};
+  for (const [key, def] of Object.entries(node.componentPropertyDefinitions)) {
+    const decoded: (typeof out)[string] = { type: def.type };
+    if (isScalarPropertyValue(def.defaultValue)) decoded.defaultValue = def.defaultValue;
+    if (def.variantOptions) decoded.variantOptions = [...def.variantOptions];
+    out[key] = decoded;
   }
   return Object.keys(out).length ? out : undefined;
 }

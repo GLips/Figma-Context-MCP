@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       '@figma/rest-api-spec':
-        specifier: ^0.37.0
-        version: 0.37.0
+        specifier: ^0.42.0
+        version: 0.42.0
       '@jimp/core':
         specifier: ^1.6.0
         version: 1.6.1
@@ -125,8 +125,8 @@ importers:
         version: 4.4.3
     devDependencies:
       '@figma/plugin-typings':
-        specifier: ^1.133.0
-        version: 1.133.0
+        specifier: ^1.138.0
+        version: 1.138.0
       esbuild:
         specifier: ^0.28.1
         version: 0.28.1
@@ -489,11 +489,11 @@ packages:
     resolution: {integrity: sha512-43/qtrDUokr7LJqoF2c3+RInu/t4zfrpYdoSDfYyhg52rwLV6TnOvdG4fXm7IkSB3wErkcmJS9iEhjVtOSEjjA==}
     engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
 
-  '@figma/plugin-typings@1.133.0':
-    resolution: {integrity: sha512-MAM1zACY7JB18gO6B0ZaMquCk/xPhbk4Dkug3KGTN7H/M3fO2tZ0h/05b1umDiKA/P1ZEXbLraNyffaVFkFpXw==}
+  '@figma/plugin-typings@1.138.0':
+    resolution: {integrity: sha512-bLP9wRf8c0e4z5GbXpDUXd7YNPXEDpgyeMmTe8Lm4EWMU8JEO1DFRfj1NaucIeRSurbde8y7xS1jas60LTTDaw==}
 
-  '@figma/rest-api-spec@0.37.0':
-    resolution: {integrity: sha512-KKeCgSRiO2gajT/sKCAsn48ubl8NRbYqyIvfkk5+NPK2ar+DVuLKg3fl3/cR1WharC5Dg4V5a9JzDsYv04k50g==}
+  '@figma/rest-api-spec@0.42.0':
+    resolution: {integrity: sha512-rx/44oRn3wFrSznwPev71KR/91RW/BNpKu4I5Z3cTpU2z6Zv/zhJwfeYmJGg4Tu2goQXoQrzv3UjNq1Ep6LcYQ==}
 
   '@hono/node-server@1.19.10':
     resolution: {integrity: sha512-hZ7nOssGqRgyV3FVVQdfi+U4q02uB23bpnYpdvNXkYTRRyWx84b7yf1ans+dnJ/7h41sGL3CeQTfO+ZGxuO+Iw==}
@@ -1172,6 +1172,7 @@ packages:
   eslint@9.39.3:
     resolution: {integrity: sha512-VmQ+sifHUbI/IcSopBCF/HO3YiHQx/AVd3UVyYL6weuwW+HvON9VYn5l6Zl1WZzPWXPNZrSQpxwkkZ/VuvJZzg==}
     engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
+    deprecated: This version is no longer supported. Please see https://eslint.org/version-support for other options.
     hasBin: true
     peerDependencies:
       jiti: '*'
@@ -2357,9 +2358,9 @@ snapshots:
       '@eslint/core': 0.17.0
       levn: 0.4.1
 
-  '@figma/plugin-typings@1.133.0': {}
+  '@figma/plugin-typings@1.138.0': {}
 
-  '@figma/rest-api-spec@0.37.0': {}
+  '@figma/rest-api-spec@0.42.0': {}
 
   '@hono/node-server@1.19.10(hono@4.12.5)':
     dependencies:

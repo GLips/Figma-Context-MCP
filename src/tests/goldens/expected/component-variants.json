@@ -1,0 +1,294 @@
+{
+  "name": "Component Variants",
+  "nodes": [
+    {
+      "id": "11:1",
+      "name": "Components Board",
+      "type": "FRAME",
+      "width": "contextual",
+      "height": "contextual",
+      "designedWidth": "600px",
+      "designedHeight": "400px",
+      "children": [
+        {
+          "id": "11:2",
+          "name": "Button",
+          "type": "COMPONENT_SET",
+          "width": 260,
+          "height": 60,
+          "left": 0,
+          "top": 0,
+          "propertyDefinitions": {
+            "Variant": {
+              "type": "variant",
+              "defaultValue": "Secondary",
+              "variantOptions": [
+                "Secondary",
+                "Primary"
+              ]
+            },
+            "Left Icon": {
+              "type": "boolean",
+              "defaultValue": true
+            }
+          },
+          "children": [
+            {
+              "id": "11:3",
+              "name": "Variant=Secondary",
+              "type": "COMPONENT",
+              "width": 120,
+              "height": 40,
+              "left": 10,
+              "top": 10,
+              "fills": "fill_fa76e12e",
+              "borderRadius": "6px",
+              "children": [
+                {
+                  "id": "11:4",
+                  "name": "Label",
+                  "type": "TEXT",
+                  "width": 88,
+                  "height": 20,
+                  "left": 16,
+                  "top": 10,
+                  "text": "Button",
+                  "textStyle": "style_9f723b14",
+                  "fills": "fill_34dc0314"
+                }
+              ]
+            },
+            {
+              "id": "11:5",
+              "name": "Variant=Primary",
+              "type": "COMPONENT",
+              "width": 120,
+              "height": 40,
+              "left": 130,
+              "top": 10,
+              "fills": "fill_016763b9",
+              "borderRadius": "6px",
+              "children": [
+                {
+                  "id": "11:6",
+                  "name": "Label",
+                  "type": "TEXT",
+                  "width": 88,
+                  "height": 20,
+                  "left": 16,
+                  "top": 10,
+                  "text": "Button",
+                  "textStyle": "style_9f723b14",
+                  "fills": "fill_658ab2fa"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "11:7",
+          "name": "Primary Button",
+          "type": "INSTANCE",
+          "width": 120,
+          "height": 40,
+          "left": 300,
+          "top": 10,
+          "fills": "fill_016763b9",
+          "borderRadius": "6px",
+          "componentId": "11:5",
+          "componentProperties": {
+            "Left Icon": false
+          },
+          "children": [
+            {
+              "id": "I11:7;11:6",
+              "name": "Label",
+              "type": "TEXT",
+              "width": 88,
+              "height": 20,
+              "left": 16,
+              "top": 10,
+              "text": "Save",
+              "textStyle": "style_9f723b14",
+              "fills": "fill_658ab2fa",
+              "overrides": [
+                "text"
+              ]
+            }
+          ]
+        },
+        {
+          "id": "11:8",
+          "name": "Card",
+          "type": "COMPONENT",
+          "width": 200,
+          "height": 120,
+          "left": 0,
+          "top": 100,
+          "layout": "layout_5597a813",
+          "propertyDefinitions": {
+            "Icon": {
+              "type": "instance_swap",
+              "defaultValue": "11:3"
+            },
+            "Content": {
+              "type": "slot"
+            }
+          },
+          "children": [
+            {
+              "id": "11:9",
+              "name": "Icon",
+              "type": "INSTANCE",
+              "width": 120,
+              "height": 40,
+              "fills": "fill_fa76e12e",
+              "componentId": "11:3",
+              "componentPropertyReferences": {
+                "componentId": "Icon"
+              }
+            },
+            {
+              "id": "11:10",
+              "name": "Content",
+              "type": "SLOT",
+              "width": 200,
+              "height": 20,
+              "layout": "layout_0ad31796",
+              "componentPropertyReferences": {
+                "slot": "Content"
+              },
+              "children": [
+                {
+                  "id": "11:11",
+                  "name": "Placeholder",
+                  "type": "TEXT",
+                  "text": "Slot content",
+                  "textStyle": "style_9f723b14",
+                  "fills": [
+                    "#808080"
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "11:12",
+          "name": "Card Instance",
+          "type": "INSTANCE",
+          "width": 200,
+          "height": 140,
+          "left": 300,
+          "top": 100,
+          "layout": "layout_5597a813",
+          "componentId": "11:8",
+          "componentProperties": {
+            "Icon": "11:5"
+          },
+          "overrides": [
+            "height"
+          ],
+          "children": [
+            {
+              "id": "I11:12;11:9",
+              "name": "Icon",
+              "type": "INSTANCE",
+              "width": 120,
+              "height": 40,
+              "fills": "fill_016763b9",
+              "componentId": "11:5",
+              "componentPropertyReferences": {
+                "componentId": "Icon"
+              }
+            },
+            {
+              "id": "I11:12;11:10",
+              "name": "Content",
+              "type": "SLOT",
+              "width": 200,
+              "height": 40,
+              "layout": "layout_0ad31796",
+              "componentPropertyReferences": {
+                "slot": "Content"
+              },
+              "children": [
+                {
+                  "id": "11:20",
+                  "name": "Filled Line",
+                  "type": "TEXT",
+                  "text": "Hello world",
+                  "textStyle": "style_9f723b14",
+                  "fills": "fill_34dc0314"
+                },
+                {
+                  "id": "11:21",
+                  "name": "Filled Line 2",
+                  "type": "TEXT",
+                  "text": "Second line",
+                  "textStyle": "style_9f723b14",
+                  "fills": "fill_34dc0314"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "components": {
+    "11:3": {
+      "id": "11:3",
+      "key": "k-secondary",
+      "name": "Variant=Secondary",
+      "componentSetId": "11:2"
+    },
+    "11:5": {
+      "id": "11:5",
+      "key": "k-primary",
+      "name": "Variant=Primary",
+      "componentSetId": "11:2"
+    },
+    "11:8": {
+      "id": "11:8",
+      "key": "k-card",
+      "name": "Card"
+    }
+  },
+  "componentSets": {
+    "11:2": {
+      "id": "11:2",
+      "key": "k-button-set",
+      "name": "Button",
+      "description": ""
+    }
+  },
+  "styles": {
+    "fill_fa76e12e": [
+      "#E6E6E6"
+    ],
+    "style_9f723b14": {
+      "fontFamily": "Inter",
+      "fontWeight": 400,
+      "fontSize": 14,
+      "lineHeight": "20px"
+    },
+    "fill_34dc0314": [
+      "#000000"
+    ],
+    "fill_016763b9": [
+      "#3366FF"
+    ],
+    "fill_658ab2fa": [
+      "#FFFFFF"
+    ],
+    "layout_5597a813": {
+      "mode": "column",
+      "gap": "8px"
+    },
+    "layout_0ad31796": {
+      "mode": "column"
+    }
+  },
+  "templates": {}
+}

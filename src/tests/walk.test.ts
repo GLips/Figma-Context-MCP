@@ -23,12 +23,12 @@ async function walk(
   extraStyles?: Record<string, Style>,
 ) {
   const sink = createRefStyleTable();
-  const { nodes: extracted, componentDefs } = await walkNodes(
+  const extracted = await walkNodes(
     nodes.map((node) => restNodeToSnapshot(node, extraStyles)),
     sink,
     options,
   );
-  return { nodes: extracted, styles: sink.styles, componentDefs };
+  return { nodes: extracted, styles: sink.styles };
 }
 
 // A small but representative node tree:
@@ -578,7 +578,7 @@ describe("component property support", () => {
     expect(instance.children![0].name).toBe("Title");
   });
 
-  it("collects componentPropertyDefinitions during traversal", async () => {
+  it("emits every property definition type on the defining node", async () => {
     const componentNode = makeNode({
       id: "12:1",
       name: "Product Card",
@@ -587,17 +587,114 @@ describe("component property support", () => {
         "On Sale#341:0": { type: "BOOLEAN", defaultValue: true },
         "Title#341:1": { type: "TEXT", defaultValue: "Product Name" },
         "Icon#341:2": { type: "INSTANCE_SWAP", defaultValue: "999:1" },
+        // A SLOT default is a { guid } object on the wire — kept as a type, default dropped.
+        "Content#341:3": { type: "SLOT", defaultValue: { guid: { sessionID: -1, localID: -1 } } },
       },
       children: [makeNode({ id: "12:2", name: "Title", type: "TEXT", characters: "Product Name" })],
     });
 
-    const { componentDefs } = await walk([componentNode]);
+    const { nodes } = await walk([componentNode]);
 
-    expect(componentDefs["12:1"]).toEqual({
+    expect(nodes[0].propertyDefinitions).toEqual({
       "On Sale": { type: "boolean", defaultValue: true },
       Title: { type: "text", defaultValue: "Product Name" },
+      Icon: { type: "instance_swap", defaultValue: "999:1" },
+      Content: { type: "slot" },
     });
-    expect(componentDefs["12:1"]).not.toHaveProperty("Icon");
+  });
+
+  it("emits a set's variant axes with their options, and none on the variant children", async () => {
+    const setNode = makeNode({
+      id: "16:1",
+      name: "Button",
+      type: "COMPONENT_SET",
+      componentPropertyDefinitions: {
+        Variant: {
+          type: "VARIANT",
+          defaultValue: "Secondary",
+          variantOptions: ["Secondary", "Primary"],
+        },
+      },
+      children: [
+        makeNode({ id: "16:2", name: "Variant=Secondary", type: "COMPONENT" }),
+        makeNode({ id: "16:3", name: "Variant=Primary", type: "COMPONENT" }),
+      ],
+    });
+
+    const { nodes } = await walk([setNode]);
+
+    expect(nodes[0].propertyDefinitions).toEqual({
+      Variant: {
+        type: "variant",
+        defaultValue: "Secondary",
+        variantOptions: ["Secondary", "Primary"],
+      },
+    });
+    expect(nodes[0].children![0].propertyDefinitions).toBeUndefined();
+  });
+
+  it("renames mainComponent and slotContentId references onto the fields they drive", async () => {
+    const componentNode = makeNode({
+      id: "17:1",
+      name: "Card",
+      type: "COMPONENT",
+      children: [
+        makeNode({
+          id: "17:2",
+          name: "Icon",
+          type: "INSTANCE",
+          componentId: "999:1",
+          componentPropertyReferences: { mainComponent: "Icon#341:2" },
+        }),
+        makeNode({
+          id: "17:3",
+          name: "Content",
+          type: "SLOT",
+          componentPropertyReferences: { slotContentId: "Content#341:3" },
+        }),
+      ],
+    });
+
+    const { nodes } = await walk([componentNode]);
+
+    const [icon, slot] = nodes[0].children!;
+    expect(icon.componentPropertyReferences).toEqual({ componentId: "Icon" });
+    expect(slot.type).toBe("SLOT");
+    expect(slot.componentPropertyReferences).toEqual({ slot: "Content" });
+  });
+
+  it("marks each overridden sublayer with the output fields the designer changed", async () => {
+    const instanceNode = makeNode({
+      id: "18:1",
+      name: "Card Instance",
+      type: "INSTANCE",
+      componentId: "17:1",
+      overrides: [
+        { id: "18:1", overriddenFields: ["width", "height"] },
+        // REST spells a text edit as four tables; they fold to one output field.
+        {
+          id: "I18:1;17:5",
+          overriddenFields: [
+            "characters",
+            "characterStyleOverrides",
+            "styleOverrideTable",
+            "fills",
+          ],
+        },
+        // A wire field with no output field (bound variables) contributes nothing.
+        { id: "I18:1;17:6", overriddenFields: ["boundVariables"] },
+      ],
+      children: [
+        makeNode({ id: "I18:1;17:5", name: "Label", type: "TEXT", characters: "Hi" }),
+        makeNode({ id: "I18:1;17:6", name: "Bg", type: "RECTANGLE" }),
+      ],
+    });
+
+    const { nodes } = await walk([instanceNode]);
+
+    expect(nodes[0].overrides).toEqual(["width", "height"]);
+    expect(nodes[0].children![0].overrides).toEqual(["text", "fills"]);
+    expect(nodes[0].children![1].overrides).toBeUndefined();
   });
 
   it("annotates componentPropertyReferences with characters→text rename", async () => {
@@ -622,7 +719,7 @@ describe("component property support", () => {
     expect(label.componentPropertyReferences).toEqual({ text: "Button Label" });
   });
 
-  it("simplifies instance componentProperties to Record format", async () => {
+  it("flattens instance componentProperties, keeping swaps and dropping variant + slot values", async () => {
     const instanceNode = makeNode({
       id: "14:1",
       name: "Card Instance",
@@ -631,6 +728,11 @@ describe("component property support", () => {
       componentProperties: {
         "On Sale": { type: "BOOLEAN", value: true },
         Title: { type: "TEXT", value: "My Product" },
+        "Icon#341:2": { type: "INSTANCE_SWAP", value: "999:2" },
+        // The variant is one join away (componentId → table name), so it isn't repeated here.
+        Size: { type: "VARIANT", value: "Large" },
+        // A SLOT value is a { guid } naming the slot node already in the subtree.
+        "Content#341:3": { type: "SLOT", value: { guid: { sessionID: 14, localID: 9 } } },
       },
       children: [makeNode({ id: "14:2", name: "Content", type: "FRAME" })],
     });
@@ -640,6 +742,7 @@ describe("component property support", () => {
     expect(nodes[0].componentProperties).toEqual({
       "On Sale": true,
       Title: "My Product",
+      Icon: "999:2",
     });
   });
 
@@ -706,7 +809,7 @@ describe("simplifyRestResponse", () => {
     expect(label.text).toBe("World");
   });
 
-  it("flows property definitions from tree traversal into component metadata", async () => {
+  it("keeps the components table to envelope provenance — definitions sit on the node", async () => {
     const componentNode = makeNode({
       id: "20:1",
       name: "Product Card",
@@ -742,7 +845,13 @@ describe("simplifyRestResponse", () => {
 
     const result = await simplifyRestResponse(mockResponse);
 
-    expect(result.components["20:1"].propertyDefinitions).toEqual({
+    expect(result.components["20:1"]).toEqual({
+      id: "20:1",
+      key: "abc123",
+      name: "Product Card",
+      componentSetId: undefined,
+    });
+    expect(result.nodes[0].propertyDefinitions).toEqual({
       "On Sale": { type: "boolean", defaultValue: true },
       Title: { type: "text", defaultValue: "Product Name" },
     });

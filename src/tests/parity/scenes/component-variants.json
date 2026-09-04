@@ -1,0 +1,659 @@
+{
+  "nodes": [
+    {
+      "id": "11:1",
+      "name": "Components Board",
+      "type": "FRAME",
+      "visible": true,
+      "absoluteBoundingBox": {
+        "x": 0,
+        "y": 0,
+        "width": 600,
+        "height": 400
+      },
+      "width": 600,
+      "height": 400,
+      "x": 0,
+      "y": 0,
+      "clipsContent": false,
+      "children": [
+        {
+          "id": "11:2",
+          "name": "Button",
+          "type": "COMPONENT_SET",
+          "visible": true,
+          "parent": {
+            "type": "FRAME"
+          },
+          "absoluteBoundingBox": {
+            "x": 0,
+            "y": 0,
+            "width": 260,
+            "height": 60
+          },
+          "width": 260,
+          "height": 60,
+          "x": 0,
+          "y": 0,
+          "clipsContent": false,
+          "componentPropertyDefinitions": {
+            "Variant": {
+              "type": "VARIANT",
+              "defaultValue": "Secondary",
+              "variantOptions": ["Secondary", "Primary"]
+            },
+            "Left Icon#920:0": {
+              "type": "BOOLEAN",
+              "defaultValue": true
+            }
+          },
+          "children": [
+            {
+              "id": "11:3",
+              "name": "Variant=Secondary",
+              "type": "COMPONENT",
+              "visible": true,
+              "parent": {
+                "type": "COMPONENT_SET"
+              },
+              "absoluteBoundingBox": {
+                "x": 10,
+                "y": 10,
+                "width": 120,
+                "height": 40
+              },
+              "width": 120,
+              "height": 40,
+              "x": 10,
+              "y": 10,
+              "clipsContent": true,
+              "cornerRadius": 6,
+              "fills": [
+                {
+                  "type": "SOLID",
+                  "color": {
+                    "r": 0.9,
+                    "g": 0.9,
+                    "b": 0.9
+                  },
+                  "visible": true
+                }
+              ],
+              "children": [
+                {
+                  "id": "11:4",
+                  "name": "Label",
+                  "type": "TEXT",
+                  "visible": true,
+                  "absoluteBoundingBox": {
+                    "x": 26,
+                    "y": 20,
+                    "width": 88,
+                    "height": 20
+                  },
+                  "width": 88,
+                  "height": 20,
+                  "x": 16,
+                  "y": 10,
+                  "fills": [
+                    {
+                      "type": "SOLID",
+                      "color": {
+                        "r": 0,
+                        "g": 0,
+                        "b": 0
+                      },
+                      "visible": true
+                    }
+                  ],
+                  "characters": "Button",
+                  "textAlignHorizontal": "LEFT",
+                  "textAlignVertical": "TOP",
+                  "styledTextSegments": [
+                    {
+                      "characters": "Button",
+                      "fontName": {
+                        "family": "Inter"
+                      },
+                      "fontWeight": 400,
+                      "fontSize": 14,
+                      "lineHeight": {
+                        "unit": "PIXELS",
+                        "value": 20
+                      }
+                    }
+                  ]
+                }
+              ],
+              "layoutSizingHorizontal": "FIXED",
+              "layoutSizingVertical": "FIXED"
+            },
+            {
+              "id": "11:5",
+              "name": "Variant=Primary",
+              "type": "COMPONENT",
+              "visible": true,
+              "parent": {
+                "type": "COMPONENT_SET"
+              },
+              "absoluteBoundingBox": {
+                "x": 130,
+                "y": 10,
+                "width": 120,
+                "height": 40
+              },
+              "width": 120,
+              "height": 40,
+              "x": 130,
+              "y": 10,
+              "clipsContent": true,
+              "cornerRadius": 6,
+              "fills": [
+                {
+                  "type": "SOLID",
+                  "color": {
+                    "r": 0.2,
+                    "g": 0.4,
+                    "b": 1
+                  },
+                  "visible": true
+                }
+              ],
+              "children": [
+                {
+                  "id": "11:6",
+                  "name": "Label",
+                  "type": "TEXT",
+                  "visible": true,
+                  "absoluteBoundingBox": {
+                    "x": 146,
+                    "y": 20,
+                    "width": 88,
+                    "height": 20
+                  },
+                  "width": 88,
+                  "height": 20,
+                  "x": 16,
+                  "y": 10,
+                  "fills": [
+                    {
+                      "type": "SOLID",
+                      "color": {
+                        "r": 1,
+                        "g": 1,
+                        "b": 1
+                      },
+                      "visible": true
+                    }
+                  ],
+                  "characters": "Button",
+                  "textAlignHorizontal": "LEFT",
+                  "textAlignVertical": "TOP",
+                  "styledTextSegments": [
+                    {
+                      "characters": "Button",
+                      "fontName": {
+                        "family": "Inter"
+                      },
+                      "fontWeight": 400,
+                      "fontSize": 14,
+                      "lineHeight": {
+                        "unit": "PIXELS",
+                        "value": 20
+                      }
+                    }
+                  ]
+                }
+              ],
+              "layoutSizingHorizontal": "FIXED",
+              "layoutSizingVertical": "FIXED"
+            }
+          ],
+          "layoutSizingHorizontal": "FIXED",
+          "layoutSizingVertical": "FIXED"
+        },
+        {
+          "id": "11:7",
+          "name": "Primary Button",
+          "type": "INSTANCE",
+          "visible": true,
+          "absoluteBoundingBox": {
+            "x": 300,
+            "y": 10,
+            "width": 120,
+            "height": 40
+          },
+          "width": 120,
+          "height": 40,
+          "x": 300,
+          "y": 10,
+          "clipsContent": true,
+          "cornerRadius": 6,
+          "fills": [
+            {
+              "type": "SOLID",
+              "color": {
+                "r": 0.2,
+                "g": 0.4,
+                "b": 1
+              },
+              "visible": true
+            }
+          ],
+          "mainComponentId": "11:5",
+          "componentProperties": {
+            "Variant": {
+              "type": "VARIANT",
+              "value": "Primary"
+            },
+            "Left Icon#920:0": {
+              "type": "BOOLEAN",
+              "value": false
+            }
+          },
+          "overrides": [
+            {
+              "id": "I11:7;11:6",
+              "overriddenFields": ["characters", "styledTextSegments"]
+            }
+          ],
+          "children": [
+            {
+              "id": "I11:7;11:6",
+              "name": "Label",
+              "type": "TEXT",
+              "visible": true,
+              "absoluteBoundingBox": {
+                "x": 316,
+                "y": 20,
+                "width": 88,
+                "height": 20
+              },
+              "width": 88,
+              "height": 20,
+              "x": 16,
+              "y": 10,
+              "fills": [
+                {
+                  "type": "SOLID",
+                  "color": {
+                    "r": 1,
+                    "g": 1,
+                    "b": 1
+                  },
+                  "visible": true
+                }
+              ],
+              "characters": "Save",
+              "textAlignHorizontal": "LEFT",
+              "textAlignVertical": "TOP",
+              "styledTextSegments": [
+                {
+                  "characters": "Save",
+                  "fontName": {
+                    "family": "Inter"
+                  },
+                  "fontWeight": 400,
+                  "fontSize": 14,
+                  "lineHeight": {
+                    "unit": "PIXELS",
+                    "value": 20
+                  }
+                }
+              ]
+            }
+          ],
+          "layoutSizingHorizontal": "FIXED",
+          "layoutSizingVertical": "FIXED"
+        },
+        {
+          "id": "11:8",
+          "name": "Card",
+          "type": "COMPONENT",
+          "visible": true,
+          "parent": {
+            "type": "FRAME"
+          },
+          "absoluteBoundingBox": {
+            "x": 0,
+            "y": 100,
+            "width": 200,
+            "height": 120
+          },
+          "width": 200,
+          "height": 120,
+          "x": 0,
+          "y": 100,
+          "clipsContent": true,
+          "layoutMode": "VERTICAL",
+          "itemSpacing": 8,
+          "componentPropertyDefinitions": {
+            "Icon#920:4": {
+              "type": "INSTANCE_SWAP",
+              "defaultValue": "11:3",
+              "preferredValues": []
+            },
+            "Content#2949:0": {
+              "type": "SLOT",
+              "defaultValue": {
+                "guid": {
+                  "sessionID": -1,
+                  "localID": -1
+                }
+              },
+              "preferredValues": [],
+              "slotSettings": {
+                "minChildren": 1
+              }
+            }
+          },
+          "children": [
+            {
+              "id": "11:9",
+              "name": "Icon",
+              "type": "INSTANCE",
+              "visible": true,
+              "absoluteBoundingBox": {
+                "x": 0,
+                "y": 100,
+                "width": 120,
+                "height": 40
+              },
+              "width": 120,
+              "height": 40,
+              "x": 0,
+              "y": 0,
+              "clipsContent": true,
+              "fills": [
+                {
+                  "type": "SOLID",
+                  "color": {
+                    "r": 0.9,
+                    "g": 0.9,
+                    "b": 0.9
+                  },
+                  "visible": true
+                }
+              ],
+              "mainComponentId": "11:3",
+              "componentPropertyReferences": {
+                "mainComponent": "Icon#920:4"
+              },
+              "overrides": [],
+              "layoutSizingHorizontal": "FIXED",
+              "layoutSizingVertical": "FIXED"
+            },
+            {
+              "id": "11:10",
+              "name": "Content",
+              "type": "SLOT",
+              "visible": true,
+              "absoluteBoundingBox": {
+                "x": 0,
+                "y": 148,
+                "width": 200,
+                "height": 20
+              },
+              "width": 200,
+              "height": 20,
+              "x": 0,
+              "y": 48,
+              "clipsContent": true,
+              "layoutMode": "VERTICAL",
+              "componentPropertyReferences": {
+                "slotContentId": "Content#2949:0"
+              },
+              "limitViolations": [],
+              "children": [
+                {
+                  "id": "11:11",
+                  "name": "Placeholder",
+                  "type": "TEXT",
+                  "visible": true,
+                  "absoluteBoundingBox": {
+                    "x": 0,
+                    "y": 148,
+                    "width": 200,
+                    "height": 20
+                  },
+                  "width": 200,
+                  "height": 20,
+                  "x": 0,
+                  "y": 0,
+                  "fills": [
+                    {
+                      "type": "SOLID",
+                      "color": {
+                        "r": 0.5,
+                        "g": 0.5,
+                        "b": 0.5
+                      },
+                      "visible": true
+                    }
+                  ],
+                  "characters": "Slot content",
+                  "textAlignHorizontal": "LEFT",
+                  "textAlignVertical": "TOP",
+                  "styledTextSegments": [
+                    {
+                      "characters": "Slot content",
+                      "fontName": {
+                        "family": "Inter"
+                      },
+                      "fontWeight": 400,
+                      "fontSize": 14,
+                      "lineHeight": {
+                        "unit": "PIXELS",
+                        "value": 20
+                      }
+                    }
+                  ]
+                }
+              ],
+              "layoutSizingHorizontal": "FIXED",
+              "layoutSizingVertical": "FIXED"
+            }
+          ],
+          "layoutSizingHorizontal": "FIXED",
+          "layoutSizingVertical": "FIXED"
+        },
+        {
+          "id": "11:12",
+          "name": "Card Instance",
+          "type": "INSTANCE",
+          "visible": true,
+          "absoluteBoundingBox": {
+            "x": 300,
+            "y": 100,
+            "width": 200,
+            "height": 140
+          },
+          "width": 200,
+          "height": 140,
+          "x": 300,
+          "y": 100,
+          "clipsContent": true,
+          "layoutMode": "VERTICAL",
+          "itemSpacing": 8,
+          "mainComponentId": "11:8",
+          "componentProperties": {
+            "Icon#920:4": {
+              "type": "INSTANCE_SWAP",
+              "value": "11:5"
+            },
+            "Content#2949:0": {
+              "type": "SLOT",
+              "value": {
+                "guid": {
+                  "sessionID": 11,
+                  "localID": 20
+                }
+              }
+            }
+          },
+          "overrides": [
+            {
+              "id": "11:12",
+              "overriddenFields": ["height"]
+            }
+          ],
+          "children": [
+            {
+              "id": "I11:12;11:9",
+              "name": "Icon",
+              "type": "INSTANCE",
+              "visible": true,
+              "absoluteBoundingBox": {
+                "x": 300,
+                "y": 100,
+                "width": 120,
+                "height": 40
+              },
+              "width": 120,
+              "height": 40,
+              "x": 0,
+              "y": 0,
+              "clipsContent": true,
+              "fills": [
+                {
+                  "type": "SOLID",
+                  "color": {
+                    "r": 0.2,
+                    "g": 0.4,
+                    "b": 1
+                  },
+                  "visible": true
+                }
+              ],
+              "mainComponentId": "11:5",
+              "componentPropertyReferences": {
+                "mainComponent": "Icon#920:4"
+              },
+              "overrides": [],
+              "layoutSizingHorizontal": "FIXED",
+              "layoutSizingVertical": "FIXED"
+            },
+            {
+              "id": "I11:12;11:10",
+              "name": "Content",
+              "type": "SLOT",
+              "visible": true,
+              "absoluteBoundingBox": {
+                "x": 300,
+                "y": 148,
+                "width": 200,
+                "height": 40
+              },
+              "width": 200,
+              "height": 40,
+              "x": 0,
+              "y": 48,
+              "clipsContent": true,
+              "layoutMode": "VERTICAL",
+              "componentPropertyReferences": {
+                "slotContentId": "Content#2949:0"
+              },
+              "limitViolations": [],
+              "children": [
+                {
+                  "id": "11:20",
+                  "name": "Filled Line",
+                  "type": "TEXT",
+                  "visible": true,
+                  "absoluteBoundingBox": {
+                    "x": 300,
+                    "y": 148,
+                    "width": 200,
+                    "height": 20
+                  },
+                  "width": 200,
+                  "height": 20,
+                  "x": 0,
+                  "y": 0,
+                  "fills": [
+                    {
+                      "type": "SOLID",
+                      "color": {
+                        "r": 0,
+                        "g": 0,
+                        "b": 0
+                      },
+                      "visible": true
+                    }
+                  ],
+                  "characters": "Hello world",
+                  "textAlignHorizontal": "LEFT",
+                  "textAlignVertical": "TOP",
+                  "styledTextSegments": [
+                    {
+                      "characters": "Hello world",
+                      "fontName": {
+                        "family": "Inter"
+                      },
+                      "fontWeight": 400,
+                      "fontSize": 14,
+                      "lineHeight": {
+                        "unit": "PIXELS",
+                        "value": 20
+                      }
+                    }
+                  ]
+                },
+                {
+                  "id": "11:21",
+                  "name": "Filled Line 2",
+                  "type": "TEXT",
+                  "visible": true,
+                  "absoluteBoundingBox": {
+                    "x": 300,
+                    "y": 168,
+                    "width": 200,
+                    "height": 20
+                  },
+                  "width": 200,
+                  "height": 20,
+                  "x": 0,
+                  "y": 20,
+                  "fills": [
+                    {
+                      "type": "SOLID",
+                      "color": {
+                        "r": 0,
+                        "g": 0,
+                        "b": 0
+                      },
+                      "visible": true
+                    }
+                  ],
+                  "characters": "Second line",
+                  "textAlignHorizontal": "LEFT",
+                  "textAlignVertical": "TOP",
+                  "styledTextSegments": [
+                    {
+                      "characters": "Second line",
+                      "fontName": {
+                        "family": "Inter"
+                      },
+                      "fontWeight": 400,
+                      "fontSize": 14,
+                      "lineHeight": {
+                        "unit": "PIXELS",
+                        "value": 20
+                      }
+                    }
+                  ]
+                }
+              ],
+              "layoutSizingHorizontal": "FIXED",
+              "layoutSizingVertical": "FIXED"
+            }
+          ],
+          "layoutSizingHorizontal": "FIXED",
+          "layoutSizingVertical": "FIXED"
+        }
+      ],
+      "layoutSizingHorizontal": "FIXED",
+      "layoutSizingVertical": "FIXED"
+    }
+  ]
+}

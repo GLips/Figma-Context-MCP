@@ -754,6 +754,268 @@ const groupedNodes = fileResponse("Grouped Nodes", [
   }),
 ]);
 
+// ---------------------------------------------------------------------------
+// 11. Component variants — the four component structures the read shape has to
+//     carry for a writer (fig-45): a COMPONENT_SET with two variants (the set owns
+//     the VARIANT definition; the variants carry none), an INSTANCE of one variant
+//     with a text override, a standalone COMPONENT with an INSTANCE_SWAP prop, a
+//     nested `mainComponent`-referenced instance and a SLOT, and an INSTANCE of
+//     that component with a filled slot. Every wire shape here is as REST sends it
+//     (verified live, file `Framelink`, 2026-09-04): SLOT is a node type and a
+//     property type the published spec lacks, the SLOT default/value is a `{ guid }`
+//     object, the slot node links to its property through `slotContentId`, and
+//     `overrides` lists direct overrides per instance level.
+// ---------------------------------------------------------------------------
+const componentVariants: GetFileNodesResponse = {
+  name: "Component Variants",
+  role: "owner",
+  lastModified: "2024-01-01",
+  thumbnailUrl: "",
+  version: "1",
+  editorType: "figma",
+  linkAccess: "view",
+  nodes: {
+    "11:1": {
+      document: node({
+        id: "11:1",
+        name: "Components Board",
+        type: "FRAME",
+        clipsContent: false,
+        absoluteBoundingBox: { x: 0, y: 0, width: 600, height: 400 },
+        layoutSizingHorizontal: "FIXED",
+        layoutSizingVertical: "FIXED",
+        children: [
+          node({
+            id: "11:2",
+            name: "Button",
+            type: "COMPONENT_SET",
+            clipsContent: false,
+            absoluteBoundingBox: { x: 0, y: 0, width: 260, height: 60 },
+            layoutSizingHorizontal: "FIXED",
+            layoutSizingVertical: "FIXED",
+            componentPropertyDefinitions: {
+              Variant: {
+                type: "VARIANT",
+                defaultValue: "Secondary",
+                variantOptions: ["Secondary", "Primary"],
+              },
+              "Left Icon#920:0": { type: "BOOLEAN", defaultValue: true },
+            },
+            children: [
+              node({
+                id: "11:3",
+                name: "Variant=Secondary",
+                type: "COMPONENT",
+                clipsContent: true,
+                absoluteBoundingBox: { x: 10, y: 10, width: 120, height: 40 },
+                layoutSizingHorizontal: "FIXED",
+                layoutSizingVertical: "FIXED",
+                cornerRadius: 6,
+                fills: [{ type: "SOLID", color: { r: 0.9, g: 0.9, b: 0.9, a: 1 }, visible: true }],
+                children: [
+                  node({
+                    id: "11:4",
+                    name: "Label",
+                    type: "TEXT",
+                    characters: "Button",
+                    absoluteBoundingBox: { x: 26, y: 20, width: 88, height: 20 },
+                    style: baseTextStyle,
+                    fills: [{ type: "SOLID", color: { r: 0, g: 0, b: 0, a: 1 }, visible: true }],
+                  }),
+                ],
+              }),
+              node({
+                id: "11:5",
+                name: "Variant=Primary",
+                type: "COMPONENT",
+                clipsContent: true,
+                absoluteBoundingBox: { x: 130, y: 10, width: 120, height: 40 },
+                layoutSizingHorizontal: "FIXED",
+                layoutSizingVertical: "FIXED",
+                cornerRadius: 6,
+                fills: [{ type: "SOLID", color: { r: 0.2, g: 0.4, b: 1, a: 1 }, visible: true }],
+                children: [
+                  node({
+                    id: "11:6",
+                    name: "Label",
+                    type: "TEXT",
+                    characters: "Button",
+                    absoluteBoundingBox: { x: 146, y: 20, width: 88, height: 20 },
+                    style: baseTextStyle,
+                    fills: [{ type: "SOLID", color: { r: 1, g: 1, b: 1, a: 1 }, visible: true }],
+                  }),
+                ],
+              }),
+            ],
+          }),
+          node({
+            id: "11:7",
+            name: "Primary Button",
+            type: "INSTANCE",
+            componentId: "11:5",
+            clipsContent: true,
+            absoluteBoundingBox: { x: 300, y: 10, width: 120, height: 40 },
+            layoutSizingHorizontal: "FIXED",
+            layoutSizingVertical: "FIXED",
+            cornerRadius: 6,
+            componentProperties: {
+              Variant: { type: "VARIANT", value: "Primary" },
+              "Left Icon#920:0": { type: "BOOLEAN", value: false },
+            },
+            overrides: [{ id: "I11:7;11:6", overriddenFields: ["characters"] }],
+            fills: [{ type: "SOLID", color: { r: 0.2, g: 0.4, b: 1, a: 1 }, visible: true }],
+            children: [
+              node({
+                id: "I11:7;11:6",
+                name: "Label",
+                type: "TEXT",
+                characters: "Save",
+                absoluteBoundingBox: { x: 316, y: 20, width: 88, height: 20 },
+                style: baseTextStyle,
+                fills: [{ type: "SOLID", color: { r: 1, g: 1, b: 1, a: 1 }, visible: true }],
+              }),
+            ],
+          }),
+          node({
+            id: "11:8",
+            name: "Card",
+            type: "COMPONENT",
+            clipsContent: true,
+            layoutMode: "VERTICAL",
+            itemSpacing: 8,
+            absoluteBoundingBox: { x: 0, y: 100, width: 200, height: 120 },
+            layoutSizingHorizontal: "FIXED",
+            layoutSizingVertical: "FIXED",
+            componentPropertyDefinitions: {
+              "Icon#920:4": { type: "INSTANCE_SWAP", defaultValue: "11:3" },
+              "Content#2949:0": {
+                type: "SLOT",
+                defaultValue: { guid: { sessionID: -1, localID: -1 } },
+                preferredValues: [],
+              },
+            },
+            children: [
+              node({
+                id: "11:9",
+                name: "Icon",
+                type: "INSTANCE",
+                componentId: "11:3",
+                clipsContent: true,
+                componentPropertyReferences: { mainComponent: "Icon#920:4" },
+                absoluteBoundingBox: { x: 0, y: 100, width: 120, height: 40 },
+                layoutSizingHorizontal: "FIXED",
+                layoutSizingVertical: "FIXED",
+                overrides: [],
+                fills: [{ type: "SOLID", color: { r: 0.9, g: 0.9, b: 0.9, a: 1 }, visible: true }],
+              }),
+              node({
+                id: "11:10",
+                name: "Content",
+                type: "SLOT",
+                clipsContent: true,
+                layoutMode: "VERTICAL",
+                componentPropertyReferences: { slotContentId: "Content#2949:0" },
+                absoluteBoundingBox: { x: 0, y: 148, width: 200, height: 20 },
+                layoutSizingHorizontal: "FIXED",
+                layoutSizingVertical: "FIXED",
+                children: [
+                  node({
+                    id: "11:11",
+                    name: "Placeholder",
+                    type: "TEXT",
+                    characters: "Slot content",
+                    absoluteBoundingBox: { x: 0, y: 148, width: 200, height: 20 },
+                    style: baseTextStyle,
+                    fills: [
+                      { type: "SOLID", color: { r: 0.5, g: 0.5, b: 0.5, a: 1 }, visible: true },
+                    ],
+                  }),
+                ],
+              }),
+            ],
+          }),
+          node({
+            id: "11:12",
+            name: "Card Instance",
+            type: "INSTANCE",
+            componentId: "11:8",
+            clipsContent: true,
+            layoutMode: "VERTICAL",
+            itemSpacing: 8,
+            absoluteBoundingBox: { x: 300, y: 100, width: 200, height: 140 },
+            layoutSizingHorizontal: "FIXED",
+            layoutSizingVertical: "FIXED",
+            componentProperties: {
+              "Icon#920:4": { type: "INSTANCE_SWAP", value: "11:5" },
+              "Content#2949:0": {
+                type: "SLOT",
+                value: { guid: { sessionID: 11, localID: 20 } },
+                preferredValues: [],
+              },
+            },
+            overrides: [{ id: "11:12", overriddenFields: ["height"] }],
+            children: [
+              node({
+                id: "I11:12;11:9",
+                name: "Icon",
+                type: "INSTANCE",
+                componentId: "11:5",
+                clipsContent: true,
+                componentPropertyReferences: { mainComponent: "Icon#920:4" },
+                absoluteBoundingBox: { x: 300, y: 100, width: 120, height: 40 },
+                layoutSizingHorizontal: "FIXED",
+                layoutSizingVertical: "FIXED",
+                overrides: [],
+                fills: [{ type: "SOLID", color: { r: 0.2, g: 0.4, b: 1, a: 1 }, visible: true }],
+              }),
+              node({
+                id: "I11:12;11:10",
+                name: "Content",
+                type: "SLOT",
+                clipsContent: true,
+                layoutMode: "VERTICAL",
+                componentPropertyReferences: { slotContentId: "Content#2949:0" },
+                absoluteBoundingBox: { x: 300, y: 148, width: 200, height: 40 },
+                layoutSizingHorizontal: "FIXED",
+                layoutSizingVertical: "FIXED",
+                children: [
+                  node({
+                    id: "11:20",
+                    name: "Filled Line",
+                    type: "TEXT",
+                    characters: "Hello world",
+                    absoluteBoundingBox: { x: 300, y: 148, width: 200, height: 20 },
+                    style: baseTextStyle,
+                    fills: [{ type: "SOLID", color: { r: 0, g: 0, b: 0, a: 1 }, visible: true }],
+                  }),
+                  node({
+                    id: "11:21",
+                    name: "Filled Line 2",
+                    type: "TEXT",
+                    characters: "Second line",
+                    absoluteBoundingBox: { x: 300, y: 168, width: 200, height: 20 },
+                    style: baseTextStyle,
+                    fills: [{ type: "SOLID", color: { r: 0, g: 0, b: 0, a: 1 }, visible: true }],
+                  }),
+                ],
+              }),
+            ],
+          }),
+        ],
+      }),
+      components: {
+        "11:3": { key: "k-secondary", name: "Variant=Secondary", componentSetId: "11:2" },
+        "11:5": { key: "k-primary", name: "Variant=Primary", componentSetId: "11:2" },
+        "11:8": { key: "k-card", name: "Card" },
+      },
+      componentSets: {
+        "11:2": { key: "k-button-set", name: "Button", description: "" },
+      },
+      styles: {},
+    },
+  },
+} as unknown as GetFileNodesResponse;
+
 export type GoldenFixture = {
   name: string;
   response: GetFileResponse | GetFileNodesResponse;
@@ -770,4 +1032,5 @@ export const GOLDEN_FIXTURES: GoldenFixture[] = [
   { name: "deep-nested", response: deepNested },
   { name: "rotated-nodes", response: rotatedNodes },
   { name: "grouped-nodes", response: groupedNodes },
+  { name: "component-variants", response: componentVariants },
 ];

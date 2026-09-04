@@ -14,6 +14,20 @@
           "height": 200,
           "left": 0,
           "top": 0,
+          "propertyDefinitions": {
+            "On Sale": {
+              "type": "boolean",
+              "defaultValue": true
+            },
+            "Title": {
+              "type": "text",
+              "defaultValue": "Product Name"
+            },
+            "Icon": {
+              "type": "instance_swap",
+              "defaultValue": "999:1"
+            }
+          },
           "children": [
             {
               "id": "6:3",
@@ -82,17 +96,7 @@
     "6:2": {
       "id": "6:2",
       "key": "compkey123",
-      "name": "Product Card",
-      "propertyDefinitions": {
-        "On Sale": {
-          "type": "boolean",
-          "defaultValue": true
-        },
-        "Title": {
-          "type": "text",
-          "defaultValue": "Product Name"
-        }
-      }
+      "name": "Product Card"
     }
   },
   "componentSets": {},

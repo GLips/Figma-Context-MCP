@@ -47,6 +47,29 @@ test("get on a text node reads back content and text style", async () => {
   assert.equal(spec.textStyle.fontWeight, 400);
 });
 
+// The plugin has no response envelope to carry a components table, so property definitions ride on the
+// defining node — the one place both producers can put them. This pins the plugin path end to end: the
+// adapter reads them off a live COMPONENT, the core emits them on the node `get` returns.
+test("get on a component returns its property definitions on the node itself", async () => {
+  const figma = createFigmaMock();
+  const comp = figma.createComponent();
+  comp.name = "Card";
+  comp.componentPropertyDefinitions = {
+    "Title#1:0": { type: "TEXT", defaultValue: "Product" },
+    "Icon#1:1": { type: "INSTANCE_SWAP", defaultValue: "9:9", preferredValues: [] },
+    "Content#1:2": { type: "SLOT", defaultValue: { guid: { sessionID: -1, localID: -1 } } },
+  };
+  figma.currentPage.appendChild(comp);
+
+  const spec = await get(id(comp.id));
+  assert.equal(spec.type, "COMPONENT");
+  assert.deepEqual(spec.propertyDefinitions, {
+    Title: { type: "text", defaultValue: "Product" },
+    Icon: { type: "instance_swap", defaultValue: "9:9" },
+    Content: { type: "slot" },
+  });
+});
+
 test("get on an instance carries an honest type and its componentId", async () => {
   const figma = createFigmaMock();
   const comp = figma.createComponent();
