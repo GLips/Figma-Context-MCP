@@ -66,6 +66,17 @@ describe("ApprovalStore", () => {
     expect(readdirSync(join(dir, "approvals"))).toHaveLength(0);
   });
 
+  it("hasUnexpiredApproval reports without pruning — a probe must not delete a live peer's file", () => {
+    store().save(PORT, "tok-abc", "id", 1000);
+    expect(store().hasUnexpiredApproval(PORT, 1000 + TTL_MS + 1)).toBe(false);
+    // `load` deletes the file at this point; this must not. The bridge's reclaim probe asks about a
+    // port ANOTHER live server may hold, and that peer's `touch` is a compare-and-set that can't
+    // rewrite a file which is gone — so pruning from a probe silently costs the peer its durable
+    // approval, and it re-prompts its human on the next restart.
+    expect(readdirSync(join(dir, "approvals"))).toHaveLength(1);
+    expect(store().load(PORT, 2000)).toBe("tok-abc");
+  });
+
   it("touch slides the TTL forward for the matching token", () => {
     store().save(PORT, "tok-abc", "id", 1000);
     // A use just before expiry pushes lastUsedAt forward; the original deadline no longer applies.

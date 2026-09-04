@@ -46,11 +46,18 @@ const HEARTBEAT_INTERVAL_MS = 10_000;
 // re-prompts with a fresh pairing code. The human sees "why is it asking again?" after a save they
 // didn't think was a restart.
 //
-// Waiting is gated on a PERSISTED APPROVAL for that exact port, which is the only evidence a server
-// has that the port is plausibly its own former slot — so a genuinely-concurrent second session (no
-// approval on the holder's port) still advances instantly and never pays this. The budget is a single
-// deadline for the whole probe (not per port), so worst-case added startup is bounded by the window
-// once, however many held-and-approved ports the block contains.
+// What the gate actually knows, stated exactly: "this project was approved on this port." That is the
+// only evidence available at bind time, and it is weaker than "the holder is my own dying
+// predecessor" — the persistence key has no process in it, so nothing here can tell a predecessor
+// from a live sibling. The consequence, named rather than glossed: a SECOND server started from the
+// same cwd while an approved one holds the base port pays the FULL window (~2s of extra startup)
+// before advancing — the Cursor-plus-Claude-Code case in approval-store.ts. That cost is accepted
+// deliberately; it is a one-time delay on a second session, weighed against re-prompting a human on
+// every save of the first. A server whose cwd holds NO approval for the busy port (a different
+// project, a first-ever run) advances instantly and never pays it.
+//
+// The budget is a single deadline for the whole probe (not per port), so worst-case added startup is
+// bounded by the window once, however many held-and-approved ports the block contains.
 const RECLAIM_WINDOW_MS = 2_000;
 const RECLAIM_RETRY_MS = 100;
 
@@ -150,15 +157,22 @@ export class PluginBridge {
   // RECLAIM_WINDOW_MS). One budget for the whole probe, stamped in `start()`; 0 means "never wait",
   // which is what a bridge that was never started reads as.
   private reclaimDeadline = 0;
+  // The pending re-probe of a busy-but-ours port, held so `stop()` can cancel it. Without the handle a
+  // stopped bridge would come back to life when the timer fired — binding the port it was just told to
+  // release and reloading the persisted token onto an object the caller believes is dead.
+  private reclaimTimer: ReturnType<typeof setTimeout> | null = null;
 
-  // Both injectable for the contract harness, which drives real sockets: `store` isolates persistence
-  // to a temp dir instead of touching the real ~/.framelink, and `requestTimeoutMs` lets it pin
+  // All three injectable for the contract harness, which drives real sockets: `store` isolates
+  // persistence to a temp dir instead of touching the real ~/.framelink; `requestTimeoutMs` lets it pin
   // behaviour that only shows up when a request times out — a silent plugin's version handshake, and
-  // a displaced squatter's orphaned one resolving late — without waiting out the real 15s. Production
-  // takes both defaults.
+  // a displaced squatter's orphaned one resolving late — without waiting out the real 15s; and
+  // `reclaimWindowMs` lets it pin both ends of the reclaim wait (advance immediately, and give up at
+  // the deadline) against an explicit budget rather than racing a constant. Production takes all three
+  // defaults.
   constructor(
     private readonly store: ApprovalStore = new ApprovalStore(),
     private readonly requestTimeoutMs: number = DEFAULT_TIMEOUT_MS,
+    private readonly reclaimWindowMs: number = RECLAIM_WINDOW_MS,
   ) {}
 
   /**
@@ -170,7 +184,7 @@ export class PluginBridge {
    * only the winner's ever fire; the heartbeat is installed in `listening`, so it is winner-only.
    */
   start(ports: number[], onConnect?: () => void): void {
-    this.reclaimDeadline = Date.now() + RECLAIM_WINDOW_MS;
+    this.reclaimDeadline = Date.now() + this.reclaimWindowMs;
     this.tryBind(ports, 0, onConnect);
   }
 
@@ -228,8 +242,14 @@ export class PluginBridge {
         if (this.shouldWaitToReclaim(port)) {
           // Re-probe the SAME index rather than advancing: the holder is very likely the dying
           // predecessor of this very server, and landing elsewhere would silently cost the human a
-          // fresh Allow. unref'd so a server whose port never frees can't hold the process open.
-          setTimeout(() => this.tryBind(ports, index, onConnect), RECLAIM_RETRY_MS).unref();
+          // fresh Allow. unref'd so a server whose port never frees can't hold the process open, and
+          // retained so `stop()` can cancel it — a probe still in flight is the one way a stopped
+          // bridge could otherwise rebind.
+          this.reclaimTimer = setTimeout(() => {
+            this.reclaimTimer = null;
+            this.tryBind(ports, index, onConnect);
+          }, RECLAIM_RETRY_MS);
+          this.reclaimTimer.unref();
           return;
         }
         this.tryBind(ports, index + 1, onConnect);
@@ -344,11 +364,16 @@ export class PluginBridge {
    * is the evidence — it means a human already Allowed a server of ours on this port, so the holder is
    * most likely our own not-yet-dead predecessor, and landing elsewhere would cost a fresh Allow.
    *
-   * `store.load` is the right probe rather than a bespoke peek: it applies the same TTL and prunes the
-   * same expired file the eventual `listening` handler would, so a stale slot can't hold up startup.
+   * READ-ONLY on purpose (`hasUnexpiredApproval`, never `load`): the port being probed is one some
+   * OTHER live process may hold, and `load` prunes an expired record. Pruning here would delete a
+   * running peer's approval file behind its back, and its `touch` — a compare-and-set that only
+   * rewrites a file still holding its token — would never put it back, so the peer would silently lose
+   * durable approval and re-prompt on its next restart. A stale record can only ever cost this probe
+   * its own bounded window.
    */
   private shouldWaitToReclaim(port: number): boolean {
-    return Date.now() < this.reclaimDeadline && this.store.load(port, Date.now()) !== null;
+    const now = Date.now();
+    return now < this.reclaimDeadline && this.store.hasUnexpiredApproval(port, now);
   }
 
   /**
@@ -442,6 +467,12 @@ export class PluginBridge {
    * Under (cwd, port) keying, a faithful restart test must reclaim the same port, which requires this.
    */
   stop(): void {
+    // Cancel any in-flight reclaim re-probe FIRST and burn the budget, so a bridge told to stop can't
+    // rebind the port a moment later — closing `wss` alone leaves the pending timer free to bind and
+    // reload the persisted token onto a bridge the caller has already discarded.
+    if (this.reclaimTimer) clearTimeout(this.reclaimTimer);
+    this.reclaimTimer = null;
+    this.reclaimDeadline = 0;
     this.socket?.terminate();
     this.socket = null;
     // Nulling the socket makes the terminate()-driven `close` bail as "displaced", so it never runs

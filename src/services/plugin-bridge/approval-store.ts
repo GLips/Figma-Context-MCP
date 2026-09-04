@@ -22,6 +22,13 @@
 // exited, and is "the approval of whoever holds this slot," which the WS_CONNECTED reset + token model
 // already govern.
 //
+// That residual is WIDER than it reads, because of the reclaim wait in bridge.ts (RECLAIM_WINDOW_MS):
+// a starting server no longer merely happens upon a freed approved port, it deliberately waits up to
+// 2s for one to free. So a same-cwd sibling starting while an approved peer is on its way out both
+// pays that wait and is more likely to land on — and inherit — the slot. Same trust boundary (one
+// local user, one project directory), same "approval of whoever holds this slot" semantics; the
+// window it happens in is simply no longer accidental.
+//
 // Security posture (deliberately documented, not just coded): persisting the token WIDENS the replay
 // surface. Before, the token lived only in RAM, harvestable by winning a race to a freed port during a
 // drop window. Now it also lives in a 0600 file, so an attacker can read it and bind the port at
@@ -120,13 +127,28 @@ export class ApprovalStore {
 
   /** The persisted token for this (cwd, port) if present and unexpired, else null. Prunes an expired file. */
   load(port: number, now: number): string | null {
-    const record = this.read(port);
+    const record = this.read(port, true);
     if (!record) return null;
     if (isExpired(record, now)) {
       this.clear(port);
       return null;
     }
     return record.token;
+  }
+
+  /**
+   * Whether an unexpired approval is persisted for this (cwd, port). The read-only counterpart to
+   * `load`: it answers the same question but deletes NOTHING, not even an expired or corrupt file.
+   *
+   * That is the whole reason it exists. The one caller (the bridge's reclaim probe) asks about a port
+   * that is currently BUSY — held, quite possibly, by another live server of this same project. Pruning
+   * from there would delete that peer's approval file behind its back, and `touch`'s compare-and-set
+   * would never write it back, so the peer would lose durable approval and re-prompt its human on its
+   * next restart. Only the process that actually BINDS a port may prune that port's slot.
+   */
+  hasUnexpiredApproval(port: number, now: number): boolean {
+    const record = this.read(port, false);
+    return record !== null && !isExpired(record, now);
   }
 
   /** Persist a freshly handed-over token (0600), stamping created/used times. Fail-safe. */
@@ -140,7 +162,7 @@ export class ApprovalStore {
    * this server writing a stale token over it. No-op if nothing is persisted or ownership has moved on.
    */
   touch(port: number, token: string, now: number): void {
-    const record = this.read(port);
+    const record = this.read(port, true);
     if (!record || record.token !== token) return;
     record.lastUsedAt = now;
     this.write(port, record);
@@ -186,7 +208,12 @@ export class ApprovalStore {
     }
   }
 
-  private read(port: number): ApprovalRecord | null {
+  /**
+   * Parse this (cwd, port)'s file, or null if it's missing, torn, or not a record. `prune` says whether
+   * an unparseable file may be deleted on the way out — true for the owner of the slot, false for a
+   * probe of a port another process may hold (see `hasUnexpiredApproval`).
+   */
+  private read(port: number, prune: boolean): ApprovalRecord | null {
     let raw: string;
     try {
       raw = readFileSync(this.fileFor(port), "utf8");
@@ -197,7 +224,7 @@ export class ApprovalStore {
     try {
       record = JSON.parse(raw);
     } catch {
-      this.clear(port);
+      if (prune) this.clear(port);
       return null;
     }
     if (
@@ -206,7 +233,7 @@ export class ApprovalStore {
       typeof (record as ApprovalRecord).token !== "string" ||
       typeof (record as ApprovalRecord).lastUsedAt !== "number"
     ) {
-      this.clear(port);
+      if (prune) this.clear(port);
       return null;
     }
     return record as ApprovalRecord;

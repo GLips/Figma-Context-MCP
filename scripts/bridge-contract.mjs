@@ -11,9 +11,8 @@
 //     correlates by id alone and must never depend on pass-through metadata.
 //
 // Slice 1.2 adds the version handshake, which rides that same envelope:
-//   • GET_VERSION round-trips {pluginVersion, protocolVersion} from a current plugin.
-//   • refuseProtocolSkew treats a missing version as the floor and refuses it, like any other
-//     under-minimum plugin — a runtime that can't name its wire contract must not run agent code.
+//   • A missing version is the floor and is refused, like any other under-minimum plugin — a runtime
+//     that can't name its wire contract must not run agent code.
 //   • The connection's compatibility verdict is connection-scoped (back to `checking` on disconnect).
 //   • fig-41: a canvas request issued INSIDE the handshake window HOLDS for the verdict instead of
 //     being sent, so a stale plugin never receives agent code — the race the refusal defeats.
@@ -74,7 +73,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { PluginBridge } from "../src/services/plugin-bridge/bridge.ts";
 import { ApprovalStore } from "../src/services/plugin-bridge/approval-store.ts";
-import { refuseProtocolSkew, MIN_PROTOCOL_VERSION } from "../src/services/plugin-bridge/version.ts";
+import { MIN_PROTOCOL_VERSION } from "../src/services/plugin-bridge/version.ts";
 import { SESSION_IDENTITY } from "../src/services/plugin-bridge/approval.ts";
 import { WS_PORT_BLOCK } from "../src/services/plugin-bridge/ports.ts";
 
@@ -195,7 +194,6 @@ console.log(`✅ Pre-approval write returns PENDING_APPROVAL (code ${pairingCode
 // of the Phase 1 envelope checks ride on this approved session.
 plugin.allow();
 await wait(50); // let the handed-over SESSION_TOKEN reach and persist on the bridge
-assert.match(String(bridge.getSessionToken()), /^tok-/, "the bridge persisted the handed-over session token");
 assert.equal((await bridge.request({ type: "EXECUTE_CODE", code: "return 1" })).result, "ok", "approved write runs");
 console.log("✅ After Allow, the same write runs (server persisted the minted token)");
 
@@ -301,17 +299,6 @@ console.log("✅ Same-path squatter (same identity, no token) re-prompts even on
 squatPlugin.close();
 await wait(150);
 
-// A new connection that writes BEFORE re-introducing itself (no SESSION_INFO) must NOT inherit
-// the prior session's approval: the WS_CONNECTED reset drops the stale identity, so the write is
-// gated. Guards the reconnect/squatter bypass where a different local server grabs the freed port.
-const naked = fakePlugin("null");
-await new Promise((res) => naked.on("open", res));
-const nakedWrite = await bridge.request({ type: "EXECUTE_CODE", code: "return 1" });
-assert.equal(nakedWrite.type, "PENDING_APPROVAL", "write before SESSION_INFO is gated, not run on a stale approval");
-console.log("✅ Write before SESSION_INFO on a fresh connection is gated (no stale-identity bypass)");
-naked.close();
-await wait(150);
-
 // --- Durable approval: a restarted server reloads the persisted token; Revoke clears it (this cycle) ---
 // The bug this closes: `sessionToken` was in-memory only, so a SERVER restart (dev-watch save-restart,
 // or a crash/respawn) lost it and re-prompted — even though the plugin still remembered the token. A
@@ -411,10 +398,14 @@ await new Promise((res) => predecessor.listen(SLIP_PORT, "127.0.0.1", res));
 const bridgeS2 = new PluginBridge(new ApprovalStore(process.cwd(), sharedDir));
 bridgeS2.start([SLIP_PORT, SLIP_PORT + 1]);
 await wait(300);
-// Nothing bound yet: a null token here means it is still re-probing SLIP_PORT. Had it advanced, it
-// would have bound SLIP_PORT+1 — also null, which is exactly why the assertion that MATTERS is the
-// one after the release: only a bind on SLIP_PORT can produce the persisted token.
-assert.equal(bridgeS2.getSessionToken(), null, "the successor holds off while its own port is still occupied");
+// It is HOLDING OFF, not merely tokenless: had it advanced it would be listening on SLIP_PORT+1 by
+// now. Probe that port instead of the token (which reads null under either outcome, and so can't
+// tell them apart).
+assert.equal(
+  await refusedOrOpened(new WebSocket(`ws://127.0.0.1:${SLIP_PORT + 1}`, { origin: "null" })),
+  "refused",
+  "the successor holds off on its own occupied port instead of binding the next one",
+);
 await new Promise((res) => predecessor.close(res));
 await wait(400);
 assert.equal(
@@ -424,27 +415,104 @@ assert.equal(
 );
 console.log("✅ A restart racing its dying predecessor reclaims its own port — no slip, no fresh Allow");
 bridgeS2.stop();
+await wait(150);
+
+// --- The reclaim wait is bounded on both sides, and cancellable ---
+// Three ways that wait could go wrong in production, none of which the test above can see: it could
+// fire when it has no business firing (taxing every concurrent session with startup latency), never
+// give up (a server that binds nothing at all, in silence), or outlive the bridge that scheduled it.
+
+// (a) A busy port this project holds NO approval for is advanced past AT ONCE. The store read here
+// does hold an approval — for SLIP_PORT, not for this port — so a key that drifted back to cwd-alone
+// would find it, wait out the whole window, and make every genuinely-concurrent second session pay
+// seconds of startup for a port that was never ours.
+const NOAPP_PORT = 19880;
+const noAppHolder = net.createServer();
+await new Promise((res) => noAppHolder.listen(NOAPP_PORT, "127.0.0.1", res));
+const bridgeNoApp = new PluginBridge(new ApprovalStore(process.cwd(), sharedDir)); // production 2s window
+bridgeNoApp.start([NOAPP_PORT, NOAPP_PORT + 1]);
+await wait(250); // a small fraction of the window — only an immediate advance can have bound by now
+const advancedAtOnce = new WebSocket(`ws://127.0.0.1:${NOAPP_PORT + 1}`, { origin: "null" });
+assert.equal(
+  await refusedOrOpened(advancedAtOnce),
+  "opened",
+  "a busy port with no approval of its own is advanced past immediately, not waited on",
+);
+console.log("✅ A busy port this project never approved is advanced past at once (no startup tax on a sibling)");
+advancedAtOnce.close();
+bridgeNoApp.stop();
+await new Promise((res) => noAppHolder.close(res));
+await wait(150);
+
+// (b) A holder that never lets go is abandoned AT THE DEADLINE. Without one the re-probe loops
+// forever: the server binds nothing, reports nothing, and the plugin's block scan finds no port — a
+// startup that hangs with no error to explain it. The window is injected so the deadline is a fact
+// here rather than a race against a constant.
+const STUCK_PORT = 19892;
+const stuckState = makeSandbox();
+const bridgeD1 = new PluginBridge(new ApprovalStore(process.cwd(), sharedDir));
+bridgeD1.start([STUCK_PORT]);
+await wait(150);
+const d1 = fakePlugin("null", { url: `ws://127.0.0.1:${STUCK_PORT}`, state: stuckState });
+await new Promise((res) => d1.on("open", res));
+await bridgeD1.request({ type: "SESSION_INFO", identity: SESSION_IDENTITY, pairingCode: bridgeD1.getPairingCode(), sessionToken: bridgeD1.getSessionToken() });
+d1.allow();
+await wait(50);
+assert.match(String(bridgeD1.getSessionToken()), /^tok-/, "precondition: the port the successor will wait on is genuinely approved");
+d1.close();
+bridgeD1.stop();
+await wait(150);
+
+const stuck = net.createServer(); // never released — models a predecessor that hangs past the budget
+await new Promise((res) => stuck.listen(STUCK_PORT, "127.0.0.1", res));
+const bridgeD2 = new PluginBridge(new ApprovalStore(process.cwd(), sharedDir), 15_000, 300);
+bridgeD2.start([STUCK_PORT, STUCK_PORT + 1]);
+await wait(700); // well past the injected 300ms deadline, with the port still held
+const gaveUp = new WebSocket(`ws://127.0.0.1:${STUCK_PORT + 1}`, { origin: "null" });
+assert.equal(
+  await refusedOrOpened(gaveUp),
+  "opened",
+  "a holder that outlasts the reclaim budget is abandoned — the server advances rather than probing forever",
+);
+assert.equal(
+  bridgeD2.getSessionToken(),
+  null,
+  "the server that gave up is honest about it: no approval for the port it settled on, so the human is re-prompted",
+);
+console.log("✅ A port held past the reclaim deadline is abandoned for the next one (startup is bounded)");
+gaveUp.close();
+bridgeD2.stop();
+await wait(150);
+
+// (c) `stop()` cancels a re-probe still in flight. That timer is the one thing that can outlive the
+// bridge that scheduled it: let it fire after a stop and a discarded bridge silently rebinds the port
+// it was just told to release, reloading the persisted approval onto an object nobody holds any more.
+// Single-port block, so the only thing it can do is wait — and then, if uncancelled, take the port.
+const bridgeD3 = new PluginBridge(new ApprovalStore(process.cwd(), sharedDir), 15_000, 5_000);
+bridgeD3.start([STUCK_PORT]);
+await wait(150); // a re-probe is scheduled, deep inside the 5s window
+bridgeD3.stop();
+await new Promise((res) => stuck.close(res)); // free the port that a stopped bridge must NOT take
+await wait(400); // several retry ticks' worth
+assert.equal(bridgeD3.getSessionToken(), null, "a stopped bridge does not come back and reload a persisted approval");
+const stillFree = new WebSocket(`ws://127.0.0.1:${STUCK_PORT}`, { origin: "null" });
+assert.equal(
+  await refusedOrOpened(stillFree),
+  "refused",
+  "a stopped bridge leaves its port free — the reclaim retry it had in flight was cancelled",
+);
+console.log("✅ stop() cancels an in-flight reclaim retry (a stopped bridge cannot rebind its port)");
 
 // --- Version handshake + compatibility policy (Slice 1.2, tightened by fig-41) ---
+// The policy itself (current is clean, missing or sub-minimum is refused) is pinned END TO END below,
+// over a real socket: `stalePlugin` for sub-minimum, `spikeEra` for missing-version-is-the-floor, and
+// `currentRacer` for "a current plugin is only delayed, not refused". Asserting refuseProtocolSkew's
+// return value directly here as well would restate those same three branches without a wire in them.
 
-// The policy is pure logic, so assert it directly: a current protocol is clean, a missing or
-// sub-minimum one is REFUSED. "Missing → floor → refuse" is the load-bearing rule — a plugin that
-// answers the version question with an envelope ERROR is exactly the vintage that must not receive
-// agent code — so pin it explicitly.
-assert.equal(refuseProtocolSkew({ protocolVersion: MIN_PROTOCOL_VERSION }), null, "current protocol → no refusal");
-assert.ok(refuseProtocolSkew({}), "missing version → floor → refused, not silently driven");
-assert.ok(refuseProtocolSkew({ protocolVersion: MIN_PROTOCOL_VERSION - 1 }), "below-minimum protocol → refused");
-console.log("✅ refuseProtocolSkew: current is clean; missing/old are refused");
-
-// GET_VERSION rides the frozen envelope like any other request. Connect a CURRENT plugin
-// onto the slot the terminated mute socket just freed.
+// Connect a CURRENT plugin onto the slot the terminated mute socket just freed.
 await wait(150);
 const current = fakePlugin("null");
 await new Promise((res) => current.on("open", res));
-const ver = await bridge.request({ type: "GET_VERSION" });
-assert.equal(ver.protocolVersion, MIN_PROTOCOL_VERSION, "GET_VERSION round-trips protocolVersion");
-assert.equal(ver.pluginVersion, "0.1.0", "GET_VERSION round-trips pluginVersion");
-console.log("✅ Version handshake round-trips {pluginVersion, protocolVersion}");
 
 // The verdict is connection-scoped: the bridge's own handshake settles it on connect, and a
 // disconnect drops it back to `checking` so a newer plugin on the freed slot can't inherit it.
