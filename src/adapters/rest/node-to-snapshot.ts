@@ -38,7 +38,7 @@ type RawStructuralFields = Partial<
 
 /**
  * The wire shape of component properties, as REST actually sends it — wider than
- * `@figma/rest-api-spec` 0.37.0 declares. Grounded live (file `Framelink`, 2026-09-04):
+ * `@figma/rest-api-spec` 0.42.0 declares. Grounded live (file `Framelink`, 2026-09-04):
  * a SLOT property (`type: "SLOT"`, absent from the spec's union) carries a `{ guid }`
  * OBJECT as its `defaultValue` / `value`, not a scalar, and `componentPropertyReferences`
  * carries a `slotContentId` key the spec doesn't list either. Typed here so the decode

@@ -243,7 +243,7 @@ export interface SceneNodeLike {
     };
   };
   readonly getMainComponentAsync?: () => Promise<{ readonly id: string } | null>;
-  /** INSTANCE: direct overrides on its sublayers, plugin field spellings (`NodeChangeProperty`). */
+  /** INSTANCE: direct overrides on the instance itself and its sublayers, plugin field spellings (`NodeChangeProperty`). */
   readonly overrides?: ReadonlyArray<{ readonly id: string; readonly overriddenFields: ReadonlyArray<string> }>;
 }
 

@@ -697,6 +697,40 @@ describe("component property support", () => {
     expect(nodes[0].children![1].overrides).toBeUndefined();
   });
 
+  it("carries a nested instance's override whichever instance level reports it", async () => {
+    const outer = makeNode({
+      id: "19:1",
+      name: "Card",
+      type: "INSTANCE",
+      componentId: "17:1",
+      // The outer level reports the nested icon's sizing change and a fill on one of
+      // the icon's own sublayers; the nested level reports only its opacity.
+      overrides: [
+        { id: "I19:1;16:2", overriddenFields: ["layoutSizingHorizontal"] },
+        { id: "I19:1;16:2;16:3", overriddenFields: ["fills"] },
+      ],
+      children: [
+        makeNode({
+          id: "I19:1;16:2",
+          name: "Icon",
+          type: "INSTANCE",
+          componentId: "16:1",
+          overrides: [{ id: "I19:1;16:2", overriddenFields: ["opacity"] }],
+          // TEXT, not a vector: an all-vector INSTANCE collapses to an SVG image.
+          children: [
+            makeNode({ id: "I19:1;16:2;16:3", name: "Glyph", type: "TEXT", characters: "★" }),
+          ],
+        }),
+      ],
+    });
+
+    const { nodes } = await walk([outer]);
+
+    const icon = nodes[0].children![0];
+    expect(icon.overrides).toEqual(["width", "opacity"]);
+    expect(icon.children![0].overrides).toEqual(["fills"]);
+  });
+
   it("annotates componentPropertyReferences with characters→text rename", async () => {
     const componentNode = makeNode({
       id: "13:1",

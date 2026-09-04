@@ -45,6 +45,19 @@
               "borderRadius": "6px",
               "children": [
                 {
+                  "id": "11:14",
+                  "name": "Icon",
+                  "type": "RECTANGLE",
+                  "width": 16,
+                  "height": 16,
+                  "left": 4,
+                  "top": 12,
+                  "fills": "fill_34dc0314",
+                  "componentPropertyReferences": {
+                    "visible": "Left Icon"
+                  }
+                },
+                {
                   "id": "11:4",
                   "name": "Label",
                   "type": "TEXT",
@@ -69,6 +82,19 @@
               "fills": "fill_016763b9",
               "borderRadius": "6px",
               "children": [
+                {
+                  "id": "11:15",
+                  "name": "Icon",
+                  "type": "RECTANGLE",
+                  "width": 16,
+                  "height": 16,
+                  "left": 4,
+                  "top": 12,
+                  "fills": "fill_658ab2fa",
+                  "componentPropertyReferences": {
+                    "visible": "Left Icon"
+                  }
+                },
                 {
                   "id": "11:6",
                   "name": "Label",
@@ -267,15 +293,15 @@
     "fill_fa76e12e": [
       "#E6E6E6"
     ],
+    "fill_34dc0314": [
+      "#000000"
+    ],
     "style_9f723b14": {
       "fontFamily": "Inter",
       "fontWeight": 400,
       "fontSize": 14,
       "lineHeight": "20px"
     },
-    "fill_34dc0314": [
-      "#000000"
-    ],
     "fill_016763b9": [
       "#3366FF"
     ],

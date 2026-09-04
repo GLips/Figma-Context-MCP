@@ -107,7 +107,7 @@ import { isCoordinateTransparentType } from "~/core/utils.js";
  *     to fail here; that is this note, not a mystery.
  *
  *  8. SLOTS — NOT a divergence, recorded so nobody pins one. `@figma/rest-api-spec`
- *     0.37.0 has no SLOT node type and no SLOT property type, but the wire does
+ *     0.42.0 has no SLOT node type and no SLOT property type, but the wire does
  *     (verified live, file `Framelink`, 2026-09-04): REST emits `type: "SLOT"` nodes,
  *     links each to its property through `componentPropertyReferences.slotContentId`,
  *     and carries the SLOT definition on the owning COMPONENT — the same three things

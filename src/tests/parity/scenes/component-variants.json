@@ -81,6 +81,36 @@
               ],
               "children": [
                 {
+                  "id": "11:14",
+                  "name": "Icon",
+                  "type": "RECTANGLE",
+                  "visible": true,
+                  "componentPropertyReferences": {
+                    "visible": "Left Icon#920:0"
+                  },
+                  "absoluteBoundingBox": {
+                    "x": 14,
+                    "y": 22,
+                    "width": 16,
+                    "height": 16
+                  },
+                  "width": 16,
+                  "height": 16,
+                  "x": 4,
+                  "y": 12,
+                  "fills": [
+                    {
+                      "type": "SOLID",
+                      "color": {
+                        "r": 0,
+                        "g": 0,
+                        "b": 0
+                      },
+                      "visible": true
+                    }
+                  ]
+                },
+                {
                   "id": "11:4",
                   "name": "Label",
                   "type": "TEXT",
@@ -160,6 +190,36 @@
                 }
               ],
               "children": [
+                {
+                  "id": "11:15",
+                  "name": "Icon",
+                  "type": "RECTANGLE",
+                  "visible": true,
+                  "componentPropertyReferences": {
+                    "visible": "Left Icon#920:0"
+                  },
+                  "absoluteBoundingBox": {
+                    "x": 134,
+                    "y": 22,
+                    "width": 16,
+                    "height": 16
+                  },
+                  "width": 16,
+                  "height": 16,
+                  "x": 4,
+                  "y": 12,
+                  "fills": [
+                    {
+                      "type": "SOLID",
+                      "color": {
+                        "r": 1,
+                        "g": 1,
+                        "b": 1
+                      },
+                      "visible": true
+                    }
+                  ]
+                },
                 {
                   "id": "11:6",
                   "name": "Label",
@@ -258,6 +318,36 @@
             }
           ],
           "children": [
+            {
+              "id": "I11:7;11:15",
+              "name": "Icon",
+              "type": "RECTANGLE",
+              "visible": false,
+              "componentPropertyReferences": {
+                "visible": "Left Icon#920:0"
+              },
+              "absoluteBoundingBox": {
+                "x": 304,
+                "y": 22,
+                "width": 16,
+                "height": 16
+              },
+              "width": 16,
+              "height": 16,
+              "x": 4,
+              "y": 12,
+              "fills": [
+                {
+                  "type": "SOLID",
+                  "color": {
+                    "r": 1,
+                    "g": 1,
+                    "b": 1
+                  },
+                  "visible": true
+                }
+              ]
+            },
             {
               "id": "I11:7;11:6",
               "name": "Label",

@@ -814,6 +814,14 @@ const componentVariants: GetFileNodesResponse = {
                 fills: [{ type: "SOLID", color: { r: 0.9, g: 0.9, b: 0.9, a: 1 }, visible: true }],
                 children: [
                   node({
+                    id: "11:14",
+                    name: "Icon",
+                    type: "RECTANGLE",
+                    componentPropertyReferences: { visible: "Left Icon#920:0" },
+                    absoluteBoundingBox: { x: 14, y: 22, width: 16, height: 16 },
+                    fills: [{ type: "SOLID", color: { r: 0, g: 0, b: 0, a: 1 }, visible: true }],
+                  }),
+                  node({
                     id: "11:4",
                     name: "Label",
                     type: "TEXT",
@@ -835,6 +843,14 @@ const componentVariants: GetFileNodesResponse = {
                 cornerRadius: 6,
                 fills: [{ type: "SOLID", color: { r: 0.2, g: 0.4, b: 1, a: 1 }, visible: true }],
                 children: [
+                  node({
+                    id: "11:15",
+                    name: "Icon",
+                    type: "RECTANGLE",
+                    componentPropertyReferences: { visible: "Left Icon#920:0" },
+                    absoluteBoundingBox: { x: 134, y: 22, width: 16, height: 16 },
+                    fills: [{ type: "SOLID", color: { r: 1, g: 1, b: 1, a: 1 }, visible: true }],
+                  }),
                   node({
                     id: "11:6",
                     name: "Label",
@@ -865,6 +881,16 @@ const componentVariants: GetFileNodesResponse = {
             overrides: [{ id: "I11:7;11:6", overriddenFields: ["characters"] }],
             fills: [{ type: "SOLID", color: { r: 0.2, g: 0.4, b: 1, a: 1 }, visible: true }],
             children: [
+              // `Left Icon` is false on this instance: the bound layer arrives hidden.
+              node({
+                id: "I11:7;11:15",
+                name: "Icon",
+                type: "RECTANGLE",
+                visible: false,
+                componentPropertyReferences: { visible: "Left Icon#920:0" },
+                absoluteBoundingBox: { x: 304, y: 22, width: 16, height: 16 },
+                fills: [{ type: "SOLID", color: { r: 1, g: 1, b: 1, a: 1 }, visible: true }],
+              }),
               node({
                 id: "I11:7;11:6",
                 name: "Label",

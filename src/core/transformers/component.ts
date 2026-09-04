@@ -111,8 +111,12 @@ export function simplifyComponentProperties(
  * changed" next to the fill it reads. Both producers' spellings are listed: REST's
  * text-override tables and the plugin's `styledTextSegments` are the same edit, and
  * both fold to `text`. A wire field with no output field (bound variables, prototype
- * transitions, export settings, plugin data) is dropped — nothing in the read shape
- * shows it, so nothing can be "overridden" from a reader's point of view.
+ * transitions, export settings, plugin data, `clipsContent`) is dropped — nothing in
+ * the read shape shows it, so nothing can be "overridden" from a reader's point of view.
+ *
+ * `visible` is the one exception: there is no `visible` output field (hidden layers are
+ * dropped), but a layer whose visibility was overridden is a layer the main component
+ * hides or shows differently, and a writer replicating the instance needs to know that.
  */
 const OVERRIDE_OUTPUT_FIELDS: Record<string, string | string[]> = {
   // identity / visibility
@@ -156,6 +160,9 @@ const OVERRIDE_OUTPUT_FIELDS: Record<string, string | string[]> = {
   inheritStrokeStyleId: "strokes",
   strokeWeight: "strokeWidth",
   strokeTopWeight: "strokeWidth",
+  // Figma's own typo in the plugin API's `NodeChangeProperty` — the wire really
+  // spells it this way, so a plugin-side top-weight override arrives as `stokeTopWeight`.
+  stokeTopWeight: "strokeWidth",
   strokeRightWeight: "strokeWidth",
   strokeBottomWeight: "strokeWidth",
   strokeLeftWeight: "strokeWidth",
@@ -173,8 +180,7 @@ const OVERRIDE_OUTPUT_FIELDS: Record<string, string | string[]> = {
   bottomLeftRadius: "borderRadius",
   bottomRightRadius: "borderRadius",
   rectangleCornerRadii: "borderRadius",
-  // container config
-  clipsContent: "layout",
+  // container config — flex and grid, both landing in `layout`
   layoutMode: "layout",
   layoutWrap: "layout",
   primaryAxisSizingMode: "layout",
@@ -188,12 +194,28 @@ const OVERRIDE_OUTPUT_FIELDS: Record<string, string | string[]> = {
   paddingBottom: "layout",
   itemSpacing: "layout",
   counterAxisSpacing: "layout",
-  layoutAlign: "layout",
-  layoutGrow: "layout",
-  layoutPositioning: "layout",
-  layoutSizingHorizontal: "layout",
-  layoutSizingVertical: "layout",
   overflowDirection: "layout",
+  gridColumnsSizing: "layout",
+  gridRowsSizing: "layout",
+  gridColumnGap: "layout",
+  gridRowGap: "layout",
+  gridAutoTracks: "layout",
+  gridItemsPositioning: "layout",
+  // grid-child placement — the child's own `layout` (gridColumn / gridRow / justifySelf)
+  gridColumnAnchorIndex: "layout",
+  gridRowAnchorIndex: "layout",
+  gridColumnSpan: "layout",
+  gridRowSpan: "layout",
+  gridChildHorizontalAlign: "layout",
+  gridChildVerticalAlign: "layout",
+  layoutAlign: "layout",
+  // child sizing — the read shape spells fill/hug as the `width` / `height` VALUE, so a
+  // sizing-mode override is a size override from a reader's point of view. `layoutGrow`
+  // has no axis of its own on the wire; it names both.
+  layoutSizingHorizontal: "width",
+  layoutSizingVertical: "height",
+  layoutGrow: ["width", "height"],
+  layoutPositioning: ["position", "left", "top"],
   // component data
   componentProperties: "componentProperties",
   mainComponent: "componentId",

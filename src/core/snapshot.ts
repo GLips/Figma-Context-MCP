@@ -415,9 +415,10 @@ export interface NodeSnapshot {
   componentProperties?: Record<string, SnapshotComponentPropertyValue>;
   componentPropertyDefinitions?: Record<string, SnapshotComponentPropertyDefinition>;
   /**
-   * INSTANCE only: the DIRECT overrides on this instance's sublayers — inherited ones
-   * (from an enclosing instance) are not listed, on either producer. The core hands
-   * each entry to the sublayer it names.
+   * INSTANCE only: the direct overrides Figma reports at this instance level, on the
+   * instance itself and its sublayers. The core folds every enclosing level's list
+   * together and hands each entry to the node it names, so it does not matter which
+   * level a nested instance's edit is reported on.
    */
   overrides?: SnapshotOverride[];
 }

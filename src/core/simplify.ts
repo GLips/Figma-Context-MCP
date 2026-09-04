@@ -90,10 +90,11 @@ interface SimplifyContext {
   parent?: NodeSnapshot;
   insideComponentDefinition: boolean;
   /**
-   * The nearest enclosing INSTANCE's direct overrides, id → wire fields, so each
-   * sublayer can pick up its own entry. Replaced (not merged) at every INSTANCE:
-   * Figma lists only direct overrides per instance level, so a nested instance's
-   * list is complete for its own sublayers.
+   * Every enclosing INSTANCE's direct overrides, id → wire fields, so each sublayer
+   * can pick up its own entry. Merged (not replaced) at each INSTANCE: an edit to a
+   * nested instance made while editing the outer one may be listed on either level,
+   * and a node id is unique across the tree, so folding the levels together loses
+   * nothing and misses nothing.
    */
   overrides: ReadonlyMap<string, string[]>;
   /**
@@ -229,14 +230,18 @@ async function extractNode(
 const NO_OVERRIDES: ReadonlyMap<string, string[]> = new Map();
 
 /**
- * The override map a node and its subtree read from: an INSTANCE installs its own
- * list (replacing the enclosing one — see `SimplifyContext.overrides`); every other
- * node inherits the enclosing instance's.
+ * The override map a node and its subtree read from: an INSTANCE folds its own list
+ * into the enclosing one (see `SimplifyContext.overrides`); every other node inherits
+ * the map as-is.
  */
 function overridesOf(node: NodeSnapshot, context: SimplifyContext): ReadonlyMap<string, string[]> {
-  if (node.type !== "INSTANCE") return context.overrides;
-  if (!node.overrides?.length) return NO_OVERRIDES;
-  return new Map(node.overrides.map((entry) => [entry.id, entry.fields]));
+  if (node.type !== "INSTANCE" || !node.overrides?.length) return context.overrides;
+  const merged = new Map(context.overrides);
+  for (const entry of node.overrides) {
+    const outer = merged.get(entry.id);
+    merged.set(entry.id, outer ? [...outer, ...entry.fields] : entry.fields);
+  }
+  return merged;
 }
 
 /**
