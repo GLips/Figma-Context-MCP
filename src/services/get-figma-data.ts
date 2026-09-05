@@ -107,6 +107,7 @@ export async function getFigmaData(
       figmaService,
       fileKey,
       rawApiResponse,
+      depth,
     );
 
     await hooks.onSimplifyStart?.({ getNodeCount: () => nodeCounter.count });

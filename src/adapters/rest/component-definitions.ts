@@ -26,6 +26,11 @@ import { restNodeToSnapshot } from "./node-to-snapshot.js";
  *     nothing; only the publish `key` crosses files, so each one costs a `/components/:key` lookup
  *     for its file+node, and then one `?ids=` per library file.
  *
+ * One caveat the fetch cannot remove: `?ids=` returns the library's CURRENT state, and a consuming
+ * file pins the version of a component it last accepted. A library layer added since then reads as
+ * a layer every instance has hidden. The floor has the mirror-image bias (a donor's own edits), so
+ * neither source is authoritative — `childrenFrom` says which one a reader is looking at.
+ *
  * EVERY failure falls back to the donor floor. This is a supplementary fetch against a famously
  * rate-limited API, and the library grant is separate from the file grant — a user can have full
  * access to a file whose components they cannot open. So failures are logged and swallowed: the
@@ -35,25 +40,67 @@ export async function fetchComponentDefinitions(
   figmaService: FigmaService,
   fileKey: string,
   apiResponse: GetFileResponse | GetFileNodesResponse,
+  maxDepth?: number | null,
 ): Promise<NodeSnapshot[]> {
   const { rawNodes, components } = parseAPIResponse(apiResponse);
-  const missing = missingDefinitions(rawNodes, components);
-  if (missing.length === 0) return [];
+  const found = missingDefinitions(rawNodes, components, maxDepth);
+  if (found.length === 0) return [];
+
+  // A published component costs its OWN key lookup, so a design-system page referencing a hundred
+  // of them would fire a hundred concurrent calls at an API that rate-limits hard. Bound the work
+  // and say what fell off the end: silent truncation reads as "we fetched everything".
+  const missing = found.slice(0, MAX_DEFINITION_FETCHES);
+  if (found.length > missing.length) {
+    Logger.log(
+      `Fetching definitions for ${missing.length} of ${found.length} off-tree components ` +
+        `(cap ${MAX_DEFINITION_FETCHES}); the rest fall back to a donated instance.`,
+    );
+  }
 
   const local = missing.filter(([, component]) => !component.remote);
   const remote = missing.filter(([, component]) => component.remote);
 
   const fetches: Promise<NodeSnapshot[]>[] = [];
   if (local.length > 0) {
-    const wanted = new Map(local.map(([id]) => [id, id]));
-    fetches.push(fetchDefinitionNodes(figmaService, fileKey, wanted));
+    // Same-file ids address real nodes here, so nothing needs re-keying and one call answers all.
+    const wanted = new Map(local.map(([id]) => [id, { id, key: undefined }]));
+    fetches.push(fetchDefinitionNodes(figmaService, fileKey, wanted, components));
   }
   for (const [libraryFileKey, wanted] of await locateRemote(figmaService, remote)) {
-    fetches.push(fetchDefinitionNodes(figmaService, libraryFileKey, wanted));
+    fetches.push(fetchDefinitionNodes(figmaService, libraryFileKey, wanted, components));
   }
 
   const settled = await Promise.all(fetches);
   return settled.flat();
+}
+
+/**
+ * How many off-tree definitions one read will fetch. Each published one is a key lookup plus a
+ * share of a node fetch, against an API whose rate limit is the read's real constraint. Past this
+ * the donor floor is the better trade: a slower read that 429s is worse than a slightly less
+ * pristine one.
+ */
+const MAX_DEFINITION_FETCHES = 40;
+
+/** Concurrent key lookups. Enough to hide latency, low enough not to look like a burst. */
+const KEY_LOOKUP_CONCURRENCY = 6;
+
+/** Run `work` over `items` with at most `limit` in flight, preserving nothing but the results. */
+async function mapWithLimit<T, R>(
+  items: T[],
+  limit: number,
+  work: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results: R[] = [];
+  let next = 0;
+  const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const index = next++;
+      results.push(await work(items[index]));
+    }
+  });
+  await Promise.all(runners);
+  return results;
 }
 
 /**
@@ -64,15 +111,26 @@ export async function fetchComponentDefinitions(
 function missingDefinitions(
   rawNodes: FigmaDocumentNode[],
   components: Record<string, Component>,
+  maxDepth?: number | null,
 ): Array<[string, Component]> {
   const referenced = new Set<string>();
   const defined = new Set<string>();
-  const visit = (node: FigmaDocumentNode): void => {
+  // Discovery walks the same slice of the document the READ will keep. A hidden layer or one below
+  // the depth cut never reaches the output, so fetching its component spends a request on bytes
+  // nobody sees. The visibility rule mirrors `shouldProcessNode` in the core: hidden means gone,
+  // unless a component property drives the visibility, in which case some instance shows it.
+  const visit = (node: FigmaDocumentNode, depth: number): void => {
+    const propertyDriven =
+      "componentPropertyReferences" in node &&
+      !!node.componentPropertyReferences &&
+      "visible" in node.componentPropertyReferences;
+    if ("visible" in node && node.visible === false && !propertyDriven) return;
     if (node.type === "COMPONENT" || node.type === "COMPONENT_SET") defined.add(node.id);
     if (node.type === "INSTANCE" && node.componentId) referenced.add(node.componentId);
-    for (const child of "children" in node ? (node.children ?? []) : []) visit(child);
+    if (maxDepth !== undefined && maxDepth !== null && depth >= maxDepth) return;
+    for (const child of "children" in node ? (node.children ?? []) : []) visit(child, depth + 1);
   };
-  for (const node of rawNodes) visit(node);
+  for (const node of rawNodes) visit(node, 0);
 
   const missing: Array<[string, Component]> = [];
   for (const id of referenced) {
@@ -94,29 +152,33 @@ function missingDefinitions(
 async function locateRemote(
   figmaService: FigmaService,
   remote: Array<[string, Component]>,
-): Promise<Map<string, Map<string, string>>> {
-  const byFile = new Map<string, Map<string, string>>();
-  const sites = await Promise.all(
-    remote.map(async ([localId, component]) => {
-      try {
-        const site = await figmaService.getPublishedComponentSite(component.key);
-        return { localId, ...site };
-      } catch (error) {
-        Logger.log(
-          `Component definition for ${component.name} (key ${component.key}) is unreachable — ` +
-            `falling back to a donated instance: ${error instanceof Error ? error.message : String(error)}`,
-        );
-        return null;
-      }
-    }),
-  );
+): Promise<Map<string, Map<string, WantedDefinition>>> {
+  const byFile = new Map<string, Map<string, WantedDefinition>>();
+  const sites = await mapWithLimit(remote, KEY_LOOKUP_CONCURRENCY, async ([localId, component]) => {
+    try {
+      const site = await figmaService.getPublishedComponentSite(component.key);
+      return { localId, key: component.key, ...site };
+    } catch (error) {
+      Logger.log(
+        `Component definition for ${component.name} (key ${component.key}) is unreachable — ` +
+          `falling back to a donated instance: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return null;
+    }
+  });
   for (const site of sites) {
     if (!site) continue;
-    const wanted = byFile.get(site.fileKey) ?? new Map<string, string>();
-    wanted.set(site.nodeId, site.localId);
+    const wanted = byFile.get(site.fileKey) ?? new Map<string, WantedDefinition>();
+    wanted.set(site.nodeId, { id: site.localId, key: site.key });
     byFile.set(site.fileKey, wanted);
   }
   return byFile;
+}
+
+/** A definition to fetch: the id the READ must see it under, and its publish key when it has one. */
+interface WantedDefinition {
+  id: string;
+  key?: string;
 }
 
 /**
@@ -128,25 +190,86 @@ async function locateRemote(
 async function fetchDefinitionNodes(
   figmaService: FigmaService,
   fileKey: string,
-  wanted: Map<string, string>,
+  wanted: Map<string, WantedDefinition>,
+  consumingComponents: Record<string, Component>,
 ): Promise<NodeSnapshot[]> {
+  let response;
   try {
-    const response = await figmaService.getRawNodes(fileKey, [...wanted.keys()]);
-    const snapshots: NodeSnapshot[] = [];
-    for (const [nodeId, entry] of Object.entries(response.nodes)) {
-      if (!entry) continue;
-      const snapshot = restNodeToSnapshot(entry.document, entry.styles ?? {}, {
-        components: entry.components,
-        componentSets: entry.componentSets,
-      });
-      snapshots.push({ ...snapshot, id: wanted.get(nodeId) ?? nodeId });
-    }
-    return snapshots;
+    response = await figmaService.getRawNodes(fileKey, [...wanted.keys()]);
   } catch (error) {
+    // Access, rate limit, network. Expected enough to be a fallback rather than a failure.
     Logger.log(
       `Component definitions in ${fileKey} are unreachable — falling back to donated instances: ` +
         `${error instanceof Error ? error.message : String(error)}`,
     );
     return [];
   }
+
+  // A decode failure is NOT an access failure: the response arrived and we could not read it, which
+  // is a bug in the adapter or a wire change, not a permission. Log it as its own thing rather than
+  // letting it hide among the 403s — but still fall back, because a read that dies on supplementary
+  // data is worse than one that publishes a donated body.
+  const snapshots: NodeSnapshot[] = [];
+  for (const [nodeId, entry] of Object.entries(response.nodes)) {
+    const target = wanted.get(nodeId);
+    if (!entry) {
+      Logger.log(`Component definition ${nodeId} in ${fileKey} came back empty — donor instead.`);
+      continue;
+    }
+    try {
+      const snapshot = restNodeToSnapshot(entry.document, entry.styles ?? {}, {
+        components: entry.components,
+        componentSets: entry.componentSets,
+      });
+      snapshots.push(
+        localize(snapshot, target?.id ?? nodeId, entry.components ?? {}, consumingComponents),
+      );
+    } catch (error) {
+      Logger.log(
+        `Component definition ${nodeId} in ${fileKey} failed to decode — donor instead: ` +
+          `${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+  return snapshots;
+}
+
+/**
+ * Move a fetched definition into the CONSUMING file's id space.
+ *
+ * The root is re-keyed because a library definition's node id belongs to the library while the
+ * instance points at the id the consuming file minted for it. Descendant ids are left alone: an
+ * instance sublayer's path (`I<instance>;<tail>`) is already stated in the definition's own id
+ * space, which is what lets the diff line up at all.
+ *
+ * Nested `componentId`s are the trap. A component inside the fetched subtree names its own
+ * component by a LIBRARY id, and that id can collide with an unrelated component in the consuming
+ * file — the sidecar is keyed by bare id, so the collision would silently point one component's
+ * children at another's. Publish keys are the only identity that crosses files, so a nested
+ * reference is translated through them, and one that doesn't translate loses its `componentId`
+ * rather than asserting something false. That nested instance keeps its children and simply isn't
+ * named — the same place an unpublished component lands.
+ */
+function localize(
+  snapshot: NodeSnapshot,
+  rootId: string,
+  libraryComponents: Record<string, Component>,
+  consumingComponents: Record<string, Component>,
+): NodeSnapshot {
+  const consumingIdByKey = new Map<string, string>();
+  for (const [id, component] of Object.entries(consumingComponents)) {
+    consumingIdByKey.set(component.key, id);
+  }
+
+  const translate = (node: NodeSnapshot): void => {
+    if (node.componentId) {
+      const key = libraryComponents[node.componentId]?.key;
+      const localId = key ? consumingIdByKey.get(key) : undefined;
+      if (localId) node.componentId = localId;
+      else delete node.componentId;
+    }
+    for (const child of node.children ?? []) translate(child);
+  };
+  for (const child of snapshot.children ?? []) translate(child);
+  return { ...snapshot, id: rootId };
 }

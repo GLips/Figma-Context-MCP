@@ -8,7 +8,12 @@
 
 import { Target, RawIdRef, FindQuery, SlimHandle, ReadPredicate, GetResult } from "./ir.js";
 import { readKey, identityOf } from "./identity.js";
-import { sceneNodeToSnapshot, type SceneNodeLike, type SceneStyleResolver } from "./node-to-snapshot.js";
+import {
+  sceneNodeToSnapshot,
+  type MainComponentSink,
+  type SceneNodeLike,
+  type SceneStyleResolver,
+} from "./node-to-snapshot.js";
 import { rejectUnknownKeys } from "./validate.js";
 import { markReadSpec } from "./provenance.js";
 import { simplify, type SimplifiedComponentEntry, type SimplifiedNode } from "@framelink/core";
@@ -104,9 +109,14 @@ async function simplifyScene(
   node: BaseNode,
   options: { components?: boolean } = {},
 ): Promise<{ nodes: SimplifiedNode[]; components: Record<string, SimplifiedComponentEntry> }> {
-  const snapshot = await sceneNodeToSnapshot(node as unknown as SceneNodeLike, resolveStyle);
+  const mainComponents: MainComponentSink = new Map();
+  const snapshot = await sceneNodeToSnapshot(
+    node as unknown as SceneNodeLike,
+    resolveStyle,
+    mainComponents,
+  );
   const componentDefinitions =
-    options.components === false ? [] : await offTreeDefinitions(node as unknown as SceneNodeLike);
+    options.components === false ? [] : await offTreeDefinitions(snapshot, mainComponents);
   const { nodes, components } = await simplify([snapshot], { ...options, componentDefinitions });
   return { nodes, components };
 }
@@ -115,35 +125,43 @@ async function simplifyScene(
  * The real definition for every component this subtree instantiates but doesn't contain — what the
  * core publishes instead of donating some instance's already-edited children.
  *
- * Free here in a way it never is over REST: `getMainComponentAsync` hands back the live component
- * node, published library ones included (that is why it is async), so there is no key lookup, no
- * second file, and no permission that can be missing. Definitions found INSIDE the subtree are
- * skipped — the core prefers the in-tree node anyway, and re-snapshotting it would double the walk.
+ * Free here in a way it never is over REST: the snapshot walk ALREADY resolved every instance's
+ * main component (that is where `componentId` comes from), so `mainComponents` is that work handed
+ * back rather than repeated. Published library components included — no key lookup, no second
+ * file, no permission that can be missing. Definitions already IN the subtree are skipped: the core
+ * prefers the in-tree node anyway.
  *
  * One round only: a definition's own children may instantiate a further off-tree component, and
- * that one falls back to the donor. Chasing the chain would walk an unbounded slice of the
- * document for bytes an agent reading ONE node did not ask for.
+ * that one falls back to the donor. Chasing the chain would walk an unbounded slice of the document
+ * for bytes an agent reading ONE node did not ask for — and each round re-walks the subtrees the
+ * previous one already expanded.
+ *
+ * Supplementary by definition, so it never fails the read: a component that refuses to snapshot
+ * costs its own entry a donated body, nothing more.
  */
-async function offTreeDefinitions(root: SceneNodeLike): Promise<NodeSnapshot[]> {
-  const defined = new Set<string>();
-  const instances: SceneNodeLike[] = [];
-  const scan = (node: SceneNodeLike): void => {
-    if (node.type === "COMPONENT" || node.type === "COMPONENT_SET") defined.add(node.id);
-    if (node.type === "INSTANCE") instances.push(node);
-    for (const child of node.children ?? []) scan(child as SceneNodeLike);
-  };
-  scan(root);
-  if (instances.length === 0) return [];
+async function offTreeDefinitions(
+  snapshot: NodeSnapshot,
+  mainComponents: MainComponentSink,
+): Promise<NodeSnapshot[]> {
+  if (mainComponents.size === 0) return [];
 
-  const mains = await Promise.all(
-    instances.map((instance) => instance.getMainComponentAsync?.() ?? null),
-  );
-  const wanted = new Map<string, SceneNodeLike>();
-  for (const main of mains) {
-    if (!main || defined.has(main.id) || wanted.has(main.id)) continue;
-    wanted.set(main.id, main as unknown as SceneNodeLike);
+  const defined = new Set<string>();
+  const scan = (node: NodeSnapshot): void => {
+    if (node.type === "COMPONENT" || node.type === "COMPONENT_SET") defined.add(node.id);
+    for (const child of node.children ?? []) scan(child);
+  };
+  scan(snapshot);
+
+  const definitions: NodeSnapshot[] = [];
+  for (const [id, main] of mainComponents) {
+    if (defined.has(id)) continue;
+    try {
+      definitions.push(await sceneNodeToSnapshot(main as unknown as SceneNodeLike, resolveStyle));
+    } catch {
+      // The component was deleted mid-read, or the library refused to load it. Donor floor.
+    }
   }
-  return Promise.all([...wanted.values()].map((main) => sceneNodeToSnapshot(main, resolveStyle)));
+  return definitions;
 }
 
 /**

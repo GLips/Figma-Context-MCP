@@ -258,6 +258,15 @@ async function extractNode(
         result.children = childrenToInclude;
       }
     }
+
+    // A container whose children ALL dropped out — every one hidden by hand. Recorded rather than
+    // inferred later, because only here is it distinguishable from a childless node or a subtree
+    // the depth limit cut short; the components pass turns it into a `visible: false` per child
+    // instead of a node that reads as untouched. A container the SVG collapse folded into an image
+    // is not this: it has no children to speak of any more.
+    if (!result.children && result.type !== "IMAGE-SVG") {
+      context.components.emptiedContainers.add(node.id);
+    }
   }
 
   return result;

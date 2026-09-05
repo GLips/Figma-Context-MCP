@@ -135,7 +135,7 @@ function inlineSingleUseStyles(
           set(styles[value]);
         }
       });
-      if (node.children) walk(node.children);
+      walk(styleBearingNested(node));
     }
   };
   for (const surface of surfaces) walk(surface);
@@ -154,11 +154,26 @@ function countStyleRefs(nodes: SimplifiedNode[]): Map<string, number> {
       visitStyleRefSlots(node, (value) => {
         if (typeof value === "string") counts.set(value, (counts.get(value) ?? 0) + 1);
       });
-      if (node.children) walk(node.children);
+      walk(styleBearingNested(node));
     }
   };
   walk(nodes);
   return counts;
+}
+
+/**
+ * Everything under a node that can carry a style ref: its children AND every entry of its
+ * `overrides` diff.
+ *
+ * An override delta is a partial node — it holds the same `fill`/`layout`/`textStyle` slots as any
+ * node, and a filled slot's delta republishes whole `children`. A traversal that only followed
+ * `children` would count those refs as zero uses, and a zero-count ref is treated as single-use and
+ * dropped from the table without ever being inlined — leaving the delta pointing at a key that no
+ * longer exists. Every style pass therefore descends the same way.
+ */
+function styleBearingNested(node: SimplifiedNode): SimplifiedNode[] {
+  if (!node.overrides) return node.children ?? [];
+  return [...(node.children ?? []), ...Object.values(node.overrides)];
 }
 
 /** A candidate template during collection: the body, its stable-serialized form, and how many nodes carry it. */
@@ -213,15 +228,21 @@ function inlineExclusiveStyles(
   for (const [hash, body] of Object.entries(templates)) {
     const instanceCount = instanceCounts.get(hash);
     if (instanceCount === undefined) continue;
-    visitStyleRefSlots(body, (ref, set) => {
-      if (typeof ref !== "string") return;
-      if (namedStyleKeys.has(ref)) return;
-      if (!(ref in styles)) return;
-      if (counts.get(ref) === instanceCount) {
-        set(styles[ref]);
-        delete styles[ref];
-      }
-    });
+    // The body's own slots and those of every override it carries — a template body keeps
+    // `overrides` (it is intrinsic to the body), so its refs are part of what this collapses.
+    const inlineExclusive = (target: SimplifiedNode | TemplateBody): void => {
+      visitStyleRefSlots(target, (ref, set) => {
+        if (typeof ref !== "string") return;
+        if (namedStyleKeys.has(ref)) return;
+        if (!(ref in styles)) return;
+        if (counts.get(ref) === instanceCount) {
+          set(styles[ref]);
+          delete styles[ref];
+        }
+      });
+      for (const nested of styleBearingNested(target as SimplifiedNode)) inlineExclusive(nested);
+    };
+    inlineExclusive(body);
   }
 }
 

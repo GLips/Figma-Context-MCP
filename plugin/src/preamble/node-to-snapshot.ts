@@ -316,9 +316,18 @@ export type SceneStyleResolver = (styleId: string) => Promise<{ name: string } |
 export async function sceneNodeToSnapshot(
   node: SceneNodeLike,
   resolveStyle: SceneStyleResolver,
+  mainComponents?: MainComponentSink,
 ): Promise<NodeSnapshot> {
-  return sceneSubtreeToSnapshot(node, resolveStyle, CONTAINER_PARENT_SPACE);
+  return sceneSubtreeToSnapshot(node, resolveStyle, CONTAINER_PARENT_SPACE, mainComponents);
 }
+
+/**
+ * Where the caller collects every main component this walk resolved, keyed by id. Offered because
+ * the walk ALREADY awaits `getMainComponentAsync` on every instance to learn its `componentId`:
+ * a caller that needs those component nodes (to publish their definitions) would otherwise ask the
+ * document for each one a second time.
+ */
+export type MainComponentSink = Map<string, MainComponentLike>;
 
 /**
  * Where a node's `x`/`y` are measured from, relative to the parent the snapshot
@@ -356,15 +365,19 @@ async function sceneSubtreeToSnapshot(
   node: SceneNodeLike,
   resolveStyle: SceneStyleResolver,
   parentSpace: SceneParentSpace,
+  mainComponents?: MainComponentSink,
 ): Promise<NodeSnapshot> {
   const text = node.type === "TEXT" ? decodeSceneText(node) : undefined;
   const main = await mainComponentOf(node);
+  if (main && mainComponents && !mainComponents.has(main.id)) mainComponents.set(main.id, main);
 
   const childSpace: SceneParentSpace = isCoordinateTransparentType(node.type)
     ? { transparent: true, origin: ownXY(node), rotation: node.rotation ?? 0 }
     : CONTAINER_PARENT_SPACE;
   const children = await Promise.all(
-    (node.children ?? []).map((child) => sceneSubtreeToSnapshot(child, resolveStyle, childSpace)),
+    (node.children ?? []).map((child) =>
+      sceneSubtreeToSnapshot(child, resolveStyle, childSpace, mainComponents),
+    ),
   );
 
   return {

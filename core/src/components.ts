@@ -46,10 +46,17 @@ export interface ComponentProvenance {
 export interface ComponentNotes {
   components: Map<string, ComponentProvenance>;
   instanceEdits: Map<string, number>;
+  /**
+   * Nodes the walk descended into whose children ALL dropped out — every one hidden by hand. Only
+   * the walk can tell this apart from the two other ways a node ends up with no `children`: a
+   * genuinely childless node, and a subtree the depth limit cut short. Without the distinction,
+   * "hid every layer in here" and "left it alone" emit the same bytes.
+   */
+  emptiedContainers: Set<string>;
 }
 
 export function createComponentNotes(): ComponentNotes {
-  return { components: new Map(), instanceEdits: new Map() };
+  return { components: new Map(), instanceEdits: new Map(), emptiedContainers: new Set() };
 }
 
 /**
@@ -124,7 +131,11 @@ export function extractComponents(
   indexTree(nodes, definitionNodes, instancesByComponent);
   for (const definition of definitions) {
     indexTree([definition], definitionNodes, instancesByComponent);
-    definitionNodes.set(definition.id, definition);
+    // The in-tree node WINS (priority 1 over 2, above). It is the definition as this document has
+    // it; a fetched one is the library's current state, which the consuming file may not have
+    // adopted. `indexTree` above only registers COMPONENT/COMPONENT_SET-typed roots, so a fetched
+    // definition whose root is neither still needs registering here.
+    if (!definitionNodes.has(definition.id)) definitionNodes.set(definition.id, definition);
   }
 
   // Every id anything in this read names — instances point at components the tree may not hold,
@@ -158,7 +169,9 @@ export function extractComponents(
     resolving.add(id);
     const source = sources.get(id);
     const children = source
-      ? source.children.map((child) => reduceNode(clone(child), resolveChildren))
+      ? source.children.map((child) =>
+          reduceNode(clone(child), resolveChildren, notes.emptiedContainers),
+        )
       : undefined;
     resolving.delete(id);
     resolved.set(id, children);
@@ -179,7 +192,7 @@ export function extractComponents(
   };
 
   for (const id of ids) resolveChildren(id);
-  for (const node of nodes) reduceNode(node, resolveChildren);
+  for (const node of nodes) reduceNode(node, resolveChildren, notes.emptiedContainers);
   return components;
 }
 
@@ -218,25 +231,37 @@ function chooseChildren(
     delete definition.children;
     return { children };
   }
-  const donor = leastEdited(instancesByComponent.get(id), instanceEdits);
-  if (!donor?.children?.length) return undefined;
-  return { children: donor.children.map((child) => rekey(clone(child), donor.id)), from: donor.id };
+  // The least-edited instance first, then the next — an instance whose own sublayers were all
+  // hidden has nothing to donate, and stopping at it would publish no children for a component
+  // some other instance could have shown whole.
+  for (const donor of byEditCount(instancesByComponent.get(id), instanceEdits)) {
+    if (!donor.children?.length) continue;
+    return {
+      children: donor.children.map((child) => rekey(clone(child), donor.id)),
+      from: donor.id,
+    };
+  }
+  return undefined;
 }
 
 /**
- * The instance whose children are closest to the component's own. Fewest override entries wins;
+ * Candidate donors, closest to the component's own children first. Fewest override entries wins;
  * ties break on id so the choice doesn't depend on walk order. A donor with edits is still worth
  * publishing — `childrenFrom` warns the reader — because the alternative is N full subtrees.
+ *
+ * Fewest-edits is a heuristic, not proof of a pristine body: Figma records a hand edit, not a
+ * layout side-effect, so an instance that was merely stretched counts as clean. It is the best
+ * signal available without the definition itself, which is what the fetched upgrade is for.
  */
-function leastEdited(
+function byEditCount(
   instances: SimplifiedNode[] | undefined,
   instanceEdits: Map<string, number>,
-): SimplifiedNode | undefined {
-  if (!instances?.length) return undefined;
+): SimplifiedNode[] {
+  if (!instances?.length) return [];
   return [...instances].sort((a, b) => {
     const byEdits = (instanceEdits.get(a.id) ?? 0) - (instanceEdits.get(b.id) ?? 0);
     return byEdits !== 0 ? byEdits : a.id.localeCompare(b.id);
-  })[0];
+  });
 }
 
 function rekey(node: SimplifiedNode, donorId: string): SimplifiedNode {
@@ -257,16 +282,20 @@ function clone(node: SimplifiedNode): SimplifiedNode {
 function reduceNode(
   node: SimplifiedNode,
   resolveChildren: (id: string) => SimplifiedNode[] | undefined,
+  emptied: Set<string>,
 ): SimplifiedNode {
   if (node.children) {
-    for (const child of node.children) reduceNode(child, resolveChildren);
+    for (const child of node.children) reduceNode(child, resolveChildren, emptied);
   }
-  if (node.type !== "INSTANCE" || !node.componentId || !node.children) return node;
+  if (node.type !== "INSTANCE" || !node.componentId) return node;
+  // No children AND the walk didn't empty it: either the component has none, or the depth limit
+  // stopped short of them. Neither is a difference, so there is nothing to diff.
+  if (!node.children && !emptied.has(node.id)) return node;
 
   const reference = resolveChildren(node.componentId);
   if (!reference) return node;
 
-  const overrides = diffChildren(reference, node.children, node.id);
+  const overrides = diffChildren(reference, node.children ?? [], node.id, emptied);
   // `null` means the instance added children the diff can't express as a delta (a filled slot
   // at the top level). Keeping the full subtree is the honest answer for that instance.
   if (overrides === null) return node;
@@ -284,20 +313,29 @@ function diffChildren(
   reference: SimplifiedNode[],
   actual: SimplifiedNode[],
   instanceId: string,
+  emptied: Set<string>,
 ): Record<string, SimplifiedNode> | null {
   const referenceByPath = new Map<string, SimplifiedNode>();
   for (const child of reference) referenceByPath.set(componentPath(child.id, ""), child);
 
   const out: Record<string, SimplifiedNode> = {};
   const matched = new Set<string>();
+  const order: string[] = [];
   for (const child of actual) {
     const path = componentPath(child.id, instanceId);
     const counterpart = referenceByPath.get(path);
     if (!counterpart) return null;
     matched.add(path);
-    const delta = diffNode(counterpart, child, instanceId, out);
+    order.push(path);
+    const delta = diffNode(counterpart, child, instanceId, out, emptied);
     if (delta) out[path] = delta;
   }
+
+  // Sibling order IS the z-order and the layout flow, and the diff states differences by path, not
+  // by position — so a resequenced list (slot content the designer rearranged) would otherwise come
+  // out as no difference at all. Republish this level whole rather than inventing an order word.
+  const referenceOrder = [...referenceByPath.keys()].filter((path) => matched.has(path));
+  if (order.some((path, index) => path !== referenceOrder[index])) return null;
 
   // Present in the component, absent here: the designer hid this layer by hand. The read shape
   // drops hidden nodes, so the deviation would otherwise vanish entirely.
@@ -321,6 +359,7 @@ function diffNode(
   actual: SimplifiedNode,
   instanceId: string,
   out: Record<string, SimplifiedNode>,
+  emptied: Set<string>,
 ): SimplifiedNode | undefined {
   const delta: Record<string, unknown> = {};
   const referenceRecord = reference as unknown as Record<string, unknown>;
@@ -329,15 +368,25 @@ function diffNode(
     if (DIFF_SKIP_KEYS.has(key)) continue;
     const before = referenceRecord[key];
     const after = actualRecord[key];
-    if (after === undefined) continue;
+    // Absent on the instance but present on the component: the designer put the field back to its
+    // default (opacity to 1, a radius to 0, a paint removed). The read shape omits defaults, so
+    // there is no value to state — `null` is the delta's word for "this field is not here", and
+    // without it the reader would rebuild the component's value on a node that lost it.
+    if (after === undefined) {
+      if (before !== undefined) delta[key] = null;
+      continue;
+    }
     if (stableStringify(before) !== stableStringify(after)) delta[key] = after;
   }
 
-  if (actual.children) {
+  // An emptied container has no `children` to compare, but an EMPTY list is the honest actual:
+  // every one of the component's children then falls out below as `visible: false`.
+  const actualChildren = actual.children ?? (emptied.has(actual.id) ? [] : undefined);
+  if (actualChildren) {
     const nested = reference.children
-      ? diffChildren(reference.children, actual.children, instanceId)
+      ? diffChildren(reference.children, actualChildren, instanceId, emptied)
       : null;
-    if (nested === null) delta.children = actual.children;
+    if (nested === null) delta.children = actualChildren;
     else Object.assign(out, nested);
   }
 

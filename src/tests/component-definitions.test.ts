@@ -122,6 +122,77 @@ describe("off-tree component definitions", () => {
     });
   });
 
+  it("translates a fetched definition's nested references through publish keys", async () => {
+    // The library card holds an icon instance of library component `5:1`. The consuming file knows
+    // that same published icon as `80:1` AND has an unrelated local component that happens to be
+    // `5:1` — bare ids do not mean the same thing in two files, so an untranslated reference would
+    // point the card's icon at the wrong component entirely.
+    const consuming = {
+      ...CONSUMING_FILE,
+      components: {
+        ...CONSUMING_FILE.components,
+        "80:1": {
+          key: "pub-icon",
+          name: "Icon",
+          description: "",
+          documentationLinks: [],
+          remote: true,
+        },
+        "5:1": {
+          key: "local-unrelated",
+          name: "Unrelated",
+          description: "",
+          documentationLinks: [],
+          remote: false,
+        },
+      },
+    } as unknown as GetFileResponse;
+
+    const service = stubService({
+      getRawNodes: async () =>
+        ({
+          name: "Design System",
+          nodes: {
+            "77:7": {
+              document: node({
+                id: "77:7",
+                name: "Button",
+                type: "COMPONENT",
+                children: [
+                  node({ id: "5:9", name: "Icon", type: "INSTANCE", componentId: "5:1" }),
+                  node({ id: "6:9", name: "Glyph", type: "INSTANCE", componentId: "6:1" }),
+                ],
+              }),
+              components: {
+                "5:1": {
+                  key: "pub-icon",
+                  name: "Icon",
+                  description: "",
+                  documentationLinks: [],
+                  remote: false,
+                },
+                "6:1": {
+                  key: "pub-glyph",
+                  name: "Glyph",
+                  description: "",
+                  documentationLinks: [],
+                  remote: false,
+                },
+              },
+              componentSets: {},
+              styles: {},
+            },
+          },
+        }) as unknown as GetFileNodesResponse,
+    });
+
+    const [definition] = await fetchComponentDefinitions(service, "consumer", consuming);
+    // Same publish key on both sides — the reference lands on the id the consuming file uses.
+    expect(definition.children?.[0].componentId).toBe("80:1");
+    // No counterpart in the consuming file: better unnamed than named wrong.
+    expect(definition.children?.[1].componentId).toBeUndefined();
+  });
+
   it("falls back to the donor floor when the library is unreachable", async () => {
     const service = stubService({
       getPublishedComponentSite: async () => {

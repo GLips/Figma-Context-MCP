@@ -218,10 +218,16 @@ export interface SimplifiedNode extends NodeGeometry {
    * the live node is `I<instanceId>;<path>`, and the definition's node is `<path>` for a single
    * segment or `I<path>` for two or more (Figma carries exactly one leading `I`).
    *
-   * Each value is a partial node: only the fields that differ. A sublayer the designer hid by
-   * hand reads as `visible: false` — the definition has the node and the instance does not.
-   * A sublayer whose child LIST differs (a filled slot) carries its whole `children` array
-   * rather than a per-child diff, because that content is new rather than changed.
+   * Each value is a partial node: only the fields that differ. Three readings, and only three:
+   *   - a field with a VALUE — the instance has that value where the component has another
+   *   - a field with `null` — the field is ABSENT on the instance, though the component has it.
+   *     The read shape omits defaults, so "back to the default" (opacity 1, radius 0, a paint
+   *     removed) has no value to state; without `null` the reader would rebuild the component's
+   *     value on a node that lost it. An omitted field always means "same as the component".
+   *   - `visible: false` — the definition has the node and the instance hides it
+   * A sublayer whose child LIST differs (a filled slot, or content the designer resequenced)
+   * carries its whole `children` array rather than a per-child diff, because that is new content
+   * or a new order rather than a field-by-field edit.
    */
   overrides?: Record<string, SimplifiedNode>;
   // children
