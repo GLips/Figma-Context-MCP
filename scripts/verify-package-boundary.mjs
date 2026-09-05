@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { readFileSync, readdirSync, mkdtempSync, rmSync } from "node:fs";
+import { readFileSync, readdirSync, mkdtempSync, rmSync, existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { pathToFileURL } from "node:url";
@@ -34,8 +34,15 @@ export function assertPackageFiles(files) {
 }
 export function assertSourceBoundary(root) {
   const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
-  const lab = JSON.parse(readFileSync(join(root, "tools/payload-lab/package.json"), "utf8"));
-  if (lab.private !== true) throw new Error("Payload Lab must stay private.");
+  // The lab's own manifest is asserted only when the lab is present. This gate runs from `prepack`,
+  // so it decides whether the ROOT package is safe to publish; it must not crash on a checkout that
+  // simply doesn't have an optional local tool. The scans below are the part that actually protects
+  // the tarball, and they cover the source trees that reach dist whether the lab exists or not.
+  const labManifest = join(root, "tools/payload-lab/package.json");
+  if (existsSync(labManifest)) {
+    const lab = JSON.parse(readFileSync(labManifest, "utf8"));
+    if (lab.private !== true) throw new Error("Payload Lab must stay private.");
+  }
   if (JSON.stringify(pkg.files) !== JSON.stringify(["dist", "README.md"]))
     throw new Error("Review published files allowlist before changing it.");
   if (/payload-lab|recursive|--filter|\s-r\b/.test(pkg.scripts.build))
