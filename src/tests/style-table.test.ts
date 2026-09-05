@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { Node as FigmaNode, Style, TypeStyle } from "@figma/rest-api-spec";
-import { walkNodes } from "~/core/simplify.js";
-import { createRefStyleTable } from "~/core/style-table.js";
+import { walkNodes } from "@framelink/core";
+import { createRefStyleTable } from "@framelink/core";
 import { restNodeToSnapshot } from "~/adapters/rest/node-to-snapshot.js";
-import type { StyleValue } from "~/core/types.js";
+import type { StyleValue } from "@framelink/core";
 
 // resolveStyleKey decides whether a node's named Figma style collapses onto an
 // existing same-name entry or gets a disambiguating ` (id)` suffix. The decision

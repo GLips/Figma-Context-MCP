@@ -28,7 +28,7 @@ export const RICH_TEXT = `\`flcm.text\` takes **either** a plain string **or** a
 flcm.text("Ship it **today** — see the [runbook](https://ex.co/run) first.");
 \`\`\`
 
-To render one of those characters **literally**, backslash-escape it: \`"save 20\\\\% \\\\*today\\\\*"\` renders \`save 20% *today*\`. This escape convention is shared with figma-mcp's read output, so text you read back and re-author round-trips exactly. Markdown **image** syntax \`![alt](url)\` fails loud — text can't embed an image; use \`flcm.image(url)\`.
+To render one of those characters **literally**, backslash-escape it: \`"save 20% \\\\*today\\\\*"\` renders \`save 20% *today*\`. Only \`\\ * _ ~ [ ] ( ) { }\` are escapable; every other character is already literal, and a backslash before one of them (\`"20\\\\%"\`) renders the backslash too. This escape convention is shared with figma-mcp's read output, so text you read back and re-author round-trips exactly. Markdown **image** syntax \`![alt](url)\` fails loud — text can't embed an image; use \`flcm.image(url)\`.
 
 **Runs array** — a run is a **bare string** (a plain segment) or a **\`[text, style]\` tuple** (a styled span). The tuple's \`style\` is a **delta** over the node-level \`textStyle\` base (the \`textStyle\` object in the second argument), so you set the base once and each styled span carries only what it changes; a run's text may itself contain markdown.
 

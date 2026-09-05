@@ -4,8 +4,8 @@ import type {
   SnapshotComponentPropertyDefinition,
   SnapshotComponentPropertyValue,
   SnapshotStyleRef,
-} from "~/core/snapshot.js";
-import { isCoordinateTransparentType } from "~/core/utils.js";
+} from "@framelink/core/snapshot";
+import { isCoordinateTransparentType } from "@framelink/core";
 import { ROOT_SPACE, solveOwnBox, toParentSpacePoint, type RestParentSpace } from "./own-box.js";
 import { decodePaints, decodeEffect } from "./paint.js";
 import { decodeText } from "./text.js";
@@ -98,7 +98,7 @@ function restSubtreeToSnapshot(
     overrides?: { id: string; overriddenFields: string[] }[];
   };
 
-  const rotation = degreesFromWireRotation(raw.rotation);
+  const containerRotation = degreesFromWireRotation(raw.rotation) ?? 0;
 
   // The node's own box, recovered from the page-space AABB (see ./own-box.ts), plus
   // the space this node's own children will be resolved against.
@@ -109,13 +109,13 @@ function restSubtreeToSnapshot(
   // would invert every descendant's AABB at twice the angle. Their `left`/`top`, on
   // the other hand, are measured in the group's OWN frame, the same frame the group's
   // own width/height are measured in. See `RestParentSpace`.
-  const pageRotation = parentSpace.containerPageRotation + (rotation ?? 0);
+  const pageRotation = parentSpace.containerPageRotation + containerRotation;
   const own = solveOwnBox(raw.absoluteBoundingBox, pageRotation);
   const childSpace: RestParentSpace = {
     containerPageRotation: isCoordinateTransparentType(node.type)
       ? parentSpace.containerPageRotation
       : pageRotation,
-    emittedParentFrame: own?.originOnPage && { originOnPage: own.originOnPage, pageRotation },
+    emittedParentFrame: { originOnPage: own?.originOnPage, pageRotation },
   };
 
   return {
@@ -129,8 +129,12 @@ function restSubtreeToSnapshot(
     absoluteBoundingBox: raw.absoluteBoundingBox,
     ownSize: own?.size,
     ownOrigin:
-      own?.originOnPage && parentSpace.emittedParentFrame
-        ? toParentSpacePoint(own.originOnPage, parentSpace.emittedParentFrame)
+      own?.originOnPage && parentSpace.emittedParentFrame.originOnPage
+        ? toParentSpacePoint(
+            own.originOnPage,
+            parentSpace.emittedParentFrame.originOnPage,
+            parentSpace.emittedParentFrame.pageRotation,
+          )
         : undefined,
     layoutSizingHorizontal: raw.layoutSizingHorizontal,
     layoutSizingVertical: raw.layoutSizingVertical,
@@ -138,7 +142,8 @@ function restSubtreeToSnapshot(
     layoutGrow: raw.layoutGrow,
     layoutPositioning: raw.layoutPositioning,
     preserveRatio: raw.preserveRatio,
-    rotation,
+    // Keep page/container angles local to the solve; the snapshot composes with its parent.
+    rotation: pageRotation - parentSpace.emittedParentFrame.pageRotation || undefined,
     gridColumnAnchorIndex: raw.gridColumnAnchorIndex,
     gridRowAnchorIndex: raw.gridRowAnchorIndex,
     gridColumnSpan: raw.gridColumnSpan,

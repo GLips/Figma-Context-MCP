@@ -11,7 +11,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { resolve, dirname, basename } from "node:path";
 import { serializeResult } from "../src/utils/serialize.js";
 import { wrapForSerialization } from "../src/utils/serializable-design.js";
-import type { SimplifiedDesign, SimplifiedNode } from "../src/core/types.js";
+import type { SimplifiedDesign, SimplifiedNode } from "@framelink/core";
 
 const inputPath = resolve(process.argv[2] ?? "logs/figma-simplified.json");
 const design = JSON.parse(readFileSync(inputPath, "utf8")) as SimplifiedDesign;

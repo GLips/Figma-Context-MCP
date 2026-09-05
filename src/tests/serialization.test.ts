@@ -1,7 +1,7 @@
 import yaml from "js-yaml";
 import { serializeResult } from "~/utils/serialize.js";
 import { wrapForSerialization } from "~/utils/serializable-design.js";
-import type { SimplifiedDesign, SimplifiedNode } from "~/core/types.js";
+import type { SimplifiedDesign, SimplifiedNode } from "@framelink/core";
 
 describe("result serialization", () => {
   describe("YAML format", () => {

@@ -7,14 +7,14 @@ import type {
   Style,
 } from "@figma/rest-api-spec";
 import { tagError } from "~/utils/error-meta.js";
-import type { TraversalOptions, SimplifiedDesign } from "~/core/types.js";
-import type { NodeSnapshot } from "~/core/snapshot.js";
-import { simplify } from "~/core/simplify.js";
+import type { TraversalOptions, SimplifiedDesign } from "@framelink/core";
+import type { NodeSnapshot } from "@framelink/core/snapshot";
+import { simplify } from "@framelink/core";
 import { restNodeToSnapshot } from "./node-to-snapshot.js";
 import type {
   SimplifiedComponentDefinition,
   SimplifiedComponentSetDefinition,
-} from "~/core/transformers/component.js";
+} from "@framelink/core";
 
 // Yield to the Node event loop between walk batches so progress heartbeats,
 // SIGINT, and overlapping HTTP requests stay live during large files. Injected

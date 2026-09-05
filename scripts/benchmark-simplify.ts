@@ -6,7 +6,7 @@ import { performance } from "node:perf_hooks";
 import { Session } from "node:inspector/promises";
 import { cli } from "cleye";
 import { simplifyRestResponse } from "../src/adapters/rest/rest.js";
-import type { NodeCounter, SimplifiedNode } from "../src/core/index.js";
+import type { NodeCounter, SimplifiedNode } from "@framelink/core";
 import { serializeResult } from "../src/utils/serialize.js";
 import { wrapForSerialization } from "../src/utils/serializable-design.js";
 

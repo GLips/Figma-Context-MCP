@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { parsePaint } from "~/core/transformers/style.js";
-import type { SnapshotPaint } from "~/core/snapshot.js";
+import { parsePaint } from "../src/transformers/style.js";
+import type { SnapshotPaint } from "../src/snapshot.js";
 
 // A vertical (180deg) black→transparent linear gradient. Only `opacity` varies
 // between cases, so any difference in the emitted stops is the paint-level

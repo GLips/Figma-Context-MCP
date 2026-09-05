@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { compressDesign } from "~/core/compress.js";
-import type { SimplifiedNode, StyleValue } from "~/core/types.js";
+import { compressDesign } from "../src/compress.js";
+import type { SimplifiedNode, StyleValue } from "../src/types.js";
 
 // compressDesign is the pure functional core of the dedup features: given the
 // already-walked node tree + styles table (style fields hold refs, as

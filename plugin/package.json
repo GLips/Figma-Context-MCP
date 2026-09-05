@@ -14,6 +14,7 @@
     "./node-to-snapshot": "./src/preamble/node-to-snapshot.ts"
   },
   "dependencies": {
+    "@framelink/core": "workspace:*",
     "zod": "^4.4.3"
   },
   "devDependencies": {

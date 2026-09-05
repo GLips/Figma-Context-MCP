@@ -265,7 +265,6 @@
             },
             "layoutSizingHorizontal": "FIXED",
             "layoutSizingVertical": "FIXED",
-            "rotation": 25,
             "clipsContent": false,
             "fills": [
               {
@@ -301,7 +300,7 @@
             },
             "layoutSizingHorizontal": "FIXED",
             "layoutSizingVertical": "FIXED",
-            "rotation": 40,
+            "rotation": 15,
             "clipsContent": false,
             "fills": [
               {

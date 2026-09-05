@@ -22,19 +22,24 @@
     "dev": "cross-env NODE_ENV=development tsup --watch",
     "dev:cli": "cross-env NODE_ENV=development tsup --watch -- --stdio",
     "lint": "eslint .",
-    "format": "prettier --write \"src/**/*.ts\"",
-    "format:check": "prettier --check \"src/**/*.ts\"",
+    "format": "prettier --write \"src/**/*.ts\" \"core/**/*.ts\"",
+    "format:check": "prettier --check \"src/**/*.ts\" \"core/**/*.ts\"",
     "scan-hidden-chars": "node scripts/scan-hidden-chars.mjs",
     "inspect": "pnpx @modelcontextprotocol/inspector",
     "benchmark:simplify": "tsx scripts/benchmark-simplify.ts",
-    "prepack": "pnpm build",
+    "prepack": "pnpm build && node scripts/verify-package-boundary.mjs --no-build",
     "typecheck:plugin": "pnpm --filter @framelink/plugin typecheck",
     "test:plugin": "pnpm --filter @framelink/plugin test",
     "build:plugin": "pnpm --filter @framelink/plugin build",
     "contract": "tsx scripts/bridge-contract.mjs",
     "docs:gen": "tsx scripts/gen-flcm-doc.ts",
     "docs:check": "tsx scripts/gen-flcm-doc.ts check",
-    "validate": "pnpm scan-hidden-chars && pnpm format:check && pnpm lint && pnpm type-check && pnpm typecheck:plugin && pnpm test && pnpm test:plugin && pnpm contract && pnpm build && pnpm build:plugin && pnpm docs:check"
+    "validate": "pnpm scan-hidden-chars && pnpm format:check && pnpm lint && pnpm type-check && pnpm typecheck:core && pnpm typecheck:plugin && pnpm test && pnpm test:core && pnpm test:plugin && pnpm contract && pnpm build && pnpm build:plugin && pnpm docs:check",
+    "payload-lab": "pnpm --filter @framelink/payload-lab dev",
+    "test:payload-lab": "pnpm --filter @framelink/payload-lab test",
+    "check:package": "node scripts/verify-package-boundary.mjs",
+    "typecheck:core": "pnpm --filter @framelink/core typecheck",
+    "test:core": "pnpm --filter @framelink/core test"
   },
   "engines": {
     "node": ">=20.20.0"
@@ -80,6 +85,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.33.0",
+    "@framelink/core": "workspace:*",
     "@framelink/plugin": "workspace:*",
     "@types/express": "^5.0.0",
     "@types/js-yaml": "^4.0.9",

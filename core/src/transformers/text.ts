@@ -5,9 +5,9 @@ import type {
   SnapshotText,
   SnapshotTextRun,
   SnapshotTextStyle,
-} from "~/core/snapshot.js";
-import { isVisible, pixelRound } from "~/core/utils.js";
-import { flattenSolidFills, parsePaint, type SimplifiedFill } from "~/core/transformers/style.js";
+} from "../snapshot.js";
+import { isVisible, pixelRound } from "../utils.js";
+import { flattenSolidFills, parsePaint, type SimplifiedFill } from "./style.js";
 
 /**
  * Canonical text-style vocabulary (see docs/canonical-vocabulary.md). Used both

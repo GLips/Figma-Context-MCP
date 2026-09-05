@@ -1,7 +1,7 @@
 import type {
   SnapshotComponentPropertyDefinition,
   SnapshotComponentPropertyValue,
-} from "~/core/snapshot.js";
+} from "../snapshot.js";
 
 /**
  * One property on a COMPONENT / COMPONENT_SET, as emitted on the defining node.

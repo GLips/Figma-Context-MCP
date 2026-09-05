@@ -10,7 +10,7 @@ import { Target, RawIdRef, FindQuery, SlimHandle, ReadPredicate } from "./ir.js"
 import { readKey, identityOf } from "./identity.js";
 import { sceneNodeToSnapshot, type SceneNodeLike, type SceneStyleResolver } from "./node-to-snapshot.js";
 import { rejectUnknownKeys } from "./validate.js";
-import { simplify, type SimplifiedNode } from "~/core/index.js";
+import { simplify, type SimplifiedNode } from "@framelink/core";
 
 // A pluginData scan searches this. Default is the current page; a verb's `within` narrows it (resolved by the
 // same shape rules). PageNode and any container SceneNode both satisfy this.

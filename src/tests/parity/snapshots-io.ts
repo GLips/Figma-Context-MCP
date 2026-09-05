@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
-import type { NodeSnapshot } from "~/core/snapshot.js";
+import type { NodeSnapshot } from "@framelink/core/snapshot";
 
 /**
  * Committed plan-neutral `NodeSnapshot[]` fixtures — one <name>.json per parity

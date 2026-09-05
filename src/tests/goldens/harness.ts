@@ -1,7 +1,7 @@
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { simplifyRestResponse } from "~/adapters/rest/rest.js";
-import type { SimplifiedDesign } from "~/core/types.js";
+import type { SimplifiedDesign } from "@framelink/core";
 import type { GoldenFixture } from "./fixtures.js";
 
 // Directory holding the committed golden outputs (one <name>.json per fixture).

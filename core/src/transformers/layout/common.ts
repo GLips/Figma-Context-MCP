@@ -1,5 +1,5 @@
-import { exhaustiveCheck, isFrame, isInAutoLayoutFlow } from "~/core/utils.js";
-import type { NodeSnapshot } from "~/core/snapshot.js";
+import { exhaustiveCheck, isFrame, isInAutoLayoutFlow } from "../../utils.js";
+import type { NodeSnapshot } from "../../snapshot.js";
 
 /**
  * Container config only (the canonical `layout` group). Per-node geometry —

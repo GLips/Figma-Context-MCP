@@ -342,9 +342,10 @@ export interface NodeSnapshot {
   layoutPositioning?: "AUTO" | "ABSOLUTE";
   preserveRatio?: boolean;
   /**
-   * Degrees, counterclockwise-positive (the plugin API's convention; absent, not 0,
-   * when unrotated). The REST WIRE states this in radians — the REST adapter converts
-   * on the way in (`degreesFromWireRotation`), so nothing downstream sees two units.
+   * Degrees, counterclockwise-positive, relative to the emitted parent; absent when
+   * unrotated in that frame. Producers normalize both units and coordinate space:
+   * REST wire angles are radians, and both APIs state group-child angles against
+   * the container above the group. No wire angle convention reaches the core.
    */
   rotation?: number;
   gridColumnAnchorIndex?: number;

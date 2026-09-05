@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { walkNodes } from "~/core/simplify.js";
+import { walkNodes } from "@framelink/core";
 import { simplifyRestResponse } from "~/adapters/rest/rest.js";
 import { restNodeToSnapshot } from "~/adapters/rest/node-to-snapshot.js";
-import { createRefStyleTable } from "~/core/style-table.js";
-import type { TraversalOptions } from "~/core/types.js";
+import { createRefStyleTable } from "@framelink/core";
+import type { TraversalOptions } from "@framelink/core";
 import type { GetFileResponse, Style } from "@figma/rest-api-spec";
 import type { Node as FigmaNode } from "@figma/rest-api-spec";
 

@@ -101,7 +101,6 @@
               "height": 40,
               "left": 57.08,
               "top": 0,
-              "rotation": -25,
               "fills": [
                 "#994DCC"
               ]
@@ -114,7 +113,7 @@
               "height": 20,
               "left": 0,
               "top": 39.59,
-              "rotation": -40,
+              "rotation": -15,
               "fills": [
                 "#33B3CC"
               ]

@@ -1,19 +1,24 @@
 # Simplify core
 
-The pure transform at the center of Framelink: plan-neutral `NodeSnapshot`s in,
-canonical `SimplifiedNode`s out. Adapters (`src/adapters/rest/`, and the future
-plugin adapter) decode their wire format into snapshots; this module owns every
-raw→CSS conversion, so the transform can never fork between producers.
+`@framelink/core` — the pure transform at the center of Framelink: plan-neutral
+`NodeSnapshot`s in, canonical `SimplifiedNode`s out. Both adapters (the root
+package's `src/adapters/rest/`, and the plugin's `node-to-snapshot.ts`) decode
+their own wire format into snapshots; this package owns every raw→CSS
+conversion, so the transform can never fork between producers.
 
-The whole graph reachable from `index.ts` is bundle-pure — no Node builtins, no
-external packages — because it ships into the Figma plugin's QuickJS sandbox.
-Two CI gates enforce this: `core-figma-free.test.ts` (no REST types) and
-`core-purity.test.ts` (esbuild `platform:'neutral'` probe).
+It is a private workspace member, never published on its own. Both consumers
+depend on it and it depends on neither — that one-way shape is the point, and
+it is why this package declares no dependencies at all.
+
+The whole graph reachable from `src/index.ts` is bundle-pure — no Node builtins,
+no external packages — because it ships into the Figma plugin's QuickJS sandbox.
+Two gates in `tests/` enforce this: `figma-free.test.ts` (no REST types) and
+`bundle-purity.test.ts` (esbuild `platform:'neutral'` probe).
 
 ## Entry point
 
 ```typescript
-import { simplify } from "figma-developer-mcp";
+import { simplify } from "@framelink/core";
 
 // Expanded output (default): every style value inline, no refs, no crypto
 const { nodes } = await simplify(snapshots);

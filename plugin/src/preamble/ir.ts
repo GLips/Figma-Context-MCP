@@ -21,7 +21,7 @@
 
 // Type-only reach into the core's canonical vocabulary, for the read shapes (SlimHandle) the locate verbs
 // return. Erased at build (esbuild drops `import type`), so the figma-free type hub gains no runtime edge.
-import type { SimplifiedDimension, SimplifiedLayout, SimplifiedNode } from "~/core/index.js";
+import type { SimplifiedDimension, SimplifiedLayout, SimplifiedNode } from "@framelink/core";
 
 // The node types createable through the plugin API, enumerated explicitly. Not every figma-mcp/REST
 // `type` round-trips to a create call, so the set is closed: bridge.ts's BUILDERS table is typed

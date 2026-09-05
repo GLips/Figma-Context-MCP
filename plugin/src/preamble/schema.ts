@@ -27,7 +27,7 @@ import type {
 } from "./ir.js";
 // The read verbs return the canonical read shape the shared simplify core emits. Relative (not ~/) so the
 // root toolchain, which imports this module for docs generation, resolves it without the plugin's paths.
-import type { SimplifiedNode } from "../../../src/core/types.js";
+import type { SimplifiedNode } from "@framelink/core";
 
 // ---- Author leaf-input types the schema references but can't structurally model in zod (they're loose
 // on purpose, or reference the typed currency). `z.custom<T>()` infers exactly T with no runtime check —

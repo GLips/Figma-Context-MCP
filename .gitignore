@@ -63,3 +63,6 @@ advisor-plans/
 /scripts/measure-dedup.ts
 /scripts/measure-format-default.ts
 /scripts/perf-bench.ts
+
+# Private Payload Lab captures and isolated replay runs
+/.payload-lab/

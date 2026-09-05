@@ -7,15 +7,16 @@
     "rootDir": ".",
     "paths": {
       "~/*": ["./src/*"],
-      // @framelink/plugin is a workspace member, symlinked in as a devDependency and bundled
-      // into dist rather than published. TS must not resolve it through that symlink: doing so
-      // marks every file reached from it — including src/core/index.ts — as "from an external
-      // library", and such files are silently unemittable, so `tsup --dts` gets no declaration
-      // back for them, falls through to the raw .ts, and rollup's JS parser dies with
-      // `Error parsing: src/core/index.ts:2:7`. The symlink itself stays load-bearing — vitest
-      // resolves the plugin through it, not through these paths — so the devDependency is not
-      // vestigial. Mirrors the plugin's exports map; src/tests/plugin-paths-mirror-exports.test.ts
-      // fails if a new export subpath lands without a mapping here.
+      // @framelink/core and @framelink/plugin are workspace members, symlinked in as dependencies
+      // and bundled into dist rather than published. TS must not resolve them through those
+      // symlinks: doing so marks every file reached that way as "from an external library", and
+      // such files are silently unemittable — `tsup --dts` gets no declaration back, falls through
+      // to the raw .ts, and rollup's JS parser dies on the first `export type`. The symlinks stay
+      // load-bearing (vitest resolves through them, not through these paths), so the dependencies
+      // are not vestigial. Mirrors both exports maps; workspace-paths-mirror-exports.test.ts fails
+      // if a new export subpath lands without a mapping here.
+      "@framelink/core": ["./core/src/index.ts"],
+      "@framelink/core/snapshot": ["./core/src/snapshot.ts"],
       "@framelink/plugin/schema": ["./plugin/src/preamble/schema.ts"],
       "@framelink/plugin/node-to-snapshot": ["./plugin/src/preamble/node-to-snapshot.ts"]
     },

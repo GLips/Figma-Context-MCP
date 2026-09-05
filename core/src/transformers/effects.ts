@@ -1,11 +1,6 @@
-import type {
-  NodeSnapshot,
-  SnapshotColor,
-  SnapshotEffect,
-  SnapshotVector,
-} from "~/core/snapshot.js";
-import { formatRGBAColor, formatSolidColor } from "~/core/transformers/style.js";
-import { pixelRound } from "~/core/utils.js";
+import type { NodeSnapshot, SnapshotColor, SnapshotEffect, SnapshotVector } from "../snapshot.js";
+import { formatRGBAColor, formatSolidColor } from "./style.js";
+import { pixelRound } from "../utils.js";
 
 /** Object form of the beyond-CSS effects — read == create (each mirrors its flcm.effects sugar). */
 export interface SimplifiedGlass {

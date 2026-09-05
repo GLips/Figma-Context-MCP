@@ -1,2 +1,4 @@
 packages:
+  - core
   - plugin
+  - tools/payload-lab

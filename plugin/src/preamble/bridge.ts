@@ -14,7 +14,7 @@ import { toFigmaEffects } from "./effects.js";
 import { resolveFont, resolveFontStrict, FontMap } from "./fonts.js";
 import { normalizePathData } from "./path.js";
 import { writeKey, identityOf } from "./identity.js";
-import { pixelRound, convertSizing } from "~/core/index.js";
+import { pixelRound, convertSizing } from "@framelink/core";
 
 // `images` is the url → base64 map render() threads through the walk (bytes the server fetched+validated
 // and injected between the two passes); an image PaintSpec resolves to a plugin ImagePaint against it.

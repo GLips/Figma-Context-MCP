@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { Node as FigmaNode, TypeStyle } from "@figma/rest-api-spec";
-import { walkNodes } from "~/core/simplify.js";
-import { createRefStyleTable } from "~/core/style-table.js";
+import { walkNodes } from "@framelink/core";
+import { createRefStyleTable } from "@framelink/core";
 import { restNodeToSnapshot } from "~/adapters/rest/node-to-snapshot.js";
-import type { SimplifiedTextStyle, TextRun } from "~/core/transformers/text.js";
+import type { SimplifiedTextStyle, TextRun } from "@framelink/core";
 
 /**
  * Minimal Figma TEXT node factory. Tests only need the fields the text

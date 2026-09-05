@@ -1,0 +1,17 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    // ES2019, matching the plugin's floor: this package is bundled into Figma's QuickJS sandbox,
+    // which is the narrowest runtime it has to survive. Declaring the floor here rather than in
+    // the plugin's tsconfig puts it where the constrained code actually lives — a core module
+    // that reaches past ES2019 now fails in this package, not downstream in the plugin build.
+    "lib": ["ES2019"],
+    // Node types are here for tests/ only — the gates read files and shell out to esbuild. src/
+    // must stay free of Node builtins AND of Figma types, but neither invariant is enforced by
+    // this field: tests/bundle-purity.test.ts bundles src under platform:'neutral' (builtins), and
+    // tests/figma-free.test.ts walks its import graph (Figma types). Narrowing `types` here would
+    // only break the gates that do the real work.
+    "types": ["node"]
+  },
+  "include": ["src", "tests"]
+}

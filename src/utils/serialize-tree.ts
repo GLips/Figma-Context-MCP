@@ -1,4 +1,4 @@
-import type { SimplifiedNode } from "~/core/types.js";
+import type { SimplifiedNode } from "@framelink/core";
 import type { SerializableDesign } from "./serializable-design.js";
 import { dumpYaml } from "./yaml-dump.js";
 

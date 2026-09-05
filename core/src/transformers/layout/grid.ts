@@ -1,5 +1,5 @@
-import { hasGridLayout, isLayout } from "~/core/utils.js";
-import type { NodeSnapshot } from "~/core/snapshot.js";
+import { hasGridLayout, isLayout } from "../../utils.js";
+import type { NodeSnapshot } from "../../snapshot.js";
 import type { SimplifiedLayout } from "./common.js";
 
 /**

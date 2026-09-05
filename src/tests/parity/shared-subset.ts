@@ -1,10 +1,7 @@
-import type { TemplateBody, SimplifiedDesign, SimplifiedNode, StyleValue } from "~/core/types.js";
+import type { TemplateBody, SimplifiedDesign, SimplifiedNode, StyleValue } from "@framelink/core";
 // Single-sourced from the compression pass so the parity view resolves EXACTLY
 // the slots the compression pass can hoist — the two can't silently diverge.
-import { STYLE_REF_FIELDS } from "~/core/compress.js";
-// Same reason: the comparator has to skip a group's rotation exactly where the two
-// producers skip it, or it classifies a group child into the wrong band.
-import { isCoordinateTransparentType } from "~/core/utils.js";
+import { STYLE_REF_FIELDS } from "@framelink/core";
 
 /**
  * The comparator policy for the REST↔plugin parity harness — "shared subset" as
@@ -255,16 +252,10 @@ function viewNode(
   }
 
   if (Array.isArray(out.children)) {
-    // A coordinate-transparent parent (GROUP/BOOLEAN_OPERATION) is not a rotation of
-    // its own as far as its children are concerned — their emitted `rotation` is already
-    // stated against the container above it, so accumulating the group's again would put
-    // the wrong angle into the band test. The producers skip it for the same reason.
-    const childPageRotation = isCoordinateTransparentType(out.type as string | undefined)
-      ? space.pageRotation
-      : pageRotation;
+    // Snapshot angles compose through every emitted parent, including groups.
     out.children = out.children.map((child) =>
       viewNode(child as SimplifiedNode, styles, templates, {
-        pageRotation: childPageRotation,
+        pageRotation,
         parentCornerUnplaceable: cornerUnplaceable,
       }),
     );

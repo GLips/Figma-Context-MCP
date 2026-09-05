@@ -15,7 +15,7 @@
 // Like the REST adapter, the snapshot is constructed field-by-field against the declared contract —
 // deliberately NOT a `{...node}` spread — so undeclared plugin fields cannot ride through at runtime.
 
-import { isCoordinateTransparentType } from "~/core/index.js";
+import { isCoordinateTransparentType } from "@framelink/core";
 import type {
   NodeSnapshot,
   SnapshotColor,
@@ -28,7 +28,7 @@ import type {
   SnapshotTextStyle,
   SnapshotTransform,
   SnapshotVector,
-} from "../../../src/core/snapshot.js";
+} from "@framelink/core/snapshot";
 
 // ---------------------------------------------------------------------------
 // The structural scene view — the plugin-API subset the adapter reads. A live
@@ -372,7 +372,8 @@ async function sceneSubtreeToSnapshot(
     layoutGrow: node.layoutGrow === 1 ? 1 : undefined,
     layoutPositioning: node.layoutPositioning,
     preserveRatio: node.constrainProportions || undefined,
-    rotation: node.rotation || undefined,
+    // Group children report a container-relative angle; normalize it like their origin.
+    rotation: (node.rotation ?? 0) - parentSpace.rotation || undefined,
     gridColumnAnchorIndex: node.gridColumnAnchorIndex,
     gridRowAnchorIndex: node.gridRowAnchorIndex,
     gridColumnSpan: node.gridColumnSpan,

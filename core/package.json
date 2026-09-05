@@ -1,0 +1,20 @@
+{
+  "name": "@framelink/core",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./snapshot": "./src/snapshot.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "esbuild": "^0.28.1",
+    "typescript": "^5.7.3",
+    "vitest": "^4.0.18"
+  }
+}

@@ -12,7 +12,7 @@ import type {
   SimplifiedNoise,
   SimplifiedTexture,
   SimplifiedProgressiveBlur,
-} from "~/core/index.js";
+} from "@framelink/core";
 import type { GlassSugar, NoiseSugar, TextureSugar, ProgressiveBlurSugar } from "./schema.js";
 
 // ADR-0002 read↔create symmetry, tier-2: the core's beyond-CSS OBJECT form (what `get` emits) must feed

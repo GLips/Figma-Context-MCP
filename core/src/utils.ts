@@ -5,7 +5,7 @@
  * bundles into the plugin's QuickJS sandbox (Invariant 4, gated by the esbuild
  * `platform:'neutral'` purity probe).
  */
-import type { NodeSnapshot, SnapshotRect } from "~/core/snapshot.js";
+import type { NodeSnapshot, SnapshotRect } from "./snapshot.js";
 
 /**
  * Generate a CSS shorthand for values that come with top, right, bottom, and left

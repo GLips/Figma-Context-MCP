@@ -1,6 +1,6 @@
 import type { GetFileResponse, GetFileNodesResponse, Node } from "@figma/rest-api-spec";
-import type { SimplifiedDesign, SimplifiedNode } from "~/core/types.js";
-import type { SimplifiedFill } from "~/core/transformers/style.js";
+import type { SimplifiedDesign, SimplifiedNode } from "@framelink/core";
+import type { SimplifiedFill } from "@framelink/core";
 
 export type GetFigmaDataMetrics = {
   rawSizeKb: number;

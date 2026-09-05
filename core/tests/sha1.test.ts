@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createHash } from "node:crypto";
-import { sha1Hex } from "~/core/sha1.js";
+import { sha1Hex } from "../src/sha1.js";
 
 // The pure-JS sha1 must be byte-identical to node:crypto — the content-addressed
 // style/element ids in compressed output (and thus the goldens) depend on it.

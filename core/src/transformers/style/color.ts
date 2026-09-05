@@ -1,4 +1,4 @@
-import type { SnapshotColor, SnapshotPaint, SnapshotSolidPaint } from "~/core/snapshot.js";
+import type { SnapshotColor, SnapshotPaint, SnapshotSolidPaint } from "../../snapshot.js";
 
 export type CSSRGBAColor = `rgba(${number}, ${number}, ${number}, ${number})`;
 export type CSSHexColor = `#${string}`;

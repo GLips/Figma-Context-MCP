@@ -4,7 +4,7 @@ import type {
   SnapshotEffect,
   SnapshotPaint,
   SnapshotVector,
-} from "~/core/snapshot.js";
+} from "@framelink/core/snapshot";
 import { tagError } from "~/utils/error-meta.js";
 
 /**

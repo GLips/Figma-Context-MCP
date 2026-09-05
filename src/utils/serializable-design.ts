@@ -1,4 +1,4 @@
-import type { SimplifiedDesign, SimplifiedNode } from "~/core/types.js";
+import type { SimplifiedDesign, SimplifiedNode } from "@framelink/core";
 import { isNoiseName } from "./node-names.js";
 
 export function wrapForSerialization(design: SimplifiedDesign) {

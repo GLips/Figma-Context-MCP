@@ -1,5 +1,5 @@
 // markdown — the WRITE-edge inverse of figma-mcp read's `escapeMarkdown` + `renderRunMarkdown`
-// (figma-mcp/src/core/transformers/text.ts), pinned by the shared spec's "Markdown leaf format"
+// (@framelink/core's transformers/text.ts), pinned by the shared spec's "Markdown leaf format"
 // section (canonical-vocabulary.md). A plain authored string is decoded (escapes → literal chars,
 // the two-character `\n` → a real newline) and its markdown markers (**bold**, *italic*, ~~strike~~,
 // [text](url)) parsed into styled segments.

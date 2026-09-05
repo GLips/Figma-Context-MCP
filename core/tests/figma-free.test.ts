@@ -3,16 +3,19 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-// Phase 1 Done-when gate (Invariant 2): the simplify core module graph —
-// everything reachable from the pure transform's entry point — must NOT import
-// `@figma/rest-api-spec`. Every REST wire structure is decoded in the adapter
-// (src/adapters/rest/) so the core only ever sees `NodeSnapshot`.
+// Invariant 2: the simplify core module graph — everything reachable from the pure transform's
+// entry point — must NOT import `@figma/rest-api-spec`. Every REST wire structure is decoded in
+// the root package's adapter (src/adapters/rest/) so this package only ever sees `NodeSnapshot`.
 // One REST type leaking into the core forks the transform for the future plugin
 // producer, which is the exact failure this carve exists to prevent.
 //
 // This walks the import graph rather than grepping a hand-maintained file list,
 // so a new core module that pulls in a Figma type fails here automatically —
 // the gate can't rot as the core grows.
+//
+// This package declares no dependencies, so the gate is now backstopped by the manifest as well
+// as by this walk. It stays because a dependency can be added in one line, and because the walk
+// names the offending FILE — the manifest only tells you the package went in.
 //
 // Scope: this enforces import-cleanliness (no core module *names* a REST type),
 // not value-cleanliness. `restNodeToSnapshot` builds the snapshot by spreading
@@ -22,14 +25,14 @@ import { fileURLToPath } from "node:url";
 // runtime shape assertion) is deferred — the spread passthrough is the
 // deliberate incremental-carve mechanism, not an oversight.
 
-const SRC = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const SRC = resolve(dirname(fileURLToPath(import.meta.url)), "../src");
 
 // The pure transform's single entry: the core barrel, which re-exports the
 // walk, transformers, and compression pass. `restNodeToSnapshot` and
 // everything above it (src/adapters/rest/, services) are the ADAPTER —
 // deliberately not a root. Phase 2's esbuild purity probe targets this same
 // entry, so anything the barrel doesn't reach isn't part of the core.
-const CORE_ROOT = "core/index.ts";
+const CORE_ROOT = "index.ts";
 
 const FORBIDDEN = "@figma/rest-api-spec";
 
@@ -56,17 +59,12 @@ function importSpecifiers(source: string): string[] {
   return Array.from(specifiers);
 }
 
-/** Resolve a local (`~/` or relative) `.js` specifier to its `.ts` source path; null for externals. */
+/** Resolve a relative `.js` specifier to its `.ts` source path; null for externals. */
 function resolveLocal(specifier: string, fromFile: string): string | null {
-  let path: string;
-  if (specifier.startsWith("~/")) {
-    path = resolve(SRC, specifier.slice(2));
-  } else if (specifier.startsWith(".")) {
-    path = resolve(dirname(fromFile), specifier);
-  } else {
-    return null; // bare specifier — external package
-  }
-  return path.replace(/\.js$/, ".ts");
+  // Every intra-package import is relative — this package deliberately defines no path alias,
+  // so a bare specifier is always a real external and always a finding.
+  if (!specifier.startsWith(".")) return null;
+  return resolve(dirname(fromFile), specifier).replace(/\.js$/, ".ts");
 }
 
 /** Files reachable from the core root by following local imports. */

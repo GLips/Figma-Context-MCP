@@ -1,13 +1,13 @@
 import type { NodeSnapshot } from "./snapshot.js";
-import type { SimplifiedTextStyle, TextRun } from "~/core/transformers/text.js";
-import type { NodeGeometry, SimplifiedLayout } from "~/core/transformers/layout.js";
-import type { SimplifiedFill } from "~/core/transformers/style.js";
-import type { SimplifiedEffects } from "~/core/transformers/effects.js";
+import type { SimplifiedTextStyle, TextRun } from "./transformers/text.js";
+import type { NodeGeometry, SimplifiedLayout } from "./transformers/layout.js";
+import type { SimplifiedFill } from "./transformers/style.js";
+import type { SimplifiedEffects } from "./transformers/effects.js";
 import type {
   SimplifiedComponentDefinition,
   SimplifiedComponentSetDefinition,
   SimplifiedPropertyDefinition,
-} from "~/core/transformers/component.js";
+} from "./transformers/component.js";
 
 export type StyleValue =
   | SimplifiedTextStyle

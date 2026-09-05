@@ -17,11 +17,16 @@ It runs as a long-lived local process on user machines holding a user's Figma to
 
 ## Architecture
 
-A pnpm workspace. The root package is the shipped product; `plugin/` (`@framelink/plugin`) is a private member — the Figma plugin, bundled into `dist` by the root build, never published on its own.
+A pnpm workspace with two private members, both bundled into `dist` by the root build and never published on their own:
+
+- `core/` (`@framelink/core`) — the shared read transform. Depends on nothing; both producers depend on it.
+- `plugin/` (`@framelink/plugin`) — the Figma plugin, and the `flcm` schema the root reads for docs.
+
+The root package is the shipped product. The arrows only point one way — `plugin → core`, `root → core`, `root → plugin` — so no member reaches back into another's source. Two things enforce that: each member declares its dependency in its own `package.json`, and `core` declares none at all.
 
 ### Read path
 
-`src/services/figma.ts` (REST client, PAT or OAuth) → `src/adapters/rest/` (wire format → plan-neutral `NodeSnapshot`) → `src/core/` (snapshot → simplified output). The tools live in `src/mcp/tools/`: `get_figma_data`, `download_figma_images`.
+`src/services/figma.ts` (REST client, PAT or OAuth) → `src/adapters/rest/` (wire format → plan-neutral `NodeSnapshot`) → `@framelink/core` (snapshot → simplified output). The tools live in `src/mcp/tools/`: `get_figma_data`, `download_figma_images`.
 
 ### Write path ("code mode")
 
@@ -32,7 +37,7 @@ The relay starts with the server in both transports, but the code-mode tools are
 ## Rules of the road
 
 - **Every output field costs context budget.** Omit values an LLM can infer — emit only deviations from the default. (`strokeAlign: INSIDE` matches the CSS `border` an LLM already writes, so it's dropped; only `OUTSIDE`/`CENTER` are emitted.)
-- **`src/core/` must stay Figma-type-free.** It consumes `NodeSnapshot`, never REST or plugin types — that's what lets both the REST adapter and the plugin feed it. Gated by `src/tests/core-figma-free.test.ts`; a core change that shifts output fails both the goldens and the REST↔plugin parity snapshots.
+- **`@framelink/core` must stay Figma-type-free.** It consumes `NodeSnapshot`, never REST or plugin types — that's what lets both the REST adapter and the plugin feed it. Gated by `core/tests/figma-free.test.ts`; a core change that shifts output fails both the goldens and the REST↔plugin parity snapshots.
 - **Generated files are never hand-edited.** `plugin/docs/authoring/flcm.md` and `src/mcp/tools/flcm-docs/examples-code.generated.ts` come from the schema via `scripts/gen-flcm-doc.ts`. Change the schema, run `pnpm docs:gen`; `docs:check` fails the build on drift.
 - **The plugin preamble must stay zod-free.** It runs in QuickJS; `build:plugin` fails if zod leaks into the bundle. Validation there is hand-rolled on purpose.
 - **zod 4 is the root dependency.** The flcm surface uses the v4 API from `"zod"`; the older read-tool schemas still import `"zod/v3"`. Migrate those deliberately, not as a drive-by.

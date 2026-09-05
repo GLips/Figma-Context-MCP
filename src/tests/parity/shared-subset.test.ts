@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import type { SimplifiedDesign } from "~/core/types.js";
+import type { SimplifiedDesign } from "@framelink/core";
 import { parityView } from "./shared-subset.js";
 
 /**
@@ -238,10 +238,7 @@ describe("parityView comparator policy", () => {
     );
   });
 
-  it("does not accumulate a group's rotation into its children's band", () => {
-    // A group is coordinate-transparent: its child's emitted rotation ALREADY carries
-    // the group's, so accumulating it again would read this child as sitting at 45deg
-    // and forgive a size difference the producers have no excuse for.
+  it("accumulates emitted group rotations into the child's degenerate band", () => {
     const inGroup = (childWidth: number) =>
       design({
         nodes: [
@@ -264,8 +261,8 @@ describe("parityView comparator policy", () => {
         ],
       } as unknown as Partial<SimplifiedDesign>);
 
-    // -25 + -20 would be -45, the band. The child's own -20 is nowhere near it.
-    expect(parityView(inGroup(80))).not.toEqual(parityView(inGroup(88)));
+    // -25 + -20 = -45: REST cannot recover this child's own size.
+    expect(parityView(inGroup(80))).toEqual(parityView(inGroup(88)));
   });
 
   it("ignores the top-level design name (provenance metadata)", () => {

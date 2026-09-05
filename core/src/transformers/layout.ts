@@ -1,11 +1,11 @@
-import type { NodeSnapshot } from "~/core/snapshot.js";
+import type { NodeSnapshot } from "../snapshot.js";
 import {
   generateCSSShorthand,
   isFrame,
   isInAutoLayoutFlow,
   isLayout,
   pixelRound,
-} from "~/core/utils.js";
+} from "../utils.js";
 import {
   convertSelfAlign,
   convertSizing,

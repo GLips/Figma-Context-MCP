@@ -1,8 +1,8 @@
 import type { GetFileResponse, GetFileNodesResponse } from "@figma/rest-api-spec";
 import { sceneNodeToSnapshot } from "@framelink/plugin/node-to-snapshot";
-import type { NodeSnapshot } from "~/core/snapshot.js";
-import type { SimplifiedDesign } from "~/core/types.js";
-import { simplify } from "~/core/simplify.js";
+import type { NodeSnapshot } from "@framelink/core/snapshot";
+import type { SimplifiedDesign } from "@framelink/core";
+import { simplify } from "@framelink/core";
 import { simplifyRestResponse } from "~/adapters/rest/rest.js";
 import type { LoadedScene } from "./scenes-io.js";
 

@@ -1,4 +1,4 @@
-import type { SnapshotPoint, SnapshotRect, SnapshotSize } from "~/core/snapshot.js";
+import type { SnapshotPoint, SnapshotRect, SnapshotSize } from "@framelink/core/snapshot";
 
 /**
  * Own-box recovery — a node's authored size and origin, solved from its AABB.
@@ -13,7 +13,7 @@ import type { SnapshotPoint, SnapshotRect, SnapshotSize } from "~/core/snapshot.
 
 /** A node's own coordinate frame on the page: where its origin sits and how it is turned. */
 export interface PageFrame {
-  originOnPage: SnapshotPoint;
+  originOnPage?: SnapshotPoint;
   /** Degrees, counterclockwise-positive — this frame's total rotation against the page. */
   pageRotation: number;
 }
@@ -23,11 +23,11 @@ export interface PageFrame {
  * from DIFFERENT ancestors whenever a group is in the chain — which is the whole
  * reason this is a record and not one number:
  *
- *   - `containerPageRotation` is what the node's own `rotation` is measured from. A
+ *   - `containerPageRotation` is what the wire rotation is measured from. A
  *     GROUP/BOOLEAN_OPERATION is coordinate-transparent (`isCoordinateTransparentType`),
  *     so its children's angles are already stated against the container above it;
  *     accumulating the group's would invert their AABBs at twice the angle.
- *   - `emittedParentFrame` is the frame `left`/`top` are expressed in — the parent the
+ *   - `emittedParentFrame` is the frame snapshot origins and rotations use — the parent the
  *     SNAPSHOT emits, group included. Its rotation is the group's own, so a child of a
  *     rotated group lands inside the group's box rather than beside it.
  *
@@ -36,8 +36,8 @@ export interface PageFrame {
  */
 export interface RestParentSpace {
   containerPageRotation: number;
-  /** Absent at the top of the payload, and when the parent's own corner couldn't be solved. */
-  emittedParentFrame?: PageFrame;
+  /** The emitted parent angle survives even when its origin cannot be solved. */
+  emittedParentFrame: PageFrame;
 }
 
 /**
@@ -46,7 +46,10 @@ export interface RestParentSpace {
  * rotated one would throw off every descendant's solve. Rare enough to accept —
  * and unknowable from the payload either way.
  */
-export const ROOT_SPACE: RestParentSpace = { containerPageRotation: 0 };
+export const ROOT_SPACE: RestParentSpace = {
+  containerPageRotation: 0,
+  emittedParentFrame: { pageRotation: 0 },
+};
 
 /**
  * How ill-conditioned the inversion may get before we refuse to answer.
@@ -174,10 +177,14 @@ function isHalfTurn(degrees: number): boolean {
  * has in the plugin API. Undoing the parent's page rotation is what keeps the two
  * producers agreeing when a rotated node sits inside a rotated one.
  */
-export function toParentSpacePoint(pointOnPage: SnapshotPoint, parent: PageFrame): SnapshotPoint {
-  const dx = pointOnPage.x - parent.originOnPage.x;
-  const dy = pointOnPage.y - parent.originOnPage.y;
-  const theta = (parent.pageRotation * Math.PI) / 180;
+export function toParentSpacePoint(
+  pointOnPage: SnapshotPoint,
+  parentOrigin: SnapshotPoint,
+  parentRotation: number,
+): SnapshotPoint {
+  const dx = pointOnPage.x - parentOrigin.x;
+  const dy = pointOnPage.y - parentOrigin.y;
+  const theta = (parentRotation * Math.PI) / 180;
   const cos = Math.cos(theta);
   const sin = Math.sin(theta);
   return { x: dx * cos - dy * sin, y: dx * sin + dy * cos };

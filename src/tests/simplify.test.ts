@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Node as FigmaNode } from "@figma/rest-api-spec";
-import { simplify } from "~/core/simplify.js";
+import { simplify } from "@framelink/core";
 import { restNodeToSnapshot } from "~/adapters/rest/node-to-snapshot.js";
 
 // Phase 2 Done-when (Invariant 3): simplify with defaults emits EXPANDED
