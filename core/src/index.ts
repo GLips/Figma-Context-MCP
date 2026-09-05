@@ -1,6 +1,7 @@
 // Types
 export type {
   NodeCounter,
+  NodeDelta,
   SimplifiedComponentEntry,
   SimplifiedDesign,
   SimplifiedNode,

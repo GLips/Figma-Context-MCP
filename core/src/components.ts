@@ -1,5 +1,5 @@
 import { stableStringify } from "./utils.js";
-import type { SimplifiedComponentEntry, SimplifiedNode } from "./types.js";
+import type { NodeDelta, SimplifiedComponentEntry, SimplifiedNode } from "./types.js";
 
 /**
  * The components pass: emit each component's `children` ONCE into a sidecar, and rewrite every
@@ -53,10 +53,21 @@ export interface ComponentNotes {
    * "hid every layer in here" and "left it alone" emit the same bytes.
    */
   emptiedContainers: Set<string>;
+  /**
+   * Definition ids whose subtree the producer fetched separately and cannot prove matches what this
+   * document adopted (see `NodeSnapshot.definitionUnverified`). Only used when such a definition is
+   * the one that actually publishes, which is why it is a note rather than a field on the node.
+   */
+  unverifiedDefinitions: Set<string>;
 }
 
 export function createComponentNotes(): ComponentNotes {
-  return { components: new Map(), instanceEdits: new Map(), emptiedContainers: new Set() };
+  return {
+    components: new Map(),
+    instanceEdits: new Map(),
+    emptiedContainers: new Set(),
+    unverifiedDefinitions: new Set(),
+  };
 }
 
 /**
@@ -131,10 +142,8 @@ export function extractComponents(
   indexTree(nodes, definitionNodes, instancesByComponent);
   for (const definition of definitions) {
     indexTree([definition], definitionNodes, instancesByComponent);
-    // The in-tree node WINS (priority 1 over 2, above). It is the definition as this document has
-    // it; a fetched one is the library's current state, which the consuming file may not have
-    // adopted. `indexTree` above only registers COMPONENT/COMPONENT_SET-typed roots, so a fetched
-    // definition whose root is neither still needs registering here.
+    // `indexTree` only registers COMPONENT/COMPONENT_SET-typed roots, so a fetched definition whose
+    // root is neither still needs registering. First-wins there and here, for the same reason.
     if (!definitionNodes.has(definition.id)) definitionNodes.set(definition.id, definition);
   }
 
@@ -150,9 +159,12 @@ export function extractComponents(
 
   // The children each entry publishes, captured BEFORE any node is rewritten — an instance that
   // donates is itself reduced afterwards (against its own donation, so its diff comes out empty).
-  const sources = new Map<string, { children: SimplifiedNode[]; from?: string }>();
+  const sources = new Map<
+    string,
+    { children: SimplifiedNode[]; from?: string; unverified?: true }
+  >();
   for (const id of ids) {
-    const source = chooseChildren(id, definitionNodes, instancesByComponent, notes.instanceEdits);
+    const source = chooseChildren(id, definitionNodes, instancesByComponent, notes);
     if (source) sources.set(id, source);
   }
 
@@ -187,6 +199,7 @@ export function extractComponents(
     if (provenance?.propertyDefinitions) entry.propertyDefinitions = provenance.propertyDefinitions;
     if (children) entry.children = children;
     if (source?.from) entry.childrenFrom = source.from;
+    if (source?.unverified) entry.childrenUnverified = true;
     components[id] = entry;
     return children;
   };
@@ -203,7 +216,10 @@ function indexTree(
 ): void {
   for (const node of nodes) {
     if (node.type === "COMPONENT" || node.type === "COMPONENT_SET") {
-      definitionNodes.set(node.id, node);
+      // First wins. The tree is indexed before any adapter-supplied definition, so this is what
+      // enforces priority 1 over 2: the in-tree node is the definition as THIS document has it,
+      // while a fetched one is the library's current state, which the document may not have taken.
+      if (!definitionNodes.has(node.id)) definitionNodes.set(node.id, node);
     } else if (node.type === "INSTANCE" && node.componentId) {
       const list = instancesByComponent.get(node.componentId);
       if (list) list.push(node);
@@ -223,18 +239,18 @@ function chooseChildren(
   id: string,
   definitionNodes: Map<string, SimplifiedNode>,
   instancesByComponent: Map<string, SimplifiedNode[]>,
-  instanceEdits: Map<string, number>,
-): { children: SimplifiedNode[]; from?: string } | undefined {
+  notes: ComponentNotes,
+): { children: SimplifiedNode[]; from?: string; unverified?: true } | undefined {
   const definition = definitionNodes.get(id);
   if (definition?.children?.length) {
     const children = definition.children;
     delete definition.children;
-    return { children };
+    return notes.unverifiedDefinitions.has(id) ? { children, unverified: true } : { children };
   }
   // The least-edited instance first, then the next — an instance whose own sublayers were all
   // hidden has nothing to donate, and stopping at it would publish no children for a component
   // some other instance could have shown whole.
-  for (const donor of byEditCount(instancesByComponent.get(id), instanceEdits)) {
+  for (const donor of byEditCount(instancesByComponent.get(id), notes.instanceEdits)) {
     if (!donor.children?.length) continue;
     return {
       children: donor.children.map((child) => rekey(clone(child), donor.id)),
@@ -314,11 +330,11 @@ function diffChildren(
   actual: SimplifiedNode[],
   instanceId: string,
   emptied: Set<string>,
-): Record<string, SimplifiedNode> | null {
+): Record<string, NodeDelta> | null {
   const referenceByPath = new Map<string, SimplifiedNode>();
   for (const child of reference) referenceByPath.set(componentPath(child.id, ""), child);
 
-  const out: Record<string, SimplifiedNode> = {};
+  const out: Record<string, NodeDelta> = {};
   const matched = new Set<string>();
   const order: string[] = [];
   for (const child of actual) {
@@ -341,7 +357,7 @@ function diffChildren(
   // drops hidden nodes, so the deviation would otherwise vanish entirely.
   for (const path of referenceByPath.keys()) {
     // The path is the key; a delta never restates it.
-    if (!matched.has(path)) out[path] = { visible: false } as unknown as SimplifiedNode;
+    if (!matched.has(path)) out[path] = { visible: false };
   }
   return out;
 }
@@ -358,9 +374,9 @@ function diffNode(
   reference: SimplifiedNode,
   actual: SimplifiedNode,
   instanceId: string,
-  out: Record<string, SimplifiedNode>,
+  out: Record<string, NodeDelta>,
   emptied: Set<string>,
-): SimplifiedNode | undefined {
+): NodeDelta | undefined {
   const delta: Record<string, unknown> = {};
   const referenceRecord = reference as unknown as Record<string, unknown>;
   const actualRecord = actual as unknown as Record<string, unknown>;
@@ -391,5 +407,5 @@ function diffNode(
   }
 
   if (Object.keys(delta).length === 0) return undefined;
-  return delta as unknown as SimplifiedNode;
+  return delta as NodeDelta;
 }

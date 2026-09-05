@@ -141,6 +141,71 @@ describe("instances as diffs", () => {
     expect(design.nodes[0].children?.[1].overrides).toEqual({ "20:2": { visible: false } });
   });
 
+  it("compresses the sidecar's own children in place", async () => {
+    // The sidecar's children are output too, so they template and share hoisted styles like any
+    // other node — but only if compression writes back into the ENTRY's array. Handed a flattened
+    // copy it would rewrite the copy while inlining styles out from under the real children.
+    const twin = (id: string) =>
+      node({ id, name: "t", type: "TEXT", characters: "Hi", fills: solid(1, 0, 0) });
+    const design = await simplifyRestResponse(
+      page([
+        node({
+          id: "10:1",
+          name: "Card",
+          type: "COMPONENT",
+          children: [twin("10:2"), twin("10:3")],
+        }),
+        node({
+          id: "11:1",
+          name: "I",
+          type: "INSTANCE",
+          componentId: "10:1",
+          children: [twin("I11:1;10:2"), twin("I11:1;10:3")],
+        }),
+      ]),
+    );
+
+    const published = design.components["10:1"].children ?? [];
+    expect(published.map((child) => child.template)).toEqual([
+      expect.stringMatching(/^EL-/),
+      expect.stringMatching(/^EL-/),
+    ]);
+    for (const ref of JSON.stringify(design).match(/"fill_[0-9a-f]+"/g) ?? []) {
+      expect(Object.keys(design.styles)).toContain(JSON.parse(ref));
+    }
+  });
+
+  it("reports a slot the designer emptied", async () => {
+    const design = await simplifyRestResponse(
+      page([
+        node({
+          id: "50:1",
+          name: "C",
+          type: "COMPONENT",
+          children: [
+            node({
+              id: "50:2",
+              name: "Slot",
+              type: "FRAME",
+              children: [node({ id: "50:3", name: "T", type: "TEXT", characters: "Hi" })],
+            }),
+          ],
+        }),
+        node({
+          id: "51:1",
+          name: "I",
+          type: "INSTANCE",
+          componentId: "50:1",
+          // Emptied, not hidden: the raw list is present and has nothing in it, which never enters
+          // the walk's children branch — so "observed empty" has to be recorded, not inferred.
+          children: [node({ id: "I51:1;50:2", name: "Slot", type: "FRAME", children: [] })],
+        }),
+      ]),
+    );
+
+    expect(design.nodes[0].children?.[1].overrides).toEqual({ "50:3": { visible: false } });
+  });
+
   it("republishes children the designer resequenced", async () => {
     const design = await simplifyRestResponse(
       page([

@@ -112,8 +112,11 @@ describe("off-tree component definitions", () => {
       componentDefinitions: definitions,
     });
     const entry = design.components["9:1"];
-    // No `childrenFrom`: these children are the definition's own, not a worked example.
+    // No `childrenFrom`: these children are the definition's own, not a worked example. But the
+    // library serves its CURRENT version, which this file may never have taken — so the entry says
+    // so, or a reader would take a `visible: false` under it as a designer's edit.
     expect(entry.childrenFrom).toBeUndefined();
+    expect(entry.childrenUnverified).toBe(true);
     expect(entry.children?.map((child) => child.name)).toEqual(["Label"]);
     // Both instances now read as diffs against it — the rename and the text the designer typed,
     // keyed by the sublayer's component-relative path.
@@ -136,6 +139,7 @@ describe("off-tree component definitions", () => {
           name: "Icon",
           description: "",
           documentationLinks: [],
+          componentSetId: "800:1",
           remote: true,
         },
         "5:1": {
@@ -145,6 +149,9 @@ describe("off-tree component definitions", () => {
           documentationLinks: [],
           remote: false,
         },
+      },
+      componentSets: {
+        "800:1": { key: "pub-icon-set", name: "Icon set", description: "" },
       },
     } as unknown as GetFileResponse;
 
@@ -179,7 +186,7 @@ describe("off-tree component definitions", () => {
                   remote: false,
                 },
               },
-              componentSets: {},
+              componentSets: { "50:1": { key: "pub-icon-set", name: "Icon set", description: "" } },
               styles: {},
             },
           },
@@ -187,8 +194,11 @@ describe("off-tree component definitions", () => {
     });
 
     const [definition] = await fetchComponentDefinitions(service, "consumer", consuming);
-    // Same publish key on both sides — the reference lands on the id the consuming file uses.
+    // Same publish key on both sides — the reference lands on the id the consuming file uses, and
+    // its provenance is rebuilt from THIS file's tables, set id included. A library set id left in
+    // place would key a sidecar entry that means something else here.
     expect(definition.children?.[0].componentId).toBe("80:1");
+    expect(definition.children?.[0].mainComponent?.set?.id).toBe("800:1");
     // No counterpart in the consuming file: better unnamed than named wrong.
     expect(definition.children?.[1].componentId).toBeUndefined();
   });

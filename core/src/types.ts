@@ -123,7 +123,33 @@ export interface SimplifiedComponentEntry {
    * pristine component. Absent means the children ARE the definition's.
    */
   childrenFrom?: string;
+  /**
+   * Present when `children` came from a published library at its CURRENT version, which this
+   * document may not have adopted. It is the reader's warning that a `visible: false` in an
+   * instance's `overrides` under this component might be a layer the library ADDED rather than one
+   * the designer hid. Absent means the children are this document's own reading of the component.
+   */
+  childrenUnverified?: true;
 }
+
+/**
+ * One entry of an instance's `overrides`: a PARTIAL node whose fields may be `null`.
+ *
+ * Not a `SimplifiedNode` — it is neither complete (no `id`; the path is the key) nor
+ * non-nullable, and `null` is load-bearing here in a way it is nowhere else in the read shape.
+ *
+ * How a consumer applies one, in order, per node:
+ *   1. take the component's child at that path
+ *   2. DELETE every field the delta gives as `null`
+ *   3. REPLACE every other field the delta names, whole — never a deep merge
+ *   4. only then resolve any nested instance inside it, against its own component
+ * Step 4 last is what keeps a nested `overrides` map intact: it is a field value like any other,
+ * so it replaces rather than merging with the component's, and its own nulls survive to be applied
+ * at their own level rather than being consumed here.
+ */
+export type NodeDelta = {
+  [K in keyof SimplifiedNode]?: SimplifiedNode[K] | null;
+};
 
 export interface SimplifiedDesign {
   name: string;
@@ -229,7 +255,7 @@ export interface SimplifiedNode extends NodeGeometry {
    * carries its whole `children` array rather than a per-child diff, because that is new content
    * or a new order rather than a field-by-field edit.
    */
-  overrides?: Record<string, SimplifiedNode>;
+  overrides?: Record<string, NodeDelta>;
   // children
   children?: SimplifiedNode[];
 }

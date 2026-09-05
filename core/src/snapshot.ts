@@ -445,6 +445,14 @@ export interface NodeSnapshot {
    * off-tree one.
    */
   componentKey?: string;
+  /**
+   * Set on a definition subtree the producer fetched SEPARATELY from the document being read, when
+   * it cannot prove the two agree. A published library serves its current state, while a file pins
+   * the component version it last accepted — so a layer the library added since reads as a layer
+   * every instance hides. Plan-neutral on purpose: it states a fact about provenance, not a Figma
+   * concept, and a producer that resolves the adopted version (the plugin does) never sets it.
+   */
+  definitionUnverified?: boolean;
   componentDescription?: string;
   /**
    * INSTANCE only: the direct overrides Figma reports at this instance level, on the

@@ -1,5 +1,6 @@
 import type {
   Component,
+  ComponentSet,
   GetFileNodesResponse,
   GetFileResponse,
   Node as FigmaDocumentNode,
@@ -42,7 +43,7 @@ export async function fetchComponentDefinitions(
   apiResponse: GetFileResponse | GetFileNodesResponse,
   maxDepth?: number | null,
 ): Promise<NodeSnapshot[]> {
-  const { rawNodes, components } = parseAPIResponse(apiResponse);
+  const { rawNodes, components, componentSets } = parseAPIResponse(apiResponse);
   const found = missingDefinitions(rawNodes, components, maxDepth);
   if (found.length === 0) return [];
 
@@ -59,15 +60,16 @@ export async function fetchComponentDefinitions(
 
   const local = missing.filter(([, component]) => !component.remote);
   const remote = missing.filter(([, component]) => component.remote);
+  const consuming: FileComponentTables = { components, componentSets };
 
   const fetches: Promise<NodeSnapshot[]>[] = [];
   if (local.length > 0) {
     // Same-file ids address real nodes here, so nothing needs re-keying and one call answers all.
     const wanted = new Map(local.map(([id]) => [id, { id, key: undefined }]));
-    fetches.push(fetchDefinitionNodes(figmaService, fileKey, wanted, components));
+    fetches.push(fetchDefinitionNodes(figmaService, fileKey, wanted, consuming, false));
   }
   for (const [libraryFileKey, wanted] of await locateRemote(figmaService, remote)) {
-    fetches.push(fetchDefinitionNodes(figmaService, libraryFileKey, wanted, components));
+    fetches.push(fetchDefinitionNodes(figmaService, libraryFileKey, wanted, consuming, true));
   }
 
   const settled = await Promise.all(fetches);
@@ -116,11 +118,14 @@ function missingDefinitions(
   const referenced = new Set<string>();
   const defined = new Set<string>();
   // Discovery walks the same slice of the document the READ will keep. A hidden layer or one below
-  // the depth cut never reaches the output, so fetching its component spends a request on bytes
-  // nobody sees. The visibility rule mirrors `shouldProcessNode` in the core: hidden means gone,
-  // unless a component property drives the visibility, in which case some instance shows it.
-  const visit = (node: FigmaDocumentNode, depth: number): void => {
+  // the depth cut never reaches the output, so fetching its component spends a request — and a slot
+  // of the fetch budget — on bytes nobody sees. The visibility rule mirrors `shouldProcessNode` in
+  // the core exactly, INCLUDING its context: a hidden node whose visibility a component property
+  // drives survives only inside a component definition, where some instance will turn it on. The
+  // same node hidden inside an instance is simply hidden.
+  const visit = (node: FigmaDocumentNode, depth: number, insideDefinition: boolean): void => {
     const propertyDriven =
+      insideDefinition &&
       "componentPropertyReferences" in node &&
       !!node.componentPropertyReferences &&
       "visible" in node.componentPropertyReferences;
@@ -128,9 +133,17 @@ function missingDefinitions(
     if (node.type === "COMPONENT" || node.type === "COMPONENT_SET") defined.add(node.id);
     if (node.type === "INSTANCE" && node.componentId) referenced.add(node.componentId);
     if (maxDepth !== undefined && maxDepth !== null && depth >= maxDepth) return;
-    for (const child of "children" in node ? (node.children ?? []) : []) visit(child, depth + 1);
+    const childContext =
+      node.type === "COMPONENT" || node.type === "COMPONENT_SET"
+        ? true
+        : node.type === "INSTANCE"
+          ? false
+          : insideDefinition;
+    for (const child of "children" in node ? (node.children ?? []) : []) {
+      visit(child, depth + 1, childContext);
+    }
   };
-  for (const node of rawNodes) visit(node, 0);
+  for (const node of rawNodes) visit(node, 0, false);
 
   const missing: Array<[string, Component]> = [];
   for (const id of referenced) {
@@ -191,7 +204,9 @@ async function fetchDefinitionNodes(
   figmaService: FigmaService,
   fileKey: string,
   wanted: Map<string, WantedDefinition>,
-  consumingComponents: Record<string, Component>,
+  consuming: FileComponentTables,
+  /** A published library answers with its CURRENT version; the same file answers with this one. */
+  fromLibrary: boolean,
 ): Promise<NodeSnapshot[]> {
   let response;
   try {
@@ -222,7 +237,13 @@ async function fetchDefinitionNodes(
         componentSets: entry.componentSets,
       });
       snapshots.push(
-        localize(snapshot, target?.id ?? nodeId, entry.components ?? {}, consumingComponents),
+        localize(
+          snapshot,
+          target?.id ?? nodeId,
+          { components: entry.components ?? {}, componentSets: entry.componentSets ?? {} },
+          consuming,
+          fromLibrary,
+        ),
       );
     } catch (error) {
       Logger.log(
@@ -253,23 +274,68 @@ async function fetchDefinitionNodes(
 function localize(
   snapshot: NodeSnapshot,
   rootId: string,
-  libraryComponents: Record<string, Component>,
-  consumingComponents: Record<string, Component>,
+  library: FileComponentTables,
+  consuming: FileComponentTables,
+  fromLibrary: boolean,
 ): NodeSnapshot {
-  const consumingIdByKey = new Map<string, string>();
-  for (const [id, component] of Object.entries(consumingComponents)) {
-    consumingIdByKey.set(component.key, id);
+  const componentIdByKey = new Map<string, string>();
+  for (const [id, component] of Object.entries(consuming.components)) {
+    componentIdByKey.set(component.key, id);
   }
+  const setIdByKey = new Map<string, string>();
+  for (const [id, set] of Object.entries(consuming.componentSets)) setIdByKey.set(set.key, id);
 
+  // `mainComponent` was read out of the LIBRARY's tables, so its set id is a library id too. Rebuild
+  // the whole reference from the consuming file's tables rather than patching the id: the name and
+  // description a reader sees should be the ones this file has, not the library's newer copy.
   const translate = (node: NodeSnapshot): void => {
     if (node.componentId) {
-      const key = libraryComponents[node.componentId]?.key;
-      const localId = key ? consumingIdByKey.get(key) : undefined;
-      if (localId) node.componentId = localId;
-      else delete node.componentId;
+      const key = library.components[node.componentId]?.key;
+      const localId = key ? componentIdByKey.get(key) : undefined;
+      if (localId) {
+        node.componentId = localId;
+        node.mainComponent = referenceFrom(localId, consuming);
+      } else {
+        // No counterpart here: better unnamed than named wrong. The nested instance keeps its
+        // children and simply isn't attributed — the same place an unpublished component lands.
+        delete node.componentId;
+        delete node.mainComponent;
+      }
     }
     for (const child of node.children ?? []) translate(child);
   };
   for (const child of snapshot.children ?? []) translate(child);
-  return { ...snapshot, id: rootId };
+  // Another page of the SAME file is this document's own reading of the component. Only a library
+  // can hand back a version this document never adopted.
+  return { ...snapshot, id: rootId, definitionUnverified: fromLibrary || undefined };
+}
+
+/** A component's provenance as the CONSUMING file states it, for a reference translated into it. */
+function referenceFrom(
+  componentId: string,
+  consuming: FileComponentTables,
+): NodeSnapshot["mainComponent"] {
+  const component = consuming.components[componentId];
+  if (!component) return undefined;
+  const reference: NonNullable<NodeSnapshot["mainComponent"]> = {
+    name: component.name,
+    key: component.key || undefined,
+  };
+  const setId = component.componentSetId;
+  if (setId) {
+    const set = consuming.componentSets[setId];
+    reference.set = {
+      id: setId,
+      key: set?.key || undefined,
+      name: set?.name ?? setId,
+      description: set?.description || undefined,
+    };
+  }
+  return reference;
+}
+
+/** A file's component tables, the pair that has to travel together to translate a reference. */
+interface FileComponentTables {
+  components: Record<string, Component>;
+  componentSets: Record<string, ComponentSet>;
 }

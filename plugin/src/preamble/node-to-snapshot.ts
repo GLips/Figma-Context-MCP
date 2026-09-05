@@ -369,7 +369,15 @@ async function sceneSubtreeToSnapshot(
 ): Promise<NodeSnapshot> {
   const text = node.type === "TEXT" ? decodeSceneText(node) : undefined;
   const main = await mainComponentOf(node);
-  if (main && mainComponents && !mainComponents.has(main.id)) mainComponents.set(main.id, main);
+  // Only for an instance the read will KEEP: a hidden one is dropped downstream, so publishing its
+  // component's definition would spend a full subtree walk on bytes nobody sees. A hidden instance
+  // whose visibility a component property drives is kept — some instance turns it on.
+  const collectable =
+    node.visible !== false ||
+    (!!node.componentPropertyReferences && "visible" in node.componentPropertyReferences);
+  if (main && mainComponents && collectable && !mainComponents.has(main.id)) {
+    mainComponents.set(main.id, main);
+  }
 
   const childSpace: SceneParentSpace = isCoordinateTransparentType(node.type)
     ? { transparent: true, origin: ownXY(node), rotation: node.rotation ?? 0 }

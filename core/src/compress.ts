@@ -1,6 +1,6 @@
 import { stableStringify } from "./utils.js";
 import { sha1Hex } from "./sha1.js";
-import type { SimplifiedNode, StyleValue, TemplateBody } from "./types.js";
+import type { NodeDelta, SimplifiedNode, StyleValue, TemplateBody } from "./types.js";
 
 /**
  * Post-walk compression pass.
@@ -35,7 +35,7 @@ import type { SimplifiedNode, StyleValue, TemplateBody } from "./types.js";
  */
 export function compressDesign(
   nodes: SimplifiedNode[],
-  extraRoots: SimplifiedNode[],
+  extraSurfaces: SimplifiedNode[][],
   styles: Record<string, StyleValue>,
   namedStyleKeys: Set<string>,
 ): {
@@ -46,7 +46,7 @@ export function compressDesign(
   // The components sidecar's published children are output too, so they count, inline and
   // template exactly like tree nodes — a style shared between a component's children and the
   // page must stay hoisted, and two identical bodies must template whichever surface they sit on.
-  const surfaces = [nodes, extraRoots];
+  const surfaces = [nodes, ...extraSurfaces];
 
   // Per-style usage counts, taken before dedup while every node still carries
   // its own style fields. Reused by both the inlining and expansion steps.
@@ -76,7 +76,7 @@ export const STYLE_REF_FIELDS = ["layout", "fill", "stroke", "effects", "textSty
  * disagree about what a "style slot" is.
  */
 function visitStyleRefSlots(
-  node: SimplifiedNode | TemplateBody,
+  node: SimplifiedNode | TemplateBody | NodeDelta,
   visit: (value: unknown, set: (value: unknown) => void) => void,
 ): void {
   const record = node as unknown as Record<string, unknown>;
@@ -128,14 +128,14 @@ function inlineSingleUseStyles(
     inlineKeys.add(key);
   }
 
-  const walk = (ns: SimplifiedNode[]): void => {
+  const walk = (ns: Array<SimplifiedNode | NodeDelta>): void => {
     for (const node of ns) {
       visitStyleRefSlots(node, (value, set) => {
         if (typeof value === "string" && inlineKeys.has(value)) {
           set(styles[value]);
         }
       });
-      walk(styleBearingNested(node));
+      walk(styleBearingNested(node as SimplifiedNode));
     }
   };
   for (const surface of surfaces) walk(surface);
@@ -149,12 +149,12 @@ function inlineSingleUseStyles(
 
 function countStyleRefs(nodes: SimplifiedNode[]): Map<string, number> {
   const counts = new Map<string, number>();
-  const walk = (ns: SimplifiedNode[]): void => {
+  const walk = (ns: Array<SimplifiedNode | NodeDelta>): void => {
     for (const node of ns) {
       visitStyleRefSlots(node, (value) => {
         if (typeof value === "string") counts.set(value, (counts.get(value) ?? 0) + 1);
       });
-      walk(styleBearingNested(node));
+      walk(styleBearingNested(node as SimplifiedNode));
     }
   };
   walk(nodes);
@@ -171,7 +171,7 @@ function countStyleRefs(nodes: SimplifiedNode[]): Map<string, number> {
  * dropped from the table without ever being inlined — leaving the delta pointing at a key that no
  * longer exists. Every style pass therefore descends the same way.
  */
-function styleBearingNested(node: SimplifiedNode): SimplifiedNode[] {
+function styleBearingNested(node: SimplifiedNode): Array<SimplifiedNode | NodeDelta> {
   if (!node.overrides) return node.children ?? [];
   return [...(node.children ?? []), ...Object.values(node.overrides)];
 }
@@ -230,7 +230,7 @@ function inlineExclusiveStyles(
     if (instanceCount === undefined) continue;
     // The body's own slots and those of every override it carries — a template body keeps
     // `overrides` (it is intrinsic to the body), so its refs are part of what this collapses.
-    const inlineExclusive = (target: SimplifiedNode | TemplateBody): void => {
+    const inlineExclusive = (target: SimplifiedNode | TemplateBody | NodeDelta): void => {
       visitStyleRefSlots(target, (ref, set) => {
         if (typeof ref !== "string") return;
         if (namedStyleKeys.has(ref)) return;

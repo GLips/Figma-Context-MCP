@@ -114,18 +114,26 @@ export async function simplify(
   // Compression runs LAST and over both surfaces: a component's published children are output
   // too, so they template and share hoisted styles with the tree exactly like any other node.
   return {
-    ...compressDesign(nodes, componentRoots(components), table.styles, table.namedStyleKeys),
+    ...compressDesign(nodes, componentSurfaces(components), table.styles, table.namedStyleKeys),
     components,
   };
 }
 
-/** The sidecar's children, as extra roots for the compression pass to see. */
-function componentRoots(components: Record<string, SimplifiedComponentEntry>): SimplifiedNode[] {
-  const roots: SimplifiedNode[] = [];
+/**
+ * Each sidecar entry's children as its OWN surface, for the compression pass to see.
+ *
+ * One array per entry, not a flattened copy of all of them: templating replaces nodes by writing
+ * back into the array it was handed, so a copy would leave the entry's real children un-templated
+ * while their styles were inlined or dropped out from under them.
+ */
+function componentSurfaces(
+  components: Record<string, SimplifiedComponentEntry>,
+): SimplifiedNode[][] {
+  const surfaces: SimplifiedNode[][] = [];
   for (const entry of Object.values(components)) {
-    if (entry.children) roots.push(...entry.children);
+    if (entry.children) surfaces.push(entry.children);
   }
-  return roots;
+  return surfaces;
 }
 
 // ---------------------------------------------------------------------------
@@ -258,15 +266,15 @@ async function extractNode(
         result.children = childrenToInclude;
       }
     }
+  }
 
-    // A container whose children ALL dropped out — every one hidden by hand. Recorded rather than
-    // inferred later, because only here is it distinguishable from a childless node or a subtree
-    // the depth limit cut short; the components pass turns it into a `visible: false` per child
-    // instead of a node that reads as untouched. A container the SVG collapse folded into an image
-    // is not this: it has no children to speak of any more.
-    if (!result.children && result.type !== "IMAGE-SVG") {
-      context.components.emptiedContainers.add(node.id);
-    }
+  // A container we were allowed to look inside that came back with nothing — every child hidden by
+  // hand, or a slot emptied. Recorded rather than inferred later, because only here is it
+  // distinguishable from a subtree the depth limit cut short; the components pass turns it into a
+  // `visible: false` per child instead of a node that reads as untouched. A container the SVG
+  // collapse folded into an image is not this: it has no children to speak of any more.
+  if (!atDepthLimit && node.children && !result.children && result.type !== "IMAGE-SVG") {
+    context.components.emptiedContainers.add(node.id);
   }
 
   return result;
@@ -453,6 +461,7 @@ function extractComponent(
   // A definition in the tree names itself into the same sidecar an instance would — same entry,
   // better provenance (this is the node's own reading, not an instance's second-hand copy).
   if (node.type === "COMPONENT" || node.type === "COMPONENT_SET") {
+    if (node.definitionUnverified) context.components.unverifiedDefinitions.add(node.id);
     const definitions = node.componentPropertyDefinitions
       ? simplifyPropertyDefinitions(node.componentPropertyDefinitions)
       : undefined;
