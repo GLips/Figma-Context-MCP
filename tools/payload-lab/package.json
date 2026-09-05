@@ -1,0 +1,30 @@
+{
+  "name": "@framelink/payload-lab",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite build && node --import tsx src/server/start.ts",
+    "build": "vite build",
+    "test": "node --import tsx --test tests/*.test.ts",
+    "typecheck": "tsc --noEmit",
+    "runner": "node --import tsx src/server/cli.ts"
+  },
+  "dependencies": {
+    "@hono/node-server": "1.19.10",
+    "hono": "4.12.5",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "zod": "^4.4.3",
+    "js-yaml": "^4.1.1"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "esbuild": "^0.28.1",
+    "remeda": "2.20.1",
+    "tsx": "^4.21.0",
+    "typescript": "^5.7.3",
+    "vite": "^7.3.1"
+  }
+}
