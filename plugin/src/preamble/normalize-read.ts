@@ -307,7 +307,6 @@ function sizeProps(n: SimplifiedNode, type: AuthorableReadType, subject: string)
   const props: Record<string, unknown> = {};
   const width = axisSize(n.width, n.designedWidth, subject + ".width");
   const height = axisSize(n.height, n.designedHeight, subject + ".height");
-  assertSizeIsTheNodesOwn(n, width, height, subject);
   if (type === "LINE") {
     // A LINE sizes on `length` alone (LineSchema has no width/height). A numeric cross axis is the line's
     // ~0 bbox height and drops; a SIZING INTENT there is real state with no word — a line stretched in a
@@ -337,21 +336,6 @@ function sizeProps(n: SimplifiedNode, type: AuthorableReadType, subject: string)
     props.absolute = absolute;
   }
   return props;
-}
-
-// Read's `width`/`height` come from `absoluteBoundingBox` — the AXIS-ALIGNED bounds — while `rotation` is
-// carried beside them. On an unrotated node those are the same number; on a rotated one they are not, so
-// copying both would rebuild a 100×20 bar rotated 45° as an ~85×85 square rotated 45°. Wrong pixels with
-// no error, which is the one thing this verb must not do — and worst on a LINE, whose `length` IS that
-// width. Refuse the pair; a rotated node is a flcm.clone case until the read shape carries its own size.
-function assertSizeIsTheNodesOwn(n: SimplifiedNode, width: unknown, height: unknown, subject: string): void {
-  if (!n.rotation) return;
-  if (typeof width !== "number" && typeof height !== "number") return;
-  throw refuse(
-    subject, "rotation",
-    "this node is rotated " + n.rotation + "°, and the read `width`/`height` are its axis-aligned BOUNDS " +
-      "rather than its own size — rebuilding from them would produce a differently-sized node",
-  );
 }
 
 // One axis: a number is fixed px, "fill"/"hug" are intents that author verbatim. "contextual" is the read

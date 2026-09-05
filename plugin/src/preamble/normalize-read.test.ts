@@ -131,12 +131,20 @@ test("`**` re-emphasizes at the node's OWN bold weight, not a hardcoded 700", as
   assert.deepEqual([copy.text, copy.boldWeight], [original.text, 600]);
 });
 
-test("a size the read shape can't attribute to the node itself is refused, not guessed", async () => {
+test("a rotated node rebuilds at its own size — read reports the node's size, not its tilted bounds", async () => {
   createFigmaMock();
-  // Read's width/height are the AXIS-ALIGNED bounds, so on a rotated node they are not the node's own
-  // size — rebuilding from them would land a differently-shaped node with no error.
-  assert.throws(() => fromRead(spec({ type: "RECTANGLE", width: 100, height: 20, rotation: 45 })), /axis-aligned BOUNDS/);
-  assert.doesNotThrow(() => fromRead(spec({ type: "RECTANGLE", width: 100, height: 20 })));
+  // The text sibling keeps the frame a FRAME on read (a shapes-only container collapses to IMAGE-SVG).
+  await render(frame({ key: "card", width: 300, height: 300 }, [rect({ width: 100, height: 20, rotation: 45, fill: "#FF0000" }), text("x")]));
+  const original = (await get("card")).children![0] as SimplifiedNode;
+  assert.deepEqual([original.width, original.height, original.rotation], [100, 20, 45]);
+  // Paste it into a fresh frame (a read ROOT reports "contextual", so the copy is read as a child too).
+  await render(frame({ key: "paste", width: 300, height: 300 }, [fromRead(original), text("x")]));
+  const copy = (await get("paste")).children![0] as SimplifiedNode;
+  assert.deepEqual([copy.width, copy.height, copy.rotation], [100, 20, 45]);
+});
+
+test("a line's sizing intent on its cross axis is refused, not guessed", async () => {
+  createFigmaMock();
   // A LINE authors along `length` alone, so a SIZING INTENT on its cross axis has nowhere to go. (A
   // NUMBER there is the line's ~0 bbox height and drops — that one really is derived.)
   assert.throws(() => fromRead(spec({ type: "LINE", width: 80, height: "fill" })), /LINE sizes only along its length/);
