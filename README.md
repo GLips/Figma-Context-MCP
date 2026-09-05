@@ -17,6 +17,9 @@
   <a href="https://framelink.ai/discord">
     <img alt="Discord" src="https://img.shields.io/discord/1352337336913887343?color=7389D8&label&logo=discord&logoColor=ffffff" />
   </a>
+  <a href="https://athakur3.github.io/mcp-context-cost/servers/figma-context.html">
+    <img alt="context cost" src="https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fathakur3%2Fmcp-context-cost%2Fmain%2Fbadges%2Ffigma-context.json" />
+  </a>
   <br />
   <a href="https://twitter.com/glipsman">
     <img alt="Twitter" src="https://img.shields.io/twitter/url?url=https%3A%2F%2Fx.com%2Fglipsman&label=%40glipsman" />
