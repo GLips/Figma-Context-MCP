@@ -6,8 +6,8 @@ import type {
   SnapshotTextRun,
   SnapshotTextStyle,
 } from "../snapshot.js";
-import { isVisible, pixelRound } from "../utils.js";
-import { flattenSolidFills, parsePaint, type SimplifiedFill } from "./style.js";
+import { pixelRound } from "../utils.js";
+import { foldPaintStack, type SimplifiedFill } from "./style.js";
 
 /**
  * Canonical text-style vocabulary (see docs/canonical-vocabulary.md). Used both
@@ -43,7 +43,7 @@ export type SimplifiedTextStyle = Partial<{
   paragraphIndent: number;
   listSpacing: number;
   // Per-run text color override — run deltas only, never the base (a TEXT
-  // node's `fills` carries base color like every other node). An array only for
+  // node's `fill` carries base color like every other node). An array only for
   // a genuinely stacked span paint that can't flatten to one color.
   color: SimplifiedFill | SimplifiedFill[];
 }>;
@@ -541,7 +541,7 @@ function classifyRun(
         break;
       }
       case "fills": {
-        const color = foldRunColor(value as SnapshotPaint[]);
+        const color = foldPaintStack(value as SnapshotPaint[]);
         if (color !== undefined) {
           refDelta.color = color;
         }
@@ -648,21 +648,6 @@ function classifyRun(
 
   if (Object.keys(refDelta).length > 0) c.refDelta = refDelta;
   return c;
-}
-
-/**
- * Fold a run's visible fill paints into the delta's `color` value. Same folding
- * as node fills — an all-solid stack flattens to the one color a viewer sees —
- * but unlike node `fills` (always an array) a single value unwraps to a bare
- * scalar per the spec: only a genuinely mixed stack stays an array.
- */
-function foldRunColor(runPaints: SnapshotPaint[]): SimplifiedFill | SimplifiedFill[] | undefined {
-  const paints = runPaints.filter(isVisible);
-  const flattened = flattenSolidFills(paints);
-  if (flattened !== null) return flattened;
-  const parsed = paints.map((p) => parsePaint(p, false)).reverse();
-  if (parsed.length === 0) return undefined;
-  return parsed.length === 1 ? parsed[0] : parsed;
 }
 
 /**

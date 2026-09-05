@@ -163,14 +163,14 @@ describe("result serialization", () => {
             id: "1:1",
             name: "Box",
             type: "FRAME",
-            fills: ["#FF0000"],
+            fill: "#FF0000",
           },
         ],
       };
 
       const output = serializeResult(wrapForSerialization(design), "tree");
 
-      expect(output).toContain('fills=["#FF0000"]');
+      expect(output).toContain("fill=#FF0000");
     });
 
     // Deduplicated nodes carry only id/name/template/children; the type and
@@ -181,9 +181,9 @@ describe("result serialization", () => {
         name: "Test",
         components: {},
         componentSets: {},
-        styles: { fill_red: ["#FF0000"] },
+        styles: { fill_red: "#FF0000" },
         templates: {
-          "EL-abc12345": { type: "FRAME", fills: "fill_red" },
+          "EL-abc12345": { type: "FRAME", fill: "fill_red" },
         },
         nodes: [
           { id: "1:1", name: "Card A", template: "EL-abc12345" },

@@ -98,7 +98,7 @@ function assertNoCycle(subject: string, node: any, destination: any): void {
 // plan that added fromRead originally said to delete them for exactly that reason. It doesn't follow:
 // provenance correctly reports a RAW spec as not-constructor-built, and the next test in the chain is
 // "does it look like a target?" — which a `get` result passes, because it has an `id`. Silent move.
-const READ_SPEC_FIELDS = ["children", "fills", "strokes", "effects", "textStyle", "designedWidth", "designedHeight"];
+const READ_SPEC_FIELDS = ["children", "effects", "textStyle", "designedWidth", "designedHeight"];
 
 function assertNotReadSpec(subject: string, thing: Record<string, unknown>): void {
   if (!isReadSpec(thing) && !READ_SPEC_FIELDS.some((f) => f in thing)) return;

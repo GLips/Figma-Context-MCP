@@ -412,7 +412,7 @@ export interface PageInfo { fileName: string; page: PageSummary; pages: PageSumm
 export interface FindQuery { type?: string; name?: string; key?: string; within?: Target }
 
 // find's optional second arg: a caller closure over a candidate's FULL EXPANDED read shape — the same
-// SimplifiedNode `get` returns, with values inline (Invariant 3), so `n.fills?.[0]` is a value (a hex like
+// SimplifiedNode `get` returns, with values inline (Invariant 3), so `n.fill` is a value (a hex like
 // "#FFFFFF") and never a "fill_…" styles ref. It runs in-sandbox; the query pre-filter narrows what reaches
 // it, and only candidates the core actually materialized are passed (a dropped/collapsed node never is).
 // Returns anything truthy — an ordinary JS predicate, never shipped anywhere.

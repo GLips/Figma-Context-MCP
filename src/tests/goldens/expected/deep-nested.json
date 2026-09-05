@@ -17,36 +17,36 @@
         {
           "id": "8:2",
           "name": "Chip",
-          "template": "EL-c9738c88",
+          "template": "EL-4530f333",
           "children": [
             {
               "id": "8:2:t",
               "name": "Tag",
-              "template": "EL-de777a3d"
+              "template": "EL-18f1c885"
             }
           ]
         },
         {
           "id": "8:3",
           "name": "Chip",
-          "template": "EL-c9738c88",
+          "template": "EL-4530f333",
           "children": [
             {
               "id": "8:3:t",
               "name": "Tag",
-              "template": "EL-de777a3d"
+              "template": "EL-18f1c885"
             }
           ]
         },
         {
           "id": "8:4",
           "name": "Chip",
-          "template": "EL-c9738c88",
+          "template": "EL-4530f333",
           "children": [
             {
               "id": "8:4:t",
               "name": "Tag",
-              "template": "EL-de777a3d"
+              "template": "EL-18f1c885"
             }
           ]
         }
@@ -57,16 +57,14 @@
   "componentSets": {},
   "styles": {},
   "templates": {
-    "EL-c9738c88": {
+    "EL-4530f333": {
       "type": "FRAME",
       "width": 60,
       "height": 28,
-      "fills": [
-        "#E6E6E6"
-      ],
+      "fill": "#E6E6E6",
       "borderRadius": "14px"
     },
-    "EL-de777a3d": {
+    "EL-18f1c885": {
       "type": "TEXT",
       "width": 44,
       "height": 16,
@@ -78,9 +76,7 @@
         "fontWeight": 500,
         "fontSize": 12
       },
-      "fills": [
-        "#333333"
-      ]
+      "fill": "#333333"
     }
   }
 }

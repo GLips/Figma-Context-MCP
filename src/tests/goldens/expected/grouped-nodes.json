@@ -9,9 +9,7 @@
       "height": "contextual",
       "designedWidth": "400px",
       "designedHeight": "300px",
-      "fills": [
-        "#FFFFFF"
-      ],
+      "fill": "#FFFFFF",
       "children": [
         {
           "id": "8:2",
@@ -30,9 +28,7 @@
               "height": 40,
               "left": 15,
               "top": 0,
-              "fills": [
-                "#3366E6"
-              ]
+              "fill": "#3366E6"
             },
             {
               "id": "8:4",
@@ -42,9 +38,7 @@
               "height": 30,
               "left": 0,
               "top": 45,
-              "fills": [
-                "#E66633"
-              ]
+              "fill": "#E66633"
             },
             {
               "id": "8:5",
@@ -63,9 +57,7 @@
                   "height": 20,
                   "left": 0,
                   "top": 8,
-                  "fills": [
-                    "#1AB366"
-                  ]
+                  "fill": "#1AB366"
                 },
                 {
                   "id": "8:7",
@@ -75,9 +67,7 @@
                   "height": 12,
                   "left": 45,
                   "top": 0,
-                  "fills": [
-                    "#E6B31A"
-                  ]
+                  "fill": "#E6B31A"
                 }
               ]
             }
@@ -101,9 +91,7 @@
               "height": 40,
               "left": 57.08,
               "top": 0,
-              "fills": [
-                "#994DCC"
-              ]
+              "fill": "#994DCC"
             },
             {
               "id": "8:10",
@@ -114,9 +102,7 @@
               "left": 0,
               "top": 39.59,
               "rotation": -15,
-              "fills": [
-                "#33B3CC"
-              ]
+              "fill": "#33B3CC"
             }
           ]
         }

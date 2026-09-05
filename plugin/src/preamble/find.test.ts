@@ -138,8 +138,8 @@ test("find with a predicate keeps only nodes it accepts, against inline styling 
     ]),
   );
 
-  // The predicate reads the EXPANDED read shape — fills are inline hex values, not "fill_…" refs.
-  const whites = await find({ type: "RECTANGLE" }, (n) => Array.isArray(n.fills) && n.fills[0] === "#FFFFFF");
+  // The predicate reads the EXPANDED read shape — a fill is an inline hex value, not a "fill_…" ref.
+  const whites = await find({ type: "RECTANGLE" }, (n) => n.fill === "#FFFFFF");
   assert.deepEqual(whites.map((h) => h.key), ["white"]);
   // Matches still come back as SlimHandles (find's contract holds) — identity + layout world-model.
   assert.equal(whites[0].type, "RECTANGLE");
@@ -169,7 +169,7 @@ test("query pre-filter narrows what the predicate sees (hybrid filter)", async (
   );
 
   // Same fill predicate, but the query facet restricts candidates to FRAMEs — the rect is never tested.
-  const whiteFrames = await find({ type: "FRAME" }, (n) => Array.isArray(n.fills) && n.fills[0] === "#FFFFFF");
+  const whiteFrames = await find({ type: "FRAME" }, (n) => n.fill === "#FFFFFF");
   assert.deepEqual(whiteFrames.map((h) => h.key), ["panel"]);
 });
 
@@ -182,11 +182,11 @@ test("findOne threads the predicate and keeps its cardinality guard", async () =
     ]),
   );
 
-  const one = await findOne({ type: "RECTANGLE" }, (n) => Array.isArray(n.fills) && n.fills[0] === "#FFFFFF");
+  const one = await findOne({ type: "RECTANGLE" }, (n) => n.fill === "#FFFFFF");
   assert.equal(one.key, "white");
   // No white ellipse → 0 matches → the count-naming throw still fires.
   await assert.rejects(
-    findOne({ type: "ELLIPSE" }, (n) => Array.isArray(n.fills) && n.fills[0] === "#FFFFFF"),
+    findOne({ type: "ELLIPSE" }, (n) => n.fill === "#FFFFFF"),
     /expected exactly one match.*found 0/s,
   );
 });

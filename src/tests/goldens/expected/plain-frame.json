@@ -9,12 +9,8 @@
       "height": "contextual",
       "designedWidth": "200px",
       "designedHeight": "120px",
-      "fills": [
-        "#E6E6E6"
-      ],
-      "strokes": [
-        "#CCCCCC"
-      ],
+      "fill": "#E6E6E6",
+      "stroke": "#CCCCCC",
       "strokeWidth": "1px",
       "strokeAlign": "outside",
       "effects": {
@@ -38,9 +34,7 @@
             "fontSize": 16,
             "lineHeight": "24px"
           },
-          "fills": [
-            "#1A1A1A"
-          ]
+          "fill": "#1A1A1A"
         }
       ]
     }

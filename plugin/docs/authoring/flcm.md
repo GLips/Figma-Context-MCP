@@ -39,7 +39,7 @@ There is no autocomplete and no type-checking where your code runs (a QuickJS sa
 | `await flcm.clone(target, parent?)` | a faithful live duplicate (key-less) | a target, and optionally where the copy lands (default: beside the original). The copy path for subtrees a spec rebuild can't reproduce — anything holding an INSTANCE |
 | `flcm.fromRead(spec)` | a `get` result re-authored as a buildable spec | a spec from flcm.get, subtree and all — the constructor is picked by each node's `type` and `children` recurse. Returns a constructor-built node — render it, or place it with append/prepend/insertBefore/insertAfter. (A single node's spec can also spread straight into its constructor: flcm.rect({ ...spec, width: 320 }).) Anything the read shape carries that flcm has no word for (an INSTANCE, a paint stack, a grid) fails loud by name; flcm.clone is the faithful copy for those |
 | `await flcm.get(target)` | a node's full read spec (values inline) | target: an flcm/key, a node id, flcm.id(id), or a handle |
-| `await flcm.find(query?, predicate?)` | matching nodes as slim handles | query { type?, name?, key?, within? } AND-combined — a filter, not an address; only `within` takes a target. Optional predicate over the full read shape (n => n.fills?.[0] === '#FFF') |
+| `await flcm.find(query?, predicate?)` | matching nodes as slim handles | query { type?, name?, key?, within? } AND-combined — a filter, not an address; only `within` takes a target. Optional predicate over the full read shape (n => n.fill === '#FFF') |
 | `await flcm.findOne(query?, predicate?)` | exactly one slim handle (throws on 0 or >1) | same query + predicate as find |
 | `await flcm.selection()` | the current selection as slim handles | no args |
 | `await flcm.page.current()` | where you are — { fileName, page, pages } | no args. The orientation call: the file's name, the page every other verb acts on, and the file's other pages |
@@ -59,7 +59,7 @@ There is no autocomplete and no type-checking where your code runs (a QuickJS sa
 
 Every prop is optional; an omitted prop is simply not applied (a frame with no `fill` is transparent, not white).
 
-**A `get` result's own spellings are accepted too.** Spread a read spec into any constructor or `flcm.edit` — `flcm.rect({ ...spec, width: 320 })`, `flcm.text(spec)` — and its `fills`/`strokes`, `left`/`top`, node-level `boldWeight` and `text` land on the matching props below; naming one thing both ways in one call (`fills` and `fill`) fails loud. Fields flcm has no word for (an INSTANCE's `componentId`, `strokeDashes`, a grid) fail loud by name. A spec with `children` needs `flcm.fromRead(spec)`, which rebuilds the whole subtree.
+**A `get` result's own spellings are accepted too.** Spread a read spec into any constructor or `flcm.edit` — `flcm.rect({ ...spec, width: 320 })`, `flcm.text(spec)` — and its `left`/`top`, node-level `boldWeight`, a text's `fill` and `text` land on the matching props below; naming one thing both ways in one call (`fill` and `color` on a text) fails loud. Fields flcm has no word for (an INSTANCE's `componentId`, `strokeDashes`, a grid) fail loud by name. A spec with `children` needs `flcm.fromRead(spec)`, which rebuilds the whole subtree.
 
 ### Shared by every node
 

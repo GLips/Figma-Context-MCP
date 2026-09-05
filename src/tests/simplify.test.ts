@@ -42,8 +42,8 @@ describe("simplify — expanded by default", () => {
 
     // Both nodes carry the concrete value — no string ref, even though the
     // value repeats (dedup is compression's job, not the walk's).
-    expect(nodes[0].fills).toEqual(["#FF0000"]);
-    expect(nodes[1].fills).toEqual(["#FF0000"]);
+    expect(nodes[0].fill).toEqual("#FF0000");
+    expect(nodes[1].fill).toEqual("#FF0000");
     expect(styles).toEqual({});
     expect(templates).toEqual({});
   });
@@ -75,8 +75,8 @@ describe("simplify — expanded by default", () => {
       compress: true,
     });
 
-    expect(typeof nodes[0].fills).toBe("string");
-    expect(nodes[1].fills).toBe(nodes[0].fills);
-    expect(styles[nodes[0].fills as string]).toEqual(["#FF0000"]);
+    expect(typeof nodes[0].fill).toBe("string");
+    expect(nodes[1].fill).toBe(nodes[0].fill);
+    expect(styles[nodes[0].fill as string]).toEqual("#FF0000");
   });
 });

@@ -78,7 +78,7 @@ test("a spread-and-modified read spec is the paste-with-modifications path", asy
   assert.equal(copy.width, 320);
   assert.equal(copy.name, "Wide copy");
   // Read the copy back through the same pipeline: the paint survived the rebuild unchanged.
-  assert.deepEqual((await get(id(out.root.id))).fills, ["#123456"]);
+  assert.deepEqual((await get(id(out.root.id))).fill, "#123456");
 
   // `position` is its own word in the read shape, so a hand-set one must not be a silent no-op — out of a
   // real `get` it travels with left/top, but this module's whole pitch is spread-and-modify.
@@ -109,7 +109,7 @@ test("real state flcm can't author fails by name; derived fields drop silently",
   assert.throws(() => fromRead(spec({ type: "RECTANGLE", strokeDashes: [4, 4] })), /`strokeDashes` has no authored form/);
   assert.throws(() => fromRead(spec({ type: "FRAME", componentId: "1:2" })), /`componentId` has no authored form/);
   // A compressed read is a different mistake from a malformed value, so it gets its own message.
-  assert.throws(() => fromRead(spec({ type: "RECTANGLE", fills: "fill_a1b2c3d4" })), /styles-table REFERENCE .* COMPRESSED read/s);
+  assert.throws(() => fromRead(spec({ type: "RECTANGLE", fill: "fill_a1b2c3d4" })), /styles-table REFERENCE .* COMPRESSED read/s);
   assert.throws(() => fromRead(spec({ type: "FRAME", template: "EL-abcd1234" })), /COMPRESSED read/);
   // A word that IS in the read shape but not on this node's type names the type, not "unknown prop".
   assert.throws(() => fromRead(spec({ type: "TEXT", effects: { boxShadow: "0 1px 2px #000" } })), /`effects` is not one of flcm.text's words/);
@@ -216,17 +216,17 @@ test("a single read spec spreads straight into its constructor — the read spel
   const card = await get("card");
   const [box, label, rule] = card.children as SimplifiedNode[];
 
-  // rect: `fills`/`strokes` → fill/stroke, `left`/`top` → absolute, and a hand-set override lands.
+  // rect: `fill`/`stroke` ride through, `left`/`top` → absolute, and a hand-set override lands.
   const out = await render(frame({ width: 300, height: 300 }, [rect({ ...box, width: 320 })]));
   const copy = (await figma.getNodeByIdAsync(out.root.id)).children[0];
   assert.deepEqual([copy.width, copy.height, copy.x, copy.y, copy.strokeWeight], [320, 50, 10, 20, 2]);
   assert.deepEqual(copy.fills[0].color, { r: 0x12 / 255, g: 0x34 / 255, b: 0x56 / 255 });
   assert.deepEqual(copy.strokes[0].color, { r: 0, g: 0, b: 0 });
 
-  // text: the spec-first form — content from `text`, `fills` → color, node-level boldWeight → textStyle.
+  // text: the spec-first form — content from `text`, `fill` → color, node-level boldWeight → textStyle.
   const t = await render(frame({ width: 300, height: 300 }, [text(label)]));
   const copiedText = (await get(id(t.root.id))).children![0] as SimplifiedNode;
-  assert.deepEqual([copiedText.text, copiedText.fills, copiedText.boldWeight], [label.text, ["#FF0000"], 600]);
+  assert.deepEqual([copiedText.text, copiedText.fill, copiedText.boldWeight], [label.text, "#FF0000", 600]);
 
   // line: `width` is the line's `length`.
   const l = await render(frame({ width: 300, height: 300 }, [line({ ...rule })]));
@@ -237,7 +237,7 @@ test("a single read spec spreads straight into its constructor — the read spel
   assert.doesNotThrow(() => frame({ ...card, children: undefined }));
   // One thing named both ways is refused, not resolved — the spread-and-override bag is where a silent
   // "last one wins" would bite.
-  assert.throws(() => rect({ ...box, fill: "#FFFFFF" }), /`fills` and `fill` name the same thing/);
+  assert.throws(() => text({ ...label, color: "#FFFFFF" }), /`fill` and `color` name the same thing/);
   assert.throws(() => text("other", { ...label }), /content arrived twice/);
   assert.throws(() => text({ ...label, textStyle: { fontSize: 12, boldWeight: 700 } }), /`boldWeight` and `textStyle.boldWeight`/);
   // A spec handed to the wrong constructor says so, and names the verb that dispatches by type.
@@ -255,20 +255,20 @@ test("edit takes the read spellings too, folded against the live node's type", a
   const boxId = out.keyed.box.id;
   const lineId = out.keyed.line.id;
 
-  await edit("box", { fills: ["#00FF00"], left: 30, top: 40 });
+  await edit("box", { fill: "#00FF00", left: 30, top: 40 });
   const box = await figma.getNodeByIdAsync(boxId);
   assert.deepEqual(box.fills[0].color, { r: 0, g: 1, b: 0 });
   assert.deepEqual([box.x, box.y], [30, 40]);
 
   // The same read word lands on the TEXT's word (`color`), and `text` is the edit's `content`.
-  await edit("line", { fills: ["#0000FF"], text: "Changed" });
+  await edit("line", { fill: "#0000FF", text: "Changed" });
   const line = await figma.getNodeByIdAsync(lineId);
   assert.deepEqual(line.fills[0].color, { r: 0, g: 0, b: 1 });
   assert.equal(line.characters, "Changed");
 
   // Read identity folds to nothing, and nothing is an empty edit.
   await assert.rejects(edit("box", { id: boxId, type: "RECTANGLE" }), /changes object is empty/);
-  await assert.rejects(edit("box", { fills: ["#FFF"], fill: "#000" }), /`fills` and `fill` name the same thing/);
+  await assert.rejects(edit("line", { fill: "#FFF", color: "#000" }), /`fill` and `color` name the same thing/);
   // A word outside BOTH vocabularies is still the document-blind reject, naming the edit words only.
   await assert.rejects(edit("box", { fillz: ["#FFF"] }), /unknown prop "fillz"/);
 });

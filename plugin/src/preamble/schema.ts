@@ -528,7 +528,7 @@ export interface Flcm {
   // empty; AND-combines type/name/key/within (default scope: current page). The query is a FILTER, not an
   // address — only `within` takes a target (id/key/handle); the other facets are match conditions, and a
   // bare string is rejected rather than guessed at. Dive into a hit with `get`. An
-  // optional predicate filters by anything in the full read shape (values inline: `n.fills?.[0] === '#FFF'`);
+  // optional predicate filters by anything in the full read shape (values inline: `n.fill === '#FFF'`);
   // the query pre-filters cheaply, only survivors are materialized (a predicate-only find has a hard cap).
   find(query?: FindQuery, predicate?: ReadPredicate): Promise<SlimHandle[]>;
   // Locate exactly one — throws on 0 or >1, naming the count (a blind agent must never silently act on the
@@ -593,7 +593,7 @@ export const VERBS: VerbDoc[] = [
   { category: "structure", signature: "await flcm.clone(target, parent?)", builds: "a faithful live duplicate (key-less)", args: "a target, and optionally where the copy lands (default: beside the original). The copy path for subtrees a spec rebuild can't reproduce — anything holding an INSTANCE", quickStart: "await flcm.clone(target, parent?)" },
   { category: "build", signature: "flcm.fromRead(spec)", builds: "a `get` result re-authored as a buildable spec", args: "a spec from flcm.get, subtree and all — the constructor is picked by each node's `type` and `children` recurse. Returns a constructor-built node — render it, or place it with append/prepend/insertBefore/insertAfter. (A single node's spec can also spread straight into its constructor: flcm.rect({ ...spec, width: 320 }).) Anything the read shape carries that flcm has no word for (an INSTANCE, a paint stack, a grid) fails loud by name; flcm.clone is the faithful copy for those", quickStart: "flcm.fromRead(spec)" },
   { category: "read", signature: "await flcm.get(target)", builds: "a node's full read spec (values inline)", args: "target: an flcm/key, a node id, flcm.id(id), or a handle" },
-  { category: "read", signature: "await flcm.find(query?, predicate?)", builds: "matching nodes as slim handles", args: "query { type?, name?, key?, within? } AND-combined — a filter, not an address; only `within` takes a target. Optional predicate over the full read shape (n => n.fills?.[0] === '#FFF')" },
+  { category: "read", signature: "await flcm.find(query?, predicate?)", builds: "matching nodes as slim handles", args: "query { type?, name?, key?, within? } AND-combined — a filter, not an address; only `within` takes a target. Optional predicate over the full read shape (n => n.fill === '#FFF')" },
   { category: "read", signature: "await flcm.findOne(query?, predicate?)", builds: "exactly one slim handle (throws on 0 or >1)", args: "same query + predicate as find" },
   { category: "read", signature: "await flcm.selection()", builds: "the current selection as slim handles", args: "no args" },
   { category: "page", signature: "await flcm.page.current()", builds: "where you are — { fileName, page, pages }", args: "no args. The orientation call: the file's name, the page every other verb acts on, and the file's other pages", quickStart: "await flcm.page.current() / .use(nameOrId) / .new(name)" },

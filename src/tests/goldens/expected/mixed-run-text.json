@@ -23,9 +23,7 @@
         "fontSize": 14,
         "lineHeight": "20px"
       },
-      "fills": [
-        "#000000"
-      ]
+      "fill": "#000000"
     }
   ],
   "components": {},

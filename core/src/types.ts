@@ -11,6 +11,7 @@ import type {
 
 export type StyleValue =
   | SimplifiedTextStyle
+  | SimplifiedFill
   | SimplifiedFill[]
   | SimplifiedLayout
   | SimplifiedEffects
@@ -135,8 +136,14 @@ export interface SimplifiedNode extends NodeGeometry {
   // appearance — each style field holds either a styles-table reference (when
   // the value is shared by 2+ nodes or is a named Figma style) or the inline
   // value itself (single-use values, after the compression pass).
-  fills?: string | SimplifiedFill[];
-  strokes?: string | SimplifiedFill[];
+  //
+  // A paint slot names the SLOT, not the count (CSS `background`): ONE paint
+  // when that is what a viewer sees, an array only for a genuinely stacked
+  // paint that can't flatten (see foldPaintStack). A ref string and an inline
+  // color are both strings — a reader tells them apart by looking the value up
+  // in the design's `styles` table, never by shape.
+  fill?: string | SimplifiedFill | SimplifiedFill[];
+  stroke?: string | SimplifiedFill | SimplifiedFill[];
   // Non-stylable stroke properties are kept on the node when stroke uses a named color style
   strokeWidth?: string;
   strokeDashes?: number[];

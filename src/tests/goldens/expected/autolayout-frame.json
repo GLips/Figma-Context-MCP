@@ -22,9 +22,7 @@
           "type": "FRAME",
           "width": 120,
           "height": 36,
-          "fills": [
-            "#3366FF"
-          ],
+          "fill": "#3366FF",
           "borderRadius": "6px"
         },
         {
@@ -36,9 +34,7 @@
           "position": "absolute",
           "left": 260,
           "top": 4,
-          "fills": [
-            "#FF0000"
-          ],
+          "fill": "#FF0000",
           "borderRadius": "12px"
         }
       ]

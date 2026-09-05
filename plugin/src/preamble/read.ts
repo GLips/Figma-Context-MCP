@@ -284,7 +284,7 @@ function rejectStringQuery(query: unknown, verb: string): void {
  *
  * An optional `predicate` filters by anything in the full read shape ("every frame with a white fill"): the
  * query pre-filters cheaply, then only the survivors are materialized as the EXPANDED canonical shape (inline
- * values, so `n.fills?.[0]` is a value) and tested. A predicate-only find (no facets) materializes every
+ * values, so `n.fill` is a value) and tested. A predicate-only find (no facets) materializes every
  * rendered candidate, up to a hard cap past which it fails loud (see MATERIALIZE_CAP).
  */
 export async function find(query: FindQuery = {}, predicate?: ReadPredicate): Promise<SlimHandle[]> {

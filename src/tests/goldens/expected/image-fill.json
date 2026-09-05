@@ -5,39 +5,35 @@
       "id": "5:1",
       "name": "Photo",
       "type": "RECTANGLE",
-      "fills": [
-        {
-          "type": "IMAGE",
-          "imageRef": "abc123def456",
-          "scaleMode": "FILL",
-          "objectFit": "cover",
-          "isBackground": false,
-          "imageDownloadArguments": {
-            "needsCropping": false,
-            "requiresImageDimensions": false
-          }
+      "fill": {
+        "type": "IMAGE",
+        "imageRef": "abc123def456",
+        "scaleMode": "FILL",
+        "objectFit": "cover",
+        "isBackground": false,
+        "imageDownloadArguments": {
+          "needsCropping": false,
+          "requiresImageDimensions": false
         }
-      ]
+      }
     },
     {
       "id": "5:2",
       "name": "Tiled",
       "type": "FRAME",
-      "fills": [
-        {
-          "type": "IMAGE",
-          "imageRef": "tile999",
-          "scaleMode": "TILE",
-          "scalingFactor": 0.5,
-          "backgroundRepeat": "repeat",
-          "backgroundSize": "calc(var(--original-width) * 0.5) calc(var(--original-height) * 0.5)",
-          "isBackground": true,
-          "imageDownloadArguments": {
-            "needsCropping": false,
-            "requiresImageDimensions": true
-          }
+      "fill": {
+        "type": "IMAGE",
+        "imageRef": "tile999",
+        "scaleMode": "TILE",
+        "scalingFactor": 0.5,
+        "backgroundRepeat": "repeat",
+        "backgroundSize": "calc(var(--original-width) * 0.5) calc(var(--original-height) * 0.5)",
+        "isBackground": true,
+        "imageDownloadArguments": {
+          "needsCropping": false,
+          "requiresImageDimensions": true
         }
-      ],
+      },
       "children": [
         {
           "id": "5:3",
@@ -47,33 +43,31 @@
           "height": 50,
           "left": 0,
           "top": 0,
-          "fills": [
-            {
-              "type": "IMAGE",
-              "imageRef": "crop555",
-              "gifRef": "gif777",
-              "scaleMode": "FILL",
-              "objectFit": "cover",
-              "isBackground": false,
-              "imageDownloadArguments": {
-                "needsCropping": true,
-                "requiresImageDimensions": false,
-                "cropTransform": [
-                  [
-                    1,
-                    0,
-                    0.1
-                  ],
-                  [
-                    0,
-                    1,
-                    0.2
-                  ]
+          "fill": {
+            "type": "IMAGE",
+            "imageRef": "crop555",
+            "gifRef": "gif777",
+            "scaleMode": "FILL",
+            "objectFit": "cover",
+            "isBackground": false,
+            "imageDownloadArguments": {
+              "needsCropping": true,
+              "requiresImageDimensions": false,
+              "cropTransform": [
+                [
+                  1,
+                  0,
+                  0.1
                 ],
-                "filenameSuffix": "1f2c9a"
-              }
+                [
+                  0,
+                  1,
+                  0.2
+                ]
+              ],
+              "filenameSuffix": "1f2c9a"
             }
-          ]
+          }
         }
       ]
     }

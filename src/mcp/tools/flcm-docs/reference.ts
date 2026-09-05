@@ -160,9 +160,9 @@ const SECTIONS: Section[] = [
       "Every prop is optional; an omitted prop is simply not applied (a frame with no `fill` is transparent, " +
       "not white).\n\n" +
       "**A `get` result's own spellings are accepted too.** Spread a read spec into any constructor or " +
-      "`flcm.edit` — `flcm.rect({ ...spec, width: 320 })`, `flcm.text(spec)` — and its `fills`/`strokes`, " +
-      "`left`/`top`, node-level `boldWeight` and `text` land on the matching props below; naming one thing " +
-      "both ways in one call (`fills` and `fill`) fails loud. Fields flcm has no word for (an INSTANCE's " +
+      "`flcm.edit` — `flcm.rect({ ...spec, width: 320 })`, `flcm.text(spec)` — and its `left`/`top`, " +
+      "node-level `boldWeight`, a text's `fill` and `text` land on the matching props below; naming one thing " +
+      "both ways in one call (`fill` and `color` on a text) fails loud. Fields flcm has no word for (an INSTANCE's " +
       "`componentId`, `strokeDashes`, a grid) fail loud by name. A spec with `children` needs " +
       "`flcm.fromRead(spec)`, which rebuilds the whole subtree.\n\n" +
       `### Shared by every node\n\n${propTable(FIELD_GROUPS.shared)}\n\n` +

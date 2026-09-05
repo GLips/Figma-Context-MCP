@@ -31,7 +31,7 @@ describe("parityView comparator policy", () => {
             id: "1",
             name: "Photo",
             type: "RECTANGLE",
-            fills: [{ type: "IMAGE", imageRef, ...(gifRef ? { gifRef } : {}), scaleMode: "FILL" }],
+            fill: { type: "IMAGE", imageRef, ...(gifRef ? { gifRef } : {}), scaleMode: "FILL" },
           },
         ],
       } as unknown as Partial<SimplifiedDesign>);
@@ -47,7 +47,7 @@ describe("parityView comparator policy", () => {
   it("does NOT collapse a difference in a real fill color (shared field floor)", () => {
     const withColor = (hex: string) =>
       design({
-        nodes: [{ id: "1", name: "Swatch", type: "RECTANGLE", fills: [hex] }],
+        nodes: [{ id: "1", name: "Swatch", type: "RECTANGLE", fill: hex }],
       } as unknown as Partial<SimplifiedDesign>);
 
     expect(parityView(withColor("#000000"))).not.toEqual(parityView(withColor("#FFFFFF")));
@@ -87,11 +87,11 @@ describe("parityView comparator policy", () => {
 
   it("expands a hoisted style ref so it matches the same value inlined", () => {
     const hoisted = design({
-      nodes: [{ id: "1", name: "T", type: "TEXT", fills: "fill_abc" }],
-      styles: { fill_abc: ["#123456"] },
+      nodes: [{ id: "1", name: "T", type: "TEXT", fill: "fill_abc" }],
+      styles: { fill_abc: "#123456" },
     } as unknown as Partial<SimplifiedDesign>);
     const inlined = design({
-      nodes: [{ id: "1", name: "T", type: "TEXT", fills: ["#123456"] }],
+      nodes: [{ id: "1", name: "T", type: "TEXT", fill: "#123456" }],
     } as unknown as Partial<SimplifiedDesign>);
 
     expect(parityView(hoisted)).toEqual(parityView(inlined));
@@ -118,12 +118,12 @@ describe("parityView comparator policy", () => {
         { id: "1", name: "a", template: "EL-x" },
         { id: "2", name: "b", template: "EL-x" },
       ],
-      templates: { "EL-x": { type: "FRAME", fills: ["#FFFFFF"] } },
+      templates: { "EL-x": { type: "FRAME", fill: "#FFFFFF" } },
     } as unknown as Partial<SimplifiedDesign>);
     const inline = design({
       nodes: [
-        { id: "1", name: "a", type: "FRAME", fills: ["#FFFFFF"] },
-        { id: "2", name: "b", type: "FRAME", fills: ["#FFFFFF"] },
+        { id: "1", name: "a", type: "FRAME", fill: "#FFFFFF" },
+        { id: "2", name: "b", type: "FRAME", fill: "#FFFFFF" },
       ],
     } as unknown as Partial<SimplifiedDesign>);
 

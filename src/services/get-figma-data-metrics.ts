@@ -49,12 +49,12 @@ export type GetFigmaDataMetrics = {
 };
 
 /**
- * Collect style-table keys whose value contains at least one image-backed
- * fill (IMAGE or PATTERN). Covers both plain fill arrays and stroke objects
- * whose `colors` array holds fills. Used to classify simplified nodes as
- * "image nodes" via their `fills`/`strokes` key references.
+ * Whether a paint slot's value (one paint, or a stack) holds at least one
+ * image-backed paint (IMAGE or PATTERN). Used to classify simplified nodes as
+ * "image nodes" via their `fill`/`stroke` values or style-table references.
  */
-function hasImageFill(fills: SimplifiedFill[]): boolean {
+function hasImageFill(value: SimplifiedFill | SimplifiedFill[]): boolean {
+  const fills = Array.isArray(value) ? value : [value];
   return fills.some(
     (fill) =>
       typeof fill === "object" &&
@@ -104,13 +104,14 @@ export function measureSimplifiedDesign(design: SimplifiedDesign): {
   let imageNodeCount = 0;
   let componentPropertyCount = 0;
 
-  // A template reference keeps no body of its own — type, fills, and strokes
+  // A template reference keeps no body of its own — type, fill, and stroke
   // live in the shared element. Resolve through it so metrics stay accurate
-  // whether or not a node was deduplicated.
-  const isImageStyle = (value: SimplifiedNode["fills"]): boolean =>
+  // whether or not a node was deduplicated. A string is a ref only if the
+  // styles table knows it; otherwise it is an inline color, never an image.
+  const isImageStyle = (value: SimplifiedNode["fill"]): boolean =>
     typeof value === "string"
       ? imageStyleKeys.has(value)
-      : Array.isArray(value) && hasImageFill(value);
+      : value !== undefined && hasImageFill(value);
 
   const walk = (node: SimplifiedNode, depth: number): void => {
     simplifiedNodeCount++;
@@ -118,7 +119,7 @@ export function measureSimplifiedDesign(design: SimplifiedDesign): {
     const body = node.template ? design.templates[node.template] : node;
     if (body?.type === "INSTANCE") instanceCount++;
     if (body?.type === "TEXT") textNodeCount++;
-    if (isImageStyle(body?.fills) || isImageStyle(body?.strokes)) {
+    if (isImageStyle(body?.fill) || isImageStyle(body?.stroke)) {
       imageNodeCount++;
     }
     // Read through `body`: a deduplicated instance keeps only id/name/template,

@@ -2,8 +2,7 @@
 //
 // A `get` result and a constructor's props are one vocabulary (docs/canonical-vocabulary.md) with a
 // handful of spelling differences, each a deliberate write-side choice:
-//   • read `fills`/`strokes` are the paint SLOTS (Figma's word, an array); write takes the ONE paint an
-//     author passes, as `fill`/`stroke` — and as `color` on a TEXT, whose only paint is its type.
+//   • a TEXT's paint is `fill` on read like every other node's; write spells it `color`.
 //   • read `left`/`top` (+ `position: "absolute"`) report a free-placed node; write places one with
 //     `absolute: { x, y }`, the one word for both a free-form and an auto-layout parent.
 //   • read `boldWeight` sits at the node level; write nests it in `textStyle`, beside the base weight.
@@ -63,8 +62,8 @@ export const READ_FIELD_DISPOSITIONS: Record<keyof SimplifiedNode, ReadFieldDisp
   layout: "author",
   text: "fold",
   textStyle: "author",
-  fills: "fold",
-  strokes: "fold",
+  fill: "fold",
+  stroke: "author",
   strokeWidth: "author",
   effects: "author",
   opacity: "author",
@@ -169,7 +168,9 @@ export function acceptReadSpellings(bag: unknown, ctx: ReadSpellingContext): Fol
     const value = src[key];
     const disposition = own(READ_FIELD_DISPOSITIONS as Record<string, ReadFieldDisposition>, key);
     if (!disposition) { out[key] = value; continue; }
-    if (value == null) continue; // an explicitly-undefined read key is absence, not a claim
+    // An explicitly-undefined READ key is absence, not a claim. A write word keeps its null so the
+    // entry's own rule for it applies (edit refuses a delta that compiles to nothing).
+    if (value == null) { if (ctx.known.has(key)) out[key] = value; continue; }
     if (disposition === "drop") continue;
     if (typeof disposition === "object") throw refuse(subject, key, disposition.refuse);
     if (disposition === "author") {
@@ -185,11 +186,10 @@ export function acceptReadSpellings(bag: unknown, ctx: ReadSpellingContext): Fol
           );
         }
         break;
-      case "fills":
-        land("fills", type === "TEXT" ? "color" : "fill", assertNotCompressedRef(value, subject + ".fills"));
-        break;
-      case "strokes":
-        land("strokes", "stroke", assertNotCompressedRef(value, subject + ".strokes"));
+      case "fill":
+        assertNotCompressedRef(value, subject + ".fill");
+        if (type === "TEXT") land("fill", "color", value);
+        else keep("fill", value);
         break;
       case "text":
         if (ctx.verb === "edit") land("text", "content", foldTextContent(value, subject));
@@ -242,17 +242,17 @@ function noWord(ctx: ReadSpellingContext, readKey: string): Error {
 function foldAuthoredValue(key: string, value: unknown, subject: string): unknown {
   switch (key) {
     case "layout": return foldLayout(value, subject);
-    case "textStyle": case "effects": return assertNotCompressedRef(value, subject + "." + key);
+    case "textStyle": case "effects": case "stroke": return assertNotCompressedRef(value, subject + "." + key);
     case "strokeWidth": return singleValue(value, subject + ".strokeWidth", "one uniform stroke width, not per-side weights");
     case "borderRadius": return singleValue(value, subject + ".borderRadius", "one uniform corner radius, not per-corner radii");
     default: return value;
   }
 }
 
-// Every non-scalar read slot (fills/strokes/effects/layout/textStyle) is a REF string when the read was
-// compressed, minted as `<prefix>_<8 hex>` (core/src/style-table.ts). The exact mint shape is matched —
-// not "any string" — because `fills: "#FFF"` is a fine paint word once folded, and only the ref shape is
-// worth its own message: handed to a value parser it reads as a malformed value, not a wrong read mode.
+// Every style slot (fill/stroke/effects/layout/textStyle) is a REF string when the read was compressed,
+// minted as `<prefix>_<8 hex>` (core/src/style-table.ts). The exact mint shape is matched — not "any
+// string" — because `fill: "#FFF"` is a paint, and only the ref shape is worth its own message: handed
+// to a value parser it reads as a malformed value, not a wrong read mode.
 const STYLE_REF = /^(layout|style|fill|effect)_[0-9a-f]{8}/;
 
 function assertNotCompressedRef<T>(value: T, field: string): T {

@@ -61,7 +61,7 @@ export function compressDesign(
  * tuples inside a `text` array carry a ref the same way — visitStyleRefSlots
  * covers both.
  */
-export const STYLE_REF_FIELDS = ["layout", "fills", "strokes", "effects", "textStyle"] as const;
+export const STYLE_REF_FIELDS = ["layout", "fill", "stroke", "effects", "textStyle"] as const;
 
 /**
  * Visit every slot on a node (or template body) that can hold a style ref: the
