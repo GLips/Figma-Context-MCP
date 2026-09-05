@@ -245,16 +245,16 @@ export function registerCodeModeTools(
       {
         description:
           "Full authoring reference for the `flcm` DSL used in figma_execute_code. Call with no argument for " +
-          "the index + cheat-sheet, an array of section ids for those sections (deduped, in canonical order), " +
-          'or ["all"] for the entire reference in one call. Sections: ' +
+          "the index + cheat-sheet, or an array of section ids for those sections (deduped, in canonical " +
+          "order). Sections: " +
           SECTION_IDS.join(", ") +
           ".",
         inputSchema: {
           sections: z
-            .array(z.enum(["all", ...SECTION_IDS]))
+            .array(z.enum(SECTION_IDS))
             .optional()
             .describe(
-              'Which sections to return, e.g. ["props","effects"]. Use ["all"] for the whole reference. Omit for the index + cheat-sheet.',
+              'Which sections to return, e.g. ["props","effects"]. Omit for the index + cheat-sheet, which names every section. The whole reference does not fit one response, so ask for the sections you need.',
             ),
         },
       },

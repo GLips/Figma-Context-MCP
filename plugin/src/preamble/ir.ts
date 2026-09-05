@@ -398,6 +398,14 @@ export interface CloneResult { node: Handle; to?: Handle }
 // deleted — enough for the agent to scrub any handle it was still holding.
 export interface RemoveResult { removedId: string; from?: Handle }
 
+// A page, named the two ways anything addresses one. NOT a Handle: a page is not a SceneNode, has no
+// geometry, and can't be a `target` — every verb acts on the CURRENT page, which is what the page
+// verbs move.
+export interface PageSummary { id: string; name: string }
+
+// What every page verb answers with: the file, where you are, and what else is in the document.
+export interface PageInfo { fileName: string; page: PageSummary; pages: PageSummary[] }
+
 // A locate query: the declarative facets find/findOne match, AND-combined. `type` and `key` are exact;
 // `name` is a case-insensitive substring (layer names are fuzzy — findOne's cardinality guard catches an
 // over-broad match). `within` scopes the scan to a subtree (target-by-shape, default: current page).

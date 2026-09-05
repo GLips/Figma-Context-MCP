@@ -1,7 +1,7 @@
 // reference — the doc generator. It turns the schema (the single source: every verb/prop/type/one-liner)
 // plus the hand-written narrative fragments plus the compile-checked examples into two deliverables:
 //   • buildQuickStart()          → the ≤2KB figma_execute_code description (critical-first, signatures generated).
-//   • buildReferenceSections(s?) → the get_flcm_reference tool output (index+cheat-sheet, named sections, or all).
+//   • buildReferenceSections(s?) → the get_flcm_reference tool output (index+cheat-sheet, or named sections).
 // buildFullReference() concatenates every section for the committed human doc (slice: flcm.md regen), so
 // the repo doc and the served doc are assembled from the SAME source and cannot drift.
 //
@@ -283,6 +283,7 @@ const CATEGORY_LABELS: Record<VerbCategory, string> = {
   edit: "edit  ",
   structure: "tree  ",
   read: "read  ",
+  page: "page  ",
   target: "target",
 };
 
@@ -323,14 +324,12 @@ ${verbLines}
 
 MUST-KNOW
 - Return ids/handles, NEVER live Figma nodes (they can't cross the bridge).
-- width/height & layout.gap/padding are px NUMBERS (w/h also "fill"/"hug"); colors/gradients/shadows ARE CSS strings.
+- Metrics take a number or "Npx"; width/height also take "N%", "fill", "hug". Colors/gradients/shadows are CSS strings.
 - Anything outside the documented CSS subset FAILS LOUD, never wrong pixels.
 
-FULL DOCS — get_flcm_reference(sections?): ${SECTION_IDS.join(", ")} (["all"] = everything).
+FULL DOCS — get_flcm_reference(sections?): ${SECTION_IDS.join(", ")} (no arg = index + cheat-sheet).
 
-RETURNS { result, console, errors } — result: your value, JSON-safe (live nodes collapse to { id, name, type }); console: captured console.*; errors: the error string, else null.
-
-Raw figma.*: fills are 0–1, assigned as a NEW array; load a font before setting characters; a node is invisible until appended.`;
+RETURNS { result, console, errors } — result: your value, JSON-safe (live nodes collapse to { id, name, type }); console: captured console.*; errors: the error string, else null.`;
 
   const bytes = Buffer.byteLength(quickStart, "utf8");
   if (bytes > QUICKSTART_LIMIT_BYTES) {
@@ -343,33 +342,22 @@ Raw figma.*: fills are 0–1, assigned as a NEW array; load a font before settin
   return quickStart;
 }
 
-// Claude Code truncates a tool RESULT near ~25K tokens, and a truncated reference silently drops the tail
-// an agent needs. The full reference is ~18K chars (~5K tokens) today — comfortably under — but the
-// ["all"]/multi-section payload must trip THIS guard as sections grow, rather than being cut mid-doc in an
-// agent's context. docs:check renders the whole reference through here, so overflow fails validate (tier-2)
-// instead of surfacing at runtime. ~4 chars/token puts ~25K tokens near 100K chars; we guard well below.
-const REFERENCE_LIMIT_BYTES = 80_000;
+// A client truncates a tool RESULT near ~25K tokens, and a truncated reference silently drops the tail an
+// agent needs — Claude Code doesn't even deliver it, it writes the whole payload to a file and hands back
+// an error, so ONE over-budget call costs the agent the response AND the handshake preamble travelling with
+// it. The whole reference is ~76K chars today, well over that ceiling: there is deliberately no "give me
+// everything" argument, and a multi-section request is served up to this budget with the overflow NAMED
+// rather than cut. Dense markdown runs closer to ~3 chars/token than 4, so budget from the measured
+// failure (79K chars was refused) rather than from a nominal 4×.
+const REFERENCE_LIMIT_BYTES = 50_000;
 
-function capped(doc: string): string {
-  const bytes = Buffer.byteLength(doc, "utf8");
-  if (bytes > REFERENCE_LIMIT_BYTES) {
-    throw new Error(
-      `flcm reference payload is ${bytes} bytes, over the ${REFERENCE_LIMIT_BYTES}B get_flcm_reference cap — ` +
-        `Claude Code truncates a tool result near ~25K tokens, and a truncated reference silently drops the ` +
-        `tail. Split the reference into more sections or raise the cap deliberately.`,
-    );
-  }
-  return doc;
-}
-
-// ---- The sectioned reference tool. No/empty sections → index + cheat-sheet. An "all" member → the whole
-// reference in one call. Otherwise the named sections, DEDUPED and in canonical (SECTIONS) order, each
-// under its own heading — so an agent can assemble the whole picture (or any subset) in ONE call instead
-// of many. Unknown ids are dropped with a note rather than erroring, so a wrong name self-corrects. ----
+// ---- The sectioned reference tool. No/empty sections → index + cheat-sheet. Otherwise the named sections,
+// DEDUPED and in canonical (SECTIONS) order, each under its own heading — so an agent can assemble the whole
+// picture (or any subset) in ONE call instead of many. Unknown ids are dropped with a note rather than
+// erroring, so a wrong name self-corrects. ----
 export function buildReferenceSections(sections?: string[]): string {
   if (!sections || !sections.length) return indexBody();
   const wanted = sections.map((s) => s.trim().toLowerCase());
-  if (wanted.includes("all")) return capped(buildFullReference());
   const chosen = SECTIONS.filter((s) => wanted.includes(s.id)); // canonical order + dedupe
   const unknown = wanted.filter(
     (w) => w !== "index" && w !== "overview" && !SECTION_IDS.includes(w),
@@ -380,13 +368,47 @@ export function buildReferenceSections(sections?: string[]): string {
       : "";
     return `# flcm reference\n\n${note}${indexBody()}`;
   }
-  const parts = chosen.map((s) => `# flcm reference — ${s.title}\n\n${s.body()}`);
+
+  // Fill the budget in canonical order, then say out loud which sections didn't fit and how to get them.
+  // Never silently truncate: an agent that can't tell a short answer from a cut one guesses at the rest.
+  const parts: string[] = [];
+  const dropped: string[] = [];
+  let bytes = 0;
+  for (const section of chosen) {
+    const part = `# flcm reference — ${section.title}\n\n${section.body()}`;
+    const size = Buffer.byteLength(part, "utf8");
+    if (parts.length && bytes + size > REFERENCE_LIMIT_BYTES) {
+      dropped.push(section.id);
+      continue;
+    }
+    parts.push(part);
+    bytes += size;
+  }
+  if (dropped.length) {
+    parts.push(
+      `_Too big for one response, so ${dropped.length > 1 ? "these sections were" : "this section was"} left out: ` +
+        `${dropped.map((d) => `\`${d}\``).join(", ")}. Call \`get_flcm_reference([${dropped.map((d) => `"${d}"`).join(", ")}])\` for ${dropped.length > 1 ? "them" : "it"}._`,
+    );
+  }
   if (unknown.length) {
     parts.push(
       `_Ignored unknown section${unknown.length > 1 ? "s" : ""}: ${unknown.map((u) => `"${u}"`).join(", ")}. Valid: ${SECTION_IDS.join(", ")}._`,
     );
   }
-  return capped(parts.join("\n\n---\n\n"));
+  return parts.join("\n\n---\n\n");
+}
+
+/**
+ * Any single section must fit the response budget on its own — otherwise it is unreachable through the
+ * tool, since the budget loop always emits the first one. Called by `docs:gen`/`docs:check` so a section
+ * that outgrows the ceiling fails validate (tier-2) instead of shipping a doc no agent can read.
+ */
+export function oversizedReferenceSections(): { id: string; bytes: number; limit: number }[] {
+  return SECTIONS.map((s) => ({
+    id: s.id,
+    bytes: Buffer.byteLength(`# flcm reference — ${s.title}\n\n${s.body()}`, "utf8"),
+    limit: REFERENCE_LIMIT_BYTES,
+  })).filter((s) => s.bytes > s.limit);
 }
 
 function indexBody(): string {
@@ -407,7 +429,7 @@ ${verbTable()}
 
 - Constructors are inert; only \`await flcm.render(tree)\` creates nodes → \`{ root, keyed }\`.
 - Return ids/handles, never live Figma nodes.
-- \`width\`/\`height\` and \`layout.gap\`/\`layout.padding\` are numbers (px) or \`"fill"\`/\`"hug"\` (width/height); colors/gradients/shadows are CSS strings.
+- Every metric (\`width\`, \`height\`, \`gap\`, \`padding\`, \`borderRadius\`, \`strokeWidth\`, \`absolute.x\`/\`y\`) takes a number or \`"Npx"\`; \`width\`/\`height\`/\`absolute\` also take \`"N%"\`, and \`width\`/\`height\` take \`"fill"\`/\`"hug"\`. Colors, gradients and shadows are CSS strings.
 - Out-of-subset CSS fails loud.`;
 }
 

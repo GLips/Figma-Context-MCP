@@ -456,13 +456,28 @@ export function createFigmaMock() {
   const figma = {
     mixed: MIXED,
     currentPage: page,
-    root: { children: [page], setPluginData: (k, v) => page.setPluginData(k, v), getPluginData: (k) => page.getPluginData(k) },
+    // The DOCUMENT node. `name` is the FILE name — what flcm.page.current() reports for orientation —
+    // and `children` is the page list the page verbs read and createPage grows.
+    root: { name: "Untitled", children: [page], setPluginData: (k, v) => page.setPluginData(k, v), getPluginData: (k) => page.getPluginData(k) },
     // Undo API: RECORDED, not emulated — real history semantics are the live probe's to ground
     // (scripts/probe-commit-undo.mjs). Tests assert the SEQUENCE of calls the verb scaffold makes
     // (entry seal / success commit / failure commit+trigger), never that anything reverts.
     undoLog: [],
     commitUndo() { this.undoLog.push("commit"); },
     triggerUndo() { this.undoLog.push("trigger"); },
+    // A new page lands in the document, NOT under the current page — and is not switched to. Under
+    // `documentAccess: dynamic-page` the switch is setCurrentPageAsync's job alone, which is the whole
+    // trap flcm.page wraps: the two steps are separate, and only the first has happened here.
+    createPage() {
+      const created = new Node("PAGE");
+      created.name = "Page " + (this.root.children.length + 1);
+      created.selection = [];
+      created.loadAsync = async () => {};
+      created.parent = this.root;
+      this.root.children.push(created);
+      return created;
+    },
+    async setCurrentPageAsync(target) { this.currentPage = target; },
     createFrame() { return new Node("FRAME"); },
     // Live createText seeds a default black fill — buildText's present-empty fills clear ("none")
     // only means something against it.

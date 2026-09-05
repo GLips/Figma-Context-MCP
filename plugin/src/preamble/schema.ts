@@ -24,6 +24,7 @@ import { z } from "zod";
 import type {
   FillInput, WriteCssEffects, PaintSpec, EffectSpec, GradientStop, WriteNode, WriteChild, Handle,
   PinX, PinY, Target, RawIdRef, SlimHandle, FindQuery, ReadPredicate, InsertResult, MoveResult, CloneResult, RemoveResult,
+  PageInfo,
 } from "./ir.js";
 // The read verbs return the canonical read shape the shared simplify core emits. Relative (not ~/) so the
 // root toolchain, which imports this module for docs generation, resolves it without the plugin's paths.
@@ -36,7 +37,7 @@ export type LengthInput = number | string; // a number or "Npx"
 export type PadInput =
   | number
   | string // the CSS box shorthand, in read's spelling: "12px" | "12px 16px" | "8px 8px 0px 0px"
-  | { x?: number; y?: number; top?: number; right?: number; bottom?: number; left?: number };
+  | { x?: LengthInput; y?: LengthInput; top?: LengthInput; right?: LengthInput; bottom?: LengthInput; left?: LengthInput };
 
 export type GradientStopInput = string | { color: string; pos?: number; position?: number };
 export type GradientSugar = {
@@ -88,16 +89,16 @@ const degrees = (note: string) => prop(z.number(), note, "number (deg)");
 // reused across every verb it appears on. The reference tables render these same groups. ----
 
 const SHARED_FIELDS = {
-  name: prop(z.string(), "The node's layer name in Figma."),
+  name: prop(z.string(), "Layer name."),
   key: prop(z.string(), "An address for this node — only keyed nodes come back in render()'s `keyed` map. Author-unique per render."),
   opacity: prop(z.number(), "Whole-node opacity, 0–1.", "number (0–1)"),
   mixBlendMode: prop(
     z.string(),
-    "Blend mode — a CSS mix-blend-mode name (multiply, screen, overlay, soft-light, color-dodge, …). Composites this node against what's behind it. An unknown name fails loud.",
+    "A CSS mix-blend-mode name. An unknown one fails loud.",
     '"normal" | "multiply" | "screen" | "overlay" | "soft-light" | … (CSS mix-blend-mode)',
   ),
-  visible: prop(z.boolean(), "Layer visibility. A hidden node is invisible to the read verbs too — find/get cover the RENDERED document — so re-target it by id, not by a fresh find."),
-  locked: prop(z.boolean(), "Lock the layer against USER pointer edits in the Figma UI. The API (and flcm.edit) still writes to a locked node."),
+  visible: prop(z.boolean(), "Layer visibility. A hidden node is invisible to find/get too, so re-target it by id."),
+  locked: prop(z.boolean(), "Locks the layer against pointer edits in Figma's UI. flcm.edit still writes to it."),
 };
 
 const SIZE_FIELDS = {
@@ -105,12 +106,12 @@ const SIZE_FIELDS = {
   // literals in the inferred type — hence an explicit .meta label to keep the doc precise.
   width: prop(
     z.union([z.number(), z.string()]),
-    'Width. A number is fixed px; "N%" is a percent of the parent on this axis (free-form parent with a fixed size only). "fill" stretches to the parent (any parent frame — rejected on the root, whose parent is the page); "hug" shrinks to content, which only a row/column container or text can measure (rejected elsewhere). Not a "px" string.',
-    'number | "fill" | "hug" | "N%"',
+    'A fixed size (a number or "Npx"), "N%" of the parent axis, "fill" (stretch to the parent — rejected on the root), or "hug" (shrink to content — only a row/column container or text can hug).',
+    'number | "Npx" | "N%" | "fill" | "hug"',
   ),
   height: prop(
     z.union([z.number(), z.string()]),
-    'Height. Same rules as width — except on TEXT, whose height follows its content and wrap: set `width` (the height follows) or use "fill" in-flow; a fixed, "hug", or percent height is rejected.',
+    'Same rules as width. On TEXT the height follows the content: set `width` or use "fill"; a fixed, "hug", or percent height is rejected.',
     'number | "fill" | "hug" | "N%"',
   ),
   absolute: prop(
@@ -127,22 +128,22 @@ const SIZE_FIELDS = {
       }),
       z.literal("none"),
     ]),
-    'Pins the node at x/y relative to its parent — inside a frame that means lifting it out of the parent\'s auto-layout flow (overlays, badges, decorations); on a render root, whose parent is the page, it is where on the page the tree lands. Without it a root goes to the page origin, so successive renders stack. x/y are px numbers or "N%" (percent of the parent axis). `anchor` picks which point of the node lands on x/y — x: "left"|"center"|"right", y: "top"|"center"|"bottom" (default { left, top }); e.g. anchor:{ x:"center" } with x:"50%" centres the node on the midpoint instead of offsetting it by its own width. In flcm.edit, "none" returns the node to its parent\'s flow.',
-    '{ x?, y?, anchor?: { x?, y? } } | "none" — x/y number or "N%"',
+    'Pins the node at x/y in its parent, lifting it out of auto-layout flow (badges, overlays). On a render root it is where on the PAGE the tree lands — without it every root stacks at the origin. `anchor` picks the node\'s own reference point (default { left, top }), so anchor:{ x:"center" } with x:"50%" centres it. Under edit, "none" returns the node to the flow.',
+    '{ x?, y?, anchor?: { x?, y? } } | "none" — x/y number, "Npx" or "N%"',
   ),
   pin: prop(
     z.custom<{ x?: PinX; y?: PinY } | "none">(),
-    'Constraint override — how this node responds when its parent resizes. Overrides the auto choice (w:"fill"→stretch, "N%"→scale, percent absolute position→center, else pinned to the near edge). x: "left"|"center"|"right"|"stretch"|"scale"; y: "top"|"center"|"bottom"|"stretch"|"scale". Honored for a child of a free-form parent and for any `absolute` child; inert on an in-flow auto-layout child (which reflows via fill/hug instead) — stored, and governs if the node later leaves the flow. In flcm.edit, "none" on an axis (or the whole prop) restores the default near-edge pin.',
+    'Constraint override — how the node responds when its parent resizes, replacing the automatic choice. Honored for a child of a free-form parent and for any `absolute` child; on an in-flow auto-layout child it is stored but inert (fill/hug governs there) until the node leaves the flow. Under edit, "none" restores the default near-edge pin.',
     '{ x?, y? } | "none" — x: left/center/right/stretch/scale/none, y: top/center/bottom/stretch/scale/none',
   ),
 };
 
 const APPEARANCE_FIELDS = {
-  fill: color('Background paint — a color/gradient string, or flcm.gradient(...). "none" removes the paint.'),
+  fill: color('Background paint: a color/gradient string or flcm.gradient(...). "none" removes it.'),
   stroke: color('Border paint. "none" removes it.'),
   strokeWidth: metric("Border thickness."),
-  borderRadius: metric("Corner radius. Frames and rectangles only (ellipses ignore it)."),
-  effects: prop(z.custom<EffectsInput>(), 'Shadows / blur — flcm.effects({...}), or a CSS-string bag. "none" removes all effects.', "effects value"),
+  borderRadius: metric("Corner radius. Frames and rectangles only."),
+  effects: prop(z.custom<EffectsInput>(), 'Shadows / blur: flcm.effects({...}) or a CSS-string bag. "none" removes all effects.', "effects value"),
   rotation: degrees("Rotation in degrees."),
 };
 
@@ -152,30 +153,30 @@ const APPEARANCE_FIELDS = {
 // realizable subset of `justify-content`/`align-items`; the sugar boundary (flcm.ts) maps them to the
 // terse render intent, and rejects any valid-CSS-but-unrealizable spelling (space-around/-evenly) loud.
 const LAYOUT_FIELDS = {
-  mode: prop(z.enum(["row", "column", "none"]), 'Auto-layout direction. Default "none" (free-form; gap/padding/justifyContent/alignItems then reject loud — name mode: "row"|"column" to use them). flcm cannot author grid — a "grid" attempt fails loud.'),
+  mode: prop(z.enum(["row", "column", "none"]), 'Auto-layout direction. Default "none" = free-form, where the other layout words reject loud. No grid: "grid" fails loud.'),
   gap: metric("Space between children."),
   padding: prop(
     z.custom<PadInput>(),
-    'Padding. A number, or { x, y } shorthand (x→left+right, y→top+bottom), or per-edge. Also takes the read shape\'s CSS box shorthand string ("12px", "12px 16px") so a `get` result\'s layout re-authors as-is.',
+    'A number, the CSS box shorthand ("12px 16px"), { x, y } (x→left+right, y→top+bottom), or per-edge. Edge values take a number or "Npx".',
     'number | "12px 16px" | { x?, y? } | { top?, right?, bottom?, left? }',
   ),
   justifyContent: prop(
     z.enum(["flex-start", "flex-end", "center", "space-between"]),
-    'Distribution along the main axis (CSS justify-content). Realizable subset: "flex-start" (default) | "flex-end" | "center" | "space-between". Figma auto-layout has no space-around/space-evenly — those fail loud.',
+    'CSS justify-content, main axis. Figma has no space-around/space-evenly — those fail loud.',
   ),
   alignItems: prop(
     z.enum(["flex-start", "flex-end", "center", "stretch"]),
-    'Alignment on the cross axis (CSS align-items). "stretch" stretches every auto-sized child across the cross axis; a child with a fixed cross-axis size keeps it. (You can also stretch a single child by setting its width/height to "fill".)',
+    'CSS align-items, cross axis. "stretch" stretches every auto-sized child (a fixed cross-axis size wins); one child alone stretches via width/height "fill".',
   ),
 };
 
 const FRAME_FIELDS = {
   layout: prop(
     z.object(LAYOUT_FIELDS),
-    "Auto-layout container config (mode/gap/padding/justifyContent/alignItems). Omitted or mode:\"none\" = free-form (children position absolutely).",
+    "Auto-layout config. Omitted or mode:\"none\" = free-form, where children position absolutely.",
     "{ mode?, gap?, padding?, justifyContent?, alignItems? }",
   ),
-  clip: prop(z.boolean(), "Clip children to the frame's bounds (clipsContent). Default false — like CSS, overflow is visible unless you set clip:true."),
+  clip: prop(z.boolean(), "Clip children to the frame's bounds. Default false, like CSS overflow: visible."),
 };
 
 // Text style — the base every run layers over. The hybrid structure groups these under a `textStyle`
@@ -183,60 +184,60 @@ const FRAME_FIELDS = {
 // text `color` is NOT here — it's a top-level sugar prop compiling to the node's `fills`, like every other
 // node's color (see TEXT_FIELDS).
 const TEXTSTYLE_FIELDS = {
-  fontFamily: prop(z.string(), "Font family. An unknown family falls back to Inter."),
+  fontFamily: prop(z.string(), "An unknown family falls back to Inter."),
   fontWeight: prop(
     z.union([z.number(), z.string()]),
-    "Font weight, snapped to the nearest available style. Numbers 100–900, or names: thin/hairline, extralight/ultralight, light, normal/regular/book, medium, semibold/demibold, bold, extrabold/ultrabold, black/heavy.",
+    "Snapped to the nearest available style. Numbers 100–900, or CSS names (light, normal, medium, semibold, bold, black, …).",
     "number (100–900) | name",
   ),
   fontSize: prop(z.number(), "Font size in px."),
   fontStyle: prop(
     z.enum(["italic", "normal"]),
-    'CSS font-style — "italic" or "normal" (no oblique). Snaps to the family\'s italic variant. On the base only "italic" is meaningful; "normal" is a run-delta inverse override on an italic base.',
+    'CSS font-style, no oblique. Snaps to the family\'s italic variant. On the base only "italic" means anything; "normal" is a run delta clearing an italic base.',
   ),
   lineHeight: prop(
     z.union([z.number(), z.string()]),
-    'Line height. "auto"/"normal" = the font default. em/% are relative to font size.',
+    'Line height. "auto"/"normal" = the font default.',
     'number(px) | "Npx" | "N%" | "Nem" | "auto"',
   ),
   letterSpacing: prop(
     z.union([z.number(), z.string()]),
-    "Tracking. em/% are relative to font size.",
+    "Tracking.",
     'number(px) | "Npx" | "N%" | "Nem"',
   ),
   textDecoration: prop(
     z.enum(["underline", "line-through", "none"]),
-    'CSS text-decoration-line — "underline" | "line-through" | "none". On the base only "underline"/"line-through"; "none" is a run-delta inverse override clearing an inherited decoration. (Strikethrough is also authorable inline as ~~text~~.)',
+    'CSS text-decoration-line. On the base "none" means nothing; it is a run delta clearing an inherited decoration. Strikethrough is also inline: ~~text~~.',
   ),
-  textAlign: prop(z.enum(["left", "center", "right", "justify"]), "Horizontal text alignment (CSS text-align)."),
+  textAlign: prop(z.enum(["left", "center", "right", "justify"]), "CSS text-align."),
   textAlignVertical: prop(
     z.enum(["top", "center", "bottom"]),
-    'Vertical alignment inside the text box. Default "top". Whole-node only — a styled run cannot set it.',
+    'Vertical alignment in the text box. Whole-node only, never a run delta.',
   ),
   textTransform: prop(
     z.enum(["uppercase", "lowercase", "capitalize", "none"]),
-    'CSS text-transform — re-cases the rendered glyphs without changing the characters. "none" restores the original casing (and clears a fontVariant small-caps, which Figma stores in the same slot).',
+    'CSS text-transform — re-cases the glyphs, not the characters. "none" restores the original casing and clears a fontVariant (same Figma slot).',
   ),
   fontVariant: prop(
     z.enum(["small-caps", "all-small-caps"]),
-    'CSS font-variant-caps. Shares Figma\'s single `textCase` slot with `textTransform`, so naming both in one style fails loud — pick one.',
+    'CSS font-variant-caps. Shares one Figma slot with `textTransform`, so naming both fails loud.',
   ),
-  paragraphSpacing: metric("Space between paragraphs (after each newline)."),
-  paragraphIndent: metric("First-line indent of each paragraph."),
+  paragraphSpacing: metric("Space between paragraphs."),
+  paragraphIndent: metric("First-line indent."),
   listSpacing: metric("Space between list items."),
   hyperlink: prop(
     z.custom<string | { type: "URL"; url: string }>(),
-    'A URL link over the whole text node. Takes a url string, or the read form { type: "URL", url } so a `get` result round-trips. A design\'s NODE links (a link to another node) are read-only and fail loud.',
+    'A URL over the whole text node — a url string, or the read form { type: "URL", url }. Links to a NODE are read-only and fail loud.',
     'string (url) | { type: "URL", url }',
   ),
   boldWeight: prop(
     z.union([z.number(), z.string()]),
-    'The weight `**bold**` resolves to in THIS node. Default "bold" (700). A design that emphasizes with Semi Bold reads back `boldWeight: 600` — pass it through and the copy emphasizes the same way instead of jumping to 700. Same spellings as fontWeight.',
+    'What `**bold**` resolves to in this node. Default 700 — pass back the `boldWeight` a `get` reports and the copy emphasizes like the original. Same spellings as fontWeight.',
     "number (100–900) | name",
   ),
   lineClamp: prop(
     z.union([z.number(), z.literal("none")]),
-    'Clamp the text to at most N lines, truncating with an ellipsis (…). Needs a bounded width — a fixed/`"fill"`/`"N%"` `width` — so the text wraps; on a width-hugging text there is nothing to truncate and it fails loud. N must be a whole number ≥ 1. `"none"` removes an existing clamp (under edit; at create it is the explicit default).',
+    'Truncate to at most N lines with an ellipsis. Needs a bounded `width` so the text wraps — on a hugging text it fails loud. `"none"` removes a clamp.',
     'number (≥1) | "none"',
   ),
 };
@@ -244,10 +245,10 @@ const TEXTSTYLE_FIELDS = {
 const TEXT_FIELDS = {
   textStyle: prop(
     z.object(TEXTSTYLE_FIELDS),
-    "Text style base (font identity, metrics, casing, paragraph spacing, alignment, lineClamp). Runs layer over it.",
+    "The text style base. Runs layer over it.",
     "{ fontFamily?, fontWeight?, fontSize?, fontStyle?, lineHeight?, letterSpacing?, textDecoration?, textTransform?, fontVariant?, textAlign?, textAlignVertical?, paragraphSpacing?, paragraphIndent?, listSpacing?, hyperlink?, boldWeight?, lineClamp? }",
   ),
-  color: color("Text color (a solid color, normally) — a node-level sugar prop compiling to the text node's fill."),
+  color: color("Text color — the node-level spelling of the text's fill."),
 };
 
 // At create, text CONTENT is the positional first arg of flcm.text — this group exists for edit,
@@ -256,7 +257,7 @@ const TEXT_FIELDS = {
 const TEXTCONTENT_FIELDS = {
   content: prop(
     z.custom<string | TextRunInput[]>(),
-    "Replacement text: a plain string (markdown inline styling works: **bold**, *italic*, ~~strike~~, [link](url)) or an array of styled runs — exactly what flcm.text takes as its first argument. Replaces the node's whole content.",
+    "Replacement text — the same string-or-runs input flcm.text takes first. Replaces the whole content.",
     "string | run[]",
   ),
 };
@@ -286,7 +287,7 @@ const RUN_FIELDS = {
   // whole text node" — the opposite of what a run delta does (the bridge ranges it over this span alone).
   hyperlink: prop(
     z.custom<string | { type: "URL"; url: string }>(),
-    'A URL link over THIS span. Takes a url string, or the read form { type: "URL", url } so a `get` result round-trips. The inline `[text](url)` markdown spelling is usually simpler. A design\'s NODE links are read-only and fail loud.',
+    'A URL over THIS span — inline `[text](url)` is usually simpler. Links to a NODE are read-only and fail loud.',
     'string (url) | { type: "URL", url }',
   ),
 };
@@ -304,12 +305,12 @@ export type TextRunInput = string | [text: string, style: StyleDeltaInput];
 // constructor drops would let a compile-checked example pass while rendering wrong (a real hole, since the
 // example's whole job is to fail the build on API mismatch). It carries exactly what `line` reads.
 const LINE_FIELDS = {
-  stroke: color("The line's paint. stroke wins if both stroke and color are set."),
+  stroke: color("The line's paint. Wins over `color`."),
   color: color("The line's paint (alias for stroke)."),
   strokeWidth: metric("Thickness. Defaults to 1."),
   length: prop(z.number(), "The line's length in px.", "number"),
-  w: prop(z.number(), "The line's length in px — alias for `length` (`length` wins if both are set).", "number"),
-  rotation: degrees("Degrees. A horizontal line rotated 90° becomes vertical."),
+  w: prop(z.number(), "Alias for `length`, which wins if both are set.", "number"),
+  rotation: degrees("Degrees — 90° makes a horizontal line vertical."),
   absolute: SIZE_FIELDS.absolute,
   pin: SIZE_FIELDS.pin,
 };
@@ -321,8 +322,8 @@ const PATH_FIELDS = {
   d: z
     .string()
     .describe(
-      'SVG path data — the `d` attribute string, e.g. "M12 2 L22 20 L2 20 Z". Any standard command works ' +
-        "(H V S T A and relative/lowercase are auto-normalized); only genuinely malformed data fails. Required.",
+      'SVG path data, e.g. "M12 2 L22 20 L2 20 Z". Every standard command works (relative/shorthand are ' +
+        "normalized); only malformed data fails. Required.",
     ),
   fill: APPEARANCE_FIELDS.fill,
   stroke: APPEARANCE_FIELDS.stroke,
@@ -537,13 +538,23 @@ export interface Flcm {
   selection(): Promise<SlimHandle[]>;
   // The target escape hatch: wraps a raw node id so target resolution treats it as an id, never an flcm/key.
   id(nodeId: string): RawIdRef;
+  // The document verbs — the only words about which PAGE the other verbs act on. Every other verb works
+  // on the current page, so this is how an agent finds out where it is and moves.
+  page: {
+    // Where am I: the file name, the current page, and every page in the file.
+    current(): Promise<PageInfo>;
+    // Switch to a page that already exists, by id or name. A miss lists the file's pages; it never creates.
+    use(target: string): Promise<PageInfo>;
+    // Make a page and switch to it. Refuses a name the file already uses (so a retry can't mint a twin).
+    new: (name: string) => Promise<PageInfo>;
+  };
 }
 
 // ---- Verb registry — the canonical verb list, for the verb table and the quick-start signatures.
 // `schema` links a verb to the prop schema whose fields the reference renders under it. ----
 // `category` groups verbs for the quick-start's compact per-group rendering (the ≤2KB budget can't afford a
 // line per verb). The verb TABLE still lists each verb in full — only the quick-start groups.
-export type VerbCategory = "build" | "value" | "render" | "edit" | "structure" | "read" | "target";
+export type VerbCategory = "build" | "value" | "render" | "edit" | "structure" | "read" | "page" | "target";
 
 export interface VerbDoc {
   signature: string;
@@ -585,6 +596,9 @@ export const VERBS: VerbDoc[] = [
   { category: "read", signature: "await flcm.find(query?, predicate?)", builds: "matching nodes as slim handles", args: "query { type?, name?, key?, within? } AND-combined — a filter, not an address; only `within` takes a target. Optional predicate over the full read shape (n => n.fills?.[0] === '#FFF')" },
   { category: "read", signature: "await flcm.findOne(query?, predicate?)", builds: "exactly one slim handle (throws on 0 or >1)", args: "same query + predicate as find" },
   { category: "read", signature: "await flcm.selection()", builds: "the current selection as slim handles", args: "no args" },
+  { category: "page", signature: "await flcm.page.current()", builds: "where you are — { fileName, page, pages }", args: "no args. The orientation call: the file's name, the page every other verb acts on, and the file's other pages", quickStart: "await flcm.page.current() / .use(nameOrId) / .new(name)" },
+  { category: "page", signature: "await flcm.page.use(nameOrId)", builds: "the switched-to page's info", args: "a page name or page id. Never creates: a miss fails loud listing the file's pages", quickStart: null },
+  { category: "page", signature: "await flcm.page.new(name)", builds: "a new page, switched to", args: "a page name the file doesn't already use (a taken name fails loud and creates nothing, so a retry can't mint a twin)", quickStart: null },
   { category: "target", signature: "flcm.id(nodeId)", builds: "a raw-id target ref", args: "a node id string — resolved as an id, never scanned as an flcm/key" },
 ];
 

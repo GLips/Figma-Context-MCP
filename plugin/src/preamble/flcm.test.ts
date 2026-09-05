@@ -10,7 +10,7 @@ import { frame, text, ellipse, line, rect, render, gradient, effects } from "./f
 // render runs. (flcm.js imports are figma-free at module load, so static import above is safe.)
 createFigmaMock();
 
-test("pad: numbers, the CSS box shorthand and edge objects compile; a non-numeric edge rejects", () => {
+test("pad: numbers, the CSS box shorthand and edge objects compile; an out-of-subset unit rejects", () => {
   // mode named on the positives: padding without a row/column mode rejects at create (the shared
   // realizability gate), so the pad-compile assertions need a legal container.
   assert.deepEqual(frame({ layout: { mode: "row", padding: 24 } }).layout!.padding, { top: 24, right: 24, bottom: 24, left: 24 });
@@ -22,8 +22,10 @@ test("pad: numbers, the CSS box shorthand and edge objects compile; a non-numeri
   assert.deepEqual(frame({ layout: { mode: "row", padding: "12px 16px" } }).layout!.padding, { top: 12, right: 16, bottom: 12, left: 16 });
   assert.deepEqual(frame({ layout: { mode: "row", padding: "1px 2px 3px" } }).layout!.padding, { top: 1, right: 2, bottom: 3, left: 2 });
   assert.deepEqual(frame({ layout: { mode: "row", padding: "1px 2px 3px 4px" } }).layout!.padding, { top: 1, right: 2, bottom: 3, left: 4 });
-  // Inside the OBJECT form the edges are still numbers — the silent-zero bug that reject exists for.
-  assert.throws(() => frame({ layout: { padding: { x: "24px" } as never } }), /pad\.x must be a number/);
+  // An edge takes the same number-or-"Npx" every other metric does; anything outside that subset
+  // fails loud rather than coercing to a wrong pixel.
+  assert.deepEqual(frame({ layout: { mode: "row", padding: { x: "24px" } } }).layout!.padding, { top: 0, right: 24, bottom: 0, left: 24 });
+  assert.throws(() => frame({ layout: { padding: { x: "24em" } as never } }), /pad\.x must be a number or "Npx"/);
   assert.throws(() => frame({ layout: { padding: [] as never } }), /pad must be a number, a CSS box shorthand/);
 });
 
@@ -40,6 +42,18 @@ test("create rejects layout words the type can't realize — the SAME gate edit 
   // The words themselves stay legal where the type can realize them.
   assert.doesNotThrow(() => frame({ width: "hug", layout: { mode: "row", gap: 12 } }));
   assert.doesNotThrow(() => text("hi", { width: "hug" }));
+});
+
+test("a metric is a number or \"Npx\" everywhere — width/height and absolute read the same as gap", () => {
+  // One spelling rule across the whole surface: if a prop takes px, it takes both forms. The
+  // alternative (numbers here, strings there) is a rule an author has to memorize per prop.
+  const px = frame({ width: "320px", height: 200, absolute: { x: "16px", y: 8 } });
+  assert.deepEqual(px.layout!.dimensions, { width: 320, height: 200 });
+  assert.equal(px.layout!.left, 16);
+  assert.equal(px.layout!.top, 8);
+  // The subset still holds — an unsupported unit fails loud rather than coercing to wrong pixels.
+  assert.throws(() => frame({ width: "20em" }), /width\/height must be a number/);
+  assert.throws(() => frame({ absolute: { x: "20vw" } }), /absolute\.x must be a number/);
 });
 
 test("hand-built node POJOs reject whole — the compiled IR is not an authoring surface", async () => {

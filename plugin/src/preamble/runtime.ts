@@ -11,13 +11,14 @@ import { edit } from "./edit.js";
 import { editMany } from "./edit-many.js";
 import { append, prepend, insertBefore, insertAfter, move, remove, clone } from "./structure.js";
 import { fromRead } from "./from-read.js";
+import { page } from "./page.js";
 import type { Flcm } from "./schema.js";
 
-export { frame, text, rect, ellipse, line, svg, path, render, gradient, image, effects, get, find, findOne, selection, id, edit, editMany, append, prepend, insertBefore, insertAfter, move, remove, clone, fromRead };
+export { frame, text, rect, ellipse, line, svg, path, render, gradient, image, effects, get, find, findOne, selection, id, edit, editMany, append, prepend, insertBefore, insertAfter, move, remove, clone, fromRead, page };
 
 // Tier-1 drift guard, held at the one true public boundary: the exported surface must match the typed
 // Flcm interface schema.ts derives docs and examples from — exhaustively, so a verb added to Flcm but
 // not exported here (or exported with a drifted signature) fails plugin typecheck. `satisfies` checks
 // without widening; the local is DCE'd from the bundle (pure init, unreferenced).
-const _flcmSurface = { frame, text, rect, ellipse, line, svg, path, render, gradient, image, effects, get, find, findOne, selection, id, edit, editMany, append, prepend, insertBefore, insertAfter, move, remove, clone, fromRead } satisfies Flcm;
+const _flcmSurface = { frame, text, rect, ellipse, line, svg, path, render, gradient, image, effects, get, find, findOne, selection, id, edit, editMany, append, prepend, insertBefore, insertAfter, move, remove, clone, fromRead, page } satisfies Flcm;
 void _flcmSurface;

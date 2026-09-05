@@ -129,10 +129,14 @@ function padEdges(pad: PadInput): Edges {
     throw new Error('flcm: pad must be a number, a CSS box shorthand string ("12px 16px"), or an object ({ x, y } or { top, right, bottom, left }) — got ' + JSON.stringify(pad) + ".");
   }
   rejectUnknownKeys(pad, PAD_KEYS, "pad");
-  const edge = (v: number | undefined, name: string): number | undefined => {
+  const edge = (v: number | string | undefined, name: string): number | undefined => {
     if (v == null) return undefined;
-    if (typeof v !== "number") throw new Error("flcm: pad." + name + " must be a number, got " + JSON.stringify(v) + ' (pad takes numbers, not "px" strings).');
-    return v;
+    // Rides length(), like every other metric: a number or "Npx", and anything else fails loud there.
+    try {
+      return length(v);
+    } catch {
+      throw new Error("flcm: pad." + name + ' must be a number or "Npx", got ' + JSON.stringify(v) + ".");
+    }
   };
   const y = edge(pad.y, "y"), x = edge(pad.x, "x");
   const top = edge(pad.top, "top"), right = edge(pad.right, "right");
@@ -150,11 +154,18 @@ function applySizing(props: SizeProps, layout: WriteLayout): void {
   const axis = (val: SizeProps["width"], key: "horizontal" | "vertical", dim: "width" | "height") => {
     if (val === undefined) return;
     if (val === "fill" || val === "hug") sz[key] = val;
-    else if (typeof val === "number") { sz[key] = "fixed"; dims[dim] = val; }
     // "N%" is a fixed px once resolved against the parent (the bridge folds it in at render), so it sizes
     // "fixed" and carries only the percent intent here.
     else if (isPercent(val)) { sz[key] = "fixed"; pct[dim] = percent(val); }
-    else throw new Error('flcm: width/height must be a number, "N%", "fill", or "hug" — got ' + JSON.stringify(val) + ".");
+    // A number or "Npx" — one spelling of the same fixed size, so both ride length().
+    else {
+      try {
+        sz[key] = "fixed";
+        dims[dim] = length(val);
+      } catch {
+        throw new Error('flcm: width/height must be a number, "Npx", "N%", "fill", or "hug" — got ' + JSON.stringify(val) + ".");
+      }
+    }
   };
   axis(props.width, "horizontal", "width");
   axis(props.height, "vertical", "height");
@@ -185,9 +196,12 @@ function applyAbsolute(layout: WriteLayout, props: SizeProps): void {
   const pct: { x?: number; y?: number } = {};
   const axis = (val: number | string | undefined, key: "x" | "y") => {
     if (val == null) return;
-    if (typeof val === "number") layout[key === "x" ? "left" : "top"] = val;
-    else if (isPercent(val)) pct[key] = percent(val);
-    else throw new Error("flcm: absolute." + key + ' must be a number or "N%" — got ' + JSON.stringify(val) + ".");
+    if (isPercent(val)) { pct[key] = percent(val); return; }
+    try {
+      layout[key === "x" ? "left" : "top"] = length(val);
+    } catch {
+      throw new Error("flcm: absolute." + key + ' must be a number, "Npx", or "N%" — got ' + JSON.stringify(val) + ".");
+    }
   };
   axis(props.absolute.x, "x");
   axis(props.absolute.y, "y");
