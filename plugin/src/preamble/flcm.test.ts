@@ -42,8 +42,7 @@ test("create rejects layout words the type can't realize — the SAME gate edit 
   // One authority answers for both verbs (layout-legality.ts assertLayoutRealizableForType), so
   // the pin is one test per rule, not per verb — a rule can't be strict in edit and lax in create.
   assert.throws(() => text("hi", { height: 80 }), /a TEXT's height follows its content/);
-  // "hug" IS what a created text does, so the word is the default restated, not a request to refuse
-  // (read reports every text as height:"hug", and a read spec spreads straight into flcm.text).
+  // "hug" IS what a created text does, so the word is the default restated, not a request to refuse.
   assert.doesNotThrow(() => text("hi", { height: "hug" }));
   assert.throws(() => rect({ width: "hug" }), /"hug" sizes to content/);
   assert.throws(() => frame({ width: "hug" }), /"hug" sizes to content/);

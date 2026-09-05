@@ -489,8 +489,8 @@ function clearChildFlowFill(parent: any, child: any, layout: WriteLayout): void 
 // THE sizing home for leaf nodes (no own auto-layout) — create's builders and edit's delta path
 // both land here, so the per-kind rules can't fork: TEXT's wrap handshake (a controlled width
 // wraps; "hug" restores grow-sideways) and LINE's zero height. Generic shapes resize only the
-// named dims, floored at Figma's 0.01. The TEXT branch reads no height ON PURPOSE: an authored TEXT height rejects upstream
-// (layout-legality.ts assertLayoutRealizableForType, consulted by buildLayout and edit alike),
+// named dims, floored at Figma's 0.01. The TEXT branch reads no numeric height ON PURPOSE: one rejects
+// upstream (layout-legality.ts assertLayoutRealizableForType, consulted by buildLayout and edit alike),
 // so none reaches here; the branch shape just makes ignoring it structural.
 function applyLeafSize(node: any, layout: WriteLayout): void {
   const sizing = layout.sizing || {};
@@ -498,6 +498,10 @@ function applyLeafSize(node: any, layout: WriteLayout): void {
   if (node.type === "TEXT") {
     if (sizing.horizontal === "fixed" || sizing.horizontal === "fill") node.textAutoResize = "HEIGHT";
     else if (sizing.horizontal === "hug") node.textAutoResize = "WIDTH_AND_HEIGHT";
+    // height:"hug" is the un-fill for a text: Figma pins a flow-filled text's auto-resize to NONE
+    // (clearChildFlowFill has just lifted the fill), so hugging again means the height follows the
+    // content under whatever width rule the text keeps. On a text that already hugs it is a no-op.
+    else if (sizing.vertical === "hug" && node.textAutoResize === "NONE") node.textAutoResize = "HEIGHT";
     if (typeof dims.width === "number") node.resize(Math.max(dims.width, 0.01), node.height);
     return;
   }

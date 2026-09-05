@@ -79,7 +79,7 @@ Every prop is optional; an omitted prop is simply not applied (a frame with no `
 | Prop | Type | Notes |
 | --- | --- | --- |
 | `width` | number \| "Npx" \| "N%" \| "fill" \| "hug" | A fixed size (a number or "Npx"), "N%" of the parent axis, "fill" (stretch to the parent — rejected on the root), or "hug" (shrink to content — only a row/column container or text can hug). |
-| `height` | number \| "fill" \| "hug" \| "N%" | Same rules as width. On TEXT the height follows the content: set `width` or use "fill"; a fixed, "hug", or percent height is rejected. |
+| `height` | number \| "fill" \| "hug" \| "N%" | Same rules as width. On TEXT the height follows the content ("hug", the default): set `width` to re-wrap it, use "fill" inside an auto-layout parent and "hug" to undo that; a fixed or percent height is rejected. |
 | `left` | number \| "Npx" \| "N%" | Offset from the parent's left edge — a number, "Npx", or "N%" of the parent width. Naming `left` or `top` lifts the node out of an auto-layout parent's flow (badges, overlays); under a free-form parent it is simply where the node sits. On a render root it is where on the PAGE the tree lands — without it every root stacks at the origin. Under edit, an axis you don't name keeps its live value. |
 | `top` | number \| "Npx" \| "N%" | Offset from the parent's top edge. Same rules as `left`. |
 | `position` | "absolute" \| "none" | "absolute" lifts the node out of auto-layout flow where it stands (no coordinate needed — `left`/`top` already imply it). Under edit, "none" returns the node to the flow; naming `left`/`top`/`anchor` beside "none" fails loud. |
@@ -422,7 +422,7 @@ out.keyed.chip.intent;    // undefined — a plainly fixed node
 | `rotation` | number (deg) | Rotation in degrees. |
 | `clip` | boolean | Clip children to the frame's bounds. Default false, like CSS overflow: visible. |
 | `width` | number \| "Npx" \| "N%" \| "fill" \| "hug" | A fixed size (a number or "Npx"), "N%" of the parent axis, "fill" (stretch to the parent — rejected on the root), or "hug" (shrink to content — only a row/column container or text can hug). |
-| `height` | number \| "fill" \| "hug" \| "N%" | Same rules as width. On TEXT the height follows the content: set `width` or use "fill"; a fixed, "hug", or percent height is rejected. |
+| `height` | number \| "fill" \| "hug" \| "N%" | Same rules as width. On TEXT the height follows the content ("hug", the default): set `width` to re-wrap it, use "fill" inside an auto-layout parent and "hug" to undo that; a fixed or percent height is rejected. |
 | `left` | number \| "Npx" \| "N%" | Offset from the parent's left edge — a number, "Npx", or "N%" of the parent width. Naming `left` or `top` lifts the node out of an auto-layout parent's flow (badges, overlays); under a free-form parent it is simply where the node sits. On a render root it is where on the PAGE the tree lands — without it every root stacks at the origin. Under edit, an axis you don't name keeps its live value. |
 | `top` | number \| "Npx" \| "N%" | Offset from the parent's top edge. Same rules as `left`. |
 | `position` | "absolute" \| "none" | "absolute" lifts the node out of auto-layout flow where it stands (no coordinate needed — `left`/`top` already imply it). Under edit, "none" returns the node to the flow; naming `left`/`top`/`anchor` beside "none" fails loud. |

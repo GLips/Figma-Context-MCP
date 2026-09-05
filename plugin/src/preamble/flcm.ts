@@ -663,6 +663,9 @@ export function compileTextStyleWords(cfg: unknown, subject: string): WriteTextS
 // the family the node actually uses). A plain string that parses to a single flagless segment
 // stays plain `text`; anything richer becomes `runs`. Exported for edit.ts.
 export function compileTextContent(content: unknown, base: WriteTextStyle, boldWeight?: number | string): { text?: string; runs?: WriteTextRun[] } {
+  if (boldWeight != null && typeof boldWeight !== "number" && typeof boldWeight !== "string") {
+    throw new Error('flcm: boldWeight must be a number (400, 700) or a weight name ("bold", "semibold") — got ' + JSON.stringify(boldWeight) + ".");
+  }
   if (Array.isArray(content)) {
     const runs = compileRuns(content, base, boldWeight);
     return runs.length ? { runs } : { text: "" };
@@ -686,10 +689,6 @@ function text(content: unknown, props: TextProps | SimplifiedNode = {}): WriteNo
     content = undefined;
   }
   props = acceptAuthoringProps(props, { type: "TEXT", verb: "create", known: TEXT_KEYS, subject: "flcm.text" }) as TextProps;
-  // A created TEXT's height follows its content — exactly what "hug" says — so the word is the default
-  // restated and drops, whether it came from a read or a hand. Edit keeps it: a height word on a live
-  // text is a request the legality gate answers in its own voice (layout-legality.ts).
-  if (props.height === "hug") props = { ...props, height: undefined };
   // Content named twice — positionally AND as the prop — is refused by PRESENCE, not value: a spread
   // spec with a positional override is exactly where a silent "one wins" would bite.
   if (Object.prototype.hasOwnProperty.call(props, "text")) {
@@ -703,9 +702,6 @@ function text(content: unknown, props: TextProps | SimplifiedNode = {}): WriteNo
   const cfg = (props.textStyle ?? {}) as NonNullable<TextProps["textStyle"]>;
   const ts = compileTextStyleWords(cfg, "flcm.text.textStyle");
   if (Object.keys(ts).length) wn.textStyle = ts;
-  if (props.boldWeight != null && typeof props.boldWeight !== "number" && typeof props.boldWeight !== "string") {
-    throw new Error('flcm: boldWeight must be a number (400, 700) or a weight name ("bold", "semibold") — got ' + JSON.stringify(props.boldWeight) + ".");
-  }
   Object.assign(wn, compileTextContent(content, ts, props.boldWeight ?? undefined));
   // lineClamp "none" at create is the explicit default — no clamp to remove, nothing lands.
   if (cfg.lineClamp != null && cfg.lineClamp !== "none") wn.maxLines = assertLineClamp(cfg.lineClamp, props.width);

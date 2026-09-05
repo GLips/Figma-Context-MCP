@@ -359,13 +359,32 @@ test("un-filling while going absolute clears the mark; a direction flip clears m
   assert.equal(tall.layoutGrow, 0);
 });
 
-test("a TEXT's own height is not an edit word: fixed and hug reject loud; width still lands", async () => {
+test("a TEXT's height takes no number: fixed rejects loud; width still lands", async () => {
   const out = await render(frame({ width: 300, height: 100 }, [text("hello", { key: "label" })]));
   await assert.rejects(edit("label", { height: 80 }), /height follows its content/);
-  await assert.rejects(edit("label", { height: "hug" }), /height follows its content/);
   const label = await figma.getNodeByIdAsync(out.keyed.label.id);
   await edit("label", { width: 120 });
   assert.equal(label.width, 120);
+});
+
+test('height: "hug" on a TEXT is the un-fill: it lifts a flow fill and the height follows the content again', async () => {
+  const out = await render(
+    frame({ width: 300, height: 100, layout: { mode: "row" } }, [text("hello", { key: "label", height: "fill" })]),
+  );
+  const label = await figma.getNodeByIdAsync(out.keyed.label.id);
+  assert.equal(label.layoutAlign, "STRETCH");
+  label.textAutoResize = "NONE"; // what Figma does to a vertically filled text
+  await edit("label", { height: "hug" });
+  assert.equal(label.layoutAlign, "INHERIT");
+  assert.equal(label.textAutoResize, "HEIGHT");
+  // Already hugging: a no-op, not a rejection — a spread `get` result carries nothing that trips it.
+  await edit("label", { height: "hug" });
+  assert.equal(label.textAutoResize, "HEIGHT");
+});
+
+test("edit validates boldWeight through the same content compile as create", async () => {
+  await render(frame({ width: 300, height: 100 }, [text("hello", { key: "label" })]));
+  await assert.rejects(edit("label", { text: "**hi**", boldWeight: { weight: 700 } }), /boldWeight must be a number/);
 });
 
 test("a present-but-malformed structured value rejects the WHOLE delta — no partial apply", async () => {

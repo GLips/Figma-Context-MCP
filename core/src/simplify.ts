@@ -318,6 +318,12 @@ function extractVisuals(
   const fill = foldPaintStack(node.fills, hasChildren);
   if (fill !== undefined) {
     result.fill = context.styles.intern(node, fill, ["fill", "fills"], "fill");
+  } else if (node.type === "TEXT") {
+    // Figma paints a new TEXT black, and flcm.text keeps that default when no `fill` is passed (a text
+    // with no paint is invisible), so an ABSENT fill would rebuild as black. The no-paint state is
+    // stated with the removal word the write side already takes. Frames and shapes need no such word:
+    // their constructors clear the default paint when `fill` is absent.
+    result.fill = "none";
   }
 
   // stroke
@@ -331,6 +337,10 @@ function extractVisuals(
     if (strokes.strokeWidth) result.strokeWidth = strokes.strokeWidth;
     if (strokes.strokeDashes) result.strokeDashes = strokes.strokeDashes;
     if (strokes.strokeAlign) result.strokeAlign = strokes.strokeAlign;
+  } else if (node.type === "LINE") {
+    // Same as the TEXT fill above: a LINE is nothing but its stroke, so flcm.line keeps Figma's default
+    // black when `stroke` is absent, and only an explicit "none" rebuilds the strokeless state.
+    result.stroke = "none";
   }
 
   // effects

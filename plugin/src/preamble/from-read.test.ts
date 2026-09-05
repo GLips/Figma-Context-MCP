@@ -261,6 +261,24 @@ test("a single read spec spreads straight into its constructor — one vocabular
   assert.throws(() => rect(label), /the spec is a TEXT, not a RECTANGLE.*flcm\.fromRead\(spec\)/s);
 });
 
+test('a paintless text and a strokeless line read as "none", so a spread spec does not rebuild them black', async () => {
+  createFigmaMock();
+  // TEXT and LINE keep Figma's default black paint when the constructor gets no paint word (without one
+  // they are invisible), so an ABSENT paint on read would round-trip to black. The read says "none".
+  await render(
+    frame({ key: "card", width: 200, height: 100 }, [text("ghost", { key: "ghost", fill: "none" }), line({ key: "bare", width: 80, stroke: "none" })]),
+  );
+  const ghost = await get("ghost");
+  const bare = await get("bare");
+  assert.equal(ghost.fill, "none");
+  assert.equal(bare.stroke, "none");
+  // A text's height follows its content by default, so read does not restate "hug" on it.
+  assert.equal("height" in ghost, false);
+  const out = await render(frame({ width: 200, height: 100 }, [text(ghost), line(bare)]));
+  const [copiedText, copiedLine] = (await figma.getNodeByIdAsync(out.node.id)).children;
+  assert.deepEqual([copiedText.fills, copiedLine.strokes], [[], []]);
+});
+
 test("edit takes a read spec's words too, judged against the live node's type", async () => {
   createFigmaMock();
   const out = await render(

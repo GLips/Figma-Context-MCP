@@ -152,7 +152,11 @@ function buildNodeGeometry(
           !stretch.vertical && shouldEmitFixedDimension(n.layoutSizingVertical, axis),
         );
   if (horizontal.dimension !== undefined) geometry.width = horizontal.dimension;
-  if (vertical.dimension !== undefined) geometry.height = vertical.dimension;
+  // A TEXT's height follows its content unless it fills — "hug" is every text's default, so it is
+  // omitted, the way the write side treats an unnamed height. A number (a fixed-height text) and
+  // "fill" are the deviations and survive.
+  const textDefaultHeight = n.type === "TEXT" && vertical.dimension === "hug";
+  if (vertical.dimension !== undefined && !textDefaultHeight) geometry.height = vertical.dimension;
   if (horizontal.designed !== undefined) geometry.designedWidth = horizontal.designed;
   if (vertical.designed !== undefined) geometry.designedHeight = vertical.designed;
 

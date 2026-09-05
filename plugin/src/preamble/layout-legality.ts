@@ -47,11 +47,12 @@ export function assertLayoutRealizableForType(nodeType: string, wl: WriteLayout,
   }
   // sizing.vertical is the ONE carrier to key on: the compile writes "fixed" beside every
   // numeric AND percent height (ir.ts percentSize contract), and only compiled IR reaches the
-  // bridge — so dimensions.height/percentSize.height can never arrive without this twin.
-  if (nodeType === "TEXT" && (s.vertical === "fixed" || s.vertical === "hug")) {
+  // bridge — so dimensions.height/percentSize.height can never arrive without this twin. "hug" is
+  // legal on a text: it is the default restated at create, and the un-fill at edit.
+  if (nodeType === "TEXT" && s.vertical === "fixed") {
     throw new Error(
       subject + ": a TEXT's height follows its content and wrap — set `width` (the text re-wraps and the height follows), " +
-        'or use height: "fill" inside an auto-layout parent.',
+        'or use height: "fill" inside an auto-layout parent and height: "hug" to undo it.',
     );
   }
   if ((wl.gap != null || wl.padding || wl.justifyContent || wl.alignItems) && !willBeAuto) {
