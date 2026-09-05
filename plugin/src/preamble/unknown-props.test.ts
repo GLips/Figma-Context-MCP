@@ -8,12 +8,20 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
-import { KNOWN_KEYS, DIRECTIONAL_KEYS, frame, text, rect, line, svg, path, gradient, image, effects } from "./flcm.js";
+import { KNOWN_KEYS, DIRECTIONAL_KEYS, CONSTRUCTOR_KEYS_BY_TYPE, frame, text, rect, line, svg, path, gradient, image, effects } from "./flcm.js";
 import { find } from "./read.js";
-import { FIELD_GROUPS, SizeSchema } from "./schema.js";
+import { FIELD_GROUPS, SizeSchema, FrameSchema, TextSchema, ShapeSchema, EllipseSchema, LineSchema } from "./schema.js";
 
 // Constructors are inert POJO builders (figma untouched), but flcm.ts imports the bridge — install the mock.
 createFigmaMock();
+
+test("fromRead's constructor key sets match the complete prop schemas", () => {
+  const schemas = { FRAME: FrameSchema, TEXT: TextSchema, RECTANGLE: ShapeSchema, ELLIPSE: EllipseSchema, LINE: LineSchema };
+  assert.deepEqual(Object.keys(CONSTRUCTOR_KEYS_BY_TYPE).sort(), Object.keys(schemas).sort());
+  for (const type of Object.keys(schemas) as (keyof typeof schemas)[]) {
+    assert.deepEqual([...CONSTRUCTOR_KEYS_BY_TYPE[type]].sort(), Object.keys(schemas[type].shape).sort(), type);
+  }
+});
 
 test("KNOWN_KEYS mirrors schema.ts FIELD_GROUPS exactly (drift guard)", () => {
   // Same group set on both sides — neither a stray runtime group nor a missing one.

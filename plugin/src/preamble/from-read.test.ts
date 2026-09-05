@@ -117,6 +117,21 @@ test("real state flcm can't author fails by name; derived fields drop silently",
   assert.throws(() => fromRead(spec({ type: "RECTANGLE", fillz: ["#FFF"] })), /unknown prop "fillz"/);
 });
 
+test("constructor-only words use the same per-type fidelity gate as read words", async () => {
+  createFigmaMock();
+  const out = await render(fromRead({ type: "FRAME", clip: true }));
+  assert.equal((await figma.getNodeByIdAsync(out.node.id)).clipsContent, true);
+  assert.throws(() => fromRead({ type: "RECTANGLE", clip: true }), /`clip` is not one of flcm.rect's words.*flcm\.clone/s);
+});
+
+test("absent known fields are ignored, including words belonging to another constructor", () => {
+  createFigmaMock();
+  for (const absent of [null, undefined]) {
+    assert.doesNotThrow(() => fromRead({ type: "RECTANGLE", fill: absent, text: absent, clip: absent, template: absent }));
+    assert.throws(() => fromRead({ type: "RECTANGLE", fillz: absent }), /unknown prop "fillz"/);
+  }
+});
+
 test("`**` re-emphasizes at the node's OWN bold weight, not a hardcoded 700", async () => {
   createFigmaMock();
   // The silent-wrong shape this closes: read compresses a bold span to markdown and reports the weight it

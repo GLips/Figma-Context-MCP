@@ -39,6 +39,7 @@ import type { WriteNode, WriteChild } from "./ir.js";
 import { frame, text, rect, ellipse, line, CONSTRUCTOR_KEYS_BY_TYPE } from "./flcm.js";
 import type { SimplifiedNode, SimplifiedLayout } from "@framelink/core";
 import { own } from "./validate.js";
+import type { FrameProps, TextProps, ShapeProps, EllipseProps, LineProps } from "./schema.js";
 
 // The read types that have an flcm constructor. Read renames VECTOR → IMAGE-SVG and collapses SVG-heavy
 // containers into it, so no read type maps to flcm.svg/flcm.path: neither markup nor path data survives
@@ -57,48 +58,23 @@ const UNAUTHORABLE_TYPES: Record<string, string> = {
 
 export const CLONE_REMEDY = "A live node keeps this under flcm.clone(target, parent), which copies it whole.";
 
-// Every field of the read shape, with its disposition. Typed as an EXACT Record over `keyof
-// SimplifiedNode`, which is the drift guard: a field added to (or removed from) the read shape fails
-// plugin typecheck here until someone decides what a rebuild does with it.
-//   • "author"  — the same word on both sides; rides through to the constructor's own gate.
-//   • "prelude" — the read-only words validate.ts folds (`id`, `type`, `children`, `designedWidth`).
-//                 They ride through untouched; the prelude judges them, and `type`/`children` are this
-//                 verb's own dispatch and recursion on the way.
-//   • "drop"    — purely derived; its information is already elsewhere in the same bag.
-//   • refuse    — real state with no authoring word. Named, with the reason.
-type ReadFieldDisposition = "author" | "prelude" | "drop" | { refuse: string };
+// Read keys outside the constructor vocabulary need an explicit disposition. The fresh literal's
+// satisfies check requires every such key and rejects constructor words or keys absent from read.
+// Optional props still contribute keys; distribute over the union to include type-specific words.
+type Keys<T> = T extends unknown ? keyof T : never;
+type AuthorableReadKey = Keys<FrameProps | TextProps | ShapeProps | EllipseProps | LineProps>;
+type ReadFieldDisposition = "prelude" | "drop" | { refuse: string };
 
-export const READ_FIELD_DISPOSITIONS: Record<keyof SimplifiedNode, ReadFieldDisposition> = {
+export const READ_FIELD_DISPOSITIONS = {
   id: "prelude",
-  name: "author",
   type: "prelude",
-  // NOT derived, despite reading like it: the read side omits a run's explicit `fontWeight` exactly when
-  // it matches this value (core/transformers/text.ts classifyRun), so `boldWeight` is the ONLY carrier of
-  // the weight `**` stands for. Dropping it re-rendered every Semi Bold emphasis at 700.
-  boldWeight: "author",
-  layout: "author",
-  text: "author",
-  textStyle: "author",
-  fill: "author",
-  stroke: "author",
-  strokeWidth: "author",
-  effects: "author",
-  opacity: "author",
-  borderRadius: "author",
   children: "prelude",
-  width: "author",
-  height: "author",
   designedWidth: "prelude",
   designedHeight: "prelude",
-  position: "author",
-  left: "author",
-  top: "author",
-  rotation: "author",
   template: {
     refuse: "`template` is a COMPRESSED read's back-reference into the design's `templates` table, so this node's body isn't here at all. flcm.get returns the expanded shape — re-read the node with it",
   },
   strokeDashes: { refuse: "flcm strokes are solid — there is no dash-pattern word" },
-  strokeAlign: "author",
   aspectRatio: { refuse: "a locked aspect ratio (Figma's constrain-proportions) has no flcm word — the rebuild would silently stop holding its proportions" },
   componentId: { refuse: "this node is a component instance, and flcm cannot author one — a rebuild from props would be a detached lookalike" },
   componentProperties: { refuse: "component property VALUES belong to an instance, and flcm cannot author instances" },
@@ -108,11 +84,11 @@ export const READ_FIELD_DISPOSITIONS: Record<keyof SimplifiedNode, ReadFieldDisp
   // same bag (`fill`, `text`, …); this only names them, and a rebuild is detached from the component
   // either way, so there is no distinction left to carry.
   overrides: "drop",
-};
+} satisfies Record<Exclude<keyof SimplifiedNode, AuthorableReadKey>, ReadFieldDisposition>;
 
 // Every SimplifiedLayout word, with the same dispositions — an exact Record for the same reason. The
 // authorable five ARE flcm's `layout` prop; the rest are container config with no flcm word.
-export const LAYOUT_WORD_DISPOSITIONS: Record<keyof SimplifiedLayout, ReadFieldDisposition> = {
+export const LAYOUT_WORD_DISPOSITIONS: Record<keyof SimplifiedLayout, "author" | ReadFieldDisposition> = {
   mode: "author",
   gap: "author",
   padding: "author",
@@ -128,6 +104,8 @@ export const LAYOUT_WORD_DISPOSITIONS: Record<keyof SimplifiedLayout, ReadFieldD
   justifySelf: { refuse: "grid self-alignment belongs to a GRID parent, which flcm cannot author" },
   zIndex: { refuse: "explicit stacking order has no flcm word — sibling order is the z-order" },
 };
+
+const ALL_CONSTRUCTOR_KEYS = new Set(Object.values(CONSTRUCTOR_KEYS_BY_TYPE).flatMap(keys => [...keys]));
 
 const CONSTRUCTOR_SUBJECTS: Record<AuthorableReadType, string> = {
   FRAME: "flcm.frame", TEXT: "flcm.text", RECTANGLE: "flcm.rect", ELLIPSE: "flcm.ellipse", LINE: "flcm.line",
@@ -207,18 +185,20 @@ function readyReadSpec(src: Record<string, unknown>, type: AuthorableReadType, s
   for (const key of Object.keys(src)) {
     const value = src[key];
     const disposition = own(READ_FIELD_DISPOSITIONS as Record<string, ReadFieldDisposition>, key);
-    // An explicitly-undefined READ key is absence, not a claim.
-    if (disposition && value == null) continue;
+    // A null or undefined known key is absence, not a claim.
+    if ((disposition || ALL_CONSTRUCTOR_KEYS.has(key)) && value == null) continue;
     if (disposition === "drop") continue;
     if (typeof disposition === "object") throw refuse(subject, key, disposition.refuse);
-    if (disposition === "author") {
-      // A word that IS in the read shape but not on this node's type — an `effects` on a LINE, a
-      // `borderRadius` on an ELLIPSE — is real state the rebuild would silently not have. Named as the
-      // type's missing word, with the remedy, rather than left to the gate's "unknown prop".
-      if (!known.has(key)) throw noWord(subject, constructorSubject, known, key);
+    if (disposition === "prelude") {
+      out[key] = value;
+      continue;
+    }
+    if (known.has(key)) {
       out[key] = readyAuthoredValue(key, value, subject);
       continue;
     }
+    // A constructor word on the wrong type names the state a rebuild cannot carry.
+    if (ALL_CONSTRUCTOR_KEYS.has(key)) throw noWord(subject, constructorSubject, known, key);
     out[key] = value;
   }
   return out;
@@ -290,7 +270,7 @@ function readyLayout(raw: unknown, subject: string): unknown {
   for (const word of Object.keys(raw)) {
     const value = (raw as Record<string, unknown>)[word];
     if (value == null) continue; // an explicitly-undefined word is absence, not a claim
-    const disposition = own(LAYOUT_WORD_DISPOSITIONS as Record<string, ReadFieldDisposition>, word);
+    const disposition = own(LAYOUT_WORD_DISPOSITIONS, word);
     if (disposition && typeof disposition === "object") throw refuse(subject + ".layout", word, disposition.refuse);
     l[word] = value;
   }
