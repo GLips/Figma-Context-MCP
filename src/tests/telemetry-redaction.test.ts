@@ -20,6 +20,7 @@ import type { Server } from "http";
 import type { AddressInfo } from "net";
 import { startHttpServer, stopHttpServer } from "~/server.js";
 import { initTelemetry, shutdown as shutdownTelemetry } from "~/telemetry/index.js";
+import { REDACTED_FILE_KEY, REDACTED_NODE_ID } from "~/telemetry/redact-identifiers.js";
 
 const PER_REQUEST_KEY = "figd_TENANT_SECRET_xyz789";
 
@@ -97,5 +98,185 @@ describe("per-request telemetry redaction", () => {
       );
       expect(message).toContain("[REDACTED]");
     }
+  });
+});
+
+/**
+ * Figma file keys and node IDs are identifiers for a customer's document, and
+ * our most useful error strings name them (`/files/<key>/nodes?ids=<nodeId>`,
+ * `Node 1:2 was not found`). These tests drive the real producers —
+ * `FigmaService` for the endpoint-bearing wraps, the REST adapter for the
+ * missing-node throw — so they assert the privacy contract ("no file key or
+ * node ID reaches PostHog") rather than the regex shapes in
+ * `telemetry/redact-identifiers.ts`.
+ */
+describe("figma identifier redaction in telemetry error_message", () => {
+  const FILE_KEY = "aB3xYz9QpLmN0kRtVwSdEf";
+  const NODE_ID = "1234:5678";
+
+  function errorMessagesSent(): string[] {
+    return captureSpy.mock.calls
+      .map(([args]) => args)
+      .filter((args) => args?.properties?.is_error === true)
+      .map((args) => String(args.properties.error_message ?? ""));
+  }
+
+  async function captureThrown(fn: () => Promise<unknown>): Promise<unknown> {
+    try {
+      await fn();
+    } catch (error) {
+      return error;
+    }
+    throw new Error("expected the call to throw");
+  }
+
+  beforeEach(() => {
+    captureSpy.mockClear();
+    initTelemetry({ optOut: false, immediateFlush: true, redactFromErrors: [] });
+  });
+
+  afterEach(async () => {
+    await shutdownTelemetry();
+    vi.unstubAllGlobals();
+  });
+
+  it("scrubs the file key and node ID from a 403 on the nodes endpoint", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response('{"err":"Not allowed"}', {
+            status: 403,
+            statusText: "Forbidden",
+            headers: { "content-type": "application/json" },
+          }),
+      ),
+    );
+
+    const { FigmaService } = await import("~/services/figma.js");
+    const { captureGetFigmaDataCall } = await import("~/telemetry/index.js");
+    const service = new FigmaService({
+      figmaApiKey: "figd_test",
+      figmaOAuthToken: "",
+      useOAuth: false,
+    });
+
+    const error = await captureThrown(() => service.getRawNode(FILE_KEY, NODE_ID));
+
+    // Sanity: the user-facing message is *supposed* to name the endpoint —
+    // that's what makes a 403 debuggable. Redaction happens at the telemetry
+    // boundary, not at the throw site.
+    expect(String((error as Error).message)).toContain(FILE_KEY);
+
+    captureGetFigmaDataCall(
+      { input: { fileKey: FILE_KEY, nodeId: NODE_ID }, outputFormat: "tree", durationMs: 1, error },
+      { transport: "stdio", authMode: "api_key" },
+    );
+
+    const [message] = errorMessagesSent();
+    expect(message).not.toContain(FILE_KEY);
+    expect(message).not.toContain(NODE_ID);
+    expect(message).toContain(`/files/${REDACTED_FILE_KEY}`);
+    expect(message).toContain(`ids=${REDACTED_NODE_ID}`);
+
+    // The analytics signal survives the scrub.
+    const [event] = captureSpy.mock.calls.map(([args]) => args);
+    expect(event.properties.http_status).toBe(403);
+    expect(event.properties.error_category).toBe("auth");
+  });
+
+  it("scrubs the node ID from the REST adapter's missing-node error", async () => {
+    const { simplifyRestResponse } = await import("~/adapters/rest/rest.js");
+    const { captureGetFigmaDataCall } = await import("~/telemetry/index.js");
+
+    const error = await captureThrown(async () =>
+      simplifyRestResponse({ name: "test", nodes: { [NODE_ID]: null } } as never),
+    );
+    expect(String((error as Error).message)).toContain(NODE_ID);
+
+    captureGetFigmaDataCall(
+      { input: { fileKey: FILE_KEY, nodeId: NODE_ID }, outputFormat: "tree", durationMs: 1, error },
+      { transport: "stdio", authMode: "api_key" },
+    );
+
+    const [message] = errorMessagesSent();
+    expect(message).not.toContain(NODE_ID);
+    expect(message).toContain(`Node ${REDACTED_NODE_ID} was not found`);
+    const [event] = captureSpy.mock.calls.map(([args]) => args);
+    expect(event.properties.error_category).toBe("not_found");
+  });
+
+  it("scrubs a percent-encoded Figma URL echoed back by a proxy block page", async () => {
+    // Corporate proxies splice the blocked URL into their HTML block page, and
+    // `buildForbiddenMessage` copies that body verbatim into the 403 message.
+    // Many encode the URL they quote, so the separators arrive as %2F/%3F/%3D.
+    const { captureGetFigmaDataCall } = await import("~/telemetry/index.js");
+
+    captureGetFigmaDataCall(
+      {
+        input: { fileKey: FILE_KEY },
+        outputFormat: "tree",
+        durationMs: 1,
+        error: new Error(
+          `Response body: <html>Blocked by policy. ` +
+            `url=https%3A%2F%2Fapi.figma.com%2Fv1%2Ffiles%2F${FILE_KEY}%2Fnodes%3Fids%3D1%3A2</html>`,
+        ),
+      },
+      { transport: "stdio", authMode: "api_key" },
+    );
+
+    const [message] = errorMessagesSent();
+    expect(message).not.toContain(FILE_KEY);
+    expect(message).not.toContain("1%3A2");
+    expect(message).toContain(REDACTED_FILE_KEY);
+    // The block-page origin still reads clearly — that's why we keep the body.
+    expect(message).toContain("Blocked by policy");
+  });
+
+  it("leaves colon-separated values that are not node IDs intact", async () => {
+    // Over-redaction has a real cost here: the port distinguishes "proxy
+    // refused" from "direct connect refused", and network failures are exactly
+    // what the proxy_mode property exists to analyze.
+    const { captureGetFigmaDataCall } = await import("~/telemetry/index.js");
+
+    captureGetFigmaDataCall(
+      {
+        input: { fileKey: FILE_KEY },
+        outputFormat: "tree",
+        durationMs: 1,
+        error: new Error("connect ECONNREFUSED 127.0.0.1:8080 at fetch-json.ts:75:11"),
+      },
+      { transport: "stdio", authMode: "api_key" },
+    );
+
+    const [message] = errorMessagesSent();
+    expect(message).toContain("127.0.0.1:8080");
+    expect(message).toContain("fetch-json.ts:75:11");
+    expect(message).not.toContain(REDACTED_NODE_ID);
+  });
+
+  it("scrubs identifiers alongside credentials in an untagged error", async () => {
+    await shutdownTelemetry();
+    initTelemetry({ optOut: false, immediateFlush: true, redactFromErrors: ["figd_secret"] });
+    const { captureGetFigmaDataCall } = await import("~/telemetry/index.js");
+
+    captureGetFigmaDataCall(
+      {
+        input: { fileKey: FILE_KEY },
+        outputFormat: "tree",
+        durationMs: 1,
+        error: new Error(
+          `proxy rejected https://www.figma.com/design/${FILE_KEY}/Board?node-id=1234-5678 ` +
+            `(token figd_secret, node ${NODE_ID})`,
+        ),
+      },
+      { transport: "stdio", authMode: "api_key" },
+    );
+
+    const [message] = errorMessagesSent();
+    expect(message).not.toContain(FILE_KEY);
+    expect(message).not.toContain(NODE_ID);
+    expect(message).not.toContain("1234-5678");
+    expect(message).not.toContain("figd_secret");
   });
 });

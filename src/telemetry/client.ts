@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { PostHog } from "posthog-node";
 import { proxyMode, type ProxyMode } from "~/utils/proxy-env.js";
+import { redactFigmaIdentifiers } from "./redact-identifiers.js";
 import type { InitTelemetryOptions } from "./types.js";
 
 // Write-only project key for the Framelink MCP analytics project.
@@ -66,7 +67,10 @@ function redactErrorMessage(message: string): string {
   for (const secret of requestSecrets.getStore() ?? []) {
     result = result.replaceAll(secret, "[REDACTED]");
   }
-  return result;
+  // Credentials first, identifiers second: secret scrubbing is exact-substring
+  // and must see the message unmodified, in case a token sits inside a URL
+  // fragment that identifier scrubbing would otherwise rewrite around it.
+  return redactFigmaIdentifiers(result);
 }
 
 /**
@@ -142,16 +146,26 @@ function truncateForTelemetry(message: string): string {
 export function captureEvent(event: string, properties: Record<string, unknown>): void {
   if (disabled || !client || !sessionId || !commonProps) return;
 
-  // Redact secrets BEFORE truncating so a token straddling the cut point
-  // can't survive as a partial match.
-  const errorMessage = properties.error_message;
-  const processed =
-    typeof errorMessage === "string"
-      ? {
-          ...properties,
-          error_message: truncateForTelemetry(redactErrorMessage(errorMessage)),
-        }
-      : properties;
+  // Scrub every string-valued property, not just `error_message`. The
+  // signature here is `Record<string, unknown>`, so the next event field that
+  // carries free text would otherwise ship raw — the exact failure this
+  // redaction exists to prevent, reintroduced by someone naming a field
+  // something other than `error_message`. Non-string values can't carry an
+  // identifier we care about, and `commonProps` is machine-generated, so it's
+  // merged in below without passing through here.
+  //
+  // Redact BEFORE truncating so a token straddling the cut point can't
+  // survive as a partial match. Only `error_message` is truncated; the other
+  // fields are bounded by construction.
+  const processed: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(properties)) {
+    if (typeof value !== "string") {
+      processed[key] = value;
+      continue;
+    }
+    const redacted = redactErrorMessage(value);
+    processed[key] = key === "error_message" ? truncateForTelemetry(redacted) : redacted;
+  }
 
   try {
     client.capture({
