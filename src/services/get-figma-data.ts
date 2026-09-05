@@ -1,6 +1,7 @@
 import type { GetFileResponse, GetFileNodesResponse } from "@figma/rest-api-spec";
 import { FigmaService } from "~/services/figma.js";
 import { simplifyRestResponse } from "~/adapters/rest/rest.js";
+import { fetchComponentDefinitions } from "~/adapters/rest/component-definitions.js";
 import { writeLogs } from "~/utils/logger.js";
 import { serializeResult, type OutputFormat } from "~/utils/serialize.js";
 import { wrapForSerialization } from "~/utils/serializable-design.js";
@@ -99,6 +100,15 @@ export async function getFigmaData(
     const rawApiResponse = rawResult.data;
     const rawSizeKb = rawResult.rawSize / 1024;
 
+    // Off-tree component definitions, fetched before the walk so a component whose subtree the
+    // read didn't contain is emitted from the REAL definition rather than a donated instance. Any
+    // failure returns an empty list and the core falls back to the donor (see the module).
+    const componentDefinitions = await fetchComponentDefinitions(
+      figmaService,
+      fileKey,
+      rawApiResponse,
+    );
+
     await hooks.onSimplifyStart?.({ getNodeCount: () => nodeCounter.count });
     let simplifiedDesign;
     const simplifyStart = Date.now();
@@ -106,6 +116,7 @@ export async function getFigmaData(
       simplifiedDesign = await simplifyRestResponse(rawApiResponse, {
         maxDepth: depth,
         nodeCounter,
+        componentDefinitions,
       });
     } catch (error) {
       tagError(error, { phase: "simplify" });

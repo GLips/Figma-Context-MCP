@@ -12,6 +12,7 @@ import { sceneNodeToSnapshot, type SceneNodeLike, type SceneStyleResolver } from
 import { rejectUnknownKeys } from "./validate.js";
 import { markReadSpec } from "./provenance.js";
 import { simplify, type SimplifiedComponentEntry, type SimplifiedNode } from "@framelink/core";
+import type { NodeSnapshot } from "@framelink/core/snapshot";
 
 // A pluginData scan searches this. Default is the current page; a verb's `within` narrows it (resolved by the
 // same shape rules). PageNode and any container SceneNode both satisfy this.
@@ -104,8 +105,45 @@ async function simplifyScene(
   options: { components?: boolean } = {},
 ): Promise<{ nodes: SimplifiedNode[]; components: Record<string, SimplifiedComponentEntry> }> {
   const snapshot = await sceneNodeToSnapshot(node as unknown as SceneNodeLike, resolveStyle);
-  const { nodes, components } = await simplify([snapshot], options);
+  const componentDefinitions =
+    options.components === false ? [] : await offTreeDefinitions(node as unknown as SceneNodeLike);
+  const { nodes, components } = await simplify([snapshot], { ...options, componentDefinitions });
   return { nodes, components };
+}
+
+/**
+ * The real definition for every component this subtree instantiates but doesn't contain — what the
+ * core publishes instead of donating some instance's already-edited children.
+ *
+ * Free here in a way it never is over REST: `getMainComponentAsync` hands back the live component
+ * node, published library ones included (that is why it is async), so there is no key lookup, no
+ * second file, and no permission that can be missing. Definitions found INSIDE the subtree are
+ * skipped — the core prefers the in-tree node anyway, and re-snapshotting it would double the walk.
+ *
+ * One round only: a definition's own children may instantiate a further off-tree component, and
+ * that one falls back to the donor. Chasing the chain would walk an unbounded slice of the
+ * document for bytes an agent reading ONE node did not ask for.
+ */
+async function offTreeDefinitions(root: SceneNodeLike): Promise<NodeSnapshot[]> {
+  const defined = new Set<string>();
+  const instances: SceneNodeLike[] = [];
+  const scan = (node: SceneNodeLike): void => {
+    if (node.type === "COMPONENT" || node.type === "COMPONENT_SET") defined.add(node.id);
+    if (node.type === "INSTANCE") instances.push(node);
+    for (const child of node.children ?? []) scan(child as SceneNodeLike);
+  };
+  scan(root);
+  if (instances.length === 0) return [];
+
+  const mains = await Promise.all(
+    instances.map((instance) => instance.getMainComponentAsync?.() ?? null),
+  );
+  const wanted = new Map<string, SceneNodeLike>();
+  for (const main of mains) {
+    if (!main || defined.has(main.id) || wanted.has(main.id)) continue;
+    wanted.set(main.id, main as unknown as SceneNodeLike);
+  }
+  return Promise.all([...wanted.values()].map((main) => sceneNodeToSnapshot(main, resolveStyle)));
 }
 
 /**

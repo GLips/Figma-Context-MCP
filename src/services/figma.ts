@@ -3,6 +3,7 @@ import type {
   GetFileResponse,
   GetFileNodesResponse,
   GetImageFillsResponse,
+  GetComponentResponse,
   Transform,
 } from "@figma/rest-api-spec";
 import { downloadAndProcessImage, type ImageProcessingResult } from "~/utils/image-processing.js";
@@ -339,5 +340,28 @@ export class FigmaService {
     writeLogs("figma-raw.json", result.data);
 
     return result;
+  }
+
+  /**
+   * Several nodes in ONE call — the component-definition fetch, which asks for every off-tree
+   * definition a read referenced at once. Separate from `getRawNode` because it is a supplementary
+   * fetch: its size is not the read's payload, and the caller treats any failure as "fall back to
+   * the donated instance" rather than failing the read.
+   */
+  async getRawNodes(fileKey: string, nodeIds: string[]): Promise<GetFileNodesResponse> {
+    const endpoint = `/files/${fileKey}/nodes?ids=${nodeIds.join(",")}`;
+    Logger.log(`Retrieving ${nodeIds.length} node(s) from ${fileKey}`);
+    return this.request<GetFileNodesResponse>(endpoint);
+  }
+
+  /**
+   * Where a PUBLISHED component's definition actually lives. A remote component's `componentId` is
+   * local to the consuming file and addresses no node there; its publish `key` is the only handle
+   * that crosses files, and this endpoint trades that key for the library's file key and node id.
+   * Needs read access to the library — a separate grant from access to the file being read.
+   */
+  async getPublishedComponentSite(key: string): Promise<{ fileKey: string; nodeId: string }> {
+    const response = await this.request<GetComponentResponse>(`/components/${key}`);
+    return { fileKey: response.meta.file_key, nodeId: response.meta.node_id };
   }
 }

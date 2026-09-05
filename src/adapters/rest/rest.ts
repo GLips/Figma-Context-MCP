@@ -24,7 +24,7 @@ const eventLoopYield = () => new Promise<void>((resolve) => setImmediate(resolve
  */
 export async function simplifyRestResponse(
   apiResponse: GetFileResponse | GetFileNodesResponse,
-  options: TraversalOptions = {},
+  options: TraversalOptions & { componentDefinitions?: NodeSnapshot[] } = {},
 ): Promise<SimplifiedDesign> {
   const { name, snapshots } = restResponseToSnapshots(apiResponse);
 
@@ -67,9 +67,11 @@ export function restResponseToSnapshots(apiResponse: GetFileResponse | GetFileNo
 }
 
 /**
- * Parse the raw Figma API response to extract metadata, nodes, and components.
+ * Parse the raw Figma API response to extract metadata, nodes, and components. Exported for the
+ * off-tree definition fetch, which reads the same tables to learn which referenced components the
+ * response didn't carry and where each one actually lives.
  */
-function parseAPIResponse(data: GetFileResponse | GetFileNodesResponse) {
+export function parseAPIResponse(data: GetFileResponse | GetFileNodesResponse) {
   const aggregatedComponents: Record<string, Component> = {};
   const aggregatedComponentSets: Record<string, ComponentSet> = {};
   let extraStyles: Record<string, Style> = {};
