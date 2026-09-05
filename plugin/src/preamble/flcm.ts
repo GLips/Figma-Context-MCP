@@ -33,8 +33,7 @@ import { describeRootOverlap } from "./root-overlap.js";
 import { enterMutatingVerb } from "./mutation-lock.js";
 import { requestHostImages } from "./host.js";
 import { get, find, findOne, selection } from "./read.js";
-import { rejectUnknownKeys } from "./validate.js";
-import { acceptReadSpellings } from "./read-spellings.js";
+import { rejectUnknownKeys, acceptAuthoringProps } from "./validate.js";
 import type { SimplifiedNode } from "@framelink/core";
 
 // The authoring surface (verb Props + gradient/effects sugar) is defined ONCE in schema.ts as zod schemas
@@ -90,6 +89,11 @@ const TEXT_KEYS = keySet(KNOWN_KEYS.shared, KNOWN_KEYS.size, KNOWN_KEYS.text);
 const SHAPE_KEYS = keySet(KNOWN_KEYS.shared, KNOWN_KEYS.size, KNOWN_KEYS.appearance);
 const ELLIPSE_KEYS = keySet(KNOWN_KEYS.shared, KNOWN_KEYS.size, KNOWN_KEYS.ellipse);
 const LINE_KEYS = keySet(KNOWN_KEYS.shared, KNOWN_KEYS.line);
+// Each constructor's closed vocabulary, by the read type it builds — what fromRead judges a spec's
+// read words against before the call, so a word the type lacks is named as real state, not a typo.
+export const CONSTRUCTOR_KEYS_BY_TYPE: Record<"FRAME" | "TEXT" | "RECTANGLE" | "ELLIPSE" | "LINE", ReadonlySet<string>> = {
+  FRAME: FRAME_KEYS, TEXT: TEXT_KEYS, RECTANGLE: SHAPE_KEYS, ELLIPSE: ELLIPSE_KEYS, LINE: LINE_KEYS,
+};
 const PATH_KEYS = keySet(KNOWN_KEYS.shared, KNOWN_KEYS.size, KNOWN_KEYS.path);
 const SVG_KEYS = keySet(KNOWN_KEYS.shared, KNOWN_KEYS.size);
 const LAYOUT_KEYS = keySet(KNOWN_KEYS.layout);
@@ -483,10 +487,10 @@ function sealWriteNode(wn: WriteNode): WriteNode {
   return wn;
 }
 
-// Every constructor folds the read shape's read-only leftovers (`id`, a root's "contextual" size, …)
-// BEFORE its closed-set gate, so a `get` result spreads straight in. The fold returns the bag typed as
-// the constructor's own props: it has refused every read field the vocabulary lacks, so what is left
-// is that vocabulary (plus whatever typo the gate is about to name).
+// Every constructor opens with the shared prelude (validate.ts acceptAuthoringProps): the read shape's
+// read-only words (`id`, `type`, `children`, a root's `designedWidth`) fold away, then the closed-set
+// gate runs — so a `get` result spreads straight in, and what comes back is the constructor's own
+// vocabulary.
 function frame(props: FrameProps | SimplifiedNode = {}, children?: WriteChild | WriteChild[]): WriteNode {
   // ?? not || (here and in every constructor): null/undefined mean "no props" (the pinned absence
   // convention), but a present falsy non-object (false, 0, "") is malformed and must reach the
@@ -497,8 +501,7 @@ function frame(props: FrameProps | SimplifiedNode = {}, children?: WriteChild | 
   if (Array.isArray(props)) {
     throw new Error('flcm.frame takes (props, children) — children are the second argument: flcm.frame({}, [...]).');
   }
-  props = acceptReadSpellings(props, { type: "FRAME", verb: "create", known: FRAME_KEYS, subject: "flcm.frame" }) as FrameProps;
-  rejectUnknownKeys(props, FRAME_KEYS, "flcm.frame");
+  props = acceptAuthoringProps(props, { type: "FRAME", verb: "create", known: FRAME_KEYS, subject: "flcm.frame" }) as FrameProps;
   const wn = mintWriteNode("FRAME");
   compileNodeLocalProps(wn, props, { radius: true, clip: true });
   wn.layout = buildLayout(props, "FRAME", "flcm.frame");
@@ -665,8 +668,11 @@ function text(content: unknown, props: TextProps | SimplifiedNode = {}): WriteNo
     props = content as TextProps;
     content = undefined;
   }
-  props = acceptReadSpellings(props, { type: "TEXT", verb: "create", known: TEXT_KEYS, subject: "flcm.text" }) as TextProps;
-  rejectUnknownKeys(props, TEXT_KEYS, "flcm.text");
+  props = acceptAuthoringProps(props, { type: "TEXT", verb: "create", known: TEXT_KEYS, subject: "flcm.text" }) as TextProps;
+  // A created TEXT's height follows its content — exactly what "hug" says — so the word is the default
+  // restated and drops, whether it came from a read or a hand. Edit keeps it: a height word on a live
+  // text is a request the legality gate answers in its own voice (layout-legality.ts).
+  if (props.height === "hug") props = { ...props, height: undefined };
   // Content named twice — positionally AND as the prop — is refused by PRESENCE, not value: a spread
   // spec with a positional override is exactly where a silent "one wins" would bite.
   if (Object.prototype.hasOwnProperty.call(props, "text")) {
@@ -843,8 +849,7 @@ function shape(type: "RECTANGLE" | "ELLIPSE", props: ShapeProps | EllipseProps |
   // An ELLIPSE has no corners, so its vocabulary has no radius word (schema ELLIPSE_FIELDS): refused by
   // the gate, not accepted and dropped on the floor.
   const known = type === "RECTANGLE" ? SHAPE_KEYS : ELLIPSE_KEYS;
-  props = acceptReadSpellings(props, { type, verb: "create", known, subject }) as ShapeProps;
-  rejectUnknownKeys(props, known, subject);
+  props = acceptAuthoringProps(props, { type, verb: "create", known, subject }) as ShapeProps;
   const wn = mintWriteNode(type);
   compileNodeLocalProps(wn, props, { radius: type === "RECTANGLE" });
   const layout = buildLayout(props as FrameProps, type, subject);
@@ -857,8 +862,7 @@ function ellipse(props?: EllipseProps | SimplifiedNode): WriteNode { return shap
 
 function line(props: LineProps | SimplifiedNode = {}): WriteNode {
   props = props ?? {};
-  props = acceptReadSpellings(props, { type: "LINE", verb: "create", known: LINE_KEYS, subject: "flcm.line" }) as LineProps;
-  rejectUnknownKeys(props, LINE_KEYS, "flcm.line");
+  props = acceptAuthoringProps(props, { type: "LINE", verb: "create", known: LINE_KEYS, subject: "flcm.line" }) as LineProps;
   const wn = mintWriteNode("LINE");
   base(wn, props);
   if (props.stroke != null) wn.strokes = compilePaintWord(props.stroke, "stroke");

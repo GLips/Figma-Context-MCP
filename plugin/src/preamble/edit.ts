@@ -52,8 +52,7 @@ import {
   RenderResources, BatchLayoutDeltas,
 } from "./bridge.js";
 import { toFigmaEffects } from "./effects.js";
-import { rejectUnknownKeys } from "./validate.js";
-import { acceptReadSpellings, READ_FIELD_DISPOSITIONS, own } from "./read-spellings.js";
+import { rejectUnknownKeys, acceptAuthoringProps, READ_ONLY_WORDS } from "./validate.js";
 import { liveFontWords, loadFontsForTextEdits } from "./fonts.js";
 import {
   KNOWN_KEYS, compileNodeLocalProps, compileSizeWords, compilePlacementWords, compileContainerWords,
@@ -111,12 +110,12 @@ export function rejectNonDeltaWords(changes: EditDelta, subject: string): void {
       subject + ": position is not spelled with bare x/y — use `left`/`top` (naming either also lifts the node out of an auto-layout flow; `position: \"none\"` returns it), and `pin` for how it responds to a parent resize.",
     );
   }
-  // The read shape's read-only fields (`id`, `type`, a root's `designedWidth`, …) are folded in stage 2,
-  // where the live node's TYPE decides what they mean. They pass this document-blind gate unjudged;
-  // everything else is judged now, against the edit vocabulary alone.
+  // The read shape's read-only words (`id`, `type`, `children`, a root's `designedWidth`) are judged in
+  // stage 2, where the live node's TYPE is known. They pass this document-blind gate unjudged; everything else is judged now,
+  // against the edit vocabulary alone.
   const foreign: Record<string, unknown> = {};
   for (const key of Object.keys(changes)) {
-    if (!own(READ_FIELD_DISPOSITIONS as Record<string, unknown>, key)) foreign[key] = (changes as Record<string, unknown>)[key];
+    if (!READ_ONLY_WORDS.has(key)) foreign[key] = (changes as Record<string, unknown>)[key];
   }
   rejectUnknownKeys(foreign, EDIT_KEYS, subject);
   assertDeltaNotEmpty(changes, subject);
@@ -287,9 +286,9 @@ export interface EditPlan { node: SceneNode; patch: WriteProps; liveTextFacts: s
 
 /** Stage 2 — compile against the live node, recording every mutable fact the compile consulted. */
 export function compileEditPlan(node: SceneNode, changes: EditDelta, subject: string): EditPlan {
-  changes = acceptReadSpellings(changes, { type: node.type, verb: "edit", known: EDIT_KEYS, subject }) as EditDelta;
+  changes = acceptAuthoringProps(changes, { type: node.type, verb: "edit", known: EDIT_KEYS, subject }) as EditDelta;
   // A delta that was ONLY read-shape identity (`{ id, type }`) folds to nothing — same refusal as an
-  // empty object, now that the fold has run.
+  // empty object, now that the prelude has run.
   assertDeltaNotEmpty(changes, subject);
   const legal = assertDeltaLegalForType(node, changes, subject);
   // Snapshot BEFORE the compile, so the recorded facts are the ones it goes on to read.

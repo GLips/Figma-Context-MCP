@@ -59,7 +59,7 @@ There is no autocomplete and no type-checking where your code runs (a QuickJS sa
 
 Every prop is optional; an omitted prop is simply not applied (a frame with no `fill` is transparent, not white).
 
-**Read and write share one vocabulary.** What `get` returns spreads straight into any constructor or `flcm.edit` — `flcm.rect({ ...spec, width: 320 })`, `flcm.text(spec)` — because `left`/`top`, `fill`, `text`, `boldWeight` and the rest are the same words on both sides. A read's derived facts (`id`, a `contextual`/`designedWidth` measurement) fold away; fields flcm has no word for (an INSTANCE's `componentId`, `strokeDashes`, a grid) fail loud by name. A spec with `children` needs `flcm.fromRead(spec)`, which rebuilds the whole subtree.
+**Read and write share one vocabulary.** What `get` returns spreads straight into any constructor or `flcm.edit` — `flcm.rect({ ...spec, width: 320 })`, `flcm.text(spec)` — because `left`/`top`, `fill`, `text`, `boldWeight` and the rest are the same words on both sides. A spec's read-only words (`id`, `type`, a root's `contextual` size beside `designedWidth`) fold away. A spec with `children` needs `flcm.fromRead(spec)`, which rebuilds the whole subtree and refuses by name the fields flcm has no word for (an INSTANCE's `componentId`, `strokeDashes`, a grid).
 
 ### Shared by every node
 

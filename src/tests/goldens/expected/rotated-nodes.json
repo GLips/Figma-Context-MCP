@@ -51,7 +51,6 @@
           "name": "Tilted Rule",
           "type": "LINE",
           "width": 80,
-          "height": 0,
           "left": 60,
           "top": 250,
           "rotation": -15,

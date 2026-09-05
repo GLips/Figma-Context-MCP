@@ -158,10 +158,10 @@ const SECTIONS: Section[] = [
       "not white).\n\n" +
       "**Read and write share one vocabulary.** What `get` returns spreads straight into any constructor or " +
       "`flcm.edit` — `flcm.rect({ ...spec, width: 320 })`, `flcm.text(spec)` — because `left`/`top`, `fill`, " +
-      "`text`, `boldWeight` and the rest are the same words on both sides. A read's derived facts (`id`, a " +
-      "`contextual`/`designedWidth` measurement) fold away; fields flcm has no word for (an INSTANCE's " +
-      "`componentId`, `strokeDashes`, a grid) fail loud by name. A spec with `children` needs " +
-      "`flcm.fromRead(spec)`, which rebuilds the whole subtree.\n\n" +
+      "`text`, `boldWeight` and the rest are the same words on both sides. A spec's read-only words (`id`, " +
+      "`type`, a root's `contextual` size beside `designedWidth`) fold away. A spec with `children` needs " +
+      "`flcm.fromRead(spec)`, which rebuilds the whole subtree and refuses by name the fields flcm has no " +
+      "word for (an INSTANCE's `componentId`, `strokeDashes`, a grid).\n\n" +
       `### Shared by every node\n\n${propTable(FIELD_GROUPS.shared)}\n\n` +
       "### Size & position (frame, text, rect, ellipse)\n\n" +
       '(A `line` sizes on a numeric `width` alone — its length; there is no `height`, `"fill"`, or `"hug"`.)\n\n' +

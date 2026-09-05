@@ -1,5 +1,5 @@
-// The read↔write seam closed: a `get` result authors through the constructors and `edit` directly
-// (read-spellings.ts), and fromRead rebuilds a whole subtree. These drive the WHOLE loop over the mock
+// The read↔write seam closed: read and write are one vocabulary, so a `get` result authors through the
+// constructors and `edit` directly, and fromRead rebuilds a whole subtree. These drive the WHOLE loop over the mock
 // (author → render → get → author again) rather than hand-writing read specs, because the point is that
 // what `get` actually emits re-authors: a hand-written fixture would pin what I believe the read shape
 // is. Three concerns: a real subtree round-trips with its styling intact, a single spec spreads straight
@@ -146,12 +146,14 @@ test("a rotated node rebuilds at its own size — read reports the node's size, 
   assert.deepEqual([copy.width, copy.height, copy.rotation], [100, 20, 45]);
 });
 
-test("a line's sizing intent on its cross axis is refused, not guessed", async () => {
+test("a line has no height word: read emits none, and a hand-added one is refused, not guessed", async () => {
   createFigmaMock();
-  // A LINE sizes along `width` alone, so a SIZING INTENT on its cross axis has nowhere to go. (A
-  // NUMBER there is the line's ~0 bbox height and drops — that one really is derived.)
-  assert.throws(() => fromRead(spec({ type: "LINE", width: 80, height: "fill" })), /LINE sizes only along its width/);
-  assert.doesNotThrow(() => fromRead(spec({ type: "LINE", width: 80, height: 0 })));
+  // (A text sibling keeps the frame from reading as an SVG-heavy container, which collapses to IMAGE-SVG.)
+  await render(frame({ key: "card", width: 300, height: 300 }, [text("x"), line({ key: "rule", width: 80 })]));
+  const rule = (await get("card")).children![1] as SimplifiedNode;
+  assert.equal(rule.height, undefined);
+  // A LINE sizes along `width` alone, so a SIZING INTENT on its cross axis has nowhere to go.
+  assert.throws(() => fromRead(spec({ type: "LINE", width: 80, height: "fill" })), /`height` is not one of flcm.line's words/);
 });
 
 test("layout words flcm has no vocabulary for fail loud; a grid names itself", async () => {
@@ -199,7 +201,7 @@ test("the closed sets are actually closed — a prototype key is not a member of
   // An ellipse has no corners: borderRadius is refused by name — by the constructor's own gate, whether
   // the bag came from a read or a hand — rather than accepted and dropped by compileNodeLocalProps.
   assert.throws(() => fromRead(spec({ type: "ELLIPSE", borderRadius: "8px" })), /`borderRadius` is not one of flcm.ellipse's words/);
-  assert.throws(() => ellipse({ borderRadius: 8 }), /`borderRadius` is not one of flcm.ellipse's words/);
+  assert.throws(() => ellipse({ borderRadius: 8 } as never), /unknown prop "borderRadius" on flcm\.ellipse/);
   // `position` is the write word too, with two spellings; anything else is malformed input, not absence.
   assert.throws(() => fromRead(spec({ type: "RECTANGLE", position: "relative" })), /position must be "absolute" or "none"/);
 });
