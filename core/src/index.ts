@@ -36,6 +36,11 @@ export { isCoordinateTransparentType } from "./utils.js";
 // of a tilted group in a different spot on each side.
 export { rotateIntoParentFrame } from "./utils.js";
 
+// Box arithmetic, shared by both directions: read asks whether a grid's children overlap, write asks how
+// much of a render root landed on its page neighbours. One implementation, so the two agree on the edge
+// case that matters — boxes that merely touch are not overlapping.
+export { rectIntersectionArea, rectsOverlap, anyRectsOverlap } from "./rect.js";
+
 // Figma's per-axis sizing flag → the canonical fill/hug/fixed word. Exported for the plugin's write side,
 // which reports a rendered node's sizing intent (bridge.intentOf) off the live node: resolveAxisDimension
 // takes the fill/hug word straight from this mapper, so sourcing it here rather than re-deriving it is what

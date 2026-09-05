@@ -68,7 +68,7 @@ export async function startServer(config: ServerConfig): Promise<void> {
   // The WS relay to the Figma plugin always starts with the server, both transports: the plugin's
   // ui.html holds a persistent socket open whenever the plugin runs in Figma, and its connection is
   // what advertises the code-mode tools. One loopback port from the block; negligible when unused.
-  const pluginBridge = startPluginBridge();
+  const pluginBridge = startPluginBridge({ assetRoot: config.assetRoot });
 
   const serverOptions = {
     transport: config.isStdioMode ? ("stdio" as const) : ("http" as const),
@@ -89,6 +89,16 @@ export async function startServer(config: ServerConfig): Promise<void> {
       process.stderr.write(
         `Warning: --image-dir not set; download_figma_images will save under the server's cwd (${config.imageDir}). ` +
           `MCP clients often launch the server outside your project root — set IMAGE_DIR or pass --image-dir to make this explicit.\n`,
+      );
+    }
+    // The asset root is a READ boundary — it decides which of the user's files flcm.image can place
+    // into a cloud-synced Figma document. An MCP client picks the cwd, so a defaulted root may be a
+    // directory the user never chose to expose. Warn unconditionally (unlike --image-dir's warning):
+    // the code-mode tools can latch on later in the process, so "no plugin yet" proves nothing.
+    if (config.configSources.assetRoot === "default") {
+      process.stderr.write(
+        `Warning: --asset-root not set; flcm.image local file paths resolve under the server's cwd (${config.assetRoot}). ` +
+          `MCP clients often launch the server outside your project root — set FRAMELINK_ASSET_ROOT or pass --asset-root to choose the boundary deliberately.\n`,
       );
     }
     const server = createServer(config.auth, serverOptions);

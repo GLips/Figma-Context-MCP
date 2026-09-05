@@ -3,10 +3,14 @@
 
 import { safeSerialize, guardReturnValue } from "./serialize.js";
 import { resolveScreenshotTarget, type ScreenshotTarget } from "./screenshot-target.js";
-
-// The std-lib source string, generated from the typed preamble/ fragments and baked in at build time
-// by build.mjs via esbuild `define` (it can't be generated in-sandbox — flattening runs esbuild).
-declare const SANDBOX_PREAMBLE: string;
+import { createRunCancellationRegistry } from "./run-cancellation.js";
+// TYPE-ONLY on purpose: this is the one shared declaration binding the host half of the flcm
+// interface to the preamble half, and it must stay erasable — a value import from preamble/ would
+// drag the whole std-lib back into this bundle, which is exactly what ADR-0010 removed.
+import type { FlcmHost } from "./preamble/host.js";
+// Likewise type-only: the shape the std-lib factory hands back, so the agent's `flcm` parameter is
+// the real surface rather than `any`. Names what runtime.ts re-exports — nothing more.
+import type * as FlcmRuntime from "./preamble/runtime.js";
 
 // The window is a fixed-width strip whose HEIGHT is whatever the iframe measures after each render
 // (UI_HEIGHT) — so "collapsed" and "expanded" are CSS states over there, not two magic numbers here.
@@ -35,10 +39,13 @@ figma.showUI(__html__, {
 
 // Versions reported to the server over the frozen envelope on connect (server-initiated
 // GET_VERSION handshake). These are the SOURCE OF TRUTH for the plugin's wire identity:
-//   • PROTOCOL_VERSION — the frozen forward-compat envelope contract. The server GATES on
-//     this; bump it ONLY on a breaking envelope change (and the server's MIN with it).
-//   • PLUGIN_VERSION — the plugin release, shown to the human in a skew nudge. Informational.
-const PROTOCOL_VERSION = 1;
+//   • PROTOCOL_VERSION — the envelope contract, plus the FlcmHost interface this host hands the
+//     preamble (preamble/host.ts). The server GATES on this; bump it ONLY on a breaking change to
+//     either (and the server's MIN with it). v2 = the mid-run image protocol (plugin-issued
+//     IMAGES_REQUEST/IMAGES_REPLY + run-scoped CANCEL). v3 = the server ships the flcm std-lib
+//     (ADR-0010), and the host capabilities collapse into the one `__flcmHost` object.
+//   • PLUGIN_VERSION — the plugin release, shown to the human in a skew refusal. Informational.
+const PROTOCOL_VERSION = 3;
 const PLUGIN_VERSION = "0.1.0";
 
 // Phase 2 consent gate. The sandbox is the SOLE ARBITER (Invariant): it holds the durable
@@ -152,6 +159,90 @@ function connKeyOf(msg: InboundMessage): ConnKey | undefined {
  */
 function reply(to: ReplyTo, body: Record<string, unknown>): void {
   figma.ui.postMessage({ ...body, id: to.id, __connKey: to.connKey });
+}
+
+// ---- Mid-run image fetch: the plugin→server reverse-request direction (protocol 2). ----
+// The sandbox's render() suspends on an await while the server fetches image bytes; these tables
+// correlate the plugin-ISSUED requests with the server's typed replies. Deliberately a separate id
+// namespace ("preq-") and a separate pending table from the server's own requests: each side owns
+// its ids, and reverse replies are matched by TYPE (IMAGES_REPLY/IMAGES_ERROR) before the envelope
+// dispatch, so neither end ever has to guess who minted an id.
+let nextImagesRequestId = 0;
+interface PendingImagesFetch {
+  resolve: (images: Record<string, string>) => void;
+  reject: (err: Error) => void;
+  runId: string;
+  connKey: ConnKey | undefined;
+}
+const pendingImagesFetches = new Map<string, PendingImagesFetch>();
+
+/**
+ * Ask the run's server for image bytes (url → base64) and await its typed reply. Tagged with the
+ * run's correlation id so the server can (a) suspend the run's inactivity deadline while IT is the
+ * side doing the work, and (b) refuse a request for a run it no longer tracks (cancelled/timed
+ * out) — that refusal rejects this promise, which is what makes a zombie run die at its
+ * suspension point instead of resuming into canvas writes.
+ */
+function requestServerImages(to: ReplyTo, urls: string[]): Promise<Record<string, string>> {
+  // Fail closed at issue time: with no live socket for this run's port, ui.html would silently drop
+  // the frame and this promise could never settle — wedging the write chain (the run never
+  // resolves, so no later write ever dispatches) for the life of the plugin. WS_CLOSED /
+  // WS_CONNECTED reject the fetches that were already pending; this covers the run that reaches
+  // its fetch only AFTER the drop.
+  if (to.connKey === undefined || !connections.has(to.connKey)) {
+    return Promise.reject(
+      new Error("flcm: the server for this run is not connected — the image fetch cannot be issued and the script stops here."),
+    );
+  }
+  return new Promise((resolve, reject) => {
+    const id = "preq-" + ++nextImagesRequestId;
+    pendingImagesFetches.set(id, { resolve, reject, runId: to.id, connKey: to.connKey });
+    figma.ui.postMessage({ type: "IMAGES_REQUEST", id, runId: to.id, urls, __connKey: to.connKey });
+  });
+}
+
+/** Settle a plugin-issued image request from the server's typed reply. An unknown id is dropped —
+ * that fetch was already rejected by a CANCEL or a disconnect. The reply must arrive on the SAME
+ * port the request went out on: ui.html holds a socket per block port, so without this check any
+ * other local server (approved or not — approval gates writes, not this direction) could inject
+ * bytes into an approved session's in-flight render, bypassing the trusted fetch path. */
+function settleImagesFetch(msg: InboundMessage): void {
+  if (typeof msg.id !== "string") return;
+  const pending = pendingImagesFetches.get(msg.id);
+  if (!pending) return;
+  if (pending.connKey !== connKeyOf(msg)) return;
+  pendingImagesFetches.delete(msg.id);
+  if (msg.type === "IMAGES_REPLY" && msg.images && typeof msg.images === "object") {
+    // Boundary-parse the url→base64 record here, where reverse-reply bytes enter the sandbox: keep
+    // string entries only, so downstream imagePaint can trust every value it finds (a dropped
+    // entry surfaces there as the fail-loud missing-bytes error, naming its url).
+    const images: Record<string, string> = {};
+    for (const [url, b64] of Object.entries(msg.images)) {
+      if (typeof b64 === "string") images[url] = b64;
+    }
+    pending.resolve(images);
+  } else {
+    pending.reject(
+      new Error(
+        typeof msg.error === "string" ? msg.error : "flcm.image: the server's image reply was malformed.",
+      ),
+    );
+  }
+}
+
+// Run cancellation (protocol 2's CANCEL made real). The policy and key semantics live on the
+// registry module — run-cancellation.ts — not here.
+const cancelledRuns = createRunCancellationRegistry();
+
+/** Reject matching pending image fetches. A rejected fetch kills its suspended run at the await —
+ * the mechanism behind both CANCEL (deadline fired) and WS_CLOSED (server went away), and what
+ * keeps the write queue from wedging on a fetch whose reply can never arrive. */
+function rejectImagesFetches(match: (p: PendingImagesFetch) => boolean, reason: string): void {
+  for (const [id, pending] of pendingImagesFetches) {
+    if (!match(pending)) continue;
+    pendingImagesFetches.delete(id);
+    pending.reject(new Error(reason));
+  }
 }
 
 // First-run orientation. The session list shows a one-time explainer (what the plugin does; "only
@@ -358,11 +449,12 @@ function revokeSession(key: ConnKey): void {
 
 figma.ui.onmessage = (msg: InboundMessage) => {
   // Local CONTROL messages from ui.html and the arbiter panel are id-less: they never traverse
-  // the WS, so they carry no server correlation id and get no reply. The server, by contrast,
-  // stamps an id on every message (PluginBridge.request), so id-less ⟺ local control. Handle
-  // those here and return; an id-CARRYING message of any type falls through to the normal
-  // envelope path below (and its ERROR reply for unknown types), preserving the frozen-envelope
-  // "every id-carrying message gets exactly one reply" invariant.
+  // the WS, so they carry no server correlation id and get no reply. Server REQUESTS all carry ids
+  // (PluginBridge.request); since protocol 2 the server also emits ONE id-less one-way frame,
+  // CANCEL, handled in this branch beside the session-scoped controls because it is likewise
+  // reply-less and __connKey-routed. An id-CARRYING message falls through to the reverse-reply
+  // intercept and then the envelope path below (ERROR reply for unknown types), preserving the
+  // "every id-carrying server request gets exactly one reply" invariant.
   if (msg.id === undefined) {
     // Surface control first — these address the WINDOW, not a session, so they carry no __connKey.
     if (msg.type === "UI_READY") {
@@ -396,6 +488,16 @@ figma.ui.onmessage = (msg: InboundMessage) => {
       // executor. approvedTokens stays intact (sticky); a legit reconnect re-binds via the echoed
       // token in its SESSION_INFO. ui.html fires this on ws.onopen, before any server message on the
       // new socket. activeKey is left alone — see its declaration for why a reconnect keeps it.
+      // Any image fetch still pending against this port belonged to the PREVIOUS socket's server —
+      // the new one doesn't know its preq ids, so a reply can never arrive: reject now or the
+      // suspended run (and the write chain behind it) waits forever.
+      rejectImagesFetches(
+        (p) => p.connKey === key,
+        "flcm: the server connection for this run was replaced mid-run — the image fetch was abandoned and the script stops here.",
+      );
+      // A new socket may be a NEW server whose run-id counter restarts — its req-1 must not
+      // inherit the old server's cancellation. Executing runs keep theirs (run-cancellation.ts).
+      cancelledRuns.sweepPort(key);
       connections.set(key, { token: null, identity: null, pairingCode: null });
     } else if (msg.type === "WS_CLOSED") {
       // The socket dropped — remove the session's row (disconnect-detection reuses this persistent
@@ -403,6 +505,15 @@ figma.ui.onmessage = (msg: InboundMessage) => {
       // and with no socket there are no writes meanwhile. ui.html auto-reconnects the port after this.
       // Refresh the list; collapse only once the LAST session is gone (nothing left to act on) — a
       // departure mustn't close a list another session opened for a pending decision.
+      // First, kill this session's suspended runs: a reply to their image fetches can never arrive,
+      // and an unrejected fetch would wedge the write queue for the life of the plugin.
+      rejectImagesFetches(
+        (p) => p.connKey === key,
+        "flcm: the server disconnected mid-run — the image fetch was abandoned and the script stops here.",
+      );
+      // The server rejects every in-flight caller when a socket dies, so its outstanding runs here
+      // (queued or executing) were all reported failed — cancel them or they'd keep going.
+      cancelledRuns.cancelPort(key);
       connections.delete(key);
       if (connections.size === 0) setExpanded(false);
       else renderUi();
@@ -415,7 +526,28 @@ figma.ui.onmessage = (msg: InboundMessage) => {
       // The human clicked "Revoke access" on an approved row — de-authorize it and clear the server's
       // persisted token.
       revokeSession(key);
+    } else if (msg.type === "CANCEL") {
+      // The server's deadline fired for this run (id-less, run-scoped, one-way — the server-side
+      // mirror of SESSION_TOKEN's direction). Record it; every refusal point reads the registry
+      // (the full policy lives in run-cancellation.ts). Rejecting the pending image fetches below
+      // additionally kills a run suspended at its await right now.
+      const runId = typeof msg.runId === "string" ? msg.runId : null;
+      if (runId) {
+        cancelledRuns.recordCancellation(key, runId);
+        rejectImagesFetches(
+          (p) => p.runId === runId && p.connKey === key,
+          "flcm: this run was cancelled by the server (its deadline passed) — the script stops here.",
+        );
+      }
     }
+    return;
+  }
+  // Reverse-direction replies (protocol 2): typed answers to PLUGIN-issued requests, matched by
+  // type + plugin id and consumed here. They are replies, so they must not fall through to the
+  // envelope dispatch below — its contract is "every id-carrying SERVER request gets one reply",
+  // and its ids are a different namespace.
+  if (msg.type === "IMAGES_REPLY" || msg.type === "IMAGES_ERROR") {
+    settleImagesFetch(msg);
     return;
   }
   const to: ReplyTo = { id: msg.id, connKey: connKeyOf(msg) };
@@ -444,12 +576,33 @@ figma.ui.onmessage = (msg: InboundMessage) => {
     if (to.connKey !== undefined && !isApproved(to.connKey)) setExpanded(true);
     else renderUi();
   } else if (msg.type === "EXECUTE_CODE") {
+    // Protocol validation comes BEFORE the consent gate, deliberately: a malformed request can never
+    // execute, so making the human click Allow for it would be asking consent for nothing. An empty
+    // string is rejected with the absent case — it would otherwise reach eval and die as the useless
+    // "flcm is not defined". This is an envelope ERROR, not an EXECUTE_CODE_RESULT: nothing ran.
+    const preamble = typeof msg.preamble === "string" ? msg.preamble : "";
+    if (!preamble) {
+      reply(to, {
+        type: "ERROR",
+        error:
+          "This plugin expects the flcm std-lib to arrive with the code, but the server sent none — it " +
+          "predates the server-shipped runtime. Update the server (`npx figma-developer-mcp@latest`) and " +
+          "restart it.",
+      });
+      return;
+    }
     // Sandbox-side gate (the consent Invariant's enforcement point): gateWrite runs the write only
     // for an approved session — otherwise it replies PENDING_APPROVAL and the write never reaches the
     // executor. Queued, not awaited here, so a second session's write can't interleave with this one.
-    if (gateWrite(to)) enqueueWrite(() => executeCode(to, typeof msg.code === "string" ? msg.code : ""));
+    // Accepted runs register with the cancellation registry from this moment (run-cancellation.ts) —
+    // a run can be cancelled while it still sits in the queue.
+    if (gateWrite(to)) {
+      cancelledRuns.enqueue(to);
+      enqueueWrite(() => executeCode(to, typeof msg.code === "string" ? msg.code : "", preamble));
+    }
   } else if (msg.type === "SCREENSHOT") {
-    if (gateWrite(to))
+    if (gateWrite(to)) {
+      cancelledRuns.enqueue(to);
       enqueueWrite(() =>
         screenshot(
           to,
@@ -460,6 +613,7 @@ figma.ui.onmessage = (msg: InboundMessage) => {
           typeof msg.scale === "number" ? msg.scale : undefined,
         ),
       );
+    }
   } else if (msg.type === "GET_VERSION") {
     // Server-initiated version handshake. The constants live here in the sandbox (not in
     // ui.html, which owns the WS connect but doesn't know them), so the server asks and we
@@ -494,7 +648,21 @@ figma.ui.onmessage = (msg: InboundMessage) => {
  * is what buys the agent `await` (e.g. `figma.loadFontAsync`) for free. A bare
  * `eval(code)` would break the moment the agent writes `await`.
  */
-async function executeCode(to: ReplyTo, code: string): Promise<void> {
+async function executeCode(to: ReplyTo, code: string, preamble: string): Promise<void> {
+  // The dequeue refusal — the queued-zombie case (run-cancellation.ts): a run cancelled while it
+  // sat queued behind writeChain must not execute now, mutating a canvas the agent was told is
+  // unchanged. The refusal reply is harmless (the server already dropped the run's pending).
+  if (cancelledRuns.takeCancellation(to)) {
+    cancelledRuns.settle(to);
+    reply(to, {
+      type: "EXECUTE_CODE_RESULT",
+      result: null,
+      console: [],
+      errors:
+        "flcm: this run was cancelled by the server (its deadline passed while the run was queued) — no code was executed.",
+    });
+    return;
+  }
   const consoleLog: string[] = [];
   const originalConsole = {
     log: console.log,
@@ -516,34 +684,41 @@ async function executeCode(to: ReplyTo, code: string): Promise<void> {
 
   let result: unknown;
   let errorMessage: string | null = null;
-  // The two-pass image path: flcm.render() throws this sentinel (carrying the urls) BEFORE creating any
-  // node when the server hasn't yet injected the image bytes. It's not an error — it's a request for the
-  // server to fetch+validate those urls and re-run this same code with the bytes injected. Surfaced on the
-  // normal result envelope so the frozen wire shape is untouched.
-  let imagesNeeded: string[] | null = null;
   try {
-    // The preamble bundle rides INSIDE the same async IIFE as the user's code, so its single
-    // `flcm` global (flcm.frame/text/render/…) is simply in scope. The leading preamble also
-    // preloads fonts (an `await`), which is why the IIFE must be async.
-    const raw = await eval("(async function(){ " + SANDBOX_PREAMBLE + "\n;\n" + code + "\n })()");
+    // Two evals, and the split is the point. The std-lib the server sent is a FACTORY expression
+    // (buildSandboxPreamble, src/preamble/index.mjs): call it with the host, get the `flcm` surface
+    // back, hand that to the agent's code as a named parameter. Nothing HERE knows how the preamble
+    // binds its host — the one identifier that crosses that eval boundary lives wholly inside
+    // preamble/, bound and asserted by the single file that emits both ends of it.
+    //
+    // The host is bound to `to`, so it answers for THIS run's correlation id and source port. Its
+    // methods need no pinning of their own: both sides import FlcmHost, so tsc catches a reshape.
+    //
+    // Giving the agent's code its own wrapper also keeps its line numbers its own — a thrown error
+    // reports where the AGENT wrote it, not an offset into ~230 KiB of std-lib. That wrapper is
+    // async because the agent awaits flcm.render(); the factory itself is synchronous (the font
+    // preload runs inside render(), not at module top level).
+    const host: FlcmHost = {
+      requestImages: (urls: string[]) => requestServerImages(to, urls),
+      isRunCancelled: () => cancelledRuns.isCancelled(to),
+    };
+    const flcm = (eval(preamble) as (host: FlcmHost) => typeof FlcmRuntime)(host);
+    const raw = await eval("(async function(flcm){ " + code + "\n })")(flcm);
     // Return-path node guard (R2): a returned live node would otherwise collapse to
     // { id } and silently drop everything else. Make that loud instead of lossy.
     guardReturnValue(raw);
     result = raw;
   } catch (err) {
-    const needed = err && typeof err === "object" ? (err as { __flcmImagesNeeded?: unknown }).__flcmImagesNeeded : undefined;
-    if (Array.isArray(needed)) imagesNeeded = needed.filter((u): u is string => typeof u === "string");
-    else errorMessage = formatError(err);
+    errorMessage = formatError(err);
   } finally {
     console.log = originalConsole.log;
     console.info = originalConsole.info;
     console.warn = originalConsole.warn;
     console.error = originalConsole.error;
+    cancelledRuns.settle(to);
   }
 
-  reply(to, imagesNeeded
-    ? { type: "EXECUTE_CODE_RESULT", imagesNeeded, console: consoleLog, errors: null }
-    : { type: "EXECUTE_CODE_RESULT", result: safeSerialize(result), console: consoleLog, errors: errorMessage });
+  reply(to, { type: "EXECUTE_CODE_RESULT", result: safeSerialize(result), console: consoleLog, errors: errorMessage });
 }
 
 /**
@@ -563,6 +738,17 @@ async function screenshot(
   target: ScreenshotTarget,
   scale: number | undefined,
 ): Promise<void> {
+  // Same dequeue refusal as executeCode. A screenshot writes nothing, but exporting for a run the
+  // server already reported dead is wasted work whose reply nothing correlates.
+  if (cancelledRuns.takeCancellation(to)) {
+    cancelledRuns.settle(to);
+    reply(to, {
+      type: "SCREENSHOT_RESULT",
+      errors:
+        "flcm: this run was cancelled by the server (its deadline passed while the run was queued) — no screenshot was taken.",
+    });
+    return;
+  }
   try {
     const node = await resolveScreenshotTarget(target);
     if (!("exportAsync" in node)) throw new Error(`Node ${node.type} (${node.id}) is not exportable`);
@@ -573,6 +759,8 @@ async function screenshot(
     reply(to, { type: "SCREENSHOT_RESULT", image: figma.base64Encode(bytes) });
   } catch (err) {
     reply(to, { type: "SCREENSHOT_RESULT", errors: formatError(err) });
+  } finally {
+    cancelledRuns.settle(to);
   }
 }
 

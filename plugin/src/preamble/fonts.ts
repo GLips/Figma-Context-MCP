@@ -16,7 +16,7 @@
 // The load pass returns a FontMap that render() threads on the RenderCtx through the build walk — load
 // and resolve agree on the `key()` of each (family, weight) by construction, with no module-level state.
 
-import { WriteNode, WriteChild } from "./ir.js";
+import { WriteNode, WriteChild, WriteProps, WriteTextStyle, namesFontIdentity } from "./ir.js";
 
 // A resolved-and-loaded style per (family, weight) key — the output of the load pass, consumed by the
 // build walk via resolveFont.
@@ -74,6 +74,66 @@ function key(family: string | undefined, weight: number | string | undefined, it
 }
 
 interface FontNeed { family?: string; weight?: number | string; italic?: boolean }
+
+// A live FontName decoded into authored font words — the ONLY translation from Figma's combined
+// style label ("Bold Italic" carries weight AND slant in one string) back into the (family, weight,
+// slant) triple this module keys on. Label grammar lives here, beside NAMED/styleWeight, so a new
+// label shape is handled once — edit's live-node enrichment must ride this, never re-parse.
+export function liveFontWords(fontName: { family: string; style: string }): WriteTextStyle {
+  return {
+    fontFamily: fontName.family,
+    fontWeight: styleWeight(fontName.style),
+    fontStyle: isItalic(fontName.style) ? "italic" : "normal",
+  };
+}
+
+// One edit entry's node + compiled delta — the unit the load below works over. Deliberately ANY
+// SceneNode, not just TEXT: the filter belongs here, beside the reflow filter it sits next to, so
+// no caller has to know that a non-text entry contributes nothing.
+export interface EditFontNeed { node: SceneNode; patch: WriteProps }
+
+// Whether a compiled delta re-lays the text: fonts gate every reflowing text mutation, not just
+// characters — size, clamp, and style writes throw on an unloaded font too.
+//
+// Deliberately keyed on the WORD GROUP (`patch.textStyle` whole), not on individual style leaves:
+// a new text word added inside textStyle is covered the day it lands, and cannot ship as a write
+// that throws at apply time because nobody remembered to register it here. A new TOP-LEVEL text
+// word (a sibling of `text`/`runs`/`maxLines`) gets no such cover and MUST be added below.
+function textEditReflows(patch: WriteProps): boolean {
+  return (
+    patch.text != null || !!patch.runs || !!patch.textStyle || patch.maxLines != null ||
+    !!(patch.layout && (patch.layout.sizing || patch.layout.dimensions || patch.layout.percentSize))
+  );
+}
+
+// Every font a mutating verb's span will touch, loaded in its read-only PREPARE phase (before the
+// entry seal). Two halves: the LIVE fonts (all range fonts when mixed — the reflow re-lays existing
+// ranges), and the AUTHORED triples the appliers will resolve (loadFontsForTree over a synthetic
+// tree, so an edit preloads exactly the way render does).
+//
+// Plural because a BATCH is one verb: N entries share one listAvailableFontsAsync inside
+// loadFontsForTree and one Promise.all over the live fonts, instead of paying a serial round trip
+// per entry. Each of those round trips is a suspension point the user can edit the document
+// across, so collapsing them is not just speed (see edit.ts's live-facts freshness check).
+export async function loadFontsForTextEdits(edits: readonly EditFontNeed[]): Promise<FontMap> {
+  const reflowing = edits.filter(({ node, patch }) => node.type === "TEXT" && textEditReflows(patch));
+  if (!reflowing.length) return {};
+  const live: FontName[] = [];
+  for (const { node } of reflowing) {
+    const t = node as TextNode;
+    if (t.fontName === figma.mixed) live.push(...t.getRangeAllFontNames(0, t.characters.length));
+    else live.push(t.fontName as FontName);
+  }
+  await Promise.all(live.map((f) => figma.loadFontAsync(f)));
+  const authored = reflowing.filter(
+    ({ patch }) => namesFontIdentity(patch.textStyle) || (patch.runs || []).some((r) => namesFontIdentity(r.style)),
+  );
+  if (!authored.length) return {};
+  return loadFontsForTree({
+    type: "FRAME",
+    children: authored.map(({ patch }) => ({ type: "TEXT", textStyle: patch.textStyle, runs: patch.runs })),
+  });
+}
 
 export async function loadFontsForTree(tree: WriteNode): Promise<FontMap> {
   const avail = await figma.listAvailableFontsAsync();

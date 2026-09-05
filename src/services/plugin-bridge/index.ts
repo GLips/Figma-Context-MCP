@@ -1,6 +1,8 @@
 import { join } from "node:path";
 import { Logger } from "~/utils/logger.js";
 import { PluginBridge } from "./bridge.js";
+import { fetchAndProcessImage, isLocalImageSource, createLocalImageReader } from "./images.js";
+import { ImageByteCache, createImagesRequestHandler } from "./image-requests.js";
 import { WS_PORT_BLOCK } from "./ports.js";
 import { SESSION_IDENTITY } from "./approval.js";
 import { resolveStateDir } from "./approval-store.js";
@@ -28,8 +30,20 @@ export interface PluginBridgeRuntime {
  * process from server startup; every MCP server instance (one for stdio, one per stateless HTTP
  * request) shares the returned runtime.
  */
-export function startPluginBridge(): PluginBridgeRuntime {
-  const bridge = new PluginBridge();
+export function startPluginBridge({ assetRoot }: { assetRoot: string }): PluginBridgeRuntime {
+  // The images handler answers the plugin's mid-run image requests (protocol 2). Sources split by
+  // scheme: https urls go through the guarded fetch plus a session-lifetime URL→bytes cache, local
+  // paths through the asset-root-contained file read (uncached — see image-requests.ts).
+  // One reader per process: it pins the canonical asset root on first use, so the authorization
+  // boundary can't shift under a retargeted root symlink mid-session.
+  const readLocalImage = createLocalImageReader(assetRoot);
+  const bridge = new PluginBridge(undefined, {
+    imagesRequestHandler: createImagesRequestHandler({
+      fetchImage: (source) =>
+        isLocalImageSource(source) ? readLocalImage(source) : fetchAndProcessImage(source),
+      cache: new ImageByteCache(),
+    }),
+  });
   // Surface where the durable-approval token file lives — it is a security-adjacent 0600 credential, so
   // an operator should be able to see (and locate/inspect) it at startup. Override via FRAMELINK_STATE_DIR.
   Logger.log(`Session approvals persisted under ${join(resolveStateDir(), "approvals")}`);

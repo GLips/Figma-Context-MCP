@@ -8,9 +8,9 @@
 // fidelity is the whole risk of accepting CSS-shaped input, so the edges are strict.
 
 import {
-  PaintSpec, GradientType, GradientStop, Rgba,
-  EffectSpec, WriteLineHeight, WriteLetterSpacing,
-  FillInput, WriteCssEffects, WriteBlendMode,
+  PaintSpec, ImageHashSpec, ImageScaleMode, GradientType, GradientStop, Rgba,
+  EffectSpec, WriteLineHeight, WriteLetterSpacing, Edges,
+  FillLeaf, WriteGradientFill, WriteCssEffects, WriteBlendMode,
 } from "./ir.js";
 import { solid, linearGradient, radialGradient } from "./paint.js";
 import { shadow, layerBlurFromCssPx, backgroundBlurFromCssPx } from "./effects.js";
@@ -61,12 +61,15 @@ export function parseColor(input: string): Rgba {
 }
 
 // ---- Fills (color string | gradient string | read-form { type, gradient }) -> PaintSpec ----
-export function parseFill(value: FillInput, field: string): PaintSpec {
+// Takes ONE leaf. The read shape's array spelling is unwrapped upstream (flcm.compilePaintWord),
+// where the stacked-paints refusal lives — a parser that also un-nested would have to own that rule.
+export function parseFill(value: FillLeaf, field: string): PaintSpec {
   if (value && typeof value === "object") {
     if ("kind" in value) return value; // already a typed PaintSpec (what flcm.gradient() returns)
-    if (isImageFill(value)) throw imageFillRejected(field, value);
-    if (typeof value.gradient === "string" && typeof value.type === "string" && value.type.indexOf("GRADIENT_") === 0) {
-      return parseGradientString(value.gradient);
+    if (isImageFill(value)) return readImagePaint(value, field);
+    const g = value as WriteGradientFill;
+    if (typeof g.gradient === "string" && typeof g.type === "string" && g.type.indexOf("GRADIENT_") === 0) {
+      return parseGradientString(g.gradient);
     }
     throw badFill(field, value);
   }
@@ -79,19 +82,57 @@ function badFill(field: string, value: unknown): Error {
   return new Error("flcm: " + field + " must be a color string, a gradient string (linear-gradient(...) / radial-gradient(...)), or a gradient leaf { type, gradient }. Got " + JSON.stringify(value) + ".");
 }
 
-// A read-artifact image fill (figma-mcp read's SimplifiedImageFill: { type:'IMAGE', imageRef|gifRef,
-// scaleMode }) is a REF to bytes we don't have — distinct from an AUTHORED image, which comes in as a typed
-// ImageSpec ({ kind:'image', url }) and returns early above via the `"kind" in value` path, never reaching
-// here. `type:'IMAGE'` is the always-present discriminator (imageRef itself can be omitted when Figma
-// returns a null ref). Reject loud here — pointing at flcm.image(url), the real write path — rather than
-// dropping the fill silently or letting a confusing plugin-API throw surface downstream.
+// A read-form image fill (the read shape's SimplifiedImageFill: { type:'IMAGE', imageRef|gifRef,
+// scaleMode }) names bytes ALREADY IN THE DOCUMENT, so in-plugin it needs no fetch and no url — the
+// imageRef IS the paint's imageHash [verified: node-to-snapshot maps `ref: paint.imageHash`]. It is
+// distinct from an AUTHORED image, which arrives as a typed ImageSpec ({ kind:'image', url }) and
+// returns early above via the `"kind" in value` path, never reaching here. `type:'IMAGE'` is the
+// always-present discriminator; the ref itself can be missing (Figma returns a null imageRef for an
+// asset that lives in a file you don't own), and THAT case still has nothing to point at.
 function isImageFill(value: object): boolean {
   const o = value as Record<string, unknown>;
   return o.type === "IMAGE" || typeof o.imageRef === "string" || typeof o.gifRef === "string";
 }
 
-function imageFillRejected(field: string, value: unknown): Error {
-  return new Error("flcm: " + field + " is a read-artifact image fill — a ref to bytes we don't have (" + JSON.stringify(value) + "). Author an image with flcm.image(url) instead.");
+// The read shape's scale-mode words → the plugin's. "STRETCH" is REST's spelling of the plugin's CROP
+// (node-to-snapshot maps it on the way out), and it is the one mode that CANNOT come back: the crop is
+// carried by the paint's imageTransform matrix, which the read shape never surfaces, so rebuilding it
+// would silently un-crop the image. Refused by name below rather than reproduced wrong.
+const READ_SCALE_MODES: Record<string, ImageScaleMode> = { FILL: "FILL", FIT: "FIT", TILE: "TILE" };
+
+function readImagePaint(value: object, field: string): ImageHashSpec {
+  const o = value as { imageRef?: unknown; gifRef?: unknown; scaleMode?: unknown; scalingFactor?: unknown };
+  // An animated GIF carries BOTH refs, and its `imageRef` points at the static snapshot frame — so the
+  // one path that looks like it works is exactly the one that silently strips the animation. There is no
+  // hash to point a new paint at (the GIF's own bytes live behind gifRef, which is not an image hash).
+  if (typeof o.gifRef === "string" && o.gifRef) {
+    throw new Error(
+      "flcm: " + field + " is an animated GIF fill, and its `imageRef` is only the static snapshot frame — rebuilding from it would drop the animation. Duplicate the node with flcm.clone to keep the GIF.",
+    );
+  }
+  const hash = typeof o.imageRef === "string" && o.imageRef ? o.imageRef : undefined;
+  if (!hash) {
+    throw new Error(
+      "flcm: " + field + " is an image fill with no imageRef — Figma reports a null ref for an asset that lives in a file you don't own, so there is nothing to point the new paint at (" +
+        JSON.stringify(value) + "). Duplicate the node with flcm.clone instead, or author your own image with flcm.image(url).",
+    );
+  }
+  const scaleMode = ownEntry(READ_SCALE_MODES, String(o.scaleMode));
+  if (!scaleMode) {
+    throw new Error(
+      "flcm: " + field + ' is a cropped image fill (scaleMode "' + String(o.scaleMode) + '"). The crop lives in the paint\'s transform matrix, which the read shape does not carry, so rebuilding it would silently un-crop the image. Duplicate the node with flcm.clone to keep the crop.',
+    );
+  }
+  const spec: ImageHashSpec = { kind: "image", hash, scaleMode };
+  if (scaleMode === "TILE" && typeof o.scalingFactor === "number") spec.scalingFactor = o.scalingFactor;
+  return spec;
+}
+
+// Both word tables below are indexed by an AGENT-SUPPLIED string, and a plain `table[key]` reaches
+// Object.prototype — `blendMode: "constructor"` would resolve to a function and sail through the
+// unknown-word reject. Own-property only.
+function ownEntry<T>(table: Record<string, T>, key: string): T | undefined {
+  return Object.prototype.hasOwnProperty.call(table, key) ? table[key] : undefined;
 }
 
 // ---- Blend mode (CSS mix-blend-mode name -> Figma BlendMode). Only the CSS-named modes are reachable;
@@ -117,7 +158,7 @@ const BLEND_MODES: Record<string, WriteBlendMode> = {
 };
 
 export function parseBlendMode(input: string): WriteBlendMode {
-  const mode = BLEND_MODES[String(input).trim().toLowerCase()];
+  const mode = ownEntry(BLEND_MODES, String(input).trim().toLowerCase());
   if (!mode) {
     throw new Error('flcm: unsupported blend "' + input + '" — use one of these CSS mix-blend-mode names: ' + Object.keys(BLEND_MODES).join(", ") + ". (Figma has no equivalent for pass-through or plus-lighter/plus-darker.)");
   }
@@ -280,6 +321,22 @@ export function length(v: number | string): number {
   const m = /^(-?\d+(\.\d+)?)px$/.exec(String(v).trim());
   if (!m) throw new Error('flcm: expected a number or "Npx" (e.g. 24 or "24px"), got ' + JSON.stringify(v) + " — em/%/rem and bare numeric strings are not coerced.");
   return parseFloat(m[1]);
+}
+
+// A CSS 1–4 value box shorthand ("12px" | "12px 16px" | "12px 16px 8px" | "12px 16px 8px 4px") -> typed
+// Edges, following CSS's own fill-in rules. The READ shape spells padding this way (one string, per
+// core/utils generateCSSShorthand) while flcm's `padding` prop takes numbers, so the read→write
+// normalizer needs the decode; nothing else authors padding as a string. Each value rides `length`, so a
+// non-px unit fails loud there rather than coercing to wrong pixels.
+export function boxShorthand(value: string, field: string): Edges {
+  const parts = String(value).trim().split(/\s+/).filter((p) => p.length);
+  if (!parts.length || parts.length > 4) {
+    throw new Error("flcm: " + field + ' must be a CSS box shorthand of 1–4 values (e.g. "12px" or "12px 16px") — got ' + JSON.stringify(value) + ".");
+  }
+  const n = parts.map((p) => length(p));
+  const top = n[0];
+  const right = n.length > 1 ? n[1] : top;
+  return { top, right, bottom: n.length > 2 ? n[2] : top, left: n.length > 3 ? n[3] : right };
 }
 
 // A "N%" size/position leaf. Percent has no CSS→Figma string parse (it resolves against the parent at

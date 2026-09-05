@@ -1,13 +1,19 @@
-// The trusted server-side image fetch — the ONE network trust boundary in the write path. The Figma
-// sandbox holds manifest allowedDomains:["none"] and can reach nothing, so agent-authored `flcm.image(url)`
-// fills are inert until this module fetches, validates, and downscales the bytes; the executor then injects
-// them back into the sandbox (globalThis.__flcmImageBytes) and re-runs the code (see index.ts). Because the
-// model picks the url, every guard here defends against a hostile one: SSRF ranges, byte-size, payload type.
+// The trusted server-side image byte sources — the trust boundary in the write path. The Figma
+// sandbox holds manifest allowedDomains:["none"] and can reach nothing, so agent-authored `flcm.image(src)`
+// fills are inert until this module loads, validates, and downscales the bytes; the bridge answers the
+// sandbox's mid-run IMAGES_REQUEST with them (see image-requests.ts). Two sources feed one processing
+// pipeline: an http(s) url through the guarded fetch (SSRF ranges, byte cap, redirect re-guarding), or a
+// LOCAL FILE PATH through the asset-root guard (readLocalImage). Because the model — via the untrusted
+// plugin — picks the source, every guard here defends against a hostile one; "read a file the plugin
+// names" is an arbitrary-file-read primitive unless the root check holds.
 //
 // Ported in spirit from production figma-mcp (downloadAndProcessImage/jimp), but the guard is net-new:
 // figma-mcp only ever fetches from Figma's own trusted CDN, so it has no SSRF/type defense to port. jimp is
 // the shared piece — the modular @jimp/* build, downscaling to Figma's 4096px createImage cap.
 import { lookup } from "node:dns/promises";
+import { realpath, stat, open } from "node:fs/promises";
+import { constants as fsConstants } from "node:fs";
+import { resolve as resolvePath, sep as pathSep } from "node:path";
 import { Agent, fetch, type Response } from "undici";
 import { createJimp } from "@jimp/core";
 import png from "@jimp/js-png";
@@ -265,5 +271,131 @@ export async function fetchAndProcessImage(url: string): Promise<string> {
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
     throw new Error(`flcm.image could not load ${JSON.stringify(url)}: ${reason}`);
+  }
+}
+
+// The scheme split for flcm.image sources, mirroring CSS url(): an http(s) url is fetched, anything else
+// is a local file path served from the asset root. One classifier, imported by both the source dispatch
+// (plugin-bridge/index.ts) and the cache-skip rule (image-requests.ts), so they can't disagree.
+export function isLocalImageSource(source: string): boolean {
+  return !/^https?:\/\//i.test(source);
+}
+
+// Open flags for a contained read. O_NOFOLLOW is the TOCTOU guard: we open the path realpath ALREADY
+// resolved, so its final component is a real file by construction — if it has become a symlink between
+// the check and the open, someone swapped it under us and the open fails instead of following the swap
+// out of the root. O_NONBLOCK keeps a fifo/device swapped into the path from parking the open forever
+// (the fstat below then rejects it). Both are POSIX-only constants; on Windows they read as undefined
+// and fall back to 0, where the handle checks below remain the guard.
+const CONTAINED_OPEN_FLAGS =
+  fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0);
+
+/**
+ * Build the local-file byte source for one asset root — the filesystem twin of fetchAndProcessImage,
+ * feeding the same processing pipeline. One reader per server (see plugin-bridge/index.ts).
+ *
+ * THE ROOT IS THE CONTROL, not the magic-byte check (plenty of real images hold secrets, and the bytes
+ * land in a cloud-synced Figma document). The path arrives from the untrusted plugin, so this is an
+ * arbitrary-file-read primitive unless contained: resolve against the root, then verify the resolved
+ * REALPATH sits inside the root's realpath — post-resolution, which is what defeats both `../` traversal
+ * and a symlink pointing out of the root (a pre-resolution string check catches neither). The reverse
+ * channel's EXECUTE_CODE payload gate makes every path attributable to an approved run — defense in
+ * depth, not a substitute for this check.
+ *
+ * Negative space: a HARDLINK inside the root to a file outside it passes containment, deliberately.
+ * realpath structurally cannot see through one — there is no link to resolve, just a second name for
+ * the same inode, and both names are equally real. It grants no capability either, because minting one
+ * needs write access inside the asset root, and anyone holding that could copy the file in instead. Do
+ * not "fix" it with an inode or link-count check: it buys nothing and would refuse the ordinary
+ * hardlinked assets that build tools produce.
+ *
+ * The root is canonicalized ONCE and pinned for the process: re-resolving it per request would let a
+ * root that is a symlink be retargeted mid-session, silently moving the authorization boundary the
+ * operator chose at startup.
+ *
+ * Errors name the root explicitly: "./assets/logo.png" is ambiguous when the server's cwd differs from
+ * the repo the agent is working in.
+ */
+export function createLocalImageReader(assetRoot: string): (source: string) => Promise<string> {
+  // Cached only on success, so a root that doesn't exist yet at first use isn't a permanent verdict.
+  let pinnedRoot: Promise<string> | null = null;
+  const canonicalRoot = (): Promise<string> => {
+    if (!pinnedRoot) {
+      pinnedRoot = (async () => {
+        const rootReal = await realpath(assetRoot);
+        if (!(await stat(rootReal)).isDirectory()) {
+          throw new Error(`the asset root (${assetRoot}) is not a directory`);
+        }
+        return rootReal;
+      })().catch((err: unknown) => {
+        pinnedRoot = null;
+        throw err;
+      });
+    }
+    return pinnedRoot;
+  };
+
+  return async function readLocalImage(source: string): Promise<string> {
+    try {
+      const rootReal = await canonicalRoot();
+      let fileReal: string;
+      try {
+        fileReal = await realpath(resolvePath(rootReal, source));
+      } catch (err) {
+        // Only ENOENT/ENOTDIR genuinely mean "no such file" — reporting a permission or
+        // name-too-long failure as a missing file sends the reader hunting for the wrong problem.
+        const code = (err as NodeJS.ErrnoException).code;
+        if (code === "ENOENT" || code === "ENOTDIR") {
+          throw new Error(`no such file under the asset root (${assetRoot})`);
+        }
+        throw new Error(`could not resolve that path under the asset root (${assetRoot}): ${code}`);
+      }
+      if (fileReal !== rootReal && !fileReal.startsWith(rootReal + pathSep)) {
+        throw new Error(
+          `the path resolves outside the asset root (${assetRoot}) — only files under that root can be ` +
+            `placed. Start the server with --asset-root pointed at your project if the root is wrong.`,
+        );
+      }
+      return await processImageBytes(await readContainedFile(fileReal, assetRoot));
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      throw new Error(`flcm.image could not load ${JSON.stringify(source)}: ${reason}`);
+    }
+  };
+}
+
+/**
+ * Read an already-contained path through ONE handle: open, verify what we actually opened, then read
+ * only from that descriptor. Checking a path and then re-opening it by name is three separate races —
+ * the file can become a symlink, a fifo, or a different (larger) file between them — and every one of
+ * those resolves the name again. A descriptor cannot be swapped, so the object we vet is the object
+ * we read, and the byte cap binds the read itself instead of a size the file no longer has.
+ *
+ * Negative space: a directory component swapped for a symlink between realpath and open is NOT closed
+ * here. Doing so needs openat/RESOLVE_BENEATH, which Node core does not expose portably, and it takes
+ * a local writer racing us inside the root — a strictly smaller threat than the plugin-named path this
+ * whole module exists to contain.
+ */
+async function readContainedFile(fileReal: string, assetRoot: string): Promise<Uint8Array> {
+  const handle = await open(fileReal, CONTAINED_OPEN_FLAGS);
+  try {
+    // fstat, not stat: this describes the OPEN object, so a fifo/device/directory swapped into the
+    // path after the containment check is refused here rather than read or blocked on.
+    if (!(await handle.stat()).isFile()) {
+      throw new Error(`the path is not a file (asset root: ${assetRoot})`);
+    }
+    // One cap-sized buffer, filled from the descriptor: a file that grew after the check can't make
+    // us allocate past the cap, and the (cap + 1)th byte is what proves it was over.
+    const buffer = Buffer.allocUnsafe(MAX_BYTES + 1);
+    let total = 0;
+    while (total < buffer.length) {
+      const { bytesRead } = await handle.read(buffer, total, buffer.length - total, null);
+      if (bytesRead === 0) break;
+      total += bytesRead;
+    }
+    if (total > MAX_BYTES) throw new Error(`file is over the ${MAX_BYTES}-byte cap`);
+    return buffer.subarray(0, total);
+  } finally {
+    await handle.close();
   }
 }

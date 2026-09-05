@@ -16,22 +16,32 @@ import { buildSandboxPreamble } from "../src/preamble/index.mjs";
 const fileArg = process.argv[2];
 if (!fileArg) { console.error("usage: node harness/dogfood.mjs <file.js>"); process.exit(2); }
 
-// 1. Generate SANDBOX_PREAMBLE through the one seam (same string the plugin ships) — the generator
-//    owns fragment layout, order, and the esbuild flatten; this consumer just asks for the string.
+// 1. Generate the std-lib through the one seam (same string the server ships) — the generator owns
+//    fragment layout, order, and the esbuild flatten; this consumer just asks for the factory.
 const SANDBOX_PREAMBLE = await buildSandboxPreamble();
 
 // 2. Mock figma + capture console (mirrors code.ts's console capture for parity).
 createFigmaMock();
+// The host capability object (FlcmHost, preamble/host.ts): the live sandbox awaits the server over
+// the WS bridge for images and reads the run's real CANCEL state; the harness answers instantly with
+// stand-in bytes and never cancels, so scenarios run headless.
+const host = {
+  requestImages: async (urls) =>
+    Object.fromEntries(urls.map((u) => [u, Buffer.from("harness-image-bytes").toString("base64")])),
+  isRunCancelled: () => false,
+};
 const userCode = readFileSync(resolve(process.cwd(), fileArg), "utf8");
 const log = [];
 const real = { ...console };
 for (const lvl of ["log", "info", "warn", "error"]) console[lvl] = (...a) => log.push(`[${lvl}] ${a.join(" ")}`);
 
-// 3. Run in the same async-IIFE shape as executeCode in code.ts (indirect eval -> global scope, so
-//    the preamble's `figma`/`console`/`Promise` references resolve to globals).
+// 3. Run in the same two-eval shape as executeCode in code.ts: call the std-lib factory with the
+//    host, then hand the resulting `flcm` to the scenario. Indirect eval so the preamble's
+//    `figma`/`console`/`Promise` references resolve to globals.
 let result, error = null;
 try {
-  result = await (0, eval)("(async function(){ " + SANDBOX_PREAMBLE + "\n;\n" + userCode + "\n })()");
+  const flcm = (0, eval)(SANDBOX_PREAMBLE)(host);
+  result = await (0, eval)("(async function(flcm){ " + userCode + "\n })")(flcm);
 } catch (e) {
   error = e && e.stack ? e.stack : String(e);
 } finally {

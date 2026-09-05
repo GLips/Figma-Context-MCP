@@ -1,9 +1,11 @@
 # `preamble/` — the `flcm` std-lib
 
 This directory is the sandbox std-lib that rides inside every `execute_code` call. Each fragment is a
-**real typed ES module**; `index.mjs`'s `buildSandboxPreamble()` esbuild-bundles them into one string,
-`SANDBOX_PREAMBLE`, which `code.ts` prepends to the agent's code inside the wrapping
-`(async function(){ … })()`.
+**real typed ES module**; `index.mjs`'s `buildSandboxPreamble()` esbuild-bundles them into one string
+and wraps it as a **factory expression** — `(function (__flcmHost) { … return flcm })`. The **server**
+holds that string (ADR-0010: the plugin no longer bundles the DSL) and sends it with every
+`EXECUTE_CODE`; `code.ts` evaluates it, calls it with the run's `FlcmHost`, and hands the resulting
+`flcm` to the agent's code as a parameter.
 
 ## Two layers: typed modules at authoring time, one IIFE at runtime
 
@@ -13,17 +15,17 @@ The fragments are authored as ordinary ES modules — they `import` helpers from
 
 The sandbox itself is QuickJS with **no module system**. So `buildSandboxPreamble()` runs esbuild to
 bundle `runtime.ts` at **`format: 'iife'` + `globalName: 'flcm'`**. That wraps the whole module graph
-in one IIFE that assigns a single `flcm` global. The agent calls `flcm.frame(...)`,
-`await flcm.render(...)`, etc.
+in one IIFE assigning a single `flcm` var, which the surrounding factory returns. The agent calls
+`flcm.frame(...)`, `await flcm.render(...)`, etc.
 
 ### Why this gives clean, prefix-free internals
 
 Only the names `runtime.ts` re-exports become members of the `flcm` global. Every other
 declaration — `toFigmaPaint`, `buildFrame`, `parseFill`, the boundary parsers — is reachable from those
 roots (so esbuild keeps it in the bundle) but stays **closure-private inside the IIFE**. It is invisible
-to, and uncollidable with, the agent's code that runs in the same eval scope. So **internal helpers use
-plain names with no collision-safety prefix** — the closure is the namespace a module system would
-otherwise provide.
+to, and uncollidable with, the agent's code — which sees nothing of this bundle but the one `flcm`
+object handed to it. So **internal helpers use plain names with no collision-safety prefix** — the
+closure is the namespace a module system would otherwise provide.
 
 > This replaced an earlier `format: 'esm'` bundle that emitted bare top-level declarations sharing one
 > flat scope with the agent's code, which is why internals used to carry a `__cm*` prefix. The only
@@ -51,7 +53,7 @@ boundary) ← `flcm` (sugar) → `bridge` (typed walk).
 | `effects.ts` | typed effects: `shadow`/`layerBlurFromCssPx`/`backgroundBlurFromCssPx` constructors (blur×2 lives in the `*FromCssPx` names), `toFigmaEffects` mapper. No strings | `ir` |
 | `css.ts` | **THE string boundary — the only module that knows CSS syntax exists.** Color (#hex/rgba), gradient-string, and effect-string parsers; `parseFill`/`parseCssEffects`; `length`/`lineHeight`/`letterSpacing` coercions. Emits the typed currency | `ir`, `paint`, `effects` |
 | `fonts.ts` | `loadFontsForTree()` → a `FontMap` render threads on the ctx (no module state); `listAvailableFontsAsync` nearest-style snap; `resolveFont` | `ir` |
-| `bridge.ts` | the typed render walk: `WriteNode` → live nodes (layout/sizing/fill-intent/cover/position/paint/effects/text); `BUILDERS` table; the one terse→plugin enum map set; `handle`. **Consumes the typed currency only — never imports `css`** | `ir`, `paint`, `effects`, `fonts` |
+| `bridge.ts` | the ONE mutation authority: exported appliers (paint/container/sizing/fill-intent/cover/position/constraints/percents) that every mutating verb drives against a live node — the render walk (`WriteNode` → live nodes, `BUILDERS` table) is its create-side caller, edit resolves targets into the same appliers, never a parallel path; the one terse→plugin enum map set; `handle`. **Consumes the typed currency only — never imports `css`** | `ir`, `paint`, `effects`, `fonts` |
 | `flcm.ts` | the public namespace: typed-Props constructors (terse→`WriteNode`), `render`, `gradient`/`effects` sugar (build the typed currency **directly**, no string round-trip) | `ir`, `paint`, `effects`, `css`, `fonts`, `bridge` |
 | `runtime.ts` | bundle entry — re-exports the public verbs (and only those) | `flcm` |
 
@@ -66,9 +68,9 @@ CSS strings exist for read↔write unity with figma-mcp's `SimplifiedNode` (an a
 CSS-string-bearing JSON and writes it back), but that unity only matters at the **agent I/O boundary**.
 So CSS-string parsing is quarantined to `css.ts` — the one module that knows the syntax. Authors write
 CSS-shaped leaves (a `#hex` color, a `linear-gradient(...)` string, a `"32px"` metric); `css.ts` parses
-each **once, at construction**, into the typed currency. A future `get` result (a `SimplifiedNode` of
-CSS strings) will normalize through the same boundary into a typed `WriteNode` before render — so the
-port promise is "SimplifiedNode normalizes mechanically into typed WriteNode," not "render it
+each **once, at construction**, into the typed currency. A future `get`-result port would rebuild
+through the constructors (the one validated compile — render refuses IR they didn't mint), so the
+port promise is "SimplifiedNode maps mechanically onto constructor calls," not "render it
 string-for-string." (See `docs/adr/0001-…`.)
 
 ## Phase-1 scope (this build)

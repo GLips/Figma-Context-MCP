@@ -29,18 +29,22 @@ export function isPendingApproval(reply: unknown): boolean {
 }
 
 // The ceiling on how long one gated call waits for the human. The wait and the execution that follows it
-// share ONE tool call's budget, so the worst case — the last poll starting just under the ceiling, then a
-// run that burns the bridge's full 15s per-request timeout — must still land inside the MCP client's 60s
-// default. Past the ceiling the caller falls back to the retryable "not approved yet" text, which is
-// still the right answer for a human who stepped away.
+// share ONE tool call's budget against the MCP client's 60s default. Since protocol 2, execution is not
+// a flat 15s worst case: the inactivity deadline re-arms on run traffic, and the true cap is the bridge's
+// 45s run ceiling (bridge.ts DEFAULT_RUN_CEILING_MS — keep the two in sync) — so this wait plus a
+// worst-case run cannot BOTH fit inside 60s, and that is accepted deliberately: a long wait means the
+// human just clicked Allow on a fresh session, and the first run after Allow is interactive and short; a
+// run that needs its full ceiling happens on an already-approved session where the wait is zero. Past
+// the ceiling the caller falls back to the retryable "not approved yet" text, which is still the right
+// answer for a human who stepped away.
 //
-// One case exceeds that arithmetic and is accepted rather than designed around: a poll that lands on a
-// plugin which has just reconnected holds on the bridge's compatibility gate (bridge.ts), and that hold
-// ends only when the new connection's GET_VERSION answers or times out — so a plugin that connects and
-// then goes silent can add a second 15s, putting the worst case past 60s. It needs a mid-wait reconnect
-// to a plugin that speaks WS but never answers the handshake; the common reconnect answers in a
-// round-trip and costs nothing. Widening the ceiling's guarantee to cover it would mean bounding the
-// hold against the remaining budget, which is not worth the machinery for this shape.
+// A second case exceeds the arithmetic and is likewise accepted rather than designed around: a poll that
+// lands on a plugin which has just reconnected holds on the bridge's compatibility gate (bridge.ts), and
+// that hold ends only when the new connection's GET_VERSION answers or times out — so a plugin that
+// connects and then goes silent can add a full inactivity timeout. It needs a mid-wait reconnect to a
+// plugin that speaks WS but never answers the handshake; the common reconnect answers in a round-trip
+// and costs nothing. Widening the ceiling's guarantee to cover it would mean bounding the hold against
+// the remaining budget, which is not worth the machinery for this shape.
 export const APPROVAL_WAIT_MS = 40_000;
 
 // How often to re-offer the request while waiting. Fast enough that clicking Allow feels immediate,
@@ -74,6 +78,12 @@ interface ApprovalWaitDeps {
  * PENDING_APPROVAL — which proves a plugin was there and the session merely lacks consent — do errors
  * become rideable. If the wait then ends still broken, the transport error is rethrown rather than
  * swallowed into a consent message: "not approved yet" would be a lie about a plugin that went away.
+ *
+ * This deliberately does NOT wait for a plugin to (re)connect. A restart leaves a window where the
+ * relay is up and the plugin has not yet redialed, and an earlier cut of this file parked here for it;
+ * that was the wrong layer. Consent is a human-scale wait, transport is a machine-scale one, and the
+ * disconnect is answered where the caller can say something true about it instead — see
+ * code-mode-tools.ts's pluginUnavailableReply.
  */
 export async function requestUntilApproved(
   send: () => Promise<unknown>,

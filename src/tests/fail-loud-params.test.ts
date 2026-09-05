@@ -16,6 +16,8 @@ function connectedServer(request = vi.fn().mockResolvedValue({ image: "iVBORw0KG
     request,
     getPairingCode: () => "1234",
     touchApproval: () => {},
+    // A plugin is on the wire in these tests, so the disconnect reply never fires.
+    isPluginConnected: () => true,
   } as unknown as PluginBridge;
   const runtime: PluginBridgeRuntime = {
     bridge,

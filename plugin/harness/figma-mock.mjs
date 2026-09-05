@@ -21,7 +21,19 @@ const COPY_FIELDS = ["name", "layoutMode", "itemSpacing", "paddingTop", "padding
   "paddingLeft", "primaryAxisAlignItems", "counterAxisAlignItems", "primaryAxisSizingMode",
   "counterAxisSizingMode", "layoutGrow", "layoutAlign", "layoutPositioning", "constraints", "strokeWeight",
   "cornerRadius", "opacity", "visible", "rotation", "characters", "fontSize", "textAutoResize",
-  "_fixedW", "_fixedH"];
+  // x/y ride along because a live clone() preserves position: without them the mock can't show
+  // that flcm.clone with no parent lands the copy exactly ON TOP of the original in a free-form
+  // parent — real behavior that would otherwise be invisible here.
+  "x", "y", "_fixedW", "_fixedH"];
+
+// The node types that hold children (Figma's ChildrenMixin). See the constructor: only these get
+// appendChild/insertChild, because a leaf node genuinely has neither.
+const CONTAINER_TYPES = ["PAGE", "FRAME", "GROUP", "COMPONENT", "COMPONENT_SET", "INSTANCE", "SECTION"];
+
+// Every per-range styling bucket the setRange* recorders write — the set a `characters` write clears.
+const RANGE_BUCKETS = ["_rangeFonts", "_rangeSizes", "_rangeFills", "_rangeLineHeights",
+  "_rangeLetterSpacings", "_rangeDecorations", "_rangeHyperlinks", "_rangeCases",
+  "_rangeParagraphSpacings", "_rangeParagraphIndents", "_rangeListSpacings"];
 
 class Node {
   constructor(type) {
@@ -47,6 +59,9 @@ class Node {
     this.strokeWeight = 1;
     this.cornerRadius = 0;
     this.opacity = 1;
+    // Every live SceneNode (bar SLICE) carries a blendMode; the appliers' `"blendMode" in node`
+    // guards key off its presence, so the mock must declare it like the live API does.
+    this.blendMode = "NORMAL";
     this.visible = true;
     this.effects = [];
     this.rotation = 0;
@@ -67,12 +82,24 @@ class Node {
     this.textAutoResize = "WIDTH_AND_HEIGHT";
     this.textAlignHorizontal = "LEFT";
     this.textAlignVertical = "TOP";
+    this.textCase = "ORIGINAL";
+    this.paragraphSpacing = 0;
+    this.paragraphIndent = 0;
+    this.listSpacing = 0;
     // geometry (explicit, from resize). Shapes get an intrinsic default size like the live API.
     this._fixedW = null;
     this._fixedH = null;
     if (type === "RECTANGLE" || type === "ELLIPSE" || type === "POLYGON" || type === "STAR") { this._fixedW = 100; this._fixedH = 100; }
     if (type === "LINE") { this._fixedW = 100; this._fixedH = 0; }
     if (type === "VECTOR") { this._fixedW = 24; this._fixedH = 24; this.vectorPaths = []; }
+    // Only a ChildrenMixin node carries appendChild/insertChild — a live RectangleNode has
+    // neither, and the structural verbs' container gate keys on exactly that, so a mock that
+    // handed them to every node would let "append into a rect" pass here and fail in Figma.
+    // Bound per instance (not on the prototype) because that presence IS the modelled fact.
+    if (CONTAINER_TYPES.indexOf(type) !== -1) {
+      this.appendChild = (child) => this._appendChild(child);
+      this.insertChild = (index, child) => this._insertChild(index, child);
+    }
     this._plugin = {};
     // prototyping reactions — the mock can't run present mode, but it STORES them so a scenario can
     // assert the right trigger/action/destination were wired (setReactionsAsync replaces, like live).
@@ -85,13 +112,15 @@ class Node {
 
   get _isAuto() { return this.layoutMode === "HORIZONTAL" || this.layoutMode === "VERTICAL"; }
 
-  appendChild(child) {
+  _appendChild(child) {
     if (child.parent) child.parent.children = child.parent.children.filter((c) => c !== child);
     child.parent = this;
     this.children.push(child);
   }
-  insertChild(index, child) {
-    // Match live Figma exactly (GROUNDED): when `child` is already in THIS parent, `index` is
+  _insertChild(index, child) {
+    // [directional — on the live checklist]: neither the typings nor the published docs define the
+    // same-parent case, so this models the behavior Figma's UI shows rather than a cited contract.
+    // When `child` is already in THIS parent, `index` is
     // interpreted against the PRE-removal array — Figma compensates for the node's own slot, so
     // insertChild(3, B@1) on [A,B,C,D] yields [A,C,B,D] (lands at 2), and insertChild(2, B@1) is a
     // no-op. A naive remove-then-splice-at-index (what this used to do) overshoots reorders by one and
@@ -101,6 +130,17 @@ class Node {
     child.parent = this;
     const idx = had !== -1 && had < index ? index - 1 : index;
     this.children.splice(idx, 0, child);
+  }
+  // Duplicate this node and its subtree, parented under the current page — [verified,
+  // plugin-typings 1.133: "Duplicates the node. By default, the duplicate will be parented under
+  // figma.currentPage"], which is why flcm.clone always places the copy explicitly afterwards.
+  // pluginData IS copied here: whether live clone() carries it is [directional] (the typings
+  // don't say), and modelling the carrying case is what makes the flcm/key strip testable — if
+  // live turns out not to copy, the strip is simply a no-op and the same test holds.
+  clone() {
+    const copy = cloneSubtree(this);
+    figma.currentPage.appendChild(copy);
+    return copy;
   }
   resize(w, h) { this._fixedW = w; this._fixedH = h; }
   remove() {
@@ -117,6 +157,25 @@ class Node {
   // A range whose font isn't first loaded throws live — the preamble preloads every run font, so we don't
   // model that rejection here; resolveFontStrict is what guards the unloaded case in the std-lib.
   _range(bucket, start, end, value) { (this[bucket] || (this[bucket] = [])).push({ start, end, value }); }
+
+  // A `characters` write collapses the node to its LEADING run's style — VERIFIED live
+  // 2026-08-08, twice: a full replacement re-uniforms (one distinct style across every char, not
+  // figma.mixed), and the disambiguating bold-FIRST-span repro came back whole-node Bold — the
+  // first run's style wins, not the base. Only the FONT collapse is live-verified: the other
+  // range buckets are cleared without promoting their char-0 values (unverified — extend the
+  // collapse if a scenario ever keys on post-write size/fill). Range styling exists after a
+  // write only if the same edit re-applies runs, which is the bridge's order
+  // (buildText/applyTextProps: characters, then setRange*).
+  get characters() { return this._characters; }
+  set characters(v) {
+    if (this.type === "TEXT" && (this._rangeFonts || []).length && (this._characters || "").length) {
+      let lead = this._fontName;
+      for (const r of this._rangeFonts) if (r.start <= 0 && 0 < r.end) lead = r.value; // last range covering char 0 wins, like getRangeAllFontNames
+      this._fontName = lead;
+    }
+    this._characters = v;
+    for (const b of RANGE_BUCKETS) this[b] = [];
+  }
   setRangeFontName(start, end, value) { this._range("_rangeFonts", start, end, value); }
   setRangeFontSize(start, end, value) { this._range("_rangeSizes", start, end, value); }
   setRangeFills(start, end, value) { this._range("_rangeFills", start, end, value); }
@@ -124,6 +183,39 @@ class Node {
   setRangeLetterSpacing(start, end, value) { this._range("_rangeLetterSpacings", start, end, value); }
   setRangeTextDecoration(start, end, value) { this._range("_rangeDecorations", start, end, value); }
   setRangeHyperlink(start, end, value) { this._range("_rangeHyperlinks", start, end, value); }
+  setRangeTextCase(start, end, value) { this._range("_rangeCases", start, end, value); }
+  setRangeParagraphSpacing(start, end, value) { this._range("_rangeParagraphSpacings", start, end, value); }
+  setRangeParagraphIndent(start, end, value) { this._range("_rangeParagraphIndents", start, end, value); }
+  setRangeListSpacing(start, end, value) { this._range("_rangeListSpacings", start, end, value); }
+
+  // Live Figma reports figma.mixed when the characters don't all share one font — recorded
+  // setRangeFontName ranges that diverge from the base make this node mixed the same way. Writing
+  // fontName is a whole-node font reset live (every range takes the new font), so the setter wipes
+  // the per-range variation — and so does a `characters` write (see the characters setter above).
+  get fontName() {
+    if (this.type === "TEXT" && (this._rangeFonts || []).length && this.characters.length) {
+      const fonts = this.getRangeAllFontNames(0, this.characters.length);
+      if (fonts.length > 1) return MIXED;
+      if (fonts.length === 1) return fonts[0];
+    }
+    return this._fontName;
+  }
+  set fontName(v) { this._fontName = v; this._rangeFonts = []; }
+
+  // Every distinct font over [start, end) — resolved from the recorded ranges the same way
+  // getStyledTextSegments does (last range covering the char wins, base fontName otherwise).
+  // Edit's TEXT preload walks this when fontName is figma.mixed.
+  getRangeAllFontNames(start, end) {
+    const names = [];
+    const seen = new Set();
+    for (let i = start; i < end; i++) {
+      let f = this._fontName;
+      for (const r of this._rangeFonts || []) if (r.start <= i && i < r.end) f = r.value;
+      const key = f.family + "|" + f.style;
+      if (!seen.has(key)) { seen.add(key); names.push(f); }
+    }
+    return names;
+  }
 
   // --- read-path surface (what sceneNodeToSnapshot consumes) ---
 
@@ -169,13 +261,17 @@ class Node {
       return v;
     };
     const styleAt = (i) => {
-      const fontName = at("_rangeFonts", i, this.fontName);
+      const fontName = at("_rangeFonts", i, this._fontName);
       const seg = {
         fontName,
         fontWeight: weightOfStyle(fontName.style),
         fontStyle: /\bItalic\b/.test(fontName.style) ? "ITALIC" : "REGULAR",
         fontSize: at("_rangeSizes", i, this.fontSize),
         textDecoration: at("_rangeDecorations", i, this.textDecoration),
+        textCase: at("_rangeCases", i, this.textCase),
+        paragraphSpacing: at("_rangeParagraphSpacings", i, this.paragraphSpacing),
+        paragraphIndent: at("_rangeParagraphIndents", i, this.paragraphIndent),
+        listSpacing: at("_rangeListSpacings", i, this.listSpacing),
         fills: at("_rangeFills", i, this.fills),
       };
       const lineHeight = at("_rangeLineHeights", i, this.lineHeight);
@@ -305,6 +401,25 @@ class Node {
   get overrides() { return this._overrides || []; }
 }
 
+// A free-standing duplicate of a subtree (Node.clone): fresh ids, its own copies of the mutable
+// bags, and its own pluginData — nothing aliases the original. Distinct from cloneInto below,
+// which mints INSTANCE sublayers under the composite-id scheme.
+function cloneSubtree(src) {
+  const n = new Node(src.type);
+  for (const k of COPY_FIELDS) n[k] = src[k];
+  n.fills = clonePaints(src.fills);
+  n.strokes = clonePaints(src.strokes);
+  n.effects = clonePaints(src.effects);
+  n.constraints = { ...src.constraints };
+  n._fontName = JSON.parse(JSON.stringify(src._fontName));
+  n._rangeFonts = JSON.parse(JSON.stringify(src._rangeFonts || []));
+  n._plugin = { ...src._plugin };
+  // A copied INSTANCE keeps pointing at the same main component, as live clone() does.
+  n.mainComponent = src.mainComponent;
+  for (const c of src.children) { const cc = cloneSubtree(c); cc.parent = n; n.children.push(cc); }
+  return n;
+}
+
 // Clone a main subtree into instance sublayers. The root gets a fresh id; descendants get the
 // deterministic composite id I<instId>;<mainChildId> — exactly the format the live API uses and the
 // std-lib's override() builds. Every cloned node is registered so getNodeByIdAsync resolves it.
@@ -317,7 +432,8 @@ function cloneInto(mainNode, instId, isRoot) {
   n.fills = clonePaints(mainNode.fills);
   n.strokes = clonePaints(mainNode.strokes);
   n.effects = clonePaints(mainNode.effects);
-  n.fontName = JSON.parse(JSON.stringify(mainNode.fontName));
+  n.fontName = JSON.parse(JSON.stringify(mainNode._fontName));
+  n._rangeFonts = JSON.parse(JSON.stringify(mainNode._rangeFonts || []));
   n.children = [];
   for (const c of mainNode.children) { const cc = cloneInto(c, instId, false); cc.parent = n; n.children.push(cc); }
   return n;
@@ -341,12 +457,28 @@ export function createFigmaMock() {
     mixed: MIXED,
     currentPage: page,
     root: { children: [page], setPluginData: (k, v) => page.setPluginData(k, v), getPluginData: (k) => page.getPluginData(k) },
+    // Undo API: RECORDED, not emulated — real history semantics are the live probe's to ground
+    // (scripts/probe-commit-undo.mjs). Tests assert the SEQUENCE of calls the verb scaffold makes
+    // (entry seal / success commit / failure commit+trigger), never that anything reverts.
+    undoLog: [],
+    commitUndo() { this.undoLog.push("commit"); },
+    triggerUndo() { this.undoLog.push("trigger"); },
     createFrame() { return new Node("FRAME"); },
-    createText() { const t = new Node("TEXT"); t.fontName = { family: "Inter", style: "Regular" }; return t; },
+    // Live createText seeds a default black fill — buildText's present-empty fills clear ("none")
+    // only means something against it.
+    createText() {
+      const t = new Node("TEXT");
+      t.fontName = { family: "Inter", style: "Regular" };
+      t.fills = [{ type: "SOLID", color: { r: 0, g: 0, b: 0 } }];
+      return t;
+    },
     createComponent() { return new Node("COMPONENT"); },
+    createSlice() { return new Node("SLICE"); },
     createRectangle() { return new Node("RECTANGLE"); },
     createEllipse() { return new Node("ELLIPSE"); },
-    createLine() { return new Node("LINE"); },
+    // Live createLine seeds a default black stroke (like createVector below) — model it so a
+    // stroke:"none" line that fails to write the clear shows up stroked here, not falsely bare.
+    createLine() { const l = new Node("LINE"); l.strokes = [{ type: "SOLID", color: { r: 0, g: 0, b: 0 }, opacity: 1 }]; return l; },
     createPolygon() { const p = new Node("POLYGON"); p.pointCount = 3; return p; },
     createStar() { const s = new Node("STAR"); s.pointCount = 5; s.innerRadius = 0.5; return s; },
     // Live Figma seeds a new vector with a default black 1px stroke (createRectangle/Ellipse get none).
@@ -401,7 +533,10 @@ export function createFigmaMock() {
     // The mock models no shared styles — nodes never carry a fill/text/effectStyleId, so the read
     // path's resolver treats every lookup as unresolvable (dropping the slot, like live).
     async getStyleByIdAsync() { return null; },
-    loadFontAsync() { return Promise.resolve(); },
+    // RECORDED like undo: tests assert a font was preloaded before a size write, not that Figma
+    // would have refused without it (that rejection is live behavior, grounded by probe).
+    fontLoads: [],
+    loadFontAsync(font) { this.fontLoads.push(font); return Promise.resolve(); },
     // The bundled-Inter weight ladder the real API exposes, so fonts.ts's nearest-style snap has a
     // realistic family to match against (numeric weights resolve to Thin..Black, not just 4 buckets).
     // Both the upright and italic ladders are exposed so italic resolution (author `fontStyle`,

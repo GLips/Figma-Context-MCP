@@ -9,8 +9,8 @@
 // matters at the AGENT I/O BOUNDARY; internally the string form forced a number→string→number round-trip
 // on the only path that ships today (authoring). So strings are now quarantined to css.ts (the input
 // boundary), and the currency here is typed. The read-port promise is re-framed accordingly: a future
-// `get` result (a SimplifiedNode of CSS strings) NORMALIZES through css.ts into this typed WriteNode
-// before render — mechanically, in one place — rather than being rendered string-for-string.
+// `get` result (a SimplifiedNode of CSS strings) REBUILDS through the flcm constructors — the one
+// validated compile; render refuses IR they didn't mint — rather than being rendered string-for-string.
 //
 // Phase-1 scope for the WriteNode currency: only create/render fields. Read-compression refs
 // (styles/template tables), components, prototype, variables, images, and rich text are deliberately absent.
@@ -28,6 +28,22 @@ import type { SimplifiedDimension, SimplifiedLayout, SimplifiedNode } from "@fra
 // `Record<WriteType, …>` (TS enforces a builder per type) and render() rejects anything outside it with
 // a specific error rather than letting a confusing plugin-API throw surface.
 export type WriteType = "FRAME" | "TEXT" | "RECTANGLE" | "ELLIPSE" | "LINE" | "VECTOR";
+
+// Which schema word GROUPS compose each createable type's edit surface — the same compositions as
+// the per-verb create key sets (flcm.ts FRAME_KEYS = shared+size+appearance+frame, etc.), named
+// once so the two consumers can't drift: edit.ts builds the runtime legality gate from it (via
+// KNOWN_KEYS, intersected with the edit surface) and reference.ts renders the per-type doc lists
+// from it (via schema.ts's FIELD_GROUPS). Both index their group tables with these literals, so a
+// misspelled group name is a compile error on each side. Lives here, not in flcm.ts or schema.ts,
+// because ir.ts is the one module both sides already import type-safely with no zod and no figma.
+export const EDIT_TYPE_WORD_GROUPS = {
+  FRAME: ["shared", "size", "appearance", "frame"],
+  TEXT: ["shared", "size", "text", "textContent"],
+  RECTANGLE: ["shared", "size", "appearance"],
+  ELLIPSE: ["shared", "size", "appearance"],
+  LINE: ["shared", "line"],
+  VECTOR: ["shared", "size", "path"],
+} as const satisfies Record<WriteType, readonly string[]>;
 
 export interface Rgb { r: number; g: number; b: number }
 export interface Rgba { r: number; g: number; b: number; a: number }
@@ -48,7 +64,22 @@ export interface GradientSpec { kind: "gradient"; type: GradientType; transform:
 // and injected. `placeholder` records stand-in-vs-real; the bridge persists it on the node (pluginData) so
 // a later read can tell them apart — the one content case whose semantics don't recover from geometry. ----
 export type ImageScaleMode = "FILL" | "FIT" | "CROP" | "TILE";
-export interface ImageSpec { kind: "image"; url: string; scaleMode: ImageScaleMode; placeholder: boolean }
+export interface ImageUrlSpec { kind: "image"; url: string; scaleMode: ImageScaleMode; placeholder: boolean }
+// ---- The OTHER image source: a paint whose bytes are already in the document, named by the
+// imageHash a read shape carries (`{ type: "IMAGE", imageRef }`). Nothing needs fetching — in-plugin a
+// paint can reference an existing hash directly — which is what lets a `get` result rebuild an image
+// fill with no server round trip and no url the agent never had. The two forms are separate interfaces,
+// not one shape with two optional sources, so "which source is this" is answered by the type
+// (`"url" in spec`) and a byte collector cannot silently include a hash-backed paint. ----
+export interface ImageHashSpec {
+  kind: "image";
+  hash: string;
+  scaleMode: ImageScaleMode;
+  // TILE's repeat scale, carried only because the read shape does — a tile reproduced at natural size
+  // is a visible divergence. Absent for every other scale mode.
+  scalingFactor?: number;
+}
+export type ImageSpec = ImageUrlSpec | ImageHashSpec;
 export type PaintSpec = SolidSpec | GradientSpec | ImageSpec;
 
 // ---- Author input shapes for a fill/stroke leaf. An author passes a CSS color/gradient string, the
@@ -56,7 +87,15 @@ export type PaintSpec = SolidSpec | GradientSpec | ImageSpec;
 // These live here (the figma-free type hub) rather than in css.ts so the schema module can source them
 // via `import type` without dragging css.ts's parsers — and their Figma-typings — into a typecheck. ----
 export interface WriteGradientFill { type: GradientType; gradient: string }
-export type FillInput = string | WriteGradientFill | PaintSpec;
+// The read shape's image-fill leaf. Named here (rather than sniffed inline at the parser) so the
+// normalizer can type what it hands back; the extra read-only keys it carries (css hints,
+// imageDownloadArguments) are irrelevant to the parse and deliberately unnamed.
+export interface ReadImageFill { type: "IMAGE"; imageRef?: string; gifRef?: string; scaleMode?: string; scalingFactor?: number }
+export type FillLeaf = string | WriteGradientFill | ReadImageFill | PaintSpec;
+// A paint slot takes one leaf, or the read shape's own ARRAY spelling of the same slot — so a `get`
+// result's `fills` feeds straight back in. More than one entry fails loud (compilePaintWord): flcm
+// paints a single fill/stroke and a stack has no authored form.
+export type FillInput = FillLeaf | FillLeaf[];
 
 // ---- Effect currency (Figma-domain). A blur's radius is ALREADY the Figma radius — the ×2 CSS-blur
 // factor (see effects.ts) is applied when the spec is built, never here and never in the bridge, so a
@@ -88,6 +127,11 @@ export type TextAlign = "left" | "center" | "right" | "justify";
 // (clearing an inherited base decoration) — the base omits it; the bridge maps each to Figma's
 // TextDecoration enum (UNDERLINE/STRIKETHROUGH/NONE).
 export type TextDecoration = "underline" | "line-through" | "none";
+// Figma conflates CSS `text-transform` and `font-variant-caps` into ONE `textCase` enum, so the
+// author's two words (`textTransform`, `fontVariant`) resolve to this single Figma-domain field at
+// the css/sugar boundary — the same shape `blend` → `blendMode` takes. Resolving there is what makes
+// "both named at once" unrepresentable in the currency instead of a rule the bridge re-checks.
+export type WriteTextCase = "ORIGINAL" | "UPPER" | "LOWER" | "TITLE" | "SMALL_CAPS" | "SMALL_CAPS_FORCED";
 export interface WriteTextStyle {
   fontFamily?: string;
   fontWeight?: number | string;
@@ -105,6 +149,28 @@ export interface WriteTextStyle {
   // IR field NAMES mirror CSS; only the VALUES stay terse where a terse form exists — here the CSS values
   // (left/center/right/justify) already are the canonical spelling, so name and value both align.
   textAlign?: TextAlign;
+  // Applied per range (setRangeTextCase), so a run carries it too. Requires the font loaded — the
+  // reason a delta naming any text word preloads (fonts.ts textEditReflows).
+  textCase?: WriteTextCase;
+  // Vertical alignment inside the text box. Node-level in Figma — there is no setRangeTextAlignVertical
+  // — so this is a BASE word only; a run delta naming it would have nowhere to land.
+  textAlignVertical?: "top" | "center" | "bottom";
+  // Paragraph metrics in px. Per-range in Figma (setRangeParagraph*/setRangeListSpacing), which is
+  // why the read side surfaces them on run deltas and why runs carry them here.
+  paragraphSpacing?: number;
+  paragraphIndent?: number;
+  listSpacing?: number;
+  // A URL link over the whole node (setRangeHyperlink across every character). A RUN's own link lives
+  // on WriteTextRun.hyperlink instead — there the span already IS the range, so it isn't a style leaf.
+  hyperlink?: string;
+}
+
+// THE presence predicate behind "presence-gated" font writes, surface-wide: whether a style names any
+// of the (family, weight, slant) triple — the trigger for writing a base/range fontName, enriching an
+// edit delta from the live node, and preloading authored triples. One name so the three-field check
+// can't decay into partial copies at its call sites.
+export function namesFontIdentity(style: WriteTextStyle | undefined): style is WriteTextStyle {
+  return !!style && (style.fontFamily !== undefined || style.fontWeight !== undefined || style.fontStyle !== undefined);
 }
 
 // ---- Rich text: a styled span within one text node. A `runs` array on a TEXT WriteNode carries the
@@ -137,8 +203,11 @@ export interface Edges { top: number; right: number; bottom: number; left: numbe
 // (x names an edge on the horizontal axis, y on the vertical); the bridge maps each to Figma's per-axis
 // constraint enum. Governs how a positioned child reflows when its parent resizes — a free-form parent's
 // children and an absolute child of any parent; inert on an in-flow auto-layout child. ----
-export type PinX = "left" | "center" | "right" | "stretch" | "scale";
-export type PinY = "top" | "center" | "bottom" | "stretch" | "scale";
+// "none" is edit's per-axis clearing word: it restores MIN (Figma's default, pinned to the near
+// edge) — the auto-derived constraint create chose isn't stored anywhere live, so the default is
+// the stated inverse, not a recovered intent.
+export type PinX = "left" | "center" | "right" | "stretch" | "scale" | "none";
+export type PinY = "top" | "center" | "bottom" | "stretch" | "scale" | "none";
 
 // ---- Blend mode (author `blend`). The CSS mix-blend-mode names normalize to Figma's BlendMode enum at
 // the css.ts boundary; this is the resolved Figma-domain currency. A SUBSET of Figma's BlendMode — only the
@@ -181,16 +250,20 @@ export interface WriteLayout {
   // `pin`. Honored for a free-form parent's child and an absolute child; inert on an in-flow auto-layout
   // child (which reflows via fill/hug instead).
   pin?: { x?: PinX; y?: PinY };
-  position?: "absolute";
+  // "none" is edit's return-to-flow word (absolute:"none"): the node rejoins its auto-layout
+  // parent's flow (layoutPositioning AUTO). Create only ever sets "absolute".
+  position?: "absolute" | "none";
   // Offset from the parent's top-left corner — the write-side spelling of the read output's left/top,
-  // one vocabulary across read and write. Always both set when position is "absolute" (percent axes seed
-  // 0 here; bridge.resolvePercents overwrites them once the parent's realized size is readable).
+  // one vocabulary across read and write. Presence-preserving per axis: an axis the author didn't name
+  // (or spelled as "N%" — see percentPos) is absent, and the bridge leaves/reads the live coordinate.
   left?: number;
   top?: number;
 }
 
-export interface WriteNode {
-  type: WriteType;
+// A WriteNode's props without the `type` discriminant — the shape edit's partial delta compiles to
+// (a delta nudges an existing node, so it never carries a createable type), and what the prop
+// appliers/walkers consume (they read fields, never dispatch on type).
+export interface WriteProps {
   name?: string;
   // Our pluginData('flcm/key') identity — the one field write ADDS over read. Optional in v1
   // (reconcile deferred): key the nodes you'll address, leave the rest anonymous.
@@ -213,7 +286,8 @@ export interface WriteNode {
   // TEXT only: clamp the node to at most N lines, truncating with an ending ellipsis (textTruncation:
   // "ENDING" + maxLines:N in the bridge). The author boundary (flcm.text) rejects it on a width-hugging
   // text — truncation needs a bounded width to wrap against — so a value here always has a wrap to bite.
-  maxLines?: number;
+  // "none" is edit's removal spelling: truncation DISABLED, maxLines null (create never compiles it).
+  maxLines?: number | "none";
   fills?: PaintSpec[];
   strokes?: PaintSpec[];
   strokeWeight?: number;
@@ -223,9 +297,21 @@ export interface WriteNode {
   borderRadius?: number;
   clip?: boolean;     // clipsContent
   rotation?: number;  // degrees (write-add; read does not surface it)
+  // On every SceneNode, like blendMode — part of the shared vocabulary edit allows even on node
+  // types flcm can't create (GROUP/INSTANCE/…). The read side never surfaces either: find/get
+  // cover the RENDERED document, so a hidden node is invisible to reads by design.
+  visible?: boolean;
+  locked?: boolean;
   layout?: WriteLayout;
   children?: WriteChild[];
 }
+
+export interface WriteNode extends WriteProps {
+  type: WriteType;
+}
+
+// Constructor provenance (the WeakSet, the tree gate) lives in provenance.ts — one home for
+// "did an flcm constructor build this node", and why the IR is not an authoring surface.
 
 // A child slot may be falsy so `cond && flcm.text(...)` composes; the bridge skips falsy entries.
 export type WriteChild = WriteNode | null | false | undefined;
@@ -288,6 +374,30 @@ export interface SlimHandle extends Identity {
   childCount?: number;
 }
 
+// ---- What the structural verbs return. Every one carries the SUBJECT plus each container whose
+// geometry the operation could have moved — a hug parent reflows whenever its children change, and
+// those are exactly the nodes an agent would otherwise re-read. Flat handles with fresh geometry,
+// a few dozen tokens each; never nested trees (dive with `get`).
+//
+// Containers are named `to` (where things ended up) and `from` (a container something LEFT), in
+// every shape — `append(parent, thing)` returns InsertResult or MoveResult depending on what it
+// was passed, and an agent reading `out.to` must not have to know which branch ran. Either field
+// is ABSENT when its container is the page (no box to measure) and `from` is absent on a reorder
+// inside one parent, where `to` already names it. ----
+
+// Placing a constructor spec: render's own `{ root, keyed }` (one vocabulary — an agent that
+// renders and an agent that appends read the same fields) plus the attach point.
+export interface InsertResult { root: Handle; keyed: Record<string, Handle>; to?: Handle }
+
+// Placing (or `move`-ing) a LIVE node: the node plus both ends of the reparent.
+export interface MoveResult { node: Handle; from?: Handle; to?: Handle }
+
+export interface CloneResult { node: Handle; to?: Handle }
+
+// `remove` can't hand back a handle for a node that no longer exists, so it names the id it
+// deleted — enough for the agent to scrub any handle it was still holding.
+export interface RemoveResult { removedId: string; from?: Handle }
+
 // A locate query: the declarative facets find/findOne match, AND-combined. `type` and `key` are exact;
 // `name` is a case-insensitive substring (layer names are fuzzy — findOne's cardinality guard catches an
 // over-broad match). `within` scopes the scan to a subtree (target-by-shape, default: current page).
@@ -305,7 +415,9 @@ export type ReadPredicate = (node: SimplifiedNode) => unknown;
 // string could be read either way. Inert data, like a WriteNode.
 export interface RawIdRef { __flcmId: string }
 
-// What any target-taking verb (get/find/edit — later plans) accepts, resolved by shape (read.resolveTarget):
-// a bare string (auto-detected node id or flcm/key), an explicit id via flcm.id(id), or any handle-shaped
-// object carrying an `id` (a render Handle, a slim handle, a read POJO).
-export type Target = string | RawIdRef | Handle;
+// What any target-taking verb (get/find/edit) accepts, resolved by shape (read.resolveTarget):
+// a bare string (auto-detected node id or flcm/key), an explicit id via flcm.id(id), or any
+// handle-shaped object carrying an `id` — a render Handle, a find/selection SlimHandle, a read
+// POJO. SlimHandle is named in the union (not just assignable) because it's what the locate verbs
+// actually return, and the runtime accepts any `{ id }` regardless.
+export type Target = string | RawIdRef | Handle | SlimHandle;

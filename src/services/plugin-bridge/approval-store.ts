@@ -125,15 +125,22 @@ export class ApprovalStore {
     return this.approvalsDir;
   }
 
-  /** The persisted token for this (cwd, port) if present and unexpired, else null. Prunes an expired file. */
-  load(port: number, now: number): string | null {
+  /**
+   * The persisted record for this (cwd, port) if present and unexpired, else null. Prunes an expired
+   * file.
+   *
+   * Returns the whole record rather than just the token because the bridge needs two facts from the
+   * one read: the token to echo, and `lastUsedAt` to judge how RECENTLY a plugin was approved here —
+   * a much tighter question than the store's own 24h expiry (see PluginBridge.hasRecentApproval).
+   */
+  loadRecord(port: number, now: number): ApprovalRecord | null {
     const record = this.read(port, true);
     if (!record) return null;
     if (isExpired(record, now)) {
       this.clear(port);
       return null;
     }
-    return record.token;
+    return record;
   }
 
   /**

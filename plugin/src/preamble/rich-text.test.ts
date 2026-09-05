@@ -97,7 +97,7 @@ test("a whole-node italic base resolves the italic font and needs no per-range f
   const out = await render(text("all slanted", { textStyle: { fontStyle: "italic", fontWeight: 700 } }));
   const node = await figma.getNodeByIdAsync(out.root.id);
   assert.deepEqual(node.fontName, { family: "Inter", style: "Bold Italic" });
-  assert.equal(node._rangeFonts, undefined); // plain string, no runs
+  assert.deepEqual(node._rangeFonts, []); // plain string, no runs
 });
 
 test("an italic run over an italic base with a weight override keeps the slant", async () => {

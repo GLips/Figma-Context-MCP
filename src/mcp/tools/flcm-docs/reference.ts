@@ -9,7 +9,12 @@
 // prop that isn't in the schema can't appear in any output, and a deleted one vanishes everywhere at once.
 
 import { z } from "zod";
-import { VERBS, FIELD_GROUPS, type VerbCategory } from "@framelink/plugin/schema";
+import {
+  VERBS,
+  FIELD_GROUPS,
+  EDIT_TYPE_WORD_GROUPS,
+  type VerbCategory,
+} from "@framelink/plugin/schema";
 import {
   MENTAL_MODEL,
   CHILDREN,
@@ -23,6 +28,12 @@ import {
   VERIFY_READBACK,
   CSS_SUBSET,
   FAILS_LOUD,
+  EDIT_INTRO,
+  EDIT_REMOVAL,
+  EDIT_RULES,
+  EDIT_MANY,
+  STRUCTURE_INTRO,
+  STRUCTURE_RULES,
 } from "./narrative.js";
 import { EXAMPLES } from "./examples.js";
 
@@ -88,6 +99,30 @@ function propTable(fields: Fields): string {
       `| \`${name}\` | ${cell(typeLabel(field))} | ${cell(field.description ?? "")} |`,
   );
   return ["| Prop | Type | Notes |", "| --- | --- | --- |", ...rows].join("\n");
+}
+
+// The per-type editable-word lists, composed from EDIT_TYPE_WORD_GROUPS — the SAME table the
+// runtime legality gate composes from (edit.ts DELTA_KEYS_BY_TYPE), intersected with the edit
+// field set the same way, so the doc can't promise a word the gate rejects. RECTANGLE/ELLIPSE
+// share one line (identical compositions by construction).
+function editTypeWordLines(): string {
+  const editWords = new Set(Object.keys(FIELD_GROUPS.edit));
+  const lines: string[] = [];
+  const labels: Partial<Record<keyof typeof EDIT_TYPE_WORD_GROUPS, string>> = {
+    RECTANGLE: "RECTANGLE / ELLIPSE",
+    VECTOR: "VECTOR (path- or svg-born)",
+  };
+  for (const t of Object.keys(EDIT_TYPE_WORD_GROUPS) as (keyof typeof EDIT_TYPE_WORD_GROUPS)[]) {
+    if (t === "ELLIPSE") continue;
+    const words = [
+      ...new Set(EDIT_TYPE_WORD_GROUPS[t].flatMap((g) => Object.keys(FIELD_GROUPS[g]))),
+    ]
+      .filter((k) => editWords.has(k))
+      .map((k) => `\`${k}\``)
+      .join(", ");
+    lines.push(`- **${labels[t] ?? t}** — ${words}`);
+  }
+  return lines.join("\n");
 }
 
 function verbTable(): string {
@@ -171,6 +206,28 @@ const SECTIONS: Section[] = [
     body: () => RENDER_KEYS,
   },
   {
+    id: "edit",
+    title: "edit() / editMany() — changing existing nodes",
+    blurb: "partial deltas against live nodes, batching them atomically, and the rollback contract",
+    body: () =>
+      `${EDIT_INTRO}\n\n### Editable fields\n\n${propTable(FIELD_GROUPS.edit)}\n\n` +
+      `### Words by node type\n\n${editTypeWordLines()}\n\n` +
+      // Derived from the schema's shared group (minus key, which is never editable) so this sentence
+      // can't drift from the runtime's non-createable gate, which composes from the same group.
+      "On a node type flcm can't create (GROUP, INSTANCE, COMPONENT, …) only the shared words apply: " +
+      `${Object.keys(FIELD_GROUPS.shared)
+        .filter((k) => k !== "key")
+        .map((k) => `\`${k}\``)
+        .join(", ")}.\n\n` +
+      `${EDIT_REMOVAL}\n\n${EDIT_RULES}\n\n${EDIT_MANY}`,
+  },
+  {
+    id: "structure",
+    title: "Tree shape — placing, moving, removing",
+    blurb: "append/prepend/insertBefore/insertAfter against live nodes",
+    body: () => `${STRUCTURE_INTRO}\n\n${STRUCTURE_RULES}`,
+  },
+  {
     id: "verify",
     title: "Seeing what you built (get_screenshot)",
     blurb: "the build → screenshot → look → fix loop, and the raw figma.* escape hatch",
@@ -217,17 +274,26 @@ const CATEGORY_LABELS: Record<VerbCategory, string> = {
   build: "build ",
   value: "value ",
   render: "render",
+  edit: "edit  ",
+  structure: "tree  ",
   read: "read  ",
   target: "target",
 };
 
+// The `flcm.` prefix is stated ONCE in the block header rather than repeated per verb: at 24 verbs
+// that repetition alone costs ~120 bytes of a 2048-byte budget, and the budget is the binding
+// constraint (see QUICKSTART_LIMIT_BYTES). A verb whose `quickStart` is null is already covered by
+// the previous entry's combined spelling and prints nothing.
 function quickStartVerbLines(): string {
   // Map preserves insertion order, so categories print in first-seen VERBS order (no separate order array).
   const byCategory = new Map<VerbCategory, string[]>();
   for (const v of VERBS) {
+    const spelling = v.quickStart === undefined ? v.signature : v.quickStart;
+    if (spelling === null) continue;
+    const stripped = spelling.replace(/\bflcm\./g, "");
     const sigs = byCategory.get(v.category);
-    if (sigs) sigs.push(v.signature);
-    else byCategory.set(v.category, [v.signature]);
+    if (sigs) sigs.push(stripped);
+    else byCategory.set(v.category, [stripped]);
   }
   return [...byCategory]
     .map(([cat, sigs]) => `  ${CATEGORY_LABELS[cat]}: ${sigs.join(", ")}`)
@@ -246,11 +312,10 @@ DESCRIBE an inert tree, then RENDER once:
   const t = flcm.frame({ layout:{ mode:"column", gap:16 } }, [ flcm.text("Hi",{ color:"#111" }) ]);
   const out = await flcm.render(t);   // creates nodes → { root, keyed }
 
-VERBS (nothing else is on \`flcm\`):
+VERBS — all on \`flcm.\`, nothing else is:
 ${verbLines}
 
 MUST-KNOW
-- Constructors are inert — only \`await flcm.render(tree)\` creates anything.
 - Return ids/handles, NEVER live Figma nodes (they can't cross the bridge).
 - width/height & layout.gap/padding are px NUMBERS (w/h also "fill"/"hug"); colors/gradients/shadows ARE CSS strings.
 - Anything outside the documented CSS subset FAILS LOUD, never wrong pixels.

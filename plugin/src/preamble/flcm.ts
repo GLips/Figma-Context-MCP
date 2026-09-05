@@ -5,8 +5,9 @@
 // The constructors take TERSE sugar props (w/h/pad/gap/align/cross/absolute/radius/fill/...) and compile
 // them into the typed WriteNode currency here. Author CSS-shaped leaves (a #hex color, a gradient string,
 // a "32px" metric) are normalized ONCE through css.ts at construction — the bridge only ever sees the
-// typed currency, never a string. A raw WriteNode (e.g. a future tweaked `get` result, normalized through
-// css.ts first) is the same typed shape a constructor emits, so it renders too.
+// typed currency, never a string. The constructors are the ONLY way to make a renderable node:
+// their output is provenance-tracked and deep-frozen (mintWriteNode/sealWriteNode below), and the
+// bridge refuses anything else — hand-built IR could state combinations the compile forbids.
 //
 // Props types are precise so the bundle's own authors get checking, while the public entry points stay
 // runtime-lenient (agent code runs in QuickJS, not tsc): a bad value still fails loud at the parsers
@@ -16,16 +17,21 @@
 // closure-private in the IIFE bundle — which is why nothing in this preamble needs a name prefix.
 
 import {
-  WriteNode, WriteChild, WriteLayout, WriteTextStyle, WriteTextRun, PaintSpec,
+  WriteNode, WriteProps, WriteChild, WriteLayout, WriteTextStyle, WriteTextRun, PaintSpec,
   GradientStop, EffectSpec, Sizing, Edges, Handle, WriteCssEffects, PinX, PinY, AnchorX, AnchorY,
-  Justify, Align, TextAlign, TextDecoration, RawIdRef,
+  Justify, Align, TextAlign, TextDecoration, WriteTextCase, RawIdRef, WriteType,
 } from "./ir.js";
+import { markConstructorBuilt, isConstructorBuilt, assertConstructorBuiltTree } from "./provenance.js";
+import { assertLayoutRealizableForType, assertSizingResolvesAgainstParentFrame } from "./layout-legality.js";
 import { loadFontsForTree } from "./fonts.js";
 import { parseInlineMarkdown, MdSegment } from "./markdown.js";
 import { linearGradient, radialGradient } from "./paint.js";
 import { layerBlurFromCssPx, backgroundBlurFromCssPx, shadow, glass, noise, texture, progressiveBlur } from "./effects.js";
-import { parseColor, parseFill, parseCssEffects, parseBlendMode, length, lineHeight, letterSpacing, isPercent, percent } from "./css.js";
-import { buildNode, settleHandles, resolvePercents, RenderCtx } from "./bridge.js";
+import { parseColor, parseFill, parseCssEffects, parseBlendMode, boxShorthand, length, lineHeight, letterSpacing, isPercent, percent } from "./css.js";
+import { buildNode, placeRootOnPage, settleHandles, resolvePercents, RenderCtx, RenderResources } from "./bridge.js";
+import { describeRootOverlap } from "./root-overlap.js";
+import { enterMutatingVerb } from "./mutation-lock.js";
+import { requestHostImages } from "./host.js";
 import { get, find, findOne, selection } from "./read.js";
 import { rejectUnknownKeys } from "./validate.js";
 
@@ -36,7 +42,7 @@ import type {
   BaseProps, SizeProps, AppearanceProps, FrameProps, TextProps, TextRunInput, StyleDeltaInput,
   ShapeProps, LineProps, PathProps, SvgProps, ImageOpts,
   PadInput, EffectsInput, GradientSugar, GradientStopInput, EffectsSugar, ShadowSugar, BlurSugar,
-  GlassSugar, NoiseSugar, TextureSugar, ProgressiveBlurSugar, Flcm,
+  GlassSugar, NoiseSugar, TextureSugar, ProgressiveBlurSugar,
 } from "./schema.js";
 
 // ---- Unknown-prop rejection (ratified decision 1: fail loud, surface-wide, at construction) ----
@@ -53,14 +59,16 @@ import type {
 // dropped from) the schema can't drift out of sync here. The reject itself is the shared closed-set gate in
 // validate.ts, the same one read.ts's locate query fails loud with.
 export const KNOWN_KEYS = {
-  shared: ["name", "key", "opacity", "mixBlendMode"],
+  shared: ["name", "key", "opacity", "mixBlendMode", "visible", "locked"],
+  edit: ["name", "opacity", "mixBlendMode", "visible", "locked", "fill", "stroke", "strokeWidth", "borderRadius", "effects", "rotation", "clip", "width", "height", "absolute", "pin", "layout", "length", "w", "content", "textStyle", "color"],
   size: ["width", "height", "absolute", "pin"],
   appearance: ["fill", "stroke", "strokeWidth", "borderRadius", "effects", "rotation"],
   frame: ["layout", "clip"],
   layout: ["mode", "gap", "padding", "justifyContent", "alignItems"],
   text: ["textStyle", "color"],
-  textStyle: ["fontFamily", "fontWeight", "fontSize", "fontStyle", "lineHeight", "letterSpacing", "textDecoration", "textAlign", "lineClamp"],
-  run: ["fontWeight", "fontSize", "fontFamily", "fontStyle", "lineHeight", "letterSpacing", "textDecoration", "color", "hyperlink"],
+  textContent: ["content"], // edit-only spelling of flcm.text's positional content arg
+  textStyle: ["fontFamily", "fontWeight", "fontSize", "fontStyle", "lineHeight", "letterSpacing", "textDecoration", "textTransform", "fontVariant", "textAlign", "textAlignVertical", "paragraphSpacing", "paragraphIndent", "listSpacing", "hyperlink", "boldWeight", "lineClamp"],
+  run: ["fontWeight", "fontSize", "fontFamily", "fontStyle", "lineHeight", "letterSpacing", "textDecoration", "textTransform", "fontVariant", "paragraphSpacing", "paragraphIndent", "listSpacing", "color", "hyperlink"],
   line: ["stroke", "color", "strokeWidth", "length", "w", "rotation", "absolute", "pin"],
   path: ["d", "fill", "stroke", "strokeWidth", "effects", "rotation"],
   image: ["scaleMode", "placeholder"],
@@ -81,15 +89,18 @@ const LINE_KEYS = keySet(KNOWN_KEYS.shared, KNOWN_KEYS.line);
 const PATH_KEYS = keySet(KNOWN_KEYS.shared, KNOWN_KEYS.size, KNOWN_KEYS.path);
 const SVG_KEYS = keySet(KNOWN_KEYS.shared, KNOWN_KEYS.size);
 const LAYOUT_KEYS = keySet(KNOWN_KEYS.layout);
-const TEXTSTYLE_KEYS = keySet(KNOWN_KEYS.textStyle);
-const RUN_KEYS = keySet(KNOWN_KEYS.run);
 const IMAGE_KEYS = keySet(KNOWN_KEYS.image);
 const GRADIENT_KEYS = keySet(KNOWN_KEYS.gradient);
 const EFFECTS_KEYS = keySet(KNOWN_KEYS.effects);
 // The CSS-effects bag (WriteCssEffects) — the string form of `effects`, routed to parseCssEffects. Its keys
 // are an ir.ts interface, not a schema FIELD_GROUP, so no runtime drift test reaches them; but they're the
 // frozen CSS spellings, and this ONE list drives both the is-this-CSS detection and the reject (normalizeEffects).
-const CSS_EFFECTS_KEYS = keySet(["boxShadow", "filter", "backdropFilter", "textShadow"]);
+const CSS_EFFECTS_WORDS = ["boxShadow", "filter", "backdropFilter", "textShadow"] as const;
+const CSS_EFFECTS_KEYS = keySet(CSS_EFFECTS_WORDS);
+// The `effects:` prop accepts EITHER vocabulary in one bag, so its closed set is the union — the reject
+// has to run before the split, or a typo lands in whichever half claims it and gets named by that half's
+// gate instead of by `effects` (which is where the author wrote it).
+const EFFECTS_INPUT_KEYS = keySet(KNOWN_KEYS.effects, CSS_EFFECTS_WORDS);
 // The directional nested shapes are defined INLINE in schema.ts's SIZE_FIELDS (not their own FIELD_GROUP).
 // The drift test still guards them by unwrapping the zod objects directly — ABSOLUTE_KEYS against the
 // `absolute` shape, DIRECTIONAL_KEYS against the `anchor` shape. `pin` reuses DIRECTIONAL_KEYS: it's a
@@ -102,15 +113,19 @@ export const DIRECTIONAL_KEYS = keySet(["x", "y"]); // pin and absolute.anchor
 
 // ---- shared prop -> WriteNode compilers ----
 
-// terse pad (number | {x,y} | {top,right,bottom,left}) -> typed edges. pad takes NUMBERS, not "px"
-// strings: a string like "24px" is neither a number nor an edge object, and the old code silently
-// dropped it to zero padding on every side. Reject a non-number/non-object, and a non-numeric edge
-// field, rather than emit a silent zero (ADR-0003 fail-loud).
+// terse pad (number | CSS box shorthand | {x,y} | {top,right,bottom,left}) -> typed edges. The string
+// form is the READ shape's spelling ("12px 16px"): `get` returns padding as a CSS shorthand, and without
+// it here a spec's own layout wouldn't re-author. Inside the object form the edges stay NUMBERS — a "24px"
+// there once dropped silently to zero on every side, and that reject stays (ADR-0003 fail-loud).
+const PAD_KEYS = keySet(["x", "y", "top", "right", "bottom", "left"]);
+
 function padEdges(pad: PadInput): Edges {
   if (typeof pad === "number") return { top: pad, right: pad, bottom: pad, left: pad };
-  if (pad == null || typeof pad !== "object") {
-    throw new Error("flcm: pad must be a number or an object ({ x, y } or { top, right, bottom, left }) — got " + JSON.stringify(pad) + '. pad takes numbers, not "px" strings.');
+  if (typeof pad === "string") return boxShorthand(pad, "pad");
+  if (pad == null || typeof pad !== "object" || Array.isArray(pad)) {
+    throw new Error('flcm: pad must be a number, a CSS box shorthand string ("12px 16px"), or an object ({ x, y } or { top, right, bottom, left }) — got ' + JSON.stringify(pad) + ".");
   }
+  rejectUnknownKeys(pad, PAD_KEYS, "pad");
   const edge = (v: number | undefined, name: string): number | undefined => {
     if (v == null) return undefined;
     if (typeof v !== "number") throw new Error("flcm: pad." + name + " must be a number, got " + JSON.stringify(v) + ' (pad takes numbers, not "px" strings).');
@@ -146,13 +161,24 @@ function applySizing(props: SizeProps, layout: WriteLayout): void {
 }
 
 function applyAbsolute(layout: WriteLayout, props: SizeProps): void {
-  if (!props.absolute) return;
+  if (props.absolute == null) return;
+  // absolute:"none" is edit's return-to-flow word — no x/y ride it (a node rejoining the flow is
+  // positioned by the layout, not by coordinates).
+  if (props.absolute === "none") {
+    layout.position = "none";
+    return;
+  }
+  // QuickJS boundary: a present-but-malformed value (false, a number, an array) must reject the
+  // whole call, not read as absence and let the rest of the props land as a partial write.
+  if (typeof props.absolute !== "object" || Array.isArray(props.absolute)) {
+    throw new Error('flcm: absolute must be an object like { x, y, anchor } or "none" — got ' + JSON.stringify(props.absolute) + ".");
+  }
   rejectUnknownKeys(props.absolute, ABSOLUTE_KEYS, "absolute");
   layout.position = "absolute";
-  // A percent x/y resolves to px against the parent axis at render (percentPos); a number is the location
-  // directly. The percent axes seed 0 here and the bridge overwrites them once the parent size is known.
-  layout.left = 0;
-  layout.top = 0;
+  // A percent x/y resolves to px against the parent axis at render (percentPos); a number is the
+  // location directly. Presence-preserving per axis: an unnamed axis compiles to NOTHING — a fresh
+  // node sits at Figma's own 0, and an edit naming only `absolute: { x }` must not teleport the y
+  // it didn't speak (the bridge falls back to the live coordinate where it needs one).
   const pct: { x?: number; y?: number } = {};
   const axis = (val: number | string | undefined, key: "x" | "y") => {
     if (val == null) return;
@@ -164,14 +190,26 @@ function applyAbsolute(layout: WriteLayout, props: SizeProps): void {
   axis(props.absolute.y, "y");
   if (pct.x != null || pct.y != null) layout.percentPos = pct;
   applyAnchor(layout, props.absolute.anchor);
+  // An anchor axis without its coordinate has nothing to land on. Rejected rather than anchored
+  // against the live coordinate: subtracting the anchor offset from wherever the node sits would
+  // move it again on every re-apply — the relative-delta drift the absolute-values contract forbids.
+  const a = layout.anchor;
+  if (a) {
+    if (a.x != null && layout.left == null && pct.x == null) {
+      throw new Error("flcm: absolute.anchor.x names which point of the node lands on x — name absolute.x alongside it.");
+    }
+    if (a.y != null && layout.top == null && pct.y == null) {
+      throw new Error("flcm: absolute.anchor.y names which point of the node lands on y — name absolute.y alongside it.");
+    }
+  }
 }
 
 // pin and anchor are the two directional `{ x?, y? }` props: same shape, different vocabularies. Both
 // validate each axis at the boundary (a bad value fails loud, ADR-0003) so the bridge can trust the words —
 // pin's map to Figma's constraint enum, anchor's to an offset. anchor's words are a subset of pin's (no
 // stretch/scale: an anchor is a point, not a resize rule).
-const PIN_X = new Set<PinX>(["left", "center", "right", "stretch", "scale"]);
-const PIN_Y = new Set<PinY>(["top", "center", "bottom", "stretch", "scale"]);
+const PIN_X = new Set<PinX>(["left", "center", "right", "stretch", "scale", "none"]);
+const PIN_Y = new Set<PinY>(["top", "center", "bottom", "stretch", "scale", "none"]);
 const ANCHOR_X = new Set<AnchorX>(["left", "center", "right"]);
 const ANCHOR_Y = new Set<AnchorY>(["top", "center", "bottom"]);
 
@@ -211,7 +249,7 @@ function parseDirectional<X extends string, Y extends string>(
   name: string, raw: unknown, xSet: ReadonlySet<X>, ySet: ReadonlySet<Y>,
 ): { x?: X; y?: Y } | undefined {
   if (raw == null) return undefined;
-  if (typeof raw !== "object") {
+  if (typeof raw !== "object" || Array.isArray(raw)) {
     throw new Error("flcm: " + name + " must be an object like { x, y } — got " + JSON.stringify(raw) + ".");
   }
   const r = raw as { x?: string; y?: string };
@@ -228,10 +266,11 @@ function parseDirectional<X extends string, Y extends string>(
   return out.x != null || out.y != null ? out : undefined;
 }
 
-// Map a CSS-total container word (justifyContent/alignItems) to the terse render intent via its table (see
-// JUSTIFY_CONTENT/ALIGN_ITEMS for why this gate exists). `hint` appends prop-specific guidance; the shared
-// body names the realizable CSS spellings.
-function mapLayoutWord<T extends string>(name: string, raw: unknown, table: Record<string, T>, hint = ""): T {
+// Map a CSS-total author word to the Figma-domain value its table names — the container words
+// (justifyContent/alignItems, see JUSTIFY_CONTENT/ALIGN_ITEMS for why this gate exists) and the text
+// casing words (textTransform/fontVariant). `hint` appends prop-specific guidance; the shared body
+// names the realizable CSS spellings.
+function mapCssWord<T extends string>(name: string, raw: unknown, table: Record<string, T>, hint = ""): T {
   const mapped = typeof raw === "string" ? table[raw] : undefined;
   if (!mapped) {
     const allowed = Object.keys(table).map((w) => '"' + w + '"').join(", ");
@@ -249,114 +288,393 @@ function applyAnchor(layout: WriteLayout, anchor: { x?: AnchorX; y?: AnchorY } |
 // pin -> constraint-override intent on the layout. Only meaningful for a free-form parent's child;
 // harmlessly ignored under auto-layout.
 function applyPin(layout: WriteLayout, props: SizeProps): void {
-  const pin = parseDirectional("pin", props.pin, PIN_X, PIN_Y);
+  // `pin: "none"` is shorthand for clearing both axes; per-axis "none" rides parseDirectional.
+  const raw = props.pin === "none" ? { x: "none", y: "none" } : props.pin;
+  const pin = parseDirectional("pin", raw, PIN_X, PIN_Y);
   if (pin) layout.pin = pin;
 }
 
-function buildLayout(props: FrameProps, isFrame: boolean): WriteLayout {
-  const layout: WriteLayout = {};
-  if (isFrame) {
-    const cfg = props.layout || {};
-    rejectUnknownKeys(cfg, LAYOUT_KEYS, "flcm.frame.layout");
-    layout.mode = cfg.mode == null ? "none" : assertEnum("layout.mode", cfg.mode, LAYOUT_MODE);
-    if (cfg.gap != null) layout.gap = length(cfg.gap);
-    if (cfg.padding != null) layout.padding = padEdges(cfg.padding);
-    // The space-around/evenly hint is primary-axis-only (a justify-content notion), so only justifyContent carries it.
-    if (cfg.justifyContent != null) layout.justifyContent = mapLayoutWord("layout.justifyContent", cfg.justifyContent, JUSTIFY_CONTENT, " Figma auto-layout can't realize CSS space-around/space-evenly; add gap/padding for spacing instead.");
-    if (cfg.alignItems != null) layout.alignItems = mapLayoutWord("layout.alignItems", cfg.alignItems, ALIGN_ITEMS);
+// Compile the container words (`layout: { mode, gap, padding, justifyContent, alignItems }`) into a
+// WriteLayout — presence-preserving: a word the author didn't write compiles to nothing. The
+// creation default (an omitted mode means free-form) is buildLayout's to inject, NOT this
+// function's: edit compiles through here directly, and a defaulted mode would turn a gap nudge
+// into an auto-layout kill. Exported for edit.ts.
+export function compileContainerWords(cfg: NonNullable<FrameProps["layout"]>, subject: string): WriteLayout {
+  // QuickJS boundary: a present-but-malformed value (false, a number, an array) must reject the
+  // whole call — Object.keys on it would read as "no words named" and the rest would partially apply.
+  if (typeof cfg !== "object" || cfg === null || Array.isArray(cfg)) {
+    throw new Error("flcm: " + subject + " must be an object like { mode, gap, padding, justifyContent, alignItems } — got " + JSON.stringify(cfg) + ".");
   }
-  applySizing(props, layout);
-  applyAbsolute(layout, props);
-  applyPin(layout, props);
+  rejectUnknownKeys(cfg, LAYOUT_KEYS, subject);
+  const layout: WriteLayout = {};
+  if (cfg.mode != null) layout.mode = assertEnum("layout.mode", cfg.mode, LAYOUT_MODE);
+  if (cfg.gap != null) layout.gap = length(cfg.gap);
+  if (cfg.padding != null) layout.padding = padEdges(cfg.padding);
+  // The space-around/evenly hint is primary-axis-only (a justify-content notion), so only justifyContent carries it.
+  if (cfg.justifyContent != null) layout.justifyContent = mapCssWord("layout.justifyContent", cfg.justifyContent, JUSTIFY_CONTENT, " Figma auto-layout can't realize CSS space-around/space-evenly; add gap/padding for spacing instead.");
+  if (cfg.alignItems != null) layout.alignItems = mapCssWord("layout.alignItems", cfg.alignItems, ALIGN_ITEMS);
   return layout;
 }
 
-// name/key/opacity — present on every node kind. Additive: only present props land on the WriteNode.
-function base(wn: WriteNode, props: BaseProps): void {
-  if (typeof props.name === "string") wn.name = props.name;
-  if (typeof props.key === "string") wn.key = props.key;
-  if (typeof props.opacity === "number") wn.opacity = props.opacity;
-  if (props.mixBlendMode != null) wn.blendMode = parseBlendMode(props.mixBlendMode);
+// Compile the child-side size/position words (width/height, absolute, pin) into a WriteLayout —
+// the same trio every constructor rides. Presence-preserving like the container compile; the
+// return is undefined when no word was written, so callers can gate on "was any layout named".
+// Exported for edit.ts.
+export function compileSizeWords(props: SizeProps): WriteLayout | undefined {
+  const layout: WriteLayout = {};
+  applySizing(props, layout);
+  applyAbsolute(layout, props);
+  applyPin(layout, props);
+  return Object.keys(layout).length ? layout : undefined;
 }
 
-// Appearance props shared by frame/rect/ellipse, on top of base(). Every CSS-shaped leaf is normalized
-// to the typed currency through css.ts here.
-function appearance(wn: WriteNode, props: AppearanceProps, opts: { radius?: boolean; clip?: boolean }): void {
+// A LINE sizes on one word — `length`, alias `w` — compiled here so flcm.line and an edit delta
+// reject a mistyped value with the SAME error, naming the prop the author actually wrote.
+export function compileLineLength(props: Pick<LineProps, "length" | "w">): WriteLayout | undefined {
+  // Validate BOTH spellings when both are present — a malformed value must reject the whole call
+  // even when its alias shadows it (present-but-malformed never reads as absence).
+  if (props.w != null) assertScalarType(props.w, "number", "w");
+  const prop = props.length != null ? "length" : props.w != null ? "w" : null;
+  if (!prop) return undefined;
+  const len = props[prop];
+  assertScalarType(len, "number", prop);
+  // A length is a FIXED width, and the sizing intent must say so: clearChildFlowFill keys the
+  // un-fill off sizing "fixed", so a length edit on a live line someone set to grow (layoutGrow 1
+  // — authorable in the Figma UI, not in flcm) actually takes over from the fill.
+  return { sizing: { horizontal: "fixed" }, dimensions: { width: len as number } };
+}
+
+function buildLayout(props: FrameProps, nodeType: WriteType, subject: string): WriteLayout {
+  const layout: WriteLayout = {};
+  if (nodeType === "FRAME") {
+    // ?? not ||: a falsy-but-present layout (false, 0) must reach the compile's malformed-value reject.
+    Object.assign(layout, compileContainerWords(props.layout ?? {}, "flcm.frame.layout"));
+    if (layout.mode == null) layout.mode = "none"; // the creation default: an omitted mode is free-form
+  }
+  // The size/position words ride the same compile edit does — the container words above and the
+  // creation default are the only create-side extras.
+  Object.assign(layout, compileSizeWords(props) || {});
+  // The shared per-type legality authority (layout-legality.ts) — the same call edit's live gate
+  // makes, so a word that rejects on edit rejects identically here instead of silently not landing.
+  assertLayoutRealizableForType(nodeType, layout, false, subject);
+  return layout;
+}
+
+// The QuickJS boundary has no type checking, so a present-but-mistyped scalar must reject LOUD —
+// a bare typeof guard would silently drop it, committing the rest of the props as a partial write
+// (the ADR-0003 silent no-op, and for edit a broken whole-delta validation). null/undefined still
+// mean "absent": presence-preserving stays intact.
+function assertScalarType(value: unknown, want: "string" | "number" | "boolean", prop: string): void {
+  if (typeof value !== want) {
+    throw new Error("flcm: `" + prop + "` must be a " + want + " — got " + JSON.stringify(value) + ".");
+  }
+}
+
+// The shared-by-every-node props. Additive: only present props land on the WriteNode.
+function base(wn: WriteProps, props: BaseProps): void {
+  if (props.name != null) { assertScalarType(props.name, "string", "name"); wn.name = props.name; }
+  if (props.key != null) { assertScalarType(props.key, "string", "key"); wn.key = props.key; }
+  if (props.opacity != null) { assertScalarType(props.opacity, "number", "opacity"); wn.opacity = props.opacity; }
+  if (props.mixBlendMode != null) wn.blendMode = parseBlendMode(props.mixBlendMode);
+  if (props.visible != null) { assertScalarType(props.visible, "boolean", "visible"); wn.visible = props.visible; }
+  if (props.locked != null) { assertScalarType(props.locked, "boolean", "locked"); wn.locked = props.locked; }
+}
+
+// Appearance props shared by frame/rect/ellipse (and edit's delta compile), on top of base(). Every
+// CSS-shaped leaf is normalized to the typed currency through css.ts here — presence-preserving by
+// construction, so it doubles as the edit patch compiler's core: only present keys produce writes.
+// Exported for edit.ts (which imports FROM here; flcm.ts never imports edit.ts — no cycle).
+export function compileNodeLocalProps(wn: WriteProps, props: AppearanceProps, opts: { radius?: boolean; clip?: boolean }): void {
   base(wn, props);
-  if (props.fill != null) wn.fills = [parseFill(props.fill, "fill")];
-  if (props.stroke != null) wn.strokes = [parseFill(props.stroke, "stroke")];
+  if (props.fill != null) wn.fills = compilePaintWord(props.fill, "fill");
+  if (props.stroke != null) wn.strokes = compilePaintWord(props.stroke, "stroke");
   if (props.strokeWidth != null) wn.strokeWeight = length(props.strokeWidth);
-  if (props.effects != null) wn.effects = normalizeEffects(props.effects);
+  if (props.effects != null) wn.effects = props.effects === "none" ? [] : normalizeEffects(props.effects);
   if (opts.radius && props.borderRadius != null) wn.borderRadius = length(props.borderRadius);
-  if (opts.clip && typeof (props as FrameProps).clip === "boolean") wn.clip = (props as FrameProps).clip;
-  if (typeof props.rotation === "number") wn.rotation = props.rotation;
+  const clip = (props as FrameProps).clip;
+  if (opts.clip && clip != null) { assertScalarType(clip, "boolean", "clip"); wn.clip = clip; }
+  if (props.rotation != null) { assertScalarType(props.rotation, "number", "rotation"); wn.rotation = props.rotation; }
+}
+
+// THE paint-word compile, shared by every constructor and edit's deltas so values and rejections
+// can't drift between verbs. "none" is the removal word (CSS's own absence spelling): an EMPTY
+// array is the compiled "clear this" — distinct from an ABSENT array, which means "don't touch it".
+// Create writing [] onto a fresh node clears a live seeded default; the distinction exists for edit.
+//
+// An ARRAY is the read shape's own spelling of a paint slot (`fills: ["#FFF"]`), accepted so a `get`
+// result feeds straight back in. Exactly one paint is authorable: flcm paints a single fill/stroke,
+// and a STACK — a gradient over a solid, an image over a tint — has no write vocabulary at all, so
+// it fails loud naming the count instead of quietly dropping every layer but one. An empty array is
+// the read spelling of "no paint", identical to "none".
+export function compilePaintWord(value: NonNullable<AppearanceProps["fill"]>, subject: string): NonNullable<WriteProps["fills"]> {
+  if (value === "none") return [];
+  if (Array.isArray(value)) {
+    if (value.length > 1) {
+      throw new Error(
+        "flcm: " + subject + " has " + value.length + " stacked paints, and flcm paints one — there is no authored form for a paint stack. " +
+          "Pass the single paint you want, or duplicate the node with flcm.clone to keep the stack.",
+      );
+    }
+    return value.length ? [parseFill(value[0], subject)] : [];
+  }
+  return [parseFill(value, subject)];
+}
+
+// `color` is the line's stroke alias (`stroke` wins when both are present) — one compile shared by
+// flcm.line and edit's LINE delta so the precedence and the "none" clear can't drift. The error
+// names the word the author actually wrote.
+export function compileLineStroke(props: Pick<LineProps, "stroke" | "color">): WriteProps["strokes"] {
+  // The shadowed alias still validates: a malformed `color` beside a good `stroke` rejects the
+  // whole call rather than riding the precedence into silence.
+  if (props.color != null) compilePaintWord(props.color, "color");
+  const word = props.stroke != null ? "stroke" : "color";
+  const paint = props.stroke != null ? props.stroke : props.color;
+  return paint == null ? undefined : compilePaintWord(paint, word);
+}
+
+// Every constructor births its WriteNode here (WeakSet provenance — see provenance.ts on why
+// the IR is not an authoring surface) and returns it through sealWriteNode below. A spread-copy
+// ({ ...flcm.rect() }) is a different object and rejects at render — clone a node by re-calling
+// its constructor, the only validated path.
+function mintWriteNode(type: WriteType): WriteNode {
+  const wn: WriteNode = { type };
+  markConstructorBuilt(wn);
+  return wn;
+}
+
+// Seal the finished compile so provenance stays MEANINGFUL: without it, membership only proves
+// the node was once constructor-built, while `node.layout.gap = 12` after the fact would smuggle
+// unvalidated IR through the gate. Sealing CLONES as it freezes — the compile retains
+// caller-passed structures (a gradient PaintSpec, an effects array), and freezing those in place
+// would break the caller's own reuse of them, while a caller-frozen shell would shield its
+// mutable descendants from an isFrozen-pruned walk. Cloning severs both: the sealed node shares
+// nothing caller-reachable except child nodes, which are constructor-sealed themselves (the
+// provenance check is the prune — never isFrozen). One traversal does both so the prune rule
+// can't drift between a clone pass and a freeze pass.
+function cloneAndFreeze(v: unknown): unknown {
+  if (v === null || typeof v !== "object") return v;
+  if (isConstructorBuilt(v)) return v; // a child node: already sealed, shared by design
+  if (Array.isArray(v)) return Object.freeze(v.map(cloneAndFreeze));
+  const out: Record<string, unknown> = {};
+  for (const k of Object.keys(v)) out[k] = cloneAndFreeze((v as Record<string, unknown>)[k]);
+  return Object.freeze(out);
+}
+
+function sealWriteNode(wn: WriteNode): WriteNode {
+  const bag = wn as unknown as Record<string, unknown>;
+  for (const k of Object.keys(bag)) bag[k] = cloneAndFreeze(bag[k]);
+  Object.freeze(wn);
+  return wn;
 }
 
 function frame(props: FrameProps = {}, children?: WriteChild | WriteChild[]): WriteNode {
-  props = props || {};
+  // ?? not || (here and in every constructor): null/undefined mean "no props" (the pinned absence
+  // convention), but a present falsy non-object (false, 0, "") is malformed and must reach the
+  // gate's non-object reject, not read as absence.
+  props = props ?? {};
+  // An array arriving first is almost always the children — steer to the real fix rather than
+  // letting the generic non-object reject imply a props problem.
+  if (Array.isArray(props)) {
+    throw new Error('flcm.frame takes (props, children) — children are the second argument: flcm.frame({}, [...]).');
+  }
   rejectUnknownKeys(props, FRAME_KEYS, "flcm.frame");
-  const wn: WriteNode = { type: "FRAME" };
-  appearance(wn, props, { radius: true, clip: true });
-  wn.layout = buildLayout(props, true);
-  wn.children = Array.isArray(children) ? children : children ? [children] : [];
-  return wn;
+  const wn = mintWriteNode("FRAME");
+  compileNodeLocalProps(wn, props, { radius: true, clip: true });
+  wn.layout = buildLayout(props, "FRAME", "flcm.frame");
+  // The children array is frozen IN PLACE — the one deliberate exception to the seal's
+  // clone-don't-freeze rule (cloneAndFreeze). A children list is the tree itself, and the
+  // aliasing accident is push-AFTER-frame(): with a silent clone that push builds a node the
+  // author believes has children and renders an empty frame; frozen, the push throws (agent
+  // code runs strict). Reusable specs (a gradient, an effects array) keep the clone rule —
+  // sharing those across nodes is legitimate, appending to a handed-over children list is not.
+  wn.children = Object.freeze(Array.isArray(children) ? children : children ? [children] : []) as WriteChild[];
+  return sealWriteNode(wn);
+}
+
+// CSS text-transform / font-variant-caps -> Figma's ONE textCase enum. Two author words, one slot,
+// which is why compileTextCase refuses a style naming both rather than letting the later key win.
+const TEXT_TRANSFORM: Record<string, WriteTextCase> = {
+  uppercase: "UPPER", lowercase: "LOWER", capitalize: "TITLE", none: "ORIGINAL",
+};
+const FONT_VARIANT: Record<string, WriteTextCase> = {
+  "small-caps": "SMALL_CAPS", "all-small-caps": "SMALL_CAPS_FORCED",
+};
+
+function compileTextCase(c: { textTransform?: unknown; fontVariant?: unknown }, subject: string): WriteTextCase | undefined {
+  if (c.textTransform != null && c.fontVariant != null) {
+    throw new Error(
+      subject + ": textTransform and fontVariant are two CSS words for Figma's ONE textCase slot, so they can't both be set — name whichever you mean. " +
+        '(To clear a small-caps, use textTransform: "none".)',
+    );
+  }
+  if (c.textTransform != null) return mapCssWord(subject + ".textTransform", c.textTransform, TEXT_TRANSFORM);
+  if (c.fontVariant != null) return mapCssWord(subject + ".fontVariant", c.fontVariant, FONT_VARIANT);
+  return undefined;
+}
+
+const TEXT_ALIGN_VERTICAL = new Set<NonNullable<WriteTextStyle["textAlignVertical"]>>(["top", "center", "bottom"]);
+
+// A hyperlink leaf: an author URL string, or the read form ({ type: "URL", url }) so a `get` result
+// round-trips without the caller unwrapping it. A NODE link — Figma's other kind, a jump to another
+// node in the design — has no authored form at all, so it rejects BY NAME instead of dropping the
+// link silently and handing back a node the agent believes still carries it.
+function parseHyperlink(value: unknown, subject: string): string {
+  if (typeof value === "string" && value.trim()) return value;
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    const h = value as { type?: unknown; url?: unknown };
+    if (h.type === "URL" && typeof h.url === "string" && h.url.trim()) return h.url;
+    if (h.type === "NODE") {
+      throw new Error(subject + ": that is a NODE hyperlink (a jump to another node in the design) — Figma has no way for a plugin to author one. Point it at a URL, or drop the field.");
+    }
+  }
+  throw new Error(subject + ': hyperlink must be a non-empty URL string, or the read form { type: "URL", url } — got ' + JSON.stringify(value) + ".");
+}
+
+// Read-shape text leaves that are NOT authoring input, so a spread `{ ...spec.textStyle, fontSize: 18 }`
+// still compiles instead of dying on the closed-set gate. Two dispositions, deliberately different:
+//   • IGNORED — purely DERIVED, its information already elsewhere in the same style, so dropping it
+//     loses nothing. `fontVariantName` ("Bold Italic") IS fontWeight + fontStyle, restated as Figma's
+//     own label; there is nothing to write that the triple doesn't already say.
+//   • REFUSED — real state the plugin API cannot write. Named with its reason, because silently
+//     dropping it would hand back a node the agent believes carries it (ADR-0003).
+const IGNORED_READ_TEXT_LEAVES = ["fontVariantName"];
+const REFUSED_READ_TEXT_LEAVES: Record<string, string> = {
+  opentypeFlags: "OpenType features are read-only to a plugin — TextNode.openTypeFeatures has no setter and no setRange* counterpart [verified, plugin-typings 1.133]",
+};
+// A RUN's refusals add the two alignment words. Both are legal on the BASE (they're whole-node
+// properties, which is exactly the point) but a run delta can carry them too — the read side emits them
+// as inverse overrides of a non-default base — and Figma has no setRangeTextAlignHorizontal/Vertical
+// [verified, plugin-typings 1.133], so one span cannot align differently from its node. Named here rather
+// than left to the unknown-prop gate, which would diagnose a real read leaf as a typo.
+const REFUSED_RUN_TEXT_LEAVES: Record<string, string> = {
+  ...REFUSED_READ_TEXT_LEAVES,
+  textAlign: "horizontal alignment is a whole-node property in Figma (no setRangeTextAlignHorizontal), so a single run can't set it — move it to the node's textStyle",
+  textAlignVertical: "vertical alignment is a whole-node property in Figma (no setRangeTextAlignVertical), so a single run can't set it — move it to the node's textStyle",
+};
+
+// The closed set each text-style carrier accepts as INPUT: its own words plus the derived read leaves
+// it drops. Built from KNOWN_KEYS (schema-mirrored, drift-guarded) so the tolerated extras stay
+// visibly separate from the authoring surface — they are not props, and the docs must not list them.
+const TEXTSTYLE_INPUT_KEYS = keySet(KNOWN_KEYS.textStyle, IGNORED_READ_TEXT_LEAVES);
+const RUN_INPUT_KEYS = keySet(KNOWN_KEYS.run, IGNORED_READ_TEXT_LEAVES);
+
+function rejectUnauthorableTextLeaves(c: object, subject: string, refused: Record<string, string> = REFUSED_READ_TEXT_LEAVES): void {
+  for (const leaf of Object.keys(refused)) {
+    if (c.hasOwnProperty(leaf)) {
+      throw new Error(subject + ": `" + leaf + "` is a read-only field — " + refused[leaf] + ". Drop it from the style.");
+    }
+  }
+}
+
+// The text words a BASE style and a RUN delta share — casing, paragraph metrics, links. Written once
+// because Figma applies every one of them per range (setRangeTextCase/setRangeParagraph*/…), so the
+// two carriers differ only in which range they cover, never in what the word means.
+function compileSharedTextWords(c: Record<string, unknown>, ts: WriteTextStyle, subject: string): void {
+  const textCase = compileTextCase(c, subject);
+  if (textCase) ts.textCase = textCase;
+  if (c.paragraphSpacing != null) ts.paragraphSpacing = length(c.paragraphSpacing as number | string);
+  if (c.paragraphIndent != null) ts.paragraphIndent = length(c.paragraphIndent as number | string);
+  if (c.listSpacing != null) ts.listSpacing = length(c.listSpacing as number | string);
+}
+
+// The textStyle word compile every text carrier rides — flcm.text's base and an edit delta alike
+// (one vocabulary, one parser). Two words in the group are deliberately NOT compiled here, because
+// neither is a Figma property this returns:
+//   • lineClamp validates against a width the two callers know differently (create: the authored
+//     width; edit: the live wrap state), so each reads cfg.lineClamp itself.
+//   • boldWeight is a CONTENT-compile convention — what `**` resolves to — so it rides into
+//     compileTextContent, not onto the node's style. Letting it land here would put a non-property
+//     on the IR the bridge would have to know to ignore.
+// Exported for edit.ts.
+export function compileTextStyleWords(cfg: unknown, subject: string): WriteTextStyle {
+  // QuickJS boundary: a present-but-malformed value must reject the whole call, not read as absence.
+  if (typeof cfg !== "object" || cfg === null || Array.isArray(cfg)) {
+    throw new Error("flcm: " + subject + " must be an object like { fontSize, fontWeight, … } — got " + JSON.stringify(cfg) + ".");
+  }
+  const c = cfg as NonNullable<TextProps["textStyle"]>;
+  rejectUnauthorableTextLeaves(c, subject);
+  rejectUnknownKeys(c, TEXTSTYLE_INPUT_KEYS, subject);
+  const ts: WriteTextStyle = {};
+  if (c.fontSize != null) { assertScalarType(c.fontSize, "number", "textStyle.fontSize"); ts.fontSize = c.fontSize; }
+  // The one non-scalar-typed leaf: a number (700) or a name ("bold"). Anything else must reject —
+  // wantWeight would silently read it as 400, a whole-node reset to regular.
+  if (c.fontWeight != null) {
+    if (typeof c.fontWeight !== "number" && typeof c.fontWeight !== "string") {
+      throw new Error('flcm: textStyle.fontWeight must be a number (400, 700) or a weight name ("bold", "semibold") — got ' + JSON.stringify(c.fontWeight) + ".");
+    }
+    ts.fontWeight = c.fontWeight;
+  }
+  if (c.fontFamily != null) { assertScalarType(c.fontFamily, "string", "textStyle.fontFamily"); ts.fontFamily = c.fontFamily; }
+  if (c.fontStyle != null) ts.fontStyle = assertEnum("textStyle.fontStyle", c.fontStyle, FONT_STYLE);
+  if (c.lineHeight != null) ts.lineHeight = lineHeight(c.lineHeight);
+  if (c.letterSpacing != null) ts.letterSpacing = letterSpacing(c.letterSpacing);
+  if (c.textDecoration != null) ts.textDecoration = assertEnum("textStyle.textDecoration", c.textDecoration, TEXT_DECORATION);
+  if (c.textAlign != null) ts.textAlign = assertEnum("textStyle.textAlign", c.textAlign, TEXT_ALIGN);
+  if (c.textAlignVertical != null) ts.textAlignVertical = assertEnum("textStyle.textAlignVertical", c.textAlignVertical, TEXT_ALIGN_VERTICAL);
+  if (c.hyperlink != null) ts.hyperlink = parseHyperlink(c.hyperlink, subject + ".hyperlink");
+  compileSharedTextWords(c as Record<string, unknown>, ts, subject);
+  return ts;
+}
+
+// Content -> { text | runs }, the ONE parser behind flcm.text's positional arg and edit's `content`
+// word. Both the runs-array and plain-string forms flow through the markdown parser (markdown.ts):
+// a plain string may carry `**bold**` or literal escapes; a runs-array entry's text is markdown
+// too. `base` is the style each styled run layers over (create: the authored textStyle; edit: the
+// delta's textStyle enriched with the live node's font identity, so a run that only bolds inherits
+// the family the node actually uses). A plain string that parses to a single flagless segment
+// stays plain `text`; anything richer becomes `runs`. Exported for edit.ts.
+export function compileTextContent(content: unknown, base: WriteTextStyle, boldWeight?: number | string): { text?: string; runs?: WriteTextRun[] } {
+  if (Array.isArray(content)) {
+    const runs = compileRuns(content, base, boldWeight);
+    return runs.length ? { runs } : { text: "" };
+  }
+  const segs = parseInlineMarkdown(assertNotReadToken(plainString(content)));
+  if (segs.length === 1 && isPlainSeg(segs[0])) return { text: segs[0].text };
+  if (!segs.length) return { text: "" };
+  return { runs: segs.map((seg) => compileRun(seg.text, mergeDelta(seg, {}, boldWeight), base, "flcm.text run")) };
 }
 
 function text(content: unknown, props: TextProps = {}): WriteNode {
-  props = props || {};
+  props = props ?? {};
   rejectUnknownKeys(props, TEXT_KEYS, "flcm.text");
-  const wn: WriteNode = { type: "TEXT" };
+  const wn = mintWriteNode("TEXT");
   base(wn, props);
   // `color` is a top-level node-level sugar prop (compiles to the text node's fill), NOT part of textStyle —
   // base color lives in `fills` like every other node, and the grouped `textStyle` is the type base only.
-  if (props.color != null) wn.fills = [parseFill(props.color, "color")];
-  const cfg = props.textStyle || {};
-  rejectUnknownKeys(cfg, TEXTSTYLE_KEYS, "flcm.text.textStyle");
-  const ts: WriteTextStyle = {};
-  if (cfg.fontSize != null) ts.fontSize = cfg.fontSize;
-  if (cfg.fontWeight != null) ts.fontWeight = cfg.fontWeight;
-  if (typeof cfg.fontFamily === "string") ts.fontFamily = cfg.fontFamily;
-  if (cfg.fontStyle != null) ts.fontStyle = assertEnum("textStyle.fontStyle", cfg.fontStyle, FONT_STYLE);
-  if (cfg.lineHeight != null) ts.lineHeight = lineHeight(cfg.lineHeight);
-  if (cfg.letterSpacing != null) ts.letterSpacing = letterSpacing(cfg.letterSpacing);
-  if (cfg.textDecoration != null) ts.textDecoration = assertEnum("textStyle.textDecoration", cfg.textDecoration, TEXT_DECORATION);
-  if (cfg.textAlign != null) ts.textAlign = assertEnum("textStyle.textAlign", cfg.textAlign, TEXT_ALIGN);
+  // "none" is the same removal word edit takes — one vocabulary means create accepts it too.
+  if (props.color != null) wn.fills = compilePaintWord(props.color, "color");
+  const cfg = (props.textStyle ?? {}) as NonNullable<TextProps["textStyle"]>;
+  const ts = compileTextStyleWords(cfg, "flcm.text.textStyle");
   if (Object.keys(ts).length) wn.textStyle = ts;
-  // Content is either the rich-text runs array or a plain string, and BOTH flow through the markdown
-  // parser now (markdown.ts). A plain string may carry markdown (`**bold**`) or literal escapes (`\*`);
-  // a runs-array entry's text is markdown too (read renders a run's decorations INSIDE its text). The
-  // base textStyle above is the default each run layers over. A plain string that parses to a single
-  // flagless segment stays a plain `text`; anything richer becomes `runs`.
-  if (Array.isArray(content)) {
-    const runs = compileRuns(content, ts);
-    if (runs.length) wn.runs = runs;
-    else wn.text = "";
-  } else {
-    const segs = parseInlineMarkdown(assertNotReadToken(plainString(content)));
-    if (segs.length === 1 && isPlainSeg(segs[0])) wn.text = segs[0].text;
-    else if (!segs.length) wn.text = "";
-    else wn.runs = segs.map((seg) => compileRun(seg.text, mergeDelta(seg, {}), ts));
-  }
-  if (cfg.lineClamp != null) wn.maxLines = assertLineClamp(cfg.lineClamp, props.width);
-  const layout = buildLayout(props as FrameProps, false);
+  Object.assign(wn, compileTextContent(content, ts, cfg.boldWeight));
+  // lineClamp "none" at create is the explicit default — no clamp to remove, nothing lands.
+  if (cfg.lineClamp != null && cfg.lineClamp !== "none") wn.maxLines = assertLineClamp(cfg.lineClamp, props.width);
+  const layout = buildLayout(props as FrameProps, "TEXT", "flcm.text");
   if (Object.keys(layout).length) wn.layout = layout;
-  return wn;
+  return sealWriteNode(wn);
+}
+
+// N's shape gate, shared by create and edit so one author mistake reads one error. "none" is each
+// caller's, before this: create skips it (the explicit default), edit compiles it to the removal.
+// Boundedness is also the caller's — create knows the authored width, edit the live wrap state.
+export function assertLineClampCount(lineClamp: unknown, subject: string): number {
+  if (typeof lineClamp !== "number" || !Number.isInteger(lineClamp) || lineClamp < 1) {
+    throw new Error(subject + ': textStyle.lineClamp must be a whole number ≥ 1 or "none" — got ' + JSON.stringify(lineClamp) + ".");
+  }
+  return lineClamp;
 }
 
 // lineClamp clamps a text to N lines with an ending ellipsis, but truncation only bites when the text has a
 // bounded width to wrap against — buildText wires a fixed/`"fill"`/`"N%"` width to height-only auto-resize,
 // giving it a wrap; a width-hugging text grows sideways on one line, so there's nothing to clamp. Rather
-// than let `lineClamp` be a silent no-op there (ADR-0003), reject it loud and name the fix. N must be a
-// whole number ≥ 1. (A `"hug"` or absent `width` is the unbounded case.)
+// than let `lineClamp` be a silent no-op there (ADR-0003), reject it loud and name the fix.
 function assertLineClamp(lineClamp: unknown, width: TextProps["width"]): number {
-  if (typeof lineClamp !== "number" || !Number.isInteger(lineClamp) || lineClamp < 1) {
-    throw new Error("flcm.text: textStyle.lineClamp must be a whole number ≥ 1 — got " + JSON.stringify(lineClamp) + ".");
-  }
+  const n = assertLineClampCount(lineClamp, "flcm.text");
   const bounded = typeof width === "number" || width === "fill" || isPercent(width);
   if (!bounded) {
     throw new Error('flcm.text: textStyle.lineClamp needs a bounded width to truncate against — set width to a number, "fill", or "N%". A width-hugging text grows on one line, so there is nothing to wrap and clamp.');
   }
-  return lineClamp;
+  return n;
 }
 
 // Realizable subsets for the two enum-valued text-style leaves. zod's enums (schema.ts) are type/doc only
@@ -411,7 +729,7 @@ const isPlainSeg = (seg: MdSegment): boolean => !seg.bold && !seg.italic && !seg
 // is parsed and may expand to several runs; each carries the entry's residual StyleDelta merged UNDER the
 // markdown flags (an explicit delta field wins over the field the markdown implied — e.g. a non-canonical
 // heavy weight overrides the plain `**` bold). The `{tsN}` rejection runs on the raw entry text, pre-decode.
-function compileRuns(runs: TextRunInput[], baseStyle: WriteTextStyle): WriteTextRun[] {
+function compileRuns(runs: TextRunInput[], baseStyle: WriteTextStyle, boldWeight?: number | string): WriteTextRun[] {
   if (!runs.length) {
     throw new Error("flcm.text: a runs array must be non-empty — pass at least one run (a string or a [text, style] tuple).");
   }
@@ -421,27 +739,32 @@ function compileRuns(runs: TextRunInput[], baseStyle: WriteTextStyle): WriteText
     let raw: string;
     let delta: StyleDeltaInput;
     if (typeof run === "string") { raw = run; delta = {}; }
-    else if (Array.isArray(run) && typeof run[0] === "string") { raw = run[0]; delta = run[1] || {}; }
+    else if (Array.isArray(run) && typeof run[0] === "string") { raw = run[0]; delta = run[1] ?? {}; }
     else {
       throw new Error('flcm.text: each run is a plain string or a [text, style] tuple like ["bold bit", { fontWeight: 700 }] — got ' + JSON.stringify(run) + ".");
     }
     // The run delta is the grounded silent-drop site: compileRun reads a positive list and never looked at
-    // the rest, so a typo'd `textTransform` on a run vanished. Reject it here, on the raw author delta.
-    rejectUnknownKeys(delta, RUN_KEYS, `flcm.text run[${i}]`);
+    // the rest, so a typo'd `textTransfrom` on a run vanished. Reject it here, on the raw author delta.
+    rejectUnauthorableTextLeaves(delta, `flcm.text run[${i}]`, REFUSED_RUN_TEXT_LEAVES);
+    rejectUnknownKeys(delta, RUN_INPUT_KEYS, `flcm.text run[${i}]`);
     for (const seg of parseInlineMarkdown(assertNotReadToken(raw))) {
-      out.push(compileRun(seg.text, mergeDelta(seg, delta), baseStyle));
+      out.push(compileRun(seg.text, mergeDelta(seg, delta, boldWeight), baseStyle, `flcm.text run[${i}]`));
     }
   }
   return out;
 }
 
 // Markdown flags → StyleDelta fields, then overlay the tuple's explicit delta so an explicit field wins
-// over the one the markdown implied. Bold maps to the default bold weight ("bold", snapped by fonts.ts);
-// a read run whose weight isn't the canonical bold carries an explicit `fontWeight` in its delta that
-// overrides this. `\n`-decoded newlines and every other char already live in seg.text.
-function mergeDelta(seg: MdSegment, explicit: StyleDeltaInput): StyleDeltaInput {
+// over the one the markdown implied. `\n`-decoded newlines and every other char already live in seg.text.
+//
+// `**` resolves to the NODE's bold weight, not a global 700. The read side compresses a bold span to
+// markdown and reports the weight it stood for ONCE, on the node (`boldWeight`) — it deliberately omits
+// the per-run `fontWeight` when the run matches that weight, so the node-level word is the only carrier.
+// Defaulting to "bold" here regardless would re-render a Semi Bold (600) emphasis at 700: silently wrong
+// pixels on the commonest mixed-weight text there is.
+function mergeDelta(seg: MdSegment, explicit: StyleDeltaInput, boldWeight?: number | string): StyleDeltaInput {
   const d: StyleDeltaInput = {};
-  if (seg.bold) d.fontWeight = "bold";
+  if (seg.bold) d.fontWeight = boldWeight != null ? boldWeight : "bold";
   if (seg.italic) d.fontStyle = "italic";
   if (seg.strike) d.textDecoration = "line-through";
   if (seg.hyperlink !== undefined) d.hyperlink = seg.hyperlink;
@@ -455,13 +778,17 @@ function mergeDelta(seg: MdSegment, explicit: StyleDeltaInput): StyleDeltaInput 
 // base italic carries no per-range font (the base font is already italic). textDecoration and hyperlink are
 // independent Figma calls. The `{tsN}` guard is NOT re-run here — the text is already decoded (see
 // assertNotReadToken); it was checked on the raw input in compileRuns / text().
-function compileRun(str: string, delta: StyleDeltaInput, baseStyle: WriteTextStyle): WriteTextRun {
+function compileRun(str: string, delta: StyleDeltaInput, baseStyle: WriteTextStyle, subject: string): WriteTextRun {
   const out: WriteTextRun = { text: str };
   const style: WriteTextStyle = {};
   const italic = delta.fontStyle != null
     ? assertEnum("run fontStyle", delta.fontStyle, FONT_STYLE)
     : baseStyle.fontStyle;
   if (delta.fontFamily != null || delta.fontWeight != null || delta.fontStyle != null) {
+    // CONTRACT: a run changing any of the (family, weight, slant) triple carries the COMPLETE
+    // effective triple — fontFamily is assigned even when the base has none (the key is present
+    // with an undefined value). Edit's mixed-base guard reads exactly that presence; don't "tidy"
+    // the undefined assignment away.
     style.fontFamily = delta.fontFamily != null ? delta.fontFamily : baseStyle.fontFamily;
     style.fontWeight = delta.fontWeight != null ? delta.fontWeight : baseStyle.fontWeight;
     if (italic != null) style.fontStyle = italic;
@@ -470,48 +797,47 @@ function compileRun(str: string, delta: StyleDeltaInput, baseStyle: WriteTextSty
   if (delta.lineHeight != null) style.lineHeight = lineHeight(delta.lineHeight);
   if (delta.letterSpacing != null) style.letterSpacing = letterSpacing(delta.letterSpacing);
   if (delta.textDecoration != null) style.textDecoration = assertEnum("run textDecoration", delta.textDecoration, TEXT_DECORATION);
+  compileSharedTextWords(delta as Record<string, unknown>, style, subject);
   if (Object.keys(style).length) out.style = style;
-  if (delta.color != null) out.fills = [parseFill(delta.color, "color")];
-  if (delta.hyperlink != null) out.hyperlink = assertHyperlink(delta.hyperlink);
+  if (delta.color != null) out.fills = compilePaintWord(delta.color, "color");
+  // A run's link lives on the RUN, not its style: the span already IS the range setRangeHyperlink
+  // needs, so it takes no per-field range of its own.
+  if (delta.hyperlink != null) out.hyperlink = parseHyperlink(delta.hyperlink, subject + ".hyperlink");
   return out;
 }
 
-function assertHyperlink(url: unknown): string {
-  if (typeof url !== "string" || !url.trim()) {
-    throw new Error("flcm.text: hyperlink must be a non-empty URL string — got " + JSON.stringify(url) + ".");
-  }
-  return url;
-}
-
 function shape(type: "RECTANGLE" | "ELLIPSE", props: ShapeProps = {}): WriteNode {
-  props = props || {};
-  rejectUnknownKeys(props, SHAPE_KEYS, type === "RECTANGLE" ? "flcm.rect" : "flcm.ellipse");
-  const wn: WriteNode = { type };
-  appearance(wn, props, { radius: type === "RECTANGLE" });
-  const layout = buildLayout(props as FrameProps, false);
+  props = props ?? {};
+  const subject = type === "RECTANGLE" ? "flcm.rect" : "flcm.ellipse";
+  rejectUnknownKeys(props, SHAPE_KEYS, subject);
+  const wn = mintWriteNode(type);
+  compileNodeLocalProps(wn, props, { radius: type === "RECTANGLE" });
+  const layout = buildLayout(props as FrameProps, type, subject);
   if (Object.keys(layout).length) wn.layout = layout;
-  return wn;
+  return sealWriteNode(wn);
 }
 
 function rect(props?: ShapeProps): WriteNode { return shape("RECTANGLE", props); }
 function ellipse(props?: ShapeProps): WriteNode { return shape("ELLIPSE", props); }
 
 function line(props: LineProps = {}): WriteNode {
-  props = props || {};
+  props = props ?? {};
   rejectUnknownKeys(props, LINE_KEYS, "flcm.line");
-  const wn: WriteNode = { type: "LINE" };
+  const wn = mintWriteNode("LINE");
   base(wn, props);
-  const paint = props.stroke != null ? props.stroke : props.color;
-  if (paint != null) wn.strokes = [parseFill(paint, "stroke")];
+  const strokes = compileLineStroke(props);
+  if (strokes) wn.strokes = strokes;
   if (props.strokeWidth != null) wn.strokeWeight = length(props.strokeWidth);
-  const len = props.length != null ? props.length : props.w;
-  const layout: WriteLayout = {};
-  if (typeof len === "number") layout.dimensions = { width: len };
+  const layout: WriteLayout = { ...(compileLineLength(props) || {}) };
   applyAbsolute(layout, props);
   applyPin(layout, props);
+  // line() is the one constructor that doesn't ride buildLayout (length-only vocabulary), so it
+  // consults the shared authority itself — no rule fires on a length-only layout today, but a
+  // future LINE-keyed rule must not end up edit-only (the asymmetry this module forbids).
+  assertLayoutRealizableForType("LINE", layout, false, "flcm.line");
   if (Object.keys(layout).length) wn.layout = layout;
-  if (typeof props.rotation === "number") wn.rotation = props.rotation;
-  return wn;
+  if (props.rotation != null) { assertScalarType(props.rotation, "number", "rotation"); wn.rotation = props.rotation; }
+  return sealWriteNode(wn);
 }
 
 // ---- Vector verbs. Two contracts, deliberately not interchangeable (see ir.ts WriteNode.svg/pathData):
@@ -522,7 +848,7 @@ function line(props: LineProps = {}): WriteNode {
 // ADR-0003 forbids, so reject them loud. The markup must look like an <svg> document (catches a URL/path
 // passed by mistake); the render-time parse (bridge) is the second, authoritative fail-loud.
 function svg(markup: unknown, props: SvgProps = {}): WriteNode {
-  props = props || {};
+  props = props ?? {};
   if (typeof markup !== "string" || !/<svg[\s>]/i.test(markup)) {
     throw new Error("flcm.svg: expected SVG markup containing an <svg> element — got " + JSON.stringify(markup) + ". For a themeable single-path vector use flcm.path({ d }) instead.");
   }
@@ -532,15 +858,16 @@ function svg(markup: unknown, props: SvgProps = {}): WriteNode {
   }
   // After the fill/stroke special-case (its tailored message beats a generic "unknown prop") — reject the rest.
   rejectUnknownKeys(props, SVG_KEYS, "flcm.svg");
-  const wn: WriteNode = { type: "VECTOR", svg: markup };
+  const wn = mintWriteNode("VECTOR");
+  wn.svg = markup;
   base(wn, props);
-  const layout = buildLayout(props as FrameProps, false);
+  const layout = buildLayout(props as FrameProps, "VECTOR", "flcm.svg");
   if (Object.keys(layout).length) wn.layout = layout;
-  return wn;
+  return sealWriteNode(wn);
 }
 
 // flcm.path({ d, ... }) -> a VECTOR node carrying the path data (createVector + vectorPaths at render). Takes
-// the shared appearance props via appearance() (radius off — a vector has none), so it themes like a rect.
+// the shared appearance props via compileNodeLocalProps() (radius off — a vector has none), so it themes like a rect.
 // `d` is required and must be a non-empty string; bad path data fails loud again at render (bridge).
 function path(props: PathProps): WriteNode {
   if (!props || typeof props !== "object") {
@@ -551,11 +878,12 @@ function path(props: PathProps): WriteNode {
     throw new Error("flcm.path: `d` (SVG path data) must be a non-empty string — got " + JSON.stringify(d) + ".");
   }
   rejectUnknownKeys(props, PATH_KEYS, "flcm.path");
-  const wn: WriteNode = { type: "VECTOR", pathData: d };
-  appearance(wn, props, {}); // fill/stroke/strokeWidth/effects/rotation + base; radius/clip off for a vector
-  const layout = buildLayout(props as FrameProps, false);
+  const wn = mintWriteNode("VECTOR");
+  wn.pathData = d;
+  compileNodeLocalProps(wn, props, {}); // fill/stroke/strokeWidth/effects/rotation + base; radius/clip off for a vector
+  const layout = buildLayout(props as FrameProps, "VECTOR", "flcm.path");
   if (Object.keys(layout).length) wn.layout = layout;
-  return wn;
+  return sealWriteNode(wn);
 }
 
 // ---- gradient() sugar: structured spec -> typed PaintSpec (no string round-trip). The transform math
@@ -596,19 +924,21 @@ function stopPercent(raw: { pos?: number; position?: number }, i: number, n: num
   return n > 1 ? (i / (n - 1)) * 100 : 0;
 }
 
-// ---- image() paint constructor: a url + intent -> an inert image PaintSpec (a fill value, like
-// flcm.gradient). The sandbox NEVER fetches — the spec carries only the source; the trusted server fetches
-// + validates the bytes and the bridge resolves them to a plugin ImagePaint at render (keyed by url).
-// `placeholder` marks a stand-in so a later read can tell it from a real asset (bridge persists it on the
-// node). Fails loud on a non-string/empty url or a scaleMode outside the set — never a silent blank fill.
+// ---- image() paint constructor: a source + intent -> an inert image PaintSpec (a fill value, like
+// flcm.gradient). The source is an https url or a local file path (CSS url() takes both; the server
+// confines paths to its asset root). The sandbox NEVER touches network or disk — the spec carries only the
+// source string; the trusted server loads + validates the bytes and the bridge resolves them to a plugin
+// ImagePaint at render (keyed by source). `placeholder` marks a stand-in so a later read can tell it from a
+// real asset (bridge persists it on the node). Fails loud on a non-string/empty source or a scaleMode
+// outside the set — never a silent blank fill.
 
 const IMAGE_SCALE_MODES = new Set(["FILL", "FIT", "CROP", "TILE"]);
 
 function image(url: unknown, opts: ImageOpts = {}): PaintSpec {
   if (typeof url !== "string" || !url.trim()) {
-    throw new Error("flcm.image: expected an image url string, e.g. flcm.image(\"https://example.com/photo.jpg\") — got " + JSON.stringify(url) + ".");
+    throw new Error("flcm.image: expected an image url or local file path string, e.g. flcm.image(\"https://example.com/photo.jpg\") or flcm.image(\"assets/logo.png\") — got " + JSON.stringify(url) + ".");
   }
-  opts = opts || {};
+  opts = opts ?? {};
   rejectUnknownKeys(opts, IMAGE_KEYS, "flcm.image opts");
   const scaleMode = opts.scaleMode != null ? opts.scaleMode : "FILL";
   if (!IMAGE_SCALE_MODES.has(scaleMode)) {
@@ -709,45 +1039,40 @@ function blurRadius(b: BlurSugar): number {
 }
 
 // Accept the sugar spec ({ shadow, blur, backgroundBlur }), an already-typed EffectSpec[] (what
-// flcm.effects returns), or a hand-written CSS WriteEffects bag — all converge on EffectSpec[].
+// flcm.effects returns), or a CSS WriteEffects bag — all converge on EffectSpec[].
+//
+// The two string/object vocabularies are SPLIT, not routed: one read `effects` value carries both at once
+// (a frame with a drop shadow AND native glass reads back as { boxShadow, glass }), so picking a single
+// path by "does this look CSS?" would reject exactly the shape `get` hands back. The closed-set reject runs
+// ONCE over the union first — parseCssEffects reads a positive list, so without a gate a typo beside a real
+// CSS key would vanish silently; and gating after the split would name the half the typo fell into rather
+// than `effects`, where it was written, with only half the legal vocabulary listed.
 function normalizeEffects(v: EffectsInput): EffectSpec[] {
   if (Array.isArray(v)) return v;
   if (!v || typeof v !== "object") throw new Error("flcm: effects must be an object — got " + JSON.stringify(v) + ".");
-  // A bag carrying any CSS-effect key is the CSS form. Reject its unknown keys too — parseCssEffects reads a
-  // positive list, so a typo'd key would otherwise silently vanish (the same closed-set policy as the sugar
-  // bag, surface-wide). A bag with NO CSS key routes to the sugar path, whose own EFFECTS_KEYS reject fires.
-  const isCss = [...CSS_EFFECTS_KEYS].some((f) => f in v);
-  if (isCss) {
-    rejectUnknownKeys(v, CSS_EFFECTS_KEYS, "effects (CSS bag)");
-    return parseCssEffects(v as WriteCssEffects);
-  }
-  return effects(v as EffectsSugar);
-}
-
-// The server injects the raster bytes for image fills on this global between the two render passes (a
-// Record keyed by url → base64). It's the ONE channel that reaches into the preamble: the preamble is its
-// own IIFE closure, so a var declared in the agent-code scope wouldn't be visible here. Declared because
-// the sandbox's ES2017 lib predates the globalThis TYPE; the `typeof` guard makes the READ safe even in an
-// engine where the identifier is truly absent (typeof never throws on an undeclared name). Absent on the
-// first pass (and whenever no image fills are used); a Record on the re-run.
-declare const globalThis: { __flcmImageBytes?: Record<string, string> } | undefined;
-
-function injectedImageBytes(): Record<string, string> {
-  const g = typeof globalThis !== "undefined" ? globalThis : undefined;
-  const bag = g && g.__flcmImageBytes;
-  return bag && typeof bag === "object" ? bag : {};
+  rejectUnknownKeys(v, EFFECTS_INPUT_KEYS, "effects");
+  const bag = v as Record<string, unknown>;
+  const css: Record<string, unknown> = {};
+  const sugar: Record<string, unknown> = {};
+  for (const k of Object.keys(bag)) (CSS_EFFECTS_KEYS.has(k) ? css : sugar)[k] = bag[k];
+  const out: EffectSpec[] = [];
+  if (Object.keys(css).length) out.push(...parseCssEffects(css as WriteCssEffects));
+  if (Object.keys(sugar).length) out.push(...effects(sugar as EffectsSugar));
+  return out;
 }
 
 // Gather every image url in the tree — from EVERY paint-bearing location the bridge later resolves through
 // paintOf (node fills/strokes AND per-run fills), so render() can check which still need server-fetched
 // bytes before it creates a single node. This must stay in lockstep with paintOf's coverage: a paint site
 // paintOf resolves but this misses would fetch nothing, then hit the "no bytes" throw at render.
-function collectImageUrls(tree: WriteNode): string[] {
+function collectImageUrls(tree: WriteProps): string[] {
   const urls: string[] = [];
   const addFrom = (paints: readonly PaintSpec[] | undefined): void => {
-    if (paints) for (const spec of paints) if (spec && spec.kind === "image") urls.push(spec.url);
+    // `"url" in spec` is the whole hash-vs-url branch: a hash-backed image already names bytes in the
+    // document, so including it here would ask the server to fetch a string that is not a source.
+    if (paints) for (const spec of paints) if (spec && spec.kind === "image" && "url" in spec) urls.push(spec.url);
   };
-  const visit = (wn: WriteChild): void => {
+  const visit = (wn: WriteChild | WriteProps): void => {
     if (!wn || typeof wn !== "object") return;
     addFrom(wn.fills);
     addFrom(wn.strokes);
@@ -758,39 +1083,111 @@ function collectImageUrls(tree: WriteNode): string[] {
   return urls;
 }
 
+// Fetch bytes for every image paint in `trees` through the host channel (protocol 2), in ONE deduped
+// awaitable request, BEFORE any canvas write — a fetch failure (blocked url, oversize, unreachable)
+// aborts with zero mutations. The await is the run's suspension point (the sandbox suspends while the
+// plugin relays the WS round-trip); a cancelled or disconnected run dies here when the host rejects
+// its pending fetch. Shared by render (one tree) and the edit verbs (a delta's fill/stroke) — the
+// walk reads only paint sites, so WriteProps (no type discriminant) is the honest input.
+//
+// Plural because ONE VERB OWES ONE ROUND TRIP: a batch of deltas dedupes across every entry, so ten
+// entries sharing an image url fetch it once and the batch has a single suspension point.
+export async function fetchImagesForTrees(trees: readonly WriteProps[]): Promise<Record<string, string>> {
+  const all: string[] = [];
+  for (const tree of trees) for (const url of collectImageUrls(tree)) all.push(url);
+  const urls = Array.from(new Set(all));
+  if (!urls.length) return {};
+  return requestHostImages(urls);
+}
+
+// The two read-only resource loads a tree needs before ANY node is created — fonts and image
+// bytes, in parallel (neither depends on the other, and they're a run's two slowest awaits).
+// Shared by render and the structural insert verbs, which owe the same guarantee: a blocked url,
+// an oversize image, or an unreachable host aborts with zero mutations.
+//
+// Both settle BEFORE this resolves or rejects (hand-rolled: the tsconfig lib pins the QuickJS
+// floor below ES2020's allSettled). A fail-fast Promise.all would release the verb's queue slot
+// while the sibling await is still in flight — the next verb's prepare could then issue a second
+// image request beside the orphaned one, breaking "one in-flight fetch per run" (the host comment
+// relies on it). A separate `failed` flag, not a sentinel on the reason: a promise can legally
+// reject with undefined, and mistaking that for success would carry a missing resource map into
+// the SEALED apply span. Both catch handlers attach before either await — attaching the second
+// only after the first settles would leave an early font rejection briefly unhandled and
+// mis-order which failure wins.
+export async function loadTreeResources(tree: WriteNode): Promise<RenderResources> {
+  let failed = false;
+  let firstFailure: unknown;
+  const settled = <V>(p: Promise<V>) =>
+    p.catch((err: unknown) => {
+      if (!failed) {
+        failed = true;
+        firstFailure = err;
+      }
+      return undefined as unknown as V;
+    });
+  const settledImages = settled(fetchImagesForTrees([tree]));
+  const settledFonts = settled(loadFontsForTree(tree));
+  const images = await settledImages;
+  const fonts = await settledFonts;
+  if (failed) throw firstFailure;
+  return { images, fonts };
+}
+
 // render(tree) — the one place nodes are created. Loads fonts, walks the WriteNode tree, stamps each
 // `key` into pluginData('flcm/key'), and returns the root handle plus a map of every keyed node. Only
 // keyed nodes appear in `keyed`; a duplicate key within one render is a loud error (in bridge).
-async function render(tree: WriteNode): Promise<{ root: Handle; keyed: Record<string, Handle> }> {
-  if (!tree || typeof tree !== "object" || typeof tree.type !== "string") {
-    throw new Error("flcm.render: expected a node from flcm.frame()/text()/rect()/ellipse()/line() (or a raw WriteNode), got " + JSON.stringify(tree) + ".");
-  }
-  // The root has no parent to resolve a percent against, so reject it up front — before the image round-trip
-  // below (this check needs no bytes), and before buildNode, which only guards a percent on a *child*. A
-  // percent w/h/x/y belongs on a child, against its parent.
-  if (tree.layout && (tree.layout.percentSize || tree.layout.percentPos)) {
-    throw new Error("flcm: a percent w/h/x/y on the root node has no parent to resolve against — the root node sizes in px. Put the percent on a child, against its parent.");
-  }
-  // Two-pass image path: collect every image url and, if the server hasn't injected its bytes yet, signal
-  // "images needed" BEFORE creating any node (flcm builds an inert tree then renders, so nothing has run
-  // yet — the re-run can't double any side effect). The executor turns this throw into an imagesNeeded
-  // reply; the server fetches+validates and re-runs this same code with bytes injected, and this pass then
-  // finds them present. Dedupe so the server never fetches one url twice.
-  const images = injectedImageBytes();
-  const missing = collectImageUrls(tree).filter((url) => !(url in images));
-  if (missing.length) {
-    const err: Error & { __flcmImagesNeeded?: string[] } = new Error("flcm.render: image bytes not fetched yet — the server supplies them and re-runs this code.");
-    err.__flcmImagesNeeded = Array.from(new Set(missing));
-    throw err;
-  }
-  const fonts = await loadFontsForTree(tree);
-  const ctx: RenderCtx = { keyed: {}, fonts, images, pending: [] };
-  // Build the tree (percent children land at a provisional size), then fold every percent/anchor into
-  // pixels against each parent's now-realized size in one post-walk pass (bridge.resolvePercents).
-  const root = buildNode(tree, ctx);
-  resolvePercents(ctx);
-  // Handles are minted only now: geometry settles once the whole tree is laid out (bridge.settleHandles).
-  return settleHandles(root, ctx.keyed);
+// A single expression on purpose: the queue slot is reserved before render() can possibly yield,
+// which is the lock's invocation-order guarantee (see enterMutatingVerb) — don't add work above it.
+function render(tree: WriteNode): Promise<{ root: Handle; keyed: Record<string, Handle> }> {
+  return enterMutatingVerb(
+    "render",
+    // Prepare — spec checks, then the read-only resource loads (parallel: neither depends on the
+    // other, and they're the run's two slowest awaits). A reject here — bad spec, blocked url,
+    // oversize, unreachable — exits with zero mutations and zero undo residue, and a run the
+    // server cancelled during the awaits is refused before the entry seal. Deliberate cost:
+    // concurrent renders' prepares now SUM (each waits its turn in the queue slot) against the
+    // server's never-suspended 45s run ceiling — and font-only prepares, which emit no bridge
+    // traffic, against the 15s inactivity deadline too — where they used to overlap. The price
+    // of one entry shape for every verb; a run that genuinely needs many cold fetches should
+    // split its work. Upside: the per-run in-flight image cap can no longer refuse a
+    // Promise.all of image renders.
+    async () => {
+      if (!tree || typeof tree !== "object" || typeof tree.type !== "string") {
+        throw new Error("flcm.render: expected a node from flcm.frame()/text()/rect()/ellipse()/line()/svg()/path(), got " + JSON.stringify(tree) + ".");
+      }
+      // Authenticate provenance for the WHOLE tree before the resource loads below — a hand-built
+      // node must reject with its own message, not surface as a confusing image/font error after
+      // a wasted host round-trip.
+      assertConstructorBuiltTree(tree);
+      // The root lands on the page, which has no bounded size to resolve "fill" or a percent
+      // against — reject before the image round-trip (this check needs no bytes) and before
+      // buildNode, which only guards a percent on a *child*. The rule is edit's page-parent gate,
+      // shared (assertSizingResolvesAgainstParentFrame), so the two verbs answer identically.
+      if (tree.layout) {
+        assertSizingResolvesAgainstParentFrame(tree.layout, true, "flcm");
+      }
+      return loadTreeResources(tree);
+    },
+    // Apply — node creation, sealed as one undo step.
+    ({ images, fonts }) => {
+      const ctx: RenderCtx = { keyed: {}, fonts, images, pending: [] };
+      // Build the tree (percent children land at a provisional size), then fold every percent/anchor into
+      // pixels against each parent's now-realized size in one post-walk pass (bridge.resolvePercents).
+      const root = buildNode(tree, ctx);
+      // The root's own position words (absolute x/y, pin, anchor) apply against the page — the
+      // walk above only positions CHILDREN, and edit applies the same words to a page child.
+      if (tree.layout) placeRootOnPage(root, tree.layout, ctx);
+      resolvePercents(ctx);
+      // After resolvePercents, so the root's bounds are final — and through the CONSOLE channel,
+      // which every already-installed plugin already returns. A new field on EXECUTE_CODE_RESULT
+      // would be a protocol bump, i.e. a manual manifest re-import for every user, to say something
+      // this advisory. ADR-0010 buys exactly this: placement feedback ships with the server.
+      const overlap = describeRootOverlap(root);
+      if (overlap) console.log(overlap);
+      // Handles are minted only now: geometry settles once the whole tree is laid out (bridge.settleHandles).
+      return settleHandles(root, ctx.keyed);
+    },
+  );
 }
 
 // flcm.id(id) — the target escape hatch. Wraps a raw node id so a target-taking verb (get/find/edit) treats
@@ -804,16 +1201,10 @@ function id(nodeId: unknown): RawIdRef {
   return { __flcmId: nodeId };
 }
 
-// Tier-1 drift guard: assert the real constructors match the typed public surface (Flcm) that schema.ts
-// exports and the reference/example generators author against. If a verb's signature here diverges from
-// Flcm, plugin typecheck fails — so the docs can't describe a shape the code doesn't have. `satisfies`
-// checks without widening and the local is DCE'd from the bundle (pure init, unreferenced).
-const _flcmShape = { frame, text, rect, ellipse, line, svg, path, gradient, image, effects, render, get, find, findOne, selection, id } satisfies Flcm;
-void _flcmShape;
-
-// The public verb surface — runtime.ts (the bundle entry) re-exports EXACTLY this set onto the
-// `globalName: flcm` global, and nothing else in the preamble is re-exported, so every other helper stays
-// closure-private. This list must mirror runtime.ts's re-export (and the _flcmShape/Flcm guard above).
+// The verbs this module contributes to the public surface — runtime.ts (the bundle entry) re-exports
+// these plus `edit` (which lives in edit.ts: it imports FROM this module, so defining it here would be
+// a cycle) and holds the one exhaustive `satisfies Flcm` drift guard against the schema's typed
+// surface. Nothing else in the preamble is re-exported, so every other helper stays closure-private.
 // `get`/`find`/`findOne`/`selection` are defined in read.ts (the figma.*-speaking read walk) and surface
 // here, the way render's live work lives in bridge.ts.
 export { frame, text, rect, ellipse, line, svg, path, render, gradient, image, effects, get, find, findOne, selection, id };

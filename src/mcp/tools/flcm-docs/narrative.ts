@@ -12,7 +12,8 @@
 export const MENTAL_MODEL = `You **describe** a tree of nodes with plain function calls, then **render** it once.
 
 - **Constructors are inert.** \`flcm.frame(...)\`, \`flcm.text(...)\`, etc. build plain description objects and create *nothing* on the canvas. Only \`await flcm.render(tree)\` creates live nodes — so you can freely build, nest, and compose trees before rendering.
-- **Leaf values are CSS-familiar.** Colors, gradients, shadows, and metrics are written the way you'd write them in CSS (\`"#0B1020"\`, \`"rgba(255,255,255,0.06)"\`, \`"linear-gradient(180deg, …)"\`, \`"24px"\`, \`"-0.02em"\`). You write this one familiar format; we translate it to Figma-native values for you. The catch: CSS can spell things Figma can't realize, so values **outside the documented subset fail loud** (a specific error) rather than rendering wrong pixels.
+- **CSS is the dialect — prop NAMES as well as values.** When CSS has a word for something, that is the word: \`color\`, \`fontSize\`, \`fontWeight\`, \`borderRadius\`, \`opacity\`, \`gap\`, \`padding\`, \`justifyContent\`, \`alignItems\`, \`mixBlendMode\` — camelCased, and \`column\`/\`row\` for direction. If you find yourself inventing a shorter name (\`radius\`, \`size\`, \`weight\`), reach for the CSS one instead. Where flcm has no CSS counterpart (\`key\`, \`absolute\`, \`pin\`, \`width: "fill"|"hug"\`) the props page is the only source — read it before your first render rather than guessing.
+- **Leaf values are CSS too.** Colors, gradients, shadows, and metrics are written the way you'd write them in CSS (\`"#0B1020"\`, \`"rgba(255,255,255,0.06)"\`, \`"linear-gradient(180deg, …)"\`, \`"24px"\`, \`"-0.02em"\`). You write this one familiar format; we translate it to Figma-native values for you. The catch: CSS can spell things Figma can't realize, so values **outside the documented subset fail loud** (a specific error) rather than rendering wrong pixels.
 
 There is no autocomplete and no type-checking where your code runs (a QuickJS sandbox), so everything you can write is spelled out in this reference. If a verb, prop, or value isn't documented, it isn't supported.`;
 
@@ -58,7 +59,7 @@ flcm.rect({ width: 40, height: 40, absolute: { x: "50%", y: 12 } });
 
 **Percent resolves against the parent's *realized* size** — its actual rendered width/height on the canvas, not a size you had to declare up front. So a percent child of a \`"fill"\` track or a percent-sized parent resolves fine: the parent's real size is read after the layout settles. There is exactly **one** case that can't work, and it **fails loud** (never a wrong guess):
 
-- **An in-flow \`%\`-*size* child of an auto-layout parent that *hugs* that axis.** The parent hugs to fit its children while the child sizes to a fraction of the parent — a genuine cycle. Give the parent a fixed or \`"fill"\` size on that axis, use \`"fill"\`/\`"hug"\` on the child, or lift the child out with \`absolute\` (an out-of-flow child doesn't feed the hug, so it resolves fine). A percent on the **root** node also fails loud — it has no parent.
+- **An in-flow \`%\`-*size* child of an auto-layout parent that *hugs* that axis.** The parent hugs to fit its children while the child sizes to a fraction of the parent — a genuine cycle. Give the parent a fixed or \`"fill"\` size on that axis, use \`"fill"\`/\`"hug"\` on the child, or lift the child out with \`absolute\` (an out-of-flow child doesn't feed the hug, so it resolves fine). A percent — or \`"fill"\` — on the **root** node also fails loud: its parent is the page, which has no bounded size.
 
 Percent always resolves to a fixed pixel *now*. Whether it also *reflows* when the parent is later resized depends on where it sits (next section) — a percent child of an auto-layout parent is static-only, and that boundary is called out, not hidden.
 
@@ -122,7 +123,7 @@ export const PAINT_INTRO = `A paint value (for \`fill\`, \`stroke\`, \`color\`) 
 - a **solid color string** — \`"#FF0000"\`, \`"#FF0000AA"\`, \`"rgba(255,0,0,0.5)"\`;
 - a **gradient string** — \`"linear-gradient(…)"\` / \`"radial-gradient(…)"\`;
 - the result of \`flcm.gradient(...)\` (below); or
-- the result of \`flcm.image(url)\` — a raster image fill (see **Images**).
+- the result of \`flcm.image(src)\` — a raster image fill from a url or local file path (see **Images**).
 
 \`\`\`js
 flcm.frame({ fill: "#0B1020" });
@@ -139,18 +140,22 @@ flcm.gradient("linear" | "radial", stops, angle);   // positional form
 
 export const IMAGE_INTRO = `Place a **real raster image** — feed media, an avatar, a thumbnail — instead of faking it with a gradient or solid fill (which carries no signal it was ever meant to be an image).
 
-\`flcm.image(url, opts?)\` is a **paint value**, like \`flcm.gradient\` — not a node type. An image in Figma is a fill, so **any shape carries one**: a \`rect\` for a photo, an \`ellipse\` for a circular avatar, a \`frame\` for a hero.
+\`flcm.image(src, opts?)\` is a **paint value**, like \`flcm.gradient\` — not a node type. An image in Figma is a fill, so **any shape carries one**: a \`rect\` for a photo, an \`ellipse\` for a circular avatar, a \`frame\` for a hero. The source is an **https url** or a **local file path** — like CSS \`url()\`, both work in the same place.
 
 \`\`\`js
 // a circular avatar: an ellipse filled with an image
 flcm.ellipse({ width: 48, height: 48, fill: flcm.image("https://example.com/face.jpg") });
 
+// a project asset by relative path — resolved against the server's asset root
+flcm.rect({ width: 120, height: 40, fill: flcm.image("public/logo.png", { scaleMode: "FIT" }) });
+
 // a feed photo, explicit scaleMode; mark a stand-in as a placeholder
 flcm.rect({ width: 390, height: 260, fill: flcm.image("https://example.com/photo.jpg", { scaleMode: "FILL", placeholder: true }) });
 \`\`\`
 
-- **The server fetches the bytes — your code never touches the network.** You pass a url; the trusted server fetches, validates, and downscales it, then the image renders. Any *public* http(s) url works.
-- An **unfetchable, blocked (private/loopback range), oversize, or non-image url fails loud** — never a silent blank fill.
+- **The server loads the bytes — your code never touches the network or the filesystem.** You pass a source; the trusted server fetches (or reads), validates, and downscales it, then the image renders. Any *public* http(s) url works.
+- **Local paths are confined to the server's asset root** (\`--asset-root\`, defaulting to the directory the server was started in). A path that resolves outside it is refused, naming the root — use it for assets already in the project (\`public/logo.png\`, \`assets/icons/star.png\`).
+- An **unfetchable, blocked (private/loopback range), outside-the-root, oversize, or non-image source fails loud** — never a silent blank fill.
 
 \`opts\` (\`scaleMode\`, \`placeholder\`) are documented in the field table below.`;
 
@@ -300,23 +305,98 @@ export const FAILS_LOUD = `The whole point of accepting CSS is fidelity, so the 
 | --- | --- |
 | A color / gradient / effect outside the [CSS subset](#the-css-subset) | A parse error naming the offending value and why. |
 | A **read-artifact image fill** (\`{ type: "IMAGE", imageRef, … }\`) on \`fill\`/\`stroke\`/\`color\` | Rejected: it's a ref to bytes we don't have. Author an image with \`flcm.image(url)\` instead. |
-| An \`flcm.image\` url that is unfetchable, blocked (private/loopback range), oversize, or not a real image | Rejected server-side: never a silent blank fill. |
+| An \`flcm.image\` source that is unfetchable, blocked (private/loopback range), a local path outside the server's asset root, oversize, or not a real image | Rejected server-side, naming the reason (and, for a path, the root): never a silent blank fill. |
 | A \`flcm.text\` value that is neither a plain string nor a runs array (a structured read object), or text carrying figma-mcp style-ref tokens (\`{ts1}…{/ts1}\`) | Rejected: those are read artifacts. Author styled text as **markdown** or a **runs array** (see Rich text). A plain-string \`**\` is now **markdown** (bold), not literal — backslash-escape (\`\\\\*\\\\*\`) for a literal. |
 | Markdown **image** syntax \`![alt](url)\` inside a \`flcm.text\` string, or an unrealizable \`fontStyle\`/\`textDecoration\` value (e.g. \`"oblique"\`, \`"overline"\`) | Rejected: text can't embed an image (use \`flcm.image(url)\`); the enum value names the supported set. |
 | A **duplicate \`key\`** within one render | Rejected: keys must be unique per render. |
 | A node \`type\` other than FRAME/TEXT/RECTANGLE/ELLIPSE/LINE/VECTOR | Rejected: those are the only createable types. |
+| A **hand-built node object** (a POJO not made by an flcm constructor, including a spread-copy of one) | Rejected: the constructors are the authoring surface — they validate every prop at the boundary, and a hand-assembled shape could smuggle combinations they'd refuse. Clone a node by re-calling its constructor. Nodes also compile **at construction**: they're sealed, so mutating a node (or the children array you passed) afterwards throws rather than silently changing nothing. |
 | \`fill\`/\`stroke\` on \`flcm.svg\` | Rejected: colors are baked into the SVG markup, so they'd be a no-op. Edit the markup, or use \`flcm.path\` for a themeable vector. |
 | Unparseable SVG markup (\`flcm.svg\`) or bad path \`d\` data (\`flcm.path\`) | Rejected: never a silent empty/blank node. |
 | Returning a **live Figma node** from your code | Rejected: return the id string (or a handle) instead. |
 | A bad \`pin\` value (not \`{ x?, y? }\`, or an axis outside its set) | Rejected: naming the offending value and the allowed names. |
-| A percent \`width\`/\`height\` (\`"N%"\`) on an **in-flow** child of an **auto-layout** parent that **hugs** that axis (the child both sets and depends on the parent's size — a cycle), or a percent on the **root** node | Rejected: this is the one percent case a runtime read can't break. Give the parent a fixed or \`"fill"\` size on that axis, use \`"fill"\`/\`"hug"\` on the child, or lift it out with \`absolute\` (an out-of-flow child doesn't feed the hug, so it resolves fine). Every other percent — against a fixed, \`"fill"\`, \`"hug"\`, or percent-sized parent — resolves against the parent's realized size. |
+| A percent \`width\`/\`height\` (\`"N%"\`) on an **in-flow** child of an **auto-layout** parent that **hugs** that axis (the child both sets and depends on the parent's size — a cycle), or a percent or \`"fill"\` on the **root** node (its parent is the page, which has no bounded size) | Rejected: this is the one percent case a runtime read can't break. Give the parent a fixed or \`"fill"\` size on that axis, use \`"fill"\`/\`"hug"\` on the child, or lift it out with \`absolute\` (an out-of-flow child doesn't feed the hug, so it resolves fine). Every other percent — against a fixed, \`"fill"\`, \`"hug"\`, or percent-sized parent — resolves against the parent's realized size. |
 | A bad \`absolute.anchor\` value (an axis outside \`left\`/\`center\`/\`right\` or \`top\`/\`center\`/\`bottom\`) | Rejected: naming the offending value and the allowed names. |
 | An unknown \`mixBlendMode\` value (not a CSS \`mix-blend-mode\` name) | Rejected: naming the offending value and the supported set. |
 | An unrealizable \`layout.justifyContent\`/\`layout.alignItems\` value — notably \`"space-around"\`/\`"space-evenly"\` | Rejected: Figma auto-layout has no space-around/space-evenly. Use \`"space-between"\` or add \`layout.gap\`/\`layout.padding\`; never faked with spacer nodes (they'd read as content). |
 | \`textStyle.lineClamp\` on a **width-hugging** text (no bounded \`width\`) | Rejected: truncation needs a width to wrap against — a hugging text grows on one line, so \`textStyle.lineClamp\` would do nothing. Set \`width\` to a number, \`"fill"\`, or \`"N%"\`. |
+| A layout word the node **can't realize** — a fixed, \`"hug"\`, or percent \`height\` on TEXT (its height follows content and wrap; set \`width\` or use \`height: "fill"\`), \`"hug"\` on a node with nothing to measure (not a row/column container or text), or container words (\`layout.gap\`/\`padding\`/\`justifyContent\`/\`alignItems\`) without \`layout.mode: "row"\`/\`"column"\` | Rejected — the same rule set governs **create and edit alike**, so a word that would silently not land instead names the fix. |
 
 Components, variables, and prototype interactions are deliberately **out of v1** — read concepts with no create path yet. Rejecting them loudly is intentional, so you never half-write something unrealizable. (Rich text is now authorable as a runs array, and images via \`flcm.image(url)\` — both above.)
 
 ### The one silent exception: unrenderable glyphs
 
 Everything above fails **loud**. There is exactly one case that does not, because the Figma plugin API exposes no glyph-coverage check to key it off: **a character the resolved font can't render draws as nothing** — no glyph, no tofu box, no error. This bites emoji and private-use codepoints (e.g. SF Symbols) in fonts like Inter that don't carry them. If text you set renders blank, suspect a missing glyph before anything else, and switch to a font that covers the codepoint. This is the sole place the surface can silently whiff; treat unusual codepoints with suspicion until you've eyeballed a screenshot.`;
+
+export const EDIT_INTRO = `\`await flcm.edit(target, changes)\` applies a partial delta to one existing node and returns its updated handle. The target is anything the read verbs accept: an flcm/key, a node id, \`flcm.id(id)\`, or a handle from \`render\`/\`find\`. The delta uses the **same words as create** — there is no separate edit dialect — and only the fields you pass change; everything else on the node is untouched.`;
+
+export const EDIT_REMOVAL = `### Removal — the \`"none"\` word
+
+\`"none"\` (CSS's own absence spelling) is the one removal word, surface-wide: \`fill: "none"\` / \`stroke: "none"\` clear the paint, \`effects: "none"\` clears all effects, \`absolute: "none"\` returns the node to its parent's flow, \`pin: "none"\` (or \`pin: { x: "none" }\` per axis) restores the default near-edge pin, \`layout: { mode: "none" }\` switches auto-layout off (children convert per Figma's own semantics — look, then nudge). The same spellings are legal at create, where they mean the explicit default (a transparent fill, free-form layout). Sizes are never *removed*, only replaced within the number/\`"fill"\`/\`"hug"\` trio: \`width: "hug"\` is how a fixed or filled width comes off.`;
+
+export const EDIT_RULES = `### Rules
+
+- **A node type takes exactly the words create accepts for it.** \`fill\` on a LINE, \`clip\` on a TEXT, \`borderRadius\` on a VECTOR — each rejects loud naming the prop, the node type, and that type's editable words, the same way the constructor would.
+- **Only the fields you pass change — per axis, too.** \`pin: { x: "center" }\` keeps the y pin; \`absolute: { x: 10 }\` keeps the live y; \`width: "hug"\` leaves the height's sizing alone.
+- **Un-filling really un-fills.** \`width: 80\` or \`"hug"\` on a child that was \`"fill"\` clears the grow/stretch marks fill installed — the new size governs, not the old fill.
+- **Container edits ripple by stated rules.** \`layout.alignItems: "stretch"\` walks the live children setting their stretch marks; writing any other alignItems clears every stretch mark (Figma doesn't store which child stretched because of the container — a child that should keep filling gets its own \`height: "fill"\` edit after; an un-stretched child keeps its current size rather than re-hugging). Changing the layout direction — row↔column, or \`"none"\` to either — clears both flow marks (grow and stretch) on every in-flow child: the axes they meant just moved.
+- **Layout legality is the same rule set create enforces, applied against live facts.** Rejected loud, before any write: a percent on an in-flow child of an auto-layout parent that hugs that axis (a cycle), \`"fill"\`/\`"N%"\` on a node whose parent is the page (no bounded size), \`"hug"\` on a node with nothing to measure (not — and after this delta still not — a row/column container or text), a fixed/hug/percent \`height\` on TEXT (its height follows content — edit \`width\`, or use \`height: "fill"\`), and container words (\`gap\`/\`padding\`/\`justifyContent\`/\`alignItems\`) on a frame that isn't — or after this delta won't be — a row/column container. Percents resolve immediately against the live parent's size.
+- **Text words read the LIVE node.** \`content\` replaces the whole text (a string or run array, markdown included; re-running the same edit converges). The replacement collapses the text to its LEADING run's style — prior bold spans or per-range colors do NOT survive — so style the new text explicitly, with styled runs or \`textStyle\` in the same edit. \`textStyle\` naming part of the font triple keeps the live rest (\`fontWeight: "bold"\` on an italic Roboto stays bold italic Roboto). A text that already MIXES fonts has no single base: a partial font change or a styled \`content\` run without its own \`fontFamily\` rejects loud — anchor \`textStyle.fontFamily\` in the same edit (a whole-node reset), or give each run its family. \`lineClamp\` needs a bounded width to truncate against (set \`width\` in the same edit if the text hugs), and \`lineClamp: "none"\` removes the clamp.
+- **Edits inside a component INSTANCE apply as overrides.** A property Figma forbids overriding rejects with an error naming the instance — edit the main component instead (flcm never auto-detaches an instance).
+- **\`key\` is immutable.** Keys are set at creation and are how later calls address the node — re-keying could mint a duplicate address. To rename what you see in the layers panel, set \`name\`.
+- **No bare \`x\`/\`y\`** — position is spelled \`absolute: { x, y }\`, resize behavior is \`pin\`.
+- **An empty delta is rejected**, not silently committed — an empty edit would still mint an undo step.
+- **Each edit is one undo step.** The whole delta validates before the first write; if Figma refuses a write mid-apply, the edit rolls back to how the node was and the error carries the target's identity, Figma's reason, and how many earlier mutating calls in the run still stand.
+- Delta values are **absolute** (a fill, an opacity), never relative (\`+10\`) — re-running the same edit converges instead of compounding.`;
+
+export const EDIT_MANY = `### Many at once — \`flcm.editMany\`
+
+\`await flcm.editMany([{ target, changes }, …], { within? })\` applies a whole set of deltas as **one** call, and returns a handle per entry in the order you wrote them. Each \`changes\` is exactly an \`flcm.edit\` delta — same words, same rules as everything above.
+
+Reach for it whenever you're nudging more than one node, because a loop over \`flcm.edit\` is **not** the same thing:
+
+- **The set is atomic, not just each call.** Every target resolves and every delta validates before the first write. A loop would already have mutated entries 1–3 by the time entry 4's typo surfaced; here nothing moves and the canvas is exactly as you found it.
+- **One rejection names every bad entry**, indexed — \`[2] …\`, \`[5] …\` — so you fix the whole batch in one pass instead of one round trip per mistake.
+- **The whole batch is one undo step.** Your user steps back over the change they asked for, not over nine of them.
+- **Order doesn't matter.** Entries settle ancestors-first, so turning a parent into a row *and* setting its child to \`width: "fill"\` works whichever way round you write them.
+- **Two entries for the same node reject** rather than silently last-wins — put both fields in one entry.
+
+Only props: tree shape stays with \`append\`/\`move\`/\`remove\`/\`clone\`, one call each.`;
+
+export const STRUCTURE_INTRO = `Tree shape is its own set of verbs, and **position is the verb** — there is no index argument and no options bag. \`flcm.append(parent, thing)\` and \`flcm.prepend(parent, thing)\` take the parent; \`flcm.insertBefore(sibling, thing)\` and \`flcm.insertAfter(sibling, thing)\` take a **sibling** and work out the parent from it.
+
+\`thing\` is either of two things, and they mean what they mean in the DOM:
+
+- a **constructor spec** — \`flcm.frame(...)\`, \`flcm.text(...)\`, an inert tree — which is built inside the destination. Returns \`{ root, keyed, to }\`: the same \`root\`/\`keyed\` \`render\` gives you, plus the container it landed in.
+- a **target naming a live node** (an flcm/key, a node id, \`flcm.id(id)\`, or a handle) — which **moves** that node there, exactly as \`appendChild\` moves an attached DOM node. Returns \`{ node, from, to }\`.
+
+Three more complete the set: \`flcm.move(target, parent)\` is the plain reparent (the node lands last inside \`parent\` — the same placement \`append\` does, with the subject named first), \`flcm.remove(target)\` deletes a node and its subtree, and \`flcm.clone(target, parent?)\` duplicates one.
+
+**\`clone\` is the copy path for subtrees a rebuild can't reproduce** — anything containing a component INSTANCE, which is most real content. It duplicates the LIVE node rather than re-authoring it, so nothing is lost in translation, and the copy comes back **key-less**: a raw \`node.clone()\` copies the original's \`flcm/key\` too, quietly giving two live nodes one address. Key the copy yourself if you want to address it later. The copy is faithful down to its coordinates, so in a **free-form** parent it lands directly on top of the original — \`flcm.edit\` its \`absolute\` position to separate them. (In a row/column parent it simply lands last.)
+
+Every return carries the subject plus each container whose geometry the operation could have changed — a hugging parent reflows whenever its children change, and those are the nodes you would otherwise have to re-read. They are flat handles with fresh geometry, never nested trees; \`get\` is still how you dive. Containers are always named \`to\` (where things ended up) and \`from\` (one something left), so \`out.to\` reads the same whichever kind of \`thing\` you placed. Either is absent when that container is the page (a page has no box to measure), and \`from\` is absent when you reordered inside one parent.`;
+
+export const STRUCTURE_RULES = `### Rules
+
+- **Sizing that depends on the parent works on insert.** The node is attached *before* it is sized, so \`width: "fill"\` on an appended spec fills the destination — the ordering hazard is handled for you, not something to work around.
+- **Layout legality is re-asked against the DESTINATION.** The same rule set create and edit enforce, with the new parent's facts: \`"fill"\`/\`"N%"\` into a page parent, a TEXT \`height: "fill"\` landing out of a row/column flow, a percent child of a hugging auto-layout parent, or any parent-relative word under a GRID parent each reject loud, before anything moves. A layout that was legal where a node sat is not automatically legal where it lands.
+- **A move re-aims the moved node's fill.** \`"fill"\` is stored as a mark on the parent's *primary* or *counter* axis, and those axes move with the node — so a moved node's fill is cleared and re-applied against the new parent (filling a row's width becomes filling a column's width, and a fill into a free-form parent covers its box). Fixed sizes are untouched.
+- **A stretch container does not stretch what you insert.** Figma stores no container-level \`alignItems: "stretch"\` — a stretched child is indistinguishable from one that asked for counter-axis \`"fill"\` itself — so an inserted child doesn't inherit it. Re-assert it with \`flcm.edit(parent, { layout: { alignItems: "stretch" } })\`, which re-synthesizes the marks over every child including the new one.
+- **An instance's CHILD LIST is closed.** Placing into an instance (or anything inside one), and moving or removing one of its children, both reject loud and name the instance: those children come from the main component, so edit that instead — flcm never auto-detaches. The instance **itself** is an ordinary node in its own parent: moving, removing and cloning it are all fine.
+- **A node can't be placed inside itself or its own subtree**, and the refusal names both nodes rather than surfacing Figma's own cycle error.
+- **Each call is one undo step**, with the same contract as \`edit\`: everything validates before the first write, and a Figma refusal mid-apply rolls the whole call back.
+
+### Cut, copy, paste
+
+There is no separate clipboard API — the verbs compose into one:
+
+| You want | Use |
+| --- | --- |
+| cut & paste | \`flcm.move(target, parent)\` |
+| paste a faithful copy | \`flcm.clone(target, parent?)\` — works on any subtree, instances included |
+| paste with modifications | \`flcm.append(parent, flcm.fromRead(spec))\` — or \`flcm.clone(...)\` then \`flcm.edit\` the copy |
+| delete | \`flcm.remove(target)\` |
+
+A \`get\` result is not authoring input **on its own**: passing a bare read spec to \`append\` is rejected, not quietly treated as a move — the spec carries a live \`id\` exactly as a handle does, so only you can say whether you mean copy or move. \`flcm.fromRead(spec)\` is how you say copy: it re-authors the subtree through the constructors, so you can edit the spec first (\`{ ...spec, width: 320 }\`) and paste the result anywhere.
+
+\`fromRead\` rebuilds; \`clone\` duplicates. Rebuilding only reaches what flcm can author, so anything it can't — an INSTANCE, a stacked paint, a grid container, a flattened \`IMAGE-SVG\` — fails loud naming the field, and \`clone\` is the answer for those.`;

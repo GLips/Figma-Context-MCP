@@ -1,15 +1,9 @@
 import * as esbuild from "esbuild";
-import { readFileSync } from "node:fs";
-import { buildSandboxPreamble } from "./src/preamble/index.mjs";
 
-// Generate the std-lib string through the one seam and bake it into the bundle via `define`. code.ts
-// can't generate it in-sandbox (flattening runs esbuild), so the value is a build-time constant here.
-// This is why code.ts declares SANDBOX_PREAMBLE rather than importing it.
-const SANDBOX_PREAMBLE = await buildSandboxPreamble();
-
-// Figma's plugin sandbox loads a single classic script as `main`. Bundle code.ts
-// into an IIFE so it runs there directly. The agent's code is NEVER bundled — it
-// travels as a raw string and is eval'd at runtime; only the plugin shell is built.
+// Figma's plugin sandbox loads a single classic script as `main`. Bundle code.ts into an IIFE so it
+// runs there directly. Neither the agent's code NOR the flcm std-lib is bundled here — both travel
+// from the server as raw strings and are eval'd at runtime (ADR-0010), which is what keeps a DSL
+// change off the manual-re-import path. Only the host shell is built.
 await esbuild.build({
   entryPoints: ["src/code.ts"],
   bundle: true,
@@ -17,17 +11,15 @@ await esbuild.build({
   platform: "browser",
   format: "iife",
   target: "es2017",
-  define: { SANDBOX_PREAMBLE: JSON.stringify(SANDBOX_PREAMBLE) },
   logLevel: "info",
 });
 
-// Load-bearing invariant, enforced (not just documented): zod must NEVER reach the QuickJS sandbox. The
-// preamble imports schema-derived things as `import type` only, so esbuild erases them — but a future
-// *value* import from schema.ts is valid TS that silently bundles zod. Grep the output and fail the build
-// if it slips in, turning the acceptance criterion into a gate rather than a manual check.
-if (readFileSync("dist/code.js", "utf8").includes("zod")) {
-  throw new Error(
-    "zod leaked into the sandbox bundle (dist/code.js). The preamble must import schema.ts things as " +
-      "`import type` ONLY — a runtime value import from schema.ts pulls zod into QuickJS. Find it and make it type-only.",
-  );
-}
+// Negative space, both deliberate: this build asserts nothing about the bundle afterwards.
+//
+// No zod check — the preamble isn't in here anymore, so grepping this output for it would be
+// vacuous. It moved to the seam that PRODUCES the preamble (src/preamble/index.mjs).
+//
+// No `__flcmHost` check either. code.ts calls the std-lib factory positionally and never names that
+// identifier; the wrapper that binds it and the bundle that reads it are both emitted by
+// index.mjs, which asserts they agree. A grep here could only re-check one end of a seam whose ends
+// no longer live apart.
