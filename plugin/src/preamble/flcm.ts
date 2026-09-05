@@ -34,6 +34,8 @@ import { enterMutatingVerb } from "./mutation-lock.js";
 import { requestHostImages } from "./host.js";
 import { get, find, findOne, selection } from "./read.js";
 import { rejectUnknownKeys } from "./validate.js";
+import { acceptReadSpellings } from "./read-spellings.js";
+import type { SimplifiedNode } from "@framelink/core";
 
 // The authoring surface (verb Props + gradient/effects sugar) is defined ONCE in schema.ts as zod schemas
 // with per-field docs; these are the z.infer'd types. Imported `import type` ONLY so schema.ts's zod is
@@ -85,6 +87,7 @@ function keySet(...groups: readonly (readonly string[])[]): ReadonlySet<string> 
 const FRAME_KEYS = keySet(KNOWN_KEYS.shared, KNOWN_KEYS.size, KNOWN_KEYS.appearance, KNOWN_KEYS.frame);
 const TEXT_KEYS = keySet(KNOWN_KEYS.shared, KNOWN_KEYS.size, KNOWN_KEYS.text);
 const SHAPE_KEYS = keySet(KNOWN_KEYS.shared, KNOWN_KEYS.size, KNOWN_KEYS.appearance);
+const ELLIPSE_KEYS = new Set([...SHAPE_KEYS].filter((k) => k !== "borderRadius"));
 const LINE_KEYS = keySet(KNOWN_KEYS.shared, KNOWN_KEYS.line);
 const PATH_KEYS = keySet(KNOWN_KEYS.shared, KNOWN_KEYS.size, KNOWN_KEYS.path);
 const SVG_KEYS = keySet(KNOWN_KEYS.shared, KNOWN_KEYS.size);
@@ -467,7 +470,12 @@ function sealWriteNode(wn: WriteNode): WriteNode {
   return wn;
 }
 
-function frame(props: FrameProps = {}, children?: WriteChild | WriteChild[]): WriteNode {
+// Every constructor folds the read shape's spellings (`fills`, `left`/`top`, …) onto its own BEFORE
+// its closed-set gate, so a `get` result spreads straight in and the gate still advertises one word
+// per thing. The fold returns the bag typed as the constructor's own props: it has rewritten every read
+// spelling and refused every read field the vocabulary lacks, so what is left is that vocabulary (plus
+// whatever typo the gate is about to name).
+function frame(props: FrameProps | SimplifiedNode = {}, children?: WriteChild | WriteChild[]): WriteNode {
   // ?? not || (here and in every constructor): null/undefined mean "no props" (the pinned absence
   // convention), but a present falsy non-object (false, 0, "") is malformed and must reach the
   // gate's non-object reject, not read as absence.
@@ -477,6 +485,7 @@ function frame(props: FrameProps = {}, children?: WriteChild | WriteChild[]): Wr
   if (Array.isArray(props)) {
     throw new Error('flcm.frame takes (props, children) — children are the second argument: flcm.frame({}, [...]).');
   }
+  props = acceptReadSpellings(props, { type: "FRAME", verb: "create", known: FRAME_KEYS, subject: "flcm.frame" }).props as FrameProps;
   rejectUnknownKeys(props, FRAME_KEYS, "flcm.frame");
   const wn = mintWriteNode("FRAME");
   compileNodeLocalProps(wn, props, { radius: true, clip: true });
@@ -634,8 +643,23 @@ export function compileTextContent(content: unknown, base: WriteTextStyle, boldW
   return { runs: segs.map((seg) => compileRun(seg.text, mergeDelta(seg, {}, boldWeight), base, "flcm.text run")) };
 }
 
-function text(content: unknown, props: TextProps = {}): WriteNode {
+function text(content: unknown, props: TextProps | SimplifiedNode = {}): WriteNode {
   props = props ?? {};
+  // The object-first form, flcm.text(spec): a read spec carries its content in its `text` field. Content
+  // is never a plain object (a string, or a runs ARRAY), so an object first is unambiguously the props.
+  if (content !== null && typeof content === "object" && !Array.isArray(content)) {
+    if (typeof props === "object" && Object.keys(props).length) {
+      throw new Error("flcm.text(spec) takes the spec alone (its content is the spec's `text`); flcm.text(content, props) takes a string or runs array first.");
+    }
+    props = content as TextProps;
+    content = undefined;
+  }
+  const folded = acceptReadSpellings(props, { type: "TEXT", verb: "create", known: TEXT_KEYS, subject: "flcm.text" });
+  if (folded.content !== undefined) {
+    if (content != null) throw new Error("flcm.text: content arrived twice — as the first argument and as the props' `text`. Pass one.");
+    content = folded.content;
+  }
+  props = folded.props as TextProps;
   rejectUnknownKeys(props, TEXT_KEYS, "flcm.text");
   const wn = mintWriteNode("TEXT");
   base(wn, props);
@@ -697,16 +721,11 @@ function assertEnum<T extends string>(name: string, raw: unknown, set: ReadonlyS
 }
 
 // flcm.text takes PLAIN text OR a runs array (see compileRuns). A bare structured/object value that is
-// neither is a READ artifact with no write path — figma-mcp read output nests styled text as an object, and
-// writing it back verbatim would render its shape literally — so reject loud. (A stray `**` in a plain
-// string is NOT rejected: it is markdown now, gated on the escape convention — an author who wants a
-// literal `**` writes `\*\*`, which decodes back to the literal.)
+// neither (an object arriving first is the props — see text()). (A stray `**` in a plain string is NOT
+// rejected: it is markdown now, gated on the escape convention — an author who wants a literal `**`
+// writes `\*\*`, which decodes back to the literal.)
 function plainString(content: unknown): string {
-  if (content == null) return "";
-  if (typeof content === "object") {
-    throw new Error("flcm.text: expected a plain string or a runs array, got a structured value (" + JSON.stringify(content) + "). A styled-text read object has no write path — pass a plain string, or an array of [text, style] runs.");
-  }
-  return String(content);
+  return content == null ? "" : String(content);
 }
 
 // figma-mcp compressed read-side rich text by wrapping spans in inline style-ref tokens ({ts1}…{/ts1}); a
@@ -806,10 +825,14 @@ function compileRun(str: string, delta: StyleDeltaInput, baseStyle: WriteTextSty
   return out;
 }
 
-function shape(type: "RECTANGLE" | "ELLIPSE", props: ShapeProps = {}): WriteNode {
+function shape(type: "RECTANGLE" | "ELLIPSE", props: ShapeProps | SimplifiedNode = {}): WriteNode {
   props = props ?? {};
   const subject = type === "RECTANGLE" ? "flcm.rect" : "flcm.ellipse";
-  rejectUnknownKeys(props, SHAPE_KEYS, subject);
+  // An ELLIPSE has no corners, so its vocabulary has no radius word: refused by the gate, not accepted
+  // and dropped on the floor.
+  const known = type === "RECTANGLE" ? SHAPE_KEYS : ELLIPSE_KEYS;
+  props = acceptReadSpellings(props, { type, verb: "create", known, subject }).props as ShapeProps;
+  rejectUnknownKeys(props, known, subject);
   const wn = mintWriteNode(type);
   compileNodeLocalProps(wn, props, { radius: type === "RECTANGLE" });
   const layout = buildLayout(props as FrameProps, type, subject);
@@ -817,11 +840,12 @@ function shape(type: "RECTANGLE" | "ELLIPSE", props: ShapeProps = {}): WriteNode
   return sealWriteNode(wn);
 }
 
-function rect(props?: ShapeProps): WriteNode { return shape("RECTANGLE", props); }
-function ellipse(props?: ShapeProps): WriteNode { return shape("ELLIPSE", props); }
+function rect(props?: ShapeProps | SimplifiedNode): WriteNode { return shape("RECTANGLE", props); }
+function ellipse(props?: ShapeProps | SimplifiedNode): WriteNode { return shape("ELLIPSE", props); }
 
-function line(props: LineProps = {}): WriteNode {
+function line(props: LineProps | SimplifiedNode = {}): WriteNode {
   props = props ?? {};
+  props = acceptReadSpellings(props, { type: "LINE", verb: "create", known: LINE_KEYS, subject: "flcm.line" }).props as LineProps;
   rejectUnknownKeys(props, LINE_KEYS, "flcm.line");
   const wn = mintWriteNode("LINE");
   base(wn, props);

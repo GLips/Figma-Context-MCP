@@ -10,7 +10,7 @@ import { frame, text, rect, ellipse, line, svg, path, render, gradient, image, e
 import { edit } from "./edit.js";
 import { editMany } from "./edit-many.js";
 import { append, prepend, insertBefore, insertAfter, move, remove, clone } from "./structure.js";
-import { fromRead } from "./normalize-read.js";
+import { fromRead } from "./from-read.js";
 import type { Flcm } from "./schema.js";
 
 export { frame, text, rect, ellipse, line, svg, path, render, gradient, image, effects, get, find, findOne, selection, id, edit, editMany, append, prepend, insertBefore, insertAfter, move, remove, clone, fromRead };

@@ -1,14 +1,17 @@
-// flcm.fromRead — the read↔write seam closed. These drive the WHOLE loop over the mock (author →
-// render → get → fromRead → render) rather than hand-writing read specs, because the point of the verb
-// is that what `get` actually emits re-authors: a hand-written fixture would pin what I believe the read
-// shape is. Two concerns: a real subtree round-trips with its styling intact, and everything the read
-// shape carries that flcm has no word for fails LOUD by name instead of vanishing from the copy.
+// The read↔write seam closed: a `get` result authors through the constructors and `edit` directly
+// (read-spellings.ts), and fromRead rebuilds a whole subtree. These drive the WHOLE loop over the mock
+// (author → render → get → author again) rather than hand-writing read specs, because the point is that
+// what `get` actually emits re-authors: a hand-written fixture would pin what I believe the read shape
+// is. Three concerns: a real subtree round-trips with its styling intact, a single spec spreads straight
+// into its constructor or an edit, and everything the read shape carries that flcm has no word for
+// fails LOUD by name instead of vanishing from the copy.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
-import { frame, text, rect, render, get, id, effects } from "./flcm.js";
+import { frame, text, rect, ellipse, line, render, get, id, effects } from "./flcm.js";
 import { append } from "./structure.js";
-import { fromRead } from "./normalize-read.js";
+import { edit } from "./edit.js";
+import { fromRead } from "./from-read.js";
 import type { SimplifiedNode } from "@framelink/core";
 
 // The read shape is agent-facing data; a test spec is a partial of it, so the casts here stand in for
@@ -109,9 +112,9 @@ test("real state flcm can't author fails by name; derived fields drop silently",
   assert.throws(() => fromRead(spec({ type: "RECTANGLE", fills: "fill_a1b2c3d4" })), /styles-table REFERENCE .* COMPRESSED read/s);
   assert.throws(() => fromRead(spec({ type: "FRAME", template: "EL-abcd1234" })), /COMPRESSED read/);
   // A word that IS in the read shape but not on this node's type names the type, not "unknown prop".
-  assert.throws(() => fromRead(spec({ type: "TEXT", effects: { boxShadow: "0 1px 2px #000" } })), /this TEXT carries `effects`/);
+  assert.throws(() => fromRead(spec({ type: "TEXT", effects: { boxShadow: "0 1px 2px #000" } })), /`effects` is not one of flcm.text's words/);
   // A genuinely unknown field still throws — tolerating the derived leaves didn't open the set.
-  assert.throws(() => fromRead(spec({ type: "RECTANGLE", fillz: ["#FFF"] })), /unknown read field `fillz`/);
+  assert.throws(() => fromRead(spec({ type: "RECTANGLE", fillz: ["#FFF"] })), /unknown prop "fillz"/);
 });
 
 test("`**` re-emphasizes at the node's OWN bold weight, not a hardcoded 700", async () => {
@@ -157,7 +160,7 @@ test("layout words flcm has no vocabulary for fail loud; a grid names itself", a
     () => fromRead(spec({ type: "FRAME", layout: { mode: "grid", gridTemplateColumns: "1fr 1fr" } })),
     /`gridTemplateColumns` has no authored form/,
   );
-  assert.throws(() => fromRead(spec({ type: "FRAME", layout: { mode: "grid" } })), /cannot author a GRID container/);
+  assert.throws(() => fromRead(spec({ type: "FRAME", layout: { mode: "grid" } })), /layout\.mode must be one of/);
   assert.throws(() => fromRead(spec({ type: "FRAME", layout: { mode: "row", wrap: true } })), /layout: `wrap` has no authored form/);
   // flcm has one gap and one radius — the multi-value CSS forms are state, not something to average.
   assert.throws(() => fromRead(spec({ type: "FRAME", layout: { mode: "row", gap: "8px 12px" } })), /flcm authors one gap/);
@@ -188,14 +191,84 @@ test("the closed sets are actually closed — a prototype key is not a member of
   // gate and fell out of the switch as the raw STRING, which a structural verb then reads as a live
   // target — a copy request that moves the node instead.
   assert.throws(() => fromRead(spec({ type: "toString" })), /toString nodes have no authored form/);
-  assert.throws(() => fromRead(spec({ type: "RECTANGLE", constructor: "x" })), /unknown read field `constructor`/);
-  assert.throws(() => fromRead(spec({ type: "FRAME", layout: { mode: "row", constructor: 1 } })), /unknown word `constructor`/);
+  assert.throws(() => fromRead(spec({ type: "RECTANGLE", constructor: "x" })), /unknown prop "constructor"/);
+  assert.throws(() => fromRead(spec({ type: "FRAME", layout: { mode: "row", constructor: 1 } })), /unknown prop "constructor"/);
   // Same hazard one layer down, in the value tables css.ts keys by an agent string.
   assert.throws(() => rect({ fill: { type: "IMAGE", imageRef: "x", scaleMode: "constructor" } }), /cropped image fill/);
 
-  // A "use" disposition still has to be a word the CONSTRUCTOR reads: an ellipse has no corners, so
-  // borderRadius is refused by name rather than accepted and dropped by compileNodeLocalProps.
-  assert.throws(() => fromRead(spec({ type: "ELLIPSE", borderRadius: "8px" })), /this ELLIPSE carries `borderRadius`/);
+  // An ellipse has no corners: borderRadius is refused by name — by the constructor's own gate, whether
+  // the bag came from a read or a hand — rather than accepted and dropped by compileNodeLocalProps.
+  assert.throws(() => fromRead(spec({ type: "ELLIPSE", borderRadius: "8px" })), /`borderRadius` is not one of flcm.ellipse's words/);
+  assert.throws(() => ellipse({ borderRadius: 8 }), /`borderRadius` is not one of flcm.ellipse's words/);
   // `position` has exactly one read spelling; anything else is malformed input, not absence.
   assert.throws(() => fromRead(spec({ type: "RECTANGLE", position: "relative" })), /spells only "absolute"/);
+});
+
+test("a single read spec spreads straight into its constructor — the read spellings fold onto the write ones", async () => {
+  createFigmaMock();
+  await render(
+    frame({ key: "card", width: 300, height: 300 }, [
+      rect({ key: "box", width: 100, height: 50, fill: "#123456", stroke: "#000000", strokeWidth: 2, absolute: { x: 10, y: 20 } }),
+      text("Hello **world**", { key: "line", color: "#FF0000", textStyle: { fontSize: 18, boldWeight: 600 } }),
+      line({ key: "rule", length: 80, stroke: "#00FF00" }),
+    ]),
+  );
+  const card = await get("card");
+  const [box, label, rule] = card.children as SimplifiedNode[];
+
+  // rect: `fills`/`strokes` → fill/stroke, `left`/`top` → absolute, and a hand-set override lands.
+  const out = await render(frame({ width: 300, height: 300 }, [rect({ ...box, width: 320 })]));
+  const copy = (await figma.getNodeByIdAsync(out.root.id)).children[0];
+  assert.deepEqual([copy.width, copy.height, copy.x, copy.y, copy.strokeWeight], [320, 50, 10, 20, 2]);
+  assert.deepEqual(copy.fills[0].color, { r: 0x12 / 255, g: 0x34 / 255, b: 0x56 / 255 });
+  assert.deepEqual(copy.strokes[0].color, { r: 0, g: 0, b: 0 });
+
+  // text: the spec-first form — content from `text`, `fills` → color, node-level boldWeight → textStyle.
+  const t = await render(frame({ width: 300, height: 300 }, [text(label)]));
+  const copiedText = (await get(id(t.root.id))).children![0] as SimplifiedNode;
+  assert.deepEqual([copiedText.text, copiedText.fills, copiedText.boldWeight], [label.text, ["#FF0000"], 600]);
+
+  // line: `width` is the line's `length`.
+  const l = await render(frame({ width: 300, height: 300 }, [line({ ...rule })]));
+  assert.equal((await figma.getNodeByIdAsync(l.root.id)).children[0].width, 80);
+
+  // A frame spec's children are read specs, not built nodes — the subtree is fromRead's job.
+  assert.throws(() => frame(card), /`children` here are read specs.*flcm\.fromRead\(spec\)/s);
+  assert.doesNotThrow(() => frame({ ...card, children: undefined }));
+  // One thing named both ways is refused, not resolved — the spread-and-override bag is where a silent
+  // "last one wins" would bite.
+  assert.throws(() => rect({ ...box, fill: "#FFFFFF" }), /`fills` and `fill` name the same thing/);
+  assert.throws(() => text("other", { ...label }), /content arrived twice/);
+  assert.throws(() => text({ ...label, textStyle: { fontSize: 12, boldWeight: 700 } }), /`boldWeight` and `textStyle.boldWeight`/);
+  // A spec handed to the wrong constructor says so, and names the verb that dispatches by type.
+  assert.throws(() => rect(label), /the spec is a TEXT, not a RECTANGLE.*flcm\.fromRead\(spec\)/s);
+});
+
+test("edit takes the read spellings too, folded against the live node's type", async () => {
+  createFigmaMock();
+  const out = await render(
+    frame({ key: "card", width: 300, height: 300 }, [
+      rect({ key: "box", width: 100, height: 50, fill: "#123456" }),
+      text("Hello", { key: "line", color: "#FF0000" }),
+    ]),
+  );
+  const boxId = out.keyed.box.id;
+  const lineId = out.keyed.line.id;
+
+  await edit("box", { fills: ["#00FF00"], left: 30, top: 40 });
+  const box = await figma.getNodeByIdAsync(boxId);
+  assert.deepEqual(box.fills[0].color, { r: 0, g: 1, b: 0 });
+  assert.deepEqual([box.x, box.y], [30, 40]);
+
+  // The same read word lands on the TEXT's word (`color`), and `text` is the edit's `content`.
+  await edit("line", { fills: ["#0000FF"], text: "Changed" });
+  const line = await figma.getNodeByIdAsync(lineId);
+  assert.deepEqual(line.fills[0].color, { r: 0, g: 0, b: 1 });
+  assert.equal(line.characters, "Changed");
+
+  // Read identity folds to nothing, and nothing is an empty edit.
+  await assert.rejects(edit("box", { id: boxId, type: "RECTANGLE" }), /changes object is empty/);
+  await assert.rejects(edit("box", { fills: ["#FFF"], fill: "#000" }), /`fills` and `fill` name the same thing/);
+  // A word outside BOTH vocabularies is still the document-blind reject, naming the edit words only.
+  await assert.rejects(edit("box", { fillz: ["#FFF"] }), /unknown prop "fillz"/);
 });

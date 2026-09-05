@@ -53,6 +53,7 @@ import {
 } from "./bridge.js";
 import { toFigmaEffects } from "./effects.js";
 import { rejectUnknownKeys } from "./validate.js";
+import { acceptReadSpellings, READ_FIELD_DISPOSITIONS, own } from "./read-spellings.js";
 import { liveFontWords, loadFontsForTextEdits } from "./fonts.js";
 import {
   KNOWN_KEYS, compileNodeLocalProps, compileSizeWords, compileContainerWords, compileLineLength,
@@ -111,7 +112,19 @@ export function rejectNonDeltaWords(changes: EditDelta, subject: string): void {
       subject + ": position is not spelled with bare x/y — use `absolute: { x, y }` to place the node out of flow (or `absolute: \"none\"` to return it to flow), and `pin` for how it responds to a parent resize.",
     );
   }
-  rejectUnknownKeys(changes, EDIT_KEYS, subject);
+  // The read shape's own spellings (`fills`, `left`/`top`, `text`, …) are folded onto the edit words
+  // in stage 2, where the live node's TYPE decides the fold (`fills` is `color` on a TEXT, `width` is
+  // `length` on a LINE). They pass this document-blind gate unjudged; everything else is judged now,
+  // against the edit vocabulary alone, so the message advertises one word per thing.
+  const foreign: Record<string, unknown> = {};
+  for (const key of Object.keys(changes)) {
+    if (!own(READ_FIELD_DISPOSITIONS as Record<string, unknown>, key)) foreign[key] = (changes as Record<string, unknown>)[key];
+  }
+  rejectUnknownKeys(foreign, EDIT_KEYS, subject);
+  assertDeltaNotEmpty(changes, subject);
+}
+
+function assertDeltaNotEmpty(changes: object, subject: string): void {
   if (Object.keys(changes).length === 0) {
     throw new Error(
       subject + ": the changes object is empty — nothing to apply (an empty edit would still mint an undo step). Editable words: " +
@@ -273,6 +286,10 @@ export interface EditPlan { node: SceneNode; patch: WriteProps; liveTextFacts: s
 
 /** Stage 2 — compile against the live node, recording every mutable fact the compile consulted. */
 export function compileEditPlan(node: SceneNode, changes: EditDelta, subject: string): EditPlan {
+  changes = acceptReadSpellings(changes, { type: node.type, verb: "edit", known: EDIT_KEYS, subject }).props as EditDelta;
+  // A delta that was ONLY read-shape identity (`{ id, type }`) folds to nothing — same refusal as an
+  // empty object, now that the fold has run.
+  assertDeltaNotEmpty(changes, subject);
   const legal = assertDeltaLegalForType(node, changes, subject);
   // Snapshot BEFORE the compile, so the recorded facts are the ones it goes on to read.
   const liveTextFacts = readLiveTextFacts(node);

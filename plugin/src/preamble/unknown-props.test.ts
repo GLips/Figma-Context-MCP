@@ -44,7 +44,7 @@ test("verbs reject an unknown top-level prop, naming it and the verb", () => {
   assert.throws(() => frame({ background: "#fff" } as never), /unknown prop "background" on flcm\.frame/);
   assert.throws(() => text("hi", { textTransform: "upper" } as never), /unknown prop "textTransform" on flcm\.text/);
   assert.throws(() => rect({ radius: 4 } as never), /unknown prop "radius" on flcm\.rect/); // it's borderRadius
-  assert.throws(() => line({ height: 10 } as never), /unknown prop "height" on flcm\.line/); // a line sizes on length only
+  assert.throws(() => line({ height: 10 } as never), /`height` is not one of flcm\.line's words/); // a line sizes on length only
   assert.throws(() => path({ d: "M0 0 L1 1", borderRadius: 2 } as never), /unknown prop "borderRadius" on flcm\.path/);
   assert.throws(() => gradient({ type: "linear", stops: ["#000", "#fff"], colors: [] } as never), /unknown prop "colors" on flcm\.gradient/);
   assert.throws(() => image("https://x/y.png", { scale: "FILL" } as never), /unknown prop "scale" on flcm\.image opts/);
@@ -71,7 +71,7 @@ test("a non-object where a props/query object belongs names THAT mistake, not th
 });
 
 test("nested authoring objects reject unknown keys with a path-threaded error", () => {
-  assert.throws(() => frame({ layout: { mode: "row", wrap: "nowrap" } as never }), /unknown prop "wrap" on flcm\.frame\.layout/);
+  assert.throws(() => frame({ layout: { mode: "row", flexWrap: "nowrap" } as never }), /unknown prop "flexWrap" on flcm\.frame\.layout/);
   assert.throws(() => text("hi", { textStyle: { fontVarient: "small-caps" } as never }), /unknown prop "fontVarient" on flcm\.text\.textStyle/);
   assert.throws(() => frame({ absolute: { x: 1, z: 2 } as never }), /unknown prop "z" on absolute/);
   assert.throws(() => frame({ absolute: { x: 1, anchor: { z: "left" } } as never }), /unknown prop "z" on absolute\.anchor/);

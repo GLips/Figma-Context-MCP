@@ -37,7 +37,7 @@ There is no autocomplete and no type-checking where your code runs (a QuickJS sa
 | `await flcm.move(target, parent)` | the node reparented as `parent`'s last child | a live target, then a parent target. Creating is append's job — a spec here fails loud |
 | `await flcm.remove(target)` | nothing — deletes the node and its subtree | a target; returns { removedId, parent } |
 | `await flcm.clone(target, parent?)` | a faithful live duplicate (key-less) | a target, and optionally where the copy lands (default: beside the original). The copy path for subtrees a spec rebuild can't reproduce — anything holding an INSTANCE |
-| `flcm.fromRead(spec)` | a `get` result re-authored as a buildable spec | a spec from flcm.get. Returns a constructor-built node — render it, or place it with append/prepend/insertBefore/insertAfter. Anything the read shape carries that flcm has no word for (an INSTANCE, a paint stack, a grid) fails loud by name; flcm.clone is the faithful copy for those |
+| `flcm.fromRead(spec)` | a `get` result re-authored as a buildable spec | a spec from flcm.get, subtree and all — the constructor is picked by each node's `type` and `children` recurse. Returns a constructor-built node — render it, or place it with append/prepend/insertBefore/insertAfter. (A single node's spec can also spread straight into its constructor: flcm.rect({ ...spec, width: 320 }).) Anything the read shape carries that flcm has no word for (an INSTANCE, a paint stack, a grid) fails loud by name; flcm.clone is the faithful copy for those |
 | `await flcm.get(target)` | a node's full read spec (values inline) | target: an flcm/key, a node id, flcm.id(id), or a handle |
 | `await flcm.find(query?, predicate?)` | matching nodes as slim handles | query { type?, name?, key?, within? } AND-combined — a filter, not an address; only `within` takes a target. Optional predicate over the full read shape (n => n.fills?.[0] === '#FFF') |
 | `await flcm.findOne(query?, predicate?)` | exactly one slim handle (throws on 0 or >1) | same query + predicate as find |
@@ -55,6 +55,8 @@ There is no autocomplete and no type-checking where your code runs (a QuickJS sa
 ## Props by node
 
 Every prop is optional; an omitted prop is simply not applied (a frame with no `fill` is transparent, not white).
+
+**A `get` result's own spellings are accepted too.** Spread a read spec into any constructor or `flcm.edit` — `flcm.rect({ ...spec, width: 320 })`, `flcm.text(spec)` — and its `fills`/`strokes`, `left`/`top`, node-level `boldWeight` and `text` land on the matching props below; naming one thing both ways in one call (`fills` and `fill`) fails loud. Fields flcm has no word for (an INSTANCE's `componentId`, `strokeDashes`, a grid) fail loud by name. A spec with `children` needs `flcm.fromRead(spec)`, which rebuilds the whole subtree.
 
 ### Shared by every node
 
@@ -525,7 +527,7 @@ There is no separate clipboard API — the verbs compose into one:
 | paste with modifications | `flcm.append(parent, flcm.fromRead(spec))` — or `flcm.clone(...)` then `flcm.edit` the copy |
 | delete | `flcm.remove(target)` |
 
-A `get` result is not authoring input **on its own**: passing a bare read spec to `append` is rejected, not quietly treated as a move — the spec carries a live `id` exactly as a handle does, so only you can say whether you mean copy or move. `flcm.fromRead(spec)` is how you say copy: it re-authors the subtree through the constructors, so you can edit the spec first (`{ ...spec, width: 320 }`) and paste the result anywhere.
+A `get` result is not authoring input **on its own**: passing a bare read spec to `append` is rejected, not quietly treated as a move — the spec carries a live `id` exactly as a handle does, so only you can say whether you mean copy or move. `flcm.fromRead(spec)` is how you say copy: it re-authors the subtree through the constructors, so you can edit the spec first (`{ ...spec, width: 320 }`) and the copy comes back key-less. A single node's spec also spreads straight into its own constructor or an edit — `flcm.rect({ ...spec, width: 320 })`, `flcm.edit(target, { fills: spec.fills })` — since the constructors read the read shape's spellings; `fromRead` is for a subtree, whose `children` are read specs rather than built nodes.
 
 `fromRead` rebuilds; `clone` duplicates. Rebuilding only reaches what flcm can author, so anything it can't — an INSTANCE, a stacked paint, a grid container, a flattened `IMAGE-SVG` — fails loud naming the field, and `clone` is the answer for those.
 
