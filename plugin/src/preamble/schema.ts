@@ -515,7 +515,7 @@ export interface Flcm {
   // fetched server-side (the sandbox reaches nothing); an unfetchable/blocked/invalid url fails loud.
   image(url: string, opts?: ImageOpts): PaintSpec;
   effects(spec: EffectsSugar): EffectSpec[];
-  render(tree: WriteNode): Promise<{ root: Handle; keyed: Record<string, Handle> }>;
+  render(tree: WriteNode): Promise<{ node: Handle; keyed: Record<string, Handle> }>;
   // Nudge an existing node: apply a partial delta (same vocabulary as create — node-local props in
   // this slice) to the resolved target and return its updated Handle with fresh geometry. Atomic per
   // call: the whole delta validates before the first write, and a post-validation Figma refusal
@@ -529,7 +529,7 @@ export interface Flcm {
   // Tree shape, DOM-style — position is the verb, and the thing placed is either a constructor
   // spec (built there) or a target naming a live node (MOVED there, like the DOM). append/prepend
   // take the parent; insertBefore/insertAfter take a sibling and infer the parent from it. A spec
-  // returns render's `{ root, keyed }` plus the attach point; a live node returns
+  // returns render's `{ node, keyed }` plus the attach point; a live node returns
   // `{ node, from, to }`.
   append(parent: Target, thing: WriteNode | Target): Promise<InsertResult | MoveResult>;
   prepend(parent: Target, thing: WriteNode | Target): Promise<InsertResult | MoveResult>;
@@ -608,10 +608,10 @@ export const VERBS: VerbDoc[] = [
   { category: "value", signature: "flcm.gradient(...)", builds: "a gradient fill value", args: "object or positional form", schema: GradientSchema },
   { category: "value", signature: "flcm.image(src, opts?)", builds: "an image fill value", args: "an https url or a local file path (under the server's asset root) first, then { scaleMode?, placeholder? }", schema: ImageSchema },
   { category: "value", signature: "flcm.effects({...})", builds: "an effects value", args: "an { shadow, blur, backgroundBlur } bag", schema: EffectsSchema },
-  { category: "render", signature: "await flcm.render(tree)", builds: "live nodes", args: "returns { root, keyed }" },
+  { category: "render", signature: "await flcm.render(tree)", builds: "live nodes", args: "returns { node, keyed }" },
   { category: "edit", signature: "await flcm.edit(target, changes)", builds: "a nudged existing node (returns its updated Handle)", args: "target (an flcm/key, node id, flcm.id(id), or handle), then a partial delta in the same vocabulary as create", schema: EditSchema, quickStart: "await flcm.edit(target, changes) / flcm.editMany([{ target, changes }, …])" },
   { category: "edit", signature: "await flcm.editMany(entries, scope?)", builds: "a whole set of nudges, applied atomically (returns a Handle per entry, in order)", args: "an array of { target, changes } — the same delta vocabulary as flcm.edit — and optionally { within } to scope key resolution. One invalid entry rejects the batch naming every offender, and nothing is applied", quickStart: null },
-  { category: "structure", signature: "await flcm.append(parent, thing)", builds: "`thing` placed as the LAST child of `parent`", args: "a parent target, then either a constructor spec (built there → { root, keyed, parent }) or a target naming a live node (MOVED there → { node, from, to })", quickStart: "await flcm.append/prepend(parent, spec|target)" },
+  { category: "structure", signature: "await flcm.append(parent, thing)", builds: "`thing` placed as the LAST child of `parent`", args: "a parent target, then either a constructor spec (built there → { node, keyed, to }) or a target naming a live node (MOVED there → { node, from, to })", quickStart: "await flcm.append/prepend(parent, spec|target)" },
   { category: "structure", signature: "await flcm.prepend(parent, thing)", builds: "the same, placed FIRST", args: "same as append", quickStart: null },
   { category: "structure", signature: "await flcm.insertBefore(sibling, thing)", builds: "`thing` placed just before `sibling`", args: "a SIBLING target (the parent is inferred from it), then a spec or a live target", quickStart: "await flcm.insertBefore/insertAfter(sibling, spec|target)" },
   { category: "structure", signature: "await flcm.insertAfter(sibling, thing)", builds: "`thing` placed just after `sibling`", args: "same as insertBefore", quickStart: null },

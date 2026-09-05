@@ -140,10 +140,10 @@ export function mintHandle(node: any): Handle {
 // is created as a page child and reparented only when it's appended (so mid-walk even "does the parent
 // place this node?" — which decides whether left/top exist at all — answers wrong). Minting once here is
 // what keeps a returned handle from ever carrying a provisional value.
-export function settleHandles(root: any, keyed: Record<string, any>): { root: Handle; keyed: Record<string, Handle> } {
+export function settleHandles(root: any, keyed: Record<string, any>): { node: Handle; keyed: Record<string, Handle> } {
   const handles: Record<string, Handle> = {};
   for (const key of Object.keys(keyed)) handles[key] = mintHandle(keyed[key]);
-  return { root: mintHandle(root), keyed: handles };
+  return { node: mintHandle(root), keyed: handles };
 }
 
 function stampKey(node: any, wn: WriteNode, ctx: RenderCtx): void {

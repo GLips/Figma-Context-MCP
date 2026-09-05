@@ -212,7 +212,7 @@ function applyInsert(verb: string, { dest, spec, resources }: PreparedInsert): I
     throw fail(cause);
   }
   const settled = settleHandles(root, ctx.keyed);
-  return { root: settled.root, keyed: settled.keyed, to: containerHandle(dest.parent) };
+  return { node: settled.node, keyed: settled.keyed, to: containerHandle(dest.parent) };
 }
 
 // Put a live node into a destination and settle it there. `move` and `clone` share this: a clone is

@@ -40,7 +40,7 @@ test("append builds a spec into the destination and sizes it THERE — fill fill
   assert.equal(filler.layoutGrow, 1);
   assert.equal(filler.width, 290);
   // render's own return shape, plus the attach point with fresh geometry.
-  assert.equal(out.root.id, filler.id);
+  assert.equal(out.node.id, filler.id);
   assert.equal(out.keyed.filler.id, filler.id);
   assert.equal(out.to.id, row.id);
   assert.equal(out.to.width, 300);
@@ -49,7 +49,7 @@ test("append builds a spec into the destination and sizes it THERE — fill fill
 test("a percent size on an inserted spec resolves against the live destination", async () => {
   await render(frame({ key: "board", width: 200, height: 200 }));
   const out = await append("board", rect({ name: "half", width: "50%", height: 20 }));
-  assert.equal(out.root.width, 100);
+  assert.equal(out.node.width, 100);
 });
 
 test("prepend, insertBefore and insertAfter each land where their name says", async () => {

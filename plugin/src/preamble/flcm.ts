@@ -1188,11 +1188,11 @@ export async function loadTreeResources(tree: WriteNode): Promise<RenderResource
 }
 
 // render(tree) — the one place nodes are created. Loads fonts, walks the WriteNode tree, stamps each
-// `key` into pluginData('flcm/key'), and returns the root handle plus a map of every keyed node. Only
+// `key` into pluginData('flcm/key'), and returns the built tree's top node plus a map of every keyed node. Only
 // keyed nodes appear in `keyed`; a duplicate key within one render is a loud error (in bridge).
 // A single expression on purpose: the queue slot is reserved before render() can possibly yield,
 // which is the lock's invocation-order guarantee (see enterMutatingVerb) — don't add work above it.
-function render(tree: WriteNode): Promise<{ root: Handle; keyed: Record<string, Handle> }> {
+function render(tree: WriteNode): Promise<{ node: Handle; keyed: Record<string, Handle> }> {
   return enterMutatingVerb(
     "render",
     // Prepare — spec checks, then the read-only resource loads (parallel: neither depends on the

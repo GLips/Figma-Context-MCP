@@ -24,7 +24,7 @@ test("the base text words land on the node — casing, vertical align, paragraph
       },
     }),
   );
-  const node = await figma.getNodeByIdAsync(out.root.id);
+  const node = await figma.getNodeByIdAsync(out.node.id);
   assert.equal(node.textCase, "UPPER");
   assert.equal(node.textAlignVertical, "CENTER");
   assert.equal(node.paragraphSpacing, 12);
@@ -46,15 +46,15 @@ test("textTransform and fontVariant are two CSS words for ONE Figma slot", async
     /textTransform and fontVariant are two CSS words for Figma's ONE textCase slot/,
   );
   const smallCaps = await render(text("x", { textStyle: { fontVariant: "all-small-caps" } }));
-  assert.equal((await figma.getNodeByIdAsync(smallCaps.root.id)).textCase, "SMALL_CAPS_FORCED");
+  assert.equal((await figma.getNodeByIdAsync(smallCaps.node.id)).textCase, "SMALL_CAPS_FORCED");
   // "none" is the shared clearing word — it restores ORIGINAL casing, small-caps included.
   const cleared = await render(text("x", { textStyle: { textTransform: "none" } }));
-  assert.equal((await figma.getNodeByIdAsync(cleared.root.id)).textCase, "ORIGINAL");
+  assert.equal((await figma.getNodeByIdAsync(cleared.node.id)).textCase, "ORIGINAL");
 });
 
 test("a run delta carries casing and paragraph metrics over its own slice", async () => {
   const out = await render(text(["plain ", ["SHOUT", { textTransform: "uppercase", paragraphSpacing: 20 }]]));
-  const node = await figma.getNodeByIdAsync(out.root.id);
+  const node = await figma.getNodeByIdAsync(out.node.id);
   assert.deepEqual(node._rangeCases[0], { start: 6, end: 11, value: "UPPER" });
   assert.deepEqual(node._rangeParagraphSpacings[0], { start: 6, end: 11, value: 20 });
 });
@@ -62,7 +62,7 @@ test("a run delta carries casing and paragraph metrics over its own slice", asyn
 test("edit rides the same compile — a live node takes the new words too", async () => {
   const out = await render(text("hi", { key: "label" }));
   await edit("label", { textStyle: { textTransform: "capitalize", paragraphIndent: 6 } });
-  const node = await figma.getNodeByIdAsync(out.root.id);
+  const node = await figma.getNodeByIdAsync(out.node.id);
   assert.equal(node.textCase, "TITLE");
   assert.equal(node.paragraphIndent, 6);
 });
@@ -85,7 +85,7 @@ test("a spread read textStyle compiles: derived leaves drop, unwritable ones fai
 
 test("a hyperlink takes the author string or the read form; a NODE link has no authored form", async () => {
   const out = await render(text("docs", { textStyle: { hyperlink: { type: "URL", url: "https://x.co" } } }));
-  const node = await figma.getNodeByIdAsync(out.root.id);
+  const node = await figma.getNodeByIdAsync(out.node.id);
   assert.deepEqual(node._rangeHyperlinks[0].value, { type: "URL", value: "https://x.co" });
   assert.throws(
     () => text("x", { textStyle: { hyperlink: { type: "NODE", nodeID: "1:2" } } as never }),

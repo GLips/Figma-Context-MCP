@@ -317,7 +317,7 @@ EXECUTION MODEL — your code runs in an async function body: use \`await\` dire
 
 DESCRIBE an inert tree, then RENDER once:
   const t = flcm.frame({ layout:{ mode:"column", gap:16 } }, [ flcm.text("Hi",{ fill:"#111" }) ]);
-  const out = await flcm.render(t);   // creates nodes → { root, keyed }
+  const out = await flcm.render(t);   // creates nodes → { node, keyed }
 
 VERBS — all on \`flcm.\`, nothing else is:
 ${verbLines}
@@ -427,7 +427,7 @@ ${sectionList}
 
 ${verbTable()}
 
-- Constructors are inert; only \`await flcm.render(tree)\` creates nodes → \`{ root, keyed }\`.
+- Constructors are inert; only \`await flcm.render(tree)\` creates nodes → \`{ node, keyed }\`.
 - Return ids/handles, never live Figma nodes.
 - Every metric (\`width\`, \`height\`, \`gap\`, \`padding\`, \`borderRadius\`, \`strokeWidth\`, \`left\`/\`top\`) takes a number or \`"Npx"\`; \`width\`/\`height\`/\`left\`/\`top\` also take \`"N%"\`, and \`width\`/\`height\` take \`"fill"\`/\`"hug"\`. Colors, gradients and shadows are CSS strings.
 - Out-of-subset CSS fails loud.`;

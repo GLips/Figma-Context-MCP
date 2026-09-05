@@ -26,6 +26,6 @@ export async function vectorExample(flcm: Flcm) {
   ]);
 
   const out = await flcm.render(player);
-  return { root: out.root.id, play: out.keyed.play.id };
+  return { node: out.node.id, play: out.keyed.play.id };
   // example:end
 }

@@ -20,6 +20,6 @@ export async function imageExample(flcm: Flcm) {
   ]);
 
   const out = await flcm.render(post);
-  return out.root.id;
+  return out.node.id;
   // example:end
 }

@@ -65,7 +65,7 @@ const built = await flcm.render(
     flcm.rect({ width: 40, height: 40, fill: flcm.image("https://probe.invalid/b.png") }),
   ]),
 );
-return { elapsedMs: Date.now() - t0, rootId: built.root.id };
+return { elapsedMs: Date.now() - t0, rootId: built.node.id };
 `;
 
 let started = false;

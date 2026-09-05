@@ -29,7 +29,7 @@ test("a read subtree round-trips: get → fromRead → render reproduces styling
   const read = await get("card");
 
   const out = await render(fromRead(read));
-  const copy = await figma.getNodeByIdAsync(out.root.id);
+  const copy = await figma.getNodeByIdAsync(out.node.id);
   // The read root's size is "contextual" (a top-level node's FIXED is an artifact) with the real number
   // parked in designedWidth — the rebuild has to land on the size that was READ, or a paste is a resize.
   assert.equal(copy.width, 200);
@@ -57,12 +57,13 @@ test("append takes a fromRead spec as a COPY, and still refuses the bare read sp
   const read = await get("src");
 
   const placed = await append("dest", fromRead(read));
-  const destNode = await figma.getNodeByIdAsync(dest.root.id);
+  const destNode = await figma.getNodeByIdAsync(dest.node.id);
   assert.equal(destNode.children.length, 1);
   // A COPY, not a move: the node that was read is still where it was.
   const original = await figma.getNodeByIdAsync(read.id);
   assert.notEqual(original.parent.id, destNode.id);
-  assert.equal("root" in placed, true);
+  // Built, not moved — `keyed` is the discriminant now that both results name their subject `node`.
+  assert.equal("keyed" in placed, true);
 
   // The bare spec stays refused — and the refusal now names the verb that makes the intent explicit.
   await assert.rejects(append("dest", read as never), /flcm\.fromRead\(spec\)/);
@@ -74,17 +75,17 @@ test("a spread-and-modified read spec is the paste-with-modifications path", asy
   const read = await get("src");
 
   const out = await render(fromRead(spec({ ...read, width: 320, name: "Wide copy" })));
-  const copy = await figma.getNodeByIdAsync(out.root.id);
+  const copy = await figma.getNodeByIdAsync(out.node.id);
   assert.equal(copy.width, 320);
   assert.equal(copy.name, "Wide copy");
   // Read the copy back through the same pipeline: the paint survived the rebuild unchanged.
-  assert.deepEqual((await get(id(out.root.id))).fill, "#123456");
+  assert.deepEqual((await get(id(out.node.id))).fill, "#123456");
 
   // `position` is its own word in the read shape, so a hand-set one must not be a silent no-op — out of a
   // real `get` it travels with left/top, but this module's whole pitch is spread-and-modify.
   const row = await render(frame({ key: "row", width: 300, height: 100, layout: { mode: "row" } }));
   await append("row", fromRead(spec({ ...read, left: undefined, top: undefined, position: "absolute" })));
-  const child = (await figma.getNodeByIdAsync(row.root.id)).children[0];
+  const child = (await figma.getNodeByIdAsync(row.node.id)).children[0];
   assert.equal(child.layoutPositioning, "ABSOLUTE");
 });
 
@@ -128,7 +129,7 @@ test("`**` re-emphasizes at the node's OWN bold weight, not a hardcoded 700", as
   assert.equal(original.boldWeight, 600);
 
   const out = await render(fromRead(read));
-  const copy = (await get(id(out.root.id))).children![0] as SimplifiedNode;
+  const copy = (await get(id(out.node.id))).children![0] as SimplifiedNode;
   // Read the copy back through the same pipeline: content AND the weight it emphasizes at are unchanged.
   assert.deepEqual([copy.text, copy.boldWeight], [original.text, 600]);
 });
@@ -177,7 +178,7 @@ test("beyond-CSS and CSS effects arrive in ONE read bag, and both halves land", 
   assert.ok(fx.boxShadow && fx.glass);
 
   const out = await render(fromRead(read));
-  const copy = await figma.getNodeByIdAsync(out.root.id);
+  const copy = await figma.getNodeByIdAsync(out.node.id);
   // NOT sorted, on purpose: order is visible effect state, and the copy's is the READ shape's fixed key
   // order (shadows, blurs, then the beyond-CSS forms — core/transformers/effects.ts buckets by TYPE and
   // keeps no stack order), not the order the original carried. A design whose glass sits UNDER its shadow
@@ -219,19 +220,19 @@ test("a single read spec spreads straight into its constructor — one vocabular
 
   // rect: `fill`/`stroke`/`left`/`top` ride through, and a hand-set override lands.
   const out = await render(frame({ width: 300, height: 300 }, [rect({ ...box, width: 320 })]));
-  const copy = (await figma.getNodeByIdAsync(out.root.id)).children[0];
+  const copy = (await figma.getNodeByIdAsync(out.node.id)).children[0];
   assert.deepEqual([copy.width, copy.height, copy.x, copy.y, copy.strokeWeight], [320, 50, 10, 20, 2]);
   assert.deepEqual(copy.fills[0].color, { r: 0x12 / 255, g: 0x34 / 255, b: 0x56 / 255 });
   assert.deepEqual(copy.strokes[0].color, { r: 0, g: 0, b: 0 });
 
   // text: the props-first form — `text`, `fill` and node-level `boldWeight` are the constructor's own words.
   const t = await render(frame({ width: 300, height: 300 }, [text(label)]));
-  const copiedText = (await get(id(t.root.id))).children![0] as SimplifiedNode;
+  const copiedText = (await get(id(t.node.id))).children![0] as SimplifiedNode;
   assert.deepEqual([copiedText.text, copiedText.fill, copiedText.boldWeight], [label.text, "#FF0000", 600]);
 
   // line: `width` is the line's length.
   const l = await render(frame({ width: 300, height: 300 }, [line({ ...rule })]));
-  assert.equal((await figma.getNodeByIdAsync(l.root.id)).children[0].width, 80);
+  assert.equal((await figma.getNodeByIdAsync(l.node.id)).children[0].width, 80);
 
   // A frame spec's children are read specs, not built nodes — the subtree is fromRead's job.
   assert.throws(() => frame(card), /`children` here are read specs.*flcm\.fromRead\(spec\)/s);

@@ -98,7 +98,7 @@ test("an image on a text run is collected for fetch and resolves through paintOf
   const runs = text([["hi", { color: image(url) }]], { textStyle: { fontSize: 20 } });
   const { out, batches } = await renderWithImages(runs, bytesFor);
   assert.deepEqual(batches, [[url]], "a run-fill image reaches the batched request like any other paint site");
-  const node = await figma.getNodeByIdAsync(out.root.id);
+  const node = await figma.getNodeByIdAsync(out.node.id);
   assert.equal(node._rangeFills[0].value[0].type, "IMAGE");
 });
 
@@ -108,7 +108,7 @@ test("render resolves an image fill to an IMAGE paint and stamps placeholder plu
     rect({ width: 200, height: 120, fill: image(url, { scaleMode: "CROP", placeholder: true }) }),
     bytesFor,
   );
-  const node = await figma.getNodeByIdAsync(out.root.id);
+  const node = await figma.getNodeByIdAsync(out.node.id);
   assert.equal(node.fills.length, 1);
   assert.equal(node.fills[0].type, "IMAGE");
   assert.equal(node.fills[0].scaleMode, "CROP");
@@ -119,7 +119,7 @@ test("render resolves an image fill to an IMAGE paint and stamps placeholder plu
 test("a real (non-placeholder) image still records its src for read-back", async () => {
   const url = "https://cdn.example.com/avatar.jpg";
   const { out } = await renderWithImages(ellipse({ width: 48, height: 48, fill: image(url) }), bytesFor);
-  const node = await figma.getNodeByIdAsync(out.root.id);
+  const node = await figma.getNodeByIdAsync(out.node.id);
   assert.deepEqual(JSON.parse(node.getPluginData("flcm/image")), { url, placeholder: false });
 });
 
@@ -135,7 +135,7 @@ test("a read-form image fill paints from the live hash — no fetch, no channel 
       fill: { type: "IMAGE", imageRef: "abc123hash", scaleMode: "FILL" },
     }),
   );
-  const node = await figma.getNodeByIdAsync(out.root.id);
+  const node = await figma.getNodeByIdAsync(out.node.id);
   assert.deepEqual(node.fills[0], { type: "IMAGE", scaleMode: "FILL", imageHash: "abc123hash" });
   // Nothing to record: the read shape carries no source url, and a stale one would name the wrong asset.
   assert.equal(node.getPluginData("flcm/image"), "");
@@ -145,7 +145,7 @@ test("a TILE read fill keeps its repeat scale; STRETCH and a ref-less fill fail 
   const tiled = await render(
     rect({ fill: { type: "IMAGE", imageRef: "tile1", scaleMode: "TILE", scalingFactor: 0.5 } }),
   );
-  assert.equal((await figma.getNodeByIdAsync(tiled.root.id)).fills[0].scalingFactor, 0.5);
+  assert.equal((await figma.getNodeByIdAsync(tiled.node.id)).fills[0].scalingFactor, 0.5);
   // STRETCH is the read spelling of the plugin's CROP, whose crop lives in a transform matrix the
   // read shape never surfaces — reproducing it would silently un-crop the image.
   assert.throws(
@@ -164,10 +164,10 @@ test("a TILE read fill keeps its repeat scale; STRETCH and a ref-less fill fail 
 
 test("a paint slot takes the read shape's ARRAY spelling; a stack fails loud naming the count", async () => {
   const out = await render(rect({ fill: ["#112233"] }));
-  assert.equal((await figma.getNodeByIdAsync(out.root.id)).fills.length, 1);
+  assert.equal((await figma.getNodeByIdAsync(out.node.id)).fills.length, 1);
   // An empty array is the read spelling of "no paint" — same as "none".
   const bare = await render(rect({ fill: [] }));
-  assert.deepEqual((await figma.getNodeByIdAsync(bare.root.id)).fills, []);
+  assert.deepEqual((await figma.getNodeByIdAsync(bare.node.id)).fills, []);
   assert.throws(
     () => rect({ fill: ["#000", "linear-gradient(#fff, #000)"] }),
     /has 2 stacked paints, and flcm paints one/,

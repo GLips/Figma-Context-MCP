@@ -27,10 +27,10 @@ There is no autocomplete and no type-checking where your code runs (a QuickJS sa
 | `flcm.gradient(...)` | a gradient fill value | object or positional form |
 | `flcm.image(src, opts?)` | an image fill value | an https url or a local file path (under the server's asset root) first, then { scaleMode?, placeholder? } |
 | `flcm.effects({...})` | an effects value | an { shadow, blur, backgroundBlur } bag |
-| `await flcm.render(tree)` | live nodes | returns { root, keyed } |
+| `await flcm.render(tree)` | live nodes | returns { node, keyed } |
 | `await flcm.edit(target, changes)` | a nudged existing node (returns its updated Handle) | target (an flcm/key, node id, flcm.id(id), or handle), then a partial delta in the same vocabulary as create |
 | `await flcm.editMany(entries, scope?)` | a whole set of nudges, applied atomically (returns a Handle per entry, in order) | an array of { target, changes } — the same delta vocabulary as flcm.edit — and optionally { within } to scope key resolution. One invalid entry rejects the batch naming every offender, and nothing is applied |
-| `await flcm.append(parent, thing)` | `thing` placed as the LAST child of `parent` | a parent target, then either a constructor spec (built there → { root, keyed, parent }) or a target naming a live node (MOVED there → { node, from, to }) |
+| `await flcm.append(parent, thing)` | `thing` placed as the LAST child of `parent` | a parent target, then either a constructor spec (built there → { node, keyed, to }) or a target naming a live node (MOVED there → { node, from, to }) |
 | `await flcm.prepend(parent, thing)` | the same, placed FIRST | same as append |
 | `await flcm.insertBefore(sibling, thing)` | `thing` placed just before `sibling` | a SIBLING target (the parent is inferred from it), then a spec or a live target |
 | `await flcm.insertAfter(sibling, thing)` | `thing` placed just after `sibling` | same as insertBefore |
@@ -375,7 +375,7 @@ Blur values are written in **CSS px** — you always write the CSS number and we
 
 ```js
 {
-  root:  Handle,               // the top node of the tree
+  node:  Handle,               // the top node of the tree
   keyed: { [key]: Handle }     // every node you gave a `key`
 }
 ```
@@ -483,7 +483,7 @@ Tree shape is its own set of verbs, and **position is the verb** — no index ar
 
 `thing` is one of two, meaning what they mean in the DOM:
 
-- a **constructor spec** — built inside the destination. Returns `{ root, keyed, to }`: what `render` gives you, plus the container it landed in.
+- a **constructor spec** — built inside the destination. Returns `{ node, keyed, to }`: what `render` gives you, plus the container it landed in.
 - a **target naming a live node** — **moved** there, as `appendChild` moves an attached DOM node. Returns `{ node, from, to }`.
 
 Three more complete the set: `flcm.move(target, parent)` is the plain reparent (subject named first, node lands last), `flcm.remove(target)` deletes a node and its subtree, `flcm.clone(target, parent?)` duplicates one.
@@ -526,7 +526,7 @@ You cannot judge what you built from the code you wrote — hairlines, grain, gl
 ```js
 // call 1 — figma_execute_code
 const out = await flcm.render(card);
-return { id: out.root.id, bar: out.keyed.transportBar.id };
+return { id: out.node.id, bar: out.keyed.transportBar.id };
 ```
 
 ```
@@ -549,9 +549,9 @@ The full Figma plugin API is in scope alongside `flcm`. **Author with `flcm`** �
 
 ```js
 const out = await flcm.render(screen);                                  // author with flcm
-const node = await figma.getNodeByIdAsync(out.root.id);                 // drop out for document ops
-figma.viewport.scrollAndZoomIntoView([node]);
-return out.root.id;
+const live = await figma.getNodeByIdAsync(out.node.id);                 // drop out for document ops
+figma.viewport.scrollAndZoomIntoView([live]);
+return out.node.id;
 ```
 
 **Pages** are covered — every verb acts on the current page, and `flcm.page` is how you see and change which one that is:
@@ -745,7 +745,7 @@ const screen = flcm.frame(
 const out = await flcm.render(screen);
 
 return {
-  root: out.root.id, // the login frame's id
+  node: out.node.id, // the login frame's id
   card: out.keyed.card.id, // a keyed node, addressed after render
   title: out.keyed.title.text, // "Welcome back"
 };
@@ -802,7 +802,7 @@ const player = flcm.frame({ width: 96, height: 96, borderRadius: 48, fill: "#111
 ]);
 
 const out = await flcm.render(player);
-return { root: out.root.id, play: out.keyed.play.id };
+return { node: out.node.id, play: out.keyed.play.id };
 ```
 
 ### Images (real raster fills)
@@ -825,7 +825,7 @@ const post = flcm.frame({ layout: { mode: "column", gap: 8 }, width: 390 }, [
 ]);
 
 const out = await flcm.render(post);
-return out.root.id;
+return out.node.id;
 ```
 
 ### Copying what's already on the canvas (get → fromRead)

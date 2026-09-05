@@ -387,9 +387,11 @@ export interface SlimHandle extends Identity {
 // is ABSENT when its container is the page (no box to measure) and `from` is absent on a reorder
 // inside one parent, where `to` already names it. ----
 
-// Placing a constructor spec: render's own `{ root, keyed }` (one vocabulary — an agent that
-// renders and an agent that appends read the same fields) plus the attach point.
-export interface InsertResult { root: Handle; keyed: Record<string, Handle>; to?: Handle }
+// Placing a constructor spec: render's own `{ node, keyed }` (one vocabulary — an agent that
+// renders and an agent that appends read the same fields) plus the attach point. `node` is the
+// subject every result-shaped verb names — the same key MoveResult/CloneResult use, so a caller
+// that just wants what the verb acted on never has to ask which branch ran.
+export interface InsertResult { node: Handle; keyed: Record<string, Handle>; to?: Handle }
 
 // Placing (or `move`-ing) a LIVE node: the node plus both ends of the reparent.
 export interface MoveResult { node: Handle; from?: Handle; to?: Handle }

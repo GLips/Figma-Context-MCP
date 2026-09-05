@@ -37,7 +37,7 @@ test("a covered child reports its SETTLED size, not its walk-time provisional on
 test("the root handle carries its size and no offset — a page child has no parent box to be relative to", async () => {
   createFigmaMock();
   const out = await render(frame({ name: "Root", width: 120, height: 80 }));
-  assert.deepEqual(out.root, { id: out.root.id, type: "FRAME", name: "Root", width: 120, height: 80 });
+  assert.deepEqual(out.node, { id: out.node.id, type: "FRAME", name: "Root", width: 120, height: 80 });
 });
 
 test("an auto-layout parent's in-flow child reports no offset; an absolute one reports position/left/top", async () => {

@@ -91,7 +91,7 @@ const screen = flcm.frame(
 const out = await flcm.render(screen);
 
 return {
-  root: out.root.id, // the login frame's id
+  node: out.node.id, // the login frame's id
   card: out.keyed.card.id, // a keyed node, addressed after render
   title: out.keyed.title.text, // "Welcome back"
 };`,
@@ -134,7 +134,7 @@ const player = flcm.frame({ width: 96, height: 96, borderRadius: 48, fill: "#111
 ]);
 
 const out = await flcm.render(player);
-return { root: out.root.id, play: out.keyed.play.id };`,
+return { node: out.node.id, play: out.keyed.play.id };`,
   image: `// A feed post: a real photo as a rect fill, and a circular avatar as an ellipse filled with an image.
 // flcm.image is a paint value — any shape carries one. The server fetches the bytes; your code doesn't.
 const post = flcm.frame({ layout: { mode: "column", gap: 8 }, width: 390 }, [
@@ -150,7 +150,7 @@ const post = flcm.frame({ layout: { mode: "column", gap: 8 }, width: 390 }, [
 ]);
 
 const out = await flcm.render(post);
-return out.root.id;`,
+return out.node.id;`,
   reuse: `// Copy a card that already exists on the canvas into a different container, widened on the way.
 // \`get\` reads it as the canonical shape; \`fromRead\` re-authors that shape through the constructors,
 // which is what makes it a COPY. A bare read spec carries the original's live id, so passing one

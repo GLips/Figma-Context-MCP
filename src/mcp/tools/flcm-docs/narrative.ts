@@ -140,7 +140,7 @@ export const RENDER_KEYS = `\`render\` is **async** — always \`await\` it. It 
 
 \`\`\`js
 {
-  root:  Handle,               // the top node of the tree
+  node:  Handle,               // the top node of the tree
   keyed: { [key]: Handle }     // every node you gave a \`key\`
 }
 \`\`\`
@@ -176,7 +176,7 @@ export const VERIFY_READBACK = `You cannot judge what you built from the code yo
 \`\`\`js
 // call 1 — figma_execute_code
 const out = await flcm.render(card);
-return { id: out.root.id, bar: out.keyed.transportBar.id };
+return { id: out.node.id, bar: out.keyed.transportBar.id };
 \`\`\`
 
 \`\`\`
@@ -199,9 +199,9 @@ The full Figma plugin API is in scope alongside \`flcm\`. **Author with \`flcm\`
 
 \`\`\`js
 const out = await flcm.render(screen);                                  // author with flcm
-const node = await figma.getNodeByIdAsync(out.root.id);                 // drop out for document ops
-figma.viewport.scrollAndZoomIntoView([node]);
-return out.root.id;
+const live = await figma.getNodeByIdAsync(out.node.id);                 // drop out for document ops
+figma.viewport.scrollAndZoomIntoView([live]);
+return out.node.id;
 \`\`\`
 
 **Pages** are covered — every verb acts on the current page, and \`flcm.page\` is how you see and change which one that is:
@@ -335,7 +335,7 @@ export const STRUCTURE_INTRO = `Tree shape is its own set of verbs, and **positi
 
 \`thing\` is one of two, meaning what they mean in the DOM:
 
-- a **constructor spec** — built inside the destination. Returns \`{ root, keyed, to }\`: what \`render\` gives you, plus the container it landed in.
+- a **constructor spec** — built inside the destination. Returns \`{ node, keyed, to }\`: what \`render\` gives you, plus the container it landed in.
 - a **target naming a live node** — **moved** there, as \`appendChild\` moves an attached DOM node. Returns \`{ node, from, to }\`.
 
 Three more complete the set: \`flcm.move(target, parent)\` is the plain reparent (subject named first, node lands last), \`flcm.remove(target)\` deletes a node and its subtree, \`flcm.clone(target, parent?)\` duplicates one.

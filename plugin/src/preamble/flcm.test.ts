@@ -110,7 +110,7 @@ test("root position words land on the page; an in-flow child's explicit pin is s
   const out = await render(frame({ width: 40, height: 40, left: 42, top: 17, layout: { mode: "row", gap: 4 } }, [
     rect({ width: 10, height: 10, pin: { x: "right" } }),
   ]));
-  const root = await figma.getNodeByIdAsync(out.root.id);
+  const root = await figma.getNodeByIdAsync(out.node.id);
   assert.equal(root.x, 42);
   assert.equal(root.y, 17);
   assert.equal(root.children[0].constraints.horizontal, "MAX");
@@ -176,7 +176,7 @@ test("blend: a CSS mix-blend-mode name maps to the Figma enum on any node; unkno
   assert.throws(() => frame({ mixBlendMode: "plus-lighter" }), /unsupported blend/); // real CSS keyword, no Figma mapping
   // Applied once in the shared dispatch (buildNode), so every node kind gets it live.
   const out = await render(frame({ mixBlendMode: "overlay" }, [ellipse({ key: "dot", mixBlendMode: "screen" })]));
-  assert.equal((await figma.getNodeByIdAsync(out.root.id)).blendMode, "OVERLAY");
+  assert.equal((await figma.getNodeByIdAsync(out.node.id)).blendMode, "OVERLAY");
   assert.equal((await figma.getNodeByIdAsync(out.keyed.dot.id)).blendMode, "SCREEN");
 });
 
@@ -191,15 +191,15 @@ test("maxLines: clamps to N lines against a bounded width; unbounded or non-inte
   assert.throws(() => text("t", { textStyle: { lineClamp: 0 }, width: 200 }), /whole number/);
   assert.throws(() => text("t", { textStyle: { lineClamp: 1.5 }, width: 200 }), /whole number/);
   // Sets the plugin truncation props at render (textTruncation:"ENDING" gives the automatic ellipsis).
-  const t = await figma.getNodeByIdAsync((await render(text("A very long title indeed", { textStyle: { lineClamp: 2 }, width: 120 }))).root.id);
+  const t = await figma.getNodeByIdAsync((await render(text("A very long title indeed", { textStyle: { lineClamp: 2 }, width: 120 }))).node.id);
   assert.equal(t.maxLines, 2);
   assert.equal(t.textTruncation, "ENDING");
 });
 
 test("frames don't clip by default; clip:true opts in", async () => {
-  const def = await figma.getNodeByIdAsync((await render(frame({}))).root.id);
-  const on = await figma.getNodeByIdAsync((await render(frame({ clip: true }))).root.id);
-  const off = await figma.getNodeByIdAsync((await render(frame({ clip: false }))).root.id);
+  const def = await figma.getNodeByIdAsync((await render(frame({}))).node.id);
+  const on = await figma.getNodeByIdAsync((await render(frame({ clip: true }))).node.id);
+  const off = await figma.getNodeByIdAsync((await render(frame({ clip: false }))).node.id);
   assert.equal(def.clipsContent, false);
   assert.equal(on.clipsContent, true);
   assert.equal(off.clipsContent, false);

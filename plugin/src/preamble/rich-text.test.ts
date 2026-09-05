@@ -28,7 +28,7 @@ test("a runs array builds one node whose characters are the concatenation", asyn
   assert.equal(wn.runs!.length, 3);
 
   const out = await render(wn);
-  const node = await figma.getNodeByIdAsync(out.root.id);
+  const node = await figma.getNodeByIdAsync(out.node.id);
   assert.equal(node.characters, "@ridgeline body copy more");
   assert.equal(node.fontSize, 14); // base props apply as the node default
 });
@@ -44,7 +44,7 @@ test("runs apply per-range weight and fills over the right slices; unstyled runs
       { textStyle: { fontSize: 14 } },
     ),
   );
-  const node = await figma.getNodeByIdAsync(out.root.id);
+  const node = await figma.getNodeByIdAsync(out.node.id);
 
   // Only the weighted run sets a range font — and it resolves to the family's Semi Bold, not the base.
   assert.equal(node._rangeFonts.length, 1);
@@ -75,7 +75,7 @@ test("markdown in a plain string compiles to runs and renders per-range", async 
   assert.equal(wn.characters, undefined);
 
   const out = await render(wn);
-  const node = await figma.getNodeByIdAsync(out.root.id);
+  const node = await figma.getNodeByIdAsync(out.node.id);
   assert.equal(node.characters, "Hi bold and italic and struck and link");
 
   // Bold + italic each resolve a per-range font (weight snap / italic variant); strike does not.
@@ -95,7 +95,7 @@ test("markdown in a plain string compiles to runs and renders per-range", async 
 
 test("a whole-node italic base resolves the italic font and needs no per-range font", async () => {
   const out = await render(text("all slanted", { textStyle: { fontStyle: "italic", fontWeight: 700 } }));
-  const node = await figma.getNodeByIdAsync(out.root.id);
+  const node = await figma.getNodeByIdAsync(out.node.id);
   assert.deepEqual(node.fontName, { family: "Inter", style: "Bold Italic" });
   assert.deepEqual(node._rangeFonts, []); // plain string, no runs
 });
@@ -105,7 +105,7 @@ test("an italic run over an italic base with a weight override keeps the slant",
   const out = await render(
     text([["heavy", { fontWeight: 900 }], " rest"], { textStyle: { fontStyle: "italic" } }),
   );
-  const node = await figma.getNodeByIdAsync(out.root.id);
+  const node = await figma.getNodeByIdAsync(out.node.id);
   const run = node._rangeFonts.find((r: any) => r.start === 0);
   assert.deepEqual(run.value, { family: "Inter", style: "Black Italic" });
 });
@@ -114,7 +114,7 @@ test("a tuple StyleDelta can carry fontStyle/textDecoration/hyperlink directly",
   const out = await render(
     text([["x", { fontStyle: "italic", textDecoration: "underline", hyperlink: "https://b.co" }]]),
   );
-  const node = await figma.getNodeByIdAsync(out.root.id);
+  const node = await figma.getNodeByIdAsync(out.node.id);
   assert.equal(node._rangeFonts[0].value.style, "Italic");
   assert.deepEqual(node._rangeDecorations[0], { start: 0, end: 1, value: "UNDERLINE" });
   assert.deepEqual(node._rangeHyperlinks[0].value, { type: "URL", value: "https://b.co" });
@@ -123,7 +123,7 @@ test("a tuple StyleDelta can carry fontStyle/textDecoration/hyperlink directly",
 test("an explicit run fontWeight overrides the markdown bold weight", async () => {
   // `**` implies default bold; the tuple's explicit 900 wins (a non-canonical heavy weight isn't lost).
   const out = await render(text([["**heavy**", { fontWeight: 900 }]]));
-  const node = await figma.getNodeByIdAsync(out.root.id);
+  const node = await figma.getNodeByIdAsync(out.node.id);
   assert.equal(node.characters, "heavy");
   assert.equal(node._rangeFonts[0].value.style, "Black");
 });

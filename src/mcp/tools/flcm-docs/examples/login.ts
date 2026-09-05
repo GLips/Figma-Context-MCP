@@ -95,7 +95,7 @@ export async function loginExample(flcm: Flcm) {
   const out = await flcm.render(screen);
 
   return {
-    root: out.root.id, // the login frame's id
+    node: out.node.id, // the login frame's id
     card: out.keyed.card.id, // a keyed node, addressed after render
     title: out.keyed.title.text, // "Welcome back"
   };
