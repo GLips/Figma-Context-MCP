@@ -35,7 +35,7 @@ test("a batch over three targets applies in ONE call and ONE undo step, returnin
   const handles = await editMany([
     { target: "a", changes: { fill: "#0000ff" } },
     { target: "b", changes: { opacity: 0.5 } },
-    { target: "c", changes: { content: "goodbye" } },
+    { target: "c", changes: { text: "goodbye" } },
   ]);
   assert.deepEqual(a.fills[0].color, { r: 0, g: 0, b: 1 });
   assert.equal(b.opacity, 0.5);
@@ -233,7 +233,7 @@ test("cross-entry layout legality is judged against the batch's own end state, n
 test("every MEASUREMENT waits for every write: an anchored ancestor centers on the size its descendant ends at", async () => {
   const out = await render(
     frame({ key: "card", width: 300, height: 200 }, [
-      frame({ key: "panel", layout: { mode: "row" }, width: "hug", height: "hug", absolute: { x: 0, y: 0 } }, [
+      frame({ key: "panel", layout: { mode: "row" }, width: "hug", height: "hug", left: 0, top: 0 }, [
         text("x", { key: "label" }),
       ]),
     ]),
@@ -243,8 +243,8 @@ test("every MEASUREMENT waits for every write: an anchored ancestor centers on t
   // against that size. Applied ancestor-first with no deferred measure pass, the center is computed
   // from the pre-growth width and the panel ends up visibly off-center, with no error.
   await editMany([
-    { target: "panel", changes: { absolute: { x: "50%", anchor: { x: "center" } } } },
-    { target: "label", changes: { content: "this is a much longer label" } },
+    { target: "panel", changes: { left: "50%", anchor: { x: "center" } } },
+    { target: "label", changes: { text: "this is a much longer label" } },
   ]);
   assert.ok(panel.width > 100, "the descendant edit grew the hugging panel");
   assert.equal(panel.x + panel.width / 2, 150); // dead center of the 300-wide card
@@ -260,7 +260,7 @@ test("a refusal names the identity the node had BEFORE the batch's first write, 
   await assert.rejects(
     editMany([
       { target: "a", changes: { opacity: 0.5 } },
-      { target: "host", changes: { name: "Renamed", absolute: { x: "50%" } } },
+      { target: "host", changes: { name: "Renamed", left: "50%" } },
     ]),
     (err: Error) => {
       assert.match(err.message, /key "host"/);

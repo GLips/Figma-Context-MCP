@@ -123,7 +123,7 @@ test("`**` re-emphasizes at the node's OWN bold weight, not a hardcoded 700", as
   // stood for ONCE, at node level — omitting the run's own fontWeight exactly when it matches. So a design
   // that emphasizes with Semi Bold has `boldWeight` as the SOLE carrier of 600, and dropping it re-rendered
   // every emphasis at 700: right characters, wrong pixels, no error.
-  await render(frame({ key: "card", width: 200, height: 80 }, [text("Hello **world**", { key: "line", textStyle: { boldWeight: 600 } })]));
+  await render(frame({ key: "card", width: 200, height: 80 }, [text("Hello **world**", { key: "line", boldWeight: 600 })]));
   const read = await get("card");
   const original = read.children![0] as SimplifiedNode;
   assert.equal(original.boldWeight, 600);
@@ -148,9 +148,9 @@ test("a rotated node rebuilds at its own size — read reports the node's size, 
 
 test("a line's sizing intent on its cross axis is refused, not guessed", async () => {
   createFigmaMock();
-  // A LINE authors along `length` alone, so a SIZING INTENT on its cross axis has nowhere to go. (A
+  // A LINE sizes along `width` alone, so a SIZING INTENT on its cross axis has nowhere to go. (A
   // NUMBER there is the line's ~0 bbox height and drops — that one really is derived.)
-  assert.throws(() => fromRead(spec({ type: "LINE", width: 80, height: "fill" })), /LINE sizes only along its length/);
+  assert.throws(() => fromRead(spec({ type: "LINE", width: 80, height: "fill" })), /LINE sizes only along its width/);
   assert.doesNotThrow(() => fromRead(spec({ type: "LINE", width: 80, height: 0 })));
 });
 
@@ -200,56 +200,56 @@ test("the closed sets are actually closed — a prototype key is not a member of
   // the bag came from a read or a hand — rather than accepted and dropped by compileNodeLocalProps.
   assert.throws(() => fromRead(spec({ type: "ELLIPSE", borderRadius: "8px" })), /`borderRadius` is not one of flcm.ellipse's words/);
   assert.throws(() => ellipse({ borderRadius: 8 }), /`borderRadius` is not one of flcm.ellipse's words/);
-  // `position` has exactly one read spelling; anything else is malformed input, not absence.
-  assert.throws(() => fromRead(spec({ type: "RECTANGLE", position: "relative" })), /spells only "absolute"/);
+  // `position` is the write word too, with two spellings; anything else is malformed input, not absence.
+  assert.throws(() => fromRead(spec({ type: "RECTANGLE", position: "relative" })), /position must be "absolute" or "none"/);
 });
 
-test("a single read spec spreads straight into its constructor — the read spellings fold onto the write ones", async () => {
+test("a single read spec spreads straight into its constructor — one vocabulary, read and write", async () => {
   createFigmaMock();
   await render(
     frame({ key: "card", width: 300, height: 300 }, [
-      rect({ key: "box", width: 100, height: 50, fill: "#123456", stroke: "#000000", strokeWidth: 2, absolute: { x: 10, y: 20 } }),
-      text("Hello **world**", { key: "line", color: "#FF0000", textStyle: { fontSize: 18, boldWeight: 600 } }),
-      line({ key: "rule", length: 80, stroke: "#00FF00" }),
+      rect({ key: "box", width: 100, height: 50, fill: "#123456", stroke: "#000000", strokeWidth: 2, left: 10, top: 20 }),
+      text("Hello **world**", { key: "line", fill: "#FF0000", boldWeight: 600, textStyle: { fontSize: 18 } }),
+      line({ key: "rule", width: 80, stroke: "#00FF00" }),
     ]),
   );
   const card = await get("card");
   const [box, label, rule] = card.children as SimplifiedNode[];
 
-  // rect: `fill`/`stroke` ride through, `left`/`top` → absolute, and a hand-set override lands.
+  // rect: `fill`/`stroke`/`left`/`top` ride through, and a hand-set override lands.
   const out = await render(frame({ width: 300, height: 300 }, [rect({ ...box, width: 320 })]));
   const copy = (await figma.getNodeByIdAsync(out.root.id)).children[0];
   assert.deepEqual([copy.width, copy.height, copy.x, copy.y, copy.strokeWeight], [320, 50, 10, 20, 2]);
   assert.deepEqual(copy.fills[0].color, { r: 0x12 / 255, g: 0x34 / 255, b: 0x56 / 255 });
   assert.deepEqual(copy.strokes[0].color, { r: 0, g: 0, b: 0 });
 
-  // text: the spec-first form — content from `text`, `fill` → color, node-level boldWeight → textStyle.
+  // text: the props-first form — `text`, `fill` and node-level `boldWeight` are the constructor's own words.
   const t = await render(frame({ width: 300, height: 300 }, [text(label)]));
   const copiedText = (await get(id(t.root.id))).children![0] as SimplifiedNode;
   assert.deepEqual([copiedText.text, copiedText.fill, copiedText.boldWeight], [label.text, "#FF0000", 600]);
 
-  // line: `width` is the line's `length`.
+  // line: `width` is the line's length.
   const l = await render(frame({ width: 300, height: 300 }, [line({ ...rule })]));
   assert.equal((await figma.getNodeByIdAsync(l.root.id)).children[0].width, 80);
 
   // A frame spec's children are read specs, not built nodes — the subtree is fromRead's job.
   assert.throws(() => frame(card), /`children` here are read specs.*flcm\.fromRead\(spec\)/s);
   assert.doesNotThrow(() => frame({ ...card, children: undefined }));
-  // One thing named both ways is refused, not resolved — the spread-and-override bag is where a silent
-  // "last one wins" would bite.
-  assert.throws(() => text({ ...label, color: "#FFFFFF" }), /`fill` and `color` name the same thing/);
-  assert.throws(() => text("other", { ...label }), /content arrived twice/);
-  assert.throws(() => text({ ...label, textStyle: { fontSize: 12, boldWeight: 700 } }), /`boldWeight` and `textStyle.boldWeight`/);
+  // Content named twice — positionally and as `text` — is refused by PRESENCE, not resolved: the
+  // spread-and-override bag is where a silent "one wins" would bite. The props-first form takes nothing
+  // in the second slot.
+  assert.throws(() => text("other", { ...label }), /arrived twice/);
+  assert.throws(() => text(label, { name: "x" } as never), /takes the props alone/);
   // A spec handed to the wrong constructor says so, and names the verb that dispatches by type.
   assert.throws(() => rect(label), /the spec is a TEXT, not a RECTANGLE.*flcm\.fromRead\(spec\)/s);
 });
 
-test("edit takes the read spellings too, folded against the live node's type", async () => {
+test("edit takes a read spec's words too, judged against the live node's type", async () => {
   createFigmaMock();
   const out = await render(
     frame({ key: "card", width: 300, height: 300 }, [
       rect({ key: "box", width: 100, height: 50, fill: "#123456" }),
-      text("Hello", { key: "line", color: "#FF0000" }),
+      text("Hello", { key: "line", fill: "#FF0000" }),
     ]),
   );
   const boxId = out.keyed.box.id;
@@ -260,7 +260,7 @@ test("edit takes the read spellings too, folded against the live node's type", a
   assert.deepEqual(box.fills[0].color, { r: 0, g: 1, b: 0 });
   assert.deepEqual([box.x, box.y], [30, 40]);
 
-  // The same read word lands on the TEXT's word (`color`), and `text` is the edit's `content`.
+  // `fill` and `text` are the TEXT's own words under edit too.
   await edit("line", { fill: "#0000FF", text: "Changed" });
   const line = await figma.getNodeByIdAsync(lineId);
   assert.deepEqual(line.fills[0].color, { r: 0, g: 0, b: 1 });
@@ -268,7 +268,7 @@ test("edit takes the read spellings too, folded against the live node's type", a
 
   // Read identity folds to nothing, and nothing is an empty edit.
   await assert.rejects(edit("box", { id: boxId, type: "RECTANGLE" }), /changes object is empty/);
-  await assert.rejects(edit("line", { fill: "#FFF", color: "#000" }), /`fill` and `color` name the same thing/);
+  await assert.rejects(edit("line", { fill: "#FFF", color: "#000" } as never), /unknown prop "color"/);
   // A word outside BOTH vocabularies is still the document-blind reject, naming the edit words only.
   await assert.rejects(edit("box", { fillz: ["#FFF"] }), /unknown prop "fillz"/);
 });

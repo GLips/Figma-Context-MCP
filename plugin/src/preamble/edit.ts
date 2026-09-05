@@ -56,11 +56,10 @@ import { rejectUnknownKeys } from "./validate.js";
 import { acceptReadSpellings, READ_FIELD_DISPOSITIONS, own } from "./read-spellings.js";
 import { liveFontWords, loadFontsForTextEdits } from "./fonts.js";
 import {
-  KNOWN_KEYS, compileNodeLocalProps, compileSizeWords, compileContainerWords, compileLineLength,
-  compileLineStroke, compilePaintWord, compileTextStyleWords, compileTextContent, assertLineClampCount,
-  fetchImagesForTrees,
+  KNOWN_KEYS, compileNodeLocalProps, compileSizeWords, compilePlacementWords, compileContainerWords,
+  compileLineWidth, compileTextStyleWords, compileTextContent, assertLineClampCount, fetchImagesForTrees,
 } from "./flcm.js";
-import type { EditDelta, FrameProps, LineProps } from "./schema.js";
+import type { EditDelta, FrameProps } from "./schema.js";
 
 const SUBJECT = "flcm.edit";
 const EDIT_KEYS: ReadonlySet<string> = new Set(KNOWN_KEYS.edit);
@@ -109,13 +108,12 @@ export function rejectNonDeltaWords(changes: EditDelta, subject: string): void {
   }
   if ("x" in changes || "y" in changes) {
     throw new Error(
-      subject + ": position is not spelled with bare x/y — use `absolute: { x, y }` to place the node out of flow (or `absolute: \"none\"` to return it to flow), and `pin` for how it responds to a parent resize.",
+      subject + ": position is not spelled with bare x/y — use `left`/`top` (naming either also lifts the node out of an auto-layout flow; `position: \"none\"` returns it), and `pin` for how it responds to a parent resize.",
     );
   }
-  // The read shape's own spellings (`fills`, `left`/`top`, `text`, …) are folded onto the edit words
-  // in stage 2, where the live node's TYPE decides the fold (`fills` is `color` on a TEXT, `width` is
-  // `length` on a LINE). They pass this document-blind gate unjudged; everything else is judged now,
-  // against the edit vocabulary alone, so the message advertises one word per thing.
+  // The read shape's read-only fields (`id`, `type`, a root's `designedWidth`, …) are folded in stage 2,
+  // where the live node's TYPE decides what they mean. They pass this document-blind gate unjudged;
+  // everything else is judged now, against the edit vocabulary alone.
   const foreign: Record<string, unknown> = {};
   for (const key of Object.keys(changes)) {
     if (!own(READ_FIELD_DISPOSITIONS as Record<string, unknown>, key)) foreign[key] = (changes as Record<string, unknown>)[key];
@@ -161,7 +159,7 @@ function enrichFontIdentity(ts: WriteTextStyle, node: TextNode, subject: string)
   if (node.fontName === figma.mixed) {
     if (ts.fontFamily === undefined) {
       throw new Error(
-        subject + ": this text mixes fonts (fontName is mixed), so a partial font change has no single base to resolve against — name textStyle.fontFamily in the same edit (unnamed weight resets to regular), or restyle spans via `content` runs.",
+        subject + ": this text mixes fonts (fontName is mixed), so a partial font change has no single base to resolve against — name textStyle.fontFamily in the same edit (unnamed weight resets to regular), or restyle spans via `text` runs.",
       );
     }
     return ts; // a family-anchored delta is an absolute whole-node reset — legal on mixed
@@ -169,8 +167,8 @@ function enrichFontIdentity(ts: WriteTextStyle, node: TextNode, subject: string)
   return { ...liveFontWords(node.fontName as FontName), ...ts };
 }
 
-// The base style `content` runs layer over: the delta's own (enriched) font identity when it
-// names one, else the live node's — so `content: ["a ", ["b", { fontWeight: "bold" }]]` bolds in
+// The base style `text` runs layer over: the delta's own (enriched) font identity when it
+// names one, else the live node's — so `text: ["a ", ["b", { fontWeight: "bold" }]]` bolds in
 // the family the node actually uses. A mixed node has no single base; that case is gated by the
 // caller (a styled run without a resolvable family would silently land in the default family).
 function liveBaseStyle(node: TextNode): WriteTextStyle {
@@ -189,14 +187,11 @@ function compileDeltaPatch(changes: EditDelta, legal: ReadonlySet<string>, node:
   if (patch.effects) toFigmaEffects(patch.effects);
   // Layout words compile through the same helpers every constructor rides — never buildLayout,
   // whose creation default (omitted mode → "none") would turn a gap nudge into an auto-layout kill.
-  const layout: WriteLayout = { ...(compileSizeWords(changes) || {}) };
-  if (node.type === "LINE") {
-    Object.assign(layout, compileLineLength(changes) || {});
-    // flcm.line's own stroke compile carries the `stroke`-wins-over-`color` precedence; when only
-    // `stroke` was named this re-lands what compileNodeLocalProps already wrote — same compile.
-    const strokes = compileLineStroke(changes);
-    if (strokes) patch.strokes = strokes;
-  }
+  // A LINE's `width` is flcm.line's own fixed-only compile, not the sizing-intent one.
+  const layout: WriteLayout =
+    node.type === "LINE"
+      ? { ...(compileLineWidth(changes) || {}), ...(compilePlacementWords(changes) || {}) }
+      : { ...(compileSizeWords(changes) || {}) };
   if (changes.layout != null) Object.assign(layout, compileContainerWords(changes.layout as NonNullable<FrameProps["layout"]>, subject + ".layout"));
   if (Object.keys(layout).length) patch.layout = layout;
   if (node.type === "TEXT") compileTextDeltaWords(changes, patch, node as TextNode, subject);
@@ -210,9 +205,9 @@ function compileDeltaPatch(changes: EditDelta, legal: ReadonlySet<string>, node:
 
 // The TEXT words: textStyle (create's own compile + live font-identity enrichment), lineClamp
 // (create's shape gate; the bounded-width fact here is live-or-this-delta, not authored width),
-// color (the text-fill sugar, exactly as flcm.text reads it), and content (create's own parser
-// over an enriched base). Runs after the layout words land on the patch — lineClamp's gate reads
-// the compiled sizing.
+// and text + boldWeight (create's own content parser over an enriched base). `fill` is not here: it
+// is the shared paint word, landed by compileNodeLocalProps like every other node's. Runs after the
+// layout words land on the patch — lineClamp's gate reads the compiled sizing.
 function compileTextDeltaWords(changes: EditDelta, patch: WriteProps, node: TextNode, subject: string): void {
   if (changes.textStyle != null) {
     const ts = compileTextStyleWords(changes.textStyle, subject + ".textStyle");
@@ -246,10 +241,16 @@ function compileTextDeltaWords(changes: EditDelta, patch: WriteProps, node: Text
         ') would never truncate again. Clear it in the same edit (textStyle: { lineClamp: "none" }) or keep a bounded width.',
     );
   }
-  if (changes.color != null) patch.fills = compilePaintWord(changes.color, "color");
-  if (changes.content != null) {
+  // `boldWeight` is a content convention (what `**` in `text` resolves to), not a property of the
+  // live node — alone it would re-emphasize nothing, the silent no-op the surface rejects everywhere.
+  if (changes.boldWeight != null && changes.text == null) {
+    throw new Error(
+      subject + ": `boldWeight` says what `**` in `text` resolves to, and this delta names no `text` — the live content would not be re-emphasized. Pass the content back as `text` with the new `boldWeight`, or drop it.",
+    );
+  }
+  if (changes.text != null) {
     const base = namesFontIdentity(patch.textStyle) ? patch.textStyle : liveBaseStyle(node);
-    const compiled = compileTextContent(changes.content, base, changes.textStyle && changes.textStyle.boldWeight);
+    const compiled = compileTextContent(changes.text, base, changes.boldWeight ?? undefined);
     // A styled run that changes font identity with no family anywhere (no run family, no delta
     // textStyle, mixed live base) would silently land in the DEFAULT family — reject instead.
     if (compiled.runs && compiled.runs.some((r) => namesFontIdentity(r.style) && r.style.fontFamily === undefined)) {
@@ -286,7 +287,7 @@ export interface EditPlan { node: SceneNode; patch: WriteProps; liveTextFacts: s
 
 /** Stage 2 — compile against the live node, recording every mutable fact the compile consulted. */
 export function compileEditPlan(node: SceneNode, changes: EditDelta, subject: string): EditPlan {
-  changes = acceptReadSpellings(changes, { type: node.type, verb: "edit", known: EDIT_KEYS, subject }).props as EditDelta;
+  changes = acceptReadSpellings(changes, { type: node.type, verb: "edit", known: EDIT_KEYS, subject }) as EditDelta;
   // A delta that was ONLY read-shape identity (`{ id, type }`) folds to nothing — same refusal as an
   // empty object, now that the fold has run.
   assertDeltaNotEmpty(changes, subject);

@@ -1,21 +1,16 @@
-// read-spellings — the read shape's own spellings, accepted at every authoring entry.
+// read-spellings — a `get` result, accepted at every authoring entry.
 //
-// A `get` result and a constructor's props are one vocabulary (docs/canonical-vocabulary.md) with a
-// handful of spelling differences, each a deliberate write-side choice:
-//   • a TEXT's paint is `fill` on read like every other node's; write spells it `color`.
-//   • read `left`/`top` (+ `position: "absolute"`) report a free-placed node; write places one with
-//     `absolute: { x, y }`, the one word for both a free-form and an auto-layout parent.
-//   • read `boldWeight` sits at the node level; write nests it in `textStyle`, beside the base weight.
-//   • read `text` is a field; flcm.text's content is the positional argument (edit's is `content`).
-//   • read `width` on a LINE is its `length` — a LINE has no other size word.
+// A `get` result and a constructor's props are ONE vocabulary (docs/canonical-vocabulary.md): the same
+// word names the same thing on both sides, so `{ ...spec, width: 320 }` authors as-is through any
+// constructor and through `edit`, and fromRead only dispatches on `type` and recurses. What this module
+// folds is the read shape's READ-ONLY residue — the fields a read carries that are not authoring input:
+//   • `id` is the identity of the node that was read; a rebuild is a new node.
+//   • `type` must be the constructor's own — flcm.fromRead(spec) is the by-type dispatch.
 //   • a read ROOT reports `width: "contextual"` and parks the real px in `designedWidth`.
-// This module folds each read spelling onto the write one, so `{ ...spec, width: 320 }` authors as-is
-// through any constructor and through `edit`, and fromRead only dispatches on `type` and recurses.
+//   • `children` are read specs, not built nodes — fromRead recurses; a constructor can't.
 //
-// The fold runs BEFORE each entry's closed-set gate (rejectUnknownKeys), so the read spellings never join
-// KNOWN_KEYS or the generated doc: the write vocabulary stays one word per thing, and the read spelling
-// is accepted, not advertised. Naming one thing both ways in one bag (`fills` AND `fill`) fails loud —
-// a spread spec with a hand-set override is exactly where a silent "last one wins" would bite.
+// The fold runs BEFORE each entry's closed-set gate (rejectUnknownKeys), so the read-only fields never
+// join KNOWN_KEYS or the generated doc.
 //
 // FIDELITY IS THE CONTRACT. Real state the read shape carries that the entry has no word for fails LOUD
 // by name, pointing at flcm.clone — the live-duplicate path that copies a node whole. The only silent
@@ -42,7 +37,7 @@ import { length } from "./css.js";
 // SimplifiedNode`, which is the drift guard: a field added to (or removed from) the read shape fails
 // plugin typecheck here until someone decides what the write side does with it.
 //   • "author" — the same word on both sides; rides through to the entry's own gate.
-//   • "fold"   — a read spelling with a write spelling; acceptReadSpellings owns the rewrite. NOTE the
+//   • "fold"   — read-only, or read-only in part; acceptReadSpellings owns what it becomes. NOTE the
 //                limit of the guard: the Record forces a DISPOSITION, not a consumer — a "fold" the code
 //                never reads is still a silent drop, so the tests pin each one.
 //   • "drop"   — purely derived; its information is already elsewhere in the same bag.
@@ -58,11 +53,11 @@ export const READ_FIELD_DISPOSITIONS: Record<keyof SimplifiedNode, ReadFieldDisp
   // NOT derived, despite reading like it: the read side omits a run's explicit `fontWeight` exactly when
   // it matches this value (core/transformers/text.ts classifyRun), so `boldWeight` is the ONLY carrier of
   // the weight `**` stands for. Dropping it re-rendered every Semi Bold emphasis at 700.
-  boldWeight: "fold",
+  boldWeight: "author",
   layout: "author",
-  text: "fold",
+  text: "author",
   textStyle: "author",
-  fill: "fold",
+  fill: "author",
   stroke: "author",
   strokeWidth: "author",
   effects: "author",
@@ -73,9 +68,9 @@ export const READ_FIELD_DISPOSITIONS: Record<keyof SimplifiedNode, ReadFieldDisp
   height: "fold",
   designedWidth: "fold",
   designedHeight: "fold",
-  position: "fold",
-  left: "fold",
-  top: "fold",
+  position: "author",
+  left: "author",
+  top: "author",
   rotation: "author",
   template: {
     refuse: "`template` is a COMPRESSED read's back-reference into the design's `templates` table, so this node's body isn't here at all. flcm.get returns the expanded shape — re-read the node with it",
@@ -88,7 +83,7 @@ export const READ_FIELD_DISPOSITIONS: Record<keyof SimplifiedNode, ReadFieldDisp
   componentPropertyReferences: { refuse: "a component property BINDING (this node's text/visibility driven by a component prop) has no flcm word" },
   propertyDefinitions: { refuse: "component property DEFINITIONS belong to a COMPONENT or COMPONENT_SET, and flcm cannot author either — a rebuild would be a plain frame that defines nothing" },
   // Which fields the designer overrode on an instance sublayer. The overridden VALUES are already in the
-  // same bag (`fills`, `text`, …); this only names them, and a rebuild is detached from the component
+  // same bag (`fill`, `text`, …); this only names them, and a rebuild is detached from the component
   // either way, so there is no distinction left to carry.
   overrides: "drop",
 };
@@ -124,40 +119,23 @@ export function own<T>(table: Record<string, T>, key: string): T | undefined {
 export interface ReadSpellingContext {
   /** The node kind the bag is authored FOR: a constructor's own type, or the live target's under edit. */
   type: string;
-  /** Create folds the read `text` field into the returned `content`; edit folds it onto its `content` word. */
   verb: "create" | "edit";
   /** The entry's own write vocabulary. Real read state with no word in it is refused by name. */
   known: ReadonlySet<string>;
   subject: string;
 }
 
-export interface FoldedProps {
-  props: Record<string, unknown>;
-  /** Create only: the read `text` field, handed to flcm.text as its positional content. */
-  content?: unknown;
-}
-
 /**
- * Fold the read shape's spellings in `bag` onto the write ones. Keys outside the read shape (write-only
- * words, typos) ride through untouched for the entry's own closed-set gate to judge; a non-object rides
- * through whole for the same reason (the gate names the object-vs-value mistake).
+ * Fold the read-only fields in `bag` and refuse the unauthorable ones; every other key rides through
+ * untouched for the entry's own closed-set gate to judge. A non-object rides through whole for the same
+ * reason (the gate names the object-vs-value mistake).
  */
-export function acceptReadSpellings(bag: unknown, ctx: ReadSpellingContext): FoldedProps {
-  if (bag === null || typeof bag !== "object" || Array.isArray(bag)) return { props: bag as Record<string, unknown> };
+export function acceptReadSpellings(bag: unknown, ctx: ReadSpellingContext): Record<string, unknown> {
+  if (bag === null || typeof bag !== "object" || Array.isArray(bag)) return bag as Record<string, unknown>;
   const src = bag as Record<string, unknown>;
   const out: Record<string, unknown> = {};
-  const folded: FoldedProps = { props: out };
   const { subject, type } = ctx;
 
-  // A read key that lands on a DIFFERENT write key. The bag is the authority on conflicts: the same
-  // thing named both ways is refused rather than resolved.
-  const land = (readKey: string, writeKey: string, value: unknown): void => {
-    if (src[writeKey] != null) {
-      throw new Error(subject + ": `" + readKey + "` and `" + writeKey + "` name the same thing (the read shape's spelling and flcm's) — pass one.");
-    }
-    if (!ctx.known.has(writeKey)) throw noWord(ctx, readKey);
-    out[writeKey] = value;
-  };
   // A read key that keeps its name — still has to be a word THIS entry reads.
   const keep = (key: string, value: unknown): void => {
     if (!ctx.known.has(key)) throw noWord(ctx, key);
@@ -186,16 +164,6 @@ export function acceptReadSpellings(bag: unknown, ctx: ReadSpellingContext): Fol
           );
         }
         break;
-      case "fill":
-        assertNotCompressedRef(value, subject + ".fill");
-        if (type === "TEXT") land("fill", "color", value);
-        else keep("fill", value);
-        break;
-      case "text":
-        if (ctx.verb === "edit") land("text", "content", foldTextContent(value, subject));
-        else if (type !== "TEXT") throw noWord(ctx, "text");
-        else folded.content = foldTextContent(value, subject);
-        break;
       case "children":
         throw new Error(
           subject + ": `children` here are read specs, not built nodes. " +
@@ -203,20 +171,17 @@ export function acceptReadSpellings(bag: unknown, ctx: ReadSpellingContext): Fol
               ? "flcm.fromRead(spec) rebuilds the whole subtree; or build the children with the constructors and pass them as the second argument."
               : "A tree changes through the structure verbs (append, move, remove), not an edit."),
         );
-      // The geometry words fold as a GROUP (an axis is width + designedWidth; a placement is left + top +
-      // position), so they wait for the bag to be fully read.
-      case "boldWeight": case "width": case "height": case "designedWidth": case "designedHeight":
-      case "position": case "left": case "top":
+      // The size words fold as a GROUP (an axis is width + designedWidth), so they wait for the bag to
+      // be fully read.
+      case "width": case "height": case "designedWidth": case "designedHeight":
         break;
       default:
         throw new Error(subject + ": no fold for read field `" + key + "` (read-spellings.ts).");
     }
   }
 
-  foldSize(src, ctx, keep, land);
-  foldPlacement(src, ctx, land);
-  if (src.boldWeight != null) foldBoldWeight(src, out, ctx, keep);
-  return folded;
+  foldSize(src, ctx, keep);
+  return out;
 }
 
 // ---- the refusals ----
@@ -227,7 +192,7 @@ function refuse(subject: string, what: string, why: string): Error {
   return new Error(subject + ": `" + what + "` has no authored form — " + why + ". " + CLONE_REMEDY);
 }
 
-// A word that IS in the read shape but not in this entry's vocabulary: a `strokes` on a TEXT, an
+// A word that IS in the read shape but not in this entry's vocabulary: a `boldWeight` on a RECT, an
 // `effects` on a LINE, a `borderRadius` on an ELLIPSE. Named as the type's missing word, not "unknown
 // prop" — on a spec from flcm.get it is real state the rebuild would silently not have.
 function noWord(ctx: ReadSpellingContext, readKey: string): Error {
@@ -242,7 +207,8 @@ function noWord(ctx: ReadSpellingContext, readKey: string): Error {
 function foldAuthoredValue(key: string, value: unknown, subject: string): unknown {
   switch (key) {
     case "layout": return foldLayout(value, subject);
-    case "textStyle": case "effects": case "stroke": return assertNotCompressedRef(value, subject + "." + key);
+    case "text": return foldTextContent(value, subject);
+    case "textStyle": case "effects": case "fill": case "stroke": return assertNotCompressedRef(value, subject + "." + key);
     case "strokeWidth": return singleValue(value, subject + ".strokeWidth", "one uniform stroke width, not per-side weights");
     case "borderRadius": return singleValue(value, subject + ".borderRadius", "one uniform corner radius, not per-corner radii");
     default: return value;
@@ -295,8 +261,6 @@ function foldLayout(raw: unknown, subject: string): unknown {
   return l;
 }
 
-// ---- text ----
-
 // The read `text` field is already the canonical run model (a markdown string, or `[text, style]`
 // tuples), so it re-authors verbatim. The one thing to intercept is a compressed run: a tuple whose
 // style slot is a ref string rather than the delta.
@@ -308,36 +272,23 @@ function foldTextContent(raw: unknown, subject: string): unknown {
   });
 }
 
-// The read shape reports the weight `**` stands for at the NODE level; flcm spells it inside textStyle.
-function foldBoldWeight(
-  src: Record<string, unknown>, out: Record<string, unknown>, ctx: ReadSpellingContext,
-  keep: (key: string, value: unknown) => void,
-): void {
-  if (ctx.type !== "TEXT") throw noWord(ctx, "boldWeight");
-  const textStyle = out.textStyle;
-  if (textStyle != null && typeof textStyle === "object" && (textStyle as Record<string, unknown>).boldWeight != null) {
-    throw new Error(ctx.subject + ": `boldWeight` and `textStyle.boldWeight` name the same thing (the read shape's spelling and flcm's) — pass one.");
-  }
-  keep("textStyle", { ...(textStyle as object | null), boldWeight: src.boldWeight });
-}
-
 // ---- geometry ----
 
 function foldSize(
   src: Record<string, unknown>, ctx: ReadSpellingContext,
-  keep: (key: string, value: unknown) => void, land: (readKey: string, writeKey: string, value: unknown) => void,
+  keep: (key: string, value: unknown) => void,
 ): void {
   const { subject, type } = ctx;
   const width = axisSize(src.width, src.designedWidth);
   const height = axisSize(src.height, src.designedHeight);
   if (type === "LINE") {
-    // A LINE sizes on `length` alone. Read reports its cross axis as `height: 0` — the only value a
+    // A LINE sizes on `width` alone. Read reports its cross axis as `height: 0` — the only value a
     // LINE node has, restated — so that drops; a SIZING INTENT there is real state with no word (a line
     // stretched in a column reads height:"fill"), and silently discarding it would rebuild a line that
     // doesn't stretch.
-    if (typeof height === "string") throw refuse(subject, "height", 'a LINE sizes only along its length, so a "' + height + '" cross axis has no flcm word');
+    if (typeof height === "string") throw refuse(subject, "height", 'a LINE sizes only along its width, so a "' + height + '" cross axis has no flcm word');
     if (height !== undefined && height !== 0) keep("height", height); // not read's word for a line: the gate names it
-    if (width !== undefined) land("width", "length", width);
+    if (width !== undefined) keep("width", width);
     return;
   }
   if (width !== undefined) keep("width", width);
@@ -357,24 +308,4 @@ function foldSize(
 function axisSize(dimension: unknown, designed: unknown): unknown {
   if (dimension === "contextual") return designed == null ? undefined : length(designed as number | string);
   return dimension == null ? undefined : dimension;
-}
-
-// `left`/`top` are emitted whenever the parent's auto-layout doesn't already place the node — with
-// `position: "absolute"` under an auto-layout parent, without it under a free-form one. `absolute` is
-// the one authoring word for both: under a free-form parent the bridge writes x/y natively and the
-// ABSOLUTE positioning flag is inert (bridge.applyChildPosition). `position` is read explicitly rather
-// than inferred from left/top: the two travel together out of a real `get`, but spread-and-modify is
-// the advertised path, where a hand-set `position` must not silently do nothing.
-function foldPlacement(
-  src: Record<string, unknown>, ctx: ReadSpellingContext,
-  land: (readKey: string, writeKey: string, value: unknown) => void,
-): void {
-  if (src.position != null && src.position !== "absolute") {
-    throw new Error(ctx.subject + '.position: the read shape spells only "absolute" (a node the parent\'s auto-layout does not place) — got ' + JSON.stringify(src.position) + ".");
-  }
-  if (src.left == null && src.top == null && src.position == null) return;
-  const absolute: { x?: unknown; y?: unknown } = {};
-  if (src.left != null) absolute.x = src.left;
-  if (src.top != null) absolute.y = src.top;
-  land(src.position != null ? "position" : src.left != null ? "left" : "top", "absolute", absolute);
 }

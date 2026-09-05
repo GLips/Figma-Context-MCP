@@ -8,7 +8,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
-import { KNOWN_KEYS, ABSOLUTE_KEYS, DIRECTIONAL_KEYS, frame, text, rect, line, svg, path, gradient, image, effects } from "./flcm.js";
+import { KNOWN_KEYS, DIRECTIONAL_KEYS, frame, text, rect, line, svg, path, gradient, image, effects } from "./flcm.js";
 import { find } from "./read.js";
 import { FIELD_GROUPS, SizeSchema } from "./schema.js";
 
@@ -27,15 +27,10 @@ test("KNOWN_KEYS mirrors schema.ts FIELD_GROUPS exactly (drift guard)", () => {
   }
 });
 
-test("directional nested sets (absolute/anchor) match their inline schema shapes (drift guard)", () => {
-  // absolute/pin/anchor are defined inline in SIZE_FIELDS, not as their own FIELD_GROUP — so guard them by
-  // unwrapping the zod objects directly. prop() wraps each field in .optional(); .unwrap() peels it.
-  // absolute is a union since edit's removal word landed ({ x, y, anchor } | "none") — the object
-  // option carries the shape to guard.
-  const absField = (SizeSchema as unknown as { shape: { absolute: { unwrap(): { options: Array<{ shape?: Record<string, unknown> }> } } } }).shape.absolute.unwrap();
-  const absShape = absField.options.find((o) => o.shape) as { shape: Record<string, unknown> };
-  assert.deepEqual([...ABSOLUTE_KEYS].sort(), Object.keys(absShape.shape).sort());
-  const anchorShape = (absShape.shape.anchor as { unwrap(): { shape: Record<string, unknown> } }).unwrap();
+test("the directional nested set (anchor) matches its inline schema shape (drift guard)", () => {
+  // anchor is defined inline in SIZE_FIELDS, not as its own FIELD_GROUP — so guard it by unwrapping the
+  // zod object directly. prop() wraps each field in .optional(); .unwrap() peels it.
+  const anchorShape = (SizeSchema as unknown as { shape: { anchor: { unwrap(): { shape: Record<string, unknown> } } } }).shape.anchor.unwrap();
   assert.deepEqual([...DIRECTIONAL_KEYS].sort(), Object.keys(anchorShape.shape).sort());
   // `pin` reuses DIRECTIONAL_KEYS (z.custom — no zod shape to reflect on), so the anchor guard covers it too.
 });
@@ -44,7 +39,7 @@ test("verbs reject an unknown top-level prop, naming it and the verb", () => {
   assert.throws(() => frame({ background: "#fff" } as never), /unknown prop "background" on flcm\.frame/);
   assert.throws(() => text("hi", { textTransform: "upper" } as never), /unknown prop "textTransform" on flcm\.text/);
   assert.throws(() => rect({ radius: 4 } as never), /unknown prop "radius" on flcm\.rect/); // it's borderRadius
-  assert.throws(() => line({ height: 10 } as never), /`height` is not one of flcm\.line's words/); // a line sizes on length only
+  assert.throws(() => line({ height: 10 } as never), /`height` is not one of flcm\.line's words/); // a line sizes on width only
   assert.throws(() => path({ d: "M0 0 L1 1", borderRadius: 2 } as never), /unknown prop "borderRadius" on flcm\.path/);
   assert.throws(() => gradient({ type: "linear", stops: ["#000", "#fff"], colors: [] } as never), /unknown prop "colors" on flcm\.gradient/);
   assert.throws(() => image("https://x/y.png", { scale: "FILL" } as never), /unknown prop "scale" on flcm\.image opts/);
@@ -73,8 +68,7 @@ test("a non-object where a props/query object belongs names THAT mistake, not th
 test("nested authoring objects reject unknown keys with a path-threaded error", () => {
   assert.throws(() => frame({ layout: { mode: "row", flexWrap: "nowrap" } as never }), /unknown prop "flexWrap" on flcm\.frame\.layout/);
   assert.throws(() => text("hi", { textStyle: { fontVarient: "small-caps" } as never }), /unknown prop "fontVarient" on flcm\.text\.textStyle/);
-  assert.throws(() => frame({ absolute: { x: 1, z: 2 } as never }), /unknown prop "z" on absolute/);
-  assert.throws(() => frame({ absolute: { x: 1, anchor: { z: "left" } } as never }), /unknown prop "z" on absolute\.anchor/);
+  assert.throws(() => frame({ left: 1, anchor: { z: "left" } as never }), /unknown prop "z" on anchor/);
   assert.throws(() => frame({ pin: { z: "left" } as never }), /unknown prop "z" on pin/);
 });
 
@@ -105,12 +99,12 @@ test("plural offenders are all named", () => {
 test("known props on every verb still construct (the reject is closed, not over-broad)", () => {
   // A representative spread of real props per verb — none should trip the reject.
   assert.doesNotThrow(() =>
-    frame({ name: "n", width: 100, height: "hug", fill: "#fff", layout: { mode: "row", gap: 8, padding: 4 }, absolute: { x: 1, y: 2, anchor: { x: "center" } }, pin: { x: "left" } }),
+    frame({ name: "n", width: 100, height: "hug", fill: "#fff", layout: { mode: "row", gap: 8, padding: 4 }, left: 1, top: 2, anchor: { x: "center" }, pin: { x: "left" } }),
   );
-  assert.doesNotThrow(() => text("hi", { color: "#000", textStyle: { fontSize: 14, fontWeight: "bold", textAlign: "center" } }));
+  assert.doesNotThrow(() => text("hi", { fill: "#000", textStyle: { fontSize: 14, fontWeight: "bold", textAlign: "center" } }));
   assert.doesNotThrow(() => text([["b", { fontWeight: "bold", color: "#f00", hyperlink: "https://x" }]]));
   assert.doesNotThrow(() => rect({ fill: "#fff", borderRadius: 4, strokeWidth: 1 }));
-  assert.doesNotThrow(() => line({ stroke: "#000", length: 40, strokeWidth: 2 }));
+  assert.doesNotThrow(() => line({ stroke: "#000", width: 40, strokeWidth: 2 }));
   assert.doesNotThrow(() => path({ d: "M0 0 L1 1", fill: "#000" }));
   assert.doesNotThrow(() => svg('<svg viewBox="0 0 1 1"></svg>', { width: 24 }));
   assert.doesNotThrow(() => gradient({ type: "radial", stops: ["#000", "#fff"], at: { x: 50, y: 50 } }));

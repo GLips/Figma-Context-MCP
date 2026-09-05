@@ -103,17 +103,14 @@ function propTable(fields: Fields): string {
 
 // The per-type editable-word lists, composed from EDIT_TYPE_WORD_GROUPS — the SAME table the
 // runtime legality gate composes from (edit.ts DELTA_KEYS_BY_TYPE), intersected with the edit
-// field set the same way, so the doc can't promise a word the gate rejects. RECTANGLE/ELLIPSE
-// share one line (identical compositions by construction).
+// field set the same way, so the doc can't promise a word the gate rejects.
 function editTypeWordLines(): string {
   const editWords = new Set(Object.keys(FIELD_GROUPS.edit));
   const lines: string[] = [];
   const labels: Partial<Record<keyof typeof EDIT_TYPE_WORD_GROUPS, string>> = {
-    RECTANGLE: "RECTANGLE / ELLIPSE",
     VECTOR: "VECTOR (path- or svg-born)",
   };
   for (const t of Object.keys(EDIT_TYPE_WORD_GROUPS) as (keyof typeof EDIT_TYPE_WORD_GROUPS)[]) {
-    if (t === "ELLIPSE") continue;
     const words = [
       ...new Set(EDIT_TYPE_WORD_GROUPS[t].flatMap((g) => Object.keys(FIELD_GROUPS[g]))),
     ]
@@ -159,25 +156,28 @@ const SECTIONS: Section[] = [
     body: () =>
       "Every prop is optional; an omitted prop is simply not applied (a frame with no `fill` is transparent, " +
       "not white).\n\n" +
-      "**A `get` result's own spellings are accepted too.** Spread a read spec into any constructor or " +
-      "`flcm.edit` — `flcm.rect({ ...spec, width: 320 })`, `flcm.text(spec)` — and its `left`/`top`, " +
-      "node-level `boldWeight`, a text's `fill` and `text` land on the matching props below; naming one thing " +
-      "both ways in one call (`fill` and `color` on a text) fails loud. Fields flcm has no word for (an INSTANCE's " +
+      "**Read and write share one vocabulary.** What `get` returns spreads straight into any constructor or " +
+      "`flcm.edit` — `flcm.rect({ ...spec, width: 320 })`, `flcm.text(spec)` — because `left`/`top`, `fill`, " +
+      "`text`, `boldWeight` and the rest are the same words on both sides. A read's derived facts (`id`, a " +
+      "`contextual`/`designedWidth` measurement) fold away; fields flcm has no word for (an INSTANCE's " +
       "`componentId`, `strokeDashes`, a grid) fail loud by name. A spec with `children` needs " +
       "`flcm.fromRead(spec)`, which rebuilds the whole subtree.\n\n" +
       `### Shared by every node\n\n${propTable(FIELD_GROUPS.shared)}\n\n` +
       "### Size & position (frame, text, rect, ellipse)\n\n" +
-      '(A `line` sizes differently — it takes a numeric `length`/`w` and ignores `h`/`"fill"`/`"hug"`.)\n\n' +
+      '(A `line` sizes on a numeric `width` alone — its length; there is no `height`, `"fill"`, or `"hug"`.)\n\n' +
       `${propTable(FIELD_GROUPS.size)}\n\n` +
       `#### Percent sizing\n\n${PERCENT_SIZING}\n\n` +
       `### flcm.frame — container props\n\n${propTable({ ...FIELD_GROUPS.appearance, ...FIELD_GROUPS.frame })}\n\n` +
       `#### Auto-layout config (the \`layout\` object)\n\n${propTable(FIELD_GROUPS.layout)}\n\n` +
       `### flcm.text — text props\n\n${propTable(FIELD_GROUPS.text)}\n\n` +
-      "`content` is passed first: a plain string, or an array of styled runs (below). A fixed `width` makes it " +
-      "wrap (grows in height); otherwise it grows sideways.\n\n" +
+      '`text` is the content — passed first (`flcm.text("Hi", props)`) or as the `text` prop (`flcm.text(props)`), ' +
+      "never both: a plain string, or an array of styled runs (below). `fill` is its paint, like any node; " +
+      "`boldWeight` says what `**` in `text` resolves to. A fixed `width` makes it wrap (grows in height); " +
+      "otherwise it grows sideways.\n\n" +
       `#### Text style (the \`textStyle\` object)\n\n${propTable(FIELD_GROUPS.textStyle)}\n\n` +
       `### flcm.text — rich text (runs)\n\n${RICH_TEXT}\n\nEach styled run's delta fields:\n\n${propTable(FIELD_GROUPS.run)}\n\n` +
-      `### flcm.rect / flcm.ellipse — shape props\n\n${propTable(FIELD_GROUPS.appearance)}\n\n` +
+      `### flcm.rect — shape props\n\n${propTable(FIELD_GROUPS.appearance)}\n\n` +
+      `### flcm.ellipse — shape props\n\n(An ellipse has no \`borderRadius\` — its edge is already round.)\n\n${propTable(FIELD_GROUPS.ellipse)}\n\n` +
       `### flcm.line — line props\n\n${propTable(FIELD_GROUPS.line)}\n\n` +
       `### flcm.path — vector props\n\n(\`flcm.svg\` takes only the shared and size/position props above — colors are baked into the markup.)\n\n${propTable(FIELD_GROUPS.path)}`,
   },
@@ -316,7 +316,7 @@ export function buildQuickStart(): string {
 EXECUTION MODEL — your code runs in an async function body: use \`await\` directly and \`return <value>\`. Each call runs in its OWN scope — thread state by returning ids/keys and re-targeting them (flcm.get).
 
 DESCRIBE an inert tree, then RENDER once:
-  const t = flcm.frame({ layout:{ mode:"column", gap:16 } }, [ flcm.text("Hi",{ color:"#111" }) ]);
+  const t = flcm.frame({ layout:{ mode:"column", gap:16 } }, [ flcm.text("Hi",{ fill:"#111" }) ]);
   const out = await flcm.render(t);   // creates nodes → { root, keyed }
 
 VERBS — all on \`flcm.\`, nothing else is:
@@ -429,7 +429,7 @@ ${verbTable()}
 
 - Constructors are inert; only \`await flcm.render(tree)\` creates nodes → \`{ root, keyed }\`.
 - Return ids/handles, never live Figma nodes.
-- Every metric (\`width\`, \`height\`, \`gap\`, \`padding\`, \`borderRadius\`, \`strokeWidth\`, \`absolute.x\`/\`y\`) takes a number or \`"Npx"\`; \`width\`/\`height\`/\`absolute\` also take \`"N%"\`, and \`width\`/\`height\` take \`"fill"\`/\`"hug"\`. Colors, gradients and shadows are CSS strings.
+- Every metric (\`width\`, \`height\`, \`gap\`, \`padding\`, \`borderRadius\`, \`strokeWidth\`, \`left\`/\`top\`) takes a number or \`"Npx"\`; \`width\`/\`height\`/\`left\`/\`top\` also take \`"N%"\`, and \`width\`/\`height\` take \`"fill"\`/\`"hug"\`. Colors, gradients and shadows are CSS strings.
 - Out-of-subset CSS fails loud.`;
 }
 

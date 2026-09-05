@@ -38,7 +38,7 @@ test("find surfaces container mode + childCount, and out-of-flow position/left/t
   createFigmaMock();
   await render(
     frame({ key: "card", width: 200, height: 120, layout: { mode: "column", gap: 8 } }, [
-      rect({ key: "floaty", absolute: { x: 5, y: 7 }, width: 10, height: 10 }),
+      rect({ key: "floaty", left: 5, top: 7, width: 10, height: 10 }),
     ]),
   );
 

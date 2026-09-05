@@ -143,7 +143,7 @@ test("read-artifact and malformed run inputs fail loud", () => {
   // figma-mcp style-ref tokens are rejected on both the plain-string and the run-text forms.
   assert.throws(() => text("a {ts1}bold{/ts1} b"), /style-ref tokens/);
   assert.throws(() => text(["{ts1}bold{/ts1}"]), /style-ref tokens/);
-  // An object first is the spec-first form (props, content in `text`) — so a stray object is judged
+  // An object first is the props-first form (content in `text`) — so a stray object is judged
   // as props, and its keys are named.
   assert.throws(() => text({ characters: "hi" } as never), /unknown prop "characters" on flcm\.text/);
   // Malformed runs.

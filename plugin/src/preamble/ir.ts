@@ -38,9 +38,9 @@ export type WriteType = "FRAME" | "TEXT" | "RECTANGLE" | "ELLIPSE" | "LINE" | "V
 // because ir.ts is the one module both sides already import type-safely with no zod and no figma.
 export const EDIT_TYPE_WORD_GROUPS = {
   FRAME: ["shared", "size", "appearance", "frame"],
-  TEXT: ["shared", "size", "text", "textContent"],
+  TEXT: ["shared", "size", "text"],
   RECTANGLE: ["shared", "size", "appearance"],
-  ELLIPSE: ["shared", "size", "appearance"],
+  ELLIPSE: ["shared", "size", "ellipse"],
   LINE: ["shared", "line"],
   VECTOR: ["shared", "size", "path"],
 } as const satisfies Record<WriteType, readonly string[]>;
@@ -92,8 +92,8 @@ export interface WriteGradientFill { type: GradientType; gradient: string }
 // imageDownloadArguments) are irrelevant to the parse and deliberately unnamed.
 export interface ReadImageFill { type: "IMAGE"; imageRef?: string; gifRef?: string; scaleMode?: string; scalingFactor?: number }
 export type FillLeaf = string | WriteGradientFill | ReadImageFill | PaintSpec;
-// A paint slot takes one leaf, or the read shape's own ARRAY spelling of the same slot — so a `get`
-// result's `fills` feeds straight back in. More than one entry fails loud (compilePaintWord): flcm
+// A paint slot takes one leaf, or the array a read emits for a genuinely STACKED paint — accepted so a
+// `get` result feeds straight back in, but more than one entry fails loud (compilePaintWord): flcm
 // paints a single fill/stroke and a stack has no authored form.
 export type FillInput = FillLeaf | FillLeaf[];
 
@@ -218,9 +218,9 @@ export type WriteBlendMode =
   | "OVERLAY" | "SOFT_LIGHT" | "HARD_LIGHT" | "DIFFERENCE" | "EXCLUSION" | "HUE"
   | "SATURATION" | "COLOR" | "LUMINOSITY";
 
-// ---- Anchor (author `absolute.anchor`). Which point of an absolute child lands on the resolved x/y.
+// ---- Anchor (author `anchor`). Which point of an out-of-flow child lands on the resolved left/top.
 // Reuses `pin`'s directional edge words (no stretch/scale — an anchor is a point, not a resize rule).
-// Default {left, top} is back-compatible: the child's top-left sits at x/y, the pre-anchor behavior. ----
+// Default {left, top}: the child's top-left sits at left/top. ----
 export type AnchorX = "left" | "center" | "right";
 export type AnchorY = "top" | "center" | "bottom";
 export interface WriteLayout {
@@ -231,7 +231,7 @@ export interface WriteLayout {
   padding?: Edges;
   sizing?: { horizontal?: Sizing; vertical?: Sizing };
   dimensions?: { width?: number; height?: number };
-  // Percent INTENT — a `w`/`h`/`absolute.x`/`absolute.y` written as "N%" (0–100), resolved to pixels
+  // Percent INTENT — a `width`/`height`/`left`/`top` written as "N%" (0–100), resolved to pixels
   // against the parent's *realized* axis size in a post-walk pass (bridge.resolvePercents): the node is
   // built at a provisional size first, then resized once the whole tree is assembled and every parent's
   // fill/hug size is readable off the canvas — the parent size isn't known at construction, and reading it
@@ -240,9 +240,9 @@ export interface WriteLayout {
   // Absent unless the author wrote a percent.
   percentSize?: { width?: number; height?: number };
   percentPos?: { x?: number; y?: number };
-  // Anchor point for an absolute child (author `absolute.anchor`) — which corner/edge of the child lands on
-  // the resolved x/y. Applied in the same post-walk pass as percent position (it needs the child's realized
-  // size to offset by). Absent → {left, top} (top-left on x/y), the back-compatible default.
+  // Anchor point for an out-of-flow child (author `anchor`) — which corner/edge of the child lands on the
+  // resolved left/top. Applied in the same post-walk pass as percent position (it needs the child's
+  // realized size to offset by). Absent → {left, top} (top-left on the coordinate).
   anchor?: { x?: AnchorX; y?: AnchorY };
   // Explicit Figma-constraint override for a positioned child — how it responds when the parent resizes.
   // Overrides the constraint the bridge auto-derives from the child's size/position intent (fill→STRETCH,
@@ -250,12 +250,13 @@ export interface WriteLayout {
   // `pin`. Honored for a free-form parent's child and an absolute child; inert on an in-flow auto-layout
   // child (which reflows via fill/hug instead).
   pin?: { x?: PinX; y?: PinY };
-  // "none" is edit's return-to-flow word (absolute:"none"): the node rejoins its auto-layout
-  // parent's flow (layoutPositioning AUTO). Create only ever sets "absolute".
+  // "absolute" is the out-of-flow flag: the author's own `position: "absolute"`, or implied by a
+  // `left`/`top`. "none" is edit's return-to-flow word: the node rejoins its auto-layout parent's flow
+  // (layoutPositioning AUTO). Create only ever sets "absolute".
   position?: "absolute" | "none";
-  // Offset from the parent's top-left corner — the write-side spelling of the read output's left/top,
-  // one vocabulary across read and write. Presence-preserving per axis: an axis the author didn't name
-  // (or spelled as "N%" — see percentPos) is absent, and the bridge leaves/reads the live coordinate.
+  // Offset from the parent's top-left corner — the author's `left`/`top`, the read shape's words.
+  // Presence-preserving per axis: an axis the author didn't name (or spelled as "N%" — see percentPos)
+  // is absent, and the bridge leaves/reads the live coordinate.
   left?: number;
   top?: number;
 }

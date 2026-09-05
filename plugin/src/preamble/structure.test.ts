@@ -242,7 +242,7 @@ test("a `get` result is refused rather than silently moving the node it describe
 
 test("clone with no parent lands the copy on the original's own coordinates", async () => {
   const out = await render(frame({ key: "board", width: 400, height: 400 }, [
-    rect({ key: "chip", width: 40, height: 40, absolute: { x: 30, y: 50 } }),
+    rect({ key: "chip", width: 40, height: 40, left: 30, top: 50 }),
   ]));
   const copied = await clone("chip");
   const copy = await figma.getNodeByIdAsync(copied.node.id);

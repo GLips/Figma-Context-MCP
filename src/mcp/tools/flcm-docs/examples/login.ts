@@ -11,7 +11,7 @@ export async function loginExample(flcm: Flcm) {
     flcm.frame({ key, layout: { mode: "column", gap: 6 }, width: "fill" }, [
       flcm.text(label, {
         textStyle: { fontSize: 13, fontWeight: 500 },
-        color: "rgba(255,255,255,0.7)",
+        fill: "rgba(255,255,255,0.7)",
       }),
       flcm.frame(
         {
@@ -23,7 +23,7 @@ export async function loginExample(flcm: Flcm) {
           stroke: "rgba(255,255,255,0.12)",
           strokeWidth: 1,
         },
-        [flcm.text(placeholder, { textStyle: { fontSize: 15 }, color: "rgba(255,255,255,0.4)" })],
+        [flcm.text(placeholder, { textStyle: { fontSize: 15 }, fill: "rgba(255,255,255,0.4)" })],
       ),
     ]);
 
@@ -37,10 +37,11 @@ export async function loginExample(flcm: Flcm) {
       fill: "linear-gradient(180deg, #0B1020 0%, #131A2E 100%)",
     },
     [
-      // Declared first → sits behind everything. Absolute, so it's out of the column flow.
+      // Declared first → sits behind everything. `left`/`top` lift it out of the column flow.
       flcm.ellipse({
         name: "Glow",
-        absolute: { x: -80, y: -60 },
+        left: -80,
+        top: -60,
         width: 180,
         height: 180,
         fill: "radial-gradient(circle, #2A3A66 0%, #0B102000 70%)",
@@ -48,7 +49,7 @@ export async function loginExample(flcm: Flcm) {
       }),
       flcm.text("Welcome back", {
         key: "title",
-        color: "#FFFFFF",
+        fill: "#FFFFFF",
         textStyle: { fontSize: 26, fontWeight: 700, letterSpacing: "-0.02em", lineHeight: "32px" },
       }),
       flcm.frame(
@@ -82,7 +83,7 @@ export async function loginExample(flcm: Flcm) {
             [
               flcm.text("Sign in", {
                 textStyle: { fontSize: 15, fontWeight: 600 },
-                color: "#FFFFFF",
+                fill: "#FFFFFF",
               }),
             ],
           ),

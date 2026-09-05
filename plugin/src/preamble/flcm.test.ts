@@ -44,16 +44,16 @@ test("create rejects layout words the type can't realize — the SAME gate edit 
   assert.doesNotThrow(() => text("hi", { width: "hug" }));
 });
 
-test("a metric is a number or \"Npx\" everywhere — width/height and absolute read the same as gap", () => {
+test("a metric is a number or \"Npx\" everywhere — width/height and left/top read the same as gap", () => {
   // One spelling rule across the whole surface: if a prop takes px, it takes both forms. The
   // alternative (numbers here, strings there) is a rule an author has to memorize per prop.
-  const px = frame({ width: "320px", height: 200, absolute: { x: "16px", y: 8 } });
+  const px = frame({ width: "320px", height: 200, left: "16px", top: 8 });
   assert.deepEqual(px.layout!.dimensions, { width: 320, height: 200 });
   assert.equal(px.layout!.left, 16);
   assert.equal(px.layout!.top, 8);
   // The subset still holds — an unsupported unit fails loud rather than coercing to wrong pixels.
   assert.throws(() => frame({ width: "20em" }), /width\/height must be a number/);
-  assert.throws(() => frame({ absolute: { x: "20vw" } }), /absolute\.x must be a number/);
+  assert.throws(() => frame({ left: "20vw" }), /left must be a number/);
 });
 
 test("hand-built node POJOs reject whole — the compiled IR is not an authoring surface", async () => {
@@ -96,9 +96,9 @@ test("the seal clones caller inputs — nothing caller-reachable is frozen, noth
 });
 
 test("root position words land on the page; an in-flow child's explicit pin is stored", async () => {
-  // Both are create/edit symmetry pins: edit applies absolute x/y to a page child and writes an
+  // Both are create/edit symmetry pins: edit applies left/top to a page child and writes an
   // explicit pin unconditionally, so create dropping either would diverge the verbs.
-  const out = await render(frame({ width: 40, height: 40, absolute: { x: 42, y: 17 }, layout: { mode: "row", gap: 4 } }, [
+  const out = await render(frame({ width: 40, height: 40, left: 42, top: 17, layout: { mode: "row", gap: 4 } }, [
     rect({ width: 10, height: 10, pin: { x: "right" } }),
   ]));
   const root = await figma.getNodeByIdAsync(out.root.id);

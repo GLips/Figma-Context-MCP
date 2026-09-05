@@ -7,7 +7,7 @@ export const EXAMPLE_CODE = {
   flcm.frame({ key, layout: { mode: "column", gap: 6 }, width: "fill" }, [
     flcm.text(label, {
       textStyle: { fontSize: 13, fontWeight: 500 },
-      color: "rgba(255,255,255,0.7)",
+      fill: "rgba(255,255,255,0.7)",
     }),
     flcm.frame(
       {
@@ -19,7 +19,7 @@ export const EXAMPLE_CODE = {
         stroke: "rgba(255,255,255,0.12)",
         strokeWidth: 1,
       },
-      [flcm.text(placeholder, { textStyle: { fontSize: 15 }, color: "rgba(255,255,255,0.4)" })],
+      [flcm.text(placeholder, { textStyle: { fontSize: 15 }, fill: "rgba(255,255,255,0.4)" })],
     ),
   ]);
 
@@ -33,10 +33,11 @@ const screen = flcm.frame(
     fill: "linear-gradient(180deg, #0B1020 0%, #131A2E 100%)",
   },
   [
-    // Declared first → sits behind everything. Absolute, so it's out of the column flow.
+    // Declared first → sits behind everything. \`left\`/\`top\` lift it out of the column flow.
     flcm.ellipse({
       name: "Glow",
-      absolute: { x: -80, y: -60 },
+      left: -80,
+      top: -60,
       width: 180,
       height: 180,
       fill: "radial-gradient(circle, #2A3A66 0%, #0B102000 70%)",
@@ -44,7 +45,7 @@ const screen = flcm.frame(
     }),
     flcm.text("Welcome back", {
       key: "title",
-      color: "#FFFFFF",
+      fill: "#FFFFFF",
       textStyle: { fontSize: 26, fontWeight: 700, letterSpacing: "-0.02em", lineHeight: "32px" },
     }),
     flcm.frame(
@@ -78,7 +79,7 @@ const screen = flcm.frame(
           [
             flcm.text("Sign in", {
               textStyle: { fontSize: 15, fontWeight: 600 },
-              color: "#FFFFFF",
+              fill: "#FFFFFF",
             }),
           ],
         ),
@@ -104,7 +105,7 @@ const caption = flcm.text(
   ],
   {
     key: "caption",
-    color: "#111827",
+    fill: "#111827",
     width: 340,
     textStyle: { fontSize: 15, lineHeight: "20px" },
   },
@@ -120,13 +121,15 @@ const player = flcm.frame({ width: 96, height: 96, borderRadius: 48, fill: "#111
     key: "play",
     d: "M38 30 L70 48 L38 66 Z",
     fill: "#6366F1",
-    absolute: { x: 30, y: 24 },
+    left: 30,
+    top: 24,
   }),
   // svg pastes opaque markup (its colors are baked in — fill/stroke would be rejected here)
   flcm.svg('<svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="#22C55E"/></svg>', {
     width: 16,
     height: 16,
-    absolute: { x: 8, y: 8 },
+    left: 8,
+    top: 8,
   }),
 ]);
 

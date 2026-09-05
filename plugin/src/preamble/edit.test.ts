@@ -49,7 +49,7 @@ test("vocabulary rejections happen before any write: unknown prop, key, bare x/y
   const logBefore = [...figma.undoLog];
   await assert.rejects(edit("card", { wat: 1 } as never), /unknown prop "wat" on flcm\.edit/);
   await assert.rejects(edit("card", { key: "rekeyed" } as never), /`key` is not editable/);
-  await assert.rejects(edit("card", { x: 10 } as never), /absolute: \{ x, y \}/);
+  await assert.rejects(edit("card", { x: 10 } as never), /use `left`\/`top`/);
   await assert.rejects(edit("card", {}), /empty/);
   // A mistyped scalar rejects the WHOLE delta — the valid fill beside it must not land as a
   // partial write (QuickJS has no type checking, so this is the runtime's only line of defense).
@@ -62,7 +62,7 @@ test("vocabulary rejections happen before any write: unknown prop, key, bare x/y
 });
 
 test("legality is per node type: a LINE takes no fill, exactly as flcm.line does", async () => {
-  const out = await render(frame({ width: 100, height: 100 }, [line({ key: "rule", length: 80 })]));
+  const out = await render(frame({ width: 100, height: 100 }, [line({ key: "rule", width: 80 })]));
   await assert.rejects(edit("rule", { fill: "#ff0000" }), /`fill` is not a LINE word/);
   const node = await figma.getNodeByIdAsync(out.keyed.rule.id);
   await edit("rule", { stroke: "#ff0000" });
@@ -155,10 +155,10 @@ test('fill→fixed/hug is a real inverse: the flow marks fill installed are clea
   assert.equal(tall.layoutAlign, "INHERIT");
 });
 
-test('absolute:"none" returns an absolute child to flow; pin deltas preserve the unnamed axis', async () => {
+test('position:"none" returns an absolute child to flow; pin deltas preserve the unnamed axis', async () => {
   const out = await render(
     frame({ key: "host", width: 200, height: 200, layout: { mode: "row" } }, [
-      rect({ key: "badge", width: 20, height: 20, absolute: { x: 10, y: 10 } }),
+      rect({ key: "badge", width: 20, height: 20, left: 10, top: 10 }),
     ]),
   );
   const badge = await figma.getNodeByIdAsync(out.keyed.badge.id);
@@ -170,7 +170,7 @@ test('absolute:"none" returns an absolute child to flow; pin deltas preserve the
   assert.deepEqual(badge.constraints, { horizontal: "MAX", vertical: "MAX" });
   await edit("badge", { pin: "none" });
   assert.deepEqual(badge.constraints, { horizontal: "MIN", vertical: "MIN" });
-  await edit("badge", { absolute: "none" });
+  await edit("badge", { position: "none" });
   assert.equal(badge.layoutPositioning, "AUTO");
 });
 
@@ -213,14 +213,14 @@ test('container ripples: alignItems:"stretch" walks the live children, a non-str
   assert.equal(row.layoutMode, "VERTICAL");
 });
 
-test("absolute is presence-preserving per axis: `absolute: { x }` moves x and leaves the live y alone", async () => {
+test("left/top are presence-preserving per axis: `left` alone moves x and leaves the live y alone", async () => {
   const out = await render(
     frame({ key: "host", width: 200, height: 200, layout: { mode: "row" } }, [
-      rect({ key: "badge", width: 20, height: 20, absolute: { x: 10, y: 10 } }),
+      rect({ key: "badge", width: 20, height: 20, left: 10, top: 10 }),
     ]),
   );
   const badge = await figma.getNodeByIdAsync(out.keyed.badge.id);
-  await edit("badge", { absolute: { x: 50 } });
+  await edit("badge", { left: 50 });
   assert.equal(badge.x, 50);
   assert.equal(badge.y, 10);
 });
@@ -229,12 +229,12 @@ test("a percent on an ALREADY-absolute child of a hugging parent is legal — ou
   const out = await render(
     frame({ key: "hugrow", layout: { mode: "row" } }, [
       rect({ key: "kid", width: 40, height: 40 }),
-      rect({ key: "badge", width: 20, height: 20, absolute: { x: 0, y: 0 } }),
+      rect({ key: "badge", width: 20, height: 20, left: 0, top: 0 }),
     ]),
   );
   const row = await figma.getNodeByIdAsync(out.keyed.hugrow.id);
   const badge = await figma.getNodeByIdAsync(out.keyed.badge.id);
-  // The delta names no `absolute` — the guard must thread the LIVE positioning, not assume in-flow.
+  // The delta names no `left`/`top` — the guard must thread the LIVE positioning, not assume in-flow.
   await edit("badge", { width: "50%" });
   assert.equal(badge.width, row.width / 2);
 });
@@ -282,10 +282,10 @@ test("a direction change clears BOTH flow marks — layoutGrow too, and NONE→r
   assert.equal(grow.layoutGrow, 0); // NONE→row establishes a direction: no resurrection
 });
 
-test("a LINE's mistyped size word names the prop the author wrote — `w`, not `length`", async () => {
-  await render(frame({ width: 100, height: 100 }, [line({ key: "rule", length: 80 })]));
-  await assert.rejects(edit("rule", { w: "80" } as never), /`w` must be a number/);
-  await assert.rejects(edit("rule", { length: "80" } as never), /`length` must be a number/);
+test("a LINE's `width` is a fixed size: a sizing intent or a mistyped value names the line rule", async () => {
+  await render(frame({ width: 100, height: 100 }, [line({ key: "rule", width: 80 })]));
+  await assert.rejects(edit("rule", { width: "fill" }), /a LINE's width is its length, a fixed size/);
+  await assert.rejects(edit("rule", { width: "80" } as never), /`width` on a LINE must be a number/);
 });
 
 test("a TEXT size delta preloads the node's font before the mutating span", async () => {
@@ -321,16 +321,16 @@ test("a percent resolves against a hug-mode parent whose axis is realized from a
 test("an anchored absolute edit is idempotent, and an anchor axis without its coordinate rejects", async () => {
   const out = await render(
     frame({ key: "host", width: 200, height: 200, layout: { mode: "row" } }, [
-      rect({ key: "badge", width: 20, height: 20, absolute: { x: 10, y: 10 } }),
+      rect({ key: "badge", width: 20, height: 20, left: 10, top: 10 }),
     ]),
   );
   const badge = await figma.getNodeByIdAsync(out.keyed.badge.id);
-  await edit("badge", { absolute: { x: 100, anchor: { x: "center" } } });
+  await edit("badge", { left: 100, anchor: { x: "center" } });
   assert.equal(badge.x, 90);
-  await edit("badge", { absolute: { x: 100, anchor: { x: "center" } } });
+  await edit("badge", { left: 100, anchor: { x: "center" } });
   assert.equal(badge.x, 90); // re-apply converges — no drift off the live coordinate
   assert.equal(badge.y, 10); // the unnamed axis never moved
-  await assert.rejects(edit("badge", { absolute: { anchor: { x: "center" } } } as never), /name absolute\.x alongside/);
+  await assert.rejects(edit("badge", { anchor: { x: "center" } } as never), /name `left` alongside/);
 });
 
 test("un-filling while going absolute clears the mark; a direction flip clears marks parked on absolute children", async () => {
@@ -343,17 +343,17 @@ test("un-filling while going absolute clears the mark; a direction flip clears m
   const grow = await figma.getNodeByIdAsync(out.keyed.grow.id);
   assert.equal(grow.layoutGrow, 1);
   // The delta both lifts the node out of flow AND replaces the filled width — the mark must not
-  // survive parked on the absolute node, or absolute:"none" later resurrects the fill.
-  await edit("grow", { absolute: { x: 0, y: 0 }, width: 80 });
+  // survive parked on the absolute node, or position:"none" later resurrects the fill.
+  await edit("grow", { left: 0, top: 0, width: 80 });
   assert.equal(grow.layoutGrow, 0);
-  await edit("grow", { absolute: "none" });
+  await edit("grow", { position: "none" });
   assert.equal(grow.layoutGrow, 0);
   // A mark parked by absolute ALONE is cleared when the container changes direction — rejoining
   // the flow later must not fill along an axis the mark never meant.
   const tall = await figma.getNodeByIdAsync(out.keyed.tall.id);
   await edit("tall", { width: "fill" });
   assert.equal(tall.layoutGrow, 1);
-  await edit("tall", { absolute: { x: 0, y: 0 } });
+  await edit("tall", { left: 0, top: 0 });
   assert.equal(tall.layoutGrow, 1); // parked, positioning is ABSOLUTE
   await edit("row", { layout: { mode: "column" } });
   assert.equal(tall.layoutGrow, 0);
@@ -370,7 +370,7 @@ test("a TEXT's own height is not an edit word: fixed and hug reject loud; width 
 
 test("a present-but-malformed structured value rejects the WHOLE delta — no partial apply", async () => {
   const node = await renderKeyedRowFrame();
-  await assert.rejects(edit("card", { fill: "#ff0000", absolute: false } as never), /absolute must be an object/);
+  await assert.rejects(edit("card", { fill: "#ff0000", position: false } as never), /position must be "absolute" or "none"/);
   await assert.rejects(edit("card", { fill: "#ff0000", layout: false } as never), /flcm\.edit\.layout must be an object/);
   await assert.rejects(edit("card", { fill: "#ff0000", layout: { padding: [] } } as never), /pad must be a number, a CSS box shorthand/);
   await assert.rejects(edit("card", { fill: "#ff0000", pin: [] } as never), /pin must be an object/);
@@ -393,8 +393,8 @@ test("container words on a frame that isn't (or won't be) row/column reject; nam
 test('flcm.line({ stroke: "none" }) constructs the explicit no-stroke — the same word edit speaks', async () => {
   const out = await render(
     frame({ width: 100, height: 100 }, [
-      line({ key: "bare", length: 80, stroke: "none" }),
-      line({ key: "plain", length: 80 }),
+      line({ key: "bare", width: 80, stroke: "none" }),
+      line({ key: "plain", width: 80 }),
     ]),
   );
   const bare = await figma.getNodeByIdAsync(out.keyed.bare.id);
@@ -410,14 +410,14 @@ test("re-sizing an axis whose fill mark sits parked on an ABSOLUTE child still u
     ]),
   );
   const grow = await figma.getNodeByIdAsync(out.keyed.grow.id);
-  await edit("grow", { absolute: { x: 0, y: 0 } });
+  await edit("grow", { left: 0, top: 0 });
   assert.equal(grow.layoutGrow, 1); // parked
   await edit("grow", { width: 80 }); // named fixed while absolute — the parked mark must go
   assert.equal(grow.layoutGrow, 0);
   // And the one-delta return-to-flow + resize: the new size governs, not the old fill.
-  await edit("grow", { absolute: { x: 0, y: 0 } });
+  await edit("grow", { left: 0, top: 0 });
   await edit("row", { layout: { alignItems: "flex-start" } }); // unrelated container edit, marks stay
-  await edit("grow", { absolute: "none", width: 60 });
+  await edit("grow", { position: "none", width: 60 });
   assert.equal(grow.layoutGrow, 0);
   assert.equal(grow.width, 60);
 });
@@ -429,7 +429,7 @@ test('TEXT height:"fill" needs a flow to fill: free-form parent and absolute tex
   await assert.rejects(edit("t1", { height: "fill" }), /fill its height as an in-flow child/);
   await render(
     frame({ key: "row", width: 200, height: 200, layout: { mode: "row" } }, [
-      text("b", { key: "t2", absolute: { x: 0, y: 0 } }),
+      text("b", { key: "t2", left: 0, top: 0 }),
     ]),
   );
   await assert.rejects(edit("t2", { height: "fill" }), /fill its height as an in-flow child/);
@@ -451,11 +451,11 @@ test("an unknown padding key rejects the whole delta instead of compiling to zer
 
 test("a length edit takes over from a UI-authored fill: the grow mark clears and the length governs", async () => {
   const out = await render(
-    frame({ key: "row", width: 300, height: 100, layout: { mode: "row" } }, [line({ key: "rule", length: 100 })]),
+    frame({ key: "row", width: 300, height: 100, layout: { mode: "row" } }, [line({ key: "rule", width: 100 })]),
   );
   const rule = await figma.getNodeByIdAsync(out.keyed.rule.id);
   rule.layoutGrow = 1; // flcm can't author this on a line — a human did, in the Figma UI
-  await edit("rule", { length: 80 });
+  await edit("rule", { width: 80 });
   assert.equal(rule.layoutGrow, 0);
   assert.equal(rule.width, 80);
 });
@@ -468,9 +468,9 @@ test("un-stretching the container reaches a mark parked on an ABSOLUTE child too
   );
   const a = await figma.getNodeByIdAsync(out.keyed.a.id);
   assert.equal(a.layoutAlign, "STRETCH");
-  await edit("a", { absolute: { x: 0, y: 0 } });
+  await edit("a", { left: 0, top: 0 });
   await edit("row", { layout: { alignItems: "flex-start" } });
-  await edit("a", { absolute: "none" });
+  await edit("a", { position: "none" });
   assert.equal(a.layoutAlign, "INHERIT"); // no resurrected stretch the container no longer asks for
 });
 
@@ -504,7 +504,7 @@ test("a Figma refusal mid-apply rolls back and the error is a pointer: identity 
   });
 });
 
-// ——— slice 2.5: the TEXT words (content / textStyle / color) and LINE's color alias ———
+// ——— the TEXT words (text / textStyle / fill / boldWeight) ———
 
 async function renderKeyedText(content: Parameters<typeof text>[0] = "hello", props: Parameters<typeof text>[1] = {}) {
   const out = await render(frame({ width: 300, height: 100 }, [text(content, { key: "label", ...props })]));
@@ -514,7 +514,7 @@ async function renderKeyedText(content: Parameters<typeof text>[0] = "hello", pr
 test("`content` with a plain string replaces the whole text, preloading the live font first", async () => {
   const node = await renderKeyedText("hello");
   figma.fontLoads.length = 0;
-  await edit("label", { content: "goodbye" });
+  await edit("label", { text: "goodbye" });
   assert.equal(node.characters, "goodbye");
   // The reflow re-lays the existing font — loaded before the mutating span, like create's preload.
   assert.deepEqual(figma.fontLoads[0], { family: "Inter", style: "Regular" });
@@ -564,7 +564,7 @@ test("a partial font delta on a MIXED text rejects; anchoring fontFamily makes i
 
 test("`content` markdown compiles runs over the live base family, per-range fonts landing on the right slice", async () => {
   const node = await renderKeyedText("hello");
-  await edit("label", { content: "plain **bold**" });
+  await edit("label", { text: "plain **bold**" });
   assert.equal(node.characters, "plain bold");
   assert.deepEqual(node._rangeFonts, [{ start: 6, end: 10, value: { family: "Inter", style: "Bold" } }]);
   assert.equal(node.fontName, figma.mixed); // the edit's own runs made it mixed — live-faithful
@@ -573,7 +573,7 @@ test("`content` markdown compiles runs over the live base family, per-range font
 test("a plain-string `content` on a MIXED text succeeds, preloading EVERY range font for the reflow", async () => {
   const node = await renderKeyedText("plain **bold**");
   figma.fontLoads.length = 0;
-  await edit("label", { content: "flat" });
+  await edit("label", { text: "flat" });
   assert.equal(node.characters, "flat");
   // Verified live 2026-08-08: a whole-content replacement collapses the text to its LEADING
   // run's style (no positional carry-over of old range styling). Char 0 is unstyled here, so
@@ -592,28 +592,24 @@ test("a content replacement collapses a MIXED text to its LEADING run's style �
   // exactly the fact the mixed-font gates key on.
   const node = await renderKeyedText("**bold** plain tail");
   assert.equal(node.fontName, figma.mixed);
-  await edit("label", { content: "0123456789 replacement" });
+  await edit("label", { text: "0123456789 replacement" });
   assert.deepEqual(node.fontName, { family: "Inter", style: "Bold" });
 });
 
 test("a styled run in `content` on a MIXED text has no base family — rejects instead of landing in the default", async () => {
   await renderKeyedText("plain **bold**");
   await assert.rejects(
-    edit("label", { content: ["a ", ["b", { fontWeight: "bold" }]] }),
+    edit("label", { text: ["a ", ["b", { fontWeight: "bold" }]] }),
     /no base family to resolve against/,
   );
 });
 
-test("`color` is the TEXT fill sugar and the LINE stroke alias; \"none\" clears both", async () => {
-  const node = await renderKeyedText("hello", { color: "#0000ff" });
-  await edit("label", { color: "#ff0000" });
+test("`fill` is the TEXT's paint like every other node's; \"none\" clears it", async () => {
+  const node = await renderKeyedText("hello", { fill: "#0000ff" });
+  await edit("label", { fill: "#ff0000" });
   assert.deepEqual(node.fills[0].color, { r: 1, g: 0, b: 0 });
-  await edit("label", { color: "none" });
+  await edit("label", { fill: "none" });
   assert.deepEqual(node.fills, []);
-  const out = await render(frame({ width: 100, height: 100 }, [line({ key: "rule", length: 80 })]));
-  const rule = await figma.getNodeByIdAsync(out.keyed.rule.id);
-  await edit("rule", { color: "#00ff00" });
-  assert.deepEqual(rule.strokes[0].color, { r: 0, g: 1, b: 0 });
 });
 
 test("lineClamp needs a bounded width: hug rejects, a width in the same edit legalizes, \"none\" removes", async () => {
@@ -651,14 +647,14 @@ test("a Figma refusal on an instance child names the instance — and never auto
 
 test("a present-but-malformed textStyle rejects the WHOLE delta — the fill beside it never lands", async () => {
   const node = await renderKeyedText("hello");
-  await assert.rejects(edit("label", { color: "#ff0000", textStyle: false } as never), /must be an object/);
+  await assert.rejects(edit("label", { fill: "#ff0000", textStyle: false } as never), /must be an object/);
   await assert.rejects(edit("label", { textStyle: { wat: 1 } } as never), /unknown prop "wat"/);
   assert.equal(node.fills[0].color.r, 0); // created black — the rejected recolor never landed
 });
 
-test('flcm.text({ color: "none" }) constructs the explicit no-fill — the same word edit speaks', async () => {
+test('flcm.text({ fill: "none" }) constructs the explicit no-fill — the same word edit speaks', async () => {
   const out = await render(
-    frame({ width: 100, height: 100 }, [text("ghost", { key: "ghost", color: "none" }), text("plain", { key: "plain" })]),
+    frame({ width: 100, height: 100 }, [text("ghost", { key: "ghost", fill: "none" }), text("plain", { key: "plain" })]),
   );
   const ghost = await figma.getNodeByIdAsync(out.keyed.ghost.id);
   assert.deepEqual(ghost.fills, []); // the clear is written over createText's default black
@@ -666,25 +662,26 @@ test('flcm.text({ color: "none" }) constructs the explicit no-fill — the same 
   assert.equal(plain.fills.length, 1); // an OMITTED color keeps the live default — absence isn't removal
 });
 
-test("content + an anchored absolute in ONE edit resolves against the POST-reflow size", async () => {
+test("text + an anchored left in ONE edit resolves against the POST-reflow size", async () => {
   const node = await renderKeyedText("hi");
-  await edit("label", { content: "a much longer line of text", absolute: { x: 100, anchor: { x: "center" } } });
+  await edit("label", { text: "a much longer line of text", left: 100, anchor: { x: "center" } });
   // Text applies before layout (create's order): the anchor subtracts the NEW width. The old
   // order centered the pre-reflow width and only converged on a second identical edit.
   assert.equal(node.x + node.width / 2, 100);
 });
 
-test("a malformed value behind its alias still rejects the whole delta — precedence is not a blind spot", async () => {
-  const out = await render(frame({ width: 100, height: 100 }, [line({ key: "rule", length: 80 })]));
-  const rule = await figma.getNodeByIdAsync(out.keyed.rule.id);
-  await assert.rejects(edit("rule", { length: 60, w: "bad" } as never), /`w` must be a number/);
-  await assert.rejects(edit("rule", { stroke: "#ffffff", color: "wat" } as never), /color/);
-  assert.equal(rule.width, 80); // both deltas rejected whole — the good halves never landed
+test("`boldWeight` alone re-emphasizes nothing, so it rejects naming `text`; beside `text` it sets what `**` means", async () => {
+  const node = await renderKeyedText("hello");
+  await assert.rejects(edit("label", { boldWeight: 600 }), /names no `text`/);
+  assert.equal(node.characters, "hello"); // refused whole — nothing landed
+  await edit("label", { text: "hello **world**", boldWeight: 600 });
+  assert.equal(node.characters, "hello world");
+  assert.deepEqual(node._rangeFonts.at(-1), { start: 6, end: 11, value: { family: "Inter", style: "Semi Bold" } });
 });
 
 test('a run\'s color: "none" compiles to a real transparent range write, not a reject or a skip', async () => {
   const node = await renderKeyedText("hello");
-  await edit("label", { content: [["ghost", { color: "none" }], " rest"] });
+  await edit("label", { text: [["ghost", { color: "none" }], " rest"] });
   assert.deepEqual(node._rangeFills, [{ start: 0, end: 5, value: [] }]);
 });
 
@@ -736,7 +733,7 @@ test("a live fact that changed during the resource round trip refuses the whole 
     // fontWeight was enriched against the live (bold) identity, which is gone by the time the
     // bytes land — so the delta describes a node that no longer exists in that state.
     await assert.rejects(
-      edit("label", { color: image("https://cdn.example.com/a.jpg"), textStyle: { fontSize: 20 } }),
+      edit("label", { fill: image("https://cdn.example.com/a.jpg"), textStyle: { fontSize: 20 } }),
       /changed while this call was loading fonts and images/,
     );
   } finally {

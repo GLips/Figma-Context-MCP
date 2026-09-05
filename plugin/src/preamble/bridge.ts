@@ -276,7 +276,7 @@ function setContainerStretchMarks(f: any): void {
 // STRETCH mark (container-stretch intent is never stored, so "was stretch" is unknowable), and
 // lifts the crossing-child hug-beats-stretch pin it installed. ABSOLUTE children included —
 // unlike the SET walk, which skips them (stretch never governs out-of-flow), the CLEAR must reach
-// a mark parked on an absolute child, or absolute:"none" later resurrects a stretch the container
+// a mark parked on an absolute child, or position:"none" later resurrects a stretch the container
 // no longer asks for.
 function clearContainerStretchMarks(f: any): void {
   const pIsRow = f.layoutMode === "HORIZONTAL";
@@ -289,7 +289,7 @@ function clearContainerStretchMarks(f: any): void {
 
 // Direction-change cleanup (see applyContainer's mode write): both flow marks — layoutGrow along
 // the old primary AND STRETCH along the old counter — go, on EVERY child, ABSOLUTE ones included:
-// a mark parked on an out-of-flow child is inert now but would rejoin the flow via absolute:"none"
+// a mark parked on an out-of-flow child is inert now but would rejoin the flow via position:"none"
 // meaning the NEW direction's axis. The crossing-child pin is lifted only when the OLD mode names
 // a real direction; under NONE that FIXED is indistinguishable from an authored fixed size, so it
 // stays (the same live-state ambiguity that makes the stretch rules stated, not derived).
@@ -396,10 +396,11 @@ function coverChild(parent: any, child: any, layout: WriteLayout): void {
   child.resize(Math.max(cw, 0.01), child.type === "LINE" ? 0 : Math.max(ch, 0.01));
 }
 
-// Lift an absolute child out of an auto-layout parent's flow (so x/y are honored, it can overlap
-// siblings, and it extends past a clip) and apply its location. Outside auto-layout, x/y are native.
-// position:"none" (edit's absolute:"none") is the inverse: the child rejoins the flow and the
-// layout re-places it — in a free-form parent there is no flow to rejoin, so it's inert there.
+// Lift an out-of-flow child (author `left`/`top`, or `position: "absolute"`) out of an auto-layout
+// parent's flow (so the coordinates are honored, it can overlap siblings, and it extends past a clip)
+// and apply its location. Outside auto-layout, x/y are native and the flag is inert. position:"none"
+// (edit) is the inverse: the child rejoins the flow and the layout re-places it — in a free-form
+// parent there is no flow to rejoin, so it's inert there.
 function applyChildPosition(parent: any, child: any, layout: WriteLayout): void {
   if (layout.position === "none") {
     if ("layoutPositioning" in child) child.layoutPositioning = "AUTO";
@@ -598,7 +599,7 @@ export function applyLiveNodeLayout(node: any, wl: WriteLayout): void {
   // Un-fill BEFORE the position write, and regardless of the child's CURRENT positioning: an axis
   // the delta re-sizes to fixed/hug must lose the grow/stretch mark fill installed there, even when
   // the mark sits parked and inert on an absolute child — otherwise `width: 80` on it (or
-  // `{ absolute: "none", width: 80 }` in one delta) leaves the mark to resurrect the fill the delta
+  // `{ position: "none", width: 80 }` in one delta) leaves the mark to resurrect the fill the delta
   // explicitly replaced. Clearing an inert mark is free; clearChildFlowFill touches only named axes.
   if (parentIsAuto) clearChildFlowFill(parent, node, wl);
   applyChildPosition(parent, node, wl);
@@ -745,7 +746,7 @@ function projectedParentLayoutFacts(parent: any, deltas: BatchLayoutDeltas | und
 //
 //   `isContainer`   — will the node itself lay out row/column children (edit: live-or-delta mode).
 //   `isOutOfFlow`   — the node's EFFECTIVE positioning after this call. A delta rarely names
-//                     `absolute`, so an already-ABSOLUTE child threads its live positioning: out
+//                     a placement word, so an already-ABSOLUTE child threads its live positioning: out
 //                     of flow it doesn't feed the parent's hug, and the percent cycle can't form.
 function assertLayoutLandsUnderParent(
   parent: ParentLayoutFacts, nodeType: string, wl: WriteLayout, isContainer: boolean, isOutOfFlow: boolean, subject: string,
@@ -1143,7 +1144,7 @@ export function buildNode(wn: WriteNode, ctx: RenderCtx): any {
 }
 
 // The root is the page's child, and the page is a free-form parent — so the SAME child-side
-// appliers run for it that buildFrame runs for a free-form child: absolute x/y land as canvas
+// appliers run for it that buildFrame runs for a free-form child: `left`/`top` land as canvas
 // coordinates, an explicit pin is stored (inert until the root is dragged into a frame, like any
 // page child's constraints), an anchor rides the pending pass. Without this, position words on
 // the root would validate fine and silently not land — while edit applies the same words to a

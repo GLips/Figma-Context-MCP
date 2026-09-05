@@ -15,7 +15,7 @@ export async function captionExample(flcm: Flcm) {
     ],
     {
       key: "caption",
-      color: "#111827",
+      fill: "#111827",
       width: 340,
       textStyle: { fontSize: 15, lineHeight: "20px" },
     },
