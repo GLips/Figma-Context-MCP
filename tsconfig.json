@@ -1,9 +1,20 @@
 {
   "compilerOptions": {
     "baseUrl": "./",
-    "rootDir": "src",
+    // The program spans the workspace root, not just src/: the paths below pull @framelink/plugin
+    // source into it. Nothing emits through tsc (tsup owns the build, type-check is --noEmit), so
+    // rootDir only has to be wide enough to cover every file in the program.
+    "rootDir": ".",
     "paths": {
-      "~/*": ["./src/*"]
+      "~/*": ["./src/*"],
+      // @framelink/plugin is a workspace member whose source is bundled into dist, not an
+      // installed dependency. Without these mappings TS resolves it through the node_modules
+      // symlink, which marks every file reached from it — including src/core/index.ts — as
+      // "from an external library". Such files are silently unemittable, so `tsup --dts` gets
+      // no declaration back for them, falls through to the raw .ts, and rollup's JS parser
+      // dies on the first `export type`. Mirrors the plugin's exports map exactly; keep in sync.
+      "@framelink/plugin/schema": ["./plugin/src/preamble/schema.ts"],
+      "@framelink/plugin/node-to-snapshot": ["./plugin/src/preamble/node-to-snapshot.ts"]
     },
 
     "target": "ES2022",
