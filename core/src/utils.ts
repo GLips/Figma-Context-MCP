@@ -5,7 +5,7 @@
  * bundles into the plugin's QuickJS sandbox (Invariant 4, gated by the esbuild
  * `platform:'neutral'` purity probe).
  */
-import type { NodeSnapshot, SnapshotRect } from "./snapshot.js";
+import type { NodeSnapshot, SnapshotPoint, SnapshotRect } from "./snapshot.js";
 
 /**
  * Generate a CSS shorthand for values that come with top, right, bottom, and left
@@ -173,6 +173,25 @@ const COORDINATE_TRANSPARENT_TYPES = new Set(["GROUP", "BOOLEAN_OPERATION"]);
 /** Whether a node type is one its children's coordinates skip (see above). */
 export function isCoordinateTransparentType(nodeType: string | undefined): boolean {
   return !!nodeType && COORDINATE_TRANSPARENT_TYPES.has(nodeType);
+}
+
+/**
+ * Express a point in a rotated parent's own frame. Both producers need this and must agree: a
+ * child of a container tilted 25° belongs inside its box, not beside it. Undoing Figma's
+ * `[[cos, sin], [-sin, cos]]` is a multiply by its transpose.
+ */
+export function rotateIntoParentFrame(
+  point: SnapshotPoint,
+  parentOrigin: SnapshotPoint,
+  parentRotationDegrees: number,
+): SnapshotPoint {
+  const dx = point.x - parentOrigin.x;
+  const dy = point.y - parentOrigin.y;
+  if (!parentRotationDegrees) return { x: dx, y: dy };
+  const theta = (parentRotationDegrees * Math.PI) / 180;
+  const cos = Math.cos(theta);
+  const sin = Math.sin(theta);
+  return { x: dx * cos - dy * sin, y: dx * sin + dy * cos };
 }
 
 export function isLayout(val: unknown): val is LayoutSnapshot {

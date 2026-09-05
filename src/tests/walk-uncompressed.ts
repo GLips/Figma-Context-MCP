@@ -3,13 +3,9 @@ import { restNodeToSnapshot } from "~/adapters/rest/node-to-snapshot.js";
 import type { StyleValue, TraversalOptions } from "@framelink/core";
 import { createRefStyleTable, walkNodes } from "@framelink/core/internal";
 
-// The uncompressed walk: what `simplify` runs before `compressDesign`. Three read-path suites
-// (walk, style-table, rich-text) need to observe the walk's output and its style sink BEFORE
-// compression rewrites both, which `simplify` alone can't give them.
-//
-// It lives here, in one file, on purpose: this is the only place that imports `walkNodes` +
-// `createRefStyleTable` together, so the pair that could be used to assemble a divergent walk has
-// a single call site to audit rather than three copies drifting apart.
+// The uncompressed walk — what `simplify` runs before `compressDesign`. Three read-path suites
+// need the output and style sink before compression rewrites both. Kept to one file so the
+// divergent-walk toolkit has a single call site to audit.
 export async function walkUncompressed(
   nodes: FigmaNode[],
   options: {

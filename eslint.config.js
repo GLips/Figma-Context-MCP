@@ -34,11 +34,7 @@ export default [
     rules: prettier.rules,
   },
   {
-    // `@framelink/core/internal` exposes `walkNodes` + `createRefStyleTable` — together, the
-    // toolkit for assembling a walk that diverges from `simplify`, which is the fork the shared
-    // core exists to prevent. The read-path tests genuinely need it (they drive the walk through
-    // the REST adapter, so they can't live inside core); production code never should. The
-    // override below re-permits it for tests only.
+    // The core's internal walk seam is test-only; the block below re-permits it for tests.
     files: ["**/*.ts", "**/*.tsx"],
     rules: {
       "no-restricted-imports": [

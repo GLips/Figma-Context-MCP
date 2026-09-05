@@ -34,10 +34,8 @@ export function assertPackageFiles(files) {
 }
 export function assertSourceBoundary(root) {
   const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
-  // The lab's own manifest is asserted only when the lab is present. This gate runs from `prepack`,
-  // so it decides whether the ROOT package is safe to publish; it must not crash on a checkout that
-  // simply doesn't have an optional local tool. The scans below are the part that actually protects
-  // the tarball, and they cover the source trees that reach dist whether the lab exists or not.
+  // Only when present: this runs from `prepack` to decide if the ROOT is publishable, and must not
+  // crash on a checkout without the optional lab. The scans below are what protect the tarball.
   const labManifest = join(root, "tools/payload-lab/package.json");
   if (existsSync(labManifest)) {
     const lab = JSON.parse(readFileSync(labManifest, "utf8"));
@@ -58,8 +56,7 @@ export function assertSourceBoundary(root) {
         throw new Error(`Production source references Payload Lab: ${path}`);
     }
   }
-  // Every source tree that reaches dist. core/ and plugin/ are private workspace members inlined
-  // by tsup's `noExternal`, so a lab reference in either ships just as surely as one in src/.
+  // Every tree that reaches dist — the members are inlined by tsup's `noExternal`.
   scan(join(root, "src"));
   scan(join(root, "core/src"));
   scan(join(root, "plugin/src"));

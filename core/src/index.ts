@@ -32,6 +32,10 @@ export { pixelRound } from "./utils.js";
 // coordinates skip, or the two producers place every group child differently.
 export { isCoordinateTransparentType } from "./utils.js";
 
+// Both producers place children of a rotated container with this; forking it puts every child
+// of a tilted group in a different spot on each side.
+export { rotateIntoParentFrame } from "./utils.js";
+
 // Figma's per-axis sizing flag → the canonical fill/hug/fixed word. Exported for the plugin's write side,
 // which reports a rendered node's sizing intent (bridge.intentOf) off the live node: resolveAxisDimension
 // takes the fill/hug word straight from this mapper, so sourcing it here rather than re-deriving it is what
@@ -43,21 +47,15 @@ export { convertSizing } from "./transformers/layout/common.js";
 export { simplify } from "./simplify.js";
 export type { SimplifyOptions, SimplifyResult } from "./simplify.js";
 
-// Key-ordered serialization. On the barrel because the REST adapter hashes text styles with it:
-// two producers that stringify the same style differently would emit different style refs for
-// identical styling, which the parity harness reads as a real divergence.
+// The REST adapter hashes text styles with this; two producers stringifying differently would
+// emit different style refs for identical styling.
 export { stableStringify } from "./utils.js";
 
-// The output vocabulary the transformers produce. On the barrel because the REST adapter
-// (rest.ts) and the metrics service name these types directly; they were deep-imported from the
-// transformers before this package had a boundary to import across.
+// Named directly by the REST adapter and the metrics service.
 export type {
   SimplifiedComponentDefinition,
   SimplifiedComponentSetDefinition,
 } from "./transformers/component.js";
 export type { SimplifiedFill } from "./transformers/style.js";
 
-// Deliberately NOT here: `walkNodes`, `createRefStyleTable`, `STYLE_REF_FIELDS`. `simplify` is the
-// one transform authority, and those three are the toolkit for assembling a divergent walk. The
-// root package's read-path tests do need them, so they live behind `@framelink/core/internal`
-// (see src/internal.ts) where an eslint rule keeps non-test code out.
+// Deliberately absent: `walkNodes`, `createRefStyleTable`, `STYLE_REF_FIELDS` — see internal.ts.

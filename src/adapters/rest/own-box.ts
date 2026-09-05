@@ -171,21 +171,3 @@ function isHalfTurn(degrees: number): boolean {
   const wrapped = Math.abs(((degrees % 360) + 360) % 360);
   return Math.abs(wrapped - 180) < HALF_TURN_TOLERANCE_DEG;
 }
-
-/**
- * Express a page-space point in the parent's own frame — the spelling `node.x`/`node.y`
- * has in the plugin API. Undoing the parent's page rotation is what keeps the two
- * producers agreeing when a rotated node sits inside a rotated one.
- */
-export function toParentSpacePoint(
-  pointOnPage: SnapshotPoint,
-  parentOrigin: SnapshotPoint,
-  parentRotation: number,
-): SnapshotPoint {
-  const dx = pointOnPage.x - parentOrigin.x;
-  const dy = pointOnPage.y - parentOrigin.y;
-  const theta = (parentRotation * Math.PI) / 180;
-  const cos = Math.cos(theta);
-  const sin = Math.sin(theta);
-  return { x: dx * cos - dy * sin, y: dx * sin + dy * cos };
-}

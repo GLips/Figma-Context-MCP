@@ -15,7 +15,7 @@
 // Like the REST adapter, the snapshot is constructed field-by-field against the declared contract —
 // deliberately NOT a `{...node}` spread — so undeclared plugin fields cannot ride through at runtime.
 
-import { isCoordinateTransparentType } from "@framelink/core";
+import { isCoordinateTransparentType, rotateIntoParentFrame } from "@framelink/core";
 import type {
   NodeSnapshot,
   SnapshotColor,
@@ -273,13 +273,7 @@ function ownOriginIn(node: SceneNodeLike, parentSpace: SceneParentSpace): Snapsh
   const own = ownXY(node);
   if (!own || !parentSpace.transparent) return own;
   if (!parentSpace.origin) return undefined;
-  const dx = own.x - parentSpace.origin.x;
-  const dy = own.y - parentSpace.origin.y;
-  if (!parentSpace.rotation) return { x: dx, y: dy };
-  const theta = (parentSpace.rotation * Math.PI) / 180;
-  const cos = Math.cos(theta);
-  const sin = Math.sin(theta);
-  return { x: dx * cos - dy * sin, y: dx * sin + dy * cos };
+  return rotateIntoParentFrame(own, parentSpace.origin, parentSpace.rotation ?? 0);
 }
 
 /**

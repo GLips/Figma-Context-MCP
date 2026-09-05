@@ -1,20 +1,15 @@
 {
   "compilerOptions": {
     "baseUrl": "./",
-    // The program spans the workspace root, not just src/: the paths below pull @framelink/plugin
-    // source into it. Nothing emits through tsc (tsup owns the build, type-check is --noEmit), so
-    // rootDir only has to be wide enough to cover every file in the program.
+    // Spans the workspace root because the paths below pull member source into the program.
+    // Nothing emits through tsc, so this only has to be wide enough to cover it.
     "rootDir": ".",
     "paths": {
       "~/*": ["./src/*"],
-      // @framelink/core and @framelink/plugin are workspace members, symlinked in as dependencies
-      // and bundled into dist rather than published. TS must not resolve them through those
-      // symlinks: doing so marks every file reached that way as "from an external library", and
-      // such files are silently unemittable — `tsup --dts` gets no declaration back, falls through
-      // to the raw .ts, and rollup's JS parser dies on the first `export type`. The symlinks stay
-      // load-bearing (vitest resolves through them, not through these paths), so the dependencies
-      // are not vestigial. Mirrors both exports maps; workspace-paths-mirror-exports.test.ts fails
-      // if a new export subpath lands without a mapping here.
+      // Resolve the bundled members here, NOT through their node_modules symlinks: TS marks
+      // anything reached that way "from an external library" and silently won't emit declarations
+      // for it, so `tsup --dts` dies on the raw .ts. workspace-paths-mirror-exports.test.ts fails
+      // if an export subpath lands without a mapping. (vitest still resolves via the symlinks.)
       "@framelink/core": ["./core/src/index.ts"],
       "@framelink/core/snapshot": ["./core/src/snapshot.ts"],
       "@framelink/core/internal": ["./core/src/internal.ts"],

@@ -6,7 +6,8 @@ import type {
   SnapshotStyleRef,
 } from "@framelink/core/snapshot";
 import { isCoordinateTransparentType } from "@framelink/core";
-import { ROOT_SPACE, solveOwnBox, toParentSpacePoint, type RestParentSpace } from "./own-box.js";
+import { ROOT_SPACE, solveOwnBox, type RestParentSpace } from "./own-box.js";
+import { rotateIntoParentFrame } from "@framelink/core";
 import { decodePaints, decodeEffect } from "./paint.js";
 import { decodeText } from "./text.js";
 
@@ -130,7 +131,7 @@ function restSubtreeToSnapshot(
     ownSize: own?.size,
     ownOrigin:
       own?.originOnPage && parentSpace.emittedParentFrame.originOnPage
-        ? toParentSpacePoint(
+        ? rotateIntoParentFrame(
             own.originOnPage,
             parentSpace.emittedParentFrame.originOnPage,
             parentSpace.emittedParentFrame.pageRotation,
