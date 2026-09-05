@@ -5,7 +5,8 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./snapshot": "./src/snapshot.ts"
+    "./snapshot": "./src/snapshot.ts",
+    "./internal": "./src/internal.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

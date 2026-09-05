@@ -1,9 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Node as FigmaNode, TypeStyle } from "@figma/rest-api-spec";
-import { walkNodes } from "@framelink/core";
-import { createRefStyleTable } from "@framelink/core";
-import { restNodeToSnapshot } from "~/adapters/rest/node-to-snapshot.js";
-import type { SimplifiedTextStyle, TextRun } from "@framelink/core";
+import { walkUncompressed } from "./walk-uncompressed.js";
+import type { SimplifiedTextStyle, TextRun } from "@framelink/core/internal";
 
 /**
  * Minimal Figma TEXT node factory. Tests only need the fields the text
@@ -35,12 +33,7 @@ function makeText(opts: {
 }
 
 async function extract(nodes: FigmaNode[]) {
-  const sink = createRefStyleTable();
-  const extracted = await walkNodes(
-    nodes.map((node) => restNodeToSnapshot(node)),
-    sink,
-  );
-  return { nodes: extracted, styles: sink.styles };
+  return walkUncompressed(nodes);
 }
 
 /** Assert a run is a `[text, ref]` tuple and return it destructurable. */

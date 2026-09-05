@@ -1,8 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Node as FigmaNode, Style, TypeStyle } from "@figma/rest-api-spec";
-import { walkNodes } from "@framelink/core";
-import { createRefStyleTable } from "@framelink/core";
-import { restNodeToSnapshot } from "~/adapters/rest/node-to-snapshot.js";
+import { walkUncompressed } from "./walk-uncompressed.js";
 import type { StyleValue } from "@framelink/core";
 
 // resolveStyleKey decides whether a node's named Figma style collapses onto an
@@ -47,15 +45,11 @@ const extraStyles: Record<string, Style> = {
 async function extractWithSeed(seed: Record<string, unknown>) {
   // Seed a pre-existing same-name entry straight into the sink's styles table;
   // resolveStyleKey treats anything already there as registered.
-  const sink = createRefStyleTable();
-  sink.styles["Heading / Large"] = seed as StyleValue;
-  await walkNodes(
-    [namedTextNode({ fontFamily: "Inter", fontWeight: 700, fontSize: 24 })].map((node) =>
-      restNodeToSnapshot(node, extraStyles),
-    ),
-    sink,
+  const { styles } = await walkUncompressed(
+    [namedTextNode({ fontFamily: "Inter", fontWeight: 700, fontSize: 24 })],
+    { extraStyles, seedStyles: { "Heading / Large": seed as StyleValue } },
   );
-  return { styles: sink.styles };
+  return { styles };
 }
 
 describe("resolveStyleKey — canonical (order-insensitive) comparison", () => {

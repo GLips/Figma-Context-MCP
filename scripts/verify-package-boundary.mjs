@@ -51,7 +51,10 @@ export function assertSourceBoundary(root) {
         throw new Error(`Production source references Payload Lab: ${path}`);
     }
   }
+  // Every source tree that reaches dist. core/ and plugin/ are private workspace members inlined
+  // by tsup's `noExternal`, so a lab reference in either ships just as surely as one in src/.
   scan(join(root, "src"));
+  scan(join(root, "core/src"));
   scan(join(root, "plugin/src"));
 }
 export function verifyPackage(root, buildFirst = true) {

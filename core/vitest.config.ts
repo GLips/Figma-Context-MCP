@@ -6,9 +6,10 @@ import { defineConfig } from "vitest/config";
 //
 // No `~` alias on purpose. This package has no path alias; every intra-package import is relative,
 // which is what lets it be consumed across a package boundary at all.
+// No `globals: true` either: every test here imports describe/it/expect from "vitest" explicitly,
+// and tsconfig.json's `types` deliberately omits vitest/globals, so the flag would be a lie.
 export default defineConfig({
   test: {
-    globals: true,
     include: ["tests/**/*.test.ts"],
   },
 });

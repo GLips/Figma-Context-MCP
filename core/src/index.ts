@@ -48,24 +48,16 @@ export type { SimplifyOptions, SimplifyResult } from "./simplify.js";
 // identical styling, which the parity harness reads as a real divergence.
 export { stableStringify } from "./utils.js";
 
-// The output vocabulary the transformers produce. On the barrel because the REST adapter and the
-// metrics service name these types directly; they were deep-imported from ./types.js and the
+// The output vocabulary the transformers produce. On the barrel because the REST adapter
+// (rest.ts) and the metrics service name these types directly; they were deep-imported from the
 // transformers before this package had a boundary to import across.
 export type {
   SimplifiedComponentDefinition,
   SimplifiedComponentSetDefinition,
 } from "./transformers/component.js";
 export type { SimplifiedFill } from "./transformers/style.js";
-export type { SimplifiedTextStyle, TextRun } from "./transformers/text.js";
 
-// The style-ref table and the field list the compression pass lifts into it. Both are on the
-// barrel for the parity harness and the style-table tests, which have to build and inspect a
-// table the same way `simplify` does rather than reimplementing the shape alongside it.
-export { createRefStyleTable } from "./style-table.js";
-export { STYLE_REF_FIELDS } from "./compress.js";
-
-// The walk `simplify` runs internally. Exported for the read-path tests in the root package, which
-// drive it through the REST adapter and so cannot live in this package. Note the asymmetry: the
-// shipped npm surface (root src/index.ts) deliberately does NOT re-export this — publishing the
-// walk would hand consumers the toolkit to assemble a divergent one. Workspace-visible, not public.
-export { walkNodes } from "./simplify.js";
+// Deliberately NOT here: `walkNodes`, `createRefStyleTable`, `STYLE_REF_FIELDS`. `simplify` is the
+// one transform authority, and those three are the toolkit for assembling a divergent walk. The
+// root package's read-path tests do need them, so they live behind `@framelink/core/internal`
+// (see src/internal.ts) where an eslint rule keeps non-test code out.

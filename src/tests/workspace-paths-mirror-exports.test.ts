@@ -16,9 +16,9 @@ import ts from "typescript";
 // mapping is missing, which is why this gate exists rather than leaving it to the build: adding
 // an export subpath and forgetting the mapping should fail here, by name.
 //
-// Directional on purpose: extra `paths` entries beyond the exports map are not a failure
-// here — the exports map is the boundary, and widening tsconfig past it is caught by the
-// package-boundary check, not by this one.
+// Directional on purpose: this asserts every export IS mapped, not that every mapping IS an
+// export. A stray extra `paths` entry is unenforced — it would only ever make resolution more
+// permissive for the type-checker, and it cannot widen what the exports map lets anyone import.
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 

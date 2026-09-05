@@ -1,8 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { walkNodes } from "@framelink/core";
 import { simplifyRestResponse } from "~/adapters/rest/rest.js";
-import { restNodeToSnapshot } from "~/adapters/rest/node-to-snapshot.js";
-import { createRefStyleTable } from "@framelink/core";
+import { walkUncompressed } from "./walk-uncompressed.js";
 import type { TraversalOptions } from "@framelink/core";
 import type { GetFileResponse, Style } from "@figma/rest-api-spec";
 import type { Node as FigmaNode } from "@figma/rest-api-spec";
@@ -22,13 +20,7 @@ async function walk(
   options?: TraversalOptions,
   extraStyles?: Record<string, Style>,
 ) {
-  const sink = createRefStyleTable();
-  const extracted = await walkNodes(
-    nodes.map((node) => restNodeToSnapshot(node, extraStyles)),
-    sink,
-    options,
-  );
-  return { nodes: extracted, styles: sink.styles };
+  return walkUncompressed(nodes, { traversal: options, extraStyles });
 }
 
 // A small but representative node tree:

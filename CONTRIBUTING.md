@@ -109,20 +109,31 @@ This focused approach ensures:
 
 ## Project Structure
 
+A pnpm workspace. `src/` is the shipped npm package; `core/` and `plugin/` are private members
+bundled into `dist` by the root build. Dependencies point one way — both members are consumed by
+`src/`, `plugin/` consumes `core/`, and `core/` depends on nothing.
+
 ```
-src/
+src/                    # figma-developer-mcp — the published package
 ├── cli.ts              # Command line interface
 ├── config.ts           # Configuration management
-├── index.ts            # Main entry point
+├── index.ts            # Main entry point (the npm surface)
 ├── server.ts           # MCP server implementation
 ├── mcp/                # MCP-specific code
 │   ├── index.ts
 │   └── tools/          # MCP tools
 ├── adapters/rest/      # REST wire format → NodeSnapshot
-├── core/               # Canonicalize core (walker, extractors, transformers)
 ├── services/           # Core business logic
 ├── utils/              # Utility functions
 └── tests/              # Test files
+
+core/                   # @framelink/core — the shared read transform
+├── src/                # NodeSnapshot → SimplifiedNode (walker, transformers)
+└── tests/              # Unit tests + the Figma-free and bundle-purity gates
+
+plugin/                 # @framelink/plugin — the Figma plugin and the flcm schema
+├── src/preamble/       # flcm authoring surface; schema.ts is its single source
+└── docs/authoring/     # Generated from the schema — never hand-edited
 ```
 
 ## Contributing Guidelines

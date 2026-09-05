@@ -1,7 +1,7 @@
 import type { TemplateBody, SimplifiedDesign, SimplifiedNode, StyleValue } from "@framelink/core";
 // Single-sourced from the compression pass so the parity view resolves EXACTLY
 // the slots the compression pass can hoist — the two can't silently diverge.
-import { STYLE_REF_FIELDS } from "@framelink/core";
+import { STYLE_REF_FIELDS } from "@framelink/core/internal";
 
 /**
  * The comparator policy for the REST↔plugin parity harness — "shared subset" as
