@@ -53,13 +53,16 @@ import { STYLE_REF_FIELDS } from "@framelink/core/internal";
  *     refs to values, so the key — and any producer disagreement about it —
  *     is gone before comparison.
  *
- *  4. ROOT CONTEXTUAL SIZING (`core/transformers/layout.ts`). A node is "root"
- *     when it has no parent in the input array; the root's spurious FIXED axis
- *     becomes `contextual`. Which node is root is a function of what each producer
- *     is handed as top-level, so this agrees BY CONSTRUCTION when both are fed the
- *     same root subtree — which the harness guarantees. No normalization; pinned
- *     here so a future producer that reads a different selection root is a known,
- *     out-of-scope divergence, not a mystery.
+ *  4. ROOT CONTEXTUAL SIZING (`core/transformers/layout.ts`). NOT a producer
+ *     difference: the rule is core's and both producers emit it. A node is "root"
+ *     when it has no parent in the input array; Figma reports a top-level node's
+ *     size as FIXED, and the core rewrites that axis to `contextual` (with the
+ *     designed size alongside) so a reader doesn't hard-code a width the designer
+ *     never pinned. Which node is root is a function of what each producer is
+ *     handed as top-level, so this agrees BY CONSTRUCTION when both are fed the
+ *     same root subtree — which the harness guarantees. Pinned so a future
+ *     producer that reads a different selection root is a known cause, not a
+ *     mystery.
  *
  *  5. SVG COLLAPSE (`collapseSvgContainers`, `core/simplify.ts`) and
  *  6. HIDDEN COMPONENT-PROPERTY NODES (`shouldProcessNode`,
