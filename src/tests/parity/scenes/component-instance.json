@@ -20,11 +20,9 @@
         {
           "id": "6:2",
           "name": "Product Card",
+          "key": "compkey123",
           "type": "COMPONENT",
           "visible": true,
-          "parent": {
-            "type": "FRAME"
-          },
           "absoluteBoundingBox": {
             "x": 0,
             "y": 0,

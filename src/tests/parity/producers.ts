@@ -46,22 +46,14 @@ const restProducer: ParityProducer = {
 
 /**
  * Assemble a `SimplifiedDesign` from snapshots the way the plugin path does: the
- * one shared core and nothing else. The component tables stay empty — they are
- * REST response-envelope provenance the plugin has no source for, and the
- * comparator scopes them out (pin 2). Property definitions travel on the defining
- * NODE, so they are compared as part of `nodes` like every other field.
+ * one shared core and nothing else. The components sidecar comes from the CORE now, not
+ * from a response envelope — both producers fold the same provenance onto their nodes — so
+ * it is compared like the tree rather than scoped out (pin 2, retired).
  */
 async function designFromSnapshots(snapshots: NodeSnapshot[]): Promise<SimplifiedDesign> {
-  const { nodes, styles, templates } = await simplify(snapshots, { compress: true });
-  return {
-    // `name` is scoped out of the parity view — no source name in a snapshot.
-    name: "",
-    nodes,
-    components: {},
-    componentSets: {},
-    styles,
-    templates,
-  };
+  const { nodes, styles, templates, components } = await simplify(snapshots, { compress: true });
+  // `name` is scoped out of the parity view — no source name in a snapshot.
+  return { name: "", nodes, components, styles, templates };
 }
 
 /**

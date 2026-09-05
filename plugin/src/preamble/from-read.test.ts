@@ -26,7 +26,7 @@ test("a read subtree round-trips: get → fromRead → render reproduces styling
       text("Hello **world**", { textStyle: { fontSize: 18, textTransform: "uppercase" } }),
     ]),
   );
-  const read = await get("card");
+  const { node: read } = await get("card");
 
   const out = await render(fromRead(read));
   const copy = await figma.getNodeByIdAsync(out.node.id);
@@ -54,7 +54,7 @@ test("append takes a fromRead spec as a COPY, and still refuses the bare read sp
   createFigmaMock();
   await render(frame({ key: "src", width: 60, height: 60, fill: "#0000FF" }));
   const dest = await render(frame({ key: "dest", width: 300, height: 300 }));
-  const read = await get("src");
+  const { node: read } = await get("src");
 
   const placed = await append("dest", fromRead(read));
   const destNode = await figma.getNodeByIdAsync(dest.node.id);
@@ -72,14 +72,14 @@ test("append takes a fromRead spec as a COPY, and still refuses the bare read sp
 test("a spread-and-modified read spec is the paste-with-modifications path", async () => {
   createFigmaMock();
   await render(frame({ key: "src", width: 100, height: 50, fill: "#123456" }));
-  const read = await get("src");
+  const { node: read } = await get("src");
 
   const out = await render(fromRead(spec({ ...read, width: 320, name: "Wide copy" })));
   const copy = await figma.getNodeByIdAsync(out.node.id);
   assert.equal(copy.width, 320);
   assert.equal(copy.name, "Wide copy");
   // Read the copy back through the same pipeline: the paint survived the rebuild unchanged.
-  assert.deepEqual((await get(id(out.node.id))).fill, "#123456");
+  assert.deepEqual((await get(id(out.node.id))).node.fill, "#123456");
 
   // `position` is its own word in the read shape, so a hand-set one must not be a silent no-op — out of a
   // real `get` it travels with left/top, but this module's whole pitch is spread-and-modify.
@@ -95,7 +95,7 @@ test("a type with no authored form fails loud by name, pointing at flcm.clone", 
   comp.name = "Chip";
   figmaMock.currentPage.appendChild(comp);
   const instance = comp.createInstance();
-  const read = await get(id(instance.id));
+  const { node: read } = await get(id(instance.id));
 
   assert.throws(() => fromRead(read), /INSTANCE nodes have no authored form .* flcm\.clone\(target, parent\)/s);
   // The flattened vector form has no path data to rebuild from — same disposition, its own reason.
@@ -139,12 +139,12 @@ test("`**` re-emphasizes at the node's OWN bold weight, not a hardcoded 700", as
   // that emphasizes with Semi Bold has `boldWeight` as the SOLE carrier of 600, and dropping it re-rendered
   // every emphasis at 700: right characters, wrong pixels, no error.
   await render(frame({ key: "card", width: 200, height: 80 }, [text("Hello **world**", { key: "line", boldWeight: 600 })]));
-  const read = await get("card");
+  const { node: read } = await get("card");
   const original = read.children![0] as SimplifiedNode;
   assert.equal(original.boldWeight, 600);
 
   const out = await render(fromRead(read));
-  const copy = (await get(id(out.node.id))).children![0] as SimplifiedNode;
+  const copy = (await get(id(out.node.id))).node.children![0] as SimplifiedNode;
   // Read the copy back through the same pipeline: content AND the weight it emphasizes at are unchanged.
   assert.deepEqual([copy.text, copy.boldWeight], [original.text, 600]);
 });
@@ -153,11 +153,11 @@ test("a rotated node rebuilds at its own size — read reports the node's size, 
   createFigmaMock();
   // The text sibling keeps the frame a FRAME on read (a shapes-only container collapses to IMAGE-SVG).
   await render(frame({ key: "card", width: 300, height: 300 }, [rect({ width: 100, height: 20, rotation: 45, fill: "#FF0000" }), text("x")]));
-  const original = (await get("card")).children![0] as SimplifiedNode;
+  const original = (await get("card")).node.children![0] as SimplifiedNode;
   assert.deepEqual([original.width, original.height, original.rotation], [100, 20, 45]);
   // Paste it into a fresh frame (a read ROOT reports "contextual", so the copy is read as a child too).
   await render(frame({ key: "paste", width: 300, height: 300 }, [fromRead(original), text("x")]));
-  const copy = (await get("paste")).children![0] as SimplifiedNode;
+  const copy = (await get("paste")).node.children![0] as SimplifiedNode;
   assert.deepEqual([copy.width, copy.height, copy.rotation], [100, 20, 45]);
 });
 
@@ -165,7 +165,7 @@ test("a line has no height word: read emits none, and a hand-added one is refuse
   createFigmaMock();
   // (A text sibling keeps the frame from reading as an SVG-heavy container, which collapses to IMAGE-SVG.)
   await render(frame({ key: "card", width: 300, height: 300 }, [text("x"), line({ key: "rule", width: 80 })]));
-  const rule = (await get("card")).children![1] as SimplifiedNode;
+  const rule = (await get("card")).node.children![1] as SimplifiedNode;
   assert.equal(rule.height, undefined);
   // A LINE sizes along `width` alone, so a SIZING INTENT on its cross axis has nowhere to go.
   assert.throws(() => fromRead(spec({ type: "LINE", width: 80, height: "fill" })), /`height` is not one of flcm.line's words/);
@@ -187,7 +187,7 @@ test("layout words flcm has no vocabulary for fail loud; a grid names itself", a
 test("beyond-CSS and CSS effects arrive in ONE read bag, and both halves land", async () => {
   createFigmaMock();
   await render(rect({ key: "pane", width: 80, height: 80, effects: effects({ shadow: { y: 4, blur: 8 }, glass: true }) }));
-  const read = await get("pane");
+  const { node: read } = await get("pane");
   // The read value carries both vocabularies at once — the shape a "which kind is this?" router rejects.
   const fx = read.effects as Record<string, unknown>;
   assert.ok(fx.boxShadow && fx.glass);
@@ -230,7 +230,7 @@ test("a single read spec spreads straight into its constructor — one vocabular
       line({ key: "rule", width: 80, stroke: "#00FF00" }),
     ]),
   );
-  const card = await get("card");
+  const { node: card } = await get("card");
   const [box, label, rule] = card.children as SimplifiedNode[];
 
   // rect: `fill`/`stroke`/`left`/`top` ride through, and a hand-set override lands.
@@ -242,7 +242,7 @@ test("a single read spec spreads straight into its constructor — one vocabular
 
   // text: the props-first form — `text`, `fill` and node-level `boldWeight` are the constructor's own words.
   const t = await render(frame({ width: 300, height: 300 }, [text(label)]));
-  const copiedText = (await get(id(t.node.id))).children![0] as SimplifiedNode;
+  const copiedText = (await get(id(t.node.id))).node.children![0] as SimplifiedNode;
   assert.deepEqual([copiedText.text, copiedText.fill, copiedText.boldWeight], [label.text, "#FF0000", 600]);
 
   // line: `width` is the line's length.
@@ -268,8 +268,8 @@ test('a paintless text and a strokeless line read as "none", so a spread spec do
   await render(
     frame({ key: "card", width: 200, height: 100 }, [text("ghost", { key: "ghost", fill: "none" }), line({ key: "bare", width: 80, stroke: "none" })]),
   );
-  const ghost = await get("ghost");
-  const bare = await get("bare");
+  const { node: ghost } = await get("ghost");
+  const { node: bare } = await get("bare");
   assert.equal(ghost.fill, "none");
   assert.equal(bare.stroke, "none");
   // A text's height follows its content by default, so read does not restate "hug" on it.

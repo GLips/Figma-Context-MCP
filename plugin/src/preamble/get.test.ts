@@ -16,7 +16,7 @@ test("get on a frame returns the expanded canonical shape — values inline, chi
     ),
   );
 
-  const spec = await get("card");
+  const { node: spec } = await get("card");
   assert.equal(spec.type, "FRAME");
   // JSON round-trip: the core leaves unset layout fields as present-but-undefined keys, which the
   // egress serialization drops — compare the shape an agent's returned value actually carries.
@@ -34,7 +34,7 @@ test("get on a text node reads back content and text style", async () => {
     frame({ key: "wrap" }, [text("Hello **world**", { key: "greeting", textStyle: { fontSize: 16 } })]),
   );
 
-  const spec = await get("greeting");
+  const { node: spec } = await get("greeting");
   assert.equal(spec.type, "TEXT");
   // The bold span reads back as markdown. The residual fontVariantName delta rides along because a
   // live segment always carries fontName.style ("Bold") and the adapter reports it faithfully —
@@ -47,10 +47,11 @@ test("get on a text node reads back content and text style", async () => {
   assert.equal(spec.textStyle.fontWeight, 400);
 });
 
-// The plugin has no response envelope to carry a components table, so property definitions ride on the
-// defining node — the one place both producers can put them. This pins the plugin path end to end: the
-// adapter reads them off a live COMPONENT, the core emits them on the node `get` returns.
-test("get on a component returns its property definitions on the node itself", async () => {
+// A component is named ONCE, in the envelope's `components` sidecar — its property definitions and its
+// children live there, keyed by component id, which is the only place an off-tree definition could be
+// named at all. This pins the plugin path end to end: the adapter reads the definitions off a live
+// COMPONENT, the core lifts them into the sidecar `get` returns beside the node.
+test("get on a component names it in the components sidecar, not on the node", async () => {
   const figma = createFigmaMock();
   const comp = figma.createComponent();
   comp.name = "Card";
@@ -61,12 +62,16 @@ test("get on a component returns its property definitions on the node itself", a
   };
   figma.currentPage.appendChild(comp);
 
-  const spec = await get(id(comp.id));
+  const { node: spec, components } = await get(id(comp.id));
   assert.equal(spec.type, "COMPONENT");
-  assert.deepEqual(spec.propertyDefinitions, {
-    Title: { type: "text", defaultValue: "Product" },
-    Icon: { type: "instance_swap", defaultValue: "9:9" },
-    Content: { type: "slot" },
+  assert.deepEqual(components?.[comp.id], {
+    type: "COMPONENT",
+    name: "Card",
+    propertyDefinitions: {
+      Title: { type: "text", defaultValue: "Product" },
+      Icon: { type: "instance_swap", defaultValue: "9:9" },
+      Content: { type: "slot" },
+    },
   });
 });
 
@@ -77,7 +82,7 @@ test("get on an instance carries an honest type and its componentId", async () =
   figma.currentPage.appendChild(comp);
   const inst = comp.createInstance();
 
-  const spec = await get(id(inst.id));
+  const { node: spec } = await get(id(inst.id));
   assert.equal(spec.type, "INSTANCE");
   assert.equal(spec.componentId, comp.id);
 });
@@ -96,7 +101,7 @@ test("get reads beyond-CSS effects back as the flcm.effects object form", async 
     }),
   );
 
-  const spec = await get("pane");
+  const { node: spec } = await get("pane");
   const fx = spec.effects;
   // Expanded read: effects is the inline object, never a "effect_…" styles ref (also narrows the type).
   if (typeof fx !== "object") throw new Error(`expected an inline effects object, got ${JSON.stringify(fx)}`);

@@ -140,8 +140,7 @@ export function measureSimplifiedDesign(design: SimplifiedDesign): {
     textNodeCount,
     imageNodeCount,
     componentPropertyCount,
-    componentCount:
-      Object.keys(design.components).length + Object.keys(design.componentSets).length,
+    componentCount: Object.keys(design.components).length,
   };
 }
 

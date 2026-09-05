@@ -20,7 +20,7 @@ describe("count-gated style hoisting", () => {
     const nodes = [node({ id: "1", fill: "fill_red" })];
     const styles: Record<string, StyleValue> = { fill_red: RED };
 
-    const result = compressDesign(nodes, styles, new Set());
+    const result = compressDesign(nodes, [], styles, new Set());
 
     expect(result.nodes[0].fill).toEqual(RED);
     expect(result.styles).toEqual({});
@@ -35,7 +35,7 @@ describe("count-gated style hoisting", () => {
     ];
     const styles: Record<string, StyleValue> = { fill_red: RED };
 
-    const result = compressDesign(nodes, styles, new Set());
+    const result = compressDesign(nodes, [], styles, new Set());
 
     expect(result.nodes[0].fill).toBe("fill_red");
     expect(result.nodes[1].fill).toBe("fill_red");
@@ -46,7 +46,7 @@ describe("count-gated style hoisting", () => {
     const nodes = [node({ id: "1", type: "TEXT", textStyle: "Heading / Large" })];
     const styles: Record<string, StyleValue> = { "Heading / Large": { fontSize: 24 } };
 
-    const result = compressDesign(nodes, styles, new Set(["Heading / Large"]));
+    const result = compressDesign(nodes, [], styles, new Set(["Heading / Large"]));
 
     expect(result.nodes[0].textStyle).toBe("Heading / Large");
     expect(result.styles).toEqual({ "Heading / Large": { fontSize: 24 } });
@@ -60,7 +60,7 @@ describe("count-gated style hoisting", () => {
     const nodes = [node({ id: "1", type: "FRAME" })]; // references no style
     const styles: Record<string, StyleValue> = { "Heading / Large": { fontSize: 24 } };
 
-    const result = compressDesign(nodes, styles, new Set(["Heading / Large"]));
+    const result = compressDesign(nodes, [], styles, new Set(["Heading / Large"]));
 
     expect(result.styles).toEqual({});
   });
@@ -69,7 +69,7 @@ describe("count-gated style hoisting", () => {
     const nodes = [node({ id: "1", type: "TEXT", text: ["a ", ["b", "style_abc12345"]] })];
     const styles: Record<string, StyleValue> = { style_abc12345: { fontWeight: 700 } };
 
-    const result = compressDesign(nodes, styles, new Set());
+    const result = compressDesign(nodes, [], styles, new Set());
 
     expect(result.nodes[0].text).toEqual(["a ", ["b", { fontWeight: 700 }]]);
     expect(result.styles).toEqual({});
@@ -82,7 +82,7 @@ describe("count-gated style hoisting", () => {
     ];
     const styles: Record<string, StyleValue> = { style_abc12345: { fontWeight: 700 } };
 
-    const result = compressDesign(nodes, styles, new Set());
+    const result = compressDesign(nodes, [], styles, new Set());
 
     expect(result.nodes[0].text).toEqual([["a", "style_abc12345"]]);
     expect(result.nodes[1].text).toEqual([["b", "style_abc12345"]]);
@@ -103,7 +103,7 @@ describe("templates", () => {
     ];
     const styles: Record<string, StyleValue> = { fill_red: RED };
 
-    const result = compressDesign(nodes, styles, new Set());
+    const result = compressDesign(nodes, [], styles, new Set());
 
     const [hash] = Object.keys(result.templates);
     expect(Object.keys(result.templates)).toHaveLength(1);
@@ -126,7 +126,7 @@ describe("templates", () => {
     ];
     const styles: Record<string, StyleValue> = { fill_red: RED };
 
-    const result = compressDesign(nodes, styles, new Set());
+    const result = compressDesign(nodes, [], styles, new Set());
 
     const [hash] = Object.keys(result.templates);
     expect(result.templates[hash]).toEqual({ type: "FRAME", fill: RED });
@@ -140,7 +140,7 @@ describe("templates", () => {
     ];
     const styles: Record<string, StyleValue> = { "Heading / Large": { fontSize: 24 } };
 
-    const result = compressDesign(nodes, styles, new Set(["Heading / Large"]));
+    const result = compressDesign(nodes, [], styles, new Set(["Heading / Large"]));
 
     const [hash] = Object.keys(result.templates);
     expect(result.templates[hash]).toEqual({ type: "TEXT", textStyle: "Heading / Large" });
@@ -155,7 +155,7 @@ describe("templates", () => {
     ];
     const styles: Record<string, StyleValue> = { fill_red: RED, fill_blue: BLUE };
 
-    const result = compressDesign(nodes, styles, new Set());
+    const result = compressDesign(nodes, [], styles, new Set());
 
     // The solo card's body is unique → no template, and its single-use fill
     // inlines onto the node.
@@ -176,7 +176,7 @@ describe("templates", () => {
     const nodes = [card("1"), card("2")];
     const styles: Record<string, StyleValue> = { fill_red: RED };
 
-    const result = compressDesign(nodes, styles, new Set());
+    const result = compressDesign(nodes, [], styles, new Set());
 
     // Two distinct templates: the card body and the icon body.
     expect(Object.keys(result.templates)).toHaveLength(2);
@@ -189,7 +189,7 @@ describe("templates", () => {
   it("does not dedupe type-only bodies (a template would grow the payload)", () => {
     const nodes = [node({ id: "1" }), node({ id: "2" })];
 
-    const result = compressDesign(nodes, {}, new Set());
+    const result = compressDesign(nodes, [], {}, new Set());
 
     expect(result.templates).toEqual({});
     expect(result.nodes[0].template).toBeUndefined();
@@ -201,8 +201,8 @@ describe("templates", () => {
       node({ id: "1", fill: "fill_red" }),
       node({ id: "2", fill: "fill_red" }),
     ];
-    const a = compressDesign(build(), { fill_red: RED }, new Set());
-    const b = compressDesign(build(), { fill_red: RED }, new Set());
+    const a = compressDesign(build(), [], { fill_red: RED }, new Set());
+    const b = compressDesign(build(), [], { fill_red: RED }, new Set());
 
     expect(Object.keys(a.templates)).toEqual(Object.keys(b.templates));
   });

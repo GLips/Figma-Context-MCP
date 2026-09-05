@@ -36,6 +36,7 @@
           "y": 0
         },
         "clipsContent": true,
+        "componentKey": "compkey123",
         "componentPropertyDefinitions": {
           "On Sale#341:0": {
             "type": "BOOLEAN",
@@ -167,6 +168,10 @@
         },
         "clipsContent": true,
         "componentId": "6:2",
+        "mainComponent": {
+          "name": "Product Card",
+          "key": "compkey123"
+        },
         "componentProperties": {
           "On Sale": {
             "type": "BOOLEAN",

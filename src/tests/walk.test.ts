@@ -538,12 +538,13 @@ describe("component property support", () => {
       ],
     });
 
-    const { nodes } = await walk([componentNode]);
+    const { components } = await walk([componentNode]);
 
-    const card = nodes[0];
-    expect(card.children).toHaveLength(2);
+    // A definition's children live in the sidecar, emitted once for every instance of it.
+    const card = components["10:1"].children!;
+    expect(card).toHaveLength(2);
 
-    const badge = card.children!.find((c) => c.name === "Badge")!;
+    const badge = card.find((c) => c.name === "Badge")!;
     expect(badge).toBeDefined();
     expect(badge.componentPropertyReferences).toEqual({ visible: "Show Badge" });
   });
@@ -563,11 +564,18 @@ describe("component property support", () => {
       ],
     });
 
-    const { nodes } = await walk([instanceNode]);
+    const { nodes, components } = await walk([instanceNode]);
 
-    const instance = nodes[0];
-    expect(instance.children).toHaveLength(1);
-    expect(instance.children![0].name).toBe("Title");
+    // The component is off-tree, so this instance donates its own children — marked, because
+    // its edits are baked into them. The hidden Badge is stripped before the donation, so the
+    // published children show only what renders.
+    const entry = components["10:1"];
+    expect(entry.childrenFrom).toBe("11:1");
+    expect(entry.children).toHaveLength(1);
+    expect(entry.children![0].name).toBe("Title");
+    // Diffed against its own donation, the donor's own diff is empty.
+    expect(nodes[0].children).toBeUndefined();
+    expect(nodes[0].overrides).toBeUndefined();
   });
 
   it("emits every property definition type on the defining node", async () => {
@@ -585,9 +593,9 @@ describe("component property support", () => {
       children: [makeNode({ id: "12:2", name: "Title", type: "TEXT", characters: "Product Name" })],
     });
 
-    const { nodes } = await walk([componentNode]);
+    const { components } = await walk([componentNode]);
 
-    expect(nodes[0].propertyDefinitions).toEqual({
+    expect(components["12:1"].propertyDefinitions).toEqual({
       "On Sale": { type: "boolean", defaultValue: true },
       Title: { type: "text", defaultValue: "Product Name" },
       Icon: { type: "instance_swap", defaultValue: "999:1" },
@@ -613,16 +621,17 @@ describe("component property support", () => {
       ],
     });
 
-    const { nodes } = await walk([setNode]);
+    const { components } = await walk([setNode]);
 
-    expect(nodes[0].propertyDefinitions).toEqual({
+    expect(components["16:1"].propertyDefinitions).toEqual({
       Variant: {
         type: "variant",
         defaultValue: "Secondary",
         variantOptions: ["Secondary", "Primary"],
       },
     });
-    expect(nodes[0].children![0].propertyDefinitions).toBeUndefined();
+    // Figma keeps a variant's definitions on the SET, so the variants own none.
+    expect(components["16:2"].propertyDefinitions).toBeUndefined();
   });
 
   it("renames mainComponent and slotContentId references onto the fields they drive", async () => {
@@ -647,80 +656,119 @@ describe("component property support", () => {
       ],
     });
 
-    const { nodes } = await walk([componentNode]);
+    const { components } = await walk([componentNode]);
 
-    const [icon, slot] = nodes[0].children!;
+    const [icon, slot] = components["17:1"].children!;
     expect(icon.componentPropertyReferences).toEqual({ componentId: "Icon" });
     expect(slot.type).toBe("SLOT");
     expect(slot.componentPropertyReferences).toEqual({ slot: "Content" });
   });
 
-  it("marks each overridden sublayer with the output fields the designer changed", async () => {
-    const instanceNode = makeNode({
+  it("emits an instance as a diff against its component's children, values not field names", async () => {
+    const component = makeNode({
+      id: "17:1",
+      name: "Card",
+      type: "COMPONENT",
+      children: [
+        makeNode({ id: "17:5", name: "Label", type: "TEXT", characters: "Buy" }),
+        makeNode({ id: "17:6", name: "Bg", type: "RECTANGLE" }),
+      ],
+    });
+    const instance = makeNode({
       id: "18:1",
       name: "Card Instance",
       type: "INSTANCE",
       componentId: "17:1",
-      overrides: [
-        { id: "18:1", overriddenFields: ["width", "height"] },
-        // REST spells a text edit as four tables; they fold to one output field.
-        {
-          id: "I18:1;17:5",
-          overriddenFields: [
-            "characters",
-            "characterStyleOverrides",
-            "styleOverrideTable",
-            "fills",
-          ],
-        },
-        // A wire field with no output field (bound variables) contributes nothing.
-        { id: "I18:1;17:6", overriddenFields: ["boundVariables"] },
-      ],
       children: [
-        makeNode({ id: "I18:1;17:5", name: "Label", type: "TEXT", characters: "Hi" }),
+        makeNode({ id: "I18:1;17:5", name: "Label", type: "TEXT", characters: "Save" }),
         makeNode({ id: "I18:1;17:6", name: "Bg", type: "RECTANGLE" }),
       ],
     });
 
-    const { nodes } = await walk([instanceNode]);
+    const { nodes } = await walk([component, instance]);
 
-    expect(nodes[0].overrides).toEqual(["width", "height"]);
-    expect(nodes[0].children![0].overrides).toEqual(["text", "fill"]);
-    expect(nodes[0].children![1].overrides).toBeUndefined();
+    // The instance carries no copy of the subtree — only what differs, keyed by the path the
+    // sublayer has in EVERY instance of this component, with the changed value itself.
+    expect(nodes[1].children).toBeUndefined();
+    expect(nodes[1].overrides).toEqual({ "17:5": { text: "Save" } });
   });
 
-  it("carries a nested instance's override whichever instance level reports it", async () => {
-    const outer = makeNode({
-      id: "19:1",
+  it("reads a hand-hidden instance sublayer as visible: false, not as a missing node", async () => {
+    const component = makeNode({
+      id: "17:1",
       name: "Card",
+      type: "COMPONENT",
+      children: [
+        makeNode({ id: "17:5", name: "Label", type: "TEXT", characters: "Buy" }),
+        makeNode({ id: "17:6", name: "Badge", type: "RECTANGLE" }),
+      ],
+    });
+    // The walk drops hidden nodes (the read shape covers the rendered document), so without
+    // this the deviation would vanish: the instance would simply have one fewer child than the
+    // component and nothing would say why.
+    const instance = makeNode({
+      id: "18:1",
+      name: "Card Instance",
       type: "INSTANCE",
       componentId: "17:1",
-      // The outer level reports the nested icon's sizing change and a fill on one of
-      // the icon's own sublayers; the nested level reports only its opacity.
-      overrides: [
-        { id: "I19:1;16:2", overriddenFields: ["layoutSizingHorizontal"] },
-        { id: "I19:1;16:2;16:3", overriddenFields: ["fills"] },
+      children: [
+        makeNode({ id: "I18:1;17:5", name: "Label", type: "TEXT", characters: "Buy" }),
+        makeNode({ id: "I18:1;17:6", name: "Badge", type: "RECTANGLE", visible: false }),
       ],
+    });
+
+    const { nodes } = await walk([component, instance]);
+
+    expect(nodes[1].overrides).toEqual({ "17:6": { visible: false } });
+  });
+
+  it("diffs a nested instance at its full path, whichever level Figma reported it on", async () => {
+    const inner = makeNode({
+      id: "16:1",
+      name: "Icon",
+      type: "COMPONENT",
+      children: [makeNode({ id: "16:3", name: "Glyph", type: "TEXT", characters: "★" })],
+    });
+    const outer = makeNode({
+      id: "17:1",
+      name: "Card",
+      type: "COMPONENT",
+      children: [
+        makeNode({
+          id: "16:2",
+          name: "Icon",
+          type: "INSTANCE",
+          componentId: "16:1",
+          children: [makeNode({ id: "I16:2;16:3", name: "Glyph", type: "TEXT", characters: "★" })],
+        }),
+      ],
+    });
+    const instance = makeNode({
+      id: "19:1",
+      name: "Card Instance",
+      type: "INSTANCE",
+      componentId: "17:1",
       children: [
         makeNode({
           id: "I19:1;16:2",
           name: "Icon",
           type: "INSTANCE",
           componentId: "16:1",
-          overrides: [{ id: "I19:1;16:2", overriddenFields: ["opacity"] }],
-          // TEXT, not a vector: an all-vector INSTANCE collapses to an SVG image.
+          opacity: 0.5,
           children: [
-            makeNode({ id: "I19:1;16:2;16:3", name: "Glyph", type: "TEXT", characters: "★" }),
+            makeNode({ id: "I19:1;16:2;16:3", name: "Glyph", type: "TEXT", characters: "☆" }),
           ],
         }),
       ],
     });
 
-    const { nodes } = await walk([outer]);
+    const { nodes } = await walk([inner, outer, instance]);
 
-    const icon = nodes[0].children![0];
-    expect(icon.overrides).toEqual(["width", "opacity"]);
-    expect(icon.children![0].overrides).toEqual(["fill"]);
+    // The nested instance is reduced first, so the outer diff compares reduced against reduced:
+    // its opacity is the outer delta, and its own text edit is the inner instance's own diff.
+    expect(nodes[2].overrides).toEqual({
+      "16:2": { opacity: 0.5, overrides: { "16:3": { text: "☆" } } },
+    });
   });
 
   it("annotates componentPropertyReferences with characters→text rename", async () => {
@@ -739,9 +787,9 @@ describe("component property support", () => {
       ],
     });
 
-    const { nodes } = await walk([componentNode]);
+    const { components } = await walk([componentNode]);
 
-    const label = nodes[0].children![0];
+    const label = components["13:1"].children![0];
     expect(label.componentPropertyReferences).toEqual({ text: "Button Label" });
   });
 
@@ -791,13 +839,16 @@ describe("component property support", () => {
       ],
     });
 
-    const { nodes } = await walk([componentNode]);
+    const { components } = await walk([componentNode]);
 
-    const nestedInstance = nodes[0].children![0];
-    expect(nestedInstance).toBeDefined();
+    // The nested instance is the only copy of component 99:1 anywhere in the read, so it
+    // donates — and the hidden child was already stripped by the walk, so what it donates is
+    // what renders.
+    const nestedInstance = components["15:1"].children![0];
     expect(nestedInstance.name).toBe("Nested Instance");
-    expect(nestedInstance.children).toHaveLength(1);
-    expect(nestedInstance.children![0].name).toBe("Visible Child");
+    expect(nestedInstance.children).toBeUndefined();
+    expect(components["99:1"].childrenFrom).toBe("15:2");
+    expect(components["99:1"].children!.map((c) => c.name)).toEqual(["Visible Child"]);
   });
 });
 
@@ -871,15 +922,14 @@ describe("simplifyRestResponse", () => {
 
     const result = await simplifyRestResponse(mockResponse);
 
-    expect(result.components["20:1"]).toEqual({
-      id: "20:1",
+    expect(result.components["20:1"]).toMatchObject({
+      type: "COMPONENT",
       key: "abc123",
       name: "Product Card",
-      componentSetId: undefined,
-    });
-    expect(result.nodes[0].propertyDefinitions).toEqual({
-      "On Sale": { type: "boolean", defaultValue: true },
-      Title: { type: "text", defaultValue: "Product Name" },
+      propertyDefinitions: {
+        "On Sale": { type: "boolean", defaultValue: true },
+        Title: { type: "text", defaultValue: "Product Name" },
+      },
     });
   });
 });

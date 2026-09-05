@@ -39,14 +39,18 @@ import { STYLE_REF_FIELDS } from "@framelink/core/internal";
  *     surfacing them onto the node where the rewrite reaches them.
  *     (`decodePaint`/`parsePaint`, `core/transformers/style.ts`.)
  *
- *  2. COMPONENT TABLES. The `components`/`componentSets` tables are producer-
- *     ASSEMBLY provenance and nothing else: REST reads `key`/`name`/`description`/
- *     `componentSetId` from the published-library tables in the response envelope;
- *     the plugin has no envelope and leaves them empty. Nothing in them is core
- *     output, so the view drops both tables whole. Property definitions are NOT
- *     table data — the core emits them on the defining node
- *     (`SimplifiedNode.propertyDefinitions`), where both producers carry them and
- *     the node comparison gates them like any other field.
+ *  2. COMPONENTS SIDECAR — RETIRED as a divergence, and compared like the nodes.
+ *     It used to be two REST-only tables (`components`/`componentSets`) filled from
+ *     the response envelope, which the plugin had no envelope to fill, so the view
+ *     dropped them whole. It is now core output: both producers fold the same
+ *     provenance ONTO their nodes (REST from the tables, the plugin from the
+ *     `getMainComponentAsync()` node it already resolves) and the core builds one
+ *     sidecar from that. Each entry's `children` are ordinary read-shape nodes and
+ *     are expanded and scoped exactly like tree nodes.
+ *
+ *     `childrenFrom` is part of the comparison on purpose: it records WHICH copy of a
+ *     component's children the read published, and two producers that disagree about
+ *     that are emitting different children — a real divergence, not a nuisance.
  *
  *  3. SAME-NAME STYLE DISAMBIGUATION (`resolveStyleKey`, `core/style-table.ts`).
  *     The `Name (id)` suffix only exists as a styles-table KEY. Expansion resolves
@@ -270,12 +274,20 @@ function viewNode(
 /**
  * The shared view a design reduces to for cross-producer comparison. Two
  * producers pass parity iff their views are deep-equal. Excludes the top-level
- * design `name` (file/page metadata, provenance-divergent and gated elsewhere),
- * the `components`/`componentSets` tables (envelope provenance, pin 2) and the
- * now-empty `styles`/`templates` (folded inline by expansion).
+ * design `name` (file/page metadata, provenance-divergent and gated elsewhere)
+ * and the now-empty `styles`/`templates` (folded inline by expansion). The
+ * components sidecar IS compared — see pin 2.
  */
-export function parityView(design: SimplifiedDesign): { nodes: Rec[] } {
+export function parityView(design: SimplifiedDesign): { nodes: Rec[]; components: Rec } {
   const styles: Record<string, StyleValue> = design.styles ?? {};
   const templates = design.templates ?? {};
-  return { nodes: design.nodes.map((node) => viewNode(node, styles, templates)) };
+  const components: Rec = {};
+  for (const [id, entry] of Object.entries(design.components ?? {})) {
+    const viewed: Rec = { ...(entry as unknown as Rec) };
+    if (entry.children) {
+      viewed.children = entry.children.map((child) => viewNode(child, styles, templates));
+    }
+    components[id] = viewed;
+  }
+  return { nodes: design.nodes.map((node) => viewNode(node, styles, templates)), components };
 }

@@ -21,7 +21,9 @@
 
 // Type-only reach into the core's canonical vocabulary, for the read shapes (SlimHandle) the locate verbs
 // return. Erased at build (esbuild drops `import type`), so the figma-free type hub gains no runtime edge.
-import type { SimplifiedDimension, SimplifiedLayout, SimplifiedNode } from "@framelink/core";
+import type {
+  SimplifiedComponentEntry, SimplifiedDimension, SimplifiedLayout, SimplifiedNode,
+} from "@framelink/core";
 
 // The node types createable through the plugin API, enumerated explicitly. Not every figma-mcp/REST
 // `type` round-trips to a create call, so the set is closed: bridge.ts's BUILDERS table is typed
@@ -397,6 +399,13 @@ export interface InsertResult { node: Handle; keyed: Record<string, Handle>; to?
 export interface MoveResult { node: Handle; from?: Handle; to?: Handle }
 
 export interface CloneResult { node: Handle; to?: Handle }
+
+// What `get` hands back. An ENVELOPE rather than a bare node because `components` is keyed by
+// component id and is RESPONSE data, not node data: a component's children are the same bytes for
+// every instance of it, so they are emitted here once and each INSTANCE carries only its
+// `overrides` diff. Absent when the subtree touched no component. This is the shape REST already
+// serves, so the two read edges stay one vocabulary.
+export interface GetResult { node: SimplifiedNode; components?: Record<string, SimplifiedComponentEntry> }
 
 // `remove` can't hand back a handle for a node that no longer exists, so it names the id it
 // deleted — enough for the agent to scrub any handle it was still holding.

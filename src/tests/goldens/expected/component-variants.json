@@ -17,99 +17,7 @@
           "width": 260,
           "height": 60,
           "left": 0,
-          "top": 0,
-          "propertyDefinitions": {
-            "Variant": {
-              "type": "variant",
-              "defaultValue": "Secondary",
-              "variantOptions": [
-                "Secondary",
-                "Primary"
-              ]
-            },
-            "Left Icon": {
-              "type": "boolean",
-              "defaultValue": true
-            }
-          },
-          "children": [
-            {
-              "id": "11:3",
-              "name": "Variant=Secondary",
-              "type": "COMPONENT",
-              "width": 120,
-              "height": 40,
-              "left": 10,
-              "top": 10,
-              "fill": "fill_1288b06a",
-              "borderRadius": "6px",
-              "children": [
-                {
-                  "id": "11:14",
-                  "name": "Icon",
-                  "type": "RECTANGLE",
-                  "width": 16,
-                  "height": 16,
-                  "left": 4,
-                  "top": 12,
-                  "fill": "fill_314185fc",
-                  "componentPropertyReferences": {
-                    "visible": "Left Icon"
-                  }
-                },
-                {
-                  "id": "11:4",
-                  "name": "Label",
-                  "type": "TEXT",
-                  "width": 88,
-                  "height": 20,
-                  "left": 16,
-                  "top": 10,
-                  "text": "Button",
-                  "textStyle": "style_9f723b14",
-                  "fill": "fill_314185fc"
-                }
-              ]
-            },
-            {
-              "id": "11:5",
-              "name": "Variant=Primary",
-              "type": "COMPONENT",
-              "width": 120,
-              "height": 40,
-              "left": 130,
-              "top": 10,
-              "fill": "fill_93e41386",
-              "borderRadius": "6px",
-              "children": [
-                {
-                  "id": "11:15",
-                  "name": "Icon",
-                  "type": "RECTANGLE",
-                  "width": 16,
-                  "height": 16,
-                  "left": 4,
-                  "top": 12,
-                  "fill": "fill_93230492",
-                  "componentPropertyReferences": {
-                    "visible": "Left Icon"
-                  }
-                },
-                {
-                  "id": "11:6",
-                  "name": "Label",
-                  "type": "TEXT",
-                  "width": 88,
-                  "height": 20,
-                  "left": 16,
-                  "top": 10,
-                  "text": "Button",
-                  "textStyle": "style_9f723b14",
-                  "fill": "fill_93230492"
-                }
-              ]
-            }
-          ]
+          "top": 0
         },
         {
           "id": "11:7",
@@ -125,23 +33,14 @@
           "componentProperties": {
             "Left Icon": false
           },
-          "children": [
-            {
-              "id": "I11:7;11:6",
-              "name": "Label",
-              "type": "TEXT",
-              "width": 88,
-              "height": 20,
-              "left": 16,
-              "top": 10,
-              "text": "Save",
-              "textStyle": "style_9f723b14",
-              "fill": "fill_93230492",
-              "overrides": [
-                "text"
-              ]
+          "overrides": {
+            "11:6": {
+              "text": "Save"
+            },
+            "11:15": {
+              "visible": false
             }
-          ]
+          }
         },
         {
           "id": "11:8",
@@ -151,51 +50,7 @@
           "height": 120,
           "left": 0,
           "top": 100,
-          "layout": "layout_5597a813",
-          "propertyDefinitions": {
-            "Icon": {
-              "type": "instance_swap",
-              "defaultValue": "11:3"
-            },
-            "Content": {
-              "type": "slot"
-            }
-          },
-          "children": [
-            {
-              "id": "11:9",
-              "name": "Icon",
-              "type": "INSTANCE",
-              "width": 120,
-              "height": 40,
-              "fill": "fill_1288b06a",
-              "componentId": "11:3",
-              "componentPropertyReferences": {
-                "componentId": "Icon"
-              }
-            },
-            {
-              "id": "11:10",
-              "name": "Content",
-              "type": "SLOT",
-              "width": 200,
-              "height": 20,
-              "layout": "layout_0ad31796",
-              "componentPropertyReferences": {
-                "slot": "Content"
-              },
-              "children": [
-                {
-                  "id": "11:11",
-                  "name": "Placeholder",
-                  "type": "TEXT",
-                  "text": "Slot content",
-                  "textStyle": "style_9f723b14",
-                  "fill": "#808080"
-                }
-              ]
-            }
-          ]
+          "layout": "layout_5597a813"
         },
         {
           "id": "11:12",
@@ -210,32 +65,13 @@
           "componentProperties": {
             "Icon": "11:5"
           },
-          "overrides": [
-            "height"
-          ],
-          "children": [
-            {
-              "id": "I11:12;11:9",
-              "name": "Icon",
-              "type": "INSTANCE",
-              "width": 120,
-              "height": 40,
+          "overrides": {
+            "11:9": {
               "fill": "fill_93e41386",
-              "componentId": "11:5",
-              "componentPropertyReferences": {
-                "componentId": "Icon"
-              }
+              "componentId": "11:5"
             },
-            {
-              "id": "I11:12;11:10",
-              "name": "Content",
-              "type": "SLOT",
-              "width": 200,
+            "11:10": {
               "height": 40,
-              "layout": "layout_0ad31796",
-              "componentPropertyReferences": {
-                "slot": "Content"
-              },
               "children": [
                 {
                   "id": "11:20",
@@ -255,36 +91,171 @@
                 }
               ]
             }
-          ]
+          }
         }
       ]
     }
   ],
   "components": {
+    "11:2": {
+      "type": "COMPONENT_SET",
+      "name": "Button",
+      "key": "k-button-set",
+      "propertyDefinitions": {
+        "Variant": {
+          "type": "variant",
+          "defaultValue": "Secondary",
+          "variantOptions": [
+            "Secondary",
+            "Primary"
+          ]
+        },
+        "Left Icon": {
+          "type": "boolean",
+          "defaultValue": true
+        }
+      },
+      "children": [
+        {
+          "id": "11:3",
+          "name": "Variant=Secondary",
+          "type": "COMPONENT",
+          "width": 120,
+          "height": 40,
+          "left": 10,
+          "top": 10,
+          "fill": "fill_1288b06a",
+          "borderRadius": "6px"
+        },
+        {
+          "id": "11:5",
+          "name": "Variant=Primary",
+          "type": "COMPONENT",
+          "width": 120,
+          "height": 40,
+          "left": 130,
+          "top": 10,
+          "fill": "fill_93e41386",
+          "borderRadius": "6px"
+        }
+      ]
+    },
     "11:3": {
-      "id": "11:3",
-      "key": "k-secondary",
+      "type": "COMPONENT",
       "name": "Variant=Secondary",
-      "componentSetId": "11:2"
+      "key": "k-secondary",
+      "componentSetId": "11:2",
+      "children": [
+        {
+          "id": "11:14",
+          "name": "Icon",
+          "type": "RECTANGLE",
+          "width": 16,
+          "height": 16,
+          "left": 4,
+          "top": 12,
+          "fill": "fill_314185fc",
+          "componentPropertyReferences": {
+            "visible": "Left Icon"
+          }
+        },
+        {
+          "id": "11:4",
+          "name": "Label",
+          "type": "TEXT",
+          "width": 88,
+          "height": 20,
+          "left": 16,
+          "top": 10,
+          "text": "Button",
+          "textStyle": "style_9f723b14",
+          "fill": "fill_314185fc"
+        }
+      ]
     },
     "11:5": {
-      "id": "11:5",
-      "key": "k-primary",
+      "type": "COMPONENT",
       "name": "Variant=Primary",
-      "componentSetId": "11:2"
+      "key": "k-primary",
+      "componentSetId": "11:2",
+      "children": [
+        {
+          "id": "11:15",
+          "name": "Icon",
+          "type": "RECTANGLE",
+          "width": 16,
+          "height": 16,
+          "left": 4,
+          "top": 12,
+          "fill": "fill_93230492",
+          "componentPropertyReferences": {
+            "visible": "Left Icon"
+          }
+        },
+        {
+          "id": "11:6",
+          "name": "Label",
+          "type": "TEXT",
+          "width": 88,
+          "height": 20,
+          "left": 16,
+          "top": 10,
+          "text": "Button",
+          "textStyle": "style_9f723b14",
+          "fill": "fill_93230492"
+        }
+      ]
     },
     "11:8": {
-      "id": "11:8",
+      "type": "COMPONENT",
+      "name": "Card",
       "key": "k-card",
-      "name": "Card"
-    }
-  },
-  "componentSets": {
-    "11:2": {
-      "id": "11:2",
-      "key": "k-button-set",
-      "name": "Button",
-      "description": ""
+      "propertyDefinitions": {
+        "Icon": {
+          "type": "instance_swap",
+          "defaultValue": "11:3"
+        },
+        "Content": {
+          "type": "slot"
+        }
+      },
+      "children": [
+        {
+          "id": "11:9",
+          "name": "Icon",
+          "type": "INSTANCE",
+          "width": 120,
+          "height": 40,
+          "fill": "fill_1288b06a",
+          "componentId": "11:3",
+          "componentPropertyReferences": {
+            "componentId": "Icon"
+          }
+        },
+        {
+          "id": "11:10",
+          "name": "Content",
+          "type": "SLOT",
+          "width": 200,
+          "height": 20,
+          "layout": {
+            "mode": "column"
+          },
+          "componentPropertyReferences": {
+            "slot": "Content"
+          },
+          "children": [
+            {
+              "id": "11:11",
+              "name": "Placeholder",
+              "type": "TEXT",
+              "text": "Slot content",
+              "textStyle": "style_9f723b14",
+              "fill": "#808080"
+            }
+          ]
+        }
+      ]
     }
   },
   "styles": {
@@ -301,9 +272,6 @@
     "layout_5597a813": {
       "mode": "column",
       "gap": "8px"
-    },
-    "layout_0ad31796": {
-      "mode": "column"
     }
   },
   "templates": {}

@@ -229,6 +229,10 @@ export interface SceneNodeLike {
   readonly effectStyleId?: string;
   readonly gridStyleId?: string;
 
+  /** COMPONENT / COMPONENT_SET: the definition's own publish key and description. */
+  readonly key?: string;
+  readonly description?: string;
+
   // Component metadata. The value/defaultValue are `unknown` on purpose: a SLOT property's is a
   // `{ guid }` object on the wire (REST verified live; the plugin typings still say `string | boolean`),
   // and the decode below keeps only the scalars.
@@ -242,9 +246,29 @@ export interface SceneNodeLike {
       readonly variantOptions?: ReadonlyArray<string>;
     };
   };
-  readonly getMainComponentAsync?: () => Promise<{ readonly id: string } | null>;
+  /**
+   * INSTANCE: the live main component. Read for its PROVENANCE as well as its id — `key`, `name`
+   * and the enclosing variant set are exactly what REST reads out of its response tables, and the
+   * plugin has no envelope to put a table in. This one call is what lets a plugin read name a
+   * component at all, and therefore what makes an instance's variant recoverable here.
+   */
+  readonly getMainComponentAsync?: () => Promise<MainComponentLike | null>;
   /** INSTANCE: direct overrides on the instance itself and its sublayers, plugin field spellings (`NodeChangeProperty`). */
   readonly overrides?: ReadonlyArray<{ readonly id: string; readonly overriddenFields: ReadonlyArray<string> }>;
+}
+
+/** The subset of a live ComponentNode this adapter reads off an instance's main component. */
+interface MainComponentLike {
+  readonly id: string;
+  readonly key?: string;
+  readonly name?: string;
+  readonly parent?: {
+    readonly id: string;
+    readonly type: string;
+    readonly key?: string;
+    readonly name?: string;
+    readonly description?: string;
+  } | null;
 }
 
 /** The node's own top-left corner as the live node states it, or undefined if it has none. */
@@ -334,6 +358,7 @@ async function sceneSubtreeToSnapshot(
   parentSpace: SceneParentSpace,
 ): Promise<NodeSnapshot> {
   const text = node.type === "TEXT" ? decodeSceneText(node) : undefined;
+  const main = await mainComponentOf(node);
 
   const childSpace: SceneParentSpace = isCoordinateTransparentType(node.type)
     ? { transparent: true, origin: ownXY(node), rotation: node.rotation ?? 0 }
@@ -406,7 +431,12 @@ async function sceneSubtreeToSnapshot(
       typeof node.cornerRadius === "symbol" ? decodePerCornerRadii(node) : undefined,
 
     // Component metadata
-    componentId: await mainComponentId(node),
+    componentId: main?.id,
+    mainComponent: mainComponentRef(main),
+    componentKey:
+      node.type === "COMPONENT" || node.type === "COMPONENT_SET" ? node.key || undefined : undefined,
+    componentDescription:
+      node.type === "COMPONENT_SET" ? node.description || undefined : undefined,
     componentProperties: decodeComponentProps(node),
     componentPropertyDefinitions: decodePropertyDefinitions(node),
     overrides:
@@ -781,10 +811,26 @@ function decodeOverflow(
 // Component metadata
 // ---------------------------------------------------------------------------
 
-async function mainComponentId(node: SceneNodeLike): Promise<string | undefined> {
-  if (node.type !== "INSTANCE" || !node.getMainComponentAsync) return undefined;
-  const main = await node.getMainComponentAsync();
-  return main?.id;
+async function mainComponentOf(node: SceneNodeLike): Promise<MainComponentLike | null> {
+  if (node.type !== "INSTANCE" || !node.getMainComponentAsync) return null;
+  return await node.getMainComponentAsync();
+}
+
+/** The live main component as plan-neutral provenance — the plugin's answer to REST's tables. */
+function mainComponentRef(main: MainComponentLike | null): NodeSnapshot["mainComponent"] {
+  if (!main) return undefined;
+  const ref: NonNullable<NodeSnapshot["mainComponent"]> = { name: main.name ?? main.id };
+  if (main.key) ref.key = main.key;
+  const parent = main.parent;
+  if (parent && parent.type === "COMPONENT_SET") {
+    ref.set = {
+      id: parent.id,
+      key: parent.key || undefined,
+      name: parent.name ?? parent.id,
+      description: parent.description || undefined,
+    };
+  }
+  return ref;
 }
 
 function isScalarPropertyValue(value: unknown): value is boolean | string {

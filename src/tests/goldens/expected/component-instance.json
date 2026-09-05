@@ -13,51 +13,7 @@
           "width": 150,
           "height": 200,
           "left": 0,
-          "top": 0,
-          "propertyDefinitions": {
-            "On Sale": {
-              "type": "boolean",
-              "defaultValue": true
-            },
-            "Title": {
-              "type": "text",
-              "defaultValue": "Product Name"
-            },
-            "Icon": {
-              "type": "instance_swap",
-              "defaultValue": "999:1"
-            }
-          },
-          "children": [
-            {
-              "id": "6:3",
-              "name": "Label",
-              "type": "TEXT",
-              "width": 134,
-              "height": 20,
-              "left": 8,
-              "top": 8,
-              "text": "Product Name",
-              "textStyle": "style_9f723b14",
-              "fill": "fill_314185fc",
-              "componentPropertyReferences": {
-                "text": "Title"
-              }
-            },
-            {
-              "id": "6:4",
-              "name": "Sale Ribbon",
-              "type": "FRAME",
-              "width": 60,
-              "height": 20,
-              "left": 0,
-              "top": 0,
-              "fill": "#FF0000",
-              "componentPropertyReferences": {
-                "visible": "On Sale"
-              }
-            }
-          ]
+          "top": 0
         },
         {
           "id": "6:5",
@@ -92,12 +48,55 @@
   ],
   "components": {
     "6:2": {
-      "id": "6:2",
+      "type": "COMPONENT",
+      "name": "Product Card",
       "key": "compkey123",
-      "name": "Product Card"
+      "propertyDefinitions": {
+        "On Sale": {
+          "type": "boolean",
+          "defaultValue": true
+        },
+        "Title": {
+          "type": "text",
+          "defaultValue": "Product Name"
+        },
+        "Icon": {
+          "type": "instance_swap",
+          "defaultValue": "999:1"
+        }
+      },
+      "children": [
+        {
+          "id": "6:3",
+          "name": "Label",
+          "type": "TEXT",
+          "width": 134,
+          "height": 20,
+          "left": 8,
+          "top": 8,
+          "text": "Product Name",
+          "textStyle": "style_9f723b14",
+          "fill": "fill_314185fc",
+          "componentPropertyReferences": {
+            "text": "Title"
+          }
+        },
+        {
+          "id": "6:4",
+          "name": "Sale Ribbon",
+          "type": "FRAME",
+          "width": 60,
+          "height": 20,
+          "left": 0,
+          "top": 0,
+          "fill": "#FF0000",
+          "componentPropertyReferences": {
+            "visible": "On Sale"
+          }
+        }
+      ]
     }
   },
-  "componentSets": {},
   "styles": {
     "style_9f723b14": {
       "fontFamily": "Inter",

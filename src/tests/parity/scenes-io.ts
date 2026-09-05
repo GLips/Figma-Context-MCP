@@ -16,7 +16,10 @@ import type {
  *
  * JSON can't carry the parts of the plugin surface that aren't data, so the loader revives them:
  *   - `styledTextSegments` (an array in the file) becomes the node's `getStyledTextSegments` method
- *   - `mainComponentId` (a string) becomes `getMainComponentAsync`
+ *   - `mainComponentId` (a string) becomes `getMainComponentAsync`, resolved to that node
+ *     in the same fixture — the live node is what the real API returns
+ *   - `parent` back-links, non-enumerably — the adapter reads a parent's type (is this COMPONENT
+ *     a set variant?) and, through the main component, the enclosing set's own id/name/key
  *   - the literal string "figma:mixed" becomes a symbol, the adapter's `figma.mixed` signal
  *   - the top-level `styles` table (id → { name }) backs the returned style resolver
  *
@@ -45,15 +48,29 @@ export interface LoadedScene {
   resolveStyle: SceneStyleResolver;
 }
 
-function reviveNode(raw: SceneFixtureNode): SceneNodeLike {
+function reviveNode(
+  raw: SceneFixtureNode,
+  byId: Map<string, Record<string, unknown>>,
+  parent: Record<string, unknown> | null,
+): SceneNodeLike {
   const { styledTextSegments, mainComponentId, children, ...rest } = raw;
   const node: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(rest)) {
     node[key] = value === MIXED_SENTINEL ? MIXED : value;
   }
-  if (children) node.children = children.map(reviveNode);
+  // `parent` is non-enumerable so the revived node still JSON-stringifies (the fixtures are
+  // compared and dumped by id elsewhere) and so the cycle it creates can't be walked into.
+  Object.defineProperty(node, "parent", { value: parent, enumerable: false });
+  if (children) node.children = children.map((child) => reviveNode(child, byId, node));
   if (styledTextSegments) node.getStyledTextSegments = () => styledTextSegments;
-  if (mainComponentId) node.getMainComponentAsync = async () => ({ id: mainComponentId });
+  if (mainComponentId) {
+    // The real `getMainComponentAsync` hands back the LIVE component node — name, key and the
+    // COMPONENT_SET it sits in included — which is where the plugin adapter reads an instance's
+    // provenance. Resolve through the fixture so it does, falling back to a bare id for a
+    // component the fixture doesn't hold (a published library one, off-tree by definition).
+    node.getMainComponentAsync = async () => byId.get(mainComponentId) ?? { id: mainComponentId };
+  }
+  if (typeof node.id === "string") byId.set(node.id, node);
   return node as unknown as SceneNodeLike;
 }
 
@@ -62,8 +79,11 @@ export function loadScene(name: string): LoadedScene | null {
   if (!existsSync(file)) return null;
   const fixture = JSON.parse(readFileSync(file, "utf8")) as SceneFixtureFile;
   const styles = fixture.styles ?? {};
+  // Two passes: revive registers every node by id, then the main-component links resolve — a
+  // fixture may name a component that appears after the instance referencing it.
+  const byId = new Map<string, Record<string, unknown>>();
   return {
-    roots: fixture.nodes.map(reviveNode),
+    roots: fixture.nodes.map((raw) => reviveNode(raw, byId, null)),
     resolveStyle: async (styleId) => styles[styleId] ?? null,
   };
 }

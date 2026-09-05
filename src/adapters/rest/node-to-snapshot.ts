@@ -1,4 +1,11 @@
-import type { Node as FigmaDocumentNode, Paint, Effect, Style } from "@figma/rest-api-spec";
+import type {
+  Node as FigmaDocumentNode,
+  Paint,
+  Effect,
+  Style,
+  Component,
+  ComponentSet,
+} from "@figma/rest-api-spec";
 import type {
   NodeSnapshot,
   SnapshotComponentPropertyDefinition,
@@ -74,8 +81,56 @@ type RawComponentPropertyMap = Record<string, RawComponentProperty>;
 export function restNodeToSnapshot(
   node: FigmaDocumentNode,
   extraStyles: Record<string, Style> = {},
+  tables: RestComponentTables = {},
 ): NodeSnapshot {
-  return restSubtreeToSnapshot(node, extraStyles, ROOT_SPACE);
+  return restSubtreeToSnapshot(node, extraStyles, ROOT_SPACE, tables);
+}
+
+/**
+ * The response envelope's component tables. REST is the only producer with them, and this is
+ * the only place they are read: they get folded ONTO the nodes as `mainComponent` /
+ * `componentKey`, which is the shape the plugin can also supply from its live main-component
+ * node. Nothing table-shaped reaches the core (Invariant 2).
+ */
+export interface RestComponentTables {
+  components?: Record<string, Component>;
+  componentSets?: Record<string, ComponentSet>;
+}
+
+/** A definition node's own table entry — a COMPONENT's, or a COMPONENT_SET's. */
+function definitionEntry(
+  node: FigmaDocumentNode,
+  tables: RestComponentTables,
+): { key?: string; description?: string } | undefined {
+  if (node.type === "COMPONENT") return tables.components?.[node.id];
+  if (node.type === "COMPONENT_SET") return tables.componentSets?.[node.id];
+  return undefined;
+}
+
+/** An instance's main component, joined against both tables so a variant also names its set. */
+function mainComponentOf(
+  componentId: string | undefined,
+  tables: RestComponentTables,
+): NodeSnapshot["mainComponent"] {
+  if (!componentId) return undefined;
+  const component = tables.components?.[componentId];
+  if (!component) return undefined;
+  const ref: NonNullable<NodeSnapshot["mainComponent"]> = {
+    name: component.name,
+    key: component.key || undefined,
+  };
+  const set = component.componentSetId
+    ? tables.componentSets?.[component.componentSetId]
+    : undefined;
+  if (component.componentSetId) {
+    ref.set = {
+      id: component.componentSetId,
+      key: set?.key || undefined,
+      name: set?.name ?? component.componentSetId,
+      description: set?.description || undefined,
+    };
+  }
+  return ref;
 }
 
 /**
@@ -88,6 +143,7 @@ function restSubtreeToSnapshot(
   node: FigmaDocumentNode,
   extraStyles: Record<string, Style>,
   parentSpace: RestParentSpace,
+  tables: RestComponentTables,
 ): NodeSnapshot {
   const raw = node as unknown as RawStructuralFields & {
     fills?: Paint[];
@@ -182,6 +238,9 @@ function restSubtreeToSnapshot(
 
     // Component metadata
     componentId: raw.componentId,
+    mainComponent: node.type === "INSTANCE" ? mainComponentOf(raw.componentId, tables) : undefined,
+    componentKey: definitionEntry(node, tables)?.key || undefined,
+    componentDescription: definitionEntry(node, tables)?.description || undefined,
     componentProperties:
       raw.componentProperties && decodeComponentProperties(raw.componentProperties),
     componentPropertyDefinitions:
@@ -203,7 +262,7 @@ function restSubtreeToSnapshot(
     // per-slot resolved names; the wire shape never reaches the core.
     styles: decodeStyles(node, extraStyles),
 
-    children: raw.children?.map((c) => restSubtreeToSnapshot(c, extraStyles, childSpace)),
+    children: raw.children?.map((c) => restSubtreeToSnapshot(c, extraStyles, childSpace, tables)),
   };
 }
 

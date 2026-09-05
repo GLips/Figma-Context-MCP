@@ -287,6 +287,27 @@ export interface SnapshotOverride {
   fields: string[];
 }
 
+/**
+ * Provenance for the component an INSTANCE resolves to, folded on-node by the adapter.
+ *
+ * This is the one thing the core cannot derive for itself when the definition sits outside
+ * the fetched subtree, and it is what lets BOTH producers name a component. REST reads it
+ * from the response's `components`/`componentSets` tables; the plugin reads it off the
+ * `getMainComponentAsync()` node it already resolves for `componentId`, which is why the
+ * plugin no longer needs a response table it has nowhere to put.
+ *
+ * Carrying `name` here is also what makes an instance's VARIANT recoverable on the plugin:
+ * `componentId` plus this `name` ("Variant=Primary") says which variant resolved, so the
+ * variant values themselves never have to be re-emitted per instance.
+ */
+export interface SnapshotComponentRef {
+  /** Publish key. Absent on a component that was never published. */
+  key?: string;
+  name: string;
+  /** The variant set this component belongs to, when it is a variant. */
+  set?: { id: string; key?: string; name: string; description?: string };
+}
+
 export interface NodeSnapshot {
   id: string;
   name: string;
@@ -415,6 +436,16 @@ export interface NodeSnapshot {
   componentId?: string;
   componentProperties?: Record<string, SnapshotComponentPropertyValue>;
   componentPropertyDefinitions?: Record<string, SnapshotComponentPropertyDefinition>;
+  /** INSTANCE only: who `componentId` names (see SnapshotComponentRef). */
+  mainComponent?: SnapshotComponentRef;
+  /**
+   * COMPONENT / COMPONENT_SET only: the defining node's own publish key and description.
+   * Both producers have these first-hand — REST from the response tables, the plugin from
+   * the live node — so the components sidecar can name an in-tree definition as fully as an
+   * off-tree one.
+   */
+  componentKey?: string;
+  componentDescription?: string;
   /**
    * INSTANCE only: the direct overrides Figma reports at this instance level, on the
    * instance itself and its sublayers. The core folds every enclosing level's list

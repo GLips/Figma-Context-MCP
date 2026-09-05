@@ -38,7 +38,7 @@ There is no autocomplete and no type-checking where your code runs (a QuickJS sa
 | `await flcm.remove(target)` | nothing — deletes the node and its subtree | a target; returns { removedId, parent } |
 | `await flcm.clone(target, parent?)` | a faithful live duplicate (key-less) | a target, and optionally where the copy lands (default: beside the original). The copy path for subtrees a spec rebuild can't reproduce — anything holding an INSTANCE |
 | `flcm.fromRead(spec)` | a `get` result re-authored as a buildable spec | a spec from flcm.get, subtree and all — the constructor is picked by each node's `type` and `children` recurse. Returns a constructor-built node — render it, or place it with append/prepend/insertBefore/insertAfter. (A single node's spec can also spread straight into its constructor: flcm.rect({ ...spec, width: 320 }).) Anything the read shape carries that flcm has no word for (an INSTANCE, a paint stack, a grid) fails loud by name; flcm.clone is the faithful copy for those |
-| `await flcm.get(target)` | a node's full read spec (values inline) | target: an flcm/key, a node id, flcm.id(id), or a handle |
+| `await flcm.get(target)` | { node, components } — the read spec, plus each component named once | target: an flcm/key, a node id, flcm.id(id), or a handle |
 | `await flcm.find(query?, predicate?)` | matching nodes as slim handles | query { type?, name?, key?, within? } AND-combined — a filter, not an address; only `within` takes a target. Optional predicate over the full read shape (n => n.fill === '#FFF') |
 | `await flcm.findOne(query?, predicate?)` | exactly one slim handle (throws on 0 or >1) | same query + predicate as find |
 | `await flcm.selection()` | the current selection as slim handles | no args |
@@ -513,6 +513,8 @@ No separate clipboard API — the verbs compose:
 | paste with modifications | `flcm.append(parent, flcm.fromRead(spec))`, or `clone` then `edit` |
 | delete | `flcm.remove(target)` |
 
+`flcm.get` returns `{ node, components }`. `node` is the read spec; `components` appears only when the subtree holds a component or an instance of one, and names each one ONCE — its `children` and its property definitions live there, keyed by component id. An INSTANCE therefore carries no `children` of its own: it carries `componentId` plus `overrides`, a map from component-relative sublayer path to just the fields that differ from the component (a hand-hidden layer reads as `visible: false`). Reconstruct any sublayer's live id as `I<instanceId>;<path>`.
+
 A `get` result is not authoring input on its own: a bare read spec passed to `append` is rejected rather than quietly treated as a move, because the spec carries a live `id` exactly as a handle does — only you can say copy or move. `flcm.fromRead(spec)` says copy: it re-authors the subtree through the constructors, so you can edit the spec first (`{ ...spec, width: 320 }`), and the copy comes back key-less. A single node's spec also spreads straight into its constructor or an edit — `flcm.rect({ ...spec, width: 320 })` — since the constructors read the read shape's spellings; `fromRead` is for a subtree, whose `children` are specs rather than built nodes.
 
 `fromRead` rebuilds; `clone` duplicates. Rebuilding reaches only what flcm can author, so an INSTANCE, a stacked paint, a grid container or a flattened `IMAGE-SVG` fails loud naming the field — `clone` is the answer for those.
@@ -837,8 +839,10 @@ The read↔write seam: `flcm.get` reads a live subtree as the canonical shape, y
 // `get` reads it as the canonical shape; `fromRead` re-authors that shape through the constructors,
 // which is what makes it a COPY. A bare read spec carries the original's live id, so passing one
 // straight to `append` is refused rather than read as "move the node I just looked at".
-const spec = await flcm.get("card");
-const wider = flcm.fromRead({ ...spec, width: 480, name: "Card (wide)" });
+// `get` returns an envelope — `node` is the spec, and `components` (when the card holds instances)
+// names each component once, with the children every instance shares.
+const { node } = await flcm.get("card");
+const wider = flcm.fromRead({ ...node, width: 480, name: "Card (wide)" });
 const placed = await flcm.append("sidebar", wider);
 
 // fromRead REBUILDS, so it reaches only what flcm can author: an INSTANCE, a stacked paint, or a grid

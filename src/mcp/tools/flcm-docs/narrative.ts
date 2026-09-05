@@ -365,6 +365,8 @@ No separate clipboard API — the verbs compose:
 | paste with modifications | \`flcm.append(parent, flcm.fromRead(spec))\`, or \`clone\` then \`edit\` |
 | delete | \`flcm.remove(target)\` |
 
+\`flcm.get\` returns \`{ node, components }\`. \`node\` is the read spec; \`components\` appears only when the subtree holds a component or an instance of one, and names each one ONCE — its \`children\` and its property definitions live there, keyed by component id. An INSTANCE therefore carries no \`children\` of its own: it carries \`componentId\` plus \`overrides\`, a map from component-relative sublayer path to just the fields that differ from the component (a hand-hidden layer reads as \`visible: false\`). Reconstruct any sublayer's live id as \`I<instanceId>;<path>\`.
+
 A \`get\` result is not authoring input on its own: a bare read spec passed to \`append\` is rejected rather than quietly treated as a move, because the spec carries a live \`id\` exactly as a handle does — only you can say copy or move. \`flcm.fromRead(spec)\` says copy: it re-authors the subtree through the constructors, so you can edit the spec first (\`{ ...spec, width: 320 }\`), and the copy comes back key-less. A single node's spec also spreads straight into its constructor or an edit — \`flcm.rect({ ...spec, width: 320 })\` — since the constructors read the read shape's spellings; \`fromRead\` is for a subtree, whose \`children\` are specs rather than built nodes.
 
 \`fromRead\` rebuilds; \`clone\` duplicates. Rebuilding reaches only what flcm can author, so an INSTANCE, a stacked paint, a grid container or a flattened \`IMAGE-SVG\` fails loud naming the field — \`clone\` is the answer for those.`;

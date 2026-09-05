@@ -20,11 +20,9 @@
         {
           "id": "11:2",
           "name": "Button",
+          "key": "k-button-set",
           "type": "COMPONENT_SET",
           "visible": true,
-          "parent": {
-            "type": "FRAME"
-          },
           "absoluteBoundingBox": {
             "x": 0,
             "y": 0,
@@ -51,11 +49,9 @@
             {
               "id": "11:3",
               "name": "Variant=Secondary",
+              "key": "k-secondary",
               "type": "COMPONENT",
               "visible": true,
-              "parent": {
-                "type": "COMPONENT_SET"
-              },
               "absoluteBoundingBox": {
                 "x": 10,
                 "y": 10,
@@ -161,11 +157,9 @@
             {
               "id": "11:5",
               "name": "Variant=Primary",
+              "key": "k-primary",
               "type": "COMPONENT",
               "visible": true,
-              "parent": {
-                "type": "COMPONENT_SET"
-              },
               "absoluteBoundingBox": {
                 "x": 130,
                 "y": 10,
@@ -399,11 +393,9 @@
         {
           "id": "11:8",
           "name": "Card",
+          "key": "k-card",
           "type": "COMPONENT",
           "visible": true,
-          "parent": {
-            "type": "FRAME"
-          },
           "absoluteBoundingBox": {
             "x": 0,
             "y": 100,

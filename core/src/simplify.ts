@@ -10,15 +10,17 @@ import {
 } from "./transformers/text.js";
 import {
   simplifyComponentProperties,
-  simplifyOverriddenFields,
   simplifyPropertyDefinitions,
   simplifyPropertyReferences,
 } from "./transformers/component.js";
 import { compressDesign } from "./compress.js";
+import { createComponentNotes, extractComponents, noteComponent } from "./components.js";
+import type { ComponentNotes } from "./components.js";
 import { createInlineStyleTable, createRefStyleTable } from "./style-table.js";
 import type { NodeSnapshot } from "./snapshot.js";
 import type {
   NodeCounter,
+  SimplifiedComponentEntry,
   SimplifiedNode,
   StyleTable,
   StyleValue,
@@ -35,6 +37,19 @@ export interface SimplifyOptions extends TraversalOptions {
    * value inline and never touches the content hash (Invariant 3).
    */
   compress?: boolean;
+  /**
+   * Definition subtrees for components that aren't in `snapshots` — REST's off-tree fetch, the
+   * plugin's live `getMainComponentAsync()` node. Fed here rather than looked up inside the core
+   * because resolving them is producer-specific and networked; the core just prefers a real
+   * definition over a donated instance (see `extractComponents`).
+   */
+  componentDefinitions?: NodeSnapshot[];
+  /**
+   * Opt OUT of the components pass, keeping every instance's full subtree. The one caller that
+   * wants this is the plugin's `find` index: its predicates run over whole read shapes in-sandbox,
+   * where nothing is serialized and instance sublayers still have to be findable.
+   */
+  components?: boolean;
 }
 
 export interface SimplifyResult {
@@ -46,6 +61,8 @@ export interface SimplifyResult {
   styles: Record<string, StyleValue>;
   /** Deduplicated node bodies (compression only; empty when expanded). */
   templates: Record<string, TemplateBody>;
+  /** Every component the read referenced, its children emitted once. Empty when it referenced none. */
+  components: Record<string, SimplifiedComponentEntry>;
 }
 
 /**
@@ -65,17 +82,50 @@ export async function simplify(
   snapshots: NodeSnapshot[],
   options: SimplifyOptions = {},
 ): Promise<SimplifyResult> {
-  const { compress = false, ...traversal } = options;
+  const {
+    compress = false,
+    components: withComponents = true,
+    componentDefinitions = [],
+    ...traversal
+  } = options;
+  const notes = createComponentNotes();
 
-  if (compress) {
-    const table = createRefStyleTable();
-    const nodes = await walkNodes(snapshots, table, traversal);
-    return compressDesign(nodes, table.styles, table.namedStyleKeys);
+  // Supplied definitions walk through the SAME style table and notes as the tree, so a value
+  // shared between a component's children and the page is hoisted once, not twice.
+  const walk = async (table: StyleTable) => {
+    const nodes = await walkNodes(snapshots, table, traversal, notes);
+    const definitions = withComponents
+      ? await walkNodes(componentDefinitions, table, traversal, notes)
+      : [];
+    return {
+      nodes,
+      components: withComponents ? extractComponents(nodes, notes, definitions) : {},
+    };
+  };
+
+  if (!compress) {
+    const table = createInlineStyleTable();
+    const { nodes, components } = await walk(table);
+    return { nodes, styles: table.styles, templates: {}, components };
   }
 
-  const table = createInlineStyleTable();
-  const nodes = await walkNodes(snapshots, table, traversal);
-  return { nodes, styles: table.styles, templates: {} };
+  const table = createRefStyleTable();
+  const { nodes, components } = await walk(table);
+  // Compression runs LAST and over both surfaces: a component's published children are output
+  // too, so they template and share hoisted styles with the tree exactly like any other node.
+  return {
+    ...compressDesign(nodes, componentRoots(components), table.styles, table.namedStyleKeys),
+    components,
+  };
+}
+
+/** The sidecar's children, as extra roots for the compression pass to see. */
+function componentRoots(components: Record<string, SimplifiedComponentEntry>): SimplifiedNode[] {
+  const roots: SimplifiedNode[] = [];
+  for (const entry of Object.values(components)) {
+    if (entry.children) roots.push(...entry.children);
+  }
+  return roots;
 }
 
 // ---------------------------------------------------------------------------
@@ -86,17 +136,11 @@ export async function simplify(
 interface SimplifyContext {
   /** Style-interning table — the compression seam (see StyleTable). */
   styles: StyleTable;
+  /** Component provenance sink — the components pass reads it after the walk (see ComponentNotes). */
+  components: ComponentNotes;
   currentDepth: number;
   parent?: NodeSnapshot;
   insideComponentDefinition: boolean;
-  /**
-   * Every enclosing INSTANCE's direct overrides, id → wire fields, so each sublayer
-   * can pick up its own entry. Merged (not replaced) at each INSTANCE: an edit to a
-   * nested instance made while editing the outer one may be listed on either level,
-   * and a node id is unique across the tree, so folding the levels together loses
-   * nothing and misses nothing.
-   */
-  overrides: ReadonlyMap<string, string[]>;
   /**
    * Per-call mutable counter shared with the caller. Lives on the context so
    * the recursion can increment it without touching module-global state —
@@ -131,29 +175,27 @@ async function maybeYield(
  * @param nodes - The node snapshots to process
  * @param styleTable - Where style values are interned (the compression seam)
  * @param options - Traversal options (depth limit, scheduler, progress counter)
+ * @param notes - Where component provenance is recorded for the components pass
  * @returns The processed nodes
  */
 export async function walkNodes(
   nodes: NodeSnapshot[],
   styleTable: StyleTable,
   options: TraversalOptions = {},
+  notes: ComponentNotes = createComponentNotes(),
 ): Promise<SimplifiedNode[]> {
   const context: SimplifyContext = {
     styles: styleTable,
+    components: notes,
     currentDepth: 0,
     insideComponentDefinition: false,
-    overrides: NO_OVERRIDES,
     nodeCounter: options.nodeCounter ?? { count: 0 },
   };
 
   const processedNodes: SimplifiedNode[] = [];
   for (const node of nodes) {
     if (!shouldProcessNode(node, context)) continue;
-    // A root INSTANCE's own override entry lives in its own list — install it before
-    // extraction so the instance node itself reads it like any sublayer would.
-    processedNodes.push(
-      await extractNode(node, { ...context, overrides: overridesOf(node, context) }, options),
-    );
+    processedNodes.push(await extractNode(node, context, options));
   }
 
   return processedNodes;
@@ -205,13 +247,7 @@ async function extractNode(
     for (const idx of order) {
       const child = node.children[idx];
       if (!shouldProcessNode(child, childContext)) continue;
-      children.push(
-        await extractNode(
-          child,
-          { ...childContext, overrides: overridesOf(child, childContext) },
-          options,
-        ),
-      );
+      children.push(await extractNode(child, childContext, options));
     }
 
     if (children.length > 0) {
@@ -225,23 +261,6 @@ async function extractNode(
   }
 
   return result;
-}
-
-const NO_OVERRIDES: ReadonlyMap<string, string[]> = new Map();
-
-/**
- * The override map a node and its subtree read from: an INSTANCE folds its own list
- * into the enclosing one (see `SimplifyContext.overrides`); every other node inherits
- * the map as-is.
- */
-function overridesOf(node: NodeSnapshot, context: SimplifyContext): ReadonlyMap<string, string[]> {
-  if (node.type !== "INSTANCE" || !node.overrides?.length) return context.overrides;
-  const merged = new Map(context.overrides);
-  for (const entry of node.overrides) {
-    const outer = merged.get(entry.id);
-    merged.set(entry.id, outer ? [...outer, ...entry.fields] : entry.fields);
-  }
-  return merged;
 }
 
 /**
@@ -378,10 +397,29 @@ function extractComponent(
   result: SimplifiedNode,
   context: SimplifyContext,
 ): void {
-  // Instance nodes: componentId + simplified componentProperties
+  // Instance nodes: componentId + simplified componentProperties. The component's own name,
+  // key, set and properties go to the SIDECAR — an off-tree definition has no node to carry
+  // them, so the sidecar is the one place both cases can be named.
   if (node.type === "INSTANCE") {
     if (node.componentId) {
       result.componentId = node.componentId;
+      if (node.mainComponent) {
+        noteComponent(context.components, node.componentId, {
+          type: "COMPONENT",
+          name: node.mainComponent.name,
+          key: node.mainComponent.key,
+          componentSetId: node.mainComponent.set?.id,
+        });
+        if (node.mainComponent.set) {
+          const set = node.mainComponent.set;
+          noteComponent(context.components, set.id, {
+            type: "COMPONENT_SET",
+            name: set.name,
+            key: set.key,
+            description: set.description,
+          });
+        }
+      }
     }
     if (node.componentProperties) {
       const props = simplifyComponentProperties(node.componentProperties);
@@ -389,6 +427,10 @@ function extractComponent(
         result.componentProperties = props;
       }
     }
+    // How hand-edited this instance is, for donor selection only (see ComponentNotes).
+    let edits = 0;
+    for (const entry of node.overrides ?? []) edits += entry.fields.length;
+    context.components.instanceEdits.set(node.id, edits);
   }
 
   // Any node with property references: annotate with simplified refs
@@ -399,23 +441,34 @@ function extractComponent(
     }
   }
 
-  // Component/ComponentSet definitions stay on the defining node — the one place
-  // both producers can put them (the plugin has no response envelope to fill).
-  if (
-    (node.type === "COMPONENT" || node.type === "COMPONENT_SET") &&
-    node.componentPropertyDefinitions
-  ) {
-    const defs = simplifyPropertyDefinitions(node.componentPropertyDefinitions);
-    if (Object.keys(defs).length > 0) {
-      result.propertyDefinitions = defs;
+  // A definition in the tree names itself into the same sidecar an instance would — same entry,
+  // better provenance (this is the node's own reading, not an instance's second-hand copy).
+  if (node.type === "COMPONENT" || node.type === "COMPONENT_SET") {
+    const definitions = node.componentPropertyDefinitions
+      ? simplifyPropertyDefinitions(node.componentPropertyDefinitions)
+      : undefined;
+    noteComponent(context.components, node.id, {
+      type: node.type,
+      name: node.name,
+      key: node.componentKey,
+      description: node.componentDescription,
+      propertyDefinitions:
+        definitions && Object.keys(definitions).length > 0 ? definitions : undefined,
+    });
+    // A set names its variants' membership. The variant node itself can't: nothing on a
+    // COMPONENT says which set owns it, and REST reads that from a table the plugin has no
+    // equivalent of — but a set's children ARE its variants, which both producers can see.
+    if (node.type === "COMPONENT_SET") {
+      for (const variant of node.children ?? []) {
+        if (variant.type !== "COMPONENT") continue;
+        noteComponent(context.components, variant.id, {
+          type: "COMPONENT",
+          name: variant.name,
+          key: variant.componentKey,
+          componentSetId: node.id,
+        });
+      }
     }
-  }
-
-  // Override marker: the output fields the designer changed on this node.
-  const overridden = context.overrides.get(node.id);
-  if (overridden) {
-    const fields = simplifyOverriddenFields(overridden);
-    if (fields.length > 0) result.overrides = fields;
   }
 }
 

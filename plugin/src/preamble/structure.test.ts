@@ -196,8 +196,8 @@ test("clone duplicates an INSTANCE-bearing subtree and strips every flcm/key fro
   const keysUnder = (n) => [readKey(n), ...n.children.flatMap(keysUnder)];
   assert.deepEqual(keysUnder(copy).filter(Boolean), []);
   // …and so the originals' keys still resolve, each to exactly one node (resolveTarget throws on a clash).
-  assert.equal((await get("card")).id, card.id);
-  assert.equal((await get("title")).id, out.keyed.title.id);
+  assert.equal((await get("card")).node.id, card.id);
+  assert.equal((await get("title")).node.id, out.keyed.title.id);
 });
 
 test("an instance's CHILD LIST is closed, but the instance itself is an ordinary node", async () => {
@@ -232,10 +232,10 @@ test("a `get` result is refused rather than silently moving the node it describe
   await render(frame({ key: "tray", width: 300, height: 300 }));
   // The trap this closes: a read spec carries a live `id`, exactly as a handle does, so a
   // shape-based dispatch would have taken this for a target and CUT the node out of its parent.
-  await assert.rejects(append("tray", await get("card")), /is a `get` result/);
+  await assert.rejects(append("tray", (await get("card")).node), /is a `get` result/);
   // …including the bare read shape that carries no styling at all to give it away. That one is
   // caught by identity (the read-side brand), which is why the field sniff can stay a fallback.
-  await assert.rejects(append("tray", await get("plain")), /is a `get` result/);
+  await assert.rejects(append("tray", (await get("plain")).node), /is a `get` result/);
   assert.equal(card.parent.id, figma.currentPage.id);
   assert.equal(plain.parent.id, card.id);
 });

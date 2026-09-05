@@ -3,11 +3,7 @@ import type { SimplifiedTextStyle, TextRun } from "./transformers/text.js";
 import type { NodeGeometry, SimplifiedLayout } from "./transformers/layout.js";
 import type { SimplifiedFill } from "./transformers/style.js";
 import type { SimplifiedEffects } from "./transformers/effects.js";
-import type {
-  SimplifiedComponentDefinition,
-  SimplifiedComponentSetDefinition,
-  SimplifiedPropertyDefinition,
-} from "./transformers/component.js";
+import type { SimplifiedPropertyDefinition } from "./transformers/component.js";
 
 export type StyleValue =
   | SimplifiedTextStyle
@@ -82,11 +78,58 @@ export interface TraversalOptions {
   scheduler?: WalkScheduler;
 }
 
+/**
+ * One component (or component set) the read referenced, named ONCE.
+ *
+ * The sidecar exists because a component's `children` are the same bytes for every instance
+ * of it: emitting them here once and each instance as a diff is the whole point of the shape.
+ * It is keyed by component id and sits BESIDE the node tree — it is response data, not node
+ * data, which is why `flcm.get` returns `{ node, components }` rather than hanging a
+ * root-only field off the node it hands back.
+ *
+ * Both producers fill it. REST reads provenance from its response tables; the plugin reads it
+ * off the `getMainComponentAsync()` node it already resolves. That symmetry is what retired
+ * the REST-only `components`/`componentSets` tables (parity pin 2) and what makes an
+ * instance's variant recoverable through the plugin — `componentId` plus this `name`.
+ */
+export interface SimplifiedComponentEntry {
+  /** COMPONENT or COMPONENT_SET. A set owns the variant axes; its variants are separate entries. */
+  type: string;
+  name: string;
+  /** Publish key. Absent on a component that was never published. */
+  key?: string;
+  /** COMPONENT: the variant set it belongs to, when it is a variant. */
+  componentSetId?: string;
+  /** COMPONENT_SET only. */
+  description?: string;
+  /**
+   * The properties this definition owns. Figma keeps a variant's definitions on the SET, so a
+   * variant COMPONENT carries none. Lives here rather than on the defining node because an
+   * off-tree component has no node to carry them.
+   */
+  propertyDefinitions?: Record<string, SimplifiedPropertyDefinition>;
+  /**
+   * The definition's subtree, emitted once. Absent when nothing in the read could supply it —
+   * a component referenced only by name, with no definition fetched and no instance to donate.
+   *
+   * The node's OWN styling is not here: every instance already carries its own fills/layout/
+   * radius on the instance node, and an in-tree definition carries them on its node.
+   */
+  children?: SimplifiedNode[];
+  /**
+   * Present ONLY when `children` were donated by an instance rather than read from the
+   * definition — the id of the instance they came from. A warning with a name: that instance's
+   * own edits are baked into these children, so they are a worked example rather than the
+   * pristine component. Absent means the children ARE the definition's.
+   */
+  childrenFrom?: string;
+}
+
 export interface SimplifiedDesign {
   name: string;
   nodes: SimplifiedNode[];
-  components: Record<string, SimplifiedComponentDefinition>;
-  componentSets: Record<string, SimplifiedComponentSetDefinition>;
+  /** Every component and component set the read referenced (see SimplifiedComponentEntry). */
+  components: Record<string, SimplifiedComponentEntry>;
   /** Hoisted styles: shared + named styles under ref keys. */
   styles: Record<string, StyleValue>;
   /**
@@ -151,22 +194,36 @@ export interface SimplifiedNode extends NodeGeometry {
   effects?: string | SimplifiedEffects;
   opacity?: number;
   borderRadius?: string;
-  // component data — an INSTANCE names its main component and the property values
-  // it resolved; a COMPONENT / COMPONENT_SET carries the definitions it owns
-  // (Figma keeps a variant's definitions on the SET, so a variant COMPONENT has
-  // none); any component sublayer names the property that drives one of its
-  // fields, keyed by that output field (`visible` / `text` / `componentId` / `slot`).
+  // component data — an INSTANCE names its main component and the property values it
+  // resolved; the definition's own properties and children live in the components sidecar
+  // (SimplifiedComponentEntry), keyed by that id, which is the one place both an in-tree and
+  // an off-tree definition can be named. Any component sublayer names the property that
+  // drives one of its fields, keyed by that output field
+  // (`visible` / `text` / `componentId` / `slot`).
   componentId?: string;
   componentProperties?: Record<string, boolean | string>;
   componentPropertyReferences?: Record<string, string>;
-  propertyDefinitions?: Record<string, SimplifiedPropertyDefinition>;
   /**
-   * On an instance sublayer (or the instance itself): the output fields the designer
-   * changed by hand on THIS node, against the main component. Named by output field
-   * (`fills`, `text`, `layout`, …) so the reader can tell an authored deviation from
-   * inherited component content without a second fetch.
+   * Only ever `false`, and only ever inside an `overrides` delta: the read shape covers the
+   * RENDERED document, so a visible node never says so. A layer the designer hid by hand inside
+   * an instance is a real difference from the component, and dropping the node silently would
+   * lose it — so the delta says the node is hidden instead of shipping the node.
    */
-  overrides?: string[];
+  visible?: boolean;
+  /**
+   * INSTANCE only: how this instance differs from its component's `children`, so the instance
+   * itself carries none. Keyed by COMPONENT-RELATIVE PATH — the sublayer's id with its
+   * enclosing instance stripped (`11:9`, `11:9;11:14`), which is the same path in every
+   * instance of the component and in the definition itself. Two reconstructions, one rule each:
+   * the live node is `I<instanceId>;<path>`, and the definition's node is `<path>` for a single
+   * segment or `I<path>` for two or more (Figma carries exactly one leading `I`).
+   *
+   * Each value is a partial node: only the fields that differ. A sublayer the designer hid by
+   * hand reads as `visible: false` — the definition has the node and the instance does not.
+   * A sublayer whose child LIST differs (a filled slot) carries its whole `children` array
+   * rather than a per-child diff, because that content is new rather than changed.
+   */
+  overrides?: Record<string, SimplifiedNode>;
   // children
   children?: SimplifiedNode[];
 }

@@ -40,6 +40,7 @@
         "layoutSizingHorizontal": "FIXED",
         "layoutSizingVertical": "FIXED",
         "clipsContent": false,
+        "componentKey": "k-button-set",
         "componentPropertyDefinitions": {
           "Variant": {
             "type": "VARIANT",
@@ -78,6 +79,7 @@
             "layoutSizingVertical": "FIXED",
             "clipsContent": true,
             "cornerRadius": 6,
+            "componentKey": "k-secondary",
             "fills": [
               {
                 "type": "SOLID",
@@ -205,6 +207,7 @@
             "layoutSizingVertical": "FIXED",
             "clipsContent": true,
             "cornerRadius": 6,
+            "componentKey": "k-primary",
             "fills": [
               {
                 "type": "SOLID",
@@ -335,6 +338,15 @@
         "clipsContent": true,
         "cornerRadius": 6,
         "componentId": "11:5",
+        "mainComponent": {
+          "name": "Variant=Primary",
+          "key": "k-primary",
+          "set": {
+            "id": "11:2",
+            "key": "k-button-set",
+            "name": "Button"
+          }
+        },
         "componentProperties": {
           "Variant": {
             "type": "VARIANT",
@@ -481,6 +493,7 @@
         "clipsContent": true,
         "layoutMode": "VERTICAL",
         "itemSpacing": 8,
+        "componentKey": "k-card",
         "componentPropertyDefinitions": {
           "Icon#920:4": {
             "type": "INSTANCE_SWAP",
@@ -517,6 +530,15 @@
             "layoutSizingVertical": "FIXED",
             "clipsContent": true,
             "componentId": "11:3",
+            "mainComponent": {
+              "name": "Variant=Secondary",
+              "key": "k-secondary",
+              "set": {
+                "id": "11:2",
+                "key": "k-button-set",
+                "name": "Button"
+              }
+            },
             "fills": [
               {
                 "type": "SOLID",
@@ -640,6 +662,10 @@
         "layoutMode": "VERTICAL",
         "itemSpacing": 8,
         "componentId": "11:8",
+        "mainComponent": {
+          "name": "Card",
+          "key": "k-card"
+        },
         "componentProperties": {
           "Icon#920:4": {
             "type": "INSTANCE_SWAP",
@@ -681,6 +707,15 @@
             "layoutSizingVertical": "FIXED",
             "clipsContent": true,
             "componentId": "11:5",
+            "mainComponent": {
+              "name": "Variant=Primary",
+              "key": "k-primary",
+              "set": {
+                "id": "11:2",
+                "key": "k-button-set",
+                "name": "Button"
+              }
+            },
             "fills": [
               {
                 "type": "SOLID",

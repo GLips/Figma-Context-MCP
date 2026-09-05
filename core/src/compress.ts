@@ -35,6 +35,7 @@ import type { SimplifiedNode, StyleValue, TemplateBody } from "./types.js";
  */
 export function compressDesign(
   nodes: SimplifiedNode[],
+  extraRoots: SimplifiedNode[],
   styles: Record<string, StyleValue>,
   namedStyleKeys: Set<string>,
 ): {
@@ -42,12 +43,17 @@ export function compressDesign(
   styles: Record<string, StyleValue>;
   templates: Record<string, TemplateBody>;
 } {
+  // The components sidecar's published children are output too, so they count, inline and
+  // template exactly like tree nodes — a style shared between a component's children and the
+  // page must stay hoisted, and two identical bodies must template whichever surface they sit on.
+  const surfaces = [nodes, extraRoots];
+
   // Per-style usage counts, taken before dedup while every node still carries
   // its own style fields. Reused by both the inlining and expansion steps.
-  const styleCounts = countStyleRefs(nodes);
+  const styleCounts = countStyleRefs(surfaces.flat());
 
-  const surviving = inlineSingleUseStyles(nodes, styles, namedStyleKeys, styleCounts);
-  const { templates, instanceCounts } = deduplicateTemplates(nodes);
+  const surviving = inlineSingleUseStyles(surfaces, styles, namedStyleKeys, styleCounts);
+  const { templates, instanceCounts } = deduplicateTemplates(surfaces);
   inlineExclusiveStyles(templates, instanceCounts, surviving, styleCounts, namedStyleKeys);
 
   return { nodes, styles: surviving, templates };
@@ -99,7 +105,7 @@ function visitStyleRefSlots(
  * no aliasing.
  */
 function inlineSingleUseStyles(
-  nodes: SimplifiedNode[],
+  surfaces: SimplifiedNode[][],
   styles: Record<string, StyleValue>,
   namedStyleKeys: Set<string>,
   counts: Map<string, number>,
@@ -132,7 +138,7 @@ function inlineSingleUseStyles(
       if (node.children) walk(node.children);
     }
   };
-  walk(nodes);
+  for (const surface of surfaces) walk(surface);
 
   const surviving: Record<string, StyleValue> = {};
   for (const [key, value] of Object.entries(styles)) {
@@ -163,13 +169,13 @@ type TemplateCandidate = { body: TemplateBody; str: string; count: number };
  * template reference, returning the template table and each template's instance
  * count. Mutates nodes in place.
  */
-function deduplicateTemplates(nodes: SimplifiedNode[]): {
+function deduplicateTemplates(surfaces: SimplifiedNode[][]): {
   templates: Record<string, TemplateBody>;
   instanceCounts: Map<string, number>;
 } {
   const bodiesByHash = new Map<string, TemplateCandidate>();
   const hashByNode = new Map<SimplifiedNode, string>();
-  collectTemplateBodies(nodes, bodiesByHash, hashByNode);
+  for (const surface of surfaces) collectTemplateBodies(surface, bodiesByHash, hashByNode);
 
   const templates: Record<string, TemplateBody> = {};
   const instanceCounts = new Map<string, number>();
@@ -180,7 +186,7 @@ function deduplicateTemplates(nodes: SimplifiedNode[]): {
     }
   }
 
-  applyTemplateRefs(nodes, hashByNode, templates);
+  for (const surface of surfaces) applyTemplateRefs(surface, hashByNode, templates);
   return { templates, instanceCounts };
 }
 

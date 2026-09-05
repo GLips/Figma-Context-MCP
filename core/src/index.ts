@@ -1,6 +1,7 @@
 // Types
 export type {
   NodeCounter,
+  SimplifiedComponentEntry,
   SimplifiedDesign,
   SimplifiedNode,
   StyleRefPrefix,
@@ -56,11 +57,6 @@ export type { SimplifyOptions, SimplifyResult } from "./simplify.js";
 // emit different style refs for identical styling.
 export { stableStringify } from "./utils.js";
 
-// Named directly by the REST adapter and the metrics service.
-export type {
-  SimplifiedComponentDefinition,
-  SimplifiedComponentSetDefinition,
-} from "./transformers/component.js";
 export type { SimplifiedFill } from "./transformers/style.js";
 
 // Deliberately absent: `walkNodes`, `createRefStyleTable`, `STYLE_REF_FIELDS` — see internal.ts.

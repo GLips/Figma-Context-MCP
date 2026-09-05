@@ -79,10 +79,9 @@ export const READ_FIELD_DISPOSITIONS = {
   componentId: { refuse: "this node is a component instance, and flcm cannot author one — a rebuild from props would be a detached lookalike" },
   componentProperties: { refuse: "component property VALUES belong to an instance, and flcm cannot author instances" },
   componentPropertyReferences: { refuse: "a component property BINDING (this node's text/visibility driven by a component prop) has no flcm word" },
-  propertyDefinitions: { refuse: "component property DEFINITIONS belong to a COMPONENT or COMPONENT_SET, and flcm cannot author either — a rebuild would be a plain frame that defines nothing" },
-  // Which fields the designer overrode on an instance sublayer. The overridden VALUES are already in the
-  // same bag (`fill`, `text`, …); this only names them, and a rebuild is detached from the component
-  // either way, so there is no distinction left to carry.
+  // How an instance differs from its component's children, keyed by component-relative path. Only an
+  // INSTANCE carries it, and `componentId` already refuses that node by name — this entry exists so
+  // the exhaustive record stays exhaustive.
   overrides: "drop",
 } satisfies Record<Exclude<keyof SimplifiedNode, AuthorableReadKey>, ReadFieldDisposition>;
 

@@ -11,10 +11,6 @@ import type { TraversalOptions, SimplifiedDesign } from "@framelink/core";
 import type { NodeSnapshot } from "@framelink/core/snapshot";
 import { simplify } from "@framelink/core";
 import { restNodeToSnapshot } from "./node-to-snapshot.js";
-import type {
-  SimplifiedComponentDefinition,
-  SimplifiedComponentSetDefinition,
-} from "@framelink/core";
 
 // Yield to the Node event loop between walk batches so progress heartbeats,
 // SIGINT, and overlapping HTTP requests stay live during large files. Injected
@@ -30,32 +26,22 @@ export async function simplifyRestResponse(
   apiResponse: GetFileResponse | GetFileNodesResponse,
   options: TraversalOptions = {},
 ): Promise<SimplifiedDesign> {
-  // Decode the response into plan-neutral snapshots + the REST-table metadata
-  // the output assembly still needs (component/componentSet tables).
-  const { name, snapshots, components, componentSets } = restResponseToSnapshots(apiResponse);
+  const { name, snapshots } = restResponseToSnapshots(apiResponse);
 
   // Run the core with egress compression on: this is the shipped REST tool's
   // output form (ref-deduplicated styles + templates).
-  const { nodes, styles, templates } = await simplify(snapshots, {
+  const { nodes, styles, templates, components } = await simplify(snapshots, {
     ...options,
     compress: true,
     scheduler: eventLoopYield,
   });
 
-  return {
-    name,
-    nodes,
-    components: simplifyComponents(components),
-    componentSets: simplifyComponentSets(componentSets),
-    styles,
-    templates,
-  };
+  return { name, nodes, components, styles, templates };
 }
 
 /**
  * The REST producer's adapter half: a raw API response in, plan-neutral
- * `NodeSnapshot`s out (plus the REST-only component tables the output assembly
- * still consults). This is the one seam where REST wire encodings are unpacked —
+ * `NodeSnapshot`s out. This is the one seam where REST wire encodings are unpacked —
  * `restNodeToSnapshot` decodes each node's structures, and `parseAPIResponse`
  * unwraps the response envelope and the top-level `styles`/component tables — so
  * nothing REST-shaped reaches the core (Invariant 2).
@@ -67,16 +53,17 @@ export async function simplifyRestResponse(
 export function restResponseToSnapshots(apiResponse: GetFileResponse | GetFileNodesResponse): {
   name: string;
   snapshots: NodeSnapshot[];
-  components: Record<string, Component>;
-  componentSets: Record<string, ComponentSet>;
 } {
   const { name, rawNodes, components, componentSets, extraStyles } = parseAPIResponse(apiResponse);
 
-  // restNodeToSnapshot is the single place REST wire encodings are unpacked,
-  // including the named-style join against the top-level `styles` table.
-  const snapshots = rawNodes.map((node) => restNodeToSnapshot(node, extraStyles));
+  // restNodeToSnapshot is the single place REST wire encodings are unpacked, including the
+  // named-style join against the top-level `styles` table and the component tables' fold onto
+  // the nodes that reference them.
+  const snapshots = rawNodes.map((node) =>
+    restNodeToSnapshot(node, extraStyles, { components, componentSets }),
+  );
 
-  return { name, snapshots, components, componentSets };
+  return { name, snapshots };
 }
 
 /**
@@ -129,36 +116,4 @@ function parseAPIResponse(data: GetFileResponse | GetFileNodesResponse) {
     components: aggregatedComponents,
     componentSets: aggregatedComponentSets,
   };
-}
-
-/*
- * Decode the top-level `components` / `componentSets` tables into the provenance
- * maps the output carries. These tables are a REST-specific coupling spot
- * (Invariant 2) — they live outside the node tree in the API response, so
- * they're parsed here rather than in the core walk. They carry NO property
- * definitions: the wire never has them here (only on the defining node in the
- * tree, where the core emits them), so a component outside the fetched subtree
- * is nameable from this table but its properties are not visible.
- */
-
-function simplifyComponents(
-  aggregatedComponents: Record<string, Component>,
-): Record<string, SimplifiedComponentDefinition> {
-  return Object.fromEntries(
-    Object.entries(aggregatedComponents).map(([id, comp]) => [
-      id,
-      { id, key: comp.key, name: comp.name, componentSetId: comp.componentSetId },
-    ]),
-  );
-}
-
-function simplifyComponentSets(
-  aggregatedComponentSets: Record<string, ComponentSet>,
-): Record<string, SimplifiedComponentSetDefinition> {
-  return Object.fromEntries(
-    Object.entries(aggregatedComponentSets).map(([id, set]) => [
-      id,
-      { id, key: set.key, name: set.name, description: set.description },
-    ]),
-  );
 }

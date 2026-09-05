@@ -4,5 +4,6 @@
 
 export { walkNodes } from "./simplify.js";
 export { createRefStyleTable } from "./style-table.js";
+export { createComponentNotes, extractComponents } from "./components.js";
 export { STYLE_REF_FIELDS } from "./compress.js";
 export type { SimplifiedTextStyle, TextRun } from "./transformers/text.js";

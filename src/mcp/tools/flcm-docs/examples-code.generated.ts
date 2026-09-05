@@ -155,8 +155,10 @@ return out.node.id;`,
 // \`get\` reads it as the canonical shape; \`fromRead\` re-authors that shape through the constructors,
 // which is what makes it a COPY. A bare read spec carries the original's live id, so passing one
 // straight to \`append\` is refused rather than read as "move the node I just looked at".
-const spec = await flcm.get("card");
-const wider = flcm.fromRead({ ...spec, width: 480, name: "Card (wide)" });
+// \`get\` returns an envelope — \`node\` is the spec, and \`components\` (when the card holds instances)
+// names each component once, with the children every instance shares.
+const { node } = await flcm.get("card");
+const wider = flcm.fromRead({ ...node, width: 480, name: "Card (wide)" });
 const placed = await flcm.append("sidebar", wider);
 
 // fromRead REBUILDS, so it reaches only what flcm can author: an INSTANCE, a stacked paint, or a grid

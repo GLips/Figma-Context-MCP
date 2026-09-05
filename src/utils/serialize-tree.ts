@@ -32,12 +32,10 @@ export function serializeAsTree(design: SerializableDesign): string {
     sections.push(`TEMPLATES:\n${dumpYaml(design.templates)}`);
   }
 
+  // One table for components and component sets alike — each entry names its own `type`, and a
+  // component's children live here rather than being re-copied into every instance of it.
   if (Object.keys(design.metadata.components).length > 0) {
     sections.push(`COMPONENTS:\n${dumpYaml(design.metadata.components)}`);
-  }
-
-  if (Object.keys(design.metadata.componentSets).length > 0) {
-    sections.push(`COMPONENT_SETS:\n${dumpYaml(design.metadata.componentSets)}`);
   }
 
   const lines: string[] = ["NODES:"];
@@ -95,10 +93,8 @@ function renderNode(
   if (node.componentPropertyReferences !== undefined) {
     parts.push(`componentPropertyReferences=${JSON.stringify(node.componentPropertyReferences)}`);
   }
-  if (node.propertyDefinitions !== undefined) {
-    parts.push(`propertyDefinitions=${JSON.stringify(node.propertyDefinitions)}`);
-  }
-  if (node.overrides !== undefined) parts.push(`overrides=${node.overrides.join(",")}`);
+  if (node.visible === false) parts.push("visible=false");
+  if (node.overrides !== undefined) parts.push(`overrides=${JSON.stringify(node.overrides)}`);
   if (node.textStyle !== undefined) parts.push(`textStyle=${renderStyleValue(node.textStyle)}`);
   if (node.boldWeight !== undefined) parts.push(`boldWeight=${node.boldWeight}`);
   if (node.text !== undefined) {

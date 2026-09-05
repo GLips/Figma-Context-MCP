@@ -103,7 +103,6 @@ describe("result serialization", () => {
       const design: SimplifiedDesign = {
         name: "Test File",
         components: {},
-        componentSets: {},
         styles: {},
         templates: {},
         nodes: [
@@ -130,7 +129,6 @@ describe("result serialization", () => {
       const design: SimplifiedDesign = {
         name: "Test",
         components: {},
-        componentSets: {},
         styles: {},
         templates: {},
         nodes: [
@@ -155,7 +153,6 @@ describe("result serialization", () => {
       const design: SimplifiedDesign = {
         name: "Test",
         components: {},
-        componentSets: {},
         styles: {},
         templates: {},
         nodes: [
@@ -180,7 +177,6 @@ describe("result serialization", () => {
       const design: SimplifiedDesign = {
         name: "Test",
         components: {},
-        componentSets: {},
         styles: { fill_red: "#FF0000" },
         templates: {
           "EL-abc12345": { type: "FRAME", fill: "fill_red" },
@@ -208,7 +204,6 @@ describe("result serialization", () => {
       return {
         name: "Test",
         components: {},
-        componentSets: {},
         styles: {},
         templates: {},
         nodes: [node],
@@ -270,7 +265,6 @@ describe("result serialization", () => {
       const wrapped = wrapForSerialization({
         name: "Test",
         components: {},
-        componentSets: {},
         styles: {},
         templates: { "EL-abc12345": { type: "TEXT", text: "Buy now" } },
         nodes: [{ id: "1:1", name: "Stale label", template: "EL-abc12345" }],

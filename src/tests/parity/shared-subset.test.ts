@@ -53,32 +53,47 @@ describe("parityView comparator policy", () => {
     expect(parityView(withColor("#000000"))).not.toEqual(parityView(withColor("#FFFFFF")));
   });
 
-  it("scopes the component tables out entirely — they are envelope provenance (pin 2)", () => {
-    // REST fills the tables from the response envelope; the plugin has no envelope
-    // and leaves them empty. Neither carries anything the core produced, so a
-    // fully populated table and an empty one must reduce to the same view.
+  it("compares the components sidecar — it is core output now, not envelope provenance (pin 2)", () => {
+    // The REST-only components/componentSets tables retired: both producers fold the same
+    // provenance onto their nodes and the core builds ONE sidecar. So a populated sidecar and
+    // an empty one are a real divergence, where the old tables were forgiven.
     const rich = design({
-      components: { "1:1": { id: "1:1", key: "libkey", name: "Card", componentSetId: "9:9" } },
-      componentSets: { "9:9": { id: "9:9", key: "setkey", name: "Cards", description: "" } },
-    });
-    const empty = design({});
+      components: { "1:1": { type: "COMPONENT", key: "libkey", name: "Card" } },
+    } as unknown as Partial<SimplifiedDesign>);
 
-    expect(parityView(rich)).toEqual(parityView(empty));
+    expect(parityView(rich)).not.toEqual(parityView(design({})));
   });
 
-  it("does NOT scope a defining node's propertyDefinitions — they compare as node fields", () => {
+  it("expands style refs inside a sidecar entry's children, like any other node", () => {
+    const entry = (fill: string, styles: Record<string, string> = {}) =>
+      design({
+        components: {
+          "1:1": {
+            type: "COMPONENT",
+            name: "Card",
+            children: [{ id: "1:2", name: "Label", type: "TEXT", fill }],
+          },
+        },
+        styles,
+      } as unknown as Partial<SimplifiedDesign>);
+
+    expect(parityView(entry("fill_abc", { fill_abc: "#123456" }))).toEqual(
+      parityView(entry("#123456")),
+    );
+  });
+
+  it("compares a definition's propertyDefinitions, now that they live in the sidecar", () => {
     const withDefs = (defaultValue: string) =>
       design({
-        nodes: [
-          {
-            id: "1:1",
-            name: "Button",
+        components: {
+          "1:1": {
             type: "COMPONENT_SET",
+            name: "Button",
             propertyDefinitions: {
               Variant: { type: "variant", defaultValue, variantOptions: ["Primary", "Secondary"] },
             },
           },
-        ],
+        },
       } as unknown as Partial<SimplifiedDesign>);
 
     expect(parityView(withDefs("Primary"))).toEqual(parityView(withDefs("Primary")));

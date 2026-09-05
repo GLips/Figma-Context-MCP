@@ -6,12 +6,12 @@
 // both throw, naming the target and (for a key clash) the count — a blind agent must never silently act on
 // the wrong node.
 
-import { Target, RawIdRef, FindQuery, SlimHandle, ReadPredicate } from "./ir.js";
+import { Target, RawIdRef, FindQuery, SlimHandle, ReadPredicate, GetResult } from "./ir.js";
 import { readKey, identityOf } from "./identity.js";
 import { sceneNodeToSnapshot, type SceneNodeLike, type SceneStyleResolver } from "./node-to-snapshot.js";
 import { rejectUnknownKeys } from "./validate.js";
 import { markReadSpec } from "./provenance.js";
-import { simplify, type SimplifiedNode } from "@framelink/core";
+import { simplify, type SimplifiedComponentEntry, type SimplifiedNode } from "@framelink/core";
 
 // A pluginData scan searches this. Default is the current page; a verb's `within` narrows it (resolved by the
 // same shape rules). PageNode and any container SceneNode both satisfy this.
@@ -99,10 +99,13 @@ const resolveStyle: SceneStyleResolver = (styleId) => figma.getStyleByIdAsync(st
 // deliberate boundary cast lives here (shared by get and the locate index): the adapter's structural view
 // narrows the plugin typings to the axes it reads (its paint union omits VideoPaint, its segment getter
 // drops the field-generic overload), so tsc can't prove a live node assignable to it.
-async function simplifyScene(node: BaseNode): Promise<SimplifiedNode[]> {
+async function simplifyScene(
+  node: BaseNode,
+  options: { components?: boolean } = {},
+): Promise<{ nodes: SimplifiedNode[]; components: Record<string, SimplifiedComponentEntry> }> {
   const snapshot = await sceneNodeToSnapshot(node as unknown as SceneNodeLike, resolveStyle);
-  const { nodes } = await simplify([snapshot]);
-  return nodes;
+  const { nodes, components } = await simplify([snapshot], options);
+  return { nodes, components };
 }
 
 /**
@@ -110,9 +113,10 @@ async function simplifyScene(node: BaseNode): Promise<SimplifiedNode[]> {
  * shape (see simplifyScene). A hidden target yields no root node — the read shape covers the rendered
  * document — so throw rather than return nothing.
  */
-export async function get(target: Target): Promise<SimplifiedNode> {
+export async function get(target: Target): Promise<GetResult> {
   const node = await resolveTarget(target);
-  const [spec] = await simplifyScene(node);
+  const { nodes, components } = await simplifyScene(node);
+  const [spec] = nodes;
   if (!spec) {
     throw new Error(
       `flcm.get: node ${JSON.stringify(node.name)} (id ${JSON.stringify(node.id)}) is hidden (visible: false) — the read shape covers the rendered document. Unhide it or target a visible node.`,
@@ -121,7 +125,9 @@ export async function get(target: Target): Promise<SimplifiedNode> {
   // Brand it, so a structural verb handed this back can refuse it instead of reading its live `id`
   // as a move target — the read shape is not authoring input until Phase 5's normalizer exists.
   markReadSpec(spec);
-  return spec;
+  const result: GetResult = { node: spec };
+  if (Object.keys(components).length > 0) result.components = components;
+  return result;
 }
 
 async function scanRoot(within: Target | undefined): Promise<ScanRoot> {
@@ -183,7 +189,10 @@ function isRendered(node: SceneNode): boolean {
 // A node the core dropped (e.g. an SVG-heavy container it collapsed) is simply absent — projectSlim falls
 // back to identity-only for it.
 async function simplifiedIndex(root: ScanRoot): Promise<Map<string, SimplifiedNode>> {
-  const nodes = await simplifyScene(root);
+  // `components: false` — a predicate must still see inside instances. `get` moves an instance's
+  // children to the sidecar to save the agent tokens; this index is in-sandbox and pays none, and a
+  // `find` that couldn't target an instance sublayer would be worse than the bytes it saved.
+  const { nodes } = await simplifyScene(root, { components: false });
   const index = new Map<string, SimplifiedNode>();
   const walk = (node: SimplifiedNode): void => {
     index.set(node.id, node);

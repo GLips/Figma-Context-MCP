@@ -23,7 +23,7 @@
 import { z } from "zod";
 import type {
   FillInput, WriteCssEffects, PaintSpec, EffectSpec, GradientStop, WriteNode, WriteChild, Handle,
-  PinX, PinY, Target, RawIdRef, SlimHandle, FindQuery, ReadPredicate, InsertResult, MoveResult, CloneResult, RemoveResult,
+  PinX, PinY, Target, RawIdRef, SlimHandle, FindQuery, ReadPredicate, InsertResult, MoveResult, CloneResult, RemoveResult, GetResult,
   PageInfo,
 } from "./ir.js";
 // The read verbs return the canonical read shape the shared simplify core emits. Relative (not ~/) so the
@@ -549,8 +549,11 @@ export interface Flcm {
   // that flcm has no word for fails loud by name, pointing at flcm.clone.
   fromRead(spec: SimplifiedNode): WriteNode;
   // Full inspect: the node's styling as the EXPANDED canonical read shape — the same vocabulary
-  // figma-mcp's REST read emits, every value inline (no styles refs), for any node type.
-  get(target: Target): Promise<SimplifiedNode>;
+  // figma-mcp's REST read emits, every value inline (no styles refs), for any node type. Returns an
+  // ENVELOPE: `node` is the read spec, and `components` (present only when the subtree touched one)
+  // names each component once — its `children` live there, and each INSTANCE carries only its
+  // `overrides` diff against them.
+  get(target: Target): Promise<GetResult>;
   // Locate: every node matching the query, as slim handles (identity + a cheap layout world-model). May be
   // empty; AND-combines type/name/key/within (default scope: current page). The query is a FILTER, not an
   // address — only `within` takes a target (id/key/handle); the other facets are match conditions, and a
@@ -619,7 +622,7 @@ export const VERBS: VerbDoc[] = [
   { category: "structure", signature: "await flcm.remove(target)", builds: "nothing — deletes the node and its subtree", args: "a target; returns { removedId, parent }", quickStart: "await flcm.remove(target)" },
   { category: "structure", signature: "await flcm.clone(target, parent?)", builds: "a faithful live duplicate (key-less)", args: "a target, and optionally where the copy lands (default: beside the original). The copy path for subtrees a spec rebuild can't reproduce — anything holding an INSTANCE", quickStart: "await flcm.clone(target, parent?)" },
   { category: "build", signature: "flcm.fromRead(spec)", builds: "a `get` result re-authored as a buildable spec", args: "a spec from flcm.get, subtree and all — the constructor is picked by each node's `type` and `children` recurse. Returns a constructor-built node — render it, or place it with append/prepend/insertBefore/insertAfter. (A single node's spec can also spread straight into its constructor: flcm.rect({ ...spec, width: 320 }).) Anything the read shape carries that flcm has no word for (an INSTANCE, a paint stack, a grid) fails loud by name; flcm.clone is the faithful copy for those", quickStart: "flcm.fromRead(spec)" },
-  { category: "read", signature: "await flcm.get(target)", builds: "a node's full read spec (values inline)", args: "target: an flcm/key, a node id, flcm.id(id), or a handle" },
+  { category: "read", signature: "await flcm.get(target)", builds: "{ node, components } — the read spec, plus each component named once", args: "target: an flcm/key, a node id, flcm.id(id), or a handle" },
   { category: "read", signature: "await flcm.find(query?, predicate?)", builds: "matching nodes as slim handles", args: "query { type?, name?, key?, within? } AND-combined — a filter, not an address; only `within` takes a target. Optional predicate over the full read shape (n => n.fill === '#FFF')" },
   { category: "read", signature: "await flcm.findOne(query?, predicate?)", builds: "exactly one slim handle (throws on 0 or >1)", args: "same query + predicate as find" },
   { category: "read", signature: "await flcm.selection()", builds: "the current selection as slim handles", args: "no args" },
