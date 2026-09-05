@@ -291,6 +291,7 @@ export interface WriteProps {
   fills?: PaintSpec[];
   strokes?: PaintSpec[];
   strokeWeight?: number;
+  strokeAlign?: "INSIDE" | "OUTSIDE" | "CENTER";
   effects?: EffectSpec[];
   opacity?: number;
   blendMode?: WriteBlendMode; // author `blend` (CSS mix-blend-mode → Figma BlendMode); applied in buildNode (shared: every node has one)

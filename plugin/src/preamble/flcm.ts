@@ -62,9 +62,9 @@ import type {
 // validate.ts, the same one read.ts's locate query fails loud with.
 export const KNOWN_KEYS = {
   shared: ["name", "key", "opacity", "mixBlendMode", "visible", "locked"],
-  edit: ["name", "opacity", "mixBlendMode", "visible", "locked", "fill", "stroke", "strokeWidth", "borderRadius", "effects", "rotation", "clip", "width", "height", "absolute", "pin", "layout", "length", "w", "content", "textStyle", "color"],
+  edit: ["name", "opacity", "mixBlendMode", "visible", "locked", "fill", "stroke", "strokeWidth", "strokeAlign", "borderRadius", "effects", "rotation", "clip", "width", "height", "absolute", "pin", "layout", "length", "w", "content", "textStyle", "color"],
   size: ["width", "height", "absolute", "pin"],
-  appearance: ["fill", "stroke", "strokeWidth", "borderRadius", "effects", "rotation"],
+  appearance: ["fill", "stroke", "strokeWidth", "strokeAlign", "borderRadius", "effects", "rotation"],
   frame: ["layout", "clip"],
   layout: ["mode", "gap", "padding", "justifyContent", "alignItems"],
   text: ["textStyle", "color"],
@@ -72,7 +72,7 @@ export const KNOWN_KEYS = {
   textStyle: ["fontFamily", "fontWeight", "fontSize", "fontStyle", "lineHeight", "letterSpacing", "textDecoration", "textTransform", "fontVariant", "textAlign", "textAlignVertical", "paragraphSpacing", "paragraphIndent", "listSpacing", "hyperlink", "boldWeight", "lineClamp"],
   run: ["fontWeight", "fontSize", "fontFamily", "fontStyle", "lineHeight", "letterSpacing", "textDecoration", "textTransform", "fontVariant", "paragraphSpacing", "paragraphIndent", "listSpacing", "color", "hyperlink"],
   line: ["stroke", "color", "strokeWidth", "length", "w", "rotation", "absolute", "pin"],
-  path: ["d", "fill", "stroke", "strokeWidth", "effects", "rotation"],
+  path: ["d", "fill", "stroke", "strokeWidth", "strokeAlign", "effects", "rotation"],
   image: ["scaleMode", "placeholder"],
   gradient: ["type", "stops", "angle", "at"],
   effects: ["shadow", "blur", "backgroundBlur", "glass", "noise", "texture", "progressiveBlur"],
@@ -406,11 +406,28 @@ export function compileNodeLocalProps(wn: WriteProps, props: AppearanceProps, op
   if (props.fill != null) wn.fills = compilePaintWord(props.fill, "fill");
   if (props.stroke != null) wn.strokes = compilePaintWord(props.stroke, "stroke");
   if (props.strokeWidth != null) wn.strokeWeight = length(props.strokeWidth);
+  if (props.strokeAlign != null) wn.strokeAlign = compileStrokeAlign(props.strokeAlign);
   if (props.effects != null) wn.effects = props.effects === "none" ? [] : normalizeEffects(props.effects);
   if (opts.radius && props.borderRadius != null) wn.borderRadius = length(props.borderRadius);
   const clip = (props as FrameProps).clip;
   if (opts.clip && clip != null) { assertScalarType(clip, "boolean", "clip"); wn.clip = clip; }
   if (props.rotation != null) { assertScalarType(props.rotation, "number", "rotation"); wn.rotation = props.rotation; }
+}
+
+// Which side of the edge a border sits on. Lowercase on both sides of the surface (the read shape emits
+// "outside"/"center" and omits the default), uppercased here to Figma's own enum.
+const STROKE_ALIGNS: Record<string, "INSIDE" | "OUTSIDE" | "CENTER"> = {
+  inside: "INSIDE",
+  outside: "OUTSIDE",
+  center: "CENTER",
+};
+
+function compileStrokeAlign(value: unknown): "INSIDE" | "OUTSIDE" | "CENTER" {
+  const hit = typeof value === "string" ? STROKE_ALIGNS[value.toLowerCase()] : undefined;
+  if (!hit) {
+    throw new Error('flcm: strokeAlign is "inside", "outside" or "center" — got ' + JSON.stringify(value) + ".");
+  }
+  return hit;
 }
 
 // THE paint-word compile, shared by every constructor and edit's deltas so values and rejections

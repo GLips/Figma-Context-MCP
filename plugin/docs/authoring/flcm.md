@@ -125,6 +125,7 @@ flcm.ellipse({ width: 16, height: 16, absolute: { x: "40%", y: "50%", anchor: { 
 | `fill` | color / gradient | Background paint: a color/gradient string or flcm.gradient(...). "none" removes it. |
 | `stroke` | color / gradient | Border paint. "none" removes it. |
 | `strokeWidth` | number \| "Npx" | Border thickness. |
+| `strokeAlign` | "inside" \| "outside" \| "center" | Which side of the edge. Default "inside". |
 | `borderRadius` | number \| "Npx" | Corner radius. Frames and rectangles only. |
 | `effects` | effects value | Shadows / blur: flcm.effects({...}) or a CSS-string bag. "none" removes all effects. |
 | `rotation` | number (deg) | Rotation in degrees. |
@@ -224,6 +225,7 @@ Each styled run's delta fields:
 | `fill` | color / gradient | Background paint: a color/gradient string or flcm.gradient(...). "none" removes it. |
 | `stroke` | color / gradient | Border paint. "none" removes it. |
 | `strokeWidth` | number \| "Npx" | Border thickness. |
+| `strokeAlign` | "inside" \| "outside" \| "center" | Which side of the edge. Default "inside". |
 | `borderRadius` | number \| "Npx" | Corner radius. Frames and rectangles only. |
 | `effects` | effects value | Shadows / blur: flcm.effects({...}) or a CSS-string bag. "none" removes all effects. |
 | `rotation` | number (deg) | Rotation in degrees. |
@@ -251,6 +253,7 @@ Each styled run's delta fields:
 | `fill` | color / gradient | Background paint: a color/gradient string or flcm.gradient(...). "none" removes it. |
 | `stroke` | color / gradient | Border paint. "none" removes it. |
 | `strokeWidth` | number \| "Npx" | Border thickness. |
+| `strokeAlign` | "inside" \| "outside" \| "center" | Which side of the edge. Default "inside". |
 | `effects` | effects value | Shadows / blur: flcm.effects({...}) or a CSS-string bag. "none" removes all effects. |
 | `rotation` | number (deg) | Rotation in degrees. |
 
@@ -325,11 +328,11 @@ flcm.rect({ width: 120, height: 40, fill: flcm.image("public/logo.png", { scaleM
 
 ## Effects
 
-An `effects` value is either the result of `flcm.effects({...})` (recommended) or a CSS-string bag: `{ boxShadow?, textShadow?, filter?, backdropFilter? }`.
+Write effects as the CSS you'd already write — a bag of `{ boxShadow?, textShadow?, filter?, backdropFilter? }`. `flcm.effects({...})` is the second form, and the only way to reach the Figma-native effects CSS has no word for (`glass`, `noise`, `texture`, `progressiveBlur`).
 
 ```js
-flcm.frame({ effects: flcm.effects({ shadow: { y: 12, blur: 32, color: "rgba(0,0,0,0.18)" }, backgroundBlur: 16 }) });
-flcm.frame({ effects: { boxShadow: "0px 12px 32px rgba(0,0,0,0.18)", backdropFilter: "blur(16px)" } });
+flcm.frame({ effects: { boxShadow: "0 12px 32px rgba(0,0,0,0.18)", backdropFilter: "blur(16px)" } });
+flcm.frame({ effects: flcm.effects({ shadow: { y: 12, blur: 32, color: "rgba(0,0,0,0.18)" }, glass: { refraction: 0.4 } }) });
 ```
 
 Blur values are written in **CSS px** — you always write the CSS number and we map it to Figma's scale for you.
@@ -395,6 +398,7 @@ out.keyed.chip.intent;    // undefined — a plainly fixed node
 | `fill` | color / gradient | Background paint: a color/gradient string or flcm.gradient(...). "none" removes it. |
 | `stroke` | color / gradient | Border paint. "none" removes it. |
 | `strokeWidth` | number \| "Npx" | Border thickness. |
+| `strokeAlign` | "inside" \| "outside" \| "center" | Which side of the edge. Default "inside". |
 | `borderRadius` | number \| "Npx" | Corner radius. Frames and rectangles only. |
 | `effects` | effects value | Shadows / blur: flcm.effects({...}) or a CSS-string bag. "none" removes all effects. |
 | `rotation` | number (deg) | Rotation in degrees. |
@@ -412,11 +416,11 @@ out.keyed.chip.intent;    // undefined — a plainly fixed node
 
 ### Words by node type
 
-- **FRAME** — `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `width`, `height`, `absolute`, `pin`, `fill`, `stroke`, `strokeWidth`, `borderRadius`, `effects`, `rotation`, `layout`, `clip`
+- **FRAME** — `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `width`, `height`, `absolute`, `pin`, `fill`, `stroke`, `strokeWidth`, `strokeAlign`, `borderRadius`, `effects`, `rotation`, `layout`, `clip`
 - **TEXT** — `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `width`, `height`, `absolute`, `pin`, `textStyle`, `color`, `content`
-- **RECTANGLE / ELLIPSE** — `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `width`, `height`, `absolute`, `pin`, `fill`, `stroke`, `strokeWidth`, `borderRadius`, `effects`, `rotation`
+- **RECTANGLE / ELLIPSE** — `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `width`, `height`, `absolute`, `pin`, `fill`, `stroke`, `strokeWidth`, `strokeAlign`, `borderRadius`, `effects`, `rotation`
 - **LINE** — `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `stroke`, `color`, `strokeWidth`, `length`, `w`, `rotation`, `absolute`, `pin`
-- **VECTOR (path- or svg-born)** — `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `width`, `height`, `absolute`, `pin`, `fill`, `stroke`, `strokeWidth`, `effects`, `rotation`
+- **VECTOR (path- or svg-born)** — `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `width`, `height`, `absolute`, `pin`, `fill`, `stroke`, `strokeWidth`, `strokeAlign`, `effects`, `rotation`
 
 On a node type flcm can't create (GROUP, INSTANCE, COMPONENT, …) only the shared words apply: `name`, `opacity`, `mixBlendMode`, `visible`, `locked`.
 
@@ -577,7 +581,7 @@ Leaf values are CSS-familiar, but only a **documented subset** is supported. Any
 ### Effects (CSS strings)
 
 When you pass effects as CSS strings (`effects: { … }`):
-- `boxShadow` / `textShadow`: `[inset] <x>px <y>px <blur>px [<spread>px] <color>`, comma-separated for multiple.
+- `boxShadow` / `textShadow`: `[inset] <x> <y> [<blur>] [<spread>] <color>`, comma-separated for multiple. Lengths are `Npx` or a bare `0`; the color is required (`currentColor` can't be resolved here).
 - `filter`: **`blur(Npx)` only** — a layer blur. Any other function (`drop-shadow(...)`, `brightness(...)`) throws.
 - `backdropFilter`: **`blur(Npx)` only** — a background blur. Figma's background blur has just a radius: `saturate()`/`brightness()`/`contrast()` and other backdrop-filter functions have no equivalent and throw.
 
@@ -630,10 +634,13 @@ Everything above fails loud. One case can't, because the plugin API exposes no g
 
 ### The login screen
 
-A gradient background, an absolute radial-glow decoration declared first (so it sits behind), a frosted card with a shadow + background blur, fixed and "fill" sizing, rgba/hex solids, numeric font weights, and keyed nodes addressed after render.
+A gradient background, an absolute radial-glow decoration declared first (so it sits behind), a frosted card whose shadow and blur are plain CSS strings, fixed and "fill" sizing, rgba/hex solids, numeric font weights, and keyed nodes addressed after render.
 
 ```js
-const field = (key: string, label: string, placeholder: string) =>
+const fields = [
+  { key: "email", label: "Email", placeholder: "you@example.com" },
+  { key: "password", label: "Password", placeholder: "••••••••" },
+].map(({ key, label, placeholder }) =>
   flcm.frame({ key, layout: { mode: "column", gap: 6 }, width: "fill" }, [
     flcm.text(label, {
       textStyle: { fontSize: 13, fontWeight: 500 },
@@ -651,7 +658,8 @@ const field = (key: string, label: string, placeholder: string) =>
       },
       [flcm.text(placeholder, { textStyle: { fontSize: 15 }, color: "rgba(255,255,255,0.4)" })],
     ),
-  ]);
+  ]),
+);
 
 const screen = flcm.frame(
   {
@@ -687,14 +695,10 @@ const screen = flcm.frame(
         fill: "rgba(255,255,255,0.04)",
         stroke: "rgba(255,255,255,0.08)",
         strokeWidth: 1,
-        effects: flcm.effects({
-          shadow: { y: 12, blur: 32, color: "rgba(0,0,0,0.18)" },
-          backgroundBlur: 16,
-        }),
+        effects: { boxShadow: "0 12px 32px rgba(0,0,0,0.18)", backdropFilter: "blur(8px)" },
       },
       [
-        field("email", "Email", "you@example.com"),
-        field("password", "Password", "••••••••"),
+        ...fields,
         flcm.frame(
           {
             key: "submit",

@@ -7,7 +7,10 @@ import type { Flcm } from "@framelink/plugin/schema";
 // and for the agent-facing description of what this example demonstrates (kept there, not duplicated).
 export async function loginExample(flcm: Flcm) {
   // example:start
-  const field = (key: string, label: string, placeholder: string) =>
+  const fields = [
+    { key: "email", label: "Email", placeholder: "you@example.com" },
+    { key: "password", label: "Password", placeholder: "••••••••" },
+  ].map(({ key, label, placeholder }) =>
     flcm.frame({ key, layout: { mode: "column", gap: 6 }, width: "fill" }, [
       flcm.text(label, {
         textStyle: { fontSize: 13, fontWeight: 500 },
@@ -25,7 +28,8 @@ export async function loginExample(flcm: Flcm) {
         },
         [flcm.text(placeholder, { textStyle: { fontSize: 15 }, color: "rgba(255,255,255,0.4)" })],
       ),
-    ]);
+    ]),
+  );
 
   const screen = flcm.frame(
     {
@@ -61,14 +65,10 @@ export async function loginExample(flcm: Flcm) {
           fill: "rgba(255,255,255,0.04)",
           stroke: "rgba(255,255,255,0.08)",
           strokeWidth: 1,
-          effects: flcm.effects({
-            shadow: { y: 12, blur: 32, color: "rgba(0,0,0,0.18)" },
-            backgroundBlur: 16,
-          }),
+          effects: { boxShadow: "0 12px 32px rgba(0,0,0,0.18)", backdropFilter: "blur(8px)" },
         },
         [
-          field("email", "Email", "you@example.com"),
-          field("password", "Password", "••••••••"),
+          ...fields,
           flcm.frame(
             {
               key: "submit",

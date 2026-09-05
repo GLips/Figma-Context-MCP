@@ -29,6 +29,15 @@ test("pad: numbers, the CSS box shorthand and edge objects compile; an out-of-su
   assert.throws(() => frame({ layout: { padding: [] as never } }), /pad must be a number, a CSS box shorthand/);
 });
 
+test("strokeAlign takes the read shape's own lowercase words and rejects anything else", () => {
+  // Same spelling on both sides of the surface: a `get` result reports "outside"/"center" and spreads
+  // straight back into a constructor. Absent means Figma's INSIDE, which is the CSS `border`.
+  assert.equal(rect({ stroke: "#000", strokeAlign: "outside" }).strokeAlign, "OUTSIDE");
+  assert.equal(rect({ stroke: "#000", strokeAlign: "center" }).strokeAlign, "CENTER");
+  assert.equal(rect({ stroke: "#000" }).strokeAlign, undefined);
+  assert.throws(() => rect({ strokeAlign: "outer" as never }), /strokeAlign is "inside", "outside" or "center"/);
+});
+
 test("create rejects layout words the type can't realize — the SAME gate edit consults (no asymmetry)", () => {
   // One authority answers for both verbs (layout-legality.ts assertLayoutRealizableForType), so
   // the pin is one test per rule, not per verb — a rule can't be strict in edit and lax in create.

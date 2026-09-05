@@ -125,11 +125,11 @@ flcm.rect({ width: 120, height: 40, fill: flcm.image("public/logo.png", { scaleM
 - **Local paths are confined to the server's asset root** (\`--asset-root\`, default: the directory the server started in). A path outside it is refused, naming the root.
 - An **unfetchable, blocked, out-of-root, oversize, or non-image source fails loud** — never a silent blank fill.`;
 
-export const EFFECTS_INTRO = `An \`effects\` value is either the result of \`flcm.effects({...})\` (recommended) or a CSS-string bag: \`{ boxShadow?, textShadow?, filter?, backdropFilter? }\`.
+export const EFFECTS_INTRO = `Write effects as the CSS you'd already write — a bag of \`{ boxShadow?, textShadow?, filter?, backdropFilter? }\`. \`flcm.effects({...})\` is the second form, and the only way to reach the Figma-native effects CSS has no word for (\`glass\`, \`noise\`, \`texture\`, \`progressiveBlur\`).
 
 \`\`\`js
-flcm.frame({ effects: flcm.effects({ shadow: { y: 12, blur: 32, color: "rgba(0,0,0,0.18)" }, backgroundBlur: 16 }) });
-flcm.frame({ effects: { boxShadow: "0px 12px 32px rgba(0,0,0,0.18)", backdropFilter: "blur(16px)" } });
+flcm.frame({ effects: { boxShadow: "0 12px 32px rgba(0,0,0,0.18)", backdropFilter: "blur(16px)" } });
+flcm.frame({ effects: flcm.effects({ shadow: { y: 12, blur: 32, color: "rgba(0,0,0,0.18)" }, glass: { refraction: 0.4 } }) });
 \`\`\`
 
 Blur values are written in **CSS px** — you always write the CSS number and we map it to Figma's scale for you.
@@ -249,7 +249,7 @@ export const CSS_SUBSET = `Leaf values are CSS-familiar, but only a **documented
 ### Effects (CSS strings)
 
 When you pass effects as CSS strings (\`effects: { … }\`):
-- \`boxShadow\` / \`textShadow\`: \`[inset] <x>px <y>px <blur>px [<spread>px] <color>\`, comma-separated for multiple.
+- \`boxShadow\` / \`textShadow\`: \`[inset] <x> <y> [<blur>] [<spread>] <color>\`, comma-separated for multiple. Lengths are \`Npx\` or a bare \`0\`; the color is required (\`currentColor\` can't be resolved here).
 - \`filter\`: **\`blur(Npx)\` only** — a layer blur. Any other function (\`drop-shadow(...)\`, \`brightness(...)\`) throws.
 - \`backdropFilter\`: **\`blur(Npx)\` only** — a background blur. Figma's background blur has just a radius: \`saturate()\`/\`brightness()\`/\`contrast()\` and other backdrop-filter functions have no equivalent and throw.
 

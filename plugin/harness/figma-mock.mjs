@@ -19,7 +19,7 @@ const clonePaints = (p) => (Array.isArray(p) ? JSON.parse(JSON.stringify(p)) : p
 // The visual/layout props carried across clone (instance) and promote (createComponentFromNode).
 const COPY_FIELDS = ["name", "layoutMode", "itemSpacing", "paddingTop", "paddingRight", "paddingBottom",
   "paddingLeft", "primaryAxisAlignItems", "counterAxisAlignItems", "primaryAxisSizingMode",
-  "counterAxisSizingMode", "layoutGrow", "layoutAlign", "layoutPositioning", "constraints", "strokeWeight",
+  "counterAxisSizingMode", "layoutGrow", "layoutAlign", "layoutPositioning", "constraints", "strokeWeight", "strokeAlign",
   "cornerRadius", "opacity", "visible", "rotation", "characters", "fontSize", "textAutoResize",
   // x/y ride along because a live clone() preserves position: without them the mock can't show
   // that flcm.clone with no parent lands the copy exactly ON TOP of the original in a free-form
@@ -57,6 +57,7 @@ class Node {
     this.fills = [];
     this.strokes = [];
     this.strokeWeight = 1;
+    this.strokeAlign = "INSIDE";
     this.cornerRadius = 0;
     this.opacity = 1;
     // Every live SceneNode (bar SLICE) carries a blendMode; the appliers' `"blendMode" in node`

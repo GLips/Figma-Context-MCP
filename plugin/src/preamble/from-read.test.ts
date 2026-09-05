@@ -105,7 +105,6 @@ test("a type with no authored form fails loud by name, pointing at flcm.clone", 
 test("real state flcm can't author fails by name; derived fields drop silently", async () => {
   createFigmaMock();
   // Refused: each carries state a rebuilt node would silently not have.
-  assert.throws(() => fromRead(spec({ type: "RECTANGLE", strokeAlign: "outside" })), /`strokeAlign` has no authored form/);
   assert.throws(() => fromRead(spec({ type: "RECTANGLE", strokeDashes: [4, 4] })), /`strokeDashes` has no authored form/);
   assert.throws(() => fromRead(spec({ type: "FRAME", componentId: "1:2" })), /`componentId` has no authored form/);
   // A compressed read is a different mistake from a malformed value, so it gets its own message.

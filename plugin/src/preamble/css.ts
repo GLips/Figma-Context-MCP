@@ -279,7 +279,10 @@ function parseShadow(s: string): EffectSpec {
   const inner = tokens[0] === "inset";
   if (inner) tokens.shift();
   const lengths: number[] = [];
-  while (tokens.length && /^-?\d+(\.\d+)?px$/.test(tokens[0])) lengths.push(parseFloat(tokens.shift()!));
+  // `0` is the one unitless length CSS allows, and it's how every author spells a shadow with no
+  // x-offset ("0 2px 6px …"). Any OTHER bare number stays a non-length, so it falls through to the
+  // color and fails there by name rather than being read as px.
+  while (tokens.length && /^-?\d+(\.\d+)?px$|^-?0(\.0+)?$/.test(tokens[0])) lengths.push(parseFloat(tokens.shift()!));
   if (lengths.length < 2) throw badEffect(s, "box-shadow needs at least <x>px <y>px");
   // No color token -> CSS `currentColor`, which we can't resolve here. Reject rather than silently
   // substitute a translucent black (a silent-wrong divergence per ADR-0003) — name the fix in the error.

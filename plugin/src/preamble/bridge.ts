@@ -210,6 +210,7 @@ export function applyPaint(node: any, wn: WriteProps, ctx: RenderResources): voi
   if (wn.fills) node.fills = wn.fills.length ? [paintOf(wn.fills[0], ctx)] : [];
   if (wn.strokes) node.strokes = wn.strokes.length ? [paintOf(wn.strokes[0], ctx)] : [];
   if (wn.strokeWeight != null && "strokeWeight" in node) node.strokeWeight = wn.strokeWeight;
+  if (wn.strokeAlign != null && "strokeAlign" in node) node.strokeAlign = wn.strokeAlign;
   if (wn.borderRadius != null && "cornerRadius" in node) node.cornerRadius = wn.borderRadius;
   if (wn.effects && "effects" in node) node.effects = toFigmaEffects(wn.effects);
   // The `in` guard matters for edit targets: a SliceNode carries no MinimalBlendMixin at all.

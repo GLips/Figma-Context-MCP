@@ -42,3 +42,13 @@ test("parseCssEffects: a colorless box-shadow rejects (CSS currentColor is unava
   assert.equal(fx.length, 1);
   assert.equal(fx[0].kind, "shadow");
 });
+
+test("parseCssEffects: a bare 0 is a length, any other unitless number is not", () => {
+  // The spelling every CSS author actually writes. Reading it as "no length here" made the most
+  // ordinary shadow string in the world fail with "needs at least <x>px <y>px".
+  const [bare] = parseCssEffects({ boxShadow: "0 2px 6px rgba(0,0,0,0.18)" });
+  const [unit] = parseCssEffects({ boxShadow: "0px 2px 6px rgba(0,0,0,0.18)" });
+  assert.deepEqual(bare, unit);
+  // A unitless NON-zero is not a CSS length — it falls through to the color and fails there.
+  assert.throws(() => parseCssEffects({ boxShadow: "0 2 6 rgba(0,0,0,0.18)" }), /box-shadow/);
+});

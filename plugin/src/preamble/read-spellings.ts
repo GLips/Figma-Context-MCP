@@ -82,7 +82,7 @@ export const READ_FIELD_DISPOSITIONS: Record<keyof SimplifiedNode, ReadFieldDisp
     refuse: "`template` is a COMPRESSED read's back-reference into the design's `templates` table, so this node's body isn't here at all. flcm.get returns the expanded shape — re-read the node with it",
   },
   strokeDashes: { refuse: "flcm strokes are solid — there is no dash-pattern word" },
-  strokeAlign: { refuse: 'flcm strokes align INSIDE (the CSS `border` an author writes); "outside" and "center" have no word' },
+  strokeAlign: "author",
   aspectRatio: { refuse: "a locked aspect ratio (Figma's constrain-proportions) has no flcm word — the rebuild would silently stop holding its proportions" },
   componentId: { refuse: "this node is a component instance, and flcm cannot author one — a rebuild from props would be a detached lookalike" },
   componentProperties: { refuse: "component property VALUES belong to an instance, and flcm cannot author instances" },

@@ -142,6 +142,11 @@ const APPEARANCE_FIELDS = {
   fill: color('Background paint: a color/gradient string or flcm.gradient(...). "none" removes it.'),
   stroke: color('Border paint. "none" removes it.'),
   strokeWidth: metric("Border thickness."),
+  strokeAlign: prop(
+    z.custom<"inside" | "outside" | "center">(),
+    'Which side of the edge. Default "inside".',
+    '"inside" | "outside" | "center"',
+  ),
   borderRadius: metric("Corner radius. Frames and rectangles only."),
   effects: prop(z.custom<EffectsInput>(), 'Shadows / blur: flcm.effects({...}) or a CSS-string bag. "none" removes all effects.', "effects value"),
   rotation: degrees("Rotation in degrees."),
@@ -328,6 +333,7 @@ const PATH_FIELDS = {
   fill: APPEARANCE_FIELDS.fill,
   stroke: APPEARANCE_FIELDS.stroke,
   strokeWidth: APPEARANCE_FIELDS.strokeWidth,
+  strokeAlign: APPEARANCE_FIELDS.strokeAlign,
   effects: APPEARANCE_FIELDS.effects,
   rotation: APPEARANCE_FIELDS.rotation,
 };
@@ -377,6 +383,7 @@ const EDIT_FIELDS = {
   fill: APPEARANCE_FIELDS.fill,
   stroke: APPEARANCE_FIELDS.stroke,
   strokeWidth: APPEARANCE_FIELDS.strokeWidth,
+  strokeAlign: APPEARANCE_FIELDS.strokeAlign,
   borderRadius: APPEARANCE_FIELDS.borderRadius,
   effects: APPEARANCE_FIELDS.effects,
   rotation: APPEARANCE_FIELDS.rotation,

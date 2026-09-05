@@ -25,8 +25,8 @@ const EXAMPLE_META: Record<ExampleId, { title: string; intro: string }> = {
     title: "The login screen",
     intro:
       "A gradient background, an absolute radial-glow decoration declared first (so it sits behind), a " +
-      'frosted card with a shadow + background blur, fixed and "fill" sizing, rgba/hex solids, numeric ' +
-      "font weights, and keyed nodes addressed after render.",
+      'frosted card whose shadow and blur are plain CSS strings, fixed and "fill" sizing, rgba/hex solids, ' +
+      "numeric font weights, and keyed nodes addressed after render.",
   },
   caption: {
     title: "A feed caption (rich text)",
