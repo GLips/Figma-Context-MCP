@@ -116,6 +116,13 @@ const READ_FIELD_DISPOSITIONS: Record<keyof SimplifiedNode, ReadFieldDisposition
   componentPropertyReferences: {
     refuse: "a component property BINDING (this node's text/visibility driven by a component prop) has no flcm word",
   },
+  propertyDefinitions: {
+    refuse: "component property DEFINITIONS belong to a COMPONENT or COMPONENT_SET, and flcm cannot author either — a rebuild would be a plain frame that defines nothing",
+  },
+  // Which fields the designer overrode on an instance sublayer. The overridden VALUES are already in the
+  // same spec (`fills`, `text`, …); this only names them, and a rebuild is detached from the component
+  // either way, so there is no distinction left to carry.
+  overrides: "drop",
 };
 
 // Which read fields each authorable type has a word for. The universal ones — name/opacity/type and the

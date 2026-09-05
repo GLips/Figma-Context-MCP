@@ -789,9 +789,8 @@ assert.ok(raceErr, "a write issued inside the handshake window must not run");
 // GET_VERSION reply, and `refuseProtocolSkew` degrades silently to "the connected plugin" when that
 // field is missing. Pinning the full text is what keeps `pluginVersion` round-tripping — a reply,
 // parse, or message change that dropped it would otherwise pass every check in this file.
-assert.match(
-  raceErr.message,
-  /plugin v0\.0\.1 \(protocol v0\)/,
+assert.ok(
+  raceErr.message.includes(`plugin v0.0.1 (protocol v${MIN_PROTOCOL_VERSION - 1})`),
   "it is refused with the update-the-plugin message, naming the plugin version it round-tripped",
 );
 assert.equal(raceBridge.protocolCompatibility(), "incompatible", "the verdict landed while the write was held");

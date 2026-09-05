@@ -79,6 +79,6 @@ export default [
     // run by the root `validate`.
     // .agent_cache holds external repos cloned for reference reading (gitignored, never ours) — eslint
     // walks it regardless of .gitignore, so 300+ of someone else's lint errors would fail `pnpm validate`.
-    ignores: ["dist/**", "node_modules/**", "plugin/**", ".agent_cache/**"],
+    ignores: ["**/dist/**", "node_modules/**", "plugin/**", ".agent_cache/**", ".claude/**"],
   },
 ];
