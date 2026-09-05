@@ -1,7 +1,11 @@
 // from-read — `flcm.fromRead(spec)`: the SimplifiedNode a `get` returns, re-authored as constructor
-// CALLS. The constructors already speak the read shape's spellings (read-spellings.ts), so all that is
-// left for a whole SUBTREE is what a single constructor can't do: pick the constructor by the spec's
-// `type`, and recurse into `children`, which arrive as read specs rather than built nodes.
+// CALLS. Read and write are one vocabulary (docs/canonical-vocabulary.md): the same word names the same
+// thing on both sides, so a single spec spreads straight into its constructor or into `edit`, and the
+// read shape's read-only words (`id`, `type`, `children`, a root's `designedWidth`) are judged by the
+// prelude every entry runs (validate.ts acceptAuthoringProps). What is left for this verb is what ONE
+// constructor call can't take:
+//   • the by-type dispatch, and the recursion into `children`, which arrive as read specs;
+//   • real state flcm has no word for — refused by NAME, pointing at flcm.clone.
 //
 // It emits calls, never IR. ADR-0012 makes the constructors the only authoring dialect — render refuses
 // any WriteNode they didn't mint — so there is no raw-IR shortcut to take even if it were tempting.
@@ -11,11 +15,30 @@
 // the ambiguity that already produced a silent destructive bug. `fromRead` output is constructor-built,
 // so `append(other, flcm.fromRead(spec))` classifies as a spec on provenance alone, and a RAW spec keeps
 // being refused (structure.ts) with a pointer here.
+//
+// FIDELITY IS THE CONTRACT. Real state the read shape carries that the rebuild has no word for fails
+// LOUD by name. The only silent drops are fields whose information is already elsewhere in the same
+// bag, each named in the table below with why.
+//
+// VALUE-level legality is NOT this verb's call. Read's layout unions carry spellings the canvas can't
+// realize ("baseline", "stretch" on justifyContent, `mode: "grid"`) and the constructors are the stated
+// authority on which values are realizable (core/src/transformers/layout/common.ts). So a read-legal/
+// write-illegal VALUE rides through and the constructor names the supported set; this verb only
+// intercepts the two read artifacts a value parser would misname (a compressed read's style refs, a
+// multi-value shorthand). The grid-only layout WORDS are refused here by name, since a word is
+// vocabulary, not a value.
+//
+// THE CEILING, stated so it isn't mistaken for a promise: this verb can only refuse what the read shape
+// CARRIES. State the READ side already dropped is invisible here and rebuilds as the flcm default with no
+// error — `clipsContent`, a paint's blendMode, an image paint's opacity/rotation/filters, and the ORDER of
+// a node's effect stack are all known cases (each a read-side fix). A node whose fidelity depends on one
+// of them is a flcm.clone case, and the agent has no way to tell from the spec. Do not add a guess here
+// to paper over one: the fix belongs where the information was lost.
 
 import type { WriteNode, WriteChild } from "./ir.js";
-import { frame, text, rect, ellipse, line } from "./flcm.js";
-import type { SimplifiedNode } from "@framelink/core";
-import { CLONE_REMEDY, own } from "./read-spellings.js";
+import { frame, text, rect, ellipse, line, CONSTRUCTOR_KEYS_BY_TYPE } from "./flcm.js";
+import type { SimplifiedNode, SimplifiedLayout } from "@framelink/core";
+import { own } from "./validate.js";
 
 // The read types that have an flcm constructor. Read renames VECTOR → IMAGE-SVG and collapses SVG-heavy
 // containers into it, so no read type maps to flcm.svg/flcm.path: neither markup nor path data survives
@@ -32,7 +55,85 @@ const UNAUTHORABLE_TYPES: Record<string, string> = {
   COMPONENT_SET: "a COMPONENT_SET is a variant container — rebuilding its props would produce a plain frame, not a component set",
 };
 
-type Builder = (spec: SimplifiedNode, subject: string) => WriteNode;
+export const CLONE_REMEDY = "A live node keeps this under flcm.clone(target, parent), which copies it whole.";
+
+// Every field of the read shape, with its disposition. Typed as an EXACT Record over `keyof
+// SimplifiedNode`, which is the drift guard: a field added to (or removed from) the read shape fails
+// plugin typecheck here until someone decides what a rebuild does with it.
+//   • "author"  — the same word on both sides; rides through to the constructor's own gate.
+//   • "prelude" — the read-only words validate.ts folds (`id`, `type`, `children`, `designedWidth`).
+//                 They ride through untouched; the prelude judges them, and `type`/`children` are this
+//                 verb's own dispatch and recursion on the way.
+//   • "drop"    — purely derived; its information is already elsewhere in the same bag.
+//   • refuse    — real state with no authoring word. Named, with the reason.
+type ReadFieldDisposition = "author" | "prelude" | "drop" | { refuse: string };
+
+export const READ_FIELD_DISPOSITIONS: Record<keyof SimplifiedNode, ReadFieldDisposition> = {
+  id: "prelude",
+  name: "author",
+  type: "prelude",
+  // NOT derived, despite reading like it: the read side omits a run's explicit `fontWeight` exactly when
+  // it matches this value (core/transformers/text.ts classifyRun), so `boldWeight` is the ONLY carrier of
+  // the weight `**` stands for. Dropping it re-rendered every Semi Bold emphasis at 700.
+  boldWeight: "author",
+  layout: "author",
+  text: "author",
+  textStyle: "author",
+  fill: "author",
+  stroke: "author",
+  strokeWidth: "author",
+  effects: "author",
+  opacity: "author",
+  borderRadius: "author",
+  children: "prelude",
+  width: "author",
+  height: "author",
+  designedWidth: "prelude",
+  designedHeight: "prelude",
+  position: "author",
+  left: "author",
+  top: "author",
+  rotation: "author",
+  template: {
+    refuse: "`template` is a COMPRESSED read's back-reference into the design's `templates` table, so this node's body isn't here at all. flcm.get returns the expanded shape — re-read the node with it",
+  },
+  strokeDashes: { refuse: "flcm strokes are solid — there is no dash-pattern word" },
+  strokeAlign: "author",
+  aspectRatio: { refuse: "a locked aspect ratio (Figma's constrain-proportions) has no flcm word — the rebuild would silently stop holding its proportions" },
+  componentId: { refuse: "this node is a component instance, and flcm cannot author one — a rebuild from props would be a detached lookalike" },
+  componentProperties: { refuse: "component property VALUES belong to an instance, and flcm cannot author instances" },
+  componentPropertyReferences: { refuse: "a component property BINDING (this node's text/visibility driven by a component prop) has no flcm word" },
+  propertyDefinitions: { refuse: "component property DEFINITIONS belong to a COMPONENT or COMPONENT_SET, and flcm cannot author either — a rebuild would be a plain frame that defines nothing" },
+  // Which fields the designer overrode on an instance sublayer. The overridden VALUES are already in the
+  // same bag (`fill`, `text`, …); this only names them, and a rebuild is detached from the component
+  // either way, so there is no distinction left to carry.
+  overrides: "drop",
+};
+
+// Every SimplifiedLayout word, with the same dispositions — an exact Record for the same reason. The
+// authorable five ARE flcm's `layout` prop; the rest are container config with no flcm word.
+export const LAYOUT_WORD_DISPOSITIONS: Record<keyof SimplifiedLayout, ReadFieldDisposition> = {
+  mode: "author",
+  gap: "author",
+  padding: "author",
+  justifyContent: "author",
+  alignItems: "author",
+  alignSelf: { refuse: 'cross-axis self-alignment has no flcm word — a child stretches by sizing that axis "fill"' },
+  wrap: { refuse: "flcm auto-layout does not wrap — there is no wrap word" },
+  overflowScroll: { refuse: "scroll behavior (Figma's overflowDirection) has no flcm word" },
+  gridTemplateColumns: { refuse: "flcm cannot author a GRID container" },
+  gridTemplateRows: { refuse: "flcm cannot author a GRID container" },
+  gridColumn: { refuse: "grid placement belongs to a GRID parent, which flcm cannot author" },
+  gridRow: { refuse: "grid placement belongs to a GRID parent, which flcm cannot author" },
+  justifySelf: { refuse: "grid self-alignment belongs to a GRID parent, which flcm cannot author" },
+  zIndex: { refuse: "explicit stacking order has no flcm word — sibling order is the z-order" },
+};
+
+const CONSTRUCTOR_SUBJECTS: Record<AuthorableReadType, string> = {
+  FRAME: "flcm.frame", TEXT: "flcm.text", RECTANGLE: "flcm.rect", ELLIPSE: "flcm.ellipse", LINE: "flcm.line",
+};
+
+type Builder = (spec: Record<string, unknown>, subject: string) => WriteNode;
 
 const BUILDERS: Record<AuthorableReadType, Builder> = {
   FRAME: (spec, subject) => {
@@ -42,7 +143,7 @@ const BUILDERS: Record<AuthorableReadType, Builder> = {
     if (children != null && !Array.isArray(children)) {
       throw new Error(subject + ".children: expected the read shape's array of child specs — got " + JSON.stringify(children) + ".");
     }
-    const built = (children ?? []).map((child, i) => buildFromRead(child, childSubject(subject, i, child)));
+    const built = (children ?? []).map((child: unknown, i: number) => buildFromRead(child, childSubject(subject, i, child)));
     return frame(props, built as WriteChild[]);
   },
   TEXT: (spec) => text(spec),
@@ -63,10 +164,10 @@ function buildFromRead(spec: unknown, subject: string): WriteNode {
   if (!spec || typeof spec !== "object" || Array.isArray(spec)) {
     throw new Error(subject + ": expected a `get` result (a read spec object) — got " + JSON.stringify(spec) + ".");
   }
-  const n = spec as SimplifiedNode;
+  const n = spec as Record<string, unknown>;
   const type = assertAuthorableType(n.type, subject);
   try {
-    return BUILDERS[type](n, subject);
+    return BUILDERS[type](readyReadSpec(n, type, subject), subject);
   } catch (e) {
     // The constructor names itself; prefix the path so a deep refusal still says WHICH node. A child's
     // error is already prefixed by its own call, and the frame builder rebuilds children before its own
@@ -76,8 +177,9 @@ function buildFromRead(spec: unknown, subject: string): WriteNode {
   }
 }
 
-function childSubject(subject: string, i: number, child: SimplifiedNode | undefined): string {
-  return subject + " > " + JSON.stringify(child?.name ?? child?.type ?? `child[${i}]`);
+function childSubject(subject: string, i: number, child: unknown): string {
+  const c = (child ?? {}) as { name?: unknown; type?: unknown };
+  return subject + " > " + JSON.stringify(c.name ?? c.type ?? `child[${i}]`);
 }
 
 function assertAuthorableType(type: unknown, subject: string): AuthorableReadType {
@@ -91,4 +193,118 @@ function assertAuthorableType(type: unknown, subject: string): AuthorableReadTyp
       (why || "flcm's constructors build FRAME/TEXT/RECTANGLE/ELLIPSE/LINE (plus svg/path from markup you supply), and this is none of them") +
       ". " + CLONE_REMEDY,
   );
+}
+
+// ---- what a constructor call can't take ----
+
+// Refuse the unauthorable, drop the derived, and hand the rest to the constructor. A key outside the
+// read shape rides through untouched: the constructor's closed set names a typo in its own voice, and
+// this verb has nothing to add.
+function readyReadSpec(src: Record<string, unknown>, type: AuthorableReadType, subject: string): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  const known = CONSTRUCTOR_KEYS_BY_TYPE[type];
+  const constructorSubject = CONSTRUCTOR_SUBJECTS[type];
+  for (const key of Object.keys(src)) {
+    const value = src[key];
+    const disposition = own(READ_FIELD_DISPOSITIONS as Record<string, ReadFieldDisposition>, key);
+    // An explicitly-undefined READ key is absence, not a claim.
+    if (disposition && value == null) continue;
+    if (disposition === "drop") continue;
+    if (typeof disposition === "object") throw refuse(subject, key, disposition.refuse);
+    if (disposition === "author") {
+      // A word that IS in the read shape but not on this node's type — an `effects` on a LINE, a
+      // `borderRadius` on an ELLIPSE — is real state the rebuild would silently not have. Named as the
+      // type's missing word, with the remedy, rather than left to the gate's "unknown prop".
+      if (!known.has(key)) throw noWord(subject, constructorSubject, known, key);
+      out[key] = readyAuthoredValue(key, value, subject);
+      continue;
+    }
+    out[key] = value;
+  }
+  return out;
+}
+
+// ---- the refusals ----
+
+// THE refusal. Every "flcm has no word for this" message in the module is built here, so the sentence
+// and the remedy can't drift between the node-field gate, the layout-word gate and the value guards.
+function refuse(subject: string, what: string, why: string): Error {
+  return new Error(subject + ": `" + what + "` has no authored form — " + why + ". " + CLONE_REMEDY);
+}
+
+function noWord(subject: string, constructorSubject: string, known: ReadonlySet<string>, readKey: string): Error {
+  return new Error(
+    subject + ": `" + readKey + "` is not one of " + constructorSubject + "'s words (" + [...known].join(", ") +
+      "). On a node read with flcm.get this is real state a rebuild can't carry. " + CLONE_REMEDY,
+  );
+}
+
+// ---- values that keep their key ----
+
+function readyAuthoredValue(key: string, value: unknown, subject: string): unknown {
+  switch (key) {
+    case "layout": return readyLayout(value, subject);
+    case "text": return readyTextContent(value, subject);
+    case "textStyle": case "effects": case "fill": case "stroke": return assertNotCompressedRef(value, subject + "." + key);
+    case "strokeWidth": return singleValue(value, subject + ".strokeWidth", "one uniform stroke width, not per-side weights");
+    case "borderRadius": return singleValue(value, subject + ".borderRadius", "one uniform corner radius, not per-corner radii");
+    default: return value;
+  }
+}
+
+// Every style slot (fill/stroke/effects/layout/textStyle) is a REF string when the read was compressed,
+// minted as `<prefix>_<8 hex>` (core/src/style-table.ts). The exact mint shape is matched — not "any
+// string" — because `fill: "#FFF"` is a paint, and only the ref shape is worth its own message: handed
+// to a value parser it reads as a malformed value, not a wrong read mode.
+const STYLE_REF = /^(layout|style|fill|effect)_[0-9a-f]{8}/;
+
+function assertNotCompressedRef<T>(value: T, field: string): T {
+  if (typeof value === "string" && STYLE_REF.test(value)) throw compressedRef(field);
+  return value;
+}
+
+function compressedRef(field: string): Error {
+  return new Error(
+    field + ' is a styles-table REFERENCE (like "fill_a1b2c3d4"), not a value — that spec came from a COMPRESSED read. ' +
+      "flcm.get returns the expanded shape with every value inline; re-read the node with flcm.get, or resolve the ref against the design's `styles` table first.",
+  );
+}
+
+// A read metric that flcm spells with ONE value. Read emits a CSS shorthand when the sides/corners differ
+// ("1px 2px", "8px 8px 0px 0px"); flcm has one word for the whole node, so the multi-value form is real
+// state with no authored form rather than something to average or take the first of.
+function singleValue(value: unknown, field: string, whatFlcmHas: string): unknown {
+  if (typeof value === "string" && /\s/.test(value.trim())) {
+    throw new Error(field + " is " + JSON.stringify(value) + ", and flcm authors " + whatFlcmHas + ". " + CLONE_REMEDY);
+  }
+  return value;
+}
+
+// The layout bag keeps its key and its authorable words verbatim (`gap` is a metric the constructor
+// parses, `padding` takes read's box shorthand directly); this only refuses the words with no flcm
+// form. Unknown words are the constructor's closed set to name.
+function readyLayout(raw: unknown, subject: string): unknown {
+  assertNotCompressedRef(raw, subject + ".layout");
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return raw;
+  const l: Record<string, unknown> = {};
+  for (const word of Object.keys(raw)) {
+    const value = (raw as Record<string, unknown>)[word];
+    if (value == null) continue; // an explicitly-undefined word is absence, not a claim
+    const disposition = own(LAYOUT_WORD_DISPOSITIONS as Record<string, ReadFieldDisposition>, word);
+    if (disposition && typeof disposition === "object") throw refuse(subject + ".layout", word, disposition.refuse);
+    l[word] = value;
+  }
+  if (l.gap != null) singleValue(l.gap, subject + ".layout.gap", "one gap, not separate row and column gaps");
+  return l;
+}
+
+// The read `text` field is already the canonical run model (a markdown string, or `[text, style]`
+// tuples), so it re-authors verbatim. The one thing to intercept is a compressed run: a tuple whose
+// style slot is a ref string rather than the delta.
+function readyTextContent(raw: unknown, subject: string): unknown {
+  if (!Array.isArray(raw)) return raw;
+  return raw.map((run, i) => {
+    if (Array.isArray(run)) assertNotCompressedRef(run[1], subject + ".text run[" + i + "] style");
+    return run;
+  });
 }

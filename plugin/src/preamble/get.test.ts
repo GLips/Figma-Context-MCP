@@ -21,11 +21,11 @@ test("get on a frame returns the expanded canonical shape — values inline, chi
   // JSON round-trip: the core leaves unset layout fields as present-but-undefined keys, which the
   // egress serialization drops — compare the shape an agent's returned value actually carries.
   assert.deepEqual(JSON.parse(JSON.stringify(spec.layout)), { mode: "row", padding: "12px", gap: "8px" });
-  assert.deepEqual(spec.fills, ["#FF0000"]); // the inline value — never a "fill_…" styles ref
+  assert.deepEqual(spec.fill, "#FF0000"); // the inline value — never a "fill_…" styles ref
   const chip = spec.children?.[0];
   assert.equal(chip?.type, "RECTANGLE");
   assert.equal(chip?.width, 40);
-  assert.deepEqual(chip?.fills, ["#00FF00"]);
+  assert.deepEqual(chip?.fill, "#00FF00");
 });
 
 test("get on a text node reads back content and text style", async () => {

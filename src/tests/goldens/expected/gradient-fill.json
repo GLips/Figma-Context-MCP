@@ -5,23 +5,19 @@
       "id": "4:1",
       "name": "Linear",
       "type": "RECTANGLE",
-      "fills": [
-        {
-          "type": "GRADIENT_LINEAR",
-          "gradient": "linear-gradient(135deg, rgba(255, 0, 0, 1) 0%, rgba(0, 0, 255, 1) 100%)"
-        }
-      ]
+      "fill": {
+        "type": "GRADIENT_LINEAR",
+        "gradient": "linear-gradient(135deg, rgba(255, 0, 0, 1) 0%, rgba(0, 0, 255, 1) 100%)"
+      }
     },
     {
       "id": "4:2",
       "name": "Radial",
       "type": "RECTANGLE",
-      "fills": [
-        {
-          "type": "GRADIENT_RADIAL",
-          "gradient": "radial-gradient(circle at 50% 50%, rgba(255, 255, 255, 0.8) 0%, rgba(0, 0, 0, 0.8) 100%)"
-        }
-      ]
+      "fill": {
+        "type": "GRADIENT_RADIAL",
+        "gradient": "radial-gradient(circle at 50% 50%, rgba(255, 255, 255, 0.8) 0%, rgba(0, 0, 0, 0.8) 100%)"
+      }
     }
   ],
   "components": {},

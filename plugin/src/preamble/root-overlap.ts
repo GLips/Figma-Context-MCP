@@ -1,5 +1,5 @@
 // A render root lands on the PAGE, and a page has no layout — nothing moves aside to make room. With
-// no `layout.absolute` a root goes to the page origin, so a second render lands exactly on top of the
+// no `left`/`top` a root goes to the page origin, so a second render lands exactly on top of the
 // first, and the agent (which gets back a handle, not a canvas) has no way to notice. This note is
 // the only channel that tells it.
 //
@@ -80,6 +80,6 @@ export function describeRootOverlap(root: any): string | null {
     " already on this page: " +
     named +
     (rest > 0 ? "; and " + rest + " more" : "") +
-    ". Set layout.absolute {x, y} on the root to place it somewhere else."
+    ". Set `left`/`top` on the root to place it somewhere else."
   );
 }

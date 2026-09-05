@@ -1,7 +1,7 @@
 import type { NodeSnapshot, SnapshotPaint } from "../snapshot.js";
 import { generateCSSShorthand, isVisible } from "../utils.js";
 
-import { convertColor, formatRGBAColor } from "./style/color.js";
+import { convertColor, flattenSolidFills, formatRGBAColor } from "./style/color.js";
 import { translateScaleMode, handleImageTransform, parsePatternPaint } from "./style/image.js";
 import type { SimplifiedImageFill } from "./style/image.js";
 import { convertGradientToCss } from "./style/gradient.js";
@@ -76,6 +76,28 @@ export function buildSimplifiedStrokes(
   }
 
   return strokes;
+}
+
+/**
+ * Fold a paint stack into the ONE value a slot carries. Invisible paints drop;
+ * an all-solid stack flattens to the single resolved color a viewer sees,
+ * removing the layer-order ambiguity that misleads LLM consumers; a mixed stack
+ * (gradient/image/pattern, or a non-normal blend) can't be folded and stays an
+ * array, reversed into CSS top-first order. A lone paint unwraps to a scalar, so
+ * only a genuinely stacked paint costs the array. The same fold serves a node's
+ * `fill`/`stroke` and a text run's `color`.
+ */
+export function foldPaintStack(
+  raw: SnapshotPaint[] | undefined,
+  hasChildren: boolean = false,
+): SimplifiedFill | SimplifiedFill[] | undefined {
+  if (!raw || !raw.length) return undefined;
+  const paints = raw.filter(isVisible);
+  const flattened = flattenSolidFills(paints);
+  if (flattened !== null) return flattened;
+  const parsed = paints.map((p) => parsePaint(p, hasChildren)).reverse();
+  if (parsed.length === 0) return undefined;
+  return parsed.length === 1 ? parsed[0] : parsed;
 }
 
 /**

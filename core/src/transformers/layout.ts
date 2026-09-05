@@ -140,12 +140,17 @@ function buildNodeGeometry(
     isRoot,
     !stretch.horizontal && shouldEmitFixedDimension(n.layoutSizingHorizontal, axis),
   );
-  const vertical = resolveAxisDimension(
-    convertSizing(n.layoutSizingVertical),
-    size.height,
-    isRoot,
-    !stretch.vertical && shouldEmitFixedDimension(n.layoutSizingVertical, axis),
-  );
+  // A LINE has no height — Figma reports 0 on every one — so its vertical axis says nothing and is
+  // omitted, matching the write side, where flcm.line sizes on `width` alone.
+  const vertical =
+    n.type === "LINE"
+      ? {}
+      : resolveAxisDimension(
+          convertSizing(n.layoutSizingVertical),
+          size.height,
+          isRoot,
+          !stretch.vertical && shouldEmitFixedDimension(n.layoutSizingVertical, axis),
+        );
   if (horizontal.dimension !== undefined) geometry.width = horizontal.dimension;
   if (vertical.dimension !== undefined) geometry.height = vertical.dimension;
   if (horizontal.designed !== undefined) geometry.designedWidth = horizontal.designed;

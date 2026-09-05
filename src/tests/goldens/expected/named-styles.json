@@ -7,7 +7,7 @@
       "type": "TEXT",
       "text": "Alpha",
       "textStyle": "Heading / Large",
-      "fills": "fill_34dc0314"
+      "fill": "fill_314185fc"
     },
     {
       "id": "7:2",
@@ -15,13 +15,13 @@
       "type": "TEXT",
       "text": "Beta",
       "textStyle": "Heading / Large (161:300)",
-      "fills": "fill_34dc0314"
+      "fill": "fill_314185fc"
     },
     {
       "id": "7:3",
       "name": "Swatch",
       "type": "RECTANGLE",
-      "fills": "Brand / Orange"
+      "fill": "Brand / Orange"
     }
   ],
   "components": {},
@@ -32,17 +32,13 @@
       "fontWeight": 400,
       "fontSize": 12
     },
-    "fill_34dc0314": [
-      "#000000"
-    ],
+    "fill_314185fc": "#000000",
     "Heading / Large (161:300)": {
       "fontFamily": "Inter",
       "fontWeight": 600,
       "fontSize": 14
     },
-    "Brand / Orange": [
-      "#FF8000"
-    ]
+    "Brand / Orange": "#FF8000"
   },
   "templates": {}
 }

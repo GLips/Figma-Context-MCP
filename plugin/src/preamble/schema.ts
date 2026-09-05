@@ -114,28 +114,43 @@ const SIZE_FIELDS = {
     'Same rules as width. On TEXT the height follows the content: set `width` or use "fill"; a fixed, "hug", or percent height is rejected.',
     'number | "fill" | "hug" | "N%"',
   ),
-  absolute: prop(
-    z.union([
-      z.object({
-        x: z.union([z.number(), z.string()]).optional(),
-        y: z.union([z.number(), z.string()]).optional(),
-        anchor: z
-          .object({
-            x: z.enum(["left", "center", "right"]).optional(),
-            y: z.enum(["top", "center", "bottom"]).optional(),
-          })
-          .optional(),
-      }),
-      z.literal("none"),
-    ]),
-    'Pins the node at x/y in its parent, lifting it out of auto-layout flow (badges, overlays). On a render root it is where on the PAGE the tree lands — without it every root stacks at the origin. `anchor` picks the node\'s own reference point (default { left, top }), so anchor:{ x:"center" } with x:"50%" centres it. Under edit, "none" returns the node to the flow.',
-    '{ x?, y?, anchor?: { x?, y? } } | "none" — x/y number, "Npx" or "N%"',
+  // Placement is the read shape's own words: `left`/`top` are the offset in the parent, and naming
+  // either lifts the node out of an auto-layout parent's flow (read reports that as `position:
+  // "absolute"`). Under a free-form parent they are just the coordinates. `position` on its own lifts
+  // without moving, or ("none", edit only) returns the node to the flow; `anchor` says which point of
+  // the node lands on the coordinate it accompanies.
+  left: prop(
+    z.union([z.number(), z.string()]),
+    'Offset from the parent\'s left edge — a number, "Npx", or "N%" of the parent width. Naming `left` or `top` lifts the node out of an auto-layout parent\'s flow (badges, overlays); under a free-form parent it is simply where the node sits. On a render root it is where on the PAGE the tree lands — without it every root stacks at the origin. Under edit, an axis you don\'t name keeps its live value.',
+    'number | "Npx" | "N%"',
+  ),
+  top: prop(z.union([z.number(), z.string()]), "Offset from the parent's top edge. Same rules as `left`.", 'number | "Npx" | "N%"'),
+  position: prop(
+    z.enum(["absolute", "none"]),
+    '"absolute" lifts the node out of auto-layout flow where it stands (no coordinate needed — `left`/`top` already imply it). Under edit, "none" returns the node to the flow; naming `left`/`top`/`anchor` beside "none" fails loud.',
+  ),
+  anchor: prop(
+    z.object({
+      x: z.enum(["left", "center", "right"]).optional(),
+      y: z.enum(["top", "center", "bottom"]).optional(),
+    }),
+    'Which point of the node lands on `left`/`top` (default its top-left corner), so anchor:{ x:"center" } with left:"50%" centres it. Each anchor axis needs its coordinate in the same call.',
+    "{ x?: left/center/right, y?: top/center/bottom }",
   ),
   pin: prop(
     z.custom<{ x?: PinX; y?: PinY } | "none">(),
-    'Constraint override — how the node responds when its parent resizes, replacing the automatic choice. Honored for a child of a free-form parent and for any `absolute` child; on an in-flow auto-layout child it is stored but inert (fill/hug governs there) until the node leaves the flow. Under edit, "none" restores the default near-edge pin.',
+    'Constraint override — how the node responds when its parent resizes, replacing the automatic choice. Honored for a child of a free-form parent and for any out-of-flow (`left`/`top`) child; on an in-flow auto-layout child it is stored but inert (fill/hug governs there) until the node leaves the flow. Under edit, "none" restores the default near-edge pin. Never lifts a node out of flow by itself.',
     '{ x?, y? } | "none" — x: left/center/right/stretch/scale/none, y: top/center/bottom/stretch/scale/none',
   ),
+};
+
+// The placement words alone — what a LINE takes beside its width, and what edit compiles for one.
+const PLACEMENT_FIELDS = {
+  left: SIZE_FIELDS.left,
+  top: SIZE_FIELDS.top,
+  position: SIZE_FIELDS.position,
+  anchor: SIZE_FIELDS.anchor,
+  pin: SIZE_FIELDS.pin,
 };
 
 const APPEARANCE_FIELDS = {
@@ -150,6 +165,17 @@ const APPEARANCE_FIELDS = {
   borderRadius: metric("Corner radius. Frames and rectangles only."),
   effects: prop(z.custom<EffectsInput>(), 'Shadows / blur: flcm.effects({...}) or a CSS-string bag. "none" removes all effects.', "effects value"),
   rotation: degrees("Rotation in degrees."),
+};
+
+// An ELLIPSE has no corners, so its appearance vocabulary is the shared one minus `borderRadius` — a
+// separate group (not a runtime filter) so the edit gate and the per-type doc list both compose it.
+const ELLIPSE_FIELDS = {
+  fill: APPEARANCE_FIELDS.fill,
+  stroke: APPEARANCE_FIELDS.stroke,
+  strokeWidth: APPEARANCE_FIELDS.strokeWidth,
+  strokeAlign: APPEARANCE_FIELDS.strokeAlign,
+  effects: APPEARANCE_FIELDS.effects,
+  rotation: APPEARANCE_FIELDS.rotation,
 };
 
 // Auto-layout container config. The hybrid structure (canonical vocabulary) groups it under a single
@@ -185,9 +211,8 @@ const FRAME_FIELDS = {
 };
 
 // Text style — the base every run layers over. The hybrid structure groups these under a `textStyle`
-// object (canonical names: fontFamily/fontWeight/fontSize/textAlign), mirroring the read side. Node-level
-// text `color` is NOT here — it's a top-level sugar prop compiling to the node's `fills`, like every other
-// node's color (see TEXT_FIELDS).
+// object (canonical names: fontFamily/fontWeight/fontSize/textAlign), mirroring the read side. The text's
+// paint is NOT here — it is the node-level `fill`, like every other node's (see TEXT_FIELDS).
 const TEXTSTYLE_FIELDS = {
   fontFamily: prop(z.string(), "An unknown family falls back to Inter."),
   fontWeight: prop(
@@ -235,11 +260,6 @@ const TEXTSTYLE_FIELDS = {
     'A URL over the whole text node — a url string, or the read form { type: "URL", url }. Links to a NODE are read-only and fail loud.',
     'string (url) | { type: "URL", url }',
   ),
-  boldWeight: prop(
-    z.union([z.number(), z.string()]),
-    'What `**bold**` resolves to in this node. Default 700 — pass back the `boldWeight` a `get` reports and the copy emphasizes like the original. Same spellings as fontWeight.',
-    "number (100–900) | name",
-  ),
   lineClamp: prop(
     z.union([z.number(), z.literal("none")]),
     'Truncate to at most N lines with an ellipsis. Needs a bounded `width` so the text wraps — on a hugging text it fails loud. `"none"` removes a clamp.',
@@ -247,23 +267,26 @@ const TEXTSTYLE_FIELDS = {
   ),
 };
 
+// The TEXT node's own words, in the read shape's spellings: `text` is the content (flcm.text also takes
+// it positionally — the prop form is what lets a `get` result spread in and what edit names), `fill` is
+// the paint like every other node's, and `boldWeight` sits at the node level beside `textStyle` because
+// it is a content convention (what `**` resolves to), not a style property.
 const TEXT_FIELDS = {
+  text: prop(
+    z.custom<string | TextRunInput[]>(),
+    "The content — a plain string (markdown: **bold**, *italic*, ~~strike~~, [text](url)) or an array of styled runs. At create it is usually the positional first argument; under edit it replaces the whole content.",
+    "string | run[]",
+  ),
   textStyle: prop(
     z.object(TEXTSTYLE_FIELDS),
     "The text style base. Runs layer over it.",
-    "{ fontFamily?, fontWeight?, fontSize?, fontStyle?, lineHeight?, letterSpacing?, textDecoration?, textTransform?, fontVariant?, textAlign?, textAlignVertical?, paragraphSpacing?, paragraphIndent?, listSpacing?, hyperlink?, boldWeight?, lineClamp? }",
+    "{ fontFamily?, fontWeight?, fontSize?, fontStyle?, lineHeight?, letterSpacing?, textDecoration?, textTransform?, fontVariant?, textAlign?, textAlignVertical?, paragraphSpacing?, paragraphIndent?, listSpacing?, hyperlink?, lineClamp? }",
   ),
-  color: color("Text color — the node-level spelling of the text's fill."),
-};
-
-// At create, text CONTENT is the positional first arg of flcm.text — this group exists for edit,
-// where the delta is one object and the content needs a prop name. Same input shape and the same
-// markdown/run parser as the positional arg; a whole-content replacement, never a splice.
-const TEXTCONTENT_FIELDS = {
-  content: prop(
-    z.custom<string | TextRunInput[]>(),
-    "Replacement text — the same string-or-runs input flcm.text takes first. Replaces the whole content.",
-    "string | run[]",
+  fill: color('The text\'s paint, like every other node\'s. "none" removes it.'),
+  boldWeight: prop(
+    z.union([z.number(), z.string()]),
+    "What `**bold**` in `text` resolves to. Default 700 — pass back the `boldWeight` a `get` reports and the copy emphasizes like the original. Same spellings as fontWeight. Under edit it only means something beside `text`.",
+    "number (100–900) | name",
   ),
 };
 
@@ -305,19 +328,17 @@ export type StyleDeltaInput = z.infer<typeof RunStyleSchema>;
 // StyleDelta (never a styles-table ref — refs are read-only).
 export type TextRunInput = string | [text: string, style: StyleDeltaInput];
 
-// A line sizes ONLY along its length: the constructor honors numeric `length`/`w` and `absolute`, and
-// ignores `h`/`"fill"`/`"hug"`. So LineSchema does NOT spread the full SIZE_FIELDS — typing props the
-// constructor drops would let a compile-checked example pass while rendering wrong (a real hole, since the
-// example's whole job is to fail the build on API mismatch). It carries exactly what `line` reads.
+// A line sizes ONLY along its length, which is its `width` (the read shape's word for it): a fixed
+// number, never "fill"/"hug"/a percent, and there is no height word at all. So LineSchema does NOT
+// spread the full SIZE_FIELDS — typing props the constructor drops would let a compile-checked example
+// pass while rendering wrong (a real hole, since the example's whole job is to fail the build on API
+// mismatch). It carries exactly what `line` reads.
 const LINE_FIELDS = {
-  stroke: color("The line's paint. Wins over `color`."),
-  color: color("The line's paint (alias for stroke)."),
+  stroke: color('The line\'s paint. "none" removes it.'),
   strokeWidth: metric("Thickness. Defaults to 1."),
-  length: prop(z.number(), "The line's length in px.", "number"),
-  w: prop(z.number(), "Alias for `length`, which wins if both are set.", "number"),
+  width: metric("The line's length. A fixed size only — a line can't fill, hug, or take a percent."),
   rotation: degrees("Degrees — 90° makes a horizontal line vertical."),
-  absolute: SIZE_FIELDS.absolute,
-  pin: SIZE_FIELDS.pin,
+  ...PLACEMENT_FIELDS,
 };
 
 // A single themeable vector (flcm.path): the shared appearance vocabulary MINUS `radius` (a vector has no
@@ -353,15 +374,17 @@ export type AppearanceProps = z.infer<typeof AppearanceSchema>;
 export const FrameSchema = z.object({ ...SHARED_FIELDS, ...SIZE_FIELDS, ...APPEARANCE_FIELDS, ...FRAME_FIELDS });
 export const TextSchema = z.object({ ...SHARED_FIELDS, ...SIZE_FIELDS, ...TEXT_FIELDS });
 export const ShapeSchema = z.object({ ...SHARED_FIELDS, ...SIZE_FIELDS, ...APPEARANCE_FIELDS });
+export const EllipseSchema = z.object({ ...SHARED_FIELDS, ...SIZE_FIELDS, ...ELLIPSE_FIELDS });
 export const LineSchema = z.object({ ...SHARED_FIELDS, ...LINE_FIELDS });
 export const PathSchema = z.object({ ...SHARED_FIELDS, ...SIZE_FIELDS, ...PATH_FIELDS });
 // svg pastes opaque markup: size/position only, no appearance (colors are baked into the markup). `markup`
-// is the positional first arg, like text's `content`, so it isn't a prop field here.
+// is the positional first arg, so it isn't a prop field here.
 export const SvgSchema = z.object({ ...SHARED_FIELDS, ...SIZE_FIELDS });
 
 export type FrameProps = z.infer<typeof FrameSchema>;
 export type TextProps = z.infer<typeof TextSchema>;
 export type ShapeProps = z.infer<typeof ShapeSchema>;
+export type EllipseProps = z.infer<typeof EllipseSchema>;
 export type LineProps = z.infer<typeof LineSchema>;
 export type PathProps = z.infer<typeof PathSchema>;
 export type SvgProps = z.infer<typeof SvgSchema>;
@@ -372,8 +395,7 @@ export type SvgProps = z.infer<typeof SvgSchema>;
 // which node type is the runtime's per-type gate (edit.ts DELTA_KEYS_BY_TYPE, composed from the
 // same KNOWN_KEYS atoms) — this schema is the flat closed set an unknown key fails loud against.
 // One absence is the contract, not an oversight: `key` is immutable under edit (a delta naming it
-// fails loud — re-keying could mint a duplicate address). `content` is the one edit-only spelling:
-// at create the same input is flcm.text's positional first argument.
+// fails loud — re-keying could mint a duplicate address).
 const EDIT_FIELDS = {
   name: SHARED_FIELDS.name,
   opacity: SHARED_FIELDS.opacity,
@@ -390,14 +412,11 @@ const EDIT_FIELDS = {
   clip: FRAME_FIELDS.clip,
   width: SIZE_FIELDS.width,
   height: SIZE_FIELDS.height,
-  absolute: SIZE_FIELDS.absolute,
-  pin: SIZE_FIELDS.pin,
+  ...PLACEMENT_FIELDS,
   layout: FRAME_FIELDS.layout,
-  length: LINE_FIELDS.length,
-  w: LINE_FIELDS.w,
-  content: TEXTCONTENT_FIELDS.content,
+  text: TEXT_FIELDS.text,
   textStyle: TEXT_FIELDS.textStyle,
-  color: TEXT_FIELDS.color,
+  boldWeight: TEXT_FIELDS.boldWeight,
 };
 export const EditSchema = z.object(EDIT_FIELDS);
 export type EditDelta = z.infer<typeof EditSchema>;
@@ -415,8 +434,8 @@ export interface EditEntry { target: Target; changes: EditDelta }
 export interface EditManyScope { within?: Target }
 
 // flcm.image(src, opts?) options — the second, optional arg to the image paint constructor. `src` (an
-// https url or a local file path under the server's asset root) is the positional first arg (like text's
-// `content` / svg's `markup`), so it isn't a prop field here.
+// https url or a local file path under the server's asset root) is the positional first arg (like svg's
+// `markup`), so it isn't a prop field here.
 const IMAGE_FIELDS = {
   scaleMode: prop(
     z.enum(["FILL", "FIT", "CROP", "TILE"]),
@@ -475,15 +494,16 @@ export const EffectsSchema = z.object({
 // ---- The typed public surface. flcm.ts's real exports are asserted `satisfies Flcm`, so this can't
 // drift from them; the example files author against it and fail the build if a signature moves. ----
 export interface Flcm {
-  // Every constructor also takes a `get` result (SimplifiedNode) as its props: the read shape's own
-  // spellings fold onto the constructor's (read-spellings.ts), so `{ ...spec, width: 320 }` authors as-is.
+  // Every constructor also takes a `get` result (SimplifiedNode) as its props: the read shape and the
+  // write props are one vocabulary, so `{ ...spec, width: 320 }` authors as-is (the read-only leftovers —
+  // `id`, a root's "contextual" size — are folded at the entry).
   frame(props?: FrameProps | SimplifiedNode, children?: WriteChild | WriteChild[]): WriteNode;
   // A plain string, or an array of styled runs (rich text — per-span color/weight/size in one node).
   text(content: string | TextRunInput[], props?: TextProps): WriteNode;
-  // The spec-first form: a read spec carries its content in `text`.
-  text(spec: SimplifiedNode): WriteNode;
+  // The props-first form: the content is the `text` prop, which is how a read spec carries it.
+  text(props: TextProps | SimplifiedNode): WriteNode;
   rect(props?: ShapeProps | SimplifiedNode): WriteNode;
-  ellipse(props?: ShapeProps | SimplifiedNode): WriteNode;
+  ellipse(props?: EllipseProps | SimplifiedNode): WriteNode;
   line(props?: LineProps | SimplifiedNode): WriteNode;
   // Two vector verbs, two contracts. svg pastes opaque markup (colors baked in); path is a single themeable
   // vector taking our appearance props. `d` is required on path.
@@ -535,7 +555,7 @@ export interface Flcm {
   // empty; AND-combines type/name/key/within (default scope: current page). The query is a FILTER, not an
   // address — only `within` takes a target (id/key/handle); the other facets are match conditions, and a
   // bare string is rejected rather than guessed at. Dive into a hit with `get`. An
-  // optional predicate filters by anything in the full read shape (values inline: `n.fills?.[0] === '#FFF'`);
+  // optional predicate filters by anything in the full read shape (values inline: `n.fill === '#FFF'`);
   // the query pre-filters cheaply, only survivors are materialized (a predicate-only find has a hard cap).
   find(query?: FindQuery, predicate?: ReadPredicate): Promise<SlimHandle[]>;
   // Locate exactly one — throws on 0 or >1, naming the count (a blind agent must never silently act on the
@@ -579,9 +599,9 @@ export interface VerbDoc {
 
 export const VERBS: VerbDoc[] = [
   { category: "build", signature: "flcm.frame(props?, children?)", builds: "a FRAME (container)", args: "props object, then an array of children", schema: FrameSchema },
-  { category: "build", signature: "flcm.text(content, props?)", builds: "a TEXT node", args: "content (a string or a runs array) first, then props", schema: TextSchema },
+  { category: "build", signature: "flcm.text(text, props?)", builds: "a TEXT node", args: "the text (a string or a runs array) first, then props — or one props object carrying `text`", schema: TextSchema },
   { category: "build", signature: "flcm.rect(props?)", builds: "a RECTANGLE", args: "props object", schema: ShapeSchema },
-  { category: "build", signature: "flcm.ellipse(props?)", builds: "an ELLIPSE", args: "props object", schema: ShapeSchema },
+  { category: "build", signature: "flcm.ellipse(props?)", builds: "an ELLIPSE", args: "props object (no borderRadius)", schema: EllipseSchema },
   { category: "build", signature: "flcm.line(props?)", builds: "a LINE", args: "props object", schema: LineSchema },
   { category: "build", signature: "flcm.svg(markup, props?)", builds: "a VECTOR from SVG markup", args: "SVG markup string first, then size/position props", schema: SvgSchema },
   { category: "build", signature: "flcm.path(props)", builds: "a themeable VECTOR", args: "props object including `d` (path data)", schema: PathSchema },
@@ -600,7 +620,7 @@ export const VERBS: VerbDoc[] = [
   { category: "structure", signature: "await flcm.clone(target, parent?)", builds: "a faithful live duplicate (key-less)", args: "a target, and optionally where the copy lands (default: beside the original). The copy path for subtrees a spec rebuild can't reproduce — anything holding an INSTANCE", quickStart: "await flcm.clone(target, parent?)" },
   { category: "build", signature: "flcm.fromRead(spec)", builds: "a `get` result re-authored as a buildable spec", args: "a spec from flcm.get, subtree and all — the constructor is picked by each node's `type` and `children` recurse. Returns a constructor-built node — render it, or place it with append/prepend/insertBefore/insertAfter. (A single node's spec can also spread straight into its constructor: flcm.rect({ ...spec, width: 320 }).) Anything the read shape carries that flcm has no word for (an INSTANCE, a paint stack, a grid) fails loud by name; flcm.clone is the faithful copy for those", quickStart: "flcm.fromRead(spec)" },
   { category: "read", signature: "await flcm.get(target)", builds: "a node's full read spec (values inline)", args: "target: an flcm/key, a node id, flcm.id(id), or a handle" },
-  { category: "read", signature: "await flcm.find(query?, predicate?)", builds: "matching nodes as slim handles", args: "query { type?, name?, key?, within? } AND-combined — a filter, not an address; only `within` takes a target. Optional predicate over the full read shape (n => n.fills?.[0] === '#FFF')" },
+  { category: "read", signature: "await flcm.find(query?, predicate?)", builds: "matching nodes as slim handles", args: "query { type?, name?, key?, within? } AND-combined — a filter, not an address; only `within` takes a target. Optional predicate over the full read shape (n => n.fill === '#FFF')" },
   { category: "read", signature: "await flcm.findOne(query?, predicate?)", builds: "exactly one slim handle (throws on 0 or >1)", args: "same query + predicate as find" },
   { category: "read", signature: "await flcm.selection()", builds: "the current selection as slim handles", args: "no args" },
   { category: "page", signature: "await flcm.page.current()", builds: "where you are — { fileName, page, pages }", args: "no args. The orientation call: the file's name, the page every other verb acts on, and the file's other pages", quickStart: "await flcm.page.current() / .use(nameOrId) / .new(name)" },
@@ -619,11 +639,12 @@ export { EDIT_TYPE_WORD_GROUPS } from "./ir.js";
 export const FIELD_GROUPS = {
   shared: SHARED_FIELDS,
   size: SIZE_FIELDS,
+  placement: PLACEMENT_FIELDS,
   appearance: APPEARANCE_FIELDS,
+  ellipse: ELLIPSE_FIELDS,
   frame: FRAME_FIELDS,
   layout: LAYOUT_FIELDS,
   text: TEXT_FIELDS,
-  textContent: TEXTCONTENT_FIELDS,
   textStyle: TEXTSTYLE_FIELDS,
   run: RUN_FIELDS,
   line: LINE_FIELDS,

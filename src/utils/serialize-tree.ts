@@ -80,8 +80,8 @@ function renderNode(
   if (node.top !== undefined) parts.push(`top=${node.top}`);
   if (node.rotation !== undefined) parts.push(`rotation=${node.rotation}`);
   if (node.layout !== undefined) parts.push(`layout=${renderStyleValue(node.layout)}`);
-  if (node.fills !== undefined) parts.push(`fills=${renderStyleValue(node.fills)}`);
-  if (node.strokes !== undefined) parts.push(`strokes=${renderStyleValue(node.strokes)}`);
+  if (node.fill !== undefined) parts.push(`fill=${renderStyleValue(node.fill)}`);
+  if (node.stroke !== undefined) parts.push(`stroke=${renderStyleValue(node.stroke)}`);
   if (node.strokeWidth !== undefined) parts.push(`strokeWidth=${maybeQuote(node.strokeWidth)}`);
   if (node.strokeDashes !== undefined) parts.push(`strokeDashes=${node.strokeDashes.join(",")}`);
   if (node.strokeAlign !== undefined) parts.push(`strokeAlign=${node.strokeAlign}`);

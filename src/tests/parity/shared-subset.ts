@@ -138,10 +138,9 @@ function resolveRef(value: unknown, styles: Record<string, StyleValue>): unknown
   return typeof value === "string" && value in styles ? styles[value] : value;
 }
 
-/** Collapse image-paint refs to the sentinel; pass every other fill through. */
+/** Collapse image-paint refs to the sentinel; pass every other paint through. A slot holds one paint or a stack. */
 function scopeStyleValue(value: unknown): unknown {
-  if (!Array.isArray(value)) return value;
-  return value.map((entry) => {
+  const scopePaint = (entry: unknown): unknown => {
     if (entry && typeof entry === "object" && (entry as Rec).type === "IMAGE") {
       const fill = { ...(entry as Rec) };
       if ("imageRef" in fill) fill.imageRef = IMAGE_REF_SENTINEL;
@@ -149,7 +148,8 @@ function scopeStyleValue(value: unknown): unknown {
       return fill;
     }
     return entry;
-  });
+  };
+  return Array.isArray(value) ? value.map(scopePaint) : scopePaint(value);
 }
 
 /**

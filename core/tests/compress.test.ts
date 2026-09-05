@@ -7,9 +7,9 @@ import type { SimplifiedNode, StyleValue } from "../src/types.js";
 // the walk emits them), it gates single-use styles inline. Testing it directly
 // keeps these fast and free of Figma-fixture noise.
 
-// Solid fills serialize to hex-string arrays in real output (see style.ts).
-const RED: StyleValue = ["#FF0000"];
-const BLUE: StyleValue = ["#0000FF"];
+// A lone solid fill serializes to a bare hex string in real output (see foldPaintStack).
+const RED: StyleValue = "#FF0000";
+const BLUE: StyleValue = "#0000FF";
 
 function node(overrides: Partial<SimplifiedNode> & { id: string }): SimplifiedNode {
   return { name: overrides.id, type: "FRAME", ...overrides };
@@ -17,12 +17,12 @@ function node(overrides: Partial<SimplifiedNode> & { id: string }): SimplifiedNo
 
 describe("count-gated style hoisting", () => {
   it("inlines a single-use style onto its node and drops it from the styles table", () => {
-    const nodes = [node({ id: "1", fills: "fill_red" })];
+    const nodes = [node({ id: "1", fill: "fill_red" })];
     const styles: Record<string, StyleValue> = { fill_red: RED };
 
     const result = compressDesign(nodes, styles, new Set());
 
-    expect(result.nodes[0].fills).toEqual(RED);
+    expect(result.nodes[0].fill).toEqual(RED);
     expect(result.styles).toEqual({});
   });
 
@@ -30,15 +30,15 @@ describe("count-gated style hoisting", () => {
     // Distinct bodies (FRAME vs RECTANGLE) so template dedup doesn't fold them —
     // this isolates style gating: the shared fill is referenced, not inlined.
     const nodes = [
-      node({ id: "1", type: "FRAME", fills: "fill_red" }),
-      node({ id: "2", type: "RECTANGLE", fills: "fill_red" }),
+      node({ id: "1", type: "FRAME", fill: "fill_red" }),
+      node({ id: "2", type: "RECTANGLE", fill: "fill_red" }),
     ];
     const styles: Record<string, StyleValue> = { fill_red: RED };
 
     const result = compressDesign(nodes, styles, new Set());
 
-    expect(result.nodes[0].fills).toBe("fill_red");
-    expect(result.nodes[1].fills).toBe("fill_red");
+    expect(result.nodes[0].fill).toBe("fill_red");
+    expect(result.nodes[1].fill).toBe("fill_red");
     expect(result.styles).toEqual({ fill_red: RED });
   });
 
@@ -97,9 +97,9 @@ describe("templates", () => {
     // (distinct body) also uses fill_red so it stays a hoisted ref rather than
     // being inlined by exclusive-style expansion.
     const nodes = [
-      node({ id: "1", name: "Card A", fills: "fill_red" }),
-      node({ id: "2", name: "Card B", fills: "fill_red" }),
-      node({ id: "9", name: "Header", type: "RECTANGLE", fills: "fill_red" }),
+      node({ id: "1", name: "Card A", fill: "fill_red" }),
+      node({ id: "2", name: "Card B", fill: "fill_red" }),
+      node({ id: "9", name: "Header", type: "RECTANGLE", fill: "fill_red" }),
     ];
     const styles: Record<string, StyleValue> = { fill_red: RED };
 
@@ -107,7 +107,7 @@ describe("templates", () => {
 
     const [hash] = Object.keys(result.templates);
     expect(Object.keys(result.templates)).toHaveLength(1);
-    expect(result.templates[hash]).toEqual({ type: "FRAME", fills: "fill_red" });
+    expect(result.templates[hash]).toEqual({ type: "FRAME", fill: "fill_red" });
 
     // Each card keeps its per-instance id/name, body replaced by the ref.
     expect(result.nodes[0]).toEqual({ id: "1", name: "Card A", template: hash });
@@ -121,15 +121,15 @@ describe("templates", () => {
     // template (2 instances). Exclusive → expanded inline, global entry removed,
     // collapsing template → ref → value down to template → value.
     const nodes = [
-      node({ id: "1", name: "Card A", fills: "fill_red" }),
-      node({ id: "2", name: "Card B", fills: "fill_red" }),
+      node({ id: "1", name: "Card A", fill: "fill_red" }),
+      node({ id: "2", name: "Card B", fill: "fill_red" }),
     ];
     const styles: Record<string, StyleValue> = { fill_red: RED };
 
     const result = compressDesign(nodes, styles, new Set());
 
     const [hash] = Object.keys(result.templates);
-    expect(result.templates[hash]).toEqual({ type: "FRAME", fills: RED });
+    expect(result.templates[hash]).toEqual({ type: "FRAME", fill: RED });
     expect(result.styles).toEqual({});
   });
 
@@ -149,9 +149,9 @@ describe("templates", () => {
 
   it("leaves a unique subtree inline (no template)", () => {
     const nodes = [
-      node({ id: "1", name: "Card A", fills: "fill_red" }),
-      node({ id: "2", name: "Card B", fills: "fill_red" }),
-      node({ id: "3", name: "Solo", fills: "fill_blue" }),
+      node({ id: "1", name: "Card A", fill: "fill_red" }),
+      node({ id: "2", name: "Card B", fill: "fill_red" }),
+      node({ id: "3", name: "Solo", fill: "fill_blue" }),
     ];
     const styles: Record<string, StyleValue> = { fill_red: RED, fill_blue: BLUE };
 
@@ -160,7 +160,7 @@ describe("templates", () => {
     // The solo card's body is unique → no template, and its single-use fill
     // inlines onto the node.
     expect(result.nodes[2].template).toBeUndefined();
-    expect(result.nodes[2].fills).toEqual(BLUE);
+    expect(result.nodes[2].fill).toEqual(BLUE);
     expect(result.nodes[2].type).toBe("FRAME");
   });
 
@@ -170,7 +170,7 @@ describe("templates", () => {
       node({
         id,
         name: `Card ${id}`,
-        fills: "fill_red",
+        fill: "fill_red",
         children: [node({ id: `${id}-icon`, name: "Icon", type: "IMAGE-SVG", opacity: 0.5 })],
       });
     const nodes = [card("1"), card("2")];
@@ -198,8 +198,8 @@ describe("templates", () => {
 
   it("is deterministic: identical input yields identical template hashes", () => {
     const build = (): SimplifiedNode[] => [
-      node({ id: "1", fills: "fill_red" }),
-      node({ id: "2", fills: "fill_red" }),
+      node({ id: "1", fill: "fill_red" }),
+      node({ id: "2", fill: "fill_red" }),
     ];
     const a = compressDesign(build(), { fill_red: RED }, new Set());
     const b = compressDesign(build(), { fill_red: RED }, new Set());

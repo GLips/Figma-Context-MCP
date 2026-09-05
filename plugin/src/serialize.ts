@@ -68,7 +68,7 @@ export function guardReturnValue(value: unknown): void {
 // (`x = {a:x, b:x}` repeated), which depth alone lets fan out. Rejected deliberately: a visited-set collapses
 // the SECOND occurrence of any shared reference to a marker, and the expanded read shape may legitimately
 // share a value object across nodes (e.g. one fill reused on many nodes). That would corrupt the round-trip
-// this serializer exists to preserve (a predicate reading `n.fills?.[0]` must see the value, not "[seen]").
+// this serializer exists to preserve (a predicate reading `n.fill` must see the value, not "[seen]").
 // The depth cap never touches a legit shared ref — it only truncates true pathological depth. The DAG-blowup
 // case is a self-inflicted agent hang, not a data-integrity risk, so the safe backstop wins.
 const MAX_SERIALIZE_DEPTH = 200;

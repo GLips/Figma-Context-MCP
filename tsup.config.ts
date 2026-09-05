@@ -28,7 +28,7 @@ export default defineConfig({
   // plugin/src/preamble, so every DSL edit would wake the watcher and be thrown away. A path LIST
   // skips that filter, which is what makes `pnpm dev` actually pick up a new verb. Left undefined
   // outside dev, since any truthy value turns `pnpm build` into a watch build.
-  watch: isDev ? ["src/**/*", "plugin/src/**/*"] : undefined,
+  watch: isDev ? ["src/**/*", "plugin/src/**/*", "core/src/**/*"] : undefined,
   define: {
     "process.env.NPM_PACKAGE_VERSION": JSON.stringify(packageVersion),
   },

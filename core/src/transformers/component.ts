@@ -152,12 +152,12 @@ const OVERRIDE_OUTPUT_FIELDS: Record<string, string | string[]> = {
   textStyleId: "textStyle",
   inheritTextStyleId: "textStyle",
   // paints
-  fills: "fills",
-  fillStyleId: "fills",
-  inheritFillStyleId: "fills",
-  strokes: "strokes",
-  strokeStyleId: "strokes",
-  inheritStrokeStyleId: "strokes",
+  fills: "fill",
+  fillStyleId: "fill",
+  inheritFillStyleId: "fill",
+  strokes: "stroke",
+  strokeStyleId: "stroke",
+  inheritStrokeStyleId: "stroke",
   strokeWeight: "strokeWidth",
   strokeTopWeight: "strokeWidth",
   // Figma's own typo in the plugin API's `NodeChangeProperty` — the wire really

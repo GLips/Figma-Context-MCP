@@ -13,13 +13,15 @@ export async function vectorExample(flcm: Flcm) {
       key: "play",
       d: "M38 30 L70 48 L38 66 Z",
       fill: "#6366F1",
-      absolute: { x: 30, y: 24 },
+      left: 30,
+      top: 24,
     }),
     // svg pastes opaque markup (its colors are baked in — fill/stroke would be rejected here)
     flcm.svg('<svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="#22C55E"/></svg>', {
       width: 16,
       height: 16,
-      absolute: { x: 8, y: 8 },
+      left: 8,
+      top: 8,
     }),
   ]);
 

@@ -110,7 +110,7 @@ export function assertPercentResolvable(childLayout: WriteLayout, facts: ParentF
   if ((ps.width != null && facts.hugW) || (ps.height != null && facts.hugH)) {
     throw new Error(
       subject + ': a percent w/h ("N%") on an in-flow child of an auto-layout (row/column) parent that HUGS that axis is a cycle — ' +
-        'the child\'s size both sets and depends on the parent\'s. Give the parent a fixed or "fill" size on that axis, use "fill"/"hug" on the child, or lift it out with `absolute`.',
+        'the child\'s size both sets and depends on the parent\'s. Give the parent a fixed or "fill" size on that axis, use "fill"/"hug" on the child, or lift it out of the flow with `left`/`top`.',
     );
   }
 }

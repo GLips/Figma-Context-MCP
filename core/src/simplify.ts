@@ -1,6 +1,6 @@
 import { hasAutoLayout, isRectangleCornerRadii, isVisible } from "./utils.js";
 import { buildSimplifiedLayout, computeGridChildOrder } from "./transformers/layout.js";
-import { buildSimplifiedStrokes, flattenSolidFills, parsePaint } from "./transformers/style.js";
+import { buildSimplifiedStrokes, foldPaintStack } from "./transformers/style.js";
 import { buildSimplifiedEffects } from "./transformers/effects.js";
 import {
   buildFormattedText,
@@ -314,27 +314,20 @@ function extractVisuals(
   // Check if node has children to determine CSS properties
   const hasChildren = !!node.children && node.children.length > 0;
 
-  // fills
-  if (node.fills && node.fills.length) {
-    const visibleFills = node.fills.filter(isVisible);
-    // An all-solid stack collapses to the single resolved color a viewer sees,
-    // removing the layer-order ambiguity that misleads LLM consumers. Mixed
-    // stacks (gradient/image/pattern or a non-normal blend) can't be folded and
-    // fall back to the per-paint array, reversed into CSS top-first order.
-    const flattened = flattenSolidFills(visibleFills);
-    const fills = flattened
-      ? [flattened]
-      : visibleFills.map((fill) => parsePaint(fill, hasChildren)).reverse();
-    result.fills = context.styles.intern(node, fills, ["fill", "fills"], "fill");
+  // fill — one paint, or the array a genuinely stacked paint needs (foldPaintStack)
+  const fill = foldPaintStack(node.fills, hasChildren);
+  if (fill !== undefined) {
+    result.fill = context.styles.intern(node, fill, ["fill", "fills"], "fill");
   }
 
-  // strokes
-  // Only the stroke color array is interned as a (potentially named) shared style.
+  // stroke
+  // Only the stroke paint is interned as a (potentially named) shared style.
   // Figma named styles only apply to paint, not to stroke width / dashes / per-side
   // weights, so those stay as plain sibling fields and are never deduplicated.
   const strokes = buildSimplifiedStrokes(node, hasChildren);
   if (strokes.colors.length) {
-    result.strokes = context.styles.intern(node, strokes.colors, ["stroke", "strokes"], "fill");
+    const stroke = strokes.colors.length === 1 ? strokes.colors[0] : strokes.colors;
+    result.stroke = context.styles.intern(node, stroke, ["stroke", "strokes"], "fill");
     if (strokes.strokeWidth) result.strokeWidth = strokes.strokeWidth;
     if (strokes.strokeDashes) result.strokeDashes = strokes.strokeDashes;
     if (strokes.strokeAlign) result.strokeAlign = strokes.strokeAlign;

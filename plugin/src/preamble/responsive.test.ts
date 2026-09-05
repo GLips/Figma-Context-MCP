@@ -1,4 +1,4 @@
-// Percent sizing ("N%") on w/h and absolute.x/y, plus absolute `anchor`. Percent has no construction-time
+// Percent sizing ("N%") on width/height and left/top, plus `anchor`. Percent has no construction-time
 // meaning (the parent isn't known yet), so these exercise a live render against the in-memory figma mock:
 // the bridge resolves a percent to pixels against the parent's REALIZED axis size in a post-walk pass, and
 // fails loud only on the true cycle (an in-flow %-size child of a parent that hugs that axis) and the root.
@@ -35,7 +35,7 @@ test("percent resolves against a percent-sized ancestor (chained)", async () => 
 test("percent absolute x/y resolves against the parent box", async () => {
   const out = await render(
     frame({ width: 200, height: 100 }, [
-      rect({ key: "badge", width: 40, height: 40, absolute: { x: "50%", y: "50%" } }),
+      rect({ key: "badge", width: 40, height: 40, left: "50%", top: "50%" }),
     ]),
   );
   const badge = await figma.getNodeByIdAsync(out.keyed.badge.id);
@@ -46,7 +46,7 @@ test("percent absolute x/y resolves against the parent box", async () => {
 test("percent absolute position works inside an auto-layout parent (out of flow)", async () => {
   const out = await render(
     frame({ layout: { mode: "row" }, width: 200, height: 100 }, [
-      rect({ key: "pin", width: 20, height: 20, absolute: { x: "25%" } }),
+      rect({ key: "pin", width: 20, height: 20, left: "25%" }),
     ]),
   );
   const pin = await figma.getNodeByIdAsync(out.keyed.pin.id);
@@ -100,7 +100,7 @@ test("percent SIZE on an ABSOLUTE (out-of-flow) child resolves inside an auto-la
   // percent position does — and width:"fill" on it already works. Rejecting width:"50%" here would be inconsistent.
   const out = await render(
     frame({ layout: { mode: "row" }, width: 300, height: 100 }, [
-      rect({ key: "overlay", width: "50%", height: 40, absolute: { x: 10, y: 10 } }),
+      rect({ key: "overlay", width: "50%", height: 40, left: 10, top: 10 }),
     ]),
   );
   assert.equal((await figma.getNodeByIdAsync(out.keyed.overlay.id)).width, 150); // 50% of 300
@@ -115,7 +115,7 @@ test("percent on the root node (no parent) fails loud", async () => {
 test("anchor centres a child on the resolved point (no half-width offset)", async () => {
   const out = await render(
     frame({ width: 200, height: 100 }, [
-      rect({ key: "knob", width: 40, height: 40, absolute: { x: "50%", y: "50%", anchor: { x: "center", y: "center" } } }),
+      rect({ key: "knob", width: 40, height: 40, left: "50%", top: "50%", anchor: { x: "center", y: "center" } }),
     ]),
   );
   const knob = await figma.getNodeByIdAsync(out.keyed.knob.id);
@@ -126,7 +126,7 @@ test("anchor centres a child on the resolved point (no half-width offset)", asyn
 test("anchor right/bottom pins a child's far edge to the point", async () => {
   const out = await render(
     frame({ width: 300, height: 200 }, [
-      rect({ key: "badge", width: 24, height: 24, absolute: { x: "100%", y: 0, anchor: { x: "right", y: "top" } } }),
+      rect({ key: "badge", width: 24, height: 24, left: "100%", top: 0, anchor: { x: "right", y: "top" } }),
     ]),
   );
   const badge = await figma.getNodeByIdAsync(out.keyed.badge.id);
@@ -136,14 +136,14 @@ test("anchor right/bottom pins a child's far edge to the point", async () => {
 
 test("anchor works with a numeric position too (no percent required)", async () => {
   const out = await render(
-    frame({ width: 200, height: 100 }, [rect({ key: "dot", width: 10, height: 10, absolute: { x: 100, anchor: { x: "center" } } })]),
+    frame({ width: 200, height: 100 }, [rect({ key: "dot", width: 10, height: 10, left: 100, anchor: { x: "center" } })]),
   );
   assert.equal((await figma.getNodeByIdAsync(out.keyed.dot.id)).x, 95); // 100 - half of 10
 });
 
 test("a bad anchor value fails loud", () => {
-  assert.throws(() => rect({ absolute: { x: 0, anchor: { x: "top" } } } as never), /anchor\.x must be one of/);
-  assert.throws(() => rect({ absolute: { x: 0, anchor: { y: "left" } } } as never), /anchor\.y must be one of/);
+  assert.throws(() => rect({ left: 0, anchor: { x: "top" } } as never), /anchor\.x must be one of/);
+  assert.throws(() => rect({ left: 0, anchor: { y: "left" } } as never), /anchor\.y must be one of/);
 });
 
 // --- Phase 4.2: auto-constraints on a free-form parent's children + `pin` override ---
@@ -154,8 +154,8 @@ test("a free-form child's constraints derive from its size/position intent", asy
       rect({ key: "plain", width: 40, height: 40 }),                                    // numeric → MIN (Figma default)
       rect({ key: "fillW", width: "fill", height: 40 }),                                // fill → STRETCH
       rect({ key: "pctW", width: "50%", height: 40 }),                                  // percent size → SCALE
-      rect({ key: "pctPos", width: 40, height: 40, absolute: { x: "50%", y: "50%" } }), // percent position → CENTER
-      rect({ key: "numPos", width: 40, height: 40, absolute: { x: 20, y: 20 } }),       // numeric position → MIN
+      rect({ key: "pctPos", width: 40, height: 40, left: "50%", top: "50%" }), // percent position → CENTER
+      rect({ key: "numPos", width: 40, height: 40, left: 20, top: 20 }),       // numeric position → MIN
     ]),
   );
   const c = async (k: string) => (await figma.getNodeByIdAsync(out.keyed[k].id)).constraints;
@@ -175,7 +175,7 @@ test("`pin` overrides the auto-derived constraint per axis", async () => {
   const out = await render(
     frame({ width: 300, height: 200 }, [
       rect({ key: "r", width: "fill", height: 40, pin: { x: "right", y: "bottom" } }),           // over fill/MIN
-      rect({ key: "c", width: 40, height: 40, absolute: { x: 10, y: 10 }, pin: { x: "center", y: "scale" } } as never),
+      rect({ key: "c", width: 40, height: 40, left: 10, top: 10, pin: { x: "center", y: "scale" } } as never),
     ]),
   );
   assert.deepEqual((await figma.getNodeByIdAsync(out.keyed.r.id)).constraints, { horizontal: "MAX", vertical: "MAX" });
@@ -201,7 +201,7 @@ test("an ABSOLUTE child of an auto-layout parent honors pin/constraints (out of 
   // case. So pin/auto-derivation must flow through even under an auto-layout parent (not a silent no-op).
   const out = await render(
     frame({ layout: { mode: "row" }, width: 320, height: 200 }, [
-      rect({ key: "badge", width: 28, height: 28, absolute: { x: 284, y: 12 }, pin: { x: "right", y: "top" } } as never),
+      rect({ key: "badge", width: 28, height: 28, left: 284, top: 12, pin: { x: "right", y: "top" } } as never),
     ]),
   );
   assert.deepEqual((await figma.getNodeByIdAsync(out.keyed.badge.id)).constraints, { horizontal: "MAX", vertical: "MIN" });

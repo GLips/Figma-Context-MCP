@@ -41,7 +41,7 @@
               "height": 40,
               "left": 10,
               "top": 10,
-              "fills": "fill_fa76e12e",
+              "fill": "fill_1288b06a",
               "borderRadius": "6px",
               "children": [
                 {
@@ -52,7 +52,7 @@
                   "height": 16,
                   "left": 4,
                   "top": 12,
-                  "fills": "fill_34dc0314",
+                  "fill": "fill_314185fc",
                   "componentPropertyReferences": {
                     "visible": "Left Icon"
                   }
@@ -67,7 +67,7 @@
                   "top": 10,
                   "text": "Button",
                   "textStyle": "style_9f723b14",
-                  "fills": "fill_34dc0314"
+                  "fill": "fill_314185fc"
                 }
               ]
             },
@@ -79,7 +79,7 @@
               "height": 40,
               "left": 130,
               "top": 10,
-              "fills": "fill_016763b9",
+              "fill": "fill_93e41386",
               "borderRadius": "6px",
               "children": [
                 {
@@ -90,7 +90,7 @@
                   "height": 16,
                   "left": 4,
                   "top": 12,
-                  "fills": "fill_658ab2fa",
+                  "fill": "fill_93230492",
                   "componentPropertyReferences": {
                     "visible": "Left Icon"
                   }
@@ -105,7 +105,7 @@
                   "top": 10,
                   "text": "Button",
                   "textStyle": "style_9f723b14",
-                  "fills": "fill_658ab2fa"
+                  "fill": "fill_93230492"
                 }
               ]
             }
@@ -119,7 +119,7 @@
           "height": 40,
           "left": 300,
           "top": 10,
-          "fills": "fill_016763b9",
+          "fill": "fill_93e41386",
           "borderRadius": "6px",
           "componentId": "11:5",
           "componentProperties": {
@@ -136,7 +136,7 @@
               "top": 10,
               "text": "Save",
               "textStyle": "style_9f723b14",
-              "fills": "fill_658ab2fa",
+              "fill": "fill_93230492",
               "overrides": [
                 "text"
               ]
@@ -168,7 +168,7 @@
               "type": "INSTANCE",
               "width": 120,
               "height": 40,
-              "fills": "fill_fa76e12e",
+              "fill": "fill_1288b06a",
               "componentId": "11:3",
               "componentPropertyReferences": {
                 "componentId": "Icon"
@@ -191,9 +191,7 @@
                   "type": "TEXT",
                   "text": "Slot content",
                   "textStyle": "style_9f723b14",
-                  "fills": [
-                    "#808080"
-                  ]
+                  "fill": "#808080"
                 }
               ]
             }
@@ -222,7 +220,7 @@
               "type": "INSTANCE",
               "width": 120,
               "height": 40,
-              "fills": "fill_016763b9",
+              "fill": "fill_93e41386",
               "componentId": "11:5",
               "componentPropertyReferences": {
                 "componentId": "Icon"
@@ -245,7 +243,7 @@
                   "type": "TEXT",
                   "text": "Hello world",
                   "textStyle": "style_9f723b14",
-                  "fills": "fill_34dc0314"
+                  "fill": "fill_314185fc"
                 },
                 {
                   "id": "11:21",
@@ -253,7 +251,7 @@
                   "type": "TEXT",
                   "text": "Second line",
                   "textStyle": "style_9f723b14",
-                  "fills": "fill_34dc0314"
+                  "fill": "fill_314185fc"
                 }
               ]
             }
@@ -290,24 +288,16 @@
     }
   },
   "styles": {
-    "fill_fa76e12e": [
-      "#E6E6E6"
-    ],
-    "fill_34dc0314": [
-      "#000000"
-    ],
+    "fill_1288b06a": "#E6E6E6",
+    "fill_314185fc": "#000000",
     "style_9f723b14": {
       "fontFamily": "Inter",
       "fontWeight": 400,
       "fontSize": 14,
       "lineHeight": "20px"
     },
-    "fill_016763b9": [
-      "#3366FF"
-    ],
-    "fill_658ab2fa": [
-      "#FFFFFF"
-    ],
+    "fill_93e41386": "#3366FF",
+    "fill_93230492": "#FFFFFF",
     "layout_5597a813": {
       "mode": "column",
       "gap": "8px"

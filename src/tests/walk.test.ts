@@ -124,8 +124,8 @@ describe("walkNodes", () => {
     const { nodes, styles } = await walk([nodeA, nodeB]);
 
     // Both nodes should reference the same fill variable
-    expect(nodes[0].fills).toBeDefined();
-    expect(nodes[0].fills).toBe(nodes[1].fills);
+    expect(nodes[0].fill).toBeDefined();
+    expect(nodes[0].fill).toBe(nodes[1].fill);
 
     // Only one fill entry should exist in the styles table
     const fillEntries = Object.entries(styles).filter(([key]) => key.startsWith("fill"));
@@ -148,14 +148,14 @@ describe("walkNodes", () => {
 
     const { nodes, styles } = await walk([strokeNode, fillNode]);
 
-    expect(nodes[0].strokes).toBeDefined();
-    expect(nodes[1].fills).toBeDefined();
-    expect(nodes[0].strokes).toBe(nodes[1].fills);
+    expect(nodes[0].stroke).toBeDefined();
+    expect(nodes[1].fill).toBeDefined();
+    expect(nodes[0].stroke).toBe(nodes[1].fill);
 
     // The shared var should use the fill prefix since stroke colors are
     // structurally identical to fill colors in Figma (both are FILL-type styles).
     const colorEntries = Object.entries(styles).filter(
-      ([, value]) => JSON.stringify(value) === JSON.stringify(["#FF0000"]),
+      ([, value]) => JSON.stringify(value) === JSON.stringify("#FF0000"),
     );
     expect(colorEntries).toHaveLength(1);
     expect(colorEntries[0][0]).toMatch(/^fill_/);
@@ -228,10 +228,10 @@ describe("walkNodes", () => {
 });
 
 describe("fill flattening", () => {
-  // Resolve a node's registered fills var back to its concrete value.
+  // Resolve a node's registered fill var back to its concrete value.
   type Extracted = Awaited<ReturnType<typeof walk>>;
   function fillsValue(nodes: Extracted["nodes"], styles: Extracted["styles"]) {
-    return styles[nodes[0].fills as string];
+    return styles[nodes[0].fill as string];
   }
 
   // Figma orders the fills array bottom-first, so index 0 is the backdrop and
@@ -249,7 +249,7 @@ describe("fill flattening", () => {
 
     const { nodes, styles } = await walk([node]);
 
-    expect(fillsValue(nodes, styles)).toEqual(["#CCCCCC"]);
+    expect(fillsValue(nodes, styles)).toEqual("#CCCCCC");
   });
 
   it("culls layers fully occluded by an opaque paint above them", async () => {
@@ -266,7 +266,7 @@ describe("fill flattening", () => {
     const { nodes, styles } = await walk([node]);
 
     // Only the opaque top color survives; the blue beneath contributes nothing.
-    expect(fillsValue(nodes, styles)).toEqual(["#FF0000"]);
+    expect(fillsValue(nodes, styles)).toEqual("#FF0000");
   });
 
   it("folds both color.a and paint.opacity into the effective alpha", async () => {
@@ -283,7 +283,7 @@ describe("fill flattening", () => {
 
     const { nodes, styles } = await walk([node]);
 
-    expect(fillsValue(nodes, styles)).toEqual(["#BFBFBF"]);
+    expect(fillsValue(nodes, styles)).toEqual("#BFBFBF");
   });
 
   it("culls everything below a fully-opaque mid-stack paint, compositing only what's above", async () => {
@@ -301,7 +301,7 @@ describe("fill flattening", () => {
     const { nodes, styles } = await walk([node]);
 
     // Red contributes nothing (opaque green above it); blue@50% blends over green → teal.
-    expect(fillsValue(nodes, styles)).toEqual(["#008080"]);
+    expect(fillsValue(nodes, styles)).toEqual("#008080");
   });
 
   it("treats PASS_THROUGH blend as flattenable", async () => {
@@ -328,7 +328,7 @@ describe("fill flattening", () => {
 
     const { nodes, styles } = await walk([node]);
 
-    expect(fillsValue(nodes, styles)).toEqual(["#CCCCCC"]);
+    expect(fillsValue(nodes, styles)).toEqual("#CCCCCC");
   });
 
   it("emits rgba() when the composited stack is still translucent", async () => {
@@ -344,7 +344,7 @@ describe("fill flattening", () => {
 
     const { nodes, styles } = await walk([node]);
 
-    expect(fillsValue(nodes, styles)).toEqual(["rgba(85, 85, 85, 0.75)"]);
+    expect(fillsValue(nodes, styles)).toEqual("rgba(85, 85, 85, 0.75)");
   });
 
   it("leaves a stack untouched when it contains a gradient", async () => {
@@ -685,7 +685,7 @@ describe("component property support", () => {
     const { nodes } = await walk([instanceNode]);
 
     expect(nodes[0].overrides).toEqual(["width", "height"]);
-    expect(nodes[0].children![0].overrides).toEqual(["text", "fills"]);
+    expect(nodes[0].children![0].overrides).toEqual(["text", "fill"]);
     expect(nodes[0].children![1].overrides).toBeUndefined();
   });
 
@@ -720,7 +720,7 @@ describe("component property support", () => {
 
     const icon = nodes[0].children![0];
     expect(icon.overrides).toEqual(["width", "opacity"]);
-    expect(icon.children![0].overrides).toEqual(["fills"]);
+    expect(icon.children![0].overrides).toEqual(["fill"]);
   });
 
   it("annotates componentPropertyReferences with characters→text rename", async () => {

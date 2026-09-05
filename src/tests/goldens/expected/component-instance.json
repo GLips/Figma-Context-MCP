@@ -39,7 +39,7 @@
               "top": 8,
               "text": "Product Name",
               "textStyle": "style_9f723b14",
-              "fills": "fill_34dc0314",
+              "fill": "fill_314185fc",
               "componentPropertyReferences": {
                 "text": "Title"
               }
@@ -52,9 +52,7 @@
               "height": 20,
               "left": 0,
               "top": 0,
-              "fills": [
-                "#FF0000"
-              ],
+              "fill": "#FF0000",
               "componentPropertyReferences": {
                 "visible": "On Sale"
               }
@@ -85,7 +83,7 @@
               "top": 8,
               "text": "My Product",
               "textStyle": "style_9f723b14",
-              "fills": "fill_34dc0314"
+              "fill": "fill_314185fc"
             }
           ]
         }
@@ -107,9 +105,7 @@
       "fontSize": 14,
       "lineHeight": "20px"
     },
-    "fill_34dc0314": [
-      "#000000"
-    ]
+    "fill_314185fc": "#000000"
   },
   "templates": {}
 }

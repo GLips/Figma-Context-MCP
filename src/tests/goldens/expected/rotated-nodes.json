@@ -9,7 +9,7 @@
       "height": "contextual",
       "designedWidth": "400px",
       "designedHeight": "300px",
-      "fills": "fill_658ab2fa",
+      "fill": "fill_93230492",
       "children": [
         {
           "id": "9:2",
@@ -20,9 +20,7 @@
           "left": 100,
           "top": 60,
           "rotation": -15,
-          "fills": [
-            "#3366E6"
-          ]
+          "fill": "#3366E6"
         },
         {
           "id": "9:3",
@@ -33,9 +31,7 @@
           "left": 220,
           "top": 37.57,
           "rotation": -45,
-          "fills": [
-            "#E66633"
-          ],
+          "fill": "#E66633",
           "children": [
             {
               "id": "9:6",
@@ -46,7 +42,7 @@
               "left": 8.49,
               "top": 42.43,
               "rotation": 45,
-              "fills": "fill_658ab2fa"
+              "fill": "fill_93230492"
             }
           ]
         },
@@ -55,13 +51,10 @@
           "name": "Tilted Rule",
           "type": "LINE",
           "width": 80,
-          "height": 0,
           "left": 60,
           "top": 250,
           "rotation": -15,
-          "strokes": [
-            "#000000"
-          ],
+          "stroke": "#000000",
           "strokeWidth": "1px"
         },
         {
@@ -73,9 +66,7 @@
           "left": 250,
           "top": 170,
           "rotation": -180,
-          "fills": [
-            "#994DCC"
-          ]
+          "fill": "#994DCC"
         },
         {
           "id": "9:4",
@@ -86,9 +77,7 @@
           "left": 40,
           "top": 150,
           "rotation": -10,
-          "fills": [
-            "#F2F2F2"
-          ],
+          "fill": "#F2F2F2",
           "children": [
             {
               "id": "9:5",
@@ -99,9 +88,7 @@
               "left": 12,
               "top": 9,
               "rotation": -20,
-              "fills": [
-                "#1AB366"
-              ]
+              "fill": "#1AB366"
             }
           ]
         }
@@ -111,9 +98,7 @@
   "components": {},
   "componentSets": {},
   "styles": {
-    "fill_658ab2fa": [
-      "#FFFFFF"
-    ]
+    "fill_93230492": "#FFFFFF"
   },
   "templates": {}
 }

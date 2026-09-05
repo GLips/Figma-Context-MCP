@@ -12,7 +12,7 @@ test("a handle reports the node's measured size, and its offset inside a free-fo
   createFigmaMock();
   const out = await render(
     frame({ width: 300, height: 200 }, [
-      rect({ key: "box", name: "Box", width: 40, height: 24, absolute: { x: 20, y: 12 } }),
+      rect({ key: "box", name: "Box", width: 40, height: 24, left: 20, top: 12 }),
     ]),
   );
   // A free-form parent places nothing, so the child's offset is its own — left/top, and no `position`
@@ -45,7 +45,7 @@ test("an auto-layout parent's in-flow child reports no offset; an absolute one r
   const out = await render(
     frame({ width: 200, height: 120, layout: { mode: "column", gap: 8, padding: 10 } }, [
       rect({ key: "inflow", width: 40, height: 24 }),
-      rect({ key: "floaty", width: 10, height: 10, absolute: { x: 5, y: 7 } }),
+      rect({ key: "floaty", width: 10, height: 10, left: 5, top: 7 }),
     ]),
   );
   // The parent owns an in-flow child's position, so reporting it would invite the agent to pin what the
@@ -63,7 +63,7 @@ test("a render handle and a found handle describe one node in one spelling", asy
   createFigmaMock();
   const out = await render(
     frame({ width: 200, height: 120, layout: { mode: "column" } }, [
-      rect({ key: "floaty", width: 10, height: 10, absolute: { x: 5, y: 7 } }),
+      rect({ key: "floaty", width: 10, height: 10, left: 5, top: 7 }),
     ]),
   );
   const found = await findOne({ key: "floaty" });

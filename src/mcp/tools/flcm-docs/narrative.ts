@@ -12,14 +12,14 @@
 export const MENTAL_MODEL = `You **describe** a tree of nodes with plain function calls, then **render** it once.
 
 - **Constructors are inert.** \`flcm.frame(...)\`, \`flcm.text(...)\`, etc. build plain description objects and create *nothing* on the canvas. Only \`await flcm.render(tree)\` creates live nodes — so you can freely build, nest, and compose trees before rendering.
-- **CSS is the dialect — prop NAMES as well as values.** When CSS has a word for something, that is the word: \`color\`, \`fontSize\`, \`fontWeight\`, \`borderRadius\`, \`opacity\`, \`gap\`, \`padding\`, \`justifyContent\`, \`alignItems\`, \`mixBlendMode\` — camelCased, and \`column\`/\`row\` for direction. If you find yourself inventing a shorter name (\`radius\`, \`size\`, \`weight\`), reach for the CSS one instead. Where flcm has no CSS counterpart (\`key\`, \`absolute\`, \`pin\`, \`width: "fill"|"hug"\`) the props page is the only source — read it before your first render rather than guessing.
+- **CSS is the dialect — prop NAMES as well as values.** When CSS has a word for something, that is the word: \`color\`, \`fontSize\`, \`fontWeight\`, \`borderRadius\`, \`opacity\`, \`gap\`, \`padding\`, \`justifyContent\`, \`alignItems\`, \`mixBlendMode\` — camelCased, and \`column\`/\`row\` for direction. If you find yourself inventing a shorter name (\`radius\`, \`size\`, \`weight\`), reach for the CSS one instead. Where flcm has no CSS counterpart (\`key\`, \`anchor\`, \`pin\`, \`width: "fill"|"hug"\`) the props page is the only source — read it before your first render rather than guessing.
 - **Leaf values are CSS too.** Colors, gradients, shadows, and metrics are written the way you'd write them in CSS (\`"#0B1020"\`, \`"rgba(255,255,255,0.06)"\`, \`"linear-gradient(180deg, …)"\`, \`"24px"\`, \`"-0.02em"\`). You write this one familiar format; we translate it to Figma-native values for you. The catch: CSS can spell things Figma can't realize, so values **outside the documented subset fail loud** (a specific error) rather than rendering wrong pixels.
 
 There is no autocomplete and no type-checking where your code runs (a QuickJS sandbox), so everything you can write is spelled out in this reference. If a verb, prop, or value isn't documented, it isn't supported.`;
 
 export const CHILDREN = `- A frame's children are the **second positional argument**: an array (or a single child).
 - Children may be **falsy** — \`null\`, \`false\`, \`undefined\` are skipped, so \`showError && flcm.text(...)\` composes cleanly.
-- **Z-order is document order: declare back-to-front.** Earlier children sit behind later ones; there is no \`z\`/\`layer\` prop. An absolute-positioned decoration that should sit behind content is declared first.`;
+- **Z-order is document order: declare back-to-front.** Earlier children sit behind later ones; there is no \`z\`/\`layer\` prop. A decoration placed with \`left\`/\`top\` that should sit behind content is declared first.`;
 
 export const RICH_TEXT = `\`flcm.text\` takes **either** a plain string **or** an array of **runs** — one text node, several styles.
 
@@ -45,7 +45,7 @@ flcm.text(
 
 A run resolves its font exactly as the node does, and its delta may set any field in the table below. \`textAlign\`, \`textAlignVertical\` and \`lineClamp\` are whole-node only. A fixed \`width\` wraps the node into a flowing paragraph, so a styled paragraph is runs + a width.`;
 
-export const PERCENT_SIZING = `\`width\`, \`height\`, and \`absolute.x\`/\`absolute.y\` take a percent string — \`"50%"\` of the parent's size on that axis, resolved against its *realized* size once layout settles (so a percent child of a \`"fill"\` or percent-sized parent is fine).
+export const PERCENT_SIZING = `\`width\`, \`height\`, \`left\` and \`top\` take a percent string — \`"50%"\` of the parent's size on that axis, resolved against its *realized* size once layout settles (so a percent child of a \`"fill"\` or percent-sized parent is fine).
 
 \`\`\`js
 flcm.frame({ width: 300, height: 8, borderRadius: 4, fill: "#E5E7EB" }, [
@@ -53,27 +53,27 @@ flcm.frame({ width: 300, height: 8, borderRadius: 4, fill: "#E5E7EB" }, [
 ]);
 \`\`\`
 
-One case can't resolve and **fails loud**: an in-flow percent-*sized* child of an auto-layout parent that *hugs* that axis — the parent sizes to the child while the child sizes to the parent. Give the parent a fixed or \`"fill"\` size, or lift the child out with \`absolute\`. A percent (or \`"fill"\`) on the **root** fails loud too: its parent is the page, which is unbounded.
+One case can't resolve and **fails loud**: an in-flow percent-*sized* child of an auto-layout parent that *hugs* that axis — the parent sizes to the child while the child sizes to the parent. Give the parent a fixed or \`"fill"\` size, or lift the child out of the flow with \`left\`/\`top\`. A percent (or \`"fill"\`) on the **root** fails loud too: its parent is the page, which is unbounded.
 
-**Responsive by default.** A percent renders to fixed pixels now, and a **positioned** child — one in a free-form parent, or any \`absolute\` child — also gets a Figma constraint, so it still reflows when the parent is resized later. Per axis, derived from how you sized it:
+**Responsive by default.** A percent renders to fixed pixels now, and a **positioned** child — one in a free-form parent, or one lifted out of an auto-layout flow by \`left\`/\`top\` — also gets a Figma constraint, so it still reflows when the parent is resized later. Per axis, derived from how you sized it:
 
 | You wrote | Auto constraint | On resize |
 | --- | --- | --- |
 | \`width:"fill"\` | stretch | grows/shrinks with the parent |
 | \`width:"N%"\` | scale | scales proportionally |
-| \`absolute:{ x:"N%" }\` | center | holds its relative spot |
+| \`left:"N%"\` | center | holds its relative spot |
 | a plain number | near edge | stays put (Figma default) |
 
-**\`pin\`** overrides that choice; **\`absolute.anchor\`** picks which point of the node lands on \`x\`/\`y\` (default top-left), which is what saves the half-width subtraction when centring:
+**\`pin\`** overrides that choice; **\`anchor\`** picks which point of the node lands on \`left\`/\`top\` (default top-left), which is what saves the half-width subtraction when centring:
 
 \`\`\`js
 // a close button that stays top-right as the card widens
 flcm.frame({ width: 320, height: 200 }, [
-  flcm.rect({ width: 28, height: 28, absolute: { x: 284, y: 12 }, pin: { x: "right", y: "top" } }),
+  flcm.rect({ width: 28, height: 28, left: 284, top: 12, pin: { x: "right", y: "top" } }),
 ]);
 
 // a knob centred on the 40% mark
-flcm.ellipse({ width: 16, height: 16, absolute: { x: "40%", y: "50%", anchor: { x: "center", y: "center" } } });
+flcm.ellipse({ width: 16, height: 16, left: "40%", top: "50%", anchor: { x: "center", y: "center" } });
 \`\`\`
 
 \`pin\` is ignored on an in-flow auto-layout child, which reflows through \`fill\`/\`hug\` instead. A bad \`pin\` or \`anchor\` value fails loud.`;
@@ -99,7 +99,7 @@ A \`path\` with no \`fill\` is transparent, like a rect. Unparseable markup or b
 
 **For uniform translucency use node-level \`opacity\`** — it flattens the vector and fades it as one layer. \`fill-opacity\`/\`stroke-opacity\` inside markup composite per-subpath, so they seam where subpaths overlap.`;
 
-export const PAINT_INTRO = `A paint value (for \`fill\`, \`stroke\`, \`color\`) is one of:
+export const PAINT_INTRO = `A paint value (for \`fill\`, \`stroke\`, or a run's \`color\`) is one of:
 
 - a **solid color string** — \`"#FF0000"\`, \`"#FF0000AA"\`, \`"rgba(255,0,0,0.5)"\`;
 - a **gradient string** — \`"linear-gradient(…)"\` / \`"radial-gradient(…)"\`;
@@ -157,7 +157,7 @@ out.keyed.chip.intent;    // undefined — a plainly fixed node
 
 **\`intent\` tells you whether that number is yours to keep.** It appears only on an axis the layout owns (\`"fill"\`/\`"hug"\`), which re-measures whenever the parent or content changes — reading \`320\` off a \`"fill"\` bar and hardcoding it is how a responsive design silently becomes fixed.
 
-\`left\`/\`top\` are the offset in the parent, present **only when the parent doesn't place the node** (a child of a plain frame, or an \`absolute\` one — which also carries \`position: "absolute"\`).
+\`left\`/\`top\` are the offset in the parent, present **only when the parent doesn't place the node** (a child of a plain frame, or one lifted out of an auto-layout flow — which also carries \`position: "absolute"\`). They are the same \`left\`/\`top\` you write.
 
 \`get\`/\`find\` name geometry the same way, with one difference: \`render\` just measured, so it gives the number *and* the rule; \`find\` reports \`width: "fill"\` and withholds the px, so nothing tempts you to pin a size the design didn't fix.
 
@@ -264,8 +264,8 @@ When you pass effects as CSS strings (\`effects: { … }\`):
 | \`layout.gap\`, \`strokeWidth\`, \`borderRadius\` | number or \`"Npx"\` |
 | \`layout.padding\` (and its \`x\`/\`y\`/\`top\`/…) | **numbers only** (not \`"px"\` strings) |
 | \`width\`, \`height\` | a **number** (fixed px), \`"N%"\` (percent of the parent's realized size — see Percent sizing), or \`"fill"\` / \`"hug"\` |
-| \`absolute.x/y\` | a number (px) or \`"N%"\` (percent of the parent axis); \`absolute.anchor\` sets which point of the node lands there |
-| \`textStyle.fontSize\`, \`rotation\`, \`length\`, \`opacity\` | numbers |
+| \`left\`/\`top\` | a number (px) or \`"N%"\` (percent of the parent axis); \`anchor\` sets which point of the node lands there. Naming either lifts a child out of an auto-layout flow |
+| \`textStyle.fontSize\`, \`rotation\`, \`opacity\` | numbers |
 | \`textStyle.lineHeight\`, \`textStyle.letterSpacing\` | number(px), \`"Npx"\`, \`"N%"\`, \`"Nem"\` (lineHeight also \`"auto"\`) |`;
 
 export const FAILS_LOUD = `Accepting CSS is a fidelity promise, so the boundaries are strict. Each of these throws a specific error naming the offending value — never a guess, never a silent no-op:
@@ -273,7 +273,7 @@ export const FAILS_LOUD = `Accepting CSS is a fidelity promise, so the boundarie
 | Situation | Why, and the fix |
 | --- | --- |
 | A color / gradient / effect outside the [CSS subset](#the-css-subset) | Parse error naming the value. |
-| A read-artifact image fill (\`{ type: "IMAGE", imageRef, … }\`) on \`fill\`/\`stroke\`/\`color\` | A ref to bytes we don't have — author with \`flcm.image(url)\`. |
+| A read-artifact image fill (\`{ type: "IMAGE", imageRef, … }\`) on \`fill\`/\`stroke\` | A ref to bytes we don't have — author with \`flcm.image(url)\`. |
 | An \`flcm.image\` source that is unfetchable, blocked (private/loopback), outside the server's asset root, oversize, or not an image | Rejected server-side with the reason, never a blank fill. |
 | An \`flcm.text\` value that is neither a string nor a runs array, or text carrying read style-ref tokens (\`{ts1}…{/ts1}\`) | Those are read artifacts. Author styled text as markdown or runs. \`**\` in a plain string is markdown — backslash-escape for a literal. |
 | \`![alt](url)\` in a text string, or an unrealizable \`fontStyle\`/\`textDecoration\` (\`"oblique"\`, \`"overline"\`) | Text can't embed an image (\`flcm.image\`); the enum names the supported set. |
@@ -283,8 +283,8 @@ export const FAILS_LOUD = `Accepting CSS is a fidelity promise, so the boundarie
 | \`fill\`/\`stroke\` on \`flcm.svg\` | Colors are baked into the markup — edit it, or use \`flcm.path\` for a themeable vector. |
 | Unparseable SVG markup, or bad path \`d\` data | Never a silent blank node. |
 | Returning a live Figma node | Return the id string or a handle. |
-| A bad \`pin\` or \`absolute.anchor\` value | Names the value and the allowed set. |
-| A percent \`width\`/\`height\` on an in-flow child of a parent that hugs that axis, or a percent/\`"fill"\` on the root | A genuine cycle (and the page is unbounded). Give the parent a fixed or \`"fill"\` size, or lift the child out with \`absolute\`. |
+| A bad \`pin\` or \`anchor\` value, or \`anchor\` on an axis without its \`left\`/\`top\` | Names the value and the allowed set. |
+| A percent \`width\`/\`height\` on an in-flow child of a parent that hugs that axis, or a percent/\`"fill"\` on the root | A genuine cycle (and the page is unbounded). Give the parent a fixed or \`"fill"\` size, or lift the child out of the flow with \`left\`/\`top\`. |
 | An unknown \`mixBlendMode\` | Names the value and the supported set. |
 | \`layout.justifyContent\`/\`alignItems\` Figma can't realize — \`"space-around"\`, \`"space-evenly"\` | Use \`"space-between"\` or \`gap\`/\`padding\`. Never faked with spacer nodes, which read as content. |
 | \`textStyle.lineClamp\` on a width-hugging text | Truncation needs a width to wrap against. Set \`width\` to a number, \`"fill"\`, or \`"N%"\`. |
@@ -300,19 +300,19 @@ export const EDIT_INTRO = `\`await flcm.edit(target, changes)\` applies a partia
 
 export const EDIT_REMOVAL = `### Removal — the \`"none"\` word
 
-\`"none"\` is the one removal word, surface-wide: \`fill\`/\`stroke\` clear the paint, \`effects\` clears every effect, \`absolute\` returns the node to its parent's flow, \`pin\` (or \`pin: { x: "none" }\` per axis) restores the near-edge default, \`layout: { mode: "none" }\` switches auto-layout off. The same spellings are legal at create, where they mean the explicit default. Sizes are never removed, only replaced within the number/\`"fill"\`/\`"hug"\` trio — \`width: "hug"\` is how a fixed width comes off.`;
+\`"none"\` is the one removal word, surface-wide: \`fill\`/\`stroke\` clear the paint, \`effects\` clears every effect, \`position: "none"\` returns the node to its parent's flow, \`pin\` (or \`pin: { x: "none" }\` per axis) restores the near-edge default, \`layout: { mode: "none" }\` switches auto-layout off. The same spellings are legal at create, where they mean the explicit default. Sizes are never removed, only replaced within the number/\`"fill"\`/\`"hug"\` trio — \`width: "hug"\` is how a fixed width comes off.`;
 
 export const EDIT_RULES = `### Rules
 
 - **A node type takes exactly the words create accepts for it.** \`fill\` on a LINE, \`clip\` on a TEXT, \`borderRadius\` on a VECTOR — each rejects loud, naming the prop, the type, and that type's editable words.
-- **Only the fields you pass change — per axis, too.** \`pin: { x: "center" }\` keeps the y pin; \`absolute: { x: 10 }\` keeps the live y; \`width: "hug"\` leaves the height alone.
+- **Only the fields you pass change — per axis, too.** \`pin: { x: "center" }\` keeps the y pin; \`left: 10\` keeps the live \`top\`; \`width: "hug"\` leaves the height alone.
 - **Un-filling really un-fills.** \`width: 80\` or \`"hug"\` on a \`"fill"\` child clears the grow/stretch marks — the new size governs.
 - **Container edits ripple by stated rules.** \`layout.alignItems: "stretch"\` walks the live children setting their stretch marks; any other value clears every one (Figma doesn't record which child stretched because of the container, so a child that should keep filling needs its own \`height: "fill"\`). Changing direction — row↔column, or \`"none"\` to either — clears both flow marks on every in-flow child, since the axes they meant just moved.
 - **Layout legality is create's rule set, applied to live facts** and rejected before any write: a percent on an in-flow child of a hugging parent, \`"fill"\`/\`"N%"\` under the page, \`"hug"\` with nothing to measure, a fixed/hug/percent \`height\` on TEXT, or container words on a frame that isn't (and after this delta still won't be) a row/column container. Percents resolve immediately against the live parent.
-- **Text words read the LIVE node.** \`content\` replaces the whole text and collapses it to its LEADING run's style — prior bold spans and per-range colors do NOT survive, so style the new text in the same edit. A \`textStyle\` naming part of the font triple keeps the live rest (\`fontWeight: "bold"\` on italic Roboto stays bold italic Roboto). A text that already MIXES fonts has no single base: a partial font change, or a styled \`content\` run without its own \`fontFamily\`, rejects loud — anchor \`textStyle.fontFamily\` in the same edit, or give every run its family. \`lineClamp\` needs a bounded width.
+- **Text words read the LIVE node.** \`text\` replaces the whole text and collapses it to its LEADING run's style — prior bold spans and per-range colors do NOT survive, so style the new text in the same edit. A \`textStyle\` naming part of the font triple keeps the live rest (\`fontWeight: "bold"\` on italic Roboto stays bold italic Roboto). A text that already MIXES fonts has no single base: a partial font change, or a styled \`text\` run without its own \`fontFamily\`, rejects loud — anchor \`textStyle.fontFamily\` in the same edit, or give every run its family. \`lineClamp\` needs a bounded width.
 - **Edits inside a component INSTANCE apply as overrides.** A property Figma forbids overriding rejects, naming the instance — edit the main component (flcm never auto-detaches).
 - **\`key\` is immutable** — re-keying could mint a duplicate address. Set \`name\` to change the layers panel.
-- **No bare \`x\`/\`y\`** — position is \`absolute: { x, y }\`, resize behavior is \`pin\`.
+- **No bare \`x\`/\`y\`** — position is \`left\`/\`top\` (naming either lifts a child out of an auto-layout flow; \`position: "absolute"\` lifts it in place, \`position: "none"\` returns it), resize behavior is \`pin\`.
 - **An empty delta is rejected**, since it would still mint an undo step.
 - **Each edit is one undo step.** The whole delta validates before the first write; a Figma refusal mid-apply rolls the node back, and the error carries the target's identity, Figma's reason, and how many earlier mutating calls still stand.
 - Delta values are **absolute**, never relative (\`+10\`), so re-running an edit converges instead of compounding.`;
@@ -340,7 +340,7 @@ export const STRUCTURE_INTRO = `Tree shape is its own set of verbs, and **positi
 
 Three more complete the set: \`flcm.move(target, parent)\` is the plain reparent (subject named first, node lands last), \`flcm.remove(target)\` deletes a node and its subtree, \`flcm.clone(target, parent?)\` duplicates one.
 
-**\`clone\` is the copy path for subtrees a rebuild can't reproduce** — anything containing an INSTANCE, which is most real content. It duplicates the LIVE node, and the copy comes back **key-less** (a raw \`node.clone()\` would copy the \`flcm/key\` too, giving two nodes one address). It is faithful down to coordinates, so in a free-form parent it lands on top of the original — edit its \`absolute\` to separate them.
+**\`clone\` is the copy path for subtrees a rebuild can't reproduce** — anything containing an INSTANCE, which is most real content. It duplicates the LIVE node, and the copy comes back **key-less** (a raw \`node.clone()\` would copy the \`flcm/key\` too, giving two nodes one address). It is faithful down to coordinates, so in a free-form parent it lands on top of the original — edit its \`left\`/\`top\` to separate them.
 
 Every return carries the subject plus each container whose geometry could have changed — flat handles with fresh geometry, never nested trees. \`to\` is where things ended up, \`from\` is what something left; either is absent when that container is the page, and \`from\` is absent when you reordered inside one parent.`;
 
