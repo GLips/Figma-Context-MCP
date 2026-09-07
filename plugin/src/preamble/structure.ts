@@ -29,6 +29,7 @@ import {
 } from "./bridge.js";
 import { assertConstructorBuiltTree, isConstructorBuilt, isReadSpec } from "./provenance.js";
 import { loadTreeResources } from "./render.js";
+import { assertNoComponentPropertyBindings } from "./flcm.js";
 import { clearKeysDeep, instanceAncestorOf } from "./identity.js";
 import { beginMutatingApply } from "./verb-error.js";
 
@@ -202,6 +203,7 @@ interface PreparedInsert { kind: "insert"; dest: Destination; spec: WriteNode; r
 interface PreparedPlacement { kind: "placement"; dest: Destination; node: any; words: WriteLayout }
 
 function applyInsert(verb: string, { dest, spec, resources }: PreparedInsert): InsertResult {
+  // No `bindings` — an insert declares no component properties (see RenderCtx.bindings).
   const ctx: RenderCtx = { ...resources, keyed: {}, pending: [] };
   const fail = beginMutatingApply(verb, dest.parent);
   let root: any;
@@ -266,6 +268,9 @@ function placeVerb(verb: string, anchor: Target, thing: unknown, placement: Plac
       // image fetch, and a sealed tree can't change between here and the build (ADR-0012).
       const spec = thing as WriteNode;
       assertConstructorBuiltTree(spec);
+      // Bindings are flcm.component's word alone — inserting one would reference a property this
+      // call never declares. (Capability 4 lifts this for an insert INTO an existing component.)
+      assertNoComponentPropertyBindings(spec, subject);
       // Resources BEFORE the destination, and this order is load-bearing: fonts and images are the
       // long await in this prepare, and the user has the document open the whole time. Every live
       // fact the gates below read — the parent's layout mode, its hug axes, its instance ancestry —

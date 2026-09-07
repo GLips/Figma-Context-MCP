@@ -24,7 +24,7 @@ import { z } from "zod";
 import type {
   FillInput, WriteCssEffects, PaintSpec, EffectSpec, GradientStop, WriteNode, WriteChild, Handle,
   PinX, PinY, Target, RawIdRef, SlimHandle, FindQuery, ReadPredicate, InsertResult, MoveResult, CloneResult, RemoveResult, GetResult,
-  PageInfo, ComponentPropertyInput, OverrideDeltaInput,
+  PageInfo, ComponentPropertyInput, OverrideDeltaInput, ComponentPropertyDefinitions, ComponentResult, VariantEntryInput,
 } from "./ir.js";
 // The read verbs return the canonical read shape the shared simplify core emits. Relative (not ~/) so the
 // root toolchain, which imports this module for docs generation, resolves it without the plugin's paths.
@@ -389,6 +389,26 @@ const SWAP_FIELDS = {
   ),
 };
 
+// The BINDING word, on every node constructor: which component property drives which of this node's
+// fields. The read's own `componentPropertyReferences`, with the read's own field spellings — so a
+// component's children read back and author back in one vocabulary. It means something ONLY inside
+// flcm.component (the verb that declares the properties in the same call); every other verb refuses
+// a tree carrying one, by name. Which FIELDS a given constructor may bind is per-type and enforced
+// at construction (flcm.ts compileBindingBag), not spelled in the type — a `slot` on a TEXT would be
+// a frame's word on a node with no children.
+const BINDING_FIELDS = {
+  componentPropertyReferences: prop(
+    z.object({
+      visible: z.string().optional(),
+      text: z.string().optional(),
+      componentId: z.string().optional(),
+      slot: z.string().optional(),
+    }),
+    'Bind this node to a component property declared in the same flcm.component call, keyed as `get` reports a binding: `visible` (a boolean property hides/shows the layer — any node), `text` (flcm.text only — the property drives its content), `componentId` (flcm.instance only — an instance-swap property), `slot` (flcm.frame only — THIS frame is the slot, and every instance shows it as a SLOT holding that frame\'s content; authoring an instance\'s slot content is not yet a word). Each value is a property name from this call\'s `propertyDefinitions`; an unknown name, or one whose type doesn\'t match the field, fails loud.',
+    "{ visible?, text?, componentId?, slot? } — property names",
+  ),
+};
+
 // ---- Composed verb schemas → inferred Props. flcm.ts imports these types (import type only). The Base/
 // Size/Appearance sub-schemas exist so flcm.ts's shared compilers (base/applySizing/appearance) type
 // against the same fields the verbs are built from. ----
@@ -401,19 +421,19 @@ export type BaseProps = z.infer<typeof BaseSchema>;
 export type SizeProps = z.infer<typeof SizeSchema>;
 export type AppearanceProps = z.infer<typeof AppearanceSchema>;
 
-export const FrameSchema = z.object({ ...SHARED_FIELDS, ...SIZE_FIELDS, ...APPEARANCE_FIELDS, ...FRAME_FIELDS });
-export const TextSchema = z.object({ ...SHARED_FIELDS, ...SIZE_FIELDS, ...TEXT_FIELDS });
-export const ShapeSchema = z.object({ ...SHARED_FIELDS, ...SIZE_FIELDS, ...APPEARANCE_FIELDS });
-export const EllipseSchema = z.object({ ...SHARED_FIELDS, ...SIZE_FIELDS, ...ELLIPSE_FIELDS });
-export const LineSchema = z.object({ ...SHARED_FIELDS, ...LINE_FIELDS });
-export const PathSchema = z.object({ ...SHARED_FIELDS, ...SIZE_FIELDS, ...PATH_FIELDS });
+export const FrameSchema = z.object({ ...SHARED_FIELDS, ...SIZE_FIELDS, ...APPEARANCE_FIELDS, ...FRAME_FIELDS, ...BINDING_FIELDS });
+export const TextSchema = z.object({ ...SHARED_FIELDS, ...SIZE_FIELDS, ...TEXT_FIELDS, ...BINDING_FIELDS });
+export const ShapeSchema = z.object({ ...SHARED_FIELDS, ...SIZE_FIELDS, ...APPEARANCE_FIELDS, ...BINDING_FIELDS });
+export const EllipseSchema = z.object({ ...SHARED_FIELDS, ...SIZE_FIELDS, ...ELLIPSE_FIELDS, ...BINDING_FIELDS });
+export const LineSchema = z.object({ ...SHARED_FIELDS, ...LINE_FIELDS, ...BINDING_FIELDS });
+export const PathSchema = z.object({ ...SHARED_FIELDS, ...SIZE_FIELDS, ...PATH_FIELDS, ...BINDING_FIELDS });
 // svg pastes opaque markup: size/position only, no appearance (colors are baked into the markup). `markup`
 // is the positional first arg, so it isn't a prop field here.
-export const SvgSchema = z.object({ ...SHARED_FIELDS, ...SIZE_FIELDS });
+export const SvgSchema = z.object({ ...SHARED_FIELDS, ...SIZE_FIELDS, ...BINDING_FIELDS });
 // An instance takes a FRAME's words — its root is a frame-like container, and naming one of them
 // sets a root-level override (an unnamed word keeps tracking the component) — plus the component
 // words. No `children`: an instance's content is its component's.
-export const InstanceSchema = z.object({ ...SHARED_FIELDS, ...SIZE_FIELDS, ...APPEARANCE_FIELDS, ...FRAME_FIELDS, ...INSTANCE_FIELDS });
+export const InstanceSchema = z.object({ ...SHARED_FIELDS, ...SIZE_FIELDS, ...APPEARANCE_FIELDS, ...FRAME_FIELDS, ...INSTANCE_FIELDS, ...BINDING_FIELDS });
 
 export type FrameProps = z.infer<typeof FrameSchema>;
 export type InstanceProps = z.infer<typeof InstanceSchema>;
@@ -474,6 +494,56 @@ export interface EditEntry { target: Target; changes: EditDelta }
 // verb's second target argument means WHERE something goes — `within` is a search scope, and the
 // read verbs already spell it as a named field on their query.
 export interface EditManyScope { within?: Target }
+
+// ---- The two verbs that MAKE a component. Read words are write words here too: `propertyDefinitions`
+// and `componentPropertyReferences` are what a `get` reports on a COMPONENT, spelled the same way. ----
+
+// flcm.component(specOrTarget, options?) options.
+const COMPONENT_FIELDS = {
+  name: prop(z.string(), "The component's name. Defaults to the spec's (or the promoted node's) own name."),
+  description: prop(z.string(), "The component's description — what Figma shows beside it in the assets panel."),
+  propertyDefinitions: prop(
+    z.custom<ComponentPropertyDefinitions>(),
+    'The properties this component exposes, by name — the read\'s own `propertyDefinitions`: { Label: { type: "text" }, Icon: { type: "boolean", defaultValue: true }, Trailing: { type: "slot" } }. Names must be non-empty and unique in the call. A `variant` type is refused: variant axes are made by combining components into a set (flcm.variants), never declared on one.',
+    '{ [name]: { type, defaultValue? } }',
+  ),
+};
+
+// One entry of `propertyDefinitions` — its own table, since the bag above documents only the map.
+const PROPERTY_DEFINITION_FIELDS = {
+  type: z
+    .enum(["boolean", "text", "instance_swap", "slot"])
+    .describe(
+      'The read\'s own lowercase property types. `boolean` shows/hides bound layers, `text` drives a bound TEXT\'s content, `instance_swap` swaps a bound instance\'s component, `slot` makes a bound FRAME a hole an instance fills. Required.',
+    ),
+  defaultValue: prop(
+    z.custom<boolean | string | Target>(),
+    'The value a fresh instance starts at: a boolean, a string, or (for `instance_swap`) a component target. OMIT IT to derive it from the node that binds this property — its `visible`, its text, its component. A `slot` refuses one (its content is authored, not set), and a property nothing binds must state one.',
+    "boolean | string | component target",
+  ),
+};
+
+// One entry of flcm.variants — both fields required, so neither rides prop() (which optionals).
+const VARIANT_ENTRY_FIELDS = {
+  component: z
+    .custom<Target>()
+    .describe("The standalone COMPONENT that becomes this variant. Already a variant of another set, or not a component at all, fails loud.")
+    .meta({ type: "component target" }),
+  variant: z
+    .custom<Record<string, string>>()
+    .describe('Which member of the set this component IS, in the set\'s axes: { Size: "Large", State: "Default" }. Every entry names the SAME axes (order-free); axis names and values may not contain "=" or "," (Figma\'s variant-name grammar), and no two entries may name the same combination.')
+    .meta({ type: "{ [axis]: value }" }),
+};
+
+const VARIANTS_FIELDS = {
+  name: z.string().describe("The set's name. Required — left to Figma the set would be named after the first member's axes."),
+  description: COMPONENT_FIELDS.description,
+};
+
+export const ComponentOptionsSchema = z.object(COMPONENT_FIELDS);
+export type ComponentOptions = z.infer<typeof ComponentOptionsSchema>;
+export const VariantsOptionsSchema = z.object(VARIANTS_FIELDS);
+export type VariantsOptions = z.infer<typeof VariantsOptionsSchema>;
 
 // flcm.image(src, opts?) options — the second, optional arg to the image paint constructor. `src` (an
 // https url or a local file path under the server's asset root) is the positional first arg (like svg's
@@ -566,6 +636,17 @@ export interface Flcm {
   // nothing re-attaches it. A NESTED instance fails loud naming the enclosing one: Figma's detach
   // would take every enclosing instance with it, and flcm won't widen the mutation silently.
   detach(target: Target): Promise<Handle>;
+  // Make a COMPONENT — from a constructor spec (rendered on the current page exactly as flcm.render
+  // would, then promoted) or from a target naming a live node (promoted where it stands). `options`
+  // names it, describes it, and declares its `propertyDefinitions`; the spec's nodes say which of
+  // their fields each property drives through `componentPropertyReferences`. Returns the COMPONENT's
+  // handle (a NEW node — its id is not the frame's) plus every keyed node in its subtree.
+  component(specOrTarget: WriteNode | Target, options?: ComponentOptions): Promise<ComponentResult>;
+  // Fold standalone components into a COMPONENT_SET: each entry says which member of the set its
+  // component IS, in the set's axes. The set lands where the first component sat, and the variant
+  // axes become the set's own `variant` properties — the ones flcm.instance's `componentProperties`
+  // then select by.
+  variants(entries: VariantEntryInput[], options: VariantsOptions): Promise<Handle>;
   gradient(spec: GradientSugar): PaintSpec;
   gradient(type: "linear" | "radial", stops: GradientStopInput[], angle?: number): PaintSpec;
   // A raster image fill value — like flcm.gradient, a paint you pass to any node's `fill`. The bytes are
@@ -666,6 +747,8 @@ export const VERBS: VerbDoc[] = [
   { category: "build", signature: "flcm.svg(markup, props?)", builds: "a VECTOR from SVG markup", args: "SVG markup string first, then size/position props", schema: SvgSchema },
   { category: "build", signature: "flcm.path(props)", builds: "a themeable VECTOR", args: "props object including `d` (path data)", schema: PathSchema },
   { category: "component", signature: "flcm.instance(component, props?)", builds: "an INSTANCE of a component (a spec — render it, or place it with append/insertBefore like any node)", args: "the component first — a read's `componentId`, an flcm/key, a handle, or a COMPONENT_SET (the variant `componentProperties` select) — then a frame's props plus `componentProperties` and `overrides`, keyed exactly as `get` reports them. Or one props object carrying `componentId`, as a read spec does", schema: InstanceSchema },
+  { category: "component", signature: "await flcm.component(specOrTarget, options?)", builds: "a COMPONENT — a spec rendered then promoted, or a live node promoted where it stands (returns { node, keyed }, the component's own handle)", args: "a constructor spec or a target, then { name?, description?, propertyDefinitions? }. A node in the spec says which property drives which of its fields with `componentPropertyReferences`", schema: ComponentOptionsSchema, quickStart: "await flcm.component(spec|target, opts) / flcm.variants(entries, opts)" },
+  { category: "component", signature: "await flcm.variants(entries, options)", builds: "a COMPONENT_SET from standalone components (returns the set's handle)", args: "an array of { component, variant: { Axis: \"Value\", … } } naming the same axes, then { name, description? }. The set lands where the first component sat", schema: VariantsOptionsSchema, quickStart: null },
   { category: "component", signature: "await flcm.detach(target)", builds: "the instance's subtree as ordinary layers — a FRAME with a NEW id (returns its handle)", args: "an INSTANCE target. One-way. A nested instance fails loud naming the enclosing one — Figma's detach would take every enclosing instance with it, so flcm makes you say so", quickStart: null },
   { category: "value", signature: "flcm.gradient(...)", builds: "a gradient fill value", args: "object or positional form", schema: GradientSchema },
   { category: "value", signature: "flcm.image(src, opts?)", builds: "an image fill value", args: "an https url or a local file path (under the server's asset root) first, then { scaleMode?, placeholder? }", schema: ImageSchema },
@@ -714,6 +797,11 @@ export const FIELD_GROUPS = {
   edit: EDIT_FIELDS,
   instance: INSTANCE_FIELDS,
   swap: SWAP_FIELDS,
+  binding: BINDING_FIELDS,
+  componentOptions: COMPONENT_FIELDS,
+  propertyDefinition: PROPERTY_DEFINITION_FIELDS,
+  variantEntry: VARIANT_ENTRY_FIELDS,
+  variantsOptions: VARIANTS_FIELDS,
   image: IMAGE_FIELDS,
   gradient: GradientSchema.shape,
   effects: EffectsSchema.shape,

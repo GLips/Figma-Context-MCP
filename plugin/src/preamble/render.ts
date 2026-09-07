@@ -10,7 +10,7 @@ import { loadFontsForTree, loadFontsForTextEdits } from "./fonts.js";
 import { buildNode, placeRootOnPage, settleHandles, resolvePercents, RenderCtx, RenderResources } from "./bridge.js";
 import { describeRootOverlap } from "./root-overlap.js";
 import { enterMutatingVerb } from "./mutation-lock.js";
-import { fetchImagesForTrees } from "./flcm.js";
+import { fetchImagesForTrees, assertNoComponentPropertyBindings } from "./flcm.js";
 import { prepareInstancePlans } from "./instance.js";
 
 // The read-only resource loads a tree needs before ANY node is created — the instance plans
@@ -62,6 +62,32 @@ export async function loadTreeResources(tree: WriteNode): Promise<RenderResource
   }
 }
 
+/**
+ * The build sequence a spec ROOT gets when it lands on the page: build the tree (percent children at
+ * a provisional size), apply the root's own position words against the page, fold every percent and
+ * anchor into pixels now that each parent's realized size is readable, and tell the agent when the
+ * root landed on top of something.
+ *
+ * Shared rather than copied because `flcm.component`'s spec form promises the agent its spec renders
+ * "exactly as flcm.render would" — a second hand-rolled copy of these four steps makes that promise
+ * false the first time one of them changes. The caller owns the ctx: whether bindings are collected
+ * is the caller's declaration, not this function's (see RenderCtx.bindings).
+ */
+export function buildTreeOnPage(tree: WriteNode, ctx: RenderCtx): any {
+  const root = buildNode(tree, ctx);
+  // The root's own position words (absolute x/y, pin, anchor) apply against the page — the walk
+  // above only positions CHILDREN, and edit applies the same words to a page child.
+  if (tree.layout) placeRootOnPage(root, tree.layout, ctx);
+  resolvePercents(ctx);
+  // After resolvePercents, so the root's bounds are final — and through the CONSOLE channel, which
+  // every already-installed plugin already returns. A new field on EXECUTE_CODE_RESULT would be a
+  // protocol bump, i.e. a manual manifest re-import for every user, to say something this advisory.
+  // ADR-0010 buys exactly this: placement feedback ships with the server.
+  const overlap = describeRootOverlap(root);
+  if (overlap) console.log(overlap);
+  return root;
+}
+
 // render(tree) — the one place nodes are created. Loads fonts, walks the WriteNode tree, stamps each
 // `key` into pluginData('flcm/key'), and returns the built tree's top node plus a map of every keyed node. Only
 // keyed nodes appear in `keyed`; a duplicate key within one render is a loud error (in bridge).
@@ -88,6 +114,9 @@ function render(tree: WriteNode): Promise<{ node: Handle; keyed: Record<string, 
       // node must reject with its own message, not surface as a confusing image/font error after
       // a wasted host round-trip.
       assertConstructorBuiltTree(tree);
+      // A binding names a property only flcm.component declares, so through render the name points
+      // at nothing. Refused here, beside provenance, for the same reason: before any round trip.
+      assertNoComponentPropertyBindings(tree, "flcm.render");
       // The root lands on the page, which has no bounded size to resolve "fill" or a percent
       // against — reject before the image round-trip (this check needs no bytes) and before
       // buildNode, which only guards a percent on a *child*. The rule is edit's page-parent gate,
@@ -99,20 +128,10 @@ function render(tree: WriteNode): Promise<{ node: Handle; keyed: Record<string, 
     },
     // Apply — node creation, sealed as one undo step.
     (resources) => {
+      // No `bindings`: render declares no component properties, so a bound node reaching the walk is
+      // a loud internal error rather than a silently dropped word (prepare refused it already).
       const ctx: RenderCtx = { ...resources, keyed: {}, pending: [] };
-      // Build the tree (percent children land at a provisional size), then fold every percent/anchor into
-      // pixels against each parent's now-realized size in one post-walk pass (bridge.resolvePercents).
-      const root = buildNode(tree, ctx);
-      // The root's own position words (absolute x/y, pin, anchor) apply against the page — the
-      // walk above only positions CHILDREN, and edit applies the same words to a page child.
-      if (tree.layout) placeRootOnPage(root, tree.layout, ctx);
-      resolvePercents(ctx);
-      // After resolvePercents, so the root's bounds are final — and through the CONSOLE channel,
-      // which every already-installed plugin already returns. A new field on EXECUTE_CODE_RESULT
-      // would be a protocol bump, i.e. a manual manifest re-import for every user, to say something
-      // this advisory. ADR-0010 buys exactly this: placement feedback ships with the server.
-      const overlap = describeRootOverlap(root);
-      if (overlap) console.log(overlap);
+      const root = buildTreeOnPage(tree, ctx);
       // Handles are minted only now: geometry settles once the whole tree is laid out (bridge.settleHandles).
       return settleHandles(root, ctx.keyed);
     },

@@ -16,7 +16,7 @@
 // appliers cover a small additive vocabulary, so fighting the union with casts at every line would add
 // noise without safety.
 
-import { WriteType, WriteNode, WriteProps, WriteLayout, Justify, Align, TextAlign, TextDecoration, Sizing, Identity, Handle, PaintSpec, ImageSpec, namesFontIdentity } from "./ir.js";
+import { WriteType, WriteNode, WriteProps, WriteLayout, Justify, Align, TextAlign, TextDecoration, Sizing, Identity, Handle, PaintSpec, ImageSpec, ComponentPropertyBinding, namesFontIdentity } from "./ir.js";
 import {
   assertLayoutRealizableForType, assertPercentResolvable, assertSizingResolvesAgainstParentFrame, assertNoParentRelativeWordsUnderGrid, ParentFlowFacts,
   assertTextFillHeightInFlow,
@@ -64,7 +64,22 @@ export interface InstancePlan {
 export interface RenderCtx extends RenderResources {
   keyed: Record<string, any>;
   pending: PendingResolve[];
+  // Every node the walk built that carries a `componentPropertyReferences` bag, paired with it.
+  // Collected DURING the walk (like `keyed`) because only the walk knows which live node a spec
+  // node became — a spec→live pairing recovered afterwards would have to guess past falsy children
+  // and an svg's synthesized frame.
+  //
+  // OPTIONAL on purpose, and the absence is the enforcement: only a verb that can DECLARE component
+  // properties (flcm.component alone) has anywhere for a binding to point, so only it passes a list.
+  // Every other spec-taking verb omits it, and buildNode then throws on a bound node rather than
+  // pushing it into a list nobody reads — a dropped authoring word would be wrong pixels with no
+  // error, which is the one outcome this surface never allows. Their prepares refuse the tree first
+  // (assertNoComponentPropertyBindings); this is the backstop for the next verb that forgets to.
+  bindings?: BoundSpecNode[];
 }
+
+/** One built node and the raw binding bag its spec carried. */
+export interface BoundSpecNode { node: any; refs: ComponentPropertyBinding }
 
 // A deferred percent/anchor resolution: the built (provisional) child node, its RAW layout (percent intent
 // intact), and its live parent. Collected during the walk and applied in resolvePercents after the whole
@@ -1202,6 +1217,15 @@ export function buildNode(wn: WriteNode, ctx: RenderCtx): any {
   const node = build(wn, ctx);
   applySceneProps(node, wn);
   stampKey(node, wn, ctx);
+  if (wn.componentPropertyReferences) {
+    if (!ctx.bindings) {
+      throw new Error(
+        "flcm: a node in this tree carries `componentPropertyReferences`, and this verb declares no component properties for it to point at — a binding only means something inside flcm.component. " +
+          "(The verb's prepare should have refused the tree; reaching the build walk is a bug.)",
+      );
+    }
+    ctx.bindings.push({ node, refs: wn.componentPropertyReferences });
+  }
   return node;
 }
 

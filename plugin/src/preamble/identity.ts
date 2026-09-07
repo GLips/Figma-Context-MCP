@@ -68,6 +68,11 @@ interface IdentifiableNode {
 // reads name/key/text so the two consumers can't drift. `key` comes from pluginData (present only on stamped
 // nodes); `text` only from TEXT nodes. Reads no geometry — the two spell it alike but source it differently
 // (Handle's measured px off the live node, SlimHandle's sizing intent out of the core).
+// The one-line spelling every refusal names a node by: `TEXT "Label" (id "12:3")`.
+export function describeNodeIdentity(node: { type: string; name: string; id: string }): string {
+  return node.type + " " + JSON.stringify(node.name) + " (id " + JSON.stringify(node.id) + ")";
+}
+
 export function identityOf(node: IdentifiableNode): Identity {
   const identity: Identity = { id: node.id, type: node.type, name: node.name };
   const key = readKey(node);

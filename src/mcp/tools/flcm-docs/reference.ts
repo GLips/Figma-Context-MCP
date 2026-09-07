@@ -34,6 +34,9 @@ import {
   EDIT_MANY,
   STRUCTURE_INTRO,
   STRUCTURE_RULES,
+  COMPONENTS_CREATE,
+  COMPONENTS_PROPERTIES,
+  COMPONENTS_VARIANTS,
   COMPONENTS_INTRO,
   COMPONENTS_EDIT,
   COMPONENTS_DETACH,
@@ -165,7 +168,8 @@ const SECTIONS: Section[] = [
       "`text`, `boldWeight` and the rest are the same words on both sides. A spec's read-only words (`id`, " +
       "`type`, a root's `contextual` size beside `designedWidth`) fold away. A spec with `children` needs " +
       "`flcm.fromRead(spec)`, which rebuilds the whole subtree and refuses by name the fields flcm has no " +
-      "word for (a component property binding, `strokeDashes`, a grid).\n\n" +
+      "word for (`strokeDashes`, a locked aspect ratio, a grid). A component property binding " +
+      "(`componentPropertyReferences`) rebuilds, but only means something inside `flcm.component` — see the components section.\n\n" +
       `### Shared by every node\n\n${propTable(FIELD_GROUPS.shared)}\n\n` +
       "### Size & position (frame, text, rect, ellipse, instance)\n\n" +
       '(A `line` sizes on a numeric `width` alone — its length; there is no `height`, `"fill"`, or `"hug"`.)\n\n' +
@@ -240,13 +244,21 @@ const SECTIONS: Section[] = [
   },
   {
     id: "components",
-    title: "Components — instances",
+    title: "Components — making and using them",
     blurb:
-      "flcm.instance / edit / detach: stamp a component, set properties, override sublayers, swap, detach",
+      "flcm.component / variants to make one; flcm.instance / edit / detach to stamp, override, swap, detach",
     body: () =>
       // The swap word (`componentId`) has no table here: it is edit-only, so it rides the edit
       // section's table, and the narrative below says what it does.
-      `${COMPONENTS_INTRO}\n\n### flcm.instance props\n\n${propTable(FIELD_GROUPS.instance)}\n\n` +
+      `${COMPONENTS_CREATE}\n\n### flcm.component options\n\n${propTable(FIELD_GROUPS.componentOptions)}\n\n` +
+      `### Properties\n\n${COMPONENTS_PROPERTIES}\n\n` +
+      `#### One \`propertyDefinitions\` entry\n\n${propTable(FIELD_GROUPS.propertyDefinition)}\n\n` +
+      `#### The binding word (on every node constructor)\n\n${propTable(FIELD_GROUPS.binding)}\n\n` +
+      `### Variants — \`flcm.variants\`\n\n${COMPONENTS_VARIANTS}\n\n` +
+      `#### One entry\n\n${propTable(FIELD_GROUPS.variantEntry)}\n\n` +
+      `#### Options\n\n${propTable(FIELD_GROUPS.variantsOptions)}\n\n` +
+      `### Using one — \`flcm.instance\`\n\n${COMPONENTS_INTRO}\n\n` +
+      `#### flcm.instance props\n\n${propTable(FIELD_GROUPS.instance)}\n\n` +
       `${COMPONENTS_EDIT}\n\n${COMPONENTS_DETACH}\n\n${COMPONENTS_RULES}`,
   },
   {
@@ -328,19 +340,19 @@ function quickStartVerbLines(): string {
 // verb signatures, the must-knows, the pointer to the reference tool. ----
 export function buildQuickStart(): string {
   const verbLines = quickStartVerbLines();
-  const quickStart = `Execute JavaScript against the live Figma Plugin API (figma.*) in the plugin sandbox. The \`flcm\` DSL is already in scope — prefer it over raw figma.*.
+  const quickStart = `Execute JavaScript against the live Figma Plugin API (figma.*) in the plugin sandbox. The \`flcm\` DSL is in scope — prefer it over raw figma.*.
 
 EXECUTION MODEL — your code runs in an async function body: use \`await\` directly and \`return <value>\`. Each call runs in its OWN scope — thread state by returning ids/keys and re-targeting them (flcm.get).
 
 DESCRIBE an inert tree, then RENDER once:
-  const t = flcm.frame({ layout:{ mode:"column", gap:16 } }, [ flcm.text("Hi",{ fill:"#111" }) ]);
+  const t = flcm.frame({ layout:{ mode:"column", gap:16 } }, [ flcm.text("Hi") ]);
   const out = await flcm.render(t);   // creates nodes → { node, keyed }
 
 VERBS — all on \`flcm.\`, nothing else is:
 ${verbLines}
 
 MUST-KNOW
-- Return ids/handles, NEVER live Figma nodes (they can't cross the bridge).
+- Return ids/handles, NEVER live Figma nodes.
 - Metrics take a number or "Npx"; width/height also take "N%", "fill", "hug". Colors/gradients/shadows are CSS strings.
 - Anything outside the documented CSS subset FAILS LOUD, never wrong pixels.
 

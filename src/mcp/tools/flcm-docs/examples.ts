@@ -54,6 +54,14 @@ const EXAMPLE_META: Record<ExampleId, { title: string; intro: string }> = {
       "like any object, and `flcm.fromRead` re-authors it through the constructors so a structural verb " +
       "places a COPY. `flcm.clone` stays the faithful duplicate for subtrees a rebuild can't reproduce.",
   },
+  makeComponent: {
+    title: "Authoring a component (flcm.component → flcm.variants)",
+    intro:
+      "A Button built as an ordinary spec and promoted to a COMPONENT in one call: a boolean, a text and " +
+      "a slot property declared as `propertyDefinitions`, each bound to the node it drives with " +
+      "`componentPropertyReferences`, defaults derived from those nodes, then two sizes folded into a " +
+      "variant set an instance picks from.",
+  },
   components: {
     title: "Instantiating a component (flcm.instance)",
     intro:

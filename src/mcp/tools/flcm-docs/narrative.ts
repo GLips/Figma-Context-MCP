@@ -372,6 +372,75 @@ A \`get\` result is not authoring input on its own: a bare read spec passed to \
 
 \`fromRead\` rebuilds; \`clone\` duplicates. Rebuilding reaches only what flcm can author, so a stacked paint, a grid container or a flattened \`IMAGE-SVG\` fails loud naming the field — \`clone\` is the answer for those. An INSTANCE rebuilds through \`flcm.instance\`: a fresh stamp of the same component, with the read's property values and overrides re-applied.`;
 
+export const COMPONENTS_CREATE = `\`await flcm.component(specOrTarget, options?)\` makes a COMPONENT — the thing instances come from — and returns \`{ node, keyed }\` the way \`render\` does, where \`node\` is the COMPONENT's own handle.
+
+Two forms, told apart exactly as \`append\` tells them apart (a constructor spec, or a target naming a live node):
+
+\`\`\`js
+// Build and promote in one call — the spec renders on the current page exactly as flcm.render would.
+const { node, keyed } = await flcm.component(
+  flcm.frame({ name: "Button", layout: { mode: "row", gap: 8, padding: 12 }, fill: "#111", borderRadius: 8 }, [
+    flcm.text("Label", { key: "label", fill: "#fff", componentPropertyReferences: { text: "Label" } }),
+  ]),
+  { name: "Button", propertyDefinitions: { Label: { type: "text" } } },
+);
+
+// Or promote a node that already exists, where it stands — same parent, same index.
+await flcm.component(flcm.id("12:34"), { name: "Card", description: "The list card." });
+\`\`\`
+
+- **The spec form** renders first (the same font loading, image fetching and root placement as \`render\`), then promotes the root. Every \`key\` in the tree survives the promotion — including the root's, which lands on the COMPONENT — so \`keyed\` addresses the component's own children.
+- **The target form** promotes in place. It refuses by name: a COMPONENT or COMPONENT_SET (it already is one — edit it), an INSTANCE (Figma would *wrap* the instance rather than promote it — detach it first), a node inside an instance, a SLOT, and a page.
+- \`name\` defaults to the spec's — or the promoted node's — own name. \`description\` is what Figma shows beside the component in the assets panel.
+- Nothing is written until every gate passes, and the whole call is one undo step.`;
+
+export const COMPONENTS_PROPERTIES = `A component's properties are declared in the call that makes it — \`propertyDefinitions\`, the read's own word — and the nodes inside say which property drives which of their fields through \`componentPropertyReferences\`, the read's own word for a binding. The two halves are checked against each other before anything is written: a binding naming a property the call doesn't declare fails loud listing the ones it does.
+
+\`\`\`js
+await flcm.component(
+  flcm.frame({ name: "Row", layout: { mode: "row", gap: 8 } }, [
+    flcm.instance(icon, { componentPropertyReferences: { componentId: "Icon" } }),
+    flcm.text("Label", { componentPropertyReferences: { text: "Label", visible: "Show Label" } }),
+    flcm.frame({ width: 240, height: 80, componentPropertyReferences: { slot: "Content" } }),
+  ]),
+  {
+    name: "Row",
+    propertyDefinitions: {
+      Icon: { type: "instance_swap" },
+      Label: { type: "text" },
+      "Show Label": { type: "boolean" },
+      Content: { type: "slot" },
+    },
+  },
+);
+\`\`\`
+
+- **Each type has one field, on the node type that owns it.** \`boolean\` → \`visible\` (any node); \`text\` → \`text\` (\`flcm.text\` only); \`instance_swap\` → \`componentId\` (\`flcm.instance\` only); \`slot\` → \`slot\` (\`flcm.frame\` only). A field on the wrong constructor fails at construction, before any verb runs.
+- **Omit \`defaultValue\` and it is derived from the node that binds the property** — its \`visible\` (an unnamed \`visible\` is \`true\`), its text, its component. Deriving needs exactly one binder: a property nothing binds must state a \`defaultValue\`, and one two nodes bind has no single value to read.
+- **A slot IS a frame you author.** Bind the frame that holds the placeholder content and the definition keeps that frame — its size, its layout, its children — while every instance shows it as a SLOT. A declared slot no frame binds is refused rather than dropping Figma's unpositioned 100×100 box into your component, and two frames on one slot are refused because a slot is one hole. **Putting content into an instance's slot is not authorable yet**: an instance's child list is closed to plugins, and \`overrides\` restyles a slot but cannot fill one. Until then, what every instance shows is the placeholder content you put in the bound frame.
+- **\`variant\` is not a type here.** Axes are made by combining components into a set (\`flcm.variants\`), never declared on one.
+- **A binding only means something inside \`flcm.component\`.** The same tree handed to \`render\`, \`append\` or \`edit\` is refused naming the word: there is no component in that call to declare the property it points at.`;
+
+export const COMPONENTS_VARIANTS = `\`await flcm.variants(entries, options)\` folds standalone components into a COMPONENT_SET and returns the set's handle. Each entry says which member of the set its component **is**, in the set's axes — the axes an instance then picks with \`componentProperties\`.
+
+\`\`\`js
+const small = await flcm.component(flcm.frame({ width: 96, height: 32, fill: "#111", borderRadius: 6 }), { name: "Button" });
+const large = await flcm.component(flcm.frame({ width: 128, height: 44, fill: "#111", borderRadius: 8 }), { name: "Button" });
+const set = await flcm.variants(
+  [
+    { component: small.node, variant: { Size: "Small" } },
+    { component: large.node, variant: { Size: "Large" } },
+  ],
+  { name: "Button" },
+);
+await flcm.render(flcm.instance(set, { componentProperties: { Size: "Large" } }));
+\`\`\`
+
+- **Every entry names the same axes**, order-free; the first entry's key order becomes the set's axis order. Axis names and values are non-empty and may not contain \`=\` or \`,\` (Figma's variant-name grammar), and no two entries may name the same combination.
+- Each component is **renamed** to that grammar (\`Size=Large, State=Default\`) as it joins — the set carries the \`name\` you pass.
+- **The set lands where the first component sat** — its parent, its index — so a set built from components inside a frame stays there.
+- Each entry's component must be a standalone **local** COMPONENT. A FRAME or an INSTANCE fails loud pointing at \`flcm.component\`; a library component fails loud (this file only holds a reference to it); and a component **already in a set** fails loud naming that set — there is no add-to-an-existing-set form.`;
+
 export const COMPONENTS_INTRO = `\`flcm.instance(component, props?)\` is a constructor like \`flcm.frame\`: it builds an inert INSTANCE spec you \`render\` on its own, nest in a frame's children, or place with \`append\`/\`insertBefore\`. The component is a target — a read's \`componentId\`, an flcm/key, \`flcm.id(id)\`, or a handle from \`find\` — naming a COMPONENT, or a COMPONENT_SET (then the variant \`componentProperties\` pick, the set's default otherwise). Library components already used in the file resolve by the same id \`get\` reports.
 
 **Read words are write words.** What \`flcm.get\` reports on an instance is what \`flcm.instance\` takes, so a read spec authors as-is: \`flcm.instance({ ...spec, name: "Copy" })\` (the props form — \`componentId\` is read straight off the spec). Three groups of words:

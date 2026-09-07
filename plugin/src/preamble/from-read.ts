@@ -51,8 +51,8 @@ type AuthorableReadType = "FRAME" | "TEXT" | "RECTANGLE" | "ELLIPSE" | "LINE" | 
 const UNAUTHORABLE_TYPES: Record<string, string> = {
   "IMAGE-SVG": "the read shape flattens a VECTOR (and SVG-heavy containers) into IMAGE-SVG, which carries no path data or markup to rebuild from",
   GROUP: "a GROUP is a selection wrapper with no flcm constructor — its children carry the layout, so there is nothing to author",
-  COMPONENT: "a COMPONENT is a definition other nodes instantiate — rebuilding its props would produce a plain frame, not a component",
-  COMPONENT_SET: "a COMPONENT_SET is a variant container — rebuilding its props would produce a plain frame, not a component set",
+  COMPONENT: "a COMPONENT is a definition other nodes instantiate, and rebuilding its props would produce a plain frame. flcm.component(spec, { propertyDefinitions }) is how a component is MADE — rebuild the body you want and promote it",
+  COMPONENT_SET: "a COMPONENT_SET is a variant container, and rebuilding its props would produce a plain frame. Rebuild each variant, promote them with flcm.component, then combine them with flcm.variants",
 };
 
 export const CLONE_REMEDY = "A live node keeps this under flcm.clone(target, parent), which copies it whole.";
@@ -78,7 +78,6 @@ export const READ_FIELD_DISPOSITIONS = {
   // An instance's component, folded by flcm.instance's props form (the constructor takes the spec
   // whole, `componentId` and all) — only an INSTANCE carries it, so no other constructor meets it.
   componentId: "prelude",
-  componentPropertyReferences: { refuse: "a component property BINDING (this node's text/visibility driven by a component prop) has no flcm word" },
 } satisfies Record<Exclude<keyof SimplifiedNode, AuthorableReadKey>, ReadFieldDisposition>;
 
 // Every SimplifiedLayout word, with the same dispositions — an exact Record for the same reason. The

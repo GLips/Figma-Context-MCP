@@ -31,7 +31,9 @@ const COPY_FIELDS = ["name", "layoutMode", "itemSpacing", "paddingTop", "padding
 
 // The node types that hold children (Figma's ChildrenMixin). See the constructor: only these get
 // appendChild/insertChild, because a leaf node genuinely has neither.
-const CONTAINER_TYPES = ["PAGE", "FRAME", "GROUP", "COMPONENT", "COMPONENT_SET", "INSTANCE", "SECTION"];
+// SLOT is here because an instance's slot is a real hole content is appended INTO — live Figma
+// reports the bound frame as `type: "SLOT"` inside every instance and accepts appendChild on it.
+const CONTAINER_TYPES = ["PAGE", "FRAME", "GROUP", "COMPONENT", "COMPONENT_SET", "INSTANCE", "SECTION", "SLOT"];
 
 // Every per-range styling bucket the setRange* recorders write — the set a `characters` write clears.
 const RANGE_BUCKETS = ["_rangeFonts", "_rangeSizes", "_rangeFills", "_rangeLineHeights",
@@ -104,6 +106,10 @@ class Node {
       this.appendChild = (child) => this._appendChild(child);
       this.insertChild = (index, child) => this._insertChild(index, child);
     }
+    // Only a COMPONENT / COMPONENT_SET carries a description live (it's what the assets panel shows),
+    // so only those declare one here — a `description` on every node would let a write to the wrong
+    // type pass in the mock and throw in Figma.
+    if (type === "COMPONENT" || type === "COMPONENT_SET") this.description = "";
     this._plugin = {};
     // prototyping reactions — the mock can't run present mode, but it STORES them so a scenario can
     // assert the right trigger/action/destination were wired (setReactionsAsync replaces, like live).
@@ -462,6 +468,8 @@ class Node {
     for (const [name, value] of Object.entries(props)) {
       const def = defs[name];
       if (!def) throw new Error("setProperties: no component property named " + JSON.stringify(name));
+      // Live refuses a slot here: a slot has no value, its content is appended into it.
+      if (def.type === "SLOT") throw new Error("setProperties: " + JSON.stringify(name) + " is a slot property and has no value");
       if (def.type === "VARIANT") { variant[name] = value; variantChanged = true; continue; }
       this._props[name] = value;
       for (const sub of this.findAll()) {
@@ -580,7 +588,11 @@ function cloneSubtree(src) {
 // deterministic composite id I<instId>;<mainChildId> — exactly the format the live API uses and the
 // std-lib's override() builds. Every cloned node is registered so getNodeByIdAsync resolves it.
 function cloneInto(mainNode, instId, isRoot) {
-  const n = new Node(mainNode.type);
+  // A FRAME bound to a SLOT property stays a FRAME in the DEFINITION (layout intact) and appears in
+  // every INSTANCE as `type: "SLOT"` — verified in a live file. That asymmetry is the whole slot
+  // model, so the instance clone is where the type changes.
+  const boundSlot = mainNode.type === "FRAME" && !!(mainNode.componentPropertyReferences || {}).slotContentId;
+  const n = new Node(boundSlot ? "SLOT" : mainNode.type);
   registry.delete(n.id); // re-key below
   // Figma spells a sublayer with exactly ONE leading `I` however deep the nesting, so a main node
   // that is ITSELF a sublayer of a nested instance (`I<nested>;<child>`) contributes its chain
@@ -656,12 +668,14 @@ export function createFigmaMock() {
     // A COMPONENT_SET over `nodes`, whose variant axes are read off each child's "Axis=Value"
     // name: one VARIANT definition per axis, options in first-seen order, default = the first
     // child's value. The set lands under `parent` at the first node's old position.
-    combineAsVariants(nodes, parent) {
+    combineAsVariants(nodes, parent, index) {
       const set = new Node("COMPONENT_SET");
       set._defs = {};
       set.remote = false;
       const first = nodes[0];
-      const at = first.parent ? first.parent.children.indexOf(first) : -1;
+      // `index` (live: the optional third argument) is where the SET lands in `parent`; without one
+      // it takes the first node's own slot, when that node was already a child of `parent`.
+      const at = typeof index === "number" ? index : parent === first.parent ? parent.children.indexOf(first) : -1;
       for (const n of nodes) {
         if (n.parent) n.parent.children = n.parent.children.filter((c) => c !== n);
         n.parent = set;
@@ -674,7 +688,13 @@ export function createFigmaMock() {
         }
       }
       set.parent = parent;
-      if (at >= 0 && parent === first.parent) parent.children.splice(at, 0, set);
+      // The members have just left `parent.children`, so an index read BEFORE the move can point past
+      // the end. Live's insertChild family throws on an out-of-range index; throw too rather than
+      // clamp, or a caller that counts the wrong slot passes here and crashes in a real file.
+      if (at > parent.children.length) {
+        throw new Error("combineAsVariants: index " + at + " is out of range (the parent has " + parent.children.length + " children after the members were removed)");
+      }
+      if (at >= 0) parent.children.splice(at, 0, set);
       else parent.children.push(set);
       return set;
     },
@@ -707,9 +727,25 @@ export function createFigmaMock() {
     createImage(bytes) { return { hash: "img" + (bytes && bytes.length ? bytes.length : 0) + ":" + ++__id }; },
     base64Decode(b64) { return Uint8Array.from(Buffer.from(String(b64), "base64")); },
     createComponentFromNode(node) {
+      // Live refuses outright: the node "cannot be a component or component set and cannot be inside
+      // a component, component set, or instance" (plugin typings) — it throws this exact message.
+      if (node.type === "COMPONENT" || node.type === "COMPONENT_SET") throw new Error("Cannot create component from node");
+      for (let p = node.parent; p; p = p.parent) {
+        if (p.type === "COMPONENT" || p.type === "COMPONENT_SET" || p.type === "INSTANCE") throw new Error("Cannot create component from node");
+      }
+      // Live does NOT refuse a leaf — it behaves like the Create component button and WRAPS it in a
+      // new component frame. flcm refuses that case in prepare (assertPromotableSpecRoot /
+      // assertPromotable), so a leaf reaching here is a caller bug; throwing keeps the mock from
+      // quietly modelling a conversion live would never perform.
+      if (!CONTAINER_TYPES.includes(node.type)) {
+        throw new Error("createComponentFromNode: live WRAPS a " + node.type + " rather than converting it — the caller must refuse this before the apply");
+      }
       // Mirror the live API: produce a NEW COMPONENT node, move the frame's children onto it, replace
       // the frame in its parent, and remove the old frame. (In-place mutation would leave the old
       // frame on the page and falsely trip the no-fill-root warning — live replaces the node.)
+      //
+      // pluginData is deliberately NOT carried over: whether live keeps it is undocumented, so the
+      // mock takes the pessimistic side and both forms of flcm.component re-stamp the root's key.
       const comp = new Node("COMPONENT");
       for (const k of COPY_FIELDS) comp[k] = node[k];
       comp.fills = clonePaints(node.fills);

@@ -32,7 +32,7 @@ import {
 } from "./edit-plan.js";
 import { enterMutatingVerb } from "./mutation-lock.js";
 import { beginMutatingApply } from "./verb-error.js";
-import { instanceAncestorOf } from "./identity.js";
+import { instanceAncestorOf, describeNodeIdentity } from "./identity.js";
 import { EditFontNeed } from "./fonts.js";
 import { own } from "./validate.js";
 import type { EditDelta } from "./schema.js";
@@ -56,8 +56,6 @@ const NULL_RESTORE: Record<string, unknown> = {
 /** One sublayer's override: the component-relative path, and the delta compiled for it. */
 export interface OverridePlan { path: string; plan: EditPlan }
 
-const describe = (node: { type: string; name: string; id: string }): string =>
-  node.type + " " + JSON.stringify(node.name) + " (id " + JSON.stringify(node.id) + ")";
 
 /**
  * Resolve every INSTANCE spec in `tree`. Returns the plans (by WriteNode identity) and the font
@@ -103,7 +101,7 @@ async function prepareOne(wn: WriteNode): Promise<{ plan: InstancePlan; override
 
 // ---- the component ----
 
-interface ResolvedComponent {
+export interface ResolvedComponent {
   /** The component to stamp before any variant selection: a set's default, or the named one. */
   base: any;
   /** The set, when the base is a variant — the owner of the property definitions. */
@@ -115,11 +113,16 @@ function resolvedFromComponent(node: any): ResolvedComponent {
   return { base: node, set: node.parent && node.parent.type === "COMPONENT_SET" ? node.parent : null };
 }
 
-async function resolveComponentTarget(target: Target, subject: string): Promise<ResolvedComponent> {
+/**
+ * A target naming a component, resolved. Exported because every verb that takes one rides it —
+ * flcm.instance's positional component, an instance-swap property's value, and flcm.component's
+ * `instance_swap` default — so they all refuse an INSTANCE (or a plain frame) with one sentence.
+ */
+export async function resolveComponentTarget(target: Target, subject: string): Promise<ResolvedComponent> {
   const node: any = await resolveTarget(target);
   if (node.type === "COMPONENT_SET") return { base: node.defaultVariant, set: node };
   if (node.type === "COMPONENT") return resolvedFromComponent(node);
-  const who = describe(node);
+  const who = describeNodeIdentity(node);
   if (node.type === "INSTANCE") {
     throw new Error(
       subject + ": " + who + " is itself an instance, not a component. Pass the component it comes from — flcm.get(" + JSON.stringify(node.id) + ") reports it as `componentId`.",
@@ -205,7 +208,14 @@ async function resolveComponentProperties(
         break;
       }
       case "SLOT":
-        throw new Error(where + ": " + JSON.stringify(full) + " is a slot — its content is authored, not set as a value. Fill it through `overrides` at the slot's path.");
+        // Deliberately points at no route: filling an instance's slot is not authorable yet. Its
+        // content is appended INTO it, and an instance's child list is closed to plugins — and an
+        // `overrides` delta at the slot's path can only restyle the hole, never fill it. Saying so
+        // is the whole value here; naming a word that doesn't work costs the agent a round trip.
+        throw new Error(
+          where + ": " + JSON.stringify(full) + " is a slot — its content is placed INTO it, not set as a value, and flcm has no word for filling one yet (an instance's child list is closed to plugins). " +
+            "Put the content in the component's own placeholder frame, or fill this instance's slot by hand in Figma.",
+        );
       default:
         throw new Error(where + ": " + JSON.stringify(full) + " is a " + String(def.type) + " property, which flcm has no word for.");
     }
@@ -312,7 +322,7 @@ function applyOverridePlans(instance: any, overrides: OverridePlan[], resources:
     const node = instance.findOne((n: any) => n.id === liveId);
     if (!node) {
       throw new Error(
-        subject + ".overrides[" + JSON.stringify(path) + "]: " + describe(instance) + " has no sublayer at that path — a component word in the same call replaced it (an instance swap, or a variant with a different tree). Apply the component word, read the instance, then override.",
+        subject + ".overrides[" + JSON.stringify(path) + "]: " + describeNodeIdentity(instance) + " has no sublayer at that path — a component word in the same call replaced it (an instance swap, or a variant with a different tree). Apply the component word, read the instance, then override.",
       );
     }
     // Existence-only, always — `liveTextFacts: undefined` on purpose. The freshness gate belongs to
@@ -366,7 +376,7 @@ export async function prepareInstanceEditPlan(node: SceneNode, words: InstanceEd
   const current: any = await instance.getMainComponentAsync();
   if (!current) {
     throw new Error(
-      subject + ": " + describe(instance) + " has no readable main component — it comes from a library the file can't reach right now, so nothing about its properties or sublayers can be resolved.",
+      subject + ": " + describeNodeIdentity(instance) + " has no readable main component — it comes from a library the file can't reach right now, so nothing about its properties or sublayers can be resolved.",
     );
   }
   // The base the property names and variant axes are read against: the component being swapped IN
@@ -411,7 +421,7 @@ async function resolveEditOverridePaths(
     const live: any = await figma.getNodeByIdAsync(liveSublayerIdOf(instance.id, path));
     if (!live || live.removed) {
       throw new Error(
-        where + ": " + describe(instance) + " has no sublayer at that path. " +
+        where + ": " + describeNodeIdentity(instance) + " has no sublayer at that path. " +
           "Paths are component-relative, exactly as flcm.get keys this instance's `overrides` — and each variant has its own; read the instance to see the ones it has.",
       );
     }
@@ -478,7 +488,7 @@ export function detach(target: Target): Promise<Handle> {
       const node: any = await resolveTarget(target);
       if (node.type !== "INSTANCE") {
         throw new Error(
-          DETACH_SUBJECT + ": " + describe(node) + " is not an instance — there is no component link to break. " +
+          DETACH_SUBJECT + ": " + describeNodeIdentity(node) + " is not an instance — there is no component link to break. " +
             (node.type === "COMPONENT" || node.type === "COMPONENT_SET"
               ? "This is the component itself; detach an INSTANCE of it."
               : "flcm.find({ type: \"INSTANCE\" }) locates the instances on the page."),
@@ -492,7 +502,7 @@ export function detach(target: Target): Promise<Handle> {
       const host = instanceAncestorOf(node);
       if (host) {
         throw new Error(
-          DETACH_SUBJECT + ": " + describe(node) + " is nested inside instance " + JSON.stringify(host.name) + " (id " + JSON.stringify(host.id) +
+          DETACH_SUBJECT + ": " + describeNodeIdentity(node) + " is nested inside instance " + JSON.stringify(host.name) + " (id " + JSON.stringify(host.id) +
             "). Figma's detach on a nested instance ALSO detaches every enclosing instance up the chain, so flcm refuses rather than widen the mutation silently. Detach " +
             JSON.stringify(host.id) + " (the whole outer instance becomes editable layers) if that is what you mean, or edit the component the nested instance comes from.",
         );

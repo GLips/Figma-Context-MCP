@@ -8,7 +8,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
-import { KNOWN_KEYS, DIRECTIONAL_KEYS, CONSTRUCTOR_KEYS_BY_TYPE, frame, text, rect, line, svg, path, gradient, image, effects } from "./flcm.js";
+import { KNOWN_KEYS, DIRECTIONAL_KEYS, BINDING_FIELD_KEYS, CONSTRUCTOR_KEYS_BY_TYPE, frame, text, rect, line, svg, path, gradient, image, effects } from "./flcm.js";
 import { find } from "./read.js";
 import { FIELD_GROUPS, SizeSchema, FrameSchema, TextSchema, ShapeSchema, EllipseSchema, LineSchema, InstanceSchema } from "./schema.js";
 
@@ -41,6 +41,14 @@ test("the directional nested set (anchor) matches its inline schema shape (drift
   const anchorShape = (SizeSchema as unknown as { shape: { anchor: { unwrap(): { shape: Record<string, unknown> } } } }).shape.anchor.unwrap();
   assert.deepEqual([...DIRECTIONAL_KEYS].sort(), Object.keys(anchorShape.shape).sort());
   // `pin` reuses DIRECTIONAL_KEYS (z.custom — no zod shape to reflect on), so the anchor guard covers it too.
+});
+
+test("the binding bag's fields match their inline schema shape (drift guard)", () => {
+  // componentPropertyReferences' fields are defined inline in BINDING_FIELDS, not as their own
+  // FIELD_GROUP, so guard them by unwrapping the zod object — as the anchor guard above does. The
+  // runtime holds them as PER-CONSTRUCTOR lists (a `slot` is a frame's word); their UNION is the set.
+  const shape = (FrameSchema as unknown as { shape: { componentPropertyReferences: { unwrap(): { shape: Record<string, unknown> } } } }).shape.componentPropertyReferences.unwrap();
+  assert.deepEqual([...BINDING_FIELD_KEYS].sort(), Object.keys(shape.shape).sort());
 });
 
 test("verbs reject an unknown top-level prop, naming it and the verb", () => {

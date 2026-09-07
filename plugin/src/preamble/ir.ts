@@ -330,7 +330,47 @@ export interface WriteProps {
   component?: Target;
   componentProperties?: Record<string, ComponentPropertyInput>;
   overrides?: Record<string, OverrideDeltaInput>;
+  // The BINDING half of the component words, kept raw for the same reason: which property a name
+  // reaches is decided by the flcm.component call that declares them, not by the constructor. The
+  // constructor judges the bag's SHAPE and which fields ITS node type can bind; the verb's prepare
+  // resolves each name against that call's `propertyDefinitions`. Any other verb refuses a tree
+  // carrying one (flcm.assertNoComponentPropertyBindings) — a binding with no declaring call is a
+  // name pointing at nothing.
+  componentPropertyReferences?: ComponentPropertyBinding;
 }
+
+// Which component property drives which of a node's fields — the read shape's own word, and its
+// own field spellings (`text`, not Figma's wire key `characters`). Each value is a property NAME
+// declared in the same flcm.component call. Per-node legality is the constructor's (`text` only on
+// flcm.text, `componentId` only on flcm.instance, `slot` only on flcm.frame, `visible` anywhere).
+export interface ComponentPropertyBinding {
+  visible?: string;
+  text?: string;
+  componentId?: string;
+  slot?: string;
+}
+
+// One property an flcm.component call declares, in the read's own lowercase words. `defaultValue`
+// is the property's value on a fresh instance: a boolean, a text, or — for `instance_swap` — a
+// component Target (the resolved COMPONENT's id is what Figma stores). Omitted, it is DERIVED from
+// the single node that binds the property; a `slot` refuses one outright (its content is authored).
+export interface ComponentPropertyDefinitionInput {
+  type: "boolean" | "text" | "instance_swap" | "slot";
+  defaultValue?: boolean | string | Target;
+}
+
+export type ComponentPropertyDefinitions = Record<string, ComponentPropertyDefinitionInput>;
+
+// What flcm.component hands back: the COMPONENT itself plus every keyed node in its subtree —
+// render's own `{ node, keyed }`, so an agent that renders and an agent that promotes read the
+// same fields. The component's id is NOT the promoted frame's (Figma mints a new node), which is
+// why `node` is the only trustworthy way back to it.
+export interface ComponentResult { node: Handle; keyed: Record<string, Handle> }
+
+// One member of an flcm.variants call: the standalone COMPONENT, and which member of the set it IS
+// in the set's axes. One entry shape — the axes are what a set is made of, so there is no
+// bare-component form to guess a name from.
+export interface VariantEntryInput { component: Target; variant: Record<string, string> }
 
 // A component property value as authored: the read shape's own scalar (`Record<name, boolean |
 // string>`), plus a Target for an instance-swap property — the read reports a swap value as the

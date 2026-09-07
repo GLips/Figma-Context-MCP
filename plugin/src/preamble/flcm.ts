@@ -22,7 +22,7 @@ import {
   WriteNode, WriteProps, WriteChild, WriteLayout, WriteTextStyle, WriteTextRun, PaintSpec,
   GradientStop, EffectSpec, Sizing, Edges, WriteCssEffects, PinX, PinY, AnchorX, AnchorY,
   Justify, Align, TextAlign, TextDecoration, WriteTextCase, RawIdRef, WriteType, Target,
-  ComponentPropertyInput, OverrideDeltaInput,
+  ComponentPropertyInput, OverrideDeltaInput, ComponentPropertyBinding,
 } from "./ir.js";
 import { markConstructorBuilt, isConstructorBuilt } from "./provenance.js";
 import { assertLayoutRealizableForType } from "./layout-legality.js";
@@ -74,6 +74,11 @@ export const KNOWN_KEYS = {
   path: ["d", "fill", "stroke", "strokeWidth", "strokeAlign", "effects", "rotation"],
   instance: ["componentProperties", "overrides"],
   swap: ["componentId"],
+  binding: ["componentPropertyReferences"],
+  componentOptions: ["name", "description", "propertyDefinitions"],
+  propertyDefinition: ["type", "defaultValue"],
+  variantEntry: ["component", "variant"],
+  variantsOptions: ["name", "description"],
   image: ["scaleMode", "placeholder"],
   gradient: ["type", "stops", "angle", "at"],
   effects: ["shadow", "blur", "backgroundBlur", "glass", "noise", "texture", "progressiveBlur"],
@@ -85,12 +90,15 @@ function keySet(...groups: readonly (readonly string[])[]): ReadonlySet<string> 
 
 // Per-verb known-key sets, COMPOSED from the guarded group atoms above (so a verb set can't drift once the
 // groups are). Each mirrors the verb's composed schema — FrameSchema = shared+size+appearance+frame, etc.
-const FRAME_KEYS = keySet(KNOWN_KEYS.shared, KNOWN_KEYS.size, KNOWN_KEYS.appearance, KNOWN_KEYS.frame);
-const TEXT_KEYS = keySet(KNOWN_KEYS.shared, KNOWN_KEYS.size, KNOWN_KEYS.text);
-const SHAPE_KEYS = keySet(KNOWN_KEYS.shared, KNOWN_KEYS.size, KNOWN_KEYS.appearance);
-const ELLIPSE_KEYS = keySet(KNOWN_KEYS.shared, KNOWN_KEYS.size, KNOWN_KEYS.ellipse);
-const LINE_KEYS = keySet(KNOWN_KEYS.shared, KNOWN_KEYS.line);
-const INSTANCE_KEYS = keySet(KNOWN_KEYS.shared, KNOWN_KEYS.size, KNOWN_KEYS.appearance, KNOWN_KEYS.frame, KNOWN_KEYS.instance);
+// `binding` composes into EVERY node's set: any layer can be bound to a component property, and
+// which FIELDS a given type may bind is the per-constructor list below (compileBindingBag), not the
+// key set — the word itself is universal.
+const FRAME_KEYS = keySet(KNOWN_KEYS.shared, KNOWN_KEYS.size, KNOWN_KEYS.appearance, KNOWN_KEYS.frame, KNOWN_KEYS.binding);
+const TEXT_KEYS = keySet(KNOWN_KEYS.shared, KNOWN_KEYS.size, KNOWN_KEYS.text, KNOWN_KEYS.binding);
+const SHAPE_KEYS = keySet(KNOWN_KEYS.shared, KNOWN_KEYS.size, KNOWN_KEYS.appearance, KNOWN_KEYS.binding);
+const ELLIPSE_KEYS = keySet(KNOWN_KEYS.shared, KNOWN_KEYS.size, KNOWN_KEYS.ellipse, KNOWN_KEYS.binding);
+const LINE_KEYS = keySet(KNOWN_KEYS.shared, KNOWN_KEYS.line, KNOWN_KEYS.binding);
+const INSTANCE_KEYS = keySet(KNOWN_KEYS.shared, KNOWN_KEYS.size, KNOWN_KEYS.appearance, KNOWN_KEYS.frame, KNOWN_KEYS.instance, KNOWN_KEYS.binding);
 // The words an override delta may name — the edit vocabulary, since an override IS an edit of one
 // sublayer, judged at construction the way edit's stage 1 judges a delta. MINUS the three component
 // words: a path names a sublayer, and re-pointing a NESTED instance from here would need a second
@@ -106,8 +114,8 @@ const OVERRIDE_DELTA_KEYS = keySet(KNOWN_KEYS.edit.filter((k) => !INSTANCE_COMPO
 export const CONSTRUCTOR_KEYS_BY_TYPE: Record<"FRAME" | "TEXT" | "RECTANGLE" | "ELLIPSE" | "LINE" | "INSTANCE", ReadonlySet<string>> = {
   FRAME: FRAME_KEYS, TEXT: TEXT_KEYS, RECTANGLE: SHAPE_KEYS, ELLIPSE: ELLIPSE_KEYS, LINE: LINE_KEYS, INSTANCE: INSTANCE_KEYS,
 };
-const PATH_KEYS = keySet(KNOWN_KEYS.shared, KNOWN_KEYS.size, KNOWN_KEYS.path);
-const SVG_KEYS = keySet(KNOWN_KEYS.shared, KNOWN_KEYS.size);
+const PATH_KEYS = keySet(KNOWN_KEYS.shared, KNOWN_KEYS.size, KNOWN_KEYS.path, KNOWN_KEYS.binding);
+const SVG_KEYS = keySet(KNOWN_KEYS.shared, KNOWN_KEYS.size, KNOWN_KEYS.binding);
 const LAYOUT_KEYS = keySet(KNOWN_KEYS.layout);
 const IMAGE_KEYS = keySet(KNOWN_KEYS.image);
 const GRADIENT_KEYS = keySet(KNOWN_KEYS.gradient);
@@ -533,6 +541,7 @@ function frame(props: FrameProps | SimplifiedNode = {}, children?: WriteChild | 
   props = acceptAuthoringProps(props, { type: "FRAME", verb: "create", known: FRAME_KEYS, subject: "flcm.frame" }) as FrameProps;
   const wn = mintWriteNode("FRAME");
   compileNodeLocalProps(wn, props, { radius: true, clip: true });
+  compileBindings(wn, props, FRAME_BINDINGS, "flcm.frame");
   wn.layout = buildLayout(props, "FRAME", "flcm.frame");
   // The children array is frozen IN PLACE — the one deliberate exception to the seal's
   // clone-don't-freeze rule (cloneAndFreeze). A children list is the tree itself, and the
@@ -552,14 +561,17 @@ function isInstancePropsForm(arg: unknown): arg is Record<string, unknown> {
   return !!arg && typeof arg === "object" && !Array.isArray(arg) && Object.prototype.hasOwnProperty.call(arg, "componentId");
 }
 
-function isTargetShaped(value: unknown): value is Target {
+// Target-by-shape, the one test every verb that takes a component uses (flcm.instance's positional
+// argument, an instance-swap value, flcm.component/variants' subjects) — so they refuse the same
+// non-targets with the same sentence. Exported for component.ts, which meets the same shapes.
+export function isTargetShaped(value: unknown): value is Target {
   if (typeof value === "string") return value.trim().length > 0;
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const v = value as { __flcmId?: unknown; id?: unknown };
   return typeof v.__flcmId === "string" || typeof v.id === "string";
 }
 
-const COMPONENT_TARGET_HINT = "a component's node id (a read's `componentId`), an flcm/key, flcm.id(id), or a handle from flcm.find";
+export const COMPONENT_TARGET_HINT = "a component's node id (a read's `componentId`), an flcm/key, flcm.id(id), or a handle from flcm.find";
 
 // flcm.instance(component, props) — stamp a component. Inert like every constructor: the component
 // target, the property values and the override deltas ride the WriteNode RAW (ir.ts WriteProps on why),
@@ -603,6 +615,7 @@ function instance(componentOrProps: Target | InstanceProps | SimplifiedNode, pro
   // The type rule (hug needs auto-layout, gap needs a container) is NOT run here: whether this root is
   // a row/column is the COMPONENT's fact, read in render's prepare — the same live-mode call edit makes.
   if (Object.keys(layout).length) wn.layout = layout;
+  compileBindings(wn, accepted, INSTANCE_BINDINGS, "flcm.instance");
   if (accepted.componentProperties != null) wn.componentProperties = compileComponentPropertyBag(accepted.componentProperties, "flcm.instance");
   if (accepted.overrides != null) wn.overrides = compileOverrideBag(accepted.overrides, "flcm.instance");
   return sealWriteNode(wn);
@@ -665,6 +678,82 @@ export function compileOverrideBag(raw: unknown, subject: string): Record<string
     out[path] = delta as OverrideDeltaInput;
   }
   return out;
+}
+
+// ---- the BINDING word (`componentPropertyReferences`) ----
+//
+// Which component property drives which of this node's fields. The constructor judges SHAPE and
+// per-type legality only: the names point at properties an flcm.component call declares in the same
+// breath, so whether a name exists (and whether its TYPE matches the field) is that verb's prepare
+// to say — the same split `componentProperties` takes.
+
+// Why each field belongs to the one constructor it does, for the refusal's second sentence. `visible`
+// has no entry: every node has one, so it is never the wrong node's word.
+const BINDING_FIELD_OWNERS: Record<string, string> = {
+  text: "`text` drives a TEXT node's content, so it belongs to flcm.text",
+  componentId: "`componentId` is an instance-swap property re-pointing an INSTANCE, so it belongs to flcm.instance",
+  slot: "`slot` marks the FRAME that IS the slot (an instance shows it as a SLOT holding that frame's content), so it belongs to flcm.frame",
+};
+
+// Which fields each constructor may bind — `visible` everywhere, the other three only on the node
+// type whose field they name. Written as arrays (not a set) so a refusal can list them in order.
+const ANY_NODE_BINDINGS: readonly string[] = ["visible"];
+const FRAME_BINDINGS: readonly string[] = ["visible", "slot"];
+const TEXT_BINDINGS: readonly string[] = ["visible", "text"];
+const INSTANCE_BINDINGS: readonly string[] = ["visible", "componentId"];
+// The union of those lists — every field the word can name anywhere. Guarded against the schema's
+// inline object (unknown-props.test.ts), the way DIRECTIONAL_KEYS is: the bag's fields are defined
+// inline in BINDING_FIELDS, not as their own FIELD_GROUP.
+export const BINDING_FIELD_KEYS: ReadonlySet<string> = keySet(FRAME_BINDINGS, TEXT_BINDINGS, INSTANCE_BINDINGS);
+
+export function compileBindingBag(raw: unknown, legal: readonly string[], subject: string): ComponentPropertyBinding {
+  const where = subject + ".componentPropertyReferences";
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error(where + ' must be an object naming which component property drives which field, e.g. { text: "Label" } — got ' + JSON.stringify(raw) + ".");
+  }
+  const out: Record<string, string> = {};
+  for (const field of Object.keys(raw)) {
+    const value = (raw as Record<string, unknown>)[field];
+    if (value == null) continue; // an explicitly-absent field is absence, not a claim
+    if (legal.indexOf(field) === -1) {
+      const owner = BINDING_FIELD_OWNERS[field];
+      throw new Error(
+        where + ": `" + field + "` is not one of " + subject + "'s binding fields (" + legal.join(", ") + ")" +
+          (owner ? " — " + owner : "") + ".",
+      );
+    }
+    if (typeof value !== "string" || !value.trim()) {
+      throw new Error(where + "." + field + ": a binding names the component property that drives this field — a property name declared in the same flcm.component call. Got " + JSON.stringify(value) + ".");
+    }
+    out[field] = value;
+  }
+  return out as ComponentPropertyBinding;
+}
+
+// The constructor-side half: compile the bag (when named) onto the WriteNode. An empty bag lands
+// nothing — a node carrying `componentPropertyReferences: {}` binds nothing and must not read as a
+// bound node to flcm.component's gate.
+function compileBindings(wn: WriteProps, props: { componentPropertyReferences?: unknown }, legal: readonly string[], subject: string): void {
+  if (props.componentPropertyReferences == null) return;
+  const refs = compileBindingBag(props.componentPropertyReferences, legal, subject);
+  if (Object.keys(refs).length) wn.componentPropertyReferences = refs;
+}
+
+/**
+ * Refuse a tree carrying bindings anywhere but flcm.component. A binding names a property that only
+ * a declaring call has — through render or append the name points at nothing, and Figma would take
+ * the reference silently onto a node with no component behind it. Called by every spec-taking verb
+ * except flcm.component (which is where the names are minted).
+ */
+export function assertNoComponentPropertyBindings(tree: WriteChild, subject: string): void {
+  if (!tree || typeof tree !== "object") return;
+  if (tree.componentPropertyReferences) {
+    throw new Error(
+      subject + ": `componentPropertyReferences` binds a node to a component property, which only means something inside flcm.component — the verb that declares the properties in the same call. " +
+        "Build the component with flcm.component(spec, { propertyDefinitions: … }), then place an flcm.instance of it.",
+    );
+  }
+  for (const child of tree.children || []) assertNoComponentPropertyBindings(child, subject);
 }
 
 // The swap word's SHAPE — the same target grammar the constructor's positional component takes, so
@@ -842,6 +931,7 @@ function text(content: unknown, props: TextProps | SimplifiedNode = {}): WriteNo
   }
   const wn = mintWriteNode("TEXT");
   base(wn, props);
+  compileBindings(wn, props, TEXT_BINDINGS, "flcm.text");
   // The text's paint is `fill`, like every other node's. "none" is the same removal word edit takes.
   if (props.fill != null) wn.fills = compilePaintWord(props.fill, "fill");
   const cfg = (props.textStyle ?? {}) as NonNullable<TextProps["textStyle"]>;
@@ -1010,6 +1100,7 @@ function shape(type: "RECTANGLE" | "ELLIPSE", props: ShapeProps | EllipseProps |
   props = acceptAuthoringProps(props, { type, verb: "create", known, subject }) as ShapeProps;
   const wn = mintWriteNode(type);
   compileNodeLocalProps(wn, props, { radius: type === "RECTANGLE" });
+  compileBindings(wn, props, ANY_NODE_BINDINGS, subject);
   const layout = buildLayout(props as FrameProps, type, subject);
   if (Object.keys(layout).length) wn.layout = layout;
   return sealWriteNode(wn);
@@ -1023,6 +1114,7 @@ function line(props: LineProps | SimplifiedNode = {}): WriteNode {
   props = acceptAuthoringProps(props, { type: "LINE", verb: "create", known: LINE_KEYS, subject: "flcm.line" }) as LineProps;
   const wn = mintWriteNode("LINE");
   base(wn, props);
+  compileBindings(wn, props, ANY_NODE_BINDINGS, "flcm.line");
   if (props.stroke != null) wn.strokes = compilePaintWord(props.stroke, "stroke");
   if (props.strokeWidth != null) wn.strokeWeight = length(props.strokeWidth);
   const layout: WriteLayout = { ...(compileLineWidth(props) || {}), ...(compilePlacementWords(props) || {}) };
@@ -1056,6 +1148,7 @@ function svg(markup: unknown, props: SvgProps = {}): WriteNode {
   const wn = mintWriteNode("VECTOR");
   wn.svg = markup;
   base(wn, props);
+  compileBindings(wn, props, ANY_NODE_BINDINGS, "flcm.svg");
   const layout = buildLayout(props as FrameProps, "VECTOR", "flcm.svg");
   if (Object.keys(layout).length) wn.layout = layout;
   return sealWriteNode(wn);
@@ -1076,6 +1169,7 @@ function path(props: PathProps): WriteNode {
   const wn = mintWriteNode("VECTOR");
   wn.pathData = d;
   compileNodeLocalProps(wn, props, {}); // fill/stroke/strokeWidth/effects/rotation + base; radius/clip off for a vector
+  compileBindings(wn, props, ANY_NODE_BINDINGS, "flcm.path");
   const layout = buildLayout(props as FrameProps, "VECTOR", "flcm.path");
   if (Object.keys(layout).length) wn.layout = layout;
   return sealWriteNode(wn);
