@@ -33,9 +33,10 @@ import type {
 export type WriteType = "FRAME" | "TEXT" | "RECTANGLE" | "ELLIPSE" | "LINE" | "VECTOR" | "INSTANCE";
 
 // The node types edit has a per-type vocabulary for. A superset of WriteType on purpose: an INSTANCE
-// is both, while the definition types (COMPONENT/COMPONENT_SET, and a SLOT inside one) are edited but
-// never constructed — flcm.component PROMOTES a frame; nothing builds one from a spec.
-export type EditableType = WriteType;
+// is both, while the definition types (COMPONENT/COMPONENT_SET, and the SLOT an instance shows for a
+// bound frame) are edited but never constructed — flcm.component PROMOTES a frame; nothing builds one
+// from a spec.
+export type EditableType = WriteType | "COMPONENT" | "COMPONENT_SET" | "SLOT";
 
 // Which schema word GROUPS compose each editable type's surface — the same compositions as the
 // per-verb create key sets (flcm.ts FRAME_KEYS = shared+size+appearance+frame, etc.), named once
@@ -50,14 +51,28 @@ export type EditableType = WriteType;
 // alone also takes `swap` (`componentId`), the one word that exists only under edit — the constructor
 // takes the component positionally, so the group is composed here rather than into INSTANCE's create
 // vocabulary.
+//
+// `binding` (`componentPropertyReferences`) composes into every type that can BE a component's
+// sublayer — the same universality it has at create, where every constructor takes it. Not onto
+// COMPONENT/COMPONENT_SET: Figma has no component inside a component, so a component's own binding
+// would name a property of something that can't exist. Not onto SLOT either: a slot is what an
+// INSTANCE shows for a bound frame, and the binding lives on that frame back in the definition.
+//
+// COMPONENT and COMPONENT_SET take a FRAME's words because their root IS a frame (layout, fill,
+// borderRadius, width… all land exactly as on one), plus `componentDefinition` — the two words that
+// change what the component DECLARES. SLOT takes the frame surface without them [verified live:
+// layoutMode, gap and fills are settable on an instance's slot].
 export const EDIT_TYPE_WORD_GROUPS = {
-  FRAME: ["shared", "size", "appearance", "frame"],
-  TEXT: ["shared", "size", "text"],
-  RECTANGLE: ["shared", "size", "appearance"],
-  ELLIPSE: ["shared", "size", "ellipse"],
-  LINE: ["shared", "line"],
-  VECTOR: ["shared", "size", "path"],
-  INSTANCE: ["shared", "size", "appearance", "frame", "instance", "swap"],
+  FRAME: ["shared", "size", "appearance", "frame", "binding"],
+  TEXT: ["shared", "size", "text", "binding"],
+  RECTANGLE: ["shared", "size", "appearance", "binding"],
+  ELLIPSE: ["shared", "size", "ellipse", "binding"],
+  LINE: ["shared", "line", "binding"],
+  VECTOR: ["shared", "size", "path", "binding"],
+  INSTANCE: ["shared", "size", "appearance", "frame", "instance", "swap", "binding"],
+  COMPONENT: ["shared", "size", "appearance", "frame", "componentDefinition"],
+  COMPONENT_SET: ["shared", "size", "appearance", "frame", "componentDefinition"],
+  SLOT: ["shared", "size", "appearance", "frame"],
 } as const satisfies Record<EditableType, readonly string[]>;
 
 export interface Rgb { r: number; g: number; b: number }
@@ -360,6 +375,41 @@ export interface ComponentPropertyDefinitionInput {
 }
 
 export type ComponentPropertyDefinitions = Record<string, ComponentPropertyDefinitionInput>;
+
+// One `propertyDefinitions` entry as an EDIT names it, keyed by the property's CURRENT name. Three
+// shapes in one: a name the component doesn't have yet ADDS (create's own rules, with `defaultValue`
+// required — nothing binds it in the same call), a name it has CHANGES (`defaultValue`, and `name`
+// to rename), and `null` DELETES. `name` is the one word here with no read spelling: a read reports
+// a property's name as the key, so renaming needs a word of its own.
+export interface ComponentPropertyDefinitionEdit {
+  type?: "boolean" | "text" | "instance_swap" | "slot";
+  defaultValue?: boolean | string | Target;
+  name?: string;
+}
+
+export type ComponentPropertyDefinitionEdits = Record<string, ComponentPropertyDefinitionEdit | null>;
+
+// The binding bag under EDIT: the same fields, plus `null` per field to UNBIND it — the field stops
+// tracking the property and keeps whatever value it has. (At create there is nothing to unbind, so
+// ComponentPropertyBinding above carries no null.)
+export interface ComponentPropertyBindingEdit {
+  visible?: string | null;
+  text?: string | null;
+  componentId?: string | null;
+  slot?: string | null;
+}
+
+// The COMPONENT-side words an EDIT delta may carry, kept RAW for the same reason the INSTANCE words
+// are: which definition a bare property name reaches, which component owns a sublayer's binding, and
+// what an instance-swap default resolves to are all live-document facts. Split off the compiled patch
+// by edit's stage 2 and resolved by the verb's prepare (component-edit.ts). `description` /
+// `propertyDefinitions` reach a COMPONENT or COMPONENT_SET; `componentPropertyReferences` reaches any
+// sublayer of one.
+export interface ComponentEditWords {
+  description?: string;
+  propertyDefinitions?: ComponentPropertyDefinitionEdits;
+  componentPropertyReferences?: ComponentPropertyBindingEdit;
+}
 
 // What flcm.component hands back: the COMPONENT itself plus every keyed node in its subtree —
 // render's own `{ node, keyed }`, so an agent that renders and an agent that promotes read the

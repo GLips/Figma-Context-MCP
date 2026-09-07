@@ -22,7 +22,7 @@ import {
   WriteNode, WriteProps, WriteChild, WriteLayout, WriteTextStyle, WriteTextRun, PaintSpec,
   GradientStop, EffectSpec, Sizing, Edges, WriteCssEffects, PinX, PinY, AnchorX, AnchorY,
   Justify, Align, TextAlign, TextDecoration, WriteTextCase, RawIdRef, WriteType, Target,
-  ComponentPropertyInput, OverrideDeltaInput, ComponentPropertyBinding,
+  ComponentPropertyInput, OverrideDeltaInput, ComponentPropertyBinding, ComponentPropertyDefinitionEdit,
 } from "./ir.js";
 import { markConstructorBuilt, isConstructorBuilt } from "./provenance.js";
 import { assertLayoutRealizableForType } from "./layout-legality.js";
@@ -32,7 +32,7 @@ import { layerBlurFromCssPx, backgroundBlurFromCssPx, shadow, glass, noise, text
 import { parseColor, parseFill, parseCssEffects, parseBlendMode, boxShorthand, length, lineHeight, letterSpacing, isPercent, percent } from "./css.js";
 import { requestHostImages } from "./host.js";
 import { get, find, findOne, selection } from "./read.js";
-import { rejectUnknownKeys, acceptAuthoringProps, rejectNonDeltaWords } from "./validate.js";
+import { rejectUnknownKeys, acceptAuthoringProps, rejectNonDeltaWords, own } from "./validate.js";
 import type { SimplifiedNode } from "@framelink/core";
 
 // The authoring surface (verb Props + gradient/effects sugar) is defined ONCE in schema.ts as zod schemas
@@ -60,7 +60,7 @@ import type {
 // validate.ts, the same one read.ts's locate query fails loud with.
 export const KNOWN_KEYS = {
   shared: ["name", "key", "opacity", "mixBlendMode", "visible", "locked"],
-  edit: ["name", "opacity", "mixBlendMode", "visible", "locked", "fill", "stroke", "strokeWidth", "strokeAlign", "borderRadius", "effects", "rotation", "clip", "width", "height", "left", "top", "position", "anchor", "pin", "layout", "text", "textStyle", "boldWeight", "componentProperties", "overrides", "componentId"],
+  edit: ["name", "opacity", "mixBlendMode", "visible", "locked", "fill", "stroke", "strokeWidth", "strokeAlign", "borderRadius", "effects", "rotation", "clip", "width", "height", "left", "top", "position", "anchor", "pin", "layout", "text", "textStyle", "boldWeight", "componentProperties", "overrides", "componentId", "componentPropertyReferences", "description", "propertyDefinitions"],
   size: ["width", "height", "left", "top", "position", "anchor", "pin"],
   placement: ["left", "top", "position", "anchor", "pin"],
   appearance: ["fill", "stroke", "strokeWidth", "strokeAlign", "borderRadius", "effects", "rotation"],
@@ -76,7 +76,8 @@ export const KNOWN_KEYS = {
   swap: ["componentId"],
   binding: ["componentPropertyReferences"],
   componentOptions: ["name", "description", "propertyDefinitions"],
-  propertyDefinition: ["type", "defaultValue"],
+  componentDefinition: ["description", "propertyDefinitions"],
+  propertyDefinition: ["type", "defaultValue", "name"],
   variantEntry: ["component", "variant"],
   variantsOptions: ["name", "description"],
   image: ["scaleMode", "placeholder"],
@@ -108,7 +109,16 @@ const INSTANCE_KEYS = keySet(KNOWN_KEYS.shared, KNOWN_KEYS.size, KNOWN_KEYS.appe
 // INSTANCE_COMPONENT_WORDS is also what edit's stage 2 splits off a delta as the instance half
 // (edit-plan.ts) — one set, so a word added to either group can't be split by one and refused by the other.
 export const INSTANCE_COMPONENT_WORDS: ReadonlySet<string> = keySet(KNOWN_KEYS.instance, KNOWN_KEYS.swap);
-const OVERRIDE_DELTA_KEYS = keySet(KNOWN_KEYS.edit.filter((k) => !INSTANCE_COMPONENT_WORDS.has(k)));
+// The COMPONENT half of the same split: what the component DECLARES (`description`,
+// `propertyDefinitions`, on a COMPONENT/COMPONENT_SET) and which property drives a SUBLAYER
+// (`componentPropertyReferences`). Live-document questions all — which definition a bare name
+// reaches, which component owns the node — so edit's stage 2 splits them off raw exactly as it
+// splits the instance words, and component-edit.ts resolves them.
+export const COMPONENT_EDIT_WORDS: ReadonlySet<string> = keySet(KNOWN_KEYS.componentDefinition, KNOWN_KEYS.binding);
+// Every edit word the sync compile can only judge the SHAPE of. One set, so a word added to either
+// half is split by stage 2 and refused by the override gate below without a second edit.
+export const DOCUMENT_RESOLVED_EDIT_WORDS: ReadonlySet<string> = keySet([...INSTANCE_COMPONENT_WORDS], [...COMPONENT_EDIT_WORDS]);
+const OVERRIDE_DELTA_KEYS = keySet(KNOWN_KEYS.edit.filter((k) => !DOCUMENT_RESOLVED_EDIT_WORDS.has(k)));
 // Each constructor's closed vocabulary, by the read type it builds — what fromRead judges a spec's
 // read words against before the call, so a word the type lacks is named as real state, not a typo.
 export const CONSTRUCTOR_KEYS_BY_TYPE: Record<"FRAME" | "TEXT" | "RECTANGLE" | "ELLIPSE" | "LINE" | "INSTANCE", ReadonlySet<string>> = {
@@ -651,6 +661,36 @@ export function compileComponentPropertyBag(raw: unknown, subject: string): Reco
   return out;
 }
 
+// The edit bag's SHAPE: an object of property names to a definition object or `null`. Which names
+// already exist — and therefore whether an entry adds, changes or deletes — is the component's to
+// say at prepare (component-edit.ts), exactly as `componentProperties` splits the question.
+//
+// Names are TRIMMED here, once, for the same reason flcm.component trims them: the dedupe below, the
+// live lookup, and the name Figma stores must all see one spelling.
+export function compilePropertyDefinitionEditBag(raw: unknown, subject: string): Record<string, ComponentPropertyDefinitionEdit | null> {
+  const where = subject + ".propertyDefinitions";
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error(where + ' must be an object of definitions by property name, e.g. { Label: { defaultValue: "Save" }, Icon: null } — got ' + JSON.stringify(raw) + ".");
+  }
+  const out: Record<string, ComponentPropertyDefinitionEdit | null> = {};
+  for (const rawName of Object.keys(raw)) {
+    const name = rawName.trim();
+    if (!name) throw new Error(where + ": a property name is empty.");
+    if (own(out, name) !== undefined) {
+      throw new Error(where + ": two entries name the property " + JSON.stringify(name) + " — one property, one entry.");
+    }
+    const value = (raw as Record<string, unknown>)[rawName];
+    if (value !== null && (!value || typeof value !== "object" || Array.isArray(value))) {
+      throw new Error(
+        where + "[" + JSON.stringify(name) + "] must be a definition object — { defaultValue } to re-default it, { name } to rename it, " +
+          '{ type, defaultValue } to add one — or null to delete it. Got ' + JSON.stringify(value) + ".",
+      );
+    }
+    out[name] = value as ComponentPropertyDefinitionEdit | null;
+  }
+  return out;
+}
+
 // Each override is a delta in the edit vocabulary, keyed by the sublayer's component-relative path.
 // The document-blind half of edit's validation runs on every entry now (a misspelled word rejects
 // before any component is looked up); the per-type half — which words THIS sublayer takes, what a
@@ -667,11 +707,20 @@ export function compileOverrideBag(raw: unknown, subject: string): Record<string
     const at = where + "[" + JSON.stringify(path) + "]";
     if (delta && typeof delta === "object") {
       for (const word of Object.keys(delta)) {
-        if (!INSTANCE_COMPONENT_WORDS.has(word)) continue;
-        throw new Error(
-          at + ": `" + word + "` reaches a NESTED instance's own component, which an override path can't address — the path names a sublayer, and the tree behind it is what this call is still deciding. " +
-            'Edit that instance directly once this call lands: flcm.edit("I<instanceId>;' + path + '", { ' + word + ": … }).",
-        );
+        if (INSTANCE_COMPONENT_WORDS.has(word)) {
+          throw new Error(
+            at + ": `" + word + "` reaches a NESTED instance's own component, which an override path can't address — the path names a sublayer, and the tree behind it is what this call is still deciding. " +
+              'Edit that instance directly once this call lands: flcm.edit("I<instanceId>;' + path + '", { ' + word + ": … }).",
+          );
+        }
+        // The definition words reach the COMPONENT, and an override is a per-INSTANCE difference —
+        // writing one here would change every instance, which is the opposite of what an override is.
+        if (COMPONENT_EDIT_WORDS.has(word)) {
+          throw new Error(
+            at + ": `" + word + "` belongs to the main COMPONENT, not to one instance's override — setting it here would change every instance of it. " +
+              "Edit the component itself: flcm.edit(componentId, { " + word + ": … }).",
+          );
+        }
       }
     }
     rejectNonDeltaWords(delta, OVERRIDE_DELTA_KEYS, at);
@@ -706,6 +755,30 @@ const INSTANCE_BINDINGS: readonly string[] = ["visible", "componentId"];
 // inline in BINDING_FIELDS, not as their own FIELD_GROUP.
 export const BINDING_FIELD_KEYS: ReadonlySet<string> = keySet(FRAME_BINDINGS, TEXT_BINDINGS, INSTANCE_BINDINGS);
 
+/**
+ * Which fields a LIVE node of this type may bind — the same per-type rule the constructors carry,
+ * read off the document instead of off the verb, so `flcm.edit(sublayer, { componentPropertyReferences })`
+ * and `flcm.text(…, { componentPropertyReferences })` refuse the same field on the same node.
+ */
+export function bindingFieldsForType(type: string): readonly string[] {
+  if (type === "FRAME") return FRAME_BINDINGS;
+  if (type === "TEXT") return TEXT_BINDINGS;
+  if (type === "INSTANCE") return INSTANCE_BINDINGS;
+  return ANY_NODE_BINDINGS;
+}
+
+// The per-field legality half, shared by the create bag and the edit bag so a field on the wrong
+// node type reads the same either way. `what` is what the refusal calls the thing that can't bind
+// it — a constructor name at create ("flcm.text"), the live node's type under edit ("a TEXT").
+function assertBindingFieldLegal(field: string, legal: readonly string[], where: string, what: string): void {
+  if (legal.indexOf(field) !== -1) return;
+  const owner = BINDING_FIELD_OWNERS[field];
+  throw new Error(
+    where + ": `" + field + "` is not one of " + what + "'s binding fields (" + legal.join(", ") + ")" +
+      (owner ? " — " + owner : "") + ".",
+  );
+}
+
 export function compileBindingBag(raw: unknown, legal: readonly string[], subject: string): ComponentPropertyBinding {
   const where = subject + ".componentPropertyReferences";
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
@@ -715,19 +788,44 @@ export function compileBindingBag(raw: unknown, legal: readonly string[], subjec
   for (const field of Object.keys(raw)) {
     const value = (raw as Record<string, unknown>)[field];
     if (value == null) continue; // an explicitly-absent field is absence, not a claim
-    if (legal.indexOf(field) === -1) {
-      const owner = BINDING_FIELD_OWNERS[field];
-      throw new Error(
-        where + ": `" + field + "` is not one of " + subject + "'s binding fields (" + legal.join(", ") + ")" +
-          (owner ? " — " + owner : "") + ".",
-      );
-    }
+    assertBindingFieldLegal(field, legal, where, subject);
     if (typeof value !== "string" || !value.trim()) {
       throw new Error(where + "." + field + ": a binding names the component property that drives this field — a property name declared in the same flcm.component call. Got " + JSON.stringify(value) + ".");
     }
     out[field] = value;
   }
   return out as ComponentPropertyBinding;
+}
+
+/**
+ * The EDIT bag's shape gate. One thing separates it from the create bag above: `null` is a CLAIM
+ * here, not absence — it unbinds the field — so a null can't be skipped, and the field it names is
+ * judged for legality like any other. Which property each name reaches (and whether unbinding this
+ * one is legal) is prepare's, against the owning component: component-edit.ts.
+ *
+ * `what` names the live node's type, since under edit the offending field belongs to a node, not to
+ * a constructor: "`slot` is not one of a TEXT's binding fields".
+ */
+export function compileBindingEditBag(raw: unknown, legal: readonly string[], subject: string, what: string): Record<string, string | null> {
+  const where = subject + ".componentPropertyReferences";
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error(where + ' must be an object naming which component property drives which field, e.g. { text: "Label" } (or null to unbind) — got ' + JSON.stringify(raw) + ".");
+  }
+  const out: Record<string, string | null> = {};
+  for (const field of Object.keys(raw)) {
+    const value = (raw as Record<string, unknown>)[field];
+    if (value === undefined) continue; // an explicitly-undefined field is absence; `null` is the unbind
+    assertBindingFieldLegal(field, legal, where, what);
+    if (value === null) {
+      out[field] = null;
+      continue;
+    }
+    if (typeof value !== "string" || !value.trim()) {
+      throw new Error(where + "." + field + ": a binding names the component property that drives this field — a property this component declares — or null to unbind it. Got " + JSON.stringify(value) + ".");
+    }
+    out[field] = value;
+  }
+  return out;
 }
 
 // The constructor-side half: compile the bag (when named) onto the WriteNode. An empty bag lands
@@ -740,17 +838,19 @@ function compileBindings(wn: WriteProps, props: { componentPropertyReferences?: 
 }
 
 /**
- * Refuse a tree carrying bindings anywhere but flcm.component. A binding names a property that only
- * a declaring call has — through render or append the name points at nothing, and Figma would take
- * the reference silently onto a node with no component behind it. Called by every spec-taking verb
- * except flcm.component (which is where the names are minted).
+ * Refuse a tree carrying bindings with no declaring component behind it. A binding names a property
+ * that only a component has — through render, or an append landing on a page or a plain frame, the
+ * name points at nothing, and Figma would take the reference silently onto a node with no component
+ * behind it. Called by every spec-taking verb except flcm.component (which mints the names), and by
+ * an insert once it knows its destination is NOT inside a component (component-edit.ts).
  */
 export function assertNoComponentPropertyBindings(tree: WriteChild, subject: string): void {
   if (!tree || typeof tree !== "object") return;
   if (tree.componentPropertyReferences) {
     throw new Error(
-      subject + ": `componentPropertyReferences` binds a node to a component property, which only means something inside flcm.component — the verb that declares the properties in the same call. " +
-        "Build the component with flcm.component(spec, { propertyDefinitions: … }), then place an flcm.instance of it.",
+      subject + ": `componentPropertyReferences` binds a node to a component property, and nothing here declares one — a binding means something only with a component behind it. " +
+        "Either build the component in one call (flcm.component(spec, { propertyDefinitions: … }), which declares the properties the spec binds), " +
+        "or insert this into a COMPONENT that already declares them (flcm.append(component, spec)). To place a copy of a component, use flcm.instance.",
     );
   }
   for (const child of tree.children || []) assertNoComponentPropertyBindings(child, subject);

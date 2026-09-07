@@ -251,14 +251,15 @@ test("what a variants call refuses, with zero writes", async () => {
   await assert.rejects(variants([{ component: a, variant: { Size: "Small" } }], { name: "Other" }), /is already a variant of set "Button"/);
 });
 
-test("a binding means nothing outside flcm.component — every other verb refuses it by name", async () => {
+test("a binding means nothing with no declaring component behind it — every other verb refuses it by name", async () => {
   const figma = createFigmaMock();
   const bound = () => frame({ width: 10, height: 10 }, [text("Hi", { componentPropertyReferences: { text: "Label" } })]);
-  await assert.rejects(render(bound()), /flcm\.render: `componentPropertyReferences`.*only means something inside flcm\.component/s);
+  await assert.rejects(render(bound()), /flcm\.render: `componentPropertyReferences`.*nothing here declares one/s);
   await render(frame({ key: "host", width: 100, height: 100 }));
-  await assert.rejects(append("host", bound()), /flcm\.append: `componentPropertyReferences`.*only means something inside flcm\.component/s);
-  // Under edit it isn't a word at all.
-  await assert.rejects(edit("host", { componentPropertyReferences: { visible: "Icon" } } as never), /unknown prop "componentPropertyReferences" on flcm\.edit/);
+  await assert.rejects(append("host", bound()), /flcm\.append: `componentPropertyReferences`.*nothing here declares one/s);
+  // Under edit the word exists (it binds a component's own sublayer — see component-edit.test.ts),
+  // but on a node outside every component there is nothing for it to point at.
+  await assert.rejects(edit("host", { componentPropertyReferences: { visible: "Icon" } }), /is not inside a component, so no component declares a property for this to point at/);
   assert.equal(figma.currentPage.children.length, 1);
 });
 

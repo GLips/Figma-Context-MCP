@@ -407,7 +407,7 @@ class Node {
     root.mainComponent = this;
     // The instance starts at every property's default; VARIANT axes read off the main's name.
     root._props = {};
-    const defs = propertyOwnerOf(this)._defs || {};
+    const defs = definitionOwnerOf(this)._defs || {};
     for (const [name, def] of Object.entries(defs)) if (def.type !== "VARIANT") root._props[name] = def.defaultValue;
     figma.currentPage.appendChild(root);
     return root;
@@ -431,7 +431,74 @@ class Node {
     const def = { type, defaultValue };
     if (options && options.variantOptions) def.variantOptions = [...options.variantOptions];
     (this._defs || (this._defs = {}))[full] = def;
+    // Every existing instance gains the property at its default, as live does.
+    for (const inst of instancesOf(this)) if (type !== "VARIANT") inst._props[full] = defaultValue;
     return full;
+  }
+
+  // Rename and/or re-default a property, returning its NEW full name — a rename RE-SUFFIXES
+  // ("Label#1:1" → "Caption#9:9"), and Figma re-points every reference to it (the definition's own
+  // sublayers, and every instance's). A VARIANT axis refuses: the axes are the member components'
+  // names. [typings 1.138 — the re-suffix and the reference re-pointing are on the live checklist.]
+  editComponentProperty(name, edits) {
+    const def = this._assertEditableProperty(name, "editComponentProperty");
+    const wire = PROPERTY_WIRE[def.type].ref;
+    let full = name;
+    const rename = edits && edits.name;
+    if (rename != null && rename !== bareComponentPropertyName(name)) {
+      delete this._defs[name];
+      full = rename + "#" + nextId();
+      this._defs[full] = def;
+      for (const n of definitionSubtreeOf(this)) repointPropertyReference(n, wire, name, full);
+      for (const inst of instancesOf(this)) {
+        for (const sub of [inst, ...inst.findAll()]) repointPropertyReference(sub, wire, name, full);
+        if (Object.prototype.hasOwnProperty.call(inst._props, name)) {
+          inst._props[full] = inst._props[name];
+          delete inst._props[name];
+        }
+      }
+    }
+    if (edits && edits.defaultValue !== undefined) {
+      const before = def.defaultValue;
+      def.defaultValue = edits.defaultValue;
+      // An instance that never set the property follows the new default; one that did keeps its own.
+      for (const inst of instancesOf(this)) {
+        if (inst._props[full] !== before) continue;
+        inst._props[full] = edits.defaultValue;
+        writeBoundProperty(inst, full, def, edits.defaultValue);
+      }
+    }
+    return full;
+  }
+
+  // Remove a property: the definition's bound sublayers stop referencing it (and keep the value they
+  // have), and every instance's sublayer falls back to its definition node's value — the override the
+  // property was driving no longer exists.
+  deleteComponentProperty(name) {
+    const def = this._assertEditableProperty(name, "deleteComponentProperty");
+    const { ref: wire, field } = PROPERTY_WIRE[def.type];
+    delete this._defs[name];
+    for (const n of definitionSubtreeOf(this)) repointPropertyReference(n, wire, name, null);
+    for (const inst of instancesOf(this)) {
+      delete inst._props[name];
+      for (const sub of [inst, ...inst.findAll()]) {
+        const refs = sub.componentPropertyReferences || {};
+        if (refs[wire] !== name) continue;
+        repointPropertyReference(sub, wire, name, null);
+        const source = definitionNodeOf(sub, inst);
+        if (source && field) sub[field] = clonePaints(source[field]);
+        // A slot's frame becomes an ordinary frame the moment the property is gone.
+        if (def.type === "SLOT" && sub.type === "SLOT") sub.type = "FRAME";
+      }
+    }
+  }
+
+  _assertEditableProperty(name, verb) {
+    if (this.type !== "COMPONENT" && this.type !== "COMPONENT_SET") throw new Error(verb + ": not a component");
+    const def = (this._defs || {})[name];
+    if (!def) throw new Error(verb + ": no component property named " + JSON.stringify(name));
+    if (def.type === "VARIANT") throw new Error(verb + ": " + JSON.stringify(name) + " is a variant property — the axes come from the variants' names");
+    return def;
   }
   // "Size=Large, State=Hover" → { Size: "Large", State: "Hover" }; null off a set, like live.
   get variantProperties() {
@@ -448,7 +515,7 @@ class Node {
   get componentProperties() {
     if (this.type !== "INSTANCE") return undefined;
     const out = {};
-    const defs = propertyOwnerOf(this.mainComponent)._defs || {};
+    const defs = definitionOwnerOf(this.mainComponent)._defs || {};
     const variant = this.variantProperties || {};
     for (const [name, def] of Object.entries(defs)) {
       out[name] = { type: def.type, value: def.type === "VARIANT" ? variant[name] : this._props[name] };
@@ -461,7 +528,7 @@ class Node {
   // property through componentPropertyReferences.
   setProperties(props) {
     if (this.type !== "INSTANCE") throw new Error("setProperties: not an INSTANCE");
-    const owner = propertyOwnerOf(this.mainComponent);
+    const owner = definitionOwnerOf(this.mainComponent);
     const defs = owner._defs || {};
     const variant = { ...(this.variantProperties || {}) };
     let variantChanged = false;
@@ -522,7 +589,7 @@ class Node {
     this.mainComponent = component;
     this._repointTo(component);
     this._props = {};
-    const defs = propertyOwnerOf(component)._defs || {};
+    const defs = definitionOwnerOf(component)._defs || {};
     for (const [name, def] of Object.entries(defs)) if (def.type !== "VARIANT") this._props[name] = def.defaultValue;
     for (const sub of this.findAll()) {
       const diff = carried.get(sub.name);
@@ -560,8 +627,110 @@ const OVERRIDDEN_FIELDS = ["characters", "visible", "opacity", "rotation", "corn
   "fontSize", "fills", "strokes", "effects"];
 
 // Who holds a component's property definitions: the set for a variant, else the component itself.
-function propertyOwnerOf(component) {
+function definitionOwnerOf(component) {
   return component && component.parent && component.parent.type === "COMPONENT_SET" ? component.parent : component;
+}
+
+// Each property type's wire key on a sublayer's componentPropertyReferences, and which field of that
+// sublayer the property DRIVES. A slot drives no field — its content is the bound frame itself.
+const PROPERTY_WIRE = {
+  BOOLEAN: { ref: "visible", field: "visible" },
+  TEXT: { ref: "characters", field: "characters" },
+  INSTANCE_SWAP: { ref: "mainComponent", field: "mainComponent" },
+  SLOT: { ref: "slotContentId", field: null },
+  VARIANT: { ref: null, field: null },
+};
+
+const bareComponentPropertyName = (full) => (full.lastIndexOf("#") === -1 ? full : full.slice(0, full.lastIndexOf("#")));
+
+// The definition subtree a property's references live in: a SET's is every variant and their
+// children, since each variant carries its own copy of a binding.
+function definitionSubtreeOf(owner) {
+  return [owner, ...owner.findAll()];
+}
+
+// Every live instance of `component` (or, for a SET, of any of its variants). The mock keeps no
+// back-index, so this is a registry scan — fine at test scale, and it keeps instances honest about
+// following their main.
+function instancesOf(component) {
+  const mains = component.type === "COMPONENT_SET" ? component.children : [component];
+  const out = [];
+  for (const node of registry.values()) {
+    if (node.type === "INSTANCE" && !node.removed && mains.indexOf(node.mainComponent) !== -1) out.push(node);
+  }
+  return out;
+}
+
+// Re-point (or, with `to` null, clear) one sublayer's reference to a property.
+function repointPropertyReference(node, wire, from, to) {
+  const refs = node.componentPropertyReferences;
+  if (!wire || !refs || refs[wire] !== from) return;
+  const next = { ...refs };
+  if (to === null) delete next[wire];
+  else next[wire] = to;
+  node.componentPropertyReferences = next;
+}
+
+// The definition node an instance sublayer is a copy of — the composite id names it (`I<inst>;<def>`),
+// and the instance ROOT's is the main component itself.
+function definitionNodeOf(node, instance) {
+  if (node === instance) return instance.mainComponent;
+  const rest = node.id.slice(node.id.indexOf(";") + 1);
+  return registry.get(rest.indexOf(";") !== -1 ? "I" + rest : rest) || null;
+}
+
+// Push a property value onto every sublayer of `instance` bound to it — the same propagation
+// setProperties performs, shared so a definition-level default change lands the identical way.
+function writeBoundProperty(instance, full, def, value) {
+  const { ref: wire, field } = PROPERTY_WIRE[def.type];
+  if (!wire || !field) return;
+  for (const sub of instance.findAll()) {
+    if ((sub.componentPropertyReferences || {})[wire] !== full) continue;
+    sub[field] = def.type === "INSTANCE_SWAP" ? registry.get(value) || sub[field] : value;
+  }
+}
+
+// ---- an instance TRACKS its main component ----
+//
+// Editing a main component is how every instance of it changes, so the mock has to show that or the
+// whole capability is untestable here. A plain data mock can't observe a write, so the main's own
+// nodes get accessors the first time they are instantiated: a write to a mirrored field lands on
+// every instance node that still agrees with the value the main had. "Still agrees" is the mock's
+// stand-in for Figma's real per-field override bit — enough for the fact under test (a component
+// edit reaches its instances) without pretending to model override resolution.
+//
+// x/y are deliberately absent: an instance's position is its own, never the component's. So is
+// `componentPropertyReferences`, which is re-pointed explicitly by the definition-editing calls above.
+const MIRRORED_FIELDS = ["name", "layoutMode", "itemSpacing", "paddingTop", "paddingRight", "paddingBottom",
+  "paddingLeft", "primaryAxisAlignItems", "counterAxisAlignItems", "primaryAxisSizingMode",
+  "counterAxisSizingMode", "layoutGrow", "layoutAlign", "layoutPositioning", "strokeWeight", "strokeAlign",
+  "cornerRadius", "opacity", "visible", "rotation", "_characters", "fontSize", "textAutoResize",
+  "fills", "strokes", "effects", "clipsContent", "_fixedW", "_fixedH"];
+
+function trackInstanceNode(mainNode, instanceNode) {
+  if (!mainNode._mirrors) {
+    mainNode._mirrors = [];
+    for (const field of MIRRORED_FIELDS) installFieldMirror(mainNode, field);
+  }
+  mainNode._mirrors.push(instanceNode);
+}
+
+function installFieldMirror(node, field) {
+  let held = node[field];
+  Object.defineProperty(node, field, {
+    configurable: true,
+    enumerable: true,
+    get: () => held,
+    set: (next) => {
+      const before = held;
+      held = next;
+      for (const mirror of node._mirrors) {
+        if (mirror.removed) continue;
+        if (JSON.stringify(mirror[field]) !== JSON.stringify(before)) continue; // this instance overrode it
+        mirror[field] = clonePaints(next);
+      }
+    },
+  });
 }
 
 // A free-standing duplicate of a subtree (Node.clone): fresh ids, its own copies of the mutable
@@ -613,6 +782,8 @@ function cloneInto(mainNode, instId, isRoot) {
   }
   n.children = [];
   for (const c of mainNode.children) { const cc = cloneInto(c, instId, false); cc.parent = n; n.children.push(cc); }
+  // From here this node FOLLOWS its definition node — see trackInstanceNode.
+  trackInstanceNode(mainNode, n);
   return n;
 }
 

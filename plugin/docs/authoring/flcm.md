@@ -448,18 +448,24 @@ out.keyed.chip.intent;    // undefined — a plainly fixed node
 | `componentProperties` | { [name]: string \| boolean \| component target } | Component property values by name, as `get` reports them: a variant axis ("Size": "Large"), a boolean, a text, or — for an instance-swap property — a component target (its node id or a handle). Names are the bare names without the `#id` suffix. An unknown name, a value of the wrong type, a variant option the set lacks, or a combination no variant has each fails loud naming the component's own. A slot property is not set here (its content is authored — see `overrides`). |
 | `overrides` | { [path]: delta } | How this instance differs from its component's children, keyed by COMPONENT-RELATIVE sublayer path exactly as `get` keys them (`"11:9"`, `"11:9;11:14"` for a sublayer inside a nested instance). Each value is a delta in the edit vocabulary for that sublayer's type — `{ text: "Vue.js" }`, `{ fill: "#F00" }`, `{ visible: false }`. A read's `null` (the instance lacks a field the component has) is accepted where flcm has a removal word (`fill`/`stroke`/`effects` → "none", `opacity` → 1, `borderRadius` → 0) and fails loud otherwise. A path the resolved variant doesn't have fails loud. |
 | `componentId` | component target | INSTANCE only, under edit: swap this instance to another component — the read's own word, so a `get` spec re-pointed at a different component writes back as-is. A target naming a COMPONENT, or a COMPONENT_SET (its default variant, unless `componentProperties` in the same delta pick one). Figma carries the overrides it can match across the swap; the rest fall back to the new component's own values. |
+| `componentPropertyReferences` | { visible?, text?, componentId?, slot? } — property names, or null to unbind | Bind this node to a component property of the COMPONENT it sits in, keyed as `get` reports a binding: `visible` (any node), `text` (TEXT only), `componentId` (INSTANCE only), `slot` (FRAME only). Each value is a property name declared on that component — bare names resolve when unambiguous — and `null` UNBINDS the field, which then keeps whatever value it has. The node must be inside a COMPONENT (or a variant of a set): inside an INSTANCE the binding belongs to the main component and is refused, and outside any component there is no property for it to point at. Unbinding the ONLY frame of a slot property is refused (delete the property instead: `propertyDefinitions: { Name: null }` on the component). |
+| `description` | string | The component's description — what Figma shows beside it in the assets panel. |
+| `propertyDefinitions` | { [name]: { type?, defaultValue?, name? } \| null } | COMPONENT / COMPONENT_SET only, under edit: change what the component DECLARES, keyed by the property's current name (bare, or the full name with its `#suffix`). A name the component doesn't have ADDS it — `{ type, defaultValue }`, with `defaultValue` REQUIRED here since nothing binds it in the same call (bind a sublayer next with `flcm.edit(sublayer, { componentPropertyReferences })`). A name it has CHANGES it: `{ defaultValue }` re-defaults it (instances still on the old default follow), `{ name: "New" }` renames it (Figma re-suffixes and re-points every bound sublayer). `null` DELETES it, freeing its bound layers. A `type` that differs from the current one is refused — Figma can't change a property's type, so delete and re-add. A new `slot` is refused too: a slot IS its frame, so it is made by inserting a bound frame (flcm.append(component, flcm.frame({ componentPropertyReferences: { slot: "Name" } }))). Variant axes live on the SET and are renamed by renaming its member components. |
 
 ### Words by node type
 
-- **FRAME** — `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `fill`, `stroke`, `strokeWidth`, `strokeAlign`, `borderRadius`, `effects`, `rotation`, `layout`, `clip`
-- **TEXT** — `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `text`, `textStyle`, `fill`, `boldWeight`
-- **RECTANGLE** — `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `fill`, `stroke`, `strokeWidth`, `strokeAlign`, `borderRadius`, `effects`, `rotation`
-- **ELLIPSE** — `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `fill`, `stroke`, `strokeWidth`, `strokeAlign`, `effects`, `rotation`
-- **LINE** — `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `stroke`, `strokeWidth`, `width`, `rotation`, `left`, `top`, `position`, `anchor`, `pin`
-- **VECTOR (path- or svg-born)** — `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `fill`, `stroke`, `strokeWidth`, `strokeAlign`, `effects`, `rotation`
-- **INSTANCE** — `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `fill`, `stroke`, `strokeWidth`, `strokeAlign`, `borderRadius`, `effects`, `rotation`, `layout`, `clip`, `componentProperties`, `overrides`, `componentId`
+- **FRAME** — `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `fill`, `stroke`, `strokeWidth`, `strokeAlign`, `borderRadius`, `effects`, `rotation`, `layout`, `clip`, `componentPropertyReferences`
+- **TEXT** — `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `text`, `textStyle`, `fill`, `boldWeight`, `componentPropertyReferences`
+- **RECTANGLE** — `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `fill`, `stroke`, `strokeWidth`, `strokeAlign`, `borderRadius`, `effects`, `rotation`, `componentPropertyReferences`
+- **ELLIPSE** — `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `fill`, `stroke`, `strokeWidth`, `strokeAlign`, `effects`, `rotation`, `componentPropertyReferences`
+- **LINE** — `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `stroke`, `strokeWidth`, `width`, `rotation`, `left`, `top`, `position`, `anchor`, `pin`, `componentPropertyReferences`
+- **VECTOR (path- or svg-born)** — `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `fill`, `stroke`, `strokeWidth`, `strokeAlign`, `effects`, `rotation`, `componentPropertyReferences`
+- **INSTANCE** — `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `fill`, `stroke`, `strokeWidth`, `strokeAlign`, `borderRadius`, `effects`, `rotation`, `layout`, `clip`, `componentProperties`, `overrides`, `componentId`, `componentPropertyReferences`
+- **COMPONENT** — `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `fill`, `stroke`, `strokeWidth`, `strokeAlign`, `borderRadius`, `effects`, `rotation`, `layout`, `clip`, `description`, `propertyDefinitions`
+- **COMPONENT_SET** — `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `fill`, `stroke`, `strokeWidth`, `strokeAlign`, `borderRadius`, `effects`, `rotation`, `layout`, `clip`, `description`, `propertyDefinitions`
+- **SLOT** — `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `fill`, `stroke`, `strokeWidth`, `strokeAlign`, `borderRadius`, `effects`, `rotation`, `layout`, `clip`
 
-On a node type with no vocabulary of its own (GROUP, COMPONENT, …) only the shared words apply: `name`, `opacity`, `mixBlendMode`, `visible`, `locked`.
+On a node type with no vocabulary of its own (GROUP, SECTION, POLYGON, …) only the shared words apply: `name`, `opacity`, `mixBlendMode`, `visible`, `locked`.
 
 ### Removal — the `"none"` word
 
@@ -475,6 +481,7 @@ On a node type with no vocabulary of its own (GROUP, COMPONENT, …) only the sh
 - **Text words read the LIVE node.** `text` replaces the whole text and collapses it to its LEADING run's style — prior bold spans and per-range colors do NOT survive, so style the new text in the same edit. A `textStyle` naming part of the font triple keeps the live rest (`fontWeight: "bold"` on italic Roboto stays bold italic Roboto). A text that already MIXES fonts has no single base: a partial font change, or a styled `text` run without its own `fontFamily`, rejects loud — anchor `textStyle.fontFamily` in the same edit, or give every run its family. `lineClamp` needs a bounded width.
 - **Edits inside a component INSTANCE apply as overrides.** A property Figma forbids overriding rejects, naming the instance — edit the main component (flcm never auto-detaches).
 - **An INSTANCE target also takes its three component words** — `componentProperties`, `overrides`, and `componentId` (the swap). See the components section; on any other node type each fails loud as an unknown word for that type.
+- **A COMPONENT or COMPONENT_SET target takes a frame's words plus `description` and `propertyDefinitions`** — editing the main is how every instance of it changes. A layer inside one also takes `componentPropertyReferences`, which binds it to a property. See the components section.
 - **`key` is immutable** — re-keying could mint a duplicate address. Set `name` to change the layers panel.
 - **No bare `x`/`y`** — position is `left`/`top` (naming either lifts a child out of an auto-layout flow; `position: "absolute"` lifts it in place, `position: "none"` returns it), resize behavior is `pin`.
 - **An empty delta is rejected**, since it would still mint an undo step.
@@ -603,7 +610,8 @@ await flcm.component(
 | Prop | Type | Notes |
 | --- | --- | --- |
 | `type` | "boolean" \| "text" \| "instance_swap" \| "slot" | The read's own lowercase property types. `boolean` shows/hides bound layers, `text` drives a bound TEXT's content, `instance_swap` swaps a bound instance's component, `slot` makes a bound FRAME a hole an instance fills. Required. |
-| `defaultValue` | boolean \| string \| component target | The value a fresh instance starts at: a boolean, a string, or (for `instance_swap`) a component target. OMIT IT to derive it from the node that binds this property — its `visible`, its text, its component. A `slot` refuses one (its content is authored, not set), and a property nothing binds must state one. |
+| `defaultValue` | boolean \| string \| component target | The value a fresh instance starts at: a boolean, a string, or (for `instance_swap`) a component target. OMIT IT to derive it from the node that binds this property — its `visible`, its text, its component. A `slot` refuses one (its content is authored, not set), and a property nothing binds must state one. Under `flcm.edit` it is REQUIRED when adding a property (nothing binds it yet) and is how an existing property is re-defaulted. |
+| `name` | string | EDIT ONLY: rename this property. The read has no rename word (a read reports the name as the key), so this is the one edit-only key inside a definition — `{ propertyDefinitions: { Label: { name: "Caption" } } }`. Figma re-suffixes the property and re-points every sublayer bound to it. At create the key IS the name, and passing this fails loud. |
 
 #### The binding word (on every node constructor)
 
@@ -646,6 +654,73 @@ await flcm.render(flcm.instance(set, { componentProperties: { Size: "Large" } })
 | --- | --- | --- |
 | `name` | string | The set's name. Required — left to Figma the set would be named after the first member's axes. |
 | `description` | string | The component's description — what Figma shows beside it in the assets panel. |
+
+### Changing a component — `flcm.edit`
+
+There is no verb for this either: **a main component is edited with `flcm.edit` and the structural verbs, exactly as a frame is**, and every instance of it follows because that is what a component is. A COMPONENT's root *is* a frame, so it takes a frame's whole vocabulary — `fill`, `layout`, `borderRadius`, `width` — and so does a COMPONENT_SET, whose layout words arrange its variants. Its sublayers are ordinary nodes: edit them by id, `append` new ones, `remove` ones you don't want.
+
+```js
+await flcm.edit(comp, { fill: "#111", layout: { gap: 12 } });   // every instance recolors and re-gaps
+await flcm.edit(labelId, { textStyle: { fontSize: 14 } });      // a sublayer, like any other node
+```
+
+Two words exist only here: `description`, and `propertyDefinitions` — what the component **declares**.
+
+```js
+await flcm.edit(comp, {
+  propertyDefinitions: {
+    Size: { type: "text", defaultValue: "M" },   // a name it doesn't have  → ADDS
+    Label: { defaultValue: "Save" },             // a name it has           → re-defaults
+    Icon: { name: "Leading" },                   // a name it has           → renames
+    Legacy: null,                                //                         → deletes
+  },
+});
+```
+
+- **Adding requires `defaultValue`.** At create it can be derived from the node that binds the property; an edit binds nothing in the same call, so there is no node to read a starting value off. Bind a layer next (below).
+- **A new `slot` can't be declared here at all** — a slot IS the frame that holds its placeholder content. Insert that frame and the slot comes with it (below).
+- **Changing a `defaultValue`** reaches every instance still sitting on the old default; an instance that stated its own value keeps it. **Renaming** re-suffixes the property and re-points every layer bound to it — `name` inside a definition is the one edit-only key, since a read reports a property's name as the key. **Deleting** frees the layers it drove.
+- **A property's TYPE can't change** — Figma has no such call. Delete it and declare the new one.
+- **A variant axis is not a definition.** A set's axes ARE its members' names, so they change by renaming the member components; and a variant's properties live on the SET, so a `propertyDefinitions` edit aimed at a variant is refused pointing at it.
+
+#### The component-definition words (edit only)
+
+| Prop | Type | Notes |
+| --- | --- | --- |
+| `description` | string | The component's description — what Figma shows beside it in the assets panel. |
+| `propertyDefinitions` | { [name]: { type?, defaultValue?, name? } \| null } | COMPONENT / COMPONENT_SET only, under edit: change what the component DECLARES, keyed by the property's current name (bare, or the full name with its `#suffix`). A name the component doesn't have ADDS it — `{ type, defaultValue }`, with `defaultValue` REQUIRED here since nothing binds it in the same call (bind a sublayer next with `flcm.edit(sublayer, { componentPropertyReferences })`). A name it has CHANGES it: `{ defaultValue }` re-defaults it (instances still on the old default follow), `{ name: "New" }` renames it (Figma re-suffixes and re-points every bound sublayer). `null` DELETES it, freeing its bound layers. A `type` that differs from the current one is refused — Figma can't change a property's type, so delete and re-add. A new `slot` is refused too: a slot IS its frame, so it is made by inserting a bound frame (flcm.append(component, flcm.frame({ componentPropertyReferences: { slot: "Name" } }))). Variant axes live on the SET and are renamed by renaming its member components. |
+
+### Binding a layer — `componentPropertyReferences` under edit
+
+The same word the constructors take, now on a live sublayer of a component: which property drives which of its fields. `null` unbinds a field, which then keeps whatever value it has.
+
+```js
+await flcm.edit(comp, { propertyDefinitions: { Heading: { type: "text", defaultValue: "Untitled" } } });
+await flcm.edit(titleId, { componentPropertyReferences: { text: "Heading" } });   // now the property drives it
+await flcm.edit(titleId, { componentPropertyReferences: { visible: null } });     // stop tracking, keep the value
+```
+
+- The node must be **inside a COMPONENT** (or a set's variant). Inside an INSTANCE the binding belongs to the definition and is refused naming the instance; outside every component there is no property to point at.
+- Field legality is the constructors' — `text` on a TEXT, `componentId` on an INSTANCE, `slot` on a FRAME, `visible` anywhere — read off the live node's type.
+- **Unbinding the only frame of a slot property is refused**: the property would have nowhere to put an instance's content. Delete the property instead (`propertyDefinitions: { Name: null }`), which frees the frame in the same move. In a SET the count is per VARIANT — one slot property is one frame in *each* variant — so a sibling variant's frame doesn't make this one's spare.
+- In one `editMany` batch, definition edits must not cross-reference the rest of the batch: another entry binding a layer to a name this one is renaming, or setting that property on an INSTANCE, has no stated order, so it is refused naming both entries. Two calls say it unambiguously.
+
+### Inserting a bound layer
+
+`append`/`prepend`/`insertBefore`/`insertAfter` into a component (or into one of its sublayers) accept a spec carrying `componentPropertyReferences` — the only place outside `flcm.component` where a binding means something.
+
+```js
+await flcm.append(comp, flcm.text("Sub", { componentPropertyReferences: { text: "Label" } }));
+await flcm.append(comp, flcm.frame({ width: 240, height: 80, componentPropertyReferences: { slot: "Content" } }));
+```
+
+Every name must already be declared, with **one exception**: a `slot` naming a property that doesn't exist yet **declares it**, because the frame being inserted is what the slot IS and there is no other way to make one after the fact. A `slot` naming a property that already has its frame is refused — a slot is one hole. Into a set's VARIANT, a new `slot` declares the property on the SET and this variant realizes it; the other variants take the same slot by inserting their own bound frame.
+
+A spec insert whose destination is a **COMPONENT_SET** is refused: a set's children are its variants, and there is no add-to-an-existing-set form yet (`flcm.variants` builds a set from standalone components). To change what every variant holds, insert into each variant.
+
+### An instance's SLOT
+
+A slot is a FRAME in the definition and a `SLOT` node inside each instance. That node takes the frame surface under `edit` — `layout`, `fill`, `width`, padding — so an instance's hole can be styled. Putting content INTO it is still not authorable (an instance's child list is closed to plugins).
 
 ### Using one — `flcm.instance`
 

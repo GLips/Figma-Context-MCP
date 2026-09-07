@@ -32,7 +32,7 @@ import {
 } from "./edit-plan.js";
 import { enterMutatingVerb } from "./mutation-lock.js";
 import { beginMutatingApply } from "./verb-error.js";
-import { instanceAncestorOf, describeNodeIdentity } from "./identity.js";
+import { instanceAncestorOf, describeNodeIdentity, definitionOwnerOf, propertyDefinitionsOf } from "./identity.js";
 import { EditFontNeed } from "./fonts.js";
 import { own } from "./validate.js";
 import type { EditDelta } from "./schema.js";
@@ -131,33 +131,45 @@ export async function resolveComponentTarget(target: Target, subject: string): P
   throw new Error(subject + ": " + who + " is not a component — only a COMPONENT (or a COMPONENT_SET, whose variant the `componentProperties` pick) can be instantiated.");
 }
 
-// The definitions live on the set (for a variant) or the standalone component. A variant's own
-// `componentPropertyDefinitions` throws in the live API, so the read goes to the owner.
-function definitionsOf({ base, set }: ResolvedComponent): Record<string, any> {
-  return (set || base).componentPropertyDefinitions || {};
-}
 
-const bareName = (full: string): string => {
+/** Figma files a property under `Label#12:3`; the bare name is what an author writes and reads. */
+export const bareName = (full: string): string => {
   const hash = full.lastIndexOf("#");
   return hash === -1 ? full : full.slice(0, hash);
 };
 
+/**
+ * Every definition an authored name could mean: the exact full name if it is one, else every
+ * definition sharing that bare name. Zero, one, or (legally, since the suffix is the identity) more.
+ *
+ * Split from resolvePropertyName because an EDIT of `propertyDefinitions` forks on the count rather
+ * than refusing it — a name that matches nothing ADDS a property, where every other caller is
+ * addressing one that must already exist.
+ */
+export function matchPropertyNames(authored: string, definitions: Record<string, any>): string[] {
+  if (own(definitions, authored) !== undefined) return [authored];
+  return Object.keys(definitions).filter((full) => bareName(full) === authored);
+}
+
 // An authored name resolves to Figma's suffixed one: exact first, else the ONE definition whose
 // bare name matches. Two definitions sharing a bare name (legal in Figma — the suffix is the
 // identity) refuse rather than guess, listing both full names so the agent can pick.
-function resolvePropertyName(authored: string, definitions: Record<string, any>, subject: string): string {
-  if (own(definitions, authored) !== undefined) return authored;
-  const matches = Object.keys(definitions).filter((full) => bareName(full) === authored);
+//
+// `where` is the WORD the name was written under (`flcm.edit.componentProperties`,
+// `flcm.edit.propertyDefinitions`, a binding field) — the refusal names it so the agent can see
+// which half of a multi-word delta it is being told about.
+export function resolvePropertyName(authored: string, definitions: Record<string, any>, where: string): string {
+  const matches = matchPropertyNames(authored, definitions);
   if (matches.length === 1) return matches[0];
   if (matches.length > 1) {
     throw new Error(
-      subject + ".componentProperties: " + JSON.stringify(authored) + " names " + matches.length + " properties on this component (" +
+      where + ": " + JSON.stringify(authored) + " names " + matches.length + " properties on this component (" +
         matches.map((m) => JSON.stringify(m)).join(", ") + ") — use the full name with its #suffix.",
     );
   }
   const available = Object.keys(definitions);
   throw new Error(
-    subject + ".componentProperties: this component has no property " + JSON.stringify(authored) + " — " +
+    where + ": this component has no property " + JSON.stringify(authored) + " — " +
       (available.length ? "its properties are " + available.map((n) => JSON.stringify(bareName(n))).join(", ") : "it defines no properties") + ".",
   );
 }
@@ -173,11 +185,11 @@ function resolvePropertyName(authored: string, definitions: Record<string, any>,
 async function resolveComponentProperties(
   resolved: ResolvedComponent, authored: Record<string, ComponentPropertyInput>, subject: string,
 ): Promise<{ component: any; properties: Record<string, string | boolean>; variant: Record<string, string> }> {
-  const definitions = definitionsOf(resolved);
+  const definitions = propertyDefinitionsOf(definitionOwnerOf(resolved.base));
   const properties: Record<string, string | boolean> = {};
   const variant: Record<string, string> = {};
   for (const name of Object.keys(authored)) {
-    const full = resolvePropertyName(name, definitions, subject);
+    const full = resolvePropertyName(name, definitions, subject + ".componentProperties");
     const def = definitions[full];
     const value = authored[name];
     const where = subject + ".componentProperties[" + JSON.stringify(name) + "]";
@@ -360,6 +372,15 @@ function applyOverridePlans(instance: any, overrides: OverridePlan[], resources:
  */
 export interface InstanceEditPlan {
   swapTo: any | null;
+  /**
+   * The COMPONENT whose DECLARED properties this delta names by name — null when it names none. A
+   * batch reads it to refuse an entry that sets a property another entry is redeclaring in the same
+   * call (see assertNoDefinitionBindingCrossReference); it is the VARIANT for a set, so a caller
+   * that wants the node the declarations live on goes through definitionOwnerOf. A variant axis is
+   * deliberately not counted: a set's axes ARE its members' names, which no `propertyDefinitions`
+   * edit can reach, so an axis change depends on nothing a definition entry could move.
+   */
+  namesDeclaredPropertiesOf: any | null;
   properties: Record<string, string | boolean>;
   overrides: OverridePlan[];
   retargets: boolean;
@@ -391,6 +412,7 @@ export async function prepareInstanceEditPlan(node: SceneNode, words: InstanceEd
   const swapTo = words.componentId != null && retargets ? component : null;
   return {
     swapTo,
+    namesDeclaredPropertiesOf: Object.keys(properties).length ? component : null,
     // With no swap the variant axes ride setProperties — Figma re-points the instance itself, keeps
     // its id, and carries the overrides it can. With one, the swap already landed on the exact
     // variant the combination names, so restating the axes would be a second write for nothing.

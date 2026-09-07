@@ -37,6 +37,8 @@ import {
   COMPONENTS_CREATE,
   COMPONENTS_PROPERTIES,
   COMPONENTS_VARIANTS,
+  COMPONENTS_EDIT_MAIN,
+  COMPONENTS_EDIT_BINDINGS,
   COMPONENTS_INTRO,
   COMPONENTS_EDIT,
   COMPONENTS_DETACH,
@@ -229,7 +231,7 @@ const SECTIONS: Section[] = [
       `### Words by node type\n\n${editTypeWordLines()}\n\n` +
       // Derived from the schema's shared group (minus key, which is never editable) so this sentence
       // can't drift from the runtime's non-createable gate, which composes from the same group.
-      "On a node type with no vocabulary of its own (GROUP, COMPONENT, …) only the shared words apply: " +
+      "On a node type with no vocabulary of its own (GROUP, SECTION, POLYGON, …) only the shared words apply: " +
       `${Object.keys(FIELD_GROUPS.shared)
         .filter((k) => k !== "key")
         .map((k) => `\`${k}\``)
@@ -257,6 +259,11 @@ const SECTIONS: Section[] = [
       `### Variants — \`flcm.variants\`\n\n${COMPONENTS_VARIANTS}\n\n` +
       `#### One entry\n\n${propTable(FIELD_GROUPS.variantEntry)}\n\n` +
       `#### Options\n\n${propTable(FIELD_GROUPS.variantsOptions)}\n\n` +
+      `### Changing a component — \`flcm.edit\`\n\n${COMPONENTS_EDIT_MAIN}\n\n` +
+      // The table documents `description`/`propertyDefinitions`, so it sits directly under the prose
+      // that introduces them — the binding and SLOT parts of the narrative follow it.
+      `#### The component-definition words (edit only)\n\n${propTable(FIELD_GROUPS.componentDefinition)}\n\n` +
+      `${COMPONENTS_EDIT_BINDINGS}\n\n` +
       `### Using one — \`flcm.instance\`\n\n${COMPONENTS_INTRO}\n\n` +
       `#### flcm.instance props\n\n${propTable(FIELD_GROUPS.instance)}\n\n` +
       `${COMPONENTS_EDIT}\n\n${COMPONENTS_DETACH}\n\n${COMPONENTS_RULES}`,

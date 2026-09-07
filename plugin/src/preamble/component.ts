@@ -42,11 +42,11 @@ import type { ComponentOptions, VariantsOptions } from "./schema.js";
 const SUBJECT = "flcm.component";
 const VARIANTS_SUBJECT = "flcm.variants";
 
-const quoted = (names: readonly string[]): string => names.map((n) => JSON.stringify(n)).join(", ");
+export const quoted = (names: readonly string[]): string => names.map((n) => JSON.stringify(n)).join(", ");
 
 // The read's lowercase property types → Figma's own enum. `variant` is deliberately absent: an axis
 // is minted by combining components into a SET, never declared on one (see the refusal below).
-const PROPERTY_TYPES: Record<string, "BOOLEAN" | "TEXT" | "INSTANCE_SWAP" | "SLOT"> = {
+export const PROPERTY_TYPES: Record<string, "BOOLEAN" | "TEXT" | "INSTANCE_SWAP" | "SLOT"> = {
   boolean: "BOOLEAN",
   text: "TEXT",
   instance_swap: "INSTANCE_SWAP",
@@ -54,10 +54,15 @@ const PROPERTY_TYPES: Record<string, "BOOLEAN" | "TEXT" | "INSTANCE_SWAP" | "SLO
 };
 const PROPERTY_TYPE_WORDS = Object.keys(PROPERTY_TYPES);
 
+// Figma's enum → the read's lowercase word, for a refusal that has only a LIVE definition to go on
+// (an edit resolves against `componentPropertyDefinitions`, which speaks the enum).
+export const PROPERTY_TYPE_WORD_FOR: Record<string, string> = {};
+for (const word of PROPERTY_TYPE_WORDS) PROPERTY_TYPE_WORD_FOR[PROPERTY_TYPES[word]] = word;
+
 // Each binding field: the property type it demands, and the key Figma actually stores it under.
 // The author writes the READ's spelling on both sides of the surface; only this table knows the
 // wire keys — which is the whole reason a binding is authored rather than hand-written.
-const BINDING_FIELD_WIRE_KEYS: Record<string, { wire: string; type: string }> = {
+export const BINDING_FIELD_WIRE_KEYS: Record<string, { wire: string; type: string }> = {
   visible: { wire: "visible", type: "boolean" },
   text: { wire: "characters", type: "text" },
   componentId: { wire: "mainComponent", type: "instance_swap" },
@@ -66,7 +71,7 @@ const BINDING_FIELD_WIRE_KEYS: Record<string, { wire: string; type: string }> = 
 
 // Which binding field carries a property of each type — the table above inverted, for the
 // derived-default lookup ("which node binds this property?"). One field per type is the invariant.
-const FIELD_FOR_TYPE: Record<string, string> = {};
+export const FIELD_FOR_TYPE: Record<string, string> = {};
 for (const field of Object.keys(BINDING_FIELD_WIRE_KEYS)) FIELD_FOR_TYPE[BINDING_FIELD_WIRE_KEYS[field].type] = field;
 
 const COMPONENT_OPTION_KEYS: ReadonlySet<string> = new Set(KNOWN_KEYS.componentOptions);
@@ -77,7 +82,7 @@ const VARIANTS_OPTION_KEYS: ReadonlySet<string> = new Set(KNOWN_KEYS.variantsOpt
 // ---- what an flcm.component call declares, document-blind then resolved ----
 
 /** One `propertyDefinitions` entry as authored: shape-checked, nothing looked up yet. */
-interface AuthoredDefinition {
+export interface AuthoredDefinition {
   name: string;
   /** The read's lowercase word — kept as authored so refusals speak the agent's own vocabulary. */
   type: string;
@@ -87,7 +92,7 @@ interface AuthoredDefinition {
 }
 
 /** The same definition with its default settled, ready for one addComponentProperty call. */
-interface PreparedDefinition {
+export interface PreparedDefinition {
   name: string;
   figmaType: "BOOLEAN" | "TEXT" | "INSTANCE_SWAP" | "SLOT";
   defaultValue: boolean | string;
@@ -146,12 +151,25 @@ function compilePropertyDefinitions(raw: unknown): AuthoredDefinition[] {
   return out;
 }
 
-function compilePropertyDefinition(name: string, raw: unknown, at: string): AuthoredDefinition {
+/**
+ * One DECLARED property, shape-checked with nothing looked up. Shared by flcm.component's options
+ * bag and by an edit's `propertyDefinitions` ADD branch (component-edit.ts), so what a definition IS
+ * is stated once — the two callers differ only in what they do about a missing `defaultValue`.
+ */
+export function compilePropertyDefinition(name: string, raw: unknown, at: string): AuthoredDefinition {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     throw new Error(at + ' must be an object like { type: "text", defaultValue: "Save" } — got ' + JSON.stringify(raw) + ".");
   }
   rejectUnknownKeys(raw, DEFINITION_KEYS, at);
   const bag = raw as Record<string, unknown>;
+  // `name` is edit's RENAME word, and this call is DECLARING a property whose name is the key it is
+  // filed under — two names for one property, with no way to say which the bindings mean.
+  if (bag.name != null) {
+    throw new Error(
+      at + ": `name` renames an EXISTING property, and this declares a new one — the key it is filed under (" + JSON.stringify(name) + ") IS its name. " +
+        "Drop `name`, or key the entry by the property you meant to rename.",
+    );
+  }
   const type = bag.type;
   if (type === "variant" || type === "VARIANT") {
     throw new Error(
@@ -423,7 +441,13 @@ function assertPromotable(node: any): void {
   }
 }
 
-function componentAncestorOf(node: any): any {
+/**
+ * The COMPONENT (or COMPONENT_SET) a node sits inside, or null. THE test for "does this node belong
+ * to a definition" — flcm.component refuses to promote a node that does, and a binding edit requires
+ * it. Caller beware: a node inside an INSTANCE that itself sits in a component answers the OUTER
+ * component, so an instance-ancestor check comes first wherever the two are different questions.
+ */
+export function componentAncestorOf(node: any): any {
   for (let p = node.parent; p; p = p.parent) {
     if (p.type === "COMPONENT" || p.type === "COMPONENT_SET") return p;
   }
@@ -443,6 +467,17 @@ function declareProperties(comp: any, definitions: readonly PreparedDefinition[]
   for (const definition of definitions) {
     suffixed[definition.name] = comp.addComponentProperty(definition.name, definition.figmaType, definition.defaultValue);
   }
+  writeBindingReferences(bound, suffixed);
+}
+
+/**
+ * Write each built node's binding bag onto it, translating the AUTHORED property names to the full
+ * names Figma actually files the properties under. Shared by flcm.component (which mints them with
+ * addComponentProperty) and by a bound insert into an existing component (component-edit.ts, whose
+ * map is mostly names it resolved off the live definitions) — so there is one place that knows a
+ * reference stores the suffixed name and merges rather than replaces the node's existing bag.
+ */
+export function writeBindingReferences(bound: readonly BoundSpecNode[], suffixed: Record<string, string>): void {
   for (const { node, refs } of bound) {
     const wire: Record<string, string> = { ...(node.componentPropertyReferences || {}) };
     for (const field of Object.keys(refs)) {
@@ -530,8 +565,9 @@ export function component(specOrTarget: WriteNode | Target, options?: ComponentO
 }
 
 function applySpecComponent({ spec, resources, definitions, options }: PreparedSpecComponent): ComponentResult {
-  // The one ctx in the codebase that opts INTO binding collection — this is the only verb with
-  // properties for a binding to point at (see RenderCtx.bindings).
+  // One of the two ctxs that opt INTO binding collection — this verb declares the properties in the
+  // same call; the other is an insert landing inside a component (structure.ts's applyInsert, which
+  // has one already declaring them). See RenderCtx.bindings.
   const ctx: RenderCtx = { ...resources, keyed: {}, pending: [], bindings: [] };
   // render's own build sequence, shared rather than copied (render.buildTreeOnPage): the spec lands
   // exactly as flcm.render would land it, overlap notice included. Only then is there a laid-out

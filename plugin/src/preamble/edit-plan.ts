@@ -50,13 +50,22 @@
 // bracket rather than join because a swap or a variant change replaces the very sublayers the
 // override paths name.
 //
+// A COMPONENT delta is split the same way (`componentWords` → component-edit.ts) and brackets the
+// same stages: the DEFINITION words (`description`, `propertyDefinitions`) land before 5a, so a
+// rename and a recolor of the same component are one undo step, and a sublayer's BINDING
+// (`componentPropertyReferences`) lands right after 5a — the layer is what this delta makes it
+// before it is wired to a property.
+//
 // Stage 4 is why stage 2's live reads are safe to make early. Loading fonts and image bytes
 // suspends the run for a WS round trip while the user has the document open, and a batch stacks one
 // suspension per entry — so a fact read before them is a guess by the time the seal lands. Rather
 // than trust it, the compile SNAPSHOTS what it read and stage 4 re-reads and compares. (The
 // dependency can't simply be reordered away: which fonts to load is derived from the live node.)
 
-import { WriteProps, EditableType, WriteLayout, WriteTextStyle, InstanceEditWords, EDIT_TYPE_WORD_GROUPS, namesFontIdentity } from "./ir.js";
+import {
+  WriteProps, EditableType, WriteLayout, WriteTextStyle, InstanceEditWords, ComponentEditWords,
+  ComponentPropertyBindingEdit, EDIT_TYPE_WORD_GROUPS, namesFontIdentity,
+} from "./ir.js";
 import { beginMutatingApply } from "./verb-error.js";
 import {
   applyPaint, applySceneProps, applyLiveNodeLayout, settleLiveNodePercentSize,
@@ -69,7 +78,8 @@ import { liveFontWords, loadFontsForTextEdits } from "./fonts.js";
 import {
   KNOWN_KEYS, compileNodeLocalProps, compileSizeWords, compilePlacementWords, compileContainerWords,
   compileLineWidth, compileTextStyleWords, compileTextContent, assertLineClampCount, fetchImagesForTrees,
-  compileComponentPropertyBag, compileOverrideBag, compileSwapTarget, INSTANCE_COMPONENT_WORDS,
+  compileComponentPropertyBag, compileOverrideBag, compileSwapTarget, compilePropertyDefinitionEditBag,
+  INSTANCE_COMPONENT_WORDS, DOCUMENT_RESOLVED_EDIT_WORDS,
 } from "./flcm.js";
 import type { EditDelta, FrameProps } from "./schema.js";
 
@@ -95,7 +105,7 @@ const DELTA_KEYS_BY_TYPE = Object.fromEntries(
   ]),
 ) as Record<EditableType, ReadonlySet<string>>;
 
-// A node type with no per-type vocabulary (GROUP, COMPONENT, …) takes the shared words (minus `key`,
+// A node type with no per-type vocabulary (GROUP, SECTION, POLYGON, …) takes the shared words (minus `key`,
 // which isn't editable anywhere). Deliberately a conservative floor, not a mixin-derived ceiling:
 // effects/rotation on a GROUP would land but wait for a deliberate widening.
 const SHARED_DELTA_KEYS = editableWords(KNOWN_KEYS.shared);
@@ -223,12 +233,59 @@ function takeInstanceEditWords(changes: EditDelta, subject: string): InstanceEdi
   return named ? words : undefined;
 }
 
-// The delta minus the instance words — what the node-local compile above judges. A shallow copy so
-// the caller's own object is never mutated (it is the agent's, and editMany snapshots but doesn't own it).
-function withoutInstanceWords(changes: EditDelta): EditDelta {
+// Split a delta's COMPONENT words off, exactly as takeInstanceEditWords splits the instance ones and
+// for the same reason: which definition a bare property name reaches, which component owns the node,
+// and what an instance-swap default resolves to are live-document questions the sync compile can
+// only shape-check. Resolved by the verb's prepare (component-edit.ts) and applied around the
+// node-local stages — definitions before them, the binding after.
+//
+// `description` is here rather than on the patch because there is no such WriteProps field: it is a
+// COMPONENT/COMPONENT_SET-only word, and compileNodeLocalProps would silently drop it.
+//
+// A bag's CONTENT decides, not its presence (again as with the instance words): an empty
+// `propertyDefinitions` or `componentPropertyReferences` resolves to zero writes, and counting it as
+// named would carry the delta past the compiled-to-nothing guard and mint an undo step for nothing.
+function takeComponentEditWords(changes: EditDelta, subject: string): ComponentEditWords | undefined {
+  const words: ComponentEditWords = {};
+  let named = false;
+  const description = own(changes as Record<string, unknown>, "description");
+  if (description != null) {
+    if (typeof description !== "string") {
+      throw new Error(subject + ".description must be a string — what Figma shows beside the component in the assets panel. Got " + JSON.stringify(description) + ".");
+    }
+    words.description = description;
+    named = true;
+  }
+  const definitions = own(changes as Record<string, unknown>, "propertyDefinitions");
+  if (definitions != null) {
+    const bag = compilePropertyDefinitionEditBag(definitions, subject);
+    if (Object.keys(bag).length) {
+      words.propertyDefinitions = bag;
+      named = true;
+    }
+  }
+  const bindings = own(changes as Record<string, unknown>, "componentPropertyReferences");
+  if (bindings != null) {
+    // The bag's fields are judged against the LIVE node's type in prepare (component-edit.ts), which
+    // is also where a name is resolved — here it is only "an object with something in it".
+    if (typeof bindings !== "object" || Array.isArray(bindings)) {
+      throw new Error(subject + '.componentPropertyReferences must be an object naming which component property drives which field, e.g. { text: "Label" } (or null to unbind) — got ' + JSON.stringify(bindings) + ".");
+    }
+    if (Object.keys(bindings).length) {
+      words.componentPropertyReferences = bindings as ComponentPropertyBindingEdit;
+      named = true;
+    }
+  }
+  return named ? words : undefined;
+}
+
+// The delta minus the words a live pass resolves — what the node-local compile above judges. A
+// shallow copy so the caller's own object is never mutated (it is the agent's, and editMany
+// snapshots but doesn't own it).
+function withoutDocumentResolvedWords(changes: EditDelta): EditDelta {
   const out: Record<string, unknown> = {};
   for (const word of Object.keys(changes)) {
-    if (!INSTANCE_COMPONENT_WORDS.has(word)) out[word] = (changes as Record<string, unknown>)[word];
+    if (!DOCUMENT_RESOLVED_EDIT_WORDS.has(word)) out[word] = (changes as Record<string, unknown>)[word];
   }
   return out as EditDelta;
 }
@@ -324,6 +381,8 @@ export interface EditPlan {
   patch: WriteProps;
   liveTextFacts: string | undefined;
   instanceWords?: InstanceEditWords;
+  /** The COMPONENT half, still RAW — resolved by component-edit.ts in the verb's prepare. */
+  componentWords?: ComponentEditWords;
 }
 
 /** Stage 2 — compile against the live node, recording every mutable fact the compile consulted. */
@@ -334,20 +393,22 @@ export function compileEditPlan(node: SceneNode, changes: EditDelta, subject: st
   assertDeltaNotEmpty(changes, subject);
   const legal = assertDeltaLegalForType(node, changes, subject);
   const instanceWords = takeInstanceEditWords(changes, subject);
-  // Unconditional: an EMPTY component bag doesn't make `instanceWords`, and it must not reach the
-  // node-local compile either — `componentProperties` is not a word compileDeltaPatch knows.
-  const nodeLocal = withoutInstanceWords(changes);
+  const componentWords = takeComponentEditWords(changes, subject);
+  // Unconditional: an EMPTY component bag doesn't make `instanceWords`/`componentWords`, and it must
+  // not reach the node-local compile either — `componentProperties` is not a word compileDeltaPatch knows.
+  const nodeLocal = withoutDocumentResolvedWords(changes);
   // Snapshot BEFORE the compile, so the recorded facts are the ones it goes on to read.
   const liveTextFacts = readLiveTextFacts(node);
   const patch = Object.keys(nodeLocal).length ? compileDeltaPatch(nodeLocal, legal, node, subject) : {};
   // Every named word compiled to nothing (all values null/undefined, or an empty component bag) —
-  // same hazard as `{}`: the verb would mint an undo step for zero writes. Instance words that
-  // carry content have real work ahead of them either way, so they short-circuit it.
-  if (!instanceWords && Object.keys(patch).length === 0) {
+  // same hazard as `{}`: the verb would mint an undo step for zero writes. Instance and component
+  // words that carry content have real work ahead of them either way, so they short-circuit it.
+  if (!instanceWords && !componentWords && Object.keys(patch).length === 0) {
     throw new Error(subject + ": the delta compiled to nothing — every value was null, undefined, or an empty object. Pass a real value, or omit the prop.");
   }
   const plan: EditPlan = { node, patch, liveTextFacts };
   if (instanceWords) plan.instanceWords = instanceWords;
+  if (componentWords) plan.componentWords = componentWords;
   return plan;
 }
 

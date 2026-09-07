@@ -25,6 +25,7 @@ import type {
   FillInput, WriteCssEffects, PaintSpec, EffectSpec, GradientStop, WriteNode, WriteChild, Handle,
   PinX, PinY, Target, RawIdRef, SlimHandle, FindQuery, ReadPredicate, InsertResult, MoveResult, CloneResult, RemoveResult, GetResult,
   PageInfo, ComponentPropertyInput, OverrideDeltaInput, ComponentPropertyDefinitions, ComponentResult, VariantEntryInput,
+  ComponentPropertyDefinitionEdits, ComponentPropertyBindingEdit,
 } from "./ir.js";
 // The read verbs return the canonical read shape the shared simplify core emits. Relative (not ~/) so the
 // root toolchain, which imports this module for docs generation, resolves it without the plugin's paths.
@@ -444,6 +445,19 @@ export type LineProps = z.infer<typeof LineSchema>;
 export type PathProps = z.infer<typeof PathSchema>;
 export type SvgProps = z.infer<typeof SvgSchema>;
 
+// The two words that reach a COMPONENT / COMPONENT_SET's own DEFINITION under edit — what the
+// component declares, as opposed to what its root frame looks like. Edit-only: at create they ride
+// flcm.component's options bag (COMPONENT_FIELDS below reuses `description` from here), and the
+// per-type gate keeps them off every other node type by name.
+const COMPONENT_DEFINITION_FIELDS = {
+  description: prop(z.string(), "The component's description — what Figma shows beside it in the assets panel."),
+  propertyDefinitions: prop(
+    z.custom<ComponentPropertyDefinitionEdits>(),
+    'COMPONENT / COMPONENT_SET only, under edit: change what the component DECLARES, keyed by the property\'s current name (bare, or the full name with its `#suffix`). A name the component doesn\'t have ADDS it — `{ type, defaultValue }`, with `defaultValue` REQUIRED here since nothing binds it in the same call (bind a sublayer next with `flcm.edit(sublayer, { componentPropertyReferences })`). A name it has CHANGES it: `{ defaultValue }` re-defaults it (instances still on the old default follow), `{ name: "New" }` renames it (Figma re-suffixes and re-points every bound sublayer). `null` DELETES it, freeing its bound layers. A `type` that differs from the current one is refused — Figma can\'t change a property\'s type, so delete and re-add. A new `slot` is refused too: a slot IS its frame, so it is made by inserting a bound frame (flcm.append(component, flcm.frame({ componentPropertyReferences: { slot: "Name" } }))). Variant axes live on the SET and are renamed by renaming its member components.',
+    "{ [name]: { type?, defaultValue?, name? } | null }",
+  ),
+};
+
 // The flcm.edit(target, changes) delta — the ONE authoring vocabulary (no second dialect,
 // invariant: same spellings, same parsers as create). Entries REUSE the create field objects (the
 // RUN_FIELDS pattern), so a prop can't mean something different under edit. Which words apply to
@@ -479,6 +493,16 @@ const EDIT_FIELDS = {
   componentProperties: INSTANCE_FIELDS.componentProperties,
   overrides: INSTANCE_FIELDS.overrides,
   ...SWAP_FIELDS,
+  // The COMPONENT words. The binding word is the constructor's own statement — which property drives
+  // which of this node's fields — restated here rather than reused, because edit alone can UNBIND
+  // (`null` per field) and the type has to say so. The two definition words reach the COMPONENT
+  // itself. The per-type gate keeps each off the types that can't carry it.
+  componentPropertyReferences: prop(
+    z.custom<ComponentPropertyBindingEdit>(),
+    'Bind this node to a component property of the COMPONENT it sits in, keyed as `get` reports a binding: `visible` (any node), `text` (TEXT only), `componentId` (INSTANCE only), `slot` (FRAME only). Each value is a property name declared on that component — bare names resolve when unambiguous — and `null` UNBINDS the field, which then keeps whatever value it has. The node must be inside a COMPONENT (or a variant of a set): inside an INSTANCE the binding belongs to the main component and is refused, and outside any component there is no property for it to point at. Unbinding the ONLY frame of a slot property is refused (delete the property instead: `propertyDefinitions: { Name: null }` on the component).',
+    "{ visible?, text?, componentId?, slot? } — property names, or null to unbind",
+  ),
+  ...COMPONENT_DEFINITION_FIELDS,
 };
 export const EditSchema = z.object(EDIT_FIELDS);
 export type EditDelta = z.infer<typeof EditSchema>;
@@ -501,7 +525,7 @@ export interface EditManyScope { within?: Target }
 // flcm.component(specOrTarget, options?) options.
 const COMPONENT_FIELDS = {
   name: prop(z.string(), "The component's name. Defaults to the spec's (or the promoted node's) own name."),
-  description: prop(z.string(), "The component's description — what Figma shows beside it in the assets panel."),
+  description: COMPONENT_DEFINITION_FIELDS.description,
   propertyDefinitions: prop(
     z.custom<ComponentPropertyDefinitions>(),
     'The properties this component exposes, by name — the read\'s own `propertyDefinitions`: { Label: { type: "text" }, Icon: { type: "boolean", defaultValue: true }, Trailing: { type: "slot" } }. Names must be non-empty and unique in the call. A `variant` type is refused: variant axes are made by combining components into a set (flcm.variants), never declared on one.',
@@ -518,8 +542,14 @@ const PROPERTY_DEFINITION_FIELDS = {
     ),
   defaultValue: prop(
     z.custom<boolean | string | Target>(),
-    'The value a fresh instance starts at: a boolean, a string, or (for `instance_swap`) a component target. OMIT IT to derive it from the node that binds this property — its `visible`, its text, its component. A `slot` refuses one (its content is authored, not set), and a property nothing binds must state one.',
+    'The value a fresh instance starts at: a boolean, a string, or (for `instance_swap`) a component target. OMIT IT to derive it from the node that binds this property — its `visible`, its text, its component. A `slot` refuses one (its content is authored, not set), and a property nothing binds must state one. Under `flcm.edit` it is REQUIRED when adding a property (nothing binds it yet) and is how an existing property is re-defaulted.',
     "boolean | string | component target",
+  ),
+  // Deliberately absent at create: there the KEY is the name, and a `name` beside it would be two
+  // names for one property. It exists only so an edit can rename — see COMPONENT_DEFINITION_FIELDS.
+  name: prop(
+    z.string(),
+    "EDIT ONLY: rename this property. The read has no rename word (a read reports the name as the key), so this is the one edit-only key inside a definition — `{ propertyDefinitions: { Label: { name: \"Caption\" } } }`. Figma re-suffixes the property and re-points every sublayer bound to it. At create the key IS the name, and passing this fails loud.",
   ),
 };
 
@@ -799,6 +829,7 @@ export const FIELD_GROUPS = {
   swap: SWAP_FIELDS,
   binding: BINDING_FIELDS,
   componentOptions: COMPONENT_FIELDS,
+  componentDefinition: COMPONENT_DEFINITION_FIELDS,
   propertyDefinition: PROPERTY_DEFINITION_FIELDS,
   variantEntry: VARIANT_ENTRY_FIELDS,
   variantsOptions: VARIANTS_FIELDS,

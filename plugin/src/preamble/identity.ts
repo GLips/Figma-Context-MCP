@@ -35,6 +35,18 @@ export function instanceAncestorOf<T extends ParentedNode>(node: T): T | null {
   return null;
 }
 
+// Who holds a component's property definitions: the SET, for a variant. A variant's own
+// `componentPropertyDefinitions` throws in the live API — Figma keeps a variant's properties on the
+// set it belongs to — so every read and every write of them goes to this node.
+export function definitionOwnerOf<T extends ParentedNode>(component: T): T {
+  return component.parent && component.parent.type === "COMPONENT_SET" ? (component.parent as T) : component;
+}
+
+/** The owner's declarations, `{}` for a component that declares none. Pair with definitionOwnerOf. */
+export function propertyDefinitionsOf(owner: { componentPropertyDefinitions?: Record<string, any> }): Record<string, any> {
+  return owner.componentPropertyDefinitions || {};
+}
+
 // A node whose subtree can be walked to clear flcm keys. Structural (a live leaf simply has no
 // `children`), so this module stays free of the plugin ambients like the rest of it.
 interface KeyedTree {

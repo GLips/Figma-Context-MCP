@@ -312,6 +312,7 @@ export const EDIT_RULES = `### Rules
 - **Text words read the LIVE node.** \`text\` replaces the whole text and collapses it to its LEADING run's style — prior bold spans and per-range colors do NOT survive, so style the new text in the same edit. A \`textStyle\` naming part of the font triple keeps the live rest (\`fontWeight: "bold"\` on italic Roboto stays bold italic Roboto). A text that already MIXES fonts has no single base: a partial font change, or a styled \`text\` run without its own \`fontFamily\`, rejects loud — anchor \`textStyle.fontFamily\` in the same edit, or give every run its family. \`lineClamp\` needs a bounded width.
 - **Edits inside a component INSTANCE apply as overrides.** A property Figma forbids overriding rejects, naming the instance — edit the main component (flcm never auto-detaches).
 - **An INSTANCE target also takes its three component words** — \`componentProperties\`, \`overrides\`, and \`componentId\` (the swap). See the components section; on any other node type each fails loud as an unknown word for that type.
+- **A COMPONENT or COMPONENT_SET target takes a frame's words plus \`description\` and \`propertyDefinitions\`** — editing the main is how every instance of it changes. A layer inside one also takes \`componentPropertyReferences\`, which binds it to a property. See the components section.
 - **\`key\` is immutable** — re-keying could mint a duplicate address. Set \`name\` to change the layers panel.
 - **No bare \`x\`/\`y\`** — position is \`left\`/\`top\` (naming either lifts a child out of an auto-layout flow; \`position: "absolute"\` lifts it in place, \`position: "none"\` returns it), resize behavior is \`pin\`.
 - **An empty delta is rejected**, since it would still mint an undo step.
@@ -440,6 +441,67 @@ await flcm.render(flcm.instance(set, { componentProperties: { Size: "Large" } })
 - Each component is **renamed** to that grammar (\`Size=Large, State=Default\`) as it joins — the set carries the \`name\` you pass.
 - **The set lands where the first component sat** — its parent, its index — so a set built from components inside a frame stays there.
 - Each entry's component must be a standalone **local** COMPONENT. A FRAME or an INSTANCE fails loud pointing at \`flcm.component\`; a library component fails loud (this file only holds a reference to it); and a component **already in a set** fails loud naming that set — there is no add-to-an-existing-set form.`;
+
+export const COMPONENTS_EDIT_MAIN = `There is no verb for this either: **a main component is edited with \`flcm.edit\` and the structural verbs, exactly as a frame is**, and every instance of it follows because that is what a component is. A COMPONENT's root *is* a frame, so it takes a frame's whole vocabulary — \`fill\`, \`layout\`, \`borderRadius\`, \`width\` — and so does a COMPONENT_SET, whose layout words arrange its variants. Its sublayers are ordinary nodes: edit them by id, \`append\` new ones, \`remove\` ones you don't want.
+
+\`\`\`js
+await flcm.edit(comp, { fill: "#111", layout: { gap: 12 } });   // every instance recolors and re-gaps
+await flcm.edit(labelId, { textStyle: { fontSize: 14 } });      // a sublayer, like any other node
+\`\`\`
+
+Two words exist only here: \`description\`, and \`propertyDefinitions\` — what the component **declares**.
+
+\`\`\`js
+await flcm.edit(comp, {
+  propertyDefinitions: {
+    Size: { type: "text", defaultValue: "M" },   // a name it doesn't have  → ADDS
+    Label: { defaultValue: "Save" },             // a name it has           → re-defaults
+    Icon: { name: "Leading" },                   // a name it has           → renames
+    Legacy: null,                                //                         → deletes
+  },
+});
+\`\`\`
+
+- **Adding requires \`defaultValue\`.** At create it can be derived from the node that binds the property; an edit binds nothing in the same call, so there is no node to read a starting value off. Bind a layer next (below).
+- **A new \`slot\` can't be declared here at all** — a slot IS the frame that holds its placeholder content. Insert that frame and the slot comes with it (below).
+- **Changing a \`defaultValue\`** reaches every instance still sitting on the old default; an instance that stated its own value keeps it. **Renaming** re-suffixes the property and re-points every layer bound to it — \`name\` inside a definition is the one edit-only key, since a read reports a property's name as the key. **Deleting** frees the layers it drove.
+- **A property's TYPE can't change** — Figma has no such call. Delete it and declare the new one.
+- **A variant axis is not a definition.** A set's axes ARE its members' names, so they change by renaming the member components; and a variant's properties live on the SET, so a \`propertyDefinitions\` edit aimed at a variant is refused pointing at it.`;
+
+// The rest of "changing a component" — everything AFTER the component-definition prop table, which
+// documents the two words the prose above introduces. Split for that table's sake: a `####` table
+// sits directly under the `###` narrative it belongs to, as every other one in this file does.
+export const COMPONENTS_EDIT_BINDINGS = `### Binding a layer — \`componentPropertyReferences\` under edit
+
+The same word the constructors take, now on a live sublayer of a component: which property drives which of its fields. \`null\` unbinds a field, which then keeps whatever value it has.
+
+\`\`\`js
+await flcm.edit(comp, { propertyDefinitions: { Heading: { type: "text", defaultValue: "Untitled" } } });
+await flcm.edit(titleId, { componentPropertyReferences: { text: "Heading" } });   // now the property drives it
+await flcm.edit(titleId, { componentPropertyReferences: { visible: null } });     // stop tracking, keep the value
+\`\`\`
+
+- The node must be **inside a COMPONENT** (or a set's variant). Inside an INSTANCE the binding belongs to the definition and is refused naming the instance; outside every component there is no property to point at.
+- Field legality is the constructors' — \`text\` on a TEXT, \`componentId\` on an INSTANCE, \`slot\` on a FRAME, \`visible\` anywhere — read off the live node's type.
+- **Unbinding the only frame of a slot property is refused**: the property would have nowhere to put an instance's content. Delete the property instead (\`propertyDefinitions: { Name: null }\`), which frees the frame in the same move. In a SET the count is per VARIANT — one slot property is one frame in *each* variant — so a sibling variant's frame doesn't make this one's spare.
+- In one \`editMany\` batch, definition edits must not cross-reference the rest of the batch: another entry binding a layer to a name this one is renaming, or setting that property on an INSTANCE, has no stated order, so it is refused naming both entries. Two calls say it unambiguously.
+
+### Inserting a bound layer
+
+\`append\`/\`prepend\`/\`insertBefore\`/\`insertAfter\` into a component (or into one of its sublayers) accept a spec carrying \`componentPropertyReferences\` — the only place outside \`flcm.component\` where a binding means something.
+
+\`\`\`js
+await flcm.append(comp, flcm.text("Sub", { componentPropertyReferences: { text: "Label" } }));
+await flcm.append(comp, flcm.frame({ width: 240, height: 80, componentPropertyReferences: { slot: "Content" } }));
+\`\`\`
+
+Every name must already be declared, with **one exception**: a \`slot\` naming a property that doesn't exist yet **declares it**, because the frame being inserted is what the slot IS and there is no other way to make one after the fact. A \`slot\` naming a property that already has its frame is refused — a slot is one hole. Into a set's VARIANT, a new \`slot\` declares the property on the SET and this variant realizes it; the other variants take the same slot by inserting their own bound frame.
+
+A spec insert whose destination is a **COMPONENT_SET** is refused: a set's children are its variants, and there is no add-to-an-existing-set form yet (\`flcm.variants\` builds a set from standalone components). To change what every variant holds, insert into each variant.
+
+### An instance's SLOT
+
+A slot is a FRAME in the definition and a \`SLOT\` node inside each instance. That node takes the frame surface under \`edit\` — \`layout\`, \`fill\`, \`width\`, padding — so an instance's hole can be styled. Putting content INTO it is still not authorable (an instance's child list is closed to plugins).`;
 
 export const COMPONENTS_INTRO = `\`flcm.instance(component, props?)\` is a constructor like \`flcm.frame\`: it builds an inert INSTANCE spec you \`render\` on its own, nest in a frame's children, or place with \`append\`/\`insertBefore\`. The component is a target — a read's \`componentId\`, an flcm/key, \`flcm.id(id)\`, or a handle from \`find\` — naming a COMPONENT, or a COMPONENT_SET (then the variant \`componentProperties\` pick, the set's default otherwise). Library components already used in the file resolve by the same id \`get\` reports.
 

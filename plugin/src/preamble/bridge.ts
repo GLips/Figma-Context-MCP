@@ -69,9 +69,10 @@ export interface RenderCtx extends RenderResources {
   // node became — a spec→live pairing recovered afterwards would have to guess past falsy children
   // and an svg's synthesized frame.
   //
-  // OPTIONAL on purpose, and the absence is the enforcement: only a verb that can DECLARE component
-  // properties (flcm.component alone) has anywhere for a binding to point, so only it passes a list.
-  // Every other spec-taking verb omits it, and buildNode then throws on a bound node rather than
+  // OPTIONAL on purpose, and the absence is the enforcement: only a verb with a declaring component
+  // behind it — flcm.component, or an insert landing inside one — has anywhere for a binding to
+  // point, so only those pass a list. Every other spec-taking verb omits it (and so does an insert
+  // landing anywhere else), and buildNode then throws on a bound node rather than
   // pushing it into a list nobody reads — a dropped authoring word would be wrong pixels with no
   // error, which is the one outcome this surface never allows. Their prepares refuse the tree first
   // (assertNoComponentPropertyBindings); this is the backstop for the next verb that forgets to.
@@ -1220,7 +1221,7 @@ export function buildNode(wn: WriteNode, ctx: RenderCtx): any {
   if (wn.componentPropertyReferences) {
     if (!ctx.bindings) {
       throw new Error(
-        "flcm: a node in this tree carries `componentPropertyReferences`, and this verb declares no component properties for it to point at — a binding only means something inside flcm.component. " +
+        "flcm: a node in this tree carries `componentPropertyReferences`, and this verb has no declaring component behind it for the binding to point at — that is flcm.component, or an insert landing inside a component. " +
           "(The verb's prepare should have refused the tree; reaching the build walk is a bug.)",
       );
     }

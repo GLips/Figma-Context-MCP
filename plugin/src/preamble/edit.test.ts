@@ -70,13 +70,17 @@ test("legality is per node type: a LINE takes no fill, exactly as flcm.line does
   assert.deepEqual(node.strokes[0].color, { r: 1, g: 0, b: 0 });
 });
 
-test("a non-createable node type takes only the shared words, and the error names both", async () => {
-  const component = figma.createComponent();
-  await assert.rejects(edit(id(component.id), { fill: "#ff0000" }), /`fill` is not a COMPONENT word/);
-  const handle = await edit(id(component.id), { name: "renamed", visible: false });
-  assert.equal(component.name, "renamed");
-  assert.equal(component.visible, false);
-  assert.equal(handle.id, component.id);
+test("a node type with no vocabulary of its own takes only the shared words, and the error names both", async () => {
+  // A POLYGON is a real node type flcm can't create and has assigned no edit words — the
+  // conservative floor. (COMPONENT/COMPONENT_SET/SLOT have their own vocabularies; see
+  // component-edit.test.ts.)
+  const polygon = figma.createPolygon();
+  figma.currentPage.appendChild(polygon);
+  await assert.rejects(edit(id(polygon.id), { fill: "#ff0000" }), /`fill` is not a POLYGON word/);
+  const handle = await edit(id(polygon.id), { name: "renamed", visible: false });
+  assert.equal(polygon.name, "renamed");
+  assert.equal(polygon.visible, false);
+  assert.equal(handle.id, polygon.id);
   // SLICE has no blend mixin at all — opacity would be an undo step that changed nothing.
   const slice = figma.createSlice();
   await assert.rejects(edit(id(slice.id), { opacity: 0.5 }), /`opacity` is not a SLICE word/);

@@ -34,6 +34,9 @@ import {
 import {
   prepareInstanceEditPlan, assertOverridePlansStillApply, applyInstanceRetarget, applyInstanceOverrides, InstanceEditPlan,
 } from "./instance.js";
+import { prepareComponentEditPlan, applyComponentDefinitionEdit, applyComponentBindingEdit, ComponentEditPlan } from "./component-edit.js";
+import { componentAncestorOf } from "./component.js";
+import { definitionOwnerOf } from "./identity.js";
 import type { EditEntry, EditManyScope } from "./schema.js";
 
 const SUBJECT = "flcm.editMany";
@@ -202,6 +205,92 @@ async function resolveEntryInstancePlans(
 }
 
 /**
+ * Every COMPONENT entry's definition/binding half, resolved. Same group as the instance plans above
+ * and for the same reasons: read-only, document-local, no host round trip.
+ */
+async function resolveEntryComponentPlans(
+  ledger: BatchLedger, plans: readonly (EditPlan | undefined)[],
+): Promise<(ComponentEditPlan | undefined)[]> {
+  const components: (ComponentEditPlan | undefined)[] = [];
+  await Promise.all(
+    plans.map(async (plan, i) => {
+      if (ledger.failed(i) || !plan || !plan.componentWords) return;
+      try {
+        components[i] = await prepareComponentEditPlan(plan.node, plan.componentWords, SUBJECT);
+      } catch (err) {
+        ledger.record(i, err);
+      }
+    }),
+  );
+  return components;
+}
+
+/**
+ * A batch that both re-declares a component's properties and NAMES one of them from another entry
+ * is refused, naming both entries.
+ *
+ * Every other cross-entry dependency in a batch has a defined answer (see applyOrderShallowestFirst
+ * and the parent projection). This one doesn't: the naming entry resolved a NAME against the
+ * definitions on the canvas, and the definition entry may be renaming or deleting exactly that
+ * property — so the batch would either wire a layer to a property that is about to move or refuse a
+ * name that is about to exist, depending on an order the agent never stated. Two calls say it
+ * unambiguously, and that is what the refusal asks for.
+ *
+ * Two entry shapes name a property: a sublayer's `componentPropertyReferences`, and an INSTANCE's
+ * `componentProperties`. The second is not a lesser case — the appliers run the instance's
+ * setProperties BEFORE the definition writes, so a batch deleting a property while an instance sets
+ * it would land the value and then throw it away, silently.
+ */
+function assertNoDefinitionBindingCrossReference(
+  ledger: BatchLedger, plans: readonly (EditPlan | undefined)[],
+  components: readonly (ComponentEditPlan | undefined)[], instances: readonly (InstanceEditPlan | undefined)[],
+): void {
+  for (let declarer = 0; declarer < plans.length; declarer++) {
+    const definitions = components[declarer] && components[declarer]!.definitions;
+    const declarerPlan = plans[declarer];
+    if (!definitions || !declarerPlan || ledger.failed(declarer)) continue;
+    if (!definitions.deletes.length && !definitions.changes.length && !definitions.adds.length) continue;
+    for (let namer = 0; namer < plans.length; namer++) {
+      const namerPlan = plans[namer];
+      if (namer === declarer || !namerPlan || ledger.failed(namer)) continue;
+      const named = definitionsNamedByEntry(namerPlan, components[namer], instances[namer]);
+      if (!named || named.owner !== definitionOwnerOf(declarerPlan.node)) continue;
+      ledger.record(
+        namer,
+        new Error(
+          named.what + " of " + JSON.stringify(declarerPlan.node.name) + " (id " + JSON.stringify(declarerPlan.node.id) +
+            "), whose `propertyDefinitions` entry [" + declarer + "] is changing in the same batch — the two would have to run in an order this call never states. " +
+            "Split them: declare the properties in one call, " + named.instead + " in the next.",
+        ),
+      );
+    }
+  }
+}
+
+/**
+ * Whose declarations an entry depends on, and how it says so — undefined for an entry that names no
+ * property at all. Answered by definition OWNER: a layer inside a variant binds against the SET's
+ * properties, and so does an instance of that variant, which is the node a `propertyDefinitions`
+ * entry has to name.
+ */
+function definitionsNamedByEntry(
+  plan: EditPlan, component: ComponentEditPlan | undefined, instance: InstanceEditPlan | undefined,
+): { owner: any; what: string; instead: string } | undefined {
+  if (component && component.binding) {
+    const around = componentAncestorOf(plan.node);
+    return around ? { owner: definitionOwnerOf(around), what: "binds a layer to a property", instead: "bind the layers" } : undefined;
+  }
+  if (instance && instance.namesDeclaredPropertiesOf) {
+    return {
+      owner: definitionOwnerOf(instance.namesDeclaredPropertiesOf),
+      what: "sets `componentProperties` on an instance",
+      instead: "set the instance's values",
+    };
+  }
+  return undefined;
+}
+
+/**
  * An entry aimed INSIDE an instance another entry is re-pointing is refused, naming both.
  *
  * A swap or a variant change rebuilds the instance's sublayers, so the node the inner entry
@@ -320,7 +409,9 @@ export function editMany(entries: EditEntry[], scope?: EditManyScope): Promise<H
         compiled[i] = compileEditPlan(nodes[i] as SceneNode, batch[i].changes, SUBJECT);
       });
       const instances = await resolveEntryInstancePlans(ledger, compiled);
+      const components = await resolveEntryComponentPlans(ledger, compiled);
       assertNoEntryInsideRetargetedInstance(ledger, compiled, instances);
+      assertNoDefinitionBindingCrossReference(ledger, compiled, components, instances);
       // The document-blind, resolve and compile stages all report together. The seal-time gates
       // below cannot join them: they need the resources, and a batch already known to be doomed
       // must not spend a font load and an image fetch to find its remaining faults.
@@ -346,10 +437,10 @@ export function editMany(entries: EditEntry[], scope?: EditManyScope): Promise<H
         if (instance) assertOverridePlansStillApply(instance, SUBJECT);
       });
       ledger.rejectIfAny();
-      return { plans, instances, resources };
+      return { plans, instances, components, resources };
     },
     // Apply — the sealed span: every entry's writes, no awaits, one undo step for the set.
-    ({ plans, instances, resources }) => {
+    ({ plans, instances, components, resources }) => {
       // Every entry's failure builder BEFORE the first write of the batch: it snapshots the
       // identity the error will name, and entry 0's rename must not be what entry 0's own later
       // stage reports (see openEditPlanApply).
@@ -366,7 +457,17 @@ export function editMany(entries: EditEntry[], scope?: EditManyScope): Promise<H
         const instance = instances[i];
         if (instance) applyInstanceRetarget(fails[i], plans[i].node, instance);
       }
+      // A COMPONENT entry's definition words come before every entry's writes and its binding words
+      // after them — the same bracket `edit` applies to one delta (see edit.ts), widened to the set.
+      for (const i of order) {
+        const component = components[i];
+        if (component && component.definitions) applyComponentDefinitionEdit(fails[i], plans[i].node, component.definitions);
+      }
       for (const i of order) applyEditPlanWrites(fails[i], plans[i], resources);
+      for (const i of order) {
+        const component = components[i];
+        if (component && component.binding) applyComponentBindingEdit(fails[i], plans[i].node, component.binding);
+      }
       for (const i of order) settleEditPlanSizes(fails[i], plans[i]);
       for (const i of order) settleEditPlanPositions(fails[i], plans[i]);
       for (const i of order) {

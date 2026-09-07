@@ -29,7 +29,7 @@ import {
 } from "./bridge.js";
 import { assertConstructorBuiltTree, isConstructorBuilt, isReadSpec } from "./provenance.js";
 import { loadTreeResources } from "./render.js";
-import { assertNoComponentPropertyBindings } from "./flcm.js";
+import { prepareInsertBindings, applyInsertBindings, InsertBindingPlan } from "./component-edit.js";
 import { clearKeysDeep, instanceAncestorOf } from "./identity.js";
 import { beginMutatingApply } from "./verb-error.js";
 
@@ -72,6 +72,18 @@ function assertInstanceChildListUntouched(subject: string, node: any, role: "des
     subject + ": the " + what + " is inside component instance " + JSON.stringify(host.name) + " (id " +
       JSON.stringify(host.id) + "), whose child list Figma won't let a plugin change. Edit the main " +
       "component it comes from (flcm never auto-detaches an instance).",
+  );
+}
+
+// A COMPONENT_SET's children are its VARIANTS — every one a COMPONENT, all sharing the set's axes.
+// A spec built into one would be a plain frame among them, which Figma either refuses or turns into
+// a malformed member. Named here, with the absence stated: nothing adds to an existing set yet.
+function assertSpecInsertNotIntoSet(subject: string, parent: any): void {
+  if (parent.type !== "COMPONENT_SET") return;
+  throw new Error(
+    subject + ": " + JSON.stringify(parent.name) + " (id " + JSON.stringify(parent.id) + ") is a COMPONENT_SET, and a set's children are its VARIANTS — " +
+      "a built spec would be a plain frame among them. There is no add-to-an-existing-set form yet: flcm.variants builds a set from standalone components. " +
+      "To change what every variant holds, insert into each variant.",
   );
 }
 
@@ -197,19 +209,23 @@ function containerHandle(parent: any): Handle | undefined {
   return parent && parent.type !== "PAGE" ? mintHandle(parent) : undefined;
 }
 
-interface PreparedInsert { kind: "insert"; dest: Destination; spec: WriteNode; resources: RenderResources }
+interface PreparedInsert { kind: "insert"; dest: Destination; spec: WriteNode; resources: RenderResources; bindings?: InsertBindingPlan }
 // `words` is the subject's parent-relative intent read BEFORE the reparent — under the OLD parent's
 // axes, the frame of reference the words were written in. Reading it in apply would be too late.
 interface PreparedPlacement { kind: "placement"; dest: Destination; node: any; words: WriteLayout }
 
-function applyInsert(verb: string, { dest, spec, resources }: PreparedInsert): InsertResult {
-  // No `bindings` — an insert declares no component properties (see RenderCtx.bindings).
-  const ctx: RenderCtx = { ...resources, keyed: {}, pending: [] };
+function applyInsert(verb: string, { dest, spec, resources, bindings }: PreparedInsert): InsertResult {
+  // `bindings` is opted into ONLY for an insert landing inside a component (see RenderCtx.bindings):
+  // without the list, buildNode throws on a bound node rather than dropping the authoring word.
+  const ctx: RenderCtx = { ...resources, keyed: {}, pending: [], ...(bindings ? { bindings: [] } : {}) };
   const fail = beginMutatingApply(verb, dest.parent);
   let root: any;
   try {
     root = attachSpecChild(dest.parent, spec, ctx, liveParentSpecFacts(dest.parent, "flcm." + verb), dest.place);
     resolvePercents(ctx);
+    // After the tree is attached and settled: the property references (and the slot properties this
+    // insert declares) land in the same sealed span, so a bound layer is never on the canvas unbound.
+    if (bindings) applyInsertBindings(bindings, ctx.bindings!);
   } catch (cause) {
     throw fail(cause);
   }
@@ -268,18 +284,21 @@ function placeVerb(verb: string, anchor: Target, thing: unknown, placement: Plac
       // image fetch, and a sealed tree can't change between here and the build (ADR-0012).
       const spec = thing as WriteNode;
       assertConstructorBuiltTree(spec);
-      // Bindings are flcm.component's word alone — inserting one would reference a property this
-      // call never declares. (Capability 4 lifts this for an insert INTO an existing component.)
-      assertNoComponentPropertyBindings(spec, subject);
       // Resources BEFORE the destination, and this order is load-bearing: fonts and images are the
       // long await in this prepare, and the user has the document open the whole time. Every live
-      // fact the gates below read — the parent's layout mode, its hug axes, its instance ancestry —
-      // must be read AFTER the last yield, or the verb validates against a canvas that has moved on.
+      // fact the gates below read — the parent's layout mode, its hug axes, its instance ancestry,
+      // and which component (if any) declares the properties a binding names — must be read AFTER
+      // the last yield, or the verb validates against a canvas that has moved on.
       const resources = await loadTreeResources(spec);
       const dest = await resolveDestination(subject, anchor, placement);
       assertInstanceChildListUntouched(subject, dest.parent, "destination");
+      assertSpecInsertNotIntoSet(subject, dest.parent);
       assertSpecRootLandsUnderParent(dest.parent, spec, subject);
-      return { kind: "insert", dest, spec, resources };
+      // A spec MAY carry `componentPropertyReferences` when it is landing inside a component — the
+      // one place outside flcm.component where a binding names a property that exists. Everywhere
+      // else this is the standing refusal, raised from inside (component-edit.ts).
+      const bindings = prepareInsertBindings(subject, dest.parent, spec);
+      return { kind: "insert", dest, spec, resources, bindings };
     },
     (prepared) => (prepared.kind === "insert" ? applyInsert(verb, prepared) : applyPlacement(verb, prepared)),
   );
