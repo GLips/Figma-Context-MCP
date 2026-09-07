@@ -1,6 +1,8 @@
-// flcm — the public surface. This is the ONLY thing the agent touches: a single namespace of inert
-// constructors plus render(). Constructors build POJO WriteNodes (the typed IR currency) and mutate
-// nothing; render() is the one async call that walks the tree and creates live nodes.
+// flcm — the constructors. This is most of what the agent touches: a namespace of inert constructors
+// that build POJO WriteNodes (the typed IR currency) and mutate nothing. render() — the one async call
+// that walks a tree and creates live nodes — lives in render.ts, which imports FROM here: an instance
+// spec resolves its component in render's prepare through the edit compile (instance.ts → edit.ts →
+// this module), and a constructor module that imported that chain would close a cycle.
 //
 // The constructors take the read shape's own props (width/height/left/top/layout/fill/...) and compile
 // them into the typed WriteNode currency here. Author CSS-shaped leaves (a #hex color, a gradient string,
@@ -18,22 +20,19 @@
 
 import {
   WriteNode, WriteProps, WriteChild, WriteLayout, WriteTextStyle, WriteTextRun, PaintSpec,
-  GradientStop, EffectSpec, Sizing, Edges, Handle, WriteCssEffects, PinX, PinY, AnchorX, AnchorY,
-  Justify, Align, TextAlign, TextDecoration, WriteTextCase, RawIdRef, WriteType,
+  GradientStop, EffectSpec, Sizing, Edges, WriteCssEffects, PinX, PinY, AnchorX, AnchorY,
+  Justify, Align, TextAlign, TextDecoration, WriteTextCase, RawIdRef, WriteType, Target,
+  ComponentPropertyInput, OverrideDeltaInput,
 } from "./ir.js";
-import { markConstructorBuilt, isConstructorBuilt, assertConstructorBuiltTree } from "./provenance.js";
-import { assertLayoutRealizableForType, assertSizingResolvesAgainstParentFrame } from "./layout-legality.js";
-import { loadFontsForTree } from "./fonts.js";
+import { markConstructorBuilt, isConstructorBuilt } from "./provenance.js";
+import { assertLayoutRealizableForType } from "./layout-legality.js";
 import { parseInlineMarkdown, MdSegment } from "./markdown.js";
 import { linearGradient, radialGradient } from "./paint.js";
 import { layerBlurFromCssPx, backgroundBlurFromCssPx, shadow, glass, noise, texture, progressiveBlur } from "./effects.js";
 import { parseColor, parseFill, parseCssEffects, parseBlendMode, boxShorthand, length, lineHeight, letterSpacing, isPercent, percent } from "./css.js";
-import { buildNode, placeRootOnPage, settleHandles, resolvePercents, RenderCtx, RenderResources } from "./bridge.js";
-import { describeRootOverlap } from "./root-overlap.js";
-import { enterMutatingVerb } from "./mutation-lock.js";
 import { requestHostImages } from "./host.js";
 import { get, find, findOne, selection } from "./read.js";
-import { rejectUnknownKeys, acceptAuthoringProps } from "./validate.js";
+import { rejectUnknownKeys, acceptAuthoringProps, rejectNonDeltaWords } from "./validate.js";
 import type { SimplifiedNode } from "@framelink/core";
 
 // The authoring surface (verb Props + gradient/effects sugar) is defined ONCE in schema.ts as zod schemas
@@ -41,7 +40,7 @@ import type { SimplifiedNode } from "@framelink/core";
 // erased by esbuild and never reaches the sandbox bundle. Change a prop by editing the schema, not here.
 import type {
   BaseProps, SizeProps, AppearanceProps, FrameProps, TextProps, TextRunInput, StyleDeltaInput,
-  ShapeProps, EllipseProps, LineProps, PathProps, SvgProps, ImageOpts,
+  ShapeProps, EllipseProps, LineProps, PathProps, SvgProps, ImageOpts, InstanceProps,
   PadInput, EffectsInput, GradientSugar, GradientStopInput, EffectsSugar, ShadowSugar, BlurSugar,
   GlassSugar, NoiseSugar, TextureSugar, ProgressiveBlurSugar,
 } from "./schema.js";
@@ -73,6 +72,7 @@ export const KNOWN_KEYS = {
   run: ["fontWeight", "fontSize", "fontFamily", "fontStyle", "lineHeight", "letterSpacing", "textDecoration", "textTransform", "fontVariant", "paragraphSpacing", "paragraphIndent", "listSpacing", "color", "hyperlink"],
   line: ["stroke", "strokeWidth", "width", "rotation", "left", "top", "position", "anchor", "pin"],
   path: ["d", "fill", "stroke", "strokeWidth", "strokeAlign", "effects", "rotation"],
+  instance: ["componentProperties", "overrides"],
   image: ["scaleMode", "placeholder"],
   gradient: ["type", "stops", "angle", "at"],
   effects: ["shadow", "blur", "backgroundBlur", "glass", "noise", "texture", "progressiveBlur"],
@@ -89,10 +89,14 @@ const TEXT_KEYS = keySet(KNOWN_KEYS.shared, KNOWN_KEYS.size, KNOWN_KEYS.text);
 const SHAPE_KEYS = keySet(KNOWN_KEYS.shared, KNOWN_KEYS.size, KNOWN_KEYS.appearance);
 const ELLIPSE_KEYS = keySet(KNOWN_KEYS.shared, KNOWN_KEYS.size, KNOWN_KEYS.ellipse);
 const LINE_KEYS = keySet(KNOWN_KEYS.shared, KNOWN_KEYS.line);
+const INSTANCE_KEYS = keySet(KNOWN_KEYS.shared, KNOWN_KEYS.size, KNOWN_KEYS.appearance, KNOWN_KEYS.frame, KNOWN_KEYS.instance);
+// The words an override delta may name — the edit vocabulary, since an override IS an edit of one
+// sublayer, judged at construction the way edit's stage 1 judges a delta.
+const OVERRIDE_DELTA_KEYS = keySet(KNOWN_KEYS.edit);
 // Each constructor's closed vocabulary, by the read type it builds — what fromRead judges a spec's
 // read words against before the call, so a word the type lacks is named as real state, not a typo.
-export const CONSTRUCTOR_KEYS_BY_TYPE: Record<"FRAME" | "TEXT" | "RECTANGLE" | "ELLIPSE" | "LINE", ReadonlySet<string>> = {
-  FRAME: FRAME_KEYS, TEXT: TEXT_KEYS, RECTANGLE: SHAPE_KEYS, ELLIPSE: ELLIPSE_KEYS, LINE: LINE_KEYS,
+export const CONSTRUCTOR_KEYS_BY_TYPE: Record<"FRAME" | "TEXT" | "RECTANGLE" | "ELLIPSE" | "LINE" | "INSTANCE", ReadonlySet<string>> = {
+  FRAME: FRAME_KEYS, TEXT: TEXT_KEYS, RECTANGLE: SHAPE_KEYS, ELLIPSE: ELLIPSE_KEYS, LINE: LINE_KEYS, INSTANCE: INSTANCE_KEYS,
 };
 const PATH_KEYS = keySet(KNOWN_KEYS.shared, KNOWN_KEYS.size, KNOWN_KEYS.path);
 const SVG_KEYS = keySet(KNOWN_KEYS.shared, KNOWN_KEYS.size);
@@ -530,6 +534,113 @@ function frame(props: FrameProps | SimplifiedNode = {}, children?: WriteChild | 
   // sharing those across nodes is legitimate, appending to a handed-over children list is not.
   wn.children = Object.freeze(Array.isArray(children) ? children : children ? [children] : []) as WriteChild[];
   return sealWriteNode(wn);
+}
+
+// The two shapes of an instance's first argument. A props bag carrying `componentId` is the read shape
+// (`flcm.instance({ ...spec })`); anything else is a component target. A handle carries `id` and no
+// `componentId`, so it stays a target — the only object that reads as props is one naming its
+// component in the read's own word.
+function isInstancePropsForm(arg: unknown): arg is Record<string, unknown> {
+  return !!arg && typeof arg === "object" && !Array.isArray(arg) && Object.prototype.hasOwnProperty.call(arg, "componentId");
+}
+
+function isTargetShaped(value: unknown): value is Target {
+  if (typeof value === "string") return value.trim().length > 0;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const v = value as { __flcmId?: unknown; id?: unknown };
+  return typeof v.__flcmId === "string" || typeof v.id === "string";
+}
+
+const COMPONENT_TARGET_HINT = "a component's node id (a read's `componentId`), an flcm/key, flcm.id(id), or a handle from flcm.find";
+
+// flcm.instance(component, props) — stamp a component. Inert like every constructor: the component
+// target, the property values and the override deltas ride the WriteNode RAW (ir.ts WriteProps on why),
+// and render's prepare phase resolves them against the live document (instance.ts) before any write.
+// What IS judged here is everything the document can't change: the root words' vocabulary and values
+// (they compile exactly as a frame's do), the SHAPE of the two component bags, and each override
+// delta's words — the same document-blind gate edit's stage 1 runs on a delta.
+//
+// PRESENCE-PRESERVING, unlike flcm.frame: no `layout.mode: "none"` default, no transparent-fill
+// default, no hug default. An instance's root already has every value from its component, and a
+// creation default written onto it would be a root-level override the author never asked for — the
+// instance would stop tracking the component on that field. Only a named word becomes an override.
+function instance(componentOrProps: Target | InstanceProps | SimplifiedNode, props?: InstanceProps | SimplifiedNode): WriteNode {
+  let component: unknown;
+  let bag: unknown;
+  if (isInstancePropsForm(componentOrProps)) {
+    if (props !== undefined) {
+      throw new Error("flcm.instance takes (component, props) or ONE props object carrying `componentId` — not both. Drop the second argument, or pass the component first and leave `componentId` out of the props.");
+    }
+    const { componentId, ...rest } = componentOrProps as Record<string, unknown>;
+    component = componentId;
+    bag = rest;
+  } else {
+    component = componentOrProps;
+    bag = props ?? {};
+    if (isInstancePropsForm(bag)) {
+      throw new Error("flcm.instance: the component is the first argument, and the props also name `componentId` — two components for one instance. Pass one or the other.");
+    }
+  }
+  if (!isTargetShaped(component)) {
+    throw new Error("flcm.instance: the component must be " + COMPONENT_TARGET_HINT + " — got " + JSON.stringify(component) + ".");
+  }
+  const accepted = acceptAuthoringProps(bag, { type: "INSTANCE", verb: "create", known: INSTANCE_KEYS, subject: "flcm.instance" }) as InstanceProps;
+  const wn = mintWriteNode("INSTANCE");
+  wn.component = component;
+  compileNodeLocalProps(wn, accepted, { radius: true, clip: true });
+  const layout: WriteLayout = {};
+  // ?? not ||, as in buildLayout: a falsy-but-present layout must reach the compile's malformed reject.
+  if (accepted.layout != null) Object.assign(layout, compileContainerWords(accepted.layout, "flcm.instance.layout"));
+  Object.assign(layout, compileSizeWords(accepted) || {});
+  // The type rule (hug needs auto-layout, gap needs a container) is NOT run here: whether this root is
+  // a row/column is the COMPONENT's fact, read in render's prepare — the same live-mode call edit makes.
+  if (Object.keys(layout).length) wn.layout = layout;
+  if (accepted.componentProperties != null) wn.componentProperties = compileComponentPropertyBag(accepted.componentProperties);
+  if (accepted.overrides != null) wn.overrides = compileOverrideBag(accepted.overrides);
+  return sealWriteNode(wn);
+}
+
+// The property bag's SHAPE: an object of names to scalars or component targets. Which names exist,
+// what type each takes and which variant combinations are real are the component's to say, at
+// prepare. A null value is refused here rather than treated as absence: unlike a constructor word,
+// a property has no "unset" — the read never reports one as null, and a null would either
+// silently keep the default or throw inside Figma's setter.
+function compileComponentPropertyBag(raw: unknown): Record<string, ComponentPropertyInput> {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error('flcm.instance.componentProperties must be an object of property values by name, e.g. { Size: "Large", Label: "Save" } — got ' + JSON.stringify(raw) + ".");
+  }
+  const out: Record<string, ComponentPropertyInput> = {};
+  for (const name of Object.keys(raw)) {
+    const value = (raw as Record<string, unknown>)[name];
+    if (!name.trim()) throw new Error("flcm.instance.componentProperties: a property name is empty.");
+    if (typeof value === "string" || typeof value === "boolean" || isTargetShaped(value)) {
+      out[name] = value as ComponentPropertyInput;
+      continue;
+    }
+    throw new Error(
+      "flcm.instance.componentProperties[" + JSON.stringify(name) + "]: a property value is a string (a variant option or a text), a boolean, or — for an instance-swap property — " +
+        COMPONENT_TARGET_HINT + ". Got " + JSON.stringify(value) + ".",
+    );
+  }
+  return out;
+}
+
+// Each override is a delta in the edit vocabulary, keyed by the sublayer's component-relative path.
+// The document-blind half of edit's validation runs on every entry now (a misspelled word rejects
+// before any component is looked up); the per-type half — which words THIS sublayer takes, what a
+// `null` means for it — runs at prepare against the resolved definition (instance.ts).
+function compileOverrideBag(raw: unknown): Record<string, OverrideDeltaInput> {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error('flcm.instance.overrides must be an object of deltas by sublayer path, e.g. { "11:9": { text: "Save" } } — got ' + JSON.stringify(raw) + ".");
+  }
+  const out: Record<string, OverrideDeltaInput> = {};
+  for (const path of Object.keys(raw)) {
+    if (!path.trim()) throw new Error("flcm.instance.overrides: a sublayer path is empty.");
+    const delta = (raw as Record<string, unknown>)[path];
+    rejectNonDeltaWords(delta, OVERRIDE_DELTA_KEYS, "flcm.instance.overrides[" + JSON.stringify(path) + "]");
+    out[path] = delta as OverrideDeltaInput;
+  }
+  return out;
 }
 
 // CSS text-transform / font-variant-caps -> Figma's ONE textCase enum. Two author words, one slot,
@@ -1150,96 +1261,6 @@ export async function fetchImagesForTrees(trees: readonly WriteProps[]): Promise
   return requestHostImages(urls);
 }
 
-// The two read-only resource loads a tree needs before ANY node is created — fonts and image
-// bytes, in parallel (neither depends on the other, and they're a run's two slowest awaits).
-// Shared by render and the structural insert verbs, which owe the same guarantee: a blocked url,
-// an oversize image, or an unreachable host aborts with zero mutations.
-//
-// Both settle BEFORE this resolves or rejects (hand-rolled: the tsconfig lib pins the QuickJS
-// floor below ES2020's allSettled). A fail-fast Promise.all would release the verb's queue slot
-// while the sibling await is still in flight — the next verb's prepare could then issue a second
-// image request beside the orphaned one, breaking "one in-flight fetch per run" (the host comment
-// relies on it). A separate `failed` flag, not a sentinel on the reason: a promise can legally
-// reject with undefined, and mistaking that for success would carry a missing resource map into
-// the SEALED apply span. Both catch handlers attach before either await — attaching the second
-// only after the first settles would leave an early font rejection briefly unhandled and
-// mis-order which failure wins.
-export async function loadTreeResources(tree: WriteNode): Promise<RenderResources> {
-  let failed = false;
-  let firstFailure: unknown;
-  const settled = <V>(p: Promise<V>) =>
-    p.catch((err: unknown) => {
-      if (!failed) {
-        failed = true;
-        firstFailure = err;
-      }
-      return undefined as unknown as V;
-    });
-  const settledImages = settled(fetchImagesForTrees([tree]));
-  const settledFonts = settled(loadFontsForTree(tree));
-  const images = await settledImages;
-  const fonts = await settledFonts;
-  if (failed) throw firstFailure;
-  return { images, fonts };
-}
-
-// render(tree) — the one place nodes are created. Loads fonts, walks the WriteNode tree, stamps each
-// `key` into pluginData('flcm/key'), and returns the built tree's top node plus a map of every keyed node. Only
-// keyed nodes appear in `keyed`; a duplicate key within one render is a loud error (in bridge).
-// A single expression on purpose: the queue slot is reserved before render() can possibly yield,
-// which is the lock's invocation-order guarantee (see enterMutatingVerb) — don't add work above it.
-function render(tree: WriteNode): Promise<{ node: Handle; keyed: Record<string, Handle> }> {
-  return enterMutatingVerb(
-    "render",
-    // Prepare — spec checks, then the read-only resource loads (parallel: neither depends on the
-    // other, and they're the run's two slowest awaits). A reject here — bad spec, blocked url,
-    // oversize, unreachable — exits with zero mutations and zero undo residue, and a run the
-    // server cancelled during the awaits is refused before the entry seal. Deliberate cost:
-    // concurrent renders' prepares now SUM (each waits its turn in the queue slot) against the
-    // server's never-suspended 45s run ceiling — and font-only prepares, which emit no bridge
-    // traffic, against the 15s inactivity deadline too — where they used to overlap. The price
-    // of one entry shape for every verb; a run that genuinely needs many cold fetches should
-    // split its work. Upside: the per-run in-flight image cap can no longer refuse a
-    // Promise.all of image renders.
-    async () => {
-      if (!tree || typeof tree !== "object" || typeof tree.type !== "string") {
-        throw new Error("flcm.render: expected a node from flcm.frame()/text()/rect()/ellipse()/line()/svg()/path(), got " + JSON.stringify(tree) + ".");
-      }
-      // Authenticate provenance for the WHOLE tree before the resource loads below — a hand-built
-      // node must reject with its own message, not surface as a confusing image/font error after
-      // a wasted host round-trip.
-      assertConstructorBuiltTree(tree);
-      // The root lands on the page, which has no bounded size to resolve "fill" or a percent
-      // against — reject before the image round-trip (this check needs no bytes) and before
-      // buildNode, which only guards a percent on a *child*. The rule is edit's page-parent gate,
-      // shared (assertSizingResolvesAgainstParentFrame), so the two verbs answer identically.
-      if (tree.layout) {
-        assertSizingResolvesAgainstParentFrame(tree.layout, true, "flcm");
-      }
-      return loadTreeResources(tree);
-    },
-    // Apply — node creation, sealed as one undo step.
-    ({ images, fonts }) => {
-      const ctx: RenderCtx = { keyed: {}, fonts, images, pending: [] };
-      // Build the tree (percent children land at a provisional size), then fold every percent/anchor into
-      // pixels against each parent's now-realized size in one post-walk pass (bridge.resolvePercents).
-      const root = buildNode(tree, ctx);
-      // The root's own position words (absolute x/y, pin, anchor) apply against the page — the
-      // walk above only positions CHILDREN, and edit applies the same words to a page child.
-      if (tree.layout) placeRootOnPage(root, tree.layout, ctx);
-      resolvePercents(ctx);
-      // After resolvePercents, so the root's bounds are final — and through the CONSOLE channel,
-      // which every already-installed plugin already returns. A new field on EXECUTE_CODE_RESULT
-      // would be a protocol bump, i.e. a manual manifest re-import for every user, to say something
-      // this advisory. ADR-0010 buys exactly this: placement feedback ships with the server.
-      const overlap = describeRootOverlap(root);
-      if (overlap) console.log(overlap);
-      // Handles are minted only now: geometry settles once the whole tree is laid out (bridge.settleHandles).
-      return settleHandles(root, ctx.keyed);
-    },
-  );
-}
-
 // flcm.id(id) — the target escape hatch. Wraps a raw node id so a target-taking verb (get/find/edit) treats
 // it as a live-node id and never scans it as an flcm/key (the one string a bare target could be read either
 // way). An inert POJO constructor like the others; the resolver (read.resolveTarget) unwraps it —
@@ -1252,9 +1273,9 @@ function id(nodeId: unknown): RawIdRef {
 }
 
 // The verbs this module contributes to the public surface — runtime.ts (the bundle entry) re-exports
-// these plus `edit` (which lives in edit.ts: it imports FROM this module, so defining it here would be
-// a cycle) and holds the one exhaustive `satisfies Flcm` drift guard against the schema's typed
-// surface. Nothing else in the preamble is re-exported, so every other helper stays closure-private.
-// `get`/`find`/`findOne`/`selection` are defined in read.ts (the figma.*-speaking read walk) and surface
-// here, the way render's live work lives in bridge.ts.
-export { frame, text, rect, ellipse, line, svg, path, render, gradient, image, effects, get, find, findOne, selection, id };
+// these plus `render` (render.ts) and `edit` (edit.ts), both of which import FROM this module, so
+// defining either here would be a cycle — and holds the one exhaustive `satisfies Flcm` drift guard
+// against the schema's typed surface. Nothing else in the preamble is re-exported, so every other
+// helper stays closure-private. `get`/`find`/`findOne`/`selection` are defined in read.ts (the
+// figma.*-speaking read walk) and surface here.
+export { frame, text, rect, ellipse, line, svg, path, instance, gradient, image, effects, get, find, findOne, selection, id };

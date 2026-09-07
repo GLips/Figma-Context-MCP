@@ -26,7 +26,7 @@ export function isConstructorBuilt(wn: object): boolean {
 export function assertConstructorBuiltTree(wn: WriteNode): void {
   if (!isConstructorBuilt(wn)) {
     throw new Error(
-      'flcm: nodes come from the flcm constructors — flcm.frame/text/rect/ellipse/line/svg/path — got a hand-built "' +
+      'flcm: nodes come from the flcm constructors — flcm.frame/text/rect/ellipse/line/svg/path/instance — got a hand-built "' +
         wn.type + '" object. (A copy of a constructor node also lands here — a spread or clone is a different object; re-call the constructor instead.)',
     );
   }

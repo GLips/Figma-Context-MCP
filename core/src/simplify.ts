@@ -302,7 +302,9 @@ function shouldProcessNode(node: NodeSnapshot, context: SimplifyContext): boolea
 function extractLayout(node: NodeSnapshot, result: SimplifiedNode, context: SimplifyContext): void {
   const { layout, geometry } = buildSimplifiedLayout(node, context.parent);
   Object.assign(result, geometry);
-  if (Object.keys(layout).length > 1) {
+  // A free-form container with nothing else to say (`{ mode: "none" }`) is the default and is
+  // omitted; a row/column is information even when every other word is at its default.
+  if (layout.mode !== "none" || Object.keys(layout).length > 1) {
     // Layout can't be a Figma named style, so no style slots to check.
     result.layout = context.styles.intern(node, layout, [], "layout");
   }

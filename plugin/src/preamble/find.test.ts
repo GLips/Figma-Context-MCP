@@ -5,7 +5,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
-import { frame, rect, text, render, find, findOne, selection } from "./flcm.js";
+import { frame, rect, text, find, findOne, selection } from "./flcm.js";
+import { render } from "./render.js";
 
 test("find returns matching nodes as slim handles with in-context sizing intent", async () => {
   createFigmaMock();

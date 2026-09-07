@@ -290,7 +290,7 @@ export const FAILS_LOUD = `Accepting CSS is a fidelity promise, so the boundarie
 | \`textStyle.lineClamp\` on a width-hugging text | Truncation needs a width to wrap against. Set \`width\` to a number, \`"fill"\`, or \`"N%"\`. |
 | A layout word the node can't realize — a fixed/\`"hug"\`/percent \`height\` on TEXT, \`"hug"\` with nothing to measure, or container words without \`layout.mode\` | The same rules govern create and edit alike, so a word that wouldn't land names the fix instead. |
 
-Components, variables, and prototype interactions are deliberately **out of v1** — read concepts with no create path. They're rejected loudly so you never half-write something unrealizable.
+Variables and prototype interactions are deliberately **out of v1** — read concepts with no create path. They're rejected loudly so you never half-write something unrealizable. (Components have one: \`flcm.instance\` — see the components section.)
 
 ### The one silent exception: unrenderable glyphs
 
@@ -369,4 +369,22 @@ No separate clipboard API — the verbs compose:
 
 A \`get\` result is not authoring input on its own: a bare read spec passed to \`append\` is rejected rather than quietly treated as a move, because the spec carries a live \`id\` exactly as a handle does — only you can say copy or move. \`flcm.fromRead(spec)\` says copy: it re-authors the subtree through the constructors, so you can edit the spec first (\`{ ...spec, width: 320 }\`), and the copy comes back key-less. A single node's spec also spreads straight into its constructor or an edit — \`flcm.rect({ ...spec, width: 320 })\` — since the constructors read the read shape's spellings; \`fromRead\` is for a subtree, whose \`children\` are specs rather than built nodes.
 
-\`fromRead\` rebuilds; \`clone\` duplicates. Rebuilding reaches only what flcm can author, so an INSTANCE, a stacked paint, a grid container or a flattened \`IMAGE-SVG\` fails loud naming the field — \`clone\` is the answer for those.`;
+\`fromRead\` rebuilds; \`clone\` duplicates. Rebuilding reaches only what flcm can author, so a stacked paint, a grid container or a flattened \`IMAGE-SVG\` fails loud naming the field — \`clone\` is the answer for those. An INSTANCE rebuilds through \`flcm.instance\`: a fresh stamp of the same component, with the read's property values and overrides re-applied.`;
+
+export const COMPONENTS_INTRO = `\`flcm.instance(component, props?)\` is a constructor like \`flcm.frame\`: it builds an inert INSTANCE spec you \`render\` on its own, nest in a frame's children, or place with \`append\`/\`insertBefore\`. The component is a target — a read's \`componentId\`, an flcm/key, \`flcm.id(id)\`, or a handle from \`find\` — naming a COMPONENT, or a COMPONENT_SET (then the variant \`componentProperties\` pick, the set's default otherwise). Library components already used in the file resolve by the same id \`get\` reports.
+
+**Read words are write words.** What \`flcm.get\` reports on an instance is what \`flcm.instance\` takes, so a read spec authors as-is: \`flcm.instance({ ...spec, name: "Copy" })\` (the props form — \`componentId\` is read straight off the spec). Three groups of words:
+
+- **A frame's props** — \`fill\`, \`width\`, \`layout\`, \`opacity\`, \`name\`… Each one you name becomes a **root-level override**; each one you omit keeps tracking the component. There are no creation defaults here: a plain \`flcm.instance(comp)\` is byte-for-byte the component, where a plain \`flcm.frame()\` gets a transparent fill and hug sizing.
+- **\`componentProperties\`** — values by property name, as \`get\` reports them: a variant axis (\`Size: "Large"\`), a boolean, a text, or a component target for an instance-swap property. Bare names resolve to Figma's suffixed ones when unambiguous. A variant selection is checked as a whole combination against the variants the set actually has.
+- **\`overrides\`** — how sublayers differ from the component, keyed by component-relative path exactly as \`get\` keys them, each value a delta in the edit vocabulary for that sublayer's type (\`{ "11:9": { text: "Save" }, "11:12": { fill: "#F00", visible: false } }\`). A read's \`null\` (the instance lacks a field) is accepted where flcm has a removal word (\`fill\`/\`stroke\`/\`effects\` → "none", \`opacity\` → 1, \`borderRadius\` → 0) and refused otherwise.
+
+After render, a sublayer's live id is \`I<instanceId>;<path>\`, and \`flcm.edit\` on it is the same override — \`find({ within: handle })\` locates them.`;
+
+export const COMPONENTS_RULES = `### Rules
+
+- **Everything resolves against the live component before the first write.** An unknown property name, a wrong value type, a variant combination the set lacks, or an override path the component doesn't have each fails loud naming the component's own — its real property names, its real variants — with nothing created.
+- **A property is a property, an override is an override.** \`componentProperties\` drive what the component bound to them (a label's text, a layer's visibility, a nested swap); \`overrides\` reach any sublayer field the edit vocabulary has. Setting a bound text through \`overrides\` works but leaves the property unset — prefer the property when one exists.
+- **A slot property has no value** — its content is authored, not set; a slot in \`componentProperties\` is refused.
+- **Paths are per variant.** Each variant has its own sublayer ids; an override keyed from a read of one variant does not apply to another, and says so.
+- **An instance's child list stays closed** (see Tree shape): its content is the component's. Edit sublayers by id, or the main component.`;

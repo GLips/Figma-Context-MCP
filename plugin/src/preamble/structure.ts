@@ -28,7 +28,7 @@ import {
   liveParentSpecFacts, assertLiveNodeLandsUnderParent, assertSpecRootLandsUnderParent, resettleMovedNode,
 } from "./bridge.js";
 import { assertConstructorBuiltTree, isConstructorBuilt, isReadSpec } from "./provenance.js";
-import { loadTreeResources } from "./flcm.js";
+import { loadTreeResources } from "./render.js";
 import { clearKeysDeep, instanceAncestorOf } from "./identity.js";
 import { beginMutatingApply } from "./verb-error.js";
 
@@ -202,7 +202,7 @@ interface PreparedInsert { kind: "insert"; dest: Destination; spec: WriteNode; r
 interface PreparedPlacement { kind: "placement"; dest: Destination; node: any; words: WriteLayout }
 
 function applyInsert(verb: string, { dest, spec, resources }: PreparedInsert): InsertResult {
-  const ctx: RenderCtx = { keyed: {}, fonts: resources.fonts, images: resources.images, pending: [] };
+  const ctx: RenderCtx = { ...resources, keyed: {}, pending: [] };
   const fail = beginMutatingApply(verb, dest.parent);
   let root: any;
   try {

@@ -28,16 +28,25 @@ import type {
 // The node types createable through the plugin API, enumerated explicitly. Not every figma-mcp/REST
 // `type` round-trips to a create call, so the set is closed: bridge.ts's BUILDERS table is typed
 // `Record<WriteType, …>` (TS enforces a builder per type) and render() rejects anything outside it with
-// a specific error rather than letting a confusing plugin-API throw surface.
-export type WriteType = "FRAME" | "TEXT" | "RECTANGLE" | "ELLIPSE" | "LINE" | "VECTOR";
+// a specific error rather than letting a confusing plugin-API throw surface. INSTANCE is createable
+// (flcm.instance stamps a component), but its content comes from the component, never from `children`.
+export type WriteType = "FRAME" | "TEXT" | "RECTANGLE" | "ELLIPSE" | "LINE" | "VECTOR" | "INSTANCE";
 
-// Which schema word GROUPS compose each createable type's edit surface — the same compositions as
-// the per-verb create key sets (flcm.ts FRAME_KEYS = shared+size+appearance+frame, etc.), named
-// once so the two consumers can't drift: edit.ts builds the runtime legality gate from it (via
+// The node types edit has a per-type vocabulary for. A superset of WriteType on purpose: an INSTANCE
+// is both, while the definition types (COMPONENT/COMPONENT_SET, and a SLOT inside one) are edited but
+// never constructed — flcm.component PROMOTES a frame; nothing builds one from a spec.
+export type EditableType = WriteType;
+
+// Which schema word GROUPS compose each editable type's surface — the same compositions as the
+// per-verb create key sets (flcm.ts FRAME_KEYS = shared+size+appearance+frame, etc.), named once
+// so the two consumers can't drift: edit.ts builds the runtime legality gate from it (via
 // KNOWN_KEYS, intersected with the edit surface) and reference.ts renders the per-type doc lists
 // from it (via schema.ts's FIELD_GROUPS). Both index their group tables with these literals, so a
 // misspelled group name is a compile error on each side. Lives here, not in flcm.ts or schema.ts,
 // because ir.ts is the one module both sides already import type-safely with no zod and no figma.
+//
+// INSTANCE takes a FRAME's words plus the `instance` group: its root is a frame-like container whose
+// every named word becomes a root-level override, and an unnamed one keeps tracking the component.
 export const EDIT_TYPE_WORD_GROUPS = {
   FRAME: ["shared", "size", "appearance", "frame"],
   TEXT: ["shared", "size", "text"],
@@ -45,7 +54,8 @@ export const EDIT_TYPE_WORD_GROUPS = {
   ELLIPSE: ["shared", "size", "ellipse"],
   LINE: ["shared", "line"],
   VECTOR: ["shared", "size", "path"],
-} as const satisfies Record<WriteType, readonly string[]>;
+  INSTANCE: ["shared", "size", "appearance", "frame", "instance"],
+} as const satisfies Record<EditableType, readonly string[]>;
 
 export interface Rgb { r: number; g: number; b: number }
 export interface Rgba { r: number; g: number; b: number; a: number }
@@ -308,7 +318,26 @@ export interface WriteProps {
   locked?: boolean;
   layout?: WriteLayout;
   children?: WriteChild[];
+  // INSTANCE only — the three component words, carried RAW rather than compiled. A component
+  // reference and a property value can only be resolved against the live document (which
+  // definition owns the property, what the variant axes are, which node a swap target names),
+  // and an override delta compiles against the TYPE of the sublayer it targets — none of which
+  // an inert constructor can see. The constructor validates their SHAPE (an object, known delta
+  // words); render's prepare phase resolves and compiles them (instance.ts) before any write.
+  component?: Target;
+  componentProperties?: Record<string, ComponentPropertyInput>;
+  overrides?: Record<string, OverrideDeltaInput>;
 }
+
+// A component property value as authored: the read shape's own scalar (`Record<name, boolean |
+// string>`), plus a Target for an instance-swap property — the read reports a swap value as the
+// component's node id, and a handle from `find` names the same thing.
+export type ComponentPropertyInput = boolean | string | RawIdRef | Handle | SlimHandle;
+
+// One sublayer's override delta as authored — the read's `overrides` entry (a partial node whose
+// fields may be `null`) or an edit delta in the same words. Typed open here because the words a
+// sublayer takes depend on ITS type, judged when the component resolves.
+export type OverrideDeltaInput = Record<string, unknown>;
 
 export interface WriteNode extends WriteProps {
   type: WriteType;

@@ -36,22 +36,21 @@
 // to paper over one: the fix belongs where the information was lost.
 
 import type { WriteNode, WriteChild } from "./ir.js";
-import { frame, text, rect, ellipse, line, CONSTRUCTOR_KEYS_BY_TYPE } from "./flcm.js";
+import { frame, text, rect, ellipse, line, instance, CONSTRUCTOR_KEYS_BY_TYPE } from "./flcm.js";
 import type { SimplifiedNode, SimplifiedLayout } from "@framelink/core";
 import { own } from "./validate.js";
-import type { FrameProps, TextProps, ShapeProps, EllipseProps, LineProps } from "./schema.js";
+import type { FrameProps, TextProps, ShapeProps, EllipseProps, LineProps, InstanceProps } from "./schema.js";
 
 // The read types that have an flcm constructor. Read renames VECTOR → IMAGE-SVG and collapses SVG-heavy
 // containers into it, so no read type maps to flcm.svg/flcm.path: neither markup nor path data survives
 // the read (see UNAUTHORABLE_TYPES).
-type AuthorableReadType = "FRAME" | "TEXT" | "RECTANGLE" | "ELLIPSE" | "LINE";
+type AuthorableReadType = "FRAME" | "TEXT" | "RECTANGLE" | "ELLIPSE" | "LINE" | "INSTANCE";
 
 // Why each non-createable read type has no spec rebuild. Types outside both tables get the generic
 // message — the set of node types Figma can produce is open, and a new one is not a fromRead bug.
 const UNAUTHORABLE_TYPES: Record<string, string> = {
   "IMAGE-SVG": "the read shape flattens a VECTOR (and SVG-heavy containers) into IMAGE-SVG, which carries no path data or markup to rebuild from",
   GROUP: "a GROUP is a selection wrapper with no flcm constructor — its children carry the layout, so there is nothing to author",
-  INSTANCE: "an INSTANCE is bound to its main component, and a rebuild from props would produce a detached lookalike that stops tracking the component",
   COMPONENT: "a COMPONENT is a definition other nodes instantiate — rebuilding its props would produce a plain frame, not a component",
   COMPONENT_SET: "a COMPONENT_SET is a variant container — rebuilding its props would produce a plain frame, not a component set",
 };
@@ -62,7 +61,7 @@ export const CLONE_REMEDY = "A live node keeps this under flcm.clone(target, par
 // satisfies check requires every such key and rejects constructor words or keys absent from read.
 // Optional props still contribute keys; distribute over the union to include type-specific words.
 type Keys<T> = T extends unknown ? keyof T : never;
-type AuthorableReadKey = Keys<FrameProps | TextProps | ShapeProps | EllipseProps | LineProps>;
+type AuthorableReadKey = Keys<FrameProps | TextProps | ShapeProps | EllipseProps | LineProps | InstanceProps>;
 type ReadFieldDisposition = "prelude" | "drop" | { refuse: string };
 
 export const READ_FIELD_DISPOSITIONS = {
@@ -76,13 +75,10 @@ export const READ_FIELD_DISPOSITIONS = {
   },
   strokeDashes: { refuse: "flcm strokes are solid — there is no dash-pattern word" },
   aspectRatio: { refuse: "a locked aspect ratio (Figma's constrain-proportions) has no flcm word — the rebuild would silently stop holding its proportions" },
-  componentId: { refuse: "this node is a component instance, and flcm cannot author one — a rebuild from props would be a detached lookalike" },
-  componentProperties: { refuse: "component property VALUES belong to an instance, and flcm cannot author instances" },
+  // An instance's component, folded by flcm.instance's props form (the constructor takes the spec
+  // whole, `componentId` and all) — only an INSTANCE carries it, so no other constructor meets it.
+  componentId: "prelude",
   componentPropertyReferences: { refuse: "a component property BINDING (this node's text/visibility driven by a component prop) has no flcm word" },
-  // How an instance differs from its component's children, keyed by component-relative path. Only an
-  // INSTANCE carries it, and `componentId` already refuses that node by name — this entry exists so
-  // the exhaustive record stays exhaustive.
-  overrides: "drop",
 } satisfies Record<Exclude<keyof SimplifiedNode, AuthorableReadKey>, ReadFieldDisposition>;
 
 // Every SimplifiedLayout word, with the same dispositions — an exact Record for the same reason. The
@@ -107,7 +103,7 @@ export const LAYOUT_WORD_DISPOSITIONS: Record<keyof SimplifiedLayout, "author" |
 const ALL_CONSTRUCTOR_KEYS = new Set(Object.values(CONSTRUCTOR_KEYS_BY_TYPE).flatMap(keys => [...keys]));
 
 const CONSTRUCTOR_SUBJECTS: Record<AuthorableReadType, string> = {
-  FRAME: "flcm.frame", TEXT: "flcm.text", RECTANGLE: "flcm.rect", ELLIPSE: "flcm.ellipse", LINE: "flcm.line",
+  FRAME: "flcm.frame", TEXT: "flcm.text", RECTANGLE: "flcm.rect", ELLIPSE: "flcm.ellipse", LINE: "flcm.line", INSTANCE: "flcm.instance",
 };
 
 type Builder = (spec: Record<string, unknown>, subject: string) => WriteNode;
@@ -127,6 +123,10 @@ const BUILDERS: Record<AuthorableReadType, Builder> = {
   RECTANGLE: (spec) => rect(spec),
   ELLIPSE: (spec) => ellipse(spec),
   LINE: (spec) => line(spec),
+  // A read instance carries its `componentId`, its property values and its `overrides` — exactly the
+  // constructor's props form. Overrides re-resolve against the live component at render, so a
+  // value the instance shares with its component (the read omits those) stays the component's.
+  INSTANCE: (spec) => instance(spec),
 };
 
 /**
@@ -167,7 +167,7 @@ function assertAuthorableType(type: unknown, subject: string): AuthorableReadTyp
   const why = own(UNAUTHORABLE_TYPES, type);
   throw new Error(
     subject + ": " + type + " nodes have no authored form — " +
-      (why || "flcm's constructors build FRAME/TEXT/RECTANGLE/ELLIPSE/LINE (plus svg/path from markup you supply), and this is none of them") +
+      (why || "flcm's constructors build FRAME/TEXT/RECTANGLE/ELLIPSE/LINE/INSTANCE (plus svg/path from markup you supply), and this is none of them") +
       ". " + CLONE_REMEDY,
   );
 }

@@ -5,7 +5,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
-import { frame, text, rect, render, id, get, effects } from "./flcm.js";
+import { frame, text, rect, id, get, effects } from "./flcm.js";
+import { render } from "./render.js";
 
 test("get on a frame returns the expanded canonical shape — values inline, children included", async () => {
   createFigmaMock();
@@ -18,9 +19,9 @@ test("get on a frame returns the expanded canonical shape — values inline, chi
 
   const { node: spec } = await get("card");
   assert.equal(spec.type, "FRAME");
-  // JSON round-trip: the core leaves unset layout fields as present-but-undefined keys, which the
-  // egress serialization drops — compare the shape an agent's returned value actually carries.
-  assert.deepEqual(JSON.parse(JSON.stringify(spec.layout)), { mode: "row", padding: "12px", gap: "8px" });
+  // The live object, not a JSON round-trip: an unset layout word is ABSENT, not present-but-undefined,
+  // because this exact object spreads into the constructors' closed-set gate.
+  assert.deepEqual(spec.layout, { mode: "row", padding: "12px", gap: "8px" });
   assert.deepEqual(spec.fill, "#FF0000"); // the inline value — never a "fill_…" styles ref
   const chip = spec.children?.[0];
   assert.equal(chip?.type, "RECTANGLE");

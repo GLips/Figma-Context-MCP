@@ -42,7 +42,7 @@
 // than trust it, the compile SNAPSHOTS what it read and stage 4 re-reads and compares. (The
 // dependency can't simply be reordered away: which fonts to load is derived from the live node.)
 
-import { WriteProps, WriteType, WriteLayout, WriteTextStyle, Target, Handle, EDIT_TYPE_WORD_GROUPS, namesFontIdentity } from "./ir.js";
+import { WriteProps, EditableType, WriteLayout, WriteTextStyle, Target, Handle, EDIT_TYPE_WORD_GROUPS, namesFontIdentity } from "./ir.js";
 import { resolveTarget } from "./read.js";
 import { enterMutatingVerb } from "./mutation-lock.js";
 import { beginMutatingApply } from "./verb-error.js";
@@ -52,7 +52,7 @@ import {
   RenderResources, BatchLayoutDeltas,
 } from "./bridge.js";
 import { toFigmaEffects } from "./effects.js";
-import { rejectUnknownKeys, acceptAuthoringProps, READ_ONLY_WORDS } from "./validate.js";
+import { acceptAuthoringProps, rejectNonDeltaWords as rejectNonDeltaWordsAgainst } from "./validate.js";
 import { liveFontWords, loadFontsForTextEdits } from "./fonts.js";
 import {
   KNOWN_KEYS, compileNodeLocalProps, compileSizeWords, compilePlacementWords, compileContainerWords,
@@ -77,13 +77,13 @@ function editableWords(...groups: readonly (readonly string[])[]): ReadonlySet<s
 // renders). VECTOR uses flcm.path's words: an svg-born vector shares the type, but path's words
 // are the only authored vocabulary the type has.
 const DELTA_KEYS_BY_TYPE = Object.fromEntries(
-  (Object.keys(EDIT_TYPE_WORD_GROUPS) as WriteType[]).map((t) => [
+  (Object.keys(EDIT_TYPE_WORD_GROUPS) as EditableType[]).map((t) => [
     t,
     editableWords(...EDIT_TYPE_WORD_GROUPS[t].map((g) => KNOWN_KEYS[g])),
   ]),
-) as Record<WriteType, ReadonlySet<string>>;
+) as Record<EditableType, ReadonlySet<string>>;
 
-// A node type flcm can't create (GROUP, INSTANCE, COMPONENT, …) takes the shared words (minus `key`,
+// A node type with no per-type vocabulary (GROUP, COMPONENT, …) takes the shared words (minus `key`,
 // which isn't editable anywhere). Deliberately a conservative floor, not a mixin-derived ceiling:
 // effects/rotation on a GROUP would land but wait for a deliberate widening.
 const SHARED_DELTA_KEYS = editableWords(KNOWN_KEYS.shared);
@@ -92,33 +92,10 @@ const SHARED_DELTA_KEYS = editableWords(KNOWN_KEYS.shared);
 // rejects everywhere else). The appliers' `in node` guards are belt for the same fact.
 const SLICE_DELTA_KEYS = editableWords(["name", "visible", "locked"]);
 
-// The pure, document-blind half of validation (invariant 2's validate-then-mutate: this runs before
-// the target is even resolved, so a misspelled word reads "unknown prop" no matter what it targets).
-// `key` and bare `x`/`y` get steering messages ahead of the generic closed-set reject — they're the
-// two mistakes an agent is most likely to make, and "unknown prop" would misdiagnose both.
+// Stage 1 — the document-blind gate (validate.ts owns it: an instance's `overrides` entries are
+// deltas judged by the same rule at construction), bound to the edit vocabulary.
 export function rejectNonDeltaWords(changes: EditDelta, subject: string): void {
-  if (changes == null || typeof changes !== "object") {
-    throw new Error(subject + ": changes must be an object of props to apply — got " + JSON.stringify(changes) + ".");
-  }
-  if ("key" in changes) {
-    throw new Error(
-      subject + ": `key` is not editable — keys are set at creation and are how later calls address this node; re-keying could mint a duplicate address. Set `key` in the render that creates a node.",
-    );
-  }
-  if ("x" in changes || "y" in changes) {
-    throw new Error(
-      subject + ": position is not spelled with bare x/y — use `left`/`top` (naming either also lifts the node out of an auto-layout flow; `position: \"none\"` returns it), and `pin` for how it responds to a parent resize.",
-    );
-  }
-  // The read shape's read-only words (`id`, `type`, `children`, a root's `designedWidth`) are judged in
-  // stage 2, where the live node's TYPE is known. They pass this document-blind gate unjudged; everything else is judged now,
-  // against the edit vocabulary alone.
-  const foreign: Record<string, unknown> = {};
-  for (const key of Object.keys(changes)) {
-    if (!READ_ONLY_WORDS.has(key)) foreign[key] = (changes as Record<string, unknown>)[key];
-  }
-  rejectUnknownKeys(foreign, EDIT_KEYS, subject);
-  assertDeltaNotEmpty(changes, subject);
+  rejectNonDeltaWordsAgainst(changes, EDIT_KEYS, subject);
 }
 
 function assertDeltaNotEmpty(changes: object, subject: string): void {
@@ -304,7 +281,8 @@ export function compileEditPlan(node: SceneNode, changes: EditDelta, subject: st
 export async function loadEditResources(plans: readonly EditPlan[]): Promise<RenderResources> {
   const fonts = await loadFontsForTextEdits(plans);
   const images = await fetchImagesForTrees(plans.map((plan) => plan.patch));
-  return { fonts, images };
+  // No instance plans: a delta never constructs an instance (an instance spec is render's).
+  return { fonts, images, instances: new Map() };
 }
 
 /**

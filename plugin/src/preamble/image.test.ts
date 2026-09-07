@@ -6,7 +6,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
-import { image, rect, ellipse, frame, text, render } from "./flcm.js";
+import { image, rect, ellipse, frame, text } from "./flcm.js";
+import { render } from "./render.js";
 
 createFigmaMock();
 

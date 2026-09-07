@@ -3,7 +3,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
-import { frame, rect, render, id } from "./flcm.js";
+import { frame, rect, id } from "./flcm.js";
+import { render } from "./render.js";
 import { resolveTarget } from "./read.js";
 
 test("resolves the SAME node from its key, bare id, flcm.id(), and a handle", async () => {

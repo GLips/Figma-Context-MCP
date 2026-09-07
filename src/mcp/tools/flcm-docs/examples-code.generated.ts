@@ -161,8 +161,35 @@ const { node } = await flcm.get("card");
 const wider = flcm.fromRead({ ...node, width: 480, name: "Card (wide)" });
 const placed = await flcm.append("sidebar", wider);
 
-// fromRead REBUILDS, so it reaches only what flcm can author: an INSTANCE, a stacked paint, or a grid
-// container fails loud naming the field. flcm.clone(target, parent) duplicates the live node whole —
-// faithful, but not editable as a spec first.
+// fromRead REBUILDS, so it reaches only what flcm can author: a stacked paint or a grid container
+// fails loud naming the field (an INSTANCE rebuilds as a fresh stamp of its component).
+// flcm.clone(target, parent) duplicates the live node whole — faithful, but not editable as a spec first.
 return placed;`,
+  components: `// A toolbar of buttons from the file's Button component. Find the component set by name, then read
+// one variant to learn its property names and sublayer paths (the \`components\` sidecar lists them).
+const button = await flcm.findOne({ type: "COMPONENT_SET", name: "Button" });
+const { components } = await flcm.get(button);
+// components[button.id].propertyDefinitions → { Size: { type: "variant", variantOptions: [...] }, Label: { type: "text" }, ... }
+
+const toolbar = flcm.frame({ key: "toolbar", layout: { mode: "row", gap: 8, padding: 12 } }, [
+  // The set as the component: the variant is picked by its axes, as a whole combination.
+  flcm.instance(button, {
+    key: "save",
+    componentProperties: { Size: "Large", State: "Default", Label: "Save" },
+  }),
+  // The same, plus a root-level override (width) and a sublayer override by component-relative path —
+  // exactly the path \`get\` keys an instance's \`overrides\` by. Everything unnamed keeps tracking the component.
+  flcm.instance(button, {
+    key: "cancel",
+    width: 120,
+    componentProperties: { Size: "Large", Label: "Cancel" },
+    overrides: { "11:9": { fill: "#B91C1C" } },
+  }),
+]);
+const out = await flcm.render(toolbar);
+
+// A read instance authors as-is: \`componentId\`, \`componentProperties\` and \`overrides\` are the same words.
+const { node: save } = await flcm.get(out.keyed.save);
+await flcm.append("toolbar", flcm.instance({ ...save, name: "Save (copy)" }));
+return { toolbar: out.node.id, definitions: Object.keys(components ?? {}) };`,
 } as const;

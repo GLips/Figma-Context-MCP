@@ -24,6 +24,7 @@ There is no autocomplete and no type-checking where your code runs (a QuickJS sa
 | `flcm.line(props?)` | a LINE | props object |
 | `flcm.svg(markup, props?)` | a VECTOR from SVG markup | SVG markup string first, then size/position props |
 | `flcm.path(props)` | a themeable VECTOR | props object including `d` (path data) |
+| `flcm.instance(component, props?)` | an INSTANCE of a component (a spec — render it, or place it with append/insertBefore like any node) | the component first — a read's `componentId`, an flcm/key, a handle, or a COMPONENT_SET (the variant `componentProperties` select) — then a frame's props plus `componentProperties` and `overrides`, keyed exactly as `get` reports them. Or one props object carrying `componentId`, as a read spec does |
 | `flcm.gradient(...)` | a gradient fill value | object or positional form |
 | `flcm.image(src, opts?)` | an image fill value | an https url or a local file path (under the server's asset root) first, then { scaleMode?, placeholder? } |
 | `flcm.effects({...})` | an effects value | an { shadow, blur, backgroundBlur } bag |
@@ -59,7 +60,7 @@ There is no autocomplete and no type-checking where your code runs (a QuickJS sa
 
 Every prop is optional; an omitted prop is simply not applied (a frame with no `fill` is transparent, not white).
 
-**Read and write share one vocabulary.** What `get` returns spreads straight into any constructor or `flcm.edit` — `flcm.rect({ ...spec, width: 320 })`, `flcm.text(spec)` — because `left`/`top`, `fill`, `text`, `boldWeight` and the rest are the same words on both sides. A spec's read-only words (`id`, `type`, a root's `contextual` size beside `designedWidth`) fold away. A spec with `children` needs `flcm.fromRead(spec)`, which rebuilds the whole subtree and refuses by name the fields flcm has no word for (an INSTANCE's `componentId`, `strokeDashes`, a grid).
+**Read and write share one vocabulary.** What `get` returns spreads straight into any constructor or `flcm.edit` — `flcm.rect({ ...spec, width: 320 })`, `flcm.text(spec)` — because `left`/`top`, `fill`, `text`, `boldWeight` and the rest are the same words on both sides. A spec's read-only words (`id`, `type`, a root's `contextual` size beside `designedWidth`) fold away. A spec with `children` needs `flcm.fromRead(spec)`, which rebuilds the whole subtree and refuses by name the fields flcm has no word for (a component property binding, `strokeDashes`, a grid).
 
 ### Shared by every node
 
@@ -72,7 +73,7 @@ Every prop is optional; an omitted prop is simply not applied (a frame with no `
 | `visible` | boolean | Layer visibility. A hidden node is invisible to find/get too, so re-target it by id. |
 | `locked` | boolean | Locks the layer against pointer edits in Figma's UI. flcm.edit still writes to it. |
 
-### Size & position (frame, text, rect, ellipse)
+### Size & position (frame, text, rect, ellipse, instance)
 
 (A `line` sizes on a numeric `width` alone — its length; there is no `height`, `"fill"`, or `"hug"`.)
 
@@ -275,6 +276,15 @@ Each styled run's delta fields:
 | `effects` | effects value | Shadows / blur: flcm.effects({...}) or a CSS-string bag. "none" removes all effects. |
 | `rotation` | number (deg) | Rotation in degrees. |
 
+### flcm.instance — component words
+
+(An instance also takes every `flcm.frame` prop above; each one named becomes a root-level override. See the components section.)
+
+| Prop | Type | Notes |
+| --- | --- | --- |
+| `componentProperties` | { [name]: string \| boolean \| component target } | Component property values by name, as `get` reports them: a variant axis ("Size": "Large"), a boolean, a text, or — for an instance-swap property — a component target (its node id or a handle). Names are the bare names without the `#id` suffix. An unknown name, a value of the wrong type, a variant option the set lacks, or a combination no variant has each fails loud naming the component's own. A slot property is not set here (its content is authored — see `overrides`). |
+| `overrides` | { [path]: delta } | How this instance differs from its component's children, keyed by COMPONENT-RELATIVE sublayer path exactly as `get` keys them (`"11:9"`, `"11:9;11:14"` for a sublayer inside a nested instance). Each value is a delta in the edit vocabulary for that sublayer's type — `{ text: "Vue.js" }`, `{ fill: "#F00" }`, `{ visible: false }`. A read's `null` (the instance lacks a field the component has) is accepted where flcm has a removal word (`fill`/`stroke`/`effects` → "none", `opacity` → 1, `borderRadius` → 0) and fails loud otherwise. A path the resolved variant doesn't have fails loud. |
+
 ## Vector art (svg & path)
 
 Render real vector art — icons, logos, glyphs — instead of composing them from rects/ellipses or leaning on emoji (which render inconsistently and read as *content*, not iconography). There is **no built-in icon catalog**: bring your own SVG markup or path data.
@@ -441,8 +451,9 @@ out.keyed.chip.intent;    // undefined — a plainly fixed node
 - **ELLIPSE** — `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `fill`, `stroke`, `strokeWidth`, `strokeAlign`, `effects`, `rotation`
 - **LINE** — `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `stroke`, `strokeWidth`, `width`, `rotation`, `left`, `top`, `position`, `anchor`, `pin`
 - **VECTOR (path- or svg-born)** — `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `fill`, `stroke`, `strokeWidth`, `strokeAlign`, `effects`, `rotation`
+- **INSTANCE** — `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `fill`, `stroke`, `strokeWidth`, `strokeAlign`, `borderRadius`, `effects`, `rotation`, `layout`, `clip`
 
-On a node type flcm can't create (GROUP, INSTANCE, COMPONENT, …) only the shared words apply: `name`, `opacity`, `mixBlendMode`, `visible`, `locked`.
+On a node type with no vocabulary of its own (GROUP, COMPONENT, …) only the shared words apply: `name`, `opacity`, `mixBlendMode`, `visible`, `locked`.
 
 ### Removal — the `"none"` word
 
@@ -517,7 +528,34 @@ No separate clipboard API — the verbs compose:
 
 A `get` result is not authoring input on its own: a bare read spec passed to `append` is rejected rather than quietly treated as a move, because the spec carries a live `id` exactly as a handle does — only you can say copy or move. `flcm.fromRead(spec)` says copy: it re-authors the subtree through the constructors, so you can edit the spec first (`{ ...spec, width: 320 }`), and the copy comes back key-less. A single node's spec also spreads straight into its constructor or an edit — `flcm.rect({ ...spec, width: 320 })` — since the constructors read the read shape's spellings; `fromRead` is for a subtree, whose `children` are specs rather than built nodes.
 
-`fromRead` rebuilds; `clone` duplicates. Rebuilding reaches only what flcm can author, so an INSTANCE, a stacked paint, a grid container or a flattened `IMAGE-SVG` fails loud naming the field — `clone` is the answer for those.
+`fromRead` rebuilds; `clone` duplicates. Rebuilding reaches only what flcm can author, so a stacked paint, a grid container or a flattened `IMAGE-SVG` fails loud naming the field — `clone` is the answer for those. An INSTANCE rebuilds through `flcm.instance`: a fresh stamp of the same component, with the read's property values and overrides re-applied.
+
+## Components — instantiating
+
+`flcm.instance(component, props?)` is a constructor like `flcm.frame`: it builds an inert INSTANCE spec you `render` on its own, nest in a frame's children, or place with `append`/`insertBefore`. The component is a target — a read's `componentId`, an flcm/key, `flcm.id(id)`, or a handle from `find` — naming a COMPONENT, or a COMPONENT_SET (then the variant `componentProperties` pick, the set's default otherwise). Library components already used in the file resolve by the same id `get` reports.
+
+**Read words are write words.** What `flcm.get` reports on an instance is what `flcm.instance` takes, so a read spec authors as-is: `flcm.instance({ ...spec, name: "Copy" })` (the props form — `componentId` is read straight off the spec). Three groups of words:
+
+- **A frame's props** — `fill`, `width`, `layout`, `opacity`, `name`… Each one you name becomes a **root-level override**; each one you omit keeps tracking the component. There are no creation defaults here: a plain `flcm.instance(comp)` is byte-for-byte the component, where a plain `flcm.frame()` gets a transparent fill and hug sizing.
+- **`componentProperties`** — values by property name, as `get` reports them: a variant axis (`Size: "Large"`), a boolean, a text, or a component target for an instance-swap property. Bare names resolve to Figma's suffixed ones when unambiguous. A variant selection is checked as a whole combination against the variants the set actually has.
+- **`overrides`** — how sublayers differ from the component, keyed by component-relative path exactly as `get` keys them, each value a delta in the edit vocabulary for that sublayer's type (`{ "11:9": { text: "Save" }, "11:12": { fill: "#F00", visible: false } }`). A read's `null` (the instance lacks a field) is accepted where flcm has a removal word (`fill`/`stroke`/`effects` → "none", `opacity` → 1, `borderRadius` → 0) and refused otherwise.
+
+After render, a sublayer's live id is `I<instanceId>;<path>`, and `flcm.edit` on it is the same override — `find({ within: handle })` locates them.
+
+### flcm.instance props
+
+| Prop | Type | Notes |
+| --- | --- | --- |
+| `componentProperties` | { [name]: string \| boolean \| component target } | Component property values by name, as `get` reports them: a variant axis ("Size": "Large"), a boolean, a text, or — for an instance-swap property — a component target (its node id or a handle). Names are the bare names without the `#id` suffix. An unknown name, a value of the wrong type, a variant option the set lacks, or a combination no variant has each fails loud naming the component's own. A slot property is not set here (its content is authored — see `overrides`). |
+| `overrides` | { [path]: delta } | How this instance differs from its component's children, keyed by COMPONENT-RELATIVE sublayer path exactly as `get` keys them (`"11:9"`, `"11:9;11:14"` for a sublayer inside a nested instance). Each value is a delta in the edit vocabulary for that sublayer's type — `{ text: "Vue.js" }`, `{ fill: "#F00" }`, `{ visible: false }`. A read's `null` (the instance lacks a field the component has) is accepted where flcm has a removal word (`fill`/`stroke`/`effects` → "none", `opacity` → 1, `borderRadius` → 0) and fails loud otherwise. A path the resolved variant doesn't have fails loud. |
+
+### Rules
+
+- **Everything resolves against the live component before the first write.** An unknown property name, a wrong value type, a variant combination the set lacks, or an override path the component doesn't have each fails loud naming the component's own — its real property names, its real variants — with nothing created.
+- **A property is a property, an override is an override.** `componentProperties` drive what the component bound to them (a label's text, a layer's visibility, a nested swap); `overrides` reach any sublayer field the edit vocabulary has. Setting a bound text through `overrides` works but leaves the property unset — prefer the property when one exists.
+- **A slot property has no value** — its content is authored, not set; a slot in `componentProperties` is refused.
+- **Paths are per variant.** Each variant has its own sublayer ids; an override keyed from a read of one variant does not apply to another, and says so.
+- **An instance's child list stays closed** (see Tree shape): its content is the component's. Edit sublayers by id, or the main component.
 
 ## Seeing what you built (get_screenshot)
 
@@ -646,7 +684,7 @@ Accepting CSS is a fidelity promise, so the boundaries are strict. Each of these
 | `textStyle.lineClamp` on a width-hugging text | Truncation needs a width to wrap against. Set `width` to a number, `"fill"`, or `"N%"`. |
 | A layout word the node can't realize — a fixed/`"hug"`/percent `height` on TEXT, `"hug"` with nothing to measure, or container words without `layout.mode` | The same rules govern create and edit alike, so a word that wouldn't land names the fix instead. |
 
-Components, variables, and prototype interactions are deliberately **out of v1** — read concepts with no create path. They're rejected loudly so you never half-write something unrealizable.
+Variables and prototype interactions are deliberately **out of v1** — read concepts with no create path. They're rejected loudly so you never half-write something unrealizable. (Components have one: `flcm.instance` — see the components section.)
 
 ### The one silent exception: unrenderable glyphs
 
@@ -845,8 +883,42 @@ const { node } = await flcm.get("card");
 const wider = flcm.fromRead({ ...node, width: 480, name: "Card (wide)" });
 const placed = await flcm.append("sidebar", wider);
 
-// fromRead REBUILDS, so it reaches only what flcm can author: an INSTANCE, a stacked paint, or a grid
-// container fails loud naming the field. flcm.clone(target, parent) duplicates the live node whole —
-// faithful, but not editable as a spec first.
+// fromRead REBUILDS, so it reaches only what flcm can author: a stacked paint or a grid container
+// fails loud naming the field (an INSTANCE rebuilds as a fresh stamp of its component).
+// flcm.clone(target, parent) duplicates the live node whole — faithful, but not editable as a spec first.
 return placed;
+```
+
+### Instantiating a component (flcm.instance)
+
+A row of buttons stamped from a library button: the component found by name, a variant picked by its axes, a bound label set through `componentProperties`, one sublayer overridden by path, and a read instance re-authored as-is through the props form.
+
+```js
+// A toolbar of buttons from the file's Button component. Find the component set by name, then read
+// one variant to learn its property names and sublayer paths (the `components` sidecar lists them).
+const button = await flcm.findOne({ type: "COMPONENT_SET", name: "Button" });
+const { components } = await flcm.get(button);
+// components[button.id].propertyDefinitions → { Size: { type: "variant", variantOptions: [...] }, Label: { type: "text" }, ... }
+
+const toolbar = flcm.frame({ key: "toolbar", layout: { mode: "row", gap: 8, padding: 12 } }, [
+  // The set as the component: the variant is picked by its axes, as a whole combination.
+  flcm.instance(button, {
+    key: "save",
+    componentProperties: { Size: "Large", State: "Default", Label: "Save" },
+  }),
+  // The same, plus a root-level override (width) and a sublayer override by component-relative path —
+  // exactly the path `get` keys an instance's `overrides` by. Everything unnamed keeps tracking the component.
+  flcm.instance(button, {
+    key: "cancel",
+    width: 120,
+    componentProperties: { Size: "Large", Label: "Cancel" },
+    overrides: { "11:9": { fill: "#B91C1C" } },
+  }),
+]);
+const out = await flcm.render(toolbar);
+
+// A read instance authors as-is: `componentId`, `componentProperties` and `overrides` are the same words.
+const { node: save } = await flcm.get(out.keyed.save);
+await flcm.append("toolbar", flcm.instance({ ...save, name: "Save (copy)" }));
+return { toolbar: out.node.id, definitions: Object.keys(components ?? {}) };
 ```

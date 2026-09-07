@@ -4,7 +4,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
-import { frame, text, ellipse, line, rect, render, gradient, effects } from "./flcm.js";
+import { frame, text, ellipse, line, rect, gradient, effects } from "./flcm.js";
+import { render } from "./render.js";
 
 // The bridge reads figma.* only inside render(); constructors never touch it. Install the mock before any
 // render runs. (flcm.js imports are figma-free at module load, so static import above is safe.)

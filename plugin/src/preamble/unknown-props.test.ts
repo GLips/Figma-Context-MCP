@@ -10,13 +10,13 @@ import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
 import { KNOWN_KEYS, DIRECTIONAL_KEYS, CONSTRUCTOR_KEYS_BY_TYPE, frame, text, rect, line, svg, path, gradient, image, effects } from "./flcm.js";
 import { find } from "./read.js";
-import { FIELD_GROUPS, SizeSchema, FrameSchema, TextSchema, ShapeSchema, EllipseSchema, LineSchema } from "./schema.js";
+import { FIELD_GROUPS, SizeSchema, FrameSchema, TextSchema, ShapeSchema, EllipseSchema, LineSchema, InstanceSchema } from "./schema.js";
 
 // Constructors are inert POJO builders (figma untouched), but flcm.ts imports the bridge — install the mock.
 createFigmaMock();
 
 test("fromRead's constructor key sets match the complete prop schemas", () => {
-  const schemas = { FRAME: FrameSchema, TEXT: TextSchema, RECTANGLE: ShapeSchema, ELLIPSE: EllipseSchema, LINE: LineSchema };
+  const schemas = { FRAME: FrameSchema, TEXT: TextSchema, RECTANGLE: ShapeSchema, ELLIPSE: EllipseSchema, LINE: LineSchema, INSTANCE: InstanceSchema };
   assert.deepEqual(Object.keys(CONSTRUCTOR_KEYS_BY_TYPE).sort(), Object.keys(schemas).sort());
   for (const type of Object.keys(schemas) as (keyof typeof schemas)[]) {
     assert.deepEqual([...CONSTRUCTOR_KEYS_BY_TYPE[type]].sort(), Object.keys(schemas[type].shape).sort(), type);

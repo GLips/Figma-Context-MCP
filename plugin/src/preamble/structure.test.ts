@@ -6,7 +6,8 @@
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
-import { frame, rect, text, render, id } from "./flcm.js";
+import { frame, rect, text, id } from "./flcm.js";
+import { render } from "./render.js";
 import { append, prepend, insertBefore, insertAfter, move, remove, clone } from "./structure.js";
 import { get } from "./read.js";
 import { readKey } from "./identity.js";

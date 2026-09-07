@@ -71,8 +71,11 @@ function buildSimplifiedFrameValues(n: NodeSnapshot): SimplifiedLayout {
     return frameValues;
   }
 
-  // Shared across grid and flex containers
-  frameValues.alignSelf = convertSelfAlign(n.layoutAlign);
+  // Shared across grid and flex containers. Every optional word is set only when it has a value:
+  // the plugin hands this object to the sandbox AS-IS (no JSON round trip to drop an undefined
+  // key), and a read spec spreads into the constructors, whose closed-set gate judges every
+  // present key — so a present-but-undefined `alignSelf` would read as an unknown prop.
+  setIfDefined(frameValues, "alignSelf", convertSelfAlign(n.layoutAlign));
   if (n.paddingTop || n.paddingBottom || n.paddingLeft || n.paddingRight) {
     frameValues.padding = generateCSSShorthand({
       top: n.paddingTop ?? 0,
@@ -89,21 +92,33 @@ function buildSimplifiedFrameValues(n: NodeSnapshot): SimplifiedLayout {
     const rows = n.gridRowsSizing?.trim();
     if (rows) frameValues.gridTemplateRows = rows;
 
-    frameValues.gap = gapShorthand(n.gridRowGap, n.gridColumnGap);
+    setIfDefined(frameValues, "gap", gapShorthand(n.gridRowGap, n.gridColumnGap));
     return frameValues;
   }
 
   // Flex-specific — mode is narrowed to "row" | "column" after grid early-return
-  frameValues.justifyContent = convertJustifyContent(n.primaryAxisAlignItems ?? "MIN");
-  frameValues.alignItems = convertAlignItems(
-    n.counterAxisAlignItems ?? "MIN",
-    n.children ?? [],
-    mode,
+  setIfDefined(
+    frameValues,
+    "justifyContent",
+    convertJustifyContent(n.primaryAxisAlignItems ?? "MIN"),
   );
-  frameValues.wrap = n.layoutWrap === "WRAP" ? true : undefined;
-  frameValues.gap = buildFlexGap(n, mode);
+  setIfDefined(
+    frameValues,
+    "alignItems",
+    convertAlignItems(n.counterAxisAlignItems ?? "MIN", n.children ?? [], mode),
+  );
+  if (n.layoutWrap === "WRAP") frameValues.wrap = true;
+  setIfDefined(frameValues, "gap", buildFlexGap(n, mode));
 
   return frameValues;
+}
+
+function setIfDefined<K extends keyof SimplifiedLayout>(
+  layout: SimplifiedLayout,
+  key: K,
+  value: SimplifiedLayout[K] | undefined,
+): void {
+  if (value !== undefined) layout[key] = value;
 }
 
 function buildNodeGeometry(

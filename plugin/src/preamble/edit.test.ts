@@ -7,7 +7,8 @@
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
-import { frame, rect, line, text, render, image, id } from "./flcm.js";
+import { frame, rect, line, text, image, id } from "./flcm.js";
+import { render } from "./render.js";
 import { edit } from "./edit.js";
 
 let figma = createFigmaMock();

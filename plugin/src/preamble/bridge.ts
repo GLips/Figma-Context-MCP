@@ -35,6 +35,25 @@ import { pixelRound, convertSizing } from "@framelink/core";
 export interface RenderResources {
   fonts: FontMap;
   images: Record<string, string>;
+  // Every INSTANCE spec in the tree, resolved against the live document in the verb's prepare
+  // (instance.ts) — the component to stamp, the property writes, the override deltas compiled
+  // per sublayer. Keyed by the sealed WriteNode itself: the walk meets the same frozen object
+  // prepare authenticated, so identity is the only key that can't be spoofed or collide.
+  instances: InstancePlans;
+}
+
+export type InstancePlans = ReadonlyMap<WriteNode, InstancePlan>;
+
+// What render needs to stamp one instance. `component` is the exact main component (a variant
+// already selected — the property values that pick it are not repeated in `properties`);
+// `properties` are ready for setProperties, in Figma's own suffixed names. `applyOverrides` is a
+// closure rather than data because an override is an edit of one sublayer, applied through
+// edit.ts's staged appliers — and edit.ts imports FROM this module, so the stages arrive here as
+// a function instead of an import.
+export interface InstancePlan {
+  component: any;
+  properties: Record<string, string | boolean>;
+  applyOverrides: (instance: any, resources: RenderResources) => void;
 }
 
 // The full walk context: resources plus render-only accumulation. `pending` collects every
@@ -76,8 +95,17 @@ const AUTO_LAYOUT_MODES = ["HORIZONTAL", "VERTICAL", "GRID"];
 // assigned its cells — when it does, this predicate is where the rule lands, not six inlined
 // comparisons. AUTO_LAYOUT_MODES above differs on purpose: for read-side geometry a GRID parent DOES
 // place its children, so left/top stay omitted.
-function isRowColumnAutoLayout(node: any): boolean {
+export function isRowColumnAutoLayout(node: any): boolean {
   return node.layoutMode === "HORIZONTAL" || node.layoutMode === "VERTICAL";
+}
+
+// The node types whose OWN size is a frame's (applyOwnSize: sizing modes + resize, never the
+// leaf path): a frame, and everything Figma builds as a frame-shaped container — a component,
+// an instance of one, a variant set, a slot. Keyed by type rather than `"layoutMode" in node`
+// because a GROUP carries layoutMode too and is not sized like a frame.
+const FRAME_LIKE_TYPES = new Set(["FRAME", "COMPONENT", "COMPONENT_SET", "INSTANCE", "SLOT"]);
+function isFrameLike(node: any): boolean {
+  return FRAME_LIKE_TYPES.has(node.type);
 }
 
 // A node's geometry in the read verbs' spelling (ir.Handle). width/height are the measured px, rounded the
@@ -612,7 +640,7 @@ export function applyLiveNodeLayout(node: any, wl: WriteLayout): void {
   if (inFlowAuto) {
     applyChildFill(parent, node, wl, false); // crossStretch is the container's own alignItems edit, never a child's
   }
-  if (isRowColumnAutoLayout(node) || node.type === "FRAME") applyOwnSize(node, wl);
+  if (isRowColumnAutoLayout(node) || isFrameLike(node)) applyOwnSize(node, wl);
   else applyLeafSize(node, wl);
   if (!inFlowAuto) coverChild(parent, node, wl);
   if (wl.pin) applyPinDelta(node, wl.pin);
@@ -941,6 +969,27 @@ function buildFrame(wn: WriteNode, ctx: RenderCtx): any {
   return f;
 }
 
+// Stamp a component. Everything the spec DOESN'T name stays the component's — no clip/fill/hug
+// defaults (buildFrame's are creation defaults for a blank frame; on an instance each would be a
+// root-level override the author never wrote, silently unlinking that field from the component).
+// Order: properties before overrides, since a property can swap a nested instance or hide a
+// sublayer and the override paths were resolved against the tree the properties produce. The
+// child-side words (position, fill, pin) are attachSpecChild's, after the caller places the node.
+function buildInstance(wn: WriteNode, ctx: RenderCtx): any {
+  const plan = ctx.instances.get(wn);
+  if (!plan) throw new Error("flcm: an instance spec reached the build walk without a resolved plan. This is an internal error; report it.");
+  const inst = plan.component.createInstance();
+  figma.currentPage.appendChild(inst); // enter the doc; reparented when appended to a parent frame
+  if (Object.keys(plan.properties).length) inst.setProperties(plan.properties);
+  applyPaint(inst, wn, ctx);
+  if (wn.layout) {
+    applyContainer(inst, wn.layout);
+    applyOwnSize(inst, wn.layout);
+  }
+  plan.applyOverrides(inst, ctx);
+  return inst;
+}
+
 // Layer each rich-text run's style/fills over its slice of the already-set characters via Figma's per-range
 // API. Offsets track the concatenation order the runs were joined in (buildText). A run only carries the
 // fields it overrides, so we touch only those ranges — the rest inherit the node's base style. A run's font
@@ -1129,6 +1178,7 @@ const BUILDERS: Record<WriteType, (wn: WriteNode, ctx: RenderCtx) => any> = {
   ELLIPSE: (wn, ctx) => buildShape(figma.createEllipse(), wn, ctx),
   LINE: (wn, ctx) => buildLine(wn, ctx),
   VECTOR: (wn, ctx) => buildVector(wn, ctx),
+  INSTANCE: (wn, ctx) => buildInstance(wn, ctx),
 };
 
 // Build one node and its subtree. Percent size/position is NOT resolved here — the node is built at a

@@ -24,7 +24,7 @@ import { z } from "zod";
 import type {
   FillInput, WriteCssEffects, PaintSpec, EffectSpec, GradientStop, WriteNode, WriteChild, Handle,
   PinX, PinY, Target, RawIdRef, SlimHandle, FindQuery, ReadPredicate, InsertResult, MoveResult, CloneResult, RemoveResult, GetResult,
-  PageInfo,
+  PageInfo, ComponentPropertyInput, OverrideDeltaInput,
 } from "./ir.js";
 // The read verbs return the canonical read shape the shared simplify core emits. Relative (not ~/) so the
 // root toolchain, which imports this module for docs generation, resolves it without the plugin's paths.
@@ -359,6 +359,23 @@ const PATH_FIELDS = {
   rotation: APPEARANCE_FIELDS.rotation,
 };
 
+// The component words an INSTANCE carries, in the read shape's own spellings — what `get` reports on an
+// instance is what `flcm.instance` takes and what an instance edit names. `componentId` is not here: it
+// is the constructor's positional argument (or the read spec's own field, folded at the entry), and
+// under edit it is the swap word (see EDIT_FIELDS).
+const INSTANCE_FIELDS = {
+  componentProperties: prop(
+    z.custom<Record<string, ComponentPropertyInput>>(),
+    'Component property values by name, as `get` reports them: a variant axis ("Size": "Large"), a boolean, a text, or — for an instance-swap property — a component target (its node id or a handle). Names are the bare names without the `#id` suffix. An unknown name, a value of the wrong type, a variant option the set lacks, or a combination no variant has each fails loud naming the component\'s own. A slot property is not set here (its content is authored — see `overrides`).',
+    "{ [name]: string | boolean | component target }",
+  ),
+  overrides: prop(
+    z.custom<Record<string, OverrideDeltaInput>>(),
+    "How this instance differs from its component's children, keyed by COMPONENT-RELATIVE sublayer path exactly as `get` keys them (`\"11:9\"`, `\"11:9;11:14\"` for a sublayer inside a nested instance). Each value is a delta in the edit vocabulary for that sublayer's type — `{ text: \"Vue.js\" }`, `{ fill: \"#F00\" }`, `{ visible: false }`. A read's `null` (the instance lacks a field the component has) is accepted where flcm has a removal word (`fill`/`stroke`/`effects` → \"none\", `opacity` → 1, `borderRadius` → 0) and fails loud otherwise. A path the resolved variant doesn't have fails loud.",
+    "{ [path]: delta }",
+  ),
+};
+
 // ---- Composed verb schemas → inferred Props. flcm.ts imports these types (import type only). The Base/
 // Size/Appearance sub-schemas exist so flcm.ts's shared compilers (base/applySizing/appearance) type
 // against the same fields the verbs are built from. ----
@@ -380,8 +397,13 @@ export const PathSchema = z.object({ ...SHARED_FIELDS, ...SIZE_FIELDS, ...PATH_F
 // svg pastes opaque markup: size/position only, no appearance (colors are baked into the markup). `markup`
 // is the positional first arg, so it isn't a prop field here.
 export const SvgSchema = z.object({ ...SHARED_FIELDS, ...SIZE_FIELDS });
+// An instance takes a FRAME's words — its root is a frame-like container, and naming one of them
+// sets a root-level override (an unnamed word keeps tracking the component) — plus the component
+// words. No `children`: an instance's content is its component's.
+export const InstanceSchema = z.object({ ...SHARED_FIELDS, ...SIZE_FIELDS, ...APPEARANCE_FIELDS, ...FRAME_FIELDS, ...INSTANCE_FIELDS });
 
 export type FrameProps = z.infer<typeof FrameSchema>;
+export type InstanceProps = z.infer<typeof InstanceSchema>;
 export type TextProps = z.infer<typeof TextSchema>;
 export type ShapeProps = z.infer<typeof ShapeSchema>;
 export type EllipseProps = z.infer<typeof EllipseSchema>;
@@ -509,6 +531,16 @@ export interface Flcm {
   // vector taking our appearance props. `d` is required on path.
   svg(markup: string, props?: SvgProps): WriteNode;
   path(props: PathProps): WriteNode;
+  // Stamp a component: `component` is a target naming it — a read's `componentId`, an flcm/key, a
+  // handle — or a COMPONENT_SET, which resolves to the variant `componentProperties` select (its default
+  // variant when none is named). Local or from a library the file already uses; a component the file
+  // has never used is not reachable this way. Props are a frame's words (each a root-level override)
+  // plus `componentProperties` and `overrides`, keyed as `get` reports them — so an instance's read
+  // spec writes back as-is.
+  instance(component: Target, props?: InstanceProps): WriteNode;
+  // The props-first form: a read spec carries `componentId`, so `flcm.instance({ ...spec, name: "Copy" })` authors as-is.
+  instance(props: InstanceProps & { componentId: string }): WriteNode;
+  instance(props: SimplifiedNode): WriteNode;
   gradient(spec: GradientSugar): PaintSpec;
   gradient(type: "linear" | "radial", stops: GradientStopInput[], angle?: number): PaintSpec;
   // A raster image fill value — like flcm.gradient, a paint you pass to any node's `fill`. The bytes are
@@ -584,7 +616,7 @@ export interface Flcm {
 // `schema` links a verb to the prop schema whose fields the reference renders under it. ----
 // `category` groups verbs for the quick-start's compact per-group rendering (the ≤2KB budget can't afford a
 // line per verb). The verb TABLE still lists each verb in full — only the quick-start groups.
-export type VerbCategory = "build" | "value" | "render" | "edit" | "structure" | "read" | "page" | "target";
+export type VerbCategory = "build" | "value" | "render" | "edit" | "structure" | "component" | "read" | "page" | "target";
 
 export interface VerbDoc {
   signature: string;
@@ -608,6 +640,7 @@ export const VERBS: VerbDoc[] = [
   { category: "build", signature: "flcm.line(props?)", builds: "a LINE", args: "props object", schema: LineSchema },
   { category: "build", signature: "flcm.svg(markup, props?)", builds: "a VECTOR from SVG markup", args: "SVG markup string first, then size/position props", schema: SvgSchema },
   { category: "build", signature: "flcm.path(props)", builds: "a themeable VECTOR", args: "props object including `d` (path data)", schema: PathSchema },
+  { category: "component", signature: "flcm.instance(component, props?)", builds: "an INSTANCE of a component (a spec — render it, or place it with append/insertBefore like any node)", args: "the component first — a read's `componentId`, an flcm/key, a handle, or a COMPONENT_SET (the variant `componentProperties` select) — then a frame's props plus `componentProperties` and `overrides`, keyed exactly as `get` reports them. Or one props object carrying `componentId`, as a read spec does", schema: InstanceSchema },
   { category: "value", signature: "flcm.gradient(...)", builds: "a gradient fill value", args: "object or positional form", schema: GradientSchema },
   { category: "value", signature: "flcm.image(src, opts?)", builds: "an image fill value", args: "an https url or a local file path (under the server's asset root) first, then { scaleMode?, placeholder? }", schema: ImageSchema },
   { category: "value", signature: "flcm.effects({...})", builds: "an effects value", args: "an { shadow, blur, backgroundBlur } bag", schema: EffectsSchema },
@@ -653,6 +686,7 @@ export const FIELD_GROUPS = {
   line: LINE_FIELDS,
   path: PATH_FIELDS,
   edit: EDIT_FIELDS,
+  instance: INSTANCE_FIELDS,
   image: IMAGE_FIELDS,
   gradient: GradientSchema.shape,
   effects: EffectsSchema.shape,

@@ -15,9 +15,9 @@ export async function reuseExample(flcm: Flcm) {
   const wider = flcm.fromRead({ ...node, width: 480, name: "Card (wide)" });
   const placed = await flcm.append("sidebar", wider);
 
-  // fromRead REBUILDS, so it reaches only what flcm can author: an INSTANCE, a stacked paint, or a grid
-  // container fails loud naming the field. flcm.clone(target, parent) duplicates the live node whole —
-  // faithful, but not editable as a spec first.
+  // fromRead REBUILDS, so it reaches only what flcm can author: a stacked paint or a grid container
+  // fails loud naming the field (an INSTANCE rebuilds as a fresh stamp of its component).
+  // flcm.clone(target, parent) duplicates the live node whole — faithful, but not editable as a spec first.
   return placed;
   // example:end
 }

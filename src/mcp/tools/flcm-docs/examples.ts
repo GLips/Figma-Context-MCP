@@ -54,6 +54,13 @@ const EXAMPLE_META: Record<ExampleId, { title: string; intro: string }> = {
       "like any object, and `flcm.fromRead` re-authors it through the constructors so a structural verb " +
       "places a COPY. `flcm.clone` stays the faithful duplicate for subtrees a rebuild can't reproduce.",
   },
+  components: {
+    title: "Instantiating a component (flcm.instance)",
+    intro:
+      "A row of buttons stamped from a library button: the component found by name, a variant picked by " +
+      "its axes, a bound label set through `componentProperties`, one sublayer overridden by path, and a " +
+      "read instance re-authored as-is through the props form.",
+  },
 };
 
 // Rendered in the generated module's key order, which the generator emits in EXAMPLE_IDS order.

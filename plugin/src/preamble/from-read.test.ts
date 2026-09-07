@@ -8,7 +8,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
-import { frame, text, rect, ellipse, line, render, get, id, effects } from "./flcm.js";
+import { frame, text, rect, ellipse, line, get, id, effects } from "./flcm.js";
+import { render } from "./render.js";
 import { append } from "./structure.js";
 import { edit } from "./edit.js";
 import { fromRead } from "./from-read.js";
@@ -90,14 +91,7 @@ test("a spread-and-modified read spec is the paste-with-modifications path", asy
 });
 
 test("a type with no authored form fails loud by name, pointing at flcm.clone", async () => {
-  const figmaMock = createFigmaMock();
-  const comp = figmaMock.createComponent();
-  comp.name = "Chip";
-  figmaMock.currentPage.appendChild(comp);
-  const instance = comp.createInstance();
-  const { node: read } = await get(id(instance.id));
-
-  assert.throws(() => fromRead(read), /INSTANCE nodes have no authored form .* flcm\.clone\(target, parent\)/s);
+  createFigmaMock();
   // The flattened vector form has no path data to rebuild from — same disposition, its own reason.
   assert.throws(() => fromRead(spec({ type: "IMAGE-SVG" })), /IMAGE-SVG .* no path data or markup/s);
   assert.throws(() => fromRead(spec({ type: "GROUP" })), /GROUP nodes have no authored form/);
@@ -107,7 +101,8 @@ test("real state flcm can't author fails by name; derived fields drop silently",
   createFigmaMock();
   // Refused: each carries state a rebuilt node would silently not have.
   assert.throws(() => fromRead(spec({ type: "RECTANGLE", strokeDashes: [4, 4] })), /`strokeDashes` has no authored form/);
-  assert.throws(() => fromRead(spec({ type: "FRAME", componentId: "1:2" })), /`componentId` has no authored form/);
+  // `componentId` is an INSTANCE's word: on any other type it is a plain unknown prop, in the constructor's voice.
+  assert.throws(() => fromRead(spec({ type: "FRAME", componentId: "1:2" })), /unknown prop "componentId" on flcm.frame/);
   // A compressed read is a different mistake from a malformed value, so it gets its own message.
   assert.throws(() => fromRead(spec({ type: "RECTANGLE", fill: "fill_a1b2c3d4" })), /styles-table REFERENCE .* COMPRESSED read/s);
   assert.throws(() => fromRead(spec({ type: "FRAME", template: "EL-abcd1234" })), /COMPRESSED read/);

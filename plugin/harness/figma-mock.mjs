@@ -24,7 +24,10 @@ const COPY_FIELDS = ["name", "layoutMode", "itemSpacing", "paddingTop", "padding
   // x/y ride along because a live clone() preserves position: without them the mock can't show
   // that flcm.clone with no parent lands the copy exactly ON TOP of the original in a free-form
   // parent — real behavior that would otherwise be invisible here.
-  "x", "y", "_fixedW", "_fixedH"];
+  "x", "y", "_fixedW", "_fixedH",
+  // A sublayer's binding to a component property (visible/characters/mainComponent → property
+  // name) rides into every instance's sublayers — it is what setProperties resolves through.
+  "componentPropertyReferences"];
 
 // The node types that hold children (Figma's ChildrenMixin). See the constructor: only these get
 // appendChild/insertChild, because a leaf node genuinely has neither.
@@ -396,10 +399,93 @@ class Node {
     const root = cloneInto(this, instId, true);
     root.type = "INSTANCE";
     root.mainComponent = this;
+    // The instance starts at every property's default; VARIANT axes read off the main's name.
+    root._props = {};
+    const defs = propertyOwnerOf(this)._defs || {};
+    for (const [name, def] of Object.entries(defs)) if (def.type !== "VARIANT") root._props[name] = def.defaultValue;
     figma.currentPage.appendChild(root);
     return root;
   }
   get overrides() { return this._overrides || []; }
+
+  // Property DEFINITIONS live on a standalone COMPONENT or a COMPONENT_SET. Reading them on a
+  // variant throws, as live does — the set owns them.
+  get componentPropertyDefinitions() {
+    if (this.type === "COMPONENT" && this.parent && this.parent.type === "COMPONENT_SET") {
+      throw new Error("Cannot call componentPropertyDefinitions on a variant — use the parent COMPONENT_SET");
+    }
+    if (this.type !== "COMPONENT" && this.type !== "COMPONENT_SET") return undefined;
+    return JSON.parse(JSON.stringify(this._defs || {}));
+  }
+  set componentPropertyDefinitions(v) { this._defs = v; }
+  // Returns the suffixed name, like live ("Label#<id>"); a VARIANT axis keeps its bare name.
+  addComponentProperty(name, type, defaultValue, options) {
+    if (this.type !== "COMPONENT" && this.type !== "COMPONENT_SET") throw new Error("addComponentProperty: not a component");
+    const full = type === "VARIANT" ? name : name + "#" + nextId();
+    const def = { type, defaultValue };
+    if (options && options.variantOptions) def.variantOptions = [...options.variantOptions];
+    (this._defs || (this._defs = {}))[full] = def;
+    return full;
+  }
+  // "Size=Large, State=Hover" → { Size: "Large", State: "Hover" }; null off a set, like live.
+  get variantProperties() {
+    const main = this.type === "INSTANCE" ? this.mainComponent : this;
+    if (!main || main.type !== "COMPONENT" || !main.parent || main.parent.type !== "COMPONENT_SET") return null;
+    const out = {};
+    for (const pair of main.name.split(",")) {
+      const [k, v] = pair.split("=").map((s) => s.trim());
+      if (k) out[k] = v;
+    }
+    return out;
+  }
+  get defaultVariant() { return this.type === "COMPONENT_SET" ? this.children[0] : undefined; }
+  get componentProperties() {
+    if (this.type !== "INSTANCE") return undefined;
+    const out = {};
+    const defs = propertyOwnerOf(this.mainComponent)._defs || {};
+    const variant = this.variantProperties || {};
+    for (const [name, def] of Object.entries(defs)) {
+      out[name] = { type: def.type, value: def.type === "VARIANT" ? variant[name] : this._props[name] };
+    }
+    return out;
+  }
+  // The live semantics that matter to the preamble: a name must be a definition's FULL name; a
+  // VARIANT write re-points the instance at the sibling variant (re-cloning its sublayers under
+  // the same instance id); BOOLEAN/TEXT/INSTANCE_SWAP writes land on every sublayer bound to the
+  // property through componentPropertyReferences.
+  setProperties(props) {
+    if (this.type !== "INSTANCE") throw new Error("setProperties: not an INSTANCE");
+    const owner = propertyOwnerOf(this.mainComponent);
+    const defs = owner._defs || {};
+    const variant = { ...(this.variantProperties || {}) };
+    let variantChanged = false;
+    for (const [name, value] of Object.entries(props)) {
+      const def = defs[name];
+      if (!def) throw new Error("setProperties: no component property named " + JSON.stringify(name));
+      if (def.type === "VARIANT") { variant[name] = value; variantChanged = true; continue; }
+      this._props[name] = value;
+      for (const sub of this.findAll()) {
+        const refs = sub.componentPropertyReferences || {};
+        if (def.type === "BOOLEAN" && refs.visible === name) sub.visible = value;
+        if (def.type === "TEXT" && refs.characters === name) sub.characters = value;
+        if (def.type === "INSTANCE_SWAP" && refs.mainComponent === name) sub.mainComponent = registry.get(value) || sub.mainComponent;
+      }
+    }
+    if (variantChanged) {
+      const axes = Object.keys(variant);
+      const next = owner.children.find((v) => axes.every((a) => (v.variantProperties || {})[a] === variant[a]));
+      if (!next) throw new Error("setProperties: no variant " + JSON.stringify(variant));
+      this.mainComponent = next;
+      for (const k of COPY_FIELDS) if (k !== "x" && k !== "y") this[k] = next[k];
+      this.children = [];
+      for (const c of next.children) { const cc = cloneInto(c, this.id, false); cc.parent = this; this.children.push(cc); }
+    }
+  }
+}
+
+// Who holds a component's property definitions: the set for a variant, else the component itself.
+function propertyOwnerOf(component) {
+  return component && component.parent && component.parent.type === "COMPONENT_SET" ? component.parent : component;
 }
 
 // A free-standing duplicate of a subtree (Node.clone): fresh ids, its own copies of the mutable
@@ -417,6 +503,7 @@ function cloneSubtree(src) {
   n._plugin = { ...src._plugin };
   // A copied INSTANCE keeps pointing at the same main component, as live clone() does.
   n.mainComponent = src.mainComponent;
+  if (src._props) n._props = { ...src._props };
   for (const c of src.children) { const cc = cloneSubtree(c); cc.parent = n; n.children.push(cc); }
   return n;
 }
@@ -488,7 +575,32 @@ export function createFigmaMock() {
       t.fills = [{ type: "SOLID", color: { r: 0, g: 0, b: 0 } }];
       return t;
     },
-    createComponent() { return new Node("COMPONENT"); },
+    createComponent() { const c = new Node("COMPONENT"); c._defs = {}; c.remote = false; return c; },
+    // A COMPONENT_SET over `nodes`, whose variant axes are read off each child's "Axis=Value"
+    // name: one VARIANT definition per axis, options in first-seen order, default = the first
+    // child's value. The set lands under `parent` at the first node's old position.
+    combineAsVariants(nodes, parent) {
+      const set = new Node("COMPONENT_SET");
+      set._defs = {};
+      set.remote = false;
+      const first = nodes[0];
+      const at = first.parent ? first.parent.children.indexOf(first) : -1;
+      for (const n of nodes) {
+        if (n.parent) n.parent.children = n.parent.children.filter((c) => c !== n);
+        n.parent = set;
+        set.children.push(n);
+      }
+      for (const n of nodes) {
+        for (const [axis, value] of Object.entries(n.variantProperties || {})) {
+          const def = set._defs[axis] || (set._defs[axis] = { type: "VARIANT", defaultValue: value, variantOptions: [] });
+          if (def.variantOptions.indexOf(value) === -1) def.variantOptions.push(value);
+        }
+      }
+      set.parent = parent;
+      if (at >= 0 && parent === first.parent) parent.children.splice(at, 0, set);
+      else parent.children.push(set);
+      return set;
+    },
     createSlice() { return new Node("SLICE"); },
     createRectangle() { return new Node("RECTANGLE"); },
     createEllipse() { return new Node("ELLIPSE"); },
@@ -530,7 +642,7 @@ export function createFigmaMock() {
       comp.children.forEach((c) => (c.parent = comp));
       comp.key = "k" + Math.abs(hashStr(node.id)).toString(16).padStart(40, "0").slice(0, 40);
       comp.remote = false;
-      comp.componentPropertyDefinitions = {};
+      comp._defs = {};
       const parent = node.parent;
       if (parent) {
         const i = parent.children.indexOf(node);

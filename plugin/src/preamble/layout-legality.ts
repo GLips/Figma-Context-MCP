@@ -40,7 +40,7 @@ export function assertLayoutRealizableForType(nodeType: string, wl: WriteLayout,
     throw new Error(
       subject + ': "hug" sizes to content, which only an auto-layout (row/column) container or text can measure — a ' +
         nodeType + " without auto-layout has no content size. " +
-        (nodeType === "FRAME"
+        (nodeType === "FRAME" || nodeType === "INSTANCE"
           ? 'Use pixel dimensions, or set layout: { mode: "row"|"column" } in the same call.'
           : "Use a pixel size (only a row/column frame or a text can measure content)."),
     );

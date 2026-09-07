@@ -65,6 +65,42 @@ export function rejectUnknownKeys(obj: unknown, allowed: ReadonlySet<string>, su
 //     pasted node look like the one that was read (dropping the axis would hand back a different size).
 export const READ_ONLY_WORDS: ReadonlySet<string> = new Set(["id", "type", "children", "designedWidth", "designedHeight"]);
 
+// The pure, document-blind half of a DELTA's validation (invariant 2's validate-then-mutate: this
+// runs before any target is resolved, so a misspelled word reads "unknown prop" no matter what it
+// targets). Shared by flcm.edit and by an instance's `overrides` entries, which are deltas in the
+// same vocabulary judged at construction. `key` and bare `x`/`y` get steering messages ahead of
+// the generic closed-set reject — they're the two mistakes an agent is most likely to make, and
+// "unknown prop" would misdiagnose both. `known` is the caller's edit vocabulary (flcm.ts owns it).
+export function rejectNonDeltaWords(changes: unknown, known: ReadonlySet<string>, subject: string): void {
+  if (changes == null || typeof changes !== "object") {
+    throw new Error(subject + ": changes must be an object of props to apply — got " + showValue(changes) + ".");
+  }
+  if ("key" in changes) {
+    throw new Error(
+      subject + ": `key` is not editable — keys are set at creation and are how later calls address this node; re-keying could mint a duplicate address. Set `key` in the render that creates a node.",
+    );
+  }
+  if ("x" in changes || "y" in changes) {
+    throw new Error(
+      subject + ": position is not spelled with bare x/y — use `left`/`top` (naming either also lifts the node out of an auto-layout flow; `position: \"none\"` returns it), and `pin` for how it responds to a parent resize.",
+    );
+  }
+  // The read shape's read-only words (`id`, `type`, `children`, a root's `designedWidth`) are judged
+  // later, where the live node's TYPE is known. They pass this document-blind gate unjudged;
+  // everything else is judged now, against the edit vocabulary alone.
+  const foreign: Record<string, unknown> = {};
+  for (const key of Object.keys(changes)) {
+    if (!READ_ONLY_WORDS.has(key)) foreign[key] = (changes as Record<string, unknown>)[key];
+  }
+  rejectUnknownKeys(foreign, known, subject);
+  if (Object.keys(changes).length === 0) {
+    throw new Error(
+      subject + ": the changes object is empty — nothing to apply (an empty edit would still mint an undo step). Editable words: " +
+        [...known].join(", ") + ".",
+    );
+  }
+}
+
 export interface AuthoringEntry {
   /** The node kind the bag is authored FOR: a constructor's own type, or the live target's under edit. */
   type: string;

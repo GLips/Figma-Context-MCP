@@ -34,6 +34,8 @@ import {
   EDIT_MANY,
   STRUCTURE_INTRO,
   STRUCTURE_RULES,
+  COMPONENTS_INTRO,
+  COMPONENTS_RULES,
 } from "./narrative.js";
 import { EXAMPLES } from "./examples.js";
 
@@ -161,9 +163,9 @@ const SECTIONS: Section[] = [
       "`text`, `boldWeight` and the rest are the same words on both sides. A spec's read-only words (`id`, " +
       "`type`, a root's `contextual` size beside `designedWidth`) fold away. A spec with `children` needs " +
       "`flcm.fromRead(spec)`, which rebuilds the whole subtree and refuses by name the fields flcm has no " +
-      "word for (an INSTANCE's `componentId`, `strokeDashes`, a grid).\n\n" +
+      "word for (a component property binding, `strokeDashes`, a grid).\n\n" +
       `### Shared by every node\n\n${propTable(FIELD_GROUPS.shared)}\n\n` +
-      "### Size & position (frame, text, rect, ellipse)\n\n" +
+      "### Size & position (frame, text, rect, ellipse, instance)\n\n" +
       '(A `line` sizes on a numeric `width` alone — its length; there is no `height`, `"fill"`, or `"hug"`.)\n\n' +
       `${propTable(FIELD_GROUPS.size)}\n\n` +
       `#### Percent sizing\n\n${PERCENT_SIZING}\n\n` +
@@ -179,7 +181,8 @@ const SECTIONS: Section[] = [
       `### flcm.rect — shape props\n\n${propTable(FIELD_GROUPS.appearance)}\n\n` +
       `### flcm.ellipse — shape props\n\n(An ellipse has no \`borderRadius\` — its edge is already round.)\n\n${propTable(FIELD_GROUPS.ellipse)}\n\n` +
       `### flcm.line — line props\n\n${propTable(FIELD_GROUPS.line)}\n\n` +
-      `### flcm.path — vector props\n\n(\`flcm.svg\` takes only the shared and size/position props above — colors are baked into the markup.)\n\n${propTable(FIELD_GROUPS.path)}`,
+      `### flcm.path — vector props\n\n(\`flcm.svg\` takes only the shared and size/position props above — colors are baked into the markup.)\n\n${propTable(FIELD_GROUPS.path)}\n\n` +
+      `### flcm.instance — component words\n\n(An instance also takes every \`flcm.frame\` prop above; each one named becomes a root-level override. See the components section.)\n\n${propTable(FIELD_GROUPS.instance)}`,
   },
   {
     id: "vector",
@@ -220,7 +223,7 @@ const SECTIONS: Section[] = [
       `### Words by node type\n\n${editTypeWordLines()}\n\n` +
       // Derived from the schema's shared group (minus key, which is never editable) so this sentence
       // can't drift from the runtime's non-createable gate, which composes from the same group.
-      "On a node type flcm can't create (GROUP, INSTANCE, COMPONENT, …) only the shared words apply: " +
+      "On a node type with no vocabulary of its own (GROUP, COMPONENT, …) only the shared words apply: " +
       `${Object.keys(FIELD_GROUPS.shared)
         .filter((k) => k !== "key")
         .map((k) => `\`${k}\``)
@@ -232,6 +235,13 @@ const SECTIONS: Section[] = [
     title: "Tree shape — placing, moving, removing",
     blurb: "append/prepend/insertBefore/insertAfter against live nodes",
     body: () => `${STRUCTURE_INTRO}\n\n${STRUCTURE_RULES}`,
+  },
+  {
+    id: "components",
+    title: "Components — instantiating",
+    blurb: "flcm.instance: stamp a component, set its properties, override sublayers",
+    body: () =>
+      `${COMPONENTS_INTRO}\n\n### flcm.instance props\n\n${propTable(FIELD_GROUPS.instance)}\n\n${COMPONENTS_RULES}`,
   },
   {
     id: "verify",
@@ -285,6 +295,7 @@ const CATEGORY_LABELS: Record<VerbCategory, string> = {
   read: "read  ",
   page: "page  ",
   target: "target",
+  component: "comp  ",
 };
 
 // The `flcm.` prefix is stated ONCE in the block header rather than repeated per verb: at 24 verbs

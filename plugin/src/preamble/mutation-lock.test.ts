@@ -11,7 +11,8 @@ import { test, afterEach, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
 import { enterMutatingVerb, committedVerbCount } from "./mutation-lock.js";
-import { frame, image, rect, render, text } from "./flcm.js";
+import { frame, image, rect, text } from "./flcm.js";
+import { render } from "./render.js";
 
 let figma = createFigmaMock();
 

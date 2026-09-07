@@ -6,7 +6,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
-import { frame, rect, text, render, findOne } from "./flcm.js";
+import { frame, rect, text, findOne } from "./flcm.js";
+import { render } from "./render.js";
 
 test("a handle reports the node's measured size, and its offset inside a free-form parent", async () => {
   createFigmaMock();
