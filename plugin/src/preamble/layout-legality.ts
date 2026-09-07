@@ -62,7 +62,7 @@ export function assertLayoutRealizableForType(nodeType: string, wl: WriteLayout,
       subject + ": layout gap/padding/justifyContent/alignItems need an auto-layout (row/column) container — " +
         (wl.mode === "none"
           ? 'mode "none" (which is also the default when layout.mode is omitted) leaves this frame free-form'
-          : "this frame isn't one") +
+          : "this " + (nodeType === "INSTANCE" ? "instance" : "frame") + " isn't one") +
         '. Name layout: { mode: "row" } (or "column") in the same call.',
     );
   }

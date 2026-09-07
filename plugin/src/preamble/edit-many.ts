@@ -5,7 +5,7 @@
 // EVERY failing entry, so the agent fixes the whole batch in one pass. One undo step is the
 // secondary purchase: the user steps back over the nudge they asked for, not over nine of them.
 //
-// It is orchestration over edit.ts's staged pipeline (see that module's header for the stages and
+// It is orchestration over edit-plan.ts's staged pipeline (see that module's header for the stages and
 // why their order is the contract). Nothing here compiles or applies a delta itself: a second
 // application path is exactly what invariant 1 forbids. Four things ARE this module's own, and
 // each is a consequence of the set being the unit rather than the entry:
@@ -30,7 +30,10 @@ import { rejectUnknownKeys } from "./validate.js";
 import {
   EditPlan, rejectNonDeltaWords, compileEditPlan, loadEditResources, assertEditPlanStillApplies,
   openEditPlanApply, applyEditPlanWrites, settleEditPlanSizes, settleEditPlanPositions,
-} from "./edit.js";
+} from "./edit-plan.js";
+import {
+  prepareInstanceEditPlan, assertOverridePlansStillApply, applyInstanceRetarget, applyInstanceOverrides, InstanceEditPlan,
+} from "./instance.js";
 import type { EditEntry, EditManyScope } from "./schema.js";
 
 const SUBJECT = "flcm.editMany";
@@ -175,6 +178,74 @@ function assertOneEntryPerNode(ledger: BatchLedger, nodes: readonly (SceneNode |
 }
 
 /**
+ * Every INSTANCE entry's component half, resolved. Read-only and document-local (no host round
+ * trip), so it runs concurrently and joins the COMPILE ledger group: a bad property name and a
+ * misspelled word are reported together, and neither costs the batch its font/image load.
+ *
+ * A slot stays empty for an entry whose delta names no component word — the ordinary case.
+ */
+async function resolveEntryInstancePlans(
+  ledger: BatchLedger, plans: readonly (EditPlan | undefined)[],
+): Promise<(InstanceEditPlan | undefined)[]> {
+  const instances: (InstanceEditPlan | undefined)[] = [];
+  await Promise.all(
+    plans.map(async (plan, i) => {
+      if (ledger.failed(i) || !plan || !plan.instanceWords) return;
+      try {
+        instances[i] = await prepareInstanceEditPlan(plan.node, plan.instanceWords, SUBJECT);
+      } catch (err) {
+        ledger.record(i, err);
+      }
+    }),
+  );
+  return instances;
+}
+
+/**
+ * An entry aimed INSIDE an instance another entry is re-pointing is refused, naming both.
+ *
+ * A swap or a variant change rebuilds the instance's sublayers, so the node the inner entry
+ * resolved and gated against is detached by the time the batch's write passes reach it — and Figma
+ * keeps accepting writes on a detached node (the same hazard assertEditPlanStillApplies calls out
+ * for a deleted one), so the batch would report success for a write that landed nowhere. The path
+ * that survives is the instance entry's own `overrides`, which are re-acquired after the retarget.
+ *
+ * Runs in the compile ledger group: it is document-local and costs no round trip, so it reports
+ * alongside every other prepare fault instead of after the batch has paid for its font load.
+ */
+function assertNoEntryInsideRetargetedInstance(
+  ledger: BatchLedger, plans: readonly (EditPlan | undefined)[], instances: readonly (InstanceEditPlan | undefined)[],
+): void {
+  for (let host = 0; host < plans.length; host++) {
+    const instance = instances[host];
+    const hostPlan = plans[host];
+    if (!instance || !instance.retargets || !hostPlan || ledger.failed(host)) continue;
+    for (let inner = 0; inner < plans.length; inner++) {
+      const innerPlan = plans[inner];
+      if (inner === host || !innerPlan || ledger.failed(inner)) continue;
+      if (!isInsideInstance(innerPlan.node, hostPlan.node)) continue;
+      ledger.record(
+        inner,
+        new Error(
+          "sits inside " + JSON.stringify(hostPlan.node.name) + " (id " + JSON.stringify(hostPlan.node.id) +
+            "), the instance entry [" + host + "] re-points — that swap rebuilds these sublayers, so this write would land on a node no longer in the tree. " +
+            "Move it into entry [" + host + "]'s own `overrides`, keyed by the sublayer's component-relative path.",
+        ),
+      );
+    }
+  }
+}
+
+// Is `node` inside `host`? A sublayer answers by its composite id (`I<host>;<path>`, one leading `I`
+// however deep — core's rule), anything else by the parent chain.
+function isInsideInstance(node: SceneNode, host: SceneNode): boolean {
+  const prefix = (host.id.charAt(0) === "I" ? host.id : "I" + host.id) + ";";
+  if (node.id.indexOf(prefix) === 0) return true;
+  for (let p = node.parent as BaseNode | null; p; p = p.parent) if (p === host) return true;
+  return false;
+}
+
+/**
  * Every entry's layout delta, by node id — so an entry can be judged against the ancestors the
  * batch is about to produce rather than the ones on the canvas.
  *
@@ -248,23 +319,37 @@ export function editMany(entries: EditEntry[], scope?: EditManyScope): Promise<H
       forEachLiveEntry(ledger, batch.length, (i) => {
         compiled[i] = compileEditPlan(nodes[i] as SceneNode, batch[i].changes, SUBJECT);
       });
+      const instances = await resolveEntryInstancePlans(ledger, compiled);
+      assertNoEntryInsideRetargetedInstance(ledger, compiled, instances);
       // The document-blind, resolve and compile stages all report together. The seal-time gates
       // below cannot join them: they need the resources, and a batch already known to be doomed
       // must not spend a font load and an image fetch to find its remaining faults.
       ledger.rejectIfAny();
       const plans = compiled as EditPlan[]; // dense: rejectIfAny threw unless every stage filled its slot
-      const resources = await loadEditResources(plans);
+      // The override deltas ride the SAME load — each is a text/image edit of one sublayer, and the
+      // batch owes one round trip however many of them there are.
+      const resources = await loadEditResources([
+        ...plans,
+        ...instances.flatMap((instance) => (instance ? instance.overrides.map((o) => o.plan) : [])),
+      ]);
       // AFTER the batch's last await: the live gates, plus proof that each node still exists and
       // the facts its compile read survived the loads. The batch is what makes this load-bearing —
       // entry 0's node state was read before every later entry's resolution and the whole batch's
       // font/image round trip, and the user has the document open across all of it.
       const deltas = layoutDeltasByNodeId(plans);
-      forEachLiveEntry(ledger, plans.length, (i) => assertEditPlanStillApplies(plans[i], SUBJECT, deltas));
+      forEachLiveEntry(ledger, plans.length, (i) => {
+        const instance = instances[i];
+        // The root's layout gate reads the container the entry LEAVES BEHIND (a swap re-points the
+        // instance before its own layout words land); a non-retargeting entry's override plans get
+        // the same stage-4 pass here, where a stale sublayer costs the batch zero writes.
+        assertEditPlanStillApplies(plans[i], SUBJECT, deltas, instance ? instance.becomesRowColumn : undefined);
+        if (instance) assertOverridePlansStillApply(instance, SUBJECT);
+      });
       ledger.rejectIfAny();
-      return { plans, resources };
+      return { plans, instances, resources };
     },
     // Apply — the sealed span: every entry's writes, no awaits, one undo step for the set.
-    ({ plans, resources }) => {
+    ({ plans, instances, resources }) => {
       // Every entry's failure builder BEFORE the first write of the batch: it snapshots the
       // identity the error will name, and entry 0's rename must not be what entry 0's own later
       // stage reports (see openEditPlanApply).
@@ -274,9 +359,20 @@ export function editMany(entries: EditEntry[], scope?: EditManyScope): Promise<H
       // orders producers before consumers; across entries only the batch can, and it must — an
       // entry that centers a hugging panel would otherwise read a width the entry editing that
       // panel's child is about to grow, and center it on the size it used to be.
+      // An INSTANCE entry's component words BRACKET the node-local stages (see edit.ts): the
+      // retarget first, so every later stage measures the tree this batch is producing, and the
+      // overrides last, on sublayers re-acquired after it.
+      for (const i of order) {
+        const instance = instances[i];
+        if (instance) applyInstanceRetarget(fails[i], plans[i].node, instance);
+      }
       for (const i of order) applyEditPlanWrites(fails[i], plans[i], resources);
       for (const i of order) settleEditPlanSizes(fails[i], plans[i]);
       for (const i of order) settleEditPlanPositions(fails[i], plans[i]);
+      for (const i of order) {
+        const instance = instances[i];
+        if (instance) applyInstanceOverrides(plans[i].node, instance, resources, "editMany (entry " + i + ")");
+      }
       // Handles are minted only once every write has landed: a hug parent reflows when a child in
       // the same batch changes, so geometry read mid-batch would be a number about to move.
       return plans.map((plan) => mintHandle(plan.node));

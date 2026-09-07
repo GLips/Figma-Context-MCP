@@ -1,8 +1,8 @@
 // flcm — the constructors. This is most of what the agent touches: a namespace of inert constructors
 // that build POJO WriteNodes (the typed IR currency) and mutate nothing. render() — the one async call
 // that walks a tree and creates live nodes — lives in render.ts, which imports FROM here: an instance
-// spec resolves its component in render's prepare through the edit compile (instance.ts → edit.ts →
-// this module), and a constructor module that imported that chain would close a cycle.
+// spec resolves its component in render's prepare through the edit compile (instance.ts → edit-plan.ts
+// → this module), and a constructor module that imported that chain would close a cycle.
 //
 // The constructors take the read shape's own props (width/height/left/top/layout/fill/...) and compile
 // them into the typed WriteNode currency here. Author CSS-shaped leaves (a #hex color, a gradient string,
@@ -60,7 +60,7 @@ import type {
 // validate.ts, the same one read.ts's locate query fails loud with.
 export const KNOWN_KEYS = {
   shared: ["name", "key", "opacity", "mixBlendMode", "visible", "locked"],
-  edit: ["name", "opacity", "mixBlendMode", "visible", "locked", "fill", "stroke", "strokeWidth", "strokeAlign", "borderRadius", "effects", "rotation", "clip", "width", "height", "left", "top", "position", "anchor", "pin", "layout", "text", "textStyle", "boldWeight"],
+  edit: ["name", "opacity", "mixBlendMode", "visible", "locked", "fill", "stroke", "strokeWidth", "strokeAlign", "borderRadius", "effects", "rotation", "clip", "width", "height", "left", "top", "position", "anchor", "pin", "layout", "text", "textStyle", "boldWeight", "componentProperties", "overrides", "componentId"],
   size: ["width", "height", "left", "top", "position", "anchor", "pin"],
   placement: ["left", "top", "position", "anchor", "pin"],
   appearance: ["fill", "stroke", "strokeWidth", "strokeAlign", "borderRadius", "effects", "rotation"],
@@ -73,6 +73,7 @@ export const KNOWN_KEYS = {
   line: ["stroke", "strokeWidth", "width", "rotation", "left", "top", "position", "anchor", "pin"],
   path: ["d", "fill", "stroke", "strokeWidth", "strokeAlign", "effects", "rotation"],
   instance: ["componentProperties", "overrides"],
+  swap: ["componentId"],
   image: ["scaleMode", "placeholder"],
   gradient: ["type", "stops", "angle", "at"],
   effects: ["shadow", "blur", "backgroundBlur", "glass", "noise", "texture", "progressiveBlur"],
@@ -91,8 +92,15 @@ const ELLIPSE_KEYS = keySet(KNOWN_KEYS.shared, KNOWN_KEYS.size, KNOWN_KEYS.ellip
 const LINE_KEYS = keySet(KNOWN_KEYS.shared, KNOWN_KEYS.line);
 const INSTANCE_KEYS = keySet(KNOWN_KEYS.shared, KNOWN_KEYS.size, KNOWN_KEYS.appearance, KNOWN_KEYS.frame, KNOWN_KEYS.instance);
 // The words an override delta may name — the edit vocabulary, since an override IS an edit of one
-// sublayer, judged at construction the way edit's stage 1 judges a delta.
-const OVERRIDE_DELTA_KEYS = keySet(KNOWN_KEYS.edit);
+// sublayer, judged at construction the way edit's stage 1 judges a delta. MINUS the three component
+// words: a path names a sublayer, and re-pointing a NESTED instance from here would need a second
+// round of path resolution against a tree this call is still deciding. Refused by name below, with
+// the reachable spelling (edit the nested instance by its live id).
+//
+// INSTANCE_COMPONENT_WORDS is also what edit's stage 2 splits off a delta as the instance half
+// (edit-plan.ts) — one set, so a word added to either group can't be split by one and refused by the other.
+export const INSTANCE_COMPONENT_WORDS: ReadonlySet<string> = keySet(KNOWN_KEYS.instance, KNOWN_KEYS.swap);
+const OVERRIDE_DELTA_KEYS = keySet(KNOWN_KEYS.edit.filter((k) => !INSTANCE_COMPONENT_WORDS.has(k)));
 // Each constructor's closed vocabulary, by the read type it builds — what fromRead judges a spec's
 // read words against before the call, so a word the type lacks is named as real state, not a typo.
 export const CONSTRUCTOR_KEYS_BY_TYPE: Record<"FRAME" | "TEXT" | "RECTANGLE" | "ELLIPSE" | "LINE" | "INSTANCE", ReadonlySet<string>> = {
@@ -320,7 +328,7 @@ function applyPin(layout: WriteLayout, props: SizeProps): void {
 // WriteLayout — presence-preserving: a word the author didn't write compiles to nothing. The
 // creation default (an omitted mode means free-form) is buildLayout's to inject, NOT this
 // function's: edit compiles through here directly, and a defaulted mode would turn a gap nudge
-// into an auto-layout kill. Exported for edit.ts.
+// into an auto-layout kill. Exported for edit-plan.ts.
 export function compileContainerWords(cfg: NonNullable<FrameProps["layout"]>, subject: string): WriteLayout {
   // QuickJS boundary: a present-but-malformed value (false, a number, an array) must reject the
   // whole call — Object.keys on it would read as "no words named" and the rest would partially apply.
@@ -341,7 +349,7 @@ export function compileContainerWords(cfg: NonNullable<FrameProps["layout"]>, su
 // Compile the child-side size/placement words (width/height, left/top/position/anchor, pin) into a
 // WriteLayout — the same set every constructor rides. Presence-preserving like the container compile;
 // the return is undefined when no word was written, so callers can gate on "was any layout named".
-// Exported for edit.ts.
+// Exported for edit-plan.ts.
 export function compileSizeWords(props: SizeProps): WriteLayout | undefined {
   const layout: WriteLayout = {};
   applySizing(props, layout);
@@ -351,7 +359,7 @@ export function compileSizeWords(props: SizeProps): WriteLayout | undefined {
 }
 
 // The placement words alone — what a LINE takes beside its width (a line has no sizing intent to
-// compile). Exported for edit.ts.
+// compile). Exported for edit-plan.ts.
 export function compilePlacementWords(props: SizeProps): WriteLayout | undefined {
   const layout: WriteLayout = {};
   applyPlacement(layout, props);
@@ -419,7 +427,7 @@ function base(wn: WriteProps, props: BaseProps): void {
 // Appearance props shared by frame/rect/ellipse (and edit's delta compile), on top of base(). Every
 // CSS-shaped leaf is normalized to the typed currency through css.ts here — presence-preserving by
 // construction, so it doubles as the edit patch compiler's core: only present keys produce writes.
-// Exported for edit.ts (which imports FROM here; flcm.ts never imports edit.ts — no cycle).
+// Exported for edit-plan.ts (which imports FROM here; flcm.ts never imports it — no cycle).
 export function compileNodeLocalProps(wn: WriteProps, props: AppearanceProps, opts: { radius?: boolean; clip?: boolean }): void {
   base(wn, props);
   if (props.fill != null) wn.fills = compilePaintWord(props.fill, "fill");
@@ -595,8 +603,8 @@ function instance(componentOrProps: Target | InstanceProps | SimplifiedNode, pro
   // The type rule (hug needs auto-layout, gap needs a container) is NOT run here: whether this root is
   // a row/column is the COMPONENT's fact, read in render's prepare — the same live-mode call edit makes.
   if (Object.keys(layout).length) wn.layout = layout;
-  if (accepted.componentProperties != null) wn.componentProperties = compileComponentPropertyBag(accepted.componentProperties);
-  if (accepted.overrides != null) wn.overrides = compileOverrideBag(accepted.overrides);
+  if (accepted.componentProperties != null) wn.componentProperties = compileComponentPropertyBag(accepted.componentProperties, "flcm.instance");
+  if (accepted.overrides != null) wn.overrides = compileOverrideBag(accepted.overrides, "flcm.instance");
   return sealWriteNode(wn);
 }
 
@@ -605,20 +613,25 @@ function instance(componentOrProps: Target | InstanceProps | SimplifiedNode, pro
 // prepare. A null value is refused here rather than treated as absence: unlike a constructor word,
 // a property has no "unset" — the read never reports one as null, and a null would either
 // silently keep the default or throw inside Figma's setter.
-function compileComponentPropertyBag(raw: unknown): Record<string, ComponentPropertyInput> {
+//
+// `subject` is the verb that met the bag — flcm.instance at construction, flcm.edit/editMany when a
+// delta carries the same word. ONE shape gate for both, so what an instance is created with and what
+// an instance edit sets can't diverge on what a property value even is.
+export function compileComponentPropertyBag(raw: unknown, subject: string): Record<string, ComponentPropertyInput> {
+  const where = subject + ".componentProperties";
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-    throw new Error('flcm.instance.componentProperties must be an object of property values by name, e.g. { Size: "Large", Label: "Save" } — got ' + JSON.stringify(raw) + ".");
+    throw new Error(where + ' must be an object of property values by name, e.g. { Size: "Large", Label: "Save" } — got ' + JSON.stringify(raw) + ".");
   }
   const out: Record<string, ComponentPropertyInput> = {};
   for (const name of Object.keys(raw)) {
     const value = (raw as Record<string, unknown>)[name];
-    if (!name.trim()) throw new Error("flcm.instance.componentProperties: a property name is empty.");
+    if (!name.trim()) throw new Error(where + ": a property name is empty.");
     if (typeof value === "string" || typeof value === "boolean" || isTargetShaped(value)) {
       out[name] = value as ComponentPropertyInput;
       continue;
     }
     throw new Error(
-      "flcm.instance.componentProperties[" + JSON.stringify(name) + "]: a property value is a string (a variant option or a text), a boolean, or — for an instance-swap property — " +
+      where + "[" + JSON.stringify(name) + "]: a property value is a string (a variant option or a text), a boolean, or — for an instance-swap property — " +
         COMPONENT_TARGET_HINT + ". Got " + JSON.stringify(value) + ".",
     );
   }
@@ -629,18 +642,39 @@ function compileComponentPropertyBag(raw: unknown): Record<string, ComponentProp
 // The document-blind half of edit's validation runs on every entry now (a misspelled word rejects
 // before any component is looked up); the per-type half — which words THIS sublayer takes, what a
 // `null` means for it — runs at prepare against the resolved definition (instance.ts).
-function compileOverrideBag(raw: unknown): Record<string, OverrideDeltaInput> {
+export function compileOverrideBag(raw: unknown, subject: string): Record<string, OverrideDeltaInput> {
+  const where = subject + ".overrides";
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-    throw new Error('flcm.instance.overrides must be an object of deltas by sublayer path, e.g. { "11:9": { text: "Save" } } — got ' + JSON.stringify(raw) + ".");
+    throw new Error(where + ' must be an object of deltas by sublayer path, e.g. { "11:9": { text: "Save" } } — got ' + JSON.stringify(raw) + ".");
   }
   const out: Record<string, OverrideDeltaInput> = {};
   for (const path of Object.keys(raw)) {
-    if (!path.trim()) throw new Error("flcm.instance.overrides: a sublayer path is empty.");
+    if (!path.trim()) throw new Error(where + ": a sublayer path is empty.");
     const delta = (raw as Record<string, unknown>)[path];
-    rejectNonDeltaWords(delta, OVERRIDE_DELTA_KEYS, "flcm.instance.overrides[" + JSON.stringify(path) + "]");
+    const at = where + "[" + JSON.stringify(path) + "]";
+    if (delta && typeof delta === "object") {
+      for (const word of Object.keys(delta)) {
+        if (!INSTANCE_COMPONENT_WORDS.has(word)) continue;
+        throw new Error(
+          at + ": `" + word + "` reaches a NESTED instance's own component, which an override path can't address — the path names a sublayer, and the tree behind it is what this call is still deciding. " +
+            'Edit that instance directly once this call lands: flcm.edit("I<instanceId>;' + path + '", { ' + word + ": … }).",
+        );
+      }
+    }
+    rejectNonDeltaWords(delta, OVERRIDE_DELTA_KEYS, at);
     out[path] = delta as OverrideDeltaInput;
   }
   return out;
+}
+
+// The swap word's SHAPE — the same target grammar the constructor's positional component takes, so
+// `flcm.edit(inst, { componentId })` and `flcm.instance(component)` refuse the same non-targets with
+// the same sentence. WHICH node it names (a COMPONENT, a set, an instance) is prepare's to say.
+export function compileSwapTarget(raw: unknown, subject: string): Target {
+  if (!isTargetShaped(raw)) {
+    throw new Error(subject + ".componentId: the component to swap to must be " + COMPONENT_TARGET_HINT + " — got " + JSON.stringify(raw) + ".");
+  }
+  return raw;
 }
 
 // CSS text-transform / font-variant-caps -> Figma's ONE textCase enum. Two author words, one slot,
@@ -735,7 +769,7 @@ function compileSharedTextWords(c: Record<string, unknown>, ts: WriteTextStyle, 
 // live wrap state), so each reads cfg.lineClamp itself. (`boldWeight` is a node-level word, not a
 // style: it is the CONTENT-compile convention for what `**` resolves to, so it rides into
 // compileTextContent and never onto the IR.)
-// Exported for edit.ts.
+// Exported for edit-plan.ts.
 export function compileTextStyleWords(cfg: unknown, subject: string): WriteTextStyle {
   // QuickJS boundary: a present-but-malformed value must reject the whole call, not read as absence.
   if (typeof cfg !== "object" || cfg === null || Array.isArray(cfg)) {
@@ -772,7 +806,7 @@ export function compileTextStyleWords(cfg: unknown, subject: string): WriteTextS
 // too. `base` is the style each styled run layers over (create: the authored textStyle; edit: the
 // delta's textStyle enriched with the live node's font identity, so a run that only bolds inherits
 // the family the node actually uses). A plain string that parses to a single flagless segment
-// stays plain `text`; anything richer becomes `runs`. Exported for edit.ts.
+// stays plain `text`; anything richer becomes `runs`. Exported for edit-plan.ts.
 export function compileTextContent(content: unknown, base: WriteTextStyle, boldWeight?: number | string): { text?: string; runs?: WriteTextRun[] } {
   if (boldWeight != null && typeof boldWeight !== "number" && typeof boldWeight !== "string") {
     throw new Error('flcm: boldWeight must be a number (400, 700) or a weight name ("bold", "semibold") — got ' + JSON.stringify(boldWeight) + ".");

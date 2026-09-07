@@ -1,6 +1,6 @@
 // render — the one place a spec tree becomes live nodes. Split from flcm.ts (the constructors)
 // because its PREPARE reaches the edit compile through instance.ts (an instance spec's overrides
-// are edit deltas resolved against the live component), and edit.ts imports the constructors'
+// are edit deltas resolved against the live component), and edit-plan.ts imports the constructors'
 // leaf compilers — so a render living beside the constructors would close a module cycle.
 
 import { WriteNode, Handle } from "./ir.js";

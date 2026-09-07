@@ -114,7 +114,7 @@ function textEditReflows(patch: WriteProps): boolean {
 // Plural because a BATCH is one verb: N entries share one listAvailableFontsAsync inside
 // loadFontsForTree and one Promise.all over the live fonts, instead of paying a serial round trip
 // per entry. Each of those round trips is a suspension point the user can edit the document
-// across, so collapsing them is not just speed (see edit.ts's live-facts freshness check).
+// across, so collapsing them is not just speed (see edit-plan.ts's live-facts freshness check).
 export async function loadFontsForTextEdits(edits: readonly EditFontNeed[]): Promise<FontMap> {
   const reflowing = edits.filter(({ node, patch }) => node.type === "TEXT" && textEditReflows(patch));
   if (!reflowing.length) return {};

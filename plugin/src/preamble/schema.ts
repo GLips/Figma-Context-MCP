@@ -376,6 +376,19 @@ const INSTANCE_FIELDS = {
   ),
 };
 
+// The one component word that exists ONLY under edit: `componentId` swaps the instance's component.
+// Its own group rather than a member of INSTANCE_FIELDS because the constructor takes the component
+// POSITIONALLY (a read spec's `componentId` is folded at the entry, and naming it beside the positional
+// argument fails loud) — so only INSTANCE's edit vocabulary composes this in, and every other node type
+// rejects it with the per-type message.
+const SWAP_FIELDS = {
+  componentId: prop(
+    z.custom<Target>(),
+    "INSTANCE only, under edit: swap this instance to another component — the read's own word, so a `get` spec re-pointed at a different component writes back as-is. A target naming a COMPONENT, or a COMPONENT_SET (its default variant, unless `componentProperties` in the same delta pick one). Figma carries the overrides it can match across the swap; the rest fall back to the new component's own values.",
+    "component target",
+  ),
+};
+
 // ---- Composed verb schemas → inferred Props. flcm.ts imports these types (import type only). The Base/
 // Size/Appearance sub-schemas exist so flcm.ts's shared compilers (base/applySizing/appearance) type
 // against the same fields the verbs are built from. ----
@@ -414,7 +427,7 @@ export type SvgProps = z.infer<typeof SvgSchema>;
 // The flcm.edit(target, changes) delta — the ONE authoring vocabulary (no second dialect,
 // invariant: same spellings, same parsers as create). Entries REUSE the create field objects (the
 // RUN_FIELDS pattern), so a prop can't mean something different under edit. Which words apply to
-// which node type is the runtime's per-type gate (edit.ts DELTA_KEYS_BY_TYPE, composed from the
+// which node type is the runtime's per-type gate (edit-plan.ts DELTA_KEYS_BY_TYPE, composed from the
 // same KNOWN_KEYS atoms) — this schema is the flat closed set an unknown key fails loud against.
 // One absence is the contract, not an oversight: `key` is immutable under edit (a delta naming it
 // fails loud — re-keying could mint a duplicate address).
@@ -439,6 +452,13 @@ const EDIT_FIELDS = {
   text: TEXT_FIELDS.text,
   textStyle: TEXT_FIELDS.textStyle,
   boldWeight: TEXT_FIELDS.boldWeight,
+  // The INSTANCE words. Reused from the constructor's group (not restated), because editing an
+  // instance is the same vocabulary `get` reports on it and `flcm.instance` creates it with —
+  // there is no separate "change the variant" verb. The per-type gate keeps them off every other
+  // node type.
+  componentProperties: INSTANCE_FIELDS.componentProperties,
+  overrides: INSTANCE_FIELDS.overrides,
+  ...SWAP_FIELDS,
 };
 export const EditSchema = z.object(EDIT_FIELDS);
 export type EditDelta = z.infer<typeof EditSchema>;
@@ -541,6 +561,11 @@ export interface Flcm {
   // The props-first form: a read spec carries `componentId`, so `flcm.instance({ ...spec, name: "Copy" })` authors as-is.
   instance(props: InstanceProps & { componentId: string }): WriteNode;
   instance(props: SimplifiedNode): WriteNode;
+  // Break an instance's link to its component: the subtree becomes ordinary editable layers under a
+  // FRAME with a NEW id (every sublayer id changes too), returned as that frame's handle. One-way —
+  // nothing re-attaches it. A NESTED instance fails loud naming the enclosing one: Figma's detach
+  // would take every enclosing instance with it, and flcm won't widen the mutation silently.
+  detach(target: Target): Promise<Handle>;
   gradient(spec: GradientSugar): PaintSpec;
   gradient(type: "linear" | "radial", stops: GradientStopInput[], angle?: number): PaintSpec;
   // A raster image fill value — like flcm.gradient, a paint you pass to any node's `fill`. The bytes are
@@ -641,6 +666,7 @@ export const VERBS: VerbDoc[] = [
   { category: "build", signature: "flcm.svg(markup, props?)", builds: "a VECTOR from SVG markup", args: "SVG markup string first, then size/position props", schema: SvgSchema },
   { category: "build", signature: "flcm.path(props)", builds: "a themeable VECTOR", args: "props object including `d` (path data)", schema: PathSchema },
   { category: "component", signature: "flcm.instance(component, props?)", builds: "an INSTANCE of a component (a spec — render it, or place it with append/insertBefore like any node)", args: "the component first — a read's `componentId`, an flcm/key, a handle, or a COMPONENT_SET (the variant `componentProperties` select) — then a frame's props plus `componentProperties` and `overrides`, keyed exactly as `get` reports them. Or one props object carrying `componentId`, as a read spec does", schema: InstanceSchema },
+  { category: "component", signature: "await flcm.detach(target)", builds: "the instance's subtree as ordinary layers — a FRAME with a NEW id (returns its handle)", args: "an INSTANCE target. One-way. A nested instance fails loud naming the enclosing one — Figma's detach would take every enclosing instance with it, so flcm makes you say so", quickStart: null },
   { category: "value", signature: "flcm.gradient(...)", builds: "a gradient fill value", args: "object or positional form", schema: GradientSchema },
   { category: "value", signature: "flcm.image(src, opts?)", builds: "an image fill value", args: "an https url or a local file path (under the server's asset root) first, then { scaleMode?, placeholder? }", schema: ImageSchema },
   { category: "value", signature: "flcm.effects({...})", builds: "an effects value", args: "an { shadow, blur, backgroundBlur } bag", schema: EffectsSchema },
@@ -666,7 +692,7 @@ export const VERBS: VerbDoc[] = [
 ];
 
 // Re-exported for the doc generator: which FIELD_GROUPS compose each node type's edit surface —
-// the same table edit.ts builds its runtime legality gate from, so the per-type doc lists and the
+// the same table edit-plan.ts builds its runtime legality gate from, so the per-type doc lists and the
 // gate cannot drift. (A runtime value, but from zod-free ir.ts — the purity gate is unaffected.)
 export { EDIT_TYPE_WORD_GROUPS } from "./ir.js";
 
@@ -687,6 +713,7 @@ export const FIELD_GROUPS = {
   path: PATH_FIELDS,
   edit: EDIT_FIELDS,
   instance: INSTANCE_FIELDS,
+  swap: SWAP_FIELDS,
   image: IMAGE_FIELDS,
   gradient: GradientSchema.shape,
   effects: EffectsSchema.shape,

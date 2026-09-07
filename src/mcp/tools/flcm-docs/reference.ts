@@ -35,6 +35,8 @@ import {
   STRUCTURE_INTRO,
   STRUCTURE_RULES,
   COMPONENTS_INTRO,
+  COMPONENTS_EDIT,
+  COMPONENTS_DETACH,
   COMPONENTS_RULES,
 } from "./narrative.js";
 import { EXAMPLES } from "./examples.js";
@@ -104,7 +106,7 @@ function propTable(fields: Fields): string {
 }
 
 // The per-type editable-word lists, composed from EDIT_TYPE_WORD_GROUPS — the SAME table the
-// runtime legality gate composes from (edit.ts DELTA_KEYS_BY_TYPE), intersected with the edit
+// runtime legality gate composes from (edit-plan.ts DELTA_KEYS_BY_TYPE), intersected with the edit
 // field set the same way, so the doc can't promise a word the gate rejects.
 function editTypeWordLines(): string {
   const editWords = new Set(Object.keys(FIELD_GROUPS.edit));
@@ -238,10 +240,14 @@ const SECTIONS: Section[] = [
   },
   {
     id: "components",
-    title: "Components — instantiating",
-    blurb: "flcm.instance: stamp a component, set its properties, override sublayers",
+    title: "Components — instances",
+    blurb:
+      "flcm.instance / edit / detach: stamp a component, set properties, override sublayers, swap, detach",
     body: () =>
-      `${COMPONENTS_INTRO}\n\n### flcm.instance props\n\n${propTable(FIELD_GROUPS.instance)}\n\n${COMPONENTS_RULES}`,
+      // The swap word (`componentId`) has no table here: it is edit-only, so it rides the edit
+      // section's table, and the narrative below says what it does.
+      `${COMPONENTS_INTRO}\n\n### flcm.instance props\n\n${propTable(FIELD_GROUPS.instance)}\n\n` +
+      `${COMPONENTS_EDIT}\n\n${COMPONENTS_DETACH}\n\n${COMPONENTS_RULES}`,
   },
   {
     id: "verify",

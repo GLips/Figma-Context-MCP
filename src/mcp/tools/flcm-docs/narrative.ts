@@ -311,6 +311,7 @@ export const EDIT_RULES = `### Rules
 - **Layout legality is create's rule set, applied to live facts** and rejected before any write: a percent on an in-flow child of a hugging parent, \`"fill"\`/\`"N%"\` under the page, \`"hug"\` with nothing to measure, a fixed/hug/percent \`height\` on TEXT, or container words on a frame that isn't (and after this delta still won't be) a row/column container. Percents resolve immediately against the live parent.
 - **Text words read the LIVE node.** \`text\` replaces the whole text and collapses it to its LEADING run's style — prior bold spans and per-range colors do NOT survive, so style the new text in the same edit. A \`textStyle\` naming part of the font triple keeps the live rest (\`fontWeight: "bold"\` on italic Roboto stays bold italic Roboto). A text that already MIXES fonts has no single base: a partial font change, or a styled \`text\` run without its own \`fontFamily\`, rejects loud — anchor \`textStyle.fontFamily\` in the same edit, or give every run its family. \`lineClamp\` needs a bounded width.
 - **Edits inside a component INSTANCE apply as overrides.** A property Figma forbids overriding rejects, naming the instance — edit the main component (flcm never auto-detaches).
+- **An INSTANCE target also takes its three component words** — \`componentProperties\`, \`overrides\`, and \`componentId\` (the swap). See the components section; on any other node type each fails loud as an unknown word for that type.
 - **\`key\` is immutable** — re-keying could mint a duplicate address. Set \`name\` to change the layers panel.
 - **No bare \`x\`/\`y\`** — position is \`left\`/\`top\` (naming either lifts a child out of an auto-layout flow; \`position: "absolute"\` lifts it in place, \`position: "none"\` returns it), resize behavior is \`pin\`.
 - **An empty delta is rejected**, since it would still mint an undo step.
@@ -381,10 +382,33 @@ export const COMPONENTS_INTRO = `\`flcm.instance(component, props?)\` is a const
 
 After render, a sublayer's live id is \`I<instanceId>;<path>\`, and \`flcm.edit\` on it is the same override — \`find({ within: handle })\` locates them.`;
 
+export const COMPONENTS_EDIT = `### Changing an instance
+
+There is no separate variant or swap verb: **an instance changes through \`flcm.edit\`, in the same words \`get\` reports on it.**
+
+\`\`\`js
+await flcm.edit(inst, { componentProperties: { Size: "Large", Label: "Save" } }); // variant + a text property
+await flcm.edit(inst, { overrides: { "11:9": { fill: "#F00" } }, width: 240 });   // a sublayer, and a root word
+await flcm.edit(inst, { componentId: other.id });                                 // swap the component
+\`\`\`
+
+- **A frame's words** (\`fill\`, \`width\`, \`layout\`, \`opacity\`, \`name\`…) apply to the instance's root as root-level overrides, exactly as on a frame — including the layout gates, which read the instance's live mode.
+- **\`componentProperties\`** takes the same values as at create, resolved against the component this instance is on now. A variant axis you don't name keeps its current value, so \`{ State: "Hover" }\` on a \`Size=Large\` instance selects \`Size=Large, State=Hover\` — and a combination the set lacks fails loud listing the ones it has. The instance keeps its id; its sublayer ids become the new variant's.
+- **\`overrides\`** are edits of the live sublayers \`I<instanceId>;<path>\`, so a text delta resolves against the font that sublayer really has. (\`flcm.edit("I12:3;4:5", …)\` on the sublayer directly is the same write.)
+- **\`componentId\`** swaps the component — a COMPONENT, or a COMPONENT_SET (its default variant unless \`componentProperties\` in the same delta pick one). Figma carries across the overrides it can match; the rest fall back to the new component's own values.
+
+**One delta, one order:** swap → properties → the root's own words → overrides. So a single call can swap a component, pick a variant of it, and override a sublayer of the *result* — the paths are resolved against the incoming component, and the sublayers re-acquired after the swap lands. Everything resolves before the first write; a bad path or property name leaves the instance untouched.`;
+
+export const COMPONENTS_DETACH = `### Breaking the link — \`flcm.detach\`
+
+\`await flcm.detach(target)\` turns an instance into ordinary layers: a FRAME with a **new id**, holding new-id copies of the subtree, returned as that frame's handle. It is one-way, and a **nested** instance fails loud naming the enclosing one: Figma's own detach on a nested instance also detaches *every* enclosing instance up the chain, so flcm makes you ask for that widening explicitly rather than perform it silently. Reach for it only when the design genuinely leaves the component behind; overriding is what keeps the design system's link alive.`;
+
 export const COMPONENTS_RULES = `### Rules
 
 - **Everything resolves against the live component before the first write.** An unknown property name, a wrong value type, a variant combination the set lacks, or an override path the component doesn't have each fails loud naming the component's own — its real property names, its real variants — with nothing created.
 - **A property is a property, an override is an override.** \`componentProperties\` drive what the component bound to them (a label's text, a layer's visibility, a nested swap); \`overrides\` reach any sublayer field the edit vocabulary has. Setting a bound text through \`overrides\` works but leaves the property unset — prefer the property when one exists.
 - **A slot property has no value** — its content is authored, not set; a slot in \`componentProperties\` is refused.
 - **Paths are per variant.** Each variant has its own sublayer ids; an override keyed from a read of one variant does not apply to another, and says so.
-- **An instance's child list stays closed** (see Tree shape): its content is the component's. Edit sublayers by id, or the main component.`;
+- **An instance's child list stays closed** (see Tree shape): its content is the component's. Edit sublayers by id, or the main component.
+- **An override delta reaches a sublayer's own fields, not a nested instance's component.** \`componentProperties\`/\`overrides\`/\`componentId\` inside an \`overrides\` entry are refused — edit that nested instance by its live id (\`I<instanceId>;<path>\`) once the outer call has landed.
+- **The three component words are INSTANCE-only.** On a FRAME, a TEXT, or anything else they fail loud as words that node type doesn't take.`;

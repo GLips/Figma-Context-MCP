@@ -6,7 +6,7 @@
 // reason. Deliberately NO applied/not-applied ledger: the verb rolled back, so the canvas plus
 // this message is the whole story.
 //
-// Lives in its own module because both edit.ts and structure.ts throw it and neither should
+// Lives in its own module because both edit-plan.ts and structure.ts throw it and neither should
 // import the other; the message shape is the contract, so one home is what keeps them identical.
 
 import { Identity } from "./ir.js";

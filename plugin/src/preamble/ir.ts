@@ -39,14 +39,17 @@ export type EditableType = WriteType;
 
 // Which schema word GROUPS compose each editable type's surface — the same compositions as the
 // per-verb create key sets (flcm.ts FRAME_KEYS = shared+size+appearance+frame, etc.), named once
-// so the two consumers can't drift: edit.ts builds the runtime legality gate from it (via
+// so the two consumers can't drift: edit-plan.ts builds the runtime legality gate from it (via
 // KNOWN_KEYS, intersected with the edit surface) and reference.ts renders the per-type doc lists
 // from it (via schema.ts's FIELD_GROUPS). Both index their group tables with these literals, so a
 // misspelled group name is a compile error on each side. Lives here, not in flcm.ts or schema.ts,
 // because ir.ts is the one module both sides already import type-safely with no zod and no figma.
 //
 // INSTANCE takes a FRAME's words plus the `instance` group: its root is a frame-like container whose
-// every named word becomes a root-level override, and an unnamed one keeps tracking the component.
+// every named word becomes a root-level override, and an unnamed one keeps tracking the component. It
+// alone also takes `swap` (`componentId`), the one word that exists only under edit — the constructor
+// takes the component positionally, so the group is composed here rather than into INSTANCE's create
+// vocabulary.
 export const EDIT_TYPE_WORD_GROUPS = {
   FRAME: ["shared", "size", "appearance", "frame"],
   TEXT: ["shared", "size", "text"],
@@ -54,7 +57,7 @@ export const EDIT_TYPE_WORD_GROUPS = {
   ELLIPSE: ["shared", "size", "ellipse"],
   LINE: ["shared", "line"],
   VECTOR: ["shared", "size", "path"],
-  INSTANCE: ["shared", "size", "appearance", "frame", "instance"],
+  INSTANCE: ["shared", "size", "appearance", "frame", "instance", "swap"],
 } as const satisfies Record<EditableType, readonly string[]>;
 
 export interface Rgb { r: number; g: number; b: number }
@@ -338,6 +341,17 @@ export type ComponentPropertyInput = boolean | string | RawIdRef | Handle | Slim
 // fields may be `null`) or an edit delta in the same words. Typed open here because the words a
 // sublayer takes depend on ITS type, judged when the component resolves.
 export type OverrideDeltaInput = Record<string, unknown>;
+
+// The INSTANCE words an EDIT delta may carry, kept raw for exactly the reason WriteProps keeps them
+// raw: which component a target names, which definition owns a property, and which sublayer a path
+// reaches are all live-document facts. Split out of the compiled patch by edit's stage 2 and resolved
+// by the verb's prepare (instance.prepareInstanceEditPlan). `componentId` is the swap word — read-side
+// spelling, edit-side only (a constructor takes its component positionally).
+export interface InstanceEditWords {
+  componentId?: Target;
+  componentProperties?: Record<string, ComponentPropertyInput>;
+  overrides?: Record<string, OverrideDeltaInput>;
+}
 
 export interface WriteNode extends WriteProps {
   type: WriteType;

@@ -476,12 +476,80 @@ class Node {
       const next = owner.children.find((v) => axes.every((a) => (v.variantProperties || {})[a] === variant[a]));
       if (!next) throw new Error("setProperties: no variant " + JSON.stringify(variant));
       this.mainComponent = next;
-      for (const k of COPY_FIELDS) if (k !== "x" && k !== "y") this[k] = next[k];
-      this.children = [];
-      for (const c of next.children) { const cc = cloneInto(c, this.id, false); cc.parent = this; this.children.push(cc); }
+      this._repointTo(next);
     }
   }
+
+  // Re-point this instance at `main`: the root takes the component's own visual/layout values and
+  // its sublayers are re-cloned under the SAME instance id (so every composite id becomes
+  // I<thisId>;<main's child id>). Shared by the VARIANT branch of setProperties and swapComponent —
+  // they differ only in what carries across, not in how the tree is rebuilt.
+  _repointTo(main) {
+    for (const k of COPY_FIELDS) if (k !== "x" && k !== "y") this[k] = main[k];
+    this.children = [];
+    for (const c of main.children) { const cc = cloneInto(c, this.id, false); cc.parent = this; this.children.push(cc); }
+  }
+
+  // Point this instance at a different component. Figma preserves the overrides it can MATCH across
+  // the swap — layer NAME is the documented matching axis — and drops the rest; property values
+  // reset to the new component's defaults. Modelled by diffing each sublayer against its own
+  // definition node before the swap (the composite id names it) and replaying those diffs onto the
+  // same-named sublayers after.
+  swapComponent(component) {
+    if (this.type !== "INSTANCE") throw new Error("swapComponent: not an INSTANCE");
+    if (!component || component.type !== "COMPONENT") throw new Error("swapComponent: not a COMPONENT");
+    const carried = new Map();
+    for (const sub of this.findAll()) {
+      // The composite id names the definition node, minus this instance's own segment — and one
+      // leading `I` iff what remains still crosses an instance boundary (core's definitionId rule).
+      const rest = sub.id.slice(sub.id.indexOf(";") + 1);
+      const def = registry.get(rest.indexOf(";") !== -1 ? "I" + rest : rest);
+      if (!def) continue;
+      const diff = {};
+      for (const k of OVERRIDDEN_FIELDS) {
+        if (JSON.stringify(sub[k]) !== JSON.stringify(def[k])) diff[k] = clonePaints(sub[k]);
+      }
+      if (Object.keys(diff).length) carried.set(sub.name, diff);
+    }
+    this.mainComponent = component;
+    this._repointTo(component);
+    this._props = {};
+    const defs = propertyOwnerOf(component)._defs || {};
+    for (const [name, def] of Object.entries(defs)) if (def.type !== "VARIANT") this._props[name] = def.defaultValue;
+    for (const sub of this.findAll()) {
+      const diff = carried.get(sub.name);
+      if (diff) for (const k of Object.keys(diff)) sub[k] = diff[k];
+    }
+  }
+
+  // Break the component link: a NEW FRAME node (new id) holding new-id copies of the subtree, in
+  // this instance's slot in its parent. The instance node itself is removed — every old id, the
+  // root's and every composite sublayer's, is gone.
+  detachInstance() {
+    if (this.type !== "INSTANCE") throw new Error("detachInstance: not an INSTANCE");
+    const detached = cloneSubtree(this);
+    detached.type = "FRAME";
+    detached.mainComponent = undefined;
+    delete detached._props;
+    for (const n of [detached, ...detached.findAll()]) delete n.componentPropertyReferences;
+    const parent = this.parent;
+    if (parent) {
+      const at = parent.children.indexOf(this);
+      if (at >= 0) parent.children[at] = detached;
+      else parent.children.push(detached);
+      detached.parent = parent;
+    }
+    this.parent = null;
+    this.children = [];
+    this.removed = true;
+    return detached;
+  }
 }
+
+// The sublayer fields the mock treats as OVERRIDABLE — what a swap carries across when the incoming
+// component has a same-named layer. `name` is deliberately absent: it is the matching key.
+const OVERRIDDEN_FIELDS = ["characters", "visible", "opacity", "rotation", "cornerRadius", "strokeWeight",
+  "fontSize", "fills", "strokes", "effects"];
 
 // Who holds a component's property definitions: the set for a variant, else the component itself.
 function propertyOwnerOf(component) {
@@ -514,7 +582,10 @@ function cloneSubtree(src) {
 function cloneInto(mainNode, instId, isRoot) {
   const n = new Node(mainNode.type);
   registry.delete(n.id); // re-key below
-  n.id = isRoot ? instId : "I" + instId + ";" + mainNode.id;
+  // Figma spells a sublayer with exactly ONE leading `I` however deep the nesting, so a main node
+  // that is ITSELF a sublayer of a nested instance (`I<nested>;<child>`) contributes its chain
+  // without its own `I`. The read side of the same rule is core's componentPath.
+  n.id = isRoot ? instId : "I" + instId + ";" + (mainNode.id.startsWith("I") ? mainNode.id.slice(1) : mainNode.id);
   registry.set(n.id, n);
   for (const k of COPY_FIELDS) n[k] = mainNode[k];
   n.fills = clonePaints(mainNode.fills);
@@ -522,6 +593,12 @@ function cloneInto(mainNode, instId, isRoot) {
   n.effects = clonePaints(mainNode.effects);
   n.fontName = JSON.parse(JSON.stringify(mainNode._fontName));
   n._rangeFonts = JSON.parse(JSON.stringify(mainNode._rangeFonts || []));
+  // A nested INSTANCE stays an instance inside the clone: it keeps its own main component and its
+  // own property values, which is what makes swapComponent/setProperties on it legal in Figma.
+  if (mainNode.type === "INSTANCE") {
+    n.mainComponent = mainNode.mainComponent;
+    n._props = { ...(mainNode._props || {}) };
+  }
   n.children = [];
   for (const c of mainNode.children) { const cc = cloneInto(c, instId, false); cc.parent = n; n.children.push(cc); }
   return n;

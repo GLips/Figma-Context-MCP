@@ -25,6 +25,7 @@ There is no autocomplete and no type-checking where your code runs (a QuickJS sa
 | `flcm.svg(markup, props?)` | a VECTOR from SVG markup | SVG markup string first, then size/position props |
 | `flcm.path(props)` | a themeable VECTOR | props object including `d` (path data) |
 | `flcm.instance(component, props?)` | an INSTANCE of a component (a spec — render it, or place it with append/insertBefore like any node) | the component first — a read's `componentId`, an flcm/key, a handle, or a COMPONENT_SET (the variant `componentProperties` select) — then a frame's props plus `componentProperties` and `overrides`, keyed exactly as `get` reports them. Or one props object carrying `componentId`, as a read spec does |
+| `await flcm.detach(target)` | the instance's subtree as ordinary layers — a FRAME with a NEW id (returns its handle) | an INSTANCE target. One-way. A nested instance fails loud naming the enclosing one — Figma's detach would take every enclosing instance with it, so flcm makes you say so |
 | `flcm.gradient(...)` | a gradient fill value | object or positional form |
 | `flcm.image(src, opts?)` | an image fill value | an https url or a local file path (under the server's asset root) first, then { scaleMode?, placeholder? } |
 | `flcm.effects({...})` | an effects value | an { shadow, blur, backgroundBlur } bag |
@@ -442,6 +443,9 @@ out.keyed.chip.intent;    // undefined — a plainly fixed node
 | `text` | string \| run[] | The content — a plain string (markdown: **bold**, *italic*, ~~strike~~, [text](url)) or an array of styled runs. At create it is usually the positional first argument; under edit it replaces the whole content. |
 | `textStyle` | { fontFamily?, fontWeight?, fontSize?, fontStyle?, lineHeight?, letterSpacing?, textDecoration?, textTransform?, fontVariant?, textAlign?, textAlignVertical?, paragraphSpacing?, paragraphIndent?, listSpacing?, hyperlink?, lineClamp? } | The text style base. Runs layer over it. |
 | `boldWeight` | number (100–900) \| name | What `**bold**` in `text` resolves to. Default 700 — pass back the `boldWeight` a `get` reports and the copy emphasizes like the original. Same spellings as fontWeight. Under edit it only means something beside `text`. |
+| `componentProperties` | { [name]: string \| boolean \| component target } | Component property values by name, as `get` reports them: a variant axis ("Size": "Large"), a boolean, a text, or — for an instance-swap property — a component target (its node id or a handle). Names are the bare names without the `#id` suffix. An unknown name, a value of the wrong type, a variant option the set lacks, or a combination no variant has each fails loud naming the component's own. A slot property is not set here (its content is authored — see `overrides`). |
+| `overrides` | { [path]: delta } | How this instance differs from its component's children, keyed by COMPONENT-RELATIVE sublayer path exactly as `get` keys them (`"11:9"`, `"11:9;11:14"` for a sublayer inside a nested instance). Each value is a delta in the edit vocabulary for that sublayer's type — `{ text: "Vue.js" }`, `{ fill: "#F00" }`, `{ visible: false }`. A read's `null` (the instance lacks a field the component has) is accepted where flcm has a removal word (`fill`/`stroke`/`effects` → "none", `opacity` → 1, `borderRadius` → 0) and fails loud otherwise. A path the resolved variant doesn't have fails loud. |
+| `componentId` | component target | INSTANCE only, under edit: swap this instance to another component — the read's own word, so a `get` spec re-pointed at a different component writes back as-is. A target naming a COMPONENT, or a COMPONENT_SET (its default variant, unless `componentProperties` in the same delta pick one). Figma carries the overrides it can match across the swap; the rest fall back to the new component's own values. |
 
 ### Words by node type
 
@@ -451,7 +455,7 @@ out.keyed.chip.intent;    // undefined — a plainly fixed node
 - **ELLIPSE** — `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `fill`, `stroke`, `strokeWidth`, `strokeAlign`, `effects`, `rotation`
 - **LINE** — `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `stroke`, `strokeWidth`, `width`, `rotation`, `left`, `top`, `position`, `anchor`, `pin`
 - **VECTOR (path- or svg-born)** — `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `fill`, `stroke`, `strokeWidth`, `strokeAlign`, `effects`, `rotation`
-- **INSTANCE** — `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `fill`, `stroke`, `strokeWidth`, `strokeAlign`, `borderRadius`, `effects`, `rotation`, `layout`, `clip`
+- **INSTANCE** — `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `fill`, `stroke`, `strokeWidth`, `strokeAlign`, `borderRadius`, `effects`, `rotation`, `layout`, `clip`, `componentProperties`, `overrides`, `componentId`
 
 On a node type with no vocabulary of its own (GROUP, COMPONENT, …) only the shared words apply: `name`, `opacity`, `mixBlendMode`, `visible`, `locked`.
 
@@ -468,6 +472,7 @@ On a node type with no vocabulary of its own (GROUP, COMPONENT, …) only the sh
 - **Layout legality is create's rule set, applied to live facts** and rejected before any write: a percent on an in-flow child of a hugging parent, `"fill"`/`"N%"` under the page, `"hug"` with nothing to measure, a fixed/hug/percent `height` on TEXT, or container words on a frame that isn't (and after this delta still won't be) a row/column container. Percents resolve immediately against the live parent.
 - **Text words read the LIVE node.** `text` replaces the whole text and collapses it to its LEADING run's style — prior bold spans and per-range colors do NOT survive, so style the new text in the same edit. A `textStyle` naming part of the font triple keeps the live rest (`fontWeight: "bold"` on italic Roboto stays bold italic Roboto). A text that already MIXES fonts has no single base: a partial font change, or a styled `text` run without its own `fontFamily`, rejects loud — anchor `textStyle.fontFamily` in the same edit, or give every run its family. `lineClamp` needs a bounded width.
 - **Edits inside a component INSTANCE apply as overrides.** A property Figma forbids overriding rejects, naming the instance — edit the main component (flcm never auto-detaches).
+- **An INSTANCE target also takes its three component words** — `componentProperties`, `overrides`, and `componentId` (the swap). See the components section; on any other node type each fails loud as an unknown word for that type.
 - **`key` is immutable** — re-keying could mint a duplicate address. Set `name` to change the layers panel.
 - **No bare `x`/`y`** — position is `left`/`top` (naming either lifts a child out of an auto-layout flow; `position: "absolute"` lifts it in place, `position: "none"` returns it), resize behavior is `pin`.
 - **An empty delta is rejected**, since it would still mint an undo step.
@@ -530,7 +535,7 @@ A `get` result is not authoring input on its own: a bare read spec passed to `ap
 
 `fromRead` rebuilds; `clone` duplicates. Rebuilding reaches only what flcm can author, so a stacked paint, a grid container or a flattened `IMAGE-SVG` fails loud naming the field — `clone` is the answer for those. An INSTANCE rebuilds through `flcm.instance`: a fresh stamp of the same component, with the read's property values and overrides re-applied.
 
-## Components — instantiating
+## Components — instances
 
 `flcm.instance(component, props?)` is a constructor like `flcm.frame`: it builds an inert INSTANCE spec you `render` on its own, nest in a frame's children, or place with `append`/`insertBefore`. The component is a target — a read's `componentId`, an flcm/key, `flcm.id(id)`, or a handle from `find` — naming a COMPONENT, or a COMPONENT_SET (then the variant `componentProperties` pick, the set's default otherwise). Library components already used in the file resolve by the same id `get` reports.
 
@@ -549,6 +554,27 @@ After render, a sublayer's live id is `I<instanceId>;<path>`, and `flcm.edit` on
 | `componentProperties` | { [name]: string \| boolean \| component target } | Component property values by name, as `get` reports them: a variant axis ("Size": "Large"), a boolean, a text, or — for an instance-swap property — a component target (its node id or a handle). Names are the bare names without the `#id` suffix. An unknown name, a value of the wrong type, a variant option the set lacks, or a combination no variant has each fails loud naming the component's own. A slot property is not set here (its content is authored — see `overrides`). |
 | `overrides` | { [path]: delta } | How this instance differs from its component's children, keyed by COMPONENT-RELATIVE sublayer path exactly as `get` keys them (`"11:9"`, `"11:9;11:14"` for a sublayer inside a nested instance). Each value is a delta in the edit vocabulary for that sublayer's type — `{ text: "Vue.js" }`, `{ fill: "#F00" }`, `{ visible: false }`. A read's `null` (the instance lacks a field the component has) is accepted where flcm has a removal word (`fill`/`stroke`/`effects` → "none", `opacity` → 1, `borderRadius` → 0) and fails loud otherwise. A path the resolved variant doesn't have fails loud. |
 
+### Changing an instance
+
+There is no separate variant or swap verb: **an instance changes through `flcm.edit`, in the same words `get` reports on it.**
+
+```js
+await flcm.edit(inst, { componentProperties: { Size: "Large", Label: "Save" } }); // variant + a text property
+await flcm.edit(inst, { overrides: { "11:9": { fill: "#F00" } }, width: 240 });   // a sublayer, and a root word
+await flcm.edit(inst, { componentId: other.id });                                 // swap the component
+```
+
+- **A frame's words** (`fill`, `width`, `layout`, `opacity`, `name`…) apply to the instance's root as root-level overrides, exactly as on a frame — including the layout gates, which read the instance's live mode.
+- **`componentProperties`** takes the same values as at create, resolved against the component this instance is on now. A variant axis you don't name keeps its current value, so `{ State: "Hover" }` on a `Size=Large` instance selects `Size=Large, State=Hover` — and a combination the set lacks fails loud listing the ones it has. The instance keeps its id; its sublayer ids become the new variant's.
+- **`overrides`** are edits of the live sublayers `I<instanceId>;<path>`, so a text delta resolves against the font that sublayer really has. (`flcm.edit("I12:3;4:5", …)` on the sublayer directly is the same write.)
+- **`componentId`** swaps the component — a COMPONENT, or a COMPONENT_SET (its default variant unless `componentProperties` in the same delta pick one). Figma carries across the overrides it can match; the rest fall back to the new component's own values.
+
+**One delta, one order:** swap → properties → the root's own words → overrides. So a single call can swap a component, pick a variant of it, and override a sublayer of the *result* — the paths are resolved against the incoming component, and the sublayers re-acquired after the swap lands. Everything resolves before the first write; a bad path or property name leaves the instance untouched.
+
+### Breaking the link — `flcm.detach`
+
+`await flcm.detach(target)` turns an instance into ordinary layers: a FRAME with a **new id**, holding new-id copies of the subtree, returned as that frame's handle. It is one-way, and a **nested** instance fails loud naming the enclosing one: Figma's own detach on a nested instance also detaches *every* enclosing instance up the chain, so flcm makes you ask for that widening explicitly rather than perform it silently. Reach for it only when the design genuinely leaves the component behind; overriding is what keeps the design system's link alive.
+
 ### Rules
 
 - **Everything resolves against the live component before the first write.** An unknown property name, a wrong value type, a variant combination the set lacks, or an override path the component doesn't have each fails loud naming the component's own — its real property names, its real variants — with nothing created.
@@ -556,6 +582,8 @@ After render, a sublayer's live id is `I<instanceId>;<path>`, and `flcm.edit` on
 - **A slot property has no value** — its content is authored, not set; a slot in `componentProperties` is refused.
 - **Paths are per variant.** Each variant has its own sublayer ids; an override keyed from a read of one variant does not apply to another, and says so.
 - **An instance's child list stays closed** (see Tree shape): its content is the component's. Edit sublayers by id, or the main component.
+- **An override delta reaches a sublayer's own fields, not a nested instance's component.** `componentProperties`/`overrides`/`componentId` inside an `overrides` entry are refused — edit that nested instance by its live id (`I<instanceId>;<path>`) once the outer call has landed.
+- **The three component words are INSTANCE-only.** On a FRAME, a TEXT, or anything else they fail loud as words that node type doesn't take.
 
 ## Seeing what you built (get_screenshot)
 

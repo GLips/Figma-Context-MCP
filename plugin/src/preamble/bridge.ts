@@ -48,7 +48,7 @@ export type InstancePlans = ReadonlyMap<WriteNode, InstancePlan>;
 // already selected — the property values that pick it are not repeated in `properties`);
 // `properties` are ready for setProperties, in Figma's own suffixed names. `applyOverrides` is a
 // closure rather than data because an override is an edit of one sublayer, applied through
-// edit.ts's staged appliers — and edit.ts imports FROM this module, so the stages arrive here as
+// edit-plan.ts's staged appliers — and edit-plan.ts imports FROM this module, so the stages arrive here as
 // a function instead of an import.
 export interface InstancePlan {
   component: any;
@@ -804,11 +804,18 @@ function assertLayoutLandsUnderParent(
 // entry rejected inside a batch must say which verb the agent actually called. `deltas` is every
 // layout delta THIS verb is applying, keyed by node id, so the ancestors this node is judged
 // against are the ones the call is creating (see projectedParentLayoutFacts); a lone `edit` passes
-// none and is judged against the live canvas.
-export function assertLayoutDeltaResolvable(node: any, wl: WriteLayout, subject: string, deltas?: BatchLayoutDeltas): void {
+// none and is judged against the live canvas. `becomesRowColumn` is the node's OWN container mode
+// after this same call — an INSTANCE the delta swaps or re-variants takes the incoming component's
+// auto-layout mode before its root words land, so reading the live mode would both refuse a gap the
+// swap makes legal and accept one it makes meaningless. Undefined for every other delta, which has
+// no way to change its own mode mid-call.
+export function assertLayoutDeltaResolvable(
+  node: any, wl: WriteLayout, subject: string, deltas?: BatchLayoutDeltas, becomesRowColumn?: boolean,
+): void {
   const outOfFlow = wl.position === "absolute" || (wl.position !== "none" && node.layoutPositioning === "ABSOLUTE");
   const parent = projectedParentLayoutFacts(node.parent, deltas);
-  assertLayoutLandsUnderParent(parent, node.type, wl, isRowColumnAutoLayout(node), outOfFlow, subject);
+  const isContainer = becomesRowColumn === undefined ? isRowColumnAutoLayout(node) : becomesRowColumn;
+  assertLayoutLandsUnderParent(parent, node.type, wl, isContainer, outOfFlow, subject);
 }
 
 // A structural verb placing a LIVE node: ask whether the words it already wears stay legal under
