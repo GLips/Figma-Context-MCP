@@ -37,6 +37,7 @@ const textData = extractFromDesign(nodes, contentOnly, {
 - `textExtractor` - Text content and typography styles
 - `visualsExtractor` - Visual appearance (fills, strokes, effects, opacity, borders)
 - `componentExtractor` - Component instance data
+- `annotationExtractor` - Dev Mode annotations (designer notes and pinned properties)
 
 ### Convenience Combinations
 

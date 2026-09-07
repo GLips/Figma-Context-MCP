@@ -8,6 +8,7 @@ import type {
   SimplifiedComponentSetDefinition,
   SimplifiedPropertyDefinition,
 } from "~/transformers/component.js";
+import type { SimplifiedAnnotation } from "~/transformers/annotation.js";
 
 export type StyleTypes =
   | SimplifiedTextStyle
@@ -165,6 +166,8 @@ export interface SimplifiedNode {
   componentId?: string;
   componentProperties?: Record<string, boolean | string>;
   componentPropertyReferences?: Record<string, string>;
+  // Dev Mode annotations — designer notes and pinned properties left on the node.
+  annotations?: SimplifiedAnnotation[];
   // children
   children?: SimplifiedNode[];
 }

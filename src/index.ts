@@ -17,6 +17,7 @@ export {
   textExtractor,
   visualsExtractor,
   componentExtractor,
+  annotationExtractor,
   allExtractors,
   layoutAndText,
   contentOnly,
