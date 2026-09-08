@@ -137,7 +137,11 @@ export function acceptAuthoringProps(bag: unknown, entry: AuthoringEntry): Recor
         entry.subject + ": `children` here are read specs, not built nodes. " +
           (entry.verb === "create"
             ? "flcm.fromRead(spec) rebuilds the whole subtree; or build the children with the constructors and pass them as the second argument."
-            : "A tree changes through the structure verbs (append, move, remove), not an edit."),
+            : entry.type === "SLOT"
+              // The one node whose child list IS stated whole — but from the INSTANCE, where the
+              // slot is a path, never as an edit of the SLOT node itself.
+              ? "A slot's content is stated from its instance: flcm.edit(instance, { overrides: { \"<slotPath>\": { children: [ …specs ] } } }) replaces it whole ([] empties it), and flcm.append(slot, spec) adds to it."
+              : "A tree changes through the structure verbs (append, move, remove), not an edit."),
       );
     }
     out[key] = value;

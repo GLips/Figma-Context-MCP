@@ -367,13 +367,26 @@ const PATH_FIELDS = {
 const INSTANCE_FIELDS = {
   componentProperties: prop(
     z.custom<Record<string, ComponentPropertyInput>>(),
-    'Component property values by name, as `get` reports them: a variant axis ("Size": "Large"), a boolean, a text, or — for an instance-swap property — a component target (its node id or a handle). Names are the bare names without the `#id` suffix. An unknown name, a value of the wrong type, a variant option the set lacks, or a combination no variant has each fails loud naming the component\'s own. A slot property is not set here (its content is authored — see `overrides`).',
+    'Component property values by name, as `get` reports them: a variant axis ("Size": "Large"), a boolean, a text, or — for an instance-swap property — a component target (its node id or a handle). Names are the bare names without the `#id` suffix. An unknown name, a value of the wrong type, a variant option the set lacks, or a combination no variant has each fails loud naming the component\'s own. A slot property has no value and is refused here, naming the fill word: its content is `children` under `overrides` at the slot\'s path.',
     "{ [name]: string | boolean | component target }",
   ),
   overrides: prop(
     z.custom<Record<string, OverrideDeltaInput>>(),
-    "How this instance differs from its component's children, keyed by COMPONENT-RELATIVE sublayer path exactly as `get` keys them (`\"11:9\"`, `\"11:9;11:14\"` for a sublayer inside a nested instance). Each value is a delta in the edit vocabulary for that sublayer's type — `{ text: \"Vue.js\" }`, `{ fill: \"#F00\" }`, `{ visible: false }`. A read's `null` (the instance lacks a field the component has) is accepted where flcm has a removal word (`fill`/`stroke`/`effects` → \"none\", `opacity` → 1, `borderRadius` → 0) and fails loud otherwise. A path the resolved variant doesn't have fails loud.",
+    "How this instance differs from its component's children, keyed by COMPONENT-RELATIVE sublayer path exactly as `get` keys them (`\"11:9\"`, `\"11:9;11:14\"` for a sublayer inside a nested instance). Each value is a delta in the edit vocabulary for that sublayer's type — `{ text: \"Vue.js\" }`, `{ fill: \"#F00\" }`, `{ visible: false }`. At a SLOT's path the delta also takes `children`: an array of constructor-built specs that REPLACES the slot's content (`[]` empties it), exactly the shape `get` reports a filled slot in. A read's `null` (the instance lacks a field the component has) is accepted where flcm has a removal word (`fill`/`stroke`/`effects` → \"none\", `opacity` → 1, `borderRadius` → 0) and fails loud otherwise. A path the resolved variant doesn't have fails loud; `children` at a path that is not a slot fails loud listing the slot paths the component has.",
     "{ [path]: delta }",
+  ),
+};
+
+// The fill word — the one word that exists ONLY inside an `overrides` entry, and only at a SLOT's
+// path. Read words are write words: `get` republishes a filled slot's content as `children` under
+// the slot's path, and that is exactly the spelling that fills one. Not an edit word on any node
+// type (edit-plan's per-type gate never sees it): a SLOT's content is stated whole from the
+// instance, or grown with the structural verbs, and the definition's bound frame grows with `append`.
+const SLOT_CONTENT_FIELDS = {
+  children: prop(
+    z.custom<WriteChild[]>(),
+    "Only inside `overrides`, at a SLOT's path: the slot's new content — an array of constructor-built specs (`flcm.frame`, `flcm.text`, `flcm.instance`, …) that REPLACES whatever the slot holds, in order; `[]` empties it. A nested `flcm.instance` here may fill its own slot the same way. Keys inside come back in `render`'s `keyed` and are addressable afterwards. A read spec (a `get` result's `children`) is refused — rebuild it with flcm.fromRead or the constructors. A binding inside is refused: an instance declares no property. `null` is refused (`[]` is the emptying word). Afterwards `append`/`insertBefore`/`move`/`remove` on the slot's content are ordinary.",
+    "spec[]",
   ),
 };
 
@@ -405,7 +418,7 @@ const BINDING_FIELDS = {
       componentId: z.string().optional(),
       slot: z.string().optional(),
     }),
-    'Bind this node to a component property declared in the same flcm.component call, keyed as `get` reports a binding: `visible` (a boolean property hides/shows the layer — any node), `text` (flcm.text only — the property drives its content), `componentId` (flcm.instance only — an instance-swap property), `slot` (flcm.frame only — THIS frame is the slot, and every instance shows it as a SLOT holding that frame\'s content; authoring an instance\'s slot content is not yet a word). Each value is a property name from this call\'s `propertyDefinitions`; an unknown name, or one whose type doesn\'t match the field, fails loud.',
+    'Bind this node to a component property declared in the same flcm.component call, keyed as `get` reports a binding: `visible` (a boolean property hides/shows the layer — any node), `text` (flcm.text only — the property drives its content), `componentId` (flcm.instance only — an instance-swap property), `slot` (flcm.frame only — THIS frame is the slot, and every instance shows it as a SLOT holding that frame\'s content until the instance fills it with `overrides: { \"<path>\": { children: [ … ] } }`). Each value is a property name from this call\'s `propertyDefinitions`; an unknown name, or one whose type doesn\'t match the field, fails loud.',
     "{ visible?, text?, componentId?, slot? } — property names",
   ),
 };
@@ -827,6 +840,7 @@ export const FIELD_GROUPS = {
   edit: EDIT_FIELDS,
   instance: INSTANCE_FIELDS,
   swap: SWAP_FIELDS,
+  slotContent: SLOT_CONTENT_FIELDS,
   binding: BINDING_FIELDS,
   componentOptions: COMPONENT_FIELDS,
   componentDefinition: COMPONENT_DEFINITION_FIELDS,

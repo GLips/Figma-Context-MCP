@@ -266,6 +266,7 @@ const SECTIONS: Section[] = [
       `${COMPONENTS_EDIT_BINDINGS}\n\n` +
       `### Using one — \`flcm.instance\`\n\n${COMPONENTS_INTRO}\n\n` +
       `#### flcm.instance props\n\n${propTable(FIELD_GROUPS.instance)}\n\n` +
+      `#### The fill word (inside \`overrides\`, at a SLOT's path)\n\n${propTable(FIELD_GROUPS.slotContent)}\n\n` +
       `${COMPONENTS_EDIT}\n\n${COMPONENTS_DETACH}\n\n${COMPONENTS_RULES}`,
   },
   {

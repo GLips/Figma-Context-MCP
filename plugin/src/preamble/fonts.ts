@@ -115,9 +115,12 @@ function textEditReflows(patch: WriteProps): boolean {
 // loadFontsForTree and one Promise.all over the live fonts, instead of paying a serial round trip
 // per entry. Each of those round trips is a suspension point the user can edit the document
 // across, so collapsing them is not just speed (see edit-plan.ts's live-facts freshness check).
-export async function loadFontsForTextEdits(edits: readonly EditFontNeed[]): Promise<FontMap> {
+//
+// `built` are the spec trees the same verb will BUILD (an instance delta's slot content): their
+// fonts are a tree's, and they join the authored half so the verb still pays one load.
+export async function loadFontsForTextEdits(edits: readonly EditFontNeed[], built: readonly WriteNode[] = []): Promise<FontMap> {
   const reflowing = edits.filter(({ node, patch }) => node.type === "TEXT" && textEditReflows(patch));
-  if (!reflowing.length) return {};
+  if (!reflowing.length && !built.length) return {};
   const live: FontName[] = [];
   for (const { node } of reflowing) {
     const t = node as TextNode;
@@ -128,10 +131,10 @@ export async function loadFontsForTextEdits(edits: readonly EditFontNeed[]): Pro
   const authored = reflowing.filter(
     ({ patch }) => namesFontIdentity(patch.textStyle) || (patch.runs || []).some((r) => namesFontIdentity(r.style)),
   );
-  if (!authored.length) return {};
+  if (!authored.length && !built.length) return {};
   return loadFontsForTree({
     type: "FRAME",
-    children: authored.map(({ patch }) => ({ type: "TEXT", textStyle: patch.textStyle, runs: patch.runs })),
+    children: [...authored.map(({ patch }): WriteChild => ({ type: "TEXT", textStyle: patch.textStyle, runs: patch.runs })), ...built],
   });
 }
 

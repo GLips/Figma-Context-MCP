@@ -19,21 +19,33 @@
 // an edit that leaves the instance pointing where it already points compiles against the LIVE
 // sublayer, which is the real target and carries the real font and wrap.
 //
+// A SLOT is filled from here too. Read words are write words: `get` republishes a filled slot's
+// content as `children` under the slot's path in `overrides`, and stating `children` at that path
+// — at create or under edit — is what fills one. The specs are built inside the instance's own
+// sealed span through the same attach-then-size entry every insert rides (bridge.attachSpecChild),
+// so slot content lands exactly as appended content does; afterwards the structural verbs treat
+// it as the ordinary tree it is (structure.ts's gate knows a SLOT's child list is open).
+//
 // flcm.detach lives here too: it is the one verb that ENDS an instance, and it reads the same
 // facts (the ancestor chain Figma restricts overrides by).
 
 import { WriteNode, WriteChild, ComponentPropertyInput, InstanceEditWords, OverrideDeltaInput, Target, Handle } from "./ir.js";
 import { resolveTarget } from "./read.js";
-import { isRowColumnAutoLayout, mintHandle, InstancePlan, InstancePlans, RenderResources } from "./bridge.js";
+import {
+  isRowColumnAutoLayout, mintHandle, attachSpecChild, liveParentSpecFacts, assertSpecRootLandsUnderParent,
+  InstancePlan, RenderCtx, RenderResources, BatchLayoutDeltas,
+} from "./bridge.js";
 import { assertLayoutRealizableForType } from "./layout-legality.js";
 import {
-  EditPlan, EditPlanFailure, compileEditPlan, assertEditPlanStillApplies, openEditPlanApply,
+  EditPlan, EditPlanFailure, InstanceNeeds, compileEditPlan, assertEditPlanStillApplies, openEditPlanApply,
   applyEditPlanWrites, settleEditPlanSizes, settleEditPlanPositions,
 } from "./edit-plan.js";
 import { enterMutatingVerb } from "./mutation-lock.js";
 import { beginMutatingApply } from "./verb-error.js";
-import { instanceAncestorOf, describeNodeIdentity, definitionOwnerOf, propertyDefinitionsOf } from "./identity.js";
-import { EditFontNeed } from "./fonts.js";
+import {
+  instanceAncestorOf, describeNodeIdentity, definitionOwnerOf, propertyDefinitionsOf, isSlotHole, SLOT_CONTENT_WIRE_KEY,
+} from "./identity.js";
+import { SLOT_CONTENT_WORD } from "./flcm.js";
 import { own } from "./validate.js";
 import type { EditDelta } from "./schema.js";
 
@@ -53,31 +65,67 @@ const NULL_RESTORE: Record<string, unknown> = {
   rotation: 0,
 };
 
-/** One sublayer's override: the component-relative path, and the delta compiled for it. */
-export interface OverridePlan { path: string; plan: EditPlan }
-
+/**
+ * One sublayer's override: the component-relative path, the sublayer's own words compiled for it
+ * (an empty patch when the override only fills a slot — the existence gate still runs on it), and,
+ * at a SLOT's path, the content the override states: the specs to build there, in order.
+ */
+export interface OverridePlan { path: string; plan: EditPlan; slotContent?: WriteNode[] }
 
 /**
- * Resolve every INSTANCE spec in `tree`. Returns the plans (by WriteNode identity) and the font
- * needs the override deltas add, for the caller's one font load.
+ * Resolve every INSTANCE spec in `tree` — the tree's own, and every one inside the slot content its
+ * instances fill, however deep (a nested instance inside a slot fills ITS slot through the same
+ * path). Returns the plans (by WriteNode identity), the font needs the override deltas add, and the
+ * slot content trees, for the caller's one font load and one image request.
  */
-export async function prepareInstancePlans(tree: WriteNode): Promise<{ plans: InstancePlans; fontNeeds: EditFontNeed[] }> {
-  const plans = new Map<WriteNode, InstancePlan>();
-  const fontNeeds: EditFontNeed[] = [];
+export async function prepareInstancePlans(tree: WriteNode): Promise<InstanceNeeds> {
+  const needs: InstanceNeeds = { plans: new Map(), fontNeeds: [], slotContentTrees: [] };
   const specs: WriteNode[] = [];
   collectInstanceSpecs(tree, specs);
   for (const wn of specs) {
     const { plan, overrides } = await prepareOne(wn);
-    plans.set(wn, plan);
-    for (const o of overrides) fontNeeds.push(o.plan);
+    needs.plans.set(wn, plan);
+    for (const o of overrides) {
+      needs.fontNeeds.push(o.plan);
+      if (o.slotContent) needs.slotContentTrees.push(...o.slotContent);
+    }
   }
-  return { plans, fontNeeds };
+  return needs;
 }
 
+// Descends into slot content as well as children: a `flcm.instance` inside an override's `children`
+// is an instance spec like any other, and the build walk will ask for its plan by identity.
 function collectInstanceSpecs(wn: WriteChild, out: WriteNode[]): void {
   if (!wn || typeof wn !== "object") return;
   if (wn.type === "INSTANCE") out.push(wn);
   for (const child of wn.children || []) collectInstanceSpecs(child, out);
+  for (const content of slotContentSpecsOf(wn)) for (const child of content) collectInstanceSpecs(child, out);
+}
+
+// Every `children` array an instance spec's overrides carry — the raw word, shape-checked at
+// construction (flcm.compileOverrideBag) and resolved to a slot here.
+function slotContentSpecsOf(wn: WriteNode): WriteChild[][] {
+  const out: WriteChild[][] = [];
+  for (const path of Object.keys(wn.overrides || {})) {
+    const content = own(wn.overrides![path], SLOT_CONTENT_WORD);
+    if (Array.isArray(content)) out.push(content as WriteChild[]);
+  }
+  return out;
+}
+
+/**
+ * The needs of slot content a DELTA states: each content tree's own instances (and their slot
+ * content, recursively), gathered so the verb loads them beside the delta's own resources.
+ */
+async function prepareSlotContentNeeds(content: readonly WriteNode[]): Promise<InstanceNeeds> {
+  const needs: InstanceNeeds = { plans: new Map(), fontNeeds: [], slotContentTrees: [...content] };
+  for (const tree of content) {
+    const nested = await prepareInstancePlans(tree);
+    nested.plans.forEach((plan, wn) => needs.plans.set(wn, plan));
+    needs.fontNeeds.push(...nested.fontNeeds);
+    needs.slotContentTrees.push(...nested.slotContentTrees);
+  }
+  return needs;
 }
 
 async function prepareOne(wn: WriteNode): Promise<{ plan: InstancePlan; overrides: OverridePlan[] }> {
@@ -93,7 +141,7 @@ async function prepareOne(wn: WriteNode): Promise<{ plan: InstancePlan; override
       // A create stamps the exact variant (`component` above), so the variant axes are not restated
       // as property writes — only the non-variant values are.
       properties,
-      applyOverrides: (instance, resources) => applyOverridePlans(instance, overrides, resources, "render"),
+      applyOverrides: (instance, ctx) => applyOverridePlans(instance, overrides, ctx, "render"),
     },
     overrides,
   };
@@ -188,6 +236,9 @@ async function resolveComponentProperties(
   const definitions = propertyDefinitionsOf(definitionOwnerOf(resolved.base));
   const properties: Record<string, string | boolean> = {};
   const variant: Record<string, string> = {};
+  // A slot named here is refused — but only once the variant is known, because the path the
+  // refusal hands over is per variant (each realizes the set's slot with its own frame).
+  let slotNamed: { full: string; where: string } | undefined;
   for (const name of Object.keys(authored)) {
     const full = resolvePropertyName(name, definitions, subject + ".componentProperties");
     const def = definitions[full];
@@ -220,19 +271,23 @@ async function resolveComponentProperties(
         break;
       }
       case "SLOT":
-        // Deliberately points at no route: filling an instance's slot is not authorable yet. Its
-        // content is appended INTO it, and an instance's child list is closed to plugins — and an
-        // `overrides` delta at the slot's path can only restyle the hole, never fill it. Saying so
-        // is the whole value here; naming a word that doesn't work costs the agent a round trip.
-        throw new Error(
-          where + ": " + JSON.stringify(full) + " is a slot — its content is placed INTO it, not set as a value, and flcm has no word for filling one yet (an instance's child list is closed to plugins). " +
-            "Put the content in the component's own placeholder frame, or fill this instance's slot by hand in Figma.",
-        );
+        if (!slotNamed) slotNamed = { full, where };
+        break;
       default:
         throw new Error(where + ": " + JSON.stringify(full) + " is a " + String(def.type) + " property, which flcm has no word for.");
     }
   }
   const component = Object.keys(variant).length ? selectVariant(resolved, variant, subject) : resolved.base;
+  if (slotNamed) {
+    // A slot has no value: its content is stated at the slot's PATH, and the path is the bound
+    // frame's in THIS variant — walked so the refusal hands over the exact key to write.
+    const hole = slotFrameBoundTo(component, slotNamed.full);
+    const path = hole ? JSON.stringify(componentPathOfDefinitionId(hole.id)) : '"<slotPath>"';
+    throw new Error(
+      slotNamed.where + ": " + JSON.stringify(slotNamed.full) + " is a slot, and a slot has no value — its content is stated as `children` at the slot's path: " +
+        subject + ".overrides[" + path + "] = { children: [ …specs ] } (flcm.frame/text/instance…; [] empties it).",
+    );
+  }
   return { component, properties, variant };
 }
 
@@ -269,6 +324,24 @@ function definitionIdOf(path: string): string {
   return path.indexOf(";") !== -1 ? "I" + path : path;
 }
 
+// The inverse: a definition node's own id, as the path `get` keys an instance's `overrides` by.
+function componentPathOfDefinitionId(id: string): string {
+  return id.charAt(0) === "I" && id.indexOf(";") !== -1 ? id.slice(1) : id;
+}
+
+// The frame bound to a slot property in ONE definition, or null. The variant's own subtree, not
+// the set's: each variant realizes the set's slot with its own frame.
+function slotFrameBoundTo(definition: any, full: string): any | null {
+  return definition.findOne((n: any) => own((n.componentPropertyReferences || {}) as Record<string, string>, SLOT_CONTENT_WIRE_KEY) === full);
+}
+
+// The slot paths a definition HAS — what a `children` at the wrong path is told instead.
+function slotPathsSentence(definition: any): string {
+  const paths = (definition.findAll((n: any) => isSlotHole(n)) as any[]).map((n) => JSON.stringify(componentPathOfDefinitionId(n.id)));
+  if (paths.length) return "The slot" + (paths.length > 1 ? "s" : "") + " of " + describeNodeIdentity(definition) + " " + (paths.length > 1 ? "are" : "is") + " at " + paths.join(", ") + ".";
+  return describeNodeIdentity(definition) + " has no slot — declare one on the component first (a frame bound with componentPropertyReferences: { slot }), then fill it here.";
+}
+
 // The live sublayer a path names inside one instance — the composite id Figma mints and `get`
 // documents (`I<instanceId>;<path>`). Exactly ONE leading `I` however deep: a NESTED instance's own
 // id already carries it (`I12:3;4:5`), so its sublayer is `I12:3;4:5;6:7`, not `II12:3;…`. Same rule
@@ -280,6 +353,34 @@ function liveSublayerIdOf(instanceId: string, path: string): string {
 function isInside(node: any, ancestor: any): boolean {
   for (let p = node.parent; p; p = p.parent) if (p === ancestor) return true;
   return false;
+}
+
+/**
+ * Two override paths in one delta, where one sits INSIDE a slot the other fills: refused, naming
+ * both paths, with zero writes.
+ *
+ * A fill REPLACES the slot's content — every current child is removed (replaceSlotContent) — and
+ * the sublayer the other path names is one of them. The words would land in stage 5a and the node
+ * would be deleted moments later in the same span, and Figma keeps accepting writes on a removed
+ * node, so the call would report success for a write that landed on nothing. Ordering the two
+ * differently is not an answer: the delta never says which it meant, and the layer the fill
+ * installs is a different node from the one the path names. The content spec is where those words
+ * belong. `editMany`'s cross-ENTRY version of the same contradiction lives in edit-many.ts.
+ */
+function assertNoOverridePathInsideFilledSlot(plans: readonly OverridePlan[], subject: string): void {
+  const filled = plans.filter((plan) => plan.slotContent);
+  if (!filled.length) return;
+  for (const plan of plans) {
+    for (const slot of filled) {
+      if (plan === slot || !isInside(plan.plan.node, slot.plan.node)) continue;
+      throw new Error(
+        subject + ".overrides[" + JSON.stringify(plan.path) + "]: " + describeNodeIdentity(plan.plan.node) +
+          " sits inside the slot at " + JSON.stringify(slot.path) + ", whose `" + SLOT_CONTENT_WORD +
+          "` this same call replaces — the fill removes that layer, so these words would land on a node the call deletes. " +
+          "State them on the spec you fill the slot with instead.",
+      );
+    }
+  }
 }
 
 async function resolveOverridePaths(component: any, overrides: Record<string, OverrideDeltaInput>, subject: string): Promise<OverridePlan[]> {
@@ -295,10 +396,56 @@ async function resolveOverridePaths(component: any, overrides: Record<string, Ov
     }
     // The compile runs against the DEFINITION node: a fresh instance's sublayer is a copy of it
     // (same type, same font, same wrap), and the definition exists before the instance does.
-    const plan = compileEditPlan(definition, restoreNullWords(overrides[path], where), where);
-    plans.push({ path, plan });
+    plans.push(compileOverride(definition, component, overrides[path], path, where));
   }
+  assertNoOverridePathInsideFilledSlot(plans, subject);
   return plans;
+}
+
+// One override, compiled against the sublayer the route chose (the definition node, or the live
+// one). The fill word splits off FIRST: `children` is not an edit word (the sublayer compile would
+// refuse it as a read spec), and what it carries is built, not written. The rest is the sublayer's
+// own delta and compiles as the words it is — a slot's `layout`/`fill` restyle the hole exactly
+// as before.
+function compileOverride(sublayer: any, definition: any, delta: OverrideDeltaInput, path: string, where: string): OverridePlan {
+  const { rest, slotContent } = splitSlotContent(sublayer, definition, delta, where);
+  // An override that only fills (or only restated the read's `type`) has no words to write, and
+  // an empty compile would refuse it; the empty plan still runs the existence gate at apply.
+  const plan: EditPlan = Object.keys(rest).length
+    ? compileEditPlan(sublayer, restoreNullWords(rest, where), where)
+    : { node: sublayer, patch: {}, liveTextFacts: undefined };
+  if (!slotContent) return { path, plan };
+  // The content's roots are judged against the slot as THIS override will leave it (its own
+  // layout words projected, the way a batch projects a parent's delta) — a percent under a hug
+  // slot, or a fill-height text in its flow, refuses here with zero writes, not from the span.
+  const deltas: BatchLayoutDeltas | undefined = plan.patch.layout ? { [sublayer.id]: plan.patch.layout } : undefined;
+  for (const spec of slotContent) assertSpecRootLandsUnderParent(sublayer, spec, where + "." + SLOT_CONTENT_WORD, deltas);
+  return { path, plan, slotContent };
+}
+
+// The fill word, taken off the delta and judged against the one authority on what a slot is
+// (identity.isSlotHole): legal only when the sublayer at that path IS one, refused naming the
+// path and the slots the component has otherwise. The array's shape and its specs' provenance
+// were judged at construction; the falsy entries a children list allows are dropped here.
+function splitSlotContent(sublayer: any, definition: any, delta: OverrideDeltaInput, where: string): { rest: OverrideDeltaInput; slotContent?: WriteNode[] } {
+  const raw = own(delta, SLOT_CONTENT_WORD);
+  const isSlot = isSlotHole(sublayer);
+  const rest: OverrideDeltaInput = {};
+  for (const key of Object.keys(delta)) {
+    if (key === SLOT_CONTENT_WORD) continue;
+    // A read spells a slot's `type` as SLOT — what the instance shows — where the node a create
+    // compiles against is the definition's bound FRAME. That word is identity, not a claim, so at
+    // a slot it folds here instead of tripping the compile's wrong-type check.
+    if (key === "type" && isSlot && delta[key] === "SLOT") continue;
+    rest[key] = delta[key];
+  }
+  if (raw === undefined) return { rest };
+  if (!isSlot) {
+    throw new Error(
+      where + ": `" + SLOT_CONTENT_WORD + "` fills a SLOT, and " + describeNodeIdentity(sublayer) + " at that path is not one. " + slotPathsSentence(definition),
+    );
+  }
+  return { rest, slotContent: (raw as WriteChild[]).filter((child): child is WriteNode => !!child) };
 }
 
 function restoreNullWords(delta: OverrideDeltaInput, where: string): EditDelta {
@@ -327,15 +474,28 @@ function restoreNullWords(delta: OverrideDeltaInput, where: string): EditDelta {
 // re-acquired HERE, not trusted from prepare, because a swap or a variant write earlier in the
 // same span replaced the tree the paths named. `verb` is what the span reports as — a batch spells
 // its entry into it, so an override that fails names which entry's it was.
-function applyOverridePlans(instance: any, overrides: OverridePlan[], resources: RenderResources, verb: string): void {
+//
+// THE ORDER a slot fill takes among those stages, decided here and nowhere else: 5a writes for
+// every sublayer first — a slot's own `layout`/`fill` words land before its content, so the
+// content attaches under the mode it will live in — then each slot's content replaced (a child
+// list change belongs after the writes and BEFORE the sizes: a hug slot must measure its new
+// content), then 5b sizes, then 5c positions. The content's own percents and anchors ride the
+// walk context's pending list, settled by the verb once the whole span has landed.
+function applyOverridePlans(instance: any, overrides: OverridePlan[], ctx: RenderCtx, verb: string): void {
   const subject = "flcm." + verb;
-  const live = overrides.map(({ path, plan }) => {
+  const live = overrides.map(({ path, plan, slotContent }) => {
+    const where = subject + ".overrides[" + JSON.stringify(path) + "]";
     const liveId = liveSublayerIdOf(instance.id, path);
     const node = instance.findOne((n: any) => n.id === liveId);
     if (!node) {
       throw new Error(
-        subject + ".overrides[" + JSON.stringify(path) + "]: " + describeNodeIdentity(instance) + " has no sublayer at that path — a component word in the same call replaced it (an instance swap, or a variant with a different tree). Apply the component word, read the instance, then override.",
+        where + ": " + describeNodeIdentity(instance) + " has no sublayer at that path — a component word in the same call replaced it (an instance swap, or a variant with a different tree). Apply the component word, read the instance, then override.",
       );
+    }
+    // Prepare judged the path a slot on the tree it could see; a retarget in this span may have
+    // put something else there. Asked again on the live node, loud, before a child is touched.
+    if (slotContent && node.type !== "SLOT") {
+      throw new Error(where + ": " + describeNodeIdentity(node) + " is not a SLOT in the tree this call produced — a component word in the same call replaced it. Apply the component word, read the instance, then fill.");
     }
     // Existence-only, always — `liveTextFacts: undefined` on purpose. The freshness gate belongs to
     // PREPARE (assertOverridePlansStillApply, run there for every non-retargeting edit), where a
@@ -345,11 +505,27 @@ function applyOverridePlans(instance: any, overrides: OverridePlan[], resources:
     // fonts, which is not a document race at all).
     const editPlan: EditPlan = { node, patch: plan.patch, liveTextFacts: undefined };
     assertEditPlanStillApplies(editPlan, subject);
-    return { editPlan, fail: openEditPlanApply(verb, editPlan) };
+    return { editPlan, slotContent, fail: openEditPlanApply(verb, editPlan) };
   });
-  for (const { editPlan, fail } of live) applyEditPlanWrites(fail, editPlan, resources);
+  for (const { editPlan, fail } of live) applyEditPlanWrites(fail, editPlan, ctx);
+  for (const { editPlan, slotContent, fail } of live) if (slotContent) replaceSlotContent(fail, editPlan.node, slotContent, ctx, subject);
   for (const { editPlan, fail } of live) settleEditPlanSizes(fail, editPlan);
   for (const { editPlan, fail } of live) settleEditPlanPositions(fail, editPlan);
+}
+
+// Replace a live SLOT's content: every current child goes — the definition's placeholder sublayers
+// on a fresh instance, or whatever an earlier fill put there — then the specs, in order, through
+// the attach-then-size entry every insert rides. Removing a placeholder sublayer is an ASSUMPTION
+// on the live checklist: if Figma refuses, the refusal surfaces from this span and the whole call
+// rolls back — loud, never a half-filled slot.
+function replaceSlotContent(fail: EditPlanFailure, slot: any, specs: readonly WriteNode[], ctx: RenderCtx, subject: string): void {
+  try {
+    for (const child of [...slot.children]) child.remove();
+    const facts = liveParentSpecFacts(slot, subject);
+    for (const spec of specs) attachSpecChild(slot, spec, ctx, facts, (child) => slot.appendChild(child));
+  } catch (cause) {
+    throw fail(cause);
+  }
 }
 
 // ---- editing a live instance ----
@@ -383,6 +559,8 @@ export interface InstanceEditPlan {
   namesDeclaredPropertiesOf: any | null;
   properties: Record<string, string | boolean>;
   overrides: OverridePlan[];
+  /** What the slot content among `overrides` needs loaded — empty when none fills a slot. */
+  needs: InstanceNeeds;
   retargets: boolean;
   becomesRowColumn: boolean | undefined;
 }
@@ -410,6 +588,7 @@ export async function prepareInstanceEditPlan(node: SceneNode, words: InstanceEd
   // the current one are both no-ops, and the sublayer tree the override paths name is unchanged.
   const retargets = component !== current;
   const swapTo = words.componentId != null && retargets ? component : null;
+  const overrides = await resolveEditOverridePaths(instance, component, retargets, words.overrides || {}, subject);
   return {
     swapTo,
     namesDeclaredPropertiesOf: Object.keys(properties).length ? component : null,
@@ -417,7 +596,8 @@ export async function prepareInstanceEditPlan(node: SceneNode, words: InstanceEd
     // its id, and carries the overrides it can. With one, the swap already landed on the exact
     // variant the combination names, so restating the axes would be a second write for nothing.
     properties: swapTo ? properties : { ...properties, ...variant },
-    overrides: await resolveEditOverridePaths(instance, component, retargets, words.overrides || {}, subject),
+    overrides,
+    needs: await prepareSlotContentNeeds(overrides.flatMap((o) => o.slotContent || [])),
     retargets,
     // The same fact create's own gate reads (prepareOne above): the RESOLVED component's mode, not
     // the instance's current one, which the retarget is about to replace.
@@ -447,8 +627,9 @@ async function resolveEditOverridePaths(
           "Paths are component-relative, exactly as flcm.get keys this instance's `overrides` — and each variant has its own; read the instance to see the ones it has.",
       );
     }
-    plans.push({ path, plan: compileEditPlan(live, restoreNullWords(overrides[path], where), where) });
+    plans.push(compileOverride(live, component, overrides[path], path, where));
   }
+  assertNoOverridePathInsideFilledSlot(plans, subject);
   return plans;
 }
 
@@ -484,11 +665,12 @@ export function applyInstanceRetarget(fail: EditPlanFailure, node: SceneNode, pl
 
 /**
  * The second half: every override, on sublayers re-acquired after the retarget. `verb` is what the
- * span reports as, the same spelling the entry's own failure builder was opened with.
+ * span reports as, the same spelling the entry's own failure builder was opened with. `ctx` is the
+ * verb's build walk (bridge.beginRenderWalk) — shared across a batch's entries.
  */
-export function applyInstanceOverrides(node: SceneNode, plan: InstanceEditPlan, resources: RenderResources, verb: string): void {
+export function applyInstanceOverrides(node: SceneNode, plan: InstanceEditPlan, ctx: RenderCtx, verb: string): void {
   if (!plan.overrides.length) return;
-  applyOverridePlans(node as any, plan.overrides, resources, verb);
+  applyOverridePlans(node as any, plan.overrides, ctx, verb);
 }
 
 // ---- detach ----

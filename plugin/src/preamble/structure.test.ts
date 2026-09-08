@@ -194,7 +194,7 @@ test("clone duplicates an INSTANCE-bearing subtree and strips every flcm/key fro
   assert.equal(copy.children[0].characters, "Hi");
   assert.equal(copy.children[1].mainComponent.id, component.id);
   // Key-less, all the way down — a copied key would mint a second node at the same address.
-  const keysUnder = (n) => [readKey(n), ...n.children.flatMap(keysUnder)];
+  const keysUnder = (n) => [readKey(n), ...(n.children || []).flatMap(keysUnder)];
   assert.deepEqual(keysUnder(copy).filter(Boolean), []);
   // …and so the originals' keys still resolve, each to exactly one node (resolveTarget throws on a clash).
   assert.equal((await get("card")).node.id, card.id);

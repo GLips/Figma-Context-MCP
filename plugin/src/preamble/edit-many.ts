@@ -25,7 +25,7 @@
 import { Handle, Target } from "./ir.js";
 import { resolveTarget } from "./read.js";
 import { enterMutatingVerb } from "./mutation-lock.js";
-import { mintHandle, BatchLayoutDeltas } from "./bridge.js";
+import { mintHandle, resolvePercents, beginRenderWalk, BatchLayoutDeltas } from "./bridge.js";
 import { rejectUnknownKeys } from "./validate.js";
 import {
   EditPlan, rejectNonDeltaWords, compileEditPlan, loadEditResources, assertEditPlanStillApplies,
@@ -325,6 +325,60 @@ function assertNoEntryInsideRetargetedInstance(
   }
 }
 
+/**
+ * An entry aimed INSIDE a slot another entry FILLS is refused, naming both.
+ *
+ * A fill replaces the slot's content wholesale — every current child is removed — so by the time
+ * the batch's override pass runs, the node the inner entry resolved and wrote to in an earlier
+ * stage is gone. Figma keeps accepting writes on a removed node (the same hazard the retarget rule
+ * above and assertEditPlanStillApplies call out), so without this the batch would report success
+ * and hand back a Handle minted from a corpse. The remedy is not an order: the layer the fill
+ * installs is a different node from the one the entry names, so its words belong on the spec.
+ *
+ * The single-delta form of this contradiction — one entry stating both the fill and a path inside
+ * it — is refused in instance.ts, where the override set is resolved.
+ *
+ * Runs in the compile ledger group, like every other document-local cross-entry refusal.
+ */
+function assertNoEntryInsideFilledSlot(
+  ledger: BatchLedger, plans: readonly (EditPlan | undefined)[], instances: readonly (InstanceEditPlan | undefined)[],
+): void {
+  for (let host = 0; host < plans.length; host++) {
+    const instance = instances[host];
+    const hostPlan = plans[host];
+    if (!instance || !hostPlan || ledger.failed(host)) continue;
+    // A RETARGETING entry's override plans were compiled against the incoming component's
+    // definition nodes, not against anything on the canvas — an entry inside that instance is
+    // already refused by assertNoEntryInsideRetargetedInstance, on the stronger ground that the
+    // whole sublayer tree goes.
+    if (instance.retargets) continue;
+    for (const slot of instance.overrides) {
+      if (!slot.slotContent) continue;
+      for (let inner = 0; inner < plans.length; inner++) {
+        const innerPlan = plans[inner];
+        if (inner === host || !innerPlan || ledger.failed(inner)) continue;
+        if (!isUnder(innerPlan.node, slot.plan.node)) continue;
+        ledger.record(
+          inner,
+          new Error(
+            "sits inside the slot at " + JSON.stringify(slot.path) + " of " + JSON.stringify(hostPlan.node.name) +
+              " (id " + JSON.stringify(hostPlan.node.id) + "), which entry [" + host + "] FILLS in the same batch — that fill " +
+              "removes the slot's current content, so this write would land on a node no longer in the tree. " +
+              "State these words on the spec entry [" + host + "] fills the slot with.",
+          ),
+        );
+      }
+    }
+  }
+}
+
+// Is `node` a descendant of `ancestor`? The ancestor is a live node the batch resolved, so the
+// parent chain is the whole answer — no composite-id reasoning needed.
+function isUnder(node: SceneNode, ancestor: SceneNode): boolean {
+  for (let p = node.parent as BaseNode | null; p; p = p.parent) if (p === (ancestor as BaseNode)) return true;
+  return false;
+}
+
 // Is `node` inside `host`? A sublayer answers by its composite id (`I<host>;<path>`, one leading `I`
 // however deep — core's rule), anything else by the parent chain.
 function isInsideInstance(node: SceneNode, host: SceneNode): boolean {
@@ -411,6 +465,7 @@ export function editMany(entries: EditEntry[], scope?: EditManyScope): Promise<H
       const instances = await resolveEntryInstancePlans(ledger, compiled);
       const components = await resolveEntryComponentPlans(ledger, compiled);
       assertNoEntryInsideRetargetedInstance(ledger, compiled, instances);
+      assertNoEntryInsideFilledSlot(ledger, compiled, instances);
       assertNoDefinitionBindingCrossReference(ledger, compiled, components, instances);
       // The document-blind, resolve and compile stages all report together. The seal-time gates
       // below cannot join them: they need the resources, and a batch already known to be doomed
@@ -419,10 +474,10 @@ export function editMany(entries: EditEntry[], scope?: EditManyScope): Promise<H
       const plans = compiled as EditPlan[]; // dense: rejectIfAny threw unless every stage filled its slot
       // The override deltas ride the SAME load — each is a text/image edit of one sublayer, and the
       // batch owes one round trip however many of them there are.
-      const resources = await loadEditResources([
-        ...plans,
-        ...instances.flatMap((instance) => (instance ? instance.overrides.map((o) => o.plan) : [])),
-      ]);
+      const resources = await loadEditResources(
+        [...plans, ...instances.flatMap((instance) => (instance ? instance.overrides.map((o) => o.plan) : []))],
+        instances.flatMap((instance) => (instance ? [instance.needs] : [])),
+      );
       // AFTER the batch's last await: the live gates, plus proof that each node still exists and
       // the facts its compile read survived the loads. The batch is what makes this load-bearing —
       // entry 0's node state was read before every later entry's resolution and the whole batch's
@@ -470,10 +525,14 @@ export function editMany(entries: EditEntry[], scope?: EditManyScope): Promise<H
       }
       for (const i of order) settleEditPlanSizes(fails[i], plans[i]);
       for (const i of order) settleEditPlanPositions(fails[i], plans[i]);
+      // ONE walk for the batch's slot content (see beginRenderWalk): a key is unique across the set
+      // as it is across a render, and every entry's content settles its percents together.
+      const walk = beginRenderWalk(resources);
       for (const i of order) {
         const instance = instances[i];
-        if (instance) applyInstanceOverrides(plans[i].node, instance, resources, "editMany (entry " + i + ")");
+        if (instance) applyInstanceOverrides(plans[i].node, instance, walk, "editMany (entry " + i + ")");
       }
+      resolvePercents(walk);
       // Handles are minted only once every write has landed: a hug parent reflows when a child in
       // the same batch changes, so geometry read mid-batch would be a number about to move.
       return plans.map((plan) => mintHandle(plan.node));

@@ -352,7 +352,7 @@ export const STRUCTURE_RULES = `### Rules
 - **Layout legality is re-asked against the DESTINATION**, with the new parent's facts: \`"fill"\`/\`"N%"\` into a page parent, a TEXT \`height: "fill"\` landing out of a row/column flow, a percent child of a hugging parent, or any parent-relative word under a GRID parent each reject loud before anything moves. Legal where a node sat is not automatically legal where it lands.
 - **A move re-aims the moved node's fill.** \`"fill"\` is a mark on the parent's primary or counter axis, and those axes move with the node, so it is cleared and re-applied against the new parent. Fixed sizes are untouched.
 - **A stretch container does not stretch what you insert.** Figma stores no container-level stretch — a stretched child is indistinguishable from one that asked for counter-axis \`"fill"\` — so re-assert it with \`flcm.edit(parent, { layout: { alignItems: "stretch" } })\`, which re-synthesizes the marks over every child.
-- **An instance's CHILD LIST is closed.** Placing into an instance, or moving/removing one of its children, rejects loud and names it — edit the main component instead. The instance itself is an ordinary node: moving, removing and cloning it are fine.
+- **An instance's CHILD LIST is closed — except inside a SLOT.** Placing into an instance, or moving/removing one of its children, rejects loud and names it — edit the main component instead. A \`SLOT\` node inside the instance is the opening: its content is the instance's own, so \`append\`/\`insertBefore\`/\`move\`/\`remove\` work on and under it however deep (the SLOT node itself stays put). The instance itself is an ordinary node: moving, removing and cloning it are fine.
 - **A node can't be placed inside itself or its own subtree**; the refusal names both nodes.
 - **Each call is one undo step**, with \`edit\`'s contract: validate before the first write, roll the whole call back on a Figma refusal.
 
@@ -418,7 +418,7 @@ await flcm.component(
 
 - **Each type has one field, on the node type that owns it.** \`boolean\` → \`visible\` (any node); \`text\` → \`text\` (\`flcm.text\` only); \`instance_swap\` → \`componentId\` (\`flcm.instance\` only); \`slot\` → \`slot\` (\`flcm.frame\` only). A field on the wrong constructor fails at construction, before any verb runs.
 - **Omit \`defaultValue\` and it is derived from the node that binds the property** — its \`visible\` (an unnamed \`visible\` is \`true\`), its text, its component. Deriving needs exactly one binder: a property nothing binds must state a \`defaultValue\`, and one two nodes bind has no single value to read.
-- **A slot IS a frame you author.** Bind the frame that holds the placeholder content and the definition keeps that frame — its size, its layout, its children — while every instance shows it as a SLOT. A declared slot no frame binds is refused rather than dropping Figma's unpositioned 100×100 box into your component, and two frames on one slot are refused because a slot is one hole. **Putting content into an instance's slot is not authorable yet**: an instance's child list is closed to plugins, and \`overrides\` restyles a slot but cannot fill one. Until then, what every instance shows is the placeholder content you put in the bound frame.
+- **A slot IS a frame you author.** Bind the frame that holds the placeholder content and the definition keeps that frame — its size, its layout, its children — while every instance shows it as a SLOT. A declared slot no frame binds is refused rather than dropping Figma's unpositioned 100×100 box into your component, and two frames on one slot are refused because a slot is one hole. An instance shows the placeholder content until it fills the slot: \`children\` at the slot's path in \`overrides\` (see "Filling a slot" below).
 - **\`variant\` is not a type here.** Axes are made by combining components into a set (\`flcm.variants\`), never declared on one.
 - **A binding only means something inside \`flcm.component\`.** The same tree handed to \`render\`, \`append\` or \`edit\` is refused naming the word: there is no component in that call to declare the property it points at.`;
 
@@ -501,7 +501,7 @@ A spec insert whose destination is a **COMPONENT_SET** is refused: a set's child
 
 ### An instance's SLOT
 
-A slot is a FRAME in the definition and a \`SLOT\` node inside each instance. That node takes the frame surface under \`edit\` — \`layout\`, \`fill\`, \`width\`, padding — so an instance's hole can be styled. Putting content INTO it is still not authorable (an instance's child list is closed to plugins).`;
+A slot is a FRAME in the definition and a \`SLOT\` node inside each instance. That node takes the frame surface under \`edit\` — \`layout\`, \`fill\`, \`width\`, padding — so an instance's hole can be styled. Its CONTENT is stated from the instance, as \`children\` at the slot's path in \`overrides\` (see "Filling a slot"); \`flcm.edit(slotNode, { children })\` is refused pointing there.`;
 
 export const COMPONENTS_INTRO = `\`flcm.instance(component, props?)\` is a constructor like \`flcm.frame\`: it builds an inert INSTANCE spec you \`render\` on its own, nest in a frame's children, or place with \`append\`/\`insertBefore\`. The component is a target — a read's \`componentId\`, an flcm/key, \`flcm.id(id)\`, or a handle from \`find\` — naming a COMPONENT, or a COMPONENT_SET (then the variant \`componentProperties\` pick, the set's default otherwise). Library components already used in the file resolve by the same id \`get\` reports.
 
@@ -511,7 +511,23 @@ export const COMPONENTS_INTRO = `\`flcm.instance(component, props?)\` is a const
 - **\`componentProperties\`** — values by property name, as \`get\` reports them: a variant axis (\`Size: "Large"\`), a boolean, a text, or a component target for an instance-swap property. Bare names resolve to Figma's suffixed ones when unambiguous. A variant selection is checked as a whole combination against the variants the set actually has.
 - **\`overrides\`** — how sublayers differ from the component, keyed by component-relative path exactly as \`get\` keys them, each value a delta in the edit vocabulary for that sublayer's type (\`{ "11:9": { text: "Save" }, "11:12": { fill: "#F00", visible: false } }\`). A read's \`null\` (the instance lacks a field) is accepted where flcm has a removal word (\`fill\`/\`stroke\`/\`effects\` → "none", \`opacity\` → 1, \`borderRadius\` → 0) and refused otherwise.
 
-After render, a sublayer's live id is \`I<instanceId>;<path>\`, and \`flcm.edit\` on it is the same override — \`find({ within: handle })\` locates them.`;
+After render, a sublayer's live id is \`I<instanceId>;<path>\`, and \`flcm.edit\` on it is the same override — \`find({ within: handle })\` locates them.
+
+#### Filling a slot
+
+A slot has no value: its content is \`children\` at the slot's path in \`overrides\`, exactly where \`get\` reports a filled slot's content. The array REPLACES whatever the slot holds (the placeholder on a fresh instance, an earlier fill later); \`[]\` empties it. Specs come from the constructors — \`flcm.text\`, \`flcm.frame\`, \`flcm.instance\` (a nested instance fills its own slot the same way); a read spec rebuilds through \`flcm.fromRead\`. Keys inside the content come back in \`render\`'s \`keyed\`, and are addressable by key afterwards either way.
+
+\`\`\`js
+// "11:12" is the slot's path: the bound frame's id in the component, the key get reports it under on an instance.
+await flcm.render(flcm.instance(card, { overrides: { "11:12": { children: [flcm.text("Body copy"), flcm.instance(button)] } } }));
+await flcm.edit(inst, { overrides: { "11:12": { layout: { mode: "row" }, children: [] } } }); // restyle the hole AND empty it
+\`\`\`
+
+The slot's own words in the same delta land first, so the content attaches under the layout it will live in. After the fill, the content is an ordinary tree: \`append(slotNode, spec)\`, \`insertBefore\`, \`move\`, \`remove\` all work on and under the \`SLOT\` node, which \`find({ within: inst, type: "SLOT" })\` locates. An EMPTIED slot reads back the way every emptied container does — each of the component's children as \`visible: false\` at its own path, not \`children: []\` — so re-authoring that read leaves the slot empty rather than restoring the placeholder.
+
+A variant change or a swap keeps filled content only where Figma matches the slot property across the target — Figma carries what it can; re-fill afterwards if it did not.
+
+\`children\` at a path that is not a slot fails loud listing the paths that are; naming the slot in \`componentProperties\` fails loud naming the path to write. Filling a slot and editing a sublayer INSIDE it in the same call is refused, in one delta or across an \`editMany\` batch: the fill removes that layer, so state its words on the spec you fill with.`;
 
 export const COMPONENTS_EDIT = `### Changing an instance
 
@@ -538,8 +554,8 @@ export const COMPONENTS_RULES = `### Rules
 
 - **Everything resolves against the live component before the first write.** An unknown property name, a wrong value type, a variant combination the set lacks, or an override path the component doesn't have each fails loud naming the component's own — its real property names, its real variants — with nothing created.
 - **A property is a property, an override is an override.** \`componentProperties\` drive what the component bound to them (a label's text, a layer's visibility, a nested swap); \`overrides\` reach any sublayer field the edit vocabulary has. Setting a bound text through \`overrides\` works but leaves the property unset — prefer the property when one exists.
-- **A slot property has no value** — its content is authored, not set; a slot in \`componentProperties\` is refused.
+- **A slot property has no value** — its content is \`children\` under \`overrides\` at the slot's path; a slot in \`componentProperties\` is refused naming that path.
 - **Paths are per variant.** Each variant has its own sublayer ids; an override keyed from a read of one variant does not apply to another, and says so.
-- **An instance's child list stays closed** (see Tree shape): its content is the component's. Edit sublayers by id, or the main component.
+- **An instance's child list stays closed, except inside a SLOT** (see Tree shape): its content is the component's, and a slot's content is the instance's. Edit sublayers by id, or the main component; fill a slot from the instance.
 - **An override delta reaches a sublayer's own fields, not a nested instance's component.** \`componentProperties\`/\`overrides\`/\`componentId\` inside an \`overrides\` entry are refused — edit that nested instance by its live id (\`I<instanceId>;<path>\`) once the outer call has landed.
 - **The three component words are INSTANCE-only.** On a FRAME, a TEXT, or anything else they fail loud as words that node type doesn't take.`;

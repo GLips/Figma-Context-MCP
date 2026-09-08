@@ -420,7 +420,10 @@ export function prepareInsertBindings(subject: string, parent: any, spec: WriteN
   if (!bound.length) return undefined;
   // A COMPONENT_SET destination is refused before this runs (structure.ts's assertSpecInsertNotIntoSet),
   // so `component` is a standalone component or a set's VARIANT — the definition the slot rule counts in.
-  const component = parent.type === "COMPONENT" ? parent : componentAncestorOf(parent);
+  // The instance question comes FIRST: a spec landing in an instance's SLOT can sit under a
+  // component (an instance placed inside one), and a binding there would name a property the
+  // instance's own definition — not the host component — declares. Instance content binds nothing.
+  const component = instanceAncestorOf(parent) ? null : parent.type === "COMPONENT" ? parent : componentAncestorOf(parent);
   // Not landing in a component: the standing refusal, in its own words.
   if (!component) assertNoComponentPropertyBindings(spec, subject);
   const owner = definitionOwnerOf(component);

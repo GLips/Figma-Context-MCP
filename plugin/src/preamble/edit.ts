@@ -23,7 +23,7 @@
 import { Target, Handle } from "./ir.js";
 import { resolveTarget } from "./read.js";
 import { enterMutatingVerb } from "./mutation-lock.js";
-import { mintHandle } from "./bridge.js";
+import { mintHandle, resolvePercents, beginRenderWalk } from "./bridge.js";
 import {
   rejectNonDeltaWords, compileEditPlan, loadEditResources, assertEditPlanStillApplies,
   openEditPlanApply, applyEditPlanWrites, settleEditPlanSizes, settleEditPlanPositions,
@@ -68,7 +68,7 @@ export function edit(target: Target, changes: EditDelta): Promise<Handle> {
       const component: ComponentEditPlan | undefined = plan.componentWords
         ? await prepareComponentEditPlan(plan.node, plan.componentWords, SUBJECT)
         : undefined;
-      const resources = await loadEditResources([plan, ...(instance ? instance.overrides.map((o) => o.plan) : [])]);
+      const resources = await loadEditResources([plan, ...(instance ? instance.overrides.map((o) => o.plan) : [])], instance ? [instance.needs] : []);
       // The root's own gate reads the container this delta LEAVES BEHIND (a swap re-points the
       // instance before its layout words land), and every override plan compiled against a live
       // sublayer gets the same stage-4 pass — here, where a stale one costs zero writes.
@@ -85,7 +85,13 @@ export function edit(target: Target, changes: EditDelta): Promise<Handle> {
       if (component && component.binding) applyComponentBindingEdit(fail, plan.node, component.binding);
       settleEditPlanSizes(fail, plan);
       settleEditPlanPositions(fail, plan);
-      if (instance) applyInstanceOverrides(plan.node, instance, resources, "edit");
+      if (instance) {
+        // Slot content among the overrides is BUILT, so it needs a walk; its percents settle once
+        // the whole delta has landed, as a render's do after its tree.
+        const walk = beginRenderWalk(resources);
+        applyInstanceOverrides(plan.node, instance, walk, "edit");
+        resolvePercents(walk);
+      }
       return mintHandle(plan.node);
     },
   );

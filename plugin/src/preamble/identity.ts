@@ -35,6 +35,36 @@ export function instanceAncestorOf<T extends ParentedNode>(node: T): T | null {
   return null;
 }
 
+// The INSTANCE whose CLOSED child list `node` sits in, or null when the list is open. One rule:
+// walk up, and the first SLOT or INSTANCE met decides — a SLOT means slot content, which an
+// instance leaves open however deep the nesting; an INSTANCE means the component's own tree, which
+// Figma closes to plugins. `countSelf` is the destination question ("may children land IN this
+// node?"): the node itself decides first, so a SLOT destination is open and an INSTANCE destination
+// closed. A subject ("may this node move or go?") starts at its parent — an instance is an ordinary
+// node in ITS parent, and the SLOT node is itself a sublayer whose parent chain meets the instance.
+export function childListClosingInstanceOf<T extends ParentedNode>(node: T, countSelf: boolean): T | null {
+  for (let p: ParentedNode | null | undefined = countSelf ? node : node.parent; p && p.type !== "PAGE"; p = p.parent) {
+    if (p.type === "SLOT") return null;
+    if (p.type === "INSTANCE") return p as T;
+  }
+  return null;
+}
+
+// The wire key a FRAME's `componentPropertyReferences` carries when it IS a slot property's frame —
+// the one spelling the binding writers (component.ts), the mock, and the slot predicate below share.
+export const SLOT_CONTENT_WIRE_KEY = "slotContentId";
+
+// THE authority on "is this sublayer a slot hole" — the one place both routes into an instance's
+// slot content ask. A DEFINITION shows a slot as the FRAME bound to the slot property (it keeps its
+// layout and its placeholder children); every INSTANCE shows that same frame as `type: "SLOT"`. So a
+// path resolved against the definition (a create, a retargeting edit) meets the frame, and one
+// resolved against the live instance meets the SLOT, and both are the same hole.
+export function isSlotHole(node: { type: string; componentPropertyReferences?: Record<string, string> | null }): boolean {
+  if (node.type === "SLOT") return true;
+  const refs = node.componentPropertyReferences;
+  return node.type === "FRAME" && !!refs && Object.prototype.hasOwnProperty.call(refs, SLOT_CONTENT_WIRE_KEY) && !!refs[SLOT_CONTENT_WIRE_KEY];
+}
+
 // Who holds a component's property definitions: the SET, for a variant. A variant's own
 // `componentPropertyDefinitions` throws in the live API — Figma keeps a variant's properties on the
 // set it belongs to — so every read and every write of them goes to this node.

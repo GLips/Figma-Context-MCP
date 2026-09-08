@@ -125,8 +125,28 @@ const BUILDERS: Record<AuthorableReadType, Builder> = {
   // A read instance carries its `componentId`, its property values and its `overrides` — exactly the
   // constructor's props form. Overrides re-resolve against the live component at render, so a
   // value the instance shares with its component (the read omits those) stays the component's.
-  INSTANCE: (spec) => instance(spec),
+  // A filled slot reads as `children` under its path; those are read specs and rebuild here, each
+  // under its own path, exactly as a frame's do.
+  INSTANCE: (spec, subject) => instance(withSlotContentRebuilt(spec, subject)),
 };
+
+function withSlotContentRebuilt(spec: Record<string, unknown>, subject: string): Record<string, unknown> {
+  const overrides = spec.overrides;
+  if (!overrides || typeof overrides !== "object" || Array.isArray(overrides)) return spec;
+  const src = overrides as Record<string, unknown>;
+  const rebuilt: Record<string, unknown> = {};
+  for (const path of Object.keys(src)) {
+    const delta = src[path];
+    const content = delta && typeof delta === "object" ? (delta as Record<string, unknown>).children : undefined;
+    if (!Array.isArray(content)) {
+      rebuilt[path] = delta;
+      continue;
+    }
+    const at = subject + ".overrides[" + JSON.stringify(path) + "]";
+    rebuilt[path] = { ...(delta as Record<string, unknown>), children: content.map((child: unknown, i: number) => buildFromRead(child, childSubject(at, i, child))) };
+  }
+  return { ...spec, overrides: rebuilt };
+}
 
 /**
  * flcm.fromRead — re-author a `get` result as a constructor-built spec, ready for render/append.

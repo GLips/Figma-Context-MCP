@@ -49,11 +49,13 @@ export type InstancePlans = ReadonlyMap<WriteNode, InstancePlan>;
 // `properties` are ready for setProperties, in Figma's own suffixed names. `applyOverrides` is a
 // closure rather than data because an override is an edit of one sublayer, applied through
 // edit-plan.ts's staged appliers — and edit-plan.ts imports FROM this module, so the stages arrive here as
-// a function instead of an import.
+// a function instead of an import. It takes the whole walk context, not just the resources: an
+// override at a SLOT's path builds that slot's content through attachSpecChild, whose keyed nodes
+// and pending percents belong to the SAME walk as the instance's siblings.
 export interface InstancePlan {
   component: any;
   properties: Record<string, string | boolean>;
-  applyOverrides: (instance: any, resources: RenderResources) => void;
+  applyOverrides: (instance: any, ctx: RenderCtx) => void;
 }
 
 // The full walk context: resources plus render-only accumulation. `pending` collects every
@@ -567,6 +569,19 @@ function applyLeafSize(node: any, layout: WriteLayout): void {
 // parent's size is finally readable off the canvas (the ordering hazard: doing this at walk time would
 // predate the fill/hug pin and reintroduce the unknown-parent-size problem this replaces). Ancestor-first
 // (shallowest depth first) so a percent child of a percent parent reads its parent's already-resolved px.
+/**
+ * Open a build walk over `resources`. ONE per verb, never per node or per entry: the walk's `keyed`
+ * map is where duplicate keys collide, so a key is unique across an editMany batch's slot content
+ * exactly as it is across a rendered tree, and `pending` is settled once by resolvePercents after
+ * the verb's last write. `bindings` is opted into only by a verb with a declaring component behind
+ * it (see RenderCtx.bindings).
+ */
+export function beginRenderWalk(resources: RenderResources, opts?: { bindings?: boolean }): RenderCtx {
+  const ctx: RenderCtx = { ...resources, keyed: {}, pending: [] };
+  if (opts && opts.bindings) ctx.bindings = [];
+  return ctx;
+}
+
 export function resolvePercents(ctx: RenderCtx): void {
   ctx.pending.sort((a, b) => depthOf(a.node) - depthOf(b.node));
   for (const p of ctx.pending) resolvePercentLayout(p.parent, p.node, p.layout);
@@ -845,9 +860,11 @@ export function assertLiveNodeLandsUnderParent(node: any, destination: any, subj
 
 // A structural verb placing a SPEC: only its ROOT meets the destination — the interior children
 // are checked against their own authored parents inside the build walk, exactly as at create.
-export function assertSpecRootLandsUnderParent(destination: any, wn: WriteNode, subject: string): void {
+// `deltas` is the same projection a batch hands assertLayoutDeltaResolvable: a slot's content is
+// judged against the slot as the SAME override's own layout words will leave it, not as it stands.
+export function assertSpecRootLandsUnderParent(destination: any, wn: WriteNode, subject: string, deltas?: BatchLayoutDeltas): void {
   const wl = wn.layout || {};
-  assertLayoutLandsUnderParent(liveParentLayoutFacts(destination), wn.type, wl, wl.mode === "row" || wl.mode === "column", wl.position === "absolute", subject);
+  assertLayoutLandsUnderParent(projectedParentLayoutFacts(destination, deltas), wn.type, wl, wl.mode === "row" || wl.mode === "column", wl.position === "absolute", subject);
 }
 
 // The layout words a LIVE node carries that MEAN SOMETHING ABOUT ITS PARENT — the only intent a

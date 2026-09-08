@@ -26,14 +26,14 @@ import {
 } from "./ir.js";
 import { resolveTarget } from "./read.js";
 import {
-  settleHandles, mintHandle, BoundSpecNode, InstancePlans, RenderCtx, RenderResources,
+  settleHandles, mintHandle, BoundSpecNode, InstancePlans, beginRenderWalk, RenderResources,
 } from "./bridge.js";
 import { assertConstructorBuiltTree, isConstructorBuilt, isReadSpec } from "./provenance.js";
 import { assertSizingResolvesAgainstParentFrame } from "./layout-legality.js";
 import { loadTreeResources, buildTreeOnPage } from "./render.js";
 import { enterMutatingVerb } from "./mutation-lock.js";
 import { beginMutatingApply } from "./verb-error.js";
-import { instanceAncestorOf, readKey, writeKey, describeNodeIdentity } from "./identity.js";
+import { instanceAncestorOf, readKey, writeKey, describeNodeIdentity, SLOT_CONTENT_WIRE_KEY } from "./identity.js";
 import { resolveComponentTarget } from "./instance.js";
 import { own, rejectUnknownKeys } from "./validate.js";
 import { KNOWN_KEYS, isTargetShaped, COMPONENT_TARGET_HINT } from "./flcm.js";
@@ -66,7 +66,7 @@ export const BINDING_FIELD_WIRE_KEYS: Record<string, { wire: string; type: strin
   visible: { wire: "visible", type: "boolean" },
   text: { wire: "characters", type: "text" },
   componentId: { wire: "mainComponent", type: "instance_swap" },
-  slot: { wire: "slotContentId", type: "slot" },
+  slot: { wire: SLOT_CONTENT_WIRE_KEY, type: "slot" },
 };
 
 // Which binding field carries a property of each type — the table above inverted, for the
@@ -568,7 +568,7 @@ function applySpecComponent({ spec, resources, definitions, options }: PreparedS
   // One of the two ctxs that opt INTO binding collection — this verb declares the properties in the
   // same call; the other is an insert landing inside a component (structure.ts's applyInsert, which
   // has one already declaring them). See RenderCtx.bindings.
-  const ctx: RenderCtx = { ...resources, keyed: {}, pending: [], bindings: [] };
+  const ctx = beginRenderWalk(resources, { bindings: true });
   // render's own build sequence, shared rather than copied (render.buildTreeOnPage): the spec lands
   // exactly as flcm.render would land it, overlap notice included. Only then is there a laid-out
   // node to convert.

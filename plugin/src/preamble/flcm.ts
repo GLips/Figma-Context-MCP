@@ -24,7 +24,7 @@ import {
   Justify, Align, TextAlign, TextDecoration, WriteTextCase, RawIdRef, WriteType, Target,
   ComponentPropertyInput, OverrideDeltaInput, ComponentPropertyBinding, ComponentPropertyDefinitionEdit,
 } from "./ir.js";
-import { markConstructorBuilt, isConstructorBuilt } from "./provenance.js";
+import { markConstructorBuilt, isConstructorBuilt, isReadSpec, assertConstructorBuiltTree } from "./provenance.js";
 import { assertLayoutRealizableForType } from "./layout-legality.js";
 import { parseInlineMarkdown, MdSegment } from "./markdown.js";
 import { linearGradient, radialGradient } from "./paint.js";
@@ -74,6 +74,7 @@ export const KNOWN_KEYS = {
   path: ["d", "fill", "stroke", "strokeWidth", "strokeAlign", "effects", "rotation"],
   instance: ["componentProperties", "overrides"],
   swap: ["componentId"],
+  slotContent: ["children"],
   binding: ["componentPropertyReferences"],
   componentOptions: ["name", "description", "propertyDefinitions"],
   componentDefinition: ["description", "propertyDefinitions"],
@@ -118,7 +119,12 @@ export const COMPONENT_EDIT_WORDS: ReadonlySet<string> = keySet(KNOWN_KEYS.compo
 // Every edit word the sync compile can only judge the SHAPE of. One set, so a word added to either
 // half is split by stage 2 and refused by the override gate below without a second edit.
 export const DOCUMENT_RESOLVED_EDIT_WORDS: ReadonlySet<string> = keySet([...INSTANCE_COMPONENT_WORDS], [...COMPONENT_EDIT_WORDS]);
-const OVERRIDE_DELTA_KEYS = keySet(KNOWN_KEYS.edit.filter((k) => !DOCUMENT_RESOLVED_EDIT_WORDS.has(k)));
+// PLUS the one word that exists only inside an override: `children` at a SLOT's path fills the
+// slot. Not an edit word on any node type — a bound frame in the definition grows through
+// `append`, and the SLOT node's own child list is stated whole, from the instance, or grown
+// with the structural verbs. Which path is a slot is the document's to say (instance.ts).
+export const SLOT_CONTENT_WORD = KNOWN_KEYS.slotContent[0];
+const OVERRIDE_DELTA_KEYS = keySet(KNOWN_KEYS.edit.filter((k) => !DOCUMENT_RESOLVED_EDIT_WORDS.has(k)), KNOWN_KEYS.slotContent);
 // Each constructor's closed vocabulary, by the read type it builds — what fromRead judges a spec's
 // read words against before the call, so a word the type lacks is named as real state, not a typo.
 export const CONSTRUCTOR_KEYS_BY_TYPE: Record<"FRAME" | "TEXT" | "RECTANGLE" | "ELLIPSE" | "LINE" | "INSTANCE", ReadonlySet<string>> = {
@@ -724,9 +730,41 @@ export function compileOverrideBag(raw: unknown, subject: string): Record<string
       }
     }
     rejectNonDeltaWords(delta, OVERRIDE_DELTA_KEYS, at);
+    if (own(delta as Record<string, unknown>, SLOT_CONTENT_WORD) !== undefined) assertSlotContentShape((delta as Record<string, unknown>)[SLOT_CONTENT_WORD], at);
     out[path] = delta as OverrideDeltaInput;
   }
   return out;
+}
+
+// The document-blind half of the fill word: `children` is an array of constructor-built specs (`[]`
+// empties the slot), and the specs go through the same discipline every spec-taking verb applies
+// before a round trip — provenance, and no binding (an instance declares no property for one to
+// point at). Whether the PATH is a slot is the other half, answered against the component.
+//
+// A read spec is named as such rather than as "hand-built": a `get` of a filled slot republishes
+// the content as raw read specs under this very key, so an agent spreading that read back in meets
+// this refusal first, and the fix it needs is fromRead, not "call a constructor".
+function assertSlotContentShape(raw: unknown, at: string): void {
+  const where = at + "." + SLOT_CONTENT_WORD;
+  if (raw === null) {
+    throw new Error(where + " is null. `children` at a slot's path states the slot's content whole — pass the specs to fill it with, or [] to empty it. There is no null form.");
+  }
+  if (!Array.isArray(raw)) {
+    throw new Error(where + " must be an array of nodes from the flcm constructors (flcm.frame/text/rect/…/instance), or [] to empty the slot — got " + JSON.stringify(raw) + ".");
+  }
+  raw.forEach((child, i) => {
+    if (!child) return; // `cond && flcm.text(…)` composes here as in any children list
+    const spot = where + "[" + i + "]";
+    if (typeof child !== "object") throw new Error(spot + " is not a node — got " + JSON.stringify(child) + ".");
+    if (isReadSpec(child) || (!isConstructorBuilt(child) && typeof (child as { id?: unknown }).id === "string")) {
+      throw new Error(
+        spot + ": that is a `get` result's read spec, and a read spec is not authoring input on its own. Rebuild it through the constructors — flcm.fromRead(spec) for a whole subtree, " +
+          "or flcm.frame(spec, children) / flcm.text(spec) / flcm.instance(spec) directly — and pass what they return.",
+      );
+    }
+    assertConstructorBuiltTree(child as WriteNode);
+    assertNoComponentPropertyBindings(child as WriteNode, spot);
+  });
 }
 
 // ---- the BINDING word (`componentPropertyReferences`) ----

@@ -480,7 +480,12 @@ async function sceneSubtreeToSnapshot(
     // Named styles: per-slot resolved names via the injected resolver
     styles: await decodeStyleSlots(node, resolveStyle),
 
-    children: children.length ? children : undefined,
+    // A container that HAS a child list keeps it even when it is empty — `[]` and `undefined` mean
+    // different things downstream: core's `emptiedContainers` only records a node whose snapshot
+    // had children and whose simplified output has none, which is how an emptied slot reads back
+    // as emptied instead of as untouched. The REST adapter's `raw.children?.map(...)` preserves the
+    // same distinction; collapsing `[]` to `undefined` here would split the two producers.
+    children: "children" in node ? children : undefined,
   };
 }
 

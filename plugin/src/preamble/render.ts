@@ -7,7 +7,7 @@ import { WriteNode, Handle } from "./ir.js";
 import { assertConstructorBuiltTree } from "./provenance.js";
 import { assertSizingResolvesAgainstParentFrame } from "./layout-legality.js";
 import { loadFontsForTree, loadFontsForTextEdits } from "./fonts.js";
-import { buildNode, placeRootOnPage, settleHandles, resolvePercents, RenderCtx, RenderResources } from "./bridge.js";
+import { buildNode, placeRootOnPage, settleHandles, resolvePercents, beginRenderWalk, RenderCtx, RenderResources } from "./bridge.js";
 import { describeRootOverlap } from "./root-overlap.js";
 import { enterMutatingVerb } from "./mutation-lock.js";
 import { fetchImagesForTrees, assertNoComponentPropertyBindings } from "./flcm.js";
@@ -34,7 +34,9 @@ import { prepareInstancePlans } from "./instance.js";
 // only after the first settles would leave an early font rejection briefly unhandled and mis-order
 // which failure wins.
 export async function loadTreeResources(tree: WriteNode): Promise<RenderResources> {
-  const { plans: instances, fontNeeds } = await prepareInstancePlans(tree);
+  const needs = await prepareInstancePlans(tree);
+  // The tree and every slot content tree its instances fill: one image request, one font load.
+  const trees = [tree, ...needs.slotContentTrees];
   let failed = false;
   let firstFailure: unknown;
   const settled = <V>(p: Promise<V>) =>
@@ -45,20 +47,20 @@ export async function loadTreeResources(tree: WriteNode): Promise<RenderResource
       }
       return undefined as unknown as V;
     });
-  const settledImages = settled(fetchImagesForTrees([tree]));
+  const settledImages = settled(fetchImagesForTrees(trees));
   const settledFonts = settled(loadAllFonts());
   const images = await settledImages;
   const fonts = await settledFonts;
   if (failed) throw firstFailure;
-  return { images, fonts, instances };
+  return { images, fonts, instances: needs.plans };
 
-  // The tree's own text fonts plus every override delta's (an override retypes a live sublayer
-  // — the same live-then-authored load an edit makes). Keyed by (family, weight, italic) on both
-  // sides, so the merge can't collide on a different meaning.
+  // The tree's own text fonts (and its slot content's), plus every override delta's (an override
+  // retypes a live sublayer — the same live-then-authored load an edit makes). Keyed by (family,
+  // weight, italic) on both sides, so the merge can't collide on a different meaning.
   async function loadAllFonts() {
-    const own = await loadFontsForTree(tree);
-    if (!fontNeeds.length) return own;
-    return { ...own, ...(await loadFontsForTextEdits(fontNeeds)) };
+    const own = await loadFontsForTree(trees.length === 1 ? tree : { type: "FRAME", children: trees });
+    if (!needs.fontNeeds.length) return own;
+    return { ...own, ...(await loadFontsForTextEdits(needs.fontNeeds)) };
   }
 }
 
@@ -130,7 +132,7 @@ function render(tree: WriteNode): Promise<{ node: Handle; keyed: Record<string, 
     (resources) => {
       // No `bindings`: render declares no component properties, so a bound node reaching the walk is
       // a loud internal error rather than a silently dropped word (prepare refused it already).
-      const ctx: RenderCtx = { ...resources, keyed: {}, pending: [] };
+      const ctx = beginRenderWalk(resources);
       const root = buildTreeOnPage(tree, ctx);
       // Handles are minted only now: geometry settles once the whole tree is laid out (bridge.settleHandles).
       return settleHandles(root, ctx.keyed);

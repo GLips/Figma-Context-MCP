@@ -63,18 +63,18 @@
 // dependency can't simply be reordered away: which fonts to load is derived from the live node.)
 
 import {
-  WriteProps, EditableType, WriteLayout, WriteTextStyle, InstanceEditWords, ComponentEditWords,
+  WriteNode, WriteProps, EditableType, WriteLayout, WriteTextStyle, InstanceEditWords, ComponentEditWords,
   ComponentPropertyBindingEdit, EDIT_TYPE_WORD_GROUPS, namesFontIdentity,
 } from "./ir.js";
 import { beginMutatingApply } from "./verb-error.js";
 import {
   applyPaint, applySceneProps, applyLiveNodeLayout, settleLiveNodePercentSize,
   settleLiveNodePercentPosition, assertLayoutDeltaResolvable, applyTextProps, applyTextClamp,
-  RenderResources, BatchLayoutDeltas,
+  RenderResources, BatchLayoutDeltas, InstancePlan,
 } from "./bridge.js";
 import { toFigmaEffects } from "./effects.js";
 import { acceptAuthoringProps, own, rejectNonDeltaWords as rejectNonDeltaWordsAgainst } from "./validate.js";
-import { liveFontWords, loadFontsForTextEdits } from "./fonts.js";
+import { liveFontWords, loadFontsForTextEdits, EditFontNeed } from "./fonts.js";
 import {
   KNOWN_KEYS, compileNodeLocalProps, compileSizeWords, compilePlacementWords, compileContainerWords,
   compileLineWidth, compileTextStyleWords, compileTextContent, assertLineClampCount, fetchImagesForTrees,
@@ -413,15 +413,40 @@ export function compileEditPlan(node: SceneNode, changes: EditDelta, subject: st
 }
 
 /**
+ * What the INSTANCE specs a verb will build need loaded before its span: their plans (instance.ts
+ * resolved them against the live component), the font needs of their override deltas, and the
+ * SLOT CONTENT trees those overrides fill — spec trees in their own right, whose fonts and images
+ * load exactly as a rendered tree's do and whose own nested instances are already in `plans`.
+ * Produced by instance.ts for a rendered tree and for an instance delta alike; this module only
+ * types it, because stage 3 below is what spends it.
+ */
+export interface InstanceNeeds {
+  plans: Map<WriteNode, InstancePlan>;
+  fontNeeds: EditFontNeed[];
+  slotContentTrees: WriteNode[];
+}
+
+/**
  * Stage 3 — the verb's resource awaits, and the only suspension between the compiles and the seal.
  * ONE font load and ONE image request however many entries there are: a batch is one verb, so it
  * owes one round trip, and every extra suspension is another instant the user can edit across.
+ *
+ * `needs` is every INSTANCE entry's slot content: the one way a delta BUILDS nodes, so the one way
+ * an edit's resources carry instance plans and tree fonts at all.
  */
-export async function loadEditResources(plans: readonly EditPlan[]): Promise<RenderResources> {
-  const fonts = await loadFontsForTextEdits(plans);
-  const images = await fetchImagesForTrees(plans.map((plan) => plan.patch));
-  // No instance plans: a delta never constructs an instance (an instance spec is render's).
-  return { fonts, images, instances: new Map() };
+export async function loadEditResources(plans: readonly EditPlan[], needs: readonly InstanceNeeds[] = []): Promise<RenderResources> {
+  const trees: WriteNode[] = [];
+  const instances = new Map<WriteNode, InstancePlan>();
+  const fontNeeds: EditFontNeed[] = [];
+  for (const need of needs) {
+    trees.push(...need.slotContentTrees);
+    fontNeeds.push(...need.fontNeeds);
+    need.plans.forEach((plan, wn) => instances.set(wn, plan));
+  }
+  // Slot content is BUILT, so its fonts are a tree's, not a delta's — folded into the same load.
+  const fonts = await loadFontsForTextEdits([...plans, ...fontNeeds], trees);
+  const images = await fetchImagesForTrees([...plans.map((plan) => plan.patch), ...trees]);
+  return { fonts, images, instances };
 }
 
 /**

@@ -24,13 +24,13 @@ import { WriteNode, WriteLayout, Target, Handle, InsertResult, MoveResult, Clone
 import { resolveTarget } from "./read.js";
 import { enterMutatingVerb } from "./mutation-lock.js";
 import {
-  attachSpecChild, mintHandle, settleHandles, resolvePercents, RenderCtx, RenderResources,
+  attachSpecChild, mintHandle, settleHandles, resolvePercents, beginRenderWalk, RenderResources,
   liveParentSpecFacts, assertLiveNodeLandsUnderParent, assertSpecRootLandsUnderParent, resettleMovedNode,
 } from "./bridge.js";
 import { assertConstructorBuiltTree, isConstructorBuilt, isReadSpec } from "./provenance.js";
 import { loadTreeResources } from "./render.js";
 import { prepareInsertBindings, applyInsertBindings, InsertBindingPlan } from "./component-edit.js";
-import { clearKeysDeep, instanceAncestorOf } from "./identity.js";
+import { clearKeysDeep, childListClosingInstanceOf } from "./identity.js";
 import { beginMutatingApply } from "./verb-error.js";
 
 // Where a placement verb puts its subject inside the destination. `place` is deliberately a
@@ -56,23 +56,35 @@ function assertDestinationIsContainer(subject: string, node: any): void {
 
 // Figma forbids changing an instance's CHILDREN — they come from its main component, and the only
 // real fix is editing that component (flcm never auto-detaches: detaching churns every id, killing
-// the handles the agent is holding). The restriction is exactly that, so the two roles ask
-// different questions and this is the whole reason the role is a parameter:
+// the handles the agent is holding) — with one opening: a SLOT's content is the instance's own,
+// and the list under it is as open as any frame's, however deep. The rule that decides is
+// identity.childListClosingInstanceOf (first SLOT or INSTANCE up the chain wins), and the two
+// roles ask it different questions — this is the whole reason the role is a parameter:
 //
-//   • a DESTINATION fails if it IS an instance or sits inside one — either way the child would
-//     land in an instance's child list.
-//   • a SUBJECT fails only if it sits inside one. An instance is an ordinary scene node in ITS
-//     parent, so moving or deleting the instance itself is not just legal but routine, and this
-//     gate must not stand in the way of it.
+//   • a DESTINATION counts itself: an INSTANCE destination is closed, a SLOT destination open.
+//   • a SUBJECT starts at its parent. An instance is an ordinary scene node in ITS parent, so
+//     moving or deleting the instance itself is not just legal but routine, and this gate must
+//     not stand in the way of it; the SLOT node itself is a sublayer, so it stays put.
 function assertInstanceChildListUntouched(subject: string, node: any, role: "destination" | "subject"): void {
-  const host = role === "destination" && node.type === "INSTANCE" ? node : instanceAncestorOf(node);
+  const host = childListClosingInstanceOf(node, role === "destination");
   if (!host) return;
   const what = role === "destination" ? "destination" : "node being moved or removed";
   throw new Error(
     subject + ": the " + what + " is inside component instance " + JSON.stringify(host.name) + " (id " +
       JSON.stringify(host.id) + "), whose child list Figma won't let a plugin change. Edit the main " +
-      "component it comes from (flcm never auto-detaches an instance).",
+      "component it comes from (flcm never auto-detaches an instance)" + slotsOpenIn(host, role) + ".",
   );
+}
+
+// The SLOTs a refused destination's instance HAS, named — the one open door, listed rather than
+// hinted at. Nothing for a subject: what moves or goes is not looking for somewhere to land.
+function slotsOpenIn(host: any, role: "destination" | "subject"): string {
+  if (role !== "destination") return "";
+  const slots = host.findAll((n: any) => n.type === "SLOT") as any[];
+  if (!slots.length) return "";
+  return " — or place into one of its SLOTs, whose content is the instance's own: " +
+    slots.map((s) => JSON.stringify(s.name) + " (id " + JSON.stringify(s.id) + ")").join(", ") +
+    ". Stating the content whole is flcm.edit(instance, { overrides: { \"<slotPath>\": { children: [ … ] } } })";
 }
 
 // A COMPONENT_SET's children are its VARIANTS — every one a COMPONENT, all sharing the set's axes.
@@ -217,7 +229,7 @@ interface PreparedPlacement { kind: "placement"; dest: Destination; node: any; w
 function applyInsert(verb: string, { dest, spec, resources, bindings }: PreparedInsert): InsertResult {
   // `bindings` is opted into ONLY for an insert landing inside a component (see RenderCtx.bindings):
   // without the list, buildNode throws on a bound node rather than dropping the authoring word.
-  const ctx: RenderCtx = { ...resources, keyed: {}, pending: [], ...(bindings ? { bindings: [] } : {}) };
+  const ctx = beginRenderWalk(resources, { bindings: !!bindings });
   const fail = beginMutatingApply(verb, dest.parent);
   let root: any;
   try {

@@ -35,6 +35,21 @@ const COPY_FIELDS = ["name", "layoutMode", "itemSpacing", "paddingTop", "padding
 // reports the bound frame as `type: "SLOT"` inside every instance and accepts appendChild on it.
 const CONTAINER_TYPES = ["PAGE", "FRAME", "GROUP", "COMPONENT", "COMPONENT_SET", "INSTANCE", "SECTION", "SLOT"];
 
+// An instance's child list is closed to plugins, a SLOT's is open: walking up from the node (the
+// destination counts itself; a moving or removed child starts at its parent), the first SLOT or
+// INSTANCE met decides. Live Figma throws on appendChild/insertChild into an instance's own tree
+// and on remove() of one of its sublayers; appendChild INTO a SLOT is verified live. Three
+// ASSUMPTIONS on the live checklist ride the same rule here: (1) a fresh instance's placeholder
+// sublayers (`I<inst>;<child>` ids, cloned from the definition's slot frame) can be remove()d;
+// (2) content appended into a slot gets a plain id of its own, not a composite one; (3) insertChild
+// at an index into a SLOT works as it does for a frame.
+function assertChildListOpen(node, countSelf, verb) {
+  for (let p = countSelf ? node : node.parent; p && p.type !== "PAGE"; p = p.parent) {
+    if (p.type === "SLOT") return;
+    if (p.type === "INSTANCE") throw new Error(verb + ": cannot change the children of an instance (" + JSON.stringify(p.name) + ")");
+  }
+}
+
 // Every per-range styling bucket the setRange* recorders write — the set a `characters` write clears.
 const RANGE_BUCKETS = ["_rangeFonts", "_rangeSizes", "_rangeFills", "_rangeLineHeights",
   "_rangeLetterSpacings", "_rangeDecorations", "_rangeHyperlinks", "_rangeCases",
@@ -47,7 +62,6 @@ class Node {
     this.name = type === "FRAME" ? "Frame" : type === "TEXT" ? "Text" : type;
     this.removed = false;
     this.parent = null;
-    this.children = [];
     // auto-layout
     this.layoutMode = "NONE";
     this.itemSpacing = 0;
@@ -98,11 +112,15 @@ class Node {
     if (type === "RECTANGLE" || type === "ELLIPSE" || type === "POLYGON" || type === "STAR") { this._fixedW = 100; this._fixedH = 100; }
     if (type === "LINE") { this._fixedW = 100; this._fixedH = 0; }
     if (type === "VECTOR") { this._fixedW = 24; this._fixedH = 24; this.vectorPaths = []; }
-    // Only a ChildrenMixin node carries appendChild/insertChild — a live RectangleNode has
-    // neither, and the structural verbs' container gate keys on exactly that, so a mock that
-    // handed them to every node would let "append into a rect" pass here and fail in Figma.
+    // Only a ChildrenMixin node carries `children` / appendChild / insertChild — a live
+    // RectangleNode has none of them, and the structural verbs' container gate keys on exactly
+    // that, so a mock that handed them to every node would let "append into a rect" pass here and
+    // fail in Figma. `children` matters to the READ side too: `"children" in node` is how
+    // node-to-snapshot tells an emptied container from a node that never had a list, so a leaf
+    // carrying `[]` would read back as a container someone emptied.
     // Bound per instance (not on the prototype) because that presence IS the modelled fact.
     if (CONTAINER_TYPES.indexOf(type) !== -1) {
+      this.children = [];
       this.appendChild = (child) => this._appendChild(child);
       this.insertChild = (index, child) => this._insertChild(index, child);
     }
@@ -123,11 +141,15 @@ class Node {
   get _isAuto() { return this.layoutMode === "HORIZONTAL" || this.layoutMode === "VERTICAL"; }
 
   _appendChild(child) {
+    assertChildListOpen(this, true, "appendChild");
+    if (child.parent) assertChildListOpen(child, false, "appendChild");
     if (child.parent) child.parent.children = child.parent.children.filter((c) => c !== child);
     child.parent = this;
     this.children.push(child);
   }
   _insertChild(index, child) {
+    assertChildListOpen(this, true, "insertChild");
+    if (child.parent) assertChildListOpen(child, false, "insertChild");
     // [directional — on the live checklist]: neither the typings nor the published docs define the
     // same-parent case, so this models the behavior Figma's UI shows rather than a cited contract.
     // When `child` is already in THIS parent, `index` is
@@ -154,6 +176,7 @@ class Node {
   }
   resize(w, h) { this._fixedW = w; this._fixedH = h; }
   remove() {
+    if (this.parent) assertChildListOpen(this, false, "remove");
     if (this.parent) this.parent.children = this.parent.children.filter((c) => c !== this);
     this.parent = null;
     this.removed = true;
@@ -304,13 +327,13 @@ class Node {
 
   findAll(pred) {
     const out = [];
-    const walk = (n) => n.children.forEach((c) => { if (!pred || pred(c)) out.push(c); walk(c); });
+    const walk = (n) => (n.children || []).forEach((c) => { if (!pred || pred(c)) out.push(c); walk(c); });
     walk(this);
     return out;
   }
   findOne(pred) {
     let hit = null;
-    const walk = (n) => n.children.forEach((c) => { if (hit) return; if (pred(c)) { hit = c; return; } walk(c); });
+    const walk = (n) => (n.children || []).forEach((c) => { if (hit) return; if (pred(c)) { hit = c; return; } walk(c); });
     walk(this);
     return hit;
   }
@@ -361,7 +384,7 @@ class Node {
     const dimIsPrimary = (dim === "w") === isRow;
     const pad = dim === "w" ? this._padW() : this._padH();
     // Absolutely-positioned children are out of the flow — they don't contribute to the parent's hug.
-    const flow = this.children.filter((k) => k.layoutPositioning !== "ABSOLUTE");
+    const flow = (this.children || []).filter((k) => k.layoutPositioning !== "ABSOLUTE");
     if (dimIsPrimary) {
       let sum = 0;
       for (const k of flow) sum += k._sizeOf(dim);
@@ -518,7 +541,10 @@ class Node {
     const defs = definitionOwnerOf(this.mainComponent)._defs || {};
     const variant = this.variantProperties || {};
     for (const [name, def] of Object.entries(defs)) {
-      out[name] = { type: def.type, value: def.type === "VARIANT" ? variant[name] : this._props[name] };
+      // A SLOT's value live is `{ guid }` naming the slot's content container, never a scalar —
+      // what lets both read producers drop it (the SLOT sublayer already IS the content).
+      const slot = def.type === "SLOT" ? this.findOne((n) => n.type === "SLOT" && (n.componentPropertyReferences || {}).slotContentId === name) : null;
+      out[name] = { type: def.type, value: def.type === "VARIANT" ? variant[name] : def.type === "SLOT" ? { guid: slot ? slot.id : undefined } : this._props[name] };
     }
     return out;
   }
@@ -559,6 +585,9 @@ class Node {
   // its sublayers are re-cloned under the SAME instance id (so every composite id becomes
   // I<thisId>;<main's child id>). Shared by the VARIANT branch of setProperties and swapComponent —
   // they differ only in what carries across, not in how the tree is rebuilt.
+  // Filled SLOT content is dropped here, which is a modelling gap on the live checklist, not the
+  // contract: live Figma carries slot content across a variant change or swap where it can match
+  // the slot property on the target. Nothing in the preamble depends on either answer.
   _repointTo(main) {
     for (const k of COPY_FIELDS) if (k !== "x" && k !== "y") this[k] = main[k];
     this.children = [];
@@ -749,7 +778,7 @@ function cloneSubtree(src) {
   // A copied INSTANCE keeps pointing at the same main component, as live clone() does.
   n.mainComponent = src.mainComponent;
   if (src._props) n._props = { ...src._props };
-  for (const c of src.children) { const cc = cloneSubtree(c); cc.parent = n; n.children.push(cc); }
+  for (const c of src.children || []) { const cc = cloneSubtree(c); cc.parent = n; n.children.push(cc); }
   return n;
 }
 
@@ -780,8 +809,10 @@ function cloneInto(mainNode, instId, isRoot) {
     n.mainComponent = mainNode.mainComponent;
     n._props = { ...(mainNode._props || {}) };
   }
-  n.children = [];
-  for (const c of mainNode.children) { const cc = cloneInto(c, instId, false); cc.parent = n; n.children.push(cc); }
+  if (mainNode.children) {
+    n.children = [];
+    for (const c of mainNode.children) { const cc = cloneInto(c, instId, false); cc.parent = n; n.children.push(cc); }
+  }
   // From here this node FOLLOWS its definition node — see trackInstanceNode.
   trackInstanceNode(mainNode, n);
   return n;
