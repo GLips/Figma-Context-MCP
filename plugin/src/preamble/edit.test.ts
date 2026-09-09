@@ -57,7 +57,7 @@ test("vocabulary rejections happen before any write: unknown prop, key, bare x/y
   await assert.rejects(edit("card", { fill: "#ff0000", opacity: "bad" } as never), /`opacity` must be a number/);
   // Named words whose values are all null/undefined compile to nothing — same hazard as {}.
   await assert.rejects(edit("card", { fill: undefined }), /compiled to nothing/);
-  // All rejected in prepare, before the entry seal: no undo activity, node untouched.
+  // All rejected before the entry seal: no undo activity, node untouched.
   assert.deepEqual(figma.undoLog, logBefore);
   assert.deepEqual(node.fills[0].color, { r: 0, g: 0, b: 1 });
 });
@@ -581,7 +581,7 @@ test("a partial font delta on a MIXED text rejects; anchoring fontFamily makes i
   const node = await renderKeyedText("plain **bold**");
   assert.equal(node.fontName, figma.mixed); // markdown bold made the ranges diverge
   await assert.rejects(edit("label", { textStyle: { fontWeight: 600 } }), /mixes fonts/);
-  assert.equal(node.fontName, figma.mixed); // rejected in prepare, before any write — still mixed
+  assert.equal(node.fontName, figma.mixed); // rejected before any write — still mixed
   await edit("label", { textStyle: { fontFamily: "Inter", fontWeight: 600 } });
   assert.deepEqual(node.fontName, { family: "Inter", style: "Semi Bold" }); // uniform again
 });
@@ -738,32 +738,48 @@ test('the clamp gate holds from BOTH sides: width:"hug" on a live-clamped text r
   assert.equal(node.textAutoResize, "WIDTH_AND_HEIGHT");
 });
 
-// ——— slice 4.1: the live facts a compile reads must still hold at the seal ———
+// ——— the phase rule: the delta that lands is compiled against the document at the seal ———
 
-test("a live fact that changed during the resource round trip refuses the whole call — zero writes", async () => {
-  const node = await renderKeyedText("hello", { textStyle: { fontWeight: "bold" } });
-  const logBefore = [...figma.undoLog];
-  // The image fetch is the run's suspension point, and the user has the document open across it.
-  // Standing in for that user: the channel retypes the node's font before handing the bytes back.
+// The image fetch is the run's suspension point, and the user has the document open across it.
+// Standing in for that user: the channel retypes the node's font before handing the bytes back.
+function imageChannelThatRetypes(node: any, fontName: { family: string; style: string }): () => void {
   const g = globalThis as { __flcmHost?: unknown };
   g.__flcmHost = {
     requestImages: async (urls: string[]) => {
-      node.fontName = { family: "Inter", style: "Regular" };
+      node.fontName = fontName;
       return Object.fromEntries(urls.map((u) => [u, Buffer.from("bytes").toString("base64")]));
     },
     isRunCancelled: () => false,
   };
-  try {
-    // fontWeight was enriched against the live (bold) identity, which is gone by the time the
-    // bytes land — so the delta describes a node that no longer exists in that state.
-    await assert.rejects(
-      edit("label", { fill: image("https://cdn.example.com/a.jpg"), textStyle: { fontSize: 20 } }),
-      /changed while this call was loading fonts and images/,
-    );
-  } finally {
+  return () => {
     delete g.__flcmHost;
+  };
+}
+
+test("a live fact that changed during the round trip: the delta lands on the FRESH state, or refuses with zero writes", async () => {
+  const node = await renderKeyedText("hello", { textStyle: { fontWeight: "bold" } });
+  // Bold → Regular while the bytes are in flight. The delta names no font identity, so the gate's
+  // compile against the retyped node is just as valid: it lands, on the node as the user left it.
+  let restore = imageChannelThatRetypes(node, { family: "Inter", style: "Regular" });
+  try {
+    await edit("label", { fill: image("https://cdn.example.com/a.jpg"), textStyle: { fontSize: 20 } });
+  } finally {
+    restore();
   }
   assert.deepEqual(node.fontName, { family: "Inter", style: "Regular" }); // the user's own retype stands
-  assert.equal(node.fontSize, 12); // the delta never landed — still the default size
-  assert.deepEqual(figma.undoLog, logBefore); // refused in prepare: no seal, no rollback
+  assert.equal(node.fontSize, 20);
+  // A retype to a family this run never loaded is different: a reflow would throw on it, and the
+  // gate proves the prepare-time load covers the fresh compile before the seal — zero writes.
+  const logBefore = [...figma.undoLog];
+  restore = imageChannelThatRetypes(node, { family: "Roboto", style: "Regular" });
+  try {
+    await assert.rejects(
+      edit("label", { fill: image("https://cdn.example.com/b.jpg"), textStyle: { fontSize: 24 } }),
+      /changed to Roboto Regular while this call was loading fonts and images/,
+    );
+  } finally {
+    restore();
+  }
+  assert.equal(node.fontSize, 20);
+  assert.deepEqual(figma.undoLog, logBefore); // refused in the gate: no seal, no stamp, no rollback
 });

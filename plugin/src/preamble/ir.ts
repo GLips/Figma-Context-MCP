@@ -348,7 +348,7 @@ export interface WriteProps {
   // definition owns the property, what the variant axes are, which node a swap target names),
   // and an override delta compiles against the TYPE of the sublayer it targets — none of which
   // an inert constructor can see. The constructor validates their SHAPE (an object, known delta
-  // words); render's prepare phase resolves and compiles them (instance.ts) before any write.
+  // words); render's gate resolves and compiles them (instance.ts) before any write.
   component?: Target;
   componentProperties?: Record<string, ComponentPropertyInput>;
   overrides?: Record<string, OverrideDeltaInput>;
@@ -441,8 +441,9 @@ export type OverrideDeltaInput = Record<string, unknown>;
 
 // The INSTANCE words an EDIT delta may carry, kept raw for exactly the reason WriteProps keeps them
 // raw: which component a target names, which definition owns a property, and which sublayer a path
-// reaches are all live-document facts. Split out of the compiled patch by edit's stage 2 and resolved
-// by the verb's prepare (instance.prepareInstanceEditPlan). `componentId` is the swap word — read-side
+// reaches are all live-document facts. Split out of the compiled patch by edit's stage 2; the verb
+// resolves their targets in prepare and plans them in its gate (instance.planInstanceEdit).
+// `componentId` is the swap word — read-side
 // spelling, edit-side only (a constructor takes its component positionally).
 export interface InstanceEditWords {
   componentId?: Target;

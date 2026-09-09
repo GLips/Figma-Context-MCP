@@ -31,11 +31,10 @@ export function requestTreeAnnotationCategories(tree: WriteNode): void {
   }
 }
 
-// Runs inside the verb's resource-loading phase, beside the font load and the image fetch, so the
-// suspension it costs happens BEFORE every verb's after-the-last-await gates rather than after them
-// (a verb that validated the live document and then awaited a category would seal against a canvas
-// that had moved on). Resolve all names before creating any, so an ambiguous name refuses without
-// having created a category for an earlier one.
+// Runs inside the verb's resource-loading phase (prepare), beside the font load and the image
+// fetch: a resource like any other, loaded before the synchronous gate that decides everything
+// about the document (mutation-lock.ts). Resolve all names before creating any, so an ambiguous
+// name refuses without having created a category for an earlier one.
 export async function resolveAnnotationCategories(): Promise<void> {
   if (!requestedCategories.size) return;
   const categories = await figma.annotations.getAnnotationCategoriesAsync();

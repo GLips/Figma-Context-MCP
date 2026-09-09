@@ -1,19 +1,15 @@
 // mutation-lock — the single entry point every mutating verb takes (plan invariant 4): render, edit,
-// editMany, and the structural verbs. Three jobs, one place — serialize verbs, enforce cancellation,
-// own the undo scaffold (the seal/commit/rollback shape lives on enterMutatingVerb, exactly once,
-// never per verb):
+// editMany, the component verbs, and the structural verbs. Three jobs, one place — serialize verbs,
+// enforce cancellation, own the undo scaffold (the seal/commit/rollback shape lives on
+// enterMutatingVerb, exactly once, never per verb):
 //
 //   • Serialize mutating verbs WITHIN a run — the WHOLE verb, preparation included. Agent code can
 //     legally Promise.all two verbs, and every verb awaits internally (fonts, targets, images), so
-//     an unserialized preparation would read the canvas BEFORE an earlier queued verb's writes and
-//     validate against a state that no longer holds when its own turn arrives (width:"hug" and
-//     lineClamp racing each other would both "validate", landing an unbounded clamp sequential
-//     order rejects). The chain slot is reserved synchronously at call time, so gates always read
-//     the canvas in invocation order. Whole-verb serialization is REQUIRED only for canvas-reading
-//     preparations (edit's); render's resource loads read no document state and pay the
-//     serialization purely for the one shared entry shape — accepted, not required. Per-run state —
-//     the preamble is eval'd fresh inside each run's wrapper; exclusion BETWEEN runs is the host's
-//     writeChain (code.ts enqueueWrite).
+//     an unserialized preparation would resolve its targets and load its resources against a
+//     canvas an earlier queued verb is about to change. The chain slot is reserved synchronously
+//     at call time, so verbs run in invocation order. Per-run state — the preamble is eval'd fresh
+//     inside each run's wrapper; exclusion BETWEEN runs is the host's writeChain (code.ts
+//     enqueueWrite).
 //
 //   • Enforce cancellation during execution: once the host records this run's CANCEL, no further
 //     verb STARTS — checked as each verb's turn arrives AND again after its preparation (the
@@ -50,8 +46,9 @@ export function committedVerbCount(): number {
 // so the bridge SURVIVES that flip (a session outliving a mode switch is the point), which makes
 // this refusal reachable by design rather than an edge case.
 //
-// Read live per verb, never cached: the human can flip modes at any moment while the plugin runs.
-// Refused in prepare, before the entry seal, so a Dev Mode run leaves zero undo residue.
+// The mode is a live fact like any other, so it is read where every live fact is read: in the sync
+// stretch before the seal, never cached. A flip during the resource loads is caught here, and a
+// Dev Mode run leaves zero undo residue.
 function refuseIfDevMode(verb: string): void {
   if (figma.editorType === "dev") {
     throw new Error(
@@ -71,21 +68,37 @@ function refuseIfCancelled(verb: string): void {
 }
 
 /**
- * Run one mutating verb under the lock, in two phases that share the verb's single queue slot:
+ * Run one mutating verb under the lock, in three phases that share the verb's single queue slot.
+ * The rule that splits them is FRESHNESS: nothing decides anything about the document until there
+ * is no await left between the decision and the write.
  *
- *   prepare — resolve targets, compile, validate live facts, load fonts/images and resolve the
- *   annotation categories the verb names. Runs serialized behind every earlier verb, so its gates
- *   read the canvas exactly as this verb will find it. A throw here exits with ZERO undo calls — a
- *   rejected verb leaves no undo residue. The one thing prepare can leave behind is a file-scoped
- *   annotation category, which Figma keeps out of the undo stack entirely; a failure removes those
- *   by hand (removeFailedAnnotationCategories), which is why the cleanup wraps prepare as well as
- *   apply. Everything else here is read-only.
+ *   prepare — async, and DOCUMENT-BLIND in what it decides: shape-check the input, resolve every
+ *   target the input names to a live node (read.ts createResolvedTargets — the one read that has
+ *   to be async under dynamic-page), load fonts and image bytes, resolve the annotation categories
+ *   the input names. It MAY read the document to learn what to load (which fonts a text edit's live
+ *   font implies), and a planner run for that hint may refuse early — the same refusal the gate
+ *   would make a moment later, against the document as it stood then. Nothing prepare concludes
+ *   from a live property is what lands. A throw exits with ZERO undo calls. The one thing prepare
+ *   can leave behind is a file-scoped annotation category, which Figma keeps out of the undo stack
+ *   entirely; a failure removes those by hand (removeFailedAnnotationCategories), which is why the
+ *   cleanup wraps all three phases.
+ *
+ *   gate — SYNCHRONOUS, run immediately before the entry seal: every legality decision that reads
+ *   the document (a parent's layout mode, a text's live font and wrap, a component's definitions,
+ *   an instance ancestor, a destination's child list) is made here, against the document as it
+ *   stands at this instant, and the plans that apply will write are built here from the fresh
+ *   answers. A throw exits like a prepare throw: zero undo calls, no stamp, nothing to roll back.
+ *   No await can sit between a gate's read and apply's write, so a stale check is impossible by
+ *   construction — which is why no verb re-checks anything. The one decision apply makes for itself
+ *   is about what does not exist before the seal: a sublayer this span's own retarget produces
+ *   (instance.ts applyOverridePlans). A refusal there is a rollback, the price of that fact.
  *
  *   apply — the mutating span, wrapped in the invariant-2/4 undo scaffold:
  *     entry seal → stamp → apply → success commit          (the verb is exactly one undo step)
  *     entry seal → stamp → apply throws → commit + trigger (seal the partial writes, pop that step)
- *   apply is SYNCHRONOUS BY TYPE: the sealed span cannot suspend, so nothing can interleave
- *   between the seal and its commit. Anything a verb wants to await belongs in prepare.
+ *
+ * gate and apply are SYNCHRONOUS BY TYPE: neither can suspend, so nothing can interleave between a
+ * gate's read, the seal, and apply's commit. Anything a verb wants to await belongs in prepare.
  *
  * The failure path's commit is LOAD-BEARING, not a bookkeeping nicety: figma.triggerUndo() reverts
  * the last COMMITTED step and swallows uncommitted trailing writes with it (hand-verified
@@ -97,14 +110,14 @@ function refuseIfCancelled(verb: string): void {
  * alone is not enough.
  *
  * A verb IS a single call to this function — its public entry does nothing before it (even pure
- * input checks live in prepare). The invocation-order freshness guarantee is the slot reservation
- * happening before the caller ever yields; an await upstream of this call would reopen the
- * staleness window whole-verb serialization exists to close.
+ * input checks live in prepare). The invocation-order guarantee is the slot reservation happening
+ * before the caller ever yields; an await upstream of this call would let two verbs' prepares
+ * interleave, which whole-verb serialization exists to prevent.
  */
-// The type-level teeth behind "apply is synchronous": a plain `(p: P) => T` would happily infer
-// T = Promise<X> for an async apply — which returns at its FIRST await, letting the success
-// commit run mid-writes and later failures escape the rollback entirely. Resolving to `never`
-// makes that a compile error (pinned by a @ts-expect-error test).
+// The type-level teeth behind "gate and apply are synchronous": a plain `(p: P) => T` would happily
+// infer T = Promise<X> for an async callback — which returns at its FIRST await, letting the seal
+// land on an unfinished gate or the success commit run mid-writes. Resolving to `never` makes that
+// a compile error (pinned by a @ts-expect-error test).
 type SyncOnly<T> = T extends PromiseLike<unknown> ? never : T;
 
 // The seal alone does not bound the rollback. figma.commitUndo() with nothing written since the
@@ -123,13 +136,13 @@ function stampUndoStep(): void {
   figma.root.setPluginData(UNDO_STEP_STAMP_KEY, previous === "1" ? "0" : "1");
 }
 
-export function enterMutatingVerb<P, T>(
+export function enterMutatingVerb<P, G, T>(
   verb: string,
   prepare: () => Promise<P>,
-  apply: (prepared: P) => SyncOnly<T>,
+  gate: (prepared: P) => SyncOnly<G>,
+  apply: (gated: G) => SyncOnly<T>,
 ): Promise<T> {
   const turn = verbChain.then(async () => {
-    refuseIfDevMode(verb);
     refuseIfCancelled(verb);
     // The verb's annotation-category slate, opened here rather than by prepare because its other
     // half is the failure path below: what a prepare created must be removable from a catch that
@@ -138,15 +151,18 @@ export function enterMutatingVerb<P, T>(
     try {
       const prepared = await prepare();
       // Prepare's awaits are the run's suspension points — a CANCEL that arrived during them must
-      // fail closed here, before the seal, not mutate on a dead run's behalf.
+      // fail closed here, before the seal, not mutate on a dead run's behalf; a Dev Mode flip
+      // during them is the same kind of fact, read at the same place.
       refuseIfCancelled(verb);
+      refuseIfDevMode(verb);
+      const gated = gate(prepared);
       figma.commitUndo();
       // Outside the rollback-protected block on purpose: a stamp that fails to write has put
       // nothing of this verb's on the canvas, and a triggerUndo here would be exactly the
       // overreach into the previous step the stamp exists to prevent.
       stampUndoStep();
       try {
-        const result = apply(prepared);
+        const result = apply(gated);
         figma.commitUndo();
         committedVerbs++;
         return result;
@@ -156,13 +172,13 @@ export function enterMutatingVerb<P, T>(
         throw err;
       }
     } catch (err) {
-      // Wraps prepare AND apply: a category is created during the resource loads, so a validation
-      // that fails after them (or a write that fails inside the seal) both leave one to remove.
+      // Wraps every phase: a category is created during the resource loads, so a gate that refuses
+      // after them (or a write that fails inside the seal) both leave one to remove.
       throw removeFailedAnnotationCategories(err);
     }
   });
   // A failed verb must not poison the chain — the failure belongs to its caller (via `turn`);
-  // later verbs proceed against the rolled-back (or, on a prepare reject, untouched) canvas.
+  // later verbs proceed against the rolled-back (or, on a prepare/gate reject, untouched) canvas.
   // (Same swallow as the host's writeChain, code.ts enqueueWrite.)
   verbChain = turn.catch(() => {});
   return turn;

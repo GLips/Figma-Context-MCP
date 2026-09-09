@@ -594,7 +594,7 @@ export const COMPONENT_TARGET_HINT = "a component's node id (a read's `component
 
 // flcm.instance(component, props) — stamp a component. Inert like every constructor: the component
 // target, the property values and the override deltas ride the WriteNode RAW (ir.ts WriteProps on why),
-// and render's prepare phase resolves them against the live document (instance.ts) before any write.
+// and render resolves them against the live document (instance.ts) before any write.
 // What IS judged here is everything the document can't change: the root words' vocabulary and values
 // (they compile exactly as a frame's do), the SHAPE of the two component bags, and each override
 // delta's words — the same document-blind gate edit's stage 1 runs on a delta.

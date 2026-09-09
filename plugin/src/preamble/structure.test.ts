@@ -6,7 +6,7 @@
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
-import { frame, rect, text, id } from "./flcm.js";
+import { frame, rect, text, image, id } from "./flcm.js";
 import { render } from "./render.js";
 import { append, prepend, insertBefore, insertAfter, move, remove, clone } from "./structure.js";
 import { get } from "./read.js";
@@ -109,7 +109,81 @@ test("legality is re-asked against the DESTINATION: a fill can't land on the pag
   // A node whose live width fills its row can't be moved to the page either — the words were
   // legal where it sat, not where it would land.
   await assert.rejects(append(id(figma.currentPage.id), "grower"), /parent frame/);
-  assert.deepEqual(figma.undoLog, before); // every reject fired in prepare, before any seal
+  assert.deepEqual(figma.undoLog, before); // every reject fired before any seal
+});
+
+test("the destination is read at the seal: an anchor moved during the image fetch is followed to its new parent", async () => {
+  const out = await render(
+    frame({ key: "board", width: 400, height: 400 }, [
+      frame({ key: "left", width: 200, height: 200 }, [rect({ key: "anchor", width: 40, height: 40 })]),
+      frame({ key: "right", width: 200, height: 200 }),
+    ]),
+  );
+  const left = await figma.getNodeByIdAsync(out.keyed.left.id);
+  const right = await figma.getNodeByIdAsync(out.keyed.right.id);
+  const anchor = await figma.getNodeByIdAsync(out.keyed.anchor.id);
+  // The image fetch is the run's suspension point; the user drags the anchor across it.
+  const g = globalThis as { __flcmHost?: unknown };
+  g.__flcmHost = {
+    requestImages: async (urls: string[]) => {
+      right.appendChild(anchor);
+      return Object.fromEntries(urls.map((u) => [u, Buffer.from("bytes").toString("base64")]));
+    },
+    isRunCancelled: () => false,
+  };
+  try {
+    const placed = await insertAfter("anchor", rect({ name: "beside", width: 20, height: 20, fill: image("https://cdn.example.com/a.jpg") }));
+    assert.equal(placed.to.id, right.id);
+  } finally {
+    delete g.__flcmHost;
+  }
+  assert.deepEqual(names(right), ["RECTANGLE", "beside"]);
+  assert.deepEqual(names(left), []);
+});
+
+test("a source deleted while the destination resolved refuses at the seal — Figma would have cloned the corpse", async () => {
+  const out = await render(
+    frame({ key: "board", width: 400, height: 400 }, [rect({ key: "src", width: 40, height: 40 }), frame({ key: "dest", width: 200, height: 200 })]),
+  );
+  const src = await figma.getNodeByIdAsync(out.keyed.src.id);
+  const dest = await figma.getNodeByIdAsync(out.keyed.dest.id);
+  const before = [...figma.undoLog];
+  // clone resolves its source, then its destination; the user deletes the source between the two.
+  const getNodeByIdAsync = figma.getNodeByIdAsync;
+  figma.getNodeByIdAsync = async (nodeId: string) => {
+    if (nodeId === dest.id) src.remove();
+    return getNodeByIdAsync.call(figma, nodeId);
+  };
+  try {
+    await assert.rejects(clone(id(src.id), id(dest.id)), /flcm\.clone: "RECTANGLE" \(id .*\) was deleted while this call was resolving targets and loading resources/);
+  } finally {
+    figma.getNodeByIdAsync = getNodeByIdAsync;
+  }
+  assert.deepEqual(names(dest), []);
+  assert.deepEqual(figma.undoLog, before);
+});
+
+test("a destination dragged to a page this call never loaded refuses before the seal", async () => {
+  const out = await render(frame({ key: "board", width: 400, height: 400 }, [rect({ key: "anchor", width: 40, height: 40 })]));
+  const anchor = await figma.getNodeByIdAsync(out.keyed.anchor.id);
+  const before = [...figma.undoLog];
+  const g = globalThis as { __flcmHost?: unknown };
+  g.__flcmHost = {
+    requestImages: async (urls: string[]) => {
+      figma.createPage().appendChild(anchor); // under dynamic-page that page's child list is unreadable until loaded
+      return Object.fromEntries(urls.map((u) => [u, Buffer.from("bytes").toString("base64")]));
+    },
+    isRunCancelled: () => false,
+  };
+  try {
+    await assert.rejects(
+      insertAfter("anchor", rect({ width: 20, height: 20, fill: image("https://cdn.example.com/a.jpg") })),
+      /moved to page "Page 2" \(id .*\) while this call was resolving targets and loading resources, and that page is not loaded/,
+    );
+  } finally {
+    delete g.__flcmHost;
+  }
+  assert.deepEqual(figma.undoLog, before);
 });
 
 test("prepare rejects a non-container destination, a cycle, and a hand-built spec — with zero writes", async () => {

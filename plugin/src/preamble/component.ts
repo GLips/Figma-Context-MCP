@@ -11,10 +11,11 @@
 // shape's own names for these facts, with the read's own lowercase types and field spellings; only
 // the wire keys Figma stores (`characters`, `mainComponent`, `slotContentId`) stay hidden here.
 //
-// Prepare/apply like every mutating verb: everything the document can refuse — the target, the
-// instance plans, fonts and images, an instance-swap default's component, every binding name against
-// this call's definitions — resolves in prepare with zero writes; the apply span is sync and sealed,
-// so one call is one undo step and a Figma refusal rolls the whole thing back.
+// Prepare/gate/apply like every mutating verb (mutation-lock.ts): the targets, fonts and images
+// resolve in prepare; everything the document can refuse — whether the target can be promoted,
+// the instance plans, an instance-swap default's component, every binding name against this
+// call's definitions — is decided in the synchronous gate with zero writes; the apply span is
+// sync and sealed, so one call is one undo step and a Figma refusal rolls the whole thing back.
 //
 // A SLOT is authored as a bound FRAME, not created: `figma.createSlot()` exists but yields an
 // unpositioned 100×100 free-form box, while a plain frame bound with `{ slot: name }` keeps its
@@ -24,17 +25,18 @@
 import {
   WriteNode, WriteChild, Handle, Target, ComponentPropertyBinding, ComponentResult, VariantEntryInput,
 } from "./ir.js";
-import { resolveTarget } from "./read.js";
+import { resolveTarget, createResolvedTargets, ResolvedTargets } from "./read.js";
 import {
   settleHandles, mintHandle, BoundSpecNode, InstancePlans, beginRenderWalk, RenderResources,
 } from "./bridge.js";
 import { assertConstructorBuiltTree, isConstructorBuilt, isReadSpec } from "./provenance.js";
 import { assertSizingResolvesAgainstParentFrame } from "./layout-legality.js";
-import { loadTreeResources, buildTreeOnPage } from "./render.js";
+import { loadTreeResources, gateTreeResources, buildTreeOnPage, LoadedTreeResources } from "./render.js";
 import { enterMutatingVerb } from "./mutation-lock.js";
+import { assertNodeStillOnCanvas, createLoadedPages, loadPageForWrite, assertPageLoaded } from "./freshness.js";
 import { beginMutatingApply } from "./verb-error.js";
 import { instanceAncestorOf, readKey, writeKey, describeNodeIdentity, SLOT_CONTENT_WIRE_KEY } from "./identity.js";
-import { resolveComponentTarget } from "./instance.js";
+import { resolveComponentNode } from "./instance.js";
 import { own, rejectUnknownKeys } from "./validate.js";
 import { KNOWN_KEYS, isTargetShaped, COMPONENT_TARGET_HINT } from "./flcm.js";
 import type { ComponentOptions, VariantsOptions } from "./schema.js";
@@ -287,26 +289,29 @@ function bindersOf(bound: readonly BoundSpec[], definition: AuthoredDefinition):
 // the property, because that node already states the value the component starts at — a bound text's
 // content, a bound layer's visibility, a bound instance's component. Nothing binds it and nothing
 // was passed: refused, since a silent "" or `true` would be an invented design decision.
-async function resolveDefaults(
-  definitions: readonly AuthoredDefinition[], bound: readonly BoundSpec[], plans: InstancePlans, form: SubjectForm,
-): Promise<PreparedDefinition[]> {
-  const out: PreparedDefinition[] = [];
-  for (const definition of definitions) {
-    out.push({ name: definition.name, figmaType: definition.figmaType, defaultValue: await defaultFor(definition, bound, plans, form) });
-  }
-  return out;
+function resolveDefaults(
+  definitions: readonly AuthoredDefinition[], bound: readonly BoundSpec[], plans: InstancePlans, form: SubjectForm, targets: ResolvedTargets,
+): PreparedDefinition[] {
+  return definitions.map((definition) => ({ name: definition.name, figmaType: definition.figmaType, defaultValue: defaultFor(definition, bound, plans, form, targets) }));
 }
 
-async function defaultFor(
-  definition: AuthoredDefinition, bound: readonly BoundSpec[], plans: InstancePlans, form: SubjectForm,
-): Promise<boolean | string> {
+// The async half of the defaults: an explicit instance-swap default names a component. Its type is
+// authored, so which defaults are targets is known without the document.
+async function resolveDefaultTargets(definitions: readonly AuthoredDefinition[], targets: ResolvedTargets): Promise<void> {
+  for (const definition of definitions) {
+    if (definition.figmaType === "INSTANCE_SWAP" && definition.defaultValue !== undefined) await targets.resolve(definition.defaultValue as Target);
+  }
+}
+
+function defaultFor(
+  definition: AuthoredDefinition, bound: readonly BoundSpec[], plans: InstancePlans, form: SubjectForm, targets: ResolvedTargets,
+): boolean | string {
   const at = SUBJECT + " options.propertyDefinitions[" + JSON.stringify(definition.name) + "]";
   // A slot's "value" is the empty string Figma wants; its content is the bound frame.
   if (definition.figmaType === "SLOT") return "";
   if (definition.defaultValue !== undefined) {
     if (definition.figmaType !== "INSTANCE_SWAP") return definition.defaultValue as boolean | string;
-    const resolved = await resolveComponentTarget(definition.defaultValue as Target, at);
-    return resolved.base.id;
+    return resolveComponentNode(targets.node(definition.defaultValue as Target, at), at).base.id;
   }
   const binders = bindersOf(bound, definition);
   if (!binders.length) {
@@ -380,7 +385,7 @@ const WOULD_WRAP =
 // Everything that disqualifies a SPEC ROOT from being promoted. A leaf spec — a text, a shape, a
 // path, an instance — is exactly the wrappable case above, and the mismatch is silent twice over:
 // the key the author put on the root would end up on the wrapper, not on the node they keyed.
-// Judged in prepare, before a single node is built, so a refusal costs nothing.
+// Document-blind, so judged in prepare before a single resource is loaded: a refusal costs nothing.
 function assertPromotableSpecRoot(spec: WriteNode): void {
   if (spec.type === "FRAME") return;
   // The one non-FRAME spec that builds a frame: createNodeFromSvg returns a FrameNode of vectors.
@@ -512,12 +517,27 @@ function collectKeyed(root: any): Record<string, any> {
 interface PreparedSpecComponent {
   kind: "spec";
   spec: WriteNode;
+  loaded: LoadedTreeResources;
+  bound: BoundSpec[];
+  options: PreparedOptions;
+}
+
+interface PreparedTargetComponent {
+  kind: "target";
+  node: any;
+  targets: ResolvedTargets;
+  options: PreparedOptions;
+}
+
+interface GatedSpecComponent {
+  kind: "spec";
+  spec: WriteNode;
   resources: RenderResources;
   definitions: PreparedDefinition[];
   options: PreparedOptions;
 }
 
-interface PreparedTargetComponent {
+interface GatedTargetComponent {
   kind: "target";
   node: any;
   definitions: PreparedDefinition[];
@@ -536,15 +556,17 @@ interface PreparedTargetComponent {
 export function component(specOrTarget: WriteNode | Target, options?: ComponentOptions): Promise<ComponentResult> {
   return enterMutatingVerb(
     "component",
+    // Prepare — the document-blind checks, then the targets and resources.
     async (): Promise<PreparedSpecComponent | PreparedTargetComponent> => {
       const prepared = compileComponentOptions(options);
       if (classifySubject(specOrTarget) === "target") {
         const node: any = await resolveTarget(specOrTarget as Target);
-        assertPromotable(node);
         // No spec, so nothing binds anything: a definition without an explicit default, and any
         // slot at all, refuse here naming what THIS form can pass.
         assertSlotsAreBound([], prepared.definitions, "target");
-        return { kind: "target", node, definitions: await resolveDefaults(prepared.definitions, [], new Map(), "target"), options: prepared };
+        const targets = createResolvedTargets();
+        await resolveDefaultTargets(prepared.definitions, targets);
+        return { kind: "target", node, targets, options: prepared };
       }
       const spec = specOrTarget as WriteNode;
       assertConstructorBuiltTree(spec);
@@ -555,16 +577,28 @@ export function component(specOrTarget: WriteNode | Target, options?: ComponentO
       const bound = collectBoundSpecs(spec);
       assertBindingsResolve(bound, prepared.definitions);
       assertSlotsAreBound(bound, prepared.definitions, "spec");
-      const resources = await loadTreeResources(spec);
-      // Defaults AFTER the resources: a derived instance-swap default reads the instance plan the
-      // load just built, rather than resolving the same target a second time to a different answer.
-      return { kind: "spec", spec, resources, definitions: await resolveDefaults(prepared.definitions, bound, resources.instances, "spec"), options: prepared };
+      const loaded = await loadTreeResources(spec);
+      await resolveDefaultTargets(prepared.definitions, loaded.targets);
+      return { kind: "spec", spec, loaded, bound, options: prepared };
     },
-    (prepared) => (prepared.kind === "spec" ? applySpecComponent(prepared) : applyTargetComponent(prepared)),
+    // Gate — what the live document decides: the target's promotability, the instance plans, and
+    // the defaults. Defaults AFTER the plans: a derived instance-swap default reads the plan the
+    // gate just made, rather than resolving the same target a second time to a different answer.
+    (prepared): GatedSpecComponent | GatedTargetComponent => {
+      if (prepared.kind === "target") {
+        assertNodeStillOnCanvas(prepared.node, SUBJECT);
+        assertPromotable(prepared.node);
+        return { kind: "target", node: prepared.node, definitions: resolveDefaults(prepared.options.definitions, [], new Map(), "target", prepared.targets), options: prepared.options };
+      }
+      const resources = gateTreeResources(prepared.spec, prepared.loaded);
+      const definitions = resolveDefaults(prepared.options.definitions, prepared.bound, resources.instances, "spec", prepared.loaded.targets);
+      return { kind: "spec", spec: prepared.spec, resources, definitions, options: prepared.options };
+    },
+    (gated) => (gated.kind === "spec" ? applySpecComponent(gated) : applyTargetComponent(gated)),
   );
 }
 
-function applySpecComponent({ spec, resources, definitions, options }: PreparedSpecComponent): ComponentResult {
+function applySpecComponent({ spec, resources, definitions, options }: GatedSpecComponent): ComponentResult {
   // One of the two ctxs that opt INTO binding collection — this verb declares the properties in the
   // same call; the other is an insert landing inside a component (structure.ts's applyInsert, which
   // has one already declaring them). See RenderCtx.bindings.
@@ -593,7 +627,7 @@ function applySpecComponent({ spec, resources, definitions, options }: PreparedS
   }
 }
 
-function applyTargetComponent({ node, definitions, options }: PreparedTargetComponent): ComponentResult {
+function applyTargetComponent({ node, definitions, options }: GatedTargetComponent): ComponentResult {
   const fail = beginMutatingApply("component", node);
   try {
     // Read the key BEFORE the conversion and re-stamp it after, exactly as the spec form does:
@@ -762,29 +796,39 @@ function assertCombinable(node: any, at: string): void {
 export function variants(entries: VariantEntryInput[], options: VariantsOptions): Promise<Handle> {
   return enterMutatingVerb(
     "variants",
-    async (): Promise<PreparedVariants> => {
+    // Prepare — the members, resolved; and the first member's page loaded (freshness.ts on why the
+    // gate proves that page is still the one the set lands on).
+    async () => {
       const opts = compileVariantsOptions(options);
       const authored = compileVariantEntries(entries);
       const members: { node: any; name: string }[] = [];
       for (let i = 0; i < authored.length; i++) {
-        const at = VARIANTS_SUBJECT + " entries[" + i + "]";
         const node: any = await resolveTarget(authored[i].component);
-        assertCombinable(node, at);
         const twin = members.findIndex((m) => m.node === node);
         if (twin !== -1) {
           throw new Error(VARIANTS_SUBJECT + ": entries[" + twin + "] and entries[" + i + "] name the same component (" + describeNodeIdentity(node) + ") — one component is one variant.");
         }
         members.push({ node, name: authored[i].name });
       }
+      const pages = createLoadedPages();
+      await loadPageForWrite(members[0].node.parent, pages);
+      return { members, pages, options: opts };
+    },
+    // Gate — every fact the set is built from, read at the seal: each member still on the canvas
+    // and combinable, the first member's parent, and the set's index among the survivors.
+    ({ members, pages, options: opts }): PreparedVariants => {
+      members.forEach((member, i) => {
+        const at = VARIANTS_SUBJECT + " entries[" + i + "]";
+        assertNodeStillOnCanvas(member.node, at);
+        assertCombinable(member.node, at);
+      });
       const parent = members[0].node.parent;
       if (!parent) {
         throw new Error(
           VARIANTS_SUBJECT + ": " + describeNodeIdentity(members[0].node) + " has no parent for the set to land in — the set takes the first component's place. Put it on a page first.",
         );
       }
-      // Under `documentAccess: dynamic-page` a PageNode's `children` throws until it is loaded, and
-      // the first member may live on a page that isn't current.
-      if (parent.type === "PAGE") await parent.loadAsync();
+      assertPageLoaded(parent, pages, VARIANTS_SUBJECT);
       return { members, parent, index: setIndexAmongSurvivors(members, parent), options: opts };
     },
     ({ members, parent, index, options: opts }) => {

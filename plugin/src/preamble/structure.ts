@@ -22,26 +22,28 @@
 
 import { WriteNode, WriteLayout, Target, Handle, InsertResult, MoveResult, CloneResult, RemoveResult } from "./ir.js";
 import { resolveTarget } from "./read.js";
+import { assertNodeStillOnCanvas, LoadedPages, createLoadedPages, loadPageForWrite, assertPageLoaded } from "./freshness.js";
 import { enterMutatingVerb } from "./mutation-lock.js";
 import {
   attachSpecChild, mintHandle, settleHandles, resolvePercents, beginRenderWalk, RenderResources,
   liveParentSpecFacts, assertLiveNodeLandsUnderParent, assertSpecRootLandsUnderParent, resettleMovedNode,
 } from "./bridge.js";
 import { assertConstructorBuiltTree, isConstructorBuilt, isReadSpec } from "./provenance.js";
-import { loadTreeResources } from "./render.js";
+import { loadTreeResources, gateTreeResources, LoadedTreeResources } from "./render.js";
 import { prepareInsertBindings, applyInsertBindings, InsertBindingPlan } from "./component-edit.js";
 import { clearKeysDeep, childListClosingInstanceOf } from "./identity.js";
 import { beginMutatingApply } from "./verb-error.js";
 
-// Where a placement verb puts its subject inside the destination. `place` is deliberately a
-// closure evaluated in the APPLY span: an index read in prepare would be stale by the time the
-// awaits (target resolution, fonts, images) resolve.
+// Where a placement verb puts its subject inside the destination. `place` is a closure evaluated
+// in the APPLY span, right after the gate that built it — the sibling's index is read at the
+// moment of the insert, never carried.
 interface Destination {
   parent: any;
   place: (node: any) => void;
 }
 
-// ---- prepare-phase gates. Every one of these fires with ZERO writes (invariant 2). ----
+// ---- gate-phase refusals. Every one of these fires with ZERO writes (invariant 2), in the verb's
+// synchronous gate (mutation-lock.ts), against the document as it stands at the seal. ----
 
 // A container is a node with Figma's ChildrenMixin — the structural test, not a type allow-list,
 // so a container type we've never heard of works and a leaf fails with the same message.
@@ -170,17 +172,19 @@ function classifyPlaceable(subject: string, thing: unknown): "spec" | "target" {
 
 // ---- destination resolution ----
 
-// Under the manifest's `documentAccess: dynamic-page`, a PageNode's `children`/`appendChild`/
-// `insertChild` all throw until the page is loaded — [verified, plugin-typings 1.133: the note on
-// each of those members]. Every other destination is a scene node the target resolution already
-// materialized. Nothing is written here, so this belongs in prepare with the rest of the reads.
-async function loadPageDestination(node: any): Promise<void> {
-  if (node && node.type === "PAGE") await node.loadAsync();
+// The async half of a destination: the anchor, resolved, and the page it names loaded (the
+// anchor's own page for a sibling placement — a hint of where the seal will find it; freshness.ts
+// on why the gate proves it).
+async function resolveAnchor(anchor: Target, placement: Placement, pages: LoadedPages): Promise<any> {
+  const anchorNode: any = await resolveTarget(anchor);
+  await loadPageForWrite(placement === "before" || placement === "after" ? anchorNode.parent : anchorNode, pages);
+  return anchorNode;
 }
 
-async function resolveDestination(subject: string, anchor: Target, placement: Placement): Promise<Destination> {
-  const anchorNode: any = await resolveTarget(anchor);
-  await loadPageDestination(placement === "before" || placement === "after" ? anchorNode.parent : anchorNode);
+// The sync half, in the gate: the anchor still on the canvas, its parent (a live fact — the
+// sibling can have moved, and onto a page prepare never loaded) and the container check.
+function destinationOf(subject: string, anchorNode: any, placement: Placement, pages: LoadedPages): Destination {
+  assertNodeStillOnCanvas(anchorNode, subject);
   if (placement === "before" || placement === "after") {
     const parent = anchorNode.parent;
     if (!parent) {
@@ -189,11 +193,10 @@ async function resolveDestination(subject: string, anchor: Target, placement: Pl
           ") has no parent to insert beside. Use flcm.append(parent, …) instead.",
       );
     }
+    assertPageLoaded(parent, pages, subject);
     const offset = placement === "after" ? 1 : 0;
     return {
       parent,
-      // The sibling's index is read at APPLY time, never in prepare: the awaits between the two
-      // (target resolution, fonts, images) can leave a prepare-time index pointing anywhere.
       // The same-parent case rides Figma compensating for the node's own slot — [directional],
       // undefined in the typings and on the live checklist; a reorder is what would expose it.
       place: (node) => parent.insertChild(parent.children.indexOf(anchorNode) + offset, node),
@@ -207,7 +210,7 @@ async function resolveDestination(subject: string, anchor: Target, placement: Pl
 }
 
 // A destination that appends at the end — what `move`, `clone` and `append` all place into. Kept
-// beside resolveDestination so the two ways to name a destination stay one concept.
+// beside destinationOf so the two ways to name a destination stay one concept.
 function endOf(parent: any): Destination {
   return { parent, place: (node) => parent.appendChild(node) };
 }
@@ -271,9 +274,10 @@ type Placement = "end" | "start" | "before" | "after";
 
 // Everything a live subject owes its destination before it may be placed there. Shared by the move
 // branch and by `clone`, so a gate added here reaches both — they are the same operation on a node
-// that already exists, differing only in whether that node was born a moment ago. Synchronous by
-// type on purpose: every fact it reads is live, so it must run after its caller's LAST await.
-function prepareLivePlacement(subject: string, dest: Destination, node: any): PreparedPlacement {
+// that already exists, differing only in whether that node was born a moment ago. Runs in the
+// verb's gate: every fact it reads is live.
+function gateLivePlacement(subject: string, dest: Destination, node: any): PreparedPlacement {
+  assertNodeStillOnCanvas(node, subject);
   assertInstanceChildListUntouched(subject, dest.parent, "destination");
   assertInstanceChildListUntouched(subject, node, "subject");
   assertNoCycle(subject, node, dest.parent);
@@ -287,22 +291,28 @@ function placeVerb(verb: string, anchor: Target, thing: unknown, placement: Plac
   const subject = "flcm." + verb;
   return enterMutatingVerb(
     verb,
-    async (): Promise<PreparedInsert | PreparedPlacement> => {
+    // Prepare — the anchor, then the subject (a live node, or a whole sealed tree with its
+    // resources). The anchor first: a bad anchor refuses without paying for a font or image fetch.
+    async (): Promise<ResolvedMove | ResolvedInsert> => {
+      const pages = createLoadedPages();
       if (classifyPlaceable(subject, thing) === "target") {
-        const node: any = await resolveTarget(thing as Target);
-        return prepareLivePlacement(subject, await resolveDestination(subject, anchor, placement), node);
+        const anchorNode = await resolveAnchor(anchor, placement, pages);
+        return { kind: "move", node: await resolveTarget(thing as Target), anchorNode, pages };
       }
       // Whole tree, before the resource round-trip: a hand-built child rejects without a font or
       // image fetch, and a sealed tree can't change between here and the build (ADR-0012).
       const spec = thing as WriteNode;
       assertConstructorBuiltTree(spec);
-      // Resources BEFORE the destination, and this order is load-bearing: fonts and images are the
-      // long await in this prepare, and the user has the document open the whole time. Every live
-      // fact the gates below read — the parent's layout mode, its hug axes, its instance ancestry,
-      // and which component (if any) declares the properties a binding names — must be read AFTER
-      // the last yield, or the verb validates against a canvas that has moved on.
-      const resources = await loadTreeResources(spec);
-      const dest = await resolveDestination(subject, anchor, placement);
+      const anchorNode = await resolveAnchor(anchor, placement, pages);
+      return { kind: "insert", spec, loaded: await loadTreeResources(spec), anchorNode, pages };
+    },
+    // Gate — every live fact a placement turns on: the anchor's parent, its layout mode and hug
+    // axes, its instance ancestry, which component (if any) declares the properties a binding
+    // names, and the instance plans of an inserted tree.
+    (resolved): PreparedInsert | PreparedPlacement => {
+      const dest = destinationOf(subject, resolved.anchorNode, placement, resolved.pages);
+      if (resolved.kind === "move") return gateLivePlacement(subject, dest, resolved.node);
+      const { spec } = resolved;
       assertInstanceChildListUntouched(subject, dest.parent, "destination");
       assertSpecInsertNotIntoSet(subject, dest.parent);
       assertSpecRootLandsUnderParent(dest.parent, spec, subject);
@@ -310,11 +320,14 @@ function placeVerb(verb: string, anchor: Target, thing: unknown, placement: Plac
       // one place outside flcm.component where a binding names a property that exists. Everywhere
       // else this is the standing refusal, raised from inside (component-edit.ts).
       const bindings = prepareInsertBindings(subject, dest.parent, spec);
-      return { kind: "insert", dest, spec, resources, bindings };
+      return { kind: "insert", dest, spec, resources: gateTreeResources(spec, resolved.loaded), bindings };
     },
     (prepared) => (prepared.kind === "insert" ? applyInsert(verb, prepared) : applyPlacement(verb, prepared)),
   );
 }
+
+interface ResolvedMove { kind: "move"; node: any; anchorNode: any; pages: LoadedPages }
+interface ResolvedInsert { kind: "insert"; spec: WriteNode; loaded: LoadedTreeResources; anchorNode: any; pages: LoadedPages }
 
 /**
  * flcm.append(parent, thing) — place `thing` as the LAST child of `parent`. `thing` is either a
@@ -354,9 +367,11 @@ export function move(target: Target, parent: Target): Promise<MoveResult> {
             "flcm.id(id), or a handle), not a spec. To CREATE a node inside a parent, use flcm.append(parent, spec).",
         );
       }
-      const node: any = await resolveTarget(target);
-      return prepareLivePlacement("flcm.move", await resolveDestination("flcm.move", parent, "end"), node);
+      const pages = createLoadedPages();
+      const anchorNode = await resolveAnchor(parent, "end", pages);
+      return { node: await resolveTarget(target), anchorNode, pages };
     },
+    ({ node, anchorNode, pages }) => gateLivePlacement("flcm.move", destinationOf("flcm.move", anchorNode, "end", pages), node),
     (prepared) => applyPlacement("move", prepared),
   );
 }
@@ -369,8 +384,9 @@ export function move(target: Target, parent: Target): Promise<MoveResult> {
 export function remove(target: Target): Promise<RemoveResult> {
   return enterMutatingVerb(
     "remove",
-    async () => {
-      const node: any = await resolveTarget(target);
+    () => resolveTarget(target),
+    (node: any) => {
+      assertNodeStillOnCanvas(node, "flcm.remove");
       assertInstanceChildListUntouched("flcm.remove", node, "subject");
       return { node, from: node.parent };
     },
@@ -405,20 +421,22 @@ export function clone(target: Target, parent?: Target): Promise<CloneResult> {
   return enterMutatingVerb(
     "clone",
     async () => {
+      const pages = createLoadedPages();
       const node: any = await resolveTarget(target);
-      let dest: Destination;
-      if (parent != null) {
-        dest = await resolveDestination("flcm.clone", parent, "end");
-      } else {
-        await loadPageDestination(node.parent);
-        dest = endOf(node.parent);
-      }
+      if (parent != null) return { node, anchorNode: await resolveAnchor(parent, "end", pages), pages };
+      await loadPageForWrite(node.parent, pages);
+      return { node, anchorNode: undefined, pages };
+    },
+    ({ node, anchorNode, pages }) => {
+      assertNodeStillOnCanvas(node, "flcm.clone");
+      const dest = anchorNode !== undefined ? destinationOf("flcm.clone", anchorNode, "end", pages) : endOf(node.parent);
       if (!dest.parent) {
         throw new Error(
           "flcm.clone: " + JSON.stringify(node.name) + " (id " + JSON.stringify(node.id) +
             ") has no parent for the copy to land in — name one: flcm.clone(target, parent).",
         );
       }
+      assertPageLoaded(dest.parent, pages, "flcm.clone");
       assertInstanceChildListUntouched("flcm.clone", dest.parent, "destination");
       // The ORIGINAL's parent-relative intent: the copy is born carrying the same flow marks, and
       // they mean the old parent's axes exactly as a move's do. No cycle check — the copy did not

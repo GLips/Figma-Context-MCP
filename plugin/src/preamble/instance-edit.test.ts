@@ -153,6 +153,32 @@ test("componentId swaps the component; overrides in the same delta land on the N
   );
 });
 
+test("the main component is proven at the seal: a swap during the font load refuses with zero writes", async () => {
+  const { comp, label, inst } = await chipComponent();
+  const builtB = await render(frame({ key: "b", left: 400, layout: { mode: "row" } }, [text("B", { key: "labelB", name: "Label" })]));
+  const compB = figma.createComponentFromNode(await figma.getNodeByIdAsync(builtB.keyed.b.id));
+  compB.name = "Chip B";
+  const before = [...figma.undoLog];
+  // The delta names the component the instance HAS, so prepare plans it as a no-op swap. The font
+  // load is the suspension point; standing in for the user, it swaps the instance to Chip B. A
+  // gate that trusted prepare's relationship would leave Chip B in place and report success.
+  const loadFontAsync = figma.loadFontAsync;
+  figma.loadFontAsync = (font: unknown) => {
+    inst.swapComponent(compB);
+    return loadFontAsync.call(figma, font);
+  };
+  try {
+    await assert.rejects(
+      edit(id(inst.id), { componentId: comp.id, overrides: { [label.id]: { text: "Hi" } } }),
+      /the main component of INSTANCE .* changed while this call was resolving targets and loading resources \(it was COMPONENT "Chip"/,
+    );
+  } finally {
+    figma.loadFontAsync = loadFontAsync;
+  }
+  assert.deepEqual(figma.undoLog, before);
+  assert.equal(inst.mainComponent, compB); // the user's swap stands
+});
+
 test("the component words are INSTANCE-only — every other type rejects them by name", async () => {
   const out = await render(frame({ key: "card", width: 100, height: 100 }, [text("hi", { key: "t" })]));
   await assert.rejects(edit("card", { componentProperties: { Size: "Large" } }), /`componentProperties` is not a FRAME word/);
@@ -162,7 +188,7 @@ test("the component words are INSTANCE-only — every other type rejects them by
   assert.equal((await figma.getNodeByIdAsync(out.keyed.card.id)).width, 100);
 });
 
-test("every component-word refusal fires in prepare, with zero writes and zero undo residue", async () => {
+test("every component-word refusal fires before the seal, with zero writes and zero undo residue", async () => {
   const { comp, inst } = await chipComponent();
   const plain = await render(rect({ width: 10, height: 10 }));
   const logBefore = [...figma.undoLog];
@@ -295,7 +321,7 @@ test("a swap and a layout word in one delta gate on the component the swap bring
   assert.equal(freeInst.layoutMode, "HORIZONTAL");
   assert.equal(freeInst.itemSpacing, 20);
 
-  // The other direction: the swap makes the gap meaningless, so it rejects in prepare rather than
+  // The other direction: the swap makes the gap meaningless, so it rejects in the gate rather than
   // landing the swap and letting Figma refuse the write inside the sealed span.
   const before = [...figma.undoLog];
   await assert.rejects(
@@ -306,7 +332,7 @@ test("a swap and a layout word in one delta gate on the component the swap bring
   assert.equal(inst.mainComponent.name, "Chip");
 });
 
-test("an override's live gate runs in PREPARE — a refusal costs zero writes, not a rollback", async () => {
+test("an override's live gate runs BEFORE the seal — a refusal costs zero writes, not a rollback", async () => {
   const built = await render(frame({ key: "panel", left: 400, width: 120, height: 60 }, [frame({ key: "inner", width: 40, height: 40 })]));
   const panel = figma.createComponentFromNode(await figma.getNodeByIdAsync(built.keyed.panel.id));
   panel.name = "Panel";

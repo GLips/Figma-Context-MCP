@@ -94,7 +94,7 @@ test("one invalid delta mutates NOTHING, and the error names every failing entry
   // The valid entry beside the bad one never landed: the set is atomic, not each entry.
   assert.deepEqual(a.fills[0].color, { r: 1, g: 0, b: 0 });
   assert.equal(b.opacity, 1);
-  assert.deepEqual(figma.undoLog, logBefore); // rejected in prepare: no seal, no rollback
+  assert.deepEqual(figma.undoLog, logBefore); // rejected before the seal: no rollback
 });
 
 test("a parent turned auto-layout and a child set to fill succeed in EITHER array order", async () => {
@@ -291,7 +291,7 @@ test("a node deleted during the resource round trip refuses the whole batch — 
         { target: "a", changes: { fill: image("https://cdn.example.com/a.jpg") } },
         { target: "b", changes: { opacity: 0.5 } },
       ]),
-      /\[0\].*was deleted while this call was loading fonts and images/s,
+      /\[0\].*was deleted while this call was resolving targets and loading resources/s,
     );
   } finally {
     delete g.__flcmHost;

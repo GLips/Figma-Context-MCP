@@ -21,23 +21,27 @@
 // to the same canvas; the residue is a duplicate undo step, not divergent state. Keep it that way:
 // a relative delta word would turn that accepted race into canvas corruption.
 //
-// Validation is APPLY-time-fresh: the whole delta pipeline — vocabulary, target resolution, the
-// layout gates, clamp boundedness, font-identity enrichment, the font/image loads — runs as the
-// verb's serialized PREPARE phase inside the lock's queue slot (reserved synchronously; edit() is
-// a single enterMutatingVerb expression), so a run racing its own edits still has each edit's
-// gates read the canvas exactly as that edit will find it. A prepare reject leaves zero undo
-// residue; only the sealed apply span can mint a step.
+// Validation is SEAL-time-fresh, by phase rather than by re-check (mutation-lock.ts): the compile
+// reads the live node, and the compile that lands runs in the verb's synchronous GATE, right
+// before the entry seal, with no await between its reads and the writes. The same compile also
+// runs earlier, in prepare, purely to learn what to load — a text delta's fonts follow the node's
+// live font — and the gate proves that load still covers what it compiled against the fresh node
+// (fonts.ts assertTextEditFontsLoaded). A prepare or gate reject leaves zero undo residue; only the
+// sealed apply span can mint a step. The lock serializes whole verbs, so a run racing its own edits
+// still has each edit's gate read the canvas exactly as that edit will find it.
 //
 // The pipeline is FIVE NAMED STAGES because `editMany` drives the same ones N times over one queue
 // slot (invariant 4: a batch verb takes the lock once and rides the internal appliers, never the
 // public verb). Their ORDER is the contract, not their bodies:
 //
 //   1. rejectNonDeltaWords    pure — no document read at all, so it can run for every entry first
-//   2. compileEditPlan        the compile, which reads the LIVE node (font identity, wrap mode)
+//   2. compileEditPlan        the compile, which reads the LIVE node (font identity, wrap mode).
+//                             Prepare runs it for the resource hint; the gate runs it for real.
 //   3. loadEditResources      the verb's ONLY awaits: one font load, one image request, and the
 //                             annotation categories the batch names (resolved, created if absent)
-//   4. assertEditPlanStillApplies  the live gates, AFTER the last await — plus proof that the node
-//                             still exists and the facts stage 2 read still hold (readLiveTextFacts)
+//   4. gateEditPlan           SYNC, before the seal: the node still exists, the compile again on the
+//                             node as it stands now, proof the fonts loaded cover it, and the
+//                             live-parent layout gate — every document-reading decision, made once
 //   5a. applyEditPlanWrites     the sealed, commit-free span: everything that CHANGES the node
 //   5b. settleEditPlanSizes      what still PRODUCES geometry: percent size, then the text clamp
 //   5c. settleEditPlanPositions  what CONSUMES it: percent position and anchor, last of all
@@ -46,22 +50,16 @@
 // next: a size read while another entry still has writes to land is a number about to move.
 //
 // An INSTANCE delta adds no stage here. Its three component words are split off by stage 2 and left
-// RAW on the plan (`instanceWords`); the verb resolves them through instance.ts and BRACKETS the
-// stages above with the result — the retarget before 5a, the overrides after 5c (see edit.ts). They
-// bracket rather than join because a swap or a variant change replaces the very sublayers the
-// override paths name.
+// RAW on the plan (`instanceWords`); the verb resolves their targets in prepare and plans them in
+// its gate through instance.ts, and BRACKETS the stages above with the result — the retarget
+// before 5a, the overrides after 5c (see edit.ts). They bracket rather than join because a swap or
+// a variant change replaces the very sublayers the override paths name.
 //
 // A COMPONENT delta is split the same way (`componentWords` → component-edit.ts) and brackets the
 // same stages: the DEFINITION words (`description`, `propertyDefinitions`) land before 5a, so a
 // rename and a recolor of the same component are one undo step, and a sublayer's BINDING
 // (`componentPropertyReferences`) lands right after 5a — the layer is what this delta makes it
 // before it is wired to a property.
-//
-// Stage 4 is why stage 2's live reads are safe to make early. Loading fonts and image bytes
-// suspends the run for a WS round trip while the user has the document open, and a batch stacks one
-// suspension per entry — so a fact read before them is a guess by the time the seal lands. Rather
-// than trust it, the compile SNAPSHOTS what it read and stage 4 re-reads and compares. (The
-// dependency can't simply be reordered away: which fonts to load is derived from the live node.)
 
 import {
   WriteNode, WriteProps, EditableType, WriteLayout, WriteTextStyle, InstanceEditWords, ComponentEditWords,
@@ -69,6 +67,7 @@ import {
 } from "./ir.js";
 import { applyAnnotations, requestAnnotationCategories, requestTreeAnnotationCategories, resolveAnnotationCategories } from "./annotation-categories.js";
 import { beginMutatingApply } from "./verb-error.js";
+import { assertNodeStillOnCanvas } from "./freshness.js";
 import {
   applyPaint, applySceneProps, applyLiveNodeLayout, settleLiveNodePercentSize,
   settleLiveNodePercentPosition, assertLayoutDeltaResolvable, applyTextProps, applyTextClamp,
@@ -76,7 +75,7 @@ import {
 } from "./bridge.js";
 import { toFigmaEffects } from "./effects.js";
 import { acceptAuthoringProps, own, rejectNonDeltaWords as rejectNonDeltaWordsAgainst } from "./validate.js";
-import { liveFontWords, loadFontsForTextEdits, EditFontNeed } from "./fonts.js";
+import { liveFontWords, loadFontsForTextEdits, assertTextEditFontsLoaded, EditFontNeed, FontMap } from "./fonts.js";
 import {
   KNOWN_KEYS, compileNodeLocalProps, compileSizeWords, compilePlacementWords, compileContainerWords,
   compileLineWidth, compileTextStyleWords, compileTextContent, assertLineClampCount, fetchImagesForTrees,
@@ -131,8 +130,9 @@ function assertDeltaNotEmpty(changes: object, subject: string): void {
   }
 }
 
-// The per-type legality gate (prepare phase, after resolve and before the entry seal, so an illegal word rejects with
-// zero writes). Returns the type's word set so the compile step can flag radius/clip from it.
+// The per-type legality gate (a node's type is identity, not a live fact, so this holds whenever it
+// runs; an illegal word rejects with zero writes). Returns the type's word set so the compile step
+// can flag radius/clip from it.
 function assertDeltaLegalForType(node: SceneNode, changes: EditDelta, subject: string): ReadonlySet<string> {
   const legal =
     (DELTA_KEYS_BY_TYPE as Record<string, ReadonlySet<string>>)[node.type] ||
@@ -185,7 +185,6 @@ function compileDeltaPatch(changes: EditDelta, legal: ReadonlySet<string>, node:
   const patch: WriteProps = {};
   compileNodeLocalProps(patch, changes, { radius: legal.has("borderRadius"), clip: legal.has("clip") });
   if (patch.effects) toFigmaEffects(patch.effects);
-  requestAnnotationCategories(patch.annotations);
   // Layout words compile through the same helpers every constructor rides — never buildLayout,
   // whose creation default (omitted mode → "none") would turn a gap nudge into an auto-layout kill.
   // A LINE's `width` is flcm.line's own fixed-only compile, not the sizing-intent one.
@@ -269,8 +268,8 @@ function takeComponentEditWords(changes: EditDelta, subject: string): ComponentE
   }
   const bindings = own(changes as Record<string, unknown>, "componentPropertyReferences");
   if (bindings != null) {
-    // The bag's fields are judged against the LIVE node's type in prepare (component-edit.ts), which
-    // is also where a name is resolved — here it is only "an object with something in it".
+    // The bag's fields are judged against the LIVE node's type in the verb's gate (component-edit.ts),
+    // which is also where a name is resolved — here it is only "an object with something in it".
     if (typeof bindings !== "object" || Array.isArray(bindings)) {
       throw new Error(subject + '.componentPropertyReferences must be an object naming which component property drives which field, e.g. { text: "Label" } (or null to unbind) — got ' + JSON.stringify(bindings) + ".");
     }
@@ -356,39 +355,28 @@ function compileTextDeltaWords(changes: EditDelta, patch: WriteProps, node: Text
 // batch (edit-many.ts), which is what keeps every entry's gates reading the canvas at the same
 // moment. Everything below is preamble-internal — the IIFE bundle exports only the public verbs. ----
 
-// Every LIVE fact a compile reads off a TEXT node, as ONE comparable string — so recording the
-// facts and comparing them are the same code, and a fact added here is re-verified by
-// construction. (Only TEXT has any: the compile's other live read is `node.type`, which a live node
-// cannot change.) The mixed branch spells out the RANGE fonts rather than a "mixed" token, because
-// those are what the font preload reads — a retype that leaves the node mixed but swaps one range's
-// font would otherwise slip past stage 4 and surface as a generic apply-time refusal instead.
-function readLiveTextFacts(node: SceneNode): string | undefined {
-  if (node.type !== "TEXT") return undefined;
-  const t = node as TextNode;
-  const font =
-    t.fontName === figma.mixed
-      ? t.getRangeAllFontNames(0, t.characters.length).map((f) => f.family + " " + f.style).join(",")
-      : (t.fontName as FontName).family + " " + (t.fontName as FontName).style;
-  return font + "|" + t.textAutoResize + "|" + t.maxLines;
-}
-
 /**
- * One entry's compiled, ready-to-apply delta, plus what the compile read to produce it.
+ * One entry's compiled, ready-to-apply delta.
  *
- * `instanceWords` is the INSTANCE half, still RAW: only a live-document pass can resolve it, and the
- * compile is sync. The verb's prepare turns it into an `instance` plan (instance.ts) and the apply
- * span brackets the node-local stages with it — retarget before 5a, overrides after 5c.
+ * `instanceWords` is the INSTANCE half, still RAW: the compile is sync and document-local, and the
+ * words name targets that have to be resolved async. The verb resolves those in prepare and plans
+ * the half in its gate (instance.ts), and the apply span brackets the node-local stages with the
+ * result — retarget before 5a, overrides after 5c.
  */
 export interface EditPlan {
   node: SceneNode;
   patch: WriteProps;
-  liveTextFacts: string | undefined;
   instanceWords?: InstanceEditWords;
-  /** The COMPONENT half, still RAW — resolved by component-edit.ts in the verb's prepare. */
+  /** The COMPONENT half, still RAW — planned by component-edit.ts in the verb's gate. */
   componentWords?: ComponentEditWords;
 }
 
-/** Stage 2 — compile against the live node, recording every mutable fact the compile consulted. */
+/**
+ * Stage 2 — compile against the live node. Sync, and the reads it makes (a text's font, wrap, live
+ * clamp) are decisions, so the compile that LANDS is the gate's (gateEditPlan); prepare's call is
+ * the resource hint. A refusal here is the same refusal either way — from prepare it just arrives
+ * before the round trip, against the document as it stood then.
+ */
 export function compileEditPlan(node: SceneNode, changes: EditDelta, subject: string): EditPlan {
   changes = acceptAuthoringProps(changes, { type: node.type, verb: "edit", known: EDIT_KEYS, subject }) as EditDelta;
   // A delta that was ONLY read-shape identity (`{ id, type }`) folds to nothing — same refusal as an
@@ -400,8 +388,6 @@ export function compileEditPlan(node: SceneNode, changes: EditDelta, subject: st
   // Unconditional: an EMPTY component bag doesn't make `instanceWords`/`componentWords`, and it must
   // not reach the node-local compile either — `componentProperties` is not a word compileDeltaPatch knows.
   const nodeLocal = withoutDocumentResolvedWords(changes);
-  // Snapshot BEFORE the compile, so the recorded facts are the ones it goes on to read.
-  const liveTextFacts = readLiveTextFacts(node);
   const patch = Object.keys(nodeLocal).length ? compileDeltaPatch(nodeLocal, legal, node, subject) : {};
   // Every named word compiled to nothing (all values null/undefined, or an empty component bag) —
   // same hazard as `{}`: the verb would mint an undo step for zero writes. Instance and component
@@ -409,19 +395,19 @@ export function compileEditPlan(node: SceneNode, changes: EditDelta, subject: st
   if (!instanceWords && !componentWords && Object.keys(patch).length === 0) {
     throw new Error(subject + ": the delta compiled to nothing — every value was null, undefined, or an empty object. Pass a real value, or omit the prop.");
   }
-  const plan: EditPlan = { node, patch, liveTextFacts };
+  const plan: EditPlan = { node, patch };
   if (instanceWords) plan.instanceWords = instanceWords;
   if (componentWords) plan.componentWords = componentWords;
   return plan;
 }
 
 /**
- * What the INSTANCE specs a verb will build need loaded before its span: their plans (instance.ts
- * resolved them against the live component), the font needs of their override deltas, and the
- * SLOT CONTENT trees those overrides fill — spec trees in their own right, whose fonts and images
- * load exactly as a rendered tree's do and whose own nested instances are already in `plans`.
- * Produced by instance.ts for a rendered tree and for an instance delta alike; this module only
- * types it, because stage 3 below is what spends it.
+ * What the INSTANCE specs a verb will build need: their plans (instance.ts made them against the
+ * live component), the font needs of their override deltas, and the SLOT CONTENT trees those
+ * overrides fill — spec trees in their own right, whose fonts and images load exactly as a
+ * rendered tree's do and whose own nested instances are already in `plans`. Produced by
+ * instance.ts for a rendered tree and for an instance delta alike, twice per verb: prepare spends
+ * the needs on its loads (stage 3), the gate spends the plans on the build walk.
  */
 export interface InstanceNeeds {
   plans: Map<WriteNode, InstancePlan>;
@@ -434,35 +420,43 @@ export interface InstanceNeeds {
  * ONE font load and ONE image request however many entries there are: a batch is one verb, so it
  * owes one round trip, and every extra suspension is another instant the user can edit across.
  *
- * `needs` is every INSTANCE entry's slot content: the one way a delta BUILDS nodes, so the one way
- * an edit's resources carry instance plans and tree fonts at all.
+ * `plans` and `needs` are prepare's HINT plans — what the deltas need loaded if the document stays
+ * as it is. `needs` is every INSTANCE entry's slot content: the one way a delta BUILDS nodes, so
+ * the one way an edit's resources carry tree fonts at all. The instance PLANS are not here: those
+ * are the gate's to make, against the document at the seal (instance.ts planInstanceEdit).
  */
-export async function loadEditResources(plans: readonly EditPlan[], needs: readonly InstanceNeeds[] = []): Promise<RenderResources> {
+export async function loadEditResources(plans: readonly EditPlan[], needs: readonly InstanceNeeds[] = []): Promise<LoadedResources> {
   const trees: WriteNode[] = [];
-  const instances = new Map<WriteNode, InstancePlan>();
   const fontNeeds: EditFontNeed[] = [];
   for (const need of needs) {
     trees.push(...need.slotContentTrees);
     fontNeeds.push(...need.fontNeeds);
-    need.plans.forEach((plan, wn) => instances.set(wn, plan));
   }
   for (const tree of trees) requestTreeAnnotationCategories(tree);
+  for (const { patch } of [...plans, ...fontNeeds]) requestAnnotationCategories(patch.annotations);
   // Slot content is BUILT, so its fonts are a tree's, not a delta's — folded into the same load.
   const fonts = await loadFontsForTextEdits([...plans, ...fontNeeds], trees);
   const images = await fetchImagesForTrees([...plans.map((plan) => plan.patch), ...trees]);
   // Categories last of the three: resolving one can CREATE a file-scoped category, so a batch whose
-  // font or image load was going to fail anyway never creates one to be cleaned up again. It lands
-  // HERE, inside stage 3, so stage 4's live gates still run after the verb's every suspension.
+  // font or image load was going to fail anyway never creates one to be cleaned up again.
   await resolveAnnotationCategories();
-  return { fonts, images, instances };
+  return { fonts, images };
+}
+
+/** What stage 3 loaded — everything the apply span needs except the instance plans the gate makes. */
+export interface LoadedResources {
+  fonts: FontMap;
+  images: Record<string, string>;
 }
 
 /**
- * Stage 4 — everything that must read the document AFTER the verb's last await: the live-parent
- * layout gate, and proof that the facts the compile went on (font identity, wrap mode, live clamp)
- * survived the resource round trips. A mismatch is refused rather than papered over: the delta was
- * enriched against a font that is gone, or gated against a wrap that has changed, so applying it
- * would land something the agent never asked for. Zero writes either way.
+ * Stage 4 — the delta's every document-reading decision, made in the verb's synchronous gate
+ * (mutation-lock.ts) against the node as it stands at the seal: existence (the one live fact every
+ * delta depends on, including the ones that read nothing else off the node), the compile itself
+ * (font identity, wrap mode, the live clamp), proof that the fonts prepare loaded cover what that
+ * compile produced, and the layout words that only mean something against the live tree (a page
+ * parent, hug legality, the hug-cycle percent). Zero writes on refusal, and nothing between here
+ * and the writes can go stale.
  *
  * `deltas` is every layout delta the SAME verb is applying, by node id — a batch judges its entries
  * against the canvas it is creating, not the one it found.
@@ -472,29 +466,35 @@ export async function loadEditResources(plans: readonly EditPlan[], needs: reado
  * `layout` words are legal or not by that mode, never the outgoing one's (instance.ts computes it).
  * Undefined means "read it off the live node", which is every other delta.
  */
-export function assertEditPlanStillApplies(
-  plan: EditPlan, subject: string, deltas?: BatchLayoutDeltas, becomesRowColumn?: boolean,
+export function gateEditPlan(
+  node: SceneNode, changes: EditDelta, fonts: FontMap, subject: string, deltas?: BatchLayoutDeltas, becomesRowColumn?: boolean,
+): EditPlan {
+  assertNodeStillOnCanvas(node, subject);
+  const plan = compileEditPlan(node, changes, subject);
+  assertEditPlanLands(plan, fonts, subject, deltas, becomesRowColumn);
+  return plan;
+}
+
+/**
+ * The second half of stage 4 on its own, for a verb that has to plan a delta's INSTANCE half
+ * between the compile and these gates (the root's layout gate reads the container the retarget
+ * leaves behind — `becomesRowColumn` comes from that plan).
+ */
+export function assertEditPlanLands(
+  plan: EditPlan, fonts: FontMap, subject: string, deltas?: BatchLayoutDeltas, becomesRowColumn?: boolean,
 ): void {
-  const { node } = plan;
-  // EXISTENCE first, and unconditionally — it is the one live fact every delta depends on, including
-  // the ones that read nothing else off the node. A node deleted during the round trip still accepts
-  // writes (Figma detaches it rather than throwing on every setter), so without this a fill delta on
-  // a deleted node reports success, mints a handle, and paints an object no longer on the canvas.
-  if (node.removed) {
-    throw new Error(
-      subject + ": " + JSON.stringify(node.name) + " (id " + JSON.stringify(node.id) +
-        ") was deleted while this call was loading fonts and images, so it is no longer on the canvas. Nothing was applied — re-run the call without it.",
-    );
-  }
-  if (plan.liveTextFacts !== undefined && readLiveTextFacts(node) !== plan.liveTextFacts) {
-    throw new Error(
-      subject + ": the text of " + JSON.stringify(node.name) + " (id " + JSON.stringify(node.id) +
-        ") changed while this call was loading fonts and images, so the delta was resolved against a node that no longer exists in that state. Nothing was applied — re-run the call.",
-    );
-  }
-  // Layout words that only mean something against the live tree (a page parent, hug legality, the
-  // hug-cycle percent) reject here like every other validation — zero writes on failure.
-  if (plan.patch.layout) assertLayoutDeltaResolvable(node, plan.patch.layout, subject, deltas, becomesRowColumn);
+  assertTextEditFontsLoaded(plan.node, plan.patch, fonts, subject);
+  if (plan.patch.layout) assertLayoutDeltaResolvable(plan.node, plan.patch.layout, subject, deltas, becomesRowColumn);
+}
+
+/**
+ * The apply span's resources: what stage 3 loaded, plus the instance plans the gate made for the
+ * slot content this verb builds — every entry's, merged, since a batch walks its content once.
+ */
+export function gateEditResources(loaded: LoadedResources, needs: readonly InstanceNeeds[]): RenderResources {
+  const instances = new Map<WriteNode, InstancePlan>();
+  for (const need of needs) need.plans.forEach((plan, wn) => instances.set(wn, plan));
+  return { fonts: loaded.fonts, images: loaded.images, instances };
 }
 
 /**

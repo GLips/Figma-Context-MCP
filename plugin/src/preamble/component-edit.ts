@@ -11,9 +11,11 @@
 //   • the bindings a SPEC carries into an existing component through append/prepend/insertBefore/
 //     insertAfter — the one place outside flcm.component where a binding means something.
 //
-// The split is edit's own (see edit-plan.ts): the sync compile judges the words' SHAPE, everything
-// that needs the document resolves HERE in the verb's prepare with zero writes, and the apply is a
-// sync span the verb seals — a rename and a recolor of the same component are one undo step.
+// The split is edit's own (see edit-plan.ts): the sync compile judges the words' SHAPE, the targets
+// the words name resolve in the verb's prepare (resolveComponentEditTargets), everything that reads
+// the definitions is decided in the verb's synchronous GATE (planComponentEdit) with zero writes,
+// and the apply is a sync span the verb seals — a rename and a recolor of the same component are
+// one undo step.
 //
 // Where the writes sit in that span is a rule, not an accident: definitions land BEFORE the node's
 // own words (a rename must be part of the same step as whatever else the delta says), bindings land
@@ -26,7 +28,8 @@ import {
   PROPERTY_TYPES, PROPERTY_TYPE_WORD_FOR, BINDING_FIELD_WIRE_KEYS, FIELD_FOR_TYPE, PreparedDefinition,
   compilePropertyDefinition, componentAncestorOf, writeBindingReferences, quoted,
 } from "./component.js";
-import { resolveComponentTarget, resolvePropertyName, matchPropertyNames, bareName } from "./instance.js";
+import { resolveComponentNode, resolvePropertyName, matchPropertyNames, bareName } from "./instance.js";
+import { ResolvedTargets } from "./read.js";
 import { compileBindingEditBag, bindingFieldsForType, assertNoComponentPropertyBindings } from "./flcm.js";
 import { instanceAncestorOf, describeNodeIdentity, definitionOwnerOf, propertyDefinitionsOf } from "./identity.js";
 import { own } from "./validate.js";
@@ -47,9 +50,9 @@ export interface ComponentDefinitionEditPlan {
   adds: PreparedDefinition[];
 }
 
-export async function prepareComponentDefinitionEdit(
-  node: any, words: ComponentEditWords, subject: string,
-): Promise<ComponentDefinitionEditPlan> {
+function planComponentDefinitionEdit(
+  node: any, words: ComponentEditWords, targets: ResolvedTargets, subject: string,
+): ComponentDefinitionEditPlan {
   const plan: ComponentDefinitionEditPlan = { deletes: [], changes: [], adds: [] };
   if (words.description !== undefined) plan.description = words.description;
   const authored = words.propertyDefinitions;
@@ -84,12 +87,12 @@ export async function prepareComponentDefinitionEdit(
     const at = where + "[" + JSON.stringify(name) + "]";
     const matches = matchPropertyNames(name, definitions);
     if (!matches.length) {
-      plan.adds.push(await prepareAddedDefinition(name, entry, at));
+      plan.adds.push(planAddedDefinition(name, entry, at, targets));
       taken.add(name);
       continue;
     }
     const full = resolvePropertyName(name, definitions, where);
-    const change = await prepareChangedDefinition(full, definitions[full], entry, at, node, taken);
+    const change = planChangedDefinition(full, definitions[full], entry, at, node, taken, targets);
     if (change.rename !== undefined) {
       taken.delete(bareName(full));
       taken.add(change.rename);
@@ -113,7 +116,7 @@ function assertNotVariantAxis(definition: any, full: string, at: string, node: a
 
 // A name the component doesn't have yet: create's own definition rules, with two differences that
 // both come from there being no spec in this call.
-async function prepareAddedDefinition(name: string, entry: ComponentPropertyDefinitionEdit, at: string): Promise<PreparedDefinition> {
+function planAddedDefinition(name: string, entry: ComponentPropertyDefinitionEdit, at: string, targets: ResolvedTargets): PreparedDefinition {
   const definition = compilePropertyDefinition(name, entry, at);
   // A slot IS a frame in the definition, and this call has no frame in it. Declaring one here would
   // leave Figma's own unpositioned 100×100 box in the component — the same refusal flcm.component
@@ -133,16 +136,16 @@ async function prepareAddedDefinition(name: string, entry: ComponentPropertyDefi
     );
   }
   const value = definition.figmaType === "INSTANCE_SWAP"
-    ? (await resolveComponentTarget(definition.defaultValue as Target, at)).base.id
+    ? resolveComponentNode(targets.node(definition.defaultValue as Target, at), at).base.id
     : (definition.defaultValue as boolean | string);
   return { name, figmaType: definition.figmaType, defaultValue: value };
 }
 
 // A name the component HAS: `defaultValue` re-defaults it, `name` renames it, and `type` may only
 // restate what it already is.
-async function prepareChangedDefinition(
-  full: string, definition: any, entry: ComponentPropertyDefinitionEdit, at: string, node: any, taken: ReadonlySet<string>,
-): Promise<{ full: string; rename?: string; defaultValue?: boolean | string }> {
+function planChangedDefinition(
+  full: string, definition: any, entry: ComponentPropertyDefinitionEdit, at: string, node: any, taken: ReadonlySet<string>, targets: ResolvedTargets,
+): { full: string; rename?: string; defaultValue?: boolean | string } {
   assertNotVariantAxis(definition, full, at, node);
   const change: { full: string; rename?: string; defaultValue?: boolean | string } = { full };
   if (entry.type != null) {
@@ -170,7 +173,7 @@ async function prepareChangedDefinition(
     }
     if (rename !== bareName(full)) change.rename = rename;
   }
-  if (entry.defaultValue != null) change.defaultValue = await resolveChangedDefault(definition, entry.defaultValue, at, full);
+  if (entry.defaultValue != null) change.defaultValue = resolveChangedDefault(definition, entry.defaultValue, at, full, targets);
   if (change.rename === undefined && change.defaultValue === undefined) {
     throw new Error(
       at + ": names nothing that can change — a definition edit passes `defaultValue` (the value fresh instances start at), `name` (renames it), or null (deletes it). `type` alone can only restate what the property already is.",
@@ -179,7 +182,7 @@ async function prepareChangedDefinition(
   return change;
 }
 
-async function resolveChangedDefault(definition: any, value: unknown, at: string, full: string): Promise<boolean | string> {
+function resolveChangedDefault(definition: any, value: unknown, at: string, full: string, targets: ResolvedTargets): boolean | string {
   const named = JSON.stringify(bareName(full));
   switch (definition.type) {
     case "SLOT":
@@ -193,7 +196,7 @@ async function resolveChangedDefault(definition: any, value: unknown, at: string
       if (typeof value !== "string") throw new Error(at + ": " + named + " is a text property — its defaultValue is a string. Got " + JSON.stringify(value) + ".");
       return value;
     case "INSTANCE_SWAP":
-      return (await resolveComponentTarget(value as Target, at)).base.id;
+      return resolveComponentNode(targets.node(value as Target, at), at).base.id;
     default:
       throw new Error(at + ": " + named + " is a " + String(definition.type) + " property, which flcm has no word for.");
   }
@@ -380,10 +383,30 @@ export interface ComponentEditPlan {
   binding?: ComponentBindingEditPlan;
 }
 
-export async function prepareComponentEditPlan(node: any, words: ComponentEditWords, subject: string): Promise<ComponentEditPlan> {
+/**
+ * The async half: every component target a definition edit names as an instance-swap default —
+ * an ADD says its type itself, a CHANGE's type is the live definition's, read here as the document
+ * stands (the gate reads it again; a default that became a swap during the loads is a miss the
+ * lookup refuses).
+ */
+export async function resolveComponentEditTargets(node: any, words: ComponentEditWords, targets: ResolvedTargets): Promise<void> {
+  const authored = words.propertyDefinitions;
+  if (!authored) return;
+  const definitions = node.type === "COMPONENT" || node.type === "COMPONENT_SET" ? propertyDefinitionsOf(definitionOwnerOf(node)) : {};
+  for (const name of Object.keys(authored)) {
+    const entry = authored[name];
+    if (entry === null || entry.defaultValue == null || typeof entry.defaultValue === "boolean") continue;
+    const matches = matchPropertyNames(name, definitions);
+    const swaps = matches.length ? matches.length === 1 && definitions[matches[0]].type === "INSTANCE_SWAP" : entry.type === "instance_swap";
+    if (swaps) await targets.resolve(entry.defaultValue as Target);
+  }
+}
+
+/** The sync half, run in the verb's gate: every definition and binding word, decided against the live component. */
+export function planComponentEdit(node: any, words: ComponentEditWords, targets: ResolvedTargets, subject: string): ComponentEditPlan {
   const plan: ComponentEditPlan = {};
   if (words.description !== undefined || words.propertyDefinitions !== undefined) {
-    plan.definitions = await prepareComponentDefinitionEdit(node, words, subject);
+    plan.definitions = planComponentDefinitionEdit(node, words, targets, subject);
   }
   if (words.componentPropertyReferences !== undefined) {
     plan.binding = prepareComponentBindingEdit(node, words.componentPropertyReferences, subject);
@@ -411,8 +434,8 @@ export interface InsertBindingPlan {
  * anywhere but inside a component is refused by flcm's own surface-wide rule (a binding with no
  * declaring component names nothing).
  *
- * Synchronous by type, and that is load-bearing: every fact it reads is live, so it must run after
- * the insert verb's last await (the font/image load) — see structure.ts's prepare order.
+ * Synchronous by type, and that is load-bearing: every fact it reads is live, so it runs in the
+ * insert verb's synchronous gate — see structure.ts.
  */
 export function prepareInsertBindings(subject: string, parent: any, spec: WriteNode): InsertBindingPlan | undefined {
   const bound: { wn: WriteNode; refs: ComponentPropertyBinding }[] = [];

@@ -1,7 +1,7 @@
 // edit — the mutate verb itself. Everything it drives lives elsewhere: the staged pipeline in
 // edit-plan.ts (see that module's header for the stages and why their order is the contract), the
-// INSTANCE half in instance.ts. This module is the ORDER those two are composed in, once, so
-// `editMany` composes them the same way.
+// INSTANCE half in instance.ts, the COMPONENT half in component-edit.ts. This module is the ORDER
+// those are composed in, once, so `editMany` composes them the same way.
 //
 // An INSTANCE delta brackets the node-local stages rather than joining them, because a swap or a
 // variant change REPLACES the sublayer tree the override paths name:
@@ -21,18 +21,19 @@
 // is wired to a property.
 
 import { Target, Handle } from "./ir.js";
-import { resolveTarget } from "./read.js";
+import { resolveTarget, createResolvedTargets } from "./read.js";
 import { enterMutatingVerb } from "./mutation-lock.js";
+import { assertNodeStillOnCanvas } from "./freshness.js";
 import { mintHandle, resolvePercents, beginRenderWalk } from "./bridge.js";
 import {
-  rejectNonDeltaWords, compileEditPlan, loadEditResources, assertEditPlanStillApplies,
+  rejectNonDeltaWords, compileEditPlan, loadEditResources, assertEditPlanLands, gateEditResources,
   openEditPlanApply, applyEditPlanWrites, settleEditPlanSizes, settleEditPlanPositions,
 } from "./edit-plan.js";
 import {
-  prepareInstanceEditPlan, assertOverridePlansStillApply, applyInstanceRetarget, applyInstanceOverrides, InstanceEditPlan,
+  resolveInstanceEditTargets, planInstanceEdit, applyInstanceRetarget, applyInstanceOverrides, InstanceEditPlan,
 } from "./instance.js";
 import {
-  prepareComponentEditPlan, applyComponentDefinitionEdit, applyComponentBindingEdit, ComponentEditPlan,
+  resolveComponentEditTargets, planComponentEdit, applyComponentDefinitionEdit, applyComponentBindingEdit, ComponentEditPlan,
 } from "./component-edit.js";
 import type { EditDelta } from "./schema.js";
 
@@ -49,32 +50,32 @@ const SUBJECT = "flcm.edit";
 export function edit(target: Target, changes: EditDelta): Promise<Handle> {
   return enterMutatingVerb(
     "edit",
-    // Prepare — serialized, read-only, apply-time-fresh: every validation and canvas read
-    // (vocabulary, resolve, gates, enrichment) and every await (fonts, images) lives here; a
-    // throw rejects the verb with zero writes and zero undo residue.
+    // Prepare — the target, every target the delta names, and the resources. The compile runs here
+    // once as the HINT of what to load (an override's or a text delta's fonts follow the live
+    // node); nothing it concludes lands. A throw rejects the verb with zero writes.
     async () => {
       rejectNonDeltaWords(changes, SUBJECT);
-      const plan = compileEditPlan(await resolveTarget(target), changes, SUBJECT);
-      // The instance resolution runs BEFORE the resource load: an override delta's compiled text
-      // decides which fonts to load, exactly as render's instance prepare does.
-      const instance: InstanceEditPlan | undefined = plan.instanceWords
-        ? await prepareInstanceEditPlan(plan.node, plan.instanceWords, SUBJECT)
-        : undefined;
-      // The COMPONENT half is resolved beside it, and before the resource load for the same reason:
-      // it costs no round trip, so a bad property name rejects without paying for a font fetch.
-      // It gets no stage-4 re-read, deliberately: every write it makes names a property by its full
-      // name, and a definition that moved during the load fails inside the sealed span, which rolls
-      // the whole delta back — loud, where a stale override plan would be silent.
-      const component: ComponentEditPlan | undefined = plan.componentWords
-        ? await prepareComponentEditPlan(plan.node, plan.componentWords, SUBJECT)
-        : undefined;
-      const resources = await loadEditResources([plan, ...(instance ? instance.overrides.map((o) => o.plan) : [])], instance ? [instance.needs] : []);
-      // The root's own gate reads the container this delta LEAVES BEHIND (a swap re-points the
-      // instance before its layout words land), and every override plan compiled against a live
-      // sublayer gets the same stage-4 pass — here, where a stale one costs zero writes.
-      assertEditPlanStillApplies(plan, SUBJECT, undefined, instance ? instance.becomesRowColumn : undefined);
-      if (instance) assertOverridePlansStillApply(instance, SUBJECT);
-      return { plan, instance, component, resources };
+      const node = await resolveTarget(target);
+      const hint = compileEditPlan(node, changes, SUBJECT);
+      const targets = createResolvedTargets();
+      const current = hint.instanceWords ? await resolveInstanceEditTargets(node, hint.instanceWords, targets) : null;
+      if (hint.componentWords) await resolveComponentEditTargets(node, hint.componentWords, targets);
+      const instance = hint.instanceWords ? planInstanceEdit(node, hint.instanceWords, current, { targets }, SUBJECT) : undefined;
+      const loaded = await loadEditResources([hint, ...(instance ? instance.overrides.map((o) => o.plan) : [])], instance ? [instance.needs] : []);
+      return { node, targets, current, loaded };
+    },
+    // Gate — every decision that reads the document, made against it as it stands at the seal:
+    // the compile, the instance and component halves, and the root's own layout gate, which reads
+    // the container this delta LEAVES BEHIND (a swap re-points the instance before its layout
+    // words land — `becomesRowColumn`).
+    ({ node, targets, current, loaded }) => {
+      assertNodeStillOnCanvas(node, SUBJECT);
+      const plan = compileEditPlan(node, changes, SUBJECT);
+      const planning = { targets, fonts: loaded.fonts };
+      const instance: InstanceEditPlan | undefined = plan.instanceWords ? planInstanceEdit(node, plan.instanceWords, current, planning, SUBJECT) : undefined;
+      const component: ComponentEditPlan | undefined = plan.componentWords ? planComponentEdit(node, plan.componentWords, targets, SUBJECT) : undefined;
+      assertEditPlanLands(plan, loaded.fonts, SUBJECT, undefined, instance ? instance.becomesRowColumn : undefined);
+      return { plan, instance, component, resources: gateEditResources(loaded, instance ? [instance.needs] : []) };
     },
     // Apply — the sealed span: all writes, no awaits.
     ({ plan, instance, component, resources }) => {

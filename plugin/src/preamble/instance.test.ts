@@ -72,6 +72,29 @@ test("an override lands on the sublayer its component-relative path names", asyn
   assert.deepEqual(icon.fills[0].color, { r: 1, g: 1, b: 1 });
 });
 
+test("an override is planned at the seal: a definition retyped during the font load refuses with zero writes", async () => {
+  const { figma, comp, label } = await chipComponent();
+  const before = [...figma.undoLog];
+  // The override's text delta loads the label's font as the definition carries it. The font load
+  // is a suspension point the user has the document open across: standing in for that user, the
+  // load retypes the definition to a family this run never loaded, before it resolves.
+  const loadFontAsync = figma.loadFontAsync;
+  figma.loadFontAsync = (font: unknown) => {
+    label.fontName = { family: "Roboto", style: "Regular" };
+    return loadFontAsync.call(figma, font);
+  };
+  try {
+    await assert.rejects(
+      render(instance(comp.id, { overrides: { [label.id]: { text: "Hi" } } })),
+      /changed to Roboto Regular while this call was loading fonts and images/,
+    );
+  } finally {
+    figma.loadFontAsync = loadFontAsync;
+  }
+  assert.deepEqual(figma.undoLog, before);
+  assert.equal(figma.currentPage.children.length, 1); // the component alone — nothing was built
+});
+
 test("a read spec spreads straight in, and fromRead rebuilds an instance", async () => {
   const { figma, comp, label } = await chipComponent();
   const first = await render(instance(comp.id, { name: "Original", componentProperties: { Label: "Go" }, overrides: { [label.id]: { fill: "#00ff00" } } }));

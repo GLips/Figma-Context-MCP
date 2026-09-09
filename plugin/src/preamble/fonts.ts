@@ -18,6 +18,23 @@
 
 import { WriteNode, WriteChild, WriteProps, WriteTextStyle, namesFontIdentity } from "./ir.js";
 
+// Every font this run has loaded, by Figma's own (family, style) label. Per-run, like every
+// piece of preamble state: the preamble is eval'd fresh inside each run's wrapper, and a font a
+// PREVIOUS run loaded is deliberately not trusted — Figma's font state is session-global, but
+// "looks loaded" is the heisenbug the load pass already refuses to gamble on. The ledger exists
+// for one reader: assertTextEditFontsLoaded, the gate that proves a verb's prepare-time load still
+// covers the text it is about to reflow.
+const loadedFonts = new Set<string>();
+
+function fontLabel(font: { family: string; style: string }): string {
+  return font.family + "\u0000" + font.style;
+}
+
+async function loadFont(font: { family: string; style: string }): Promise<void> {
+  await figma.loadFontAsync(font);
+  loadedFonts.add(fontLabel(font));
+}
+
 // A resolved-and-loaded style per (family, weight) key — the output of the load pass, consumed by the
 // build walk via resolveFont.
 export type FontMap = Record<string, { family: string; style: string }>;
@@ -113,8 +130,9 @@ function textEditReflows(patch: WriteProps): boolean {
 //
 // Plural because a BATCH is one verb: N entries share one listAvailableFontsAsync inside
 // loadFontsForTree and one Promise.all over the live fonts, instead of paying a serial round trip
-// per entry. Each of those round trips is a suspension point the user can edit the document
-// across, so collapsing them is not just speed (see edit-plan.ts's live-facts freshness check).
+// per entry. The `edits` are prepare's HINT — plans compiled against the node as it stood before
+// the round trip; the gate compiles again and assertTextEditFontsLoaded proves this load still
+// covers what it compiled.
 //
 // `built` are the spec trees the same verb will BUILD (an instance delta's slot content): their
 // fonts are a tree's, and they join the authored half so the verb still pays one load.
@@ -122,12 +140,8 @@ export async function loadFontsForTextEdits(edits: readonly EditFontNeed[], buil
   const reflowing = edits.filter(({ node, patch }) => node.type === "TEXT" && textEditReflows(patch));
   if (!reflowing.length && !built.length) return {};
   const live: FontName[] = [];
-  for (const { node } of reflowing) {
-    const t = node as TextNode;
-    if (t.fontName === figma.mixed) live.push(...t.getRangeAllFontNames(0, t.characters.length));
-    else live.push(t.fontName as FontName);
-  }
-  await Promise.all(live.map((f) => figma.loadFontAsync(f)));
+  for (const { node } of reflowing) live.push(...liveFontsOf(node as TextNode));
+  await Promise.all(live.map(loadFont));
   const authored = reflowing.filter(
     ({ patch }) => namesFontIdentity(patch.textStyle) || (patch.runs || []).some((r) => namesFontIdentity(r.style)),
   );
@@ -136,6 +150,48 @@ export async function loadFontsForTextEdits(edits: readonly EditFontNeed[], buil
     type: "FRAME",
     children: [...authored.map(({ patch }): WriteChild => ({ type: "TEXT", textStyle: patch.textStyle, runs: patch.runs })), ...built],
   });
+}
+
+// The fonts a TEXT node carries right now — every range's when mixed, since a reflow re-lays them all.
+function liveFontsOf(node: TextNode): FontName[] {
+  return node.fontName === figma.mixed ? node.getRangeAllFontNames(0, node.characters.length) : [node.fontName as FontName];
+}
+
+/**
+ * The GATE side of loadFontsForTextEdits: prove, in the sync stretch before the seal, that what
+ * prepare loaded covers what this delta — compiled a moment ago against the LIVE node — is about
+ * to write. Two halves, mirroring the load: the node's live fonts (a reflow throws on an unloaded
+ * one), and every authored triple the appliers will resolve. A miss means the node's font changed
+ * during the resource round trip, so the delta was enriched against an identity that is gone — or
+ * the agent's own family isn't loaded, which the load pass makes impossible. Refused with zero
+ * writes rather than left to resolveFont's silent default-family fallback, the one outcome this
+ * surface never allows.
+ */
+export function assertTextEditFontsLoaded(node: SceneNode, patch: WriteProps, fonts: FontMap, subject: string): void {
+  if (node.type !== "TEXT" || !textEditReflows(patch)) return;
+  const t = node as TextNode;
+  const who = JSON.stringify(t.name) + " (id " + JSON.stringify(t.id) + ")";
+  for (const font of liveFontsOf(t)) {
+    if (loadedFonts.has(fontLabel(font))) continue;
+    throw new Error(
+      subject + ": the font of " + who + " changed to " + font.family + " " + font.style +
+        " while this call was loading fonts and images, so the delta was resolved against a node that no longer exists in that state. Nothing was applied — re-run the call.",
+    );
+  }
+  const authored: FontNeed[] = [];
+  if (namesFontIdentity(patch.textStyle)) authored.push(needOf(patch.textStyle!));
+  for (const run of patch.runs || []) if (run.style && namesFontIdentity(run.style)) authored.push(needOf(run.style));
+  for (const need of authored) {
+    if (fonts[key(need.family, need.weight, !!need.italic)]) continue;
+    throw new Error(
+      subject + ": " + who + " needs " + (need.family || DEFAULT_FAMILY) + " (weight " + (need.weight == null ? "default" : need.weight) + (need.italic ? ", italic" : "") +
+        "), which this call did not load — the text's font changed while the call was loading fonts and images. Nothing was applied — re-run the call.",
+    );
+  }
+}
+
+function needOf(ts: WriteTextStyle): FontNeed {
+  return { family: ts.fontFamily, weight: ts.fontWeight, italic: ts.fontStyle === "italic" };
 }
 
 export async function loadFontsForTree(tree: WriteNode): Promise<FontMap> {
@@ -155,12 +211,12 @@ export async function loadFontsForTree(tree: WriteNode): Promise<FontMap> {
     const family = need.family && byFamily[need.family] ? need.family : fallbackFamily;
     const style = nearestStyle(byFamily[family] || ["Regular"], wantWeight(need.weight), !!need.italic);
     try {
-      await figma.loadFontAsync({ family, style });
+      await loadFont({ family, style });
       resolved[k] = { family, style };
     } catch (e) {
       // The matched style label can still be rejected (label drift); fall back to Regular rather than
       // taking down the whole render over one node's font.
-      await figma.loadFontAsync({ family, style: "Regular" }).catch(() => {});
+      await loadFont({ family, style: "Regular" }).catch(() => {});
       resolved[k] = { family, style: "Regular" };
     }
   }

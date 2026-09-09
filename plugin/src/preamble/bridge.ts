@@ -36,8 +36,8 @@ import { pixelRound, convertSizing } from "@framelink/core";
 export interface RenderResources {
   fonts: FontMap;
   images: Record<string, string>;
-  // Every INSTANCE spec in the tree, resolved against the live document in the verb's prepare
-  // (instance.ts) — the component to stamp, the property writes, the override deltas compiled
+  // Every INSTANCE spec in the tree, planned against the live document in the verb's synchronous
+  // gate (instance.ts) — the component to stamp, the property writes, the override deltas compiled
   // per sublayer. Keyed by the sealed WriteNode itself: the walk meets the same frozen object
   // prepare authenticated, so identity is the only key that can't be spoofed or collide.
   instances: InstancePlans;

@@ -18,6 +18,7 @@ import {
 } from "./node-to-snapshot.js";
 import { rejectUnknownKeys } from "./validate.js";
 import { markReadSpec } from "./provenance.js";
+import { assertNodeStillOnCanvas } from "./freshness.js";
 import { simplify, type SimplifiedComponentEntry, type SimplifiedNode } from "@framelink/core";
 import type { NodeSnapshot } from "@framelink/core/snapshot";
 
@@ -94,6 +95,62 @@ async function resolveString(target: string, within?: Target): Promise<SceneNode
   throw new Error(
     `flcm: no node found for target ${JSON.stringify(target)} — no live node has that id, and no node carries it as an flcm/key on the searched root.`,
   );
+}
+
+/**
+ * Targets resolved AHEAD of a verb's seal, handed to its sync phase as a lookup.
+ *
+ * Resolution is the one document read that has to be async under `dynamic-page` (getNodeByIdAsync,
+ * page loads), and a mutating verb decides nothing about the document until the synchronous
+ * stretch right before its seal (mutation-lock.ts). So a verb resolves every target its input
+ * names — a component, a swap value, a definition's default — in prepare, and its gate asks this
+ * for the node. A resolution that FAILED is kept as its error and thrown from the gate, so a bad
+ * id refuses with the message it always had, from the phase every refusal comes from.
+ *
+ * `node` never returns a removed node: the gate reads the document as it stands at the seal, and a
+ * node deleted during the resource loads is gone from it.
+ */
+export interface ResolvedTargets {
+  resolve(target: Target): Promise<void>;
+  /** Sync. Throws the resolution's own error, or a freshness refusal for a target prepare never asked for. */
+  node(target: Target, subject: string): SceneNode;
+}
+
+// The cache key is the target's FORM plus its value: a bare string is resolved by a different rule
+// (id or key, both checked) than the same string wrapped in flcm.id(), so they are different asks.
+function targetCacheKey(target: Target): string {
+  if (typeof target === "string") return "s:" + target;
+  if (isRawIdRef(target)) return "r:" + target.__flcmId;
+  if (hasId(target)) return "h:" + target.id;
+  return "?:" + JSON.stringify(target);
+}
+
+export function createResolvedTargets(): ResolvedTargets {
+  const entries = new Map<string, { node: SceneNode } | { error: unknown }>();
+  return {
+    async resolve(target) {
+      const key = targetCacheKey(target);
+      if (entries.has(key)) return;
+      try {
+        entries.set(key, { node: await resolveTarget(target) });
+      } catch (error) {
+        entries.set(key, { error });
+      }
+    },
+    node(target, subject) {
+      const entry = entries.get(targetCacheKey(target));
+      // Prepare decides WHICH values are targets from the document as it stood then (a property's
+      // declared type, a definition's). A miss here means that decision no longer holds at the seal.
+      if (!entry) {
+        throw new Error(
+          subject + ": " + JSON.stringify(target) + " was not resolved before this call's seal — the definitions it depends on changed while the call was loading fonts and images. Nothing was applied; re-run the call.",
+        );
+      }
+      if ("error" in entry) throw entry.error;
+      assertNodeStillOnCanvas(entry.node, subject);
+      return entry.node;
+    },
+  };
 }
 
 // The live style resolver: the one snapshot lookup that isn't node-local. A style the document can't

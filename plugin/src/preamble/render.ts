@@ -3,7 +3,7 @@
 // are edit deltas resolved against the live component), and edit-plan.ts imports the constructors'
 // leaf compilers — so a render living beside the constructors would close a module cycle.
 
-import { requestTreeAnnotationCategories, resolveAnnotationCategories } from "./annotation-categories.js";
+import { requestAnnotationCategories, requestTreeAnnotationCategories, resolveAnnotationCategories } from "./annotation-categories.js";
 import { WriteNode, Handle } from "./ir.js";
 import { assertConstructorBuiltTree } from "./provenance.js";
 import { assertSizingResolvesAgainstParentFrame } from "./layout-legality.js";
@@ -12,19 +12,27 @@ import { buildNode, placeRootOnPage, settleHandles, resolvePercents, beginRender
 import { describeRootOverlap } from "./root-overlap.js";
 import { enterMutatingVerb } from "./mutation-lock.js";
 import { fetchImagesForTrees, assertNoComponentPropertyBindings } from "./flcm.js";
-import { prepareInstancePlans } from "./instance.js";
+import { resolveInstanceTreeTargets, planInstanceTree } from "./instance.js";
+import { LoadedResources, InstanceNeeds } from "./edit-plan.js";
+import { createResolvedTargets, ResolvedTargets } from "./read.js";
 
-// The resource loads a tree needs before ANY node is created — the instance plans (component +
-// property + override resolution, which reads the document but writes nothing), then fonts and
-// image bytes in parallel (neither depends on the other, and they're a run's two slowest awaits),
-// then the annotation categories its notes name. Shared by render and the structural insert verbs,
-// which owe the same guarantee: a blocked url, an oversize image, an unknown component or an
-// unreachable host aborts with zero mutations. Only the categories can outlive a failure, and the
-// lock removes those (mutation-lock.ts).
+/** What a tree's prepare loaded, for its gate to finish: the resources, plus the targets its instances name. */
+export interface LoadedTreeResources extends LoadedResources {
+  targets: ResolvedTargets;
+}
+
+// The resource loads a tree needs before ANY node is created — every target its instance specs
+// name (component + swap values, the reads that have to be async), then fonts and image bytes in
+// parallel (neither depends on the other, and they're a run's two slowest awaits), then the
+// annotation categories its notes name. Shared by render, flcm.component and the structural insert
+// verbs, which owe the same guarantee: a blocked url, an oversize image, an unknown component or
+// an unreachable host aborts with zero mutations. Only the categories can outlive a failure, and
+// the lock removes those (mutation-lock.ts).
 //
-// Instance plans resolve FIRST, alone: an override's text delta decides which live fonts to load,
-// so the font load depends on it — and the resolution is a chain of in-document lookups, never a
-// host round trip, so nothing is lost by not overlapping it with the image request.
+// The instance plans are made TWICE: here, as the HINT of what to load (an override's text delta
+// decides which live fonts to load, so the font load depends on it — a chain of in-document
+// lookups, never a host round trip), and again in the verb's gate (gateTreeResources), against the
+// document as it stands at the seal, which is the plan the build walk gets.
 //
 // Fonts and images both settle BEFORE this resolves or rejects (hand-rolled: the tsconfig lib pins
 // the QuickJS floor below ES2020's allSettled). A fail-fast Promise.all would release the verb's
@@ -35,11 +43,14 @@ import { prepareInstancePlans } from "./instance.js";
 // into the SEALED apply span. Both catch handlers attach before either await — attaching the second
 // only after the first settles would leave an early font rejection briefly unhandled and mis-order
 // which failure wins.
-export async function loadTreeResources(tree: WriteNode): Promise<RenderResources> {
-  const needs = await prepareInstancePlans(tree);
+export async function loadTreeResources(tree: WriteNode): Promise<LoadedTreeResources> {
+  const targets = createResolvedTargets();
+  await resolveInstanceTreeTargets(tree, targets);
+  const needs = planInstanceTree(tree, { targets });
   // The tree and every slot content tree its instances fill: one image request, one font load.
   const trees = [tree, ...needs.slotContentTrees];
   trees.forEach(requestTreeAnnotationCategories);
+  for (const { patch } of needs.fontNeeds) requestAnnotationCategories(patch.annotations);
   let failed = false;
   let firstFailure: unknown;
   const settled = <V>(p: Promise<V>) =>
@@ -58,7 +69,7 @@ export async function loadTreeResources(tree: WriteNode): Promise<RenderResource
   // Categories last of the three: resolving one can CREATE a file-scoped category, so a tree whose
   // image or font load was going to fail anyway never creates one to be cleaned up again.
   await resolveAnnotationCategories();
-  return { images, fonts, instances: needs.plans };
+  return { images, fonts, targets };
 
   // The tree's own text fonts (and its slot content's), plus every override delta's (an override
   // retypes a live sublayer — the same live-then-authored load an edit makes). Keyed by (family,
@@ -68,6 +79,19 @@ export async function loadTreeResources(tree: WriteNode): Promise<RenderResource
     if (!needs.fontNeeds.length) return own;
     return { ...own, ...(await loadFontsForTextEdits(needs.fontNeeds)) };
   }
+}
+
+/**
+ * The GATE half of loadTreeResources, sync, immediately before the verb's seal: plan every instance
+ * spec against the document as it stands now — the component's definitions, its variant, its
+ * layout mode, the sublayers its override paths name. Handing the plans the fonts is what makes
+ * each override's compile the full stage-4 gate, font coverage included (instance.ts
+ * compileOverride); the tree's own texts need no such proof, since their fonts are authored, not
+ * live. The plans the build walk consumes are these, never prepare's.
+ */
+export function gateTreeResources(tree: WriteNode, loaded: LoadedTreeResources): RenderResources {
+  const needs: InstanceNeeds = planInstanceTree(tree, { targets: loaded.targets, fonts: loaded.fonts });
+  return { fonts: loaded.fonts, images: loaded.images, instances: needs.plans };
 }
 
 /**
@@ -134,6 +158,8 @@ function render(tree: WriteNode): Promise<{ node: Handle; keyed: Record<string, 
       }
       return loadTreeResources(tree);
     },
+    // Gate — the instance plans, made against the document at the seal.
+    (loaded) => gateTreeResources(tree, loaded),
     // Apply — node creation, sealed as one undo step.
     (resources) => {
       // No `bindings`: render declares no component properties, so a bound node reaching the walk is

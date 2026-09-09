@@ -23,18 +23,19 @@
 // undo boundary per entry (invariant 4).
 
 import { Handle, Target } from "./ir.js";
-import { resolveTarget } from "./read.js";
+import { resolveTarget, createResolvedTargets, ResolvedTargets } from "./read.js";
 import { enterMutatingVerb } from "./mutation-lock.js";
+import { assertNodeStillOnCanvas } from "./freshness.js";
 import { mintHandle, resolvePercents, beginRenderWalk, BatchLayoutDeltas } from "./bridge.js";
 import { rejectUnknownKeys } from "./validate.js";
 import {
-  EditPlan, rejectNonDeltaWords, compileEditPlan, loadEditResources, assertEditPlanStillApplies,
+  EditPlan, rejectNonDeltaWords, compileEditPlan, loadEditResources, assertEditPlanLands, gateEditResources,
   openEditPlanApply, applyEditPlanWrites, settleEditPlanSizes, settleEditPlanPositions,
 } from "./edit-plan.js";
 import {
-  prepareInstanceEditPlan, assertOverridePlansStillApply, applyInstanceRetarget, applyInstanceOverrides, InstanceEditPlan,
+  resolveInstanceEditTargets, planInstanceEdit, applyInstanceRetarget, applyInstanceOverrides, InstanceEditPlan, InstancePlanning,
 } from "./instance.js";
-import { prepareComponentEditPlan, applyComponentDefinitionEdit, applyComponentBindingEdit, ComponentEditPlan } from "./component-edit.js";
+import { resolveComponentEditTargets, planComponentEdit, applyComponentDefinitionEdit, applyComponentBindingEdit, ComponentEditPlan } from "./component-edit.js";
 import { componentAncestorOf } from "./component.js";
 import { definitionOwnerOf } from "./identity.js";
 import type { EditEntry, EditManyScope } from "./schema.js";
@@ -119,7 +120,7 @@ function forEachLiveEntry(ledger: BatchLedger, total: number, step: (index: numb
   }
 }
 
-// ---- prepare-phase stages, each over the WHOLE batch ----
+// ---- the stages, each over the WHOLE batch ----
 
 function assertBatchShape(entries: unknown, scope: EditManyScope | undefined): void {
   if (!Array.isArray(entries)) {
@@ -181,47 +182,70 @@ function assertOneEntryPerNode(ledger: BatchLedger, nodes: readonly (SceneNode |
 }
 
 /**
- * Every INSTANCE entry's component half, resolved. Read-only and document-local (no host round
- * trip), so it runs concurrently and joins the COMPILE ledger group: a bad property name and a
- * misspelled word are reported together, and neither costs the batch its font/image load.
- *
- * A slot stays empty for an entry whose delta names no component word — the ordinary case.
+ * Every INSTANCE entry's targets, resolved: the instance's current main component (kept per entry
+ * — the one instance fact the gate takes as a handle) and every target its words name. Read-only
+ * and document-local (no host round trip), so it runs concurrently. A slot stays null for an entry
+ * whose delta names no component word — the ordinary case.
  */
-async function resolveEntryInstancePlans(
-  ledger: BatchLedger, plans: readonly (EditPlan | undefined)[],
-): Promise<(InstanceEditPlan | undefined)[]> {
-  const instances: (InstanceEditPlan | undefined)[] = [];
+async function resolveEntryInstanceTargets(
+  ledger: BatchLedger, plans: readonly (EditPlan | undefined)[], targets: ResolvedTargets,
+): Promise<(any | null)[]> {
+  const currents: (any | null)[] = [];
   await Promise.all(
     plans.map(async (plan, i) => {
+      currents[i] = null;
       if (ledger.failed(i) || !plan || !plan.instanceWords) return;
       try {
-        instances[i] = await prepareInstanceEditPlan(plan.node, plan.instanceWords, SUBJECT);
+        currents[i] = await resolveInstanceEditTargets(plan.node, plan.instanceWords, targets);
       } catch (err) {
         ledger.record(i, err);
       }
     }),
   );
-  return instances;
+  return currents;
 }
 
-/**
- * Every COMPONENT entry's definition/binding half, resolved. Same group as the instance plans above
- * and for the same reasons: read-only, document-local, no host round trip.
- */
-async function resolveEntryComponentPlans(
-  ledger: BatchLedger, plans: readonly (EditPlan | undefined)[],
-): Promise<(ComponentEditPlan | undefined)[]> {
-  const components: (ComponentEditPlan | undefined)[] = [];
+/** Every COMPONENT entry's targets — the instance-swap defaults its definition words name. */
+async function resolveEntryComponentTargets(
+  ledger: BatchLedger, plans: readonly (EditPlan | undefined)[], targets: ResolvedTargets,
+): Promise<void> {
   await Promise.all(
     plans.map(async (plan, i) => {
       if (ledger.failed(i) || !plan || !plan.componentWords) return;
       try {
-        components[i] = await prepareComponentEditPlan(plan.node, plan.componentWords, SUBJECT);
+        await resolveComponentEditTargets(plan.node, plan.componentWords, targets);
       } catch (err) {
         ledger.record(i, err);
       }
     }),
   );
+}
+
+/**
+ * Every INSTANCE entry's component half, planned against the document as it stands. Run by
+ * prepare as the HINT (which fonts the override deltas and slot content need loaded) and by the
+ * gate for the plans that land (instance.ts on the two halves).
+ */
+function planEntryInstances(
+  ledger: BatchLedger, plans: readonly (EditPlan | undefined)[], currents: readonly (any | null)[], planning: InstancePlanning,
+): (InstanceEditPlan | undefined)[] {
+  const instances: (InstanceEditPlan | undefined)[] = [];
+  forEachLiveEntry(ledger, plans.length, (i) => {
+    const plan = plans[i];
+    if (plan && plan.instanceWords) instances[i] = planInstanceEdit(plan.node, plan.instanceWords, currents[i], planning, SUBJECT);
+  });
+  return instances;
+}
+
+/** Every COMPONENT entry's definition/binding half, planned against the live component — gate only. */
+function planEntryComponents(
+  ledger: BatchLedger, plans: readonly (EditPlan | undefined)[], targets: ResolvedTargets,
+): (ComponentEditPlan | undefined)[] {
+  const components: (ComponentEditPlan | undefined)[] = [];
+  forEachLiveEntry(ledger, plans.length, (i) => {
+    const plan = plans[i];
+    if (plan && plan.componentWords) components[i] = planComponentEdit(plan.node, plan.componentWords, targets, SUBJECT);
+  });
   return components;
 }
 
@@ -295,12 +319,11 @@ function definitionsNamedByEntry(
  *
  * A swap or a variant change rebuilds the instance's sublayers, so the node the inner entry
  * resolved and gated against is detached by the time the batch's write passes reach it — and Figma
- * keeps accepting writes on a detached node (the same hazard assertEditPlanStillApplies calls out
+ * keeps accepting writes on a detached node (the same hazard assertNodeStillOnCanvas calls out
  * for a deleted one), so the batch would report success for a write that landed nowhere. The path
  * that survives is the instance entry's own `overrides`, which are re-acquired after the retarget.
  *
- * Runs in the compile ledger group: it is document-local and costs no round trip, so it reports
- * alongside every other prepare fault instead of after the batch has paid for its font load.
+ * Runs in the GATE, like every other refusal that reads the live tree.
  */
 function assertNoEntryInsideRetargetedInstance(
   ledger: BatchLedger, plans: readonly (EditPlan | undefined)[], instances: readonly (InstanceEditPlan | undefined)[],
@@ -331,14 +354,14 @@ function assertNoEntryInsideRetargetedInstance(
  * A fill replaces the slot's content wholesale — every current child is removed — so by the time
  * the batch's override pass runs, the node the inner entry resolved and wrote to in an earlier
  * stage is gone. Figma keeps accepting writes on a removed node (the same hazard the retarget rule
- * above and assertEditPlanStillApplies call out), so without this the batch would report success
+ * above and assertNodeStillOnCanvas call out), so without this the batch would report success
  * and hand back a Handle minted from a corpse. The remedy is not an order: the layer the fill
  * installs is a different node from the one the entry names, so its words belong on the spec.
  *
  * The single-delta form of this contradiction — one entry stating both the fill and a path inside
  * it — is refused in instance.ts, where the override set is resolved.
  *
- * Runs in the compile ledger group, like every other document-local cross-entry refusal.
+ * Runs in the gate, like every other document-reading cross-entry refusal.
  */
 function assertNoEntryInsideFilledSlot(
   ledger: BatchLedger, plans: readonly (EditPlan | undefined)[], instances: readonly (InstanceEditPlan | undefined)[],
@@ -398,10 +421,20 @@ function isInsideInstance(node: SceneNode, host: SceneNode): boolean {
  * though it would have worked, and — worse, because this surface is fail-loud — a child set to
  * `"fill"` under a parent the batch turns FREE-FORM is accepted and then silently never honored.
  */
-function layoutDeltasByNodeId(plans: readonly EditPlan[]): BatchLayoutDeltas {
+function layoutDeltasByNodeId(plans: readonly (EditPlan | undefined)[]): BatchLayoutDeltas {
   const byId: BatchLayoutDeltas = {};
-  for (const plan of plans) if (plan.patch.layout) byId[plan.node.id] = plan.patch.layout;
+  for (const plan of plans) if (plan && plan.patch.layout) byId[plan.node.id] = plan.patch.layout;
   return byId;
+}
+
+// Every entry's compile, in ONE synchronous turn, so all of them see a single canvas instant
+// rather than one instant per entry. Prepare runs it for the hint, the gate for real.
+function compileEntries(ledger: BatchLedger, nodes: readonly (SceneNode | undefined)[], batch: readonly EditEntry[]): (EditPlan | undefined)[] {
+  const compiled: (EditPlan | undefined)[] = [];
+  forEachLiveEntry(ledger, batch.length, (i) => {
+    compiled[i] = compileEditPlan(nodes[i] as SceneNode, batch[i].changes, SUBJECT);
+  });
+  return compiled;
 }
 
 // ---- apply ----
@@ -415,8 +448,7 @@ function layoutDeltasByNodeId(plans: readonly EditPlan[]): BatchLayoutDeltas {
  * points the same way: a child's `fill`/`hug`/`N%` resolves against a parent whose layout mode and
  * size the batch may also be changing, and never the reverse.
  *
- * Read at the top of the sealed span, not in prepare: a node's depth is a live fact, and the
- * resource awaits sit between.
+ * Read at the top of the sealed span: a node's depth is a live fact.
  */
 function applyOrderShallowestFirst(plans: readonly EditPlan[]): number[] {
   const depths = plans.map((plan) => {
@@ -456,43 +488,50 @@ export function editMany(entries: EditEntry[], scope?: EditManyScope): Promise<H
       const within: Target | undefined = scoped ? { __flcmId: scoped.id } : undefined;
       const nodes = await resolveEntryTargets(ledger, batch, within);
       assertOneEntryPerNode(ledger, nodes);
-      // Every compile runs in ONE synchronous turn after the resolves, so all of them see a single
-      // canvas instant rather than one instant per entry.
-      const compiled: (EditPlan | undefined)[] = [];
-      forEachLiveEntry(ledger, batch.length, (i) => {
-        compiled[i] = compileEditPlan(nodes[i] as SceneNode, batch[i].changes, SUBJECT);
-      });
-      const instances = await resolveEntryInstancePlans(ledger, compiled);
-      const components = await resolveEntryComponentPlans(ledger, compiled);
-      assertNoEntryInsideRetargetedInstance(ledger, compiled, instances);
-      assertNoEntryInsideFilledSlot(ledger, compiled, instances);
-      assertNoDefinitionBindingCrossReference(ledger, compiled, components, instances);
-      // The document-blind, resolve and compile stages all report together. The seal-time gates
-      // below cannot join them: they need the resources, and a batch already known to be doomed
-      // must not spend a font load and an image fetch to find its remaining faults.
+      // The HINT compiles: what each entry needs loaded if the document stays as it is. Every
+      // decision they make is made again in the gate, against the document at the seal.
+      const hints = compileEntries(ledger, nodes, batch);
+      const targets = createResolvedTargets();
+      const currents = await resolveEntryInstanceTargets(ledger, hints, targets);
+      await resolveEntryComponentTargets(ledger, hints, targets);
+      const instances = planEntryInstances(ledger, hints, currents, { targets });
+      // The shape, resolve and hint stages all report together. The gate cannot join them: it
+      // needs the resources, and a batch already known to be doomed must not spend a font load
+      // and an image fetch to find its remaining faults.
       ledger.rejectIfAny();
-      const plans = compiled as EditPlan[]; // dense: rejectIfAny threw unless every stage filled its slot
+      const plans = hints as EditPlan[]; // dense: rejectIfAny threw unless every stage filled its slot
       // The override deltas ride the SAME load — each is a text/image edit of one sublayer, and the
       // batch owes one round trip however many of them there are.
-      const resources = await loadEditResources(
+      const loaded = await loadEditResources(
         [...plans, ...instances.flatMap((instance) => (instance ? instance.overrides.map((o) => o.plan) : []))],
         instances.flatMap((instance) => (instance ? [instance.needs] : [])),
       );
-      // AFTER the batch's last await: the live gates, plus proof that each node still exists and
-      // the facts its compile read survived the loads. The batch is what makes this load-bearing —
-      // entry 0's node state was read before every later entry's resolution and the whole batch's
-      // font/image round trip, and the user has the document open across all of it.
-      const deltas = layoutDeltasByNodeId(plans);
-      forEachLiveEntry(ledger, plans.length, (i) => {
+      return { batch, nodes, targets, currents, loaded };
+    },
+    // Gate — every decision that reads the document, for every entry, against the document as it
+    // stands at the seal. The batch is what makes this load-bearing: entry 0's node was resolved
+    // before every later entry's resolution and the whole batch's font/image round trip, and the
+    // user has the document open across all of it. The ledger runs here too, so one rejection
+    // still names every failing entry.
+    ({ batch, nodes, targets, currents, loaded }) => {
+      const ledger = createBatchLedger(batch.length);
+      forEachLiveEntry(ledger, batch.length, (i) => assertNodeStillOnCanvas(nodes[i] as SceneNode, SUBJECT));
+      const compiled = compileEntries(ledger, nodes, batch);
+      const instances = planEntryInstances(ledger, compiled, currents, { targets, fonts: loaded.fonts });
+      const components = planEntryComponents(ledger, compiled, targets);
+      assertNoEntryInsideRetargetedInstance(ledger, compiled, instances);
+      assertNoEntryInsideFilledSlot(ledger, compiled, instances);
+      assertNoDefinitionBindingCrossReference(ledger, compiled, components, instances);
+      const deltas = layoutDeltasByNodeId(compiled);
+      forEachLiveEntry(ledger, batch.length, (i) => {
         const instance = instances[i];
         // The root's layout gate reads the container the entry LEAVES BEHIND (a swap re-points the
-        // instance before its own layout words land); a non-retargeting entry's override plans get
-        // the same stage-4 pass here, where a stale sublayer costs the batch zero writes.
-        assertEditPlanStillApplies(plans[i], SUBJECT, deltas, instance ? instance.becomesRowColumn : undefined);
-        if (instance) assertOverridePlansStillApply(instance, SUBJECT);
+        // instance before its own layout words land).
+        assertEditPlanLands(compiled[i] as EditPlan, loaded.fonts, SUBJECT, deltas, instance ? instance.becomesRowColumn : undefined);
       });
       ledger.rejectIfAny();
-      return { plans, instances, components, resources };
+      const plans = compiled as EditPlan[];
+      return { plans, instances, components, resources: gateEditResources(loaded, instances.flatMap((instance) => (instance ? [instance.needs] : []))) };
     },
     // Apply — the sealed span: every entry's writes, no awaits, one undo step for the set.
     ({ plans, instances, components, resources }) => {
