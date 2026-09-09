@@ -11,7 +11,7 @@
 
 export const MENTAL_MODEL = `You **describe** a tree of nodes with plain function calls, then **render** it once.
 
-- **Constructors are inert.** \`flcm.frame(...)\`, \`flcm.text(...)\`, etc. build plain description objects and create *nothing* on the canvas. Only \`await flcm.render(tree)\` creates live nodes — so you can freely build, nest, and compose trees before rendering.
+- **Constructors create nothing.** \`flcm.frame(...)\`, \`flcm.text(...)\`, etc. build plain description objects and create *nothing* on the canvas. Only \`await flcm.render(tree)\` creates live nodes — so you can freely build, nest, and compose trees before rendering.
 - **CSS is the dialect — prop NAMES as well as values.** When CSS has a word for something, that is the word: \`color\`, \`fontSize\`, \`fontWeight\`, \`borderRadius\`, \`opacity\`, \`gap\`, \`padding\`, \`justifyContent\`, \`alignItems\`, \`mixBlendMode\` — camelCased, and \`column\`/\`row\` for direction. If you find yourself inventing a shorter name (\`radius\`, \`size\`, \`weight\`), reach for the CSS one instead. Where flcm has no CSS counterpart (\`key\`, \`anchor\`, \`pin\`, \`width: "fill"|"hug"\`) the props page is the only source — read it before your first render rather than guessing.
 - **Leaf values are CSS too.** Colors, gradients, shadows, and metrics are written the way you'd write them in CSS (\`"#0B1020"\`, \`"rgba(255,255,255,0.06)"\`, \`"linear-gradient(180deg, …)"\`, \`"24px"\`, \`"-0.02em"\`). You write this one familiar format; we translate it to Figma-native values for you. The catch: CSS can spell things Figma can't realize, so values **outside the documented subset fail loud** (a specific error) rather than rendering wrong pixels.
 
@@ -337,7 +337,7 @@ export const STRUCTURE_INTRO = `Tree shape is its own set of verbs, and **positi
 
 \`thing\` is one of two, meaning what they mean in the DOM:
 
-- a **constructor spec** — built inside the destination. Returns \`{ node, keyed, to }\`: what \`render\` gives you, plus the container it landed in.
+- a **constructor-built node** — built inside the destination. Returns \`{ node, keyed, to }\`: what \`render\` gives you, plus the container it landed in.
 - a **target naming a live node** — **moved** there, as \`appendChild\` moves an attached DOM node. Returns \`{ node, from, to }\`.
 
 Three more complete the set: \`flcm.move(target, parent)\` is the plain reparent (subject named first, node lands last), \`flcm.remove(target)\` deletes a node and its subtree, \`flcm.clone(target, parent?)\` duplicates one.
@@ -348,7 +348,7 @@ Every return carries the subject plus each container whose geometry could have c
 
 export const STRUCTURE_RULES = `### Rules
 
-- **Sizing that depends on the parent works on insert.** The node is attached *before* it is sized, so \`width: "fill"\` on an appended spec fills the destination.
+- **Sizing that depends on the parent works on insert.** The node is attached *before* it is sized, so \`width: "fill"\` on an appended node fills the destination.
 - **Layout legality is re-asked against the DESTINATION**, with the new parent's facts: \`"fill"\`/\`"N%"\` into a page parent, a TEXT \`height: "fill"\` landing out of a row/column flow, a percent child of a hugging parent, or any parent-relative word under a GRID parent each reject loud before anything moves. Legal where a node sat is not automatically legal where it lands.
 - **A move re-aims the moved node's fill.** \`"fill"\` is a mark on the parent's primary or counter axis, and those axes move with the node, so it is cleared and re-applied against the new parent. Fixed sizes are untouched.
 - **A stretch container does not stretch what you insert.** Figma stores no container-level stretch — a stretched child is indistinguishable from one that asked for counter-axis \`"fill"\` — so re-assert it with \`flcm.edit(parent, { layout: { alignItems: "stretch" } })\`, which re-synthesizes the marks over every child.
@@ -364,23 +364,23 @@ No separate clipboard API — the verbs compose:
 | --- | --- |
 | cut & paste | \`flcm.move(target, parent)\` |
 | paste a faithful copy | \`flcm.clone(target, parent?)\` — any subtree, instances included |
-| paste with modifications | \`flcm.append(parent, flcm.fromRead(spec))\`, or \`clone\` then \`edit\` |
+| paste with modifications | \`flcm.append(parent, flcm.fromRead(node))\`, or \`clone\` then \`edit\` |
 | delete | \`flcm.remove(target)\` |
 
-\`flcm.get\` returns \`{ node, components }\`. \`node\` is the read spec; \`components\` appears only when the subtree holds a component or an instance of one, and names each one ONCE — its \`children\` and its property definitions live there, keyed by component id. An INSTANCE therefore carries no \`children\` of its own: it carries \`componentId\` plus \`overrides\`, a map from component-relative sublayer path to just the fields that differ from the component. An omitted field means "same as the component"; \`null\` means the instance does not have that field at all (a paint removed, an opacity put back to 1); \`visible: false\` means the designer hid that layer. Reconstruct any sublayer's live id as \`I<instanceId>;<path>\`. An entry marked \`childrenUnverified\` came from a published library at its current version, which the file may not have adopted — treat a \`visible: false\` under it as possibly a layer the library added rather than one the designer hid; \`childrenFrom\` instead means the children were donated by that instance, edits and all.
+\`flcm.get\` returns \`{ node, components }\`. \`node\` is the read shape; \`components\` appears only when the subtree holds a component or an instance of one, and names each one ONCE — its \`children\` and its property definitions live there, keyed by component id. An INSTANCE therefore carries no \`children\` of its own: it carries \`componentId\` plus \`overrides\`, a map from component-relative sublayer path to just the fields that differ from the component. An omitted field means "same as the component"; \`null\` means the instance does not have that field at all (a paint removed, an opacity put back to 1); \`visible: false\` means the designer hid that layer. Reconstruct any sublayer's live id as \`I<instanceId>;<path>\`. An entry marked \`childrenUnverified\` came from a published library at its current version, which the file may not have adopted — treat a \`visible: false\` under it as possibly a layer the library added rather than one the designer hid; \`childrenFrom\` instead means the children were donated by that instance, edits and all.
 
-A \`get\` result is not authoring input on its own: a bare read spec passed to \`append\` is rejected rather than quietly treated as a move, because the spec carries a live \`id\` exactly as a handle does — only you can say copy or move. \`flcm.fromRead(spec)\` says copy: it re-authors the subtree through the constructors, so you can edit the spec first (\`{ ...spec, width: 320 }\`), and the copy comes back key-less. A single node's spec also spreads straight into its constructor or an edit — \`flcm.rect({ ...spec, width: 320 })\` — since the constructors read the read shape's spellings; \`fromRead\` is for a subtree, whose \`children\` are specs rather than built nodes.
+A \`get\` result is not authoring input on its own: a bare \`get\` result passed to \`append\` is rejected rather than quietly treated as a move, because it carries a live \`id\` exactly as a handle does — only you can say copy or move. \`flcm.fromRead(node)\` says copy: it re-authors the subtree through the constructors, so you can edit the read shape first (\`{ ...node, width: 320 }\`), and the copy comes back key-less. A single node's read shape also spreads straight into its constructor or an edit — \`flcm.rect({ ...node, width: 320 })\` — since the constructors read the read shape's spellings; \`fromRead\` is for a subtree, whose \`children\` are read shapes rather than built nodes.
 
 \`fromRead\` rebuilds; \`clone\` duplicates. Rebuilding reaches only what flcm can author, so a stacked paint, a grid container or a flattened \`IMAGE-SVG\` fails loud naming the field — \`clone\` is the answer for those. An INSTANCE rebuilds through \`flcm.instance\`: a fresh stamp of the same component, with the read's property values and overrides re-applied.`;
 
-export const COMPONENTS_CREATE = `\`await flcm.component(specOrTarget, options?)\` makes a COMPONENT and returns \`{ node, keyed }\` as \`render\` does, \`node\` being the COMPONENT's handle. Two forms, told apart as \`append\` tells them apart:
+export const COMPONENTS_CREATE = `\`await flcm.component(nodeOrTarget, options?)\` makes a COMPONENT and returns \`{ node, keyed }\` as \`render\` does, \`node\` being the COMPONENT's handle. Two forms, told apart as \`append\` tells them apart:
 
 \`\`\`js
 const { node, keyed } = await flcm.component(flcm.frame({ name: "Button" }, [flcm.text("Label", { key: "label" })]), { name: "Button" });
 await flcm.component(flcm.id("12:34"), { name: "Card", description: "The list card." });
 \`\`\`
 
-- **The spec form** renders as \`render\` does (fonts, images, root placement), then promotes the root. Every \`key\` survives (the root's lands on the COMPONENT), so \`keyed\` addresses the component's children.
+- **The constructor-built form** renders as \`render\` does (fonts, images, root placement), then promotes the root. Every \`key\` survives (the root's lands on the COMPONENT), so \`keyed\` addresses the component's children.
 - **The target form** promotes in place (same parent and index). It refuses a COMPONENT or COMPONENT_SET (edit it), an INSTANCE (Figma would *wrap* it; detach first), a node inside an instance, a SLOT, and a page.
 - Nothing is written until every gate passes; the call is one undo step.`;
 
@@ -464,16 +464,16 @@ await flcm.edit(titleId, { componentPropertyReferences: { visible: null } });   
 
 ### Inserting a bound layer
 
-\`append\`/\`prepend\`/\`insertBefore\`/\`insertAfter\` into a component or its sublayers accept a spec carrying \`componentPropertyReferences\`.
+\`append\`/\`prepend\`/\`insertBefore\`/\`insertAfter\` into a component or its sublayers accept a constructor-built node carrying \`componentPropertyReferences\`.
 
 \`\`\`js
 await flcm.append(comp, flcm.text("Sub", { componentPropertyReferences: { text: "Label" } }));
 await flcm.append(comp, flcm.frame({ width: 240, height: 80, componentPropertyReferences: { slot: "Content" } }));
 \`\`\`
 
-Every name must already be declared, except a \`slot\` naming a property that doesn't exist, which **declares it**; naming one that already has its frame is refused. Into a set's VARIANT, a new \`slot\` declares the property on the SET and this variant realizes it; the others insert their own bound frame. A spec insert into the COMPONENT_SET itself is refused: its children are its variants.`;
+Every name must already be declared, except a \`slot\` naming a property that doesn't exist, which **declares it**; naming one that already has its frame is refused. Into a set's VARIANT, a new \`slot\` declares the property on the SET and this variant realizes it; the others insert their own bound frame. An insert into the COMPONENT_SET itself is refused: its children are its variants.`;
 
-export const COMPONENTS_INTRO = `\`flcm.instance(component, props?)\` builds an inert INSTANCE spec: render it, nest it, or place it with \`append\`/\`insertBefore\`. The component is a target naming a COMPONENT or a COMPONENT_SET (\`componentProperties\` pick the variant, else the set's default). A library component already used in the file resolves by the id \`get\` reports; a read spec authors as-is through the props form, \`flcm.instance({ ...spec, name: "Copy" })\`. Three groups of words:
+export const COMPONENTS_INTRO = `\`flcm.instance(component, props?)\` builds an INSTANCE node: render it, nest it, or place it with \`append\`/\`insertBefore\`. The component is a target naming a COMPONENT or a COMPONENT_SET (\`componentProperties\` pick the variant, else the set's default). A library component already used in the file resolves by the id \`get\` reports; a \`get\` result authors as-is through the props form, \`flcm.instance({ ...node, name: "Copy" })\`. Three groups of words:
 
 - **A frame's props** (\`fill\`, \`width\`, \`layout\`, \`opacity\`, \`name\`…). Each one named is a root-level override; each omitted keeps tracking the component. No creation defaults: a bare \`flcm.instance(comp)\` is byte-for-byte the component.
 - **\`componentProperties\`**, by bare name (no \`#id\` suffix; resolved when unambiguous): a variant axis (\`Size: "Large"\`), a boolean, a text, or a component target for an instance-swap. Prefer a property over overriding the layer it drives, which works but leaves the property unset.
@@ -481,7 +481,7 @@ export const COMPONENTS_INTRO = `\`flcm.instance(component, props?)\` builds an 
 
 #### Filling a slot
 
-A slot shows up in each instance as a \`SLOT\` node, which takes the frame surface under \`edit\` (\`layout\`, \`fill\`, \`width\`, padding) but has no value: its content is \`children\` at the slot's path in \`overrides\`, where \`get\` reports a filled slot, and \`flcm.edit(slotNode, { children })\` is refused pointing there. The array REPLACES what the slot holds; \`[]\` empties it. Specs come from the constructors, a nested \`flcm.instance\` fills its own slot the same way, and keys inside come back in \`render\`'s \`keyed\`. A read spec (rebuild it with \`flcm.fromRead\`), a binding inside (an instance declares no property) and \`null\` (\`[]\` is the emptying word) are each refused.
+A slot shows up in each instance as a \`SLOT\` node, which takes the frame surface under \`edit\` (\`layout\`, \`fill\`, \`width\`, padding) but has no value: its content is \`children\` at the slot's path in \`overrides\`, where \`get\` reports a filled slot, and \`flcm.edit(slotNode, { children })\` is refused pointing there. The array REPLACES what the slot holds; \`[]\` empties it. The content comes from the constructors, a nested \`flcm.instance\` fills its own slot the same way, and keys inside come back in \`render\`'s \`keyed\`. A \`get\` result (rebuild it with \`flcm.fromRead\`), a binding inside (an instance declares no property) and \`null\` (\`[]\` is the emptying word) are each refused.
 
 \`\`\`js
 // "11:12": the slot's path, the bound frame's id as get keys it.
@@ -489,7 +489,7 @@ await flcm.render(flcm.instance(card, { overrides: { "11:12": { children: [flcm.
 await flcm.edit(inst, { overrides: { "11:12": { layout: { mode: "row" }, children: [] } } }); // restyle the hole AND empty it
 \`\`\`
 
-The slot's own words in the same delta land first, so content attaches under the layout it lives in. Afterwards it is an ordinary tree: the structural verbs work on and under the \`SLOT\` node (\`find({ within: inst, type: "SLOT" })\`), while the rest of an instance's child list stays closed (see Tree shape). An EMPTIED slot reads back as any emptied container does (each component child \`visible: false\` at its path, not \`children: []\`), so re-authoring that read keeps it empty. A variant change or swap keeps filled content only where Figma matches the slot property across the target; re-fill if it did not. Filling a slot and editing a sublayer inside it in one call or \`editMany\` batch is refused: the fill removes that layer, so put its words on the spec you fill with.`;
+The slot's own words in the same delta land first, so content attaches under the layout it lives in. Afterwards it is an ordinary tree: the structural verbs work on and under the \`SLOT\` node (\`find({ within: inst, type: "SLOT" })\`), while the rest of an instance's child list stays closed (see Tree shape). An EMPTIED slot reads back as any emptied container does (each component child \`visible: false\` at its path, not \`children: []\`), so re-authoring that read keeps it empty. A variant change or swap keeps filled content only where Figma matches the slot property across the target; re-fill if it did not. Filling a slot and editing a sublayer inside it in one call or \`editMany\` batch is refused: the fill removes that layer, so put its words on the node you fill with.`;
 
 export const COMPONENTS_EDIT = `### Changing an instance
 

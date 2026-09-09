@@ -1,5 +1,5 @@
 // Rich text (Phase 1): flcm.text accepts a styled-runs array alongside the plain-string form. Construction
-// is inert (checked on the built WriteNode); the per-range apply is render-time (bridge) behavior, checked
+// is document-blind (checked on the built WriteNode); the per-range apply is render-time (bridge) behavior, checked
 // against the in-memory figma mock, which records each setRange* call so we can assert the runs landed.
 import { test } from "node:test";
 import assert from "node:assert/strict";

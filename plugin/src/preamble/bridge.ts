@@ -3,10 +3,10 @@
 // Every mutating verb drives these same exported appliers — never a parallel application path, so a
 // paint compiled for create and for edit cannot diverge. It consumes ONLY the typed IR currency — it
 // never sees a CSS string leaf and never imports css.ts; the boundary parsed everything into types
-// upstream, so here a gap is already a number, a fill already a PaintSpec, an effect already an
-// EffectSpec. The constructors in flcm.ts only build inert POJOs.
+// upstream, so here a gap is already a number, a fill already a WritePaint, an effect already an
+// WriteEffect. The constructors in flcm.ts only build plain frozen POJOs.
 //
-// Appliers touch only the fields PRESENT on their spec, and a `'prop' in node` guard skips only
+// Appliers touch only the fields PRESENT on their node, and a `'prop' in node` guard skips only
 // vocabulary a node KIND lacks (an ellipse has no cornerRadius). A Figma refusal on a field the node
 // does carry THROWS — the plugin's own error names the setter — and the aftermath belongs to the
 // mutating-verb scaffold (mutation-lock.ts, where the commit-then-undo rollback lands), never to a
@@ -17,7 +17,7 @@
 // noise without safety.
 
 import { applyAnnotations } from "./annotation-categories.js";
-import { WriteType, WriteNode, WriteProps, WriteLayout, Justify, Align, TextAlign, TextDecoration, Sizing, Identity, Handle, PaintSpec, ImageSpec, ComponentPropertyBinding, namesFontIdentity } from "./ir.js";
+import { WriteType, WriteNode, WriteProps, WriteLayout, Justify, Align, TextAlign, TextDecoration, Sizing, Identity, Handle, WritePaint, WriteImage, ComponentPropertyBinding, namesFontIdentity } from "./ir.js";
 import {
   assertLayoutRealizableForType, assertPercentResolvable, assertSizingResolvesAgainstParentFrame, assertNoParentRelativeWordsUnderGrid, ParentFlowFacts,
   assertTextFillHeightInFlow,
@@ -31,12 +31,12 @@ import { pixelRound, convertSizing } from "@framelink/core";
 
 // The resource half of the walk context — what an applier resolves against, split out so an exported
 // applier demands only what it reads: `fonts` is the preloaded FontMap, `images` the url → base64 map
-// of bytes the server fetched+validated (an image PaintSpec resolves to a plugin ImagePaint against
+// of bytes the server fetched+validated (an image WritePaint resolves to a plugin ImagePaint against
 // it). An edit caller supplies these for a live target without fabricating walk state.
 export interface RenderResources {
   fonts: FontMap;
   images: Record<string, string>;
-  // Every INSTANCE spec in the tree, planned against the live document in the verb's synchronous
+  // Every INSTANCE node in the tree, planned against the live document in the verb's synchronous
   // gate (instance.ts) — the component to stamp, the property writes, the override deltas compiled
   // per sublayer. Keyed by the sealed WriteNode itself: the walk meets the same frozen object
   // prepare authenticated, so identity is the only key that can't be spoofed or collide.
@@ -51,7 +51,7 @@ export type InstancePlans = ReadonlyMap<WriteNode, InstancePlan>;
 // closure rather than data because an override is an edit of one sublayer, applied through
 // edit-plan.ts's staged appliers — and edit-plan.ts imports FROM this module, so the stages arrive here as
 // a function instead of an import. It takes the whole walk context, not just the resources: an
-// override at a SLOT's path builds that slot's content through attachSpecChild, whose keyed nodes
+// override at a SLOT's path builds that slot's content through attachBuiltChild, whose keyed nodes
 // and pending percents belong to the SAME walk as the instance's siblings.
 export interface InstancePlan {
   component: any;
@@ -68,22 +68,22 @@ export interface RenderCtx extends RenderResources {
   keyed: Record<string, any>;
   pending: PendingResolve[];
   // Every node the walk built that carries a `componentPropertyReferences` bag, paired with it.
-  // Collected DURING the walk (like `keyed`) because only the walk knows which live node a spec
-  // node became — a spec→live pairing recovered afterwards would have to guess past falsy children
+  // Collected DURING the walk (like `keyed`) because only the walk knows which live node a constructor-built
+  // node became — a built→live pairing recovered afterwards would have to guess past falsy children
   // and an svg's synthesized frame.
   //
   // OPTIONAL on purpose, and the absence is the enforcement: only a verb with a declaring component
   // behind it — flcm.component, or an insert landing inside one — has anywhere for a binding to
-  // point, so only those pass a list. Every other spec-taking verb omits it (and so does an insert
+  // point, so only those pass a list. Every other tree-taking verb omits it (and so does an insert
   // landing anywhere else), and buildNode then throws on a bound node rather than
   // pushing it into a list nobody reads — a dropped authoring word would be wrong pixels with no
   // error, which is the one outcome this surface never allows. Their prepares refuse the tree first
   // (assertNoComponentPropertyBindings); this is the backstop for the next verb that forgets to.
-  bindings?: BoundSpecNode[];
+  bindings?: BoundLiveNode[];
 }
 
-/** One built node and the raw binding bag its spec carried. */
-export interface BoundSpecNode { node: any; refs: ComponentPropertyBinding }
+/** One built node and the raw binding bag the WriteNode behind it carried. */
+export interface BoundLiveNode { node: any; refs: ComponentPropertyBinding }
 
 // A deferred percent/anchor resolution: the built (provisional) child node, its RAW layout (percent intent
 // intact), and its live parent. Collected during the walk and applied in resolvePercents after the whole
@@ -143,7 +143,7 @@ function isFrameLike(node: any): boolean {
 // and NOT to an intervening GROUP — where the read side subtracts the group's own corner instead. The two
 // can't disagree here: every node render creates enters the doc on the page and is reparented only into a
 // frame render built itself, so a minted handle never has a group above it. find/get take their left/top
-// from the core's simplified spec (read.projectSlim), which is already the group-aware answer.
+// from the core's simplified node (read.projectSlim), which is already the group-aware answer.
 function geometryOf(node: any): Omit<Handle, keyof Identity> {
   const geometry: Omit<Handle, keyof Identity> = { width: pixelRound(node.width), height: pixelRound(node.height) };
   const intent = intentOf(node);
@@ -202,31 +202,31 @@ function stampKey(node: any, wn: WriteNode, ctx: RenderCtx): void {
   ctx.keyed[wn.key] = node;
 }
 
-// Resolve one PaintSpec to a plugin Paint. An image spec needs raster BYTES (render() awaited them from
+// Resolve one WritePaint to a plugin Paint. An image paint needs raster BYTES (render() awaited them from
 // the server mid-run into ctx.images, keyed by url) turned into an imageHash via figma.createImage — a
-// figma.* call, so it lives HERE in the bridge, not in the figma-free paint.ts. Every other spec maps purely.
-function paintOf(spec: PaintSpec, ctx: RenderResources): Paint {
-  if (spec.kind === "image") return imagePaint(spec, ctx);
-  return toFigmaPaint(spec);
+// figma.* call, so it lives HERE in the bridge, not in the figma-free paint.ts. Every other paint maps purely.
+function paintOf(paint: WritePaint, ctx: RenderResources): Paint {
+  if (paint.kind === "image") return imagePaint(paint, ctx);
+  return toFigmaPaint(paint);
 }
 
-function imagePaint(spec: ImageSpec, ctx: RenderResources): Paint {
-  // A hash-backed spec names bytes the document already holds (a read-form fill rebuilt through the
+function imagePaint(paint: WriteImage, ctx: RenderResources): Paint {
+  // A hash-backed paint names bytes the document already holds (a read-form fill rebuilt through the
   // constructors), so there is nothing to fetch and nothing to create — the paint just points at it.
-  if ("hash" in spec) {
-    return spec.scalingFactor != null
-      ? { type: "IMAGE", scaleMode: spec.scaleMode, imageHash: spec.hash, scalingFactor: spec.scalingFactor }
-      : { type: "IMAGE", scaleMode: spec.scaleMode, imageHash: spec.hash };
+  if ("hash" in paint) {
+    return paint.scalingFactor != null
+      ? { type: "IMAGE", scaleMode: paint.scaleMode, imageHash: paint.hash, scalingFactor: paint.scalingFactor }
+      : { type: "IMAGE", scaleMode: paint.scaleMode, imageHash: paint.hash };
   }
-  const b64 = ctx.images[spec.url];
+  const b64 = ctx.images[paint.url];
   if (typeof b64 !== "string") {
     // render() collects and awaits every image url before any node is built, so the bytes are always
     // present here. A miss means collectImageUrls missed a paint site paintOf resolves (the lockstep
     // warning on collectImageUrls) — fail loud rather than paint a blank fill.
-    throw new Error('flcm.image: no fetched bytes for "' + spec.url + '" — the image was not resolved before render.');
+    throw new Error('flcm.image: no fetched bytes for "' + paint.url + '" — the image was not resolved before render.');
   }
   const img = figma.createImage(figma.base64Decode(b64));
-  return { type: "IMAGE", scaleMode: spec.scaleMode, imageHash: img.hash };
+  return { type: "IMAGE", scaleMode: paint.scaleMode, imageHash: img.hash };
 }
 
 // Persist an image fill's source + placeholder flag on the node (pluginData) so a later read/codegen pass
@@ -268,8 +268,8 @@ export function applyPaint(node: any, wn: WriteProps, ctx: RenderResources): voi
 
 // Layout mode + container props. The mode applies when PRESENT — including "none", which switches
 // auto-layout OFF (children convert per Figma's own semantics; canvas is truth). The container props
-// (gap/pad/justify/align) gate on the LIVE mode, not the spec's: a delta naming only `gap` lands on
-// an already-auto frame instead of silently skipping — spec-gating was create-only truth.
+// (gap/pad/justify/align) gate on the LIVE mode, not the authored node's: a delta naming only `gap` lands on
+// an already-auto frame instead of silently skipping — gating on the authored mode was create-only truth.
 function applyContainer(f: any, layout: WriteLayout): void {
   const mode = layout.mode;
   if (mode === "row" || mode === "column") {
@@ -354,9 +354,9 @@ function clearContainerFlowMarks(f: any): void {
 
 // Own-axis sizing, applied AFTER children so a `hug` axis measures real content. Maps the IR's
 // sizing/dimensions onto the plugin's primary/counter sizing modes (which axis is which depends on the
-// frame's own direction) and resizes the fixed axes. Direction comes from the LIVE node, not the spec:
+// frame's own direction) and resizes the fixed axes. Direction comes from the LIVE node, not the authored one:
 // at create time applyContainer already set layoutMode so the two agree, and an edit delta naming only
-// sizing carries no mode at all. Presence-preserving per axis — an axis the spec doesn't name keeps
+// sizing carries no mode at all. Presence-preserving per axis — an axis the caller doesn't name keeps
 // its live sizing mode; the fresh-frame hug default is the BUILDER's to inject (see buildFrame).
 function applyOwnSize(f: any, layout: WriteLayout): void {
   const sizing = layout.sizing || {};
@@ -698,7 +698,7 @@ export function settleLiveNodePercentPosition(node: any, wl: WriteLayout): void 
 }
 
 // The live-parent facts assertPercentResolvable needs (create computes them from the authored
-// spec; edit reads them off the canvas). EFFECTIVE sizing (layoutSizing*), not the internal axis
+// node; edit reads them off the canvas). EFFECTIVE sizing (layoutSizing*), not the internal axis
 // modes: an AUTO-mode axis that the grandparent stretches reports FILL — the parent's size is
 // realized from above, the child's percent resolves against it, and no cycle exists. Reading
 // primary/counterAxisSizingMode here would reject that valid case as a hug.
@@ -859,11 +859,11 @@ export function assertLiveNodeLandsUnderParent(node: any, destination: any, subj
   return wl;
 }
 
-// A structural verb placing a SPEC: only its ROOT meets the destination — the interior children
+// A structural verb placing a constructor-built node: only its ROOT meets the destination — the interior children
 // are checked against their own authored parents inside the build walk, exactly as at create.
 // `deltas` is the same projection a batch hands assertLayoutDeltaResolvable: a slot's content is
 // judged against the slot as the SAME override's own layout words will leave it, not as it stands.
-export function assertSpecRootLandsUnderParent(destination: any, wn: WriteNode, subject: string, deltas?: BatchLayoutDeltas): void {
+export function assertBuiltRootLandsUnderParent(destination: any, wn: WriteNode, subject: string, deltas?: BatchLayoutDeltas): void {
   const wl = wn.layout || {};
   assertLayoutLandsUnderParent(projectedParentLayoutFacts(destination, deltas), wn.type, wl, wl.mode === "row" || wl.mode === "column", wl.position === "absolute", subject);
 }
@@ -908,26 +908,26 @@ function isPositionedChild(parentIsAuto: boolean, cl: WriteLayout): boolean {
   return cl.position === "absolute" || !parentIsAuto;
 }
 
-// The parent-side facts a spec child is settled against. The flow facts are ParentFlowFacts (the
+// The parent-side facts a constructor-built child is settled against. The flow facts are ParentFlowFacts (the
 // percent rule's own shape); `crossStretch` rides along because container-level `alignItems:
 // "stretch"` intent is never stored — not by Figma, not by us (see setContainerStretchMarks) — so
-// only a caller holding the parent's SPEC can state it. A caller inserting into a LIVE parent
+// only a caller holding the parent's own WriteNode can state it. A caller inserting into a LIVE parent
 // passes false and says so in its docs: the marks are re-synthesized by editing the container.
-export interface SpecParentFacts extends ParentFlowFacts {
+export interface AttachParentFacts extends ParentFlowFacts {
   crossStretch: boolean;
   subject: string; // the verb name the shared legality rules prefix their rejections with
 }
 
 // The same facts read off a LIVE destination, for the structural insert verbs. `crossStretch` is
 // FALSE here and that is a stated rule, not a reading gap: an inserted child does NOT inherit a
-// stretch container's stretch, because there is nothing to inherit FROM — see SpecParentFacts
+// stretch container's stretch, because there is nothing to inherit FROM — see AttachParentFacts
 // above. The remedy is `edit(parent, { layout: { alignItems: "stretch" } })`, which re-synthesizes
 // the marks over every child including the new one.
-export function liveParentSpecFacts(parent: any, subject: string): SpecParentFacts {
+export function liveParentAttachFacts(parent: any, subject: string): AttachParentFacts {
   return { ...parentHugFacts(parent), crossStretch: false, subject };
 }
 
-// THE attach-then-size entry: build one spec child and settle it into `parent`. Shared by the
+// THE attach-then-size entry: build one constructor-built child and settle it into `parent`. Shared by the
 // create walk (parent = the frame it is assembling) and the structural insert verbs (parent = a
 // live destination), so a subtree lands the same way whichever verb placed it.
 //
@@ -936,12 +936,12 @@ export function liveParentSpecFacts(parent: any, subject: string): SpecParentFac
 // the node is inside the parent that resolves them. `place` performs the attachment — appending
 // at the end for create, at an index for prepend/insertBefore — so WHERE stays the caller's while
 // the ordering stays here.
-export function attachSpecChild(
-  parent: any, wn: WriteNode, ctx: RenderCtx, facts: SpecParentFacts, place: (child: any) => void,
+export function attachBuiltChild(
+  parent: any, wn: WriteNode, ctx: RenderCtx, facts: AttachParentFacts, place: (child: any) => void,
 ): any {
   const cl = wn.layout || {};
   // Fail loud on the one unresolvable percent (in-flow %-size against a hugging auto-layout parent)
-  // before building the node, so a bad spec doesn't orphan a live node on the canvas. Every other
+  // before building the node, so a bad node doesn't orphan a live node on the canvas. Every other
   // percent/anchor is recorded and resolved in the post-walk pass (resolvePercents) against realized size.
   assertPercentResolvable(cl, facts, facts.subject);
   assertTextFillHeightInFlow(wn.type, cl, facts.parentIsAuto, cl.position === "absolute", facts.subject);
@@ -980,13 +980,13 @@ function buildFrame(wn: WriteNode, ctx: RenderCtx): any {
 
   const mode = layout.mode;
   const isAutoParent = mode === "row" || mode === "column";
-  // The hug facts answer from the AUTHORED spec — the frame's live sizing modes don't exist until
+  // The hug facts answer from the AUTHORED node — the frame's live sizing modes don't exist until
   // applyOwnSize runs after the children (see assertPercentResolvable's contract).
-  const specSizing = layout.sizing || {};
-  const facts: SpecParentFacts = {
+  const authoredSizing = layout.sizing || {};
+  const facts: AttachParentFacts = {
     parentIsAuto: isAutoParent,
-    hugW: !specSizing.horizontal || specSizing.horizontal === "hug",
-    hugH: !specSizing.vertical || specSizing.vertical === "hug",
+    hugW: !authoredSizing.horizontal || authoredSizing.horizontal === "hug",
+    hugH: !authoredSizing.vertical || authoredSizing.vertical === "hug",
     crossStretch: layout.alignItems === "stretch",
     subject: "flcm",
   };
@@ -994,31 +994,31 @@ function buildFrame(wn: WriteNode, ctx: RenderCtx): any {
   // hug-sized): every covered child, absolute or free-form. coverChild no-ops without a fill. An
   // INSERT into a live parent needs no such pass — its destination is already sized.
   const covers: { child: any; layout: WriteLayout }[] = [];
-  for (const rawSpec of wn.children || []) {
-    if (!rawSpec) continue; // falsy child entries skipped, so `cond && flcm.text(...)` works
-    const cl = rawSpec.layout || {};
-    const child = attachSpecChild(f, rawSpec, ctx, facts, (c) => f.appendChild(c));
+  for (const rawChild of wn.children || []) {
+    if (!rawChild) continue; // falsy child entries skipped, so `cond && flcm.text(...)` works
+    const cl = rawChild.layout || {};
+    const child = attachBuiltChild(f, rawChild, ctx, facts, (c) => f.appendChild(c));
     if (isPositionedChild(isAutoParent, cl)) covers.push({ child, layout: cl });
   }
 
   // Creation default: a fresh auto-layout frame HUGS both axes (CSS fit-content). Like the
   // transparent-fill default above, it's the builder's to inject — the applier itself never turns
   // key-absence into a write, so an edit delta omitting an axis leaves it alone.
-  applyOwnSize(f, { ...layout, sizing: { horizontal: specSizing.horizontal || "hug", vertical: specSizing.vertical || "hug" } });
+  applyOwnSize(f, { ...layout, sizing: { horizontal: authoredSizing.horizontal || "hug", vertical: authoredSizing.vertical || "hug" } });
   // Re-cover every fill child now that the frame has its final size (at append it was hug-sized).
   for (const c of covers) coverChild(f, c.child, c.layout);
   return f;
 }
 
-// Stamp a component. Everything the spec DOESN'T name stays the component's — no clip/fill/hug
+// Stamp a component. Everything the node DOESN'T name stays the component's — no clip/fill/hug
 // defaults (buildFrame's are creation defaults for a blank frame; on an instance each would be a
 // root-level override the author never wrote, silently unlinking that field from the component).
 // Order: properties before overrides, since a property can swap a nested instance or hide a
 // sublayer and the override paths were resolved against the tree the properties produce. The
-// child-side words (position, fill, pin) are attachSpecChild's, after the caller places the node.
+// child-side words (position, fill, pin) are attachBuiltChild's, after the caller places the node.
 function buildInstance(wn: WriteNode, ctx: RenderCtx): any {
   const plan = ctx.instances.get(wn);
-  if (!plan) throw new Error("flcm: an instance spec reached the build walk without a resolved plan. This is an internal error; report it.");
+  if (!plan) throw new Error("flcm: an INSTANCE node reached the build walk without a resolved plan. This is an internal error; report it.");
   const inst = plan.component.createInstance();
   figma.currentPage.appendChild(inst); // enter the doc; reparented when appended to a parent frame
   if (Object.keys(plan.properties).length) inst.setProperties(plan.properties);
@@ -1071,7 +1071,7 @@ function applyRuns(t: any, runs: NonNullable<WriteNode["runs"]>, ctx: RenderReso
 // so a text style compiled for create and for edit cannot land differently. Presence-only: the
 // base font writes ONLY when the style names a font-identity word (an edit's fontSize nudge must
 // not re-write fontName from a default triple; buildText writes the creation default itself when
-// the spec names none). Order is load-bearing: font before characters (Figma refuses characters on
+// the node names none). Order is load-bearing: font before characters (Figma refuses characters on
 // an unloaded font; the caller preloaded exactly this triple), characters before runs (the setRange
 // offsets address slices of them). Node-level fills are applyPaint's — the caller must run it
 // BEFORE this so range fills land over, not under, the base fill.
@@ -1119,7 +1119,7 @@ function buildText(wn: WriteNode, ctx: RenderCtx): any {
   const t = figma.createText();
   figma.currentPage.appendChild(t);
   // The creation default is the builder's: a fresh text ALWAYS ends up with a written base font —
-  // applyTextProps's font write is presence-gated (edit's rule), so when the spec names no identity
+  // applyTextProps's font write is presence-gated (edit's rule), so when the node names no identity
   // word, create writes the resolveFont fallback triple itself (loadFontsForTree preloaded it).
   if (!namesFontIdentity(wn.textStyle)) t.fontName = resolveFont(ctx.fonts, undefined, undefined, false);
   // Present-but-empty is the compiled "none" — write the clear (live createText seeds a default

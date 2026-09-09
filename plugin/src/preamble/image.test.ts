@@ -1,5 +1,5 @@
-// Images, sandbox side: flcm.image is an inert paint value; render() batches every image url into
-// ONE deduped mid-run request (protocol 2), awaits the bytes, and resolves each spec to a plugin
+// Images, sandbox side: flcm.image is a plain paint value; render() batches every image url into
+// ONE deduped mid-run request (protocol 2), awaits the bytes, and resolves each paint to a plugin
 // ImagePaint. The channel is FlcmHost.requestImages, off the host-installed __flcmHost — in the live
 // plugin it's the parameter of the eval'd wrapper executeCode builds; here (plain import → module
 // scope chains to global) we install it on globalThis, exactly as the dogfood harness does.
@@ -37,15 +37,15 @@ async function renderWithImages(
 
 const bytesFor = (urls: string[]) => Object.fromEntries(urls.map((u) => [u, B64]));
 
-test("flcm.image builds an inert image PaintSpec with FILL/placeholder defaults", () => {
-  const spec = image("https://cdn.example.com/a.jpg");
-  assert.deepEqual(spec, { kind: "image", url: "https://cdn.example.com/a.jpg", scaleMode: "FILL", placeholder: false });
+test("flcm.image builds an image WritePaint with FILL/placeholder defaults", () => {
+  const paint = image("https://cdn.example.com/a.jpg");
+  assert.deepEqual(paint, { kind: "image", url: "https://cdn.example.com/a.jpg", scaleMode: "FILL", placeholder: false });
 });
 
 test("flcm.image carries scaleMode + placeholder overrides", () => {
-  const spec = image("https://cdn.example.com/a.jpg", { scaleMode: "CROP", placeholder: true });
-  assert.equal(spec.scaleMode, "CROP");
-  assert.equal(spec.placeholder, true);
+  const paint = image("https://cdn.example.com/a.jpg", { scaleMode: "CROP", placeholder: true });
+  assert.equal(paint.scaleMode, "CROP");
+  assert.equal(paint.placeholder, true);
 });
 
 test("flcm.image rejects a non-string/empty url and a bad scaleMode (fail loud)", () => {

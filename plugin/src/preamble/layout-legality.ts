@@ -4,18 +4,18 @@
 // so the two cannot answer differently (ADR-0003: a word that would do nothing must reject loud,
 // in every verb). Pure and figma-free by charter: rules take the authored WriteLayout plus any
 // live facts as BOOLEANS, because the callers know them from different places — the create walk
-// answers from the authored spec (before the node or its parent's sizing modes exist), edit from
+// answers from the authored node (before the node or its parent's sizing modes exist), edit from
 // the live flags. A rule that needs a fact neither side can state this way doesn't belong here.
 //
 // Convention: `subject` (the rejecting verb's name for the error prefix) is always the LAST
 // parameter. The parent-relative rules fire from create's APPLY walk, not prepare — deliberate:
-// the walk already holds each parent's spec facts beside the appliers, and duplicating that
+// the walk already holds each parent's authored facts beside the appliers, and duplicating that
 // derivation in a prepare pass is where the two could drift. Accepted cost: a bad percent child
-// spec pays prepare's font/image loads before rejecting.
+// pays prepare's font/image loads before rejecting.
 import { WriteLayout } from "./ir.js";
 
 // The live parent-flow facts the percent rule needs — edit reads them off the canvas
-// (bridge.parentHugFacts), create derives them from the authored parent spec.
+// (bridge.parentHugFacts), create derives them from the authored parent node.
 export interface ParentFlowFacts {
   parentIsAuto: boolean;
   hugW: boolean;
@@ -25,7 +25,7 @@ export interface ParentFlowFacts {
 // Node-local legality: the type, the words, and whether the node will be a row/column container
 // after this call. `liveIsRowColumn` is the one fact only edit can supply (a delta that doesn't
 // name a mode inherits the live one); create passes false — the authored mode decides, and a
-// spec with no mode is never a container. `willBeAuto` is derived here, not passed, so a caller
+// node with no mode is never a container. `willBeAuto` is derived here, not passed, so a caller
 // can't hand in a value that contradicts the very layout it also passes.
 export function assertLayoutRealizableForType(nodeType: string, wl: WriteLayout, liveIsRowColumn: boolean, subject: string): void {
   // No per-type "can this even be a container" rule here ON PURPOSE: a mode on a non-frame is

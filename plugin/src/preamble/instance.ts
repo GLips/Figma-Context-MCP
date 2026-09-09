@@ -1,6 +1,6 @@
 // instance — the component half of the write path, for BOTH verbs that touch one:
 //
-//   • CREATE (flcm.instance): everything an instance spec carries raw (ir.ts WriteProps on why)
+//   • CREATE (flcm.instance): everything an flcm.instance carries raw (ir.ts WriteProps on why)
 //     resolved against the live document in render's synchronous gate, right before its entry
 //     seal, so that the build walk (bridge.buildInstance) is a sync sequence of writes with
 //     nothing left to look up.
@@ -31,8 +31,8 @@
 //
 // A SLOT is filled from here too. Read words are write words: `get` republishes a filled slot's
 // content as `children` under the slot's path in `overrides`, and stating `children` at that path
-// — at create or under edit — is what fills one. The specs are built inside the instance's own
-// sealed span through the same attach-then-size entry every insert rides (bridge.attachSpecChild),
+// — at create or under edit — is what fills one. The content nodes are built inside the instance's own
+// sealed span through the same attach-then-size entry every insert rides (bridge.attachBuiltChild),
 // so slot content lands exactly as appended content does; afterwards the structural verbs treat
 // it as the ordinary tree it is (structure.ts's gate knows a SLOT's child list is open).
 //
@@ -44,7 +44,7 @@ import { resolveTarget, ResolvedTargets } from "./read.js";
 import { assertNodeStillOnCanvas } from "./freshness.js";
 import { FontMap } from "./fonts.js";
 import {
-  isRowColumnAutoLayout, mintHandle, attachSpecChild, liveParentSpecFacts, assertSpecRootLandsUnderParent,
+  isRowColumnAutoLayout, mintHandle, attachBuiltChild, liveParentAttachFacts, assertBuiltRootLandsUnderParent,
   InstancePlan, RenderCtx, RenderResources, BatchLayoutDeltas,
 } from "./bridge.js";
 import { assertLayoutRealizableForType } from "./layout-legality.js";
@@ -81,7 +81,7 @@ const NULL_RESTORE: Record<string, unknown> = {
  * One sublayer's override: the component-relative path, the sublayer's own words as a delta
  * (undefined when the override only fills a slot), the plan compiled from them against the sublayer
  * the route chose (an empty patch for a fill-only override — the existence gate still runs on it),
- * and, at a SLOT's path, the content the override states: the specs to build there, in order.
+ * and, at a SLOT's path, the content the override states: the nodes to build there, in order.
  *
  * `delta` rides along because the plan is compiled AGAIN inside the sealed span, against the live
  * sublayer as it stands after this call's own retarget (applyOverridePlans).
@@ -98,17 +98,17 @@ export interface InstancePlanning { targets: ResolvedTargets; fonts?: FontMap }
 // ---- the async half: targets, resolved ahead of the seal ----
 
 /**
- * Resolve every target the INSTANCE specs in `tree` name — the tree's own instances, and every one
+ * Resolve every target the INSTANCE nodes in `tree` name — the tree's own instances, and every one
  * inside the slot content they fill, however deep (a nested instance inside a slot fills ITS slot
- * through the same path). Two rounds per spec, because WHICH property values are targets is a fact
+ * through the same path). Two rounds per node, because WHICH property values are targets is a fact
  * of the component the first round resolves: its swap-typed properties. Read here as the document
  * stands now; the gate reads the definitions again, and a value that became a swap during the
  * loads is a miss the lookup refuses (read.ts ResolvedTargets).
  */
 export async function resolveInstanceTreeTargets(tree: WriteNode, targets: ResolvedTargets): Promise<void> {
-  const specs: WriteNode[] = [];
-  collectInstanceSpecs(tree, specs);
-  for (const wn of specs) {
+  const instances: WriteNode[] = [];
+  collectInstanceNodes(tree, instances);
+  for (const wn of instances) {
     await targets.resolve(wn.component as Target);
     await resolveSwapValueTargets(componentNodeOrNull(wn.component as Target, targets), wn.componentProperties || {}, targets);
   }
@@ -141,17 +141,17 @@ async function resolveSwapValueTargets(owner: any | null, authored: Record<strin
 // ---- the sync half: the plans, made against the document as it stands ----
 
 /**
- * Plan every INSTANCE spec in `tree` (and in the slot content its instances fill). Returns the plans
+ * Plan every INSTANCE node in `tree` (and in the slot content its instances fill). Returns the plans
  * (by WriteNode identity), the font needs the override deltas add, and the slot content trees —
  * prepare spends the last two on its one font load and one image request; the gate spends the
  * first on the build walk.
  */
 export function planInstanceTree(tree: WriteNode, planning: InstancePlanning): InstanceNeeds {
   const needs: InstanceNeeds = { plans: new Map(), fontNeeds: [], slotContentTrees: [] };
-  const specs: WriteNode[] = [];
-  collectInstanceSpecs(tree, specs);
-  for (const wn of specs) {
-    const { plan, overrides } = planInstanceSpec(wn, planning);
+  const instances: WriteNode[] = [];
+  collectInstanceNodes(tree, instances);
+  for (const wn of instances) {
+    const { plan, overrides } = planInstanceNode(wn, planning);
     needs.plans.set(wn, plan);
     for (const o of overrides) {
       needs.fontNeeds.push(o.plan);
@@ -162,17 +162,17 @@ export function planInstanceTree(tree: WriteNode, planning: InstancePlanning): I
 }
 
 // Descends into slot content as well as children: a `flcm.instance` inside an override's `children`
-// is an instance spec like any other, and the build walk will ask for its plan by identity.
-function collectInstanceSpecs(wn: WriteChild, out: WriteNode[]): void {
+// is an INSTANCE node like any other, and the build walk will ask for its plan by identity.
+function collectInstanceNodes(wn: WriteChild, out: WriteNode[]): void {
   if (!wn || typeof wn !== "object") return;
   if (wn.type === "INSTANCE") out.push(wn);
-  for (const child of wn.children || []) collectInstanceSpecs(child, out);
-  for (const content of slotContentSpecsOf(wn)) for (const child of content) collectInstanceSpecs(child, out);
+  for (const child of wn.children || []) collectInstanceNodes(child, out);
+  for (const content of slotContentListsOf(wn)) for (const child of content) collectInstanceNodes(child, out);
 }
 
-// Every `children` array an instance spec's overrides carry — the raw word, shape-checked at
+// Every `children` array an INSTANCE node's overrides carry — the raw word, shape-checked at
 // construction (flcm.compileOverrideBag) and resolved to a slot here.
-function slotContentSpecsOf(wn: WriteNode): WriteChild[][] {
+function slotContentListsOf(wn: WriteNode): WriteChild[][] {
   const out: WriteChild[][] = [];
   for (const path of Object.keys(wn.overrides || {})) {
     const content = own(wn.overrides![path], SLOT_CONTENT_WORD);
@@ -196,7 +196,7 @@ function planSlotContentNeeds(content: readonly WriteNode[], planning: InstanceP
   return needs;
 }
 
-function planInstanceSpec(wn: WriteNode, planning: InstancePlanning): { plan: InstancePlan; overrides: OverridePlan[] } {
+function planInstanceNode(wn: WriteNode, planning: InstancePlanning): { plan: InstancePlan; overrides: OverridePlan[] } {
   const resolved = resolveComponentNode(planning.targets.node(wn.component as Target, SUBJECT), SUBJECT);
   const { component, properties } = resolveComponentProperties(resolved, wn.componentProperties || {}, SUBJECT, planning.targets);
   // The root's layout words are legal or not by the COMPONENT's mode — the same live fact edit
@@ -354,7 +354,7 @@ function resolveComponentProperties(
     const path = hole ? JSON.stringify(componentPathOfDefinitionId(hole.id)) : '"<slotPath>"';
     throw new Error(
       slotNamed.where + ": " + JSON.stringify(slotNamed.full) + " is a slot, and a slot has no value — its content is stated as `children` at the slot's path: " +
-        subject + ".overrides[" + path + "] = { children: [ …specs ] } (flcm.frame/text/instance…; [] empties it).",
+        subject + ".overrides[" + path + "] = { children: [ …nodes ] } (flcm.frame/text/instance…; [] empties it).",
     );
   }
   return { component, properties, variant };
@@ -433,7 +433,7 @@ function isInside(node: any, ancestor: any): boolean {
  * would be deleted moments later in the same span, and Figma keeps accepting writes on a removed
  * node, so the call would report success for a write that landed on nothing. Ordering the two
  * differently is not an answer: the delta never says which it meant, and the layer the fill
- * installs is a different node from the one the path names. The content spec is where those words
+ * installs is a different node from the one the path names. The content nodes are where those words
  * belong. `editMany`'s cross-ENTRY version of the same contradiction lives in edit-many.ts.
  */
 function assertNoOverridePathInsideFilledSlot(plans: readonly OverridePlan[], subject: string): void {
@@ -446,7 +446,7 @@ function assertNoOverridePathInsideFilledSlot(plans: readonly OverridePlan[], su
         subject + ".overrides[" + JSON.stringify(plan.path) + "]: " + describeNodeIdentity(plan.plan.node) +
           " sits inside the slot at " + JSON.stringify(slot.path) + ", whose `" + SLOT_CONTENT_WORD +
           "` this same call replaces — the fill removes that layer, so these words would land on a node the call deletes. " +
-          "State them on the spec you fill the slot with instead.",
+          "State them on the nodes you fill the slot with instead.",
       );
     }
   }
@@ -477,7 +477,7 @@ function planDefinitionOverrides(component: any, overrides: Record<string, Overr
 }
 
 // The fill word splits off FIRST: `children` is not an edit word (the sublayer compile would
-// refuse it as a read spec), and what it carries is built, not written. The rest is the sublayer's
+// refuse it as a `get` result), and what it carries is built, not written. The rest is the sublayer's
 // own delta and compiles as the words it is — a slot's `layout`/`fill` restyle the hole exactly
 // as before.
 // One override, compiled against the sublayer the route chose (the definition node, or the live
@@ -498,13 +498,13 @@ function compileOverride(sublayer: any, definition: any, delta: OverrideDeltaInp
   // layout words projected, the way a batch projects a parent's delta) — a percent under a hug
   // slot, or a fill-height text in its flow, refuses here with zero writes, not from the span.
   const deltas: BatchLayoutDeltas | undefined = plan.patch.layout ? { [sublayer.id]: plan.patch.layout } : undefined;
-  for (const spec of slotContent) assertSpecRootLandsUnderParent(sublayer, spec, where + "." + SLOT_CONTENT_WORD, deltas);
+  for (const content of slotContent) assertBuiltRootLandsUnderParent(sublayer, content, where + "." + SLOT_CONTENT_WORD, deltas);
   return { path, delta: words, plan, slotContent };
 }
 
 // The fill word, taken off the delta and judged against the one authority on what a slot is
 // (identity.isSlotHole): legal only when the sublayer at that path IS one, refused naming the
-// path and the slots the component has otherwise. The array's shape and its specs' provenance
+// path and the slots the component has otherwise. The array's shape and its nodes' provenance
 // were judged at construction; the falsy entries a children list allows are dropped here.
 function splitSlotContent(sublayer: any, definition: any, delta: OverrideDeltaInput, where: string): { rest: OverrideDeltaInput; slotContent?: WriteNode[] } {
   const raw = own(delta, SLOT_CONTENT_WORD);
@@ -592,15 +592,15 @@ function applyOverridePlans(instance: any, overrides: OverridePlan[], ctx: Rende
 }
 
 // Replace a live SLOT's content: every current child goes — the definition's placeholder sublayers
-// on a fresh instance, or whatever an earlier fill put there — then the specs, in order, through
+// on a fresh instance, or whatever an earlier fill put there — then the content nodes, in order, through
 // the attach-then-size entry every insert rides. Removing a placeholder sublayer is an ASSUMPTION
 // on the live checklist: if Figma refuses, the refusal surfaces from this span and the whole call
 // rolls back — loud, never a half-filled slot.
-function replaceSlotContent(fail: EditPlanFailure, slot: any, specs: readonly WriteNode[], ctx: RenderCtx, subject: string): void {
+function replaceSlotContent(fail: EditPlanFailure, slot: any, slotContent: readonly WriteNode[], ctx: RenderCtx, subject: string): void {
   try {
     for (const child of [...slot.children]) child.remove();
-    const facts = liveParentSpecFacts(slot, subject);
-    for (const spec of specs) attachSpecChild(slot, spec, ctx, facts, (child) => slot.appendChild(child));
+    const facts = liveParentAttachFacts(slot, subject);
+    for (const content of slotContent) attachBuiltChild(slot, content, ctx, facts, (child) => slot.appendChild(child));
   } catch (cause) {
     throw fail(cause);
   }
@@ -703,7 +703,7 @@ export function planInstanceEdit(node: SceneNode, words: InstanceEditWords, curr
     overrides,
     needs: planSlotContentNeeds(overrides.flatMap((o) => o.slotContent || []), planning),
     retargets,
-    // The same fact create's own gate reads (planInstanceSpec above): the RESOLVED component's mode, not
+    // The same fact create's own gate reads (planInstanceNode above): the RESOLVED component's mode, not
     // the instance's current one, which the retarget is about to replace.
     becomesRowColumn: retargets ? isRowColumnAutoLayout(component) : undefined,
   };

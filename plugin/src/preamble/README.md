@@ -29,12 +29,13 @@ closure is the namespace a module system would otherwise provide.
 
 > This replaced an earlier `format: 'esm'` bundle that emitted bare top-level declarations sharing one
 > flat scope with the agent's code, which is why internals used to carry a `__cm*` prefix. The only
-> thing that forced `esm` was a module-level top-level `await` (the font preload). The inert-spec model
-> removed that need — see below — so the IIFE became possible, and the prefix unnecessary.
+> thing that forced `esm` was a module-level top-level `await` (the font preload). Moving the font
+> load into `render()` removed that need — see below — so the IIFE became possible, and the prefix
+> unnecessary.
 
 ### No top-level await
 
-Constructors (`flcm.frame`, `flcm.text`, …) build **inert POJO `WriteNode`s** and touch nothing live.
+Constructors (`flcm.frame`, `flcm.text`, …) build **plain POJO `WriteNode`s** and touch nothing live.
 Only `flcm.render()` creates Figma nodes, and it's `async` — so the font preload
 (`loadFontsForTree()` in `fonts.ts`, which awaits `listAvailableFontsAsync` + `loadFontAsync`) runs at
 the top of `render()`, not at module top level. With no TLA to preserve, the synchronous IIFE bundle is
@@ -48,7 +49,7 @@ boundary) ← `flcm` (sugar) → `bridge` (typed walk).
 
 | File | Covers | Imports from |
 | --- | --- | --- |
-| `ir.ts` | the typed `WriteNode` **currency** types: `PaintSpec`/`EffectSpec` discriminated unions, typed layout/text leaves (numbers, edges, terse-intent enums), `WriteType` allow-list. No logic | — |
+| `ir.ts` | the typed `WriteNode` **currency** types: `WritePaint`/`WriteEffect` discriminated unions, typed layout/text leaves (numbers, edges, terse-intent enums), `WriteType` allow-list. No logic | — |
 | `paint.ts` | typed paint: `solid`/`linearGradient`/`radialGradient` constructors (the grounded 2×3 transform math, one home), `toFigmaPaint` mapper. No strings | `ir` |
 | `effects.ts` | typed effects: `shadow`/`layerBlurFromCssPx`/`backgroundBlurFromCssPx` constructors (blur×2 lives in the `*FromCssPx` names), `toFigmaEffects` mapper. No strings | `ir` |
 | `css.ts` | **THE string boundary — the only module that knows CSS syntax exists.** Color (#hex/rgba), gradient-string, and effect-string parsers; `parseFill`/`parseCssEffects`; `length`/`lineHeight`/`letterSpacing` coercions. Emits the typed currency | `ir`, `paint`, `effects` |
@@ -60,7 +61,7 @@ boundary) ← `flcm` (sugar) → `bridge` (typed walk).
 ## The currency boundary: CSS at the edges, typed inside
 
 `WriteNode` (`ir.ts`) is the **single typed currency** the whole preamble speaks — every leaf is a real
-type (a number, a typed edge box, a `PaintSpec`/`EffectSpec`), never a CSS string. The sugar (`flcm.ts`)
+type (a number, a typed edge box, a `WritePaint`/`WriteEffect`), never a CSS string. The sugar (`flcm.ts`)
 compiles terse props straight into it; the bridge reads it and drives the plugin API. Nothing between
 them parses or re-serializes a string.
 

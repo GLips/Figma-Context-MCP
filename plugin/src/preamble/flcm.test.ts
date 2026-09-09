@@ -1,4 +1,4 @@
-// ADR-0003 code-fix tests that need construction and/or a live render. Constructors are inert POJOs, so
+// ADR-0003 code-fix tests that need construction and/or a live render. Constructors build plain POJOs, so
 // pad rejection is checked on the built WriteNode; cross:"stretch" and the clip default are render-time
 // (bridge) behavior, exercised against the in-memory figma mock the dogfood harness uses.
 import { test } from "node:test";
@@ -17,7 +17,7 @@ test("pad: numbers, the CSS box shorthand and edge objects compile; an out-of-su
   assert.deepEqual(frame({ layout: { mode: "row", padding: 24 } }).layout!.padding, { top: 24, right: 24, bottom: 24, left: 24 });
   assert.deepEqual(frame({ layout: { mode: "row", padding: { x: 8, y: 16 } } }).layout!.padding, { top: 16, right: 8, bottom: 16, left: 8 });
   assert.deepEqual(frame({ layout: { mode: "row", padding: { top: 4, left: 2 } } }).layout!.padding, { top: 4, right: 0, bottom: 0, left: 2 });
-  // The read shape's own spelling: `get` returns padding as a CSS box shorthand, so a spec re-authors
+  // The read shape's own spelling: `get` returns padding as a CSS box shorthand, so a `get` result re-authors
   // as-is. All four CSS arities, since the 1/2/3-part forms mirror sides rather than defaulting to 0.
   assert.deepEqual(frame({ layout: { mode: "row", padding: "24px" } }).layout!.padding, { top: 24, right: 24, bottom: 24, left: 24 });
   assert.deepEqual(frame({ layout: { mode: "row", padding: "12px 16px" } }).layout!.padding, { top: 12, right: 16, bottom: 12, left: 16 });
@@ -90,7 +90,7 @@ test("the seal clones caller inputs — nothing caller-reachable is frozen, noth
   rect({ width: 10, height: 10, effects: fx });
   assert.doesNotThrow(() => fx.push(fx[0]));
   // …and a caller-frozen SHELL can't shield mutable descendants: the node keeps a clone, so
-  // mutating the original spec's stops after construction changes nothing the node will render.
+  // mutating the original gradient's stops after construction changes nothing the node will render.
   const g = gradient("linear", [{ color: "#000000" }, { color: "#ffffff" }]);
   Object.freeze(g); // shallow — g.stops entries stay mutable in the caller's hands
   const wn = rect({ width: 10, height: 10, fill: g });

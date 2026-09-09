@@ -7,9 +7,9 @@ export async function reuseExample(flcm: Flcm) {
   // example:start
   // Copy a card that already exists on the canvas into a different container, widened on the way.
   // `get` reads it as the canonical shape; `fromRead` re-authors that shape through the constructors,
-  // which is what makes it a COPY. A bare read spec carries the original's live id, so passing one
+  // which is what makes it a COPY. A bare `get` result carries the original's live id, so passing one
   // straight to `append` is refused rather than read as "move the node I just looked at".
-  // `get` returns an envelope — `node` is the spec, and `components` (when the card holds instances)
+  // `get` returns an envelope — `node` is the read shape, and `components` (when the card holds instances)
   // names each component once, with the children every instance shares.
   const { node } = await flcm.get("card");
   const wider = flcm.fromRead({ ...node, width: 480, name: "Card (wide)" });
@@ -17,7 +17,7 @@ export async function reuseExample(flcm: Flcm) {
 
   // fromRead REBUILDS, so it reaches only what flcm can author: a stacked paint or a grid container
   // fails loud naming the field (an INSTANCE rebuilds as a fresh stamp of its component).
-  // flcm.clone(target, parent) duplicates the live node whole — faithful, but not editable as a spec first.
+  // flcm.clone(target, parent) duplicates the live node whole — faithful, but not editable before it lands.
   return placed;
   // example:end
 }

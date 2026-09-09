@@ -176,7 +176,7 @@ function liveBaseStyle(node: TextNode): WriteTextStyle {
 }
 
 // Compile the delta to a typed patch through create's own parsers, then pre-flight the one compiled
-// form those parsers don't fully close: a raw EffectSpec[] passes normalizeEffects untouched, and an
+// form those parsers don't fully close: a raw WriteEffect[] passes normalizeEffects untouched, and an
 // unknown kind would otherwise surface mid-apply as a fake "Figma refused". toFigmaEffects is pure
 // (figma-free), so running it here keeps every vocabulary failure ahead of the first canvas write.
 // Takes the LIVE node (not just its type): text words compile against live facts — font identity
@@ -402,9 +402,9 @@ export function compileEditPlan(node: SceneNode, changes: EditDelta, subject: st
 }
 
 /**
- * What the INSTANCE specs a verb will build need: their plans (instance.ts made them against the
+ * What the INSTANCE nodes a verb will build need: their plans (instance.ts made them against the
  * live component), the font needs of their override deltas, and the SLOT CONTENT trees those
- * overrides fill — spec trees in their own right, whose fonts and images load exactly as a
+ * overrides fill — constructor-built trees in their own right, whose fonts and images load exactly as a
  * rendered tree's do and whose own nested instances are already in `plans`. Produced by
  * instance.ts for a rendered tree and for an instance delta alike, twice per verb: prepare spends
  * the needs on its loads (stage 3), the gate spends the plans on the build walk.

@@ -26,8 +26,8 @@ const here = dirname(fileURLToPath(import.meta.url));
 
 export async function buildSandboxPreamble() {
   // format:'iife' + globalName:'flcm' is what gives us the single-global / closure-private-internals
-  // shape. target:'esnext' keeps output lean; there is no top-level await to preserve (the inert-spec
-  // model loads fonts inside render(), not at module top level), so any modern target works.
+  // shape. target:'esnext' keeps output lean; there is no top-level await to preserve (fonts
+  // load inside render(), not at module top level), so any modern target works.
   const bundled = await esbuild.build({
     entryPoints: [resolve(here, "runtime.ts")],
     bundle: true, write: false, format: "iife", globalName: "flcm", target: "esnext", platform: "neutral",

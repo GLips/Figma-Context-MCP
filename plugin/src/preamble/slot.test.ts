@@ -62,12 +62,12 @@ test("`children` at the slot's path fills it at create, keys come back, and the 
   assert.equal(out.keyed.swatch.id, slot.children[1].id);
   // The placeholder went with the fill: content REPLACES, it does not join.
   assert.equal(slot.findOne((n: { name: string }) => n.name === "Placeholder"), null);
-  const { node: spec } = await get(id(inst.id));
-  const content = (spec as any).overrides[slotPath].children;
+  const { node: read } = await get(id(inst.id));
+  const content = (read as any).overrides[slotPath].children;
   assert.equal(content.length, 2);
   assert.equal(content[0].type, "TEXT");
-  // Read words are write words: the read spec re-authors whole, content and all.
-  const again = await render(fromRead(spec));
+  // Read words are write words: the read shape re-authors whole, content and all.
+  const again = await render(fromRead(read));
   assert.equal(liveSlotOf(await figma.getNodeByIdAsync(again.node.id)).children.length, 2);
 });
 
@@ -78,7 +78,7 @@ test("under edit the fill replaces the content whole, and [] empties the slot", 
   const slot = liveSlotOf(inst);
   assert.equal(slot.children.length, 1);
   // A DELTA builds nodes here, which is the one thing a delta otherwise never does — an INSTANCE
-  // spec among the content is the case that needs the edit path's own instance plans (without them
+  // node among the content is the case that needs the edit path's own instance plans (without them
   // the build walk throws from inside the sealed span, mid-edit, with a report-a-bug message).
   await edit(id(inst.id), { overrides: { [slotPath]: { children: [text("One"), instance(comp.id, { key: "inner" })] } } });
   assert.deepEqual(slot.children.map((c: any) => c.type), ["TEXT", "INSTANCE"]);
@@ -95,10 +95,10 @@ test("under edit the fill replaces the content whole, and [] empties the slot", 
   // An emptied slot must not read back as untouched. The read has no `children: []` word for it —
   // core answers an emptied container by hiding every one of the component's children by path —
   // but it must say SOMETHING, and re-authoring what it says must not restore the placeholder.
-  const { node: spec } = await get(id(inst.id));
-  const placeholderPath = Object.keys((spec as any).overrides).find((p) => p !== slotPath)!;
-  assert.deepEqual((spec as any).overrides[placeholderPath], { visible: false });
-  const again = await render(fromRead(spec));
+  const { node: read } = await get(id(inst.id));
+  const placeholderPath = Object.keys((read as any).overrides).find((p) => p !== slotPath)!;
+  assert.deepEqual((read as any).overrides[placeholderPath], { visible: false });
+  const again = await render(fromRead(read));
   const reslot = liveSlotOf(await figma.getNodeByIdAsync(again.node.id));
   assert.deepEqual(
     reslot.children.filter((c: any) => c.visible).map((c: any) => c.characters),
@@ -140,7 +140,7 @@ test("the structural verbs work inside a filled slot, and the instance's own lis
   await assert.rejects(move(id(slot.id), id(holder.node.id)), /node being moved or removed is inside component instance/);
 });
 
-test("a fill refuses with zero writes: a non-slot path, a binding inside, a raw read spec, null", async () => {
+test("a fill refuses with zero writes: a non-slot path, a binding inside, a raw `get` result, null", async () => {
   const { comp, slotPath, title } = await cardComponent();
   const out = await render(instance(comp.id, { key: "card1" }));
   const inst = await figma.getNodeByIdAsync(out.node.id);
@@ -158,7 +158,7 @@ test("a fill refuses with zero writes: a non-slot path, a binding inside, a raw 
     /componentPropertyReferences/,
   );
   const { node: read } = await get(id(title.id));
-  assert.throws(() => instance(comp.id, { overrides: { [slotPath]: { children: [read as any] } } }), /read spec.*flcm\.fromRead/s);
+  assert.throws(() => instance(comp.id, { overrides: { [slotPath]: { children: [read as any] } } }), /`get` result.*flcm\.fromRead/s);
   assert.throws(() => instance(comp.id, { overrides: { [slotPath]: { children: null as any } } }), /no null form/);
   assert.throws(() => instance(comp.id, { overrides: { [slotPath]: { children: text("x") as any } } }), /must be an array/);
   assert.deepEqual(figma.undoLog.slice(before), []);

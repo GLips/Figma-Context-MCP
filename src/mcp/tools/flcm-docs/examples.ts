@@ -57,7 +57,7 @@ const EXAMPLE_META: Record<ExampleId, { title: string; intro: string }> = {
   makeComponent: {
     title: "Authoring a component (flcm.component → flcm.variants)",
     intro:
-      "A Button spec promoted to a COMPONENT in one call — a boolean, a text and a slot property, each " +
+      "A Button, authored then promoted to a COMPONENT in one call — a boolean, a text and a slot property, each " +
       "bound to the node it drives, defaults derived from those nodes — then two sizes folded into a " +
       "variant set.",
   },

@@ -23,7 +23,7 @@ beforeEach(() => {
 
 // One shared slot so a test can install both capabilities without the second clobbering the first,
 // seeded COMPLETE: FlcmHost has no optional members, so the preamble is entitled to call either
-// method on any host that exists. The seeds are the inert answers — no images, never cancelled —
+// method on any host that exists. The seeds are the do-nothing answers — no images, never cancelled —
 // and each helper below overrides only the one its tests exercise.
 const hostSlot = (): Record<string, unknown> => {
   const g = globalThis as Record<string, unknown>;

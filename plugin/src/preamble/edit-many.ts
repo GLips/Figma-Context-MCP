@@ -356,7 +356,7 @@ function assertNoEntryInsideRetargetedInstance(
  * stage is gone. Figma keeps accepting writes on a removed node (the same hazard the retarget rule
  * above and assertNodeStillOnCanvas call out), so without this the batch would report success
  * and hand back a Handle minted from a corpse. The remedy is not an order: the layer the fill
- * installs is a different node from the one the entry names, so its words belong on the spec.
+ * installs is a different node from the one the entry names, so its words belong on the node that fills it.
  *
  * The single-delta form of this contradiction — one entry stating both the fill and a path inside
  * it — is refused in instance.ts, where the override set is resolved.
@@ -387,7 +387,7 @@ function assertNoEntryInsideFilledSlot(
             "sits inside the slot at " + JSON.stringify(slot.path) + " of " + JSON.stringify(hostPlan.node.name) +
               " (id " + JSON.stringify(hostPlan.node.id) + "), which entry [" + host + "] FILLS in the same batch — that fill " +
               "removes the slot's current content, so this write would land on a node no longer in the tree. " +
-              "State these words on the spec entry [" + host + "] fills the slot with.",
+              "State these words on the entry [" + host + "] fills the slot with.",
           ),
         );
       }

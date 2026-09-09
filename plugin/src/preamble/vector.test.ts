@@ -1,5 +1,5 @@
 // Vector (Phase 2): flcm.svg pastes opaque markup; flcm.path is a single themeable vector. Construction is
-// inert (checked on the built WriteNode); the plugin calls are render-time (bridge) behavior, checked
+// document-blind (checked on the built WriteNode); the plugin calls are render-time (bridge) behavior, checked
 // against the in-memory figma mock (which models createNodeFromSvg → a FRAME of vectors, and createVector).
 import { test } from "node:test";
 import assert from "node:assert/strict";

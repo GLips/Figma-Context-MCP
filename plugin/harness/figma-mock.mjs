@@ -961,7 +961,7 @@ export function createFigmaMock() {
         if (p.type === "COMPONENT" || p.type === "COMPONENT_SET" || p.type === "INSTANCE") throw new Error("Cannot create component from node");
       }
       // Live does NOT refuse a leaf — it behaves like the Create component button and WRAPS it in a
-      // new component frame. flcm refuses that case in prepare (assertPromotableSpecRoot /
+      // new component frame. flcm refuses that case in prepare (assertPromotableBuiltRoot /
       // assertPromotable), so a leaf reaching here is a caller bug; throwing keeps the mock from
       // quietly modelling a conversion live would never perform.
       if (!CONTAINER_TYPES.includes(node.type)) {

@@ -166,10 +166,10 @@ const SECTIONS: Section[] = [
       "Every prop is optional; an omitted prop is simply not applied (a frame with no `fill` is transparent, " +
       "not white).\n\n" +
       "**Read and write share one vocabulary.** What `get` returns spreads straight into any constructor or " +
-      "`flcm.edit` — `flcm.rect({ ...spec, width: 320 })`, `flcm.text(spec)` — because `left`/`top`, `fill`, " +
-      "`text`, `boldWeight` and the rest are the same words on both sides. A spec's read-only words (`id`, " +
-      "`type`, a root's `contextual` size beside `designedWidth`) fold away. A spec with `children` needs " +
-      "`flcm.fromRead(spec)`, which rebuilds the whole subtree and refuses by name the fields flcm has no " +
+      "`flcm.edit` — `flcm.rect({ ...node, width: 320 })`, `flcm.text(node)` — because `left`/`top`, `fill`, " +
+      "`text`, `boldWeight` and the rest are the same words on both sides. A read shape's read-only words (`id`, " +
+      "`type`, a root's `contextual` size beside `designedWidth`) fold away. A node with `children` needs " +
+      "`flcm.fromRead(node)`, which rebuilds the whole subtree and refuses by name the fields flcm has no " +
       "word for (`strokeDashes`, a locked aspect ratio, a grid). A component property binding " +
       "(`componentPropertyReferences`) rebuilds, but means something only inside a component — see the components section.\n\n" +
       `### Shared by every node\n\n${propTable(FIELD_GROUPS.shared)}\n\n` +
@@ -356,7 +356,7 @@ export function buildQuickStart(): string {
 
 EXECUTION MODEL — your code runs in an async function body: use \`await\` directly and \`return <value>\`. Each call runs in its OWN scope — thread state by returning ids/keys and re-targeting them (flcm.get).
 
-DESCRIBE an inert tree, then RENDER once:
+DESCRIBE a tree, then RENDER once:
   const t = flcm.frame({ layout:{ mode:"column", gap:16 } }, [ flcm.text("Hi") ]);
   const out = await flcm.render(t);   // creates nodes → { node, keyed }
 
@@ -468,7 +468,7 @@ ${sectionList}
 
 ${verbTable()}
 
-- Constructors are inert; only \`await flcm.render(tree)\` creates nodes → \`{ node, keyed }\`.
+- Constructors create nothing; only \`await flcm.render(tree)\` creates nodes → \`{ node, keyed }\`.
 - Return ids/handles, never live Figma nodes.
 - Every metric (\`width\`, \`height\`, \`gap\`, \`padding\`, \`borderRadius\`, \`strokeWidth\`, \`left\`/\`top\`) takes a number or \`"Npx"\`; \`width\`/\`height\`/\`left\`/\`top\` also take \`"N%"\`, and \`width\`/\`height\` take \`"fill"\`/\`"hug"\`. Colors, gradients and shadows are CSS strings.
 - Out-of-subset CSS fails loud.`;

@@ -76,8 +76,8 @@ function coreModuleGraph(): string[] {
     if (seen.has(file)) continue;
     seen.add(file);
     const source = readFileSync(file, "utf-8");
-    for (const spec of importSpecifiers(source)) {
-      const local = resolveLocal(spec, file);
+    for (const specifier of importSpecifiers(source)) {
+      const local = resolveLocal(specifier, file);
       if (local && !seen.has(local)) queue.push(local);
     }
   }

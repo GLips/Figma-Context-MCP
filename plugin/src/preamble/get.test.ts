@@ -17,13 +17,13 @@ test("get on a frame returns the expanded canonical shape — values inline, chi
     ),
   );
 
-  const { node: spec } = await get("card");
-  assert.equal(spec.type, "FRAME");
+  const { node: read } = await get("card");
+  assert.equal(read.type, "FRAME");
   // The live object, not a JSON round-trip: an unset layout word is ABSENT, not present-but-undefined,
   // because this exact object spreads into the constructors' closed-set gate.
-  assert.deepEqual(spec.layout, { mode: "row", padding: "12px", gap: "8px" });
-  assert.deepEqual(spec.fill, "#FF0000"); // the inline value — never a "fill_…" styles ref
-  const chip = spec.children?.[0];
+  assert.deepEqual(read.layout, { mode: "row", padding: "12px", gap: "8px" });
+  assert.deepEqual(read.fill, "#FF0000"); // the inline value — never a "fill_…" styles ref
+  const chip = read.children?.[0];
   assert.equal(chip?.type, "RECTANGLE");
   assert.equal(chip?.width, 40);
   assert.deepEqual(chip?.fill, "#00FF00");
@@ -35,17 +35,17 @@ test("get on a text node reads back content and text style", async () => {
     frame({ key: "wrap" }, [text("Hello **world**", { key: "greeting", textStyle: { fontSize: 16 } })]),
   );
 
-  const { node: spec } = await get("greeting");
-  assert.equal(spec.type, "TEXT");
+  const { node: read } = await get("greeting");
+  assert.equal(read.type, "TEXT");
   // The bold span reads back as markdown. The residual fontVariantName delta rides along because a
   // live segment always carries fontName.style ("Bold") and the adapter reports it faithfully —
   // whether real REST emits the same residual is on the plan's dogfood-verify list; a deliberate
   // change there updates this pin.
-  assert.deepEqual(spec.text, ["Hello ", ["**world**", { fontVariantName: "Bold" }]]);
-  assert.ok(typeof spec.textStyle === "object");
-  assert.equal(spec.textStyle.fontSize, 16);
-  assert.equal(spec.textStyle.fontFamily, "Inter");
-  assert.equal(spec.textStyle.fontWeight, 400);
+  assert.deepEqual(read.text, ["Hello ", ["**world**", { fontVariantName: "Bold" }]]);
+  assert.ok(typeof read.textStyle === "object");
+  assert.equal(read.textStyle.fontSize, 16);
+  assert.equal(read.textStyle.fontFamily, "Inter");
+  assert.equal(read.textStyle.fontWeight, 400);
 });
 
 // A component is named ONCE, in the envelope's `components` sidecar — its property definitions and its
@@ -63,8 +63,8 @@ test("get on a component names it in the components sidecar, not on the node", a
   };
   figma.currentPage.appendChild(comp);
 
-  const { node: spec, components } = await get(id(comp.id));
-  assert.equal(spec.type, "COMPONENT");
+  const { node: read, components } = await get(id(comp.id));
+  assert.equal(read.type, "COMPONENT");
   assert.deepEqual(components?.[comp.id], {
     type: "COMPONENT",
     name: "Card",
@@ -83,9 +83,9 @@ test("get on an instance carries an honest type and its componentId", async () =
   figma.currentPage.appendChild(comp);
   const inst = comp.createInstance();
 
-  const { node: spec } = await get(id(inst.id));
-  assert.equal(spec.type, "INSTANCE");
-  assert.equal(spec.componentId, comp.id);
+  const { node: read } = await get(id(inst.id));
+  assert.equal(read.type, "INSTANCE");
+  assert.equal(read.componentId, comp.id);
 });
 
 // Beyond-CSS effects round-trip: what flcm.effects({...}) authors reads back as the same object form
@@ -102,8 +102,8 @@ test("get reads beyond-CSS effects back as the flcm.effects object form", async 
     }),
   );
 
-  const { node: spec } = await get("pane");
-  const fx = spec.effects;
+  const { node: read } = await get("pane");
+  const fx = read.effects;
   // Expanded read: effects is the inline object, never a "effect_…" styles ref (also narrows the type).
   if (typeof fx !== "object") throw new Error(`expected an inline effects object, got ${JSON.stringify(fx)}`);
   assert.deepEqual(fx.glass, {

@@ -1,4 +1,4 @@
-// The structural verbs. What must not regress silently: an inserted spec is attached BEFORE it is
+// The structural verbs. What must not regress silently: an inserted node is attached BEFORE it is
 // sized (so parent-dependent sizing actually resolves — the invariant-3 hazard), a live target is
 // MOVED rather than copied and has its flow marks re-aimed at the new parent, legality is re-asked
 // against the DESTINATION, and every rejection fires with zero writes. The undo scaffold's call
@@ -31,7 +31,7 @@ async function renderRow() {
 
 const names = (node) => node.children.map((c) => c.name);
 
-test("append builds a spec into the destination and sizes it THERE — fill fills the live parent", async () => {
+test("append builds a node into the destination and sizes it THERE — fill fills the live parent", async () => {
   const row = await renderRow();
   const out = await append("row", rect({ key: "filler", name: "filler", width: "fill", height: 20 }));
   assert.deepEqual(names(row), ["RECTANGLE", "RECTANGLE", "filler"]);
@@ -47,7 +47,7 @@ test("append builds a spec into the destination and sizes it THERE — fill fill
   assert.equal(out.to.width, 300);
 });
 
-test("a percent size on an inserted spec resolves against the live destination", async () => {
+test("a percent size on an inserted node resolves against the live destination", async () => {
   await render(frame({ key: "board", width: 200, height: 200 }));
   const out = await append("board", rect({ name: "half", width: "50%", height: 20 }));
   assert.equal(out.node.width, 100);
@@ -186,7 +186,7 @@ test("a destination dragged to a page this call never loaded refuses before the 
   assert.deepEqual(figma.undoLog, before);
 });
 
-test("prepare rejects a non-container destination, a cycle, and a hand-built spec — with zero writes", async () => {
+test("prepare rejects a non-container destination, a cycle, and a hand-built node — with zero writes", async () => {
   const out = await render(
     frame({ key: "row", width: 300, height: 100 }, [
       rect({ key: "a", width: 40, height: 40 }),
@@ -210,7 +210,7 @@ test("prepare rejects a non-container destination, a cycle, and a hand-built spe
   assert.deepEqual(figma.undoLog, before);
 });
 
-test("move reparents a live node, and refuses a spec — creating is append's job", async () => {
+test("move reparents a live node, and refuses a constructor-built node — creating is append's job", async () => {
   const out = await render(
     frame({ key: "board", width: 400, height: 400 }, [
       frame({ key: "row", width: 300, height: 100, layout: { mode: "row" } }, [
@@ -249,7 +249,7 @@ test("remove deletes the subtree and reports the id plus the reflowed parent", a
 });
 
 test("clone duplicates an INSTANCE-bearing subtree and strips every flcm/key from the copy", async () => {
-  // A component instance is the case a spec REBUILD can't reproduce — the reason clone exists.
+  // A component instance is the case a REBUILD can't reproduce — the reason clone exists.
   const src = await render(frame({ key: "badge", width: 60, height: 60 }, [rect({ width: 20, height: 20 })]));
   const component = figma.createComponentFromNode(await figma.getNodeByIdAsync(src.keyed.badge.id));
   const out = await render(
@@ -305,7 +305,7 @@ test("a `get` result is refused rather than silently moving the node it describe
   const card = await figma.getNodeByIdAsync(out.keyed.card.id);
   const plain = await figma.getNodeByIdAsync(out.keyed.plain.id);
   await render(frame({ key: "tray", width: 300, height: 300 }));
-  // The trap this closes: a read spec carries a live `id`, exactly as a handle does, so a
+  // The trap this closes: a `get` result carries a live `id`, exactly as a handle does, so a
   // shape-based dispatch would have taken this for a target and CUT the node out of its parent.
   await assert.rejects(append("tray", (await get("card")).node), /is a `get` result/);
   // …including the bare read shape that carries no styling at all to give it away. That one is

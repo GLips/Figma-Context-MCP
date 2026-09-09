@@ -1,5 +1,5 @@
 // ir — the typed WriteNode currency: the ONE internal representation the whole preamble speaks. Every
-// leaf is a real type (a number, a typed edge box, a discriminated paint/effect spec), never a CSS
+// leaf is a real type (a number, a typed edge box, a discriminated paint/effect value), never a CSS
 // string. The sugar (flcm.ts) compiles terse author props straight into this; the bridge (bridge.ts)
 // reads it and drives the plugin API. Nothing between them parses or re-serializes a string.
 //
@@ -35,8 +35,8 @@ export type WriteType = "FRAME" | "TEXT" | "RECTANGLE" | "ELLIPSE" | "LINE" | "V
 
 // The node types edit has a per-type vocabulary for. A superset of WriteType on purpose: an INSTANCE
 // is both, while the definition types (COMPONENT/COMPONENT_SET, and the SLOT an instance shows for a
-// bound frame) are edited but never constructed — flcm.component PROMOTES a frame; nothing builds one
-// from a spec.
+// bound frame) are edited but never constructed — flcm.component PROMOTES a frame; no constructor
+// builds one.
 export type EditableType = WriteType | "COMPONENT" | "COMPONENT_SET" | "SLOT" | "POLYGON" | "STAR";
 
 // Which schema word GROUPS compose each editable type's surface — the same compositions as the
@@ -87,27 +87,27 @@ export interface Rgba { r: number; g: number; b: number; a: number }
 // ---- Paint currency (Figma-domain). A solid carries its alpha on `opacity` (Figma stores paint alpha
 // there, not in the color). A gradient carries the computed 2x3 transform and stops — the angle→matrix
 // math is already done (paint.ts), so the bridge maps straight to a plugin Paint. ----
-export interface SolidSpec { kind: "solid"; color: Rgb; opacity: number }
+export interface WriteSolid { kind: "solid"; color: Rgb; opacity: number }
 export type GradientType = "GRADIENT_LINEAR" | "GRADIENT_RADIAL" | "GRADIENT_ANGULAR" | "GRADIENT_DIAMOND";
 export type Transform = [[number, number, number], [number, number, number]];
 export interface GradientStop { position: number; color: Rgba }
-export interface GradientSpec { kind: "gradient"; type: GradientType; transform: Transform; stops: GradientStop[] }
+export interface WriteGradient { kind: "gradient"; type: GradientType; transform: Transform; stops: GradientStop[] }
 
-// ---- Image paint currency. Unlike solid/gradient, an image spec is NOT self-contained: turning it into a
+// ---- Image paint currency. Unlike solid/gradient, an image paint is NOT self-contained: turning it into a
 // plugin ImagePaint needs the raster BYTES, and the sandbox never touches the network (manifest
-// allowedDomains:["none"]). So an ImageSpec is INERT — it carries only the source url + intent — and the
+// allowedDomains:["none"]). So a WriteImage carries only the source url + intent, and the
 // bridge resolves it to a paint at render, keyed by url, from bytes the trusted server fetched+validated
 // and injected. `placeholder` records stand-in-vs-real; the bridge persists it on the node (pluginData) so
 // a later read can tell them apart — the one content case whose semantics don't recover from geometry. ----
 export type ImageScaleMode = "FILL" | "FIT" | "CROP" | "TILE";
-export interface ImageUrlSpec { kind: "image"; url: string; scaleMode: ImageScaleMode; placeholder: boolean }
+export interface WriteImageUrl { kind: "image"; url: string; scaleMode: ImageScaleMode; placeholder: boolean }
 // ---- The OTHER image source: a paint whose bytes are already in the document, named by the
 // imageHash a read shape carries (`{ type: "IMAGE", imageRef }`). Nothing needs fetching — in-plugin a
 // paint can reference an existing hash directly — which is what lets a `get` result rebuild an image
 // fill with no server round trip and no url the agent never had. The two forms are separate interfaces,
 // not one shape with two optional sources, so "which source is this" is answered by the type
-// (`"url" in spec`) and a byte collector cannot silently include a hash-backed paint. ----
-export interface ImageHashSpec {
+// (`"url" in paint`) and a byte collector cannot silently include a hash-backed paint. ----
+export interface WriteImageHash {
   kind: "image";
   hash: string;
   scaleMode: ImageScaleMode;
@@ -115,11 +115,11 @@ export interface ImageHashSpec {
   // is a visible divergence. Absent for every other scale mode.
   scalingFactor?: number;
 }
-export type ImageSpec = ImageUrlSpec | ImageHashSpec;
-export type PaintSpec = SolidSpec | GradientSpec | ImageSpec;
+export type WriteImage = WriteImageUrl | WriteImageHash;
+export type WritePaint = WriteSolid | WriteGradient | WriteImage;
 
 // ---- Author input shapes for a fill/stroke leaf. An author passes a CSS color/gradient string, the
-// read-form { type, gradient } object, OR an already-typed PaintSpec (what flcm.gradient() returns).
+// read-form { type, gradient } object, OR an already-typed WritePaint (what flcm.gradient() returns).
 // These live here (the figma-free type hub) rather than in css.ts so the schema module can source them
 // via `import type` without dragging css.ts's parsers — and their Figma-typings — into a typecheck. ----
 export interface WriteGradientFill { type: GradientType; gradient: string }
@@ -127,28 +127,28 @@ export interface WriteGradientFill { type: GradientType; gradient: string }
 // normalizer can type what it hands back; the extra read-only keys it carries (css hints,
 // imageDownloadArguments) are irrelevant to the parse and deliberately unnamed.
 export interface ReadImageFill { type: "IMAGE"; imageRef?: string; gifRef?: string; scaleMode?: string; scalingFactor?: number }
-export type FillLeaf = string | WriteGradientFill | ReadImageFill | PaintSpec;
+export type FillLeaf = string | WriteGradientFill | ReadImageFill | WritePaint;
 // A paint slot takes one leaf, or the array a read emits for a genuinely STACKED paint — accepted so a
 // `get` result feeds straight back in, but more than one entry fails loud (compilePaintWord): flcm
 // paints a single fill/stroke and a stack has no authored form.
 export type FillInput = FillLeaf | FillLeaf[];
 
 // ---- Effect currency (Figma-domain). A blur's radius is ALREADY the Figma radius — the ×2 CSS-blur
-// factor (see effects.ts) is applied when the spec is built, never here and never in the bridge, so a
+// factor (see effects.ts) is applied when the effect is built, never here and never in the bridge, so a
 // Figma-radius value can't be double-doubled. A shadow's radius is 1:1 with CSS. ----
-export interface ShadowSpec { kind: "shadow"; inner: boolean; color: Rgba; offset: { x: number; y: number }; radius: number; spread: number }
-export interface BlurSpec { kind: "blur"; type: "LAYER_BLUR" | "BACKGROUND_BLUR"; radius: number }
+export interface WriteShadow { kind: "shadow"; inner: boolean; color: Rgba; offset: { x: number; y: number }; radius: number; spread: number }
+export interface WriteBlur { kind: "blur"; type: "LAYER_BLUR" | "BACKGROUND_BLUR"; radius: number }
 // Beyond-CSS effects (plugin-typings@1.130.0). No CSS spelling exists, so these are object-form only and
 // carry raw Figma-domain values — no CSS-px scaling (the ×2 blur factor never touches them). radius/offset
 // units are Figma's own. See effects.ts:toFigmaEffects for the plugin-Effect mapping and the live-runtime
 // notes (notably: the running runtime rejects NOISE.blendMode despite the typing listing it).
-export interface GlassSpec { kind: "glass"; lightIntensity: number; lightAngle: number; refraction: number; depth: number; dispersion: number; radius: number }
-export interface NoiseSpec { kind: "noise"; noiseType: "MONOTONE" | "DUOTONE" | "MULTITONE"; color: Rgba; noiseSize: number; density: number; secondaryColor?: Rgba; opacity?: number }
-export interface TextureSpec { kind: "texture"; noiseSize: number; radius: number; clipToShape: boolean }
+export interface WriteGlass { kind: "glass"; lightIntensity: number; lightAngle: number; refraction: number; depth: number; dispersion: number; radius: number }
+export interface WriteNoise { kind: "noise"; noiseType: "MONOTONE" | "DUOTONE" | "MULTITONE"; color: Rgba; noiseSize: number; density: number; secondaryColor?: Rgba; opacity?: number }
+export interface WriteTexture { kind: "texture"; noiseSize: number; radius: number; clipToShape: boolean }
 // The progressive LAYER_BLUR variant: radius is the END radius; the blur ramps startRadius→radius along the
 // startOffset→endOffset axis (offsets normalized to the node's 0–1 object space).
-export interface ProgressiveBlurSpec { kind: "progressiveBlur"; startRadius: number; radius: number; startOffset: { x: number; y: number }; endOffset: { x: number; y: number } }
-export type EffectSpec = ShadowSpec | BlurSpec | GlassSpec | NoiseSpec | TextureSpec | ProgressiveBlurSpec;
+export interface WriteProgressiveBlur { kind: "progressiveBlur"; startRadius: number; radius: number; startOffset: { x: number; y: number }; endOffset: { x: number; y: number } }
+export type WriteEffect = WriteShadow | WriteBlur | WriteGlass | WriteNoise | WriteTexture | WriteProgressiveBlur;
 
 // Author input shape for CSS-string effects: the { boxShadow, filter, backdropFilter, textShadow } bag.
 // Here (not css.ts) for the same reason as FillInput — the schema sources it without pulling in parsers.
@@ -217,7 +217,7 @@ export function namesFontIdentity(style: WriteTextStyle | undefined): style is W
 export interface WriteTextRun {
   text: string;
   style?: WriteTextStyle;
-  fills?: PaintSpec[];
+  fills?: WritePaint[];
   // URL hyperlink over this span (author `[text](url)` markdown, or a run delta's `hyperlink`).
   // Applied via setRangeHyperlink({ type: "URL" }); NODE links are a read-only artifact with no
   // authored form, so only the URL string is carried here.
@@ -326,11 +326,11 @@ export interface WriteProps {
   // text — truncation needs a bounded width to wrap against — so a value here always has a wrap to bite.
   // "none" is edit's removal spelling: truncation DISABLED, maxLines null (create never compiles it).
   maxLines?: number | "none";
-  fills?: PaintSpec[];
-  strokes?: PaintSpec[];
+  fills?: WritePaint[];
+  strokes?: WritePaint[];
   strokeWeight?: number;
   strokeAlign?: "INSIDE" | "OUTSIDE" | "CENTER";
-  effects?: EffectSpec[];
+  effects?: WriteEffect[];
   opacity?: number;
   blendMode?: WriteBlendMode; // author `blend` (CSS mix-blend-mode → Figma BlendMode); applied in buildNode (shared: every node has one)
   borderRadius?: number;
@@ -347,7 +347,7 @@ export interface WriteProps {
   // reference and a property value can only be resolved against the live document (which
   // definition owns the property, what the variant axes are, which node a swap target names),
   // and an override delta compiles against the TYPE of the sublayer it targets — none of which
-  // an inert constructor can see. The constructor validates their SHAPE (an object, known delta
+  // a document-blind constructor can see. The constructor validates their SHAPE (an object, known delta
   // words); render's gate resolves and compiles them (instance.ts) before any write.
   component?: Target;
   componentProperties?: Record<string, ComponentPropertyInput>;
@@ -531,7 +531,7 @@ export interface SlimHandle extends Identity {
 // is ABSENT when its container is the page (no box to measure) and `from` is absent on a reorder
 // inside one parent, where `to` already names it. ----
 
-// Placing a constructor spec: render's own `{ node, keyed }` (one vocabulary — an agent that
+// Placing a constructor-built node: render's own `{ node, keyed }` (one vocabulary — an agent that
 // renders and an agent that appends read the same fields) plus the attach point. `node` is the
 // subject every result-shaped verb names — the same key MoveResult/CloneResult use, so a caller
 // that just wants what the verb acted on never has to ask which branch ran.
@@ -575,7 +575,7 @@ export type ReadPredicate = (node: SimplifiedNode) => unknown;
 
 // An explicit raw-id target — the escape hatch flcm.id(id) returns. Tagged (not a bare string) so the
 // resolver treats it as a live-node id and NEVER as an flcm/key: the one way to force id resolution when a
-// string could be read either way. Inert data, like a WriteNode.
+// string could be read either way. Plain data, like a WriteNode.
 export interface RawIdRef { __flcmId: string }
 
 // What any target-taking verb (get/find/edit) accepts, resolved by shape (read.resolveTarget):

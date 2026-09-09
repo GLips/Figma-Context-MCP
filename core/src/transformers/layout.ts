@@ -73,7 +73,7 @@ function buildSimplifiedFrameValues(n: NodeSnapshot): SimplifiedLayout {
 
   // Shared across grid and flex containers. Every optional word is set only when it has a value:
   // the plugin hands this object to the sandbox AS-IS (no JSON round trip to drop an undefined
-  // key), and a read spec spreads into the constructors, whose closed-set gate judges every
+  // key), and a read shape spreads into the constructors, whose closed-set gate judges every
   // present key — so a present-but-undefined `alignSelf` would read as an unknown prop.
   setIfDefined(frameValues, "alignSelf", convertSelfAlign(n.layoutAlign));
   if (n.paddingTop || n.paddingBottom || n.paddingLeft || n.paddingRight) {

@@ -56,9 +56,9 @@ export function rejectUnknownKeys(obj: unknown, allowed: ReadonlySet<string>, su
 // constructor's vocabulary or the generated doc:
 //   • `id` is the identity of the node that was READ. A build is a new node and an edit names its
 //     target first, so it folds away — carrying it forward is what would make a copy look like a move.
-//   • `type` must be the entry's own: a spec handed to the wrong constructor says so, and names
+//   • `type` must be the entry's own: a `get` result handed to the wrong constructor says so, and names
 //     flcm.fromRead, the by-type dispatch.
-//   • `children` are read specs, not built nodes — fromRead recurses; a constructor can't.
+//   • `children` are the read shape's own, not built nodes — fromRead recurses; a constructor can't.
 //   • `designedWidth`/`designedHeight` carry a read ROOT's real px beside `width: "contextual"` — and
 //     every `get` result is a root. Figma reports a top-level node FIXED against an absent parent, so
 //     read rewrites the artifact and parks the number; authoring it AS that number is what makes the
@@ -121,26 +121,26 @@ export function acceptAuthoringProps(bag: unknown, entry: AuthoringEntry): Recor
   for (const key of Object.keys(src)) {
     const value = src[key];
     if (key === "id" || key === "designedWidth" || key === "designedHeight") continue;
-    // An explicitly-undefined read-only word is absence, not a claim (`{ ...spec, children: undefined }`).
+    // An explicitly-undefined read-only word is absence, not a claim (`{ ...node, children: undefined }`).
     if (value == null && READ_ONLY_WORDS.has(key)) continue;
     if (key === "type") {
       if (value !== entry.type) {
         throw new Error(
-          entry.subject + ": the spec is a " + String(value) + ", not a " + entry.type + ". " +
-            (entry.verb === "create" ? "flcm.fromRead(spec) builds by the spec's own type." : "Edit the node it was read from, or pass only the fields to change."),
+          entry.subject + ": the node is a " + String(value) + ", not a " + entry.type + ". " +
+            (entry.verb === "create" ? "flcm.fromRead(node) builds by the node's own type." : "Edit the node it was read from, or pass only the fields to change."),
         );
       }
       continue;
     }
     if (key === "children") {
       throw new Error(
-        entry.subject + ": `children` here are read specs, not built nodes. " +
+        entry.subject + ": `children` here are the read shape's own, not built nodes. " +
           (entry.verb === "create"
-            ? "flcm.fromRead(spec) rebuilds the whole subtree; or build the children with the constructors and pass them as the second argument."
+            ? "flcm.fromRead(node) rebuilds the whole subtree; or build the children with the constructors and pass them as the second argument."
             : entry.type === "SLOT"
               // The one node whose child list IS stated whole — but from the INSTANCE, where the
               // slot is a path, never as an edit of the SLOT node itself.
-              ? "A slot's content is stated from its instance: flcm.edit(instance, { overrides: { \"<slotPath>\": { children: [ …specs ] } } }) replaces it whole ([] empties it), and flcm.append(slot, spec) adds to it."
+              ? "A slot's content is stated from its instance: flcm.edit(instance, { overrides: { \"<slotPath>\": { children: [ …nodes ] } } }) replaces it whole ([] empties it), and flcm.append(slot, node) adds to it."
               : "A tree changes through the structure verbs (append, move, remove), not an edit."),
       );
     }

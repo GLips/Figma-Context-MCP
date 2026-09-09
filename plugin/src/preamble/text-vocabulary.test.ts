@@ -1,6 +1,6 @@
 // The text words that closed the read↔write seam (Phase 5.1): casing, vertical alignment, paragraph
 // metrics and whole-node links were readable but not authorable, so a `get` result could not be spread
-// back into an edit or rebuilt into a spec. Two concerns pinned here — that each word actually LANDS
+// back into an edit or rebuilt through the constructors. Two concerns pinned here — that each word actually LANDS
 // (through the one applier create and edit share), and that the read shape's non-authorable leaves get
 // their stated disposition (derived → dropped, unwritable → loud) instead of an "unknown prop".
 import { test } from "node:test";
@@ -69,7 +69,7 @@ test("edit rides the same compile — a live node takes the new words too", asyn
 });
 
 test("a spread read textStyle compiles: derived leaves drop, unwritable ones fail loud by name", () => {
-  // The Goal case: `{ ...spec.textStyle, fontSize: 18 }`. fontVariantName ("Bold Italic") IS
+  // The Goal case: `{ ...node.textStyle, fontSize: 18 }`. fontVariantName ("Bold Italic") IS
   // fontWeight + fontStyle restated in Figma's own label, so it drops rather than blocking the spread.
   const wn = text("x", {
     textStyle: { fontVariantName: "Bold Italic", fontWeight: 700, fontStyle: "italic", fontSize: 18 } as never,

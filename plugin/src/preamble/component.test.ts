@@ -1,4 +1,4 @@
-// flcm.component / flcm.variants — MAKING a component. What must not regress silently: a spec is
+// flcm.component / flcm.variants — MAKING a component. What must not regress silently: a constructor-built node is
 // rendered exactly as flcm.render would render it and then promoted (layout, fill and keys intact,
 // and the handle is the COMPONENT's, not the frame's), a live node is promoted where it stands,
 // every property type lands with the right default and its binding actually drives an instance, a
@@ -47,7 +47,7 @@ async function chipComponent() {
   return { figma, badge, out, comp };
 }
 
-test("a spec renders as render would, then becomes the COMPONENT the handle names", async () => {
+test("a constructor-built node renders as render would, then becomes the COMPONENT the handle names", async () => {
   const { figma, out, comp } = await chipComponent();
   assert.equal(comp.type, "COMPONENT");
   assert.equal(comp.name, "Chip");
@@ -119,7 +119,7 @@ test("a derived instance_swap default is the variant the bound instance actually
   assert.equal(definitions[full].defaultValue, comp.children[0].mainComponent.id);
 });
 
-test("a spec promoted onto an occupied page says so, exactly as render does", async () => {
+test("a node promoted onto an occupied page says so, exactly as render does", async () => {
   createFigmaMock();
   const said: string[] = [];
   const log = console.log;
@@ -208,14 +208,14 @@ test("what a component call refuses, with zero writes", async () => {
   await assert.rejects(component(stamped.node.id + ";" + comp.children[1].id), /no live node|has no sublayer|is inside component instance/);
   // A component's own sublayer: live's createComponentFromNode throws on it, so flcm names it first.
   await assert.rejects(component(comp.children[0].id), /is inside component "Chip".*createComponentFromNode throws/s);
-  // The SPEC form gates its root the same way — a leaf root would be wrapped, not converted, and
+  // The constructor-built form gates its root the same way — a leaf root would be wrapped, not converted, and
   // the root's key would land on the wrapper rather than the node the author keyed.
-  await assert.rejects(component(text("Hi", { key: "t" })), /the spec's root is a TEXT, and a component's root is a frame/);
-  await assert.rejects(component(instance(comp.id)), /the spec's root is an flcm\.instance.*WRAP/s);
-  // A slot and a default-less property both need the spec form, and the target form says so rather
-  // than naming a constructor word the call has no spec to carry.
+  await assert.rejects(component(text("Hi", { key: "t" })), /the tree's root is a TEXT, and a component's root is a frame/);
+  await assert.rejects(component(instance(comp.id)), /the tree's root is an flcm\.instance.*WRAP/s);
+  // A slot and a default-less property both need the constructor-built form, and the target form says so rather
+  // than naming a constructor word the call has no authored tree to carry.
   const plain = (await render(frame({ key: "plain", width: 10, height: 10 }))).node.id;
-  await assert.rejects(component(plain, { propertyDefinitions: { T: { type: "slot" } } }), /slot property "T" needs the SPEC form/);
+  await assert.rejects(component(plain, { propertyDefinitions: { T: { type: "slot" } } }), /slot property "T" needs the constructor-built form/);
   await assert.rejects(component(plain, { propertyDefinitions: { Label: { type: "text" } } }), /promoting a live node binds nothing to this property/);
   assert.equal(figma.currentPage.children.length, before + 2); // only the instance and the plain frame landed
 });
@@ -269,7 +269,7 @@ test("the binding bag is judged at construction: shape, and which fields THIS no
   assert.throws(() => frame({ componentPropertyReferences: { text: "Label" } }), /`text` is not one of flcm\.frame's binding fields \(visible, slot\) — `text` drives a TEXT node's content/);
   assert.throws(() => rect({ componentPropertyReferences: { visible: 3 } as never }), /a binding names the component property that drives this field/);
   assert.throws(() => rect({ componentPropertyReferences: "Icon" as never }), /must be an object naming which component property drives which field/);
-  // Well-formed: inert, sealed, and the raw bag rides the node for the verb's prepare to resolve.
+  // Well-formed: sealed, document-blind, and the raw bag rides the node for the verb's prepare to resolve.
   const wn = rect({ componentPropertyReferences: { visible: "Icon" } });
   assert.deepEqual(wn.componentPropertyReferences, { visible: "Icon" });
   assert.ok(Object.isFrozen(wn));

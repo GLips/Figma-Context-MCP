@@ -1,5 +1,5 @@
-// flcm.instance — stamp a component. What must not regress silently: the constructor is inert and
-// presence-preserving (nothing the spec doesn't name becomes a root override), a read spec spreads
+// flcm.instance — stamp a component. What must not regress silently: the constructor is document-blind and
+// presence-preserving (nothing the node doesn't name becomes a root override), a `get` result spreads
 // straight in, component properties resolve by bare name and pick the variant as a whole
 // combination, overrides land on the sublayer the component-relative path names, and every
 // refusal fires with zero writes naming the component's own vocabulary.
@@ -95,21 +95,21 @@ test("an override is planned at the seal: a definition retyped during the font l
   assert.equal(figma.currentPage.children.length, 1); // the component alone — nothing was built
 });
 
-test("a read spec spreads straight in, and fromRead rebuilds an instance", async () => {
+test("a `get` result spreads straight in, and fromRead rebuilds an instance", async () => {
   const { figma, comp, label } = await chipComponent();
   const first = await render(instance(comp.id, { name: "Original", componentProperties: { Label: "Go" }, overrides: { [label.id]: { fill: "#00ff00" } } }));
-  const { node: spec } = await get(id(first.node.id));
-  assert.equal(spec.type, "INSTANCE");
-  assert.equal(spec.componentId, comp.id);
+  const { node: read } = await get(id(first.node.id));
+  assert.equal(read.type, "INSTANCE");
+  assert.equal(read.componentId, comp.id);
 
-  const copy = await render(instance({ ...spec, name: "Copy" }));
+  const copy = await render(instance({ ...read, name: "Copy" }));
   const inst = await figma.getNodeByIdAsync(copy.node.id);
   assert.equal(inst.name, "Copy");
   assert.equal(inst.mainComponent, comp);
   assert.equal(inst.children[1].characters, "Go");
   assert.deepEqual((await figma.getNodeByIdAsync("I" + inst.id + ";" + label.id)).fills[0].color, { r: 0, g: 1, b: 0 });
 
-  const rebuilt = await render(fromRead(spec));
+  const rebuilt = await render(fromRead(read));
   assert.equal((await figma.getNodeByIdAsync(rebuilt.node.id)).mainComponent, comp);
 });
 
@@ -163,7 +163,7 @@ test("refusals name the component's own vocabulary, with zero writes", async () 
   assert.equal(figma.currentPage.children.length, before + 2);
 });
 
-test("the constructor is inert and document-blind: shape errors fire before any component lookup", () => {
+test("the constructor is document-blind: shape errors fire before any component lookup", () => {
   createFigmaMock();
   assert.throws(() => instance(undefined as never), /the component must be a component's node id/);
   assert.throws(() => instance("1:2", { componentId: "1:3" } as never), /two components for one instance/);
@@ -172,7 +172,7 @@ test("the constructor is inert and document-blind: shape errors fire before any 
   assert.throws(() => instance("1:2", { overrides: { "1:3": { colour: "#000" } } }), /unknown prop "colour" on flcm.instance.overrides\["1:3"\]/);
   assert.throws(() => instance("1:2", { overrides: { "1:3": { x: 3 } } }), /position is not spelled with bare x\/y/);
   assert.throws(() => instance("1:2", { componentProperties: { Label: null } } as never), /a property value is a string .* Got null/s);
-  // Well-formed: inert, sealed, and the raw component words ride the node for prepare to resolve.
+  // Well-formed: sealed, document-blind, and the raw component words ride the node for prepare to resolve.
   const wn = instance("1:2", { componentProperties: { Label: "x" }, overrides: { "1:3": { fill: "#fff" } }, width: 100 });
   assert.equal(wn.type, "INSTANCE");
   assert.equal(wn.component, "1:2");

@@ -12,7 +12,7 @@ import { KNOWN_KEYS, DIRECTIONAL_KEYS, BINDING_FIELD_KEYS, CONSTRUCTOR_KEYS_BY_T
 import { find } from "./read.js";
 import { FIELD_GROUPS, SizeSchema, FrameSchema, TextSchema, ShapeSchema, EllipseSchema, LineSchema, InstanceSchema } from "./schema.js";
 
-// Constructors are inert POJO builders (figma untouched), but flcm.ts imports the bridge — install the mock.
+// Constructors are plain POJO builders (figma untouched), but flcm.ts imports the bridge — install the mock.
 createFigmaMock();
 
 test("fromRead's constructor key sets match the complete prop schemas", () => {

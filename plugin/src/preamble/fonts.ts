@@ -2,7 +2,7 @@
 // them before render() builds any text.
 //
 // Fonts must be loaded before a TextNode's characters/size are set or the plugin throws. In the
-// inert-spec model the constructors are pure data and never touch fonts; only render() creates live
+// constructors are pure data and never touch fonts; only render() creates live
 // nodes, and it's async — so loading lives here as a plain async function render() awaits. Keeping it
 // out of module top level (no top-level await) is what lets the whole preamble bundle as a synchronous
 // IIFE, which keeps every internal helper closure-private. Never move it to module scope.
@@ -134,7 +134,7 @@ function textEditReflows(patch: WriteProps): boolean {
 // the round trip; the gate compiles again and assertTextEditFontsLoaded proves this load still
 // covers what it compiled.
 //
-// `built` are the spec trees the same verb will BUILD (an instance delta's slot content): their
+// `built` are the constructor-built trees the same verb will BUILD (an instance delta's slot content): their
 // fonts are a tree's, and they join the authored half so the verb still pays one load.
 export async function loadFontsForTextEdits(edits: readonly EditFontNeed[], built: readonly WriteNode[] = []): Promise<FontMap> {
   const reflowing = edits.filter(({ node, patch }) => node.type === "TEXT" && textEditReflows(patch));

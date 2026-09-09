@@ -8,7 +8,7 @@
 //     CHANGE one (`defaultValue`, or `name` to rename), or DELETE one (`null`).
 //   • `componentPropertyReferences` under edit — bind an existing sublayer to a property, or
 //     unbind it (`null` per field).
-//   • the bindings a SPEC carries into an existing component through append/prepend/insertBefore/
+//   • the bindings a CONSTRUCTOR-BUILT node carries into an existing component through append/prepend/insertBefore/
 //     insertAfter — the one place outside flcm.component where a binding means something.
 //
 // The split is edit's own (see edit-plan.ts): the sync compile judges the words' SHAPE, the targets
@@ -22,7 +22,7 @@
 // AFTER them (the node has to be what this delta makes it before it is wired to a property).
 
 import { WriteNode, WriteChild, ComponentEditWords, ComponentPropertyBinding, ComponentPropertyDefinitionEdit, Target } from "./ir.js";
-import { BoundSpecNode } from "./bridge.js";
+import { BoundLiveNode } from "./bridge.js";
 import { EditPlanFailure } from "./edit-plan.js";
 import {
   PROPERTY_TYPES, PROPERTY_TYPE_WORD_FOR, BINDING_FIELD_WIRE_KEYS, FIELD_FOR_TYPE, PreparedDefinition,
@@ -115,7 +115,7 @@ function assertNotVariantAxis(definition: any, full: string, at: string, node: a
 }
 
 // A name the component doesn't have yet: create's own definition rules, with two differences that
-// both come from there being no spec in this call.
+// both come from there being no authored tree in this call.
 function planAddedDefinition(name: string, entry: ComponentPropertyDefinitionEdit, at: string, targets: ResolvedTargets): PreparedDefinition {
   const definition = compilePropertyDefinition(name, entry, at);
   // A slot IS a frame in the definition, and this call has no frame in it. Declaring one here would
@@ -312,7 +312,7 @@ export function prepareComponentBindingEdit(node: any, raw: unknown, subject: st
 /**
  * The last step of every binding, wherever it is authored: the name Figma files the property under,
  * type-checked against the field that will drive it, and — for a slot — checked to be the one hole a
- * slot is. Both paths into a binding (an edit of a live layer, a spec inserted into a component)
+ * slot is. Both paths into a binding (an edit of a live layer, a constructor-built node inserted into a component)
  * come through here, so a field added to BINDING_FIELD_WIRE_KEYS is reasoned about once.
  *
  * `definitions` are read off the definition OWNER (the SET, for a variant) because that is where
@@ -414,10 +414,10 @@ export function planComponentEdit(node: any, words: ComponentEditWords, targets:
   return plan;
 }
 
-// ---- a bound SPEC inserted into an existing component ----
+// ---- a bound CONSTRUCTOR-BUILT node inserted into an existing component ----
 
 /**
- * What an insert has to do about the bindings its spec carries, resolved against the component it
+ * What an insert has to do about the bindings its tree carries, resolved against the component it
  * is landing in. `resolved` maps each AUTHORED property name to the full name Figma files it under;
  * `declaresSlots` are the slot properties this insert MINTS, which is the one thing an insert can
  * declare — a slot IS its frame, so after the component exists there is no other way to make one.
@@ -429,37 +429,37 @@ export interface InsertBindingPlan {
 }
 
 /**
- * Prepare the bindings of a spec being inserted into `parent`. Returns undefined when the spec
- * carries none — the ordinary insert, unchanged. A spec that DOES carry them and is landing
+ * Prepare the bindings of a tree being inserted into `parent`. Returns undefined when it
+ * carries none — the ordinary insert, unchanged. A tree that DOES carry them and is landing
  * anywhere but inside a component is refused by flcm's own surface-wide rule (a binding with no
  * declaring component names nothing).
  *
  * Synchronous by type, and that is load-bearing: every fact it reads is live, so it runs in the
  * insert verb's synchronous gate — see structure.ts.
  */
-export function prepareInsertBindings(subject: string, parent: any, spec: WriteNode): InsertBindingPlan | undefined {
+export function prepareInsertBindings(subject: string, parent: any, tree: WriteNode): InsertBindingPlan | undefined {
   const bound: { wn: WriteNode; refs: ComponentPropertyBinding }[] = [];
-  collectBoundSpecNodes(spec, bound);
+  collectBoundWriteNodes(tree, bound);
   if (!bound.length) return undefined;
-  // A COMPONENT_SET destination is refused before this runs (structure.ts's assertSpecInsertNotIntoSet),
+  // A COMPONENT_SET destination is refused before this runs (structure.ts's assertBuiltInsertNotIntoSet),
   // so `component` is a standalone component or a set's VARIANT — the definition the slot rule counts in.
-  // The instance question comes FIRST: a spec landing in an instance's SLOT can sit under a
+  // The instance question comes FIRST: a tree landing in an instance's SLOT can sit under a
   // component (an instance placed inside one), and a binding there would name a property the
   // instance's own definition — not the host component — declares. Instance content binds nothing.
   const component = instanceAncestorOf(parent) ? null : parent.type === "COMPONENT" ? parent : componentAncestorOf(parent);
   // Not landing in a component: the standing refusal, in its own words.
-  if (!component) assertNoComponentPropertyBindings(spec, subject);
+  if (!component) assertNoComponentPropertyBindings(tree, subject);
   const owner = definitionOwnerOf(component);
   const definitions = propertyDefinitionsOf(owner);
   const plan: InsertBindingPlan = { owner, resolved: {}, declaresSlots: [] };
   const where = subject + ".componentPropertyReferences";
-  // A slot is one hole, and the second claim on it can come from this same spec — where neither
+  // A slot is one hole, and the second claim on it can come from this same tree — where neither
   // frame is on the canvas yet for the live count to see. Declared names and full names never
   // collide (a full name carries Figma's #suffix), so one list holds both.
   const claimedSlots: string[] = [];
   const claimSlot = (name: string, at: string): void => {
     if (claimedSlots.indexOf(name) !== -1) {
-      throw new Error(at + ": two frames in this spec claim slot " + JSON.stringify(bareName(name)) + ", and a slot is one hole. Bind the one the content goes into.");
+      throw new Error(at + ": two frames in this tree claim slot " + JSON.stringify(bareName(name)) + ", and a slot is one hole. Bind the one the content goes into.");
     }
     claimedSlots.push(name);
   };
@@ -486,20 +486,20 @@ export function prepareInsertBindings(subject: string, parent: any, spec: WriteN
   return plan;
 }
 
-// Every bound node in the spec, ROOT INCLUDED — unlike flcm.component's own walk, where the root
+// Every bound node in the tree, ROOT INCLUDED — unlike flcm.component's own walk, where the root
 // becomes the component and can't point at a property of itself. Here the root is an ordinary child
 // of the component it lands in, so binding it is exactly as meaningful as binding any other layer.
-function collectBoundSpecNodes(wn: WriteChild, out: { wn: WriteNode; refs: ComponentPropertyBinding }[]): void {
+function collectBoundWriteNodes(wn: WriteChild, out: { wn: WriteNode; refs: ComponentPropertyBinding }[]): void {
   if (!wn || typeof wn !== "object") return;
   if (wn.componentPropertyReferences) out.push({ wn, refs: wn.componentPropertyReferences });
-  for (const child of wn.children || []) collectBoundSpecNodes(child, out);
+  for (const child of wn.children || []) collectBoundWriteNodes(child, out);
 }
 
 /**
  * Mint the slot properties this insert declares, then write every binding onto the built nodes —
  * inside the insert's own sealed span, after the tree is attached and settled.
  */
-export function applyInsertBindings(plan: InsertBindingPlan, built: readonly BoundSpecNode[]): void {
+export function applyInsertBindings(plan: InsertBindingPlan, built: readonly BoundLiveNode[]): void {
   const suffixed: Record<string, string> = { ...plan.resolved };
   // Declaring a slot may make Figma materialize its own unpositioned 100×100 placeholder for the
   // hole — it does when a slot is declared through the UI, and whether this API call does it too is

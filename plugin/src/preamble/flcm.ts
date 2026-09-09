@@ -1,7 +1,7 @@
-// flcm — the constructors. This is most of what the agent touches: a namespace of inert constructors
+// flcm — the constructors. This is most of what the agent touches: a namespace of document-blind constructors
 // that build POJO WriteNodes (the typed IR currency) and mutate nothing. render() — the one async call
 // that walks a tree and creates live nodes — lives in render.ts, which imports FROM here: an instance
-// spec resolves its component in render's prepare through the edit compile (instance.ts → edit-plan.ts
+// node resolves its component in render's prepare through the edit compile (instance.ts → edit-plan.ts
 // → this module), and a constructor module that imported that chain would close a cycle.
 //
 // The constructors take the read shape's own props (width/height/left/top/layout/fill/...) and compile
@@ -20,12 +20,12 @@
 
 import { compileAnnotations } from "./annotations.js";
 import {
-  WriteNode, WriteProps, WriteChild, WriteLayout, WriteTextStyle, WriteTextRun, PaintSpec,
-  GradientStop, EffectSpec, Sizing, Edges, WriteCssEffects, PinX, PinY, AnchorX, AnchorY,
+  WriteNode, WriteProps, WriteChild, WriteLayout, WriteTextStyle, WriteTextRun, WritePaint,
+  GradientStop, WriteEffect, Sizing, Edges, WriteCssEffects, PinX, PinY, AnchorX, AnchorY,
   Justify, Align, TextAlign, TextDecoration, WriteTextCase, RawIdRef, WriteType, Target,
   ComponentPropertyInput, OverrideDeltaInput, ComponentPropertyBinding, ComponentPropertyDefinitionEdit,
 } from "./ir.js";
-import { markConstructorBuilt, isConstructorBuilt, isReadSpec, assertConstructorBuiltTree } from "./provenance.js";
+import { markConstructorBuilt, isConstructorBuilt, isReadNode, assertConstructorBuiltTree } from "./provenance.js";
 import { assertLayoutRealizableForType } from "./layout-legality.js";
 import { parseInlineMarkdown, MdSegment } from "./markdown.js";
 import { linearGradient, radialGradient } from "./paint.js";
@@ -127,7 +127,7 @@ export const DOCUMENT_RESOLVED_EDIT_WORDS: ReadonlySet<string> = keySet([...INST
 // with the structural verbs. Which path is a slot is the document's to say (instance.ts).
 export const SLOT_CONTENT_WORD = KNOWN_KEYS.slotContent[0];
 const OVERRIDE_DELTA_KEYS = keySet(KNOWN_KEYS.edit.filter((k) => !DOCUMENT_RESOLVED_EDIT_WORDS.has(k)), KNOWN_KEYS.slotContent);
-// Each constructor's closed vocabulary, by the read type it builds — what fromRead judges a spec's
+// Each constructor's closed vocabulary, by the read type it builds — what fromRead judges a `get` result's
 // read words against before the call, so a word the type lacks is named as real state, not a typo.
 export const CONSTRUCTOR_KEYS_BY_TYPE: Record<"FRAME" | "TEXT" | "RECTANGLE" | "ELLIPSE" | "LINE" | "INSTANCE", ReadonlySet<string>> = {
   FRAME: FRAME_KEYS, TEXT: TEXT_KEYS, RECTANGLE: SHAPE_KEYS, ELLIPSE: ELLIPSE_KEYS, LINE: LINE_KEYS, INSTANCE: INSTANCE_KEYS,
@@ -159,7 +159,7 @@ export const DIRECTIONAL_KEYS = keySet(["x", "y"]); // pin and anchor
 
 // terse pad (number | CSS box shorthand | {x,y} | {top,right,bottom,left}) -> typed edges. The string
 // form is the READ shape's spelling ("12px 16px"): `get` returns padding as a CSS shorthand, and without
-// it here a spec's own layout wouldn't re-author. Inside the object form the edges stay NUMBERS — a "24px"
+// it here a `get` result's own layout wouldn't re-author. Inside the object form the edges stay NUMBERS — a "24px"
 // there once dropped silently to zero on every side, and that reject stays (ADR-0003 fail-loud).
 const PAD_KEYS = keySet(["x", "y", "top", "right", "bottom", "left"]);
 
@@ -521,7 +521,7 @@ function mintWriteNode(type: WriteType): WriteNode {
 // Seal the finished compile so provenance stays MEANINGFUL: without it, membership only proves
 // the node was once constructor-built, while `node.layout.gap = 12` after the fact would smuggle
 // unvalidated IR through the gate. Sealing CLONES as it freezes — the compile retains
-// caller-passed structures (a gradient PaintSpec, an effects array), and freezing those in place
+// caller-passed structures (a gradient WritePaint, an effects array), and freezing those in place
 // would break the caller's own reuse of them, while a caller-frozen shell would shield its
 // mutable descendants from an isFrozen-pruned walk. Cloning severs both: the sealed node shares
 // nothing caller-reachable except child nodes, which are constructor-sealed themselves (the
@@ -566,14 +566,14 @@ function frame(props: FrameProps | SimplifiedNode = {}, children?: WriteChild | 
   // clone-don't-freeze rule (cloneAndFreeze). A children list is the tree itself, and the
   // aliasing accident is push-AFTER-frame(): with a silent clone that push builds a node the
   // author believes has children and renders an empty frame; frozen, the push throws (agent
-  // code runs strict). Reusable specs (a gradient, an effects array) keep the clone rule —
+  // code runs strict). Reusable values (a gradient, an effects array) keep the clone rule —
   // sharing those across nodes is legitimate, appending to a handed-over children list is not.
   wn.children = Object.freeze(Array.isArray(children) ? children : children ? [children] : []) as WriteChild[];
   return sealWriteNode(wn);
 }
 
 // The two shapes of an instance's first argument. A props bag carrying `componentId` is the read shape
-// (`flcm.instance({ ...spec })`); anything else is a component target. A handle carries `id` and no
+// (`flcm.instance({ ...node })`); anything else is a component target. A handle carries `id` and no
 // `componentId`, so it stays a target — the only object that reads as props is one naming its
 // component in the read's own word.
 function isInstancePropsForm(arg: unknown): arg is Record<string, unknown> {
@@ -592,7 +592,7 @@ export function isTargetShaped(value: unknown): value is Target {
 
 export const COMPONENT_TARGET_HINT = "a component's node id (a read's `componentId`), an flcm/key, flcm.id(id), or a handle from flcm.find";
 
-// flcm.instance(component, props) — stamp a component. Inert like every constructor: the component
+// flcm.instance(component, props) — stamp a component. Document-blind like every constructor: the component
 // target, the property values and the override deltas ride the WriteNode RAW (ir.ts WriteProps on why),
 // and render resolves them against the live document (instance.ts) before any write.
 // What IS judged here is everything the document can't change: the root words' vocabulary and values
@@ -739,18 +739,18 @@ export function compileOverrideBag(raw: unknown, subject: string): Record<string
   return out;
 }
 
-// The document-blind half of the fill word: `children` is an array of constructor-built specs (`[]`
-// empties the slot), and the specs go through the same discipline every spec-taking verb applies
+// The document-blind half of the fill word: `children` is an array of constructor-built nodes (`[]`
+// empties the slot), and they go through the same discipline every tree-taking verb applies
 // before a round trip — provenance, and no binding (an instance declares no property for one to
 // point at). Whether the PATH is a slot is the other half, answered against the component.
 //
-// A read spec is named as such rather than as "hand-built": a `get` of a filled slot republishes
-// the content as raw read specs under this very key, so an agent spreading that read back in meets
+// A `get` result is named as such rather than as "hand-built": a `get` of a filled slot republishes
+// the content as raw `get` results under this very key, so an agent spreading that read back in meets
 // this refusal first, and the fix it needs is fromRead, not "call a constructor".
 function assertSlotContentShape(raw: unknown, at: string): void {
   const where = at + "." + SLOT_CONTENT_WORD;
   if (raw === null) {
-    throw new Error(where + " is null. `children` at a slot's path states the slot's content whole — pass the specs to fill it with, or [] to empty it. There is no null form.");
+    throw new Error(where + " is null. `children` at a slot's path states the slot's content whole — pass the nodes to fill it with, or [] to empty it. There is no null form.");
   }
   if (!Array.isArray(raw)) {
     throw new Error(where + " must be an array of nodes from the flcm constructors (flcm.frame/text/rect/…/instance), or [] to empty the slot — got " + JSON.stringify(raw) + ".");
@@ -759,10 +759,10 @@ function assertSlotContentShape(raw: unknown, at: string): void {
     if (!child) return; // `cond && flcm.text(…)` composes here as in any children list
     const spot = where + "[" + i + "]";
     if (typeof child !== "object") throw new Error(spot + " is not a node — got " + JSON.stringify(child) + ".");
-    if (isReadSpec(child) || (!isConstructorBuilt(child) && typeof (child as { id?: unknown }).id === "string")) {
+    if (isReadNode(child) || (!isConstructorBuilt(child) && typeof (child as { id?: unknown }).id === "string")) {
       throw new Error(
-        spot + ": that is a `get` result's read spec, and a read spec is not authoring input on its own. Rebuild it through the constructors — flcm.fromRead(spec) for a whole subtree, " +
-          "or flcm.frame(spec, children) / flcm.text(spec) / flcm.instance(spec) directly — and pass what they return.",
+        spot + ": that is a `get` result, and a `get` result is not authoring input on its own. Rebuild it through the constructors — flcm.fromRead(node) for a whole subtree, " +
+          "or flcm.frame(node, children) / flcm.text(node) / flcm.instance(node) directly — and pass what they return.",
       );
     }
     assertConstructorBuiltTree(child as WriteNode);
@@ -882,7 +882,7 @@ function compileBindings(wn: WriteProps, props: { componentPropertyReferences?: 
  * Refuse a tree carrying bindings with no declaring component behind it. A binding names a property
  * that only a component has — through render, or an append landing on a page or a plain frame, the
  * name points at nothing, and Figma would take the reference silently onto a node with no component
- * behind it. Called by every spec-taking verb except flcm.component (which mints the names), and by
+ * behind it. Called by every tree-taking verb except flcm.component (which mints the names), and by
  * an insert once it knows its destination is NOT inside a component (component-edit.ts).
  */
 export function assertNoComponentPropertyBindings(tree: WriteChild, subject: string): void {
@@ -890,8 +890,8 @@ export function assertNoComponentPropertyBindings(tree: WriteChild, subject: str
   if (tree.componentPropertyReferences) {
     throw new Error(
       subject + ": `componentPropertyReferences` binds a node to a component property, and nothing here declares one — a binding means something only with a component behind it. " +
-        "Either build the component in one call (flcm.component(spec, { propertyDefinitions: … }), which declares the properties the spec binds), " +
-        "or insert this into a COMPONENT that already declares them (flcm.append(component, spec)). To place a copy of a component, use flcm.instance.",
+        "Either build the component in one call (flcm.component(node, { propertyDefinitions: … }), which declares the properties the tree binds), " +
+        "or insert this into a COMPONENT that already declares them (flcm.append(component, node)). To place a copy of a component, use flcm.instance.",
     );
   }
   for (const child of tree.children || []) assertNoComponentPropertyBindings(child, subject);
@@ -946,7 +946,7 @@ function parseHyperlink(value: unknown, subject: string): string {
   throw new Error(subject + ': hyperlink must be a non-empty URL string, or the read form { type: "URL", url } — got ' + JSON.stringify(value) + ".");
 }
 
-// Read-shape text leaves that are NOT authoring input, so a spread `{ ...spec.textStyle, fontSize: 18 }`
+// Read-shape text leaves that are NOT authoring input, so a spread `{ ...node.textStyle, fontSize: 18 }`
 // still compiles instead of dying on the closed-set gate. Two dispositions, deliberately different:
 //   • IGNORED — purely DERIVED, its information already elsewhere in the same style, so dropping it
 //     loses nothing. `fontVariantName` ("Bold Italic") IS fontWeight + fontStyle, restated as Figma's
@@ -1053,7 +1053,7 @@ export function compileTextContent(content: unknown, base: WriteTextStyle, boldW
 
 function text(content: unknown, props: TextProps | SimplifiedNode = {}): WriteNode {
   props = props ?? {};
-  // The props-first form, flcm.text(props): the content is the `text` prop — how a read spec carries
+  // The props-first form, flcm.text(props): the content is the `text` prop — how a `get` result carries
   // it. Content is never a plain object (a string, or a runs ARRAY), so an object first is unambiguously
   // the props, and anything in the second slot is then a mistake worth naming.
   if (content !== null && typeof content === "object" && !Array.isArray(content)) {
@@ -1065,7 +1065,7 @@ function text(content: unknown, props: TextProps | SimplifiedNode = {}): WriteNo
   }
   props = acceptAuthoringProps(props, { type: "TEXT", verb: "create", known: TEXT_KEYS, subject: "flcm.text" }) as TextProps;
   // Content named twice — positionally AND as the prop — is refused by PRESENCE, not value: a spread
-  // spec with a positional override is exactly where a silent "one wins" would bite.
+  // of a `get` result with a positional override is exactly where a silent "one wins" would bite.
   if (Object.prototype.hasOwnProperty.call(props, "text")) {
     if (content !== undefined) throw new Error("flcm.text: the text arrived twice — as the first argument and as the `text` prop. Pass one.");
     content = props.text;
@@ -1316,23 +1316,23 @@ function path(props: PathProps): WriteNode {
   return sealWriteNode(wn);
 }
 
-// ---- gradient() sugar: structured spec -> typed PaintSpec (no string round-trip). The transform math
+// ---- gradient() sugar: a structured bag -> typed WritePaint (no string round-trip). The transform math
 // lives in paint.ts, shared with css.ts's gradient-string parser, so sugar and hand-written CSS agree.
 // GradientSugar / GradientStopInput are defined in schema.ts (the authoring-surface source). ----
 
-function gradient(a: GradientSugar | "linear" | "radial", b?: GradientStopInput[], c?: number): PaintSpec {
-  // Only the object form carries author-supplied keys to check; the positional form builds a closed spec.
+function gradient(a: GradientSugar | "linear" | "radial", b?: GradientStopInput[], c?: number): WritePaint {
+  // Only the object form carries author-supplied keys to check; the positional form builds a closed bag.
   if (a && typeof a === "object") rejectUnknownKeys(a, GRADIENT_KEYS, "flcm.gradient");
-  const spec: GradientSugar = a && typeof a === "object" ? a : { type: a, stops: b, angle: c };
-  const stops = gradientStops(spec.stops);
-  const type = spec.type || "linear";
-  if (type === "linear") return linearGradient(typeof spec.angle === "number" ? spec.angle : 180, stops);
+  const sugar: GradientSugar = a && typeof a === "object" ? a : { type: a, stops: b, angle: c };
+  const stops = gradientStops(sugar.stops);
+  const type = sugar.type || "linear";
+  if (type === "linear") return linearGradient(typeof sugar.angle === "number" ? sugar.angle : 180, stops);
   if (type === "radial") {
-    const x = spec.at && spec.at.x != null ? spec.at.x : 50;
-    const y = spec.at && spec.at.y != null ? spec.at.y : 50;
+    const x = sugar.at && sugar.at.x != null ? sugar.at.x : 50;
+    const y = sugar.at && sugar.at.y != null ? sugar.at.y : 50;
     return radialGradient("GRADIENT_RADIAL", x, y, stops);
   }
-  throw new Error('flcm.gradient: type must be "linear" or "radial" — got ' + JSON.stringify(spec.type) + ".");
+  throw new Error('flcm.gradient: type must be "linear" or "radial" — got ' + JSON.stringify(sugar.type) + ".");
 }
 
 // stops: ['#000','#fff'] | [{ color, pos }] -> typed stops, even spread when pos is omitted.
@@ -1354,9 +1354,9 @@ function stopPercent(raw: { pos?: number; position?: number }, i: number, n: num
   return n > 1 ? (i / (n - 1)) * 100 : 0;
 }
 
-// ---- image() paint constructor: a source + intent -> an inert image PaintSpec (a fill value, like
+// ---- image() paint constructor: a source + intent -> an image WritePaint (a fill value, like
 // flcm.gradient). The source is an https url or a local file path (CSS url() takes both; the server
-// confines paths to its asset root). The sandbox NEVER touches network or disk — the spec carries only the
+// confines paths to its asset root). The sandbox NEVER touches network or disk — the paint carries only the
 // source string; the trusted server loads + validates the bytes and the bridge resolves them to a plugin
 // ImagePaint at render (keyed by source). `placeholder` marks a stand-in so a later read can tell it from a
 // real asset (bridge persists it on the node). Fails loud on a non-string/empty source or a scaleMode
@@ -1364,7 +1364,7 @@ function stopPercent(raw: { pos?: number; position?: number }, i: number, n: num
 
 const IMAGE_SCALE_MODES = new Set(["FILL", "FIT", "CROP", "TILE"]);
 
-function image(url: unknown, opts: ImageOpts = {}): PaintSpec {
+function image(url: unknown, opts: ImageOpts = {}): WritePaint {
   if (typeof url !== "string" || !url.trim()) {
     throw new Error("flcm.image: expected an image url or local file path string, e.g. flcm.image(\"https://example.com/photo.jpg\") or flcm.image(\"assets/logo.png\") — got " + JSON.stringify(url) + ".");
   }
@@ -1377,31 +1377,31 @@ function image(url: unknown, opts: ImageOpts = {}): PaintSpec {
   return { kind: "image", url: url.trim(), scaleMode, placeholder: opts.placeholder === true };
 }
 
-// ---- effects() sugar: { shadow, blur, backgroundBlur } -> typed EffectSpec[] (no string round-trip).
+// ---- effects() sugar: { shadow, blur, backgroundBlur } -> typed WriteEffect[] (no string round-trip).
 // Values are CSS px; the blur ×2 factor lives in the *FromCssPx constructors (effects.ts). EffectsSugar /
 // ShadowSugar / BlurSugar are defined in schema.ts (the authoring-surface source). ----
 
-function effects(spec: EffectsSugar): EffectSpec[] {
-  if (!spec || typeof spec !== "object") {
-    throw new Error("flcm.effects: expected { shadow?, blur?, backgroundBlur?, glass?, noise?, texture?, progressiveBlur? } — got " + JSON.stringify(spec) + ".");
+function effects(sugar: EffectsSugar): WriteEffect[] {
+  if (!sugar || typeof sugar !== "object") {
+    throw new Error("flcm.effects: expected { shadow?, blur?, backgroundBlur?, glass?, noise?, texture?, progressiveBlur? } — got " + JSON.stringify(sugar) + ".");
   }
-  rejectUnknownKeys(spec, EFFECTS_KEYS, "flcm.effects");
-  const out: EffectSpec[] = [];
-  if (spec.shadow !== undefined) out.push(...sugarShadows(spec.shadow));
-  if (spec.blur !== undefined) out.push(layerBlurFromCssPx(blurRadius(spec.blur)));
-  if (spec.backgroundBlur !== undefined) out.push(backgroundBlurFromCssPx(blurRadius(spec.backgroundBlur)));
-  if (spec.glass !== undefined) out.push(sugarGlass(spec.glass));
-  if (spec.noise !== undefined) out.push(sugarNoise(spec.noise));
-  if (spec.texture !== undefined) out.push(sugarTexture(spec.texture));
-  if (spec.progressiveBlur !== undefined) out.push(sugarProgressiveBlur(spec.progressiveBlur));
+  rejectUnknownKeys(sugar, EFFECTS_KEYS, "flcm.effects");
+  const out: WriteEffect[] = [];
+  if (sugar.shadow !== undefined) out.push(...sugarShadows(sugar.shadow));
+  if (sugar.blur !== undefined) out.push(layerBlurFromCssPx(blurRadius(sugar.blur)));
+  if (sugar.backgroundBlur !== undefined) out.push(backgroundBlurFromCssPx(blurRadius(sugar.backgroundBlur)));
+  if (sugar.glass !== undefined) out.push(sugarGlass(sugar.glass));
+  if (sugar.noise !== undefined) out.push(sugarNoise(sugar.noise));
+  if (sugar.texture !== undefined) out.push(sugarTexture(sugar.texture));
+  if (sugar.progressiveBlur !== undefined) out.push(sugarProgressiveBlur(sugar.progressiveBlur));
   return out;
 }
 
-// ---- Beyond-CSS effect sugar: friendly bag -> typed spec, defaults filled here (the sugar layer owns
+// ---- Beyond-CSS effect sugar: friendly bag -> typed effect, defaults filled here (the sugar layer owns
 // defaults + color parsing, mirroring sugarShadows). `true` gives a usable effect with all defaults.
 // Values are raw Figma-domain (no CSS-px scaling) — see ir.ts.
 
-function sugarGlass(g: GlassSugar): EffectSpec {
+function sugarGlass(g: GlassSugar): WriteEffect {
   const s = g === true ? {} : g;
   return glass({
     lightIntensity: s.lightIntensity != null ? s.lightIntensity : 0.5,
@@ -1413,7 +1413,7 @@ function sugarGlass(g: GlassSugar): EffectSpec {
   });
 }
 
-function sugarNoise(n: NoiseSugar): EffectSpec {
+function sugarNoise(n: NoiseSugar): WriteEffect {
   const s = n === true ? {} : n;
   const type = s.type || "monotone";
   return noise({
@@ -1426,7 +1426,7 @@ function sugarNoise(n: NoiseSugar): EffectSpec {
   });
 }
 
-function sugarTexture(t: TextureSugar): EffectSpec {
+function sugarTexture(t: TextureSugar): WriteEffect {
   const s = t === true ? {} : t;
   return texture({
     noiseSize: s.noiseSize != null ? s.noiseSize : 3,
@@ -1435,7 +1435,7 @@ function sugarTexture(t: TextureSugar): EffectSpec {
   });
 }
 
-function sugarProgressiveBlur(b: ProgressiveBlurSugar): EffectSpec {
+function sugarProgressiveBlur(b: ProgressiveBlurSugar): WriteEffect {
   const s = typeof b === "number" ? { endRadius: b } : b;
   return progressiveBlur({
     startRadius: s.startRadius != null ? s.startRadius : 0,
@@ -1445,7 +1445,7 @@ function sugarProgressiveBlur(b: ProgressiveBlurSugar): EffectSpec {
   });
 }
 
-function sugarShadows(input: ShadowSugar | ShadowSugar[]): EffectSpec[] {
+function sugarShadows(input: ShadowSugar | ShadowSugar[]): WriteEffect[] {
   const list = Array.isArray(input) ? input : [input];
   return list.map((raw) => {
     const s = raw === true || raw == null ? {} : raw;
@@ -1468,8 +1468,8 @@ function blurRadius(b: BlurSugar): number {
   return b.radius || 0;
 }
 
-// Accept the sugar spec ({ shadow, blur, backgroundBlur }), an already-typed EffectSpec[] (what
-// flcm.effects returns), or a CSS WriteEffects bag — all converge on EffectSpec[].
+// Accept the sugar bag ({ shadow, blur, backgroundBlur }), an already-typed WriteEffect[] (what
+// flcm.effects returns), or a CSS WriteEffects bag — all converge on WriteEffect[].
 //
 // The two string/object vocabularies are SPLIT, not routed: one read `effects` value carries both at once
 // (a frame with a drop shadow AND native glass reads back as { boxShadow, glass }), so picking a single
@@ -1477,7 +1477,7 @@ function blurRadius(b: BlurSugar): number {
 // ONCE over the union first — parseCssEffects reads a positive list, so without a gate a typo beside a real
 // CSS key would vanish silently; and gating after the split would name the half the typo fell into rather
 // than `effects`, where it was written, with only half the legal vocabulary listed.
-function normalizeEffects(v: EffectsInput): EffectSpec[] {
+function normalizeEffects(v: EffectsInput): WriteEffect[] {
   if (Array.isArray(v)) return v;
   if (!v || typeof v !== "object") throw new Error("flcm: effects must be an object — got " + JSON.stringify(v) + ".");
   rejectUnknownKeys(v, EFFECTS_INPUT_KEYS, "effects");
@@ -1485,7 +1485,7 @@ function normalizeEffects(v: EffectsInput): EffectSpec[] {
   const css: Record<string, unknown> = {};
   const sugar: Record<string, unknown> = {};
   for (const k of Object.keys(bag)) (CSS_EFFECTS_KEYS.has(k) ? css : sugar)[k] = bag[k];
-  const out: EffectSpec[] = [];
+  const out: WriteEffect[] = [];
   if (Object.keys(css).length) out.push(...parseCssEffects(css as WriteCssEffects));
   if (Object.keys(sugar).length) out.push(...effects(sugar as EffectsSugar));
   return out;
@@ -1497,10 +1497,10 @@ function normalizeEffects(v: EffectsInput): EffectSpec[] {
 // paintOf resolves but this misses would fetch nothing, then hit the "no bytes" throw at render.
 function collectImageUrls(tree: WriteProps): string[] {
   const urls: string[] = [];
-  const addFrom = (paints: readonly PaintSpec[] | undefined): void => {
-    // `"url" in spec` is the whole hash-vs-url branch: a hash-backed image already names bytes in the
+  const addFrom = (paints: readonly WritePaint[] | undefined): void => {
+    // `"url" in paint` is the whole hash-vs-url branch: a hash-backed image already names bytes in the
     // document, so including it here would ask the server to fetch a string that is not a source.
-    if (paints) for (const spec of paints) if (spec && spec.kind === "image" && "url" in spec) urls.push(spec.url);
+    if (paints) for (const paint of paints) if (paint && paint.kind === "image" && "url" in paint) urls.push(paint.url);
   };
   const visit = (wn: WriteChild | WriteProps): void => {
     if (!wn || typeof wn !== "object") return;
@@ -1532,7 +1532,7 @@ export async function fetchImagesForTrees(trees: readonly WriteProps[]): Promise
 
 // flcm.id(id) — the target escape hatch. Wraps a raw node id so a target-taking verb (get/find/edit) treats
 // it as a live-node id and never scans it as an flcm/key (the one string a bare target could be read either
-// way). An inert POJO constructor like the others; the resolver (read.resolveTarget) unwraps it —
+// way). A plain POJO constructor like the others; the resolver (read.resolveTarget) unwraps it —
 // production code unwraps `__flcmId` structurally, not via this function.
 function id(nodeId: unknown): RawIdRef {
   if (typeof nodeId !== "string" || !nodeId.trim()) {

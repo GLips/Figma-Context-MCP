@@ -1,10 +1,10 @@
-// from-read — `flcm.fromRead(spec)`: the SimplifiedNode a `get` returns, re-authored as constructor
+// from-read — `flcm.fromRead(node)`: the SimplifiedNode a `get` returns, re-authored as constructor
 // CALLS. Read and write are one vocabulary (docs/canonical-vocabulary.md): the same word names the same
-// thing on both sides, so a single spec spreads straight into its constructor or into `edit`, and the
+// thing on both sides, so a single `get` result spreads straight into its constructor or into `edit`, and the
 // read shape's read-only words (`id`, `type`, `children`, a root's `designedWidth`) are judged by the
 // prelude every entry runs (validate.ts acceptAuthoringProps). What is left for this verb is what ONE
 // constructor call can't take:
-//   • the by-type dispatch, and the recursion into `children`, which arrive as read specs;
+//   • the by-type dispatch, and the recursion into `children`, which arrive as `get` results themselves;
 //   • real state flcm has no word for — refused by NAME, pointing at flcm.clone.
 //
 // It emits calls, never IR. ADR-0012 makes the constructors the only authoring dialect — render refuses
@@ -13,7 +13,7 @@
 // It is a VERB, not a dispatch rule. A `get` result carries a live `id` exactly as a handle does, so
 // letting a structural verb rebuild implicitly would mean guessing "copy this" from "move this" —
 // the ambiguity that already produced a silent destructive bug. `fromRead` output is constructor-built,
-// so `append(other, flcm.fromRead(spec))` classifies as a spec on provenance alone, and a RAW spec keeps
+// so `append(other, flcm.fromRead(node))` classifies as constructor-built on provenance alone, and a RAW `get` result keeps
 // being refused (structure.ts) with a pointer here.
 //
 // FIDELITY IS THE CONTRACT. Real state the read shape carries that the rebuild has no word for fails
@@ -32,7 +32,7 @@
 // CARRIES. State the READ side already dropped is invisible here and rebuilds as the flcm default with no
 // error — `clipsContent`, a paint's blendMode, an image paint's opacity/rotation/filters, and the ORDER of
 // a node's effect stack are all known cases (each a read-side fix). A node whose fidelity depends on one
-// of them is a flcm.clone case, and the agent has no way to tell from the spec. Do not add a guess here
+// of them is a flcm.clone case, and the agent has no way to tell from the read shape. Do not add a guess here
 // to paper over one: the fix belongs where the information was lost.
 
 import type { WriteNode, WriteChild } from "./ir.js";
@@ -46,12 +46,12 @@ import type { FrameProps, TextProps, ShapeProps, EllipseProps, LineProps, Instan
 // the read (see UNAUTHORABLE_TYPES).
 type AuthorableReadType = "FRAME" | "TEXT" | "RECTANGLE" | "ELLIPSE" | "LINE" | "INSTANCE";
 
-// Why each non-createable read type has no spec rebuild. Types outside both tables get the generic
+// Why each non-createable read type has no rebuild. Types outside both tables get the generic
 // message — the set of node types Figma can produce is open, and a new one is not a fromRead bug.
 const UNAUTHORABLE_TYPES: Record<string, string> = {
   "IMAGE-SVG": "the read shape flattens a VECTOR (and SVG-heavy containers) into IMAGE-SVG, which carries no path data or markup to rebuild from",
   GROUP: "a GROUP is a selection wrapper with no flcm constructor — its children carry the layout, so there is nothing to author",
-  COMPONENT: "a COMPONENT is a definition other nodes instantiate, and rebuilding its props would produce a plain frame. flcm.component(spec, { propertyDefinitions }) is how a component is MADE — rebuild the body you want and promote it",
+  COMPONENT: "a COMPONENT is a definition other nodes instantiate, and rebuilding its props would produce a plain frame. flcm.component(node, { propertyDefinitions }) is how a component is MADE — rebuild the body you want and promote it",
   COMPONENT_SET: "a COMPONENT_SET is a variant container, and rebuilding its props would produce a plain frame. Rebuild each variant, promote them with flcm.component, then combine them with flcm.variants",
 };
 
@@ -76,7 +76,7 @@ export const READ_FIELD_DISPOSITIONS = {
   },
   strokeDashes: { refuse: "flcm strokes are solid — there is no dash-pattern word" },
   aspectRatio: { refuse: "a locked aspect ratio (Figma's constrain-proportions) has no flcm word — the rebuild would silently stop holding its proportions" },
-  // An instance's component, folded by flcm.instance's props form (the constructor takes the spec
+  // An instance's component, folded by flcm.instance's props form (the constructor takes the read shape
   // whole, `componentId` and all) — only an INSTANCE carries it, so no other constructor meets it.
   componentId: "prelude",
 } satisfies Record<Exclude<keyof SimplifiedNode, AuthorableReadKey> | "annotations", ReadFieldDisposition>;
@@ -106,40 +106,40 @@ const CONSTRUCTOR_SUBJECTS: Record<AuthorableReadType, string> = {
   FRAME: "flcm.frame", TEXT: "flcm.text", RECTANGLE: "flcm.rect", ELLIPSE: "flcm.ellipse", LINE: "flcm.line", INSTANCE: "flcm.instance",
 };
 
-type Builder = (spec: Record<string, unknown>, subject: string) => WriteNode;
+type Builder = (node: Record<string, unknown>, subject: string) => WriteNode;
 
 const BUILDERS: Record<AuthorableReadType, Builder> = {
-  FRAME: (spec, subject) => {
+  FRAME: (node, subject) => {
     // Children are rebuilt FIRST, each under its own path, so a refusal deep in the subtree names the
     // node it came from rather than the root.
-    const { children, ...props } = spec;
+    const { children, ...props } = node;
     if (children != null && !Array.isArray(children)) {
-      throw new Error(subject + ".children: expected the read shape's array of child specs — got " + JSON.stringify(children) + ".");
+      throw new Error(subject + ".children: expected the read shape's array of child nodes — got " + JSON.stringify(children) + ".");
     }
     const built = (children ?? []).map((child: unknown, i: number) => buildFromRead(child, childSubject(subject, i, child)));
     return frame(props, built as WriteChild[]);
   },
-  TEXT: (spec) => text(spec),
-  RECTANGLE: (spec) => rect(spec),
-  ELLIPSE: (spec) => ellipse(spec),
-  LINE: (spec) => line(spec),
+  TEXT: (node) => text(node),
+  RECTANGLE: (node) => rect(node),
+  ELLIPSE: (node) => ellipse(node),
+  LINE: (node) => line(node),
   // A read instance carries its `componentId`, its property values and its `overrides` — exactly the
   // constructor's props form. Overrides re-resolve against the live component at render, so a
   // value the instance shares with its component (the read omits those) stays the component's.
-  // A filled slot reads as `children` under its path; those are read specs and rebuild here, each
+  // A filled slot reads as `children` under its path; those are `get` results too and rebuild here, each
   // under its own path, exactly as a frame's do.
-  INSTANCE: (spec, subject) => instance(readyInstanceOverridesForRebuild(spec, subject)),
+  INSTANCE: (node, subject) => instance(readyInstanceOverridesForRebuild(node, subject)),
 };
 
 // An instance's override bag, made ready to re-author: slot content rebuilt through the constructors
-// under its own path, and every sublayer's annotations dropped — the same disposition the root spec
-// gets (readyReadSpec). A rebuilt instance is a NEW instance and carries none of the source's notes,
+// under its own path, and every sublayer's annotations dropped — the same disposition the root node
+// gets (readyReadNode). A rebuilt instance is a NEW instance and carries none of the source's notes,
 // at the root or on a sublayer: a note is a statement about the layer it is pinned to, and an
 // instruction addressed to the agent is not completed by being copied. The notes the rebuild DOES
 // show are the component's own, which is where they belong.
-function readyInstanceOverridesForRebuild(spec: Record<string, unknown>, subject: string): Record<string, unknown> {
-  const overrides = spec.overrides;
-  if (!overrides || typeof overrides !== "object" || Array.isArray(overrides)) return spec;
+function readyInstanceOverridesForRebuild(node: Record<string, unknown>, subject: string): Record<string, unknown> {
+  const overrides = node.overrides;
+  if (!overrides || typeof overrides !== "object" || Array.isArray(overrides)) return node;
   const src = overrides as Record<string, unknown>;
   const rebuilt: Record<string, unknown> = {};
   for (const path of Object.keys(src)) {
@@ -159,25 +159,25 @@ function readyInstanceOverridesForRebuild(spec: Record<string, unknown>, subject
     const at = subject + ".overrides[" + JSON.stringify(path) + "]";
     rebuilt[path] = { ...(delta as Record<string, unknown>), children: content.map((child: unknown, i: number) => buildFromRead(child, childSubject(at, i, child))) };
   }
-  return { ...spec, overrides: rebuilt };
+  return { ...node, overrides: rebuilt };
 }
 
 /**
- * flcm.fromRead — re-author a `get` result as a constructor-built spec, ready for render/append.
- * The spec is agent input at a system boundary, so every shape assumption is checked here.
+ * flcm.fromRead — re-author a `get` result as a constructor-built node, ready for render/append.
+ * The `get` result is agent input at a system boundary, so every shape assumption is checked here.
  */
-export function fromRead(spec: unknown): WriteNode {
-  return buildFromRead(spec, "flcm.fromRead");
+export function fromRead(node: unknown): WriteNode {
+  return buildFromRead(node, "flcm.fromRead");
 }
 
-function buildFromRead(spec: unknown, subject: string): WriteNode {
-  if (!spec || typeof spec !== "object" || Array.isArray(spec)) {
-    throw new Error(subject + ": expected a `get` result (a read spec object) — got " + JSON.stringify(spec) + ".");
+function buildFromRead(node: unknown, subject: string): WriteNode {
+  if (!node || typeof node !== "object" || Array.isArray(node)) {
+    throw new Error(subject + ": expected a `get` result (a read-shape object) — got " + JSON.stringify(node) + ".");
   }
-  const n = spec as Record<string, unknown>;
+  const n = node as Record<string, unknown>;
   const type = assertAuthorableType(n.type, subject);
   try {
-    return BUILDERS[type](readyReadSpec(n, type, subject), subject);
+    return BUILDERS[type](readyReadNode(n, type, subject), subject);
   } catch (e) {
     // The constructor names itself; prefix the path so a deep refusal still says WHICH node. A child's
     // error is already prefixed by its own call, and the frame builder rebuilds children before its own
@@ -194,7 +194,7 @@ function childSubject(subject: string, i: number, child: unknown): string {
 
 function assertAuthorableType(type: unknown, subject: string): AuthorableReadType {
   if (typeof type !== "string" || !type) {
-    throw new Error(subject + ": the spec has no `type` — pass a node from flcm.get (the read shape always names its type).");
+    throw new Error(subject + ": the node has no `type` — pass a node from flcm.get (the read shape always names its type).");
   }
   if (own(BUILDERS as Record<string, Builder>, type)) return type as AuthorableReadType;
   const why = own(UNAUTHORABLE_TYPES, type);
@@ -210,7 +210,7 @@ function assertAuthorableType(type: unknown, subject: string): AuthorableReadTyp
 // Refuse the unauthorable, drop the derived, and hand the rest to the constructor. A key outside the
 // read shape rides through untouched: the constructor's closed set names a typo in its own voice, and
 // this verb has nothing to add.
-function readyReadSpec(src: Record<string, unknown>, type: AuthorableReadType, subject: string): Record<string, unknown> {
+function readyReadNode(src: Record<string, unknown>, type: AuthorableReadType, subject: string): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   const known = CONSTRUCTOR_KEYS_BY_TYPE[type];
   const constructorSubject = CONSTRUCTOR_SUBJECTS[type];
@@ -277,7 +277,7 @@ function assertNotCompressedRef<T>(value: T, field: string): T {
 
 function compressedRef(field: string): Error {
   return new Error(
-    field + ' is a styles-table REFERENCE (like "fill_a1b2c3d4"), not a value — that spec came from a COMPRESSED read. ' +
+    field + ' is a styles-table REFERENCE (like "fill_a1b2c3d4"), not a value — that read came from a COMPRESSED read. ' +
       "flcm.get returns the expanded shape with every value inline; re-read the node with flcm.get, or resolve the ref against the design's `styles` table first.",
   );
 }

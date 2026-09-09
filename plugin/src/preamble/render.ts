@@ -1,5 +1,5 @@
-// render — the one place a spec tree becomes live nodes. Split from flcm.ts (the constructors)
-// because its PREPARE reaches the edit compile through instance.ts (an instance spec's overrides
+// render — the one place a constructor-built tree becomes live nodes. Split from flcm.ts (the constructors)
+// because its PREPARE reaches the edit compile through instance.ts (an flcm.instance's overrides
 // are edit deltas resolved against the live component), and edit-plan.ts imports the constructors'
 // leaf compilers — so a render living beside the constructors would close a module cycle.
 
@@ -21,7 +21,7 @@ export interface LoadedTreeResources extends LoadedResources {
   targets: ResolvedTargets;
 }
 
-// The resource loads a tree needs before ANY node is created — every target its instance specs
+// The resource loads a tree needs before ANY node is created — every target its INSTANCE nodes
 // name (component + swap values, the reads that have to be async), then fonts and image bytes in
 // parallel (neither depends on the other, and they're a run's two slowest awaits), then the
 // annotation categories its notes name. Shared by render, flcm.component and the structural insert
@@ -82,8 +82,8 @@ export async function loadTreeResources(tree: WriteNode): Promise<LoadedTreeReso
 }
 
 /**
- * The GATE half of loadTreeResources, sync, immediately before the verb's seal: plan every instance
- * spec against the document as it stands now — the component's definitions, its variant, its
+ * The GATE half of loadTreeResources, sync, immediately before the verb's seal: plan every INSTANCE
+ * node against the document as it stands now — the component's definitions, its variant, its
  * layout mode, the sublayers its override paths name. Handing the plans the fonts is what makes
  * each override's compile the full stage-4 gate, font coverage included (instance.ts
  * compileOverride); the tree's own texts need no such proof, since their fonts are authored, not
@@ -95,12 +95,12 @@ export function gateTreeResources(tree: WriteNode, loaded: LoadedTreeResources):
 }
 
 /**
- * The build sequence a spec ROOT gets when it lands on the page: build the tree (percent children at
+ * The build sequence a constructor-built ROOT gets when it lands on the page: build the tree (percent children at
  * a provisional size), apply the root's own position words against the page, fold every percent and
  * anchor into pixels now that each parent's realized size is readable, and tell the agent when the
  * root landed on top of something.
  *
- * Shared rather than copied because `flcm.component`'s spec form promises the agent its spec renders
+ * Shared rather than copied because `flcm.component`'s constructor-built form promises the agent its tree renders
  * "exactly as flcm.render would" — a second hand-rolled copy of these four steps makes that promise
  * false the first time one of them changes. The caller owns the ctx: whether bindings are collected
  * is the caller's declaration, not this function's (see RenderCtx.bindings).
@@ -128,8 +128,8 @@ export function buildTreeOnPage(tree: WriteNode, ctx: RenderCtx): any {
 function render(tree: WriteNode): Promise<{ node: Handle; keyed: Record<string, Handle> }> {
   return enterMutatingVerb(
     "render",
-    // Prepare — spec checks, then the read-only resource loads (parallel: neither depends on the
-    // other, and they're the run's two slowest awaits). A reject here — bad spec, blocked url,
+    // Prepare — tree checks, then the read-only resource loads (parallel: neither depends on the
+    // other, and they're the run's two slowest awaits). A reject here — a bad tree, a blocked url,
     // oversize, unreachable — exits with zero mutations and zero undo residue, and a run the
     // server cancelled during the awaits is refused before the entry seal. Deliberate cost:
     // concurrent renders' prepares now SUM (each waits its turn in the queue slot) against the

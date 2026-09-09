@@ -66,7 +66,7 @@ export async function makeComponentExample(flcm: Flcm) {
   await flcm.render(
     flcm.instance(set, { componentProperties: { Size: "Large", Label: "Publish" } }),
   );
-  // Keys stamped in the spec still address the COMPONENT's own subtree.
+  // Keys stamped while authoring still address the COMPONENT's own subtree.
   return { set: set.id, label: small.keyed.label.id };
   // example:end
 }

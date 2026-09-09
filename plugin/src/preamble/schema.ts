@@ -7,7 +7,7 @@
 //   1. TYPES — flcm.ts infers its Props (`FrameProps`, `TextProps`, …) from these schemas via `z.infer`
 //      and imports them as `import type` ONLY. Type-only imports are erased by esbuild, so this module's
 //      zod NEVER enters the sandbox bundle (acceptance: `grep zod plugin/dist/code.js` is empty). The
-//      constructors stay the sole runtime; this file is inert type + doc metadata.
+//      constructors stay the sole runtime; this file is type + doc metadata only.
 //   2. DOCS — the server walks these schemas at startup to generate the execute_code quick-start and the
 //      get_flcm_reference sections. A prop that isn't here can't be documented; a documented prop that's
 //      deleted here also vanishes from the Props type, so flcm.ts stops compiling. Drift is structural,
@@ -22,7 +22,7 @@
 
 import { z } from "zod";
 import type {
-  FillInput, WriteCssEffects, PaintSpec, EffectSpec, GradientStop, WriteNode, WriteChild, Handle,
+  FillInput, WriteCssEffects, WritePaint, WriteEffect, GradientStop, WriteNode, WriteChild, Handle,
   PinX, PinY, Target, RawIdRef, SlimHandle, FindQuery, ReadPredicate, InsertResult, MoveResult, CloneResult, RemoveResult, GetResult,
   PageInfo, ComponentPropertyInput, OverrideDeltaInput, ComponentPropertyDefinitions, ComponentResult, VariantEntryInput,
   ComponentPropertyDefinitionEdits, ComponentPropertyBindingEdit,
@@ -69,11 +69,11 @@ export type EffectsSugar = {
   progressiveBlur?: ProgressiveBlurSugar;
 };
 
-// The `effects` prop accepts the sugar bag, an already-typed EffectSpec[] (what flcm.effects returns), or
+// The `effects` prop accepts the sugar bag, an already-typed WriteEffect[] (what flcm.effects returns), or
 // a CSS-string bag.
 // "none" is the surface-wide removal word (CSS's own absence spelling): effects:"none" clears the
 // node's effects, the same way fill/stroke:"none" clear paint.
-export type EffectsInput = EffectSpec[] | WriteCssEffects | EffectsSugar | "none";
+export type EffectsInput = WriteEffect[] | WriteCssEffects | EffectsSugar | "none";
 
 // ---- prop() — one optional field carrying its note (.describe) and, when the shown type should differ
 // from the inferred one, a display label (.meta.type). The generator reads .description + .meta().type. ----
@@ -370,7 +370,7 @@ const PATH_FIELDS = {
 
 // The component words an INSTANCE carries, in the read shape's own spellings — what `get` reports on an
 // instance is what `flcm.instance` takes and what an instance edit names. `componentId` is not here: it
-// is the constructor's positional argument (or the read spec's own field, folded at the entry), and
+// is the constructor's positional argument (or the read shape's own field, folded at the entry), and
 // under edit it is the swap word (see EDIT_FIELDS).
 const INSTANCE_FIELDS = {
   componentProperties: prop(
@@ -393,14 +393,14 @@ const INSTANCE_FIELDS = {
 const SLOT_CONTENT_FIELDS = {
   children: prop(
     z.custom<WriteChild[]>(),
-    "Constructor-built specs that REPLACE the slot's content (`[]` empties it). Refused: a read spec (use flcm.fromRead), a binding inside (an instance declares no property), and `null`.",
-    "spec[]",
+    "Constructor-built nodes that REPLACE the slot's content (`[]` empties it). Refused: a `get` result (use flcm.fromRead), a binding inside (an instance declares no property), and `null`.",
+    "node[]",
   ),
 };
 
 // The one component word that exists ONLY under edit: `componentId` swaps the instance's component.
 // Its own group rather than a member of INSTANCE_FIELDS because the constructor takes the component
-// POSITIONALLY (a read spec's `componentId` is folded at the entry, and naming it beside the positional
+// POSITIONALLY (a `get` result's `componentId` is folded at the entry, and naming it beside the positional
 // argument fails loud) — so only INSTANCE's edit vocabulary composes this in, and every other node type
 // rejects it with the per-type message.
 const SWAP_FIELDS = {
@@ -544,9 +544,9 @@ export interface EditManyScope { within?: Target }
 // ---- The two verbs that MAKE a component. Read words are write words here too: `propertyDefinitions`
 // and `componentPropertyReferences` are what a `get` reports on a COMPONENT, spelled the same way. ----
 
-// flcm.component(specOrTarget, options?) options.
+// flcm.component(nodeOrTarget, options?) options.
 const COMPONENT_FIELDS = {
-  name: prop(z.string(), "Defaults to the spec's or promoted node's own name."),
+  name: prop(z.string(), "Defaults to the authored node's or promoted node's own name."),
   description: COMPONENT_DEFINITION_FIELDS.description,
   propertyDefinitions: prop(
     z.custom<ComponentPropertyDefinitions>(),
@@ -657,12 +657,12 @@ export const EffectsSchema = z.object({
 // drift from them; the example files author against it and fail the build if a signature moves. ----
 export interface Flcm {
   // Every constructor also takes a `get` result (SimplifiedNode) as its props: the read shape and the
-  // write props are one vocabulary, so `{ ...spec, width: 320 }` authors as-is (the read-only leftovers —
+  // write props are one vocabulary, so `{ ...node, width: 320 }` authors as-is (the read-only leftovers —
   // `id`, a root's "contextual" size — are folded at the entry).
   frame(props?: FrameProps | SimplifiedNode, children?: WriteChild | WriteChild[]): WriteNode;
   // A plain string, or an array of styled runs (rich text — per-span color/weight/size in one node).
   text(content: string | TextRunInput[], props?: TextProps): WriteNode;
-  // The props-first form: the content is the `text` prop, which is how a read spec carries it.
+  // The props-first form: the content is the `text` prop, which is how a `get` result carries it.
   text(props: TextProps | SimplifiedNode): WriteNode;
   rect(props?: ShapeProps | SimplifiedNode): WriteNode;
   ellipse(props?: EllipseProps | SimplifiedNode): WriteNode;
@@ -676,9 +676,9 @@ export interface Flcm {
   // variant when none is named). Local or from a library the file already uses; a component the file
   // has never used is not reachable this way. Props are a frame's words (each a root-level override)
   // plus `componentProperties` and `overrides`, keyed as `get` reports them — so an instance's read
-  // spec writes back as-is.
+  // read shape writes back as-is.
   instance(component: Target, props?: InstanceProps): WriteNode;
-  // The props-first form: a read spec carries `componentId`, so `flcm.instance({ ...spec, name: "Copy" })` authors as-is.
+  // The props-first form: a `get` result carries `componentId`, so `flcm.instance({ ...node, name: "Copy" })` authors as-is.
   instance(props: InstanceProps & { componentId: string }): WriteNode;
   instance(props: SimplifiedNode): WriteNode;
   // Break an instance's link to its component: the subtree becomes ordinary editable layers under a
@@ -686,23 +686,23 @@ export interface Flcm {
   // nothing re-attaches it. A NESTED instance fails loud naming the enclosing one: Figma's detach
   // would take every enclosing instance with it, and flcm won't widen the mutation silently.
   detach(target: Target): Promise<Handle>;
-  // Make a COMPONENT — from a constructor spec (rendered on the current page exactly as flcm.render
+  // Make a COMPONENT — from a constructor-built node (rendered on the current page exactly as flcm.render
   // would, then promoted) or from a target naming a live node (promoted where it stands). `options`
-  // names it, describes it, and declares its `propertyDefinitions`; the spec's nodes say which of
+  // names it, describes it, and declares its `propertyDefinitions`; the tree's nodes say which of
   // their fields each property drives through `componentPropertyReferences`. Returns the COMPONENT's
   // handle (a NEW node — its id is not the frame's) plus every keyed node in its subtree.
-  component(specOrTarget: WriteNode | Target, options?: ComponentOptions): Promise<ComponentResult>;
+  component(nodeOrTarget: WriteNode | Target, options?: ComponentOptions): Promise<ComponentResult>;
   // Fold standalone components into a COMPONENT_SET: each entry says which member of the set its
   // component IS, in the set's axes. The set lands where the first component sat, and the variant
   // axes become the set's own `variant` properties — the ones flcm.instance's `componentProperties`
   // then select by.
   variants(entries: VariantEntryInput[], options: VariantsOptions): Promise<Handle>;
-  gradient(spec: GradientSugar): PaintSpec;
-  gradient(type: "linear" | "radial", stops: GradientStopInput[], angle?: number): PaintSpec;
+  gradient(sugar: GradientSugar): WritePaint;
+  gradient(type: "linear" | "radial", stops: GradientStopInput[], angle?: number): WritePaint;
   // A raster image fill value — like flcm.gradient, a paint you pass to any node's `fill`. The bytes are
   // fetched server-side (the sandbox reaches nothing); an unfetchable/blocked/invalid url fails loud.
-  image(url: string, opts?: ImageOpts): PaintSpec;
-  effects(spec: EffectsSugar): EffectSpec[];
+  image(url: string, opts?: ImageOpts): WritePaint;
+  effects(sugar: EffectsSugar): WriteEffect[];
   render(tree: WriteNode): Promise<{ node: Handle; keyed: Record<string, Handle> }>;
   // Nudge an existing node: apply a partial delta (same vocabulary as create — node-local props in
   // this slice) to the resolved target and return its updated Handle with fresh geometry. Atomic per
@@ -715,8 +715,8 @@ export interface Flcm {
   // auto-layout settles before a child set to "fill", whichever way round they were written).
   editMany(entries: EditEntry[], scope?: EditManyScope): Promise<Handle[]>;
   // Tree shape, DOM-style — position is the verb, and the thing placed is either a constructor
-  // spec (built there) or a target naming a live node (MOVED there, like the DOM). append/prepend
-  // take the parent; insertBefore/insertAfter take a sibling and infer the parent from it. A spec
+  // node (built there) or a target naming a live node (MOVED there, like the DOM). append/prepend
+  // take the parent; insertBefore/insertAfter take a sibling and infer the parent from it. A built node
   // returns render's `{ node, keyed }` plus the attach point; a live node returns
   // `{ node, from, to }`.
   append(parent: Target, thing: WriteNode | Target): Promise<InsertResult | MoveResult>;
@@ -726,19 +726,19 @@ export interface Flcm {
   // The plain reparent: the node lands as `parent`'s last child.
   move(target: Target, parent: Target): Promise<MoveResult>;
   remove(target: Target): Promise<RemoveResult>;
-  // A faithful live duplicate — the copy path for subtrees a spec rebuild can't reproduce (anything
+  // A faithful live duplicate — the copy path for subtrees a rebuild can't reproduce (anything
   // holding an INSTANCE). Lands at the end of `parent`, beside the original when omitted, and comes
   // back key-less: a raw node.clone() would copy the flcm/key and mint a duplicate address.
   clone(target: Target, parent?: Target): Promise<CloneResult>;
-  // Re-author a `get` result — a whole SUBTREE — as a constructor-built spec: the constructor is picked
-  // by each spec's `type`, and `children` (read specs, not built nodes) recurse. Explicit (not folded
-  // into the structural verbs) because a read spec carries a live `id` exactly as a handle does: only
+  // Re-author a `get` result — a whole SUBTREE — as a constructor-built node: the constructor is picked
+  // by each node's `type`, and `children` (the read shape's own, not built nodes) recurse. Explicit (not folded
+  // into the structural verbs) because a `get` result carries a live `id` exactly as a handle does: only
   // the author can say whether it means "copy this" or "move this". Anything the read shape carries
   // that flcm has no word for fails loud by name, pointing at flcm.clone.
-  fromRead(spec: SimplifiedNode): WriteNode;
+  fromRead(node: SimplifiedNode): WriteNode;
   // Full inspect: the node's styling as the EXPANDED canonical read shape — the same vocabulary
   // figma-mcp's REST read emits, every value inline (no styles refs), for any node type. Returns an
-  // ENVELOPE: `node` is the read spec, and `components` (present only when the subtree touched one)
+  // ENVELOPE: `node` is the read shape, and `components` (present only when the subtree touched one)
   // names each component once — its `children` live there, and each INSTANCE carries only its
   // `overrides` diff against them.
   get(target: Target): Promise<GetResult>;
@@ -796,8 +796,8 @@ export const VERBS: VerbDoc[] = [
   { category: "build", signature: "flcm.line(props?)", builds: "a LINE", args: "props object", schema: LineSchema },
   { category: "build", signature: "flcm.svg(markup, props?)", builds: "a VECTOR from SVG markup", args: "SVG markup string first, then size/position props", schema: SvgSchema },
   { category: "build", signature: "flcm.path(props)", builds: "a themeable VECTOR", args: "props object including `d` (path data)", schema: PathSchema },
-  { category: "component", signature: "flcm.instance(component, props?)", builds: "an INSTANCE of a component (a spec — render it, or place it like any node)", args: "the component (a read's `componentId`, an flcm/key, a handle, or a COMPONENT_SET whose variant `componentProperties` pick), then a frame's props plus `componentProperties` and `overrides` as `get` reports them — or one props object carrying `componentId`, as a read spec does", schema: InstanceSchema },
-  { category: "component", signature: "await flcm.component(specOrTarget, options?)", builds: "a COMPONENT — a spec rendered then promoted, or a live node promoted in place (returns { node, keyed })", args: "a constructor spec or a target, then { name?, description?, propertyDefinitions? }; nodes in the spec bind properties with `componentPropertyReferences`", schema: ComponentOptionsSchema, quickStart: "await flcm.component(spec|target, opts) / flcm.variants(entries, opts)" },
+  { category: "component", signature: "flcm.instance(component, props?)", builds: "an INSTANCE of a component (a node — render it, or place it like any node)", args: "the component (a read's `componentId`, an flcm/key, a handle, or a COMPONENT_SET whose variant `componentProperties` pick), then a frame's props plus `componentProperties` and `overrides` as `get` reports them — or one props object carrying `componentId`, as a `get` result does", schema: InstanceSchema },
+  { category: "component", signature: "await flcm.component(nodeOrTarget, options?)", builds: "a COMPONENT — a constructor-built node rendered then promoted, or a live node promoted in place (returns { node, keyed })", args: "a constructor-built node or a target, then { name?, description?, propertyDefinitions? }; nodes in the tree bind properties with `componentPropertyReferences`", schema: ComponentOptionsSchema, quickStart: "await flcm.component(node|target, opts) / flcm.variants(entries, opts)" },
   { category: "component", signature: "await flcm.variants(entries, options)", builds: "a COMPONENT_SET from standalone components (returns its handle)", args: "an array of { component, variant: { Axis: \"Value\", … } } naming the same axes, then { name, description? }", schema: VariantsOptionsSchema, quickStart: null },
   { category: "component", signature: "await flcm.detach(target)", builds: "the instance as ordinary layers — a FRAME with a NEW id (returns its handle)", args: "an INSTANCE target; one-way", quickStart: null },
   { category: "value", signature: "flcm.gradient(...)", builds: "a gradient fill value", args: "object or positional form", schema: GradientSchema },
@@ -806,15 +806,15 @@ export const VERBS: VerbDoc[] = [
   { category: "render", signature: "await flcm.render(tree)", builds: "live nodes", args: "returns { node, keyed }" },
   { category: "edit", signature: "await flcm.edit(target, changes)", builds: "a nudged existing node (returns its updated Handle)", args: "target (an flcm/key, node id, flcm.id(id), or handle), then a partial delta in the same vocabulary as create", schema: EditSchema, quickStart: "await flcm.edit(target, changes) / flcm.editMany([{ target, changes }, …])" },
   { category: "edit", signature: "await flcm.editMany(entries, scope?)", builds: "a whole set of nudges, applied atomically (returns a Handle per entry, in order)", args: "an array of { target, changes } — the same delta vocabulary as flcm.edit — and optionally { within } to scope key resolution. One invalid entry rejects the batch naming every offender, and nothing is applied", quickStart: null },
-  { category: "structure", signature: "await flcm.append(parent, thing)", builds: "`thing` placed as the LAST child of `parent`", args: "a parent target, then either a constructor spec (built there → { node, keyed, to }) or a target naming a live node (MOVED there → { node, from, to })", quickStart: "await flcm.append/prepend(parent, spec|target)" },
+  { category: "structure", signature: "await flcm.append(parent, thing)", builds: "`thing` placed as the LAST child of `parent`", args: "a parent target, then either a constructor-built node (built there → { node, keyed, to }) or a target naming a live node (MOVED there → { node, from, to })", quickStart: "await flcm.append/prepend(parent, node|target)" },
   { category: "structure", signature: "await flcm.prepend(parent, thing)", builds: "the same, placed FIRST", args: "same as append", quickStart: null },
-  { category: "structure", signature: "await flcm.insertBefore(sibling, thing)", builds: "`thing` placed just before `sibling`", args: "a SIBLING target (the parent is inferred from it), then a spec or a live target", quickStart: "await flcm.insertBefore/insertAfter(sibling, spec|target)" },
+  { category: "structure", signature: "await flcm.insertBefore(sibling, thing)", builds: "`thing` placed just before `sibling`", args: "a SIBLING target (the parent is inferred from it), then a constructor-built node or a live target", quickStart: "await flcm.insertBefore/insertAfter(sibling, node|target)" },
   { category: "structure", signature: "await flcm.insertAfter(sibling, thing)", builds: "`thing` placed just after `sibling`", args: "same as insertBefore", quickStart: null },
-  { category: "structure", signature: "await flcm.move(target, parent)", builds: "the node reparented as `parent`'s last child", args: "a live target, then a parent target. Creating is append's job — a spec here fails loud", quickStart: "await flcm.move(target, parent)" },
+  { category: "structure", signature: "await flcm.move(target, parent)", builds: "the node reparented as `parent`'s last child", args: "a live target, then a parent target. Creating is append's job — a constructor-built node here fails loud", quickStart: "await flcm.move(target, parent)" },
   { category: "structure", signature: "await flcm.remove(target)", builds: "nothing — deletes the node and its subtree", args: "a target; returns { removedId, parent }", quickStart: "await flcm.remove(target)" },
-  { category: "structure", signature: "await flcm.clone(target, parent?)", builds: "a faithful live duplicate (key-less)", args: "a target, and optionally where the copy lands (default: beside the original). The copy path for subtrees a spec rebuild can't reproduce — anything holding an INSTANCE", quickStart: "await flcm.clone(target, parent?)" },
-  { category: "build", signature: "flcm.fromRead(spec)", builds: "a `get` result re-authored as a buildable spec", args: "a spec from flcm.get, subtree and all — the constructor is picked by each node's `type` and `children` recurse. Returns a constructor-built node — render it, or place it with append/prepend/insertBefore/insertAfter. (A single node's spec can also spread straight into its constructor: flcm.rect({ ...spec, width: 320 }).) Anything the read shape carries that flcm has no word for (an INSTANCE, a paint stack, a grid) fails loud by name; flcm.clone is the faithful copy for those", quickStart: "flcm.fromRead(spec)" },
-  { category: "read", signature: "await flcm.get(target)", builds: "{ node, components } — the read spec, plus each component named once", args: "target: an flcm/key, a node id, flcm.id(id), or a handle" },
+  { category: "structure", signature: "await flcm.clone(target, parent?)", builds: "a faithful live duplicate (key-less)", args: "a target, and optionally where the copy lands (default: beside the original). The copy path for subtrees a rebuild can't reproduce — anything holding an INSTANCE", quickStart: "await flcm.clone(target, parent?)" },
+  { category: "build", signature: "flcm.fromRead(node)", builds: "a `get` result re-authored as a buildable node", args: "a node from flcm.get, subtree and all — the constructor is picked by each node's `type` and `children` recurse. Returns a constructor-built node — render it, or place it with append/prepend/insertBefore/insertAfter. (A single node's read shape can also spread straight into its constructor: flcm.rect({ ...node, width: 320 }).) Anything the read shape carries that flcm has no word for (an INSTANCE, a paint stack, a grid) fails loud by name; flcm.clone is the faithful copy for those", quickStart: "flcm.fromRead(node)" },
+  { category: "read", signature: "await flcm.get(target)", builds: "{ node, components } — the read shape, plus each component named once", args: "target: an flcm/key, a node id, flcm.id(id), or a handle" },
   { category: "read", signature: "await flcm.find(query?, predicate?)", builds: "matching nodes as slim handles", args: "query { type?, name?, key?, hasAnnotations?, within? } AND-combined — a filter, not an address; only `within` takes a target. Optional predicate over the full read shape (n => n.fill === '#FFF')" },
   { category: "read", signature: "await flcm.findOne(query?, predicate?)", builds: "exactly one slim handle (throws on 0 or >1)", args: "same query + predicate as find" },
   { category: "read", signature: "await flcm.selection()", builds: "the current selection as slim handles", args: "no args" },

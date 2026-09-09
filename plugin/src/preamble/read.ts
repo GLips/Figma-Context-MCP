@@ -17,7 +17,7 @@ import {
   type SceneStyleResolver,
 } from "./node-to-snapshot.js";
 import { rejectUnknownKeys } from "./validate.js";
-import { markReadSpec } from "./provenance.js";
+import { markReadNode } from "./provenance.js";
 import { assertNodeStillOnCanvas } from "./freshness.js";
 import { simplify, type SimplifiedComponentEntry, type SimplifiedNode } from "@framelink/core";
 import type { NodeSnapshot } from "@framelink/core/snapshot";
@@ -235,16 +235,16 @@ async function offTreeDefinitions(
 export async function get(target: Target): Promise<GetResult> {
   const node = await resolveTarget(target);
   const { nodes, components } = await simplifyScene(node);
-  const [spec] = nodes;
-  if (!spec) {
+  const [simplified] = nodes;
+  if (!simplified) {
     throw new Error(
       `flcm.get: node ${JSON.stringify(node.name)} (id ${JSON.stringify(node.id)}) is hidden (visible: false) — the read shape covers the rendered document. Unhide it or target a visible node.`,
     );
   }
   // Brand it, so a structural verb handed this back can refuse it instead of reading its live `id`
   // as a move target — the read shape is not authoring input until Phase 5's normalizer exists.
-  markReadSpec(spec);
-  const result: GetResult = { node: spec };
+  markReadNode(simplified);
+  const result: GetResult = { node: simplified };
   if (Object.keys(components).length > 0) result.components = components;
   return result;
 }
@@ -323,7 +323,7 @@ async function simplifiedIndex(root: ScanRoot, categories: ReadonlyMap<string, s
 }
 
 // Project a live hit + its core-simplified twin into a SlimHandle. IDENTITY (id/type/name/key/text) comes
-// from the LIVE node via identityOf — deliberately, not from the simplified spec: a SlimHandle IS a Handle
+// from the LIVE node via identityOf — deliberately, not from the simplified node: a SlimHandle IS a Handle
 // (plus a layout world-model), and the whole handle family reports live identity, so slim.type is the live
 // type you queried on (e.g. "VECTOR", not the egress-canonical "IMAGE-SVG" get emits for a collapsed icon)
 // and slim.text is the plain characters, a cheap locate label rather than get's rich run structure. childCount
@@ -331,18 +331,18 @@ async function simplifiedIndex(root: ScanRoot, categories: ReadonlyMap<string, s
 // LAYOUT WORLD-MODEL (width/height/layout.mode/position/left/top) is the core's own output — that is where
 // Invariant 1's "one vocabulary" bites, and it reads exactly like the matching fields of `get`. Only the
 // container mode survives from `layout`; a leaf (mode "none") drops it.
-function projectSlim(node: SceneNode, spec: SimplifiedNode | undefined, categories: ReadonlyMap<string, string>): SlimHandle {
+function projectSlim(node: SceneNode, simplified: SimplifiedNode | undefined, categories: ReadonlyMap<string, string>): SlimHandle {
   const slim: SlimHandle = identityOf(node);
   const annotations = decodeAnnotations("annotations" in node ? node.annotations : undefined, categories);
   if (annotations) slim.annotations = annotations;
-  if (spec) {
-    if (spec.width !== undefined) slim.width = spec.width;
-    if (spec.height !== undefined) slim.height = spec.height;
-    const mode = typeof spec.layout === "object" ? spec.layout.mode : undefined;
+  if (simplified) {
+    if (simplified.width !== undefined) slim.width = simplified.width;
+    if (simplified.height !== undefined) slim.height = simplified.height;
+    const mode = typeof simplified.layout === "object" ? simplified.layout.mode : undefined;
     if (mode && mode !== "none") slim.layout = { mode };
-    if (spec.position === "absolute") slim.position = "absolute";
-    if (spec.left !== undefined) slim.left = spec.left;
-    if (spec.top !== undefined) slim.top = spec.top;
+    if (simplified.position === "absolute") slim.position = "absolute";
+    if (simplified.left !== undefined) slim.left = simplified.left;
+    if (simplified.top !== undefined) slim.top = simplified.top;
   }
   const childCount = "children" in node ? node.children.length : 0;
   if (childCount) slim.childCount = childCount;
@@ -385,8 +385,8 @@ async function filterByPredicate(hits: SceneNode[], root: ScanRoot, predicate: R
   const index = await simplifiedIndex(root, categories);
   const survivors: SlimHandle[] = [];
   for (const hit of hits) {
-    const spec = index.get(hit.id);
-    if (spec && predicate(spec)) survivors.push(projectSlim(hit, spec, categories));
+    const simplified = index.get(hit.id);
+    if (simplified && predicate(simplified)) survivors.push(projectSlim(hit, simplified, categories));
   }
   return survivors;
 }

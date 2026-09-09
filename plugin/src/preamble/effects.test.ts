@@ -33,19 +33,19 @@ void _textureSym;
 void _progressiveSym;
 
 test("effects sugar: glass/noise/texture/progressiveBlur build with defaults from `true`/number", () => {
-  const specs = effects({ glass: true, noise: true, texture: true, progressiveBlur: 24 });
-  assert.deepEqual(specs.map((s) => s.kind), ["glass", "noise", "texture", "progressiveBlur"]);
+  const built = effects({ glass: true, noise: true, texture: true, progressiveBlur: 24 });
+  assert.deepEqual(built.map((s) => s.kind), ["glass", "noise", "texture", "progressiveBlur"]);
 
-  const glass = specs[0] as Extract<(typeof specs)[number], { kind: "glass" }>;
+  const glass = built[0] as Extract<(typeof built)[number], { kind: "glass" }>;
   assert.equal(glass.depth, 12);
   assert.equal(glass.lightIntensity, 0.5);
 
-  const noise = specs[1] as Extract<(typeof specs)[number], { kind: "noise" }>;
+  const noise = built[1] as Extract<(typeof built)[number], { kind: "noise" }>;
   assert.equal(noise.noiseType, "MONOTONE");
   assert.equal(noise.secondaryColor, undefined); // monotone: no secondary
   assert.equal(noise.opacity, undefined);
 
-  const pblur = specs[3] as Extract<(typeof specs)[number], { kind: "progressiveBlur" }>;
+  const pblur = built[3] as Extract<(typeof built)[number], { kind: "progressiveBlur" }>;
   assert.equal(pblur.radius, 24); // a bare number is the END radius
   assert.deepEqual(pblur.endOffset, { x: 0, y: 1 }); // default top→bottom fade
 });

@@ -8,8 +8,8 @@
 // fidelity is the whole risk of accepting CSS-shaped input, so the edges are strict.
 
 import {
-  PaintSpec, ImageHashSpec, ImageScaleMode, GradientType, GradientStop, Rgba,
-  EffectSpec, WriteLineHeight, WriteLetterSpacing, Edges,
+  WritePaint, WriteImageHash, ImageScaleMode, GradientType, GradientStop, Rgba,
+  WriteEffect, WriteLineHeight, WriteLetterSpacing, Edges,
   FillLeaf, WriteGradientFill, WriteCssEffects, WriteBlendMode,
 } from "./ir.js";
 import { solid, linearGradient, radialGradient } from "./paint.js";
@@ -60,12 +60,12 @@ export function parseColor(input: string): Rgba {
   return s.indexOf("rgb") === 0 ? parseRgb(s) : parseHex(s);
 }
 
-// ---- Fills (color string | gradient string | read-form { type, gradient }) -> PaintSpec ----
+// ---- Fills (color string | gradient string | read-form { type, gradient }) -> WritePaint ----
 // Takes ONE leaf. The read shape's array spelling is unwrapped upstream (flcm.compilePaintWord),
 // where the stacked-paints refusal lives — a parser that also un-nested would have to own that rule.
-export function parseFill(value: FillLeaf, field: string): PaintSpec {
+export function parseFill(value: FillLeaf, field: string): WritePaint {
   if (value && typeof value === "object") {
-    if ("kind" in value) return value; // already a typed PaintSpec (what flcm.gradient() returns)
+    if ("kind" in value) return value; // already a typed WritePaint (what flcm.gradient() returns)
     if (isImageFill(value)) return readImagePaint(value, field);
     const g = value as WriteGradientFill;
     if (typeof g.gradient === "string" && typeof g.type === "string" && g.type.indexOf("GRADIENT_") === 0) {
@@ -85,7 +85,7 @@ function badFill(field: string, value: unknown): Error {
 // A read-form image fill (the read shape's SimplifiedImageFill: { type:'IMAGE', imageRef|gifRef,
 // scaleMode }) names bytes ALREADY IN THE DOCUMENT, so in-plugin it needs no fetch and no url — the
 // imageRef IS the paint's imageHash [verified: node-to-snapshot maps `ref: paint.imageHash`]. It is
-// distinct from an AUTHORED image, which arrives as a typed ImageSpec ({ kind:'image', url }) and
+// distinct from an AUTHORED image, which arrives as a typed WriteImage ({ kind:'image', url }) and
 // returns early above via the `"kind" in value` path, never reaching here. `type:'IMAGE'` is the
 // always-present discriminator; the ref itself can be missing (Figma returns a null imageRef for an
 // asset that lives in a file you don't own), and THAT case still has nothing to point at.
@@ -100,7 +100,7 @@ function isImageFill(value: object): boolean {
 // would silently un-crop the image. Refused by name below rather than reproduced wrong.
 const READ_SCALE_MODES: Record<string, ImageScaleMode> = { FILL: "FILL", FIT: "FIT", TILE: "TILE" };
 
-function readImagePaint(value: object, field: string): ImageHashSpec {
+function readImagePaint(value: object, field: string): WriteImageHash {
   const o = value as { imageRef?: unknown; gifRef?: unknown; scaleMode?: unknown; scalingFactor?: unknown };
   // An animated GIF carries BOTH refs, and its `imageRef` points at the static snapshot frame — so the
   // one path that looks like it works is exactly the one that silently strips the animation. There is no
@@ -123,9 +123,9 @@ function readImagePaint(value: object, field: string): ImageHashSpec {
       "flcm: " + field + ' is a cropped image fill (scaleMode "' + String(o.scaleMode) + '"). The crop lives in the paint\'s transform matrix, which the read shape does not carry, so rebuilding it would silently un-crop the image. Duplicate the node with flcm.clone to keep the crop.',
     );
   }
-  const spec: ImageHashSpec = { kind: "image", hash, scaleMode };
-  if (scaleMode === "TILE" && typeof o.scalingFactor === "number") spec.scalingFactor = o.scalingFactor;
-  return spec;
+  const paint: WriteImageHash = { kind: "image", hash, scaleMode };
+  if (scaleMode === "TILE" && typeof o.scalingFactor === "number") paint.scalingFactor = o.scalingFactor;
+  return paint;
 }
 
 // Both word tables below are indexed by an AGENT-SUPPLIED string, and a plain `table[key]` reaches
@@ -165,14 +165,14 @@ export function parseBlendMode(input: string): WriteBlendMode {
   return mode;
 }
 
-// ---- Gradient strings -> PaintSpec. Dispatch by CSS gradient function; conic is absent on purpose (it
+// ---- Gradient strings -> WritePaint. Dispatch by CSS gradient function; conic is absent on purpose (it
 // maps to GRADIENT_ANGULAR, outside the supported subset) and falls through to the loud error. ----
-const GRADIENTS: Record<string, (stops: string[], raw: string) => PaintSpec> = {
+const GRADIENTS: Record<string, (stops: string[], raw: string) => WritePaint> = {
   "linear-gradient": parseLinearGradient,
   "radial-gradient": parseRadialGradient,
 };
 
-function parseGradientString(css: string): PaintSpec {
+function parseGradientString(css: string): WritePaint {
   const { name, args } = cssFn(css.trim());
   const parse = GRADIENTS[name];
   if (!parse) {
@@ -194,7 +194,7 @@ function cssFn(s: string): { name: string; args: string[] } {
 
 const SIDE_ANGLE: Record<string, number> = { top: 0, right: 90, bottom: 180, left: 270 };
 
-function parseLinearGradient(args: string[], raw: string): PaintSpec {
+function parseLinearGradient(args: string[], raw: string): WritePaint {
   const head = args[0] || "";
   let angle = 180; // CSS default = "to bottom"
   let stops = args;
@@ -204,7 +204,7 @@ function parseLinearGradient(args: string[], raw: string): PaintSpec {
   return linearGradient(angle, parseStops(stops, raw));
 }
 
-function parseRadialGradient(args: string[], raw: string): PaintSpec {
+function parseRadialGradient(args: string[], raw: string): WritePaint {
   const head = args[0] || "";
   const hasGeometry = /^(circle|ellipse|at)\b/i.test(head);
   const isEllipse = hasGeometry && /ellipse/i.test(head);
@@ -249,17 +249,17 @@ function badGradient(s: string, why: string): Error {
   return new Error('flcm: cannot parse gradient "' + s + '" — ' + why + ".");
 }
 
-// ---- CSS effect strings (WriteCssEffects) -> EffectSpec[] ----
+// ---- CSS effect strings (WriteCssEffects) -> WriteEffect[] ----
 // boxShadow/textShadow decode as shadows; filter/backdropFilter as blurs with their Figma blur kind.
-const EFFECT_FIELDS: { field: keyof WriteCssEffects; decode: (css: string) => EffectSpec[] }[] = [
+const EFFECT_FIELDS: { field: keyof WriteCssEffects; decode: (css: string) => WriteEffect[] }[] = [
   { field: "boxShadow", decode: parseShadows },
   { field: "textShadow", decode: parseShadows },
   { field: "filter", decode: (css) => parseBlurs(css, layerBlurFromCssPx) },
   { field: "backdropFilter", decode: (css) => parseBlurs(css, backgroundBlurFromCssPx) },
 ];
 
-export function parseCssEffects(fx: WriteCssEffects): EffectSpec[] {
-  const out: EffectSpec[] = [];
+export function parseCssEffects(fx: WriteCssEffects): WriteEffect[] {
+  const out: WriteEffect[] = [];
   for (const { field, decode } of EFFECT_FIELDS) {
     const css = fx[field];
     if (css) out.push(...decode(css));
@@ -268,11 +268,11 @@ export function parseCssEffects(fx: WriteCssEffects): EffectSpec[] {
 }
 
 // box-shadow: `[inset] <x>px <y>px <blur>px [<spread>px] <color>`, comma-separated for many.
-function parseShadows(css: string): EffectSpec[] {
+function parseShadows(css: string): WriteEffect[] {
   return splitTopLevel(css, ",").map((part) => parseShadow(part.trim()));
 }
 
-function parseShadow(s: string): EffectSpec {
+function parseShadow(s: string): WriteEffect {
   // Whitespace tokens at paren depth 0, so an rgba() color stays one token. Lengths lead; whatever
   // remains after the leading `Npx` run is the color.
   const tokens = splitTopLevel(s, " ").map((t) => t.trim()).filter((t) => t.length);
@@ -300,7 +300,7 @@ function parseShadow(s: string): EffectSpec {
 
 // filter / backdrop-filter: one or more `blur(Npx)`. The build() constructor applies the ×2 CSS->Figma
 // factor (see effects.ts), so it is NOT applied here. Any other function (drop-shadow(), …) throws.
-function parseBlurs(css: string, build: (cssPx: number) => EffectSpec): EffectSpec[] {
+function parseBlurs(css: string, build: (cssPx: number) => WriteEffect): WriteEffect[] {
   const fns = splitTopLevel(css.trim(), " ").map((t) => t.trim()).filter((t) => t.length);
   if (!fns.length) throw badEffect(css, "expected blur(Npx)");
   return fns.map((fn) => {

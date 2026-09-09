@@ -4,7 +4,7 @@
 //
 // What must not regress silently: a component's root takes a frame's words (and its instances get
 // them), `propertyDefinitions` adds/changes/renames/deletes a declaration with instances following,
-// `componentPropertyReferences` binds and unbinds a live sublayer, a bound spec may be inserted into
+// `componentPropertyReferences` binds and unbinds a live sublayer, a bound constructor-built node may be inserted into
 // an existing component (a new `slot` name declaring the property, since a slot IS its frame), an
 // instance's SLOT takes the frame surface — and every refusal fires with zero writes.
 import { test, beforeEach } from "node:test";
@@ -450,7 +450,7 @@ test("every bound-insert refusal names the cause and writes nothing", async () =
     append(id(comp.id), text("Hi", { componentPropertyReferences: { text: "Nope" } })),
     /this component has no property "Nope"/,
   );
-  // A slot is one hole, whether the second claim comes from the document or from this same spec.
+  // A slot is one hole, whether the second claim comes from the document or from this same tree.
   await assert.rejects(
     append(id(comp.id), frame({ width: 10, height: 10, componentPropertyReferences: { slot: "Trailing" } })),
     /slot property "Trailing" already has its frame/,
@@ -460,7 +460,7 @@ test("every bound-insert refusal names the cause and writes nothing", async () =
       frame({ width: 10, height: 10, componentPropertyReferences: { slot: "Twin" } }),
       frame({ width: 10, height: 10, componentPropertyReferences: { slot: "Twin" } }),
     ])),
-    /two frames in this spec claim slot "Twin"/i,
+    /two frames in this tree claim slot "Twin"/i,
   );
 
   assert.deepEqual(figma.undoLog.slice(before), []);
@@ -469,7 +469,7 @@ test("every bound-insert refusal names the cause and writes nothing", async () =
   assert.ok(trailing.componentPropertyReferences.slotContentId);
 });
 
-test("a spec insert into a COMPONENT_SET is refused — its children are its variants", async () => {
+test("an insert into a COMPONENT_SET is refused — its children are its variants", async () => {
   const small = await component(frame({ width: 96, height: 32, fill: "#111111" }), { name: "Button" });
   const large = await component(frame({ width: 128, height: 44, fill: "#111111" }), { name: "Button" });
   const set = await variants(

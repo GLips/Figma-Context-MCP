@@ -16,5 +16,5 @@ await flcm.render(card);
 
 const read = await flcm.get("card");
 console.log(JSON.stringify(read, null, 2));
-const spec = read.node;
-return { type: spec.type, mode: spec.layout && spec.layout.mode, children: (spec.children || []).length };
+const node = read.node;
+return { type: node.type, mode: node.layout && node.layout.mode, children: (node.children || []).length };
