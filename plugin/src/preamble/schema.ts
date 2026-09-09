@@ -367,12 +367,12 @@ const PATH_FIELDS = {
 const INSTANCE_FIELDS = {
   componentProperties: prop(
     z.custom<Record<string, ComponentPropertyInput>>(),
-    'Component property values by name, as `get` reports them: a variant axis ("Size": "Large"), a boolean, a text, or — for an instance-swap property — a component target (its node id or a handle). Names are the bare names without the `#id` suffix. An unknown name, a value of the wrong type, a variant option the set lacks, or a combination no variant has each fails loud naming the component\'s own. A slot property has no value and is refused here, naming the fill word: its content is `children` under `overrides` at the slot\'s path.',
+    "Values by bare name (no `#id` suffix), as `get` reports them: a variant axis, a boolean, a text, or a component target for an instance_swap. A slot has no value here — its content is `children` under `overrides`.",
     "{ [name]: string | boolean | component target }",
   ),
   overrides: prop(
     z.custom<Record<string, OverrideDeltaInput>>(),
-    "How this instance differs from its component's children, keyed by COMPONENT-RELATIVE sublayer path exactly as `get` keys them (`\"11:9\"`, `\"11:9;11:14\"` for a sublayer inside a nested instance). Each value is a delta in the edit vocabulary for that sublayer's type — `{ text: \"Vue.js\" }`, `{ fill: \"#F00\" }`, `{ visible: false }`. At a SLOT's path the delta also takes `children`: an array of constructor-built specs that REPLACES the slot's content (`[]` empties it), exactly the shape `get` reports a filled slot in. A read's `null` (the instance lacks a field the component has) is accepted where flcm has a removal word (`fill`/`stroke`/`effects` → \"none\", `opacity` → 1, `borderRadius` → 0) and fails loud otherwise. A path the resolved variant doesn't have fails loud; `children` at a path that is not a slot fails loud listing the slot paths the component has.",
+    "Sublayer deltas keyed by component-relative path as `get` keys them (`\"11:9\"`, or `\"11:9;11:14\"` inside a nested instance), each in that sublayer's edit vocabulary; at a SLOT's path the delta also takes `children`.",
     "{ [path]: delta }",
   ),
 };
@@ -385,7 +385,7 @@ const INSTANCE_FIELDS = {
 const SLOT_CONTENT_FIELDS = {
   children: prop(
     z.custom<WriteChild[]>(),
-    "Only inside `overrides`, at a SLOT's path: the slot's new content — an array of constructor-built specs (`flcm.frame`, `flcm.text`, `flcm.instance`, …) that REPLACES whatever the slot holds, in order; `[]` empties it. A nested `flcm.instance` here may fill its own slot the same way. Keys inside come back in `render`'s `keyed` and are addressable afterwards. A read spec (a `get` result's `children`) is refused — rebuild it with flcm.fromRead or the constructors. A binding inside is refused: an instance declares no property. `null` is refused (`[]` is the emptying word). Afterwards `append`/`insertBefore`/`move`/`remove` on the slot's content are ordinary.",
+    "Constructor-built specs that REPLACE the slot's content (`[]` empties it). Refused: a read spec (use flcm.fromRead), a binding inside (an instance declares no property), and `null`.",
     "spec[]",
   ),
 };
@@ -398,7 +398,7 @@ const SLOT_CONTENT_FIELDS = {
 const SWAP_FIELDS = {
   componentId: prop(
     z.custom<Target>(),
-    "INSTANCE only, under edit: swap this instance to another component — the read's own word, so a `get` spec re-pointed at a different component writes back as-is. A target naming a COMPONENT, or a COMPONENT_SET (its default variant, unless `componentProperties` in the same delta pick one). Figma carries the overrides it can match across the swap; the rest fall back to the new component's own values.",
+    "INSTANCE only, under edit: swap this instance to another COMPONENT or COMPONENT_SET. See Changing an instance.",
     "component target",
   ),
 };
@@ -418,7 +418,7 @@ const BINDING_FIELDS = {
       componentId: z.string().optional(),
       slot: z.string().optional(),
     }),
-    'Bind this node to a component property declared in the same flcm.component call, keyed as `get` reports a binding: `visible` (a boolean property hides/shows the layer — any node), `text` (flcm.text only — the property drives its content), `componentId` (flcm.instance only — an instance-swap property), `slot` (flcm.frame only — THIS frame is the slot, and every instance shows it as a SLOT holding that frame\'s content until the instance fills it with `overrides: { \"<path>\": { children: [ … ] } }`). Each value is a property name from this call\'s `propertyDefinitions`; an unknown name, or one whose type doesn\'t match the field, fails loud.',
+    "Which declared property drives this node's `visible`, `text`, `componentId` or `slot` (see Properties).",
     "{ visible?, text?, componentId?, slot? } — property names",
   ),
 };
@@ -463,10 +463,10 @@ export type SvgProps = z.infer<typeof SvgSchema>;
 // flcm.component's options bag (COMPONENT_FIELDS below reuses `description` from here), and the
 // per-type gate keeps them off every other node type by name.
 const COMPONENT_DEFINITION_FIELDS = {
-  description: prop(z.string(), "The component's description — what Figma shows beside it in the assets panel."),
+  description: prop(z.string(), "Shown beside the component in Figma's assets panel."),
   propertyDefinitions: prop(
     z.custom<ComponentPropertyDefinitionEdits>(),
-    'COMPONENT / COMPONENT_SET only, under edit: change what the component DECLARES, keyed by the property\'s current name (bare, or the full name with its `#suffix`). A name the component doesn\'t have ADDS it — `{ type, defaultValue }`, with `defaultValue` REQUIRED here since nothing binds it in the same call (bind a sublayer next with `flcm.edit(sublayer, { componentPropertyReferences })`). A name it has CHANGES it: `{ defaultValue }` re-defaults it (instances still on the old default follow), `{ name: "New" }` renames it (Figma re-suffixes and re-points every bound sublayer). `null` DELETES it, freeing its bound layers. A `type` that differs from the current one is refused — Figma can\'t change a property\'s type, so delete and re-add. A new `slot` is refused too: a slot IS its frame, so it is made by inserting a bound frame (flcm.append(component, flcm.frame({ componentPropertyReferences: { slot: "Name" } }))). Variant axes live on the SET and are renamed by renaming its member components.',
+    "COMPONENT / COMPONENT_SET, under edit: add, re-default, rename or delete a property. See Changing a component.",
     "{ [name]: { type?, defaultValue?, name? } | null }",
   ),
 };
@@ -512,7 +512,7 @@ const EDIT_FIELDS = {
   // itself. The per-type gate keeps each off the types that can't carry it.
   componentPropertyReferences: prop(
     z.custom<ComponentPropertyBindingEdit>(),
-    'Bind this node to a component property of the COMPONENT it sits in, keyed as `get` reports a binding: `visible` (any node), `text` (TEXT only), `componentId` (INSTANCE only), `slot` (FRAME only). Each value is a property name declared on that component — bare names resolve when unambiguous — and `null` UNBINDS the field, which then keeps whatever value it has. The node must be inside a COMPONENT (or a variant of a set): inside an INSTANCE the binding belongs to the main component and is refused, and outside any component there is no property for it to point at. Unbinding the ONLY frame of a slot property is refused (delete the property instead: `propertyDefinitions: { Name: null }` on the component).',
+    "On a live sublayer of a COMPONENT: which of its properties drives `visible` (any node), `text` (TEXT), `componentId` (INSTANCE) or `slot` (FRAME); `null` unbinds the field. See Binding a layer in the components section.",
     "{ visible?, text?, componentId?, slot? } — property names, or null to unbind",
   ),
   ...COMPONENT_DEFINITION_FIELDS,
@@ -537,11 +537,11 @@ export interface EditManyScope { within?: Target }
 
 // flcm.component(specOrTarget, options?) options.
 const COMPONENT_FIELDS = {
-  name: prop(z.string(), "The component's name. Defaults to the spec's (or the promoted node's) own name."),
+  name: prop(z.string(), "Defaults to the spec's or promoted node's own name."),
   description: COMPONENT_DEFINITION_FIELDS.description,
   propertyDefinitions: prop(
     z.custom<ComponentPropertyDefinitions>(),
-    'The properties this component exposes, by name — the read\'s own `propertyDefinitions`: { Label: { type: "text" }, Icon: { type: "boolean", defaultValue: true }, Trailing: { type: "slot" } }. Names must be non-empty and unique in the call. A `variant` type is refused: variant axes are made by combining components into a set (flcm.variants), never declared on one.',
+    "The properties it exposes, by name — non-empty, unique in the call. See Properties.",
     '{ [name]: { type, defaultValue? } }',
   ),
 };
@@ -550,19 +550,17 @@ const COMPONENT_FIELDS = {
 const PROPERTY_DEFINITION_FIELDS = {
   type: z
     .enum(["boolean", "text", "instance_swap", "slot"])
-    .describe(
-      'The read\'s own lowercase property types. `boolean` shows/hides bound layers, `text` drives a bound TEXT\'s content, `instance_swap` swaps a bound instance\'s component, `slot` makes a bound FRAME a hole an instance fills. Required.',
-    ),
+    .describe("Required; each type drives one field (see Properties)."),
   defaultValue: prop(
     z.custom<boolean | string | Target>(),
-    'The value a fresh instance starts at: a boolean, a string, or (for `instance_swap`) a component target. OMIT IT to derive it from the node that binds this property — its `visible`, its text, its component. A `slot` refuses one (its content is authored, not set), and a property nothing binds must state one. Under `flcm.edit` it is REQUIRED when adding a property (nothing binds it yet) and is how an existing property is re-defaulted.',
+    "What a fresh instance starts at. A `slot` refuses one: its content is authored, not set.",
     "boolean | string | component target",
   ),
   // Deliberately absent at create: there the KEY is the name, and a `name` beside it would be two
   // names for one property. It exists only so an edit can rename — see COMPONENT_DEFINITION_FIELDS.
   name: prop(
     z.string(),
-    "EDIT ONLY: rename this property. The read has no rename word (a read reports the name as the key), so this is the one edit-only key inside a definition — `{ propertyDefinitions: { Label: { name: \"Caption\" } } }`. Figma re-suffixes the property and re-points every sublayer bound to it. At create the key IS the name, and passing this fails loud.",
+    "Edit only: renames the property. At create the key IS the name, so this fails loud.",
   ),
 };
 
@@ -570,16 +568,16 @@ const PROPERTY_DEFINITION_FIELDS = {
 const VARIANT_ENTRY_FIELDS = {
   component: z
     .custom<Target>()
-    .describe("The standalone COMPONENT that becomes this variant. Already a variant of another set, or not a component at all, fails loud.")
+    .describe("The standalone local COMPONENT that becomes this variant.")
     .meta({ type: "component target" }),
   variant: z
     .custom<Record<string, string>>()
-    .describe('Which member of the set this component IS, in the set\'s axes: { Size: "Large", State: "Default" }. Every entry names the SAME axes (order-free); axis names and values may not contain "=" or "," (Figma\'s variant-name grammar), and no two entries may name the same combination.')
+    .describe('Which member of the set this component IS: { Size: "Large", State: "Default" }.')
     .meta({ type: "{ [axis]: value }" }),
 };
 
 const VARIANTS_FIELDS = {
-  name: z.string().describe("The set's name. Required — left to Figma the set would be named after the first member's axes."),
+  name: z.string().describe("Required."),
   description: COMPONENT_FIELDS.description,
 };
 
@@ -789,10 +787,10 @@ export const VERBS: VerbDoc[] = [
   { category: "build", signature: "flcm.line(props?)", builds: "a LINE", args: "props object", schema: LineSchema },
   { category: "build", signature: "flcm.svg(markup, props?)", builds: "a VECTOR from SVG markup", args: "SVG markup string first, then size/position props", schema: SvgSchema },
   { category: "build", signature: "flcm.path(props)", builds: "a themeable VECTOR", args: "props object including `d` (path data)", schema: PathSchema },
-  { category: "component", signature: "flcm.instance(component, props?)", builds: "an INSTANCE of a component (a spec — render it, or place it with append/insertBefore like any node)", args: "the component first — a read's `componentId`, an flcm/key, a handle, or a COMPONENT_SET (the variant `componentProperties` select) — then a frame's props plus `componentProperties` and `overrides`, keyed exactly as `get` reports them. Or one props object carrying `componentId`, as a read spec does", schema: InstanceSchema },
-  { category: "component", signature: "await flcm.component(specOrTarget, options?)", builds: "a COMPONENT — a spec rendered then promoted, or a live node promoted where it stands (returns { node, keyed }, the component's own handle)", args: "a constructor spec or a target, then { name?, description?, propertyDefinitions? }. A node in the spec says which property drives which of its fields with `componentPropertyReferences`", schema: ComponentOptionsSchema, quickStart: "await flcm.component(spec|target, opts) / flcm.variants(entries, opts)" },
-  { category: "component", signature: "await flcm.variants(entries, options)", builds: "a COMPONENT_SET from standalone components (returns the set's handle)", args: "an array of { component, variant: { Axis: \"Value\", … } } naming the same axes, then { name, description? }. The set lands where the first component sat", schema: VariantsOptionsSchema, quickStart: null },
-  { category: "component", signature: "await flcm.detach(target)", builds: "the instance's subtree as ordinary layers — a FRAME with a NEW id (returns its handle)", args: "an INSTANCE target. One-way. A nested instance fails loud naming the enclosing one — Figma's detach would take every enclosing instance with it, so flcm makes you say so", quickStart: null },
+  { category: "component", signature: "flcm.instance(component, props?)", builds: "an INSTANCE of a component (a spec — render it, or place it like any node)", args: "the component (a read's `componentId`, an flcm/key, a handle, or a COMPONENT_SET whose variant `componentProperties` pick), then a frame's props plus `componentProperties` and `overrides` as `get` reports them — or one props object carrying `componentId`, as a read spec does", schema: InstanceSchema },
+  { category: "component", signature: "await flcm.component(specOrTarget, options?)", builds: "a COMPONENT — a spec rendered then promoted, or a live node promoted in place (returns { node, keyed })", args: "a constructor spec or a target, then { name?, description?, propertyDefinitions? }; nodes in the spec bind properties with `componentPropertyReferences`", schema: ComponentOptionsSchema, quickStart: "await flcm.component(spec|target, opts) / flcm.variants(entries, opts)" },
+  { category: "component", signature: "await flcm.variants(entries, options)", builds: "a COMPONENT_SET from standalone components (returns its handle)", args: "an array of { component, variant: { Axis: \"Value\", … } } naming the same axes, then { name, description? }", schema: VariantsOptionsSchema, quickStart: null },
+  { category: "component", signature: "await flcm.detach(target)", builds: "the instance as ordinary layers — a FRAME with a NEW id (returns its handle)", args: "an INSTANCE target; one-way", quickStart: null },
   { category: "value", signature: "flcm.gradient(...)", builds: "a gradient fill value", args: "object or positional form", schema: GradientSchema },
   { category: "value", signature: "flcm.image(src, opts?)", builds: "an image fill value", args: "an https url or a local file path (under the server's asset root) first, then { scaleMode?, placeholder? }", schema: ImageSchema },
   { category: "value", signature: "flcm.effects({...})", builds: "an effects value", args: "an { shadow, blur, backgroundBlur } bag", schema: EffectsSchema },

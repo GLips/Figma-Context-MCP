@@ -57,17 +57,15 @@ const EXAMPLE_META: Record<ExampleId, { title: string; intro: string }> = {
   makeComponent: {
     title: "Authoring a component (flcm.component → flcm.variants)",
     intro:
-      "A Button built as an ordinary spec and promoted to a COMPONENT in one call: a boolean, a text and " +
-      "a slot property declared as `propertyDefinitions`, each bound to the node it drives with " +
-      "`componentPropertyReferences`, defaults derived from those nodes, then two sizes folded into a " +
-      "variant set an instance picks from.",
+      "A Button spec promoted to a COMPONENT in one call — a boolean, a text and a slot property, each " +
+      "bound to the node it drives, defaults derived from those nodes — then two sizes folded into a " +
+      "variant set.",
   },
   components: {
     title: "Instantiating a component (flcm.instance)",
     intro:
-      "A row of buttons stamped from a library button: the component found by name, a variant picked by " +
-      "its axes, a bound label set through `componentProperties`, one sublayer overridden by path, and a " +
-      "read instance re-authored as-is through the props form.",
+      "Buttons stamped from a set found by name: a variant picked by its axes, a bound label set through " +
+      "`componentProperties`, a sublayer overridden by path, and a read instance re-authored as-is.",
   },
 };
 

@@ -6,9 +6,8 @@ import type { Flcm } from "@framelink/plugin/schema";
 // marked region below (see examples.ts).
 export async function makeComponentExample(flcm: Flcm) {
   // example:start
-  // Author a Button, then fold two sizes of it into a variant set.
-  // The spec renders exactly as flcm.render would and its root becomes the COMPONENT; each node a
-  // property drives says so with `componentPropertyReferences` — the read's own word for a binding.
+  // Author a Button, then fold two sizes of it into a variant set. Each node a property drives says
+  // so with `componentPropertyReferences`.
   const buildButton = (height: number) =>
     flcm.frame(
       {
@@ -19,22 +18,21 @@ export async function makeComponentExample(flcm: Flcm) {
         borderRadius: 8,
       },
       [
-        // A boolean property hides/shows this dot. Its default is derived from the node: `visible`
-        // unnamed is true, so state the false explicitly.
+        // A boolean property drives this dot's `visible`. Unnamed, `visible` derives to true, so
+        // the definition states the false.
         flcm.ellipse({
           width: 8,
           height: 8,
           fill: "#22C55E",
           componentPropertyReferences: { visible: "Show Dot" },
         }),
-        // A text property drives this node's content; omitting `defaultValue` derives it from here ("Save").
+        // A text property drives this content; its default derives from here ("Save").
         flcm.text("Save", {
           key: "label",
           fill: "#FFFFFF",
           componentPropertyReferences: { text: "Label" },
         }),
-        // A slot IS a frame you author: this frame stays in the component, and every instance shows
-        // it as a SLOT holding this frame's content.
+        // A slot property: this frame is the hole every instance fills.
         flcm.frame({ width: 24, height: 24, componentPropertyReferences: { slot: "Trailing" } }),
       ],
     );
@@ -55,8 +53,7 @@ export async function makeComponentExample(flcm: Flcm) {
     propertyDefinitions: definitions,
   });
 
-  // Fold them into a set: each entry says which member of the set its component IS. The set lands
-  // where the FIRST component sat, and the axes become what an instance picks.
+  // Each entry says which member of the set its component IS; the axes are what an instance picks.
   const set = await flcm.variants(
     [
       { component: small.node, variant: { Size: "Small" } },
@@ -65,11 +62,11 @@ export async function makeComponentExample(flcm: Flcm) {
     { name: "Button" },
   );
 
-  // An instance picks a member by the set's AXES. Whether a member's own non-variant properties
-  // (Label, Show Dot) also resolve at set level is Figma's business — read the set back before
-  // naming them here.
-  await flcm.render(flcm.instance(set, { componentProperties: { Size: "Large" } }));
-  // `keyed` is minted from the COMPONENT's own subtree, so keys stamped in the spec still address it.
+  // The set carries its members' shared properties, so Label is set beside the axis.
+  await flcm.render(
+    flcm.instance(set, { componentProperties: { Size: "Large", Label: "Publish" } }),
+  );
+  // Keys stamped in the spec still address the COMPONENT's own subtree.
   return { set: set.id, label: small.keyed.label.id };
   // example:end
 }

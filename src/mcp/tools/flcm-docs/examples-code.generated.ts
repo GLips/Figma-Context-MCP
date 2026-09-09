@@ -165,9 +165,8 @@ const placed = await flcm.append("sidebar", wider);
 // fails loud naming the field (an INSTANCE rebuilds as a fresh stamp of its component).
 // flcm.clone(target, parent) duplicates the live node whole — faithful, but not editable as a spec first.
 return placed;`,
-  makeComponent: `// Author a Button, then fold two sizes of it into a variant set.
-// The spec renders exactly as flcm.render would and its root becomes the COMPONENT; each node a
-// property drives says so with \`componentPropertyReferences\` — the read's own word for a binding.
+  makeComponent: `// Author a Button, then fold two sizes of it into a variant set. Each node a property drives says
+// so with \`componentPropertyReferences\`.
 const buildButton = (height: number) =>
   flcm.frame(
     {
@@ -178,22 +177,21 @@ const buildButton = (height: number) =>
       borderRadius: 8,
     },
     [
-      // A boolean property hides/shows this dot. Its default is derived from the node: \`visible\`
-      // unnamed is true, so state the false explicitly.
+      // A boolean property drives this dot's \`visible\`. Unnamed, \`visible\` derives to true, so
+      // the definition states the false.
       flcm.ellipse({
         width: 8,
         height: 8,
         fill: "#22C55E",
         componentPropertyReferences: { visible: "Show Dot" },
       }),
-      // A text property drives this node's content; omitting \`defaultValue\` derives it from here ("Save").
+      // A text property drives this content; its default derives from here ("Save").
       flcm.text("Save", {
         key: "label",
         fill: "#FFFFFF",
         componentPropertyReferences: { text: "Label" },
       }),
-      // A slot IS a frame you author: this frame stays in the component, and every instance shows
-      // it as a SLOT holding this frame's content.
+      // A slot property: this frame is the hole every instance fills.
       flcm.frame({ width: 24, height: 24, componentPropertyReferences: { slot: "Trailing" } }),
     ],
   );
@@ -214,8 +212,7 @@ const large = await flcm.component(buildButton(44), {
   propertyDefinitions: definitions,
 });
 
-// Fold them into a set: each entry says which member of the set its component IS. The set lands
-// where the FIRST component sat, and the axes become what an instance picks.
+// Each entry says which member of the set its component IS; the axes are what an instance picks.
 const set = await flcm.variants(
   [
     { component: small.node, variant: { Size: "Small" } },
@@ -224,26 +221,24 @@ const set = await flcm.variants(
   { name: "Button" },
 );
 
-// An instance picks a member by the set's AXES. Whether a member's own non-variant properties
-// (Label, Show Dot) also resolve at set level is Figma's business — read the set back before
-// naming them here.
-await flcm.render(flcm.instance(set, { componentProperties: { Size: "Large" } }));
-// \`keyed\` is minted from the COMPONENT's own subtree, so keys stamped in the spec still address it.
+// The set carries its members' shared properties, so Label is set beside the axis.
+await flcm.render(
+  flcm.instance(set, { componentProperties: { Size: "Large", Label: "Publish" } }),
+);
+// Keys stamped in the spec still address the COMPONENT's own subtree.
 return { set: set.id, label: small.keyed.label.id };`,
-  components: `// A toolbar of buttons from the file's Button component. Find the component set by name, then read
-// one variant to learn its property names and sublayer paths (the \`components\` sidecar lists them).
+  components: `// A toolbar from the file's Button set. Read it first: the \`components\` sidecar lists its property
+// names and sublayer paths, e.g. { Size: { type: "variant", variantOptions: [...] }, Label: { type: "text" } }.
 const button = await flcm.findOne({ type: "COMPONENT_SET", name: "Button" });
 const { components } = await flcm.get(button);
-// components[button.id].propertyDefinitions → { Size: { type: "variant", variantOptions: [...] }, Label: { type: "text" }, ... }
 
 const toolbar = flcm.frame({ key: "toolbar", layout: { mode: "row", gap: 8, padding: 12 } }, [
-  // The set as the component: the variant is picked by its axes, as a whole combination.
+  // The variant is picked by its axes, as a whole combination.
   flcm.instance(button, {
     key: "save",
     componentProperties: { Size: "Large", State: "Default", Label: "Save" },
   }),
-  // The same, plus a root-level override (width) and a sublayer override by component-relative path —
-  // exactly the path \`get\` keys an instance's \`overrides\` by. Everything unnamed keeps tracking the component.
+  // Plus a root-level override (width) and a sublayer override by component-relative path.
   flcm.instance(button, {
     key: "cancel",
     width: 120,
@@ -253,7 +248,6 @@ const toolbar = flcm.frame({ key: "toolbar", layout: { mode: "row", gap: 8, padd
 ]);
 const out = await flcm.render(toolbar);
 
-// A read instance authors as-is: \`componentId\`, \`componentProperties\` and \`overrides\` are the same words.
 const { node: save } = await flcm.get(out.keyed.save);
 await flcm.append("toolbar", flcm.instance({ ...save, name: "Save (copy)" }));
 return { toolbar: out.node.id, definitions: Object.keys(components ?? {}) };`,

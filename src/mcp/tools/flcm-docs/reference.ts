@@ -38,7 +38,6 @@ import {
   COMPONENTS_PROPERTIES,
   COMPONENTS_VARIANTS,
   COMPONENTS_EDIT_MAIN,
-  COMPONENTS_EDIT_BINDINGS,
   COMPONENTS_INTRO,
   COMPONENTS_EDIT,
   COMPONENTS_DETACH,
@@ -171,7 +170,7 @@ const SECTIONS: Section[] = [
       "`type`, a root's `contextual` size beside `designedWidth`) fold away. A spec with `children` needs " +
       "`flcm.fromRead(spec)`, which rebuilds the whole subtree and refuses by name the fields flcm has no " +
       "word for (`strokeDashes`, a locked aspect ratio, a grid). A component property binding " +
-      "(`componentPropertyReferences`) rebuilds, but only means something inside `flcm.component` — see the components section.\n\n" +
+      "(`componentPropertyReferences`) rebuilds, but means something only inside a component — see the components section.\n\n" +
       `### Shared by every node\n\n${propTable(FIELD_GROUPS.shared)}\n\n` +
       "### Size & position (frame, text, rect, ellipse, instance)\n\n" +
       '(A `line` sizes on a numeric `width` alone — its length; there is no `height`, `"fill"`, or `"hug"`.)\n\n' +
@@ -190,7 +189,11 @@ const SECTIONS: Section[] = [
       `### flcm.ellipse — shape props\n\n(An ellipse has no \`borderRadius\` — its edge is already round.)\n\n${propTable(FIELD_GROUPS.ellipse)}\n\n` +
       `### flcm.line — line props\n\n${propTable(FIELD_GROUPS.line)}\n\n` +
       `### flcm.path — vector props\n\n(\`flcm.svg\` takes only the shared and size/position props above — colors are baked into the markup.)\n\n${propTable(FIELD_GROUPS.path)}\n\n` +
-      `### flcm.instance — component words\n\n(An instance also takes every \`flcm.frame\` prop above; each one named becomes a root-level override. See the components section.)\n\n${propTable(FIELD_GROUPS.instance)}`,
+      // The instance table prints once, here beside its sibling constructors; the components section's
+      // prose explains the same two words at length rather than repeating the table.
+      "### flcm.instance — component words\n\n(An instance also takes every `flcm.frame` prop above; each one " +
+      "named is a root-level override. `componentId` names the component in the props form, and swaps it under edit — see the components section.)\n\n" +
+      propTable(FIELD_GROUPS.instance),
   },
   {
     id: "vector",
@@ -254,19 +257,18 @@ const SECTIONS: Section[] = [
       // section's table, and the narrative below says what it does.
       `${COMPONENTS_CREATE}\n\n### flcm.component options\n\n${propTable(FIELD_GROUPS.componentOptions)}\n\n` +
       `### Properties\n\n${COMPONENTS_PROPERTIES}\n\n` +
+      // The binding word has no table of its own: the Properties prose and its sample carry the whole
+      // shape, and the edit section's field table lists the word.
       `#### One \`propertyDefinitions\` entry\n\n${propTable(FIELD_GROUPS.propertyDefinition)}\n\n` +
-      `#### The binding word (on every node constructor)\n\n${propTable(FIELD_GROUPS.binding)}\n\n` +
+      // No tables for the variants entry/options or the edit-only definition words: the code samples
+      // show both shapes, and the definition words already ride the edit section's field table.
       `### Variants — \`flcm.variants\`\n\n${COMPONENTS_VARIANTS}\n\n` +
-      `#### One entry\n\n${propTable(FIELD_GROUPS.variantEntry)}\n\n` +
-      `#### Options\n\n${propTable(FIELD_GROUPS.variantsOptions)}\n\n` +
       `### Changing a component — \`flcm.edit\`\n\n${COMPONENTS_EDIT_MAIN}\n\n` +
-      // The table documents `description`/`propertyDefinitions`, so it sits directly under the prose
-      // that introduces them — the binding and SLOT parts of the narrative follow it.
-      `#### The component-definition words (edit only)\n\n${propTable(FIELD_GROUPS.componentDefinition)}\n\n` +
-      `${COMPONENTS_EDIT_BINDINGS}\n\n` +
+      // No instance or fill-word table here: the instance table prints in the props section beside the
+      // other constructors, and the fill word's whole shape is in the "Filling a slot" prose.
       `### Using one — \`flcm.instance\`\n\n${COMPONENTS_INTRO}\n\n` +
-      `#### flcm.instance props\n\n${propTable(FIELD_GROUPS.instance)}\n\n` +
-      `#### The fill word (inside \`overrides\`, at a SLOT's path)\n\n${propTable(FIELD_GROUPS.slotContent)}\n\n` +
+      // COMPONENTS_RULES is the section's one refusal catalogue; the prose above states each other
+      // refusal beside the rule it enforces, so nothing is listed twice.
       `${COMPONENTS_EDIT}\n\n${COMPONENTS_DETACH}\n\n${COMPONENTS_RULES}`,
   },
   {
