@@ -106,7 +106,7 @@ const SHARED_FIELDS = {
     "A CSS mix-blend-mode name. An unknown one fails loud.",
     '"normal" | "multiply" | "screen" | "overlay" | "soft-light" | … (CSS mix-blend-mode)',
   ),
-  visible: prop(z.boolean(), "Layer visibility. Hidden nodes are omitted by get and ordinary find; find({ hasAnnotations: true }) can locate their annotations."),
+  visible: prop(z.boolean(), "Layer visibility. A hidden node is invisible to the read verbs too — find/get cover the RENDERED document, annotations included — so re-target it by id, not by a fresh find."),
   locked: prop(z.boolean(), "Locks the layer against pointer edits in Figma's UI. flcm.edit still writes to it."),
 };
 

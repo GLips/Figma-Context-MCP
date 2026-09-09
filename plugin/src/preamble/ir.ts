@@ -63,8 +63,9 @@ export type EditableType = WriteType | "COMPONENT" | "COMPONENT_SET" | "SLOT" | 
 // borderRadius, width… all land exactly as on one), plus `componentDefinition` — the two words that
 // change what the component DECLARES. SLOT takes the frame surface without them [verified live:
 // layoutMode, gap and fills are settable on an instance's slot].
-// Annotation support follows https://developers.figma.com/docs/plugins/api/Annotation/.
-// GROUP and SECTION have no annotations; SLOT needs live verification before admission.
+// Annotation support follows https://developers.figma.com/docs/plugins/api/Annotation/, widened by
+// what a live document answers: GROUP and SECTION carry no annotations, but a SLOT does — both the
+// component's bound frame and the slot an instance shows for it take writable notes [verified live].
 export const EDIT_TYPE_WORD_GROUPS = {
   FRAME: ["annotation", "shared", "size", "appearance", "frame", "binding"],
   TEXT: ["annotation", "shared", "size", "text", "binding"],
@@ -77,7 +78,7 @@ export const EDIT_TYPE_WORD_GROUPS = {
   COMPONENT_SET: ["annotation", "shared", "size", "appearance", "frame", "componentDefinition"],
   POLYGON: ["shared", "annotation"],
   STAR: ["shared", "annotation"],
-  SLOT: ["shared", "size", "appearance", "frame"],
+  SLOT: ["annotation", "shared", "size", "appearance", "frame"],
 } as const satisfies Record<EditableType, readonly string[]>;
 
 export interface Rgb { r: number; g: number; b: number }

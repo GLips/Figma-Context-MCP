@@ -128,10 +128,16 @@ const BUILDERS: Record<AuthorableReadType, Builder> = {
   // value the instance shares with its component (the read omits those) stays the component's.
   // A filled slot reads as `children` under its path; those are read specs and rebuild here, each
   // under its own path, exactly as a frame's do.
-  INSTANCE: (spec, subject) => instance(withSlotContentRebuilt(spec, subject)),
+  INSTANCE: (spec, subject) => instance(readyInstanceOverridesForRebuild(spec, subject)),
 };
 
-function withSlotContentRebuilt(spec: Record<string, unknown>, subject: string): Record<string, unknown> {
+// An instance's override bag, made ready to re-author: slot content rebuilt through the constructors
+// under its own path, and every sublayer's annotations dropped — the same disposition the root spec
+// gets (readyReadSpec). A rebuilt instance is a NEW instance and carries none of the source's notes,
+// at the root or on a sublayer: a note is a statement about the layer it is pinned to, and an
+// instruction addressed to the agent is not completed by being copied. The notes the rebuild DOES
+// show are the component's own, which is where they belong.
+function readyInstanceOverridesForRebuild(spec: Record<string, unknown>, subject: string): Record<string, unknown> {
   const overrides = spec.overrides;
   if (!overrides || typeof overrides !== "object" || Array.isArray(overrides)) return spec;
   const src = overrides as Record<string, unknown>;
@@ -141,6 +147,8 @@ function withSlotContentRebuilt(spec: Record<string, unknown>, subject: string):
     if (delta && typeof delta === "object" && !Array.isArray(delta) && "annotations" in delta) {
       const { annotations: _annotations, ...survivors } = delta as Record<string, unknown>;
       delta = survivors;
+      // An override whose ONLY word was the note has nothing left to say: dropping the path keeps
+      // the sublayer tracking its component instead of writing an empty override.
       if (!Object.keys(survivors).length) continue;
     }
     const content = delta && typeof delta === "object" ? (delta as Record<string, unknown>).children : undefined;

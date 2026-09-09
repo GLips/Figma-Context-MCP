@@ -27,7 +27,12 @@ const COPY_FIELDS = ["name", "layoutMode", "itemSpacing", "paddingTop", "padding
   "x", "y", "_fixedW", "_fixedH",
   // A sublayer's binding to a component property (visible/characters/mainComponent → property
   // name) rides into every instance's sublayers — it is what setProperties resolves through.
-  "componentPropertyReferences", "annotations"];
+  "componentPropertyReferences"];
+
+// `annotations` is deliberately NOT in COPY_FIELDS: an instance does not inherit its component's
+// notes, at the root or on any sublayer (verified live) — a note is a statement about the layer it
+// is pinned to, and the component's notes stay the component's. clone() is the other answer, and
+// carries them by hand (cloneSubtree).
 
 // The node types that hold children (Figma's ChildrenMixin). See the constructor: only these get
 // appendChild/insertChild, because a leaf node genuinely has neither.
@@ -93,7 +98,10 @@ class Node {
     this.layoutPositioning = "AUTO";
     // Per-child pinning rules for how this node reflows when a FREE-FORM parent resizes. Figma's default is
     // MIN/MIN (pinned to the top-left); the bridge overwrites it for a free-form parent's child.
-    if (["COMPONENT", "COMPONENT_SET", "ELLIPSE", "FRAME", "INSTANCE", "LINE", "POLYGON", "RECTANGLE", "STAR", "TEXT", "VECTOR"].includes(type)) this.annotations = [];
+    // The types that carry annotations at all — Figma's documented list plus SLOT, which the docs
+    // omit but a live document answers for (an instance's slot takes writable notes). GROUP and
+    // SECTION are absent because live Figma has no `annotations` on them at all.
+    if (["COMPONENT", "COMPONENT_SET", "ELLIPSE", "FRAME", "INSTANCE", "LINE", "POLYGON", "RECTANGLE", "SLOT", "STAR", "TEXT", "VECTOR"].includes(type)) this.annotations = [];
     this.constraints = { horizontal: "MIN", vertical: "MIN" };
     // text
     this.characters = "";
@@ -776,6 +784,9 @@ function cloneSubtree(src) {
   n._fontName = JSON.parse(JSON.stringify(src._fontName));
   n._rangeFonts = JSON.parse(JSON.stringify(src._rangeFonts || []));
   n._plugin = { ...src._plugin };
+  // A duplicate carries the source's notes, pinned properties and all — live clone() does, which is
+  // how a pending task ends up on the copy too. Deep-copied so the two nodes' notes don't alias.
+  if (src.annotations) n.annotations = JSON.parse(JSON.stringify(src.annotations));
   // A copied INSTANCE keeps pointing at the same main component, as live clone() does.
   n.mainComponent = src.mainComponent;
   if (src._props) n._props = { ...src._props };

@@ -44,6 +44,13 @@
 //     the identical sequence WITH a closing commitUndo() before triggerUndo gave {foreign:true,
 //     own1:false, own2:false}. triggerUndo reverts the last COMMITTED step.
 //   PENDING — full probe re-run with both shapes + the 1b residue count (undosForPrev).
+//
+// Live verdict (2026-09-09, hand repro through the connected plugin):
+//   EMPTY SEAL MINTS NO STEP — seal → annotation-category creation (which never enters the undo
+//     stack) → seal → triggerUndo popped the PREVIOUS execution's step whole. So the entry seal
+//     bounds the pop only once the verb has written something; enterMutatingVerb stamps the step
+//     (root plugin data, verified undoable) right after the seal for that reason. Not yet a
+//     scenario here — add one when this probe is next re-run.
 
 import { PluginBridge } from "../src/services/plugin-bridge/bridge.ts";
 import { WS_PORT_BLOCK } from "../src/services/plugin-bridge/ports.ts";

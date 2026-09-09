@@ -1,7 +1,7 @@
-// mutation-lock — the single entry point every mutating verb takes (plan invariant 4): render, edit
-// and the structural verbs today; editMany enters through it as it lands. Three jobs, one
-// place — serialize verbs, enforce cancellation, own the undo scaffold (the seal/commit/rollback
-// shape lives on enterMutatingVerb, exactly once, never per verb):
+// mutation-lock — the single entry point every mutating verb takes (plan invariant 4): render, edit,
+// editMany, and the structural verbs. Three jobs, one place — serialize verbs, enforce cancellation,
+// own the undo scaffold (the seal/commit/rollback shape lives on enterMutatingVerb, exactly once,
+// never per verb):
 //
 //   • Serialize mutating verbs WITHIN a run — the WHOLE verb, preparation included. Agent code can
 //     legally Promise.all two verbs, and every verb awaits internally (fonts, targets, images), so
@@ -28,7 +28,7 @@
 // is the rule itself: a batch verb (editMany) takes the lock once and drives the commit-free
 // internal appliers, never the public verbs (invariant 4).
 
-import { beginAnnotationMutation, resolveAnnotationCategories, removeFailedAnnotationCategories, hasRequestedAnnotationCategories } from "./annotation-categories.js";
+import { beginAnnotationMutation, removeFailedAnnotationCategories } from "./annotation-categories.js";
 import { hostRunCancelled } from "./host.js";
 
 let verbChain: Promise<unknown> = Promise.resolve();
@@ -73,22 +73,28 @@ function refuseIfCancelled(verb: string): void {
 /**
  * Run one mutating verb under the lock, in two phases that share the verb's single queue slot:
  *
- *   prepare — read-only: resolve targets, compile, validate live facts, load fonts/images. Runs
- *   serialized behind every earlier verb, so its gates read the canvas exactly as this verb will
- *   find it. A throw here exits with ZERO undo calls — a rejected verb leaves no undo residue.
+ *   prepare — resolve targets, compile, validate live facts, load fonts/images and resolve the
+ *   annotation categories the verb names. Runs serialized behind every earlier verb, so its gates
+ *   read the canvas exactly as this verb will find it. A throw here exits with ZERO undo calls — a
+ *   rejected verb leaves no undo residue. The one thing prepare can leave behind is a file-scoped
+ *   annotation category, which Figma keeps out of the undo stack entirely; a failure removes those
+ *   by hand (removeFailedAnnotationCategories), which is why the cleanup wraps prepare as well as
+ *   apply. Everything else here is read-only.
  *
  *   apply — the mutating span, wrapped in the invariant-2/4 undo scaffold:
- *     entry seal → apply → success commit          (the verb is exactly one undo step)
- *     entry seal → apply throws → commit + trigger (seal the partial writes, pop exactly that step)
+ *     entry seal → stamp → apply → success commit          (the verb is exactly one undo step)
+ *     entry seal → stamp → apply throws → commit + trigger (seal the partial writes, pop that step)
  *   apply is SYNCHRONOUS BY TYPE: the sealed span cannot suspend, so nothing can interleave
  *   between the seal and its commit. Anything a verb wants to await belongs in prepare.
  *
  * The failure path's commit is LOAD-BEARING, not a bookkeeping nicety: figma.triggerUndo() reverts
  * the last COMMITTED step and swallows uncommitted trailing writes with it (hand-verified
  * 2026-08-07; scripts/probe-commit-undo.mjs is the standing runbook). Bare triggerUndo over the
- * failed verb's writes would eat the previous step too. The entry seal is what bounds the pop:
- * whatever preceded the verb — earlier verbs, raw figma.* writes, a human's edit — is already
- * sealed into its own step, so rollback can only ever erase the failed verb's own writes.
+ * failed verb's writes would eat the previous step too. The entry seal plus the stamp are what
+ * bound the pop: whatever preceded the verb — earlier verbs, raw figma.* writes, a human's edit —
+ * is already sealed into its own step, and the stamp guarantees THIS verb's step exists, so
+ * rollback can only ever erase the failed verb's own writes. See stampUndoStep for why the seal
+ * alone is not enough.
  *
  * A verb IS a single call to this function — its public entry does nothing before it (even pure
  * input checks live in prepare). The invocation-order freshness guarantee is the slot reservation
@@ -101,27 +107,44 @@ function refuseIfCancelled(verb: string): void {
 // makes that a compile error (pinned by a @ts-expect-error test).
 type SyncOnly<T> = T extends PromiseLike<unknown> ? never : T;
 
+// The seal alone does not bound the rollback. figma.commitUndo() with nothing written since the
+// last commit mints NO step (live-verified 2026-09-09: seal → category creation, which is outside
+// the undo stack → seal → triggerUndo popped the PREVIOUS execution's work). So a verb whose apply
+// throws before its first canvas write would seal an empty step and the pop would reach the last
+// committed verb's writes, or the human's. One guaranteed write right after the entry seal makes
+// this verb's step exist no matter what apply does next. Plugin data on the document root is the
+// write: undoable (live-verified), invisible on the canvas, page-independent, and it must CHANGE
+// value — a same-value write is not a mutation — so it toggles. It stays after a success as part
+// of the step: clearing it would make a no-op verb a net-zero step whose coalescing behaviour is
+// unproven, and the value itself means nothing.
+const UNDO_STEP_STAMP_KEY = "flcm/undo-step";
+function stampUndoStep(): void {
+  const previous = figma.root.getPluginData(UNDO_STEP_STAMP_KEY);
+  figma.root.setPluginData(UNDO_STEP_STAMP_KEY, previous === "1" ? "0" : "1");
+}
+
 export function enterMutatingVerb<P, T>(
   verb: string,
   prepare: () => Promise<P>,
   apply: (prepared: P) => SyncOnly<T>,
-  revalidate?: (prepared: P) => void,
 ): Promise<T> {
   const turn = verbChain.then(async () => {
     refuseIfDevMode(verb);
     refuseIfCancelled(verb);
+    // The verb's annotation-category slate, opened here rather than by prepare because its other
+    // half is the failure path below: what a prepare created must be removable from a catch that
+    // never sees the prepared value (annotation-categories.ts).
     beginAnnotationMutation();
     try {
       const prepared = await prepare();
-      // Category creation suspends after prepare; live edit facts must be checked again.
-      if (hasRequestedAnnotationCategories()) {
-        await resolveAnnotationCategories();
-        revalidate?.(prepared);
-      }
       // Prepare's awaits are the run's suspension points — a CANCEL that arrived during them must
       // fail closed here, before the seal, not mutate on a dead run's behalf.
       refuseIfCancelled(verb);
       figma.commitUndo();
+      // Outside the rollback-protected block on purpose: a stamp that fails to write has put
+      // nothing of this verb's on the canvas, and a triggerUndo here would be exactly the
+      // overreach into the previous step the stamp exists to prevent.
+      stampUndoStep();
       try {
         const result = apply(prepared);
         figma.commitUndo();
@@ -133,8 +156,9 @@ export function enterMutatingVerb<P, T>(
         throw err;
       }
     } catch (err) {
-      removeFailedAnnotationCategories();
-      throw err;
+      // Wraps prepare AND apply: a category is created during the resource loads, so a validation
+      // that fails after them (or a write that fails inside the seal) both leave one to remove.
+      throw removeFailedAnnotationCategories(err);
     }
   });
   // A failed verb must not poison the chain — the failure belongs to its caller (via `turn`);

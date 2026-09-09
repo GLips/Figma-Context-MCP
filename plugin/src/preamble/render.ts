@@ -3,7 +3,7 @@
 // are edit deltas resolved against the live component), and edit-plan.ts imports the constructors'
 // leaf compilers — so a render living beside the constructors would close a module cycle.
 
-import { requestTreeAnnotationCategories } from "./annotation-categories.js";
+import { requestTreeAnnotationCategories, resolveAnnotationCategories } from "./annotation-categories.js";
 import { WriteNode, Handle } from "./ir.js";
 import { assertConstructorBuiltTree } from "./provenance.js";
 import { assertSizingResolvesAgainstParentFrame } from "./layout-legality.js";
@@ -14,12 +14,13 @@ import { enterMutatingVerb } from "./mutation-lock.js";
 import { fetchImagesForTrees, assertNoComponentPropertyBindings } from "./flcm.js";
 import { prepareInstancePlans } from "./instance.js";
 
-// The read-only resource loads a tree needs before ANY node is created — the instance plans
-// (component + property + override resolution, which reads the document but writes nothing), then
-// fonts and image bytes in parallel (neither depends on the other, and they're a run's two slowest
-// awaits). Shared by render and the structural insert verbs, which owe the same guarantee: a
-// blocked url, an oversize image, an unknown component or an unreachable host aborts with zero
-// mutations.
+// The resource loads a tree needs before ANY node is created — the instance plans (component +
+// property + override resolution, which reads the document but writes nothing), then fonts and
+// image bytes in parallel (neither depends on the other, and they're a run's two slowest awaits),
+// then the annotation categories its notes name. Shared by render and the structural insert verbs,
+// which owe the same guarantee: a blocked url, an oversize image, an unknown component or an
+// unreachable host aborts with zero mutations. Only the categories can outlive a failure, and the
+// lock removes those (mutation-lock.ts).
 //
 // Instance plans resolve FIRST, alone: an override's text delta decides which live fonts to load,
 // so the font load depends on it — and the resolution is a chain of in-document lookups, never a
@@ -54,6 +55,9 @@ export async function loadTreeResources(tree: WriteNode): Promise<RenderResource
   const images = await settledImages;
   const fonts = await settledFonts;
   if (failed) throw firstFailure;
+  // Categories last of the three: resolving one can CREATE a file-scoped category, so a tree whose
+  // image or font load was going to fail anyway never creates one to be cleaned up again.
+  await resolveAnnotationCategories();
   return { images, fonts, instances: needs.plans };
 
   // The tree's own text fonts (and its slot content's), plus every override delta's (an override

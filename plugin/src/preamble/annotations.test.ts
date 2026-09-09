@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
-import { frame, rect, text, line, ellipse, path, svg } from "./flcm.js";
+import { frame, rect, text, line, ellipse, path, svg, instance } from "./flcm.js";
 import { render } from "./render.js";
 import { get, find, selection, resolveTarget } from "./read.js";
 import { edit } from "./edit.js";
@@ -9,21 +9,24 @@ import { editMany } from "./edit-many.js";
 import { fromRead } from "./from-read.js";
 import { clone } from "./structure.js";
 
-test("a hidden deeply nested task is found and completed, preserving the same-text survivor and its pins", async () => {
+test("a deeply nested task is found and completed, preserving the same-text survivor and its pins", async () => {
   createFigmaMock();
-  const root = await render(frame({ key: "root" }, [frame({}, [frame({}, [rect({ key: "task", visible: false })])])]));
+  const root = await render(frame({ key: "root" }, [frame({}, [frame({}, [rect({ key: "task" })])]), rect({ key: "unrendered", visible: false })]));
   const task = await resolveTarget("task");
-  task.annotations = [{ label: "Show this layer" }, { label: "Show this layer", properties: [{ type: "width" }, { type: "fills" }] }];
-  assert.deepEqual(await find({ within: root.node, name: "Rectangle" }), []);
-  const [hit] = await find({ within: root.node, hasAnnotations: true });
-  assert.equal(hit.id, task.id);
-  assert.deepEqual(hit.annotations, [{ text: "Show this layer" }, { text: "Show this layer", properties: ["width", "fills"] }]);
+  task.annotations = [{ label: "Make this the primary CTA" }, { label: "Make this the primary CTA", properties: [{ type: "width" }, { type: "fills" }] }];
+  // A note on a hidden layer is invisible to find, exactly as it is to get: both cover the RENDERED
+  // document, so the facet stage and the predicate stage judge the same population.
+  (await resolveTarget("unrendered")).annotations = [{ label: "Show this layer" }];
+  const hits = await find({ within: root.node, hasAnnotations: true });
+  assert.deepEqual(hits.map((h) => h.id), [task.id]);
+  const [hit] = hits;
+  assert.deepEqual(hit.annotations, [{ text: "Make this the primary CTA" }, { text: "Make this the primary CTA", properties: ["width", "fills"] }]);
   // Re-read immediately before the replacement; choose one entry's identity, never all matching text.
   const [fresh] = await find({ within: root.node, hasAnnotations: true });
   const completed = fresh.annotations![0];
-  await edit(fresh, { visible: true, annotations: fresh.annotations!.filter((note) => note !== completed) });
-  assert.equal(task.visible, true);
-  assert.deepEqual((await get(task)).node.annotations, [{ text: "Show this layer", properties: ["width", "fills"] }]);
+  await edit(fresh, { name: "CTA", annotations: fresh.annotations!.filter((note) => note !== completed) });
+  assert.equal(task.name, "CTA");
+  assert.deepEqual((await get(task)).node.annotations, [{ text: "Make this the primary CTA", properties: ["width", "fills"] }]);
   await edit(task, { name: "Done" });
   assert.equal(task.annotations.length, 1);
   await edit(task, { annotations: [] });
@@ -86,15 +89,28 @@ test("fromRead drops annotations throughout a rebuild; clone keeps pending tasks
   assert.equal((await find({ within: copied.node, hasAnnotations: true })).length, 1);
 });
 
-test("the documented node matrix admits polygon and star but refuses group, section and SLOT", async () => {
+test("an instance inherits none of its component's notes; cloning the instance keeps its own", async () => {
+  const figma = createFigmaMock();
+  const built = await render(frame({ key: "card", annotations: [{ text: "Resize this", category: "Agent" }] }, [text("Label", { key: "label", annotations: [{ text: "Opens filters", properties: ["width"] }] })]));
+  const comp = figma.createComponentFromNode(await figma.getNodeByIdAsync(built.keyed.card.id));
+  const stamped = await render(instance(comp.id, { annotations: [{ text: "Wire this one up" }] }));
+  // The component's notes stay the component's: neither the instance root nor any sublayer takes them.
+  assert.deepEqual((await get(stamped.node)).node.annotations, [{ text: "Wire this one up" }]);
+  assert.deepEqual(await find({ within: stamped.node, hasAnnotations: true }), []);
+  const copied = await clone(stamped.node);
+  assert.deepEqual((await get(copied.node)).node.annotations, [{ text: "Wire this one up" }]);
+  assert.deepEqual(await find({ within: copied.node, hasAnnotations: true }), []);
+});
+
+test("the documented node matrix admits polygon, star and SLOT but refuses group and section", async () => {
   createFigmaMock();
   const out = await render(frame({}));
   const node = await resolveTarget(out.node);
-  for (const type of ["POLYGON", "STAR", "COMPONENT", "COMPONENT_SET"]) {
+  for (const type of ["POLYGON", "STAR", "COMPONENT", "COMPONENT_SET", "SLOT"]) {
     node.type = type;
     await edit(node, { annotations: [{ text: "Intent" }] });
   }
-  for (const type of ["GROUP", "SECTION", "SLOT"]) {
+  for (const type of ["GROUP", "SECTION"]) {
     node.type = type;
     await assert.rejects(edit(node, { annotations: [] }), /not a .* word/);
   }
@@ -112,4 +128,22 @@ test("a target deleted during category creation rejects and removes the category
   };
   await assert.rejects(edit(out.node, { annotations: [{ text: "Intent", category: "Agent" }] }), /removed|deleted|no longer exists/);
   assert.deepEqual(await figma.annotations.getAnnotationCategoriesAsync(), []);
+});
+
+test("a category that refuses removal never becomes the failure the agent sees, and the rest still go", async () => {
+  createFigmaMock();
+  const out = await render(rect({}));
+  const node = await resolveTarget(out.node);
+  const addCategory = figma.annotations.addAnnotationCategoryAsync;
+  figma.annotations.addAnnotationCategoryAsync = async (input) => {
+    const category = await addCategory(input);
+    if (input.label === "Stuck") category.remove = () => { throw new Error("Figma refused the removal"); };
+    return category;
+  };
+  Object.defineProperty(node, "annotations", { get: () => [], set: () => { throw new Error("Figma refused annotations"); } });
+  await assert.rejects(
+    edit(out.node, { annotations: [{ text: "Task", category: "Stuck" }, { text: "Intent", category: "Fine" }] }),
+    (err: Error) => err.message.startsWith("flcm.edit") && err.message.includes("Figma refused annotations") && err.message.includes('"Stuck"'),
+  );
+  assert.deepEqual((await figma.annotations.getAnnotationCategoriesAsync()).map((category) => category.label), ["Stuck"]);
 });

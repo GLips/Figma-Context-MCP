@@ -1,7 +1,13 @@
 import type { WriteNode } from "./ir.js";
 import type { WriteAnnotation } from "./annotations.js";
 
-// The mutation queue owns this per-verb state. Constructors never enqueue work.
+// Per-verb state, module-global rather than threaded through the verb's resources object the way
+// fonts and images are: the created-category list outlives the resources, because the FAILURE path
+// that removes them belongs to the lock (which never sees a verb's prepared value), and a category
+// can be created by a prepare that later throws. The lock resets it as each verb's turn opens
+// (enterMutatingVerb), so one verb can never remove a category another verb created — verbs are
+// serialized whole, so there is exactly one verb's worth of this at a time. Constructors never
+// enqueue work.
 let requestedCategories = new Set<string>();
 let resolvedCategories = new Map<string, string>();
 let createdCategories: AnnotationCategory[] = [];
@@ -25,11 +31,11 @@ export function requestTreeAnnotationCategories(tree: WriteNode): void {
   }
 }
 
-export function hasRequestedAnnotationCategories(): boolean {
-  return requestedCategories.size > 0;
-}
-
-// Run only after the entire verb's prepare succeeds. Resolve all names before creating any.
+// Runs inside the verb's resource-loading phase, beside the font load and the image fetch, so the
+// suspension it costs happens BEFORE every verb's after-the-last-await gates rather than after them
+// (a verb that validated the live document and then awaited a category would seal against a canvas
+// that had moved on). Resolve all names before creating any, so an ambiguous name refuses without
+// having created a category for an earlier one.
 export async function resolveAnnotationCategories(): Promise<void> {
   if (!requestedCategories.size) return;
   const categories = await figma.annotations.getAnnotationCategoriesAsync();
@@ -48,8 +54,35 @@ export async function resolveAnnotationCategories(): Promise<void> {
   }
 }
 
-export function removeFailedAnnotationCategories(): void {
-  for (const category of createdCategories) category.remove();
+/**
+ * The failed verb's cleanup: every category this verb created goes away, whether the verb died in
+ * prepare (a later validation) or inside the sealed apply span. Category creation is NOT in Figma's
+ * undo stack (live-verified), so the rollback that erases the verb's writes cannot erase these.
+ *
+ * Returns the verb's OWN failure, which is what the agent must see — a category that refuses to be
+ * removed is a leftover empty category, not the reason the verb failed. Every removal is attempted
+ * even after one throws, and the ones that failed ride along on the original error's message so a
+ * leftover is named rather than silently kept.
+ */
+export function removeFailedAnnotationCategories(cause: unknown): unknown {
+  const unremoved: string[] = [];
+  for (const category of createdCategories) {
+    const label = category.label;
+    try {
+      category.remove();
+    } catch (err) {
+      unremoved.push(`${JSON.stringify(label)} (${err instanceof Error ? err.message : String(err)})`);
+    }
+  }
+  createdCategories = [];
+  if (!unremoved.length) return cause;
+  const leftovers = `flcm.annotations: the annotation category this call created could not be removed and is still in the file: ${unremoved.join(", ")}.`;
+  if (cause instanceof Error) {
+    cause.message += " " + leftovers;
+    return cause;
+  }
+  console.log(leftovers);
+  return cause;
 }
 
 export function applyAnnotations(node: SceneNode, annotations: readonly WriteAnnotation[] | undefined): void {

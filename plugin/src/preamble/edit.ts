@@ -94,9 +94,5 @@ export function edit(target: Target, changes: EditDelta): Promise<Handle> {
       }
       return mintHandle(plan.node);
     },
-    ({ plan, instance }) => {
-      assertEditPlanStillApplies(plan, SUBJECT, undefined, instance?.becomesRowColumn);
-      if (instance) assertOverridePlansStillApply(instance, SUBJECT);
-    },
   );
 }

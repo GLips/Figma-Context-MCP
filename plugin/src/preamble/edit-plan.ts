@@ -34,7 +34,8 @@
 //
 //   1. rejectNonDeltaWords    pure — no document read at all, so it can run for every entry first
 //   2. compileEditPlan        the compile, which reads the LIVE node (font identity, wrap mode)
-//   3. loadEditResources      the verb's ONLY awaits: one font load, one image request
+//   3. loadEditResources      the verb's ONLY awaits: one font load, one image request, and the
+//                             annotation categories the batch names (resolved, created if absent)
 //   4. assertEditPlanStillApplies  the live gates, AFTER the last await — plus proof that the node
 //                             still exists and the facts stage 2 read still hold (readLiveTextFacts)
 //   5a. applyEditPlanWrites     the sealed, commit-free span: everything that CHANGES the node
@@ -66,7 +67,7 @@ import {
   WriteNode, WriteProps, EditableType, WriteLayout, WriteTextStyle, InstanceEditWords, ComponentEditWords,
   ComponentPropertyBindingEdit, EDIT_TYPE_WORD_GROUPS, namesFontIdentity,
 } from "./ir.js";
-import { applyAnnotations, requestAnnotationCategories, requestTreeAnnotationCategories } from "./annotation-categories.js";
+import { applyAnnotations, requestAnnotationCategories, requestTreeAnnotationCategories, resolveAnnotationCategories } from "./annotation-categories.js";
 import { beginMutatingApply } from "./verb-error.js";
 import {
   applyPaint, applySceneProps, applyLiveNodeLayout, settleLiveNodePercentSize,
@@ -449,6 +450,10 @@ export async function loadEditResources(plans: readonly EditPlan[], needs: reado
   // Slot content is BUILT, so its fonts are a tree's, not a delta's — folded into the same load.
   const fonts = await loadFontsForTextEdits([...plans, ...fontNeeds], trees);
   const images = await fetchImagesForTrees([...plans.map((plan) => plan.patch), ...trees]);
+  // Categories last of the three: resolving one can CREATE a file-scoped category, so a batch whose
+  // font or image load was going to fail anyway never creates one to be cleaned up again. It lands
+  // HERE, inside stage 3, so stage 4's live gates still run after the verb's every suspension.
+  await resolveAnnotationCategories();
   return { fonts, images, instances };
 }
 

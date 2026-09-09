@@ -89,6 +89,31 @@ test("a successful verb is one sealed step: entry seal, then success commit — 
   assert.equal(committedVerbCount(), before + 1);
 });
 
+test("every sealed step carries the stamp write, and a stamp that fails to write never triggers a rollback", async () => {
+  const stamp = (): string => figma.root.getPluginData("flcm/undo-step");
+  const first = stamp();
+  await enterMutatingVerb("edit", noPrep, () => 1);
+  const second = stamp();
+  assert.notEqual(second, first);
+  await enterMutatingVerb("edit", noPrep, () => 2);
+  assert.notEqual(stamp(), second);
+  // A stamp failure means the step is EMPTY of this verb's writes — a triggerUndo would pop the
+  // previous verb's step, the one thing the stamp exists to prevent.
+  const setPluginData = figma.root.setPluginData;
+  figma.root.setPluginData = () => {
+    throw new Error("root refused");
+  };
+  figma.undoLog.length = 0;
+  await assert.rejects(
+    enterMutatingVerb("edit", noPrep, () => {
+      throw new Error("apply must never run");
+    }),
+    /root refused/,
+  );
+  assert.deepEqual(figma.undoLog, ["commit"]);
+  figma.root.setPluginData = setPluginData;
+});
+
 test("a preparation reject leaves ZERO undo residue — no seal, no rollback, chain unpoisoned", async () => {
   const before = committedVerbCount();
   await assert.rejects(

@@ -354,8 +354,8 @@ function rejectStringQuery(query: unknown, verb: string): void {
 
 /**
  * flcm.find locates matching descendants as SlimHandles. Facets AND-combine; within scopes
- * the scan to a container. Annotation queries also locate hidden notes through live collections;
- * ordinary queries exclude hidden nodes. Handles carry annotations alongside the layout projection.
+ * the scan to a container. Hidden nodes are excluded, annotation queries included — find covers the
+ * rendered document the way `get` does. Handles carry annotations alongside the layout projection.
  *
  * An optional `predicate` filters by anything in the full read shape ("every frame with a white fill"): the
  * query pre-filters live nodes, then a whole-scope simplify supplies their expanded canonical shapes.
@@ -367,7 +367,7 @@ export async function find(query: FindQuery = {}, predicate?: ReadPredicate): Pr
   rejectUnknownKeys(query, FIND_KEY_SET, "flcm.find", "query key");
   if (query.hasAnnotations !== undefined && typeof query.hasAnnotations !== "boolean") throw new Error("flcm.find: hasAnnotations must be a boolean.");
   const root = await scanRoot(query.within);
-  const hits = root.findAll((node) => matchesQuery(node, query) && (query.hasAnnotations === true || isRendered(node)));
+  const hits = root.findAll((node) => matchesQuery(node, query) && isRendered(node));
   if (!predicate) return projectHits(hits, root);
   return filterByPredicate(hits, root, predicate);
 }

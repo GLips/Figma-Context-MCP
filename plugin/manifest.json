@@ -4,7 +4,8 @@
   "api": "1.0.0",
   "main": "dist/code.js",
   "ui": "ui.html",
-  "editorType": ["figma"],
+  "editorType": ["figma", "dev"],
+  "capabilities": ["inspect"],
   "documentAccess": "dynamic-page",
   "networkAccess": {
     "allowedDomains": ["none"],
