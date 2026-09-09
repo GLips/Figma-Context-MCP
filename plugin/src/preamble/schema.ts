@@ -89,6 +89,14 @@ const degrees = (note: string) => prop(z.number(), note, "number (deg)");
 // ---- Field groups. Each verb schema is composed from these by spread, so a field is authored once and
 // reused across every verb it appears on. The reference tables render these same groups. ----
 
+const ANNOTATION_FIELDS = {
+  annotations: prop(z.array(z.object({
+    text: z.string().optional(),
+    category: z.string().trim().min(1).optional(),
+    properties: z.array(z.string()).optional(),
+  })), "Native annotations. Omitted leaves annotations untouched; a supplied array replaces the whole collection; [] clears every one.", "{ text?: string; category?: string; properties?: string[] }[]"),
+};
+
 const SHARED_FIELDS = {
   name: prop(z.string(), "Layer name."),
   key: prop(z.string(), "An address for this node — only keyed nodes come back in render()'s `keyed` map. Author-unique per render."),
@@ -98,7 +106,7 @@ const SHARED_FIELDS = {
     "A CSS mix-blend-mode name. An unknown one fails loud.",
     '"normal" | "multiply" | "screen" | "overlay" | "soft-light" | … (CSS mix-blend-mode)',
   ),
-  visible: prop(z.boolean(), "Layer visibility. A hidden node is invisible to find/get too, so re-target it by id."),
+  visible: prop(z.boolean(), "Layer visibility. Hidden nodes are omitted by get and ordinary find; find({ hasAnnotations: true }) can locate their annotations."),
   locked: prop(z.boolean(), "Locks the layer against pointer edits in Figma's UI. flcm.edit still writes to it."),
 };
 
@@ -435,19 +443,19 @@ export type BaseProps = z.infer<typeof BaseSchema>;
 export type SizeProps = z.infer<typeof SizeSchema>;
 export type AppearanceProps = z.infer<typeof AppearanceSchema>;
 
-export const FrameSchema = z.object({ ...SHARED_FIELDS, ...SIZE_FIELDS, ...APPEARANCE_FIELDS, ...FRAME_FIELDS, ...BINDING_FIELDS });
-export const TextSchema = z.object({ ...SHARED_FIELDS, ...SIZE_FIELDS, ...TEXT_FIELDS, ...BINDING_FIELDS });
-export const ShapeSchema = z.object({ ...SHARED_FIELDS, ...SIZE_FIELDS, ...APPEARANCE_FIELDS, ...BINDING_FIELDS });
-export const EllipseSchema = z.object({ ...SHARED_FIELDS, ...SIZE_FIELDS, ...ELLIPSE_FIELDS, ...BINDING_FIELDS });
-export const LineSchema = z.object({ ...SHARED_FIELDS, ...LINE_FIELDS, ...BINDING_FIELDS });
-export const PathSchema = z.object({ ...SHARED_FIELDS, ...SIZE_FIELDS, ...PATH_FIELDS, ...BINDING_FIELDS });
+export const FrameSchema = z.object({ ...SHARED_FIELDS, ...SIZE_FIELDS, ...APPEARANCE_FIELDS, ...FRAME_FIELDS, ...BINDING_FIELDS, ...ANNOTATION_FIELDS });
+export const TextSchema = z.object({ ...SHARED_FIELDS, ...SIZE_FIELDS, ...TEXT_FIELDS, ...BINDING_FIELDS, ...ANNOTATION_FIELDS });
+export const ShapeSchema = z.object({ ...SHARED_FIELDS, ...SIZE_FIELDS, ...APPEARANCE_FIELDS, ...BINDING_FIELDS, ...ANNOTATION_FIELDS });
+export const EllipseSchema = z.object({ ...SHARED_FIELDS, ...SIZE_FIELDS, ...ELLIPSE_FIELDS, ...BINDING_FIELDS, ...ANNOTATION_FIELDS });
+export const LineSchema = z.object({ ...SHARED_FIELDS, ...LINE_FIELDS, ...BINDING_FIELDS, ...ANNOTATION_FIELDS });
+export const PathSchema = z.object({ ...SHARED_FIELDS, ...SIZE_FIELDS, ...PATH_FIELDS, ...BINDING_FIELDS, ...ANNOTATION_FIELDS });
 // svg pastes opaque markup: size/position only, no appearance (colors are baked into the markup). `markup`
 // is the positional first arg, so it isn't a prop field here.
-export const SvgSchema = z.object({ ...SHARED_FIELDS, ...SIZE_FIELDS, ...BINDING_FIELDS });
+export const SvgSchema = z.object({ ...SHARED_FIELDS, ...SIZE_FIELDS, ...BINDING_FIELDS, ...ANNOTATION_FIELDS });
 // An instance takes a FRAME's words — its root is a frame-like container, and naming one of them
 // sets a root-level override (an unnamed word keeps tracking the component) — plus the component
 // words. No `children`: an instance's content is its component's.
-export const InstanceSchema = z.object({ ...SHARED_FIELDS, ...SIZE_FIELDS, ...APPEARANCE_FIELDS, ...FRAME_FIELDS, ...INSTANCE_FIELDS, ...BINDING_FIELDS });
+export const InstanceSchema = z.object({ ...SHARED_FIELDS, ...SIZE_FIELDS, ...APPEARANCE_FIELDS, ...FRAME_FIELDS, ...INSTANCE_FIELDS, ...BINDING_FIELDS, ...ANNOTATION_FIELDS });
 
 export type FrameProps = z.infer<typeof FrameSchema>;
 export type InstanceProps = z.infer<typeof InstanceSchema>;
@@ -479,6 +487,7 @@ const COMPONENT_DEFINITION_FIELDS = {
 // One absence is the contract, not an oversight: `key` is immutable under edit (a delta naming it
 // fails loud — re-keying could mint a duplicate address).
 const EDIT_FIELDS = {
+  ...ANNOTATION_FIELDS,
   name: SHARED_FIELDS.name,
   opacity: SHARED_FIELDS.opacity,
   mixBlendMode: SHARED_FIELDS.mixBlendMode,
@@ -738,7 +747,7 @@ export interface Flcm {
   // address — only `within` takes a target (id/key/handle); the other facets are match conditions, and a
   // bare string is rejected rather than guessed at. Dive into a hit with `get`. An
   // optional predicate filters by anything in the full read shape (values inline: `n.fill === '#FFF'`);
-  // the query pre-filters cheaply, only survivors are materialized (a predicate-only find has a hard cap).
+  // The query pre-filters live nodes; a whole-scope simplify supplies predicate shapes and geometry.
   find(query?: FindQuery, predicate?: ReadPredicate): Promise<SlimHandle[]>;
   // Locate exactly one — throws on 0 or >1, naming the count (a blind agent must never silently act on the
   // first of several fuzzy-name matches). Same query+predicate as find.
@@ -806,7 +815,7 @@ export const VERBS: VerbDoc[] = [
   { category: "structure", signature: "await flcm.clone(target, parent?)", builds: "a faithful live duplicate (key-less)", args: "a target, and optionally where the copy lands (default: beside the original). The copy path for subtrees a spec rebuild can't reproduce — anything holding an INSTANCE", quickStart: "await flcm.clone(target, parent?)" },
   { category: "build", signature: "flcm.fromRead(spec)", builds: "a `get` result re-authored as a buildable spec", args: "a spec from flcm.get, subtree and all — the constructor is picked by each node's `type` and `children` recurse. Returns a constructor-built node — render it, or place it with append/prepend/insertBefore/insertAfter. (A single node's spec can also spread straight into its constructor: flcm.rect({ ...spec, width: 320 }).) Anything the read shape carries that flcm has no word for (an INSTANCE, a paint stack, a grid) fails loud by name; flcm.clone is the faithful copy for those", quickStart: "flcm.fromRead(spec)" },
   { category: "read", signature: "await flcm.get(target)", builds: "{ node, components } — the read spec, plus each component named once", args: "target: an flcm/key, a node id, flcm.id(id), or a handle" },
-  { category: "read", signature: "await flcm.find(query?, predicate?)", builds: "matching nodes as slim handles", args: "query { type?, name?, key?, within? } AND-combined — a filter, not an address; only `within` takes a target. Optional predicate over the full read shape (n => n.fill === '#FFF')" },
+  { category: "read", signature: "await flcm.find(query?, predicate?)", builds: "matching nodes as slim handles", args: "query { type?, name?, key?, hasAnnotations?, within? } AND-combined — a filter, not an address; only `within` takes a target. Optional predicate over the full read shape (n => n.fill === '#FFF')" },
   { category: "read", signature: "await flcm.findOne(query?, predicate?)", builds: "exactly one slim handle (throws on 0 or >1)", args: "same query + predicate as find" },
   { category: "read", signature: "await flcm.selection()", builds: "the current selection as slim handles", args: "no args" },
   { category: "page", signature: "await flcm.page.current()", builds: "where you are — { fileName, page, pages }", args: "no args. The orientation call: the file's name, the page every other verb acts on, and the file's other pages", quickStart: "await flcm.page.current() / .use(nameOrId) / .new(name)" },
@@ -823,6 +832,7 @@ export { EDIT_TYPE_WORD_GROUPS } from "./ir.js";
 // ---- Field-group registry — how the reference groups props into tables. Each verb's full schema drives
 // its TYPE; these groups drive its DOC layout (shared/size tables once, verb-specific tables per verb). ----
 export const FIELD_GROUPS = {
+  annotation: ANNOTATION_FIELDS,
   shared: SHARED_FIELDS,
   size: SIZE_FIELDS,
   placement: PLACEMENT_FIELDS,

@@ -18,6 +18,7 @@
 // Only the names exported from runtime.ts land on the `flcm` global; everything imported here stays
 // closure-private in the IIFE bundle — which is why nothing in this preamble needs a name prefix.
 
+import { compileAnnotations } from "./annotations.js";
 import {
   WriteNode, WriteProps, WriteChild, WriteLayout, WriteTextStyle, WriteTextRun, PaintSpec,
   GradientStop, EffectSpec, Sizing, Edges, WriteCssEffects, PinX, PinY, AnchorX, AnchorY,
@@ -59,8 +60,9 @@ import type {
 // dropped from) the schema can't drift out of sync here. The reject itself is the shared closed-set gate in
 // validate.ts, the same one read.ts's locate query fails loud with.
 export const KNOWN_KEYS = {
+  annotation: ["annotations"],
   shared: ["name", "key", "opacity", "mixBlendMode", "visible", "locked"],
-  edit: ["name", "opacity", "mixBlendMode", "visible", "locked", "fill", "stroke", "strokeWidth", "strokeAlign", "borderRadius", "effects", "rotation", "clip", "width", "height", "left", "top", "position", "anchor", "pin", "layout", "text", "textStyle", "boldWeight", "componentProperties", "overrides", "componentId", "componentPropertyReferences", "description", "propertyDefinitions"],
+  edit: ["annotations", "name", "opacity", "mixBlendMode", "visible", "locked", "fill", "stroke", "strokeWidth", "strokeAlign", "borderRadius", "effects", "rotation", "clip", "width", "height", "left", "top", "position", "anchor", "pin", "layout", "text", "textStyle", "boldWeight", "componentProperties", "overrides", "componentId", "componentPropertyReferences", "description", "propertyDefinitions"],
   size: ["width", "height", "left", "top", "position", "anchor", "pin"],
   placement: ["left", "top", "position", "anchor", "pin"],
   appearance: ["fill", "stroke", "strokeWidth", "strokeAlign", "borderRadius", "effects", "rotation"],
@@ -95,12 +97,12 @@ function keySet(...groups: readonly (readonly string[])[]): ReadonlySet<string> 
 // `binding` composes into EVERY node's set: any layer can be bound to a component property, and
 // which FIELDS a given type may bind is the per-constructor list below (compileBindingBag), not the
 // key set — the word itself is universal.
-const FRAME_KEYS = keySet(KNOWN_KEYS.shared, KNOWN_KEYS.size, KNOWN_KEYS.appearance, KNOWN_KEYS.frame, KNOWN_KEYS.binding);
-const TEXT_KEYS = keySet(KNOWN_KEYS.shared, KNOWN_KEYS.size, KNOWN_KEYS.text, KNOWN_KEYS.binding);
-const SHAPE_KEYS = keySet(KNOWN_KEYS.shared, KNOWN_KEYS.size, KNOWN_KEYS.appearance, KNOWN_KEYS.binding);
-const ELLIPSE_KEYS = keySet(KNOWN_KEYS.shared, KNOWN_KEYS.size, KNOWN_KEYS.ellipse, KNOWN_KEYS.binding);
-const LINE_KEYS = keySet(KNOWN_KEYS.shared, KNOWN_KEYS.line, KNOWN_KEYS.binding);
-const INSTANCE_KEYS = keySet(KNOWN_KEYS.shared, KNOWN_KEYS.size, KNOWN_KEYS.appearance, KNOWN_KEYS.frame, KNOWN_KEYS.instance, KNOWN_KEYS.binding);
+const FRAME_KEYS = keySet(KNOWN_KEYS.annotation, KNOWN_KEYS.shared, KNOWN_KEYS.size, KNOWN_KEYS.appearance, KNOWN_KEYS.frame, KNOWN_KEYS.binding);
+const TEXT_KEYS = keySet(KNOWN_KEYS.annotation, KNOWN_KEYS.shared, KNOWN_KEYS.size, KNOWN_KEYS.text, KNOWN_KEYS.binding);
+const SHAPE_KEYS = keySet(KNOWN_KEYS.annotation, KNOWN_KEYS.shared, KNOWN_KEYS.size, KNOWN_KEYS.appearance, KNOWN_KEYS.binding);
+const ELLIPSE_KEYS = keySet(KNOWN_KEYS.annotation, KNOWN_KEYS.shared, KNOWN_KEYS.size, KNOWN_KEYS.ellipse, KNOWN_KEYS.binding);
+const LINE_KEYS = keySet(KNOWN_KEYS.annotation, KNOWN_KEYS.shared, KNOWN_KEYS.line, KNOWN_KEYS.binding);
+const INSTANCE_KEYS = keySet(KNOWN_KEYS.annotation, KNOWN_KEYS.shared, KNOWN_KEYS.size, KNOWN_KEYS.appearance, KNOWN_KEYS.frame, KNOWN_KEYS.instance, KNOWN_KEYS.binding);
 // The words an override delta may name — the edit vocabulary, since an override IS an edit of one
 // sublayer, judged at construction the way edit's stage 1 judges a delta. MINUS the three component
 // words: a path names a sublayer, and re-pointing a NESTED instance from here would need a second
@@ -130,8 +132,8 @@ const OVERRIDE_DELTA_KEYS = keySet(KNOWN_KEYS.edit.filter((k) => !DOCUMENT_RESOL
 export const CONSTRUCTOR_KEYS_BY_TYPE: Record<"FRAME" | "TEXT" | "RECTANGLE" | "ELLIPSE" | "LINE" | "INSTANCE", ReadonlySet<string>> = {
   FRAME: FRAME_KEYS, TEXT: TEXT_KEYS, RECTANGLE: SHAPE_KEYS, ELLIPSE: ELLIPSE_KEYS, LINE: LINE_KEYS, INSTANCE: INSTANCE_KEYS,
 };
-const PATH_KEYS = keySet(KNOWN_KEYS.shared, KNOWN_KEYS.size, KNOWN_KEYS.path, KNOWN_KEYS.binding);
-const SVG_KEYS = keySet(KNOWN_KEYS.shared, KNOWN_KEYS.size, KNOWN_KEYS.binding);
+const PATH_KEYS = keySet(KNOWN_KEYS.annotation, KNOWN_KEYS.shared, KNOWN_KEYS.size, KNOWN_KEYS.path, KNOWN_KEYS.binding);
+const SVG_KEYS = keySet(KNOWN_KEYS.annotation, KNOWN_KEYS.shared, KNOWN_KEYS.size, KNOWN_KEYS.binding);
 const LAYOUT_KEYS = keySet(KNOWN_KEYS.layout);
 const IMAGE_KEYS = keySet(KNOWN_KEYS.image);
 const GRADIENT_KEYS = keySet(KNOWN_KEYS.gradient);
@@ -439,7 +441,8 @@ function assertScalarType(value: unknown, want: "string" | "number" | "boolean",
 }
 
 // The shared-by-every-node props. Additive: only present props land on the WriteNode.
-function base(wn: WriteProps, props: BaseProps): void {
+function base(wn: WriteProps, props: BaseProps & { annotations?: unknown }): void {
+  if (props.annotations !== undefined) wn.annotations = compileAnnotations(props.annotations);
   if (props.name != null) { assertScalarType(props.name, "string", "name"); wn.name = props.name; }
   if (props.key != null) { assertScalarType(props.key, "string", "key"); wn.key = props.key; }
   if (props.opacity != null) { assertScalarType(props.opacity, "number", "opacity"); wn.opacity = props.opacity; }

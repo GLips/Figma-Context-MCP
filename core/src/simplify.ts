@@ -452,6 +452,8 @@ function extractComponent(
     context.components.instanceEdits.set(node.id, edits);
   }
 
+  if (node.annotations?.length) result.annotations = node.annotations;
+
   // Any node with property references: annotate with simplified refs
   if (node.componentPropertyReferences) {
     const refs = simplifyPropertyReferences(node.componentPropertyReferences);

@@ -6,6 +6,8 @@
 // both throw, naming the target and (for a key clash) the count — a blind agent must never silently act on
 // the wrong node.
 
+import { readAnnotationCategoryNames } from "./annotation-categories.js";
+import { decodeAnnotations } from "./annotations.js";
 import { Target, RawIdRef, FindQuery, SlimHandle, ReadPredicate, GetResult } from "./ir.js";
 import { readKey, identityOf } from "./identity.js";
 import {
@@ -108,15 +110,18 @@ const resolveStyle: SceneStyleResolver = (styleId) => figma.getStyleByIdAsync(st
 async function simplifyScene(
   node: BaseNode,
   options: { components?: boolean } = {},
+  categories?: ReadonlyMap<string, string>,
 ): Promise<{ nodes: SimplifiedNode[]; components: Record<string, SimplifiedComponentEntry> }> {
+  const annotationCategories = categories ?? await readAnnotationCategoryNames();
   const mainComponents: MainComponentSink = new Map();
   const snapshot = await sceneNodeToSnapshot(
     node as unknown as SceneNodeLike,
     resolveStyle,
     mainComponents,
+    annotationCategories,
   );
   const componentDefinitions =
-    options.components === false ? [] : await offTreeDefinitions(snapshot, mainComponents);
+    options.components === false ? [] : await offTreeDefinitions(snapshot, mainComponents, annotationCategories);
   const { nodes, components } = await simplify([snapshot], { ...options, componentDefinitions });
   return { nodes, components };
 }
@@ -142,6 +147,7 @@ async function simplifyScene(
 async function offTreeDefinitions(
   snapshot: NodeSnapshot,
   mainComponents: MainComponentSink,
+  annotationCategories: ReadonlyMap<string, string>,
 ): Promise<NodeSnapshot[]> {
   if (mainComponents.size === 0) return [];
 
@@ -156,7 +162,7 @@ async function offTreeDefinitions(
   for (const [id, main] of mainComponents) {
     if (defined.has(id)) continue;
     try {
-      definitions.push(await sceneNodeToSnapshot(main as unknown as SceneNodeLike, resolveStyle));
+      definitions.push(await sceneNodeToSnapshot(main as unknown as SceneNodeLike, resolveStyle, undefined, annotationCategories));
     } catch {
       // The component was deleted mid-read, or the library refused to load it. Donor floor.
     }
@@ -209,7 +215,7 @@ async function scanRoot(within: Target | undefined): Promise<ScanRoot> {
 // (declarative query pre-filters cheaply; only survivors materialize) is where that gets cut — `within`
 // scopes the scan today.
 
-const FIND_KEYS = ["type", "name", "key", "within"] as const;
+const FIND_KEYS = ["type", "name", "key", "within", "hasAnnotations"] as const;
 // Tie the runtime allow-list to FindQuery: a new facet on the type that isn't listed here fails typecheck,
 // so the fail-loud check can't silently start rejecting a legitimate new query key.
 type _FindKeysCoverFindQuery = keyof FindQuery extends (typeof FIND_KEYS)[number] ? true : never;
@@ -224,6 +230,7 @@ const FIND_KEY_SET: ReadonlySet<string> = new Set(FIND_KEYS);
 // AND-combine the query facets. Empty-string facets are treated as "unset" (an empty substring would match
 // everything). `type`/`key` exact; `name` case-insensitive substring.
 function matchesQuery(node: SceneNode, query: FindQuery): boolean {
+  if (query.hasAnnotations !== undefined && Boolean("annotations" in node && node.annotations.length) !== query.hasAnnotations) return false;
   if (query.type && node.type !== query.type) return false;
   if (query.key && readKey(node) !== query.key) return false;
   if (query.name && !node.name.toLowerCase().includes(query.name.toLowerCase())) return false;
@@ -243,12 +250,12 @@ function isRendered(node: SceneNode): boolean {
 
 // Simplify the scan-root subtree through the SAME pipeline `get` uses, and index every produced node by id.
 // A node the core dropped (e.g. an SVG-heavy container it collapsed) is simply absent — projectSlim falls
-// back to identity-only for it.
-async function simplifiedIndex(root: ScanRoot): Promise<Map<string, SimplifiedNode>> {
+// back to identity and live annotations for it.
+async function simplifiedIndex(root: ScanRoot, categories: ReadonlyMap<string, string>): Promise<Map<string, SimplifiedNode>> {
   // `components: false` — a predicate must still see inside instances. `get` moves an instance's
   // children to the sidecar to save the agent tokens; this index is in-sandbox and pays none, and a
   // `find` that couldn't target an instance sublayer would be worse than the bytes it saved.
-  const { nodes } = await simplifyScene(root, { components: false });
+  const { nodes } = await simplifyScene(root, { components: false }, categories);
   const index = new Map<string, SimplifiedNode>();
   const walk = (node: SimplifiedNode): void => {
     index.set(node.id, node);
@@ -267,8 +274,10 @@ async function simplifiedIndex(root: ScanRoot): Promise<Map<string, SimplifiedNo
 // LAYOUT WORLD-MODEL (width/height/layout.mode/position/left/top) is the core's own output — that is where
 // Invariant 1's "one vocabulary" bites, and it reads exactly like the matching fields of `get`. Only the
 // container mode survives from `layout`; a leaf (mode "none") drops it.
-function projectSlim(node: SceneNode, spec: SimplifiedNode | undefined): SlimHandle {
+function projectSlim(node: SceneNode, spec: SimplifiedNode | undefined, categories: ReadonlyMap<string, string>): SlimHandle {
   const slim: SlimHandle = identityOf(node);
+  const annotations = decodeAnnotations("annotations" in node ? node.annotations : undefined, categories);
+  if (annotations) slim.annotations = annotations;
   if (spec) {
     if (spec.width !== undefined) slim.width = spec.width;
     if (spec.height !== undefined) slim.height = spec.height;
@@ -287,8 +296,9 @@ function projectSlim(node: SceneNode, spec: SimplifiedNode | undefined): SlimHan
 // common ancestor, so each reads in-context). Empty stays empty without paying to materialize the scope.
 async function projectHits(hits: SceneNode[], indexRoot: ScanRoot): Promise<SlimHandle[]> {
   if (!hits.length) return [];
-  const index = await simplifiedIndex(indexRoot);
-  return hits.map((node) => projectSlim(node, index.get(node.id)));
+  const categories = await readAnnotationCategoryNames();
+  const index = await simplifiedIndex(indexRoot, categories);
+  return hits.map((node) => projectSlim(node, index.get(node.id), categories));
 }
 
 // The predicate materialization cap (ratified decision 2). A predicate-only find makes every rendered node a
@@ -314,11 +324,12 @@ async function filterByPredicate(hits: SceneNode[], root: ScanRoot, predicate: R
     );
   }
   if (!hits.length) return [];
-  const index = await simplifiedIndex(root);
+  const categories = await readAnnotationCategoryNames();
+  const index = await simplifiedIndex(root, categories);
   const survivors: SlimHandle[] = [];
   for (const hit of hits) {
     const spec = index.get(hit.id);
-    if (spec && predicate(spec)) survivors.push(projectSlim(hit, spec));
+    if (spec && predicate(spec)) survivors.push(projectSlim(hit, spec, categories));
   }
   return survivors;
 }
@@ -342,21 +353,21 @@ function rejectStringQuery(query: unknown, verb: string): void {
 }
 
 /**
- * flcm.find — locate every RENDERED node matching the query, as SlimHandles (may be empty). The declarative
- * facets (type/name/key/within) AND-combine; `within` scopes the scan (default: current page). Hidden nodes
- * are excluded (the read shape covers the rendered document, like `get`). Returns the cheap layout
- * world-model, not full styling — dive into a hit with `get`.
+ * flcm.find locates matching descendants as SlimHandles. Facets AND-combine; within scopes
+ * the scan to a container. Annotation queries also locate hidden notes through live collections;
+ * ordinary queries exclude hidden nodes. Handles carry annotations alongside the layout projection.
  *
  * An optional `predicate` filters by anything in the full read shape ("every frame with a white fill"): the
- * query pre-filters cheaply, then only the survivors are materialized as the EXPANDED canonical shape (inline
- * values, so `n.fill` is a value) and tested. A predicate-only find (no facets) materializes every
+ * query pre-filters live nodes, then a whole-scope simplify supplies their expanded canonical shapes.
+ * Candidates absent from that read shape cannot satisfy a predicate. A predicate-only find materializes every
  * rendered candidate, up to a hard cap past which it fails loud (see MATERIALIZE_CAP).
  */
 export async function find(query: FindQuery = {}, predicate?: ReadPredicate): Promise<SlimHandle[]> {
   rejectStringQuery(query, "flcm.find");
   rejectUnknownKeys(query, FIND_KEY_SET, "flcm.find", "query key");
+  if (query.hasAnnotations !== undefined && typeof query.hasAnnotations !== "boolean") throw new Error("flcm.find: hasAnnotations must be a boolean.");
   const root = await scanRoot(query.within);
-  const hits = root.findAll((node) => matchesQuery(node, query) && isRendered(node));
+  const hits = root.findAll((node) => matchesQuery(node, query) && (query.hasAnnotations === true || isRendered(node)));
   if (!predicate) return projectHits(hits, root);
   return filterByPredicate(hits, root, predicate);
 }

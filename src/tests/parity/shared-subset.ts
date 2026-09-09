@@ -129,12 +129,11 @@ const IMAGE_REF_SENTINEL = "<image-ref>";
  * Node fields the plugin will additively emit beyond the REST-shared CSS subset
  * (read-plan Phase 5: beyond-CSS effects, bound variables, dev-mode data).
  * Stripped from every node before comparison so plugin enrichments never fail
- * parity (plan Warning). Empty today — the REST producer emits nothing here; the
- * read plan adds an entry as each enrichment lands, and if an enrichment nests
- * inside a style value rather than a top-level node field, extend the scope in
- * `scopeStyleValue` alongside.
+ * parity. Native annotations are plugin-only because REST exposes no annotation
+ * content. If an enrichment nests inside a style value rather than a top-level
+ * node field, extend the scope in `scopeStyleValue` alongside.
  */
-const PLUGIN_ONLY_FIELDS = new Set<string>([]);
+const PLUGIN_ONLY_FIELDS = new Set<string>(["annotations"]);
 
 type Rec = Record<string, unknown>;
 

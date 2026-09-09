@@ -26,6 +26,7 @@ import {
   EFFECTS_INTRO,
   RENDER_KEYS,
   VERIFY_READBACK,
+  ANNOTATIONS_REFERENCE,
   CSS_SUBSET,
   FAILS_LOUD,
   EDIT_INTRO,
@@ -172,6 +173,7 @@ const SECTIONS: Section[] = [
       "word for (`strokeDashes`, a locked aspect ratio, a grid). A component property binding " +
       "(`componentPropertyReferences`) rebuilds, but means something only inside a component — see the components section.\n\n" +
       `### Shared by every node\n\n${propTable(FIELD_GROUPS.shared)}\n\n` +
+      `### Annotations\n\n${propTable(FIELD_GROUPS.annotation)}\n\n${ANNOTATIONS_REFERENCE}\n\n` +
       "### Size & position (frame, text, rect, ellipse, instance)\n\n" +
       '(A `line` sizes on a numeric `width` alone — its length; there is no `height`, `"fill"`, or `"hug"`.)\n\n' +
       `${propTable(FIELD_GROUPS.size)}\n\n` +

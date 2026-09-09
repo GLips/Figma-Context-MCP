@@ -17,8 +17,8 @@
 // being refused (structure.ts) with a pointer here.
 //
 // FIDELITY IS THE CONTRACT. Real state the read shape carries that the rebuild has no word for fails
-// LOUD by name. The only silent drops are fields whose information is already elsewhere in the same
-// bag, each named in the table below with why.
+// LOUD by name. Annotations deliberately drop: a rebuilt node must not inherit a statement
+// about the original node. Other silent drops have their information elsewhere in the same bag.
 //
 // VALUE-level legality is NOT this verb's call. Read's layout unions carry spellings the canvas can't
 // realize ("baseline", "stretch" on justifyContent, `mode: "grid"`) and the constructors are the stated
@@ -65,6 +65,7 @@ type AuthorableReadKey = Keys<FrameProps | TextProps | ShapeProps | EllipseProps
 type ReadFieldDisposition = "prelude" | "drop" | { refuse: string };
 
 export const READ_FIELD_DISPOSITIONS = {
+  annotations: "drop",
   id: "prelude",
   type: "prelude",
   children: "prelude",
@@ -78,7 +79,7 @@ export const READ_FIELD_DISPOSITIONS = {
   // An instance's component, folded by flcm.instance's props form (the constructor takes the spec
   // whole, `componentId` and all) — only an INSTANCE carries it, so no other constructor meets it.
   componentId: "prelude",
-} satisfies Record<Exclude<keyof SimplifiedNode, AuthorableReadKey>, ReadFieldDisposition>;
+} satisfies Record<Exclude<keyof SimplifiedNode, AuthorableReadKey> | "annotations", ReadFieldDisposition>;
 
 // Every SimplifiedLayout word, with the same dispositions — an exact Record for the same reason. The
 // authorable five ARE flcm's `layout` prop; the rest are container config with no flcm word.
@@ -136,7 +137,12 @@ function withSlotContentRebuilt(spec: Record<string, unknown>, subject: string):
   const src = overrides as Record<string, unknown>;
   const rebuilt: Record<string, unknown> = {};
   for (const path of Object.keys(src)) {
-    const delta = src[path];
+    let delta = src[path];
+    if (delta && typeof delta === "object" && !Array.isArray(delta) && "annotations" in delta) {
+      const { annotations: _annotations, ...survivors } = delta as Record<string, unknown>;
+      delta = survivors;
+      if (!Object.keys(survivors).length) continue;
+    }
     const content = delta && typeof delta === "object" ? (delta as Record<string, unknown>).children : undefined;
     if (!Array.isArray(content)) {
       rebuilt[path] = delta;

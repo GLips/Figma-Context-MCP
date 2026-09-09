@@ -66,6 +66,7 @@ import {
   WriteNode, WriteProps, EditableType, WriteLayout, WriteTextStyle, InstanceEditWords, ComponentEditWords,
   ComponentPropertyBindingEdit, EDIT_TYPE_WORD_GROUPS, namesFontIdentity,
 } from "./ir.js";
+import { applyAnnotations, requestAnnotationCategories, requestTreeAnnotationCategories } from "./annotation-categories.js";
 import { beginMutatingApply } from "./verb-error.js";
 import {
   applyPaint, applySceneProps, applyLiveNodeLayout, settleLiveNodePercentSize,
@@ -183,6 +184,7 @@ function compileDeltaPatch(changes: EditDelta, legal: ReadonlySet<string>, node:
   const patch: WriteProps = {};
   compileNodeLocalProps(patch, changes, { radius: legal.has("borderRadius"), clip: legal.has("clip") });
   if (patch.effects) toFigmaEffects(patch.effects);
+  requestAnnotationCategories(patch.annotations);
   // Layout words compile through the same helpers every constructor rides — never buildLayout,
   // whose creation default (omitted mode → "none") would turn a gap nudge into an auto-layout kill.
   // A LINE's `width` is flcm.line's own fixed-only compile, not the sizing-intent one.
@@ -443,6 +445,7 @@ export async function loadEditResources(plans: readonly EditPlan[], needs: reado
     fontNeeds.push(...need.fontNeeds);
     need.plans.forEach((plan, wn) => instances.set(wn, plan));
   }
+  for (const tree of trees) requestTreeAnnotationCategories(tree);
   // Slot content is BUILT, so its fonts are a tree's, not a delta's — folded into the same load.
   const fonts = await loadFontsForTextEdits([...plans, ...fontNeeds], trees);
   const images = await fetchImagesForTrees([...plans.map((plan) => plan.patch), ...trees]);
@@ -508,6 +511,7 @@ export function applyEditPlanWrites(fail: EditPlanFailure, { node, patch }: Edit
   try {
     applyPaint(node, patch, resources);
     applySceneProps(node, patch);
+    applyAnnotations(node, patch.annotations);
     // Text BEFORE layout — create's own order (buildText: characters, then applyLeafSize): an
     // anchor or percent in the same delta must resolve against the POST-reflow metrics, or a
     // center anchor lands off by the text-size change and only converges on a second run.

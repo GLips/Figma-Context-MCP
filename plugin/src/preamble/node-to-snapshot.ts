@@ -15,6 +15,7 @@
 // Like the REST adapter, the snapshot is constructed field-by-field against the declared contract —
 // deliberately NOT a `{...node}` spread — so undeclared plugin fields cannot ride through at runtime.
 
+import { decodeAnnotations, type SceneAnnotation } from "./annotations.js";
 import { isCoordinateTransparentType, rotateIntoParentFrame } from "@framelink/core";
 import type {
   NodeSnapshot,
@@ -142,6 +143,7 @@ export interface SceneTextSegment {
 }
 
 export interface SceneNodeLike {
+  readonly annotations?: readonly SceneAnnotation[];
   readonly id: string;
   readonly name: string;
   readonly type: string;
@@ -317,8 +319,9 @@ export async function sceneNodeToSnapshot(
   node: SceneNodeLike,
   resolveStyle: SceneStyleResolver,
   mainComponents?: MainComponentSink,
+  annotationCategories: ReadonlyMap<string, string> = new Map(),
 ): Promise<NodeSnapshot> {
-  return sceneSubtreeToSnapshot(node, resolveStyle, CONTAINER_PARENT_SPACE, mainComponents);
+  return sceneSubtreeToSnapshot(node, resolveStyle, CONTAINER_PARENT_SPACE, mainComponents, annotationCategories);
 }
 
 /**
@@ -366,6 +369,7 @@ async function sceneSubtreeToSnapshot(
   resolveStyle: SceneStyleResolver,
   parentSpace: SceneParentSpace,
   mainComponents?: MainComponentSink,
+  annotationCategories: ReadonlyMap<string, string> = new Map(),
 ): Promise<NodeSnapshot> {
   const text = node.type === "TEXT" ? decodeSceneText(node) : undefined;
   const main = await mainComponentOf(node);
@@ -384,11 +388,12 @@ async function sceneSubtreeToSnapshot(
     : CONTAINER_PARENT_SPACE;
   const children = await Promise.all(
     (node.children ?? []).map((child) =>
-      sceneSubtreeToSnapshot(child, resolveStyle, childSpace, mainComponents),
+      sceneSubtreeToSnapshot(child, resolveStyle, childSpace, mainComponents, annotationCategories),
     ),
   );
 
   return {
+    annotations: decodeAnnotations(node.annotations, annotationCategories),
     id: node.id,
     name: node.name,
     type: node.type === "POLYGON" ? "REGULAR_POLYGON" : node.type,

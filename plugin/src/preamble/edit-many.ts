@@ -537,5 +537,13 @@ export function editMany(entries: EditEntry[], scope?: EditManyScope): Promise<H
       // the same batch changes, so geometry read mid-batch would be a number about to move.
       return plans.map((plan) => mintHandle(plan.node));
     },
+    ({ plans, instances }) => {
+      const deltas = layoutDeltasByNodeId(plans);
+      plans.forEach((plan, i) => {
+        const instance = instances[i];
+        assertEditPlanStillApplies(plan, SUBJECT, deltas, instance?.becomesRowColumn);
+        if (instance) assertOverridePlansStillApply(instance, SUBJECT);
+      });
+    },
   );
 }

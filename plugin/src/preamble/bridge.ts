@@ -16,6 +16,7 @@
 // appliers cover a small additive vocabulary, so fighting the union with casts at every line would add
 // noise without safety.
 
+import { applyAnnotations } from "./annotation-categories.js";
 import { WriteType, WriteNode, WriteProps, WriteLayout, Justify, Align, TextAlign, TextDecoration, Sizing, Identity, Handle, PaintSpec, ImageSpec, ComponentPropertyBinding, namesFontIdentity } from "./ir.js";
 import {
   assertLayoutRealizableForType, assertPercentResolvable, assertSizingResolvesAgainstParentFrame, assertNoParentRelativeWordsUnderGrid, ParentFlowFacts,
@@ -1234,6 +1235,7 @@ export function buildNode(wn: WriteNode, ctx: RenderCtx): any {
   // walks here is byte-for-byte the one prepare authenticated. No re-check per node.
   const node = build(wn, ctx);
   applySceneProps(node, wn);
+  applyAnnotations(node, wn.annotations);
   stampKey(node, wn, ctx);
   if (wn.componentPropertyReferences) {
     if (!ctx.bindings) {

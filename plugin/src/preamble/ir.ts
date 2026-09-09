@@ -21,6 +21,7 @@
 
 // Type-only reach into the core's canonical vocabulary, for the read shapes (SlimHandle) the locate verbs
 // return. Erased at build (esbuild drops `import type`), so the figma-free type hub gains no runtime edge.
+import type { WriteAnnotation } from "./annotations.js";
 import type {
   SimplifiedComponentEntry, SimplifiedDimension, SimplifiedLayout, SimplifiedNode,
 } from "@framelink/core";
@@ -36,7 +37,7 @@ export type WriteType = "FRAME" | "TEXT" | "RECTANGLE" | "ELLIPSE" | "LINE" | "V
 // is both, while the definition types (COMPONENT/COMPONENT_SET, and the SLOT an instance shows for a
 // bound frame) are edited but never constructed — flcm.component PROMOTES a frame; nothing builds one
 // from a spec.
-export type EditableType = WriteType | "COMPONENT" | "COMPONENT_SET" | "SLOT";
+export type EditableType = WriteType | "COMPONENT" | "COMPONENT_SET" | "SLOT" | "POLYGON" | "STAR";
 
 // Which schema word GROUPS compose each editable type's surface — the same compositions as the
 // per-verb create key sets (flcm.ts FRAME_KEYS = shared+size+appearance+frame, etc.), named once
@@ -62,16 +63,20 @@ export type EditableType = WriteType | "COMPONENT" | "COMPONENT_SET" | "SLOT";
 // borderRadius, width… all land exactly as on one), plus `componentDefinition` — the two words that
 // change what the component DECLARES. SLOT takes the frame surface without them [verified live:
 // layoutMode, gap and fills are settable on an instance's slot].
+// Annotation support follows https://developers.figma.com/docs/plugins/api/Annotation/.
+// GROUP and SECTION have no annotations; SLOT needs live verification before admission.
 export const EDIT_TYPE_WORD_GROUPS = {
-  FRAME: ["shared", "size", "appearance", "frame", "binding"],
-  TEXT: ["shared", "size", "text", "binding"],
-  RECTANGLE: ["shared", "size", "appearance", "binding"],
-  ELLIPSE: ["shared", "size", "ellipse", "binding"],
-  LINE: ["shared", "line", "binding"],
-  VECTOR: ["shared", "size", "path", "binding"],
-  INSTANCE: ["shared", "size", "appearance", "frame", "instance", "swap", "binding"],
-  COMPONENT: ["shared", "size", "appearance", "frame", "componentDefinition"],
-  COMPONENT_SET: ["shared", "size", "appearance", "frame", "componentDefinition"],
+  FRAME: ["annotation", "shared", "size", "appearance", "frame", "binding"],
+  TEXT: ["annotation", "shared", "size", "text", "binding"],
+  RECTANGLE: ["annotation", "shared", "size", "appearance", "binding"],
+  ELLIPSE: ["annotation", "shared", "size", "ellipse", "binding"],
+  LINE: ["annotation", "shared", "line", "binding"],
+  VECTOR: ["annotation", "shared", "size", "path", "binding"],
+  INSTANCE: ["annotation", "shared", "size", "appearance", "frame", "instance", "swap", "binding"],
+  COMPONENT: ["annotation", "shared", "size", "appearance", "frame", "componentDefinition"],
+  COMPONENT_SET: ["annotation", "shared", "size", "appearance", "frame", "componentDefinition"],
+  POLYGON: ["shared", "annotation"],
+  STAR: ["shared", "annotation"],
   SLOT: ["shared", "size", "appearance", "frame"],
 } as const satisfies Record<EditableType, readonly string[]>;
 
@@ -295,6 +300,7 @@ export interface WriteLayout {
 // (a delta nudges an existing node, so it never carries a createable type), and what the prop
 // appliers/walkers consume (they read fields, never dispatch on type).
 export interface WriteProps {
+  annotations?: WriteAnnotation[];
   name?: string;
   // Our pluginData('flcm/key') identity — the one field write ADDS over read. Optional in v1
   // (reconcile deferred): key the nodes you'll address, leave the rest anonymous.
@@ -502,6 +508,7 @@ export interface Handle extends Identity {
 // measured number in width/height, the rule beside it in `intent`. A render just measured what it built, so
 // it can hand over both; a locate has only the design's own intent to report (see Handle above).
 export interface SlimHandle extends Identity {
+  annotations?: SimplifiedNode["annotations"];
   width?: SimplifiedDimension;
   height?: SimplifiedDimension;
   layout?: { mode: SimplifiedLayout["mode"] };
@@ -555,7 +562,7 @@ export interface PageInfo { fileName: string; page: PageSummary; pages: PageSumm
 // A locate query: the declarative facets find/findOne match, AND-combined. `type` and `key` are exact;
 // `name` is a case-insensitive substring (layer names are fuzzy — findOne's cardinality guard catches an
 // over-broad match). `within` scopes the scan to a subtree (target-by-shape, default: current page).
-export interface FindQuery { type?: string; name?: string; key?: string; within?: Target }
+export interface FindQuery { type?: string; name?: string; key?: string; within?: Target; hasAnnotations?: boolean }
 
 // find's optional second arg: a caller closure over a candidate's FULL EXPANDED read shape — the same
 // SimplifiedNode `get` returns, with values inline (Invariant 3), so `n.fill` is a value (a hex like

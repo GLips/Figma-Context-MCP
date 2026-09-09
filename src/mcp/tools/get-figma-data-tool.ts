@@ -112,7 +112,7 @@ async function getFigmaData(
 export const getFigmaDataTool = {
   name: "get_figma_data",
   description:
-    "Get comprehensive Figma file data including layout, content, visuals, and component information",
+    "Get comprehensive Figma file data including layout, content, visuals, and component information. Figma annotations are not in this output (the REST API does not expose them); read them through the plugin.",
   parametersSchema,
   handler: getFigmaData,
 } as const;

@@ -1,4 +1,4 @@
-import type { NodeSnapshot } from "./snapshot.js";
+import type { NodeSnapshot, SnapshotAnnotation } from "./snapshot.js";
 import type { SimplifiedTextStyle, TextRun } from "./transformers/text.js";
 import type { NodeGeometry, SimplifiedLayout } from "./transformers/layout.js";
 import type { SimplifiedFill } from "./transformers/style.js";
@@ -179,6 +179,7 @@ export type TemplateBody = Omit<SimplifiedNode, "id" | "name" | "children" | "te
 // level per the canonical vocabulary's hybrid structure — inherited from
 // NodeGeometry so the extractor and the type can't drift.
 export interface SimplifiedNode extends NodeGeometry {
+  annotations?: SnapshotAnnotation[];
   id: string;
   // Always populated during simplification, but the serialization pass drops it
   // when it is noise (auto-generated like `Rectangle 12`, or redundant with the

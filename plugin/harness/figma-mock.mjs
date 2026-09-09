@@ -27,7 +27,7 @@ const COPY_FIELDS = ["name", "layoutMode", "itemSpacing", "paddingTop", "padding
   "x", "y", "_fixedW", "_fixedH",
   // A sublayer's binding to a component property (visible/characters/mainComponent → property
   // name) rides into every instance's sublayers — it is what setProperties resolves through.
-  "componentPropertyReferences"];
+  "componentPropertyReferences", "annotations"];
 
 // The node types that hold children (Figma's ChildrenMixin). See the constructor: only these get
 // appendChild/insertChild, because a leaf node genuinely has neither.
@@ -93,6 +93,7 @@ class Node {
     this.layoutPositioning = "AUTO";
     // Per-child pinning rules for how this node reflows when a FREE-FORM parent resizes. Figma's default is
     // MIN/MIN (pinned to the top-left); the bridge overwrites it for a free-form parent's child.
+    if (["COMPONENT", "COMPONENT_SET", "ELLIPSE", "FRAME", "INSTANCE", "LINE", "POLYGON", "RECTANGLE", "STAR", "TEXT", "VECTOR"].includes(type)) this.annotations = [];
     this.constraints = { horizontal: "MIN", vertical: "MIN" };
     // text
     this.characters = "";
@@ -832,7 +833,20 @@ export function createFigmaMock() {
   // caller that correctly awaits it isn't punished by the mock for doing the right thing.
   page.loadAsync = async () => {};
 
+  const categories = [];
   const figma = {
+    annotations: {
+      async getAnnotationCategoriesAsync() { return categories.slice(); },
+      async addAnnotationCategoryAsync({ label, color }) {
+        const category = { id: nextId("category"), label, color, isPreset: false,
+          remove() { const i = categories.indexOf(category); if (i >= 0) categories.splice(i, 1); },
+          setLabel(value) { category.label = value; },
+          setColor(value) { category.color = value; },
+        };
+        categories.push(category);
+        return category;
+      },
+    },
     mixed: MIXED,
     currentPage: page,
     // The DOCUMENT node. `name` is the FILE name — what flcm.page.current() reports for orientation —

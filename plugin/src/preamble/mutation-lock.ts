@@ -28,6 +28,7 @@
 // is the rule itself: a batch verb (editMany) takes the lock once and drives the commit-free
 // internal appliers, never the public verbs (invariant 4).
 
+import { beginAnnotationMutation, resolveAnnotationCategories, removeFailedAnnotationCategories, hasRequestedAnnotationCategories } from "./annotation-categories.js";
 import { hostRunCancelled } from "./host.js";
 
 let verbChain: Promise<unknown> = Promise.resolve();
@@ -41,6 +42,23 @@ let committedVerbs = 0;
 // where this verb hasn't (and won't) increment.
 export function committedVerbCount(): number {
   return committedVerbs;
+}
+
+// Dev Mode's plugin API is read-only — every node create/delete/property write throws. Figma's own
+// refusal names the setter ("in set_fills: …") and never the mode, so an agent that hits it has no
+// way to learn the real cause: the human flipped the file to Dev Mode. The manifest declares "dev"
+// so the bridge SURVIVES that flip (a session outliving a mode switch is the point), which makes
+// this refusal reachable by design rather than an edge case.
+//
+// Read live per verb, never cached: the human can flip modes at any moment while the plugin runs.
+// Refused in prepare, before the entry seal, so a Dev Mode run leaves zero undo residue.
+function refuseIfDevMode(verb: string): void {
+  if (figma.editorType === "dev") {
+    throw new Error(
+      "flcm." + verb + ": Figma is in Dev Mode, where the plugin API is read-only — this write " +
+        "cannot run. Switch the file back to Design mode to author. Reads are unaffected.",
+    );
+  }
 }
 
 function refuseIfCancelled(verb: string): void {
@@ -87,22 +105,35 @@ export function enterMutatingVerb<P, T>(
   verb: string,
   prepare: () => Promise<P>,
   apply: (prepared: P) => SyncOnly<T>,
+  revalidate?: (prepared: P) => void,
 ): Promise<T> {
   const turn = verbChain.then(async () => {
+    refuseIfDevMode(verb);
     refuseIfCancelled(verb);
-    const prepared = await prepare();
-    // Prepare's awaits are the run's suspension points — a CANCEL that arrived during them must
-    // fail closed here, before the seal, not mutate on a dead run's behalf.
-    refuseIfCancelled(verb);
-    figma.commitUndo();
+    beginAnnotationMutation();
     try {
-      const result = apply(prepared);
+      const prepared = await prepare();
+      // Category creation suspends after prepare; live edit facts must be checked again.
+      if (hasRequestedAnnotationCategories()) {
+        await resolveAnnotationCategories();
+        revalidate?.(prepared);
+      }
+      // Prepare's awaits are the run's suspension points — a CANCEL that arrived during them must
+      // fail closed here, before the seal, not mutate on a dead run's behalf.
+      refuseIfCancelled(verb);
       figma.commitUndo();
-      committedVerbs++;
-      return result;
+      try {
+        const result = apply(prepared);
+        figma.commitUndo();
+        committedVerbs++;
+        return result;
+      } catch (err) {
+        figma.commitUndo();
+        figma.triggerUndo();
+        throw err;
+      }
     } catch (err) {
-      figma.commitUndo();
-      figma.triggerUndo();
+      removeFailedAnnotationCategories();
       throw err;
     }
   });

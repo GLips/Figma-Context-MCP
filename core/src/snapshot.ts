@@ -308,7 +308,14 @@ export interface SnapshotComponentRef {
   set?: { id: string; key?: string; name: string; description?: string };
 }
 
+export interface SnapshotAnnotation {
+  text?: string;
+  category?: string;
+  properties?: string[];
+}
+
 export interface NodeSnapshot {
+  annotations?: SnapshotAnnotation[];
   id: string;
   name: string;
   /** Raw Figma node type (e.g. FRAME, TEXT, VECTOR). The walker maps VECTOR→IMAGE-SVG. */

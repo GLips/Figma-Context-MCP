@@ -3,6 +3,7 @@
 // are edit deltas resolved against the live component), and edit-plan.ts imports the constructors'
 // leaf compilers — so a render living beside the constructors would close a module cycle.
 
+import { requestTreeAnnotationCategories } from "./annotation-categories.js";
 import { WriteNode, Handle } from "./ir.js";
 import { assertConstructorBuiltTree } from "./provenance.js";
 import { assertSizingResolvesAgainstParentFrame } from "./layout-legality.js";
@@ -37,6 +38,7 @@ export async function loadTreeResources(tree: WriteNode): Promise<RenderResource
   const needs = await prepareInstancePlans(tree);
   // The tree and every slot content tree its instances fill: one image request, one font load.
   const trees = [tree, ...needs.slotContentTrees];
+  trees.forEach(requestTreeAnnotationCategories);
   let failed = false;
   let firstFailure: unknown;
   const settled = <V>(p: Promise<V>) =>
