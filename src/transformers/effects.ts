@@ -18,17 +18,19 @@ export type SimplifiedEffects = {
 export function buildSimplifiedEffects(n: FigmaDocumentNode): SimplifiedEffects {
   if (!hasValue("effects", n)) return {};
   const effects = n.effects.filter((e) => e.visible);
+  const isText = n.type === "TEXT";
 
-  // Handle drop and inner shadows (both go into CSS box-shadow)
+  // CSS text-shadow supports neither spread nor inset; an unsupported entry
+  // would invalidate the entire shadow list, including valid drop shadows.
   const dropShadows = effects
     .filter((e): e is DropShadowEffect => e.type === "DROP_SHADOW")
-    .map(simplifyDropShadow);
+    .map((effect) => (isText ? simplifyTextShadow(effect) : simplifyDropShadow(effect)));
 
   const innerShadows = effects
-    .filter((e): e is InnerShadowEffect => e.type === "INNER_SHADOW")
+    .filter((e): e is InnerShadowEffect => !isText && e.type === "INNER_SHADOW")
     .map(simplifyInnerShadow);
 
-  const boxShadow = [...dropShadows, ...innerShadows].join(", ");
+  const shadow = [...dropShadows, ...innerShadows].join(", ");
 
   // Handle blur effects - separate by CSS property. A zero-radius blur is a
   // no-op, so drop it entirely rather than emit a dead `blur(0px)`.
@@ -46,17 +48,21 @@ export function buildSimplifiedEffects(n: FigmaDocumentNode): SimplifiedEffects 
 
   const result: SimplifiedEffects = {};
 
-  if (boxShadow) {
-    if (n.type === "TEXT") {
-      result.textShadow = boxShadow;
+  if (shadow) {
+    if (isText) {
+      result.textShadow = shadow;
     } else {
-      result.boxShadow = boxShadow;
+      result.boxShadow = shadow;
     }
   }
   if (filterBlurValues) result.filter = filterBlurValues;
   if (backdropFilterValues) result.backdropFilter = backdropFilterValues;
 
   return result;
+}
+
+function simplifyTextShadow(effect: DropShadowEffect) {
+  return `${effect.offset.x}px ${effect.offset.y}px ${effect.radius}px ${formatRGBAColor(effect.color)}`;
 }
 
 function simplifyDropShadow(effect: DropShadowEffect) {
