@@ -5,7 +5,12 @@ export interface FigmaUrlParts {
   nodeId: string | undefined;
 }
 
-const FIGMA_PATH_PATTERN = /^\/(file|design)\/([a-zA-Z0-9]+)/;
+// `/proto/` is the prototype presentation of an ordinary design file — same file key,
+// same `/v1/files/{key}` response — so a pasted prototype link is worth accepting.
+// `/board/` (FigJam) is deliberately absent: that endpoint answers, but with FigJam's
+// own node vocabulary (STICKY, CONNECTOR, SHAPE_WITH_TEXT), which this server does not
+// model. Refusing the URL beats emitting a design-shaped tree that says nothing.
+const FIGMA_PATH_PATTERN = /^\/(file|design|proto)\/([a-zA-Z0-9]+)/;
 
 export function parseFigmaUrl(input: string): FigmaUrlParts {
   const url = new URL(input);
