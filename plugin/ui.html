@@ -179,6 +179,22 @@
         background: var(--figma-color-bg-secondary, #f0f0f0);
         color: var(--figma-color-text, #333);
       }
+      /* The global counterpart to a per-row Revoke access — set apart by a rule rather than a card,
+         since it addresses every approval this plugin remembers, not one row in the list above it. */
+      .footer {
+        border-top: 1px solid var(--figma-color-border, #e5e5e5);
+        padding-top: 8px;
+      }
+      #detail button.revoke-all {
+        width: 100%;
+        background: none;
+        color: var(--figma-color-text-secondary, #888);
+        padding: 6px 0;
+      }
+      #detail button.revoke-all:hover {
+        color: var(--figma-color-text-danger, #e0413f);
+        box-shadow: none;
+      }
     </style>
   </head>
   <body>
@@ -203,8 +219,8 @@
       // It is ALSO the plugin's only human surface: an always-visible status strip that expands into
       // the session list. The sandbox drives it with one local RENDER control message (NOT relayed to
       // the WS) and owns every decision (sole arbiter); this file only reports clicks (UI_DECISION /
-      // UI_REVOKE / UI_TOGGLE) and its own measured height (UI_HEIGHT). Resizing does not reload the
-      // iframe, so the WS connections below survive every expand/collapse.
+      // UI_REVOKE / UI_REVOKE_ALL / UI_TOGGLE) and its own measured height (UI_HEIGHT). Resizing does
+      // not reload the iframe, so the WS connections below survive every expand/collapse.
       //
       // Opens ONE persistent connection per port in the block from bridge/src/config.ts
       // (WS_PORT_BLOCK). Each running server probe-binds one block port, so scanning the whole block
@@ -351,6 +367,7 @@
           sessions.forEach(function (s) {
             detail.appendChild(sessionCard(s));
           });
+          if (msg.hasApprovals) detail.appendChild(revokeAllFooter());
         }
         reportHeight();
       }
@@ -412,7 +429,8 @@
             "div",
             null,
             "Approving a session lets it run code against this document — only approve sessions " +
-              "you started.",
+              "you started. Approval is remembered, even after closing and reopening this plugin, " +
+              'until you revoke it here or use "Revoke all approvals".',
           ),
         );
         return intro;
@@ -481,6 +499,24 @@
         }
         card.appendChild(actions);
         return card;
+      }
+
+      // Shown whenever the sandbox reports ANY remembered approval (msg.hasApprovals), independent of
+      // what's in `sessions` above it — a persisted approval can outlive its connection, so this is
+      // often the only surface for one the human never sees a row for. One control, not one per
+      // session: it revokes everything this plugin remembers, which is the whole point of the
+      // "explicit revocation" fig-61 asks for.
+      function revokeAllFooter() {
+        var footer = el("div", "footer");
+        var button = el("button", "revoke-all", "Revoke all approvals");
+        button.title =
+          "Forgets every session this plugin has approved — including ones not currently " +
+          "connected — so all of them must Allow again, even after this plugin restarts.";
+        button.onclick = function () {
+          parent.postMessage({ pluginMessage: { type: "UI_REVOKE_ALL" } }, "*");
+        };
+        footer.appendChild(button);
+        return footer;
       }
 
       function el(tag, className, text) {

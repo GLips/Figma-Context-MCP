@@ -24,10 +24,11 @@ const UI_MAX_HEIGHT = 560;
 // expands into the session list.
 //
 // It starts VISIBLE and is never hidden. A running plugin's only summonable surface is its own
-// iframe — a menu command re-RUNS the plugin, which would tear down this relay and every in-memory
-// approval — so a hidden window leaves the human no way to check whether a session is connected or
-// to reach Revoke. They could only act at moments WE chose to interrupt them. An always-on strip
-// inverts that: state is ambient, and the human opens the list whenever they want.
+// iframe — a menu command re-RUNS the plugin, which tears down this relay and every live
+// connection — so a hidden window leaves the human no way to check whether a session is connected
+// or to reach Revoke access / Revoke all approvals. They could only act at moments WE chose to
+// interrupt them. An always-on strip inverts that: state is ambient, and the human opens the list
+// whenever they want.
 // themeColors gives the iframe Figma's light/dark variables, which an always-on window needs.
 figma.showUI(__html__, {
   visible: true,
@@ -59,11 +60,32 @@ const PLUGIN_VERSION = "0.1.0";
 // is the auth key (Invariant "Approval keys on a minted session token, not a forgeable
 // identity"): minted here on Allow, handed to the approved server, and echoed back by that
 // server in every SESSION_INFO. A same-path squatter never received an Allow handover, so it
-// has no token and falls back to PENDING. `approvedTokens` is sticky WITHIN a Figma session —
-// it survives WS reconnects because this module outlives any single socket, but it is plain
-// in-memory, so closing/reopening the plugin clears it (the "approve once per work session"
-// behavior; clientStorage would wrongly persist approval across reopens).
+// has no token and falls back to PENDING.
+//
+// Persisted via clientStorage (fig-61), the same pattern hasSeenOrientation uses below: loaded
+// once at startup into this in-memory Set, written back on every mint and every revoke. The
+// startup read is local and resolves long before any session's SESSION_INFO can arrive (that
+// needs a WS round-trip), so a reconnecting server's echoed token is already recognized by the
+// time isApproved() is asked. This replaces the original "approve once per work session" design,
+// where the Set was plain in-memory and closing the plugin cleared every approval — ordinary
+// file-switching now survives a close/reopen without a fresh Allow. What clears an entry is only
+// ever explicit: per-session Revoke access (revokeSession) or the global Revoke all approvals
+// action (revokeAllApprovals) — never a timer, never a reopen.
 const approvedTokens = new Set<string>();
+
+const APPROVED_TOKENS_STORAGE_KEY = "code-mode:approved-tokens";
+void figma.clientStorage.getAsync(APPROVED_TOKENS_STORAGE_KEY).then((persisted) => {
+  if (!Array.isArray(persisted)) return;
+  for (const token of persisted) {
+    if (typeof token === "string") approvedTokens.add(token);
+  }
+});
+
+/** Write the current approval set back to clientStorage. Fire-and-forget, like every other
+ * durable write here — a plugin reload is the only reader, and it always re-reads at startup. */
+function persistApprovedTokens(): void {
+  void figma.clientStorage.setAsync(APPROVED_TOKENS_STORAGE_KEY, Array.from(approvedTokens));
+}
 
 // One live session, as last presented over SESSION_INFO. The token gates writes; the identity is
 // the label the human approves in the panel; the pairing code is the glance-and-compare check
@@ -246,12 +268,11 @@ function rejectImagesFetches(match: (p: PendingImagesFetch) => boolean, reason: 
 }
 
 // First-run orientation. The session list shows a one-time explainer (what the plugin does; "only
-// approve sessions you started") the FIRST time it is ever expanded, then never again. This is the
-// ONE durable bit of plugin state — it persists across plugin reopens via clientStorage,
-// deliberately distinct from the per-session approval Set (in-memory, clears on reopen). Read once
-// at startup into a sync flag so expanding stays synchronous (no await in the hot path); the
-// write-back is fire-and-forget. The startup read resolves long before any session connects (it's
-// local; SESSION_INFO needs a WS round-trip), so the flag is settled by the first expand.
+// approve sessions you started") the FIRST time it is ever expanded, then never again. Durable via
+// clientStorage, same as approvedTokens above. Read once at startup into a sync flag so expanding
+// stays synchronous (no await in the hot path); the write-back is fire-and-forget. The startup read
+// resolves long before any session connects (it's local; SESSION_INFO needs a WS round-trip), so
+// the flag is settled by the first expand.
 const ORIENTATION_STORAGE_KEY = "code-mode:has-seen-orientation";
 let hasSeenOrientation = false;
 void figma.clientStorage.getAsync(ORIENTATION_STORAGE_KEY).then((seen) => {
@@ -318,9 +339,20 @@ let expanded = false;
  * Push the current state to the strip — the single render path (there is no separate "raise"; the
  * window is always visible). The iframe re-measures itself after painting and reports its height
  * back (UI_HEIGHT), which is what resizes the window, so render and resize are one flow.
+ *
+ * `hasApprovals` gates the "Revoke all approvals" footer — it reflects the WHOLE persisted Set, not
+ * just rows in `sessions`, because a prior approval can outlive its connection (that's the point of
+ * persisting it). Without this flag the footer would have no way to appear for approvals nobody is
+ * currently connected to reconnect and show a row for.
  */
 function renderUi(showOrientation = false): void {
-  figma.ui.postMessage({ type: "RENDER", sessions: panelSessions(), expanded, showOrientation });
+  figma.ui.postMessage({
+    type: "RENDER",
+    sessions: panelSessions(),
+    expanded,
+    showOrientation,
+    hasApprovals: approvedTokens.size > 0,
+  });
 }
 
 /**
@@ -418,6 +450,7 @@ function applyDecision(key: ConnKey, approve: boolean): void {
   if (conn !== undefined && approve && !isApproved(key)) {
     const token = mintToken();
     approvedTokens.add(token);
+    persistApprovedTokens();
     conn.token = token;
     // Same field name (`sessionToken`) the server echoes back in SESSION_INFO — one vocabulary in
     // both directions. __connKey routes the unsolicited handover to THIS row's socket.
@@ -431,19 +464,45 @@ function applyDecision(key: ConnKey, approve: boolean): void {
  * later reconnect echoing it) is no longer approved, drop its baton, and tell that row's server to
  * delete its PERSISTED copy (REVOKE_SESSION over the same relay as the Allow handover) — otherwise a
  * durable on-disk token would silently re-approve on the next connect. Deleting the token from
- * approvedTokens is what actually closes the gate: a reconnect re-binds the token, but isApproved is
- * false once the Set no longer holds it. The row stays in the list, now unapproved (Allow/Deny
- * again) — this is a de-authorization, not a disconnect, which is why the button doesn't say
- * "Disconnect": the socket is untouched and the agent can ask again.
+ * approvedTokens (and persisting that deletion, fig-61) is what actually closes the gate: a
+ * reconnect re-binds the token, but isApproved is false once the Set no longer holds it — including
+ * after this plugin itself reopens. The row stays in the list, now unapproved (Allow/Deny again) —
+ * this is a de-authorization, not a disconnect, which is why the button doesn't say "Disconnect":
+ * the socket is untouched and the agent can ask again.
  */
 function revokeSession(key: ConnKey): void {
   const conn = connections.get(key);
   if (conn && conn.token) {
     approvedTokens.delete(conn.token);
+    persistApprovedTokens();
     figma.ui.postMessage({ type: "REVOKE_SESSION", __connKey: key });
     conn.token = null;
   }
   if (activeKey === key) activeKey = null;
+  renderUi();
+}
+
+/**
+ * The human clicked "Revoke all approvals" — a global action distinct from per-row Revoke access:
+ * it forgets EVERY token this plugin remembers, including ones for sessions that aren't currently
+ * connected (a persisted approval, by definition, can outlive its connection). This is the explicit
+ * escape hatch fig-61 asks for: since approval now survives a plugin close/reopen, there must be a
+ * way to durably undo that survival — one that itself survives the same reopen, which persisting an
+ * empty Set gives for free (the startup load above finds nothing to restore).
+ *
+ * Every currently-connected row is also told to drop its server-side persisted copy, exactly like
+ * revokeSession, so an active session's next write re-prompts immediately rather than waiting for a
+ * reconnect to discover the plugin no longer recognizes its token.
+ */
+function revokeAllApprovals(): void {
+  approvedTokens.clear();
+  persistApprovedTokens();
+  for (const [key, conn] of connections) {
+    if (conn.token === null) continue;
+    figma.ui.postMessage({ type: "REVOKE_SESSION", __connKey: key });
+    conn.token = null;
+  }
+  activeKey = null;
   renderUi();
 }
 
@@ -465,6 +524,12 @@ figma.ui.onmessage = (msg: InboundMessage) => {
     }
     if (msg.type === "UI_TOGGLE") {
       setExpanded(!expanded);
+      return;
+    }
+    if (msg.type === "UI_REVOKE_ALL") {
+      // Global, so — unlike UI_DECISION/UI_REVOKE — it carries no __connKey: it addresses every
+      // approval this plugin remembers, not one row.
+      revokeAllApprovals();
       return;
     }
     if (msg.type === "UI_HEIGHT") {
