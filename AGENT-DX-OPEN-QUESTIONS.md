@@ -42,4 +42,6 @@ Consider a reusable compact structural summary. Settle useful fields, depth/node
 
 ## Slot node readability after placement (triage1–3)
 
+**Update:** Item 2 now has an implemented, live-verified descendant-access fix. [Resolution and remaining limits](AGENT-DX-SLOT-ACCESS-RESOLUTION.md). Native remapped-root move-out remains unresolved; the earlier investigation notes below are historical.
+
 **Status:** Open; deeper investigation requested. User wants a reliable intended workflow and has not accepted the preliminary avoid-read, clone-replacement, or rejection/rollback candidates as the solution. After plain-frame/nested-instance/direct-instance controls, investigate alternative access and placement mechanisms, fresh resolution, identity transitions and asynchronous behavior with evidence. Preserve identity, content and geometry where possible. Treat constructed variant slot content separately from donor moves. Recommend a solution only after reproductions and independent readback establish its reliability.

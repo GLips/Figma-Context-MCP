@@ -1,38 +1,40 @@
 # Overnight DX progress
 
-## Checkpoints
+**The approved fixes are built and saved in commits. Automated checks pass. We still need to test the new work in Figma before calling it finished.**
 
-- `2713b86`: earlier approved DX fixes and investigation decisions.
-- `6491609`: responsive and structural authoring batches, including integration of earlier sizing work from its worktree. Commit hooks passed formatting, lint and root typecheck.
+## What this should make easier
 
-## Implemented, automated checks passed
+- **Build layouts that adapt to available space.** Agents can make rows wrap, set separate spacing between rows and columns, and use minimum and maximum sizes. New text in a column with a defined width wraps within that space by default. Sizing warnings help explain when content overflows or a requested size gets constrained.
+- **Reuse designs with less manual repair.** Agents can measure a node, copy it with changes to its size or appearance, and replace an existing node while retaining its placement and sizing. Duplicated variants restore their supported text, visibility, and component-swap bindings so their controls keep working.
+- **Make components easier to use.** Nested component controls can be exposed in the enclosing component’s panel. Already-approved sessions stop receiving repeated pairing instructions when requesting reference material.
+- **See a design in context.** A screenshot prototype can include space around a node, showing the background and neighboring content that an isolated export misses. It is optional and still needs visual testing.
 
-Measurement; clone root overrides; clone binding restoration; replacement; wrap/two-value gaps; contextual text-width default; nested exposure; approval-aware reference guidance; prior bounds/clamp/overflow and inherited sizing integration.
+## What we know works
 
-Combined preamble suite: 393 tests. Root focused checks: 30 tests including parity and shipped preamble. Structural focused tests: 28, included in combined coverage rather than an additional total. Root/plugin/core types, build and generated docs checks passed according to agent reports.
+Automated checks passed for both implementation batches and the screenshot prototype. The earlier sizing fixes also passed live checks before being brought into the main branch. Promotion’s old-node references passed Undo and Redo checks earlier.
 
-These new batches have **not passed live verification**. Native rollback, exposure UI, and new responsive/structural live probes remain pending. Earlier alias Undo/Redo passed; reopen and page-movement checks remain pending.
+**That does not yet prove the new combined build works correctly in Figma.** We still need to check the new layout and component behavior, replacement recovery, references after reopening or moving between pages, and actual screenshot output. We have not produced live example captures yet.
 
-## Current blocker
+## What remains unresolved
 
-The regular Framelink plugin required approval. The capability attempt expired before code submission; no new benchmark or mutation result was produced. Do not repeatedly resend live work while approval remains unavailable.
+**Reading content after a slot move:** we found a way to read and edit affected content without replacing it. We have not yet proved that this approach covers all the nodes we need, preserves ordering and identity, or performs well on larger designs. The main access code has not been changed.
 
-## Ready for user follow-up
+**Screenshot side effects:** we need to watch for flicker, selection changes, and Undo behavior. The prototype temporarily creates a capture region and removes it afterward. If export stalls, cleanup waits for it to finish; forced plugin shutdown could leave that temporary region behind.
 
-The contextual screenshot prototype is committed as `d0ac434`; nine focused tests, typechecks, lint and host build passed. Live fixture scripts are ready. Real capture artifacts require live access; flicker/selection/undo observation remains for the user. Default margin choices remain provisional.
+## What happens next
 
-Slot scene-access migration remains investigation-only. Criteria-returned objects support tested reads/edits, but complete ID/order/type/performance equivalence is unproved. The parity/benchmark harness is prepared and unrun.
+The plugin and Codex have now been restarted. A fresh read-only live check succeeded, and slot-access correctness/performance investigation has resumed. Re-enabling scheduled follow-ups was still rejected by Codex’s automatic approval review with the checkpoint-compatibility error; the running investigation is unaffected.
 
-## Evidence
+The slot investigator currently has the exclusive live queue. Finish the slot-access proof and a tested resolution, then run the prepared authoring/structural checks one batch at a time and review contextual screenshots with you watching. Scheduled follow-ups remain paused; do not treat that as an active monitor.
 
-- [Responsive implementation report](/tmp/figma-responsive-authoring-implementation.md)
-- [Structural checkpoint](/tmp/figma-structural-live/checkpoint.md)
-- [Scene access proof status](/tmp/figma-scene-access-proof/status.md)
+## Saved progress and supporting detail
 
-## Handoff
+- `2713b86` — earlier fixes and decisions.
+- `6491609` — responsive layouts, component workflows, and integrated sizing fixes.
+- `d0ac434` — contextual screenshot prototype.
 
-All three agents have completed their current assignments. Overnight follow-ups are paused because remaining live checks need regular Framelink approval, and contextual screenshot interaction verification needs the user present. No shared scene-access migration was implemented.
+Detailed test results and prepared checks: [layouts and controls](/tmp/figma-responsive-authoring-implementation.md), [copying and replacement](/tmp/figma-structural-live/checkpoint.md), [screenshots](/tmp/figma-contextual-screenshot-prototype/report.md), and [slot-access investigation](/tmp/figma-scene-access-proof/status.md).
 
-Next: reload the updated plugin, approve the pending connection when requested, then run serialized authoring/structural and alias lifecycle checks. Run contextual screenshot checks with user observation. Resume slot equivalence/performance investigation afterward.
+## Subsequent slot-access resolution
 
-[Contextual screenshot prototype report](/tmp/figma-contextual-screenshot-prototype/report.md). Cancellation cleanup waits for native export settlement; forced shutdown cannot guarantee slice cleanup.
+The primary slot descendant-read/edit issue is now implemented and live-verified. [Resolution, performance and remaining limits](AGENT-DX-SLOT-ACCESS-RESOLUTION.md). Native remapped-root movement out of slots and the historical connection/page-switch stall remain open.

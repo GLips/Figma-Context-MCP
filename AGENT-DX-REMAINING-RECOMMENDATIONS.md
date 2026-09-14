@@ -1,5 +1,7 @@
 # Remaining DX recommendations
 
+[Latest slot-access resolution](AGENT-DX-SLOT-ACCESS-RESOLUTION.md): item 2 is now fixed and verified; the current triage counts supersede this earlier recommendation snapshot.
+
 ## What actually needs review
 
 Reconciled against the conversation, 2026-09-13. The earlier seventeen were unfinished triage entries, not seventeen untouched decisions. That classification is superseded. [Triage](AGENT-DX-TRIAGE.md) now distinguishes settled decisions, delivery, investigation, and deferral.

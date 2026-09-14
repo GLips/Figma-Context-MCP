@@ -6,7 +6,7 @@
 
 The earlier “17 open or deferred” total incorrectly mixed unmade decisions with already approved follow-up work. It is superseded by this classification. Every original entry appears once below; its original number is retained.
 
-**What still needs discussion:** five entries have recommendations not yet accepted: **14, 20, 22, 30, 33**. They form three review topics in the [remaining recommendations](AGENT-DX-REMAINING-RECOMMENDATIONS.md). Four other entries need investigation before a solution is ready; two designs were explicitly deferred. The remaining 27 entries have settled dispositions.
+**What still needs discussion:** five entries have recommendations not yet accepted: **14, 20, 22, 30, 33**. They form three review topics in the [remaining recommendations](AGENT-DX-REMAINING-RECOMMENDATIONS.md). Three other entries need investigation before a solution is ready; two designs were explicitly deferred. The remaining 28 entries have settled dispositions.
 
 | Decision / work status                                         | Entries                                              | Count |
 | -------------------------------------------------------------- | ---------------------------------------------------- | ----: |
@@ -20,11 +20,17 @@ The earlier “17 open or deferred” total incorrectly mixed unmade decisions w
 
 “Settled” means no repeat approval is needed for the recorded scope. It does not mean implemented, tested, committed, or merged. In particular, the screenshot direction is approved for an experiment, not an unconditional slice implementation. Delivery status and historical evidence remain attached to each entry. Source changes remain uncommitted; test coverage differs by item.
 
-The nine resolved entries comprise five implemented/tested resolutions and four accepted existing behaviors. The four-entry verification group retains its batch completion gate even where individual live checks have passed. The fourteen-entry delivery group includes both undispatched features and already implemented work with residual checks; it must not be described as fourteen unimplemented fixes.
+The ten resolved entries comprise six implemented/tested resolutions and four accepted existing behaviors. The four-entry verification group retains its batch completion gate even where individual live checks have passed. The fourteen-entry delivery group includes both undispatched features and already implemented work with residual checks; it must not be described as fourteen unimplemented fixes.
 
 [Open design questions](AGENT-DX-OPEN-QUESTIONS.md) records explicit deferrals and investigation questions. First-pass evidence is historical; the current disposition takes precedence.
 
-## Resolved or accepted — 9
+## Resolved or accepted — 10
+
+### 2. Slot instance sublayers: unreadable handles and unresolved IDs
+
+**Current disposition:** Implemented and live-verified for previously read instance descendants moved into slots: get/find/measure/edit retain usable original handles, content and geometry. Shared indexed scene access replaces stale traversal within the dialect. Healthy output/performance comparisons and 424 automated tests passed. Native remapped-root move-out remains a separate unresolved case under item 1; optional variant/reorder completion was not verified. [Resolution and limits](AGENT-DX-SLOT-ACCESS-RESOLUTION.md).
+
+**First-pass evidence and sources:** Slot instance sublayers: unreadable handles and unresolved IDs. [notes §26.2](AGENT-DX-NOTES.md#262-instances-inside-a-slot-have-unreadable-sublayers). **Reproduced, narrowed**: reading descendants before ordinary-frame-to-slot import triggers unreadability through raw and flcm; cold imports stay readable, clones restore readability. Evidence: slot-validity 06; /tmp/figma-slot-archaeology/review.md.
 
 ### 4. Clone-based audits: wrapped geometry differs from live nodes
 
@@ -224,19 +230,13 @@ The nine resolved entries comprise five implemented/tested resolutions and four 
 
 **First-pass evidence and sources:** Raw escape responsibilities: font loading, bulk sublayer edits and mixed-value serialization. [notes §1](AGENT-DX-NOTES.md#1-the-font-loading-cliff-the-thing-that-actually-broke), [notes §19](AGENT-DX-NOTES.md#19-smaller-things). **Partly reproduced**: mixed-value coercion throws and naive JSON omits it; slow serial-font workload not replayed. Evidence: triage-first-pass 12.
 
-## Investigation before a solution can be proposed — 4
+## Investigation before a solution can be proposed — 3
 
 ### 1. Raw slot moves: node validity across slots and out to frames
 
 **Current disposition:** Active slot investigation. No movement/recovery fix approved.
 
 **First-pass evidence and sources:** Raw slot moves: node validity across slots and out to frames. [slots §1](AGENT-DX-NOTES-slots.md#1-moving-a-node-between-two-slots-corrupts-it-silently--p0), [notes §26.2a](AGENT-DX-NOTES.md#262a-footgun-moving-a-node-out-of-a-slot-destroys-it). **Reproduced, context-dependent**: raw inherited moves break root reads; direct slot-to-slot moves break sublayers through raw/flcm. Inherited flcm moves reject and preserve readable source content. Evidence: slot-validity 02, 05.
-
-### 2. Slot instance sublayers: unreadable handles and unresolved IDs
-
-**Current disposition:** Active slot investigation; ordinary frames versus instance descendants and prior-read effects are being isolated. No workaround approved.
-
-**First-pass evidence and sources:** Slot instance sublayers: unreadable handles and unresolved IDs. [notes §26.2](AGENT-DX-NOTES.md#262-instances-inside-a-slot-have-unreadable-sublayers). **Reproduced, narrowed**: reading descendants before ordinary-frame-to-slot import triggers unreadability through raw and flcm; cold imports stay readable, clones restore readability. Evidence: slot-validity 06; /tmp/figma-slot-archaeology/review.md.
 
 ### 3. Audit scripts: skipped slot nodes reported as clean
 
