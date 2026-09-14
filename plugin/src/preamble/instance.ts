@@ -1,3 +1,5 @@
+import { assertExposureTree, assertExposureTarget } from "./instance-exposure.js";
+import { assertBounds } from "./size-bounds.js";
 // instance — the component half of the write path, for BOTH verbs that touch one:
 //
 //   • CREATE (flcm.instance): everything an flcm.instance carries raw (ir.ts WriteProps on why)
@@ -188,6 +190,7 @@ function slotContentListsOf(wn: WriteNode): WriteChild[][] {
 function planSlotContentNeeds(content: readonly WriteNode[], planning: InstancePlanning): InstanceNeeds {
   const needs: InstanceNeeds = { plans: new Map(), fontNeeds: [], slotContentTrees: [...content] };
   for (const tree of content) {
+    assertExposureTree(tree);
     const nested = planInstanceTree(tree, planning);
     nested.plans.forEach((plan, wn) => needs.plans.set(wn, plan));
     needs.fontNeeds.push(...nested.fontNeeds);
@@ -201,7 +204,8 @@ function planInstanceNode(wn: WriteNode, planning: InstancePlanning): { plan: In
   const { component, properties } = resolveComponentProperties(resolved, wn.componentProperties || {}, SUBJECT, planning.targets);
   // The root's layout words are legal or not by the COMPONENT's mode — the same live fact edit
   // reads off its target. Judged here, not in the constructor, because that is where it's known.
-  if (wn.layout) assertLayoutRealizableForType("INSTANCE", wn.layout, component.layoutMode, SUBJECT);
+  if (wn.layout) assertBounds(wn.layout.bounds, component, SUBJECT);
+  if (wn.layout) assertLayoutRealizableForType("INSTANCE", wn.layout, component.layoutMode, SUBJECT, component.layoutWrap === "WRAP");
   const overrides = planDefinitionOverrides(component, wn.overrides || {}, SUBJECT, planning.fonts);
   return {
     plan: {
@@ -491,7 +495,7 @@ function compileOverride(sublayer: any, definition: any, delta: OverrideDeltaInp
   const plan: EditPlan = !words
     ? { node: sublayer, patch: {} }
     : fonts
-      ? gateEditPlan(sublayer, words, fonts, where)
+      ? gateEditPlan(sublayer, words, fonts, where, undefined, { instanceDefinition: definition })
       : compileEditPlan(sublayer, words, where);
   if (!slotContent) return { path, delta: words, plan };
   // The content's roots are judged against the slot as THIS override will leave it (its own
@@ -641,6 +645,8 @@ export interface InstanceEditPlan {
   needs: InstanceNeeds;
   retargets: boolean;
   becomesLayoutMode: AutoLayoutMixin["layoutMode"] | undefined;
+  becomesLayoutWrap: boolean | undefined;
+  exposed?: boolean;
 }
 
 /**
@@ -672,6 +678,7 @@ export async function resolveInstanceEditTargets(node: SceneNode, words: Instanc
  */
 export function planInstanceEdit(node: SceneNode, words: InstanceEditWords, current: any | null, planning: InstancePlanning, subject: string): InstanceEditPlan {
   const instance: any = node;
+  if (words.exposed !== undefined) assertExposureTarget(node, subject);
   if (!current) {
     throw new Error(
       subject + ": " + describeNodeIdentity(instance) + " has no readable main component — it comes from a library the file can't reach right now, so nothing about its properties or sublayers can be resolved.",
@@ -706,6 +713,8 @@ export function planInstanceEdit(node: SceneNode, words: InstanceEditWords, curr
     // The same fact create's own gate reads (planInstanceNode above): the RESOLVED component's mode, not
     // the instance's current one, which the retarget is about to replace.
     becomesLayoutMode: retargets ? component.layoutMode : undefined,
+    becomesLayoutWrap: retargets ? component.layoutWrap === "WRAP" : undefined,
+    exposed: words.exposed,
   };
 }
 
@@ -767,6 +776,7 @@ export function applyInstanceRetarget(fail: EditPlanFailure, node: SceneNode, pl
   const instance: any = node;
   try {
     if (plan.swapTo) instance.swapComponent(plan.swapTo);
+    if (plan.exposed !== undefined) instance.isExposedInstance = plan.exposed;
     if (Object.keys(plan.properties).length) instance.setProperties(plan.properties);
   } catch (cause) {
     throw fail(cause);

@@ -6,11 +6,11 @@ import type { PluginBridgeRuntime } from "~/services/plugin-bridge/index.js";
 import {
   requestUntilApproved,
   isPendingApproval,
-  APPROVAL_WAIT_MS,
 } from "~/services/plugin-bridge/await-approval.js";
 import type { ServerTransport } from "~/mcp/index.js";
 import { registerFailLoudTool, retryableToolReply } from "~/mcp/fail-loud-params.js";
 import { flcmSandboxPreamble } from "~/services/plugin-bridge/sandbox-preamble.js";
+import { referenceSessionGuidance } from "./flcm-docs/session-guidance.js";
 import { buildQuickStart, buildReferenceSections, SECTION_IDS } from "./flcm-docs/reference.js";
 
 // The figma_execute_code description is the GENERATED quick-start (buildQuickStart), assembled from
@@ -44,10 +44,6 @@ const ScreenshotReply = z.union([
 // page-sized PNG at absurd resolution (and blow the agent's image budget on the way back). 4x already
 // resolves hairlines and grain, and matches the top of Figma's own export-scale UI.
 const MAX_SCREENSHOT_SCALE = 4;
-
-// Both the gate text and the reference preamble quote the hold window to the agent; the ceiling is a
-// whole number of seconds by construction, so this is a display conversion, not a rounding.
-const APPROVAL_WAIT_SECONDS = APPROVAL_WAIT_MS / 1000;
 
 type CodeModeToolsOptions = {
   /** Force the tools to be advertised from startup (`--code-mode`) instead of waiting for a plugin. */
@@ -117,49 +113,6 @@ export function registerCodeModeTools(
         },
       ],
     };
-  }
-
-  /**
-   * A per-request handshake preamble prepended to every get_flcm_reference response. It carries the two
-   * things the static, drift-checked reference doc can't: the *live* pairing code and a heads-up about the
-   * approval gate. A fresh agent calls this docs tool first, so surfacing both here lets it hand the code to
-   * the human and expect the approval round-trip BEFORE its first figma_execute_code — instead of learning
-   * the code only from a blocked call (the ergo5 first-connect friction this closes).
-   *
-   * The code is read fresh from the bridge on EVERY call — never cached, never baked into narrative.ts —
-   * because it's per-connection and can rotate mid-session (a lapsed session gets reissued a new code with
-   * the plugin still connected). The gate line is worded so a *later* "not approved" prompt reads as normal
-   * re-approval, and its "not approved yet" phrasing matches gateResult's PENDING_APPROVAL reply so the two
-   * read as one handshake.
-   *
-   * Null code = no plugin connected — reachable under `--code-mode` (always-advertised) and in the window
-   * between a disconnect and the plugin's ~1s reconnect, since advertisement latches on. There's nothing to
-   * relay *yet*, so the whole preamble (not just the code line) switches to a coherent cold-start script:
-   * steer the human to open the plugin and re-read this reference, rather than emitting a "relay the
-   * pairing code" instruction that contradicts a missing code.
-   */
-  function referencePreamble(): string {
-    const code = bridge.getPairingCode();
-    if (!code) {
-      return (
-        `**No Figma plugin is connected yet, so there's no pairing code.** Ask the user to open the Framelink ` +
-        `plugin in Figma; a pairing code is issued once it connects, and \`figma_execute_code\` has no sandbox ` +
-        `to run in until then.\n\n` +
-        `Once it connects, call get_flcm_reference again for the code and relay it to the user before your ` +
-        `first \`figma_execute_code\`. An unapproved call doesn't fail — the server holds it open while it ` +
-        `waits for the user to click Allow — so relaying the code FIRST is what keeps that wait short. ` +
-        `The code is per-session and can rotate, so a later re-approval prompt is also normal.`
-      );
-    }
-    const pairingLine =
-      `**Pairing code ${code}.** Relay this to the user before your first \`figma_execute_code\` — they'll see ` +
-      `it on the Framelink plugin's status strip in Figma and click Allow to approve this session.`;
-    const gateLine =
-      `An unapproved call waits locally for up to ${APPROVAL_WAIT_SECONDS}s, subject to the client's earlier deadline. ` +
-      `Allow submits the code once. Reject, cancellation, or client disconnection ends the wait without executing it. ` +
-      `Progress reports approval waiting when the client supports it; it does not guarantee a longer overall deadline. ` +
-      `An execution timeout never resubmits code automatically. Completion may be unconfirmed, so inspect affected nodes before retrying.`;
-    return `${pairingLine}\n\n${gateLine}`;
   }
 
   // Every code-mode tool registers through registerFailLoudTool, not server.registerTool: a mistyped
@@ -237,11 +190,14 @@ export function registerCodeModeTools(
       async ({ sections }) => {
         // Docs still serve on a stale plugin — but lead with the refusal text so the agent learns
         // the re-import fix here, before its first (refused) write.
-        const note = bridge.protocolRefusal();
+        const note = await referenceSessionGuidance({
+          pairingCode: bridge.getPairingCode(),
+          protocolRefusal: bridge.protocolRefusal(),
+          status: (signal) => bridge.request({ type: "APPROVAL_STATUS" }, signal),
+        });
         return {
           content: [
             ...(note ? [{ type: "text" as const, text: note }] : []),
-            { type: "text" as const, text: referencePreamble() },
             { type: "text" as const, text: buildReferenceSections(sections) },
           ],
         };

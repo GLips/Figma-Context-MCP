@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
 import { frame, rect, text, image, id } from "./flcm.js";
 import { render } from "./render.js";
-import { append, prepend, insertBefore, insertAfter, move, remove, clone } from "./structure.js";
+import { append, prepend, insertBefore, insertAfter, move, remove, clone, measure, replace } from "./structure.js";
 import { get } from "./read.js";
 import { readKey } from "./identity.js";
 
@@ -325,4 +325,63 @@ test("clone with no parent lands the copy on the original's own coordinates", as
   assert.equal(copied.to.id, out.keyed.board.id);
   // Faithful means faithful: in a free-form parent the copy sits exactly on top of the original.
   assert.deepEqual([copy.x, copy.y], [30, 50]);
+});
+
+
+test("measure returns parent-relative numeric geometry without mutation", async () => {
+  const out = await render(frame({ width: 400, height: 200, left: 100, top: 70 }, [rect({ key: "measured", width: 42, height: 23, left: 18, top: 9 })]));
+  assert.deepEqual(await measure("measured"), { x: 18, y: 9, width: 42, height: 23 });
+  assert.deepEqual(await measure(out.node), { x: 100, y: 70, width: 400, height: 200 });
+});
+
+test("clone root overrides fix geometry before destination fill settlement and apply styles", async () => {
+  await render(frame({ key: "source", width: 200, height: 100, layout: { mode: "row" } }, [rect({ key: "copy", width: "fill", height: 30, fill: "#ff0000" })]));
+  await render(frame({ key: "destination", width: 500, height: 100, layout: { mode: "row" } }));
+  const out = await clone("copy", { width: 70, height: 40, fill: "#00ff00", opacity: 0.5 }, "destination");
+  const copy = await figma.getNodeByIdAsync(out.node.id);
+  assert.equal(copy.width, 70); assert.equal(copy.height, 40); assert.equal(copy.layoutGrow, 0);
+  assert.equal(copy.opacity, 0.5); assert.equal(copy.fills[0].color.g, 1);
+  const original = await figma.getNodeByIdAsync((await get("copy")).node.id);
+  assert.equal(original.fills[0].color.r, 1);
+});
+
+test("clone validates malformed overrides before making any copy", async () => {
+  const row = await renderRow(); const before = row.children.map(n => n.id);
+  await assert.rejects(clone("a", { width: "nonsense" }), /width|length|size/i);
+  assert.deepEqual(row.children.map(n => n.id), before);
+});
+
+test("replace preserves index and parent-relative constraints with explicit sizing precedence", async () => {
+  const parent = await render(frame({ key: "replace-parent", width: 400, height: 300 }, [
+    rect({ key: "before", width: 10, height: 10 }),
+    rect({ key: "old", width: 90, height: 60, left: 23, top: 37, pin: { x: "right", y: "bottom" } }),
+    rect({ key: "after", width: 10, height: 10 }),
+  ]));
+  const old = (await get("old")).node.id;
+  const out = await replace("old", rect({ name: "replacement", width: 120, fill: "#00ff00" }));
+  const node = await figma.getNodeByIdAsync(out.node.id);
+  const host = await figma.getNodeByIdAsync(parent.node.id);
+  assert.equal(host.children[1].id, node.id); assert.equal(node.width, 120); assert.equal(node.height, 60);
+  assert.equal(node.x, 23); assert.equal(node.y, 37);
+  assert.deepEqual(node.constraints, { horizontal: "MAX", vertical: "MAX" });
+  assert.equal((await figma.getNodeByIdAsync(old)).removed, true);
+});
+
+test("replace keeps fill and rejects incompatible inherited hug before writes", async () => {
+  await render(frame({ key: "replace-row", width: 300, height: 100, layout: { mode: "row" } }, [rect({ key: "old-fill", width: "fill", height: 40 })]));
+  const out = await replace("old-fill", rect({ fill: "#00ff00" }));
+  const node = await figma.getNodeByIdAsync(out.node.id);
+  assert.equal(node.width, 300); assert.equal(node.height, 40); assert.equal(node.layoutGrow, 1);
+  await render(frame({ key: "hug-old", layout: { mode: "row" } }, [rect({ width: 50, height: 20 })]));
+  await assert.rejects(replace("hug-old", rect({})), /hug/i);
+  assert.equal((await get("hug-old")).node.type, "FRAME");
+});
+
+test("replace removal failure stays inside one rollback boundary", async () => {
+  await render(rect({ key: "replacement-failure", width: 20, height: 30 }));
+  const target = await figma.getNodeByIdAsync((await get("replacement-failure")).node.id);
+  target.remove = () => { throw new Error("injected remove failure"); };
+  figma.undoLog.length = 0;
+  await assert.rejects(replace("replacement-failure", rect({ width: 30 })), /rolled back.*entry seal/);
+  assert.deepEqual(figma.undoLog, ["commit", "commit", "trigger"]);
 });

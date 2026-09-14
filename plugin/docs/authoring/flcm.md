@@ -40,7 +40,9 @@ There is no autocomplete and no type-checking where your code runs (a QuickJS sa
 | `await flcm.insertAfter(sibling, thing)` | `thing` placed just after `sibling` | same as insertBefore |
 | `await flcm.move(target, parent)` | the node reparented as `parent`'s last child | a live target, then a parent target. Creating is append's job — a constructor-built node here fails loud |
 | `await flcm.remove(target)` | nothing — deletes the node and its subtree | a target; returns { removedId, parent } |
-| `await flcm.clone(target, parent?)` | a faithful live duplicate (key-less) | a target, and optionally where the copy lands (default: beside the original). The copy path for subtrees a rebuild can't reproduce — anything holding an INSTANCE |
+| `await flcm.measure(target)` | current numeric x, y, width and height | a target. Coordinates are relative to the immediate parent, including a page |
+| `await flcm.replace(target, replacement)` | replacement handle, keyed children and destination | a target and constructor-built replacement. Keeps parent/index; explicit props win over compatible inherited sizing/placement |
+| `await flcm.clone(target, props?, parent?)` | a faithful live duplicate (key-less) | a target, optional ordinary root props, and optional destination (default: beside the original). Existing clone(target, parent) calls remain valid. Component property/binding edits are separate; owned SLOT definitions reject before writes |
 | `flcm.fromRead(node)` | a `get` result re-authored as a buildable node | a node from flcm.get, subtree and all — the constructor is picked by each node's `type` and `children` recurse. Returns a constructor-built node — render it, or place it with append/prepend/insertBefore/insertAfter. (A single node's read shape can also spread straight into its constructor: flcm.rect({ ...node, width: 320 }).) Anything the read shape carries that flcm has no word for (an INSTANCE, a paint stack, a grid) fails loud by name; flcm.clone is the faithful copy for those |
 | `await flcm.get(target)` | { node, components } — the read shape, plus each component named once | target: an flcm/key, a node id, flcm.id(id), or a handle |
 | `await flcm.find(query?, predicate?)` | matching nodes as slim handles | query { type?, name?, key?, hasAnnotations?, within? } AND-combined — a filter, not an address; only `within` takes a target. Optional predicate over the full read shape (n => n.fill === '#FFF') |
@@ -109,6 +111,10 @@ if (done) {
 
 | Prop | Type | Notes |
 | --- | --- | --- |
+| `minWidth` | number \| "none" | minWidth in positive pixels, effective on auto-layout containers and their direct children. Omitted preserves the bound; "none" clears it. Sizes constrained by bounds succeed with a console warning. |
+| `maxWidth` | number \| "none" | maxWidth in positive pixels, effective on auto-layout containers and their direct children. Omitted preserves the bound; "none" clears it. Sizes constrained by bounds succeed with a console warning. |
+| `minHeight` | number \| "none" | minHeight in positive pixels, effective on auto-layout containers and their direct children. Omitted preserves the bound; "none" clears it. Sizes constrained by bounds succeed with a console warning. |
+| `maxHeight` | number \| "none" | maxHeight in positive pixels, effective on auto-layout containers and their direct children. Omitted preserves the bound; "none" clears it. Sizes constrained by bounds succeed with a console warning. |
 | `width` | number \| "Npx" \| "N%" \| "fill" \| "hug" | A fixed size (a number or "Npx"), "N%" of the parent axis, "fill" (stretch to the parent — rejected on the root), or "hug" (shrink to content — only a row/column container or text can hug). |
 | `height` | number \| "fill" \| "hug" \| "N%" | Same rules as width. On TEXT the height follows the content ("hug", the default): set `width` to re-wrap it, use "fill" inside an auto-layout parent and "hug" to undo that; a fixed or percent height is rejected. |
 | `left` | number \| "Npx" \| "N%" | Offset from the parent's left edge — a number, "Npx", or "N%" of the parent width. Naming `left` or `top` lifts the node out of an auto-layout parent's flow (badges, overlays); under a free-form parent it is simply where the node sits. On a render root it is where on the PAGE the tree lands — without it every root stacks at the origin. Under edit, an axis you don't name keeps its live value. |
@@ -152,6 +158,14 @@ flcm.ellipse({ width: 16, height: 16, left: "40%", top: "50%", anchor: { x: "cen
 
 `pin` is ignored on an in-flow auto-layout child, which reflows through `fill`/`hug` instead. A bad `pin` or `anchor` value fails loud.
 
+Sizing bounds use `minWidth`, `maxWidth`, `minHeight`, and `maxHeight` in positive pixels. Bounds govern auto-layout containers and their direct children. Reads retain these bounds, including instance-only bounds. Omitted bounds remain unchanged; `"none"` clears one. A valid resize constrained by a bound succeeds and reports its requested size, bound and resulting size in the execution console. Contradictory bounds reject before writes.
+
+After resizing, the console reports affected containers with overflowing children in one compact warning, grouped by clipped and unclipped IDs. This includes existing overflow and nested layouts after the batch settles. The write still succeeds.
+
+New text with omitted width fills a column whose available width is independently bounded, and omitted height grows with wrapped content. A hugging column or horizontal row keeps content-driven text width. Explicit sizes and omitted edit fields retain their existing meaning.
+
+Budget fixed widths together with padding and gaps; use `"fill"` for the remaining space. Fixed heights can overflow when text wraps or children grow. Use `"hug"` where the container should grow with content. Existing `pin` constraints control children of free-form containers and absolute children; in-flow auto-layout children use fill/hug. Inspect screenshots for visual quality beyond geometric overflow.
+
 ### flcm.frame — container props
 
 | Prop | Type | Notes |
@@ -164,7 +178,7 @@ flcm.ellipse({ width: 16, height: 16, left: "40%", top: "50%", anchor: { x: "cen
 | `effects` | effects value | Shadows / blur: flcm.effects({...}) or a CSS-string bag. "none" removes all effects. |
 | `rotation` | number (deg) | Rotation in degrees. |
 | `clipsContent` | boolean | Input alias for clip; duplicate values must agree. |
-| `layout` | { mode?, gap?, padding?, justifyContent?, alignItems? } | Auto-layout config. Omitted or mode:"none" = free-form, where children position absolutely. |
+| `layout` | { mode?, wrap?, gap?, padding?, justifyContent?, alignItems? } | Auto-layout config. Omitted or mode:"none" = free-form, where children position absolutely. |
 | `clip` | boolean | Clip children to the frame's bounds. Default false, like CSS overflow: visible. |
 
 #### Auto-layout config (the `layout` object)
@@ -172,7 +186,8 @@ flcm.ellipse({ width: 16, height: 16, left: "40%", top: "50%", anchor: { x: "cen
 | Prop | Type | Notes |
 | --- | --- | --- |
 | `mode` | "row" \| "column" \| "none" | Auto-layout direction. Default "none" = free-form, where the other layout words reject loud. No grid: "grid" fails loud. |
-| `gap` | number \| "Npx" | Space between children. |
+| `gap` | number \| string | A number, "Npx", or "row-gap column-gap" in px. Unequal gaps require wrapping. |
+| `wrap` | boolean | Wrap children onto new rows. Requires horizontal auto-layout. False disables wrapping; omitted edits preserve it. |
 | `padding` | number \| "12px 16px" \| { x?, y? } \| { top?, right?, bottom?, left? } | A number, the CSS box shorthand ("12px 16px"), { x, y } (x→left+right, y→top+bottom), or per-edge. Edge values take a number or "Npx". |
 | `justifyContent` | "flex-start" \| "flex-end" \| "center" \| "space-between" | CSS justify-content, main axis. Figma has no space-around/space-evenly — those fail loud. |
 | `alignItems` | "flex-start" \| "flex-end" \| "center" \| "stretch" \| "baseline" | CSS align-items, cross axis. "baseline" requires a horizontal row. "stretch" stretches every auto-sized child (a fixed cross-axis size wins); one child alone stretches via width/height "fill". |
@@ -314,6 +329,7 @@ Each styled run's delta fields:
 
 | Prop | Type | Notes |
 | --- | --- | --- |
+| `exposed` | boolean | Expose this nested instance's existing controls in the enclosing instance panel. Writable only inside a component definition; false clears it. |
 | `componentProperties` | { [name]: string \| boolean \| component target } | Values by bare name (no `#id` suffix), as `get` reports them: a variant axis, a boolean, a text, or a component target for an instance_swap. A slot has no value here — its content is `children` under `overrides`. |
 | `overrides` | { [path]: delta } | Sublayer deltas keyed by component-relative path as `get` keys them (`"11:9"`, or `"11:9;11:14"` inside a nested instance), each in that sublayer's edit vocabulary; at a SLOT's path the delta also takes `children`. |
 
@@ -465,6 +481,10 @@ out.keyed.chip.intent;    // undefined — a plainly fixed node
 | `rotation` | number (deg) | Rotation in degrees. |
 | `clip` | boolean | Clip children to the frame's bounds. Default false, like CSS overflow: visible. |
 | `clipsContent` | boolean | Input alias for clip; duplicate values must agree. |
+| `minWidth` | number \| "none" | minWidth in positive pixels, effective on auto-layout containers and their direct children. Omitted preserves the bound; "none" clears it. Sizes constrained by bounds succeed with a console warning. |
+| `maxWidth` | number \| "none" | maxWidth in positive pixels, effective on auto-layout containers and their direct children. Omitted preserves the bound; "none" clears it. Sizes constrained by bounds succeed with a console warning. |
+| `minHeight` | number \| "none" | minHeight in positive pixels, effective on auto-layout containers and their direct children. Omitted preserves the bound; "none" clears it. Sizes constrained by bounds succeed with a console warning. |
+| `maxHeight` | number \| "none" | maxHeight in positive pixels, effective on auto-layout containers and their direct children. Omitted preserves the bound; "none" clears it. Sizes constrained by bounds succeed with a console warning. |
 | `width` | number \| "Npx" \| "N%" \| "fill" \| "hug" | A fixed size (a number or "Npx"), "N%" of the parent axis, "fill" (stretch to the parent — rejected on the root), or "hug" (shrink to content — only a row/column container or text can hug). |
 | `height` | number \| "fill" \| "hug" \| "N%" | Same rules as width. On TEXT the height follows the content ("hug", the default): set `width` to re-wrap it, use "fill" inside an auto-layout parent and "hug" to undo that; a fixed or percent height is rejected. |
 | `left` | number \| "Npx" \| "N%" | Offset from the parent's left edge — a number, "Npx", or "N%" of the parent width. Naming `left` or `top` lifts the node out of an auto-layout parent's flow (badges, overlays); under a free-form parent it is simply where the node sits. On a render root it is where on the PAGE the tree lands — without it every root stacks at the origin. Under edit, an axis you don't name keeps its live value. |
@@ -472,11 +492,12 @@ out.keyed.chip.intent;    // undefined — a plainly fixed node
 | `position` | "absolute" \| "none" | "absolute" lifts the node out of auto-layout flow where it stands (no coordinate needed — `left`/`top` already imply it). Under edit, "none" returns the node to the flow; naming `left`/`top`/`anchor` beside "none" fails loud. |
 | `anchor` | { x?: left/center/right, y?: top/center/bottom } | Which point of the node lands on `left`/`top` (default its top-left corner), so anchor:{ x:"center" } with left:"50%" centres it. Each anchor axis needs its coordinate in the same call. |
 | `pin` | { x?, y? } \| "none" — x: left/center/right/stretch/scale/none, y: top/center/bottom/stretch/scale/none | Constraint override — how the node responds when its parent resizes, replacing the automatic choice. Honored for a child of a free-form parent and for any out-of-flow (`left`/`top`) child; on an in-flow auto-layout child it is stored but inert (fill/hug governs there) until the node leaves the flow. Under edit, "none" restores the default near-edge pin. Never lifts a node out of flow by itself. |
-| `layout` | { mode?, gap?, padding?, justifyContent?, alignItems? } | Auto-layout config. Omitted or mode:"none" = free-form, where children position absolutely. |
+| `layout` | { mode?, wrap?, gap?, padding?, justifyContent?, alignItems? } | Auto-layout config. Omitted or mode:"none" = free-form, where children position absolutely. |
 | `text` | string \| run[] | The content — a plain string (markdown: **bold**, *italic*, ~~strike~~, [text](url)) or an array of styled runs. At create it is usually the positional first argument; under edit it replaces the whole content. |
 | `textStyle` | { fontFamily?, fontWeight?, fontSize?, fontStyle?, lineHeight?, letterSpacing?, textDecoration?, textTransform?, fontVariant?, textAlign?, textAlignVertical?, paragraphSpacing?, paragraphIndent?, listSpacing?, hyperlink?, lineClamp? } | The text style base. Runs layer over it. |
 | `fontSize` | number | Input alias for textStyle.fontSize; duplicate values must agree. |
 | `boldWeight` | number (100–900) \| name | What `**bold**` in `text` resolves to. Default 700 — pass back the `boldWeight` a `get` reports and the copy emphasizes like the original. Same spellings as fontWeight. Under edit it only means something beside `text`. |
+| `exposed` | boolean | Expose this nested instance's existing controls in the enclosing instance panel. Writable only inside a component definition; false clears it. |
 | `componentProperties` | { [name]: string \| boolean \| component target } | Values by bare name (no `#id` suffix), as `get` reports them: a variant axis, a boolean, a text, or a component target for an instance_swap. A slot has no value here — its content is `children` under `overrides`. |
 | `overrides` | { [path]: delta } | Sublayer deltas keyed by component-relative path as `get` keys them (`"11:9"`, or `"11:9;11:14"` inside a nested instance), each in that sublayer's edit vocabulary; at a SLOT's path the delta also takes `children`. |
 | `componentId` | component target | INSTANCE only, under edit: swap this instance to another COMPONENT or COMPONENT_SET. See Changing an instance. |
@@ -486,18 +507,18 @@ out.keyed.chip.intent;    // undefined — a plainly fixed node
 
 ### Words by node type
 
-- **FRAME** — `annotations`, `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `fill`, `stroke`, `strokeWidth`, `strokeAlign`, `borderRadius`, `effects`, `rotation`, `clipsContent`, `layout`, `clip`, `componentPropertyReferences`
-- **TEXT** — `annotations`, `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `fontSize`, `text`, `textStyle`, `fill`, `boldWeight`, `componentPropertyReferences`
-- **RECTANGLE** — `annotations`, `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `fill`, `stroke`, `strokeWidth`, `strokeAlign`, `borderRadius`, `effects`, `rotation`, `componentPropertyReferences`
-- **ELLIPSE** — `annotations`, `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `fill`, `stroke`, `strokeWidth`, `strokeAlign`, `effects`, `rotation`, `componentPropertyReferences`
+- **FRAME** — `annotations`, `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `minWidth`, `maxWidth`, `minHeight`, `maxHeight`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `fill`, `stroke`, `strokeWidth`, `strokeAlign`, `borderRadius`, `effects`, `rotation`, `clipsContent`, `layout`, `clip`, `componentPropertyReferences`
+- **TEXT** — `annotations`, `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `minWidth`, `maxWidth`, `minHeight`, `maxHeight`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `fontSize`, `text`, `textStyle`, `fill`, `boldWeight`, `componentPropertyReferences`
+- **RECTANGLE** — `annotations`, `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `minWidth`, `maxWidth`, `minHeight`, `maxHeight`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `fill`, `stroke`, `strokeWidth`, `strokeAlign`, `borderRadius`, `effects`, `rotation`, `componentPropertyReferences`
+- **ELLIPSE** — `annotations`, `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `minWidth`, `maxWidth`, `minHeight`, `maxHeight`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `fill`, `stroke`, `strokeWidth`, `strokeAlign`, `effects`, `rotation`, `componentPropertyReferences`
 - **LINE** — `annotations`, `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `stroke`, `strokeWidth`, `width`, `rotation`, `left`, `top`, `position`, `anchor`, `pin`, `componentPropertyReferences`
-- **VECTOR (path- or svg-born)** — `annotations`, `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `fill`, `stroke`, `strokeWidth`, `strokeAlign`, `effects`, `rotation`, `componentPropertyReferences`
-- **INSTANCE** — `annotations`, `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `fill`, `stroke`, `strokeWidth`, `strokeAlign`, `borderRadius`, `effects`, `rotation`, `clipsContent`, `layout`, `clip`, `componentProperties`, `overrides`, `componentId`, `componentPropertyReferences`
-- **COMPONENT** — `annotations`, `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `fill`, `stroke`, `strokeWidth`, `strokeAlign`, `borderRadius`, `effects`, `rotation`, `clipsContent`, `layout`, `clip`, `description`, `propertyDefinitions`
-- **COMPONENT_SET** — `annotations`, `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `fill`, `stroke`, `strokeWidth`, `strokeAlign`, `borderRadius`, `effects`, `rotation`, `clipsContent`, `layout`, `clip`, `description`, `propertyDefinitions`
+- **VECTOR (path- or svg-born)** — `annotations`, `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `minWidth`, `maxWidth`, `minHeight`, `maxHeight`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `fill`, `stroke`, `strokeWidth`, `strokeAlign`, `effects`, `rotation`, `componentPropertyReferences`
+- **INSTANCE** — `annotations`, `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `minWidth`, `maxWidth`, `minHeight`, `maxHeight`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `fill`, `stroke`, `strokeWidth`, `strokeAlign`, `borderRadius`, `effects`, `rotation`, `clipsContent`, `layout`, `clip`, `exposed`, `componentProperties`, `overrides`, `componentId`, `componentPropertyReferences`
+- **COMPONENT** — `annotations`, `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `minWidth`, `maxWidth`, `minHeight`, `maxHeight`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `fill`, `stroke`, `strokeWidth`, `strokeAlign`, `borderRadius`, `effects`, `rotation`, `clipsContent`, `layout`, `clip`, `description`, `propertyDefinitions`
+- **COMPONENT_SET** — `annotations`, `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `minWidth`, `maxWidth`, `minHeight`, `maxHeight`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `fill`, `stroke`, `strokeWidth`, `strokeAlign`, `borderRadius`, `effects`, `rotation`, `clipsContent`, `layout`, `clip`, `description`, `propertyDefinitions`
 - **POLYGON** — `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `annotations`
 - **STAR** — `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `annotations`
-- **SLOT** — `annotations`, `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `fill`, `stroke`, `strokeWidth`, `strokeAlign`, `borderRadius`, `effects`, `rotation`, `clipsContent`, `layout`, `clip`
+- **SLOT** — `annotations`, `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `minWidth`, `maxWidth`, `minHeight`, `maxHeight`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `fill`, `stroke`, `strokeWidth`, `strokeAlign`, `borderRadius`, `effects`, `rotation`, `clipsContent`, `layout`, `clip`
 
 On a node type with no vocabulary of its own (GROUP, SECTION, POLYGON, …) only the shared words apply: `name`, `opacity`, `mixBlendMode`, `visible`, `locked`.
 
@@ -545,9 +566,13 @@ Tree shape is its own set of verbs, and **position is the verb** — no index ar
 - a **constructor-built node** — built inside the destination. Returns `{ node, keyed, to }`: what `render` gives you, plus the container it landed in.
 - a **target naming a live node** — **moved** there, as `appendChild` moves an attached DOM node. Returns `{ node, from, to }`.
 
-Three more complete the set: `flcm.move(target, parent)` is the plain reparent (subject named first, node lands last), `flcm.remove(target)` deletes a node and its subtree, `flcm.clone(target, parent?)` duplicates one.
+Related operations: `flcm.move(target, parent)` is the plain reparent (subject named first, node lands last), `flcm.remove(target)` deletes a node and its subtree, `flcm.clone(target, parent?)` duplicates one.
 
 **`clone` is the copy path for subtrees a rebuild can't reproduce** — anything containing an INSTANCE, which is most real content. It duplicates the LIVE node, and the copy comes back **key-less** (a raw `node.clone()` would copy the `flcm/key` too, giving two nodes one address). It is faithful down to coordinates, so in a free-form parent it lands on top of the original — edit its `left`/`top` to separate them.
+
+`flcm.clone(target, props, parent?)` applies ordinary root size/style/position overrides as part of the copy; `clone(target, parent?)` remains valid. Component property edits are separate. Clone restores text, visibility, and instance-swap bindings with the destination definition IDs; owned SLOT definitions reject before writing because their restoration is unsupported.
+
+`flcm.measure(target)` returns current numeric `{ x, y, width, height }` relative to the immediate parent, including a page. Use those values with clone's `width`/`height`/`left`/`top` props when placing a measured copy. `flcm.replace(target, constructorBuiltSpec)` keeps parent/index and compatible sizing, placement, constraints, and bounds; explicit spec fields win. It returns the replacement's current handle and removes the old target only after the replacement succeeds.
 
 Every return carries the subject plus each container whose geometry could have changed — flat handles with fresh geometry, never nested trees. `to` is where things ended up, `from` is what something left; either is absent when that container is the page, and `from` is absent when you reordered inside one parent.
 
@@ -602,6 +627,8 @@ await flcm.component(flcm.id("12:34"), { name: "Card", description: "The list ca
 | `propertyDefinitions` | { [name]: { type, defaultValue? } } | The properties it exposes, by name — non-empty, unique in the call. See Properties. |
 
 ### Properties
+
+A primary nested instance inside a component definition accepts `exposed: true` to show its existing controls in the enclosing instance panel; `false` clears exposure. This works in component construction and edits to the definition's nested instance.
 
 `propertyDefinitions` declares what the component exposes; each node inside names the property that drives one of its fields with `componentPropertyReferences` (`null` is the edit-side unbind word, not a create word). Both are checked against each other before any write.
 
@@ -738,6 +765,10 @@ await flcm.edit(inst, { componentId: other.id });                               
 - **`componentProperties`** resolve against the component the instance is on now. An unnamed axis keeps its value: `{ State: "Hover" }` on `Size=Large` selects `Size=Large, State=Hover`. The instance keeps its id; its sublayer ids become the new variant's.
 - **`overrides`** edit the live sublayers `I<instanceId>;<path>` (`find({ within: inst })` locates them; `flcm.edit` on one is the same write), so a text delta resolves against the font that sublayer really has.
 - **`componentId`** swaps to a COMPONENT, or a COMPONENT_SET (its default variant unless `componentProperties` in the same delta pick one). Figma carries across the overrides it can match; the rest fall back to the new component's values.
+
+An instance root inherits its layout direction from its component. An edit may restate the matching `layout.mode`; a different direction is rejected before any writes. With a swap or variant change, the direction must match the incoming component. Edit the component or choose a matching variant to change direction.
+
+Numeric `width` and `height` edits on inherited rectangles are rejected before any writes, including overrides used to create or retarget an instance. Change the component or choose a suitable variant. Use `width: "fill"` or `height: "fill"` when the auto-layout parent should size the rectangle. The instance root can still be resized.
 
 **One delta, one order:** swap → properties → root words → overrides; override paths resolve against the incoming component.
 

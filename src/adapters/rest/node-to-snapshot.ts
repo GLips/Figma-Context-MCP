@@ -193,6 +193,10 @@ function restSubtreeToSnapshot(
             parentSpace.emittedParentFrame.pageRotation,
           )
         : undefined,
+    minWidth: raw.minWidth,
+    maxWidth: raw.maxWidth,
+    minHeight: raw.minHeight,
+    maxHeight: raw.maxHeight,
     layoutSizingHorizontal: raw.layoutSizingHorizontal,
     layoutSizingVertical: raw.layoutSizingVertical,
     layoutAlign: raw.layoutAlign,
@@ -238,6 +242,7 @@ function restSubtreeToSnapshot(
 
     // Component metadata
     componentId: raw.componentId,
+    isExposedInstance: raw.isExposedInstance,
     mainComponent: node.type === "INSTANCE" ? mainComponentOf(raw.componentId, tables) : undefined,
     componentKey: definitionEntry(node, tables)?.key || undefined,
     componentDescription: definitionEntry(node, tables)?.description || undefined,

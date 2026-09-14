@@ -25,6 +25,7 @@
 import {
   WriteNode, WriteChild, Handle, Target, ComponentPropertyBinding, ComponentResult, VariantEntryInput,
 } from "./ir.js";
+import { applyExposures } from "./instance-exposure.js";
 import { recordPromotionAlias } from "./promotion-aliases.js";
 import { resolveTarget, createResolvedTargets, ResolvedTargets } from "./read.js";
 import {
@@ -591,7 +592,7 @@ export function component(nodeOrTarget: WriteNode | Target, options?: ComponentO
         assertPromotable(prepared.node);
         return { kind: "target", node: prepared.node, definitions: resolveDefaults(prepared.options.definitions, [], new Map(), "target", prepared.targets), options: prepared.options };
       }
-      const resources = gateTreeResources(prepared.tree, prepared.loaded);
+      const resources = gateTreeResources(prepared.tree, prepared.loaded, { componentRoot: true });
       const definitions = resolveDefaults(prepared.options.definitions, prepared.bound, resources.instances, "built", prepared.loaded.targets);
       return { kind: "built", tree: prepared.tree, resources, definitions, options: prepared.options };
     },
@@ -622,6 +623,7 @@ function applyBuiltComponent({ tree, resources, definitions, options }: GatedBui
       ctx.keyed[tree.key] = comp;
     }
     declareProperties(comp, definitions, ctx.bindings!, options);
+    applyExposures(ctx.exposures);
     return settleHandles(comp, ctx.keyed);
   } catch (cause) {
     throw fail(cause);

@@ -32,6 +32,12 @@ import { assertConstructorBuiltTree, isConstructorBuilt, isReadNode } from "./pr
 import { loadTreeResources, gateTreeResources, LoadedTreeResources } from "./render.js";
 import { prepareInsertBindings, applyInsertBindings, InsertBindingPlan } from "./component-edit.js";
 import { clearKeysDeep, childListClosingInstanceOf } from "./identity.js";
+import { applyExposures } from "./instance-exposure.js";
+import { captureCloneBindings, restoreCloneBindings } from "./clone-bindings.js";
+import { replacementTree } from "./structure-layout.js";
+import type { EditDelta } from "./schema.js";
+import { compileEditPlan, loadEditResources, gateEditResources, assertEditPlanLands,
+  applyEditPlanWrites, settleEditPlanSizes, settleEditPlanPositions } from "./edit-plan.js";
 import { beginMutatingApply } from "./verb-error.js";
 
 // Where a placement verb puts its subject inside the destination. `place` is a closure evaluated
@@ -241,6 +247,7 @@ function applyInsert(verb: string, { dest, tree, resources, bindings }: Prepared
     // After the tree is attached and settled: the property references (and the slot properties this
     // insert declares) land in the same sealed span, so a bound layer is never on the canvas unbound.
     if (bindings) applyInsertBindings(bindings, ctx.bindings!);
+    applyExposures(ctx.exposures);
   } catch (cause) {
     throw fail(cause);
   }
@@ -320,7 +327,7 @@ function placeVerb(verb: string, anchor: Target, thing: unknown, placement: Plac
       // one place outside flcm.component where a binding names a property that exists. Everywhere
       // else this is the standing refusal, raised from inside (component-edit.ts).
       const bindings = prepareInsertBindings(subject, dest.parent, tree);
-      return { kind: "insert", dest, tree, resources: gateTreeResources(tree, resolved.loaded), bindings };
+      return { kind: "insert", dest, tree, resources: gateTreeResources(tree, resolved.loaded, { destination: dest.parent }), bindings };
     },
     (prepared) => (prepared.kind === "insert" ? applyInsert(verb, prepared) : applyPlacement(verb, prepared)),
   );
@@ -417,17 +424,24 @@ export function remove(target: Target): Promise<RemoveResult> {
  * the original's exact coordinates — directly on top of it. That's the faithful-duplicate contract,
  * not an oversight: `edit` the copy's left/top to separate them.
  */
-export function clone(target: Target, parent?: Target): Promise<CloneResult> {
+export function clone(target: Target, parent?: Target): Promise<CloneResult>;
+export function clone(target: Target, props: EditDelta, parent?: Target): Promise<CloneResult>;
+export function clone(target: Target, propsOrParent?: EditDelta | Target, parent?: Target): Promise<CloneResult> {
+  const isDestination = typeof propsOrParent === "string" || !!propsOrParent && typeof propsOrParent === "object" && isTargetShaped(propsOrParent);
+  const props = isDestination ? undefined : propsOrParent as EditDelta | undefined;
+  const destination = isDestination ? propsOrParent as Target : parent;
   return enterMutatingVerb(
     "clone",
     async () => {
       const pages = createLoadedPages();
       const node: any = await resolveTarget(target);
-      if (parent != null) return { node, anchorNode: await resolveAnchor(parent, "end", pages), pages };
-      await loadPageForWrite(node.parent, pages);
-      return { node, anchorNode: undefined, pages };
+      const hint = props === undefined ? undefined : compileCloneProps(node, props);
+      const loaded = await loadEditResources(hint ? [hint] : []);
+      const anchorNode = destination != null ? await resolveAnchor(destination, "end", pages) : undefined;
+      if (!anchorNode) await loadPageForWrite(node.parent, pages);
+      return { node, anchorNode, pages, loaded };
     },
-    ({ node, anchorNode, pages }) => {
+    ({ node, anchorNode, pages, loaded }) => {
       assertNodeStillOnCanvas(node, "flcm.clone");
       const dest = anchorNode !== undefined ? destinationOf("flcm.clone", anchorNode, "end", pages) : endOf(node.parent);
       if (!dest.parent) {
@@ -441,9 +455,13 @@ export function clone(target: Target, parent?: Target): Promise<CloneResult> {
       // The ORIGINAL's parent-relative intent: the copy is born carrying the same flow marks, and
       // they mean the old parent's axes exactly as a move's do. No cycle check — the copy did not
       // exist a moment ago, so it can't contain its own destination.
-      return { node, dest, words: assertLiveNodeLandsUnderParent(node, dest.parent, "flcm.clone") };
+      const edit = props === undefined ? undefined : compileCloneProps(node, props);
+      // Font coverage is checked on the source; placement legality belongs to the destination.
+      if (edit) assertEditPlanLands({ ...edit, patch: { ...edit.patch, layout: undefined } }, loaded.fonts, "flcm.clone");
+      return { node, dest, words: assertLiveNodeLandsUnderParent(node, dest.parent, "flcm.clone", edit?.patch.layout),
+        edit, resources: gateEditResources(loaded, []), bindings: captureCloneBindings(node) };
     },
-    ({ node, dest, words }) => {
+    ({ node, dest, words, edit, resources, bindings }) => {
       const fail = beginMutatingApply("clone", node);
       let copy: any;
       try {
@@ -453,8 +471,58 @@ export function clone(target: Target, parent?: Target): Promise<CloneResult> {
         throw fail(cause);
       }
       // From here the copy is the subject, and placing it is exactly a move.
-      const placed = applyPlacement("clone", { kind: "placement", dest, node: copy, words });
-      return { node: placed.node, to: placed.to };
+      applyPlacement("clone", { kind: "placement", dest, node: copy, words });
+      try { restoreCloneBindings(copy, bindings); } catch (cause) { throw fail(cause); }
+      if (edit) {
+        const plan = { ...edit, node: copy };
+        applyEditPlanWrites(fail, plan, resources);
+        settleEditPlanSizes(fail, plan);
+        settleEditPlanPositions(fail, plan);
+      }
+      return { node: mintHandle(copy), to: containerHandle(dest.parent) };
     },
   );
+}
+
+function compileCloneProps(node: any, props: EditDelta) {
+  if (props && typeof props === "object" && !Array.isArray(props) && Object.keys(props).length === 0) return undefined;
+  const plan = compileEditPlan(node, props, "flcm.clone");
+  if (plan.instanceWords || plan.componentWords) throw new Error("flcm.clone: overrides are ordinary root properties; edit component properties, bindings, or nested overrides on the returned copy separately. Nothing was applied.");
+  return plan;
+}
+
+/** Numeric geometry relative to the immediate parent, including the page. */
+export async function measure(target: Target): Promise<{ x: number; y: number; width: number; height: number }> {
+  const node: any = await resolveTarget(target);
+  assertNodeStillOnCanvas(node, "flcm.measure");
+  if (![node.x, node.y, node.width, node.height].every(Number.isFinite)) throw new Error("flcm.measure: target has no measurable scene geometry.");
+  return { x: node.x, y: node.y, width: node.width, height: node.height };
+}
+
+/** Replace content in one sealed mutation, keeping the original until the new tree is settled. */
+export function replace(target: Target, spec: WriteNode): Promise<InsertResult> {
+  return enterMutatingVerb("replace", async () => {
+    assertConstructorBuiltTree(spec);
+    const node: any = await resolveTarget(target);
+    const pages = createLoadedPages();
+    await loadPageForWrite(node.parent, pages);
+    return { node, pages, loaded: await loadTreeResources(spec) };
+  }, ({ node, pages, loaded }): PreparedInsert & { original: any } => {
+    assertNodeStillOnCanvas(node, "flcm.replace");
+    assertInstanceChildListUntouched("flcm.replace", node, "subject");
+    const dest = destinationOf("flcm.replace", node, "before", pages);
+    assertInstanceChildListUntouched("flcm.replace", dest.parent, "destination");
+    assertBuiltInsertNotIntoSet("flcm.replace", dest.parent);
+    const tree = replacementTree(node, spec);
+    assertBuiltRootLandsUnderParent(dest.parent, tree, "flcm.replace");
+    return { kind: "insert", original: node, dest, tree,
+      resources: gateTreeResources(tree, loaded, { destination: dest.parent }), bindings: prepareInsertBindings("flcm.replace", dest.parent, tree) };
+  }, (prepared) => {
+    const fail = beginMutatingApply("replace", prepared.original);
+    const result = applyInsert("replace", prepared);
+    try { prepared.original.remove(); } catch (cause) { throw fail(cause); }
+    // Removing the old flow item can change the replacement's final fill/hug geometry.
+    return { ...result, node: mintHandle(prepared.dest.parent.children.find((node: any) => node.id === result.node.id)),
+      to: containerHandle(prepared.dest.parent) };
+  });
 }

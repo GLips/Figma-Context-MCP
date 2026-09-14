@@ -352,7 +352,7 @@ function quickStartVerbLines(): string {
 // verb signatures, the must-knows, the pointer to the reference tool. ----
 export function buildQuickStart(): string {
   const verbLines = quickStartVerbLines();
-  const quickStart = `Execute JavaScript against the live Figma Plugin API (figma.*) in the plugin sandbox. The \`flcm\` DSL is in scope — prefer it over raw figma.*.
+  const quickStart = `Execute JavaScript in the live Figma plugin sandbox. Prefer the in-scope \`flcm\` DSL over raw figma.*.
 
 EXECUTION MODEL — your code runs in an async function body: use \`await\` directly and \`return <value>\`. Each call runs in its OWN scope — thread state by returning ids/keys and re-targeting them (flcm.get).
 

@@ -341,6 +341,11 @@ function projectSlim(node: SceneNode, simplified: SimplifiedNode | undefined, ca
   if (simplified) {
     if (simplified.width !== undefined) slim.width = simplified.width;
     if (simplified.height !== undefined) slim.height = simplified.height;
+    if (simplified.minWidth !== undefined) slim.minWidth = simplified.minWidth;
+    if (simplified.maxWidth !== undefined) slim.maxWidth = simplified.maxWidth;
+    if (simplified.minHeight !== undefined) slim.minHeight = simplified.minHeight;
+    if (simplified.maxHeight !== undefined) slim.maxHeight = simplified.maxHeight;
+
     const mode = typeof simplified.layout === "object" ? simplified.layout.mode : undefined;
     if (mode && mode !== "none") slim.layout = { mode };
     if (simplified.position === "absolute") slim.position = "absolute";

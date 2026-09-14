@@ -17,7 +17,7 @@ const __measuring = new Set(); // (node,dim) keys in-flight, to break the fill<-
 const clonePaints = (p) => (Array.isArray(p) ? JSON.parse(JSON.stringify(p)) : p);
 
 // The visual/layout props carried across clone (instance) and promote (createComponentFromNode).
-const COPY_FIELDS = ["name", "layoutMode", "itemSpacing", "paddingTop", "paddingRight", "paddingBottom",
+const COPY_FIELDS = ["isExposedInstance", "layoutWrap", "counterAxisSpacing", "counterAxisAlignContent", "minWidth", "maxWidth", "minHeight", "maxHeight", "name", "layoutMode", "itemSpacing", "paddingTop", "paddingRight", "paddingBottom",
   "paddingLeft", "primaryAxisAlignItems", "counterAxisAlignItems", "primaryAxisSizingMode",
   "counterAxisSizingMode", "layoutGrow", "layoutAlign", "layoutPositioning", "constraints", "strokeWeight", "strokeAlign",
   "cornerRadius", "opacity", "visible", "rotation", "characters", "fontSize", "textAutoResize",
@@ -70,6 +70,10 @@ class Node {
     // auto-layout
     this.layoutMode = "NONE";
     this.itemSpacing = 0;
+    this.layoutWrap = "NO_WRAP";
+    this.counterAxisSpacing = 0;
+    this.counterAxisAlignContent = "AUTO";
+    this.isExposedInstance = false;
     this.paddingTop = this.paddingRight = this.paddingBottom = this.paddingLeft = 0;
     this.primaryAxisAlignItems = "MIN";
     this.counterAxisAlignItems = "MIN";
@@ -116,6 +120,7 @@ class Node {
     this.paragraphIndent = 0;
     this.listSpacing = 0;
     // geometry (explicit, from resize). Shapes get an intrinsic default size like the live API.
+    this.minWidth = this.maxWidth = this.minHeight = this.maxHeight = null;
     this._fixedW = null;
     this._fixedH = null;
     if (type === "RECTANGLE" || type === "ELLIPSE" || type === "POLYGON" || type === "STAR") { this._fixedW = 100; this._fixedH = 100; }
@@ -183,7 +188,11 @@ class Node {
     figma.currentPage.appendChild(copy);
     return copy;
   }
-  resize(w, h) { this._fixedW = w; this._fixedH = h; }
+  resize(w, h) { this._fixedW = this._bounded(w, "Width"); this._fixedH = this._bounded(h, "Height"); }
+  _bounded(value, axis) {
+    const auto = (node) => node && ["HORIZONTAL", "VERTICAL", "GRID"].includes(node.layoutMode);
+    return auto(this) || auto(this.parent) ? Math.max(this["min" + axis] ?? 0, Math.min(this["max" + axis] ?? Infinity, value)) : value;
+  }
   remove() {
     if (this.parent) assertChildListOpen(this, false, "remove");
     if (this.parent) this.parent.children = this.parent.children.filter((c) => c !== this);
@@ -352,8 +361,8 @@ class Node {
   }
 
   // --- sizing: width/height as getters so reads during a run reflect current state ---
-  get width() { return this._sizeOf("w"); }
-  get height() { return this._sizeOf("h"); }
+  get width() { return this._bounded(this._sizeOf("w"), "Width"); }
+  get height() { return this._bounded(this._sizeOf("h"), "Height"); }
 
   // The sizing resolver is mutually recursive (child fills against parent, parent hugs from children),
   // and a w:'fill' text inside a w:'fill' row can drive it in a cycle. Guard re-entry per (node,dim):

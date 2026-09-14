@@ -1,3 +1,4 @@
+import { beginSizingDiagnostics, finishSizingDiagnostics } from "./sizing-diagnostics.js";
 // mutation-lock — the single entry point every mutating verb takes (plan invariant 4): render, edit,
 // editMany, the component verbs, and the structural verbs. Three jobs, one place — serialize verbs,
 // enforce cancellation, own the undo scaffold (the seal/commit/rollback shape lives on
@@ -162,9 +163,11 @@ export function enterMutatingVerb<P, G, T>(
       // overreach into the previous step the stamp exists to prevent.
       stampUndoStep();
       try {
+        beginSizingDiagnostics();
         const result = apply(gated);
         figma.commitUndo();
         committedVerbs++;
+        finishSizingDiagnostics(verb);
         return result;
       } catch (err) {
         figma.commitUndo();

@@ -227,6 +227,7 @@ export interface SimplifiedNode extends NodeGeometry {
   // an off-tree definition can be named. Any component sublayer names the property that
   // drives one of its fields, keyed by that output field
   // (`visible` / `text` / `componentId` / `slot`).
+  exposed?: boolean;
   componentId?: string;
   componentProperties?: Record<string, boolean | string>;
   componentPropertyReferences?: Record<string, string>;

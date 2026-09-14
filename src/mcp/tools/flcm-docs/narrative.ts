@@ -76,7 +76,15 @@ flcm.frame({ width: 320, height: 200 }, [
 flcm.ellipse({ width: 16, height: 16, left: "40%", top: "50%", anchor: { x: "center", y: "center" } });
 \`\`\`
 
-\`pin\` is ignored on an in-flow auto-layout child, which reflows through \`fill\`/\`hug\` instead. A bad \`pin\` or \`anchor\` value fails loud.`;
+\`pin\` is ignored on an in-flow auto-layout child, which reflows through \`fill\`/\`hug\` instead. A bad \`pin\` or \`anchor\` value fails loud.
+
+Sizing bounds use \`minWidth\`, \`maxWidth\`, \`minHeight\`, and \`maxHeight\` in positive pixels. Bounds govern auto-layout containers and their direct children. Reads retain these bounds, including instance-only bounds. Omitted bounds remain unchanged; \`"none"\` clears one. A valid resize constrained by a bound succeeds and reports its requested size, bound and resulting size in the execution console. Contradictory bounds reject before writes.
+
+After resizing, the console reports affected containers with overflowing children in one compact warning, grouped by clipped and unclipped IDs. This includes existing overflow and nested layouts after the batch settles. The write still succeeds.
+
+New text with omitted width fills a column whose available width is independently bounded, and omitted height grows with wrapped content. A hugging column or horizontal row keeps content-driven text width. Explicit sizes and omitted edit fields retain their existing meaning.
+
+Budget fixed widths together with padding and gaps; use \`"fill"\` for the remaining space. Fixed heights can overflow when text wraps or children grow. Use \`"hug"\` where the container should grow with content. Existing \`pin\` constraints control children of free-form containers and absolute children; in-flow auto-layout children use fill/hug. Inspect screenshots for visual quality beyond geometric overflow.`;
 
 export const VECTOR_INTRO = `Render real vector art — icons, logos, glyphs — instead of composing them from rects/ellipses or leaning on emoji (which render inconsistently and read as *content*, not iconography). There is **no built-in icon catalog**: bring your own SVG markup or path data.
 
@@ -341,9 +349,13 @@ export const STRUCTURE_INTRO = `Tree shape is its own set of verbs, and **positi
 - a **constructor-built node** — built inside the destination. Returns \`{ node, keyed, to }\`: what \`render\` gives you, plus the container it landed in.
 - a **target naming a live node** — **moved** there, as \`appendChild\` moves an attached DOM node. Returns \`{ node, from, to }\`.
 
-Three more complete the set: \`flcm.move(target, parent)\` is the plain reparent (subject named first, node lands last), \`flcm.remove(target)\` deletes a node and its subtree, \`flcm.clone(target, parent?)\` duplicates one.
+Related operations: \`flcm.move(target, parent)\` is the plain reparent (subject named first, node lands last), \`flcm.remove(target)\` deletes a node and its subtree, \`flcm.clone(target, parent?)\` duplicates one.
 
 **\`clone\` is the copy path for subtrees a rebuild can't reproduce** — anything containing an INSTANCE, which is most real content. It duplicates the LIVE node, and the copy comes back **key-less** (a raw \`node.clone()\` would copy the \`flcm/key\` too, giving two nodes one address). It is faithful down to coordinates, so in a free-form parent it lands on top of the original — edit its \`left\`/\`top\` to separate them.
+
+\`flcm.clone(target, props, parent?)\` applies ordinary root size/style/position overrides as part of the copy; \`clone(target, parent?)\` remains valid. Component property edits are separate. Clone restores text, visibility, and instance-swap bindings with the destination definition IDs; owned SLOT definitions reject before writing because their restoration is unsupported.
+
+\`flcm.measure(target)\` returns current numeric \`{ x, y, width, height }\` relative to the immediate parent, including a page. Use those values with clone's \`width\`/\`height\`/\`left\`/\`top\` props when placing a measured copy. \`flcm.replace(target, constructorBuiltSpec)\` keeps parent/index and compatible sizing, placement, constraints, and bounds; explicit spec fields win. It returns the replacement's current handle and removes the old target only after the replacement succeeds.
 
 Every return carries the subject plus each container whose geometry could have changed — flat handles with fresh geometry, never nested trees. \`to\` is where things ended up, \`from\` is what something left; either is absent when that container is the page, and \`from\` is absent when you reordered inside one parent.`;
 
@@ -387,7 +399,9 @@ await flcm.component(flcm.id("12:34"), { name: "Card", description: "The list ca
 - **The target form** promotes in place (same parent and index). Old root IDs resolve to the new component when the original node is absent; aliases persist in this file, and returned handles use the current ID. It refuses a COMPONENT or COMPONENT_SET (edit it), an INSTANCE (Figma would *wrap* it; detach first), a node inside an instance, a SLOT, and a page.
 - Nothing is written until every gate passes; the call is one undo step.`;
 
-export const COMPONENTS_PROPERTIES = `\`propertyDefinitions\` declares what the component exposes; each node inside names the property that drives one of its fields with \`componentPropertyReferences\` (\`null\` is the edit-side unbind word, not a create word). Both are checked against each other before any write.
+export const COMPONENTS_PROPERTIES = `A primary nested instance inside a component definition accepts \`exposed: true\` to show its existing controls in the enclosing instance panel; \`false\` clears exposure. This works in component construction and edits to the definition's nested instance.
+
+\`propertyDefinitions\` declares what the component exposes; each node inside names the property that drives one of its fields with \`componentPropertyReferences\` (\`null\` is the edit-side unbind word, not a create word). Both are checked against each other before any write.
 
 \`\`\`js
 await flcm.component(
@@ -508,6 +522,10 @@ await flcm.edit(inst, { componentId: other.id });                               
 - **\`componentProperties\`** resolve against the component the instance is on now. An unnamed axis keeps its value: \`{ State: "Hover" }\` on \`Size=Large\` selects \`Size=Large, State=Hover\`. The instance keeps its id; its sublayer ids become the new variant's.
 - **\`overrides\`** edit the live sublayers \`I<instanceId>;<path>\` (\`find({ within: inst })\` locates them; \`flcm.edit\` on one is the same write), so a text delta resolves against the font that sublayer really has.
 - **\`componentId\`** swaps to a COMPONENT, or a COMPONENT_SET (its default variant unless \`componentProperties\` in the same delta pick one). Figma carries across the overrides it can match; the rest fall back to the new component's values.
+
+An instance root inherits its layout direction from its component. An edit may restate the matching \`layout.mode\`; a different direction is rejected before any writes. With a swap or variant change, the direction must match the incoming component. Edit the component or choose a matching variant to change direction.
+
+Numeric \`width\` and \`height\` edits on inherited rectangles are rejected before any writes, including overrides used to create or retarget an instance. Change the component or choose a suitable variant. Use \`width: "fill"\` or \`height: "fill"\` when the auto-layout parent should size the rectangle. The instance root can still be resized.
 
 **One delta, one order:** swap → properties → root words → overrides; override paths resolve against the incoming component.`;
 

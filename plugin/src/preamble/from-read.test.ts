@@ -173,9 +173,9 @@ test("layout words flcm has no vocabulary for fail loud; a grid names itself", a
     /`gridTemplateColumns` has no authored form/,
   );
   assert.throws(() => fromRead(readShape({ type: "FRAME", layout: { mode: "grid" } })), /layout\.mode must be one of/);
-  assert.throws(() => fromRead(readShape({ type: "FRAME", layout: { mode: "row", wrap: true } })), /layout: `wrap` has no authored form/);
-  // flcm has one gap and one radius — the multi-value CSS forms are state, not something to average.
-  assert.throws(() => fromRead(readShape({ type: "FRAME", layout: { mode: "row", gap: "8px 12px" } })), /flcm authors one gap/);
+  assert.equal(fromRead(readShape({ type: "FRAME", layout: { mode: "row", wrap: true, gap: "8px 12px" } })).layout?.wrap, true);
+  // Unequal gaps need wrapping; corner radii retain their uniform-only vocabulary.
+  assert.throws(() => fromRead(readShape({ type: "FRAME", layout: { mode: "row", gap: "8px 12px" } })), /unequal row\/column gaps require/);
   assert.throws(() => fromRead(readShape({ type: "RECTANGLE", borderRadius: "8px 8px 0px 0px" })), /one uniform corner radius/);
 });
 

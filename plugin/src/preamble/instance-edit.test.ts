@@ -369,3 +369,123 @@ test("editMany refuses an entry aimed INSIDE an instance another entry re-points
   assert.equal(inst.mainComponent.name, "Chip");
   assert.deepEqual((await figma.getNodeByIdAsync(liveLabelId)).fills[0].color, { r: 0, g: 0, b: 0 }); // the sibling never landed
 });
+
+test("instance direction mismatch rejects all root words before writes; matching direction is allowed", async () => {
+  const { inst } = await chipComponent();
+  const before = { gap: inst.itemSpacing, name: inst.name, opacity: inst.opacity, undo: [...figma.undoLog] };
+  await assert.rejects(edit(id(inst.id), { name: "Changed", opacity: 0.5, layout: { mode: "column", gap: 20 } }), /instance root inherits its layout direction/);
+  assert.equal(inst.layoutMode, "HORIZONTAL");
+  assert.deepEqual({ gap: inst.itemSpacing, name: inst.name, opacity: inst.opacity, undo: figma.undoLog }, before);
+  await edit(id(inst.id), { layout: { mode: "row", gap: 20 } });
+  assert.equal(inst.itemSpacing, 20);
+  assert.equal(inst.layoutMode, "HORIZONTAL");
+});
+
+test("editMany refuses the entire batch for an incompatible instance direction", async () => {
+  const { inst, comp } = await chipComponent();
+  const before = [...figma.undoLog];
+  await assert.rejects(editMany([
+    { target: id(comp.id), changes: { name: "Changed" } },
+    { target: id(inst.id), changes: { layout: { mode: "none" }, opacity: 0.5 } },
+  ]), /instance root inherits its layout direction/);
+  assert.equal(comp.name, "Chip");
+  assert.equal(inst.opacity, 1);
+  assert.equal(inst.itemSpacing, 4);
+  assert.equal(inst.layoutMode, "HORIZONTAL");
+  assert.deepEqual(figma.undoLog, before);
+});
+
+for (const retarget of ["swap", "variant"] as const) {
+  test(`${retarget} direction validation uses the incoming component, with zero writes on rejection`, async () => {
+    const { variants, inst } = await variantSet();
+    variants[1].layoutMode = "HORIZONTAL";
+    variants[2].layoutMode = "VERTICAL";
+    // Refresh the mock instance from the outgoing definition.
+    inst.swapComponent(variants[1]);
+    const changes = retarget === "swap" ? { componentId: variants[2].id } : { componentProperties: { State: "Hover" } };
+    const before = [...figma.undoLog];
+    await assert.rejects(edit(id(inst.id), { ...changes, opacity: 0.5, layout: { mode: "row", gap: 20 } }), /instance root inherits its layout direction/);
+    assert.equal(inst.mainComponent, variants[1]);
+    assert.equal(inst.opacity, 1);
+    assert.equal(inst.itemSpacing, 0);
+    assert.deepEqual(figma.undoLog, before);
+    await editMany([{ target: id(inst.id), changes: { ...changes, layout: { mode: "column", gap: 20 } } }]);
+    assert.equal(inst.mainComponent, variants[2]);
+    assert.equal(inst.layoutMode, "VERTICAL");
+    assert.equal(inst.itemSpacing, 20);
+  });
+}
+
+test("nested instance direction overrides reject before root writes on live and incoming trees", async () => {
+  const { comp } = await chipComponent();
+  const outer = figma.createComponent();
+  const nested = comp.createInstance();
+  outer.appendChild(nested);
+  const { inst } = await chipComponent();
+  for (const retarget of [true, false]) {
+    if (!retarget) inst.swapComponent(outer);
+    const before = [...figma.undoLog];
+    const current = inst.mainComponent;
+    await assert.rejects(edit(id(inst.id), {
+      ...(retarget ? { componentId: outer.id } : {}),
+      opacity: 0.5,
+      overrides: { [nested.id]: { layout: { mode: "column", gap: 20 } } },
+    }), /instance root inherits its layout direction/);
+    assert.equal(inst.mainComponent, current);
+    assert.equal(inst.opacity, 1);
+    assert.equal(nested.itemSpacing, 4);
+    if (!retarget) assert.equal(inst.children[0].itemSpacing, 4);
+    assert.deepEqual(figma.undoLog, before);
+  }
+});
+
+test("inherited rectangle dimensions reject before style writes, while fill and root resizing remain editable", async () => {
+  const { inst, icon } = await chipComponent();
+  const liveIcon = inst.children[0];
+  const before = [...figma.undoLog];
+  for (const dimensions of [{ width: 72 }, { height: 72 }]) {
+    await assert.rejects(edit(id(liveIcon.id), { ...dimensions, fill: "#00ff00" }), /explicit width\/height cannot resize an inherited rectangle/);
+    assert.equal(liveIcon.width, 12);
+    assert.equal(liveIcon.height, 12);
+    assert.deepEqual(liveIcon.fills[0].color, { r: 1, g: 1, b: 1 });
+    assert.deepEqual(figma.undoLog, before);
+  }
+  await edit(id(liveIcon.id), { width: "fill", fill: "#00ff00" });
+  assert.equal(liveIcon.layoutSizingHorizontal, "FILL");
+  assert.deepEqual(liveIcon.fills[0].color, { r: 0, g: 1, b: 0 });
+  await edit(id(inst.id), { width: 200, height: 80 });
+  assert.equal(inst.width, 200);
+  assert.equal(inst.height, 80);
+  await edit(id(icon.id), { width: 72 });
+  assert.equal(icon.width, 72);
+});
+
+test("inherited rectangle dimensions reject an entire editMany batch", async () => {
+  const { inst, comp } = await chipComponent();
+  const before = [...figma.undoLog];
+  await assert.rejects(editMany([
+    { target: id(comp.id), changes: { name: "Changed" } },
+    { target: id(inst.children[0].id), changes: { width: 72, fill: "#00ff00" } },
+  ]), /explicit width\/height cannot resize an inherited rectangle/);
+  assert.equal(comp.name, "Chip");
+  assert.equal(inst.children[0].width, 12);
+  assert.deepEqual(figma.undoLog, before);
+});
+
+test("rectangle overrides gate before creating an instance or retargeting its component", async () => {
+  const { comp, icon, inst } = await chipComponent();
+  const overrides = { [icon.id]: { width: 72, fill: "#00ff00" } };
+  const before = [...figma.undoLog];
+  const children = [...figma.currentPage.children];
+  await assert.rejects(render(instance(comp.id, { overrides })), /explicit width\/height cannot resize an inherited rectangle/);
+  assert.deepEqual(figma.currentPage.children, children);
+  await assert.rejects(edit(id(inst.id), { opacity: 0.5, overrides }), /explicit width\/height cannot resize an inherited rectangle/);
+  const other = figma.createComponent();
+  const outgoing = other.createInstance();
+  await assert.rejects(edit(id(outgoing.id), { componentId: comp.id, opacity: 0.5, overrides }), /explicit width\/height cannot resize an inherited rectangle/);
+  assert.equal(outgoing.mainComponent, other);
+  assert.equal(outgoing.opacity, 1);
+  assert.equal(inst.opacity, 1);
+  assert.equal(icon.width, 12);
+  assert.deepEqual(figma.undoLog, before);
+});

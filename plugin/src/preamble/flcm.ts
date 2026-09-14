@@ -1,3 +1,4 @@
+import { compileBounds, BOUND_KEYS } from "./size-bounds.js";
 // flcm — the constructors. This is most of what the agent touches: a namespace of document-blind constructors
 // that build POJO WriteNodes (the typed IR currency) and mutate nothing. render() — the one async call
 // that walks a tree and creates live nodes — lives in render.ts, which imports FROM here: an instance
@@ -62,19 +63,19 @@ import type {
 export const KNOWN_KEYS = {
   annotation: ["annotations"],
   shared: ["name", "key", "opacity", "mixBlendMode", "visible", "locked"],
-  edit: ["clipsContent", "fontSize", "annotations", "name", "opacity", "mixBlendMode", "visible", "locked", "fill", "stroke", "strokeWidth", "strokeAlign", "borderRadius", "effects", "rotation", "clip", "width", "height", "left", "top", "position", "anchor", "pin", "layout", "text", "textStyle", "boldWeight", "componentProperties", "overrides", "componentId", "componentPropertyReferences", "description", "propertyDefinitions"],
-  size: ["width", "height", "left", "top", "position", "anchor", "pin"],
+  edit: ["exposed", ...BOUND_KEYS, "clipsContent", "fontSize", "annotations", "name", "opacity", "mixBlendMode", "visible", "locked", "fill", "stroke", "strokeWidth", "strokeAlign", "borderRadius", "effects", "rotation", "clip", "width", "height", "left", "top", "position", "anchor", "pin", "layout", "text", "textStyle", "boldWeight", "componentProperties", "overrides", "componentId", "componentPropertyReferences", "description", "propertyDefinitions"],
+  size: [...BOUND_KEYS, "width", "height", "left", "top", "position", "anchor", "pin"],
   placement: ["left", "top", "position", "anchor", "pin"],
   appearance: ["fill", "stroke", "strokeWidth", "strokeAlign", "borderRadius", "effects", "rotation"],
   ellipse: ["fill", "stroke", "strokeWidth", "strokeAlign", "effects", "rotation"],
   frame: ["layout", "clip", "clipsContent"],
-  layout: ["mode", "gap", "padding", "justifyContent", "alignItems"],
+  layout: ["mode", "gap", "wrap", "padding", "justifyContent", "alignItems"],
   text: ["text", "textStyle", "fill", "boldWeight", "fontSize"],
   textStyle: ["fontFamily", "fontWeight", "fontSize", "fontStyle", "lineHeight", "letterSpacing", "textDecoration", "textTransform", "fontVariant", "textAlign", "textAlignVertical", "paragraphSpacing", "paragraphIndent", "listSpacing", "hyperlink", "lineClamp"],
   run: ["fontWeight", "fontSize", "fontFamily", "fontStyle", "lineHeight", "letterSpacing", "textDecoration", "textTransform", "fontVariant", "paragraphSpacing", "paragraphIndent", "listSpacing", "color", "hyperlink"],
   line: ["stroke", "strokeWidth", "width", "rotation", "left", "top", "position", "anchor", "pin"],
   path: ["d", "fill", "stroke", "strokeWidth", "strokeAlign", "effects", "rotation"],
-  instance: ["componentProperties", "overrides"],
+  instance: ["componentProperties", "overrides", "exposed"],
   swap: ["componentId"],
   slotContent: ["children"],
   binding: ["componentPropertyReferences"],
@@ -364,7 +365,15 @@ export function compileContainerWords(cfg: NonNullable<FrameProps["layout"]>, su
   rejectUnknownKeys(cfg, LAYOUT_KEYS, subject);
   const layout: WriteLayout = {};
   if (cfg.mode != null) layout.mode = assertEnum("layout.mode", cfg.mode, LAYOUT_MODE);
-  if (cfg.gap != null) layout.gap = length(cfg.gap);
+  if (cfg.gap != null) {
+    const values = typeof cfg.gap === "string" ? cfg.gap.trim().split(/\s+/).map(length) : [cfg.gap];
+    if (values.length < 1 || values.length > 2 || values.some(v => typeof v !== "number" || !Number.isFinite(v))) throw new Error("flcm." + subject + ': gap needs a finite number, "Npx", or "row-gap column-gap".');
+    layout.gap = values.length === 1 || values[0] === values[1] ? values[0] : { row: values[0], column: values[1] };
+  }
+  if (cfg.wrap !== undefined) {
+    if (typeof cfg.wrap !== "boolean") throw new Error("flcm." + subject + ": wrap must be a boolean.");
+    layout.wrap = cfg.wrap;
+  }
   if (cfg.padding != null) layout.padding = padEdges(cfg.padding);
   // The space-around/evenly hint is primary-axis-only (a justify-content notion), so only justifyContent carries it.
   if (cfg.justifyContent != null) layout.justifyContent = mapCssWord("layout.justifyContent", cfg.justifyContent, JUSTIFY_CONTENT, " Figma auto-layout can't realize CSS space-around/space-evenly; add gap/padding for spacing instead.");
@@ -379,6 +388,8 @@ export function compileContainerWords(cfg: NonNullable<FrameProps["layout"]>, su
 export function compileSizeWords(props: SizeProps): WriteLayout | undefined {
   const layout: WriteLayout = {};
   applySizing(props, layout);
+  const bounds = compileBounds(props);
+  if (bounds) layout.bounds = bounds;
   applyPlacement(layout, props);
   applyPin(layout, props);
   return Object.keys(layout).length ? layout : undefined;
@@ -626,6 +637,7 @@ function instance(componentOrProps: Target | InstanceProps | SimplifiedNode, pro
   const accepted = acceptAuthoringProps(bag, { type: "INSTANCE", verb: "create", known: INSTANCE_KEYS, subject: "flcm.instance" }) as InstanceProps;
   const wn = mintWriteNode("INSTANCE");
   wn.component = component;
+  if (accepted.exposed !== undefined) { assertScalarType(accepted.exposed, "boolean", "exposed"); wn.exposed = accepted.exposed; }
   compileNodeLocalProps(wn, accepted, { radius: true, clip: true });
   const layout: WriteLayout = {};
   // ?? not ||, as in buildLayout: a falsy-but-present layout must reach the compile's malformed reject.

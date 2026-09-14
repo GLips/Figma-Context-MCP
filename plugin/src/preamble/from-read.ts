@@ -90,7 +90,7 @@ export const LAYOUT_WORD_DISPOSITIONS: Record<keyof SimplifiedLayout, "author" |
   justifyContent: "author",
   alignItems: "author",
   alignSelf: { refuse: 'cross-axis self-alignment has no flcm word — a child stretches by sizing that axis "fill"' },
-  wrap: { refuse: "flcm auto-layout does not wrap — there is no wrap word" },
+  wrap: "author",
   overflowScroll: { refuse: "scroll behavior (Figma's overflowDirection) has no flcm word" },
   gridTemplateColumns: { refuse: "flcm cannot author a GRID container" },
   gridTemplateRows: { refuse: "flcm cannot author a GRID container" },
@@ -306,7 +306,6 @@ function readyLayout(raw: unknown, subject: string): unknown {
     if (disposition && typeof disposition === "object") throw refuse(subject + ".layout", word, disposition.refuse);
     l[word] = value;
   }
-  if (l.gap != null) singleValue(l.gap, subject + ".layout.gap", "one gap, not separate row and column gaps");
   return l;
 }
 

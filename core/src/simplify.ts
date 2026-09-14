@@ -420,6 +420,7 @@ function extractComponent(
   // key, set and properties go to the SIDECAR — an off-tree definition has no node to carry
   // them, so the sidecar is the one place both cases can be named.
   if (node.type === "INSTANCE") {
+    if (node.isExposedInstance) result.exposed = true;
     if (node.componentId) {
       result.componentId = node.componentId;
       if (node.mainComponent) {

@@ -27,7 +27,7 @@ export interface ParentFlowFacts {
 // name a mode inherits the live one); create passes undefined — the authored mode decides, and a
 // node with no mode is never a container. `willBeAuto` is derived here, not passed, so a caller
 // can't hand in a value that contradicts the very layout it also passes.
-export function assertLayoutRealizableForType(nodeType: string, wl: WriteLayout, liveMode: "HORIZONTAL" | "VERTICAL" | "NONE" | "GRID" | undefined, subject: string): void {
+export function assertLayoutRealizableForType(nodeType: string, wl: WriteLayout, liveMode: "HORIZONTAL" | "VERTICAL" | "NONE" | "GRID" | undefined, subject: string, liveWrap = false): void {
   // No per-type "can this even be a container" rule here ON PURPOSE: a mode on a non-frame is
   // unreachable in both verbs — `layout` is a frame-constructor-only word at create, edit's
   // per-type vocabulary gate rejects it upstream, and render refuses hand-built IR
@@ -36,6 +36,11 @@ export function assertLayoutRealizableForType(nodeType: string, wl: WriteLayout,
   if (wl.alignItems === "baseline" && (wl.mode ?? (liveMode === "HORIZONTAL" ? "row" : "none")) !== "row") {
     throw new Error(subject + ': layout.alignItems "baseline" requires layout.mode "row" (horizontal auto-layout).');
   }
+  const effectiveMode = wl.mode ?? (liveMode === "HORIZONTAL" ? "row" : liveMode === "VERTICAL" ? "column" : "none");
+  const wraps = wl.wrap ?? liveWrap;
+  if (wraps && effectiveMode !== "row") throw new Error(subject + ': layout.wrap requires layout.mode "row"; disable wrap in the same call before changing direction.');
+  if (typeof wl.gap === "object" && !wraps) throw new Error(subject + ': unequal row/column gaps require layout.wrap: true on a horizontal row.');
+  if (wraps && wl.gap !== undefined && (typeof wl.gap === "number" ? wl.gap : wl.gap.row) < 0) throw new Error(subject + ": wrapped row gap must be non-negative.");
   const s = wl.sizing || {};
   if ((s.horizontal === "hug" || s.vertical === "hug") && !willBeAuto && nodeType !== "TEXT") {
     // The remedy is type-gated: `layout` is a FRAME-only word, so prescribing a mode to a shape
@@ -132,4 +137,11 @@ export function assertNoParentRelativeWordsUnderGrid(wl: WriteLayout, parentIsGr
       subject + ': this node\'s parent is a GRID container, which the edit vocabulary doesn\'t cover — "fill", percents, absolute, and pin have no assigned meaning there. Use fixed pixel sizes, or edit the parent.',
     );
   }
+}
+
+
+/** Explicit rectangle dimensions cannot override the closed part of an instance's tree. */
+export function assertInheritedRectangleDimensions(wl: WriteLayout, subject: string): void {
+  if (wl.dimensions?.width === undefined && wl.dimensions?.height === undefined) return;
+  throw new Error(subject + ': explicit width/height cannot resize an inherited rectangle. Edit its component or choose a suitable variant; use width: "fill" or height: "fill" when the auto-layout parent should size it. Nothing was applied.');
 }

@@ -72,6 +72,10 @@ export type SimplifiedDimension = number | "fill" | "hug" | "contextual";
  * (grid child-overlap) read it off the snapshot directly.
  */
 export interface NodeGeometry {
+  minWidth?: number;
+  maxWidth?: number;
+  minHeight?: number;
+  maxHeight?: number;
   width?: SimplifiedDimension;
   height?: SimplifiedDimension;
   // The size the requested root was designed at, surfaced as a non-binding

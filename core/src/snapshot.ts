@@ -330,6 +330,7 @@ export interface NodeSnapshot {
    * rescue hidden nodes inside component definitions; the component extractor
    * renames the rest onto the output fields they drive.
    */
+  isExposedInstance?: boolean;
   componentPropertyReferences?: Record<string, string>;
   children?: NodeSnapshot[];
 
@@ -363,6 +364,10 @@ export interface NodeSnapshot {
    * delta.
    */
   ownOrigin?: SnapshotPoint;
+  minWidth?: number | null;
+  maxWidth?: number | null;
+  minHeight?: number | null;
+  maxHeight?: number | null;
   layoutSizingHorizontal?: "FIXED" | "HUG" | "FILL";
   layoutSizingVertical?: "FIXED" | "HUG" | "FILL";
   layoutAlign?: "INHERIT" | "STRETCH" | "MIN" | "CENTER" | "MAX";

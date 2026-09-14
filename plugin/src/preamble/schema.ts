@@ -112,6 +112,11 @@ const SHARED_FIELDS = {
 };
 
 const SIZE_FIELDS = {
+  minWidth: prop(z.union([z.number(), z.literal("none")]), "minWidth in positive pixels, effective on auto-layout containers and their direct children. Omitted preserves the bound; \"none\" clears it. Sizes constrained by bounds succeed with a console warning.", 'number | "none"'),
+  maxWidth: prop(z.union([z.number(), z.literal("none")]), "maxWidth in positive pixels, effective on auto-layout containers and their direct children. Omitted preserves the bound; \"none\" clears it. Sizes constrained by bounds succeed with a console warning.", 'number | "none"'),
+  minHeight: prop(z.union([z.number(), z.literal("none")]), "minHeight in positive pixels, effective on auto-layout containers and their direct children. Omitted preserves the bound; \"none\" clears it. Sizes constrained by bounds succeed with a console warning.", 'number | "none"'),
+  maxHeight: prop(z.union([z.number(), z.literal("none")]), "maxHeight in positive pixels, effective on auto-layout containers and their direct children. Omitted preserves the bound; \"none\" clears it. Sizes constrained by bounds succeed with a console warning.", 'number | "none"'),
+
   // A percent ("50%") widens the runtime type to `string`, so `"fill"`/`"hug"` no longer survive as
   // literals in the inferred type — hence an explicit .meta label to keep the doc precise.
   width: prop(
@@ -195,7 +200,8 @@ const ELLIPSE_FIELDS = {
 // terse render intent, and rejects any valid-CSS-but-unrealizable spelling (space-around/-evenly) loud.
 const LAYOUT_FIELDS = {
   mode: prop(z.enum(["row", "column", "none"]), 'Auto-layout direction. Default "none" = free-form, where the other layout words reject loud. No grid: "grid" fails loud.'),
-  gap: metric("Space between children."),
+  gap: prop(z.union([z.number(), z.string()]), 'A number, "Npx", or "row-gap column-gap" in px. Unequal gaps require wrapping.'),
+  wrap: prop(z.boolean(), "Wrap children onto new rows. Requires horizontal auto-layout. False disables wrapping; omitted edits preserve it."),
   padding: prop(
     z.custom<PadInput>(),
     'A number, the CSS box shorthand ("12px 16px"), { x, y } (x→left+right, y→top+bottom), or per-edge. Edge values take a number or "Npx".',
@@ -216,7 +222,7 @@ const FRAME_FIELDS = {
   layout: prop(
     z.object(LAYOUT_FIELDS),
     "Auto-layout config. Omitted or mode:\"none\" = free-form, where children position absolutely.",
-    "{ mode?, gap?, padding?, justifyContent?, alignItems? }",
+    "{ mode?, wrap?, gap?, padding?, justifyContent?, alignItems? }",
   ),
   clip: prop(z.boolean(), "Clip children to the frame's bounds. Default false, like CSS overflow: visible."),
 };
@@ -376,6 +382,7 @@ const PATH_FIELDS = {
 // is the constructor's positional argument (or the read shape's own field, folded at the entry), and
 // under edit it is the swap word (see EDIT_FIELDS).
 const INSTANCE_FIELDS = {
+  exposed: prop(z.boolean(), "Expose this nested instance's existing controls in the enclosing instance panel. Writable only inside a component definition; false clears it."),
   componentProperties: prop(
     z.custom<Record<string, ComponentPropertyInput>>(),
     "Values by bare name (no `#id` suffix), as `get` reports them: a variant axis, a boolean, a text, or a component target for an instance_swap. A slot has no value here — its content is `children` under `overrides`.",
@@ -505,6 +512,10 @@ const EDIT_FIELDS = {
   rotation: APPEARANCE_FIELDS.rotation,
   clip: FRAME_FIELDS.clip,
   clipsContent: FRAME_FIELDS.clipsContent,
+  minWidth: SIZE_FIELDS.minWidth,
+  maxWidth: SIZE_FIELDS.maxWidth,
+  minHeight: SIZE_FIELDS.minHeight,
+  maxHeight: SIZE_FIELDS.maxHeight,
   width: SIZE_FIELDS.width,
   height: SIZE_FIELDS.height,
   ...PLACEMENT_FIELDS,
@@ -517,6 +528,7 @@ const EDIT_FIELDS = {
   // instance is the same vocabulary `get` reports on it and `flcm.instance` creates it with —
   // there is no separate "change the variant" verb. The per-type gate keeps them off every other
   // node type.
+  exposed: INSTANCE_FIELDS.exposed,
   componentProperties: INSTANCE_FIELDS.componentProperties,
   overrides: INSTANCE_FIELDS.overrides,
   ...SWAP_FIELDS,
@@ -533,6 +545,7 @@ const EDIT_FIELDS = {
 };
 export const EditSchema = z.object(EDIT_FIELDS);
 export type EditDelta = z.infer<typeof EditSchema>;
+export type CloneProps = Omit<EditDelta, "componentId" | "componentProperties" | "overrides" | "exposed" | "componentPropertyReferences" | "description" | "propertyDefinitions">;
 
 // One entry of an flcm.editMany batch. An ARRAY of { target, changes } rather than the sketch's
 // string-keyed map, because each `target` takes the full target grammar — a key, a node id,
@@ -735,6 +748,9 @@ export interface Flcm {
   // holding an INSTANCE). Lands at the end of `parent`, beside the original when omitted, and comes
   // back key-less: a raw node.clone() would copy the flcm/key and mint a duplicate address.
   clone(target: Target, parent?: Target): Promise<CloneResult>;
+  clone(target: Target, props: CloneProps, parent?: Target): Promise<CloneResult>;
+  measure(target: Target): Promise<{ x: number; y: number; width: number; height: number }>;
+  replace(target: Target, replacement: WriteNode): Promise<InsertResult>;
   // Re-author a `get` result — a whole SUBTREE — as a constructor-built node: the constructor is picked
   // by each node's `type`, and `children` (the read shape's own, not built nodes) recurse. Explicit (not folded
   // into the structural verbs) because a `get` result carries a live `id` exactly as a handle does: only
@@ -817,7 +833,9 @@ export const VERBS: VerbDoc[] = [
   { category: "structure", signature: "await flcm.insertAfter(sibling, thing)", builds: "`thing` placed just after `sibling`", args: "same as insertBefore", quickStart: null },
   { category: "structure", signature: "await flcm.move(target, parent)", builds: "the node reparented as `parent`'s last child", args: "a live target, then a parent target. Creating is append's job — a constructor-built node here fails loud", quickStart: "await flcm.move(target, parent)" },
   { category: "structure", signature: "await flcm.remove(target)", builds: "nothing — deletes the node and its subtree", args: "a target; returns { removedId, parent }", quickStart: "await flcm.remove(target)" },
-  { category: "structure", signature: "await flcm.clone(target, parent?)", builds: "a faithful live duplicate (key-less)", args: "a target, and optionally where the copy lands (default: beside the original). The copy path for subtrees a rebuild can't reproduce — anything holding an INSTANCE", quickStart: "await flcm.clone(target, parent?)" },
+  { category: "read", signature: "await flcm.measure(target)", builds: "current numeric x, y, width and height", args: "a target. Coordinates are relative to the immediate parent, including a page", quickStart: "await flcm.measure(target)" },
+  { category: "structure", signature: "await flcm.replace(target, replacement)", builds: "replacement handle, keyed children and destination", args: "a target and constructor-built replacement. Keeps parent/index; explicit props win over compatible inherited sizing/placement", quickStart: "await flcm.replace(target, node)" },
+  { category: "structure", signature: "await flcm.clone(target, props?, parent?)", builds: "a faithful live duplicate (key-less)", args: "a target, optional ordinary root props, and optional destination (default: beside the original). Existing clone(target, parent) calls remain valid. Component property/binding edits are separate; owned SLOT definitions reject before writes", quickStart: "await flcm.clone(target, props?, parent?)" },
   { category: "build", signature: "flcm.fromRead(node)", builds: "a `get` result re-authored as a buildable node", args: "a node from flcm.get, subtree and all — the constructor is picked by each node's `type` and `children` recurse. Returns a constructor-built node — render it, or place it with append/prepend/insertBefore/insertAfter. (A single node's read shape can also spread straight into its constructor: flcm.rect({ ...node, width: 320 }).) Anything the read shape carries that flcm has no word for (an INSTANCE, a paint stack, a grid) fails loud by name; flcm.clone is the faithful copy for those", quickStart: "flcm.fromRead(node)" },
   { category: "read", signature: "await flcm.get(target)", builds: "{ node, components } — the read shape, plus each component named once", args: "target: an flcm/key, a node id, flcm.id(id), or a handle" },
   { category: "read", signature: "await flcm.find(query?, predicate?)", builds: "matching nodes as slim handles", args: "query { type?, name?, key?, hasAnnotations?, within? } AND-combined — a filter, not an address; only `within` takes a target. Optional predicate over the full read shape (n => n.fill === '#FFF')" },

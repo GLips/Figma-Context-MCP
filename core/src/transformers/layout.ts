@@ -138,6 +138,10 @@ function buildNodeGeometry(
   // keep their fill/hug/fixed semantics. See fig-ovmi.
   const isRoot = parent === undefined;
   const geometry: NodeGeometry = {};
+  if (n.minWidth != null) geometry.minWidth = pixelRound(n.minWidth);
+  if (n.maxWidth != null) geometry.maxWidth = pixelRound(n.maxWidth);
+  if (n.minHeight != null) geometry.minHeight = pixelRound(n.minHeight);
+  if (n.maxHeight != null) geometry.maxHeight = pixelRound(n.maxHeight);
 
   // Per-axis width/height. Emit a concrete number only when the child isn't
   // stretching that axis and the sizing flag permits it. Stretch detection and

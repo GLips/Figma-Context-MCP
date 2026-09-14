@@ -8,6 +8,7 @@ import { WriteNode, Handle } from "./ir.js";
 import { assertConstructorBuiltTree } from "./provenance.js";
 import { assertSizingResolvesAgainstParentFrame } from "./layout-legality.js";
 import { loadFontsForTree, loadFontsForTextEdits } from "./fonts.js";
+import { assertExposureTree, type ExposureContext } from "./instance-exposure.js";
 import { buildNode, placeRootOnPage, settleHandles, resolvePercents, beginRenderWalk, RenderCtx, RenderResources } from "./bridge.js";
 import { describeRootOverlap } from "./root-overlap.js";
 import { enterMutatingVerb } from "./mutation-lock.js";
@@ -89,7 +90,8 @@ export async function loadTreeResources(tree: WriteNode): Promise<LoadedTreeReso
  * compileOverride); the tree's own texts need no such proof, since their fonts are authored, not
  * live. The plans the build walk consumes are these, never prepare's.
  */
-export function gateTreeResources(tree: WriteNode, loaded: LoadedTreeResources): RenderResources {
+export function gateTreeResources(tree: WriteNode, loaded: LoadedTreeResources, exposure: ExposureContext = {}): RenderResources {
+  assertExposureTree(tree, exposure);
   const needs: InstanceNeeds = planInstanceTree(tree, { targets: loaded.targets, fonts: loaded.fonts });
   return { fonts: loaded.fonts, images: loaded.images, instances: needs.plans };
 }

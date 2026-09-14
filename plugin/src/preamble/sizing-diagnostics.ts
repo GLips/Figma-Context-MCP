@@ -1,0 +1,119 @@
+// One accumulator per synchronous mutation span. Diagnostics observe final geometry after all
+// entries, overrides and percent sizing settle; they never turn a successful write into a failure.
+interface SizingNode {
+  id: string;
+  type: string;
+  removed: boolean;
+  visible?: boolean;
+  width: number;
+  height: number;
+  x: number;
+  y: number;
+  minWidth?: number | null;
+  maxWidth?: number | null;
+  minHeight?: number | null;
+  maxHeight?: number | null;
+  parent?: SizingNode | null;
+  children?: readonly SizingNode[];
+  clipsContent?: boolean;
+  absoluteTransform?: readonly (readonly number[])[];
+  relativeTransform?: readonly (readonly number[])[];
+  resize(width: number, height: number): void;
+}
+interface Measurement { node: SizingNode; width: number; height: number }
+interface ResizeRequest { node: SizingNode; width: number; height: number }
+let measured = new Map<string, Measurement>();
+let affected = new Map<string, SizingNode>();
+let requests = new Map<string, ResizeRequest>();
+let roots = new Set<string>();
+let inspectionError: unknown;
+
+export function beginSizingDiagnostics(): void {
+  measured = new Map();
+  affected = new Map();
+  requests = new Map();
+  roots = new Set();
+  inspectionError = undefined;
+}
+
+function walk(node: SizingNode, visit: (node: SizingNode) => void): void {
+  if (node.removed || node.visible === false) return;
+  visit(node);
+  if (node.children) for (const child of node.children) walk(child, visit);
+}
+
+export function trackSizing(node: SizingNode): void {
+  try {
+    // Snapshot only the containing layout tree, never the page/document. Siblings whose size changes
+    // through fill/hug join the affected set after sizing settles; unchanged siblings stay out.
+    let root = node;
+    for (let parent = node.parent; parent && parent.type !== "PAGE" && parent.type !== "DOCUMENT"; parent = parent.parent) root = parent;
+    if (!roots.has(root.id)) walk(root, n => {
+      if (!measured.has(n.id)) measured.set(n.id, { node: n, width: n.width, height: n.height });
+    });
+    roots.add(root.id);
+    walk(node, n => affected.set(n.id, n));
+    for (let parent = node.parent; parent && parent.type !== "PAGE" && parent.type !== "DOCUMENT"; parent = parent.parent) affected.set(parent.id, parent);
+  } catch (error) { inspectionError = error; }
+}
+
+export function resizeWithDiagnostics(node: SizingNode, width: number, height: number): void {
+  trackSizing(node);
+  node.resize(width, height);
+  requests.set(node.id, { node, width, height });
+}
+
+// Project each child's own corners into the container's coordinates. Absolute transforms avoid
+// the special coordinate convention of children under groups and handle rotated containers.
+function overflows(container: SizingNode, child: SizingNode): boolean {
+  const a = container.absoluteTransform, b = child.absoluteTransform;
+  let transform: readonly (readonly number[])[];
+  if (a && b) {
+    const determinant = a[0][0] * a[1][1] - a[0][1] * a[1][0];
+    if (Math.abs(determinant) < 1e-10) return false;
+    const inverse = [[a[1][1] / determinant, -a[0][1] / determinant], [-a[1][0] / determinant, a[0][0] / determinant]];
+    transform = inverse.map(row => [row[0] * b[0][0] + row[1] * b[1][0], row[0] * b[0][1] + row[1] * b[1][1], row[0] * (b[0][2] - a[0][2]) + row[1] * (b[1][2] - a[1][2])]);
+  } else {
+    transform = child.relativeTransform || [[1, 0, child.x], [0, 1, child.y]];
+  }
+  return [[0, 0], [child.width, 0], [0, child.height], [child.width, child.height]].some(([x, y]) => {
+    const cx = transform[0][0] * x + transform[0][1] * y + transform[0][2];
+    const cy = transform[1][0] * x + transform[1][1] * y + transform[1][2];
+    return cx < -0.01 || cy < -0.01 || cx > container.width + 0.01 || cy > container.height + 0.01;
+  });
+}
+
+export function finishSizingDiagnostics(verb: string): void {
+  try {
+    if (inspectionError) throw inspectionError;
+    const clamps: string[] = [];
+    for (const request of requests.values()) {
+      const node = request.node;
+      if (node.removed) continue;
+      for (const [axis, min, max] of [["width", "minWidth", "maxWidth"], ["height", "minHeight", "maxHeight"]] as const) {
+        const requested = request[axis], actual = node[axis];
+        const bound = node[min] != null && requested < node[min] ? min : node[max] != null && requested > node[max] ? max : undefined;
+        if (bound && Math.abs(actual - requested) > 0.01) clamps.push(node.id + " " + axis + " requested " + requested + ", " + bound + " " + node[bound] + ", result " + actual);
+      }
+    }
+    if (clamps.length) console.warn("flcm." + verb + ": size constrained: " + clamps.join("; ") + ". Write succeeded.");
+    for (const { node, width, height } of measured.values()) {
+      if (!node.removed && (node.width !== width || node.height !== height)) {
+        affected.set(node.id, node);
+        if (node.parent && node.parent.type !== "PAGE") affected.set(node.parent.id, node.parent);
+      }
+    }
+    const clipped: string[] = [], unclipped: string[] = [];
+    for (const node of affected.values()) {
+      if (node.removed || !node.children || node.visible === false) continue;
+      if (node.children.some((child: SizingNode) => !child.removed && child.visible !== false && overflows(node, child))) {
+        (node.clipsContent ? clipped : unclipped).push(node.id);
+      }
+    }
+    if (clipped.length || unclipped.length) console.warn("flcm." + verb + ": overflow in " + (clipped.length + unclipped.length) + " containers; clipped (" + clipped.length + "): " + clipped.join(", ") + "; unclipped (" + unclipped.length + "): " + unclipped.join(", ") + ". Write succeeded.");
+  } catch (error) {
+    console.warn("flcm." + verb + ": write succeeded; sizing diagnostics could not inspect the resulting layout: " + String(error));
+  } finally {
+    beginSizingDiagnostics();
+  }
+}

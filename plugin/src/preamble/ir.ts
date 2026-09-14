@@ -260,10 +260,12 @@ export type WriteBlendMode =
 export type AnchorX = "left" | "center" | "right";
 export type AnchorY = "top" | "center" | "bottom";
 export interface WriteLayout {
+  bounds?: Partial<Record<"minWidth" | "maxWidth" | "minHeight" | "maxHeight", number | "none">>;
   mode?: "none" | "row" | "column";
   justifyContent?: Justify; // primary-axis distribution (author `layout.justifyContent`)
   alignItems?: Align;       // counter-axis alignment (author `layout.alignItems`)
-  gap?: number;
+  gap?: number | { row: number; column: number };
+  wrap?: boolean;
   padding?: Edges;
   sizing?: { horizontal?: Sizing; vertical?: Sizing };
   dimensions?: { width?: number; height?: number };
@@ -349,6 +351,7 @@ export interface WriteProps {
   // and an override delta compiles against the TYPE of the sublayer it targets — none of which
   // a document-blind constructor can see. The constructor validates their SHAPE (an object, known delta
   // words); render's gate resolves and compiles them (instance.ts) before any write.
+  exposed?: boolean;
   component?: Target;
   componentProperties?: Record<string, ComponentPropertyInput>;
   overrides?: Record<string, OverrideDeltaInput>;
@@ -446,6 +449,7 @@ export type OverrideDeltaInput = Record<string, unknown>;
 // `componentId` is the swap word — read-side
 // spelling, edit-side only (a constructor takes its component positionally).
 export interface InstanceEditWords {
+  exposed?: boolean;
   componentId?: Target;
   componentProperties?: Record<string, ComponentPropertyInput>;
   overrides?: Record<string, OverrideDeltaInput>;
@@ -476,6 +480,11 @@ export interface Identity { id: string; type: string; name: string; key?: string
 // point — an agent that measures what it rendered and an agent that locates an existing node read the same
 // field names. The values are settled by render()'s post-walk minting pass (bridge.settleHandles).
 export interface Handle extends Identity {
+  minWidth?: number;
+  maxWidth?: number;
+  minHeight?: number;
+  maxHeight?: number;
+
   // MEASURED px, always. render() just laid the tree out, so the settled number is ground truth and the
   // whole reason to look: a 35%-wide bar's real width, a hugged frame's real height. Always a number so the
   // obvious reach — `bar.width + 8` — is always right; the sizing RULE behind it lives in `intent`, where it
@@ -510,6 +519,11 @@ export interface Handle extends Identity {
 // measured number in width/height, the rule beside it in `intent`. A render just measured what it built, so
 // it can hand over both; a locate has only the design's own intent to report (see Handle above).
 export interface SlimHandle extends Identity {
+  minWidth?: number;
+  maxWidth?: number;
+  minHeight?: number;
+  maxHeight?: number;
+
   annotations?: SimplifiedNode["annotations"];
   width?: SimplifiedDimension;
   height?: SimplifiedDimension;

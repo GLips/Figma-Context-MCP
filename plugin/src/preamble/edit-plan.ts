@@ -71,7 +71,7 @@ import { assertNodeStillOnCanvas } from "./freshness.js";
 import {
   applyPaint, applySceneProps, applyLiveNodeLayout, settleLiveNodePercentSize,
   settleLiveNodePercentPosition, assertLayoutDeltaResolvable, applyTextProps, applyTextClamp,
-  RenderResources, BatchLayoutDeltas, InstancePlan,
+  RenderResources, BatchLayoutDeltas, InstancePlan, EditLayoutProjection,
 } from "./bridge.js";
 import { toFigmaEffects } from "./effects.js";
 import { acceptAuthoringProps, own, rejectNonDeltaWords as rejectNonDeltaWordsAgainst } from "./validate.js";
@@ -210,7 +210,11 @@ function compileDeltaPatch(changes: EditDelta, legal: ReadonlySet<string>, node:
 // undo step for nothing. The bags still compile — an empty one is legal shape, a non-object isn't.
 function takeInstanceEditWords(changes: EditDelta, subject: string): InstanceEditWords | undefined {
   const words: InstanceEditWords = {};
-  let named = false;
+  if (changes.exposed !== undefined) {
+    if (typeof changes.exposed !== "boolean") throw new Error(subject + ": exposed must be a boolean.");
+    words.exposed = changes.exposed;
+  }
+  let named = changes.exposed !== undefined;
   const properties = own(changes as Record<string, unknown>, "componentProperties");
   if (properties != null) {
     const bag = compileComponentPropertyBag(properties, subject);
@@ -461,30 +465,31 @@ export interface LoadedResources {
  * `deltas` is every layout delta the SAME verb is applying, by node id — a batch judges its entries
  * against the canvas it is creating, not the one it found.
  *
- * `becomesLayoutMode` is the same projection one node deep: an INSTANCE delta that swaps or
+ * `projection.mode` is the same projection one node deep: an INSTANCE delta that swaps or
  * re-variants takes the INCOMING component's auto-layout mode before its root words land, so its
  * `layout` words are legal or not by that mode, never the outgoing one's (instance.ts computes it).
  * Undefined means "read it off the live node", which is every other delta.
+ * `projection.instanceDefinition` marks definition overrides that will land under a new instance.
  */
 export function gateEditPlan(
-  node: SceneNode, changes: EditDelta, fonts: FontMap, subject: string, deltas?: BatchLayoutDeltas, becomesLayoutMode?: AutoLayoutMixin["layoutMode"],
+  node: SceneNode, changes: EditDelta, fonts: FontMap, subject: string, deltas?: BatchLayoutDeltas, projection?: EditLayoutProjection,
 ): EditPlan {
   assertNodeStillOnCanvas(node, subject);
   const plan = compileEditPlan(node, changes, subject);
-  assertEditPlanLands(plan, fonts, subject, deltas, becomesLayoutMode);
+  assertEditPlanLands(plan, fonts, subject, deltas, projection);
   return plan;
 }
 
 /**
  * The second half of stage 4 on its own, for a verb that has to plan a delta's INSTANCE half
  * between the compile and these gates (the root's layout gate reads the container the retarget
- * leaves behind — `becomesLayoutMode` comes from that plan).
+ * leaves behind — `projection.mode` comes from that plan).
  */
 export function assertEditPlanLands(
-  plan: EditPlan, fonts: FontMap, subject: string, deltas?: BatchLayoutDeltas, becomesLayoutMode?: AutoLayoutMixin["layoutMode"],
+  plan: EditPlan, fonts: FontMap, subject: string, deltas?: BatchLayoutDeltas, projection?: EditLayoutProjection,
 ): void {
   assertTextEditFontsLoaded(plan.node, plan.patch, fonts, subject);
-  if (plan.patch.layout) assertLayoutDeltaResolvable(plan.node, plan.patch.layout, subject, deltas, becomesLayoutMode);
+  if (plan.patch.layout) assertLayoutDeltaResolvable(plan.node, plan.patch.layout, subject, deltas, projection);
 }
 
 /**

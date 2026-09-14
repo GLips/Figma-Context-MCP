@@ -161,6 +161,10 @@ export interface SceneNodeLike {
   /** The node's own top-left corner in its parent's frame (relativeTransform's translation). */
   readonly x?: number;
   readonly y?: number;
+  readonly minWidth?: number | null;
+  readonly maxWidth?: number | null;
+  readonly minHeight?: number | null;
+  readonly maxHeight?: number | null;
   readonly layoutSizingHorizontal?: "FIXED" | "HUG" | "FILL";
   readonly layoutSizingVertical?: "FIXED" | "HUG" | "FILL";
   readonly layoutAlign?: "INHERIT" | "STRETCH" | "MIN" | "CENTER" | "MAX";
@@ -238,6 +242,7 @@ export interface SceneNodeLike {
   // Component metadata. The value/defaultValue are `unknown` on purpose: a SLOT property's is a
   // `{ guid }` object on the wire (REST verified live; the plugin typings still say `string | boolean`),
   // and the decode below keeps only the scalars.
+  readonly isExposedInstance?: boolean;
   readonly componentProperties?: {
     readonly [key: string]: { readonly type: string; readonly value: unknown };
   };
@@ -411,6 +416,10 @@ async function sceneSubtreeToSnapshot(
         ? { width: node.width, height: node.height }
         : undefined,
     ownOrigin: ownOriginIn(node, parentSpace),
+    minWidth: node.minWidth,
+    maxWidth: node.maxWidth,
+    minHeight: node.minHeight,
+    maxHeight: node.maxHeight,
     layoutSizingHorizontal: node.layoutSizingHorizontal,
     layoutSizingVertical: node.layoutSizingVertical,
     layoutAlign: node.layoutAlign,
@@ -463,6 +472,7 @@ async function sceneSubtreeToSnapshot(
       node.type === "COMPONENT" || node.type === "COMPONENT_SET" ? node.key || undefined : undefined,
     componentDescription:
       node.type === "COMPONENT_SET" ? node.description || undefined : undefined,
+    isExposedInstance: node.type === "INSTANCE" ? node.isExposedInstance : undefined,
     componentProperties: decodeComponentProps(node),
     componentPropertyDefinitions: decodePropertyDefinitions(node),
     overrides:

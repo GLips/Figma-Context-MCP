@@ -74,7 +74,7 @@ export function edit(target: Target, changes: EditDelta): Promise<Handle> {
       const planning = { targets, fonts: loaded.fonts };
       const instance: InstanceEditPlan | undefined = plan.instanceWords ? planInstanceEdit(node, plan.instanceWords, current, planning, SUBJECT) : undefined;
       const component: ComponentEditPlan | undefined = plan.componentWords ? planComponentEdit(node, plan.componentWords, targets, SUBJECT) : undefined;
-      assertEditPlanLands(plan, loaded.fonts, SUBJECT, undefined, instance ? instance.becomesLayoutMode : undefined);
+      assertEditPlanLands(plan, loaded.fonts, SUBJECT, undefined, instance ? { mode: instance.becomesLayoutMode, wrap: instance.becomesLayoutWrap } : undefined);
       return { plan, instance, component, resources: gateEditResources(loaded, instance ? [instance.needs] : []) };
     },
     // Apply — the sealed span: all writes, no awaits.

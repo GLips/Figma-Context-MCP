@@ -1,3 +1,6 @@
+import type { ExposureWrite } from "./instance-exposure.js";
+import { applyBounds, assertBounds } from "./size-bounds.js";
+import { resizeWithDiagnostics, trackSizing } from "./sizing-diagnostics.js";
 // bridge — the ONE mutation authority: every property lands on a live Figma node through the appliers
 // here, whether the node was just built (the render walk below) or resolved as a live edit target.
 // Every mutating verb drives these same exported appliers — never a parallel application path, so a
@@ -20,13 +23,13 @@ import { applyAnnotations } from "./annotation-categories.js";
 import { WriteType, WriteNode, WriteProps, WriteLayout, Justify, Align, TextAlign, TextDecoration, Sizing, Identity, Handle, WritePaint, WriteImage, ComponentPropertyBinding, namesFontIdentity } from "./ir.js";
 import {
   assertLayoutRealizableForType, assertPercentResolvable, assertSizingResolvesAgainstParentFrame, assertNoParentRelativeWordsUnderGrid, ParentFlowFacts,
-  assertTextFillHeightInFlow,
+  assertTextFillHeightInFlow, assertInheritedRectangleDimensions,
 } from "./layout-legality.js";
 import { toFigmaPaint } from "./paint.js";
 import { toFigmaEffects } from "./effects.js";
 import { resolveFont, resolveFontStrict, FontMap } from "./fonts.js";
 import { normalizePathData } from "./path.js";
-import { writeKey, identityOf } from "./identity.js";
+import { writeKey, identityOf, isSlotHole, describeNodeIdentity } from "./identity.js";
 import { pixelRound, convertSizing } from "@framelink/core";
 
 // The resource half of the walk context — what an applier resolves against, split out so an exported
@@ -65,6 +68,7 @@ export interface InstancePlan {
 // geometry is trustworthy mid-walk (see settleHandles), so handles are minted in one pass after the
 // walk instead of stamped and then patched.
 export interface RenderCtx extends RenderResources {
+  exposures: ExposureWrite[];
   keyed: Record<string, any>;
   pending: PendingResolve[];
   // Every node the walk built that carries a `componentPropertyReferences` bag, paired with it.
@@ -146,6 +150,10 @@ function isFrameLike(node: any): boolean {
 // from the core's simplified node (read.projectSlim), which is already the group-aware answer.
 function geometryOf(node: any): Omit<Handle, keyof Identity> {
   const geometry: Omit<Handle, keyof Identity> = { width: pixelRound(node.width), height: pixelRound(node.height) };
+  if (node.minWidth != null) geometry.minWidth = pixelRound(node.minWidth);
+  if (node.maxWidth != null) geometry.maxWidth = pixelRound(node.maxWidth);
+  if (node.minHeight != null) geometry.minHeight = pixelRound(node.minHeight);
+  if (node.maxHeight != null) geometry.maxHeight = pixelRound(node.maxHeight);
   const intent = intentOf(node);
   if (intent) geometry.intent = intent;
   const parent = node.parent;
@@ -272,6 +280,7 @@ export function applyPaint(node: any, wn: WriteProps, ctx: RenderResources): voi
 // an already-auto frame instead of silently skipping — gating on the authored mode was create-only truth.
 function applyContainer(f: any, layout: WriteLayout): void {
   const mode = layout.mode;
+  if (layout.wrap === false && f.layoutMode === "HORIZONTAL") f.layoutWrap = "NO_WRAP";
   if (mode === "row" || mode === "column") {
     const next = mode === "row" ? "HORIZONTAL" : "VERTICAL";
     // Any direction-establishing write — row↔column flip, or NONE→row/column over children still
@@ -283,7 +292,15 @@ function applyContainer(f: any, layout: WriteLayout): void {
     f.layoutMode = next;
   } else if (mode === "none") f.layoutMode = "NONE";
   if (!isRowColumnAutoLayout(f)) return; // gap/pad/align are inert without auto-layout
-  if (layout.gap != null) f.itemSpacing = layout.gap;
+  if (layout.wrap !== undefined && f.layoutMode === "HORIZONTAL") f.layoutWrap = layout.wrap ? "WRAP" : "NO_WRAP";
+  if (layout.gap !== undefined) {
+    const gap = typeof layout.gap === "number" ? { row: layout.gap, column: layout.gap } : layout.gap;
+    f.itemSpacing = f.layoutMode === "HORIZONTAL" ? gap.column : gap.row;
+    if (f.layoutWrap === "WRAP") {
+      f.counterAxisAlignContent = "AUTO";
+      f.counterAxisSpacing = f.layoutMode === "HORIZONTAL" ? gap.row : gap.column;
+    }
+  }
   if (layout.padding) {
     const e = layout.padding;
     f.paddingTop = e.top; f.paddingRight = e.right; f.paddingBottom = e.bottom; f.paddingLeft = e.left;
@@ -359,6 +376,7 @@ function clearContainerFlowMarks(f: any): void {
 // sizing carries no mode at all. Presence-preserving per axis — an axis the caller doesn't name keeps
 // its live sizing mode; the fresh-frame hug default is the BUILDER's to inject (see buildFrame).
 function applyOwnSize(f: any, layout: WriteLayout): void {
+  if (layout.bounds) { trackSizing(f); applyBounds(f, layout.bounds); }
   const sizing = layout.sizing || {};
   const dims = layout.dimensions || {};
   const isAuto = isRowColumnAutoLayout(f);
@@ -382,7 +400,7 @@ function applyOwnSize(f: any, layout: WriteLayout): void {
   if (fixedW || fixedH) {
     const w = fixedW && typeof dims.width === "number" ? dims.width : f.width;
     const h = fixedH && typeof dims.height === "number" ? dims.height : f.height;
-    f.resize(Math.max(w, 0.01), Math.max(h, 0.01));
+    resizeWithDiagnostics(f, Math.max(w, 0.01), Math.max(h, 0.01));
   }
 }
 
@@ -441,7 +459,7 @@ function coverChild(parent: any, child: any, layout: WriteLayout): void {
   // plugin-typings 1.133] — so the 0.01 floor (there to keep degenerate fills from the resize(0)
   // throw on area nodes) must not touch it: w:"fill" on a line is a legal full-width rule. Vertical
   // fill on a line can't be authored (LineSchema has no height word), so no rule is needed for it.
-  child.resize(Math.max(cw, 0.01), child.type === "LINE" ? 0 : Math.max(ch, 0.01));
+  resizeWithDiagnostics(child, Math.max(cw, 0.01), child.type === "LINE" ? 0 : Math.max(ch, 0.01));
 }
 
 // Lift an out-of-flow child (author `left`/`top`, or `position: "absolute"`) out of an auto-layout
@@ -540,6 +558,7 @@ function clearChildFlowFill(parent: any, child: any, layout: WriteLayout): void 
 // upstream (layout-legality.ts assertLayoutRealizableForType, consulted by buildLayout and edit alike),
 // so none reaches here; the branch shape just makes ignoring it structural.
 function applyLeafSize(node: any, layout: WriteLayout): void {
+  if (layout.bounds) { trackSizing(node); applyBounds(node, layout.bounds); }
   const sizing = layout.sizing || {};
   const dims = layout.dimensions || {};
   if (node.type === "TEXT") {
@@ -549,15 +568,15 @@ function applyLeafSize(node: any, layout: WriteLayout): void {
     // (clearChildFlowFill has just lifted the fill), so hugging again means the height follows the
     // content under whatever width rule the text keeps. On a text that already hugs it is a no-op.
     else if (sizing.vertical === "hug" && node.textAutoResize === "NONE") node.textAutoResize = "HEIGHT";
-    if (typeof dims.width === "number") node.resize(Math.max(dims.width, 0.01), node.height);
+    if (typeof dims.width === "number") resizeWithDiagnostics(node, Math.max(dims.width, 0.01), node.height);
     return;
   }
   if (node.type === "LINE") {
-    if (typeof dims.width === "number") node.resize(Math.max(dims.width, 0.01), 0);
+    if (typeof dims.width === "number") resizeWithDiagnostics(node, Math.max(dims.width, 0.01), 0);
     return;
   }
   if (typeof dims.width === "number" || typeof dims.height === "number") {
-    node.resize(Math.max(typeof dims.width === "number" ? dims.width : node.width, 0.01),
+    resizeWithDiagnostics(node, Math.max(typeof dims.width === "number" ? dims.width : node.width, 0.01),
                 Math.max(typeof dims.height === "number" ? dims.height : node.height, 0.01));
   }
 }
@@ -578,7 +597,7 @@ function applyLeafSize(node: any, layout: WriteLayout): void {
  * it (see RenderCtx.bindings).
  */
 export function beginRenderWalk(resources: RenderResources, opts?: { bindings?: boolean }): RenderCtx {
-  const ctx: RenderCtx = { ...resources, keyed: {}, pending: [] };
+  const ctx: RenderCtx = { ...resources, keyed: {}, pending: [], exposures: [] };
   if (opts && opts.bindings) ctx.bindings = [];
   return ctx;
 }
@@ -618,7 +637,7 @@ function resolvePercentSize(parent: any, child: any, layout: WriteLayout): void 
     // hugging its content. Mirror buildText's fixed-width handshake so a percent-width text wraps at the
     // resolved width (height auto-fits) instead of silently dropping the percent (ADR-0003 silent-wrong).
     if (child.type === "TEXT" && ps.width != null) child.textAutoResize = "HEIGHT";
-    child.resize(Math.max(w, 0.01), Math.max(h, 0.01));
+    resizeWithDiagnostics(child, Math.max(w, 0.01), Math.max(h, 0.01));
   }
 }
 
@@ -657,6 +676,7 @@ function resolvePercentPosition(parent: any, child: any, layout: WriteLayout): v
 // settleLiveNodePercentSize/Position, deliberately NOT called here — both measure, so the caller
 // owns when they run (see those functions).
 export function applyLiveNodeLayout(node: any, wl: WriteLayout): void {
+  if (wl.sizing || wl.bounds || wl.percentSize) trackSizing(node);
   const parent = node.parent;
   applyContainer(node, wl);
   if (!parent) return; // a parentless node (the page itself can't get here) has no child-side context
@@ -814,12 +834,12 @@ function projectedParentLayoutFacts(parent: any, deltas: BatchLayoutDeltas | und
 //                     a placement word, so an already-ABSOLUTE child threads its live positioning: out
 //                     of flow it doesn't feed the parent's hug, and the percent cycle can't form.
 function assertLayoutLandsUnderParent(
-  parent: ParentLayoutFacts, nodeType: string, wl: WriteLayout, isContainer: AutoLayoutMixin["layoutMode"] | undefined, isOutOfFlow: boolean, subject: string, nodeLocalValidated = false,
+  parent: ParentLayoutFacts, nodeType: string, wl: WriteLayout, isContainer: AutoLayoutMixin["layoutMode"] | undefined, isOutOfFlow: boolean, subject: string, nodeLocalValidated = false, liveWrap = false,
 ): void {
   if (parent.isPage) {
     assertSizingResolvesAgainstParentFrame(wl, false, subject);
   }
-  if (!nodeLocalValidated) assertLayoutRealizableForType(nodeType, wl, isContainer, subject);
+  if (!nodeLocalValidated) assertLayoutRealizableForType(nodeType, wl, isContainer, subject, liveWrap);
   assertTextFillHeightInFlow(nodeType, wl, parent.parentIsAuto, isOutOfFlow, subject);
   assertNoParentRelativeWordsUnderGrid(wl, parent.isGrid, subject);
   if (wl.percentSize) {
@@ -836,25 +856,55 @@ function assertLayoutLandsUnderParent(
 // entry rejected inside a batch must say which verb the agent actually called. `deltas` is every
 // layout delta THIS verb is applying, keyed by node id, so the ancestors this node is judged
 // against are the ones the call is creating (see projectedParentLayoutFacts); a lone `edit` passes
-// none and is judged against the live canvas. `becomesLayoutMode` is the node's OWN container mode
+// none and is judged against the live canvas. `projection.mode` is the node's OWN container mode
 // after this same call — an INSTANCE the delta swaps or re-variants takes the incoming component's
 // auto-layout mode before its root words land, so reading the live mode would both refuse a gap the
 // swap makes legal and accept one it makes meaningless. Undefined for every other delta, which has
 // no way to change its own mode mid-call.
+export interface EditLayoutProjection {
+  mode?: AutoLayoutMixin["layoutMode"];
+  wrap?: boolean;
+  /** Overrides compiled against a definition will land inside an instance of this component. */
+  instanceDefinition?: SceneNode;
+}
+
 export function assertLayoutDeltaResolvable(
-  node: any, wl: WriteLayout, subject: string, deltas?: BatchLayoutDeltas, becomesLayoutMode?: AutoLayoutMixin["layoutMode"],
+  node: any, wl: WriteLayout, subject: string, deltas?: BatchLayoutDeltas, projection?: EditLayoutProjection,
 ): void {
+  assertBounds(wl.bounds, node, subject);
   const outOfFlow = wl.position === "absolute" || (wl.position !== "none" && node.layoutPositioning === "ABSOLUTE");
   const parent = projectedParentLayoutFacts(node.parent, deltas);
-  const isContainer = becomesLayoutMode === undefined ? node.layoutMode : becomesLayoutMode;
-  assertLayoutLandsUnderParent(parent, node.type, wl, isContainer, outOfFlow, subject);
+  const mode = projection?.mode === undefined ? node.layoutMode : projection.mode;
+  if (node.type === "RECTANGLE") {
+    let owner: any = null;
+    for (let parent = node.parent; parent && parent.type !== "PAGE"; parent = parent.parent) {
+      // Open slot content is outside this inherited-rectangle rule. A nested instance inside
+      // that content still supplies its own inherited rectangle children.
+      if (isSlotHole(parent)) break;
+      if (parent.type === "INSTANCE" || parent === projection?.instanceDefinition) { owner = parent; break; }
+    }
+    if (owner) assertInheritedRectangleDimensions(wl, subject + ": " + describeNodeIdentity(node) + " under " + describeNodeIdentity(owner));
+  }
+  if (node.type === "INSTANCE" && wl.mode !== undefined) {
+    const requested = wl.mode === "row" ? "HORIZONTAL" : wl.mode === "column" ? "VERTICAL" : "NONE";
+    if (requested !== mode) {
+      throw new Error(subject + ": an instance root inherits its layout direction from its component; layout.mode " +
+        JSON.stringify(wl.mode) + " does not match the resulting component's " + mode + " direction. Change the component or choose a matching variant instead. Nothing was applied.");
+    }
+  }
+  const isContainer = mode;
+  assertLayoutLandsUnderParent(parent, node.type, wl, isContainer, outOfFlow, subject, false, projection?.wrap ?? node.layoutWrap === "WRAP");
 }
 
 // A structural verb placing a LIVE node: ask whether the words it already wears stay legal under
 // `destination`, and hand them back — they're also what the post-move re-aim replays, and reading
 // them twice would risk reading them AFTER the reparent, when they no longer mean the old axes.
-export function assertLiveNodeLandsUnderParent(node: any, destination: any, subject: string): WriteLayout {
-  const wl = liveParentRelativeWords(node);
+export function assertLiveNodeLandsUnderParent(node: any, destination: any, subject: string, overrides?: WriteLayout): WriteLayout {
+  const live = liveParentRelativeWords(node);
+  const wl: WriteLayout = { ...live, ...overrides };
+  if (live.sizing || overrides?.sizing) wl.sizing = { ...live.sizing, ...overrides?.sizing };
+  if (live.dimensions || overrides?.dimensions) wl.dimensions = { ...live.dimensions, ...overrides?.dimensions };
+  assertBounds(wl.bounds, node, subject);
   assertLayoutLandsUnderParent(liveParentLayoutFacts(destination), node.type, wl, node.layoutMode, wl.position === "absolute", subject);
   return wl;
 }
@@ -917,6 +967,7 @@ function isPositionedChild(parentIsAuto: boolean, cl: WriteLayout): boolean {
 // passes false and says so in its docs: the marks are re-synthesized by editing the container.
 export interface AttachParentFacts extends ParentFlowFacts {
   crossStretch: boolean;
+  widthIsBounded: boolean;
   subject: string; // the verb name the shared legality rules prefix their rejections with
 }
 
@@ -926,7 +977,8 @@ export interface AttachParentFacts extends ParentFlowFacts {
 // above. The remedy is `edit(parent, { layout: { alignItems: "stretch" } })`, which re-synthesizes
 // the marks over every child including the new one.
 export function liveParentAttachFacts(parent: any, subject: string): AttachParentFacts {
-  return { ...parentHugFacts(parent), crossStretch: false, subject };
+  const flow = parentHugFacts(parent);
+  return { ...flow, crossStretch: false, widthIsBounded: !flow.hugW, subject };
 }
 
 // THE attach-then-size entry: build one constructor-built child and settle it into `parent`. Shared by the
@@ -941,13 +993,16 @@ export function liveParentAttachFacts(parent: any, subject: string): AttachParen
 export function attachBuiltChild(
   parent: any, wn: WriteNode, ctx: RenderCtx, facts: AttachParentFacts, place: (child: any) => void,
 ): any {
-  const cl = wn.layout || {};
+  const authored = wn.layout || {};
+  const defaultTextFill = wn.type === "TEXT" && authored.sizing?.horizontal === undefined && authored.position !== "absolute" && parent.layoutMode === "VERTICAL" && facts.widthIsBounded;
+  const cl: WriteLayout = defaultTextFill ? { ...authored, sizing: { ...authored.sizing, horizontal: "fill" } } : authored;
   // Fail loud on the one unresolvable percent (in-flow %-size against a hugging auto-layout parent)
   // before building the node, so a bad node doesn't orphan a live node on the canvas. Every other
   // percent/anchor is recorded and resolved in the post-walk pass (resolvePercents) against realized size.
   assertPercentResolvable(cl, facts, facts.subject);
   assertTextFillHeightInFlow(wn.type, cl, facts.parentIsAuto, cl.position === "absolute", facts.subject);
-  const child = buildNode(wn, ctx);
+  const child = buildNode(wn, ctx, facts.widthIsBounded);
+  if (defaultTextFill) child.textAutoResize = "HEIGHT";
   place(child);
   if (cl.percentSize || cl.percentPos || (cl.position === "absolute" && cl.anchor)) {
     ctx.pending.push({ node: child, layout: cl, parent });
@@ -968,7 +1023,7 @@ export function attachBuiltChild(
   return child;
 }
 
-function buildFrame(wn: WriteNode, ctx: RenderCtx): any {
+function buildFrame(wn: WriteNode, ctx: RenderCtx, enclosingWidthBounded = false): any {
   const f = figma.createFrame();
   figma.currentPage.appendChild(f); // enter the doc; reparented when appended to a parent frame
   // CSS default overflow is VISIBLE; Figma's createFrame() defaults clipsContent = true. Default it off so
@@ -990,6 +1045,7 @@ function buildFrame(wn: WriteNode, ctx: RenderCtx): any {
     hugW: !authoredSizing.horizontal || authoredSizing.horizontal === "hug",
     hugH: !authoredSizing.vertical || authoredSizing.vertical === "hug",
     crossStretch: layout.alignItems === "stretch",
+    widthIsBounded: !isAutoParent || (authoredSizing.horizontal === "fixed" && !layout.percentSize?.width) || ((authoredSizing.horizontal === "fill" || layout.percentSize?.width !== undefined) && enclosingWidthBounded),
     subject: "flcm",
   };
   // Children whose w/h:"fill" must be re-resized after the frame gets its FINAL size (at append it was
@@ -1029,6 +1085,7 @@ function buildInstance(wn: WriteNode, ctx: RenderCtx): any {
     applyContainer(inst, wn.layout);
     applyOwnSize(inst, wn.layout);
   }
+  if (wn.exposed !== undefined) ctx.exposures.push({ node: inst, value: wn.exposed });
   plan.applyOverrides(inst, ctx);
   return inst;
 }
@@ -1214,8 +1271,8 @@ function buildPath(wn: WriteNode, pathData: string, ctx: RenderCtx): any {
 // The createable allow-list AND the dispatch in one table — `Record<WriteType, …>` makes TS reject any
 // createable type that lacks a builder (or a builder for a non-createable type), so the two can't drift.
 // A type outside the table falls through to the loud error in buildNode.
-const BUILDERS: Record<WriteType, (wn: WriteNode, ctx: RenderCtx) => any> = {
-  FRAME: (wn, ctx) => buildFrame(wn, ctx),
+const BUILDERS: Record<WriteType, (wn: WriteNode, ctx: RenderCtx, enclosingWidthBounded?: boolean) => any> = {
+  FRAME: (wn, ctx, bounded) => buildFrame(wn, ctx, bounded),
   TEXT: (wn, ctx) => buildText(wn, ctx),
   RECTANGLE: (wn, ctx) => buildShape(figma.createRectangle(), wn, ctx),
   ELLIPSE: (wn, ctx) => buildShape(figma.createEllipse(), wn, ctx),
@@ -1227,7 +1284,7 @@ const BUILDERS: Record<WriteType, (wn: WriteNode, ctx: RenderCtx) => any> = {
 // Build one node and its subtree. Percent size/position is NOT resolved here — the node is built at a
 // provisional size and buildFrame records it in ctx.pending for the post-walk resolvePercents pass (which
 // needs the fully-assembled tree to read realized parent sizes). Returns the live node.
-export function buildNode(wn: WriteNode, ctx: RenderCtx): any {
+export function buildNode(wn: WriteNode, ctx: RenderCtx, enclosingWidthBounded?: boolean): any {
   const build = BUILDERS[wn.type];
   if (!build) {
     throw new Error('flcm: cannot create a "' + wn.type + '" node — createable types are ' + Object.keys(BUILDERS).join(", ") + ".");
@@ -1235,7 +1292,7 @@ export function buildNode(wn: WriteNode, ctx: RenderCtx): any {
   // Provenance was authenticated tree-wide in render's PREPARE (assertConstructorBuiltTree),
   // before any resource load — and the constructors deep-freeze their output, so the tree apply
   // walks here is byte-for-byte the one prepare authenticated. No re-check per node.
-  const node = build(wn, ctx);
+  const node = build(wn, ctx, enclosingWidthBounded);
   applySceneProps(node, wn);
   applyAnnotations(node, wn.annotations);
   stampKey(node, wn, ctx);
