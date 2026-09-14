@@ -1,46 +1,40 @@
 # Overnight DX progress
 
-**The approved fixes are built and saved in commits. Automated checks pass. We still need to test the new work in Figma before calling it finished.**
+The approved fixes are implemented and committed. Live verification has confirmed most layout and editing workflows. The remaining checks resumed after the usage-limit interruption.
 
-## What this should make easier
+## What now works in Figma
 
-- **Build layouts that adapt to available space.** Agents can make rows wrap, set separate spacing between rows and columns, and use minimum and maximum sizes. New text in a column with a defined width wraps within that space by default. Sizing warnings help explain when content overflows or a requested size gets constrained.
-- **Reuse designs with less manual repair.** Agents can measure a node, copy it with changes to its size or appearance, and replace an existing node while retaining its placement and sizing. Duplicated variants restore their supported text, visibility, and component-swap bindings so their controls keep working.
-- **Make components easier to use.** Nested component controls can be exposed in the enclosing component’s panel. Already-approved sessions stop receiving repeated pairing instructions when requesting reference material.
-- **See a design in context.** A screenshot prototype can include space around a node, showing the background and neighboring content that an isolated export misses. It is optional and still needs visual testing.
+- Rows wrap, support separate gaps, and reject unsupported direction changes before editing the design. New text wraps within bounded columns; hug-sized text retains its sizing behavior.
+- Nested component controls can be exposed, read back, hidden, and exposed again.
+- Measurement matches the live node's parent-relative position and dimensions. Replacement preserves placement and fill sizing. Clones accept fixed-size overrides. A standalone clone's text control works.
+- Content moved into a slot can be read, found, measured, and edited using its original reference. Healthy-design comparisons preserved hierarchy and query results. See the [slot-access resolution](AGENT-DX-SLOT-ACCESS-RESOLUTION.md).
+- Earlier sizing fixes passed all ten live cases. Promotion references passed Undo and Redo earlier.
 
-## What we know works
+The first authoring and measurement assertions had invalid test fixtures. Corrected fixtures passed those checks. A valid native control then established two product failures in component-set cloning, listed below.
 
-Automated checks passed for both implementation batches and the screenshot prototype. The earlier sizing fixes also passed live checks before being brought into the main branch. Promotion’s old-node references passed Undo and Redo checks earlier.
+## Verification still underway
 
-**That does not yet prove the new combined build works correctly in Figma.** We still need to check the new layout and component behavior, replacement recovery, references after reopening or moving between pages, and actual screenshot output. We have not produced live example captures yet.
+- **Component-set cloning needs a fix.** The corrected live matrix passed standalone TEXT, BOOLEAN, and INSTANCE_SWAP controls. Same-set cloning fails while reading definitions; different-set cloning fails binding restoration. Investigation and repair are active.
+- Saved promotion references passed after plugin reopening and movement between pages.
+- Contextual captures passed default, 80-pixel, and zero margins with expected image sizes, clipping, and surrounding content. All captures left no temporary slices and preserved selection and viewport. Visual flicker and manual Undo checks still require observation.
+- Native rollback behavior beyond the cases already verified. Automated rollback tests alone do not establish every live recovery path.
 
-## What remains unresolved
+Evidence and individual results: [live verification report](/tmp/figma-luna-live-verification.md). Screenshot artifacts will be saved under `/tmp/figma-final-live/`.
 
-**Reading content after a slot move:** we found a way to read and edit affected content without replacing it. We have not yet proved that this approach covers all the nodes we need, preserves ordering and identity, or performs well on larger designs. The main access code has not been changed.
+## Remaining limits
 
-**Screenshot side effects:** we need to watch for flicker, selection changes, and Undo behavior. The prototype temporarily creates a capture region and removes it afterward. If export stalls, cleanup waits for it to finish; forced plugin shutdown could leave that temporary region behind.
+The historical execution stall has not reproduced consistently. Added tracing records native page and font waits and late replies without resubmitting code. The latest controlled creation completed in 1.35 seconds; that does not explain the earlier stalls.
 
-## What happens next
+Moving a remapped instance root out of a slot remains a separate native issue. The verified slot read/edit fix does not resolve it.
 
-The plugin and Codex have now been restarted. A fresh read-only live check succeeded, and slot-access correctness/performance investigation has resumed. Re-enabling scheduled follow-ups was still rejected by Codex’s automatic approval review with the checkpoint-compatibility error; the running investigation is unaffected.
+Contextual screenshots remain a prototype. Cleanup waits for native export to settle; forced plugin shutdown can leave the temporary slice behind. Browser-generated connection errors also remain noisy while unused WebSocket ports are probed.
 
-The slot investigator currently has the exclusive live queue. Finish the slot-access proof and a tested resolution, then run the prepared authoring/structural checks one batch at a time and review contextual screenshots with you watching. Scheduled follow-ups remain paused; do not treat that as an active monitor.
+## Saved work
 
-## Saved progress and supporting detail
+- `2713b86`: earlier fixes and decisions.
+- `6491609`: responsive layouts, component workflows, and sizing integration.
+- `d0ac434`: contextual screenshot prototype.
+- `4a295eb`: shared scene access and slot readability.
+- `6a869b2`: native-wait and late-reply tracing.
 
-- `2713b86` — earlier fixes and decisions.
-- `6491609` — responsive layouts, component workflows, and integrated sizing fixes.
-- `d0ac434` — contextual screenshot prototype.
-
-Detailed test results and prepared checks: [layouts and controls](/tmp/figma-responsive-authoring-implementation.md), [copying and replacement](/tmp/figma-structural-live/checkpoint.md), [screenshots](/tmp/figma-contextual-screenshot-prototype/report.md), and [slot-access investigation](/tmp/figma-scene-access-proof/status.md).
-
-## Subsequent slot-access resolution
-
-The primary slot descendant-read/edit issue is now implemented and live-verified. [Resolution, performance and remaining limits](AGENT-DX-SLOT-ACCESS-RESOLUTION.md). Native remapped-root movement out of slots and the historical connection/page-switch stall remain open.
-
-### Stall diagnosis checkpoint
-
-The recurring execution stall is still unresolved. The saved failed run reached execution but did not record which native call held it up. The regular plugin now reports page creation, page switching, and font waits; the bridge retains bounded request timing and late-reply metadata. This records no script or design content and does not extend deadlines or retry execution.
-
-Validation: 426 plugin tests and the bridge contract checks pass. Live diagnosis needs one stop/start of the rebuilt regular plugin, then a fresh controlled run with the matching bridge. A passing run alone will not establish the cause of the earlier stalls.
+Scheduled follow-ups remain paused. Current verification is being driven in this task.
