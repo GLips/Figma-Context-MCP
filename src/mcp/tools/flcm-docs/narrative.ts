@@ -273,7 +273,6 @@ export const FAILS_LOUD = `Accepting CSS is a fidelity promise, so the boundarie
 | Situation | Why, and the fix |
 | --- | --- |
 | A color / gradient / effect outside the [CSS subset](#the-css-subset) | Parse error naming the value. |
-| A read-artifact image fill (\`{ type: "IMAGE", imageRef, … }\`) on \`fill\`/\`stroke\` | A ref to bytes we don't have — author with \`flcm.image(url)\`. |
 | An \`flcm.image\` source that is unfetchable, blocked (private/loopback), outside the server's asset root, oversize, or not an image | Rejected server-side with the reason, never a blank fill. |
 | An \`flcm.text\` value that is neither a string nor a runs array, or text carrying read style-ref tokens (\`{ts1}…{/ts1}\`) | Those are read artifacts. Author styled text as markdown or runs. \`**\` in a plain string is markdown — backslash-escape for a literal. |
 | \`![alt](url)\` in a text string, or an unrealizable \`fontStyle\`/\`textDecoration\` (\`"oblique"\`, \`"overline"\`) | Text can't embed an image (\`flcm.image\`); the enum names the supported set. |
@@ -289,6 +288,8 @@ export const FAILS_LOUD = `Accepting CSS is a fidelity promise, so the boundarie
 | \`layout.justifyContent\`/\`alignItems\` Figma can't realize — \`"space-around"\`, \`"space-evenly"\` | Use \`"space-between"\` or \`gap\`/\`padding\`. Never faked with spacer nodes, which read as content. |
 | \`textStyle.lineClamp\` on a width-hugging text | Truncation needs a width to wrap against. Set \`width\` to a number, \`"fill"\`, or \`"N%"\`. |
 | A layout word the node can't realize — a fixed/\`"hug"\`/percent \`height\` on TEXT, \`"hug"\` with nothing to measure, or container words without \`layout.mode\` | The same rules govern create and edit alike, so a word that wouldn't land names the fix instead. |
+
+An \`imageRef\` identifies an existing image in this file and can be reused, for example \`flcm.rect({ fill: { type: "IMAGE", imageRef } })\`.
 
 Variables and prototype interactions are deliberately **out of v1** — read concepts with no create path. They're rejected loudly so you never half-write something unrealizable. (Components have one: \`flcm.instance\` — see the components section.)
 
@@ -367,6 +368,8 @@ No separate clipboard API — the verbs compose:
 | paste with modifications | \`flcm.append(parent, flcm.fromRead(node))\`, or \`clone\` then \`edit\` |
 | delete | \`flcm.remove(target)\` |
 
+\`flcm.find\` and \`flcm.findOne\` accept a literal case-insensitive name substring or a JavaScript RegExp, for example \`{ name: /^Copy/i }\`. Regex flags are preserved and repeated searches do not advance the expression's lastIndex.
+
 \`flcm.get\` returns \`{ node, components }\`. \`node\` is the read shape; \`components\` appears only when the subtree holds a component or an instance of one, and names each one ONCE — its \`children\` and its property definitions live there, keyed by component id. An INSTANCE therefore carries no \`children\` of its own: it carries \`componentId\` plus \`overrides\`, a map from component-relative sublayer path to just the fields that differ from the component. An omitted field means "same as the component"; \`null\` means the instance does not have that field at all (a paint removed, an opacity put back to 1); \`visible: false\` means the designer hid that layer. Reconstruct any sublayer's live id as \`I<instanceId>;<path>\`. An entry marked \`childrenUnverified\` came from a published library at its current version, which the file may not have adopted — treat a \`visible: false\` under it as possibly a layer the library added rather than one the designer hid; \`childrenFrom\` instead means the children were donated by that instance, edits and all.
 
 A \`get\` result is not authoring input on its own: a bare \`get\` result passed to \`append\` is rejected rather than quietly treated as a move, because it carries a live \`id\` exactly as a handle does — only you can say copy or move. \`flcm.fromRead(node)\` says copy: it re-authors the subtree through the constructors, so you can edit the read shape first (\`{ ...node, width: 320 }\`), and the copy comes back key-less. A single node's read shape also spreads straight into its constructor or an edit — \`flcm.rect({ ...node, width: 320 })\` — since the constructors read the read shape's spellings; \`fromRead\` is for a subtree, whose \`children\` are read shapes rather than built nodes.
@@ -381,7 +384,7 @@ await flcm.component(flcm.id("12:34"), { name: "Card", description: "The list ca
 \`\`\`
 
 - **The constructor-built form** renders as \`render\` does (fonts, images, root placement), then promotes the root. Every \`key\` survives (the root's lands on the COMPONENT), so \`keyed\` addresses the component's children.
-- **The target form** promotes in place (same parent and index). It refuses a COMPONENT or COMPONENT_SET (edit it), an INSTANCE (Figma would *wrap* it; detach first), a node inside an instance, a SLOT, and a page.
+- **The target form** promotes in place (same parent and index). Old root IDs resolve to the new component when the original node is absent; aliases persist in this file, and returned handles use the current ID. It refuses a COMPONENT or COMPONENT_SET (edit it), an INSTANCE (Figma would *wrap* it; detach first), a node inside an instance, a SLOT, and a page.
 - Nothing is written until every gate passes; the call is one undo step.`;
 
 export const COMPONENTS_PROPERTIES = `\`propertyDefinitions\` declares what the component exposes; each node inside names the property that drives one of its fields with \`componentPropertyReferences\` (\`null\` is the edit-side unbind word, not a create word). Both are checked against each other before any write.

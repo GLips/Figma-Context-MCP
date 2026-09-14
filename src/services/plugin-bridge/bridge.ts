@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { WebSocketServer, WebSocket } from "ws";
 import { mintPairingCode, SESSION_IDENTITY } from "./approval.js";
 import { ApprovalStore } from "./approval-store.js";
@@ -21,6 +22,7 @@ import { Logger } from "~/utils/logger.js";
 export type BridgeRequest =
   | { type: "PING"; payload: string }
   | { type: "GET_VERSION" }
+  | { type: "APPROVAL_STATUS" }
   | { type: "NOTIFY"; message: string }
   // Both nullable on purpose, matching SessionConn on the plugin side: the pairing code is null with
   // no connection, and the session token is null until the human's first Allow mints one.
@@ -36,7 +38,24 @@ export type BridgeRequest =
 /** Answers the plugin's mid-run IMAGES_REQUEST with url→base64 bytes (see image-requests.ts). */
 export type ImagesRequestHandler = (urls: string[]) => Promise<Record<string, string>>;
 
+export type RequestPhase = "submitted" | "queued" | "running";
+
+export class BridgeRequestError extends Error {
+  constructor(
+    message: string,
+    readonly outcome: "not-submitted" | "unconfirmed",
+    readonly phase?: RequestPhase,
+  ) {
+    super(message);
+    this.name = "BridgeRequestError";
+  }
+}
+
 interface Pending {
+  socket: WebSocket;
+  phase: RequestPhase;
+  startedAt: number;
+  cleanup: () => void;
   resolve: (value: unknown) => void;
   reject: (err: Error) => void;
   /** The inactivity deadline (see DEFAULT_TIMEOUT_MS) — suspended and re-armed by run traffic. */
@@ -167,7 +186,7 @@ function isAllowedOrigin(origin: string | undefined): boolean {
 export class PluginBridge {
   private socket: WebSocket | null = null;
   private pending = new Map<string, Pending>();
-  private nextId = 0;
+  private disconnectedAt: number | null = null;
   // Where the CURRENT connection stands with the version handshake, and the refusal text when it came
   // back under the minimum. Connection-scoped on purpose: reset to `checking` the moment a socket is
   // installed, so a newer plugin reconnecting onto the freed slot starts clean instead of inheriting
@@ -420,6 +439,7 @@ export class PluginBridge {
       // field points at the newcomer's gate, and settling it would release holders early.)
       this.settleVerdict();
       this.socket = socket;
+      this.disconnectedAt = null;
       // Start every connection back at `checking`, with a fresh promise for canvas requests to hold
       // on. The close handler also resets this, but resetting only on close leaves a window: if a
       // prior connection drops mid-handshake, its awaited verdict can land AFTER close cleared the
@@ -454,6 +474,7 @@ export class PluginBridge {
           return;
         }
         this.socket = null;
+        this.disconnectedAt = Date.now();
         this.pairingCode = null;
         this.handshaked = false;
         // Wake anything holding for a verdict that will now never arrive. The hold re-checks the
@@ -466,7 +487,10 @@ export class PluginBridge {
         // Every in-flight request was sent on THIS (current, now-closed) socket, so reject
         // them now instead of letting each hang to its 15s timeout — same "never a silent
         // hang" contract as the frozen envelope.
-        this.failPending("Figma plugin disconnected before replying.");
+        this.failPending(
+          "Figma plugin disconnected before replying. Completion is unconfirmed; inspect affected nodes before retrying.",
+          socket,
+        );
         Logger.log("Plugin disconnected from WS bridge");
       });
 
@@ -474,6 +498,7 @@ export class PluginBridge {
         // terminate() fires `stale`'s close handler, but this.socket already points at the
         // newcomer, so the `this.socket === socket` guard there leaves the new slot intact.
         Logger.log("Reclaiming WS slot from a non-handshaked holder for a new connection");
+        this.failPending("Figma connection replaced. Completion is unconfirmed.", stale);
         stale.terminate();
       }
       Logger.log("Plugin connected to WS bridge");
@@ -642,6 +667,7 @@ export class PluginBridge {
     if (this.reclaimTimer) clearTimeout(this.reclaimTimer);
     this.reclaimTimer = null;
     this.reclaimDeadline = 0;
+    this.failPending("Bridge stopped. Completion is unconfirmed.");
     this.socket?.terminate();
     this.socket = null;
     // Nulling the socket makes the terminate()-driven `close` bail as "displaced", so it never runs
@@ -655,9 +681,17 @@ export class PluginBridge {
   }
 
   /** Reject and clear every pending request — used when the socket they were sent on dies. */
-  private failPending(reason: string): void {
-    for (const id of this.pending.keys()) {
-      this.takePending(id)?.reject(new Error(reason));
+  private failPending(reason: string, socket?: WebSocket): void {
+    for (const [id, pending] of this.pending) {
+      if (socket && pending.socket !== socket) continue;
+      const waiting = pending.payloadType === "APPROVAL_STATUS";
+      this.takePending(id)?.reject(
+        new BridgeRequestError(
+          waiting ? "Plugin disconnected while checking approval; no code was submitted." : reason,
+          waiting ? "not-submitted" : "unconfirmed",
+          pending.phase,
+        ),
+      );
     }
   }
 
@@ -667,6 +701,7 @@ export class PluginBridge {
   private takePending(id: string): Pending | undefined {
     const pending = this.pending.get(id);
     if (!pending) return undefined;
+    pending.cleanup();
     clearTimeout(pending.timer);
     clearTimeout(pending.ceilingTimer);
     this.pending.delete(id);
@@ -674,12 +709,13 @@ export class PluginBridge {
     return pending;
   }
 
-  request(payload: BridgeRequest): Promise<unknown> {
+  request(payload: BridgeRequest, signal?: AbortSignal): Promise<unknown> {
+    if (signal?.aborted) return Promise.reject(signal.reason);
     // Handshake messages send SYNCHRONOUSLY (no await before the socket.send): the connection
     // contract depends on the newcomer's handshake being in flight before a displaced socket's close
     // fires a tick later. Everything else goes through the compatibility hold.
-    if (HANDSHAKE_REQUEST_TYPES.has(payload.type)) return this.sendCorrelated(payload);
-    return this.sendOnceCompatible(payload);
+    if (HANDSHAKE_REQUEST_TYPES.has(payload.type)) return this.sendCorrelated(payload, signal);
+    return this.sendOnceCompatible(payload, signal);
   }
 
   /**
@@ -691,31 +727,39 @@ export class PluginBridge {
    * again and ultimately run against whoever ends up driving; a socket that dies drops out of the loop
    * and falls through to `sendCorrelated`'s own "no plugin connected" rejection.
    */
-  private async sendOnceCompatible(payload: BridgeRequest): Promise<unknown> {
+  private async sendOnceCompatible(payload: BridgeRequest, signal?: AbortSignal): Promise<unknown> {
     while (this.compatibility === "checking" && this.socket?.readyState === WebSocket.OPEN) {
-      await this.verdictSettled;
+      await waitForSignal(this.verdictSettled, signal);
     }
     // Refuse rather than send. A stale plugin executing agent code against a wire contract the server
     // no longer speaks is the failure the minimum exists to prevent, and a refusal the agent relays
     // beats a nudge stapled to a result the wrong runtime already produced.
     const refusal = this.compatibility === "incompatible" ? this.skewRefusal : null;
-    if (refusal) throw new Error(refusal);
-    return this.sendCorrelated(payload);
+    if (refusal) throw new BridgeRequestError(refusal, "not-submitted");
+    return this.sendCorrelated(payload, signal);
   }
 
   /** Stamp a correlation id on the payload, send it, and resolve when the reply carrying that id lands. */
-  private sendCorrelated(payload: BridgeRequest): Promise<unknown> {
+  private sendCorrelated(payload: BridgeRequest, signal?: AbortSignal): Promise<unknown> {
+    if (signal?.aborted) return Promise.reject(signal.reason);
     const socket = this.socket;
     if (!socket || socket.readyState !== WebSocket.OPEN) {
       return Promise.reject(
-        new Error(
-          "No Figma plugin connected. Open the Framelink plugin in Figma desktop and try again.",
+        new BridgeRequestError(
+          "No Figma plugin connected. This call was not submitted. Open the Framelink plugin in Figma desktop and try again.",
+          "not-submitted",
         ),
       );
     }
-    const id = `req-${++this.nextId}`;
+    const id = randomUUID();
     return new Promise((resolve, reject) => {
+      const cancel = () => this.cancelPending(id, "caller cancelled");
+      signal?.addEventListener("abort", cancel, { once: true });
       this.pending.set(id, {
+        socket,
+        phase: "submitted",
+        startedAt: Date.now(),
+        cleanup: () => signal?.removeEventListener("abort", cancel),
         resolve,
         reject,
         timer: setTimeout(() => this.timeoutPending(id, "inactivity"), this.requestTimeoutMs),
@@ -741,24 +785,37 @@ export class PluginBridge {
    * could itself time out and cancel, recursively.
    */
   private timeoutPending(id: string, cause: "inactivity" | "ceiling"): void {
-    const pending = this.takePending(id);
-    if (!pending) return;
-    if (this.socket && this.socket.readyState === WebSocket.OPEN) {
-      this.socket.send(JSON.stringify({ type: "CANCEL", runId: id }));
-    }
     const why =
       cause === "inactivity"
         ? `saw no traffic for ${this.requestTimeoutMs}ms`
         : `exceeded the absolute ${this.runCeilingMs}ms run ceiling`;
+    this.cancelPending(id, why);
+  }
+
+  private cancelPending(id: string, why: string): void {
+    const pending = this.takePending(id);
+    if (!pending) return;
+    if (pending.socket.readyState === WebSocket.OPEN) {
+      pending.socket.send(JSON.stringify({ type: "CANCEL", runId: id }));
+    }
     pending.reject(
-      new Error(
-        `Bridge request ${id} (${pending.payloadType}) ${why} — ` +
-          `the run was cancelled. The canvas holds whatever completed before that.`,
+      new BridgeRequestError(
+        `Bridge request ${id} (${pending.payloadType}, last phase ${pending.phase}, ${Date.now() - pending.startedAt}ms) ${why}. ` +
+          (pending.payloadType === "APPROVAL_STATUS"
+            ? "Approval status was not received; no code was submitted."
+            : "Completion is unconfirmed; cancellation requested. Raw code may still finish. Inspect affected nodes before retrying."),
+        pending.payloadType === "APPROVAL_STATUS" ? "not-submitted" : "unconfirmed",
+        pending.phase,
       ),
     );
   }
 
+  disconnectedDurationMs(): number | null {
+    return this.disconnectedAt === null ? null : Date.now() - this.disconnectedAt;
+  }
+
   private handleMessage(socket: WebSocket, raw: string): void {
+    if (this.socket !== socket) return;
     let msg: {
       id?: unknown;
       type?: unknown;
@@ -766,6 +823,7 @@ export class PluginBridge {
       sessionToken?: unknown;
       runId?: unknown;
       urls?: unknown;
+      phase?: unknown;
     };
     try {
       msg = JSON.parse(raw);
@@ -802,7 +860,22 @@ export class PluginBridge {
       this.serveImagesRequest(socket, msg);
       return;
     }
-    if (typeof msg.id !== "string") return;
+    if (msg.type === "RUN_STATE" && typeof msg.runId === "string") {
+      const run = this.pending.get(msg.runId);
+      if (run?.socket === socket && (msg.phase === "queued" || msg.phase === "running")) {
+        run.phase = msg.phase;
+        Logger.log(
+          `Bridge request ${msg.runId}: ${msg.phase} after ${Date.now() - run.startedAt}ms`,
+        );
+        clearTimeout(run.timer);
+        run.timer = setTimeout(
+          () => this.timeoutPending(msg.runId as string, "inactivity"),
+          this.requestTimeoutMs,
+        );
+      }
+      return;
+    }
+    if (typeof msg.id !== "string" || this.pending.get(msg.id)?.socket !== socket) return;
     const pending = this.takePending(msg.id);
     if (!pending) return;
     // A reply matching a pending request proves the holder speaks the frozen envelope — it's
@@ -817,6 +890,7 @@ export class PluginBridge {
       pending.reject(new Error(msg.error));
       return;
     }
+    Logger.log(`Bridge request ${msg.id}: finished after ${Date.now() - pending.startedAt}ms`);
     pending.resolve(msg);
   }
 
@@ -855,7 +929,7 @@ export class PluginBridge {
       }
     };
     const run = runId ? this.pending.get(runId) : undefined;
-    if (!runId || !run) {
+    if (!runId || !run || run.socket !== socket) {
       send({
         type: "IMAGES_ERROR",
         error: `flcm.image: run ${runId ?? "(unknown)"} is no longer active on this server (cancelled, timed out, or already finished) — the image request was refused.`,
@@ -921,4 +995,21 @@ export class PluginBridge {
       })
       .finally(settleService);
   }
+}
+
+/** Abort a local hold without leaving listeners behind when its gate settles. */
+function waitForSignal(promise: Promise<void>, signal?: AbortSignal): Promise<void> {
+  if (!signal) return promise;
+  if (signal.aborted) return Promise.reject(signal.reason);
+  return new Promise((resolve, reject) => {
+    const abort = () => {
+      signal.removeEventListener("abort", abort);
+      reject(signal.reason);
+    };
+    signal.addEventListener("abort", abort, { once: true });
+    promise.then(() => {
+      signal.removeEventListener("abort", abort);
+      resolve();
+    }, reject);
+  });
 }

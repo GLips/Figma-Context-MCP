@@ -201,7 +201,7 @@ function planInstanceNode(wn: WriteNode, planning: InstancePlanning): { plan: In
   const { component, properties } = resolveComponentProperties(resolved, wn.componentProperties || {}, SUBJECT, planning.targets);
   // The root's layout words are legal or not by the COMPONENT's mode — the same live fact edit
   // reads off its target. Judged here, not in the constructor, because that is where it's known.
-  if (wn.layout) assertLayoutRealizableForType("INSTANCE", wn.layout, isRowColumnAutoLayout(component), SUBJECT);
+  if (wn.layout) assertLayoutRealizableForType("INSTANCE", wn.layout, component.layoutMode, SUBJECT);
   const overrides = planDefinitionOverrides(component, wn.overrides || {}, SUBJECT, planning.fonts);
   return {
     plan: {
@@ -620,7 +620,7 @@ function replaceSlotContent(fail: EditPlanFailure, slot: any, slotContent: reado
  * with the live ones only existing inside the span), and it tells a batch that any sibling entry
  * aimed inside this instance is about to be writing to a detached node.
  *
- * `becomesRowColumn` is the container fact AFTER the retarget — the incoming component's auto-layout
+ * `becomesLayoutMode` is the container fact AFTER the retarget — the incoming component's auto-layout
  * mode, which is what the root's own layout words must be gated against, not the outgoing one's.
  * `undefined` when nothing retargets, meaning "read it off the live node".
  */
@@ -640,7 +640,7 @@ export interface InstanceEditPlan {
   /** What the slot content among `overrides` needs loaded — empty when none fills a slot. */
   needs: InstanceNeeds;
   retargets: boolean;
-  becomesRowColumn: boolean | undefined;
+  becomesLayoutMode: AutoLayoutMixin["layoutMode"] | undefined;
 }
 
 /**
@@ -705,7 +705,7 @@ export function planInstanceEdit(node: SceneNode, words: InstanceEditWords, curr
     retargets,
     // The same fact create's own gate reads (planInstanceNode above): the RESOLVED component's mode, not
     // the instance's current one, which the retarget is about to replace.
-    becomesRowColumn: retargets ? isRowColumnAutoLayout(component) : undefined,
+    becomesLayoutMode: retargets ? component.layoutMode : undefined,
   };
 }
 

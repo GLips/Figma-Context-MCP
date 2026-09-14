@@ -163,6 +163,7 @@ flcm.ellipse({ width: 16, height: 16, left: "40%", top: "50%", anchor: { x: "cen
 | `borderRadius` | number \| "Npx" | Corner radius. Frames and rectangles only. |
 | `effects` | effects value | Shadows / blur: flcm.effects({...}) or a CSS-string bag. "none" removes all effects. |
 | `rotation` | number (deg) | Rotation in degrees. |
+| `clipsContent` | boolean | Input alias for clip; duplicate values must agree. |
 | `layout` | { mode?, gap?, padding?, justifyContent?, alignItems? } | Auto-layout config. Omitted or mode:"none" = free-form, where children position absolutely. |
 | `clip` | boolean | Clip children to the frame's bounds. Default false, like CSS overflow: visible. |
 
@@ -174,12 +175,13 @@ flcm.ellipse({ width: 16, height: 16, left: "40%", top: "50%", anchor: { x: "cen
 | `gap` | number \| "Npx" | Space between children. |
 | `padding` | number \| "12px 16px" \| { x?, y? } \| { top?, right?, bottom?, left? } | A number, the CSS box shorthand ("12px 16px"), { x, y } (x→left+right, y→top+bottom), or per-edge. Edge values take a number or "Npx". |
 | `justifyContent` | "flex-start" \| "flex-end" \| "center" \| "space-between" | CSS justify-content, main axis. Figma has no space-around/space-evenly — those fail loud. |
-| `alignItems` | "flex-start" \| "flex-end" \| "center" \| "stretch" | CSS align-items, cross axis. "stretch" stretches every auto-sized child (a fixed cross-axis size wins); one child alone stretches via width/height "fill". |
+| `alignItems` | "flex-start" \| "flex-end" \| "center" \| "stretch" \| "baseline" | CSS align-items, cross axis. "baseline" requires a horizontal row. "stretch" stretches every auto-sized child (a fixed cross-axis size wins); one child alone stretches via width/height "fill". |
 
 ### flcm.text — text props
 
 | Prop | Type | Notes |
 | --- | --- | --- |
+| `fontSize` | number | Input alias for textStyle.fontSize; duplicate values must agree. |
 | `text` | string \| run[] | The content — a plain string (markdown: **bold**, *italic*, ~~strike~~, [text](url)) or an array of styled runs. At create it is usually the positional first argument; under edit it replaces the whole content. |
 | `textStyle` | { fontFamily?, fontWeight?, fontSize?, fontStyle?, lineHeight?, letterSpacing?, textDecoration?, textTransform?, fontVariant?, textAlign?, textAlignVertical?, paragraphSpacing?, paragraphIndent?, listSpacing?, hyperlink?, lineClamp? } | The text style base. Runs layer over it. |
 | `fill` | color / gradient | The text's paint, like every other node's. "none" removes it. |
@@ -462,6 +464,7 @@ out.keyed.chip.intent;    // undefined — a plainly fixed node
 | `effects` | effects value | Shadows / blur: flcm.effects({...}) or a CSS-string bag. "none" removes all effects. |
 | `rotation` | number (deg) | Rotation in degrees. |
 | `clip` | boolean | Clip children to the frame's bounds. Default false, like CSS overflow: visible. |
+| `clipsContent` | boolean | Input alias for clip; duplicate values must agree. |
 | `width` | number \| "Npx" \| "N%" \| "fill" \| "hug" | A fixed size (a number or "Npx"), "N%" of the parent axis, "fill" (stretch to the parent — rejected on the root), or "hug" (shrink to content — only a row/column container or text can hug). |
 | `height` | number \| "fill" \| "hug" \| "N%" | Same rules as width. On TEXT the height follows the content ("hug", the default): set `width` to re-wrap it, use "fill" inside an auto-layout parent and "hug" to undo that; a fixed or percent height is rejected. |
 | `left` | number \| "Npx" \| "N%" | Offset from the parent's left edge — a number, "Npx", or "N%" of the parent width. Naming `left` or `top` lifts the node out of an auto-layout parent's flow (badges, overlays); under a free-form parent it is simply where the node sits. On a render root it is where on the PAGE the tree lands — without it every root stacks at the origin. Under edit, an axis you don't name keeps its live value. |
@@ -472,6 +475,7 @@ out.keyed.chip.intent;    // undefined — a plainly fixed node
 | `layout` | { mode?, gap?, padding?, justifyContent?, alignItems? } | Auto-layout config. Omitted or mode:"none" = free-form, where children position absolutely. |
 | `text` | string \| run[] | The content — a plain string (markdown: **bold**, *italic*, ~~strike~~, [text](url)) or an array of styled runs. At create it is usually the positional first argument; under edit it replaces the whole content. |
 | `textStyle` | { fontFamily?, fontWeight?, fontSize?, fontStyle?, lineHeight?, letterSpacing?, textDecoration?, textTransform?, fontVariant?, textAlign?, textAlignVertical?, paragraphSpacing?, paragraphIndent?, listSpacing?, hyperlink?, lineClamp? } | The text style base. Runs layer over it. |
+| `fontSize` | number | Input alias for textStyle.fontSize; duplicate values must agree. |
 | `boldWeight` | number (100–900) \| name | What `**bold**` in `text` resolves to. Default 700 — pass back the `boldWeight` a `get` reports and the copy emphasizes like the original. Same spellings as fontWeight. Under edit it only means something beside `text`. |
 | `componentProperties` | { [name]: string \| boolean \| component target } | Values by bare name (no `#id` suffix), as `get` reports them: a variant axis, a boolean, a text, or a component target for an instance_swap. A slot has no value here — its content is `children` under `overrides`. |
 | `overrides` | { [path]: delta } | Sublayer deltas keyed by component-relative path as `get` keys them (`"11:9"`, or `"11:9;11:14"` inside a nested instance), each in that sublayer's edit vocabulary; at a SLOT's path the delta also takes `children`. |
@@ -482,18 +486,18 @@ out.keyed.chip.intent;    // undefined — a plainly fixed node
 
 ### Words by node type
 
-- **FRAME** — `annotations`, `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `fill`, `stroke`, `strokeWidth`, `strokeAlign`, `borderRadius`, `effects`, `rotation`, `layout`, `clip`, `componentPropertyReferences`
-- **TEXT** — `annotations`, `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `text`, `textStyle`, `fill`, `boldWeight`, `componentPropertyReferences`
+- **FRAME** — `annotations`, `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `fill`, `stroke`, `strokeWidth`, `strokeAlign`, `borderRadius`, `effects`, `rotation`, `clipsContent`, `layout`, `clip`, `componentPropertyReferences`
+- **TEXT** — `annotations`, `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `fontSize`, `text`, `textStyle`, `fill`, `boldWeight`, `componentPropertyReferences`
 - **RECTANGLE** — `annotations`, `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `fill`, `stroke`, `strokeWidth`, `strokeAlign`, `borderRadius`, `effects`, `rotation`, `componentPropertyReferences`
 - **ELLIPSE** — `annotations`, `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `fill`, `stroke`, `strokeWidth`, `strokeAlign`, `effects`, `rotation`, `componentPropertyReferences`
 - **LINE** — `annotations`, `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `stroke`, `strokeWidth`, `width`, `rotation`, `left`, `top`, `position`, `anchor`, `pin`, `componentPropertyReferences`
 - **VECTOR (path- or svg-born)** — `annotations`, `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `fill`, `stroke`, `strokeWidth`, `strokeAlign`, `effects`, `rotation`, `componentPropertyReferences`
-- **INSTANCE** — `annotations`, `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `fill`, `stroke`, `strokeWidth`, `strokeAlign`, `borderRadius`, `effects`, `rotation`, `layout`, `clip`, `componentProperties`, `overrides`, `componentId`, `componentPropertyReferences`
-- **COMPONENT** — `annotations`, `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `fill`, `stroke`, `strokeWidth`, `strokeAlign`, `borderRadius`, `effects`, `rotation`, `layout`, `clip`, `description`, `propertyDefinitions`
-- **COMPONENT_SET** — `annotations`, `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `fill`, `stroke`, `strokeWidth`, `strokeAlign`, `borderRadius`, `effects`, `rotation`, `layout`, `clip`, `description`, `propertyDefinitions`
+- **INSTANCE** — `annotations`, `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `fill`, `stroke`, `strokeWidth`, `strokeAlign`, `borderRadius`, `effects`, `rotation`, `clipsContent`, `layout`, `clip`, `componentProperties`, `overrides`, `componentId`, `componentPropertyReferences`
+- **COMPONENT** — `annotations`, `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `fill`, `stroke`, `strokeWidth`, `strokeAlign`, `borderRadius`, `effects`, `rotation`, `clipsContent`, `layout`, `clip`, `description`, `propertyDefinitions`
+- **COMPONENT_SET** — `annotations`, `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `fill`, `stroke`, `strokeWidth`, `strokeAlign`, `borderRadius`, `effects`, `rotation`, `clipsContent`, `layout`, `clip`, `description`, `propertyDefinitions`
 - **POLYGON** — `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `annotations`
 - **STAR** — `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `annotations`
-- **SLOT** — `annotations`, `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `fill`, `stroke`, `strokeWidth`, `strokeAlign`, `borderRadius`, `effects`, `rotation`, `layout`, `clip`
+- **SLOT** — `annotations`, `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `fill`, `stroke`, `strokeWidth`, `strokeAlign`, `borderRadius`, `effects`, `rotation`, `clipsContent`, `layout`, `clip`
 
 On a node type with no vocabulary of its own (GROUP, SECTION, POLYGON, …) only the shared words apply: `name`, `opacity`, `mixBlendMode`, `visible`, `locked`.
 
@@ -568,6 +572,8 @@ No separate clipboard API — the verbs compose:
 | paste with modifications | `flcm.append(parent, flcm.fromRead(node))`, or `clone` then `edit` |
 | delete | `flcm.remove(target)` |
 
+`flcm.find` and `flcm.findOne` accept a literal case-insensitive name substring or a JavaScript RegExp, for example `{ name: /^Copy/i }`. Regex flags are preserved and repeated searches do not advance the expression's lastIndex.
+
 `flcm.get` returns `{ node, components }`. `node` is the read shape; `components` appears only when the subtree holds a component or an instance of one, and names each one ONCE — its `children` and its property definitions live there, keyed by component id. An INSTANCE therefore carries no `children` of its own: it carries `componentId` plus `overrides`, a map from component-relative sublayer path to just the fields that differ from the component. An omitted field means "same as the component"; `null` means the instance does not have that field at all (a paint removed, an opacity put back to 1); `visible: false` means the designer hid that layer. Reconstruct any sublayer's live id as `I<instanceId>;<path>`. An entry marked `childrenUnverified` came from a published library at its current version, which the file may not have adopted — treat a `visible: false` under it as possibly a layer the library added rather than one the designer hid; `childrenFrom` instead means the children were donated by that instance, edits and all.
 
 A `get` result is not authoring input on its own: a bare `get` result passed to `append` is rejected rather than quietly treated as a move, because it carries a live `id` exactly as a handle does — only you can say copy or move. `flcm.fromRead(node)` says copy: it re-authors the subtree through the constructors, so you can edit the read shape first (`{ ...node, width: 320 }`), and the copy comes back key-less. A single node's read shape also spreads straight into its constructor or an edit — `flcm.rect({ ...node, width: 320 })` — since the constructors read the read shape's spellings; `fromRead` is for a subtree, whose `children` are read shapes rather than built nodes.
@@ -584,7 +590,7 @@ await flcm.component(flcm.id("12:34"), { name: "Card", description: "The list ca
 ```
 
 - **The constructor-built form** renders as `render` does (fonts, images, root placement), then promotes the root. Every `key` survives (the root's lands on the COMPONENT), so `keyed` addresses the component's children.
-- **The target form** promotes in place (same parent and index). It refuses a COMPONENT or COMPONENT_SET (edit it), an INSTANCE (Figma would *wrap* it; detach first), a node inside an instance, a SLOT, and a page.
+- **The target form** promotes in place (same parent and index). Old root IDs resolve to the new component when the original node is absent; aliases persist in this file, and returned handles use the current ID. It refuses a COMPONENT or COMPONENT_SET (edit it), an INSTANCE (Figma would *wrap* it; detach first), a node inside an instance, a SLOT, and a page.
 - Nothing is written until every gate passes; the call is one undo step.
 
 ### flcm.component options
@@ -857,7 +863,6 @@ Accepting CSS is a fidelity promise, so the boundaries are strict. Each of these
 | Situation | Why, and the fix |
 | --- | --- |
 | A color / gradient / effect outside the [CSS subset](#the-css-subset) | Parse error naming the value. |
-| A read-artifact image fill (`{ type: "IMAGE", imageRef, … }`) on `fill`/`stroke` | A ref to bytes we don't have — author with `flcm.image(url)`. |
 | An `flcm.image` source that is unfetchable, blocked (private/loopback), outside the server's asset root, oversize, or not an image | Rejected server-side with the reason, never a blank fill. |
 | An `flcm.text` value that is neither a string nor a runs array, or text carrying read style-ref tokens (`{ts1}…{/ts1}`) | Those are read artifacts. Author styled text as markdown or runs. `**` in a plain string is markdown — backslash-escape for a literal. |
 | `![alt](url)` in a text string, or an unrealizable `fontStyle`/`textDecoration` (`"oblique"`, `"overline"`) | Text can't embed an image (`flcm.image`); the enum names the supported set. |
@@ -873,6 +878,8 @@ Accepting CSS is a fidelity promise, so the boundaries are strict. Each of these
 | `layout.justifyContent`/`alignItems` Figma can't realize — `"space-around"`, `"space-evenly"` | Use `"space-between"` or `gap`/`padding`. Never faked with spacer nodes, which read as content. |
 | `textStyle.lineClamp` on a width-hugging text | Truncation needs a width to wrap against. Set `width` to a number, `"fill"`, or `"N%"`. |
 | A layout word the node can't realize — a fixed/`"hug"`/percent `height` on TEXT, `"hug"` with nothing to measure, or container words without `layout.mode` | The same rules govern create and edit alike, so a word that wouldn't land names the fix instead. |
+
+An `imageRef` identifies an existing image in this file and can be reused, for example `flcm.rect({ fill: { type: "IMAGE", imageRef } })`.
 
 Variables and prototype interactions are deliberately **out of v1** — read concepts with no create path. They're rejected loudly so you never half-write something unrealizable. (Components have one: `flcm.instance` — see the components section.)
 

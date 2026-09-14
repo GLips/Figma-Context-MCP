@@ -21,6 +21,7 @@
 // parsers (css.ts) at runtime, so the leaf schemas here exist for their TYPE and DOC, not to re-validate.
 
 import { z } from "zod";
+import { INPUT_ALIASES } from "./input-aliases.js";
 import type {
   FillInput, WriteCssEffects, WritePaint, WriteEffect, GradientStop, WriteNode, WriteChild, Handle,
   PinX, PinY, Target, RawIdRef, SlimHandle, FindQuery, ReadPredicate, InsertResult, MoveResult, CloneResult, RemoveResult, GetResult,
@@ -205,12 +206,13 @@ const LAYOUT_FIELDS = {
     'CSS justify-content, main axis. Figma has no space-around/space-evenly — those fail loud.',
   ),
   alignItems: prop(
-    z.enum(["flex-start", "flex-end", "center", "stretch"]),
-    'CSS align-items, cross axis. "stretch" stretches every auto-sized child (a fixed cross-axis size wins); one child alone stretches via width/height "fill".',
+    z.enum(["flex-start", "flex-end", "center", "stretch", "baseline"]),
+    'CSS align-items, cross axis. "baseline" requires a horizontal row. "stretch" stretches every auto-sized child (a fixed cross-axis size wins); one child alone stretches via width/height "fill".',
   ),
 };
 
 const FRAME_FIELDS = {
+  ["clipsContent" satisfies keyof typeof INPUT_ALIASES]: prop(z.boolean(), "Input alias for clip; duplicate values must agree."),
   layout: prop(
     z.object(LAYOUT_FIELDS),
     "Auto-layout config. Omitted or mode:\"none\" = free-form, where children position absolutely.",
@@ -281,6 +283,7 @@ const TEXTSTYLE_FIELDS = {
 // the paint like every other node's, and `boldWeight` sits at the node level beside `textStyle` because
 // it is a content convention (what `**` resolves to), not a style property.
 const TEXT_FIELDS = {
+  ["fontSize" satisfies keyof typeof INPUT_ALIASES]: prop(z.number(), "Input alias for textStyle.fontSize; duplicate values must agree."),
   text: prop(
     z.custom<string | TextRunInput[]>(),
     "The content — a plain string (markdown: **bold**, *italic*, ~~strike~~, [text](url)) or an array of styled runs. At create it is usually the positional first argument; under edit it replaces the whole content.",
@@ -501,12 +504,14 @@ const EDIT_FIELDS = {
   effects: APPEARANCE_FIELDS.effects,
   rotation: APPEARANCE_FIELDS.rotation,
   clip: FRAME_FIELDS.clip,
+  clipsContent: FRAME_FIELDS.clipsContent,
   width: SIZE_FIELDS.width,
   height: SIZE_FIELDS.height,
   ...PLACEMENT_FIELDS,
   layout: FRAME_FIELDS.layout,
   text: TEXT_FIELDS.text,
   textStyle: TEXT_FIELDS.textStyle,
+  fontSize: TEXT_FIELDS.fontSize,
   boldWeight: TEXT_FIELDS.boldWeight,
   // The INSTANCE words. Reused from the constructor's group (not restated), because editing an
   // instance is the same vocabulary `get` reports on it and `flcm.instance` creates it with —

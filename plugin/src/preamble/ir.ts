@@ -231,7 +231,7 @@ export interface WriteTextRun {
 // render intent — the CSS-total value spellings (flex-start/space-between) are an LLM-edge concern the
 // sugar boundary (flcm.ts) maps in, never pushed through the render layer. ----
 export type Justify = "start" | "center" | "end" | "between";
-export type Align = "start" | "center" | "end" | "stretch";
+export type Align = "start" | "center" | "end" | "stretch" | "baseline";
 export type Sizing = "fixed" | "fill" | "hug";
 export interface Edges { top: number; right: number; bottom: number; left: number }
 
@@ -564,7 +564,7 @@ export interface PageInfo { fileName: string; page: PageSummary; pages: PageSumm
 // A locate query: the declarative facets find/findOne match, AND-combined. `type` and `key` are exact;
 // `name` is a case-insensitive substring (layer names are fuzzy — findOne's cardinality guard catches an
 // over-broad match). `within` scopes the scan to a subtree (target-by-shape, default: current page).
-export interface FindQuery { type?: string; name?: string; key?: string; within?: Target; hasAnnotations?: boolean }
+export interface FindQuery { type?: string; name?: string | RegExp; key?: string; within?: Target; hasAnnotations?: boolean }
 
 // find's optional second arg: a caller closure over a candidate's FULL EXPANDED read shape — the same
 // SimplifiedNode `get` returns, with values inline (Invariant 3), so `n.fill` is a value (a hex like

@@ -11,7 +11,13 @@ import type { PluginBridgeRuntime } from "~/services/plugin-bridge/index.js";
  * Client/Server pair over InMemoryTransport. Anything less (calling the handler directly) would pass
  * even if the SDK silently stripped the bad key on the way in, which is the exact bug this closes.
  */
-function connectedServer(request = vi.fn().mockResolvedValue({ image: "iVBORw0KGgo=" })) {
+function connectedServer(
+  request = vi
+    .fn()
+    .mockImplementation(async (payload: { type: string }) =>
+      payload.type === "APPROVAL_STATUS" ? { type: "APPROVAL_GRANTED" } : { image: "iVBORw0KGgo=" },
+    ),
+) {
   const bridge = {
     request,
     getPairingCode: () => "1234",
@@ -61,7 +67,10 @@ describe("unknown MCP tool params fail loud", () => {
     const { call, request, close } = connectedServer();
     const result = await call("get_screenshot", { nodeId: "1:2", scale: 2 });
 
-    expect(request).toHaveBeenCalledWith({ type: "SCREENSHOT", nodeId: "1:2", scale: 2 });
+    expect(request).toHaveBeenCalledWith(
+      { type: "SCREENSHOT", nodeId: "1:2", scale: 2 },
+      expect.any(AbortSignal),
+    );
     expect(result.content[0]).toMatchObject({ type: "image", mimeType: "image/png" });
     await close();
   });

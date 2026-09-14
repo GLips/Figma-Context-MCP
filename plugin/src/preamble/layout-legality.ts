@@ -3,7 +3,7 @@
 // (buildLayout, render's root check) and the bridge walk, edit via assertLayoutDeltaResolvable —
 // so the two cannot answer differently (ADR-0003: a word that would do nothing must reject loud,
 // in every verb). Pure and figma-free by charter: rules take the authored WriteLayout plus any
-// live facts as BOOLEANS, because the callers know them from different places — the create walk
+// live facts as scalar values, because the callers know them from different places — the create walk
 // answers from the authored node (before the node or its parent's sizing modes exist), edit from
 // the live flags. A rule that needs a fact neither side can state this way doesn't belong here.
 //
@@ -23,16 +23,19 @@ export interface ParentFlowFacts {
 }
 
 // Node-local legality: the type, the words, and whether the node will be a row/column container
-// after this call. `liveIsRowColumn` is the one fact only edit can supply (a delta that doesn't
-// name a mode inherits the live one); create passes false — the authored mode decides, and a
+// after this call. `liveMode` is the one fact only edit can supply (a delta that doesn't
+// name a mode inherits the live one); create passes undefined — the authored mode decides, and a
 // node with no mode is never a container. `willBeAuto` is derived here, not passed, so a caller
 // can't hand in a value that contradicts the very layout it also passes.
-export function assertLayoutRealizableForType(nodeType: string, wl: WriteLayout, liveIsRowColumn: boolean, subject: string): void {
+export function assertLayoutRealizableForType(nodeType: string, wl: WriteLayout, liveMode: "HORIZONTAL" | "VERTICAL" | "NONE" | "GRID" | undefined, subject: string): void {
   // No per-type "can this even be a container" rule here ON PURPOSE: a mode on a non-frame is
   // unreachable in both verbs — `layout` is a frame-constructor-only word at create, edit's
   // per-type vocabulary gate rejects it upstream, and render refuses hand-built IR
   // (provenance.ts) — so the rules below may trust the compile's invariants.
-  const willBeAuto = wl.mode != null ? wl.mode !== "none" : liveIsRowColumn;
+  const willBeAuto = wl.mode != null ? wl.mode !== "none" : liveMode === "HORIZONTAL" || liveMode === "VERTICAL";
+  if (wl.alignItems === "baseline" && (wl.mode ?? (liveMode === "HORIZONTAL" ? "row" : "none")) !== "row") {
+    throw new Error(subject + ': layout.alignItems "baseline" requires layout.mode "row" (horizontal auto-layout).');
+  }
   const s = wl.sizing || {};
   if ((s.horizontal === "hug" || s.vertical === "hug") && !willBeAuto && nodeType !== "TEXT") {
     // The remedy is type-gated: `layout` is a FRAME-only word, so prescribing a mode to a shape

@@ -238,9 +238,11 @@
         9876, 9877, 9878, 9879, 9880, 9881, 9882, 9883,
         9884, 9885, 9886, 9887, 9888, 9889, 9890, 9891,
       ];
-      // Every live socket, keyed by its port — the local-only connection key (__connKey) the sandbox
-      // threads through replies so each one goes back out on the socket it arrived on.
+      // Discovery is keyed by port. Sandbox traffic uses a separate unique socket key.
       var sockets = {};
+      // Local connection identity never reuses a port as a run owner.
+      var nextConnectionKey = 0;
+      var routes = {};
 
       // Reconnect cadence, per port. A port that has NEVER opened is almost certainly empty (no server
       // in the block bound it), so we back its retries off 1s → 15s. This is purely to tame console
@@ -269,7 +271,14 @@
       var lastOpenAt = {};
 
       function connect(port) {
+        var previous = sockets[port];
+        if (previous && previous.connectionKey) {
+          delete routes[previous.connectionKey];
+          parent.postMessage({ pluginMessage: { type: "WS_CLOSED", __connKey: previous.connectionKey } }, "*");
+        }
         var ws = new WebSocket("ws://localhost:" + port);
+        var connectionKey = ++nextConnectionKey;
+        ws.connectionKey = connectionKey;
         sockets[port] = ws;
         // Did THIS socket ever open? Most block ports have no server, so their connect fails and fires
         // onclose without ever opening. We must NOT tell the sandbox about those dead ports — a
@@ -277,6 +286,8 @@
         // render/visibility. Only a socket that actually opened represents a real session.
         var opened = false;
         ws.onopen = function () {
+          if (sockets[port] !== ws) return;
+          routes[connectionKey] = ws;
           opened = true;
           // A real server lives here — keep this port on the fast cadence so it rediscovers quickly if
           // the server drops/restarts, through the next few failed retries too (see the grace above).
@@ -288,24 +299,28 @@
           // into the executor — the consent gate's job is to stop exactly that. Tagged with __connKey
           // so the sandbox resets the right session. onopen fires before any onmessage on this socket,
           // so the reset lands before the new server's first message. Carries no id: local control.
-          parent.postMessage({ pluginMessage: { type: "WS_CONNECTED", __connKey: port } }, "*");
+          parent.postMessage({ pluginMessage: { type: "WS_CONNECTED", __connKey: connectionKey } }, "*");
         };
         ws.onmessage = function (event) {
-          // Server → sandbox. Tag the message with its source port (__connKey) so the sandbox keys
+          if (sockets[port] !== ws) return;
+          // Server → sandbox. Tag the message with its socket generation (__connKey) so the sandbox keys
           // its per-connection map and routes the reply back to this socket. __connKey is LOCAL — it
           // is stripped again before any sandbox reply re-enters the WS (see window.onmessage).
           var msg = JSON.parse(event.data);
-          msg.__connKey = port;
+          msg.__connKey = connectionKey;
           parent.postMessage({ pluginMessage: msg }, "*");
         };
         ws.onclose = function () {
+          delete routes[connectionKey];
+          if (sockets[port] !== ws) return;
+          delete sockets[port];
           // Tell the sandbox a real session dropped so its row leaves the panel (disconnect-detection
           // reuses this persistent relay) — but ONLY if this socket had opened; a dead port that never
           // connected has no row to remove and must stay silent. Either way, auto-reconnect: the plugin
           // outlives any single server run, and an empty port keeps its slot warm for a server that may
           // yet bind it (discovery is the same persistent relay).
           if (opened) {
-            parent.postMessage({ pluginMessage: { type: "WS_CLOSED", __connKey: port } }, "*");
+            parent.postMessage({ pluginMessage: { type: "WS_CLOSED", __connKey: connectionKey } }, "*");
           } else if (Date.now() - (lastOpenAt[port] || 0) > FAST_RECONNECT_GRACE_MS) {
             // Never opened, and no session here within the grace ⇒ presumed-empty port: double the
             // backoff (capped) so its doomed retries — and the un-mutable console line each one emits —
@@ -322,7 +337,7 @@
 
       // Sandbox → server relay, EXCEPT local control messages (RENDER, and the panel-control
       // SHOW/HIDE verbs it replaced), which the sandbox addresses to THIS iframe, not a server.
-      // Everything else carries __connKey — the port whose socket it must go out on (a reply, or the
+      // Everything else carries __connKey — the socket generation it must go out on (a reply, or the
       // SESSION_TOKEN Allow handover). Strip __connKey before ws.send so this LOCAL routing key never
       // rides onto the frozen envelope.
       window.onmessage = function (event) {
@@ -332,9 +347,9 @@
           render(msg);
           return;
         }
-        var port = msg.__connKey;
+        var connectionKey = msg.__connKey;
         delete msg.__connKey;
-        var ws = sockets[port];
+        var ws = routes[connectionKey];
         if (ws && ws.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify(msg));
         }
@@ -363,6 +378,7 @@
         detail.style.display = msg.expanded ? "flex" : "none";
         if (msg.expanded) {
           if (msg.showOrientation) detail.appendChild(orientationBanner());
+          if (msg.approvalStorageError) detail.appendChild(el("div", "orientation", msg.approvalStorageError));
           if (!sessions.length) detail.appendChild(emptyState());
           sessions.forEach(function (s) {
             detail.appendChild(sessionCard(s));
@@ -474,7 +490,7 @@
           allow.onclick = function () {
             decide(true, s.key);
           };
-          var deny = el("button", "deny", "Deny");
+          var deny = el("button", "deny", "Reject");
           deny.onclick = function () {
             decide(false, s.key);
           };

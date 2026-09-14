@@ -1,3 +1,4 @@
+import { startProgressHeartbeat, type ToolExtra } from "~/mcp/progress.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
@@ -72,76 +73,50 @@ export function registerCodeModeTools(
 ): void {
   const { bridge } = runtime;
 
-  /**
-   * Is a plugin around — connected, or plausibly between sockets? One question, two synchronous
-   * readers: whether to advertise the write tools at all, and which disconnect message tells the truth.
-   *
-   * Two sources, because neither alone spans a server restart:
-   *   • the connection latch — true once a plugin has connected IN THIS PROCESS. Authoritative while
-   *     the process lives, and reset to false by every restart.
-   *   • a recently-used persisted approval — code mode was used on this (cwd, port) minutes ago. It
-   *     lives on disk, so it survives the restart that just cleared the latch.
-   *
-   * False means what it says: no plugin has connected here and none was used here recently — a genuine
-   * cold start, where hiding the tools and saying "open the plugin" is right. It is NOT the answer for
-   * a dev-watch restart, which is the case that used to look identical.
-   */
+  /** Tool advertisement stays latched for this process; outage guidance uses elapsed time below. */
   function expectsPluginConnection(): boolean {
     return runtime.hasEverConnected() || bridge.hasRecentApproval();
   }
 
-  /**
-   * The reply for a write call that arrives with no plugin on the wire, or null when one is connected.
-   *
-   * This is where the restart window is ANSWERED rather than waited out. `bridge.request` would reject
-   * with "No Figma plugin connected. Open the Framelink plugin in Figma desktop" — true about the
-   * socket, wrong about the remedy during a reconnect, and expensive: the human obeys, reopening
-   * re-runs plugin/src/code.ts, which clears its in-memory approvedTokens and costs a real Allow. That
-   * instruction cost a dozen Allow clicks in one afternoon. So the two cases get different text, and
-   * the reconnect case says plainly NOT to reopen.
-   *
-   * Retryable, never `isError`: a socket that is a second from returning is a "try again", and an agent
-   * that reads a terminal failure abandons the tool.
-   */
+  /** A pre-submission outage uses bounded reconnect guidance; in-flight errors come from the bridge. */
   function pluginUnavailableReply(): CallToolResult | null {
     if (bridge.isPluginConnected()) return null;
-    if (expectsPluginConnection()) {
+    const elapsed = bridge.disconnectedDurationMs();
+    if (elapsed !== null && elapsed < 30_000) {
       return retryableToolReply(
-        `The Figma plugin is momentarily disconnected — the server restarted and the plugin reconnects ` +
-          `on its own within a second or two, so this call did not run. Retry this exact call. This is ` +
-          `NOT a failure, and it does NOT mean the plugin is closed: do NOT ask the user to reopen or ` +
-          `re-import the Framelink plugin, which would throw away their approval and make them click ` +
-          `Allow again for no reason. Just retry.`,
+        `The Figma plugin disconnected ${Math.round(elapsed / 1000)}s ago. This call was not submitted. Allow a few seconds for reconnection, then retry once.`,
       );
     }
     return retryableToolReply(
-      `No Figma plugin is connected, so this call did not run — nothing has connected to this server ` +
-        `and code mode has no sandbox to run in. Ask the user to open the Framelink plugin in Figma ` +
-        `desktop, then retry this exact call. This is NOT a failure: it is the normal first step.`,
+      `No Figma plugin is connected. This call was not submitted. Check that the Framelink plugin is open in the intended Figma file and the local server is running, then retry.`,
     );
   }
 
-  /**
-   * The sandbox gates a write exactly ONE way — consent — and the gate is RETRYABLE (deliberately not
-   * `isError`: the agent should relay the situation to the human and try again, not treat it as
-   * terminal). PENDING_APPROVAL means the session isn't approved yet; the text names this server's own
-   * per-connection pairing code (single source) so it always matches the row the plugin shows.
-   * Returns null when the reply isn't a gated one.
-   *
-   * Reaching here means the call ALREADY waited out requestUntilApproved's full window — the agent only
-   * sees this text when the human didn't click within it, so the wording says so. The common case (a
-   * human at the keyboard) never produces this result at all; the wait returns the real one.
-   */
+  function approvalOptions(extra: ToolExtra) {
+    return {
+      signal: extra.signal,
+      onWaiting: () =>
+        startProgressHeartbeat(
+          extra,
+          () =>
+            `Waiting for approval in Figma (pairing code ${bridge.getPairingCode()}). Code has not been submitted.`,
+          3000,
+        ),
+    };
+  }
+
+  /** A gate refusal proves the submitted body did not execute, including approval revoked after polling. */
   function gateResult(reply: unknown): { content: { type: "text"; text: string }[] } | null {
     if (!isPendingApproval(reply)) return null;
     const code = bridge.getPairingCode();
-    const text =
-      `This Figma session is not approved yet, so this call did not run — the server held the call open ` +
-      `for ${APPROVAL_WAIT_SECONDS}s waiting for approval and it didn't arrive. In Figma, open ` +
-      `the Framelink plugin and click Allow to approve session ${code}, then retry this exact call — it ` +
-      `will run as soon as it's approved. This is NOT a failure: relay the code "${code}" to the user, ` +
-      `make sure they've approved it in Figma, and try again.`;
-    return { content: [{ type: "text", text }] };
+    return {
+      content: [
+        {
+          type: "text",
+          text: `Session approval was unavailable, so this call did not execute. In Figma, approve pairing code ${code}, then submit a new call. This finished call will not run after a later Allow.`,
+        },
+      ],
+    };
   }
 
   /**
@@ -180,12 +155,10 @@ export function registerCodeModeTools(
       `**Pairing code ${code}.** Relay this to the user before your first \`figma_execute_code\` — they'll see ` +
       `it on the Framelink plugin's status strip in Figma and click Allow to approve this session.`;
     const gateLine =
-      `If the session isn't approved yet, your \`figma_execute_code\` call does NOT come back with an error — the ` +
-      `server holds it open for up to ${APPROVAL_WAIT_SECONDS}s and runs it the moment the user ` +
-      `clicks Allow, so a single call is usually all you need. That's why relaying the pairing code BEFORE you ` +
-      `call matters: the user should already be looking at Figma. Only if the wait runs out do you get a ` +
-      `"not approved yet" reply, which is retryable, NOT a failure. The code is per-session and can rotate, so ` +
-      `being asked to re-approve later is also normal — re-read this reference for the current code if so.`;
+      `An unapproved call waits locally for up to ${APPROVAL_WAIT_SECONDS}s, subject to the client's earlier deadline. ` +
+      `Allow submits the code once. Reject, cancellation, or client disconnection ends the wait without executing it. ` +
+      `Progress reports approval waiting when the client supports it; it does not guarantee a longer overall deadline. ` +
+      `An execution timeout never resubmits code automatically. Completion may be unconfirmed, so inspect affected nodes before retrying.`;
     return `${pairingLine}\n\n${gateLine}`;
   }
 
@@ -206,7 +179,7 @@ export function registerCodeModeTools(
             ),
         },
       },
-      async ({ code }) => {
+      async ({ code }, extra) => {
         const unavailable = pluginUnavailableReply();
         if (unavailable) return unavailable;
         // Correlation ids are owned by PluginBridge; mid-run image fetches ride the bridge underneath
@@ -219,8 +192,11 @@ export function registerCodeModeTools(
         // hash — the sandbox already re-evals the whole string per call, so it costs transfer only,
         // and a preamble sent every time is definitionally the one that ran, leaving no drift to
         // detect and nothing to put in the version handshake.
-        const raw = await requestUntilApproved(() =>
-          bridge.request({ type: "EXECUTE_CODE", code, preamble: flcmSandboxPreamble() }),
+        const raw = await requestUntilApproved(
+          (signal) => bridge.request({ type: "APPROVAL_STATUS" }, signal),
+          (signal) =>
+            bridge.request({ type: "EXECUTE_CODE", code, preamble: flcmSandboxPreamble() }, signal),
+          approvalOptions(extra),
         );
         const gated = gateResult(raw);
         if (gated) return gated;
@@ -308,7 +284,7 @@ Returns a PNG image.`,
             ),
         },
       },
-      async ({ nodeId, key, scale }) => {
+      async ({ nodeId, key, scale }, extra) => {
         // Value-level target checks (Phase 1 covers UNKNOWN keys; nodeId/key/scale are all known, so
         // their misuse is checked here). Same retryable shape: the agent can fix the call and retry.
         if (nodeId !== undefined && key !== undefined) {
@@ -328,8 +304,10 @@ Returns a PNG image.`,
         }
         const unavailable = pluginUnavailableReply();
         if (unavailable) return unavailable;
-        const raw = await requestUntilApproved(() =>
-          bridge.request({ type: "SCREENSHOT", nodeId, key, scale }),
+        const raw = await requestUntilApproved(
+          (signal) => bridge.request({ type: "APPROVAL_STATUS" }, signal),
+          (signal) => bridge.request({ type: "SCREENSHOT", nodeId, key, scale }, signal),
+          approvalOptions(extra),
         );
         const gated = gateResult(raw);
         if (gated) return gated;

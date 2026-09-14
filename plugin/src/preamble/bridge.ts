@@ -96,7 +96,7 @@ interface PendingResolve { node: any; layout: WriteLayout; parent: any }
 // each auto-sized child gets layoutAlign STRETCH on the parent's counter axis. Absorbing that divergence
 // in code (not documenting it as a footgun) is exactly ADR-0003's contract.
 const JUSTIFY: Record<Justify, string> = { start: "MIN", center: "CENTER", end: "MAX", between: "SPACE_BETWEEN" };
-const ALIGN: Partial<Record<Align, string>> = { start: "MIN", center: "CENTER", end: "MAX" };
+const ALIGN: Partial<Record<Align, string>> = { start: "MIN", center: "CENTER", end: "MAX", baseline: "BASELINE" };
 const TEXT_ALIGN: Record<TextAlign, "LEFT" | "CENTER" | "RIGHT" | "JUSTIFIED"> = { left: "LEFT", center: "CENTER", right: "RIGHT", justify: "JUSTIFIED" };
 // CSS text-decoration-line → Figma's TextDecoration enum. "none" is the enum's own NONE, used by a
 // per-run inverse override that clears an inherited base decoration.
@@ -814,12 +814,12 @@ function projectedParentLayoutFacts(parent: any, deltas: BatchLayoutDeltas | und
 //                     a placement word, so an already-ABSOLUTE child threads its live positioning: out
 //                     of flow it doesn't feed the parent's hug, and the percent cycle can't form.
 function assertLayoutLandsUnderParent(
-  parent: ParentLayoutFacts, nodeType: string, wl: WriteLayout, isContainer: boolean, isOutOfFlow: boolean, subject: string,
+  parent: ParentLayoutFacts, nodeType: string, wl: WriteLayout, isContainer: AutoLayoutMixin["layoutMode"] | undefined, isOutOfFlow: boolean, subject: string, nodeLocalValidated = false,
 ): void {
   if (parent.isPage) {
     assertSizingResolvesAgainstParentFrame(wl, false, subject);
   }
-  assertLayoutRealizableForType(nodeType, wl, isContainer, subject);
+  if (!nodeLocalValidated) assertLayoutRealizableForType(nodeType, wl, isContainer, subject);
   assertTextFillHeightInFlow(nodeType, wl, parent.parentIsAuto, isOutOfFlow, subject);
   assertNoParentRelativeWordsUnderGrid(wl, parent.isGrid, subject);
   if (wl.percentSize) {
@@ -836,17 +836,17 @@ function assertLayoutLandsUnderParent(
 // entry rejected inside a batch must say which verb the agent actually called. `deltas` is every
 // layout delta THIS verb is applying, keyed by node id, so the ancestors this node is judged
 // against are the ones the call is creating (see projectedParentLayoutFacts); a lone `edit` passes
-// none and is judged against the live canvas. `becomesRowColumn` is the node's OWN container mode
+// none and is judged against the live canvas. `becomesLayoutMode` is the node's OWN container mode
 // after this same call — an INSTANCE the delta swaps or re-variants takes the incoming component's
 // auto-layout mode before its root words land, so reading the live mode would both refuse a gap the
 // swap makes legal and accept one it makes meaningless. Undefined for every other delta, which has
 // no way to change its own mode mid-call.
 export function assertLayoutDeltaResolvable(
-  node: any, wl: WriteLayout, subject: string, deltas?: BatchLayoutDeltas, becomesRowColumn?: boolean,
+  node: any, wl: WriteLayout, subject: string, deltas?: BatchLayoutDeltas, becomesLayoutMode?: AutoLayoutMixin["layoutMode"],
 ): void {
   const outOfFlow = wl.position === "absolute" || (wl.position !== "none" && node.layoutPositioning === "ABSOLUTE");
   const parent = projectedParentLayoutFacts(node.parent, deltas);
-  const isContainer = becomesRowColumn === undefined ? isRowColumnAutoLayout(node) : becomesRowColumn;
+  const isContainer = becomesLayoutMode === undefined ? node.layoutMode : becomesLayoutMode;
   assertLayoutLandsUnderParent(parent, node.type, wl, isContainer, outOfFlow, subject);
 }
 
@@ -855,7 +855,7 @@ export function assertLayoutDeltaResolvable(
 // them twice would risk reading them AFTER the reparent, when they no longer mean the old axes.
 export function assertLiveNodeLandsUnderParent(node: any, destination: any, subject: string): WriteLayout {
   const wl = liveParentRelativeWords(node);
-  assertLayoutLandsUnderParent(liveParentLayoutFacts(destination), node.type, wl, isRowColumnAutoLayout(node), wl.position === "absolute", subject);
+  assertLayoutLandsUnderParent(liveParentLayoutFacts(destination), node.type, wl, node.layoutMode, wl.position === "absolute", subject);
   return wl;
 }
 
@@ -864,8 +864,10 @@ export function assertLiveNodeLandsUnderParent(node: any, destination: any, subj
 // `deltas` is the same projection a batch hands assertLayoutDeltaResolvable: a slot's content is
 // judged against the slot as the SAME override's own layout words will leave it, not as it stands.
 export function assertBuiltRootLandsUnderParent(destination: any, wn: WriteNode, subject: string, deltas?: BatchLayoutDeltas): void {
+  // Instance planning validates node-local words against the resolved component/selected variant,
+  // including recursively planned slot content. This gate only adds destination-relative checks.
   const wl = wn.layout || {};
-  assertLayoutLandsUnderParent(projectedParentLayoutFacts(destination, deltas), wn.type, wl, wl.mode === "row" || wl.mode === "column", wl.position === "absolute", subject);
+  assertLayoutLandsUnderParent(projectedParentLayoutFacts(destination, deltas), wn.type, wl, undefined, wl.position === "absolute", subject, wn.type === "INSTANCE");
 }
 
 // The layout words a LIVE node carries that MEAN SOMETHING ABOUT ITS PARENT — the only intent a

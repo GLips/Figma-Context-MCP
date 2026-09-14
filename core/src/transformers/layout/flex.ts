@@ -26,6 +26,7 @@ export function convertAlignItems(
   const allStretch =
     children.length > 0 &&
     children.every((c) => c.layoutPositioning === "ABSOLUTE" || c[crossSizing] === "FILL");
+  if (align === "BASELINE") return "baseline";
   if (allStretch) return "stretch";
 
   switch (align) {
@@ -35,8 +36,6 @@ export function convertAlignItems(
       return "flex-end";
     case "CENTER":
       return "center";
-    case "BASELINE":
-      return "baseline";
     default:
       return undefined;
   }

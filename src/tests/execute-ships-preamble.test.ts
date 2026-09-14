@@ -19,7 +19,13 @@ import type { BridgeRequest, PluginBridge } from "~/services/plugin-bridge/bridg
 import type { PluginBridgeRuntime } from "~/services/plugin-bridge/index.js";
 
 function connectedServer() {
-  const request = vi.fn().mockResolvedValue({ result: "ok", console: [], errors: null });
+  const request = vi
+    .fn()
+    .mockImplementation(async (payload: BridgeRequest) =>
+      payload.type === "APPROVAL_STATUS"
+        ? { type: "APPROVAL_GRANTED" }
+        : { result: "ok", console: [], errors: null },
+    );
   const bridge = {
     request,
     getPairingCode: () => "1234",
@@ -55,10 +61,10 @@ describe("figma_execute_code ships the flcm std-lib", () => {
     try {
       await call("figma_execute_code", { code: "return 1" });
 
-      expect(request).toHaveBeenCalledTimes(1);
+      expect(request.mock.calls.filter(([p]) => p.type === "EXECUTE_CODE")).toHaveLength(1);
       // Named against the real union member, not a hand-written shape: drop `preamble` from
       // BridgeRequest and this file stops compiling rather than quietly asserting on `undefined`.
-      const sent = request.mock.calls[0][0] as Extract<BridgeRequest, { type: "EXECUTE_CODE" }>;
+      const sent = request.mock.calls[1][0] as Extract<BridgeRequest, { type: "EXECUTE_CODE" }>;
       expect(sent.type).toBe("EXECUTE_CODE");
       expect(sent.code).toBe("return 1");
 

@@ -67,14 +67,14 @@ export function edit(target: Target, changes: EditDelta): Promise<Handle> {
     // Gate — every decision that reads the document, made against it as it stands at the seal:
     // the compile, the instance and component halves, and the root's own layout gate, which reads
     // the container this delta LEAVES BEHIND (a swap re-points the instance before its layout
-    // words land — `becomesRowColumn`).
+    // words land — `becomesLayoutMode`).
     ({ node, targets, current, loaded }) => {
       assertNodeStillOnCanvas(node, SUBJECT);
       const plan = compileEditPlan(node, changes, SUBJECT);
       const planning = { targets, fonts: loaded.fonts };
       const instance: InstanceEditPlan | undefined = plan.instanceWords ? planInstanceEdit(node, plan.instanceWords, current, planning, SUBJECT) : undefined;
       const component: ComponentEditPlan | undefined = plan.componentWords ? planComponentEdit(node, plan.componentWords, targets, SUBJECT) : undefined;
-      assertEditPlanLands(plan, loaded.fonts, SUBJECT, undefined, instance ? instance.becomesRowColumn : undefined);
+      assertEditPlanLands(plan, loaded.fonts, SUBJECT, undefined, instance ? instance.becomesLayoutMode : undefined);
       return { plan, instance, component, resources: gateEditResources(loaded, instance ? [instance.needs] : []) };
     },
     // Apply — the sealed span: all writes, no awaits.

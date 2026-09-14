@@ -7,6 +7,8 @@
 // Every closed set in the preamble is indexed by an AGENT-SUPPLIED string, so a plain `table[key]`
 // reaches Object.prototype: `{ type: "toString" }` would pass a type gate and `{ constructor: 1 }` a
 // field gate, both silently. Own-property only — a closed set has to actually be closed.
+import { normalizeInputAliases } from "./input-aliases.js";
+
 export function own<T>(table: Record<string, T>, key: string): T | undefined {
   return Object.prototype.hasOwnProperty.call(table, key) ? table[key] : undefined;
 }
@@ -92,7 +94,7 @@ export function rejectNonDeltaWords(changes: unknown, known: ReadonlySet<string>
   for (const key of Object.keys(changes)) {
     if (!READ_ONLY_WORDS.has(key)) foreign[key] = (changes as Record<string, unknown>)[key];
   }
-  rejectUnknownKeys(foreign, known, subject);
+  rejectUnknownKeys(normalizeInputAliases(foreign, subject), known, subject);
   if (Object.keys(changes).length === 0) {
     throw new Error(
       subject + ": the changes object is empty — nothing to apply (an empty edit would still mint an undo step). Editable words: " +
@@ -116,7 +118,7 @@ export interface AuthoringEntry {
  */
 export function acceptAuthoringProps(bag: unknown, entry: AuthoringEntry): Record<string, unknown> {
   if (bag === null || typeof bag !== "object" || Array.isArray(bag)) rejectUnknownKeys(bag, entry.known, entry.subject);
-  const src = bag as Record<string, unknown>;
+  const src = normalizeInputAliases(bag as Record<string, unknown>, entry.subject, entry.type);
   const out: Record<string, unknown> = {};
   for (const key of Object.keys(src)) {
     const value = src[key];

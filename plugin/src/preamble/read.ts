@@ -9,6 +9,7 @@
 import { readAnnotationCategoryNames } from "./annotation-categories.js";
 import { decodeAnnotations } from "./annotations.js";
 import { Target, RawIdRef, FindQuery, SlimHandle, ReadPredicate, GetResult } from "./ir.js";
+import { resolvePromotionId } from "./promotion-aliases.js";
 import { readKey, identityOf } from "./identity.js";
 import {
   sceneNodeToSnapshot,
@@ -41,8 +42,7 @@ function hasId(value: unknown): value is { id: string } {
 // target-taking verb below async. Cast to SceneNode — every resolvable target is one in practice, and the
 // read/edit verbs that consume this operate on scene nodes.
 async function byId(id: string): Promise<SceneNode | null> {
-  const node = await figma.getNodeByIdAsync(id);
-  return node && !node.removed ? (node as SceneNode) : null;
+  return resolvePromotionId(id);
 }
 
 function scanKey(key: string, root: ScanRoot): SceneNode[] {
@@ -290,7 +290,10 @@ function matchesQuery(node: SceneNode, query: FindQuery): boolean {
   if (query.hasAnnotations !== undefined && Boolean("annotations" in node && node.annotations.length) !== query.hasAnnotations) return false;
   if (query.type && node.type !== query.type) return false;
   if (query.key && readKey(node) !== query.key) return false;
-  if (query.name && !node.name.toLowerCase().includes(query.name.toLowerCase())) return false;
+  if (query.name instanceof RegExp) {
+    const pattern = new RegExp(query.name.source, query.name.flags);
+    if (!pattern.test(node.name)) return false;
+  } else if (query.name && !node.name.toLowerCase().includes(query.name.toLowerCase())) return false;
   return true;
 }
 
@@ -423,6 +426,11 @@ export async function find(query: FindQuery = {}, predicate?: ReadPredicate): Pr
   rejectStringQuery(query, "flcm.find");
   rejectUnknownKeys(query, FIND_KEY_SET, "flcm.find", "query key");
   if (query.hasAnnotations !== undefined && typeof query.hasAnnotations !== "boolean") throw new Error("flcm.find: hasAnnotations must be a boolean.");
+  for (const key of ["type", "key"] as const) {
+    if (query[key] !== undefined && typeof query[key] !== "string") throw new Error("flcm.find: " + key + " must be a string.");
+  }
+  if (query.name !== undefined && typeof query.name !== "string" && !(query.name instanceof RegExp)) throw new Error("flcm.find: name must be a string (literal substring) or RegExp.");
+  if (predicate !== undefined && typeof predicate !== "function") throw new Error("flcm.find: predicate must be a function.");
   const root = await scanRoot(query.within);
   const hits = root.findAll((node) => matchesQuery(node, query) && isRendered(node));
   if (!predicate) return projectHits(hits, root);

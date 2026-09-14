@@ -527,7 +527,7 @@ export function editMany(entries: EditEntry[], scope?: EditManyScope): Promise<H
         const instance = instances[i];
         // The root's layout gate reads the container the entry LEAVES BEHIND (a swap re-points the
         // instance before its own layout words land).
-        assertEditPlanLands(compiled[i] as EditPlan, loaded.fonts, SUBJECT, deltas, instance ? instance.becomesRowColumn : undefined);
+        assertEditPlanLands(compiled[i] as EditPlan, loaded.fonts, SUBJECT, deltas, instance ? instance.becomesLayoutMode : undefined);
       });
       ledger.rejectIfAny();
       const plans = compiled as EditPlan[];

@@ -851,3 +851,11 @@ describe("aspectRatio zero-height guard", () => {
     expect(geometryOf(rotated, parent).aspectRatio).toBe(2);
   });
 });
+
+test("native baseline takes precedence over fill-child stretch inference", () => {
+  const node = makeFrame({
+    counterAxisAlignItems: "BASELINE",
+    children: [makeChild({ layoutSizingVertical: "FILL" })],
+  });
+  expect(layoutOf(node)?.alignItems).toBe("baseline");
+});

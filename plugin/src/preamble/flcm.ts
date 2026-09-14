@@ -62,14 +62,14 @@ import type {
 export const KNOWN_KEYS = {
   annotation: ["annotations"],
   shared: ["name", "key", "opacity", "mixBlendMode", "visible", "locked"],
-  edit: ["annotations", "name", "opacity", "mixBlendMode", "visible", "locked", "fill", "stroke", "strokeWidth", "strokeAlign", "borderRadius", "effects", "rotation", "clip", "width", "height", "left", "top", "position", "anchor", "pin", "layout", "text", "textStyle", "boldWeight", "componentProperties", "overrides", "componentId", "componentPropertyReferences", "description", "propertyDefinitions"],
+  edit: ["clipsContent", "fontSize", "annotations", "name", "opacity", "mixBlendMode", "visible", "locked", "fill", "stroke", "strokeWidth", "strokeAlign", "borderRadius", "effects", "rotation", "clip", "width", "height", "left", "top", "position", "anchor", "pin", "layout", "text", "textStyle", "boldWeight", "componentProperties", "overrides", "componentId", "componentPropertyReferences", "description", "propertyDefinitions"],
   size: ["width", "height", "left", "top", "position", "anchor", "pin"],
   placement: ["left", "top", "position", "anchor", "pin"],
   appearance: ["fill", "stroke", "strokeWidth", "strokeAlign", "borderRadius", "effects", "rotation"],
   ellipse: ["fill", "stroke", "strokeWidth", "strokeAlign", "effects", "rotation"],
-  frame: ["layout", "clip"],
+  frame: ["layout", "clip", "clipsContent"],
   layout: ["mode", "gap", "padding", "justifyContent", "alignItems"],
-  text: ["text", "textStyle", "fill", "boldWeight"],
+  text: ["text", "textStyle", "fill", "boldWeight", "fontSize"],
   textStyle: ["fontFamily", "fontWeight", "fontSize", "fontStyle", "lineHeight", "letterSpacing", "textDecoration", "textTransform", "fontVariant", "textAlign", "textAlignVertical", "paragraphSpacing", "paragraphIndent", "listSpacing", "hyperlink", "lineClamp"],
   run: ["fontWeight", "fontSize", "fontFamily", "fontStyle", "lineHeight", "letterSpacing", "textDecoration", "textTransform", "fontVariant", "paragraphSpacing", "paragraphIndent", "listSpacing", "color", "hyperlink"],
   line: ["stroke", "strokeWidth", "width", "rotation", "left", "top", "position", "anchor", "pin"],
@@ -286,7 +286,7 @@ const JUSTIFY_CONTENT: Record<string, Justify> = {
   "flex-start": "start", "flex-end": "end", center: "center", "space-between": "between",
 };
 const ALIGN_ITEMS: Record<string, Align> = {
-  "flex-start": "start", "flex-end": "end", center: "center", stretch: "stretch",
+  "flex-start": "start", "flex-end": "end", center: "center", stretch: "stretch", baseline: "baseline",
 };
 // Auto-layout direction. Unlike justify/align these need no CSS→terse mapping (row/column/none ARE the
 // values), so mode validates by identity via assertEnum — a stray mode (notably `grid`, which flcm can't
@@ -426,7 +426,7 @@ function buildLayout(props: FrameProps, nodeType: WriteType, subject: string): W
   Object.assign(layout, compileSizeWords(props) || {});
   // The shared per-type legality authority (layout-legality.ts) — the same call edit's live gate
   // makes, so a word that rejects on edit rejects identically here instead of silently not landing.
-  assertLayoutRealizableForType(nodeType, layout, false, subject);
+  assertLayoutRealizableForType(nodeType, layout, undefined, subject);
   return layout;
 }
 
@@ -1262,7 +1262,7 @@ function line(props: LineProps | SimplifiedNode = {}): WriteNode {
   // line() is the one constructor that doesn't ride buildLayout (width-only sizing), so it consults
   // the shared authority itself — no rule fires on a width-only layout today, but a future LINE-keyed
   // rule must not end up edit-only (the asymmetry this module forbids).
-  assertLayoutRealizableForType("LINE", layout, false, "flcm.line");
+  assertLayoutRealizableForType("LINE", layout, undefined, "flcm.line");
   if (Object.keys(layout).length) wn.layout = layout;
   if (props.rotation != null) { assertScalarType(props.rotation, "number", "rotation"); wn.rotation = props.rotation; }
   return sealWriteNode(wn);

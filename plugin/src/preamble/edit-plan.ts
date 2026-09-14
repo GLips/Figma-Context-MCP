@@ -461,30 +461,30 @@ export interface LoadedResources {
  * `deltas` is every layout delta the SAME verb is applying, by node id — a batch judges its entries
  * against the canvas it is creating, not the one it found.
  *
- * `becomesRowColumn` is the same projection one node deep: an INSTANCE delta that swaps or
+ * `becomesLayoutMode` is the same projection one node deep: an INSTANCE delta that swaps or
  * re-variants takes the INCOMING component's auto-layout mode before its root words land, so its
  * `layout` words are legal or not by that mode, never the outgoing one's (instance.ts computes it).
  * Undefined means "read it off the live node", which is every other delta.
  */
 export function gateEditPlan(
-  node: SceneNode, changes: EditDelta, fonts: FontMap, subject: string, deltas?: BatchLayoutDeltas, becomesRowColumn?: boolean,
+  node: SceneNode, changes: EditDelta, fonts: FontMap, subject: string, deltas?: BatchLayoutDeltas, becomesLayoutMode?: AutoLayoutMixin["layoutMode"],
 ): EditPlan {
   assertNodeStillOnCanvas(node, subject);
   const plan = compileEditPlan(node, changes, subject);
-  assertEditPlanLands(plan, fonts, subject, deltas, becomesRowColumn);
+  assertEditPlanLands(plan, fonts, subject, deltas, becomesLayoutMode);
   return plan;
 }
 
 /**
  * The second half of stage 4 on its own, for a verb that has to plan a delta's INSTANCE half
  * between the compile and these gates (the root's layout gate reads the container the retarget
- * leaves behind — `becomesRowColumn` comes from that plan).
+ * leaves behind — `becomesLayoutMode` comes from that plan).
  */
 export function assertEditPlanLands(
-  plan: EditPlan, fonts: FontMap, subject: string, deltas?: BatchLayoutDeltas, becomesRowColumn?: boolean,
+  plan: EditPlan, fonts: FontMap, subject: string, deltas?: BatchLayoutDeltas, becomesLayoutMode?: AutoLayoutMixin["layoutMode"],
 ): void {
   assertTextEditFontsLoaded(plan.node, plan.patch, fonts, subject);
-  if (plan.patch.layout) assertLayoutDeltaResolvable(plan.node, plan.patch.layout, subject, deltas, becomesRowColumn);
+  if (plan.patch.layout) assertLayoutDeltaResolvable(plan.node, plan.patch.layout, subject, deltas, becomesLayoutMode);
 }
 
 /**

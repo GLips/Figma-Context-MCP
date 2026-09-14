@@ -25,6 +25,7 @@
 import {
   WriteNode, WriteChild, Handle, Target, ComponentPropertyBinding, ComponentResult, VariantEntryInput,
 } from "./ir.js";
+import { recordPromotionAlias } from "./promotion-aliases.js";
 import { resolveTarget, createResolvedTargets, ResolvedTargets } from "./read.js";
 import {
   settleHandles, mintHandle, BoundLiveNode, InstancePlans, beginRenderWalk, RenderResources,
@@ -634,9 +635,11 @@ function applyTargetComponent({ node, definitions, options }: GatedTargetCompone
     // createComponentFromNode hands back a new node, and whether Figma carries pluginData across is
     // undocumented. Re-stamping is right under either answer, and keeps the two forms symmetric.
     const key = readKey(node);
+    const previousId = node.id;
     const comp = figma.createComponentFromNode(node);
     if (key) writeKey(comp, key);
     declareProperties(comp, definitions, [], options);
+    recordPromotionAlias(previousId, comp.id);
     return settleHandles(comp, collectKeyed(comp));
   } catch (cause) {
     throw fail(cause);

@@ -1,6 +1,7 @@
 // Plugin sandbox entry. This is the only context where `figma.*` lives. It never
 // touches the network — it talks to the headless ui.html bridge via postMessage.
 
+import { createApprovalLifecycle } from "./approval-lifecycle.js";
 import { safeSerialize, guardReturnValue } from "./serialize.js";
 import { resolveScreenshotTarget, type ScreenshotTarget } from "./screenshot-target.js";
 import { createRunCancellationRegistry } from "./run-cancellation.js";
@@ -46,7 +47,7 @@ figma.showUI(__html__, {
 //     IMAGES_REQUEST/IMAGES_REPLY + run-scoped CANCEL). v3 = the server ships the flcm std-lib
 //     (ADR-0010), and the host capabilities collapse into the one `__flcmHost` object.
 //   • PLUGIN_VERSION — the plugin release, shown to the human in a skew refusal. Informational.
-const PROTOCOL_VERSION = 3;
+const PROTOCOL_VERSION = 4;
 const PLUGIN_VERSION = "0.1.0";
 
 // Phase 2 consent gate. The sandbox is the SOLE ARBITER (Invariant): it holds the durable
@@ -62,48 +63,36 @@ const PLUGIN_VERSION = "0.1.0";
 // server in every SESSION_INFO. A same-path squatter never received an Allow handover, so it
 // has no token and falls back to PENDING.
 //
-// Persisted via clientStorage (fig-61), the same pattern hasSeenOrientation uses below: loaded
-// once at startup into this in-memory Set, written back on every mint and every revoke. The
-// startup read is local and resolves long before any session's SESSION_INFO can arrive (that
-// needs a WS round-trip), so a reconnecting server's echoed token is already recognized by the
-// time isApproved() is asked. This replaces the original "approve once per work session" design,
-// where the Set was plain in-memory and closing the plugin cleared every approval — ordinary
-// file-switching now survives a close/reopen without a fresh Allow. What clears an entry is only
-// ever explicit: per-session Revoke access (revokeSession) or the global Revoke all approvals
-// action (revokeAllApprovals) — never a timer, never a reopen.
-const approvedTokens = new Set<string>();
-
+// Startup restoration and all approval changes share an ordered durable lifecycle.
 const APPROVED_TOKENS_STORAGE_KEY = "code-mode:approved-tokens";
-void figma.clientStorage.getAsync(APPROVED_TOKENS_STORAGE_KEY).then((persisted) => {
-  if (!Array.isArray(persisted)) return;
-  for (const token of persisted) {
-    if (typeof token === "string") approvedTokens.add(token);
-  }
+let approvalStorageError: string | null = null;
+const approvedTokens = createApprovalLifecycle({
+  load: () => figma.clientStorage.getAsync(APPROVED_TOKENS_STORAGE_KEY),
+  save: async (tokens) => {
+    await figma.clientStorage.setAsync(APPROVED_TOKENS_STORAGE_KEY, tokens);
+    approvalStorageError = null;
+  },
+}, (error) => {
+  approvalStorageError = `Approval storage failed: ${String(error)}. Changes may not survive reopening.`;
+  figma.notify(approvalStorageError, { error: true, timeout: 15000 });
 });
-
-/** Write the current approval set back to clientStorage. Fire-and-forget, like every other
- * durable write here — a plugin reload is the only reader, and it always re-reads at startup. */
-function persistApprovedTokens(): void {
-  void figma.clientStorage.setAsync(APPROVED_TOKENS_STORAGE_KEY, Array.from(approvedTokens));
-}
+void approvedTokens.ready.then(() => renderUi());
 
 // One live session, as last presented over SESSION_INFO. The token gates writes; the identity is
 // the label the human approves in the panel; the pairing code is the glance-and-compare check
 // shown beside it. All null until this connection's SESSION_INFO arrives — a connection with no
 // token yet is UNAPPROVED, so a write racing ahead of the handshake gets the pending path.
 interface SessionConn {
+  rejected?: boolean;
+  decisionRevision?: number;
   token: string | null;
   identity: string | null;
   pairingCode: string | null;
 }
 
-// Phase 3 multi-connection: ui.html holds N persistent sockets (one per block port) and tags every
-// server→sandbox message with its source port (__connKey). This map replaces the single
-// currentToken/currentIdentity/currentPairingCode with one SessionConn per live port, so each
-// session is gated and approved independently. Keyed by the port: one server binds one port and
-// ui.html owns the sockets, so the port is the natural stable key. approvedTokens (above) stays a
-// flat module Set — sticky approval keys on the minted TOKEN, not the connection, so it must
-// outlive any single port's connection entry (Slice 2.1b).
+// ui.html assigns a unique local key to each socket generation. Replies, sessions,
+// cancellation and reverse image requests all carry that same owner. Approval tokens
+// are independent and may survive replacement connections.
 type ConnKey = number;
 const connections = new Map<ConnKey, SessionConn>();
 
@@ -154,7 +143,7 @@ interface InboundMessage {
 
 /**
  * Everything a reply inherits from its request, derived once at dispatch: the correlation `id`, and
- * `connKey` — the local source-port tag ui.html attached, stamped back so the reply goes out on the
+ * `connKey` — the local connection-generation tag ui.html attached, stamped back so the reply goes out on the
  * socket the request arrived on.
  *
  * Negative space: nothing else crosses over, and there is deliberately no pass-through namespace to
@@ -168,7 +157,7 @@ interface ReplyTo {
   connKey: ConnKey | undefined;
 }
 
-/** The source-port tag ui.html attached, or undefined if absent — one parse site for the routing
+/** The connection-generation tag ui.html attached, or undefined if absent — one parse site for the routing
  * key, so the "is it a number" check and its absent-sentinel are defined once. */
 function connKeyOf(msg: InboundMessage): ConnKey | undefined {
   return typeof msg.__connKey === "number" ? msg.__connKey : undefined;
@@ -176,9 +165,13 @@ function connKeyOf(msg: InboundMessage): ConnKey | undefined {
 
 /**
  * The single reply path: the handler's body, with the correlation `id` (the frozen-envelope
- * Invariant) and the source-port tag stamped last so a body field can't clobber either.
+ * Invariant) and the connection-generation tag stamped last so a body field can't clobber either.
  * `__connKey` is LOCAL — ui.html strips it before ws.send, so it never reaches a server.
  */
+function runState(to: ReplyTo, phase: "queued" | "running"): void {
+  figma.ui.postMessage({ type: "RUN_STATE", runId: to.id, phase, __connKey: to.connKey });
+}
+
 function reply(to: ReplyTo, body: Record<string, unknown>): void {
   figma.ui.postMessage({ ...body, id: to.id, __connKey: to.connKey });
 }
@@ -352,6 +345,7 @@ function renderUi(showOrientation = false): void {
     expanded,
     showOrientation,
     hasApprovals: approvedTokens.size > 0,
+    approvalStorageError,
   });
 }
 
@@ -434,26 +428,24 @@ function enqueueWrite(run: () => Promise<void>): void {
   writeChain = writeChain.then(run).catch(() => {});
 }
 
-/**
- * Apply the human's Allow/Deny to a specific session (keyed by its port). Allow mints a session
- * token, remembers it as approved, binds it to that connection, and hands it to that row's server
- * (routed by __connKey) so the server can echo it on reconnect — approval keys on the minted token,
- * never the forgeable identity (Invariant). Deny (approve !== true) changes no state: it means "not
- * now", so the session's next write re-opens the list.
- *
- * Approving does NOT make the row the driver. Driving follows WRITES (takeBaton), so there is
- * exactly one rule for who holds the baton and the human never arbitrates it. Either way the list
- * collapses — the decision is made, and the strip still reports anything left pending.
- */
-function applyDecision(key: ConnKey, approve: boolean): void {
+/** Allow becomes usable after durable storage succeeds. Reject ends pending waits. */
+async function applyDecision(key: ConnKey, approve: boolean): Promise<void> {
   const conn = connections.get(key);
-  if (conn !== undefined && approve && !isApproved(key)) {
+  if (!conn) return;
+  const revision = (conn.decisionRevision ?? 0) + 1;
+  conn.decisionRevision = revision;
+  if (!approve) {
+    conn.rejected = true;
+    setExpanded(false);
+    return;
+  }
+  if (!isApproved(key)) {
     const token = mintToken();
-    approvedTokens.add(token);
-    persistApprovedTokens();
+    try { await approvedTokens.allow(token); }
+    catch { renderUi(); return; }
+    if (connections.get(key) !== conn || conn.decisionRevision !== revision) return;
+    conn.rejected = false;
     conn.token = token;
-    // Same field name (`sessionToken`) the server echoes back in SESSION_INFO — one vocabulary in
-    // both directions. __connKey routes the unsolicited handover to THIS row's socket.
     figma.ui.postMessage({ type: "SESSION_TOKEN", sessionToken: token, __connKey: key });
   }
   setExpanded(false);
@@ -470,13 +462,14 @@ function applyDecision(key: ConnKey, approve: boolean): void {
  * this is a de-authorization, not a disconnect, which is why the button doesn't say "Disconnect":
  * the socket is untouched and the agent can ask again.
  */
-function revokeSession(key: ConnKey): void {
+async function revokeSession(key: ConnKey): Promise<void> {
   const conn = connections.get(key);
+  if (conn) conn.decisionRevision = (conn.decisionRevision ?? 0) + 1;
   if (conn && conn.token) {
-    approvedTokens.delete(conn.token);
-    persistApprovedTokens();
+    const persistence = approvedTokens.revoke(conn.token);
     figma.ui.postMessage({ type: "REVOKE_SESSION", __connKey: key });
     conn.token = null;
+    await persistence.catch(() => {});
   }
   if (activeKey === key) activeKey = null;
   renderUi();
@@ -494,15 +487,16 @@ function revokeSession(key: ConnKey): void {
  * revokeSession, so an active session's next write re-prompts immediately rather than waiting for a
  * reconnect to discover the plugin no longer recognizes its token.
  */
-function revokeAllApprovals(): void {
-  approvedTokens.clear();
-  persistApprovedTokens();
+async function revokeAllApprovals(): Promise<void> {
+  const persistence = approvedTokens.revokeAll();
   for (const [key, conn] of connections) {
+    conn.decisionRevision = (conn.decisionRevision ?? 0) + 1;
     if (conn.token === null) continue;
     figma.ui.postMessage({ type: "REVOKE_SESSION", __connKey: key });
     conn.token = null;
   }
   activeKey = null;
+  await persistence.catch(() => {});
   renderUi();
 }
 
@@ -547,22 +541,8 @@ figma.ui.onmessage = (msg: InboundMessage) => {
     const key = connKeyOf(msg);
     if (key === undefined) return;
     if (msg.type === "WS_CONNECTED") {
-      // A fresh socket opened on this port (the server restarted, or a DIFFERENT local server
-      // grabbed the port after the prior one dropped). Reset this port's binding to unapproved so a
-      // write racing ahead of the new SESSION_INFO can't ride a stale-but-approved token into the
-      // executor. approvedTokens stays intact (sticky); a legit reconnect re-binds via the echoed
-      // token in its SESSION_INFO. ui.html fires this on ws.onopen, before any server message on the
-      // new socket. activeKey is left alone — see its declaration for why a reconnect keeps it.
-      // Any image fetch still pending against this port belonged to the PREVIOUS socket's server —
-      // the new one doesn't know its preq ids, so a reply can never arrive: reject now or the
-      // suspended run (and the write chain behind it) waits forever.
-      rejectImagesFetches(
-        (p) => p.connKey === key,
-        "flcm: the server connection for this run was replaced mid-run — the image fetch was abandoned and the script stops here.",
-      );
-      // A new socket may be a NEW server whose run-id counter restarts — its req-1 must not
-      // inherit the old server's cancellation. Executing runs keep theirs (run-cancellation.ts).
-      cancelledRuns.sweepPort(key);
+      // Each socket generation starts with an unapproved session. The previous
+      // generation receives WS_CLOSED and keeps its own cancellation until settlement.
       connections.set(key, { token: null, identity: null, pairingCode: null });
     } else if (msg.type === "WS_CLOSED") {
       // The socket dropped — remove the session's row (disconnect-detection reuses this persistent
@@ -578,7 +558,7 @@ figma.ui.onmessage = (msg: InboundMessage) => {
       );
       // The server rejects every in-flight caller when a socket dies, so its outstanding runs here
       // (queued or executing) were all reported failed — cancel them or they'd keep going.
-      cancelledRuns.cancelPort(key);
+      cancelledRuns.cancelConnection(key);
       connections.delete(key);
       if (connections.size === 0) setExpanded(false);
       else renderUi();
@@ -640,6 +620,12 @@ figma.ui.onmessage = (msg: InboundMessage) => {
     // and doesn't disturb a list another session opened.
     if (to.connKey !== undefined && !isApproved(to.connKey)) setExpanded(true);
     else renderUi();
+  } else if (msg.type === "APPROVAL_STATUS") {
+    const conn = to.connKey === undefined ? undefined : connections.get(to.connKey);
+    const type = conn?.rejected ? "APPROVAL_REJECTED" :
+      to.connKey !== undefined && isApproved(to.connKey) ? "APPROVAL_GRANTED" : "PENDING_APPROVAL";
+    if (type === "PENDING_APPROVAL") setExpanded(true);
+    reply(to, { type });
   } else if (msg.type === "EXECUTE_CODE") {
     // Protocol validation comes BEFORE the consent gate, deliberately: a malformed request can never
     // execute, so making the human click Allow for it would be asking consent for nothing. An empty
@@ -663,11 +649,13 @@ figma.ui.onmessage = (msg: InboundMessage) => {
     // a run can be cancelled while it still sits in the queue.
     if (gateWrite(to)) {
       cancelledRuns.enqueue(to);
+      runState(to, "queued");
       enqueueWrite(() => executeCode(to, typeof msg.code === "string" ? msg.code : "", preamble));
     }
   } else if (msg.type === "SCREENSHOT") {
     if (gateWrite(to)) {
       cancelledRuns.enqueue(to);
+      runState(to, "queued");
       enqueueWrite(() =>
         screenshot(
           to,
@@ -728,6 +716,8 @@ async function executeCode(to: ReplyTo, code: string, preamble: string): Promise
     });
     return;
   }
+  if (!gateWrite(to)) { cancelledRuns.settle(to); return; }
+  runState(to, "running");
   const consoleLog: string[] = [];
   const originalConsole = {
     log: console.log,
@@ -814,6 +804,8 @@ async function screenshot(
     });
     return;
   }
+  if (!gateWrite(to)) { cancelledRuns.settle(to); return; }
+  runState(to, "running");
   try {
     const node = await resolveScreenshotTarget(target);
     if (!("exportAsync" in node)) throw new Error(`Node ${node.type} (${node.id}) is not exportable`);

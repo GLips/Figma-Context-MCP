@@ -1,3 +1,4 @@
+import type { ToolExtra } from "./progress.js";
 import type { McpServer, RegisteredTool } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
@@ -32,7 +33,7 @@ export function registerFailLoudTool<Shape extends z.ZodRawShape>(
   server: McpServer,
   name: string,
   config: { description: string; inputSchema: Shape },
-  handler: (args: z.infer<z.ZodObject<Shape>>) => Promise<CallToolResult>,
+  handler: (args: z.infer<z.ZodObject<Shape>>, extra: ToolExtra) => Promise<CallToolResult>,
 ): RegisteredTool {
   const known = Object.keys(config.inputSchema);
   return server.registerTool(
@@ -40,10 +41,10 @@ export function registerFailLoudTool<Shape extends z.ZodRawShape>(
     { description: config.description, inputSchema: z.looseObject(config.inputSchema) },
     // The intersection IS the loose parse's output: the tool's own params plus whatever unknown keys
     // survived — so the filter below has something to read and the handler takes `args` unchanged.
-    async (args: z.infer<z.ZodObject<Shape>> & Record<string, unknown>) => {
+    async (args: z.infer<z.ZodObject<Shape>> & Record<string, unknown>, extra) => {
       const unknown = Object.keys(args).filter((key) => !known.includes(key));
       if (unknown.length) return unknownParamReply(name, unknown, known);
-      return handler(args);
+      return handler(args, extra);
     },
   );
 }
