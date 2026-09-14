@@ -1,3 +1,4 @@
+import { captureScreenshot, type CaptureOptions } from "./screenshot-capture.js";
 // Plugin sandbox entry. This is the only context where `figma.*` lives. It never
 // touches the network — it talks to the headless ui.html bridge via postMessage.
 
@@ -663,7 +664,7 @@ figma.ui.onmessage = (msg: InboundMessage) => {
             nodeId: typeof msg.nodeId === "string" ? msg.nodeId : undefined,
             key: typeof msg.key === "string" ? msg.key : undefined,
           },
-          typeof msg.scale === "number" ? msg.scale : undefined,
+          { scale: typeof msg.scale === "number" ? msg.scale : undefined, context: msg.context === true, margin: typeof msg.margin === "number" ? msg.margin : undefined },
         ),
       );
     }
@@ -791,9 +792,9 @@ async function executeCode(to: ReplyTo, code: string, preamble: string): Promise
 async function screenshot(
   to: ReplyTo,
   target: ScreenshotTarget,
-  scale: number | undefined,
+  options: CaptureOptions,
 ): Promise<void> {
-  // Same dequeue refusal as executeCode. A screenshot writes nothing, but exporting for a run the
+  // Same dequeue refusal as executeCode. Avoid exporting for a run the
   // server already reported dead is wasted work whose reply nothing correlates.
   if (cancelledRuns.takeCancellation(to)) {
     cancelledRuns.settle(to);
@@ -808,12 +809,8 @@ async function screenshot(
   runState(to, "running");
   try {
     const node = await resolveScreenshotTarget(target);
-    if (!("exportAsync" in node)) throw new Error(`Node ${node.type} (${node.id}) is not exportable`);
-    const bytes = await node.exportAsync({
-      format: "PNG",
-      constraint: { type: "SCALE", value: scale ?? 1 },
-    });
-    reply(to, { type: "SCREENSHOT_RESULT", image: figma.base64Encode(bytes) });
+    const bytes = await captureScreenshot(node, options, () => cancelledRuns.isCancelled(to));
+    reply(to, { type: "SCREENSHOT_RESULT", image: figma.base64Encode(bytes), ...(options.context ? { capture: "contextual" } : {}) });
   } catch (err) {
     reply(to, { type: "SCREENSHOT_RESULT", errors: formatError(err) });
   } finally {

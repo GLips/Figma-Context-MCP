@@ -36,7 +36,7 @@ const ExecuteCodeReply = z.object({
 // The sandbox posts exactly one of these (see screenshot() in code.ts): `image`
 // (base64 PNG) on success, `errors` on the failure path — never both, never neither.
 const ScreenshotReply = z.union([
-  z.object({ image: z.string() }),
+  z.object({ image: z.string(), capture: z.literal("contextual").optional() }),
   z.object({ errors: z.string() }),
 ]);
 
@@ -218,6 +218,8 @@ Passing both nodeId and key is ambiguous and fails loud. A failed lookup NEVER f
 
 scale (default 1, max 4) multiplies the export resolution — use scale: 2–4 to inspect detail you can't resolve at 1x: hairline borders, 1px strokes, grain, glass refraction, small type.
 
+context:true opts into a temporary-slice prototype that captures surrounding canvas. Requires nodeId or key. margin is pixels on each side; provisional default is 10% of the longest target side, clamped to 24–160px. Selection, flicker, undo and visual fidelity remain unverified. Omit context for the existing isolated capture.
+
 Returns a PNG image.`,
         inputSchema: {
           nodeId: z
@@ -232,6 +234,14 @@ Returns a PNG image.`,
             .describe(
               "Key of the node to screenshot, as authored via a node's `key` prop. Mutually exclusive with nodeId.",
             ),
+          context: z
+            .boolean()
+            .optional()
+            .describe("Opt-in contextual capture prototype using a temporary canvas slice."),
+          margin: z
+            .number()
+            .optional()
+            .describe("Nonnegative context margin in pixels; requires context:true."),
           scale: z
             .number()
             .optional()
@@ -240,7 +250,7 @@ Returns a PNG image.`,
             ),
         },
       },
-      async ({ nodeId, key, scale }, extra) => {
+      async ({ nodeId, key, scale, context, margin }, extra) => {
         // Value-level target checks (Phase 1 covers UNKNOWN keys; nodeId/key/scale are all known, so
         // their misuse is checked here). Same retryable shape: the agent can fix the call and retry.
         if (nodeId !== undefined && key !== undefined) {
@@ -258,11 +268,18 @@ Returns a PNG image.`,
               `in range (2–4 is plenty for inspecting fine detail).`,
           );
         }
+        if (context && nodeId === undefined && key === undefined)
+          return retryableToolReply("Contextual capture requires nodeId or key.");
+        if (margin !== undefined && (!context || !Number.isFinite(margin) || margin < 0))
+          return retryableToolReply(
+            "margin requires context:true and a finite nonnegative pixel value.",
+          );
         const unavailable = pluginUnavailableReply();
         if (unavailable) return unavailable;
         const raw = await requestUntilApproved(
           (signal) => bridge.request({ type: "APPROVAL_STATUS" }, signal),
-          (signal) => bridge.request({ type: "SCREENSHOT", nodeId, key, scale }, signal),
+          (signal) =>
+            bridge.request({ type: "SCREENSHOT", nodeId, key, scale, context, margin }, signal),
           approvalOptions(extra),
         );
         const gated = gateResult(raw);
@@ -271,6 +288,16 @@ Returns a PNG image.`,
         if ("errors" in reply) {
           return { content: [{ type: "text", text: reply.errors }], isError: true };
         }
+        if (context && reply.capture !== "contextual")
+          return {
+            content: [
+              {
+                type: "text",
+                text: "Connected plugin does not support contextual capture. Rebuild and reopen the updated plugin; this isolated response was discarded.",
+              },
+            ],
+            isError: true,
+          };
         return {
           content: [{ type: "image", data: reply.image, mimeType: "image/png" }],
         };

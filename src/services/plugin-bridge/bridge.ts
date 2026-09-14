@@ -33,7 +33,14 @@ export type BridgeRequest =
       sessionToken: string | null;
     }
   | { type: "EXECUTE_CODE"; code: string; preamble: string }
-  | { type: "SCREENSHOT"; nodeId?: string; key?: string; scale?: number };
+  | {
+      type: "SCREENSHOT";
+      nodeId?: string;
+      key?: string;
+      scale?: number;
+      context?: boolean;
+      margin?: number;
+    };
 
 /** Answers the plugin's mid-run IMAGES_REQUEST with url→base64 bytes (see image-requests.ts). */
 export type ImagesRequestHandler = (urls: string[]) => Promise<Record<string, string>>;
