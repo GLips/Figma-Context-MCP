@@ -1,5 +1,7 @@
 # Agent DX investigation triage
 
+[Overnight implementation progress](AGENT-DX-OVERNIGHT-PROGRESS.md) records the newer implementation checkpoints and live-verification blocker. Decision groups below are unchanged; delivery notes in that report supersede older per-entry implementation wording.
+
 ## Decision and delivery status — reconciled 2026-09-13
 
 The earlier “17 open or deferred” total incorrectly mixed unmade decisions with already approved follow-up work. It is superseded by this classification. Every original entry appears once below; its original number is retained.
