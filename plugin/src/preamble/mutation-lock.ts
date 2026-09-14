@@ -36,6 +36,15 @@ let verbChain: Promise<unknown> = Promise.resolve();
 // it re-read the canvas to find out where it is. Per-run state, like the chain.
 let committedVerbs = 0;
 
+const compensatedFailures = new WeakSet<Error>();
+/** An applier may mark a failure only after restoring every write in its own span. */
+export function compensatedMutationFailure(cause: unknown): Error {
+  const error = cause instanceof Error ? cause : new Error(String(cause));
+  compensatedFailures.add(error);
+  return error;
+}
+
+
 // How many mutating verbs committed before the currently-failing one — read inside a verb's catch,
 // where this verb hasn't (and won't) increment.
 export function committedVerbCount(): number {
@@ -173,7 +182,8 @@ export function enterMutatingVerb<P, G, T>(
         return result;
       } catch (err) {
         figma.commitUndo();
-        figma.triggerUndo();
+        // Explicit clone compensation already restored its writes; undo would reverse that cleanup.
+        if (!(err instanceof Error && compensatedFailures.has(err))) figma.triggerUndo();
         throw err;
       }
     } catch (err) {

@@ -39,13 +39,17 @@ export function captureCloneBindings(root: any): CloneBindings {
   }
   discover(root, []); return { owners };
 }
-export function restoreCloneBindings(copy: any, plan: CloneBindings): void {
+export type CreatedCloneProperties = { owner: any; id: string }[];
+export function restoreCloneBindings(copy: any, plan: CloneBindings, created: CreatedCloneProperties = []): void {
   for (const entry of plan.owners) {
     const root = at(copy, entry.path);
     if (!root) throw new Error("flcm.clone: copied component structure changed during placement.");
     const destination = ownerOf(root);
     const mapping = new Map<string, string>();
-    const defs = destination.componentPropertyDefinitions || {};
+    // A duplicate variant temporarily makes the set definition getter reject. The source
+    // owner was validated before cloning, and same-owner restoration needs no new definitions.
+    const sameOwner = destination === entry.source;
+    const defs = sameOwner ? entry.definitions : destination.componentPropertyDefinitions || {};
     for (const layer of entry.layers) {
       const node = at(root, layer.path);
       if (!node || node.type !== layer.type) throw new Error("flcm.clone: copied layer structure does not match its source.");
@@ -69,6 +73,7 @@ export function restoreCloneBindings(copy: any, plan: CloneBindings): void {
         // Keep full-ID identity distinct even when multiple source definitions share a name.
         const id = destination.addComponentProperty(sourceId.replace(/#[^#]*$/, ""), def.type, def.defaultValue,
           def.preferredValues ? { preferredValues: def.preferredValues } : undefined);
+        created.push({ owner: destination, id });
         mapping.set(sourceId, id);
       }
     }
@@ -78,8 +83,28 @@ export function restoreCloneBindings(copy: any, plan: CloneBindings): void {
       const refs = Object.fromEntries(Object.entries(layer.refs).map(([field, id]) => [field, mapping.get(id)]));
       node.componentPropertyReferences = refs;
       for (const [field, id] of Object.entries(refs)) {
-        if (!id || node.componentPropertyReferences?.[field] !== id) throw new Error("flcm.clone: native binding restoration did not persist.");
+        if (!id || !samePropertyId(node.componentPropertyReferences?.[field], id)) throw new Error("flcm.clone: native binding restoration did not persist.");
       }
     }
+  }
+}
+
+// Native addComponentProperty can return the requested display name while the persisted
+// reference has a collision-adjusted name (Label#id -> Label2#id). The # suffix is identity.
+function samePropertyId(actual: unknown, expected: string): boolean {
+  if (actual === expected) return true;
+  if (typeof actual !== "string") return false;
+  const suffix = expected.lastIndexOf("#");
+  const actualSuffix = actual.lastIndexOf("#");
+  return suffix >= 0 && actualSuffix >= 0 && actual.slice(actualSuffix) === expected.slice(suffix);
+}
+
+/** Compensate only nodes and definitions created by this clone; never touch prior destination controls. */
+export function removeFailedClone(copy: any, created: CreatedCloneProperties): void {
+  if (copy && !copy.removed) copy.remove();
+  for (const { owner, id } of created.slice().reverse()) {
+    if (owner.removed) continue;
+    const key = Object.keys(owner.componentPropertyDefinitions).find(key => samePropertyId(key, id));
+    if (key) owner.deleteComponentProperty(key);
   }
 }

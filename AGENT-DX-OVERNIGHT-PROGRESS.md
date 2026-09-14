@@ -1,6 +1,6 @@
 # Overnight DX progress
 
-The approved fixes are implemented and committed. Live verification has confirmed most layout and editing workflows. The remaining checks resumed after the usage-limit interruption.
+Live checks resumed and found two clone-binding bugs plus incomplete failure cleanup. Those are now fixed and live-verified. All 430 plugin tests pass.
 
 ## What now works in Figma
 
@@ -10,16 +10,16 @@ The approved fixes are implemented and committed. Live verification has confirme
 - Content moved into a slot can be read, found, measured, and edited using its original reference. Healthy-design comparisons preserved hierarchy and query results. See the [slot-access resolution](AGENT-DX-SLOT-ACCESS-RESOLUTION.md).
 - Earlier sizing fixes passed all ten live cases. Promotion references passed Undo and Redo earlier.
 
-The first authoring and measurement assertions had invalid test fixtures. Corrected fixtures passed those checks. A valid native control then established two product failures in component-set cloning, listed below.
+The first authoring and measurement assertions had invalid test fixtures. Corrected fixtures passed those checks. A valid native control established two component-set cloning failures; both were fixed and verified.
 
-## Verification still underway
+## Latest verification results
 
-- **Component-set cloning needs a fix.** The corrected live matrix passed standalone TEXT, BOOLEAN, and INSTANCE_SWAP controls. Same-set cloning fails while reading definitions; different-set cloning fails binding restoration. Investigation and repair are active.
+- Clones into the same set, another set, and standalone destinations pass TEXT, BOOLEAN, and INSTANCE_SWAP control tests. Collision-adjusted property names retain identity.
 - Saved promotion references passed after plugin reopening and movement between pages.
 - Contextual captures passed default, 80-pixel, and zero margins with expected image sizes, clipping, and surrounding content. All captures left no temporary slices and preserved selection and viewport. Visual flicker and manual Undo checks still require observation.
-- Native rollback behavior beyond the cases already verified. Automated rollback tests alone do not establish every live recovery path.
+- A deliberate clone failure leaves no copy or added properties. Separate readback confirms the destination retains its definitions, ordered children, positions, dimensions, existing overrides, and earlier successful edit.
 
-Evidence and individual results: [live verification report](/tmp/figma-luna-live-verification.md). Screenshot artifacts will be saved under `/tmp/figma-final-live/`.
+Evidence and individual results: [live verification report](/tmp/figma-luna-live-verification.md). Real screenshot artifacts are saved under `/tmp/figma-final-live/`. Clone repair evidence is in [the live investigation report](/tmp/figma-variant-binding-diagnosis/report.md).
 
 ## Remaining limits
 

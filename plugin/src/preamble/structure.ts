@@ -23,7 +23,7 @@
 import { WriteNode, WriteLayout, Target, Handle, InsertResult, MoveResult, CloneResult, RemoveResult } from "./ir.js";
 import { resolveTarget } from "./read.js";
 import { assertNodeStillOnCanvas, LoadedPages, createLoadedPages, loadPageForWrite, assertPageLoaded } from "./freshness.js";
-import { enterMutatingVerb } from "./mutation-lock.js";
+import { enterMutatingVerb, compensatedMutationFailure } from "./mutation-lock.js";
 import {
   attachBuiltChild, mintHandle, settleHandles, resolvePercents, beginRenderWalk, RenderResources,
   liveParentAttachFacts, assertLiveNodeLandsUnderParent, assertBuiltRootLandsUnderParent, resettleMovedNode,
@@ -33,7 +33,7 @@ import { loadTreeResources, gateTreeResources, LoadedTreeResources } from "./ren
 import { prepareInsertBindings, applyInsertBindings, InsertBindingPlan } from "./component-edit.js";
 import { clearKeysDeep, childListClosingInstanceOf } from "./identity.js";
 import { applyExposures } from "./instance-exposure.js";
-import { captureCloneBindings, restoreCloneBindings } from "./clone-bindings.js";
+import { captureCloneBindings, restoreCloneBindings, removeFailedClone, type CreatedCloneProperties } from "./clone-bindings.js";
 import { replacementTree } from "./structure-layout.js";
 import type { EditDelta } from "./schema.js";
 import { compileEditPlan, loadEditResources, gateEditResources, assertEditPlanLands,
@@ -464,22 +464,30 @@ export function clone(target: Target, propsOrParent?: EditDelta | Target, parent
     ({ node, dest, words, edit, resources, bindings }) => {
       const fail = beginMutatingApply("clone", node);
       let copy: any;
+      const created: CreatedCloneProperties = [];
       try {
-        copy = node.clone();
-        clearKeysDeep(copy);
+        try {
+          copy = node.clone();
+          clearKeysDeep(copy);
+        } catch (cause) {
+          throw fail(cause);
+        }
+        // From here the copy is the subject, and placing it is exactly a move.
+        applyPlacement("clone", { kind: "placement", dest, node: copy, words });
+        try { restoreCloneBindings(copy, bindings, created); } catch (cause) { throw fail(cause); }
+        if (edit) {
+          const plan = { ...edit, node: copy };
+          applyEditPlanWrites(fail, plan, resources);
+          settleEditPlanSizes(fail, plan);
+          settleEditPlanPositions(fail, plan);
+        }
+        return { node: mintHandle(copy), to: containerHandle(dest.parent) };
       } catch (cause) {
-        throw fail(cause);
+        if (!copy) throw cause;
+        try { removeFailedClone(copy, created); }
+        catch (cleanup) { throw new Error(String(cause) + " Cleanup also failed: " + String(cleanup)); }
+        throw compensatedMutationFailure(cause);
       }
-      // From here the copy is the subject, and placing it is exactly a move.
-      applyPlacement("clone", { kind: "placement", dest, node: copy, words });
-      try { restoreCloneBindings(copy, bindings); } catch (cause) { throw fail(cause); }
-      if (edit) {
-        const plan = { ...edit, node: copy };
-        applyEditPlanWrites(fail, plan, resources);
-        settleEditPlanSizes(fail, plan);
-        settleEditPlanPositions(fail, plan);
-      }
-      return { node: mintHandle(copy), to: containerHandle(dest.parent) };
     },
   );
 }

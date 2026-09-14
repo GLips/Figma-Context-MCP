@@ -53,14 +53,14 @@ test("unsupported property definitions reject before native clone", async () => 
   await assert.rejects(clone(id(source.id)), /unsupported component property type SLOT/);
   assert.equal(called, false);
 });
-test("restoration refusal uses the mutation rollback boundary", async () => {
+test("restoration refusal compensates its copy before sealing the failed span", async () => {
   const { source } = fixture();
   const destination = figma.combineAsVariants([figma.createComponent()], figma.currentPage);
   destination.addComponentProperty = () => { throw new Error("injected restoration refusal"); };
   figma.undoLog.length = 0;
   await assert.rejects(clone(id(source.id), id(destination.id)), /restoration refusal/);
-  // The lightweight harness records native undo; live verification checks actual canvas rollback.
-  assert.deepEqual(figma.undoLog, ["commit", "commit", "trigger"]);
+  // Completed compensation seals its span without undoing the cleanup.
+  assert.deepEqual(figma.undoLog, ["commit", "commit"]);
 });
 
 test("nested component owners retain independent controls and instance-swap references", async () => {
@@ -80,4 +80,61 @@ test("nested component owners retain independent controls and instance-swap refe
   instance.setProperties({ [copiedSwapId]: b.id });
   assert.equal(instance.children[1].mainComponent.id, b.id);
   assert.equal(nested.mainComponent.id, a.id);
+});
+
+test("same-set restoration does not reread definitions while the duplicate variant exists", async () => {
+  const { source, set } = fixture();
+  const definitions = set.componentPropertyDefinitions;
+  Object.defineProperty(set, "componentPropertyDefinitions", { configurable: true, get() {
+    if (set.children.length > 1) throw Error("Component set has existing errors");
+    return definitions;
+  } });
+  const result = await clone(id(source.id), id(set.id));
+  const copy = await figma.getNodeByIdAsync(result.node.id);
+  assert.deepEqual(copy.children.map(n => n.componentPropertyReferences), source.children.map(n => n.componentPropertyReferences));
+});
+
+for (const preservesIdentity of [true, false]) test("native collision-adjusted binding names " + (preservesIdentity ? "retain identity" : "reject changed identity"), async () => {
+  const { source } = fixture();
+  const destination = figma.combineAsVariants([figma.createComponent()], figma.currentPage);
+  const nativeClone = source.clone;
+  source.clone = () => {
+    const copy = nativeClone();
+    for (const layer of copy.children) {
+      let refs = {};
+      Object.defineProperty(layer, "componentPropertyReferences", { configurable: true,
+        get() { return refs; },
+        set(value) { refs = Object.fromEntries(Object.entries(value).map(([field, property]: [string, any]) => [field, property.replace(/#[^#]*$/, (suffix: string) => "#display2" + suffix + (preservesIdentity ? "" : "-different"))])); },
+      });
+    }
+    return copy;
+  };
+  if (!preservesIdentity) {
+    const beforeChildren = destination.children.map(n => n.id);
+    const beforeDefinitions = JSON.stringify(destination.componentPropertyDefinitions);
+    await assert.rejects(clone(id(source.id), id(destination.id)), /native binding restoration did not persist/);
+    assert.deepEqual(destination.children.map(n => n.id), beforeChildren);
+    assert.equal(JSON.stringify(destination.componentPropertyDefinitions), beforeDefinitions);
+    return;
+  }
+  const result = await clone(id(source.id), id(destination.id));
+  const copy = await figma.getNodeByIdAsync(result.node.id);
+  assert.ok(copy.children.every(n => Object.values(n.componentPropertyReferences).every((value: any) => value.includes("#display2#"))));
+});
+
+test("unknown native clone effects and incomplete compensation retain ordinary rollback", async () => {
+  const { source } = fixture();
+  source.clone = () => { throw Error("native clone refused before returning"); };
+  figma.undoLog.length = 0;
+  await assert.rejects(clone(id(source.id)), /native clone refused/);
+  assert.deepEqual(figma.undoLog, ["commit", "commit", "trigger"]);
+  const next = fixture();
+  const destination = figma.combineAsVariants([figma.createComponent()], figma.currentPage);
+  const add = destination.addComponentProperty.bind(destination);
+  let count = 0;
+  destination.addComponentProperty = (...args: any[]) => { if (++count > 1) throw Error("second definition refused"); return add(...args); };
+  destination.deleteComponentProperty = () => { throw Error("cleanup refused"); };
+  figma.undoLog.length = 0;
+  await assert.rejects(clone(id(next.source.id), id(destination.id)), /second definition refused.*Cleanup also failed.*cleanup refused/);
+  assert.deepEqual(figma.undoLog, ["commit", "commit", "trigger"]);
 });
