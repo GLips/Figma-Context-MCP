@@ -1,3 +1,4 @@
+import { awaitNative, traceNative } from "./host.js";
 import { sceneFigma as figma } from "./scene-access.js";
 // page — the document-level verbs: which page am I on, switch to another, make a new one.
 //
@@ -89,7 +90,7 @@ export async function pageUse(target: string): Promise<PageInfo> {
         " — pass one of their ids instead: " + hits.map((p) => JSON.stringify(p.id)).join(", ") + ".",
     );
   }
-  await figma.setCurrentPageAsync(hits[0]);
+  await awaitNative("page-switch", () => figma.setCurrentPageAsync(hits[0]));
   return pageCurrent();
 }
 
@@ -112,9 +113,11 @@ export async function pageNew(name: string): Promise<PageInfo> {
         "Nothing was created.",
     );
   }
+  traceNative("native-start", "page-create");
   const created = figma.createPage();
+  traceNative("native-end", "page-create");
   created.name = wanted;
-  await figma.setCurrentPageAsync(created);
+  await awaitNative("page-switch", () => figma.setCurrentPageAsync(created));
   return pageCurrent();
 }
 

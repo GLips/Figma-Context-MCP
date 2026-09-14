@@ -15,10 +15,13 @@
 // sides. Only the binding name `__flcmHost` crosses the eval boundary no compiler can see — and its
 // other end is the factory wrapper index.mjs writes around this bundle, which refuses to emit one
 // that doesn't reference the name. Rename it here alone and the generator throws.
-// No optional members, deliberately: a host either exists or it doesn't, and one that exists
-// answers for everything. That is what lets the accessors below check presence ONCE instead of
-// probing each method — and what makes a partial host a test bug rather than a supported shape.
+// Execution services are required. Diagnostic reporting is optional so a newer preamble can
+// still run on an older host; diagnostics never affect execution or deadlines.
+export type NativeOperation = "page-create" | "page-switch" | "font-load" | "font-list";
+export type NativeTraceStage = "native-start" | "native-end" | "native-error";
+
 export interface FlcmHost {
+  traceNative?(stage: NativeTraceStage, operation: NativeOperation): void;
   /** Fetch bytes for image urls through the server. The sandbox has no network of its own. */
   requestImages(urls: string[]): Promise<Record<string, string>>;
   /** Has the server cancelled this run? Only the host sees the CANCEL frame arrive. */
@@ -61,4 +64,21 @@ export function requestHostImages(urls: string[]): Promise<Record<string, string
 export function hostRunCancelled(): boolean {
   const host = currentHost();
   return host ? host.isRunCancelled() : false;
+}
+
+/** Diagnostics must not change the result or rejection of a native operation. */
+export function traceNative(stage: NativeTraceStage, operation: NativeOperation): void {
+  try { currentHost()?.traceNative?.(stage, operation); } catch { /* Reporting is best effort. */ }
+}
+
+export async function awaitNative<T>(operation: NativeOperation, run: () => Promise<T>): Promise<T> {
+  traceNative("native-start", operation);
+  try {
+    const value = await run();
+    traceNative("native-end", operation);
+    return value;
+  } catch (error) {
+    traceNative("native-error", operation);
+    throw error;
+  }
 }

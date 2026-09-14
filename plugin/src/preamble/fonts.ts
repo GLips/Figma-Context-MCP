@@ -1,3 +1,4 @@
+import { awaitNative } from "./host.js";
 import { sceneFigma as figma } from "./scene-access.js";
 // fonts — resolve every text node's (family, weight) to a real, loaded Figma font style, and preload
 // them before render() builds any text.
@@ -32,7 +33,7 @@ function fontLabel(font: { family: string; style: string }): string {
 }
 
 async function loadFont(font: { family: string; style: string }): Promise<void> {
-  await figma.loadFontAsync(font);
+  await awaitNative("font-load", () => figma.loadFontAsync(font));
   loadedFonts.add(fontLabel(font));
 }
 
@@ -196,7 +197,7 @@ function needOf(ts: WriteTextStyle): FontNeed {
 }
 
 export async function loadFontsForTree(tree: WriteNode): Promise<FontMap> {
-  const avail = await figma.listAvailableFontsAsync();
+  const avail = await awaitNative("font-list", () => figma.listAvailableFontsAsync());
   const byFamily: Record<string, string[]> = {};
   for (const { fontName } of avail) {
     (byFamily[fontName.family] || (byFamily[fontName.family] = [])).push(fontName.style);

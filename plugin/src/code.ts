@@ -719,6 +719,13 @@ async function executeCode(to: ReplyTo, code: string, preamble: string): Promise
   }
   if (!gateWrite(to)) { cancelledRuns.settle(to); return; }
   runState(to, "running");
+  const traceStarted = Date.now();
+  const trace = (stage: string, operation?: string) => {
+    try {
+      figma.ui.postMessage({ type: "RUN_TRACE", runId: to.id, stage, operation, elapsedMs: Date.now() - traceStarted, __connKey: to.connKey });
+    } catch { /* A diagnostic must never change execution or cleanup. */ }
+  };
+  trace("eval-start");
   const consoleLog: string[] = [];
   const originalConsole = {
     log: console.log,
@@ -755,6 +762,7 @@ async function executeCode(to: ReplyTo, code: string, preamble: string): Promise
     // async because the agent awaits flcm.render(); the factory itself is synchronous (the font
     // preload runs inside render(), not at module top level).
     const host: FlcmHost = {
+      traceNative: (stage, operation) => trace(stage, operation),
       requestImages: (urls: string[]) => requestServerImages(to, urls),
       isRunCancelled: () => cancelledRuns.isCancelled(to),
     };
@@ -767,6 +775,7 @@ async function executeCode(to: ReplyTo, code: string, preamble: string): Promise
   } catch (err) {
     errorMessage = formatError(err);
   } finally {
+    trace("eval-end");
     console.log = originalConsole.log;
     console.info = originalConsole.info;
     console.warn = originalConsole.warn;

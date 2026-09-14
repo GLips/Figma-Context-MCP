@@ -1,3 +1,4 @@
+import { RequestTrace } from "./request-trace.js";
 import { randomUUID } from "node:crypto";
 import { WebSocketServer, WebSocket } from "ws";
 import { mintPairingCode, SESSION_IDENTITY } from "./approval.js";
@@ -192,6 +193,9 @@ function isAllowedOrigin(origin: string | undefined): boolean {
  */
 export class PluginBridge {
   private socket: WebSocket | null = null;
+  private readonly trace = new RequestTrace((event) =>
+    Logger.log("Bridge trace " + JSON.stringify(event)),
+  );
   private pending = new Map<string, Pending>();
   private disconnectedAt: number | null = null;
   // Where the CURRENT connection stands with the version handshake, and the refusal text when it came
@@ -691,6 +695,7 @@ export class PluginBridge {
   private failPending(reason: string, socket?: WebSocket): void {
     for (const [id, pending] of this.pending) {
       if (socket && pending.socket !== socket) continue;
+      this.trace.record(id, pending.socket, "disconnected");
       const waiting = pending.payloadType === "APPROVAL_STATUS";
       this.takePending(id)?.reject(
         new BridgeRequestError(
@@ -773,6 +778,7 @@ export class PluginBridge {
         ceilingTimer: setTimeout(() => this.timeoutPending(id, "ceiling"), this.runCeilingMs),
         payloadType: payload.type,
       });
+      if (payload.type === "EXECUTE_CODE") this.trace.start(id, socket);
       // `id` last: the generated correlation id is authoritative and a payload field
       // must never overwrite it, or the reply could never be matched to this pending.
       socket.send(JSON.stringify({ ...payload, id }));
@@ -796,12 +802,20 @@ export class PluginBridge {
       cause === "inactivity"
         ? `saw no traffic for ${this.requestTimeoutMs}ms`
         : `exceeded the absolute ${this.runCeilingMs}ms run ceiling`;
+    const pending = this.pending.get(id);
+    if (pending)
+      this.trace.record(
+        id,
+        pending.socket,
+        cause === "inactivity" ? "timeout-inactivity" : "timeout-ceiling",
+      );
     this.cancelPending(id, why);
   }
 
   private cancelPending(id: string, why: string): void {
     const pending = this.takePending(id);
     if (!pending) return;
+    if (why === "caller cancelled") this.trace.record(id, pending.socket, "caller-cancelled");
     if (pending.socket.readyState === WebSocket.OPEN) {
       pending.socket.send(JSON.stringify({ type: "CANCEL", runId: id }));
     }
@@ -822,15 +836,18 @@ export class PluginBridge {
   }
 
   private handleMessage(socket: WebSocket, raw: string): void {
-    if (this.socket !== socket) return;
     let msg: {
       id?: unknown;
       type?: unknown;
       error?: unknown;
+      errors?: unknown;
       sessionToken?: unknown;
       runId?: unknown;
       urls?: unknown;
       phase?: unknown;
+      stage?: unknown;
+      elapsedMs?: unknown;
+      operation?: unknown;
     };
     try {
       msg = JSON.parse(raw);
@@ -838,6 +855,15 @@ export class PluginBridge {
       Logger.log(`Ignoring non-JSON message from plugin: ${raw.slice(0, 120)}`);
       return;
     }
+    // Diagnostic traffic is observed even from a displaced request owner. It never participates
+    // in request settlement or inactivity rearming, and the trace retains no response contents.
+    if (typeof msg.id === "string" && !this.pending.has(msg.id))
+      this.trace.record(msg.id, socket, "late-reply");
+    if (msg.type === "RUN_TRACE" && typeof msg.runId === "string") {
+      this.trace.record(msg.runId, socket, "host", msg.stage, msg.elapsedMs, msg.operation);
+      return;
+    }
+    if (this.socket !== socket) return;
     // Token handover from the sandbox after Allow: unsolicited (no id — it's not a reply to any
     // server request), so it's handled here, before the id-match path that would drop it. Persist
     // it OUTSIDE the connection-scoped cluster (the field never clears on disconnect) so every
@@ -871,6 +897,7 @@ export class PluginBridge {
       const run = this.pending.get(msg.runId);
       if (run?.socket === socket && (msg.phase === "queued" || msg.phase === "running")) {
         run.phase = msg.phase;
+        this.trace.record(msg.runId, socket, msg.phase);
         Logger.log(
           `Bridge request ${msg.runId}: ${msg.phase} after ${Date.now() - run.startedAt}ms`,
         );
@@ -894,9 +921,17 @@ export class PluginBridge {
     // older, un-updatable plugin. Surface it as an immediate rejection so the caller
     // gets a readable error instead of waiting out the 15s timeout.
     if (msg.type === "ERROR" && typeof msg.error === "string") {
+      this.trace.record(msg.id, socket, "error");
       pending.reject(new Error(msg.error));
       return;
     }
+    this.trace.record(
+      msg.id,
+      socket,
+      msg.type === "EXECUTE_CODE_RESULT" && typeof msg.errors === "string" && msg.errors.length > 0
+        ? "error"
+        : "result",
+    );
     Logger.log(`Bridge request ${msg.id}: finished after ${Date.now() - pending.startedAt}ms`);
     pending.resolve(msg);
   }

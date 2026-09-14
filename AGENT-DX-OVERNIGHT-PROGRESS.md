@@ -38,3 +38,9 @@ Detailed test results and prepared checks: [layouts and controls](/tmp/figma-res
 ## Subsequent slot-access resolution
 
 The primary slot descendant-read/edit issue is now implemented and live-verified. [Resolution, performance and remaining limits](AGENT-DX-SLOT-ACCESS-RESOLUTION.md). Native remapped-root movement out of slots and the historical connection/page-switch stall remain open.
+
+### Stall diagnosis checkpoint
+
+The recurring execution stall is still unresolved. The saved failed run reached execution but did not record which native call held it up. The regular plugin now reports page creation, page switching, and font waits; the bridge retains bounded request timing and late-reply metadata. This records no script or design content and does not extend deadlines or retry execution.
+
+Validation: 426 plugin tests and the bridge contract checks pass. Live diagnosis needs one stop/start of the rebuilt regular plugin, then a fresh controlled run with the matching bridge. A passing run alone will not establish the cause of the earlier stalls.
