@@ -17,9 +17,9 @@ These new batches have **not passed live verification**. Native rollback, exposu
 
 The regular Framelink plugin required approval. The capability attempt expired before code submission; no new benchmark or mutation result was produced. Do not repeatedly resend live work while approval remains unavailable.
 
-## Continuing work
+## Ready for user follow-up
 
-The authoring agent is preparing the separately authorized contextual screenshot prototype, automated checks and live fixture scripts. Real capture artifacts require live access; flicker/selection/undo observation remains for the user. Default margin choices remain provisional.
+The contextual screenshot prototype is committed as `d0ac434`; nine focused tests, typechecks, lint and host build passed. Live fixture scripts are ready. Real capture artifacts require live access; flicker/selection/undo observation remains for the user. Default margin choices remain provisional.
 
 Slot scene-access migration remains investigation-only. Criteria-returned objects support tested reads/edits, but complete ID/order/type/performance equivalence is unproved. The parity/benchmark harness is prepared and unrun.
 
@@ -28,3 +28,11 @@ Slot scene-access migration remains investigation-only. Criteria-returned object
 - [Responsive implementation report](/tmp/figma-responsive-authoring-implementation.md)
 - [Structural checkpoint](/tmp/figma-structural-live/checkpoint.md)
 - [Scene access proof status](/tmp/figma-scene-access-proof/status.md)
+
+## Handoff
+
+All three agents have completed their current assignments. Overnight follow-ups are paused because remaining live checks need regular Framelink approval, and contextual screenshot interaction verification needs the user present. No shared scene-access migration was implemented.
+
+Next: reload the updated plugin, approve the pending connection when requested, then run serialized authoring/structural and alias lifecycle checks. Run contextual screenshot checks with user observation. Resume slot equivalence/performance investigation afterward.
+
+[Contextual screenshot prototype report](/tmp/figma-contextual-screenshot-prototype/report.md). Cancellation cleanup waits for native export settlement; forced shutdown cannot guarantee slice cleanup.
