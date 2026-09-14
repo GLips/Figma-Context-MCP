@@ -1,3 +1,4 @@
+import { sceneFigma as figma } from "./scene-access.js";
 // fonts — resolve every text node's (family, weight) to a real, loaded Figma font style, and preload
 // them before render() builds any text.
 //

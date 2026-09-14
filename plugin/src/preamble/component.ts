@@ -1,3 +1,4 @@
+import { sceneFigma as figma } from "./scene-access.js";
 // component — the two verbs that MAKE a component, the write side of what `get` reports about one:
 //
 //   • flcm.component(nodeOrTarget, options?) — promote a constructor-built node (rendered on the current

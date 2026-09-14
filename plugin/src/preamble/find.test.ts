@@ -194,12 +194,8 @@ test("findOne threads the predicate and keeps its cardinality guard", async () =
 
 test("a predicate-only find fails loud past the materialization cap, naming it", async () => {
   const figma = createFigmaMock();
-  await render(frame({ key: "wrap", width: 100, height: 100, layout: { mode: "column" } }, []));
-
-  // Force the candidate count over the cap without building a 5000-node fixture: the query pre-filter
-  // counts whatever findAll returns, so a stub scan root standing in for a huge page trips the guard.
-  const huge = new Array(5001).fill(null).map((_, i) => ({ id: `n${i}`, type: "RECTANGLE", name: `r${i}`, visible: true, parent: null }));
-  figma.currentPage.findAll = () => huge;
+  // Exercise the actual indexed acquisition boundary with a large candidate set.
+  for (let i = 0; i < 5001; i++) figma.currentPage.appendChild(figma.createRectangle());
 
   await assert.rejects(
     find({}, () => true),

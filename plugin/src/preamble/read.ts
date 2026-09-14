@@ -1,3 +1,4 @@
+import { sceneFigma as figma, invalidateSceneAccess } from "./scene-access.js";
 // read — the read-side walk that speaks figma.* (the counterpart to bridge.ts's write walk). Phase 1 seeds
 // it with target resolution; the read walk + sceneNodeToSnapshot join it as the read verbs (get/find) land.
 //
@@ -52,6 +53,7 @@ function scanKey(key: string, root: ScanRoot): SceneNode[] {
 // Resolve a target to a live node, or throw. `within` scopes the key scan (default: current page); it is
 // itself a target, resolved by the same rules, so `within: 'card'` searches inside the node keyed "card".
 export async function resolveTarget(target: Target, within?: Target): Promise<SceneNode> {
+  invalidateSceneAccess();
   if (isRawIdRef(target)) {
     const node = await byId(target.__flcmId);
     if (!node) throw new Error(`flcm: no live node with id ${JSON.stringify(target.__flcmId)} (flcm.id(...)).`);
@@ -428,6 +430,7 @@ function rejectStringQuery(query: unknown, verb: string): void {
  * rendered candidate, up to a hard cap past which it fails loud (see MATERIALIZE_CAP).
  */
 export async function find(query: FindQuery = {}, predicate?: ReadPredicate): Promise<SlimHandle[]> {
+  invalidateSceneAccess();
   rejectStringQuery(query, "flcm.find");
   rejectUnknownKeys(query, FIND_KEY_SET, "flcm.find", "query key");
   if (query.hasAnnotations !== undefined && typeof query.hasAnnotations !== "boolean") throw new Error("flcm.find: hasAnnotations must be a boolean.");
@@ -465,6 +468,7 @@ export async function findOne(query: FindQuery = {}, predicate?: ReadPredicate):
  * built over the page; selected nodes are its descendants and read in-context.
  */
 export async function selection(): Promise<SlimHandle[]> {
+  invalidateSceneAccess();
   const selected = figma.currentPage.selection.filter(isRendered);
   return projectHits(selected, figma.currentPage);
 }

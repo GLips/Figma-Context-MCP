@@ -1,3 +1,4 @@
+import { sceneFigma as figma } from "./scene-access.js";
 // File-scoped, undoable aliases. Read on each call so undo and reopen need no cache invalidation.
 const KEY = "flcm/promotion-aliases";
 function aliases(): Record<string, string> {

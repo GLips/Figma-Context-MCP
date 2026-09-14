@@ -1,3 +1,4 @@
+import { sceneFigma as figma, invalidateSceneAccess } from "./scene-access.js";
 import { beginSizingDiagnostics, finishSizingDiagnostics } from "./sizing-diagnostics.js";
 // mutation-lock — the single entry point every mutating verb takes (plan invariant 4): render, edit,
 // editMany, the component verbs, and the structural verbs. Three jobs, one place — serialize verbs,
@@ -156,6 +157,7 @@ export function enterMutatingVerb<P, G, T>(
       // during them is the same kind of fact, read at the same place.
       refuseIfCancelled(verb);
       refuseIfDevMode(verb);
+      invalidateSceneAccess();
       const gated = gate(prepared);
       figma.commitUndo();
       // Outside the rollback-protected block on purpose: a stamp that fails to write has put

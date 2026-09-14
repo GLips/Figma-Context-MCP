@@ -357,7 +357,7 @@ class Node {
   }
   findAllWithCriteria(opts) {
     const types = (opts && opts.types) || [];
-    return this.findAll((n) => types.indexOf(n.type) !== -1);
+    return this.findAll((n) => types.length === 0 || types.indexOf(n.type) !== -1);
   }
 
   // --- sizing: width/height as getters so reads during a run reflect current state ---

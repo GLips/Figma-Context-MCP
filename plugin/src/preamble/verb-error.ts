@@ -26,19 +26,21 @@ import { committedVerbCount } from "./mutation-lock.js";
  */
 export function beginMutatingApply(verb: string, node: SceneNode): (cause: unknown) => Error {
   const identity = identityOf(node);
-  return (cause) => mutatingVerbError(verb, identity, cause, node);
+  const ancestor = instanceAncestorOf(node);
+  const instance = ancestor ? { id: ancestor.id, name: ancestor.name } : null;
+  return (cause) => mutatingVerbError(verb, identity, cause, instance);
 }
 
 // A Figma refusal names its own setter ("in set_fills: …"); an flcm-prefixed cause is our own
 // throw, so don't pin it on Figma.
-function mutatingVerbError(verb: string, identity: Identity, cause: unknown, node: SceneNode): Error {
+function mutatingVerbError(verb: string, identity: Identity, cause: unknown, instance: { id: string; name: string } | null): Error {
   const message = cause instanceof Error ? cause.message : String(cause);
   const who =
     identity.type + " " + JSON.stringify(identity.name) + " (id " + JSON.stringify(identity.id) +
     (identity.key ? ", key " + JSON.stringify(identity.key) : "") + ")";
   const isFigmaRefusal = !message.startsWith("flcm");
   const refusal = isFigmaRefusal ? "Figma refused a write on " : "failed mid-apply on ";
-  const instanceHost = isFigmaRefusal ? instanceAncestorOf(node) : null;
+  const instanceHost = isFigmaRefusal ? instance : null;
   const instanceNote = instanceHost
     ? " The target lives inside instance " + JSON.stringify(instanceHost.name) + " (id " + JSON.stringify(instanceHost.id) +
       ") — Figma restricts what can be changed on an instance's children; edit the component it comes from (flcm never auto-detaches)."

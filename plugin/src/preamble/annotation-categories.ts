@@ -1,3 +1,4 @@
+import { sceneFigma as figma } from "./scene-access.js";
 import type { WriteNode } from "./ir.js";
 import type { WriteAnnotation } from "./annotations.js";
 

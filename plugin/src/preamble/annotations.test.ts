@@ -73,7 +73,7 @@ test("invalid edits and ambiguous categories create nothing; a failed apply remo
   await assert.rejects(edit(out.node, { annotations: [...note.annotations, { text: "Ambiguous", category: "Agent" }] }), (err: Error) => err.message.includes(a.id) && err.message.includes(b.id));
   assert.equal((await figma.annotations.getAnnotationCategoriesAsync()).length, 2);
   const node = await resolveTarget(out.node);
-  Object.defineProperty(node, "annotations", { get: () => [], set: () => { throw new Error("Figma refused annotations"); } });
+  Object.defineProperty(await figma.getNodeByIdAsync(node.id), "annotations", { get: () => [], set: () => { throw new Error("Figma refused annotations"); } });
   await assert.rejects(edit(out.node, note), /Figma refused/);
   assert.deepEqual((await figma.annotations.getAnnotationCategoriesAsync()).map((c) => c.id), [a.id, b.id]);
 });
@@ -140,7 +140,7 @@ test("a category that refuses removal never becomes the failure the agent sees, 
     if (input.label === "Stuck") category.remove = () => { throw new Error("Figma refused the removal"); };
     return category;
   };
-  Object.defineProperty(node, "annotations", { get: () => [], set: () => { throw new Error("Figma refused annotations"); } });
+  Object.defineProperty(await figma.getNodeByIdAsync(node.id), "annotations", { get: () => [], set: () => { throw new Error("Figma refused annotations"); } });
   await assert.rejects(
     edit(out.node, { annotations: [{ text: "Task", category: "Stuck" }, { text: "Intent", category: "Fine" }] }),
     (err: Error) => err.message.startsWith("flcm.edit") && err.message.includes("Figma refused annotations") && err.message.includes('"Stuck"'),

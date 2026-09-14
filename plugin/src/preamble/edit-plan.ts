@@ -1,3 +1,4 @@
+import { sceneFigma as figma } from "./scene-access.js";
 // edit-plan — the STAGES of the mutate pipeline, with no verb attached. Three callers drive them:
 // `flcm.edit` (edit.ts) once, `flcm.editMany` (edit-many.ts) N times over one queue slot, and an
 // INSTANCE's override deltas (instance.ts), which are edits of one sublayer each.

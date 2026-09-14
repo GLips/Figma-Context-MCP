@@ -1,3 +1,4 @@
+import { sceneFigma as figma } from "./scene-access.js";
 import type { ExposureWrite } from "./instance-exposure.js";
 import { applyBounds, assertBounds } from "./size-bounds.js";
 import { resizeWithDiagnostics, trackSizing } from "./sizing-diagnostics.js";

@@ -1,3 +1,4 @@
+import { sceneFigma as figma } from "./scene-access.js";
 // page — the document-level verbs: which page am I on, switch to another, make a new one.
 //
 // Why these are flcm verbs rather than "just use figma.*": every session that builds something new
