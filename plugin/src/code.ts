@@ -10,9 +10,8 @@ import { createRunCancellationRegistry } from "./run-cancellation.js";
 // interface to the preamble half, and it must stay erasable — a value import from preamble/ would
 // drag the whole std-lib back into this bundle, which is exactly what ADR-0010 removed.
 import type { FlcmHost } from "./preamble/host.js";
-// Likewise type-only: the shape the std-lib factory hands back, so the agent's `flcm` parameter is
-// the real surface rather than `any`. Names what runtime.ts re-exports — nothing more.
-import type * as FlcmRuntime from "./preamble/runtime.js";
+// Likewise type-only: the factory result types both agent bindings without bundling their implementation.
+import type * as SandboxRuntime from "./preamble/sandbox.js";
 
 // The window is a fixed-width strip whose HEIGHT is whatever the iframe measures after each render
 // (UI_HEIGHT) — so "collapsed" and "expanded" are CSS states over there, not two magic numbers here.
@@ -414,6 +413,9 @@ function takeBaton(key: ConnKey): void {
   renderUi();
 }
 
+// One store per plugin run, shared by approved callers across socket generations and pages.
+let agentSession: Record<string, unknown> | undefined;
+
 /**
  * One writer at a time (Invariant) — enforced by SERIALIZING writes rather than refusing the
  * non-driving session. Two approved agents can now both have work in flight, and without this chain
@@ -750,8 +752,8 @@ async function executeCode(to: ReplyTo, code: string, preamble: string): Promise
   let errorMessage: string | null = null;
   try {
     // Two evals, and the split is the point. The std-lib the server sent is a FACTORY expression
-    // (buildSandboxPreamble, src/preamble/index.mjs): call it with the host, get the `flcm` surface
-    // back, hand that to the agent's code as a named parameter. Nothing HERE knows how the preamble
+    // (buildSandboxPreamble, src/preamble/index.mjs): call it with the host, get the { flcm, session } bindings
+    // back, hand those to the agent's code as named parameters. Nothing HERE knows how the preamble
     // binds its host — the one identifier that crosses that eval boundary lives wholly inside
     // preamble/, bound and asserted by the single file that emits both ends of it.
     //
@@ -763,17 +765,20 @@ async function executeCode(to: ReplyTo, code: string, preamble: string): Promise
     // async because the agent awaits flcm.render(); the factory itself is synchronous (the font
     // preload runs inside render(), not at module top level).
     const host: FlcmHost = {
+      getSession: (initialize) => agentSession ??= initialize(),
       registerRead: egress.registerRead,
       traceNative: (stage, operation) => trace(stage, operation),
       requestImages: (urls: string[]) => requestServerImages(to, urls),
       isRunCancelled: () => cancelledRuns.isCancelled(to),
     };
-    const flcm = (eval(preamble) as (host: FlcmHost) => typeof FlcmRuntime)(host);
-    const raw = await eval("(async function(flcm){ " + code + "\n })")(flcm);
+    const { flcm, session } = (eval(preamble) as (host: FlcmHost) => typeof SandboxRuntime)(host);
+    const raw = await eval("(async function(flcm, session){ " + code + "\n })")(flcm, session);
     // Return-path node guard (R2): a returned live node would otherwise collapse to
     // { id } and silently drop everything else. Make that loud instead of lossy.
     guardReturnValue(raw);
-    result = safeSerialize(egress.project(raw));
+    const serialized = safeSerialize(egress.project(raw));
+    session.last = raw;
+    result = serialized;
   } catch (err) {
     errorMessage = formatError(err);
   } finally {

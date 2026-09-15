@@ -13,12 +13,13 @@ const code = buildSync({
 const flush = async () => {
   for (let n = 0; n < 30; n++) await Promise.resolve();
 };
-function host() {
+function host(native: Record<string, unknown> = {}) {
   const frames: Record<string, unknown>[] = [];
   const figma = {
     showUI() {},
     notify() {},
     currentPage: { name: "test" },
+    ...native,
     clientStorage: { getAsync: async () => [], setAsync: async () => {} },
     ui: {
       postMessage: (msg: Record<string, unknown>) => frames.push(msg),
@@ -47,7 +48,7 @@ test("queued cancellation never executes, old settlement cannot cancel or erase 
   });
   h.context.writes = [];
   const run = (key: number, id: string, body: string) =>
-    h.send({ type: "EXECUTE_CODE", id, __connKey: key, preamble: "(host)=>({})", code: body });
+    h.send({ type: "EXECUTE_CODE", id, __connKey: key, preamble: "(host)=>({ flcm: {}, session: host.getSession(() => ({})) })", code: body });
   run(1, "same-id", "await hold; writes.push('old completed'); return 'old';");
   await flush();
   h.send({ type: "WS_CLOSED", __connKey: 1 });
@@ -85,7 +86,7 @@ test("Reject is explicit and unknown tokens cannot bypass approval status or exe
     type: "EXECUTE_CODE",
     id: "run",
     __connKey: 1,
-    preamble: "(host)=>({})",
+    preamble: "(host)=>({ flcm: {}, session: host.getSession(() => ({})) })",
     code: "writes.push('bad');",
   });
   await flush();
@@ -150,7 +151,7 @@ test("execute projects registered reads in nested results and console lines exac
     preamble: `(host) => {
       const read = { id: "v", type: "VECTOR", d: "M0 0 L1 1" };
       host.registerRead(read, () => ({ id: "v", type: "IMAGE-SVG", elided: { d: 10 } }));
-      return { read };
+      return { flcm: { read }, session: host.getSession(() => ({})) };
     }`,
     code: `console.log({ nested: [flcm.read] }); return { nested: [flcm.read], computed: { id: "v", type: "VECTOR", d: "mine" } };`,
   });
@@ -162,4 +163,157 @@ test("execute projects registered reads in nested results and console lines exac
   assert.equal(reply.result.computed.d, "mine");
   assert.equal(reply.console[0].includes('"type":"IMAGE-SVG"'), true);
   assert.equal(reply.console[0].includes('"d":"M0'), false);
+});
+
+const realPreamble = import("./preamble/index.mjs").then(m => m.buildSandboxPreamble());
+async function execute(h: ReturnType<typeof host>, body: string, key = 1) {
+  const id = `execute-${h.frames.length}`;
+  h.send({ type: "EXECUTE_CODE", id, __connKey: key, preamble: await realPreamble, code: body });
+  for (let n = 0; n < 100; n++) {
+    const reply = h.frames.find(f => f.id === id && f.type === "EXECUTE_CODE_RESULT");
+    if (reply) return reply as { result: any; errors: string | null };
+    await new Promise<void>(resolve => setImmediate(resolve));
+  }
+  throw new Error("execution did not settle");
+}
+
+test("session identity, snapshots and last survive fresh calls, reconnects and pages but not plugin runs", async () => {
+  const h = host();
+  await h.connect(1);
+  let result = await execute(h, `
+    const local = { children: [{ name: "snapshot" }] };
+    session.screen = local;
+    local.children[0].name = "outside";
+    globalThis.observedSession = session;
+    return { large: session.screen };
+  `);
+  assert.equal(result.errors, null);
+  h.send({ type: "WS_CLOSED", __connKey: 1 });
+  await h.connect(2);
+  h.context.figma.currentPage = { name: "another page" };
+  result = await execute(h, `
+    return [session === observedSession, typeof local, session.screen.children[0].name, session.last.large.children[0].name];
+  `, 2);
+  assert.equal(result.errors, null);
+  assert.deepEqual(JSON.parse(JSON.stringify(result.result)), [true, "undefined", "snapshot", "snapshot"]);
+  result = await execute(h, `session.saved = 7; throw new Error("failure");`, 2);
+  assert.match(result.errors!, /failure/);
+  result = await execute(h, `return [session.saved, session.last[0]];`, 2);
+  assert.deepEqual(JSON.parse(JSON.stringify(result.result)), [7, true]);
+  await execute(h, `session.saved = 8;`, 2);
+  result = await execute(h, `return session.last === undefined;`, 2);
+  assert.equal(result.result, true);
+  const reopened = host();
+  await reopened.connect(1);
+  result = await execute(reopened, `return Object.keys(session);`);
+  assert.deepEqual(JSON.parse(JSON.stringify(result.result)), []);
+});
+
+test("session rejects request plumbing and alias attacks at every write boundary", async () => {
+  const h = host();
+  await h.connect(1);
+  const result = await execute(h, `
+    session.tree = { children: [] };
+    const rejects = [];
+    const attempt = fn => { try { fn(); rejects.push(false); } catch (e) { rejects.push(e.message.includes("plain data")); } };
+    attempt(() => session.bad = flcm);
+    attempt(() => session.tree.children.push({ hidden: () => flcm.get("1:1") }));
+    attempt(() => Object.defineProperty(session.tree, "bad", { get: () => flcm }));
+    attempt(() => Object.setPrototypeOf(session.tree, { bad: flcm }));
+    attempt(() => session.bad = new Map());
+    attempt(() => session.bad = Promise.resolve(1));
+    attempt(() => session.bad = { get hidden() { throw new Error("getter must not run"); } });
+    attempt(() => session.bad = { [Symbol()]: flcm });
+    attempt(() => session.bad = { id: "1:1", type: "FRAME", removed: false });
+    attempt(() => session.tree.loop = session);
+    attempt(() => Object.freeze(session));
+    const alias = { nested: {} };
+    session.safe = alias;
+    alias.nested.bad = flcm;
+    session.tree.children.push({ name: "a" }, { name: "b" });
+    session.tree.children.unshift(session.tree.children.pop());
+    return { rejects, safe: session.safe, order: session.tree.children.map(n => n.name) };
+  `);
+  assert.equal(result.errors, null);
+  assert.deepEqual(JSON.parse(JSON.stringify(result.result)), {
+    rejects: Array(11).fill(true), safe: { nested: {} }, order: ["b", "a"],
+  });
+  const invalidReturn = await execute(h, `return { plumbing: flcm };`);
+  assert.match(invalidReturn.errors!, /session.last.plumbing.*plain data/);
+  const after = await execute(h, `return session.last.order;`);
+  assert.deepEqual(JSON.parse(JSON.stringify(after.result)), ["b", "a"]);
+});
+
+test("last retains full read data before wire projection", async () => {
+  const h = host();
+  await h.connect(1);
+  const preamble = await realPreamble;
+  h.send({
+    type: "EXECUTE_CODE", id: "full-read", __connKey: 1,
+    preamble: `(host) => {
+      const bindings = (${preamble}\n)(host);
+      const read = { id: "v", type: "VECTOR", d: "M0 0 L1 1" };
+      host.registerRead(read, () => ({ id: "v", type: "IMAGE-SVG", elided: { d: 10 } }));
+      return { ...bindings, flcm: { read } };
+    }`,
+    code: `return { nested: [flcm.read] };`,
+  });
+  await flush();
+  const first = h.frames.find(f => f.id === "full-read" && f.type === "EXECUTE_CODE_RESULT") as any;
+  assert.equal(first.errors, null);
+  assert.equal(first.result.nested[0].type, "IMAGE-SVG");
+  const next = await execute(h, `return session.last.nested[0].d;`);
+  assert.equal(next.errors, null);
+  assert.equal(next.result, "M0 0 L1 1");
+});
+
+test("two calls reorder and re-append a stored tree while preserving live ids", async () => {
+  const { createFigmaMock } = await import("../harness/figma-mock.mjs");
+  const figma = createFigmaMock();
+  const h = host(figma);
+  await h.connect(1);
+  const first = await execute(h, `
+    const root = await flcm.render({ type: "FRAME", width: 300, height: 300 });
+    session.root = root.id;
+    const screen = { type: "FRAME", width: 200, height: 200, children: [
+      { type: "TEXT", text: "First" }, { type: "TEXT", text: "Second" }
+    ] };
+    session.screen = await flcm.append(root, screen);
+    return session.screen;
+  `);
+  assert.equal(first.errors, null);
+  const before = first.result;
+  const second = await execute(h, `
+    session.screen.children.unshift(session.screen.children.pop());
+    session.screen = await flcm.append(session.root, session.screen);
+    return session.screen;
+  `);
+  assert.equal(second.errors, null);
+  assert.equal(second.result.id, before.id);
+  const expected = [before.children[1].id, before.children[0].id];
+  assert.deepEqual(Array.from(second.result.children, (n: any) => n.id), expected);
+  const live = await figma.getNodeByIdAsync(before.id);
+  assert.deepEqual(live.children.map((n: any) => n.id), expected);
+  const promoted = await execute(h, `session.screen = await flcm.component(session.screen); return session.screen.id;`);
+  assert.equal(promoted.errors, null);
+  const read = await execute(h, `return (await flcm.get(session.screen)).node.id;`);
+  assert.equal(read.errors, null);
+  assert.equal(read.result, promoted.result);
+});
+
+test("queued calls observe completed session writes and cancelled queued calls cannot change last", async () => {
+  const h = host();
+  await h.connect(1);
+  let release!: () => void;
+  h.context.hold = new Promise<void>(resolve => { release = resolve; });
+  const preamble = await realPreamble;
+  const send = (id: string, code: string) => h.send({ type: "EXECUTE_CODE", id, __connKey: 1, preamble, code });
+  send("first", `session.count = 1; await hold; session.count++; return session.count;`);
+  send("cancelled", `session.count = 100; return 100;`);
+  h.send({ type: "CANCEL", runId: "cancelled", __connKey: 1 });
+  const next = execute(h, `return [session.count, session.last];`);
+  release();
+  const result = await next;
+  assert.equal(result.errors, null);
+  assert.deepEqual(JSON.parse(JSON.stringify(result.result)), [2, 2]);
 });

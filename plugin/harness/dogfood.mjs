@@ -25,7 +25,9 @@ createFigmaMock();
 // The host capability object (FlcmHost, preamble/host.ts): the live sandbox awaits the server over
 // the WS bridge for images and reads the run's real CANCEL state; the harness answers instantly with
 // stand-in bytes and never cancels, so scenarios run headless.
+let agentSession;
 const host = {
+  getSession: initialize => agentSession ??= initialize(),
   // This diagnostic harness inspects full runtime data; execution-lifecycle tests cover host projection.
   registerRead() {},
   requestImages: async (urls) =>
@@ -42,8 +44,9 @@ for (const lvl of ["log", "info", "warn", "error"]) console[lvl] = (...a) => log
 //    `figma`/`console`/`Promise` references resolve to globals.
 let result, error = null;
 try {
-  const flcm = (0, eval)(SANDBOX_PREAMBLE)(host);
-  result = await (0, eval)("(async function(flcm){ " + userCode + "\n })")(flcm);
+  const { flcm, session } = (0, eval)(SANDBOX_PREAMBLE)(host);
+  result = await (0, eval)("(async function(flcm, session){ " + userCode + "\n })")(flcm, session);
+  session.last = result;
 } catch (e) {
   error = e && e.stack ? e.stack : String(e);
 } finally {

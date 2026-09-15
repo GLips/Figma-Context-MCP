@@ -4,7 +4,6 @@ import { sceneFigma as figma, invalidateSceneAccess } from "./scene-access.js";
 import { readAnnotationCategoryNames } from "./annotation-categories.js";
 import { decodeAnnotations } from "./annotations.js";
 import { Target, RawIdRef, FindQuery, SlimHandle, ReadPredicate, GetResult } from "./ir.js";
-import { resolvePromotionId } from "./promotion-aliases.js";
 import { readKey, identityOf } from "./identity.js";
 import {
   sceneNodeToSnapshot,
@@ -37,7 +36,8 @@ function hasId(value: unknown): value is { id: string } {
 // target-taking verb below async. Cast to SceneNode — every resolvable target is one in practice, and the
 // read/edit verbs that consume this operate on scene nodes.
 async function byId(id: string): Promise<SceneNode | null> {
-  return resolvePromotionId(id);
+  const node = await figma.getNodeByIdAsync(id);
+  return node && !node.removed ? node as SceneNode : null;
 }
 
 function scanKey(key: string, root: ScanRoot): SceneNode[] {

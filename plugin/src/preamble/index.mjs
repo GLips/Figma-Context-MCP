@@ -4,14 +4,14 @@
 // calls it at all — ADR-0010 moved the runtime onto the server so DSL changes skip the re-import.
 //
 // What it emits is a FACTORY EXPRESSION, not a paste-in blob: `eval(preamble)(host)` takes the
-// FlcmHost and returns the `flcm` surface the agent calls (flcm.render()/flcm.append()/…). That shape
+// FlcmHost and returns { flcm, session }, the bindings agent code receives. That shape
 // is what keeps `__flcmHost` — the one identifier no compiler can follow across eval — entirely
 // inside this directory. This file writes the wrapper that BINDS it and asserts the bundle READS it
 // (see below); the consumers only ever call the factory positionally, so none of them can drift.
 //
 // The fragments are authored as real typed ES modules (so tsc checks the shipped JS), but QuickJS has
-// no module system — so esbuild bundles runtime.ts as an IIFE with globalName 'flcm'. That wraps the
-// whole module graph in one closure: only the verbs runtime.ts re-exports land on the `flcm` global,
+// no module system — so esbuild bundles sandbox.ts as an IIFE with globalName 'sandbox'. That wraps the
+// whole module graph in one closure: only the verbs runtime.ts re-exports land on the `flcm` binding,
 // and every internal helper is closure-private — uncollidable with the agent's code, which is why no
 // helper needs a name prefix.
 //
@@ -25,12 +25,12 @@ import { dirname, resolve } from "node:path";
 const here = dirname(fileURLToPath(import.meta.url));
 
 export async function buildSandboxPreamble() {
-  // format:'iife' + globalName:'flcm' is what gives us the single-global / closure-private-internals
+  // format:'iife' + globalName:'sandbox' is what gives us the single-global / closure-private-internals
   // shape. target:'esnext' keeps output lean; there is no top-level await to preserve (fonts
   // load inside render(), not at module top level), so any modern target works.
   const bundled = await esbuild.build({
-    entryPoints: [resolve(here, "runtime.ts")],
-    bundle: true, write: false, format: "iife", globalName: "flcm", target: "esnext", platform: "neutral",
+    entryPoints: [resolve(here, "sandbox.ts")],
+    bundle: true, write: false, format: "iife", globalName: "sandbox", target: "esnext", platform: "neutral",
     // The read path bundles the repo-root simplify core, whose internal imports use the root's ~/ alias.
     alias: { "~": resolve(here, "../../../src") },
     // Powers the zod gate below: it asks the real input graph rather than guessing from the output.
@@ -78,7 +78,7 @@ export async function buildSandboxPreamble() {
     );
   }
 
-  // Wrapped as a callable expression: `eval(preamble)(host)` → the `flcm` surface. `flcm` is the var
+  // Wrapped as a callable expression: `eval(preamble)(host)` → { flcm, session }. `sandbox` is the var
   // esbuild's globalName emits, declared inside this function rather than in whatever scope the
   // consumer eval'd from — so the std-lib's single global never leaks into the agent's scope by
   // accident; the caller hands it to the agent's code deliberately.
@@ -86,7 +86,7 @@ export async function buildSandboxPreamble() {
     "// ===== flcm std-lib (injected) =====",
     "(function (__flcmHost) {",
     code,
-    "return flcm;",
+    "return sandbox;",
     "})",
     "// ===== end std-lib =====",
   ].join("\n");

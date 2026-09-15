@@ -27,7 +27,6 @@ import {
   WriteNode, WriteChild, Handle, Target, ComponentPropertyBinding, VariantEntryInput,
 } from "./ir.js";
 import { applyExposures } from "./instance-exposure.js";
-import { recordPromotionAlias } from "./promotion-aliases.js";
 import { resolveTarget, createResolvedTargets, ResolvedTargets } from "./read.js";
 import {
   mintHandle, BoundLiveNode, InstancePlans, beginRenderWalk, RenderResources,
@@ -527,7 +526,6 @@ function applyBuiltComponent({ tree, resources, definitions, options }: GatedBui
     }
     declareProperties(comp, definitions, ctx.bindings!, options);
     applyExposures(ctx.exposures);
-    if (tree.liveId) recordPromotionAlias(tree.liveId, comp.id);
     tree.source!.id = comp.id;
     tree.source!.type = "COMPONENT";
     return tree.source as AuthoredTree;

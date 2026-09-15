@@ -8,7 +8,6 @@ import { edit } from "./edit.js";
 import { append, prepend } from "./structure.js";
 import { component } from "./component.js";
 import { find, findOne, get, resolveTarget } from "./read.js";
-import { recordPromotionAlias } from "./promotion-aliases.js";
 
 test("aliases normalize compilers and edits without changing canonical output", async () => {
   const figma = createFigmaMock();
@@ -114,33 +113,12 @@ test("baseline authors and edits rows and rejects columns before writes", async 
   );
 });
 
-test("promotion IDs resolve durable chains, prioritize live originals, and detect cycles", async () => {
-  const figma = createFigmaMock();
+test("promotion returns the new identity and stale root ids fail", async () => {
+  createFigmaMock();
   const built = await render({ type: "FRAME" });
   const promoted = await component(built.id);
-  assert.equal((await get(id(built.id))).node.id, promoted.id);
-  recordPromotionAlias("old", built.id);
-  assert.equal((await resolveTarget(id("old"))).id, promoted.id);
-  recordPromotionAlias(promoted.id, "missing");
-  assert.equal((await resolveTarget(id(promoted.id))).id, promoted.id);
-  recordPromotionAlias("cycle-a", "cycle-b");
-  recordPromotionAlias("cycle-b", "cycle-a");
-  await assert.rejects(resolveTarget(id("cycle-a")), /cycle/);
-  recordPromotionAlias("missing-old", "missing-new");
-  await assert.rejects(resolveTarget(id("missing-old")), /no live node/);
-  assert.ok(figma.root.getPluginData("flcm/promotion-aliases"));
-  const metadata = figma.root.getPluginData("flcm/promotion-aliases");
-  const candidate = await render({ type: "FRAME" });
-  const create = figma.createComponentFromNode;
-  figma.createComponentFromNode = () => {
-    throw new Error("promotion test failure");
-  };
-  await assert.rejects(component(candidate.id), /promotion test failure/);
-  figma.createComponentFromNode = create;
-  assert.equal(figma.root.getPluginData("flcm/promotion-aliases"), metadata);
-
-  createFigmaMock();
-  await assert.rejects(resolveTarget(id("old")), /no live node/);
+  assert.equal((await get(id(promoted.id))).node.id, promoted.id);
+  await assert.rejects(resolveTarget(id(built.id)), /no live node/);
 });
 
 test("selected variants and slot content inherit resolved auto layout", async () => {
@@ -207,14 +185,14 @@ test("selected variants and slot content inherit resolved auto layout", async ()
   assert.equal(live.children[0].children.length, count);
 });
 
-test("shipped factory supports RegExp input and promotion aliases across separate evaluations", async () => {
+test("shipped factory supports RegExp input across separate evaluations", async () => {
   const figma = createFigmaMock();
   const { buildSandboxPreamble } = await import("./index.mjs");
   const { createContext, runInContext } = await import("node:vm");
   const preamble = await buildSandboxPreamble();
   const context = createContext({ figma, console });
   const install = () =>
-    runInContext("var flcm = (" + preamble + "\n)({isRunCancelled: () => false, registerRead() {}});", context);
+    runInContext("var flcm = (" + preamble + "\n)({isRunCancelled: () => false, registerRead() {}, getSession: init => init()}).flcm;", context);
   install();
   await runInContext(
     '(async () => { var built = await flcm.render({type:"FRAME", name:"Copy"}); globalThis.oldId = built.id; globalThis.newId = (await flcm.component(oldId)).id; })()',
@@ -222,7 +200,7 @@ test("shipped factory supports RegExp input and promotion aliases across separat
   );
   install();
   const result = await runInContext(
-    '(async () => { const re = /copy/gi; re.lastIndex = 99; return [(await flcm.find({name:re})).length, (await flcm.find({name:new RegExp("copy", "i")})).length, re.lastIndex, (await flcm.get(flcm.id(oldId))).node.id === newId]; })()',
+    '(async () => { const re = /copy/gi; re.lastIndex = 99; return [(await flcm.find({name:re})).length, (await flcm.find({name:new RegExp("copy", "i")})).length, re.lastIndex, (await flcm.get(flcm.id(newId))).node.id === newId]; })()',
     context,
   );
   assert.deepEqual(Array.from(result), [1, 1, 99, true]);

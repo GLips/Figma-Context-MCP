@@ -32,7 +32,8 @@ import { z } from "zod";
 // Nothing has ever shipped, at any version, so there is deliberately NO compat path — the fix is
 // always a re-import, and the refusal names it.
 // v4: separate APPROVAL_STATUS polling, Reject, and connection-owned run states.
-// v5: read-object registration lets the host project returns and console lines at egress.
+// v5: read registration projects egress; getSession retains preamble-owned data policy for one
+// plugin run. The preamble factory returns { flcm, session } for the agent wrapper.
 export const MIN_PROTOCOL_VERSION = 5;
 
 /**

@@ -7,7 +7,7 @@
 // re-import. So it stays deliberately tiny, and an incompatible change to it bumps PROTOCOL_VERSION.
 //
 // What earns a place here: only a service that needs plugin-owned state the sandbox can't see — the
-// reverse bridge to the server (images) or the host's view of the run's lifecycle (cancellation).
+// reverse bridge (images), run cancellation, or plugin-run storage.
 // Helpers, policy and anything derivable from `figma.*` stay in the shipped preamble, where they
 // cost nothing to change.
 //
@@ -21,6 +21,8 @@ export type NativeOperation = "page-create" | "page-switch" | "font-load" | "fon
 export type NativeTraceStage = "native-start" | "native-end" | "native-error";
 
 export interface FlcmHost {
+  /** Retain one preamble-initialized object for this plugin run; never retain the initializer. */
+  getSession(initialize: () => Record<string, unknown>): Record<string, unknown>;
   registerRead(value: object, project: () => unknown): void;
   traceNative?(stage: NativeTraceStage, operation: NativeOperation): void;
   /** Fetch bytes for image urls through the server. The sandbox has no network of its own. */
@@ -87,4 +89,9 @@ export async function awaitNative<T>(operation: NativeOperation, run: () => Prom
 /** Identity registration keeps authored/computed objects out of the lossy egress path. */
 export function registerRead(value: object, project: () => unknown): void {
   currentHost()?.registerRead(value, project);
+}
+
+/** Host ownership supplies lifetime; the server-shipped initializer supplies data policy. */
+export function hostSession(initialize: () => Record<string, unknown>): Record<string, unknown> {
+  return currentHost()?.getSession(initialize) ?? initialize();
 }
