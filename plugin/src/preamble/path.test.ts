@@ -1,4 +1,4 @@
-// Phase 1: flcm.path auto-normalizes any valid SVG `d` into Figma's absolute M/L/C/Q/Z subset. These tests
+// Phase 1: VECTOR auto-normalizes any valid SVG `d` into Figma's absolute M/L/C/Q/Z subset. These tests
 // prove (a) output is subset-only, (b) geometry is preserved within tolerance, (c) malformed data fails loud.
 import { test } from "node:test";
 import assert from "node:assert/strict";

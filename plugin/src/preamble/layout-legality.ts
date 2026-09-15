@@ -29,9 +29,9 @@ export interface ParentFlowFacts {
 // can't hand in a value that contradicts the very layout it also passes.
 export function assertLayoutRealizableForType(nodeType: string, wl: WriteLayout, liveMode: "HORIZONTAL" | "VERTICAL" | "NONE" | "GRID" | undefined, subject: string, liveWrap = false): void {
   // No per-type "can this even be a container" rule here ON PURPOSE: a mode on a non-frame is
-  // unreachable in both verbs — `layout` is a frame-constructor-only word at create, edit's
+  // unreachable in both verbs — `layout` is a frame-compiler-only word at create, edit's
   // per-type vocabulary gate rejects it upstream, and render refuses hand-built IR
-  // (provenance.ts) — so the rules below may trust the compile's invariants.
+  // so the rules below may trust the private compile's invariants.
   const willBeAuto = wl.mode != null ? wl.mode !== "none" : liveMode === "HORIZONTAL" || liveMode === "VERTICAL";
   if (wl.alignItems === "baseline" && (wl.mode ?? (liveMode === "HORIZONTAL" ? "row" : "none")) !== "row") {
     throw new Error(subject + ': layout.alignItems "baseline" requires layout.mode "row" (horizontal auto-layout).');

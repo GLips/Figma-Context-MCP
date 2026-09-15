@@ -1,3 +1,4 @@
+import { specNode } from "../../harness/spec-node.js";
 // flcm.editMany — the atomic batch. What must not regress silently: the SET validates before any
 // entry applies (a loop over `edit` can't do that, which is the whole reason this verb exists), a
 // rejection names EVERY offender, the batch is one undo step, and cross-entry ordering is the
@@ -6,7 +7,7 @@
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
-import { frame, rect, text, id, image } from "./flcm.js";
+import { id, image } from "./flcm.js";
 import { render } from "./render.js";
 import { editMany } from "./edit-many.js";
 
@@ -19,14 +20,14 @@ beforeEach(() => {
 // A free-form card holding three keyed children — the shape a batch nudge is written against.
 async function renderCard() {
   const out = await render(
-    frame({ key: "card", width: 300, height: 200 }, [
-      rect({ key: "a", width: 40, height: 40, fill: "#ff0000" }),
-      rect({ key: "b", width: 40, height: 40, fill: "#00ff00" }),
-      text("hello", { key: "c" }),
-      text("world", { key: "c2" }),
-    ]),
+    ({ type: "FRAME", key: "card", width: 300, height: 200, children: [
+      ({ type: "RECTANGLE", key: "a", width: 40, height: 40, fill: "#ff0000" }),
+      ({ type: "RECTANGLE", key: "b", width: 40, height: 40, fill: "#00ff00" }),
+      ({ type: "TEXT", text: "hello", key: "c" }),
+      ({ type: "TEXT", text: "world", key: "c2" }),
+    ] }),
   );
-  const node = async (k: string) => figma.getNodeByIdAsync(out.keyed[k].id);
+  const node = async (k: string) => figma.getNodeByIdAsync(specNode(out, k).id);
   return { out, card: await node("card"), a: await node("a"), b: await node("b"), c: await node("c") };
 }
 
@@ -207,13 +208,13 @@ test("cross-entry layout legality is judged against the batch's own end state, n
   {
     figma = createFigmaMock();
     const out = await render(
-      frame({ key: "outer", layout: { mode: "row" }, width: 500, height: 300 }, [
-        frame({ key: "panel", layout: { mode: "row" }, width: "fill", height: "fill" }, [
-          rect({ key: "kid", width: 40, height: 40 }),
-        ]),
-      ]),
+      ({ type: "FRAME", key: "outer", layout: { mode: "row" }, width: 500, height: 300, children: [
+        ({ type: "FRAME", key: "panel", layout: { mode: "row" }, width: "fill", height: "fill", children: [
+          ({ type: "RECTANGLE", key: "kid", width: 40, height: 40 }),
+        ] }),
+      ] }),
     );
-    const kid = await figma.getNodeByIdAsync(out.keyed["kid"].id);
+    const kid = await figma.getNodeByIdAsync(specNode(out, "kid").id);
     // The fill DOES survive a flip of the panel alone — that must stay accepted.
     await editMany([
       { target: "panel", changes: { layout: { mode: "column" } } },
@@ -233,13 +234,13 @@ test("cross-entry layout legality is judged against the batch's own end state, n
 
 test("every MEASUREMENT waits for every write: an anchored ancestor centers on the size its descendant ends at", async () => {
   const out = await render(
-    frame({ key: "card", width: 300, height: 200 }, [
-      frame({ key: "panel", layout: { mode: "row" }, width: "hug", height: "hug", left: 0, top: 0 }, [
-        text("x", { key: "label" }),
-      ]),
-    ]),
+    ({ type: "FRAME", key: "card", width: 300, height: 200, children: [
+      ({ type: "FRAME", key: "panel", layout: { mode: "row" }, width: "hug", height: "hug", left: 0, top: 0, children: [
+        ({ type: "TEXT", text: "x", key: "label" }),
+      ] }),
+    ] }),
   );
-  const panel = await figma.getNodeByIdAsync(out.keyed["panel"].id);
+  const panel = await figma.getNodeByIdAsync(specNode(out, "panel").id);
   // The panel HUGS, so the other entry's content change resizes it — and the anchor is measured
   // against that size. Applied ancestor-first with no deferred measure pass, the center is computed
   // from the pre-growth width and the panel ends up visibly off-center, with no error.
@@ -253,8 +254,8 @@ test("every MEASUREMENT waits for every write: an anchored ancestor centers on t
 
 test("a refusal names the identity the node had BEFORE the batch's first write, not after its rename", async () => {
   const { a } = await renderCard();
-  const out = await render(frame({ key: "shell", width: 300, height: 300 }, [frame({ key: "host", width: 10, height: 10 }, [])]));
-  const host = await figma.getNodeByIdAsync(out.keyed["host"].id);
+  const out = await render(({ type: "FRAME", key: "shell", width: 300, height: 300, children: [({ type: "FRAME", key: "host", width: 10, height: 10, children: [] })] }));
+  const host = await figma.getNodeByIdAsync(specNode(out, "host").id);
   // The rename lands in the write pass; the refusal comes from the position pass after it. The
   // error must still point at the node the agent named, because the rollback erases the new name.
   Object.defineProperty(host, "x", { set: () => { throw new Error("in set_x: Cannot write to node"); }, get: () => 0, configurable: true });
@@ -343,10 +344,10 @@ test("the batch shape itself fails loud: not an array, empty, a non-entry item, 
 
 test("`within` scopes key resolution for the whole batch — one scan, and an out-of-scope key still fails loud", async () => {
   await render(
-    frame({ key: "outer", width: 400, height: 400 }, [
-      frame({ key: "left", width: 100, height: 100 }, [rect({ key: "dot", width: 10, height: 10 })]),
-      frame({ key: "right", width: 100, height: 100 }, []),
-    ]),
+    ({ type: "FRAME", key: "outer", width: 400, height: 400, children: [
+      ({ type: "FRAME", key: "left", width: 100, height: 100, children: [({ type: "RECTANGLE", key: "dot", width: 10, height: 10 })] }),
+      ({ type: "FRAME", key: "right", width: 100, height: 100, children: [] }),
+    ] }),
   );
   await editMany([{ target: "dot", changes: { opacity: 0.25 } }], { within: "left" });
   const scoped = await editMany([{ target: "dot", changes: { opacity: 0.5 } }], { within: "outer" });

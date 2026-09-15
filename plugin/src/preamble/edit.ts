@@ -1,3 +1,4 @@
+import { compileDeltaTrees } from "./compile-tree.js";
 // edit — the mutate verb itself. Everything it drives lives elsewhere: the staged pipeline in
 // edit-plan.ts (see that module's header for the stages and why their order is the contract), the
 // INSTANCE half in instance.ts, the COMPONENT half in component-edit.ts. This module is the ORDER
@@ -54,6 +55,7 @@ export function edit(target: Target, changes: EditDelta): Promise<Handle> {
     // once as the HINT of what to load (an override's or a text delta's fonts follow the live
     // node); nothing it concludes lands. A throw rejects the verb with zero writes.
     async () => {
+      changes = compileDeltaTrees(changes, SUBJECT);
       rejectNonDeltaWords(changes, SUBJECT);
       const node = await resolveTarget(target);
       const hint = compileEditPlan(node, changes, SUBJECT);

@@ -1,51 +1,46 @@
-// Rich text (Phase 1): flcm.text accepts a styled-runs array alongside the plain-string form. Construction
+import { compileTree } from "./compile-tree.js";
+// Rich text (Phase 1): TEXT accepts a styled-runs array alongside the plain-string form. Construction
 // is document-blind (checked on the built WriteNode); the per-range apply is render-time (bridge) behavior, checked
 // against the in-memory figma mock, which records each setRange* call so we can assert the runs landed.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
-import { text } from "./flcm.js";
+
 import { render } from "./render.js";
 import { resolveFontStrict } from "./fonts.js";
 
 createFigmaMock();
 
 test("a plain string still builds a plain text node (no runs)", () => {
-  const wn = text("hello", { textStyle: { fontSize: 14 } });
+  const wn = compileTree(({ type: "TEXT", text: "hello", textStyle: { fontSize: 14 } }), "spec");
   assert.equal(wn.text, "hello");
   assert.equal(wn.runs, undefined);
 });
 
 test("a runs array builds one node whose characters are the concatenation", async () => {
-  const wn = text(
-    [
+  const wn = ({ type: "TEXT", text: [
       ["@ridgeline", { color: "#6366F1", fontWeight: "semibold" }],
       " body copy ",
       ["more", { color: "#8E8E93" }],
-    ],
-    { textStyle: { fontSize: 14 } },
-  );
-  assert.equal(wn.text, undefined);
-  assert.equal(wn.runs!.length, 3);
+    ], textStyle: { fontSize: 14 } });
+  assert.equal(compileTree(wn, "spec").text, undefined);
+  assert.equal(compileTree(wn, "spec").runs!.length, 3);
 
   const out = await render(wn);
-  const node = await figma.getNodeByIdAsync(out.node.id);
+  const node = await figma.getNodeByIdAsync(out.id);
   assert.equal(node.characters, "@ridgeline body copy more");
   assert.equal(node.fontSize, 14); // base props apply as the node default
 });
 
 test("runs apply per-range weight and fills over the right slices; unstyled runs touch nothing", async () => {
   const out = await render(
-    text(
-      [
+    ({ type: "TEXT", text: [
         ["@ridgeline", { color: "#6366F1", fontWeight: "semibold" }], // 0..10 — weight + fill
         " body copy ", //                                                10..21 — inherits base, no range
         ["more", { color: "#8E8E93" }], //                               21..25 — fill only
-      ],
-      { textStyle: { fontSize: 14 } },
-    ),
+      ], textStyle: { fontSize: 14 } }),
   );
-  const node = await figma.getNodeByIdAsync(out.node.id);
+  const node = await figma.getNodeByIdAsync(out.id);
 
   // Only the weighted run sets a range font — and it resolves to the family's Semi Bold, not the base.
   assert.equal(node._rangeFonts.length, 1);
@@ -70,13 +65,13 @@ test("resolveFontStrict throws for an unloaded run font rather than falling back
 });
 
 test("markdown in a plain string compiles to runs and renders per-range", async () => {
-  const wn = text("Hi **bold** and *italic* and ~~struck~~ and [link](https://a.co)");
+  const wn = ({ type: "TEXT", text: "Hi **bold** and *italic* and ~~struck~~ and [link](https://a.co)" });
   // Splits into runs (no longer a single plain string).
-  assert.equal(wn.text, undefined);
+  assert.equal(compileTree(wn, "spec").text, undefined);
   assert.equal(wn.characters, undefined);
 
   const out = await render(wn);
-  const node = await figma.getNodeByIdAsync(out.node.id);
+  const node = await figma.getNodeByIdAsync(out.id);
   assert.equal(node.characters, "Hi bold and italic and struck and link");
 
   // Bold + italic each resolve a per-range font (weight snap / italic variant); strike does not.
@@ -95,8 +90,8 @@ test("markdown in a plain string compiles to runs and renders per-range", async 
 });
 
 test("a whole-node italic base resolves the italic font and needs no per-range font", async () => {
-  const out = await render(text("all slanted", { textStyle: { fontStyle: "italic", fontWeight: 700 } }));
-  const node = await figma.getNodeByIdAsync(out.node.id);
+  const out = await render(({ type: "TEXT", text: "all slanted", textStyle: { fontStyle: "italic", fontWeight: 700 } }));
+  const node = await figma.getNodeByIdAsync(out.id);
   assert.deepEqual(node.fontName, { family: "Inter", style: "Bold Italic" });
   assert.deepEqual(node._rangeFonts, []); // plain string, no runs
 });
@@ -104,18 +99,18 @@ test("a whole-node italic base resolves the italic font and needs no per-range f
 test("an italic run over an italic base with a weight override keeps the slant", async () => {
   // The run changes only weight; effective slant inherits the italic base, so the run's font is italic.
   const out = await render(
-    text([["heavy", { fontWeight: 900 }], " rest"], { textStyle: { fontStyle: "italic" } }),
+    ({ type: "TEXT", text: [["heavy", { fontWeight: 900 }], " rest"], textStyle: { fontStyle: "italic" } }),
   );
-  const node = await figma.getNodeByIdAsync(out.node.id);
+  const node = await figma.getNodeByIdAsync(out.id);
   const run = node._rangeFonts.find((r: any) => r.start === 0);
   assert.deepEqual(run.value, { family: "Inter", style: "Black Italic" });
 });
 
 test("a tuple StyleDelta can carry fontStyle/textDecoration/hyperlink directly", async () => {
   const out = await render(
-    text([["x", { fontStyle: "italic", textDecoration: "underline", hyperlink: "https://b.co" }]]),
+    ({ type: "TEXT", text: [["x", { fontStyle: "italic", textDecoration: "underline", hyperlink: "https://b.co" }]] }),
   );
-  const node = await figma.getNodeByIdAsync(out.node.id);
+  const node = await figma.getNodeByIdAsync(out.id);
   assert.equal(node._rangeFonts[0].value.style, "Italic");
   assert.deepEqual(node._rangeDecorations[0], { start: 0, end: 1, value: "UNDERLINE" });
   assert.deepEqual(node._rangeHyperlinks[0].value, { type: "URL", value: "https://b.co" });
@@ -123,33 +118,33 @@ test("a tuple StyleDelta can carry fontStyle/textDecoration/hyperlink directly",
 
 test("an explicit run fontWeight overrides the markdown bold weight", async () => {
   // `**` implies default bold; the tuple's explicit 900 wins (a non-canonical heavy weight isn't lost).
-  const out = await render(text([["**heavy**", { fontWeight: 900 }]]));
-  const node = await figma.getNodeByIdAsync(out.node.id);
+  const out = await render(({ type: "TEXT", text: [["**heavy**", { fontWeight: 900 }]] }));
+  const node = await figma.getNodeByIdAsync(out.id);
   assert.equal(node.characters, "heavy");
   assert.equal(node._rangeFonts[0].value.style, "Black");
 });
 
 test("a literal ** authored with escapes renders literally, no runs, and never re-tokenizes", () => {
-  const wn = text("price \\*\\* each");
+  const wn = compileTree(({ type: "TEXT", text: "price \\*\\* each" }), "spec");
   assert.equal(wn.text, "price ** each");
   assert.equal(wn.runs, undefined);
 });
 
 test("unrealizable fontStyle / textDecoration values fail loud naming the set", () => {
-  assert.throws(() => text("x", { textStyle: { fontStyle: "oblique" as never } }), /fontStyle must be one of/);
-  assert.throws(() => text("x", { textStyle: { textDecoration: "overline" as never } }), /textDecoration must be one of/);
+  assert.throws(() => compileTree(({ type: "TEXT", text: "x", textStyle: { fontStyle: "oblique" as never } }), "spec"), /fontStyle must be one of/);
+  assert.throws(() => compileTree(({ type: "TEXT", text: "x", textStyle: { textDecoration: "overline" as never } }), "spec"), /textDecoration must be one of/);
 });
 
 test("read-artifact and malformed run inputs fail loud", () => {
   // figma-mcp style-ref tokens are rejected on both the plain-string and the run-text forms.
-  assert.throws(() => text("a {ts1}bold{/ts1} b"), /style-ref tokens/);
-  assert.throws(() => text(["{ts1}bold{/ts1}"]), /style-ref tokens/);
+  assert.throws(() => compileTree(({ type: "TEXT", text: "a {ts1}bold{/ts1} b" }), "spec"), /style-ref tokens/);
+  assert.throws(() => compileTree(({ type: "TEXT", text: ["{ts1}bold{/ts1}"] }), "spec"), /style-ref tokens/);
   // An object first is the props-first form (content in `text`) — so a stray object is judged
   // as props, and its keys are named.
-  assert.throws(() => text({ characters: "hi" } as never), /unknown prop "characters" on flcm\.text/);
+  assert.throws(() => compileTree(({ type: "TEXT", ...({ characters: "hi" } as never) }), "spec"), /unknown prop "characters" on TEXT/);
   // Malformed runs.
-  assert.throws(() => text([]), /non-empty/);
+  assert.throws(() => compileTree(({ type: "TEXT", text: [] }), "spec"), /non-empty/);
   // The old { text, ... } object run form is no longer a valid run — a run is a bare string or a tuple.
-  assert.throws(() => text([{ text: "hi" } as never]), /plain string or a \[text, style\] tuple/);
-  assert.throws(() => text([[5, {}] as never]), /plain string or a \[text, style\] tuple/);
+  assert.throws(() => compileTree(({ type: "TEXT", text: [{ text: "hi" } as never] }), "spec"), /plain string or a \[text, style\] tuple/);
+  assert.throws(() => compileTree(({ type: "TEXT", text: [[5, {}] as never] }), "spec"), /plain string or a \[text, style\] tuple/);
 });

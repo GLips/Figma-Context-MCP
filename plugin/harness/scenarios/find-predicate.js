@@ -1,19 +1,16 @@
 // find(query?, predicate?) live round-trip: render a frame with mixed-fill rects, then locate by a
 // predicate over the EXPANDED read shape (fills are inline hex, not styles refs) — exercising the hybrid
 // filter (query pre-filter → materialize survivors → predicate) inside the preamble IIFE against live nodes.
-const swatches = flcm.frame(
-  {
+const swatches = ({ type: "FRAME", ...({
     key: "swatches",
     width: 320,
     fill: "#ffffff",
     layout: { mode: "row", gap: 12, padding: 24 },
-  },
-  [
-    flcm.rect({ key: "green", width: 48, height: 48, fill: "#22c55e" }),
-    flcm.rect({ key: "white", width: 48, height: 48, fill: "#ffffff" }),
-    flcm.rect({ key: "faded", width: 48, height: 48, fill: "#22c55e", opacity: 0.5 }),
-  ],
-);
+  }), children: [
+    ({ type: "RECTANGLE", ...({ key: "green", width: 48, height: 48, fill: "#22c55e" }) }),
+    ({ type: "RECTANGLE", ...({ key: "white", width: 48, height: 48, fill: "#ffffff" }) }),
+    ({ type: "RECTANGLE", ...({ key: "faded", width: 48, height: 48, fill: "#22c55e", opacity: 0.5 }) }),
+  ] });
 await flcm.render(swatches);
 
 // Predicate over inline styling values. A plain query find would need the exact key; the predicate lets us

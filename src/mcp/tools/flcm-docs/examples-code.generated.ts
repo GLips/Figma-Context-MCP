@@ -4,251 +4,295 @@
 
 export const EXAMPLE_CODE = {
   login: `const fields = [
-  { key: "email", label: "Email", placeholder: "you@example.com" },
-  { key: "password", label: "Password", placeholder: "••••••••" },
-].map(({ key, label, placeholder }) =>
-  flcm.frame({ key, layout: { mode: "column", gap: 6 }, width: "fill" }, [
-    flcm.text(label, {
-      textStyle: { fontSize: 13, fontWeight: 500 },
-      fill: "rgba(255,255,255,0.7)",
-    }),
-    flcm.frame(
-      {
-        layout: { mode: "row", alignItems: "center", padding: { x: 16 } },
-        width: "fill",
-        height: 48,
-        borderRadius: 12,
-        fill: "rgba(255,255,255,0.06)",
-        stroke: "rgba(255,255,255,0.12)",
-        strokeWidth: 1,
-      },
-      [flcm.text(placeholder, { textStyle: { fontSize: 15 }, fill: "rgba(255,255,255,0.4)" })],
-    ),
-  ]),
-);
-
-const screen = flcm.frame(
-  {
+    { key: "email", label: "Email", placeholder: "you@example.com" },
+    { key: "password", label: "Password", placeholder: "••••••••" },
+].map(({ key, label, placeholder }) => ({
+    type: "FRAME",
+    key,
+    layout: { mode: "column", gap: 6 },
+    width: "fill",
+    children: [
+        {
+            type: "TEXT",
+            text: label,
+            textStyle: { fontSize: 13, fontWeight: 500 },
+            fill: "rgba(255,255,255,0.7)",
+        },
+        {
+            type: "FRAME",
+            layout: { mode: "row", alignItems: "center", padding: { x: 16 } },
+            width: "fill",
+            height: 48,
+            borderRadius: 12,
+            fill: "rgba(255,255,255,0.06)",
+            stroke: "rgba(255,255,255,0.12)",
+            strokeWidth: 1,
+            children: [
+                {
+                    type: "TEXT",
+                    text: placeholder,
+                    textStyle: { fontSize: 15 },
+                    fill: "rgba(255,255,255,0.4)",
+                },
+            ],
+        },
+    ],
+}));
+const screen = {
+    type: "FRAME",
     key: "login",
     name: "Login",
     layout: { mode: "column", gap: 28, padding: 32 },
     width: 390,
     height: 844,
     fill: "linear-gradient(180deg, #0B1020 0%, #131A2E 100%)",
-  },
-  [
-    // Declared first → sits behind everything. \`left\`/\`top\` lift it out of the column flow.
-    flcm.ellipse({
-      name: "Glow",
-      left: -80,
-      top: -60,
-      width: 180,
-      height: 180,
-      fill: "radial-gradient(circle, #2A3A66 0%, #0B102000 70%)",
-      opacity: 0.6,
-    }),
-    flcm.text("Welcome back", {
-      key: "title",
-      fill: "#FFFFFF",
-      textStyle: { fontSize: 26, fontWeight: 700, letterSpacing: "-0.02em", lineHeight: "32px" },
-    }),
-    flcm.frame(
-      {
-        key: "card",
-        name: "Card",
-        layout: { mode: "column", gap: 16, padding: 28 },
-        width: "fill",
-        borderRadius: 20,
-        fill: "rgba(255,255,255,0.04)",
-        stroke: "rgba(255,255,255,0.08)",
-        strokeWidth: 1,
-        effects: { boxShadow: "0 12px 32px rgba(0,0,0,0.18)", backdropFilter: "blur(8px)" },
-      },
-      [
-        ...fields,
-        flcm.frame(
-          {
-            key: "submit",
-            name: "Submit",
-            layout: { mode: "row", justifyContent: "center", alignItems: "center" },
+    children: [
+        // Declared first → sits behind everything. \`left\`/\`top\` lift it out of the column flow.
+        {
+            type: "ELLIPSE",
+            name: "Glow",
+            left: -80,
+            top: -60,
+            width: 180,
+            height: 180,
+            fill: "radial-gradient(circle, #2A3A66 0%, #0B102000 70%)",
+            opacity: 0.6,
+        },
+        {
+            type: "TEXT",
+            text: "Welcome back",
+            key: "title",
+            fill: "#FFFFFF",
+            textStyle: { fontSize: 26, fontWeight: 700, letterSpacing: "-0.02em", lineHeight: "32px" },
+        },
+        {
+            type: "FRAME",
+            key: "card",
+            name: "Card",
+            layout: { mode: "column", gap: 16, padding: 28 },
             width: "fill",
-            height: 48,
-            borderRadius: 12,
-            fill: "#6366F1",
-          },
-          [
-            flcm.text("Sign in", {
-              textStyle: { fontSize: 15, fontWeight: 600 },
-              fill: "#FFFFFF",
-            }),
-          ],
-        ),
-      ],
-    ),
-  ],
-);
-
+            borderRadius: 20,
+            fill: "rgba(255,255,255,0.04)",
+            stroke: "rgba(255,255,255,0.08)",
+            strokeWidth: 1,
+            effects: { boxShadow: "0 12px 32px rgba(0,0,0,0.18)", backdropFilter: "blur(8px)" },
+            children: [
+                ...fields,
+                {
+                    type: "FRAME",
+                    key: "submit",
+                    name: "Submit",
+                    layout: { mode: "row", justifyContent: "center", alignItems: "center" },
+                    width: "fill",
+                    height: 48,
+                    borderRadius: 12,
+                    fill: "#6366F1",
+                    children: [
+                        {
+                            type: "TEXT",
+                            text: "Sign in",
+                            textStyle: { fontSize: 15, fontWeight: 600 },
+                            fill: "#FFFFFF",
+                        },
+                    ],
+                },
+            ],
+        },
+    ],
+};
 const out = await flcm.render(screen);
-
 return {
-  node: out.node.id, // the login frame's id
-  card: out.keyed.card.id, // a keyed node, addressed after render
-  title: out.keyed.title.text, // "Welcome back"
+    node: out.id, // the login frame's id
+    card: out.children[2].id,
+    title: out.children[1].text, // "Welcome back"
 };`,
   caption: `// One text node, three styles: a colored @handle, plain body copy, a muted "more". The base props
 // (size 15, a line height) apply to every run; each run overrides only what it changes.
-const caption = flcm.text(
-  [
-    ["@ridgeline", { fontWeight: "semibold", color: "#6366F1" }],
-    " summited at golden hour — the whole valley lit up. ",
-    ["more", { color: "#8E8E93" }],
-  ],
-  {
+const caption = {
+    type: "TEXT",
+    text: [
+        ["@ridgeline", { fontWeight: "semibold", color: "#6366F1" }],
+        " summited at golden hour — the whole valley lit up. ",
+        ["more", { color: "#8E8E93" }],
+    ],
     key: "caption",
     fill: "#111827",
     width: 340,
     textStyle: { fontSize: 15, lineHeight: "20px" },
-  },
-);
-
+};
 const out = await flcm.render(caption);
-return { caption: out.keyed.caption.id, text: out.keyed.caption.text };`,
-  vector: `// A round "play" button: a themed circle, with a themeable play triangle (flcm.path) centered on top,
-// and a brand mark pasted verbatim from SVG markup (flcm.svg) in the corner.
-const player = flcm.frame({ width: 96, height: 96, borderRadius: 48, fill: "#111827" }, [
-  // path themes like any primitive — the triangle fills with the accent color
-  flcm.path({
-    key: "play",
-    d: "M38 30 L70 48 L38 66 Z",
-    fill: "#6366F1",
-    left: 30,
-    top: 24,
-  }),
-  // svg pastes opaque markup (its colors are baked in — fill/stroke would be rejected here)
-  flcm.svg('<svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="#22C55E"/></svg>', {
-    width: 16,
-    height: 16,
-    left: 8,
-    top: 8,
-  }),
-]);
-
+return {
+    caption: out.id,
+    text: out.text,
+};`,
+  vector: `// A round "play" button: a themed circle, with a themeable play triangle (VECTOR with d) centered on top,
+// and a brand mark pasted verbatim from SVG markup (VECTOR with svg) in the corner.
+const player = {
+    type: "FRAME",
+    width: 96,
+    height: 96,
+    borderRadius: 48,
+    fill: "#111827",
+    children: [
+        // path themes like any primitive — the triangle fills with the accent color
+        {
+            type: "VECTOR",
+            key: "play",
+            d: "M38 30 L70 48 L38 66 Z",
+            fill: "#6366F1",
+            left: 30,
+            top: 24,
+        },
+        // svg pastes opaque markup (its colors are baked in — fill/stroke would be rejected here)
+        {
+            type: "VECTOR",
+            svg: '<svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="#22C55E"/></svg>',
+            width: 16,
+            height: 16,
+            left: 8,
+            top: 8,
+        },
+    ],
+};
 const out = await flcm.render(player);
-return { node: out.node.id, play: out.keyed.play.id };`,
+return { node: out.id, play: out.children[0].id };`,
   image: `// A feed post: a real photo as a rect fill, and a circular avatar as an ellipse filled with an image.
 // flcm.image is a paint value — any shape carries one. The server fetches the bytes; your code doesn't.
-const post = flcm.frame({ layout: { mode: "column", gap: 8 }, width: 390 }, [
-  flcm.rect({ width: 390, height: 260, fill: flcm.image("https://example.com/photo.jpg") }),
-  flcm.frame({ layout: { mode: "row", gap: 8, padding: 12, alignItems: "center" } }, [
-    flcm.ellipse({
-      width: 40,
-      height: 40,
-      fill: flcm.image("https://example.com/avatar.jpg", { scaleMode: "FILL" }),
-    }),
-    flcm.text("@ridgeline", { textStyle: { fontWeight: "semibold", fontSize: 14 } }),
-  ]),
-]);
-
+const post = {
+    type: "FRAME",
+    layout: { mode: "column", gap: 8 },
+    width: 390,
+    children: [
+        {
+            type: "RECTANGLE",
+            width: 390,
+            height: 260,
+            fill: flcm.image("https://example.com/photo.jpg"),
+        },
+        {
+            type: "FRAME",
+            layout: { mode: "row", gap: 8, padding: 12, alignItems: "center" },
+            children: [
+                {
+                    type: "ELLIPSE",
+                    width: 40,
+                    height: 40,
+                    fill: flcm.image("https://example.com/avatar.jpg", { scaleMode: "FILL" }),
+                },
+                { type: "TEXT", text: "@ridgeline", textStyle: { fontWeight: "semibold", fontSize: 14 } },
+            ],
+        },
+    ],
+};
 const out = await flcm.render(post);
-return out.node.id;`,
-  reuse: `// Copy a card that already exists on the canvas into a different container, widened on the way.
-// \`get\` reads it as the canonical shape; \`fromRead\` re-authors that shape through the constructors,
-// which is what makes it a COPY. A bare \`get\` result carries the original's live id, so passing one
-// straight to \`append\` is refused rather than read as "move the node I just looked at".
-// \`get\` returns an envelope — \`node\` is the read shape, and \`components\` (when the card holds instances)
-// names each component once, with the children every instance shares.
-const { node } = await flcm.get("card");
-const wider = flcm.fromRead({ ...node, width: 480, name: "Card (wide)" });
-const placed = await flcm.append("sidebar", wider);
-
-// fromRead REBUILDS, so it reaches only what flcm can author: a stacked paint or a grid container
-// fails loud naming the field (an INSTANCE rebuilds as a fresh stamp of its component).
-// flcm.clone(target, parent) duplicates the live node whole — faithful, but not editable before it lands.
-return placed;`,
+return out.id;`,
+  reuse: `const { node } = await flcm.get("card");
+// Keeping ids moves the nodes you read and edits their named props.
+const moved = await flcm.append("sidebar", { ...node, width: 480 });
+// Drop every node id to stamp a copy, including nodes in instance slot overrides.
+function withoutIds(value) {
+    if (Array.isArray(value))
+        return value.map(withoutIds);
+    if (!value || typeof value !== "object")
+        return value;
+    return Object.fromEntries(Object.entries(value)
+        .filter(([key]) => key !== "id")
+        .map(([key, child]) => [key, withoutIds(child)]));
+}
+const template = withoutIds(node);
+const copy = await flcm.append("sidebar", { ...template, name: "Card copy" });
+// clone preserves live state that the data vocabulary cannot express.
+const faithful = await flcm.clone(moved, "sidebar");
+return { moved, copy, faithful };`,
   makeComponent: `// Author a Button, then fold two sizes of it into a variant set. Each node a property drives says
 // so with \`componentPropertyReferences\`.
-const buildButton = (height: number) =>
-  flcm.frame(
-    {
-      name: "Button",
-      height,
-      layout: { mode: "row", gap: 8, padding: 12, alignItems: "center" },
-      fill: "#111827",
-      borderRadius: 8,
-    },
-    [
-      // A boolean property drives this dot's \`visible\`. Unnamed, \`visible\` derives to true, so
-      // the definition states the false.
-      flcm.ellipse({
-        width: 8,
-        height: 8,
-        fill: "#22C55E",
-        componentPropertyReferences: { visible: "Show Dot" },
-      }),
-      // A text property drives this content; its default derives from here ("Save").
-      flcm.text("Save", {
-        key: "label",
-        fill: "#FFFFFF",
-        componentPropertyReferences: { text: "Label" },
-      }),
-      // A slot property: this frame is the hole every instance fills.
-      flcm.frame({ width: 24, height: 24, componentPropertyReferences: { slot: "Trailing" } }),
+const buildButton = (height) => ({
+    type: "FRAME",
+    name: "Button",
+    height,
+    layout: { mode: "row", gap: 8, padding: 12, alignItems: "center" },
+    fill: "#111827",
+    borderRadius: 8,
+    children: [
+        // A boolean property drives this dot's \`visible\`. Unnamed, \`visible\` derives to true, so
+        // the definition states the false.
+        {
+            type: "ELLIPSE",
+            width: 8,
+            height: 8,
+            fill: "#22C55E",
+            componentPropertyReferences: { visible: "Show Dot" },
+        },
+        // A text property drives this content; its default derives from here ("Save").
+        {
+            type: "TEXT",
+            text: "Save",
+            key: "label",
+            fill: "#FFFFFF",
+            componentPropertyReferences: { text: "Label" },
+        },
+        // A slot property: this frame is the hole every instance fills.
+        { type: "FRAME", width: 24, height: 24, componentPropertyReferences: { slot: "Trailing" } },
     ],
-  );
-
+});
 const definitions = {
-  Label: { type: "text" },
-  "Show Dot": { type: "boolean", defaultValue: false },
-  Trailing: { type: "slot" },
-} as const;
-
+    Label: { type: "text" },
+    "Show Dot": { type: "boolean", defaultValue: false },
+    Trailing: { type: "slot" },
+};
 const small = await flcm.component(buildButton(32), {
-  name: "Button",
-  description: "The primary action.",
-  propertyDefinitions: definitions,
+    name: "Button",
+    description: "The primary action.",
+    propertyDefinitions: definitions,
 });
 const large = await flcm.component(buildButton(44), {
-  name: "Button",
-  propertyDefinitions: definitions,
+    name: "Button",
+    propertyDefinitions: definitions,
 });
-
 // Each entry says which member of the set its component IS; the axes are what an instance picks.
-const set = await flcm.variants(
-  [
-    { component: small.node, variant: { Size: "Small" } },
-    { component: large.node, variant: { Size: "Large" } },
-  ],
-  { name: "Button" },
-);
-
+const set = await flcm.variants([
+    { component: small, variant: { Size: "Small" } },
+    { component: large, variant: { Size: "Large" } },
+], { name: "Button" });
 // The set carries its members' shared properties, so Label is set beside the axis.
-await flcm.render(
-  flcm.instance(set, { componentProperties: { Size: "Large", Label: "Publish" } }),
-);
-// Keys stamped while authoring still address the COMPONENT's own subtree.
-return { set: set.id, label: small.keyed.label.id };`,
+await flcm.render({
+    type: "INSTANCE",
+    componentId: set,
+    componentProperties: { Size: "Large", Label: "Publish" },
+});
+// Each returned child carries its live identity.
+return { set: set.id, label: small.children[1].id };`,
   components: `// A toolbar from the file's Button set. Read it first: the \`components\` sidecar lists its property
 // names and sublayer paths, e.g. { Size: { type: "variant", variantOptions: [...] }, Label: { type: "text" } }.
 const button = await flcm.findOne({ type: "COMPONENT_SET", name: "Button" });
 const { components } = await flcm.get(button);
-
-const toolbar = flcm.frame({ key: "toolbar", layout: { mode: "row", gap: 8, padding: 12 } }, [
-  // The variant is picked by its axes, as a whole combination.
-  flcm.instance(button, {
-    key: "save",
-    componentProperties: { Size: "Large", State: "Default", Label: "Save" },
-  }),
-  // Plus a root-level override (width) and a sublayer override by component-relative path.
-  flcm.instance(button, {
-    key: "cancel",
-    width: 120,
-    componentProperties: { Size: "Large", Label: "Cancel" },
-    overrides: { "11:9": { fill: "#B91C1C" } },
-  }),
-]);
+const toolbar = {
+    type: "FRAME",
+    key: "toolbar",
+    layout: { mode: "row", gap: 8, padding: 12 },
+    children: [
+        // The variant is picked by its axes, as a whole combination.
+        {
+            type: "INSTANCE",
+            componentId: button,
+            key: "save",
+            componentProperties: { Size: "Large", State: "Default", Label: "Save" },
+        },
+        // Plus a root-level override (width) and a sublayer override by component-relative path.
+        {
+            type: "INSTANCE",
+            componentId: button,
+            key: "cancel",
+            width: 120,
+            componentProperties: { Size: "Large", Label: "Cancel" },
+            overrides: { "11:9": { fill: "#B91C1C" } },
+        },
+    ],
+};
 const out = await flcm.render(toolbar);
-
-const { node: save } = await flcm.get(out.keyed.save);
-await flcm.append("toolbar", flcm.instance({ ...save, name: "Save (copy)" }));
-return { toolbar: out.node.id, definitions: Object.keys(components ?? {}) };`,
+const { node: save } = await flcm.get(out.children[0]);
+const copy = { ...save };
+delete copy.id;
+await flcm.append("toolbar", { ...copy, name: "Save (copy)" });
+return { toolbar: out.id, definitions: Object.keys(components ?? {}) };`,
 } as const;

@@ -19,7 +19,6 @@ import {
   type SceneStyleResolver,
 } from "./node-to-snapshot.js";
 import { rejectUnknownKeys } from "./validate.js";
-import { markReadNode } from "./provenance.js";
 import { assertNodeStillOnCanvas } from "./freshness.js";
 import { simplify, type SimplifiedComponentEntry, type SimplifiedNode } from "@framelink/core";
 import type { NodeSnapshot } from "@framelink/core/snapshot";
@@ -245,7 +244,6 @@ export async function get(target: Target): Promise<GetResult> {
   }
   // Brand it, so a structural verb handed this back can refuse it instead of reading its live `id`
   // as a move target — the read shape is not authoring input until Phase 5's normalizer exists.
-  markReadNode(simplified);
   const result: GetResult = { node: simplified };
   if (Object.keys(components).length > 0) result.components = components;
   return result;
@@ -283,7 +281,7 @@ void _findKeysExhaustive;
 
 // A locate query is agent input at a system boundary, so an unknown facet (a typo'd `tpye`) FAILS LOUD
 // rather than silently matching every node — the ADR-0003 fail-loud contract, via the same closed-set gate
-// (validate.rejectUnknownKeys) the authoring constructors use, just with "query key" wording. Built once.
+// (validate.rejectUnknownKeys) the authoring compilers use, just with "query key" wording. Built once.
 const FIND_KEY_SET: ReadonlySet<string> = new Set(FIND_KEYS);
 
 // AND-combine the query facets. Empty-string facets are treated as "unset" (an empty substring would match

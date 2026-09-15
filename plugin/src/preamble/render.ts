@@ -1,15 +1,15 @@
-// render — the one place a constructor-built tree becomes live nodes. Split from flcm.ts (the constructors)
-// because its PREPARE reaches the edit compile through instance.ts (an flcm.instance's overrides
-// are edit deltas resolved against the live component), and edit-plan.ts imports the constructors'
-// leaf compilers — so a render living beside the constructors would close a module cycle.
+// render — the one place a compiled tree becomes live nodes. Split from flcm.ts (the compilers)
+// because its PREPARE reaches the edit compile through instance.ts (an INSTANCE's overrides
+// are edit deltas resolved against the live component), and edit-plan.ts imports the compilers'
+// leaf compilers — so a render living beside the compilers would close a module cycle.
 
 import { requestAnnotationCategories, requestTreeAnnotationCategories, resolveAnnotationCategories } from "./annotation-categories.js";
 import { WriteNode, Handle } from "./ir.js";
-import { assertConstructorBuiltTree } from "./provenance.js";
+import { loadLiveTree, gateLiveTree, LoadedLiveTree } from "./live-tree.js";
 import { assertSizingResolvesAgainstParentFrame } from "./layout-legality.js";
 import { loadFontsForTree, loadFontsForTextEdits } from "./fonts.js";
 import { assertExposureTree, type ExposureContext } from "./instance-exposure.js";
-import { buildNode, placeRootOnPage, settleHandles, resolvePercents, beginRenderWalk, RenderCtx, RenderResources } from "./bridge.js";
+import { buildNode, placeRootOnPage, resolvePercents, beginRenderWalk, RenderCtx, RenderResources } from "./bridge.js";
 import { describeRootOverlap } from "./root-overlap.js";
 import { enterMutatingVerb } from "./mutation-lock.js";
 import { fetchImagesForTrees, assertNoComponentPropertyBindings } from "./flcm.js";
@@ -20,6 +20,7 @@ import { createResolvedTargets, ResolvedTargets } from "./read.js";
 /** What a tree's prepare loaded, for its gate to finish: the resources, plus the targets its instances name. */
 export interface LoadedTreeResources extends LoadedResources {
   targets: ResolvedTargets;
+  live: LoadedLiveTree;
 }
 
 // The resource loads a tree needs before ANY node is created — every target its INSTANCE nodes
@@ -45,6 +46,7 @@ export interface LoadedTreeResources extends LoadedResources {
 // only after the first settles would leave an early font rejection briefly unhandled and mis-order
 // which failure wins.
 export async function loadTreeResources(tree: WriteNode): Promise<LoadedTreeResources> {
+  const live = await loadLiveTree(tree);
   const targets = createResolvedTargets();
   await resolveInstanceTreeTargets(tree, targets);
   const needs = planInstanceTree(tree, { targets });
@@ -70,7 +72,7 @@ export async function loadTreeResources(tree: WriteNode): Promise<LoadedTreeReso
   // Categories last of the three: resolving one can CREATE a file-scoped category, so a tree whose
   // image or font load was going to fail anyway never creates one to be cleaned up again.
   await resolveAnnotationCategories();
-  return { images, fonts, targets };
+  return { images: { ...live.loaded.images, ...images }, fonts: { ...live.loaded.fonts, ...fonts }, targets, live };
 
   // The tree's own text fonts (and its slot content's), plus every override delta's (an override
   // retypes a live sublayer — the same live-then-authored load an edit makes). Keyed by (family,
@@ -93,25 +95,28 @@ export async function loadTreeResources(tree: WriteNode): Promise<LoadedTreeReso
 export function gateTreeResources(tree: WriteNode, loaded: LoadedTreeResources, exposure: ExposureContext = {}): RenderResources {
   assertExposureTree(tree, exposure);
   const needs: InstanceNeeds = planInstanceTree(tree, { targets: loaded.targets, fonts: loaded.fonts });
-  return { fonts: loaded.fonts, images: loaded.images, instances: needs.plans };
+  const resources: RenderResources = { fonts: loaded.fonts, images: loaded.images, instances: needs.plans };
+  resources.live = gateLiveTree(loaded.live, resources);
+  return resources;
 }
 
 /**
- * The build sequence a constructor-built ROOT gets when it lands on the page: build the tree (percent children at
+ * The build sequence a compiled ROOT gets when it lands on the page: build the tree (percent children at
  * a provisional size), apply the root's own position words against the page, fold every percent and
  * anchor into pixels now that each parent's realized size is readable, and tell the agent when the
  * root landed on top of something.
  *
- * Shared rather than copied because `flcm.component`'s constructor-built form promises the agent its tree renders
+ * Shared rather than copied because `flcm.component`'s compiled form promises the agent its tree renders
  * "exactly as flcm.render would" — a second hand-rolled copy of these four steps makes that promise
  * false the first time one of them changes. The caller owns the ctx: whether bindings are collected
  * is the caller's declaration, not this function's (see RenderCtx.bindings).
  */
 export function buildTreeOnPage(tree: WriteNode, ctx: RenderCtx): any {
-  const root = buildNode(tree, ctx);
+  const live = ctx.live?.get(tree);
+  const root = live ? live.place(live.node.parent, () => {}, ctx) : buildNode(tree, ctx);
   // The root's own position words (absolute x/y, pin, anchor) apply against the page — the walk
   // above only positions CHILDREN, and edit applies the same words to a page child.
-  if (tree.layout) placeRootOnPage(root, tree.layout, ctx);
+  if (!live && tree.layout) placeRootOnPage(root, tree.layout, ctx);
   resolvePercents(ctx);
   // After resolvePercents, so the root's bounds are final — and through the CONSOLE channel, which
   // every already-installed plugin already returns. A new field on EXECUTE_CODE_RESULT would be a
@@ -122,56 +127,4 @@ export function buildTreeOnPage(tree: WriteNode, ctx: RenderCtx): any {
   return root;
 }
 
-// render(tree) — the one place nodes are created. Loads fonts, walks the WriteNode tree, stamps each
-// `key` into pluginData('flcm/key'), and returns the built tree's top node plus a map of every keyed node. Only
-// keyed nodes appear in `keyed`; a duplicate key within one render is a loud error (in bridge).
-// A single expression on purpose: the queue slot is reserved before render() can possibly yield,
-// which is the lock's invocation-order guarantee (see enterMutatingVerb) — don't add work above it.
-function render(tree: WriteNode): Promise<{ node: Handle; keyed: Record<string, Handle> }> {
-  return enterMutatingVerb(
-    "render",
-    // Prepare — tree checks, then the read-only resource loads (parallel: neither depends on the
-    // other, and they're the run's two slowest awaits). A reject here — a bad tree, a blocked url,
-    // oversize, unreachable — exits with zero mutations and zero undo residue, and a run the
-    // server cancelled during the awaits is refused before the entry seal. Deliberate cost:
-    // concurrent renders' prepares now SUM (each waits its turn in the queue slot) against the
-    // server's never-suspended 45s run ceiling — and font-only prepares, which emit no bridge
-    // traffic, against the 15s inactivity deadline too — where they used to overlap. The price
-    // of one entry shape for every verb; a run that genuinely needs many cold fetches should
-    // split its work. Upside: the per-run in-flight image cap can no longer refuse a
-    // Promise.all of image renders.
-    async () => {
-      if (!tree || typeof tree !== "object" || typeof tree.type !== "string") {
-        throw new Error("flcm.render: expected a node from flcm.frame()/text()/rect()/ellipse()/line()/svg()/path()/instance(), got " + JSON.stringify(tree) + ".");
-      }
-      // Authenticate provenance for the WHOLE tree before the resource loads below — a hand-built
-      // node must reject with its own message, not surface as a confusing image/font error after
-      // a wasted host round-trip.
-      assertConstructorBuiltTree(tree);
-      // A binding names a property only flcm.component declares, so through render the name points
-      // at nothing. Refused here, beside provenance, for the same reason: before any round trip.
-      assertNoComponentPropertyBindings(tree, "flcm.render");
-      // The root lands on the page, which has no bounded size to resolve "fill" or a percent
-      // against — reject before the image round-trip (this check needs no bytes) and before
-      // buildNode, which only guards a percent on a *child*. The rule is edit's page-parent gate,
-      // shared (assertSizingResolvesAgainstParentFrame), so the two verbs answer identically.
-      if (tree.layout) {
-        assertSizingResolvesAgainstParentFrame(tree.layout, true, "flcm");
-      }
-      return loadTreeResources(tree);
-    },
-    // Gate — the instance plans, made against the document at the seal.
-    (loaded) => gateTreeResources(tree, loaded),
-    // Apply — node creation, sealed as one undo step.
-    (resources) => {
-      // No `bindings`: render declares no component properties, so a bound node reaching the walk is
-      // a loud internal error rather than a silently dropped word (prepare refused it already).
-      const ctx = beginRenderWalk(resources);
-      const root = buildTreeOnPage(tree, ctx);
-      // Handles are minted only now: geometry settles once the whole tree is laid out (bridge.settleHandles).
-      return settleHandles(root, ctx.keyed);
-    },
-  );
-}
-
-export { render };
+export { render } from "./structure.js";

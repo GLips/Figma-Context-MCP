@@ -1,3 +1,4 @@
+import { specNode } from "../../harness/spec-node.js";
 // flcm.find / findOne / selection — the locate verbs return SlimHandles: the identity core plus a cheap
 // layout world-model, a sparse projection of the same canonical shape `get` emits. These pin the live-path
 // plumbing (query filter → simplify index → slim projection) over the figma mock; the shape's parity with
@@ -5,16 +6,16 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
-import { frame, rect, text, find, findOne, selection } from "./flcm.js";
+import { find, findOne, selection } from "./flcm.js";
 import { render } from "./render.js";
 
 test("find returns matching nodes as slim handles with in-context sizing intent", async () => {
   createFigmaMock();
   await render(
-    frame({ key: "card", width: 200, height: 100, layout: { mode: "row", gap: 8, padding: 12 } }, [
-      rect({ key: "chip", width: 40, height: 40 }),
-      text("hi", { key: "label" }),
-    ]),
+    ({ type: "FRAME", key: "card", width: 200, height: 100, layout: { mode: "row", gap: 8, padding: 12 }, children: [
+      ({ type: "RECTANGLE", key: "chip", width: 40, height: 40 }),
+      ({ type: "TEXT", text: "hi", key: "label" }),
+    ] }),
   );
 
   const rects = await find({ type: "RECTANGLE" });
@@ -38,9 +39,9 @@ test("find returns matching nodes as slim handles with in-context sizing intent"
 test("find surfaces container mode + childCount, and out-of-flow position/left/top", async () => {
   createFigmaMock();
   await render(
-    frame({ key: "card", width: 200, height: 120, layout: { mode: "column", gap: 8 } }, [
-      rect({ key: "floaty", left: 5, top: 7, width: 10, height: 10 }),
-    ]),
+    ({ type: "FRAME", key: "card", width: 200, height: 120, layout: { mode: "column", gap: 8 }, children: [
+      ({ type: "RECTANGLE", key: "floaty", left: 5, top: 7, width: 10, height: 10 }),
+    ] }),
   );
 
   const [card] = await find({ key: "card" });
@@ -56,11 +57,11 @@ test("find surfaces container mode + childCount, and out-of-flow position/left/t
 test("find AND-combines facets; name is a case-insensitive substring", async () => {
   createFigmaMock();
   await render(
-    frame({ key: "root", name: "Root" }, [
-      frame({ name: "Primary Button", width: 80, height: 30 }),
-      frame({ name: "Secondary Button", width: 80, height: 30 }),
-      text("Button label", { name: "Label" }),
-    ]),
+    ({ type: "FRAME", key: "root", name: "Root", children: [
+      ({ type: "FRAME", name: "Primary Button", width: 80, height: 30 }),
+      ({ type: "FRAME", name: "Secondary Button", width: 80, height: 30 }),
+      ({ type: "TEXT", text: "Button label", name: "Label" }),
+    ] }),
   );
 
   const buttons = await find({ type: "FRAME", name: "button" });
@@ -72,7 +73,7 @@ test("find AND-combines facets; name is a case-insensitive substring", async () 
 
 test("find returns empty for no match; an unknown query key fails loud", async () => {
   createFigmaMock();
-  await render(frame({ key: "root" }, [rect({ key: "card" })]));
+  await render(({ type: "FRAME", key: "root", children: [({ type: "RECTANGLE", key: "card" })] }));
 
   assert.deepEqual(await find({ type: "ELLIPSE" }), []);
   // A typo'd facet must not silently match everything (ADR-0003 fail-loud).
@@ -82,7 +83,7 @@ test("find returns empty for no match; an unknown query key fails loud", async (
 test("findOne returns the single hit, and throws naming the count on 0 or >1", async () => {
   createFigmaMock();
   await render(
-    frame({ key: "root" }, [rect({ key: "only", width: 10, height: 10 }), rect({ name: "dup" }), rect({ name: "dup" })]),
+    ({ type: "FRAME", key: "root", children: [({ type: "RECTANGLE", key: "only", width: 10, height: 10 }), ({ type: "RECTANGLE", name: "dup" }), ({ type: "RECTANGLE", name: "dup" })] }),
   );
 
   const one = await findOne({ key: "only" });
@@ -95,14 +96,14 @@ test("findOne returns the single hit, and throws naming the count on 0 or >1", a
 test("selection returns the current selection as slim handles; empty when nothing is selected", async () => {
   const figma = createFigmaMock();
   const out = await render(
-    frame({ key: "card", width: 100, height: 100, layout: { mode: "column" } }, [
-      rect({ key: "chip", width: 20, height: 20 }),
-    ]),
+    ({ type: "FRAME", key: "card", width: 100, height: 100, layout: { mode: "column" }, children: [
+      ({ type: "RECTANGLE", key: "chip", width: 20, height: 20 }),
+    ] }),
   );
 
   assert.deepEqual(await selection(), []);
 
-  const chipNode = await figma.getNodeByIdAsync(out.keyed.chip.id);
+  const chipNode = await figma.getNodeByIdAsync(specNode(out, "chip").id);
   figma.currentPage.selection = [chipNode];
   const sel = await selection();
   assert.equal(sel.length, 1);
@@ -113,12 +114,12 @@ test("selection returns the current selection as slim handles; empty when nothin
 test("find excludes hidden nodes — the read shape covers the rendered document, like get", async () => {
   const figma = createFigmaMock();
   const out = await render(
-    frame({ key: "wrap", width: 100, height: 100, layout: { mode: "column" } }, [
-      rect({ key: "shown", width: 10, height: 10 }),
-      rect({ key: "gone", width: 10, height: 10 }),
-    ]),
+    ({ type: "FRAME", key: "wrap", width: 100, height: 100, layout: { mode: "column" }, children: [
+      ({ type: "RECTANGLE", key: "shown", width: 10, height: 10 }),
+      ({ type: "RECTANGLE", key: "gone", width: 10, height: 10 }),
+    ] }),
   );
-  (await figma.getNodeByIdAsync(out.keyed.gone.id)).visible = false;
+  (await figma.getNodeByIdAsync(specNode(out, "gone").id)).visible = false;
 
   const rects = await find({ type: "RECTANGLE" });
   assert.deepEqual(
@@ -126,17 +127,17 @@ test("find excludes hidden nodes — the read shape covers the rendered document
     ["shown"],
   );
   // A hit whose ancestor is hidden is also unrendered.
-  (await figma.getNodeByIdAsync(out.keyed.wrap.id)).visible = false;
+  (await figma.getNodeByIdAsync(specNode(out, "wrap").id)).visible = false;
   assert.deepEqual(await find({ type: "RECTANGLE" }), []);
 });
 
 test("find with a predicate keeps only nodes it accepts, against inline styling values", async () => {
   createFigmaMock();
   await render(
-    frame({ key: "wrap", width: 200, height: 100, layout: { mode: "row", gap: 8 } }, [
-      rect({ key: "white", width: 40, height: 40, fill: "#ffffff" }),
-      rect({ key: "black", width: 40, height: 40, fill: "#000000" }),
-    ]),
+    ({ type: "FRAME", key: "wrap", width: 200, height: 100, layout: { mode: "row", gap: 8 }, children: [
+      ({ type: "RECTANGLE", key: "white", width: 40, height: 40, fill: "#ffffff" }),
+      ({ type: "RECTANGLE", key: "black", width: 40, height: 40, fill: "#000000" }),
+    ] }),
   );
 
   // The predicate reads the EXPANDED read shape — a fill is an inline hex value, not a "fill_…" ref.
@@ -150,10 +151,10 @@ test("find with a predicate keeps only nodes it accepts, against inline styling 
 test("a predicate-only find (no query facets) materializes every rendered candidate", async () => {
   createFigmaMock();
   await render(
-    frame({ key: "wrap", width: 100, height: 100, layout: { mode: "column" }, fill: "#112233" }, [
-      rect({ key: "opaque", width: 10, height: 10 }),
-      rect({ key: "faded", width: 10, height: 10, opacity: 0.5 }),
-    ]),
+    ({ type: "FRAME", key: "wrap", width: 100, height: 100, layout: { mode: "column" }, fill: "#112233", children: [
+      ({ type: "RECTANGLE", key: "opaque", width: 10, height: 10 }),
+      ({ type: "RECTANGLE", key: "faded", width: 10, height: 10, opacity: 0.5 }),
+    ] }),
   );
 
   const faded = await find({}, (n) => n.opacity !== undefined && n.opacity < 1);
@@ -163,10 +164,10 @@ test("a predicate-only find (no query facets) materializes every rendered candid
 test("query pre-filter narrows what the predicate sees (hybrid filter)", async () => {
   createFigmaMock();
   await render(
-    frame({ key: "wrap", width: 200, height: 100, layout: { mode: "row", gap: 8 } }, [
-      frame({ key: "panel", width: 40, height: 40, fill: "#ffffff" }),
-      rect({ key: "chip", width: 40, height: 40, fill: "#ffffff" }),
-    ]),
+    ({ type: "FRAME", key: "wrap", width: 200, height: 100, layout: { mode: "row", gap: 8 }, children: [
+      ({ type: "FRAME", key: "panel", width: 40, height: 40, fill: "#ffffff" }),
+      ({ type: "RECTANGLE", key: "chip", width: 40, height: 40, fill: "#ffffff" }),
+    ] }),
   );
 
   // Same fill predicate, but the query facet restricts candidates to FRAMEs — the rect is never tested.
@@ -177,10 +178,10 @@ test("query pre-filter narrows what the predicate sees (hybrid filter)", async (
 test("findOne threads the predicate and keeps its cardinality guard", async () => {
   createFigmaMock();
   await render(
-    frame({ key: "wrap", width: 200, height: 100, layout: { mode: "row", gap: 8 } }, [
-      rect({ key: "white", width: 40, height: 40, fill: "#ffffff" }),
-      rect({ key: "black", width: 40, height: 40, fill: "#000000" }),
-    ]),
+    ({ type: "FRAME", key: "wrap", width: 200, height: 100, layout: { mode: "row", gap: 8 }, children: [
+      ({ type: "RECTANGLE", key: "white", width: 40, height: 40, fill: "#ffffff" }),
+      ({ type: "RECTANGLE", key: "black", width: 40, height: 40, fill: "#000000" }),
+    ] }),
   );
 
   const one = await findOne({ type: "RECTANGLE" }, (n) => n.fill === "#FFFFFF");
@@ -210,7 +211,7 @@ test("a hit inside a core-collapsed SVG container still projects identity (no ge
   // identity-only rather than throwing. (To inspect it fully, `get(hit)` roots the node and doesn't
   // collapse a lone primitive.)
   createFigmaMock();
-  await render(frame({ key: "icon", width: 24, height: 24 }, [rect({ key: "dot", width: 4, height: 4 })]));
+  await render(({ type: "FRAME", key: "icon", width: 24, height: 24, children: [({ type: "RECTANGLE", key: "dot", width: 4, height: 4 })] }));
 
   const [dot] = await find({ key: "dot" });
   assert.equal(dot.key, "dot");

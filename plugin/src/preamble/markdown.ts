@@ -92,7 +92,7 @@ function findFirstLink(chs: Ch[]): Link | null {
     const url = unescapeLinkUrl(raw);
     if (!url.trim()) continue; // empty destination — not a link
     if (i > 0 && !chs[i - 1].lit && chs[i - 1].c === "!") {
-      throw new Error("flcm.text: markdown image syntax ![…](…) has no text equivalent — use flcm.image(url) for a raster fill, or flcm.svg(markup) / flcm.path({ d }) for vector art.");
+      throw new Error("TEXT: markdown image syntax ![…](…) has no text equivalent — use flcm.image(url) for a raster fill, or { type: \"VECTOR\", svg } / { type: \"VECTOR\", d } for vector art.");
     }
     return { start: i, innerStart: i + 1, innerEnd: j, after: k + 1, url };
   }
@@ -205,7 +205,7 @@ function pushSeg(segs: MdSegment[], seg: MdSegment): void {
 
 // Parse an authored plain string into styled segments. A string with no live markers and no escapes
 // returns a single flagless segment whose text equals the input — the common, allocation-cheap path.
-// The empty string returns []. Callers (flcm.text) treat a single flagless segment as plain `text` and
+// The empty string returns []. Callers (TEXT) treat a single flagless segment as plain `text` and
 // anything richer as `runs`.
 export function parseInlineMarkdown(raw: string): MdSegment[] {
   return parse(lex(raw));

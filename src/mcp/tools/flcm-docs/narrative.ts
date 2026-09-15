@@ -9,24 +9,32 @@
 // container stretch per-child, so it just works). What stays documented is the fail-loud boundary: what
 // we reject rather than approximate — plus the ONE honest silent exception (an unrenderable glyph).
 
-export const MENTAL_MODEL = `You **describe** a tree of nodes with plain function calls, then **render** it once.
+export const MENTAL_MODEL = `Nodes are plain JavaScript data. Each new node names its type: FRAME, TEXT, RECTANGLE, ELLIPSE, LINE, VECTOR, or INSTANCE. children is an ordinary array of node specs.
 
-- **Constructors create nothing.** \`flcm.frame(...)\`, \`flcm.text(...)\`, etc. build plain description objects and create *nothing* on the canvas. Only \`await flcm.render(tree)\` creates live nodes — so you can freely build, nest, and compose trees before rendering.
-- **CSS is the dialect — prop NAMES as well as values.** When CSS has a word for something, that is the word: \`color\`, \`fontSize\`, \`fontWeight\`, \`borderRadius\`, \`opacity\`, \`gap\`, \`padding\`, \`justifyContent\`, \`alignItems\`, \`mixBlendMode\` — camelCased, and \`column\`/\`row\` for direction. If you find yourself inventing a shorter name (\`radius\`, \`size\`, \`weight\`), reach for the CSS one instead. Where flcm has no CSS counterpart (\`key\`, \`anchor\`, \`pin\`, \`width: "fill"|"hug"\`) the props page is the only source — read it before your first render rather than guessing.
-- **Leaf values are CSS too.** Colors, gradients, shadows, and metrics are written the way you'd write them in CSS (\`"#0B1020"\`, \`"rgba(255,255,255,0.06)"\`, \`"linear-gradient(180deg, …)"\`, \`"24px"\`, \`"-0.02em"\`). You write this one familiar format; we translate it to Figma-native values for you. The catch: CSS can spell things Figma can't realize, so values **outside the documented subset fail loud** (a specific error) rather than rendering wrong pixels.
+\`\`\`js
+const template = { type: "FRAME", layout: { mode: "column", gap: 16 }, children: [
+  { type: "TEXT", text: "Hello" }
+] };
+const first = await flcm.render(template);
+const second = await flcm.render(template);
+\`\`\`
 
-There is no autocomplete and no type-checking where your code runs (a QuickJS sandbox), so everything you can write is spelled out in this reference. If a verb, prop, or value isn't documented, it isn't supported.`;
+Every placement verb compiles the tree, creates or moves each node, and returns a deep copy of the input with ids filled in. It never changes the input. The two calls above create two independent trees.
 
-export const CHILDREN = `- A frame's children are the **second positional argument**: an array (or a single child).
-- Children may be **falsy** — \`null\`, \`false\`, \`undefined\` are skipped, so \`showError && flcm.text(...)\` composes cleanly.
-- **Z-order is document order: declare back-to-front.** Earlier children sit behind later ones; there is no \`z\`/\`layer\` prop. A decoration placed with \`left\`/\`top\` that should sit behind content is declared first.`;
+An id identifies a live node, at every depth. A spec with an id moves that node and edits its named props; one without an id creates a new node. A minimal move is \`await flcm.append(parent, { id })\`. Children omitted from a live node's spec stay in the document. Use remove for deletion.
 
-export const RICH_TEXT = `\`flcm.text\` takes **either** a plain string **or** an array of **runs** — one text node, several styles.
+\`const { node } = await flcm.get(target); await flcm.append(parent, node)\` moves the node you read. To create a data copy, remove the ids from every node you want copied, including slot content in overrides. Removing only the root id creates a new root and moves its id-bearing children. Annotations are authored and copied. \`clone\` is the faithful live copy, including state the authoring vocabulary cannot express.
+
+Read-only fields with no authored equivalent fail by name. A contextual read size folds through designedWidth/designedHeight. Compressed style references, dash patterns, locked proportions and grid data are refused. An id-bearing IMAGE-SVG read resolves to its live type; without an id it cannot be recreated because the read omits vector geometry. Errors identify the verb and a path such as spec.children[3].children[1].`;
+
+export const CHILDREN = `Use \`children: [{ type: "TEXT", text: "Hi" }]\` on a FRAME. Compose with array spread and filter conditional entries before calling a verb. Every entry must be a plain node object. Instances expose editable content through slot paths in overrides. Unmentioned live children remain; an empty list does not delete them.`;
+
+export const RICH_TEXT = `\`TEXT\` takes **either** a plain string **or** an array of **runs** — one text node, several styles.
 
 **Markdown in a plain string** — \`**bold**\`, \`*italic*\`, \`~~strike~~\`, \`[text](url)\` — parses to styled spans:
 
 \`\`\`js
-flcm.text("Ship it **today** — see the [runbook](https://ex.co/run) first.");
+({ type: "TEXT", text: "Ship it **today** — see the [runbook](https://ex.co/run) first." });
 \`\`\`
 
 Backslash-escape to render one literally: \`"save 20% \\\\*today\\\\*"\`. Only \`\\ * _ ~ [ ] ( ) { }\` are escapable, and this matches figma-mcp's read output, so text you read back round-trips. \`![alt](url)\` fails loud — use \`flcm.image(url)\`.
@@ -35,12 +43,9 @@ Backslash-escape to render one literally: \`"save 20% \\\\*today\\\\*"\`. Only \
 
 \`\`\`js
 // a feed caption as ONE node: a colored @handle, plain body, a muted "more"
-flcm.text(
-  [ ["@ridgeline", { fontWeight: "semibold", color: "#6366F1" }],
+({ type: "TEXT", text: [ ["@ridgeline", { fontWeight: "semibold", color: "#6366F1" }],
     " summited at golden hour. ",
-    ["more", { color: "#8E8E93" }] ],
-  { textStyle: { fontSize: 14 } },
-);
+    ["more", { color: "#8E8E93" }] ], ...({ textStyle: { fontSize: 14 } }) });
 \`\`\`
 
 A run resolves its font exactly as the node does, and its delta may set any field in the table below. \`textAlign\`, \`textAlignVertical\` and \`lineClamp\` are whole-node only. A fixed \`width\` wraps the node into a flowing paragraph, so a styled paragraph is runs + a width.`;
@@ -48,9 +53,9 @@ A run resolves its font exactly as the node does, and its delta may set any fiel
 export const PERCENT_SIZING = `\`width\`, \`height\`, \`left\` and \`top\` take a percent string — \`"50%"\` of the parent's size on that axis, resolved against its *realized* size once layout settles (so a percent child of a \`"fill"\` or percent-sized parent is fine).
 
 \`\`\`js
-flcm.frame({ width: 300, height: 8, borderRadius: 4, fill: "#E5E7EB" }, [
-  flcm.rect({ width: "35%", height: 8, borderRadius: 4, fill: "#6366F1" }),   // 35% of the track
-]);
+({ type: "FRAME", ...({ width: 300, height: 8, borderRadius: 4, fill: "#E5E7EB" }), children: [
+  ({ type: "RECTANGLE", ...({ width: "35%", height: 8, borderRadius: 4, fill: "#6366F1" }) }),   // 35% of the track
+] });
 \`\`\`
 
 One case can't resolve and **fails loud**: an in-flow percent-*sized* child of an auto-layout parent that *hugs* that axis — the parent sizes to the child while the child sizes to the parent. Give the parent a fixed or \`"fill"\` size, or lift the child out of the flow with \`left\`/\`top\`. A percent (or \`"fill"\`) on the **root** fails loud too: its parent is the page, which is unbounded.
@@ -68,12 +73,12 @@ One case can't resolve and **fails loud**: an in-flow percent-*sized* child of a
 
 \`\`\`js
 // a close button that stays top-right as the card widens
-flcm.frame({ width: 320, height: 200 }, [
-  flcm.rect({ width: 28, height: 28, left: 284, top: 12, pin: { x: "right", y: "top" } }),
-]);
+({ type: "FRAME", ...({ width: 320, height: 200 }), children: [
+  ({ type: "RECTANGLE", ...({ width: 28, height: 28, left: 284, top: 12, pin: { x: "right", y: "top" } }) }),
+] });
 
 // a knob centred on the 40% mark
-flcm.ellipse({ width: 16, height: 16, left: "40%", top: "50%", anchor: { x: "center", y: "center" } });
+({ type: "ELLIPSE", ...({ width: 16, height: 16, left: "40%", top: "50%", anchor: { x: "center", y: "center" } }) });
 \`\`\`
 
 \`pin\` is ignored on an in-flow auto-layout child, which reflows through \`fill\`/\`hug\` instead. A bad \`pin\` or \`anchor\` value fails loud.
@@ -86,26 +91,14 @@ New text with omitted width fills a column whose available width is independentl
 
 Budget fixed widths together with padding and gaps; use \`"fill"\` for the remaining space. Fixed heights can overflow when text wraps or children grow. Use \`"hug"\` where the container should grow with content. Existing \`pin\` constraints control children of free-form containers and absolute children; in-flow auto-layout children use fill/hug. Inspect screenshots for visual quality beyond geometric overflow.`;
 
-export const VECTOR_INTRO = `Render real vector art — icons, logos, glyphs — instead of composing them from rects/ellipses or leaning on emoji (which render inconsistently and read as *content*, not iconography). There is **no built-in icon catalog**: bring your own SVG markup or path data.
-
-Two verbs, two contracts — not interchangeable:
-
-- **\`flcm.svg(markup, props?)\`** — paste a whole \`<svg>…</svg>\` and get it as-is. Colors are baked into the markup, so \`fill\`/\`stroke\` fail loud here; it takes size/position only.
-- **\`flcm.path(props)\`** — one vector from a single \`d\` string, taking our appearance props, so it themes like any other primitive. \`d\` is required.
+export const VECTOR_INTRO = `Use \`type: "VECTOR"\` with exactly one geometry prop:
 
 \`\`\`js
-// a themeable play triangle — fills with the theme color like a rect
-flcm.path({ d: "M8 5 L19 12 L8 19 Z", fill: "#6366F1", width: 24, height: 24 });
-
-// an opaque brand logo — colors live in the markup
-flcm.svg('<svg viewBox="0 0 24 24"><path d="M12 2 L22 20 L2 20 Z" fill="#0B1020"/></svg>', { width: 32, height: 32 });
+await flcm.render({ type: "VECTOR", d: "M0 0 L24 24", stroke: "#111", strokeWidth: 2 });
+await flcm.render({ type: "VECTOR", svg: '<svg width="24" height="24"><circle cx="12" cy="12" r="10" fill="red"/></svg>' });
 \`\`\`
 
-A \`path\` with no \`fill\` is transparent, like a rect. Unparseable markup or bad \`d\` data fails loud rather than leaving a blank node.
-
-**Sizing differs.** A \`path\` sizes to its \`d\` data's bounding box and needs no \`width\`/\`height\` to appear at natural size; \`width\`/\`height\` scale that box. An \`svg\` scales its \`viewBox\` into the size you give it.
-
-**For uniform translucency use node-level \`opacity\`** — it flattens the vector and fades it as one layer. \`fill-opacity\`/\`stroke-opacity\` inside markup composite per-subpath, so they seam where subpaths overlap.`;
+\`d\` is a themeable SVG path. \`svg\` imports markup whose colors are baked in; it accepts shared and size props. There is no icon catalog. Supply the artwork. An id-bearing VECTOR accepts d as a geometry edit and preserves its live identity. svg imports can change node types and child identities, so live svg replacement is refused by name. Move imported artwork with { id }, or omit its id to import a new copy.`;
 
 export const PAINT_INTRO = `A paint value (for \`fill\`, \`stroke\`, or a run's \`color\`) is one of:
 
@@ -115,8 +108,8 @@ export const PAINT_INTRO = `A paint value (for \`fill\`, \`stroke\`, or a run's 
 - \`flcm.image(src)\` — a raster fill from a url or local path (see **Images**).
 
 \`\`\`js
-flcm.frame({ fill: "linear-gradient(180deg, #0B1020 0%, #131A2E 100%)" });
-flcm.frame({ fill: flcm.gradient({ stops: ["#0B1020", "#131A2E"], angle: 180 }) });
+({ type: "FRAME", ...({ fill: "linear-gradient(180deg, #0B1020 0%, #131A2E 100%)" }) });
+({ type: "FRAME", ...({ fill: flcm.gradient({ stops: ["#0B1020", "#131A2E"], angle: 180 }) }) });
 flcm.gradient("linear" | "radial", stops, angle);   // the positional form
 \`\`\``;
 
@@ -125,8 +118,8 @@ export const IMAGE_INTRO = `Place a **real raster image** — feed media, an ava
 \`flcm.image(src, opts?)\` is a **paint value**, like \`flcm.gradient\` — not a node type. An image in Figma is a fill, so any shape carries one: a \`rect\` for a photo, an \`ellipse\` for a circular avatar, a \`frame\` for a hero. \`src\` is an https url or a local file path, like CSS \`url()\`.
 
 \`\`\`js
-flcm.ellipse({ width: 48, height: 48, fill: flcm.image("https://example.com/face.jpg") });
-flcm.rect({ width: 120, height: 40, fill: flcm.image("public/logo.png", { scaleMode: "FIT" }) });
+({ type: "ELLIPSE", ...({ width: 48, height: 48, fill: flcm.image("https://example.com/face.jpg") }) });
+({ type: "RECTANGLE", ...({ width: 120, height: 40, fill: flcm.image("public/logo.png", { scaleMode: "FIT" }) }) });
 \`\`\`
 
 - **The server loads the bytes** — your code never touches the network or the filesystem. Any public http(s) url works.
@@ -136,47 +129,18 @@ flcm.rect({ width: 120, height: 40, fill: flcm.image("public/logo.png", { scaleM
 export const EFFECTS_INTRO = `Write effects as the CSS you'd already write — a bag of \`{ boxShadow?, textShadow?, filter?, backdropFilter? }\`. \`flcm.effects({...})\` is the second form, and the only way to reach the Figma-native effects CSS has no word for (\`glass\`, \`noise\`, \`texture\`, \`progressiveBlur\`).
 
 \`\`\`js
-flcm.frame({ effects: { boxShadow: "0 12px 32px rgba(0,0,0,0.18)", backdropFilter: "blur(16px)" } });
-flcm.frame({ effects: flcm.effects({ shadow: { y: 12, blur: 32, color: "rgba(0,0,0,0.18)" }, glass: { refraction: 0.4 } }) });
+({ type: "FRAME", ...({ effects: { boxShadow: "0 12px 32px rgba(0,0,0,0.18)", backdropFilter: "blur(16px)" } }) });
+({ type: "FRAME", ...({ effects: flcm.effects({ shadow: { y: 12, blur: 32, color: "rgba(0,0,0,0.18)" }, glass: { refraction: 0.4 } }) }) });
 \`\`\`
 
 Blur values are written in **CSS px** — you always write the CSS number and we map it to Figma's scale for you.
 
 **\`glass\` needs a high-frequency backdrop to read as glass.** \`refraction\` and \`dispersion\` bend what is *behind* the pane, so over a flat fill or a smooth gradient there is nothing to bend and the result looks like a plain frosted tint — that's the physics of the scene, not a broken effect. Put busy content behind it (an image, dense text, an icon grid, a sharp-edged shape) and the refraction becomes visible.`;
 
-export const RENDER_KEYS = `\`render\` is **async** — always \`await\` it. It loads fonts, creates the nodes, stamps each \`key\`, and returns:
+export const RENDER_KEYS = `\`await flcm.render(spec)\` places the spec on the current page. Set left/top on the root for canvas position. Its return is the input tree copied with ids, including every child and each node in instance slot content. Use those ids directly with get, edit, append and the other target-taking verbs.
 
-\`\`\`js
-{
-  node:  Handle,               // the top node of the tree
-  keyed: { [key]: Handle }     // every node you gave a \`key\`
-}
-\`\`\`
+\`key\` is optional persistent metadata used by find and findOne. It does not decide identity. Duplicate keys within one authored tree are refused. Returned dimensions remain the authored values; use measure for realized pixels and get for current read data.`;
 
-A **Handle** is a plain object safe to return or log: \`{ id, type, name, width, height, key?, text?, intent?, position?, left?, top? }\`.
-
-\`width\`/\`height\` are **always numbers** — real px measured after layout settles, so \`bar.width + 8\` works. They're the node's own size, unaffected by \`rotation\`.
-
-\`\`\`js
-out.keyed.bar.width;      // 320       — what it came out at
-out.keyed.bar.intent;     // { width: "fill" }
-out.keyed.chip.intent;    // undefined — a plainly fixed node
-\`\`\`
-
-**\`intent\` tells you whether that number is yours to keep.** It appears only on an axis the layout owns (\`"fill"\`/\`"hug"\`), which re-measures whenever the parent or content changes — reading \`320\` off a \`"fill"\` bar and hardcoding it is how a responsive design silently becomes fixed.
-
-\`left\`/\`top\` are the offset in the parent, present **only when the parent doesn't place the node** (a child of a plain frame, or one lifted out of an auto-layout flow — which also carries \`position: "absolute"\`). They are the same \`left\`/\`top\` you write.
-
-\`get\`/\`find\` name geometry the same way, with one difference: \`render\` just measured, so it gives the number *and* the rule; \`find\` reports \`width: "fill"\` and withholds the px, so nothing tempts you to pin a size the design didn't fix.
-
-**Keys are opt-in addressing.** Only keyed nodes appear in \`out.keyed\`. They must be unique within a render (a duplicate is a loud error) and are global to it, so namespace by hand (\`"email:input"\`). The key is stored on the node (\`pluginData("flcm/key")\`).
-
-**Return ids or handles, never live Figma nodes** — a live node can't cross the bridge, so returning one is a loud error.`;
-
-// The one fragment that documents a *tool* rather than a DSL verb. That crossing is deliberate: the
-// build→see→fix loop spans both layers, and this reference is the agent's whole map — a loop documented
-// only on one side is the loop an agent never runs. The wording keeps the layer distinction explicit so
-// it can't read as "get_screenshot is part of flcm".
 export const VERIFY_READBACK = `You cannot judge what you built from the code you wrote — hairlines, grain, glass, 1px strokes and missing glyphs all *look* fine in source. **Build → screenshot → look → fix.**
 
 \`get_screenshot\` is a separate **MCP tool**, not an \`flcm\` verb (there is no \`flcm.screenshot\`). Each \`figma_execute_code\` call runs in its own scope, so what crosses between calls is a **string you copy** out of the render result.
@@ -184,7 +148,7 @@ export const VERIFY_READBACK = `You cannot judge what you built from the code yo
 \`\`\`js
 // call 1 — figma_execute_code
 const out = await flcm.render(card);
-return { id: out.node.id, bar: out.keyed.transportBar.id };
+return out;
 \`\`\`
 
 \`\`\`
@@ -282,12 +246,11 @@ export const FAILS_LOUD = `Accepting CSS is a fidelity promise, so the boundarie
 | --- | --- |
 | A color / gradient / effect outside the [CSS subset](#the-css-subset) | Parse error naming the value. |
 | An \`flcm.image\` source that is unfetchable, blocked (private/loopback), outside the server's asset root, oversize, or not an image | Rejected server-side with the reason, never a blank fill. |
-| An \`flcm.text\` value that is neither a string nor a runs array, or text carrying read style-ref tokens (\`{ts1}…{/ts1}\`) | Those are read artifacts. Author styled text as markdown or runs. \`**\` in a plain string is markdown — backslash-escape for a literal. |
+| An \`TEXT\` value that is neither a string nor a runs array, or text carrying read style-ref tokens (\`{ts1}…{/ts1}\`) | Those are read artifacts. Author styled text as markdown or runs. \`**\` in a plain string is markdown — backslash-escape for a literal. |
 | \`![alt](url)\` in a text string, or an unrealizable \`fontStyle\`/\`textDecoration\` (\`"oblique"\`, \`"overline"\`) | Text can't embed an image (\`flcm.image\`); the enum names the supported set. |
 | A duplicate \`key\` in one render | Keys are unique per render. |
 | A node \`type\` outside FRAME/TEXT/RECTANGLE/ELLIPSE/LINE/VECTOR | Those are the only createable types. |
-| A hand-built node POJO (including a spread-copy of a real one) | The constructors validate at the boundary; a hand-assembled shape could smuggle a combination they'd refuse. Nodes compile at construction and are sealed, so mutating one afterwards throws. |
-| \`fill\`/\`stroke\` on \`flcm.svg\` | Colors are baked into the markup — edit it, or use \`flcm.path\` for a themeable vector. |
+| \`fill\`/\`stroke\` on \`VECTOR\` | Colors are baked into the markup — edit it, or use \`VECTOR\` for a themeable vector. |
 | Unparseable SVG markup, or bad path \`d\` data | Never a silent blank node. |
 | Returning a live Figma node | Return the id string or a handle. |
 | A bad \`pin\` or \`anchor\` value, or \`anchor\` on an axis without its \`left\`/\`top\` | Names the value and the allowed set. |
@@ -297,9 +260,9 @@ export const FAILS_LOUD = `Accepting CSS is a fidelity promise, so the boundarie
 | \`textStyle.lineClamp\` on a width-hugging text | Truncation needs a width to wrap against. Set \`width\` to a number, \`"fill"\`, or \`"N%"\`. |
 | A layout word the node can't realize — a fixed/\`"hug"\`/percent \`height\` on TEXT, \`"hug"\` with nothing to measure, or container words without \`layout.mode\` | The same rules govern create and edit alike, so a word that wouldn't land names the fix instead. |
 
-An \`imageRef\` identifies an existing image in this file and can be reused, for example \`flcm.rect({ fill: { type: "IMAGE", imageRef } })\`.
+An \`imageRef\` identifies an existing image in this file and can be reused, for example \`({ type: "RECTANGLE", ...({ fill: { type: "IMAGE", imageRef } }) })\`.
 
-Variables and prototype interactions are deliberately **out of v1** — read concepts with no create path. They're rejected loudly so you never half-write something unrealizable. (Components have one: \`flcm.instance\` — see the components section.)
+Variables and prototype interactions are deliberately **out of v1** — read concepts with no create path. They're rejected loudly so you never half-write something unrealizable. (Components have one: \`INSTANCE\` — see the components section.)
 
 ### The one silent exception: unrenderable glyphs
 
@@ -342,62 +305,27 @@ Reach for it whenever you're nudging more than one node — a loop over \`flcm.e
 
 Props only: tree shape stays with \`append\`/\`move\`/\`remove\`/\`clone\`.`;
 
-export const STRUCTURE_INTRO = `Tree shape is its own set of verbs, and **position is the verb** — no index argument, no options bag. \`append\`/\`prepend\` take the parent; \`insertBefore\`/\`insertAfter\` take a **sibling** and work out the parent from it.
-
-\`thing\` is one of two, meaning what they mean in the DOM:
-
-- a **constructor-built node** — built inside the destination. Returns \`{ node, keyed, to }\`: what \`render\` gives you, plus the container it landed in.
-- a **target naming a live node** — **moved** there, as \`appendChild\` moves an attached DOM node. Returns \`{ node, from, to }\`.
-
-Related operations: \`flcm.move(target, parent)\` is the plain reparent (subject named first, node lands last), \`flcm.remove(target)\` deletes a node and its subtree, \`flcm.clone(target, parent?)\` duplicates one.
-
-**\`clone\` is the copy path for subtrees a rebuild can't reproduce** — anything containing an INSTANCE, which is most real content. It duplicates the LIVE node, and the copy comes back **key-less** (a raw \`node.clone()\` would copy the \`flcm/key\` too, giving two nodes one address). It is faithful down to coordinates, so in a free-form parent it lands on top of the original — edit its \`left\`/\`top\` to separate them.
-
-\`flcm.clone(target, props, parent?)\` applies ordinary root size/style/position overrides as part of the copy; \`clone(target, parent?)\` remains valid. Component property edits are separate. Clone restores text, visibility, and instance-swap bindings with the destination definition IDs; owned SLOT definitions reject before writing because their restoration is unsupported.
-
-\`flcm.measure(target)\` returns current numeric \`{ x, y, width, height }\` relative to the immediate parent, including a page. Use those values with clone's \`width\`/\`height\`/\`left\`/\`top\` props when placing a measured copy. \`flcm.replace(target, constructorBuiltSpec)\` keeps parent/index and compatible sizing, placement, constraints, and bounds; explicit spec fields win. It returns the replacement's current handle and removes the old target only after the replacement succeeds.
-
-Every return carries the subject plus each container whose geometry could have changed — flat handles with fresh geometry, never nested trees. \`to\` is where things ended up, \`from\` is what something left; either is absent when that container is the page, and \`from\` is absent when you reordered inside one parent.`;
-
-export const STRUCTURE_RULES = `### Rules
-
-- **Sizing that depends on the parent works on insert.** The node is attached *before* it is sized, so \`width: "fill"\` on an appended node fills the destination.
-- **Layout legality is re-asked against the DESTINATION**, with the new parent's facts: \`"fill"\`/\`"N%"\` into a page parent, a TEXT \`height: "fill"\` landing out of a row/column flow, a percent child of a hugging parent, or any parent-relative word under a GRID parent each reject loud before anything moves. Legal where a node sat is not automatically legal where it lands.
-- **A move re-aims the moved node's fill.** \`"fill"\` is a mark on the parent's primary or counter axis, and those axes move with the node, so it is cleared and re-applied against the new parent. Fixed sizes are untouched.
-- **A stretch container does not stretch what you insert.** Figma stores no container-level stretch — a stretched child is indistinguishable from one that asked for counter-axis \`"fill"\` — so re-assert it with \`flcm.edit(parent, { layout: { alignItems: "stretch" } })\`, which re-synthesizes the marks over every child.
-- **An instance's CHILD LIST is closed — except inside a SLOT.** Placing into an instance, or moving/removing one of its children, rejects loud and names it — edit the main component instead. A \`SLOT\` node inside the instance is the opening: its content is the instance's own, so \`append\`/\`insertBefore\`/\`move\`/\`remove\` work on and under it however deep (the SLOT node itself stays put). The instance itself is an ordinary node: moving, removing and cloning it are fine.
-- **A node can't be placed inside itself or its own subtree**; the refusal names both nodes.
-- **Each call is one undo step**, with \`edit\`'s contract: validate before the first write, roll the whole call back on a Figma refusal.
-
-### Cut, copy, paste
-
-No separate clipboard API — the verbs compose:
-
-| You want | Use |
-| --- | --- |
-| cut & paste | \`flcm.move(target, parent)\` |
-| paste a faithful copy | \`flcm.clone(target, parent?)\` — any subtree, instances included |
-| paste with modifications | \`flcm.append(parent, flcm.fromRead(node))\`, or \`clone\` then \`edit\` |
-| delete | \`flcm.remove(target)\` |
-
-\`flcm.find\` and \`flcm.findOne\` accept a literal case-insensitive name substring or a JavaScript RegExp, for example \`{ name: /^Copy/i }\`. Regex flags are preserved and repeated searches do not advance the expression's lastIndex.
-
-\`flcm.get\` returns \`{ node, components }\`. \`node\` is the read shape; \`components\` appears only when the subtree holds a component or an instance of one, and names each one ONCE — its \`children\` and its property definitions live there, keyed by component id. An INSTANCE therefore carries no \`children\` of its own: it carries \`componentId\` plus \`overrides\`, a map from component-relative sublayer path to just the fields that differ from the component. An omitted field means "same as the component"; \`null\` means the instance does not have that field at all (a paint removed, an opacity put back to 1); \`visible: false\` means the designer hid that layer. Reconstruct any sublayer's live id as \`I<instanceId>;<path>\`. An entry marked \`childrenUnverified\` came from a published library at its current version, which the file may not have adopted — treat a \`visible: false\` under it as possibly a layer the library added rather than one the designer hid; \`childrenFrom\` instead means the children were donated by that instance, edits and all.
-
-A \`get\` result is not authoring input on its own: a bare \`get\` result passed to \`append\` is rejected rather than quietly treated as a move, because it carries a live \`id\` exactly as a handle does — only you can say copy or move. \`flcm.fromRead(node)\` says copy: it re-authors the subtree through the constructors, so you can edit the read shape first (\`{ ...node, width: 320 }\`), and the copy comes back key-less. A single node's read shape also spreads straight into its constructor or an edit — \`flcm.rect({ ...node, width: 320 })\` — since the constructors read the read shape's spellings; \`fromRead\` is for a subtree, whose \`children\` are read shapes rather than built nodes.
-
-\`fromRead\` rebuilds; \`clone\` duplicates. Rebuilding reaches only what flcm can author, so a stacked paint, a grid container or a flattened \`IMAGE-SVG\` fails loud naming the field — \`clone\` is the answer for those. An INSTANCE rebuilds through \`flcm.instance\`: a fresh stamp of the same component, with the read's property values and overrides re-applied.`;
-
-export const COMPONENTS_CREATE = `\`await flcm.component(nodeOrTarget, options?)\` makes a COMPONENT and returns \`{ node, keyed }\` as \`render\` does, \`node\` being the COMPONENT's handle. Two forms, told apart as \`append\` tells them apart:
+export const STRUCTURE_INTRO = `All placement verbs take a plain spec. append and prepend take a parent; insertBefore and insertAfter take a sibling. render uses the current page. Each returns a deep copy of the spec with every node id filled in.
 
 \`\`\`js
-const { node, keyed } = await flcm.component(flcm.frame({ name: "Button" }, [flcm.text("Label", { key: "label" })]), { name: "Button" });
-await flcm.component(flcm.id("12:34"), { name: "Card", description: "The list card." });
+const panel = await flcm.render({ type: "FRAME", width: 320, height: 200 });
+const label = await flcm.append(panel, { type: "TEXT", text: "Hello" });
+await flcm.prepend(panel, { id: label.id, text: "Moved and edited" });
 \`\`\`
 
-- **The constructor-built form** renders as \`render\` does (fonts, images, root placement), then promotes the root. Every \`key\` survives (the root's lands on the COMPONENT), so \`keyed\` addresses the component's children.
-- **The target form** promotes in place (same parent and index). Old root IDs resolve to the new component when the original node is absent; aliases persist in this file, and returned handles use the current ID. It refuses a COMPONENT or COMPONENT_SET (edit it), an INSTANCE (Figma would *wrap* it; detach first), a node inside an instance, a SLOT, and a page.
-- Nothing is written until every gate passes; the call is one undo step.`;
+No id creates. An id moves and edits that live node. This applies recursively, including new children inside moved nodes and live children inside new nodes.`;
+
+export const STRUCTURE_RULES = `Placement is one undo step. Malformed input and unresolved resources fail before writing; a Figma write failure rolls the call back. A node cannot move into itself or a descendant. Figma instance sublayers cannot be moved; slot content remains open.
+
+Unmentioned children are retained. remove explicitly deletes a node and its subtree. replace places a spec at a target's position and removes the original after placement succeeds. A new replacement inherits omitted placement and size; explicit props win. Replacing a node with its own id edits it without deleting it.
+
+clone duplicates the live subtree faithfully and clears its keys. It returns { node, to? }; the default destination is the source parent. Optional root props apply before returning the copy.
+
+get returns { node, components? }. Use its node as a spec. A read may omit state the authoring compiler cannot recover; clone preserves that live state.`;
+
+export const COMPONENTS_CREATE = `\`await flcm.component(specOrTarget, options?)\` promotes a FRAME to a COMPONENT. A new spec is placed on the current page; a live root stays where it is and receives the named edits and children before promotion. The return is the spec copied with ids, with the new component id at the root. Figma preserves child identity during promotion.
+
+Options are name, description and propertyDefinitions. Child componentPropertyReferences bind authored fields to those definitions.`;
 
 export const COMPONENTS_PROPERTIES = `A primary nested instance inside a component definition accepts \`exposed: true\` to show its existing controls in the enclosing instance panel; \`false\` clears exposure. This works in component construction and edits to the definition's nested instance.
 
@@ -405,11 +333,11 @@ export const COMPONENTS_PROPERTIES = `A primary nested instance inside a compone
 
 \`\`\`js
 await flcm.component(
-  flcm.frame({ name: "Row" }, [
-    flcm.instance(icon, { componentPropertyReferences: { componentId: "Icon" } }),
-    flcm.text("Label", { componentPropertyReferences: { text: "Label", visible: "Show Label" } }),
-    flcm.frame({ width: 240, height: 80, componentPropertyReferences: { slot: "Content" } }),
-  ]),
+  ({ type: "FRAME", ...({ name: "Row" }), children: [
+    ({ type: "INSTANCE", componentId: icon, ...({ componentPropertyReferences: { componentId: "Icon" } }) }),
+    ({ type: "TEXT", text: "Label", ...({ componentPropertyReferences: { text: "Label", visible: "Show Label" } }) }),
+    ({ type: "FRAME", ...({ width: 240, height: 80, componentPropertyReferences: { slot: "Content" } }) }),
+  ] }),
   {
     propertyDefinitions: {
       Icon: { type: "instance_swap" },
@@ -421,7 +349,7 @@ await flcm.component(
 );
 \`\`\`
 
-- **One field per type, on the node that owns it:** \`boolean\` → \`visible\` (any node), \`text\` → \`text\` (\`flcm.text\`), \`instance_swap\` → \`componentId\` (\`flcm.instance\`), \`slot\` → \`slot\` (\`flcm.frame\`). A field on the wrong constructor fails at construction; an undeclared name fails loud listing the declared ones, a mismatched type fails loud.
+- **One field per type, on the node that owns it:** \`boolean\` → \`visible\` (any node), \`text\` → \`text\` (\`TEXT\`), \`instance_swap\` → \`componentId\` (\`INSTANCE\`), \`slot\` → \`slot\` (\`FRAME\`). A field on the wrong node type fails at the verb; an undeclared name fails loud listing the declared ones, a mismatched type fails loud.
 - **Omit \`defaultValue\` to derive it from the binding node**: its \`visible\` (unnamed is \`true\`), its text, its component. That needs exactly one binder: a property nothing binds must state one; two binders leave no single value.
 - **A slot IS a frame you author.** The bound frame stays in the definition, placeholder children and all, and every instance shows it as a SLOT holding that content until it fills it (below). A slot no frame binds is refused (rather than Figma's unpositioned 100×100 box); two frames on one slot are refused: a slot is one hole.
 - **\`variant\` is not a type.** Axes come from folding components into a set (\`flcm.variants\`).
@@ -430,12 +358,12 @@ await flcm.component(
 export const COMPONENTS_VARIANTS = `\`await flcm.variants(entries, { name, description? })\` folds standalone components into a COMPONENT_SET and returns its handle. Each entry says which member of the set its component **is**; an instance picks a member by those axes in \`componentProperties\`.
 
 \`\`\`js
-const small = await flcm.component(flcm.frame({ width: 96, height: 32 }), { name: "Button" });
-const large = await flcm.component(flcm.frame({ width: 128, height: 44 }), { name: "Button" });
+const small = await flcm.component(({ type: "FRAME", ...({ width: 96, height: 32 }) }), { name: "Button" });
+const large = await flcm.component(({ type: "FRAME", ...({ width: 128, height: 44 }) }), { name: "Button" });
 const set = await flcm.variants(
   [
-    { component: small.node, variant: { Size: "Small" } },
-    { component: large.node, variant: { Size: "Large" } },
+    { component: small, variant: { Size: "Small" } },
+    { component: large, variant: { Size: "Large" } },
   ],
   { name: "Button" },
 );
@@ -466,7 +394,7 @@ await flcm.edit(comp, {
 
 ### Binding a layer — \`componentPropertyReferences\` under edit
 
-The constructors' word on a live sublayer of a component; \`null\` unbinds a field, which keeps its value.
+The compiler's word on a live sublayer of a component; \`null\` unbinds a field, which keeps its value.
 
 \`\`\`js
 await flcm.edit(comp, { propertyDefinitions: { Heading: { type: "text", defaultValue: "Untitled" } } });
@@ -475,38 +403,26 @@ await flcm.edit(titleId, { componentPropertyReferences: { visible: null } });   
 \`\`\`
 
 - The node must be inside a COMPONENT or a set's variant: inside an INSTANCE it is refused naming the instance, and outside any component there is no property to point at.
-- Field legality is the constructors', read off the live node's type. Bare names resolve to Figma's suffixed ones when unambiguous.
+- Field legality is the compiler's, read off the live node's type. Bare names resolve to Figma's suffixed ones when unambiguous.
 - **Unbinding the only frame of a slot property is refused**: delete the property (\`{ Name: null }\`), which frees the frame. In a SET the count is per VARIANT; a sibling variant's frame is no spare.
 - An \`editMany\` batch can't mix a definition edit with an entry that depends on it (binding to a name it renames, or setting that property on an INSTANCE): refused naming both, so use two calls.
 
 ### Inserting a bound layer
 
-\`append\`/\`prepend\`/\`insertBefore\`/\`insertAfter\` into a component or its sublayers accept a constructor-built node carrying \`componentPropertyReferences\`.
+\`append\`/\`prepend\`/\`insertBefore\`/\`insertAfter\` into a component or its sublayers accept a plain node spec carrying \`componentPropertyReferences\`.
 
 \`\`\`js
-await flcm.append(comp, flcm.text("Sub", { componentPropertyReferences: { text: "Label" } }));
-await flcm.append(comp, flcm.frame({ width: 240, height: 80, componentPropertyReferences: { slot: "Content" } }));
+await flcm.append(comp, ({ type: "TEXT", text: "Sub", ...({ componentPropertyReferences: { text: "Label" } }) }));
+await flcm.append(comp, ({ type: "FRAME", ...({ width: 240, height: 80, componentPropertyReferences: { slot: "Content" } }) }));
 \`\`\`
 
 Every name must already be declared, except a \`slot\` naming a property that doesn't exist, which **declares it**; naming one that already has its frame is refused. Into a set's VARIANT, a new \`slot\` declares the property on the SET and this variant realizes it; the others insert their own bound frame. An insert into the COMPONENT_SET itself is refused: its children are its variants.`;
 
-export const COMPONENTS_INTRO = `\`flcm.instance(component, props?)\` builds an INSTANCE node: render it, nest it, or place it with \`append\`/\`insertBefore\`. The component is a target naming a COMPONENT or a COMPONENT_SET (\`componentProperties\` pick the variant, else the set's default). A library component already used in the file resolves by the id \`get\` reports; a \`get\` result authors as-is through the props form, \`flcm.instance({ ...node, name: "Copy" })\`. Three groups of words:
+export const COMPONENTS_INTRO = `Create an instance with \`{ type: "INSTANCE", componentId: componentTarget }\`. A COMPONENT_SET target selects its variant using componentProperties, or uses its default. A library component already used in the file can be addressed by its read componentId.
 
-- **A frame's props** (\`fill\`, \`width\`, \`layout\`, \`opacity\`, \`name\`…). Each one named is a root-level override; each omitted keeps tracking the component. No creation defaults: a bare \`flcm.instance(comp)\` is byte-for-byte the component.
-- **\`componentProperties\`**, by bare name (no \`#id\` suffix; resolved when unambiguous): a variant axis (\`Size: "Large"\`), a boolean, a text, or a component target for an instance-swap. Prefer a property over overriding the layer it drives, which works but leaves the property unset.
-- **\`overrides\`**, sublayer deltas keyed by component-relative path as \`get\` keys them (\`"11:9"\`; \`"11:9;11:14"\` inside a nested instance), each in that sublayer's edit vocabulary. A read's \`null\` maps to flcm's removal word (\`fill\`/\`stroke\`/\`effects\` → "none", \`opacity\` → 1, \`borderRadius\` → 0). A delta reaches the sublayer's own fields, not a nested instance's component — edit that instance by its live id afterwards.
+componentProperties maps property names to values. overrides maps component-relative sublayer paths to edit deltas. An omitted prop follows its component. Root appearance and layout props are overrides too.
 
-#### Filling a slot
-
-A slot shows up in each instance as a \`SLOT\` node, which takes the frame surface under \`edit\` (\`layout\`, \`fill\`, \`width\`, padding) but has no value: its content is \`children\` at the slot's path in \`overrides\`, where \`get\` reports a filled slot, and \`flcm.edit(slotNode, { children })\` is refused pointing there. The array REPLACES what the slot holds; \`[]\` empties it. The content comes from the constructors, a nested \`flcm.instance\` fills its own slot the same way, and keys inside come back in \`render\`'s \`keyed\`. A \`get\` result (rebuild it with \`flcm.fromRead\`), a binding inside (an instance declares no property) and \`null\` (\`[]\` is the emptying word) are each refused.
-
-\`\`\`js
-// "11:12": the slot's path, the bound frame's id as get keys it.
-await flcm.render(flcm.instance(card, { overrides: { "11:12": { children: [flcm.text("Body copy"), flcm.instance(button)] } } }));
-await flcm.edit(inst, { overrides: { "11:12": { layout: { mode: "row" }, children: [] } } }); // restyle the hole AND empty it
-\`\`\`
-
-The slot's own words in the same delta land first, so content attaches under the layout it lives in. Afterwards it is an ordinary tree: the structural verbs work on and under the \`SLOT\` node (\`find({ within: inst, type: "SLOT" })\`), while the rest of an instance's child list stays closed (see Tree shape). An EMPTIED slot reads back as any emptied container does (each component child \`visible: false\` at its path, not \`children: []\`), so re-authoring that read keeps it empty. A variant change or swap keeps filled content only where Figma matches the slot property across the target; re-fill if it did not. Filling a slot and editing a sublayer inside it in one call or \`editMany\` batch is refused: the fill removes that layer, so put its words on the node you fill with.`;
+Slot content is plain specs in \`overrides[path].children\`. Each id moves and edits, each missing id creates, and unmentioned content remains. Use remove on content nodes for deletion. Bindings in slot content need a declaring component and are refused otherwise.`;
 
 export const COMPONENTS_EDIT = `### Changing an instance
 
@@ -547,7 +463,7 @@ export const ANNOTATIONS_REFERENCE = `Figma's native annotations — the note a 
 
 **The rule:** an instruction to change the design is done when the change is made, so remove it once you've verified the result; a note about how the design works stays. Finding an annotation doesn't authorise acting on it — the user's request does. The category \`Agent\` marks the exchange between the human and you, in both directions; most human notes carry no category, and that's fine.
 
-\`text\` is Figma-flavoured markdown. \`category\` is the category's name — created in the file on first use, so spell an existing one exactly; a verb that fails removes the category it created. \`properties\` is Figma's list of pinned design properties (\`["width", "fills"]\`); it rides along on read and write so a note you preserve keeps its pins. Leave intent as you build: \`flcm.frame({ annotations: [{ text: "Tapping opens the filter sheet", category: "Agent" }] }, [...])\`. The array **replaces** the node's whole collection: omit it to leave annotations alone, \`[]\` clears every one, a supplied array becomes the collection.
+\`text\` is Figma-flavoured markdown. \`category\` is the category's name — created in the file on first use, so spell an existing one exactly; a verb that fails removes the category it created. \`properties\` is Figma's list of pinned design properties (\`["width", "fills"]\`); it rides along on read and write so a note you preserve keeps its pins. Leave intent as you build: \`({ type: "FRAME", ...({ annotations: [{ text: "Tapping opens the filter sheet", category: "Agent" }] }), children: [...] })\`. The array **replaces** the node's whole collection: omit it to leave annotations alone, \`[]\` clears every one, a supplied array becomes the collection.
 
 Start from \`flcm.selection()\`: check the selected root's own \`annotations\`, then \`find({ hasAnnotations: true, within: root })\` for its descendants — \`within\` searches descendants only. \`hasAnnotations\` tests the live collection, and the slim handles come back carrying their \`annotations\`. To remove one, re-read the node **immediately before writing** and find your entry in that fresh collection by \`text\` — annotations have no id, so an index from the earlier read may not be the same note:
 
@@ -562,4 +478,4 @@ if (done) {
 } // not there any more: leave the node alone and say so in chat
 \`\`\`
 
-\`fromRead\` drops annotations (a rebuild is not the annotated node); \`clone\` keeps them, as Figma's own duplicate does.`;
+Data copies and clone preserve annotations. Remove unwanted notes explicitly.`;

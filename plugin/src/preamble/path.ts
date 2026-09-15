@@ -1,8 +1,8 @@
-// SVG path normalization for flcm.path.
+// SVG path normalization for VECTOR.
 //
 // Why this exists: Figma's `vectorPaths` parser accepts ONLY the `M L C Q Z` subset in *absolute* form.
 // Standard SVG `d` strings routinely use `H V S T A` and relative (lowercase) commands, so before this
-// module they failed loud at render — forcing the author onto flcm.svg and losing themeability. That was
+// module they failed loud at render — forcing the author onto VECTOR and losing themeability. That was
 // ergo5's rank-1 cost. We convert the full command set into the accepted subset so any valid `d` renders
 // as a single themeable vector.
 //
@@ -138,7 +138,7 @@ export function normalizePathData(d: string): string {
   let i = 0;
 
   const fail = (msg: string): never => {
-    throw new Error('flcm.path: could not parse the SVG path data "' + d + '" — ' + msg + " (at index " + i + ").");
+    throw new Error('VECTOR: could not parse the SVG path data "' + d + '" — ' + msg + " (at index " + i + ").");
   };
   const isWs = (ch: string): boolean => ch === " " || ch === "\t" || ch === "\n" || ch === "\r" || ch === "\f";
   const skipSep = (): void => {

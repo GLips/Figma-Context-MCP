@@ -124,7 +124,7 @@ function planAddedDefinition(name: string, entry: ComponentPropertyDefinitionEdi
   if (definition.figmaType === "SLOT") {
     throw new Error(
       at + ": a slot IS the frame that holds its placeholder content, so it can't be declared on its own. " +
-        'Insert the frame and declare it in one move: flcm.append(component, flcm.frame({ …, componentPropertyReferences: { slot: ' + JSON.stringify(name) + " } })).",
+        'Insert the frame and declare it in one move: flcm.append(component, { type: "FRAME", componentPropertyReferences: { slot: ' + JSON.stringify(name) + " } }).",
     );
   }
   // At create the default is DERIVED from the node that binds the property. Nothing binds this one —
@@ -312,7 +312,7 @@ export function prepareComponentBindingEdit(node: any, raw: unknown, subject: st
 /**
  * The last step of every binding, wherever it is authored: the name Figma files the property under,
  * type-checked against the field that will drive it, and — for a slot — checked to be the one hole a
- * slot is. Both paths into a binding (an edit of a live layer, a constructor-built node inserted into a component)
+ * slot is. Both paths into a binding (an edit of a live layer, a compiled node inserted into a component)
  * come through here, so a field added to BINDING_FIELD_WIRE_KEYS is reasoned about once.
  *
  * `definitions` are read off the definition OWNER (the SET, for a variant) because that is where

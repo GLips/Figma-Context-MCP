@@ -26,19 +26,19 @@ const EXAMPLE_META: Record<ExampleId, { title: string; intro: string }> = {
     intro:
       "A gradient background, an out-of-flow radial-glow decoration declared first (so it sits behind), a " +
       'frosted card whose shadow and blur are plain CSS strings, fixed and "fill" sizing, rgba/hex solids, ' +
-      "numeric font weights, and keyed nodes addressed after render.",
+      "numeric font weights, and child identities returned in the authored tree.",
   },
   caption: {
     title: "A feed caption (rich text)",
     intro:
-      "One `flcm.text` node carrying three styled runs — a colored `@handle`, plain body copy, and a muted " +
+      "One `TEXT` node carrying three styled runs — a colored `@handle`, plain body copy, and a muted " +
       "`more` — over shared base props, wrapped to a fixed width. Replaces four hand-split text nodes.",
   },
   vector: {
     title: "Vector art (svg & path)",
     intro:
-      "Both vector contracts side by side: a themeable `flcm.path` triangle that fills with the accent " +
-      "color like any primitive, and an opaque `flcm.svg` mark pasted verbatim (its colors baked into the " +
+      "Both vector contracts side by side: a themeable `VECTOR` with `d` triangle that fills with the accent " +
+      "color like any primitive, and an opaque `VECTOR` with `svg` mark pasted verbatim (its colors baked into the " +
       "markup). No icon catalog — you bring the path data or markup.",
   },
   image: {
@@ -48,10 +48,10 @@ const EXAMPLE_META: Record<ExampleId, { title: string; intro: string }> = {
       "image. `flcm.image(url)` is a paint value, so any shape carries one; the server fetches the bytes.",
   },
   reuse: {
-    title: "Copying what's already on the canvas (get → fromRead)",
+    title: "Copying what's already on the canvas (get → plain data)",
     intro:
       "The read↔write seam: `flcm.get` reads a live subtree as the canonical shape, you edit that shape " +
-      "like any object, and `flcm.fromRead` re-authors it through the constructors so a structural verb " +
+      "like any object. Keep ids to move, or drop them recursively to create a copy. A structural verb " +
       "places a COPY. `flcm.clone` stays the faithful duplicate for subtrees a rebuild can't reproduce.",
   },
   makeComponent: {
@@ -62,7 +62,7 @@ const EXAMPLE_META: Record<ExampleId, { title: string; intro: string }> = {
       "variant set.",
   },
   components: {
-    title: "Instantiating a component (flcm.instance)",
+    title: "Instantiating a component (INSTANCE)",
     intro:
       "Buttons stamped from a set found by name: a variant picked by its axes, a bound label set through " +
       "`componentProperties`, a sublayer overridden by path, and a read instance re-authored as-is.",

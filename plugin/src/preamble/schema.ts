@@ -7,7 +7,7 @@
 //   1. TYPES — flcm.ts infers its Props (`FrameProps`, `TextProps`, …) from these schemas via `z.infer`
 //      and imports them as `import type` ONLY. Type-only imports are erased by esbuild, so this module's
 //      zod NEVER enters the sandbox bundle (acceptance: `grep zod plugin/dist/code.js` is empty). The
-//      constructors stay the sole runtime; this file is type + doc metadata only.
+//      compilers stay the sole runtime; this file is type + doc metadata only.
 //   2. DOCS — the server walks these schemas at startup to generate the execute_code quick-start and the
 //      get_flcm_reference sections. A prop that isn't here can't be documented; a documented prop that's
 //      deleted here also vanishes from the Props type, so flcm.ts stops compiling. Drift is structural,
@@ -24,8 +24,8 @@ import { z } from "zod";
 import { INPUT_ALIASES } from "./input-aliases.js";
 import type {
   FillInput, WriteCssEffects, WritePaint, WriteEffect, GradientStop, WriteNode, WriteChild, Handle,
-  PinX, PinY, Target, RawIdRef, SlimHandle, FindQuery, ReadPredicate, InsertResult, MoveResult, CloneResult, RemoveResult, GetResult,
-  PageInfo, ComponentPropertyInput, OverrideDeltaInput, ComponentPropertyDefinitions, ComponentResult, VariantEntryInput,
+  PinX, PinY, Target, RawIdRef, SlimHandle, FindQuery, ReadPredicate, CloneResult, RemoveResult, GetResult,
+  PageInfo, ComponentPropertyInput, OverrideDeltaInput, ComponentPropertyDefinitions, VariantEntryInput,
   ComponentPropertyDefinitionEdits, ComponentPropertyBindingEdit,
 } from "./ir.js";
 // The read verbs return the canonical read shape the shared simplify core emits. Relative (not ~/) so the
@@ -100,7 +100,7 @@ const ANNOTATION_FIELDS = {
 
 const SHARED_FIELDS = {
   name: prop(z.string(), "Layer name."),
-  key: prop(z.string(), "An address for this node — only keyed nodes come back in render()'s `keyed` map. Author-unique per render."),
+  key: prop(z.string(), "Persistent metadata for find/findOne. Unique within one authored tree; id alone decides live identity."),
   opacity: prop(z.number(), "Whole-node opacity, 0–1.", "number (0–1)"),
   mixBlendMode: prop(
     z.string(),
@@ -284,15 +284,12 @@ const TEXTSTYLE_FIELDS = {
   ),
 };
 
-// The TEXT node's own words, in the read shape's spellings: `text` is the content (flcm.text also takes
-// it positionally — the prop form is what lets a `get` result spread in and what edit names), `fill` is
-// the paint like every other node's, and `boldWeight` sits at the node level beside `textStyle` because
-// it is a content convention (what `**` resolves to), not a style property.
+// text is content; fill is paint. boldWeight controls markdown emphasis, not base text style.
 const TEXT_FIELDS = {
   ["fontSize" satisfies keyof typeof INPUT_ALIASES]: prop(z.number(), "Input alias for textStyle.fontSize; duplicate values must agree."),
   text: prop(
     z.custom<string | TextRunInput[]>(),
-    "The content — a plain string (markdown: **bold**, *italic*, ~~strike~~, [text](url)) or an array of styled runs. At create it is usually the positional first argument; under edit it replaces the whole content.",
+    "The content — a plain string (markdown: **bold**, *italic*, ~~strike~~, [text](url)) or an array of styled runs. Set it on a TEXT spec; under edit it replaces the whole content.",
     "string | run[]",
   ),
   textStyle: prop(
@@ -309,7 +306,7 @@ const TEXT_FIELDS = {
 };
 
 // The rich-text run's style delta — the second element of a `[text, style]` run tuple (the array form of
-// flcm.text). Every field overrides the node-level `textStyle` base for just that span, so a run carries
+// TEXT). Every field overrides the node-level `textStyle` base for just that span, so a run carries
 // only what it changes. Canonical StyleDelta field names (fontWeight, not weight), reusing the TEXTSTYLE
 // entries so a run styles exactly like the base and the two can't drift. `textAlign`,
 // `textAlignVertical` and `lineClamp` are absent: alignment and clamping are whole-node properties in
@@ -348,7 +345,7 @@ export type TextRunInput = string | [text: string, style: StyleDeltaInput];
 
 // A line sizes ONLY along its length, which is its `width` (the read shape's word for it): a fixed
 // number, never "fill"/"hug"/a percent, and there is no height word at all. So LineSchema does NOT
-// spread the full SIZE_FIELDS — typing props the constructor drops would let a compile-checked example
+// spread the full SIZE_FIELDS — typing props the compiler drops would let a compile-checked example
 // pass while rendering wrong (a real hole, since the example's whole job is to fail the build on API
 // mismatch). It carries exactly what `line` reads.
 const LINE_FIELDS = {
@@ -359,7 +356,7 @@ const LINE_FIELDS = {
   ...PLACEMENT_FIELDS,
 };
 
-// A single themeable vector (flcm.path): the shared appearance vocabulary MINUS `radius` (a vector has no
+// A single themeable vector (VECTOR): the shared appearance vocabulary MINUS `radius` (a vector has no
 // corner radius — accepting it would be a documented no-op, which ADR-0003 forbids) plus the required `d`.
 // Reuses the APPEARANCE_FIELDS entries so a path themes exactly like a rect and the docs can't drift.
 const PATH_FIELDS = {
@@ -377,10 +374,7 @@ const PATH_FIELDS = {
   rotation: APPEARANCE_FIELDS.rotation,
 };
 
-// The component words an INSTANCE carries, in the read shape's own spellings — what `get` reports on an
-// instance is what `flcm.instance` takes and what an instance edit names. `componentId` is not here: it
-// is the constructor's positional argument (or the read shape's own field, folded at the entry), and
-// under edit it is the swap word (see EDIT_FIELDS).
+// Instance controls use the read vocabulary. The component target is grouped separately below.
 const INSTANCE_FIELDS = {
   exposed: prop(z.boolean(), "Expose this nested instance's existing controls in the enclosing instance panel. Writable only inside a component definition; false clears it."),
   componentProperties: prop(
@@ -402,30 +396,26 @@ const INSTANCE_FIELDS = {
 // instance, or grown with the structural verbs, and the definition's bound frame grows with `append`.
 const SLOT_CONTENT_FIELDS = {
   children: prop(
-    z.custom<WriteChild[]>(),
-    "Constructor-built nodes that REPLACE the slot's content (`[]` empties it). Refused: a `get` result (use flcm.fromRead), a binding inside (an instance declares no property), and `null`.",
+    z.custom<NodeSpec[]>(),
+    "Plain child specs. Ids move and edit; omitted ids create. Unmentioned children remain. Use remove to delete content.",
     "node[]",
   ),
 };
 
-// The one component word that exists ONLY under edit: `componentId` swaps the instance's component.
-// Its own group rather than a member of INSTANCE_FIELDS because the constructor takes the component
-// POSITIONALLY (a `get` result's `componentId` is folded at the entry, and naming it beside the positional
-// argument fails loud) — so only INSTANCE's edit vocabulary composes this in, and every other node type
-// rejects it with the per-type message.
+// The same target selects a new instance’s component and swaps a live instance’s component.
 const SWAP_FIELDS = {
   componentId: prop(
     z.custom<Target>(),
-    "INSTANCE only, under edit: swap this instance to another COMPONENT or COMPONENT_SET. See Changing an instance.",
+    "Required on a new INSTANCE: its COMPONENT or COMPONENT_SET target. On a live instance, swaps to that component. See Changing an instance.",
     "component target",
   ),
 };
 
-// The BINDING word, on every node constructor: which component property drives which of this node's
+// The BINDING word, on every node compiler: which component property drives which of this node's
 // fields. The read's own `componentPropertyReferences`, with the read's own field spellings — so a
 // component's children read back and author back in one vocabulary. It means something ONLY inside
 // flcm.component (the verb that declares the properties in the same call); every other verb refuses
-// a tree carrying one, by name. Which FIELDS a given constructor may bind is per-type and enforced
+// a tree carrying one, by name. Which FIELDS a given compiler may bind is per-type and enforced
 // at construction (flcm.ts compileBindingBag), not spelled in the type — a `slot` on a TEXT would be
 // a frame's word on a node with no children.
 const BINDING_FIELDS = {
@@ -459,8 +449,7 @@ export const ShapeSchema = z.object({ ...SHARED_FIELDS, ...SIZE_FIELDS, ...APPEA
 export const EllipseSchema = z.object({ ...SHARED_FIELDS, ...SIZE_FIELDS, ...ELLIPSE_FIELDS, ...BINDING_FIELDS, ...ANNOTATION_FIELDS });
 export const LineSchema = z.object({ ...SHARED_FIELDS, ...LINE_FIELDS, ...BINDING_FIELDS, ...ANNOTATION_FIELDS });
 export const PathSchema = z.object({ ...SHARED_FIELDS, ...SIZE_FIELDS, ...PATH_FIELDS, ...BINDING_FIELDS, ...ANNOTATION_FIELDS });
-// svg pastes opaque markup: size/position only, no appearance (colors are baked into the markup). `markup`
-// is the positional first arg, so it isn't a prop field here.
+// SVG markup is opaque: colors are baked in. The compiler dispatch consumes svg before these props.
 export const SvgSchema = z.object({ ...SHARED_FIELDS, ...SIZE_FIELDS, ...BINDING_FIELDS, ...ANNOTATION_FIELDS });
 // An instance takes a FRAME's words — its root is a frame-like container, and naming one of them
 // sets a root-level override (an unnamed word keeps tracking the component) — plus the component
@@ -524,15 +513,15 @@ const EDIT_FIELDS = {
   textStyle: TEXT_FIELDS.textStyle,
   fontSize: TEXT_FIELDS.fontSize,
   boldWeight: TEXT_FIELDS.boldWeight,
-  // The INSTANCE words. Reused from the constructor's group (not restated), because editing an
-  // instance is the same vocabulary `get` reports on it and `flcm.instance` creates it with —
+  // The INSTANCE words. Reused from the compiler's group (not restated), because editing an
+  // instance is the same vocabulary `get` reports on it and `INSTANCE` creates it with —
   // there is no separate "change the variant" verb. The per-type gate keeps them off every other
   // node type.
   exposed: INSTANCE_FIELDS.exposed,
   componentProperties: INSTANCE_FIELDS.componentProperties,
   overrides: INSTANCE_FIELDS.overrides,
   ...SWAP_FIELDS,
-  // The COMPONENT words. The binding word is the constructor's own statement — which property drives
+  // The COMPONENT words. The binding word is the compiler's own statement — which property drives
   // which of this node's fields — restated here rather than reused, because edit alone can UNBIND
   // (`null` per field) and the type has to say so. The two definition words reach the COMPONENT
   // itself. The per-type gate keeps each off the types that can't carry it.
@@ -613,9 +602,7 @@ export type ComponentOptions = z.infer<typeof ComponentOptionsSchema>;
 export const VariantsOptionsSchema = z.object(VARIANTS_FIELDS);
 export type VariantsOptions = z.infer<typeof VariantsOptionsSchema>;
 
-// flcm.image(src, opts?) options — the second, optional arg to the image paint constructor. `src` (an
-// https url or a local file path under the server's asset root) is the positional first arg (like svg's
-// `markup`), so it isn't a prop field here.
+// Image sources are URLs or local paths under the server’s asset root; options control paint mapping.
 const IMAGE_FIELDS = {
   scaleMode: prop(
     z.enum(["FILL", "FIT", "CROP", "TILE"]),
@@ -671,48 +658,18 @@ export const EffectsSchema = z.object({
   ),
 });
 
+export type NodeSpec = (Omit<Partial<SimplifiedNode>, "children"> & { children?: NodeSpec[] }) | ({ id?: string; type?: string; children?: NodeSpec[] } & Partial<FrameProps & TextProps & LineProps & PathProps & InstanceProps & { svg: string; componentId: Target }>);
+export type AuthoredTree = NodeSpec & { id: string; children?: AuthoredTree[] };
+
 // ---- The typed public surface. flcm.ts's real exports are asserted `satisfies Flcm`, so this can't
 // drift from them; the example files author against it and fail the build if a signature moves. ----
 export interface Flcm {
-  // Every constructor also takes a `get` result (SimplifiedNode) as its props: the read shape and the
-  // write props are one vocabulary, so `{ ...node, width: 320 }` authors as-is (the read-only leftovers —
-  // `id`, a root's "contextual" size — are folded at the entry).
-  frame(props?: FrameProps | SimplifiedNode, children?: WriteChild | WriteChild[]): WriteNode;
-  // A plain string, or an array of styled runs (rich text — per-span color/weight/size in one node).
-  text(content: string | TextRunInput[], props?: TextProps): WriteNode;
-  // The props-first form: the content is the `text` prop, which is how a `get` result carries it.
-  text(props: TextProps | SimplifiedNode): WriteNode;
-  rect(props?: ShapeProps | SimplifiedNode): WriteNode;
-  ellipse(props?: EllipseProps | SimplifiedNode): WriteNode;
-  line(props?: LineProps | SimplifiedNode): WriteNode;
-  // Two vector verbs, two contracts. svg pastes opaque markup (colors baked in); path is a single themeable
-  // vector taking our appearance props. `d` is required on path.
-  svg(markup: string, props?: SvgProps): WriteNode;
-  path(props: PathProps): WriteNode;
-  // Stamp a component: `component` is a target naming it — a read's `componentId`, an flcm/key, a
-  // handle — or a COMPONENT_SET, which resolves to the variant `componentProperties` select (its default
-  // variant when none is named). Local or from a library the file already uses; a component the file
-  // has never used is not reachable this way. Props are a frame's words (each a root-level override)
-  // plus `componentProperties` and `overrides`, keyed as `get` reports them — so an instance's read
-  // read shape writes back as-is.
-  instance(component: Target, props?: InstanceProps): WriteNode;
-  // The props-first form: a `get` result carries `componentId`, so `flcm.instance({ ...node, name: "Copy" })` authors as-is.
-  instance(props: InstanceProps & { componentId: string }): WriteNode;
-  instance(props: SimplifiedNode): WriteNode;
-  // Break an instance's link to its component: the subtree becomes ordinary editable layers under a
-  // FRAME with a NEW id (every sublayer id changes too), returned as that frame's handle. One-way —
-  // nothing re-attaches it. A NESTED instance fails loud naming the enclosing one: Figma's detach
-  // would take every enclosing instance with it, and flcm won't widen the mutation silently.
   detach(target: Target): Promise<Handle>;
-  // Make a COMPONENT — from a constructor-built node (rendered on the current page exactly as flcm.render
-  // would, then promoted) or from a target naming a live node (promoted where it stands). `options`
-  // names it, describes it, and declares its `propertyDefinitions`; the tree's nodes say which of
-  // their fields each property drives through `componentPropertyReferences`. Returns the COMPONENT's
-  // handle (a NEW node — its id is not the frame's) plus every keyed node in its subtree.
-  component(nodeOrTarget: WriteNode | Target, options?: ComponentOptions): Promise<ComponentResult>;
+  // Promotion returns authored data with the promoted root id.
+  component(nodeOrTarget: NodeSpec | Target, options?: ComponentOptions): Promise<AuthoredTree>;
   // Fold standalone components into a COMPONENT_SET: each entry says which member of the set its
   // component IS, in the set's axes. The set lands where the first component sat, and the variant
-  // axes become the set's own `variant` properties — the ones flcm.instance's `componentProperties`
+  // axes become the set's own `variant` properties — the ones INSTANCE's `componentProperties`
   // then select by.
   variants(entries: VariantEntryInput[], options: VariantsOptions): Promise<Handle>;
   gradient(sugar: GradientSugar): WritePaint;
@@ -721,7 +678,7 @@ export interface Flcm {
   // fetched server-side (the sandbox reaches nothing); an unfetchable/blocked/invalid url fails loud.
   image(url: string, opts?: ImageOpts): WritePaint;
   effects(sugar: EffectsSugar): WriteEffect[];
-  render(tree: WriteNode): Promise<{ node: Handle; keyed: Record<string, Handle> }>;
+  render(tree: NodeSpec): Promise<AuthoredTree>;
   // Nudge an existing node: apply a partial delta (same vocabulary as create — node-local props in
   // this slice) to the resolved target and return its updated Handle with fresh geometry. Atomic per
   // call: the whole delta validates before the first write, and a post-validation Figma refusal
@@ -732,31 +689,19 @@ export interface Flcm {
   // The whole set is one undo step, and cross-entry order doesn't matter (a parent turned
   // auto-layout settles before a child set to "fill", whichever way round they were written).
   editMany(entries: EditEntry[], scope?: EditManyScope): Promise<Handle[]>;
-  // Tree shape, DOM-style — position is the verb, and the thing placed is either a constructor
-  // node (built there) or a target naming a live node (MOVED there, like the DOM). append/prepend
-  // take the parent; insertBefore/insertAfter take a sibling and infer the parent from it. A built node
-  // returns render's `{ node, keyed }` plus the attach point; a live node returns
-  // `{ node, from, to }`.
-  append(parent: Target, thing: WriteNode | Target): Promise<InsertResult | MoveResult>;
-  prepend(parent: Target, thing: WriteNode | Target): Promise<InsertResult | MoveResult>;
-  insertBefore(sibling: Target, thing: WriteNode | Target): Promise<InsertResult | MoveResult>;
-  insertAfter(sibling: Target, thing: WriteNode | Target): Promise<InsertResult | MoveResult>;
-  // The plain reparent: the node lands as `parent`'s last child.
-  move(target: Target, parent: Target): Promise<MoveResult>;
+  // Ids select live nodes at every depth; each result is a copy of the spec with ids filled.
+  append(parent: Target, thing: NodeSpec): Promise<AuthoredTree>;
+  prepend(parent: Target, thing: NodeSpec): Promise<AuthoredTree>;
+  insertBefore(sibling: Target, thing: NodeSpec): Promise<AuthoredTree>;
+  insertAfter(sibling: Target, thing: NodeSpec): Promise<AuthoredTree>;
   remove(target: Target): Promise<RemoveResult>;
   // A faithful live duplicate — the copy path for subtrees a rebuild can't reproduce (anything
-  // holding an INSTANCE). Lands at the end of `parent`, beside the original when omitted, and comes
+  // outside the authoring vocabulary). Lands at the end of `parent`, beside the original when omitted, and comes
   // back key-less: a raw node.clone() would copy the flcm/key and mint a duplicate address.
   clone(target: Target, parent?: Target): Promise<CloneResult>;
   clone(target: Target, props: CloneProps, parent?: Target): Promise<CloneResult>;
   measure(target: Target): Promise<{ x: number; y: number; width: number; height: number }>;
-  replace(target: Target, replacement: WriteNode): Promise<InsertResult>;
-  // Re-author a `get` result — a whole SUBTREE — as a constructor-built node: the constructor is picked
-  // by each node's `type`, and `children` (the read shape's own, not built nodes) recurse. Explicit (not folded
-  // into the structural verbs) because a `get` result carries a live `id` exactly as a handle does: only
-  // the author can say whether it means "copy this" or "move this". Anything the read shape carries
-  // that flcm has no word for fails loud by name, pointing at flcm.clone.
-  fromRead(node: SimplifiedNode): WriteNode;
+  replace(target: Target, replacement: NodeSpec): Promise<AuthoredTree>;
   // Full inspect: the node's styling as the EXPANDED canonical read shape — the same vocabulary
   // figma-mcp's REST read emits, every value inline (no styles refs), for any node type. Returns an
   // ENVELOPE: `node` is the read shape, and `components` (present only when the subtree touched one)
@@ -790,17 +735,16 @@ export interface Flcm {
 }
 
 // ---- Verb registry — the canonical verb list, for the verb table and the quick-start signatures.
-// `schema` links a verb to the prop schema whose fields the reference renders under it. ----
+// ----
 // `category` groups verbs for the quick-start's compact per-group rendering (the ≤2KB budget can't afford a
 // line per verb). The verb TABLE still lists each verb in full — only the quick-start groups.
-export type VerbCategory = "build" | "value" | "render" | "edit" | "structure" | "component" | "read" | "page" | "target";
+export type VerbCategory = "value" | "render" | "edit" | "structure" | "component" | "read" | "page" | "target";
 
 export interface VerbDoc {
   signature: string;
   builds: string;
   args: string;
   category: VerbCategory;
-  schema?: z.ZodObject;
   // The ≤2KB quick-start spelling, when the full signature doesn't fit its budget — written in the
   // same `flcm.`-prefixed form as `signature`, since the renderer strips the prefix from both.
   // `null` means "folded into the PREVIOUS entry's combined spelling": verbs that differ only in
@@ -810,41 +754,31 @@ export interface VerbDoc {
 }
 
 export const VERBS: VerbDoc[] = [
-  { category: "build", signature: "flcm.frame(props?, children?)", builds: "a FRAME (container)", args: "props object, then an array of children", schema: FrameSchema },
-  { category: "build", signature: "flcm.text(text, props?)", builds: "a TEXT node", args: "the text (a string or a runs array) first, then props — or one props object carrying `text`", schema: TextSchema },
-  { category: "build", signature: "flcm.rect(props?)", builds: "a RECTANGLE", args: "props object", schema: ShapeSchema },
-  { category: "build", signature: "flcm.ellipse(props?)", builds: "an ELLIPSE", args: "props object (no borderRadius)", schema: EllipseSchema },
-  { category: "build", signature: "flcm.line(props?)", builds: "a LINE", args: "props object", schema: LineSchema },
-  { category: "build", signature: "flcm.svg(markup, props?)", builds: "a VECTOR from SVG markup", args: "SVG markup string first, then size/position props", schema: SvgSchema },
-  { category: "build", signature: "flcm.path(props)", builds: "a themeable VECTOR", args: "props object including `d` (path data)", schema: PathSchema },
-  { category: "component", signature: "flcm.instance(component, props?)", builds: "an INSTANCE of a component (a node — render it, or place it like any node)", args: "the component (a read's `componentId`, an flcm/key, a handle, or a COMPONENT_SET whose variant `componentProperties` pick), then a frame's props plus `componentProperties` and `overrides` as `get` reports them — or one props object carrying `componentId`, as a `get` result does", schema: InstanceSchema },
-  { category: "component", signature: "await flcm.component(nodeOrTarget, options?)", builds: "a COMPONENT — a constructor-built node rendered then promoted, or a live node promoted in place (returns { node, keyed })", args: "a constructor-built node or a target, then { name?, description?, propertyDefinitions? }; nodes in the tree bind properties with `componentPropertyReferences`", schema: ComponentOptionsSchema, quickStart: "await flcm.component(node|target, opts) / flcm.variants(entries, opts)" },
-  { category: "component", signature: "await flcm.variants(entries, options)", builds: "a COMPONENT_SET from standalone components (returns its handle)", args: "an array of { component, variant: { Axis: \"Value\", … } } naming the same axes, then { name, description? }", schema: VariantsOptionsSchema, quickStart: null },
-  { category: "component", signature: "await flcm.detach(target)", builds: "the instance as ordinary layers — a FRAME with a NEW id (returns its handle)", args: "an INSTANCE target; one-way", quickStart: null },
-  { category: "value", signature: "flcm.gradient(...)", builds: "a gradient fill value", args: "object or positional form", schema: GradientSchema },
-  { category: "value", signature: "flcm.image(src, opts?)", builds: "an image fill value", args: "an https url or a local file path (under the server's asset root) first, then { scaleMode?, placeholder? }", schema: ImageSchema },
-  { category: "value", signature: "flcm.effects({...})", builds: "an effects value", args: "an { shadow, blur, backgroundBlur } bag", schema: EffectsSchema },
-  { category: "render", signature: "await flcm.render(tree)", builds: "live nodes", args: "returns { node, keyed }" },
-  { category: "edit", signature: "await flcm.edit(target, changes)", builds: "a nudged existing node (returns its updated Handle)", args: "target (an flcm/key, node id, flcm.id(id), or handle), then a partial delta in the same vocabulary as create", schema: EditSchema, quickStart: "await flcm.edit(target, changes) / flcm.editMany([{ target, changes }, …])" },
-  { category: "edit", signature: "await flcm.editMany(entries, scope?)", builds: "a whole set of nudges, applied atomically (returns a Handle per entry, in order)", args: "an array of { target, changes } — the same delta vocabulary as flcm.edit — and optionally { within } to scope key resolution. One invalid entry rejects the batch naming every offender, and nothing is applied", quickStart: null },
-  { category: "structure", signature: "await flcm.append(parent, thing)", builds: "`thing` placed as the LAST child of `parent`", args: "a parent target, then either a constructor-built node (built there → { node, keyed, to }) or a target naming a live node (MOVED there → { node, from, to })", quickStart: "await flcm.append/prepend(parent, node|target)" },
-  { category: "structure", signature: "await flcm.prepend(parent, thing)", builds: "the same, placed FIRST", args: "same as append", quickStart: null },
-  { category: "structure", signature: "await flcm.insertBefore(sibling, thing)", builds: "`thing` placed just before `sibling`", args: "a SIBLING target (the parent is inferred from it), then a constructor-built node or a live target", quickStart: "await flcm.insertBefore/insertAfter(sibling, node|target)" },
-  { category: "structure", signature: "await flcm.insertAfter(sibling, thing)", builds: "`thing` placed just after `sibling`", args: "same as insertBefore", quickStart: null },
-  { category: "structure", signature: "await flcm.move(target, parent)", builds: "the node reparented as `parent`'s last child", args: "a live target, then a parent target. Creating is append's job — a constructor-built node here fails loud", quickStart: "await flcm.move(target, parent)" },
-  { category: "structure", signature: "await flcm.remove(target)", builds: "nothing — deletes the node and its subtree", args: "a target; returns { removedId, parent }", quickStart: "await flcm.remove(target)" },
-  { category: "read", signature: "await flcm.measure(target)", builds: "current numeric x, y, width and height", args: "a target. Coordinates are relative to the immediate parent, including a page", quickStart: "await flcm.measure(target)" },
-  { category: "structure", signature: "await flcm.replace(target, replacement)", builds: "replacement handle, keyed children and destination", args: "a target and constructor-built replacement. Keeps parent/index; explicit props win over compatible inherited sizing/placement", quickStart: "await flcm.replace(target, node)" },
-  { category: "structure", signature: "await flcm.clone(target, props?, parent?)", builds: "a faithful live duplicate (key-less)", args: "a target, optional ordinary root props, and optional destination (default: beside the original). Existing clone(target, parent) calls remain valid. Component property/binding edits are separate; owned SLOT definitions reject before writes", quickStart: "await flcm.clone(target, props?, parent?)" },
-  { category: "build", signature: "flcm.fromRead(node)", builds: "a `get` result re-authored as a buildable node", args: "a node from flcm.get, subtree and all — the constructor is picked by each node's `type` and `children` recurse. Returns a constructor-built node — render it, or place it with append/prepend/insertBefore/insertAfter. (A single node's read shape can also spread straight into its constructor: flcm.rect({ ...node, width: 320 }).) Anything the read shape carries that flcm has no word for (an INSTANCE, a paint stack, a grid) fails loud by name; flcm.clone is the faithful copy for those", quickStart: "flcm.fromRead(node)" },
-  { category: "read", signature: "await flcm.get(target)", builds: "{ node, components } — the read shape, plus each component named once", args: "target: an flcm/key, a node id, flcm.id(id), or a handle" },
-  { category: "read", signature: "await flcm.find(query?, predicate?)", builds: "matching nodes as slim handles", args: "query { type?, name?, key?, hasAnnotations?, within? } AND-combined — a filter, not an address; only `within` takes a target. Optional predicate over the full read shape (n => n.fill === '#FFF')" },
-  { category: "read", signature: "await flcm.findOne(query?, predicate?)", builds: "exactly one slim handle (throws on 0 or >1)", args: "same query + predicate as find" },
-  { category: "read", signature: "await flcm.selection()", builds: "the current selection as slim handles", args: "no args" },
-  { category: "page", signature: "await flcm.page.current()", builds: "where you are — { fileName, page, pages }", args: "no args. The orientation call: the file's name, the page every other verb acts on, and the file's other pages", quickStart: "await flcm.page.current() / .use(nameOrId) / .new(name)" },
-  { category: "page", signature: "await flcm.page.use(nameOrId)", builds: "the switched-to page's info", args: "a page name or page id. Never creates: a miss fails loud listing the file's pages", quickStart: null },
-  { category: "page", signature: "await flcm.page.new(name)", builds: "a new page, switched to", args: "a page name the file doesn't already use (a taken name fails loud and creates nothing, so a retry can't mint a twin)", quickStart: null },
-  { category: "target", signature: "flcm.id(nodeId)", builds: "a raw-id target ref", args: "a node id string — resolved as an id, never scanned as an flcm/key" },
+  {"category": "render", "signature": "await flcm.render(spec)", "builds": "the spec copied with ids on every node", "args": "Place on the current page. An id moves and edits that live node; no id creates. Children follow the same rule."},
+  {"category": "structure", "signature": "await flcm.append(parent, spec)", "builds": "the spec copied with ids on every node", "args": "Place as the last child. Unmentioned live children remain."},
+  {"category": "structure", "signature": "await flcm.prepend(parent, spec)", "builds": "the spec copied with ids on every node", "args": "Place as the first child."},
+  {"category": "structure", "signature": "await flcm.insertBefore(sibling, spec)", "builds": "the spec copied with ids on every node", "args": "Place immediately before the sibling."},
+  {"category": "structure", "signature": "await flcm.insertAfter(sibling, spec)", "builds": "the spec copied with ids on every node", "args": "Place immediately after the sibling."},
+  {"category": "structure", "signature": "await flcm.replace(target, spec)", "builds": "the spec copied with ids on every node", "args": "Place in the target position, then remove the target. New roots inherit omitted placement and size; explicit props win."},
+  {"category": "structure", "signature": "await flcm.remove(target)", "builds": "{ removedId, from? }", "args": "Delete the node and subtree. from is the former parent handle, absent for pages."},
+  {"category": "structure", "signature": "await flcm.clone(target, props?, parent?)", "builds": "{ node, to? }", "args": "Faithful live copy, with optional root edits and destination. Keys are cleared. Default destination is the original parent."},
+  {"category": "component", "signature": "await flcm.component(specOrTarget, options?)", "builds": "the spec copied with ids on every node", "args": "Promote a FRAME to a COMPONENT. A live root stays in place; a new root lands on the current page. The returned root id is the component id. options declares name, description and propertyDefinitions."},
+  {"category": "component", "signature": "await flcm.variants(entries, options)", "builds": "a COMPONENT_SET handle", "args": "Each entry is { component: target, variant: { axis: value } }. options names the set."},
+  {"category": "component", "signature": "await flcm.detach(target)", "builds": "a FRAME handle", "args": "Detach an instance. Root and descendant ids change."},
+  {"category": "edit", "signature": "await flcm.edit(target, changes)", "builds": "an updated handle", "args": "Apply only the named props. Structure changes use placement verbs."},
+  {"category": "edit", "signature": "await flcm.editMany(entries, scope?)", "builds": "updated handles in entry order", "args": "One atomic batch of { target, changes }. scope is { within? }."},
+  {"category": "read", "signature": "await flcm.get(target)", "builds": "{ node, components? }", "args": "Expanded read data. Pass node directly to a placement verb to move and edit it. components contains shared definitions."},
+  {"category": "read", "signature": "await flcm.find(query?, predicate?)", "builds": "slim handles[]", "args": "Query fields: type, name, key, within, hasAnnotations. Optional predicate sees expanded read data."},
+  {"category": "read", "signature": "await flcm.findOne(query?, predicate?)", "builds": "one slim handle", "args": "Like find; throws unless exactly one matches."},
+  {"category": "read", "signature": "await flcm.selection()", "builds": "slim handles[]", "args": "The current selection."},
+  {"category": "read", "signature": "await flcm.measure(target)", "builds": "{ x, y, width, height }", "args": "Measured pixels relative to the immediate parent."},
+  {"category": "value", "signature": "flcm.gradient(sugar)", "builds": "a paint value", "args": "{ type: linear or radial, stops, angle?, at? }. Also accepts (type, stops, angle?)."},
+  {"category": "value", "signature": "flcm.image(url, options?)", "builds": "a paint value", "args": "Raster fill. Options: scaleMode, placeholder. Bytes are fetched through the host at the mutation verb."},
+  {"category": "value", "signature": "flcm.effects(sugar)", "builds": "effect values[]", "args": "CSS and Figma effect values for an effects prop."},
+  {"category": "target", "signature": "flcm.id(nodeId)", "builds": "{ __flcmId: nodeId }", "args": "Force raw-id resolution in a target argument."},
+  {"category": "page", "signature": "await flcm.page.current()", "builds": "{ fileName, page, pages }", "args": "Current page and available pages."},
+  {"category": "page", "signature": "await flcm.page.use(nameOrId)", "builds": "{ fileName, page, pages }", "args": "Switch to an existing page."},
+  {"category": "page", "signature": "await flcm.page.new(name)", "builds": "{ fileName, page, pages }", "args": "Create a uniquely named page and switch to it."},
 ];
 
 // Re-exported for the doc generator: which FIELD_GROUPS compose each node type's edit surface —

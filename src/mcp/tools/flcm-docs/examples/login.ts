@@ -1,4 +1,4 @@
-import type { Flcm } from "@framelink/plugin/schema";
+import type { Flcm, NodeSpec } from "@framelink/plugin/schema";
 
 // The login-screen worked example. Authored against the REAL typed surface (Flcm), so a schema change
 // that renames/removes a prop or moves a signature breaks this file's typecheck — the build goes red
@@ -10,39 +10,51 @@ export async function loginExample(flcm: Flcm) {
   const fields = [
     { key: "email", label: "Email", placeholder: "you@example.com" },
     { key: "password", label: "Password", placeholder: "••••••••" },
-  ].map(({ key, label, placeholder }) =>
-    flcm.frame({ key, layout: { mode: "column", gap: 6 }, width: "fill" }, [
-      flcm.text(label, {
+  ].map<NodeSpec>(({ key, label, placeholder }) => ({
+    type: "FRAME",
+    key,
+    layout: { mode: "column", gap: 6 },
+    width: "fill",
+    children: [
+      {
+        type: "TEXT",
+        text: label,
         textStyle: { fontSize: 13, fontWeight: 500 },
         fill: "rgba(255,255,255,0.7)",
-      }),
-      flcm.frame(
-        {
-          layout: { mode: "row", alignItems: "center", padding: { x: 16 } },
-          width: "fill",
-          height: 48,
-          borderRadius: 12,
-          fill: "rgba(255,255,255,0.06)",
-          stroke: "rgba(255,255,255,0.12)",
-          strokeWidth: 1,
-        },
-        [flcm.text(placeholder, { textStyle: { fontSize: 15 }, fill: "rgba(255,255,255,0.4)" })],
-      ),
-    ]),
-  );
+      },
+      {
+        type: "FRAME",
+        layout: { mode: "row", alignItems: "center", padding: { x: 16 } },
+        width: "fill",
+        height: 48,
+        borderRadius: 12,
+        fill: "rgba(255,255,255,0.06)",
+        stroke: "rgba(255,255,255,0.12)",
+        strokeWidth: 1,
+        children: [
+          {
+            type: "TEXT",
+            text: placeholder,
+            textStyle: { fontSize: 15 },
+            fill: "rgba(255,255,255,0.4)",
+          },
+        ],
+      },
+    ],
+  }));
 
-  const screen = flcm.frame(
-    {
-      key: "login",
-      name: "Login",
-      layout: { mode: "column", gap: 28, padding: 32 },
-      width: 390,
-      height: 844,
-      fill: "linear-gradient(180deg, #0B1020 0%, #131A2E 100%)",
-    },
-    [
+  const screen: NodeSpec = {
+    type: "FRAME",
+    key: "login",
+    name: "Login",
+    layout: { mode: "column", gap: 28, padding: 32 },
+    width: 390,
+    height: 844,
+    fill: "linear-gradient(180deg, #0B1020 0%, #131A2E 100%)",
+    children: [
       // Declared first → sits behind everything. `left`/`top` lift it out of the column flow.
-      flcm.ellipse({
+      {
+        type: "ELLIPSE",
         name: "Glow",
         left: -80,
         top: -60,
@@ -50,54 +62,56 @@ export async function loginExample(flcm: Flcm) {
         height: 180,
         fill: "radial-gradient(circle, #2A3A66 0%, #0B102000 70%)",
         opacity: 0.6,
-      }),
-      flcm.text("Welcome back", {
+      },
+      {
+        type: "TEXT",
+        text: "Welcome back",
         key: "title",
         fill: "#FFFFFF",
         textStyle: { fontSize: 26, fontWeight: 700, letterSpacing: "-0.02em", lineHeight: "32px" },
-      }),
-      flcm.frame(
-        {
-          key: "card",
-          name: "Card",
-          layout: { mode: "column", gap: 16, padding: 28 },
-          width: "fill",
-          borderRadius: 20,
-          fill: "rgba(255,255,255,0.04)",
-          stroke: "rgba(255,255,255,0.08)",
-          strokeWidth: 1,
-          effects: { boxShadow: "0 12px 32px rgba(0,0,0,0.18)", backdropFilter: "blur(8px)" },
-        },
-        [
+      },
+      {
+        type: "FRAME",
+        key: "card",
+        name: "Card",
+        layout: { mode: "column", gap: 16, padding: 28 },
+        width: "fill",
+        borderRadius: 20,
+        fill: "rgba(255,255,255,0.04)",
+        stroke: "rgba(255,255,255,0.08)",
+        strokeWidth: 1,
+        effects: { boxShadow: "0 12px 32px rgba(0,0,0,0.18)", backdropFilter: "blur(8px)" },
+        children: [
           ...fields,
-          flcm.frame(
-            {
-              key: "submit",
-              name: "Submit",
-              layout: { mode: "row", justifyContent: "center", alignItems: "center" },
-              width: "fill",
-              height: 48,
-              borderRadius: 12,
-              fill: "#6366F1",
-            },
-            [
-              flcm.text("Sign in", {
+          {
+            type: "FRAME",
+            key: "submit",
+            name: "Submit",
+            layout: { mode: "row", justifyContent: "center", alignItems: "center" },
+            width: "fill",
+            height: 48,
+            borderRadius: 12,
+            fill: "#6366F1",
+            children: [
+              {
+                type: "TEXT",
+                text: "Sign in",
                 textStyle: { fontSize: 15, fontWeight: 600 },
                 fill: "#FFFFFF",
-              }),
+              },
             ],
-          ),
+          },
         ],
-      ),
+      },
     ],
-  );
+  };
 
   const out = await flcm.render(screen);
 
   return {
-    node: out.node.id, // the login frame's id
-    card: out.keyed.card.id, // a keyed node, addressed after render
-    title: out.keyed.title.text, // "Welcome back"
+    node: out.id, // the login frame's id
+    card: out.children![2].id,
+    title: out.children![1].text, // "Welcome back"
   };
   // example:end
 }

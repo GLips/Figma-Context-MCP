@@ -1,10 +1,14 @@
+import { describeRootOverlap } from "./root-overlap.js";
+import { sceneFigma as figma } from "./scene-access.js";
+import { compileTree, treeNodes } from "./compile-tree.js";
+import type { NodeSpec, AuthoredTree } from "./schema.js";
 // structure — the tree-shape verbs (sibling to edit.ts, the field-level one). Position is the
 // VERB, DOM-style: `append`/`prepend` take the parent, `insertBefore`/`insertAfter` take a sibling
 // and infer the parent from it. There is no options bag and no index argument — an index is a
 // number an agent has to derive from a read it would otherwise not need.
 //
-// Each placement verb takes EITHER a constructor-built node or a live target, and DOM semantics decide
-// what that means: placing a constructor-built node builds it, placing an already-attached node MOVES it. The two
+// Each placement verb takes EITHER a compiled node or a live target, and DOM semantics decide
+// what that means: placing a compiled node builds it, placing an already-attached node MOVES it. The two
 // paths differ in what they must guarantee, not in where they land:
 //
 //   • a CONSTRUCTOR-BUILT node rides attachBuiltChild — the same attach-then-size entry the create walk uses, so an
@@ -20,15 +24,14 @@
 // (entry seal / success commit / commit-then-undo rollback) is the lock's — each verb is a single
 // enterMutatingVerb expression, so its queue slot is reserved before it can yield.
 
-import { WriteNode, WriteLayout, Target, Handle, InsertResult, MoveResult, CloneResult, RemoveResult } from "./ir.js";
+import { WriteNode, WriteLayout, Target, Handle, CloneResult, RemoveResult } from "./ir.js";
 import { resolveTarget } from "./read.js";
 import { assertNodeStillOnCanvas, LoadedPages, createLoadedPages, loadPageForWrite, assertPageLoaded } from "./freshness.js";
 import { enterMutatingVerb, compensatedMutationFailure } from "./mutation-lock.js";
 import {
-  attachBuiltChild, mintHandle, settleHandles, resolvePercents, beginRenderWalk, RenderResources,
+  attachBuiltChild, mintHandle, resolvePercents, beginRenderWalk, RenderResources,
   liveParentAttachFacts, assertLiveNodeLandsUnderParent, assertBuiltRootLandsUnderParent, resettleMovedNode,
 } from "./bridge.js";
-import { assertConstructorBuiltTree, isConstructorBuilt, isReadNode } from "./provenance.js";
 import { loadTreeResources, gateTreeResources, LoadedTreeResources } from "./render.js";
 import { prepareInsertBindings, applyInsertBindings, InsertBindingPlan } from "./component-edit.js";
 import { clearKeysDeep, childListClosingInstanceOf } from "./identity.js";
@@ -119,61 +122,8 @@ function assertNoCycle(subject: string, node: any, destination: any): void {
   }
 }
 
-// A `get` result must never be mistaken for a target. It carries a live string `id` exactly as a
-// handle does — deliberate, one vocabulary at the agent boundary — so shape can't tell them apart,
-// and guessing wrong MOVES the node the agent asked to copy: silently wrong, the one outcome flcm
-// never ships. Object identity CAN tell them apart, so the primary test is the read-side brand
-// (provenance.markReadNode). The field sniff behind it is the fallback for a result that lost its
-// identity crossing JSON — a heuristic on purpose, and only ever additive to the brand.
-//
-// This brand and its refusal are LOAD-BEARING and permanent — ADR-0014. They look redundant next to
-// constructor provenance (fromRead's output is constructor-built, so it never reaches here), and the
-// plan that added fromRead originally said to delete them for exactly that reason. It doesn't follow:
-// provenance correctly reports a RAW `get` result as not-constructor-built, and the next test in the chain is
-// "does it look like a target?" — which a `get` result passes, because it has an `id`. Silent move.
-const READ_NODE_FIELDS = ["children", "effects", "textStyle", "designedWidth", "designedHeight"];
-
-function assertNotReadNode(subject: string, thing: Record<string, unknown>): void {
-  if (!isReadNode(thing) && !READ_NODE_FIELDS.some((f) => f in thing)) return;
-  throw new Error(
-    subject + ": that is a `get` result, and a `get` result is not authoring input on its own — placing it " +
-      "would MOVE the node you read, not copy it. Wrap it to say you mean a COPY: " +
-      subject + "(…, flcm.fromRead(node)). To duplicate a live node whole (instances, paint stacks, " +
-      "anything a rebuild can't reproduce) use flcm.clone(target, parent) instead.",
-  );
-}
-
-// The object target forms: flcm.id(id), or any handle. (A bare id/key string is handled before
-// this is ever reached.)
 function isTargetShaped(thing: object): boolean {
-  const t = thing as { id?: unknown; __flcmId?: unknown };
-  return typeof t.id === "string" || typeof t.__flcmId === "string";
-}
-
-/**
- * Constructor-built node or live target? Decided by PROVENANCE first (ADR-0012 — the constructors are the only
- * authoring dialect), never by shape alone: a constructor-minted tree is the thing to build, and a name for
- * a live node is left to read.ts's `resolveTarget`, the one place the target grammar lives. Shape
- * cannot lead here — a handle and a `get` result both carry a string `id` — so every other object
- * has to be sorted by which MISTAKE it is, each with its own remedy.
- */
-function classifyPlaceable(subject: string, thing: unknown): "built" | "target" {
-  if (typeof thing === "string") return "target";
-  if (isConstructorBuilt(thing as object)) return "built";
-  if (Array.isArray(thing)) {
-    throw new Error(subject + ": place one node per call — call it once per child, or wrap them in a flcm.frame().");
-  }
-  if (thing && typeof thing === "object") {
-    assertNotReadNode(subject, thing as Record<string, unknown>);
-    if (isTargetShaped(thing)) return "target";
-    // Shaped like a node but not minted by a constructor: the provenance walk owns that message.
-    if (typeof (thing as WriteNode).type === "string") assertConstructorBuiltTree(thing as WriteNode);
-  }
-  throw new Error(
-    subject + ": the second argument is the thing to place — a node from the flcm constructors " +
-      "(flcm.frame/text/rect/ellipse/line/svg/path), or a target naming a live node to move (an flcm/key, " +
-      "a node id, flcm.id(id), or a handle). Got " + JSON.stringify(thing) + ".",
-  );
+  return "id" in thing || "__flcmId" in thing;
 }
 
 // ---- destination resolution ----
@@ -235,7 +185,7 @@ interface PreparedInsert { kind: "insert"; dest: Destination; tree: WriteNode; r
 // axes, the frame of reference the words were written in. Reading it in apply would be too late.
 interface PreparedPlacement { kind: "placement"; dest: Destination; node: any; words: WriteLayout }
 
-function applyInsert(verb: string, { dest, tree, resources, bindings }: PreparedInsert): InsertResult {
+function applyInsert(verb: string, { dest, tree, resources, bindings }: PreparedInsert): AuthoredTree {
   // `bindings` is opted into ONLY for an insert landing inside a component (see RenderCtx.bindings):
   // without the list, buildNode throws on a bound node rather than dropping the authoring word.
   const ctx = beginRenderWalk(resources, { bindings: !!bindings });
@@ -244,6 +194,7 @@ function applyInsert(verb: string, { dest, tree, resources, bindings }: Prepared
   try {
     root = attachBuiltChild(dest.parent, tree, ctx, liveParentAttachFacts(dest.parent, "flcm." + verb), dest.place);
     resolvePercents(ctx);
+    if (verb === "render") { const overlap = describeRootOverlap(root); if (overlap) console.log(overlap); }
     // After the tree is attached and settled: the property references (and the slot properties this
     // insert declares) land in the same sealed span, so a bound layer is never on the canvas unbound.
     if (bindings) applyInsertBindings(bindings, ctx.bindings!);
@@ -251,14 +202,13 @@ function applyInsert(verb: string, { dest, tree, resources, bindings }: Prepared
   } catch (cause) {
     throw fail(cause);
   }
-  const settled = settleHandles(root, ctx.keyed);
-  return { node: settled.node, keyed: settled.keyed, to: containerHandle(dest.parent) };
+  return tree.source as AuthoredTree;
 }
 
 // Put a live node into a destination and settle it there. `move` and `clone` share this: a clone is
 // a move of a node that was born one instruction ago, and the place-then-resettle ORDER is the part
 // that must not be written twice (resettling before the attach would aim `fill` at the old parent).
-function applyPlacement(verb: string, { dest, node, words }: PreparedPlacement): MoveResult {
+function applyPlacement(verb: string, { dest, node, words }: PreparedPlacement): void {
   const fail = beginMutatingApply(verb, node);
   const from = node.parent;
   try {
@@ -267,120 +217,51 @@ function applyPlacement(verb: string, { dest, node, words }: PreparedPlacement):
   } catch (cause) {
     throw fail(cause);
   }
-  return {
-    node: mintHandle(node),
-    // A reorder inside one parent reports it once, as `to`.
-    from: from !== dest.parent ? containerHandle(from) : undefined,
-    to: containerHandle(dest.parent),
-  };
+
 }
 
 // ---- the placement verbs ----
 
 type Placement = "end" | "start" | "before" | "after";
 
-// Everything a live subject owes its destination before it may be placed there. Shared by the move
-// branch and by `clone`, so a gate added here reaches both — they are the same operation on a node
-// that already exists, differing only in whether that node was born a moment ago. Runs in the
-// verb's gate: every fact it reads is live.
-function gateLivePlacement(subject: string, dest: Destination, node: any): PreparedPlacement {
-  assertNodeStillOnCanvas(node, subject);
-  assertInstanceChildListUntouched(subject, dest.parent, "destination");
-  assertInstanceChildListUntouched(subject, node, "subject");
-  assertNoCycle(subject, node, dest.parent);
-  return { kind: "placement", dest, node, words: assertLiveNodeLandsUnderParent(node, dest.parent, subject) };
-}
-
-// The one body behind append/prepend/insertBefore/insertAfter. The verbs differ only in how their
-// anchor names a destination. A single enterMutatingVerb expression on purpose — the queue slot is
-// reserved before anything can yield, which is the lock's invocation-order guarantee.
-function placeVerb(verb: string, anchor: Target, thing: unknown, placement: Placement): Promise<InsertResult | MoveResult> {
+function placeVerb(verb: string, anchor: Target | undefined, spec: NodeSpec, placement: Placement): Promise<AuthoredTree> {
   const subject = "flcm." + verb;
-  return enterMutatingVerb(
-    verb,
-    // Prepare — the anchor, then the subject (a live node, or a whole sealed tree with its
-    // resources). The anchor first: a bad anchor refuses without paying for a font or image fetch.
-    async (): Promise<ResolvedMove | ResolvedInsert> => {
-      const pages = createLoadedPages();
-      if (classifyPlaceable(subject, thing) === "target") {
-        const anchorNode = await resolveAnchor(anchor, placement, pages);
-        return { kind: "move", node: await resolveTarget(thing as Target), anchorNode, pages };
-      }
-      // Whole tree, before the resource round-trip: a hand-built child rejects without a font or
-      // image fetch, and a sealed tree can't change between here and the build (ADR-0012).
-      const tree = thing as WriteNode;
-      assertConstructorBuiltTree(tree);
-      const anchorNode = await resolveAnchor(anchor, placement, pages);
-      return { kind: "insert", tree, loaded: await loadTreeResources(tree), anchorNode, pages };
-    },
-    // Gate — every live fact a placement turns on: the anchor's parent, its layout mode and hug
-    // axes, its instance ancestry, which component (if any) declares the properties a binding
-    // names, and the instance plans of an inserted tree.
-    (resolved): PreparedInsert | PreparedPlacement => {
-      const dest = destinationOf(subject, resolved.anchorNode, placement, resolved.pages);
-      if (resolved.kind === "move") return gateLivePlacement(subject, dest, resolved.node);
-      const { tree } = resolved;
-      assertInstanceChildListUntouched(subject, dest.parent, "destination");
+  return enterMutatingVerb(verb, async () => {
+    const tree = compileTree(spec, subject + ".spec");
+    const pages = createLoadedPages();
+    const anchorNode = anchor === undefined ? figma.currentPage : await resolveAnchor(anchor, placement, pages);
+    if (anchor === undefined) await loadPageForWrite(anchorNode, pages);
+    return { tree, anchorNode, pages, loaded: await loadTreeResources(tree) };
+  }, ({ tree, anchorNode, pages, loaded }): PreparedInsert => {
+    const dest = destinationOf(subject, anchorNode, placement, pages);
+    assertInstanceChildListUntouched(subject, dest.parent, "destination");
+    if (!tree.liveId) {
       assertBuiltInsertNotIntoSet(subject, dest.parent);
       assertBuiltRootLandsUnderParent(dest.parent, tree, subject);
-      // A constructor-built node MAY carry `componentPropertyReferences` when it is landing inside a component — the
-      // one place outside flcm.component where a binding names a property that exists. Everywhere
-      // else this is the standing refusal, raised from inside (component-edit.ts).
-      const bindings = prepareInsertBindings(subject, dest.parent, tree);
-      return { kind: "insert", dest, tree, resources: gateTreeResources(tree, resolved.loaded, { destination: dest.parent }), bindings };
-    },
-    (prepared) => (prepared.kind === "insert" ? applyInsert(verb, prepared) : applyPlacement(verb, prepared)),
-  );
+    }
+    const resources = gateTreeResources(tree, loaded, { destination: dest.parent });
+    for (const entry of loaded.live.entries) assertNoCycle(entry.wn.sourcePath!, entry.node, dest.parent);
+    const liveRoot = resources.live?.get(tree);
+    if (liveRoot) assertLiveNodeLandsUnderParent(liveRoot.node, dest.parent, subject, tree.layout);
+    const bindings = prepareInsertBindings(subject, dest.parent, tree);
+    return { kind: "insert", dest, tree, resources, bindings };
+  }, prepared => applyInsert(verb, prepared));
 }
 
-interface ResolvedMove { kind: "move"; node: any; anchorNode: any; pages: LoadedPages }
-interface ResolvedInsert { kind: "insert"; tree: WriteNode; loaded: LoadedTreeResources; anchorNode: any; pages: LoadedPages }
-
-/**
- * flcm.append(parent, thing) — place `thing` as the LAST child of `parent`. `thing` is either a
- * constructor-built node (built and inserted) or a target naming a live node (moved, DOM-style).
- */
-export function append(parent: Target, thing: WriteNode | Target): Promise<InsertResult | MoveResult> {
-  return placeVerb("append", parent, thing, "end");
+export function render(spec: NodeSpec): Promise<AuthoredTree> {
+  return placeVerb("render", undefined, spec, "end");
 }
-
-/** flcm.prepend(parent, thing) — the same, as the FIRST child. */
-export function prepend(parent: Target, thing: WriteNode | Target): Promise<InsertResult | MoveResult> {
-  return placeVerb("prepend", parent, thing, "start");
+export function append(parent: Target, spec: NodeSpec): Promise<AuthoredTree> {
+  return placeVerb("append", parent, spec, "end");
 }
-
-/** flcm.insertBefore(sibling, thing) — place `thing` immediately before `sibling`, in its parent. */
-export function insertBefore(sibling: Target, thing: WriteNode | Target): Promise<InsertResult | MoveResult> {
-  return placeVerb("insertBefore", sibling, thing, "before");
+export function prepend(parent: Target, spec: NodeSpec): Promise<AuthoredTree> {
+  return placeVerb("prepend", parent, spec, "start");
 }
-
-/** flcm.insertAfter(sibling, thing) — place `thing` immediately after `sibling`, in its parent. */
-export function insertAfter(sibling: Target, thing: WriteNode | Target): Promise<InsertResult | MoveResult> {
-  return placeVerb("insertAfter", sibling, thing, "after");
+export function insertBefore(sibling: Target, spec: NodeSpec): Promise<AuthoredTree> {
+  return placeVerb("insertBefore", sibling, spec, "before");
 }
-
-/**
- * flcm.move(target, parent) — the plain reparent: the node lands as `parent`'s last child. The same
- * placement `append` does, with the subject named first (the way the sentence reads) and creating
- * left to `append` — which is why this returns a MoveResult flat, with no union to narrow.
- */
-export function move(target: Target, parent: Target): Promise<MoveResult> {
-  return enterMutatingVerb(
-    "move",
-    async () => {
-      if (isConstructorBuilt(target as object)) {
-        throw new Error(
-          "flcm.move moves a node that already exists — its first argument is a target (an flcm/key, a node id, " +
-            "flcm.id(id), or a handle), not a constructor-built node. To CREATE a node inside a parent, use flcm.append(parent, node).",
-        );
-      }
-      const pages = createLoadedPages();
-      const anchorNode = await resolveAnchor(parent, "end", pages);
-      return { node: await resolveTarget(target), anchorNode, pages };
-    },
-    ({ node, anchorNode, pages }) => gateLivePlacement("flcm.move", destinationOf("flcm.move", anchorNode, "end", pages), node),
-    (prepared) => applyPlacement("move", prepared),
-  );
+export function insertAfter(sibling: Target, spec: NodeSpec): Promise<AuthoredTree> {
+  return placeVerb("insertAfter", sibling, spec, "after");
 }
 
 /**
@@ -507,30 +388,33 @@ export async function measure(target: Target): Promise<{ x: number; y: number; w
   return { x: node.x, y: node.y, width: node.width, height: node.height };
 }
 
-/** Replace content in one sealed mutation, keeping the original until the new tree is settled. */
-export function replace(target: Target, spec: WriteNode): Promise<InsertResult> {
+/** Keep the original until its replacement has settled. */
+export function replace(target: Target, spec: NodeSpec): Promise<AuthoredTree> {
   return enterMutatingVerb("replace", async () => {
-    assertConstructorBuiltTree(spec);
+    const tree = compileTree(spec, "flcm.replace.spec");
     const node: any = await resolveTarget(target);
     const pages = createLoadedPages();
     await loadPageForWrite(node.parent, pages);
-    return { node, pages, loaded: await loadTreeResources(spec) };
-  }, ({ node, pages, loaded }): PreparedInsert & { original: any } => {
+    return { node, tree, pages, loaded: await loadTreeResources(tree) };
+  }, ({ node, tree, pages, loaded }): PreparedInsert & { original: any } => {
     assertNodeStillOnCanvas(node, "flcm.replace");
     assertInstanceChildListUntouched("flcm.replace", node, "subject");
     const dest = destinationOf("flcm.replace", node, "before", pages);
     assertInstanceChildListUntouched("flcm.replace", dest.parent, "destination");
-    assertBuiltInsertNotIntoSet("flcm.replace", dest.parent);
-    const tree = replacementTree(node, spec);
-    assertBuiltRootLandsUnderParent(dest.parent, tree, "flcm.replace");
-    return { kind: "insert", original: node, dest, tree,
-      resources: gateTreeResources(tree, loaded, { destination: dest.parent }), bindings: prepareInsertBindings("flcm.replace", dest.parent, tree) };
-  }, (prepared) => {
-    const fail = beginMutatingApply("replace", prepared.original);
+    if (!tree.liveId) {
+      assertBuiltInsertNotIntoSet("flcm.replace", dest.parent);
+      Object.assign(tree, replacementTree(node, tree));
+      assertBuiltRootLandsUnderParent(dest.parent, tree, "flcm.replace");
+    }
+    const resources = gateTreeResources(tree, loaded, { destination: dest.parent });
+    for (const entry of loaded.live.entries) assertNoCycle(entry.wn.sourcePath!, entry.node, dest.parent);
+    return { kind: "insert", original: node, dest, tree, resources, bindings: prepareInsertBindings("flcm.replace", dest.parent, tree) };
+  }, prepared => {
     const result = applyInsert("replace", prepared);
-    try { prepared.original.remove(); } catch (cause) { throw fail(cause); }
-    // Removing the old flow item can change the replacement's final fill/hug geometry.
-    return { ...result, node: mintHandle(prepared.dest.parent.children.find((node: any) => node.id === result.node.id)),
-      to: containerHandle(prepared.dest.parent) };
+    if (!treeNodes(prepared.tree).some(node => node.liveId === prepared.original.id)) {
+      const fail = beginMutatingApply("replace", prepared.original);
+      try { prepared.original.remove(); } catch (cause) { throw fail(cause); }
+    }
+    return result;
   });
 }

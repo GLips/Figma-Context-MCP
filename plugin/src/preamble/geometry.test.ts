@@ -1,110 +1,22 @@
-// Handle geometry: render() returns each handle's SETTLED geometry, spelled the way the read verbs spell it
-// (flat width/height; left/top only when the parent's auto-layout doesn't place the node). Two contracts
-// here — the timing (handles are minted after the whole tree is laid out, so a covered child reports its
-// settled size and not the provisional hug it held mid-walk) and the spelling (a render handle and a found
-// one describe the same node with the same field names — see find.test.ts's out-of-flow case).
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
-import { frame, rect, text, findOne } from "./flcm.js";
-import { render } from "./render.js";
+import { render, measure, findOne, edit } from "./runtime.js";
 
-test("a handle reports the node's measured size, and its offset inside a free-form parent", async () => {
+test("returned sizes preserve intent; measure reports final pixels after parent settlement", async () => {
   createFigmaMock();
-  const out = await render(
-    frame({ width: 300, height: 200 }, [
-      rect({ key: "box", name: "Box", width: 40, height: 24, left: 20, top: 12 }),
-    ]),
-  );
-  // A free-form parent places nothing, so the child's offset is its own — left/top, and no `position`
-  // marker (that marks a child lifted OUT of an auto-layout flow, exactly as the core emits it). The whole
-  // shape is asserted: a handle carries identity + this geometry and nothing else.
-  assert.deepEqual(out.keyed.box, {
-    id: out.keyed.box.id, type: "RECTANGLE", name: "Box", key: "box",
-    width: 40, height: 24, left: 20, top: 12,
-  });
+  const tree = await render({ type: "FRAME", width: 300, height: 200, layout: { mode: "column" }, children: [{ type: "RECTANGLE", key: "bar", width: "fill", height: 12 }] });
+  assert.equal(tree.children![0].width, "fill");
+  assert.equal((await measure(tree.children![0])).width, 300);
+  assert.equal((await findOne({ key: "bar" })).width, "fill");
+  await edit(tree, { width: 400 });
+  assert.equal(tree.children![0].width, "fill");
+  assert.equal((await measure(tree.children![0])).width, 400);
 });
 
-test("a covered child reports its SETTLED size, not its walk-time provisional one", async () => {
+test("returned coordinates keep authored percentages while measure uses parent-relative pixels", async () => {
   createFigmaMock();
-  // w:"fill" only stretches to 300 once the tree settles; handles are minted after that, not at stampKey
-  // time when the child still holds its hug width.
-  const out = await render(
-    frame({ width: 300, height: 200 }, [rect({ key: "bar", width: "fill", height: 12 })]),
-  );
-  assert.equal(out.keyed.bar.width, 300);
-});
-
-test("the root handle carries its size and no offset — a page child has no parent box to be relative to", async () => {
-  createFigmaMock();
-  const out = await render(frame({ name: "Root", width: 120, height: 80 }));
-  assert.deepEqual(out.node, { id: out.node.id, type: "FRAME", name: "Root", width: 120, height: 80 });
-});
-
-test("an auto-layout parent's in-flow child reports no offset; an absolute one reports position/left/top", async () => {
-  createFigmaMock();
-  const out = await render(
-    frame({ width: 200, height: 120, layout: { mode: "column", gap: 8, padding: 10 } }, [
-      rect({ key: "inflow", width: 40, height: 24 }),
-      rect({ key: "floaty", width: 10, height: 10, left: 5, top: 7 }),
-    ]),
-  );
-  // The parent owns an in-flow child's position, so reporting it would invite the agent to pin what the
-  // layout decides — the read side omits it for the same reason.
-  assert.equal(out.keyed.inflow.left, undefined);
-  assert.equal(out.keyed.inflow.top, undefined);
-  assert.equal(out.keyed.inflow.position, undefined);
-  assert.deepEqual(
-    { position: out.keyed.floaty.position, left: out.keyed.floaty.left, top: out.keyed.floaty.top },
-    { position: "absolute", left: 5, top: 7 },
-  );
-});
-
-test("a render handle and a found handle describe one node in one spelling", async () => {
-  createFigmaMock();
-  const out = await render(
-    frame({ width: 200, height: 120, layout: { mode: "column" } }, [
-      rect({ key: "floaty", width: 10, height: 10, left: 5, top: 7 }),
-    ]),
-  );
-  const found = await findOne({ key: "floaty" });
-  const rendered = out.keyed.floaty;
-  assert.deepEqual(
-    { position: found.position, left: found.left, top: found.top, width: found.width },
-    { position: rendered.position, left: rendered.left, top: rendered.top, width: rendered.width },
-  );
-});
-
-test("a hugging node reports measured px AND the rule behind it; find folds both into one field", async () => {
-  createFigmaMock();
-  const out = await render(frame({ layout: { mode: "row" } }, [text("hi", { key: "label" })]));
-  // width is always the number, so `label.width + 8` is always right; the rule sits beside it, spelled the
-  // read side's way. find has only one field for both, so it reports the rule and withholds the px.
-  assert.equal(typeof out.keyed.label.width, "number");
-  assert.deepEqual(out.keyed.label.intent, { width: "hug", height: "hug" });
-  assert.equal((await findOne({ key: "label" })).width, "hug");
-});
-
-test("a fill axis is named too; a plainly fixed axis says nothing", async () => {
-  createFigmaMock();
-  const out = await render(
-    frame({ width: 300, height: 200, layout: { mode: "column" } }, [
-      rect({ key: "bar", width: "fill", height: 12 }),
-      rect({ key: "chip", width: 40, height: 24 }),
-    ]),
-  );
-  // The measurement is a snapshot on a fill axis (it re-measures with the parent) and ground truth on a
-  // fixed one — which is the whole reason to say so on one and stay quiet on the other.
-  assert.equal(out.keyed.bar.width, 300);
-  assert.deepEqual(out.keyed.bar.intent, { width: "fill" });
-  assert.equal(out.keyed.chip.intent, undefined);
-});
-
-test("render's intent and find's width are the same word for the same axis", async () => {
-  createFigmaMock();
-  const out = await render(
-    frame({ width: 300, height: 200, layout: { mode: "column" } }, [rect({ key: "bar", width: "fill", height: 12 })]),
-  );
-  // Both sides reach the word through the core's convertSizing, so this can't drift into two vocabularies.
-  assert.equal(out.keyed.bar.intent?.width, (await findOne({ key: "bar" })).width);
+  const tree = await render({ type: "FRAME", width: 200, height: 100, children: [{ type: "RECTANGLE", width: 20, height: 10, left: "50%", top: 12 }] });
+  assert.equal(tree.children![0].left, "50%");
+  assert.deepEqual(await measure(tree.children![0]), { x: 100, y: 12, width: 20, height: 10 });
 });

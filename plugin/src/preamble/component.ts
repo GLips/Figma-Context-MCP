@@ -1,7 +1,7 @@
 import { sceneFigma as figma } from "./scene-access.js";
 // component — the two verbs that MAKE a component, the write side of what `get` reports about one:
 //
-//   • flcm.component(nodeOrTarget, options?) — promote a constructor-built node (rendered on the current
+//   • flcm.component(nodeOrTarget, options?) — promote a compiled node (rendered on the current
 //     page exactly as flcm.render would, then converted) or a live node (converted where it stands)
 //     into a COMPONENT, declaring its `propertyDefinitions` and wiring each one to the nodes that
 //     carry it (`componentPropertyReferences`).
@@ -24,15 +24,16 @@ import { sceneFigma as figma } from "./scene-access.js";
 // a live file during the design spike].
 
 import {
-  WriteNode, WriteChild, Handle, Target, ComponentPropertyBinding, ComponentResult, VariantEntryInput,
+  WriteNode, WriteChild, Handle, Target, ComponentPropertyBinding, VariantEntryInput,
 } from "./ir.js";
 import { applyExposures } from "./instance-exposure.js";
 import { recordPromotionAlias } from "./promotion-aliases.js";
 import { resolveTarget, createResolvedTargets, ResolvedTargets } from "./read.js";
 import {
-  settleHandles, mintHandle, BoundLiveNode, InstancePlans, beginRenderWalk, RenderResources,
+  mintHandle, BoundLiveNode, InstancePlans, beginRenderWalk, RenderResources,
 } from "./bridge.js";
-import { assertConstructorBuiltTree, isConstructorBuilt, isReadNode } from "./provenance.js";
+import { compileTree } from "./compile-tree.js";
+import type { NodeSpec, AuthoredTree } from "./schema.js";
 import { assertSizingResolvesAgainstParentFrame } from "./layout-legality.js";
 import { loadTreeResources, gateTreeResources, buildTreeOnPage, LoadedTreeResources } from "./render.js";
 import { enterMutatingVerb } from "./mutation-lock.js";
@@ -103,7 +104,7 @@ export interface PreparedDefinition {
   defaultValue: boolean | string;
 }
 
-/** A constructor-built node carrying bindings, before it is built — what the definition gates read. */
+/** A compiled node carrying bindings, before it is built — what the definition gates read. */
 interface BoundWriteNode {
   wn: WriteNode;
   refs: ComponentPropertyBinding;
@@ -256,17 +257,11 @@ function assertBindingsResolve(bound: readonly BoundWriteNode[], definitions: re
 //
 // `form` is what the refusal is FOR: the target form has no authored tree to add a binding to, so telling it
 // to write `componentPropertyReferences` would name a word its own call can't express.
-function assertSlotsAreBound(bound: readonly BoundWriteNode[], definitions: readonly AuthoredDefinition[], form: SubjectForm): void {
+function assertSlotsAreBound(bound: readonly BoundWriteNode[], definitions: readonly AuthoredDefinition[]): void {
   for (const definition of definitions) {
     if (definition.figmaType !== "SLOT") continue;
     const binders = bindersOf(bound, definition);
     if (!binders.length) {
-      if (form === "target") {
-        throw new Error(
-          SUBJECT + ": slot property " + JSON.stringify(definition.name) + " needs the constructor-built form. Promoting a live node declares properties but binds nothing to them, and a slot IS a frame in the definition — " +
-            "build the component from a constructor-built tree whose placeholder frame carries `componentPropertyReferences: { slot: " + JSON.stringify(definition.name) + " }`.",
-        );
-      }
       throw new Error(
         SUBJECT + ": slot property " + JSON.stringify(definition.name) + " is declared but no frame is bound to it. A slot IS a frame in the definition — give the frame that holds the slot's placeholder content " +
           "`componentPropertyReferences: { slot: " + JSON.stringify(definition.name) + " }`, and every instance shows it as a SLOT.",
@@ -293,9 +288,9 @@ function bindersOf(bound: readonly BoundWriteNode[], definition: AuthoredDefinit
 // content, a bound layer's visibility, a bound instance's component. Nothing binds it and nothing
 // was passed: refused, since a silent "" or `true` would be an invented design decision.
 function resolveDefaults(
-  definitions: readonly AuthoredDefinition[], bound: readonly BoundWriteNode[], plans: InstancePlans, form: SubjectForm, targets: ResolvedTargets,
+  definitions: readonly AuthoredDefinition[], bound: readonly BoundWriteNode[], plans: InstancePlans, targets: ResolvedTargets, live?: RenderResources["live"],
 ): PreparedDefinition[] {
-  return definitions.map((definition) => ({ name: definition.name, figmaType: definition.figmaType, defaultValue: defaultFor(definition, bound, plans, form, targets) }));
+  return definitions.map((definition) => ({ name: definition.name, figmaType: definition.figmaType, defaultValue: defaultFor(definition, bound, plans, targets, live) }));
 }
 
 // The async half of the defaults: an explicit instance-swap default names a component. Its type is
@@ -307,7 +302,7 @@ async function resolveDefaultTargets(definitions: readonly AuthoredDefinition[],
 }
 
 function defaultFor(
-  definition: AuthoredDefinition, bound: readonly BoundWriteNode[], plans: InstancePlans, form: SubjectForm, targets: ResolvedTargets,
+  definition: AuthoredDefinition, bound: readonly BoundWriteNode[], plans: InstancePlans, targets: ResolvedTargets, live?: RenderResources["live"],
 ): boolean | string {
   const at = SUBJECT + " options.propertyDefinitions[" + JSON.stringify(definition.name) + "]";
   // A slot's "value" is the empty string Figma wants; its content is the bound frame.
@@ -318,12 +313,6 @@ function defaultFor(
   }
   const binders = bindersOf(bound, definition);
   if (!binders.length) {
-    if (form === "target") {
-      throw new Error(
-        at + ": no `defaultValue`, and promoting a live node binds nothing to this property — so there is no node to read the starting value off. " +
-          "Pass `defaultValue`, or build the component from a constructor-built tree, where the bound node supplies it.",
-      );
-    }
     throw new Error(
       at + ": no `defaultValue`, and nothing in this call binds " + JSON.stringify(definition.name) + " — so there is no node to read the starting value off. " +
         "Pass `defaultValue`, or bind a node with componentPropertyReferences: { " + FIELD_FOR_TYPE[definition.type] + ": " + JSON.stringify(definition.name) + " }.",
@@ -337,12 +326,12 @@ function defaultFor(
   const wn = binders[0].wn;
   if (definition.figmaType === "BOOLEAN") return wn.visible !== false; // an unnamed `visible` is true
   if (definition.figmaType === "TEXT") return authoredTextOf(wn);
-  // The bound node is an flcm.instance (the constructors allow `componentId` on nothing else), and
+  // The bound node is an INSTANCE (the compilers allow `componentId` on nothing else), and
   // its plan already holds the component this call will actually STAMP — which is the point: when
   // the node names a SET and picks a member with `componentProperties`, re-resolving the target here
   // would land on the set's DEFAULT variant and the definition's default would disagree with the very
   // node it was derived from.
-  return plans.get(wn)!.component.id;
+  return (plans.get(wn)?.component ?? live?.get(wn)?.component).id;
 }
 
 // A TEXT node's authored content, however it compiled: a plain string, or the runs a markdown/rich author
@@ -355,28 +344,6 @@ function authoredTextOf(wn: WriteNode): string {
 // ---- the live subject ----
 
 /** Which of the verb's two forms a refusal is speaking to — they can express different fixes. */
-type SubjectForm = "built" | "target";
-
-// The one place a constructor-built node and a target are told apart — provenance first, exactly as the structural
-// verbs do it (ADR-0012), because a `get` result and a handle both carry a string `id` and only
-// object identity can separate them.
-function classifySubject(thing: unknown): SubjectForm {
-  if (typeof thing === "string") return "target";
-  if (isConstructorBuilt(thing as object)) return "built";
-  if (thing && typeof thing === "object" && !Array.isArray(thing)) {
-    if (isReadNode(thing) || "children" in (thing as Record<string, unknown>)) {
-      throw new Error(
-        SUBJECT + ": that is a `get` result, and a `get` result is not authoring input on its own — promoting it would turn the node you READ into a component, not a copy of it. " +
-          "Say which you mean: " + SUBJECT + "(flcm.fromRead(node)) rebuilds it as a new component, " + SUBJECT + "(node.id) promotes the live node.",
-      );
-    }
-    if (isTargetShaped(thing)) return "target";
-    if (typeof (thing as WriteNode).type === "string") assertConstructorBuiltTree(thing as WriteNode);
-  }
-  throw new Error(
-    SUBJECT + ": the first argument is what becomes the component — a node from the flcm constructors, or a target naming a live node (an flcm/key, a node id, flcm.id(id), or a handle). Got " + JSON.stringify(thing) + ".",
-  );
-}
 
 // Figma's createComponentFromNode "behaves like the Create component button": handed a node it can't
 // CONVERT it wraps it in a new component frame instead. That is never what the call asked for, and
@@ -392,17 +359,17 @@ const WOULD_WRAP =
 function assertPromotableBuiltRoot(tree: WriteNode): void {
   if (tree.type === "FRAME") return;
   // The one non-FRAME node that builds a frame: createNodeFromSvg returns a FrameNode of vectors.
-  // flcm.path (also a VECTOR) builds a real VECTOR, so it falls through to the refusal.
+  // VECTOR (also a VECTOR) builds a real VECTOR, so it falls through to the refusal.
   if (tree.type === "VECTOR" && typeof tree.svg === "string") return;
   if (tree.type === "INSTANCE") {
     throw new Error(
-      SUBJECT + ": the tree's root is an flcm.instance. " + WOULD_WRAP + " — author the body you want as the component " +
+      SUBJECT + ": the tree's root is an INSTANCE. " + WOULD_WRAP + " — author the body you want as the component " +
         "(an instance's own layers aren't editable anyway), or flcm.render it, flcm.detach the result, and promote that.",
     );
   }
   throw new Error(
     SUBJECT + ": the tree's root is a " + tree.type + ", and a component's root is a frame. " + WOULD_WRAP +
-      " — wrap it yourself so the layout is yours: " + SUBJECT + "(flcm.frame({ … }, [node])).",
+      " — wrap it yourself so the layout is yours: " + SUBJECT + "({ type: \"FRAME\", children: [node] }).",
   );
 }
 
@@ -413,7 +380,7 @@ function assertPromotable(node: any): void {
   const who = describeNodeIdentity(node);
   if (node.type === "COMPONENT" || node.type === "COMPONENT_SET") {
     throw new Error(
-      SUBJECT + ": " + who + " is already a component — there is nothing to promote. Edit it with flcm.edit, stamp it with flcm.instance, or " +
+      SUBJECT + ": " + who + " is already a component — there is nothing to promote. Edit it with flcm.edit, stamp it with INSTANCE, or " +
         (node.type === "COMPONENT" ? "make it a variant with flcm.variants." : "add to the set with flcm.variants."),
     );
   }
@@ -444,7 +411,7 @@ function assertPromotable(node: any): void {
     throw new Error(
       SUBJECT + ": " + who + " is inside " + (owner.type === "COMPONENT_SET" ? "component set " : "component ") + JSON.stringify(owner.name) +
         " (id " + JSON.stringify(owner.id) + ") — Figma won't make a component out of a component's own sublayer (createComponentFromNode throws). " +
-        "Edit the component it is in, or promote a COPY of the sublayer: " + SUBJECT + "(flcm.fromRead(await flcm.get(" + JSON.stringify(node.id) + "))).",
+        "Edit the enclosing component, or clone the sublayer and promote that copy.",
     );
   }
 }
@@ -495,40 +462,11 @@ export function writeBindingReferences(bound: readonly BoundLiveNode[], suffixed
   }
 }
 
-// The TARGET form's keyed map: read back off the subtree's pluginData, since no walk of ours built
-// it. A key that appears twice (two earlier calls stamped it) refuses, as stampKey does within one
-// render — last-wins would hand the agent a handle to the wrong node.
-function collectKeyed(root: any): Record<string, any> {
-  const keyed: Record<string, any> = {};
-  const visit = (node: any): void => {
-    const key = readKey(node);
-    if (key) {
-      if (keyed[key]) {
-        throw new Error(
-          SUBJECT + ": two nodes inside " + describeNodeIdentity(root) + " carry the flcm/key " + JSON.stringify(key) + " (" +
-            JSON.stringify(keyed[key].id) + " and " + JSON.stringify(node.id) + "), so `keyed` can't name one. Address them by id, or rebuild one under a fresh key.",
-        );
-      }
-      keyed[key] = node;
-    }
-    for (const child of node.children || []) visit(child);
-  };
-  visit(root);
-  return keyed;
-}
-
 interface PreparedBuiltComponent {
   kind: "built";
   tree: WriteNode;
   loaded: LoadedTreeResources;
   bound: BoundWriteNode[];
-  options: PreparedOptions;
-}
-
-interface PreparedTargetComponent {
-  kind: "target";
-  node: any;
-  targets: ResolvedTargets;
   options: PreparedOptions;
 }
 
@@ -540,68 +478,33 @@ interface GatedBuiltComponent {
   options: PreparedOptions;
 }
 
-interface GatedTargetComponent {
-  kind: "target";
-  node: any;
-  definitions: PreparedDefinition[];
-  options: PreparedOptions;
-}
-
-/**
- * flcm.component(nodeOrTarget, options?) — make a COMPONENT. A constructor-built node is rendered on the current page
- * exactly as flcm.render would render it (same gates, same resources, same root placement) and then
- * converted; a target is converted where it stands. Returns the COMPONENT's own handle — Figma mints
- * a NEW node for it, so the promoted frame's id is not the component's — plus every keyed node in
- * its subtree.
- */
-// A single expression on purpose: the queue slot is reserved before component() can possibly yield,
-// which is the lock's invocation-order guarantee (see enterMutatingVerb) — don't add work above it.
-export function component(nodeOrTarget: WriteNode | Target, options?: ComponentOptions): Promise<ComponentResult> {
-  return enterMutatingVerb(
-    "component",
-    // Prepare — the document-blind checks, then the targets and resources.
-    async (): Promise<PreparedBuiltComponent | PreparedTargetComponent> => {
-      const prepared = compileComponentOptions(options);
-      if (classifySubject(nodeOrTarget) === "target") {
-        const node: any = await resolveTarget(nodeOrTarget as Target);
-        // Nothing authored, so nothing binds anything: a definition without an explicit default, and any
-        // slot at all, refuse here naming what THIS form can pass.
-        assertSlotsAreBound([], prepared.definitions, "target");
-        const targets = createResolvedTargets();
-        await resolveDefaultTargets(prepared.definitions, targets);
-        return { kind: "target", node, targets, options: prepared };
-      }
-      const tree = nodeOrTarget as WriteNode;
-      assertConstructorBuiltTree(tree);
+export function component(specOrTarget: NodeSpec | Target, options?: ComponentOptions): Promise<AuthoredTree> {
+  return enterMutatingVerb("component", async (): Promise<PreparedBuiltComponent> => {
+    const prepared = compileComponentOptions(options);
+    const spec = typeof specOrTarget === "string" || "__flcmId" in specOrTarget
+      ? { id: (await resolveTarget(specOrTarget as Target)).id } : specOrTarget;
+    const tree = compileTree(spec, "flcm.component.spec");
+    const loaded = await loadTreeResources(tree);
+    if (tree.liveId) assertPromotable(loaded.live.entries.find(e => e.wn === tree)!.node);
+    else {
       assertPromotableBuiltRoot(tree);
-      // The component lands on the page like any render root, and the page has no bounded size to
-      // resolve "fill" or a percent against — render's own gate, shared so both verbs answer alike.
-      if (tree.layout) assertSizingResolvesAgainstParentFrame(tree.layout, true, "flcm");
-      const bound = collectBoundWriteNodes(tree);
-      assertBindingsResolve(bound, prepared.definitions);
-      assertSlotsAreBound(bound, prepared.definitions, "built");
-      const loaded = await loadTreeResources(tree);
-      await resolveDefaultTargets(prepared.definitions, loaded.targets);
-      return { kind: "built", tree, loaded, bound, options: prepared };
-    },
-    // Gate — what the live document decides: the target's promotability, the instance plans, and
-    // the defaults. Defaults AFTER the plans: a derived instance-swap default reads the plan the
-    // gate just made, rather than resolving the same target a second time to a different answer.
-    (prepared): GatedBuiltComponent | GatedTargetComponent => {
-      if (prepared.kind === "target") {
-        assertNodeStillOnCanvas(prepared.node, SUBJECT);
-        assertPromotable(prepared.node);
-        return { kind: "target", node: prepared.node, definitions: resolveDefaults(prepared.options.definitions, [], new Map(), "target", prepared.targets), options: prepared.options };
-      }
-      const resources = gateTreeResources(prepared.tree, prepared.loaded, { componentRoot: true });
-      const definitions = resolveDefaults(prepared.options.definitions, prepared.bound, resources.instances, "built", prepared.loaded.targets);
-      return { kind: "built", tree: prepared.tree, resources, definitions, options: prepared.options };
-    },
-    (gated) => (gated.kind === "built" ? applyBuiltComponent(gated) : applyTargetComponent(gated)),
-  );
+      if (tree.layout) assertSizingResolvesAgainstParentFrame(tree.layout, true, SUBJECT);
+    }
+    const bound = collectBoundWriteNodes(tree);
+    assertBindingsResolve(bound, prepared.definitions);
+    assertSlotsAreBound(bound, prepared.definitions);
+    await resolveDefaultTargets(prepared.definitions, loaded.targets);
+    return { kind: "built", tree, loaded, bound, options: prepared };
+  }, (prepared): GatedBuiltComponent => {
+    const resources = gateTreeResources(prepared.tree, prepared.loaded, { componentRoot: true });
+    const live = resources.live?.get(prepared.tree);
+    if (live) assertPromotable(live.node);
+    return { kind: "built", tree: prepared.tree, resources,
+      definitions: resolveDefaults(prepared.options.definitions, prepared.bound, resources.instances, prepared.loaded.targets, resources.live), options: prepared.options };
+  }, applyBuiltComponent);
 }
 
-function applyBuiltComponent({ tree, resources, definitions, options }: GatedBuiltComponent): ComponentResult {
+function applyBuiltComponent({ tree, resources, definitions, options }: GatedBuiltComponent): AuthoredTree {
   // One of the two ctxs that opt INTO binding collection — this verb declares the properties in the
   // same call; the other is an insert landing inside a component (structure.ts's applyInsert, which
   // has one already declaring them). See RenderCtx.bindings.
@@ -618,36 +521,21 @@ function applyBuiltComponent({ tree, resources, definitions, options }: GatedBui
     const comp = figma.createComponentFromNode(root);
     // The root's own key rides across by hand: createComponentFromNode returns a NEW node, so the
     // pluginData stamped on the frame belongs to a node that no longer exists. Children keep theirs
-    // (Figma moves the same nodes), so the walk's own `keyed` map stays right except at the root.
+    // Figma moves the same child nodes into the component.
     if (typeof tree.key === "string") {
       writeKey(comp, tree.key);
-      ctx.keyed[tree.key] = comp;
     }
     declareProperties(comp, definitions, ctx.bindings!, options);
     applyExposures(ctx.exposures);
-    return settleHandles(comp, ctx.keyed);
+    if (tree.liveId) recordPromotionAlias(tree.liveId, comp.id);
+    tree.source!.id = comp.id;
+    return tree.source as AuthoredTree;
   } catch (cause) {
     throw fail(cause);
   }
 }
 
-function applyTargetComponent({ node, definitions, options }: GatedTargetComponent): ComponentResult {
-  const fail = beginMutatingApply("component", node);
-  try {
-    // Read the key BEFORE the conversion and re-stamp it after, exactly as the constructor-built form does:
-    // createComponentFromNode hands back a new node, and whether Figma carries pluginData across is
-    // undocumented. Re-stamping is right under either answer, and keeps the two forms symmetric.
-    const key = readKey(node);
-    const previousId = node.id;
-    const comp = figma.createComponentFromNode(node);
-    if (key) writeKey(comp, key);
-    declareProperties(comp, definitions, [], options);
-    recordPromotionAlias(previousId, comp.id);
-    return settleHandles(comp, collectKeyed(comp));
-  } catch (cause) {
-    throw fail(cause);
-  }
-}
+
 
 // ---- flcm.variants ----
 
@@ -795,7 +683,7 @@ function assertCombinable(node: any, at: string): void {
 /**
  * flcm.variants(entries, options) — fold standalone components into a COMPONENT_SET. Each entry
  * names the SAME axes; the set lands under the FIRST component's parent, at its index, and members
- * elsewhere are moved into it. Returns the set's handle — which is what flcm.instance then takes,
+ * elsewhere are moved into it. Returns the set's handle — which is what INSTANCE then takes,
  * selecting a member through `componentProperties`.
  */
 // A single expression on purpose — see enterMutatingVerb on the invocation-order guarantee.

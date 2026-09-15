@@ -5,22 +5,19 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
-import { frame, text, rect, id, get, effects } from "./flcm.js";
+import { id, get, effects } from "./flcm.js";
 import { render } from "./render.js";
 
 test("get on a frame returns the expanded canonical shape — values inline, children included", async () => {
   createFigmaMock();
   await render(
-    frame(
-      { key: "card", width: 200, height: 100, fill: "#ff0000", layout: { mode: "row", gap: 8, padding: 12 } },
-      [rect({ key: "chip", width: 40, height: 40, fill: "#00ff00" })],
-    ),
+    ({ type: "FRAME", key: "card", width: 200, height: 100, fill: "#ff0000", layout: { mode: "row", gap: 8, padding: 12 }, children: [({ type: "RECTANGLE", key: "chip", width: 40, height: 40, fill: "#00ff00" })] }),
   );
 
   const { node: read } = await get("card");
   assert.equal(read.type, "FRAME");
   // The live object, not a JSON round-trip: an unset layout word is ABSENT, not present-but-undefined,
-  // because this exact object spreads into the constructors' closed-set gate.
+  // because this exact object spreads into the compilers' closed-set gate.
   assert.deepEqual(read.layout, { mode: "row", padding: "12px", gap: "8px" });
   assert.deepEqual(read.fill, "#FF0000"); // the inline value — never a "fill_…" styles ref
   const chip = read.children?.[0];
@@ -32,7 +29,7 @@ test("get on a frame returns the expanded canonical shape — values inline, chi
 test("get on a text node reads back content and text style", async () => {
   createFigmaMock();
   await render(
-    frame({ key: "wrap" }, [text("Hello **world**", { key: "greeting", textStyle: { fontSize: 16 } })]),
+    ({ type: "FRAME", key: "wrap", children: [({ type: "TEXT", text: "Hello **world**", key: "greeting", textStyle: { fontSize: 16 } })] }),
   );
 
   const { node: read } = await get("greeting");
@@ -94,12 +91,7 @@ test("get on an instance carries an honest type and its componentId", async () =
 test("get reads beyond-CSS effects back as the flcm.effects object form", async () => {
   createFigmaMock();
   await render(
-    rect({
-      key: "pane",
-      width: 100,
-      height: 100,
-      effects: effects({ glass: true, noise: true, texture: true, progressiveBlur: 24 }),
-    }),
+    ({ type: "RECTANGLE", key: "pane", width: 100, height: 100, effects: effects({ glass: true, noise: true, texture: true, progressiveBlur: 24 }) }),
   );
 
   const { node: read } = await get("pane");
@@ -133,8 +125,8 @@ test("get reads beyond-CSS effects back as the flcm.effects object form", async 
 
 test("get on a hidden node fails loud instead of returning nothing", async () => {
   const figma = createFigmaMock();
-  const out = await render(frame({ key: "ghost", width: 10, height: 10 }));
-  (await figma.getNodeByIdAsync(out.node.id)).visible = false;
+  const out = await render(({ type: "FRAME", key: "ghost", width: 10, height: 10 }));
+  (await figma.getNodeByIdAsync(out.id)).visible = false;
 
   await assert.rejects(get("ghost"), /hidden/);
 });

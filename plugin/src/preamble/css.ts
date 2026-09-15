@@ -129,7 +129,7 @@ function readImagePaint(value: object, field: string): WriteImageHash {
 }
 
 // Both word tables below are indexed by an AGENT-SUPPLIED string, and a plain `table[key]` reaches
-// Object.prototype — `blendMode: "constructor"` would resolve to a function and sail through the
+// Object.prototype — `blendMode: "compiler"` would resolve to a function and sail through the
 // unknown-word reject. Own-property only.
 function ownEntry<T>(table: Record<string, T>, key: string): T | undefined {
   return Object.prototype.hasOwnProperty.call(table, key) ? table[key] : undefined;
@@ -298,7 +298,7 @@ function parseShadow(s: string): WriteEffect {
   });
 }
 
-// filter / backdrop-filter: one or more `blur(Npx)`. The build() constructor applies the ×2 CSS->Figma
+// filter / backdrop-filter: one or more `blur(Npx)`. The build() compiler applies the ×2 CSS->Figma
 // factor (see effects.ts), so it is NOT applied here. Any other function (drop-shadow(), …) throws.
 function parseBlurs(css: string, build: (cssPx: number) => WriteEffect): WriteEffect[] {
   const fns = splitTopLevel(css.trim(), " ").map((t) => t.trim()).filter((t) => t.length);

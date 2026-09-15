@@ -4,7 +4,7 @@ import { sceneFigma as figma } from "./scene-access.js";
 // them before render() builds any text.
 //
 // Fonts must be loaded before a TextNode's characters/size are set or the plugin throws. In the
-// constructors are pure data and never touch fonts; only render() creates live
+// compilers are pure data and never touch fonts; only render() creates live
 // nodes, and it's async — so loading lives here as a plain async function render() awaits. Keeping it
 // out of module top level (no top-level await) is what lets the whole preamble bundle as a synchronous
 // IIFE, which keeps every internal helper closure-private. Never move it to module scope.
@@ -136,7 +136,7 @@ function textEditReflows(patch: WriteProps): boolean {
 // the round trip; the gate compiles again and assertTextEditFontsLoaded proves this load still
 // covers what it compiled.
 //
-// `built` are the constructor-built trees the same verb will BUILD (an instance delta's slot content): their
+// `built` are the compiled trees the same verb will BUILD (an instance delta's slot content): their
 // fonts are a tree's, and they join the authored half so the verb still pays one load.
 export async function loadFontsForTextEdits(edits: readonly EditFontNeed[], built: readonly WriteNode[] = []): Promise<FontMap> {
   const reflowing = edits.filter(({ node, patch }) => node.type === "TEXT" && textEditReflows(patch));
@@ -256,7 +256,7 @@ export function resolveFont(fonts: FontMap, family: string | undefined, weight: 
 export function resolveFontStrict(fonts: FontMap, family: string | undefined, weight: number | string | undefined, italic = false): { family: string; style: string } {
   const font = fonts[key(family, weight, italic)];
   if (!font) {
-    throw new Error("flcm.text: a run's font (" + (family || DEFAULT_FAMILY) + ", weight " + (weight == null ? "default" : weight) + (italic ? ", italic" : "") + ") was not loaded before render — the run would silently render in the base style. This is an internal error; report it.");
+    throw new Error("TEXT: a run's font (" + (family || DEFAULT_FAMILY) + ", weight " + (weight == null ? "default" : weight) + (italic ? ", italic" : "") + ") was not loaded before render — the run would silently render in the base style. This is an internal error; report it.");
   }
   return font;
 }

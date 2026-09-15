@@ -1,28 +1,29 @@
+import { withoutIds } from "../../harness/spec-node.js";
+import { specNode } from "../../harness/spec-node.js";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
-import { frame, rect, text, line, ellipse, path, svg, instance } from "./flcm.js";
+
 import { render } from "./render.js";
 import { get, find, selection, resolveTarget } from "./read.js";
 import { edit } from "./edit.js";
 import { editMany } from "./edit-many.js";
-import { fromRead } from "./from-read.js";
 import { clone } from "./structure.js";
 
 test("a deeply nested task is found and completed, preserving the same-text survivor and its pins", async () => {
   createFigmaMock();
-  const root = await render(frame({ key: "root" }, [frame({}, [frame({}, [rect({ key: "task" })])]), rect({ key: "unrendered", visible: false })]));
+  const root = await render(({ type: "FRAME", key: "root", children: [({ type: "FRAME", children: [({ type: "FRAME", children: [({ type: "RECTANGLE", key: "task" })] })] }), ({ type: "RECTANGLE", key: "unrendered", visible: false })] }));
   const task = await resolveTarget("task");
   task.annotations = [{ label: "Make this the primary CTA" }, { label: "Make this the primary CTA", properties: [{ type: "width" }, { type: "fills" }] }];
   // A note on a hidden layer is invisible to find, exactly as it is to get: both cover the RENDERED
   // document, so the facet stage and the predicate stage judge the same population.
   (await resolveTarget("unrendered")).annotations = [{ label: "Show this layer" }];
-  const hits = await find({ within: root.node, hasAnnotations: true });
+  const hits = await find({ within: root, hasAnnotations: true });
   assert.deepEqual(hits.map((h) => h.id), [task.id]);
   const [hit] = hits;
   assert.deepEqual(hit.annotations, [{ text: "Make this the primary CTA" }, { text: "Make this the primary CTA", properties: ["width", "fills"] }]);
   // Re-read immediately before the replacement; choose one entry's identity, never all matching text.
-  const [fresh] = await find({ within: root.node, hasAnnotations: true });
+  const [fresh] = await find({ within: root, hasAnnotations: true });
   const completed = fresh.annotations![0];
   await edit(fresh, { name: "CTA", annotations: fresh.annotations!.filter((note) => note !== completed) });
   assert.equal(task.name, "CTA");
@@ -31,16 +32,16 @@ test("a deeply nested task is found and completed, preserving the same-text surv
   assert.equal(task.annotations.length, 1);
   await edit(task, { annotations: [] });
   assert.equal("annotations" in (await get(task)).node, false);
-  assert.deepEqual(await find({ within: root.node, hasAnnotations: true }), []);
+  assert.deepEqual(await find({ within: root, hasAnnotations: true }), []);
 });
 
-test("categories reuse exact trimmed names and retain their color across constructors, edits, and selection", async () => {
+test("categories reuse exact trimmed names and retain their color across compilers, edits, and selection", async () => {
   createFigmaMock();
   const existing = await figma.annotations.addAnnotationCategoryAsync({ label: "Agent", color: "green" });
   await figma.annotations.addAnnotationCategoryAsync({ label: "agent", color: "red" });
   const note = { annotations: [{ text: "Tapping opens filters", category: " Agent " }] };
-  const out = await render(frame(note, [rect(note), text("Label", note), line(note), ellipse(note), path({ d: "M0 0 L10 10", ...note }), svg('<svg width="10" height="10"></svg>', note)]));
-  const root = await resolveTarget(out.node);
+  const out = await render(({ type: "FRAME", ...(note), children: [({ type: "RECTANGLE", ...(note) }), ({ type: "TEXT", text: "Label", ...(note) }), ({ type: "LINE", ...(note) }), ({ type: "ELLIPSE", ...(note) }), ({ type: "VECTOR", d: "M0 0 L10 10", ...note }), ({ type: "VECTOR", svg: '<svg width="10" height="10"></svg>', ...(note) })] }));
+  const root = await resolveTarget(out);
   await editMany(root.children.map((node) => ({ target: node, changes: note })));
   assert.equal((await figma.annotations.getAnnotationCategoriesAsync()).length, 2);
   assert.equal(existing.color, "green");
@@ -53,59 +54,59 @@ test("categories reuse exact trimmed names and retain their color across constru
 test("a category is created once across a tree and later verbs; a property-only note round-trips", async () => {
   createFigmaMock();
   const note = { annotations: [{ text: "Intent", category: "Agent" }] };
-  const out = await render(frame(note, [rect(note), rect(note)]));
-  await edit(out.node, { annotations: [{ properties: ["width"] }, ...note.annotations] });
+  const out = await render(({ type: "FRAME", ...(note), children: [({ type: "RECTANGLE", ...(note) }), ({ type: "RECTANGLE", ...(note) })] }));
+  await edit(out, { annotations: [{ properties: ["width"] }, ...note.annotations] });
   assert.equal((await figma.annotations.getAnnotationCategoriesAsync()).length, 1);
-  assert.deepEqual((await get(out.node)).node.annotations, [{ properties: ["width"] }, ...note.annotations]);
+  assert.deepEqual((await get(out)).node.annotations, [{ properties: ["width"] }, ...note.annotations]);
 });
 
 test("invalid edits and ambiguous categories create nothing; a failed apply removes its new category", async () => {
   createFigmaMock();
-  const out = await render(rect({}));
+  const out = await render(({ type: "RECTANGLE" }));
   const note = { annotations: [{ text: "Intent", category: "New" }] };
-  await assert.rejects(edit(out.node, { ...note, opacity: "bad" } as never), /opacity/);
-  await assert.rejects(editMany([{ target: out.node, changes: note }, { target: "missing", changes: { name: "bad" } }]), /missing/);
-  await assert.rejects(edit(out.node, { annotations: [{ text: "bad", category: " " }] }), /non-blank/);
-  await assert.rejects(edit(out.node, { annotations: [{ properties: ["fake"] }] }), /pinned property/);
+  await assert.rejects(edit(out, { ...note, opacity: "bad" } as never), /opacity/);
+  await assert.rejects(editMany([{ target: out, changes: note }, { target: "missing", changes: { name: "bad" } }]), /missing/);
+  await assert.rejects(edit(out, { annotations: [{ text: "bad", category: " " }] }), /non-blank/);
+  await assert.rejects(edit(out, { annotations: [{ properties: ["fake"] }] }), /pinned property/);
   assert.equal((await figma.annotations.getAnnotationCategoriesAsync()).length, 0);
   const a = await figma.annotations.addAnnotationCategoryAsync({ label: "Agent", color: "red" });
   const b = await figma.annotations.addAnnotationCategoryAsync({ label: "Agent", color: "blue" });
-  await assert.rejects(edit(out.node, { annotations: [...note.annotations, { text: "Ambiguous", category: "Agent" }] }), (err: Error) => err.message.includes(a.id) && err.message.includes(b.id));
+  await assert.rejects(edit(out, { annotations: [...note.annotations, { text: "Ambiguous", category: "Agent" }] }), (err: Error) => err.message.includes(a.id) && err.message.includes(b.id));
   assert.equal((await figma.annotations.getAnnotationCategoriesAsync()).length, 2);
-  const node = await resolveTarget(out.node);
+  const node = await resolveTarget(out);
   Object.defineProperty(await figma.getNodeByIdAsync(node.id), "annotations", { get: () => [], set: () => { throw new Error("Figma refused annotations"); } });
-  await assert.rejects(edit(out.node, note), /Figma refused/);
+  await assert.rejects(edit(out, note), /Figma refused/);
   assert.deepEqual((await figma.annotations.getAnnotationCategoriesAsync()).map((c) => c.id), [a.id, b.id]);
 });
 
-test("fromRead drops annotations throughout a rebuild; clone keeps pending tasks and design intent", async () => {
+test("data copies and clone retain annotations throughout the subtree", async () => {
   createFigmaMock();
-  const out = await render(frame({ annotations: [{ text: "Resize this", category: "Agent" }] }, [text("Filters", { annotations: [{ text: "Opens filters" }] })]));
-  const rebuilt = await render(fromRead((await get(out.node)).node));
-  assert.equal((await get(rebuilt.node)).node.annotations, undefined);
-  assert.deepEqual(await find({ within: rebuilt.node, hasAnnotations: true }), []);
-  const copied = await clone(out.node);
-  assert.deepEqual((await get(copied.node)).node.annotations, (await get(out.node)).node.annotations);
+  const out = await render(({ type: "FRAME", annotations: [{ text: "Resize this", category: "Agent" }], children: [({ type: "TEXT", text: "Filters", annotations: [{ text: "Opens filters" }] })] }));
+  const rebuilt = await render(withoutIds((await get(out)).node));
+  assert.deepEqual((await get(rebuilt)).node.annotations, (await get(out)).node.annotations);
+  assert.equal((await find({ within: rebuilt, hasAnnotations: true })).length, 1);
+  const copied = await clone(out);
+  assert.deepEqual((await get(copied.node)).node.annotations, (await get(out)).node.annotations);
   assert.equal((await find({ within: copied.node, hasAnnotations: true })).length, 1);
 });
 
 test("an instance inherits none of its component's notes; cloning the instance keeps its own", async () => {
   const figma = createFigmaMock();
-  const built = await render(frame({ key: "card", annotations: [{ text: "Resize this", category: "Agent" }] }, [text("Label", { key: "label", annotations: [{ text: "Opens filters", properties: ["width"] }] })]));
-  const comp = figma.createComponentFromNode(await figma.getNodeByIdAsync(built.keyed.card.id));
-  const stamped = await render(instance(comp.id, { annotations: [{ text: "Wire this one up" }] }));
+  const built = await render(({ type: "FRAME", key: "card", annotations: [{ text: "Resize this", category: "Agent" }], children: [({ type: "TEXT", text: "Label", key: "label", annotations: [{ text: "Opens filters", properties: ["width"] }] })] }));
+  const comp = figma.createComponentFromNode(await figma.getNodeByIdAsync(specNode(built, "card").id));
+  const stamped = await render(({ type: "INSTANCE", componentId: comp.id, annotations: [{ text: "Wire this one up" }] }));
   // The component's notes stay the component's: neither the instance root nor any sublayer takes them.
-  assert.deepEqual((await get(stamped.node)).node.annotations, [{ text: "Wire this one up" }]);
-  assert.deepEqual(await find({ within: stamped.node, hasAnnotations: true }), []);
-  const copied = await clone(stamped.node);
+  assert.deepEqual((await get(stamped)).node.annotations, [{ text: "Wire this one up" }]);
+  assert.deepEqual(await find({ within: stamped, hasAnnotations: true }), []);
+  const copied = await clone(stamped);
   assert.deepEqual((await get(copied.node)).node.annotations, [{ text: "Wire this one up" }]);
   assert.deepEqual(await find({ within: copied.node, hasAnnotations: true }), []);
 });
 
 test("the documented node matrix admits polygon, star and SLOT but refuses group and section", async () => {
   createFigmaMock();
-  const out = await render(frame({}));
-  const node = await resolveTarget(out.node);
+  const out = await render(({ type: "FRAME" }));
+  const node = await resolveTarget(out);
   for (const type of ["POLYGON", "STAR", "COMPONENT", "COMPONENT_SET", "SLOT"]) {
     node.type = type;
     await edit(node, { annotations: [{ text: "Intent" }] });
@@ -118,22 +119,22 @@ test("the documented node matrix admits polygon, star and SLOT but refuses group
 
 test("a target deleted during category creation rejects and removes the category", async () => {
   createFigmaMock();
-  const out = await render(rect({}));
-  const node = await resolveTarget(out.node);
+  const out = await render(({ type: "RECTANGLE" }));
+  const node = await resolveTarget(out);
   const addCategory = figma.annotations.addAnnotationCategoryAsync;
   figma.annotations.addAnnotationCategoryAsync = async (input) => {
     const category = await addCategory(input);
     node.remove();
     return category;
   };
-  await assert.rejects(edit(out.node, { annotations: [{ text: "Intent", category: "Agent" }] }), /removed|deleted|no longer exists/);
+  await assert.rejects(edit(out, { annotations: [{ text: "Intent", category: "Agent" }] }), /removed|deleted|no longer exists/);
   assert.deepEqual(await figma.annotations.getAnnotationCategoriesAsync(), []);
 });
 
 test("a category that refuses removal never becomes the failure the agent sees, and the rest still go", async () => {
   createFigmaMock();
-  const out = await render(rect({}));
-  const node = await resolveTarget(out.node);
+  const out = await render(({ type: "RECTANGLE" }));
+  const node = await resolveTarget(out);
   const addCategory = figma.annotations.addAnnotationCategoryAsync;
   figma.annotations.addAnnotationCategoryAsync = async (input) => {
     const category = await addCategory(input);
@@ -142,7 +143,7 @@ test("a category that refuses removal never becomes the failure the agent sees, 
   };
   Object.defineProperty(await figma.getNodeByIdAsync(node.id), "annotations", { get: () => [], set: () => { throw new Error("Figma refused annotations"); } });
   await assert.rejects(
-    edit(out.node, { annotations: [{ text: "Task", category: "Stuck" }, { text: "Intent", category: "Fine" }] }),
+    edit(out, { annotations: [{ text: "Task", category: "Stuck" }, { text: "Intent", category: "Fine" }] }),
     (err: Error) => err.message.startsWith("flcm.edit") && err.message.includes("Figma refused annotations") && err.message.includes('"Stuck"'),
   );
   assert.deepEqual((await figma.annotations.getAnnotationCategoriesAsync()).map((category) => category.label), ["Stuck"]);

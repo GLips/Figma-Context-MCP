@@ -1,3 +1,5 @@
+import { compileTree } from "./compile-tree.js";
+import { specNode } from "../../harness/spec-node.js";
 // Editing a live INSTANCE — read words are write words, so `flcm.edit` is the whole surface: a
 // frame's words on the root, `componentProperties` (variants included), `overrides` per sublayer,
 // and `componentId` to swap. Plus `flcm.detach`, the one verb that ends an instance.
@@ -10,7 +12,7 @@
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
-import { frame, rect, text, instance, id } from "./flcm.js";
+import { id } from "./flcm.js";
 import { render } from "./render.js";
 import { edit } from "./edit.js";
 import { editMany } from "./edit-many.js";
@@ -26,21 +28,21 @@ beforeEach(() => {
 // property, and two sublayers an override can reach.
 async function chipComponent() {
   const built = await render(
-    frame({ key: "chip", fill: "#0000ff", layout: { mode: "row", gap: 4, padding: 8 } }, [
-      rect({ key: "icon", name: "Icon", width: 12, height: 12, fill: "#ffffff" }),
-      text("Label", { key: "label", name: "Label", textStyle: { fontSize: 12 } }),
-    ]),
+    ({ type: "FRAME", key: "chip", fill: "#0000ff", layout: { mode: "row", gap: 4, padding: 8 }, children: [
+      ({ type: "RECTANGLE", key: "icon", name: "Icon", width: 12, height: 12, fill: "#ffffff" }),
+      ({ type: "TEXT", text: "Label", key: "label", name: "Label", textStyle: { fontSize: 12 } }),
+    ] }),
   );
-  const comp = figma.createComponentFromNode(await figma.getNodeByIdAsync(built.keyed.chip.id));
+  const comp = figma.createComponentFromNode(await figma.getNodeByIdAsync(specNode(built, "chip").id));
   comp.name = "Chip";
-  const label = await figma.getNodeByIdAsync(built.keyed.label.id);
-  const icon = await figma.getNodeByIdAsync(built.keyed.icon.id);
+  const label = await figma.getNodeByIdAsync(specNode(built, "label").id);
+  const icon = await figma.getNodeByIdAsync(specNode(built, "icon").id);
   const labelProp = comp.addComponentProperty("Label", "TEXT", "Label");
   const iconProp = comp.addComponentProperty("Icon", "BOOLEAN", true);
   label.componentPropertyReferences = { characters: labelProp };
   icon.componentPropertyReferences = { visible: iconProp };
-  const stamped = await render(instance(comp.id, { key: "live" }));
-  return { comp, label, icon, labelProp, iconProp, inst: await figma.getNodeByIdAsync(stamped.node.id) };
+  const stamped = await render(({ type: "INSTANCE", componentId: comp.id, key: "live" }));
+  return { comp, label, icon, labelProp, iconProp, inst: await figma.getNodeByIdAsync(stamped.id) };
 }
 
 // A two-axis variant set plus an instance of Size=Large, State=Default (variants[1]).
@@ -53,8 +55,8 @@ async function variantSet() {
   });
   const set = figma.combineAsVariants(variants, figma.currentPage);
   set.name = "Button";
-  const stamped = await render(instance(variants[1].id));
-  return { set, variants, inst: await figma.getNodeByIdAsync(stamped.node.id) };
+  const stamped = await render(({ type: "INSTANCE", componentId: variants[1].id }));
+  return { set, variants, inst: await figma.getNodeByIdAsync(stamped.id) };
 }
 
 test("a frame's words land on an instance's root, and the layout gate reads its LIVE mode", async () => {
@@ -70,10 +72,10 @@ test("a frame's words land on an instance's root, and the layout gate reads its 
   assert.equal(inst.itemSpacing, 12);
 
   // The same word on an instance of a FREE-FORM component is refused by the live mode, not by type.
-  const plainFrame = await render(frame({ key: "plain", width: 40, height: 40 }));
-  const plain = figma.createComponentFromNode(await figma.getNodeByIdAsync(plainFrame.node.id));
-  const stamped = await render(instance(plain.id));
-  await assert.rejects(edit(id(stamped.node.id), { layout: { gap: 8 } }), /need an auto-layout \(row\/column\) container/);
+  const plainFrame = await render(({ type: "FRAME", key: "plain", width: 40, height: 40 }));
+  const plain = figma.createComponentFromNode(await figma.getNodeByIdAsync(plainFrame.id));
+  const stamped = await render(({ type: "INSTANCE", componentId: plain.id }));
+  await assert.rejects(edit(id(stamped.id), { layout: { gap: 8 } }), /need an auto-layout \(row\/column\) container/);
   assert.equal(comp.itemSpacing, 4); // the component is untouched by any of it
 });
 
@@ -125,13 +127,13 @@ test("componentId swaps the component; overrides in the same delta land on the N
   const { inst } = await chipComponent();
   // A second component with a same-named "Label" sublayer — what Figma matches an override across.
   const builtB = await render(
-    frame({ key: "b", left: 400, fill: "#00ff00", layout: { mode: "row", gap: 2, padding: 4 } }, [
-      text("B", { key: "labelB", name: "Label", textStyle: { fontSize: 12 } }),
-    ]),
+    ({ type: "FRAME", key: "b", left: 400, fill: "#00ff00", layout: { mode: "row", gap: 2, padding: 4 }, children: [
+      ({ type: "TEXT", text: "B", key: "labelB", name: "Label", textStyle: { fontSize: 12 } }),
+    ] }),
   );
-  const compB = figma.createComponentFromNode(await figma.getNodeByIdAsync(builtB.keyed.b.id));
+  const compB = figma.createComponentFromNode(await figma.getNodeByIdAsync(specNode(builtB, "b").id));
   compB.name = "Chip B";
-  const labelB = await figma.getNodeByIdAsync(builtB.keyed.labelB.id);
+  const labelB = await figma.getNodeByIdAsync(specNode(builtB, "labelB").id);
 
   const handle = await edit(id(inst.id), {
     componentId: compB.id,
@@ -155,8 +157,8 @@ test("componentId swaps the component; overrides in the same delta land on the N
 
 test("the main component is proven at the seal: a swap during the font load refuses with zero writes", async () => {
   const { comp, label, inst } = await chipComponent();
-  const builtB = await render(frame({ key: "b", left: 400, layout: { mode: "row" } }, [text("B", { key: "labelB", name: "Label" })]));
-  const compB = figma.createComponentFromNode(await figma.getNodeByIdAsync(builtB.keyed.b.id));
+  const builtB = await render(({ type: "FRAME", key: "b", left: 400, layout: { mode: "row" }, children: [({ type: "TEXT", text: "B", key: "labelB", name: "Label" })] }));
+  const compB = figma.createComponentFromNode(await figma.getNodeByIdAsync(specNode(builtB, "b").id));
   compB.name = "Chip B";
   const before = [...figma.undoLog];
   // The delta names the component the instance HAS, so prepare plans it as a no-op swap. The font
@@ -180,27 +182,27 @@ test("the main component is proven at the seal: a swap during the font load refu
 });
 
 test("the component words are INSTANCE-only — every other type rejects them by name", async () => {
-  const out = await render(frame({ key: "card", width: 100, height: 100 }, [text("hi", { key: "t" })]));
+  const out = await render(({ type: "FRAME", key: "card", width: 100, height: 100, children: [({ type: "TEXT", text: "hi", key: "t" })] }));
   await assert.rejects(edit("card", { componentProperties: { Size: "Large" } }), /`componentProperties` is not a FRAME word/);
   await assert.rejects(edit("card", { overrides: { "1:2": { fill: "#000" } } }), /`overrides` is not a FRAME word/);
   await assert.rejects(edit("card", { componentId: "1:2" }), /`componentId` is not a FRAME word/);
   await assert.rejects(edit("t", { componentId: "1:2" }), /`componentId` is not a TEXT word/);
-  assert.equal((await figma.getNodeByIdAsync(out.keyed.card.id)).width, 100);
+  assert.equal((await figma.getNodeByIdAsync(specNode(out, "card").id)).width, 100);
 });
 
 test("every component-word refusal fires before the seal, with zero writes and zero undo residue", async () => {
   const { comp, inst } = await chipComponent();
-  const plain = await render(rect({ width: 10, height: 10 }));
+  const plain = await render(({ type: "RECTANGLE", width: 10, height: 10 }));
   const logBefore = [...figma.undoLog];
   await assert.rejects(edit(id(inst.id), { componentProperties: { Lable: "x" } }), /no property "Lable" — its properties are "Label", "Icon"/);
   await assert.rejects(edit(id(inst.id), { componentProperties: { Icon: "yes" } }), /is a boolean property — got "yes"/);
   await assert.rejects(edit(id(inst.id), { overrides: { "999:999": { fill: "#000" } } }), /has no sublayer at that path/);
   await assert.rejects(edit(id(inst.id), { componentId: 7 as never }), /the component to swap to must be a component's node id/);
-  await assert.rejects(edit(id(inst.id), { componentId: plain.node.id }), /is not a component/);
+  await assert.rejects(edit(id(inst.id), { componentId: plain.id }), /is not a component/);
   await assert.rejects(edit(id(inst.id), { componentId: id(inst.id) as never }), /is itself an instance, not a component/);
   // A nested instance's own component is out of an override's reach, and says where to go instead.
   assert.throws(
-    () => instance(comp.id, { overrides: { "1:2": { componentId: "1:3" } } as never }),
+    () => compileTree(({ type: "INSTANCE", componentId: comp.id, overrides: { "1:2": { componentId: "1:3" } } as never }), "spec"),
     /`componentId` reaches a NESTED instance's own component/,
   );
   assert.deepEqual(figma.undoLog, logBefore);
@@ -210,7 +212,7 @@ test("every component-word refusal fires before the seal, with zero writes and z
 
 test("editMany takes instance deltas, atomically, alongside ordinary ones", async () => {
   const { label, inst } = await chipComponent();
-  const other = await render(rect({ key: "box", width: 10, height: 10 }));
+  const other = await render(({ type: "RECTANGLE", key: "box", width: 10, height: 10 }));
   const undosBefore = figma.undoLog.length;
   await editMany([
     { target: id(inst.id), changes: { componentProperties: { Label: "Go" }, overrides: { [label.id]: { fill: "#00ff00" } }, opacity: 0.4 } },
@@ -222,7 +224,7 @@ test("editMany takes instance deltas, atomically, alongside ordinary ones", asyn
   assert.deepEqual(figma.undoLog.slice(undosBefore), ["commit", "commit"]); // one undo step for the set
 
   // A bad component word rejects the whole batch, naming its entry — and the sibling never lands.
-  const box = await figma.getNodeByIdAsync(other.node.id);
+  const box = await figma.getNodeByIdAsync(other.id);
   await assert.rejects(
     editMany([
       { target: "box", changes: { fill: "#0000ff" } },
@@ -252,11 +254,11 @@ test("detach hands back a NEW frame and leaves the instance node behind", async 
 
 test("detach refuses a NESTED instance, naming the outer one, and anything that isn't an instance", async () => {
   const { comp, inst } = await chipComponent();
-  const outerFrame = await render(frame({ key: "outer", left: 400, width: 200, height: 60 }, [instance(comp.id, { key: "nested" })]));
-  const outerComp = figma.createComponentFromNode(await figma.getNodeByIdAsync(outerFrame.keyed.outer.id));
+  const outerFrame = await render(({ type: "FRAME", key: "outer", left: 400, width: 200, height: 60, children: [({ type: "INSTANCE", componentId: comp.id, key: "nested" })] }));
+  const outerComp = figma.createComponentFromNode(await figma.getNodeByIdAsync(specNode(outerFrame, "outer").id));
   outerComp.name = "Panel";
-  const stamped = await render(instance(outerComp.id));
-  const outer = await figma.getNodeByIdAsync(stamped.node.id);
+  const stamped = await render(({ type: "INSTANCE", componentId: outerComp.id }));
+  const outer = await figma.getNodeByIdAsync(stamped.id);
   const nested = outer.children[0];
   assert.equal(nested.type, "INSTANCE");
   await assert.rejects(detach(id(nested.id)), (err: Error) => {
@@ -275,11 +277,11 @@ test("detach refuses a NESTED instance, naming the outer one, and anything that 
 
 test("a NESTED instance takes the same words — its live ids carry exactly ONE leading `I`", async () => {
   const { comp, label } = await chipComponent();
-  const outerFrame = await render(frame({ key: "outer", left: 400, width: 200, height: 60 }, [instance(comp.id, { key: "nested" })]));
-  const outerComp = figma.createComponentFromNode(await figma.getNodeByIdAsync(outerFrame.keyed.outer.id));
+  const outerFrame = await render(({ type: "FRAME", key: "outer", left: 400, width: 200, height: 60, children: [({ type: "INSTANCE", componentId: comp.id, key: "nested" })] }));
+  const outerComp = figma.createComponentFromNode(await figma.getNodeByIdAsync(specNode(outerFrame, "outer").id));
   outerComp.name = "Panel";
-  const stamped = await render(instance(outerComp.id));
-  const outer = await figma.getNodeByIdAsync(stamped.node.id);
+  const stamped = await render(({ type: "INSTANCE", componentId: outerComp.id }));
+  const outer = await figma.getNodeByIdAsync(stamped.id);
   const nested = outer.children[0];
   assert.equal(nested.type, "INSTANCE");
   assert.equal(nested.id.indexOf("II"), -1);
@@ -307,16 +309,16 @@ test("an empty component bag is refused rather than minting an undo step for zer
 
 test("a swap and a layout word in one delta gate on the component the swap brings IN", async () => {
   const { inst } = await chipComponent(); // "Chip" is a row
-  const builtFree = await render(frame({ key: "free", left: 400, width: 80, height: 30, fill: "#00ff00" }));
-  const freeComp = figma.createComponentFromNode(await figma.getNodeByIdAsync(builtFree.keyed.free.id));
+  const builtFree = await render(({ type: "FRAME", key: "free", left: 400, width: 80, height: 30, fill: "#00ff00" }));
+  const freeComp = figma.createComponentFromNode(await figma.getNodeByIdAsync(specNode(builtFree, "free").id));
   freeComp.name = "Free";
-  const builtRow = await render(frame({ key: "row", left: 600, layout: { mode: "row", gap: 2, padding: 2 } }, [rect({ width: 8, height: 8 })]));
-  const rowComp = figma.createComponentFromNode(await figma.getNodeByIdAsync(builtRow.keyed.row.id));
+  const builtRow = await render(({ type: "FRAME", key: "row", left: 600, layout: { mode: "row", gap: 2, padding: 2 }, children: [({ type: "RECTANGLE", width: 8, height: 8 })] }));
+  const rowComp = figma.createComponentFromNode(await figma.getNodeByIdAsync(specNode(builtRow, "row").id));
   rowComp.name = "Row";
 
   // Swapping a free-form instance to a row MAKES the gap legal — the pre-swap mode must not refuse it.
-  const stampedFree = await render(instance(freeComp.id));
-  const freeInst = await figma.getNodeByIdAsync(stampedFree.node.id);
+  const stampedFree = await render(({ type: "INSTANCE", componentId: freeComp.id }));
+  const freeInst = await figma.getNodeByIdAsync(stampedFree.id);
   await edit(id(freeInst.id), { componentId: rowComp.id, layout: { gap: 20 } });
   assert.equal(freeInst.layoutMode, "HORIZONTAL");
   assert.equal(freeInst.itemSpacing, 20);
@@ -333,12 +335,12 @@ test("a swap and a layout word in one delta gate on the component the swap bring
 });
 
 test("an override's live gate runs BEFORE the seal — a refusal costs zero writes, not a rollback", async () => {
-  const built = await render(frame({ key: "panel", left: 400, width: 120, height: 60 }, [frame({ key: "inner", width: 40, height: 40 })]));
-  const panel = figma.createComponentFromNode(await figma.getNodeByIdAsync(built.keyed.panel.id));
+  const built = await render(({ type: "FRAME", key: "panel", left: 400, width: 120, height: 60, children: [({ type: "FRAME", key: "inner", width: 40, height: 40 })] }));
+  const panel = figma.createComponentFromNode(await figma.getNodeByIdAsync(specNode(built, "panel").id));
   panel.name = "Panel";
-  const inner = await figma.getNodeByIdAsync(built.keyed.inner.id);
-  const stamped = await render(instance(panel.id));
-  const pinst = await figma.getNodeByIdAsync(stamped.node.id);
+  const inner = await figma.getNodeByIdAsync(specNode(built, "inner").id);
+  const stamped = await render(({ type: "INSTANCE", componentId: panel.id }));
+  const pinst = await figma.getNodeByIdAsync(stamped.id);
   const before = [...figma.undoLog];
   await assert.rejects(
     edit(id(pinst.id), { overrides: { [inner.id]: { layout: { gap: 8 } } } }),
@@ -350,11 +352,11 @@ test("an override's live gate runs BEFORE the seal — a refusal costs zero writ
 test("editMany refuses an entry aimed INSIDE an instance another entry re-points", async () => {
   const { label, inst } = await chipComponent();
   const builtB = await render(
-    frame({ key: "b", left: 400, fill: "#00ff00", layout: { mode: "row", gap: 2, padding: 4 } }, [
-      text("B", { key: "labelB", name: "Label", textStyle: { fontSize: 12 } }),
-    ]),
+    ({ type: "FRAME", key: "b", left: 400, fill: "#00ff00", layout: { mode: "row", gap: 2, padding: 4 }, children: [
+      ({ type: "TEXT", text: "B", key: "labelB", name: "Label", textStyle: { fontSize: 12 } }),
+    ] }),
   );
-  const compB = figma.createComponentFromNode(await figma.getNodeByIdAsync(builtB.keyed.b.id));
+  const compB = figma.createComponentFromNode(await figma.getNodeByIdAsync(specNode(builtB, "b").id));
   compB.name = "Chip B";
   const liveLabelId = "I" + inst.id + ";" + label.id;
   const before = [...figma.undoLog];
@@ -477,7 +479,7 @@ test("rectangle overrides gate before creating an instance or retargeting its co
   const overrides = { [icon.id]: { width: 72, fill: "#00ff00" } };
   const before = [...figma.undoLog];
   const children = [...figma.currentPage.children];
-  await assert.rejects(render(instance(comp.id, { overrides })), /explicit width\/height cannot resize an inherited rectangle/);
+  await assert.rejects(render(({ type: "INSTANCE", componentId: comp.id, overrides })), /explicit width\/height cannot resize an inherited rectangle/);
   assert.deepEqual(figma.currentPage.children, children);
   await assert.rejects(edit(id(inst.id), { opacity: 0.5, overrides }), /explicit width\/height cannot resize an inherited rectangle/);
   const other = figma.createComponent();

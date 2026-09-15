@@ -1,3 +1,4 @@
+import type { NodeSpec } from "./schema.js";
 // ir — the typed WriteNode currency: the ONE internal representation the whole preamble speaks. Every
 // leaf is a real type (a number, a typed edge box, a discriminated paint/effect value), never a CSS
 // string. The sugar (flcm.ts) compiles terse author props straight into this; the bridge (bridge.ts)
@@ -9,7 +10,7 @@
 // matters at the AGENT I/O BOUNDARY; internally the string form forced a number→string→number round-trip
 // on the only path that ships today (authoring). So strings are now quarantined to css.ts (the input
 // boundary), and the currency here is typed. The read-port promise is re-framed accordingly: a future
-// `get` result (a SimplifiedNode of CSS strings) REBUILDS through the flcm constructors — the one
+// `get` result (a SimplifiedNode of CSS strings) REBUILDS through the flcm compilers — the one
 // validated compile; render refuses IR they didn't mint — rather than being rendered string-for-string.
 //
 // Phase-1 scope for the WriteNode currency: only create/render fields. Read-compression refs
@@ -30,12 +31,12 @@ import type {
 // `type` round-trips to a create call, so the set is closed: bridge.ts's BUILDERS table is typed
 // `Record<WriteType, …>` (TS enforces a builder per type) and render() rejects anything outside it with
 // a specific error rather than letting a confusing plugin-API throw surface. INSTANCE is createable
-// (flcm.instance stamps a component), but its content comes from the component, never from `children`.
+// (INSTANCE stamps a component), but its content comes from the component, never from `children`.
 export type WriteType = "FRAME" | "TEXT" | "RECTANGLE" | "ELLIPSE" | "LINE" | "VECTOR" | "INSTANCE";
 
 // The node types edit has a per-type vocabulary for. A superset of WriteType on purpose: an INSTANCE
 // is both, while the definition types (COMPONENT/COMPONENT_SET, and the SLOT an instance shows for a
-// bound frame) are edited but never constructed — flcm.component PROMOTES a frame; no constructor
+// bound frame) are edited but never constructed — flcm.component PROMOTES a frame; no compiler
 // builds one.
 export type EditableType = WriteType | "COMPONENT" | "COMPONENT_SET" | "SLOT" | "POLYGON" | "STAR";
 
@@ -47,14 +48,10 @@ export type EditableType = WriteType | "COMPONENT" | "COMPONENT_SET" | "SLOT" | 
 // misspelled group name is a compile error on each side. Lives here, not in flcm.ts or schema.ts,
 // because ir.ts is the one module both sides already import type-safely with no zod and no figma.
 //
-// INSTANCE takes a FRAME's words plus the `instance` group: its root is a frame-like container whose
-// every named word becomes a root-level override, and an unnamed one keeps tracking the component. It
-// alone also takes `swap` (`componentId`), the one word that exists only under edit — the constructor
-// takes the component positionally, so the group is composed here rather than into INSTANCE's create
-// vocabulary.
+// INSTANCE combines frame-like root overrides with instance controls and the componentId target.
 //
 // `binding` (`componentPropertyReferences`) composes into every type that can BE a component's
-// sublayer — the same universality it has at create, where every constructor takes it. Not onto
+// sublayer — the same universality it has at create, where every compiler takes it. Not onto
 // COMPONENT/COMPONENT_SET: Figma has no component inside a component, so a component's own binding
 // would name a property of something that can't exist. Not onto SLOT either: a slot is what an
 // INSTANCE shows for a bound frame, and the binding lives on that frame back in the definition.
@@ -310,7 +307,7 @@ export interface WriteProps {
   key?: string;
   text?: string;
   // Vector content. A VECTOR WriteNode carries EXACTLY ONE of these two, and they drive two different
-  // plugin calls — the two vector verbs are not interchangeable (see flcm.svg / flcm.path):
+  // plugin calls — the two vector verbs are not interchangeable (see VECTOR / VECTOR):
   //   • `svg`      — raw SVG markup → figma.createNodeFromSvg, which returns a FRAME of vectors with its
   //                  colors baked in. So a VECTOR-typed node can render a FrameNode; the handle reports the
   //                  real created type. Appearance props don't apply (color lives in the markup).
@@ -324,7 +321,7 @@ export interface WriteProps {
   runs?: WriteTextRun[];
   textStyle?: WriteTextStyle;
   // TEXT only: clamp the node to at most N lines, truncating with an ending ellipsis (textTruncation:
-  // "ENDING" + maxLines:N in the bridge). The author boundary (flcm.text) rejects it on a width-hugging
+  // "ENDING" + maxLines:N in the bridge). The author boundary (TEXT) rejects it on a width-hugging
   // text — truncation needs a bounded width to wrap against — so a value here always has a wrap to bite.
   // "none" is edit's removal spelling: truncation DISABLED, maxLines null (create never compiles it).
   maxLines?: number | "none";
@@ -349,15 +346,15 @@ export interface WriteProps {
   // reference and a property value can only be resolved against the live document (which
   // definition owns the property, what the variant axes are, which node a swap target names),
   // and an override delta compiles against the TYPE of the sublayer it targets — none of which
-  // a document-blind constructor can see. The constructor validates their SHAPE (an object, known delta
+  // a document-blind compiler can see. The compiler validates their SHAPE (an object, known delta
   // words); render's gate resolves and compiles them (instance.ts) before any write.
   exposed?: boolean;
   component?: Target;
   componentProperties?: Record<string, ComponentPropertyInput>;
   overrides?: Record<string, OverrideDeltaInput>;
   // The BINDING half of the component words, kept raw for the same reason: which property a name
-  // reaches is decided by the flcm.component call that declares them, not by the constructor. The
-  // constructor judges the bag's SHAPE and which fields ITS node type can bind; the verb's prepare
+  // reaches is decided by the flcm.component call that declares them, not by the compiler. The
+  // compiler judges the bag's SHAPE and which fields ITS node type can bind; the verb's prepare
   // resolves each name against that call's `propertyDefinitions`. Any other verb refuses a tree
   // carrying one (flcm.assertNoComponentPropertyBindings) — a binding with no declaring call is a
   // name pointing at nothing.
@@ -366,8 +363,8 @@ export interface WriteProps {
 
 // Which component property drives which of a node's fields — the read shape's own word, and its
 // own field spellings (`text`, not Figma's wire key `characters`). Each value is a property NAME
-// declared in the same flcm.component call. Per-node legality is the constructor's (`text` only on
-// flcm.text, `componentId` only on flcm.instance, `slot` only on flcm.frame, `visible` anywhere).
+// declared in the same flcm.component call. Per-node legality is the compiler's (`text` only on
+// TEXT, `componentId` only on INSTANCE, `slot` only on FRAME, `visible` anywhere).
 export interface ComponentPropertyBinding {
   visible?: string;
   text?: string;
@@ -421,12 +418,6 @@ export interface ComponentEditWords {
   componentPropertyReferences?: ComponentPropertyBindingEdit;
 }
 
-// What flcm.component hands back: the COMPONENT itself plus every keyed node in its subtree —
-// render's own `{ node, keyed }`, so an agent that renders and an agent that promotes read the
-// same fields. The component's id is NOT the promoted frame's (Figma mints a new node), which is
-// why `node` is the only trustworthy way back to it.
-export interface ComponentResult { node: Handle; keyed: Record<string, Handle> }
-
 // One member of an flcm.variants call: the standalone COMPONENT, and which member of the set it IS
 // in the set's axes. One entry shape — the axes are what a set is made of, so there is no
 // bare-component form to guess a name from.
@@ -446,8 +437,7 @@ export type OverrideDeltaInput = Record<string, unknown>;
 // raw: which component a target names, which definition owns a property, and which sublayer a path
 // reaches are all live-document facts. Split out of the compiled patch by edit's stage 2; the verb
 // resolves their targets in prepare and plans them in its gate (instance.planInstanceEdit).
-// `componentId` is the swap word — read-side
-// spelling, edit-side only (a constructor takes its component positionally).
+// componentId selects the destination component for a live instance swap.
 export interface InstanceEditWords {
   exposed?: boolean;
   componentId?: Target;
@@ -456,14 +446,15 @@ export interface InstanceEditWords {
 }
 
 export interface WriteNode extends WriteProps {
+  source?: NodeSpec;
+  sourcePath?: string;
+  liveId?: string;
+  authoring?: Record<string, unknown>;
   type: WriteType;
 }
 
-// Constructor provenance (the WeakSet, the tree gate) lives in provenance.ts — one home for
-// "did an flcm constructor build this node", and why the IR is not an authoring surface.
-
-// A child slot may be falsy so `cond && flcm.text(...)` composes; the bridge skips falsy entries.
-export type WriteChild = WriteNode | null | false | undefined;
+// Compiled children are private IR nodes; author input is validated before the walk.
+export type WriteChild = WriteNode;
 
 // A node's stable identity — the fields every returned reference shares, pulled out of the live node by
 // identity.identityOf so render's Handle and the read verbs' SlimHandle can't drift on how they read
@@ -472,13 +463,7 @@ export type WriteChild = WriteNode | null | false | undefined;
 // `"removed" in value`, so a read shape that exposed it would be wrongly collapsed in transit.
 export interface Identity { id: string; type: string; name: string; key?: string; text?: string }
 
-// A Handle is the JSON-safe reference render() returns for a node: what crosses the bridge back to the
-// agent in place of a live (unserializable) Figma node. Defined here so the schema module can type
-// render()'s return without importing bridge.ts (which speaks figma.*). Geometry is spelled EXACTLY as the
-// read side spells it (SlimHandle below, and `get`'s NodeGeometry): flat width/height, and left/top only
-// when the parent's auto-layout doesn't already place the node. One vocabulary at the agent boundary is the
-// point — an agent that measures what it rendered and an agent that locates an existing node read the same
-// field names. The values are settled by render()'s post-walk minting pass (bridge.settleHandles).
+// Edit and clone return measured handles. Tree verbs return authored data with ids.
 export interface Handle extends Identity {
   minWidth?: number;
   maxWidth?: number;
@@ -534,26 +519,6 @@ export interface SlimHandle extends Identity {
   childCount?: number;
 }
 
-// ---- What the structural verbs return. Every one carries the SUBJECT plus each container whose
-// geometry the operation could have moved — a hug parent reflows whenever its children change, and
-// those are exactly the nodes an agent would otherwise re-read. Flat handles with fresh geometry,
-// a few dozen tokens each; never nested trees (dive with `get`).
-//
-// Containers are named `to` (where things ended up) and `from` (a container something LEFT), in
-// every shape — `append(parent, thing)` returns InsertResult or MoveResult depending on what it
-// was passed, and an agent reading `out.to` must not have to know which branch ran. Either field
-// is ABSENT when its container is the page (no box to measure) and `from` is absent on a reorder
-// inside one parent, where `to` already names it. ----
-
-// Placing a constructor-built node: render's own `{ node, keyed }` (one vocabulary — an agent that
-// renders and an agent that appends read the same fields) plus the attach point. `node` is the
-// subject every result-shaped verb names — the same key MoveResult/CloneResult use, so a caller
-// that just wants what the verb acted on never has to ask which branch ran.
-export interface InsertResult { node: Handle; keyed: Record<string, Handle>; to?: Handle }
-
-// Placing (or `move`-ing) a LIVE node: the node plus both ends of the reparent.
-export interface MoveResult { node: Handle; from?: Handle; to?: Handle }
-
 export interface CloneResult { node: Handle; to?: Handle }
 
 // What `get` hands back. An ENVELOPE rather than a bare node because `components` is keyed by
@@ -597,4 +562,4 @@ export interface RawIdRef { __flcmId: string }
 // handle-shaped object carrying an `id` — a render Handle, a find/selection SlimHandle, a read
 // POJO. SlimHandle is named in the union (not just assignable) because it's what the locate verbs
 // actually return, and the runtime accepts any `{ id }` regardless.
-export type Target = string | RawIdRef | Handle | SlimHandle;
+export type Target = string | RawIdRef | { id: string };

@@ -152,10 +152,8 @@ const SECTIONS: Section[] = [
     blurb: "the full verb list and what each builds",
     body: () =>
       `\`flcm\` exposes exactly these. Nothing else is on the \`flcm\` object.\n\n${verbTable()}\n\n` +
-      "`FRAME`, `TEXT`, `RECTANGLE`, `ELLIPSE`, `LINE`, and `VECTOR` (via `flcm.svg`/`flcm.path`) are the " +
-      "**only** node types you can create — anything else fails loud at render. `flcm.gradient` and " +
-      "`flcm.effects` don't build nodes; they build " +
-      "*values* you pass to a `fill`/`effects` prop (you can also write the equivalent CSS string directly).\n\n" +
+      "Nodes are data with type FRAME, TEXT, RECTANGLE, ELLIPSE, LINE, VECTOR or INSTANCE. " +
+      "gradient, image and effects produce reusable values for props.\n\n" +
       `### Children and composition\n\n${CHILDREN}`,
   },
   {
@@ -163,44 +161,37 @@ const SECTIONS: Section[] = [
     title: "Props by node",
     blurb: "every prop on every verb, with types",
     body: () =>
-      "Every prop is optional; an omitted prop is simply not applied (a frame with no `fill` is transparent, " +
-      "not white).\n\n" +
-      "**Read and write share one vocabulary.** What `get` returns spreads straight into any constructor or " +
-      "`flcm.edit` — `flcm.rect({ ...node, width: 320 })`, `flcm.text(node)` — because `left`/`top`, `fill`, " +
-      "`text`, `boldWeight` and the rest are the same words on both sides. A read shape's read-only words (`id`, " +
-      "`type`, a root's `contextual` size beside `designedWidth`) fold away. A node with `children` needs " +
-      "`flcm.fromRead(node)`, which rebuilds the whole subtree and refuses by name the fields flcm has no " +
-      "word for (`strokeDashes`, a locked aspect ratio, a grid). A component property binding " +
-      "(`componentPropertyReferences`) rebuilds, but means something only inside a component — see the components section.\n\n" +
+      "New nodes require type; INSTANCE also requires componentId, and VECTOR requires exactly one of svg or d. " +
+      "An id refers to a live node; type can be omitted for a move. children is an array of plain specs. " +
+      "Other omitted props keep live values or use creation defaults. The verb returns the spec copied with ids.\n\n" +
       `### Shared by every node\n\n${propTable(FIELD_GROUPS.shared)}\n\n` +
       `### Annotations\n\n${propTable(FIELD_GROUPS.annotation)}\n\n${ANNOTATIONS_REFERENCE}\n\n` +
       "### Size & position (frame, text, rect, ellipse, instance)\n\n" +
       '(A `line` sizes on a numeric `width` alone — its length; there is no `height`, `"fill"`, or `"hug"`.)\n\n' +
       `${propTable(FIELD_GROUPS.size)}\n\n` +
       `#### Percent sizing\n\n${PERCENT_SIZING}\n\n` +
-      `### flcm.frame — container props\n\n${propTable({ ...FIELD_GROUPS.appearance, ...FIELD_GROUPS.frame })}\n\n` +
+      `### FRAME — container props\n\n${propTable({ ...FIELD_GROUPS.appearance, ...FIELD_GROUPS.frame })}\n\n` +
       `#### Auto-layout config (the \`layout\` object)\n\n${propTable(FIELD_GROUPS.layout)}\n\n` +
-      `### flcm.text — text props\n\n${propTable(FIELD_GROUPS.text)}\n\n` +
-      '`text` is the content — passed first (`flcm.text("Hi", props)`) or as the `text` prop (`flcm.text(props)`), ' +
-      "never both: a plain string, or an array of styled runs (below). `fill` is its paint, like any node; " +
+      `### TEXT — text props\n\n${propTable(FIELD_GROUPS.text)}\n\n` +
+      "`text` is a string or array of styled runs. `fill` is its paint. " +
       "`boldWeight` says what `**` in `text` resolves to. A fixed `width` makes it wrap (grows in height); " +
       "otherwise it grows sideways.\n\n" +
       `#### Text style (the \`textStyle\` object)\n\n${propTable(FIELD_GROUPS.textStyle)}\n\n` +
-      `### flcm.text — rich text (runs)\n\n${RICH_TEXT}\n\nEach styled run's delta fields:\n\n${propTable(FIELD_GROUPS.run)}\n\n` +
-      `### flcm.rect — shape props\n\n${propTable(FIELD_GROUPS.appearance)}\n\n` +
-      `### flcm.ellipse — shape props\n\n(An ellipse has no \`borderRadius\` — its edge is already round.)\n\n${propTable(FIELD_GROUPS.ellipse)}\n\n` +
-      `### flcm.line — line props\n\n${propTable(FIELD_GROUPS.line)}\n\n` +
-      `### flcm.path — vector props\n\n(\`flcm.svg\` takes only the shared and size/position props above — colors are baked into the markup.)\n\n${propTable(FIELD_GROUPS.path)}\n\n` +
-      // The instance table prints once, here beside its sibling constructors; the components section's
+      `### TEXT — rich text (runs)\n\n${RICH_TEXT}\n\nEach styled run's delta fields:\n\n${propTable(FIELD_GROUPS.run)}\n\n` +
+      `### RECTANGLE — shape props\n\n${propTable(FIELD_GROUPS.appearance)}\n\n` +
+      `### ELLIPSE — shape props\n\n(An ellipse has no \`borderRadius\` — its edge is already round.)\n\n${propTable(FIELD_GROUPS.ellipse)}\n\n` +
+      `### LINE — line props\n\n${propTable(FIELD_GROUPS.line)}\n\n` +
+      `### VECTOR — vector props\n\n(Use \`svg\` for opaque markup with shared and size/position props; use \`d\` for a themeable path with the props below.)\n\n${propTable(FIELD_GROUPS.path)}\n\n` +
+      // The instance table prints once, here beside its sibling node types; the components section's
       // prose explains the same two words at length rather than repeating the table.
-      "### flcm.instance — component words\n\n(An instance also takes every `flcm.frame` prop above; each one " +
+      "### INSTANCE — component words\n\n(An instance also takes every `FRAME` prop above; each one " +
       "named is a root-level override. `componentId` names the component in the props form, and swaps it under edit — see the components section.)\n\n" +
-      propTable(FIELD_GROUPS.instance),
+      propTable({ ...FIELD_GROUPS.swap, ...FIELD_GROUPS.instance }),
   },
   {
     id: "vector",
     title: "Vector art (svg & path)",
-    blurb: "icons/logos via flcm.svg and flcm.path",
+    blurb: "SVG imports and themeable vector paths",
     body: () => VECTOR_INTRO,
   },
   {
@@ -253,7 +244,7 @@ const SECTIONS: Section[] = [
     id: "components",
     title: "Components — making and using them",
     blurb:
-      "flcm.component / variants to make one; flcm.instance / edit / detach to stamp, override, swap, detach",
+      "flcm.component / variants to make one; INSTANCE / edit / detach to stamp, override, swap, detach",
     body: () =>
       // The swap word (`componentId`) has no table here: it is edit-only, so it rides the edit
       // section's table, and the narrative below says what it does.
@@ -267,8 +258,8 @@ const SECTIONS: Section[] = [
       `### Variants — \`flcm.variants\`\n\n${COMPONENTS_VARIANTS}\n\n` +
       `### Changing a component — \`flcm.edit\`\n\n${COMPONENTS_EDIT_MAIN}\n\n` +
       // No instance or fill-word table here: the instance table prints in the props section beside the
-      // other constructors, and the fill word's whole shape is in the "Filling a slot" prose.
-      `### Using one — \`flcm.instance\`\n\n${COMPONENTS_INTRO}\n\n` +
+      // other node types, and the fill word's whole shape is in the "Filling a slot" prose.
+      `### Using one — \`INSTANCE\`\n\n${COMPONENTS_INTRO}\n\n` +
       // COMPONENTS_RULES is the section's one refusal catalogue; the prose above states each other
       // refusal beside the rule it enforces, so nothing is listed twice.
       `${COMPONENTS_EDIT}\n\n${COMPONENTS_DETACH}\n\n${COMPONENTS_RULES}`,
@@ -317,7 +308,6 @@ const QUICKSTART_LIMIT_BYTES = 2048;
 // Typed by VerbCategory so a new category fails typecheck until it has a label — the trailing padding keeps
 // the quick-start's category column aligned.
 const CATEGORY_LABELS: Record<VerbCategory, string> = {
-  build: "build ",
   value: "value ",
   render: "render",
   edit: "edit  ",
@@ -357,8 +347,9 @@ export function buildQuickStart(): string {
 EXECUTION MODEL — your code runs in an async function body: use \`await\` directly and \`return <value>\`. Each call runs in its OWN scope — thread state by returning ids/keys and re-targeting them (flcm.get).
 
 DESCRIBE a tree, then RENDER once:
-  const t = flcm.frame({ layout:{ mode:"column", gap:16 } }, [ flcm.text("Hi") ]);
-  const out = await flcm.render(t);   // creates nodes → { node, keyed }
+  const t = { type:"FRAME", layout:{ mode:"column", gap:16 }, children:[{ type:"TEXT", text:"Hi" }] };
+  const out = await flcm.render(t); // copied spec with ids; input stays reusable
+  // id means move + edit; no id means create, at every depth.
 
 VERBS — all on \`flcm.\`, nothing else is:
 ${verbLines}
@@ -468,7 +459,7 @@ ${sectionList}
 
 ${verbTable()}
 
-- Constructors create nothing; only \`await flcm.render(tree)\` creates nodes → \`{ node, keyed }\`.
+- Nodes are plain data. Placement verbs return the spec copied with ids. Id means move and edit; no id means create.
 - Return ids/handles, never live Figma nodes.
 - Every metric (\`width\`, \`height\`, \`gap\`, \`padding\`, \`borderRadius\`, \`strokeWidth\`, \`left\`/\`top\`) takes a number or \`"Npx"\`; \`width\`/\`height\`/\`left\`/\`top\` also take \`"N%"\`, and \`width\`/\`height\` take \`"fill"\`/\`"hug"\`. Colors, gradients and shadows are CSS strings.
 - Out-of-subset CSS fails loud.`;

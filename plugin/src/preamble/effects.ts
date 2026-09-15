@@ -5,7 +5,7 @@
 // THE BLUR-RADIUS FACTOR (preserved from findings.md / figma-mcp's effects transformer): Figma's blur
 // radius is ~2x the CSS blur() radius (a Figma blur of 32 renders as CSS blur(16px); read HALVES it). So
 // a CSS-px blur becomes radius N*2. box-shadow blur is 1:1 (read emits the Figma radius directly), so it
-// is NOT doubled — the asymmetry is real. The ×2 lives ONLY in the *FromCssPx constructors below, so a
+// is NOT doubled — the asymmetry is real. The ×2 lives ONLY in the *FromCssPx compilers below, so a
 // value that is already a Figma radius can never be double-doubled.
 
 import { WriteEffect, WriteShadow, WriteBlur, WriteGlass, WriteNoise, WriteTexture, WriteProgressiveBlur, Rgba } from "./ir.js";

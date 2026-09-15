@@ -1,24 +1,4 @@
 import { compileBounds, BOUND_KEYS } from "./size-bounds.js";
-// flcm — the constructors. This is most of what the agent touches: a namespace of document-blind constructors
-// that build POJO WriteNodes (the typed IR currency) and mutate nothing. render() — the one async call
-// that walks a tree and creates live nodes — lives in render.ts, which imports FROM here: an instance
-// node resolves its component in render's prepare through the edit compile (instance.ts → edit-plan.ts
-// → this module), and a constructor module that imported that chain would close a cycle.
-//
-// The constructors take the read shape's own props (width/height/left/top/layout/fill/...) and compile
-// them into the typed WriteNode currency here. Author CSS-shaped leaves (a #hex color, a gradient string,
-// a "32px" metric) are normalized ONCE through css.ts at construction — the bridge only ever sees the
-// typed currency, never a string. The constructors are the ONLY way to make a renderable node:
-// their output is provenance-tracked and deep-frozen (mintWriteNode/sealWriteNode below), and the
-// bridge refuses anything else — hand-built IR could state combinations the compile forbids.
-//
-// Props types are precise so the bundle's own authors get checking, while the public entry points stay
-// runtime-lenient (agent code runs in QuickJS, not tsc): a bad value still fails loud at the parsers
-// (parseFill/length/sizing throw), it just isn't caught at compile time in the sandbox.
-//
-// Only the names exported from runtime.ts land on the `flcm` global; everything imported here stays
-// closure-private in the IIFE bundle — which is why nothing in this preamble needs a name prefix.
-
 import { compileAnnotations } from "./annotations.js";
 import {
   WriteNode, WriteProps, WriteChild, WriteLayout, WriteTextStyle, WriteTextRun, WritePaint,
@@ -26,7 +6,6 @@ import {
   Justify, Align, TextAlign, TextDecoration, WriteTextCase, RawIdRef, WriteType, Target,
   ComponentPropertyInput, OverrideDeltaInput, ComponentPropertyBinding, ComponentPropertyDefinitionEdit,
 } from "./ir.js";
-import { markConstructorBuilt, isConstructorBuilt, isReadNode, assertConstructorBuiltTree } from "./provenance.js";
 import { assertLayoutRealizableForType } from "./layout-legality.js";
 import { parseInlineMarkdown, MdSegment } from "./markdown.js";
 import { linearGradient, radialGradient } from "./paint.js";
@@ -47,19 +26,7 @@ import type {
   GlassSugar, NoiseSugar, TextureSugar, ProgressiveBlurSugar,
 } from "./schema.js";
 
-// ---- Unknown-prop rejection (ratified decision 1: fail loud, surface-wide, at construction) ----
-//
-// The write path used to silently drop any authoring prop it didn't read from a positive list — a typo'd
-// `textTransform` on a run, a stray `background` on a frame, just vanished, and the agent got a node that
-// quietly ignored what it asked for. That ends here: every constructor and every nested authoring object
-// rejects unknown keys at construction — BEFORE render/edit touches the canvas — so the whole call fails
-// atomically (nothing partial lands) and the agent can `catch` the error and fix the typo.
-//
-// The known-key sets live HERE, not sourced from schema.ts's zod: that zod must never enter the QuickJS
-// bundle (the purity gate). They mirror schema.ts's FIELD_GROUPS exactly — a tier-2 drift test
-// (unknown-props.test.ts) asserts each group == Object.keys of its schema group, so a prop added to (or
-// dropped from) the schema can't drift out of sync here. The reject itself is the shared closed-set gate in
-// validate.ts, the same one read.ts's locate query fails loud with.
+// These zod-free key sets mirror schema.ts; the drift test compares every field group.
 export const KNOWN_KEYS = {
   annotation: ["annotations"],
   shared: ["name", "key", "opacity", "mixBlendMode", "visible", "locked"],
@@ -96,7 +63,7 @@ function keySet(...groups: readonly (readonly string[])[]): ReadonlySet<string> 
 // Per-verb known-key sets, COMPOSED from the guarded group atoms above (so a verb set can't drift once the
 // groups are). Each mirrors the verb's composed schema — FrameSchema = shared+size+appearance+frame, etc.
 // `binding` composes into EVERY node's set: any layer can be bound to a component property, and
-// which FIELDS a given type may bind is the per-constructor list below (compileBindingBag), not the
+// which FIELDS a given type may bind is the per-compiler list below (compileBindingBag), not the
 // key set — the word itself is universal.
 const FRAME_KEYS = keySet(KNOWN_KEYS.annotation, KNOWN_KEYS.shared, KNOWN_KEYS.size, KNOWN_KEYS.appearance, KNOWN_KEYS.frame, KNOWN_KEYS.binding);
 const TEXT_KEYS = keySet(KNOWN_KEYS.annotation, KNOWN_KEYS.shared, KNOWN_KEYS.size, KNOWN_KEYS.text, KNOWN_KEYS.binding);
@@ -128,9 +95,8 @@ export const DOCUMENT_RESOLVED_EDIT_WORDS: ReadonlySet<string> = keySet([...INST
 // with the structural verbs. Which path is a slot is the document's to say (instance.ts).
 export const SLOT_CONTENT_WORD = KNOWN_KEYS.slotContent[0];
 const OVERRIDE_DELTA_KEYS = keySet(KNOWN_KEYS.edit.filter((k) => !DOCUMENT_RESOLVED_EDIT_WORDS.has(k)), KNOWN_KEYS.slotContent);
-// Each constructor's closed vocabulary, by the read type it builds — what fromRead judges a `get` result's
-// read words against before the call, so a word the type lacks is named as real state, not a typo.
-export const CONSTRUCTOR_KEYS_BY_TYPE: Record<"FRAME" | "TEXT" | "RECTANGLE" | "ELLIPSE" | "LINE" | "INSTANCE", ReadonlySet<string>> = {
+// The per-type authored vocabulary, checked against the prop schemas in the drift test.
+export const NODE_KEYS_BY_TYPE: Record<"FRAME" | "TEXT" | "RECTANGLE" | "ELLIPSE" | "LINE" | "INSTANCE", ReadonlySet<string>> = {
   FRAME: FRAME_KEYS, TEXT: TEXT_KEYS, RECTANGLE: SHAPE_KEYS, ELLIPSE: ELLIPSE_KEYS, LINE: LINE_KEYS, INSTANCE: INSTANCE_KEYS,
 };
 const PATH_KEYS = keySet(KNOWN_KEYS.annotation, KNOWN_KEYS.shared, KNOWN_KEYS.size, KNOWN_KEYS.path, KNOWN_KEYS.binding);
@@ -154,7 +120,7 @@ const EFFECTS_INPUT_KEYS = keySet(KNOWN_KEYS.effects, CSS_EFFECTS_WORDS);
 export const DIRECTIONAL_KEYS = keySet(["x", "y"]); // pin and anchor
 
 // The closed-set reject (rejectUnknownKeys) lives in validate.ts — one gate shared with read.ts's locate
-// query. Every constructor + nested object below passes its verb name / path as the `subject`.
+// query. Every compiler + nested object below passes its verb name / path as the `subject`.
 
 // ---- shared prop -> WriteNode compilers ----
 
@@ -382,7 +348,7 @@ export function compileContainerWords(cfg: NonNullable<FrameProps["layout"]>, su
 }
 
 // Compile the child-side size/placement words (width/height, left/top/position/anchor, pin) into a
-// WriteLayout — the same set every constructor rides. Presence-preserving like the container compile;
+// WriteLayout — the same set every compiler rides. Presence-preserving like the container compile;
 // the return is undefined when no word was written, so callers can gate on "was any layout named".
 // Exported for edit-plan.ts.
 export function compileSizeWords(props: SizeProps): WriteLayout | undefined {
@@ -404,7 +370,7 @@ export function compilePlacementWords(props: SizeProps): WriteLayout | undefined
   return Object.keys(layout).length ? layout : undefined;
 }
 
-// A LINE sizes on one word, `width` — its length, and a FIXED size only. Compiled here so flcm.line and
+// A LINE sizes on one word, `width` — its length, and a FIXED size only. Compiled here so LINE and
 // an edit delta reject a sizing intent with the SAME error: "fill"/"hug"/a percent read as a size on
 // every other node, and on a line they would silently become nothing.
 export function compileLineWidth(props: Pick<LineProps, "width">): WriteLayout | undefined {
@@ -429,7 +395,7 @@ function buildLayout(props: FrameProps, nodeType: WriteType, subject: string): W
   const layout: WriteLayout = {};
   if (nodeType === "FRAME") {
     // ?? not ||: a falsy-but-present layout (false, 0) must reach the compile's malformed-value reject.
-    Object.assign(layout, compileContainerWords(props.layout ?? {}, "flcm.frame.layout"));
+    Object.assign(layout, compileContainerWords(props.layout ?? {}, "FRAME.layout"));
     if (layout.mode == null) layout.mode = "none"; // the creation default: an omitted mode is free-form
   }
   // The size/position words ride the same compile edit does — the container words above and the
@@ -495,7 +461,7 @@ function compileStrokeAlign(value: unknown): "INSIDE" | "OUTSIDE" | "CENTER" {
   return hit;
 }
 
-// THE paint-word compile, shared by every constructor and edit's deltas so values and rejections
+// THE paint-word compile, shared by every compiler and edit's deltas so values and rejections
 // can't drift between verbs. "none" is the removal word (CSS's own absence spelling): an EMPTY
 // array is the compiled "clear this" — distinct from an ABSENT array, which means "don't touch it".
 // Create writing [] onto a fresh node clears a live seeded default; the distinction exists for edit.
@@ -519,80 +485,16 @@ export function compilePaintWord(value: NonNullable<AppearanceProps["fill"]>, su
   return [parseFill(value, subject)];
 }
 
-// Every constructor births its WriteNode here (WeakSet provenance — see provenance.ts on why
-// the IR is not an authoring surface) and returns it through sealWriteNode below. A spread-copy
-// ({ ...flcm.rect() }) is a different object and rejects at render — clone a node by re-calling
-// its constructor, the only validated path.
-function mintWriteNode(type: WriteType): WriteNode {
-  const wn: WriteNode = { type };
-  markConstructorBuilt(wn);
-  return wn;
-}
-
-// Seal the finished compile so provenance stays MEANINGFUL: without it, membership only proves
-// the node was once constructor-built, while `node.layout.gap = 12` after the fact would smuggle
-// unvalidated IR through the gate. Sealing CLONES as it freezes — the compile retains
-// caller-passed structures (a gradient WritePaint, an effects array), and freezing those in place
-// would break the caller's own reuse of them, while a caller-frozen shell would shield its
-// mutable descendants from an isFrozen-pruned walk. Cloning severs both: the sealed node shares
-// nothing caller-reachable except child nodes, which are constructor-sealed themselves (the
-// provenance check is the prune — never isFrozen). One traversal does both so the prune rule
-// can't drift between a clone pass and a freeze pass.
-function cloneAndFreeze(v: unknown): unknown {
-  if (v === null || typeof v !== "object") return v;
-  if (isConstructorBuilt(v)) return v; // a child node: already sealed, shared by design
-  if (Array.isArray(v)) return Object.freeze(v.map(cloneAndFreeze));
-  const out: Record<string, unknown> = {};
-  for (const k of Object.keys(v)) out[k] = cloneAndFreeze((v as Record<string, unknown>)[k]);
-  return Object.freeze(out);
-}
-
-function sealWriteNode(wn: WriteNode): WriteNode {
-  const bag = wn as unknown as Record<string, unknown>;
-  for (const k of Object.keys(bag)) bag[k] = cloneAndFreeze(bag[k]);
-  Object.freeze(wn);
-  return wn;
-}
-
-// Every constructor opens with the shared prelude (validate.ts acceptAuthoringProps): the read shape's
-// read-only words (`id`, `type`, `children`, a root's `designedWidth`) fold away, then the closed-set
-// gate runs — so a `get` result spreads straight in, and what comes back is the constructor's own
-// vocabulary.
-function frame(props: FrameProps | SimplifiedNode = {}, children?: WriteChild | WriteChild[]): WriteNode {
-  // ?? not || (here and in every constructor): null/undefined mean "no props" (the pinned absence
-  // convention), but a present falsy non-object (false, 0, "") is malformed and must reach the
-  // gate's non-object reject, not read as absence.
-  props = props ?? {};
-  // An array arriving first is almost always the children — steer to the real fix rather than
-  // letting the generic non-object reject imply a props problem.
-  if (Array.isArray(props)) {
-    throw new Error('flcm.frame takes (props, children) — children are the second argument: flcm.frame({}, [...]).');
-  }
-  props = acceptAuthoringProps(props, { type: "FRAME", verb: "create", known: FRAME_KEYS, subject: "flcm.frame" }) as FrameProps;
-  const wn = mintWriteNode("FRAME");
+function compileFrame(props: FrameProps): WriteNode {
+  props = acceptAuthoringProps(props, { type: "FRAME", verb: "create", known: FRAME_KEYS, subject: "FRAME" }) as FrameProps;
+  const wn: WriteNode = { type: "FRAME" };
   compileNodeLocalProps(wn, props, { radius: true, clip: true });
-  compileBindings(wn, props, FRAME_BINDINGS, "flcm.frame");
-  wn.layout = buildLayout(props, "FRAME", "flcm.frame");
-  // The children array is frozen IN PLACE — the one deliberate exception to the seal's
-  // clone-don't-freeze rule (cloneAndFreeze). A children list is the tree itself, and the
-  // aliasing accident is push-AFTER-frame(): with a silent clone that push builds a node the
-  // author believes has children and renders an empty frame; frozen, the push throws (agent
-  // code runs strict). Reusable values (a gradient, an effects array) keep the clone rule —
-  // sharing those across nodes is legitimate, appending to a handed-over children list is not.
-  wn.children = Object.freeze(Array.isArray(children) ? children : children ? [children] : []) as WriteChild[];
-  return sealWriteNode(wn);
+  compileBindings(wn, props, FRAME_BINDINGS, "FRAME");
+  wn.layout = buildLayout(props, "FRAME", "FRAME");
+  return wn;
 }
 
-// The two shapes of an instance's first argument. A props bag carrying `componentId` is the read shape
-// (`flcm.instance({ ...node })`); anything else is a component target. A handle carries `id` and no
-// `componentId`, so it stays a target — the only object that reads as props is one naming its
-// component in the read's own word.
-function isInstancePropsForm(arg: unknown): arg is Record<string, unknown> {
-  return !!arg && typeof arg === "object" && !Array.isArray(arg) && Object.prototype.hasOwnProperty.call(arg, "componentId");
-}
-
-// Target-by-shape, the one test every verb that takes a component uses (flcm.instance's positional
-// argument, an instance-swap value, flcm.component/variants' subjects) — so they refuse the same
+// Component targets share one grammar across instance specs, swaps, and component/variants subjects — so they refuse the same
 // non-targets with the same sentence. Exported for component.ts, which meets the same shapes.
 export function isTargetShaped(value: unknown): value is Target {
   if (typeof value === "string") return value.trim().length > 0;
@@ -603,62 +505,47 @@ export function isTargetShaped(value: unknown): value is Target {
 
 export const COMPONENT_TARGET_HINT = "a component's node id (a read's `componentId`), an flcm/key, flcm.id(id), or a handle from flcm.find";
 
-// flcm.instance(component, props) — stamp a component. Document-blind like every constructor: the component
+// INSTANCE(component, props) — stamp a component. Document-blind like every compiler: the component
 // target, the property values and the override deltas ride the WriteNode RAW (ir.ts WriteProps on why),
 // and render resolves them against the live document (instance.ts) before any write.
 // What IS judged here is everything the document can't change: the root words' vocabulary and values
 // (they compile exactly as a frame's do), the SHAPE of the two component bags, and each override
 // delta's words — the same document-blind gate edit's stage 1 runs on a delta.
 //
-// PRESENCE-PRESERVING, unlike flcm.frame: no `layout.mode: "none"` default, no transparent-fill
+// PRESENCE-PRESERVING, unlike FRAME: no `layout.mode: "none"` default, no transparent-fill
 // default, no hug default. An instance's root already has every value from its component, and a
 // creation default written onto it would be a root-level override the author never asked for — the
 // instance would stop tracking the component on that field. Only a named word becomes an override.
-function instance(componentOrProps: Target | InstanceProps | SimplifiedNode, props?: InstanceProps | SimplifiedNode): WriteNode {
-  let component: unknown;
-  let bag: unknown;
-  if (isInstancePropsForm(componentOrProps)) {
-    if (props !== undefined) {
-      throw new Error("flcm.instance takes (component, props) or ONE props object carrying `componentId` — not both. Drop the second argument, or pass the component first and leave `componentId` out of the props.");
-    }
-    const { componentId, ...rest } = componentOrProps as Record<string, unknown>;
-    component = componentId;
-    bag = rest;
-  } else {
-    component = componentOrProps;
-    bag = props ?? {};
-    if (isInstancePropsForm(bag)) {
-      throw new Error("flcm.instance: the component is the first argument, and the props also name `componentId` — two components for one instance. Pass one or the other.");
-    }
-  }
+function compileInstance(props: InstanceProps & { componentId: Target }): WriteNode {
+  const { componentId: component, ...bag } = props;
   if (!isTargetShaped(component)) {
-    throw new Error("flcm.instance: the component must be " + COMPONENT_TARGET_HINT + " — got " + JSON.stringify(component) + ".");
+    throw new Error("INSTANCE: the component must be " + COMPONENT_TARGET_HINT + " — got " + JSON.stringify(component) + ".");
   }
-  const accepted = acceptAuthoringProps(bag, { type: "INSTANCE", verb: "create", known: INSTANCE_KEYS, subject: "flcm.instance" }) as InstanceProps;
-  const wn = mintWriteNode("INSTANCE");
+  const accepted = acceptAuthoringProps(bag, { type: "INSTANCE", verb: "create", known: INSTANCE_KEYS, subject: "INSTANCE" }) as InstanceProps;
+  const wn: WriteNode = { type: "INSTANCE" };
   wn.component = component;
   if (accepted.exposed !== undefined) { assertScalarType(accepted.exposed, "boolean", "exposed"); wn.exposed = accepted.exposed; }
   compileNodeLocalProps(wn, accepted, { radius: true, clip: true });
   const layout: WriteLayout = {};
   // ?? not ||, as in buildLayout: a falsy-but-present layout must reach the compile's malformed reject.
-  if (accepted.layout != null) Object.assign(layout, compileContainerWords(accepted.layout, "flcm.instance.layout"));
+  if (accepted.layout != null) Object.assign(layout, compileContainerWords(accepted.layout, "INSTANCE.layout"));
   Object.assign(layout, compileSizeWords(accepted) || {});
   // The type rule (hug needs auto-layout, gap needs a container) is NOT run here: whether this root is
   // a row/column is the COMPONENT's fact, read in render's prepare — the same live-mode call edit makes.
   if (Object.keys(layout).length) wn.layout = layout;
-  compileBindings(wn, accepted, INSTANCE_BINDINGS, "flcm.instance");
-  if (accepted.componentProperties != null) wn.componentProperties = compileComponentPropertyBag(accepted.componentProperties, "flcm.instance");
-  if (accepted.overrides != null) wn.overrides = compileOverrideBag(accepted.overrides, "flcm.instance");
-  return sealWriteNode(wn);
+  compileBindings(wn, accepted, INSTANCE_BINDINGS, "INSTANCE");
+  if (accepted.componentProperties != null) wn.componentProperties = compileComponentPropertyBag(accepted.componentProperties, "INSTANCE");
+  if (accepted.overrides != null) wn.overrides = compileOverrideBag(accepted.overrides, "INSTANCE");
+  return wn;
 }
 
 // The property bag's SHAPE: an object of names to scalars or component targets. Which names exist,
 // what type each takes and which variant combinations are real are the component's to say, at
-// prepare. A null value is refused here rather than treated as absence: unlike a constructor word,
+// prepare. A null value is refused here rather than treated as absence: unlike a compiler word,
 // a property has no "unset" — the read never reports one as null, and a null would either
 // silently keep the default or throw inside Figma's setter.
 //
-// `subject` is the verb that met the bag — flcm.instance at construction, flcm.edit/editMany when a
+// `subject` is the verb that met the bag — INSTANCE at construction, flcm.edit/editMany when a
 // delta carries the same word. ONE shape gate for both, so what an instance is created with and what
 // an instance edit sets can't diverge on what a property value even is.
 export function compileComponentPropertyBag(raw: unknown, subject: string): Record<string, ComponentPropertyInput> {
@@ -751,53 +638,26 @@ export function compileOverrideBag(raw: unknown, subject: string): Record<string
   return out;
 }
 
-// The document-blind half of the fill word: `children` is an array of constructor-built nodes (`[]`
-// empties the slot), and they go through the same discipline every tree-taking verb applies
-// before a round trip — provenance, and no binding (an instance declares no property for one to
-// point at). Whether the PATH is a slot is the other half, answered against the component.
-//
-// A `get` result is named as such rather than as "hand-built": a `get` of a filled slot republishes
-// the content as raw `get` results under this very key, so an agent spreading that read back in meets
-// this refusal first, and the fix it needs is fromRead, not "call a constructor".
 function assertSlotContentShape(raw: unknown, at: string): void {
-  const where = at + "." + SLOT_CONTENT_WORD;
-  if (raw === null) {
-    throw new Error(where + " is null. `children` at a slot's path states the slot's content whole — pass the nodes to fill it with, or [] to empty it. There is no null form.");
-  }
-  if (!Array.isArray(raw)) {
-    throw new Error(where + " must be an array of nodes from the flcm constructors (flcm.frame/text/rect/…/instance), or [] to empty the slot — got " + JSON.stringify(raw) + ".");
-  }
-  raw.forEach((child, i) => {
-    if (!child) return; // `cond && flcm.text(…)` composes here as in any children list
-    const spot = where + "[" + i + "]";
-    if (typeof child !== "object") throw new Error(spot + " is not a node — got " + JSON.stringify(child) + ".");
-    if (isReadNode(child) || (!isConstructorBuilt(child) && typeof (child as { id?: unknown }).id === "string")) {
-      throw new Error(
-        spot + ": that is a `get` result, and a `get` result is not authoring input on its own. Rebuild it through the constructors — flcm.fromRead(node) for a whole subtree, " +
-          "or flcm.frame(node, children) / flcm.text(node) / flcm.instance(node) directly — and pass what they return.",
-      );
-    }
-    assertConstructorBuiltTree(child as WriteNode);
-    assertNoComponentPropertyBindings(child as WriteNode, spot);
-  });
+  if (!Array.isArray(raw)) throw new Error(at + ".children must be an array of node specs.");
 }
 
 // ---- the BINDING word (`componentPropertyReferences`) ----
 //
-// Which component property drives which of this node's fields. The constructor judges SHAPE and
+// Which component property drives which of this node's fields. The compiler judges SHAPE and
 // per-type legality only: the names point at properties an flcm.component call declares in the same
 // breath, so whether a name exists (and whether its TYPE matches the field) is that verb's prepare
 // to say — the same split `componentProperties` takes.
 
-// Why each field belongs to the one constructor it does, for the refusal's second sentence. `visible`
+// Why each field belongs to the one compiler it does, for the refusal's second sentence. `visible`
 // has no entry: every node has one, so it is never the wrong node's word.
 const BINDING_FIELD_OWNERS: Record<string, string> = {
-  text: "`text` drives a TEXT node's content, so it belongs to flcm.text",
-  componentId: "`componentId` is an instance-swap property re-pointing an INSTANCE, so it belongs to flcm.instance",
-  slot: "`slot` marks the FRAME that IS the slot (an instance shows it as a SLOT holding that frame's content), so it belongs to flcm.frame",
+  text: "`text` drives a TEXT node's content, so it belongs to TEXT",
+  componentId: "`componentId` is an instance-swap property re-pointing an INSTANCE, so it belongs to INSTANCE",
+  slot: "`slot` marks the FRAME that IS the slot (an instance shows it as a SLOT holding that frame's content), so it belongs to FRAME",
 };
 
-// Which fields each constructor may bind — `visible` everywhere, the other three only on the node
+// Which fields each compiler may bind — `visible` everywhere, the other three only on the node
 // type whose field they name. Written as arrays (not a set) so a refusal can list them in order.
 const ANY_NODE_BINDINGS: readonly string[] = ["visible"];
 const FRAME_BINDINGS: readonly string[] = ["visible", "slot"];
@@ -809,9 +669,9 @@ const INSTANCE_BINDINGS: readonly string[] = ["visible", "componentId"];
 export const BINDING_FIELD_KEYS: ReadonlySet<string> = keySet(FRAME_BINDINGS, TEXT_BINDINGS, INSTANCE_BINDINGS);
 
 /**
- * Which fields a LIVE node of this type may bind — the same per-type rule the constructors carry,
+ * Which fields a LIVE node of this type may bind — the same per-type rule the compilers carry,
  * read off the document instead of off the verb, so `flcm.edit(sublayer, { componentPropertyReferences })`
- * and `flcm.text(…, { componentPropertyReferences })` refuse the same field on the same node.
+ * and `TEXT(…, { componentPropertyReferences })` refuse the same field on the same node.
  */
 export function bindingFieldsForType(type: string): readonly string[] {
   if (type === "FRAME") return FRAME_BINDINGS;
@@ -822,7 +682,7 @@ export function bindingFieldsForType(type: string): readonly string[] {
 
 // The per-field legality half, shared by the create bag and the edit bag so a field on the wrong
 // node type reads the same either way. `what` is what the refusal calls the thing that can't bind
-// it — a constructor name at create ("flcm.text"), the live node's type under edit ("a TEXT").
+// it — a compiler name at create ("TEXT"), the live node's type under edit ("a TEXT").
 function assertBindingFieldLegal(field: string, legal: readonly string[], where: string, what: string): void {
   if (legal.indexOf(field) !== -1) return;
   const owner = BINDING_FIELD_OWNERS[field];
@@ -857,7 +717,7 @@ export function compileBindingBag(raw: unknown, legal: readonly string[], subjec
  * one is legal) is prepare's, against the owning component: component-edit.ts.
  *
  * `what` names the live node's type, since under edit the offending field belongs to a node, not to
- * a constructor: "`slot` is not one of a TEXT's binding fields".
+ * a compiler: "`slot` is not one of a TEXT's binding fields".
  */
 export function compileBindingEditBag(raw: unknown, legal: readonly string[], subject: string, what: string): Record<string, string | null> {
   const where = subject + ".componentPropertyReferences";
@@ -881,7 +741,7 @@ export function compileBindingEditBag(raw: unknown, legal: readonly string[], su
   return out;
 }
 
-// The constructor-side half: compile the bag (when named) onto the WriteNode. An empty bag lands
+// The compiler-side half: compile the bag (when named) onto the WriteNode. An empty bag lands
 // nothing — a node carrying `componentPropertyReferences: {}` binds nothing and must not read as a
 // bound node to flcm.component's gate.
 function compileBindings(wn: WriteProps, props: { componentPropertyReferences?: unknown }, legal: readonly string[], subject: string): void {
@@ -903,15 +763,13 @@ export function assertNoComponentPropertyBindings(tree: WriteChild, subject: str
     throw new Error(
       subject + ": `componentPropertyReferences` binds a node to a component property, and nothing here declares one — a binding means something only with a component behind it. " +
         "Either build the component in one call (flcm.component(node, { propertyDefinitions: … }), which declares the properties the tree binds), " +
-        "or insert this into a COMPONENT that already declares them (flcm.append(component, node)). To place a copy of a component, use flcm.instance.",
+        "or insert this into a COMPONENT that already declares them (flcm.append(component, node)). To place a copy of a component, use INSTANCE.",
     );
   }
   for (const child of tree.children || []) assertNoComponentPropertyBindings(child, subject);
 }
 
-// The swap word's SHAPE — the same target grammar the constructor's positional component takes, so
-// `flcm.edit(inst, { componentId })` and `flcm.instance(component)` refuse the same non-targets with
-// the same sentence. WHICH node it names (a COMPONENT, a set, an instance) is prepare's to say.
+// Component target syntax is shared by new instances and swaps; prepare resolves live identity.
 export function compileSwapTarget(raw: unknown, subject: string): Target {
   if (!isTargetShaped(raw)) {
     throw new Error(subject + ".componentId: the component to swap to must be " + COMPONENT_TARGET_HINT + " — got " + JSON.stringify(raw) + ".");
@@ -1005,7 +863,7 @@ function compileSharedTextWords(c: Record<string, unknown>, ts: WriteTextStyle, 
   if (c.listSpacing != null) ts.listSpacing = length(c.listSpacing as number | string);
 }
 
-// The textStyle word compile every text carrier rides — flcm.text's base and an edit delta alike
+// The textStyle word compile every text carrier rides — TEXT's base and an edit delta alike
 // (one vocabulary, one parser). One word in the group is deliberately NOT compiled here: lineClamp
 // validates against a width the two callers know differently (create: the authored width; edit: the
 // live wrap state), so each reads cfg.lineClamp itself. (`boldWeight` is a node-level word, not a
@@ -1042,8 +900,7 @@ export function compileTextStyleWords(cfg: unknown, subject: string): WriteTextS
   return ts;
 }
 
-// Content -> { text | runs }, the ONE parser behind flcm.text's positional arg and the `text` prop
-// (create and edit). Both the runs-array and plain-string forms flow through the markdown parser (markdown.ts):
+// The text prop compiles to plain content or styled runs for both create and edit. Both the runs-array and plain-string forms flow through the markdown parser (markdown.ts):
 // a plain string may carry `**bold**` or literal escapes; a runs-array entry's text is markdown
 // too. `base` is the style each styled run layers over (create: the authored textStyle; edit: the
 // delta's textStyle enriched with the live node's font identity, so a run that only bolds inherits
@@ -1060,42 +917,26 @@ export function compileTextContent(content: unknown, base: WriteTextStyle, boldW
   const segs = parseInlineMarkdown(assertNotReadToken(plainString(content)));
   if (segs.length === 1 && isPlainSeg(segs[0])) return { text: segs[0].text };
   if (!segs.length) return { text: "" };
-  return { runs: segs.map((seg) => compileRun(seg.text, mergeDelta(seg, {}, boldWeight), base, "flcm.text run")) };
+  return { runs: segs.map((seg) => compileRun(seg.text, mergeDelta(seg, {}, boldWeight), base, "TEXT run")) };
 }
 
-function text(content: unknown, props: TextProps | SimplifiedNode = {}): WriteNode {
-  props = props ?? {};
-  // The props-first form, flcm.text(props): the content is the `text` prop — how a `get` result carries
-  // it. Content is never a plain object (a string, or a runs ARRAY), so an object first is unambiguously
-  // the props, and anything in the second slot is then a mistake worth naming.
-  if (content !== null && typeof content === "object" && !Array.isArray(content)) {
-    if (typeof props !== "object" || Array.isArray(props) || Object.keys(props).length) {
-      throw new Error("flcm.text(props) takes the props alone (the content is its `text`); flcm.text(text, props) takes a string or runs array first — got a second argument " + JSON.stringify(props) + ".");
-    }
-    props = content as TextProps;
-    content = undefined;
-  }
-  props = acceptAuthoringProps(props, { type: "TEXT", verb: "create", known: TEXT_KEYS, subject: "flcm.text" }) as TextProps;
-  // Content named twice — positionally AND as the prop — is refused by PRESENCE, not value: a spread
-  // of a `get` result with a positional override is exactly where a silent "one wins" would bite.
-  if (Object.prototype.hasOwnProperty.call(props, "text")) {
-    if (content !== undefined) throw new Error("flcm.text: the text arrived twice — as the first argument and as the `text` prop. Pass one.");
-    content = props.text;
-  }
-  const wn = mintWriteNode("TEXT");
+function compileText(props: TextProps): WriteNode {
+  props = acceptAuthoringProps(props, { type: "TEXT", verb: "create", known: TEXT_KEYS, subject: "TEXT" }) as TextProps;
+  const content = props.text;
+  const wn: WriteNode = { type: "TEXT" };
   base(wn, props);
-  compileBindings(wn, props, TEXT_BINDINGS, "flcm.text");
+  compileBindings(wn, props, TEXT_BINDINGS, "TEXT");
   // The text's paint is `fill`, like every other node's. "none" is the same removal word edit takes.
   if (props.fill != null) wn.fills = compilePaintWord(props.fill, "fill");
   const cfg = (props.textStyle ?? {}) as NonNullable<TextProps["textStyle"]>;
-  const ts = compileTextStyleWords(cfg, "flcm.text.textStyle");
+  const ts = compileTextStyleWords(cfg, "TEXT.textStyle");
   if (Object.keys(ts).length) wn.textStyle = ts;
   Object.assign(wn, compileTextContent(content, ts, props.boldWeight ?? undefined));
   // lineClamp "none" at create is the explicit default — no clamp to remove, nothing lands.
   if (cfg.lineClamp != null && cfg.lineClamp !== "none") wn.maxLines = assertLineClamp(cfg.lineClamp, props.width);
-  const layout = buildLayout(props as FrameProps, "TEXT", "flcm.text");
+  const layout = buildLayout(props as FrameProps, "TEXT", "TEXT");
   if (Object.keys(layout).length) wn.layout = layout;
-  return sealWriteNode(wn);
+  return wn;
 }
 
 // N's shape gate, shared by create and edit so one author mistake reads one error. "none" is each
@@ -1113,10 +954,10 @@ export function assertLineClampCount(lineClamp: unknown, subject: string): numbe
 // giving it a wrap; a width-hugging text grows sideways on one line, so there's nothing to clamp. Rather
 // than let `lineClamp` be a silent no-op there (ADR-0003), reject it loud and name the fix.
 function assertLineClamp(lineClamp: unknown, width: TextProps["width"]): number {
-  const n = assertLineClampCount(lineClamp, "flcm.text");
+  const n = assertLineClampCount(lineClamp, "TEXT");
   const bounded = typeof width === "number" || width === "fill" || isPercent(width);
   if (!bounded) {
-    throw new Error('flcm.text: textStyle.lineClamp needs a bounded width to truncate against — set width to a number, "fill", or "N%". A width-hugging text grows on one line, so there is nothing to wrap and clamp.');
+    throw new Error('TEXT: textStyle.lineClamp needs a bounded width to truncate against — set width to a number, "fill", or "N%". A width-hugging text grows on one line, so there is nothing to wrap and clamp.');
   }
   return n;
 }
@@ -1140,7 +981,7 @@ function assertEnum<T extends string>(name: string, raw: unknown, set: ReadonlyS
   return raw;
 }
 
-// flcm.text takes PLAIN text OR a runs array (see compileRuns); an object arriving first is the props —
+// TEXT takes PLAIN text OR a runs array (see compileRuns); an object arriving first is the props —
 // see text(). (A stray `**` in a plain string is NOT rejected: it is markdown now, gated on the escape
 // convention — an author who wants a literal `**` writes `\*\*`, which decodes back to the literal.)
 function plainString(content: unknown): string {
@@ -1154,7 +995,7 @@ function plainString(content: unknown): string {
 // re-run on decoded text, or that escaped-literal round-trip would false-positive.
 function assertNotReadToken(s: string): string {
   if (/\{\/?ts\d+\}/.test(s)) {
-    throw new Error("flcm.text: this text carries figma-mcp style-ref tokens ({tsN}…{/tsN}) — a read artifact. Strip the inline styling, or express the styling as a runs array.");
+    throw new Error("TEXT: this text carries figma-mcp style-ref tokens ({tsN}…{/tsN}) — a read artifact. Strip the inline styling, or express the styling as a runs array.");
   }
   return s;
 }
@@ -1169,7 +1010,7 @@ const isPlainSeg = (seg: MdSegment): boolean => !seg.bold && !seg.italic && !seg
 // heavy weight overrides the plain `**` bold). The `{tsN}` rejection runs on the raw entry text, pre-decode.
 function compileRuns(runs: TextRunInput[], baseStyle: WriteTextStyle, boldWeight?: number | string): WriteTextRun[] {
   if (!runs.length) {
-    throw new Error("flcm.text: a runs array must be non-empty — pass at least one run (a string or a [text, style] tuple).");
+    throw new Error("TEXT: a runs array must be non-empty — pass at least one run (a string or a [text, style] tuple).");
   }
   const out: WriteTextRun[] = [];
   for (let i = 0; i < runs.length; i++) {
@@ -1179,14 +1020,14 @@ function compileRuns(runs: TextRunInput[], baseStyle: WriteTextStyle, boldWeight
     if (typeof run === "string") { raw = run; delta = {}; }
     else if (Array.isArray(run) && typeof run[0] === "string") { raw = run[0]; delta = run[1] ?? {}; }
     else {
-      throw new Error('flcm.text: each run is a plain string or a [text, style] tuple like ["bold bit", { fontWeight: 700 }] — got ' + JSON.stringify(run) + ".");
+      throw new Error('TEXT: each run is a plain string or a [text, style] tuple like ["bold bit", { fontWeight: 700 }] — got ' + JSON.stringify(run) + ".");
     }
     // The run delta is the grounded silent-drop site: compileRun reads a positive list and never looked at
     // the rest, so a typo'd `textTransfrom` on a run vanished. Reject it here, on the raw author delta.
-    rejectUnauthorableTextLeaves(delta, `flcm.text run[${i}]`, REFUSED_RUN_TEXT_LEAVES);
-    rejectUnknownKeys(delta, RUN_INPUT_KEYS, `flcm.text run[${i}]`);
+    rejectUnauthorableTextLeaves(delta, `TEXT run[${i}]`, REFUSED_RUN_TEXT_LEAVES);
+    rejectUnknownKeys(delta, RUN_INPUT_KEYS, `TEXT run[${i}]`);
     for (const seg of parseInlineMarkdown(assertNotReadToken(raw))) {
-      out.push(compileRun(seg.text, mergeDelta(seg, delta, boldWeight), baseStyle, `flcm.text run[${i}]`));
+      out.push(compileRun(seg.text, mergeDelta(seg, delta, boldWeight), baseStyle, `TEXT run[${i}]`));
     }
   }
   return out;
@@ -1246,86 +1087,86 @@ function compileRun(str: string, delta: StyleDeltaInput, baseStyle: WriteTextSty
 
 function shape(type: "RECTANGLE" | "ELLIPSE", props: ShapeProps | EllipseProps | SimplifiedNode = {}): WriteNode {
   props = props ?? {};
-  const subject = type === "RECTANGLE" ? "flcm.rect" : "flcm.ellipse";
+  const subject = type === "RECTANGLE" ? "RECTANGLE" : "ELLIPSE";
   // An ELLIPSE has no corners, so its vocabulary has no radius word (schema ELLIPSE_FIELDS): refused by
   // the gate, not accepted and dropped on the floor.
   const known = type === "RECTANGLE" ? SHAPE_KEYS : ELLIPSE_KEYS;
   props = acceptAuthoringProps(props, { type, verb: "create", known, subject }) as ShapeProps;
-  const wn = mintWriteNode(type);
+  const wn: WriteNode = { type };
   compileNodeLocalProps(wn, props, { radius: type === "RECTANGLE" });
   compileBindings(wn, props, ANY_NODE_BINDINGS, subject);
   const layout = buildLayout(props as FrameProps, type, subject);
   if (Object.keys(layout).length) wn.layout = layout;
-  return sealWriteNode(wn);
+  return wn;
 }
 
-function rect(props?: ShapeProps | SimplifiedNode): WriteNode { return shape("RECTANGLE", props); }
-function ellipse(props?: EllipseProps | SimplifiedNode): WriteNode { return shape("ELLIPSE", props); }
+function compileRectangle(props?: ShapeProps | SimplifiedNode): WriteNode { return shape("RECTANGLE", props); }
+function compileEllipse(props?: EllipseProps | SimplifiedNode): WriteNode { return shape("ELLIPSE", props); }
 
-function line(props: LineProps | SimplifiedNode = {}): WriteNode {
+function compileLine(props: LineProps | SimplifiedNode = {}): WriteNode {
   props = props ?? {};
-  props = acceptAuthoringProps(props, { type: "LINE", verb: "create", known: LINE_KEYS, subject: "flcm.line" }) as LineProps;
-  const wn = mintWriteNode("LINE");
+  props = acceptAuthoringProps(props, { type: "LINE", verb: "create", known: LINE_KEYS, subject: "LINE" }) as LineProps;
+  const wn: WriteNode = { type: "LINE" };
   base(wn, props);
-  compileBindings(wn, props, ANY_NODE_BINDINGS, "flcm.line");
+  compileBindings(wn, props, ANY_NODE_BINDINGS, "LINE");
   if (props.stroke != null) wn.strokes = compilePaintWord(props.stroke, "stroke");
   if (props.strokeWidth != null) wn.strokeWeight = length(props.strokeWidth);
   const layout: WriteLayout = { ...(compileLineWidth(props) || {}), ...(compilePlacementWords(props) || {}) };
-  // line() is the one constructor that doesn't ride buildLayout (width-only sizing), so it consults
+  // line() is the one compiler that doesn't ride buildLayout (width-only sizing), so it consults
   // the shared authority itself — no rule fires on a width-only layout today, but a future LINE-keyed
   // rule must not end up edit-only (the asymmetry this module forbids).
-  assertLayoutRealizableForType("LINE", layout, undefined, "flcm.line");
+  assertLayoutRealizableForType("LINE", layout, undefined, "LINE");
   if (Object.keys(layout).length) wn.layout = layout;
   if (props.rotation != null) { assertScalarType(props.rotation, "number", "rotation"); wn.rotation = props.rotation; }
-  return sealWriteNode(wn);
+  return wn;
 }
 
 // ---- Vector verbs. Two contracts, deliberately not interchangeable (see ir.ts WriteNode.svg/pathData):
 // svg pastes opaque markup (colors baked in); path is a single themeable vector taking our appearance props.
 
-// flcm.svg(markup) -> a VECTOR node carrying raw markup (createNodeFromSvg at render, which yields a frame).
+// Opaque SVG markup imports through createNodeFromSvg, which yields a native frame.
 // Colors live in the markup, so fill/stroke DON'T apply — accepting them silently would be the exact no-op
 // ADR-0003 forbids, so reject them loud. The markup must look like an <svg> document (catches a URL/path
 // passed by mistake); the render-time parse (bridge) is the second, authoritative fail-loud.
-function svg(markup: unknown, props: SvgProps = {}): WriteNode {
+function compileSvg(markup: unknown, props: SvgProps = {}): WriteNode {
   props = props ?? {};
   if (typeof markup !== "string" || !/<svg[\s>]/i.test(markup)) {
-    throw new Error("flcm.svg: expected SVG markup containing an <svg> element — got " + JSON.stringify(markup) + ". For a themeable single-path vector use flcm.path({ d }) instead.");
+    throw new Error("VECTOR: expected SVG markup containing an <svg> element — got " + JSON.stringify(markup) + ". For a themeable single-path vector use { type: " + JSON.stringify("VECTOR") + ", d } instead.");
   }
   const p = props as AppearanceProps;
   if (p.fill != null || p.stroke != null) {
-    throw new Error("flcm.svg: colors are baked into the SVG markup — fill/stroke don't apply. Edit the markup's own colors, or use flcm.path({ d, fill }) for a themeable vector.");
+    throw new Error("VECTOR: colors are baked into the SVG markup — fill/stroke don't apply. Edit the markup's own colors, or use a VECTOR spec with d and fill for a themeable vector.");
   }
   // After the fill/stroke special-case (its tailored message beats a generic "unknown prop") — reject the rest.
-  rejectUnknownKeys(props, SVG_KEYS, "flcm.svg");
-  const wn = mintWriteNode("VECTOR");
+  rejectUnknownKeys(props, SVG_KEYS, "VECTOR");
+  const wn: WriteNode = { type: "VECTOR" };
   wn.svg = markup;
   base(wn, props);
-  compileBindings(wn, props, ANY_NODE_BINDINGS, "flcm.svg");
-  const layout = buildLayout(props as FrameProps, "VECTOR", "flcm.svg");
+  compileBindings(wn, props, ANY_NODE_BINDINGS, "VECTOR");
+  const layout = buildLayout(props as FrameProps, "VECTOR", "VECTOR");
   if (Object.keys(layout).length) wn.layout = layout;
-  return sealWriteNode(wn);
+  return wn;
 }
 
-// flcm.path({ d, ... }) -> a VECTOR node carrying the path data (createVector + vectorPaths at render). Takes
+// A path spec creates a native vector with vectorPaths. It takes
 // the shared appearance props via compileNodeLocalProps() (radius off — a vector has none), so it themes like a rect.
 // `d` is required and must be a non-empty string; bad path data fails loud again at render (bridge).
-function path(props: PathProps): WriteNode {
+function compilePath(props: PathProps): WriteNode {
   if (!props || typeof props !== "object") {
-    throw new Error("flcm.path: expected a props object with a `d` path string, e.g. flcm.path({ d: \"M12 2 L22 20 L2 20 Z\", fill: \"#111\" }) — got " + JSON.stringify(props) + ".");
+    throw new Error("VECTOR: expected a props object with a `d` path string, e.g. { type: \"VECTOR\", d: \"M12 2 L22 20 L2 20 Z\", fill: \"#111\" } — got " + JSON.stringify(props) + ".");
   }
   const d = props.d;
   if (typeof d !== "string" || !d.trim()) {
-    throw new Error("flcm.path: `d` (SVG path data) must be a non-empty string — got " + JSON.stringify(d) + ".");
+    throw new Error("VECTOR: `d` (SVG path data) must be a non-empty string — got " + JSON.stringify(d) + ".");
   }
-  rejectUnknownKeys(props, PATH_KEYS, "flcm.path");
-  const wn = mintWriteNode("VECTOR");
+  rejectUnknownKeys(props, PATH_KEYS, "VECTOR");
+  const wn: WriteNode = { type: "VECTOR" };
   wn.pathData = d;
   compileNodeLocalProps(wn, props, {}); // fill/stroke/strokeWidth/effects/rotation + base; radius/clip off for a vector
-  compileBindings(wn, props, ANY_NODE_BINDINGS, "flcm.path");
-  const layout = buildLayout(props as FrameProps, "VECTOR", "flcm.path");
+  compileBindings(wn, props, ANY_NODE_BINDINGS, "VECTOR");
+  const layout = buildLayout(props as FrameProps, "VECTOR", "VECTOR");
   if (Object.keys(layout).length) wn.layout = layout;
-  return sealWriteNode(wn);
+  return wn;
 }
 
 // ---- gradient() sugar: a structured bag -> typed WritePaint (no string round-trip). The transform math
@@ -1366,7 +1207,7 @@ function stopPercent(raw: { pos?: number; position?: number }, i: number, n: num
   return n > 1 ? (i / (n - 1)) * 100 : 0;
 }
 
-// ---- image() paint constructor: a source + intent -> an image WritePaint (a fill value, like
+// ---- image() paint compiler: a source + intent -> an image WritePaint (a fill value, like
 // flcm.gradient). The source is an https url or a local file path (CSS url() takes both; the server
 // confines paths to its asset root). The sandbox NEVER touches network or disk — the paint carries only the
 // source string; the trusted server loads + validates the bytes and the bridge resolves them to a plugin
@@ -1390,7 +1231,7 @@ function image(url: unknown, opts: ImageOpts = {}): WritePaint {
 }
 
 // ---- effects() sugar: { shadow, blur, backgroundBlur } -> typed WriteEffect[] (no string round-trip).
-// Values are CSS px; the blur ×2 factor lives in the *FromCssPx constructors (effects.ts). EffectsSugar /
+// Values are CSS px; the blur ×2 factor lives in the *FromCssPx compilers (effects.ts). EffectsSugar /
 // ShadowSugar / BlurSugar are defined in schema.ts (the authoring-surface source). ----
 
 function effects(sugar: EffectsSugar): WriteEffect[] {
@@ -1544,7 +1385,7 @@ export async function fetchImagesForTrees(trees: readonly WriteProps[]): Promise
 
 // flcm.id(id) — the target escape hatch. Wraps a raw node id so a target-taking verb (get/find/edit) treats
 // it as a live-node id and never scans it as an flcm/key (the one string a bare target could be read either
-// way). A plain POJO constructor like the others; the resolver (read.resolveTarget) unwraps it —
+// way). A plain POJO compiler like the others; the resolver (read.resolveTarget) unwraps it —
 // production code unwraps `__flcmId` structurally, not via this function.
 function id(nodeId: unknown): RawIdRef {
   if (typeof nodeId !== "string" || !nodeId.trim()) {
@@ -1559,4 +1400,4 @@ function id(nodeId: unknown): RawIdRef {
 // against the schema's typed surface. Nothing else in the preamble is re-exported, so every other
 // helper stays closure-private. `get`/`find`/`findOne`/`selection` are defined in read.ts (the
 // figma.*-speaking read walk) and surface here.
-export { frame, text, rect, ellipse, line, svg, path, instance, gradient, image, effects, get, find, findOne, selection, id };
+export { compileFrame, compileText, compileRectangle, compileEllipse, compileLine, compileSvg, compilePath, compileInstance, gradient, image, effects, get, find, findOne, selection, id };

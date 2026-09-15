@@ -5,23 +5,22 @@
 // invisible to (and uncollidable with) the agent's code that runs in the same eval scope. That
 // isolation is why no internal helper needs a name prefix.
 //
-// The agent calls `flcm.frame(...)`, `await flcm.render(...)`, etc. — these are the only public verbs.
-import { frame, text, rect, ellipse, line, svg, path, instance, gradient, image, effects, get, find, findOne, selection, id } from "./flcm.js";
+// Only these exports are visible to sandbox authors.
+import { gradient, image, effects, get, find, findOne, selection, id } from "./flcm.js";
 import { render } from "./render.js";
 import { detach } from "./instance.js";
 import { component, variants } from "./component.js";
 import { edit } from "./edit.js";
 import { editMany } from "./edit-many.js";
-import { append, prepend, insertBefore, insertAfter, move, remove, clone, measure, replace } from "./structure.js";
-import { fromRead } from "./from-read.js";
+import { append, prepend, insertBefore, insertAfter, remove, clone, measure, replace } from "./structure.js";
 import { page } from "./page.js";
 import type { Flcm } from "./schema.js";
 
-export { frame, text, rect, ellipse, line, svg, path, instance, detach, component, variants, render, gradient, image, effects, get, find, findOne, selection, id, edit, editMany, append, prepend, insertBefore, insertAfter, move, remove, clone, measure, replace, fromRead, page };
+export { detach, component, variants, render, gradient, image, effects, get, find, findOne, selection, id, edit, editMany, append, prepend, insertBefore, insertAfter, remove, clone, measure, replace, page };
 
 // Tier-1 drift guard, held at the one true public boundary: the exported surface must match the typed
 // Flcm interface schema.ts derives docs and examples from — exhaustively, so a verb added to Flcm but
 // not exported here (or exported with a drifted signature) fails plugin typecheck. `satisfies` checks
 // without widening; the local is DCE'd from the bundle (pure init, unreferenced).
-const _flcmSurface = { frame, text, rect, ellipse, line, svg, path, instance, detach, component, variants, render, gradient, image, effects, get, find, findOne, selection, id, edit, editMany, append, prepend, insertBefore, insertAfter, move, remove, clone, measure, replace, fromRead, page } satisfies Flcm;
+const _flcmSurface = { detach, component, variants, render, gradient, image, effects, get, find, findOne, selection, id, edit, editMany, append, prepend, insertBefore, insertAfter, remove, clone, measure, replace, page } satisfies Flcm;
 void _flcmSurface;

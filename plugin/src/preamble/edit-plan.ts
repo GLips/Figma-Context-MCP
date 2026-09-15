@@ -1,3 +1,4 @@
+import { loadLiveTree, gateLiveTree, LoadedLiveTree } from "./live-tree.js";
 import { sceneFigma as figma } from "./scene-access.js";
 // edit-plan — the STAGES of the mutate pipeline, with no verb attached. Three callers drive them:
 // `flcm.edit` (edit.ts) once, `flcm.editMany` (edit-many.ts) N times over one queue slot, and an
@@ -10,8 +11,8 @@ import { sceneFigma as figma } from "./scene-access.js";
 // What the stages do: apply a partial delta to an existing live node (the read-side sibling is
 // read.ts, the way render's live work lives in bridge.ts). ORCHESTRATION ONLY: validate → resolve →
 // gate → apply. The delta compiles through the same leaf parsers create uses
-// (flcm.compileNodeLocalProps → css.ts) — never the constructors, whose job is to inject creation
-// defaults (flcm.frame({ fill }) emits layout.mode "none"; riding it would turn a recolor into an
+// (flcm.compileNodeLocalProps → css.ts) — never the compilers, whose job is to inject creation
+// defaults (FRAME({ fill }) emits layout.mode "none"; riding it would turn a recolor into an
 // auto-layout kill) — and every write lands through the bridge's exported appliers, never a second
 // application path. The undo scaffold (entry seal / success commit / commit-then-undo rollback) is
 // the lock's, not ours: see enterMutatingVerb in mutation-lock.ts.
@@ -97,8 +98,8 @@ function editableWords(...groups: readonly (readonly string[])[]): ReadonlySet<s
 // What each node type's delta may name — composed from EDIT_TYPE_WORD_GROUPS (ir.ts), the single
 // source the generated per-type doc lists also render, so edit accepts on a node exactly the words
 // create accepts for its type (invariant 1: one vocabulary, no permissive edit dialect — `fill` on
-// a LINE rejects here the way flcm.line rejects it, instead of landing on a property Figma never
-// renders). VECTOR uses flcm.path's words: an svg-born vector shares the type, but path's words
+// a LINE rejects here the way LINE rejects it, instead of landing on a property Figma never
+// renders). VECTOR uses VECTOR's words: an svg-born vector shares the type, but path's words
 // are the only authored vocabulary the type has.
 const DELTA_KEYS_BY_TYPE = Object.fromEntries(
   (Object.keys(EDIT_TYPE_WORD_GROUPS) as EditableType[]).map((t) => [
@@ -186,9 +187,9 @@ function compileDeltaPatch(changes: EditDelta, legal: ReadonlySet<string>, node:
   const patch: WriteProps = {};
   compileNodeLocalProps(patch, changes, { radius: legal.has("borderRadius"), clip: legal.has("clip") });
   if (patch.effects) toFigmaEffects(patch.effects);
-  // Layout words compile through the same helpers every constructor rides — never buildLayout,
+  // Layout words compile through the same helpers every compiler rides — never buildLayout,
   // whose creation default (omitted mode → "none") would turn a gap nudge into an auto-layout kill.
-  // A LINE's `width` is flcm.line's own fixed-only compile, not the sizing-intent one.
+  // A LINE's `width` is LINE's own fixed-only compile, not the sizing-intent one.
   const layout: WriteLayout =
     node.type === "LINE"
       ? { ...(compileLineWidth(changes) || {}), ...(compilePlacementWords(changes) || {}) }
@@ -201,7 +202,7 @@ function compileDeltaPatch(changes: EditDelta, legal: ReadonlySet<string>, node:
 
 // Split an INSTANCE delta's three component words off the delta: they are LIVE-DOCUMENT questions
 // (which component a target names, which definition owns a property, which sublayer a path reaches),
-// so the sync compile can only judge their SHAPE — the same shape gates flcm.instance runs, called
+// so the sync compile can only judge their SHAPE — the same shape gates INSTANCE runs, called
 // here so the create and edit surfaces can't drift on what a property value or an override delta is.
 // Returns undefined when the delta names none, so a plain recolor stays exactly what it was.
 // (The per-type gate already rejected these words on every non-INSTANCE target.)
@@ -409,7 +410,7 @@ export function compileEditPlan(node: SceneNode, changes: EditDelta, subject: st
 /**
  * What the INSTANCE nodes a verb will build need: their plans (instance.ts made them against the
  * live component), the font needs of their override deltas, and the SLOT CONTENT trees those
- * overrides fill — constructor-built trees in their own right, whose fonts and images load exactly as a
+ * overrides fill — compiled trees in their own right, whose fonts and images load exactly as a
  * rendered tree's do and whose own nested instances are already in `plans`. Produced by
  * instance.ts for a rendered tree and for an instance delta alike, twice per verb: prepare spends
  * the needs on its loads (stage 3), the gate spends the plans on the build walk.
@@ -437,6 +438,8 @@ export async function loadEditResources(plans: readonly EditPlan[], needs: reado
     trees.push(...need.slotContentTrees);
     fontNeeds.push(...need.fontNeeds);
   }
+  const liveTrees: LoadedLiveTree[] = [];
+  for (const tree of trees) liveTrees.push(await loadLiveTree(tree));
   for (const tree of trees) requestTreeAnnotationCategories(tree);
   for (const { patch } of [...plans, ...fontNeeds]) requestAnnotationCategories(patch.annotations);
   // Slot content is BUILT, so its fonts are a tree's, not a delta's — folded into the same load.
@@ -445,11 +448,13 @@ export async function loadEditResources(plans: readonly EditPlan[], needs: reado
   // Categories last of the three: resolving one can CREATE a file-scoped category, so a batch whose
   // font or image load was going to fail anyway never creates one to be cleaned up again.
   await resolveAnnotationCategories();
-  return { fonts, images };
+  for (const live of liveTrees) { Object.assign(fonts, live.loaded.fonts); Object.assign(images, live.loaded.images); }
+  return { fonts, images, liveTrees };
 }
 
 /** What stage 3 loaded — everything the apply span needs except the instance plans the gate makes. */
 export interface LoadedResources {
+  liveTrees?: LoadedLiveTree[];
   fonts: FontMap;
   images: Record<string, string>;
 }
@@ -500,7 +505,11 @@ export function assertEditPlanLands(
 export function gateEditResources(loaded: LoadedResources, needs: readonly InstanceNeeds[]): RenderResources {
   const instances = new Map<WriteNode, InstancePlan>();
   for (const need of needs) need.plans.forEach((plan, wn) => instances.set(wn, plan));
-  return { fonts: loaded.fonts, images: loaded.images, instances };
+  const resources: RenderResources = { fonts: loaded.fonts, images: loaded.images, instances };
+  const live = new Map();
+  for (const tree of loaded.liveTrees ?? []) for (const [wn, plan] of gateLiveTree(tree, resources)) live.set(wn, plan);
+  resources.live = live;
+  return resources;
 }
 
 /**

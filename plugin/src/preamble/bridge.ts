@@ -1,3 +1,4 @@
+import type { LiveTreeNode } from "./live-tree.js";
 import { sceneFigma as figma } from "./scene-access.js";
 import type { ExposureWrite } from "./instance-exposure.js";
 import { applyBounds, assertBounds } from "./size-bounds.js";
@@ -8,7 +9,7 @@ import { resizeWithDiagnostics, trackSizing } from "./sizing-diagnostics.js";
 // paint compiled for create and for edit cannot diverge. It consumes ONLY the typed IR currency — it
 // never sees a CSS string leaf and never imports css.ts; the boundary parsed everything into types
 // upstream, so here a gap is already a number, a fill already a WritePaint, an effect already an
-// WriteEffect. The constructors in flcm.ts only build plain frozen POJOs.
+// WriteEffect. The compilers in flcm.ts only build plain frozen POJOs.
 //
 // Appliers touch only the fields PRESENT on their node, and a `'prop' in node` guard skips only
 // vocabulary a node KIND lacks (an ellipse has no cornerRadius). A Figma refusal on a field the node
@@ -38,12 +39,10 @@ import { pixelRound, convertSizing } from "@framelink/core";
 // of bytes the server fetched+validated (an image WritePaint resolves to a plugin ImagePaint against
 // it). An edit caller supplies these for a live target without fabricating walk state.
 export interface RenderResources {
+  live?: ReadonlyMap<WriteNode, LiveTreeNode>;
   fonts: FontMap;
   images: Record<string, string>;
-  // Every INSTANCE node in the tree, planned against the live document in the verb's synchronous
-  // gate (instance.ts) — the component to stamp, the property writes, the override deltas compiled
-  // per sublayer. Keyed by the sealed WriteNode itself: the walk meets the same frozen object
-  // prepare authenticated, so identity is the only key that can't be spoofed or collide.
+  // Instance plans are keyed by the private IR node that the build walk consumes.
   instances: InstancePlans;
 }
 
@@ -55,7 +54,7 @@ export type InstancePlans = ReadonlyMap<WriteNode, InstancePlan>;
 // closure rather than data because an override is an edit of one sublayer, applied through
 // edit-plan.ts's staged appliers — and edit-plan.ts imports FROM this module, so the stages arrive here as
 // a function instead of an import. It takes the whole walk context, not just the resources: an
-// override at a SLOT's path builds that slot's content through attachBuiltChild, whose keyed nodes
+// override at a SLOT's path builds that slot's content through attachBuiltChild, whose keys
 // and pending percents belong to the SAME walk as the instance's siblings.
 export interface InstancePlan {
   component: any;
@@ -63,17 +62,14 @@ export interface InstancePlan {
   applyOverrides: (instance: any, ctx: RenderCtx) => void;
 }
 
-// The full walk context: resources plus render-only accumulation. `pending` collects every
-// percent/anchor child during the walk, resolved in one post-walk pass once the tree's fill/hug sizes
-// have settled (see resolvePercents). `keyed` collects LIVE NODES, not Handles: nothing about a node's
-// geometry is trustworthy mid-walk (see settleHandles), so handles are minted in one pass after the
-// walk instead of stamped and then patched.
+// Pending geometry settles once the whole tree is attached. Keys detect duplicate addresses;
+// binding records connect compiled property references to the live nodes that receive them.
 export interface RenderCtx extends RenderResources {
   exposures: ExposureWrite[];
-  keyed: Record<string, any>;
+  keys: Set<string>;
   pending: PendingResolve[];
   // Every node the walk built that carries a `componentPropertyReferences` bag, paired with it.
-  // Collected DURING the walk (like `keyed`) because only the walk knows which live node a constructor-built
+  // Collected DURING the walk along with keys because only the walk knows which live node a compiled
   // node became — a built→live pairing recovered afterwards would have to guess past falsy children
   // and an svg's synthesized frame.
   //
@@ -196,19 +192,13 @@ export function mintHandle(node: any): Handle {
 // is created as a page child and reparented only when it's appended (so mid-walk even "does the parent
 // place this node?" — which decides whether left/top exist at all — answers wrong). Minting once here is
 // what keeps a returned handle from ever carrying a provisional value.
-export function settleHandles(root: any, keyed: Record<string, any>): { node: Handle; keyed: Record<string, Handle> } {
-  const handles: Record<string, Handle> = {};
-  for (const key of Object.keys(keyed)) handles[key] = mintHandle(keyed[key]);
-  return { node: mintHandle(root), keyed: handles };
-}
-
 function stampKey(node: any, wn: WriteNode, ctx: RenderCtx): void {
   if (typeof wn.key !== "string") return;
   // No verb name: the same walk runs under render AND under every structural insert verb, and
   // naming the wrong one sends the agent looking at a call it didn't make.
-  if (wn.key in ctx.keyed) throw new Error('flcm: duplicate key "' + wn.key + '" — keys must be unique within one call.');
+  if (ctx.keys.has(wn.key)) throw new Error('flcm: duplicate key "' + wn.key + '" — keys must be unique within one call.');
   writeKey(node, wn.key);
-  ctx.keyed[wn.key] = node;
+  ctx.keys.add(wn.key);
 }
 
 // Resolve one WritePaint to a plugin Paint. An image paint needs raster BYTES (render() awaited them from
@@ -221,7 +211,7 @@ function paintOf(paint: WritePaint, ctx: RenderResources): Paint {
 
 function imagePaint(paint: WriteImage, ctx: RenderResources): Paint {
   // A hash-backed paint names bytes the document already holds (a read-form fill rebuilt through the
-  // constructors), so there is nothing to fetch and nothing to create — the paint just points at it.
+  // compilers), so there is nothing to fetch and nothing to create — the paint just points at it.
   if ("hash" in paint) {
     return paint.scalingFactor != null
       ? { type: "IMAGE", scaleMode: paint.scaleMode, imageHash: paint.hash, scalingFactor: paint.scalingFactor }
@@ -306,7 +296,7 @@ function applyContainer(f: any, layout: WriteLayout): void {
     const e = layout.padding;
     f.paddingTop = e.top; f.paddingRight = e.right; f.paddingBottom = e.bottom; f.paddingLeft = e.left;
   }
-  // Unrealizable justify words are rejected at the constructor gate (flcm.ts mapCssWord), so
+  // Unrealizable justify words are rejected at the compiler gate (flcm.ts mapCssWord), so
   // JUSTIFY is total over everything that can arrive here.
   if (layout.justifyContent) f.primaryAxisAlignItems = JUSTIFY[layout.justifyContent];
   if (layout.alignItems) {
@@ -591,14 +581,14 @@ function applyLeafSize(node: any, layout: WriteLayout): void {
 // predate the fill/hug pin and reintroduce the unknown-parent-size problem this replaces). Ancestor-first
 // (shallowest depth first) so a percent child of a percent parent reads its parent's already-resolved px.
 /**
- * Open a build walk over `resources`. ONE per verb, never per node or per entry: the walk's `keyed`
+ * Open a build walk over `resources`. ONE per verb, never per node or per entry: the walk's key set
  * map is where duplicate keys collide, so a key is unique across an editMany batch's slot content
  * exactly as it is across a rendered tree, and `pending` is settled once by resolvePercents after
  * the verb's last write. `bindings` is opted into only by a verb with a declaring component behind
  * it (see RenderCtx.bindings).
  */
 export function beginRenderWalk(resources: RenderResources, opts?: { bindings?: boolean }): RenderCtx {
-  const ctx: RenderCtx = { ...resources, keyed: {}, pending: [], exposures: [] };
+  const ctx: RenderCtx = { ...resources, keys: new Set(), pending: [], exposures: [] };
   if (opts && opts.bindings) ctx.bindings = [];
   return ctx;
 }
@@ -910,7 +900,7 @@ export function assertLiveNodeLandsUnderParent(node: any, destination: any, subj
   return wl;
 }
 
-// A structural verb placing a constructor-built node: only its ROOT meets the destination — the interior children
+// A structural verb placing a compiled node: only its ROOT meets the destination — the interior children
 // are checked against their own authored parents inside the build walk, exactly as at create.
 // `deltas` is the same projection a batch hands assertLayoutDeltaResolvable: a slot's content is
 // judged against the slot as the SAME override's own layout words will leave it, not as it stands.
@@ -961,7 +951,7 @@ function isPositionedChild(parentIsAuto: boolean, cl: WriteLayout): boolean {
   return cl.position === "absolute" || !parentIsAuto;
 }
 
-// The parent-side facts a constructor-built child is settled against. The flow facts are ParentFlowFacts (the
+// The parent-side facts a compiled child is settled against. The flow facts are ParentFlowFacts (the
 // percent rule's own shape); `crossStretch` rides along because container-level `alignItems:
 // "stretch"` intent is never stored — not by Figma, not by us (see setContainerStretchMarks) — so
 // only a caller holding the parent's own WriteNode can state it. A caller inserting into a LIVE parent
@@ -982,7 +972,7 @@ export function liveParentAttachFacts(parent: any, subject: string): AttachParen
   return { ...flow, crossStretch: false, widthIsBounded: !flow.hugW, subject };
 }
 
-// THE attach-then-size entry: build one constructor-built child and settle it into `parent`. Shared by the
+// THE attach-then-size entry: build one compiled child and settle it into `parent`. Shared by the
 // create walk (parent = the frame it is assembling) and the structural insert verbs (parent = a
 // live destination), so a subtree lands the same way whichever verb placed it.
 //
@@ -994,6 +984,9 @@ export function liveParentAttachFacts(parent: any, subject: string): AttachParen
 export function attachBuiltChild(
   parent: any, wn: WriteNode, ctx: RenderCtx, facts: AttachParentFacts, place: (child: any) => void,
 ): any {
+  facts = { ...facts, subject: wn.sourcePath ?? facts.subject };
+  const live = ctx.live?.get(wn);
+  if (live) return live.place(parent, place, ctx);
   const authored = wn.layout || {};
   const defaultTextFill = wn.type === "TEXT" && authored.sizing?.horizontal === undefined && authored.position !== "absolute" && parent.layoutMode === "VERTICAL" && facts.widthIsBounded;
   const cl: WriteLayout = defaultTextFill ? { ...authored, sizing: { ...authored.sizing, horizontal: "fill" } } : authored;
@@ -1054,7 +1047,7 @@ function buildFrame(wn: WriteNode, ctx: RenderCtx, enclosingWidthBounded = false
   // INSERT into a live parent needs no such pass — its destination is already sized.
   const covers: { child: any; layout: WriteLayout }[] = [];
   for (const rawChild of wn.children || []) {
-    if (!rawChild) continue; // falsy child entries skipped, so `cond && flcm.text(...)` works
+    if (!rawChild) continue;
     const cl = rawChild.layout || {};
     const child = attachBuiltChild(f, rawChild, ctx, facts, (c) => f.appendChild(c));
     if (isPositionedChild(isAutoParent, cl)) covers.push({ child, layout: cl });
@@ -1191,7 +1184,7 @@ function buildText(wn: WriteNode, ctx: RenderCtx): any {
   if (wn.effects) t.effects = toFigmaEffects(wn.effects);
   applyTextProps(t, { ...wn, text: wn.text == null ? "" : wn.text }, ctx);
   applyLeafSize(t, wn.layout || {});
-  // flcm.text guarantees a bounded width when maxLines is set (the handshake above gave it a
+  // TEXT guarantees a bounded width when maxLines is set (the handshake above gave it a
   // wrap), so the truncation always has real lines to bite.
   applyTextClamp(t, wn.maxLines);
   if (typeof wn.opacity === "number") t.opacity = wn.opacity;
@@ -1226,7 +1219,7 @@ function buildLine(wn: WriteNode, ctx: RenderCtx): any {
 function buildVector(wn: WriteNode, ctx: RenderCtx): any {
   if (typeof wn.svg === "string") return buildSvg(wn, wn.svg);
   if (typeof wn.pathData === "string") return buildPath(wn, wn.pathData, ctx);
-  throw new Error("flcm: a VECTOR node carries neither svg markup nor path data (flcm.svg/flcm.path guarantee one).");
+  throw new Error("flcm: a VECTOR node carries neither svg markup nor path data (VECTOR/VECTOR guarantee one).");
 }
 
 function buildSvg(wn: WriteNode, markup: string): any {
@@ -1234,7 +1227,7 @@ function buildSvg(wn: WriteNode, markup: string): any {
   try {
     frame = figma.createNodeFromSvg(markup);
   } catch (e: any) {
-    throw new Error("flcm.svg: Figma could not parse the SVG markup — " + (e && e.message ? e.message : String(e)));
+    throw new Error("VECTOR: Figma could not parse the SVG markup — " + (e && e.message ? e.message : String(e)));
   }
   figma.currentPage.appendChild(frame);
   // createNodeFromSvg returns a FrameNode, which inherits Figma's clipsContent=true default — so vector art
@@ -1245,6 +1238,13 @@ function buildSvg(wn: WriteNode, markup: string): any {
   applyLeafSize(frame, wn.layout || {});
   if (typeof wn.opacity === "number") frame.opacity = wn.opacity;
   return frame;
+}
+
+/** Geometry edits preserve the live vector's box unless the spec also names a new size. */
+export function applyVectorPath(node: VectorNode, normalized: string): void {
+  const { width, height } = node;
+  node.vectorPaths = [{ windingRule: "NONZERO", data: normalized }];
+  node.resize(width, height);
 }
 
 function buildPath(wn: WriteNode, pathData: string, ctx: RenderCtx): any {
@@ -1262,7 +1262,7 @@ function buildPath(wn: WriteNode, pathData: string, ctx: RenderCtx): any {
   try {
     v.vectorPaths = [{ windingRule: "NONZERO", data: normalized }];
   } catch (e: any) {
-    throw new Error('flcm.path: Figma could not parse the path data "' + pathData + '" — ' + (e && e.message ? e.message : String(e)));
+    throw new Error('VECTOR: Figma could not parse the path data "' + pathData + '" — ' + (e && e.message ? e.message : String(e)));
   }
   applyPaint(v, wn, ctx);
   applyLeafSize(v, wn.layout || {});
@@ -1286,14 +1286,21 @@ const BUILDERS: Record<WriteType, (wn: WriteNode, ctx: RenderCtx, enclosingWidth
 // provisional size and buildFrame records it in ctx.pending for the post-walk resolvePercents pass (which
 // needs the fully-assembled tree to read realized parent sizes). Returns the live node.
 export function buildNode(wn: WriteNode, ctx: RenderCtx, enclosingWidthBounded?: boolean): any {
+  try { return buildCompiledNode(wn, ctx, enclosingWidthBounded); }
+  catch (cause) {
+    const message = cause instanceof Error ? cause.message : String(cause);
+    if (!wn.sourcePath || message.includes(wn.sourcePath)) throw cause;
+    throw new Error(wn.sourcePath + ": " + message);
+  }
+}
+
+function buildCompiledNode(wn: WriteNode, ctx: RenderCtx, enclosingWidthBounded?: boolean): any {
   const build = BUILDERS[wn.type];
   if (!build) {
     throw new Error('flcm: cannot create a "' + wn.type + '" node — createable types are ' + Object.keys(BUILDERS).join(", ") + ".");
   }
-  // Provenance was authenticated tree-wide in render's PREPARE (assertConstructorBuiltTree),
-  // before any resource load — and the constructors deep-freeze their output, so the tree apply
-  // walks here is byte-for-byte the one prepare authenticated. No re-check per node.
   const node = build(wn, ctx, enclosingWidthBounded);
+  if (wn.source) wn.source.id = node.id;
   applySceneProps(node, wn);
   applyAnnotations(node, wn.annotations);
   stampKey(node, wn, ctx);

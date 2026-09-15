@@ -1,9 +1,10 @@
+import ts from "typescript";
 // Regenerate (or drift-check) the two GENERATED flcm-docs artifacts from the same source the
 // get_flcm_reference tool serves — so the doc a human reads in the repo, the strings the server
-// ships, and the code that just type-checked are the same bytes:
+// ships, and the code that just type-checked share one source:
 //
 //   • src/mcp/tools/flcm-docs/examples-code.generated.ts — the marked region of each worked example
-//     (examples/<id>.ts), extracted verbatim. The examples stay real compile-checked .ts files; the
+//     (examples/<id>.ts), transpiled to runnable JavaScript. The examples stay real compile-checked .ts files; the
 //     runtime imports these strings instead of reading source files, because the npm product runs
 //     from a tsup bundle where sources aren't on disk.
 //   • plugin/docs/authoring/flcm.md — the committed human-readable authoring doc, rendered by the
@@ -51,7 +52,11 @@ function extractExample(id: string): string {
       `Cannot inline example: the ${START} / ${END} marker lines are missing or out of order in ${path}.`,
     );
   }
-  return dedent(lines.slice(start + 1, end));
+  return ts
+    .transpileModule(dedent(lines.slice(start + 1, end)), {
+      compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext },
+    })
+    .outputText.trim();
 }
 
 // Strip the common leading indentation (the region sits inside a function body) and trim blank edges.

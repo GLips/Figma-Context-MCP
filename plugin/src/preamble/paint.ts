@@ -1,5 +1,5 @@
 // paint — the typed paint domain: build a WritePaint from numeric inputs and map it to a plugin Paint.
-// No CSS strings live here (css.ts owns those). These constructors are the ONE home for the proven
+// No CSS strings live here (css.ts owns those). These compilers are the ONE home for the proven
 // gradient-transform math, shared by two callers: the string parser (css.ts) and the gradient() sugar.
 //
 // THE GRADIENT-TRANSFORM MATH (grounded live; preserved from findings.md Round 2): Figma's plugin API

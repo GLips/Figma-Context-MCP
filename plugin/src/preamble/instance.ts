@@ -2,7 +2,7 @@ import { assertExposureTree, assertExposureTarget } from "./instance-exposure.js
 import { assertBounds } from "./size-bounds.js";
 // instance — the component half of the write path, for BOTH verbs that touch one:
 //
-//   • CREATE (flcm.instance): everything an flcm.instance carries raw (ir.ts WriteProps on why)
+//   • CREATE (INSTANCE): everything an INSTANCE carries raw (ir.ts WriteProps on why)
 //     resolved against the live document in render's synchronous gate, right before its entry
 //     seal, so that the build walk (bridge.buildInstance) is a sync sequence of writes with
 //     nothing left to look up.
@@ -63,7 +63,7 @@ import { SLOT_CONTENT_WORD } from "./flcm.js";
 import { own } from "./validate.js";
 import type { EditDelta } from "./schema.js";
 
-const SUBJECT = "flcm.instance";
+const SUBJECT = "INSTANCE";
 
 // A read `null` in an override delta means "the instance LACKS this field the component has" (the
 // read shape omits defaults, so a paint removed or an opacity back at 1 has no value to state).
@@ -153,7 +153,10 @@ export function planInstanceTree(tree: WriteNode, planning: InstancePlanning): I
   const instances: WriteNode[] = [];
   collectInstanceNodes(tree, instances);
   for (const wn of instances) {
-    const { plan, overrides } = planInstanceNode(wn, planning);
+    const { plan, overrides } = (() => {
+      try { return planInstanceNode(wn, planning); }
+      catch (cause) { throw new Error((wn.sourcePath ?? "INSTANCE") + ": " + String(cause)); }
+    })();
     needs.plans.set(wn, plan);
     for (const o of overrides) {
       needs.fontNeeds.push(o.plan);
@@ -163,11 +166,11 @@ export function planInstanceTree(tree: WriteNode, planning: InstancePlanning): I
   return needs;
 }
 
-// Descends into slot content as well as children: a `flcm.instance` inside an override's `children`
+// Descends into slot content as well as children: a `INSTANCE` inside an override's `children`
 // is an INSTANCE node like any other, and the build walk will ask for its plan by identity.
 function collectInstanceNodes(wn: WriteChild, out: WriteNode[]): void {
   if (!wn || typeof wn !== "object") return;
-  if (wn.type === "INSTANCE") out.push(wn);
+  if (wn.type === "INSTANCE" && !wn.liveId) out.push(wn);
   for (const child of wn.children || []) collectInstanceNodes(child, out);
   for (const content of slotContentListsOf(wn)) for (const child of content) collectInstanceNodes(child, out);
 }
@@ -203,7 +206,7 @@ function planInstanceNode(wn: WriteNode, planning: InstancePlanning): { plan: In
   const resolved = resolveComponentNode(planning.targets.node(wn.component as Target, SUBJECT), SUBJECT);
   const { component, properties } = resolveComponentProperties(resolved, wn.componentProperties || {}, SUBJECT, planning.targets);
   // The root's layout words are legal or not by the COMPONENT's mode — the same live fact edit
-  // reads off its target. Judged here, not in the constructor, because that is where it's known.
+  // reads off its target. Judged here, not in the compiler, because that is where it's known.
   if (wn.layout) assertBounds(wn.layout.bounds, component, SUBJECT);
   if (wn.layout) assertLayoutRealizableForType("INSTANCE", wn.layout, component.layoutMode, SUBJECT, component.layoutWrap === "WRAP");
   const overrides = planDefinitionOverrides(component, wn.overrides || {}, SUBJECT, planning.fonts);
@@ -235,7 +238,7 @@ function resolvedFromComponent(node: any): ResolvedComponent {
 
 /**
  * The node a component target resolved to, read as a component. Exported because every verb that
- * takes one rides it — flcm.instance's positional component, an instance-swap property's value,
+ * takes one rides it — INSTANCE's positional component, an instance-swap property's value,
  * and flcm.component's `instance_swap` default — so they all refuse an INSTANCE (or a plain frame)
  * with one sentence. Sync, from a node prepare already resolved: a set's default variant is a live
  * fact, read where every live fact is read.
@@ -358,7 +361,7 @@ function resolveComponentProperties(
     const path = hole ? JSON.stringify(componentPathOfDefinitionId(hole.id)) : '"<slotPath>"';
     throw new Error(
       slotNamed.where + ": " + JSON.stringify(slotNamed.full) + " is a slot, and a slot has no value — its content is stated as `children` at the slot's path: " +
-        subject + ".overrides[" + path + "] = { children: [ …nodes ] } (flcm.frame/text/instance…; [] empties it).",
+        subject + ".overrides[" + path + "] = { children: [ …nodes ] } (FRAME/text/instance…; [] empties it).",
     );
   }
   return { component, properties, variant };
@@ -423,38 +426,7 @@ function liveSublayerIdOf(instanceId: string, path: string): string {
   return (instanceId.charAt(0) === "I" ? instanceId : "I" + instanceId) + ";" + path;
 }
 
-function isInside(node: any, ancestor: any): boolean {
-  for (let p = node.parent; p; p = p.parent) if (p === ancestor) return true;
-  return false;
-}
 
-/**
- * Two override paths in one delta, where one sits INSIDE a slot the other fills: refused, naming
- * both paths, with zero writes.
- *
- * A fill REPLACES the slot's content — every current child is removed (replaceSlotContent) — and
- * the sublayer the other path names is one of them. The words would land in stage 5a and the node
- * would be deleted moments later in the same span, and Figma keeps accepting writes on a removed
- * node, so the call would report success for a write that landed on nothing. Ordering the two
- * differently is not an answer: the delta never says which it meant, and the layer the fill
- * installs is a different node from the one the path names. The content nodes are where those words
- * belong. `editMany`'s cross-ENTRY version of the same contradiction lives in edit-many.ts.
- */
-function assertNoOverridePathInsideFilledSlot(plans: readonly OverridePlan[], subject: string): void {
-  const filled = plans.filter((plan) => plan.slotContent);
-  if (!filled.length) return;
-  for (const plan of plans) {
-    for (const slot of filled) {
-      if (plan === slot || !isInside(plan.plan.node, slot.plan.node)) continue;
-      throw new Error(
-        subject + ".overrides[" + JSON.stringify(plan.path) + "]: " + describeNodeIdentity(plan.plan.node) +
-          " sits inside the slot at " + JSON.stringify(slot.path) + ", whose `" + SLOT_CONTENT_WORD +
-          "` this same call replaces — the fill removes that layer, so these words would land on a node the call deletes. " +
-          "State them on the nodes you fill the slot with instead.",
-      );
-    }
-  }
-}
 
 // The override plans against the component's DEFINITION sublayers — a create's route, and a
 // retargeting edit's. The sublayer a path names is found INSIDE the resolved component (a sync
@@ -476,7 +448,6 @@ function planDefinitionOverrides(component: any, overrides: Record<string, Overr
     // (same type, same font, same wrap), and the definition exists before the instance does.
     plans.push(compileOverride(definition, component, overrides[path], path, where, fonts));
   }
-  assertNoOverridePathInsideFilledSlot(plans, subject);
   return plans;
 }
 
@@ -590,7 +561,7 @@ function applyOverridePlans(instance: any, overrides: OverridePlan[], ctx: Rende
     return { editPlan, slotContent, fail: openEditPlanApply(verb, editPlan) };
   });
   for (const { editPlan, fail } of live) applyEditPlanWrites(fail, editPlan, ctx);
-  for (const { editPlan, slotContent, fail } of live) if (slotContent) replaceSlotContent(fail, editPlan.node, slotContent, ctx, subject);
+  for (const { editPlan, slotContent, fail } of live) if (slotContent) placeSlotContent(fail, editPlan.node, slotContent, ctx, subject);
   for (const { editPlan, fail } of live) settleEditPlanSizes(fail, editPlan);
   for (const { editPlan, fail } of live) settleEditPlanPositions(fail, editPlan);
 }
@@ -600,9 +571,8 @@ function applyOverridePlans(instance: any, overrides: OverridePlan[], ctx: Rende
 // the attach-then-size entry every insert rides. Removing a placeholder sublayer is an ASSUMPTION
 // on the live checklist: if Figma refuses, the refusal surfaces from this span and the whole call
 // rolls back — loud, never a half-filled slot.
-function replaceSlotContent(fail: EditPlanFailure, slot: any, slotContent: readonly WriteNode[], ctx: RenderCtx, subject: string): void {
+function placeSlotContent(fail: EditPlanFailure, slot: any, slotContent: readonly WriteNode[], ctx: RenderCtx, subject: string): void {
   try {
-    for (const child of [...slot.children]) child.remove();
     const facts = liveParentAttachFacts(slot, subject);
     for (const content of slotContent) attachBuiltChild(slot, content, ctx, facts, (child) => slot.appendChild(child));
   } catch (cause) {
@@ -763,7 +733,6 @@ function planLiveOverrides(
     }
     plans.push(compileOverride(live, component, overrides[path], path, where, fonts));
   }
-  assertNoOverridePathInsideFilledSlot(plans, subject);
   return plans;
 }
 

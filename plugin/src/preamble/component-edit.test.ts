@@ -1,16 +1,17 @@
+import { specNode } from "../../harness/spec-node.js";
 // Editing a MAIN component — the capability with no verb of its own: `flcm.edit` on the COMPONENT
 // and on its sublayers, plus the structural verbs, and every instance follows because that is what
 // Figma does.
 //
 // What must not regress silently: a component's root takes a frame's words (and its instances get
 // them), `propertyDefinitions` adds/changes/renames/deletes a declaration with instances following,
-// `componentPropertyReferences` binds and unbinds a live sublayer, a bound constructor-built node may be inserted into
+// `componentPropertyReferences` binds and unbinds a live sublayer, a bound compiled node may be inserted into
 // an existing component (a new `slot` name declaring the property, since a slot IS its frame), an
 // instance's SLOT takes the frame surface — and every refusal fires with zero writes.
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
-import { frame, rect, text, instance, id } from "./flcm.js";
+import { id } from "./flcm.js";
 import { render } from "./render.js";
 import { component, variants } from "./component.js";
 import { edit } from "./edit.js";
@@ -27,38 +28,38 @@ beforeEach(() => {
 // field an edit can reach, and one instance of it to watch follow.
 async function chipComponent() {
   const out = await component(
-    frame({ key: "chip", fill: "#0000ff", layout: { mode: "row", gap: 4, padding: 8 } }, [
-      rect({ key: "icon", name: "Icon", width: 12, height: 12, fill: "#ffffff", componentPropertyReferences: { visible: "Icon" } }),
-      text("Label", { key: "label", name: "Label", componentPropertyReferences: { text: "Label" } }),
-      frame({ key: "trailing", name: "Trailing", width: 20, height: 20, componentPropertyReferences: { slot: "Trailing" } }),
-    ]),
+    ({ type: "FRAME", key: "chip", fill: "#0000ff", layout: { mode: "row", gap: 4, padding: 8 }, children: [
+      ({ type: "RECTANGLE", key: "icon", name: "Icon", width: 12, height: 12, fill: "#ffffff", componentPropertyReferences: { visible: "Icon" } }),
+      ({ type: "TEXT", text: "Label", key: "label", name: "Label", componentPropertyReferences: { text: "Label" } }),
+      ({ type: "FRAME", key: "trailing", name: "Trailing", width: 20, height: 20, componentPropertyReferences: { slot: "Trailing" } }),
+    ] }),
     {
       name: "Chip",
       propertyDefinitions: { Icon: { type: "boolean" }, Label: { type: "text" }, Trailing: { type: "slot" } },
     },
   );
-  const comp = await figma.getNodeByIdAsync(out.node.id);
-  const stamped = await render(instance(comp.id, { key: "live", left: 400, top: 400 }));
+  const comp = await figma.getNodeByIdAsync(out.id);
+  const stamped = await render(({ type: "INSTANCE", componentId: comp.id, key: "live", left: 400, top: 400 }));
   return {
     comp,
-    icon: await figma.getNodeByIdAsync(out.keyed.icon.id),
-    label: await figma.getNodeByIdAsync(out.keyed.label.id),
-    trailing: await figma.getNodeByIdAsync(out.keyed.trailing.id),
-    inst: await figma.getNodeByIdAsync(stamped.node.id),
+    icon: await figma.getNodeByIdAsync(specNode(out, "icon").id),
+    label: await figma.getNodeByIdAsync(specNode(out, "label").id),
+    trailing: await figma.getNodeByIdAsync(specNode(out, "trailing").id),
+    inst: await figma.getNodeByIdAsync(stamped.id),
   };
 }
 
 // A bare component with no properties at all — the starting point for "declare, then bind".
 async function plainComponent() {
   const out = await component(
-    frame({ key: "card", fill: "#111111", layout: { mode: "column", gap: 4, padding: 8 } }, [
-      text("Title", { key: "title", name: "Title" }),
-    ]),
+    ({ type: "FRAME", key: "card", fill: "#111111", layout: { mode: "column", gap: 4, padding: 8 }, children: [
+      ({ type: "TEXT", text: "Title", key: "title", name: "Title" }),
+    ] }),
     { name: "Card" },
   );
-  const comp = await figma.getNodeByIdAsync(out.node.id);
-  const stamped = await render(instance(comp.id, { key: "live", left: 400, top: 400 }));
-  return { comp, title: await figma.getNodeByIdAsync(out.keyed.title.id), inst: await figma.getNodeByIdAsync(stamped.node.id) };
+  const comp = await figma.getNodeByIdAsync(out.id);
+  const stamped = await render(({ type: "INSTANCE", componentId: comp.id, key: "live", left: 400, top: 400 }));
+  return { comp, title: await figma.getNodeByIdAsync(specNode(out, "title").id), inst: await figma.getNodeByIdAsync(stamped.id) };
 }
 
 const bare = (full: string) => (full.lastIndexOf("#") === -1 ? full : full.slice(0, full.lastIndexOf("#")));
@@ -80,9 +81,9 @@ test("`description` is a component word, and no other node type takes it", async
   const { comp } = await chipComponent();
   await edit(id(comp.id), { description: "A compact labelled chip." });
   assert.equal(comp.description, "A compact labelled chip.");
-  const plain = await render(frame({ key: "plain", width: 10, height: 10 }));
+  const plain = await render(({ type: "FRAME", key: "plain", width: 10, height: 10 }));
   await assert.rejects(edit("plain", { description: "nope" }), /`description` is not a FRAME word/);
-  assert.equal((await figma.getNodeByIdAsync(plain.node.id)).description, undefined);
+  assert.equal((await figma.getNodeByIdAsync(plain.id)).description, undefined);
 });
 
 test("propertyDefinitions ADDS a property, and every instance gains it at the stated default", async () => {
@@ -97,8 +98,8 @@ test("propertyDefinitions ADDS a property, and every instance gains it at the st
 test("propertyDefinitions CHANGES a default, and only the instances still on the old one follow", async () => {
   const { comp, inst } = await chipComponent();
   const label = fullName(comp, "Label");
-  const stamped = await render(instance(comp.id, { key: "second", left: 600, top: 600 }));
-  const own = await figma.getNodeByIdAsync(stamped.node.id);
+  const stamped = await render(({ type: "INSTANCE", componentId: comp.id, key: "second", left: 600, top: 600 }));
+  const own = await figma.getNodeByIdAsync(stamped.id);
   await edit(id(own.id), { componentProperties: { Label: "Mine" } });
 
   await edit(id(comp.id), { propertyDefinitions: { Label: { defaultValue: "Save" } } });
@@ -170,22 +171,22 @@ test("propertyDefinitions DELETES a SLOT too — the frame becomes an ordinary f
   assert.ok(!Object.keys(comp.componentPropertyDefinitions).some((k) => bare(k) === "Trailing"));
   assert.equal(trailing.componentPropertyReferences.slotContentId, undefined);
   assert.equal(trailing.type, "FRAME"); // it was always a frame in the definition; now it is only that
-  const stamped = await render(instance(comp.id, { left: 800, top: 800 }));
-  const fresh = await figma.getNodeByIdAsync(stamped.node.id);
+  const stamped = await render(({ type: "INSTANCE", componentId: comp.id, left: 800, top: 800 }));
+  const fresh = await figma.getNodeByIdAsync(stamped.id);
   assert.equal(fresh.findOne((n: { name: string }) => n.name === "Trailing").type, "FRAME");
 });
 
 test("editMany applies definition and root words across entries in one step", async () => {
   const { comp, inst } = await chipComponent();
-  const second = await component(frame({ key: "other", width: 40, height: 40, fill: "#222222" }), { name: "Other" });
+  const second = await component(({ type: "FRAME", key: "other", width: 40, height: 40, fill: "#222222" }), { name: "Other" });
   await editMany([
     { target: id(comp.id), changes: { propertyDefinitions: { Label: { defaultValue: "Save" } }, fill: "#00ff00" } },
-    { target: id(second.node.id), changes: { propertyDefinitions: { Tone: { type: "boolean", defaultValue: true } } } },
+    { target: id(second.id), changes: { propertyDefinitions: { Tone: { type: "boolean", defaultValue: true } } } },
   ]);
   assert.equal(comp.componentPropertyDefinitions[fullName(comp, "Label")].defaultValue, "Save");
   assert.deepEqual(comp.fills[0].color, { r: 0, g: 1, b: 0 });
   assert.deepEqual(inst.fills[0].color, { r: 0, g: 1, b: 0 });
-  const other = await figma.getNodeByIdAsync(second.node.id);
+  const other = await figma.getNodeByIdAsync(second.id);
   assert.equal(other.componentPropertyDefinitions[fullName(other, "Tone")].type, "BOOLEAN");
 });
 
@@ -211,8 +212,8 @@ test("componentPropertyReferences BINDS a live sublayer, and the property then d
   const heading = fullName(comp, "Heading");
   assert.equal(title.componentPropertyReferences.characters, heading);
   // A fresh instance is what proves the wire: the property now drives the bound sublayer.
-  const stamped = await render(instance(comp.id, { left: 800, top: 800 }));
-  const fresh = await figma.getNodeByIdAsync(stamped.node.id);
+  const stamped = await render(({ type: "INSTANCE", componentId: comp.id, left: 800, top: 800 }));
+  const fresh = await figma.getNodeByIdAsync(stamped.id);
   await edit(id(fresh.id), { componentProperties: { Heading: "Ship it" } });
   assert.equal(fresh.findOne((n: { name: string }) => n.name === "Title").characters, "Ship it");
   assert.equal(inst.findOne((n: { name: string }) => n.name === "Title").characters, "Title"); // untouched
@@ -240,10 +241,10 @@ test("an insert into a component may carry bindings — an existing property, an
   const { comp } = await chipComponent();
   await append(
     id(comp.id),
-    frame({ layout: { mode: "row", gap: 2 } }, [
-      text("Sub", { key: "sub", name: "Sub", componentPropertyReferences: { text: "Label" } }),
-      frame({ key: "extra", name: "Extra", width: 16, height: 16, componentPropertyReferences: { slot: "Extra" } }),
-    ]),
+    ({ type: "FRAME", layout: { mode: "row", gap: 2 }, children: [
+      ({ type: "TEXT", text: "Sub", key: "sub", name: "Sub", componentPropertyReferences: { text: "Label" } }),
+      ({ type: "FRAME", key: "extra", name: "Extra", width: 16, height: 16, componentPropertyReferences: { slot: "Extra" } }),
+    ] }),
   );
   const sub = comp.findOne((n: { name: string }) => n.name === "Sub");
   const extra = comp.findOne((n: { name: string }) => n.name === "Extra");
@@ -254,8 +255,8 @@ test("an insert into a component may carry bindings — an existing property, an
   assert.equal(comp.componentPropertyDefinitions[extraProp].type, "SLOT");
   assert.equal(extra.componentPropertyReferences.slotContentId, extraProp);
   // And every instance stamped from here shows that frame as a SLOT.
-  const stamped = await render(instance(comp.id, { left: 900, top: 900 }));
-  const fresh = await figma.getNodeByIdAsync(stamped.node.id);
+  const stamped = await render(({ type: "INSTANCE", componentId: comp.id, left: 900, top: 900 }));
+  const fresh = await figma.getNodeByIdAsync(stamped.id);
   assert.equal(fresh.findOne((n: { name: string }) => n.name === "Extra").type, "SLOT");
 });
 
@@ -347,10 +348,10 @@ test("every definition refusal names the cause and writes nothing", async () => 
 });
 
 test("a variant's properties live on the SET, and the refusal points there", async () => {
-  const small = await component(frame({ width: 96, height: 32, fill: "#111111" }), { name: "Button" });
-  const large = await component(frame({ width: 128, height: 44, fill: "#111111" }), { name: "Button" });
+  const small = await component(({ type: "FRAME", width: 96, height: 32, fill: "#111111" }), { name: "Button" });
+  const large = await component(({ type: "FRAME", width: 128, height: 44, fill: "#111111" }), { name: "Button" });
   const set = await variants(
-    [{ component: small.node, variant: { Size: "Small" } }, { component: large.node, variant: { Size: "Large" } }],
+    [{ component: small, variant: { Size: "Small" } }, { component: large, variant: { Size: "Large" } }],
     { name: "Button" },
   );
   const setNode = await figma.getNodeByIdAsync(set.id);
@@ -370,15 +371,15 @@ test("a variant's properties live on the SET, and the refusal points there", asy
 // One slot property on a SET, one frame in EACH variant: a binding lives per variant, so "a slot is
 // one hole" is counted inside the variant, never across the set.
 test("a set's slot needs its own frame in every variant, and each variant's is its only one", async () => {
-  const small = await component(frame({ width: 96, height: 32, fill: "#111111" }), { name: "Button" });
-  const large = await component(frame({ width: 128, height: 44, fill: "#111111" }), { name: "Button" });
+  const small = await component(({ type: "FRAME", width: 96, height: 32, fill: "#111111" }), { name: "Button" });
+  const large = await component(({ type: "FRAME", width: 128, height: 44, fill: "#111111" }), { name: "Button" });
   const set = await variants(
-    [{ component: small.node, variant: { Size: "Small" } }, { component: large.node, variant: { Size: "Large" } }],
+    [{ component: small, variant: { Size: "Small" } }, { component: large, variant: { Size: "Large" } }],
     { name: "Button" },
   );
   const setNode = await figma.getNodeByIdAsync(set.id);
   const [a, b] = setNode.children;
-  const slotFrame = () => frame({ name: "Trailing", width: 20, height: 20, componentPropertyReferences: { slot: "Trailing" } });
+  const slotFrame = () => ({ type: "FRAME", name: "Trailing", width: 20, height: 20, componentPropertyReferences: { slot: "Trailing" } });
   // Into the first variant the insert MINTS the set's slot property; into the second it binds that
   // same property, which is what makes the set's slot whole.
   await append(id(a.id), slotFrame());
@@ -400,7 +401,7 @@ test("a set's slot needs its own frame in every variant, and each variant's is i
 
 test("every binding refusal names the cause and writes nothing", async () => {
   const { comp, icon, label, trailing, inst } = await chipComponent();
-  const plain = await render(frame({ key: "outside", width: 10, height: 10 }));
+  const plain = await render(({ type: "FRAME", key: "outside", width: 10, height: 10 }));
   const before = figma.undoLog.length;
 
   // Outside every component there is no property to point at.
@@ -432,53 +433,53 @@ test("every binding refusal names the cause and writes nothing", async () => {
   assert.deepEqual(figma.undoLog.slice(before), []);
   assert.equal(label.componentPropertyReferences.characters, fullName(comp, "Label"));
   assert.equal(icon.componentPropertyReferences.visible, fullName(comp, "Icon"));
-  assert.equal(plain.node.id && (await figma.getNodeByIdAsync(plain.node.id)).componentPropertyReferences, undefined);
+  assert.equal(plain.id && (await figma.getNodeByIdAsync(plain.id)).componentPropertyReferences, undefined);
 });
 
 test("every bound-insert refusal names the cause and writes nothing", async () => {
   const { comp, trailing } = await chipComponent();
-  const plain = await render(frame({ key: "outside", width: 100, height: 100 }));
+  const plain = await render(({ type: "FRAME", key: "outside", width: 100, height: 100 }));
   const before = figma.undoLog.length;
 
   // The standing refusal, unchanged everywhere but inside a component.
   await assert.rejects(
-    append("outside", text("Hi", { componentPropertyReferences: { text: "Label" } })),
+    append("outside", ({ type: "TEXT", text: "Hi", componentPropertyReferences: { text: "Label" } })),
     /`componentPropertyReferences` binds a node to a component property, and nothing here declares one/s,
   );
   // A non-slot binding names a property that must already exist.
   await assert.rejects(
-    append(id(comp.id), text("Hi", { componentPropertyReferences: { text: "Nope" } })),
+    append(id(comp.id), ({ type: "TEXT", text: "Hi", componentPropertyReferences: { text: "Nope" } })),
     /this component has no property "Nope"/,
   );
   // A slot is one hole, whether the second claim comes from the document or from this same tree.
   await assert.rejects(
-    append(id(comp.id), frame({ width: 10, height: 10, componentPropertyReferences: { slot: "Trailing" } })),
+    append(id(comp.id), ({ type: "FRAME", width: 10, height: 10, componentPropertyReferences: { slot: "Trailing" } })),
     /slot property "Trailing" already has its frame/,
   );
   await assert.rejects(
-    append(id(comp.id), frame({ layout: { mode: "row" } }, [
-      frame({ width: 10, height: 10, componentPropertyReferences: { slot: "Twin" } }),
-      frame({ width: 10, height: 10, componentPropertyReferences: { slot: "Twin" } }),
-    ])),
+    append(id(comp.id), ({ type: "FRAME", layout: { mode: "row" }, children: [
+      ({ type: "FRAME", width: 10, height: 10, componentPropertyReferences: { slot: "Twin" } }),
+      ({ type: "FRAME", width: 10, height: 10, componentPropertyReferences: { slot: "Twin" } }),
+    ] })),
     /two frames in this tree claim slot "Twin"/i,
   );
 
   assert.deepEqual(figma.undoLog.slice(before), []);
   assert.equal(comp.children.length, 3);
-  assert.equal((await figma.getNodeByIdAsync(plain.node.id)).children.length, 0);
+  assert.equal((await figma.getNodeByIdAsync(plain.id)).children.length, 0);
   assert.ok(trailing.componentPropertyReferences.slotContentId);
 });
 
 test("an insert into a COMPONENT_SET is refused — its children are its variants", async () => {
-  const small = await component(frame({ width: 96, height: 32, fill: "#111111" }), { name: "Button" });
-  const large = await component(frame({ width: 128, height: 44, fill: "#111111" }), { name: "Button" });
+  const small = await component(({ type: "FRAME", width: 96, height: 32, fill: "#111111" }), { name: "Button" });
+  const large = await component(({ type: "FRAME", width: 128, height: 44, fill: "#111111" }), { name: "Button" });
   const set = await variants(
-    [{ component: small.node, variant: { Size: "Small" } }, { component: large.node, variant: { Size: "Large" } }],
+    [{ component: small, variant: { Size: "Small" } }, { component: large, variant: { Size: "Large" } }],
     { name: "Button" },
   );
   const setNode = await figma.getNodeByIdAsync(set.id);
   const before = figma.undoLog.length;
-  await assert.rejects(append(id(set.id), rect({ width: 10, height: 10 })), /is a COMPONENT_SET, and a set's children are its VARIANTS/);
+  await assert.rejects(append(id(set.id), ({ type: "RECTANGLE", width: 10, height: 10 })), /is a COMPONENT_SET, and a set's children are its VARIANTS/);
   assert.deepEqual(figma.undoLog.slice(before), []);
   assert.equal(setNode.children.length, 2);
 });

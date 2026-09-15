@@ -1,3 +1,4 @@
+import { compileDeltaTrees } from "./compile-tree.js";
 // editMany — the atomic batch form of `edit`. It exists for ONE thing a caller loop cannot build:
 // set-level atomicity. Validation lives inside a verb, so `for (const e of entries) await edit(…)`
 // discovers entry 4's invalid delta only after entries 1–3 have already mutated the canvas — each
@@ -348,53 +349,6 @@ function assertNoEntryInsideRetargetedInstance(
   }
 }
 
-/**
- * An entry aimed INSIDE a slot another entry FILLS is refused, naming both.
- *
- * A fill replaces the slot's content wholesale — every current child is removed — so by the time
- * the batch's override pass runs, the node the inner entry resolved and wrote to in an earlier
- * stage is gone. Figma keeps accepting writes on a removed node (the same hazard the retarget rule
- * above and assertNodeStillOnCanvas call out), so without this the batch would report success
- * and hand back a Handle minted from a corpse. The remedy is not an order: the layer the fill
- * installs is a different node from the one the entry names, so its words belong on the node that fills it.
- *
- * The single-delta form of this contradiction — one entry stating both the fill and a path inside
- * it — is refused in instance.ts, where the override set is resolved.
- *
- * Runs in the gate, like every other document-reading cross-entry refusal.
- */
-function assertNoEntryInsideFilledSlot(
-  ledger: BatchLedger, plans: readonly (EditPlan | undefined)[], instances: readonly (InstanceEditPlan | undefined)[],
-): void {
-  for (let host = 0; host < plans.length; host++) {
-    const instance = instances[host];
-    const hostPlan = plans[host];
-    if (!instance || !hostPlan || ledger.failed(host)) continue;
-    // A RETARGETING entry's override plans were compiled against the incoming component's
-    // definition nodes, not against anything on the canvas — an entry inside that instance is
-    // already refused by assertNoEntryInsideRetargetedInstance, on the stronger ground that the
-    // whole sublayer tree goes.
-    if (instance.retargets) continue;
-    for (const slot of instance.overrides) {
-      if (!slot.slotContent) continue;
-      for (let inner = 0; inner < plans.length; inner++) {
-        const innerPlan = plans[inner];
-        if (inner === host || !innerPlan || ledger.failed(inner)) continue;
-        if (!isUnder(innerPlan.node, slot.plan.node)) continue;
-        ledger.record(
-          inner,
-          new Error(
-            "sits inside the slot at " + JSON.stringify(slot.path) + " of " + JSON.stringify(hostPlan.node.name) +
-              " (id " + JSON.stringify(hostPlan.node.id) + "), which entry [" + host + "] FILLS in the same batch — that fill " +
-              "removes the slot's current content, so this write would land on a node no longer in the tree. " +
-              "State these words on the entry [" + host + "] fills the slot with.",
-          ),
-        );
-      }
-    }
-  }
-}
-
 // Is `node` a descendant of `ancestor`? The ancestor is a live node the batch resolved, so the
 // parent chain is the whole answer — no composite-id reasoning needed.
 function isUnder(node: SceneNode, ancestor: SceneNode): boolean {
@@ -477,7 +431,7 @@ export function editMany(entries: EditEntry[], scope?: EditManyScope): Promise<H
       // can run in between. A batch that grew or shrank underneath us would mint handles for a set
       // nobody validated. Entries are read-only from here on; the objects inside are the caller's
       // and are only ever read.
-      const batch = entries.slice();
+      const batch = entries.map((entry, i) => (entry && typeof entry === "object" && !Array.isArray(entry) ? { ...entry, changes: compileDeltaTrees(entry.changes, SUBJECT + "[" + i + "]") } : entry));
       const ledger = createBatchLedger(batch.length);
       forEachLiveEntry(ledger, batch.length, (i) => assertEntryVocabulary(batch[i]));
       // `within` resolves ONCE for the batch, not per entry: as a bare key it costs a document
@@ -520,7 +474,6 @@ export function editMany(entries: EditEntry[], scope?: EditManyScope): Promise<H
       const instances = planEntryInstances(ledger, compiled, currents, { targets, fonts: loaded.fonts });
       const components = planEntryComponents(ledger, compiled, targets);
       assertNoEntryInsideRetargetedInstance(ledger, compiled, instances);
-      assertNoEntryInsideFilledSlot(ledger, compiled, instances);
       assertNoDefinitionBindingCrossReference(ledger, compiled, components, instances);
       const deltas = layoutDeltasByNodeId(compiled);
       forEachLiveEntry(ledger, batch.length, (i) => {
