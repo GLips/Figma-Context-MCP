@@ -776,9 +776,9 @@ async function executeCode(to: ReplyTo, code: string, preamble: string): Promise
     // Return-path node guard (R2): a returned live node would otherwise collapse to
     // { id } and silently drop everything else. Make that loud instead of lossy.
     guardReturnValue(raw);
-    const serialized = safeSerialize(egress.project(raw));
-    session.last = raw;
-    result = serialized;
+    result = safeSerialize(egress.project(raw));
+    // Session capture is optional; its narrower data contract must not reject a valid wire result.
+    try { session.last = raw; } catch { session.last = undefined; }
   } catch (err) {
     errorMessage = formatError(err);
   } finally {

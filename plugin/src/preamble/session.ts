@@ -18,7 +18,7 @@ export function createSession(): Record<string, unknown> {
     if ("removed" in value && "id" in value && "type" in value) return fail(path);
     const previous = copies.get(value);
     if (previous) return previous;
-    const target = Array.isArray(value) ? [] : Object.create(null);
+    const target: unknown[] | Record<string, unknown> = Array.isArray(value) ? [] : {};
     const reuse = retainOwned && owned.has(value);
     const output = reuse ? value : protect(target, path);
     copies.set(value, output);
@@ -67,6 +67,6 @@ export function createSession(): Record<string, unknown> {
     return proxy;
   }
 
-  const session = protect(Object.create(null), "session") as Record<string, unknown>;
+  const session = protect({}, "session") as Record<string, unknown>;
   return session;
 }

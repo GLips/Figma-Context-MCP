@@ -46,7 +46,7 @@ let result, error = null;
 try {
   const { flcm, session } = (0, eval)(SANDBOX_PREAMBLE)(host);
   result = await (0, eval)("(async function(flcm, session){ " + userCode + "\n })")(flcm, session);
-  session.last = result;
+  try { session.last = result; } catch { session.last = undefined; }
 } catch (e) {
   error = e && e.stack ? e.stack : String(e);
 } finally {

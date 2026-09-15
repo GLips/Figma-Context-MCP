@@ -344,7 +344,7 @@ export function buildQuickStart(): string {
   const verbLines = quickStartVerbLines();
   const quickStart = `Execute JavaScript in Figma with \`flcm\`.
 
-EXECUTION: await/return directly. Only session survives calls: plain-data snapshots, ids as pointers. session.last holds the full previous successful return. Same plugin run, including reconnects/pages; close/file switch clears it. Declarations and flcm are per-call.
+EXECUTION: await/return directly. Only session survives calls: plain-data snapshots, ids as pointers. session.last keeps full plain-data returns, else undefined. Same plugin run, including reconnects/pages; close/file switch clears it. Declarations and flcm are per-call.
 
 AUTHOR:
   const t = { type:"FRAME", layout:{ mode:"column", gap:16 }, children:[{ type:"TEXT", text:"Hi" }] };
@@ -355,7 +355,7 @@ VERBS — all on \`flcm.\`, nothing else is:
 ${verbLines}
 
 MUST-KNOW
-- Store/return data, never live nodes or functions.
+- Store plain data; return ids for live nodes.
 - get/find predicates see full trees. Reads project at return/console: elided gives cut sizes in JSON characters. Survey session.last or fresh flcm.get(id); never rerun edits. Computed data stays whole.
 - Metrics take a number or "Npx"; width/height also take "N%", "fill", "hug". Colors/gradients/shadows are CSS strings.
 - Unsupported CSS fails loud.

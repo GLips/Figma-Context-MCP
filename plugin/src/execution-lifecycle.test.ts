@@ -238,10 +238,6 @@ test("session rejects request plumbing and alias attacks at every write boundary
   assert.deepEqual(JSON.parse(JSON.stringify(result.result)), {
     rejects: Array(11).fill(true), safe: { nested: {} }, order: ["b", "a"],
   });
-  const invalidReturn = await execute(h, `return { plumbing: flcm };`);
-  assert.match(invalidReturn.errors!, /session.last.plumbing.*plain data/);
-  const after = await execute(h, `return session.last.order;`);
-  assert.deepEqual(JSON.parse(JSON.stringify(after.result)), ["b", "a"]);
 });
 
 test("last retains full read data before wire projection", async () => {
@@ -331,4 +327,30 @@ test("last snapshots session-owned returns and permits returning the session its
   const third = await execute(h, `session.tree.name = "newer"; return session.last.tree.name;`);
   assert.equal(third.errors, null);
   assert.equal(third.result, "after");
+});
+
+test("a non-storable return succeeds and clears last", async () => {
+  const h = host();
+  await h.connect(1);
+  await execute(h, `return { previous: true };`);
+  const returned = await execute(h, `return { ok: 1, fn: () => 1 };`);
+  assert.equal(returned.errors, null);
+  assert.deepEqual(JSON.parse(JSON.stringify(returned.result)), { ok: 1, fn: "[Function fn]" });
+  const next = await execute(h, `return session.last === undefined;`);
+  assert.equal(next.errors, null);
+  assert.equal(next.result, true);
+});
+
+test("stored objects support ordinary Object methods without invoking inherited setters", async () => {
+  const h = host();
+  await h.connect(1);
+  const result = await execute(h, `
+    session.screen = { x: 1, nested: {} };
+    session.screen.__proto__ = { injected: true };
+    return [session.hasOwnProperty("screen"), session.screen.hasOwnProperty("x"),
+      session.screen.nested.toString(), session.screen.injected === undefined,
+      session.screen.hasOwnProperty("__proto__")];
+  `);
+  assert.equal(result.errors, null);
+  assert.deepEqual(JSON.parse(JSON.stringify(result.result)), [true, true, "[object Object]", true, true]);
 });

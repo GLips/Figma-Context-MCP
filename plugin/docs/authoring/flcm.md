@@ -45,9 +45,9 @@ session.screen = await flcm.append(session.root, session.screen);
 return session.screen.children.map(n => n.id);
 ```
 
-Assignments copy plain objects and arrays from outside session, so changing the original object afterward does not change the stored snapshot. References already inside session stay shared, except last. Mutate stored data directly with ordinary properties and array operations. Strings, finite numbers, booleans, null and undefined are supported. Functions, flcm instances, live Figma nodes, accessors, symbols, class instances and cycles are rejected, including on nested writes. Property locking and prototype changes are rejected. Delete a property to release its data.
+Assignments copy plain objects and arrays from outside session, so mutate the stored value rather than the original. Session holds plain data only; functions, live Figma nodes and class instances are refused by name. Delete a property to drop its data.
 
-After a successful call, session.last holds a detached snapshot of its full return value before wire projection. Returning session itself is supported. A call with no return sets it to undefined. Failed calls do not automatically replace last; valid session writes before the error remain, just as earlier canvas writes can remain. Return plain data so it can be stored. Stored copies are agent-owned snapshots and return whole; survey their fields or compute a summary to keep output small.
+After a successful call, session.last holds a detached snapshot of its full return value before wire projection, only when the return is plain data; otherwise last becomes undefined. Returning session itself is supported. A call with no return sets it to undefined. Failed calls do not automatically replace last; valid session writes before the error remain, just as earlier canvas writes can remain. Stored copies are agent-owned snapshots and return whole; survey their fields or compute a summary to keep output small.
 
 ### Full reads and wire markers
 
