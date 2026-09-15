@@ -128,7 +128,7 @@ test("selection returns the current selection as slim handles; empty when nothin
   assert.equal(sel[0].width, 20);
 });
 
-test("find excludes hidden nodes — the read shape covers the rendered document, like get", async () => {
+test("find includes hidden nodes and descendants of hidden ancestors", async () => {
   const figma = createFigmaMock();
   const out = await render({
     type: "FRAME",
@@ -146,11 +146,11 @@ test("find excludes hidden nodes — the read shape covers the rendered document
   const rects = await find({ type: "RECTANGLE" });
   assert.deepEqual(
     rects.map((h) => h.key),
-    ["shown"],
+    ["shown", "gone"],
   );
   // A hit whose ancestor is hidden is also unrendered.
   (await figma.getNodeByIdAsync(specNode(out, "wrap").id)).visible = false;
-  assert.deepEqual(await find({ type: "RECTANGLE" }), []);
+  assert.equal((await find({ type: "RECTANGLE" })).length, 2);
 });
 
 test("find with a predicate keeps only nodes it accepts, against inline styling values", async () => {
@@ -256,12 +256,7 @@ test("a predicate-only find fails loud past the materialization cap, naming it",
   );
 });
 
-test("a hit inside a core-collapsed SVG container still projects identity (no geometry)", async () => {
-  // The shared core collapses an SVG-heavy container (a free-form frame whose children are all shape
-  // primitives) into one IMAGE-SVG node, dropping the descendants — the same egress behavior REST's read
-  // has. A hit inside such a container is absent from the simplify index, so its slim handle is
-  // identity-only rather than throwing. (To inspect it fully, `get(hit)` roots the node and doesn't
-  // collapse a lone primitive.)
+test("find predicates see geometry inside SVG-heavy containers", async () => {
   createFigmaMock();
   await render({
     type: "FRAME",
@@ -274,9 +269,7 @@ test("a hit inside a core-collapsed SVG container still projects identity (no ge
   const [dot] = await find({ key: "dot" });
   assert.equal(dot.key, "dot");
   assert.equal(dot.type, "RECTANGLE");
-  assert.equal(dot.width, undefined);
+  assert.equal(dot.width, 4);
 
-  // With a predicate, that same shapeless candidate has no full read shape to test, so it is excluded —
-  // never handed an `undefined` the closure would crash dereferencing.
-  assert.deepEqual(await find({ key: "dot" }, (n) => Array.isArray(n.fills)), []);
+  assert.equal((await find({ key: "dot" }, (n) => n.width === 4)).length, 1);
 });

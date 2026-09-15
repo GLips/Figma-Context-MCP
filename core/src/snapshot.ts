@@ -315,6 +315,8 @@ export interface SnapshotAnnotation {
 }
 
 export interface NodeSnapshot {
+  vectorPaths?: { data: string; windingRule: "NONZERO" | "EVENODD" | "NONE" }[];
+  locked?: boolean;
   annotations?: SnapshotAnnotation[];
   id: string;
   name: string;

@@ -360,8 +360,10 @@ const LINE_FIELDS = {
 // corner radius — accepting it would be a documented no-op, which ADR-0003 forbids) plus the required `d`.
 // Reuses the APPEARANCE_FIELDS entries so a path themes exactly like a rect and the docs can't drift.
 const PATH_FIELDS = {
+  vectorPaths: prop(z.array(z.object({ data: z.string(), windingRule: z.enum(["NONZERO", "EVENODD", "NONE"]) })), "Native path records for multiple paths or even-odd winding. Use exactly one of d, vectorPaths, or svg."),
   d: z
     .string()
+    .optional()
     .describe(
       'SVG path data, e.g. "M12 2 L22 20 L2 20 Z". Every standard command works (relative/shorthand are ' +
         "normalized); only malformed data fails. Required.",

@@ -1219,7 +1219,7 @@ function buildLine(wn: WriteNode, ctx: RenderCtx): any {
 // leaving a silent empty node.
 function buildVector(wn: WriteNode, ctx: RenderCtx): any {
   if (typeof wn.svg === "string") return buildSvg(wn, wn.svg);
-  if (typeof wn.pathData === "string") return buildPath(wn, wn.pathData, ctx);
+  if (typeof wn.pathData === "string" || wn.vectorPaths) return buildPath(wn, wn.pathData ?? "", ctx);
   throw new Error("flcm: a VECTOR node carries neither svg markup nor path data (VECTOR/VECTOR guarantee one).");
 }
 
@@ -1242,9 +1242,9 @@ function buildSvg(wn: WriteNode, markup: string): any {
 }
 
 /** Geometry edits preserve the live vector's box unless the spec also names a new size. */
-export function applyVectorPath(node: VectorNode, normalized: string): void {
+export function applyVectorPath(node: VectorNode, paths: VectorPaths): void {
   const { width, height } = node;
-  node.vectorPaths = [{ windingRule: "NONZERO", data: normalized }];
+  node.vectorPaths = paths;
   node.resize(width, height);
 }
 
@@ -1252,7 +1252,7 @@ function buildPath(wn: WriteNode, pathData: string, ctx: RenderCtx): any {
   // Figma's vectorPaths parser accepts only absolute M/L/C/Q/Z, so normalize the full SVG command set
   // (H V S T A + relatives) into that subset first. Do this BEFORE creating the node so malformed input
   // fails loud without orphaning an empty vector on the canvas.
-  const normalized = normalizePathData(pathData);
+  const paths = wn.vectorPaths ?? [{ windingRule: "NONZERO" as const, data: normalizePathData(pathData) }];
   const v = figma.createVector();
   figma.currentPage.appendChild(v);
   if (!wn.fills) v.fills = []; // omitted fill -> transparent, like the other primitives (no surprise default)
@@ -1261,7 +1261,7 @@ function buildPath(wn: WriteNode, pathData: string, ctx: RenderCtx): any {
   // surprise-default that breaks rect/frame parity and the "path is like a rect with no fill" mental model.
   if (!wn.strokes) v.strokes = [];
   try {
-    v.vectorPaths = [{ windingRule: "NONZERO", data: normalized }];
+    v.vectorPaths = paths;
   } catch (e: any) {
     throw new Error('VECTOR: Figma could not parse the path data "' + pathData + '" — ' + (e && e.message ? e.message : String(e)));
   }

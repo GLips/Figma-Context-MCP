@@ -1,5 +1,5 @@
 import { compileBindingBag, bindingFieldsForType } from "./flcm.js";
-import { normalizePathData } from "./path.js";
+import { normalizePathData, normalizeVectorPaths } from "./path.js";
 // Live identities compile as edits. The bridge receives closures so its write walk need not
 // import the edit orchestration that already depends on the bridge.
 import type { WriteNode } from "./ir.js";
@@ -30,15 +30,19 @@ export async function loadLiveTree(tree: WriteNode): Promise<LoadedLiveTree> {
       if (wn.authoring!.svg !== undefined) throw new Error("svg has no live geometry edit: importing markup can change node types and child identities. Move with { id }, or omit the id to import new artwork.");
       if (wn.source?.type !== undefined && wn.source.type !== "IMAGE-SVG" && wn.source.type !== node.type) throw new Error("type " + wn.source.type + " does not match live " + node.type + ".");
       wn.type = node.type;
-      const { key, d, componentPropertyReferences, ...delta } = wn.authoring!;
+      const { key, d, vectorPaths, componentPropertyReferences, ...delta } = wn.authoring!;
       if (componentPropertyReferences !== undefined) {
         wn.componentPropertyReferences = compileBindingBag(componentPropertyReferences, bindingFieldsForType(node.type), at);
       }
-      let pathData: string | undefined;
+      let pathData: VectorPaths | undefined;
       if (d !== undefined) {
         if (node.type !== "VECTOR") throw new Error("d is a VECTOR geometry word.");
         if (typeof d !== "string" || !d.trim()) throw new Error("d must be a non-empty SVG path string.");
-        pathData = normalizePathData(d);
+        pathData = [{ data: normalizePathData(d), windingRule: "NONZERO" }];
+      }
+      if (vectorPaths !== undefined) {
+        if (node.type !== "VECTOR" || d !== undefined) throw new Error("vectorPaths requires a VECTOR and cannot be combined with d.");
+        pathData = normalizeVectorPaths(vectorPaths);
       }
       if (key !== undefined && typeof key !== "string") throw new Error("key must be a string.");
       const changes = delta as EditDelta;
@@ -58,7 +62,7 @@ export async function loadLiveTree(tree: WriteNode): Promise<LoadedLiveTree> {
 export interface LoadedLiveTree {
   loaded: import("./edit-plan.js").LoadedResources;
   entries: {
-    wn: WriteNode; node: SceneNode; changes: EditDelta; key: unknown; pathData?: string;
+    wn: WriteNode; node: SceneNode; changes: EditDelta; key: unknown; pathData?: VectorPaths;
     hint: import("./edit-plan.js").EditPlan | undefined;
     targets: ReturnType<typeof createResolvedTargets>;
     current: Awaited<ReturnType<typeof resolveInstanceEditTargets>> | null;

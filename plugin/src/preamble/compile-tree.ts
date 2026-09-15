@@ -1,6 +1,7 @@
 // Trees cross the authoring boundary once. Only this private compile produces IR.
 import type { WriteNode, WriteChild } from "./ir.js";
 import type { NodeSpec, FrameProps, TextProps, ShapeProps, EllipseProps, LineProps, PathProps, SvgProps, InstanceProps } from "./schema.js";
+import { isElision, isUnchangedRead } from "@framelink/core";
 import type { SimplifiedLayout } from "@framelink/core";
 import { assertNoComponentPropertyBindings, compileFrame, compileText, compileRectangle, compileEllipse, compileLine, compileInstance, compileSvg, compilePath } from "./flcm.js";
 import { own } from "./validate.js";
@@ -32,9 +33,12 @@ export function copySpec<T>(value: T, path = "spec", ancestors = new Set<object>
 export function compileTree(input: unknown, subject: string): WriteNode {
   const ids = new Set<string>();
   const keys = new Set<string>();
-  return visit(copySpec(input, subject), subject);
+  const copied = copySpec(input, subject);
+  validateInheritedChildren(input, subject);
+  return visit(copied, subject);
   function visit(raw: unknown, at: string): WriteNode {
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error(at + ": expected a plain node spec.");
+    if (isElision(raw)) throw new Error(at + ": an elision marker is only valid inside a children array; it preserves existing children.");
     const src = raw as Record<string, unknown>;
     if (src.id !== undefined && (typeof src.id !== "string" || !src.id.trim())) throw new Error(at + ".id must be a non-empty live node id.");
     if (typeof src.id === "string") {
@@ -45,18 +49,21 @@ export function compileTree(input: unknown, subject: string): WriteNode {
       if (keys.has(src.key)) throw new Error(at + ".key: duplicate key " + JSON.stringify(src.key) + ".");
       keys.add(src.key);
     }
-    const { id, type, children, ...words } = src;
+    const { id, type, children: readChildren, ...words } = src;
+    // Inherited instance layers are edited through path overrides; they cannot be moved as children.
+    const children = type === "INSTANCE" && src.details ? undefined : readChildren;
     if (children !== undefined && !Array.isArray(children)) throw new Error(at + ".children must be an array of node specs.");
     const props = readyNodeWords(words, at);
-    const compiledChildren = (children as unknown[] | undefined)?.map((child, i) => visit(child, at + ".children[" + i + "]"));
+    const compiledChildren = (children as unknown[] | undefined)?.flatMap((child, i) => isElision(child) ? [] : [visit(child, at + ".children[" + i + "]")]);
     if (props.overrides && typeof props.overrides === "object" && !Array.isArray(props.overrides)) {
       props.overrides = Object.fromEntries(Object.entries(props.overrides).map(([path, delta]) => {
         if (!delta || typeof delta !== "object" || !Array.isArray(delta.children)) return [path, delta];
-        return [path, { ...delta, children: delta.children.map((child: unknown, i: number) => {
+        return [path, { ...delta, children: delta.children.flatMap((child: unknown, i: number) => {
+          if (isElision(child)) return [];
           const where = at + ".overrides[" + JSON.stringify(path) + "].children[" + i + "]";
           const compiled = visit(child, where);
           assertNoComponentPropertyBindings(compiled, where);
-          return compiled;
+          return [compiled];
         }) }];
       }));
     }
@@ -74,7 +81,7 @@ export function compileTree(input: unknown, subject: string): WriteNode {
           case "LINE": tree = compileLine(props as LineProps); break;
           case "INSTANCE": tree = compileInstance(props as InstanceProps & { componentId: string }); break;
           case "VECTOR": {
-            if ((props.svg !== undefined) === (props.d !== undefined)) throw new Error("VECTOR needs exactly one of svg (markup) or d (path data).");
+            if ([props.svg, props.d, props.vectorPaths].filter(value => value !== undefined).length !== 1) throw new Error("VECTOR needs exactly one of svg (markup), d (path data), or vectorPaths.");
             if (props.svg !== undefined) { const { svg, ...rest } = props; tree = compileSvg(svg, rest as SvgProps); }
             else tree = compilePath(props as PathProps);
             break;
@@ -94,6 +101,8 @@ export function compileTree(input: unknown, subject: string): WriteNode {
 export function readyNodeWords(src: Record<string, unknown>, subject: string): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(src)) {
+    // These records describe a read, never an authored change. Omission preserves live children.
+    if (key === "details" || key === "elided") continue;
     const disposition = own(READ_FIELD_DISPOSITIONS, key);
     if (value != null && disposition) throw refuse(subject, key, disposition.refuse);
     out[key] = readyAuthoredValue(key, value, subject);
@@ -209,7 +218,18 @@ export function compileDeltaTrees<T>(delta: T, at: string): T {
   if (!bag.overrides || typeof bag.overrides !== "object" || Array.isArray(bag.overrides)) return snapshot;
   for (const [path, value] of Object.entries(bag.overrides)) {
     if (!value || typeof value !== "object" || !Array.isArray(value.children)) continue;
-    value.children = value.children.map((child: unknown, i: number) => compileTree(child, at + ".overrides[" + JSON.stringify(path) + "].children[" + i + "]"));
+    value.children = value.children.flatMap((child: unknown, i: number) => isElision(child) ? [] : [compileTree(child, at + ".overrides[" + JSON.stringify(path) + "].children[" + i + "]")]);
   }
   return snapshot;
+}
+
+/** Inherited children are inspectable but cannot be reparented. Changed ones must not disappear. */
+function validateInheritedChildren(value: unknown, at: string): void {
+  if (!value || typeof value !== "object") return;
+  const node = value as Record<string, unknown>;
+  if (node.type === "INSTANCE" && node.details && Array.isArray(node.children) && !isUnchangedRead(node.children)) {
+    if (node.children.some(child => !isElision(child))) throw new Error(at + ".children: inherited instance children are read-only. Author sublayer changes through overrides, and slot content through overrides[path].children.");
+  }
+  if (Array.isArray(node.children)) node.children.forEach((child, i) => validateInheritedChildren(child, at + ".children[" + i + "]"));
+  if (node.overrides && typeof node.overrides === "object") for (const [path, delta] of Object.entries(node.overrides)) validateInheritedChildren(delta, at + ".overrides[" + JSON.stringify(path) + "]");
 }

@@ -75,6 +75,7 @@ test("get on a component names it in the components sidecar, not on the node", a
   assert.deepEqual(components?.[comp.id], {
     type: "COMPONENT",
     name: "Card",
+    children: [],
     propertyDefinitions: {
       Title: { type: "text", defaultValue: "Product" },
       Icon: { type: "instance_swap", defaultValue: "9:9" },
@@ -138,10 +139,12 @@ test("get reads beyond-CSS effects back as the flcm.effects object form", async 
   assert.equal(fx.filter, undefined);
 });
 
-test("get on a hidden node fails loud instead of returning nothing", async () => {
+test("get returns hidden targets with their visibility", async () => {
   const figma = createFigmaMock();
   const out = await render({ type: "FRAME", key: "ghost", width: 10, height: 10 });
   (await figma.getNodeByIdAsync(out.id)).visible = false;
 
-  await assert.rejects(get("ghost"), /hidden/);
+  const { node } = await get("ghost");
+  assert.equal(node.id, out.id);
+  assert.equal(node.visible, false);
 });

@@ -148,6 +148,8 @@ export interface SceneNodeLike {
   readonly name: string;
   readonly type: string;
   readonly visible?: boolean;
+  readonly locked?: boolean;
+  readonly vectorPaths?: ReadonlyArray<{ data: string; windingRule: "NONZERO" | "EVENODD" | "NONE" }>;
   /** Only the parent's type is read — to know whether a COMPONENT is a set variant. */
   readonly parent?: { readonly type: string } | null;
   readonly children?: ReadonlyArray<SceneNodeLike>;
@@ -378,13 +380,7 @@ async function sceneSubtreeToSnapshot(
 ): Promise<NodeSnapshot> {
   const text = node.type === "TEXT" ? decodeSceneText(node) : undefined;
   const main = await mainComponentOf(node);
-  // Only for an instance the read will KEEP: a hidden one is dropped downstream, so publishing its
-  // component's definition would spend a full subtree walk on bytes nobody sees. A hidden instance
-  // whose visibility a component property drives is kept — some instance turns it on.
-  const collectable =
-    node.visible !== false ||
-    (!!node.componentPropertyReferences && "visible" in node.componentPropertyReferences);
-  if (main && mainComponents && collectable && !mainComponents.has(main.id)) {
+  if (main && mainComponents && !mainComponents.has(main.id)) {
     mainComponents.set(main.id, main);
   }
 
@@ -403,6 +399,8 @@ async function sceneSubtreeToSnapshot(
     name: node.name,
     type: node.type === "POLYGON" ? "REGULAR_POLYGON" : node.type,
     visible: node.visible,
+    locked: node.locked,
+    vectorPaths: node.vectorPaths?.map(path => ({ data: path.data, windingRule: path.windingRule })),
     componentPropertyReferences: node.componentPropertyReferences ?? undefined,
 
     // Layout traits

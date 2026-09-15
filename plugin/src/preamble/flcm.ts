@@ -1,3 +1,4 @@
+import { normalizeVectorPaths } from "./path.js";
 import { compileBounds, BOUND_KEYS } from "./size-bounds.js";
 import { compileAnnotations } from "./annotations.js";
 import {
@@ -41,7 +42,7 @@ export const KNOWN_KEYS = {
   textStyle: ["fontFamily", "fontWeight", "fontSize", "fontStyle", "lineHeight", "letterSpacing", "textDecoration", "textTransform", "fontVariant", "textAlign", "textAlignVertical", "paragraphSpacing", "paragraphIndent", "listSpacing", "hyperlink", "lineClamp"],
   run: ["fontWeight", "fontSize", "fontFamily", "fontStyle", "lineHeight", "letterSpacing", "textDecoration", "textTransform", "fontVariant", "paragraphSpacing", "paragraphIndent", "listSpacing", "color", "hyperlink"],
   line: ["stroke", "strokeWidth", "width", "rotation", "left", "top", "position", "anchor", "pin"],
-  path: ["d", "fill", "stroke", "strokeWidth", "strokeAlign", "effects", "rotation"],
+  path: ["vectorPaths", "d", "fill", "stroke", "strokeWidth", "strokeAlign", "effects", "rotation"],
   instance: ["componentProperties", "overrides", "exposed"],
   swap: ["componentId"],
   slotContent: ["children"],
@@ -1152,16 +1153,20 @@ function compileSvg(markup: unknown, props: SvgProps = {}): WriteNode {
 // the shared appearance props via compileNodeLocalProps() (radius off — a vector has none), so it themes like a rect.
 // `d` is required and must be a non-empty string; bad path data fails loud again at render (bridge).
 function compilePath(props: PathProps): WriteNode {
+  props = acceptAuthoringProps(props, { type: "VECTOR", verb: "create", known: PATH_KEYS, subject: "VECTOR" }) as PathProps;
   if (!props || typeof props !== "object") {
     throw new Error("VECTOR: expected a props object with a `d` path string, e.g. { type: \"VECTOR\", d: \"M12 2 L22 20 L2 20 Z\", fill: \"#111\" } — got " + JSON.stringify(props) + ".");
   }
   const d = props.d;
-  if (typeof d !== "string" || !d.trim()) {
+  if (props.vectorPaths === undefined && (typeof d !== "string" || !d.trim())) {
     throw new Error("VECTOR: `d` (SVG path data) must be a non-empty string — got " + JSON.stringify(d) + ".");
   }
   rejectUnknownKeys(props, PATH_KEYS, "VECTOR");
   const wn: WriteNode = { type: "VECTOR" };
-  wn.pathData = d;
+  if (props.vectorPaths !== undefined) {
+    if (d !== undefined) throw new Error("VECTOR needs exactly one of d or vectorPaths.");
+    wn.vectorPaths = normalizeVectorPaths(props.vectorPaths);
+  } else wn.pathData = d;
   compileNodeLocalProps(wn, props, {}); // fill/stroke/strokeWidth/effects/rotation + base; radius/clip off for a vector
   compileBindings(wn, props, ANY_NODE_BINDINGS, "VECTOR");
   const layout = buildLayout(props as FrameProps, "VECTOR", "VECTOR");

@@ -152,6 +152,7 @@ export type NodeDelta = {
 };
 
 export interface SimplifiedDesign {
+  elided?: Elision[];
   name: string;
   nodes: SimplifiedNode[];
   /** Every component and component set the read referenced (see SimplifiedComponentEntry). */
@@ -178,7 +179,17 @@ export type TemplateBody = Omit<SimplifiedNode, "id" | "name" | "children" | "te
 // Per-node geometry (width/height/position/rotation/…) sits at the node top
 // level per the canonical vocabulary's hybrid structure — inherited from
 // NodeGeometry so the extractor and the type can't drift.
+export interface Elision {
+  $elided: { id: string; field: string; chars: number; read: string };
+}
+
 export interface SimplifiedNode extends NodeGeometry {
+  /** Producer data before CSS conversion, excluding recursive children. Read-only metadata. */
+  details?: Omit<NodeSnapshot, "children">;
+  elided?: Elision[];
+  d?: string;
+  vectorPaths?: { data: string; windingRule: "NONZERO" | "EVENODD" | "NONE" }[];
+  locked?: boolean;
   annotations?: SnapshotAnnotation[];
   id: string;
   // Always populated during simplification, but the serialization pass drops it

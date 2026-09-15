@@ -277,7 +277,12 @@ function viewNode(
  * and the now-empty `styles`/`templates` (folded inline by expansion). The
  * components sidecar IS compared — see pin 2.
  */
-export function parityView(design: SimplifiedDesign): { nodes: Rec[]; components: Rec } {
+export function parityView(input: SimplifiedDesign): { nodes: Rec[]; components: Rec } {
+  const design: SimplifiedDesign = JSON.parse(
+    JSON.stringify(input, (key, value) =>
+      key === "$elided" ? { ...value, chars: undefined } : value,
+    ),
+  );
   const styles: Record<string, StyleValue> = design.styles ?? {};
   const templates = design.templates ?? {};
   const components: Rec = {};

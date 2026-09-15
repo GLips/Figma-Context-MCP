@@ -17,7 +17,25 @@
           "width": 260,
           "height": 60,
           "left": 0,
-          "top": 0
+          "top": 0,
+          "elided": [
+            {
+              "$elided": {
+                "id": "11:2",
+                "field": "details",
+                "chars": 491,
+                "read": "flcm.get(\"11:2\")"
+              }
+            },
+            {
+              "$elided": {
+                "id": "11:2",
+                "field": "children",
+                "chars": 3620,
+                "read": "flcm.get(\"11:2\")"
+              }
+            }
+          ]
         },
         {
           "id": "11:7",
@@ -40,7 +58,25 @@
             "11:15": {
               "visible": false
             }
-          }
+          },
+          "elided": [
+            {
+              "$elided": {
+                "id": "11:7",
+                "field": "details",
+                "chars": 698,
+                "read": "flcm.get(\"11:7\")"
+              }
+            },
+            {
+              "$elided": {
+                "id": "11:7",
+                "field": "children",
+                "chars": 1272,
+                "read": "flcm.get(\"11:7\")"
+              }
+            }
+          ]
         },
         {
           "id": "11:8",
@@ -50,7 +86,25 @@
           "height": 120,
           "left": 0,
           "top": 100,
-          "layout": "layout_5597a813"
+          "layout": "layout_5597a813",
+          "elided": [
+            {
+              "$elided": {
+                "id": "11:8",
+                "field": "details",
+                "chars": 463,
+                "read": "flcm.get(\"11:8\")"
+              }
+            },
+            {
+              "$elided": {
+                "id": "11:8",
+                "field": "children",
+                "chars": 2058,
+                "read": "flcm.get(\"11:8\")"
+              }
+            }
+          ]
         },
         {
           "id": "11:12",
@@ -79,7 +133,17 @@
                   "type": "TEXT",
                   "text": "Hello world",
                   "textStyle": "style_9f723b14",
-                  "fill": "fill_314185fc"
+                  "fill": "fill_314185fc",
+                  "elided": [
+                    {
+                      "$elided": {
+                        "id": "11:20",
+                        "field": "details",
+                        "chars": 546,
+                        "read": "flcm.get(\"11:20\")"
+                      }
+                    }
+                  ]
                 },
                 {
                   "id": "11:21",
@@ -87,10 +151,48 @@
                   "type": "TEXT",
                   "text": "Second line",
                   "textStyle": "style_9f723b14",
-                  "fill": "fill_314185fc"
+                  "fill": "fill_314185fc",
+                  "elided": [
+                    {
+                      "$elided": {
+                        "id": "11:21",
+                        "field": "details",
+                        "chars": 549,
+                        "read": "flcm.get(\"11:21\")"
+                      }
+                    }
+                  ]
                 }
               ]
             }
+          },
+          "elided": [
+            {
+              "$elided": {
+                "id": "11:12",
+                "field": "details",
+                "chars": 520,
+                "read": "flcm.get(\"11:12\")"
+              }
+            },
+            {
+              "$elided": {
+                "id": "11:12",
+                "field": "children",
+                "chars": 2813,
+                "read": "flcm.get(\"11:12\")"
+              }
+            }
+          ]
+        }
+      ],
+      "elided": [
+        {
+          "$elided": {
+            "id": "11:1",
+            "field": "details",
+            "chars": 252,
+            "read": "flcm.get(\"11:1\")"
           }
         }
       ]
@@ -125,7 +227,25 @@
           "left": 10,
           "top": 10,
           "fill": "fill_1288b06a",
-          "borderRadius": "6px"
+          "borderRadius": "6px",
+          "elided": [
+            {
+              "$elided": {
+                "id": "11:3",
+                "field": "details",
+                "chars": 412,
+                "read": "flcm.get(\"11:3\")"
+              }
+            },
+            {
+              "$elided": {
+                "id": "11:3",
+                "field": "children",
+                "chars": 1235,
+                "read": "flcm.get(\"11:3\")"
+              }
+            }
+          ]
         },
         {
           "id": "11:5",
@@ -136,7 +256,25 @@
           "left": 130,
           "top": 10,
           "fill": "fill_93e41386",
-          "borderRadius": "6px"
+          "borderRadius": "6px",
+          "elided": [
+            {
+              "$elided": {
+                "id": "11:5",
+                "field": "details",
+                "chars": 408,
+                "read": "flcm.get(\"11:5\")"
+              }
+            },
+            {
+              "$elided": {
+                "id": "11:5",
+                "field": "children",
+                "chars": 1237,
+                "read": "flcm.get(\"11:5\")"
+              }
+            }
+          ]
         }
       ]
     },
@@ -157,7 +295,17 @@
           "fill": "fill_314185fc",
           "componentPropertyReferences": {
             "visible": "Left Icon"
-          }
+          },
+          "elided": [
+            {
+              "$elided": {
+                "id": "11:14",
+                "field": "details",
+                "chars": 321,
+                "read": "flcm.get(\"11:14\")"
+              }
+            }
+          ]
         },
         {
           "id": "11:4",
@@ -169,7 +317,17 @@
           "top": 10,
           "text": "Button",
           "textStyle": "style_9f723b14",
-          "fill": "fill_314185fc"
+          "fill": "fill_314185fc",
+          "elided": [
+            {
+              "$elided": {
+                "id": "11:4",
+                "field": "details",
+                "chars": 527,
+                "read": "flcm.get(\"11:4\")"
+              }
+            }
+          ]
         }
       ]
     },
@@ -190,7 +348,17 @@
           "fill": "fill_93230492",
           "componentPropertyReferences": {
             "visible": "Left Icon"
-          }
+          },
+          "elided": [
+            {
+              "$elided": {
+                "id": "11:15",
+                "field": "details",
+                "chars": 322,
+                "read": "flcm.get(\"11:15\")"
+              }
+            }
+          ]
         },
         {
           "id": "11:6",
@@ -202,7 +370,17 @@
           "top": 10,
           "text": "Button",
           "textStyle": "style_9f723b14",
-          "fill": "fill_93230492"
+          "fill": "fill_93230492",
+          "elided": [
+            {
+              "$elided": {
+                "id": "11:6",
+                "field": "details",
+                "chars": 528,
+                "read": "flcm.get(\"11:6\")"
+              }
+            }
+          ]
         }
       ]
     },
@@ -230,7 +408,17 @@
           "componentId": "11:3",
           "componentPropertyReferences": {
             "componentId": "Icon"
-          }
+          },
+          "elided": [
+            {
+              "$elided": {
+                "id": "11:9",
+                "field": "details",
+                "chars": 554,
+                "read": "flcm.get(\"11:9\")"
+              }
+            }
+          ]
         },
         {
           "id": "11:10",
@@ -251,7 +439,27 @@
               "type": "TEXT",
               "text": "Slot content",
               "textStyle": "style_9f723b14",
-              "fill": "#808080"
+              "fill": "#808080",
+              "elided": [
+                {
+                  "$elided": {
+                    "id": "11:11",
+                    "field": "details",
+                    "chars": 552,
+                    "read": "flcm.get(\"11:11\")"
+                  }
+                }
+              ]
+            }
+          ],
+          "elided": [
+            {
+              "$elided": {
+                "id": "11:10",
+                "field": "details",
+                "chars": 358,
+                "read": "flcm.get(\"11:10\")"
+              }
             }
           ]
         }

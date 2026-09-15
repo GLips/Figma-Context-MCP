@@ -168,6 +168,8 @@ export function extractComponents(
     if (source) sources.set(id, source);
   }
 
+  for (const definition of definitionNodes.values()) delete definition.children;
+
   const components: Record<string, SimplifiedComponentEntry> = {};
   const resolved = new Map<string, SimplifiedNode[] | undefined>();
   const resolving = new Set<string>();
@@ -244,7 +246,6 @@ function chooseChildren(
   const definition = definitionNodes.get(id);
   if (definition?.children?.length) {
     const children = definition.children;
-    delete definition.children;
     return notes.unverifiedDefinitions.has(id) ? { children, unverified: true } : { children };
   }
   // The least-edited instance first, then the next — an instance whose own sublayers were all
@@ -363,7 +364,7 @@ function diffChildren(
 }
 
 /** Fields never compared: the id is implied by the path, children are compared structurally. */
-const DIFF_SKIP_KEYS = new Set(["id", "children"]);
+const DIFF_SKIP_KEYS = new Set(["id", "children", "details", "elided"]);
 
 /**
  * The per-node delta: only the fields that differ, plus a structural answer for children. A
@@ -408,4 +409,51 @@ function diffNode(
 
   if (Object.keys(delta).length === 0) return undefined;
   return delta as NodeDelta;
+}
+
+/** Full definitions and donor subtrees retain their live identities in the runtime. */
+export function componentCatalog(
+  nodes: SimplifiedNode[],
+  notes: ComponentNotes,
+  definitions: SimplifiedNode[],
+): Record<string, SimplifiedComponentEntry> {
+  const defined = new Map<string, SimplifiedNode>();
+  const instances = new Map<string, SimplifiedNode[]>();
+  indexTree(nodes, defined, instances);
+  indexTree(definitions, defined, instances);
+  const result: Record<string, SimplifiedComponentEntry> = {};
+  for (const id of [
+    ...new Set([...notes.components.keys(), ...defined.keys(), ...instances.keys()]),
+  ].sort()) {
+    const provenance = notes.components.get(id);
+    const definition = defined.get(id);
+    const donor = byEditCount(instances.get(id), notes.instanceEdits)[0];
+    const source = definition ?? donor;
+    result[id] = {
+      type: provenance?.type ?? "COMPONENT",
+      name: provenance?.name ?? id,
+      ...Object.fromEntries(
+        Object.entries(provenance ?? {}).filter(([, value]) => value !== undefined),
+      ),
+    };
+    if (source?.children) result[id].children = source.children;
+    if (!definition && donor) result[id].childrenFrom = donor.id;
+    if (notes.unverifiedDefinitions.has(id)) result[id].childrenUnverified = true;
+  }
+  return result;
+}
+
+/** Semantic differences are useful to author an instance without moving its inherited layers. */
+export function describeInstanceChanges(
+  nodes: SimplifiedNode[],
+  components: Record<string, SimplifiedComponentEntry>,
+): void {
+  for (const node of nodes) {
+    if (node.children) describeInstanceChanges(node.children, components);
+    const reference = node.componentId ? components[node.componentId]?.children : undefined;
+    if (node.type !== "INSTANCE" || !reference) continue;
+    const overrides = diffChildren(reference, node.children ?? [], node.id, new Set());
+    if (overrides && Object.keys(overrides).length)
+      node.overrides = JSON.parse(JSON.stringify(overrides));
+  }
 }

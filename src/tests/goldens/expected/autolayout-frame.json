@@ -23,7 +23,17 @@
           "width": 120,
           "height": 36,
           "fill": "#3366FF",
-          "borderRadius": "6px"
+          "borderRadius": "6px",
+          "elided": [
+            {
+              "$elided": {
+                "id": "2:2",
+                "field": "details",
+                "chars": 373,
+                "read": "flcm.get(\"2:2\")"
+              }
+            }
+          ]
         },
         {
           "id": "2:3",
@@ -35,7 +45,27 @@
           "left": 260,
           "top": 4,
           "fill": "#FF0000",
-          "borderRadius": "12px"
+          "borderRadius": "12px",
+          "elided": [
+            {
+              "$elided": {
+                "id": "2:3",
+                "field": "details",
+                "chars": 390,
+                "read": "flcm.get(\"2:3\")"
+              }
+            }
+          ]
+        }
+      ],
+      "elided": [
+        {
+          "$elided": {
+            "id": "2:1",
+            "field": "details",
+            "chars": 410,
+            "read": "flcm.get(\"2:1\")"
+          }
         }
       ]
     }

@@ -20,7 +20,8 @@ import {
 } from "./node-to-snapshot.js";
 import { rejectUnknownKeys } from "./validate.js";
 import { assertNodeStillOnCanvas } from "./freshness.js";
-import { simplify, type SimplifiedComponentEntry, type SimplifiedNode } from "@framelink/core";
+import { registerRead } from "./host.js";
+import { simplify, project, projectNames, projectReadNode, type SimplifiedComponentEntry, type SimplifiedNode } from "@framelink/core";
 import type { NodeSnapshot } from "@framelink/core/snapshot";
 
 // A pluginData scan searches this. Default is the current page; a verb's `within` narrows it (resolved by the
@@ -167,9 +168,8 @@ const resolveStyle: SceneStyleResolver = (styleId) => figma.getStyleByIdAsync(st
 // drops the field-generic overload), so tsc can't prove a live node assignable to it.
 async function simplifyScene(
   node: BaseNode,
-  options: { components?: boolean } = {},
   categories?: ReadonlyMap<string, string>,
-): Promise<{ nodes: SimplifiedNode[]; components: Record<string, SimplifiedComponentEntry> }> {
+): Promise<{ nodes: SimplifiedNode[]; components: Record<string, SimplifiedComponentEntry>; full: import("@framelink/core").SimplifyResult }> {
   const annotationCategories = categories ?? await readAnnotationCategoryNames();
   const mainComponents: MainComponentSink = new Map();
   const snapshot = await sceneNodeToSnapshot(
@@ -179,9 +179,21 @@ async function simplifyScene(
     annotationCategories,
   );
   const componentDefinitions =
-    options.components === false ? [] : await offTreeDefinitions(snapshot, mainComponents, annotationCategories);
-  const { nodes, components } = await simplify([snapshot], { ...options, componentDefinitions });
-  return { nodes, components };
+    await offTreeDefinitions(snapshot, mainComponents, annotationCategories);
+  const full = await simplify([snapshot], { componentDefinitions });
+  for (const node of full.nodes) registerNode(node);
+  for (const entry of Object.values(full.components)) for (const node of entry.children ?? []) registerNode(node);
+  const result = { nodes: full.nodes, components: full.components };
+  registerRead(result, () => project(full));
+  registerRead(full.components, () => project(full).components);
+  return { ...result, full };
+  function registerNode(node: SimplifiedNode): void {
+    registerRead(node, () => {
+      const projected = projectReadNode(node, full);
+      return projected === node ? node : projectNames(projected);
+    });
+    for (const child of node.children ?? []) registerNode(child);
+  }
 }
 
 /**
@@ -193,11 +205,6 @@ async function simplifyScene(
  * back rather than repeated. Published library components included — no key lookup, no second
  * file, no permission that can be missing. Definitions already IN the subtree are skipped: the core
  * prefers the in-tree node anyway.
- *
- * One round only: a definition's own children may instantiate a further off-tree component, and
- * that one falls back to the donor. Chasing the chain would walk an unbounded slice of the document
- * for bytes an agent reading ONE node did not ask for — and each round re-walks the subtrees the
- * previous one already expanded.
  *
  * Supplementary by definition, so it never fails the read: a component that refuses to snapshot
  * costs its own entry a donated body, nothing more.
@@ -219,8 +226,9 @@ async function offTreeDefinitions(
   const definitions: NodeSnapshot[] = [];
   for (const [id, main] of mainComponents) {
     if (defined.has(id)) continue;
+    defined.add(id);
     try {
-      definitions.push(await sceneNodeToSnapshot(main as unknown as SceneNodeLike, resolveStyle, undefined, annotationCategories));
+      definitions.push(await sceneNodeToSnapshot(main as unknown as SceneNodeLike, resolveStyle, mainComponents, annotationCategories));
     } catch {
       // The component was deleted mid-read, or the library refused to load it. Donor floor.
     }
@@ -228,24 +236,18 @@ async function offTreeDefinitions(
   return definitions;
 }
 
-/**
- * flcm.get — full inspect. Resolves the target and simplifies its subtree to the EXPANDED canonical read
- * shape (see simplifyScene). A hidden target yields no root node — the read shape covers the rendered
- * document — so throw rather than return nothing.
- */
+/** Read the complete subtree, including hidden targets and instance descendants. */
 export async function get(target: Target): Promise<GetResult> {
   const node = await resolveTarget(target);
-  const { nodes, components } = await simplifyScene(node);
-  const [simplified] = nodes;
-  if (!simplified) {
-    throw new Error(
-      `flcm.get: node ${JSON.stringify(node.name)} (id ${JSON.stringify(node.id)}) is hidden (visible: false) — the read shape covers the rendered document. Unhide it or target a visible node.`,
-    );
-  }
-  // Brand it, so a structural verb handed this back can refuse it instead of reading its live `id`
-  // as a move target — the read shape is not authoring input until Phase 5's normalizer exists.
-  const result: GetResult = { node: simplified };
+  const { nodes, components, full } = await simplifyScene(node);
+  const result: GetResult = { node: nodes[0] };
   if (Object.keys(components).length > 0) result.components = components;
+  registerRead(result, () => {
+    const projected = project(full);
+    const output: GetResult = { ...result, node: projected === full ? result.node : projectNames(projected.nodes[0] ?? projectReadNode(nodes[0], full)) };
+    if (Object.keys(projected.components).length) output.components = projected.components;
+    return output;
+  });
   return result;
 }
 
@@ -297,25 +299,9 @@ function matchesQuery(node: SceneNode, query: FindQuery): boolean {
   return true;
 }
 
-// Whether a node renders in the document — it and every ancestor visible. The read shape covers the RENDERED
-// document (`get` throws on a hidden target for exactly this reason), and the simplify core drops hidden
-// nodes, so a hidden hit would otherwise slip through as an identity-only handle indistinguishable from the
-// collapsed-SVG fallback. Locate excludes it up front, so find never hands back a node `get` would refuse.
-function isRendered(node: SceneNode): boolean {
-  for (let n: BaseNode | null = node; n && "visible" in n; n = n.parent) {
-    if (n.visible === false) return false;
-  }
-  return true;
-}
-
-// Simplify the scan-root subtree through the SAME pipeline `get` uses, and index every produced node by id.
-// A node the core dropped (e.g. an SVG-heavy container it collapsed) is simply absent — projectSlim falls
-// back to identity and live annotations for it.
+// Index every descendant so predicates receive the same full shape as get.
 async function simplifiedIndex(root: ScanRoot, categories: ReadonlyMap<string, string>): Promise<Map<string, SimplifiedNode>> {
-  // `components: false` — a predicate must still see inside instances. `get` moves an instance's
-  // children to the sidecar to save the agent tokens; this index is in-sandbox and pays none, and a
-  // `find` that couldn't target an instance sublayer would be worse than the bytes it saved.
-  const { nodes } = await simplifyScene(root, { components: false }, categories);
+  const { nodes } = await simplifyScene(root, categories);
   const index = new Map<string, SimplifiedNode>();
   const walk = (node: SimplifiedNode): void => {
     index.set(node.id, node);
@@ -359,7 +345,7 @@ function projectSlim(node: SceneNode, simplified: SimplifiedNode | undefined, ca
 
 // Project a set of hits into SlimHandles against ONE simplify index built over `indexRoot` (the hits'
 // common ancestor, so each reads in-context). Empty stays empty without paying to materialize the scope.
-async function projectHits(hits: SceneNode[], indexRoot: ScanRoot): Promise<SlimHandle[]> {
+async function projectHits(hits: readonly SceneNode[], indexRoot: ScanRoot): Promise<SlimHandle[]> {
   if (!hits.length) return [];
   const categories = await readAnnotationCategoryNames();
   const index = await simplifiedIndex(indexRoot, categories);
@@ -438,7 +424,7 @@ export async function find(query: FindQuery = {}, predicate?: ReadPredicate): Pr
   if (query.name !== undefined && typeof query.name !== "string" && !(query.name instanceof RegExp)) throw new Error("flcm.find: name must be a string (literal substring) or RegExp.");
   if (predicate !== undefined && typeof predicate !== "function") throw new Error("flcm.find: predicate must be a function.");
   const root = await scanRoot(query.within);
-  const hits = root.findAll((node) => matchesQuery(node, query) && isRendered(node));
+  const hits = root.findAll((node) => matchesQuery(node, query));
   if (!predicate) return projectHits(hits, root);
   return filterByPredicate(hits, root, predicate);
 }
@@ -467,6 +453,6 @@ export async function findOne(query: FindQuery = {}, predicate?: ReadPredicate):
  */
 export async function selection(): Promise<SlimHandle[]> {
   invalidateSceneAccess();
-  const selected = figma.currentPage.selection.filter(isRendered);
+  const selected = figma.currentPage.selection;
   return projectHits(selected, figma.currentPage);
 }

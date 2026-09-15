@@ -21,6 +21,7 @@ export type NativeOperation = "page-create" | "page-switch" | "font-load" | "fon
 export type NativeTraceStage = "native-start" | "native-end" | "native-error";
 
 export interface FlcmHost {
+  registerRead(value: object, project: () => unknown): void;
   traceNative?(stage: NativeTraceStage, operation: NativeOperation): void;
   /** Fetch bytes for image urls through the server. The sandbox has no network of its own. */
   requestImages(urls: string[]): Promise<Record<string, string>>;
@@ -81,4 +82,9 @@ export async function awaitNative<T>(operation: NativeOperation, run: () => Prom
     traceNative("native-error", operation);
     throw error;
   }
+}
+
+/** Identity registration keeps authored/computed objects out of the lossy egress path. */
+export function registerRead(value: object, project: () => unknown): void {
+  currentHost()?.registerRead(value, project);
 }

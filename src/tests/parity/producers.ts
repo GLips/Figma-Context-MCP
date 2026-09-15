@@ -2,7 +2,7 @@ import type { GetFileResponse, GetFileNodesResponse } from "@figma/rest-api-spec
 import { sceneNodeToSnapshot } from "@framelink/plugin/node-to-snapshot";
 import type { NodeSnapshot } from "@framelink/core/snapshot";
 import type { SimplifiedDesign } from "@framelink/core";
-import { simplify } from "@framelink/core";
+import { simplify, project } from "@framelink/core";
 import { simplifyRestResponse } from "~/adapters/rest/rest.js";
 import type { LoadedScene } from "./scenes-io.js";
 
@@ -51,7 +51,9 @@ const restProducer: ParityProducer = {
  * it is compared like the tree rather than scoped out (pin 2, retired).
  */
 async function designFromSnapshots(snapshots: NodeSnapshot[]): Promise<SimplifiedDesign> {
-  const { nodes, styles, templates, components } = await simplify(snapshots, { compress: true });
+  const { nodes, styles, templates, components } = project(await simplify(snapshots), {
+    compress: true,
+  });
   // `name` is scoped out of the parity view — no source name in a snapshot.
   return { name: "", nodes, components, styles, templates };
 }

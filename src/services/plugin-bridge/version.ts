@@ -32,7 +32,7 @@ import { z } from "zod";
 // Nothing has ever shipped, at any version, so there is deliberately NO compat path — the fix is
 // always a re-import, and the refusal names it.
 // v4: separate APPROVAL_STATUS polling, Reject, and connection-owned run states.
-export const MIN_PROTOCOL_VERSION = 4;
+export const MIN_PROTOCOL_VERSION = 5;
 
 /**
  * Where a connection stands with the version handshake.

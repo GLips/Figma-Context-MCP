@@ -115,3 +115,24 @@ export function safeSerialize(value: unknown, depth = 0): unknown {
   }
   return out;
 }
+
+/** One registry per execution; callbacks use the server-shipped projection policy. */
+export function createReadEgress() {
+  const reads = new WeakMap<object, { project: () => unknown; entries: [string, unknown][] }>();
+  function project(value: unknown, ancestors = new Set<object>()): unknown {
+    if (value === null || typeof value !== "object" || looksLikeNode(value)) return value;
+    if (ancestors.has(value)) throw new Error("Cannot serialize cyclic return or console data.");
+    ancestors.add(value);
+    try {
+      const projection = reads.get(value);
+      if (projection) {
+        const entries = Object.entries(value);
+        if (entries.length !== projection.entries.length || entries.some(([key, item], i) => key !== projection.entries[i][0] || !Object.is(item, projection.entries[i][1]))) return value;
+        return projection.project();
+      }
+      if (Array.isArray(value)) return value.map(item => project(item, ancestors));
+      return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, project(item, ancestors)]));
+    } finally { ancestors.delete(value); }
+  }
+  return { registerRead(value: object, projection: () => unknown) { reads.set(value, { project: projection, entries: Object.entries(value) }); }, project };
+}

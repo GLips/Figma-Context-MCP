@@ -1,5 +1,5 @@
-import { hasAutoLayout, isRectangleCornerRadii, isVisible } from "./utils.js";
-import { buildSimplifiedLayout, computeGridChildOrder } from "./transformers/layout.js";
+import { isRectangleCornerRadii } from "./utils.js";
+import { buildSimplifiedLayout } from "./transformers/layout.js";
 import { buildSimplifiedStrokes, foldPaintStack } from "./transformers/style.js";
 import { buildSimplifiedEffects } from "./transformers/effects.js";
 import {
@@ -13,46 +13,32 @@ import {
   simplifyPropertyDefinitions,
   simplifyPropertyReferences,
 } from "./transformers/component.js";
-import { compressDesign } from "./compress.js";
-import { createComponentNotes, extractComponents, noteComponent } from "./components.js";
+import { rememberRead, captureRead, type ReadContext } from "./read-context.js";
+import {
+  createComponentNotes,
+  componentCatalog,
+  describeInstanceChanges,
+  noteComponent,
+} from "./components.js";
 import type { ComponentNotes } from "./components.js";
-import { createInlineStyleTable, createRefStyleTable } from "./style-table.js";
 import type { NodeSnapshot } from "./snapshot.js";
 import type {
   NodeCounter,
   SimplifiedComponentEntry,
   SimplifiedNode,
-  StyleTable,
   StyleValue,
   TemplateBody,
-  TraversalOptions,
   WalkScheduler,
 } from "./types.js";
 
-export interface SimplifyOptions extends TraversalOptions {
-  /**
-   * Opt into the egress compression pass: styles intern under deduplicating
-   * refs during the walk, then `compressDesign` count-gates hoisting and
-   * templates repeated bodies. Off by default — expanded output emits every
-   * value inline and never touches the content hash (Invariant 3).
-   */
-  compress?: boolean;
-  /**
-   * Definition subtrees for components that aren't in `snapshots` — REST's off-tree fetch, the
-   * plugin's live `getMainComponentAsync()` node. Fed here rather than looked up inside the core
-   * because resolving them is producer-specific and networked; the core just prefers a real
-   * definition over a donated instance (see `extractComponents`).
-   */
+export interface SimplifyOptions {
+  scheduler?: WalkScheduler;
+  nodeCounter?: NodeCounter;
   componentDefinitions?: NodeSnapshot[];
-  /**
-   * Opt OUT of the components pass, keeping every instance's full subtree. The one caller that
-   * wants this is the plugin's `find` index: its predicates run over whole read shapes in-sandbox,
-   * where nothing is serialized and instance sublayers still have to be findable.
-   */
-  components?: boolean;
 }
 
 export interface SimplifyResult {
+  elided?: import("./types.js").Elision[];
   nodes: SimplifiedNode[];
   /**
    * Hoisted styles. Compressed: shared + named styles under ref keys.
@@ -82,58 +68,25 @@ export async function simplify(
   snapshots: NodeSnapshot[],
   options: SimplifyOptions = {},
 ): Promise<SimplifyResult> {
-  const {
-    compress = false,
-    components: withComponents = true,
-    componentDefinitions = [],
-    ...traversal
-  } = options;
   const notes = createComponentNotes();
-
-  // Supplied definitions walk through the SAME style table and notes as the tree, so a value
-  // shared between a component's children and the page is hoisted once, not twice.
-  const walk = async (table: StyleTable) => {
-    const nodes = await walkNodes(snapshots, table, traversal, notes);
-    const definitions = withComponents
-      ? await walkNodes(componentDefinitions, table, traversal, notes)
-      : [];
-    return {
-      nodes,
-      components: withComponents ? extractComponents(nodes, notes, definitions) : {},
-    };
-  };
-
-  if (!compress) {
-    const table = createInlineStyleTable();
-    const { nodes, components } = await walk(table);
-    return { nodes, styles: table.styles, templates: {}, components };
+  const context: ReadContext = { notes, snapshots: new Map(), definitions: [] };
+  const nodes = await walkNodes(snapshots, options, notes, context);
+  context.definitions = await walkNodes(
+    options.componentDefinitions ?? [],
+    options,
+    notes,
+    context,
+  );
+  const components = componentCatalog(nodes, notes, context.definitions);
+  describeInstanceChanges(nodes, components);
+  const result = { nodes, styles: {}, templates: {}, components };
+  context.unchanged = captureRead(result);
+  rememberRead(result, context);
+  for (const node of context.snapshots.keys()) {
+    rememberRead(node, context);
+    if (node.children) rememberRead(node.children, context);
   }
-
-  const table = createRefStyleTable();
-  const { nodes, components } = await walk(table);
-  // Compression runs LAST and over both surfaces: a component's published children are output
-  // too, so they template and share hoisted styles with the tree exactly like any other node.
-  return {
-    ...compressDesign(nodes, componentSurfaces(components), table.styles, table.namedStyleKeys),
-    components,
-  };
-}
-
-/**
- * Each sidecar entry's children as its OWN surface, for the compression pass to see.
- *
- * One array per entry, not a flattened copy of all of them: templating replaces nodes by writing
- * back into the array it was handed, so a copy would leave the entry's real children un-templated
- * while their styles were inlined or dropped out from under them.
- */
-function componentSurfaces(
-  components: Record<string, SimplifiedComponentEntry>,
-): SimplifiedNode[][] {
-  const surfaces: SimplifiedNode[][] = [];
-  for (const entry of Object.values(components)) {
-    if (entry.children) surfaces.push(entry.children);
-  }
-  return surfaces;
+  return result;
 }
 
 // ---------------------------------------------------------------------------
@@ -142,13 +95,11 @@ function componentSurfaces(
 
 /** Walker state threaded through the recursion. */
 interface SimplifyContext {
-  /** Style-interning table — the compression seam (see StyleTable). */
-  styles: StyleTable;
   /** Component provenance sink — the components pass reads it after the walk (see ComponentNotes). */
   components: ComponentNotes;
   currentDepth: number;
   parent?: NodeSnapshot;
-  insideComponentDefinition: boolean;
+  read: ReadContext;
   /**
    * Per-call mutable counter shared with the caller. Lives on the context so
    * the recursion can increment it without touching module-global state —
@@ -186,23 +137,21 @@ async function maybeYield(
  * @param notes - Where component provenance is recorded for the components pass
  * @returns The processed nodes
  */
-export async function walkNodes(
+async function walkNodes(
   nodes: NodeSnapshot[],
-  styleTable: StyleTable,
-  options: TraversalOptions = {},
+  options: SimplifyOptions = {},
   notes: ComponentNotes = createComponentNotes(),
+  read: ReadContext = { notes, snapshots: new Map(), definitions: [] },
 ): Promise<SimplifiedNode[]> {
   const context: SimplifyContext = {
-    styles: styleTable,
     components: notes,
     currentDepth: 0,
-    insideComponentDefinition: false,
+    read,
     nodeCounter: options.nodeCounter ?? { count: 0 },
   };
 
   const processedNodes: SimplifiedNode[] = [];
   for (const node of nodes) {
-    if (!shouldProcessNode(node, context)) continue;
     processedNodes.push(await extractNode(node, context, options));
   }
 
@@ -216,79 +165,39 @@ export async function walkNodes(
 async function extractNode(
   node: NodeSnapshot,
   context: SimplifyContext,
-  options: TraversalOptions,
+  options: SimplifyOptions,
 ): Promise<SimplifiedNode> {
   await maybeYield(context.nodeCounter, options.scheduler);
 
   const result: SimplifiedNode = {
     id: node.id,
     name: node.name,
-    type: node.type === "VECTOR" ? "IMAGE-SVG" : node.type,
+    type: node.type,
   };
 
+  context.read.snapshots.set(result, node);
   extractLayout(node, result, context);
-  extractText(node, result, context);
-  extractVisuals(node, result, context);
+  extractText(node, result);
+  extractVisuals(node, result);
   extractComponent(node, result, context);
 
-  // Handle children recursively, unless the depth limit cuts traversal here.
-  const atDepthLimit = options.maxDepth !== undefined && context.currentDepth >= options.maxDepth;
-  if (!atDepthLimit && node.children && node.children.length > 0) {
-    const childContext: SimplifyContext = {
-      ...context,
-      currentDepth: context.currentDepth + 1,
-      parent: node,
-      // COMPONENT nodes define properties; INSTANCE nodes resolve them
-      insideComponentDefinition:
-        node.type === "COMPONENT" || node.type === "COMPONENT_SET"
-          ? true
-          : node.type === "INSTANCE"
-            ? false
-            : context.insideComponentDefinition,
-    };
-
-    // Grid containers: emit children in grid-flow (anchor) order rather than
-    // Figma's z-order, so CSS auto-placement lands them in the right cells.
-    // See computeGridChildOrder for details.
-    const order = computeGridChildOrder(node) ?? node.children.map((_, i) => i);
-    const children: SimplifiedNode[] = [];
-    for (const idx of order) {
-      const child = node.children[idx];
-      if (!shouldProcessNode(child, childContext)) continue;
-      children.push(await extractNode(child, childContext, options));
-    }
-
-    if (children.length > 0) {
-      // Runs bottom-up (children already processed), so nested SVG containers
-      // collapse innermost-first.
-      const childrenToInclude = collapseSvgContainers(node, result, children);
-      if (childrenToInclude.length > 0) {
-        result.children = childrenToInclude;
-      }
-    }
+  const details = { ...node };
+  delete details.children;
+  result.details = details;
+  if (node.visible === false) result.visible = false;
+  if (node.locked) result.locked = true;
+  if (node.vectorPaths?.length) {
+    if (node.vectorPaths.length === 1 && node.vectorPaths[0].windingRule === "NONZERO")
+      result.d = node.vectorPaths[0].data;
+    else result.vectorPaths = node.vectorPaths;
   }
-
-  // A container we were allowed to look inside that came back with nothing — every child hidden by
-  // hand, or a slot emptied. Recorded rather than inferred later, because only here is it
-  // distinguishable from a subtree the depth limit cut short; the components pass turns it into a
-  // `visible: false` per child instead of a node that reads as untouched. A container the SVG
-  // collapse folded into an image is not this: it has no children to speak of any more.
-  if (!atDepthLimit && node.children && !result.children && result.type !== "IMAGE-SVG") {
-    context.components.emptiedContainers.add(node.id);
+  if (node.children) {
+    const childContext = { ...context, currentDepth: context.currentDepth + 1, parent: node };
+    result.children = [];
+    for (const child of node.children)
+      result.children.push(await extractNode(child, childContext, options));
   }
-
   return result;
-}
-
-/**
- * Determine if a node should be processed: visible nodes only, except hidden
- * nodes controlled by a boolean property inside component definitions.
- */
-function shouldProcessNode(node: NodeSnapshot, context: SimplifyContext): boolean {
-  if (isVisible(node)) return true;
-  const hasVisibleRef =
-    !!node.componentPropertyReferences && "visible" in node.componentPropertyReferences;
-  return hasVisibleRef && context.insideComponentDefinition;
 }
 
 // ---------------------------------------------------------------------------
@@ -306,14 +215,14 @@ function extractLayout(node: NodeSnapshot, result: SimplifiedNode, context: Simp
   // omitted; a row/column is information even when every other word is at its default.
   if (layout.mode !== "none" || Object.keys(layout).length > 1) {
     // Layout can't be a Figma named style, so no style slots to check.
-    result.layout = context.styles.intern(node, layout, [], "layout");
+    result.layout = layout;
   }
 }
 
 /**
  * Extracts text content and text styling from a node.
  */
-function extractText(node: NodeSnapshot, result: SimplifiedNode, context: SimplifyContext): void {
+function extractText(node: NodeSnapshot, result: SimplifiedNode): void {
   // Extract text content — markdown for the common styled cases, `[text, style]`
   // run tuples for the arbitrary-style residual. Run deltas intern through the
   // ordinary style table (no special namespace), so the compression pass
@@ -321,9 +230,7 @@ function extractText(node: NodeSnapshot, result: SimplifiedNode, context: Simpli
   // a ref. The wire override tables are already resolved into `node.text` by
   // the adapter.
   if (isTextNode(node)) {
-    const rich = buildFormattedText(node, (delta) =>
-      context.styles.intern(node, delta, [], "style"),
-    );
+    const rich = buildFormattedText(node, (delta) => delta);
     if (rich.text !== undefined) {
       result.text = rich.text;
     }
@@ -336,7 +243,7 @@ function extractText(node: NodeSnapshot, result: SimplifiedNode, context: Simpli
   if (hasTextStyle(node)) {
     const textStyle = extractTextStyle(node);
     if (textStyle) {
-      result.textStyle = context.styles.intern(node, textStyle, ["text", "typography"], "style");
+      result.textStyle = textStyle;
     }
   }
 }
@@ -344,18 +251,14 @@ function extractText(node: NodeSnapshot, result: SimplifiedNode, context: Simpli
 /**
  * Extracts visual appearance properties (fills, strokes, effects, opacity, border radius).
  */
-function extractVisuals(
-  node: NodeSnapshot,
-  result: SimplifiedNode,
-  context: SimplifyContext,
-): void {
+function extractVisuals(node: NodeSnapshot, result: SimplifiedNode): void {
   // Check if node has children to determine CSS properties
   const hasChildren = !!node.children && node.children.length > 0;
 
   // fill — one paint, or the array a genuinely stacked paint needs (foldPaintStack)
   const fill = foldPaintStack(node.fills, hasChildren);
   if (fill !== undefined) {
-    result.fill = context.styles.intern(node, fill, ["fill", "fills"], "fill");
+    result.fill = fill;
   } else if (node.type === "TEXT") {
     // Figma paints a new TEXT black, and flcm.text keeps that default when no `fill` is passed (a text
     // with no paint is invisible), so an ABSENT fill would rebuild as black. The no-paint state is
@@ -371,7 +274,7 @@ function extractVisuals(
   const strokes = buildSimplifiedStrokes(node, hasChildren);
   if (strokes.colors.length) {
     const stroke = strokes.colors.length === 1 ? strokes.colors[0] : strokes.colors;
-    result.stroke = context.styles.intern(node, stroke, ["stroke", "strokes"], "fill");
+    result.stroke = stroke;
     if (strokes.strokeWidth) result.strokeWidth = strokes.strokeWidth;
     if (strokes.strokeDashes) result.strokeDashes = strokes.strokeDashes;
     if (strokes.strokeAlign) result.strokeAlign = strokes.strokeAlign;
@@ -384,7 +287,7 @@ function extractVisuals(
   // effects
   const effects = buildSimplifiedEffects(node);
   if (Object.keys(effects).length) {
-    result.effects = context.styles.intern(node, effects, ["effect", "effects"], "effect");
+    result.effects = effects;
   }
 
   // opacity
@@ -493,104 +396,4 @@ function extractComponent(
       }
     }
   }
-}
-
-// ---------------------------------------------------------------------------
-// SVG container collapse
-// ---------------------------------------------------------------------------
-
-/**
- * Node types that can be exported as SVG images.
- * When a collapsible container holds only these types, the container can be flattened to
- * IMAGE-SVG. BOOLEAN_OPERATION is in both this set and the container set below because it's
- * both collapsible AND SVG-eligible as a child (boolean ops always produce vector output).
- *
- * Tightly coupled to the walk above, which renames VECTOR → IMAGE-SVG before this set is
- * consulted.
- */
-const SVG_ELIGIBLE_TYPES = new Set([
-  "IMAGE-SVG", // VECTOR nodes are converted to IMAGE-SVG, or containers that were collapsed
-  "BOOLEAN_OPERATION",
-  "STAR",
-  "LINE",
-  "ELLIPSE",
-  "REGULAR_POLYGON",
-  "RECTANGLE",
-]);
-
-/** Container node types eligible to collapse into a single IMAGE-SVG. */
-const COLLAPSIBLE_CONTAINER_TYPES = new Set(["FRAME", "GROUP", "INSTANCE", "BOOLEAN_OPERATION"]);
-
-/**
- * Auto-layout signals authored structure — the spacing/arrangement of children is
- * intentional, so we normally preserve the container even when all its children are
- * SVG-eligible (charts, toolbars, layout test frames, swatch grids, tile mosaics).
- * Above this many children, though, we assume the container is a decorative pattern
- * (dotted backgrounds, noise grids) where the payload cost of preserving every leaf
- * outweighs the structural value, and we collapse anyway.
- *
- * Applies to both flex (HORIZONTAL/VERTICAL) and GRID auto-layout, since both signal
- * authored intent.
- *
- * Pivot point chosen empirically: real charts and structural displays rarely exceed ~10
- * primitives; decorative patterns typically have many dozens. Tune if real-world output
- * shows either category mis-classified.
- */
-const SVG_COLLAPSE_AUTOLAYOUT_THRESHOLD = 10;
-
-/**
- * Collapse SVG-heavy containers to IMAGE-SVG. Called by the walk after a
- * node's children are processed (bottom-up), so nested containers collapse
- * innermost-first.
- *
- * Collapses when:
- *   - container is a FRAME, GROUP, INSTANCE, or BOOLEAN_OPERATION
- *   - all children are SVG-eligible types
- *   - neither the node nor any direct child has an image fill
- *   - container is NOT auto-layout, OR child count is past the decorative-pattern threshold
- *
- * The auto-layout carve-out preserves authored layouts (bar charts, button rows, swatch
- * grids) that happen to bottom out in shape primitives. The count threshold reclaims
- * payload for decorative patterns built with auto-layout (e.g., grids of dots).
- *
- * @param node - Original Figma node
- * @param result - SimplifiedNode being built
- * @param children - Processed children
- * @returns Children to include (empty array if collapsed)
- */
-function collapseSvgContainers(
-  node: NodeSnapshot,
-  result: SimplifiedNode,
-  children: SimplifiedNode[],
-): SimplifiedNode[] {
-  if (!COLLAPSIBLE_CONTAINER_TYPES.has(node.type)) return children;
-  // `type` is optional on SimplifiedNode only because post-walk template refs
-  // drop it; mid-walk every child still has a type, so the `?? ""` is a
-  // type-level concession that never matches at runtime.
-  if (!children.every((child) => SVG_ELIGIBLE_TYPES.has(child.type ?? ""))) return children;
-  if (hasImageFillOnSelfOrDirectChildren(node)) return children;
-
-  if (hasAutoLayout(node) && children.length < SVG_COLLAPSE_AUTOLAYOUT_THRESHOLD) {
-    return children;
-  }
-
-  result.type = "IMAGE-SVG";
-  return [];
-}
-
-/**
- * Check whether a node or its direct children have image fills.
- *
- * Only direct children need checking because the collapse runs bottom-up:
- * if a deeper descendant has image fills, its parent won't collapse (stays FRAME),
- * and FRAME isn't SVG-eligible, so the chain breaks naturally at each level.
- */
-function hasImageFillOnSelfOrDirectChildren(node: NodeSnapshot): boolean {
-  if (node.fills?.some((fill) => fill.type === "IMAGE")) {
-    return true;
-  }
-  if (node.children) {
-    return node.children.some((child) => child.fills?.some((fill) => fill.type === "IMAGE"));
-  }
-  return false;
 }

@@ -3,7 +3,7 @@ import { captureScreenshot, type CaptureOptions } from "./screenshot-capture.js"
 // touches the network — it talks to the headless ui.html bridge via postMessage.
 
 import { createApprovalLifecycle } from "./approval-lifecycle.js";
-import { safeSerialize, guardReturnValue } from "./serialize.js";
+import { safeSerialize, guardReturnValue, createReadEgress } from "./serialize.js";
 import { resolveScreenshotTarget, type ScreenshotTarget } from "./screenshot-target.js";
 import { createRunCancellationRegistry } from "./run-cancellation.js";
 // TYPE-ONLY on purpose: this is the one shared declaration binding the host half of the flcm
@@ -48,7 +48,7 @@ figma.showUI(__html__, {
 //     IMAGES_REQUEST/IMAGES_REPLY + run-scoped CANCEL). v3 = the server ships the flcm std-lib
 //     (ADR-0010), and the host capabilities collapse into the one `__flcmHost` object.
 //   • PLUGIN_VERSION — the plugin release, shown to the human in a skew refusal. Informational.
-const PROTOCOL_VERSION = 4;
+const PROTOCOL_VERSION = 5;
 const PLUGIN_VERSION = "0.1.0";
 
 // Phase 2 consent gate. The sandbox is the SOLE ARBITER (Invariant): it holds the durable
@@ -726,6 +726,7 @@ async function executeCode(to: ReplyTo, code: string, preamble: string): Promise
     } catch { /* A diagnostic must never change execution or cleanup. */ }
   };
   trace("eval-start");
+  const egress = createReadEgress();
   const consoleLog: string[] = [];
   const originalConsole = {
     log: console.log,
@@ -738,7 +739,7 @@ async function executeCode(to: ReplyTo, code: string, preamble: string): Promise
   // call is serialized through the same node-aware serializer as the result, so
   // logging a live node yields `{id,name,type}` instead of an opaque failure.
   const capture = (level: string) => (...args: unknown[]) => {
-    consoleLog.push(`[${level}] ${args.map((a) => stringifyArg(a)).join(" ")}`);
+    consoleLog.push(`[${level}] ${args.map((a) => stringifyArg(egress.project(a))).join(" ")}`);
   };
   console.log = capture("log");
   console.info = capture("info");
@@ -762,6 +763,7 @@ async function executeCode(to: ReplyTo, code: string, preamble: string): Promise
     // async because the agent awaits flcm.render(); the factory itself is synchronous (the font
     // preload runs inside render(), not at module top level).
     const host: FlcmHost = {
+      registerRead: egress.registerRead,
       traceNative: (stage, operation) => trace(stage, operation),
       requestImages: (urls: string[]) => requestServerImages(to, urls),
       isRunCancelled: () => cancelledRuns.isCancelled(to),
@@ -771,7 +773,7 @@ async function executeCode(to: ReplyTo, code: string, preamble: string): Promise
     // Return-path node guard (R2): a returned live node would otherwise collapse to
     // { id } and silently drop everything else. Make that loud instead of lossy.
     guardReturnValue(raw);
-    result = raw;
+    result = egress.project(raw);
   } catch (err) {
     errorMessage = formatError(err);
   } finally {

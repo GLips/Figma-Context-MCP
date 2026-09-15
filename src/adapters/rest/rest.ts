@@ -9,7 +9,7 @@ import type {
 import { tagError } from "~/utils/error-meta.js";
 import type { TraversalOptions, SimplifiedDesign } from "@framelink/core";
 import type { NodeSnapshot } from "@framelink/core/snapshot";
-import { simplify } from "@framelink/core";
+import { simplify, project } from "@framelink/core";
 import { restNodeToSnapshot } from "./node-to-snapshot.js";
 
 // Yield to the Node event loop between walk batches so progress heartbeats,
@@ -30,13 +30,16 @@ export async function simplifyRestResponse(
 
   // Run the core with egress compression on: this is the shipped REST tool's
   // output form (ref-deduplicated styles + templates).
-  const { nodes, styles, templates, components } = await simplify(snapshots, {
+  const full = await simplify(snapshots, {
     ...options,
-    compress: true,
     scheduler: eventLoopYield,
   });
 
-  return { name, nodes, components, styles, templates };
+  const { nodes, styles, templates, components, elided } = project(full, {
+    compress: true,
+    maxDepth: options.maxDepth,
+  });
+  return { name, nodes, components, styles, templates, ...(elided ? { elided } : {}) };
 }
 
 /**

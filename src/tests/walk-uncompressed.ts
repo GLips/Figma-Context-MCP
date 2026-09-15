@@ -1,12 +1,8 @@
 import type { Node as FigmaNode, Style } from "@figma/rest-api-spec";
 import { restNodeToSnapshot, type RestComponentTables } from "~/adapters/rest/node-to-snapshot.js";
+import { simplify } from "@framelink/core";
 import type { StyleValue, TraversalOptions } from "@framelink/core";
-import {
-  createComponentNotes,
-  createRefStyleTable,
-  extractComponents,
-  walkNodes,
-} from "@framelink/core/internal";
+import { createRefStyleTable, projectIntoTable } from "@framelink/core/internal";
 
 // The uncompressed walk — what `simplify` runs before `compressDesign`. Three read-path suites
 // need the output and style sink before compression rewrites both. Kept to one file so the
@@ -24,16 +20,9 @@ export async function walkUncompressed(
 ) {
   const sink = createRefStyleTable();
   Object.assign(sink.styles, options.seedStyles);
-  const notes = createComponentNotes();
-  const extracted = await walkNodes(
+  const full = await simplify(
     nodes.map((node) => restNodeToSnapshot(node, options.extraStyles, options.tables)),
-    sink,
-    options.traversal,
-    notes,
   );
-  // The components pass runs here too: it is not part of compression (the plugin reads
-  // expanded and still gets the sidecar), so an uncompressed walk without it would be a shape
-  // no producer emits.
-  const components = extractComponents(extracted, notes);
-  return { nodes: extracted, styles: sink.styles, components };
+  const result = projectIntoTable(full, sink, options.traversal);
+  return { ...result, styles: sink.styles };
 }

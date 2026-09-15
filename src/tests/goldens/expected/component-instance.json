@@ -13,7 +13,25 @@
           "width": 150,
           "height": 200,
           "left": 0,
-          "top": 0
+          "top": 0,
+          "elided": [
+            {
+              "$elided": {
+                "id": "6:2",
+                "field": "details",
+                "chars": 449,
+                "read": "flcm.get(\"6:2\")"
+              }
+            },
+            {
+              "$elided": {
+                "id": "6:2",
+                "field": "children",
+                "chars": 1385,
+                "read": "flcm.get(\"6:2\")"
+              }
+            }
+          ]
         },
         {
           "id": "6:5",
@@ -39,9 +57,39 @@
               "top": 8,
               "text": "My Product",
               "textStyle": "style_9f723b14",
-              "fill": "fill_314185fc"
+              "fill": "fill_314185fc",
+              "elided": [
+                {
+                  "$elided": {
+                    "id": "6:6",
+                    "field": "details",
+                    "chars": 534,
+                    "read": "flcm.get(\"6:6\")"
+                  }
+                }
+              ]
+            }
+          ],
+          "elided": [
+            {
+              "$elided": {
+                "id": "6:5",
+                "field": "details",
+                "chars": 407,
+                "read": "flcm.get(\"6:5\")"
+              }
             }
           ]
+        }
+      ],
+      "elided": [
+        {
+          "$elided": {
+            "id": "6:1",
+            "field": "details",
+            "chars": 175,
+            "read": "flcm.get(\"6:1\")"
+          }
         }
       ]
     }
@@ -79,7 +127,17 @@
           "fill": "fill_314185fc",
           "componentPropertyReferences": {
             "text": "Title"
-          }
+          },
+          "elided": [
+            {
+              "$elided": {
+                "id": "6:3",
+                "field": "details",
+                "chars": 595,
+                "read": "flcm.get(\"6:3\")"
+              }
+            }
+          ]
         },
         {
           "id": "6:4",
@@ -92,7 +150,17 @@
           "fill": "#FF0000",
           "componentPropertyReferences": {
             "visible": "On Sale"
-          }
+          },
+          "elided": [
+            {
+              "$elided": {
+                "id": "6:4",
+                "field": "details",
+                "chars": 338,
+                "read": "flcm.get(\"6:4\")"
+              }
+            }
+          ]
         }
       ]
     }

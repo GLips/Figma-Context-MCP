@@ -27,13 +27,11 @@ test("a deeply nested task is found and completed, preserving the same-text surv
     { label: "Make this the primary CTA" },
     { label: "Make this the primary CTA", properties: [{ type: "width" }, { type: "fills" }] },
   ];
-  // A note on a hidden layer is invisible to find, exactly as it is to get: both cover the RENDERED
-  // document, so the facet stage and the predicate stage judge the same population.
   (await resolveTarget("unrendered")).annotations = [{ label: "Show this layer" }];
   const hits = await find({ within: root, hasAnnotations: true });
   assert.deepEqual(
     hits.map((h) => h.id),
-    [task.id],
+    [task.id, (await resolveTarget("unrendered")).id],
   );
   const [hit] = hits;
   assert.deepEqual(hit.annotations, [
@@ -55,7 +53,7 @@ test("a deeply nested task is found and completed, preserving the same-text surv
   assert.equal(task.annotations.length, 1);
   await edit(task, { annotations: [] });
   assert.equal("annotations" in (await get(task)).node, false);
-  assert.deepEqual(await find({ within: root, hasAnnotations: true }), []);
+  assert.deepEqual((await find({ within: root, hasAnnotations: true })).map(n => n.key), ["unrendered"]);
 });
 
 test("categories reuse exact trimmed names and retain their color across compilers, edits, and selection", async () => {

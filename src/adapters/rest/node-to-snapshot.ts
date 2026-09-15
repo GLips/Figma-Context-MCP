@@ -180,6 +180,7 @@ function restSubtreeToSnapshot(
     name: node.name,
     type: node.type,
     visible: raw.visible,
+    locked: raw.locked,
     componentPropertyReferences: raw.componentPropertyReferences,
 
     // Layout traits

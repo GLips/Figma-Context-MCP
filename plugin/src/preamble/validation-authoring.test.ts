@@ -214,7 +214,7 @@ test("shipped factory supports RegExp input and promotion aliases across separat
   const preamble = await buildSandboxPreamble();
   const context = createContext({ figma, console });
   const install = () =>
-    runInContext("var flcm = (" + preamble + "\n)({isRunCancelled: () => false});", context);
+    runInContext("var flcm = (" + preamble + "\n)({isRunCancelled: () => false, registerRead() {}});", context);
   install();
   await runInContext(
     '(async () => { var built = await flcm.render({type:"FRAME", name:"Copy"}); globalThis.oldId = built.id; globalThis.newId = (await flcm.component(oldId)).id; })()',

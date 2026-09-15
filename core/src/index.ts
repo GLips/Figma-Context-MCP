@@ -61,3 +61,11 @@ export { stableStringify } from "./utils.js";
 export type { SimplifiedFill } from "./transformers/style.js";
 
 // Deliberately absent: `walkNodes`, `createRefStyleTable`, `STYLE_REF_FIELDS` — see internal.ts.
+
+export { project, projectReadNode, elision, isElision } from "./project.js";
+export type { ProjectOptions } from "./project.js";
+export type { Elision } from "./types.js";
+
+export { projectNames } from "./project-names.js";
+
+export { isUnchangedRead } from "./read-context.js";

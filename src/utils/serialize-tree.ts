@@ -105,6 +105,7 @@ function renderNode(
     );
   }
 
+  if (node.elided) parts.push(`elided=${JSON.stringify(node.elided)}`);
   out.push(indent + parts.join(" "));
 
   if (node.children) {

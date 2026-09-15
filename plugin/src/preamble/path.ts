@@ -413,3 +413,13 @@ export function normalizePathData(d: string): string {
   if (out.length === 0) fail("path contained no drawing commands");
   return out.join(" ");
 }
+
+/** Validate every path before a verb starts mutating the document. */
+export function normalizeVectorPaths(value: unknown): VectorPaths {
+  if (!Array.isArray(value) || !value.length) throw new Error("VECTOR.vectorPaths must be a non-empty path array.");
+  return value.map((path, index) => {
+    if (!path || typeof path !== "object" || typeof path.data !== "string" || !["NONZERO", "EVENODD", "NONE"].includes(path.windingRule)) throw new Error("VECTOR.vectorPaths[" + index + "] needs data and windingRule.");
+    if (Object.keys(path).some(key => key !== "data" && key !== "windingRule")) throw new Error("VECTOR.vectorPaths[" + index + "]: unknown path field.");
+    return { data: normalizePathData(path.data), windingRule: path.windingRule };
+  });
+}
