@@ -317,3 +317,18 @@ test("queued calls observe completed session writes and cancelled queued calls c
   assert.equal(result.errors, null);
   assert.deepEqual(JSON.parse(JSON.stringify(result.result)), [2, 2]);
 });
+
+test("last snapshots session-owned returns and permits returning the session itself", async () => {
+  const h = host();
+  await h.connect(1);
+  const first = await execute(h, `session.tree = { name: "before" }; return session.tree;`);
+  assert.equal(first.errors, null);
+  const second = await execute(h, `session.tree.name = "after"; return session;`);
+  assert.equal(second.errors, null);
+  assert.deepEqual(JSON.parse(JSON.stringify(second.result)), {
+    tree: { name: "after" }, last: { name: "before" },
+  });
+  const third = await execute(h, `session.tree.name = "newer"; return session.last.tree.name;`);
+  assert.equal(third.errors, null);
+  assert.equal(third.result, "after");
+});

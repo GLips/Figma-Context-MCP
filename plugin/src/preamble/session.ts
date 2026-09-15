@@ -9,7 +9,7 @@ export function createSession(): Record<string, unknown> {
     throw new Error(`session: ${path} must contain plain data only (strings, finite numbers, booleans, null, undefined, arrays and plain objects). Functions, live nodes, accessors, symbols, class instances and cycles are not supported.`);
   };
 
-  function copy(value: unknown, path: string, destination?: object, ancestors = new Set<object>(), copies = new WeakMap<object, object>()): unknown {
+  function copy(value: unknown, path: string, destination?: object, retainOwned = true, ancestors = new Set<object>(), copies = new WeakMap<object, object>()): unknown {
     if (value === null || value === undefined || typeof value === "string" || typeof value === "boolean") return value;
     if (typeof value === "number" && Number.isFinite(value)) return value;
     if (typeof value !== "object" || value === destination || ancestors.has(value)) return fail(path);
@@ -19,7 +19,8 @@ export function createSession(): Record<string, unknown> {
     const previous = copies.get(value);
     if (previous) return previous;
     const target = Array.isArray(value) ? [] : Object.create(null);
-    const output = owned.has(value) ? value : protect(target, path);
+    const reuse = retainOwned && owned.has(value);
+    const output = reuse ? value : protect(target, path);
     copies.set(value, output);
     ancestors.add(value);
     try {
@@ -32,18 +33,23 @@ export function createSession(): Record<string, unknown> {
           continue;
         }
         if (!descriptor.enumerable) return fail(`${path}.${key}`);
-        const item = copy(descriptor.value, `${path}.${key}`, destination, ancestors, copies);
-        if (!owned.has(value)) Object.defineProperty(target, key, { value: item, writable: true, enumerable: true, configurable: true });
+        const item = copy(descriptor.value, `${path}.${key}`, destination, retainOwned, ancestors, copies);
+        if (!reuse) Object.defineProperty(target, key, { value: item, writable: true, enumerable: true, configurable: true });
       }
     } finally { ancestors.delete(value); }
     return output;
   }
 
   function protect(target: object, path: string): object {
+    function admit(key: string, value: unknown): unknown {
+      // last is a historical snapshot, including when the agent returns session itself.
+      const snapshot = proxy === session && key === "last";
+      return copy(value, `${path}.${key}`, snapshot ? undefined : proxy, !snapshot);
+    }
     const proxy: object = new Proxy(target, {
       set(_target, key, value) {
         if (typeof key !== "string") return fail(path);
-        const data = copy(value, `${path}.${key}`, proxy);
+        const data = admit(key, value);
         // Define on the private target so assignment cannot invoke an inherited setter.
         if (Array.isArray(target) && key === "length") return Reflect.set(target, key, data);
         return Reflect.defineProperty(target, key, { value: data, writable: true, enumerable: true, configurable: true });
@@ -52,7 +58,7 @@ export function createSession(): Record<string, unknown> {
         if (typeof key !== "string" || !("value" in descriptor) || descriptor.get || descriptor.set) return fail(path);
         // Fixed descriptors could trap a request's last result or prevent ordinary array edits.
         if (descriptor.configurable !== true || descriptor.enumerable !== true || descriptor.writable !== true) return fail(`${path}.${key}`);
-        return Reflect.defineProperty(target, key, { ...descriptor, value: copy(descriptor.value, `${path}.${key}`, proxy) });
+        return Reflect.defineProperty(target, key, { ...descriptor, value: admit(key, descriptor.value) });
       },
       setPrototypeOf() { return fail(path); },
       preventExtensions() { return fail(path); },
@@ -61,5 +67,6 @@ export function createSession(): Record<string, unknown> {
     return proxy;
   }
 
-  return protect(Object.create(null), "session") as Record<string, unknown>;
+  const session = protect(Object.create(null), "session") as Record<string, unknown>;
+  return session;
 }
