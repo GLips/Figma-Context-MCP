@@ -280,7 +280,9 @@ function viewNode(
 export function parityView(input: SimplifiedDesign): { nodes: Rec[]; components: Rec } {
   const design: SimplifiedDesign = JSON.parse(
     JSON.stringify(input, (key, value) =>
-      key === "$elided" ? { ...value, chars: undefined } : value,
+      key === "elided" && !Array.isArray(value)
+        ? Object.fromEntries(Object.keys(value).map((field) => [field, null]))
+        : value,
     ),
   );
   const styles: Record<string, StyleValue> = design.styles ?? {};

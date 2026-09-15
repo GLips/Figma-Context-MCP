@@ -356,7 +356,7 @@ ${verbLines}
 
 MUST-KNOW
 - Return ids/handles, NEVER live Figma nodes.
-- get/find predicates read whole trees. Unchanged read objects project at return/console: elided markers give id, field, chars and a fresh flcm.get(id) drill-in. Return a field to see it whole; never rerun edits. Computed data stays whole.
+- get/find predicates see full trees. Reads project at return/console: elided maps cuts to JSON character counts (null: unknown). Drill in: fresh flcm.get(node.id). Return a field to see it; never rerun edits. Computed data stays intact.
 - Metrics take a number or "Npx"; width/height also take "N%", "fill", "hug". Colors/gradients/shadows are CSS strings.
 - Anything outside the documented CSS subset FAILS LOUD, never wrong pixels.
 

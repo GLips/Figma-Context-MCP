@@ -1,7 +1,7 @@
 // Trees cross the authoring boundary once. Only this private compile produces IR.
 import type { WriteNode, WriteChild } from "./ir.js";
 import type { NodeSpec, FrameProps, TextProps, ShapeProps, EllipseProps, LineProps, PathProps, SvgProps, InstanceProps } from "./schema.js";
-import { isElision, isUnchangedRead } from "@framelink/core";
+import { isElision } from "@framelink/core";
 import type { SimplifiedLayout } from "@framelink/core";
 import { assertNoComponentPropertyBindings, compileFrame, compileText, compileRectangle, compileEllipse, compileLine, compileInstance, compileSvg, compilePath } from "./flcm.js";
 import { own } from "./validate.js";
@@ -34,7 +34,6 @@ export function compileTree(input: unknown, subject: string): WriteNode {
   const ids = new Set<string>();
   const keys = new Set<string>();
   const copied = copySpec(input, subject);
-  validateInheritedChildren(input, subject);
   return visit(copied, subject);
   function visit(raw: unknown, at: string): WriteNode {
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error(at + ": expected a plain node spec.");
@@ -51,7 +50,7 @@ export function compileTree(input: unknown, subject: string): WriteNode {
     }
     const { id, type, children: readChildren, ...words } = src;
     // Inherited instance layers are edited through path overrides; they cannot be moved as children.
-    const children = type === "INSTANCE" && src.details ? undefined : readChildren;
+    const children = type === "INSTANCE" && inheritedChildren(id, readChildren, at) ? undefined : readChildren;
     if (children !== undefined && !Array.isArray(children)) throw new Error(at + ".children must be an array of node specs.");
     const props = readyNodeWords(words, at);
     const compiledChildren = (children as unknown[] | undefined)?.flatMap((child, i) => isElision(child) ? [] : [visit(child, at + ".children[" + i + "]")]);
@@ -102,7 +101,7 @@ export function readyNodeWords(src: Record<string, unknown>, subject: string): R
   const out: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(src)) {
     // These records describe a read, never an authored change. Omission preserves live children.
-    if (key === "details" || key === "elided") continue;
+    if (key === "readOnlySource" || key === "elided") continue;
     const disposition = own(READ_FIELD_DISPOSITIONS, key);
     if (value != null && disposition) throw refuse(subject, key, disposition.refuse);
     out[key] = readyAuthoredValue(key, value, subject);
@@ -223,13 +222,21 @@ export function compileDeltaTrees<T>(delta: T, at: string): T {
   return snapshot;
 }
 
-/** Inherited children are inspectable but cannot be reparented. Changed ones must not disappear. */
-function validateInheritedChildren(value: unknown, at: string): void {
-  if (!value || typeof value !== "object") return;
-  const node = value as Record<string, unknown>;
-  if (node.type === "INSTANCE" && node.details && Array.isArray(node.children) && !isUnchangedRead(node.children)) {
-    if (node.children.some(child => !isElision(child))) throw new Error(at + ".children: inherited instance children are read-only. Author sublayer changes through overrides, and slot content through overrides[path].children.");
-  }
-  if (Array.isArray(node.children)) node.children.forEach((child, i) => validateInheritedChildren(child, at + ".children[" + i + "]"));
-  if (node.overrides && typeof node.overrides === "object") for (const [path, delta] of Object.entries(node.overrides)) validateInheritedChildren(delta, at + ".overrides[" + JSON.stringify(path) + "]");
+/** Composite sublayer ids identify an inherited echo, independent of how the spec was copied. */
+function inheritedChildren(id: unknown, children: unknown, at: string): boolean {
+  if (children === undefined) return false;
+  if (!Array.isArray(children)) throw new Error(at + ".children must be an array of node specs.");
+  // Removing an instance's root id makes a template; its echo still names one source instance.
+  const first = children.find(child => !isElision(child));
+  const sourceId = id ?? (first && typeof first.id === "string" && first.id.startsWith("I") ? first.id.slice(1, first.id.indexOf(";")) : undefined);
+  const prefix = typeof sourceId === "string" ? (sourceId.startsWith("I") ? sourceId : "I" + sourceId) + ";" : undefined;
+  const owned = (child: unknown): boolean => {
+    if (isElision(child)) return true;
+    if (!child || typeof child !== "object" || !("id" in child) || typeof child.id !== "string" || !prefix || !child.id.startsWith(prefix)) return false;
+    // Slot contents have ordinary live ids and are authored through the matching override.
+    if ("type" in child && child.type === "SLOT") return true;
+    return !("children" in child) || (Array.isArray(child.children) && child.children.every(owned));
+  };
+  if (!children.every(owned)) throw new Error(at + ".children: inherited instance children must belong to this instance. Author sublayer changes through overrides, and slot content through overrides[path].children.");
+  return true;
 }

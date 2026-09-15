@@ -31,7 +31,6 @@ export function isNoiseName(name: string, type: string | undefined): boolean {
 }
 
 import type { SimplifiedNode, TemplateBody } from "./types.js";
-import { elision } from "./project.js";
 
 /** Name projection applies to tree nodes; component definitions retain their names. */
 export function projectNames(
@@ -42,7 +41,6 @@ export function projectNames(
   if (node.children) next.children = node.children.map((child) => projectNames(child, templates));
   const type = node.type ?? (node.template ? templates[node.template]?.type : undefined);
   if (next.name !== undefined && isNoiseName(next.name, type)) {
-    next.elided = [...(next.elided ?? []), elision(node.id, "name", next.name)];
     delete next.name;
   }
   return next;

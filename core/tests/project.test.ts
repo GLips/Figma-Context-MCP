@@ -25,18 +25,12 @@ test("runtime retains SVG children, hidden nodes and producer detail; projection
   const wire = project(full);
   expect(wire.nodes[0].type).toBe("IMAGE-SVG");
   expect(wire.nodes[0].children).toBeUndefined();
-  const marker = wire.nodes[0].elided?.find((entry) => entry.$elided.field === "children")?.$elided;
-  expect(marker).toEqual({
-    id: "frame",
-    field: "children",
-    chars: JSON.stringify(full.nodes[0].children).length,
-    read: 'flcm.get("frame")',
-  });
+  expect(wire.nodes[0].elided).toEqual({ children: JSON.stringify(full.nodes[0].children).length });
   expect(JSON.stringify(full)).toBe(before);
   const leaf = projectReadNode(full.nodes[0].children![0], full);
   expect(leaf.type).toBe("IMAGE-SVG");
-  expect(leaf.elided?.some((entry) => entry.$elided.field === "d")).toBe(true);
-  expect(projectNames(leaf).elided?.some((entry) => entry.$elided.field === "name")).toBe(true);
+  expect(leaf.elided).toEqual({ d: JSON.stringify(path.vectorPaths![0].data).length });
+  expect(projectNames(leaf).elided).toEqual(leaf.elided);
 });
 
 test("hidden roots and depth cuts have addresses; full reads have neither limit", async () => {
@@ -46,13 +40,13 @@ test("hidden roots and depth cuts have addresses; full reads have neither limit"
   expect(full.nodes[0].children).toHaveLength(1);
   const wire = project(full);
   expect(wire.nodes).toEqual([]);
-  expect(wire.elided?.[0].$elided.id).toBe("hidden");
+  expect(wire.elided).toEqual([
+    { id: "hidden", elided: { node: JSON.stringify(full.nodes[0]).length } },
+  ]);
   const visible = await simplify([{ id: "root", name: "Root", type: "FRAME", children: [path] }]);
-  expect(
-    project(visible, { maxDepth: 0 }).nodes[0].elided?.some(
-      (entry) => entry.$elided.field === "children",
-    ),
-  ).toBe(true);
+  expect(project(visible, { maxDepth: 0 }).nodes[0].elided).toEqual({
+    children: JSON.stringify(visible.nodes[0].children).length,
+  });
 });
 
 test("disabled paint/effect stacks, exact geometry and named-style identities remain inspectable", async () => {
@@ -64,12 +58,10 @@ test("disabled paint/effect stacks, exact geometry and named-style identities re
     styles: { fill: { id: "style", name: "Accent" } },
   };
   const full = await simplify([source]);
-  expect(full.nodes[0].details).toEqual(source);
+  expect(full.nodes[0].readOnlySource).toEqual(source);
   const wire = project(full);
-  expect(wire.nodes[0].details).toBeUndefined();
-  expect(
-    wire.nodes[0].elided?.find((entry) => entry.$elided.field === "details")?.$elided.chars,
-  ).toBe(JSON.stringify(source).length);
+  expect(wire.nodes[0].readOnlySource).toBeUndefined();
+  expect(wire.nodes[0].elided).toEqual({ d: JSON.stringify(path.vectorPaths![0].data).length });
 });
 
 test("agent edits turn read objects into computed data, including edits within shared nested values", async () => {
@@ -78,11 +70,11 @@ test("agent edits turn read objects into computed data, including edits within s
   expect(project(full)).toBe(full);
   expect(projectReadNode(full.nodes[0], full)).toBe(full.nodes[0]);
   const nested = await simplify([path]);
-  nested.nodes[0].details!.vectorPaths![0].data = "M0 0 L1 1";
+  nested.nodes[0].readOnlySource!.vectorPaths![0].data = "M0 0 L1 1";
   expect(project(nested)).toBe(nested);
 });
 
-test("instance and definition children stay live in runtime; wire diffs carry elisions", async () => {
+test("instance and definition children stay live in runtime; wire references retain their content in the component sidecar", async () => {
   const full = await simplify([
     {
       id: "c",
@@ -101,13 +93,12 @@ test("instance and definition children stay live in runtime; wire diffs carry el
   expect(full.nodes.map((node) => node.children?.[0].id)).toEqual(["t", "Ii;t"]);
   const wire = project(full);
   expect(wire.nodes.every((node) => !node.children)).toBe(true);
-  expect(
-    wire.nodes.every((node) => node.elided?.some((entry) => entry.$elided.field === "children")),
-  ).toBe(true);
+  expect(wire.nodes.every((node) => node.elided === undefined)).toBe(true);
+  expect(wire.components.c.children).toHaveLength(1);
   expect(full.nodes[1].children?.[0].id).toBe("Ii;t");
 });
 
-test("donated component markers point to live instance descendants, not synthetic definition ids", async () => {
+test("donated component markers stay field-only and retain the donor address in childrenFrom", async () => {
   const full = await simplify([
     {
       id: "instance",
@@ -122,12 +113,11 @@ test("donated component markers point to live instance descendants, not syntheti
   ]);
   const wire = project(full);
   const donated = wire.components.missing.children!.find((node) => node.id === "vector")!;
-  const address = donated.elided!.find((entry) => entry.$elided.field === "d")!.$elided;
-  expect(address.id).toBe("Iinstance;vector");
-  expect(address.read).toBe('flcm.get("Iinstance;vector")');
+  expect(donated.elided).toEqual({ d: JSON.stringify(path.vectorPaths![0].data).length });
+  expect(wire.components.missing.childrenFrom).toBe("instance");
 });
 
-test("details and child edges reconstruct the entire producer snapshot without losing fields", async () => {
+test("readOnlySource and child edges reconstruct the entire producer snapshot without losing fields", async () => {
   const source: NodeSnapshot = {
     id: "root",
     name: "Root",
@@ -139,7 +129,7 @@ test("details and child edges reconstruct the entire producer snapshot without l
   };
   const full = await simplify([source]);
   const restore = (node: (typeof full.nodes)[number]): NodeSnapshot => ({
-    ...node.details!,
+    ...node.readOnlySource!,
     ...(node.children ? { children: node.children.map(restore) } : {}),
   });
   expect(restore(full.nodes[0])).toEqual(source);
@@ -160,18 +150,18 @@ test("solid paint stacks flatten only in project", async () => {
   expect(full.nodes[0].fill).toEqual(["#0000FF", "#FF0000"]);
   const wire = project(full).nodes[0];
   expect(wire.fill).toBe("#0000FF");
-  expect(wire.elided?.some((entry) => entry.$elided.field === "fill")).toBe(true);
+  expect(wire.elided).toBeUndefined();
 });
 
 test("upstream depth omissions are marked with unknown size, not mistaken for empty containers", async () => {
   const full = await simplify([{ id: "page", name: "Page", type: "CANVAS" }]);
   const wire = project(full, { maxDepth: 1 });
-  expect(
-    wire.nodes[0].elided?.find((entry) => entry.$elided.field === "children")?.$elided,
-  ).toEqual({
-    id: "page",
-    field: "children",
-    chars: null,
-    read: 'flcm.get("page")',
-  });
+  expect(wire.nodes[0].elided).toEqual({ children: null });
+});
+
+test("ordinary nodes, empty children and stripped names need no markers", async () => {
+  const full = await simplify([{ id: "frame", name: "Frame 1", type: "FRAME", children: [] }]);
+  const node = projectNames(project(full).nodes[0]);
+  expect(node.elided).toBeUndefined();
+  expect(node.name).toBeUndefined();
 });

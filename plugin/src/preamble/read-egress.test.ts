@@ -2,7 +2,6 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
 import { createReadEgress, safeSerialize } from "../serialize.js";
-import { elision } from "@framelink/core";
 import * as flcm from "./runtime.js";
 
 function setup() {
@@ -24,7 +23,7 @@ test("read objects project wherever returned or logged; authored lookalikes and 
   assert.equal(out.own.type, "VECTOR");
   assert.equal(out.own.d, authored.d);
   assert.equal(out.path, read.node.d);
-  assert.equal(wire(read.node).elided.some((entry: any) => entry.$elided.field === "d"), true);
+  assert.deepEqual(wire(read.node).elided, { d: JSON.stringify(read.node.d).length });
   read.node.d = "M0 0 L20 20";
   assert.equal(wire(read).node.d, read.node.d);
   assert.equal(wire(read).node.type, "VECTOR");
@@ -58,11 +57,11 @@ test("a retyped marker preserves live children and is never created as content",
   const parent = await flcm.render({ type: "FRAME", children: [{ type: "TEXT", text: "Keep" }] });
   const live = await figma.getNodeByIdAsync(parent.id);
   const child = live.children[0];
-  const marker = elision(parent.id, "children", [child.id]);
+  const marker = { elided: { children: 42 } };
   await flcm.render({ id: parent.id, children: [marker as any] });
   assert.deepEqual(live.children, [child]);
   await assert.rejects(flcm.render(marker as any), /only valid inside a children array/);
-  await assert.rejects(flcm.render({ id: parent.id, children: [{ $elided: {} } as any] }), /type must be/);
+  await assert.rejects(flcm.render({ id: parent.id, children: [{ elided: {} } as any] }), /type must be/);
   assert.deepEqual(live.children, [child]);
 });
 
@@ -73,7 +72,7 @@ test("blend modes, constraints and clipping read back in authorable fields", asy
   assert.equal(node.clip, true);
   assert.equal(node.mixBlendMode, "multiply");
   assert.deepEqual(node.pin, { x: "right", y: "bottom" });
-  assert.equal(node.details!.blendMode, "MULTIPLY");
+  assert.equal(node.readOnlySource!.blendMode, "MULTIPLY");
   const template = { ...node }; delete template.id;
   const copy = await flcm.render(template);
   const live = await figma.getNodeByIdAsync(copy.id);
@@ -88,16 +87,40 @@ test("unresolved style ids remain readable without inventing a style name", asyn
   const live = await figma.getNodeByIdAsync(original.id);
   live.fillStyleId = "missing-style";
   const { node } = await flcm.get(original);
-  assert.deepEqual(node.details!.styles!.fill, { id: "missing-style" });
+  assert.deepEqual(node.readOnlySource!.styles!.fill, { id: "missing-style" });
   assert.equal(wire(node).fill, "#123456");
 });
 
-test("editing an inherited child tree is refused rather than silently ignored", async () => {
-  setup();
-  const component = await flcm.component({ type: "FRAME", children: [{ type: "TEXT", text: "Before" }] });
+test("inherited instance echoes survive verb copies and JSON round-trips without source metadata", async () => {
+  const { figma } = setup();
+  const component = await flcm.component({ type: "FRAME", children: [{ type: "FRAME", children: [{ type: "TEXT", text: "Before" }] }] });
   const instance = await flcm.render({ type: "INSTANCE", componentId: component.id });
+  const parent = await flcm.render({ type: "FRAME" });
   const { node } = await flcm.get(instance);
-  node.children![0].text = "After";
-  await assert.rejects(flcm.render(node), /inherited instance children are read-only/);
-  assert.equal((await flcm.get(instance)).node.children![0].text, "Before");
+  const live = await figma.getNodeByIdAsync(instance.id);
+  const children = [...live.children];
+  const first = await flcm.append(parent, node);
+  const copy = await flcm.append(parent, first);
+  const third = await flcm.append(parent, JSON.parse(JSON.stringify(copy)));
+  assert.equal(third.id, instance.id);
+  assert.deepEqual(live.children, children);
+  const withoutSource = JSON.parse(JSON.stringify(node), (key, value) => key === "readOnlySource" ? undefined : value);
+  await flcm.append(parent, withoutSource);
+  assert.deepEqual(live.children, children);
+  for (const child of [{ type: "TEXT", text: "New" }, { id: "foreign", type: "TEXT" }, { ...node.children![0], children: [{ id: "foreign" }] }]) {
+    await assert.rejects(flcm.append(parent, { ...node, children: [child] } as any), /must belong to this instance/);
+    assert.deepEqual(live.children, children);
+  }
+});
+
+test("hidden nodes report visible false in get, predicates and slim handles", async () => {
+  setup();
+  const parent = await flcm.render({ type: "FRAME", children: [{ type: "TEXT", text: "Hidden", visible: false }] });
+  const full = await flcm.get(parent);
+  const hidden = full.node.children![0];
+  assert.equal(hidden.visible, false);
+  assert.equal((await flcm.get(hidden.id)).node.visible, false);
+  const hits = await flcm.find({ within: parent, type: "TEXT" }, node => node.visible === false);
+  assert.equal(hits.length, 1);
+  assert.equal(hits[0].visible, false);
 });

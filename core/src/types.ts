@@ -152,7 +152,7 @@ export type NodeDelta = {
 };
 
 export interface SimplifiedDesign {
-  elided?: Elision[];
+  elided?: { id: string; elided: Elision }[];
   name: string;
   nodes: SimplifiedNode[];
   /** Every component and component set the read referenced (see SimplifiedComponentEntry). */
@@ -179,14 +179,12 @@ export type TemplateBody = Omit<SimplifiedNode, "id" | "name" | "children" | "te
 // Per-node geometry (width/height/position/rotation/…) sits at the node top
 // level per the canonical vocabulary's hybrid structure — inherited from
 // NodeGeometry so the extractor and the type can't drift.
-export interface Elision {
-  $elided: { id: string; field: string; chars: number | null; read: string };
-}
+export type Elision = Record<string, number | null>;
 
 export interface SimplifiedNode extends NodeGeometry {
   /** Producer data before CSS conversion, excluding recursive children. Read-only metadata. */
-  details?: Omit<NodeSnapshot, "children">;
-  elided?: Elision[];
+  readOnlySource?: Omit<NodeSnapshot, "children">;
+  elided?: Elision;
   d?: string;
   vectorPaths?: { data: string; windingRule: "NONZERO" | "EVENODD" | "NONE" }[];
   locked?: boolean;
@@ -248,12 +246,7 @@ export interface SimplifiedNode extends NodeGeometry {
   componentId?: string;
   componentProperties?: Record<string, boolean | string>;
   componentPropertyReferences?: Record<string, string>;
-  /**
-   * Only ever `false`, and only ever inside an `overrides` delta: the read shape covers the
-   * RENDERED document, so a visible node never says so. A layer the designer hid by hand inside
-   * an instance is a real difference from the component, and dropping the node silently would
-   * lose it — so the delta says the node is hidden instead of shipping the node.
-   */
+  /** Hidden nodes explicitly report false; visible nodes omit the default. */
   visible?: boolean;
   /**
    * INSTANCE only: how this instance differs from its component's `children`, so the instance

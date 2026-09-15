@@ -49,9 +49,3 @@ export function captureRead(value: object): (value: unknown) => boolean {
     return unchanged(item);
   };
 }
-
-/** True only for an untouched object from this runtime's read graph. */
-export function isUnchangedRead(value: unknown): boolean {
-  if (!value || typeof value !== "object") return false;
-  return contexts.get(value)?.unchanged?.(value) ?? false;
-}

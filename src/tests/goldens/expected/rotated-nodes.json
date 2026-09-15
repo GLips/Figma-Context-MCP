@@ -20,17 +20,7 @@
           "left": 100,
           "top": 60,
           "rotation": -15,
-          "fill": "#3366E6",
-          "elided": [
-            {
-              "$elided": {
-                "id": "9:2",
-                "field": "details",
-                "chars": 426,
-                "read": "flcm.get(\"9:2\")"
-              }
-            }
-          ]
+          "fill": "#3366E6"
         },
         {
           "id": "9:3",
@@ -52,27 +42,7 @@
               "left": 8.49,
               "top": 42.43,
               "rotation": 45,
-              "fill": "fill_93230492",
-              "elided": [
-                {
-                  "$elided": {
-                    "id": "9:6",
-                    "field": "details",
-                    "chars": 317,
-                    "read": "flcm.get(\"9:6\")"
-                  }
-                }
-              ]
-            }
-          ],
-          "elided": [
-            {
-              "$elided": {
-                "id": "9:3",
-                "field": "details",
-                "chars": 302,
-                "read": "flcm.get(\"9:3\")"
-              }
+              "fill": "fill_93230492"
             }
           ]
         },
@@ -85,17 +55,7 @@
           "top": 250,
           "rotation": -15,
           "stroke": "#000000",
-          "strokeWidth": "1px",
-          "elided": [
-            {
-              "$elided": {
-                "id": "9:9",
-                "field": "details",
-                "chars": 421,
-                "read": "flcm.get(\"9:9\")"
-              }
-            }
-          ]
+          "strokeWidth": "1px"
         },
         {
           "id": "9:7",
@@ -106,17 +66,7 @@
           "left": 250,
           "top": 170,
           "rotation": -180,
-          "fill": "#994DCC",
-          "elided": [
-            {
-              "$elided": {
-                "id": "9:7",
-                "field": "details",
-                "chars": 353,
-                "read": "flcm.get(\"9:7\")"
-              }
-            }
-          ]
+          "fill": "#994DCC"
         },
         {
           "id": "9:4",
@@ -138,47 +88,9 @@
               "left": 12,
               "top": 9,
               "rotation": -20,
-              "fill": "#1AB366",
-              "elided": [
-                {
-                  "$elided": {
-                    "id": "9:5",
-                    "field": "details",
-                    "chars": 428,
-                    "read": "flcm.get(\"9:5\")"
-                  }
-                }
-              ]
-            }
-          ],
-          "elided": [
-            {
-              "$elided": {
-                "id": "9:4",
-                "field": "details",
-                "chars": 415,
-                "read": "flcm.get(\"9:4\")"
-              }
+              "fill": "#1AB366"
             }
           ]
-        }
-      ],
-      "elided": [
-        {
-          "$elided": {
-            "id": "9:1",
-            "field": "details",
-            "chars": 324,
-            "read": "flcm.get(\"9:1\")"
-          }
-        },
-        {
-          "$elided": {
-            "id": "9:1",
-            "field": "clip",
-            "chars": 4,
-            "read": "flcm.get(\"9:1\")"
-          }
         }
       ]
     }

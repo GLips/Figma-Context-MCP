@@ -149,7 +149,7 @@ export function createResolvedTargets(): ResolvedTargets {
   };
 }
 
-// Style ids survive unresolved lookups in details; only resolved names become wire style keys.
+// Style ids survive unresolved lookups in readOnlySource; only resolved names become wire style keys.
 const resolveStyle: SceneStyleResolver = (styleId) => figma.getStyleByIdAsync(styleId);
 
 // The adapter's structural view narrows plugin typings at this boundary. The resulting data is
@@ -309,6 +309,7 @@ async function simplifiedIndex(root: ScanRoot, categories: ReadonlyMap<string, s
 // container mode survives from `layout`; a leaf (mode "none") drops it.
 function projectSlim(node: SceneNode, simplified: SimplifiedNode, categories: ReadonlyMap<string, string>): SlimHandle {
   const slim: SlimHandle = identityOf(node);
+  if (simplified.visible === false) slim.visible = false;
   const annotations = decodeAnnotations("annotations" in node ? node.annotations : undefined, categories);
   if (annotations) slim.annotations = annotations;
   if (simplified.width !== undefined) slim.width = simplified.width;

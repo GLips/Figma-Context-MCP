@@ -28,25 +28,7 @@
               "height": 40,
               "left": 15,
               "top": 0,
-              "fill": "#3366E6",
-              "elided": [
-                {
-                  "$elided": {
-                    "id": "8:3",
-                    "field": "details",
-                    "chars": 348,
-                    "read": "flcm.get(\"8:3\")"
-                  }
-                },
-                {
-                  "$elided": {
-                    "id": "8:3",
-                    "field": "clip",
-                    "chars": 5,
-                    "read": "flcm.get(\"8:3\")"
-                  }
-                }
-              ]
+              "fill": "#3366E6"
             },
             {
               "id": "8:4",
@@ -56,25 +38,7 @@
               "height": 30,
               "left": 0,
               "top": 45,
-              "fill": "#E66633",
-              "elided": [
-                {
-                  "$elided": {
-                    "id": "8:4",
-                    "field": "details",
-                    "chars": 348,
-                    "read": "flcm.get(\"8:4\")"
-                  }
-                },
-                {
-                  "$elided": {
-                    "id": "8:4",
-                    "field": "clip",
-                    "chars": 5,
-                    "read": "flcm.get(\"8:4\")"
-                  }
-                }
-              ]
+              "fill": "#E66633"
             },
             {
               "id": "8:5",
@@ -93,25 +57,7 @@
                   "height": 20,
                   "left": 0,
                   "top": 8,
-                  "fill": "#1AB366",
-                  "elided": [
-                    {
-                      "$elided": {
-                        "id": "8:6",
-                        "field": "details",
-                        "chars": 353,
-                        "read": "flcm.get(\"8:6\")"
-                      }
-                    },
-                    {
-                      "$elided": {
-                        "id": "8:6",
-                        "field": "clip",
-                        "chars": 5,
-                        "read": "flcm.get(\"8:6\")"
-                      }
-                    }
-                  ]
+                  "fill": "#1AB366"
                 },
                 {
                   "id": "8:7",
@@ -121,47 +67,9 @@
                   "height": 12,
                   "left": 45,
                   "top": 0,
-                  "fill": "#E6B31A",
-                  "elided": [
-                    {
-                      "$elided": {
-                        "id": "8:7",
-                        "field": "details",
-                        "chars": 354,
-                        "read": "flcm.get(\"8:7\")"
-                      }
-                    },
-                    {
-                      "$elided": {
-                        "id": "8:7",
-                        "field": "clip",
-                        "chars": 5,
-                        "read": "flcm.get(\"8:7\")"
-                      }
-                    }
-                  ]
-                }
-              ],
-              "elided": [
-                {
-                  "$elided": {
-                    "id": "8:5",
-                    "field": "details",
-                    "chars": 273,
-                    "read": "flcm.get(\"8:5\")"
-                  }
+                  "fill": "#E6B31A"
                 }
               ]
-            }
-          ],
-          "elided": [
-            {
-              "$elided": {
-                "id": "8:2",
-                "field": "details",
-                "chars": 274,
-                "read": "flcm.get(\"8:2\")"
-              }
             }
           ]
         },
@@ -183,25 +91,7 @@
               "height": 40,
               "left": 57.08,
               "top": 0,
-              "fill": "#994DCC",
-              "elided": [
-                {
-                  "$elided": {
-                    "id": "8:9",
-                    "field": "details",
-                    "chars": 430,
-                    "read": "flcm.get(\"8:9\")"
-                  }
-                },
-                {
-                  "$elided": {
-                    "id": "8:9",
-                    "field": "clip",
-                    "chars": 5,
-                    "read": "flcm.get(\"8:9\")"
-                  }
-                }
-              ]
+              "fill": "#994DCC"
             },
             {
               "id": "8:10",
@@ -212,55 +102,9 @@
               "left": 0,
               "top": 39.59,
               "rotation": -15,
-              "fill": "#33B3CC",
-              "elided": [
-                {
-                  "$elided": {
-                    "id": "8:10",
-                    "field": "details",
-                    "chars": 448,
-                    "read": "flcm.get(\"8:10\")"
-                  }
-                },
-                {
-                  "$elided": {
-                    "id": "8:10",
-                    "field": "clip",
-                    "chars": 5,
-                    "read": "flcm.get(\"8:10\")"
-                  }
-                }
-              ]
-            }
-          ],
-          "elided": [
-            {
-              "$elided": {
-                "id": "8:8",
-                "field": "details",
-                "chars": 362,
-                "read": "flcm.get(\"8:8\")"
-              }
+              "fill": "#33B3CC"
             }
           ]
-        }
-      ],
-      "elided": [
-        {
-          "$elided": {
-            "id": "8:1",
-            "field": "details",
-            "chars": 322,
-            "read": "flcm.get(\"8:1\")"
-          }
-        },
-        {
-          "$elided": {
-            "id": "8:1",
-            "field": "clip",
-            "chars": 5,
-            "read": "flcm.get(\"8:1\")"
-          }
         }
       ]
     }

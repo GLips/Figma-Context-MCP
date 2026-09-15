@@ -23,19 +23,19 @@ Read-only fields with no authored equivalent fail by name. A root read back from
 
 ### Full reads and wire markers
 
-Inside a call, get returns the complete subtree, including hidden nodes, VECTOR geometry and inherited instance children. find predicates see that same full shape. The children array keeps live sibling order. The read-only details record preserves decoded producer facts before CSS conversion: exact measurements, disabled paints/effects, paint stacks, resolved text runs, style identities, constraints, blend modes, clipping and component metadata. The ordinary fields remain the authoring vocabulary. Writing details does not change the file; clone preserves live state the authoring vocabulary cannot express.
+Inside a call, get returns the complete subtree, including hidden nodes, VECTOR geometry and inherited instance children. find predicates see that same full shape. Hidden nodes carry visible: false in full reads and slim handles. The children array keeps live sibling order. The readOnlySource record preserves decoded producer facts before CSS conversion: exact measurements, disabled paints/effects, paint stacks, resolved text runs, style identities, constraints, blend modes, clipping and component metadata. The ordinary fields remain the authoring vocabulary. Writing readOnlySource does not change the file; clone preserves live state the authoring vocabulary cannot express.
 
 At the return and console boundary, unchanged read objects are projected wherever they occur. Computed objects, extracted fields and edited read objects pass through whole. Projection retains the REST cut rules, including IMAGE-SVG collapse, and adds markers such as:
 
 ```json
-{"$elided":{"id":"12:34","field":"children","chars":4200,"read":"flcm.get(\"12:34\")"}}
+{"id":"12:34","elided":{"children":4200}}
 ```
 
-Markers appear in a node's elided array. chars counts JSON UTF-16 code units in the omitted field, not tokens or network bytes. It is null when a REST depth limit omitted the child list upstream, so its size is unknown. Fetch with flcm.get in a fresh call, then return the field or compute a summary. For example, `return (await flcm.get("12:34")).node.children.map(n => ({ id: n.id, type: n.type, name: n.name }));` inspects a collapsed range, and `return (await flcm.get("12:35")).node.d;` retrieves a path. Never rerun editing code to expand output.
+A node's elided map names omitted content fields and their sizes in JSON characters. A size is null when a REST depth limit omitted the child list upstream, so its size is unknown. Fetch with flcm.get in a fresh call, then return the field or compute a summary. For example, `return (await flcm.get("12:34")).node.children.map(n => ({ id: n.id, type: n.type, name: n.name }));` inspects a collapsed range, and `return (await flcm.get("12:35")).node.d;` retrieves a path. Never rerun editing code to expand output.
 
-A marker retyped into a spec's children array preserves the live children it represents. It is never a node to create or edit. elided and details are read metadata. Inherited INSTANCE children are read-only; edit their paths through overrides, and place slot content through overrides[path].children. Changing the inherited child tree itself is refused.
+A marker-only object such as { elided: { children: 4200 } } retyped into a spec's children array preserves the live children it represents. It is never a node to create or edit. elided and readOnlySource are read metadata. An INSTANCE child tree whose ids all belong to that instance is an inherited echo, including after copying or JSON round-tripping. Its fields are observational; edit sublayer paths through overrides, and place slot content through overrides[path].children. Foreign or id-less inherited children are refused as restructuring. When the root id is removed to create a new instance, echo ids must share one source instance. SLOT contents can have ordinary live ids; their edits still belong in overrides.
 
-REST does not request geometry=paths, so its decoded details cannot supply VECTOR path data. Use a live plugin read for paths. Variables, prototype interactions, vector networks, video paints, image filters, mask/boolean-operation settings and plugin data remain outside the adapter vocabulary; use raw figma access for them. Reading a node type does not imply that a verb can create it; clone preserves unsupported authoring state. The predicate admission limit remains 5,000 candidates; narrow within or the query for larger files. Unavailable library definitions can still fall back to an instance donor, identified by childrenFrom.
+REST does not request geometry=paths, so its decoded readOnlySource cannot supply VECTOR path data. Use a live plugin read for paths. Variables, prototype interactions, vector networks, video paints, image filters, mask/boolean-operation settings and plugin data remain outside the adapter vocabulary; use raw figma access for them. Reading a node type does not imply that a verb can create it; clone preserves unsupported authoring state. The predicate admission limit remains 5,000 candidates; narrow within or the query for larger files. Unavailable library definitions can still fall back to an instance donor, identified by childrenFrom.
 
 ## The verbs
 
@@ -551,7 +551,7 @@ Unmentioned children are retained. remove explicitly deletes a node and its subt
 
 clone duplicates the live subtree faithfully and clears its keys. It returns { node, to? }; the default destination is the source parent. Optional root props apply before returning the copy.
 
-get returns { node, components? }. Use its node as a spec. details preserves decoded state beyond the authoring vocabulary; clone preserves live state a spec cannot author.
+get returns { node, components? }. Use its node as a spec. readOnlySource preserves decoded state beyond the authoring vocabulary; clone preserves live state a spec cannot author.
 
 ## Components — making and using them
 

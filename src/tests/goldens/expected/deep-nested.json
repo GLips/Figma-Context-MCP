@@ -22,35 +22,7 @@
             {
               "id": "8:2:t",
               "name": "Tag",
-              "template": "EL-18f1c885",
-              "elided": [
-                {
-                  "$elided": {
-                    "id": "8:2:t",
-                    "field": "details",
-                    "chars": 423,
-                    "read": "flcm.get(\"8:2:t\")"
-                  }
-                }
-              ]
-            }
-          ],
-          "elided": [
-            {
-              "$elided": {
-                "id": "8:2",
-                "field": "details",
-                "chars": 360,
-                "read": "flcm.get(\"8:2\")"
-              }
-            },
-            {
-              "$elided": {
-                "id": "8:2",
-                "field": "clip",
-                "chars": 4,
-                "read": "flcm.get(\"8:2\")"
-              }
+              "template": "EL-18f1c885"
             }
           ]
         },
@@ -62,35 +34,7 @@
             {
               "id": "8:3:t",
               "name": "Tag",
-              "template": "EL-18f1c885",
-              "elided": [
-                {
-                  "$elided": {
-                    "id": "8:3:t",
-                    "field": "details",
-                    "chars": 424,
-                    "read": "flcm.get(\"8:3:t\")"
-                  }
-                }
-              ]
-            }
-          ],
-          "elided": [
-            {
-              "$elided": {
-                "id": "8:3",
-                "field": "details",
-                "chars": 362,
-                "read": "flcm.get(\"8:3\")"
-              }
-            },
-            {
-              "$elided": {
-                "id": "8:3",
-                "field": "clip",
-                "chars": 4,
-                "read": "flcm.get(\"8:3\")"
-              }
+              "template": "EL-18f1c885"
             }
           ]
         },
@@ -102,55 +46,9 @@
             {
               "id": "8:4:t",
               "name": "Tag",
-              "template": "EL-18f1c885",
-              "elided": [
-                {
-                  "$elided": {
-                    "id": "8:4:t",
-                    "field": "details",
-                    "chars": 425,
-                    "read": "flcm.get(\"8:4:t\")"
-                  }
-                }
-              ]
-            }
-          ],
-          "elided": [
-            {
-              "$elided": {
-                "id": "8:4",
-                "field": "details",
-                "chars": 364,
-                "read": "flcm.get(\"8:4\")"
-              }
-            },
-            {
-              "$elided": {
-                "id": "8:4",
-                "field": "clip",
-                "chars": 4,
-                "read": "flcm.get(\"8:4\")"
-              }
+              "template": "EL-18f1c885"
             }
           ]
-        }
-      ],
-      "elided": [
-        {
-          "$elided": {
-            "id": "8:1",
-            "field": "details",
-            "chars": 282,
-            "read": "flcm.get(\"8:1\")"
-          }
-        },
-        {
-          "$elided": {
-            "id": "8:1",
-            "field": "clip",
-            "chars": 4,
-            "read": "flcm.get(\"8:1\")"
-          }
         }
       ]
     }

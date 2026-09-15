@@ -15,17 +15,7 @@
           "needsCropping": false,
           "requiresImageDimensions": false
         }
-      },
-      "elided": [
-        {
-          "$elided": {
-            "id": "5:1",
-            "field": "details",
-            "chars": 241,
-            "read": "flcm.get(\"5:1\")"
-          }
-        }
-      ]
+      }
     },
     {
       "id": "5:2",
@@ -77,34 +67,6 @@
               ],
               "filenameSuffix": "1f2c9a"
             }
-          },
-          "elided": [
-            {
-              "$elided": {
-                "id": "5:3",
-                "field": "details",
-                "chars": 309,
-                "read": "flcm.get(\"5:3\")"
-              }
-            }
-          ]
-        }
-      ],
-      "elided": [
-        {
-          "$elided": {
-            "id": "5:2",
-            "field": "details",
-            "chars": 274,
-            "read": "flcm.get(\"5:2\")"
-          }
-        },
-        {
-          "$elided": {
-            "id": "5:2",
-            "field": "clip",
-            "chars": 4,
-            "read": "flcm.get(\"5:2\")"
           }
         }
       ]

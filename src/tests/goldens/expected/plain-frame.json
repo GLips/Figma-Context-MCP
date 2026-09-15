@@ -34,53 +34,12 @@
             "fontSize": 16,
             "lineHeight": "24px"
           },
-          "fill": "#1A1A1A",
-          "elided": [
-            {
-              "$elided": {
-                "id": "1:3",
-                "field": "details",
-                "chars": 596,
-                "read": "flcm.get(\"1:3\")"
-              }
-            }
-          ]
+          "fill": "#1A1A1A"
         }
       ],
-      "elided": [
-        {
-          "$elided": {
-            "id": "1:1",
-            "field": "details",
-            "chars": 682,
-            "read": "flcm.get(\"1:1\")"
-          }
-        },
-        {
-          "$elided": {
-            "id": "1:1",
-            "field": "clip",
-            "chars": 4,
-            "read": "flcm.get(\"1:1\")"
-          }
-        },
-        {
-          "$elided": {
-            "id": "1:1",
-            "field": "fill",
-            "chars": 32,
-            "read": "flcm.get(\"1:1\")"
-          }
-        },
-        {
-          "$elided": {
-            "id": "1:1",
-            "field": "children",
-            "chars": 1107,
-            "read": "flcm.get(\"1:1\")"
-          }
-        }
-      ]
+      "elided": {
+        "children": 1121
+      }
     }
   ],
   "components": {},

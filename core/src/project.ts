@@ -14,18 +14,6 @@ export interface ProjectOptions {
   maxDepth?: number;
 }
 
-/** JSON character count is deterministic in QuickJS and bounds the cost of a fresh read. */
-export function elision(id: string, field: string, value: unknown): Elision {
-  return {
-    $elided: {
-      id,
-      field,
-      chars: JSON.stringify(value)?.length ?? null,
-      read: `flcm.get(${JSON.stringify(id)})`,
-    },
-  };
-}
-
 /** Project copies the runtime tree; cuts never mutate data an agent is still using. */
 export function project(full: SimplifyResult, options: ProjectOptions = {}): SimplifyResult {
   const context = readContext(full);
@@ -37,7 +25,13 @@ export function projectReadNode(node: SimplifiedNode, full: SimplifyResult): Sim
   const context = readContext(full);
   if (context.unchanged && !context.unchanged(node)) return node;
   const result = projectTrees([node], context, {});
-  return result.nodes[0] ?? { id: node.id, elided: [elision(node.id, "node", node)] };
+  return (
+    result.nodes[0] ?? {
+      id: node.id,
+      visible: false,
+      elided: { node: JSON.stringify(node).length },
+    }
+  );
 }
 
 export function projectIntoTable(
@@ -57,11 +51,10 @@ function projectTrees(
   const refs = options.compress ? createRefStyleTable() : undefined;
   const table = providedTable ?? refs ?? createInlineStyleTable();
   const notes = createComponentNotes();
-  const cuts = new Map<string, Elision[]>();
-  const originals = new Map<string, SimplifiedNode>();
+  const cuts = new Map<string, Elision>();
   const cut = (node: SimplifiedNode, field: string, value: unknown) => {
-    const list = cuts.get(node.id) ?? [];
-    list.push(elision(node.id, field, value));
+    const list = cuts.get(node.id) ?? {};
+    list[field] = JSON.stringify(value)?.length ?? null;
     cuts.set(node.id, list);
   };
   const walk = (
@@ -73,34 +66,26 @@ function projectTrees(
     for (const full of input) {
       const snapshot = context.snapshots.get(full);
       if (!snapshot) throw new Error("Read tree contains a node without producer metadata.");
-      originals.set(full.id, full);
       if (
         full.visible === false &&
         !(insideDefinition && full.componentPropertyReferences?.visible)
       )
         continue;
-      const { children, d, vectorPaths, locked, clip, pin, mixBlendMode, details, ...body } = full;
+      const { children, d, vectorPaths, ...body } = full;
       const node = JSON.parse(JSON.stringify(body)) as SimplifiedNode;
+      for (const field of ["locked", "clip", "pin", "mixBlendMode", "readOnlySource"] as const)
+        delete node[field];
       delete node.visible;
       delete node.overrides;
       if (full.type === "VECTOR") {
         node.type = "IMAGE-SVG";
-        cut(full, "type", full.type);
       }
-      if (details !== undefined) cut(full, "details", details);
       if (d !== undefined) cut(full, "d", d);
       if (vectorPaths !== undefined) cut(full, "vectorPaths", vectorPaths);
-      if (locked !== undefined) cut(full, "locked", locked);
-      if (clip !== undefined) cut(full, "clip", clip);
-      if (pin !== undefined) cut(full, "pin", pin);
-      if (mixBlendMode !== undefined) cut(full, "mixBlendMode", mixBlendMode);
-      if (full.visible === false) cut(full, "visible", false);
-      if (children && !children.length) cut(full, "children", children);
       const fill = foldPaintStack(snapshot.fills, !!snapshot.children?.length);
       if (fill !== undefined) node.fill = fill;
       else if (full.type === "TEXT") node.fill = "none";
       else delete node.fill;
-      if (JSON.stringify(node.fill) !== JSON.stringify(full.fill)) cut(full, "fill", full.fill);
       internStyles(node, snapshot, table);
       // Notes are collected only for nodes admitted by the wire's visibility/depth rules.
       for (const id of [full.id, full.componentId, snapshot.mainComponent?.set?.id]) {
@@ -131,7 +116,6 @@ function projectTrees(
         if (projected.length) {
           const kept = collapseSvgContainers(snapshot, node, projected);
           if (kept.length) node.children = kept;
-          else cut(full, "type", full.type);
         }
         if ((node.children?.length ?? 0) !== children.length) cut(full, "children", children);
       } else if (children?.length && atLimit) cut(full, "children", children);
@@ -163,15 +147,8 @@ function projectTrees(
       const fullId = donorId
         ? `${donorId.startsWith("I") ? donorId : "I" + donorId};${node.id.startsWith("I") ? node.id.slice(1) : node.id}`
         : node.id;
-      const full = originals.get(fullId);
-      if (
-        full?.children?.length &&
-        !node.children &&
-        !cuts.get(fullId)?.some((e) => e.$elided.field === "children")
-      )
-        cut(full, "children", full.children);
       const entries = cuts.get(fullId);
-      if (entries?.length) node.elided = entries;
+      if (entries && Object.keys(entries).length) node.elided = entries;
       if (node.children) mark(node.children, donorId);
       for (const delta of Object.values(node.overrides ?? {}))
         if (delta.children) mark(delta.children, donorId);
@@ -179,7 +156,10 @@ function projectTrees(
   };
   const omittedRoots = roots.filter((root) => !nodes.some((node) => node.id === root.id));
   if (omittedRoots.length)
-    (result as SimplifyResult).elided = omittedRoots.map((root) => elision(root.id, "node", root));
+    (result as SimplifyResult).elided = omittedRoots.map((root) => ({
+      id: root.id,
+      elided: { node: JSON.stringify(root).length },
+    }));
   mark(result.nodes);
   for (const entry of Object.values(components))
     if (entry.children) mark(entry.children, entry.childrenFrom);
@@ -303,23 +283,23 @@ function hasImageFillOnSelfOrDirectChildren(node: NodeSnapshot): boolean {
 }
 
 /** Markers are metadata, including when an agent retypes one into an authored child list. */
-export function isElision(value: unknown): value is Elision {
-  if (!value || typeof value !== "object" || !("$elided" in value)) return false;
-  const marker = value.$elided;
+export function isElision(value: unknown): value is { elided: Elision } {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  if (Object.keys(value).some((key) => key !== "elided")) return false;
+  if (
+    !("elided" in value) ||
+    !value.elided ||
+    typeof value.elided !== "object" ||
+    Array.isArray(value.elided)
+  )
+    return false;
+  const sizes = Object.values(value.elided);
   return (
-    !!marker &&
-    typeof marker === "object" &&
-    "id" in marker &&
-    typeof marker.id === "string" &&
-    "field" in marker &&
-    typeof marker.field === "string" &&
-    "chars" in marker &&
-    (marker.chars === null ||
-      (typeof marker.chars === "number" &&
-        Number.isSafeInteger(marker.chars) &&
-        marker.chars >= 0)) &&
-    "read" in marker &&
-    typeof marker.read === "string"
+    sizes.length > 0 &&
+    sizes.every(
+      (size) =>
+        size === null || (typeof size === "number" && Number.isSafeInteger(size) && size >= 0),
+    )
   );
 }
 

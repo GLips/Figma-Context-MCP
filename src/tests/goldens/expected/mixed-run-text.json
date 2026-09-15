@@ -23,17 +23,7 @@
         "fontSize": 14,
         "lineHeight": "20px"
       },
-      "fill": "#000000",
-      "elided": [
-        {
-          "$elided": {
-            "id": "3:1",
-            "field": "details",
-            "chars": 852,
-            "read": "flcm.get(\"3:1\")"
-          }
-        }
-      ]
+      "fill": "#000000"
     }
   ],
   "components": {},

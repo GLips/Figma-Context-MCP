@@ -360,7 +360,7 @@ function diffChildren(
 }
 
 /** Fields never compared: the id is implied by the path, children are compared structurally. */
-const DIFF_SKIP_KEYS = new Set(["id", "children", "details", "elided"]);
+const DIFF_SKIP_KEYS = new Set(["id", "children", "readOnlySource", "elided"]);
 
 /**
  * The per-node delta: only the fields that differ, plus a structural answer for children. A

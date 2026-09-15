@@ -38,7 +38,7 @@ export interface SimplifyOptions {
 }
 
 export interface SimplifyResult {
-  elided?: import("./types.js").Elision[];
+  elided?: { id: string; elided: import("./types.js").Elision }[];
   nodes: SimplifiedNode[];
   /**
    * Hoisted styles. Compressed: shared + named styles under ref keys.
@@ -167,9 +167,9 @@ async function extractNode(
   extractVisuals(node, result);
   extractComponent(node, result, context);
 
-  const details = { ...node };
-  delete details.children;
-  result.details = details;
+  const readOnlySource = { ...node };
+  delete readOnlySource.children;
+  result.readOnlySource = readOnlySource;
   if (node.visible === false) result.visible = false;
   if (node.locked) result.locked = true;
   if (
@@ -221,7 +221,7 @@ function extractLayout(node: NodeSnapshot, result: SimplifiedNode, context: Simp
  * Extracts text content and text styling from a node.
  */
 function extractText(node: NodeSnapshot, result: SimplifiedNode): void {
-  // Decoded runs remain in details; the authoring field uses markdown and inline run deltas.
+  // Decoded runs remain in readOnlySource; the authoring field uses markdown and inline run deltas.
   if (isTextNode(node)) {
     const rich = buildFormattedText(node, (delta) => delta);
     if (rich.text !== undefined) {
@@ -248,7 +248,7 @@ function extractVisuals(node: NodeSnapshot, result: SimplifiedNode): void {
   // Check if node has children to determine CSS properties
   const hasChildren = !!node.children && node.children.length > 0;
 
-  // The authoring field keeps visible paint layers in CSS order; details also keeps disabled layers.
+  // The authoring field keeps visible paint layers in CSS order; readOnlySource also keeps disabled layers.
   const paints = node.fills
     ?.filter(isVisible)
     .map((paint) => parsePaint(paint, hasChildren))

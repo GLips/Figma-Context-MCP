@@ -506,6 +506,7 @@ export interface Handle extends Identity {
 // measured number in width/height, the rule beside it in `intent`. A render just measured what it built, so
 // it can hand over both; a locate has only the design's own intent to report (see Handle above).
 export interface SlimHandle extends Identity {
+  visible?: false;
   minWidth?: number;
   maxWidth?: number;
   minHeight?: number;

@@ -149,7 +149,7 @@ test("execute projects registered reads in nested results and console lines exac
     type: "EXECUTE_CODE", id: "projection", __connKey: 1,
     preamble: `(host) => {
       const read = { id: "v", type: "VECTOR", d: "M0 0 L1 1" };
-      host.registerRead(read, () => ({ id: "v", type: "IMAGE-SVG", elided: [{ $elided: { id: "v", field: "d", chars: 10, read: 'flcm.get("v")' } }] }));
+      host.registerRead(read, () => ({ id: "v", type: "IMAGE-SVG", elided: { d: 10 } }));
       return { read };
     }`,
     code: `console.log({ nested: [flcm.read] }); return { nested: [flcm.read], computed: { id: "v", type: "VECTOR", d: "mine" } };`,
@@ -158,7 +158,7 @@ test("execute projects registered reads in nested results and console lines exac
   const reply = h.frames.find(frame => frame.id === "projection" && frame.type === "EXECUTE_CODE_RESULT") as any;
   assert.equal(reply.errors, null);
   assert.equal(reply.result.nested[0].type, "IMAGE-SVG");
-  assert.equal(reply.result.nested[0].elided.length, 1);
+  assert.equal(JSON.stringify(reply.result.nested[0].elided), '{"d":10}');
   assert.equal(reply.result.computed.d, "mine");
   assert.equal(reply.console[0].includes('"type":"IMAGE-SVG"'), true);
   assert.equal(reply.console[0].includes('"d":"M0'), false);

@@ -7,17 +7,7 @@
       "type": "TEXT",
       "text": "Alpha",
       "textStyle": "Heading / Large",
-      "fill": "fill_314185fc",
-      "elided": [
-        {
-          "$elided": {
-            "id": "7:1",
-            "field": "details",
-            "chars": 459,
-            "read": "flcm.get(\"7:1\")"
-          }
-        }
-      ]
+      "fill": "fill_314185fc"
     },
     {
       "id": "7:2",
@@ -25,33 +15,13 @@
       "type": "TEXT",
       "text": "Beta",
       "textStyle": "Heading / Large (161:300)",
-      "fill": "fill_314185fc",
-      "elided": [
-        {
-          "$elided": {
-            "id": "7:2",
-            "field": "details",
-            "chars": 460,
-            "read": "flcm.get(\"7:2\")"
-          }
-        }
-      ]
+      "fill": "fill_314185fc"
     },
     {
       "id": "7:3",
       "name": "Swatch",
       "type": "RECTANGLE",
-      "fill": "Brand / Orange",
-      "elided": [
-        {
-          "$elided": {
-            "id": "7:3",
-            "field": "details",
-            "chars": 291,
-            "read": "flcm.get(\"7:3\")"
-          }
-        }
-      ]
+      "fill": "Brand / Orange"
     }
   ],
   "components": {},
