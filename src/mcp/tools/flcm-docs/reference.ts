@@ -342,23 +342,23 @@ function quickStartVerbLines(): string {
 // verb signatures, the must-knows, the pointer to the reference tool. ----
 export function buildQuickStart(): string {
   const verbLines = quickStartVerbLines();
-  const quickStart = `Execute JavaScript in Figma. Prefer \`flcm\` to raw figma.*.
+  const quickStart = `Execute JavaScript in Figma with \`flcm\`.
 
-EXECUTION: use await and return directly. Each call has its own scope; return ids/keys and re-target with flcm.get.
+EXECUTION: await/return directly. Only session survives calls: plain-data snapshots, ids as pointers. session.last holds the full previous successful return. Same plugin run, including reconnects/pages; close/file switch clears it. Declarations and flcm are per-call.
 
-DESCRIBE a tree, then RENDER once:
+AUTHOR:
   const t = { type:"FRAME", layout:{ mode:"column", gap:16 }, children:[{ type:"TEXT", text:"Hi" }] };
-  const out = await flcm.render(t); // copied spec with ids; input stays reusable
+  session.screen = await flcm.render(t); // copied spec with ids
   // id means move + edit; no id means create, at every depth.
 
 VERBS — all on \`flcm.\`, nothing else is:
 ${verbLines}
 
 MUST-KNOW
-- Return ids/handles, NEVER live Figma nodes.
-- get/find predicates see full trees. Reads project at return/console: elided maps cuts to JSON character counts (null: unknown). Drill in: fresh flcm.get(node.id). Return a field to see it; never rerun edits. Computed data stays intact.
+- Store/return data, never live nodes or functions.
+- get/find predicates see full trees. Reads project at return/console: elided gives cut sizes in JSON characters. Survey session.last or fresh flcm.get(id); never rerun edits. Computed data stays whole.
 - Metrics take a number or "Npx"; width/height also take "N%", "fill", "hug". Colors/gradients/shadows are CSS strings.
-- Anything outside the documented CSS subset FAILS LOUD, never wrong pixels.
+- Unsupported CSS fails loud.
 
 FULL DOCS — get_flcm_reference(sections?): ${SECTION_IDS.join(", ")} (no arg = index + cheat-sheet).
 

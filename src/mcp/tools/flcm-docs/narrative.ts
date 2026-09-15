@@ -27,6 +27,34 @@ An id identifies a live node, at every depth. A spec with an id moves that node 
 
 Read-only fields with no authored equivalent fail by name. A root read back from get carries its real pixel size under designedWidth/designedHeight, and the verb uses those dimensions. Compressed style references, dash patterns, locked proportions and grid data are refused. VECTOR reads retain d or vectorPaths and can be authored directly. IMAGE-SVG is a wire projection; fetch a fresh runtime read to author its geometry. Errors identify the verb and a path such as spec.children[3].children[1].
 
+### Session across calls
+
+Agent code receives \`session\` alongside \`flcm\`. It is the same object throughout one plugin run, shared by approved callers. WebSocket reconnects and page switches keep it. Closing the plugin or switching files ends the run and clears it. Nothing is saved to clientStorage or the server.
+
+Each call has a fresh scope. Top-level declarations and that call's flcm instance do not survive. Save specs, constants, SVG markup and looked-up ids in session. Ids point to live nodes; all other values are snapshots. Re-read with flcm.get when canvas changes matter.
+
+\`\`\`js
+// Call 1
+const root = await flcm.render({ type: "FRAME" });
+session.root = root.id;
+const screen = { type: "FRAME", children: [
+  { type: "TEXT", text: "First" }, { type: "TEXT", text: "Second" }
+] };
+session.screen = await flcm.append(root, screen);
+return session.screen;
+\`\`\`
+
+\`\`\`js
+// Call 2
+session.screen.children.unshift(session.screen.children.pop());
+session.screen = await flcm.append(session.root, session.screen);
+return session.screen.children.map(n => n.id);
+\`\`\`
+
+Assignments copy plain objects and arrays from outside session, so changing the original object afterward does not change the stored snapshot. References already inside session stay shared, except last. Mutate stored data directly with ordinary properties and array operations. Strings, finite numbers, booleans, null and undefined are supported. Functions, flcm instances, live Figma nodes, accessors, symbols, class instances and cycles are rejected, including on nested writes. Property locking and prototype changes are rejected. Delete a property to release its data.
+
+After a successful call, session.last holds a detached snapshot of its full return value before wire projection. Returning session itself is supported. A call with no return sets it to undefined. Failed calls do not automatically replace last; valid session writes before the error remain, just as earlier canvas writes can remain. Return plain data so it can be stored. Stored copies are agent-owned snapshots and return whole; survey their fields or compute a summary to keep output small.
+
 ### Full reads and wire markers
 
 Inside a call, get returns the complete subtree, including hidden nodes, VECTOR geometry and inherited instance children. find predicates see that same full shape. Hidden nodes carry visible: false in full reads and slim handles. The children array keeps live sibling order. The readOnlySource record preserves decoded producer facts before CSS conversion: exact measurements, disabled paints/effects, paint stacks, resolved text runs, style identities, constraints, blend modes, clipping and component metadata. The ordinary fields remain the authoring vocabulary. Writing readOnlySource does not change the file; clone preserves live state the authoring vocabulary cannot express.
@@ -161,7 +189,7 @@ export const RENDER_KEYS = `\`await flcm.render(spec)\` places the spec on the c
 
 export const VERIFY_READBACK = `You cannot judge what you built from the code you wrote — hairlines, grain, glass, 1px strokes and missing glyphs all *look* fine in source. **Build → screenshot → look → fix.**
 
-\`get_screenshot\` is a separate **MCP tool**, not an \`flcm\` verb (there is no \`flcm.screenshot\`). Each \`figma_execute_code\` call runs in its own scope, so what crosses between calls is a **string you copy** out of the render result.
+\`get_screenshot\` is a separate **MCP tool**, not an \`flcm\` verb (there is no \`flcm.screenshot\`). Keep the render result in \`session\` for later code calls; pass its id string to the screenshot tool.
 
 \`\`\`js
 // call 1 — figma_execute_code
@@ -341,7 +369,7 @@ clone duplicates the live subtree faithfully and clears its keys. It returns { n
 
 get returns { node, components? }. Use its node as a spec. readOnlySource preserves decoded state beyond the authoring vocabulary; clone preserves live state a spec cannot author.`;
 
-export const COMPONENTS_CREATE = `\`await flcm.component(specOrTarget, options?)\` promotes a FRAME to a COMPONENT. A new spec is placed on the current page; a live root stays where it is and receives the named edits and children before promotion. The return is the spec copied with ids, with type COMPONENT and the new component id at the root. Figma preserves child identity during promotion.
+export const COMPONENTS_CREATE = `\`await flcm.component(specOrTarget, options?)\` promotes a FRAME to a COMPONENT. A new spec is placed on the current page; a live root stays where it is and receives the named edits and children before promotion. The return is the spec copied with ids, with type COMPONENT and the new component id at the root. Figma preserves child identity during promotion. Save the returned component in session; the replaced FRAME root id no longer resolves.
 
 Options are name, description and propertyDefinitions. Child componentPropertyReferences bind authored fields to those definitions.`;
 
