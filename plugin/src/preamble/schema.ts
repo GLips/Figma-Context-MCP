@@ -665,7 +665,7 @@ export type AuthoredTree = NodeSpec & { id: string; children?: AuthoredTree[] };
 // drift from them; the example files author against it and fail the build if a signature moves. ----
 export interface Flcm {
   detach(target: Target): Promise<Handle>;
-  // Promotion returns authored data with the promoted root id.
+  // Promotion returns authored data with type COMPONENT and the promoted root id.
   component(nodeOrTarget: NodeSpec | Target, options?: ComponentOptions): Promise<AuthoredTree>;
   // Fold standalone components into a COMPONENT_SET: each entry says which member of the set its
   // component IS, in the set's axes. The set lands where the first component sat, and the variant
@@ -762,7 +762,7 @@ export const VERBS: VerbDoc[] = [
   {"category": "structure", "signature": "await flcm.replace(target, spec)", "builds": "the spec copied with ids on every node", "args": "Place in the target position, then remove the target. New roots inherit omitted placement and size; explicit props win."},
   {"category": "structure", "signature": "await flcm.remove(target)", "builds": "{ removedId, from? }", "args": "Delete the node and subtree. from is the former parent handle, absent for pages."},
   {"category": "structure", "signature": "await flcm.clone(target, props?, parent?)", "builds": "{ node, to? }", "args": "Faithful live copy, with optional root edits and destination. Keys are cleared. Default destination is the original parent."},
-  {"category": "component", "signature": "await flcm.component(specOrTarget, options?)", "builds": "the spec copied with ids on every node", "args": "Promote a FRAME to a COMPONENT. A live root stays in place; a new root lands on the current page. The returned root id is the component id. options declares name, description and propertyDefinitions."},
+  {"category": "component", "signature": "await flcm.component(specOrTarget, options?)", "builds": "the spec copied with ids and root type COMPONENT", "args": "Promote a FRAME to a COMPONENT. A live root stays in place; a new root lands on the current page. The returned root id is the component id. options declares name, description and propertyDefinitions."},
   {"category": "component", "signature": "await flcm.variants(entries, options)", "builds": "a COMPONENT_SET handle", "args": "Each entry is { component: target, variant: { axis: value } }. options names the set."},
   {"category": "component", "signature": "await flcm.detach(target)", "builds": "a FRAME handle", "args": "Detach an instance. Root and descendant ids change."},
   {"category": "edit", "signature": "await flcm.edit(target, changes)", "builds": "an updated handle", "args": "Apply only the named props. Structure changes use placement verbs."},

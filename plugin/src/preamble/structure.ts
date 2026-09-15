@@ -7,11 +7,10 @@ import type { NodeSpec, AuthoredTree } from "./schema.js";
 // and infer the parent from it. There is no options bag and no index argument — an index is a
 // number an agent has to derive from a read it would otherwise not need.
 //
-// Each placement verb takes EITHER a compiled node or a live target, and DOM semantics decide
-// what that means: placing a compiled node builds it, placing an already-attached node MOVES it. The two
-// paths differ in what they must guarantee, not in where they land:
+// Each placement verb compiles a plain spec. Per node, id decides whether to move or create.
+// Both paths validate layout against the destination:
 //
-//   • a CONSTRUCTOR-BUILT node rides attachBuiltChild — the same attach-then-size entry the create walk uses, so an
+//   • a new node rides attachBuiltChild — the same attach-then-size entry the create walk uses, so an
 //     inserted subtree is settled exactly as a rendered one is (invariant 3: attach BEFORE sizing,
 //     because "fill"/"hug" are only legal once the node is inside the parent that resolves them).
 //   • a LIVE node re-consults the layout authority against its DESTINATION and then re-aims its

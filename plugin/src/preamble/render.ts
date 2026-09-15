@@ -113,7 +113,7 @@ export function gateTreeResources(tree: WriteNode, loaded: LoadedTreeResources, 
  */
 export function buildTreeOnPage(tree: WriteNode, ctx: RenderCtx): any {
   const live = ctx.live?.get(tree);
-  const root = live ? live.place(live.node.parent, () => {}, ctx) : buildNode(tree, ctx);
+  const root = live ? live.place(live.node.parent!, () => {}, ctx) : buildNode(tree, ctx);
   // The root's own position words (absolute x/y, pin, anchor) apply against the page — the walk
   // above only positions CHILDREN, and edit applies the same words to a page child.
   if (!live && tree.layout) placeRootOnPage(root, tree.layout, ctx);

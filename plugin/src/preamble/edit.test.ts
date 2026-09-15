@@ -19,9 +19,13 @@ beforeEach(() => {
 });
 
 async function renderKeyedRowFrame() {
-  const out = await render(
-    ({ type: "FRAME", key: "card", fill: "#0000ff", layout: { mode: "row", gap: 16, padding: 8 }, children: [({ type: "RECTANGLE", key: "box", width: 40, height: 40 })] }),
-  );
+  const out = await render({
+    type: "FRAME",
+    key: "card",
+    fill: "#0000ff",
+    layout: { mode: "row", gap: 16, padding: 8 },
+    children: [{ type: "RECTANGLE", key: "box", width: 40, height: 40 }],
+  });
   return figma.getNodeByIdAsync(specNode(out, "card").id);
 }
 
@@ -55,7 +59,10 @@ test("vocabulary rejections happen before any write: unknown prop, key, bare x/y
   await assert.rejects(edit("card", {}), /empty/);
   // A mistyped scalar rejects the WHOLE delta — the valid fill beside it must not land as a
   // partial write (QuickJS has no type checking, so this is the runtime's only line of defense).
-  await assert.rejects(edit("card", { fill: "#ff0000", opacity: "bad" } as never), /`opacity` must be a number/);
+  await assert.rejects(
+    edit("card", { fill: "#ff0000", opacity: "bad" } as never),
+    /`opacity` must be a number/,
+  );
   // Named words whose values are all null/undefined compile to nothing — same hazard as {}.
   await assert.rejects(edit("card", { fill: undefined }), /compiled to nothing/);
   // All rejected before the entry seal: no undo activity, node untouched.
@@ -64,7 +71,12 @@ test("vocabulary rejections happen before any write: unknown prop, key, bare x/y
 });
 
 test("legality is per node type: a LINE takes no fill, exactly as LINE does", async () => {
-  const out = await render(({ type: "FRAME", width: 100, height: 100, children: [({ type: "LINE", key: "rule", width: 80 })] }));
+  const out = await render({
+    type: "FRAME",
+    width: 100,
+    height: 100,
+    children: [{ type: "LINE", key: "rule", width: 80 }],
+  });
   await assert.rejects(edit("rule", { fill: "#ff0000" }), /`fill` is not a LINE word/);
   const node = await figma.getNodeByIdAsync(specNode(out, "rule").id);
   await edit("rule", { stroke: "#ff0000" });
@@ -110,11 +122,22 @@ test("an image fill in a delta fetches bytes through the host channel and stamps
 });
 
 test('"none" is the removal word: fill/stroke/effects clear with a real write, not a skip', async () => {
-  const out = await render(
-    ({ type: "FRAME", width: 100, height: 100, children: [
-      ({ type: "RECTANGLE", key: "box", width: 40, height: 40, fill: "#0000ff", stroke: "#000000", effects: { shadow: { blur: 4 } } }),
-    ] }),
-  );
+  const out = await render({
+    type: "FRAME",
+    width: 100,
+    height: 100,
+    children: [
+      {
+        type: "RECTANGLE",
+        key: "box",
+        width: 40,
+        height: 40,
+        fill: "#0000ff",
+        stroke: "#000000",
+        effects: { shadow: { blur: 4 } },
+      },
+    ],
+  });
   const node = await figma.getNodeByIdAsync(specNode(out, "box").id);
   assert.equal(node.fills.length, 1);
   assert.equal(node.effects.length, 1);
@@ -143,13 +166,18 @@ test('clearing an image fill with "none" wipes the flcm/image provenance too', a
   assert.equal(node.getPluginData("flcm/image"), "");
 });
 
-test('fill→fixed/hug is a real inverse: the flow marks fill installed are cleared, not shadowed', async () => {
-  const out = await render(
-    ({ type: "FRAME", key: "row", width: 300, height: 100, layout: { mode: "row" }, children: [
-      ({ type: "RECTANGLE", key: "grow", width: "fill", height: 40 }),
-      ({ type: "RECTANGLE", key: "tall", width: 40, height: "fill" }),
-    ] }),
-  );
+test("fill→fixed/hug is a real inverse: the flow marks fill installed are cleared, not shadowed", async () => {
+  const out = await render({
+    type: "FRAME",
+    key: "row",
+    width: 300,
+    height: 100,
+    layout: { mode: "row" },
+    children: [
+      { type: "RECTANGLE", key: "grow", width: "fill", height: 40 },
+      { type: "RECTANGLE", key: "tall", width: 40, height: "fill" },
+    ],
+  });
   const grow = await figma.getNodeByIdAsync(specNode(out, "grow").id);
   const tall = await figma.getNodeByIdAsync(specNode(out, "tall").id);
   assert.equal(grow.layoutGrow, 1);
@@ -162,11 +190,14 @@ test('fill→fixed/hug is a real inverse: the flow marks fill installed are clea
 });
 
 test('position:"none" returns an absolute child to flow; pin deltas preserve the unnamed axis', async () => {
-  const out = await render(
-    ({ type: "FRAME", key: "host", width: 200, height: 200, layout: { mode: "row" }, children: [
-      ({ type: "RECTANGLE", key: "badge", width: 20, height: 20, left: 10, top: 10 }),
-    ] }),
-  );
+  const out = await render({
+    type: "FRAME",
+    key: "host",
+    width: 200,
+    height: 200,
+    layout: { mode: "row" },
+    children: [{ type: "RECTANGLE", key: "badge", width: 20, height: 20, left: 10, top: 10 }],
+  });
   const badge = await figma.getNodeByIdAsync(specNode(out, "badge").id);
   assert.equal(badge.layoutPositioning, "ABSOLUTE");
   await edit("badge", { pin: { x: "right" } });
@@ -181,26 +212,40 @@ test('position:"none" returns an absolute child to flow; pin deltas preserve the
 });
 
 test("a percent size resolves immediately against the live parent; the hug cycle rejects with zero writes", async () => {
-  const out = await render(
-    ({ type: "FRAME", key: "fixed", width: 200, height: 100, children: [({ type: "RECTANGLE", key: "half", width: 40, height: 40 })] }),
-  );
+  const out = await render({
+    type: "FRAME",
+    key: "fixed",
+    width: 200,
+    height: 100,
+    children: [{ type: "RECTANGLE", key: "half", width: 40, height: 40 }],
+  });
   const half = await figma.getNodeByIdAsync(specNode(out, "half").id);
   await edit("half", { width: "50%" });
   assert.equal(half.width, 100);
   // The one percent a runtime read can't break: in-flow % child of a hugging auto parent.
-  const hug = await render(({ type: "FRAME", key: "hugrow", layout: { mode: "row" }, children: [({ type: "RECTANGLE", key: "kid", width: 40, height: 40 })] }));
+  const hug = await render({
+    type: "FRAME",
+    key: "hugrow",
+    layout: { mode: "row" },
+    children: [{ type: "RECTANGLE", key: "kid", width: 40, height: 40 }],
+  });
   const kid = await figma.getNodeByIdAsync(specNode(hug, "kid").id);
   await assert.rejects(edit("kid", { width: "25%" }), /cycle/);
   assert.equal(kid.width, 40);
 });
 
 test('container ripples: alignItems:"stretch" walks the live children, a non-stretch write clears, a direction flip clears stranded marks', async () => {
-  const out = await render(
-    ({ type: "FRAME", key: "row", width: 300, height: 120, layout: { mode: "row" }, children: [
-      ({ type: "RECTANGLE", key: "a", width: 40, height: 40 }),
-      ({ type: "RECTANGLE", key: "b", width: 40, height: 40 }),
-    ] }),
-  );
+  const out = await render({
+    type: "FRAME",
+    key: "row",
+    width: 300,
+    height: 120,
+    layout: { mode: "row" },
+    children: [
+      { type: "RECTANGLE", key: "a", width: 40, height: 40 },
+      { type: "RECTANGLE", key: "b", width: 40, height: 40 },
+    ],
+  });
   const row = await figma.getNodeByIdAsync(specNode(out, "row").id);
   const a = await figma.getNodeByIdAsync(specNode(out, "a").id);
   await edit("row", { layout: { alignItems: "stretch" } });
@@ -220,11 +265,14 @@ test('container ripples: alignItems:"stretch" walks the live children, a non-str
 });
 
 test("left/top are presence-preserving per axis: `left` alone moves x and leaves the live y alone", async () => {
-  const out = await render(
-    ({ type: "FRAME", key: "host", width: 200, height: 200, layout: { mode: "row" }, children: [
-      ({ type: "RECTANGLE", key: "badge", width: 20, height: 20, left: 10, top: 10 }),
-    ] }),
-  );
+  const out = await render({
+    type: "FRAME",
+    key: "host",
+    width: 200,
+    height: 200,
+    layout: { mode: "row" },
+    children: [{ type: "RECTANGLE", key: "badge", width: 20, height: 20, left: 10, top: 10 }],
+  });
   const badge = await figma.getNodeByIdAsync(specNode(out, "badge").id);
   await edit("badge", { left: 50 });
   assert.equal(badge.x, 50);
@@ -232,12 +280,15 @@ test("left/top are presence-preserving per axis: `left` alone moves x and leaves
 });
 
 test("a percent on an ALREADY-absolute child of a hugging parent is legal — out of flow, no cycle", async () => {
-  const out = await render(
-    ({ type: "FRAME", key: "hugrow", layout: { mode: "row" }, children: [
-      ({ type: "RECTANGLE", key: "kid", width: 40, height: 40 }),
-      ({ type: "RECTANGLE", key: "badge", width: 20, height: 20, left: 0, top: 0 }),
-    ] }),
-  );
+  const out = await render({
+    type: "FRAME",
+    key: "hugrow",
+    layout: { mode: "row" },
+    children: [
+      { type: "RECTANGLE", key: "kid", width: 40, height: 40 },
+      { type: "RECTANGLE", key: "badge", width: 20, height: 20, left: 0, top: 0 },
+    ],
+  });
   const row = await figma.getNodeByIdAsync(specNode(out, "hugrow").id);
   const badge = await figma.getNodeByIdAsync(specNode(out, "badge").id);
   // The delta names no `left`/`top` — the guard must thread the LIVE positioning, not assume in-flow.
@@ -246,18 +297,22 @@ test("a percent on an ALREADY-absolute child of a hugging parent is legal — ou
 });
 
 test("parent-relative words against a PAGE parent reject loud: a page has no bounded size", async () => {
-  await render(({ type: "FRAME", key: "top", width: 200, height: 100 }));
+  await render({ type: "FRAME", key: "top", width: 200, height: 100 });
   await assert.rejects(edit("top", { width: "50%" }), /page has no bounded size/);
   await assert.rejects(edit("top", { width: "fill" }), /page has no bounded size/);
 });
 
 test('"hug" on a node with nothing to measure rejects; naming mode in the same delta legalizes it', async () => {
-  const out = await render(
-    ({ type: "FRAME", key: "wrap", width: 200, height: 200, children: [
-      ({ type: "RECTANGLE", key: "box", width: 40, height: 40 }),
-      ({ type: "FRAME", key: "inner", width: 100, height: 100 }),
-    ] }),
-  );
+  const out = await render({
+    type: "FRAME",
+    key: "wrap",
+    width: 200,
+    height: 200,
+    children: [
+      { type: "RECTANGLE", key: "box", width: 40, height: 40 },
+      { type: "FRAME", key: "inner", width: 100, height: 100 },
+    ],
+  });
   await assert.rejects(edit("box", { width: "hug" }), /"hug" sizes to content/);
   await assert.rejects(edit("inner", { width: "hug" }), /"hug" sizes to content/);
   const inner = await figma.getNodeByIdAsync(specNode(out, "inner").id);
@@ -267,11 +322,14 @@ test('"hug" on a node with nothing to measure rejects; naming mode in the same d
 });
 
 test("a direction change clears BOTH flow marks — layoutGrow too, and NONE→row does not resurrect them", async () => {
-  const out = await render(
-    ({ type: "FRAME", key: "row", width: 300, height: 100, layout: { mode: "row" }, children: [
-      ({ type: "RECTANGLE", key: "grow", width: "fill", height: 40 }),
-    ] }),
-  );
+  const out = await render({
+    type: "FRAME",
+    key: "row",
+    width: 300,
+    height: 100,
+    layout: { mode: "row" },
+    children: [{ type: "RECTANGLE", key: "grow", width: "fill", height: 40 }],
+  });
   const grow = await figma.getNodeByIdAsync(specNode(out, "grow").id);
   assert.equal(grow.layoutGrow, 1);
   await edit("row", { layout: { mode: "column" } });
@@ -289,13 +347,29 @@ test("a direction change clears BOTH flow marks — layoutGrow too, and NONE→r
 });
 
 test("a LINE's `width` is a fixed size: a sizing intent or a mistyped value names the line rule", async () => {
-  await render(({ type: "FRAME", width: 100, height: 100, children: [({ type: "LINE", key: "rule", width: 80 })] }));
-  await assert.rejects(edit("rule", { width: "fill" }), /a LINE's width is its length, a fixed size/);
-  await assert.rejects(edit("rule", { width: "80" } as never), /`width` on a LINE must be a number/);
+  await render({
+    type: "FRAME",
+    width: 100,
+    height: 100,
+    children: [{ type: "LINE", key: "rule", width: 80 }],
+  });
+  await assert.rejects(
+    edit("rule", { width: "fill" }),
+    /a LINE's width is its length, a fixed size/,
+  );
+  await assert.rejects(
+    edit("rule", { width: "80" } as never),
+    /`width` on a LINE must be a number/,
+  );
 });
 
 test("a TEXT size delta preloads the node's font before the mutating span", async () => {
-  const out = await render(({ type: "FRAME", width: 300, height: 100, children: [({ type: "TEXT", text: "hello", key: "label" })] }));
+  const out = await render({
+    type: "FRAME",
+    width: 300,
+    height: 100,
+    children: [{ type: "TEXT", text: "hello", key: "label" }],
+  });
   const label = await figma.getNodeByIdAsync(specNode(out, "label").id);
   figma.fontLoads.length = 0;
   await edit("label", { width: 120 });
@@ -311,13 +385,23 @@ test("a TEXT size delta preloads the node's font before the mutating span", asyn
 test("a percent resolves against a hug-mode parent whose axis is realized from above (FILL) — no false cycle", async () => {
   // The inner row's height is hug-MODE (counterAxisSizingMode AUTO) but effectively FILL: its own
   // parent stretches it. The guard must read the EFFECTIVE sizing, not the internal axis mode.
-  const out = await render(
-    ({ type: "FRAME", key: "outer", width: 300, height: 200, layout: { mode: "row" }, children: [
-      ({ type: "FRAME", key: "inner", width: 100, height: "fill", layout: { mode: "row" }, children: [
-        ({ type: "RECTANGLE", key: "kid", width: 40, height: 40 }),
-      ] }),
-    ] }),
-  );
+  const out = await render({
+    type: "FRAME",
+    key: "outer",
+    width: 300,
+    height: 200,
+    layout: { mode: "row" },
+    children: [
+      {
+        type: "FRAME",
+        key: "inner",
+        width: 100,
+        height: "fill",
+        layout: { mode: "row" },
+        children: [{ type: "RECTANGLE", key: "kid", width: 40, height: 40 }],
+      },
+    ],
+  });
   const inner = await figma.getNodeByIdAsync(specNode(out, "inner").id);
   const kid = await figma.getNodeByIdAsync(specNode(out, "kid").id);
   await edit("kid", { height: "50%" });
@@ -325,27 +409,38 @@ test("a percent resolves against a hug-mode parent whose axis is realized from a
 });
 
 test("an anchored absolute edit is idempotent, and an anchor axis without its coordinate rejects", async () => {
-  const out = await render(
-    ({ type: "FRAME", key: "host", width: 200, height: 200, layout: { mode: "row" }, children: [
-      ({ type: "RECTANGLE", key: "badge", width: 20, height: 20, left: 10, top: 10 }),
-    ] }),
-  );
+  const out = await render({
+    type: "FRAME",
+    key: "host",
+    width: 200,
+    height: 200,
+    layout: { mode: "row" },
+    children: [{ type: "RECTANGLE", key: "badge", width: 20, height: 20, left: 10, top: 10 }],
+  });
   const badge = await figma.getNodeByIdAsync(specNode(out, "badge").id);
   await edit("badge", { left: 100, anchor: { x: "center" } });
   assert.equal(badge.x, 90);
   await edit("badge", { left: 100, anchor: { x: "center" } });
   assert.equal(badge.x, 90); // re-apply converges — no drift off the live coordinate
   assert.equal(badge.y, 10); // the unnamed axis never moved
-  await assert.rejects(edit("badge", { anchor: { x: "center" } } as never), /name `left` alongside/);
+  await assert.rejects(
+    edit("badge", { anchor: { x: "center" } } as never),
+    /name `left` alongside/,
+  );
 });
 
 test("un-filling while going absolute clears the mark; a direction flip clears marks parked on absolute children", async () => {
-  const out = await render(
-    ({ type: "FRAME", key: "row", width: 300, height: 100, layout: { mode: "row" }, children: [
-      ({ type: "RECTANGLE", key: "grow", width: "fill", height: 40 }),
-      ({ type: "RECTANGLE", key: "tall", width: 40, height: 40 }),
-    ] }),
-  );
+  const out = await render({
+    type: "FRAME",
+    key: "row",
+    width: 300,
+    height: 100,
+    layout: { mode: "row" },
+    children: [
+      { type: "RECTANGLE", key: "grow", width: "fill", height: 40 },
+      { type: "RECTANGLE", key: "tall", width: 40, height: 40 },
+    ],
+  });
   const grow = await figma.getNodeByIdAsync(specNode(out, "grow").id);
   assert.equal(grow.layoutGrow, 1);
   // The delta both lifts the node out of flow AND replaces the filled width — the mark must not
@@ -366,7 +461,12 @@ test("un-filling while going absolute clears the mark; a direction flip clears m
 });
 
 test("a TEXT's height takes no number: fixed rejects loud; width still lands", async () => {
-  const out = await render(({ type: "FRAME", width: 300, height: 100, children: [({ type: "TEXT", text: "hello", key: "label" })] }));
+  const out = await render({
+    type: "FRAME",
+    width: 300,
+    height: 100,
+    children: [{ type: "TEXT", text: "hello", key: "label" }],
+  });
   await assert.rejects(edit("label", { height: 80 }), /height follows its content/);
   const label = await figma.getNodeByIdAsync(specNode(out, "label").id);
   await edit("label", { width: 120 });
@@ -374,9 +474,13 @@ test("a TEXT's height takes no number: fixed rejects loud; width still lands", a
 });
 
 test('height: "hug" on a TEXT is the un-fill: it lifts a flow fill and the height follows the content again', async () => {
-  const out = await render(
-    ({ type: "FRAME", width: 300, height: 100, layout: { mode: "row" }, children: [({ type: "TEXT", text: "hello", key: "label", height: "fill" })] }),
-  );
+  const out = await render({
+    type: "FRAME",
+    width: 300,
+    height: 100,
+    layout: { mode: "row" },
+    children: [{ type: "TEXT", text: "hello", key: "label", height: "fill" }],
+  });
   const label = await figma.getNodeByIdAsync(specNode(out, "label").id);
   assert.equal(label.layoutAlign, "STRETCH");
   label.textAutoResize = "NONE"; // what Figma does to a vertically filled text
@@ -389,26 +493,55 @@ test('height: "hug" on a TEXT is the un-fill: it lifts a flow fill and the heigh
 });
 
 test("edit validates boldWeight through the same content compile as create", async () => {
-  await render(({ type: "FRAME", width: 300, height: 100, children: [({ type: "TEXT", text: "hello", key: "label" })] }));
-  await assert.rejects(edit("label", { text: "**hi**", boldWeight: { weight: 700 } }), /boldWeight must be a number/);
+  await render({
+    type: "FRAME",
+    width: 300,
+    height: 100,
+    children: [{ type: "TEXT", text: "hello", key: "label" }],
+  });
+  await assert.rejects(
+    edit("label", { text: "**hi**", boldWeight: { weight: 700 } }),
+    /boldWeight must be a number/,
+  );
 });
 
 test("a present-but-malformed structured value rejects the WHOLE delta — no partial apply", async () => {
   const node = await renderKeyedRowFrame();
-  await assert.rejects(edit("card", { fill: "#ff0000", position: false } as never), /position must be "absolute" or "none"/);
-  await assert.rejects(edit("card", { fill: "#ff0000", layout: false } as never), /flcm\.edit\.layout must be an object/);
-  await assert.rejects(edit("card", { fill: "#ff0000", layout: { padding: [] } } as never), /pad must be a number, a CSS box shorthand/);
-  await assert.rejects(edit("card", { fill: "#ff0000", pin: [] } as never), /pin must be an object/);
+  await assert.rejects(
+    edit("card", { fill: "#ff0000", position: false } as never),
+    /position must be "absolute" or "none"/,
+  );
+  await assert.rejects(
+    edit("card", { fill: "#ff0000", layout: false } as never),
+    /flcm\.edit\.layout must be an object/,
+  );
+  await assert.rejects(
+    edit("card", { fill: "#ff0000", layout: { padding: [] } } as never),
+    /pad must be a number, a CSS box shorthand/,
+  );
+  await assert.rejects(
+    edit("card", { fill: "#ff0000", pin: [] } as never),
+    /pin must be an object/,
+  );
   assert.deepEqual(node.fills[0].color, { r: 0, g: 0, b: 1 }); // the valid fill beside them never landed
 });
 
 test("container words on a frame that isn't (or won't be) row/column reject; naming mode legalizes", async () => {
-  const out = await render(({ type: "FRAME", key: "wrap", width: 200, height: 200, children: [({ type: "FRAME", key: "free", width: 100, height: 100 })] }));
+  const out = await render({
+    type: "FRAME",
+    key: "wrap",
+    width: 200,
+    height: 200,
+    children: [{ type: "FRAME", key: "free", width: 100, height: 100 }],
+  });
   const free = await figma.getNodeByIdAsync(specNode(out, "free").id);
   await assert.rejects(edit("free", { layout: { gap: 24 } }), /need an auto-layout/);
   // Killing auto-layout and spacing it in the same breath is a contradiction — reject that too.
   const row = await renderKeyedRowFrame();
-  await assert.rejects(edit("card", { layout: { mode: "none", gap: 24 } }), /leaves this frame free-form/);
+  await assert.rejects(
+    edit("card", { layout: { mode: "none", gap: 24 } }),
+    /leaves this frame free-form/,
+  );
   assert.equal(row.layoutMode, "HORIZONTAL");
   await edit("free", { layout: { mode: "row", gap: 24 } });
   assert.equal(free.layoutMode, "HORIZONTAL");
@@ -416,12 +549,15 @@ test("container words on a frame that isn't (or won't be) row/column reject; nam
 });
 
 test('LINE({ stroke: "none" }) constructs the explicit no-stroke — the same word edit speaks', async () => {
-  const out = await render(
-    ({ type: "FRAME", width: 100, height: 100, children: [
-      ({ type: "LINE", key: "bare", width: 80, stroke: "none" }),
-      ({ type: "LINE", key: "plain", width: 80 }),
-    ] }),
-  );
+  const out = await render({
+    type: "FRAME",
+    width: 100,
+    height: 100,
+    children: [
+      { type: "LINE", key: "bare", width: 80, stroke: "none" },
+      { type: "LINE", key: "plain", width: 80 },
+    ],
+  });
   const bare = await figma.getNodeByIdAsync(specNode(out, "bare").id);
   assert.deepEqual(bare.strokes, []); // the clear is written over createLine's default black
   const plain = await figma.getNodeByIdAsync(specNode(out, "plain").id);
@@ -429,11 +565,14 @@ test('LINE({ stroke: "none" }) constructs the explicit no-stroke — the same wo
 });
 
 test("re-sizing an axis whose fill mark sits parked on an ABSOLUTE child still un-fills it", async () => {
-  const out = await render(
-    ({ type: "FRAME", key: "row", width: 300, height: 100, layout: { mode: "row" }, children: [
-      ({ type: "RECTANGLE", key: "grow", width: "fill", height: 40 }),
-    ] }),
-  );
+  const out = await render({
+    type: "FRAME",
+    key: "row",
+    width: 300,
+    height: 100,
+    layout: { mode: "row" },
+    children: [{ type: "RECTANGLE", key: "grow", width: "fill", height: 40 }],
+  });
   const grow = await figma.getNodeByIdAsync(specNode(out, "grow").id);
   await edit("grow", { left: 0, top: 0 });
   assert.equal(grow.layoutGrow, 1); // parked
@@ -448,20 +587,32 @@ test("re-sizing an axis whose fill mark sits parked on an ABSOLUTE child still u
 });
 
 test('TEXT height:"fill" needs a flow to fill: free-form parent and absolute text reject', async () => {
-  const out = await render(
-    ({ type: "FRAME", key: "free", width: 200, height: 200, children: [({ type: "TEXT", text: "a", key: "t1" })] }),
-  );
+  const out = await render({
+    type: "FRAME",
+    key: "free",
+    width: 200,
+    height: 200,
+    children: [{ type: "TEXT", text: "a", key: "t1" }],
+  });
   await assert.rejects(edit("t1", { height: "fill" }), /fill its height as an in-flow child/);
-  await render(
-    ({ type: "FRAME", key: "row", width: 200, height: 200, layout: { mode: "row" }, children: [
-      ({ type: "TEXT", text: "b", key: "t2", left: 0, top: 0 }),
-    ] }),
-  );
+  await render({
+    type: "FRAME",
+    key: "row",
+    width: 200,
+    height: 200,
+    layout: { mode: "row" },
+    children: [{ type: "TEXT", text: "b", key: "t2", left: 0, top: 0 }],
+  });
   await assert.rejects(edit("t2", { height: "fill" }), /fill its height as an in-flow child/);
   // In flow under a row it's legal — the parent realizes it via STRETCH.
-  const inRow = await render(
-    ({ type: "FRAME", key: "row2", width: 200, height: 200, layout: { mode: "row" }, children: [({ type: "TEXT", text: "c", key: "t3" })] }),
-  );
+  const inRow = await render({
+    type: "FRAME",
+    key: "row2",
+    width: 200,
+    height: 200,
+    layout: { mode: "row" },
+    children: [{ type: "TEXT", text: "c", key: "t3" }],
+  });
   const t3 = await figma.getNodeByIdAsync(specNode(inRow, "t3").id);
   await edit("t3", { height: "fill" });
   assert.equal(t3.layoutAlign, "STRETCH");
@@ -470,14 +621,22 @@ test('TEXT height:"fill" needs a flow to fill: free-form parent and absolute tex
 
 test("an unknown padding key rejects the whole delta instead of compiling to zero padding", async () => {
   const node = await renderKeyedRowFrame();
-  await assert.rejects(edit("card", { fill: "#ff0000", layout: { padding: { wat: 12 } } } as never), /unknown prop "wat" on pad/);
+  await assert.rejects(
+    edit("card", { fill: "#ff0000", layout: { padding: { wat: 12 } } } as never),
+    /unknown prop "wat" on pad/,
+  );
   assert.deepEqual(node.fills[0].color, { r: 0, g: 0, b: 1 });
 });
 
 test("a length edit takes over from a UI-authored fill: the grow mark clears and the length governs", async () => {
-  const out = await render(
-    ({ type: "FRAME", key: "row", width: 300, height: 100, layout: { mode: "row" }, children: [({ type: "LINE", key: "rule", width: 100 })] }),
-  );
+  const out = await render({
+    type: "FRAME",
+    key: "row",
+    width: 300,
+    height: 100,
+    layout: { mode: "row" },
+    children: [{ type: "LINE", key: "rule", width: 100 }],
+  });
   const rule = await figma.getNodeByIdAsync(specNode(out, "rule").id);
   rule.layoutGrow = 1; // flcm can't author this on a line — a human did, in the Figma UI
   await edit("rule", { width: 80 });
@@ -486,11 +645,14 @@ test("a length edit takes over from a UI-authored fill: the grow mark clears and
 });
 
 test("un-stretching the container reaches a mark parked on an ABSOLUTE child too", async () => {
-  const out = await render(
-    ({ type: "FRAME", key: "row", width: 300, height: 120, layout: { mode: "row", alignItems: "stretch" }, children: [
-      ({ type: "RECTANGLE", key: "a", width: 40 }),
-    ] }),
-  );
+  const out = await render({
+    type: "FRAME",
+    key: "row",
+    width: 300,
+    height: 120,
+    layout: { mode: "row", alignItems: "stretch" },
+    children: [{ type: "RECTANGLE", key: "a", width: 40 }],
+  });
   const a = await figma.getNodeByIdAsync(specNode(out, "a").id);
   assert.equal(a.layoutAlign, "STRETCH");
   await edit("a", { left: 0, top: 0 });
@@ -500,9 +662,13 @@ test("un-stretching the container reaches a mark parked on an ABSOLUTE child too
 });
 
 test("parent-relative words under a live GRID parent reject; node-local fixed px still lands", async () => {
-  const out = await render(
-    ({ type: "FRAME", key: "grid", width: 300, height: 300, children: [({ type: "RECTANGLE", key: "cell", width: 40, height: 40 })] }),
-  );
+  const out = await render({
+    type: "FRAME",
+    key: "grid",
+    width: 300,
+    height: 300,
+    children: [{ type: "RECTANGLE", key: "cell", width: 40, height: 40 }],
+  });
   const grid = await figma.getNodeByIdAsync(specNode(out, "grid").id);
   grid.layoutMode = "GRID"; // not authorable through flcm — a live document fact
   const cell = await figma.getNodeByIdAsync(specNode(out, "cell").id);
@@ -531,8 +697,16 @@ test("a Figma refusal mid-apply rolls back and the error is a pointer: identity 
 
 // ——— the TEXT words (text / textStyle / fill / boldWeight) ———
 
-async function renderKeyedText(content: Parameters<typeof text>[0] = "hello", props: Parameters<typeof text>[1] = {}) {
-  const out = await render(({ type: "FRAME", width: 300, height: 100, children: [({ type: "TEXT", text: content, key: "label", ...props })] }));
+async function renderKeyedText(
+  content: Parameters<typeof text>[0] = "hello",
+  props: Parameters<typeof text>[1] = {},
+) {
+  const out = await render({
+    type: "FRAME",
+    width: 300,
+    height: 100,
+    children: [{ type: "TEXT", text: content, key: "label", ...props }],
+  });
   return figma.getNodeByIdAsync(specNode(out, "label").id);
 }
 
@@ -564,7 +738,9 @@ test("a weight-only delta enriches the rest of the triple from the LIVE font —
 });
 
 test("enrichment decodes a COMBINED live label: a family-anchor on Bold Italic keeps both axes", async () => {
-  const node = await renderKeyedText("hello", { textStyle: { fontWeight: 700, fontStyle: "italic" } });
+  const node = await renderKeyedText("hello", {
+    textStyle: { fontWeight: 700, fontStyle: "italic" },
+  });
   assert.deepEqual(node.fontName, { family: "Inter", style: "Bold Italic" });
   await edit("label", { textStyle: { fontFamily: "Inter" } });
   // "Bold Italic" carries weight AND slant in one label — a naive weight lookup on the whole
@@ -574,7 +750,10 @@ test("enrichment decodes a COMBINED live label: a family-anchor on Bold Italic k
 
 test("a malformed fontWeight rejects the whole delta instead of silently resetting to regular", async () => {
   const node = await renderKeyedText("hello", { textStyle: { fontWeight: 700 } });
-  await assert.rejects(edit("label", { textStyle: { fontWeight: true } } as never), /fontWeight must be a number/);
+  await assert.rejects(
+    edit("label", { textStyle: { fontWeight: true } } as never),
+    /fontWeight must be a number/,
+  );
   assert.deepEqual(node.fontName, { family: "Inter", style: "Bold" }); // wantWeight never saw the boolean
 });
 
@@ -591,7 +770,9 @@ test("`content` markdown compiles runs over the live base family, per-range font
   const node = await renderKeyedText("hello");
   await edit("label", { text: "plain **bold**" });
   assert.equal(node.characters, "plain bold");
-  assert.deepEqual(node._rangeFonts, [{ start: 6, end: 10, value: { family: "Inter", style: "Bold" } }]);
+  assert.deepEqual(node._rangeFonts, [
+    { start: 6, end: 10, value: { family: "Inter", style: "Bold" } },
+  ]);
   assert.equal(node.fontName, figma.mixed); // the edit's own runs made it mixed — live-faithful
 });
 
@@ -637,7 +818,7 @@ test("`fill` is the TEXT's paint like every other node's; \"none\" clears it", a
   assert.deepEqual(node.fills, []);
 });
 
-test("lineClamp needs a bounded width: hug rejects, a width in the same edit legalizes, \"none\" removes", async () => {
+test('lineClamp needs a bounded width: hug rejects, a width in the same edit legalizes, "none" removes', async () => {
   const node = await renderKeyedText("a long line of words that would wrap");
   await assert.rejects(edit("label", { textStyle: { lineClamp: 2 } }), /bounded width/);
   await assert.rejects(edit("label", { textStyle: { lineClamp: 0 }, width: 120 }), /whole number/);
@@ -661,7 +842,9 @@ test("a Figma refusal on an instance child names the instance — and never auto
   figma.currentPage.appendChild(inst);
   const child = inst.children[0];
   Object.defineProperty(child, "fills", {
-    set() { throw new Error("in set_fills: this property cannot be overridden on an instance sublayer"); },
+    set() {
+      throw new Error("in set_fills: this property cannot be overridden on an instance sublayer");
+    },
   });
   await assert.rejects(edit(id(child.id), { fill: "#ff0000" }), (err: Error) => {
     assert.match(err.message, /lives inside instance "Card"/);
@@ -672,15 +855,24 @@ test("a Figma refusal on an instance child names the instance — and never auto
 
 test("a present-but-malformed textStyle rejects the WHOLE delta — the fill beside it never lands", async () => {
   const node = await renderKeyedText("hello");
-  await assert.rejects(edit("label", { fill: "#ff0000", textStyle: false } as never), /must be an object/);
+  await assert.rejects(
+    edit("label", { fill: "#ff0000", textStyle: false } as never),
+    /must be an object/,
+  );
   await assert.rejects(edit("label", { textStyle: { wat: 1 } } as never), /unknown prop "wat"/);
   assert.equal(node.fills[0].color.r, 0); // created black — the rejected recolor never landed
 });
 
 test('TEXT({ fill: "none" }) constructs the explicit no-fill — the same word edit speaks', async () => {
-  const out = await render(
-    ({ type: "FRAME", width: 100, height: 100, children: [({ type: "TEXT", text: "ghost", key: "ghost", fill: "none" }), ({ type: "TEXT", text: "plain", key: "plain" })] }),
-  );
+  const out = await render({
+    type: "FRAME",
+    width: 100,
+    height: 100,
+    children: [
+      { type: "TEXT", text: "ghost", key: "ghost", fill: "none" },
+      { type: "TEXT", text: "plain", key: "plain" },
+    ],
+  });
   const ghost = await figma.getNodeByIdAsync(specNode(out, "ghost").id);
   assert.deepEqual(ghost.fills, []); // the clear is written over createText's default black
   const plain = await figma.getNodeByIdAsync(specNode(out, "plain").id);
@@ -701,7 +893,11 @@ test("`boldWeight` alone re-emphasizes nothing, so it rejects naming `text`; bes
   assert.equal(node.characters, "hello"); // refused whole — nothing landed
   await edit("label", { text: "hello **world**", boldWeight: 600 });
   assert.equal(node.characters, "hello world");
-  assert.deepEqual(node._rangeFonts.at(-1), { start: 6, end: 11, value: { family: "Inter", style: "Semi Bold" } });
+  assert.deepEqual(node._rangeFonts.at(-1), {
+    start: 6,
+    end: 11,
+    value: { family: "Inter", style: "Semi Bold" },
+  });
 });
 
 test('a run\'s color: "none" compiles to a real transparent range write, not a reject or a skip', async () => {
@@ -727,7 +923,10 @@ test("racing your own edits: a queued edit's gates read the canvas AFTER the ear
 });
 
 test('the clamp gate holds from BOTH sides: width:"hug" on a live-clamped text rejects; clearing in the same edit legalizes', async () => {
-  const node = await renderKeyedText("a long line of words that would wrap", { width: 160, textStyle: { lineClamp: 2 } });
+  const node = await renderKeyedText("a long line of words that would wrap", {
+    width: 160,
+    textStyle: { lineClamp: 2 },
+  });
   assert.equal(node.maxLines, 2);
   // The sequential twin of the race test: clamp-then-hug must reject like hug-then-clamp does,
   // or the lock's "outcomes equal some sequential order" guarantee still admits the no-op state.
@@ -743,7 +942,10 @@ test('the clamp gate holds from BOTH sides: width:"hug" on a live-clamped text r
 
 // The image fetch is the run's suspension point, and the user has the document open across it.
 // Standing in for that user: the channel retypes the node's font before handing the bytes back.
-function imageChannelThatRetypes(node: any, fontName: { family: string; style: string }): () => void {
+function imageChannelThatRetypes(
+  node: any,
+  fontName: { family: string; style: string },
+): () => void {
   const g = globalThis as { __flcmHost?: unknown };
   g.__flcmHost = {
     requestImages: async (urls: string[]) => {
@@ -763,7 +965,10 @@ test("a live fact that changed during the round trip: the delta lands on the FRE
   // compile against the retyped node is just as valid: it lands, on the node as the user left it.
   let restore = imageChannelThatRetypes(node, { family: "Inter", style: "Regular" });
   try {
-    await edit("label", { fill: image("https://cdn.example.com/a.jpg"), textStyle: { fontSize: 20 } });
+    await edit("label", {
+      fill: image("https://cdn.example.com/a.jpg"),
+      textStyle: { fontSize: 20 },
+    });
   } finally {
     restore();
   }

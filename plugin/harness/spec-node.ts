@@ -12,9 +12,3 @@ export function specNode(spec: NodeSpec, key: string): NodeSpec & { id: string }
   if (!found) throw new Error("No authored node with key " + key);
   return found;
 }
-
-export function withoutIds<T>(value: T): T {
-  if (!value || typeof value !== "object") return value;
-  if (Array.isArray(value)) return value.map(withoutIds) as T;
-  return Object.fromEntries(Object.entries(value).filter(([key]) => key !== "id").map(([key, child]) => [key, withoutIds(child)])) as T;
-}

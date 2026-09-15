@@ -19,16 +19,26 @@ beforeEach(() => {
 
 // A free-form card holding three keyed children — the shape a batch nudge is written against.
 async function renderCard() {
-  const out = await render(
-    ({ type: "FRAME", key: "card", width: 300, height: 200, children: [
-      ({ type: "RECTANGLE", key: "a", width: 40, height: 40, fill: "#ff0000" }),
-      ({ type: "RECTANGLE", key: "b", width: 40, height: 40, fill: "#00ff00" }),
-      ({ type: "TEXT", text: "hello", key: "c" }),
-      ({ type: "TEXT", text: "world", key: "c2" }),
-    ] }),
-  );
+  const out = await render({
+    type: "FRAME",
+    key: "card",
+    width: 300,
+    height: 200,
+    children: [
+      { type: "RECTANGLE", key: "a", width: 40, height: 40, fill: "#ff0000" },
+      { type: "RECTANGLE", key: "b", width: 40, height: 40, fill: "#00ff00" },
+      { type: "TEXT", text: "hello", key: "c" },
+      { type: "TEXT", text: "world", key: "c2" },
+    ],
+  });
   const node = async (k: string) => figma.getNodeByIdAsync(specNode(out, k).id);
-  return { out, card: await node("card"), a: await node("a"), b: await node("b"), c: await node("c") };
+  return {
+    out,
+    card: await node("card"),
+    a: await node("a"),
+    b: await node("b"),
+    c: await node("c"),
+  };
 }
 
 test("a batch over three targets applies in ONE call and ONE undo step, returning a handle per entry", async () => {
@@ -43,7 +53,10 @@ test("a batch over three targets applies in ONE call and ONE undo step, returnin
   assert.equal(b.opacity, 0.5);
   assert.equal(c.characters, "goodbye");
   // Entry order, not apply order — the handles line up with the array the agent wrote.
-  assert.deepEqual(handles.map((h) => h.key), ["a", "b", "c"]);
+  assert.deepEqual(
+    handles.map((h) => h.key),
+    ["a", "b", "c"],
+  );
   // One verb, one boundary: the entry seal plus the success commit, exactly as a single edit.
   assert.deepEqual(figma.undoLog.slice(undosBefore), ["commit", "commit"]);
 });
@@ -143,7 +156,10 @@ test("cross-entry layout legality is judged against the batch's own end state, n
   {
     figma = createFigmaMock();
     const { c } = await renderCard();
-    await editMany([{ target: "card", changes: { layout: { mode: "row" } } }, { target: "c", changes: { height: "fill" } }]);
+    await editMany([
+      { target: "card", changes: { layout: { mode: "row" } } },
+      { target: "c", changes: { height: "fill" } },
+    ]);
     assert.equal(c.layoutAlign, "STRETCH");
     await assert.rejects(
       editMany([
@@ -207,13 +223,23 @@ test("cross-entry layout legality is judged against the batch's own end state, n
   // so the parent's fill does not survive it — and the child's percent is a cycle after all.
   {
     figma = createFigmaMock();
-    const out = await render(
-      ({ type: "FRAME", key: "outer", layout: { mode: "row" }, width: 500, height: 300, children: [
-        ({ type: "FRAME", key: "panel", layout: { mode: "row" }, width: "fill", height: "fill", children: [
-          ({ type: "RECTANGLE", key: "kid", width: 40, height: 40 }),
-        ] }),
-      ] }),
-    );
+    const out = await render({
+      type: "FRAME",
+      key: "outer",
+      layout: { mode: "row" },
+      width: 500,
+      height: 300,
+      children: [
+        {
+          type: "FRAME",
+          key: "panel",
+          layout: { mode: "row" },
+          width: "fill",
+          height: "fill",
+          children: [{ type: "RECTANGLE", key: "kid", width: 40, height: 40 }],
+        },
+      ],
+    });
     const kid = await figma.getNodeByIdAsync(specNode(out, "kid").id);
     // The fill DOES survive a flip of the panel alone — that must stay accepted.
     await editMany([
@@ -233,13 +259,24 @@ test("cross-entry layout legality is judged against the batch's own end state, n
 });
 
 test("every MEASUREMENT waits for every write: an anchored ancestor centers on the size its descendant ends at", async () => {
-  const out = await render(
-    ({ type: "FRAME", key: "card", width: 300, height: 200, children: [
-      ({ type: "FRAME", key: "panel", layout: { mode: "row" }, width: "hug", height: "hug", left: 0, top: 0, children: [
-        ({ type: "TEXT", text: "x", key: "label" }),
-      ] }),
-    ] }),
-  );
+  const out = await render({
+    type: "FRAME",
+    key: "card",
+    width: 300,
+    height: 200,
+    children: [
+      {
+        type: "FRAME",
+        key: "panel",
+        layout: { mode: "row" },
+        width: "hug",
+        height: "hug",
+        left: 0,
+        top: 0,
+        children: [{ type: "TEXT", text: "x", key: "label" }],
+      },
+    ],
+  });
   const panel = await figma.getNodeByIdAsync(specNode(out, "panel").id);
   // The panel HUGS, so the other entry's content change resizes it — and the anchor is measured
   // against that size. Applied ancestor-first with no deferred measure pass, the center is computed
@@ -254,11 +291,23 @@ test("every MEASUREMENT waits for every write: an anchored ancestor centers on t
 
 test("a refusal names the identity the node had BEFORE the batch's first write, not after its rename", async () => {
   const { a } = await renderCard();
-  const out = await render(({ type: "FRAME", key: "shell", width: 300, height: 300, children: [({ type: "FRAME", key: "host", width: 10, height: 10, children: [] })] }));
+  const out = await render({
+    type: "FRAME",
+    key: "shell",
+    width: 300,
+    height: 300,
+    children: [{ type: "FRAME", key: "host", width: 10, height: 10, children: [] }],
+  });
   const host = await figma.getNodeByIdAsync(specNode(out, "host").id);
   // The rename lands in the write pass; the refusal comes from the position pass after it. The
   // error must still point at the node the agent named, because the rollback erases the new name.
-  Object.defineProperty(host, "x", { set: () => { throw new Error("in set_x: Cannot write to node"); }, get: () => 0, configurable: true });
+  Object.defineProperty(host, "x", {
+    set: () => {
+      throw new Error("in set_x: Cannot write to node");
+    },
+    get: () => 0,
+    configurable: true,
+  });
   await assert.rejects(
     editMany([
       { target: "a", changes: { opacity: 0.5 } },
@@ -338,21 +387,42 @@ test("the batch shape itself fails loud: not an array, empty, a non-entry item, 
   await assert.rejects(editMany([]), /entries array is empty/);
   await assert.rejects(editMany(["a"] as never), /takes an object/);
   await assert.rejects(editMany([{ target: "a" }] as never), /changes must be an object/);
-  await assert.rejects(editMany([{ target: "a", changes: { opacity: 1 }, when: 1 }] as never), /unknown prop "when"/);
-  await assert.rejects(editMany([{ target: "a", changes: { opacity: 1 } }], { near: "card" } as never), /unknown prop "near"/);
+  await assert.rejects(
+    editMany([{ target: "a", changes: { opacity: 1 }, when: 1 }] as never),
+    /unknown prop "when"/,
+  );
+  await assert.rejects(
+    editMany([{ target: "a", changes: { opacity: 1 } }], { near: "card" } as never),
+    /unknown prop "near"/,
+  );
 });
 
 test("`within` scopes key resolution for the whole batch — one scan, and an out-of-scope key still fails loud", async () => {
-  await render(
-    ({ type: "FRAME", key: "outer", width: 400, height: 400, children: [
-      ({ type: "FRAME", key: "left", width: 100, height: 100, children: [({ type: "RECTANGLE", key: "dot", width: 10, height: 10 })] }),
-      ({ type: "FRAME", key: "right", width: 100, height: 100, children: [] }),
-    ] }),
-  );
+  await render({
+    type: "FRAME",
+    key: "outer",
+    width: 400,
+    height: 400,
+    children: [
+      {
+        type: "FRAME",
+        key: "left",
+        width: 100,
+        height: 100,
+        children: [{ type: "RECTANGLE", key: "dot", width: 10, height: 10 }],
+      },
+      { type: "FRAME", key: "right", width: 100, height: 100, children: [] },
+    ],
+  });
   await editMany([{ target: "dot", changes: { opacity: 0.25 } }], { within: "left" });
-  const scoped = await editMany([{ target: "dot", changes: { opacity: 0.5 } }], { within: "outer" });
+  const scoped = await editMany([{ target: "dot", changes: { opacity: 0.5 } }], {
+    within: "outer",
+  });
   assert.equal(scoped[0].key, "dot");
-  await assert.rejects(editMany([{ target: "dot", changes: { opacity: 1 } }], { within: "right" }), /no node found/);
+  await assert.rejects(
+    editMany([{ target: "dot", changes: { opacity: 1 } }], { within: "right" }),
+    /no node found/,
+  );
 });
 
 // What this proves is the BOUNDARY, not the revert: the mock records commit/undo calls without
@@ -363,7 +433,9 @@ test("`within` scopes key resolution for the whole batch — one scan, and an ou
 test("a mid-apply Figma refusal seals the WHOLE batch as one step, pops it, and names the failing entry", async () => {
   const { a, b } = await renderCard();
   // Stand in for a Figma refusal on the second entry's write, after the first has landed.
-  const refuse = () => { throw new Error("in set_opacity: Cannot write to node"); };
+  const refuse = () => {
+    throw new Error("in set_opacity: Cannot write to node");
+  };
   Object.defineProperty(b, "opacity", { set: refuse, get: () => 1, configurable: true });
   await assert.rejects(
     editMany([

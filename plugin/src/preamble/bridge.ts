@@ -23,6 +23,7 @@ import { resizeWithDiagnostics, trackSizing } from "./sizing-diagnostics.js";
 
 import { applyAnnotations } from "./annotation-categories.js";
 import { WriteType, WriteNode, WriteProps, WriteLayout, Justify, Align, TextAlign, TextDecoration, Sizing, Identity, Handle, WritePaint, WriteImage, ComponentPropertyBinding, namesFontIdentity } from "./ir.js";
+import { own } from "./validate.js";
 import {
   assertLayoutRealizableForType, assertPercentResolvable, assertSizingResolvesAgainstParentFrame, assertNoParentRelativeWordsUnderGrid, ParentFlowFacts,
   assertTextFillHeightInFlow, assertInheritedRectangleDimensions,
@@ -1295,7 +1296,7 @@ export function buildNode(wn: WriteNode, ctx: RenderCtx, enclosingWidthBounded?:
 }
 
 function buildCompiledNode(wn: WriteNode, ctx: RenderCtx, enclosingWidthBounded?: boolean): any {
-  const build = BUILDERS[wn.type];
+  const build = own(BUILDERS, wn.type);
   if (!build) {
     throw new Error('flcm: cannot create a "' + wn.type + '" node — createable types are ' + Object.keys(BUILDERS).join(", ") + ".");
   }

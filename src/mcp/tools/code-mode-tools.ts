@@ -211,8 +211,8 @@ export function registerCodeModeTools(
         description: `Capture a PNG of what you've built so you can see it and self-correct. Build → screenshot → look → fix.
 
 Target ONE node, or omit both targets to snapshot the whole current page:
-- nodeId — a node's id. Copy it from a figma_execute_code result: \`(await flcm.render(tree)).node.id\`, or any handle's \`.id\` in \`.keyed\`.
-- key — a key you authored on a node (\`flcm.frame({ key: "card" }, …)\`). An unknown key, or one matching several nodes (duplicating a node copies its key), fails loud rather than guessing.
+- nodeId — a node's id. Copy it from a figma_execute_code result: \`(await flcm.render(tree)).id\`, or a child's \`.id\` in the returned tree.
+- key — a key you authored on a node (\`{ type: "FRAME", key: "card" }\`). An unknown key, or one matching several nodes (duplicating a node copies its key), fails loud rather than guessing.
 
 Passing both nodeId and key is ambiguous and fails loud. A failed lookup NEVER falls back to the whole page.
 

@@ -671,7 +671,7 @@ function classifyRun(
  * PARSER on the write edge (`plugin/src/preamble/markdown.ts`) is the exact
  * inverse — `\*` is a literal asterisk, the two-character `\n` is a line break,
  * `\\n` is a literal backslash-n. Text read here and re-authored through
- * `flcm.text()` must reproduce the original characters. This escape set is the
+ * Authoring a TEXT spec must reproduce the original characters. This escape set is the
  * canonical definition of that convention (the vocabulary spec that pinned it
  * is superseded by this code).
  */

@@ -15,15 +15,20 @@ import type { RenderCtx, RenderResources } from "./bridge.js";
 import { beginMutatingApply } from "./verb-error.js";
 import type { EditDelta } from "./schema.js";
 
+function assertSceneNode(node: BaseNode): asserts node is SceneNode {
+  if (node.type === "PAGE" || node.type === "DOCUMENT") throw new Error("a page or document cannot be placed as a scene node.");
+}
+
 export async function loadLiveTree(tree: WriteNode): Promise<LoadedLiveTree> {
   const entries = [];
   for (const wn of treeNodes(tree)) {
     if (!wn.liveId) continue;
     const at = wn.sourcePath!;
     try {
-      const node: any = await resolveTarget({ id: wn.liveId });
+      const node = await resolveTarget({ id: wn.liveId });
+      assertSceneNode(node);
       if (wn.authoring!.svg !== undefined) throw new Error("svg has no live geometry edit: importing markup can change node types and child identities. Move with { id }, or omit the id to import new artwork.");
-      if (wn.source?.type !== undefined && wn.source.type !== "IMAGE-SVG" && wn.source.type !== node.type && !(wn.source.type === "FRAME" && node.type === "COMPONENT")) throw new Error("type " + wn.source.type + " does not match live " + node.type + ".");
+      if (wn.source?.type !== undefined && wn.source.type !== "IMAGE-SVG" && wn.source.type !== node.type) throw new Error("type " + wn.source.type + " does not match live " + node.type + ".");
       wn.type = node.type;
       const { key, d, componentPropertyReferences, ...delta } = wn.authoring!;
       if (componentPropertyReferences !== undefined) {
@@ -53,7 +58,7 @@ export async function loadLiveTree(tree: WriteNode): Promise<LoadedLiveTree> {
 export interface LoadedLiveTree {
   loaded: import("./edit-plan.js").LoadedResources;
   entries: {
-    wn: WriteNode; node: any; changes: EditDelta; key: unknown; pathData?: string;
+    wn: WriteNode; node: SceneNode; changes: EditDelta; key: unknown; pathData?: string;
     hint: import("./edit-plan.js").EditPlan | undefined;
     targets: ReturnType<typeof createResolvedTargets>;
     current: Awaited<ReturnType<typeof resolveInstanceEditTargets>> | null;
@@ -61,9 +66,9 @@ export interface LoadedLiveTree {
   }[];
 }
 export interface LiveTreeNode {
-  node: any;
-  component?: any;
-  place(parent: any, place: (node: any) => void, ctx: RenderCtx): any;
+  node: SceneNode;
+  component?: ComponentNode | null;
+  place(parent: BaseNode & ChildrenMixin, place: (node: SceneNode) => void, ctx: RenderCtx): SceneNode;
 }
 
 export function gateLiveTree(live: LoadedLiveTree, resources: RenderResources): Map<WriteNode, LiveTreeNode> {
@@ -72,9 +77,8 @@ export function gateLiveTree(live: LoadedLiveTree, resources: RenderResources): 
     const { wn, node, changes, key, pathData, targets, current } = entry;
     const at = wn.sourcePath!;
     assertNodeStillOnCanvas(node, at);
-    if (node.type === "PAGE" || node.type === "DOCUMENT") throw new Error(at + ": a page or document cannot be placed as a scene node.");
     if (childListClosingInstanceOf(node, false)) throw new Error(at + ": cannot move a component instance's sublayer; edit its main component.");
-    if (wn.children?.length && (typeof node.appendChild !== "function" || childListClosingInstanceOf(node, true))) throw new Error(at + ".children: this live node's child list cannot be authored.");
+    if (wn.children?.length && (!("appendChild" in node) || childListClosingInstanceOf(node, true))) throw new Error(at + ".children: this live node's child list cannot be authored.");
     const plan = entry.hint ? compileEditPlan(node, changes, at) : undefined;
     wn.layout = plan?.patch.layout;
     const instance = plan?.instanceWords ? planInstanceEdit(node, plan.instanceWords, current, { targets, fonts: resources.fonts }, at) : undefined;
@@ -93,12 +97,12 @@ export function gateLiveTree(live: LoadedLiveTree, resources: RenderResources): 
     plans.set(wn, { node, component: instance?.swapTo ?? current, place(parent, place, ctx) {
       const fail = beginMutatingApply(at, node);
       try {
-        for (let p = parent; p; p = p.parent) if (p === node) throw new Error(at + ": a node cannot move inside itself or its descendant.");
+        for (let p: BaseNode | null = parent; p; p = p.parent) if (p === node) throw new Error(at + ": a node cannot move inside itself or its descendant.");
         const words = assertLiveNodeLandsUnderParent(node, parent, at, plan?.patch.layout);
         place(node);
         if (instance) applyInstanceRetarget(fail, node, instance);
         if (component?.definitions) applyComponentDefinitionEdit(fail, node, component.definitions);
-        if (pathData !== undefined) applyVectorPath(node, pathData);
+        if (pathData !== undefined && node.type === "VECTOR") applyVectorPath(node, pathData);
         if (plan) applyEditPlanWrites(fail, plan, ctx);
         if (component?.binding) applyComponentBindingEdit(fail, node, component.binding);
         if (key !== undefined) writeKey(node, key as string);
@@ -106,7 +110,7 @@ export function gateLiveTree(live: LoadedLiveTree, resources: RenderResources): 
           if (!ctx.bindings) throw new Error(at + ": componentPropertyReferences has no declaring component.");
           ctx.bindings.push({ node, refs: wn.componentPropertyReferences });
         }
-        for (const child of wn.children ?? []) if (child) attachBuiltChild(node, child, ctx, liveParentAttachFacts(node, child.sourcePath ?? at), c => node.appendChild(c));
+        if ("appendChild" in node) for (const child of wn.children ?? []) attachBuiltChild(node, child, ctx, liveParentAttachFacts(node, child.sourcePath ?? at), c => node.appendChild(c));
         resettleMovedNode(node, words);
         if (plan) { settleEditPlanSizes(fail, plan); settleEditPlanPositions(fail, plan); }
         if (instance) applyInstanceOverrides(node, instance, ctx, at);

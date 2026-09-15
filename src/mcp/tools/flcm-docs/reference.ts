@@ -166,8 +166,8 @@ const SECTIONS: Section[] = [
       "Other omitted props keep live values or use creation defaults. The verb returns the spec copied with ids.\n\n" +
       `### Shared by every node\n\n${propTable(FIELD_GROUPS.shared)}\n\n` +
       `### Annotations\n\n${propTable(FIELD_GROUPS.annotation)}\n\n${ANNOTATIONS_REFERENCE}\n\n` +
-      "### Size & position (frame, text, rect, ellipse, instance)\n\n" +
-      '(A `line` sizes on a numeric `width` alone — its length; there is no `height`, `"fill"`, or `"hug"`.)\n\n' +
+      "### Size & position (FRAME, TEXT, RECTANGLE, ELLIPSE, VECTOR, INSTANCE)\n\n" +
+      'A LINE sizes on a numeric `width` alone, its length. There is no `height`, `"fill"`, or `"hug"`.\n\n' +
       `${propTable(FIELD_GROUPS.size)}\n\n` +
       `#### Percent sizing\n\n${PERCENT_SIZING}\n\n` +
       `### FRAME — container props\n\n${propTable({ ...FIELD_GROUPS.appearance, ...FIELD_GROUPS.frame })}\n\n` +

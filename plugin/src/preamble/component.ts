@@ -352,7 +352,7 @@ function authoredTextOf(wn: WriteNode): string {
 const WOULD_WRAP =
   "Figma would WRAP it in a new component rather than turn it into one, so flcm refuses rather than build something you didn't ask for";
 
-// Everything that disqualifies a CONSTRUCTOR-BUILT ROOT from being promoted. A leaf — a text, a shape, a
+// Everything that disqualifies a new root from being promoted. A leaf — a text, a shape, a
 // path, an instance — is exactly the wrappable case above, and the mismatch is silent twice over:
 // the key the author put on the root would end up on the wrapper, not on the node they keyed.
 // Document-blind, so judged in prepare before a single resource is loaded: a refusal costs nothing.
@@ -529,6 +529,7 @@ function applyBuiltComponent({ tree, resources, definitions, options }: GatedBui
     applyExposures(ctx.exposures);
     if (tree.liveId) recordPromotionAlias(tree.liveId, comp.id);
     tree.source!.id = comp.id;
+    tree.source!.type = "COMPONENT";
     return tree.source as AuthoredTree;
   } catch (cause) {
     throw fail(cause);

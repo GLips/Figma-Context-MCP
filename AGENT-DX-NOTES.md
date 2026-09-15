@@ -152,8 +152,11 @@ This is the biggest doc gap, so I'll be specific about the model I had to revers
 
 ```js
 await flcm.component(
-  flcm.frame({...}, [ flcm.text("Label", { componentPropertyReferences: { text: "Label" } }) ]),
-  { propertyDefinitions: { Label: { type: "text" } } },   // no defaultValue — derived
+  {
+    type: "FRAME",
+    children: [{ type: "TEXT", text: "Label", componentPropertyReferences: { text: "Label" } }],
+  },
+  { propertyDefinitions: { Label: { type: "text" } } }, // no defaultValue — derived
 );
 ```
 
@@ -249,17 +252,16 @@ and used 16 times:
 
 ```js
 // A free-form (no auto-layout) staging frame, so promoted components don't get re-laid-out
-const { node: stage } = await flcm.render(
-  flcm.frame({
-    name: "Components",
-    left: 1760,
-    top: 0,
-    width: 1600,
-    height: 2600,
-    fill: "#fafbfc",
-    clip: false,
-  }),
-);
+const stage = await flcm.render({
+  type: "FRAME",
+  name: "Components",
+  left: 1760,
+  top: 0,
+  width: 1600,
+  height: 2600,
+  fill: "#fafbfc",
+  clip: false,
+});
 const c = await flcm.clone(flcm.id(srcId), stage);
 await flcm.edit(c.node, { left, top, width: 237 }); // fill → fixed, and place it
 ```
@@ -320,11 +322,11 @@ off-canvas where you don't look.
 The single most repeated operation in the task, ×120:
 
 ```js
-const res = await flcm.insertBefore(flcm.id(oldId), flcm.instance(comp, {
+const res = await flcm.insertBefore(flcm.id(oldId), { type: "INSTANCE", componentId: comp,
   width: old.layoutSizingHorizontal === 'FILL' ? 'fill' : old.width,   // hand-carried sizing
   componentProperties: {...},
-}));
-const rect = await figma.getNodeByIdAsync('I' + res.node.id + ';' + imgPath);
+});
+const rect = await figma.getNodeByIdAsync('I' + res.id + ';' + imgPath);
 rect.fills = oldFills;                                                  // raw fallback (§11)
 await flcm.remove(flcm.id(oldId));
 ```
@@ -634,7 +636,7 @@ exactly two nodes — and they were exactly the two the human had already flagge
 
 The mechanism is a three-part trap and every part is quiet:
 
-1. **Giving a frame an explicit height makes it FIXED, permanently.** `flcm.frame({ height: 520 })` and
+1. **Giving a frame an explicit height makes it FIXED, permanently.** `{ type: "FRAME", height: 520 }` and
    any later `resize()` both set `layoutSizingVertical: 'FIXED'`. Adding children afterwards never
    re-derives it. There's no `height: "hug"` equivalent you can pass at construction time that survives
    a subsequent resize, so "I sized the frame while roughing it out, then filled it with content" —
@@ -728,7 +730,7 @@ source of truth, already-proven enforcement.
 
 **Resolve at `validate.ts`, not at the writers.** Its own comment says it "runs before any target is
 resolved, so a misspelled word reads 'unknown prop' no matter what it targets" — it is already the
-single choke point for construct, `edit`, `editMany` and `fromRead`. One insertion covers every path.
+shared validation used by tree compilation, `edit` and `editMany`. One insertion covers every path.
 
 **Resolve _and_ warn, rather than resolve silently.** Push a line into the `console` array the tool
 already returns:
@@ -839,10 +841,10 @@ patch pass. One of them concluded flcm "was not the right tool for this job and 
 dropping to raw `figma.*` throughout. That's the real cost: the DSL's fail-loud guarantees get abandoned
 wholesale because a handful of props are missing from one bag.
 
-### 26.4 `flcm.instance` layout props are validated against the spec, not the component
+### 26.4 INSTANCE layout props are validated against the spec, not the component
 
 ```js
-flcm.insertBefore(sib, flcm.instance(comp, { layout: { gap: 22, padding: … } }))
+flcm.insertBefore(sib, { type: "INSTANCE", componentId: comp, layout: { gap: 22, padding: … } })
 // → "layout gap/padding … need an auto-layout container — this instance isn't one"
 ```
 

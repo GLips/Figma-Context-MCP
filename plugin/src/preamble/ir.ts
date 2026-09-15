@@ -445,13 +445,14 @@ export interface InstanceEditWords {
   overrides?: Record<string, OverrideDeltaInput>;
 }
 
-export interface WriteNode extends WriteProps {
+export type WriteNode = WriteProps & {
   source?: NodeSpec;
   sourcePath?: string;
-  liveId?: string;
-  authoring?: Record<string, unknown>;
-  type: WriteType;
-}
+} & (
+  | { type: WriteType; liveId?: never; authoring?: never }
+  // Live types come from the document, including node kinds that cannot be created here.
+  | { type: string; liveId: string; authoring: Record<string, unknown> }
+);
 
 // Compiled children are private IR nodes; author input is validated before the walk.
 export type WriteChild = WriteNode;

@@ -1,17 +1,23 @@
 // get round-trip: render a styled card, then read it back with flcm.get by key — exercising the
 // bundled simplify core inside the preamble IIFE (resolve → adapt → simplify, expanded output).
-const card = ({ type: "FRAME", ...({
-    key: "card",
-    width: 320,
-    fill: "linear-gradient(180deg, #6366f1, #a855f7)",
-    layout: { mode: "column", gap: 12, padding: 24 },
-  }), children: [
-    ({ type: "TEXT", text: "Hello **world**", ...({ key: "title", textStyle: { fontSize: 18 } }) }),
-    ({ type: "RECTANGLE", ...({ key: "chip", width: 48, height: 48, fill: "#22c55e", borderRadius: 8 }) }),
-  ] });
+const card = {
+  type: "FRAME",
+  key: "card",
+  width: 320,
+  fill: "linear-gradient(180deg, #6366f1, #a855f7)",
+  layout: { mode: "column", gap: 12, padding: 24 },
+  children: [
+    { type: "TEXT", text: "Hello **world**", key: "title", textStyle: { fontSize: 18 } },
+    { type: "RECTANGLE", key: "chip", width: 48, height: 48, fill: "#22c55e", borderRadius: 8 },
+  ],
+};
 await flcm.render(card);
 
 const read = await flcm.get("card");
 console.log(JSON.stringify(read, null, 2));
 const node = read.node;
-return { type: node.type, mode: node.layout && node.layout.mode, children: (node.children || []).length };
+return {
+  type: node.type,
+  mode: node.layout && node.layout.mode,
+  children: (node.children || []).length,
+};

@@ -1,4 +1,3 @@
-import { compileTree } from "./compile-tree.js";
 // The mutation lock (plan invariant 4): mutating verbs serialize within a run — preparation
 // included, so a queued verb's prepare and gate read the canvas AFTER the running verb's writes —
 // a failed verb doesn't poison later ones, a cancelled run is refused at the lock before the next
@@ -93,7 +92,12 @@ test("gate and apply are synchronous BY TYPE: an async one is a compile error, n
     enterMutatingVerb("edit", noPrep, noGate, async () => 42);
   const gateRejectedByCompiler = () =>
     // @ts-expect-error — G infers to Promise<number>, which SyncOnly resolves to never
-    enterMutatingVerb("edit", noPrep, async () => 42, () => 1);
+    enterMutatingVerb(
+      "edit",
+      noPrep,
+      async () => 42,
+      () => 1,
+    );
   void rejectedByCompiler;
   void gateRejectedByCompiler;
 });
@@ -252,7 +256,7 @@ test("cancellation arriving mid-apply lets it finish but refuses the queued next
 
 test("render enters the lock: a cancelled run creates no node", async () => {
   installCancelFlag(() => true);
-  await assert.rejects(render(({ type: "FRAME", width: 10, height: 10 })), /cancelled by the server/);
+  await assert.rejects(render({ type: "FRAME", width: 10, height: 10 }), /cancelled by the server/);
   assert.equal(figma.currentPage.children.length, 0);
 });
 
@@ -262,11 +266,14 @@ test("render enters the lock: a cancelled run creates no node", async () => {
 // rejection reason of `undefined` still counts as failure — every path exits prepare, so the
 // canvas and the undo stack stay untouched.
 
-const treeWithFontsAndImage = () =>
-  ({ type: "FRAME", layout: { mode: "column" }, children: [
-    ({ type: "TEXT", text: "hi" }),
-    ({ type: "RECTANGLE", width: 10, height: 10, fill: image("https://cdn.example.com/a.jpg") }),
-  ] });
+const treeWithFontsAndImage = () => ({
+  type: "FRAME",
+  layout: { mode: "column" },
+  children: [
+    { type: "TEXT", text: "hi" },
+    { type: "RECTANGLE", width: 10, height: 10, fill: image("https://cdn.example.com/a.jpg") },
+  ],
+});
 
 test("a font failure while images are still pending wins as the FIRST failure", async () => {
   figma.listAvailableFontsAsync = () => Promise.reject(new Error("font index down"));
@@ -291,7 +298,12 @@ test("an image failure while fonts are still pending rejects with zero undo resi
 test("a resource load rejecting with `undefined` still fails prepare — never a sealed apply over missing bytes", async () => {
   installImageChannel(() => Promise.reject(undefined));
   await assert.rejects(
-    render(({ type: "RECTANGLE", width: 10, height: 10, fill: image("https://cdn.example.com/a.jpg") })),
+    render({
+      type: "RECTANGLE",
+      width: 10,
+      height: 10,
+      fill: image("https://cdn.example.com/a.jpg"),
+    }),
     (err: unknown) => err === undefined,
   );
   // A sentinel-based settle would read this as success and fail INSIDE the sealed apply span:

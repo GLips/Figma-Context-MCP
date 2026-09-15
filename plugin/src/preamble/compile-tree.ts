@@ -9,8 +9,8 @@ const CLONE_REMEDY = "Use flcm.clone(target) for a faithful live copy.";
 type ReadFieldDisposition = { refuse: string };
 const READ_FIELD_DISPOSITIONS: Record<string, ReadFieldDisposition> = {
   template: { refuse: "this is a compressed template reference; read the expanded node with flcm.get" },
-  strokeDashes: { refuse: "dash patterns are not authorable" },
-  aspectRatio: { refuse: "locked proportions are not authorable" },
+  strokeDashes: { refuse: "flcm strokes are solid; there is no dash-pattern word. Remove strokeDashes to author a solid stroke" },
+  aspectRatio: { refuse: "flcm sizes width and height independently; there is no proportions-lock word. Remove aspectRatio and set both dimensions" },
 };
 
 /** Copy author data so compilation and returned identities never mutate a reusable template. */
@@ -64,7 +64,7 @@ export function compileTree(input: unknown, subject: string): WriteNode {
       let tree: WriteNode;
       if (id !== undefined) {
         if (type !== undefined && typeof type !== "string") throw new Error("type must be a string.");
-        tree = { type: (type ?? "FRAME") as WriteNode["type"], liveId: id as string, authoring: props };
+        tree = { type: "UNRESOLVED", liveId: id as string, authoring: props };
       } else {
         switch (type) {
           case "FRAME": tree = compileFrame(props as FrameProps); break;

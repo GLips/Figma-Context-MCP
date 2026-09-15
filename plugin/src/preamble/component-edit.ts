@@ -8,7 +8,7 @@
 //     CHANGE one (`defaultValue`, or `name` to rename), or DELETE one (`null`).
 //   • `componentPropertyReferences` under edit — bind an existing sublayer to a property, or
 //     unbind it (`null` per field).
-//   • the bindings a CONSTRUCTOR-BUILT node carries into an existing component through append/prepend/insertBefore/
+//   • the bindings an authored node carries into an existing component through append/prepend/insertBefore/
 //     insertAfter — the one place outside flcm.component where a binding means something.
 //
 // The split is edit's own (see edit-plan.ts): the sync compile judges the words' SHAPE, the targets
@@ -414,7 +414,7 @@ export function planComponentEdit(node: any, words: ComponentEditWords, targets:
   return plan;
 }
 
-// ---- a bound CONSTRUCTOR-BUILT node inserted into an existing component ----
+// ---- a bound authored node inserted into an existing component ----
 
 /**
  * What an insert has to do about the bindings its tree carries, resolved against the component it

@@ -6,7 +6,7 @@ The server bundles `runtime.ts` through `buildSandboxPreamble()` in `index.mjs` 
 
 Nodes are plain data in the read vocabulary. `compile-tree.ts` snapshots a tree, validates it with indexed paths, and dispatches each new node to the private prop compilers in `flcm.ts`. The compiled `WriteNode` IR stays inside the mutation call. `schema.ts` supplies types and documentation; its zod dependency never enters the sandbox bundle.
 
-A node spec with an `id` identifies a live node. `live-tree.ts` resolves it and prepares edits using the same stages as `edit`. A spec without an id creates a node. Both forms recurse into ordinary `children` and instance slot content. Unmentioned children stay in the document. The bridge writes live ids into the private input snapshot, which becomes the returned tree; caller data stays reusable.
+A node spec with an `id` identifies a live node. Its IR type is `UNRESOLVED` until `live-tree.ts` resolves it and prepares edits using the same stages as `edit`. A spec without an id creates a node. Both forms recurse into ordinary `children` and instance slot content. Mentioned children go to the end in spec order; unmentioned children retain their relative order. The bridge writes live ids into the private input snapshot, which becomes the returned tree; caller data stays reusable. Component promotion returns root type `COMPONENT`.
 
 `structure.ts` drives placement, including `render` on the current page. `render.ts` loads and gates tree resources. `component.ts` promotes a tree's root and declares bindings. `bridge.ts` owns Figma writes and layout settlement, and `mutation-lock.ts` makes each verb one serialized undo step. Read-only preparation can fail without writes; application failures roll back the call.
 

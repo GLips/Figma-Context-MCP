@@ -1,5 +1,4 @@
 import { specNode } from "../../harness/spec-node.js";
-import { compileTree } from "./compile-tree.js";
 // flcm.component / flcm.variants — MAKING a component. What must not regress silently: a compiled node is
 // rendered exactly as flcm.render would render it and then promoted (layout, fill and keys intact,
 // and the handle is the COMPONENT's, not the frame's), a live node is promoted where it stands,
@@ -28,12 +27,41 @@ async function chipComponent() {
   const figma = createFigmaMock();
   const badge = badgeComponent(figma, "Badge A");
   const out = await component(
-    ({ type: "FRAME", key: "chip", fill: "#0000ff", layout: { mode: "row", gap: 4, padding: 8 }, children: [
-      ({ type: "RECTANGLE", key: "icon", width: 12, height: 12, fill: "#ffffff", componentPropertyReferences: { visible: "Icon" } }),
-      ({ type: "TEXT", text: "Label", key: "label", componentPropertyReferences: { text: "Label" } }),
-      ({ type: "INSTANCE", componentId: badge.id, key: "badge", componentPropertyReferences: { componentId: "Badge" } }),
-      ({ type: "FRAME", key: "trailing", width: 20, height: 20, componentPropertyReferences: { slot: "Trailing" } }),
-    ] }),
+    {
+      type: "FRAME",
+      key: "chip",
+      fill: "#0000ff",
+      layout: { mode: "row", gap: 4, padding: 8 },
+      children: [
+        {
+          type: "RECTANGLE",
+          key: "icon",
+          width: 12,
+          height: 12,
+          fill: "#ffffff",
+          componentPropertyReferences: { visible: "Icon" },
+        },
+        {
+          type: "TEXT",
+          text: "Label",
+          key: "label",
+          componentPropertyReferences: { text: "Label" },
+        },
+        {
+          type: "INSTANCE",
+          componentId: badge.id,
+          key: "badge",
+          componentPropertyReferences: { componentId: "Badge" },
+        },
+        {
+          type: "FRAME",
+          key: "trailing",
+          width: 20,
+          height: 20,
+          componentPropertyReferences: { slot: "Trailing" },
+        },
+      ],
+    },
     {
       name: "Chip",
       description: "A compact labelled chip.",
@@ -65,7 +93,10 @@ test("a compiled node renders as render would, then becomes the COMPONENT the ha
   assert.equal(out.id, comp.id);
   assert.equal(specNode(out, "label").id, comp.children[1].id);
   // The promoted frame is gone from the page; the component stands in its place.
-  assert.deepEqual(figma.currentPage.children.map((c: any) => c.type), ["COMPONENT", "COMPONENT"]);
+  assert.deepEqual(
+    figma.currentPage.children.map((c: any) => c.type),
+    ["COMPONENT", "COMPONENT"],
+  );
 });
 
 test("every property type lands with a derived default, and its binding drives an instance", async () => {
@@ -82,10 +113,12 @@ test("every property type lands with a derived default, and its binding drives a
   assert.deepEqual(comp.children[0].componentPropertyReferences, { visible: full("Icon") });
   assert.deepEqual(comp.children[1].componentPropertyReferences, { characters: full("Label") });
   assert.deepEqual(comp.children[2].componentPropertyReferences, { mainComponent: full("Badge") });
-  assert.deepEqual(comp.children[3].componentPropertyReferences, { slotContentId: full("Trailing") });
+  assert.deepEqual(comp.children[3].componentPropertyReferences, {
+    slotContentId: full("Trailing"),
+  });
 
   // An instance of it: the bound frame reads back as a SLOT, and the properties drive their layers.
-  const stamped = await render(({ type: "INSTANCE", componentId: comp.id, key: "chip1" }));
+  const stamped = await render({ type: "INSTANCE", componentId: comp.id, key: "chip1" });
   const inst = await figma.getNodeByIdAsync(stamped.id);
   assert.equal(inst.children[3].type, "SLOT");
   assert.equal(inst.children[3].width, 20); // the bound frame's own layout, not an invented box
@@ -100,16 +133,29 @@ test("every property type lands with a derived default, and its binding drives a
 
 test("a derived instance_swap default is the variant the bound instance actually stamps", async () => {
   const figma = createFigmaMock();
-  const small = await component(({ type: "FRAME", width: 10, height: 10 }), { name: "Icon" });
-  const large = await component(({ type: "FRAME", width: 20, height: 20 }), { name: "Icon" });
+  const small = await component({ type: "FRAME", width: 10, height: 10 }, { name: "Icon" });
+  const large = await component({ type: "FRAME", width: 20, height: 20 }, { name: "Icon" });
   const set = await variants(
-    [{ component: small, variant: { Size: "S" } }, { component: large, variant: { Size: "L" } }],
+    [
+      { component: small, variant: { Size: "S" } },
+      { component: large, variant: { Size: "L" } },
+    ],
     { name: "Icon" },
   );
   const out = await component(
-    ({ type: "FRAME", width: 40, height: 40, children: [
-      ({ type: "INSTANCE", componentId: set, componentProperties: { Size: "L" }, componentPropertyReferences: { componentId: "Icon" } }),
-    ] }),
+    {
+      type: "FRAME",
+      width: 40,
+      height: 40,
+      children: [
+        {
+          type: "INSTANCE",
+          componentId: set,
+          componentProperties: { Size: "L" },
+          componentPropertyReferences: { componentId: "Icon" },
+        },
+      ],
+    },
     { name: "Chip", propertyDefinitions: { Icon: { type: "instance_swap" } } },
   );
   const comp = await figma.getNodeByIdAsync(out.id);
@@ -127,8 +173,8 @@ test("a node promoted onto an occupied page says so, exactly as render does", as
   const log = console.log;
   console.log = (...args: unknown[]) => void said.push(args.map(String).join(" "));
   try {
-    await render(({ type: "FRAME", name: "first", width: 100, height: 100 }));
-    await component(({ type: "FRAME", name: "second", width: 100, height: 100 }), { name: "Card" });
+    await render({ type: "FRAME", name: "first", width: 100, height: 100 });
+    await component({ type: "FRAME", name: "second", width: 100, height: 100 }, { name: "Card" });
   } finally {
     console.log = log;
   }
@@ -137,8 +183,19 @@ test("a node promoted onto an occupied page says so, exactly as render does", as
 
 test("a live frame is promoted where it stands, keeping its keys", async () => {
   const figma = createFigmaMock();
-  const built = await render(({ type: "FRAME", key: "card", name: "Card", width: 200, height: 100, fill: "#ff0000", children: [({ type: "RECTANGLE", key: "dot", width: 8, height: 8 })] }));
-  const out = await component(built, { name: "Card", propertyDefinitions: { Muted: { type: "boolean", defaultValue: false } } });
+  const built = await render({
+    type: "FRAME",
+    key: "card",
+    name: "Card",
+    width: 200,
+    height: 100,
+    fill: "#ff0000",
+    children: [{ type: "RECTANGLE", key: "dot", width: 8, height: 8 }],
+  });
+  const out = await component(built, {
+    name: "Card",
+    propertyDefinitions: { Muted: { type: "boolean", defaultValue: false } },
+  });
   const comp = await figma.getNodeByIdAsync(out.id);
   assert.equal(comp.type, "COMPONENT");
   assert.equal(comp.name, "Card");
@@ -147,14 +204,22 @@ test("a live frame is promoted where it stands, keeping its keys", async () => {
   // Both keys survive the conversion — the child's on the node itself, the root's on the new node.
   assert.equal(specNode(out, "card").id, comp.id);
   assert.equal(specNode(out, "dot").id, comp.children[0].id);
-  const defaults = Object.values(comp.componentPropertyDefinitions) as { type: string; defaultValue: unknown }[];
+  const defaults = Object.values(comp.componentPropertyDefinitions) as {
+    type: string;
+    defaultValue: unknown;
+  }[];
   assert.deepEqual(defaults, [{ type: "BOOLEAN", defaultValue: false }]);
 });
 
 test("flcm.variants folds components into a set an instance selects from", async () => {
   const figma = createFigmaMock();
   const make = async (label: string) =>
-    (await component(({ type: "FRAME", width: 80, height: 24, children: [({ type: "TEXT", text: label })] }), { name: label })).id;
+    (
+      await component(
+        { type: "FRAME", width: 80, height: 24, children: [{ type: "TEXT", text: label }] },
+        { name: label },
+      )
+    ).id;
   const small = await make("Small");
   const large = await make("Large");
   const largeHover = await make("Large hover");
@@ -173,105 +238,233 @@ test("flcm.variants folds components into a set an instance selects from", async
   assert.equal(live.description, "The button.");
   // The members were renamed into Figma's axis grammar, in the FIRST entry's key order, and the set
   // took the first member's slot on the page.
-  assert.deepEqual(live.children.map((c: any) => c.name), ["Size=Small, State=Default", "Size=Large, State=Default", "Size=Large, State=Hover"]);
+  assert.deepEqual(
+    live.children.map((c: any) => c.name),
+    ["Size=Small, State=Default", "Size=Large, State=Default", "Size=Large, State=Hover"],
+  );
   assert.equal(figma.currentPage.children.indexOf(live), 0);
   assert.deepEqual(Object.keys(live.componentPropertyDefinitions), ["Size", "State"]);
 
   // The set is now an INSTANCE target, and the combination selects a member as a whole.
-  const out = await render(({ type: "INSTANCE", componentId: set.id, componentProperties: { Size: "Large", State: "Hover" } }));
+  const out = await render({
+    type: "INSTANCE",
+    componentId: set.id,
+    componentProperties: { Size: "Large", State: "Hover" },
+  });
   assert.equal((await figma.getNodeByIdAsync(out.id)).mainComponent, live.children[2]);
 });
 
 test("what a component call refuses, with zero writes", async () => {
   const { figma, comp } = await chipComponent();
   const before = figma.currentPage.children.length;
-  const body = () => ({ type: "FRAME", width: 10, height: 10, children: [({ type: "TEXT", text: "Hi", componentPropertyReferences: { text: "Label" } })] });
+  const body = () => ({
+    type: "FRAME",
+    width: 10,
+    height: 10,
+    children: [{ type: "TEXT", text: "Hi", componentPropertyReferences: { text: "Label" } }],
+  });
 
   // A variant axis is the SET's to mint, not a component's to declare.
   await assert.rejects(
-    component(({ type: "FRAME", width: 10, height: 10 }), { propertyDefinitions: { Size: { type: "variant" } as never } }),
+    component(
+      { type: "FRAME", width: 10, height: 10 },
+      { propertyDefinitions: { Size: { type: "variant" } as never } },
+    ),
     /a variant axis is not declared on a component — the axes come from the SET.*flcm\.variants/s,
   );
   // A binding naming a property this call doesn't declare, and one whose type doesn't match.
-  await assert.rejects(component(body(), { propertyDefinitions: { Caption: { type: "text" } } }), /names property "Label", which this call doesn't declare — its propertyDefinitions are "Caption"/);
-  await assert.rejects(component(body(), { propertyDefinitions: { Label: { type: "boolean", defaultValue: true } } }), /`componentPropertyReferences\.text` drives a text property, and "Label" is declared "boolean"/);
-  // A slot nobody binds would leave an unpositioned box in the component.
-  await assert.rejects(component(({ type: "FRAME", width: 10, height: 10 }), { propertyDefinitions: { Trailing: { type: "slot" } } }), /no frame is bound to it/);
   await assert.rejects(
-    component(({ type: "FRAME", width: 10, height: 10, children: [({ type: "FRAME", componentPropertyReferences: { slot: "T" } }), ({ type: "FRAME", componentPropertyReferences: { slot: "T" } })] }), { propertyDefinitions: { T: { type: "slot" } } }),
+    component(body(), { propertyDefinitions: { Caption: { type: "text" } } }),
+    /names property "Label", which this call doesn't declare — its propertyDefinitions are "Caption"/,
+  );
+  await assert.rejects(
+    component(body(), { propertyDefinitions: { Label: { type: "boolean", defaultValue: true } } }),
+    /`componentPropertyReferences\.text` drives a text property, and "Label" is declared "boolean"/,
+  );
+  // A slot nobody binds would leave an unpositioned box in the component.
+  await assert.rejects(
+    component(
+      { type: "FRAME", width: 10, height: 10 },
+      { propertyDefinitions: { Trailing: { type: "slot" } } },
+    ),
+    /no frame is bound to it/,
+  );
+  await assert.rejects(
+    component(
+      {
+        type: "FRAME",
+        width: 10,
+        height: 10,
+        children: [
+          { type: "FRAME", componentPropertyReferences: { slot: "T" } },
+          { type: "FRAME", componentPropertyReferences: { slot: "T" } },
+        ],
+      },
+      { propertyDefinitions: { T: { type: "slot" } } },
+    ),
     /2 frames are bound to slot property "T", and a slot is one hole/,
   );
   // A property nothing binds and nothing defaults has no value to invent.
-  await assert.rejects(component(({ type: "FRAME", width: 10, height: 10 }), { propertyDefinitions: { Label: { type: "text" } } }), /no `defaultValue`, and nothing in this call binds "Label"/);
+  await assert.rejects(
+    component(
+      { type: "FRAME", width: 10, height: 10 },
+      { propertyDefinitions: { Label: { type: "text" } } },
+    ),
+    /no `defaultValue`, and nothing in this call binds "Label"/,
+  );
   // The subject itself.
   await assert.rejects(component(comp.id), /is already a component — there is nothing to promote/);
-  const stamped = await render(({ type: "INSTANCE", componentId: comp.id }));
+  const stamped = await render({ type: "INSTANCE", componentId: comp.id });
   await assert.rejects(component(stamped.id), /Figma would WRAP it in a new component/);
-  await assert.rejects(component(stamped.id + ";" + comp.children[1].id), /no live node|has no sublayer|is inside component instance/);
+  await assert.rejects(
+    component(stamped.id + ";" + comp.children[1].id),
+    /no live node|has no sublayer|is inside component instance/,
+  );
   // A component's own sublayer: live's createComponentFromNode throws on it, so flcm names it first.
-  await assert.rejects(component(comp.children[0].id), /is inside component "Chip".*createComponentFromNode throws/s);
+  await assert.rejects(
+    component(comp.children[0].id),
+    /is inside component "Chip".*createComponentFromNode throws/s,
+  );
   // The compiled form gates its root the same way — a leaf root would be wrapped, not converted, and
   // the root's key would land on the wrapper rather than the node the author keyed.
-  await assert.rejects(component(({ type: "TEXT", text: "Hi", key: "t" })), /the tree's root is a TEXT, and a component's root is a frame/);
-  await assert.rejects(component(({ type: "INSTANCE", componentId: comp.id })), /the tree's root is an INSTANCE.*WRAP/s);
+  await assert.rejects(
+    component({ type: "TEXT", text: "Hi", key: "t" }),
+    /the tree's root is a TEXT, and a component's root is a frame/,
+  );
+  await assert.rejects(
+    component({ type: "INSTANCE", componentId: comp.id }),
+    /the tree's root is an INSTANCE.*WRAP/s,
+  );
   // A slot and a default-less property both need the compiled form, and the target form says so rather
   // than naming a compiler word the call has no authored tree to carry.
-  const plain = (await render(({ type: "FRAME", key: "plain", width: 10, height: 10 }))).id;
-  await assert.rejects(component(plain, { propertyDefinitions: { T: { type: "slot" } } }), /slot property "T" is declared but no frame is bound/);
-  await assert.rejects(component(plain, { propertyDefinitions: { Label: { type: "text" } } }), /nothing in this call binds/);
+  const plain = (await render({ type: "FRAME", key: "plain", width: 10, height: 10 })).id;
+  await assert.rejects(
+    component(plain, { propertyDefinitions: { T: { type: "slot" } } }),
+    /slot property "T" is declared but no frame is bound/,
+  );
+  await assert.rejects(
+    component(plain, { propertyDefinitions: { Label: { type: "text" } } }),
+    /nothing in this call binds/,
+  );
   assert.equal(figma.currentPage.children.length, before + 2); // only the instance and the plain frame landed
 });
 
 test("what a variants call refuses, with zero writes", async () => {
   const figma = createFigmaMock();
-  const make = async (name: string) => (await component(({ type: "FRAME", width: 10, height: 10 }), { name })).id;
+  const make = async (name: string) =>
+    (await component({ type: "FRAME", width: 10, height: 10 }, { name })).id;
   const a = await make("A");
   const b = await make("B");
-  const plain = (await render(({ type: "FRAME", key: "plain", width: 10, height: 10 }))).id;
+  const plain = (await render({ type: "FRAME", key: "plain", width: 10, height: 10 })).id;
   const before = figma.currentPage.children.length;
 
-  await assert.rejects(variants([{ component: a, variant: { Size: "Small" } }] as never, {} as never), /options\.name is required/);
   await assert.rejects(
-    variants([{ component: a, variant: { Size: "Small" } }, { component: b, variant: { State: "Hover" } }], { name: "X" }),
+    variants([{ component: a, variant: { Size: "Small" } }] as never, {} as never),
+    /options\.name is required/,
+  );
+  await assert.rejects(
+    variants(
+      [
+        { component: a, variant: { Size: "Small" } },
+        { component: b, variant: { State: "Hover" } },
+      ],
+      { name: "X" },
+    ),
     /every entry names the SAME axes.*first entry names "Size".*missing "Size".*adds "State"/s,
   );
   await assert.rejects(
-    variants([{ component: a, variant: { Size: "Small" } }, { component: b, variant: { Size: "Small" } }], { name: "X" }),
+    variants(
+      [
+        { component: a, variant: { Size: "Small" } },
+        { component: b, variant: { Size: "Small" } },
+      ],
+      { name: "X" },
+    ),
     /entries\[0\] and entries\[1\] are both "Size=Small" — every combination in a set is unique/,
   );
-  await assert.rejects(variants([{ component: a, variant: { Size: "Sm, Lg" } }], { name: "X" }), /can't contain "=" or ","/);
-  await assert.rejects(variants([{ component: plain, variant: { Size: "Small" } }], { name: "X" }), /is not a component\. Make it one first: flcm\.component\(target\)/);
+  await assert.rejects(
+    variants([{ component: a, variant: { Size: "Sm, Lg" } }], { name: "X" }),
+    /can't contain "=" or ","/,
+  );
+  await assert.rejects(
+    variants([{ component: plain, variant: { Size: "Small" } }], { name: "X" }),
+    /is not a component\. Make it one first: flcm\.component\(target\)/,
+  );
   assert.equal(figma.currentPage.children.length, before);
 
   // The slot the set takes is counted among the SURVIVORS: the entries name B first, and B's own
   // page index (1) is a slot that no longer exists once A and B have both left the page.
-  const keeper = (await render(({ type: "FRAME", key: "keeper", width: 10, height: 10 }))).id;
-  const set = await variants([{ component: b, variant: { Size: "L" } }, { component: a, variant: { Size: "S" } }], { name: "Button" });
-  assert.deepEqual(figma.currentPage.children.map((c: any) => c.id), [set.id, plain, keeper]);
+  const keeper = (await render({ type: "FRAME", key: "keeper", width: 10, height: 10 })).id;
+  const set = await variants(
+    [
+      { component: b, variant: { Size: "L" } },
+      { component: a, variant: { Size: "S" } },
+    ],
+    { name: "Button" },
+  );
+  assert.deepEqual(
+    figma.currentPage.children.map((c: any) => c.id),
+    [set.id, plain, keeper],
+  );
 
   // Combined once, a component belongs to that set — a second call names the set it is in.
-  await assert.rejects(variants([{ component: a, variant: { Size: "Small" } }], { name: "Other" }), /is already a variant of set "Button"/);
+  await assert.rejects(
+    variants([{ component: a, variant: { Size: "Small" } }], { name: "Other" }),
+    /is already a variant of set "Button"/,
+  );
 });
 
 test("a binding means nothing with no declaring component behind it — every other verb refuses it by name", async () => {
   const figma = createFigmaMock();
-  const bound = () => ({ type: "FRAME", width: 10, height: 10, children: [({ type: "TEXT", text: "Hi", componentPropertyReferences: { text: "Label" } })] });
-  await assert.rejects(render(bound()), /flcm\.render: `componentPropertyReferences`.*nothing here declares one/s);
-  await render(({ type: "FRAME", key: "host", width: 100, height: 100 }));
-  await assert.rejects(append("host", bound()), /flcm\.append: `componentPropertyReferences`.*nothing here declares one/s);
+  const bound = () => ({
+    type: "FRAME",
+    width: 10,
+    height: 10,
+    children: [{ type: "TEXT", text: "Hi", componentPropertyReferences: { text: "Label" } }],
+  });
+  await assert.rejects(
+    render(bound()),
+    /flcm\.render: `componentPropertyReferences`.*nothing here declares one/s,
+  );
+  await render({ type: "FRAME", key: "host", width: 100, height: 100 });
+  await assert.rejects(
+    append("host", bound()),
+    /flcm\.append: `componentPropertyReferences`.*nothing here declares one/s,
+  );
   // Under edit the word exists (it binds a component's own sublayer — see component-edit.test.ts),
   // but on a node outside every component there is nothing for it to point at.
-  await assert.rejects(edit("host", { componentPropertyReferences: { visible: "Icon" } }), /is not inside a component, so no component declares a property for this to point at/);
+  await assert.rejects(
+    edit("host", { componentPropertyReferences: { visible: "Icon" } }),
+    /is not inside a component, so no component declares a property for this to point at/,
+  );
   assert.equal(figma.currentPage.children.length, 1);
 });
 
-test("the binding bag is judged at construction: shape, and which fields THIS node can bind", () => {
+test("component rejects binding fields that the node cannot bind", async () => {
   createFigmaMock();
-  assert.throws(() => compileTree(({ type: "TEXT", text: "Hi", componentPropertyReferences: { slot: "T" } }), "spec"), /`slot` is not one of TEXT's binding fields \(visible, text\) — `slot` marks the FRAME that IS the slot/);
-  assert.throws(() => compileTree(({ type: "FRAME", componentPropertyReferences: { text: "Label" } }), "spec"), /`text` is not one of FRAME's binding fields \(visible, slot\) — `text` drives a TEXT node's content/);
-  assert.throws(() => compileTree(({ type: "RECTANGLE", componentPropertyReferences: { visible: 3 } as never }), "spec"), /a binding names the component property that drives this field/);
-  assert.throws(() => compileTree(({ type: "RECTANGLE", componentPropertyReferences: "Icon" as never }), "spec"), /must be an object naming which component property drives which field/);
-  // Well-formed: sealed, document-blind, and the raw bag rides the node for the verb's prepare to resolve.
-  const wn = compileTree(({ type: "RECTANGLE", componentPropertyReferences: { visible: "Icon" } }), "spec");
-  assert.deepEqual(wn.componentPropertyReferences, { visible: "Icon" });
+  await assert.rejects(
+    component({
+      type: "FRAME",
+      children: [{ type: "TEXT", text: "Hi", componentPropertyReferences: { slot: "T" } }],
+    }),
+    /`slot` is not one of TEXT's binding fields \(visible, text\) — `slot` marks the FRAME that IS the slot/,
+  );
+  await assert.rejects(
+    component({ type: "FRAME", componentPropertyReferences: { text: "Label" } }),
+    /`text` is not one of FRAME's binding fields \(visible, slot\) — `text` drives a TEXT node's content/,
+  );
+  await assert.rejects(
+    component({
+      type: "FRAME",
+      children: [{ type: "RECTANGLE", componentPropertyReferences: { visible: 3 } as never }],
+    }),
+    /a binding names the component property that drives this field/,
+  );
+  await assert.rejects(
+    component({
+      type: "FRAME",
+      children: [{ type: "RECTANGLE", componentPropertyReferences: "Icon" as never }],
+    }),
+    /must be an object naming which component property drives which field/,
+  );
 });

@@ -15,7 +15,9 @@ beforeEach(() => {
 });
 
 const renderRoot = async (name: string, at?: { left: number; top: number }) =>
-  figma.getNodeByIdAsync((await render(({ type: "FRAME", name, width: 200, height: 100, ...at }))).id);
+  figma.getNodeByIdAsync(
+    (await render({ type: "FRAME", name, width: 200, height: 100, ...at })).id,
+  );
 
 test("a root landing on empty canvas says nothing", async () => {
   const root = await renderRoot("solo");

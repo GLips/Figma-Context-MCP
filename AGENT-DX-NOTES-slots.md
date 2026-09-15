@@ -75,7 +75,7 @@ the `structure` section rather than leaving agents to discover the negative.
 ## 2. `flcm.append` into a SLOT target times out — P1
 
 ```js
-await flcm.append(flcm.id(slot.id), flcm.frame({ ... }, [ ... ]))
+await flcm.append(flcm.id(slot.id), { type: "FRAME", children: [ ... ] })
 → Unable to establish connection to Figma after 10 seconds. Please check your internet connection.
 ```
 
@@ -179,22 +179,15 @@ after cloning a component, re-read and rebind `componentPropertyReferences`.
 
 ---
 
-## 7. `render()`'s returned node doesn't carry children — P3
+## 7. Returned child identities
 
 ```js
 const out = await flcm.render(tree);
-out.node.children[0].id
-→ TypeError: cannot read property of undefined
+out.children[0].id;
 ```
 
-Correct behaviour — live nodes can't cross the bridge, and `keyed` is the intended answer. But the
-error is a bare `TypeError` from my own code rather than something that points at the design. A
-thrown message naming `keyed` would close the loop instantly.
-
-Related, minor: when I keyed a node inside a helper function and returned the tree from that
-helper, `out.keyed` worked exactly as advertised. `keyed` is the best part of the API for
-multi-call work — it's the only stable handle across the bridge and it deserves to be pushed harder
-in the cheat-sheet.
+The returned data tree carries each child's live id. Those ids work across calls and belong in
+the cheat-sheet. A key is optional metadata for finding a node later.
 
 ---
 

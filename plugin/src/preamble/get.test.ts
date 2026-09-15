@@ -10,9 +10,15 @@ import { render } from "./render.js";
 
 test("get on a frame returns the expanded canonical shape — values inline, children included", async () => {
   createFigmaMock();
-  await render(
-    ({ type: "FRAME", key: "card", width: 200, height: 100, fill: "#ff0000", layout: { mode: "row", gap: 8, padding: 12 }, children: [({ type: "RECTANGLE", key: "chip", width: 40, height: 40, fill: "#00ff00" })] }),
-  );
+  await render({
+    type: "FRAME",
+    key: "card",
+    width: 200,
+    height: 100,
+    fill: "#ff0000",
+    layout: { mode: "row", gap: 8, padding: 12 },
+    children: [{ type: "RECTANGLE", key: "chip", width: 40, height: 40, fill: "#00ff00" }],
+  });
 
   const { node: read } = await get("card");
   assert.equal(read.type, "FRAME");
@@ -28,9 +34,13 @@ test("get on a frame returns the expanded canonical shape — values inline, chi
 
 test("get on a text node reads back content and text style", async () => {
   createFigmaMock();
-  await render(
-    ({ type: "FRAME", key: "wrap", children: [({ type: "TEXT", text: "Hello **world**", key: "greeting", textStyle: { fontSize: 16 } })] }),
-  );
+  await render({
+    type: "FRAME",
+    key: "wrap",
+    children: [
+      { type: "TEXT", text: "Hello **world**", key: "greeting", textStyle: { fontSize: 16 } },
+    ],
+  });
 
   const { node: read } = await get("greeting");
   assert.equal(read.type, "TEXT");
@@ -90,14 +100,19 @@ test("get on an instance carries an honest type and its componentId", async () =
 // object-form emission — over the live-ish mock, complementing the core unit pins in src/tests/effects.test.ts.
 test("get reads beyond-CSS effects back as the flcm.effects object form", async () => {
   createFigmaMock();
-  await render(
-    ({ type: "RECTANGLE", key: "pane", width: 100, height: 100, effects: effects({ glass: true, noise: true, texture: true, progressiveBlur: 24 }) }),
-  );
+  await render({
+    type: "RECTANGLE",
+    key: "pane",
+    width: 100,
+    height: 100,
+    effects: effects({ glass: true, noise: true, texture: true, progressiveBlur: 24 }),
+  });
 
   const { node: read } = await get("pane");
   const fx = read.effects;
   // Expanded read: effects is the inline object, never a "effect_…" styles ref (also narrows the type).
-  if (typeof fx !== "object") throw new Error(`expected an inline effects object, got ${JSON.stringify(fx)}`);
+  if (typeof fx !== "object")
+    throw new Error(`expected an inline effects object, got ${JSON.stringify(fx)}`);
   assert.deepEqual(fx.glass, {
     lightIntensity: 0.5,
     lightAngle: 130,
@@ -125,7 +140,7 @@ test("get reads beyond-CSS effects back as the flcm.effects object form", async 
 
 test("get on a hidden node fails loud instead of returning nothing", async () => {
   const figma = createFigmaMock();
-  const out = await render(({ type: "FRAME", key: "ghost", width: 10, height: 10 }));
+  const out = await render({ type: "FRAME", key: "ghost", width: 10, height: 10 });
   (await figma.getNodeByIdAsync(out.id)).visible = false;
 
   await assert.rejects(get("ghost"), /hidden/);

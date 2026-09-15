@@ -60,12 +60,12 @@ const bridge = new PluginBridge(undefined, {
 const PROBE_CODE = `
 const t0 = Date.now();
 const built = await flcm.render(
-  flcm.frame({ key: "flcm-probe", width: 120, height: 60, layout: { mode: "row", gap: 8, padding: 8 } }, [
-    flcm.rect({ width: 40, height: 40, fill: flcm.image("https://probe.invalid/a.png") }),
-    flcm.rect({ width: 40, height: 40, fill: flcm.image("https://probe.invalid/b.png") }),
-  ]),
+  { type: "FRAME", key: "flcm-probe", width: 120, height: 60, layout: { mode: "row", gap: 8, padding: 8 }, children: [
+    { type: "RECTANGLE", width: 40, height: 40, fill: flcm.image("https://probe.invalid/a.png") },
+    { type: "RECTANGLE", width: 40, height: 40, fill: flcm.image("https://probe.invalid/b.png") },
+  ] },
 );
-return { elapsedMs: Date.now() - t0, rootId: built.node.id };
+return { elapsedMs: Date.now() - t0, rootId: built.id };
 `;
 
 let started = false;
