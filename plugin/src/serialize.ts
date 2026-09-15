@@ -23,19 +23,20 @@ export function looksLikeNode(
   return typeof o.id === "string" && typeof o.type === "string" && "removed" in o;
 }
 
-function findLiveNode(value: unknown, path: string, depth: number): { path: string; type: string } | null {
-  if (depth > 6 || value === null || typeof value !== "object") return null;
+function findLiveNode(value: unknown, path: string, seen: Set<object>): { path: string; type: string } | null {
+  if (value === null || typeof value !== "object" || seen.has(value)) return null;
+  seen.add(value);
   // Stop at a node — never recurse into its (huge, circular) internals.
   if (looksLikeNode(value)) return { path, type: value.type };
   if (Array.isArray(value)) {
     for (let i = 0; i < value.length; i++) {
-      const hit = findLiveNode(value[i], `${path}[${i}]`, depth + 1);
+      const hit = findLiveNode(value[i], `${path}[${i}]`, seen);
       if (hit) return hit;
     }
     return null;
   }
   for (const key of Object.keys(value as object)) {
-    const hit = findLiveNode((value as Record<string, unknown>)[key], path ? `${path}.${key}` : key, depth + 1);
+    const hit = findLiveNode((value as Record<string, unknown>)[key], path ? `${path}.${key}` : key, seen);
     if (hit) return hit;
   }
   return null;
@@ -47,7 +48,7 @@ function findLiveNode(value: unknown, path: string, depth: number): { path: stri
  * that it happened. Better a clear error that teaches the id pattern than silent loss the agent debugs blind.
  */
 export function guardReturnValue(value: unknown): void {
-  const hit = findLiveNode(value, "", 0);
+  const hit = findLiveNode(value, "", new Set());
   if (!hit) return;
   const where = hit.path ? ` (at return value ${hit.path.startsWith("[") ? hit.path : `.${hit.path}`})` : "";
   throw new Error(
@@ -57,41 +58,13 @@ export function guardReturnValue(value: unknown): void {
   );
 }
 
-// Recursion backstop for a cyclic/self-referential structure. NOT a shaping limit: a full read POJO (a
-// `get` subtree, a long `children`/`runs` array) must round-trip WHOLE (ADR-0003 forbids silent truncation),
-// and the read walk produces finite trees whose recursion depth runs ~3× their visual nesting — far under
-// this. The only thing this stops is a pathological cycle (`a.self = a`) that would otherwise overflow the
-// QuickJS stack; guardReturnValue already rejects returned live nodes, and looksLikeNode collapses any that
-// slip through (e.g. a logged node) before it recurses, so live-node internals never reach this depth.
-//
-// Why depth, NOT a visited Set. A global visited-set would also bound a compounding shared-reference DAG
-// (`x = {a:x, b:x}` repeated), which depth alone lets fan out. Rejected deliberately: a visited-set collapses
-// the SECOND occurrence of any shared reference to a marker, and the expanded read shape may legitimately
-// share a value object across nodes (e.g. one fill reused on many nodes). That would corrupt the round-trip
-// this serializer exists to preserve (a predicate reading `n.fill` must see the value, not "[seen]").
-// The depth cap never touches a legit shared ref — it only truncates true pathological depth. The DAG-blowup
-// case is a self-inflicted agent hang, not a data-integrity risk, so the safe backstop wins.
-const MAX_SERIALIZE_DEPTH = 200;
-
-/**
- * Converts an arbitrary eval result into something safe to send over postMessage/WS. A live Figma node is
- * NOT plain JSON (sending one produces opaque failures), so any object that looks like a node (looksLikeNode)
- * collapses to `{ id, name, type }` — a stable handle the agent can thread back via figma.getNodeByIdAsync.
- * Every other value — including render Handles and full read POJOs, none of which carry `removed` — is
- * recursed and round-trips whole, bounded only by the cycle backstop above.
- */
-export function safeSerialize(value: unknown, depth = 0): unknown {
+/** Serialize whole values. Ancestors detect cycles without corrupting shared references. */
+export function safeSerialize(value: unknown, ancestors = new Set<object>()): unknown {
   if (value === null || value === undefined) return value;
   if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") return value;
   if (typeof value === "bigint") return value.toString();
   if (typeof value === "function") return `[Function ${value.name || "anonymous"}]`;
   if (typeof value === "symbol") return value.toString();
-
-  if (depth >= MAX_SERIALIZE_DEPTH) return "[…]";
-
-  if (Array.isArray(value)) {
-    return value.map((v) => safeSerialize(v, depth + 1));
-  }
 
   // A live Figma node collapses to a stable handle the agent can thread into later execute_code calls via
   // figma.getNodeByIdAsync. Gated on the removed-carrying discriminator, NOT a bare id+type shape, so a render
@@ -104,16 +77,12 @@ export function safeSerialize(value: unknown, depth = 0): unknown {
     };
   }
 
-  const obj = value as Record<string, unknown>;
-  const out: Record<string, unknown> = {};
-  for (const key of Object.keys(obj)) {
-    try {
-      out[key] = safeSerialize(obj[key], depth + 1);
-    } catch {
-      out[key] = "[unserializable]";
-    }
-  }
-  return out;
+  if (ancestors.has(value)) throw new Error("Cannot serialize cyclic return or console data.");
+  ancestors.add(value);
+  try {
+    if (Array.isArray(value)) return value.map(item => safeSerialize(item, ancestors));
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, safeSerialize(item, ancestors)]));
+  } finally { ancestors.delete(value); }
 }
 
 /** One registry per execution; callbacks use the server-shipped projection policy. */

@@ -37,6 +37,14 @@
                     "chars": 348,
                     "read": "flcm.get(\"8:3\")"
                   }
+                },
+                {
+                  "$elided": {
+                    "id": "8:3",
+                    "field": "clip",
+                    "chars": 5,
+                    "read": "flcm.get(\"8:3\")"
+                  }
                 }
               ]
             },
@@ -55,6 +63,14 @@
                     "id": "8:4",
                     "field": "details",
                     "chars": 348,
+                    "read": "flcm.get(\"8:4\")"
+                  }
+                },
+                {
+                  "$elided": {
+                    "id": "8:4",
+                    "field": "clip",
+                    "chars": 5,
                     "read": "flcm.get(\"8:4\")"
                   }
                 }
@@ -86,6 +102,14 @@
                         "chars": 353,
                         "read": "flcm.get(\"8:6\")"
                       }
+                    },
+                    {
+                      "$elided": {
+                        "id": "8:6",
+                        "field": "clip",
+                        "chars": 5,
+                        "read": "flcm.get(\"8:6\")"
+                      }
                     }
                   ]
                 },
@@ -104,6 +128,14 @@
                         "id": "8:7",
                         "field": "details",
                         "chars": 354,
+                        "read": "flcm.get(\"8:7\")"
+                      }
+                    },
+                    {
+                      "$elided": {
+                        "id": "8:7",
+                        "field": "clip",
+                        "chars": 5,
                         "read": "flcm.get(\"8:7\")"
                       }
                     }
@@ -160,6 +192,14 @@
                     "chars": 430,
                     "read": "flcm.get(\"8:9\")"
                   }
+                },
+                {
+                  "$elided": {
+                    "id": "8:9",
+                    "field": "clip",
+                    "chars": 5,
+                    "read": "flcm.get(\"8:9\")"
+                  }
                 }
               ]
             },
@@ -179,6 +219,14 @@
                     "id": "8:10",
                     "field": "details",
                     "chars": 448,
+                    "read": "flcm.get(\"8:10\")"
+                  }
+                },
+                {
+                  "$elided": {
+                    "id": "8:10",
+                    "field": "clip",
+                    "chars": 5,
                     "read": "flcm.get(\"8:10\")"
                   }
                 }
@@ -203,6 +251,14 @@
             "id": "8:1",
             "field": "details",
             "chars": 322,
+            "read": "flcm.get(\"8:1\")"
+          }
+        },
+        {
+          "$elided": {
+            "id": "8:1",
+            "field": "clip",
+            "chars": 5,
             "read": "flcm.get(\"8:1\")"
           }
         }

@@ -106,3 +106,72 @@ test("instance and definition children stay live in runtime; wire diffs carry el
   ).toBe(true);
   expect(full.nodes[1].children?.[0].id).toBe("Ii;t");
 });
+
+test("donated component markers point to live instance descendants, not synthetic definition ids", async () => {
+  const full = await simplify([
+    {
+      id: "instance",
+      name: "Instance",
+      type: "INSTANCE",
+      componentId: "missing",
+      children: [
+        { id: "Iinstance;text", name: "Title", type: "TEXT" },
+        { ...path, id: "Iinstance;vector" },
+      ],
+    },
+  ]);
+  const wire = project(full);
+  const donated = wire.components.missing.children!.find((node) => node.id === "vector")!;
+  const address = donated.elided!.find((entry) => entry.$elided.field === "d")!.$elided;
+  expect(address.id).toBe("Iinstance;vector");
+  expect(address.read).toBe('flcm.get("Iinstance;vector")');
+});
+
+test("details and child edges reconstruct the entire producer snapshot without losing fields", async () => {
+  const source: NodeSnapshot = {
+    id: "root",
+    name: "Root",
+    type: "FRAME",
+    clipsContent: true,
+    constraints: { horizontal: "MAX", vertical: "SCALE" },
+    blendMode: "MULTIPLY",
+    children: [path],
+  };
+  const full = await simplify([source]);
+  const restore = (node: (typeof full.nodes)[number]): NodeSnapshot => ({
+    ...node.details!,
+    ...(node.children ? { children: node.children.map(restore) } : {}),
+  });
+  expect(restore(full.nodes[0])).toEqual(source);
+});
+
+test("solid paint stacks flatten only in project", async () => {
+  const full = await simplify([
+    {
+      id: "paint",
+      name: "Paint",
+      type: "RECTANGLE",
+      fills: [
+        { type: "SOLID", color: { r: 1, g: 0, b: 0, a: 1 } },
+        { type: "SOLID", color: { r: 0, g: 0, b: 1, a: 1 } },
+      ],
+    },
+  ]);
+  expect(full.nodes[0].fill).toEqual(["#0000FF", "#FF0000"]);
+  const wire = project(full).nodes[0];
+  expect(wire.fill).toBe("#0000FF");
+  expect(wire.elided?.some((entry) => entry.$elided.field === "fill")).toBe(true);
+});
+
+test("upstream depth omissions are marked with unknown size, not mistaken for empty containers", async () => {
+  const full = await simplify([{ id: "page", name: "Page", type: "CANVAS" }]);
+  const wire = project(full, { maxDepth: 1 });
+  expect(
+    wire.nodes[0].elided?.find((entry) => entry.$elided.field === "children")?.$elided,
+  ).toEqual({
+    id: "page",
+    field: "children",
+    chars: null,
+    read: 'flcm.get("page")',
+  });
+});

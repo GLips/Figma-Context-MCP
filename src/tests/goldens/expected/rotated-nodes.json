@@ -171,6 +171,14 @@
             "chars": 324,
             "read": "flcm.get(\"9:1\")"
           }
+        },
+        {
+          "$elided": {
+            "id": "9:1",
+            "field": "clip",
+            "chars": 4,
+            "read": "flcm.get(\"9:1\")"
+          }
         }
       ]
     }

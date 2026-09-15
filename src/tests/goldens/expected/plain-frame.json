@@ -59,6 +59,22 @@
         {
           "$elided": {
             "id": "1:1",
+            "field": "clip",
+            "chars": 4,
+            "read": "flcm.get(\"1:1\")"
+          }
+        },
+        {
+          "$elided": {
+            "id": "1:1",
+            "field": "fill",
+            "chars": 32,
+            "read": "flcm.get(\"1:1\")"
+          }
+        },
+        {
+          "$elided": {
+            "id": "1:1",
             "field": "children",
             "chars": 1107,
             "read": "flcm.get(\"1:1\")"

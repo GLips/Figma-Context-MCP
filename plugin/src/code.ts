@@ -773,7 +773,7 @@ async function executeCode(to: ReplyTo, code: string, preamble: string): Promise
     // Return-path node guard (R2): a returned live node would otherwise collapse to
     // { id } and silently drop everything else. Make that loud instead of lossy.
     guardReturnValue(raw);
-    result = egress.project(raw);
+    result = safeSerialize(egress.project(raw));
   } catch (err) {
     errorMessage = formatError(err);
   } finally {
@@ -785,7 +785,7 @@ async function executeCode(to: ReplyTo, code: string, preamble: string): Promise
     cancelledRuns.settle(to);
   }
 
-  reply(to, { type: "EXECUTE_CODE_RESULT", result: safeSerialize(result), console: consoleLog, errors: errorMessage });
+  reply(to, { type: "EXECUTE_CODE_RESULT", result, console: consoleLog, errors: errorMessage });
 }
 
 /**

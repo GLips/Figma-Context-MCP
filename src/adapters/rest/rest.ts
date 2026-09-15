@@ -27,17 +27,18 @@ export async function simplifyRestResponse(
   options: TraversalOptions & { componentDefinitions?: NodeSnapshot[] } = {},
 ): Promise<SimplifiedDesign> {
   const { name, snapshots } = restResponseToSnapshots(apiResponse);
+  const { maxDepth, ...readOptions } = options;
 
   // Run the core with egress compression on: this is the shipped REST tool's
   // output form (ref-deduplicated styles + templates).
   const full = await simplify(snapshots, {
-    ...options,
+    ...readOptions,
     scheduler: eventLoopYield,
   });
 
   const { nodes, styles, templates, components, elided } = project(full, {
     compress: true,
-    maxDepth: options.maxDepth,
+    maxDepth,
   });
   return { name, nodes, components, styles, templates, ...(elided ? { elided } : {}) };
 }

@@ -65,7 +65,10 @@ export function createRefStyleTable(): RefStyleTable {
   // Figma style names aren't unique — a file can use a local style and an imported
   // library style that share a name (e.g., "Heading / Large"). Collapse same-name
   // same-value entries; disambiguate same-name different-value by appending the id.
-  function resolveStyleKey(styleMatch: SnapshotStyleRef, value: StyleValue): string {
+  function resolveStyleKey(
+    styleMatch: SnapshotStyleRef & { name: string },
+    value: StyleValue,
+  ): string {
     const existing = styles[styleMatch.name];
     if (!existing) return styleMatch.name;
     if (stableStringify(existing) === stableStringify(value)) return styleMatch.name;
@@ -111,11 +114,14 @@ export function createInlineStyleTable(): StyleTable {
 // adapter already joined `node.styles` with the top-level table (see
 // src/adapters/rest/node-to-snapshot.ts), so this is a plain per-slot lookup —
 // the wire style table never reaches here (Invariant 2).
-function getStyleMatch(node: NodeSnapshot, keys: string[]): SnapshotStyleRef | undefined {
+function getStyleMatch(
+  node: NodeSnapshot,
+  keys: string[],
+): (SnapshotStyleRef & { name: string }) | undefined {
   if (!node.styles) return undefined;
   for (const key of keys) {
     const match = node.styles[key];
-    if (match) return match;
+    if (match?.name) return { ...match, name: match.name };
   }
   return undefined;
 }

@@ -65,3 +65,39 @@ test("a retyped marker preserves live children and is never created as content",
   await assert.rejects(flcm.render({ id: parent.id, children: [{ $elided: {} } as any] }), /type must be/);
   assert.deepEqual(live.children, [child]);
 });
+
+test("blend modes, constraints and clipping read back in authorable fields", async () => {
+  const { figma } = setup();
+  const original = await flcm.render({ type: "FRAME", width: 80, height: 60, clip: true, mixBlendMode: "multiply", pin: { x: "right", y: "bottom" } });
+  const { node } = await flcm.get(original);
+  assert.equal(node.clip, true);
+  assert.equal(node.mixBlendMode, "multiply");
+  assert.deepEqual(node.pin, { x: "right", y: "bottom" });
+  assert.equal(node.details!.blendMode, "MULTIPLY");
+  const template = { ...node }; delete template.id;
+  const copy = await flcm.render(template);
+  const live = await figma.getNodeByIdAsync(copy.id);
+  assert.equal(live.clipsContent, true);
+  assert.equal(live.blendMode, "MULTIPLY");
+  assert.deepEqual(live.constraints, { horizontal: "MAX", vertical: "MAX" });
+});
+
+test("unresolved style ids remain readable without inventing a style name", async () => {
+  const { figma, wire } = setup();
+  const original = await flcm.render({ type: "RECTANGLE", fill: "#123456" });
+  const live = await figma.getNodeByIdAsync(original.id);
+  live.fillStyleId = "missing-style";
+  const { node } = await flcm.get(original);
+  assert.deepEqual(node.details!.styles!.fill, { id: "missing-style" });
+  assert.equal(wire(node).fill, "#123456");
+});
+
+test("editing an inherited child tree is refused rather than silently ignored", async () => {
+  setup();
+  const component = await flcm.component({ type: "FRAME", children: [{ type: "TEXT", text: "Before" }] });
+  const instance = await flcm.render({ type: "INSTANCE", componentId: component.id });
+  const { node } = await flcm.get(instance);
+  node.children![0].text = "After";
+  await assert.rejects(flcm.render(node), /inherited instance children are read-only/);
+  assert.equal((await flcm.get(instance)).node.children![0].text, "Before");
+});

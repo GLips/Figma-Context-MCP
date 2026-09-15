@@ -149,6 +149,8 @@ export interface SceneNodeLike {
   readonly type: string;
   readonly visible?: boolean;
   readonly locked?: boolean;
+  readonly blendMode?: string;
+  readonly constraints?: { horizontal: string; vertical: string };
   readonly vectorPaths?: ReadonlyArray<{ data: string; windingRule: "NONZERO" | "EVENODD" | "NONE" }>;
   /** Only the parent's type is read — to know whether a COMPONENT is a set variant. */
   readonly parent?: { readonly type: string } | null;
@@ -400,6 +402,8 @@ async function sceneSubtreeToSnapshot(
     type: node.type === "POLYGON" ? "REGULAR_POLYGON" : node.type,
     visible: node.visible,
     locked: node.locked,
+    blendMode: node.blendMode,
+    constraints: node.constraints ? { ...node.constraints } : undefined,
     vectorPaths: node.vectorPaths?.map(path => ({ data: path.data, windingRule: path.windingRule })),
     componentPropertyReferences: node.componentPropertyReferences ?? undefined,
 
@@ -937,7 +941,7 @@ async function decodeStyleSlots(
     const styleId = node[prop];
     if (typeof styleId !== "string" || !styleId) continue;
     const style = await resolveStyle(styleId);
-    if (style?.name) resolved[slot] = { name: style.name, id: styleId };
+    resolved[slot] = { ...(style?.name ? { name: style.name } : {}), id: styleId };
   }
   return Object.keys(resolved).length ? resolved : undefined;
 }

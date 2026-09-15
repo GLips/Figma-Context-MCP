@@ -10,10 +10,6 @@ import type { NodeDelta, SimplifiedComponentEntry, SimplifiedNode } from "./type
  * definition is in the tree at all, and which of N instances is the least-edited donor. Same
  * reason `compressDesign` runs after the walk.
  *
- * Unlike compression, this runs in BOTH expanded and compressed mode. The plugin reads expanded
- * and needs the sidecar just as much: it is the only place a plugin read can name a component,
- * and therefore the only way an instance's variant is recoverable there.
- *
  * The priority for a component's children is fixed, and `childrenFrom` says which case fired:
  *   1. the definition's own node, when the read fetched it (in-tree)
  *   2. a definition supplied by the adapter (REST's off-tree fetch, the plugin's live main node)

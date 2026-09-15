@@ -26,6 +26,8 @@ createFigmaMock();
 // the WS bridge for images and reads the run's real CANCEL state; the harness answers instantly with
 // stand-in bytes and never cancels, so scenarios run headless.
 const host = {
+  // This diagnostic harness inspects full runtime data; execution-lifecycle tests cover host projection.
+  registerRead() {},
   requestImages: async (urls) =>
     Object.fromEntries(urls.map((u) => [u, Buffer.from("harness-image-bytes").toString("base64")])),
   isRunCancelled: () => false,
@@ -87,7 +89,7 @@ function printTree(n, depth, out) {
   if (n.clipsContent) s += `  clip`;
   if (n.opacity < 1) s += `  opacity=${n.opacity}`;
   out.push(s);
-  for (const c of n.children) printTree(c, depth + 1, out);
+  if ("children" in n) for (const c of n.children) printTree(c, depth + 1, out);
 }
 
 const out = [];

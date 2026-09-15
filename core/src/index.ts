@@ -49,8 +49,7 @@ export { rectIntersectionArea, rectsOverlap, anyRectsOverlap } from "./rect.js";
 // makes render's `intent` and find's `width`/`height` the same answer by construction.
 export { convertSizing } from "./transformers/layout/common.js";
 
-// The core entry: NodeSnapshot[] → canonical SimplifiedNodes (expanded by
-// default; compression opt-in via { compress: true })
+// Full runtime reads; project owns the wire representation.
 export { simplify } from "./simplify.js";
 export type { SimplifyOptions, SimplifyResult } from "./simplify.js";
 

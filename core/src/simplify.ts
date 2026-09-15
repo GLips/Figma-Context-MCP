@@ -1,6 +1,6 @@
-import { isRectangleCornerRadii } from "./utils.js";
+import { isRectangleCornerRadii, isVisible } from "./utils.js";
 import { buildSimplifiedLayout } from "./transformers/layout.js";
-import { buildSimplifiedStrokes, foldPaintStack } from "./transformers/style.js";
+import { buildSimplifiedStrokes, parsePaint } from "./transformers/style.js";
 import { buildSimplifiedEffects } from "./transformers/effects.js";
 import {
   buildFormattedText,
@@ -47,7 +47,7 @@ export interface SimplifyResult {
   styles: Record<string, StyleValue>;
   /** Deduplicated node bodies (compression only; empty when expanded). */
   templates: Record<string, TemplateBody>;
-  /** Every component the read referenced, its children emitted once. Empty when it referenced none. */
+  /** Component definitions alongside the intact runtime trees. */
   components: Record<string, SimplifiedComponentEntry>;
 }
 
@@ -97,7 +97,6 @@ export async function simplify(
 interface SimplifyContext {
   /** Component provenance sink — the components pass reads it after the walk (see ComponentNotes). */
   components: ComponentNotes;
-  currentDepth: number;
   parent?: NodeSnapshot;
   read: ReadContext;
   /**
@@ -124,19 +123,7 @@ async function maybeYield(
   }
 }
 
-/**
- * The single-pass walk: geometry/layout, text, visuals, and component data are
- * extracted from every visible node, depth-first, writing style values through
- * the injected table (the compression seam). `simplify` is the public wrapper;
- * this seam is exported for tests that need to observe the pre-compression
- * walk output.
- *
- * @param nodes - The node snapshots to process
- * @param styleTable - Where style values are interned (the compression seam)
- * @param options - Traversal options (depth limit, scheduler, progress counter)
- * @param notes - Where component provenance is recorded for the components pass
- * @returns The processed nodes
- */
+/** Preserve every node and its sibling order; projection owns traversal cuts. */
 async function walkNodes(
   nodes: NodeSnapshot[],
   options: SimplifyOptions = {},
@@ -145,7 +132,6 @@ async function walkNodes(
 ): Promise<SimplifiedNode[]> {
   const context: SimplifyContext = {
     components: notes,
-    currentDepth: 0,
     read,
     nodeCounter: options.nodeCounter ?? { count: 0 },
   };
@@ -186,13 +172,25 @@ async function extractNode(
   result.details = details;
   if (node.visible === false) result.visible = false;
   if (node.locked) result.locked = true;
+  if (
+    ["FRAME", "INSTANCE", "COMPONENT", "COMPONENT_SET", "SLOT"].includes(node.type) &&
+    node.clipsContent !== undefined
+  )
+    result.clip = node.clipsContent;
+  if (node.blendMode && CSS_BLEND_MODES.has(node.blendMode))
+    result.mixBlendMode = node.blendMode.toLowerCase().replace(/_/g, "-");
+  if (node.constraints) {
+    const x = HORIZONTAL_CONSTRAINTS[node.constraints.horizontal];
+    const y = VERTICAL_CONSTRAINTS[node.constraints.vertical];
+    result.pin = { ...(x ? { x } : {}), ...(y ? { y } : {}) };
+  }
   if (node.vectorPaths?.length) {
     if (node.vectorPaths.length === 1 && node.vectorPaths[0].windingRule === "NONZERO")
       result.d = node.vectorPaths[0].data;
     else result.vectorPaths = node.vectorPaths;
   }
   if (node.children) {
-    const childContext = { ...context, currentDepth: context.currentDepth + 1, parent: node };
+    const childContext = { ...context, parent: node };
     result.children = [];
     for (const child of node.children)
       result.children.push(await extractNode(child, childContext, options));
@@ -223,12 +221,7 @@ function extractLayout(node: NodeSnapshot, result: SimplifiedNode, context: Simp
  * Extracts text content and text styling from a node.
  */
 function extractText(node: NodeSnapshot, result: SimplifiedNode): void {
-  // Extract text content — markdown for the common styled cases, `[text, style]`
-  // run tuples for the arbitrary-style residual. Run deltas intern through the
-  // ordinary style table (no special namespace), so the compression pass
-  // count-gates them like every other style: single-use inlines, shared becomes
-  // a ref. The wire override tables are already resolved into `node.text` by
-  // the adapter.
+  // Decoded runs remain in details; the authoring field uses markdown and inline run deltas.
   if (isTextNode(node)) {
     const rich = buildFormattedText(node, (delta) => delta);
     if (rich.text !== undefined) {
@@ -255,8 +248,12 @@ function extractVisuals(node: NodeSnapshot, result: SimplifiedNode): void {
   // Check if node has children to determine CSS properties
   const hasChildren = !!node.children && node.children.length > 0;
 
-  // fill — one paint, or the array a genuinely stacked paint needs (foldPaintStack)
-  const fill = foldPaintStack(node.fills, hasChildren);
+  // The authoring field keeps visible paint layers in CSS order; details also keeps disabled layers.
+  const paints = node.fills
+    ?.filter(isVisible)
+    .map((paint) => parsePaint(paint, hasChildren))
+    .reverse();
+  const fill = paints?.length ? (paints.length === 1 ? paints[0] : paints) : undefined;
   if (fill !== undefined) {
     result.fill = fill;
   } else if (node.type === "TEXT") {
@@ -397,3 +394,36 @@ function extractComponent(
     }
   }
 }
+
+const CSS_BLEND_MODES = new Set([
+  "NORMAL",
+  "MULTIPLY",
+  "SCREEN",
+  "OVERLAY",
+  "SOFT_LIGHT",
+  "HARD_LIGHT",
+  "COLOR_DODGE",
+  "COLOR_BURN",
+  "DARKEN",
+  "LIGHTEN",
+  "DIFFERENCE",
+  "EXCLUSION",
+  "HUE",
+  "SATURATION",
+  "COLOR",
+  "LUMINOSITY",
+]);
+const HORIZONTAL_CONSTRAINTS: Record<string, NonNullable<SimplifiedNode["pin"]>["x"]> = {
+  MIN: "left",
+  CENTER: "center",
+  MAX: "right",
+  STRETCH: "stretch",
+  SCALE: "scale",
+};
+const VERTICAL_CONSTRAINTS: Record<string, NonNullable<SimplifiedNode["pin"]>["y"]> = {
+  MIN: "top",
+  CENTER: "center",
+  MAX: "bottom",
+  STRETCH: "stretch",
+  SCALE: "scale",
+};

@@ -30,8 +30,16 @@
             {
               "$elided": {
                 "id": "11:2",
+                "field": "clip",
+                "chars": 5,
+                "read": "flcm.get(\"11:2\")"
+              }
+            },
+            {
+              "$elided": {
+                "id": "11:2",
                 "field": "children",
-                "chars": 3620,
+                "chars": 3644,
                 "read": "flcm.get(\"11:2\")"
               }
             }
@@ -71,6 +79,14 @@
             {
               "$elided": {
                 "id": "11:7",
+                "field": "clip",
+                "chars": 4,
+                "read": "flcm.get(\"11:7\")"
+              }
+            },
+            {
+              "$elided": {
+                "id": "11:7",
                 "field": "children",
                 "chars": 1272,
                 "read": "flcm.get(\"11:7\")"
@@ -99,8 +115,16 @@
             {
               "$elided": {
                 "id": "11:8",
+                "field": "clip",
+                "chars": 4,
+                "read": "flcm.get(\"11:8\")"
+              }
+            },
+            {
+              "$elided": {
+                "id": "11:8",
                 "field": "children",
-                "chars": 2058,
+                "chars": 2082,
                 "read": "flcm.get(\"11:8\")"
               }
             }
@@ -178,8 +202,16 @@
             {
               "$elided": {
                 "id": "11:12",
+                "field": "clip",
+                "chars": 4,
+                "read": "flcm.get(\"11:12\")"
+              }
+            },
+            {
+              "$elided": {
+                "id": "11:12",
                 "field": "children",
-                "chars": 2813,
+                "chars": 2837,
                 "read": "flcm.get(\"11:12\")"
               }
             }
@@ -192,6 +224,14 @@
             "id": "11:1",
             "field": "details",
             "chars": 252,
+            "read": "flcm.get(\"11:1\")"
+          }
+        },
+        {
+          "$elided": {
+            "id": "11:1",
+            "field": "clip",
+            "chars": 5,
             "read": "flcm.get(\"11:1\")"
           }
         }
@@ -240,6 +280,14 @@
             {
               "$elided": {
                 "id": "11:3",
+                "field": "clip",
+                "chars": 4,
+                "read": "flcm.get(\"11:3\")"
+              }
+            },
+            {
+              "$elided": {
+                "id": "11:3",
                 "field": "children",
                 "chars": 1235,
                 "read": "flcm.get(\"11:3\")"
@@ -263,6 +311,14 @@
                 "id": "11:5",
                 "field": "details",
                 "chars": 408,
+                "read": "flcm.get(\"11:5\")"
+              }
+            },
+            {
+              "$elided": {
+                "id": "11:5",
+                "field": "clip",
+                "chars": 4,
                 "read": "flcm.get(\"11:5\")"
               }
             },
@@ -417,6 +473,14 @@
                 "chars": 554,
                 "read": "flcm.get(\"11:9\")"
               }
+            },
+            {
+              "$elided": {
+                "id": "11:9",
+                "field": "clip",
+                "chars": 4,
+                "read": "flcm.get(\"11:9\")"
+              }
             }
           ]
         },
@@ -458,6 +522,14 @@
                 "id": "11:10",
                 "field": "details",
                 "chars": 358,
+                "read": "flcm.get(\"11:10\")"
+              }
+            },
+            {
+              "$elided": {
+                "id": "11:10",
+                "field": "clip",
+                "chars": 4,
                 "read": "flcm.get(\"11:10\")"
               }
             }

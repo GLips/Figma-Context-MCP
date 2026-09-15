@@ -107,7 +107,7 @@ const SHARED_FIELDS = {
     "A CSS mix-blend-mode name. An unknown one fails loud.",
     '"normal" | "multiply" | "screen" | "overlay" | "soft-light" | … (CSS mix-blend-mode)',
   ),
-  visible: prop(z.boolean(), "Layer visibility. A hidden node is invisible to the read verbs too — find/get cover the RENDERED document, annotations included — so re-target it by id, not by a fresh find."),
+  visible: prop(z.boolean(), "Layer visibility. get and find include hidden nodes and their annotations."),
   locked: prop(z.boolean(), "Locks the layer against pointer edits in Figma's UI. flcm.edit still writes to it."),
 };
 
@@ -357,16 +357,16 @@ const LINE_FIELDS = {
 };
 
 // A single themeable vector (VECTOR): the shared appearance vocabulary MINUS `radius` (a vector has no
-// corner radius — accepting it would be a documented no-op, which ADR-0003 forbids) plus the required `d`.
+// corner radius — accepting it would be a documented no-op, which ADR-0003 forbids) plus path geometry.
 // Reuses the APPEARANCE_FIELDS entries so a path themes exactly like a rect and the docs can't drift.
 const PATH_FIELDS = {
-  vectorPaths: prop(z.array(z.object({ data: z.string(), windingRule: z.enum(["NONZERO", "EVENODD", "NONE"]) })), "Native path records for multiple paths or even-odd winding. Use exactly one of d, vectorPaths, or svg."),
+  vectorPaths: prop(z.array(z.object({ data: z.string(), windingRule: z.enum(["NONZERO", "EVENODD", "NONE"]) })), "Native path records for multiple paths or even-odd winding. Use exactly one of d, vectorPaths, or svg.", 'Array<{ data: string; windingRule: "NONZERO" | "EVENODD" | "NONE" }>'),
   d: z
     .string()
     .optional()
     .describe(
       'SVG path data, e.g. "M12 2 L22 20 L2 20 Z". Every standard command works (relative/shorthand are ' +
-        "normalized); only malformed data fails. Required.",
+        "normalized); only malformed data fails. Use exactly one of d, vectorPaths, or svg.",
     ),
   fill: APPEARANCE_FIELDS.fill,
   stroke: APPEARANCE_FIELDS.stroke,
@@ -704,11 +704,7 @@ export interface Flcm {
   clone(target: Target, props: CloneProps, parent?: Target): Promise<CloneResult>;
   measure(target: Target): Promise<{ x: number; y: number; width: number; height: number }>;
   replace(target: Target, replacement: NodeSpec): Promise<AuthoredTree>;
-  // Full inspect: the node's styling as the EXPANDED canonical read shape — the same vocabulary
-  // figma-mcp's REST read emits, every value inline (no styles refs), for any node type. Returns an
-  // ENVELOPE: `node` is the read shape, and `components` (present only when the subtree touched one)
-  // names each component once — its `children` live there, and each INSTANCE carries only its
-  // `overrides` diff against them.
+  // Complete runtime tree, including hidden and inherited children, plus component definitions.
   get(target: Target): Promise<GetResult>;
   // Locate: every node matching the query, as slim handles (identity + a cheap layout world-model). May be
   // empty; AND-combines type/name/key/within (default scope: current page). The query is a FILTER, not an

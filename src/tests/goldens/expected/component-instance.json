@@ -26,8 +26,16 @@
             {
               "$elided": {
                 "id": "6:2",
+                "field": "clip",
+                "chars": 4,
+                "read": "flcm.get(\"6:2\")"
+              }
+            },
+            {
+              "$elided": {
+                "id": "6:2",
                 "field": "children",
-                "chars": 1385,
+                "chars": 1397,
                 "read": "flcm.get(\"6:2\")"
               }
             }
@@ -78,6 +86,14 @@
                 "chars": 407,
                 "read": "flcm.get(\"6:5\")"
               }
+            },
+            {
+              "$elided": {
+                "id": "6:5",
+                "field": "clip",
+                "chars": 4,
+                "read": "flcm.get(\"6:5\")"
+              }
             }
           ]
         }
@@ -88,6 +104,14 @@
             "id": "6:1",
             "field": "details",
             "chars": 175,
+            "read": "flcm.get(\"6:1\")"
+          }
+        },
+        {
+          "$elided": {
+            "id": "6:1",
+            "field": "clip",
+            "chars": 4,
             "read": "flcm.get(\"6:1\")"
           }
         }
@@ -157,6 +181,22 @@
                 "id": "6:4",
                 "field": "details",
                 "chars": 338,
+                "read": "flcm.get(\"6:4\")"
+              }
+            },
+            {
+              "$elided": {
+                "id": "6:4",
+                "field": "clip",
+                "chars": 4,
+                "read": "flcm.get(\"6:4\")"
+              }
+            },
+            {
+              "$elided": {
+                "id": "6:4",
+                "field": "visible",
+                "chars": 5,
                 "read": "flcm.get(\"6:4\")"
               }
             }

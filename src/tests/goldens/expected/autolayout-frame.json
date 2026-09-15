@@ -32,6 +32,14 @@
                 "chars": 373,
                 "read": "flcm.get(\"2:2\")"
               }
+            },
+            {
+              "$elided": {
+                "id": "2:2",
+                "field": "clip",
+                "chars": 4,
+                "read": "flcm.get(\"2:2\")"
+              }
             }
           ]
         },
@@ -54,6 +62,14 @@
                 "chars": 390,
                 "read": "flcm.get(\"2:3\")"
               }
+            },
+            {
+              "$elided": {
+                "id": "2:3",
+                "field": "clip",
+                "chars": 4,
+                "read": "flcm.get(\"2:3\")"
+              }
             }
           ]
         }
@@ -64,6 +80,14 @@
             "id": "2:1",
             "field": "details",
             "chars": 410,
+            "read": "flcm.get(\"2:1\")"
+          }
+        },
+        {
+          "$elided": {
+            "id": "2:1",
+            "field": "clip",
+            "chars": 4,
             "read": "flcm.get(\"2:1\")"
           }
         }

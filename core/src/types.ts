@@ -180,7 +180,7 @@ export type TemplateBody = Omit<SimplifiedNode, "id" | "name" | "children" | "te
 // level per the canonical vocabulary's hybrid structure — inherited from
 // NodeGeometry so the extractor and the type can't drift.
 export interface Elision {
-  $elided: { id: string; field: string; chars: number; read: string };
+  $elided: { id: string; field: string; chars: number | null; read: string };
 }
 
 export interface SimplifiedNode extends NodeGeometry {
@@ -190,6 +190,12 @@ export interface SimplifiedNode extends NodeGeometry {
   d?: string;
   vectorPaths?: { data: string; windingRule: "NONZERO" | "EVENODD" | "NONE" }[];
   locked?: boolean;
+  clip?: boolean;
+  mixBlendMode?: string;
+  pin?: {
+    x?: "left" | "center" | "right" | "stretch" | "scale";
+    y?: "top" | "center" | "bottom" | "stretch" | "scale";
+  };
   annotations?: SnapshotAnnotation[];
   id: string;
   // Always populated during simplification, but the serialization pass drops it

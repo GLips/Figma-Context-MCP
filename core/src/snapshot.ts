@@ -233,7 +233,7 @@ export interface SnapshotText {
 
 /** A resolved named-style reference (Figma named style), folded on-node by the adapter. */
 export interface SnapshotStyleRef {
-  name: string;
+  name?: string;
   id: string;
 }
 
@@ -317,10 +317,12 @@ export interface SnapshotAnnotation {
 export interface NodeSnapshot {
   vectorPaths?: { data: string; windingRule: "NONZERO" | "EVENODD" | "NONE" }[];
   locked?: boolean;
+  blendMode?: string;
+  constraints?: { horizontal: string; vertical: string };
   annotations?: SnapshotAnnotation[];
   id: string;
   name: string;
-  /** Raw Figma node type (e.g. FRAME, TEXT, VECTOR). The walker maps VECTOR→IMAGE-SVG. */
+  /** Raw Figma node type (e.g. FRAME, TEXT, VECTOR). Only project maps VECTOR to IMAGE-SVG. */
   type: string;
   visible?: boolean;
   /**
@@ -328,8 +330,8 @@ export interface NodeSnapshot {
    * (e.g. `{ visible: "Show Badge#341:0" }`). Four fields occur on the wire:
    * `visible`, `characters`, `mainComponent` (a nested INSTANCE driven by an
    * INSTANCE_SWAP prop) and `slotContentId` (a SLOT node → its SLOT prop; on both
-   * producers live, though neither spec lists it). The walker reads `visible` to
-   * rescue hidden nodes inside component definitions; the component extractor
+   * producers live, though neither spec lists it). Projection reads `visible` to
+   * retain property-controlled hidden nodes inside component definitions; the component extractor
    * renames the rest onto the output fields they drive.
    */
   isExposedInstance?: boolean;

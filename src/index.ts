@@ -4,6 +4,8 @@ export type {
   SimplifiedNode,
   SimplifyOptions,
   SimplifyResult,
+  ProjectOptions,
+  Elision,
   TraversalOptions,
   WalkScheduler,
   NodeCounter,
@@ -11,13 +13,8 @@ export type {
   TemplateBody,
 } from "@framelink/core";
 
-// Deliberately NOT exported: the internal walk and the style-table factories.
-// simplify is the one transform authority; publishing the walk + raw tables
-// would hand consumers the toolkit to assemble a divergent walk — the fork the
-// seam exists to prevent. @framelink/core's barrel does carry them, for the
-// read-path tests inside this workspace; THIS file is the npm surface and is
-// deliberately the narrower of the two. Keep it that way.
-export { simplify } from "@framelink/core";
+// The public stages own their invariants; raw walk and style-table factories stay internal.
+export { simplify, project } from "@framelink/core";
 
 // REST adapter entry: raw Figma API response → canonical SimplifiedDesign
 export { simplifyRestResponse } from "./adapters/rest/rest.js";

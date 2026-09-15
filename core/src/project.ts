@@ -3,6 +3,7 @@ import { createComponentNotes, extractComponents } from "./components.js";
 import { readContext, type ReadContext } from "./read-context.js";
 import { createInlineStyleTable, createRefStyleTable } from "./style-table.js";
 import { computeGridChildOrder } from "./transformers/layout.js";
+import { foldPaintStack } from "./transformers/style.js";
 import { hasAutoLayout } from "./utils.js";
 import type { SimplifyResult } from "./simplify.js";
 import type { NodeSnapshot } from "./snapshot.js";
@@ -19,7 +20,7 @@ export function elision(id: string, field: string, value: unknown): Elision {
     $elided: {
       id,
       field,
-      chars: JSON.stringify(value)?.length ?? 0,
+      chars: JSON.stringify(value)?.length ?? null,
       read: `flcm.get(${JSON.stringify(id)})`,
     },
   };
@@ -78,7 +79,7 @@ function projectTrees(
         !(insideDefinition && full.componentPropertyReferences?.visible)
       )
         continue;
-      const { children, d, vectorPaths, locked, details, ...body } = full;
+      const { children, d, vectorPaths, locked, clip, pin, mixBlendMode, details, ...body } = full;
       const node = JSON.parse(JSON.stringify(body)) as SimplifiedNode;
       delete node.visible;
       delete node.overrides;
@@ -90,6 +91,16 @@ function projectTrees(
       if (d !== undefined) cut(full, "d", d);
       if (vectorPaths !== undefined) cut(full, "vectorPaths", vectorPaths);
       if (locked !== undefined) cut(full, "locked", locked);
+      if (clip !== undefined) cut(full, "clip", clip);
+      if (pin !== undefined) cut(full, "pin", pin);
+      if (mixBlendMode !== undefined) cut(full, "mixBlendMode", mixBlendMode);
+      if (full.visible === false) cut(full, "visible", false);
+      if (children && !children.length) cut(full, "children", children);
+      const fill = foldPaintStack(snapshot.fills, !!snapshot.children?.length);
+      if (fill !== undefined) node.fill = fill;
+      else if (full.type === "TEXT") node.fill = "none";
+      else delete node.fill;
+      if (JSON.stringify(node.fill) !== JSON.stringify(full.fill)) cut(full, "fill", full.fill);
       internStyles(node, snapshot, table);
       // Notes are collected only for nodes admitted by the wire's visibility/depth rules.
       for (const id of [full.id, full.componentId, snapshot.mainComponent?.set?.id]) {
@@ -124,6 +135,13 @@ function projectTrees(
         }
         if ((node.children?.length ?? 0) !== children.length) cut(full, "children", children);
       } else if (children?.length && atLimit) cut(full, "children", children);
+      // A depth-limited REST response can omit the child list before core ever sees it.
+      if (
+        children === undefined &&
+        options.maxDepth !== undefined &&
+        CONTAINER_TYPES.has(snapshot.type)
+      )
+        cut(full, "children", undefined);
       if (!atLimit && children && !node.children && node.type !== "IMAGE-SVG")
         notes.emptiedContainers.add(node.id);
       out.push(node);
@@ -140,27 +158,31 @@ function projectTrees(
     ? { ...compressDesign(nodes, surfaces, table.styles, refs.namedStyleKeys), components }
     : { nodes, styles: table.styles, templates: {}, components };
   // Markers attach after hashing/diffing so they cannot change template ids or component deltas.
-  const mark = (list: SimplifiedNode[]) => {
+  const mark = (list: SimplifiedNode[], donorId?: string) => {
     for (const node of list) {
-      const full = originals.get(node.id);
+      const fullId = donorId
+        ? `${donorId.startsWith("I") ? donorId : "I" + donorId};${node.id.startsWith("I") ? node.id.slice(1) : node.id}`
+        : node.id;
+      const full = originals.get(fullId);
       if (
         full?.children?.length &&
         !node.children &&
-        !cuts.get(node.id)?.some((e) => e.$elided.field === "children")
+        !cuts.get(fullId)?.some((e) => e.$elided.field === "children")
       )
         cut(full, "children", full.children);
-      const entries = cuts.get(node.id);
+      const entries = cuts.get(fullId);
       if (entries?.length) node.elided = entries;
-      if (node.children) mark(node.children);
+      if (node.children) mark(node.children, donorId);
       for (const delta of Object.values(node.overrides ?? {}))
-        if (delta.children) mark(delta.children);
+        if (delta.children) mark(delta.children, donorId);
     }
   };
   const omittedRoots = roots.filter((root) => !nodes.some((node) => node.id === root.id));
   if (omittedRoots.length)
     (result as SimplifyResult).elided = omittedRoots.map((root) => elision(root.id, "node", root));
   mark(result.nodes);
-  surfaces.forEach(mark);
+  for (const entry of Object.values(components))
+    if (entry.children) mark(entry.children, entry.childrenFrom);
   return result;
 }
 
@@ -292,9 +314,25 @@ export function isElision(value: unknown): value is Elision {
     "field" in marker &&
     typeof marker.field === "string" &&
     "chars" in marker &&
-    typeof marker.chars === "number" &&
-    marker.chars >= 0 &&
+    (marker.chars === null ||
+      (typeof marker.chars === "number" &&
+        Number.isSafeInteger(marker.chars) &&
+        marker.chars >= 0)) &&
     "read" in marker &&
     typeof marker.read === "string"
   );
 }
+
+const CONTAINER_TYPES = new Set([
+  "DOCUMENT",
+  "CANVAS",
+  "PAGE",
+  "FRAME",
+  "GROUP",
+  "INSTANCE",
+  "COMPONENT",
+  "COMPONENT_SET",
+  "SECTION",
+  "SLOT",
+  "BOOLEAN_OPERATION",
+]);

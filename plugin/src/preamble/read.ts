@@ -1,11 +1,5 @@
 import { sceneFigma as figma, invalidateSceneAccess } from "./scene-access.js";
-// read — the read-side walk that speaks figma.* (the counterpart to bridge.ts's write walk). Phase 1 seeds
-// it with target resolution; the read walk + sceneNodeToSnapshot join it as the read verbs (get/find) land.
-//
-// resolveTarget is the ONE place a `target` becomes a live node, shared by every target-taking verb so they
-// can't drift on how a string/id/key/handle resolves. It is uniform and FAIL-LOUD: not-found and ambiguous
-// both throw, naming the target and (for a key clash) the count — a blind agent must never silently act on
-// the wrong node.
+// Target resolution is shared by read and write verbs so ids and keys cannot resolve differently.
 
 import { readAnnotationCategoryNames } from "./annotation-categories.js";
 import { decodeAnnotations } from "./annotations.js";
@@ -21,7 +15,7 @@ import {
 import { rejectUnknownKeys } from "./validate.js";
 import { assertNodeStillOnCanvas } from "./freshness.js";
 import { registerRead } from "./host.js";
-import { simplify, project, projectNames, projectReadNode, type SimplifiedComponentEntry, type SimplifiedNode } from "@framelink/core";
+import { simplify, project, projectNames, projectReadNode, type SimplifiedNode } from "@framelink/core";
 import type { NodeSnapshot } from "@framelink/core/snapshot";
 
 // A pluginData scan searches this. Default is the current page; a verb's `within` narrows it (resolved by the
@@ -155,21 +149,15 @@ export function createResolvedTargets(): ResolvedTargets {
   };
 }
 
-// The live style resolver: the one snapshot lookup that isn't node-local. A style the document can't
-// resolve drops the slot (null), mirroring the REST adapter's only-named-styles-survive rule.
+// Style ids survive unresolved lookups in details; only resolved names become wire style keys.
 const resolveStyle: SceneStyleResolver = (styleId) => figma.getStyleByIdAsync(styleId);
 
-// Materialize a live node's subtree through the ONE shared read pipeline — the plugin adapter (all figma.*
-// liveness) then the shared simplify core over pure data — so the output is exactly the vocabulary
-// figma-mcp's REST path emits (Invariant 2). No compress flag: the result is EXPANDED (every value inline,
-// no styles refs), the form in-sandbox predicates and same-run consumers read (Invariant 3). The ONE
-// deliberate boundary cast lives here (shared by get and the locate index): the adapter's structural view
-// narrows the plugin typings to the axes it reads (its paint union omits VideoPaint, its segment getter
-// drops the field-generic overload), so tsc can't prove a live node assignable to it.
+// The adapter's structural view narrows plugin typings at this boundary. The resulting data is
+// complete in the sandbox; registration defers every lossy decision until host egress.
 async function simplifyScene(
   node: BaseNode,
   categories?: ReadonlyMap<string, string>,
-): Promise<{ nodes: SimplifiedNode[]; components: Record<string, SimplifiedComponentEntry>; full: import("@framelink/core").SimplifyResult }> {
+): Promise<import("@framelink/core").SimplifyResult> {
   const annotationCategories = categories ?? await readAnnotationCategoryNames();
   const mainComponents: MainComponentSink = new Map();
   const snapshot = await sceneNodeToSnapshot(
@@ -183,10 +171,8 @@ async function simplifyScene(
   const full = await simplify([snapshot], { componentDefinitions });
   for (const node of full.nodes) registerNode(node);
   for (const entry of Object.values(full.components)) for (const node of entry.children ?? []) registerNode(node);
-  const result = { nodes: full.nodes, components: full.components };
-  registerRead(result, () => project(full));
   registerRead(full.components, () => project(full).components);
-  return { ...result, full };
+  return full;
   function registerNode(node: SimplifiedNode): void {
     registerRead(node, () => {
       const projected = projectReadNode(node, full);
@@ -239,12 +225,13 @@ async function offTreeDefinitions(
 /** Read the complete subtree, including hidden targets and instance descendants. */
 export async function get(target: Target): Promise<GetResult> {
   const node = await resolveTarget(target);
-  const { nodes, components, full } = await simplifyScene(node);
+  const full = await simplifyScene(node);
+  const { nodes, components } = full;
   const result: GetResult = { node: nodes[0] };
   if (Object.keys(components).length > 0) result.components = components;
   registerRead(result, () => {
     const projected = project(full);
-    const output: GetResult = { ...result, node: projected === full ? result.node : projectNames(projected.nodes[0] ?? projectReadNode(nodes[0], full)) };
+    const output: GetResult = { node: projected === full ? result.node : projectNames(projected.nodes[0] ?? projectReadNode(nodes[0], full)) };
     if (Object.keys(projected.components).length) output.components = projected.components;
     return output;
   });
@@ -314,30 +301,28 @@ async function simplifiedIndex(root: ScanRoot, categories: ReadonlyMap<string, s
 // Project a live hit + its core-simplified twin into a SlimHandle. IDENTITY (id/type/name/key/text) comes
 // from the LIVE node via identityOf — deliberately, not from the simplified node: a SlimHandle IS a Handle
 // (plus a layout world-model), and the whole handle family reports live identity, so slim.type is the live
-// type you queried on (e.g. "VECTOR", not the egress-canonical "IMAGE-SVG" get emits for a collapsed icon)
+// type you queried on (including VECTOR)
 // and slim.text is the plain characters, a cheap locate label rather than get's rich run structure. childCount
 // is live too — the truest "is this a container" signal, undimmed by any core-side child dropping. Only the
 // LAYOUT WORLD-MODEL (width/height/layout.mode/position/left/top) is the core's own output — that is where
 // Invariant 1's "one vocabulary" bites, and it reads exactly like the matching fields of `get`. Only the
 // container mode survives from `layout`; a leaf (mode "none") drops it.
-function projectSlim(node: SceneNode, simplified: SimplifiedNode | undefined, categories: ReadonlyMap<string, string>): SlimHandle {
+function projectSlim(node: SceneNode, simplified: SimplifiedNode, categories: ReadonlyMap<string, string>): SlimHandle {
   const slim: SlimHandle = identityOf(node);
   const annotations = decodeAnnotations("annotations" in node ? node.annotations : undefined, categories);
   if (annotations) slim.annotations = annotations;
-  if (simplified) {
-    if (simplified.width !== undefined) slim.width = simplified.width;
-    if (simplified.height !== undefined) slim.height = simplified.height;
-    if (simplified.minWidth !== undefined) slim.minWidth = simplified.minWidth;
-    if (simplified.maxWidth !== undefined) slim.maxWidth = simplified.maxWidth;
-    if (simplified.minHeight !== undefined) slim.minHeight = simplified.minHeight;
-    if (simplified.maxHeight !== undefined) slim.maxHeight = simplified.maxHeight;
+  if (simplified.width !== undefined) slim.width = simplified.width;
+  if (simplified.height !== undefined) slim.height = simplified.height;
+  if (simplified.minWidth !== undefined) slim.minWidth = simplified.minWidth;
+  if (simplified.maxWidth !== undefined) slim.maxWidth = simplified.maxWidth;
+  if (simplified.minHeight !== undefined) slim.minHeight = simplified.minHeight;
+  if (simplified.maxHeight !== undefined) slim.maxHeight = simplified.maxHeight;
 
-    const mode = typeof simplified.layout === "object" ? simplified.layout.mode : undefined;
-    if (mode && mode !== "none") slim.layout = { mode };
-    if (simplified.position === "absolute") slim.position = "absolute";
-    if (simplified.left !== undefined) slim.left = simplified.left;
-    if (simplified.top !== undefined) slim.top = simplified.top;
-  }
+  const mode = typeof simplified.layout === "object" ? simplified.layout.mode : undefined;
+  if (mode && mode !== "none") slim.layout = { mode };
+  if (simplified.position === "absolute") slim.position = "absolute";
+  if (simplified.left !== undefined) slim.left = simplified.left;
+  if (simplified.top !== undefined) slim.top = simplified.top;
   const childCount = "children" in node ? node.children.length : 0;
   if (childCount) slim.childCount = childCount;
   return slim;
@@ -349,7 +334,7 @@ async function projectHits(hits: readonly SceneNode[], indexRoot: ScanRoot): Pro
   if (!hits.length) return [];
   const categories = await readAnnotationCategoryNames();
   const index = await simplifiedIndex(indexRoot, categories);
-  return hits.map((node) => projectSlim(node, index.get(node.id), categories));
+  return hits.map((node) => projectSlim(node, indexedRead(index, node.id), categories));
 }
 
 // The predicate materialization cap (ratified decision 2). A predicate-only find makes every rendered node a
@@ -379,8 +364,8 @@ async function filterByPredicate(hits: SceneNode[], root: ScanRoot, predicate: R
   const index = await simplifiedIndex(root, categories);
   const survivors: SlimHandle[] = [];
   for (const hit of hits) {
-    const simplified = index.get(hit.id);
-    if (simplified && predicate(simplified)) survivors.push(projectSlim(hit, simplified, categories));
+    const simplified = indexedRead(index, hit.id);
+    if (predicate(simplified)) survivors.push(projectSlim(hit, simplified, categories));
   }
   return survivors;
 }
@@ -405,13 +390,12 @@ function rejectStringQuery(query: unknown, verb: string): void {
 
 /**
  * flcm.find locates matching descendants as SlimHandles. Facets AND-combine; within scopes
- * the scan to a container. Hidden nodes are excluded, annotation queries included — find covers the
- * rendered document the way `get` does. Handles carry annotations alongside the layout projection.
+ * the scan to a container. Hidden nodes and annotations participate. Handles carry annotations
+ * alongside the layout projection.
  *
  * An optional `predicate` filters by anything in the full read shape ("every frame with a white fill"): the
  * query pre-filters live nodes, then a whole-scope simplify supplies their expanded canonical shapes.
- * Candidates absent from that read shape cannot satisfy a predicate. A predicate-only find materializes every
- * rendered candidate, up to a hard cap past which it fails loud (see MATERIALIZE_CAP).
+ * A predicate-only find materializes every candidate, up to the admission cap (see MATERIALIZE_CAP).
  */
 export async function find(query: FindQuery = {}, predicate?: ReadPredicate): Promise<SlimHandle[]> {
   invalidateSceneAccess();
@@ -455,4 +439,11 @@ export async function selection(): Promise<SlimHandle[]> {
   invalidateSceneAccess();
   const selected = figma.currentPage.selection;
   return projectHits(selected, figma.currentPage);
+}
+
+
+function indexedRead(index: ReadonlyMap<string, SimplifiedNode>, id: string): SimplifiedNode {
+  const node = index.get(id);
+  if (!node) throw new Error("flcm.find: node " + id + " left the scope during this read. Make a fresh query.");
+  return node;
 }

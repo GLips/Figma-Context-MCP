@@ -32,7 +32,7 @@ test("a slim-handle-shaped POJO round-trips whole", () => {
 test("a deep full read-shape POJO round-trips whole — no depth truncation", () => {
   // A nested frame tree well past the old depth-4 cap.
   let node: Record<string, unknown> = { id: "leaf", type: "TEXT", name: "deep", characters: "end" };
-  for (let i = 0; i < 30; i++) {
+  for (let i = 0; i < 230; i++) {
     node = { id: `f${i}`, type: "FRAME", name: `frame-${i}`, layout: { mode: "column", padding: { top: i } }, children: [node] };
   }
   assert.deepEqual(safeSerialize(node), node);
@@ -45,11 +45,12 @@ test("a long array round-trips whole — no 100-element truncation", () => {
   assert.deepEqual(out[249], arr[249]);
 });
 
-test("a cyclic structure terminates at the backstop instead of overflowing the stack", () => {
+test("cycles fail loudly while shared references remain complete", () => {
   const a: Record<string, unknown> = { name: "cycle" };
   a.self = a;
-  // No throw, no overflow — the deep chain bottoms out in the depth backstop sentinel.
-  assert.doesNotThrow(() => safeSerialize(a));
+  assert.throws(() => safeSerialize(a), /cyclic/);
+  const shared = { fill: "#FFF" };
+  assert.deepEqual(safeSerialize([shared, shared]), [shared, shared]);
 });
 
 test("guardReturnValue rejects a returned live node, naming its path and the id fix", () => {
@@ -58,4 +59,11 @@ test("guardReturnValue rejects a returned live node, naming its path and the id 
 
 test("guardReturnValue passes a pure read POJO through (no `removed` anywhere)", () => {
   assert.doesNotThrow(() => guardReturnValue({ id: "1:2", type: "FRAME", name: "x", children: [{ id: "3:4", type: "TEXT", name: "y" }] }));
+});
+
+
+test("deep returned live nodes fail with their path rather than silently collapsing", () => {
+  let value: unknown = liveNode;
+  for (let i = 0; i < 12; i++) value = { child: value };
+  assert.throws(() => guardReturnValue(value), /live Figma node.*child/s);
 });

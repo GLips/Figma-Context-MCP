@@ -38,6 +38,7 @@ export function serializeAsTree(design: SerializableDesign): string {
     sections.push(`COMPONENTS:\n${dumpYaml(design.metadata.components)}`);
   }
 
+  if (design.metadata.elided) sections.push(`ELIDED: ${JSON.stringify(design.metadata.elided)}`);
   const lines: string[] = ["NODES:"];
   for (const node of design.nodes) {
     renderNode(node, 0, lines, design.templates);

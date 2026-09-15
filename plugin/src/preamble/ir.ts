@@ -314,7 +314,7 @@ export interface WriteProps {
   //   • `pathData` — a single `d` path string → figma.createVector() + vectorPaths, one vector node that
   //                  takes our appearance props (fill/stroke/…) directly, so it themes like any primitive.
   svg?: string;
-  vectorPaths?: NonNullable<SimplifiedNode["vectorPaths"]>;
+  vectorPaths?: Readonly<NonNullable<SimplifiedNode["vectorPaths"]>>;
   pathData?: string;
   // Styled spans for a TEXT node. Mutually exclusive with a bare `text` string at the author boundary;
   // when present the bridge builds `characters` from the runs and `textStyle` is the base the runs layer

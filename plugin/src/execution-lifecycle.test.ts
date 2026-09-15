@@ -141,3 +141,25 @@ test("actual UI routes old results and image requests only to their original con
   assert.equal(JSON.parse(next.frames[0]).result, "new");
   assert(!forwarded.some((f) => f.pluginMessage.type === "CANCEL"));
 });
+
+test("execute projects registered reads in nested results and console lines exactly once", async () => {
+  const h = host();
+  await h.connect(1);
+  h.send({
+    type: "EXECUTE_CODE", id: "projection", __connKey: 1,
+    preamble: `(host) => {
+      const read = { id: "v", type: "VECTOR", d: "M0 0 L1 1" };
+      host.registerRead(read, () => ({ id: "v", type: "IMAGE-SVG", elided: [{ $elided: { id: "v", field: "d", chars: 10, read: 'flcm.get("v")' } }] }));
+      return { read };
+    }`,
+    code: `console.log({ nested: [flcm.read] }); return { nested: [flcm.read], computed: { id: "v", type: "VECTOR", d: "mine" } };`,
+  });
+  await flush();
+  const reply = h.frames.find(frame => frame.id === "projection" && frame.type === "EXECUTE_CODE_RESULT") as any;
+  assert.equal(reply.errors, null);
+  assert.equal(reply.result.nested[0].type, "IMAGE-SVG");
+  assert.equal(reply.result.nested[0].elided.length, 1);
+  assert.equal(reply.result.computed.d, "mine");
+  assert.equal(reply.console[0].includes('"type":"IMAGE-SVG"'), true);
+  assert.equal(reply.console[0].includes('"d":"M0'), false);
+});

@@ -342,9 +342,9 @@ function quickStartVerbLines(): string {
 // verb signatures, the must-knows, the pointer to the reference tool. ----
 export function buildQuickStart(): string {
   const verbLines = quickStartVerbLines();
-  const quickStart = `Execute JavaScript in the live Figma plugin sandbox. Prefer the in-scope \`flcm\` DSL over raw figma.*.
+  const quickStart = `Execute JavaScript in Figma. Prefer \`flcm\` to raw figma.*.
 
-EXECUTION MODEL — your code runs in an async function body: use \`await\` directly and \`return <value>\`. Each call runs in its OWN scope — thread state by returning ids/keys and re-targeting them (flcm.get).
+EXECUTION: use await and return directly. Each call has its own scope; return ids/keys and re-target with flcm.get.
 
 DESCRIBE a tree, then RENDER once:
   const t = { type:"FRAME", layout:{ mode:"column", gap:16 }, children:[{ type:"TEXT", text:"Hi" }] };
@@ -356,12 +356,13 @@ ${verbLines}
 
 MUST-KNOW
 - Return ids/handles, NEVER live Figma nodes.
+- get/find predicates read whole trees. Unchanged read objects project at return/console: elided markers give id, field, chars and a fresh flcm.get(id) drill-in. Return a field to see it whole; never rerun edits. Computed data stays whole.
 - Metrics take a number or "Npx"; width/height also take "N%", "fill", "hug". Colors/gradients/shadows are CSS strings.
 - Anything outside the documented CSS subset FAILS LOUD, never wrong pixels.
 
 FULL DOCS — get_flcm_reference(sections?): ${SECTION_IDS.join(", ")} (no arg = index + cheat-sheet).
 
-RETURNS { result, console, errors } — result: your value, JSON-safe (live nodes collapse to { id, name, type }); console: captured console.*; errors: the error string, else null.`;
+RETURNS { result, console, errors }: JSON-safe result, captured console lines, error string or null.`;
 
   const bytes = Buffer.byteLength(quickStart, "utf8");
   if (bytes > QUICKSTART_LIMIT_BYTES) {

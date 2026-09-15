@@ -181,6 +181,8 @@ function restSubtreeToSnapshot(
     type: node.type,
     visible: raw.visible,
     locked: raw.locked,
+    blendMode: raw.blendMode,
+    constraints: raw.constraints,
     componentPropertyReferences: raw.componentPropertyReferences,
 
     // Layout traits
@@ -348,7 +350,7 @@ function decodeStyles(
   const resolved: Record<string, SnapshotStyleRef> = {};
   for (const [slot, styleId] of Object.entries(styleMap)) {
     const name = extraStyles[styleId]?.name;
-    if (name) resolved[slot] = { name, id: styleId };
+    resolved[slot] = { ...(name ? { name } : {}), id: styleId };
   }
   return Object.keys(resolved).length ? resolved : undefined;
 }
