@@ -174,8 +174,8 @@ export interface SceneNodeLike {
   readonly layoutAlign?: "INHERIT" | "STRETCH" | "MIN" | "CENTER" | "MAX";
   readonly layoutGrow?: number;
   readonly layoutPositioning?: "AUTO" | "ABSOLUTE";
-  /** The plugin spelling of REST's `preserveRatio`. */
-  readonly constrainProportions?: boolean;
+  /** The locked width:height vector, null when unlocked — the plugin spelling of REST's `preserveRatio`. */
+  readonly targetAspectRatio?: { readonly x: number; readonly y: number } | null;
   /** Degrees, counterclockwise-positive — the same raw convention the snapshot carries. */
   readonly rotation?: number;
   readonly gridColumnAnchorIndex?: number;
@@ -427,7 +427,9 @@ async function sceneSubtreeToSnapshot(
     layoutAlign: node.layoutAlign,
     layoutGrow: node.layoutGrow === 1 ? 1 : undefined,
     layoutPositioning: node.layoutPositioning,
-    preserveRatio: node.constrainProportions || undefined,
+    // Never read the boolean `constrainProportions` for this: Figma logs a deprecation warning on
+    // every access, once per node, which floods the plugin console during a tree read.
+    preserveRatio: node.targetAspectRatio ? true : undefined,
     // Group children report a container-relative angle; normalize it like their origin.
     rotation: (node.rotation ?? 0) - parentSpace.rotation || undefined,
     gridColumnAnchorIndex: node.gridColumnAnchorIndex,
