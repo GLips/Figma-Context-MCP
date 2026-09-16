@@ -122,7 +122,7 @@ syncArtifact(
 // Import the reference builders only now: they read the generated examples module, which the gen
 // path just rewrote (and the check path just verified fresh) — a static import would render the
 // doc from stale strings.
-const { buildFullReference, buildQuickStart, buildReferenceSections } = await import(
+const { buildFullReference, buildQuickStart, oversizedReferenceSections } = await import(
   "../src/mcp/tools/flcm-docs/reference.js"
 );
 
@@ -131,9 +131,22 @@ const { buildFullReference, buildQuickStart, buildReferenceSections } = await im
 // the server silently shipping a truncated contract.
 buildQuickStart();
 
-// Same idea for the get_flcm_reference size cap: render the ["all"] payload so an over-cap reference
-// fails validate here, not at runtime as a silently-truncated tool result in an agent's context.
-buildReferenceSections(["all"]);
+// Same idea for the get_flcm_reference size cap. A section over the response budget is unreachable
+// through the tool — the budget loop always emits the first one — so fail validate here rather than at
+// runtime, as a silently-truncated tool result in an agent's context.
+const oversized = oversizedReferenceSections();
+if (oversized.length) {
+  console.error(
+    oversized
+      .map(
+        (s) =>
+          `get_flcm_reference section "${s.id}" is ${s.bytes} bytes, over the ${s.limit}B response budget — ` +
+          `no agent can read it. Split it or trim it.`,
+      )
+      .join("\n"),
+  );
+  process.exit(1);
+}
 
 syncArtifact(
   DOC_PATH,

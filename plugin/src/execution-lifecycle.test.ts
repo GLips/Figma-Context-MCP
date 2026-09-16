@@ -48,7 +48,7 @@ test("queued cancellation never executes, old settlement cannot cancel or erase 
   });
   h.context.writes = [];
   const run = (key: number, id: string, body: string) =>
-    h.send({ type: "EXECUTE_CODE", id, __connKey: key, preamble: "(host)=>({ flcm: {}, session: host.getSession(() => ({})) })", code: body });
+    h.send({ type: "EXECUTE_CODE", id, __connKey: key, preamble: "(host)=>({ flcm: {}, session: host.getSession(() => ({})), mutationQueueIdle: async () => 0 })", code: body });
   run(1, "same-id", "await hold; writes.push('old completed'); return 'old';");
   await flush();
   h.send({ type: "WS_CLOSED", __connKey: 1 });
@@ -86,7 +86,7 @@ test("Reject is explicit and unknown tokens cannot bypass approval status or exe
     type: "EXECUTE_CODE",
     id: "run",
     __connKey: 1,
-    preamble: "(host)=>({ flcm: {}, session: host.getSession(() => ({})) })",
+    preamble: "(host)=>({ flcm: {}, session: host.getSession(() => ({})), mutationQueueIdle: async () => 0 })",
     code: "writes.push('bad');",
   });
   await flush();
@@ -151,7 +151,7 @@ test("execute projects registered reads in nested results and console lines exac
     preamble: `(host) => {
       const read = { id: "v", type: "VECTOR", d: "M0 0 L1 1" };
       host.registerRead(read, () => ({ id: "v", type: "IMAGE-SVG", elided: { d: 10 } }));
-      return { flcm: { read }, session: host.getSession(() => ({})) };
+      return { flcm: { read }, session: host.getSession(() => ({})), mutationQueueIdle: async () => 0 };
     }`,
     code: `console.log({ nested: [flcm.read] }); return { nested: [flcm.read], computed: { id: "v", type: "VECTOR", d: "mine" } };`,
   });
@@ -339,6 +339,70 @@ test("a non-storable return succeeds and clears last", async () => {
   const next = await execute(h, `return session.last === undefined;`);
   assert.equal(next.errors, null);
   assert.equal(next.result, true);
+});
+
+test("a write queued behind a rejected batch lands before the reply, and the reply names it", async () => {
+  const { createFigmaMock } = await import("../harness/figma-mock.mjs");
+  const figma = createFigmaMock();
+  const h = host(figma);
+  await h.connect(1);
+  // The only moment that matters: what the canvas held when the result went out. That reply is what
+  // the agent screenshots and reasons against, so a write still in flight there is invisible damage.
+  let survivorAtReply: boolean | undefined;
+  const post = h.context.figma.ui.postMessage;
+  h.context.figma.ui.postMessage = (msg: Record<string, unknown>) => {
+    if (msg.type === "EXECUTE_CODE_RESULT" && survivorAtReply === undefined) {
+      survivorAtReply = h.context.figma.currentPage.children.some(
+        (n: { name: string }) => n.name === "QUEUED-SURVIVOR",
+      );
+    }
+    return post(msg);
+  };
+  const reply = await execute(h, `
+    let caught = null;
+    try {
+      await Promise.all([
+        flcm.edit(flcm.id("0:0"), { name: "nope" }),
+        flcm.render({ type: "FRAME", name: "QUEUED-SURVIVOR", width: 40, height: 40 }),
+      ]);
+    } catch (e) { caught = String(e.message || e); }
+    return { caught };
+  `);
+  assert.equal(reply.errors, null);
+  assert.notEqual(reply.result.caught, null);
+  assert.equal(survivorAtReply, true);
+  const warning = (reply as unknown as { console: string[] }).console.find(line =>
+    line.includes("finished after your code returned"),
+  );
+  assert.match(warning ?? "", /1 write\(s\)/);
+});
+
+test("a runtime stored past its reply refuses to write or read", async () => {
+  const { createFigmaMock } = await import("../harness/figma-mock.mjs");
+  const figma = createFigmaMock();
+  const h = host(figma);
+  await h.connect(1);
+  const first = await execute(h, `
+    globalThis.staleFlcm = flcm;
+    session.rootId = (await flcm.render({ type: "FRAME", width: 40, height: 40 })).id;
+    return "stashed";
+  `);
+  assert.equal(first.errors, null);
+  const second = await execute(h, `
+    const refusals = {};
+    try { await staleFlcm.render({ type: "FRAME", name: "STALE-WRITE", width: 10, height: 10 }); }
+    catch (e) { refusals.write = String(e.message || e); }
+    try { await staleFlcm.get(session.rootId); }
+    catch (e) { refusals.read = String(e.message || e); }
+    return refusals;
+  `);
+  assert.equal(second.errors, null);
+  assert.match(second.result.write, /already finished and replied/);
+  assert.match(second.result.read, /already finished and replied/);
+  assert.equal(
+    h.context.figma.currentPage.children.some((n: { name: string }) => n.name === "STALE-WRITE"),
+    false,
+  );
 });
 
 test("stored objects support ordinary Object methods without invoking inherited setters", async () => {

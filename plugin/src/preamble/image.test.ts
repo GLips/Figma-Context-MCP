@@ -26,7 +26,7 @@ async function renderWithImages(
       batches.push(urls);
       return respond(urls);
     },
-    isRunCancelled: () => false,
+    isRunCancelled: () => false, isRunFinished: () => false,
   };
   try {
     return { out: await render(tree), batches };

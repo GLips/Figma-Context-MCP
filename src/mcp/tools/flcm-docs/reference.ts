@@ -1,7 +1,8 @@
 // reference — the doc generator. It turns the schema (the single source: every verb/prop/type/one-liner)
 // plus the hand-written narrative fragments plus the compile-checked examples into two deliverables:
 //   • buildQuickStart()          → the ≤2KB figma_execute_code description (critical-first, signatures generated).
-//   • buildReferenceSections(s?) → the get_flcm_reference tool output (index+cheat-sheet, or named sections).
+//   • buildReferenceSections(s)  → the get_flcm_reference tool output: the named sections, or a refusal
+//     naming the sections when none were asked for.
 // buildFullReference() concatenates every section for the committed human doc (slice: flcm.md regen), so
 // the repo doc and the served doc are assembled from the SAME source and cannot drift.
 //
@@ -141,11 +142,28 @@ function verbTable(): string {
 interface Section {
   id: string;
   title: string;
-  blurb: string; // one-liner for the index
+  blurb: string; // one-liner for the menu a nameless call gets back
   body: () => string;
 }
 
 const SECTIONS: Section[] = [
+  // First, and named in the blank-call refusal, because it is the part that stops an agent being wrong
+  // about what a spec IS — identity, copying, session lifetime, read shape. An agent that already knows
+  // enough to name `structure` or `components` never asks for a general overview, so the rules have to
+  // be reachable by name.
+  {
+    id: "mental-model",
+    title: "The mental model",
+    blurb:
+      "what a spec is, and the identity, copying, session and read-shape rules every other section assumes. Read this first",
+    body: () =>
+      `${MENTAL_MODEL}\n\n### Rules that hold everywhere\n\n` +
+      "- Return ids and handles, never live Figma nodes.\n" +
+      "- Every metric (`width`, `height`, `gap`, `padding`, `borderRadius`, `strokeWidth`, `left`/`top`) " +
+      'takes a number or `"Npx"`; `width`/`height`/`left`/`top` also take `"N%"`, and `width`/`height` take ' +
+      '`"fill"`/`"hug"`. Colors, gradients and shadows are CSS strings.\n' +
+      "- Out-of-subset CSS fails loud.",
+  },
   {
     id: "verbs",
     title: "The verbs",
@@ -338,6 +356,11 @@ function quickStartVerbLines(): string {
     .join("\n");
 }
 
+// The docs pointer prints the literal first call: it names the must-read section and shows that the
+// argument is required, in one gesture. `mental-model` is SECTIONS[0], so the rest list without it —
+// which also buys back bytes of a budget the reference tool's own ids keep eating.
+const DOCS_POINTER = `FULL DOCS — get_flcm_reference(["${SECTION_IDS[0]}"]) first, then: ${SECTION_IDS.slice(1).join(", ")}.`;
+
 // ---- The ≤2KB quick-start = the figma_execute_code description. Critical-first: execution model, generated
 // verb signatures, the must-knows, the pointer to the reference tool. ----
 export function buildQuickStart(): string {
@@ -360,7 +383,7 @@ MUST-KNOW
 - Metrics take a number or "Npx"; width/height also take "N%", "fill", "hug". Colors/gradients/shadows are CSS strings.
 - Unsupported CSS fails loud.
 
-FULL DOCS — get_flcm_reference(sections?): ${SECTION_IDS.join(", ")} (no arg = index + cheat-sheet).
+${DOCS_POINTER}
 
 RETURNS { result, console, errors }: JSON-safe result, captured console lines, error string or null.`;
 
@@ -384,22 +407,29 @@ RETURNS { result, console, errors }: JSON-safe result, captured console lines, e
 // failure (79K chars was refused) rather than from a nominal 4×.
 const REFERENCE_LIMIT_BYTES = 50_000;
 
-// ---- The sectioned reference tool. No/empty sections → index + cheat-sheet. Otherwise the named sections,
-// DEDUPED and in canonical (SECTIONS) order, each under its own heading — so an agent can assemble the whole
-// picture (or any subset) in ONE call instead of many. Unknown ids are dropped with a note rather than
-// erroring, so a wrong name self-corrects. ----
-export function buildReferenceSections(sections?: string[]): string {
-  if (!sections || !sections.length) return indexBody();
-  const wanted = sections.map((s) => s.trim().toLowerCase());
-  const chosen = SECTIONS.filter((s) => wanted.includes(s.id)); // canonical order + dedupe
-  const unknown = wanted.filter(
-    (w) => w !== "index" && w !== "overview" && !SECTION_IDS.includes(w),
+// A call that names nothing gets the menu and no prose. Retryable wording, not a failure: an agent that
+// reads a terminal error abandons the tool, and the one thing a blank call is missing is the names.
+function blankCallRefusal(note: string): string {
+  const menu = SECTIONS.map((s) => `- \`${s.id}\` — ${s.blurb}`).join("\n");
+  return (
+    `# flcm reference\n\n${note}` +
+    "`get_flcm_reference` needs the sections you want, so this call returned no reference. " +
+    'Retry naming them — start with `get_flcm_reference(["mental-model"])`. ' +
+    "Several ids in one call are served together, deduped and in the order below.\n\n" +
+    `${menu}`
   );
+}
+
+// ---- The sectioned reference tool. The named sections, DEDUPED and in canonical (SECTIONS) order, each
+// under its own heading — so an agent can assemble the whole picture (or any subset) in ONE call instead of
+// many. Unknown ids are dropped with a note rather than erroring, so a wrong name self-corrects. ----
+export function buildReferenceSections(sections?: string[]): string {
+  const wanted = (sections ?? []).map((s) => s.trim().toLowerCase());
+  const chosen = SECTIONS.filter((s) => wanted.includes(s.id)); // canonical order + dedupe
+  const unknown = wanted.filter((w) => !SECTION_IDS.includes(w));
   if (!chosen.length) {
-    const note = unknown.length
-      ? `No section ${unknown.map((u) => `"${u}"`).join(", ")}. Valid sections: ${SECTION_IDS.join(", ")}.\n\n`
-      : "";
-    return `# flcm reference\n\n${note}${indexBody()}`;
+    const note = unknown.length ? `No section ${unknown.map((u) => `"${u}"`).join(", ")}.\n\n` : "";
+    return blankCallRefusal(note);
   }
 
   // Fill the budget in canonical order, then say out loud which sections didn't fit and how to get them.
@@ -444,33 +474,11 @@ export function oversizedReferenceSections(): { id: string; bytes: number; limit
   })).filter((s) => s.bytes > s.limit);
 }
 
-function indexBody(): string {
-  const sectionList = SECTIONS.map((s) => `- \`${s.id}\` — ${s.blurb}`).join("\n");
-  return `# flcm reference
-
-${MENTAL_MODEL}
-
-## Sections
-
-Call \`get_flcm_reference(["<id>"])\` for any of:
-
-${sectionList}
-
-## Cheat-sheet
-
-${verbTable()}
-
-- Nodes are plain data. Placement verbs return the spec copied with ids. Id means move and edit; no id means create.
-- Return ids/handles, never live Figma nodes.
-- Every metric (\`width\`, \`height\`, \`gap\`, \`padding\`, \`borderRadius\`, \`strokeWidth\`, \`left\`/\`top\`) takes a number or \`"Npx"\`; \`width\`/\`height\`/\`left\`/\`top\` also take \`"N%"\`, and \`width\`/\`height\` take \`"fill"\`/\`"hug"\`. Colors, gradients and shadows are CSS strings.
-- Out-of-subset CSS fails loud.`;
-}
-
 // The whole reference, in section order — the committed human doc is regenerated from this, so repo and
-// served docs are the same bytes.
+// served docs are the same bytes. The mental model rides in as the first section, not separately.
 export function buildFullReference(): string {
   const body = SECTIONS.map((s) => `## ${s.title}\n\n${s.body()}`).join("\n\n");
-  return `# Authoring with \`flcm\`\n\n${MENTAL_MODEL}\n\n${body}\n`;
+  return `# Authoring with \`flcm\`\n\n${body}\n`;
 }
 
 export { SECTION_IDS };

@@ -32,7 +32,7 @@ const host = {
   registerRead() {},
   requestImages: async (urls) =>
     Object.fromEntries(urls.map((u) => [u, Buffer.from("harness-image-bytes").toString("base64")])),
-  isRunCancelled: () => false,
+  isRunCancelled: () => false, isRunFinished: () => false,
 };
 const userCode = readFileSync(resolve(process.cwd(), fileArg), "utf8");
 const log = [];

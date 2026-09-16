@@ -336,3 +336,26 @@ test("a bad `pin` value fails loud", async () => {
     /pin must be an object/,
   );
 });
+
+// The ORDER hazard, not the constraint itself: a STRETCH child grows by its parent's delta, so a
+// pin written while the parent is still at its provisional creation size inflates a child that
+// named its own pixel size. Constraints describe how a child reflows LATER; they are never part of
+// the size it is authored at.
+test("`pin: \"stretch\"` never resizes the child that authored its own dimensions", async () => {
+  for (const pin of [undefined, { x: "stretch", y: "stretch" }]) {
+    for (const padding of [undefined, 8]) {
+      const out = await render({
+        type: "FRAME",
+        width: 200,
+        height: 100,
+        ...(padding === undefined ? {} : { layout: { mode: "column", padding } }),
+        children: [{ type: "RECTANGLE", key: "child", width: 200, height: 100, position: "absolute", left: 0, top: 0, ...(pin ? { pin } : {}) }],
+      } as never);
+      const child = await figma.getNodeByIdAsync(specNode(out, "child").id);
+      const at = "pin " + JSON.stringify(pin) + ", padding " + padding;
+      assert.equal(child.width, 200, at);
+      assert.equal(child.height, 100, at);
+      assert.deepEqual(child.constraints, pin ? { horizontal: "STRETCH", vertical: "STRETCH" } : { horizontal: "MIN", vertical: "MIN" }, at);
+    }
+  }
+});

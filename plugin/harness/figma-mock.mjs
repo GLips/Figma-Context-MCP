@@ -188,7 +188,26 @@ class Node {
     figma.currentPage.appendChild(copy);
     return copy;
   }
-  resize(w, h) { this._fixedW = this._bounded(w, "Width"); this._fixedH = this._bounded(h, "Height"); }
+  resize(w, h) {
+    const before = this.children ? { w: this.width, h: this.height } : null;
+    this._fixedW = this._bounded(w, "Width");
+    this._fixedH = this._bounded(h, "Height");
+    if (before) this._reflowConstrainedChildren(before);
+  }
+
+  // Figma reflows a constrained child when the parent's box changes, and a STRETCH child holds BOTH
+  // its margins — so it grows by the parent's delta on that axis. That is what makes the order of
+  // "set constraints" and "size the parent" load-bearing at create time: a STRETCH mark written
+  // while the parent is still at its provisional size inflates the child by the difference.
+  // MIN/MAX/CENTER/SCALE stay inert: they move or rescale a child, which nothing here reads.
+  _reflowConstrainedChildren(before) {
+    const dw = this.width - before.w, dh = this.height - before.h;
+    for (const child of this.children) {
+      const pinned = child.constraints || {};
+      if (dw && pinned.horizontal === "STRETCH" && child._fixedW != null) child._fixedW = Math.max(child._fixedW + dw, 0.01);
+      if (dh && pinned.vertical === "STRETCH" && child._fixedH != null) child._fixedH = Math.max(child._fixedH + dh, 0.01);
+    }
+  }
   _bounded(value, axis) {
     const auto = (node) => node && ["HORIZONTAL", "VERTICAL", "GRID"].includes(node.layoutMode);
     return auto(this) || auto(this.parent) ? Math.max(this["min" + axis] ?? 0, Math.min(this["max" + axis] ?? Infinity, value)) : value;

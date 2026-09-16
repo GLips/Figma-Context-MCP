@@ -29,6 +29,12 @@ export interface FlcmHost {
   requestImages(urls: string[]): Promise<Record<string, string>>;
   /** Has the server cancelled this run? Only the host sees the CANCEL frame arrive. */
   isRunCancelled(): boolean;
+  /**
+   * Has the run this runtime was built FOR already replied? A runtime is per request, but agent code
+   * can outlive it — stash `flcm` on globalThis in one call and it is still callable in the next,
+   * bound to a host whose run is gone. Only the host knows its own run settled.
+   */
+  isRunFinished(): boolean;
 }
 
 // code.ts passes the host as the PARAMETER of the eval'd async wrapper the preamble runs inside, so
@@ -67,6 +73,15 @@ export function requestHostImages(urls: string[]): Promise<Record<string, string
 export function hostRunCancelled(): boolean {
   const host = currentHost();
   return host ? host.isRunCancelled() : false;
+}
+
+/**
+ * Whether this runtime's own run has already replied. Fails OPEN for the same reason as
+ * cancellation: no host means no run to outlive.
+ */
+export function hostRunFinished(): boolean {
+  const host = currentHost();
+  return host ? host.isRunFinished() : false;
 }
 
 /** Diagnostics must not change the result or rejection of a native operation. */

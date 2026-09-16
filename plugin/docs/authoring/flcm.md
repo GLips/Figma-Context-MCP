@@ -3,6 +3,8 @@
 
 # Authoring with `flcm`
 
+## The mental model
+
 Nodes are plain JavaScript data. Each new node names its type: FRAME, TEXT, RECTANGLE, ELLIPSE, LINE, VECTOR, or INSTANCE. children is an ordinary array of node specs.
 
 ```js
@@ -65,13 +67,19 @@ A marker-only object such as { elided: { children: 4200 } } retyped into a spec'
 
 REST does not request geometry=paths, so its decoded readOnlySource cannot supply VECTOR path data. Use a live plugin read for paths. Variables, prototype interactions, vector networks, video paints, image filters, mask/boolean-operation settings and plugin data remain outside the adapter vocabulary; use raw figma access for them. Reading a node type does not imply that a verb can create it; clone preserves unsupported authoring state. The predicate admission limit remains 5,000 candidates; narrow within or the query for larger files. Unavailable library definitions can still fall back to an instance donor, identified by childrenFrom.
 
+### Rules that hold everywhere
+
+- Return ids and handles, never live Figma nodes.
+- Every metric (`width`, `height`, `gap`, `padding`, `borderRadius`, `strokeWidth`, `left`/`top`) takes a number or `"Npx"`; `width`/`height`/`left`/`top` also take `"N%"`, and `width`/`height` take `"fill"`/`"hug"`. Colors, gradients and shadows are CSS strings.
+- Out-of-subset CSS fails loud.
+
 ## The verbs
 
 `flcm` exposes exactly these. Nothing else is on the `flcm` object.
 
 | Verb | Builds | Arguments |
 | --- | --- | --- |
-| `await flcm.render(spec)` | the spec copied with ids on every node | Place on the current page. An id moves and edits that live node; no id creates. Children follow the same rule. |
+| `await flcm.render(spec)` | the spec copied with ids on every node | Place on the current page. An id moves and edits that live node; no id creates. Children follow the same rule. With an id and children, it adds several children to that live node in one call. |
 | `await flcm.append(parent, spec)` | the spec copied with ids on every node | Place as the last child. Unmentioned live children remain. |
 | `await flcm.prepend(parent, spec)` | the spec copied with ids on every node | Place as the first child. |
 | `await flcm.insertBefore(sibling, spec)` | the spec copied with ids on every node | Place immediately before the sibling. |

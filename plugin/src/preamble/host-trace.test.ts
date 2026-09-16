@@ -6,7 +6,7 @@ const globals = globalThis as typeof globalThis & { __flcmHost?: FlcmHost };
 test("pending native await reports its start and preserves its eventual outcome", async () => {
   const events: string[] = [];
   globals.__flcmHost = {
-    requestImages: async () => ({}), isRunCancelled: () => false,
+    requestImages: async () => ({}), isRunCancelled: () => false, isRunFinished: () => false,
     traceNative: (stage, operation) => events.push(`${stage}:${operation}`),
   };
   try {
@@ -23,7 +23,7 @@ test("pending native await reports its start and preserves its eventual outcome"
 });
 
 test("old hosts and failing diagnostics preserve native results", async () => {
-  globals.__flcmHost = { requestImages: async () => ({}), isRunCancelled: () => false };
+  globals.__flcmHost = { requestImages: async () => ({}), isRunCancelled: () => false, isRunFinished: () => false };
   try {
     assert.equal(await awaitNative("page-switch", async () => 7), 7);
     globals.__flcmHost.traceNative = () => { throw new Error("report failed"); };

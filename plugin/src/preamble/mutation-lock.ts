@@ -11,7 +11,8 @@ import { beginSizingDiagnostics, finishSizingDiagnostics } from "./sizing-diagno
 //     canvas an earlier queued verb is about to change. The chain slot is reserved synchronously
 //     at call time, so verbs run in invocation order. Per-run state — the preamble is eval'd fresh
 //     inside each run's wrapper; exclusion BETWEEN runs is the host's writeChain (code.ts
-//     enqueueWrite).
+//     enqueueWrite). The queue can outlive the agent's code, so it also says when it is empty —
+//     mutationQueueIdle, which the host drains before it replies.
 //
 //   • Enforce cancellation during execution: once the host records this run's CANCEL, no further
 //     verb STARTS — checked as each verb's turn arrives AND again after its preparation (the
@@ -27,9 +28,32 @@ import { beginSizingDiagnostics, finishSizingDiagnostics } from "./sizing-diagno
 // internal appliers, never the public verbs (invariant 4).
 
 import { beginAnnotationMutation, removeFailedAnnotationCategories } from "./annotation-categories.js";
-import { hostRunCancelled } from "./host.js";
+import { hostRunCancelled, hostRunFinished } from "./host.js";
 
 let verbChain: Promise<unknown> = Promise.resolve();
+
+// Verbs whose turn has ended, success or failure. Only ever read as a delta across a drain, which
+// is what answers "how much landed after the agent stopped awaiting" (mutationQueueIdle).
+let settledVerbs = 0;
+
+/**
+ * Resolves once every verb reserved so far has settled, answering how many settled during the wait.
+ * The host awaits this before it replies: a slot is reserved SYNCHRONOUSLY at call time, so a
+ * rejected `Promise.all` — or a verb the agent never awaited — leaves writes queued behind code
+ * that has already returned. Replying over them would report a canvas that is still moving.
+ *
+ * Re-reads the chain until it stops growing, since a draining verb can queue the next one. Never
+ * rejects: a verb's failure belongs to the caller that invoked it, not to the drain.
+ */
+export async function mutationQueueIdle(): Promise<number> {
+  const before = settledVerbs;
+  let drained: Promise<unknown> | undefined;
+  while (drained !== verbChain) {
+    drained = verbChain;
+    await drained;
+  }
+  return settledVerbs - before;
+}
 
 // Mutating verbs that ran to their success commit this run — the pointer-error contract (invariant
 // 2) tells the agent "the N mutating calls before this one committed and stand" instead of making
@@ -74,6 +98,20 @@ function refuseIfCancelled(verb: string): void {
     throw new Error(
       "flcm." + verb + ": this run was cancelled by the server (its deadline passed) — no further " +
         "mutating verbs start. The canvas holds what completed before the cancellation.",
+    );
+  }
+}
+
+// A runtime whose own run has replied: the agent kept `flcm` across calls (on globalThis — session
+// refuses functions, so that is where it lands). Its host answers for a run nobody is waiting on, so
+// its cancellation checks are permanently false and its writes are unstoppable. Refused at the same
+// two points as cancellation, and worded so the agent reaches for the binding it was just handed.
+function refuseIfRunFinished(verb: string): void {
+  if (hostRunFinished()) {
+    throw new Error(
+      "flcm." + verb + ": this flcm belongs to an earlier call that has already finished and " +
+        "replied — a stored runtime cannot write, because nothing can cancel or wait for it. Use " +
+        "the flcm your current call was given (store ids and specs in `session`, never flcm itself).",
     );
   }
 }
@@ -154,6 +192,7 @@ export function enterMutatingVerb<P, G, T>(
   apply: (gated: G) => SyncOnly<T>,
 ): Promise<T> {
   const turn = verbChain.then(async () => {
+    refuseIfRunFinished(verb);
     refuseIfCancelled(verb);
     // The verb's annotation-category slate, opened here rather than by prepare because its other
     // half is the failure path below: what a prepare created must be removable from a catch that
@@ -164,6 +203,7 @@ export function enterMutatingVerb<P, G, T>(
       // Prepare's awaits are the run's suspension points — a CANCEL that arrived during them must
       // fail closed here, before the seal, not mutate on a dead run's behalf; a Dev Mode flip
       // during them is the same kind of fact, read at the same place.
+      refuseIfRunFinished(verb);
       refuseIfCancelled(verb);
       refuseIfDevMode(verb);
       invalidateSceneAccess();
@@ -195,6 +235,7 @@ export function enterMutatingVerb<P, G, T>(
   // A failed verb must not poison the chain — the failure belongs to its caller (via `turn`);
   // later verbs proceed against the rolled-back (or, on a prepare/gate reject, untouched) canvas.
   // (Same swallow as the host's writeChain, code.ts enqueueWrite.)
-  verbChain = turn.catch(() => {});
+  const settle = (): void => { settledVerbs++; };
+  verbChain = turn.then(settle, settle);
   return turn;
 }

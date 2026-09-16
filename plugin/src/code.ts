@@ -45,9 +45,10 @@ figma.showUI(__html__, {
 //     preamble (preamble/host.ts). The server GATES on this; bump it ONLY on a breaking change to
 //     either (and the server's MIN with it). v2 = the mid-run image protocol (plugin-issued
 //     IMAGES_REQUEST/IMAGES_REPLY + run-scoped CANCEL). v3 = the server ships the flcm std-lib
-//     (ADR-0010), and the host capabilities collapse into the one `__flcmHost` object.
+//     (ADR-0010), and the host capabilities collapse into the one `__flcmHost` object. v6 = the host
+//     answers isRunFinished, so a runtime the agent stored past its reply refuses instead of writing.
 //   • PLUGIN_VERSION — the plugin release, shown to the human in a skew refusal. Informational.
-const PROTOCOL_VERSION = 5;
+const PROTOCOL_VERSION = 6;
 const PLUGIN_VERSION = "0.1.0";
 
 // Phase 2 consent gate. The sandbox is the SOLE ARBITER (Invariant): it holds the durable
@@ -694,6 +695,14 @@ figma.ui.onmessage = (msg: InboundMessage) => {
   }
 };
 
+// The read/image half of the stale-runtime refusal; mutation-lock words the write half, which it
+// reaches through the host's isRunFinished. Same fact either way: a runtime is built per request and
+// is only serviceable while its own request is open.
+const STALE_RUNTIME_REFUSAL =
+  "flcm: this runtime belongs to an earlier call that has already finished and replied — a stored " +
+  "flcm cannot read or fetch, because its reply address is gone. Use the flcm your current call was " +
+  "given (store ids and specs in `session`, never flcm itself).";
+
 /**
  * Runs the agent's raw code string against the live figma.* API and posts back
  * `{ id, result, console, errors }`. The agent's code is never bundled or
@@ -750,6 +759,12 @@ async function executeCode(to: ReplyTo, code: string, preamble: string): Promise
 
   let result: unknown;
   let errorMessage: string | null = null;
+  // Flipped once this run has nothing left to do — after the queue drain below, so a verb that was
+  // legitimately queued by this run's code is not refused as another run's leftover. Every host
+  // method reads it, which is what contains a runtime the agent stored across calls (§8).
+  let settled = false;
+  let runtime: typeof SandboxRuntime | undefined;
+  let landedAfterReturn = 0;
   try {
     // Two evals, and the split is the point. The std-lib the server sent is a FACTORY expression
     // (buildSandboxPreamble, src/preamble/index.mjs): call it with the host, get the { flcm, session } bindings
@@ -764,14 +779,36 @@ async function executeCode(to: ReplyTo, code: string, preamble: string): Promise
     // reports where the AGENT wrote it, not an offset into ~230 KiB of std-lib. That wrapper is
     // async because the agent awaits flcm.render(); the factory itself is synchronous (the font
     // preload runs inside render(), not at module top level).
+    //
+    // Every service below answers for THIS run, so each refuses once the run has settled rather
+    // than serving a runtime the agent kept past its reply: a stale registerRead would project into
+    // a dead run's egress, a stale image fetch has no reply address left, and a stale runtime's
+    // cancellation flag can never turn true again. Tracing is the exception — a diagnostic that
+    // refuses would change execution, so it goes quiet instead.
     const host: FlcmHost = {
       getSession: (initialize) => agentSession ??= initialize(),
-      registerRead: egress.registerRead,
-      traceNative: (stage, operation) => trace(stage, operation),
-      requestImages: (urls: string[]) => requestServerImages(to, urls),
+      registerRead: (value, project) => {
+        if (settled) throw new Error(STALE_RUNTIME_REFUSAL);
+        egress.registerRead(value, project);
+      },
+      traceNative: (stage, operation) => { if (!settled) trace(stage, operation); },
+      requestImages: (urls: string[]) =>
+        settled ? Promise.reject(new Error(STALE_RUNTIME_REFUSAL)) : requestServerImages(to, urls),
       isRunCancelled: () => cancelledRuns.isCancelled(to),
+      isRunFinished: () => settled,
     };
-    const { flcm, session } = (eval(preamble) as (host: FlcmHost) => typeof SandboxRuntime)(host);
+    const built = (eval(preamble) as (host: FlcmHost) => typeof SandboxRuntime)(host);
+    // Checked HERE, not in the finally that drains: a std-lib that cannot be drained must fail as a
+    // run error the agent sees, never as a throw out of the finally — that would cost the run its
+    // reply, and the frozen envelope promises one for every request.
+    if (typeof built.mutationQueueIdle !== "function") {
+      throw new Error(
+        "the flcm std-lib the server sent exposes no mutation queue to drain, so writes could " +
+          "outlive this reply — update the server (`npx figma-developer-mcp@latest`) and restart it.",
+      );
+    }
+    runtime = built;
+    const { flcm, session } = built;
     const raw = await eval("(async function(flcm, session){ " + code + "\n })")(flcm, session);
     // Return-path node guard (R2): a returned live node would otherwise collapse to
     // { id } and silently drop everything else. Make that loud instead of lossy.
@@ -782,12 +819,29 @@ async function executeCode(to: ReplyTo, code: string, preamble: string): Promise
   } catch (err) {
     errorMessage = formatError(err);
   } finally {
+    // Drain before anything else in here, and the order of the three is load-bearing:
+    //   • BEFORE the console restore, so a queued verb's warnings still reach the agent's reply;
+    //   • BEFORE settle(), which drops this run's cancellation — a CANCEL landing mid-drain must
+    //     still refuse the verbs behind it (mutation-lock refuseIfCancelled);
+    //   • BEFORE `settled`, or the run's own queued verbs would be refused as a stale runtime's.
+    // Nothing else can wait for these writes: the agent has returned, and the reply is what it
+    // screenshots against. A preamble that never evaluated leaves no queue to drain.
+    if (runtime) landedAfterReturn = await runtime.mutationQueueIdle();
     trace("eval-end");
     console.log = originalConsole.log;
     console.info = originalConsole.info;
     console.warn = originalConsole.warn;
     console.error = originalConsole.error;
+    settled = true;
     cancelledRuns.settle(to);
+  }
+  if (landedAfterReturn > 0) {
+    consoleLog.push(
+      `[warn] ${landedAfterReturn} write(s) finished after your code returned — flcm reserves a ` +
+        `verb's slot the moment it is called, so an unawaited verb (or a sibling of one that ` +
+        `rejected in Promise.all) still lands. This reply waited for them; await every verb to keep ` +
+        `your result and the canvas in step.`,
+    );
   }
 
   reply(to, { type: "EXECUTE_CODE_RESULT", result, console: consoleLog, errors: errorMessage });

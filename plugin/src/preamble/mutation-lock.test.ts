@@ -11,7 +11,7 @@
 import { test, afterEach, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
-import { enterMutatingVerb, committedVerbCount } from "./mutation-lock.js";
+import { enterMutatingVerb, committedVerbCount, mutationQueueIdle } from "./mutation-lock.js";
 import { image } from "./flcm.js";
 import { render } from "./render.js";
 
@@ -28,7 +28,7 @@ beforeEach(() => {
 const hostSlot = (): Record<string, unknown> => {
   const g = globalThis as Record<string, unknown>;
   if (!g.__flcmHost) {
-    g.__flcmHost = { requestImages: async () => ({}), isRunCancelled: () => false };
+    g.__flcmHost = { requestImages: async () => ({}), isRunCancelled: () => false, isRunFinished: () => false };
   }
   return g.__flcmHost as Record<string, unknown>;
 };
@@ -43,6 +43,10 @@ afterEach(() => {
 
 const installImageChannel = (respond: () => Promise<Record<string, string>>): void => {
   hostSlot().requestImages = respond;
+};
+
+const installRunFinished = (finished: () => boolean): void => {
+  hostSlot().isRunFinished = finished;
 };
 
 const noPrep = async (): Promise<void> => undefined;
@@ -81,6 +85,44 @@ test("verbs serialize WHOLE: a queued verb's preparation never starts before the
   // b:prepare after a:apply is the serialization guarantee: a queued verb's prepare resolves its
   // targets and loads its resources against the canvas as the running verb leaves it.
   assert.deepEqual(events, ["a:prepare", "a:gate", "a:apply", "b:prepare", "b:gate", "b:apply"]);
+});
+
+test("a sibling of a rejected verb is still outstanding until the queue drains", async () => {
+  const landed: string[] = [];
+  let caught: string | null = null;
+  try {
+    await Promise.all([
+      enterMutatingVerb("edit", async () => { throw new Error("Input must be a valid number"); }, noGate, () => {}),
+      // Its slot was reserved synchronously, but its prepare suspends the way a real render's font
+      // and image loads do — so it cannot possibly have landed when the batch rejects.
+      enterMutatingVerb(
+        "render",
+        async () => { await new Promise((r) => setTimeout(r, 5)); },
+        noGate,
+        () => { landed.push("survivor"); },
+      ),
+    ]);
+  } catch (err) {
+    caught = (err as Error).message;
+  }
+  // The reply used to go out at exactly this point, over a canvas still about to change.
+  assert.match(caught!, /valid number/);
+  assert.deepEqual(landed, []);
+  assert.equal(await mutationQueueIdle(), 1);
+  assert.deepEqual(landed, ["survivor"]);
+  // Idle on an empty queue is immediate and counts nothing.
+  assert.equal(await mutationQueueIdle(), 0);
+});
+
+test("a runtime whose run has already replied refuses to write, and says so as a finished run", async () => {
+  installRunFinished(() => true);
+  let ran = false;
+  await assert.rejects(
+    enterMutatingVerb("render", async () => { ran = true; }, noGate, () => { ran = true; }),
+    /already finished and replied/,
+  );
+  assert.equal(ran, false);
+  assert.deepEqual(figma.undoLog, []);
 });
 
 test("gate and apply are synchronous BY TYPE: an async one is a compile error, not a runtime surprise", () => {

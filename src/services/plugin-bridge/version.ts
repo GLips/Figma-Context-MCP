@@ -34,7 +34,10 @@ import { z } from "zod";
 // v4: separate APPROVAL_STATUS polling, Reject, and connection-owned run states.
 // v5: read registration projects egress; getSession retains preamble-owned data policy for one
 // plugin run. The preamble factory returns { flcm, session } for the agent wrapper.
-export const MIN_PROTOCOL_VERSION = 5;
+// v6: FlcmHost answers isRunFinished, so the runtime refuses a stale flcm kept across calls, and the
+// host drains the preamble's verb queue (mutationQueueIdle) before replying. A v5 plugin hands the
+// preamble no isRunFinished — every mutating verb would die on the missing method.
+export const MIN_PROTOCOL_VERSION = 6;
 
 /**
  * Where a connection stands with the version handshake.

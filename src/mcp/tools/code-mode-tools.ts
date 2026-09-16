@@ -173,17 +173,20 @@ export function registerCodeModeTools(
       "get_flcm_reference",
       {
         description:
-          "Full authoring reference for the `flcm` DSL used in figma_execute_code. Call with no argument for " +
-          "the index + cheat-sheet, or an array of section ids for those sections (deduped, in canonical " +
-          "order). Sections: " +
+          "Full authoring reference for the `flcm` DSL used in figma_execute_code. Requires an array of " +
+          'section ids (deduped, served in canonical order); start with ["mental-model"], which carries the ' +
+          "identity, copying and session rules the rest assumes. Sections: " +
           SECTION_IDS.join(", ") +
           ".",
         inputSchema: {
+          // Optional at the wire so a blank call reaches the handler and gets the section menu back. A
+          // required zod field would make the SDK answer with its own fixed "Input validation error",
+          // which names no sections and reads as a broken tool (see fail-loud-params.ts).
           sections: z
             .array(z.enum(SECTION_IDS))
             .optional()
             .describe(
-              'Which sections to return, e.g. ["props","effects"]. Omit for the index + cheat-sheet, which names every section. The whole reference does not fit one response, so ask for the sections you need.',
+              'Required. Which sections to return, e.g. ["mental-model","props"]. The whole reference does not fit one response, so ask for the sections you need; a call naming none is refused with the list of ids.',
             ),
         },
       },

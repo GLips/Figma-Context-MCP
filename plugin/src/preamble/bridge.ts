@@ -952,6 +952,9 @@ function isPositionedChild(parentIsAuto: boolean, cl: WriteLayout): boolean {
   return cl.position === "absolute" || !parentIsAuto;
 }
 
+/** One positioned child waiting on its parent's final size — cover its "fill" axes, then constrain it. */
+export interface PositionedChildSettlement { child: any; layout: WriteLayout }
+
 // The parent-side facts a compiled child is settled against. The flow facts are ParentFlowFacts (the
 // percent rule's own shape); `crossStretch` rides along because container-level `alignItems:
 // "stretch"` intent is never stored — not by Figma, not by us (see setContainerStretchMarks) — so
@@ -984,6 +987,7 @@ export function liveParentAttachFacts(parent: any, subject: string): AttachParen
 // the ordering stays here.
 export function attachBuiltChild(
   parent: any, wn: WriteNode, ctx: RenderCtx, facts: AttachParentFacts, place: (child: any) => void,
+  settleAfterParentSize?: PositionedChildSettlement[],
 ): any {
   facts = { ...facts, subject: wn.sourcePath ?? facts.subject };
   const live = ctx.live?.get(wn);
@@ -1005,7 +1009,13 @@ export function attachBuiltChild(
   if (cl.position === "absolute") applyChildPosition(parent, child, cl);
   if (isPositionedChild(facts.parentIsAuto, cl)) {
     coverChild(parent, child, cl);
-    applyConstraints(child, wn.layout);
+    // A constraint is how the child reflows when the parent's box CHANGES, so writing it before the
+    // parent has its final size makes Figma reflow the child by that difference — a STRETCH child
+    // authored 200 wide under a still-provisional frame comes out 200 + the frame's growth. A caller
+    // that will size the parent afterwards takes the marks in its own post-size pass; one attaching
+    // into an already-sized live parent has no delta coming and writes them here.
+    if (settleAfterParentSize) settleAfterParentSize.push({ child, layout: cl });
+    else applyConstraints(child, wn.layout);
   } else {
     applyChildFill(parent, child, cl, facts.crossStretch);
     // An explicit pin is STORED even in flow — constraints are inert on an in-flow auto-layout
@@ -1043,23 +1053,22 @@ function buildFrame(wn: WriteNode, ctx: RenderCtx, enclosingWidthBounded = false
     widthIsBounded: !isAutoParent || (authoredSizing.horizontal === "fixed" && !layout.percentSize?.width) || ((authoredSizing.horizontal === "fill" || layout.percentSize?.width !== undefined) && enclosingWidthBounded),
     subject: "flcm",
   };
-  // Children whose w/h:"fill" must be re-resized after the frame gets its FINAL size (at append it was
-  // hug-sized): every covered child, absolute or free-form. coverChild no-ops without a fill. An
-  // INSERT into a live parent needs no such pass — its destination is already sized.
-  const covers: { child: any; layout: WriteLayout }[] = [];
+  // Every positioned child (absolute, or any child of a free-form parent) settles only once the frame
+  // has its FINAL size: a w/h:"fill" must be re-resized against it, and a constraint must not be
+  // written against the provisional one. An INSERT into a live parent needs no such pass — its
+  // destination is already sized.
+  const settlements: PositionedChildSettlement[] = [];
   for (const rawChild of wn.children || []) {
     if (!rawChild) continue;
-    const cl = rawChild.layout || {};
-    const child = attachBuiltChild(f, rawChild, ctx, facts, (c) => f.appendChild(c));
-    if (isPositionedChild(isAutoParent, cl)) covers.push({ child, layout: cl });
+    attachBuiltChild(f, rawChild, ctx, facts, (c) => f.appendChild(c), settlements);
   }
 
   // Creation default: a fresh auto-layout frame HUGS both axes (CSS fit-content). Like the
   // transparent-fill default above, it's the builder's to inject — the applier itself never turns
   // key-absence into a write, so an edit delta omitting an axis leaves it alone.
   applyOwnSize(f, { ...layout, sizing: { horizontal: authoredSizing.horizontal || "hug", vertical: authoredSizing.vertical || "hug" } });
-  // Re-cover every fill child now that the frame has its final size (at append it was hug-sized).
-  for (const c of covers) coverChild(f, c.child, c.layout);
+  // Settle every positioned child now that the frame has its final size (at append it was hug-sized).
+  for (const s of settlements) { coverChild(f, s.child, s.layout); applyConstraints(s.child, s.layout); }
   return f;
 }
 

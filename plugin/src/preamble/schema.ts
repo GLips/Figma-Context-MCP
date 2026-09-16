@@ -752,7 +752,7 @@ export interface VerbDoc {
 }
 
 export const VERBS: VerbDoc[] = [
-  {"category": "render", "signature": "await flcm.render(spec)", "builds": "the spec copied with ids on every node", "args": "Place on the current page. An id moves and edits that live node; no id creates. Children follow the same rule."},
+  {"category": "render", "signature": "await flcm.render(spec)", "builds": "the spec copied with ids on every node", "args": "Place on the current page. An id moves and edits that live node; no id creates. Children follow the same rule. With an id and children, it adds several children to that live node in one call."},
   {"category": "structure", "signature": "await flcm.append(parent, spec)", "builds": "the spec copied with ids on every node", "args": "Place as the last child. Unmentioned live children remain."},
   {"category": "structure", "signature": "await flcm.prepend(parent, spec)", "builds": "the spec copied with ids on every node", "args": "Place as the first child."},
   {"category": "structure", "signature": "await flcm.insertBefore(sibling, spec)", "builds": "the spec copied with ids on every node", "args": "Place immediately before the sibling."},

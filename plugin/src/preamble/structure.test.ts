@@ -173,7 +173,7 @@ test("the destination is read at the seal: an anchor moved during the image fetc
       right.appendChild(anchor);
       return Object.fromEntries(urls.map((u) => [u, Buffer.from("bytes").toString("base64")]));
     },
-    isRunCancelled: () => false,
+    isRunCancelled: () => false, isRunFinished: () => false,
   };
   try {
     const placed = await insertAfter("anchor", {
@@ -238,7 +238,7 @@ test("a destination dragged to a page this call never loaded refuses before the 
       figma.createPage().appendChild(anchor); // under dynamic-page that page's child list is unreadable until loaded
       return Object.fromEntries(urls.map((u) => [u, Buffer.from("bytes").toString("base64")]));
     },
-    isRunCancelled: () => false,
+    isRunCancelled: () => false, isRunFinished: () => false,
   };
   try {
     await assert.rejects(

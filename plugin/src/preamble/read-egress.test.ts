@@ -7,7 +7,7 @@ import * as flcm from "./runtime.js";
 function setup() {
   const figma = createFigmaMock();
   const egress = createReadEgress();
-  (globalThis as any).__flcmHost = { registerRead: egress.registerRead, isRunCancelled: () => false };
+  (globalThis as any).__flcmHost = { registerRead: egress.registerRead, isRunCancelled: () => false, isRunFinished: () => false };
   return { figma, wire: (value: unknown) => safeSerialize(egress.project(value)) as any };
 }
 

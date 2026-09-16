@@ -50,9 +50,11 @@ export function compileTree(input: unknown, subject: string): WriteNode {
     }
     const { id, type, children: readChildren, ...words } = src;
     // Inherited instance layers are edited through path overrides; they cannot be moved as children.
-    const children = type === "INSTANCE" && inheritedChildren(id, readChildren, at) ? undefined : readChildren;
+    const liftedChildEdits = type === "INSTANCE" ? liftInheritedChildEdits(id, readChildren, at) : undefined;
+    const children = liftedChildEdits ? undefined : readChildren;
     if (children !== undefined && !Array.isArray(children)) throw new Error(at + ".children must be an array of node specs.");
     const props = readyNodeWords(words, at);
+    if (liftedChildEdits) props.overrides = mergeLiftedChildEdits(props.overrides, liftedChildEdits, at);
     const compiledChildren = (children as unknown[] | undefined)?.flatMap((child, i) => isElision(child) ? [] : [visit(child, at + ".children[" + i + "]")]);
     if (props.overrides && typeof props.overrides === "object" && !Array.isArray(props.overrides)) {
       props.overrides = Object.fromEntries(Object.entries(props.overrides).map(([path, delta]) => {
@@ -222,21 +224,85 @@ export function compileDeltaTrees<T>(delta: T, at: string): T {
   return snapshot;
 }
 
-/** Composite sublayer ids identify an inherited echo, independent of how the spec was copied. */
-function inheritedChildren(id: unknown, children: unknown, at: string): boolean {
-  if (children === undefined) return false;
+// Words a read echoes onto an inherited sublayer that are the COMPONENT's, never one instance's: a
+// binding says which component property drives this layer, and no override can carry it (the
+// override gate refuses it by name). Lifting it would turn every round-trip into that refusal.
+const ECHO_IDENTITY_WORDS = ["componentPropertyReferences"];
+
+/**
+ * Composite sublayer ids identify an inherited echo, independent of how the spec was copied. The
+ * echo is discarded — omitting children preserves the live ones — but any word an author changed on
+ * one would go with it, so each is lifted here to `overrides[<component-relative path>]`, the only
+ * route that reaches an inherited layer. The composite id IS the path prefixed by `I<instance>;`
+ * (instance.ts liveSublayerIdOf), so the rewrite is a string slice, not a read.
+ *
+ * Returns undefined when the children are not an inherited echo — those stay children.
+ */
+function liftInheritedChildEdits(id: unknown, children: unknown, at: string): Record<string, Record<string, unknown>> | undefined {
+  if (children === undefined) return undefined;
   if (!Array.isArray(children)) throw new Error(at + ".children must be an array of node specs.");
   // Removing an instance's root id makes a template; its echo still names one source instance.
   const first = children.find(child => !isElision(child));
   const sourceId = id ?? (first && typeof first.id === "string" && first.id.startsWith("I") ? first.id.slice(1, first.id.indexOf(";")) : undefined);
   const prefix = typeof sourceId === "string" ? (sourceId.startsWith("I") ? sourceId : "I" + sourceId) + ";" : undefined;
-  const owned = (child: unknown): boolean => {
+  const lifted: Record<string, Record<string, unknown>> = {};
+  const owned = (child: unknown, where: string): boolean => {
     if (isElision(child)) return true;
     if (!child || typeof child !== "object" || !("id" in child) || typeof child.id !== "string" || !prefix || !child.id.startsWith(prefix)) return false;
-    // Slot contents have ordinary live ids and are authored through the matching override.
-    if ("type" in child && child.type === "SLOT") return true;
-    return !("children" in child) || (Array.isArray(child.children) && child.children.every(owned));
+    const { id: childId, type: childType, children: grandchildren, ...rest } = child as Record<string, unknown>;
+    for (const word of ECHO_IDENTITY_WORDS) delete rest[word];
+    // Negative space: a pixel size echoed onto an inherited layer is the size its component and its
+    // parent's layout already give it, not a resize request — and flcm has no route to resize an
+    // inherited rectangle at all. A real sublayer resize is written as an explicit override; the
+    // sizing INTENTS ("fill"/"hug"/"50%") stay, because those are words, not measurements.
+    for (const word of ["width", "height"]) if (typeof rest[word] === "number") delete rest[word];
+    const delta = readyNodeWords(rest, where);
+    if (Object.keys(delta).length) lifted[(childId as string).slice(prefix.length)] = delta;
+    // Slot contents have ordinary live ids and are authored through the matching override, so the
+    // echo of a filled slot's content is left alone rather than lifted: it is already in place.
+    if (childType === "SLOT") return true;
+    return grandchildren === undefined || (Array.isArray(grandchildren) && grandchildren.every((grandchild, i) => owned(grandchild, where + ".children[" + i + "]")));
   };
-  if (!children.every(owned)) throw new Error(at + ".children: inherited instance children must belong to this instance. Author sublayer changes through overrides, and slot content through overrides[path].children.");
-  return true;
+  if (!children.every((child, i) => owned(child, at + ".children[" + i + "]"))) {
+    throw new Error(at + ".children: inherited instance children must belong to this instance. Author sublayer changes through overrides, and slot content through overrides[path].children.");
+  }
+  return lifted;
+}
+
+// A read states an instance's differences BOTH ways — as `overrides` and in the echoed child — so
+// the two agreeing on a word is the ordinary case and merges silently. Two DIFFERENT values for one
+// word are two answers to the same question, and neither is obviously the author's: refuse naming
+// the path and the word. The explicit override wins nothing; there is nothing to win.
+function mergeLiftedChildEdits(authored: unknown, lifted: Record<string, Record<string, unknown>>, at: string): unknown {
+  const paths = Object.keys(lifted);
+  if (!paths.length) return authored;
+  if (authored !== undefined && (typeof authored !== "object" || authored === null || Array.isArray(authored))) {
+    throw new Error(at + ".overrides must be an object keyed by component-relative sublayer path.");
+  }
+  const merged: Record<string, unknown> = { ...(authored as Record<string, unknown> | undefined) };
+  for (const path of paths) {
+    const explicit = merged[path];
+    if (explicit === undefined) { merged[path] = lifted[path]; continue; }
+    if (!explicit || typeof explicit !== "object" || Array.isArray(explicit)) throw new Error(at + ".overrides[" + JSON.stringify(path) + "] must be a delta object.");
+    const delta = explicit as Record<string, unknown>;
+    for (const [word, value] of Object.entries(lifted[path])) {
+      if (Object.prototype.hasOwnProperty.call(delta, word) && !sameAuthoredData(delta[word], value)) {
+        throw new Error(
+          at + ": overrides[" + JSON.stringify(path) + "]." + word + " and the inherited child at that path " +
+            "give different values for the same word. Keep one of them — the child word, or the override.",
+        );
+      }
+      delta[word] = value;
+    }
+  }
+  return merged;
+}
+
+/** Structural equality over the plain data copySpec guarantees; key order is not a difference. */
+function sameAuthoredData(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (!a || !b || typeof a !== "object" || typeof b !== "object") return false;
+  if (Array.isArray(a) !== Array.isArray(b)) return false;
+  const [ka, kb] = [Object.keys(a), Object.keys(b)];
+  return ka.length === kb.length && ka.every(key => Object.prototype.hasOwnProperty.call(b, key) && sameAuthoredData((a as Record<string, unknown>)[key], (b as Record<string, unknown>)[key]));
 }
