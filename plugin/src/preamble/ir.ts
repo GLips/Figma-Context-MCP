@@ -278,7 +278,9 @@ export interface WriteLayout {
   gridTemplateRows?: import("./grid-tracks.js").GridTrack[];
   gridColumn?: { anchor?: number; span: number };
   gridRow?: { anchor?: number; span: number };
-  justifySelf?: "MIN" | "CENTER" | "MAX" | "AUTO";
+  // "stretch" is an ALIAS that never survives childLayout — it is rewritten to sizing.horizontal
+  // "fill" (input-aliases normalizeChildLayoutAliases) before any applier sees the bag.
+  justifySelf?: "MIN" | "CENTER" | "MAX" | "AUTO" | "stretch";
   alignSelf?: "center" | "stretch" | "start" | "end" | "auto";
   zIndex?: number;
   justifyContent?: Justify; // primary-axis distribution (author `layout.justifyContent`)

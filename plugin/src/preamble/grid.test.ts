@@ -50,7 +50,21 @@ test("grid vocabulary round-trips through render/get/edit/editMany, with parent-
     }
   }
   assert.equal((await get(flow)).node.children![0].height, "fill");
-  await assert.rejects(edit(id(built.children![1].id), { layout: { alignSelf: "stretch" } }), /stretch.*requires.*row\/column/);
+  // CSS grid's commonest pair: stretch is a request to fill the cell, on either axis.
+  const cell = id(built.children![1].id);
+  await edit(cell, { layout: { alignSelf: "stretch", justifySelf: "stretch" } });
+  const stretched = (await get(built)).node.children![1];
+  assert.deepEqual([stretched.width, stretched.height], ["fill", "fill"]);
+  const cellBox = await measure(cell);
+  assert.deepEqual([cellBox.width, cellBox.height], [290, 60]); // the 1fr column of a 400 grid, row 0
+  await assert.rejects(edit(cell, { height: 20, layout: { alignSelf: "stretch" } }), /alignSelf "stretch" conflicts with the authored height/);
+  await assert.rejects(edit(cell, { width: 20, layout: { justifySelf: "stretch" } }), /justifySelf "stretch" conflicts with the authored width/);
+  // Authored at create, and out of any flow it still has no cell to fill.
+  const stretchedAtCreate = await render({ type: "FRAME", width: 200, height: 100, layout: { mode: "grid", gridTemplateColumns: "1fr 1fr", gridTemplateRows: "100px" },
+    children: [{ type: "RECTANGLE", layout: { alignSelf: "stretch", justifySelf: "stretch" } }] });
+  const filled = (await get(stretchedAtCreate)).node.children![0];
+  assert.deepEqual([filled.width, filled.height], ["fill", "fill"]);
+  await assert.rejects(render({ type: "FRAME", width: 90, height: 90, children: [{ type: "RECTANGLE", width: 10, height: 10, layout: { alignSelf: "stretch" } }] }), /requires an in-flow row\/column or grid parent/);
 });
 
 test("grid spans and template edits use read words and refuse unresolved layout before changing it", async () => {

@@ -339,7 +339,7 @@ function compileLayoutBag(cfg: NonNullable<FrameProps["layout"]>, subject: strin
     layout[key] = parseGridPlacement(raw, subject + ": " + key);
   }
   for (const key of ["justifySelf"] as const) {
-    if (cfg[key] !== undefined) layout[key] = mapCssWord(key, cfg[key], { start: "MIN", center: "CENTER", end: "MAX", auto: "AUTO" } as const);
+    if (cfg[key] !== undefined) layout[key] = mapCssWord(key, cfg[key], { start: "MIN", center: "CENTER", end: "MAX", auto: "AUTO", stretch: "stretch" } as const);
   }
   if (cfg.alignSelf !== undefined) layout.alignSelf = mapCssWord(subject + ".alignSelf", cfg.alignSelf, { center: "center", stretch: "stretch", start: "start", end: "end", auto: "auto" } as const, " " + FLOW_ALIGNMENT_GUIDANCE);
   if (cfg.zIndex !== undefined) {

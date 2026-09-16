@@ -148,8 +148,8 @@ const CHILD_LAYOUT_FIELDS = {
   ...GRID_CHILD_ALIASES,
   gridColumn: prop(z.string(), 'Grid child column: "N", "span N", or "N / span N". Anchors are 1-based. Omitted placement uses Figma auto-placement. A grid child sizes in px, "fill" (the cell) or "hug"; "N%" is refused because the reference would be the cell, not the frame.'),
   gridRow: prop(z.string(), 'Grid child row: "N", "span N", or "N / span N". Anchors are 1-based. Rows a grid did not name grow to hold the placement.'),
-  justifySelf: prop(z.enum(["start", "center", "end", "auto"]), 'Grid child horizontal cell alignment. "auto" restores Figma alignment.'),
-  alignSelf: prop(z.enum(["center", "stretch", "start", "end", "auto"]), 'Grid vertical cell alignment: start/end/center/auto. Flow children accept only "stretch", an alias for counter-axis fill. Figma renders no per-child MIN/CENTER/MAX alignment in flow. Set layout.alignItems on the parent for every child, or wrap the child in a fill-sized frame with its own alignItems.'),
+  justifySelf: prop(z.enum(["start", "center", "end", "auto", "stretch"]), 'Grid child horizontal cell alignment. "auto" restores Figma alignment; "stretch" is an alias rewritten to width: "fill" (the cell\'s width), since Figma has no STRETCH alignment.'),
+  alignSelf: prop(z.enum(["center", "stretch", "start", "end", "auto"]), 'Grid vertical cell alignment: start/end/center/auto, plus "stretch" — an alias rewritten to height: "fill" (the cell\'s height). Flow children accept only "stretch", the same alias for counter-axis fill. Figma renders no per-child MIN/CENTER/MAX alignment in flow. Set layout.alignItems on the parent for every child, or wrap the child in a fill-sized frame with its own alignItems.'),
   zIndex: prop(z.number(), 'Grid child sibling index, a non-negative integer. Explicit indices reserve sibling slots; unnamed siblings retain relative order in remaining slots. Duplicate or out-of-range indices fail.'),
 };
 
