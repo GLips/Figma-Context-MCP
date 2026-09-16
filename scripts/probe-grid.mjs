@@ -6,7 +6,9 @@
 // It verifies native track setters, placement/spans, cell sizing, read words, edits, and stacking.
 // Live Figma uses pre-removal insertion indices: insertChild(2, A) on [A,B,C] gives [B,A,C].
 // Appending past a full manual grid adds FIXED rows: this probe’s one 40px row became two
-// FIXED 40px rows while vertical sizing stayed HUG. Automatic growth is unmodeled in the mock.
+// FIXED 40px rows while vertical sizing stayed HUG. Automatic growth is unmodeled in the mock, and
+// a grid whose rows nobody named now opens its own HUG row before the child lands, so that FIXED
+// growth is a fallback nothing here relies on.
 
 import { PluginBridge } from "../src/services/plugin-bridge/bridge.ts";
 import { WS_PORT_BLOCK } from "../src/services/plugin-bridge/ports.ts";
@@ -68,6 +70,21 @@ try {
   const flow = await flcm.render({ type: "FRAME", width: 120, height: 70, layout: { mode: "row" }, children: [{ type: "RECTANGLE", width: 20, layout: { alignSelf: "stretch" } }] });
   roots.push(flow.id);
   check("flow stretch aliases cross-axis fill", (await flcm.measure(flow.children[0])).height, 70);
+  // Rows nobody named: hug tracks, one per row the children need, growing as children arrive.
+  const implicit = await flcm.render({ type: "FRAME", name: "GRID implicit rows probe", left: 750, width: 240,
+    layout: { mode: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 },
+    children: [
+      { type: "RECTANGLE", width: "fill", height: 30, layout: { gridColumn: "span 2" } },
+      { type: "RECTANGLE", width: "fill", height: 30 },
+      { type: "RECTANGLE", width: "fill", height: 30 },
+    ] });
+  roots.push(implicit.id);
+  const implicitNative = await figma.getNodeByIdAsync(implicit.id);
+  check("implicit rows are hug tracks", [(await flcm.get(implicit)).node.layout.gridTemplateRows, implicitNative.layoutSizingVertical], ["fit-content(100%) fit-content(100%)", "HUG"]);
+  // Four cells fill the first two rows; the fifth append has to open a third.
+  for (let i = 0; i < 3; i++) await flcm.append(implicit, { type: "RECTANGLE", width: "fill", height: 30 });
+  check("an appended child grows a hug row", [implicitNative.gridRowSizes.map(t => t.type), implicitNative.layoutSizingVertical], [["HUG", "HUG", "HUG"], "HUG"]);
+
   let alignmentRefusal = "";
   try { await flcm.edit(flow.children[0], { height: 20, layout: { alignSelf: "flex-end" } }); }
   catch (error) { alignmentRefusal = String(error); }
@@ -117,8 +134,8 @@ async function runProbe() {
     if (reply?.errors) fail(`the probe script errored in the sandbox:\n${reply.errors}`);
 
     const results = reply?.result?.checks;
-    if (!Array.isArray(results) || results.length !== 12)
-      fail(`expected 12 checks, got ${JSON.stringify(reply?.result)}`);
+    if (!Array.isArray(results) || results.length !== 14)
+      fail(`expected 14 checks, got ${JSON.stringify(reply?.result)}`);
     for (const result of results) {
       console.log(
         `${result.pass ? "PASS" : "FAIL"} ${result.name}: ${JSON.stringify(result.actual)} (expected ${JSON.stringify(result.expected)})`,

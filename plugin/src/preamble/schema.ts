@@ -114,17 +114,17 @@ const SHARED_FIELDS = {
 // One read layout bag combines the node's own container settings and its placement in its parent.
 // Leaves take only child fields; frame-like types compose both groups. Parent mode decides cell vs flow.
 const CHILD_LAYOUT_FIELDS = {
-  gridColumn: prop(z.string(), 'Grid child column: "N", "span N", or "N / span N". Anchors are 1-based. Omitted placement uses Figma auto-placement.'),
-  gridRow: prop(z.string(), 'Grid child row: "N", "span N", or "N / span N". Anchors are 1-based.'),
+  gridColumn: prop(z.string(), 'Grid child column: "N", "span N", or "N / span N". Anchors are 1-based. Omitted placement uses Figma auto-placement. A grid child sizes in px, "fill" (the cell) or "hug"; "N%" is refused because the reference would be the cell, not the frame.'),
+  gridRow: prop(z.string(), 'Grid child row: "N", "span N", or "N / span N". Anchors are 1-based. Rows a grid did not name grow to hold the placement.'),
   justifySelf: prop(z.enum(["start", "center", "end", "auto"]), 'Grid child horizontal cell alignment. "auto" restores Figma alignment.'),
   alignSelf: prop(z.enum(["center", "stretch", "start", "end", "auto"]), 'Grid vertical cell alignment: start/end/center/auto. Flow children accept only "stretch", an alias for counter-axis fill. Flow alignment lives on the parent as layout.alignItems and applies to every child; use position: "absolute" for a child that must sit differently.'),
   zIndex: prop(z.number(), 'Grid child sibling index, a non-negative integer. Explicit indices reserve sibling slots; unnamed siblings retain relative order in remaining slots. Duplicate or out-of-range indices fail.'),
 };
 
 const CONTAINER_LAYOUT_FIELDS = {
-  gridTemplateColumns: prop(z.string(), "Grid columns, in read form: Npx, Nfr, auto or fit-content(100%) tracks; repeat(N, tracks) and minmax(0, Nfr) expand to native tracks. Reads return expanded tracks. Required when creating a grid. Fractional axes need explicit fixed or fill sizing. Other axes default to hug."),
-  gridTemplateRows: prop(z.string(), 'Grid rows, with the same track syntax as gridTemplateColumns. Required when creating a grid.'),
-  mode: prop(z.enum(["row", "column", "grid", "none"]), 'Auto-layout mode. Default "none" = free-form. Creating a grid requires both templates; edits preserve omitted templates.'),
+  gridTemplateColumns: prop(z.string(), "Grid columns, in read form: Npx, Nfr, auto or fit-content(100%) tracks; repeat(N, tracks) and minmax(0, Nfr) expand to native tracks. Reads return expanded tracks. Required when creating a grid — Figma flows row-wise, so the columns are the axis nothing can infer. Fractional axes need explicit fixed or fill sizing. Other axes default to hug."),
+  gridTemplateRows: prop(z.string(), 'Grid rows, with the same track syntax as gridTemplateColumns. Optional: omitted, rows are implicit — hug tracks, one per row the children need at this column count, growing as children are added. Naming rows makes them explicit, on an edit too: the named tracks are what the grid keeps, and it stops growing rows for new children.'),
+  mode: prop(z.enum(["row", "column", "grid", "none"]), 'Auto-layout mode. Default "none" = free-form. Creating a grid requires gridTemplateColumns (rows are implicit); edits preserve omitted templates.'),
   gap: prop(z.union([z.number(), z.string()]), 'A number, "Npx", or "row-gap column-gap" in px. Unequal gaps require grid or wrapping.'),
   wrap: prop(z.boolean(), "Wrap children onto new rows. Requires horizontal auto-layout. False disables wrapping; omitted edits preserve it."),
   padding: prop(
@@ -230,7 +230,7 @@ const ELLIPSE_FIELDS = {
 
 const FRAME_FIELDS = {
   ["clipsContent" satisfies keyof typeof INPUT_ALIASES]: prop(z.boolean(), "Input alias for clip; duplicate values must agree."),
-  layout: prop(z.object(LAYOUT_FIELDS), 'Own container settings plus placement under the parent. Creating a grid requires both templates.', '{ mode?, gridTemplateColumns?, gridTemplateRows?, gap?, wrap?, padding?, justifyContent?, alignItems?, gridColumn?, gridRow?, justifySelf?, alignSelf?, zIndex? }'),
+  layout: prop(z.object(LAYOUT_FIELDS), 'Own container settings plus placement under the parent. Creating a grid requires gridTemplateColumns; rows are implicit hug tracks unless named.', '{ mode?, gridTemplateColumns?, gridTemplateRows?, gap?, wrap?, padding?, justifyContent?, alignItems?, gridColumn?, gridRow?, justifySelf?, alignSelf?, zIndex? }'),
   clip: prop(z.boolean(), "Clip children to the frame's bounds. Default false, like CSS overflow: visible."),
 };
 
@@ -350,15 +350,16 @@ export type StyleDeltaInput = z.infer<typeof RunStyleSchema>;
 // StyleDelta (never a styles-table ref — refs are read-only).
 export type TextRunInput = string | [text: string, style: StyleDeltaInput];
 
-// A line sizes ONLY along its length, which is its `width` (the read shape's word for it): a fixed
-// number, never "fill"/"hug"/a percent, and there is no height word at all. So LineSchema does NOT
+// A line sizes ONLY along its length, which is its `width` (the read shape's word for it): a number,
+// or "fill" under a row/column parent whose flow supplies the number — never "hug" or a percent,
+// and there is no height word at all. So LineSchema does NOT
 // spread the full SIZE_FIELDS — typing props the compiler drops would let a compile-checked example
 // pass while rendering wrong (a real hole, since the example's whole job is to fail the build on API
 // mismatch). It carries exactly what `line` reads.
 const LINE_FIELDS = {
   stroke: color('The line\'s paint. "none" removes it.'),
   strokeWidth: metric("Thickness. Defaults to 1."),
-  width: metric("The line's length. A fixed size only — a line can't fill, hug, or take a percent."),
+  width: metric('The line\'s length: a number, or "fill" to span a row/column parent (the divider case). No "hug" and no percent — a line has no content to measure and no cell to measure against.'),
   rotation: degrees("Degrees — 90° makes a horizontal line vertical."),
   ...PLACEMENT_FIELDS,
 };

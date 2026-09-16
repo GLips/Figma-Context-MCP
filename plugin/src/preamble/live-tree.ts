@@ -12,6 +12,7 @@ import { assertNodeStillOnCanvas } from "./freshness.js";
 import { childListClosingInstanceOf, writeKey } from "./identity.js";
 import { assertLiveNodeLandsUnderParent, liveParentAttachFacts, attachBuiltChild, resettleMovedNode, applyVectorPath } from "./bridge.js";
 import type { RenderCtx, RenderResources } from "./bridge.js";
+import { growImplicitGridRows } from "./layout-native.js";
 import { beginMutatingApply } from "./verb-error.js";
 import type { EditDelta } from "./schema.js";
 
@@ -103,6 +104,7 @@ export function gateLiveTree(live: LoadedLiveTree, resources: RenderResources): 
       try {
         for (let p: BaseNode | null = parent; p; p = p.parent) if (p === node) throw new Error(at + ": a node cannot move inside itself or its descendant.");
         const words = assertLiveNodeLandsUnderParent(node, parent, at, plan?.patch.layout);
+        growImplicitGridRows(parent, words);
         place(node);
         if (instance) applyInstanceRetarget(fail, node, instance);
         if (component?.definitions) applyComponentDefinitionEdit(fail, node, component.definitions);

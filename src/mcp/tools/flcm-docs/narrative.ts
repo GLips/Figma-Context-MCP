@@ -131,6 +131,10 @@ const knob = { type: "ELLIPSE", width: 16, height: 16, left: "40%", top: "50%", 
 
 \`pin\` is ignored on an in-flow auto-layout child, which reflows through \`fill\`/\`hug\` instead. A bad \`pin\` or \`anchor\` value fails loud.
 
+**Cross-axis \`"fill"\` under a parent that hugs that axis is legal** — only a *percent* fails loud there. It isn't the same cycle: the hug still measures the children's own sizes, and the filling child then matches the result. So a \`width:"fill"\` child of a hugging column comes out as wide as its widest sibling, and one that has no sibling to measure just keeps the size it already had. Give the parent a fixed or \`"fill"\` width when you want the child to stretch to something.
+
+**\`wrap: true\` and a \`"fill"\`-width child pull against each other.** Nothing refuses the pair, but wrap breaks the row when the children run out of width while \`"fill"\` claims whatever width is left on the line — so the filling child closes the line it is on and everything after it wraps. Size wrapped children in pixels or let them hug; keep \`"fill"\` for a row that doesn't wrap.
+
 Sizing bounds use \`minWidth\`, \`maxWidth\`, \`minHeight\`, and \`maxHeight\` in positive pixels. Bounds govern auto-layout containers and their direct children. Reads retain these bounds, including instance-only bounds. Omitted bounds remain unchanged; \`"none"\` clears one. A valid resize constrained by a bound succeeds and reports its requested size, bound and resulting size in the execution console. Contradictory bounds reject before writes.
 
 After resizing, the console reports affected containers with overflowing children in one compact warning, grouped by clipped and unclipped IDs. This includes existing overflow and nested layouts after the batch settles. The write still succeeds.

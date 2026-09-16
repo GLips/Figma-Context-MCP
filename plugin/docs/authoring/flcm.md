@@ -155,7 +155,7 @@ Data copies and clone preserve annotations. Remove unwanted notes explicitly.
 
 ### Size & position (FRAME, TEXT, RECTANGLE, ELLIPSE, VECTOR, INSTANCE)
 
-A LINE sizes on a numeric `width` alone, its length. There is no `height`, `"fill"`, or `"hug"`.
+A LINE sizes along its length alone, its `width`: a number, or `"fill"` under a row or column parent — the divider case, where the flow supplies the length. There is no `height`, no `"hug"` and no percent.
 
 | Prop | Type | Notes |
 | --- | --- | --- |
@@ -209,6 +209,10 @@ const knob = { type: "ELLIPSE", width: 16, height: 16, left: "40%", top: "50%", 
 
 `pin` is ignored on an in-flow auto-layout child, which reflows through `fill`/`hug` instead. A bad `pin` or `anchor` value fails loud.
 
+**Cross-axis `"fill"` under a parent that hugs that axis is legal** — only a *percent* fails loud there. It isn't the same cycle: the hug still measures the children's own sizes, and the filling child then matches the result. So a `width:"fill"` child of a hugging column comes out as wide as its widest sibling, and one that has no sibling to measure just keeps the size it already had. Give the parent a fixed or `"fill"` width when you want the child to stretch to something.
+
+**`wrap: true` and a `"fill"`-width child pull against each other.** Nothing refuses the pair, but wrap breaks the row when the children run out of width while `"fill"` claims whatever width is left on the line — so the filling child closes the line it is on and everything after it wraps. Size wrapped children in pixels or let them hug; keep `"fill"` for a row that doesn't wrap.
+
 Sizing bounds use `minWidth`, `maxWidth`, `minHeight`, and `maxHeight` in positive pixels. Bounds govern auto-layout containers and their direct children. Reads retain these bounds, including instance-only bounds. Omitted bounds remain unchanged; `"none"` clears one. A valid resize constrained by a bound succeeds and reports its requested size, bound and resulting size in the execution console. Contradictory bounds reject before writes.
 
 After resizing, the console reports affected containers with overflowing children in one compact warning, grouped by clipped and unclipped IDs. This includes existing overflow and nested layouts after the batch settles. The write still succeeds.
@@ -229,16 +233,16 @@ Budget fixed widths together with padding and gaps; use `"fill"` for the remaini
 | `effects` | effects value | Shadows / blur: flcm.effects({...}) or a CSS-string bag. "none" removes all effects. |
 | `rotation` | number (deg) | Rotation in degrees. |
 | `clipsContent` | boolean | Input alias for clip; duplicate values must agree. |
-| `layout` | { mode?, gridTemplateColumns?, gridTemplateRows?, gap?, wrap?, padding?, justifyContent?, alignItems?, gridColumn?, gridRow?, justifySelf?, alignSelf?, zIndex? } | Own container settings plus placement under the parent. Creating a grid requires both templates. |
+| `layout` | { mode?, gridTemplateColumns?, gridTemplateRows?, gap?, wrap?, padding?, justifyContent?, alignItems?, gridColumn?, gridRow?, justifySelf?, alignSelf?, zIndex? } | Own container settings plus placement under the parent. Creating a grid requires gridTemplateColumns; rows are implicit hug tracks unless named. |
 | `clip` | boolean | Clip children to the frame's bounds. Default false, like CSS overflow: visible. |
 
 #### Auto-layout config (the `layout` object)
 
 | Prop | Type | Notes |
 | --- | --- | --- |
-| `gridTemplateColumns` | string | Grid columns, in read form: Npx, Nfr, auto or fit-content(100%) tracks; repeat(N, tracks) and minmax(0, Nfr) expand to native tracks. Reads return expanded tracks. Required when creating a grid. Fractional axes need explicit fixed or fill sizing. Other axes default to hug. |
-| `gridTemplateRows` | string | Grid rows, with the same track syntax as gridTemplateColumns. Required when creating a grid. |
-| `mode` | "row" \| "column" \| "grid" \| "none" | Auto-layout mode. Default "none" = free-form. Creating a grid requires both templates; edits preserve omitted templates. |
+| `gridTemplateColumns` | string | Grid columns, in read form: Npx, Nfr, auto or fit-content(100%) tracks; repeat(N, tracks) and minmax(0, Nfr) expand to native tracks. Reads return expanded tracks. Required when creating a grid — Figma flows row-wise, so the columns are the axis nothing can infer. Fractional axes need explicit fixed or fill sizing. Other axes default to hug. |
+| `gridTemplateRows` | string | Grid rows, with the same track syntax as gridTemplateColumns. Optional: omitted, rows are implicit — hug tracks, one per row the children need at this column count, growing as children are added. Naming rows makes them explicit, on an edit too: the named tracks are what the grid keeps, and it stops growing rows for new children. |
+| `mode` | "row" \| "column" \| "grid" \| "none" | Auto-layout mode. Default "none" = free-form. Creating a grid requires gridTemplateColumns (rows are implicit); edits preserve omitted templates. |
 | `gap` | number \| string | A number, "Npx", or "row-gap column-gap" in px. Unequal gaps require grid or wrapping. |
 | `wrap` | boolean | Wrap children onto new rows. Requires horizontal auto-layout. False disables wrapping; omitted edits preserve it. |
 | `padding` | number \| "12px 16px" \| { x?, y? } \| { top?, right?, bottom?, left? } | A number, the CSS box shorthand ("12px 16px"), { x, y } (x→left+right, y→top+bottom), or per-edge. Edge values take a number or "Npx". |
@@ -249,8 +253,8 @@ Budget fixed widths together with padding and gaps; use `"fill"` for the remaini
 
 | Prop | Type | Notes |
 | --- | --- | --- |
-| `gridColumn` | string | Grid child column: "N", "span N", or "N / span N". Anchors are 1-based. Omitted placement uses Figma auto-placement. |
-| `gridRow` | string | Grid child row: "N", "span N", or "N / span N". Anchors are 1-based. |
+| `gridColumn` | string | Grid child column: "N", "span N", or "N / span N". Anchors are 1-based. Omitted placement uses Figma auto-placement. A grid child sizes in px, "fill" (the cell) or "hug"; "N%" is refused because the reference would be the cell, not the frame. |
+| `gridRow` | string | Grid child row: "N", "span N", or "N / span N". Anchors are 1-based. Rows a grid did not name grow to hold the placement. |
 | `justifySelf` | "start" \| "center" \| "end" \| "auto" | Grid child horizontal cell alignment. "auto" restores Figma alignment. |
 | `alignSelf` | "center" \| "stretch" \| "start" \| "end" \| "auto" | Grid vertical cell alignment: start/end/center/auto. Flow children accept only "stretch", an alias for counter-axis fill. Flow alignment lives on the parent as layout.alignItems and applies to every child; use position: "absolute" for a child that must sit differently. |
 | `zIndex` | number | Grid child sibling index, a non-negative integer. Explicit indices reserve sibling slots; unnamed siblings retain relative order in remaining slots. Duplicate or out-of-range indices fail. |
@@ -363,7 +367,7 @@ Each styled run's delta fields:
 | --- | --- | --- |
 | `stroke` | color / gradient | The line's paint. "none" removes it. |
 | `strokeWidth` | number \| "Npx" | Thickness. Defaults to 1. |
-| `width` | number \| "Npx" | The line's length. A fixed size only — a line can't fill, hug, or take a percent. |
+| `width` | number \| "Npx" | The line's length: a number, or "fill" to span a row/column parent (the divider case). No "hug" and no percent — a line has no content to measure and no cell to measure against. |
 | `rotation` | number (deg) | Degrees — 90° makes a horizontal line vertical. |
 | `layout` | { gridColumn?, gridRow?, justifySelf?, alignSelf?, zIndex? } | Placement under an auto-layout parent. Grid accepts cell alignment; flow accepts only the alignSelf "stretch" alias for counter-axis fill. |
 | `left` | number \| "Npx" \| "N%" | Offset from the parent's left edge — a number, "Npx", or "N%" of the parent width. Naming `left` or `top` lifts the node out of an auto-layout parent's flow (badges, overlays); under a free-form parent it is simply where the node sits. On a render root it is where on the PAGE the tree lands — without it every root stacks at the origin. Under edit, an axis you don't name keeps its live value. |
@@ -515,7 +519,7 @@ Blur values are written in **CSS px** — you always write the CSS number and we
 | `maxHeight` | number \| "none" | maxHeight in positive pixels, effective on auto-layout containers and their direct children. Omitted preserves the bound; "none" clears it. Sizes constrained by bounds succeed with a console warning. |
 | `width` | number \| "Npx" \| "N%" \| "fill" \| "hug" | A fixed size (a number or "Npx"), "N%" of the parent axis (rejected for in-flow grid children), "fill" (stretch to the parent — rejected on the root), or "hug" (shrink to content — only a row/column/grid container or text can hug). |
 | `height` | number \| "fill" \| "hug" \| "N%" | Same rules as width. On TEXT the height follows the content ("hug", the default): set `width` to re-wrap it, use "fill" inside an auto-layout parent and "hug" to undo that; a fixed or percent height is rejected. |
-| `layout` | { mode?, gridTemplateColumns?, gridTemplateRows?, gap?, wrap?, padding?, justifyContent?, alignItems?, gridColumn?, gridRow?, justifySelf?, alignSelf?, zIndex? } | Own container settings plus placement under the parent. Creating a grid requires both templates. |
+| `layout` | { mode?, gridTemplateColumns?, gridTemplateRows?, gap?, wrap?, padding?, justifyContent?, alignItems?, gridColumn?, gridRow?, justifySelf?, alignSelf?, zIndex? } | Own container settings plus placement under the parent. Creating a grid requires gridTemplateColumns; rows are implicit hug tracks unless named. |
 | `left` | number \| "Npx" \| "N%" | Offset from the parent's left edge — a number, "Npx", or "N%" of the parent width. Naming `left` or `top` lifts the node out of an auto-layout parent's flow (badges, overlays); under a free-form parent it is simply where the node sits. On a render root it is where on the PAGE the tree lands — without it every root stacks at the origin. Under edit, an axis you don't name keeps its live value. |
 | `top` | number \| "Npx" \| "N%" | Offset from the parent's top edge. Same rules as `left`. |
 | `position` | "absolute" \| "none" | "absolute" lifts the node out of auto-layout flow where it stands (no coordinate needed — `left`/`top` already imply it). Under edit, "none" returns the node to the flow; naming `left`/`top`/`anchor` beside "none" fails loud. |
@@ -1043,7 +1047,7 @@ return {
 
 ### Grid tracks and cell placement
 
-Both templates are explicit. The fractional columns use a fixed width; fixed row tracks allow the height to hug. Children auto-place unless anchors or spans are supplied.
+Columns are explicit and fractional, so the frame takes a fixed width; rows are omitted, so they are implicit hug tracks — as many as the children need, growing as more arrive. Children auto-place unless anchors or spans are supplied.
 
 ```js
 const grid = await flcm.render({
@@ -1053,25 +1057,25 @@ const grid = await flcm.render({
     layout: {
         mode: "grid",
         gridTemplateColumns: "1fr 1fr",
-        gridTemplateRows: "80px 80px",
         gap: "12px 16px",
         padding: 16,
     },
     children: [
-        { type: "RECTANGLE", width: "fill", height: "fill", fill: "#6366F1" },
+        // A double-wide banner, then tiles: the row count follows from the placement.
+        {
+            type: "RECTANGLE",
+            width: "fill",
+            height: 72,
+            fill: "#6366F1",
+            layout: { gridColumn: "span 2" },
+        },
+        { type: "RECTANGLE", width: "fill", height: 56, fill: "#14B8A6" },
         {
             type: "RECTANGLE",
             width: 40,
             height: 40,
             fill: "#F59E0B",
             layout: { justifySelf: "center", alignSelf: "end" },
-        },
-        {
-            type: "RECTANGLE",
-            width: "fill",
-            height: "fill",
-            fill: "#14B8A6",
-            layout: { gridColumn: "span 2", gridRow: "2" },
         },
     ],
 });

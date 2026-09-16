@@ -1,5 +1,5 @@
 import { LAYOUT_MODES, layoutModeOf, effectiveLayoutMode, childLayout } from "./layout-mode.js";
-import { behaviorForMode, layoutBehavior, applySiblingOrder } from "./layout-native.js";
+import { behaviorForMode, layoutBehavior, applySiblingOrder, growImplicitGridRows } from "./layout-native.js";
 import { hasContainerLayout } from "./ir.js";
 import type { LiveTreeNode } from "./live-tree.js";
 import { sceneFigma as figma } from "./scene-access.js";
@@ -29,7 +29,7 @@ import { WriteType, WriteNode, WriteProps, WriteLayout, TextAlign, TextDecoratio
 import { own } from "./validate.js";
 import {
   assertLayoutRealizableForType, assertGridSizing, assertPercentResolvable, assertSizingResolvesAgainstParentFrame, ParentFlowFacts,
-  assertTextFillHeightInFlow, assertInheritedRectangleDimensions,
+  assertTextFillHeightInFlow, assertLineSizingInFlow, assertInheritedRectangleDimensions,
 } from "./layout-legality.js";
 import { toFigmaPaint } from "./paint.js";
 import { toFigmaEffects } from "./effects.js";
@@ -254,7 +254,7 @@ function applyContainer(node: any, layout: WriteLayout): void {
     if (next.kind !== "free" && previous.word !== next.word) layoutBehavior(node).clearChildren(node);
     node.layoutMode = next.native;
   }
-  layoutBehavior(node).container(node, layout);
+  layoutBehavior(node).container(node, layout, previous);
   if (layout.padding) {
     const p = layout.padding;
     node.paddingTop = p.top; node.paddingRight = p.right; node.paddingBottom = p.bottom; node.paddingLeft = p.left;
@@ -678,6 +678,7 @@ function assertLayoutLandsUnderParent(
   }
   if (!nodeLocalValidated) assertLayoutRealizableForType(nodeType, wl, isContainer, subject, liveWrap);
   assertTextFillHeightInFlow(nodeType, wl, parent.mode.kind !== "free", isOutOfFlow, subject);
+  assertLineSizingInFlow(nodeType, wl, parent.mode, isOutOfFlow, subject);
   if (wl.percentSize) {
     assertPercentResolvable({ ...wl, position: isOutOfFlow ? "absolute" : wl.position }, parent, subject);
   }
@@ -839,8 +840,12 @@ export function attachBuiltChild(
   // percent/anchor is recorded and resolved in the post-walk pass (resolvePercents) against realized size.
   assertPercentResolvable(cl, facts, facts.subject);
   assertTextFillHeightInFlow(wn.type, cl, facts.mode.kind !== "free", cl.position === "absolute", facts.subject);
+  assertLineSizingInFlow(wn.type, cl, facts.mode, cl.position === "absolute", facts.subject);
   const child = buildNode(wn, ctx, facts.widthIsBounded);
   if (defaultTextFill) child.textAutoResize = "HEIGHT";
+  // BEFORE the attach: Figma auto-places the child the moment it lands, and a grid with no free
+  // cell left grows a FIXED row of its own.
+  growImplicitGridRows(parent, cl);
   place(child);
   layoutBehavior(parent).place(parent, child, context);
   queueSiblingOrder(ctx, parent, child, cl.zIndex);

@@ -346,21 +346,25 @@ test("a direction change clears BOTH flow marks — layoutGrow too, and NONE→r
   assert.equal(grow.layoutGrow, 0); // NONE→row establishes a direction: no resurrection
 });
 
-test("a LINE's `width` is a fixed size: a sizing intent or a mistyped value names the line rule", async () => {
-  await render({
+test("a LINE's `width` is its length: it fills under a column, and nothing else sizes it", async () => {
+  const out = await render({
     type: "FRAME",
     width: 100,
     height: 100,
+    layout: { mode: "column", padding: 10 },
     children: [{ type: "LINE", key: "rule", width: 80 }],
   });
-  await assert.rejects(
-    edit("rule", { width: "fill" }),
-    /a LINE's width is its length, a fixed size/,
-  );
-  await assert.rejects(
-    edit("rule", { width: "80" } as never),
-    /`width` on a LINE must be a number/,
-  );
+  const line = await figma.getNodeByIdAsync(specNode(out, "rule").id);
+  await edit("rule", { width: "fill" });
+  assert.equal(line.width, 80); // the column's content width
+  assert.equal(line.height, 0);
+  await edit("rule", { width: 40 });
+  assert.equal(line.width, 40);
+  await assert.rejects(edit("rule", { width: "hug" }), /"hug" and "N%" have no meaning on a line/);
+  await assert.rejects(edit("rule", { width: "80" } as never), /`width` on a LINE must be a number/);
+  // Out of the flow nothing supplies the length.
+  await render({ type: "FRAME", width: 100, height: 100, children: [{ type: "LINE", key: "loose", width: 20 }] });
+  await assert.rejects(edit("loose", { width: "fill" }), /a LINE fills only as an in-flow child of a row or column/);
 });
 
 test("a TEXT size delta preloads the node's font before the mutating span", async () => {

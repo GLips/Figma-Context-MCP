@@ -5,7 +5,7 @@ import { render } from "./render.js";
 import { get } from "./read.js";
 import { edit } from "./edit.js";
 import { editMany } from "./edit-many.js";
-import { measure } from "./structure.js";
+import { append, measure } from "./structure.js";
 import { id } from "./flcm.js";
 
 test("grid vocabulary round-trips through render/get/edit/editMany, with parent-dependent alignment", async () => {
@@ -96,4 +96,29 @@ test("one explicit grid zIndex reserves its slot; edits reorder either way witho
   await editMany([{ id: built.children![0].id, layout: { zIndex: 0 } }, { id: built.children![2].id, layout: { zIndex: 1 } }]);
   assert.deepEqual(await stacking(), [["first", null], ["third", 1], ["second", 2]]);
   assert.deepEqual(await positions(), before);
+});
+
+test("rows omitted are implicit: hug tracks derived from placement, growing as children arrive", async () => {
+  createFigmaMock();
+  // The tile wall the row count is impossible to know up front: a double-wide header, then tiles.
+  const built = await render({ type: "FRAME", width: 400, layout: { mode: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 8 }, children: [
+    { type: "RECTANGLE", width: "fill", height: 40, layout: { gridColumn: "span 2" } },
+    ...Array.from({ length: 6 }, () => ({ type: "RECTANGLE" as const, width: "fill" as const, height: 30 })),
+  ] });
+  const read = (await get(built)).node;
+  // 2 + 6 cells over 4 columns = 2 rows.
+  assert.equal(read.layout!.gridTemplateRows, "fit-content(100%) fit-content(100%)");
+  assert.equal(read.layout!.gridTemplateColumns, "1fr 1fr 1fr 1fr");
+  // Re-authoring the read is the round trip: explicit hug rows are the same grid.
+  const echoed = await render(JSON.parse(JSON.stringify(read, (key, value) => key === "id" ? undefined : value)));
+  assert.equal((await get(echoed)).node.layout!.gridTemplateRows, read.layout!.gridTemplateRows);
+  // Appending past the last cell grows a hug row rather than leaning on Figma's FIXED growth.
+  await append(built, { type: "RECTANGLE", width: "fill", height: 30 });
+  await append(built, { type: "RECTANGLE", width: "fill", height: 30 });
+  assert.equal((await get(built)).node.layout!.gridTemplateRows, "fit-content(100%) fit-content(100%) fit-content(100%)");
+  // Naming rows makes them explicit; the grid stops growing for later children.
+  await edit(built, { height: 200, layout: { gridTemplateRows: "40px 40px 40px 40px" } });
+  assert.equal((await get(built)).node.layout!.gridTemplateRows, "40px 40px 40px 40px");
+  await append(built, { type: "RECTANGLE", width: "fill", height: 30 });
+  assert.equal((await get(built)).node.layout!.gridTemplateRows, "40px 40px 40px 40px");
 });

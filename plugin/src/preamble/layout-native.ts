@@ -1,11 +1,12 @@
 import { assertGridSizing } from "./layout-legality.js";
 import type { WriteLayout } from "./ir.js";
 import { AXES, LAYOUT_MODES, layoutModeOf, type LayoutMode, type Axis, type ChildLayout } from "./layout-mode.js";
+import { hugGridTracks, rowsForGridClaims, type GridClaim, type GridTrack } from "./grid-tracks.js";
 
 // Native layout policy owns mode-dependent writes. Bridge orchestration only chooses a policy.
 interface LayoutBehavior {
   rawHugs(node: any, axis: Axis): boolean;
-  container(node: any, layout: WriteLayout): void;
+  container(node: any, layout: WriteLayout, previous: LayoutMode): void;
   ownSize(node: any, sizing: NonNullable<WriteLayout["sizing"]>): void;
   fill(parent: any, child: any, context: ChildLayout, crossStretch: boolean): void;
   clearFill(parent: any, child: any, layout: WriteLayout): void;
@@ -82,24 +83,55 @@ function gridOwnSize(node: any, sizing: NonNullable<WriteLayout["sizing"]>): voi
     if (value && value !== "fill") node[AXES[axis].sizing] = value === "hug" ? "HUG" : "FIXED";
   }
 }
+// The one native track write. A hugging axis refuses new tracks (they arrive FLEX), so the axis is
+// temporarily bounded while the count changes and restored once the types are what the caller asked.
+function writeGridTracks(node: any, axis: Axis, requested: readonly GridTrack[]): void {
+  const { count, tracks, sizing } = AXES[axis];
+  node.gridAutoTracks = "NONE";
+  const previous = node[sizing];
+  if (previous === "HUG") node[sizing] = "FIXED";
+  node[count] = requested.length;
+  requested.forEach((track, i) => {
+    node[tracks][i].type = track.type;
+    if (track.type !== "HUG") node[tracks][i].value = track.value;
+  });
+  if (previous === "HUG" && !requested.some(t => t.type === "FLEX")) node[sizing] = "HUG";
+}
+
+/** Rows are implicit exactly while every row track hugs — the shape an omitted template leaves. */
+function hasImplicitRows(node: any): boolean {
+  const tracks = node.gridRowSizes;
+  return !!tracks?.length && tracks.every((track: { type: string }) => track.type === "HUG");
+}
+const inFlow = (child: any) => child.layoutPositioning !== "ABSOLUTE";
+const claimOfChild = (child: any): GridClaim => ({ column: child.gridColumnAnchorIndex, columnSpan: child.gridColumnSpan, row: child.gridRowAnchorIndex, rowSpan: child.gridRowSpan });
+function gridClaimOf(layout: WriteLayout): GridClaim {
+  return { column: layout.gridColumn?.anchor, columnSpan: layout.gridColumn?.span, row: layout.gridRow?.anchor, rowSpan: layout.gridRow?.span };
+}
+
+// What a grid's children claim right now. A frame BECOMING a grid has no placement yet — its
+// anchors are a non-grid frame's untouched zeros, not intent — so its children claim nothing and
+// auto-place; a frame that already was one has anchors worth reading.
+function liveGridClaims(node: any, wasGrid: boolean): GridClaim[] {
+  const children = (node.children ?? []).filter(inFlow);
+  return wasGrid ? children.map(claimOfChild) : children.map(() => ({}));
+}
+
 const GRID: LayoutBehavior = {
   rawHugs(node, axis) { return node[AXES[axis].sizing] === "HUG"; },
-  container(node, layout) {
+  container(node, layout, previous) {
+    // Rows nobody named are implicit, and resolving them into the REQUEST (rather than after it)
+    // is what lets the sizing gate judge the tracks this write actually leaves instead of a fresh
+    // frame's fractional default.
+    const wasGrid = previous.word === "grid";
+    if (!layout.gridTemplateRows && (!wasGrid || hasImplicitRows(node))) {
+      const columns = layout.gridTemplateColumns?.length ?? node.gridColumnCount;
+      layout = { ...layout, gridTemplateRows: hugGridTracks(rowsForGridClaims(columns, liveGridClaims(node, wasGrid))) };
+    }
     assertGridSizing(layout, node, "flcm");
     for (const axis of ["horizontal", "vertical"] as const) {
-      const { template, count, tracks, sizing } = AXES[axis];
-      const requested = layout[template];
-      if (!requested) continue;
-      node.gridAutoTracks = "NONE";
-      const previous = node[sizing];
-      // New native tracks start FLEX; temporarily bound HUG before assigning their actual types.
-      if (previous === "HUG") node[sizing] = "FIXED";
-      node[count] = requested.length;
-      requested.forEach((track, i) => {
-        node[tracks][i].type = track.type;
-        if (track.type !== "HUG") node[tracks][i].value = track.value;
-      });
-      if (previous === "HUG" && !requested.some(t => t.type === "FLEX")) node[sizing] = "HUG";
+      const requested = layout[AXES[axis].template];
+      if (requested) writeGridTracks(node, axis, requested);
     }
     if (layout.gap !== undefined) {
       node.gridRowGap = typeof layout.gap === "number" ? layout.gap : layout.gap.row;
@@ -142,6 +174,19 @@ const FREE: LayoutBehavior = {
 const BEHAVIORS: Record<LayoutMode["word"], LayoutBehavior> = { none: FREE, row: flowBehavior(LAYOUT_MODES.row), column: flowBehavior(LAYOUT_MODES.column), grid: GRID };
 export function behaviorForMode(mode: LayoutMode): LayoutBehavior { return BEHAVIORS[mode.word]; }
 export function layoutBehavior(node: { layoutMode?: string }): LayoutBehavior { return BEHAVIORS[layoutModeOf(node).word]; }
+
+/**
+ * Make room for a child about to enter an implicit-row grid. Growth only: Figma would otherwise
+ * grow a FIXED row of its own the moment a child lands past the last cell [observed live,
+ * scripts/probe-grid.mjs], and a FIXED row in a hug-height grid is a size nobody authored. A grid
+ * whose rows the author NAMED is left exactly as named, and a removal leaves its row behind — an
+ * empty hug track is zero tall.
+ */
+export function growImplicitGridRows(parent: any, layout: WriteLayout): void {
+  if (layoutModeOf(parent).kind !== "grid" || layout.position === "absolute" || !hasImplicitRows(parent)) return;
+  const rows = rowsForGridClaims(parent.gridColumnCount, [...liveGridClaims(parent, true), gridClaimOf(layout)]);
+  if (rows > parent.gridRowCount) writeGridTracks(parent, "vertical", hugGridTracks(rows));
+}
 
 /** Explicit indexes occupy slots; unmentioned siblings fill the remaining slots in their existing order. */
 export function applySiblingOrder(parent: any, edits: readonly { child: any; index: number }[]): void {

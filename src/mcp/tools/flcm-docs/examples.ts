@@ -31,7 +31,7 @@ const EXAMPLE_META: Record<ExampleId, { title: string; intro: string }> = {
   grid: {
     title: "Grid tracks and cell placement",
     intro:
-      "Both templates are explicit. The fractional columns use a fixed width; fixed row tracks allow the height to hug. Children auto-place unless anchors or spans are supplied.",
+      "Columns are explicit and fractional, so the frame takes a fixed width; rows are omitted, so they are implicit hug tracks — as many as the children need, growing as more arrive. Children auto-place unless anchors or spans are supplied.",
   },
   caption: {
     title: "A feed caption (rich text)",

@@ -185,7 +185,8 @@ const SECTIONS: Section[] = [
       `### Shared by every node\n\n${propTable(FIELD_GROUPS.shared)}\n\n` +
       `### Annotations\n\n${propTable(FIELD_GROUPS.annotation)}\n\n${ANNOTATIONS_REFERENCE}\n\n` +
       "### Size & position (FRAME, TEXT, RECTANGLE, ELLIPSE, VECTOR, INSTANCE)\n\n" +
-      'A LINE sizes on a numeric `width` alone, its length. There is no `height`, `"fill"`, or `"hug"`.\n\n' +
+      'A LINE sizes along its length alone, its `width`: a number, or `"fill"` under a row or column parent — the divider case, ' +
+      'where the flow supplies the length. There is no `height`, no `"hug"` and no percent.\n\n' +
       `${propTable(FIELD_GROUPS.size)}\n\n` +
       `#### Percent sizing\n\n${PERCENT_SIZING}\n\n` +
       `### FRAME — container props\n\n${propTable({ ...FIELD_GROUPS.appearance, ...FIELD_GROUPS.frame })}\n\n` +

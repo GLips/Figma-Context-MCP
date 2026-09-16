@@ -9,25 +9,25 @@ export async function gridExample(flcm: Flcm) {
     layout: {
       mode: "grid",
       gridTemplateColumns: "1fr 1fr",
-      gridTemplateRows: "80px 80px",
       gap: "12px 16px",
       padding: 16,
     },
     children: [
-      { type: "RECTANGLE", width: "fill", height: "fill", fill: "#6366F1" },
+      // A double-wide banner, then tiles: the row count follows from the placement.
+      {
+        type: "RECTANGLE",
+        width: "fill",
+        height: 72,
+        fill: "#6366F1",
+        layout: { gridColumn: "span 2" },
+      },
+      { type: "RECTANGLE", width: "fill", height: 56, fill: "#14B8A6" },
       {
         type: "RECTANGLE",
         width: 40,
         height: 40,
         fill: "#F59E0B",
         layout: { justifySelf: "center", alignSelf: "end" },
-      },
-      {
-        type: "RECTANGLE",
-        width: "fill",
-        height: "fill",
-        fill: "#14B8A6",
-        layout: { gridColumn: "span 2", gridRow: "2" },
       },
     ],
   });

@@ -377,14 +377,16 @@ export function compileNodeLayout(props: Omit<SizeProps, "layout"> & { layout?: 
   return Object.keys(layout).length ? layout : undefined;
 }
 
-// A LINE sizes on one word, `width` — its length, and a FIXED size only. Compiled here so LINE and
-// an edit delta reject a sizing intent with the SAME error: "fill"/"hug"/a percent read as a size on
-// every other node, and on a line they would silently become nothing.
+// A LINE sizes on one word, `width` — its length. A number, or "fill" to take the length from a
+// row/column parent's flow (a divider spanning its column, which layout-legality.ts gates on the
+// parent). Compiled here so LINE and an edit delta reject the other sizing intents with the SAME
+// error: "hug" and a percent read as a size on every other node, and on a line they'd become nothing.
 export function compileLineWidth(props: Pick<LineProps, "width">): WriteLayout | undefined {
   const w = props.width;
   if (w == null) return undefined;
-  if (w === "fill" || w === "hug" || isPercent(w)) {
-    throw new Error('flcm: a LINE\'s width is its length, a fixed size — "fill", "hug" and "N%" have no meaning on a line. Got ' + JSON.stringify(w) + ".");
+  if (w === "fill") return { sizing: { horizontal: "fill" } };
+  if (w === "hug" || isPercent(w)) {
+    throw new Error('flcm: a LINE\'s width is its length — "hug" and "N%" have no meaning on a line, which has no content to hug and no cell to measure against. Use a number, or "fill" under a row or column. Got ' + JSON.stringify(w) + ".");
   }
   let px: number;
   try {

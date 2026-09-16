@@ -130,6 +130,21 @@ export function assertPercentResolvable(childLayout: WriteLayout, facts: ParentF
   }
 }
 
+// A LINE is a length and nothing else: `width` IS that length, and there is no height to speak of.
+// The one non-numeric length Figma realizes is FILL under a row or column — the commonest line in
+// any design is a divider spanning its column — where the parent's flow supplies the number.
+// Out of flow nothing would, so the refusal stands there.
+export function assertLineSizingInFlow(nodeType: string, wl: WriteLayout, parentMode: LayoutMode, isAbsolute: boolean, subject: string): void {
+  if (nodeType !== "LINE") return;
+  const s = wl.sizing || {};
+  if (s.vertical !== undefined) {
+    throw new Error(subject + ": a LINE has no height — it is a length along its `width` alone. Rotate it 90° to stand it up.");
+  }
+  if (s.horizontal === "fill" && (parentMode.kind !== "flow" || isAbsolute)) {
+    throw new Error(subject + ': a LINE fills only as an in-flow child of a row or column, where the parent supplies the length. Give it a numeric `width` here.');
+  }
+}
+
 /** FLEX needs a bounded axis. Template edits cannot silently change a live HUG into FIXED. */
 export function assertGridSizing(layout: WriteLayout, live: {
   layoutMode?: string;
@@ -139,8 +154,9 @@ export function assertGridSizing(layout: WriteLayout, live: {
   gridRowSizes?: readonly { type: string }[];
 } | undefined, subject: string): void {
   if (effectiveLayoutMode(layout, live).kind !== "grid") return;
-  // A native default invents track intent and may introduce FLEX on a hugging axis.
-  if (live?.layoutMode !== "GRID" && (!layout.gridTemplateColumns || !layout.gridTemplateRows)) throw new Error(subject + ": creating a grid requires gridTemplateColumns and gridTemplateRows.");
+  // Figma flows a grid row-wise, so the columns are the axis no one can infer. Rows are implicit
+  // (hug tracks, one per row the children need) until a template names them.
+  if (live?.layoutMode !== "GRID" && !layout.gridTemplateColumns) throw new Error(subject + ": creating a grid requires gridTemplateColumns. Rows are implicit hug tracks unless gridTemplateRows names them.");
   for (const axis of ["horizontal", "vertical"] as const) {
     const fields = AXES[axis];
     const tracks = layout[fields.template] ?? live?.[fields.tracks];

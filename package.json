@@ -35,6 +35,7 @@
     "probe:midrun-await": "tsx scripts/probe-midrun-await.mjs",
     "probe:commit-undo": "tsx scripts/probe-commit-undo.mjs",
     "probe:grid": "tsx scripts/probe-grid.mjs",
+    "probe:line-fill": "tsx scripts/probe-line-fill.mjs",
     "probe:pin-stretch": "tsx scripts/probe-pin-stretch.mjs",
     "probe:queued-writes": "tsx scripts/probe-queued-writes.mjs",
     "docs:gen": "tsx scripts/gen-flcm-doc.ts",

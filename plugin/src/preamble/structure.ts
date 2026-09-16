@@ -36,6 +36,7 @@ import { prepareInsertBindings, applyInsertBindings, InsertBindingPlan } from ".
 import { clearKeysDeep, childListClosingInstanceOf } from "./identity.js";
 import { applyExposures } from "./instance-exposure.js";
 import { captureCloneBindings, restoreCloneBindings, removeFailedClone, type CreatedCloneProperties } from "./clone-bindings.js";
+import { growImplicitGridRows } from "./layout-native.js";
 import { replacementTree } from "./structure-layout.js";
 import type { EditDelta } from "./schema.js";
 import { compileEditPlan, loadEditResources, gateEditResources, assertEditPlanLands,
@@ -211,6 +212,7 @@ function applyPlacement(verb: string, { dest, node, words }: PreparedPlacement):
   const fail = beginMutatingApply(verb, node);
   const from = node.parent;
   try {
+    growImplicitGridRows(dest.parent, words);
     dest.place(node);
     resettleMovedNode(node, words);
   } catch (cause) {

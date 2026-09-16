@@ -26,3 +26,79 @@ export function parseGridTracks(raw: string, subject: string): GridTrack[] {
   return tracks;
 }
 
+// ---- Implicit rows. Figma flows row-wise, so a grid's COLUMNS are the axis an author must state;
+// the row count is a fact about the children, and making it one the author has to know is how a
+// tile wall with a captioned first tile becomes a hand-computed pixel row. A claim is one child's
+// demand on the grid — an anchored track index (0-based) or auto, and a span. ----
+export interface GridClaim {
+  column?: number;
+  columnSpan?: number;
+  row?: number;
+  rowSpan?: number;
+}
+
+/**
+ * How many rows these claims need at `columnCount`, by CSS row-major auto-placement
+ * (`grid-auto-flow: row`, sparse): claims anchored in both axes take their cells first, then a
+ * cursor walks the rest left-to-right, top-to-bottom. Always at least 1 — a grid with no children
+ * still has a row.
+ */
+export function rowsForGridClaims(columnCount: number, claims: readonly GridClaim[]): number {
+  const columns = Math.max(Math.floor(columnCount) || 1, 1);
+  const occupied = new Set<string>();
+  let rows = 0;
+  const sizeOf = (claim: GridClaim) => ({
+    columns: Math.min(Math.max(Math.floor(claim.columnSpan ?? 1), 1), columns),
+    rows: Math.max(Math.floor(claim.rowSpan ?? 1), 1),
+  });
+  type Size = ReturnType<typeof sizeOf>;
+  const free = (row: number, column: number, size: Size) => {
+    if (column < 0 || column + size.columns > columns) return false;
+    for (let r = row; r < row + size.rows; r++) for (let c = column; c < column + size.columns; c++) if (occupied.has(r + ":" + c)) return false;
+    return true;
+  };
+  const take = (row: number, column: number, size: Size) => {
+    for (let r = row; r < row + size.rows; r++) for (let c = column; c < column + size.columns; c++) occupied.add(r + ":" + c);
+    rows = Math.max(rows, row + size.rows);
+  };
+  const clampColumn = (column: number, size: Size) => Math.min(Math.max(column, 0), columns - size.columns);
+  const floating: { claim: GridClaim; size: Size }[] = [];
+  for (const claim of claims) {
+    const size = sizeOf(claim);
+    if (claim.row !== undefined && claim.column !== undefined) take(Math.max(claim.row, 0), clampColumn(claim.column, size), size);
+    else floating.push({ claim, size });
+  }
+  let cursorRow = 0, cursorColumn = 0;
+  for (const { claim, size } of floating) {
+    // An anchored row is where the claim sits, full or not: an overlap Figma refuses is the
+    // author's to see, and inventing a different row would only hide it behind a wrong row count.
+    if (claim.row !== undefined) {
+      const row = Math.max(claim.row, 0);
+      let column = 0;
+      while (column + size.columns <= columns && !free(row, column, size)) column++;
+      take(row, clampColumn(column, size), size);
+      continue;
+    }
+    if (claim.column !== undefined) {
+      const column = clampColumn(claim.column, size);
+      if (column < cursorColumn) cursorRow++;
+      cursorColumn = column;
+      while (!free(cursorRow, column, size)) cursorRow++;
+      take(cursorRow, column, size);
+      continue;
+    }
+    while (!free(cursorRow, cursorColumn, size)) {
+      cursorColumn++;
+      if (cursorColumn + size.columns > columns) { cursorColumn = 0; cursorRow++; }
+    }
+    take(cursorRow, cursorColumn, size);
+    cursorColumn += size.columns;
+  }
+  return Math.max(rows, 1);
+}
+
+/** Rows a grid hugs one per claim-row — what "gridTemplateRows omitted" resolves to. */
+export function hugGridTracks(rows: number): GridTrack[] {
+  return Array.from({ length: rows }, () => ({ type: "HUG" }) as GridTrack);
+}
+
