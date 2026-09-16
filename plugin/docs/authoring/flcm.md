@@ -258,7 +258,7 @@ Budget fixed widths together with padding and gaps; use `"fill"` for the remaini
 | `strokeAlign` | "inside" \| "outside" \| "center" | Which side of the edge. Default "inside". |
 | `borderRadius` | number \| "Npx" | Corner radius. Frames and rectangles only. |
 | `effects` | effects value | Shadows / blur: flcm.effects({...}) or a CSS-string bag. "none" removes all effects. |
-| `rotation` | number (deg) | Rotation in degrees. |
+| `rotation` | number (deg) | Rotation in degrees. Composes AFTER layout sizing: the parent sizes the node (fill/hug/px) on its own axes first, and the node then spins about its centre — so rotating changes which way the box points, never the size it was given. |
 | `layout` | { mode?, gridTemplateColumns?, gridTemplateRows?, gap?, wrap?, padding?, justifyContent?, alignItems?, gridColumn?, gridRow?, justifySelf?, alignSelf?, zIndex? } | Own container settings plus placement under the parent. Creating a grid requires gridTemplateColumns; rows are implicit hug tracks unless named. |
 | `clip` | boolean | Clip children to the frame's bounds. Default false, like CSS overflow: visible. |
 
@@ -371,7 +371,7 @@ Each styled run's delta fields:
 | `strokeAlign` | "inside" \| "outside" \| "center" | Which side of the edge. Default "inside". |
 | `borderRadius` | number \| "Npx" | Corner radius. Frames and rectangles only. |
 | `effects` | effects value | Shadows / blur: flcm.effects({...}) or a CSS-string bag. "none" removes all effects. |
-| `rotation` | number (deg) | Rotation in degrees. |
+| `rotation` | number (deg) | Rotation in degrees. Composes AFTER layout sizing: the parent sizes the node (fill/hug/px) on its own axes first, and the node then spins about its centre — so rotating changes which way the box points, never the size it was given. |
 
 ### ELLIPSE — shape props
 
@@ -384,7 +384,7 @@ Each styled run's delta fields:
 | `strokeWidth` | number \| "Npx" | Border thickness. |
 | `strokeAlign` | "inside" \| "outside" \| "center" | Which side of the edge. Default "inside". |
 | `effects` | effects value | Shadows / blur: flcm.effects({...}) or a CSS-string bag. "none" removes all effects. |
-| `rotation` | number (deg) | Rotation in degrees. |
+| `rotation` | number (deg) | Rotation in degrees. Composes AFTER layout sizing: the parent sizes the node (fill/hug/px) on its own axes first, and the node then spins about its centre — so rotating changes which way the box points, never the size it was given. |
 
 ### LINE — line props
 
@@ -392,8 +392,8 @@ Each styled run's delta fields:
 | --- | --- | --- |
 | `stroke` | paint \| paint[] | The line's paint. "none" removes it. |
 | `strokeWidth` | number \| "Npx" | Thickness. Defaults to 1. |
-| `width` | number \| "Npx" | The line's length: a number, or "fill" to span a row/column parent (the divider case). No "hug" and no percent — a line has no content to measure and no cell to measure against. |
-| `rotation` | number (deg) | Degrees — 90° makes a horizontal line vertical. |
+| `width` | number \| "Npx" | The line's length: a number, or "fill" to span an UNROTATED row/column parent (the divider case). A rotated line takes a number — "fill" resolves along the parent's own axis before the rotation turns it across, so the two together are refused; a rule across a row is a RECTANGLE 1px wide with height: "fill". No "hug" and no percent — a line has no content to measure and no cell to measure against. |
+| `rotation` | number (deg) | Degrees — 90° makes a horizontal line vertical. Applied after sizing, so it needs a numeric `width` (see width). |
 | `layout` | { gridColumn?, gridRow?, justifySelf?, alignSelf?, zIndex? } | Placement under an auto-layout parent. Grid accepts cell alignment; flow accepts only the alignSelf "stretch" alias for counter-axis fill. |
 | `left` | number \| "Npx" \| "N%" | Offset from the parent's left edge — a number, "Npx", or "N%" of the parent width. Naming `left` or `top` lifts the node out of an auto-layout parent's flow (badges, overlays); under a free-form parent it is simply where the node sits. On a render root it is where on the PAGE the tree lands — without it every root stacks at the origin. Under edit, an axis you don't name keeps its live value. |
 | `top` | number \| "Npx" \| "N%" | Offset from the parent's top edge. Same rules as `left`. |
@@ -415,7 +415,7 @@ Bare geometry: the node's box is the path's bounding box, so there is no `width`
 | `strokeWidth` | number \| "Npx" | Border thickness. |
 | `strokeAlign` | "inside" \| "outside" \| "center" | Which side of the edge. Default "inside". |
 | `effects` | effects value | Shadows / blur: flcm.effects({...}) or a CSS-string bag. "none" removes all effects. |
-| `rotation` | number (deg) | Rotation in degrees. |
+| `rotation` | number (deg) | Rotation in degrees. Composes AFTER layout sizing: the parent sizes the node (fill/hug/px) on its own axes first, and the node then spins about its centre — so rotating changes which way the box points, never the size it was given. |
 
 ### VECTOR — svg props (`svg`)
 
@@ -575,7 +575,7 @@ Blur values are written in **CSS px** — you always write the CSS number and we
 | `strokeAlign` | "inside" \| "outside" \| "center" | Which side of the edge. Default "inside". |
 | `borderRadius` | number \| "Npx" | Corner radius. Frames and rectangles only. |
 | `effects` | effects value | Shadows / blur: flcm.effects({...}) or a CSS-string bag. "none" removes all effects. |
-| `rotation` | number (deg) | Rotation in degrees. |
+| `rotation` | number (deg) | Rotation in degrees. Composes AFTER layout sizing: the parent sizes the node (fill/hug/px) on its own axes first, and the node then spins about its centre — so rotating changes which way the box points, never the size it was given. |
 | `clip` | boolean | Clip children to the frame's bounds. Default false, like CSS overflow: visible. |
 | `minWidth` | number \| "none" | minWidth in positive pixels, effective on auto-layout containers and their direct children. Omitted preserves the bound; "none" clears it. Sizes constrained by bounds succeed with a warnings record containing prop, authored and realized values. |
 | `maxWidth` | number \| "none" | maxWidth in positive pixels, effective on auto-layout containers and their direct children. Omitted preserves the bound; "none" clears it. Sizes constrained by bounds succeed with a warnings record containing prop, authored and realized values. |

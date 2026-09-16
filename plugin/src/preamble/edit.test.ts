@@ -365,6 +365,19 @@ test("a LINE's `width` is its length: it fills under a column, and nothing else 
   // Out of the flow nothing supplies the length.
   await render({ type: "FRAME", width: 100, height: 100, children: [{ type: "LINE", key: "loose", width: 20 }] });
   await assert.rejects(edit("loose", { width: "fill" }), /a LINE fills only as an in-flow child of a row or column/);
+  // A rotation composes after the fill, so the two together are the vertical divider Figma can't make.
+  const rotated = /a rotated LINE cannot use width: "fill".*RECTANGLE 1px wide/s;
+  await assert.rejects(
+    render({ type: "FRAME", width: 100, height: 100, layout: { mode: "row" }, children: [{ type: "LINE", width: "fill", rotation: 90 }] }),
+    rotated,
+  );
+  await assert.rejects(edit("rule", { rotation: 90, width: "fill" }), rotated);
+  await edit("rule", { width: "fill" });
+  await assert.rejects(edit("rule", { rotation: 90 }), rotated); // the fill is already live
+  await edit("rule", { width: 40, rotation: 90 });
+  await assert.rejects(edit("rule", { width: "fill" }), rotated); // the rotation is already live
+  await edit("rule", { rotation: 0, width: "fill" });
+  assert.equal(line.width, 80);
 });
 
 test("a TEXT size delta preloads the node's font before the mutating span", async () => {

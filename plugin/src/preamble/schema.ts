@@ -249,7 +249,7 @@ const APPEARANCE_FIELDS = {
   ),
   borderRadius: metric("Corner radius. Frames and rectangles only."),
   effects: prop(z.custom<EffectsInput>(), 'Shadows / blur: flcm.effects({...}) or a CSS-string bag. "none" removes all effects.', "effects value"),
-  rotation: degrees("Rotation in degrees."),
+  rotation: degrees("Rotation in degrees. Composes AFTER layout sizing: the parent sizes the node (fill/hug/px) on its own axes first, and the node then spins about its centre — so rotating changes which way the box points, never the size it was given."),
 };
 
 // An ELLIPSE has no corners, so its appearance vocabulary is the shared one minus `borderRadius` — a
@@ -395,8 +395,8 @@ export type TextRunInput = string | [text: string, style: StyleDeltaInput];
 const LINE_FIELDS = {
   stroke: color('The line\'s paint. "none" removes it.'),
   strokeWidth: metric("Thickness. Defaults to 1."),
-  width: metric('The line\'s length: a number, or "fill" to span a row/column parent (the divider case). No "hug" and no percent — a line has no content to measure and no cell to measure against.'),
-  rotation: degrees("Degrees — 90° makes a horizontal line vertical."),
+  width: metric('The line\'s length: a number, or "fill" to span an UNROTATED row/column parent (the divider case). A rotated line takes a number — "fill" resolves along the parent\'s own axis before the rotation turns it across, so the two together are refused; a rule across a row is a RECTANGLE 1px wide with height: "fill". No "hug" and no percent — a line has no content to measure and no cell to measure against.'),
+  rotation: degrees('Degrees — 90° makes a horizontal line vertical. Applied after sizing, so it needs a numeric `width` (see width).'),
   ...PLACEMENT_FIELDS,
 };
 

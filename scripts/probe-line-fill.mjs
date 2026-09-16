@@ -7,7 +7,8 @@
 // width: "fill" (layoutSizingHorizontal = "FILL" on the LineNode). This measures that the length
 // Figma gives it really is the parent's content width, that a row gives it the leftover space,
 // that the read says "fill", that a numeric width takes the fill back, and that a free-form
-// parent — where no flow supplies a length — still refuses.
+// parent — where no flow supplies a length — still refuses, as does a rotation (the fill resolves
+// along the parent's own axis first, so a rotated line is a length across it that nobody asked for).
 
 import { PluginBridge } from "../src/services/plugin-bridge/bridge.ts";
 import { WS_PORT_BLOCK } from "../src/services/plugin-bridge/ports.ts";
@@ -71,6 +72,25 @@ try {
   try { await flcm.edit(column.children[1], { width: "hug" }); }
   catch (error) { hugRefusal = String(error); }
   check("hug still has no meaning on a line", hugRefusal.includes("no meaning on a line"), true);
+
+  // A rotation composes AFTER the fill, so the two together give a line as long as the parent's own
+  // axis, standing across it — refused now, with the construction that does work named in its place.
+  let rotatedRefusal = "";
+  try {
+    await flcm.render({ type: "FRAME", name: "LINE rotated probe", left: 720, width: 200, height: 60,
+      layout: { mode: "row" }, children: [{ type: "LINE", width: "fill", rotation: 90, stroke: "#D4D4D8" }] });
+  } catch (error) { rotatedRefusal = String(error); }
+  check("a rotated fill is refused at create", rotatedRefusal.includes('a rotated LINE cannot use width: "fill"'), true);
+  let liveRotationRefusal = "";
+  try { await flcm.edit(column.children[1], { rotation: 90 }); }
+  catch (error) { liveRotationRefusal = String(error); }
+  check("rotating a line that already fills is refused", liveRotationRefusal.includes('a rotated LINE cannot use width: "fill"'), true);
+  // The construction the refusal names, measured: a 1px rule standing across a row.
+  const rule = await flcm.render({ type: "FRAME", name: "LINE rule construction probe", left: 960, width: 200, height: 60,
+    layout: { mode: "row", padding: 10 },
+    children: [{ type: "RECTANGLE", width: 1, height: "fill", fill: "#D4D4D8" }] });
+  roots.push(rule.id);
+  check("a 1px rectangle is the rule that stands", [(await flcm.measure(rule.children[0])).width, (await flcm.measure(rule.children[0])).height], [1, 40]);
   return { checks };
 } finally {
   for (const root of roots) { const node = await figma.getNodeByIdAsync(root); if (node) node.remove(); }
@@ -116,8 +136,8 @@ async function runProbe() {
     if (reply?.errors) fail(`the probe script errored in the sandbox:\n${reply.errors}`);
 
     const results = reply?.result?.checks;
-    if (!Array.isArray(results) || results.length !== 8)
-      fail(`expected 8 checks, got ${JSON.stringify(reply?.result)}`);
+    if (!Array.isArray(results) || results.length !== 11)
+      fail(`expected 11 checks, got ${JSON.stringify(reply?.result)}`);
     for (const result of results) {
       console.log(
         `${result.pass ? "PASS" : "FAIL"} ${result.name}: ${JSON.stringify(result.actual)} (expected ${JSON.stringify(result.expected)})`,

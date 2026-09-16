@@ -30,7 +30,7 @@ import { WriteType, WriteNode, WriteProps, WriteLayout, TextAlign, TextDecoratio
 import { own } from "./validate.js";
 import {
   assertLayoutRealizableForType, assertGridSizing, assertPercentResolvable, assertSizingResolvesAgainstParentFrame, ParentFlowFacts,
-  assertTextFillHeightInFlow, assertLineSizingInFlow, assertInheritedRectangleDimensions,
+  assertTextFillHeightInFlow, assertLineSizingInFlow, assertLineFillUnrotated, assertInheritedRectangleDimensions,
 } from "./layout-legality.js";
 import { toFigmaPaint } from "./paint.js";
 import { toFigmaEffects } from "./effects.js";
@@ -856,6 +856,7 @@ export function attachBuiltChild(
   assertPercentResolvable(cl, facts, facts.subject);
   assertTextFillHeightInFlow(wn.type, cl, facts.mode.kind !== "free", cl.position === "absolute", facts.subject);
   assertLineSizingInFlow(wn.type, cl, facts.mode, cl.position === "absolute", facts.subject);
+  assertLineFillUnrotated(wn.type, cl.sizing?.horizontal === "fill", wn.rotation, facts.subject);
   const child = buildNode(wn, ctx, facts.widthIsBounded);
   if (defaultTextFill) child.textAutoResize = "HEIGHT";
   // BEFORE the attach: Figma auto-places the child the moment it lands, and a grid with no free

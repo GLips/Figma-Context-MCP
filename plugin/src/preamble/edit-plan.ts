@@ -71,6 +71,7 @@ import {
 import { applyAnnotations, requestAnnotationCategories, requestTreeAnnotationCategories, resolveAnnotationCategories } from "./annotation-categories.js";
 import { beginMutatingApply } from "./verb-error.js";
 import { assertNodeStillOnCanvas } from "./freshness.js";
+import { assertLineFillUnrotated } from "./layout-legality.js";
 import {
   applyPaint, applySceneProps, applyLiveNodeLayout, settleLiveNodePercentSize,
   settleLiveNodePercentPosition, assertLayoutDeltaResolvable, applyTextProps, applyTextClamp,
@@ -492,6 +493,16 @@ export function assertEditPlanLands(
   plan: EditPlan, fonts: FontMap, subject: string, deltas?: BatchLayoutDeltas, projection?: EditLayoutProjection,
 ): void {
   assertTextEditFontsLoaded(plan.node, plan.patch, fonts, subject);
+  // Outside the layout gate on purpose: this rule reads ONE layout word beside one appearance word,
+  // and either half can arrive alone (rotating a line that already fills, or filling one that is
+  // already rotated), so the effective pair is read off the live node wherever the delta is silent.
+  const live = plan.node as SceneNode & { layoutSizingHorizontal?: string; rotation?: number };
+  assertLineFillUnrotated(
+    plan.node.type,
+    (plan.patch.layout?.sizing?.horizontal ?? (live.layoutSizingHorizontal === "FILL" ? "fill" : undefined)) === "fill",
+    plan.patch.rotation ?? live.rotation,
+    subject,
+  );
   if (plan.patch.layout) assertLayoutDeltaResolvable(plan.node, plan.patch.layout, subject, deltas, projection);
 }
 

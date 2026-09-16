@@ -145,6 +145,21 @@ export function assertLineSizingInFlow(nodeType: string, wl: WriteLayout, parent
   }
 }
 
+// A rotated LINE cannot fill. The parent's flow resolves "fill" along ITS OWN axis and the rotation
+// composes after that sizing, so a filling line rotated 90° in a row comes out as long as the row
+// and standing across it — the vertical divider nobody can get this way, because a LINE has no
+// height for the cross axis to supply. Refusal rather than translation: nothing in Figma renders the
+// intent, and the honest construction is a 1px-wide RECTANGLE with height: "fill".
+// Self-triggering on type, like the rules above; the callers state the EFFECTIVE fill and rotation
+// (authored word, else the live node's) so neither verb can be the one that forgets.
+export function assertLineFillUnrotated(nodeType: string, fillsWidth: boolean, rotation: number | undefined, subject: string): void {
+  if (nodeType !== "LINE" || !fillsWidth || !rotation) return;
+  throw new Error(
+    subject + ': a rotated LINE cannot use width: "fill" — the parent\'s flow supplies the length along its OWN axis, and the rotation turns that length across it. ' +
+      "Give this line a numeric `width`, or build a rule across the parent's flow as a RECTANGLE 1px wide with height: \"fill\" (no rotation).",
+  );
+}
+
 /** FLEX needs a bounded axis. Template edits cannot silently change a live HUG into FIXED. */
 export function assertGridSizing(layout: WriteLayout, live: {
   layoutMode?: string;
