@@ -223,7 +223,8 @@ const SECTIONS: Section[] = [
       `### RECTANGLE — shape props\n\n${propTable(FIELD_GROUPS.appearance)}\n\n` +
       `### ELLIPSE — shape props\n\n(An ellipse has no \`borderRadius\` — its edge is already round.)\n\n${propTable(FIELD_GROUPS.ellipse)}\n\n` +
       `### LINE — line props\n\n${propTable(FIELD_GROUPS.line)}\n\n` +
-      `### VECTOR — vector props\n\n(Use \`svg\` for opaque markup with shared and size/position props; use \`d\` for a themeable path with the props below.)\n\n${propTable(FIELD_GROUPS.path)}\n\n` +
+      `### VECTOR — path props (\`d\` / \`vectorPaths\`)\n\nBare geometry: the node's box is the path's bounding box, so there is no \`width\`/\`height\` here — \`scale\` is the size word.\n\n${propTable(FIELD_GROUPS.path)}\n\n` +
+      `### VECTOR — svg props (\`svg\`)\n\nA canvas of art, so it takes the shared and size/position props too. These two reach the vectors INSIDE the import.\n\n${propTable(FIELD_GROUPS.svg)}\n\n` +
       // The instance table prints once, here beside its sibling node types; the components section's
       // prose explains the same two words at length rather than repeating the table.
       "### INSTANCE — component words\n\n(An instance also takes every `FRAME` prop above; each one " +

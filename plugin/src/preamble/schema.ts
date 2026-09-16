@@ -399,9 +399,15 @@ const LINE_FIELDS = {
   ...PLACEMENT_FIELDS,
 };
 
-// A single themeable vector (VECTOR): the shared appearance vocabulary MINUS `radius` (a vector has no
-// corner radius — accepting it would be a documented no-op, which ADR-0003 forbids) plus path geometry.
-// Reuses the APPEARANCE_FIELDS entries so a path themes exactly like a rect and the docs can't drift.
+// A single themeable vector (VECTOR with `d`/`vectorPaths`): the shared appearance vocabulary MINUS
+// `radius` (a vector has no corner radius — accepting it would be a documented no-op, which ADR-0003
+// forbids) plus path geometry and its one size word. Reuses the APPEARANCE_FIELDS entries so a path
+// themes exactly like a rect and the docs can't drift.
+//
+// Negative space: no `width`/`height` here. The path form is BARE GEOMETRY — its box is the path's
+// bounding box — so a canvas-shaped size has nothing to mean but a non-uniform stretch of the art.
+// `scale` is the size word that survives that; `svg` is the form that has a canvas. (The words are
+// still accepted from a `get` round-trip and ignored with a warning — see flcm.ts compilePath.)
 const PATH_FIELDS = {
   vectorPaths: prop(z.array(z.object({ data: z.string(), windingRule: z.enum(["NONZERO", "EVENODD", "NONE"]) })), "Native path records for multiple paths or even-odd winding. Use exactly one of d, vectorPaths, or svg.", 'Array<{ data: string; windingRule: "NONZERO" | "EVENODD" | "NONE" }>'),
   d: z
@@ -409,14 +415,30 @@ const PATH_FIELDS = {
     .optional()
     .describe(
       'SVG path data, e.g. "M12 2 L22 20 L2 20 Z". Every standard command works (relative/shorthand are ' +
-        "normalized); only malformed data fails. Use exactly one of d, vectorPaths, or svg.",
+        "normalized); only malformed data fails. The node's box is the path's bounding box — `width`/" +
+        "`height` are ignored here, use `scale`. Use exactly one of d, vectorPaths, or svg.",
     ),
+  scale: prop(
+    z.number(),
+    "Multiplies the path's natural bounding box — `scale: 2` draws the same art twice as big. A single positive number, so the art can never stretch out of proportion. The path form's only size word.",
+  ),
   fill: APPEARANCE_FIELDS.fill,
   stroke: APPEARANCE_FIELDS.stroke,
   strokeWidth: APPEARANCE_FIELDS.strokeWidth,
   strokeAlign: APPEARANCE_FIELDS.strokeAlign,
   effects: APPEARANCE_FIELDS.effects,
   rotation: APPEARANCE_FIELDS.rotation,
+};
+
+// An SVG import (VECTOR with `svg`): a canvas of art, so it takes the size/position words — and these
+// two theme words. Figma parses the markup into a frame of vectors and flcm simply never touched them
+// before, which is why colours looked baked in; `fill`/`stroke` repaint every vector inside.
+// Negative space: no `strokeWidth`/`effects`/`radius`. Stroke weight is part of the ART's proportions
+// (the markup's own stroke-width is what makes a 1.5px icon a 1.5px icon), so overriding it per-import
+// would silently redraw the drawing rather than recolour it.
+const SVG_FIELDS = {
+  fill: color('Repaints every vector inside the imported markup, overriding the colors written into it — how an icon takes your theme. "none" clears their fills.'),
+  stroke: color('Repaints every vector\'s stroke inside the imported markup. "none" clears them.'),
 };
 
 // Instance controls use the read vocabulary. The component target is grouped separately below.
@@ -494,8 +516,8 @@ export const ShapeSchema = z.object({ ...SHARED_FIELDS, ...SIZE_FIELDS, ...APPEA
 export const EllipseSchema = z.object({ ...SHARED_FIELDS, ...SIZE_FIELDS, ...ELLIPSE_FIELDS, ...BINDING_FIELDS, ...ANNOTATION_FIELDS });
 export const LineSchema = z.object({ ...SHARED_FIELDS, ...LINE_FIELDS, ...BINDING_FIELDS, ...ANNOTATION_FIELDS });
 export const PathSchema = z.object({ ...SHARED_FIELDS, ...SIZE_FIELDS, ...PATH_FIELDS, ...BINDING_FIELDS, ...ANNOTATION_FIELDS });
-// SVG markup is opaque: colors are baked in. The compiler dispatch consumes svg before these props.
-export const SvgSchema = z.object({ ...SHARED_FIELDS, ...SIZE_FIELDS, ...BINDING_FIELDS, ...ANNOTATION_FIELDS });
+// The compiler dispatch consumes the `svg` markup itself before these props.
+export const SvgSchema = z.object({ ...SHARED_FIELDS, ...SIZE_FIELDS, ...SVG_FIELDS, ...BINDING_FIELDS, ...ANNOTATION_FIELDS });
 // An instance takes a FRAME's words — its root is a frame-like container, and naming one of them
 // sets a root-level override (an unnamed word keeps tracking the component) — plus the component
 // words. No `children`: an instance's content is its component's.
@@ -841,6 +863,7 @@ export const FIELD_GROUPS = {
   run: RUN_FIELDS,
   line: LINE_FIELDS,
   path: PATH_FIELDS,
+  svg: SVG_FIELDS,
   edit: EDIT_FIELDS,
   instance: INSTANCE_FIELDS,
   swap: SWAP_FIELDS,

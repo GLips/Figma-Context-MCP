@@ -13,7 +13,7 @@ function setup() {
 
 test("read objects project wherever returned or logged; authored lookalikes and extracted path strings remain whole", async () => {
   const { wire } = setup();
-  const authored = await flcm.render({ type: "VECTOR", d: "M0 0 L8 0 L0 8 Z", width: 8, height: 8, fill: "#123456" });
+  const authored = await flcm.render({ type: "VECTOR", d: "M0 0 L8 0 L0 8 Z", fill: "#123456" });
   const read = await flcm.get(authored);
   assert.equal(read.node.type, "VECTOR");
   assert.equal(read.node.d, "M0 0 L8 0 L0 8 Z");
@@ -38,7 +38,7 @@ test("VECTOR reads can move/edit or create a copy, including multiple paths and 
     { d: "M0 0 L8 0 L0 8 Z" },
     { vectorPaths: [{ data: "M0 0 L8 0 L0 8 Z", windingRule: "EVENODD" as const }, { data: "M1 1 L2 2", windingRule: "NONE" as const }] },
   ]) {
-    const original = await flcm.render({ type: "VECTOR", ...geometry, width: 8, height: 8, fill: "#123456" });
+    const original = await flcm.render({ type: "VECTOR", ...geometry, fill: "#123456" });
     const { node } = await flcm.get(original);
     const before = (await figma.getNodeByIdAsync(original.id)).vectorPaths;
     const moved = await flcm.render(node);

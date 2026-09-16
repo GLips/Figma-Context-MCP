@@ -84,7 +84,7 @@ export function compileTree(input: unknown, subject: string): WriteNode {
           case "VECTOR": {
             if ([props.svg, props.d, props.vectorPaths].filter(value => value !== undefined).length !== 1) throw new Error("VECTOR needs exactly one of svg (markup), d (path data), or vectorPaths.");
             if (props.svg !== undefined) { const { svg, ...rest } = props; tree = compileSvg(svg, rest as SvgProps); }
-            else tree = compilePath(props as PathProps);
+            else tree = compilePath(props as PathProps, at);
             break;
           }
           default: throw new Error("type must be FRAME, TEXT, RECTANGLE, ELLIPSE, LINE, VECTOR, or INSTANCE. " + CLONE_REMEDY);

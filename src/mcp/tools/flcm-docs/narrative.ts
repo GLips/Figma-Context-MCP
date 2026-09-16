@@ -143,14 +143,30 @@ New text with omitted width fills a column whose available width is independentl
 
 Budget fixed widths together with padding and gaps; use \`"fill"\` for the remaining space. Fixed heights can overflow when text wraps or children grow. Use \`"hug"\` where the container should grow with content. Existing \`pin\` constraints control children of free-form containers and absolute children; in-flow auto-layout children use fill/hug. Inspect screenshots for visual quality beyond geometric overflow.`;
 
-export const VECTOR_INTRO = `Use \`type: "VECTOR"\` with exactly one geometry prop:
+export const VECTOR_INTRO = `Use \`type: "VECTOR"\` with exactly one geometry prop. The two forms answer different questions — \`d\` is a shape, \`svg\` is a drawing on a canvas:
 
 \`\`\`js
+// d: bare geometry. The node's box IS the path's bounding box.
 await flcm.render({ type: "VECTOR", d: "M0 0 L24 24", stroke: "#111", strokeWidth: 2 });
-await flcm.render({ type: "VECTOR", svg: '<svg width="24" height="24"><circle cx="12" cy="12" r="10" fill="red"/></svg>' });
+await flcm.render({ type: "VECTOR", d: "M15 18 L9 12 L15 6", stroke: "#111", scale: 2 }); // same art, twice as big
+
+// svg: art on the canvas its viewBox declares — and fill/stroke recolor every vector inside it.
+await flcm.render({
+  type: "VECTOR",
+  svg: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" fill="red"/></svg>',
+  fill: "#6366F1", // recolors the circle, whatever the markup said
+  width: 24,
+  height: 24,
+});
 \`\`\`
 
-\`d\` is a themeable SVG path. \`vectorPaths\` preserves multiple native paths and their NONZERO, EVENODD or NONE winding rules. Use exactly one of d, vectorPaths or svg. \`svg\` imports markup whose colors are baked in; it accepts shared and size props. There is no icon catalog. Supply the artwork. An id-bearing VECTOR accepts d or vectorPaths as a geometry edit and preserves its live identity. svg imports can change node types and child identities, so live svg replacement is refused by name. Move imported artwork with { id }, or omit its id to import a new copy.`;
+\`d\` is a themeable SVG path, and \`vectorPaths\` the same form spelled with multiple native paths and their NONZERO, EVENODD or NONE winding rules. Use exactly one of d, vectorPaths or svg. There is no icon catalog. Supply the artwork.
+
+A path has no canvas, so it has no \`width\`/\`height\`: its box is the geometry you gave it, and \`scale\` (one positive number) is the only word that changes that box — art authored with \`d\` can never come out stretched. Passing \`width\`/\`height\` beside \`d\` at creation is ignored with a warning naming the node; the rest of the node is created as written. When the intent is "this icon lives on a 24 grid", that grid is a viewBox, so use \`svg\`.
+
+\`svg\` imports markup through Figma's own SVG import: one vector per shape, inside a frame. Size words apply to that frame, and its art scales with it. \`fill\` and \`stroke\` beside \`svg\` repaint every vector inside, overriding the colors written into the markup — so one icon's markup serves every theme ("none" clears them). Stroke weight is left alone; it is part of the drawing's proportions.
+
+An id-bearing VECTOR accepts d or vectorPaths as a geometry edit and preserves its live identity, and \`edit(id, { width, height })\` on a vector resizes its geometry — at that point the current box is something you can see. svg imports can change node types and child identities, so live svg replacement is refused by name. Move imported artwork with { id }, or omit its id to import a new copy; a copy comes back at the path's natural size, so use \`flcm.clone\` to preserve a box that was resized live.`;
 
 export const PAINT_INTRO = `A paint value (for \`fill\`, \`stroke\`, or a run's \`color\`) is one of:
 
@@ -316,7 +332,7 @@ export const FAILS_LOUD = `Accepting CSS is a fidelity promise, so the boundarie
 | \`![alt](url)\` in a text string, or an unrealizable \`fontStyle\`/\`textDecoration\` (\`"oblique"\`, \`"overline"\`) | Text can't embed an image (\`flcm.image\`); the enum names the supported set. |
 | A duplicate \`key\` in one render | Keys are unique per render. |
 | A node \`type\` outside FRAME/TEXT/RECTANGLE/ELLIPSE/LINE/VECTOR | Those are the only createable types. |
-| \`fill\`/\`stroke\` on \`VECTOR\` | Colors are baked into the markup — edit it, or use \`VECTOR\` for a themeable vector. |
+| A \`scale\` on a path that isn't a positive number | \`scale\` exists so art can't stretch; zero or a negative would collapse or mirror it. (\`width\`/\`height\` beside \`d\` are not a refusal — they're ignored with a warning.) |
 | Unparseable SVG markup, or bad path \`d\` data | Never a silent blank node. |
 | Returning a live Figma node | Return the id string or a handle. |
 | A bad \`pin\` or \`anchor\` value, or \`anchor\` on an axis without its \`left\`/\`top\` | Names the value and the allowed set. |

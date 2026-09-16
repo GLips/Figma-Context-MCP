@@ -359,7 +359,7 @@ function assertPromotableBuiltRoot(tree: WriteNode): void {
   if (tree.type === "FRAME") return;
   // The one non-FRAME node that builds a frame: createNodeFromSvg returns a FrameNode of vectors.
   // VECTOR (also a VECTOR) builds a real VECTOR, so it falls through to the refusal.
-  if (tree.type === "VECTOR" && typeof tree.svg === "string") return;
+  if (tree.type === "VECTOR" && tree.vector?.kind === "svg") return;
   if (tree.type === "INSTANCE") {
     throw new Error(
       SUBJECT + ": the tree's root is an INSTANCE. " + WOULD_WRAP + " — author the body you want as the component " +

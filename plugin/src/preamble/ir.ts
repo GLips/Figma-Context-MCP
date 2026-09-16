@@ -317,6 +317,21 @@ export interface WriteLayout {
   top?: number;
 }
 
+// Where a VECTOR's art comes from. The two forms are NOT interchangeable spellings of one thing —
+// they answer different questions, and the union keeps that in the type rather than in a
+// "exactly one of three fields" convention every consumer has to re-check:
+//   • `path` — bare geometry. The node's box IS the paths' bounding box; `scale` is the only word
+//              that changes it (uniform by construction). One real VECTOR, so the shared appearance
+//              props (fill/stroke/…) land on it directly, like any primitive.
+//   • `svg`  — a CANVAS of art. figma.createNodeFromSvg parses the markup into a FRAME of vectors,
+//              so a VECTOR-typed spec can render a FrameNode and the handle reports that real type.
+//              Sizing words apply to the canvas; fills/strokes repaint the vectors INSIDE it.
+// Both arms are normalized at compile time (path data is already Figma's absolute M/L/C/Q/Z subset
+// by the time it reaches the bridge), so the render side never re-parses author input.
+export type WriteVectorSource =
+  | { kind: "path"; paths: Readonly<NonNullable<SimplifiedNode["vectorPaths"]>>; scale?: number }
+  | { kind: "svg"; markup: string };
+
 // A WriteNode's props without the `type` discriminant — the shape edit's partial delta compiles to
 // (a delta nudges an existing node, so it never carries a createable type), and what the prop
 // appliers/walkers consume (they read fields, never dispatch on type).
@@ -327,16 +342,9 @@ export interface WriteProps {
   // (reconcile deferred): key the nodes you'll address, leave the rest anonymous.
   key?: string;
   text?: string;
-  // Vector content. A VECTOR WriteNode carries EXACTLY ONE of these two, and they drive two different
-  // plugin calls — the two vector verbs are not interchangeable (see VECTOR / VECTOR):
-  //   • `svg`      — raw SVG markup → figma.createNodeFromSvg, which returns a FRAME of vectors with its
-  //                  colors baked in. So a VECTOR-typed node can render a FrameNode; the handle reports the
-  //                  real created type. Appearance props don't apply (color lives in the markup).
-  //   • `pathData` — a single `d` path string → figma.createVector() + vectorPaths, one vector node that
-  //                  takes our appearance props (fill/stroke/…) directly, so it themes like any primitive.
-  svg?: string;
-  vectorPaths?: Readonly<NonNullable<SimplifiedNode["vectorPaths"]>>;
-  pathData?: string;
+  // Vector content, as ONE value rather than a set of optional fields where exactly one may be set —
+  // the two authoring forms are different domains, not variants of each other (WriteVectorSource).
+  vector?: WriteVectorSource;
   // Styled spans for a TEXT node. Mutually exclusive with a bare `text` string at the author boundary;
   // when present the bridge builds `characters` from the runs and `textStyle` is the base the runs layer
   // over. Absent for the plain-string form.

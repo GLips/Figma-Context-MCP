@@ -42,9 +42,9 @@ const EXAMPLE_META: Record<ExampleId, { title: string; intro: string }> = {
   vector: {
     title: "Vector art (svg & path)",
     intro:
-      "Both vector contracts side by side: a themeable `VECTOR` with `d` triangle that fills with the accent " +
-      "color like any primitive, and an opaque `VECTOR` with `svg` mark pasted verbatim (its colors baked into the " +
-      "markup). No icon catalog — you bring the path data or markup.",
+      "Both vector forms side by side, and how each is sized: a `d` triangle, which is bare geometry sized by " +
+      "`scale`, and an `svg` mark, which is art on a canvas sized by `width`/`height` and recolored through " +
+      "`fill`. No icon catalog — you bring the path data or markup.",
   },
   image: {
     title: "Images (real raster fills)",

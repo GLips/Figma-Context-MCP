@@ -34,7 +34,10 @@ export const showValue = (v: unknown): string => {
 // with its own tailored guard — keep those, don't fold them in here. The known set is passed
 // pre-built (callers hold it at module scope) and the message lists are built only in the throw
 // paths, so the happy path adds no per-call allocation.
-export function rejectUnknownKeys(obj: unknown, allowed: ReadonlySet<string>, subject: string, noun = "prop"): void {
+// `hint` names the NEGATIVE SPACE of a closed set — where the word you wanted lives, when the set itself
+// is the answer to "what can I say here" but not to "so where do I say the rest". Appended verbatim to the
+// unknown-key message; omit it where the closed set really is the whole world.
+export function rejectUnknownKeys(obj: unknown, allowed: ReadonlySet<string>, subject: string, noun = "prop", hint = ""): void {
   if (obj === null || typeof obj !== "object" || Array.isArray(obj)) {
     // Object.keys on a string enumerates its character indices — without this branch a string
     // here rejects as unknown keys "0", "1", "2"…: every word true, none naming the actual
@@ -48,7 +51,7 @@ export function rejectUnknownKeys(obj: unknown, allowed: ReadonlySet<string>, su
     const label = noun + (unknown.length > 1 ? "s" : "");
     throw new Error(
       `flcm: unknown ${label} ${unknown.map((k) => JSON.stringify(k)).join(", ")} on ${subject} — ` +
-        `${subject} takes only ${listKeys(allowed)}.`,
+        `${subject} takes only ${listKeys(allowed)}.${hint ? " " + hint : ""}`,
     );
   }
 }

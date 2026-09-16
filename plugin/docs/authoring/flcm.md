@@ -391,20 +391,30 @@ Each styled run's delta fields:
 | `anchor` | { x?: left/center/right, y?: top/center/bottom } | Which point of the node lands on `left`/`top` (default its top-left corner), so anchor:{ x:"center" } with left:"50%" centres it. Each anchor axis needs its coordinate in the same call. |
 | `pin` | { x?, y? } \| "none" — x: left/center/right/stretch/scale/none, y: top/center/bottom/stretch/scale/none | Constraint override — how the node responds when its parent resizes, replacing the automatic choice. Honored for a child of a free-form parent and for any out-of-flow (`left`/`top`) child; on an in-flow auto-layout child it is stored but inert (fill/hug governs there) until the node leaves the flow. Under edit, "none" restores the default near-edge pin. Never lifts a node out of flow by itself. |
 
-### VECTOR — vector props
+### VECTOR — path props (`d` / `vectorPaths`)
 
-(Use `svg` for opaque markup with shared and size/position props; use `d` for a themeable path with the props below.)
+Bare geometry: the node's box is the path's bounding box, so there is no `width`/`height` here — `scale` is the size word.
 
 | Prop | Type | Notes |
 | --- | --- | --- |
 | `vectorPaths` | Array<{ data: string; windingRule: "NONZERO" \| "EVENODD" \| "NONE" }> | Native path records for multiple paths or even-odd winding. Use exactly one of d, vectorPaths, or svg. |
-| `d` | string | SVG path data, e.g. "M12 2 L22 20 L2 20 Z". Every standard command works (relative/shorthand are normalized); only malformed data fails. Use exactly one of d, vectorPaths, or svg. |
+| `d` | string | SVG path data, e.g. "M12 2 L22 20 L2 20 Z". Every standard command works (relative/shorthand are normalized); only malformed data fails. The node's box is the path's bounding box — `width`/`height` are ignored here, use `scale`. Use exactly one of d, vectorPaths, or svg. |
+| `scale` | number | Multiplies the path's natural bounding box — `scale: 2` draws the same art twice as big. A single positive number, so the art can never stretch out of proportion. The path form's only size word. |
 | `fill` | paint \| paint[] | Background paint: a color/gradient string, flcm.gradient(...) or flcm.image(url). An array is a paint stack, first entry on top — see Paint & gradients. "none" removes it. |
 | `stroke` | paint \| paint[] | Border paint, or a stack of them. "none" removes it. |
 | `strokeWidth` | number \| "Npx" | Border thickness. |
 | `strokeAlign` | "inside" \| "outside" \| "center" | Which side of the edge. Default "inside". |
 | `effects` | effects value | Shadows / blur: flcm.effects({...}) or a CSS-string bag. "none" removes all effects. |
 | `rotation` | number (deg) | Rotation in degrees. |
+
+### VECTOR — svg props (`svg`)
+
+A canvas of art, so it takes the shared and size/position props too. These two reach the vectors INSIDE the import.
+
+| Prop | Type | Notes |
+| --- | --- | --- |
+| `fill` | paint \| paint[] | Repaints every vector inside the imported markup, overriding the colors written into it — how an icon takes your theme. "none" clears their fills. |
+| `stroke` | paint \| paint[] | Repaints every vector's stroke inside the imported markup. "none" clears them. |
 
 ### INSTANCE — component words
 
@@ -419,14 +429,30 @@ Each styled run's delta fields:
 
 ## Vector art (svg & path)
 
-Use `type: "VECTOR"` with exactly one geometry prop:
+Use `type: "VECTOR"` with exactly one geometry prop. The two forms answer different questions — `d` is a shape, `svg` is a drawing on a canvas:
 
 ```js
+// d: bare geometry. The node's box IS the path's bounding box.
 await flcm.render({ type: "VECTOR", d: "M0 0 L24 24", stroke: "#111", strokeWidth: 2 });
-await flcm.render({ type: "VECTOR", svg: '<svg width="24" height="24"><circle cx="12" cy="12" r="10" fill="red"/></svg>' });
+await flcm.render({ type: "VECTOR", d: "M15 18 L9 12 L15 6", stroke: "#111", scale: 2 }); // same art, twice as big
+
+// svg: art on the canvas its viewBox declares — and fill/stroke recolor every vector inside it.
+await flcm.render({
+  type: "VECTOR",
+  svg: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" fill="red"/></svg>',
+  fill: "#6366F1", // recolors the circle, whatever the markup said
+  width: 24,
+  height: 24,
+});
 ```
 
-`d` is a themeable SVG path. `vectorPaths` preserves multiple native paths and their NONZERO, EVENODD or NONE winding rules. Use exactly one of d, vectorPaths or svg. `svg` imports markup whose colors are baked in; it accepts shared and size props. There is no icon catalog. Supply the artwork. An id-bearing VECTOR accepts d or vectorPaths as a geometry edit and preserves its live identity. svg imports can change node types and child identities, so live svg replacement is refused by name. Move imported artwork with { id }, or omit its id to import a new copy.
+`d` is a themeable SVG path, and `vectorPaths` the same form spelled with multiple native paths and their NONZERO, EVENODD or NONE winding rules. Use exactly one of d, vectorPaths or svg. There is no icon catalog. Supply the artwork.
+
+A path has no canvas, so it has no `width`/`height`: its box is the geometry you gave it, and `scale` (one positive number) is the only word that changes that box — art authored with `d` can never come out stretched. Passing `width`/`height` beside `d` at creation is ignored with a warning naming the node; the rest of the node is created as written. When the intent is "this icon lives on a 24 grid", that grid is a viewBox, so use `svg`.
+
+`svg` imports markup through Figma's own SVG import: one vector per shape, inside a frame. Size words apply to that frame, and its art scales with it. `fill` and `stroke` beside `svg` repaint every vector inside, overriding the colors written into the markup — so one icon's markup serves every theme ("none" clears them). Stroke weight is left alone; it is part of the drawing's proportions.
+
+An id-bearing VECTOR accepts d or vectorPaths as a geometry edit and preserves its live identity, and `edit(id, { width, height })` on a vector resizes its geometry — at that point the current box is something you can see. svg imports can change node types and child identities, so live svg replacement is refused by name. Move imported artwork with { id }, or omit its id to import a new copy; a copy comes back at the path's natural size, so use `flcm.clone` to preserve a box that was resized live.
 
 ## Paint & gradients
 
@@ -916,7 +942,7 @@ Accepting CSS is a fidelity promise, so the boundaries are strict. Each of these
 | `![alt](url)` in a text string, or an unrealizable `fontStyle`/`textDecoration` (`"oblique"`, `"overline"`) | Text can't embed an image (`flcm.image`); the enum names the supported set. |
 | A duplicate `key` in one render | Keys are unique per render. |
 | A node `type` outside FRAME/TEXT/RECTANGLE/ELLIPSE/LINE/VECTOR | Those are the only createable types. |
-| `fill`/`stroke` on `VECTOR` | Colors are baked into the markup — edit it, or use `VECTOR` for a themeable vector. |
+| A `scale` on a path that isn't a positive number | `scale` exists so art can't stretch; zero or a negative would collapse or mirror it. (`width`/`height` beside `d` are not a refusal — they're ignored with a warning.) |
 | Unparseable SVG markup, or bad path `d` data | Never a silent blank node. |
 | Returning a live Figma node | Return the id string or a handle. |
 | A bad `pin` or `anchor` value, or `anchor` on an axis without its `left`/`top` | Names the value and the allowed set. |
@@ -1111,11 +1137,10 @@ return (await flcm.get(grid)).node;
 
 ### Vector art (svg & path)
 
-Both vector contracts side by side: a themeable `VECTOR` with `d` triangle that fills with the accent color like any primitive, and an opaque `VECTOR` with `svg` mark pasted verbatim (its colors baked into the markup). No icon catalog — you bring the path data or markup.
+Both vector forms side by side, and how each is sized: a `d` triangle, which is bare geometry sized by `scale`, and an `svg` mark, which is art on a canvas sized by `width`/`height` and recolored through `fill`. No icon catalog — you bring the path data or markup.
 
 ```js
-// A round "play" button: a themed circle, with a themeable play triangle (VECTOR with d) centered on top,
-// and a brand mark pasted verbatim from SVG markup (VECTOR with svg) in the corner.
+// A round "play" button showing both vector forms and how each is sized.
 const player = {
     type: "FRAME",
     width: 96,
@@ -1123,19 +1148,23 @@ const player = {
     borderRadius: 48,
     fill: "#111827",
     children: [
-        // path themes like any primitive — the triangle fills with the accent color
+        // `d` is bare geometry: this path is 32x36 because those are its own coordinates, and `scale`
+        // is what makes it bigger. No width/height — they'd be a canvas the path doesn't have.
         {
             type: "VECTOR",
             key: "play",
-            d: "M38 30 L70 48 L38 66 Z",
+            d: "M0 0 L32 18 L0 36 Z",
             fill: "#6366F1",
-            left: 30,
+            scale: 1.5,
+            left: 34,
             top: 24,
         },
-        // svg pastes opaque markup (its colors are baked in — fill/stroke would be rejected here)
+        // `svg` is a canvas: the viewBox sets the coordinate space, width/height size it, and `fill`
+        // repaints every vector inside — so the same markup serves every theme.
         {
             type: "VECTOR",
             svg: '<svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="#22C55E"/></svg>',
+            fill: "#F9FAFB",
             width: 16,
             height: 16,
             left: 8,

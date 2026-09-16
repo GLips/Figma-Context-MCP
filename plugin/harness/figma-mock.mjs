@@ -485,6 +485,25 @@ class Node {
     return this.findAll((n) => types.length === 0 || types.indexOf(n.type) !== -1);
   }
 
+  // Live Figma sizes a vector to the geometry you give it: assigning vectorPaths snaps the node's box to
+  // the paths' bounding box. Model that, because the whole "a path is bare geometry, not a canvas" rule
+  // rests on it — with a fixed 24x24 here a bridge that resized to the wrong box would still look right.
+  // The hull of the control points, not the true curve extents: normalized data is absolute M/L/C/Q/Z,
+  // and for the M/L paths a test writes it is exact.
+  get vectorPaths() { return this._vectorPaths; }
+  set vectorPaths(paths) {
+    this._vectorPaths = paths;
+    if (!paths || !paths.length) return;
+    const xs = [], ys = [];
+    for (const path of paths) {
+      const numbers = String(path.data).match(/-?\d*\.?\d+/g) || [];
+      for (let i = 0; i + 1 < numbers.length; i += 2) { xs.push(Number(numbers[i])); ys.push(Number(numbers[i + 1])); }
+    }
+    if (!xs.length) return;
+    this._fixedW = Math.max(Math.max(...xs) - Math.min(...xs), 0.01);
+    this._fixedH = Math.max(Math.max(...ys) - Math.min(...ys), 0.01);
+  }
+
   // --- sizing: width/height as getters so reads during a run reflect current state ---
   get width() { return this._bounded(this._sizeOf("w"), "Width"); }
   get height() { return this._bounded(this._sizeOf("h"), "Height"); }
@@ -1077,17 +1096,31 @@ export function createFigmaMock() {
     // hides a real unauthored-outline defect (the render side must actively strip this default).
     createVector() { const v = new Node("VECTOR"); v.strokes = [{ type: "SOLID", color: { r: 0, g: 0, b: 0 }, opacity: 1 }]; return v; },
     // Model createNodeFromSvg faithfully to the axes the bridge touches: it returns a FRAME (so it inherits
-    // clipsContent) carrying the parsed vectors as children. We don't parse the markup; we produce a frame
-    // with one vector child so a scenario can assert the frame type, the clip default, and a child landed.
+    // clipsContent) carrying the parsed vectors as children. We don't parse the markup; we produce a fixed
+    // shape — one vector, plus a vector nested in a group frame the way a <g> comes back — so a scenario
+    // can assert the frame type, the clip default, that children landed, and that a walk over the art
+    // RECURSES and tells the group frame apart from the vectors. Every vector carries a colour, because
+    // "the markup's colours are baked in" is the fact theming has to overwrite.
     // Empty/garbage markup that a real parser would reject isn't modeled here — the bridge's try/catch is
     // what surfaces the live parser's throw; the mock just records the source.
     createNodeFromSvg(markup) {
       const f = new Node("FRAME");
       f.name = "svg";
       f._svgSource = String(markup == null ? "" : markup);
-      const child = new Node("VECTOR");
-      child.parent = f;
-      f.children.push(child);
+      const baked = () => {
+        const v = new Node("VECTOR");
+        v.fills = [{ type: "SOLID", color: { r: 0, g: 0, b: 0 }, opacity: 1 }];
+        v.strokes = [{ type: "SOLID", color: { r: 0, g: 0, b: 0 }, opacity: 1 }];
+        return v;
+      };
+      const group = new Node("FRAME");
+      group.name = "g";
+      const [flat, nested] = [baked(), baked()];
+      flat.parent = f;
+      nested.parent = group;
+      group.children.push(nested);
+      group.parent = f;
+      f.children.push(flat, group);
       return f;
     },
     createImage(bytes) { return { hash: "img" + (bytes && bytes.length ? bytes.length : 0) + ":" + ++__id }; },

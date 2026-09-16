@@ -272,6 +272,12 @@ void _findKeysExhaustive;
 // rather than silently matching every node — the ADR-0003 fail-loud contract, via the same closed-set gate
 // (validate.rejectUnknownKeys) the authoring compilers use, just with "query key" wording. Built once.
 const FIND_KEY_SET: ReadonlySet<string> = new Set(FIND_KEYS);
+// The query is a deliberately TINY closed set — the facets that can pre-filter live nodes cheaply, before
+// anything is materialized. Every other way to narrow a search exists, one layer along, so the refusal
+// must say so: without this an agent reads "not a query key" as "flcm cannot filter on that" and gives up
+// on a search the predicate answers directly.
+const FIND_PREDICATE_HINT =
+  "Any other filter goes in the predicate, find's second argument, which sees the node's full read shape.";
 
 // AND-combine the query facets. Empty-string facets are treated as "unset" (an empty substring would match
 // everything). `type`/`key` exact; `name` case-insensitive substring.
@@ -401,7 +407,7 @@ function rejectStringQuery(query: unknown, verb: string): void {
 export async function find(query: FindQuery = {}, predicate?: ReadPredicate): Promise<SlimHandle[]> {
   invalidateSceneAccess();
   rejectStringQuery(query, "flcm.find");
-  rejectUnknownKeys(query, FIND_KEY_SET, "flcm.find", "query key");
+  rejectUnknownKeys(query, FIND_KEY_SET, "flcm.find", "query key", FIND_PREDICATE_HINT);
   if (query.hasAnnotations !== undefined && typeof query.hasAnnotations !== "boolean") throw new Error("flcm.find: hasAnnotations must be a boolean.");
   for (const key of ["type", "key"] as const) {
     if (query[key] !== undefined && typeof query[key] !== "string") throw new Error("flcm.find: " + key + " must be a string.");

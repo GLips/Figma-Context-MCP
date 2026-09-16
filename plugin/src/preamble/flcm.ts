@@ -2,7 +2,7 @@ import { FLOW_ALIGNMENT_GUIDANCE } from "./layout-mode.js";
 import { acceptAuthoringProps } from "./authoring-input.js";
 import { gridAliasKeys } from "./input-aliases.js";
 import { parseGridTracks, parseGridPlacement } from "./grid-tracks.js";
-import { normalizeVectorPaths } from "./path.js";
+import { normalizePathData, normalizeVectorPaths } from "./path.js";
 import { compileBounds, BOUND_KEYS } from "./size-bounds.js";
 import { compileAnnotations } from "./annotations.js";
 import {
@@ -48,7 +48,8 @@ export const KNOWN_KEYS = {
   textStyle: ["fontFamily", "fontWeight", "fontSize", "fontStyle", "lineHeight", "letterSpacing", "textDecoration", "textTransform", "fontVariant", "textAlign", "textAlignVertical", "paragraphSpacing", "paragraphIndent", "listSpacing", "hyperlink", "lineClamp"],
   run: ["fontWeight", "fontSize", "fontFamily", "fontStyle", "lineHeight", "letterSpacing", "textDecoration", "textTransform", "fontVariant", "paragraphSpacing", "paragraphIndent", "listSpacing", "color", "hyperlink"],
   line: [...gridAliasKeys("child"), "layout", "stroke", "strokeWidth", "width", "rotation", "left", "top", "position", "anchor", "pin"],
-  path: ["vectorPaths", "d", "fill", "stroke", "strokeWidth", "strokeAlign", "effects", "rotation"],
+  path: ["vectorPaths", "d", "scale", "fill", "stroke", "strokeWidth", "strokeAlign", "effects", "rotation"],
+  svg: ["fill", "stroke"],
   instance: ["componentProperties", "overrides", "exposed"],
   swap: ["componentId"],
   slotContent: ["children"],
@@ -107,7 +108,7 @@ export const NODE_KEYS_BY_TYPE: Record<"FRAME" | "TEXT" | "RECTANGLE" | "ELLIPSE
   FRAME: FRAME_KEYS, TEXT: TEXT_KEYS, RECTANGLE: SHAPE_KEYS, ELLIPSE: ELLIPSE_KEYS, LINE: LINE_KEYS, INSTANCE: INSTANCE_KEYS,
 };
 const PATH_KEYS = keySet(KNOWN_KEYS.annotation, KNOWN_KEYS.shared, KNOWN_KEYS.size, KNOWN_KEYS.path, KNOWN_KEYS.binding);
-const SVG_KEYS = keySet(KNOWN_KEYS.annotation, KNOWN_KEYS.shared, KNOWN_KEYS.size, KNOWN_KEYS.binding);
+const SVG_KEYS = keySet(KNOWN_KEYS.annotation, KNOWN_KEYS.shared, KNOWN_KEYS.size, KNOWN_KEYS.svg, KNOWN_KEYS.binding);
 const IMAGE_KEYS = keySet(KNOWN_KEYS.image);
 const GRADIENT_KEYS = keySet(KNOWN_KEYS.gradient);
 const EFFECTS_KEYS = keySet(KNOWN_KEYS.effects);
@@ -1115,26 +1116,24 @@ function compileLine(props: LineProps | SimplifiedNode = {}): WriteNode {
   return wn;
 }
 
-// ---- Vector verbs. Two contracts, deliberately not interchangeable (see ir.ts WriteNode.svg/pathData):
-// svg pastes opaque markup (colors baked in); path is a single themeable vector taking our appearance props.
+// ---- Vector verbs. Two forms, different domains (see ir.ts WriteVectorSource): `svg` is a CANVAS of
+// art, sized like any box and themed through its vectors; `d`/`vectorPaths` is BARE GEOMETRY, sized only
+// by `scale`. Both compile the whole authoring surface here so the bridge never re-parses author input.
 
-// Opaque SVG markup imports through createNodeFromSvg, which yields a native frame.
-// Colors live in the markup, so fill/stroke DON'T apply — accepting them silently would be the exact no-op
-// ADR-0003 forbids, so reject them loud. The markup must look like an <svg> document (catches a URL/path
-// passed by mistake); the render-time parse (bridge) is the second, authoritative fail-loud.
+// SVG markup imports through createNodeFromSvg, which yields a native frame of vectors. The markup must
+// look like an <svg> document (catches a URL/path passed by mistake); the render-time parse (bridge) is
+// the second, authoritative fail-loud.
 function compileSvg(markup: unknown, props: SvgProps = {}): WriteNode {
   props = props ?? {};
   if (typeof markup !== "string" || !/<svg[\s>]/i.test(markup)) {
     throw new Error("VECTOR: expected SVG markup containing an <svg> element — got " + JSON.stringify(markup) + ". For a themeable single-path vector use { type: " + JSON.stringify("VECTOR") + ", d } instead.");
   }
-  const p = props as AppearanceProps;
-  if (p.fill != null || p.stroke != null) {
-    throw new Error("VECTOR: colors are baked into the SVG markup — fill/stroke don't apply. Edit the markup's own colors, or use a VECTOR spec with d and fill for a themeable vector.");
-  }
-  // After the fill/stroke special-case (its tailored message beats a generic "unknown prop") — reject the rest.
   rejectUnknownKeys(props, SVG_KEYS, "VECTOR");
-  const wn: WriteNode = { type: "VECTOR" };
-  wn.svg = markup;
+  const wn: WriteNode = { type: "VECTOR", vector: { kind: "svg", markup } };
+  // Compiled like any other node's paints, but the bridge lands them on the vectors INSIDE the imported
+  // frame rather than on the frame itself — painting the frame would put a backdrop behind the art.
+  if (props.fill != null) wn.fills = compilePaintWord(props.fill, "fill");
+  if (props.stroke != null) wn.strokes = compilePaintWord(props.stroke, "stroke");
   base(wn, props);
   compileBindings(wn, props, ANY_NODE_BINDINGS, "VECTOR");
   const layout = buildLayout(props as FrameProps, "VECTOR", "VECTOR");
@@ -1142,10 +1141,28 @@ function compileSvg(markup: unknown, props: SvgProps = {}): WriteNode {
   return wn;
 }
 
-// A path spec creates a native vector with vectorPaths. It takes
-// the shared appearance props via compileNodeLocalProps() (radius off — a vector has none), so it themes like a rect.
-// `d` is required and must be a non-empty string; bad path data fails loud again at render (bridge).
-function compilePath(props: PathProps): WriteNode {
+// `width`/`height` on the path form describe a canvas the form doesn't have, and the only thing Figma
+// could do with them is stretch the geometry — non-uniformly, silently, and the reply would echo the
+// size the author asked for as though it had meant something. Ignore them and say so ONCE per node:
+// the rest of the write is exactly what the author meant, so a refusal would cost more than it saves.
+// `at` is the spec path (compile-tree's `at`), which is how the author finds the node in their own call.
+function warnCanvasSizeIgnored(props: PathProps, at: string): PathProps {
+  if (props.width === undefined && props.height === undefined) return props;
+  const { width, height, ...rest } = props;
+  console.warn(
+    "flcm: " + at + ": a VECTOR with " + (props.d !== undefined ? "`d`" : "`vectorPaths`") +
+      " is bare geometry — its box is the path's bounding box, so " +
+      [width !== undefined ? "width" : "", height !== undefined ? "height" : ""].filter(Boolean).join("/") +
+      " was ignored. Use `scale` for a bigger box (uniform), or `svg` markup with a viewBox for art on a sized canvas. The rest of the node was created as written.",
+  );
+  return rest as PathProps;
+}
+
+// A path spec creates a native vector with vectorPaths. It takes the shared appearance props via
+// compileNodeLocalProps() (radius off — a vector has none), so it themes like a rect. Path data is
+// normalized HERE, not at render: Figma's parser accepts only absolute M/L/C/Q/Z, and doing the
+// conversion at compile means malformed data fails before anything reaches the canvas.
+function compilePath(props: PathProps, at: string): WriteNode {
   props = acceptAuthoringProps(props, { type: "VECTOR", verb: "create", known: PATH_KEYS, subject: "VECTOR" }) as PathProps;
   if (!props || typeof props !== "object") {
     throw new Error("VECTOR: expected a props object with a `d` path string, e.g. { type: \"VECTOR\", d: \"M12 2 L22 20 L2 20 Z\", fill: \"#111\" } — got " + JSON.stringify(props) + ".");
@@ -1155,16 +1172,27 @@ function compilePath(props: PathProps): WriteNode {
     throw new Error("VECTOR: `d` (SVG path data) must be a non-empty string — got " + JSON.stringify(d) + ".");
   }
   rejectUnknownKeys(props, PATH_KEYS, "VECTOR");
-  const wn: WriteNode = { type: "VECTOR" };
-  if (props.vectorPaths !== undefined) {
-    if (d !== undefined) throw new Error("VECTOR needs exactly one of d or vectorPaths.");
-    wn.vectorPaths = normalizeVectorPaths(props.vectorPaths);
-  } else wn.pathData = d;
+  if (props.vectorPaths !== undefined && d !== undefined) throw new Error("VECTOR needs exactly one of d or vectorPaths.");
+  props = warnCanvasSizeIgnored(props, at);
+  const paths = props.vectorPaths !== undefined
+    ? normalizeVectorPaths(props.vectorPaths)
+    : [{ windingRule: "NONZERO" as const, data: normalizePathData(d as string) }];
+  const wn: WriteNode = { type: "VECTOR", vector: { kind: "path", paths, scale: compileScale(props.scale) } };
   compileNodeLocalProps(wn, props, {}); // fill/stroke/strokeWidth/effects/rotation + base; radius/clip off for a vector
   compileBindings(wn, props, ANY_NODE_BINDINGS, "VECTOR");
   const layout = buildLayout(props as FrameProps, "VECTOR", "VECTOR");
   if (Object.keys(layout).length) wn.layout = layout;
   return wn;
+}
+
+// One positive number, so "scaled" can never mean "stretched" — that is the whole reason this word
+// exists rather than a second pair of size props. Zero and negatives would collapse or mirror the art.
+function compileScale(scale: number | undefined): number | undefined {
+  if (scale === undefined) return undefined;
+  if (typeof scale !== "number" || !isFinite(scale) || scale <= 0) {
+    throw new Error("VECTOR: `scale` must be a positive number multiplying the path's natural size (scale: 2 draws it twice as big) — got " + JSON.stringify(scale) + ".");
+  }
+  return scale;
 }
 
 // ---- gradient() sugar: a structured bag -> typed WritePaint (no string round-trip). The transform math

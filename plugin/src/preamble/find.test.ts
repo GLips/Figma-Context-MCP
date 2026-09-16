@@ -86,6 +86,12 @@ test("find returns empty for no match; an unknown query key fails loud", async (
   assert.deepEqual(await find({ type: "ELLIPSE" }), []);
   // A typo'd facet must not silently match everything (ADR-0003 fail-loud).
   await assert.rejects(find({ tpye: "FRAME" } as never), /unknown query key.*"tpye"/s);
+  // A REAL filter that simply isn't a query facet must not read as "flcm can't filter on that" — the
+  // refusal always names the predicate, so the agent's next call is the one that works.
+  await assert.rejects(
+    find({ depth: 2 } as never),
+    /Any other filter goes in the predicate, find's second argument, which sees the node's full read shape\./,
+  );
 });
 
 test("findOne returns the single hit, and throws naming the count on 0 or >1", async () => {

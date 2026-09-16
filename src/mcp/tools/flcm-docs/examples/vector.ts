@@ -5,8 +5,7 @@ import type { Flcm } from "@framelink/plugin/schema";
 // shipping a stale example. The generator inlines only the marked region below (see examples.ts).
 export async function vectorExample(flcm: Flcm) {
   // example:start
-  // A round "play" button: a themed circle, with a themeable play triangle (VECTOR with d) centered on top,
-  // and a brand mark pasted verbatim from SVG markup (VECTOR with svg) in the corner.
+  // A round "play" button showing both vector forms and how each is sized.
   const player = {
     type: "FRAME",
     width: 96,
@@ -14,19 +13,23 @@ export async function vectorExample(flcm: Flcm) {
     borderRadius: 48,
     fill: "#111827",
     children: [
-      // path themes like any primitive — the triangle fills with the accent color
+      // `d` is bare geometry: this path is 32x36 because those are its own coordinates, and `scale`
+      // is what makes it bigger. No width/height — they'd be a canvas the path doesn't have.
       {
         type: "VECTOR",
         key: "play",
-        d: "M38 30 L70 48 L38 66 Z",
+        d: "M0 0 L32 18 L0 36 Z",
         fill: "#6366F1",
-        left: 30,
+        scale: 1.5,
+        left: 34,
         top: 24,
       },
-      // svg pastes opaque markup (its colors are baked in — fill/stroke would be rejected here)
+      // `svg` is a canvas: the viewBox sets the coordinate space, width/height size it, and `fill`
+      // repaints every vector inside — so the same markup serves every theme.
       {
         type: "VECTOR",
         svg: '<svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="#22C55E"/></svg>',
+        fill: "#F9FAFB",
         width: 16,
         height: 16,
         left: 8,

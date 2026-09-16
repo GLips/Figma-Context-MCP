@@ -34,7 +34,6 @@ import {
 import { toFigmaPaint } from "./paint.js";
 import { toFigmaEffects } from "./effects.js";
 import { resolveFont, resolveFontStrict, FontMap } from "./fonts.js";
-import { normalizePathData } from "./path.js";
 import { writeKey, identityOf, isSlotHole, describeNodeIdentity } from "./identity.js";
 import { pixelRound, convertSizing } from "@framelink/core";
 
@@ -1083,17 +1082,16 @@ function buildLine(wn: WriteNode, ctx: RenderCtx): any {
   return l;
 }
 
-// A VECTOR WriteNode carries exactly one of svg-markup / path-data (flcm.ts guarantees this), and each
-// drives a different plugin call. svg → createNodeFromSvg (a FRAME of vectors, colors baked in); path →
-// createVector + vectorPaths (one themeable vector). Both fail loud on unparseable input rather than
-// leaving a silent empty node.
+// A VECTOR WriteNode carries one WriteVectorSource (ir.ts), and each arm drives a different plugin call:
+// svg → createNodeFromSvg (a FRAME of vectors); path → createVector + vectorPaths (one themeable vector).
+// Both fail loud on unparseable input rather than leaving a silent empty node.
 function buildVector(wn: WriteNode, ctx: RenderCtx): any {
-  if (typeof wn.svg === "string") return buildSvg(wn, wn.svg);
-  if (typeof wn.pathData === "string" || wn.vectorPaths) return buildPath(wn, wn.pathData ?? "", ctx);
-  throw new Error("flcm: a VECTOR node carries neither svg markup nor path data (VECTOR/VECTOR guarantee one).");
+  const source = wn.vector;
+  if (!source) throw new Error("flcm: a VECTOR node carries no geometry (compileSvg/compilePath guarantee one).");
+  return source.kind === "svg" ? buildSvg(wn, source.markup, ctx) : buildPath(wn, source, ctx);
 }
 
-function buildSvg(wn: WriteNode, markup: string): any {
+function buildSvg(wn: WriteNode, markup: string, ctx: RenderCtx): any {
   let frame: any;
   try {
     frame = figma.createNodeFromSvg(markup);
@@ -1106,9 +1104,36 @@ function buildSvg(wn: WriteNode, markup: string): any {
   // createFrame path); this frame never traverses it, so clear it here too (CSS overflow is visible by
   // default). See buildFrame for the rationale.
   frame.clipsContent = false;
+  // BEFORE applyLeafSize: Figma applies a child's constraints during the parent's resize, so art that
+  // gets SCALE only afterwards is art the authored width/height already stranded at its import size.
+  themeImportedArt(frame, wn, ctx);
   applyLeafSize(frame, wn.layout || {});
   if (typeof wn.opacity === "number") frame.opacity = wn.opacity;
   return frame;
+}
+
+// The imported frame is a CANVAS: resizing it must scale the art, and the author's fill/stroke must reach
+// the art rather than the canvas. Both are the same walk, so they share it.
+//
+// Constraints: createNodeFromSvg's whole typing is `(svg: string): FrameNode` — the plugin docs state no
+// default constraint at all, and say nothing about what the importer leaves on the vectors it parses. The
+// editor's default for a layer is Top/Left (MIN/MIN), which would leave a 24px glyph in the top-left of a
+// frame resized to 48. So set SCALE ourselves on every descendant (each is constrained against its OWN
+// parent, so nested <g> frames need it too) and `edit(icon, { width: 48, height: 48 })` scales the drawing.
+// Paints: only the vectors, never the containers — painting a <g>'s frame would put a backdrop behind the
+// art instead of recolouring it. A present-but-empty array is the compiled "none", same as applyPaint.
+function themeImportedArt(frame: any, wn: WriteNode, ctx: RenderCtx): void {
+  const fills = wn.fills ? (wn.fills.length ? [paintOf(wn.fills[0], ctx)] : []) : undefined;
+  const strokes = wn.strokes ? (wn.strokes.length ? [paintOf(wn.strokes[0], ctx)] : []) : undefined;
+  const walk = (node: any): void => {
+    if ("constraints" in node) node.constraints = { horizontal: "SCALE", vertical: "SCALE" };
+    if (node.type === "VECTOR") {
+      if (fills) node.fills = fills;
+      if (strokes) node.strokes = strokes;
+    }
+    if (node.children) for (const child of node.children) walk(child);
+  };
+  for (const child of frame.children ?? []) walk(child);
 }
 
 /** Geometry edits preserve the live vector's box unless the spec also names a new size. */
@@ -1118,12 +1143,8 @@ export function applyVectorPath(node: VectorNode, paths: VectorPaths): void {
   node.resize(width, height);
 }
 
-function buildPath(wn: WriteNode, pathData: string, ctx: RenderCtx): any {
-  // Figma's vectorPaths parser accepts only absolute M/L/C/Q/Z, so normalize the full SVG command set
-  // (H V S T A + relatives) into that subset first. Do this BEFORE creating the node so malformed input
-  // fails loud without orphaning an empty vector on the canvas.
-  const paths = wn.vectorPaths ?? [{ windingRule: "NONZERO" as const, data: normalizePathData(pathData) }];
-  const v = figma.createVector();
+function buildPath(wn: WriteNode, source: { paths: VectorPaths; scale?: number }, ctx: RenderCtx): any {
+  const v: any = figma.createVector();
   figma.currentPage.appendChild(v);
   if (!wn.fills) v.fills = []; // omitted fill -> transparent, like the other primitives (no surprise default)
   // figma.createVector() seeds a new vector with a default black 1px stroke (createRectangle/Frame don't).
@@ -1131,12 +1152,20 @@ function buildPath(wn: WriteNode, pathData: string, ctx: RenderCtx): any {
   // surprise-default that breaks rect/frame parity and the "path is like a rect with no fill" mental model.
   if (!wn.strokes) v.strokes = [];
   try {
-    v.vectorPaths = paths;
+    v.vectorPaths = source.paths;
   } catch (e: any) {
-    throw new Error('VECTOR: Figma could not parse the path data "' + pathData + '" — ' + (e && e.message ? e.message : String(e)));
+    // Already normalized to Figma's absolute M/L/C/Q/Z subset at compile (flcm.ts compilePath); reaching
+    // here means the parser rejected something the normalizer emitted, so show what it actually sent.
+    throw new Error('VECTOR: Figma could not parse the path data "' + source.paths.map(p => p.data).join(" ") + '" — ' + (e && e.message ? e.message : String(e)));
   }
   applyPaint(v, wn, ctx);
   applyLeafSize(v, wn.layout || {});
+  // AFTER the paths (which set the natural box) and after applyLeafSize (whose min/max bounds should
+  // clamp the scaled size, and be reported when they do). resize, not rescale: strokeWidth/effects are
+  // authored in the same breath and mean the number the author wrote, not that number times `scale`.
+  if (source.scale !== undefined) {
+    resizeWithDiagnostics(v, Math.max(v.width * source.scale, 0.01), Math.max(v.height * source.scale, 0.01));
+  }
   return v;
 }
 

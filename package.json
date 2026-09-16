@@ -38,6 +38,7 @@
     "probe:line-fill": "tsx scripts/probe-line-fill.mjs",
     "probe:pin-stretch": "tsx scripts/probe-pin-stretch.mjs",
     "probe:queued-writes": "tsx scripts/probe-queued-writes.mjs",
+    "probe:vector": "tsx scripts/probe-vector.mjs",
     "docs:gen": "tsx scripts/gen-flcm-doc.ts",
     "docs:check": "tsx scripts/gen-flcm-doc.ts check",
     "validate": "pnpm scan-hidden-chars && pnpm format:check && pnpm lint && pnpm type-check && pnpm typecheck:core && pnpm typecheck:plugin && pnpm test && pnpm test:core && pnpm test:plugin && pnpm contract && pnpm build && pnpm build:plugin && pnpm docs:check",
