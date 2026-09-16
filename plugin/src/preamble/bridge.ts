@@ -25,7 +25,7 @@ import { resizeWithDiagnostics, trackSizing } from "./sizing-diagnostics.js";
 // noise without safety.
 
 import { applyAnnotations } from "./annotation-categories.js";
-import { WriteType, WriteNode, WriteProps, WriteLayout, TextAlign, TextDecoration, Sizing, Identity, Handle, WritePaint, WriteImage, ComponentPropertyBinding, namesFontIdentity } from "./ir.js";
+import { WriteType, WriteNode, WriteProps, WriteLayout, TextAlign, TextDecoration, Sizing, Identity, Handle, WritePaint, WritePaintStack, WriteImage, WriteImageUrl, ComponentPropertyBinding, namesFontIdentity } from "./ir.js";
 import { own } from "./validate.js";
 import {
   assertLayoutRealizableForType, assertGridSizing, assertPercentResolvable, assertSizingResolvesAgainstParentFrame, ParentFlowFacts,
@@ -188,6 +188,16 @@ function paintOf(paint: WritePaint, ctx: RenderResources): Paint {
   return toFigmaPaint(paint);
 }
 
+// THE order flip, and the only place either side of it is known. An authored stack is TOP FIRST (CSS
+// order, and the order a read emits); Figma stores a node's `fills`/`strokes` bottom first, so the last
+// element is what you see on top. Walking backwards is that reversal. An empty stack maps to `[]` — the
+// compiled removal word — with no branch of its own.
+function toFigmaPaintStack(stack: WritePaintStack, ctx: RenderResources): Paint[] {
+  const paints: Paint[] = [];
+  for (let i = stack.length - 1; i >= 0; i--) paints.push(paintOf(stack[i], ctx));
+  return paints;
+}
+
 function imagePaint(paint: WriteImage, ctx: RenderResources): Paint {
   // A hash-backed paint names bytes the document already holds (a read-form fill rebuilt through the
   // compilers), so there is nothing to fetch and nothing to create — the paint just points at it.
@@ -210,10 +220,16 @@ function imagePaint(paint: WriteImage, ctx: RenderResources): Paint {
 // Persist an image fill's source + placeholder flag on the node (pluginData) so a later read/codegen pass
 // can tell a stand-in from a real asset and recover its src — the one content case whose semantics don't
 // survive geometry alone. Only the fill (a node's background) is recorded; an image stroke is exotic.
+//
+// The stack's TOPMOST url-backed image is the node's image: the composite this serves is a photo under a
+// legibility scrim, where the photo is not entry 0, and a stack of two photographs has one provenance
+// slot to describe both anyway.
+const namesImageSource = (paint: WritePaint): paint is WriteImageUrl => paint.kind === "image" && "url" in paint;
+
 function stampImageData(node: any, wn: WriteProps): void {
   if (!wn.fills) return; // no fill in this write — whatever provenance exists still describes the live paint
-  const fill = wn.fills[0];
-  if (!fill || fill.kind !== "image" || !("url" in fill)) {
+  const fill = wn.fills.find(namesImageSource);
+  if (!fill) {
     // An edit replaced an image fill with a solid/gradient — or cleared it (fill:"none" compiles to
     // an empty array): the provenance no longer describes the live paint, so wipe it ("" deletes
     // the pluginData entry) instead of leaving a stale url. A HASH-backed image lands here too, and
@@ -226,14 +242,13 @@ function stampImageData(node: any, wn: WriteProps): void {
 }
 
 // Additive appearance: only fields present on the WriteNode are touched. Property guards skip what a node
-// kind lacks (an ellipse has no cornerRadius). v1 still paints a single fill/stroke. Creation defaults
-// (omitted fill -> transparent) live in the builders, NOT here — so an edit patch through this applier
-// can never turn key-absence into a write.
+// kind lacks (an ellipse has no cornerRadius). Creation defaults (omitted fill -> transparent) live in
+// the builders, NOT here — so an edit patch through this applier can never turn key-absence into a write.
 export function applyPaint(node: any, wn: WriteProps, ctx: RenderResources): void {
-  // A PRESENT-but-empty array is the compiled removal word ("none") — write the clear; skipping
+  // A PRESENT-but-empty stack is the compiled removal word ("none") — write the clear; skipping
   // empties would make removal an unspeakable intent (the ADR-0003 silent no-op).
-  if (wn.fills) node.fills = wn.fills.length ? [paintOf(wn.fills[0], ctx)] : [];
-  if (wn.strokes) node.strokes = wn.strokes.length ? [paintOf(wn.strokes[0], ctx)] : [];
+  if (wn.fills) node.fills = toFigmaPaintStack(wn.fills, ctx);
+  if (wn.strokes) node.strokes = toFigmaPaintStack(wn.strokes, ctx);
   if (wn.strokeWeight != null && "strokeWeight" in node) node.strokeWeight = wn.strokeWeight;
   if (wn.strokeAlign != null && "strokeAlign" in node) node.strokeAlign = wn.strokeAlign;
   if (wn.borderRadius != null && "cornerRadius" in node) node.cornerRadius = wn.borderRadius;
@@ -969,7 +984,7 @@ function applyRuns(t: any, runs: NonNullable<WriteNode["runs"]>, ctx: RenderReso
         if (typeof s.listSpacing === "number") t.setRangeListSpacing(start, end, s.listSpacing);
       }
       // Present-but-empty is the compiled "none" — a real transparent write over the slice, not a skip.
-      if (run.fills) t.setRangeFills(start, end, run.fills.length ? [paintOf(run.fills[0], ctx)] : []);
+      if (run.fills) t.setRangeFills(start, end, toFigmaPaintStack(run.fills, ctx));
       if (run.hyperlink) t.setRangeHyperlink(start, end, { type: "URL", value: run.hyperlink });
     }
     start = end;
@@ -1034,7 +1049,7 @@ function buildText(wn: WriteNode, ctx: RenderCtx): any {
   // Present-but-empty is the compiled "none" — write the clear (live createText seeds a default
   // black fill, so skipping would leave the "unfilled" text black).
   if (wn.fills) {
-    t.fills = wn.fills.length ? [paintOf(wn.fills[0], ctx)] : [];
+    t.fills = toFigmaPaintStack(wn.fills, ctx);
     if (wn.fills.length) stampImageData(t, wn);
   }
   if (wn.effects) t.effects = toFigmaEffects(wn.effects);
@@ -1061,7 +1076,7 @@ function buildLine(wn: WriteNode, ctx: RenderCtx): any {
   figma.currentPage.appendChild(l);
   // Present-but-empty is the compiled "none" — write the clear (live createLine seeds a default
   // black stroke, so skipping would leave the line stroked, not unstroked).
-  if (wn.strokes) l.strokes = wn.strokes.length ? [paintOf(wn.strokes[0], ctx)] : [];
+  if (wn.strokes) l.strokes = toFigmaPaintStack(wn.strokes, ctx);
   l.strokeWeight = wn.strokeWeight != null ? wn.strokeWeight : 1;
   applyLeafSize(l, wn.layout || {});
   if (typeof wn.opacity === "number") l.opacity = wn.opacity;

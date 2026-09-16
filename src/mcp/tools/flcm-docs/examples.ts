@@ -49,8 +49,10 @@ const EXAMPLE_META: Record<ExampleId, { title: string; intro: string }> = {
   image: {
     title: "Images (real raster fills)",
     intro:
-      "A feed post with a real photo as a `rect` fill and a circular avatar as an `ellipse` filled with an " +
-      "image. `flcm.image(url)` is a paint value, so any shape carries one; the server fetches the bytes.",
+      "A feed post with a real photo as a frame fill and a circular avatar as an `ellipse` filled with an " +
+      "image. `flcm.image(url)` is a paint value, so any shape carries one; the server fetches the bytes. " +
+      "The photo takes a paint *stack* — a legibility scrim over the image, first entry on top — so the " +
+      "title sitting on it stays readable.",
   },
   reuse: {
     title: "Copying what's already on the canvas (get → plain data)",

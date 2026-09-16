@@ -61,8 +61,9 @@ export function parseColor(input: string): Rgba {
 }
 
 // ---- Fills (color string | gradient string | read-form { type, gradient }) -> WritePaint ----
-// Takes ONE leaf. The read shape's array spelling is unwrapped upstream (flcm.compilePaintWord),
-// where the stacked-paints refusal lives — a parser that also un-nested would have to own that rule.
+// Takes ONE leaf. flcm.compilePaintWord owns the stack: it splits an array into leaves and calls this
+// per entry, so a parser that also un-nested would have to own paint ORDER too — and order is settled
+// in exactly two places (compilePaintWord authors it, bridge.toFigmaPaintStack flips it for Figma).
 export function parseFill(value: FillLeaf, field: string): WritePaint {
   if (value && typeof value === "object") {
     if ("kind" in value) return value; // already a typed WritePaint (what flcm.gradient() returns)

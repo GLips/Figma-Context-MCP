@@ -122,6 +122,13 @@ export interface WriteImageHash {
 export type WriteImage = WriteImageUrl | WriteImageHash;
 export type WritePaint = WriteSolid | WriteGradient | WriteImage;
 
+// A node's (or run's) paint for ONE slot: an ordered stack, TOP FIRST — index 0 paints over index 1 —
+// which is CSS order and exactly the order a read emits, so a `get` result pastes straight back. A
+// single paint is the one-element stack; an EMPTY stack is the compiled removal word ("none"), distinct
+// from an absent one ("don't touch it"). Figma stores a stack the other way up (last element on top);
+// bridge.ts's toFigmaPaintStack is the ONE place that flip is known.
+export type WritePaintStack = WritePaint[];
+
 // ---- Author input shapes for a fill/stroke leaf. An author passes a CSS color/gradient string, the
 // read-form { type, gradient } object, OR an already-typed WritePaint (what flcm.gradient() returns).
 // These live here (the figma-free type hub) rather than in css.ts so the schema module can source them
@@ -132,9 +139,9 @@ export interface WriteGradientFill { type: GradientType; gradient: string }
 // imageDownloadArguments) are irrelevant to the parse and deliberately unnamed.
 export interface ReadImageFill { type: "IMAGE"; imageRef?: string; gifRef?: string; scaleMode?: string; scalingFactor?: number }
 export type FillLeaf = string | WriteGradientFill | ReadImageFill | WritePaint;
-// A paint slot takes one leaf, or the array a read emits for a genuinely STACKED paint — accepted so a
-// `get` result feeds straight back in, but more than one entry fails loud (compilePaintWord): flcm
-// paints a single fill/stroke and a stack has no authored form.
+// A paint slot takes one leaf, or an ARRAY of them — a paint stack, top first, the same order a read
+// emits (WritePaintStack). The composite this exists for is a photograph under a legibility scrim:
+// `fill: [flcm.gradient({...}), flcm.image(url)]`.
 export type FillInput = FillLeaf | FillLeaf[];
 
 // ---- Effect currency (Figma-domain). A blur's radius is ALREADY the Figma radius — the ×2 CSS-blur
@@ -221,7 +228,7 @@ export function namesFontIdentity(style: WriteTextStyle | undefined): style is W
 export interface WriteTextRun {
   text: string;
   style?: WriteTextStyle;
-  fills?: WritePaint[];
+  fills?: WritePaintStack;
   // URL hyperlink over this span (author `[text](url)` markdown, or a run delta's `hyperlink`).
   // Applied via setRangeHyperlink({ type: "URL" }); NODE links are a read-only artifact with no
   // authored form, so only the URL string is carried here.
@@ -340,8 +347,8 @@ export interface WriteProps {
   // text — truncation needs a bounded width to wrap against — so a value here always has a wrap to bite.
   // "none" is edit's removal spelling: truncation DISABLED, maxLines null (create never compiles it).
   maxLines?: number | "none";
-  fills?: WritePaint[];
-  strokes?: WritePaint[];
+  fills?: WritePaintStack;
+  strokes?: WritePaintStack;
   strokeWeight?: number;
   strokeAlign?: "INSIDE" | "OUTSIDE" | "CENTER";
   effects?: WriteEffect[];

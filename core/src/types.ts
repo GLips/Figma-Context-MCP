@@ -224,9 +224,11 @@ export interface SimplifiedNode extends NodeGeometry {
   //
   // A paint slot names the SLOT, not the count (CSS `background`): ONE paint
   // when that is what a viewer sees, an array only for a genuinely stacked
-  // paint that can't flatten (see foldPaintStack). A ref string and an inline
-  // color are both strings — a reader tells them apart by looking the value up
-  // in the design's `styles` table, never by shape.
+  // paint that can't flatten (see foldPaintStack). The array is TOP FIRST (CSS
+  // order, not Figma's own bottom-first storage), which is the order the write
+  // surface authors a stack in — so a read pastes back unchanged. A ref string
+  // and an inline color are both strings — a reader tells them apart by looking
+  // the value up in the design's `styles` table, never by shape.
   fill?: string | SimplifiedFill | SimplifiedFill[];
   stroke?: string | SimplifiedFill | SimplifiedFill[];
   // Non-stylable stroke properties are kept on the node when stroke uses a named color style

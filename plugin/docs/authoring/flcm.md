@@ -242,8 +242,8 @@ Budget fixed widths together with padding and gaps; use `"fill"` for the remaini
 
 | Prop | Type | Notes |
 | --- | --- | --- |
-| `fill` | color / gradient | Background paint: a color/gradient string or flcm.gradient(...). "none" removes it. |
-| `stroke` | color / gradient | Border paint. "none" removes it. |
+| `fill` | paint \| paint[] | Background paint: a color/gradient string, flcm.gradient(...) or flcm.image(url). An array is a paint stack, first entry on top — see Paint & gradients. "none" removes it. |
+| `stroke` | paint \| paint[] | Border paint, or a stack of them. "none" removes it. |
 | `strokeWidth` | number \| "Npx" | Border thickness. |
 | `strokeAlign` | "inside" \| "outside" \| "center" | Which side of the edge. Default "inside". |
 | `borderRadius` | number \| "Npx" | Corner radius. Frames and rectangles only. |
@@ -281,7 +281,7 @@ Budget fixed widths together with padding and gaps; use `"fill"` for the remaini
 | --- | --- | --- |
 | `text` | string \| run[] | The content — a plain string (markdown: **bold**, *italic*, ~~strike~~, [text](url)) or an array of styled runs. Set it on a TEXT spec; under edit it replaces the whole content. |
 | `textStyle` | { fontFamily?, fontWeight?, fontSize?, fontStyle?, lineHeight?, letterSpacing?, textDecoration?, textTransform?, fontVariant?, textAlign?, textAlignVertical?, paragraphSpacing?, paragraphIndent?, listSpacing?, hyperlink?, lineClamp? } | The text style base. Runs layer over it. |
-| `fill` | color / gradient | The text's paint, like every other node's. "none" removes it. |
+| `fill` | paint \| paint[] | The text's paint, like every other node's. "none" removes it. |
 | `boldWeight` | number (100–900) \| name | What `**bold**` in `text` resolves to. Default 700 — pass back the `boldWeight` a `get` reports and the copy emphasizes like the original. Same spellings as fontWeight. Under edit it only means something beside `text`. |
 
 `text` is a string or array of styled runs. `fill` is its paint. `boldWeight` says what `**` in `text` resolves to. A fixed `width` makes it wrap (grows in height); otherwise it grows sideways.
@@ -348,15 +348,15 @@ Each styled run's delta fields:
 | `paragraphSpacing` | number \| "Npx" | Space between paragraphs. |
 | `paragraphIndent` | number \| "Npx" | First-line indent. |
 | `listSpacing` | number \| "Npx" | Space between list items. |
-| `color` | color / gradient | Per-span text color. |
+| `color` | paint \| paint[] | Per-span text color. |
 | `hyperlink` | string (url) \| { type: "URL", url } | A URL over THIS span — inline `[text](url)` is usually simpler. Links to a NODE are read-only and fail loud. |
 
 ### RECTANGLE — shape props
 
 | Prop | Type | Notes |
 | --- | --- | --- |
-| `fill` | color / gradient | Background paint: a color/gradient string or flcm.gradient(...). "none" removes it. |
-| `stroke` | color / gradient | Border paint. "none" removes it. |
+| `fill` | paint \| paint[] | Background paint: a color/gradient string, flcm.gradient(...) or flcm.image(url). An array is a paint stack, first entry on top — see Paint & gradients. "none" removes it. |
+| `stroke` | paint \| paint[] | Border paint, or a stack of them. "none" removes it. |
 | `strokeWidth` | number \| "Npx" | Border thickness. |
 | `strokeAlign` | "inside" \| "outside" \| "center" | Which side of the edge. Default "inside". |
 | `borderRadius` | number \| "Npx" | Corner radius. Frames and rectangles only. |
@@ -369,8 +369,8 @@ Each styled run's delta fields:
 
 | Prop | Type | Notes |
 | --- | --- | --- |
-| `fill` | color / gradient | Background paint: a color/gradient string or flcm.gradient(...). "none" removes it. |
-| `stroke` | color / gradient | Border paint. "none" removes it. |
+| `fill` | paint \| paint[] | Background paint: a color/gradient string, flcm.gradient(...) or flcm.image(url). An array is a paint stack, first entry on top — see Paint & gradients. "none" removes it. |
+| `stroke` | paint \| paint[] | Border paint, or a stack of them. "none" removes it. |
 | `strokeWidth` | number \| "Npx" | Border thickness. |
 | `strokeAlign` | "inside" \| "outside" \| "center" | Which side of the edge. Default "inside". |
 | `effects` | effects value | Shadows / blur: flcm.effects({...}) or a CSS-string bag. "none" removes all effects. |
@@ -380,7 +380,7 @@ Each styled run's delta fields:
 
 | Prop | Type | Notes |
 | --- | --- | --- |
-| `stroke` | color / gradient | The line's paint. "none" removes it. |
+| `stroke` | paint \| paint[] | The line's paint. "none" removes it. |
 | `strokeWidth` | number \| "Npx" | Thickness. Defaults to 1. |
 | `width` | number \| "Npx" | The line's length: a number, or "fill" to span a row/column parent (the divider case). No "hug" and no percent — a line has no content to measure and no cell to measure against. |
 | `rotation` | number (deg) | Degrees — 90° makes a horizontal line vertical. |
@@ -399,8 +399,8 @@ Each styled run's delta fields:
 | --- | --- | --- |
 | `vectorPaths` | Array<{ data: string; windingRule: "NONZERO" \| "EVENODD" \| "NONE" }> | Native path records for multiple paths or even-odd winding. Use exactly one of d, vectorPaths, or svg. |
 | `d` | string | SVG path data, e.g. "M12 2 L22 20 L2 20 Z". Every standard command works (relative/shorthand are normalized); only malformed data fails. Use exactly one of d, vectorPaths, or svg. |
-| `fill` | color / gradient | Background paint: a color/gradient string or flcm.gradient(...). "none" removes it. |
-| `stroke` | color / gradient | Border paint. "none" removes it. |
+| `fill` | paint \| paint[] | Background paint: a color/gradient string, flcm.gradient(...) or flcm.image(url). An array is a paint stack, first entry on top — see Paint & gradients. "none" removes it. |
+| `stroke` | paint \| paint[] | Border paint, or a stack of them. "none" removes it. |
 | `strokeWidth` | number \| "Npx" | Border thickness. |
 | `strokeAlign` | "inside" \| "outside" \| "center" | Which side of the edge. Default "inside". |
 | `effects` | effects value | Shadows / blur: flcm.effects({...}) or a CSS-string bag. "none" removes all effects. |
@@ -442,6 +442,20 @@ const background = { type: "FRAME", fill: "linear-gradient(180deg, #0B1020 0%, #
 const sameBackground = { type: "FRAME", fill: flcm.gradient({ stops: ["#0B1020", "#131A2E"], angle: 180 }) };
 flcm.gradient("linear" | "radial", stops, angle);   // the positional form
 ```
+
+**A stack is an array, first entry on top** — CSS order, and exactly what `get` returns, so a read pastes back unchanged. `fill`, `stroke` and a run's `color` all take one; a single paint stays a bare value. The composite this is for is a photograph under a legibility scrim:
+
+```js
+const hero = {
+  type: "RECTANGLE", width: 390, height: 260,
+  fill: [
+    flcm.gradient({ stops: ["rgba(0,0,0,0)", "rgba(0,0,0,0.65)"], angle: 180 }), // the scrim, on top
+    flcm.image("https://example.com/photo.jpg"),                                 // the photo, beneath
+  ],
+};
+```
+
+An empty array is "no paint", the same as `"none"`. To change just the photo inside a stack — on an instance, say — write the whole stack back with that one entry replaced; `overrides[path].fill` takes the array like any other paint slot.
 
 ### flcm.gradient fields
 
@@ -519,8 +533,8 @@ Blur values are written in **CSS px** — you always write the CSS number and we
 | `mixBlendMode` | "normal" \| "multiply" \| "screen" \| "overlay" \| "soft-light" \| … (CSS mix-blend-mode) | A CSS mix-blend-mode name. An unknown one fails loud. |
 | `visible` | boolean | Layer visibility. get and find include hidden nodes and their annotations. |
 | `locked` | boolean | Locks the layer against pointer edits in Figma's UI. flcm.edit still writes to it. |
-| `fill` | color / gradient | Background paint: a color/gradient string or flcm.gradient(...). "none" removes it. |
-| `stroke` | color / gradient | Border paint. "none" removes it. |
+| `fill` | paint \| paint[] | Background paint: a color/gradient string, flcm.gradient(...) or flcm.image(url). An array is a paint stack, first entry on top — see Paint & gradients. "none" removes it. |
+| `stroke` | paint \| paint[] | Border paint, or a stack of them. "none" removes it. |
 | `strokeWidth` | number \| "Npx" | Border thickness. |
 | `strokeAlign` | "inside" \| "outside" \| "center" | Which side of the edge. Default "inside". |
 | `borderRadius` | number \| "Npx" | Corner radius. Frames and rectangles only. |
@@ -1135,10 +1149,10 @@ return { node: out.id, play: out.children[0].id };
 
 ### Images (real raster fills)
 
-A feed post with a real photo as a `rect` fill and a circular avatar as an `ellipse` filled with an image. `flcm.image(url)` is a paint value, so any shape carries one; the server fetches the bytes.
+A feed post with a real photo as a frame fill and a circular avatar as an `ellipse` filled with an image. `flcm.image(url)` is a paint value, so any shape carries one; the server fetches the bytes. The photo takes a paint *stack* — a legibility scrim over the image, first entry on top — so the title sitting on it stays readable.
 
 ```js
-// A feed post: a real photo as a rect fill, and a circular avatar as an ellipse filled with an image.
+// A feed post: a real photo as a frame fill, and a circular avatar as an ellipse filled with an image.
 // flcm.image is a paint value — any shape carries one. The server fetches the bytes; your code doesn't.
 const post = {
     type: "FRAME",
@@ -1146,10 +1160,25 @@ const post = {
     width: 390,
     children: [
         {
-            type: "RECTANGLE",
+            // The photo carries TWO paints — a stack, first entry on top, the order a read returns. The
+            // scrim darkens the bottom of the photo so the title over it stays legible at any exposure.
+            type: "FRAME",
             width: 390,
             height: 260,
-            fill: flcm.image("https://example.com/photo.jpg"),
+            fill: [
+                flcm.gradient({ stops: ["rgba(0,0,0,0)", "rgba(0,0,0,0.65)"], angle: 180 }),
+                flcm.image("https://example.com/photo.jpg"),
+            ],
+            children: [
+                {
+                    type: "TEXT",
+                    text: "Ridgeline at golden hour",
+                    textStyle: { fontSize: 20, fontWeight: "semibold" },
+                    fill: "#FFFFFF",
+                    left: 16,
+                    top: 216,
+                },
+            ],
         },
         {
             type: "FRAME",

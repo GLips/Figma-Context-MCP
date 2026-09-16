@@ -163,7 +163,21 @@ export const PAINT_INTRO = `A paint value (for \`fill\`, \`stroke\`, or a run's 
 const background = { type: "FRAME", fill: "linear-gradient(180deg, #0B1020 0%, #131A2E 100%)" };
 const sameBackground = { type: "FRAME", fill: flcm.gradient({ stops: ["#0B1020", "#131A2E"], angle: 180 }) };
 flcm.gradient("linear" | "radial", stops, angle);   // the positional form
-\`\`\``;
+\`\`\`
+
+**A stack is an array, first entry on top** — CSS order, and exactly what \`get\` returns, so a read pastes back unchanged. \`fill\`, \`stroke\` and a run's \`color\` all take one; a single paint stays a bare value. The composite this is for is a photograph under a legibility scrim:
+
+\`\`\`js
+const hero = {
+  type: "RECTANGLE", width: 390, height: 260,
+  fill: [
+    flcm.gradient({ stops: ["rgba(0,0,0,0)", "rgba(0,0,0,0.65)"], angle: 180 }), // the scrim, on top
+    flcm.image("https://example.com/photo.jpg"),                                 // the photo, beneath
+  ],
+};
+\`\`\`
+
+An empty array is "no paint", the same as \`"none"\`. To change just the photo inside a stack — on an instance, say — write the whole stack back with that one entry replaced; \`overrides[path].fill\` takes the array like any other paint slot.`;
 
 export const IMAGE_INTRO = `Place a **real raster image** — feed media, an avatar, a thumbnail — instead of faking it with a gradient (which carries no signal it was ever meant to be an image).
 

@@ -90,7 +90,9 @@ function inputAlias<T extends z.ZodType>(schema: T) {
   return schema.optional().meta({ inputOnly: true });
 }
 
-const color = (note: string) => prop(z.custom<FillInput>(), note, "color / gradient");
+// A paint slot. Every one of them takes a STACK as well as a single paint — an array, top first, the
+// same order a read returns — so the note here only has to say what the slot paints.
+const color = (note: string) => prop(z.custom<FillInput>(), note, "paint | paint[]");
 const metric = (note: string) => prop(z.union([z.number(), z.string()]), note, 'number | "Npx"');
 const degrees = (note: string) => prop(z.number(), note, "number (deg)");
 
@@ -236,8 +238,8 @@ const PLACEMENT_FIELDS = {
 };
 
 const APPEARANCE_FIELDS = {
-  fill: color('Background paint: a color/gradient string or flcm.gradient(...). "none" removes it.'),
-  stroke: color('Border paint. "none" removes it.'),
+  fill: color('Background paint: a color/gradient string, flcm.gradient(...) or flcm.image(url). An array is a paint stack, first entry on top — see Paint & gradients. "none" removes it.'),
+  stroke: color('Border paint, or a stack of them. "none" removes it.'),
   strokeWidth: metric("Border thickness."),
   strokeAlign: prop(
     z.custom<"inside" | "outside" | "center">(),

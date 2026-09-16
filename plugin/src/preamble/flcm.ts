@@ -6,7 +6,7 @@ import { normalizeVectorPaths } from "./path.js";
 import { compileBounds, BOUND_KEYS } from "./size-bounds.js";
 import { compileAnnotations } from "./annotations.js";
 import {
-  WriteNode, WriteProps, WriteChild, WriteLayout, WriteTextStyle, WriteTextRun, WritePaint,
+  WriteNode, WriteProps, WriteChild, WriteLayout, WriteTextStyle, WriteTextRun, WritePaint, WritePaintStack,
   GradientStop, WriteEffect, Sizing, Edges, WriteCssEffects, PinX, PinY, AnchorX, AnchorY,
   Justify, Align, TextAlign, TextDecoration, WriteTextCase, RawIdRef, WriteType, Target,
   ComponentPropertyInput, OverrideDeltaInput, ComponentPropertyBinding, ComponentPropertyDefinitionEdit,
@@ -465,26 +465,20 @@ function compileStrokeAlign(value: unknown): "INSIDE" | "OUTSIDE" | "CENTER" {
 }
 
 // THE paint-word compile, shared by every compiler and edit's deltas so values and rejections
-// can't drift between verbs. "none" is the removal word (CSS's own absence spelling): an EMPTY
-// array is the compiled "clear this" — distinct from an ABSENT array, which means "don't touch it".
-// Create writing [] onto a fresh node clears a live seeded default; the distinction exists for edit.
+// can't drift between verbs. Every paint word produces a STACK (ir.ts WritePaintStack), top first —
+// one paint is the one-element case, and an ARRAY is the stack read and write share: a photo under a
+// legibility scrim is `[flcm.gradient({...}), flcm.image(url)]`, the first entry on top, which is the
+// order `get` returns so a read pastes straight back.
 //
-// An ARRAY is what a read emits for a genuinely STACKED paint, accepted so a `get` result feeds
-// straight back in. Exactly one paint is authorable: flcm paints a single fill/stroke, and a STACK —
-// a gradient over a solid, an image over a tint — has no write vocabulary at all, so it fails loud
-// naming the count instead of quietly dropping every layer but one. An empty array is "no paint",
-// identical to "none".
-export function compilePaintWord(value: NonNullable<AppearanceProps["fill"]>, subject: string): NonNullable<WriteProps["fills"]> {
+// "none" is the removal word (CSS's own absence spelling): an EMPTY stack is the compiled "clear this"
+// — distinct from an ABSENT one, which means "don't touch it". Create writing [] onto a fresh node
+// clears a live seeded default; the distinction exists for edit. An empty array spells the same thing.
+//
+// A bad entry inside a stack is named by index in the AUTHORED order, so the refusal points at the
+// entry as written rather than at wherever it lands in Figma's own (reversed) storage order.
+export function compilePaintWord(value: NonNullable<AppearanceProps["fill"]>, subject: string): WritePaintStack {
   if (value === "none") return [];
-  if (Array.isArray(value)) {
-    if (value.length > 1) {
-      throw new Error(
-        "flcm: " + subject + " has " + value.length + " stacked paints, and flcm paints one — there is no authored form for a paint stack. " +
-          "Pass the single paint you want, or duplicate the node with flcm.clone to keep the stack.",
-      );
-    }
-    return value.length ? [parseFill(value[0], subject)] : [];
-  }
+  if (Array.isArray(value)) return value.map((leaf, i) => parseFill(leaf, subject + "[" + i + "]"));
   return [parseFill(value, subject)];
 }
 

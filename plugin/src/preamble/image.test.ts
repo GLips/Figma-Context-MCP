@@ -6,7 +6,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
-import { image } from "./flcm.js";
+import { image, gradient as flcmGradient } from "./flcm.js";
 import { render } from "./render.js";
 
 createFigmaMock();
@@ -208,14 +208,41 @@ test("a TILE read fill keeps its repeat scale; STRETCH and a ref-less fill fail 
   );
 });
 
-test("a paint slot takes the read shape's ARRAY spelling; a stack fails loud naming the count", async () => {
+test("a paint slot takes an array — the stack, top first — and reverses it into Figma's order", async () => {
   const out = await render({ type: "RECTANGLE", fill: ["#112233"] });
   assert.equal((await figma.getNodeByIdAsync(out.id)).fills.length, 1);
   // An empty array is the read spelling of "no paint" — same as "none".
   const bare = await render({ type: "RECTANGLE", fill: [] });
   assert.deepEqual((await figma.getNodeByIdAsync(bare.id)).fills, []);
-  await assert.rejects(
-    render({ type: "RECTANGLE", fill: ["#000", "linear-gradient(#fff, #000)"] }),
-    /has 2 stacked paints, and flcm paints one/,
+  // THE order contract: authored index 0 paints on top, and Figma stores the top paint LAST. A read
+  // emits the same top-first order, so what `get` returns pastes straight back.
+  const stacked = await render({
+    type: "RECTANGLE",
+    fill: ["linear-gradient(#fff, #000)", "#112233"],
+  });
+  const fills = (await figma.getNodeByIdAsync(stacked.id)).fills;
+  assert.equal(fills.length, 2);
+  assert.equal(fills[0].type, "SOLID", "the last authored entry is the bottom paint");
+  assert.equal(fills[1].type, "GRADIENT_LINEAR", "the first authored entry paints on top");
+  // A bad entry is named by its AUTHORED index, not by where it lands in Figma's storage order.
+  await assert.rejects(render({ type: "RECTANGLE", fill: ["#000", 42] }), /fill\[1\] must be a color string/);
+});
+
+test("a scrim over a photo keeps the photo's provenance, wherever it sits in the stack", async () => {
+  const url = "https://cdn.example.com/hero.jpg";
+  const { out, batches } = await renderWithImages(
+    {
+      type: "RECTANGLE",
+      width: 390,
+      height: 260,
+      fill: [flcmGradient({ stops: ["rgba(0,0,0,0)", "rgba(0,0,0,0.65)"], angle: 180 }), image(url)],
+    },
+    bytesFor,
   );
+  assert.deepEqual(batches, [[url]], "every paint in the stack is a fetch site, not just entry 0");
+  const node = await figma.getNodeByIdAsync(out.id);
+  assert.equal(node.fills[0].type, "IMAGE", "the photo is the bottom paint");
+  assert.equal(node.fills[1].type, "GRADIENT_LINEAR", "the scrim paints over it");
+  // The image is entry 1 of the authored stack; provenance follows the image, not the index.
+  assert.deepEqual(JSON.parse(node.getPluginData("flcm/image")), { url, placeholder: false });
 });
