@@ -266,7 +266,7 @@ Budget fixed widths together with padding and gaps; use `"fill"` for the remaini
 
 | Prop | Type | Notes |
 | --- | --- | --- |
-| `gridTemplateColumns` | string | Grid columns, in read form: Npx, Nfr, auto or fit-content(100%) tracks; repeat(N, tracks) and minmax(0, Nfr) expand to native tracks. Reads return expanded tracks. Required when creating a grid — Figma flows row-wise, so the columns are the axis nothing can infer. Fractional axes need explicit fixed or fill sizing. Other axes default to hug. |
+| `gridTemplateColumns` | string | Grid columns, in read form: Npx, Nfr, auto or fit-content(100%) tracks; repeat(N, tracks) and minmax(0, Nfr) expand to native tracks. Reads return expanded tracks. Required when creating a grid — Figma flows row-wise, so the columns are the axis nothing can infer. An fr track divides THIS FRAME's own width, so name that width in the same call — a number, or "fill" under a row/column parent; a hugging width is refused, never guessed. Other axes default to hug. |
 | `gridTemplateRows` | string | Grid rows, with the same track syntax as gridTemplateColumns. Optional: omitted, rows are implicit — hug tracks, one per row the children need at this column count, growing as children are added. Naming rows makes them explicit, on an edit too: the named tracks are what the grid keeps, and it stops growing rows for new children. |
 | `mode` | "row" \| "column" \| "grid" \| "none" | Auto-layout mode. Default "none" = free-form. Creating a grid requires gridTemplateColumns (rows are implicit); edits preserve omitted templates. |
 | `gap` | number \| string | A number, "Npx", or "row-gap column-gap" in px. Unequal gaps require grid or wrapping. |

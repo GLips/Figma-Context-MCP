@@ -25,11 +25,13 @@ function flowBehavior(mode: Extract<LayoutMode, { kind: "flow" }>): LayoutBehavi
     if (own.kind === "flow" && own.main === mode.cross) child.primaryAxisSizingMode = "AUTO";
   }
   function stretch(child: any, axis: Axis): void {
-    child[axis === mode.main ? "layoutGrow" : "layoutAlign"] = axis === mode.main ? 1 : "STRETCH";
+    // A grid child fills through the native word alone — see fillAxis for why the flow branch's
+    // mark-then-own-size pair cannot be used on one.
     const own = layoutModeOf(child);
+    if (own.kind === "grid") { fillAxis(child, axis); return; }
+    child[axis === mode.main ? "layoutGrow" : "layoutAlign"] = axis === mode.main ? 1 : "STRETCH";
     // Only a flow child’s primary HUG overrides stretch; its counter HUG must survive un-fill.
     if (own.kind === "flow" && own.main === axis) child.primaryAxisSizingMode = "FIXED";
-    if (own.kind === "grid") gridOwnSize(child, { [axis]: "fixed" });
   }
   return {
     rawHugs(node, axis) { return node[axis === mode.main ? "primaryAxisSizingMode" : "counterAxisSizingMode"] === "AUTO"; },
@@ -76,6 +78,14 @@ function flowBehavior(mode: Extract<LayoutMode, { kind: "flow" }>): LayoutBehavi
     defaultSizing: hugDefault,
   };
 }
+
+// THE one way any parent policy fills a child on an axis, and the only write that states it for a
+// node whose OWN mode is grid. Figma keeps one word per axis: `layoutSizing*` is derived from the
+// flow marks under a row/column and writes back through them, so a grid child marked STRETCH and
+// then given its own axis mode loses the mark to the second write [verified live: layoutAlign
+// "STRETCH" reads FILL, and layoutSizing* = "FIXED" resets it to INHERIT — scripts/probe-grid.mjs].
+// Stating the fill as the native word is what makes the order irrelevant.
+function fillAxis(child: any, axis: Axis): void { child[AXES[axis].sizing] = "FILL"; }
 
 function gridOwnSize(node: any, sizing: NonNullable<WriteLayout["sizing"]>): void {
   for (const axis of ["horizontal", "vertical"] as const) {
@@ -140,7 +150,7 @@ const GRID: LayoutBehavior = {
   },
   ownSize: gridOwnSize,
   fill(_parent, child, context) {
-    for (const axis of ["horizontal", "vertical"] as const) if (context.layout.sizing?.[axis] === "fill") child[AXES[axis].sizing] = "FILL";
+    for (const axis of ["horizontal", "vertical"] as const) if (context.layout.sizing?.[axis] === "fill") fillAxis(child, axis);
   },
   clearFill(_parent, child, layout) { gridOwnSize(child, layout.sizing || {}); },
   clearChildren(parent) {

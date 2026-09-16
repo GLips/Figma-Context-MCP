@@ -387,13 +387,22 @@ class Node {
   // parent's auto-layout stretches this child on the axis, else the node's own FIXED/HUG.
   get layoutSizingHorizontal() { return this._layoutSizing("w"); }
   get layoutSizingVertical() { return this._layoutSizing("h"); }
-  set layoutSizingHorizontal(v) { this._setGridSizing("w", v); }
-  set layoutSizingVertical(v) { this._setGridSizing("h", v); }
-  _setGridSizing(dim, value) {
+  set layoutSizingHorizontal(v) { this._setAxisSizing("w", v); }
+  set layoutSizingVertical(v) { this._setAxisSizing("h", v); }
+  _setAxisSizing(dim, value) {
     const tracks = dim === "w" ? this.gridColumnSizes : this.gridRowSizes;
     if (this.layoutMode === "GRID" && value === "HUG" && tracks.some(t => t.type === "FLEX")) throw new Error("FLEX tracks cannot hug");
-    if (value === "FILL" && !this.parent?._isAuto) throw new Error("grid fill needs a grid parent");
-    this[dim === "w" ? "_gridFillW" : "_gridFillH"] = value === "FILL";
+    if (value === "FILL" && !this.parent?._isAuto) throw new Error("fill needs an auto-layout parent");
+    // Under a row/column the fill IS the flow mark — live Figma writes the mark here and CLEARS it
+    // on any other value, which is what makes a mark-then-own-size pair erase itself [verified
+    // live]. Modelling only the grid-parent flag would hide that whole class of bug from the tests.
+    const flowParent = this.parent?._isAuto && this.parent.layoutMode !== "GRID" && this.layoutPositioning !== "ABSOLUTE";
+    if (flowParent) {
+      if ((dim === "w") === (this.parent.layoutMode === "HORIZONTAL")) this.layoutGrow = value === "FILL" ? 1 : 0;
+      else this.layoutAlign = value === "FILL" ? "STRETCH" : "INHERIT";
+    } else {
+      this[dim === "w" ? "_gridFillW" : "_gridFillH"] = value === "FILL";
+    }
     if (value !== "FILL") {
       if (this.layoutMode === "GRID") this[dim === "w" ? "_gridSizingW" : "_gridSizingH"] = value;
       else if (this._isAuto) this[(dim === "w") === (this.layoutMode === "HORIZONTAL") ? "primaryAxisSizingMode" : "counterAxisSizingMode"] = value === "HUG" ? "AUTO" : "FIXED";

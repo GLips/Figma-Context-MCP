@@ -122,3 +122,28 @@ test("rows omitted are implicit: hug tracks derived from placement, growing as c
   await append(built, { type: "RECTANGLE", width: "fill", height: 30 });
   assert.equal((await get(built)).node.layout!.gridTemplateRows, "40px 40px 40px 40px");
 });
+
+test("a grid that fills its row/column parent divides that parent's real width", async () => {
+  createFigmaMock();
+  const tiles = () => Array.from({ length: 4 }, (_, n) => ({ type: "FRAME" as const, name: "tile" + n, width: "fill" as const, height: "hug" as const,
+    layout: { mode: "column" as const, gap: 8 }, children: [{ type: "RECTANGLE" as const, width: "fill" as const, height: 100 }] }));
+  const grid = { type: "FRAME" as const, name: "Gallery grid", width: "fill" as const,
+    layout: { mode: "grid" as const, gridTemplateColumns: "repeat(4, 1fr)", gap: "30px 24px" }, children: tiles() };
+  // The commonest placement for a grid: a fill-width child of the page column that frames it.
+  const column = await render({ type: "FRAME", width: 1200, layout: { mode: "column", padding: "48px 56px 56px 56px" }, children: [grid] });
+  const inColumn = column.children![0];
+  assert.equal((await get(id(inColumn.id))).node.width, "fill");
+  assert.equal((await measure(id(inColumn.id))).width, 1088); // 1200 - 56 - 56
+  assert.equal((await measure(id(inColumn.children![0].id))).width, 254); // (1088 - 3 * 24) / 4
+  // The main axis of a row is the other half of the same rule (layoutGrow, not STRETCH).
+  const row = await render({ type: "FRAME", width: 600, height: 400, layout: { mode: "row" }, children: [grid] });
+  const inRow = row.children![0];
+  assert.equal((await get(id(inRow.id))).node.width, "fill");
+  assert.equal((await measure(id(inRow.id))).width, 600);
+  // And an edit re-fills a grid that was sized fixed, without the tracks clobbering the fill.
+  await edit(id(inRow.id), { width: 300 });
+  assert.equal((await measure(id(inRow.id))).width, 300);
+  await edit(id(inRow.id), { width: "fill", layout: { gridTemplateColumns: "repeat(4, 2fr)" } });
+  assert.equal((await get(id(inRow.id))).node.width, "fill");
+  assert.equal((await measure(id(inRow.id))).width, 600);
+});

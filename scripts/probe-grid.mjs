@@ -85,6 +85,21 @@ try {
   for (let i = 0; i < 3; i++) await flcm.append(implicit, { type: "RECTANGLE", width: "fill", height: 30 });
   check("an appended child grows a hug row", [implicitNative.gridRowSizes.map(t => t.type), implicitNative.layoutSizingVertical], [["HUG", "HUG", "HUG"], "HUG"]);
 
+  // The commonest placement of all: a grid that is a fill-width child of the column framing it. Its
+  // own axis word and the parent's flow mark are ONE word here — STRETCH reads back FILL, and writing
+  // the axis mode clears the mark — so a fill stated any other way erases itself.
+  const framed = await flcm.render({ type: "FRAME", name: "GRID under column probe", left: 1050, width: 600,
+    layout: { mode: "column", padding: "20px" },
+    children: [{ type: "FRAME", name: "wall", width: "fill",
+      layout: { mode: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 20 },
+      children: [0, 1, 2, 3].map(() => ({ type: "RECTANGLE", width: "fill", height: 40 })) }] });
+  roots.push(framed.id);
+  const wall = await figma.getNodeByIdAsync(framed.children[0].id);
+  check("a grid fills its column parent", [wall.layoutSizingHorizontal, wall.width], ["FILL", 560]);
+  check("fr tracks divide the filled width", (await flcm.measure(framed.children[0].children[0])).width, 125);
+  wall.layoutSizingHorizontal = "FIXED";
+  check("a grid's own axis mode write clears the parent's fill mark", [wall.layoutAlign, wall.layoutSizingHorizontal], ["INHERIT", "FIXED"]);
+
   let alignmentRefusal = "";
   try { await flcm.edit(flow.children[0], { height: 20, layout: { alignSelf: "flex-end" } }); }
   catch (error) { alignmentRefusal = String(error); }
@@ -134,8 +149,8 @@ async function runProbe() {
     if (reply?.errors) fail(`the probe script errored in the sandbox:\n${reply.errors}`);
 
     const results = reply?.result?.checks;
-    if (!Array.isArray(results) || results.length !== 14)
-      fail(`expected 14 checks, got ${JSON.stringify(reply?.result)}`);
+    if (!Array.isArray(results) || results.length !== 17)
+      fail(`expected 17 checks, got ${JSON.stringify(reply?.result)}`);
     for (const result of results) {
       console.log(
         `${result.pass ? "PASS" : "FAIL"} ${result.name}: ${JSON.stringify(result.actual)} (expected ${JSON.stringify(result.expected)})`,
