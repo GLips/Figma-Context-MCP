@@ -46,7 +46,12 @@ try {
   roots.push(raw.id);
   observations.push({
     name: "raw createNodeFromSvg descendant constraints (before flcm touches them)",
-    value: (raw.children || []).flatMap(function walk(n) { return [[n.type, n.constraints]].concat((n.children || []).flatMap(walk)); }),
+    // A GROUP has no constraints and Figma's getter throws rather than returning undefined; capture that
+    // as a fact of its own instead of letting the observation kill the checks.
+    value: (raw.children || []).flatMap(function walk(n) {
+      let constraints; try { constraints = n.constraints; } catch (error) { constraints = "throws: " + String(error); }
+      return [[n.type, constraints]].concat((n.children || []).flatMap(walk));
+    }),
   });
 
   // --- The path form is bare geometry.
@@ -71,9 +76,10 @@ try {
   roots.push(icon.id);
   const native = await figma.getNodeByIdAsync(icon.id);
   check("an svg import renders a FRAME sized like a canvas", [native.type, Math.round(native.width), Math.round(native.height)], ["FRAME", 24, 24]);
-  check("flcm sets SCALE on every descendant of the import",
-    (native.children || []).flatMap(function walk(n) { return [n.constraints.horizontal + "/" + n.constraints.vertical].concat((n.children || []).flatMap(walk)); }).join(","),
-    "SCALE/SCALE,SCALE/SCALE");
+  // Live Figma turns <g> into a GROUP, which has no constraints at all; only constraint-bearing
+  // descendants are asked, and there must be at least one.
+  const constrained = (native.children || []).flatMap(function walk(n) { return ("constraints" in n ? [n.constraints.horizontal + "/" + n.constraints.vertical] : []).concat((n.children || []).flatMap(walk)); });
+  check("flcm sets SCALE on every constraint-bearing descendant of the import", [constrained.length > 0, constrained.every(c => c === "SCALE/SCALE")], [true, true]);
   check("fill beside svg repaints the vectors inside",
     artOf(native).map(v => v.fills.length && v.fills[0].type === "SOLID" ? [Math.round(v.fills[0].color.r * 255), Math.round(v.fills[0].color.g * 255), Math.round(v.fills[0].color.b * 255)] : v.fills),
     artOf(native).map(() => [255, 0, 0]));
