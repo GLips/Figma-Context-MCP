@@ -5,6 +5,7 @@ import { createFigmaMock } from "../../harness/figma-mock.mjs";
 import { id } from "./flcm.js";
 import { render } from "./render.js";
 import { edit } from "./edit.js";
+import { editMany } from "./edit-many.js";
 import { append, prepend } from "./structure.js";
 import { component } from "./component.js";
 import { find, findOne, get, resolveTarget } from "./read.js";
@@ -33,6 +34,36 @@ test("aliases normalize compilers and edits without changing canonical output", 
     /conflicting fontSize and textStyle.fontSize/,
   );
   await assert.rejects(edit(node.id, { fontSize: 12 }), /fontSize is not supported/);
+});
+
+test("native grid aliases compose across scopes and normalize through every write verb", async () => {
+  createFigmaMock();
+  const built = await render({ type: "FRAME", width: 300,
+    gridColumnsSizing: "40px 40px 40px",
+    gridColumnSizes: [{ type: "FIXED", value: 40 }, { type: "FIXED", value: 40 }, { type: "FIXED", value: 40 }],
+    layout: { mode: "grid", gridTemplateColumns: "repeat(3, 40px)" },
+    children: [{ type: "RECTANGLE", width: 20, height: 10, gridColumnAnchorIndex: 1,
+      layout: { gridColumnSpan: 2, gridRowAnchorIndex: 1, gridRowSpan: 2, gridChildHorizontalAlign: "CENTER", gridChildVerticalAlign: "MAX" },
+    }],
+  });
+  const read = (await get(built)).node;
+  assert.equal(read.layout!.gridTemplateColumns, "40px 40px 40px");
+  assert.deepEqual(read.children![0].layout, { gridColumn: "2 / span 2", gridRow: "2 / span 2", justifySelf: "center", alignSelf: "end" });
+  const child = id(built.children![0].id);
+  await edit(child, { gridColumnAnchorIndex: 0, gridColumnSpan: 2, gridChildHorizontalAlign: "AUTO", layout: { gridColumn: "1 / span 2" } });
+  await editMany([
+    { id: built.id, layout: { gridColumnSizes: [{ type: "FLEX" }, { type: "FIXED", value: 40 }, { type: "HUG" }], gridRowsSizing: "30px 30px 30px" },
+      gridRowSizes: [{ type: "FIXED", value: 30 }, { type: "FIXED", value: 30 }, { type: "FIXED", value: 30 }] },
+    { id: built.children![0].id, gridChildVerticalAlign: "CENTER", gridChildHorizontalAlign: "MIN" },
+  ]);
+  const edited = (await get(built)).node;
+  assert.equal(edited.layout!.gridTemplateColumns, "1fr 40px fit-content(100%)");
+  assert.equal(edited.layout!.gridTemplateRows, "30px 30px 30px");
+  assert.equal(edited.children![0].layout!.gridColumn, "1 / span 2");
+  assert.equal(edited.children![0].layout!.justifySelf, "start");
+  assert.equal(edited.children![0].layout!.alignSelf, "center");
+  await assert.rejects(edit(child, { gridColumnAnchorIndex: 0, layout: { gridColumn: "2" } }), /conflicting/);
+  await assert.rejects(edit(child, { gridColumnAnchorIndex: -1 }), /non-negative integer/);
 });
 
 test("regex searches preserve flags and caller lastIndex, strings remain literal", async () => {

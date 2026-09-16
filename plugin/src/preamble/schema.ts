@@ -22,6 +22,7 @@
 
 import { z } from "zod";
 import { INPUT_ALIASES } from "./input-aliases.js";
+export { INPUT_ALIASES };
 import type {
   FillInput, WriteCssEffects, WritePaint, WriteEffect, GradientStop, WriteNode, WriteChild, Handle,
   PinX, PinY, Target, RawIdRef, SlimHandle, FindQuery, ReadPredicate, CloneResult, RemoveResult, GetResult,
@@ -83,6 +84,12 @@ function prop<T extends z.ZodType>(schema: T, note: string, type?: string) {
   return type ? described.meta({ type }) : described;
 }
 
+// Input conveniences remain typed, but only canonical words belong in prop tables.
+// Their documentation is generated once from INPUT_ALIASES.
+function inputAlias<T extends z.ZodType>(schema: T) {
+  return schema.optional().meta({ inputOnly: true });
+}
+
 const color = (note: string) => prop(z.custom<FillInput>(), note, "color / gradient");
 const metric = (note: string) => prop(z.union([z.number(), z.string()]), note, 'number | "Npx"');
 const degrees = (note: string) => prop(z.number(), note, "number (deg)");
@@ -111,17 +118,40 @@ const SHARED_FIELDS = {
   locked: prop(z.boolean(), "Locks the layer against pointer edits in Figma's UI. flcm.edit still writes to it."),
 };
 
+// Native aliases describe the same authored values; normalization removes them before compilation.
+const GRID_CHILD_ALIASES = {
+  gridColumnAnchorIndex: inputAlias(z.number()),
+  gridRowAnchorIndex: inputAlias(z.number()),
+  gridColumnSpan: inputAlias(z.number()),
+  gridRowSpan: inputAlias(z.number()),
+  gridChildHorizontalAlign: inputAlias(z.enum(["AUTO", "MIN", "CENTER", "MAX"])),
+  gridChildVerticalAlign: inputAlias(z.enum(["AUTO", "MIN", "CENTER", "MAX"])),
+};
+const NATIVE_GRID_TRACK = z.union([
+  z.object({ type: z.literal("HUG"), value: z.number().optional() }),
+  z.object({ type: z.literal("FLEX"), value: z.number().optional() }),
+  z.object({ type: z.literal("FIXED"), value: z.number() }),
+]);
+const GRID_CONTAINER_ALIASES = {
+  gridColumnsSizing: inputAlias(z.string()),
+  gridRowsSizing: inputAlias(z.string()),
+  gridColumnSizes: inputAlias(z.array(NATIVE_GRID_TRACK)),
+  gridRowSizes: inputAlias(z.array(NATIVE_GRID_TRACK)),
+};
+
 // One read layout bag combines the node's own container settings and its placement in its parent.
 // Leaves take only child fields; frame-like types compose both groups. Parent mode decides cell vs flow.
 const CHILD_LAYOUT_FIELDS = {
+  ...GRID_CHILD_ALIASES,
   gridColumn: prop(z.string(), 'Grid child column: "N", "span N", or "N / span N". Anchors are 1-based. Omitted placement uses Figma auto-placement. A grid child sizes in px, "fill" (the cell) or "hug"; "N%" is refused because the reference would be the cell, not the frame.'),
   gridRow: prop(z.string(), 'Grid child row: "N", "span N", or "N / span N". Anchors are 1-based. Rows a grid did not name grow to hold the placement.'),
   justifySelf: prop(z.enum(["start", "center", "end", "auto"]), 'Grid child horizontal cell alignment. "auto" restores Figma alignment.'),
-  alignSelf: prop(z.enum(["center", "stretch", "start", "end", "auto"]), 'Grid vertical cell alignment: start/end/center/auto. Flow children accept only "stretch", an alias for counter-axis fill. Flow alignment lives on the parent as layout.alignItems and applies to every child; use position: "absolute" for a child that must sit differently.'),
+  alignSelf: prop(z.enum(["center", "stretch", "start", "end", "auto"]), 'Grid vertical cell alignment: start/end/center/auto. Flow children accept only "stretch", an alias for counter-axis fill. Figma renders no per-child MIN/CENTER/MAX alignment in flow. Set layout.alignItems on the parent for every child, or wrap the child in a fill-sized frame with its own alignItems.'),
   zIndex: prop(z.number(), 'Grid child sibling index, a non-negative integer. Explicit indices reserve sibling slots; unnamed siblings retain relative order in remaining slots. Duplicate or out-of-range indices fail.'),
 };
 
 const CONTAINER_LAYOUT_FIELDS = {
+  ...GRID_CONTAINER_ALIASES,
   gridTemplateColumns: prop(z.string(), "Grid columns, in read form: Npx, Nfr, auto or fit-content(100%) tracks; repeat(N, tracks) and minmax(0, Nfr) expand to native tracks. Reads return expanded tracks. Required when creating a grid — Figma flows row-wise, so the columns are the axis nothing can infer. Fractional axes need explicit fixed or fill sizing. Other axes default to hug."),
   gridTemplateRows: prop(z.string(), 'Grid rows, with the same track syntax as gridTemplateColumns. Optional: omitted, rows are implicit — hug tracks, one per row the children need at this column count, growing as children are added. Naming rows makes them explicit, on an edit too: the named tracks are what the grid keeps, and it stops growing rows for new children.'),
   mode: prop(z.enum(["row", "column", "grid", "none"]), 'Auto-layout mode. Default "none" = free-form. Creating a grid requires gridTemplateColumns (rows are implicit); edits preserve omitted templates.'),
@@ -145,6 +175,7 @@ const CONTAINER_LAYOUT_FIELDS = {
 const LAYOUT_FIELDS = { ...CONTAINER_LAYOUT_FIELDS, ...CHILD_LAYOUT_FIELDS };
 
 const SIZE_FIELDS = {
+  ...GRID_CHILD_ALIASES,
   layout: prop(z.object(CHILD_LAYOUT_FIELDS), 'Placement under an auto-layout parent. Grid accepts cell alignment; flow accepts only the alignSelf "stretch" alias for counter-axis fill.', '{ gridColumn?, gridRow?, justifySelf?, alignSelf?, zIndex? }'),
   minWidth: prop(z.union([z.number(), z.literal("none")]), "minWidth in positive pixels, effective on auto-layout containers and their direct children. Omitted preserves the bound; \"none\" clears it. Sizes constrained by bounds succeed with a console warning.", 'number | "none"'),
   maxWidth: prop(z.union([z.number(), z.literal("none")]), "maxWidth in positive pixels, effective on auto-layout containers and their direct children. Omitted preserves the bound; \"none\" clears it. Sizes constrained by bounds succeed with a console warning.", 'number | "none"'),
@@ -195,6 +226,7 @@ const SIZE_FIELDS = {
 
 // The placement words alone — what a LINE takes beside its width, and what edit compiles for one.
 const PLACEMENT_FIELDS = {
+  ...GRID_CHILD_ALIASES,
   layout: SIZE_FIELDS.layout,
   left: SIZE_FIELDS.left,
   top: SIZE_FIELDS.top,
@@ -229,7 +261,8 @@ const ELLIPSE_FIELDS = {
 };
 
 const FRAME_FIELDS = {
-  ["clipsContent" satisfies keyof typeof INPUT_ALIASES]: prop(z.boolean(), "Input alias for clip; duplicate values must agree."),
+  ...GRID_CONTAINER_ALIASES,
+  ["clipsContent" satisfies keyof typeof INPUT_ALIASES]: inputAlias(z.boolean()),
   layout: prop(z.object(LAYOUT_FIELDS), 'Own container settings plus placement under the parent. Creating a grid requires gridTemplateColumns; rows are implicit hug tracks unless named.', '{ mode?, gridTemplateColumns?, gridTemplateRows?, gap?, wrap?, padding?, justifyContent?, alignItems?, gridColumn?, gridRow?, justifySelf?, alignSelf?, zIndex? }'),
   clip: prop(z.boolean(), "Clip children to the frame's bounds. Default false, like CSS overflow: visible."),
 };
@@ -293,7 +326,7 @@ const TEXTSTYLE_FIELDS = {
 
 // text is content; fill is paint. boldWeight controls markdown emphasis, not base text style.
 const TEXT_FIELDS = {
-  ["fontSize" satisfies keyof typeof INPUT_ALIASES]: prop(z.number(), "Input alias for textStyle.fontSize; duplicate values must agree."),
+  ["fontSize" satisfies keyof typeof INPUT_ALIASES]: inputAlias(z.number()),
   text: prop(
     z.custom<string | TextRunInput[]>(),
     "The content — a plain string (markdown: **bold**, *italic*, ~~strike~~, [text](url)) or an array of styled runs. Set it on a TEXT spec; under edit it replaces the whole content.",
@@ -496,6 +529,7 @@ const COMPONENT_DEFINITION_FIELDS = {
 // One absence is the contract, not an oversight: `key` is immutable under edit (a delta naming it
 // fails loud — re-keying could mint a duplicate address).
 const EDIT_FIELDS = {
+  ...GRID_CONTAINER_ALIASES,
   ...ANNOTATION_FIELDS,
   name: SHARED_FIELDS.name,
   opacity: SHARED_FIELDS.opacity,

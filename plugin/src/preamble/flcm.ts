@@ -1,6 +1,7 @@
 import { FLOW_ALIGNMENT_GUIDANCE } from "./layout-mode.js";
 import { acceptAuthoringProps } from "./authoring-input.js";
-import { parseGridTracks } from "./grid-tracks.js";
+import { gridAliasKeys } from "./input-aliases.js";
+import { parseGridTracks, parseGridPlacement } from "./grid-tracks.js";
 import { normalizeVectorPaths } from "./path.js";
 import { compileBounds, BOUND_KEYS } from "./size-bounds.js";
 import { compileAnnotations } from "./annotations.js";
@@ -34,19 +35,19 @@ import type {
 export const KNOWN_KEYS = {
   annotation: ["annotations"],
   shared: ["name", "key", "opacity", "mixBlendMode", "visible", "locked"],
-  edit: ["exposed", ...BOUND_KEYS, "clipsContent", "fontSize", "annotations", "name", "opacity", "mixBlendMode", "visible", "locked", "fill", "stroke", "strokeWidth", "strokeAlign", "borderRadius", "effects", "rotation", "clip", "width", "height", "left", "top", "position", "anchor", "pin", "layout", "text", "textStyle", "boldWeight", "componentProperties", "overrides", "componentId", "componentPropertyReferences", "description", "propertyDefinitions"],
-  size: ["layout", ...BOUND_KEYS, "width", "height", "left", "top", "position", "anchor", "pin"],
-  placement: ["layout", "left", "top", "position", "anchor", "pin"],
+  edit: [...gridAliasKeys("all"), "exposed", ...BOUND_KEYS, "clipsContent", "fontSize", "annotations", "name", "opacity", "mixBlendMode", "visible", "locked", "fill", "stroke", "strokeWidth", "strokeAlign", "borderRadius", "effects", "rotation", "clip", "width", "height", "left", "top", "position", "anchor", "pin", "layout", "text", "textStyle", "boldWeight", "componentProperties", "overrides", "componentId", "componentPropertyReferences", "description", "propertyDefinitions"],
+  size: [...gridAliasKeys("child"), "layout", ...BOUND_KEYS, "width", "height", "left", "top", "position", "anchor", "pin"],
+  placement: [...gridAliasKeys("child"), "layout", "left", "top", "position", "anchor", "pin"],
   appearance: ["fill", "stroke", "strokeWidth", "strokeAlign", "borderRadius", "effects", "rotation"],
   ellipse: ["fill", "stroke", "strokeWidth", "strokeAlign", "effects", "rotation"],
-  frame: ["layout", "clip", "clipsContent"],
-  layout: ["gridTemplateColumns", "gridTemplateRows", "gridColumn", "gridRow", "justifySelf", "alignSelf", "zIndex", "mode", "gap", "wrap", "padding", "justifyContent", "alignItems"],
-  childLayout: ["gridColumn", "gridRow", "justifySelf", "alignSelf", "zIndex"],
-  containerLayout: ["mode", "gridTemplateColumns", "gridTemplateRows", "gap", "wrap", "padding", "justifyContent", "alignItems"],
+  frame: [...gridAliasKeys("container"), "layout", "clip", "clipsContent"],
+  layout: [...gridAliasKeys("all"), "gridTemplateColumns", "gridTemplateRows", "gridColumn", "gridRow", "justifySelf", "alignSelf", "zIndex", "mode", "gap", "wrap", "padding", "justifyContent", "alignItems"],
+  childLayout: [...gridAliasKeys("child"), "gridColumn", "gridRow", "justifySelf", "alignSelf", "zIndex"],
+  containerLayout: [...gridAliasKeys("container"), "mode", "gridTemplateColumns", "gridTemplateRows", "gap", "wrap", "padding", "justifyContent", "alignItems"],
   text: ["text", "textStyle", "fill", "boldWeight", "fontSize"],
   textStyle: ["fontFamily", "fontWeight", "fontSize", "fontStyle", "lineHeight", "letterSpacing", "textDecoration", "textTransform", "fontVariant", "textAlign", "textAlignVertical", "paragraphSpacing", "paragraphIndent", "listSpacing", "hyperlink", "lineClamp"],
   run: ["fontWeight", "fontSize", "fontFamily", "fontStyle", "lineHeight", "letterSpacing", "textDecoration", "textTransform", "fontVariant", "paragraphSpacing", "paragraphIndent", "listSpacing", "color", "hyperlink"],
-  line: ["layout", "stroke", "strokeWidth", "width", "rotation", "left", "top", "position", "anchor", "pin"],
+  line: [...gridAliasKeys("child"), "layout", "stroke", "strokeWidth", "width", "rotation", "left", "top", "position", "anchor", "pin"],
   path: ["vectorPaths", "d", "fill", "stroke", "strokeWidth", "strokeAlign", "effects", "rotation"],
   instance: ["componentProperties", "overrides", "exposed"],
   swap: ["componentId"],
@@ -334,9 +335,7 @@ function compileLayoutBag(cfg: NonNullable<FrameProps["layout"]>, subject: strin
   for (const key of ["gridColumn", "gridRow"] as const) {
     const raw = cfg[key];
     if (raw === undefined) continue;
-    const match = typeof raw === "string" ? /^(?:(\d+)(?: \/ span (\d+))?|span (\d+))$/.exec(raw.trim()) : null;
-    if (!match || match.slice(1).some(v => v !== undefined && (!Number.isSafeInteger(Number(v)) || Number(v) < 1))) throw new Error(subject + ": " + key + ' needs "N", "span N", or "N / span N".');
-    layout[key] = { ...(match[1] ? { anchor: Number(match[1]) - 1 } : {}), span: Number(match[2] ?? match[3] ?? 1) };
+    layout[key] = parseGridPlacement(raw, subject + ": " + key);
   }
   for (const key of ["justifySelf"] as const) {
     if (cfg[key] !== undefined) layout[key] = mapCssWord(key, cfg[key], { start: "MIN", center: "CENTER", end: "MAX", auto: "AUTO" } as const);

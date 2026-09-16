@@ -1,4 +1,5 @@
-import { buildReferenceSections } from "~/mcp/tools/flcm-docs/reference.js";
+import { INPUT_ALIASES } from "@framelink/plugin/schema";
+import { buildFullReference, buildReferenceSections } from "~/mcp/tools/flcm-docs/reference.js";
 import { describe, expect, it } from "vitest";
 
 // The mental model used to ship only to a caller who named nothing, which is nobody who knows what
@@ -22,4 +23,20 @@ describe("get_flcm_reference delivery", () => {
     expect(body).toContain("Removing only the root id creates a new root");
     expect(body).toContain("Save specs, constants, SVG markup and looked-up ids in session");
   });
+});
+
+it("documents input aliases once, outside canonical prop tables and node key lists", () => {
+  const doc = buildFullReference();
+  const block = doc.split("### Native spellings accepted\n")[1].split("\n### ")[0];
+  for (const rule of Object.values(INPUT_ALIASES)) {
+    for (const key of rule.keys) {
+      expect(block.split(`- \`${key}\` → \`${rule.path.join(".")}\``)).toHaveLength(2);
+      // fontSize is also a canonical nested text-style field.
+      if (key !== "fontSize") expect(doc.split(key)).toHaveLength(2);
+      for (const line of doc.split("\n").filter((line) => line.startsWith("- **"))) {
+        expect(line).not.toContain(`\`${key}\``);
+      }
+    }
+  }
+  expect(doc).toContain("| `fontSize` |");
 });

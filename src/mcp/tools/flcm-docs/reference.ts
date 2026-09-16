@@ -13,6 +13,7 @@ import { z } from "zod";
 import {
   VERBS,
   FIELD_GROUPS,
+  INPUT_ALIASES,
   EDIT_TYPE_WORD_GROUPS,
   type VerbCategory,
 } from "@framelink/plugin/schema";
@@ -102,9 +103,26 @@ function deriveLabel(def: any): string {
   }
 }
 
+// Input aliases are accepted by the schemas but documented once, outside the canonical vocabulary.
+function documentedFields(fields: Fields): [string, z.ZodType][] {
+  return Object.entries(fields).filter(([, field]) => !field.meta()?.inputOnly);
+}
+
+function nativeSpellings(): string {
+  const lines = Object.values(INPUT_ALIASES).flatMap((rule) =>
+    rule.keys.map((key) => `- \`${key}\` → \`${rule.path.join(".")}\``),
+  );
+  return (
+    "### Native spellings accepted\n\n" +
+    "Aliases normalize silently on every verb; equivalent duplicates agree, conflicting values fail. " +
+    "Grid aliases also work inside `layout`. Native anchors are 0-based and combine with spans into 1-based CSS placement.\n\n" +
+    lines.join("\n")
+  );
+}
+
 // Render a field group (name/key/opacity, size, a verb's props, …) as a markdown prop table.
 function propTable(fields: Fields): string {
-  const rows = Object.entries(fields).map(
+  const rows = documentedFields(fields).map(
     ([name, field]) =>
       `| \`${name}\` | ${cell(typeLabel(field))} | ${cell(field.description ?? "")} |`,
   );
@@ -115,14 +133,18 @@ function propTable(fields: Fields): string {
 // runtime legality gate composes from (edit-plan.ts DELTA_KEYS_BY_TYPE), intersected with the edit
 // field set the same way, so the doc can't promise a word the gate rejects.
 function editTypeWordLines(): string {
-  const editWords = new Set(Object.keys(FIELD_GROUPS.edit));
+  const editWords = new Set(documentedFields(FIELD_GROUPS.edit).map(([key]) => key));
   const lines: string[] = [];
   const labels: Partial<Record<keyof typeof EDIT_TYPE_WORD_GROUPS, string>> = {
     VECTOR: "VECTOR (path- or svg-born)",
   };
   for (const t of Object.keys(EDIT_TYPE_WORD_GROUPS) as (keyof typeof EDIT_TYPE_WORD_GROUPS)[]) {
     const words = [
-      ...new Set(EDIT_TYPE_WORD_GROUPS[t].flatMap((g) => Object.keys(FIELD_GROUPS[g]))),
+      ...new Set(
+        EDIT_TYPE_WORD_GROUPS[t].flatMap((g) =>
+          documentedFields(FIELD_GROUPS[g]).map(([key]) => key),
+        ),
+      ),
     ]
       .filter((k) => editWords.has(k))
       .map((k) => `\`${k}\``)
@@ -182,6 +204,7 @@ const SECTIONS: Section[] = [
       "New nodes require type; INSTANCE also requires componentId, and VECTOR requires exactly one of svg or d. " +
       "An id refers to a live node; type can be omitted for a move. children is an array of plain specs. " +
       "Other omitted props keep live values or use creation defaults. The verb returns the spec copied with ids.\n\n" +
+      `${nativeSpellings()}\n\n` +
       `### Shared by every node\n\n${propTable(FIELD_GROUPS.shared)}\n\n` +
       `### Annotations\n\n${propTable(FIELD_GROUPS.annotation)}\n\n${ANNOTATIONS_REFERENCE}\n\n` +
       "### Size & position (FRAME, TEXT, RECTANGLE, ELLIPSE, VECTOR, INSTANCE)\n\n" +

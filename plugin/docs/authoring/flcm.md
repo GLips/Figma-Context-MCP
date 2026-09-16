@@ -115,6 +115,23 @@ Use `children: [{ type: "TEXT", text: "Hi" }]` on a FRAME. Compose with array sp
 
 New nodes require type; INSTANCE also requires componentId, and VECTOR requires exactly one of svg or d. An id refers to a live node; type can be omitted for a move. children is an array of plain specs. Other omitted props keep live values or use creation defaults. The verb returns the spec copied with ids.
 
+### Native spellings accepted
+
+Aliases normalize silently on every verb; equivalent duplicates agree, conflicting values fail. Grid aliases also work inside `layout`. Native anchors are 0-based and combine with spans into 1-based CSS placement.
+
+- `clipsContent` → `clip`
+- `fontSize` → `textStyle.fontSize`
+- `gridColumnAnchorIndex` → `layout.gridColumn`
+- `gridColumnSpan` → `layout.gridColumn`
+- `gridRowAnchorIndex` → `layout.gridRow`
+- `gridRowSpan` → `layout.gridRow`
+- `gridChildHorizontalAlign` → `layout.justifySelf`
+- `gridChildVerticalAlign` → `layout.alignSelf`
+- `gridColumnsSizing` → `layout.gridTemplateColumns`
+- `gridColumnSizes` → `layout.gridTemplateColumns`
+- `gridRowsSizing` → `layout.gridTemplateRows`
+- `gridRowSizes` → `layout.gridTemplateRows`
+
 ### Shared by every node
 
 | Prop | Type | Notes |
@@ -232,7 +249,6 @@ Budget fixed widths together with padding and gaps; use `"fill"` for the remaini
 | `borderRadius` | number \| "Npx" | Corner radius. Frames and rectangles only. |
 | `effects` | effects value | Shadows / blur: flcm.effects({...}) or a CSS-string bag. "none" removes all effects. |
 | `rotation` | number (deg) | Rotation in degrees. |
-| `clipsContent` | boolean | Input alias for clip; duplicate values must agree. |
 | `layout` | { mode?, gridTemplateColumns?, gridTemplateRows?, gap?, wrap?, padding?, justifyContent?, alignItems?, gridColumn?, gridRow?, justifySelf?, alignSelf?, zIndex? } | Own container settings plus placement under the parent. Creating a grid requires gridTemplateColumns; rows are implicit hug tracks unless named. |
 | `clip` | boolean | Clip children to the frame's bounds. Default false, like CSS overflow: visible. |
 
@@ -256,14 +272,13 @@ Budget fixed widths together with padding and gaps; use `"fill"` for the remaini
 | `gridColumn` | string | Grid child column: "N", "span N", or "N / span N". Anchors are 1-based. Omitted placement uses Figma auto-placement. A grid child sizes in px, "fill" (the cell) or "hug"; "N%" is refused because the reference would be the cell, not the frame. |
 | `gridRow` | string | Grid child row: "N", "span N", or "N / span N". Anchors are 1-based. Rows a grid did not name grow to hold the placement. |
 | `justifySelf` | "start" \| "center" \| "end" \| "auto" | Grid child horizontal cell alignment. "auto" restores Figma alignment. |
-| `alignSelf` | "center" \| "stretch" \| "start" \| "end" \| "auto" | Grid vertical cell alignment: start/end/center/auto. Flow children accept only "stretch", an alias for counter-axis fill. Flow alignment lives on the parent as layout.alignItems and applies to every child; use position: "absolute" for a child that must sit differently. |
+| `alignSelf` | "center" \| "stretch" \| "start" \| "end" \| "auto" | Grid vertical cell alignment: start/end/center/auto. Flow children accept only "stretch", an alias for counter-axis fill. Figma renders no per-child MIN/CENTER/MAX alignment in flow. Set layout.alignItems on the parent for every child, or wrap the child in a fill-sized frame with its own alignItems. |
 | `zIndex` | number | Grid child sibling index, a non-negative integer. Explicit indices reserve sibling slots; unnamed siblings retain relative order in remaining slots. Duplicate or out-of-range indices fail. |
 
 ### TEXT — text props
 
 | Prop | Type | Notes |
 | --- | --- | --- |
-| `fontSize` | number | Input alias for textStyle.fontSize; duplicate values must agree. |
 | `text` | string \| run[] | The content — a plain string (markdown: **bold**, *italic*, ~~strike~~, [text](url)) or an array of styled runs. Set it on a TEXT spec; under edit it replaces the whole content. |
 | `textStyle` | { fontFamily?, fontWeight?, fontSize?, fontStyle?, lineHeight?, letterSpacing?, textDecoration?, textTransform?, fontVariant?, textAlign?, textAlignVertical?, paragraphSpacing?, paragraphIndent?, listSpacing?, hyperlink?, lineClamp? } | The text style base. Runs layer over it. |
 | `fill` | color / gradient | The text's paint, like every other node's. "none" removes it. |
@@ -512,7 +527,6 @@ Blur values are written in **CSS px** — you always write the CSS number and we
 | `effects` | effects value | Shadows / blur: flcm.effects({...}) or a CSS-string bag. "none" removes all effects. |
 | `rotation` | number (deg) | Rotation in degrees. |
 | `clip` | boolean | Clip children to the frame's bounds. Default false, like CSS overflow: visible. |
-| `clipsContent` | boolean | Input alias for clip; duplicate values must agree. |
 | `minWidth` | number \| "none" | minWidth in positive pixels, effective on auto-layout containers and their direct children. Omitted preserves the bound; "none" clears it. Sizes constrained by bounds succeed with a console warning. |
 | `maxWidth` | number \| "none" | maxWidth in positive pixels, effective on auto-layout containers and their direct children. Omitted preserves the bound; "none" clears it. Sizes constrained by bounds succeed with a console warning. |
 | `minHeight` | number \| "none" | minHeight in positive pixels, effective on auto-layout containers and their direct children. Omitted preserves the bound; "none" clears it. Sizes constrained by bounds succeed with a console warning. |
@@ -527,7 +541,6 @@ Blur values are written in **CSS px** — you always write the CSS number and we
 | `pin` | { x?, y? } \| "none" — x: left/center/right/stretch/scale/none, y: top/center/bottom/stretch/scale/none | Constraint override — how the node responds when its parent resizes, replacing the automatic choice. Honored for a child of a free-form parent and for any out-of-flow (`left`/`top`) child; on an in-flow auto-layout child it is stored but inert (fill/hug governs there) until the node leaves the flow. Under edit, "none" restores the default near-edge pin. Never lifts a node out of flow by itself. |
 | `text` | string \| run[] | The content — a plain string (markdown: **bold**, *italic*, ~~strike~~, [text](url)) or an array of styled runs. Set it on a TEXT spec; under edit it replaces the whole content. |
 | `textStyle` | { fontFamily?, fontWeight?, fontSize?, fontStyle?, lineHeight?, letterSpacing?, textDecoration?, textTransform?, fontVariant?, textAlign?, textAlignVertical?, paragraphSpacing?, paragraphIndent?, listSpacing?, hyperlink?, lineClamp? } | The text style base. Runs layer over it. |
-| `fontSize` | number | Input alias for textStyle.fontSize; duplicate values must agree. |
 | `boldWeight` | number (100–900) \| name | What `**bold**` in `text` resolves to. Default 700 — pass back the `boldWeight` a `get` reports and the copy emphasizes like the original. Same spellings as fontWeight. Under edit it only means something beside `text`. |
 | `exposed` | boolean | Expose this nested instance's existing controls in the enclosing instance panel. Writable only inside a component definition; false clears it. |
 | `componentProperties` | { [name]: string \| boolean \| component target } | Values by bare name (no `#id` suffix), as `get` reports them: a variant axis, a boolean, a text, or a component target for an instance_swap. A slot has no value here — its content is `children` under `overrides`. |
@@ -539,18 +552,18 @@ Blur values are written in **CSS px** — you always write the CSS number and we
 
 ### Words by node type
 
-- **FRAME** — `annotations`, `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `layout`, `minWidth`, `maxWidth`, `minHeight`, `maxHeight`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `fill`, `stroke`, `strokeWidth`, `strokeAlign`, `borderRadius`, `effects`, `rotation`, `clipsContent`, `clip`, `componentPropertyReferences`
-- **TEXT** — `annotations`, `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `layout`, `minWidth`, `maxWidth`, `minHeight`, `maxHeight`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `fontSize`, `text`, `textStyle`, `fill`, `boldWeight`, `componentPropertyReferences`
+- **FRAME** — `annotations`, `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `layout`, `minWidth`, `maxWidth`, `minHeight`, `maxHeight`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `fill`, `stroke`, `strokeWidth`, `strokeAlign`, `borderRadius`, `effects`, `rotation`, `clip`, `componentPropertyReferences`
+- **TEXT** — `annotations`, `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `layout`, `minWidth`, `maxWidth`, `minHeight`, `maxHeight`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `text`, `textStyle`, `fill`, `boldWeight`, `componentPropertyReferences`
 - **RECTANGLE** — `annotations`, `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `layout`, `minWidth`, `maxWidth`, `minHeight`, `maxHeight`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `fill`, `stroke`, `strokeWidth`, `strokeAlign`, `borderRadius`, `effects`, `rotation`, `componentPropertyReferences`
 - **ELLIPSE** — `annotations`, `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `layout`, `minWidth`, `maxWidth`, `minHeight`, `maxHeight`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `fill`, `stroke`, `strokeWidth`, `strokeAlign`, `effects`, `rotation`, `componentPropertyReferences`
 - **LINE** — `annotations`, `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `stroke`, `strokeWidth`, `width`, `rotation`, `layout`, `left`, `top`, `position`, `anchor`, `pin`, `componentPropertyReferences`
 - **VECTOR (path- or svg-born)** — `annotations`, `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `layout`, `minWidth`, `maxWidth`, `minHeight`, `maxHeight`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `fill`, `stroke`, `strokeWidth`, `strokeAlign`, `effects`, `rotation`, `componentPropertyReferences`
-- **INSTANCE** — `annotations`, `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `layout`, `minWidth`, `maxWidth`, `minHeight`, `maxHeight`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `fill`, `stroke`, `strokeWidth`, `strokeAlign`, `borderRadius`, `effects`, `rotation`, `clipsContent`, `clip`, `exposed`, `componentProperties`, `overrides`, `componentId`, `componentPropertyReferences`
-- **COMPONENT** — `annotations`, `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `layout`, `minWidth`, `maxWidth`, `minHeight`, `maxHeight`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `fill`, `stroke`, `strokeWidth`, `strokeAlign`, `borderRadius`, `effects`, `rotation`, `clipsContent`, `clip`, `description`, `propertyDefinitions`
-- **COMPONENT_SET** — `annotations`, `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `layout`, `minWidth`, `maxWidth`, `minHeight`, `maxHeight`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `fill`, `stroke`, `strokeWidth`, `strokeAlign`, `borderRadius`, `effects`, `rotation`, `clipsContent`, `clip`, `description`, `propertyDefinitions`
+- **INSTANCE** — `annotations`, `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `layout`, `minWidth`, `maxWidth`, `minHeight`, `maxHeight`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `fill`, `stroke`, `strokeWidth`, `strokeAlign`, `borderRadius`, `effects`, `rotation`, `clip`, `exposed`, `componentProperties`, `overrides`, `componentId`, `componentPropertyReferences`
+- **COMPONENT** — `annotations`, `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `layout`, `minWidth`, `maxWidth`, `minHeight`, `maxHeight`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `fill`, `stroke`, `strokeWidth`, `strokeAlign`, `borderRadius`, `effects`, `rotation`, `clip`, `description`, `propertyDefinitions`
+- **COMPONENT_SET** — `annotations`, `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `layout`, `minWidth`, `maxWidth`, `minHeight`, `maxHeight`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `fill`, `stroke`, `strokeWidth`, `strokeAlign`, `borderRadius`, `effects`, `rotation`, `clip`, `description`, `propertyDefinitions`
 - **POLYGON** — `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `annotations`
 - **STAR** — `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `annotations`
-- **SLOT** — `annotations`, `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `layout`, `minWidth`, `maxWidth`, `minHeight`, `maxHeight`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `fill`, `stroke`, `strokeWidth`, `strokeAlign`, `borderRadius`, `effects`, `rotation`, `clipsContent`, `clip`
+- **SLOT** — `annotations`, `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `layout`, `minWidth`, `maxWidth`, `minHeight`, `maxHeight`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `fill`, `stroke`, `strokeWidth`, `strokeAlign`, `borderRadius`, `effects`, `rotation`, `clip`
 
 On a node type with no vocabulary of its own (GROUP, SECTION, POLYGON, …) only the shared words apply: `name`, `opacity`, `mixBlendMode`, `visible`, `locked`.
 

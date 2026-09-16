@@ -29,7 +29,7 @@ export type ChildLayout =
   | { kind: "free"; layout: WriteLayout }
   | { kind: "flow"; mode: Extract<LayoutMode, { kind: "flow" }>; layout: WriteLayout }
   | { kind: "grid"; layout: WriteLayout; align?: "MIN" | "MAX" | "CENTER" | "AUTO" };
-export const FLOW_ALIGNMENT_GUIDANCE = 'Flow children accept only alignSelf: "stretch", an alias for counter-axis fill. Figma has no per-child flow alignment: set layout.alignItems on the parent to align every child, or use position: "absolute" for a child that must sit differently.';
+export const FLOW_ALIGNMENT_GUIDANCE = 'Figma renders per-child layoutAlign MIN/CENTER/MAX nowhere (deprecated); only STRETCH is real, accepted here as alignSelf: "stretch" for counter-axis fill. Set layout.alignItems on the parent to align every child, or wrap this child in a fill-sized frame with its own alignItems.';
 const CELL_ALIGN = { start: "MIN", end: "MAX", center: "CENTER", auto: "AUTO" } as const;
 export function childLayout(mode: LayoutMode, words: WriteLayout, absolute: boolean, subject: string): ChildLayout {
   const layout = normalizeChildLayoutAliases(words, mode, absolute, subject);

@@ -43,7 +43,7 @@ test("grid vocabulary round-trips through render/get/edit/editMany, with parent-
     const target = id(parent.children![0].id);
     for (const alignSelf of ["flex-start", "center", "flex-end", "auto", "start", "end"]) {
       const layout = { alignSelf } as never;
-      const reason = /layout\.alignItems.*parent.*every child.*absolute/;
+      const reason = /layout\.alignItems.*parent.*every child.*fill-sized frame.*alignItems/;
       await assert.rejects(edit(target, { layout }), reason);
       await assert.rejects(editMany([{ id: parent.children![0].id, layout }]), reason);
       await assert.rejects(render({ type: "FRAME", layout: { mode }, children: [{ type: "RECTANGLE", layout }] }), reason);

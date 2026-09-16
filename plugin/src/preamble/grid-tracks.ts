@@ -102,3 +102,9 @@ export function hugGridTracks(rows: number): GridTrack[] {
   return Array.from({ length: rows }, () => ({ type: "HUG" }) as GridTrack);
 }
 
+/** The author boundary uses one placement parser for canonical words and composed input aliases. */
+export function parseGridPlacement(raw: unknown, subject: string): { anchor?: number; span: number } {
+  const match = typeof raw === "string" ? /^(?:(\d+)(?: \/ span (\d+))?|span (\d+))$/.exec(raw.trim()) : null;
+  if (!match || match.slice(1).some(v => v !== undefined && (!Number.isSafeInteger(Number(v)) || Number(v) < 1))) throw new Error(subject + ' needs "N", "span N", or "N / span N".');
+  return { ...(match[1] ? { anchor: Number(match[1]) - 1 } : {}), span: Number(match[2] ?? match[3] ?? 1) };
+}
