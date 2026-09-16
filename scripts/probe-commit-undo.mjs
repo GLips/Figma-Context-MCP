@@ -183,7 +183,11 @@ const APPROVAL_WINDOW_MS = 10 * 60_000;
 let approvedOnce = false;
 
 async function exec(code) {
+  // Poll APPROVAL_STATUS, submit the code once — the same two-callback shape the real tool uses
+  // (code-mode-tools.ts). Handing this ONE callback polls by re-sending EXECUTE_CODE, so each
+  // scenario would run repeatedly and then read its own run's reply as an unexpected approval status.
   const reply = await requestUntilApproved(
+    (signal) => bridge.request({ type: "APPROVAL_STATUS" }, signal),
     () => bridge.request({ type: "EXECUTE_CODE", code, preamble: PREAMBLE }),
     { waitMs: APPROVAL_WINDOW_MS },
   );

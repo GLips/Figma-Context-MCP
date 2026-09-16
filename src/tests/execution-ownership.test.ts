@@ -53,7 +53,7 @@ describe("connection-owned execution", () => {
     bridge.stop();
     await oldCall;
   });
-  it("cancels on the originating socket and reports last queued phase with unconfirmed completion", async () => {
+  it("cancels on the originating socket and hedges only when nothing answers the cancellation", async () => {
     vi.useFakeTimers();
     const bridge = create({ requestTimeoutMs: 100 });
     const old = new Socket();
@@ -62,16 +62,62 @@ describe("connection-owned execution", () => {
       .request({ type: "EXECUTE_CODE", code: "x", preamble: "x" })
       .catch((e: unknown) => e);
     await Promise.resolve();
-    receive(bridge, old, { type: "RUN_STATE", runId: old.frames[0].id, phase: "queued" });
+    const id = old.frames[0].id as string;
+    // Submitted, never acknowledged: the inactivity deadline still covers a plugin that says nothing.
     const next = new Socket();
     install(bridge, next);
     await vi.advanceTimersByTimeAsync(100);
+    expect(old.frames.at(-1)).toMatchObject({ type: "CANCEL", runId: id });
+    // The displaced socket may not narrate the current connection's runs, so this answer is ignored
+    // and the caller falls back to the hedge — the one case where "unconfirmed" is the true word.
+    receive(bridge, old, { type: "CANCEL_RESULT", runId: id, disposition: "never-executed" });
+    await vi.advanceTimersByTimeAsync(1_000);
     const error = await call;
     expect(error).toBeInstanceOf(BridgeRequestError);
-    expect(error).toMatchObject({ outcome: "unconfirmed", phase: "queued" });
-    expect(String(error)).toContain("cancellation requested");
-    expect(old.frames.at(-1)).toMatchObject({ type: "CANCEL", runId: old.frames[0].id });
+    expect(error).toMatchObject({ outcome: "unconfirmed", phase: "submitted" });
+    expect(String(error)).toContain("did not confirm what became of the run");
     expect(next.frames).toEqual([]);
+  });
+  it("leaves a queued run to the run ceiling and rejects it as never executed", async () => {
+    vi.useFakeTimers();
+    const bridge = create({ requestTimeoutMs: 100, runCeilingMs: 600 });
+    const socket = new Socket();
+    install(bridge, socket);
+    const call = bridge
+      .request({ type: "EXECUTE_CODE", code: "x", preamble: "x" })
+      .catch((e: unknown) => e);
+    await Promise.resolve();
+    const id = socket.frames[0].id as string;
+    receive(bridge, socket, { type: "RUN_STATE", runId: id, phase: "queued" });
+    // Five times the inactivity deadline: a run waiting behind another one is not silence.
+    await vi.advanceTimersByTimeAsync(500);
+    expect(socket.frames.some((f) => f.type === "CANCEL")).toBe(false);
+    await vi.advanceTimersByTimeAsync(200);
+    expect(socket.frames.at(-1)).toMatchObject({ type: "CANCEL", runId: id });
+    receive(bridge, socket, { type: "CANCEL_RESULT", runId: id, disposition: "never-executed" });
+    const error = await call;
+    expect(error).toMatchObject({ outcome: "not-submitted", phase: "queued" });
+    expect(String(error)).toContain("run ceiling");
+    expect(String(error)).toContain("never executed");
+  });
+  it("deadlines a running run on inactivity and reports that its writes may have landed", async () => {
+    vi.useFakeTimers();
+    const bridge = create({ requestTimeoutMs: 100 });
+    const socket = new Socket();
+    install(bridge, socket);
+    const call = bridge
+      .request({ type: "EXECUTE_CODE", code: "x", preamble: "x" })
+      .catch((e: unknown) => e);
+    await Promise.resolve();
+    const id = socket.frames[0].id as string;
+    receive(bridge, socket, { type: "RUN_STATE", runId: id, phase: "queued" });
+    receive(bridge, socket, { type: "RUN_STATE", runId: id, phase: "running" });
+    await vi.advanceTimersByTimeAsync(100);
+    expect(socket.frames.at(-1)).toMatchObject({ type: "CANCEL", runId: id });
+    receive(bridge, socket, { type: "CANCEL_RESULT", runId: id, disposition: "was-running" });
+    const error = await call;
+    expect(error).toMatchObject({ outcome: "unconfirmed", phase: "running" });
+    expect(String(error)).toContain("was executing when it was cancelled");
   });
   it("caller abort removes tracking, sends one cancellation, and never submits through a cancelled handshake hold", async () => {
     const bridge = create();

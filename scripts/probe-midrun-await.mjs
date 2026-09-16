@@ -95,8 +95,12 @@ async function runProbe() {
     log(`sending the probe render — if the strip asks, click Allow (pairing code ${bridge.getPairingCode()})`);
 
     const runStart = Date.now();
-    const reply = await requestUntilApproved(() =>
-      bridge.request({ type: "EXECUTE_CODE", code: PROBE_CODE, preamble: PREAMBLE }),
+    // Poll APPROVAL_STATUS, submit the code once — the same two-callback shape the real tool uses
+    // (code-mode-tools.ts). Handing this ONE callback polls by re-sending EXECUTE_CODE, so the probe
+    // would execute repeatedly and then read its own run's reply as an unexpected approval status.
+    const reply = await requestUntilApproved(
+      (signal) => bridge.request({ type: "APPROVAL_STATUS" }, signal),
+      () => bridge.request({ type: "EXECUTE_CODE", code: PROBE_CODE, preamble: PREAMBLE }),
     );
     if (reply?.type === "PENDING_APPROVAL") {
       fail("the session was never approved — click Allow on the Framelink strip and re-run the probe.");

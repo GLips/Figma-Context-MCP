@@ -5,7 +5,7 @@ import { captureScreenshot, type CaptureOptions } from "./screenshot-capture.js"
 import { createApprovalLifecycle } from "./approval-lifecycle.js";
 import { safeSerialize, guardReturnValue, createReadEgress } from "./serialize.js";
 import { resolveScreenshotTarget, type ScreenshotTarget } from "./screenshot-target.js";
-import { createRunCancellationRegistry } from "./run-cancellation.js";
+import { createRunCancellationRegistry, type CancelDisposition } from "./run-cancellation.js";
 // TYPE-ONLY on purpose: this is the one shared declaration binding the host half of the flcm
 // interface to the preamble half, and it must stay erasable — a value import from preamble/ would
 // drag the whole std-lib back into this bundle, which is exactly what ADR-0010 removed.
@@ -46,7 +46,9 @@ figma.showUI(__html__, {
 //     either (and the server's MIN with it). v2 = the mid-run image protocol (plugin-issued
 //     IMAGES_REQUEST/IMAGES_REPLY + run-scoped CANCEL). v3 = the server ships the flcm std-lib
 //     (ADR-0010), and the host capabilities collapse into the one `__flcmHost` object. v6 = the host
-//     answers isRunFinished, so a runtime the agent stored past its reply refuses instead of writing.
+//     answers isRunFinished, so a runtime the agent stored past its reply refuses instead of writing,
+//     and every CANCEL is answered (CANCEL_RESULT) with what this plugin knew about the run — the
+//     server has no other way to tell a caller whether its cancelled run ever executed.
 //   • PLUGIN_VERSION — the plugin release, shown to the human in a skew refusal. Informational.
 const PROTOCOL_VERSION = 6;
 const PLUGIN_VERSION = "0.1.0";
@@ -173,6 +175,19 @@ function runState(to: ReplyTo, phase: "queued" | "running"): void {
   figma.ui.postMessage({ type: "RUN_STATE", runId: to.id, phase, __connKey: to.connKey });
 }
 
+/**
+ * The answer to a server CANCEL: what this plugin knew about the run when the frame landed. Like
+ * RUN_STATE it is run-scoped and id-less — CANCEL carries no correlation id, so this cannot ride the
+ * reply path — and like RUN_STATE it goes out on the connection the run belongs to.
+ */
+function cancelResult(
+  connKey: ConnKey | undefined,
+  runId: string,
+  disposition: CancelDisposition,
+): void {
+  figma.ui.postMessage({ type: "CANCEL_RESULT", runId, disposition, __connKey: connKey });
+}
+
 function reply(to: ReplyTo, body: Record<string, unknown>): void {
   figma.ui.postMessage({ ...body, id: to.id, __connKey: to.connKey });
 }
@@ -246,9 +261,26 @@ function settleImagesFetch(msg: InboundMessage): void {
   }
 }
 
-// Run cancellation (protocol 2's CANCEL made real). The policy and key semantics live on the
-// registry module — run-cancellation.ts — not here.
+// Run cancellation (protocol 2's CANCEL made real). The policy, the run phase it reads, and the key
+// semantics live on the registry module — run-cancellation.ts — not here.
 const cancelledRuns = createRunCancellationRegistry();
+
+/**
+ * Accept a run: track it from this moment — a run can be cancelled while it still sits in the queue —
+ * and tell its server. Phase transitions are announced and recorded together, in these two functions
+ * only: the server's copy of the phase drives its deadlines, ours answers its CANCELs, and a run
+ * whose two copies disagree is exactly how a caller gets told the wrong thing.
+ */
+function acceptRun(to: ReplyTo): void {
+  cancelledRuns.enqueue(to);
+  runState(to, "queued");
+}
+
+/** The run reached the front of the write chain and is about to touch the document. */
+function beginRun(to: ReplyTo): void {
+  cancelledRuns.markRunning(to);
+  runState(to, "running");
+}
 
 /** Reject matching pending image fetches. A rejected fetch kills its suspended run at the await —
  * the mechanism behind both CANCEL (deadline fired) and WS_CLOSED (server went away), and what
@@ -576,13 +608,17 @@ figma.ui.onmessage = (msg: InboundMessage) => {
       // persisted token.
       revokeSession(key);
     } else if (msg.type === "CANCEL") {
-      // The server's deadline fired for this run (id-less, run-scoped, one-way — the server-side
-      // mirror of SESSION_TOKEN's direction). Record it; every refusal point reads the registry
-      // (the full policy lives in run-cancellation.ts). Rejecting the pending image fetches below
-      // additionally kills a run suspended at its await right now.
+      // The server gave up on this run (id-less, run-scoped, one-way — the server-side mirror of
+      // SESSION_TOKEN's direction). Record it; every refusal point reads the registry (the full
+      // policy lives in run-cancellation.ts). Rejecting the pending image fetches below additionally
+      // kills a run suspended at its await right now.
+      //
+      // Answer FIRST, before the fetch rejections: the server is holding its caller for this one
+      // frame, and a queued run's own refusal cannot speak for it — that refusal only fires once the
+      // run ahead finishes, which may be long after the caller was told something.
       const runId = typeof msg.runId === "string" ? msg.runId : null;
       if (runId) {
-        cancelledRuns.recordCancellation(key, runId);
+        cancelResult(key, runId, cancelledRuns.recordCancellation(key, runId));
         rejectImagesFetches(
           (p) => p.runId === runId && p.connKey === key,
           "flcm: this run was cancelled by the server (its deadline passed) — the script stops here.",
@@ -649,17 +685,13 @@ figma.ui.onmessage = (msg: InboundMessage) => {
     // Sandbox-side gate (the consent Invariant's enforcement point): gateWrite runs the write only
     // for an approved session — otherwise it replies PENDING_APPROVAL and the write never reaches the
     // executor. Queued, not awaited here, so a second session's write can't interleave with this one.
-    // Accepted runs register with the cancellation registry from this moment (run-cancellation.ts) —
-    // a run can be cancelled while it still sits in the queue.
     if (gateWrite(to)) {
-      cancelledRuns.enqueue(to);
-      runState(to, "queued");
+      acceptRun(to);
       enqueueWrite(() => executeCode(to, typeof msg.code === "string" ? msg.code : "", preamble));
     }
   } else if (msg.type === "SCREENSHOT") {
     if (gateWrite(to)) {
-      cancelledRuns.enqueue(to);
-      runState(to, "queued");
+      acceptRun(to);
       enqueueWrite(() =>
         screenshot(
           to,
@@ -716,7 +748,9 @@ const STALE_RUNTIME_REFUSAL =
 async function executeCode(to: ReplyTo, code: string, preamble: string): Promise<void> {
   // The dequeue refusal — the queued-zombie case (run-cancellation.ts): a run cancelled while it
   // sat queued behind writeChain must not execute now, mutating a canvas the agent was told is
-  // unchanged. The refusal reply is harmless (the server already dropped the run's pending).
+  // unchanged. Nothing waits for this reply — the caller was answered the moment the CANCEL landed
+  // (cancelResult) — but the frozen envelope promises one reply per request, and the server files
+  // it as a late reply.
   if (cancelledRuns.takeCancellation(to)) {
     cancelledRuns.settle(to);
     reply(to, {
@@ -724,12 +758,12 @@ async function executeCode(to: ReplyTo, code: string, preamble: string): Promise
       result: null,
       console: [],
       errors:
-        "flcm: this run was cancelled by the server (its deadline passed while the run was queued) — no code was executed.",
+        "flcm: this run was cancelled by the server while it was still queued — no code was executed.",
     });
     return;
   }
   if (!gateWrite(to)) { cancelledRuns.settle(to); return; }
-  runState(to, "running");
+  beginRun(to);
   const traceStarted = Date.now();
   const trace = (stage: string, operation?: string) => {
     try {
@@ -871,12 +905,12 @@ async function screenshot(
     reply(to, {
       type: "SCREENSHOT_RESULT",
       errors:
-        "flcm: this run was cancelled by the server (its deadline passed while the run was queued) — no screenshot was taken.",
+        "flcm: this run was cancelled by the server while it was still queued — no screenshot was taken.",
     });
     return;
   }
   if (!gateWrite(to)) { cancelledRuns.settle(to); return; }
-  runState(to, "running");
+  beginRun(to);
   try {
     const node = await resolveScreenshotTarget(target);
     const bytes = await captureScreenshot(node, options, () => cancelledRuns.isCancelled(to));

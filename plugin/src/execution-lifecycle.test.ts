@@ -73,6 +73,34 @@ test("queued cancellation never executes, old settlement cannot cancel or erase 
   );
 });
 
+test("a cancel is answered at once from the phase the run had reached", async () => {
+  const h = host();
+  await h.connect(1);
+  let release!: () => void;
+  h.context.hold = new Promise<void>((resolve) => { release = resolve; });
+  const preamble = "(host)=>({ flcm: {}, session: host.getSession(() => ({})), mutationQueueIdle: async () => 0 })";
+  const run = (id: string, body: string) =>
+    h.send({ type: "EXECUTE_CODE", id, __connKey: 1, preamble, code: body });
+  run("executing", "await hold; return 1;");
+  run("waiting", "return 2;");
+  await flush();
+  // No flush between these and the assertion: the answer must come from state the plugin already
+  // holds. The queued run's own refusal can only speak once "executing" finishes — far too late.
+  h.send({ type: "CANCEL", runId: "waiting", __connKey: 1 });
+  h.send({ type: "CANCEL", runId: "executing", __connKey: 1 });
+  h.send({ type: "CANCEL", runId: "never-heard-of", __connKey: 1 });
+  assert.deepEqual(
+    h.frames.filter((f) => f.type === "CANCEL_RESULT").map((f) => [f.runId, f.disposition, f.__connKey]),
+    [
+      ["waiting", "never-executed", 1],
+      ["executing", "was-running", 1],
+      ["never-heard-of", "unknown", 1],
+    ],
+  );
+  release();
+  await flush();
+});
+
 test("Reject is explicit and unknown tokens cannot bypass approval status or execution", async () => {
   const h = host();
   await flush();

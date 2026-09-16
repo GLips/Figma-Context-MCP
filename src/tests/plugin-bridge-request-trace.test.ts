@@ -42,9 +42,12 @@ test("host checkpoints do not reset inactivity or resubmit; late result remains 
     });
   }
   await vi.advanceTimersByTimeAsync(20);
+  // The deadline's CANCEL is answered from the plugin's own phase, and that answer is what the
+  // caller's rejection is worded from (protocol 6).
+  receive({ type: "CANCEL_RESULT", runId: id, disposition: "was-running" });
   const error = await result;
   expect(error).toBeInstanceOf(Error);
-  expect((error as Error).message).toContain("Completion is unconfirmed");
+  expect((error as Error).message).toContain("was executing when it was cancelled");
   expect(sent.map((frame) => frame.type)).toEqual(["EXECUTE_CODE", "CANCEL"]);
   const replacement = { readyState: WebSocket.OPEN } as WebSocket;
   bridge["socket"] = replacement;
@@ -68,6 +71,7 @@ test("trace traffic cannot extend absolute ceiling; wrong socket cannot supply c
   receive({ type: "RUN_TRACE", runId: id, stage: "native-start" }, {} as WebSocket);
   receive({ type: "RUN_TRACE", runId: id, stage: "eval-start" });
   await vi.advanceTimersByTimeAsync(70);
+  receive({ type: "CANCEL_RESULT", runId: id, disposition: "was-running" });
   const error = await result;
   expect(error).toBeInstanceOf(Error);
   expect((error as Error).message).toContain("absolute 150ms");

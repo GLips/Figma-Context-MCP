@@ -36,7 +36,9 @@ import { z } from "zod";
 // plugin run. The preamble factory returns { flcm, session } for the agent wrapper.
 // v6: FlcmHost answers isRunFinished, so the runtime refuses a stale flcm kept across calls, and the
 // host drains the preamble's verb queue (mutationQueueIdle) before replying. A v5 plugin hands the
-// preamble no isRunFinished — every mutating verb would die on the missing method.
+// preamble no isRunFinished — every mutating verb would die on the missing method. The same version
+// answers every CANCEL with a CANCEL_RESULT naming what the run was doing, which is what lets a
+// cancelled caller be told "never executed" instead of the hedge (bridge.ts, cancelPending).
 export const MIN_PROTOCOL_VERSION = 6;
 
 /**

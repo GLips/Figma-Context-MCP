@@ -48,9 +48,21 @@ export type ImagesRequestHandler = (urls: string[]) => Promise<Record<string, st
 
 export type RequestPhase = "submitted" | "queued" | "running";
 
+/**
+ * What the plugin knew about a run when our CANCEL for it landed, as reported back on CANCEL_RESULT.
+ * The wire word is the plugin's (plugin/src/run-cancellation.ts); this is the server's copy of it,
+ * declared rather than imported because it arrives as untrusted JSON off a socket and is parsed here.
+ *
+ * `unknown` covers both halves of "the plugin cannot say": it answered that it isn't tracking the
+ * run, or it did not answer at all. Both mean the same thing to a caller, and both get the hedge.
+ */
+type CancelDisposition = "never-executed" | "was-running" | "unknown";
+
 export class BridgeRequestError extends Error {
   constructor(
     message: string,
+    // What the caller may DO about it, not where it happened: `not-submitted` means nothing ran and
+    // the call can be retried as-is; `unconfirmed` means the document may have been touched.
     readonly outcome: "not-submitted" | "unconfirmed",
     readonly phase?: RequestPhase,
   ) {
@@ -66,19 +78,21 @@ interface Pending {
   cleanup: () => void;
   resolve: (value: unknown) => void;
   reject: (err: Error) => void;
-  /** The inactivity deadline (see DEFAULT_TIMEOUT_MS) — suspended and re-armed by run traffic. */
-  timer: ReturnType<typeof setTimeout>;
+  /** The inactivity deadline (see DEFAULT_TIMEOUT_MS) — suspended and re-armed by run traffic, and
+   * null while the run is QUEUED, which is the one phase that isn't silence (armInactivityDeadline). */
+  timer: ReturnType<typeof setTimeout> | null;
   /** The absolute per-run ceiling (armed once, never reset by traffic — see DEFAULT_RUN_CEILING_MS). */
   ceilingTimer: ReturnType<typeof setTimeout>;
   /** The request's payload type: names what stalled in the timeout rejection, and gates which
    * pending ids the reverse direction will serve (only EXECUTE_CODE runs — see serveImagesRequest). */
-  payloadType: string;
+  payloadType: BridgeRequest["type"];
 }
 
 // The per-request INACTIVITY deadline, not a hard cap (protocol 2): run-scoped traffic — today,
 // servicing the run's mid-run image request — suspends and re-arms it (serveImagesRequest), so a
-// run only dies when neither side is doing its work. Injectable via the constructor so the
-// contract harness can drive timeouts without waiting out 15 real seconds.
+// run only dies when neither side is doing its work. It measures SILENCE, which is why a queued run
+// has none at all (armInactivityDeadline). Injectable via the constructor so the contract harness
+// can drive timeouts without waiting out 15 real seconds.
 const DEFAULT_TIMEOUT_MS = 15_000;
 
 // The message types the SERVER sends to establish a connection, before it knows what it is talking
@@ -104,6 +118,19 @@ const HANDSHAKE_REQUEST_TYPES = new Set<BridgeRequest["type"]>([
 // 60s budget in the common (already-approved) case; a run that genuinely needs longer should split
 // its work. await-approval.ts reasons against this number — keep them in sync.
 const DEFAULT_RUN_CEILING_MS = 45_000;
+
+// How long the caller's rejection waits for the plugin's CANCEL_RESULT before falling back to the
+// hedged "completion is unconfirmed" text. The plugin answers from state it already holds — no canvas
+// work, no await — so the honest cost is one postMessage hop plus one socket hop; a second is orders
+// of magnitude more than that, and invisible beside the deadline that just expired. What actually
+// spends it is a plugin that CAN'T answer (socket dying, main thread wedged), which is precisely the
+// case where the hedge is the true statement.
+const CANCEL_ANSWER_MS = 1_000;
+
+// The request types the plugin tracks as RUNS, and therefore the only ones whose cancellation it can
+// answer for. Everything else (handshake, approval polling) never reaches the document, so its
+// cancellation rejects on the spot rather than paying a round trip to be told `unknown`.
+const RUN_REQUEST_TYPES = new Set<BridgeRequest["type"]>(["EXECUTE_CODE", "SCREENSHOT"]);
 
 // How many IMAGES_REQUEST services one run may have in flight at once. The shipped preamble can
 // only ever have ONE in flight — every mutating verb's image fetch runs inside its serialized
@@ -184,7 +211,8 @@ function isAllowedOrigin(origin: string | undefined): boolean {
  * without a matching pending id are dropped. This is where the plan's "every WS
  * request carries a correlation id" invariant is enforced — callers never deal with
  * ids themselves. Two server→plugin frames live OUTSIDE it by design: the id-less
- * one-way CANCEL on timeout, and IMAGES_REPLY/IMAGES_ERROR, which answer the PLUGIN's
+ * CANCEL on timeout (whose own answer, CANCEL_RESULT, comes back run-scoped rather than
+ * correlated), and IMAGES_REPLY/IMAGES_ERROR, which answer the PLUGIN's
  * ids (protocol 2's reverse direction, serveImagesRequest).
  *
  * It is also where the version gate lives: every connection runs its own GET_VERSION handshake, and
@@ -197,6 +225,13 @@ export class PluginBridge {
     Logger.log("Bridge trace " + JSON.stringify(event)),
   );
   private pending = new Map<string, Pending>();
+  // Runs whose CANCEL is on the wire with the caller's rejection held for one round trip, keyed by
+  // run id. They are no longer `pending` — the run is dead to the rest of the bridge the instant it
+  // is cancelled; all that is outstanding is which SENTENCE the caller gets (see cancelPending).
+  private readonly cancelsAwaitingAnswer = new Map<
+    string,
+    { socket: WebSocket; settle: (disposition: CancelDisposition) => void }
+  >();
   private disconnectedAt: number | null = null;
   // Where the CURRENT connection stands with the version handshake, and the refusal text when it came
   // back under the minimum. Connection-scoped on purpose: reset to `checking` the moment a socket is
@@ -264,6 +299,9 @@ export class PluginBridge {
   // stopped bridge would come back to life when the timer fired — binding the port it was just told to
   // release and reloading the persisted token onto an object the caller believes is dead.
   private reclaimTimer: ReturnType<typeof setTimeout> | null = null;
+  // The port this probe has already announced a reclaim wait for, so the ~20 retries inside one
+  // window say it once. Also what tells the giving-up branch that anyone was waiting.
+  private reclaimWaitPort: number | null = null;
   // Whether `stop()` has run without a `start()` since. Every step of the probe checks it, because a
   // probe is spread across three turns of the event loop — the retry timer, the `tryBind` call it
   // makes, and the `listening` callback for a bind libuv has already accepted — and `stop()` can land
@@ -331,6 +369,7 @@ export class PluginBridge {
   start(ports: number[], onConnect?: () => void): void {
     this.stopped = false;
     this.reclaimDeadline = Date.now() + this.reclaimWindowMs;
+    this.reclaimWaitPort = null;
     this.tryBind(ports, 0, onConnect);
   }
 
@@ -389,16 +428,25 @@ export class PluginBridge {
         if (this.shouldWaitToReclaim(port)) {
           // Re-probe the SAME index rather than advancing: the holder is very likely the dying
           // predecessor of this very server, and landing elsewhere would silently cost the human a
-          // fresh Allow. unref'd so a server whose port never frees can't hold the process open, and
-          // retained so `stop()` can cancel it rather than leaving a discarded bridge to rebind on a
-          // later tick (`stopped` covers the rest of that hazard).
+          // fresh Allow. Retained so `stop()` can cancel it rather than leaving a discarded bridge to
+          // rebind on a later tick (`stopped` covers the rest of that hazard).
+          //
+          // REFERENCED, not unref'd: this bridge holds no port and no socket while it waits, so an
+          // unref'd timer is the only handle keeping a process whose sole job is the bridge (a probe
+          // script) alive — it exited here in under a second, code 0, silent. The wait is bounded by
+          // the reclaim budget (~2s) and cancelled by stop(), so holding the loop open costs a server
+          // nothing it wasn't already paying to acquire its port.
+          this.announceReclaimWait(port);
           this.reclaimTimer = setTimeout(() => {
             this.reclaimTimer = null;
             this.tryBind(ports, index, onConnect);
           }, RECLAIM_RETRY_MS);
-          this.reclaimTimer.unref();
           return;
         }
+        if (this.reclaimWaitPort === port)
+          Logger.log(
+            `Port ${port} is still held after the ${this.reclaimWindowMs}ms reclaim window — advancing to the next port in the block. The plugin scans the whole block, so it will still find this server; a prior approval keyed to port ${port} will not be reloaded.`,
+          );
         this.tryBind(ports, index + 1, onConnect);
         return;
       }
@@ -502,6 +550,9 @@ export class PluginBridge {
           "Figma plugin disconnected before replying. Completion is unconfirmed; inspect affected nodes before retrying.",
           socket,
         );
+        // Anything cancelled on this socket has lost the only mouth that could answer it — say so now
+        // rather than holding its caller for a round trip that cannot complete.
+        this.failCancelAnswers(socket);
         Logger.log("Plugin disconnected from WS bridge");
       });
 
@@ -510,6 +561,7 @@ export class PluginBridge {
         // newcomer, so the `this.socket === socket` guard there leaves the new slot intact.
         Logger.log("Reclaiming WS slot from a non-handshaked holder for a new connection");
         this.failPending("Figma connection replaced. Completion is unconfirmed.", stale);
+        this.failCancelAnswers(stale);
         stale.terminate();
       }
       Logger.log("Plugin connected to WS bridge");
@@ -538,6 +590,23 @@ export class PluginBridge {
   private shouldWaitToReclaim(port: number): boolean {
     const now = Date.now();
     return now < this.reclaimDeadline && this.store.hasUnexpiredApproval(port, now);
+  }
+
+  /**
+   * Say, once per waited-on port, that startup is paused and what a human can do about it. The wait
+   * is invisible otherwise — no port bound, no connection, nothing on stdout — and the case it most
+   * often hits is a SECOND process from the same cwd (a probe script started while the MCP server
+   * runs), where "nothing happened" is indistinguishable from a broken script.
+   */
+  private announceReclaimWait(port: number): void {
+    if (this.reclaimWaitPort === port) return;
+    this.reclaimWaitPort = port;
+    Logger.log(
+      `Port ${port} is busy and this project holds an approval for it — waiting up to ${this.reclaimWindowMs}ms ` +
+        `to reclaim it (normally this server's own restarting predecessor). If another Framelink server ` +
+        `or probe is holding the port, stop it, or give this process its own state with ` +
+        `FRAMELINK_STATE_DIR=<an isolated dir> so it advances to a free port immediately.`,
+    );
   }
 
   /**
@@ -679,6 +748,7 @@ export class PluginBridge {
     this.reclaimTimer = null;
     this.reclaimDeadline = 0;
     this.failPending("Bridge stopped. Completion is unconfirmed.");
+    this.failCancelAnswers();
     this.socket?.terminate();
     this.socket = null;
     // Nulling the socket makes the terminate()-driven `close` bail as "displaced", so it never runs
@@ -714,7 +784,7 @@ export class PluginBridge {
     const pending = this.pending.get(id);
     if (!pending) return undefined;
     pending.cleanup();
-    clearTimeout(pending.timer);
+    clearTimeout(pending.timer ?? undefined);
     clearTimeout(pending.ceilingTimer);
     this.pending.delete(id);
     this.inFlightImageServices.delete(id);
@@ -767,22 +837,45 @@ export class PluginBridge {
     return new Promise((resolve, reject) => {
       const cancel = () => this.cancelPending(id, "caller cancelled");
       signal?.addEventListener("abort", cancel, { once: true });
-      this.pending.set(id, {
+      const pending: Pending = {
         socket,
         phase: "submitted",
         startedAt: Date.now(),
         cleanup: () => signal?.removeEventListener("abort", cancel),
         resolve,
         reject,
-        timer: setTimeout(() => this.timeoutPending(id, "inactivity"), this.requestTimeoutMs),
+        timer: null,
         ceilingTimer: setTimeout(() => this.timeoutPending(id, "ceiling"), this.runCeilingMs),
         payloadType: payload.type,
-      });
+      };
+      this.pending.set(id, pending);
+      // Armed through the same helper every later phase change uses, so "when does this request have
+      // an inactivity deadline" is answered in exactly one place.
+      this.armInactivityDeadline(id, pending);
       if (payload.type === "EXECUTE_CODE") this.trace.start(id, socket);
       // `id` last: the generated correlation id is authoritative and a payload field
       // must never overwrite it, or the reply could never be matched to this pending.
       socket.send(JSON.stringify({ ...payload, id }));
     });
+  }
+
+  /**
+   * (Re)arm a pending request's inactivity deadline — or leave it deliberately disarmed while the run
+   * is QUEUED.
+   *
+   * A queued run is not silent, it is WAITING: the plugin serializes writes, so a run sitting behind
+   * a slower one produces no traffic for as long as that one takes, and a clock started there
+   * measures the run ahead rather than anything wrong. The absolute run ceiling still bounds it, and
+   * that is the right bound — the caller's own budget, not a guess about silence. Every other state
+   * is real silence and is deadlined: `submitted` (the plugin has not even acknowledged the request)
+   * and `running` (the plugin is the side working, so it owes us progress).
+   */
+  private armInactivityDeadline(id: string, pending: Pending): void {
+    clearTimeout(pending.timer ?? undefined);
+    pending.timer =
+      pending.phase === "queued"
+        ? null
+        : setTimeout(() => this.timeoutPending(id, "inactivity"), this.requestTimeoutMs);
   }
 
   /**
@@ -793,9 +886,10 @@ export class PluginBridge {
    * lock, plan invariant 4), and a run suspended at its image await has that await rejected. The
    * zombie-refusal in serveImagesRequest stays the server's own half (image requests naming a
    * dead run are refused). Don't add a second enforcement path here; the lock owns it. The frame
-   * is a run-scoped, id-less one-way notification — the reverse mirror of the plugin's
-   * SESSION_TOKEN/REVOKE_SESSION — and deliberately not a request: a CANCEL that awaited a reply
-   * could itself time out and cancel, recursively.
+   * is a run-scoped, id-less notification — the reverse mirror of the plugin's
+   * SESSION_TOKEN/REVOKE_SESSION — and deliberately not a `request()`: a CANCEL that awaited a
+   * correlated reply could itself time out and cancel, recursively. Its answer (CANCEL_RESULT) comes
+   * back the same way, run-scoped and id-less, on its own short bound — see cancelPending.
    */
   private timeoutPending(id: string, cause: "inactivity" | "ceiling"): void {
     const why =
@@ -812,23 +906,63 @@ export class PluginBridge {
     this.cancelPending(id, why);
   }
 
+  /**
+   * Cancel a request and reject its caller with the most definitive sentence available.
+   *
+   * The run dies here — it leaves `pending`, so images naming it are refused and no reply can settle
+   * it. What is held for one round trip is only the WORDING: the plugin knows, from state it already
+   * has, whether the run had started, and "never executed; retry as-is" and "was executing; inspect
+   * the canvas" are different instructions to the agent reading them. A queued run cannot say this
+   * for itself — its own dequeue refusal fires only after the run ahead of it finishes, which is the
+   * very delay the deadline just gave up on.
+   */
   private cancelPending(id: string, why: string): void {
     const pending = this.takePending(id);
     if (!pending) return;
-    if (why === "caller cancelled") this.trace.record(id, pending.socket, "caller-cancelled");
-    if (pending.socket.readyState === WebSocket.OPEN) {
-      pending.socket.send(JSON.stringify({ type: "CANCEL", runId: id }));
+    const callerWithdrew = why === "caller cancelled";
+    if (callerWithdrew) this.trace.record(id, pending.socket, "caller-cancelled");
+    const open = pending.socket.readyState === WebSocket.OPEN;
+    if (open) pending.socket.send(JSON.stringify({ type: "CANCEL", runId: id }));
+    const reject = (disposition: CancelDisposition): void =>
+      pending.reject(cancelRejection(id, pending, why, disposition));
+    // Three requests have no answer worth waiting for: one on a dead socket (nothing can reply), a
+    // non-run one (the plugin tracks no phase for it, so the answer is `unknown` by construction),
+    // and one the CALLER withdrew — it asked to stop and is no longer reading, so a round trip
+    // would only delay a rejection nobody is waiting on. Only a deadline has a live caller owed a
+    // sentence, and only that case pays for one.
+    if (!open || callerWithdrew || !RUN_REQUEST_TYPES.has(pending.payloadType)) {
+      reject("unknown");
+      return;
     }
-    pending.reject(
-      new BridgeRequestError(
-        `Bridge request ${id} (${pending.payloadType}, last phase ${pending.phase}, ${Date.now() - pending.startedAt}ms) ${why}. ` +
-          (pending.payloadType === "APPROVAL_STATUS"
-            ? "Approval status was not received; no code was submitted."
-            : "Completion is unconfirmed; cancellation requested. Raw code may still finish. Inspect affected nodes before retrying."),
-        pending.payloadType === "APPROVAL_STATUS" ? "not-submitted" : "unconfirmed",
-        pending.phase,
-      ),
-    );
+    const giveUp = setTimeout(() => this.settleCancelAnswer(id, "unknown"), CANCEL_ANSWER_MS);
+    this.cancelsAwaitingAnswer.set(id, {
+      socket: pending.socket,
+      settle: (disposition) => {
+        clearTimeout(giveUp);
+        reject(disposition);
+      },
+    });
+  }
+
+  /**
+   * Deliver the plugin's cancel answer (or the fallback) to the caller waiting on it, once. Answers
+   * arriving on a socket other than the one the CANCEL went out on are dropped: a displaced holder
+   * carries live run ids and must not narrate the current connection's runs.
+   */
+  private settleCancelAnswer(id: string, disposition: CancelDisposition, socket?: WebSocket): void {
+    const awaiting = this.cancelsAwaitingAnswer.get(id);
+    if (!awaiting || (socket && awaiting.socket !== socket)) return;
+    this.cancelsAwaitingAnswer.delete(id);
+    Logger.log(`Bridge request ${id}: cancelled, plugin reports ${disposition}`);
+    awaiting.settle(disposition);
+  }
+
+  /** Settle every cancel still waiting on an answer that can no longer arrive — its socket died, or
+   * the bridge stopped. Without this the caller waits out the full CANCEL_ANSWER_MS for a plugin
+   * that is provably gone. */
+  private failCancelAnswers(socket?: WebSocket): void {
+    for (const [id, awaiting] of this.cancelsAwaitingAnswer)
+      if (!socket || awaiting.socket === socket) this.settleCancelAnswer(id, "unknown");
   }
 
   disconnectedDurationMs(): number | null {
@@ -845,6 +979,7 @@ export class PluginBridge {
       runId?: unknown;
       urls?: unknown;
       phase?: unknown;
+      disposition?: unknown;
       stage?: unknown;
       elapsedMs?: unknown;
       operation?: unknown;
@@ -901,12 +1036,20 @@ export class PluginBridge {
         Logger.log(
           `Bridge request ${msg.runId}: ${msg.phase} after ${Date.now() - run.startedAt}ms`,
         );
-        clearTimeout(run.timer);
-        run.timer = setTimeout(
-          () => this.timeoutPending(msg.runId as string, "inactivity"),
-          this.requestTimeoutMs,
-        );
+        this.armInactivityDeadline(msg.runId, run);
       }
+      return;
+    }
+    // The plugin's answer to a CANCEL we sent: run-scoped and id-less, so it dispatches by type here
+    // beside RUN_STATE rather than through the correlated-reply path (the run it names left `pending`
+    // the moment it was cancelled). Parsed strictly — an unrecognized word is untrusted JSON, and
+    // reads as "the plugin cannot say", which is what the hedge exists for.
+    if (msg.type === "CANCEL_RESULT" && typeof msg.runId === "string") {
+      const disposition =
+        msg.disposition === "never-executed" || msg.disposition === "was-running"
+          ? msg.disposition
+          : "unknown";
+      this.settleCancelAnswer(msg.runId, disposition, socket);
       return;
     }
     if (typeof msg.id !== "string" || this.pending.get(msg.id)?.socket !== socket) return;
@@ -1005,7 +1148,8 @@ export class PluginBridge {
       return;
     }
     this.inFlightImageServices.set(runId, inFlight + 1);
-    clearTimeout(run.timer); // suspend: the server is the side working now
+    clearTimeout(run.timer ?? undefined); // suspend: the server is the side working now
+    run.timer = null;
     // Re-arm only when the LAST in-flight service settles — with concurrent services, the first
     // reply must not restart the run's clock while a second fetch is still the server's work.
     const settleService = (): void => {
@@ -1018,7 +1162,7 @@ export class PluginBridge {
       this.inFlightImageServices.delete(runId);
       // A live count implies the run is still pending (counts only exist for pending runs, and
       // ids are never reused), so re-arming the captured `run` directly is safe.
-      run.timer = setTimeout(() => this.timeoutPending(runId, "inactivity"), this.requestTimeoutMs);
+      this.armInactivityDeadline(runId, run);
     };
     void this.imagesRequestHandler(urls)
       .then((images) => {
@@ -1037,6 +1181,52 @@ export class PluginBridge {
       })
       .finally(settleService);
   }
+}
+
+/**
+ * The caller's rejection for a cancelled request, worded from the plugin's own answer.
+ *
+ * Every sentence here is an instruction to an agent, so the hedge is expensive: told "completion is
+ * unconfirmed, inspect affected nodes" about a run that never started, an agent goes reading a canvas
+ * nothing touched, and may decline to retry work that was never done. The hedge is kept for exactly
+ * the case that earns it — a plugin that could not tell us.
+ */
+function cancelRejection(
+  id: string,
+  pending: Pending,
+  why: string,
+  disposition: CancelDisposition,
+): BridgeRequestError {
+  const head = `Bridge request ${id} (${pending.payloadType}, last phase ${pending.phase}, ${Date.now() - pending.startedAt}ms) ${why}. `;
+  if (pending.payloadType === "APPROVAL_STATUS")
+    return new BridgeRequestError(
+      head + "Approval status was not received; no code was submitted.",
+      "not-submitted",
+      pending.phase,
+    );
+  if (disposition === "never-executed")
+    return new BridgeRequestError(
+      head +
+        "The plugin confirms this run never executed — it was still queued behind another one, and " +
+        "the queue will skip it. Nothing on the canvas changed; retry as-is.",
+      "not-submitted",
+      pending.phase,
+    );
+  if (disposition === "was-running")
+    return new BridgeRequestError(
+      head +
+        "The plugin confirms this run was executing when it was cancelled, so writes before the " +
+        "cancellation landed. Inspect affected nodes before retrying.",
+      "unconfirmed",
+      pending.phase,
+    );
+  return new BridgeRequestError(
+    head +
+      "Completion is unconfirmed: cancellation was requested and the plugin did not confirm what " +
+      "became of the run. Raw code may still finish. Inspect affected nodes before retrying.",
+    "unconfirmed",
+    pending.phase,
+  );
 }
 
 /** Abort a local hold without leaving listeners behind when its gate settles. */

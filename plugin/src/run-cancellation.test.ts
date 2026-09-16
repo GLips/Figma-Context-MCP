@@ -5,13 +5,25 @@ import { createRunCancellationRegistry } from "./run-cancellation.js";
 test("cancel refuses a queued run once and releases all tracking on settlement", () => {
   const runs = createRunCancellationRegistry();
   const ref = { connKey: 1, id: "run" };
-  runs.enqueue(ref); runs.recordCancellation(1, "run");
+  runs.enqueue(ref);
+  assert.equal(runs.recordCancellation(1, "run"), "never-executed");
   assert.equal(runs.isCancelled(ref), true);
   assert.equal(runs.takeCancellation(ref), true);
   assert.equal(runs.takeCancellation(ref), false);
   runs.settle(ref);
-  runs.recordCancellation(1, "run");
+  assert.equal(runs.recordCancellation(1, "run"), "unknown");
   assert.equal(runs.isCancelled(ref), false);
+});
+
+test("the cancel answer names the phase the run had actually reached", () => {
+  const runs = createRunCancellationRegistry();
+  const ref = { connKey: 1, id: "run" };
+  assert.equal(runs.recordCancellation(1, "never-seen"), "unknown");
+  runs.enqueue(ref);
+  runs.markRunning(ref);
+  assert.equal(runs.recordCancellation(1, "run"), "was-running");
+  // Answering a cancel does not consume it: the mutation lock reads this to refuse the next verb.
+  assert.equal(runs.isCancelled(ref), true);
 });
 
 test("old settlement cannot erase replacement tracking with the same request id", () => {

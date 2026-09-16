@@ -741,10 +741,16 @@ const heldWrite = reclaimBridge
   .then((r) => { heldSettled = true; return r; }, (e) => { heldSettled = true; return e; });
 await wait(50);
 assert.equal(heldSettled, false, "the write is held, not sent, while the holder's protocol is unknown");
-const takeover = fakePlugin("null", { url: reclaimUrl, state: reclaimState });
+// The newcomer holds its VERSION answer back for 300ms on purpose: the held write is released the
+// instant that verdict lands, so introducing and approving the session INSIDE that window is what
+// makes this test about the hold rather than about which round trip happens to finish first. (Both
+// SESSION_INFO and the Allow handover ride past the compatibility gate — a handshake message and an
+// unsolicited one — so neither needs the verdict this write is waiting for.)
+const takeover = fakePlugin("null", { url: reclaimUrl, state: reclaimState, versionDelayMs: 300 });
 await new Promise((res) => takeover.on("open", res));
 await reclaimBridge.request({ type: "SESSION_INFO", identity: SESSION_IDENTITY, pairingCode: reclaimBridge.getPairingCode(), sessionToken: reclaimBridge.getSessionToken() });
 takeover.allow();
+await wait(50); // let the Allow handover land before the verdict releases the write
 const heldResult = await Promise.race([heldWrite, wait(1500).then(() => "HUNG")]);
 assert.notEqual(heldResult, "HUNG", "a write held across a slot reclaim must not hang — the reclaim settles the old gate");
 assert.equal(heldResult.result, "ok", "it runs against the plugin that took the slot");
@@ -935,11 +941,14 @@ assert.deepEqual(
 );
 console.log(`✅ ui.html WS_PORT_BLOCK mirrors config's WS_PORT_BLOCK exactly (${WS_PORT_BLOCK.length} ports)`);
 
-// --- Phase 1 (edit surface): timeout policy — cancel, never abandon ---
+// --- Phase 1 (edit surface): timeout policy — cancel, never abandon; the cancel is ANSWERED ---
 // A run that stalls (no reply, no run traffic) is CANCELLED, not abandoned: the server emits a
 // run-scoped, id-less CANCEL frame so the plugin rejects the run's pending awaits (a timed-out run
-// must never resume and mutate), then rejects the caller. Driven with a short-deadline bridge and a
-// plugin that goes silent on EXECUTE_CODE.
+// must never resume and mutate), then rejects the caller. The plugin answers that CANCEL from what it
+// already knows (CANCEL_RESULT, protocol 6) and the caller's rejection is worded from the answer —
+// "never executed; retry as-is" is a different instruction than "inspect the canvas", and only the
+// plugin can tell them apart. Driven with a short-deadline bridge and a plugin that goes silent on
+// the run itself but still answers its cancellation, as a real queued run does.
 const PORT_T = 19895;
 const bridgeT = new PluginBridge(isolatedStore(), { requestTimeoutMs: 400 });
 bridgeT.start([PORT_T]);
@@ -949,7 +958,9 @@ const silent = new WebSocket(`ws://127.0.0.1:${PORT_T}`, { origin: "null" });
 silent.on("message", (raw) => {
   const msg = JSON.parse(raw.toString());
   framesT.push(msg);
-  answerVersionHandshake(silent, msg); // current, just silent on the run itself
+  if (answerVersionHandshake(silent, msg)) return; // current, just silent on the run itself
+  if (msg.type === "CANCEL")
+    silent.send(JSON.stringify({ type: "CANCEL_RESULT", runId: msg.runId, disposition: "never-executed" }));
 });
 await new Promise((res) => silent.on("open", res));
 const tStall = Date.now();
@@ -961,13 +972,15 @@ try {
 }
 assert.ok(timeoutErr && /no traffic/.test(timeoutErr.message), "a stalled run rejects with the inactivity message");
 assert.ok(Date.now() - tStall < 2000, "the injected short deadline fired, not the 15s default");
+assert.ok(/never executed/.test(timeoutErr.message), "the rejection is worded from the plugin's cancel answer, not hedged");
+assert.equal(timeoutErr.outcome, "not-submitted", "a run the plugin says never executed is safe to retry");
 await wait(50);
 const cancelFrame = framesT.find((f) => f.type === "CANCEL");
 const stalledExecute = framesT.find((f) => f.type === "EXECUTE_CODE");
 assert.ok(cancelFrame, "a timed-out run emits a CANCEL frame to the plugin");
 assert.equal(cancelFrame.runId, stalledExecute.id, "the CANCEL is scoped to the stalled run's id");
 assert.equal(cancelFrame.id, undefined, "CANCEL is id-less — a one-way notification, never a request");
-console.log("✅ A stalled run is cancelled (run-scoped, id-less CANCEL), then rejected");
+console.log("✅ A stalled run is cancelled (run-scoped, id-less CANCEL) and rejected with the plugin's own answer");
 silent.close();
 bridgeT.stop();
 await wait(150);
