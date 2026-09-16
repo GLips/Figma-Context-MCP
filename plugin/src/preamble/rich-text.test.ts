@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
 
 import { render } from "./render.js";
+import { get } from "./read.js";
 import { resolveFontStrict } from "./fonts.js";
 
 createFigmaMock();
@@ -13,6 +14,15 @@ test("a plain string renders its content and base style", async () => {
   const node = await figma.getNodeByIdAsync(out.id);
   assert.equal(node.characters, "hello");
   assert.equal(node.fontSize, 14);
+});
+
+test('an empty text reads back as text: "" — the write word, returned', async () => {
+  const out = await render({ type: "FRAME", width: 100, height: 40, layout: { mode: "column" }, children: [{ type: "TEXT", text: "" }] });
+  const read = (await get(out)).node;
+  assert.equal(read.children[0].text, "");
+  // The round trip is the point: re-authoring the read must rebuild the same empty node.
+  const echoed = await render(JSON.parse(JSON.stringify(read, (key, value) => (key === "id" ? undefined : value))));
+  assert.equal((await get(echoed)).node.children[0].text, "");
 });
 
 test("a runs array builds one node whose characters are the concatenation", async () => {

@@ -307,8 +307,14 @@ export function buildFormattedText(
   registerStyle: RegisterRunStyle,
 ): BuildFormattedTextResult {
   const text = node.text;
-  if (!text || text.characters.length === 0) {
+  if (!text) {
     return {};
+  }
+  // An empty TEXT is CONTENT, not an omittable default: `text: ""` is accepted on the write side, so
+  // the read has to hand it back or a round-trip silently turns an empty label into no label at all
+  // — and an agent scanning for `text === ""` finds a node with no `text` key instead.
+  if (text.characters.length === 0) {
+    return { text: "" };
   }
 
   const perLineRuns = text.lines;

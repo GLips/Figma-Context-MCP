@@ -319,8 +319,9 @@ describe("buildFormattedText — cross-node dedup and edge cases", () => {
 
   it("handles an empty text node", async () => {
     const { nodes } = await extract([makeText({ characters: "" })]);
-    // Empty text: no `text` field is set on the result.
-    expect(nodes[0].text).toBeUndefined();
+    // An empty TEXT reads back as empty, not as absent: the write word is `text: ""`, and read/write
+    // parity is what lets an agent search its own tree for the empty ones.
+    expect(nodes[0].text).toBe("");
     expect(nodes[0].boldWeight).toBeUndefined();
   });
 });
