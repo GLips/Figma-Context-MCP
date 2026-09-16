@@ -124,3 +124,15 @@ test("hidden nodes report visible false in get, predicates and slim handles", as
   assert.equal(hits.length, 1);
   assert.equal(hits[0].visible, false);
 });
+
+test("warnings are stripped from placement specs and edit deltas", async () => {
+  const { figma, wire } = setup();
+  const r = await flcm.render({ type: "FRAME", width: 100, height: 100 });
+  const diagnostic = { id: r.id, message: "stale diagnostic" };
+  const moved = await flcm.render({ ...r, warnings: [diagnostic] });
+  assert.equal(moved.warnings, undefined);
+  const edited = await flcm.edit(r, { opacity: 0.5, warnings: [diagnostic] } as any);
+  assert.equal(edited.warnings, undefined);
+  assert.equal((await figma.getNodeByIdAsync(r.id)).opacity, 0.5);
+  assert.equal(wire(edited).warnings, undefined);
+});

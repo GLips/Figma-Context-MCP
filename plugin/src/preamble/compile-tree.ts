@@ -48,6 +48,7 @@ export function compileTree(input: unknown, subject: string): WriteNode {
       if (keys.has(src.key)) throw new Error(at + ".key: duplicate key " + JSON.stringify(src.key) + ".");
       keys.add(src.key);
     }
+    delete src.warnings;
     const { id, type, children: readChildren, ...words } = src;
     // Inherited instance layers are edited through path overrides; they cannot be moved as children.
     const liftedChildEdits = type === "INSTANCE" ? liftInheritedChildEdits(id, readChildren, at) : undefined;
@@ -84,7 +85,7 @@ export function compileTree(input: unknown, subject: string): WriteNode {
           case "VECTOR": {
             if ([props.svg, props.d, props.vectorPaths].filter(value => value !== undefined).length !== 1) throw new Error("VECTOR needs exactly one of svg (markup), d (path data), or vectorPaths.");
             if (props.svg !== undefined) { const { svg, ...rest } = props; tree = compileSvg(svg, rest as SvgProps); }
-            else tree = compilePath(props as PathProps, at);
+            else tree = compilePath(props as PathProps);
             break;
           }
           default: throw new Error("type must be FRAME, TEXT, RECTANGLE, ELLIPSE, LINE, VECTOR, or INSTANCE. " + CLONE_REMEDY);
@@ -103,7 +104,7 @@ export function readyNodeWords(src: Record<string, unknown>, subject: string): R
   const out: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(src)) {
     // These records describe a read, never an authored change. Omission preserves live children.
-    if (key === "readOnlySource" || key === "elided") continue;
+    if (key === "readOnlySource" || key === "elided" || key === "warnings") continue;
     const disposition = own(READ_FIELD_DISPOSITIONS, key);
     if (value != null && disposition) throw refuse(subject, key, disposition.refuse);
     out[key] = readyAuthoredValue(key, value, subject);

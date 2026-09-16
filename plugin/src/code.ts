@@ -784,7 +784,10 @@ async function executeCode(to: ReplyTo, code: string, preamble: string): Promise
   // call is serialized through the same node-aware serializer as the result, so
   // logging a live node yields `{id,name,type}` instead of an opaque failure.
   const capture = (level: string) => (...args: unknown[]) => {
-    consoleLog.push(`[${level}] ${args.map((a) => stringifyArg(egress.project(a))).join(" ")}`);
+    try {
+      consoleLog.push(`[${level}] ${args.map((a) => stringifyArg(egress.project(a))).join(" ")}`);
+      runtime?.warnings.commitEgress();
+    } finally { runtime?.warnings.discardEgress(); }
   };
   console.log = capture("log");
   console.info = capture("info");
@@ -821,9 +824,9 @@ async function executeCode(to: ReplyTo, code: string, preamble: string): Promise
     // refuses would change execution, so it goes quiet instead.
     const host: FlcmHost = {
       getSession: (initialize) => agentSession ??= initialize(),
-      registerRead: (value, project) => {
+      registerRead: (value, project, decorate) => {
         if (settled) throw new Error(STALE_RUNTIME_REFUSAL);
-        egress.registerRead(value, project);
+        egress.registerRead(value, project, decorate);
       },
       traceNative: (stage, operation) => { if (!settled) trace(stage, operation); },
       requestImages: (urls: string[]) =>
@@ -848,9 +851,11 @@ async function executeCode(to: ReplyTo, code: string, preamble: string): Promise
     // { id } and silently drop everything else. Make that loud instead of lossy.
     guardReturnValue(raw);
     result = safeSerialize(egress.project(raw));
+    runtime.warnings.commitEgress();
     // Session capture is optional; its narrower data contract must not reject a valid wire result.
     try { session.last = raw; } catch { session.last = undefined; }
   } catch (err) {
+    runtime?.warnings.discardEgress();
     errorMessage = formatError(err);
   } finally {
     // Drain before anything else in here, and the order of the three is load-bearing:
@@ -870,13 +875,14 @@ async function executeCode(to: ReplyTo, code: string, preamble: string): Promise
     cancelledRuns.settle(to);
   }
   if (landedAfterReturn > 0) {
-    consoleLog.push(
-      `[warn] ${landedAfterReturn} write(s) finished after your code returned — flcm reserves a ` +
+    runtime!.warnings.add({ id: null, message:
+      `${landedAfterReturn} write(s) finished after your code returned — flcm reserves a ` +
         `verb's slot the moment it is called, so an unawaited verb (or a sibling of one that ` +
         `rejected in Promise.all) still lands. This reply waited for them; await every verb to keep ` +
         `your result and the canvas in step.`,
-    );
+    });
   }
+  if (runtime) consoleLog.push(...runtime.warnings.summary());
 
   reply(to, { type: "EXECUTE_CODE_RESULT", result, console: consoleLog, errors: errorMessage });
 }

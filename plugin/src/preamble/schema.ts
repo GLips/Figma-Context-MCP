@@ -1,3 +1,4 @@
+import type { WarningRecord } from "./warnings.js";
 // schema — THE single source of the agent-facing authoring surface. Every verb, every prop, its type,
 // and its one-line doc live here exactly once, as zod field schemas carrying `.describe()` (the note a
 // human/agent reads) and `.meta({ type })` (the displayed type label where the real TS type is looser
@@ -179,10 +180,10 @@ const LAYOUT_FIELDS = { ...CONTAINER_LAYOUT_FIELDS, ...CHILD_LAYOUT_FIELDS };
 const SIZE_FIELDS = {
   ...GRID_CHILD_ALIASES,
   layout: prop(z.object(CHILD_LAYOUT_FIELDS), 'Placement under an auto-layout parent. Grid accepts cell alignment; flow accepts only the alignSelf "stretch" alias for counter-axis fill.', '{ gridColumn?, gridRow?, justifySelf?, alignSelf?, zIndex? }'),
-  minWidth: prop(z.union([z.number(), z.literal("none")]), "minWidth in positive pixels, effective on auto-layout containers and their direct children. Omitted preserves the bound; \"none\" clears it. Sizes constrained by bounds succeed with a console warning.", 'number | "none"'),
-  maxWidth: prop(z.union([z.number(), z.literal("none")]), "maxWidth in positive pixels, effective on auto-layout containers and their direct children. Omitted preserves the bound; \"none\" clears it. Sizes constrained by bounds succeed with a console warning.", 'number | "none"'),
-  minHeight: prop(z.union([z.number(), z.literal("none")]), "minHeight in positive pixels, effective on auto-layout containers and their direct children. Omitted preserves the bound; \"none\" clears it. Sizes constrained by bounds succeed with a console warning.", 'number | "none"'),
-  maxHeight: prop(z.union([z.number(), z.literal("none")]), "maxHeight in positive pixels, effective on auto-layout containers and their direct children. Omitted preserves the bound; \"none\" clears it. Sizes constrained by bounds succeed with a console warning.", 'number | "none"'),
+  minWidth: prop(z.union([z.number(), z.literal("none")]), "minWidth in positive pixels, effective on auto-layout containers and their direct children. Omitted preserves the bound; \"none\" clears it. Sizes constrained by bounds succeed with a warnings record containing prop, authored and realized values.", 'number | "none"'),
+  maxWidth: prop(z.union([z.number(), z.literal("none")]), "maxWidth in positive pixels, effective on auto-layout containers and their direct children. Omitted preserves the bound; \"none\" clears it. Sizes constrained by bounds succeed with a warnings record containing prop, authored and realized values.", 'number | "none"'),
+  minHeight: prop(z.union([z.number(), z.literal("none")]), "minHeight in positive pixels, effective on auto-layout containers and their direct children. Omitted preserves the bound; \"none\" clears it. Sizes constrained by bounds succeed with a warnings record containing prop, authored and realized values.", 'number | "none"'),
+  maxHeight: prop(z.union([z.number(), z.literal("none")]), "maxHeight in positive pixels, effective on auto-layout containers and their direct children. Omitted preserves the bound; \"none\" clears it. Sizes constrained by bounds succeed with a warnings record containing prop, authored and realized values.", 'number | "none"'),
 
   // A percent ("50%") widens the runtime type to `string`, so `"fill"`/`"hug"` no longer survive as
   // literals in the inferred type — hence an explicit .meta label to keep the doc precise.
@@ -722,7 +723,7 @@ export const EffectsSchema = z.object({
 });
 
 export type NodeSpec = (Omit<Partial<SimplifiedNode>, "children"> & { children?: NodeSpec[] }) | ({ id?: string; type?: string; children?: NodeSpec[] } & Partial<FrameProps & TextProps & LineProps & PathProps & InstanceProps & { svg: string; componentId: Target }>);
-export type AuthoredTree = NodeSpec & { id: string; children?: AuthoredTree[] };
+export type AuthoredTree = NodeSpec & { warnings?: WarningRecord[]; id: string; children?: AuthoredTree[] };
 
 // ---- The typed public surface. flcm.ts's real exports are asserted `satisfies Flcm`, so this can't
 // drift from them; the example files author against it and fail the build if a signature moves. ----
@@ -763,7 +764,7 @@ export interface Flcm {
   // back key-less: a raw node.clone() would copy the flcm/key and mint a duplicate address.
   clone(target: Target, parent?: Target): Promise<CloneResult>;
   clone(target: Target, props: CloneProps, parent?: Target): Promise<CloneResult>;
-  measure(target: Target): Promise<{ x: number; y: number; width: number; height: number }>;
+  measure(target: Target): Promise<{ x: number; y: number; width: number; height: number; warnings?: WarningRecord[] }>;
   replace(target: Target, replacement: NodeSpec): Promise<AuthoredTree>;
   // Complete runtime tree, including hidden and inherited children, plus component definitions.
   get(target: Target): Promise<GetResult>;

@@ -87,7 +87,7 @@ export function safeSerialize(value: unknown, ancestors = new Set<object>()): un
 
 /** One registry per execution; callbacks use the server-shipped projection policy. */
 export function createReadEgress() {
-  const reads = new WeakMap<object, { project: () => unknown; entries: [string, unknown][] }>();
+  const reads = new WeakMap<object, { project: () => unknown; entries: [string, unknown][]; decorate: (value: unknown) => unknown }>();
   function project(value: unknown, ancestors = new Set<object>()): unknown {
     if (value === null || typeof value !== "object" || looksLikeNode(value)) return value;
     if (ancestors.has(value)) throw new Error("Cannot serialize cyclic return or console data.");
@@ -95,13 +95,18 @@ export function createReadEgress() {
     try {
       const projection = reads.get(value);
       if (projection) {
-        const entries = Object.entries(value);
-        if (entries.length !== projection.entries.length || entries.some(([key, item], i) => key !== projection.entries[i][0] || !Object.is(item, projection.entries[i][1]))) return value;
-        return projection.project();
+        const entries = readEntries(value);
+        if (entries.length !== projection.entries.length || entries.some(([key, item], i) => key !== projection.entries[i][0] || !Object.is(item, projection.entries[i][1]))) return projection.decorate(value);
+        return projection.decorate(projection.project());
       }
       if (Array.isArray(value)) return value.map(item => project(item, ancestors));
       return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, project(item, ancestors)]));
     } finally { ancestors.delete(value); }
   }
-  return { registerRead(value: object, projection: () => unknown) { reads.set(value, { project: projection, entries: Object.entries(value) }); }, project };
+  return { registerRead(value: object, projection: () => unknown, decorate: (value: unknown) => unknown = value => value) { reads.set(value, { project: projection, entries: readEntries(value), decorate }); }, project };
+}
+
+// Diagnostics may arrive after a handle is minted, without changing its authored data.
+function readEntries(value: object): [string, unknown][] {
+  return Object.entries(value).filter(([key]) => key !== "warnings");
 }

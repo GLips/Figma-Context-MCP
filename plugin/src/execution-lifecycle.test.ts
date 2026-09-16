@@ -1,3 +1,4 @@
+import { createWarningRegistry } from "./preamble/warnings.js";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { buildSync } from "esbuild";
@@ -27,7 +28,7 @@ function host(native: Record<string, unknown> = {}) {
       resize() {},
     },
   };
-  const context = vm.createContext({ figma, __html__: "", console: { ...console }, setTimeout });
+  const context = vm.createContext({ createWarningRegistry, figma, __html__: "", console: { ...console }, setTimeout });
   vm.runInContext(code, context);
   const send = (msg: Record<string, unknown>) => figma.ui.onmessage(msg);
   const connect = async (key: number) => {
@@ -48,7 +49,7 @@ test("queued cancellation never executes, old settlement cannot cancel or erase 
   });
   h.context.writes = [];
   const run = (key: number, id: string, body: string) =>
-    h.send({ type: "EXECUTE_CODE", id, __connKey: key, preamble: "(host)=>({ flcm: {}, session: host.getSession(() => ({})), mutationQueueIdle: async () => 0 })", code: body });
+    h.send({ type: "EXECUTE_CODE", id, __connKey: key, preamble: "(host)=>({ flcm: {}, session: host.getSession(() => ({})), warnings: createWarningRegistry(), mutationQueueIdle: async () => 0 })", code: body });
   run(1, "same-id", "await hold; writes.push('old completed'); return 'old';");
   await flush();
   h.send({ type: "WS_CLOSED", __connKey: 1 });
@@ -78,7 +79,7 @@ test("a cancel is answered at once from the phase the run had reached", async ()
   await h.connect(1);
   let release!: () => void;
   h.context.hold = new Promise<void>((resolve) => { release = resolve; });
-  const preamble = "(host)=>({ flcm: {}, session: host.getSession(() => ({})), mutationQueueIdle: async () => 0 })";
+  const preamble = "(host)=>({ flcm: {}, session: host.getSession(() => ({})), warnings: createWarningRegistry(), mutationQueueIdle: async () => 0 })";
   const run = (id: string, body: string) =>
     h.send({ type: "EXECUTE_CODE", id, __connKey: 1, preamble, code: body });
   run("executing", "await hold; return 1;");
@@ -114,7 +115,7 @@ test("Reject is explicit and unknown tokens cannot bypass approval status or exe
     type: "EXECUTE_CODE",
     id: "run",
     __connKey: 1,
-    preamble: "(host)=>({ flcm: {}, session: host.getSession(() => ({})), mutationQueueIdle: async () => 0 })",
+    preamble: "(host)=>({ flcm: {}, session: host.getSession(() => ({})), warnings: createWarningRegistry(), mutationQueueIdle: async () => 0 })",
     code: "writes.push('bad');",
   });
   await flush();
@@ -179,7 +180,7 @@ test("execute projects registered reads in nested results and console lines exac
     preamble: `(host) => {
       const read = { id: "v", type: "VECTOR", d: "M0 0 L1 1" };
       host.registerRead(read, () => ({ id: "v", type: "IMAGE-SVG", elided: { d: 10 } }));
-      return { flcm: { read }, session: host.getSession(() => ({})), mutationQueueIdle: async () => 0 };
+      return { flcm: { read }, session: host.getSession(() => ({})), warnings: createWarningRegistry(), mutationQueueIdle: async () => 0 };
     }`,
     code: `console.log({ nested: [flcm.read] }); return { nested: [flcm.read], computed: { id: "v", type: "VECTOR", d: "mine" } };`,
   });
@@ -445,4 +446,95 @@ test("stored objects support ordinary Object methods without invoking inherited 
   `);
   assert.equal(result.errors, null);
   assert.deepEqual(JSON.parse(JSON.stringify(result.result)), [true, true, "[object Object]", true, true]);
+});
+
+test("node warnings follow extracted children, reads and measures; only unseen records reach the summary", async () => {
+  const { createFigmaMock } = await import("../harness/figma-mock.mjs");
+  const h = host(createFigmaMock());
+  await h.connect(1);
+  const reply = await execute(h, `
+    const r = await flcm.render({ type: "FRAME", width: 100, height: 100, children: [
+      { type: "VECTOR", d: "M15 18 L9 12 L15 6", width: 24, height: 24 },
+      { type: "VECTOR", d: "M0 0 L8 0 L0 8 Z", width: 20 }
+    ] });
+    console.log(r.children[0]);
+    console.warn("agent warning");
+    return { own: { id: r.children[1].id }, first: await flcm.measure(r.children[0]) };
+  `) as any;
+  assert.equal(reply.errors, null);
+  assert.deepEqual(Array.from(reply.result.first.warnings, (r: any) => [r.prop, r.authored, r.realized]), [["width", 24, 6], ["height", 24, 12]]);
+  const logged = JSON.parse(reply.console.find((line: string) => line.startsWith("[log] ")).slice(6));
+  assert.equal(logged.warnings.length, 2);
+  const summaries = reply.console.filter((line: string) => line.startsWith("[warn]"));
+  assert.equal(summaries.length, 2);
+  assert.ok(summaries.includes("[warn] agent warning"));
+  assert.ok(summaries.some((line: string) => line.includes(reply.result.own.id) && line.includes("authored 20")));
+});
+
+test("full get projections retain node warnings through SVG collapse", async () => {
+  const { createFigmaMock } = await import("../harness/figma-mock.mjs");
+  const h = host(createFigmaMock());
+  await h.connect(1);
+  const reply = await execute(h, `
+    const r = await flcm.render({ type: "VECTOR", d: "M0 0 L8 0 L0 8 Z", width: 24 });
+    return await flcm.get(r);
+  `) as any;
+  assert.equal(reply.errors, null);
+  assert.equal(reply.result.node.type, "IMAGE-SVG");
+  assert.equal(reply.result.node.warnings[0].realized, 8);
+  assert.equal(reply.console.length, 0);
+});
+
+test("a warning after an earlier echo is still reported, and diagnostics do not persist into the next run", async () => {
+  const { createFigmaMock } = await import("../harness/figma-mock.mjs");
+  const h = host(createFigmaMock());
+  await h.connect(1);
+  const reply = await execute(h, `
+    const r = await flcm.render({ type: "FRAME", width: 100, height: 100, layout: { mode: "row" } });
+    console.log(r);
+    await flcm.edit(r, { width: 50, minWidth: 80 });
+  `) as any;
+  assert.equal(reply.errors, null);
+  assert.ok(reply.console.some((line: string) => line.includes("authored 50, realized 80")));
+  const next = await execute(h, "return await flcm.get(figma.currentPage.children[0].id);") as any;
+  assert.equal(next.errors, null);
+  assert.equal(next.result.node.warnings, undefined);
+  assert.equal(next.console.length, 0);
+});
+
+test("failed serialization does not suppress warnings", async () => {
+  const { createFigmaMock } = await import("../harness/figma-mock.mjs");
+  const h = host(createFigmaMock());
+  await h.connect(1);
+  const reply = await execute(h, `
+    const r = await flcm.render({ type: "VECTOR", d: "M0 0 L8 0 L0 8 Z", width: 24 });
+    const cyclic = { r }; cyclic.self = cyclic;
+    return cyclic;
+  `) as any;
+  assert.match(reply.errors, /cyclic/);
+  assert.equal(reply.console.filter((line: string) => line.startsWith("[warn]")).length, 1);
+});
+
+test("echoing an overflowing parent keeps the pair warning in the summary", async () => {
+  const { createFigmaMock } = await import("../harness/figma-mock.mjs");
+  const h = host(createFigmaMock());
+  await h.connect(1);
+  const reply = await execute(h, `return await flcm.render({ type: "FRAME", name: "Header", width: 100, height: 100,
+    children: [{ type: "RECTANGLE", name: "Scrim", width: 200, height: 100 }] });`) as any;
+  assert.equal(reply.errors, null);
+  assert.equal(reply.result.warnings, undefined);
+  assert.equal(reply.result.children[0].warnings, undefined);
+  assert.match(reply.console[0], /"Scrim" overflows .*"Header" by 100px on x; the parent does not clip/);
+});
+
+test("a rolled-back vector creation publishes no provisional divergences", async () => {
+  const { createFigmaMock } = await import("../harness/figma-mock.mjs");
+  const h = host(createFigmaMock());
+  h.context.figma.createRectangle = () => { throw new Error("creation failed"); };
+  await h.connect(1);
+  const reply = await execute(h, `return await flcm.render({ type: "FRAME", children: [
+    { type: "VECTOR", d: "M0 0 L8 0 L0 8 Z", width: 24 }, { type: "RECTANGLE" }
+  ] });`) as any;
+  assert.match(reply.errors, /creation failed/);
+  assert.equal(reply.console.length, 0);
 });

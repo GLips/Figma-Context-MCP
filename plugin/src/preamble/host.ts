@@ -1,3 +1,4 @@
+import { warnings } from "./warnings.js";
 // The host↔preamble interface — everything the preamble needs from the plugin that isn't `figma.*`.
 //
 // Why it's named and typed rather than a pair of loose free identifiers: once the flcm runtime ships
@@ -23,7 +24,7 @@ export type NativeTraceStage = "native-start" | "native-end" | "native-error";
 export interface FlcmHost {
   /** Retain one preamble-initialized object for this plugin run; never retain the initializer. */
   getSession(initialize: () => Record<string, unknown>): Record<string, unknown>;
-  registerRead(value: object, project: () => unknown): void;
+  registerRead(value: object, project: () => unknown, decorate: (value: unknown) => unknown): void;
   traceNative?(stage: NativeTraceStage, operation: NativeOperation): void;
   /** Fetch bytes for image urls through the server. The sandbox has no network of its own. */
   requestImages(urls: string[]): Promise<Record<string, string>>;
@@ -102,11 +103,19 @@ export async function awaitNative<T>(operation: NativeOperation, run: () => Prom
 }
 
 /** Identity registration keeps authored/computed objects out of the lossy egress path. */
-export function registerRead(value: object, project: () => unknown): void {
-  currentHost()?.registerRead(value, project);
+export function registerRead(value: object, project: () => unknown, nodeId?: string): void {
+  warnings.observe(value, nodeId);
+  currentHost()?.registerRead(value, project, warnings.project);
 }
 
 /** Host ownership supplies lifetime; the server-shipped initializer supplies data policy. */
 export function hostSession(initialize: () => Record<string, unknown>): Record<string, unknown> {
   return currentHost()?.getSession(initialize) ?? initialize();
+}
+
+/** Register each returned node so extracting a child keeps its diagnostics at egress. */
+export function registerResult(value: unknown): void {
+  if (!value || typeof value !== "object") return;
+  if ("id" in value && typeof value.id === "string") registerRead(value, () => value);
+  for (const [key, item] of Object.entries(value)) if (key !== "warnings") registerResult(item);
 }

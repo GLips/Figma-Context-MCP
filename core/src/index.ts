@@ -5,6 +5,7 @@ export type {
   SimplifiedComponentEntry,
   SimplifiedDesign,
   SimplifiedNode,
+  WarningRecord,
   StyleRefPrefix,
   StyleTable,
   TraversalOptions,

@@ -24,7 +24,7 @@ export function captureRead(value: object): (value: unknown) => boolean {
   const fields = new WeakMap<object, [string, unknown][]>();
   const capture = (item: unknown): void => {
     if (!item || typeof item !== "object" || fields.has(item)) return;
-    const entries = Object.entries(item);
+    const entries = dataEntries(item);
     fields.set(item, entries);
     for (const [, child] of entries) capture(child);
   };
@@ -36,7 +36,7 @@ export function captureRead(value: object): (value: unknown) => boolean {
       if (seen.has(current)) return true;
       seen.add(current);
       const before = fields.get(current);
-      const after = Object.entries(current);
+      const after = dataEntries(current);
       return (
         !!before &&
         before.length === after.length &&
@@ -48,4 +48,9 @@ export function captureRead(value: object): (value: unknown) => boolean {
     };
     return unchanged(item);
   };
+}
+
+/** Runtime diagnostics do not turn an unchanged read into authored data. */
+function dataEntries(value: object): [string, unknown][] {
+  return Object.entries(value).filter(([key]) => key !== "warnings");
 }

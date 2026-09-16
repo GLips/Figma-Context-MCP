@@ -12,17 +12,7 @@ createFigmaMock();
 const artOf = (frame: any): any[] =>
   (frame.children ?? []).flatMap((child: any) => (child.type === "VECTOR" ? [child] : artOf(child)));
 
-const warningsOf = async (run: () => Promise<unknown>): Promise<string[]> => {
-  const lines: string[] = [];
-  const original = console.warn;
-  console.warn = (...args: unknown[]) => void lines.push(args.join(" "));
-  try {
-    await run();
-  } finally {
-    console.warn = original;
-  }
-  return lines;
-};
+import { warnings as diagnostics } from "./warnings.js";
 
 test("VECTOR builds a VECTOR carrying the path data, themed by fill", async () => {
   const out = await render({ type: "VECTOR", d: "M8 5 L19 12 L8 19 Z", fill: "#6366F1" });
@@ -32,21 +22,20 @@ test("VECTOR builds a VECTOR carrying the path data, themed by fill", async () =
   assert.equal(node.fills[0].type, "SOLID");
 });
 
-test("a path's box is the path's bounding box; width/height are ignored with one warning naming the node", async () => {
+test("a path's box is the path's bounding box; width/height are ignored with property divergences on the node", async () => {
   // The bug this exists for: a 6x12 chevron authored "on a 24 grid" used to be stretched to 24x24,
   // non-uniformly, and the reply echoed 24x24 as though it had meant something.
-  let out: any;
-  const warnings = await warningsOf(async () => {
-    out = await render({ type: "VECTOR", d: "M15 18 L9 12 L15 6", stroke: "#111", width: 24, height: 24 });
-  });
+  diagnostics.discardFrom(0);
+  const out = await render({ type: "VECTOR", d: "M15 18 L9 12 L15 6", stroke: "#111", width: 24, height: 24 });
   const node = await figma.getNodeByIdAsync(out.id);
   assert.equal(node.width, 6);
   assert.equal(node.height, 12);
 
-  assert.equal(warnings.length, 1, "one warning for the node, not one per ignored word");
-  assert.match(warnings[0], /spec: a VECTOR with `d` is bare geometry/);
-  assert.match(warnings[0], /width\/height was ignored/);
-  assert.match(warnings[0], /`scale`.*`svg`/s); // both escape hatches, named
+  assert.deepEqual(out.warnings?.map(({ id, prop, authored, realized }) => ({ id, prop, authored, realized })), [
+    { id: out.id, prop: "width", authored: 24, realized: 6 },
+    { id: out.id, prop: "height", authored: 24, realized: 12 },
+  ]);
+  assert.match(out.warnings![0].message, /`scale`.*`svg`/s);
 });
 
 test("scale multiplies the path's natural box, uniformly", async () => {

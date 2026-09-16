@@ -1,3 +1,4 @@
+import type { WarningRecord } from "./warnings.js";
 import type { NodeSpec } from "./schema.js";
 // ir — the typed WriteNode currency: the ONE internal representation the whole preamble speaks. Every
 // leaf is a real type (a number, a typed edge box, a discriminated paint/effect value), never a CSS
@@ -476,6 +477,7 @@ export interface InstanceEditWords {
 }
 
 export type WriteNode = WriteProps & {
+  ignoredSize?: { width?: unknown; height?: unknown };
   source?: NodeSpec;
   sourcePath?: string;
 } & (
@@ -492,7 +494,7 @@ export type WriteChild = WriteNode;
 // name/key/text. `key` is our pluginData flcm/key (only on nodes stamped with one); `text` is present for
 // TEXT nodes. Deliberately NO `removed` field beside id/type — safeSerialize's live-node collapse keys on
 // `"removed" in value`, so a read shape that exposed it would be wrongly collapsed in transit.
-export interface Identity { id: string; type: string; name: string; key?: string; text?: string }
+export interface Identity { warnings?: WarningRecord[]; id: string; type: string; name: string; key?: string; text?: string }
 
 // Edit and clone return measured handles. Tree verbs return authored data with ids.
 export interface Handle extends Identity {

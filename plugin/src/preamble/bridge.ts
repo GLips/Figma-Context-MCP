@@ -1,3 +1,4 @@
+import { warnings } from "./warnings.js";
 import { LAYOUT_MODES, layoutModeOf, effectiveLayoutMode, childLayout } from "./layout-mode.js";
 import { behaviorForMode, layoutBehavior, applySiblingOrder, growImplicitGridRows } from "./layout-native.js";
 import { hasContainerLayout } from "./ir.js";
@@ -1200,7 +1201,16 @@ function buildCompiledNode(wn: WriteNode, ctx: RenderCtx, enclosingWidthBounded?
     throw new Error('flcm: cannot create a "' + wn.type + '" node — createable types are ' + Object.keys(BUILDERS).join(", ") + ".");
   }
   const node = build(wn, ctx, enclosingWidthBounded);
-  if (wn.source) wn.source.id = node.id;
+  if (wn.source) {
+    wn.source.id = node.id;
+  }
+  for (const prop of ["width", "height"] as const) {
+    const authored = wn.ignoredSize?.[prop];
+    if (authored !== undefined) warnings.add({
+      id: node.id, prop, authored, realized: node[prop],
+      message: "A VECTOR path is bare geometry; " + prop + " was ignored. Use `scale` for uniform sizing, or `svg` with a viewBox for a sized canvas.",
+    });
+  }
   applySceneProps(node, wn);
   applyAnnotations(node, wn.annotations);
   stampKey(node, wn, ctx);

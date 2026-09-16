@@ -330,7 +330,7 @@ test("a node deleted during the resource round trip refuses the whole batch — 
   // one entry's target before handing the bytes back. Figma keeps accepting writes to a removed
   // node, so nothing downstream would notice — it would just paint an object off the canvas.
   const g = globalThis as { __flcmHost?: unknown };
-  g.__flcmHost = {
+  g.__flcmHost = { registerRead() {},
     requestImages: async (urls: string[]) => {
       a.remove();
       return Object.fromEntries(urls.map((u) => [u, Buffer.from("bytes").toString("base64")]));

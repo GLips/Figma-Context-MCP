@@ -181,7 +181,14 @@ export type TemplateBody = Omit<SimplifiedNode, "id" | "name" | "children" | "te
 // NodeGeometry so the extractor and the type can't drift.
 export type Elision = Record<string, number | null>;
 
+/** A null id belongs to the run, including diagnostics about a parent/child relationship. */
+export type WarningRecord = { id: string | null; message: string } & (
+  | { prop: string; authored: unknown; realized: unknown }
+  | { prop?: never; authored?: never; realized?: never }
+);
+
 export interface SimplifiedNode extends NodeGeometry {
+  warnings?: WarningRecord[];
   /** Producer data before CSS conversion, excluding recursive children. Read-only metadata. */
   readOnlySource?: Omit<NodeSnapshot, "children">;
   elided?: Elision;

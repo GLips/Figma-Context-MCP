@@ -28,7 +28,7 @@ beforeEach(() => {
 const hostSlot = (): Record<string, unknown> => {
   const g = globalThis as Record<string, unknown>;
   if (!g.__flcmHost) {
-    g.__flcmHost = { requestImages: async () => ({}), isRunCancelled: () => false, isRunFinished: () => false };
+    g.__flcmHost = { registerRead() {}, requestImages: async () => ({}), isRunCancelled: () => false, isRunFinished: () => false };
   }
   return g.__flcmHost as Record<string, unknown>;
 };

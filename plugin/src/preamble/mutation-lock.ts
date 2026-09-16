@@ -1,3 +1,5 @@
+import { warnings } from "./warnings.js";
+import { registerResult } from "./host.js";
 import { sceneFigma as figma, invalidateSceneAccess } from "./scene-access.js";
 import { beginSizingDiagnostics, finishSizingDiagnostics } from "./sizing-diagnostics.js";
 // mutation-lock — the single entry point every mutating verb takes (plan invariant 4): render, edit,
@@ -213,14 +215,17 @@ export function enterMutatingVerb<P, G, T>(
       // nothing of this verb's on the canvas, and a triggerUndo here would be exactly the
       // overreach into the previous step the stamp exists to prevent.
       stampUndoStep();
+      const warningCheckpoint = warnings.records.length;
       try {
         beginSizingDiagnostics();
         const result = apply(gated);
         figma.commitUndo();
         committedVerbs++;
         finishSizingDiagnostics(verb);
+        registerResult(result);
         return result;
       } catch (err) {
+        warnings.discardFrom(warningCheckpoint);
         figma.commitUndo();
         // Explicit clone compensation already restored its writes; undo would reverse that cleanup.
         if (!(err instanceof Error && compensatedFailures.has(err))) figma.triggerUndo();

@@ -1,5 +1,5 @@
 import { specNode } from "../../harness/spec-node.js";
-import { test, beforeEach, afterEach } from "node:test";
+import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
 import { id } from "./flcm.js";
@@ -12,15 +12,11 @@ import { sceneNodeToSnapshot } from "./node-to-snapshot.js";
 import { simplify } from "@framelink/core";
 
 let figma: ReturnType<typeof createFigmaMock>;
-let warnings: string[];
-const warn = console.warn;
+import { warnings as diagnostics } from "./warnings.js";
+const warnings = () => diagnostics.summary();
 beforeEach(() => {
   figma = createFigmaMock();
-  warnings = [];
-  console.warn = (...args) => warnings.push(args.join(" "));
-});
-afterEach(() => {
-  console.warn = warn;
+  diagnostics.discardFrom(0);
 });
 const boundKeys = ["minWidth", "maxWidth", "minHeight", "maxHeight"] as const;
 const boundsOf = (node: any) => Object.fromEntries(boundKeys.map((key) => [key, node[key]]));
@@ -69,15 +65,15 @@ test("same-edit bounds clamp successfully and warnings report requested, bound a
     ["minHeight", "height", 40, 25],
     ["maxHeight", "height", 80, 95],
   ] as const) {
-    warnings = [];
+    diagnostics.discardFrom(0);
     const handle = await edit(built, { [key]: bound, [axis]: requested, opacity: 0.5 });
     assert.equal(handle[axis], bound);
     assert.equal((await figma.getNodeByIdAsync(handle.id)).opacity, 0.5);
     assert.match(
-      warnings.join("\n"),
-      new RegExp(axis + " requested " + requested + ", " + key + " " + bound + ", result " + bound),
+      warnings().join("\n"),
+      new RegExp(key + " " + bound + ".*" + axis + ": authored " + requested + ", realized " + bound),
     );
-    assert.doesNotMatch(warnings.join("\n"), /rollback|failed/);
+    assert.doesNotMatch(warnings().join("\n"), /rollback|failed/);
   }
 });
 
@@ -90,12 +86,12 @@ test("instance-only bounds persist through resize and clear without changing the
   const built = await render({ type: "INSTANCE", componentId: component.id });
   const node = await figma.getNodeByIdAsync(built.id);
   await edit(built, { minWidth: 160 });
-  warnings = [];
+  diagnostics.discardFrom(0);
   const resized = await edit(built, { width: 145 });
   assert.equal(resized.width, 160);
   assert.equal(node.minWidth, 160);
   assert.equal(component.minWidth, null);
-  assert.match(warnings.join("\n"), /width requested 145, minWidth 160, result 160/);
+  assert.match(warnings().join("\n"), /minWidth 160.*width: authored 145, realized 160/);
   await edit(built, { minWidth: "none", width: 145 });
   assert.equal(node.width, 145);
   assert.equal(node.minWidth, null);
@@ -168,23 +164,24 @@ test("overflow warning deduplicates clipped/unclipped containers, includes preex
       },
     ],
   });
-  warnings = [];
+  diagnostics.discardFrom(0);
   const handles = await editMany([
     { id: specNode(built, "clipped").id, width: 90 },
     { id: specNode(built, "outer").id, width: 190 },
     { id: specNode(built, "nested").id, height: 35 },
   ]);
   assert.equal(handles.length, 3);
-  const overflow = warnings.filter((message) => message.includes(": overflow in"));
-  assert.equal(overflow.length, 1);
-  assert.match(overflow[0], /overflow in 2 containers; clipped \(1\):/);
-  assert.ok(overflow[0].includes(specNode(built, "clipped").id));
-  assert.ok(overflow[0].includes(specNode(built, "nested").id));
-  assert.ok(!overflow[0].includes(specNode(built, "unaffected").id));
-  assert.equal(overflow[0].split(specNode(built, "nested").id).length, 2);
-  warnings = [];
+  const overflow = warnings().filter((message) => message.includes(" overflows "));
+  assert.equal(overflow.length, 2);
+  assert.ok(overflow.some(line => line.includes("the parent clips")));
+  assert.ok(overflow.some(line => line.includes("the parent does not clip")));
+  assert.ok(overflow.join("\n").includes(specNode(built, "clipped").id));
+  assert.ok(overflow.join("\n").includes(specNode(built, "nested").id));
+  assert.ok(!overflow.join("\n").includes(specNode(built, "unaffected").id));
+  assert.equal(overflow.join("\n").split(specNode(built, "nested").id).length, 2);
+  diagnostics.discardFrom(0);
   await edit(specNode(built, "clipped"), { opacity: 0.5 });
-  assert.equal(warnings.length, 0);
+  assert.equal(warnings().length, 0);
 });
 
 test("overflow is measured after all batch sizes settle", async () => {
@@ -194,12 +191,12 @@ test("overflow is measured after all batch sizes settle", async () => {
     height: 100,
     children: [{ type: "RECTANGLE", key: "child", width: 180, height: 40 }],
   });
-  warnings = [];
+  diagnostics.discardFrom(0);
   await editMany([
     { id: built.id, width: 100 },
     { id: specNode(built, "child").id, width: 80 },
   ]);
-  assert.equal(warnings.filter((message) => message.includes(": overflow in")).length, 0);
+  assert.equal(warnings().filter((message) => message.includes(" overflows ")).length, 0);
 });
 
 test("a resized parent's nested fill layout is inspected after reflow", async () => {
@@ -218,11 +215,11 @@ test("a resized parent's nested fill layout is inspected after reflow", async ()
       },
     ],
   });
-  warnings = [];
+  diagnostics.discardFrom(0);
   await edit(built, { width: 100 });
-  const overflow = warnings.filter((message) => message.includes(": overflow in"));
+  const overflow = warnings().filter((message) => message.includes(" overflows "));
   assert.equal(overflow.length, 1);
-  assert.ok(overflow[0].includes(specNode(built, "nested").id));
+  assert.ok(overflow.join("\n").includes(specNode(built, "nested").id));
 });
 
 test("overflow uses container-local geometry when the container is rotated", async () => {
@@ -242,16 +239,16 @@ test("overflow uses container-local geometry when the container is rotated", asy
     [0, -1, -20],
     [1, 0, 90],
   ];
-  warnings = [];
+  diagnostics.discardFrom(0);
   await edit(built, { width: 100 });
-  assert.match(warnings.join("\n"), /overflow in 1 containers/);
+  assert.match(warnings().join("\n"), / overflows /);
   child.absoluteTransform = [
     [0, -1, -20],
     [1, 0, 80],
   ];
-  warnings = [];
+  diagnostics.discardFrom(0);
   await edit(built, { width: 100 });
-  assert.equal(warnings.length, 0);
+  assert.equal(warnings().length, 0);
 });
 
 test("a subtree replace takes its overflow off the canvas with it", async () => {
@@ -265,10 +262,23 @@ test("a subtree replace takes its overflow off the canvas with it", async () => 
       ] },
     ],
   });
-  warnings = [];
+  diagnostics.discardFrom(0);
   await replace(id(specNode(built, "old").id), {
     type: "FRAME", width: "50%", height: "fill", layout: { mode: "row" },
     children: [{ type: "RECTANGLE", width: 20, height: 20 }],
   });
-  assert.equal(warnings.join("\n"), "");
+  assert.equal(warnings().join("\n"), "");
+});
+
+test("overflow names the worst child, axis and excess, counts other children, and explains clipping", async () => {
+  const r = await render({ type: "FRAME", name: "Header", width: 100, height: 100, children: [
+    { type: "RECTANGLE", name: "Scrim", width: 200, height: 100 },
+    { type: "RECTANGLE", name: "Badge", width: 120, height: 100 },
+  ] });
+  assert.equal(warnings().find(line => line.includes('"Scrim"')), '[warn] ' + r.children![0].id + ' "Scrim" overflows ' + r.id + ' "Header" by 100px on x and 1 more; the parent does not clip, so the excess paints outside it.');
+  diagnostics.discardFrom(0);
+  const clipped = await render({ type: "FRAME", name: "List", width: 100, height: 100, clip: true, children: [
+    { type: "RECTANGLE", name: "Row", width: 100, height: 124 },
+  ] });
+  assert.equal(warnings()[0], '[warn] ' + clipped.children![0].id + ' "Row" overflows ' + clipped.id + ' "List" by 24px on y; the parent clips, so the excess is invisible.');
 });

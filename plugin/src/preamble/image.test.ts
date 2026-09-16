@@ -21,7 +21,7 @@ async function renderWithImages(
 ): Promise<{ out: Awaited<ReturnType<typeof render>>; batches: string[][] }> {
   const batches: string[][] = [];
   const g = globalThis as { __flcmHost?: unknown };
-  g.__flcmHost = {
+  g.__flcmHost = { registerRead() {},
     requestImages: async (urls: string[]) => {
       batches.push(urls);
       return respond(urls);

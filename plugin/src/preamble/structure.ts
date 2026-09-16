@@ -1,3 +1,5 @@
+import { registerRead } from "./host.js";
+import type { WarningRecord } from "./warnings.js";
 import { describeRootOverlap } from "./root-overlap.js";
 import { sceneFigma as figma } from "./scene-access.js";
 import { compileTree, treeNodes } from "./compile-tree.js";
@@ -383,11 +385,13 @@ function compileCloneProps(node: any, props: EditDelta) {
 }
 
 /** Numeric geometry relative to the immediate parent, including the page. */
-export async function measure(target: Target): Promise<{ x: number; y: number; width: number; height: number }> {
+export async function measure(target: Target): Promise<{ x: number; y: number; width: number; height: number; warnings?: WarningRecord[] }> {
   const node: any = await resolveTarget(target);
   assertNodeStillOnCanvas(node, "flcm.measure");
   if (![node.x, node.y, node.width, node.height].every(Number.isFinite)) throw new Error("flcm.measure: target has no measurable scene geometry.");
-  return { x: node.x, y: node.y, width: node.width, height: node.height };
+  const measured = { x: node.x, y: node.y, width: node.width, height: node.height };
+  registerRead(measured, () => measured, node.id);
+  return measured;
 }
 
 /** Keep the original until its replacement has settled. */

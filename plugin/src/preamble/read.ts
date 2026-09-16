@@ -332,6 +332,7 @@ function projectSlim(node: SceneNode, simplified: SimplifiedNode, categories: Re
   if (simplified.top !== undefined) slim.top = simplified.top;
   const childCount = "children" in node ? node.children.length : 0;
   if (childCount) slim.childCount = childCount;
+  registerRead(slim, () => slim);
   return slim;
 }
 

@@ -55,6 +55,14 @@ Assignments copy plain objects and arrays from outside session, so mutate the st
 
 After a successful call, session.last holds a detached snapshot of its full return value before wire projection, only when the return is plain data; otherwise last becomes undefined. Returning session itself is supported. A call with no return sets it to undefined. Failed calls do not automatically replace last; valid session writes before the error remain, just as earlier canvas writes can remain. Stored copies are agent-owned snapshots and return whole; survey their fields or compute a summary to keep output small.
 
+### Warnings on returned nodes
+
+Warnings are records shaped as { id, message, prop?, authored?, realized? }. A plain warning has a message; a divergence also names the property, the value asked for and the value that landed. Returned specs, handles, get/find reads and measure results carry a warnings array when that node has warnings in this run. For example, a path authored with width: 24 can carry { id: "12:34", prop: "width", authored: 24, realized: 6, message: "..." } beside its echoed width. Inspect warnings before trusting authored dimensions.
+
+The same records produce the reply's [warn] summary lines for nodes you did not return or log. Logging r.children[0] shows that child's warnings and suppresses their duplicate summary. Returning nothing keeps every warning in the summary. A later warning still appears even if you logged the node earlier. Overflow and writes that finish after your code returns belong only to the run summary. Your own console.log and console.warn still work.
+
+Warnings are read metadata. Placement specs and edit deltas strip warnings on input; pasting a returned spec does not author diagnostics. They describe this run, not persistent document state.
+
 ### Full reads and wire markers
 
 Inside a call, get returns the complete subtree, including hidden nodes, VECTOR geometry and inherited instance children. find predicates see that same full shape. Hidden nodes carry visible: false in full reads and slim handles. The children array keeps live sibling order. The readOnlySource record preserves decoded producer facts before CSS conversion: exact measurements, disabled paints/effects, paint stacks, resolved text runs, style identities, constraints, blend modes, clipping and component metadata. The ordinary fields remain the authoring vocabulary. Writing readOnlySource does not change the file; clone preserves live state the authoring vocabulary cannot express.
@@ -135,9 +143,11 @@ const knob = { type: "ELLIPSE", width: 16, height: 16, left: "40%", top: "50%", 
 
 **\`wrap: true\` and a \`"fill"\`-width child pull against each other.** Nothing refuses the pair, but wrap breaks the row when the children run out of width while \`"fill"\` claims whatever width is left on the line — so the filling child closes the line it is on and everything after it wraps. Size wrapped children in pixels or let them hug; keep \`"fill"\` for a row that doesn't wrap.
 
-Sizing bounds use \`minWidth\`, \`maxWidth\`, \`minHeight\`, and \`maxHeight\` in positive pixels. Bounds govern auto-layout containers and their direct children. Reads retain these bounds, including instance-only bounds. Omitted bounds remain unchanged; \`"none"\` clears one. A valid resize constrained by a bound succeeds and reports its requested size, bound and resulting size in the execution console. Contradictory bounds reject before writes.
+Sizing bounds use \`minWidth\`, \`maxWidth\`, \`minHeight\`, and \`maxHeight\` in positive pixels. Bounds govern auto-layout containers and their direct children. Reads retain these bounds, including instance-only bounds. Omitted bounds remain unchanged; \`"none"\` clears one. A valid resize constrained by a bound succeeds and adds a warnings record to the node, with the property, authored size and realized size. Contradictory bounds reject before writes.
 
-After resizing, the console reports affected containers with overflowing children in one compact warning, grouped by clipped and unclipped IDs. This includes existing overflow and nested layouts after the batch settles. The write still succeeds.
+After sizing settles, overflow stays in the run summary because it describes a parent/child pair. Each affected container names its worst overflowing child and parent by id and name, the axis, and the pixels past the edge. Additional offenders appear as "and N more". A clipped parent hides the excess; an unclipped parent lets it paint outside. This includes existing overflow and nested layouts. The write still succeeds.
+
+For example: 4986:24352 "Scrim" overflows 4986:24351 "Header" by 100px on x; the parent does not clip, so the excess paints outside it.
 
 New text with omitted width fills a column whose available width is independently bounded, and omitted height grows with wrapped content. A hugging column or horizontal row keeps content-driven text width. Explicit sizes and omitted edit fields retain their existing meaning.
 
@@ -162,7 +172,7 @@ await flcm.render({
 
 \`d\` is a themeable SVG path, and \`vectorPaths\` the same form spelled with multiple native paths and their NONZERO, EVENODD or NONE winding rules. Use exactly one of d, vectorPaths or svg. There is no icon catalog. Supply the artwork.
 
-A path has no canvas, so it has no \`width\`/\`height\`: its box is the geometry you gave it, and \`scale\` (one positive number) is the only word that changes that box — art authored with \`d\` can never come out stretched. Passing \`width\`/\`height\` beside \`d\` at creation is ignored with a warning naming the node; the rest of the node is created as written. When the intent is "this icon lives on a 24 grid", that grid is a viewBox, so use \`svg\`.
+A path has no canvas, so it has no \`width\`/\`height\`: its box is the geometry you gave it, and \`scale\` (one positive number) is the only word that changes that box — art authored with \`d\` can never come out stretched. Passing \`width\`/\`height\` beside \`d\` at creation is ignored with warnings on the returned node, one per property with authored and realized dimensions; the rest of the node is created as written. When the intent is "this icon lives on a 24 grid", that grid is a viewBox, so use \`svg\`.
 
 \`svg\` imports markup through Figma's own SVG import: one vector per shape, inside a frame. Size words apply to that frame, and its art scales with it. \`fill\` and \`stroke\` beside \`svg\` repaint every vector inside, overriding the colors written into the markup — so one icon's markup serves every theme ("none" clears them). Stroke weight is left alone; it is part of the drawing's proportions.
 

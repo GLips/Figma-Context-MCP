@@ -1141,28 +1141,11 @@ function compileSvg(markup: unknown, props: SvgProps = {}): WriteNode {
   return wn;
 }
 
-// `width`/`height` on the path form describe a canvas the form doesn't have, and the only thing Figma
-// could do with them is stretch the geometry — non-uniformly, silently, and the reply would echo the
-// size the author asked for as though it had meant something. Ignore them and say so ONCE per node:
-// the rest of the write is exactly what the author meant, so a refusal would cost more than it saves.
-// `at` is the spec path (compile-tree's `at`), which is how the author finds the node in their own call.
-function warnCanvasSizeIgnored(props: PathProps, at: string): PathProps {
-  if (props.width === undefined && props.height === undefined) return props;
-  const { width, height, ...rest } = props;
-  console.warn(
-    "flcm: " + at + ": a VECTOR with " + (props.d !== undefined ? "`d`" : "`vectorPaths`") +
-      " is bare geometry — its box is the path's bounding box, so " +
-      [width !== undefined ? "width" : "", height !== undefined ? "height" : ""].filter(Boolean).join("/") +
-      " was ignored. Use `scale` for a bigger box (uniform), or `svg` markup with a viewBox for art on a sized canvas. The rest of the node was created as written.",
-  );
-  return rest as PathProps;
-}
-
 // A path spec creates a native vector with vectorPaths. It takes the shared appearance props via
 // compileNodeLocalProps() (radius off — a vector has none), so it themes like a rect. Path data is
 // normalized HERE, not at render: Figma's parser accepts only absolute M/L/C/Q/Z, and doing the
 // conversion at compile means malformed data fails before anything reaches the canvas.
-function compilePath(props: PathProps, at: string): WriteNode {
+function compilePath(props: PathProps): WriteNode {
   props = acceptAuthoringProps(props, { type: "VECTOR", verb: "create", known: PATH_KEYS, subject: "VECTOR" }) as PathProps;
   if (!props || typeof props !== "object") {
     throw new Error("VECTOR: expected a props object with a `d` path string, e.g. { type: \"VECTOR\", d: \"M12 2 L22 20 L2 20 Z\", fill: \"#111\" } — got " + JSON.stringify(props) + ".");
@@ -1173,11 +1156,13 @@ function compilePath(props: PathProps, at: string): WriteNode {
   }
   rejectUnknownKeys(props, PATH_KEYS, "VECTOR");
   if (props.vectorPaths !== undefined && d !== undefined) throw new Error("VECTOR needs exactly one of d or vectorPaths.");
-  props = warnCanvasSizeIgnored(props, at);
+  const { width, height, ...geometryProps } = props;
+  props = geometryProps as PathProps;
   const paths = props.vectorPaths !== undefined
     ? normalizeVectorPaths(props.vectorPaths)
     : [{ windingRule: "NONZERO" as const, data: normalizePathData(d as string) }];
   const wn: WriteNode = { type: "VECTOR", vector: { kind: "path", paths, scale: compileScale(props.scale) } };
+  if (width !== undefined || height !== undefined) wn.ignoredSize = { width, height };
   compileNodeLocalProps(wn, props, {}); // fill/stroke/strokeWidth/effects/rotation + base; radius/clip off for a vector
   compileBindings(wn, props, ANY_NODE_BINDINGS, "VECTOR");
   const layout = buildLayout(props as FrameProps, "VECTOR", "VECTOR");

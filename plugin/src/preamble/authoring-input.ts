@@ -24,7 +24,7 @@ export function acceptAuthoringProps(bag: unknown, entry: AuthoringEntry): Recor
   const out: Record<string, unknown> = {};
   for (const key of Object.keys(src)) {
     const value = src[key];
-    if (key === "designedWidth" || key === "designedHeight") continue;
+    if (key === "designedWidth" || key === "designedHeight" || key === "warnings") continue;
     // An explicitly-undefined read-only word is absence, not a claim (`{ ...node, children: undefined }`).
     if (value == null && READ_ONLY_WORDS.has(key)) continue;
     if (key === "type") {

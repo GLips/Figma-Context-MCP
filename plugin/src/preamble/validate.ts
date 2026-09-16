@@ -57,7 +57,7 @@ export function rejectUnknownKeys(obj: unknown, allowed: ReadonlySet<string>, su
 }
 
 // Contextual read dimensions need their measured fallback. Identity is interpreted by verbs.
-export const READ_ONLY_WORDS: ReadonlySet<string> = new Set(["type", "children", "designedWidth", "designedHeight"]);
+export const READ_ONLY_WORDS: ReadonlySet<string> = new Set(["type", "children", "designedWidth", "designedHeight", "warnings"]);
 
 // The pure, document-blind half of a DELTA's validation (invariant 2's validate-then-mutate: this
 // runs before any target is resolved, so a misspelled word reads "unknown prop" no matter what it
