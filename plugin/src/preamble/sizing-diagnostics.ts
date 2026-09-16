@@ -42,6 +42,19 @@ function walk(node: SizingNode, visit: (node: SizingNode) => void): void {
   if (node.children) for (const child of node.children) walk(child, visit);
 }
 
+// `removed` answers for the node remove() was CALLED on, not for the subtree it took with it: a
+// descendant of a detached node still answers false while keeping whatever geometry it held the
+// moment it left the canvas. A verb that swaps a subtree out (replace) would otherwise report
+// overflow inside the thing it deleted — a warning about a box no reader can see. Attachment to a
+// page is the fact diagnostics actually want, so ask that instead of the flag.
+function onCanvas(node: SizingNode): boolean {
+  for (let n: SizingNode | null | undefined = node; n; n = n.parent) {
+    if (n.removed) return false;
+    if (n.type === "PAGE" || n.type === "DOCUMENT") return true;
+  }
+  return false;
+}
+
 export function trackSizing(node: SizingNode): void {
   try {
     // Snapshot only the containing layout tree, never the page/document. Siblings whose size changes
@@ -89,7 +102,7 @@ export function finishSizingDiagnostics(verb: string): void {
     const clamps: string[] = [];
     for (const request of requests.values()) {
       const node = request.node;
-      if (node.removed) continue;
+      if (!onCanvas(node)) continue;
       for (const [axis, min, max] of [["width", "minWidth", "maxWidth"], ["height", "minHeight", "maxHeight"]] as const) {
         const requested = request[axis], actual = node[axis];
         const bound = node[min] != null && requested < node[min] ? min : node[max] != null && requested > node[max] ? max : undefined;
@@ -98,15 +111,17 @@ export function finishSizingDiagnostics(verb: string): void {
     }
     if (clamps.length) console.warn("flcm." + verb + ": size constrained: " + clamps.join("; ") + ". Write succeeded.");
     for (const { node, width, height } of measured.values()) {
-      if (!node.removed && (node.width !== width || node.height !== height)) {
+      if (onCanvas(node) && (node.width !== width || node.height !== height)) {
         affected.set(node.id, node);
         if (node.parent && node.parent.type !== "PAGE") affected.set(node.parent.id, node.parent);
       }
     }
     const clipped: string[] = [], unclipped: string[] = [];
     for (const node of affected.values()) {
-      if (node.removed || !node.children || node.visible === false) continue;
-      if (node.children.some((child: SizingNode) => !child.removed && child.visible !== false && overflows(node, child))) {
+      if (!node.children || node.visible === false || !onCanvas(node)) continue;
+      // A child of an on-canvas container is on the canvas by construction — visibility is the only
+      // question left to ask about it.
+      if (node.children.some((child: SizingNode) => child.visible !== false && overflows(node, child))) {
         (node.clipsContent ? clipped : unclipped).push(node.id);
       }
     }

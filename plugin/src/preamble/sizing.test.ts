@@ -7,6 +7,7 @@ import { render } from "./render.js";
 import { edit } from "./edit.js";
 import { editMany } from "./edit-many.js";
 import { find } from "./read.js";
+import { replace } from "./structure.js";
 import { sceneNodeToSnapshot } from "./node-to-snapshot.js";
 import { simplify } from "@framelink/core";
 
@@ -251,4 +252,23 @@ test("overflow uses container-local geometry when the container is rotated", asy
   warnings = [];
   await edit(built, { width: 100 });
   assert.equal(warnings.length, 0);
+});
+
+test("a subtree replace takes its overflow off the canvas with it", async () => {
+  const built = await render({
+    type: "FRAME", name: "shell", width: 200, height: 100, layout: { mode: "row", gap: 0 },
+    children: [
+      { type: "FRAME", key: "old", width: "fill", height: "fill", layout: { mode: "row" }, children: [
+        // Squeezed to nothing while the replacement shares the row, and gone by the time
+        // diagnostics look — `removed` answers only for the node replace() deleted, not its children.
+        { type: "FRAME", width: "fill", height: "fill", layout: { mode: "row" }, children: [{ type: "RECTANGLE", width: 150, height: 20 }] },
+      ] },
+    ],
+  });
+  warnings = [];
+  await replace(id(specNode(built, "old").id), {
+    type: "FRAME", width: "50%", height: "fill", layout: { mode: "row" },
+    children: [{ type: "RECTANGLE", width: 20, height: 20 }],
+  });
+  assert.equal(warnings.join("\n"), "");
 });
