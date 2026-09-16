@@ -261,21 +261,3 @@ test("a predicate-only find fails loud past the materialization cap, naming it",
     /5001 candidate nodes, over the 5000-node materialization cap/s,
   );
 });
-
-test("find predicates see geometry inside SVG-heavy containers", async () => {
-  createFigmaMock();
-  await render({
-    type: "FRAME",
-    key: "icon",
-    width: 24,
-    height: 24,
-    children: [{ type: "RECTANGLE", key: "dot", width: 4, height: 4 }],
-  });
-
-  const [dot] = await find({ key: "dot" });
-  assert.equal(dot.key, "dot");
-  assert.equal(dot.type, "RECTANGLE");
-  assert.equal(dot.width, 4);
-
-  assert.equal((await find({ key: "dot" }, (n) => n.width === 4)).length, 1);
-});

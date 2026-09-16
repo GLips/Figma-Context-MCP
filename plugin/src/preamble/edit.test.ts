@@ -604,7 +604,7 @@ test("re-sizing an axis whose fill mark sits parked on an ABSOLUTE child still u
 });
 
 test('TEXT height:"fill" needs a flow to fill: free-form parent and absolute text reject', async () => {
-  const out = await render({
+  await render({
     type: "FRAME",
     key: "free",
     width: 200,
@@ -633,7 +633,6 @@ test('TEXT height:"fill" needs a flow to fill: free-form parent and absolute tex
   const t3 = await figma.getNodeByIdAsync(specNode(inRow, "t3").id);
   await edit("t3", { height: "fill" });
   assert.equal(t3.layoutAlign, "STRETCH");
-  void out;
 });
 
 test("an unknown padding key rejects the whole delta instead of compiling to zero padding", async () => {

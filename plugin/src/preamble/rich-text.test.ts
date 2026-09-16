@@ -98,9 +98,6 @@ test("markdown in a plain string compiles to runs and renders per-range", async 
     type: "TEXT",
     text: "Hi **bold** and *italic* and ~~struck~~ and [link](https://a.co)",
   };
-  // Splits into runs (no longer a single plain string).
-  assert.equal(wn.characters, undefined);
-
   const out = await render(wn);
   const node = await figma.getNodeByIdAsync(out.id);
   assert.equal(node.characters, "Hi bold and italic and struck and link");

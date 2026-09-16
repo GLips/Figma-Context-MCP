@@ -90,7 +90,6 @@ test("placing a LIVE target moves it — including a reorder inside one parent",
     [b.id, row.children[1].id],
   );
   assert.equal(out.id, b.id);
-  // A reorder inside one parent reports the container once, as `to`.
 });
 
 test("a moved node's fill is re-aimed at the new parent's axes, not left on the old one's", async () => {
@@ -176,7 +175,7 @@ test("the destination is read at the seal: an anchor moved during the image fetc
     isRunCancelled: () => false, isRunFinished: () => false,
   };
   try {
-    const placed = await insertAfter("anchor", {
+    await insertAfter("anchor", {
       type: "RECTANGLE",
       name: "beside",
       width: 20,
