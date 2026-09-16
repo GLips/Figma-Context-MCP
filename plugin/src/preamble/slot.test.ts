@@ -109,11 +109,8 @@ test("slot content and edits to retained children can share a batch", async () =
   const slot = await slotOf(instance);
   const placeholder = slot.children[0];
   await flcm.editMany([
-    {
-      target: instance,
-      changes: { overrides: { [path]: { children: [{ type: "TEXT", text: "Added" }] } } },
-    },
-    { target: { id: placeholder.id }, changes: { text: "Retained" } },
+    { id: instance.id, overrides: { [path]: { children: [{ type: "TEXT", text: "Added" }] } } },
+    { id: placeholder.id, text: "Retained" },
   ]);
   assert.deepEqual(
     slot.children.map((n: any) => n.characters),

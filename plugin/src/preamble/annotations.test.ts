@@ -77,7 +77,7 @@ test("categories reuse exact trimmed names and retain their color across compile
     ],
   });
   const root = await resolveTarget(out);
-  await editMany(root.children.map((node) => ({ target: node, changes: note })));
+  await editMany(root.children.map((node: SceneNode) => ({ id: node.id, ...note })));
   assert.equal((await figma.annotations.getAnnotationCategoriesAsync()).length, 2);
   assert.equal(existing.color, "green");
   assert.equal(root.annotations[0].categoryId, existing.id);
@@ -112,8 +112,8 @@ test("invalid edits and ambiguous categories create nothing; a failed apply remo
   await assert.rejects(edit(out, { ...note, opacity: "bad" } as never), /opacity/);
   await assert.rejects(
     editMany([
-      { target: out, changes: note },
-      { target: "missing", changes: { name: "bad" } },
+      { id: out.id, ...note },
+      { id: "missing", name: "bad" },
     ]),
     /missing/,
   );

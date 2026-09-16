@@ -7,7 +7,7 @@ import { specNode } from "../../harness/spec-node.js";
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
-import { id, image } from "./flcm.js";
+import { image } from "./flcm.js";
 import { render } from "./render.js";
 import { editMany } from "./edit-many.js";
 
@@ -38,16 +38,17 @@ async function renderCard() {
     a: await node("a"),
     b: await node("b"),
     c: await node("c"),
+    c2: await node("c2"),
   };
 }
 
-test("a batch over three targets applies in ONE call and ONE undo step, returning a handle per entry", async () => {
+test("a batch over three nodes applies in ONE call and ONE undo step, returning a handle per entry", async () => {
   const { a, b, c } = await renderCard();
   const undosBefore = figma.undoLog.length;
   const handles = await editMany([
-    { target: "a", changes: { fill: "#0000ff" } },
-    { target: "b", changes: { opacity: 0.5 } },
-    { target: "c", changes: { text: "goodbye" } },
+    { id: a.id, fill: "#0000ff" },
+    { id: b.id, opacity: 0.5 },
+    { id: c.id, text: "goodbye" },
   ]);
   assert.deepEqual(a.fills[0].color, { r: 0, g: 0, b: 1 });
   assert.equal(b.opacity, 0.5);
@@ -62,13 +63,13 @@ test("a batch over three targets applies in ONE call and ONE undo step, returnin
 });
 
 test("one invalid delta mutates NOTHING, and the error names every failing entry by index", async () => {
-  const { a, b } = await renderCard();
+  const { a, b, c, c2 } = await renderCard();
   const logBefore = [...figma.undoLog];
   await assert.rejects(
     editMany([
-      { target: "a", changes: { fill: "#0000ff" } },
-      { target: "b", changes: { colour: "#0000ff" } as never },
-      { target: "c", changes: { wat: 1 } as never },
+      { id: a.id, fill: "#0000ff" },
+      { id: b.id, colour: "#0000ff" } as never,
+      { id: c.id, wat: 1 } as never,
     ]),
     (err: Error) => {
       assert.match(err.message, /2 of 3 entries were rejected/);
@@ -80,9 +81,9 @@ test("one invalid delta mutates NOTHING, and the error names every failing entry
   // Per-TYPE legality aggregates the same way, a stage later (it needs the resolved nodes).
   await assert.rejects(
     editMany([
-      { target: "a", changes: { fill: "#0000ff" } },
-      { target: "c", changes: { borderRadius: 4 } },
-      { target: "c2", changes: { clip: true } },
+      { id: a.id, fill: "#0000ff" },
+      { id: c.id, borderRadius: 4 },
+      { id: c2.id, clip: true },
     ]),
     (err: Error) => {
       assert.match(err.message, /2 of 3 entries were rejected/);
@@ -91,12 +92,12 @@ test("one invalid delta mutates NOTHING, and the error names every failing entry
       return true;
     },
   );
-  // Unresolvable targets aggregate the same way, from the stage before that.
+  // Unresolvable ids aggregate the same way, from the stage before that.
   await assert.rejects(
     editMany([
-      { target: "ghost", changes: { opacity: 0.5 } },
-      { target: "a", changes: { opacity: 0.5 } },
-      { target: "phantom", changes: { opacity: 0.5 } },
+      { id: "ghost", opacity: 0.5 },
+      { id: a.id, opacity: 0.5 },
+      { id: "phantom", opacity: 0.5 },
     ]),
     (err: Error) => {
       assert.match(err.message, /2 of 3 entries were rejected/);
@@ -119,8 +120,8 @@ test("a parent turned auto-layout and a child set to fill succeed in EITHER arra
       figma = createFigmaMock();
       const nodes = await renderCard();
       const entries = [
-        { target: "card", changes: { layout: { mode: "row" as const, gap: 8 } } },
-        { target: child, changes: { height: "fill" as const } },
+        { id: nodes.card.id, layout: { mode: "row" as const, gap: 8 } },
+        { id: (nodes as Record<string, any>)[child].id, height: "fill" as const },
       ];
       await editMany(parentFirst ? entries : [entries[1], entries[0]]);
       assert.equal(nodes.card.layoutMode, "HORIZONTAL");
@@ -141,13 +142,13 @@ test("cross-entry layout legality is judged against the batch's own end state, n
   {
     const { card, a } = await renderCard();
     await editMany([
-      { target: "card", changes: { layout: { mode: "row" }, width: "hug" } },
-      { target: "a", changes: { opacity: 0.5 } },
+      { id: card.id, layout: { mode: "row" }, width: "hug" },
+      { id: a.id, opacity: 0.5 },
     ]);
     assert.equal(card.layoutSizingHorizontal, "HUG");
     await editMany([
-      { target: "card", changes: { width: 400 } },
-      { target: "a", changes: { width: "50%" } },
+      { id: card.id, width: 400 },
+      { id: a.id, width: "50%" },
     ]);
     assert.equal(a.width, 200);
   }
@@ -155,16 +156,16 @@ test("cross-entry layout legality is judged against the batch's own end state, n
   // height fill has no flow to fill and would silently not stick.
   {
     figma = createFigmaMock();
-    const { c } = await renderCard();
+    const { card, c } = await renderCard();
     await editMany([
-      { target: "card", changes: { layout: { mode: "row" } } },
-      { target: "c", changes: { height: "fill" } },
+      { id: card.id, layout: { mode: "row" } },
+      { id: c.id, height: "fill" },
     ]);
     assert.equal(c.layoutAlign, "STRETCH");
     await assert.rejects(
       editMany([
-        { target: "card", changes: { layout: { mode: "none" } } },
-        { target: "c", changes: { height: "fill" } },
+        { id: card.id, layout: { mode: "none" } },
+        { id: c.id, height: "fill" },
       ]),
       /a TEXT can only fill its height as an in-flow child of a row\/column auto-layout parent/,
     );
@@ -173,12 +174,12 @@ test("cross-entry layout legality is judged against the batch's own end state, n
   // sizing by percent — the cycle assertPercentResolvable exists to name.
   {
     figma = createFigmaMock();
-    const { a } = await renderCard();
-    await editMany([{ target: "card", changes: { layout: { mode: "row" }, width: 400 } }]);
+    const { card, a } = await renderCard();
+    await editMany([{ id: card.id, layout: { mode: "row" }, width: 400 }]);
     await assert.rejects(
       editMany([
-        { target: "card", changes: { width: "hug" } },
-        { target: "a", changes: { width: "50%" } },
+        { id: card.id, width: "hug" },
+        { id: a.id, width: "50%" },
       ]),
       /is a cycle/,
     );
@@ -189,19 +190,19 @@ test("cross-entry layout legality is judged against the batch's own end state, n
   // reading — "a free-form frame hugs nothing" — is the wrong answer for the canvas being created.
   {
     figma = createFigmaMock();
-    const { a } = await renderCard();
+    const { card, a } = await renderCard();
     await assert.rejects(
       editMany([
-        { target: "card", changes: { layout: { mode: "row" } } },
-        { target: "a", changes: { width: "50%" } },
+        { id: card.id, layout: { mode: "row" } },
+        { id: a.id, width: "50%" },
       ]),
       /is a cycle/,
     );
     assert.equal(a.width, 40);
     // Naming the axis is the fix, and must still be accepted.
     await editMany([
-      { target: "card", changes: { layout: { mode: "row" }, width: 400 } },
-      { target: "a", changes: { width: "50%" } },
+      { id: card.id, layout: { mode: "row" }, width: 400 },
+      { id: a.id, width: "50%" },
     ]);
     assert.equal(a.width, 200);
   }
@@ -209,11 +210,11 @@ test("cross-entry layout legality is judged against the batch's own end state, n
   // that mapping moves with the direction, so `column` must reject exactly as `row` does.
   {
     figma = createFigmaMock();
-    await renderCard();
+    const { card, a } = await renderCard();
     await assert.rejects(
       editMany([
-        { target: "card", changes: { layout: { mode: "column" } } },
-        { target: "a", changes: { height: "50%" } },
+        { id: card.id, layout: { mode: "column" } },
+        { id: a.id, height: "50%" },
       ]),
       /is a cycle/,
     );
@@ -241,17 +242,18 @@ test("cross-entry layout legality is judged against the batch's own end state, n
       ],
     });
     const kid = await figma.getNodeByIdAsync(specNode(out, "kid").id);
+    const [outerId, panelId, kidId] = ["outer", "panel", "kid"].map((k) => specNode(out, k).id);
     // The fill DOES survive a flip of the panel alone — that must stay accepted.
     await editMany([
-      { target: "panel", changes: { layout: { mode: "column" } } },
-      { target: "kid", changes: { width: "50%" } },
+      { id: panelId, layout: { mode: "column" } },
+      { id: kidId, width: "50%" },
     ]);
     assert.equal(kid.width, 250);
     await assert.rejects(
       editMany([
-        { target: "outer", changes: { layout: { mode: "column" } } },
-        { target: "panel", changes: { layout: { mode: "column" } } },
-        { target: "kid", changes: { width: "50%" } },
+        { id: outerId, layout: { mode: "column" } },
+        { id: panelId, layout: { mode: "column" } },
+        { id: kidId, width: "50%" },
       ]),
       /is a cycle/,
     );
@@ -282,8 +284,8 @@ test("every MEASUREMENT waits for every write: an anchored ancestor centers on t
   // against that size. Applied ancestor-first with no deferred measure pass, the center is computed
   // from the pre-growth width and the panel ends up visibly off-center, with no error.
   await editMany([
-    { target: "panel", changes: { left: "50%", anchor: { x: "center" } } },
-    { target: "label", changes: { text: "this is a much longer label" } },
+    { id: panel.id, left: "50%", anchor: { x: "center" } },
+    { id: specNode(out, "label").id, text: "this is a much longer label" },
   ]);
   assert.ok(panel.width > 100, "the descendant edit grew the hugging panel");
   assert.equal(panel.x + panel.width / 2, 150); // dead center of the 300-wide card
@@ -310,8 +312,8 @@ test("a refusal names the identity the node had BEFORE the batch's first write, 
   });
   await assert.rejects(
     editMany([
-      { target: "a", changes: { opacity: 0.5 } },
-      { target: "host", changes: { name: "Renamed", left: "50%" } },
+      { id: a.id, opacity: 0.5 },
+      { id: host.id, name: "Renamed", left: "50%" },
     ]),
     (err: Error) => {
       assert.match(err.message, /key "host"/);
@@ -338,8 +340,8 @@ test("a node deleted during the resource round trip refuses the whole batch — 
   try {
     await assert.rejects(
       editMany([
-        { target: "a", changes: { fill: image("https://cdn.example.com/a.jpg") } },
-        { target: "b", changes: { opacity: 0.5 } },
+        { id: a.id, fill: image("https://cdn.example.com/a.jpg") },
+        { id: b.id, opacity: 0.5 },
       ]),
       /\[0\].*was deleted while this call was resolving targets and loading resources/s,
     );
@@ -351,13 +353,13 @@ test("a node deleted during the resource round trip refuses the whole batch — 
 });
 
 test("failures from DIFFERENT stages report together — the batch is one round trip, including its rejection", async () => {
-  await renderCard();
+  const { a, b, c } = await renderCard();
   await assert.rejects(
     editMany([
-      { target: "a", changes: { colour: "#fff" } as never }, // document-blind: unknown word
-      { target: "ghost", changes: { opacity: 0.5 } }, // resolve: no such key
-      { target: "c", changes: { borderRadius: 4 } }, // compile: not a TEXT word
-      { target: "b", changes: { opacity: 0.5 } }, // fine
+      { id: a.id, colour: "#fff" } as never, // document-blind: unknown word
+      { id: "ghost", opacity: 0.5 }, // resolve: no such node
+      { id: c.id, borderRadius: 4 }, // compile: not a TEXT word
+      { id: b.id, opacity: 0.5 }, // fine
     ]),
     (err: Error) => {
       assert.match(err.message, /3 of 4 entries were rejected/);
@@ -369,59 +371,53 @@ test("failures from DIFFERENT stages report together — the batch is one round 
   );
 });
 
-test("two entries resolving to the same node reject as ambiguous — never last-wins", async () => {
+test("two entries naming the same node reject as ambiguous — never last-wins", async () => {
   const { a } = await renderCard();
   await assert.rejects(
     editMany([
-      { target: "a", changes: { opacity: 0.5 } },
-      { target: id(a.id), changes: { opacity: 0.9 } },
+      { id: a.id, opacity: 0.5 },
+      { id: a.id, opacity: 0.9 },
     ]),
     /resolves to the same node as entry \[0\]/,
   );
   assert.equal(a.opacity, 1);
 });
 
-test("the batch shape itself fails loud: not an array, empty, a non-entry item, an unknown scope key", async () => {
-  await renderCard();
+test("the batch shape itself fails loud: not an array, empty, a non-entry item, no id, an empty delta, an unknown word", async () => {
+  const { a } = await renderCard();
   await assert.rejects(editMany({ a: { opacity: 1 } } as never), /the first argument is an array/);
   await assert.rejects(editMany([]), /entries array is empty/);
-  await assert.rejects(editMany(["a"] as never), /takes an object/);
-  await assert.rejects(editMany([{ target: "a" }] as never), /changes must be an object/);
-  await assert.rejects(
-    editMany([{ target: "a", changes: { opacity: 1 }, when: 1 }] as never),
-    /unknown prop "when"/,
-  );
-  await assert.rejects(
-    editMany([{ target: "a", changes: { opacity: 1 } }], { near: "card" } as never),
-    /unknown prop "near"/,
-  );
+  await assert.rejects(editMany(["a"] as never), /each entry is an object/);
+  await assert.rejects(editMany([{ opacity: 1 }] as never), /an entry needs an `id`/);
+  await assert.rejects(editMany([{ id: a.id }]), /changes object is empty/);
+  await assert.rejects(editMany([{ id: a.id, opacity: 1, when: 1 }] as never), /unknown prop "when"/);
 });
 
-test("`within` scopes key resolution for the whole batch — one scan, and an out-of-scope key still fails loud", async () => {
-  await render({
-    type: "FRAME",
-    key: "outer",
-    width: 400,
-    height: 400,
-    children: [
-      {
-        type: "FRAME",
-        key: "left",
-        width: 100,
-        height: 100,
-        children: [{ type: "RECTANGLE", key: "dot", width: 10, height: 10 }],
-      },
-      { type: "FRAME", key: "right", width: 100, height: 100, children: [] },
-    ],
-  });
-  await editMany([{ target: "dot", changes: { opacity: 0.25 } }], { within: "left" });
-  const scoped = await editMany([{ target: "dot", changes: { opacity: 0.5 } }], {
-    within: "outer",
-  });
-  assert.equal(scoped[0].key, "dot");
+// The one near-miss worth naming: every other verb takes a positional target, so an agent reaching
+// for a batch reaches for `target` — and "unknown prop" would say nothing about where the node goes.
+test("an entry spelled with `target` is refused by name, pointing at `id`", async () => {
+  const { a } = await renderCard();
   await assert.rejects(
-    editMany([{ target: "dot", changes: { opacity: 1 } }], { within: "right" }),
-    /no node found/,
+    editMany([{ target: a.id, changes: { opacity: 0.5 } }] as never),
+    /names its node with `id`, not `target`/,
+  );
+  assert.equal(a.opacity, 1);
+});
+
+// A batch is usually one generated list, so its mistake is usually one mistake repeated.
+test("entries that fail the same way report as one counted, indexed line", async () => {
+  const { a, b, c } = await renderCard();
+  await assert.rejects(
+    editMany([
+      { id: a.id, colour: "#fff" },
+      { id: b.id, opacity: 0.5 },
+      { id: c.id, colour: "#fff" },
+    ] as never),
+    (err: Error) => {
+      assert.match(err.message, /2 of 3 entries were rejected/);
+      assert.match(err.message, /\n {2}2 entries \(0, 2\): .*unknown prop "colour"/);
+      return true;
+    },
   );
 });
 
@@ -439,8 +435,8 @@ test("a mid-apply Figma refusal seals the WHOLE batch as one step, pops it, and 
   Object.defineProperty(b, "opacity", { set: refuse, get: () => 1, configurable: true });
   await assert.rejects(
     editMany([
-      { target: "a", changes: { fill: "#0000ff" } },
-      { target: "b", changes: { opacity: 0.5 } },
+      { id: a.id, fill: "#0000ff" },
+      { id: b.id, opacity: 0.5 },
     ]),
     /flcm\.editMany \(entry 1\): Figma refused a write on/,
   );

@@ -538,17 +538,12 @@ export const EditSchema = z.object(EDIT_FIELDS);
 export type EditDelta = z.infer<typeof EditSchema>;
 export type CloneProps = Omit<EditDelta, "componentId" | "componentProperties" | "overrides" | "exposed" | "componentPropertyReferences" | "description" | "propertyDefinitions">;
 
-// One entry of an flcm.editMany batch. An ARRAY of { target, changes } rather than the sketch's
-// string-keyed map, because each `target` takes the full target grammar — a key, a node id,
-// flcm.id(), or a handle straight from find/selection (the main edit on-ramp) — and a map's string
-// keys could carry only the first two. Structural ops deliberately never fold in here: mixing
-// tree-shape and prop ops in one list is the `flcm.change` non-goal.
-export interface EditEntry { target: Target; changes: EditDelta }
-
-// editMany's optional second argument. Named (not a bare positional target) because every other
-// verb's second target argument means WHERE something goes — `within` is a search scope, and the
-// read verbs already spell it as a named field on their query.
-export interface EditManyScope { within?: Target }
+// One entry of an flcm.editMany batch — the plain-data node shape the whole surface uses: `id` is
+// live identity (exactly as in a render spec), and every other key is an flcm.edit delta word. A key
+// string or a handle is NOT an id: a batch mutates nodes you have ALREADY located, so locate them
+// first (any object carrying an `id` — a find hit, a get result — supplies one). Structural ops stay
+// out on purpose: mixing tree-shape and prop ops in one list is the `flcm.change` non-goal.
+export type EditEntry = { id: string } & EditDelta;
 
 // ---- The two verbs that MAKE a component. Read words are write words here too: `propertyDefinitions`
 // and `componentPropertyReferences` are what a `get` reports on a COMPONENT, spelled the same way. ----
@@ -686,11 +681,11 @@ export interface Flcm {
   // call: the whole delta validates before the first write, and a post-validation Figma refusal
   // rolls the verb back (commit-then-undo) — the canvas is never half-a-verb.
   edit(target: Target, changes: EditDelta | Partial<SimplifiedNode>): Promise<Handle>;
-  // The atomic batch form: every target resolves and every delta validates before the first write,
+  // The atomic batch form: every id resolves and every delta validates before the first write,
   // so one invalid entry leaves the canvas untouched and the rejection names EVERY failing entry.
   // The whole set is one undo step, and cross-entry order doesn't matter (a parent turned
   // auto-layout settles before a child set to "fill", whichever way round they were written).
-  editMany(entries: EditEntry[], scope?: EditManyScope): Promise<Handle[]>;
+  editMany(entries: EditEntry[]): Promise<Handle[]>;
   // Ids select live nodes at every depth; each result is a copy of the spec with ids filled.
   append(parent: Target, thing: NodeSpec): Promise<AuthoredTree>;
   prepend(parent: Target, thing: NodeSpec): Promise<AuthoredTree>;
@@ -764,7 +759,7 @@ export const VERBS: VerbDoc[] = [
   {"category": "component", "signature": "await flcm.variants(entries, options)", "builds": "a COMPONENT_SET handle", "args": "Each entry is { component: target, variant: { axis: value } }. options names the set."},
   {"category": "component", "signature": "await flcm.detach(target)", "builds": "a FRAME handle", "args": "Detach an instance. Root and descendant ids change."},
   {"category": "edit", "signature": "await flcm.edit(target, changes)", "builds": "an updated handle", "args": "Apply only the named props. Structure changes use placement verbs."},
-  {"category": "edit", "signature": "await flcm.editMany(entries, scope?)", "builds": "updated handles in entry order", "args": "One atomic batch of { target, changes }. scope is { within? }."},
+  {"category": "edit", "signature": "await flcm.editMany(entries)", "builds": "updated handles in entry order", "args": "One atomic batch. Each entry is { id, ...changes } — a live node id plus the same props edit takes."},
   {"category": "read", "signature": "await flcm.get(target)", "builds": "{ node, components? }", "args": "Expanded read data. Pass node directly to a placement verb to move and edit it. components contains shared definitions."},
   {"category": "read", "signature": "await flcm.find(query?, predicate?)", "builds": "slim handles[]", "args": "Query fields: type, name, key, within, hasAnnotations. Optional predicate sees expanded read data."},
   {"category": "read", "signature": "await flcm.findOne(query?, predicate?)", "builds": "one slim handle", "args": "Like find; throws unless exactly one matches."},

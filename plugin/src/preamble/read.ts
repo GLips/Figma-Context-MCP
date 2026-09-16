@@ -56,7 +56,7 @@ export async function resolveTarget(target: Target, within?: Target): Promise<Sc
   if (typeof target === "string") return resolveString(target, within);
   if (hasId(target)) {
     const node = await byId(target.id);
-    if (!node) throw new Error(`flcm: the handle's node (id ${JSON.stringify(target.id)}) no longer exists — it may have been deleted.`);
+    if (!node) throw new Error(`flcm: no live node with id ${JSON.stringify(target.id)} — it may have been deleted.`);
     return node;
   }
   throw new Error(`flcm: cannot resolve target ${JSON.stringify(target)} — pass a node id, an flcm/key, flcm.id(id), or a handle.`);

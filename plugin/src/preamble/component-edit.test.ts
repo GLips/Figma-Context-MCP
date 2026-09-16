@@ -249,14 +249,8 @@ test("editMany applies definition and root words across entries in one step", as
     { name: "Other" },
   );
   await editMany([
-    {
-      target: id(comp.id),
-      changes: { propertyDefinitions: { Label: { defaultValue: "Save" } }, fill: "#00ff00" },
-    },
-    {
-      target: id(second.id),
-      changes: { propertyDefinitions: { Tone: { type: "boolean", defaultValue: true } } },
-    },
+    { id: comp.id, propertyDefinitions: { Label: { defaultValue: "Save" } }, fill: "#00ff00" },
+    { id: second.id, propertyDefinitions: { Tone: { type: "boolean", defaultValue: true } } },
   ]);
   assert.equal(comp.componentPropertyDefinitions[fullName(comp, "Label")].defaultValue, "Save");
   assert.deepEqual(comp.fills[0].color, { r: 0, g: 1, b: 0 });
@@ -379,8 +373,8 @@ test("editMany refuses a batch that both re-declares a property and binds to it,
   const before = figma.undoLog.length;
   await assert.rejects(
     editMany([
-      { target: id(comp.id), changes: { propertyDefinitions: { Heading: { name: "Caption" } } } },
-      { target: id(title.id), changes: { componentPropertyReferences: { text: "Heading" } } },
+      { id: comp.id, propertyDefinitions: { Heading: { name: "Caption" } } },
+      { id: title.id, componentPropertyReferences: { text: "Heading" } },
     ]),
     /\[1\].*in the same batch — the two would have to run in an order this call never states/s,
   );
@@ -397,8 +391,8 @@ test("editMany refuses a batch that deletes a property and sets it on an instanc
   const before = figma.undoLog.length;
   await assert.rejects(
     editMany([
-      { target: id(comp.id), changes: { propertyDefinitions: { Label: null } } },
-      { target: id(inst.id), changes: { componentProperties: { Label: "Hi" } } },
+      { id: comp.id, propertyDefinitions: { Label: null } },
+      { id: inst.id, componentProperties: { Label: "Hi" } },
     ]),
     /\[1\].* sets `componentProperties` on an instance of .*in the same batch — the two would have to run in an order this call never states/s,
   );

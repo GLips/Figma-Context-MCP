@@ -112,7 +112,7 @@ test("contradictory and malformed bounds reject before batch writes, valid inter
   const node = await figma.getNodeByIdAsync(built.id);
   const before = [...figma.undoLog];
   await assert.rejects(
-    editMany([{ target: built, changes: { minWidth: 120, opacity: 0.5 } }]),
+    editMany([{ id: built.id, minWidth: 120, opacity: 0.5 }]),
     /minWidth 120 exceeds maxWidth 100/,
   );
   assert.equal(node.opacity, 1);
@@ -169,9 +169,9 @@ test("overflow warning deduplicates clipped/unclipped containers, includes preex
   });
   warnings = [];
   const handles = await editMany([
-    { target: specNode(built, "clipped"), changes: { width: 90 } },
-    { target: specNode(built, "outer"), changes: { width: 190 } },
-    { target: specNode(built, "nested"), changes: { height: 35 } },
+    { id: specNode(built, "clipped").id, width: 90 },
+    { id: specNode(built, "outer").id, width: 190 },
+    { id: specNode(built, "nested").id, height: 35 },
   ]);
   assert.equal(handles.length, 3);
   const overflow = warnings.filter((message) => message.includes(": overflow in"));
@@ -195,8 +195,8 @@ test("overflow is measured after all batch sizes settle", async () => {
   });
   warnings = [];
   await editMany([
-    { target: built, changes: { width: 100 } },
-    { target: specNode(built, "child"), changes: { width: 80 } },
+    { id: built.id, width: 100 },
+    { id: specNode(built, "child").id, width: 80 },
   ]);
   assert.equal(warnings.filter((message) => message.includes(": overflow in")).length, 0);
 });

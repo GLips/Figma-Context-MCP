@@ -23,12 +23,12 @@ import { compileDeltaTrees } from "./compile-tree.js";
 // commit-free internal appliers — never the public `edit`, which would shatter the batch into one
 // undo boundary per entry (invariant 4).
 
-import { Handle, Target } from "./ir.js";
+import { Handle } from "./ir.js";
 import { resolveTarget, createResolvedTargets, ResolvedTargets } from "./read.js";
 import { enterMutatingVerb } from "./mutation-lock.js";
 import { assertNodeStillOnCanvas } from "./freshness.js";
 import { mintHandle, resolvePercents, beginRenderWalk, BatchLayoutDeltas } from "./bridge.js";
-import { rejectUnknownKeys } from "./validate.js";
+import { showValue } from "./validate.js";
 import {
   EditPlan, rejectNonDeltaWords, compileEditPlan, loadEditResources, assertEditPlanLands, gateEditResources,
   openEditPlanApply, applyEditPlanWrites, settleEditPlanSizes, settleEditPlanPositions,
@@ -39,24 +39,18 @@ import {
 import { resolveComponentEditTargets, planComponentEdit, applyComponentDefinitionEdit, applyComponentBindingEdit, ComponentEditPlan } from "./component-edit.js";
 import { componentAncestorOf } from "./component.js";
 import { definitionOwnerOf } from "./identity.js";
-import type { EditEntry, EditManyScope } from "./schema.js";
+import type { EditDelta, EditEntry } from "./schema.js";
 
 const SUBJECT = "flcm.editMany";
 
-const ENTRY_KEYS = ["target", "changes"] as const;
-const SCOPE_KEYS = ["within"] as const;
-// Tie the runtime allow-lists to the types they mirror (read.ts does the same for FindQuery): a
-// field added to either interface but not listed here fails typecheck, so the fail-loud gate can't
-// silently start rejecting a legitimate new one.
-type _EntryKeysCoverEditEntry = keyof EditEntry extends (typeof ENTRY_KEYS)[number] ? true : never;
-type _ScopeKeysCoverEditManyScope = keyof EditManyScope extends (typeof SCOPE_KEYS)[number] ? true : never;
-const _entryKeysExhaustive: _EntryKeysCoverEditEntry = true;
-const _scopeKeysExhaustive: _ScopeKeysCoverEditManyScope = true;
-void _entryKeysExhaustive;
-void _scopeKeysExhaustive;
-
-const ENTRY_KEY_SET: ReadonlySet<string> = new Set(ENTRY_KEYS);
-const SCOPE_KEY_SET: ReadonlySet<string> = new Set(SCOPE_KEYS);
+/**
+ * One entry as the pipeline works with it: the live node it addresses, and the delta to apply there.
+ *
+ * The split is the ONLY structural thing this verb knows about an entry. Everything after it judges
+ * an ordinary edit delta through edit's own gate, so the two verbs cannot grow apart — there is no
+ * per-entry allow-list here to fall out of step with the edit vocabulary.
+ */
+interface BatchEntry { id: string; changes: EditDelta }
 
 function messageOf(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
@@ -95,14 +89,37 @@ function createBatchLedger(total: number): BatchLedger {
     },
     rejectIfAny() {
       if (!count) return;
-      const lines: string[] = [];
-      for (let i = 0; i < total; i++) if (failures[i] !== undefined) lines.push("  [" + i + "] " + failures[i]);
       throw new Error(
         SUBJECT + ": " + count + " of " + total + " entries were rejected, so NOTHING was applied — " +
-          "the batch is all-or-nothing. Fix every entry below and re-run it.\n" + lines.join("\n"),
+          "the batch is all-or-nothing. Fix every entry below and re-run it.\n" + collapseFailures(failures, total).join("\n"),
       );
     },
   };
+}
+
+/**
+ * The failure lines, one per DISTINCT message: entries that failed the same way report together as
+ * `N entries (0, 2, 5): …` instead of repeating the sentence N times.
+ *
+ * A batch is usually one generated list, so its mistake is usually one mistake — a word misspelled
+ * across forty entries would otherwise bury the two entries that failed for their own reasons in
+ * forty identical lines. Distinct messages keep first-seen order, so the indexes still read
+ * left-to-right.
+ */
+function collapseFailures(failures: readonly (string | undefined)[], total: number): string[] {
+  const indexesByMessage = new Map<string, number[]>();
+  for (let i = 0; i < total; i++) {
+    const message = failures[i];
+    if (message === undefined) continue;
+    const seen = indexesByMessage.get(message);
+    if (seen) seen.push(i);
+    else indexesByMessage.set(message, [i]);
+  }
+  const lines: string[] = [];
+  indexesByMessage.forEach((at, message) => {
+    lines.push(at.length === 1 ? "  [" + at[0] + "] " + message : "  " + at.length + " entries (" + at.join(", ") + "): " + message);
+  });
+  return lines;
 }
 
 /**
@@ -123,38 +140,59 @@ function forEachLiveEntry(ledger: BatchLedger, total: number, step: (index: numb
 
 // ---- the stages, each over the WHOLE batch ----
 
-function assertBatchShape(entries: unknown, scope: EditManyScope | undefined): void {
+function assertBatchShape(entries: unknown): void {
   if (!Array.isArray(entries)) {
     throw new Error(
-      SUBJECT + ": the first argument is an array of { target, changes } entries — got " + JSON.stringify(entries) +
+      SUBJECT + ": the first argument is an array of { id, ...changes } entries — got " + showValue(entries) +
         ". To nudge a single node, use flcm.edit(target, changes).",
     );
   }
   if (!entries.length) {
     throw new Error(SUBJECT + ": the entries array is empty — nothing to apply (an empty batch would still mint an undo step).");
   }
-  if (scope != null) rejectUnknownKeys(scope, SCOPE_KEY_SET, SUBJECT + "'s scope");
 }
 
-// The pure, document-blind stage: it runs for every entry before a single node is resolved, so a
-// misspelled word reads as "unknown prop" no matter what it targets (invariant 2).
-function assertEntryVocabulary(entry: EditEntry): void {
-  rejectUnknownKeys(entry, ENTRY_KEY_SET, SUBJECT + "'s entry");
-  rejectNonDeltaWords(entry.changes, SUBJECT);
+/**
+ * The pure, document-blind stage: it runs for every entry before a single node is resolved, so a
+ * misspelled word reads as "unknown prop" no matter which node the entry names (invariant 2).
+ *
+ * `target` is named on its own because it is the near-miss an agent actually writes — every other
+ * verb takes a positional target — and the closed-set reject would answer "unknown prop", which
+ * says nothing about where the node belongs.
+ */
+function compileBatchEntry(entry: EditEntry, index: number): BatchEntry {
+  if (entry === null || typeof entry !== "object" || Array.isArray(entry)) {
+    throw new Error(SUBJECT + ": each entry is an object { id, ...changes } — got " + showValue(entry) + ".");
+  }
+  if ("target" in entry) {
+    throw new Error(
+      SUBJECT + ": an entry names its node with `id`, not `target` — write { id, ...changes }, the shape every verb reads and writes. " +
+        "A batch edits nodes you have already located: find them first (flcm.find / flcm.findOne / a render result) and pass each one's `id`.",
+    );
+  }
+  const { id, ...rest } = entry as { id?: unknown } & EditDelta;
+  if (typeof id !== "string" || !id.trim()) {
+    throw new Error(
+      SUBJECT + ": an entry needs an `id` — the live id of the node to edit, as flcm.find, flcm.findOne, flcm.get and render results all carry. Got " + showValue(id) + ".",
+    );
+  }
+  const changes = compileDeltaTrees(rest as EditDelta, SUBJECT + "[" + index + "]");
+  rejectNonDeltaWords(changes, SUBJECT);
+  return { id, changes };
 }
 
-// Resolve concurrently — target resolution is read-only, and a batch of ten shouldn't pay ten
+// Resolve concurrently — reading a node by id is read-only, and a batch of ten shouldn't pay ten
 // serial round trips. Every resolution runs to completion before anything is raised; a slot is left
 // empty exactly where the ledger holds that entry's failure.
-async function resolveEntryTargets(
-  ledger: BatchLedger, entries: readonly EditEntry[], within: Target | undefined,
-): Promise<(SceneNode | undefined)[]> {
+async function resolveEntryNodes(ledger: BatchLedger, batch: readonly BatchEntry[]): Promise<(SceneNode | undefined)[]> {
   const nodes: (SceneNode | undefined)[] = [];
   await Promise.all(
-    entries.map(async (entry, i) => {
-      if (ledger.failed(i)) return; // a malformed entry's target is not a question worth asking
+    batch.map(async (entry, i) => {
+      if (ledger.failed(i)) return; // a malformed entry's node is not a question worth asking
       try {
-        nodes[i] = await resolveTarget(entry.target, within);
+        // Through the target resolver's id branch, not a key scan: an entry's `id` IS live
+        // identity, so a string that happens to also be someone's flcm/key is not a question here.
+        nodes[i] = await resolveTarget({ id: entry.id });
       } catch (err) {
         ledger.record(i, err);
       }
@@ -164,8 +202,8 @@ async function resolveEntryTargets(
 }
 
 // Two entries naming one node is refused, never merged. Last-wins would silently drop a delta the
-// agent wrote — and the two are usually a mistake (a key and an id for the same node), not an
-// intentional merge. The remedy is one entry carrying both deltas.
+// agent wrote — and two entries for one id are a slip in whatever built the list, not an intentional
+// merge. The remedy is one entry carrying both deltas.
 function assertOneEntryPerNode(ledger: BatchLedger, nodes: readonly (SceneNode | undefined)[]): void {
   const firstSeen: Record<string, number> = {};
   forEachLiveEntry(ledger, nodes.length, (i) => {
@@ -383,7 +421,7 @@ function layoutDeltasByNodeId(plans: readonly (EditPlan | undefined)[]): BatchLa
 
 // Every entry's compile, in ONE synchronous turn, so all of them see a single canvas instant
 // rather than one instant per entry. Prepare runs it for the hint, the gate for real.
-function compileEntries(ledger: BatchLedger, nodes: readonly (SceneNode | undefined)[], batch: readonly EditEntry[]): (EditPlan | undefined)[] {
+function compileEntries(ledger: BatchLedger, nodes: readonly (SceneNode | undefined)[], batch: readonly BatchEntry[]): (EditPlan | undefined)[] {
   const compiled: (EditPlan | undefined)[] = [];
   forEachLiveEntry(ledger, batch.length, (i) => {
     compiled[i] = compileEditPlan(nodes[i] as SceneNode, batch[i].changes, SUBJECT);
@@ -414,33 +452,30 @@ function applyOrderShallowestFirst(plans: readonly EditPlan[]): number[] {
 }
 
 /**
- * flcm.editMany(entries, scope?) — apply a set of per-target deltas as ONE atomic call. Every
- * target resolves and every delta validates before the first canvas write; a rejection names every
- * failing entry and leaves the canvas untouched. Optional `scope.within` narrows key resolution the
- * way `find`'s does (default: the current page). Returns each entry's updated Handle, in entry
- * order.
+ * flcm.editMany(entries) — apply a set of per-node deltas as ONE atomic call. Each entry is
+ * `{ id, ...changes }`: the live node id, plus exactly the delta `flcm.edit` takes. Every id
+ * resolves and every delta validates before the first canvas write; a rejection names every failing
+ * entry and leaves the canvas untouched. Returns each entry's updated Handle, in entry order.
  */
 // A single expression on purpose: the queue slot is reserved before editMany() can possibly yield,
 // which is the lock's invocation-order guarantee (see enterMutatingVerb) — don't add work above it.
-export function editMany(entries: EditEntry[], scope?: EditManyScope): Promise<Handle[]> {
+export function editMany(entries: EditEntry[]): Promise<Handle[]> {
   return enterMutatingVerb(
     "editMany",
     async () => {
-      assertBatchShape(entries, scope);
+      assertBatchShape(entries);
       // Snapshot the array itself, not just its contents: prepare awaits, and the caller's own code
       // can run in between. A batch that grew or shrank underneath us would mint handles for a set
       // nobody validated. Entries are read-only from here on; the objects inside are the caller's
       // and are only ever read.
-      const batch = entries.map((entry, i) => (entry && typeof entry === "object" && !Array.isArray(entry) ? { ...entry, changes: compileDeltaTrees(entry.changes, SUBJECT + "[" + i + "]") } : entry));
-      const ledger = createBatchLedger(batch.length);
-      forEachLiveEntry(ledger, batch.length, (i) => assertEntryVocabulary(batch[i]));
-      // `within` resolves ONCE for the batch, not per entry: as a bare key it costs a document
-      // scan, and N identical scans is the cost the batch verb exists to remove. Handed on as a
-      // raw-id ref so each entry's own resolution is a lookup, and so a bad scope throws once,
-      // plainly, instead of once per entry inside the aggregate.
-      const scoped = scope && scope.within != null ? await resolveTarget(scope.within) : undefined;
-      const within: Target | undefined = scoped ? { __flcmId: scoped.id } : undefined;
-      const nodes = await resolveEntryTargets(ledger, batch, within);
+      const raw = entries.slice();
+      const ledger = createBatchLedger(raw.length);
+      // Sized to the CALLER's count up front, and left with a hole wherever an entry failed: every
+      // stage below addresses entries by index, and a length that shrank with a trailing bad entry
+      // would misreport the batch's size.
+      const batch: BatchEntry[] = new Array(raw.length);
+      forEachLiveEntry(ledger, raw.length, (i) => { batch[i] = compileBatchEntry(raw[i], i); });
+      const nodes = await resolveEntryNodes(ledger, batch);
       assertOneEntryPerNode(ledger, nodes);
       // The HINT compiles: what each entry needs loaded if the document stays as it is. Every
       // decision they make is made again in the gate, against the document at the seal.

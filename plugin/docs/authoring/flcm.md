@@ -91,7 +91,7 @@ REST does not request geometry=paths, so its decoded readOnlySource cannot suppl
 | `await flcm.variants(entries, options)` | a COMPONENT_SET handle | Each entry is { component: target, variant: { axis: value } }. options names the set. |
 | `await flcm.detach(target)` | a FRAME handle | Detach an instance. Root and descendant ids change. |
 | `await flcm.edit(target, changes)` | an updated handle | Apply only the named props. Structure changes use placement verbs. |
-| `await flcm.editMany(entries, scope?)` | updated handles in entry order | One atomic batch of { target, changes }. scope is { within? }. |
+| `await flcm.editMany(entries)` | updated handles in entry order | One atomic batch. Each entry is { id, ...changes } — a live node id plus the same props edit takes. |
 | `await flcm.get(target)` | { node, components? } | Expanded read data. Pass node directly to a placement verb to move and edit it. components contains shared definitions. |
 | `await flcm.find(query?, predicate?)` | slim handles[] | Query fields: type, name, key, within, hasAnnotations. Optional predicate sees expanded read data. |
 | `await flcm.findOne(query?, predicate?)` | one slim handle | Like find; throws unless exactly one matches. |
@@ -557,12 +557,17 @@ On a node type with no vocabulary of its own (GROUP, SECTION, POLYGON, …) only
 
 ### Many at once — `flcm.editMany`
 
-`await flcm.editMany([{ target, changes }, …], { within? })` applies a whole set of deltas as **one** call, returning a handle per entry in order. Each `changes` is exactly an `flcm.edit` delta.
+`await flcm.editMany([{ id, ...changes }, …])` applies a whole set of deltas as **one** call, returning a handle per entry in order. Each entry is the plain-data node shape used everywhere else — a live node `id` plus exactly an `flcm.edit` delta. A key or a handle is not an id, so locate the nodes first and pass what you got back:
+
+```js
+const cards = await flcm.find({ type: "FRAME", name: "Card" });
+await flcm.editMany(cards.map((card) => ({ id: card.id, fill: "#F6F7F9", borderRadius: 12 })));
+```
 
 Reach for it whenever you're nudging more than one node — a loop over `flcm.edit` is not the same thing:
 
-- **The set is atomic.** Every target resolves and every delta validates before the first write; a loop would already have mutated entries 1–3 when entry 4's typo surfaced.
-- **One rejection names every bad entry**, indexed, so you fix the batch in one pass.
+- **The set is atomic.** Every id resolves and every delta validates before the first write; a loop would already have mutated entries 1–3 when entry 4's typo surfaced.
+- **One rejection names every bad entry**, indexed, so you fix the batch in one pass; entries that failed the same way report together as one counted line.
 - **The whole batch is one undo step.**
 - **Order doesn't matter** — entries settle ancestors-first, so turning a parent into a row and setting its child to `width: "fill"` works either way round.
 - **Two entries for the same node reject** rather than last-wins; put both fields in one entry.

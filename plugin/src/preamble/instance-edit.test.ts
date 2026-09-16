@@ -274,14 +274,12 @@ test("editMany takes instance deltas, atomically, alongside ordinary ones", asyn
   const undosBefore = figma.undoLog.length;
   await editMany([
     {
-      target: id(inst.id),
-      changes: {
-        componentProperties: { Label: "Go" },
-        overrides: { [label.id]: { fill: "#00ff00" } },
-        opacity: 0.4,
-      },
+      id: inst.id,
+      componentProperties: { Label: "Go" },
+      overrides: { [label.id]: { fill: "#00ff00" } },
+      opacity: 0.4,
     },
-    { target: "box", changes: { fill: "#ff0000" } },
+    { id: other.id, fill: "#ff0000" },
   ]);
   assert.equal(inst.children[1].characters, "Go");
   assert.deepEqual((await figma.getNodeByIdAsync("I" + inst.id + ";" + label.id)).fills[0].color, {
@@ -296,8 +294,8 @@ test("editMany takes instance deltas, atomically, alongside ordinary ones", asyn
   const box = await figma.getNodeByIdAsync(other.id);
   await assert.rejects(
     editMany([
-      { target: "box", changes: { fill: "#0000ff" } },
-      { target: id(inst.id), changes: { componentProperties: { Nope: "x" } } },
+      { id: other.id, fill: "#0000ff" },
+      { id: inst.id, componentProperties: { Nope: "x" } },
     ]),
     /1 of 2 entries were rejected.*\[1\].*no property "Nope"/s,
   );
@@ -488,8 +486,8 @@ test("editMany refuses an entry aimed INSIDE an instance another entry re-points
   const before = [...figma.undoLog];
   await assert.rejects(
     editMany([
-      { target: id(inst.id), changes: { componentId: compB.id } },
-      { target: id(liveLabelId), changes: { fill: "#ff0000" } },
+      { id: inst.id, componentId: compB.id },
+      { id: liveLabelId, fill: "#ff0000" },
     ]),
     /\[1\].*entry \[0\] re-points.*`overrides`/s,
   );
@@ -529,8 +527,8 @@ test("editMany refuses the entire batch for an incompatible instance direction",
   const before = [...figma.undoLog];
   await assert.rejects(
     editMany([
-      { target: id(comp.id), changes: { name: "Changed" } },
-      { target: id(inst.id), changes: { layout: { mode: "none" }, opacity: 0.5 } },
+      { id: comp.id, name: "Changed" },
+      { id: inst.id, layout: { mode: "none" }, opacity: 0.5 },
     ]),
     /instance root inherits its layout direction/,
   );
@@ -561,9 +559,7 @@ for (const retarget of ["swap", "variant"] as const) {
     assert.equal(inst.opacity, 1);
     assert.equal(inst.itemSpacing, 0);
     assert.deepEqual(figma.undoLog, before);
-    await editMany([
-      { target: id(inst.id), changes: { ...changes, layout: { mode: "column", gap: 20 } } },
-    ]);
+    await editMany([{ id: inst.id, ...changes, layout: { mode: "column", gap: 20 } }]);
     assert.equal(inst.mainComponent, variants[2]);
     assert.equal(inst.layoutMode, "VERTICAL");
     assert.equal(inst.itemSpacing, 20);
@@ -625,8 +621,8 @@ test("inherited rectangle dimensions reject an entire editMany batch", async () 
   const before = [...figma.undoLog];
   await assert.rejects(
     editMany([
-      { target: id(comp.id), changes: { name: "Changed" } },
-      { target: id(inst.children[0].id), changes: { width: 72, fill: "#00ff00" } },
+      { id: comp.id, name: "Changed" },
+      { id: inst.children[0].id, width: 72, fill: "#00ff00" },
     ]),
     /explicit width\/height cannot resize an inherited rectangle/,
   );

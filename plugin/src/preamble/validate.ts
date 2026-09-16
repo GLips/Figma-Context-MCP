@@ -17,7 +17,7 @@ const listKeys = (allowed: ReadonlySet<string>): string => [...allowed].map((k) 
 
 // The reject must never crash while describing bad input — JSON.stringify itself throws on BigInt
 // and cycles, and returns undefined for undefined/functions/symbols.
-const showValue = (v: unknown): string => {
+export const showValue = (v: unknown): string => {
   try {
     return JSON.stringify(v) ?? String(v);
   } catch {
