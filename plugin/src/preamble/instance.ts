@@ -46,7 +46,7 @@ import { resolveTarget, ResolvedTargets } from "./read.js";
 import { assertNodeStillOnCanvas } from "./freshness.js";
 import { FontMap } from "./fonts.js";
 import {
-  isRowColumnAutoLayout, mintHandle, attachBuiltChild, liveParentAttachFacts, assertBuiltRootLandsUnderParent,
+  mintHandle, attachBuiltChild, liveParentAttachFacts, assertBuiltRootLandsUnderParent,
   InstancePlan, RenderCtx, RenderResources, BatchLayoutDeltas,
 } from "./bridge.js";
 import { assertLayoutRealizableForType } from "./layout-legality.js";

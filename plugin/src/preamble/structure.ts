@@ -28,7 +28,7 @@ import { resolveTarget } from "./read.js";
 import { assertNodeStillOnCanvas, LoadedPages, createLoadedPages, loadPageForWrite, assertPageLoaded } from "./freshness.js";
 import { enterMutatingVerb, compensatedMutationFailure } from "./mutation-lock.js";
 import {
-  attachBuiltChild, mintHandle, resolvePercents, beginRenderWalk, RenderResources,
+  attachBuiltChild, settleSiblingOrder, mintHandle, resolvePercents, beginRenderWalk, RenderResources,
   liveParentAttachFacts, assertLiveNodeLandsUnderParent, assertBuiltRootLandsUnderParent, resettleMovedNode,
 } from "./bridge.js";
 import { loadTreeResources, gateTreeResources, LoadedTreeResources } from "./render.js";
@@ -358,6 +358,7 @@ export function clone(target: Target, propsOrParent?: EditDelta | Target, parent
         if (edit) {
           const plan = { ...edit, node: copy };
           applyEditPlanWrites(fail, plan, resources);
+          settleSiblingOrder(resources);
           settleEditPlanSizes(fail, plan);
           settleEditPlanPositions(fail, plan);
         }

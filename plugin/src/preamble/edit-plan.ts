@@ -1,3 +1,4 @@
+import { acceptAuthoringProps } from "./authoring-input.js";
 import { loadLiveTree, gateLiveTree, LoadedLiveTree } from "./live-tree.js";
 import { sceneFigma as figma } from "./scene-access.js";
 // edit-plan — the STAGES of the mutate pipeline, with no verb attached. Three callers drive them:
@@ -76,15 +77,15 @@ import {
   RenderResources, BatchLayoutDeltas, InstancePlan, EditLayoutProjection,
 } from "./bridge.js";
 import { toFigmaEffects } from "./effects.js";
-import { acceptAuthoringProps, own, rejectNonDeltaWords as rejectNonDeltaWordsAgainst } from "./validate.js";
+import { own, rejectNonDeltaWords as rejectNonDeltaWordsAgainst } from "./validate.js";
 import { liveFontWords, loadFontsForTextEdits, assertTextEditFontsLoaded, EditFontNeed, FontMap } from "./fonts.js";
 import {
-  KNOWN_KEYS, compileNodeLocalProps, compileSizeWords, compilePlacementWords, compileContainerWords,
+  KNOWN_KEYS, compileNodeLocalProps, compileNodeLayout,
   compileLineWidth, compileTextStyleWords, compileTextContent, assertLineClampCount, fetchImagesForTrees,
   compileComponentPropertyBag, compileOverrideBag, compileSwapTarget, compilePropertyDefinitionEditBag,
   INSTANCE_COMPONENT_WORDS, DOCUMENT_RESOLVED_EDIT_WORDS,
 } from "./flcm.js";
-import type { EditDelta, FrameProps } from "./schema.js";
+import type { EditDelta } from "./schema.js";
 
 const EDIT_KEYS: ReadonlySet<string> = new Set(KNOWN_KEYS.edit);
 
@@ -190,12 +191,8 @@ function compileDeltaPatch(changes: EditDelta, legal: ReadonlySet<string>, node:
   // Layout words compile through the same helpers every compiler rides — never buildLayout,
   // whose creation default (omitted mode → "none") would turn a gap nudge into an auto-layout kill.
   // A LINE's `width` is LINE's own fixed-only compile, not the sizing-intent one.
-  const layout: WriteLayout =
-    node.type === "LINE"
-      ? { ...(compileLineWidth(changes) || {}), ...(compilePlacementWords(changes) || {}) }
-      : { ...(compileSizeWords(changes) || {}) };
-  if (changes.layout != null) Object.assign(layout, compileContainerWords(changes.layout as NonNullable<FrameProps["layout"]>, subject + ".layout"));
-  if (Object.keys(layout).length) patch.layout = layout;
+  const layout = compileNodeLayout(changes, node.type, subject);
+  if (layout) patch.layout = layout;
   if (node.type === "TEXT") compileTextDeltaWords(changes, patch, node as TextNode, subject);
   return patch;
 }
@@ -537,7 +534,7 @@ export function applyEditPlanWrites(fail: EditPlanFailure, { node, patch }: Edit
     // center anchor lands off by the text-size change and only converges on a second run.
     // Fills still precede runs (applyPaint above).
     if (node.type === "TEXT") applyTextProps(node as TextNode, patch, resources);
-    if (patch.layout) applyLiveNodeLayout(node, patch.layout);
+    if (patch.layout) applyLiveNodeLayout(node, patch.layout, resources);
   } catch (cause) {
     throw fail(cause);
   }

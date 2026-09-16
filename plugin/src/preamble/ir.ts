@@ -78,6 +78,13 @@ export const EDIT_TYPE_WORD_GROUPS = {
   SLOT: ["annotation", "shared", "size", "appearance", "frame"],
 } as const satisfies Record<EditableType, readonly string[]>;
 
+/** The schema's frame group is the authority for container-only layout words. */
+export function hasContainerLayout(type: string): boolean {
+  const groups: readonly string[] | undefined = Object.prototype.hasOwnProperty.call(EDIT_TYPE_WORD_GROUPS, type)
+    ? EDIT_TYPE_WORD_GROUPS[type as EditableType] : undefined;
+  return groups?.includes("frame") ?? false;
+}
+
 export interface Rgb { r: number; g: number; b: number }
 export interface Rgba { r: number; g: number; b: number; a: number }
 
@@ -258,7 +265,14 @@ export type AnchorX = "left" | "center" | "right";
 export type AnchorY = "top" | "center" | "bottom";
 export interface WriteLayout {
   bounds?: Partial<Record<"minWidth" | "maxWidth" | "minHeight" | "maxHeight", number | "none">>;
-  mode?: "none" | "row" | "column";
+  mode?: "none" | "row" | "column" | "grid";
+  gridTemplateColumns?: import("./grid-tracks.js").GridTrack[];
+  gridTemplateRows?: import("./grid-tracks.js").GridTrack[];
+  gridColumn?: { anchor?: number; span: number };
+  gridRow?: { anchor?: number; span: number };
+  justifySelf?: "MIN" | "CENTER" | "MAX" | "AUTO";
+  alignSelf?: "flex-start" | "flex-end" | "center" | "stretch" | "start" | "end" | "auto";
+  zIndex?: number;
   justifyContent?: Justify; // primary-axis distribution (author `layout.justifyContent`)
   alignItems?: Align;       // counter-axis alignment (author `layout.alignItems`)
   gap?: number | { row: number; column: number };

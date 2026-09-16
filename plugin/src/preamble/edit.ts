@@ -25,7 +25,7 @@ import { Target, Handle } from "./ir.js";
 import { resolveTarget, createResolvedTargets } from "./read.js";
 import { enterMutatingVerb } from "./mutation-lock.js";
 import { assertNodeStillOnCanvas } from "./freshness.js";
-import { mintHandle, resolvePercents, beginRenderWalk } from "./bridge.js";
+import { mintHandle, settleSiblingOrder, resolvePercents, beginRenderWalk } from "./bridge.js";
 import {
   rejectNonDeltaWords, compileEditPlan, loadEditResources, assertEditPlanLands, gateEditResources,
   openEditPlanApply, applyEditPlanWrites, settleEditPlanSizes, settleEditPlanPositions,
@@ -95,6 +95,7 @@ export function edit(target: Target, changes: EditDelta): Promise<Handle> {
         applyInstanceOverrides(plan.node, instance, walk, "edit");
         resolvePercents(walk);
       }
+      settleSiblingOrder(resources);
       return mintHandle(plan.node);
     },
   );

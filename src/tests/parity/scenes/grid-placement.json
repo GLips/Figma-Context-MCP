@@ -1,0 +1,100 @@
+{
+  "nodes": [
+    {
+      "id": "12:1",
+      "name": "Grid",
+      "type": "FRAME",
+      "visible": true,
+      "clipsContent": true,
+      "layoutMode": "GRID",
+      "absoluteBoundingBox": {
+        "x": 0,
+        "y": 0,
+        "width": 260,
+        "height": 130
+      },
+      "layoutSizingHorizontal": "FIXED",
+      "layoutSizingVertical": "FIXED",
+      "gridRowGap": 10,
+      "gridColumnGap": 10,
+      "children": [
+        {
+          "id": "12:2",
+          "name": "Tall cell",
+          "type": "RECTANGLE",
+          "visible": true,
+          "absoluteBoundingBox": {
+            "x": 10,
+            "y": 30,
+            "width": 60,
+            "height": 100
+          },
+          "layoutSizingHorizontal": "FIXED",
+          "layoutSizingVertical": "FIXED",
+          "gridColumnAnchorIndex": 0,
+          "gridRowAnchorIndex": 0,
+          "gridColumnSpan": 1,
+          "gridRowSpan": 2,
+          "gridChildHorizontalAlign": "CENTER",
+          "gridChildVerticalAlign": "MAX",
+          "width": 60,
+          "height": 100,
+          "x": 10,
+          "y": 30
+        },
+        {
+          "id": "12:3",
+          "name": "Wide cell",
+          "type": "RECTANGLE",
+          "visible": true,
+          "absoluteBoundingBox": {
+            "x": 140,
+            "y": 15,
+            "width": 120,
+            "height": 30
+          },
+          "layoutSizingHorizontal": "FIXED",
+          "layoutSizingVertical": "FIXED",
+          "gridColumnAnchorIndex": 1,
+          "gridRowAnchorIndex": 0,
+          "gridColumnSpan": 2,
+          "gridRowSpan": 1,
+          "gridChildHorizontalAlign": "MAX",
+          "gridChildVerticalAlign": "CENTER",
+          "width": 120,
+          "height": 30,
+          "x": 140,
+          "y": 15
+        }
+      ],
+      "width": 260,
+      "height": 130,
+      "x": 0,
+      "y": 0,
+      "gridColumnSizes": [
+        {
+          "type": "FIXED",
+          "value": 80
+        },
+        {
+          "type": "FIXED",
+          "value": 80
+        },
+        {
+          "type": "FIXED",
+          "value": 80
+        }
+      ],
+      "gridRowSizes": [
+        {
+          "type": "FIXED",
+          "value": 60
+        },
+        {
+          "type": "FIXED",
+          "value": 60
+        }
+      ]
+    }
+  ]
+}

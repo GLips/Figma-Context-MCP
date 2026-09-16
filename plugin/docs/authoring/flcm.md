@@ -21,7 +21,7 @@ An id identifies a live node, at every depth. A spec with an id moves that node 
 
 `const { node } = await flcm.get(target); await flcm.append(parent, node)` moves the node you read. To create a data copy, remove the ids from every node you want copied, including slot content in overrides. Removing only the root id creates a new root and moves its id-bearing children. Annotations are authored and copied. `clone` is the faithful live copy, including state the authoring vocabulary cannot express.
 
-Read-only fields with no authored equivalent fail by name. A root read back from get carries its real pixel size under designedWidth/designedHeight, and the verb uses those dimensions. Compressed style references, dash patterns, locked proportions and grid data are refused. VECTOR reads retain d or vectorPaths and can be authored directly. IMAGE-SVG is a wire projection; fetch a fresh runtime read to author its geometry. Errors identify the verb and a path such as spec.children[3].children[1].
+Read-only fields with no authored equivalent fail by name. A root read back from get carries its real pixel size under designedWidth/designedHeight, and the verb uses those dimensions. Compressed style references, dash patterns and locked proportions are refused. Grid templates, gaps, placement, cell alignment and sibling stacking use the read vocabulary. VECTOR reads retain d or vectorPaths and can be authored directly. IMAGE-SVG is a wire projection; fetch a fresh runtime read to author its geometry. Errors identify the verb and a path such as spec.children[3].children[1].
 
 ### Session across calls
 
@@ -159,11 +159,12 @@ A LINE sizes on a numeric `width` alone, its length. There is no `height`, `"fil
 
 | Prop | Type | Notes |
 | --- | --- | --- |
+| `layout` | { gridColumn?, gridRow?, justifySelf?, alignSelf?, zIndex? } | Placement under an auto-layout parent. Flow and grid accept their own self-alignment words. |
 | `minWidth` | number \| "none" | minWidth in positive pixels, effective on auto-layout containers and their direct children. Omitted preserves the bound; "none" clears it. Sizes constrained by bounds succeed with a console warning. |
 | `maxWidth` | number \| "none" | maxWidth in positive pixels, effective on auto-layout containers and their direct children. Omitted preserves the bound; "none" clears it. Sizes constrained by bounds succeed with a console warning. |
 | `minHeight` | number \| "none" | minHeight in positive pixels, effective on auto-layout containers and their direct children. Omitted preserves the bound; "none" clears it. Sizes constrained by bounds succeed with a console warning. |
 | `maxHeight` | number \| "none" | maxHeight in positive pixels, effective on auto-layout containers and their direct children. Omitted preserves the bound; "none" clears it. Sizes constrained by bounds succeed with a console warning. |
-| `width` | number \| "Npx" \| "N%" \| "fill" \| "hug" | A fixed size (a number or "Npx"), "N%" of the parent axis, "fill" (stretch to the parent — rejected on the root), or "hug" (shrink to content — only a row/column container or text can hug). |
+| `width` | number \| "Npx" \| "N%" \| "fill" \| "hug" | A fixed size (a number or "Npx"), "N%" of the parent axis (rejected for in-flow grid children), "fill" (stretch to the parent — rejected on the root), or "hug" (shrink to content — only a row/column/grid container or text can hug). |
 | `height` | number \| "fill" \| "hug" \| "N%" | Same rules as width. On TEXT the height follows the content ("hug", the default): set `width` to re-wrap it, use "fill" inside an auto-layout parent and "hug" to undo that; a fixed or percent height is rejected. |
 | `left` | number \| "Npx" \| "N%" | Offset from the parent's left edge — a number, "Npx", or "N%" of the parent width. Naming `left` or `top` lifts the node out of an auto-layout parent's flow (badges, overlays); under a free-form parent it is simply where the node sits. On a render root it is where on the PAGE the tree lands — without it every root stacks at the origin. Under edit, an axis you don't name keeps its live value. |
 | `top` | number \| "Npx" \| "N%" | Offset from the parent's top edge. Same rules as `left`. |
@@ -181,7 +182,9 @@ const track = { type: "FRAME", width: 300, height: 8, borderRadius: 4, fill: "#E
 ] };
 ```
 
-One case can't resolve and **fails loud**: an in-flow percent-*sized* child of an auto-layout parent that *hugs* that axis — the parent sizes to the child while the child sizes to the parent. Give the parent a fixed or `"fill"` size, or lift the child out of the flow with `left`/`top`. A percent (or `"fill"`) on the **root** fails loud too: its parent is the page, which is unbounded.
+In-flow GRID children reject percent sizes: the relevant base is the cell, whose settled geometry is not available through the authoring surface. Use fixed pixels or `fill`; absolute grid children resolve against the whole parent frame.
+
+Another case **fails loud**: an in-flow percent-*sized* child of an auto-layout parent that *hugs* that axis — the parent sizes to the child while the child sizes to the parent. Give the parent a fixed or `"fill"` size, or lift the child out of the flow with `left`/`top`. A percent (or `"fill"`) on the **root** fails loud too: its parent is the page, which is unbounded.
 
 **Responsive by default.** A percent renders to fixed pixels now, and a **positioned** child — one in a free-form parent, or one lifted out of an auto-layout flow by `left`/`top` — also gets a Figma constraint, so it still reflows when the parent is resized later. Per axis, derived from how you sized it:
 
@@ -226,19 +229,31 @@ Budget fixed widths together with padding and gaps; use `"fill"` for the remaini
 | `effects` | effects value | Shadows / blur: flcm.effects({...}) or a CSS-string bag. "none" removes all effects. |
 | `rotation` | number (deg) | Rotation in degrees. |
 | `clipsContent` | boolean | Input alias for clip; duplicate values must agree. |
-| `layout` | { mode?, wrap?, gap?, padding?, justifyContent?, alignItems? } | Auto-layout config. Omitted or mode:"none" = free-form, where children position absolutely. |
+| `layout` | { mode?, gridTemplateColumns?, gridTemplateRows?, gap?, wrap?, padding?, justifyContent?, alignItems?, gridColumn?, gridRow?, justifySelf?, alignSelf?, zIndex? } | Own container settings plus placement under the parent. Creating a grid requires both templates. |
 | `clip` | boolean | Clip children to the frame's bounds. Default false, like CSS overflow: visible. |
 
 #### Auto-layout config (the `layout` object)
 
 | Prop | Type | Notes |
 | --- | --- | --- |
-| `mode` | "row" \| "column" \| "none" | Auto-layout direction. Default "none" = free-form, where the other layout words reject loud. No grid: "grid" fails loud. |
-| `gap` | number \| string | A number, "Npx", or "row-gap column-gap" in px. Unequal gaps require wrapping. |
+| `gridTemplateColumns` | string | Grid columns, in read form: Npx, Nfr, auto or fit-content(100%) tracks; repeat(N, tracks) and minmax(0, Nfr) expand to native tracks. Reads return expanded tracks. Required when creating a grid. Fractional axes need explicit fixed or fill sizing. Other axes default to hug. |
+| `gridTemplateRows` | string | Grid rows, with the same track syntax as gridTemplateColumns. Required when creating a grid. |
+| `mode` | "row" \| "column" \| "grid" \| "none" | Auto-layout mode. Default "none" = free-form. Creating a grid requires both templates; edits preserve omitted templates. |
+| `gap` | number \| string | A number, "Npx", or "row-gap column-gap" in px. Unequal gaps require grid or wrapping. |
 | `wrap` | boolean | Wrap children onto new rows. Requires horizontal auto-layout. False disables wrapping; omitted edits preserve it. |
 | `padding` | number \| "12px 16px" \| { x?, y? } \| { top?, right?, bottom?, left? } | A number, the CSS box shorthand ("12px 16px"), { x, y } (x→left+right, y→top+bottom), or per-edge. Edge values take a number or "Npx". |
 | `justifyContent` | "flex-start" \| "flex-end" \| "center" \| "space-between" | CSS justify-content, main axis. Figma has no space-around/space-evenly — those fail loud. |
 | `alignItems` | "flex-start" \| "flex-end" \| "center" \| "stretch" \| "baseline" | CSS align-items, cross axis. "baseline" requires a horizontal row. "stretch" stretches every auto-sized child (a fixed cross-axis size wins); one child alone stretches via width/height "fill". |
+
+#### Placement under a parent (in the same `layout` object)
+
+| Prop | Type | Notes |
+| --- | --- | --- |
+| `gridColumn` | string | Grid child column: "N", "span N", or "N / span N". Anchors are 1-based. Omitted placement uses Figma auto-placement. |
+| `gridRow` | string | Grid child row: "N", "span N", or "N / span N". Anchors are 1-based. |
+| `justifySelf` | "start" \| "center" \| "end" \| "auto" | Grid child horizontal cell alignment. "auto" restores Figma alignment. |
+| `alignSelf` | "flex-start" \| "flex-end" \| "center" \| "stretch" \| "start" \| "end" \| "auto" | Parent-dependent alignment: flow uses flex-start/flex-end/center/stretch/auto; grid uses start/end/center/auto. Flow stretch aliases counter-axis fill. |
+| `zIndex` | number | Grid child sibling index, a non-negative integer. Explicit indices reserve sibling slots; unnamed siblings retain relative order in remaining slots. Duplicate or out-of-range indices fail. |
 
 ### TEXT — text props
 
@@ -350,6 +365,7 @@ Each styled run's delta fields:
 | `strokeWidth` | number \| "Npx" | Thickness. Defaults to 1. |
 | `width` | number \| "Npx" | The line's length. A fixed size only — a line can't fill, hug, or take a percent. |
 | `rotation` | number (deg) | Degrees — 90° makes a horizontal line vertical. |
+| `layout` | { gridColumn?, gridRow?, justifySelf?, alignSelf?, zIndex? } | Placement under an auto-layout parent. Flow and grid accept their own self-alignment words. |
 | `left` | number \| "Npx" \| "N%" | Offset from the parent's left edge — a number, "Npx", or "N%" of the parent width. Naming `left` or `top` lifts the node out of an auto-layout parent's flow (badges, overlays); under a free-form parent it is simply where the node sits. On a render root it is where on the PAGE the tree lands — without it every root stacks at the origin. Under edit, an axis you don't name keeps its live value. |
 | `top` | number \| "Npx" \| "N%" | Offset from the parent's top edge. Same rules as `left`. |
 | `position` | "absolute" \| "none" | "absolute" lifts the node out of auto-layout flow where it stands (no coordinate needed — `left`/`top` already imply it). Under edit, "none" returns the node to the flow; naming `left`/`top`/`anchor` beside "none" fails loud. |
@@ -497,14 +513,14 @@ Blur values are written in **CSS px** — you always write the CSS number and we
 | `maxWidth` | number \| "none" | maxWidth in positive pixels, effective on auto-layout containers and their direct children. Omitted preserves the bound; "none" clears it. Sizes constrained by bounds succeed with a console warning. |
 | `minHeight` | number \| "none" | minHeight in positive pixels, effective on auto-layout containers and their direct children. Omitted preserves the bound; "none" clears it. Sizes constrained by bounds succeed with a console warning. |
 | `maxHeight` | number \| "none" | maxHeight in positive pixels, effective on auto-layout containers and their direct children. Omitted preserves the bound; "none" clears it. Sizes constrained by bounds succeed with a console warning. |
-| `width` | number \| "Npx" \| "N%" \| "fill" \| "hug" | A fixed size (a number or "Npx"), "N%" of the parent axis, "fill" (stretch to the parent — rejected on the root), or "hug" (shrink to content — only a row/column container or text can hug). |
+| `width` | number \| "Npx" \| "N%" \| "fill" \| "hug" | A fixed size (a number or "Npx"), "N%" of the parent axis (rejected for in-flow grid children), "fill" (stretch to the parent — rejected on the root), or "hug" (shrink to content — only a row/column/grid container or text can hug). |
 | `height` | number \| "fill" \| "hug" \| "N%" | Same rules as width. On TEXT the height follows the content ("hug", the default): set `width` to re-wrap it, use "fill" inside an auto-layout parent and "hug" to undo that; a fixed or percent height is rejected. |
+| `layout` | { mode?, gridTemplateColumns?, gridTemplateRows?, gap?, wrap?, padding?, justifyContent?, alignItems?, gridColumn?, gridRow?, justifySelf?, alignSelf?, zIndex? } | Own container settings plus placement under the parent. Creating a grid requires both templates. |
 | `left` | number \| "Npx" \| "N%" | Offset from the parent's left edge — a number, "Npx", or "N%" of the parent width. Naming `left` or `top` lifts the node out of an auto-layout parent's flow (badges, overlays); under a free-form parent it is simply where the node sits. On a render root it is where on the PAGE the tree lands — without it every root stacks at the origin. Under edit, an axis you don't name keeps its live value. |
 | `top` | number \| "Npx" \| "N%" | Offset from the parent's top edge. Same rules as `left`. |
 | `position` | "absolute" \| "none" | "absolute" lifts the node out of auto-layout flow where it stands (no coordinate needed — `left`/`top` already imply it). Under edit, "none" returns the node to the flow; naming `left`/`top`/`anchor` beside "none" fails loud. |
 | `anchor` | { x?: left/center/right, y?: top/center/bottom } | Which point of the node lands on `left`/`top` (default its top-left corner), so anchor:{ x:"center" } with left:"50%" centres it. Each anchor axis needs its coordinate in the same call. |
 | `pin` | { x?, y? } \| "none" — x: left/center/right/stretch/scale/none, y: top/center/bottom/stretch/scale/none | Constraint override — how the node responds when its parent resizes, replacing the automatic choice. Honored for a child of a free-form parent and for any out-of-flow (`left`/`top`) child; on an in-flow auto-layout child it is stored but inert (fill/hug governs there) until the node leaves the flow. Under edit, "none" restores the default near-edge pin. Never lifts a node out of flow by itself. |
-| `layout` | { mode?, wrap?, gap?, padding?, justifyContent?, alignItems? } | Auto-layout config. Omitted or mode:"none" = free-form, where children position absolutely. |
 | `text` | string \| run[] | The content — a plain string (markdown: **bold**, *italic*, ~~strike~~, [text](url)) or an array of styled runs. Set it on a TEXT spec; under edit it replaces the whole content. |
 | `textStyle` | { fontFamily?, fontWeight?, fontSize?, fontStyle?, lineHeight?, letterSpacing?, textDecoration?, textTransform?, fontVariant?, textAlign?, textAlignVertical?, paragraphSpacing?, paragraphIndent?, listSpacing?, hyperlink?, lineClamp? } | The text style base. Runs layer over it. |
 | `fontSize` | number | Input alias for textStyle.fontSize; duplicate values must agree. |
@@ -519,18 +535,18 @@ Blur values are written in **CSS px** — you always write the CSS number and we
 
 ### Words by node type
 
-- **FRAME** — `annotations`, `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `minWidth`, `maxWidth`, `minHeight`, `maxHeight`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `fill`, `stroke`, `strokeWidth`, `strokeAlign`, `borderRadius`, `effects`, `rotation`, `clipsContent`, `layout`, `clip`, `componentPropertyReferences`
-- **TEXT** — `annotations`, `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `minWidth`, `maxWidth`, `minHeight`, `maxHeight`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `fontSize`, `text`, `textStyle`, `fill`, `boldWeight`, `componentPropertyReferences`
-- **RECTANGLE** — `annotations`, `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `minWidth`, `maxWidth`, `minHeight`, `maxHeight`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `fill`, `stroke`, `strokeWidth`, `strokeAlign`, `borderRadius`, `effects`, `rotation`, `componentPropertyReferences`
-- **ELLIPSE** — `annotations`, `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `minWidth`, `maxWidth`, `minHeight`, `maxHeight`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `fill`, `stroke`, `strokeWidth`, `strokeAlign`, `effects`, `rotation`, `componentPropertyReferences`
-- **LINE** — `annotations`, `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `stroke`, `strokeWidth`, `width`, `rotation`, `left`, `top`, `position`, `anchor`, `pin`, `componentPropertyReferences`
-- **VECTOR (path- or svg-born)** — `annotations`, `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `minWidth`, `maxWidth`, `minHeight`, `maxHeight`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `fill`, `stroke`, `strokeWidth`, `strokeAlign`, `effects`, `rotation`, `componentPropertyReferences`
-- **INSTANCE** — `annotations`, `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `minWidth`, `maxWidth`, `minHeight`, `maxHeight`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `fill`, `stroke`, `strokeWidth`, `strokeAlign`, `borderRadius`, `effects`, `rotation`, `clipsContent`, `layout`, `clip`, `exposed`, `componentProperties`, `overrides`, `componentId`, `componentPropertyReferences`
-- **COMPONENT** — `annotations`, `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `minWidth`, `maxWidth`, `minHeight`, `maxHeight`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `fill`, `stroke`, `strokeWidth`, `strokeAlign`, `borderRadius`, `effects`, `rotation`, `clipsContent`, `layout`, `clip`, `description`, `propertyDefinitions`
-- **COMPONENT_SET** — `annotations`, `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `minWidth`, `maxWidth`, `minHeight`, `maxHeight`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `fill`, `stroke`, `strokeWidth`, `strokeAlign`, `borderRadius`, `effects`, `rotation`, `clipsContent`, `layout`, `clip`, `description`, `propertyDefinitions`
+- **FRAME** — `annotations`, `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `layout`, `minWidth`, `maxWidth`, `minHeight`, `maxHeight`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `fill`, `stroke`, `strokeWidth`, `strokeAlign`, `borderRadius`, `effects`, `rotation`, `clipsContent`, `clip`, `componentPropertyReferences`
+- **TEXT** — `annotations`, `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `layout`, `minWidth`, `maxWidth`, `minHeight`, `maxHeight`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `fontSize`, `text`, `textStyle`, `fill`, `boldWeight`, `componentPropertyReferences`
+- **RECTANGLE** — `annotations`, `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `layout`, `minWidth`, `maxWidth`, `minHeight`, `maxHeight`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `fill`, `stroke`, `strokeWidth`, `strokeAlign`, `borderRadius`, `effects`, `rotation`, `componentPropertyReferences`
+- **ELLIPSE** — `annotations`, `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `layout`, `minWidth`, `maxWidth`, `minHeight`, `maxHeight`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `fill`, `stroke`, `strokeWidth`, `strokeAlign`, `effects`, `rotation`, `componentPropertyReferences`
+- **LINE** — `annotations`, `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `stroke`, `strokeWidth`, `width`, `rotation`, `layout`, `left`, `top`, `position`, `anchor`, `pin`, `componentPropertyReferences`
+- **VECTOR (path- or svg-born)** — `annotations`, `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `layout`, `minWidth`, `maxWidth`, `minHeight`, `maxHeight`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `fill`, `stroke`, `strokeWidth`, `strokeAlign`, `effects`, `rotation`, `componentPropertyReferences`
+- **INSTANCE** — `annotations`, `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `layout`, `minWidth`, `maxWidth`, `minHeight`, `maxHeight`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `fill`, `stroke`, `strokeWidth`, `strokeAlign`, `borderRadius`, `effects`, `rotation`, `clipsContent`, `clip`, `exposed`, `componentProperties`, `overrides`, `componentId`, `componentPropertyReferences`
+- **COMPONENT** — `annotations`, `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `layout`, `minWidth`, `maxWidth`, `minHeight`, `maxHeight`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `fill`, `stroke`, `strokeWidth`, `strokeAlign`, `borderRadius`, `effects`, `rotation`, `clipsContent`, `clip`, `description`, `propertyDefinitions`
+- **COMPONENT_SET** — `annotations`, `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `layout`, `minWidth`, `maxWidth`, `minHeight`, `maxHeight`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `fill`, `stroke`, `strokeWidth`, `strokeAlign`, `borderRadius`, `effects`, `rotation`, `clipsContent`, `clip`, `description`, `propertyDefinitions`
 - **POLYGON** — `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `annotations`
 - **STAR** — `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `annotations`
-- **SLOT** — `annotations`, `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `minWidth`, `maxWidth`, `minHeight`, `maxHeight`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `fill`, `stroke`, `strokeWidth`, `strokeAlign`, `borderRadius`, `effects`, `rotation`, `clipsContent`, `layout`, `clip`
+- **SLOT** — `annotations`, `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `layout`, `minWidth`, `maxWidth`, `minHeight`, `maxHeight`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `fill`, `stroke`, `strokeWidth`, `strokeAlign`, `borderRadius`, `effects`, `rotation`, `clipsContent`, `clip`
 
 On a node type with no vocabulary of its own (GROUP, SECTION, POLYGON, …) only the shared words apply: `name`, `opacity`, `mixBlendMode`, `visible`, `locked`.
 
@@ -1023,6 +1039,43 @@ return {
     caption: out.id,
     text: out.text,
 };
+```
+
+### Grid tracks and cell placement
+
+Both templates are explicit. The fractional columns use a fixed width; fixed row tracks allow the height to hug. Children auto-place unless anchors or spans are supplied.
+
+```js
+const grid = await flcm.render({
+    type: "FRAME",
+    name: "Grid cards",
+    width: 400,
+    layout: {
+        mode: "grid",
+        gridTemplateColumns: "1fr 1fr",
+        gridTemplateRows: "80px 80px",
+        gap: "12px 16px",
+        padding: 16,
+    },
+    children: [
+        { type: "RECTANGLE", width: "fill", height: "fill", fill: "#6366F1" },
+        {
+            type: "RECTANGLE",
+            width: 40,
+            height: 40,
+            fill: "#F59E0B",
+            layout: { justifySelf: "center", alignSelf: "end" },
+        },
+        {
+            type: "RECTANGLE",
+            width: "fill",
+            height: "fill",
+            fill: "#14B8A6",
+            layout: { gridColumn: "span 2", gridRow: "2" },
+        },
+    ],
+});
+return (await flcm.get(grid)).node;
 ```
 
 ### Vector art (svg & path)

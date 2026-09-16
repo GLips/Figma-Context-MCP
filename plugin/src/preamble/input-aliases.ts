@@ -25,3 +25,16 @@ export function normalizeInputAliases(bag: Record<string, unknown>, subject: str
   }
   return out;
 }
+
+import type { WriteLayout } from "./ir.js";
+import type { LayoutMode } from "./layout-mode.js";
+
+/** Stretch is a size request on the parent's cross axis, not a second alignment implementation. */
+export function normalizeChildLayoutAliases(layout: WriteLayout, parent: LayoutMode, absolute: boolean, subject: string): WriteLayout {
+  if (layout.alignSelf !== "stretch") return layout;
+  if (absolute || parent.kind !== "flow") throw new Error(subject + ': alignSelf "stretch" requires an in-flow row/column parent.');
+  const axis = parent.cross;
+  if (layout.sizing?.[axis] !== undefined && layout.sizing[axis] !== "fill") throw new Error(subject + ': alignSelf "stretch" conflicts with the authored counter-axis size; use "fill".');
+  const { alignSelf: _alias, ...words } = layout;
+  return { ...words, sizing: { ...layout.sizing, [axis]: "fill" } };
+}

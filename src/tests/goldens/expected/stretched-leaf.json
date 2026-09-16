@@ -1,0 +1,49 @@
+{
+  "name": "Stretched Leaf",
+  "nodes": [
+    {
+      "id": "13:1",
+      "name": "Row with self-alignment",
+      "type": "FRAME",
+      "width": "contextual",
+      "height": "contextual",
+      "designedWidth": "200px",
+      "designedHeight": "70px",
+      "layout": {
+        "mode": "row"
+      },
+      "children": [
+        {
+          "id": "13:2",
+          "name": "Stretched leaf",
+          "type": "RECTANGLE",
+          "width": 40,
+          "height": "fill"
+        },
+        {
+          "id": "13:3",
+          "name": "Centered leaf",
+          "type": "RECTANGLE",
+          "width": 40,
+          "height": 20,
+          "layout": {
+            "alignSelf": "center"
+          }
+        },
+        {
+          "id": "13:4",
+          "name": "End leaf",
+          "type": "RECTANGLE",
+          "width": 40,
+          "height": 20,
+          "layout": {
+            "alignSelf": "flex-end"
+          }
+        }
+      ]
+    }
+  ],
+  "components": {},
+  "styles": {},
+  "templates": {}
+}

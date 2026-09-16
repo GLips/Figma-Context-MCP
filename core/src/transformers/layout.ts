@@ -49,24 +49,30 @@ export function buildSimplifiedLayout(
     Object.assign(layout, buildGridChildPositioning(n, parent, parentGridPacked));
   }
 
-  return { layout, geometry: buildNodeGeometry(n, parent, layout.mode, parentIsGrid) };
+  const geometry = buildNodeGeometry(n, parent, layout.mode, parentIsGrid);
+  // Cross-axis fill already expresses stretch. Other self-alignment still belongs to every child type.
+  if (isInAutoLayoutFlow(n, parent) && !parentIsGrid) {
+    const alignment = convertSelfAlign(n.layoutAlign);
+    const crossSize = parent?.layoutMode === "HORIZONTAL" ? geometry.height : geometry.width;
+    if (alignment !== "stretch" || crossSize !== "fill")
+      setIfDefined(layout, "alignSelf", alignment);
+  }
+  return { layout, geometry };
 }
 
 function buildSimplifiedFrameValues(n: NodeSnapshot): SimplifiedLayout {
   if (!isFrame(n)) {
-    return { mode: "none" };
+    return {};
   }
 
-  const frameValues: SimplifiedLayout = {
-    mode: layoutModeToSchema(n.layoutMode),
-  };
+  const mode = layoutModeToSchema(n.layoutMode);
+  const frameValues: SimplifiedLayout = { mode };
 
   const overflowScroll: SimplifiedLayout["overflowScroll"] = [];
   if (n.overflowDirection?.includes("HORIZONTAL")) overflowScroll.push("x");
   if (n.overflowDirection?.includes("VERTICAL")) overflowScroll.push("y");
   if (overflowScroll.length > 0) frameValues.overflowScroll = overflowScroll;
 
-  const { mode } = frameValues;
   if (mode === "none") {
     return frameValues;
   }
@@ -75,7 +81,6 @@ function buildSimplifiedFrameValues(n: NodeSnapshot): SimplifiedLayout {
   // the plugin hands this object to the sandbox AS-IS (no JSON round trip to drop an undefined
   // key), and a read shape spreads into the constructors, whose closed-set gate judges every
   // present key — so a present-but-undefined `alignSelf` would read as an unknown prop.
-  setIfDefined(frameValues, "alignSelf", convertSelfAlign(n.layoutAlign));
   if (n.paddingTop || n.paddingBottom || n.paddingLeft || n.paddingRight) {
     frameValues.padding = generateCSSShorthand({
       top: n.paddingTop ?? 0,

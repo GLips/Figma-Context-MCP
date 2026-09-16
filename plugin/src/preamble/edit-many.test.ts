@@ -167,7 +167,7 @@ test("cross-entry layout legality is judged against the batch's own end state, n
         { id: card.id, layout: { mode: "none" } },
         { id: c.id, height: "fill" },
       ]),
-      /a TEXT can only fill its height as an in-flow child of a row\/column auto-layout parent/,
+      /a TEXT can only fill its height as an in-flow child of an auto-layout parent/,
     );
   }
   // (c) illegal, and must be refused loud: the batch makes the parent hug the axis its child is

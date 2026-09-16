@@ -211,7 +211,10 @@ function extractLayout(node: NodeSnapshot, result: SimplifiedNode, context: Simp
   Object.assign(result, geometry);
   // A free-form container with nothing else to say (`{ mode: "none" }`) is the default and is
   // omitted; a row/column is information even when every other word is at its default.
-  if (layout.mode !== "none" || Object.keys(layout).length > 1) {
+  if (
+    Object.keys(layout).some((key) => key !== "mode") ||
+    (layout.mode && layout.mode !== "none")
+  ) {
     // Layout can't be a Figma named style, so no style slots to check.
     result.layout = layout;
   }

@@ -189,7 +189,7 @@ const SECTIONS: Section[] = [
       `${propTable(FIELD_GROUPS.size)}\n\n` +
       `#### Percent sizing\n\n${PERCENT_SIZING}\n\n` +
       `### FRAME — container props\n\n${propTable({ ...FIELD_GROUPS.appearance, ...FIELD_GROUPS.frame })}\n\n` +
-      `#### Auto-layout config (the \`layout\` object)\n\n${propTable(FIELD_GROUPS.layout)}\n\n` +
+      `#### Auto-layout config (the \`layout\` object)\n\n${propTable(FIELD_GROUPS.containerLayout)}\n\n#### Placement under a parent (in the same \`layout\` object)\n\n${propTable(FIELD_GROUPS.childLayout)}\n\n` +
       `### TEXT — text props\n\n${propTable(FIELD_GROUPS.text)}\n\n` +
       "`text` is a string or array of styled runs. `fill` is its paint. " +
       "`boldWeight` says what `**` in `text` resolves to. A fixed `width` makes it wrap (grows in height); " +

@@ -1042,6 +1042,140 @@ const componentVariants: GetFileNodesResponse = {
   },
 } as unknown as GetFileNodesResponse;
 
+// Grid placement and flow self-alignment must survive both producer paths without redundant words.
+const gridPlacement = fileResponse("Grid Placement", [
+  node({
+    id: "12:1",
+    name: "Grid",
+    type: "FRAME",
+    visible: true,
+    clipsContent: true,
+    layoutMode: "GRID",
+    absoluteBoundingBox: {
+      x: 0,
+      y: 0,
+      width: 260,
+      height: 130,
+    },
+    layoutSizingHorizontal: "FIXED",
+    layoutSizingVertical: "FIXED",
+    gridColumnsSizing: "80px 80px 80px",
+    gridRowsSizing: "60px 60px",
+    gridRowGap: 10,
+    gridColumnGap: 10,
+    children: [
+      {
+        id: "12:2",
+        name: "Tall cell",
+        type: "RECTANGLE",
+        visible: true,
+        absoluteBoundingBox: {
+          x: 10,
+          y: 30,
+          width: 60,
+          height: 100,
+        },
+        layoutSizingHorizontal: "FIXED",
+        layoutSizingVertical: "FIXED",
+        gridColumnAnchorIndex: 0,
+        gridRowAnchorIndex: 0,
+        gridColumnSpan: 1,
+        gridRowSpan: 2,
+        gridChildHorizontalAlign: "CENTER",
+        gridChildVerticalAlign: "MAX",
+      },
+      {
+        id: "12:3",
+        name: "Wide cell",
+        type: "RECTANGLE",
+        visible: true,
+        absoluteBoundingBox: {
+          x: 140,
+          y: 15,
+          width: 120,
+          height: 30,
+        },
+        layoutSizingHorizontal: "FIXED",
+        layoutSizingVertical: "FIXED",
+        gridColumnAnchorIndex: 1,
+        gridRowAnchorIndex: 0,
+        gridColumnSpan: 2,
+        gridRowSpan: 1,
+        gridChildHorizontalAlign: "MAX",
+        gridChildVerticalAlign: "CENTER",
+      },
+    ],
+  }),
+]);
+
+const stretchedLeaf = fileResponse("Stretched Leaf", [
+  node({
+    id: "13:1",
+    name: "Row with self-alignment",
+    type: "FRAME",
+    visible: true,
+    clipsContent: true,
+    layoutMode: "HORIZONTAL",
+    absoluteBoundingBox: {
+      x: 0,
+      y: 0,
+      width: 200,
+      height: 70,
+    },
+    layoutSizingHorizontal: "FIXED",
+    layoutSizingVertical: "FIXED",
+    primaryAxisAlignItems: "MIN",
+    counterAxisAlignItems: "MIN",
+    children: [
+      {
+        id: "13:2",
+        name: "Stretched leaf",
+        type: "RECTANGLE",
+        visible: true,
+        absoluteBoundingBox: {
+          x: 0,
+          y: 0,
+          width: 40,
+          height: 70,
+        },
+        layoutSizingHorizontal: "FIXED",
+        layoutSizingVertical: "FILL",
+        layoutAlign: "STRETCH",
+      },
+      {
+        id: "13:3",
+        name: "Centered leaf",
+        type: "RECTANGLE",
+        visible: true,
+        absoluteBoundingBox: {
+          x: 40,
+          y: 25,
+          width: 40,
+          height: 20,
+        },
+        layoutSizingHorizontal: "FIXED",
+        layoutSizingVertical: "FIXED",
+        layoutAlign: "CENTER",
+      },
+      {
+        id: "13:4",
+        name: "End leaf",
+        type: "RECTANGLE",
+        visible: true,
+        absoluteBoundingBox: {
+          x: 80,
+          y: 50,
+          width: 40,
+          height: 20,
+        },
+        layoutSizingHorizontal: "FIXED",
+        layoutSizingVertical: "FIXED",
+        layoutAlign: "MAX",
+      },
+    ],
+  }),
+]);
+
 export type GoldenFixture = {
   name: string;
   response: GetFileResponse | GetFileNodesResponse;
@@ -1050,6 +1184,8 @@ export type GoldenFixture = {
 export const GOLDEN_FIXTURES: GoldenFixture[] = [
   { name: "plain-frame", response: plainFrame },
   { name: "autolayout-frame", response: autoLayoutFrame },
+  { name: "grid-placement", response: gridPlacement },
+  { name: "stretched-leaf", response: stretchedLeaf },
   { name: "mixed-run-text", response: mixedRunText },
   { name: "gradient-fill", response: gradientFill },
   { name: "image-fill", response: imageFill },

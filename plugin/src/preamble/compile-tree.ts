@@ -123,15 +123,15 @@ export const LAYOUT_WORD_DISPOSITIONS: Record<keyof SimplifiedLayout, "author" |
   padding: "author",
   justifyContent: "author",
   alignItems: "author",
-  alignSelf: { refuse: 'cross-axis self-alignment has no flcm word — a child stretches by sizing that axis "fill"' },
+  alignSelf: "author",
   wrap: "author",
   overflowScroll: { refuse: "scroll behavior (Figma's overflowDirection) has no flcm word" },
-  gridTemplateColumns: { refuse: "flcm cannot author a GRID container" },
-  gridTemplateRows: { refuse: "flcm cannot author a GRID container" },
-  gridColumn: { refuse: "grid placement belongs to a GRID parent, which flcm cannot author" },
-  gridRow: { refuse: "grid placement belongs to a GRID parent, which flcm cannot author" },
-  justifySelf: { refuse: "grid self-alignment belongs to a GRID parent, which flcm cannot author" },
-  zIndex: { refuse: "explicit stacking order has no flcm word — sibling order is the z-order" },
+  gridTemplateColumns: "author",
+  gridTemplateRows: "author",
+  gridColumn: "author",
+  gridRow: "author",
+  justifySelf: "author",
+  zIndex: "author",
 };
 
 // ---- the refusals ----
@@ -146,7 +146,6 @@ function refuse(subject: string, what: string, why: string): Error {
 
 function readyAuthoredValue(key: string, value: unknown, subject: string): unknown {
   switch (key) {
-    case "layout": return readyLayout(value, subject);
     case "text": return readyTextContent(value, subject);
     case "textStyle": case "effects": case "fill": case "stroke": return assertNotCompressedRef(value, subject + "." + key);
     case "strokeWidth": return singleValue(value, subject + ".strokeWidth", "one uniform stroke width, not per-side weights");
@@ -186,7 +185,7 @@ function singleValue(value: unknown, field: string, whatFlcmHas: string): unknow
 // The layout bag keeps its key and its authorable words verbatim (`gap` is a metric the compiler
 // parses, `padding` takes read's box shorthand directly); this only refuses the words with no flcm
 // form. Unknown words are the compiler's closed set to name.
-function readyLayout(raw: unknown, subject: string): unknown {
+export function readyLayout(raw: unknown, subject: string): unknown {
   assertNotCompressedRef(raw, subject + ".layout");
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return raw;
   const l: Record<string, unknown> = {};

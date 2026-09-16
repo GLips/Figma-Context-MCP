@@ -28,6 +28,7 @@ const EXAMPLES_MODULE_PATH = fileURLToPath(new URL("examples-code.generated.ts",
 const EXAMPLE_IDS = [
   "login",
   "caption",
+  "grid",
   "vector",
   "image",
   "reuse",

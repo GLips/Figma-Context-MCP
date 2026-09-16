@@ -12,41 +12,46 @@
 // the walk already holds each parent's authored facts beside the appliers, and duplicating that
 // derivation in a prepare pass is where the two could drift. Accepted cost: a bad percent child
 // pays prepare's font/image loads before rejecting.
+import { AXES, effectiveLayoutMode, type LayoutMode } from "./layout-mode.js";
 import { WriteLayout } from "./ir.js";
 
 // The live parent-flow facts the percent rule needs — edit reads them off the canvas
 // (bridge.parentHugFacts), create derives them from the authored parent node.
 export interface ParentFlowFacts {
-  parentIsAuto: boolean;
+  mode: LayoutMode;
   hugW: boolean;
   hugH: boolean;
 }
 
-// Node-local legality: the type, the words, and whether the node will be a row/column container
+// Node-local legality: the type, the words, and whether the node will be a auto-layout container
 // after this call. `liveMode` is the one fact only edit can supply (a delta that doesn't
 // name a mode inherits the live one); create passes undefined — the authored mode decides, and a
 // node with no mode is never a container. `willBeAuto` is derived here, not passed, so a caller
 // can't hand in a value that contradicts the very layout it also passes.
 export function assertLayoutRealizableForType(nodeType: string, wl: WriteLayout, liveMode: "HORIZONTAL" | "VERTICAL" | "NONE" | "GRID" | undefined, subject: string, liveWrap = false): void {
-  // No per-type "can this even be a container" rule here ON PURPOSE: a mode on a non-frame is
-  // unreachable in both verbs — `layout` is a frame-compiler-only word at create, edit's
-  // per-type vocabulary gate rejects it upstream, and render refuses hand-built IR
-  // so the rules below may trust the private compile's invariants.
-  const willBeAuto = wl.mode != null ? wl.mode !== "none" : liveMode === "HORIZONTAL" || liveMode === "VERTICAL";
-  if (wl.alignItems === "baseline" && (wl.mode ?? (liveMode === "HORIZONTAL" ? "row" : "none")) !== "row") {
+  const mode = effectiveLayoutMode(wl, { layoutMode: liveMode });
+  const willBeAuto = mode.kind !== "free";
+  if (wl.alignItems === "baseline" && mode.word !== "row") {
     throw new Error(subject + ': layout.alignItems "baseline" requires layout.mode "row" (horizontal auto-layout).');
   }
-  const effectiveMode = wl.mode ?? (liveMode === "HORIZONTAL" ? "row" : liveMode === "VERTICAL" ? "column" : "none");
+  const effectiveMode = mode.word;
+  if ((wl.gridTemplateColumns || wl.gridTemplateRows) && effectiveMode !== "grid") throw new Error(subject + ": grid templates require layout.mode grid.");
+  if (effectiveMode === "grid") {
+    if (nodeType === "SLOT") throw new Error(subject + ": Figma does not support GRID on slots.");
+    if (wl.wrap !== undefined || wl.justifyContent || wl.alignItems) throw new Error(subject + ": grid uses child justifySelf/alignSelf; wrap, justifyContent and alignItems require row/column.");
+    if (wl.gap !== undefined && (typeof wl.gap === "number" ? wl.gap < 0 : wl.gap.row < 0 || wl.gap.column < 0)) throw new Error(subject + ": grid gaps must be non-negative.");
+
+  }
   const wraps = wl.wrap ?? liveWrap;
   if (wraps && effectiveMode !== "row") throw new Error(subject + ': layout.wrap requires layout.mode "row"; disable wrap in the same call before changing direction.');
-  if (typeof wl.gap === "object" && !wraps) throw new Error(subject + ': unequal row/column gaps require layout.wrap: true on a horizontal row.');
+  if (typeof wl.gap === "object" && !wraps && effectiveMode !== "grid") throw new Error(subject + ': unequal row/column gaps require layout.wrap: true on a horizontal row.');
   if (wraps && wl.gap !== undefined && (typeof wl.gap === "number" ? wl.gap : wl.gap.row) < 0) throw new Error(subject + ": wrapped row gap must be non-negative.");
   const s = wl.sizing || {};
   if ((s.horizontal === "hug" || s.vertical === "hug") && !willBeAuto && nodeType !== "TEXT") {
     // The remedy is type-gated: `layout` is a FRAME-only word, so prescribing a mode to a shape
     // would send the author straight into an unknown-prop reject.
     throw new Error(
-      subject + ': "hug" sizes to content, which only an auto-layout (row/column) container or text can measure — a ' +
+      subject + ': "hug" sizes to content, which only an auto-layout (row/column/grid) container or text can measure — a ' +
         nodeType + " without auto-layout has no content size. " +
         (nodeType === "FRAME" || nodeType === "INSTANCE"
           ? 'Use pixel dimensions, or set layout: { mode: "row"|"column" } in the same call.'
@@ -67,7 +72,7 @@ export function assertLayoutRealizableForType(nodeType: string, wl: WriteLayout,
     // The "none" branch must hold for an AUTHORED none and for create's omitted-mode default
     // alike — naming a mode the author never wrote reads as someone else's error.
     throw new Error(
-      subject + ": layout gap/padding/justifyContent/alignItems need an auto-layout (row/column) container — " +
+      subject + ": layout gap/padding/justifyContent/alignItems need an auto-layout (row/column/grid) container — " +
         (wl.mode === "none"
           ? 'mode "none" (which is also the default when layout.mode is omitted) leaves this frame free-form'
           : "this " + (nodeType === "INSTANCE" ? "instance" : "frame") + " isn't one") +
@@ -97,12 +102,12 @@ export function assertSizingResolvesAgainstParentFrame(wl: WriteLayout, isRoot: 
 // in WIDTH_AND_HEIGHT ignores: the height silently doesn't stick, so reject instead.
 // Self-triggering (type + words checked here, not at the call sites), so widening the trigger
 // can never happen on one verb and not the other.
-export function assertTextFillHeightInFlow(nodeType: string, wl: WriteLayout, parentIsRowColumn: boolean, isAbsolute: boolean, subject: string): void {
+export function assertTextFillHeightInFlow(nodeType: string, wl: WriteLayout, parentIsAuto: boolean, isAbsolute: boolean, subject: string): void {
   if (nodeType !== "TEXT" || (wl.sizing || {}).vertical !== "fill") return;
-  if (!parentIsRowColumn || isAbsolute) {
+  if (!parentIsAuto || isAbsolute) {
     throw new Error(
-      subject + ": a TEXT can only fill its height as an in-flow child of a row/column auto-layout parent — " +
-        "out of flow its height follows content. Set `width` instead (the height follows the wrap), or place it in-flow in a row/column frame.",
+      subject + ": a TEXT can only fill its height as an in-flow child of an auto-layout parent — " +
+        "out of flow its height follows content. Set `width` instead (the height follows the wrap), or place it in-flow in an auto-layout frame.",
     );
   }
 }
@@ -115,30 +120,36 @@ export function assertTextFillHeightInFlow(nodeType: string, wl: WriteLayout, pa
 export function assertPercentResolvable(childLayout: WriteLayout, facts: ParentFlowFacts, subject: string): void {
   const ps = childLayout.percentSize;
   if (!ps) return;
-  if (!facts.parentIsAuto || childLayout.position === "absolute") return;
+  if (facts.mode.kind === "free" || childLayout.position === "absolute") return;
+  if (facts.mode.kind === "grid") throw new Error(subject + ': percent sizes on in-flow GRID children need cell geometry; use fixed pixels or "fill", or position the child absolutely.');
   if ((ps.width != null && facts.hugW) || (ps.height != null && facts.hugH)) {
     throw new Error(
-      subject + ': a percent w/h ("N%") on an in-flow child of an auto-layout (row/column) parent that HUGS that axis is a cycle — ' +
+      subject + ': a percent w/h ("N%") on an in-flow child of an auto-layout (row/column/grid) parent that HUGS that axis is a cycle — ' +
         'the child\'s size both sets and depends on the parent\'s. Give the parent a fixed or "fill" size on that axis, use "fill"/"hug" on the child, or lift it out of the flow with `left`/`top`.',
     );
   }
 }
 
-// GRID is outside the authored context matrix: flcm can't create one, and its cells' semantics
-// are unassigned — so the PARENT-RELATIVE words reject under a grid parent rather than silently
-// landing with free-form semantics ("fill" would cover the whole grid frame). Node-local words
-// (fixed px, "hug", own container props) stay legal. Only edit can see a grid parent today, but
-// the rule lives here with the rest so a future create path can't answer differently.
-export function assertNoParentRelativeWordsUnderGrid(wl: WriteLayout, parentIsGrid: boolean, subject: string): void {
-  if (!parentIsGrid) return;
-  const s = wl.sizing || {};
-  if (s.horizontal === "fill" || s.vertical === "fill" || wl.percentSize || wl.percentPos || wl.position || wl.pin || wl.anchor) {
-    throw new Error(
-      subject + ': this node\'s parent is a GRID container, which the edit vocabulary doesn\'t cover — "fill", percents, absolute, and pin have no assigned meaning there. Use fixed pixel sizes, or edit the parent.',
-    );
+/** FLEX needs a bounded axis. Template edits cannot silently change a live HUG into FIXED. */
+export function assertGridSizing(layout: WriteLayout, live: {
+  layoutMode?: string;
+  layoutSizingHorizontal?: string;
+  layoutSizingVertical?: string;
+  gridColumnSizes?: readonly { type: string }[];
+  gridRowSizes?: readonly { type: string }[];
+} | undefined, subject: string): void {
+  if (effectiveLayoutMode(layout, live).kind !== "grid") return;
+  // A native default invents track intent and may introduce FLEX on a hugging axis.
+  if (live?.layoutMode !== "GRID" && (!layout.gridTemplateColumns || !layout.gridTemplateRows)) throw new Error(subject + ": creating a grid requires gridTemplateColumns and gridTemplateRows.");
+  for (const axis of ["horizontal", "vertical"] as const) {
+    const fields = AXES[axis];
+    const tracks = layout[fields.template] ?? live?.[fields.tracks];
+    const size = layout.sizing?.[axis] ?? (live?.[fields.sizing]?.toLowerCase() || "hug");
+    if (tracks?.some(t => t.type === "FLEX") && size !== "fixed" && size !== "fill") {
+      throw new Error(subject + ": fractional grid tracks require explicit fixed or fill " + fields.dimension + "; a hugging axis cannot become fixed implicitly.");
+    }
   }
 }
-
 
 /** Explicit rectangle dimensions cannot override the closed part of an instance's tree. */
 export function assertInheritedRectangleDimensions(wl: WriteLayout, subject: string): void {

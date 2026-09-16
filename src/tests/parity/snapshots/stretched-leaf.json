@@ -1,0 +1,95 @@
+[
+  {
+    "id": "13:1",
+    "name": "Row with self-alignment",
+    "type": "FRAME",
+    "visible": true,
+    "absoluteBoundingBox": {
+      "x": 0,
+      "y": 0,
+      "width": 200,
+      "height": 70
+    },
+    "ownSize": {
+      "width": 200,
+      "height": 70
+    },
+    "layoutSizingHorizontal": "FIXED",
+    "layoutSizingVertical": "FIXED",
+    "clipsContent": true,
+    "layoutMode": "HORIZONTAL",
+    "primaryAxisAlignItems": "MIN",
+    "counterAxisAlignItems": "MIN",
+    "children": [
+      {
+        "id": "13:2",
+        "name": "Stretched leaf",
+        "type": "RECTANGLE",
+        "visible": true,
+        "absoluteBoundingBox": {
+          "x": 0,
+          "y": 0,
+          "width": 40,
+          "height": 70
+        },
+        "ownSize": {
+          "width": 40,
+          "height": 70
+        },
+        "ownOrigin": {
+          "x": 0,
+          "y": 0
+        },
+        "layoutSizingHorizontal": "FIXED",
+        "layoutSizingVertical": "FILL",
+        "layoutAlign": "STRETCH"
+      },
+      {
+        "id": "13:3",
+        "name": "Centered leaf",
+        "type": "RECTANGLE",
+        "visible": true,
+        "absoluteBoundingBox": {
+          "x": 40,
+          "y": 25,
+          "width": 40,
+          "height": 20
+        },
+        "ownSize": {
+          "width": 40,
+          "height": 20
+        },
+        "ownOrigin": {
+          "x": 40,
+          "y": 25
+        },
+        "layoutSizingHorizontal": "FIXED",
+        "layoutSizingVertical": "FIXED",
+        "layoutAlign": "CENTER"
+      },
+      {
+        "id": "13:4",
+        "name": "End leaf",
+        "type": "RECTANGLE",
+        "visible": true,
+        "absoluteBoundingBox": {
+          "x": 80,
+          "y": 50,
+          "width": 40,
+          "height": 20
+        },
+        "ownSize": {
+          "width": 40,
+          "height": 20
+        },
+        "ownOrigin": {
+          "x": 80,
+          "y": 50
+        },
+        "layoutSizingHorizontal": "FIXED",
+        "layoutSizingVertical": "FIXED",
+        "layoutAlign": "MAX"
+      }
+    ]
+  }
+]

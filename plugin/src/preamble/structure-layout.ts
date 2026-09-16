@@ -1,4 +1,5 @@
 import type { WriteLayout, WriteNode, Sizing, PinX, PinY } from "./ir.js";
+import { layoutModeOf } from "./layout-mode.js";
 import { convertSizing } from "@framelink/core";
 
 /** Per-axis intent wins as a unit: an explicit hug/fill/percent never retains old fixed pixels. */
@@ -33,7 +34,7 @@ export function replacementTree(node: any, spec: WriteNode): WriteNode {
     const y: Record<string, PinY> = { MIN: "top", CENTER: "center", MAX: "bottom", STRETCH: "stretch", SCALE: "scale" };
     inherited.pin = { x: x[node.constraints.horizontal], y: y[node.constraints.vertical] };
   }
-  const positioned = !["HORIZONTAL", "VERTICAL", "GRID"].includes(node.parent?.layoutMode) || node.layoutPositioning === "ABSOLUTE";
+  const positioned = layoutModeOf(node.parent).kind === "free" || node.layoutPositioning === "ABSOLUTE";
   if (positioned) {
     inherited.left = node.x; inherited.top = node.y;
     inherited.position = "absolute";

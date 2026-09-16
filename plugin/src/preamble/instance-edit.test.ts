@@ -86,7 +86,7 @@ test("a frame's words land on an instance's root, and the layout gate reads its 
   const stamped = await render({ type: "INSTANCE", componentId: plain.id });
   await assert.rejects(
     edit(id(stamped.id), { layout: { gap: 8 } }),
-    /need an auto-layout \(row\/column\) container/,
+    /need an auto-layout \(row\/column\/grid\) container/,
   );
   assert.equal(comp.itemSpacing, 4); // the component is untouched by any of it
 });
@@ -436,7 +436,7 @@ test("a swap and a layout word in one delta gate on the component the swap bring
   const before = [...figma.undoLog];
   await assert.rejects(
     edit(id(inst.id), { componentId: freeComp.id, layout: { gap: 20 } }),
-    /need an auto-layout \(row\/column\) container/,
+    /need an auto-layout \(row\/column\/grid\) container/,
   );
   assert.deepEqual(figma.undoLog, before);
   assert.equal(inst.mainComponent.name, "Chip");
@@ -461,7 +461,7 @@ test("an override's live gate runs BEFORE the seal — a refusal costs zero writ
   const before = [...figma.undoLog];
   await assert.rejects(
     edit(id(pinst.id), { overrides: { [inner.id]: { layout: { gap: 8 } } } }),
-    /need an auto-layout \(row\/column\) container/,
+    /need an auto-layout \(row\/column\/grid\) container/,
   );
   assert.deepEqual(figma.undoLog, before);
 });

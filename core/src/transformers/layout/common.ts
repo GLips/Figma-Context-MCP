@@ -2,7 +2,7 @@ import { exhaustiveCheck, isFrame, isInAutoLayoutFlow } from "../../utils.js";
 import type { NodeSnapshot } from "../../snapshot.js";
 
 /**
- * Container config only (the canonical `layout` group). Per-node geometry —
+ * Container config and placement under a parent (the canonical `layout` group). Per-node geometry —
  * width/height, position, rotation — lives at the node top level as
  * `NodeGeometry`, per the canonical vocabulary's hybrid structure.
  *
@@ -14,7 +14,7 @@ import type { NodeSnapshot } from "../../snapshot.js";
  * subsets now that the vocabulary spec is superseded by code.
  */
 export interface SimplifiedLayout {
-  mode: "none" | "row" | "column" | "grid";
+  mode?: "none" | "row" | "column" | "grid";
   justifyContent?: "flex-start" | "flex-end" | "center" | "space-between" | "baseline" | "stretch";
   alignItems?: "flex-start" | "flex-end" | "center" | "space-between" | "baseline" | "stretch";
   alignSelf?: "flex-start" | "flex-end" | "center" | "stretch" | "start" | "end";
@@ -134,7 +134,7 @@ export function convertSelfAlign(align?: NodeSnapshot["layoutAlign"]) {
 // exhaustiveCheck fails the build until we decide how to map it.
 export function layoutModeToSchema(
   layoutMode: NodeSnapshot["layoutMode"],
-): SimplifiedLayout["mode"] {
+): NonNullable<SimplifiedLayout["mode"]> {
   switch (layoutMode) {
     case "HORIZONTAL":
       return "row";

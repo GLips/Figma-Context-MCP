@@ -1,0 +1,84 @@
+[
+  {
+    "id": "12:1",
+    "name": "Grid",
+    "type": "FRAME",
+    "visible": true,
+    "absoluteBoundingBox": {
+      "x": 0,
+      "y": 0,
+      "width": 260,
+      "height": 130
+    },
+    "ownSize": {
+      "width": 260,
+      "height": 130
+    },
+    "layoutSizingHorizontal": "FIXED",
+    "layoutSizingVertical": "FIXED",
+    "clipsContent": true,
+    "layoutMode": "GRID",
+    "gridColumnsSizing": "80px 80px 80px",
+    "gridRowsSizing": "60px 60px",
+    "gridRowGap": 10,
+    "gridColumnGap": 10,
+    "children": [
+      {
+        "id": "12:2",
+        "name": "Tall cell",
+        "type": "RECTANGLE",
+        "visible": true,
+        "absoluteBoundingBox": {
+          "x": 10,
+          "y": 30,
+          "width": 60,
+          "height": 100
+        },
+        "ownSize": {
+          "width": 60,
+          "height": 100
+        },
+        "ownOrigin": {
+          "x": 10,
+          "y": 30
+        },
+        "layoutSizingHorizontal": "FIXED",
+        "layoutSizingVertical": "FIXED",
+        "gridColumnAnchorIndex": 0,
+        "gridRowAnchorIndex": 0,
+        "gridColumnSpan": 1,
+        "gridRowSpan": 2,
+        "gridChildHorizontalAlign": "CENTER",
+        "gridChildVerticalAlign": "MAX"
+      },
+      {
+        "id": "12:3",
+        "name": "Wide cell",
+        "type": "RECTANGLE",
+        "visible": true,
+        "absoluteBoundingBox": {
+          "x": 140,
+          "y": 15,
+          "width": 120,
+          "height": 30
+        },
+        "ownSize": {
+          "width": 120,
+          "height": 30
+        },
+        "ownOrigin": {
+          "x": 140,
+          "y": 15
+        },
+        "layoutSizingHorizontal": "FIXED",
+        "layoutSizingVertical": "FIXED",
+        "gridColumnAnchorIndex": 1,
+        "gridRowAnchorIndex": 0,
+        "gridColumnSpan": 2,
+        "gridRowSpan": 1,
+        "gridChildHorizontalAlign": "MAX",
+        "gridChildVerticalAlign": "CENTER"
+      }
+    ]
+  }
+]

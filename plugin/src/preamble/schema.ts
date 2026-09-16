@@ -111,7 +111,41 @@ const SHARED_FIELDS = {
   locked: prop(z.boolean(), "Locks the layer against pointer edits in Figma's UI. flcm.edit still writes to it."),
 };
 
+// One read layout bag combines the node's own container settings and its placement in its parent.
+// Leaves take only child fields; frame-like types compose both groups. Parent mode decides cell vs flow.
+const CHILD_LAYOUT_FIELDS = {
+  gridColumn: prop(z.string(), 'Grid child column: "N", "span N", or "N / span N". Anchors are 1-based. Omitted placement uses Figma auto-placement.'),
+  gridRow: prop(z.string(), 'Grid child row: "N", "span N", or "N / span N". Anchors are 1-based.'),
+  justifySelf: prop(z.enum(["start", "center", "end", "auto"]), 'Grid child horizontal cell alignment. "auto" restores Figma alignment.'),
+  alignSelf: prop(z.enum(["flex-start", "flex-end", "center", "stretch", "start", "end", "auto"]), 'Parent-dependent alignment: flow uses flex-start/flex-end/center/stretch/auto; grid uses start/end/center/auto. Flow stretch aliases counter-axis fill.'),
+  zIndex: prop(z.number(), 'Grid child sibling index, a non-negative integer. Explicit indices reserve sibling slots; unnamed siblings retain relative order in remaining slots. Duplicate or out-of-range indices fail.'),
+};
+
+const CONTAINER_LAYOUT_FIELDS = {
+  gridTemplateColumns: prop(z.string(), "Grid columns, in read form: Npx, Nfr, auto or fit-content(100%) tracks; repeat(N, tracks) and minmax(0, Nfr) expand to native tracks. Reads return expanded tracks. Required when creating a grid. Fractional axes need explicit fixed or fill sizing. Other axes default to hug."),
+  gridTemplateRows: prop(z.string(), 'Grid rows, with the same track syntax as gridTemplateColumns. Required when creating a grid.'),
+  mode: prop(z.enum(["row", "column", "grid", "none"]), 'Auto-layout mode. Default "none" = free-form. Creating a grid requires both templates; edits preserve omitted templates.'),
+  gap: prop(z.union([z.number(), z.string()]), 'A number, "Npx", or "row-gap column-gap" in px. Unequal gaps require grid or wrapping.'),
+  wrap: prop(z.boolean(), "Wrap children onto new rows. Requires horizontal auto-layout. False disables wrapping; omitted edits preserve it."),
+  padding: prop(
+    z.custom<PadInput>(),
+    'A number, the CSS box shorthand ("12px 16px"), { x, y } (x→left+right, y→top+bottom), or per-edge. Edge values take a number or "Npx".',
+    'number | "12px 16px" | { x?, y? } | { top?, right?, bottom?, left? }',
+  ),
+  justifyContent: prop(
+    z.enum(["flex-start", "flex-end", "center", "space-between"]),
+    'CSS justify-content, main axis. Figma has no space-around/space-evenly — those fail loud.',
+  ),
+  alignItems: prop(
+    z.enum(["flex-start", "flex-end", "center", "stretch", "baseline"]),
+    'CSS align-items, cross axis. "baseline" requires a horizontal row. "stretch" stretches every auto-sized child (a fixed cross-axis size wins); one child alone stretches via width/height "fill".',
+  ),
+};
+
+const LAYOUT_FIELDS = { ...CONTAINER_LAYOUT_FIELDS, ...CHILD_LAYOUT_FIELDS };
+
 const SIZE_FIELDS = {
+  layout: prop(z.object(CHILD_LAYOUT_FIELDS), 'Placement under an auto-layout parent. Flow and grid accept their own self-alignment words.', '{ gridColumn?, gridRow?, justifySelf?, alignSelf?, zIndex? }'),
   minWidth: prop(z.union([z.number(), z.literal("none")]), "minWidth in positive pixels, effective on auto-layout containers and their direct children. Omitted preserves the bound; \"none\" clears it. Sizes constrained by bounds succeed with a console warning.", 'number | "none"'),
   maxWidth: prop(z.union([z.number(), z.literal("none")]), "maxWidth in positive pixels, effective on auto-layout containers and their direct children. Omitted preserves the bound; \"none\" clears it. Sizes constrained by bounds succeed with a console warning.", 'number | "none"'),
   minHeight: prop(z.union([z.number(), z.literal("none")]), "minHeight in positive pixels, effective on auto-layout containers and their direct children. Omitted preserves the bound; \"none\" clears it. Sizes constrained by bounds succeed with a console warning.", 'number | "none"'),
@@ -121,7 +155,7 @@ const SIZE_FIELDS = {
   // literals in the inferred type — hence an explicit .meta label to keep the doc precise.
   width: prop(
     z.union([z.number(), z.string()]),
-    'A fixed size (a number or "Npx"), "N%" of the parent axis, "fill" (stretch to the parent — rejected on the root), or "hug" (shrink to content — only a row/column container or text can hug).',
+    'A fixed size (a number or "Npx"), "N%" of the parent axis (rejected for in-flow grid children), "fill" (stretch to the parent — rejected on the root), or "hug" (shrink to content — only a row/column/grid container or text can hug).',
     'number | "Npx" | "N%" | "fill" | "hug"',
   ),
   height: prop(
@@ -161,6 +195,7 @@ const SIZE_FIELDS = {
 
 // The placement words alone — what a LINE takes beside its width, and what edit compiles for one.
 const PLACEMENT_FIELDS = {
+  layout: SIZE_FIELDS.layout,
   left: SIZE_FIELDS.left,
   top: SIZE_FIELDS.top,
   position: SIZE_FIELDS.position,
@@ -193,37 +228,9 @@ const ELLIPSE_FIELDS = {
   rotation: APPEARANCE_FIELDS.rotation,
 };
 
-// Auto-layout container config. The hybrid structure (canonical vocabulary) groups it under a single
-// `layout` object so a frame's container props read/author as one nested block — mirroring the read side's
-// `layout: { mode, justifyContent, alignItems, gap, padding }`. Values are CSS: justify/align spell the
-// realizable subset of `justify-content`/`align-items`; the sugar boundary (flcm.ts) maps them to the
-// terse render intent, and rejects any valid-CSS-but-unrealizable spelling (space-around/-evenly) loud.
-const LAYOUT_FIELDS = {
-  mode: prop(z.enum(["row", "column", "none"]), 'Auto-layout direction. Default "none" = free-form, where the other layout words reject loud. No grid: "grid" fails loud.'),
-  gap: prop(z.union([z.number(), z.string()]), 'A number, "Npx", or "row-gap column-gap" in px. Unequal gaps require wrapping.'),
-  wrap: prop(z.boolean(), "Wrap children onto new rows. Requires horizontal auto-layout. False disables wrapping; omitted edits preserve it."),
-  padding: prop(
-    z.custom<PadInput>(),
-    'A number, the CSS box shorthand ("12px 16px"), { x, y } (x→left+right, y→top+bottom), or per-edge. Edge values take a number or "Npx".',
-    'number | "12px 16px" | { x?, y? } | { top?, right?, bottom?, left? }',
-  ),
-  justifyContent: prop(
-    z.enum(["flex-start", "flex-end", "center", "space-between"]),
-    'CSS justify-content, main axis. Figma has no space-around/space-evenly — those fail loud.',
-  ),
-  alignItems: prop(
-    z.enum(["flex-start", "flex-end", "center", "stretch", "baseline"]),
-    'CSS align-items, cross axis. "baseline" requires a horizontal row. "stretch" stretches every auto-sized child (a fixed cross-axis size wins); one child alone stretches via width/height "fill".',
-  ),
-};
-
 const FRAME_FIELDS = {
   ["clipsContent" satisfies keyof typeof INPUT_ALIASES]: prop(z.boolean(), "Input alias for clip; duplicate values must agree."),
-  layout: prop(
-    z.object(LAYOUT_FIELDS),
-    "Auto-layout config. Omitted or mode:\"none\" = free-form, where children position absolutely.",
-    "{ mode?, wrap?, gap?, padding?, justifyContent?, alignItems? }",
-  ),
+  layout: prop(z.object(LAYOUT_FIELDS), 'Own container settings plus placement under the parent. Creating a grid requires both templates.', '{ mode?, gridTemplateColumns?, gridTemplateRows?, gap?, wrap?, padding?, justifyContent?, alignItems?, gridColumn?, gridRow?, justifySelf?, alignSelf?, zIndex? }'),
   clip: prop(z.boolean(), "Clip children to the frame's bounds. Default false, like CSS overflow: visible."),
 };
 
@@ -790,6 +797,8 @@ export const FIELD_GROUPS = {
   ellipse: ELLIPSE_FIELDS,
   frame: FRAME_FIELDS,
   layout: LAYOUT_FIELDS,
+  childLayout: CHILD_LAYOUT_FIELDS,
+  containerLayout: CONTAINER_LAYOUT_FIELDS,
   text: TEXT_FIELDS,
   textStyle: TEXTSTYLE_FIELDS,
   run: RUN_FIELDS,

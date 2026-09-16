@@ -1,0 +1,85 @@
+{
+  "nodes": [
+    {
+      "id": "13:1",
+      "name": "Row with self-alignment",
+      "type": "FRAME",
+      "visible": true,
+      "clipsContent": true,
+      "layoutMode": "HORIZONTAL",
+      "absoluteBoundingBox": {
+        "x": 0,
+        "y": 0,
+        "width": 200,
+        "height": 70
+      },
+      "layoutSizingHorizontal": "FIXED",
+      "layoutSizingVertical": "FIXED",
+      "primaryAxisAlignItems": "MIN",
+      "counterAxisAlignItems": "MIN",
+      "children": [
+        {
+          "id": "13:2",
+          "name": "Stretched leaf",
+          "type": "RECTANGLE",
+          "visible": true,
+          "absoluteBoundingBox": {
+            "x": 0,
+            "y": 0,
+            "width": 40,
+            "height": 70
+          },
+          "layoutSizingHorizontal": "FIXED",
+          "layoutSizingVertical": "FILL",
+          "layoutAlign": "STRETCH",
+          "width": 40,
+          "height": 70,
+          "x": 0,
+          "y": 0
+        },
+        {
+          "id": "13:3",
+          "name": "Centered leaf",
+          "type": "RECTANGLE",
+          "visible": true,
+          "absoluteBoundingBox": {
+            "x": 40,
+            "y": 25,
+            "width": 40,
+            "height": 20
+          },
+          "layoutSizingHorizontal": "FIXED",
+          "layoutSizingVertical": "FIXED",
+          "layoutAlign": "CENTER",
+          "width": 40,
+          "height": 20,
+          "x": 40,
+          "y": 25
+        },
+        {
+          "id": "13:4",
+          "name": "End leaf",
+          "type": "RECTANGLE",
+          "visible": true,
+          "absoluteBoundingBox": {
+            "x": 80,
+            "y": 50,
+            "width": 40,
+            "height": 20
+          },
+          "layoutSizingHorizontal": "FIXED",
+          "layoutSizingVertical": "FIXED",
+          "layoutAlign": "MAX",
+          "width": 40,
+          "height": 20,
+          "x": 80,
+          "y": 50
+        }
+      ],
+      "width": 200,
+      "height": 70,
+      "x": 0,
+      "y": 0
+    }
+  ]
+}

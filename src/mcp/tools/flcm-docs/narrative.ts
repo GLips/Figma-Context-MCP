@@ -25,7 +25,7 @@ An id identifies a live node, at every depth. A spec with an id moves that node 
 
 \`const { node } = await flcm.get(target); await flcm.append(parent, node)\` moves the node you read. To create a data copy, remove the ids from every node you want copied, including slot content in overrides. Removing only the root id creates a new root and moves its id-bearing children. Annotations are authored and copied. \`clone\` is the faithful live copy, including state the authoring vocabulary cannot express.
 
-Read-only fields with no authored equivalent fail by name. A root read back from get carries its real pixel size under designedWidth/designedHeight, and the verb uses those dimensions. Compressed style references, dash patterns, locked proportions and grid data are refused. VECTOR reads retain d or vectorPaths and can be authored directly. IMAGE-SVG is a wire projection; fetch a fresh runtime read to author its geometry. Errors identify the verb and a path such as spec.children[3].children[1].
+Read-only fields with no authored equivalent fail by name. A root read back from get carries its real pixel size under designedWidth/designedHeight, and the verb uses those dimensions. Compressed style references, dash patterns and locked proportions are refused. Grid templates, gaps, placement, cell alignment and sibling stacking use the read vocabulary. VECTOR reads retain d or vectorPaths and can be authored directly. IMAGE-SVG is a wire projection; fetch a fresh runtime read to author its geometry. Errors identify the verb and a path such as spec.children[3].children[1].
 
 ### Session across calls
 
@@ -104,7 +104,9 @@ const track = { type: "FRAME", width: 300, height: 8, borderRadius: 4, fill: "#E
 ] };
 \`\`\`
 
-One case can't resolve and **fails loud**: an in-flow percent-*sized* child of an auto-layout parent that *hugs* that axis — the parent sizes to the child while the child sizes to the parent. Give the parent a fixed or \`"fill"\` size, or lift the child out of the flow with \`left\`/\`top\`. A percent (or \`"fill"\`) on the **root** fails loud too: its parent is the page, which is unbounded.
+In-flow GRID children reject percent sizes: the relevant base is the cell, whose settled geometry is not available through the authoring surface. Use fixed pixels or \`fill\`; absolute grid children resolve against the whole parent frame.
+
+Another case **fails loud**: an in-flow percent-*sized* child of an auto-layout parent that *hugs* that axis — the parent sizes to the child while the child sizes to the parent. Give the parent a fixed or \`"fill"\` size, or lift the child out of the flow with \`left\`/\`top\`. A percent (or \`"fill"\`) on the **root** fails loud too: its parent is the page, which is unbounded.
 
 **Responsive by default.** A percent renders to fixed pixels now, and a **positioned** child — one in a free-form parent, or one lifted out of an auto-layout flow by \`left\`/\`top\` — also gets a Figma constraint, so it still reflows when the parent is resized later. Per axis, derived from how you sized it:
 

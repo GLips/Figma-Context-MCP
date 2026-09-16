@@ -1,3 +1,6 @@
+import { LAYOUT_MODES, layoutModeOf, effectiveLayoutMode, childLayout } from "./layout-mode.js";
+import { behaviorForMode, layoutBehavior, applySiblingOrder } from "./layout-native.js";
+import { hasContainerLayout } from "./ir.js";
 import type { LiveTreeNode } from "./live-tree.js";
 import { sceneFigma as figma } from "./scene-access.js";
 import type { ExposureWrite } from "./instance-exposure.js";
@@ -22,10 +25,10 @@ import { resizeWithDiagnostics, trackSizing } from "./sizing-diagnostics.js";
 // noise without safety.
 
 import { applyAnnotations } from "./annotation-categories.js";
-import { WriteType, WriteNode, WriteProps, WriteLayout, Justify, Align, TextAlign, TextDecoration, Sizing, Identity, Handle, WritePaint, WriteImage, ComponentPropertyBinding, namesFontIdentity } from "./ir.js";
+import { WriteType, WriteNode, WriteProps, WriteLayout, TextAlign, TextDecoration, Sizing, Identity, Handle, WritePaint, WriteImage, ComponentPropertyBinding, namesFontIdentity } from "./ir.js";
 import { own } from "./validate.js";
 import {
-  assertLayoutRealizableForType, assertPercentResolvable, assertSizingResolvesAgainstParentFrame, assertNoParentRelativeWordsUnderGrid, ParentFlowFacts,
+  assertLayoutRealizableForType, assertGridSizing, assertPercentResolvable, assertSizingResolvesAgainstParentFrame, ParentFlowFacts,
   assertTextFillHeightInFlow, assertInheritedRectangleDimensions,
 } from "./layout-legality.js";
 import { toFigmaPaint } from "./paint.js";
@@ -45,6 +48,7 @@ export interface RenderResources {
   images: Record<string, string>;
   // Instance plans are keyed by the private IR node that the build walk consumes.
   instances: InstancePlans;
+  siblingOrder?: Map<any, Map<any, number>>;
 }
 
 export type InstancePlans = ReadonlyMap<WriteNode, InstancePlan>;
@@ -92,13 +96,6 @@ export interface BoundLiveNode { node: any; refs: ComponentPropertyBinding }
 // tree is assembled — the only point at which `parent`'s realized fill/hug size is readable off the canvas.
 interface PendingResolve { node: any; layout: WriteLayout; parent: any }
 
-// The ONE terse-intent -> plugin-enum maps (the IR carries terse intent; this is the single place it's
-// resolved). `stretch` is absent from ALIGN by design: Figma has no container-level cross-stretch enum, so
-// we SYNTHESIZE CSS's `align-items: stretch` per-child instead (see applyChildFill's crossStretch path) —
-// each auto-sized child gets layoutAlign STRETCH on the parent's counter axis. Absorbing that divergence
-// in code (not documenting it as a footgun) is exactly ADR-0003's contract.
-const JUSTIFY: Record<Justify, string> = { start: "MIN", center: "CENTER", end: "MAX", between: "SPACE_BETWEEN" };
-const ALIGN: Partial<Record<Align, string>> = { start: "MIN", center: "CENTER", end: "MAX", baseline: "BASELINE" };
 const TEXT_ALIGN: Record<TextAlign, "LEFT" | "CENTER" | "RIGHT" | "JUSTIFIED"> = { left: "LEFT", center: "CENTER", right: "RIGHT", justify: "JUSTIFIED" };
 // CSS text-decoration-line → Figma's TextDecoration enum. "none" is the enum's own NONE, used by a
 // per-run inverse override that clears an inherited base decoration.
@@ -107,27 +104,8 @@ const DECORATION: Record<TextDecoration, "UNDERLINE" | "STRIKETHROUGH" | "NONE">
 // unlike every other text word here — see WriteTextStyle.textAlignVertical.
 const VERTICAL_ALIGN: Record<"top" | "center" | "bottom", "TOP" | "CENTER" | "BOTTOM"> = { top: "TOP", center: "CENTER", bottom: "BOTTOM" };
 
-// The frame layoutModes that place their own children — the plugin-side spelling of the core's hasAutoLayout.
-const AUTO_LAYOUT_MODES = ["HORIZONTAL", "VERTICAL", "GRID"];
-
-// The one write-side answer to "does this node lay out flow children along an axis pair?"
-// (layoutGrow/layoutAlign, primary/counter sizing modes, ABSOLUTE lifting). GRID is deliberately
-// OUTSIDE: it has no authoring word, so create never produces it, and the edit context matrix hasn't
-// assigned its cells — when it does, this predicate is where the rule lands, not six inlined
-// comparisons. AUTO_LAYOUT_MODES above differs on purpose: for read-side geometry a GRID parent DOES
-// place its children, so left/top stay omitted.
-export function isRowColumnAutoLayout(node: any): boolean {
-  return node.layoutMode === "HORIZONTAL" || node.layoutMode === "VERTICAL";
-}
-
-// The node types whose OWN size is a frame's (applyOwnSize: sizing modes + resize, never the
-// leaf path): a frame, and everything Figma builds as a frame-shaped container — a component,
-// an instance of one, a variant set, a slot. Keyed by type rather than `"layoutMode" in node`
-// because a GROUP carries layoutMode too and is not sized like a frame.
-const FRAME_LIKE_TYPES = new Set(["FRAME", "COMPONENT", "COMPONENT_SET", "INSTANCE", "SLOT"]);
-function isFrameLike(node: any): boolean {
-  return FRAME_LIKE_TYPES.has(node.type);
-}
+export function isAutoLayout(node: any): boolean { return layoutModeOf(node).kind !== "free"; }
+function isFrameLike(node: any): boolean { return hasContainerLayout(node.type); }
 
 // A node's geometry in the read verbs' spelling (ir.Handle). width/height are the measured px, rounded the
 // way the core rounds every number it emits so both producers hand the agent one currency. left/top (and
@@ -155,7 +133,7 @@ function geometryOf(node: any): Omit<Handle, keyof Identity> {
   const intent = intentOf(node);
   if (intent) geometry.intent = intent;
   const parent = node.parent;
-  const parentPlacesIt = !!parent && AUTO_LAYOUT_MODES.indexOf(parent.layoutMode) !== -1 && node.layoutPositioning !== "ABSOLUTE";
+  const parentPlacesIt = !!parent && isAutoLayout(parent) && node.layoutPositioning !== "ABSOLUTE";
   if (parent && parent.type !== "PAGE" && !parentPlacesIt) {
     if (node.layoutPositioning === "ABSOLUTE") geometry.position = "absolute";
     geometry.left = pixelRound(node.x);
@@ -266,98 +244,20 @@ export function applyPaint(node: any, wn: WriteProps, ctx: RenderResources): voi
   stampImageData(node, wn);
 }
 
-// Layout mode + container props. The mode applies when PRESENT — including "none", which switches
-// auto-layout OFF (children convert per Figma's own semantics; canvas is truth). The container props
-// (gap/pad/justify/align) gate on the LIVE mode, not the authored node's: a delta naming only `gap` lands on
-// an already-auto frame instead of silently skipping — gating on the authored mode was create-only truth.
-function applyContainer(f: any, layout: WriteLayout): void {
-  const mode = layout.mode;
-  if (layout.wrap === false && f.layoutMode === "HORIZONTAL") f.layoutWrap = "NO_WRAP";
-  if (mode === "row" || mode === "column") {
-    const next = mode === "row" ? "HORIZONTAL" : "VERTICAL";
-    // Any direction-establishing write — row↔column flip, or NONE→row/column over children still
-    // carrying marks from an earlier auto-layout life — re-aims the stored flow marks: layoutGrow
-    // and STRETCH keep meaning "primary"/"counter", and those axes just moved. Clear BOTH under the
-    // OLD mode before the write. A stated rule, not a derivation; create never triggers it (a
-    // fresh frame has no children when its mode is set).
-    if (f.layoutMode !== next) clearContainerFlowMarks(f);
-    f.layoutMode = next;
-  } else if (mode === "none") f.layoutMode = "NONE";
-  if (!isRowColumnAutoLayout(f)) return; // gap/pad/align are inert without auto-layout
-  if (layout.wrap !== undefined && f.layoutMode === "HORIZONTAL") f.layoutWrap = layout.wrap ? "WRAP" : "NO_WRAP";
-  if (layout.gap !== undefined) {
-    const gap = typeof layout.gap === "number" ? { row: layout.gap, column: layout.gap } : layout.gap;
-    f.itemSpacing = f.layoutMode === "HORIZONTAL" ? gap.column : gap.row;
-    if (f.layoutWrap === "WRAP") {
-      f.counterAxisAlignContent = "AUTO";
-      f.counterAxisSpacing = f.layoutMode === "HORIZONTAL" ? gap.row : gap.column;
-    }
+function applyContainer(node: any, layout: WriteLayout): void {
+  if (!isFrameLike(node)) return;
+  const previous = layoutModeOf(node);
+  const next = effectiveLayoutMode(layout, node);
+  // Disable wrapping under the old mode before a direction change; only live rows accept the setter.
+  if (layout.wrap === false && previous.word === "row") node.layoutWrap = "NO_WRAP";
+  if (layout.mode !== undefined) {
+    if (next.kind !== "free" && previous.word !== next.word) layoutBehavior(node).clearChildren(node);
+    node.layoutMode = next.native;
   }
+  layoutBehavior(node).container(node, layout);
   if (layout.padding) {
-    const e = layout.padding;
-    f.paddingTop = e.top; f.paddingRight = e.right; f.paddingBottom = e.bottom; f.paddingLeft = e.left;
-  }
-  // Unrealizable justify words are rejected at the compiler gate (flcm.ts mapCssWord), so
-  // JUSTIFY is total over everything that can arrive here.
-  if (layout.justifyContent) f.primaryAxisAlignItems = JUSTIFY[layout.justifyContent];
-  if (layout.alignItems) {
-    // "stretch" has no counterAxisAlignItems enum — it's synthesized per-child (see the walk).
-    // Writing any OTHER value clears every child mark: container-stretch intent is never stored
-    // (not by Figma, not by us), so "was stretch" is unknowable and the clear is unconditional.
-    if (layout.alignItems === "stretch") setContainerStretchMarks(f);
-    else {
-      clearContainerStretchMarks(f);
-      if (ALIGN[layout.alignItems]) f.counterAxisAlignItems = ALIGN[layout.alignItems];
-    }
-  }
-}
-
-// The edit-side semantics of alignItems:"stretch" — create synthesizes the per-child marks at build
-// (applyChildFill's crossStretch), so at create time this walks zero children and the per-child path
-// does the work; at edit time the children exist and this re-synthesizes over them. Setting marks
-// EVERY in-flow child (a child that must keep a fixed counter size gets its own fixed edit after) —
-// Figma state cannot distinguish a container-stretched child from one that asked for counter-axis
-// fill (create deliberately routes both through fillDim), so the rule is stated, not derived. The
-// hug-beats-stretch pin fillDim installs on a child whose own primary axis is the parent's counter
-// axis is set alongside.
-function setContainerStretchMarks(f: any): void {
-  const pIsRow = f.layoutMode === "HORIZONTAL";
-  for (const child of f.children || []) {
-    if (child.layoutPositioning === "ABSOLUTE") continue;
-    child.layoutAlign = "STRETCH";
-    if (isRowColumnAutoLayout(child) && (child.layoutMode === "HORIZONTAL") !== pIsRow) child.primaryAxisSizingMode = "FIXED";
-  }
-}
-
-// The inverse under the SAME stated rule: a non-stretch alignItems clears EVERY counter-axis
-// STRETCH mark (container-stretch intent is never stored, so "was stretch" is unknowable), and
-// lifts the crossing-child hug-beats-stretch pin it installed. ABSOLUTE children included —
-// unlike the SET walk, which skips them (stretch never governs out-of-flow), the CLEAR must reach
-// a mark parked on an absolute child, or position:"none" later resurrects a stretch the container
-// no longer asks for.
-function clearContainerStretchMarks(f: any): void {
-  const pIsRow = f.layoutMode === "HORIZONTAL";
-  for (const child of f.children || []) {
-    if (child.layoutAlign !== "STRETCH") continue;
-    child.layoutAlign = "INHERIT";
-    if (isRowColumnAutoLayout(child) && (child.layoutMode === "HORIZONTAL") !== pIsRow) child.primaryAxisSizingMode = "AUTO";
-  }
-}
-
-// Direction-change cleanup (see applyContainer's mode write): both flow marks — layoutGrow along
-// the old primary AND STRETCH along the old counter — go, on EVERY child, ABSOLUTE ones included:
-// a mark parked on an out-of-flow child is inert now but would rejoin the flow via position:"none"
-// meaning the NEW direction's axis. The crossing-child pin is lifted only when the OLD mode names
-// a real direction; under NONE that FIXED is indistinguishable from an authored fixed size, so it
-// stays (the same live-state ambiguity that makes the stretch rules stated, not derived).
-function clearContainerFlowMarks(f: any): void {
-  const oldIsAuto = isRowColumnAutoLayout(f);
-  const pIsRow = f.layoutMode === "HORIZONTAL";
-  for (const child of f.children || []) {
-    child.layoutGrow = 0;
-    if (child.layoutAlign !== "STRETCH") continue;
-    child.layoutAlign = "INHERIT";
-    if (oldIsAuto && isRowColumnAutoLayout(child) && (child.layoutMode === "HORIZONTAL") !== pIsRow) child.primaryAxisSizingMode = "AUTO";
+    const p = layout.padding;
+    node.paddingTop = p.top; node.paddingRight = p.right; node.paddingBottom = p.bottom; node.paddingLeft = p.left;
   }
 }
 
@@ -371,19 +271,9 @@ function applyOwnSize(f: any, layout: WriteLayout): void {
   if (layout.bounds) { trackSizing(f); applyBounds(f, layout.bounds); }
   const sizing = layout.sizing || {};
   const dims = layout.dimensions || {};
-  const isAuto = isRowColumnAutoLayout(f);
+  const isAuto = isAutoLayout(f);
 
-  if (isAuto) {
-    const isRow = f.layoutMode === "HORIZONTAL";
-    const setMode = function (val: any, isWidth: boolean) {
-      if (val == null) return; // axis not named — leave the live mode alone
-      if (val === "fill") return; // resolved by the parent against its own axis
-      const isPrimary = isWidth === isRow;
-      f[isPrimary ? "primaryAxisSizingMode" : "counterAxisSizingMode"] = val === "fixed" ? "FIXED" : "AUTO";
-    };
-    setMode(sizing.horizontal, true);
-    setMode(sizing.vertical, false);
-  }
+  layoutBehavior(f).ownSize(f, sizing);
 
   // Auto frames resize only their FIXED axes (fill/hug are computed by layout); a non-auto frame honors
   // any authored dimension — including one carried in from a `get` result without a sizing intent.
@@ -396,42 +286,6 @@ function applyOwnSize(f: any, layout: WriteLayout): void {
   }
 }
 
-// Resolve a NON-absolute child's `fill` intent against the parent's axis. Along the parent's primary
-// axis -> layoutGrow; along its counter axis -> layoutAlign STRETCH. The non-obvious part: if the
-// filled dimension is the CHILD's own primary axis, the child hugs its content there and hug WINS over
-// STRETCH — so the child's primaryAxisSizingMode must be pinned FIXED or the fill silently still hugs.
-// (Grounded live in the prior spike; preserved here.)
-// PRECONDITION the caller routes, this function trusts: `parent` is a row/column auto-layout frame.
-// A free-form parent's children take coverChild + applyConstraints instead (that's the class split
-// buildFrame walks and edit re-derives); called with a free-form parent the flow props land inert.
-// `crossStretch` is a parameter because container-level stretch intent is never stored — not by
-// Figma, not by us — so only the caller knows it (create reads the authored alignItems; edit's
-// stretch child-walk passes its own verdict).
-function applyChildFill(parent: any, child: any, layout: WriteLayout, crossStretch: boolean): void {
-  const s = layout.sizing || {};
-  const pIsRow = parent.layoutMode === "HORIZONTAL";
-  const fillDim = function (dim: string) {
-    const alongPrimary = (dim === "width") === pIsRow;
-    if (alongPrimary) child.layoutGrow = 1;
-    else child.layoutAlign = "STRETCH";
-    if (isRowColumnAutoLayout(child)) {
-      const childIsRow = child.layoutMode === "HORIZONTAL";
-      if ((dim === "width") === childIsRow) child.primaryAxisSizingMode = "FIXED";
-    }
-  };
-  if (s.horizontal === "fill") fillDim("width");
-  if (s.vertical === "fill") fillDim("height");
-  // Container alignItems:"stretch" = CSS align-items:stretch. Stretch each child on the parent's COUNTER axis
-  // unless the child sets its own counter-axis size (fixed) or already fills it (handled above). Routes
-  // through the SAME fillDim path (STRETCH + the hug-wins primary-axis pin), so a stretched child behaves
-  // identically to one that asked for counter-axis fill — the divergence is absorbed, not documented.
-  if (crossStretch) {
-    const counterDim = pIsRow ? "height" : "width";
-    const counterSizing = pIsRow ? s.vertical : s.horizontal;
-    if (counterSizing !== "fixed" && counterSizing !== "fill") fillDim(counterDim);
-  }
-}
-
 // Resize a child to the parent's box on its w/h:'fill' axes, instead of letting fill collapse to ~0.
 // Serves two callers where layoutGrow/STRETCH can't do the sizing: an ABSOLUTE child (out of the flow, so
 // fill is the natural full-bleed cover / scrim), and any child of a FREE-FORM parent (no auto-layout to
@@ -440,11 +294,10 @@ function applyChildFill(parent: any, child: any, layout: WriteLayout, crossStret
 function coverChild(parent: any, child: any, layout: WriteLayout): void {
   const s = layout.sizing || {};
   if (s.horizontal !== "fill" && s.vertical !== "fill") return;
-  if (isRowColumnAutoLayout(child)) {
-    const isRow = child.layoutMode === "HORIZONTAL";
-    if (s.horizontal === "fill") child[isRow ? "primaryAxisSizingMode" : "counterAxisSizingMode"] = "FIXED";
-    if (s.vertical === "fill") child[isRow ? "counterAxisSizingMode" : "primaryAxisSizingMode"] = "FIXED";
-  }
+  layoutBehavior(child).ownSize(child, {
+    horizontal: s.horizontal === "fill" ? "fixed" : undefined,
+    vertical: s.vertical === "fill" ? "fixed" : undefined,
+  });
   const cw = s.horizontal === "fill" ? parent.width : child.width;
   const ch = s.vertical === "fill" ? parent.height : child.height;
   // A LINE's height is exactly 0 by Figma contract — resize throws on anything else [verified,
@@ -465,14 +318,14 @@ function applyChildPosition(parent: any, child: any, layout: WriteLayout): void 
     return;
   }
   if (layout.position !== "absolute") return;
-  if (isRowColumnAutoLayout(parent)) child.layoutPositioning = "ABSOLUTE";
+  if (isAutoLayout(parent)) child.layoutPositioning = "ABSOLUTE";
   if (typeof layout.left === "number") child.x = layout.left;
   if (typeof layout.top === "number") child.y = layout.top;
 }
 
 // Figma's per-axis constraint enum keyed by the author's directional `pin` (ir.ts PinX/PinY). Two maps
 // because the axis-neutral words (center/stretch/scale) sit alongside axis-specific edges (left/right on x,
-// top/bottom on y). This terse→enum mapping is the bridge's to own, like JUSTIFY/ALIGN above.
+// top/bottom on y). This terse→enum mapping is the bridge's to own, like the container policy’s alignment maps.
 // "none" → MIN: clearing a pin restores Figma's default (near-edge). The auto-derived constraint
 // create chose isn't stored anywhere live, so the default is the stated inverse, not a recovery.
 const PIN_H: Record<string, string> = { left: "MIN", center: "CENTER", right: "MAX", stretch: "STRETCH", scale: "SCALE", none: "MIN" };
@@ -525,24 +378,6 @@ function applyPinDelta(child: any, pin: NonNullable<WriteLayout["pin"]>): void {
   };
 }
 
-// The unset inverse of applyChildFill — create only ever SETS the flow-fill marks, so edit adds the
-// deliberate reverse: an axis explicitly re-sized to fixed/hug clears the mark fill installed there
-// (layoutGrow along the parent's primary axis, layoutAlign STRETCH on its counter), or the old fill
-// keeps governing and the new size is a lie. The hug-beats-stretch primary-axis pin fillDim
-// installed is NOT lifted here — applyOwnSize runs after and maps the named axis's sizing onto the
-// child's own mode, which is exactly that lift. Presence-preserving: only axes the delta names.
-function clearChildFlowFill(parent: any, child: any, layout: WriteLayout): void {
-  const s = layout.sizing || {};
-  const pIsRow = parent.layoutMode === "HORIZONTAL";
-  const clearDim = (dim: "width" | "height", val: Sizing | undefined): void => {
-    if (val !== "fixed" && val !== "hug") return;
-    if ((dim === "width") === pIsRow) child.layoutGrow = 0;
-    else if (child.layoutAlign === "STRETCH") child.layoutAlign = "INHERIT";
-  };
-  clearDim("width", s.horizontal);
-  clearDim("height", s.vertical);
-}
-
 // THE sizing home for leaf nodes (no own auto-layout) — create's builders and edit's delta path
 // both land here, so the per-kind rules can't fork: TEXT's wrap handshake (a controlled width
 // wraps; "hug" restores grow-sideways) and LINE's zero height. Generic shapes resize only the
@@ -557,7 +392,7 @@ function applyLeafSize(node: any, layout: WriteLayout): void {
     if (sizing.horizontal === "fixed" || sizing.horizontal === "fill") node.textAutoResize = "HEIGHT";
     else if (sizing.horizontal === "hug") node.textAutoResize = "WIDTH_AND_HEIGHT";
     // height:"hug" is the un-fill for a text: Figma pins a flow-filled text's auto-resize to NONE
-    // (clearChildFlowFill has just lifted the fill), so hugging again means the height follows the
+    // (the parent policy’s clearFill has just lifted the fill), so hugging again means the height follows the
     // content under whatever width rule the text keeps. On a text that already hugs it is a no-op.
     else if (sizing.vertical === "hug" && node.textAutoResize === "NONE") node.textAutoResize = "HEIGHT";
     if (typeof dims.width === "number") resizeWithDiagnostics(node, Math.max(dims.width, 0.01), node.height);
@@ -589,12 +424,26 @@ function applyLeafSize(node: any, layout: WriteLayout): void {
  * it (see RenderCtx.bindings).
  */
 export function beginRenderWalk(resources: RenderResources, opts?: { bindings?: boolean }): RenderCtx {
-  const ctx: RenderCtx = { ...resources, keys: new Set(), pending: [], exposures: [] };
+  const ctx: RenderCtx = { ...resources, siblingOrder: resources.siblingOrder ??= new Map(), keys: new Set(), pending: [], exposures: [] };
   if (opts && opts.bindings) ctx.bindings = [];
   return ctx;
 }
 
+function queueSiblingOrder(resources: RenderResources | undefined, parent: any, child: any, index: number | undefined): void {
+  if (index === undefined) return;
+  if (!resources) { applySiblingOrder(parent, [{ child, index }]); return; }
+  const queue = resources.siblingOrder ??= new Map();
+  let edits = queue.get(parent);
+  if (!edits) queue.set(parent, edits = new Map());
+  edits.set(child, index);
+}
+export function settleSiblingOrder(resources: RenderResources): void {
+  for (const [parent, edits] of resources.siblingOrder ?? []) applySiblingOrder(parent, [...edits].map(([child, index]) => ({ child, index })));
+  resources.siblingOrder?.clear();
+}
+
 export function resolvePercents(ctx: RenderCtx): void {
+  settleSiblingOrder(ctx);
   ctx.pending.sort((a, b) => depthOf(a.node) - depthOf(b.node));
   for (const p of ctx.pending) resolvePercentLayout(p.parent, p.node, p.layout);
 }
@@ -622,6 +471,7 @@ function resolvePercentLayout(parent: any, child: any, layout: WriteLayout): voi
 // The SIZE half — it PRODUCES geometry, so it runs before anything that measures.
 function resolvePercentSize(parent: any, child: any, layout: WriteLayout): void {
   if (layout.percentSize) {
+    assertPercentResolvable({ ...layout, position: child.layoutPositioning === "ABSOLUTE" ? "absolute" : layout.position }, parentHugFacts(parent), "flcm");
     const ps = layout.percentSize;
     const w = ps.width != null ? pctOf(ps.width, parent.width) : child.width;
     const h = ps.height != null ? pctOf(ps.height, parent.height) : child.height;
@@ -667,24 +517,28 @@ function resolvePercentPosition(parent: any, child: any, layout: WriteLayout): v
 // their unset inverses, own/leaf sizing, cover, pin. The percent/anchor tail is
 // settleLiveNodePercentSize/Position, deliberately NOT called here — both measure, so the caller
 // owns when they run (see those functions).
-export function applyLiveNodeLayout(node: any, wl: WriteLayout): void {
+export function applyLiveNodeLayout(node: any, wl: WriteLayout, resources?: RenderResources): void {
+  const context = childLayout(layoutModeOf(node.parent), wl, wl.position === "absolute" || (wl.position !== "none" && node.layoutPositioning === "ABSOLUTE"), "flcm.edit");
+  wl = context.layout;
   if (wl.sizing || wl.bounds || wl.percentSize) trackSizing(node);
   const parent = node.parent;
   applyContainer(node, wl);
   if (!parent) return; // a parentless node (the page itself can't get here) has no child-side context
-  const parentIsAuto = isRowColumnAutoLayout(parent);
+  const parentIsAuto = isAutoLayout(parent);
   // Un-fill BEFORE the position write, and regardless of the child's CURRENT positioning: an axis
   // the delta re-sizes to fixed/hug must lose the grow/stretch mark fill installed there, even when
   // the mark sits parked and inert on an absolute child — otherwise `width: 80` on it (or
   // `{ position: "none", width: 80 }` in one delta) leaves the mark to resurrect the fill the delta
-  // explicitly replaced. Clearing an inert mark is free; clearChildFlowFill touches only named axes.
-  if (parentIsAuto) clearChildFlowFill(parent, node, wl);
+  // explicitly replaced. Clearing an inert mark is free; the parent policy touches only named axes.
+  if (parentIsAuto) layoutBehavior(parent).clearFill(parent, node, wl);
   applyChildPosition(parent, node, wl);
-  const inFlowAuto = parentIsAuto && node.layoutPositioning !== "ABSOLUTE";
+  layoutBehavior(parent).place(parent, node, context);
+  queueSiblingOrder(resources, parent, node, wl.zIndex);
+  const inFlowAuto = context.kind !== "free";
   if (inFlowAuto) {
-    applyChildFill(parent, node, wl, false); // crossStretch is the container's own alignItems edit, never a child's
+    layoutBehavior(parent).fill(parent, node, context, false); // crossStretch is the container's own alignItems edit, never a child's
   }
-  if (isRowColumnAutoLayout(node) || isFrameLike(node)) applyOwnSize(node, wl);
+  if (isAutoLayout(node) || isFrameLike(node)) applyOwnSize(node, wl);
   else applyLeafSize(node, wl);
   if (!inFlowAuto) coverChild(parent, node, wl);
   if (wl.pin) applyPinDelta(node, wl.pin);
@@ -715,10 +569,10 @@ export function settleLiveNodePercentPosition(node: any, wl: WriteLayout): void 
 // realized from above, the child's percent resolves against it, and no cycle exists. Reading
 // primary/counterAxisSizingMode here would reject that valid case as a hug.
 function parentHugFacts(parent: any): ParentFlowFacts {
-  const parentIsAuto = !!parent && isRowColumnAutoLayout(parent);
-  if (!parentIsAuto) return { parentIsAuto: false, hugW: false, hugH: false };
+  const parentIsAuto = !!parent && isAutoLayout(parent);
+  if (!parentIsAuto) return { mode: LAYOUT_MODES.none, hugW: false, hugH: false };
   return {
-    parentIsAuto,
+    mode: layoutModeOf(parent),
     hugW: convertSizing(parent.layoutSizingHorizontal) === "hug",
     hugH: convertSizing(parent.layoutSizingVertical) === "hug",
   };
@@ -728,12 +582,11 @@ function parentHugFacts(parent: any): ParentFlowFacts {
 // because the parent a child is judged against is not always the parent on the canvas: inside a
 // batch the SAME call may be changing that parent, and the entries must be legal against the
 // canvas the batch is creating, not the one it found.
-export interface ParentLayoutFacts extends ParentFlowFacts { isGrid: boolean; isPage: boolean }
+export interface ParentLayoutFacts extends ParentFlowFacts { isPage: boolean }
 
 function liveParentLayoutFacts(parent: any): ParentLayoutFacts {
   return {
     ...parentHugFacts(parent),
-    isGrid: !!parent && parent.layoutMode === "GRID",
     isPage: !!parent && parent.type === "PAGE",
   };
 }
@@ -743,13 +596,6 @@ function liveParentLayoutFacts(parent: any): ParentLayoutFacts {
 // direction write clears its children's flow marks, so whether a parent's `fill` survives is the
 // grandparent's answer, not the parent's.
 export type BatchLayoutDeltas = Record<string, WriteLayout>;
-
-// A container's direction as the layout vocabulary spells it. GRID reads "none" on purpose: the
-// vocabulary can only say none/row/column, so any authored mode replaces a grid outright.
-function liveDirectionWord(f: any): "row" | "column" | "none" {
-  if (!f) return "none";
-  return f.layoutMode === "HORIZONTAL" ? "row" : f.layoutMode === "VERTICAL" ? "column" : "none";
-}
 
 /**
  * The parent's facts as they will stand once the verb's own deltas have landed. With no delta for
@@ -771,7 +617,8 @@ function projectedParentLayoutFacts(parent: any, deltas: BatchLayoutDeltas | und
   const live = liveParentLayoutFacts(parent);
   const parentDelta = parent && deltas ? deltas[parent.id] : undefined;
   if (!parentDelta) return live;
-  const parentIsAuto = parentDelta.mode != null ? parentDelta.mode !== "none" : live.parentIsAuto;
+  const nextMode = effectiveLayoutMode(parentDelta, parent);
+  const parentIsAuto = nextMode.kind !== "free";
   const sizing = parentDelta.sizing || {};
   // Does the delta ESTABLISH a direction (off→row/column, or a row↔column flip)? Then the live
   // effective sizing is the wrong reading for an axis the delta doesn't name, in the one direction
@@ -780,8 +627,7 @@ function projectedParentLayoutFacts(parent: any, deltas: BatchLayoutDeltas | und
   // default — so the instant `mode:"row"` lands it hugs BOTH axes, and a sibling entry's percent
   // against it is the cycle assertPercentResolvable exists to name. Same swap on a row↔column flip:
   // the axis each raw mode governs moves with the direction.
-  const establishesDirection = parentIsAuto && parentDelta.mode != null && parentDelta.mode !== liveDirectionWord(parent);
-  const nextIsRow = parentDelta.mode != null ? parentDelta.mode === "row" : parent.layoutMode === "HORIZONTAL";
+  const establishesDirection = parentIsAuto && parentDelta.mode != null && parentDelta.mode !== layoutModeOf(parent).word;
   // A fill is a MARK on the parent, honored by the grandparent's flow — so a grandparent whose own
   // delta re-aims that flow (any direction change: applyContainer clears every child's flow marks,
   // and "none" leaves them parked and inert) stops honoring it, and the parent falls back to its
@@ -790,7 +636,7 @@ function projectedParentLayoutFacts(parent: any, deltas: BatchLayoutDeltas | und
   const grandparent = parent ? parent.parent : null;
   const grandparentDelta = grandparent && deltas ? deltas[grandparent.id] : undefined;
   const fillSurvives =
-    !grandparentDelta || grandparentDelta.mode == null || grandparentDelta.mode === liveDirectionWord(grandparent);
+    !grandparentDelta || grandparentDelta.mode == null || grandparentDelta.mode === layoutModeOf(grandparent).word;
   const unnamedAxisHugs = function (isWidth: boolean): boolean {
     if (!parentIsAuto) return false; // hug is meaningless off auto-layout
     // The live effective reading holds unless the batch invalidates what produced it — either the
@@ -800,14 +646,11 @@ function projectedParentLayoutFacts(parent: any, deltas: BatchLayoutDeltas | und
     // Fill is realized from ABOVE, so where it survives it still isn't a hug (the same case
     // parentHugFacts reads effective sizing for).
     if (fillSurvives && convertSizing(parent[isWidth ? "layoutSizingHorizontal" : "layoutSizingVertical"]) === "fill") return false;
-    const isPrimary = isWidth === nextIsRow;
-    return parent[isPrimary ? "primaryAxisSizingMode" : "counterAxisSizingMode"] === "AUTO";
+    return behaviorForMode(nextMode).rawHugs(parent, isWidth ? "horizontal" : "vertical");
   };
   return {
     isPage: live.isPage, // a props-only delta never reparents
-    // Any authored mode replaces GRID: the vocabulary can only spell none/row/column.
-    isGrid: live.isGrid && parentDelta.mode == null,
-    parentIsAuto,
+    mode: effectiveLayoutMode(parentDelta, parent),
     hugW: sizing.horizontal !== undefined ? parentIsAuto && sizing.horizontal === "hug" : unnamedAxisHugs(true),
     hugH: sizing.vertical !== undefined ? parentIsAuto && sizing.vertical === "hug" : unnamedAxisHugs(false),
   };
@@ -828,12 +671,13 @@ function projectedParentLayoutFacts(parent: any, deltas: BatchLayoutDeltas | und
 function assertLayoutLandsUnderParent(
   parent: ParentLayoutFacts, nodeType: string, wl: WriteLayout, isContainer: AutoLayoutMixin["layoutMode"] | undefined, isOutOfFlow: boolean, subject: string, nodeLocalValidated = false, liveWrap = false,
 ): void {
+  const context = childLayout(parent.mode, wl, isOutOfFlow, subject);
+  wl = context.layout;
   if (parent.isPage) {
     assertSizingResolvesAgainstParentFrame(wl, false, subject);
   }
   if (!nodeLocalValidated) assertLayoutRealizableForType(nodeType, wl, isContainer, subject, liveWrap);
-  assertTextFillHeightInFlow(nodeType, wl, parent.parentIsAuto, isOutOfFlow, subject);
-  assertNoParentRelativeWordsUnderGrid(wl, parent.isGrid, subject);
+  assertTextFillHeightInFlow(nodeType, wl, parent.mode.kind !== "free", isOutOfFlow, subject);
   if (wl.percentSize) {
     assertPercentResolvable({ ...wl, position: isOutOfFlow ? "absolute" : wl.position }, parent, subject);
   }
@@ -878,12 +722,13 @@ export function assertLayoutDeltaResolvable(
     if (owner) assertInheritedRectangleDimensions(wl, subject + ": " + describeNodeIdentity(node) + " under " + describeNodeIdentity(owner));
   }
   if (node.type === "INSTANCE" && wl.mode !== undefined) {
-    const requested = wl.mode === "row" ? "HORIZONTAL" : wl.mode === "column" ? "VERTICAL" : "NONE";
+    const requested = LAYOUT_MODES[wl.mode].native;
     if (requested !== mode) {
       throw new Error(subject + ": an instance root inherits its layout direction from its component; layout.mode " +
         JSON.stringify(wl.mode) + " does not match the resulting component's " + mode + " direction. Change the component or choose a matching variant instead. Nothing was applied.");
     }
   }
+  assertGridSizing(wl, { layoutMode: mode, layoutSizingHorizontal: node.layoutSizingHorizontal, layoutSizingVertical: node.layoutSizingVertical, gridColumnSizes: node.gridColumnSizes, gridRowSizes: node.gridRowSizes }, subject);
   const isContainer = mode;
   assertLayoutLandsUnderParent(parent, node.type, wl, isContainer, outOfFlow, subject, false, projection?.wrap ?? node.layoutWrap === "WRAP");
 }
@@ -932,24 +777,16 @@ function liveParentRelativeWords(node: any): WriteLayout {
 // re-apply its parent-relative intent against the new one through the create/edit appliers. The
 // clear is load-bearing and unconditional — layoutGrow means "the parent's PRIMARY axis" and
 // STRETCH means "its COUNTER axis", so a row→column move silently re-aims a width-fill into a
-// height-fill unless both marks go first (the same re-aim clearContainerFlowMarks does when a
+// height-fill unless both marks go first (the same re-aim the parent policy does when a
 // container flips direction). NOT lifted, for the same reason it isn't there: the
 // hug-beats-stretch primaryAxisSizingMode pin, which is indistinguishable from an authored fixed
 // size once written.
-export function resettleMovedNode(node: any, wl: WriteLayout): void {
+export function resettleMovedNode(node: any, wl: WriteLayout, resources?: RenderResources): void {
   node.layoutGrow = 0;
   if (node.layoutAlign === "STRETCH") node.layoutAlign = "INHERIT";
-  applyLiveNodeLayout(node, wl);
+  applyLiveNodeLayout(node, wl, resources);
   settleLiveNodePercentSize(node, wl);
   settleLiveNodePercentPosition(node, wl);
-}
-
-// Which appliers govern a child under a given parent: a POSITIONED child (any ABSOLUTE child, or
-// any child of a free-form parent) is covered + constrained; an IN-FLOW auto-layout child reflows
-// via layoutGrow/STRETCH instead, on which constraints are inert. One predicate, because the
-// create walk both routes on it and records the covered children for its second cover pass.
-function isPositionedChild(parentIsAuto: boolean, cl: WriteLayout): boolean {
-  return cl.position === "absolute" || !parentIsAuto;
 }
 
 /** One positioned child waiting on its parent's final size — cover its "fill" axes, then constrain it. */
@@ -957,7 +794,7 @@ export interface PositionedChildSettlement { child: any; layout: WriteLayout }
 
 // The parent-side facts a compiled child is settled against. The flow facts are ParentFlowFacts (the
 // percent rule's own shape); `crossStretch` rides along because container-level `alignItems:
-// "stretch"` intent is never stored — not by Figma, not by us (see setContainerStretchMarks) — so
+// "stretch"` intent is never stored — not by Figma, not by us (see the flow policy) — so
 // only a caller holding the parent's own WriteNode can state it. A caller inserting into a LIVE parent
 // passes false and says so in its docs: the marks are re-synthesized by editing the container.
 export interface AttachParentFacts extends ParentFlowFacts {
@@ -994,20 +831,24 @@ export function attachBuiltChild(
   if (live) return live.place(parent, place, ctx);
   const authored = wn.layout || {};
   const defaultTextFill = wn.type === "TEXT" && authored.sizing?.horizontal === undefined && authored.position !== "absolute" && parent.layoutMode === "VERTICAL" && facts.widthIsBounded;
-  const cl: WriteLayout = defaultTextFill ? { ...authored, sizing: { ...authored.sizing, horizontal: "fill" } } : authored;
+  const words: WriteLayout = defaultTextFill ? { ...authored, sizing: { ...authored.sizing, horizontal: "fill" } } : authored;
+  const context = childLayout(facts.mode, words, words.position === "absolute", facts.subject);
+  const cl = context.layout;
   // Fail loud on the one unresolvable percent (in-flow %-size against a hugging auto-layout parent)
   // before building the node, so a bad node doesn't orphan a live node on the canvas. Every other
   // percent/anchor is recorded and resolved in the post-walk pass (resolvePercents) against realized size.
   assertPercentResolvable(cl, facts, facts.subject);
-  assertTextFillHeightInFlow(wn.type, cl, facts.parentIsAuto, cl.position === "absolute", facts.subject);
+  assertTextFillHeightInFlow(wn.type, cl, facts.mode.kind !== "free", cl.position === "absolute", facts.subject);
   const child = buildNode(wn, ctx, facts.widthIsBounded);
   if (defaultTextFill) child.textAutoResize = "HEIGHT";
   place(child);
+  layoutBehavior(parent).place(parent, child, context);
+  queueSiblingOrder(ctx, parent, child, cl.zIndex);
   if (cl.percentSize || cl.percentPos || (cl.position === "absolute" && cl.anchor)) {
     ctx.pending.push({ node: child, layout: cl, parent });
   }
   if (cl.position === "absolute") applyChildPosition(parent, child, cl);
-  if (isPositionedChild(facts.parentIsAuto, cl)) {
+  if (context.kind === "free") {
     coverChild(parent, child, cl);
     // A constraint is how the child reflows when the parent's box CHANGES, so writing it before the
     // parent has its final size makes Figma reflow the child by that difference — a STRETCH child
@@ -1017,7 +858,7 @@ export function attachBuiltChild(
     if (settleAfterParentSize) settleAfterParentSize.push({ child, layout: cl });
     else applyConstraints(child, wn.layout);
   } else {
-    applyChildFill(parent, child, cl, facts.crossStretch);
+    layoutBehavior(parent).fill(parent, child, context, facts.crossStretch);
     // An explicit pin is STORED even in flow — constraints are inert on an in-flow auto-layout
     // child, but they govern the moment it leaves the flow, and edit's applyPinDelta writes the
     // word unconditionally. applyPinDelta, NOT applyConstraints: in flow, fill rides layoutGrow,
@@ -1040,13 +881,13 @@ function buildFrame(wn: WriteNode, ctx: RenderCtx, enclosingWidthBounded = false
   if (!wn.fills) f.fills = []; // omitted fill -> transparent, not a surprise white box
   applyPaint(f, wn, ctx);
 
-  const mode = layout.mode;
-  const isAutoParent = mode === "row" || mode === "column";
+  const parentMode = effectiveLayoutMode(layout);
+  const isAutoParent = parentMode.kind !== "free";
   // The hug facts answer from the AUTHORED node — the frame's live sizing modes don't exist until
   // applyOwnSize runs after the children (see assertPercentResolvable's contract).
-  const authoredSizing = layout.sizing || {};
+  const authoredSizing = layoutBehavior(f).defaultSizing(layout);
   const facts: AttachParentFacts = {
-    parentIsAuto: isAutoParent,
+    mode: parentMode,
     hugW: !authoredSizing.horizontal || authoredSizing.horizontal === "hug",
     hugH: !authoredSizing.vertical || authoredSizing.vertical === "hug",
     crossStretch: layout.alignItems === "stretch",

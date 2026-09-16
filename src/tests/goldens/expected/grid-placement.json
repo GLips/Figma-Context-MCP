@@ -1,0 +1,51 @@
+{
+  "name": "Grid Placement",
+  "nodes": [
+    {
+      "id": "12:1",
+      "name": "Grid",
+      "type": "FRAME",
+      "width": "contextual",
+      "height": "contextual",
+      "designedWidth": "260px",
+      "designedHeight": "130px",
+      "layout": {
+        "mode": "grid",
+        "gridTemplateColumns": "80px 80px 80px",
+        "gridTemplateRows": "60px 60px",
+        "gap": "10px"
+      },
+      "children": [
+        {
+          "id": "12:2",
+          "name": "Tall cell",
+          "type": "RECTANGLE",
+          "width": 60,
+          "height": 100,
+          "layout": {
+            "gridColumn": "1",
+            "gridRow": "1 / span 2",
+            "justifySelf": "center",
+            "alignSelf": "end"
+          }
+        },
+        {
+          "id": "12:3",
+          "name": "Wide cell",
+          "type": "RECTANGLE",
+          "width": 120,
+          "height": 30,
+          "layout": {
+            "gridColumn": "2 / span 2",
+            "gridRow": "1",
+            "justifySelf": "end",
+            "alignSelf": "center"
+          }
+        }
+      ]
+    }
+  ],
+  "components": {},
+  "styles": {},
+  "templates": {}
+}

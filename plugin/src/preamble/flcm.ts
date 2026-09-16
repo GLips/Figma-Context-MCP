@@ -1,3 +1,5 @@
+import { acceptAuthoringProps } from "./authoring-input.js";
+import { parseGridTracks } from "./grid-tracks.js";
 import { normalizeVectorPaths } from "./path.js";
 import { compileBounds, BOUND_KEYS } from "./size-bounds.js";
 import { compileAnnotations } from "./annotations.js";
@@ -7,14 +9,14 @@ import {
   Justify, Align, TextAlign, TextDecoration, WriteTextCase, RawIdRef, WriteType, Target,
   ComponentPropertyInput, OverrideDeltaInput, ComponentPropertyBinding, ComponentPropertyDefinitionEdit,
 } from "./ir.js";
-import { assertLayoutRealizableForType } from "./layout-legality.js";
+import { assertLayoutRealizableForType, assertGridSizing } from "./layout-legality.js";
 import { parseInlineMarkdown, MdSegment } from "./markdown.js";
 import { linearGradient, radialGradient } from "./paint.js";
 import { layerBlurFromCssPx, backgroundBlurFromCssPx, shadow, glass, noise, texture, progressiveBlur } from "./effects.js";
 import { parseColor, parseFill, parseCssEffects, parseBlendMode, boxShorthand, length, lineHeight, letterSpacing, isPercent, percent } from "./css.js";
 import { requestHostImages } from "./host.js";
 import { get, find, findOne, selection } from "./read.js";
-import { rejectUnknownKeys, acceptAuthoringProps, rejectNonDeltaWords, own } from "./validate.js";
+import { rejectUnknownKeys, rejectNonDeltaWords, own } from "./validate.js";
 import type { SimplifiedNode } from "@framelink/core";
 
 // The authoring surface (verb Props + gradient/effects sugar) is defined ONCE in schema.ts as zod schemas
@@ -32,16 +34,18 @@ export const KNOWN_KEYS = {
   annotation: ["annotations"],
   shared: ["name", "key", "opacity", "mixBlendMode", "visible", "locked"],
   edit: ["exposed", ...BOUND_KEYS, "clipsContent", "fontSize", "annotations", "name", "opacity", "mixBlendMode", "visible", "locked", "fill", "stroke", "strokeWidth", "strokeAlign", "borderRadius", "effects", "rotation", "clip", "width", "height", "left", "top", "position", "anchor", "pin", "layout", "text", "textStyle", "boldWeight", "componentProperties", "overrides", "componentId", "componentPropertyReferences", "description", "propertyDefinitions"],
-  size: [...BOUND_KEYS, "width", "height", "left", "top", "position", "anchor", "pin"],
-  placement: ["left", "top", "position", "anchor", "pin"],
+  size: ["layout", ...BOUND_KEYS, "width", "height", "left", "top", "position", "anchor", "pin"],
+  placement: ["layout", "left", "top", "position", "anchor", "pin"],
   appearance: ["fill", "stroke", "strokeWidth", "strokeAlign", "borderRadius", "effects", "rotation"],
   ellipse: ["fill", "stroke", "strokeWidth", "strokeAlign", "effects", "rotation"],
   frame: ["layout", "clip", "clipsContent"],
-  layout: ["mode", "gap", "wrap", "padding", "justifyContent", "alignItems"],
+  layout: ["gridTemplateColumns", "gridTemplateRows", "gridColumn", "gridRow", "justifySelf", "alignSelf", "zIndex", "mode", "gap", "wrap", "padding", "justifyContent", "alignItems"],
+  childLayout: ["gridColumn", "gridRow", "justifySelf", "alignSelf", "zIndex"],
+  containerLayout: ["mode", "gridTemplateColumns", "gridTemplateRows", "gap", "wrap", "padding", "justifyContent", "alignItems"],
   text: ["text", "textStyle", "fill", "boldWeight", "fontSize"],
   textStyle: ["fontFamily", "fontWeight", "fontSize", "fontStyle", "lineHeight", "letterSpacing", "textDecoration", "textTransform", "fontVariant", "textAlign", "textAlignVertical", "paragraphSpacing", "paragraphIndent", "listSpacing", "hyperlink", "lineClamp"],
   run: ["fontWeight", "fontSize", "fontFamily", "fontStyle", "lineHeight", "letterSpacing", "textDecoration", "textTransform", "fontVariant", "paragraphSpacing", "paragraphIndent", "listSpacing", "color", "hyperlink"],
-  line: ["stroke", "strokeWidth", "width", "rotation", "left", "top", "position", "anchor", "pin"],
+  line: ["layout", "stroke", "strokeWidth", "width", "rotation", "left", "top", "position", "anchor", "pin"],
   path: ["vectorPaths", "d", "fill", "stroke", "strokeWidth", "strokeAlign", "effects", "rotation"],
   instance: ["componentProperties", "overrides", "exposed"],
   swap: ["componentId"],
@@ -102,7 +106,6 @@ export const NODE_KEYS_BY_TYPE: Record<"FRAME" | "TEXT" | "RECTANGLE" | "ELLIPSE
 };
 const PATH_KEYS = keySet(KNOWN_KEYS.annotation, KNOWN_KEYS.shared, KNOWN_KEYS.size, KNOWN_KEYS.path, KNOWN_KEYS.binding);
 const SVG_KEYS = keySet(KNOWN_KEYS.annotation, KNOWN_KEYS.shared, KNOWN_KEYS.size, KNOWN_KEYS.binding);
-const LAYOUT_KEYS = keySet(KNOWN_KEYS.layout);
 const IMAGE_KEYS = keySet(KNOWN_KEYS.image);
 const GRADIENT_KEYS = keySet(KNOWN_KEYS.gradient);
 const EFFECTS_KEYS = keySet(KNOWN_KEYS.effects);
@@ -256,11 +259,7 @@ const JUSTIFY_CONTENT: Record<string, Justify> = {
 const ALIGN_ITEMS: Record<string, Align> = {
   "flex-start": "start", "flex-end": "end", center: "center", stretch: "stretch", baseline: "baseline",
 };
-// Auto-layout direction. Unlike justify/align these need no CSS→terse mapping (row/column/none ARE the
-// values), so mode validates by identity via assertEnum — a stray mode (notably `grid`, which flcm can't
-// author) fails loud naming the set rather than silently degrading to free-form (ADR-0003; the schema doc
-// promises exactly this).
-const LAYOUT_MODE = new Set<"none" | "row" | "column">(["row", "column", "none"]);
+const LAYOUT_MODE = new Set<"none" | "row" | "column" | "grid">(["row", "column", "grid", "none"]);
 
 // TS's Set.has doesn't narrow its argument, so wrap it as a real type guard: a hit proves the string is one
 // of the set's literals, letting parseDirectional return the typed axis words with no cast at the call site.
@@ -318,19 +317,34 @@ function applyPin(layout: WriteLayout, props: SizeProps): void {
   if (pin) layout.pin = pin;
 }
 
-// Compile the container words (`layout: { mode, gap, padding, justifyContent, alignItems }`) into a
+// Compile the read layout bag, including container and grid-child words, into a
 // WriteLayout — presence-preserving: a word the author didn't write compiles to nothing. The
 // creation default (an omitted mode means free-form) is buildLayout's to inject, NOT this
-// function's: edit compiles through here directly, and a defaulted mode would turn a gap nudge
-// into an auto-layout kill. Exported for edit-plan.ts.
-export function compileContainerWords(cfg: NonNullable<FrameProps["layout"]>, subject: string): WriteLayout {
-  // QuickJS boundary: a present-but-malformed value (false, a number, an array) must reject the
-  // whole call — Object.keys on it would read as "no words named" and the rest would partially apply.
-  if (typeof cfg !== "object" || cfg === null || Array.isArray(cfg)) {
-    throw new Error("flcm: " + subject + " must be an object like { mode, gap, padding, justifyContent, alignItems } — got " + JSON.stringify(cfg) + ".");
-  }
-  rejectUnknownKeys(cfg, LAYOUT_KEYS, subject);
+// function's: edit uses the same compile, and a defaulted mode would turn a gap nudge
+// into an auto-layout kill.
+function compileLayoutBag(cfg: NonNullable<FrameProps["layout"]>, subject: string): WriteLayout {
   const layout: WriteLayout = {};
+  for (const key of ["gridTemplateColumns", "gridTemplateRows"] as const) {
+    const raw = cfg[key];
+    if (raw === undefined) continue;
+    if (typeof raw !== "string" || !raw.trim()) throw new Error(subject + ": " + key + " needs a track template.");
+    layout[key] = parseGridTracks(raw, subject);
+  }
+  for (const key of ["gridColumn", "gridRow"] as const) {
+    const raw = cfg[key];
+    if (raw === undefined) continue;
+    const match = typeof raw === "string" ? /^(?:(\d+)(?: \/ span (\d+))?|span (\d+))$/.exec(raw.trim()) : null;
+    if (!match || match.slice(1).some(v => v !== undefined && (!Number.isSafeInteger(Number(v)) || Number(v) < 1))) throw new Error(subject + ": " + key + ' needs "N", "span N", or "N / span N".');
+    layout[key] = { ...(match[1] ? { anchor: Number(match[1]) - 1 } : {}), span: Number(match[2] ?? match[3] ?? 1) };
+  }
+  for (const key of ["justifySelf"] as const) {
+    if (cfg[key] !== undefined) layout[key] = mapCssWord(key, cfg[key], { start: "MIN", center: "CENTER", end: "MAX", auto: "AUTO" } as const);
+  }
+  if (cfg.alignSelf !== undefined) layout.alignSelf = assertEnum(subject + ".alignSelf", cfg.alignSelf, new Set(["flex-start", "flex-end", "center", "stretch", "start", "end", "auto"] as const));
+  if (cfg.zIndex !== undefined) {
+    if (!Number.isSafeInteger(cfg.zIndex) || cfg.zIndex < 0) throw new Error(subject + ": zIndex needs a non-negative integer.");
+    layout.zIndex = cfg.zIndex;
+  }
   if (cfg.mode != null) layout.mode = assertEnum("layout.mode", cfg.mode, LAYOUT_MODE);
   if (cfg.gap != null) {
     const values = typeof cfg.gap === "string" ? cfg.gap.trim().split(/\s+/).map(length) : [cfg.gap];
@@ -348,24 +362,15 @@ export function compileContainerWords(cfg: NonNullable<FrameProps["layout"]>, su
   return layout;
 }
 
-// Compile the child-side size/placement words (width/height, left/top/position/anchor, pin) into a
-// WriteLayout — the same set every compiler rides. Presence-preserving like the container compile;
-// the return is undefined when no word was written, so callers can gate on "was any layout named".
-// Exported for edit-plan.ts.
-export function compileSizeWords(props: SizeProps): WriteLayout | undefined {
-  const layout: WriteLayout = {};
-  applySizing(props, layout);
-  const bounds = compileBounds(props);
-  if (bounds) layout.bounds = bounds;
-  applyPlacement(layout, props);
-  applyPin(layout, props);
-  return Object.keys(layout).length ? layout : undefined;
-}
-
-// The placement words alone — what a LINE takes beside its width (a line has no sizing intent to
-// compile). Exported for edit-plan.ts.
-export function compilePlacementWords(props: SizeProps): WriteLayout | undefined {
-  const layout: WriteLayout = {};
+// All node layout inputs compile once after the per-type vocabulary gate. LINE has only fixed width.
+export function compileNodeLayout(props: Omit<SizeProps, "layout"> & { layout?: FrameProps["layout"] }, nodeType: string, subject: string): WriteLayout | undefined {
+  const layout = props.layout == null ? {} : compileLayoutBag(props.layout, subject + ".layout");
+  if (nodeType === "LINE") Object.assign(layout, compileLineWidth(props));
+  else {
+    applySizing(props, layout);
+    const bounds = compileBounds(props);
+    if (bounds) layout.bounds = bounds;
+  }
   applyPlacement(layout, props);
   applyPin(layout, props);
   return Object.keys(layout).length ? layout : undefined;
@@ -386,25 +391,20 @@ export function compileLineWidth(props: Pick<LineProps, "width">): WriteLayout |
   } catch {
     throw new Error('flcm: `width` on a LINE must be a number or "Npx" — got ' + JSON.stringify(w) + ".");
   }
-  // The sizing intent must say "fixed": clearChildFlowFill keys the un-fill off it, so a width edit on a
+  // The sizing intent must say "fixed": the parent policy’s clearFill keys the un-fill off it, so a width edit on a
   // live line someone set to grow (layoutGrow 1 — authorable in the Figma UI, not in flcm) actually takes
   // over from the fill.
   return { sizing: { horizontal: "fixed" }, dimensions: { width: px } };
 }
 
 function buildLayout(props: FrameProps, nodeType: WriteType, subject: string): WriteLayout {
-  const layout: WriteLayout = {};
-  if (nodeType === "FRAME") {
-    // ?? not ||: a falsy-but-present layout (false, 0) must reach the compile's malformed-value reject.
-    Object.assign(layout, compileContainerWords(props.layout ?? {}, "FRAME.layout"));
-    if (layout.mode == null) layout.mode = "none"; // the creation default: an omitted mode is free-form
-  }
-  // The size/position words ride the same compile edit does — the container words above and the
-  // creation default are the only create-side extras.
-  Object.assign(layout, compileSizeWords(props) || {});
+  const layout = compileNodeLayout(props, nodeType, subject) || {};
+  if (nodeType === "FRAME" && layout.mode == null) layout.mode = "none";
   // The shared per-type legality authority (layout-legality.ts) — the same call edit's live gate
   // makes, so a word that rejects on edit rejects identically here instead of silently not landing.
+
   assertLayoutRealizableForType(nodeType, layout, undefined, subject);
+  assertGridSizing(layout, undefined, subject);
   return layout;
 }
 
@@ -527,10 +527,7 @@ function compileInstance(props: InstanceProps & { componentId: Target }): WriteN
   wn.component = component;
   if (accepted.exposed !== undefined) { assertScalarType(accepted.exposed, "boolean", "exposed"); wn.exposed = accepted.exposed; }
   compileNodeLocalProps(wn, accepted, { radius: true, clip: true });
-  const layout: WriteLayout = {};
-  // ?? not ||, as in buildLayout: a falsy-but-present layout must reach the compile's malformed reject.
-  if (accepted.layout != null) Object.assign(layout, compileContainerWords(accepted.layout, "INSTANCE.layout"));
-  Object.assign(layout, compileSizeWords(accepted) || {});
+  const layout = compileNodeLayout(accepted, "INSTANCE", "INSTANCE") || {};
   // The type rule (hug needs auto-layout, gap needs a container) is NOT run here: whether this root is
   // a row/column is the COMPONENT's fact, read in render's prepare — the same live-mode call edit makes.
   if (Object.keys(layout).length) wn.layout = layout;
@@ -1112,7 +1109,7 @@ function compileLine(props: LineProps | SimplifiedNode = {}): WriteNode {
   compileBindings(wn, props, ANY_NODE_BINDINGS, "LINE");
   if (props.stroke != null) wn.strokes = compilePaintWord(props.stroke, "stroke");
   if (props.strokeWidth != null) wn.strokeWeight = length(props.strokeWidth);
-  const layout: WriteLayout = { ...(compileLineWidth(props) || {}), ...(compilePlacementWords(props) || {}) };
+  const layout = compileNodeLayout(props, "LINE", "LINE") || {};
   // line() is the one compiler that doesn't ride buildLayout (width-only sizing), so it consults
   // the shared authority itself — no rule fires on a width-only layout today, but a future LINE-keyed
   // rule must not end up edit-only (the asymmetry this module forbids).

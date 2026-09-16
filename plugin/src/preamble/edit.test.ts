@@ -513,7 +513,7 @@ test("a present-but-malformed structured value rejects the WHOLE delta — no pa
   );
   await assert.rejects(
     edit("card", { fill: "#ff0000", layout: false } as never),
-    /flcm\.edit\.layout must be an object/,
+    /flcm\.edit\.layout takes an object/,
   );
   await assert.rejects(
     edit("card", { fill: "#ff0000", layout: { padding: [] } } as never),
@@ -659,24 +659,6 @@ test("un-stretching the container reaches a mark parked on an ABSOLUTE child too
   await edit("row", { layout: { alignItems: "flex-start" } });
   await edit("a", { position: "none" });
   assert.equal(a.layoutAlign, "INHERIT"); // no resurrected stretch the container no longer asks for
-});
-
-test("parent-relative words under a live GRID parent reject; node-local fixed px still lands", async () => {
-  const out = await render({
-    type: "FRAME",
-    key: "grid",
-    width: 300,
-    height: 300,
-    children: [{ type: "RECTANGLE", key: "cell", width: 40, height: 40 }],
-  });
-  const grid = await figma.getNodeByIdAsync(specNode(out, "grid").id);
-  grid.layoutMode = "GRID"; // not authorable through flcm — a live document fact
-  const cell = await figma.getNodeByIdAsync(specNode(out, "cell").id);
-  await assert.rejects(edit("cell", { width: "fill" }), /GRID container/);
-  await assert.rejects(edit("cell", { width: "50%" }), /GRID container/);
-  await assert.rejects(edit("cell", { pin: { x: "right" } }), /GRID container/);
-  await edit("cell", { width: 60 });
-  assert.equal(cell.width, 60);
 });
 
 test("a Figma refusal mid-apply rolls back and the error is a pointer: identity + Figma's reason", async () => {

@@ -17,7 +17,7 @@ const __measuring = new Set(); // (node,dim) keys in-flight, to break the fill<-
 const clonePaints = (p) => (Array.isArray(p) ? JSON.parse(JSON.stringify(p)) : p);
 
 // The visual/layout props carried across clone (instance) and promote (createComponentFromNode).
-const COPY_FIELDS = ["isExposedInstance", "layoutWrap", "counterAxisSpacing", "counterAxisAlignContent", "minWidth", "maxWidth", "minHeight", "maxHeight", "name", "layoutMode", "itemSpacing", "paddingTop", "paddingRight", "paddingBottom",
+const COPY_FIELDS = ["gridRowSizes", "gridColumnSizes", "gridRowGap", "gridColumnGap", "gridAutoTracks", "gridItemsPositioning", "_gridRowAnchorIndex", "_gridColumnAnchorIndex", "_gridRowSpan", "_gridColumnSpan", "gridChildHorizontalAlign", "gridChildVerticalAlign", "_gridSizingW", "_gridSizingH", "_gridFillW", "_gridFillH", "isExposedInstance", "_layoutWrap", "counterAxisSpacing", "counterAxisAlignContent", "minWidth", "maxWidth", "minHeight", "maxHeight", "name", "layoutMode", "itemSpacing", "paddingTop", "paddingRight", "paddingBottom",
   "paddingLeft", "primaryAxisAlignItems", "counterAxisAlignItems", "primaryAxisSizingMode",
   "counterAxisSizingMode", "layoutGrow", "layoutAlign", "layoutPositioning", "constraints", "strokeWeight", "strokeAlign",
   "cornerRadius", "opacity", "visible", "rotation", "characters", "fontSize", "textAutoResize",
@@ -69,8 +69,16 @@ class Node {
     this.parent = null;
     // auto-layout
     this.layoutMode = "NONE";
+    this.gridRowSizes = [{ type: "FLEX", value: 1 }];
+    this.gridColumnSizes = [{ type: "FLEX", value: 1 }];
+    this.gridRowGap = this.gridColumnGap = 0;
+    this.gridAutoTracks = "NONE";
+    this.gridItemsPositioning = "MANUAL";
+    this._gridRowAnchorIndex = this._gridColumnAnchorIndex = 0;
+    this._gridRowSpan = this._gridColumnSpan = 1;
+    this.gridChildHorizontalAlign = this.gridChildVerticalAlign = "AUTO";
     this.itemSpacing = 0;
-    this.layoutWrap = "NO_WRAP";
+    this._layoutWrap = "NO_WRAP";
     this.counterAxisSpacing = 0;
     this.counterAxisAlignContent = "AUTO";
     this.isExposedInstance = false;
@@ -94,7 +102,7 @@ class Node {
     this.visible = true;
     this.effects = [];
     this.rotation = 0;
-    this.clipsContent = false;
+    if (["FRAME", "COMPONENT", "COMPONENT_SET", "INSTANCE", "SLOT"].includes(type)) this.clipsContent = false;
     // position: x/y honored directly; layoutPositioning='ABSOLUTE' lifts a child out of an auto-layout
     // parent's flow (so x/y apply, it can overlap, and it's excluded from the parent's hug measurement).
     this.x = 0;
@@ -152,28 +160,107 @@ class Node {
   get reactions() { return this._reactions; }
   async setReactionsAsync(reactions) { this._reactions = JSON.parse(JSON.stringify(reactions || [])); }
 
-  get _isAuto() { return this.layoutMode === "HORIZONTAL" || this.layoutMode === "VERTICAL"; }
+  get layoutWrap() { return this._layoutWrap; }
+  set layoutWrap(value) {
+    if (this.layoutMode !== "HORIZONTAL") throw new Error("layoutWrap requires HORIZONTAL layoutMode");
+    this._layoutWrap = value;
+  }
+
+  get _isAuto() { return ["HORIZONTAL", "VERTICAL", "GRID"].includes(this.layoutMode); }
+
+  // Documented grid contracts: anchors are read-only, append uses the first free cell,
+  // and explicit placement/spans reject occupied cells or tracks outside the grid.
+  get gridRowCount() { return this.gridRowSizes.length; }
+  set gridRowCount(value) { this._setGridCount("Row", value); }
+  get gridColumnCount() { return this.gridColumnSizes.length; }
+  set gridColumnCount(value) { this._setGridCount("Column", value); }
+  _setGridCount(axis, value) {
+    if (!Number.isInteger(value) || value < 1 || (axis === "Row" && this.gridAutoTracks === "ROWS")) throw new Error("invalid grid count");
+    for (const c of this.children || []) if (c.layoutPositioning !== "ABSOLUTE" && c["grid" + axis + "AnchorIndex"] + c["grid" + axis + "Span"] > value) throw new Error("grid track is occupied");
+    const tracks = this["grid" + axis + "Sizes"];
+    if (value > tracks.length && this[axis === "Column" ? "layoutSizingHorizontal" : "layoutSizingVertical"] === "HUG") throw new Error("new FLEX tracks cannot hug");
+    while (tracks.length < value) tracks.push({ type: "FLEX", value: 1 });
+    tracks.length = value;
+  }
+  get gridRowAnchorIndex() { return this._gridRowAnchorIndex; }
+  get gridColumnAnchorIndex() { return this._gridColumnAnchorIndex; }
+  get gridRowSpan() { return this._gridRowSpan; }
+  set gridRowSpan(value) { this._checkGridCell(this.gridRowAnchorIndex, this.gridColumnAnchorIndex, value, this.gridColumnSpan); this._gridRowSpan = value; }
+  get gridColumnSpan() { return this._gridColumnSpan; }
+  set gridColumnSpan(value) { this._checkGridCell(this.gridRowAnchorIndex, this.gridColumnAnchorIndex, this.gridRowSpan, value); this._gridColumnSpan = value; }
+  _checkGridCell(row, col, rows, cols) {
+    const p = this.parent;
+    if (p?.layoutMode !== "GRID") throw new Error("grid child needs GRID parent");
+    if (![row, col, rows, cols].every(Number.isInteger) || row < 0 || col < 0 || rows < 1 || cols < 1 || row + rows > p.gridRowCount || col + cols > p.gridColumnCount) throw new Error("grid placement outside tracks");
+    for (const c of p.children) {
+      if (c === this || c.layoutPositioning === "ABSOLUTE") continue;
+      if (row < c.gridRowAnchorIndex + c.gridRowSpan && row + rows > c.gridRowAnchorIndex && col < c.gridColumnAnchorIndex + c.gridColumnSpan && col + cols > c.gridColumnAnchorIndex) throw new Error("grid cells overlap");
+    }
+  }
+  setGridChildPosition(row, col) {
+    if (this.parent?.gridItemsPositioning === "ROW_AUTO_FLOW") throw new Error("automatic grid placement");
+    this._checkGridCell(row, col, this.gridRowSpan, this.gridColumnSpan);
+    this._gridRowAnchorIndex = row; this._gridColumnAnchorIndex = col;
+  }
+  _autoPlaceGrid(child) {
+    if (this.layoutMode !== "GRID" || child.layoutPositioning === "ABSOLUTE") return;
+    // The harness models placement within authored tracks, not Figma’s automatic row growth.
+    for (let row = 0; row < this.gridRowCount; row++) {
+      for (let col = 0; col < this.gridColumnCount; col++) {
+        try { child._checkGridCell(row, col, child.gridRowSpan, child.gridColumnSpan); }
+        catch { continue; }
+        child._gridRowAnchorIndex = row; child._gridColumnAnchorIndex = col; return;
+      }
+    }
+    throw new Error("mock grid capacity exceeded; automatic track growth requires a live probe");
+  }
+  _gridTracks(dim) {
+    const horizontal = dim === "w";
+    const tracks = horizontal ? this.gridColumnSizes : this.gridRowSizes;
+    const gap = horizontal ? this.gridColumnGap : this.gridRowGap;
+    const pad = horizontal ? this._padW() : this._padH();
+    const fixed = tracks.map((t, i) => t.type === "FIXED" ? t.value : t.type === "HUG" ? Math.max(0, ...this.children.filter(c => c.layoutPositioning !== "ABSOLUTE" && c[horizontal ? "gridColumnAnchorIndex" : "gridRowAnchorIndex"] === i).map(c => c._sizeOf(dim) / c[horizontal ? "gridColumnSpan" : "gridRowSpan"])) : 0);
+    const flex = tracks.reduce((sum, t) => sum + (t.type === "FLEX" ? t.value ?? 1 : 0), 0);
+    const free = flex ? Math.max(0, this._sizeOf(dim) - pad - gap * (tracks.length - 1) - fixed.reduce((a, b) => a + b, 0)) : 0;
+    return fixed.map((v, i) => tracks[i].type === "FLEX" ? free * (tracks[i].value ?? 1) / flex : v);
+  }
+  _gridCellSize(child, dim) {
+    const start = dim === "w" ? child.gridColumnAnchorIndex : child.gridRowAnchorIndex;
+    const span = dim === "w" ? child.gridColumnSpan : child.gridRowSpan;
+    return this._gridTracks(dim).slice(start, start + span).reduce((a, b) => a + b, 0) + (span - 1) * (dim === "w" ? this.gridColumnGap : this.gridRowGap);
+  }
+  _gridOffset(dim) {
+    const p = this.parent;
+    if (p?.layoutMode !== "GRID" || this.layoutPositioning === "ABSOLUTE") return dim === "w" ? this._x : this._y;
+    const index = dim === "w" ? this.gridColumnAnchorIndex : this.gridRowAnchorIndex;
+    const align = dim === "w" ? this.gridChildHorizontalAlign : this.gridChildVerticalAlign;
+    const extra = p._gridCellSize(this, dim) - this._sizeOf(dim);
+    return (dim === "w" ? p.paddingLeft : p.paddingTop) + p._gridTracks(dim).slice(0, index).reduce((a, b) => a + b, 0) + index * (dim === "w" ? p.gridColumnGap : p.gridRowGap) + (align === "CENTER" ? extra / 2 : align === "MAX" ? extra : 0);
+  }
+  get x() { return this._gridOffset("w"); }
+  set x(v) { this._x = v; }
+  get y() { return this._gridOffset("h"); }
+  set y(v) { this._y = v; }
 
   _appendChild(child) {
     assertChildListOpen(this, true, "appendChild");
     if (child.parent) assertChildListOpen(child, false, "appendChild");
     if (child.parent) child.parent.children = child.parent.children.filter((c) => c !== child);
+    const entering = child.parent !== this;
     child.parent = this;
+    if (entering) this._autoPlaceGrid(child);
     this.children.push(child);
   }
   _insertChild(index, child) {
     assertChildListOpen(this, true, "insertChild");
     if (child.parent) assertChildListOpen(child, false, "insertChild");
-    // [directional — on the live checklist]: neither the typings nor the published docs define the
-    // same-parent case, so this models the behavior Figma's UI shows rather than a cited contract.
-    // When `child` is already in THIS parent, `index` is
-    // interpreted against the PRE-removal array — Figma compensates for the node's own slot, so
-    // insertChild(3, B@1) on [A,B,C,D] yields [A,C,B,D] (lands at 2), and insertChild(2, B@1) is a
-    // no-op. A naive remove-then-splice-at-index (what this used to do) overshoots reorders by one and
-    // does NOT reflect the real API. Cross-parent / new children get no adjustment.
+    // Forward same-parent indices are a harness assumption, checked by live probes.
+    // Grid ordering only moves toward earlier indices, where removal cannot change the target.
     const had = child.parent === this ? this.children.indexOf(child) : -1;
     if (child.parent) child.parent.children = child.parent.children.filter((c) => c !== child);
+    const entering = child.parent !== this;
     child.parent = this;
+    if (entering) this._autoPlaceGrid(child);
     const idx = had !== -1 && had < index ? index - 1 : index;
     this.children.splice(idx, 0, child);
   }
@@ -299,11 +386,29 @@ class Node {
   // parent's auto-layout stretches this child on the axis, else the node's own FIXED/HUG.
   get layoutSizingHorizontal() { return this._layoutSizing("w"); }
   get layoutSizingVertical() { return this._layoutSizing("h"); }
+  set layoutSizingHorizontal(v) { this._setGridSizing("w", v); }
+  set layoutSizingVertical(v) { this._setGridSizing("h", v); }
+  _setGridSizing(dim, value) {
+    const tracks = dim === "w" ? this.gridColumnSizes : this.gridRowSizes;
+    if (this.layoutMode === "GRID" && value === "HUG" && tracks.some(t => t.type === "FLEX")) throw new Error("FLEX tracks cannot hug");
+    if (value === "FILL" && !this.parent?._isAuto) throw new Error("grid fill needs a grid parent");
+    this[dim === "w" ? "_gridFillW" : "_gridFillH"] = value === "FILL";
+    if (value !== "FILL") {
+      if (this.layoutMode === "GRID") this[dim === "w" ? "_gridSizingW" : "_gridSizingH"] = value;
+      else if (this._isAuto) this[(dim === "w") === (this.layoutMode === "HORIZONTAL") ? "primaryAxisSizingMode" : "counterAxisSizingMode"] = value === "HUG" ? "AUTO" : "FIXED";
+      else if (this.type === "TEXT") this.textAutoResize = value === "HUG" ? (dim === "w" ? "WIDTH_AND_HEIGHT" : "HEIGHT") : "NONE";
+    }
+  }
   _layoutSizing(dim) {
     if (this.parent && this.parent._isAuto && this.layoutPositioning !== "ABSOLUTE") {
-      const primary = (dim === "w") === (this.parent.layoutMode === "HORIZONTAL");
-      if (primary ? this.layoutGrow === 1 : this.layoutAlign === "STRETCH") return "FILL";
+      if (this.parent.layoutMode === "GRID") {
+        if (this[dim === "w" ? "_gridFillW" : "_gridFillH"]) return "FILL";
+      } else {
+        const primary = (dim === "w") === (this.parent.layoutMode === "HORIZONTAL");
+        if (primary ? this.layoutGrow === 1 : this.layoutAlign === "STRETCH") return "FILL";
+      }
     }
+    if (this.layoutMode === "GRID") return this[dim === "w" ? "_gridSizingW" : "_gridSizingH"] ?? "FIXED";
     if (this._isAuto) {
       const primary = (dim === "w") === (this.layoutMode === "HORIZONTAL");
       const mode = primary ? this.primaryAxisSizingMode : this.counterAxisSizingMode;
@@ -400,6 +505,10 @@ class Node {
       const f = this.parent._fillSizeFor(this, dim);
       if (f != null) return Math.max(f, 0.01);
     }
+    if (this.layoutMode === "GRID") {
+      if (this._layoutSizing(dim) === "HUG") return this._gridTracks(dim).reduce((a, b) => a + b, 0) + (dim === "w" ? this._padW() + this.gridColumnGap * (this.gridColumnCount - 1) : this._padH() + this.gridRowGap * (this.gridRowCount - 1));
+      return (dim === "w" ? this._fixedW : this._fixedH) ?? 100;
+    }
     // 2. own auto-layout: fixed axis -> resized value; auto axis -> hug content
     if (this._isAuto) {
       const isRow = this.layoutMode === "HORIZONTAL";
@@ -434,6 +543,7 @@ class Node {
   }
 
   _fillSizeFor(child, dim) {
+    if (this.layoutMode === "GRID") return child.layoutPositioning !== "ABSOLUTE" && child._layoutSizing(dim) === "FILL" ? this._gridCellSize(child, dim) : null;
     const isRow = this.layoutMode === "HORIZONTAL";
     const dimIsParentPrimary = (dim === "w") === isRow;
     const parentMode = dimIsParentPrimary ? this.primaryAxisSizingMode : this.counterAxisSizingMode;
@@ -804,7 +914,7 @@ function installFieldMirror(node, field) {
 // which mints INSTANCE sublayers under the composite-id scheme.
 function cloneSubtree(src) {
   const n = new Node(src.type);
-  for (const k of COPY_FIELDS) n[k] = src[k];
+  for (const k of COPY_FIELDS) n[k] = k === "gridRowSizes" || k === "gridColumnSizes" ? src[k].map(t => ({ ...t })) : src[k];
   n.fills = clonePaints(src.fills);
   n.strokes = clonePaints(src.strokes);
   n.effects = clonePaints(src.effects);
@@ -837,7 +947,7 @@ function cloneInto(mainNode, instId, isRoot) {
   // without its own `I`. The read side of the same rule is core's componentPath.
   n.id = isRoot ? instId : "I" + instId + ";" + (mainNode.id.startsWith("I") ? mainNode.id.slice(1) : mainNode.id);
   registry.set(n.id, n);
-  for (const k of COPY_FIELDS) n[k] = mainNode[k];
+  for (const k of COPY_FIELDS) n[k] = k === "gridRowSizes" || k === "gridColumnSizes" ? mainNode[k].map(t => ({ ...t })) : mainNode[k];
   n.fills = clonePaints(mainNode.fills);
   n.strokes = clonePaints(mainNode.strokes);
   n.effects = clonePaints(mainNode.effects);

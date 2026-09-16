@@ -100,7 +100,7 @@ test("parent-relative sizes reject when the parent cannot resolve them", async (
       height: 200,
       children: [{ type: "TEXT", text: "t", height: "fill" }],
     }),
-    /in-flow child of a row\/column auto-layout parent/,
+    /in-flow child of an auto-layout parent/,
   );
 });
 
@@ -146,14 +146,14 @@ test("alignment maps supported values and refuses unrealizable spacing", async (
   );
 });
 
-test("layout mode sets the native container mode and refuses grid", async () => {
+test("layout mode sets the native container mode and refuses missing grid templates", async () => {
   const column = await render({ type: "FRAME", layout: { mode: "column" } });
   const free = await render({ type: "FRAME" });
   assert.equal((await figma.getNodeByIdAsync(column.id)).layoutMode, "VERTICAL");
   assert.equal((await figma.getNodeByIdAsync(free.id)).layoutMode, "NONE");
   await assert.rejects(
-    render({ type: "FRAME", layout: { mode: "grid" as never } }),
-    /layout\.mode must be one of/,
+    render({ type: "FRAME", layout: { mode: "grid" } }),
+    /grid.*requires.*gridTemplate/,
   );
 });
 

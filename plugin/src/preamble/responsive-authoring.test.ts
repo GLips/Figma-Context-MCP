@@ -11,6 +11,8 @@ import { get } from "./read.js";
 
 test("wrap and unequal CSS gaps create, edit, inherit and round-trip", async () => {
   const figma = createFigmaMock();
+  const unwrapped = await render({ type: "FRAME", layout: { mode: "row", wrap: false } });
+  assert.equal((await get(unwrapped)).node.layout?.wrap, undefined);
   const built = await render({
     type: "FRAME",
     width: 220,
@@ -37,6 +39,8 @@ test("wrap and unequal CSS gaps create, edit, inherit and round-trip", async () 
   assert.equal(native.layoutMode, "VERTICAL");
   assert.equal(native.layoutWrap, "NO_WRAP");
   assert.equal(native.itemSpacing, 9);
+  await edit(id(native.id), { layout: { wrap: false } });
+  assert.equal((await get(id(native.id))).node.layout?.mode, "column");
   await assert.rejects(edit(id(native.id), { layout: { gap: "4px 8px" } }), /unequal.*require/);
   await assert.rejects(
     render({ type: "FRAME", layout: { mode: "column", wrap: true } }),

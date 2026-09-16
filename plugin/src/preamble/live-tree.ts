@@ -115,7 +115,7 @@ export function gateLiveTree(live: LoadedLiveTree, resources: RenderResources): 
           ctx.bindings.push({ node, refs: wn.componentPropertyReferences });
         }
         if ("appendChild" in node) for (const child of wn.children ?? []) attachBuiltChild(node, child, ctx, liveParentAttachFacts(node, child.sourcePath ?? at), c => node.appendChild(c));
-        resettleMovedNode(node, words);
+        resettleMovedNode(node, words, ctx);
         if (plan) { settleEditPlanSizes(fail, plan); settleEditPlanPositions(fail, plan); }
         if (instance) applyInstanceOverrides(node, instance, ctx, at);
         if (wn.source) wn.source.id = node.id;

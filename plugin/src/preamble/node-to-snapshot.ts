@@ -1,3 +1,4 @@
+import { serializeGridTracks } from "./grid-tracks.js";
 // node-to-snapshot — the plugin adapter to `NodeSnapshot` (Invariant 2), the counterpart of the REST
 // adapter (src/adapters/rest/node-to-snapshot.ts). It decodes plugin-native forms DIRECTLY onto the
 // plan-neutral snapshot the shared `simplify` core consumes — it never fabricates REST wire structures
@@ -200,6 +201,8 @@ export interface SceneNodeLike {
   readonly layoutWrap?: "NO_WRAP" | "WRAP";
   readonly itemSpacing?: number;
   readonly counterAxisSpacing?: number | null;
+  readonly gridColumnSizes?: ReadonlyArray<{ type: "FIXED" | "FLEX" | "HUG"; value?: number }>;
+  readonly gridRowSizes?: ReadonlyArray<{ type: "FIXED" | "FLEX" | "HUG"; value?: number }>;
   readonly gridRowGap?: number;
   readonly gridColumnGap?: number;
 
@@ -439,9 +442,7 @@ async function sceneSubtreeToSnapshot(
     gridChildHorizontalAlign: node.gridChildHorizontalAlign,
     gridChildVerticalAlign: node.gridChildVerticalAlign,
 
-    // Frame / auto-layout container traits. gridColumnsSizing/gridRowsSizing (REST's track-template
-    // strings) are deliberately absent — the plugin API exposes per-track objects, not the template
-    // string; carrying them lands with grid-read support, not here.
+    // Convert plugin track objects to the same template strings supplied by REST.
     clipsContent: node.clipsContent,
     layoutMode: node.layoutMode,
     overflowDirection: decodeOverflow(node.overflowDirection),
@@ -455,6 +456,8 @@ async function sceneSubtreeToSnapshot(
     layoutWrap: node.layoutWrap,
     itemSpacing: node.itemSpacing,
     counterAxisSpacing: node.counterAxisSpacing ?? undefined,
+    gridColumnsSizing: node.layoutMode === "GRID" ? (node.gridColumnSizes && serializeGridTracks(node.gridColumnSizes)) : undefined,
+    gridRowsSizing: node.layoutMode === "GRID" ? (node.gridRowSizes && serializeGridTracks(node.gridRowSizes)) : undefined,
     gridRowGap: node.gridRowGap,
     gridColumnGap: node.gridColumnGap,
 

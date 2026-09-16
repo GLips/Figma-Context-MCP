@@ -28,6 +28,11 @@ const EXAMPLE_META: Record<ExampleId, { title: string; intro: string }> = {
       'frosted card whose shadow and blur are plain CSS strings, fixed and "fill" sizing, rgba/hex solids, ' +
       "numeric font weights, and child identities returned in the authored tree.",
   },
+  grid: {
+    title: "Grid tracks and cell placement",
+    intro:
+      "Both templates are explicit. The fractional columns use a fixed width; fixed row tracks allow the height to hug. Children auto-place unless anchors or spans are supplied.",
+  },
   caption: {
     title: "A feed caption (rich text)",
     intro:
