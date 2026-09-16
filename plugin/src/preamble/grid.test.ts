@@ -38,10 +38,19 @@ test("grid vocabulary round-trips through render/get/edit/editMany, with parent-
   assert.equal(flowRead.children![0].layout?.alignSelf, undefined);
   const flowCopy = await render(JSON.parse(JSON.stringify(flowRead, (key, value) => key === "id" ? undefined : value)));
   assert.equal((await get(flowCopy)).node.children![0].height, "fill");
-  await edit(id(flow.children![0].id), { height: 20, layout: { alignSelf: "flex-end" } });
-  assert.equal((await get(flow)).node.children![0].layout!.alignSelf, "flex-end");
-  await assert.rejects(edit(id(flow.children![0].id), { layout: { alignSelf: "end" } }), /alignSelf under row/);
-  await assert.rejects(edit(id(built.children![1].id), { layout: { alignSelf: "flex-end" } }), /alignSelf under grid/);
+  for (const mode of ["row", "column"] as const) {
+    const parent = mode === "row" ? flow : await render({ type: "FRAME", width: 120, height: 70, layout: { mode }, children: [{ type: "RECTANGLE", width: 20, height: 20 }] });
+    const target = id(parent.children![0].id);
+    for (const alignSelf of ["flex-start", "center", "flex-end", "auto", "start", "end"]) {
+      const layout = { alignSelf } as never;
+      const reason = /layout\.alignItems.*parent.*every child.*absolute/;
+      await assert.rejects(edit(target, { layout }), reason);
+      await assert.rejects(editMany([{ id: parent.children![0].id, layout }]), reason);
+      await assert.rejects(render({ type: "FRAME", layout: { mode }, children: [{ type: "RECTANGLE", layout }] }), reason);
+    }
+  }
+  assert.equal((await get(flow)).node.children![0].height, "fill");
+  await assert.rejects(edit(id(built.children![1].id), { layout: { alignSelf: "stretch" } }), /stretch.*requires.*row\/column/);
 });
 
 test("grid spans and template edits use read words and refuse unresolved layout before changing it", async () => {

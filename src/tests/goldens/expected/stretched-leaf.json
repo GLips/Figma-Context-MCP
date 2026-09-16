@@ -3,7 +3,7 @@
   "nodes": [
     {
       "id": "13:1",
-      "name": "Row with self-alignment",
+      "name": "Row with stored legacy alignment",
       "type": "FRAME",
       "width": "contextual",
       "height": "contextual",
@@ -22,28 +22,24 @@
         },
         {
           "id": "13:3",
-          "name": "Centered leaf",
-          "type": "RECTANGLE",
-          "width": 40,
-          "height": 20,
-          "layout": {
-            "alignSelf": "center"
-          }
+          "name": "Stored CENTER leaf",
+          "template": "EL-5052a34f"
         },
         {
           "id": "13:4",
-          "name": "End leaf",
-          "type": "RECTANGLE",
-          "width": 40,
-          "height": 20,
-          "layout": {
-            "alignSelf": "flex-end"
-          }
+          "name": "Stored MAX leaf",
+          "template": "EL-5052a34f"
         }
       ]
     }
   ],
   "components": {},
   "styles": {},
-  "templates": {}
+  "templates": {
+    "EL-5052a34f": {
+      "type": "RECTANGLE",
+      "width": 40,
+      "height": 20
+    }
+  }
 }

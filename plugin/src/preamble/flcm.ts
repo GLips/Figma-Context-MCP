@@ -1,3 +1,4 @@
+import { FLOW_ALIGNMENT_GUIDANCE } from "./layout-mode.js";
 import { acceptAuthoringProps } from "./authoring-input.js";
 import { parseGridTracks } from "./grid-tracks.js";
 import { normalizeVectorPaths } from "./path.js";
@@ -340,7 +341,7 @@ function compileLayoutBag(cfg: NonNullable<FrameProps["layout"]>, subject: strin
   for (const key of ["justifySelf"] as const) {
     if (cfg[key] !== undefined) layout[key] = mapCssWord(key, cfg[key], { start: "MIN", center: "CENTER", end: "MAX", auto: "AUTO" } as const);
   }
-  if (cfg.alignSelf !== undefined) layout.alignSelf = assertEnum(subject + ".alignSelf", cfg.alignSelf, new Set(["flex-start", "flex-end", "center", "stretch", "start", "end", "auto"] as const));
+  if (cfg.alignSelf !== undefined) layout.alignSelf = mapCssWord(subject + ".alignSelf", cfg.alignSelf, { center: "center", stretch: "stretch", start: "start", end: "end", auto: "auto" } as const, " " + FLOW_ALIGNMENT_GUIDANCE);
   if (cfg.zIndex !== undefined) {
     if (!Number.isSafeInteger(cfg.zIndex) || cfg.zIndex < 0) throw new Error(subject + ": zIndex needs a non-negative integer.");
     layout.zIndex = cfg.zIndex;

@@ -71,7 +71,7 @@ function flowBehavior(mode: Extract<LayoutMode, { kind: "flow" }>): LayoutBehavi
         if (child.layoutAlign === "STRETCH") { child.layoutAlign = "INHERIT"; restoreCrossHug(child); }
       }
     },
-    place(_parent, child, context) { if (context.kind === "flow" && context.align) child.layoutAlign = context.align; },
+    place: noWrite,
     defaultSizing: hugDefault,
   };
 }

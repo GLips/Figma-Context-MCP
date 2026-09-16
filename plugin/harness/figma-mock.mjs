@@ -204,7 +204,8 @@ class Node {
   }
   _autoPlaceGrid(child) {
     if (this.layoutMode !== "GRID" || child.layoutPositioning === "ABSOLUTE") return;
-    // The harness models placement within authored tracks, not Figma’s automatic row growth.
+    // Automatic row growth is unmodeled here. Live Figma grows a full manual grid with FIXED rows;
+    // the probe’s one-row, 40px grid became two 40px rows and retained HUG sizing.
     for (let row = 0; row < this.gridRowCount; row++) {
       for (let col = 0; col < this.gridColumnCount; col++) {
         try { child._checkGridCell(row, col, child.gridRowSpan, child.gridColumnSpan); }
@@ -212,7 +213,7 @@ class Node {
         child._gridRowAnchorIndex = row; child._gridColumnAnchorIndex = col; return;
       }
     }
-    throw new Error("mock grid capacity exceeded; automatic track growth requires a live probe");
+    throw new Error("mock grid capacity exceeded; automatic FIXED row growth is unmodeled");
   }
   _gridTracks(dim) {
     const horizontal = dim === "w";
@@ -254,7 +255,7 @@ class Node {
   _insertChild(index, child) {
     assertChildListOpen(this, true, "insertChild");
     if (child.parent) assertChildListOpen(child, false, "insertChild");
-    // Forward same-parent indices are a harness assumption, checked by live probes.
+    // Live Figma interprets same-parent indices against the pre-removal child array.
     // Grid ordering only moves toward earlier indices, where removal cannot change the target.
     const had = child.parent === this ? this.children.indexOf(child) : -1;
     if (child.parent) child.parent.children = child.parent.children.filter((c) => c !== child);

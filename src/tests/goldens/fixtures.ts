@@ -1042,7 +1042,7 @@ const componentVariants: GetFileNodesResponse = {
   },
 } as unknown as GetFileNodesResponse;
 
-// Grid placement and flow self-alignment must survive both producer paths without redundant words.
+// Grid placement and flow fill must survive both producers; legacy flow alignment must stay omitted.
 const gridPlacement = fileResponse("Grid Placement", [
   node({
     id: "12:1",
@@ -1111,7 +1111,7 @@ const gridPlacement = fileResponse("Grid Placement", [
 const stretchedLeaf = fileResponse("Stretched Leaf", [
   node({
     id: "13:1",
-    name: "Row with self-alignment",
+    name: "Row with stored legacy alignment",
     type: "FRAME",
     visible: true,
     clipsContent: true,
@@ -1144,12 +1144,12 @@ const stretchedLeaf = fileResponse("Stretched Leaf", [
       },
       {
         id: "13:3",
-        name: "Centered leaf",
+        name: "Stored CENTER leaf",
         type: "RECTANGLE",
         visible: true,
         absoluteBoundingBox: {
           x: 40,
-          y: 25,
+          y: 0,
           width: 40,
           height: 20,
         },
@@ -1159,12 +1159,12 @@ const stretchedLeaf = fileResponse("Stretched Leaf", [
       },
       {
         id: "13:4",
-        name: "End leaf",
+        name: "Stored MAX leaf",
         type: "RECTANGLE",
         visible: true,
         absoluteBoundingBox: {
           x: 80,
-          y: 50,
+          y: 0,
           width: 40,
           height: 20,
         },

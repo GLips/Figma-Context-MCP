@@ -271,7 +271,7 @@ export interface WriteLayout {
   gridColumn?: { anchor?: number; span: number };
   gridRow?: { anchor?: number; span: number };
   justifySelf?: "MIN" | "CENTER" | "MAX" | "AUTO";
-  alignSelf?: "flex-start" | "flex-end" | "center" | "stretch" | "start" | "end" | "auto";
+  alignSelf?: "center" | "stretch" | "start" | "end" | "auto";
   zIndex?: number;
   justifyContent?: Justify; // primary-axis distribution (author `layout.justifyContent`)
   alignItems?: Align;       // counter-axis alignment (author `layout.alignItems`)

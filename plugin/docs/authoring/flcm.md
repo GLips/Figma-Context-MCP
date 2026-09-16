@@ -159,7 +159,7 @@ A LINE sizes on a numeric `width` alone, its length. There is no `height`, `"fil
 
 | Prop | Type | Notes |
 | --- | --- | --- |
-| `layout` | { gridColumn?, gridRow?, justifySelf?, alignSelf?, zIndex? } | Placement under an auto-layout parent. Flow and grid accept their own self-alignment words. |
+| `layout` | { gridColumn?, gridRow?, justifySelf?, alignSelf?, zIndex? } | Placement under an auto-layout parent. Grid accepts cell alignment; flow accepts only the alignSelf "stretch" alias for counter-axis fill. |
 | `minWidth` | number \| "none" | minWidth in positive pixels, effective on auto-layout containers and their direct children. Omitted preserves the bound; "none" clears it. Sizes constrained by bounds succeed with a console warning. |
 | `maxWidth` | number \| "none" | maxWidth in positive pixels, effective on auto-layout containers and their direct children. Omitted preserves the bound; "none" clears it. Sizes constrained by bounds succeed with a console warning. |
 | `minHeight` | number \| "none" | minHeight in positive pixels, effective on auto-layout containers and their direct children. Omitted preserves the bound; "none" clears it. Sizes constrained by bounds succeed with a console warning. |
@@ -252,7 +252,7 @@ Budget fixed widths together with padding and gaps; use `"fill"` for the remaini
 | `gridColumn` | string | Grid child column: "N", "span N", or "N / span N". Anchors are 1-based. Omitted placement uses Figma auto-placement. |
 | `gridRow` | string | Grid child row: "N", "span N", or "N / span N". Anchors are 1-based. |
 | `justifySelf` | "start" \| "center" \| "end" \| "auto" | Grid child horizontal cell alignment. "auto" restores Figma alignment. |
-| `alignSelf` | "flex-start" \| "flex-end" \| "center" \| "stretch" \| "start" \| "end" \| "auto" | Parent-dependent alignment: flow uses flex-start/flex-end/center/stretch/auto; grid uses start/end/center/auto. Flow stretch aliases counter-axis fill. |
+| `alignSelf` | "center" \| "stretch" \| "start" \| "end" \| "auto" | Grid vertical cell alignment: start/end/center/auto. Flow children accept only "stretch", an alias for counter-axis fill. Flow alignment lives on the parent as layout.alignItems and applies to every child; use position: "absolute" for a child that must sit differently. |
 | `zIndex` | number | Grid child sibling index, a non-negative integer. Explicit indices reserve sibling slots; unnamed siblings retain relative order in remaining slots. Duplicate or out-of-range indices fail. |
 
 ### TEXT — text props
@@ -365,7 +365,7 @@ Each styled run's delta fields:
 | `strokeWidth` | number \| "Npx" | Thickness. Defaults to 1. |
 | `width` | number \| "Npx" | The line's length. A fixed size only — a line can't fill, hug, or take a percent. |
 | `rotation` | number (deg) | Degrees — 90° makes a horizontal line vertical. |
-| `layout` | { gridColumn?, gridRow?, justifySelf?, alignSelf?, zIndex? } | Placement under an auto-layout parent. Flow and grid accept their own self-alignment words. |
+| `layout` | { gridColumn?, gridRow?, justifySelf?, alignSelf?, zIndex? } | Placement under an auto-layout parent. Grid accepts cell alignment; flow accepts only the alignSelf "stretch" alias for counter-axis fill. |
 | `left` | number \| "Npx" \| "N%" | Offset from the parent's left edge — a number, "Npx", or "N%" of the parent width. Naming `left` or `top` lifts the node out of an auto-layout parent's flow (badges, overlays); under a free-form parent it is simply where the node sits. On a render root it is where on the PAGE the tree lands — without it every root stacks at the origin. Under edit, an axis you don't name keeps its live value. |
 | `top` | number \| "Npx" \| "N%" | Offset from the parent's top edge. Same rules as `left`. |
 | `position` | "absolute" \| "none" | "absolute" lifts the node out of auto-layout flow where it stands (no coordinate needed — `left`/`top` already imply it). Under edit, "none" returns the node to the flow; naming `left`/`top`/`anchor` beside "none" fails loud. |

@@ -758,7 +758,7 @@ describe("grid layout", () => {
   });
 
   describe("cross-layout nesting", () => {
-    test("grid container inside flex parent retains alignSelf", () => {
+    test("grid container inside flex parent omits inert legacy alignment", () => {
       const gridContainer = makeFrame({
         layoutMode: "GRID",
         layoutAlign: "CENTER",
@@ -777,8 +777,7 @@ describe("grid layout", () => {
       expect(result.gridTemplateColumns).toBe("1fr 1fr");
       // But should NOT have flex alignment from parent
       expect(result.justifyContent).toBeUndefined();
-      // alignSelf comes from the container's own layoutAlign
-      expect(result.alignSelf).toBe("center");
+      expect(result.alignSelf).toBeUndefined();
     });
 
     test("flex container inside grid parent gets grid child props", () => {

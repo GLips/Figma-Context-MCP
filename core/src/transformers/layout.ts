@@ -7,7 +7,6 @@ import {
   pixelRound,
 } from "../utils.js";
 import {
-  convertSelfAlign,
   convertSizing,
   gapShorthand,
   getChildStretch,
@@ -49,15 +48,8 @@ export function buildSimplifiedLayout(
     Object.assign(layout, buildGridChildPositioning(n, parent, parentGridPacked));
   }
 
-  const geometry = buildNodeGeometry(n, parent, layout.mode, parentIsGrid);
-  // Cross-axis fill already expresses stretch. Other self-alignment still belongs to every child type.
-  if (isInAutoLayoutFlow(n, parent) && !parentIsGrid) {
-    const alignment = convertSelfAlign(n.layoutAlign);
-    const crossSize = parent?.layoutMode === "HORIZONTAL" ? geometry.height : geometry.width;
-    if (alignment !== "stretch" || crossSize !== "fill")
-      setIfDefined(layout, "alignSelf", alignment);
-  }
-  return { layout, geometry };
+  // Flow layoutAlign's legacy alignment values do not render; STRETCH is captured by sizing.
+  return { layout, geometry: buildNodeGeometry(n, parent, layout.mode, parentIsGrid) };
 }
 
 function buildSimplifiedFrameValues(n: NodeSnapshot): SimplifiedLayout {

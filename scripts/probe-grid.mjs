@@ -4,6 +4,9 @@
 // Set FRAMELINK_STATE_DIR to a writable, isolated directory to keep approval/session state
 // separate from your normal server. This script creates probe frames and removes them in finally.
 // It verifies native track setters, placement/spans, cell sizing, read words, edits, and stacking.
+// Live Figma uses pre-removal insertion indices: insertChild(2, A) on [A,B,C] gives [B,A,C].
+// Appending past a full manual grid adds FIXED rows: this probe’s one 40px row became two
+// FIXED 40px rows while vertical sizing stayed HUG. Automatic growth is unmodeled in the mock.
 
 import { PluginBridge } from "../src/services/plugin-bridge/bridge.ts";
 import { WS_PORT_BLOCK } from "../src/services/plugin-bridge/ports.ts";
@@ -21,7 +24,6 @@ const log = (msg) => console.log(`[probe +${((Date.now() - t0) / 1000).toFixed(1
 const PROBE_CODE = `
 const roots = [];
 const checks = [];
-const observations = [];
 function check(name, actual, expected) {
   checks.push({ name, actual, expected, pass: JSON.stringify(actual) === JSON.stringify(expected) });
 }
@@ -66,23 +68,11 @@ try {
   const flow = await flcm.render({ type: "FRAME", width: 120, height: 70, layout: { mode: "row" }, children: [{ type: "RECTANGLE", width: 20, layout: { alignSelf: "stretch" } }] });
   roots.push(flow.id);
   check("flow stretch aliases cross-axis fill", (await flcm.measure(flow.children[0])).height, 70);
-  await flcm.edit(flow.children[0], { height: 20, layout: { alignSelf: "flex-end" } });
-  const flowChild = await figma.getNodeByIdAsync(flow.children[0].id);
-  check("flow flex-end actually aligns", flowChild.y, 50);
-  // Distinguish pre-removal and post-removal native indices without assuming either contract.
-  const rawOrder = figma.createFrame();
-  roots.push(rawOrder.id);
-  for (const name of ["A", "B", "C"]) { const child = figma.createRectangle(); child.name = name; rawOrder.appendChild(child); }
-  rawOrder.insertChild(2, rawOrder.children[0]);
-  observations.push({ name: "native insertChild(2, A) on [A,B,C]", order: rawOrder.children.map(c => c.name) });
-  const full = await figma.getNodeByIdAsync(stack.id);
-  const overflow = figma.createRectangle();
-  try {
-    full.appendChild(overflow);
-    observations.push({ name: "full manual grid append", rows: full.gridRowSizes.map(t => ({ type: t.type, value: t.value })), sizing: full.layoutSizingVertical });
-  } catch (error) { observations.push({ name: "full manual grid append", error: String(error) }); }
-  finally { overflow.remove(); }
-  return { checks, observations };
+  let alignmentRefusal = "";
+  try { await flcm.edit(flow.children[0], { height: 20, layout: { alignSelf: "flex-end" } }); }
+  catch (error) { alignmentRefusal = String(error); }
+  check("flow alignment refuses and names parent alignItems", alignmentRefusal.includes("alignItems"), true);
+  return { checks };
 } finally {
   for (const root of roots) { const node = await figma.getNodeByIdAsync(root); if (node) node.remove(); }
 }
@@ -129,7 +119,6 @@ async function runProbe() {
     const results = reply?.result?.checks;
     if (!Array.isArray(results) || results.length !== 12)
       fail(`expected 12 checks, got ${JSON.stringify(reply?.result)}`);
-    for (const observation of reply.result.observations) console.log(`OBSERVE ${JSON.stringify(observation)}`);
     for (const result of results) {
       console.log(
         `${result.pass ? "PASS" : "FAIL"} ${result.name}: ${JSON.stringify(result.actual)} (expected ${JSON.stringify(result.expected)})`,

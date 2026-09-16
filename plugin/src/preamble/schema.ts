@@ -117,7 +117,7 @@ const CHILD_LAYOUT_FIELDS = {
   gridColumn: prop(z.string(), 'Grid child column: "N", "span N", or "N / span N". Anchors are 1-based. Omitted placement uses Figma auto-placement.'),
   gridRow: prop(z.string(), 'Grid child row: "N", "span N", or "N / span N". Anchors are 1-based.'),
   justifySelf: prop(z.enum(["start", "center", "end", "auto"]), 'Grid child horizontal cell alignment. "auto" restores Figma alignment.'),
-  alignSelf: prop(z.enum(["flex-start", "flex-end", "center", "stretch", "start", "end", "auto"]), 'Parent-dependent alignment: flow uses flex-start/flex-end/center/stretch/auto; grid uses start/end/center/auto. Flow stretch aliases counter-axis fill.'),
+  alignSelf: prop(z.enum(["center", "stretch", "start", "end", "auto"]), 'Grid vertical cell alignment: start/end/center/auto. Flow children accept only "stretch", an alias for counter-axis fill. Flow alignment lives on the parent as layout.alignItems and applies to every child; use position: "absolute" for a child that must sit differently.'),
   zIndex: prop(z.number(), 'Grid child sibling index, a non-negative integer. Explicit indices reserve sibling slots; unnamed siblings retain relative order in remaining slots. Duplicate or out-of-range indices fail.'),
 };
 
@@ -145,7 +145,7 @@ const CONTAINER_LAYOUT_FIELDS = {
 const LAYOUT_FIELDS = { ...CONTAINER_LAYOUT_FIELDS, ...CHILD_LAYOUT_FIELDS };
 
 const SIZE_FIELDS = {
-  layout: prop(z.object(CHILD_LAYOUT_FIELDS), 'Placement under an auto-layout parent. Flow and grid accept their own self-alignment words.', '{ gridColumn?, gridRow?, justifySelf?, alignSelf?, zIndex? }'),
+  layout: prop(z.object(CHILD_LAYOUT_FIELDS), 'Placement under an auto-layout parent. Grid accepts cell alignment; flow accepts only the alignSelf "stretch" alias for counter-axis fill.', '{ gridColumn?, gridRow?, justifySelf?, alignSelf?, zIndex? }'),
   minWidth: prop(z.union([z.number(), z.literal("none")]), "minWidth in positive pixels, effective on auto-layout containers and their direct children. Omitted preserves the bound; \"none\" clears it. Sizes constrained by bounds succeed with a console warning.", 'number | "none"'),
   maxWidth: prop(z.union([z.number(), z.literal("none")]), "maxWidth in positive pixels, effective on auto-layout containers and their direct children. Omitted preserves the bound; \"none\" clears it. Sizes constrained by bounds succeed with a console warning.", 'number | "none"'),
   minHeight: prop(z.union([z.number(), z.literal("none")]), "minHeight in positive pixels, effective on auto-layout containers and their direct children. Omitted preserves the bound; \"none\" clears it. Sizes constrained by bounds succeed with a console warning.", 'number | "none"'),

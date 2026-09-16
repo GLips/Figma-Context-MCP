@@ -27,9 +27,9 @@ export function effectiveLayoutMode(layout: WriteLayout, live?: { layoutMode?: s
 // A child has one placement context. Absolute children use the parent's box, including under a grid.
 export type ChildLayout =
   | { kind: "free"; layout: WriteLayout }
-  | { kind: "flow"; mode: Extract<LayoutMode, { kind: "flow" }>; layout: WriteLayout; align?: "MIN" | "MAX" | "CENTER" | "INHERIT" }
+  | { kind: "flow"; mode: Extract<LayoutMode, { kind: "flow" }>; layout: WriteLayout }
   | { kind: "grid"; layout: WriteLayout; align?: "MIN" | "MAX" | "CENTER" | "AUTO" };
-const FLOW_ALIGN = { "flex-start": "MIN", "flex-end": "MAX", center: "CENTER", auto: "INHERIT" } as const;
+export const FLOW_ALIGNMENT_GUIDANCE = 'Flow children accept only alignSelf: "stretch", an alias for counter-axis fill. Figma has no per-child flow alignment: set layout.alignItems on the parent to align every child, or use position: "absolute" for a child that must sit differently.';
 const CELL_ALIGN = { start: "MIN", end: "MAX", center: "CENTER", auto: "AUTO" } as const;
 export function childLayout(mode: LayoutMode, words: WriteLayout, absolute: boolean, subject: string): ChildLayout {
   const layout = normalizeChildLayoutAliases(words, mode, absolute, subject);
@@ -40,9 +40,11 @@ export function childLayout(mode: LayoutMode, words: WriteLayout, absolute: bool
     if (layout.alignSelf) throw new Error(subject + ": alignSelf requires an in-flow auto-layout parent.");
     return { kind, layout };
   }
+  if (mode.kind === "flow") {
+    if (layout.alignSelf !== undefined) throw new Error(subject + ": " + FLOW_ALIGNMENT_GUIDANCE);
+    return { kind: "flow", mode, layout };
+  }
   const alignment = layout.alignSelf;
-  const table = kind === "grid" ? CELL_ALIGN : FLOW_ALIGN;
-  if (alignment && !Object.prototype.hasOwnProperty.call(table, alignment)) throw new Error(subject + ": alignSelf under " + mode.word + " must be " + Object.keys(table).join(", ") + ".");
-  if (mode.kind === "flow") return { kind: "flow", mode, layout, align: alignment ? FLOW_ALIGN[alignment as keyof typeof FLOW_ALIGN] : undefined };
+  if (alignment && !Object.prototype.hasOwnProperty.call(CELL_ALIGN, alignment)) throw new Error(subject + ": alignSelf under grid must be " + Object.keys(CELL_ALIGN).join(", ") + ".");
   return { kind: "grid", layout, align: alignment ? CELL_ALIGN[alignment as keyof typeof CELL_ALIGN] : undefined };
 }

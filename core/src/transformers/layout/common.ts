@@ -17,7 +17,8 @@ export interface SimplifiedLayout {
   mode?: "none" | "row" | "column" | "grid";
   justifyContent?: "flex-start" | "flex-end" | "center" | "space-between" | "baseline" | "stretch";
   alignItems?: "flex-start" | "flex-end" | "center" | "space-between" | "baseline" | "stretch";
-  alignSelf?: "flex-start" | "flex-end" | "center" | "stretch" | "start" | "end";
+  /** Vertical alignment within a grid cell. Flow children express stretch through fill sizing. */
+  alignSelf?: "center" | "start" | "end";
   wrap?: boolean;
   gap?: string;
   padding?: string;
@@ -111,22 +112,6 @@ export function convertSizing(s?: NodeSnapshot["layoutSizingHorizontal"]) {
   if (s === "FILL") return "fill";
   if (s === "HUG") return "hug";
   return undefined;
-}
-
-export function convertSelfAlign(align?: NodeSnapshot["layoutAlign"]) {
-  switch (align) {
-    case "MIN":
-      // MIN, AKA flex-start, is the default alignment
-      return undefined;
-    case "MAX":
-      return "flex-end";
-    case "CENTER":
-      return "center";
-    case "STRETCH":
-      return "stretch";
-    default:
-      return undefined;
-  }
 }
 
 // Centralized mapping of the snapshot's layoutMode to our schema's mode tag.

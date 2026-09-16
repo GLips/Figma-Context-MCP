@@ -123,7 +123,7 @@ export const LAYOUT_WORD_DISPOSITIONS: Record<keyof SimplifiedLayout, "author" |
   padding: "author",
   justifyContent: "author",
   alignItems: "author",
-  alignSelf: "author",
+  alignSelf: "author", // The read word is grid-only; flow stretch is an input alias for fill.
   wrap: "author",
   overflowScroll: { refuse: "scroll behavior (Figma's overflowDirection) has no flcm word" },
   gridTemplateColumns: "author",
