@@ -124,3 +124,42 @@ test("handler: a single fetch failure rejects the whole request", async () => {
   });
   await assert.rejects(handler(["ok", "bad"]), /could not load "bad"/);
 });
+
+test("cancellation reaches image fetches, drains started work and claims no more URLs", async () => {
+  const controller = new AbortController();
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const started: string[] = [];
+  const signals: Array<AbortSignal | undefined> = [];
+  const handler = createImagesRequestHandler({
+    cache: new ImageByteCache(),
+    fetchImage: async (url, signal) => {
+      started.push(url);
+      signals.push(signal);
+      // A decode/read that cannot be interrupted must still finish before service accounting ends.
+      await gate;
+      return "bytes";
+    },
+  });
+  const result = handler(
+    Array.from({ length: 12 }, (_, i) => `u${i}`),
+    controller.signal,
+  ).then(
+    () => "resolved",
+    (e) => e,
+  );
+  assert.equal(started.length, 4);
+  controller.abort(new Error("cancelled"));
+  let settled = false;
+  void result.then(() => {
+    settled = true;
+  });
+  await Promise.resolve();
+  assert.equal(settled, false);
+  release();
+  assert.match(String(await result), /cancelled/);
+  assert.equal(started.length, 4);
+  assert.ok(signals.every((signal) => signal === controller.signal && signal.aborted));
+});

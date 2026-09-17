@@ -42,8 +42,10 @@ export function startPluginBridge({ assetRoot }: { assetRoot: string }): PluginB
       [
         "images.fetch",
         createImagesCapability({
-          fetchImage: (source) =>
-            isLocalImageSource(source) ? readLocalImage(source) : fetchAndProcessImage(source),
+          fetchImage: (source, signal) =>
+            isLocalImageSource(source)
+              ? readLocalImage(source, signal)
+              : fetchAndProcessImage(source, signal),
           cache: new ImageByteCache(),
         }),
       ],

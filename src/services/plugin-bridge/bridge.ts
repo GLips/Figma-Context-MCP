@@ -1,3 +1,4 @@
+import { channelFailure } from "./channel-failure.js";
 import { RequestTrace } from "./request-trace.js";
 import { randomUUID } from "node:crypto";
 import { WebSocketServer, WebSocket } from "ws";
@@ -44,7 +45,10 @@ export type BridgeRequest =
     };
 
 /** Opaque JSON payloads. Only explicitly registered names can be called. */
-export type CapabilityHandler = (payload: unknown) => Promise<unknown>;
+export type CapabilityHandler = (
+  payload: unknown,
+  context: { signal: AbortSignal },
+) => Promise<unknown>;
 // Match the WS inbound ceiling, including the envelope. Image-specific caps remain in its adapter.
 const MAX_CHANNEL_BYTES = 100 * 1024 * 1024;
 
@@ -74,6 +78,7 @@ export class BridgeRequestError extends Error {
 }
 
 interface Pending {
+  servicesAbort: AbortController;
   socket: WebSocket;
   phase: RequestPhase;
   startedAt: number;
@@ -324,8 +329,8 @@ export class PluginBridge {
   // How many server services each run has in flight right now. The run's inactivity deadline stays
   // suspended while ANY service is running and re-arms only when the count returns to zero —
   // a lone clearTimeout/re-arm pair breaks under concurrent services (the first reply would
-  // restart the clock while the second service is still ours to finish). Entries are cleared when
-  // the run settles (reply, timeout, failPending), so a straggler service finds no count and no-ops.
+  // restart the clock while the second service is still ours to finish). Entries survive run removal
+  // until the actual work settles, including cleanup that cannot be interrupted.
   private readonly inFlightServices = new Map<string, number>();
 
   // Everything injectable for the contract harness, which drives real sockets: `store` isolates
@@ -776,8 +781,7 @@ export class PluginBridge {
   }
 
   /** Remove a pending request and stop its clocks — every settle path (reply, deadline, socket
-   * death) funnels through here, so none can leak a timer or an in-flight service count
-   * (a straggler service then finds no count and no-ops). */
+   * death) funnels through here. Signal services to stop; their accounting ends only on settlement. */
   private takePending(id: string): Pending | undefined {
     const pending = this.pending.get(id);
     if (!pending) return undefined;
@@ -785,7 +789,7 @@ export class PluginBridge {
     clearTimeout(pending.timer ?? undefined);
     clearTimeout(pending.ceilingTimer);
     this.pending.delete(id);
-    this.inFlightServices.delete(id);
+    pending.servicesAbort.abort();
     return pending;
   }
 
@@ -836,6 +840,7 @@ export class PluginBridge {
       const cancel = () => this.cancelPending(id, "caller cancelled");
       signal?.addEventListener("abort", cancel, { once: true });
       const pending: Pending = {
+        servicesAbort: new AbortController(),
         socket,
         phase: "submitted",
         startedAt: Date.now(),
@@ -968,7 +973,24 @@ export class PluginBridge {
   }
 
   private handleMessage(socket: WebSocket, raw: string): void {
-    let msg: {
+    // Measure the received frame, never recursively stringify parsed, untrusted input.
+    // All synchronous boundary dispatch stays inside this guard, including envelope validation.
+    try {
+      if (Buffer.byteLength(raw) > MAX_CHANNEL_BYTES) {
+        Logger.log("Ignoring oversized plugin frame");
+        return;
+      }
+      const msg: unknown = JSON.parse(raw);
+      if (!msg || typeof msg !== "object" || Array.isArray(msg)) return;
+      this.dispatchMessage(socket, msg);
+    } catch {
+      Logger.log("Ignoring invalid plugin message");
+    }
+  }
+
+  private dispatchMessage(
+    socket: WebSocket,
+    msg: {
       id?: unknown;
       type?: unknown;
       error?: unknown;
@@ -982,13 +1004,8 @@ export class PluginBridge {
       stage?: unknown;
       elapsedMs?: unknown;
       operation?: unknown;
-    };
-    try {
-      msg = JSON.parse(raw);
-    } catch {
-      Logger.log(`Ignoring non-JSON message from plugin: ${raw.slice(0, 120)}`);
-      return;
-    }
+    },
+  ): void {
     // Diagnostic traffic is observed even from a displaced request owner. It never participates
     // in request settlement or inactivity rearming, and the trace retains no response contents.
     if (typeof msg.id === "string" && !this.pending.has(msg.id))
@@ -1105,65 +1122,69 @@ export class PluginBridge {
     // Reply on the socket the request arrived on, and only while it is still the current one — a
     // displaced or dead socket's result must not leak onto a newer connection.
     const send = (body: Record<string, unknown>): void => {
-      if (this.socket === socket && socket.readyState === WebSocket.OPEN) {
-        const encoded = JSON.stringify({ ...body, id });
-        socket.send(
-          Buffer.byteLength(encoded) <= MAX_CHANNEL_BYTES
-            ? encoded
-            : JSON.stringify({
-                type: "CHANNEL_RESPONSE",
-                id,
-                ok: false,
-                error: "flcm: server response exceeds the channel size cap.",
-              }),
+      if (this.socket !== socket || socket.readyState !== WebSocket.OPEN) return;
+      const failure = (code: string, message: string): string =>
+        JSON.stringify({
+          type: "CHANNEL_RESPONSE",
+          id,
+          ok: false,
+          error: { code, message },
+        });
+      let encoded: string;
+      try {
+        // Encoding can fail for non-JSON handler output, including cycles or excessive depth.
+        encoded = JSON.stringify({ ...body, id });
+        if (Buffer.byteLength(encoded) > MAX_CHANNEL_BYTES) {
+          encoded = failure(
+            "RESPONSE_TOO_LARGE",
+            "flcm: server response exceeds the channel size cap.",
+          );
+        }
+      } catch {
+        encoded = failure(
+          "SERIALIZATION_FAILED",
+          "flcm: server response could not be encoded as JSON.",
         );
       }
+      try {
+        socket.send(encoded);
+      } catch {
+        Logger.log("Could not send channel response");
+      }
+    };
+    const refuse = (code: string, message: string): void => {
+      send({ type: "CHANNEL_RESPONSE", ok: false, error: { code, message } });
     };
     const run = runId ? this.pending.get(runId) : undefined;
     if (!runId || !run || run.socket !== socket) {
-      send({
-        type: "CHANNEL_RESPONSE",
-        ok: false,
-        error: `flcm: run ${runId ?? "(unknown)"} is no longer active on this server (cancelled, timed out, or already finished) — the channel request was refused.`,
-      });
+      refuse(
+        "RUN_INACTIVE",
+        `flcm: run ${runId ?? "(unknown)"} is no longer active on this server (cancelled, timed out, or already finished) — the channel request was refused.`,
+      );
       return;
     }
     // Only a code run may call the server. Server-issued handshake requests (SESSION_INFO, GET_VERSION)
     // share the req-N id namespace, so without this gate a holder could burn server work — and
     // hold a suspension — against a pending it was never granted a run for.
     if (run.payloadType !== "EXECUTE_CODE") {
-      send({
-        type: "CHANNEL_RESPONSE",
-        ok: false,
-        error: `flcm: run ${runId} is not a code run — only EXECUTE_CODE runs may call server capabilities.`,
-      });
+      refuse(
+        "INVALID_INPUT",
+        `flcm: run ${runId} is not a code run — only EXECUTE_CODE runs may call server capabilities.`,
+      );
       return;
     }
     const handler =
       typeof msg.capability === "string" ? this.capabilities.get(msg.capability) : undefined;
     if (!handler) {
-      send({
-        type: "CHANNEL_RESPONSE",
-        ok: false,
-        error: `flcm: unknown server capability ${JSON.stringify(msg.capability)}.`,
-      });
-      return;
-    }
-    if (Buffer.byteLength(JSON.stringify(msg)) > MAX_CHANNEL_BYTES) {
-      send({
-        type: "CHANNEL_RESPONSE",
-        ok: false,
-        error: "flcm: server request exceeds the channel size cap.",
-      });
+      refuse("UNKNOWN_CAPABILITY", "flcm: unknown server capability.");
       return;
     }
     const inFlight = this.inFlightServices.get(runId) ?? 0;
     if (inFlight >= MAX_INFLIGHT_SERVICES_PER_RUN) {
-      send({
-        type: "CHANNEL_RESPONSE",
-        ok: false,
-        error: `flcm: run ${runId} already has ${inFlight} channel requests in flight — this one was refused.`,
-      });
+      refuse(
+        "TOO_MANY_REQUESTS",
+        `flcm: run ${runId} already has ${inFlight} channel requests in flight — this one was refused.`,
+      );
       return;
     }
     this.inFlightServices.set(runId, inFlight + 1);
@@ -1173,37 +1194,42 @@ export class PluginBridge {
     // reply must not restart the run's clock while a second service is still the server's work.
     const settleService = (): void => {
       const count = this.inFlightServices.get(runId);
-      if (count === undefined) return; // the run settled meanwhile and cleared its count
+      if (count === undefined) return;
       if (count > 1) {
         this.inFlightServices.set(runId, count - 1);
         return;
       }
       this.inFlightServices.delete(runId);
-      // A live count implies the run is still pending (counts only exist for pending runs, and
-      // ids are never reused), so re-arming the captured `run` directly is safe.
-      this.armInactivityDeadline(runId, run);
+      // Cancelled work remains counted until it settles, but must never revive a dead run timer.
+      if (this.pending.get(runId) === run) this.armInactivityDeadline(runId, run);
     };
     void Promise.resolve()
-      .then(() => handler(msg.payload))
+      .then(() => {
+        run.servicesAbort.signal.throwIfAborted();
+        return handler(msg.payload, { signal: run.servicesAbort.signal });
+      })
       .then((payload) => {
         if (!this.pending.has(runId)) {
           // The run died during service; withhold the result rather than resume a zombie.
-          send({
-            type: "CHANNEL_RESPONSE",
-            ok: false,
-            error: `flcm: run ${runId} is no longer active on this server — the channel reply was withheld.`,
-          });
+          refuse(
+            "RUN_INACTIVE",
+            `flcm: run ${runId} is no longer active on this server — the channel reply was withheld.`,
+          );
           return;
         }
         const response = { type: "CHANNEL_RESPONSE", ok: true, payload };
         send(response);
       })
       .catch((err: unknown) => {
-        send({
-          type: "CHANNEL_RESPONSE",
-          ok: false,
-          error: err instanceof Error ? err.message : String(err),
-        });
+        if (run.servicesAbort.signal.aborted) {
+          refuse("CANCELLED", "flcm: the run ended; server work was cancelled.");
+          return;
+        }
+        try {
+          send({ type: "CHANNEL_RESPONSE", ok: false, error: channelFailure(err) });
+        } catch {
+          refuse("SERIALIZATION_FAILED", "flcm: server failure could not be encoded as JSON.");
+        }
       })
       .finally(settleService);
   }

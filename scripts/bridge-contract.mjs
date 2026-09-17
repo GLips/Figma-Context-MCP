@@ -1029,7 +1029,7 @@ pluginImg.on("message", (raw) => {
   }
   if ((msg.type === "CHANNEL_RESPONSE" && msg.ok === false) && msg.id === "preq-2") {
     // The modeled sandbox turns the rejected await into the run's error, like executeCode's catch.
-    pluginImg.send(JSON.stringify({ type: "EXECUTE_CODE_RESULT", id: pluginImg.runId, console: [], errors: msg.error }));
+    pluginImg.send(JSON.stringify({ type: "EXECUTE_CODE_RESULT", id: pluginImg.runId, console: [], errors: msg.error.message }));
   }
 });
 await new Promise((res) => pluginImg.on("open", res));
@@ -1052,7 +1052,7 @@ console.log("✅ A failed fetch rejects the run's await via typed CHANNEL_RESPON
 pluginImg.send(JSON.stringify({ type: "CHANNEL_REQUEST", capability: "images.fetch", id: "preq-9", runId: "req-9999", payload: ["u3"] }));
 await wait(100);
 const refusal = framesImg.find((f) => (f.type === "CHANNEL_RESPONSE" && f.ok === false) && f.id === "preq-9");
-assert.ok(refusal && /no longer active/.test(refusal.error), "an image request for an untracked run is refused, not served");
+assert.ok(refusal && /no longer active/.test(refusal.error.message), "an image request for an untracked run is refused, not served");
 console.log("✅ An image request for a dead run is refused (zombie runs die at their await)");
 pluginImg.close();
 bridgeI.stop();
@@ -1092,7 +1092,7 @@ const infoId = framesC.find((f) => f.type === "SESSION_INFO").id;
 pluginC.send(JSON.stringify({ type: "CHANNEL_REQUEST", capability: "images.fetch", id: "preq-g", runId: infoId, payload: ["u1"] }));
 await wait(100);
 const gateRefusal = framesC.find((f) => (f.type === "CHANNEL_RESPONSE" && f.ok === false) && f.id === "preq-g");
-assert.ok(gateRefusal && /not a code run/.test(gateRefusal.error), "an image request against a non-EXECUTE_CODE pending is refused");
+assert.ok(gateRefusal && /not a code run/.test(gateRefusal.error.message), "an image request against a non-EXECUTE_CODE pending is refused");
 pluginC.send(JSON.stringify({ type: "SESSION_INFO_ACK", id: infoId }));
 assert.equal((await infoP).type, "SESSION_INFO_ACK", "the refused image request left the SESSION_INFO pending intact");
 console.log("✅ Only an EXECUTE_CODE pending can be drawn on by the reverse channel (payload gate)");

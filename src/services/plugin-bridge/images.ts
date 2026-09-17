@@ -207,15 +207,19 @@ async function readCapped(res: Response): Promise<Uint8Array> {
 }
 
 // Guarded fetch: validate the url + host, follow redirects manually re-guarding each hop, and cap the read.
-async function guardedFetch(rawUrl: string): Promise<Uint8Array> {
+async function guardedFetch(rawUrl: string, signal?: AbortSignal): Promise<Uint8Array> {
   let target = rawUrl;
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+    signal?.throwIfAborted();
     const url = parseHttpUrl(target);
     await assertPublicHost(url.hostname);
+    signal?.throwIfAborted();
     const res = await fetch(url, {
       dispatcher: directDispatcher,
       redirect: "manual",
-      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+      signal: signal
+        ? AbortSignal.any([signal, AbortSignal.timeout(FETCH_TIMEOUT_MS)])
+        : AbortSignal.timeout(FETCH_TIMEOUT_MS),
     });
     if (res.status >= 300 && res.status < 400) {
       const location = res.headers.get("location");
@@ -233,7 +237,8 @@ async function guardedFetch(rawUrl: string): Promise<Uint8Array> {
 // Validate the payload type by magic bytes and downscale to the 4096px cap. Only re-encodes when a downscale
 // actually happens — an in-bounds image passes through byte-for-byte, preserving its format (and a GIF's
 // animation, which a jimp round-trip would flatten). Split from the fetch so it's unit-testable off-network.
-export async function processImageBytes(bytes: Uint8Array): Promise<string> {
+export async function processImageBytes(bytes: Uint8Array, signal?: AbortSignal): Promise<string> {
+  signal?.throwIfAborted();
   const type = detectImageType(bytes);
   if (!type) throw new Error("payload is not a PNG, JPEG, or GIF (magic-byte check failed)");
 
@@ -248,6 +253,7 @@ export async function processImageBytes(bytes: Uint8Array): Promise<string> {
 
   const buffer = Buffer.from(bytes);
   const image = await Jimp.fromBuffer(buffer);
+  signal?.throwIfAborted();
   const { width, height } = image;
   if (width <= MAX_DIMENSION && height <= MAX_DIMENSION) {
     return buffer.toString("base64");
@@ -257,6 +263,7 @@ export async function processImageBytes(bytes: Uint8Array): Promise<string> {
   const resized =
     width >= height ? image.resize({ w: MAX_DIMENSION }) : image.resize({ h: MAX_DIMENSION });
   const encoded = await resized.getBuffer(type === "image/gif" ? "image/png" : type);
+  signal?.throwIfAborted();
   return encoded.toString("base64");
 }
 
@@ -265,9 +272,9 @@ export async function processImageBytes(bytes: Uint8Array): Promise<string> {
  * the whole trust boundary in one call. Throws (naming the url) on any failure: blocked range, oversize,
  * non-image payload, unreachable host. The caller surfaces that loud rather than rendering a blank fill.
  */
-export async function fetchAndProcessImage(url: string): Promise<string> {
+export async function fetchAndProcessImage(url: string, signal?: AbortSignal): Promise<string> {
   try {
-    return await processImageBytes(await guardedFetch(url));
+    return await processImageBytes(await guardedFetch(url, signal), signal);
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
     throw new Error(`flcm.image could not load ${JSON.stringify(url)}: ${reason}`);
@@ -316,7 +323,9 @@ const CONTAINED_OPEN_FLAGS =
  * Errors name the root explicitly: "./assets/logo.png" is ambiguous when the server's cwd differs from
  * the repo the agent is working in.
  */
-export function createLocalImageReader(assetRoot: string): (source: string) => Promise<string> {
+export function createLocalImageReader(
+  assetRoot: string,
+): (source: string, signal?: AbortSignal) => Promise<string> {
   // Cached only on success, so a root that doesn't exist yet at first use isn't a permanent verdict.
   let pinnedRoot: Promise<string> | null = null;
   const canonicalRoot = (): Promise<string> => {
@@ -335,8 +344,9 @@ export function createLocalImageReader(assetRoot: string): (source: string) => P
     return pinnedRoot;
   };
 
-  return async function readLocalImage(source: string): Promise<string> {
+  return async function readLocalImage(source: string, signal?: AbortSignal): Promise<string> {
     try {
+      signal?.throwIfAborted();
       const rootReal = await canonicalRoot();
       let fileReal: string;
       try {
@@ -356,7 +366,7 @@ export function createLocalImageReader(assetRoot: string): (source: string) => P
             `placed. Start the server with --asset-root pointed at your project if the root is wrong.`,
         );
       }
-      return await processImageBytes(await readContainedFile(fileReal, assetRoot));
+      return await processImageBytes(await readContainedFile(fileReal, assetRoot, signal), signal);
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
       throw new Error(`flcm.image could not load ${JSON.stringify(source)}: ${reason}`);
@@ -376,7 +386,12 @@ export function createLocalImageReader(assetRoot: string): (source: string) => P
  * a local writer racing us inside the root — a strictly smaller threat than the plugin-named path this
  * whole module exists to contain.
  */
-async function readContainedFile(fileReal: string, assetRoot: string): Promise<Uint8Array> {
+async function readContainedFile(
+  fileReal: string,
+  assetRoot: string,
+  signal?: AbortSignal,
+): Promise<Uint8Array> {
+  signal?.throwIfAborted();
   const handle = await open(fileReal, CONTAINED_OPEN_FLAGS);
   try {
     // fstat, not stat: this describes the OPEN object, so a fifo/device/directory swapped into the
@@ -389,6 +404,7 @@ async function readContainedFile(fileReal: string, assetRoot: string): Promise<U
     const buffer = Buffer.allocUnsafe(MAX_BYTES + 1);
     let total = 0;
     while (total < buffer.length) {
+      signal?.throwIfAborted();
       const { bytesRead } = await handle.read(buffer, total, buffer.length - total, null);
       if (bytesRead === 0) break;
       total += bytesRead;

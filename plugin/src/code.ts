@@ -260,7 +260,9 @@ function settleServerCall(msg: InboundMessage): void {
   // reads it off `.detail`, with no plugin release. `message` stays a string only because throwing
   // a non-Error in the sandbox loses the stack.
   const error = new Error(
-    typeof msg.error === "string" ? msg.error : "flcm: the server capability failed.",
+    typeof msg.error === "string" ? msg.error :
+      msg.error && typeof msg.error === "object" && "message" in msg.error && typeof msg.error.message === "string"
+        ? msg.error.message : "flcm: the server capability failed.",
   );
   (error as Error & { detail?: unknown }).detail = msg.error;
   pending.reject(error);

@@ -8,9 +8,13 @@
 // concurrency are enforced where the fetching actually happens. They are PER-REQUEST bounds — the
 // bridge separately caps how many requests one run may have in flight (bridge.ts
 // MAX_INFLIGHT_SERVICES_PER_RUN), so neither alone bounds a whole run.
+import type { CapabilityHandler } from "./bridge.js";
 import { isLocalImageSource } from "./images.js";
 
-type ImagesRequestHandler = (urls: string[]) => Promise<Record<string, string>>;
+type ImagesRequestHandler = (
+  urls: string[],
+  signal?: AbortSignal,
+) => Promise<Record<string, string>>;
 
 // Bound on distinct image urls one request may carry, and on how many fetch/decode concurrently —
 // the pair caps peak server memory (each in-flight fetch holds a decoded raster) to
@@ -76,7 +80,7 @@ export interface ImagesRequestDeps {
    * through fetchAndProcessImage (SSRF allowlist, byte caps), local paths through readLocalImage
    * (asset-root containment). Both validate and downscale before returning base64.
    */
-  fetchImage: (url: string) => Promise<string>;
+  fetchImage: (url: string, signal?: AbortSignal) => Promise<string>;
   cache: ImageByteCache;
 }
 
@@ -87,7 +91,8 @@ export interface ImagesRequestDeps {
  * plugin turns that into the run's error, so a blocked url never renders as a blank fill.
  */
 export function createImagesRequestHandler(deps: ImagesRequestDeps): ImagesRequestHandler {
-  return async (urls) => {
+  return async (urls, signal) => {
+    signal?.throwIfAborted();
     // The plugin dedupes before asking, but it is the untrusted side — dedupe again so the cap
     // below counts distinct urls no matter what was sent.
     const distinct = Array.from(new Set(urls));
@@ -121,11 +126,17 @@ export function createImagesRequestHandler(deps: ImagesRequestDeps): ImagesReque
       if (hit !== undefined) addBytes(url, hit);
       else misses.push(url);
     }
-    await mapWithConcurrency(misses, FETCH_CONCURRENCY, async (url) => {
-      const fetched = await deps.fetchImage(url);
-      if (!isLocalImageSource(url)) deps.cache.set(url, fetched);
-      addBytes(url, fetched);
-    });
+    await mapWithConcurrency(
+      misses,
+      FETCH_CONCURRENCY,
+      async (url) => {
+        const fetched = await deps.fetchImage(url, signal);
+        signal?.throwIfAborted();
+        if (!isLocalImageSource(url)) deps.cache.set(url, fetched);
+        addBytes(url, fetched);
+      },
+      signal,
+    );
     return bytes;
   };
 }
@@ -140,12 +151,14 @@ async function mapWithConcurrency<T>(
   items: T[],
   limit: number,
   fn: (item: T) => Promise<void>,
+  signal?: AbortSignal,
 ): Promise<void> {
   let cursor = 0;
   const failures: unknown[] = [];
   const worker = async (): Promise<void> => {
     while (failures.length === 0 && cursor < items.length) {
       try {
+        signal?.throwIfAborted();
         await fn(items[cursor++]);
       } catch (err) {
         failures.push(err);
@@ -157,12 +170,11 @@ async function mapWithConcurrency<T>(
 }
 
 /** Parse image inputs at the capability boundary, away from the uninterpreted channel. */
-export function createImagesCapability(
-  deps: ImagesRequestDeps,
-): (payload: unknown) => Promise<unknown> {
+export function createImagesCapability(deps: ImagesRequestDeps): CapabilityHandler {
   const fetchImages = createImagesRequestHandler(deps);
-  return (payload) =>
+  return (payload, { signal }) =>
     fetchImages(
       Array.isArray(payload) ? payload.filter((url): url is string => typeof url === "string") : [],
+      signal,
     );
 }

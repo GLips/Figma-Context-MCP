@@ -18,8 +18,15 @@ cannot capture the plugin's local host or transport functions.
 
 The wire uses `{ type: "CHANNEL_REQUEST", id, runId, capability, payload }` and one response type:
 `{ type: "CHANNEL_RESPONSE", id, ok: true, payload }` or
-`{ type: "CHANNEL_RESPONSE", id, ok: false, error: string }`. The UI routes these through its existing
+`{ type: "CHANNEL_RESPONSE", id, ok: false, error: { code, message, details?, ...extensions } }`. The UI routes these through its existing
 connection envelope without interpreting them. Keep capability-specific fields out of the frame.
+
+Failures use an open JSON object with string `code` and `message`, optional JSON `details`, and
+capability-owned JSON extension fields. Object throws retain their fields; ordinary throws receive
+`COMPUTATION_FAILED`. Error instances retain their message and enumerable custom fields. Invalid
+JSON output produces `SERIALIZATION_FAILED`. Transport refusals have their own codes, such as
+`UNKNOWN_CAPABILITY`, `INVALID_INPUT`, `RUN_INACTIVE`, and `CANCELLED`; these are examples, not a
+closed catalogue. Binary data uses base64 strings.
 
 Failures cross opaquely too: the plugin forwards the server's error value on the rejection's
 `detail` rather than flattening it to prose, so a future capability can ship a structured failure
@@ -33,3 +40,9 @@ The channel owns correlation, connection ownership, dead-run refusal, the four-s
 cap, and the 100 MiB frame limit. Inactivity stays suspended until the last service settles, even
 across run-state traffic; the absolute run ceiling never suspends. The current caller requires an
 `EXECUTE_CODE` run. The frame does not constrain future callers to that request type.
+
+Handlers receive `(payload, { signal })`. The run aborts that signal on cancellation, disconnect,
+or completion. Handlers must stop starting new work and pass the signal to interruptible I/O.
+The service count remains until the handler and its cleanup settle. Uninterruptible decoding may
+finish internally; its result is discarded. This is cooperative cancellation, not rollback, and
+there is no aggregate admission limit. Inbound size checks use raw frame bytes before JSON parsing.
