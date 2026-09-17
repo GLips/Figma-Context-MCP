@@ -7,6 +7,7 @@ import { sceneFigma as figma } from "./scene-access.js";
 import type { ExposureWrite } from "./instance-exposure.js";
 import { applyBounds, assertBounds } from "./size-bounds.js";
 import { resizeWithDiagnostics, trackSizing } from "./sizing-diagnostics.js";
+import { warnBackgroundBlurWithoutFill } from "./background-blur-diagnostics.js";
 // bridge — the ONE mutation authority: every property lands on a live Figma node through the appliers
 // here, whether the node was just built (the render walk below) or resolved as a live edit target.
 // Every mutating verb drives these same exported appliers — never a parallel application path, so a
@@ -257,6 +258,11 @@ export function applyPaint(node: any, wn: WriteProps, ctx: RenderResources): voi
   if (typeof wn.opacity === "number" && "opacity" in node) node.opacity = wn.opacity;
   if (typeof wn.clip === "boolean" && "clipsContent" in node) node.clipsContent = wn.clip;
   stampImageData(node, wn);
+  // AFTER the writes, and only when this write was about appearance: the diagnostic asks the LIVE node
+  // whether blur and fill ended up contradicting each other, so an edit naming one of them is judged
+  // against the other's existing value. Gated on presence so a layout-only edit doesn't re-report a
+  // node's standing state on every touch.
+  if (wn.fills || wn.effects) warnBackgroundBlurWithoutFill(node);
 }
 
 // Figma splits one concept over two APIs: `cornerRadius` writes all four at once (and READS back as
