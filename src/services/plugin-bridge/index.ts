@@ -2,7 +2,7 @@ import { join } from "node:path";
 import { Logger } from "~/utils/logger.js";
 import { PluginBridge } from "./bridge.js";
 import { fetchAndProcessImage, isLocalImageSource, createLocalImageReader } from "./images.js";
-import { ImageByteCache, createImagesRequestHandler } from "./image-requests.js";
+import { ImageByteCache, createImagesCapability } from "./image-requests.js";
 import { WS_PORT_BLOCK } from "./ports.js";
 import { SESSION_IDENTITY } from "./approval.js";
 import { resolveStateDir } from "./approval-store.js";
@@ -38,11 +38,16 @@ export function startPluginBridge({ assetRoot }: { assetRoot: string }): PluginB
   // boundary can't shift under a retargeted root symlink mid-session.
   const readLocalImage = createLocalImageReader(assetRoot);
   const bridge = new PluginBridge(undefined, {
-    imagesRequestHandler: createImagesRequestHandler({
-      fetchImage: (source) =>
-        isLocalImageSource(source) ? readLocalImage(source) : fetchAndProcessImage(source),
-      cache: new ImageByteCache(),
-    }),
+    capabilities: new Map([
+      [
+        "images.fetch",
+        createImagesCapability({
+          fetchImage: (source) =>
+            isLocalImageSource(source) ? readLocalImage(source) : fetchAndProcessImage(source),
+          cache: new ImageByteCache(),
+        }),
+      ],
+    ]),
   });
   // Surface where the durable-approval token file lives — it is a security-adjacent 0600 credential, so
   // an operator should be able to see (and locate/inspect) it at startup. Override via FRAMELINK_STATE_DIR.

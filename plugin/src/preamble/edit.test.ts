@@ -104,7 +104,7 @@ test("an image fill in a delta fetches bytes through the host channel and stamps
   const url = "https://cdn.example.com/a.jpg";
   const g = globalThis as { __flcmHost?: unknown };
   g.__flcmHost = { registerRead() {},
-    requestImages: async (urls: string[]) =>
+    callServer: async (_capability: string, urls: string[]) =>
       Object.fromEntries(urls.map((u) => [u, Buffer.from("fake-image-bytes").toString("base64")])),
     isRunCancelled: () => false, isRunFinished: () => false,
   };
@@ -151,7 +151,7 @@ test('clearing an image fill with "none" wipes the flcm/image provenance too', a
   const node = await renderKeyedRowFrame();
   const g = globalThis as { __flcmHost?: unknown };
   g.__flcmHost = { registerRead() {},
-    requestImages: async (urls: string[]) =>
+    callServer: async (_capability: string, urls: string[]) =>
       Object.fromEntries(urls.map((u) => [u, Buffer.from("fake-image-bytes").toString("base64")])),
     isRunCancelled: () => false, isRunFinished: () => false,
   };
@@ -946,7 +946,7 @@ function imageChannelThatRetypes(
 ): () => void {
   const g = globalThis as { __flcmHost?: unknown };
   g.__flcmHost = { registerRead() {},
-    requestImages: async (urls: string[]) => {
+    callServer: async (_capability: string, urls: string[]) => {
       node.fontName = fontName;
       return Object.fromEntries(urls.map((u) => [u, Buffer.from("bytes").toString("base64")]));
     },

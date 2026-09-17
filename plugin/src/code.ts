@@ -44,13 +44,14 @@ figma.showUI(__html__, {
 //   • PROTOCOL_VERSION — the envelope contract, plus the FlcmHost interface this host hands the
 //     preamble (preamble/host.ts). The server GATES on this; bump it ONLY on a breaking change to
 //     either (and the server's MIN with it). v2 = the mid-run image protocol (plugin-issued
-//     IMAGES_REQUEST/IMAGES_REPLY + run-scoped CANCEL). v3 = the server ships the flcm std-lib
+//     reverse image requests + run-scoped CANCEL). v3 = the server ships the flcm std-lib
 //     (ADR-0010), and the host capabilities collapse into the one `__flcmHost` object. v6 = the host
 //     answers isRunFinished, so a runtime the agent stored past its reply refuses instead of writing,
 //     and every CANCEL is answered (CANCEL_RESULT) with what this plugin knew about the run — the
 //     server has no other way to tell a caller whether its cancelled run ever executed.
 //   • PLUGIN_VERSION — the plugin release, shown to the human in a skew refusal. Informational.
-const PROTOCOL_VERSION = 6;
+// v7 replaces image-specific host/wire methods with the opaque server channel.
+const PROTOCOL_VERSION = 7;
 const PLUGIN_VERSION = "0.1.0";
 
 // Phase 2 consent gate. The sandbox is the SOLE ARBITER (Invariant): it holds the durable
@@ -94,7 +95,7 @@ interface SessionConn {
 }
 
 // ui.html assigns a unique local key to each socket generation. Replies, sessions,
-// cancellation and reverse image requests all carry that same owner. Approval tokens
+// cancellation and reverse server requests all carry that same owner. Approval tokens
 // are independent and may survive replacement connections.
 type ConnKey = number;
 const connections = new Map<ConnKey, SessionConn>();
@@ -192,73 +193,77 @@ function reply(to: ReplyTo, body: Record<string, unknown>): void {
   figma.ui.postMessage({ ...body, id: to.id, __connKey: to.connKey });
 }
 
-// ---- Mid-run image fetch: the plugin→server reverse-request direction (protocol 2). ----
-// The sandbox's render() suspends on an await while the server fetches image bytes; these tables
-// correlate the plugin-ISSUED requests with the server's typed replies. Deliberately a separate id
+// ---- Mid-run server calls: the plugin→server reverse-request direction (protocol 7). ----
+// The preamble suspends on an await while the server works; these tables
+// correlate the plugin-ISSUED requests with the server's responses. Deliberately a separate id
 // namespace ("preq-") and a separate pending table from the server's own requests: each side owns
-// its ids, and reverse replies are matched by TYPE (IMAGES_REPLY/IMAGES_ERROR) before the envelope
+// its ids, and reverse replies are matched by TYPE (CHANNEL_RESPONSE) before the envelope
 // dispatch, so neither end ever has to guess who minted an id.
-let nextImagesRequestId = 0;
-interface PendingImagesFetch {
-  resolve: (images: Record<string, string>) => void;
+let nextChannelRequestId = 0;
+interface PendingServerCall {
+  resolve: (payload: unknown) => void;
   reject: (err: Error) => void;
   runId: string;
   connKey: ConnKey | undefined;
 }
-const pendingImagesFetches = new Map<string, PendingImagesFetch>();
+const pendingServerCalls = new Map<string, PendingServerCall>();
 
 /**
- * Ask the run's server for image bytes (url → base64) and await its typed reply. Tagged with the
+ * Call a capability on the run's server and await its opaque response. Tagged with the
  * run's correlation id so the server can (a) suspend the run's inactivity deadline while IT is the
  * side doing the work, and (b) refuse a request for a run it no longer tracks (cancelled/timed
  * out) — that refusal rejects this promise, which is what makes a zombie run die at its
  * suspension point instead of resuming into canvas writes.
+ *
+ * ORDERING RULE a capability must hold to: the sandbox gathers its evidence, the server computes,
+ * and any follow-up `figma.*` work happens AFTER the reply. A server handler must not turn around
+ * and await a fresh plugin request, because that request queues behind the execution still
+ * suspended on this call and the two wait on each other forever. The same non-reentrancy the
+ * mutation lock documents for verbs (see preamble/mutation-lock.ts), one level out.
  */
-function requestServerImages(to: ReplyTo, urls: string[]): Promise<Record<string, string>> {
+function callServer(to: ReplyTo, capability: string, payload: unknown): Promise<unknown> {
   // Fail closed at issue time: with no live socket for this run's port, ui.html would silently drop
   // the frame and this promise could never settle — wedging the write chain (the run never
   // resolves, so no later write ever dispatches) for the life of the plugin. WS_CLOSED /
-  // WS_CONNECTED reject the fetches that were already pending; this covers the run that reaches
-  // its fetch only AFTER the drop.
+  // WS_CONNECTED reject the calls that were already pending; this covers the run that reaches
+  // its call only AFTER the drop.
   if (to.connKey === undefined || !connections.has(to.connKey)) {
     return Promise.reject(
-      new Error("flcm: the server for this run is not connected — the image fetch cannot be issued and the script stops here."),
+      new Error("flcm: the server for this run is not connected — the server call cannot be issued and the script stops here."),
     );
   }
   return new Promise((resolve, reject) => {
-    const id = "preq-" + ++nextImagesRequestId;
-    pendingImagesFetches.set(id, { resolve, reject, runId: to.id, connKey: to.connKey });
-    figma.ui.postMessage({ type: "IMAGES_REQUEST", id, runId: to.id, urls, __connKey: to.connKey });
+    const id = "preq-" + ++nextChannelRequestId;
+    pendingServerCalls.set(id, { resolve, reject, runId: to.id, connKey: to.connKey });
+    figma.ui.postMessage({ type: "CHANNEL_REQUEST", id, runId: to.id, capability, payload, __connKey: to.connKey });
   });
 }
 
-/** Settle a plugin-issued image request from the server's typed reply. An unknown id is dropped —
- * that fetch was already rejected by a CANCEL or a disconnect. The reply must arrive on the SAME
+/** Settle a plugin-issued server request from the server's response. An unknown id is dropped —
+ * that call was already rejected by a CANCEL or a disconnect. The reply must arrive on the SAME
  * port the request went out on: ui.html holds a socket per block port, so without this check any
  * other local server (approved or not — approval gates writes, not this direction) could inject
- * bytes into an approved session's in-flight render, bypassing the trusted fetch path. */
-function settleImagesFetch(msg: InboundMessage): void {
+ * a result into another server's suspended call. */
+function settleServerCall(msg: InboundMessage): void {
   if (typeof msg.id !== "string") return;
-  const pending = pendingImagesFetches.get(msg.id);
+  const pending = pendingServerCalls.get(msg.id);
   if (!pending) return;
   if (pending.connKey !== connKeyOf(msg)) return;
-  pendingImagesFetches.delete(msg.id);
-  if (msg.type === "IMAGES_REPLY" && msg.images && typeof msg.images === "object") {
-    // Boundary-parse the url→base64 record here, where reverse-reply bytes enter the sandbox: keep
-    // string entries only, so downstream imagePaint can trust every value it finds (a dropped
-    // entry surfaces there as the fail-loud missing-bytes error, naming its url).
-    const images: Record<string, string> = {};
-    for (const [url, b64] of Object.entries(msg.images)) {
-      if (typeof b64 === "string") images[url] = b64;
-    }
-    pending.resolve(images);
-  } else {
-    pending.reject(
-      new Error(
-        typeof msg.error === "string" ? msg.error : "flcm.image: the server's image reply was malformed.",
-      ),
-    );
+  pendingServerCalls.delete(msg.id);
+  if (msg.ok === true) {
+    pending.resolve(msg.payload);
+    return;
   }
+  // A failure crosses opaquely, the same way a success does. The installed plugin is the ONE piece
+  // that can't be updated in step with a new capability, so it must not flatten the server's error
+  // to prose: a future capability ships a structured failure (code, details) and a preamble that
+  // reads it off `.detail`, with no plugin release. `message` stays a string only because throwing
+  // a non-Error in the sandbox loses the stack.
+  const error = new Error(
+    typeof msg.error === "string" ? msg.error : "flcm: the server capability failed.",
+  );
+  (error as Error & { detail?: unknown }).detail = msg.error;
+  pending.reject(error);
 }
 
 // Run cancellation (protocol 2's CANCEL made real). The policy, the run phase it reads, and the key
@@ -282,13 +287,13 @@ function beginRun(to: ReplyTo): void {
   runState(to, "running");
 }
 
-/** Reject matching pending image fetches. A rejected fetch kills its suspended run at the await —
+/** Reject matching pending server calls. A rejected call kills its suspended run at the await —
  * the mechanism behind both CANCEL (deadline fired) and WS_CLOSED (server went away), and what
- * keeps the write queue from wedging on a fetch whose reply can never arrive. */
-function rejectImagesFetches(match: (p: PendingImagesFetch) => boolean, reason: string): void {
-  for (const [id, pending] of pendingImagesFetches) {
+ * keeps the write queue from wedging on a call whose reply can never arrive. */
+function rejectServerCalls(match: (p: PendingServerCall) => boolean, reason: string): void {
+  for (const [id, pending] of pendingServerCalls) {
     if (!match(pending)) continue;
-    pendingImagesFetches.delete(id);
+    pendingServerCalls.delete(id);
     pending.reject(new Error(reason));
   }
 }
@@ -586,11 +591,11 @@ figma.ui.onmessage = (msg: InboundMessage) => {
       // and with no socket there are no writes meanwhile. ui.html auto-reconnects the port after this.
       // Refresh the list; collapse only once the LAST session is gone (nothing left to act on) — a
       // departure mustn't close a list another session opened for a pending decision.
-      // First, kill this session's suspended runs: a reply to their image fetches can never arrive,
-      // and an unrejected fetch would wedge the write queue for the life of the plugin.
-      rejectImagesFetches(
+      // First, kill this session's suspended runs: a reply to their server calls can never arrive,
+      // and an unrejected call would wedge the write queue for the life of the plugin.
+      rejectServerCalls(
         (p) => p.connKey === key,
-        "flcm: the server disconnected mid-run — the image fetch was abandoned and the script stops here.",
+        "flcm: the server disconnected mid-run — the server call was abandoned and the script stops here.",
       );
       // The server rejects every in-flight caller when a socket dies, so its outstanding runs here
       // (queued or executing) were all reported failed — cancel them or they'd keep going.
@@ -610,16 +615,16 @@ figma.ui.onmessage = (msg: InboundMessage) => {
     } else if (msg.type === "CANCEL") {
       // The server gave up on this run (id-less, run-scoped, one-way — the server-side mirror of
       // SESSION_TOKEN's direction). Record it; every refusal point reads the registry (the full
-      // policy lives in run-cancellation.ts). Rejecting the pending image fetches below additionally
+      // policy lives in run-cancellation.ts). Rejecting the pending server calls below additionally
       // kills a run suspended at its await right now.
       //
-      // Answer FIRST, before the fetch rejections: the server is holding its caller for this one
+      // Answer FIRST, before the call rejections: the server is holding its caller for this one
       // frame, and a queued run's own refusal cannot speak for it — that refusal only fires once the
       // run ahead finishes, which may be long after the caller was told something.
       const runId = typeof msg.runId === "string" ? msg.runId : null;
       if (runId) {
         cancelResult(key, runId, cancelledRuns.recordCancellation(key, runId));
-        rejectImagesFetches(
+        rejectServerCalls(
           (p) => p.runId === runId && p.connKey === key,
           "flcm: this run was cancelled by the server (its deadline passed) — the script stops here.",
         );
@@ -631,8 +636,8 @@ figma.ui.onmessage = (msg: InboundMessage) => {
   // type + plugin id and consumed here. They are replies, so they must not fall through to the
   // envelope dispatch below — its contract is "every id-carrying SERVER request gets one reply",
   // and its ids are a different namespace.
-  if (msg.type === "IMAGES_REPLY" || msg.type === "IMAGES_ERROR") {
-    settleImagesFetch(msg);
+  if (msg.type === "CHANNEL_RESPONSE") {
+    settleServerCall(msg);
     return;
   }
   const to: ReplyTo = { id: msg.id, connKey: connKeyOf(msg) };
@@ -819,7 +824,7 @@ async function executeCode(to: ReplyTo, code: string, preamble: string): Promise
     //
     // Every service below answers for THIS run, so each refuses once the run has settled rather
     // than serving a runtime the agent kept past its reply: a stale registerRead would project into
-    // a dead run's egress, a stale image fetch has no reply address left, and a stale runtime's
+    // a dead run's egress, a stale server call has no reply address left, and a stale runtime's
     // cancellation flag can never turn true again. Tracing is the exception — a diagnostic that
     // refuses would change execution, so it goes quiet instead.
     const host: FlcmHost = {
@@ -829,8 +834,8 @@ async function executeCode(to: ReplyTo, code: string, preamble: string): Promise
         egress.registerRead(value, project, decorate);
       },
       traceNative: (stage, operation) => { if (!settled) trace(stage, operation); },
-      requestImages: (urls: string[]) =>
-        settled ? Promise.reject(new Error(STALE_RUNTIME_REFUSAL)) : requestServerImages(to, urls),
+      callServer: (capability: string, payload: unknown) =>
+        settled ? Promise.reject(new Error(STALE_RUNTIME_REFUSAL)) : callServer(to, capability, payload),
       isRunCancelled: () => cancelledRuns.isCancelled(to),
       isRunFinished: () => settled,
     };
@@ -846,7 +851,8 @@ async function executeCode(to: ReplyTo, code: string, preamble: string): Promise
     }
     runtime = built;
     const { flcm, session } = built;
-    const raw = await eval("(async function(flcm, session){ " + code + "\n })")(flcm, session);
+    // Indirect eval gives agent code global scope, never this function's host/transport locals.
+    const raw = await (0, eval)("(async function(flcm, session){ " + code + "\n })")(flcm, session);
     // Return-path node guard (R2): a returned live node would otherwise collapse to
     // { id } and silently drop everything else. Make that loud instead of lossy.
     guardReturnValue(raw);

@@ -158,7 +158,7 @@ test("actual UI routes old results and image requests only to their original con
   next.onopen();
   const newKey = forwarded.at(-1)!.pluginMessage.__connKey;
   assert.notEqual(oldKey, newKey);
-  for (const type of ["EXECUTE_CODE_RESULT", "IMAGES_REQUEST", "SESSION_TOKEN", "REVOKE_SESSION"]) {
+  for (const type of ["EXECUTE_CODE_RESULT", "CHANNEL_REQUEST", "SESSION_TOKEN", "REVOKE_SESSION"]) {
     context.window.onmessage({ data: { pluginMessage: { type, __connKey: oldKey } } });
   }
   old.onmessage({ data: JSON.stringify({ type: "CANCEL", runId: "same-id" }) });
@@ -537,4 +537,60 @@ test("a rolled-back vector creation publishes no provisional divergences", async
   ] });`) as any;
   assert.match(reply.errors, /creation failed/);
   assert.equal(reply.console.length, 0);
+});
+
+test("agent scope cannot name the host or raw server channel", async () => {
+  const h = host();
+  await h.connect(1);
+  const reply = await execute(h, `return {
+    factoryHost: typeof __flcmHost,
+    localHost: typeof host,
+    transport: typeof callServer,
+    publicTransport: typeof flcm.callServer,
+    sessionTransport: typeof session.callServer,
+    globalHost: typeof globalThis.__flcmHost,
+    hostFunction: typeof executeCode,
+  };`);
+  assert.equal(reply.errors, null);
+  assert.deepEqual(JSON.parse(JSON.stringify(reply.result)), {
+    factoryHost: "undefined", localHost: "undefined", transport: "undefined",
+    publicTransport: "undefined", sessionTransport: "undefined", globalHost: "undefined",
+    hostFunction: "undefined",
+  });
+});
+
+test("image adapter round-trips over the opaque channel and refuses wrong-connection replies", async () => {
+  const { createFigmaMock } = await import("../harness/figma-mock.mjs");
+  const h = host(createFigmaMock());
+  await h.connect(1);
+  const result = execute(h, `return await flcm.render({ type: "RECTANGLE", width: 10, height: 10, fill: flcm.image("asset.png") });`);
+  let request: Record<string, unknown> | undefined;
+  for (let n = 0; n < 100 && !request; n++) {
+    await new Promise<void>(resolve => setImmediate(resolve));
+    request = h.frames.find(f => f.type === "CHANNEL_REQUEST");
+  }
+  assert.ok(request);
+  assert.equal(request.capability, "images.fetch");
+  assert.equal(JSON.stringify(request.payload), '["asset.png"]');
+  h.send({ type: "CHANNEL_RESPONSE", id: request.id, ok: false, error: "wrong connection", __connKey: 2 });
+  await flush();
+  assert.equal(h.frames.some(f => f.type === "EXECUTE_CODE_RESULT"), false);
+  h.send({ type: "CHANNEL_RESPONSE", id: request.id, ok: true, payload: { "asset.png": "Ynl0ZXM=" }, __connKey: 1 });
+  assert.equal((await result).errors, null);
+});
+
+test("server refusals reject the suspended image await", async () => {
+  const { createFigmaMock } = await import("../harness/figma-mock.mjs");
+  const h = host(createFigmaMock());
+  await h.connect(1);
+  const result = execute(h, `await flcm.render({ type: "RECTANGLE", width: 10, height: 10, fill: flcm.image("asset.png") }); globalThis.resumed = true;`);
+  let request: Record<string, unknown> | undefined;
+  for (let n = 0; n < 100 && !request; n++) {
+    await new Promise<void>(resolve => setImmediate(resolve));
+    request = h.frames.find(f => f.type === "CHANNEL_REQUEST");
+  }
+  assert.ok(request);
+  h.send({ type: "CHANNEL_RESPONSE", id: request.id, ok: false, error: "run no longer active", __connKey: 1 });
+  assert.match((await result).errors!, /run no longer active/);
+  assert.equal(h.context.resumed, undefined);
 });

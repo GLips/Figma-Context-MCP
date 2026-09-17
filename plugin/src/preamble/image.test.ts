@@ -1,6 +1,6 @@
 // Images, sandbox side: flcm.image is a plain paint value; render() batches every image url into
 // ONE deduped mid-run request (protocol 2), awaits the bytes, and resolves each paint to a plugin
-// ImagePaint. The channel is FlcmHost.requestImages, off the host-installed __flcmHost — in the live
+// ImagePaint. The channel is FlcmHost.callServer, off the host-installed __flcmHost — in the live
 // plugin it's the parameter of the eval'd wrapper executeCode builds; here (plain import → module
 // scope chains to global) we install it on globalThis, exactly as the dogfood harness does.
 import { test } from "node:test";
@@ -22,7 +22,7 @@ async function renderWithImages(
   const batches: string[][] = [];
   const g = globalThis as { __flcmHost?: unknown };
   g.__flcmHost = { registerRead() {},
-    requestImages: async (urls: string[]) => {
+    callServer: async (_capability: string, urls: string[]) => {
       batches.push(urls);
       return respond(urls);
     },

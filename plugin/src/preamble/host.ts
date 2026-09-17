@@ -8,7 +8,7 @@ import { warnings } from "./warnings.js";
 // re-import. So it stays deliberately tiny, and an incompatible change to it bumps PROTOCOL_VERSION.
 //
 // What earns a place here: only a service that needs plugin-owned state the sandbox can't see — the
-// reverse bridge (images), run cancellation, or plugin-run storage.
+// reverse bridge, run cancellation, or plugin-run storage.
 // Helpers, policy and anything derivable from `figma.*` stay in the shipped preamble, where they
 // cost nothing to change.
 //
@@ -26,8 +26,8 @@ export interface FlcmHost {
   getSession(initialize: () => Record<string, unknown>): Record<string, unknown>;
   registerRead(value: object, project: () => unknown, decorate: (value: unknown) => unknown): void;
   traceNative?(stage: NativeTraceStage, operation: NativeOperation): void;
-  /** Fetch bytes for image urls through the server. The sandbox has no network of its own. */
-  requestImages(urls: string[]): Promise<Record<string, string>>;
+  /** Private transport for server-shipped verbs. Never expose this on flcm or session. */
+  callServer(capability: string, payload: unknown): Promise<unknown>;
   /** Has the server cancelled this run? Only the host sees the CANCEL frame arrive. */
   isRunCancelled(): boolean;
   /**
@@ -52,19 +52,28 @@ function currentHost(): FlcmHost | undefined {
 }
 
 /**
- * The mid-run image channel (protocol 2): one deduped round trip to the server for image bytes.
+ * The image adapter over the private server channel: one deduped round trip to the server for image bytes.
  *
  * Absence is FATAL — an image fill with no channel would silently paint nothing, so this throws and
  * names what's missing.
  */
-export function requestHostImages(urls: string[]): Promise<Record<string, string>> {
+export async function requestHostImages(urls: string[]): Promise<Record<string, string>> {
   const host = currentHost();
   if (!host) {
     throw new Error(
       "flcm.image: this runtime has no host (FlcmHost) — image fills need the live plugin bridge.",
     );
   }
-  return host.requestImages(urls);
+  const payload = await host.callServer("images.fetch", urls);
+  if (!payload || typeof payload !== "object") {
+    throw new Error("flcm.image: the server's image reply was malformed.");
+  }
+  // Image policy belongs in the server-shipped preamble, not the installed host.
+  const images: Record<string, string> = Object.create(null);
+  for (const [url, bytes] of Object.entries(payload)) {
+    if (typeof bytes === "string") images[url] = bytes;
+  }
+  return images;
 }
 
 /**

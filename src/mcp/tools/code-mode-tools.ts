@@ -25,7 +25,7 @@ const EXECUTE_CODE_DESCRIPTION = buildQuickStart();
 // trusts the type instead of re-checking each field. `result` is absent when the code returns
 // nothing or throws: undefined isn't JSON, so it's dropped crossing the WS — optional, not
 // required (a missing key is the error/void path). Since protocol 2, images are fetched MID-RUN
-// (PluginBridge.serveImagesRequest), so a script executes exactly once and this reply is the
+// (PluginBridge.serveChannelRequest), so a script executes exactly once and this reply is the
 // whole story — no re-run signals, no second pass.
 const ExecuteCodeReply = z.object({
   result: z.unknown().optional(),
@@ -136,7 +136,7 @@ export function registerCodeModeTools(
         const unavailable = pluginUnavailableReply();
         if (unavailable) return unavailable;
         // Correlation ids are owned by PluginBridge; mid-run image fetches ride the bridge underneath
-        // this single execute (serveImagesRequest). The wait holds the call open across the human's
+        // this single execute (serveChannelRequest). The wait holds the call open across the human's
         // Allow rather than returning "not approved yet" for the agent to retry — see
         // requestUntilApproved.
         //

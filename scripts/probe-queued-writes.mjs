@@ -39,7 +39,7 @@ const t0 = Date.now();
 const log = (msg) => console.log(`[probe +${((Date.now() - t0) / 1000).toFixed(1)}s] ${msg}`);
 
 const bridge = new PluginBridge(undefined, {
-  imagesRequestHandler: async () => ({}),
+  capabilities: new Map([["images.fetch", async () => ({})]]),
 });
 
 const run = (code) => bridge.request({ type: "EXECUTE_CODE", code, preamble: PREAMBLE });

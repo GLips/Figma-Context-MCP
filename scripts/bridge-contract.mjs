@@ -63,8 +63,8 @@
 // reverse-request envelope — a script executes exactly ONCE:
 //   • Timeout policy: the per-request deadline is an INACTIVITY deadline; a stalled run is
 //     CANCELLED (run-scoped, id-less CANCEL frame), never silently abandoned.
-//   • Reverse direction: the plugin's IMAGES_REQUEST (own "preq-" id namespace, tagged with the
-//     run's id) is answered by typed IMAGES_REPLY/IMAGES_ERROR; the service window SUSPENDS the
+//   • Reverse direction: the plugin's CHANNEL_REQUEST (own "preq-" id namespace, tagged with the
+//     run's id) is answered by typed CHANNEL_RESPONSE; the service window SUSPENDS the
 //     run's deadline (traffic-as-heartbeat); a request naming an untracked run is refused
 //     (zombie-run defense).
 //   • Reverse-channel guards: only an EXECUTE_CODE pending may be drawn on (the req-N namespace
@@ -986,20 +986,20 @@ bridgeT.stop();
 await wait(150);
 
 // --- Phase 1 (edit surface): the reverse-request direction — mid-run image fetch ---
-// The plugin issues IMAGES_REQUEST with its OWN id namespace ("preq-") tagged with the run's id;
-// the server answers with typed IMAGES_REPLY/IMAGES_ERROR, SUSPENDS the run's inactivity deadline
+// The plugin issues CHANNEL_REQUEST with its OWN id namespace ("preq-") tagged with the run's id;
+// the server answers with typed CHANNEL_RESPONSE, SUSPENDS the run's inactivity deadline
 // while it is the side doing the work (traffic-as-heartbeat), and refuses requests for runs it no
 // longer tracks (zombie-run defense). Driven with a raw socket speaking the plugin's half.
 const PORT_I = 19896;
 const servedBatches = [];
 const bridgeI = new PluginBridge(isolatedStore(), {
   requestTimeoutMs: 500,
-  imagesRequestHandler: async (urls) => {
+  capabilities: new Map([["images.fetch", async (urls) => {
     servedBatches.push(urls);
     if (urls.includes("boom")) throw new Error('flcm.image could not load "boom": blocked range');
     await wait(700); // longer than the whole deadline: the service window must not count against the run
     return Object.fromEntries(urls.map((u) => [u, "b64-" + u]));
-  },
+  }]]),
 });
 bridgeI.start([PORT_I]);
 await wait(150);
@@ -1016,18 +1016,18 @@ pluginImg.on("message", (raw) => {
     const urls = msg.code === "boom run" ? ["boom"] : ["u1", "u1", "u2"];
     const preqId = msg.code === "boom run" ? "preq-2" : "preq-1";
     setTimeout(() => {
-      pluginImg.send(JSON.stringify({ type: "IMAGES_REQUEST", id: preqId, runId: msg.id, urls }));
+      pluginImg.send(JSON.stringify({ type: "CHANNEL_REQUEST", capability: "images.fetch", id: preqId, runId: msg.id, payload: urls }));
     }, 100);
     pluginImg.runId = msg.id;
   }
-  if (msg.type === "IMAGES_REPLY") {
+  if ((msg.type === "CHANNEL_RESPONSE" && msg.ok === true)) {
     imagesReply = msg;
     // Resume: build for a bit, then answer the run — well past the original 500ms deadline in total.
     setTimeout(() => {
-      pluginImg.send(JSON.stringify({ type: "EXECUTE_CODE_RESULT", id: pluginImg.runId, result: msg.images, console: [], errors: null }));
+      pluginImg.send(JSON.stringify({ type: "EXECUTE_CODE_RESULT", id: pluginImg.runId, result: msg.payload, console: [], errors: null }));
     }, 100);
   }
-  if (msg.type === "IMAGES_ERROR" && msg.id === "preq-2") {
+  if ((msg.type === "CHANNEL_RESPONSE" && msg.ok === false) && msg.id === "preq-2") {
     // The modeled sandbox turns the rejected await into the run's error, like executeCode's catch.
     pluginImg.send(JSON.stringify({ type: "EXECUTE_CODE_RESULT", id: pluginImg.runId, console: [], errors: msg.error }));
   }
@@ -1043,15 +1043,15 @@ console.log("✅ Mid-run image fetch round-trips in ONE run — no re-execution,
 // the suspend-while-serving + re-arm-on-reply policy lets that succeed.
 console.log("✅ The service window suspends the run's deadline (traffic-as-heartbeat)");
 
-// A fetch failure comes back as a typed IMAGES_ERROR, and the run surfaces it as its own error.
+// A fetch failure comes back as a typed CHANNEL_RESPONSE failure, and the run surfaces it as its own error.
 const boomRun = await bridgeI.request({ type: "EXECUTE_CODE", code: "boom run", preamble: PREAMBLE });
 assert.match(String(boomRun.errors), /could not load "boom"/, "a fetch failure reaches the run as its error, naming the url");
-console.log("✅ A failed fetch rejects the run's await via typed IMAGES_ERROR");
+console.log("✅ A failed fetch rejects the run's await via typed CHANNEL_RESPONSE failure");
 
-// Zombie-run defense: an IMAGES_REQUEST naming a run the server no longer tracks is refused.
-pluginImg.send(JSON.stringify({ type: "IMAGES_REQUEST", id: "preq-9", runId: "req-9999", urls: ["u3"] }));
+// Zombie-run defense: a CHANNEL_REQUEST naming a run the server no longer tracks is refused.
+pluginImg.send(JSON.stringify({ type: "CHANNEL_REQUEST", capability: "images.fetch", id: "preq-9", runId: "req-9999", payload: ["u3"] }));
 await wait(100);
-const refusal = framesImg.find((f) => f.type === "IMAGES_ERROR" && f.id === "preq-9");
+const refusal = framesImg.find((f) => (f.type === "CHANNEL_RESPONSE" && f.ok === false) && f.id === "preq-9");
 assert.ok(refusal && /no longer active/.test(refusal.error), "an image request for an untracked run is refused, not served");
 console.log("✅ An image request for a dead run is refused (zombie runs die at their await)");
 pluginImg.close();
@@ -1064,10 +1064,10 @@ await wait(150);
 const PORT_C = 19897;
 const bridgeC = new PluginBridge(isolatedStore(), {
   requestTimeoutMs: 500,
-  imagesRequestHandler: async (urls) => {
+  capabilities: new Map([["images.fetch", async (urls) => {
     await wait(urls.includes("slow") ? 1200 : 50);
     return Object.fromEntries(urls.map((u) => [u, "b64-" + u]));
-  },
+  }]]),
 });
 bridgeC.start([PORT_C]);
 await wait(150);
@@ -1081,7 +1081,7 @@ pluginC.on("message", (raw) => {
 await new Promise((res) => pluginC.on("open", res));
 
 // Payload gate: the req-N namespace also holds server-issued handshake requests (SESSION_INFO,
-// GET_VERSION). An IMAGES_REQUEST naming one of THOSE pendings must be refused — otherwise a
+// GET_VERSION). A CHANNEL_REQUEST naming one of THOSE pendings must be refused — otherwise a
 // hostile holder could burn fetches (and hold a suspension) against a pending it was never
 // granted a run for — and the refusal must not disturb the pending itself.
 // (GET_VERSION is fired by the bridge itself on connect and answered above, so SESSION_INFO is the
@@ -1089,9 +1089,9 @@ await new Promise((res) => pluginC.on("open", res));
 const infoP = bridgeC.request({ type: "SESSION_INFO", identity: SESSION_IDENTITY, pairingCode: bridgeC.getPairingCode(), sessionToken: null }).then((r) => r, (e) => e);
 await wait(50);
 const infoId = framesC.find((f) => f.type === "SESSION_INFO").id;
-pluginC.send(JSON.stringify({ type: "IMAGES_REQUEST", id: "preq-g", runId: infoId, urls: ["u1"] }));
+pluginC.send(JSON.stringify({ type: "CHANNEL_REQUEST", capability: "images.fetch", id: "preq-g", runId: infoId, payload: ["u1"] }));
 await wait(100);
-const gateRefusal = framesC.find((f) => f.type === "IMAGES_ERROR" && f.id === "preq-g");
+const gateRefusal = framesC.find((f) => (f.type === "CHANNEL_RESPONSE" && f.ok === false) && f.id === "preq-g");
 assert.ok(gateRefusal && /not a code run/.test(gateRefusal.error), "an image request against a non-EXECUTE_CODE pending is refused");
 pluginC.send(JSON.stringify({ type: "SESSION_INFO_ACK", id: infoId }));
 assert.equal((await infoP).type, "SESSION_INFO_ACK", "the refused image request left the SESSION_INFO pending intact");
@@ -1104,12 +1104,12 @@ console.log("✅ Only an EXECUTE_CODE pending can be drawn on by the reverse cha
 const runP = bridgeC.request({ type: "EXECUTE_CODE", code: "two fetches", preamble: PREAMBLE }).then((r) => r, (e) => e);
 await wait(50);
 const runIdC = framesC.find((f) => f.type === "EXECUTE_CODE").id;
-pluginC.send(JSON.stringify({ type: "IMAGES_REQUEST", id: "preq-f", runId: runIdC, urls: ["fast"] }));
+pluginC.send(JSON.stringify({ type: "CHANNEL_REQUEST", capability: "images.fetch", id: "preq-f", runId: runIdC, payload: ["fast"] }));
 await wait(20);
-pluginC.send(JSON.stringify({ type: "IMAGES_REQUEST", id: "preq-s", runId: runIdC, urls: ["slow"] }));
+pluginC.send(JSON.stringify({ type: "CHANNEL_REQUEST", capability: "images.fetch", id: "preq-s", runId: runIdC, payload: ["slow"] }));
 await wait(1400); // fast settles ~120ms in; slow ~1270ms in — well past a naively re-armed deadline
-assert.ok(framesC.some((f) => f.type === "IMAGES_REPLY" && f.id === "preq-f"), "the fast service replied");
-assert.ok(framesC.some((f) => f.type === "IMAGES_REPLY" && f.id === "preq-s"), "the slow service replied after the fast one settled");
+assert.ok(framesC.some((f) => (f.type === "CHANNEL_RESPONSE" && f.ok === true) && f.id === "preq-f"), "the fast service replied");
+assert.ok(framesC.some((f) => (f.type === "CHANNEL_RESPONSE" && f.ok === true) && f.id === "preq-s"), "the slow service replied after the fast one settled");
 assert.ok(!framesC.some((f) => f.type === "CANCEL"), "no CANCEL fired while any service was still in flight");
 pluginC.send(JSON.stringify({ type: "EXECUTE_CODE_RESULT", id: runIdC, result: "built", console: [], errors: null }));
 assert.equal((await runP).result, "built", "the run finished after both services settled");

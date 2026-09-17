@@ -1,4 +1,4 @@
-// Serves the plugin's mid-run image requests (the protocol-2 reverse direction): the sandbox's
+// Serves images.fetch over the private server channel: the sandbox's
 // render() awaits ONE batched fetch per verb, and this module answers it from the guarded byte
 // sources plus a session-lifetime URL→bytes cache, so repeated renders of the same remote asset
 // never re-download. Local file paths bypass the cache — see the miss loop below.
@@ -7,9 +7,10 @@
 // exchange: a compromised or stale plugin could ask for anything, so the url cap and the fetch
 // concurrency are enforced where the fetching actually happens. They are PER-REQUEST bounds — the
 // bridge separately caps how many requests one run may have in flight (bridge.ts
-// MAX_INFLIGHT_IMAGE_SERVICES_PER_RUN), so neither alone bounds a whole run.
-import type { ImagesRequestHandler } from "./bridge.js";
+// MAX_INFLIGHT_SERVICES_PER_RUN), so neither alone bounds a whole run.
 import { isLocalImageSource } from "./images.js";
+
+type ImagesRequestHandler = (urls: string[]) => Promise<Record<string, string>>;
 
 // Bound on distinct image urls one request may carry, and on how many fetch/decode concurrently —
 // the pair caps peak server memory (each in-flight fetch holds a decoded raster) to
@@ -80,7 +81,7 @@ export interface ImagesRequestDeps {
 }
 
 /**
- * Build the handler PluginBridge invokes for each inbound IMAGES_REQUEST. Dedupes, enforces the
+ * Build the handler PluginBridge invokes for each inbound images.fetch request. Dedupes, enforces the
  * per-request cap, answers hits from the cache, and fetches misses with bounded concurrency. Any
  * single failure (blocked range, oversize, non-image, unreachable) rejects the whole request — the
  * plugin turns that into the run's error, so a blocked url never renders as a blank fill.
@@ -133,7 +134,7 @@ export function createImagesRequestHandler(deps: ImagesRequestDeps): ImagesReque
 // cursor until the list is drained or any item FAILS: after a failure no new item is claimed, and
 // the rejection surfaces only once every already-started item has settled. That late surfacing is
 // load-bearing, not politeness — the bridge re-arms the run's inactivity deadline when the handler
-// settles (serveImagesRequest), so "settled" must mean no fetch is still running on the run's
+// settles (serveChannelRequest), so "settled" must mean no fetch is still running on the run's
 // behalf. Small local helper — no concurrency dep.
 async function mapWithConcurrency<T>(
   items: T[],
@@ -153,4 +154,15 @@ async function mapWithConcurrency<T>(
   };
   await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
   if (failures.length > 0) throw failures[0];
+}
+
+/** Parse image inputs at the capability boundary, away from the uninterpreted channel. */
+export function createImagesCapability(
+  deps: ImagesRequestDeps,
+): (payload: unknown) => Promise<unknown> {
+  const fetchImages = createImagesRequestHandler(deps);
+  return (payload) =>
+    fetchImages(
+      Array.isArray(payload) ? payload.filter((url): url is string => typeof url === "string") : [],
+    );
 }

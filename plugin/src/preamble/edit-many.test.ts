@@ -331,7 +331,7 @@ test("a node deleted during the resource round trip refuses the whole batch — 
   // node, so nothing downstream would notice — it would just paint an object off the canvas.
   const g = globalThis as { __flcmHost?: unknown };
   g.__flcmHost = { registerRead() {},
-    requestImages: async (urls: string[]) => {
+    callServer: async (_capability: string, urls: string[]) => {
       a.remove();
       return Object.fromEntries(urls.map((u) => [u, Buffer.from("bytes").toString("base64")]));
     },

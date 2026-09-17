@@ -19,7 +19,7 @@ import { z } from "zod";
 // preamble. Everything else about the DSL ships from the server and needs no bump at all. An
 // incompatible change to either half is what earns a new number here.
 //
-// v2: the mid-run image protocol — plugin-issued IMAGES_REQUEST/IMAGES_REPLY reverse direction
+// v2: the mid-run image protocol — plugin-issued image requests/replies reverse direction
 // and the run-scoped CANCEL frame, replacing the two-pass re-run. A v1 plugin genuinely cannot
 // speak this: its render() still throws the retired imagesNeeded sentinel and it drops CANCEL
 // frames.
@@ -39,7 +39,9 @@ import { z } from "zod";
 // preamble no isRunFinished — every mutating verb would die on the missing method. The same version
 // answers every CANCEL with a CANCEL_RESULT naming what the run was doing, which is what lets a
 // cancelled caller be told "never executed" instead of the hedge (bridge.ts, cancelPending).
-export const MIN_PROTOCOL_VERSION = 6;
+// v7: FlcmHost.callServer and the opaque CHANNEL_REQUEST/CHANNEL_RESPONSE replace image-specific
+// transport. Older hosts lack callServer and must be re-imported.
+export const MIN_PROTOCOL_VERSION = 7;
 
 /**
  * Where a connection stands with the version handshake.

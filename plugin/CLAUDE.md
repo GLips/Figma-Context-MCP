@@ -9,3 +9,27 @@ The Framelink Figma plugin — hosts **flcm**, the authoring DSL for the "code m
 - `docs/authoring/flcm.md` — **generated** from the schema by the repo-root `scripts/gen-flcm-doc.ts`; never hand-edit (`pnpm docs:check` gates drift).
 
 Tests: `pnpm test:plugin` from the repo root (node:test, not vitest).
+
+## Private server channel (protocol 7)
+
+`FlcmHost.callServer(capability, payload)` carries opaque JSON. The preamble closes over the host
+factory parameter; only curated `flcm` verbs reach agent code. Agent code uses indirect eval so it
+cannot capture the plugin's local host or transport functions.
+
+The wire uses `{ type: "CHANNEL_REQUEST", id, runId, capability, payload }` and one response type:
+`{ type: "CHANNEL_RESPONSE", id, ok: true, payload }` or
+`{ type: "CHANNEL_RESPONSE", id, ok: false, error: string }`. The UI routes these through its existing
+connection envelope without interpreting them. Keep capability-specific fields out of the frame.
+
+Failures cross opaquely too: the plugin forwards the server's error value on the rejection's
+`detail` rather than flattening it to prose, so a future capability can ship a structured failure
+with no plugin release. A handler must not await a fresh plugin request — that request queues
+behind the execution suspended on the call, and both wait forever; gather evidence, compute, then
+do follow-up `figma.*` work after the reply.
+
+The server's explicit allowlist registers only `images.fetch`, taking a source array and returning
+a source-to-base64 record. Image parsing and policy live in the server and preamble adapters.
+The channel owns correlation, connection ownership, dead-run refusal, the four-service concurrency
+cap, and the 100 MiB frame limit. Inactivity stays suspended until the last service settles, even
+across run-state traffic; the absolute run ceiling never suspends. The current caller requires an
+`EXECUTE_CODE` run. The frame does not constrain future callers to that request type.

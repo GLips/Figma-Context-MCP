@@ -30,7 +30,7 @@ const host = {
   getSession: initialize => agentSession ??= initialize(),
   // This diagnostic harness inspects full runtime data; execution-lifecycle tests cover host projection.
   registerRead() {},
-  requestImages: async (urls) =>
+  callServer: async (_capability, urls) =>
     Object.fromEntries(urls.map((u) => [u, Buffer.from("harness-image-bytes").toString("base64")])),
   isRunCancelled: () => false, isRunFinished: () => false,
 };

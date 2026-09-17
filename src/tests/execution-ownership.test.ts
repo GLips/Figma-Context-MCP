@@ -143,10 +143,15 @@ describe("connection-owned execution", () => {
   it("withholds an old image service after replacement and leaves new run accounting intact", async () => {
     let release!: (images: Record<string, string>) => void;
     const bridge = create({
-      imagesRequestHandler: () =>
-        new Promise((r) => {
-          release = r;
-        }),
+      capabilities: new Map([
+        [
+          "images.fetch",
+          () =>
+            new Promise((r) => {
+              release = r;
+            }),
+        ],
+      ]),
     });
     const old = new Socket();
     install(bridge, old);
@@ -155,11 +160,13 @@ describe("connection-owned execution", () => {
       .catch(() => {});
     await Promise.resolve();
     receive(bridge, old, {
-      type: "IMAGES_REQUEST",
+      type: "CHANNEL_REQUEST",
+      capability: "images.fetch",
       id: "image",
       runId: old.frames[0].id,
-      urls: ["x"],
+      payload: ["x"],
     });
+    await Promise.resolve();
     const next = new Socket();
     install(bridge, next);
     const newCall = bridge.request({ type: "PING", payload: "new" });

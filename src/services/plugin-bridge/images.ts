@@ -1,7 +1,7 @@
 // The trusted server-side image byte sources — the trust boundary in the write path. The Figma
 // sandbox holds manifest allowedDomains:["none"] and can reach nothing, so agent-authored `flcm.image(src)`
 // fills are inert until this module loads, validates, and downscales the bytes; the bridge answers the
-// sandbox's mid-run IMAGES_REQUEST with them (see image-requests.ts). Two sources feed one processing
+// sandbox's mid-run CHANNEL_REQUEST with them (see image-requests.ts). Two sources feed one processing
 // pipeline: an http(s) url through the guarded fetch (SSRF ranges, byte cap, redirect re-guarding), or a
 // LOCAL FILE PATH through the asset-root guard (readLocalImage). Because the model — via the untrusted
 // plugin — picks the source, every guard here defends against a hostile one; "read a file the plugin

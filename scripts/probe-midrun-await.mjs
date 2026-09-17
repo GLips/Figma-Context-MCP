@@ -48,13 +48,13 @@ const t0 = Date.now();
 
 let imagesRequests = 0;
 const bridge = new PluginBridge(undefined, {
-  imagesRequestHandler: async (urls) => {
+  capabilities: new Map([["images.fetch", async (urls) => {
     imagesRequests++;
     log(`plugin asked for ${urls.length} image url(s) MID-RUN — holding the reply ${SLOW_REPLY_MS}ms…`);
     await new Promise((r) => setTimeout(r, SLOW_REPLY_MS));
     log("releasing the image reply");
     return Object.fromEntries(urls.map((u) => [u, TINY_PNG_B64]));
-  },
+  }]]),
 });
 
 const PROBE_CODE = `
