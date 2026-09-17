@@ -15,7 +15,7 @@ import { assertLayoutRealizableForType, assertGridSizing } from "./layout-legali
 import { parseInlineMarkdown, MdSegment } from "./markdown.js";
 import { linearGradient, radialGradient } from "./paint.js";
 import { layerBlurFromCssPx, backgroundBlurFromCssPx, shadow, glass, noise, texture, progressiveBlur } from "./effects.js";
-import { parseColor, parseFill, parseCssEffects, parseBlendMode, boxShorthand, length, lineHeight, letterSpacing, isPercent, percent } from "./css.js";
+import { parseColor, parseFill, parseCssEffects, parseBlendMode, boxShorthand, cornerRadii, length, lineHeight, letterSpacing, isPercent, percent } from "./css.js";
 import { requestHostImages } from "./host.js";
 import { get, find, findOne, selection } from "./read.js";
 import { rejectUnknownKeys, rejectNonDeltaWords, own } from "./validate.js";
@@ -443,7 +443,7 @@ export function compileNodeLocalProps(wn: WriteProps, props: AppearanceProps, op
   if (props.strokeWidth != null) wn.strokeWeight = length(props.strokeWidth);
   if (props.strokeAlign != null) wn.strokeAlign = compileStrokeAlign(props.strokeAlign);
   if (props.effects != null) wn.effects = props.effects === "none" ? [] : normalizeEffects(props.effects);
-  if (opts.radius && props.borderRadius != null) wn.borderRadius = length(props.borderRadius);
+  if (opts.radius && props.borderRadius != null) wn.borderRadius = cornerRadii(props.borderRadius, "borderRadius");
   const clip = (props as FrameProps).clip;
   if (opts.clip && clip != null) { assertScalarType(clip, "boolean", "clip"); wn.clip = clip; }
   if (props.rotation != null) { assertScalarType(props.rotation, "number", "rotation"); wn.rotation = props.rotation; }

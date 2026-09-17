@@ -150,7 +150,6 @@ function readyAuthoredValue(key: string, value: unknown, subject: string): unkno
     case "text": return readyTextContent(value, subject);
     case "textStyle": case "effects": case "fill": case "stroke": return assertNotCompressedRef(value, subject + "." + key);
     case "strokeWidth": return singleValue(value, subject + ".strokeWidth", "one uniform stroke width, not per-side weights");
-    case "borderRadius": return singleValue(value, subject + ".borderRadius", "one uniform corner radius, not per-corner radii");
     default: return value;
   }
 }
@@ -173,9 +172,10 @@ function compressedRef(field: string): Error {
   );
 }
 
-// A read metric that flcm spells with ONE value. Read emits a CSS shorthand when the sides/corners differ
-// ("1px 2px", "8px 8px 0px 0px"); flcm has one word for the whole node, so the multi-value form is real
-// state with no authored form rather than something to average or take the first of.
+// A read metric that flcm spells with ONE value. Read emits a CSS shorthand when the sides differ
+// ("1px 2px"); flcm has one word for the whole node, so the multi-value form is real state with no
+// authored form rather than something to average or take the first of. `borderRadius` is NOT one of
+// these — it takes the shorthand for real, decoded in css.ts (cornerRadii).
 function singleValue(value: unknown, field: string, whatFlcmHas: string): unknown {
   if (typeof value === "string" && /\s/.test(value.trim())) {
     throw new Error(field + " is " + JSON.stringify(value) + ", and flcm authors " + whatFlcmHas + ". " + CLONE_REMEDY);

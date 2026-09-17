@@ -20,7 +20,7 @@ const clonePaints = (p) => (Array.isArray(p) ? JSON.parse(JSON.stringify(p)) : p
 const COPY_FIELDS = ["gridRowSizes", "gridColumnSizes", "gridRowGap", "gridColumnGap", "gridAutoTracks", "gridItemsPositioning", "_gridRowAnchorIndex", "_gridColumnAnchorIndex", "_gridRowSpan", "_gridColumnSpan", "gridChildHorizontalAlign", "gridChildVerticalAlign", "_gridSizingW", "_gridSizingH", "_gridFillW", "_gridFillH", "isExposedInstance", "_layoutWrap", "counterAxisSpacing", "counterAxisAlignContent", "minWidth", "maxWidth", "minHeight", "maxHeight", "name", "layoutMode", "itemSpacing", "paddingTop", "paddingRight", "paddingBottom",
   "paddingLeft", "primaryAxisAlignItems", "counterAxisAlignItems", "primaryAxisSizingMode",
   "counterAxisSizingMode", "layoutGrow", "layoutAlign", "layoutPositioning", "constraints", "strokeWeight", "strokeAlign",
-  "cornerRadius", "opacity", "visible", "rotation", "characters", "fontSize", "textAutoResize",
+  "_corners", "opacity", "visible", "rotation", "characters", "fontSize", "textAutoResize",
   // x/y ride along because a live clone() preserves position: without them the mock can't show
   // that flcm.clone with no parent lands the copy exactly ON TOP of the original in a free-form
   // parent — real behavior that would otherwise be invisible here.
@@ -60,6 +60,35 @@ const RANGE_BUCKETS = ["_rangeFonts", "_rangeSizes", "_rangeFills", "_rangeLineH
   "_rangeLetterSpacings", "_rangeDecorations", "_rangeHyperlinks", "_rangeCases",
   "_rangeParagraphSpacings", "_rangeParagraphIndents", "_rangeListSpacings"];
 
+// Figma's RectangleCornerMixin — the types whose four corners can differ. Everything else with a
+// corner (POLYGON, STAR, VECTOR) has only the uniform `cornerRadius`.
+const RECTANGLE_CORNER_TYPES = ["RECTANGLE", "FRAME", "COMPONENT", "COMPONENT_SET", "INSTANCE", "SLOT"];
+const CORNER_PROPS = ["topLeftRadius", "topRightRadius", "bottomRightRadius", "bottomLeftRadius"];
+
+// A live node stores four radii and PROJECTS them onto `cornerRadius`, which reads back as
+// figma.mixed the moment they differ — the exact fact node-to-snapshot branches on to emit
+// `rectangleCornerRadii`. Modelled with accessors over one `_corners` array so a per-corner write is
+// visible through both APIs. Each setter replaces the array rather than mutating it, so the clone /
+// override / component-mirror paths can share the reference the way they share every other field.
+function installCornerRadii(node, type) {
+  node._corners = [0, 0, 0, 0];
+  Object.defineProperty(node, "cornerRadius", {
+    configurable: true,
+    enumerable: true,
+    get: () => (node._corners.every((v) => v === node._corners[0]) ? node._corners[0] : MIXED),
+    set: (v) => { node._corners = [v, v, v, v]; },
+  });
+  if (!RECTANGLE_CORNER_TYPES.includes(type)) return;
+  CORNER_PROPS.forEach((prop, i) => {
+    Object.defineProperty(node, prop, {
+      configurable: true,
+      enumerable: true,
+      get: () => node._corners[i],
+      set: (v) => { const next = node._corners.slice(); next[i] = v; node._corners = next; },
+    });
+  });
+}
+
 class Node {
   constructor(type) {
     this.id = nextId();
@@ -94,7 +123,7 @@ class Node {
     this.strokes = [];
     this.strokeWeight = 1;
     this.strokeAlign = "INSIDE";
-    this.cornerRadius = 0;
+    installCornerRadii(this, type);
     this.opacity = 1;
     // Every live SceneNode (bar SLICE) carries a blendMode; the appliers' `"blendMode" in node`
     // guards key off its presence, so the mock must declare it like the live API does.
@@ -828,7 +857,7 @@ class Node {
 
 // The sublayer fields the mock treats as OVERRIDABLE — what a swap carries across when the incoming
 // component has a same-named layer. `name` is deliberately absent: it is the matching key.
-const OVERRIDDEN_FIELDS = ["characters", "visible", "opacity", "rotation", "cornerRadius", "strokeWeight",
+const OVERRIDDEN_FIELDS = ["characters", "visible", "opacity", "rotation", "_corners", "strokeWeight",
   "fontSize", "fills", "strokes", "effects"];
 
 // Who holds a component's property definitions: the set for a variant, else the component itself.
@@ -909,7 +938,7 @@ function writeBoundProperty(instance, full, def, value) {
 const MIRRORED_FIELDS = ["name", "layoutMode", "itemSpacing", "paddingTop", "paddingRight", "paddingBottom",
   "paddingLeft", "primaryAxisAlignItems", "counterAxisAlignItems", "primaryAxisSizingMode",
   "counterAxisSizingMode", "layoutGrow", "layoutAlign", "layoutPositioning", "strokeWeight", "strokeAlign",
-  "cornerRadius", "opacity", "visible", "rotation", "_characters", "fontSize", "textAutoResize",
+  "_corners", "opacity", "visible", "rotation", "_characters", "fontSize", "textAutoResize",
   "fills", "strokes", "effects", "clipsContent", "_fixedW", "_fixedH"];
 
 function trackInstanceNode(mainNode, instanceNode) {

@@ -247,7 +247,11 @@ const APPEARANCE_FIELDS = {
     'Which side of the edge. Default "inside".',
     '"inside" | "outside" | "center"',
   ),
-  borderRadius: metric("Corner radius. Frames and rectangles only."),
+  borderRadius: prop(
+    z.union([z.number(), z.string()]),
+    'Corner radius. Frames and rectangles only. Also takes the CSS border-radius shorthand, clockwise from the top-left — "12px 12px 0px 0px" rounds the top two corners; two values are TL/BR then TR/BL, three are TL, TR/BL, BR. Figma corners are circular, so the elliptical "x / y" form throws.',
+    'number | "Npx" | CSS shorthand',
+  ),
   effects: prop(z.custom<EffectsInput>(), 'Shadows / blur: flcm.effects({...}) or a CSS-string bag. "none" removes all effects.', "effects value"),
   rotation: degrees("Rotation in degrees. Composes AFTER layout sizing: the parent sizes the node (fill/hug/px) on its own axes first, and the node then spins about its centre — so rotating changes which way the box points, never the size it was given."),
 };

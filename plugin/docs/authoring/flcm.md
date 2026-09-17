@@ -78,7 +78,7 @@ REST does not request geometry=paths, so its decoded readOnlySource cannot suppl
 ### Rules that hold everywhere
 
 - Return ids and handles, never live Figma nodes.
-- Every metric (`width`, `height`, `gap`, `padding`, `borderRadius`, `strokeWidth`, `left`/`top`) takes a number or `"Npx"`; `width`/`height`/`left`/`top` also take `"N%"`, and `width`/`height` take `"fill"`/`"hug"`. Colors, gradients and shadows are CSS strings.
+- Every metric (`width`, `height`, `gap`, `padding`, `borderRadius`, `strokeWidth`, `left`/`top`) takes a number or `"Npx"`; `width`/`height`/`left`/`top` also take `"N%"`, `width`/`height` take `"fill"`/`"hug"`, and `borderRadius` also takes the CSS shorthand (`"12px 12px 0px 0px"`). Colors, gradients and shadows are CSS strings.
 - Out-of-subset CSS fails loud.
 
 ## The verbs
@@ -256,7 +256,7 @@ Budget fixed widths together with padding and gaps; use `"fill"` for the remaini
 | `stroke` | paint \| paint[] | Border paint, or a stack of them. "none" removes it. |
 | `strokeWidth` | number \| "Npx" | Border thickness. |
 | `strokeAlign` | "inside" \| "outside" \| "center" | Which side of the edge. Default "inside". |
-| `borderRadius` | number \| "Npx" | Corner radius. Frames and rectangles only. |
+| `borderRadius` | number \| "Npx" \| CSS shorthand | Corner radius. Frames and rectangles only. Also takes the CSS border-radius shorthand, clockwise from the top-left — "12px 12px 0px 0px" rounds the top two corners; two values are TL/BR then TR/BL, three are TL, TR/BL, BR. Figma corners are circular, so the elliptical "x / y" form throws. |
 | `effects` | effects value | Shadows / blur: flcm.effects({...}) or a CSS-string bag. "none" removes all effects. |
 | `rotation` | number (deg) | Rotation in degrees. Composes AFTER layout sizing: the parent sizes the node (fill/hug/px) on its own axes first, and the node then spins about its centre — so rotating changes which way the box points, never the size it was given. |
 | `layout` | { mode?, gridTemplateColumns?, gridTemplateRows?, gap?, wrap?, padding?, justifyContent?, alignItems?, gridColumn?, gridRow?, justifySelf?, alignSelf?, zIndex? } | Own container settings plus placement under the parent. Creating a grid requires gridTemplateColumns; rows are implicit hug tracks unless named. |
@@ -369,7 +369,7 @@ Each styled run's delta fields:
 | `stroke` | paint \| paint[] | Border paint, or a stack of them. "none" removes it. |
 | `strokeWidth` | number \| "Npx" | Border thickness. |
 | `strokeAlign` | "inside" \| "outside" \| "center" | Which side of the edge. Default "inside". |
-| `borderRadius` | number \| "Npx" | Corner radius. Frames and rectangles only. |
+| `borderRadius` | number \| "Npx" \| CSS shorthand | Corner radius. Frames and rectangles only. Also takes the CSS border-radius shorthand, clockwise from the top-left — "12px 12px 0px 0px" rounds the top two corners; two values are TL/BR then TR/BL, three are TL, TR/BL, BR. Figma corners are circular, so the elliptical "x / y" form throws. |
 | `effects` | effects value | Shadows / blur: flcm.effects({...}) or a CSS-string bag. "none" removes all effects. |
 | `rotation` | number (deg) | Rotation in degrees. Composes AFTER layout sizing: the parent sizes the node (fill/hug/px) on its own axes first, and the node then spins about its centre — so rotating changes which way the box points, never the size it was given. |
 
@@ -573,7 +573,7 @@ Blur values are written in **CSS px** — you always write the CSS number and we
 | `stroke` | paint \| paint[] | Border paint, or a stack of them. "none" removes it. |
 | `strokeWidth` | number \| "Npx" | Border thickness. |
 | `strokeAlign` | "inside" \| "outside" \| "center" | Which side of the edge. Default "inside". |
-| `borderRadius` | number \| "Npx" | Corner radius. Frames and rectangles only. |
+| `borderRadius` | number \| "Npx" \| CSS shorthand | Corner radius. Frames and rectangles only. Also takes the CSS border-radius shorthand, clockwise from the top-left — "12px 12px 0px 0px" rounds the top two corners; two values are TL/BR then TR/BL, three are TL, TR/BL, BR. Figma corners are circular, so the elliptical "x / y" form throws. |
 | `effects` | effects value | Shadows / blur: flcm.effects({...}) or a CSS-string bag. "none" removes all effects. |
 | `rotation` | number (deg) | Rotation in degrees. Composes AFTER layout sizing: the parent sizes the node (fill/hug/px) on its own axes first, and the node then spins about its centre — so rotating changes which way the box points, never the size it was given. |
 | `clip` | boolean | Clip children to the frame's bounds. Default false, like CSS overflow: visible. |
@@ -933,7 +933,8 @@ When you pass effects as CSS strings (`effects: { … }`):
 
 | Where | Accepts |
 | --- | --- |
-| `layout.gap`, `strokeWidth`, `borderRadius` | number or `"Npx"` |
+| `layout.gap`, `strokeWidth` | number or `"Npx"` |
+| `borderRadius` | number, `"Npx"`, or the CSS `border-radius` shorthand (`"12px 12px 0px 0px"` = TL, TR, BR, BL) — what a `get` hands back for a mixed-corner node |
 | `layout.padding` (and its `x`/`y`/`top`/…) | **numbers only** (not `"px"` strings) |
 | `width`, `height` | a **number** (fixed px), `"N%"` (percent of the parent's realized size — see Percent sizing), or `"fill"` / `"hug"` |
 | `left`/`top` | a number (px) or `"N%"` (percent of the parent axis); `anchor` sets which point of the node lands there. Naming either lifts a child out of an auto-layout flow |

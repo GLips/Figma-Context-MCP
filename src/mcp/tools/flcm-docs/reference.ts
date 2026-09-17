@@ -182,8 +182,9 @@ const SECTIONS: Section[] = [
       `${MENTAL_MODEL}\n\n### Rules that hold everywhere\n\n` +
       "- Return ids and handles, never live Figma nodes.\n" +
       "- Every metric (`width`, `height`, `gap`, `padding`, `borderRadius`, `strokeWidth`, `left`/`top`) " +
-      'takes a number or `"Npx"`; `width`/`height`/`left`/`top` also take `"N%"`, and `width`/`height` take ' +
-      '`"fill"`/`"hug"`. Colors, gradients and shadows are CSS strings.\n' +
+      'takes a number or `"Npx"`; `width`/`height`/`left`/`top` also take `"N%"`, `width`/`height` take ' +
+      '`"fill"`/`"hug"`, and `borderRadius` also takes the CSS shorthand (`"12px 12px 0px 0px"`). ' +
+      "Colors, gradients and shadows are CSS strings.\n" +
       "- Out-of-subset CSS fails loud.",
   },
   {

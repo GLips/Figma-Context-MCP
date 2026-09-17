@@ -246,6 +246,10 @@ export type Justify = "start" | "center" | "end" | "between";
 export type Align = "start" | "center" | "end" | "stretch" | "baseline";
 export type Sizing = "fixed" | "fill" | "hug";
 export interface Edges { top: number; right: number; bottom: number; left: number }
+// Corner radii in Figma's own corner order (its four per-corner properties), which is also CSS's
+// 4-value border-radius order. A uniform radius is four equal values, never a separate shape — one
+// case for the bridge to apply and one for a round-trip to compare.
+export interface CornerRadii { topLeft: number; topRight: number; bottomRight: number; bottomLeft: number }
 
 // ---- Constraint override (author `pin`). Directional per axis so the axis is unambiguous at the boundary
 // (x names an edge on the horizontal axis, y on the vertical); the bridge maps each to Figma's per-axis
@@ -365,7 +369,7 @@ export interface WriteProps {
   effects?: WriteEffect[];
   opacity?: number;
   blendMode?: WriteBlendMode; // author `blend` (CSS mix-blend-mode → Figma BlendMode); applied in buildNode (shared: every node has one)
-  borderRadius?: number;
+  borderRadius?: CornerRadii;
   clip?: boolean;     // clipsContent
   rotation?: number;  // degrees (write-add; read does not surface it)
   // On every SceneNode, like blendMode — part of the shared vocabulary edit allows even on node

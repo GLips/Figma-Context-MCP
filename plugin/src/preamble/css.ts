@@ -9,7 +9,7 @@
 
 import {
   WritePaint, WriteImageHash, ImageScaleMode, GradientType, GradientStop, Rgba,
-  WriteEffect, WriteLineHeight, WriteLetterSpacing, Edges,
+  WriteEffect, WriteLineHeight, WriteLetterSpacing, Edges, CornerRadii,
   FillLeaf, WriteGradientFill, WriteCssEffects, WriteBlendMode,
 } from "./ir.js";
 import { solid, linearGradient, radialGradient } from "./paint.js";
@@ -341,6 +341,36 @@ export function boxShorthand(value: string, field: string): Edges {
   const top = n[0];
   const right = n.length > 1 ? n[1] : top;
   return { top, right, bottom: n.length > 2 ? n[2] : top, left: n.length > 3 ? n[3] : right };
+}
+
+// A CSS `border-radius` leaf (a number, "Npx", or a 1–4 value shorthand) -> the four corners, following
+// CSS's own fill-in rules: 1 = every corner; 2 = TL/BR then TR/BL; 3 = TL, TR/BL, BR; 4 = TL, TR, BR, BL,
+// clockwise from the top-left. That 4-value order IS Figma's per-corner order, so the mapping is
+// positional. The READ shape spells a mixed-corner node exactly this way ("8px 8px 0px 0px", per
+// simplify.ts's rectangleCornerRadii branch), so this decode is what lets a `get` result re-author.
+// Each value rides `length`, so a non-px unit fails loud there rather than coercing to wrong pixels.
+export function cornerRadii(value: number | string, field: string): CornerRadii {
+  if (typeof value === "number") return { topLeft: value, topRight: value, bottomRight: value, bottomLeft: value };
+  const raw = String(value).trim();
+  // Negative space: Figma corners are circular — there is no vertical corner radius to carry the
+  // second half of an elliptical `x / y` shorthand, so it rejects instead of silently dropping it.
+  if (raw.indexOf("/") !== -1) {
+    throw new Error(
+      "flcm: " + field + " is " + JSON.stringify(value) +
+        ' — Figma corners are circular, so the elliptical "horizontal / vertical" border-radius form has no equivalent. Give one radius per corner.',
+    );
+  }
+  const parts = raw.split(/\s+/).filter((p) => p.length);
+  if (!parts.length || parts.length > 4) {
+    throw new Error(
+      "flcm: " + field + ' must be a number, "Npx", or a CSS border-radius shorthand of 1–4 values (e.g. "8px 8px 0px 0px") — got ' +
+        JSON.stringify(value) + ".",
+    );
+  }
+  const n = parts.map((p) => length(p));
+  const topLeft = n[0];
+  const topRight = n.length > 1 ? n[1] : topLeft;
+  return { topLeft, topRight, bottomRight: n.length > 2 ? n[2] : topLeft, bottomLeft: n.length > 3 ? n[3] : topRight };
 }
 
 // A "N%" size/position leaf. Percent has no CSS→Figma string parse (it resolves against the parent at

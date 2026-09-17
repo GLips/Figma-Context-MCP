@@ -26,7 +26,7 @@ import { resizeWithDiagnostics, trackSizing } from "./sizing-diagnostics.js";
 // noise without safety.
 
 import { applyAnnotations } from "./annotation-categories.js";
-import { WriteType, WriteNode, WriteProps, WriteLayout, TextAlign, TextDecoration, Sizing, Identity, Handle, WritePaint, WritePaintStack, WriteImage, WriteImageUrl, ComponentPropertyBinding, namesFontIdentity } from "./ir.js";
+import { WriteType, WriteNode, WriteProps, WriteLayout, TextAlign, TextDecoration, Sizing, Identity, Handle, WritePaint, WritePaintStack, WriteImage, WriteImageUrl, ComponentPropertyBinding, CornerRadii, namesFontIdentity } from "./ir.js";
 import { own } from "./validate.js";
 import {
   assertLayoutRealizableForType, assertGridSizing, assertPercentResolvable, assertSizingResolvesAgainstParentFrame, ParentFlowFacts,
@@ -251,12 +251,31 @@ export function applyPaint(node: any, wn: WriteProps, ctx: RenderResources): voi
   if (wn.strokes) node.strokes = toFigmaPaintStack(wn.strokes, ctx);
   if (wn.strokeWeight != null && "strokeWeight" in node) node.strokeWeight = wn.strokeWeight;
   if (wn.strokeAlign != null && "strokeAlign" in node) node.strokeAlign = wn.strokeAlign;
-  if (wn.borderRadius != null && "cornerRadius" in node) node.cornerRadius = wn.borderRadius;
+  if (wn.borderRadius) applyCornerRadii(node, wn.borderRadius);
   if (wn.effects && "effects" in node) node.effects = toFigmaEffects(wn.effects);
   // The `in` guard matters for edit targets: a SliceNode carries no MinimalBlendMixin at all.
   if (typeof wn.opacity === "number" && "opacity" in node) node.opacity = wn.opacity;
   if (typeof wn.clip === "boolean" && "clipsContent" in node) node.clipsContent = wn.clip;
   stampImageData(node, wn);
+}
+
+// Figma splits one concept over two APIs: `cornerRadius` writes all four at once (and READS back as
+// figma.mixed once they differ), while the four per-corner properties are the only route to differing
+// corners — RectangleCornerMixin, which every type flcm lets carry a radius has. Uniform still goes
+// through `cornerRadius` so a corner-bearing node outside that mixin (POLYGON, STAR, VECTOR) keeps
+// working if the edit vocabulary ever widens to it.
+function applyCornerRadii(node: any, r: CornerRadii): void {
+  if (r.topLeft === r.topRight && r.topRight === r.bottomRight && r.bottomRight === r.bottomLeft) {
+    if ("cornerRadius" in node) node.cornerRadius = r.topLeft;
+    return;
+  }
+  if (!("topLeftRadius" in node)) {
+    throw new Error("flcm: a " + node.type + " has one radius for all four corners — per-corner borderRadius has no equivalent on it.");
+  }
+  node.topLeftRadius = r.topLeft;
+  node.topRightRadius = r.topRight;
+  node.bottomRightRadius = r.bottomRight;
+  node.bottomLeftRadius = r.bottomLeft;
 }
 
 function applyContainer(node: any, layout: WriteLayout): void {

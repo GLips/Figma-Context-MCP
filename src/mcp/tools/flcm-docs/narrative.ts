@@ -325,7 +325,8 @@ When you pass effects as CSS strings (\`effects: { … }\`):
 
 | Where | Accepts |
 | --- | --- |
-| \`layout.gap\`, \`strokeWidth\`, \`borderRadius\` | number or \`"Npx"\` |
+| \`layout.gap\`, \`strokeWidth\` | number or \`"Npx"\` |
+| \`borderRadius\` | number, \`"Npx"\`, or the CSS \`border-radius\` shorthand (\`"12px 12px 0px 0px"\` = TL, TR, BR, BL) — what a \`get\` hands back for a mixed-corner node |
 | \`layout.padding\` (and its \`x\`/\`y\`/\`top\`/…) | **numbers only** (not \`"px"\` strings) |
 | \`width\`, \`height\` | a **number** (fixed px), \`"N%"\` (percent of the parent's realized size — see Percent sizing), or \`"fill"\` / \`"hug"\` |
 | \`left\`/\`top\` | a number (px) or \`"N%"\` (percent of the parent axis); \`anchor\` sets which point of the node lands there. Naming either lifts a child out of an auto-layout flow |
