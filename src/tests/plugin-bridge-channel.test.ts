@@ -405,6 +405,27 @@ it.each(["root", "nested"])(
   },
 );
 
+// Strictness here is the contract, not an oversight: JSON.stringify would quietly drop `undefined`
+// and coerce NaN to null, so a capability could ship a field the plugin never sees. Refusing the
+// whole envelope is louder, and SERIALIZATION_FAILED still carries string code and message.
+it.each([
+  ["undefined field", { details: undefined }],
+  ["non-finite number", { attempts: NaN }],
+  ["enumerable nested Error", { cause: new Error("inner") }],
+])("failure refuses a %s rather than silently dropping it", async (_label, extra) => {
+  const h = await running(async () => {
+    throw { code: "CUSTOM", message: "keep me", ...extra };
+  });
+  h.request("unrepresentable");
+  await new Promise((resolve) => setImmediate(resolve));
+  expect(h.socket.frames.at(-1)).toMatchObject({
+    ok: false,
+    error: { code: "SERIALIZATION_FAILED" },
+  });
+  h.bridge.stop();
+  await h.result;
+});
+
 it("failure snapshots shared nested getters once and preserves JSON fields named toJSON", async () => {
   let reads = 0;
   const shared = {
