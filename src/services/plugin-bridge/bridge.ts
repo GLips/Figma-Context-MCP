@@ -524,7 +524,10 @@ export class PluginBridge {
         if (this.socket === socket) this.socketAlive = true;
       });
       socket.on("message", (data) => this.handleMessage(socket, data.toString()));
-      socket.on("close", () => {
+      let disconnected = false;
+      const disconnect = (): void => {
+        if (disconnected) return;
+        disconnected = true;
         // A socket displaced by slot-reclaim is no longer current — this.socket already
         // points at the newcomer, whose fresh handshake requests are queued synchronously
         // by onConnect. terminate()'s close fires a tick LATER, so failing pending here
@@ -557,6 +560,13 @@ export class PluginBridge {
         // rather than holding its caller for a round trip that cannot complete.
         this.failCancelAnswers(socket);
         Logger.log("Plugin disconnected from WS bridge");
+      };
+      socket.on("close", disconnect);
+      // Receiver errors (including maxPayload rejection) belong to the accepted socket, not wss.
+      // Settle its runs now, then terminate; the ensuing close uses the same idempotent cleanup.
+      socket.on("error", () => {
+        disconnect();
+        socket.terminate();
       });
 
       if (stale) {

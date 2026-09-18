@@ -23,8 +23,9 @@ connection envelope without interpreting them. Keep capability-specific fields o
 
 Failures use an open JSON object with string `code` and `message`, optional JSON `details`, and
 capability-owned JSON extension fields. Object throws retain their fields; ordinary throws receive
-`COMPUTATION_FAILED`. Error instances retain their message and enumerable custom fields. Invalid
-JSON output produces `SERIALIZATION_FAILED`. Transport refusals have their own codes, such as
+`COMPUTATION_FAILED`. Error instances retain their message and enumerable custom fields. Failure
+properties are read once and copied to plain JSON data before encoding. Cycles, non-JSON fields,
+and callable serialization hooks produce `SERIALIZATION_FAILED`; hooks are never invoked. Transport refusals have their own codes, such as
 `UNKNOWN_CAPABILITY`, `INVALID_INPUT`, `RUN_INACTIVE`, and `CANCELLED`; these are examples, not a
 closed catalogue. Binary data uses base64 strings.
 

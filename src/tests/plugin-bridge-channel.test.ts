@@ -205,7 +205,7 @@ it("contains malformed envelope and synchronous dispatch failures at the message
   await h.result;
 });
 
-it.each(["cancel", "complete", "disconnect"])(
+it.each(["cancel", "complete", "shutdown"])(
   "%s aborts handler work and retains accounting until cleanup settles",
   async (end) => {
     let release!: () => void;
@@ -235,7 +235,7 @@ it.each(["cancel", "complete", "disconnect"])(
     expect(signalSeen?.aborted).toBe(false);
     if (end === "complete")
       receive(h.bridge, h.socket, { type: "EXECUTE_CODE_RESULT", id: h.runId });
-    else if (end === "disconnect") h.bridge.stop();
+    else if (end === "shutdown") h.bridge.stop();
     else {
       Reflect.apply(Reflect.get(h.bridge, "cancelPending"), h.bridge, [
         h.runId,
@@ -359,3 +359,77 @@ it.each([false, true])(
     await h.result;
   },
 );
+
+it.each(["code", "message"])(
+  "failure %s getter is snapshotted once before validation",
+  async (field) => {
+    let reads = 0;
+    const failure = { code: "CUSTOM", message: "keep me" };
+    Object.defineProperty(failure, field, {
+      enumerable: true,
+      get: () => (++reads <= 2 ? "snapshot" : 42),
+    });
+    const h = await running(async () => {
+      throw failure;
+    });
+    h.request("getter");
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(h.socket.frames.at(-1)).toMatchObject({ ok: false, error: { [field]: "snapshot" } });
+    expect(reads).toBe(1);
+    h.bridge.stop();
+    await h.result;
+  },
+);
+
+it.each(["root", "nested"])(
+  "failure rejects %s serialization hooks without invoking them",
+  async (location) => {
+    const hook = vi.fn(() => ({ lost: true }));
+    const failure = {
+      code: "CUSTOM",
+      message: "keep me",
+      ...(location === "root" ? { toJSON: hook } : { details: { toJSON: hook } }),
+    };
+    const h = await running(async () => {
+      throw failure;
+    });
+    h.request("hook");
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(h.socket.frames.at(-1)).toMatchObject({
+      ok: false,
+      error: { code: "SERIALIZATION_FAILED" },
+    });
+    expect(hook).not.toHaveBeenCalled();
+    h.bridge.stop();
+    await h.result;
+  },
+);
+
+it("failure snapshots shared nested getters once and preserves JSON fields named toJSON", async () => {
+  let reads = 0;
+  const shared = {
+    get value() {
+      reads++;
+      return [null, true, { toJSON: "data" }];
+    },
+  };
+  const h = await running(async () => {
+    throw { code: "CUSTOM", message: "keep me", details: [shared, shared] };
+  });
+  h.request("shared");
+  await new Promise((resolve) => setImmediate(resolve));
+  expect(h.socket.frames.at(-1)).toMatchObject({
+    ok: false,
+    error: {
+      code: "CUSTOM",
+      message: "keep me",
+      details: [
+        { value: [null, true, { toJSON: "data" }] },
+        { value: [null, true, { toJSON: "data" }] },
+      ],
+    },
+  });
+  expect(reads).toBe(1);
+  h.bridge.stop();
+  await h.result;
+});
