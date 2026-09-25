@@ -1,3 +1,7 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
 // SVG path normalization for VECTOR.
 //
 // Why this exists: Figma's `vectorPaths` parser accepts ONLY the `M L C Q Z` subset in *absolute* form.

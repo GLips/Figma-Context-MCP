@@ -11,8 +11,8 @@
   <a href="https://npmcharts.com/compare/figma-developer-mcp?interval=30">
     <img alt="weekly downloads" src="https://img.shields.io/npm/dm/figma-developer-mcp.svg">
   </a>
-  <a href="https://github.com/GLips/Figma-Context-MCP/blob/main/LICENSE">
-    <img alt="MIT License" src="https://img.shields.io/github/license/GLips/Figma-Context-MCP" />
+  <a href="./LICENSING.md">
+    <img alt="Licensing details" src="https://img.shields.io/badge/license-see%20licensing%20details-blue" />
   </a>
   <a href="https://framelink.ai/discord">
     <img alt="Discord" src="https://img.shields.io/discord/1352337336913887343?color=7389D8&label&logo=discord&logoColor=ffffff" />
@@ -85,6 +85,15 @@ The `figma-developer-mcp` server can be configured by adding the following to yo
 Or you can set `FIGMA_API_KEY` and `PORT` in the `env` field.
 
 If you need more information on how to configure the Framelink MCP for Figma, see the [Framelink docs](https://www.framelink.ai/docs/quickstart?utm_source=github&utm_medium=referral&utm_campaign=readme).
+
+## Licensing proposal
+
+Reads and the shared read transform stay MIT. The write path ("code mode") is
+source-available under a commercial license, in the same npm package.
+
+The [draft license](LICENSING.md) permits commercial free-allowance use without
+signup and unlimited writes for paid seats. It is not yet effective and has not
+been reviewed by a lawyer.
 
 ## Star History
 

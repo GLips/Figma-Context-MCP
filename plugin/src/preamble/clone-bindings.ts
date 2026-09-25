@@ -1,3 +1,7 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
 // Native variant-member cloning drops bindings before placement. Capture ownership and structural
 // paths before that boundary; definition display names are never used as identity.
 type Path = number[];

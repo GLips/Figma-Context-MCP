@@ -1,3 +1,7 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
 // The two bindings handed to agent code. Session initialization is pure; only its lifetime needs a host.
 import { hostSession } from "./host.js";
 import { createSession } from "./session.js";

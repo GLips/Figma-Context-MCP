@@ -1,3 +1,7 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
 import { looksLikeNode } from "../serialize.js";
 import type { WarningRecord } from "@framelink/core";
 export type { WarningRecord } from "@framelink/core";

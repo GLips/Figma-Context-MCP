@@ -1,3 +1,7 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
 // Port-free contract check for the PluginBridge's frozen envelope + connection
 // hardening (Phase 1, Slice 1.1). Drives the REAL bridge against a fake "plugin"
 // WS client that mirrors code.ts's reply contract, asserting the load-bearing
@@ -84,11 +88,11 @@ import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { PluginBridge } from "../src/services/plugin-bridge/bridge.ts";
-import { ApprovalStore } from "../src/services/plugin-bridge/approval-store.ts";
-import { MIN_PROTOCOL_VERSION } from "../src/services/plugin-bridge/version.ts";
-import { SESSION_IDENTITY } from "../src/services/plugin-bridge/approval.ts";
-import { WS_PORT_BLOCK } from "../src/services/plugin-bridge/ports.ts";
+import { PluginBridge } from "../src/commercial/plugin-bridge/bridge.ts";
+import { ApprovalStore } from "../src/commercial/plugin-bridge/approval-store.ts";
+import { MIN_PROTOCOL_VERSION } from "../src/commercial/plugin-bridge/version.ts";
+import { SESSION_IDENTITY } from "../src/commercial/plugin-bridge/approval.ts";
+import { WS_PORT_BLOCK } from "../src/commercial/plugin-bridge/ports.ts";
 
 const PORT = 19876;
 const URL = `ws://127.0.0.1:${PORT}`;

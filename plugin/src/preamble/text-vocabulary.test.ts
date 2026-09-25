@@ -1,3 +1,7 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
 // The text words that closed the read↔write seam (Phase 5.1): casing, vertical alignment, paragraph
 // metrics and whole-node links were readable but not authorable, so a `get` result could not be spread
 // back into an edit or rebuilt through the compilers. Two concerns pinned here — that each word actually LANDS

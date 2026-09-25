@@ -1,3 +1,7 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
 // The stacking papercut this exists for: two renders with no `left`/`top` both land at the page
 // origin, and the agent — holding a handle, not a canvas — sees two identical successes. What must
 // not regress is that the SECOND render says so, and that a root landing clear stays silent.

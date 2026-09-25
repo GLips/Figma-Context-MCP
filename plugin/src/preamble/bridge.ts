@@ -1,3 +1,7 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
 import { warnings } from "./warnings.js";
 import { LAYOUT_MODES, layoutModeOf, effectiveLayoutMode, childLayout } from "./layout-mode.js";
 import { behaviorForMode, layoutBehavior, applySiblingOrder, growImplicitGridRows } from "./layout-native.js";

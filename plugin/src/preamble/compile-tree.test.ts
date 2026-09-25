@@ -1,3 +1,7 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
 // The authoring boundary's one compile. What must not regress silently: an instance's inherited
 // children are an ECHO — they cannot be re-parented, and the compile drops them, which is what
 // preserves the live sublayers. A word CHANGED on one is a real edit, so it must survive that drop:

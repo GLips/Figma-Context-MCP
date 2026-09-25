@@ -1,3 +1,7 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
 import type { WriteLayout } from "./ir.js";
 import { normalizeChildLayoutAliases } from "./input-aliases.js";
 

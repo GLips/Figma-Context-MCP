@@ -27,6 +27,6 @@
       "ws://localhost:9890",
       "ws://localhost:9891"
     ],
-    "reasoning": "Dev-mode only: connects to the local Framelink MCP server over WebSocket on a loopback port block (each session probe-binds the first free port; must mirror WS_PORT_BLOCK in src/services/plugin-bridge/ports.ts). Figma has no port wildcard, so every port is enumerated; the validator rejects raw IPs, so entries use `localhost`. No production network access."
+    "reasoning": "Dev-mode only: connects to the local Framelink MCP server over WebSocket on a loopback port block (each session probe-binds the first free port; must mirror WS_PORT_BLOCK in src/commercial/plugin-bridge/ports.ts). Figma has no port wildcard, so every port is enumerated; the validator rejects raw IPs, so entries use `localhost`. No production network access."
   }
 }

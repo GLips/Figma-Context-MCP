@@ -1,3 +1,7 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
 // Live LINE-fill probe. Run `pnpm probe:line-fill`, open Framelink in a scratch Figma file,
 // then approve the pairing code. Import plugin/manifest.json after `pnpm build:plugin` if needed.
 // The preamble is built from this checkout, so preamble changes need no plugin re-import.
@@ -10,11 +14,11 @@
 // parent — where no flow supplies a length — still refuses, as does a rotation (the fill resolves
 // along the parent's own axis first, so a rotated line is a length across it that nobody asked for).
 
-import { PluginBridge } from "../src/services/plugin-bridge/bridge.ts";
-import { WS_PORT_BLOCK } from "../src/services/plugin-bridge/ports.ts";
-import { SESSION_IDENTITY } from "../src/services/plugin-bridge/approval.ts";
-import { requestUntilApproved } from "../src/services/plugin-bridge/await-approval.ts";
-import { MIN_PROTOCOL_VERSION } from "../src/services/plugin-bridge/version.ts";
+import { PluginBridge } from "../src/commercial/plugin-bridge/bridge.ts";
+import { WS_PORT_BLOCK } from "../src/commercial/plugin-bridge/ports.ts";
+import { SESSION_IDENTITY } from "../src/commercial/plugin-bridge/approval.ts";
+import { requestUntilApproved } from "../src/commercial/plugin-bridge/await-approval.ts";
+import { MIN_PROTOCOL_VERSION } from "../src/commercial/plugin-bridge/version.ts";
 import { buildSandboxPreamble } from "../plugin/src/preamble/index.mjs";
 
 // The real plugin holds no runtime of its own (ADR-0010), so the probe ships the actual std-lib

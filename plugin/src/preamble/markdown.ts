@@ -1,3 +1,7 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
 // markdown — the WRITE-edge inverse of figma-mcp read's `escapeMarkdown` + `renderRunMarkdown`
 // (@framelink/core's transformers/text.ts), pinned by the shared spec's "Markdown leaf format"
 // section (canonical-vocabulary.md). A plain authored string is decoded (escapes → literal chars,

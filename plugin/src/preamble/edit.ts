@@ -1,3 +1,7 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
 import { compileDeltaTrees } from "./compile-tree.js";
 // edit — the mutate verb itself. Everything it drives lives elsewhere: the staged pipeline in
 // edit-plan.ts (see that module's header for the stages and why their order is the contract), the

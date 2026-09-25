@@ -1,3 +1,7 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
 // LIVE PROBE for protocol 2's load-bearing runtime assumption (flcm edit surface, Phase 1 step
 // zero) — a standing runbook, not a one-shot: re-run it whenever the eval wrapper, the preamble's
 // image await, or the plugin's WS dispatch changes shape, since no headless harness can answer this.
@@ -25,11 +29,11 @@
 // run FAILS on the suspension assert, whatever changed the eval wrapper / image await / WS
 // dispatch broke the suspension the whole protocol rests on — that change must be revisited.
 
-import { PluginBridge } from "../src/services/plugin-bridge/bridge.ts";
-import { WS_PORT_BLOCK } from "../src/services/plugin-bridge/ports.ts";
-import { SESSION_IDENTITY } from "../src/services/plugin-bridge/approval.ts";
-import { requestUntilApproved } from "../src/services/plugin-bridge/await-approval.ts";
-import { MIN_PROTOCOL_VERSION } from "../src/services/plugin-bridge/version.ts";
+import { PluginBridge } from "../src/commercial/plugin-bridge/bridge.ts";
+import { WS_PORT_BLOCK } from "../src/commercial/plugin-bridge/ports.ts";
+import { SESSION_IDENTITY } from "../src/commercial/plugin-bridge/approval.ts";
+import { requestUntilApproved } from "../src/commercial/plugin-bridge/await-approval.ts";
+import { MIN_PROTOCOL_VERSION } from "../src/commercial/plugin-bridge/version.ts";
 import { buildSandboxPreamble } from "../plugin/src/preamble/index.mjs";
 
 // These probes drive a REAL plugin, which holds no runtime of its own (ADR-0010) — so they must

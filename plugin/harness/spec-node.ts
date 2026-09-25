@@ -1,3 +1,7 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
 import type { NodeSpec } from "../src/preamble/schema.js";
 
 /** Locate a keyed node in a verb's returned data, including instance slot content. */

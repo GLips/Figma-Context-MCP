@@ -1,3 +1,7 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
 /** Native scene access for the preamble. Raw agent `figma` is never replaced.
  *
  * Figma can retain stale instance-child handles after slot placement. Its indexed

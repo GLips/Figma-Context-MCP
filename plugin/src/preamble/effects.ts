@@ -1,3 +1,7 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
 // effects — the typed effect domain: build an WriteEffect from numeric inputs and map it to a plugin
 // Effect[]. No CSS strings live here (css.ts owns those). Shared by two callers: the string parser
 // (css.ts) and the effects() sugar.

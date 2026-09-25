@@ -1,3 +1,7 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
 import { warnings } from "./warnings.js";
 // The host↔preamble interface — everything the preamble needs from the plugin that isn't `figma.*`.
 //

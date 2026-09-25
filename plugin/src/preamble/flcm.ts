@@ -1,3 +1,7 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
 import { FLOW_ALIGNMENT_GUIDANCE } from "./layout-mode.js";
 import { acceptAuthoringProps } from "./authoring-input.js";
 import { gridAliasKeys } from "./input-aliases.js";

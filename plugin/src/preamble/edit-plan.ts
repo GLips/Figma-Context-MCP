@@ -1,3 +1,7 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
 import { acceptAuthoringProps } from "./authoring-input.js";
 import { loadLiveTree, gateLiveTree, LoadedLiveTree } from "./live-tree.js";
 import { sceneFigma as figma } from "./scene-access.js";

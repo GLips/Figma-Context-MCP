@@ -1,3 +1,7 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
 import { warnings } from "./warnings.js";
 // One accumulator per synchronous mutation span. Diagnostics observe final geometry after all
 // entries, overrides and percent sizing settle; they never turn a successful write into a failure.

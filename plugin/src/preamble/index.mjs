@@ -1,3 +1,7 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
 // The flcm std-lib generator — the sole seam every consumer goes through. The SERVER build
 // (tsup.config.ts, which injects the result into the shipped bundle) and harness/dogfood.mjs each
 // call buildSandboxPreamble(); neither learns the fragment layout or order. The plugin no longer
@@ -93,7 +97,7 @@ export async function buildSandboxPreamble() {
 }
 
 /**
- * The preamble as a drop-in replacement for src/services/plugin-bridge/sandbox-preamble.ts, whose
+ * The preamble as a drop-in replacement for src/commercial/plugin-bridge/sandbox-preamble.ts, whose
  * on-disk body is a fail-loud placeholder. Both bundlers that inject it — tsup for the shipped
  * server, vite for the test run — go through here so the generated module's SHAPE lives in one
  * place; each config only knows its own hook API.

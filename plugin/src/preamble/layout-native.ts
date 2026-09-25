@@ -1,3 +1,7 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
 import { assertGridSizing } from "./layout-legality.js";
 import type { WriteLayout } from "./ir.js";
 import { AXES, LAYOUT_MODES, layoutModeOf, type LayoutMode, type Axis, type ChildLayout } from "./layout-mode.js";

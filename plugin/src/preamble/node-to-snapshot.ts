@@ -1,3 +1,7 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
 import { serializeGridTracks } from "./grid-tracks.js";
 // node-to-snapshot — the plugin adapter to `NodeSnapshot` (Invariant 2), the counterpart of the REST
 // adapter (src/adapters/rest/node-to-snapshot.ts). It decodes plugin-native forms DIRECTLY onto the

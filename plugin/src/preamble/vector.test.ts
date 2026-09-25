@@ -1,3 +1,7 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
 // The mock models SVG imports as frames of vectors (with a nested group, and colors baked into every
 // vector) and path data as a native vector whose box is its geometry's bounding box.
 import { test } from "node:test";

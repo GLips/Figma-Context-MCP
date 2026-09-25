@@ -5,8 +5,8 @@ import { authMode, type AuthMode, type ClientInfo, type Transport } from "~/tele
 import type { OutputFormat } from "~/utils/serialize.js";
 import { installValidationRejectCapture } from "./validation-capture.js";
 import type { ToolExtra } from "./progress.js";
-import type { PluginBridgeRuntime } from "~/services/plugin-bridge/index.js";
-import { registerCodeModeTools } from "./tools/code-mode-tools.js";
+import type { PluginBridgeRuntime } from "~/commercial/plugin-bridge/index.js";
+import { registerCodeModeTools } from "~/commercial/tools/code-mode-tools.js";
 import {
   downloadFigmaImagesTool,
   getFigmaDataTool,

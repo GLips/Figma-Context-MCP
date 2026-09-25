@@ -1,3 +1,7 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
 /**
  * Session values own their data. Copying on ingress closes the alias loophole: an agent cannot
  * retain an input object, attach a request-bound function later, and smuggle it into the store.

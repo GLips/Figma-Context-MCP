@@ -1,3 +1,7 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
 // Focused fail-loud tests for the metric/effect parsers (ADR-0003 code fixes). These are pure functions,
 // so we test them directly: each out-of-subset metric must THROW naming the value, never silently coerce.
 import { test } from "node:test";

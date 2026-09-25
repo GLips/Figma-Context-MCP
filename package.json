@@ -10,7 +10,11 @@
   },
   "files": [
     "dist",
-    "README.md"
+    "README.md",
+    "LICENSE",
+    "LICENSING.md",
+    "licensing/TERMS.md",
+    "licensing/LICENSE-Framelink-Commercial.md"
   ],
   "scripts": {
     "build": "tsup --dts",
@@ -25,6 +29,7 @@
     "format": "prettier --write \"src/**/*.ts\" \"core/**/*.ts\"",
     "format:check": "prettier --check \"src/**/*.ts\" \"core/**/*.ts\"",
     "scan-hidden-chars": "node scripts/scan-hidden-chars.mjs",
+    "check:license-headers": "node scripts/check-license-headers.mjs",
     "inspect": "pnpx @modelcontextprotocol/inspector",
     "benchmark:simplify": "tsx scripts/benchmark-simplify.ts",
     "prepack": "pnpm build && node scripts/verify-package-boundary.mjs --no-build",
@@ -41,7 +46,7 @@
     "probe:vector": "tsx scripts/probe-vector.mjs",
     "docs:gen": "tsx scripts/gen-flcm-doc.ts",
     "docs:check": "tsx scripts/gen-flcm-doc.ts check",
-    "validate": "pnpm scan-hidden-chars && pnpm format:check && pnpm lint && pnpm type-check && pnpm typecheck:core && pnpm typecheck:plugin && pnpm test && pnpm test:core && pnpm test:plugin && pnpm contract && pnpm build && pnpm build:plugin && pnpm docs:check",
+    "validate": "pnpm scan-hidden-chars && pnpm check:license-headers && pnpm format:check && pnpm lint && pnpm type-check && pnpm typecheck:core && pnpm typecheck:plugin && pnpm test && pnpm test:core && pnpm test:plugin && pnpm contract && pnpm build && pnpm build:plugin && pnpm docs:check",
     "payload-lab": "pnpm --filter @framelink/payload-lab dev",
     "test:payload-lab": "pnpm --filter @framelink/payload-lab test",
     "check:package": "node scripts/verify-package-boundary.mjs",
@@ -69,7 +74,7 @@
     "typescript"
   ],
   "author": "",
-  "license": "MIT",
+  "license": "SEE LICENSE IN LICENSING.md",
   "dependencies": {
     "@figma/rest-api-spec": "^0.42.0",
     "@jimp/core": "^1.6.0",

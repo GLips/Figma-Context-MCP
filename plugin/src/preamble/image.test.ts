@@ -1,3 +1,7 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
 // Images, sandbox side: flcm.image is a plain paint value; render() batches every image url into
 // ONE deduped mid-run request (protocol 2), awaits the bytes, and resolves each paint to a plugin
 // ImagePaint. The channel is FlcmHost.callServer, off the host-installed __flcmHost — in the live

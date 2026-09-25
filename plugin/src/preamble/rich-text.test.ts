@@ -1,3 +1,7 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
 // The mock records each setRange* call so we can assert which text spans receive styling.
 import { test } from "node:test";
 import assert from "node:assert/strict";

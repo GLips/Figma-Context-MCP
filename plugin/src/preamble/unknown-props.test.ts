@@ -1,3 +1,7 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
 import { render } from "./render.js";
 // Unknown-prop rejection (ratified decision 1): the authoring surface fails loud on an unknown prop —
 // at the verb, before it touches the canvas. Two

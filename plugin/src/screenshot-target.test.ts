@@ -1,3 +1,7 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
 // Screenshot target resolution: the whole-page default must fire ONLY when no target was passed —
 // never as a fallback from a key that matched nothing or several nodes. A silent page capture standing
 // in for a failed lookup is the exact bug this surface exists to close.

@@ -1,3 +1,7 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
 import { specNode } from "../../harness/spec-node.js";
 // flcm.editMany — the atomic batch. What must not regress silently: the SET validates before any
 // entry applies (a loop over `edit` can't do that, which is the whole reason this verb exists), a

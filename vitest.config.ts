@@ -5,7 +5,7 @@ import { buildSandboxPreambleModule } from "./plugin/src/preamble/index.mjs";
 
 const SANDBOX_PREAMBLE_MODULE = path.resolve(
   __dirname,
-  "src/services/plugin-bridge/sandbox-preamble.ts",
+  "src/commercial/plugin-bridge/sandbox-preamble.ts",
 );
 
 export default defineConfig({

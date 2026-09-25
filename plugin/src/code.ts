@@ -1,3 +1,7 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
 import { captureScreenshot, type CaptureOptions } from "./screenshot-capture.js";
 // Plugin sandbox entry. This is the only context where `figma.*` lives. It never
 // touches the network — it talks to the headless ui.html bridge via postMessage.

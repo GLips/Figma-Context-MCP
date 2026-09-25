@@ -1,3 +1,7 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
 // markdown parser (Phase 3b): the write-edge inverse of figma-mcp read's escapeMarkdown/renderRunMarkdown.
 // These are pure-string unit tests of parseInlineMarkdown — the flag set each segment carries, the escape
 // decode, nesting, whitespace-flanking, and the round-trip guarantee the shared spec pins.

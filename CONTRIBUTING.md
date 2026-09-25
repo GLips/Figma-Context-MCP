@@ -124,6 +124,10 @@ src/                    # figma-developer-mcp — the published package
 │   └── tools/          # MCP tools
 ├── adapters/rest/      # REST wire format → NodeSnapshot
 ├── services/           # Core business logic
+├── commercial/         # Write path ("code mode") — commercial-licensed, see LICENSING.md
+│   ├── plugin-bridge/  # WS relay to the Figma plugin
+│   ├── tools/          # Code-mode MCP tools + flcm docs
+│   └── tests/          # Write-path tests
 ├── utils/              # Utility functions
 └── tests/              # Test files
 
@@ -193,4 +197,6 @@ For reference, these prefixes determine version bumps:
 
 ## License
 
-By contributing to this project, you agree that your contributions will be licensed under the MIT License.
+Files carrying the `LicenseRef-Framelink-Commercial` SPDX header (see [LICENSING.md](LICENSING.md)) are maintainer-only. We don't accept outside pull requests that change them. Open an issue instead.
+
+Everywhere else, by contributing you agree that your contributions will be licensed under the MIT License.

@@ -1,3 +1,7 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
 // css — THE string boundary. This is the ONLY module that knows CSS string syntax exists. Authors write
 // CSS-shaped leaves (a #hex/rgba() color, a "linear-gradient(...)" string, a "32px"/"-0.02em" metric)
 // and a future `get` result is a SimplifiedNode of CSS strings; every one is parsed HERE, exactly once,

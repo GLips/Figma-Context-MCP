@@ -1,3 +1,7 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
 // LOGIN WALK (full leaf fidelity) — the Phase-1 tracer for the flcm rebuild. Exercises the whole spine
 // PLUS slice-2's CSS leaves: a linear-gradient background, a radial-gradient corner glow, a card with a
 // box-shadow + background-blur (via flcm.effects sugar), rgba/#hex solids, stroke + radius, a numeric

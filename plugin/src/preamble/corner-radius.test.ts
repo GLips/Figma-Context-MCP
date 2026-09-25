@@ -1,3 +1,7 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
 // Per-corner `borderRadius` — the one word where read's CSS shorthand and write's authored value
 // have to be the same string (ADR-0007/0011). Read emits "8px 8px 0px 0px" for a mixed-corner node;
 // the write side used to refuse it outright, so a `get` result could not re-author. What's pinned

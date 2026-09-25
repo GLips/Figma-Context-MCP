@@ -1,3 +1,7 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
 import { specNode } from "../../harness/spec-node.js";
 // Target resolution: one node from a key, its bare id, flcm.id(...), or a handle — and FAIL LOUD (naming the
 // key/count) on not-found or ambiguous, so a blind agent never silently acts on the wrong node.

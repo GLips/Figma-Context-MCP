@@ -1,3 +1,7 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
 // validate — boundary validation shared across the preamble's agent-input surfaces. Pure (no
 // figma.*), so it bundles into the QuickJS sandbox freely: one gate asserting an agent-supplied
 // bag is a plain object whose every key is known, shared by the authoring compilers (flcm.ts),

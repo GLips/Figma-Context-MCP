@@ -1,3 +1,7 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
 import type { WriteLayout } from "./ir.js";
 
 export const BOUND_KEYS = ["minWidth", "maxWidth", "minHeight", "maxHeight"] as const;

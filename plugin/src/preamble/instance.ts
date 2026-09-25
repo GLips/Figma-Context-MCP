@@ -1,3 +1,7 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
 import { assertExposureTree, assertExposureTarget } from "./instance-exposure.js";
 import { assertBounds } from "./size-bounds.js";
 // instance — the component half of the write path, for BOTH verbs that touch one:

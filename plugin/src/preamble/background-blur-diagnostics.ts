@@ -1,3 +1,7 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
 import { warnings } from "./warnings.js";
 // Figma composites a BACKGROUND_BLUR through the layer's OWN paint: the blurred backdrop is masked by
 // wherever the node actually paints. A node with no visible fill paints nowhere, so the blur renders

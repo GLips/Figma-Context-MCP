@@ -1,3 +1,7 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
 // Port-free dogfood runner: executes a DSL file against the in-memory figma mock, exercising the
 // SAME plugin/src/preamble/ fragments the live sandbox uses (bundled fresh each run via esbuild — NOT
 // forked), then prints a compact tree of what got built. Usage:

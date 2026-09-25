@@ -1,3 +1,7 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
 // backgroundBlur is a silent no-op on a fill-less node: Figma masks the blurred backdrop with the
 // node's own paint, so the effect lands, reads back, and renders nothing. These cover the trap itself
 // and the two ways an edit reaches it — the final state is what's judged, not the authored delta.

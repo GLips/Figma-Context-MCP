@@ -1,3 +1,7 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
 // flcm.page — the document verbs. What's worth pinning is the REFUSALS: these exist because the raw
 // path (createPage then `figma.currentPage = page`) throws half-way and leaves an orphan, so a page
 // verb that quietly created or switched to the wrong thing would be worse than no verb at all.

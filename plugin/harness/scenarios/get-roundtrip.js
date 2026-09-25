@@ -1,3 +1,7 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
 // get round-trip: render a styled card, then read it back with flcm.get by key — exercising the
 // bundled simplify core inside the preamble IIFE (resolve → adapt → simplify, expanded output).
 const card = {

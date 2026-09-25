@@ -1,3 +1,7 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
 import { sceneFigma as figma, invalidateSceneAccess } from "./scene-access.js";
 // Target resolution is shared by read and write verbs so ids and keys cannot resolve differently.
 

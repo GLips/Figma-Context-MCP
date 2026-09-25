@@ -1,3 +1,7 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
 import { awaitNative } from "./host.js";
 import { sceneFigma as figma } from "./scene-access.js";
 // fonts — resolve every text node's (family, weight) to a real, loaded Figma font style, and preload

@@ -1,3 +1,7 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
 // component-edit — editing the DEFINITION side of a component, which is how every instance of it
 // changes at once. There is no verb here: a main component is edited with `flcm.edit` /
 // `flcm.editMany` and its sublayers with the structural verbs, exactly as any frame is, and Figma

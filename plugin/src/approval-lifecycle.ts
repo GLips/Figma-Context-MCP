@@ -1,3 +1,7 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
 /** Ordered durable approvals. Gates stay closed during restoration and pending changes. */
 export function createApprovalLifecycle(storage: {
   load(): Promise<unknown>;

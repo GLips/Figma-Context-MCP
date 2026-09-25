@@ -1,3 +1,7 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
 import { sceneFigma as figma } from "./scene-access.js";
 // component — the two verbs that MAKE a component, the write side of what `get` reports about one:
 //

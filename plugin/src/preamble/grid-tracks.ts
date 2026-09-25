@@ -1,3 +1,7 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
 // Figma's native tracks and the read template are two representations of the same tracks.
 export type GridTrack = { type: "HUG" } | { type: "FIXED" | "FLEX"; value: number };
 export function serializeGridTracks(tracks: readonly { type: "HUG" | "FIXED" | "FLEX"; value?: number }[]): string {

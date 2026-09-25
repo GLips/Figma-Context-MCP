@@ -1,3 +1,7 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
 // verb-error — the invariant-2 POINTER ERROR, one shape for every mutating verb. When a write
 // fails after validation passed, the agent is blind: it can't see the canvas, and re-downloading
 // the design to work out where it is costs more than the edit did. So the error is a pointer, not

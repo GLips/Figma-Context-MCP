@@ -1,3 +1,7 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
 // find(query?, predicate?) live round-trip: render a frame with mixed-fill rects, then locate by a
 // predicate over the EXPANDED read shape (fills are inline hex, not styles refs) — exercising the hybrid
 // filter (query pre-filter → materialize survivors → predicate) inside the preamble IIFE against live nodes.

@@ -1,3 +1,7 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
 // An in-memory Figma mock faithful to the AXES the std-lib actually touches — so the harness can run
 // the REAL preamble fragments (plugin/src/preamble/) in pure Node, no plugin and no WS port.
 //

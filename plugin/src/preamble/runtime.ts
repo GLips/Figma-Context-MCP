@@ -1,3 +1,7 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
 // The public flcm verbs. sandbox.ts nests these exports beside session inside the preamble IIFE.
 // Internal helpers remain closure-private, so their names cannot collide with agent declarations.
 //

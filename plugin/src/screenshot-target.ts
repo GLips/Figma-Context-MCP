@@ -1,3 +1,7 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
 // screenshot-target — which node a get_screenshot call actually captures.
 //
 // Split out of code.ts's screenshot() so the resolution RULES (which fail loud) are separable from the

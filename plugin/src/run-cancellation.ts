@@ -1,3 +1,7 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
 // __connKey identifies one socket generation, assigned by ui.html. Ports are reusable;
 // this identity is not. Old settlement can only release the old generation's run.
 export interface RunRef {

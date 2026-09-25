@@ -1,3 +1,7 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
 // flcm.get — full inspect through the ONE shared simplify core: the expanded canonical read shape
 // (values inline, never a styles ref) for any node type. Parity of the shape itself is pinned by the
 // REST↔scene harness (src/tests/parity/); these tests pin the live-path plumbing — resolve → adapt →

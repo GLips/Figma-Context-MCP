@@ -1,3 +1,7 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
 // Beyond-CSS effect sugar (Phase 4). These are pure builders, so we test them directly: shape + defaults,
 // fail-loud on a bad enum, and the plugin-Effect mapping. The mapping tests are the load-bearing ones —
 // they pin decisions grounded against the LIVE runtime (verified via execute_code), which the in-memory

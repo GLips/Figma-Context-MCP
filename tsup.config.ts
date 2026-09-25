@@ -2,6 +2,8 @@ import { defineConfig } from "tsup";
 import type { Plugin } from "esbuild";
 // @ts-expect-error — plain .mjs generator with no declarations; this config is outside tsconfig's `include`.
 import { buildSandboxPreambleModule } from "./plugin/src/preamble/index.mjs";
+// @ts-expect-error — shared build helper is plain .mjs.
+import { copyDistributionLicenses, licenseBanner } from "./scripts/distribution-licenses.mjs";
 
 const isDev = (process.env.npm_lifecycle_event ?? "").startsWith("dev");
 const packageVersion = process.env.npm_package_version;
@@ -16,6 +18,10 @@ export default defineConfig({
   noExternal: ["@framelink/core", "@framelink/plugin"],
   format: ["esm"],
   minify: !isDev,
+  banner: { js: licenseBanner },
+  esbuildOptions(options) {
+    options.legalComments = "inline";
+  },
   target: "esnext",
   outDir: "dist",
   outExtension: ({ format: _format }) => ({
@@ -51,7 +57,7 @@ export default defineConfig({
       setup(build) {
         let injected = false;
         build.onLoad(
-          { filter: /[/\\]services[/\\]plugin-bridge[/\\]sandbox-preamble\.ts$/ },
+          { filter: /[/\\]commercial[/\\]plugin-bridge[/\\]sandbox-preamble\.ts$/ },
           async () => {
             injected = true;
             return { contents: await buildSandboxPreambleModule(), loader: "ts" };
@@ -67,10 +73,11 @@ export default defineConfig({
           if (!injected) {
             throw new Error(
               "the flcm std-lib was never injected — the onLoad filter above matched nothing, so " +
-                "dist ships the fail-loud placeholder in src/services/plugin-bridge/sandbox-preamble.ts " +
+                "dist ships the fail-loud placeholder in src/commercial/plugin-bridge/sandbox-preamble.ts " +
                 "and every execute_code would die on it. Check that the module still lives at that path.",
             );
           }
+          copyDistributionLicenses(process.cwd(), "dist");
         });
       },
     } satisfies Plugin,

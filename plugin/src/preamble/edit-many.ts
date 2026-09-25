@@ -1,3 +1,7 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
 import { compileDeltaTrees } from "./compile-tree.js";
 // editMany — the atomic batch form of `edit`. It exists for ONE thing a caller loop cannot build:
 // set-level atomicity. Validation lives inside a verb, so `for (const e of entries) await edit(…)`

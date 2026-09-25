@@ -1,3 +1,7 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
 import { awaitNative, traceNative } from "./host.js";
 import { sceneFigma as figma } from "./scene-access.js";
 // page — the document-level verbs: which page am I on, switch to another, make a new one.

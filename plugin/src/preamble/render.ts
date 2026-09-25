@@ -1,3 +1,7 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
 // render — the one place a compiled tree becomes live nodes. Split from flcm.ts (the compilers)
 // because its PREPARE reaches the edit compile through instance.ts (an INSTANCE's overrides
 // are edit deltas resolved against the live component), and edit-plan.ts imports the compilers'

@@ -1,3 +1,7 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
 // identity — a node's stable flcm identity, stamped in pluginData. The render walk WRITES it (bridge.stampKey)
 // and the target resolver's key scan READS it (read.resolveTarget); giving the pluginData key and its
 // accessors one home is what keeps write-stamp and read-scan from disagreeing on the string.

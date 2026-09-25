@@ -1,3 +1,7 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
 import type { WarningRecord } from "./warnings.js";
 // schema — THE single source of the agent-facing authoring surface. Every verb, every prop, its type,
 // and its one-line doc live here exactly once, as zod field schemas carrying `.describe()` (the note a

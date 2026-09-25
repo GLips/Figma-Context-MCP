@@ -1,3 +1,7 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
 import { sceneFigma as figma } from "./scene-access.js";
 // A render root lands on the PAGE, and a page has no layout — nothing moves aside to make room. With
 // no `left`/`top` a root goes to the page origin, so a second render lands exactly on top of the

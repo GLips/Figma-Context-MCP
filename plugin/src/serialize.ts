@@ -1,3 +1,7 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
 // Host-side wire serialization for the sandbox eval result and its console output. This is TS HOST code
 // (bundled into code.ts's IIFE), NOT sandbox-preamble source — it runs on the plugin main thread and never
 // touches figma.*, so it stays a pure, unit-testable module distinct from code.ts's messaging/approval shell.

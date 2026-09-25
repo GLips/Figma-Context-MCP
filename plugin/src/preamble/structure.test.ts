@@ -1,3 +1,7 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
 import { resolveTarget } from "./read.js";
 import { specNode } from "../../harness/spec-node.js";
 // The structural verbs. What must not regress silently: an inserted node is attached BEFORE it is

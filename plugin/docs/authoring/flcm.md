@@ -1,5 +1,7 @@
+<!-- SPDX-License-Identifier: MIT -->
 > **Generated — do not edit.** Regenerate with `pnpm docs:gen`.
-> Source: `plugin/src/preamble/schema.ts` (verbs/props) + `src/mcp/tools/flcm-docs/{narrative,examples}`.
+> Source: `plugin/src/preamble/schema.ts` (verbs/props) + `src/commercial/tools/flcm-docs/{narrative,examples}`.
+> License: this generated reference is MIT, unlike its commercial sources, so public docs stay public.
 
 # Authoring with `flcm`
 

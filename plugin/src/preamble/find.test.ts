@@ -1,3 +1,7 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
 import { specNode } from "../../harness/spec-node.js";
 // flcm.find / findOne / selection — the locate verbs return SlimHandles: the identity core plus a cheap
 // layout world-model, a sparse projection of the same canonical shape `get` emits. These pin the live-path

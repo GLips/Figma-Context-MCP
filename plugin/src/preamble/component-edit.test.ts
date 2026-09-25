@@ -1,3 +1,7 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
 import { specNode } from "../../harness/spec-node.js";
 // Editing a MAIN component — the capability with no verb of its own: `flcm.edit` on the COMPONENT
 // and on its sublayers, plus the structural verbs, and every instance follows because that is what

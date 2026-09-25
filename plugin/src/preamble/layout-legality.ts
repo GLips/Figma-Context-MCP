@@ -1,3 +1,7 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
 // layout-legality — the ONE home for "can this node realize these layout words". Every rule that
 // decides a layout word's legality lives here, and BOTH verbs consult it — create via flcm.ts
 // (buildLayout, render's root check) and the bridge walk, edit via assertLayoutDeltaResolvable —

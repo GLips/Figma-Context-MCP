@@ -1,3 +1,7 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
 import { specNode } from "../../harness/spec-node.js";
 // Percent sizing ("N%") on width/height and left/top, plus `anchor`. Percent has no construction-time
 // meaning (the parent isn't known yet), so these exercise a live render against the in-memory figma mock:

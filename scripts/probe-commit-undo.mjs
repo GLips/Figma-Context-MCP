@@ -1,3 +1,7 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
 // LIVE PROBE for the undo contract behind plan invariants 2 and 4 (flcm edit surface, Phase 2 step
 // zero) — a standing runbook, not a one-shot: re-run whenever the verbs' seal placement (commitUndo
 // at entry/success), the rollback path (triggerUndo), or the eval wrapper changes shape. No
@@ -52,10 +56,10 @@
 //     (root plugin data, verified undoable) right after the seal for that reason. Not yet a
 //     scenario here — add one when this probe is next re-run.
 
-import { PluginBridge } from "../src/services/plugin-bridge/bridge.ts";
-import { WS_PORT_BLOCK } from "../src/services/plugin-bridge/ports.ts";
-import { SESSION_IDENTITY } from "../src/services/plugin-bridge/approval.ts";
-import { requestUntilApproved } from "../src/services/plugin-bridge/await-approval.ts";
+import { PluginBridge } from "../src/commercial/plugin-bridge/bridge.ts";
+import { WS_PORT_BLOCK } from "../src/commercial/plugin-bridge/ports.ts";
+import { SESSION_IDENTITY } from "../src/commercial/plugin-bridge/approval.ts";
+import { requestUntilApproved } from "../src/commercial/plugin-bridge/await-approval.ts";
 import { buildSandboxPreamble } from "../plugin/src/preamble/index.mjs";
 
 // These probes drive a REAL plugin, which holds no runtime of its own (ADR-0010) — so they must

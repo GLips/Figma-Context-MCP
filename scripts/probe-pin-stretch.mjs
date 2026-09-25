@@ -1,3 +1,7 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
 // LIVE PROBE for AGENT-DX-NOTES-component-surgery §6 — `pin: "stretch"` resizing the node the
 // author just sized. A standing runbook: re-run it whenever attachBuiltChild / buildFrame change
 // the order in which a child is constrained and its parent is sized, because no mock can settle
@@ -23,11 +27,11 @@
 // The probe renders four small frames, measures, deletes them again, and prints PASS/FAIL per case.
 // Safe to re-run.
 
-import { PluginBridge } from "../src/services/plugin-bridge/bridge.ts";
-import { WS_PORT_BLOCK } from "../src/services/plugin-bridge/ports.ts";
-import { SESSION_IDENTITY } from "../src/services/plugin-bridge/approval.ts";
-import { requestUntilApproved } from "../src/services/plugin-bridge/await-approval.ts";
-import { MIN_PROTOCOL_VERSION } from "../src/services/plugin-bridge/version.ts";
+import { PluginBridge } from "../src/commercial/plugin-bridge/bridge.ts";
+import { WS_PORT_BLOCK } from "../src/commercial/plugin-bridge/ports.ts";
+import { SESSION_IDENTITY } from "../src/commercial/plugin-bridge/approval.ts";
+import { requestUntilApproved } from "../src/commercial/plugin-bridge/await-approval.ts";
+import { MIN_PROTOCOL_VERSION } from "../src/commercial/plugin-bridge/version.ts";
 import { buildSandboxPreamble } from "../plugin/src/preamble/index.mjs";
 
 // The real plugin holds no runtime of its own (ADR-0010), so the probe ships the actual std-lib

@@ -1,0 +1,87 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
+// Worked examples for the reference. Each is a real .ts file under examples/, compile-checked against
+// the typed flcm surface (see examples/login.ts) — a schema change that breaks an example goes red in
+// type-check instead of shipping stale docs. The marked region of each file is extracted verbatim into
+// examples-code.generated.ts by `pnpm docs:gen`, and `pnpm docs:check` fails on drift, so the shipped
+// example is byte-for-byte the code that just type-checked. The generated-module indirection (rather
+// than reading the example sources at runtime) exists because the npm product runs from a tsup bundle,
+// where source files aren't on disk.
+
+import { EXAMPLE_CODE } from "./examples-code.generated.js";
+
+export interface Example {
+  title: string;
+  intro: string;
+  code: string;
+}
+
+type ExampleId = keyof typeof EXAMPLE_CODE;
+
+// Keyed exhaustively by the generated module, so BOTH drift directions fail to compile: a new
+// example (file + generator id) with no metadata here is a missing key, and metadata for a deleted
+// example is an excess key. Without this tie, a metadata-less example would generate cleanly, pass
+// docs:check, and silently never render — the stale-docs failure this apparatus exists to kill.
+const EXAMPLE_META: Record<ExampleId, { title: string; intro: string }> = {
+  login: {
+    title: "The login screen",
+    intro:
+      "A gradient background, an out-of-flow radial-glow decoration declared first (so it sits behind), a " +
+      'frosted card whose shadow and blur are plain CSS strings, fixed and "fill" sizing, rgba/hex solids, ' +
+      "numeric font weights, and child identities returned in the authored tree.",
+  },
+  grid: {
+    title: "Grid tracks and cell placement",
+    intro:
+      "Columns are explicit and fractional, so the frame takes a fixed width; rows are omitted, so they are implicit hug tracks — as many as the children need, growing as more arrive. Children auto-place unless anchors or spans are supplied.",
+  },
+  caption: {
+    title: "A feed caption (rich text)",
+    intro:
+      "One `TEXT` node carrying three styled runs — a colored `@handle`, plain body copy, and a muted " +
+      "`more` — over shared base props, wrapped to a fixed width. Replaces four hand-split text nodes.",
+  },
+  vector: {
+    title: "Vector art (svg & path)",
+    intro:
+      "Both vector forms side by side, and how each is sized: a `d` triangle, which is bare geometry sized by " +
+      "`scale`, and an `svg` mark, which is art on a canvas sized by `width`/`height` and recolored through " +
+      "`fill`. No icon catalog — you bring the path data or markup.",
+  },
+  image: {
+    title: "Images (real raster fills)",
+    intro:
+      "A feed post with a real photo as a frame fill and a circular avatar as an `ellipse` filled with an " +
+      "image. `flcm.image(url)` is a paint value, so any shape carries one; the server fetches the bytes. " +
+      "The photo takes a paint *stack* — a legibility scrim over the image, first entry on top — so the " +
+      "title sitting on it stays readable.",
+  },
+  reuse: {
+    title: "Copying what's already on the canvas (get → plain data)",
+    intro:
+      "The read↔write seam: `flcm.get` reads a live subtree as the canonical shape, you edit that shape " +
+      "like any object. Keep ids to move, or drop them recursively to create a copy. A structural verb " +
+      "places a COPY. `flcm.clone` stays the faithful duplicate for subtrees a rebuild can't reproduce.",
+  },
+  makeComponent: {
+    title: "Authoring a component (flcm.component → flcm.variants)",
+    intro:
+      "A Button, authored then promoted to a COMPONENT in one call — a boolean, a text and a slot property, each " +
+      "bound to the node it drives, defaults derived from those nodes — then two sizes folded into a " +
+      "variant set.",
+  },
+  components: {
+    title: "Instantiating a component (INSTANCE)",
+    intro:
+      "Buttons stamped from a set found by name: a variant picked by its axes, a bound label set through " +
+      "`componentProperties`, a sublayer overridden by path, and a read instance re-authored as-is.",
+  },
+};
+
+// Rendered in the generated module's key order, which the generator emits in EXAMPLE_IDS order.
+export const EXAMPLES: Example[] = (Object.keys(EXAMPLE_CODE) as ExampleId[]).map((id) => ({
+  ...EXAMPLE_META[id],
+  code: EXAMPLE_CODE[id],
+}));

@@ -7,7 +7,7 @@ import { ProxyAgent, EnvHttpProxyAgent, setGlobalDispatcher } from "undici";
 import { Logger } from "./utils/logger.js";
 import { hasProxyEnv, setProxyMode } from "./utils/proxy-env.js";
 import { createServer, type CreateServerOptions } from "./mcp/index.js";
-import { startPluginBridge } from "./services/plugin-bridge/index.js";
+import { startPluginBridge } from "./commercial/plugin-bridge/index.js";
 import { requireGlobalCredentials, type ServerConfig } from "./config.js";
 import type { FigmaAuthOptions } from "./services/figma.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";

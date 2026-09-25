@@ -1,3 +1,7 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
 // The mutation lock (plan invariant 4): mutating verbs serialize within a run — preparation
 // included, so a queued verb's prepare and gate read the canvas AFTER the running verb's writes —
 // a failed verb doesn't poison later ones, a cancelled run is refused at the lock before the next

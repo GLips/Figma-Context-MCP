@@ -1,3 +1,7 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
 import { compileBindingBag, bindingFieldsForType } from "./flcm.js";
 import { normalizePathData, normalizeVectorPaths } from "./path.js";
 // Live identities compile as edits. The bridge receives closures so its write walk need not

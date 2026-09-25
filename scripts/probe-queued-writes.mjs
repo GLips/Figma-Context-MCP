@@ -1,3 +1,7 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
 // LIVE PROBE for two runtime holes no headless harness can close on its own — the reply outrunning
 // the verb queue, and a runtime the agent kept past its own reply. A standing runbook: re-run it
 // whenever executeCode's finally, the mutation lock's chain, or the FlcmHost surface changes shape.
@@ -21,11 +25,11 @@
 //   5. When the plugin strip shows this session, click Allow.
 // The probe creates one small frame, reads it back, and deletes it again. Safe to re-run.
 
-import { PluginBridge } from "../src/services/plugin-bridge/bridge.ts";
-import { WS_PORT_BLOCK } from "../src/services/plugin-bridge/ports.ts";
-import { SESSION_IDENTITY } from "../src/services/plugin-bridge/approval.ts";
-import { requestUntilApproved } from "../src/services/plugin-bridge/await-approval.ts";
-import { MIN_PROTOCOL_VERSION } from "../src/services/plugin-bridge/version.ts";
+import { PluginBridge } from "../src/commercial/plugin-bridge/bridge.ts";
+import { WS_PORT_BLOCK } from "../src/commercial/plugin-bridge/ports.ts";
+import { SESSION_IDENTITY } from "../src/commercial/plugin-bridge/approval.ts";
+import { requestUntilApproved } from "../src/commercial/plugin-bridge/await-approval.ts";
+import { MIN_PROTOCOL_VERSION } from "../src/commercial/plugin-bridge/version.ts";
 import { buildSandboxPreamble } from "../plugin/src/preamble/index.mjs";
 
 // The plugin holds no runtime of its own (ADR-0010), so the probe ships the real std-lib — the same

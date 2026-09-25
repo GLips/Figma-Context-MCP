@@ -1,3 +1,7 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
 // Every authoring verb shares this boundary; pure value guards stay independent of the compiler.
 import { readyLayout } from "./compile-tree.js";
 import { KNOWN_KEYS } from "./flcm.js";

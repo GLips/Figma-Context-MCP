@@ -1,3 +1,7 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
 // Wire serialization: a live node collapses (and is rejected on the return path), but every handle / read
 // POJO must round-trip WHOLE — no shape-collapse, no depth/array truncation. This is the Phase-1 contract
 // that lets the read verbs return deep canonical shapes across the bridge intact.

@@ -1,3 +1,7 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
 import type { WriteLayout, WriteNode, Sizing, PinX, PinY } from "./ir.js";
 import { layoutModeOf } from "./layout-mode.js";
 import { convertSizing } from "@framelink/core";

@@ -1,3 +1,7 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
 import type { WriteNode } from "./ir.js";
 
 export interface ExposureWrite { node: InstanceNode; value: boolean }

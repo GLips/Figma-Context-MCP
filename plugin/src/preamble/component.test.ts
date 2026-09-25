@@ -1,3 +1,7 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
 import { specNode } from "../../harness/spec-node.js";
 // flcm.component / flcm.variants — MAKING a component. What must not regress silently: a compiled node is
 // rendered exactly as flcm.render would render it and then promoted (layout, fill and keys intact,

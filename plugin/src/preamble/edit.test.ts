@@ -1,3 +1,7 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
 import { specNode } from "../../harness/spec-node.js";
 // flcm.edit — the mutate verb. What must not regress silently: a delta applies exactly its fields
 // through the shared appliers (the header's named hazard — riding a compiler would inject

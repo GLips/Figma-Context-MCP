@@ -1,3 +1,7 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
 // freshness — the gate-phase refusals every mutating verb shares (mutation-lock.ts on the phase
 // rule). A verb's prepare resolves nodes and loads pages across awaits the user has the document
 // open across; its synchronous gate asks these, against the document as it stands at the seal,

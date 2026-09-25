@@ -1,3 +1,7 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
 import { parseGridPlacement, parseGridTracks, serializeGridTracks, type GridTrack } from "./grid-tracks.js";
 
 type Bag = Record<string, unknown>;

@@ -1,3 +1,7 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
 import { createWarningRegistry } from "./preamble/warnings.js";
 import { test } from "node:test";
 import assert from "node:assert/strict";

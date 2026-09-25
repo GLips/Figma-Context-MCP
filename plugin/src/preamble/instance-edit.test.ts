@@ -1,3 +1,7 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
 import { specNode } from "../../harness/spec-node.js";
 // Editing a live INSTANCE — read words are write words, so `flcm.edit` is the whole surface: a
 // frame's words on the root, `componentProperties` (variants included), `overrides` per sublayer,

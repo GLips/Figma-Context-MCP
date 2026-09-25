@@ -1,3 +1,7 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
 import type { WarningRecord } from "./warnings.js";
 import type { NodeSpec } from "./schema.js";
 // ir — the typed WriteNode currency: the ONE internal representation the whole preamble speaks. Every

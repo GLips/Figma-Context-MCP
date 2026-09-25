@@ -1,3 +1,7 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
 /** Opt-in prototype policy; pixel fidelity and undo/selection behavior need live verification. */
 export interface CaptureOptions { scale?: number; context?: boolean; margin?: number }
 export const CONTEXT_MARGIN_PROTOTYPE = { proportion: 0.1, min: 24, max: 160 } as const;

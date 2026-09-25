@@ -1,4 +1,10 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
 import * as esbuild from "esbuild";
+import { fileURLToPath } from "node:url";
+import { copyDistributionLicenses, licenseBanner } from "../scripts/distribution-licenses.mjs";
 
 // Figma's plugin sandbox loads a single classic script as `main`. Bundle code.ts into an IIFE so it
 // runs there directly. Neither the agent's code NOR the flcm std-lib is bundled here — both travel
@@ -12,7 +18,14 @@ await esbuild.build({
   format: "iife",
   target: "es2017",
   logLevel: "info",
+  banner: { js: licenseBanner },
+  legalComments: "inline",
 });
+
+copyDistributionLicenses(
+  fileURLToPath(new URL("../", import.meta.url)),
+  fileURLToPath(new URL("./dist/", import.meta.url)),
+);
 
 // Negative space, both deliberate: this build asserts nothing about the bundle afterwards.
 //

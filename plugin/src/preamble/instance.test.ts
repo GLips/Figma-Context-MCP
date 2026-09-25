@@ -1,3 +1,7 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
 import { specNode } from "../../harness/spec-node.js";
 // INSTANCE — stamp a component. What must not regress silently: the compiler is document-blind and
 // presence-preserving (nothing the node doesn't name becomes a root override), a `get` result spreads

@@ -1,3 +1,7 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
 import { warnings } from "./warnings.js";
 import { registerResult } from "./host.js";
 import { sceneFigma as figma, invalidateSceneAccess } from "./scene-access.js";
