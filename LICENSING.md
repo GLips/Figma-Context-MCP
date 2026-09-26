@@ -14,8 +14,8 @@ reference `plugin/docs/authoring/flcm.md` is marked `<!-- SPDX-License-Identifie
 so public docs stay public. Read functionality and the shared read transform (`core/`)
 stay MIT.
 
-[Write access terms](licensing/TERMS.md) hold the allowance and counting rules
-(incorporated into the license) and the operational terms.
+The license itself fixes each release's free allowance and what counts as a write.
+Price and billing are set at checkout, not in the repo.
 
 ## Metadata and headers
 

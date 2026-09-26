@@ -5,7 +5,6 @@ import { writeCommercialManifest } from "./check-license-headers.mjs";
 export const licenseFiles = [
   "LICENSE",
   "LICENSING.md",
-  "licensing/TERMS.md",
   "licensing/LICENSE-Framelink-Commercial.md",
 ];
 
