@@ -8,6 +8,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
 import { createServer } from "~/mcp/index.js";
 import { PluginBridge, type BridgeRequest } from "~/commercial/plugin-bridge/bridge.js";
+import { createTestWriteAccess, TEST_AUTHORIZING_USER } from "./fixtures/write-access.js";
 
 class Bridge extends PluginBridge {
   decision = "PENDING_APPROVAL";
@@ -21,6 +22,9 @@ class Bridge extends PluginBridge {
   override disconnectedDurationMs() {
     return this.outage;
   }
+  override getAuthorizingUser() {
+    return TEST_AUTHORIZING_USER;
+  }
   override getPairingCode() {
     return "1234";
   }
@@ -28,7 +32,7 @@ class Bridge extends PluginBridge {
     this.signal = signal;
     if (payload.type === "APPROVAL_STATUS") return { type: this.decision };
     this.executions++;
-    return { result: "done", console: [], errors: null };
+    return { result: "done", console: [], errors: null, documentChanged: false };
   }
 }
 const flush = async () => {
@@ -40,7 +44,12 @@ async function setup() {
     { figmaApiKey: "test", figmaOAuthToken: "", useOAuth: false },
     {
       transport: "stdio",
-      pluginBridge: { bridge, hasEverConnected: () => true, onFirstConnect: () => {} },
+      pluginBridge: {
+        bridge,
+        writeAccess: createTestWriteAccess().writeAccess,
+        hasEverConnected: () => true,
+        onFirstConnect: () => {},
+      },
     },
   );
   const client = new Client({ name: "approval-test", version: "1" });

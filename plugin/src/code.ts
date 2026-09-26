@@ -10,6 +10,7 @@ import { createApprovalLifecycle } from "./approval-lifecycle.js";
 import { safeSerialize, guardReturnValue, createReadEgress } from "./serialize.js";
 import { resolveScreenshotTarget, type ScreenshotTarget } from "./screenshot-target.js";
 import { createRunCancellationRegistry, type CancelDisposition } from "./run-cancellation.js";
+import { observeDocumentChanges, type DocumentChangeObserver } from "./document-changes.js";
 // TYPE-ONLY on purpose: this is the one shared declaration binding the host half of the flcm
 // interface to the preamble half, and it must stay erasable — a value import from preamble/ would
 // drag the whole std-lib back into this bundle, which is exactly what ADR-0010 removed.
@@ -55,7 +56,10 @@ figma.showUI(__html__, {
 //     server has no other way to tell a caller whether its cancelled run ever executed.
 //   • PLUGIN_VERSION — the plugin release, shown to the human in a skew refusal. Informational.
 // v7 replaces image-specific host/wire methods with the opaque server channel.
-const PROTOCOL_VERSION = 7;
+// v8 meters writes: EXECUTE_CODE_RESULT carries documentChanged (a later RUN_CHANGED corrects a "no"),
+// the Allow handover names its Authorizing User (figma.currentUser), SESSION_INFO names the Framelink origin,
+// and the panel speaks WRITE_ACCESS / WRITE_ACCESS_SIGN_IN with the server.
+const PROTOCOL_VERSION = 8;
 const PLUGIN_VERSION = "0.1.0";
 
 // Phase 2 consent gate. The sandbox is the SOLE ARBITER (Invariant): it holds the durable
@@ -96,6 +100,54 @@ interface SessionConn {
   token: string | null;
   identity: string | null;
   pairingCode: string | null;
+  // The server's latest word on write access (allowance spent, a sign-in code, its outcome), shown on
+  // this session's row. Absent until the server has something to say.
+  writeAccess?: WriteAccessNotice;
+  // Set by the human's sign-in click and spent by the next sign-in code: the browser only ever opens
+  // because the human asked, never because a server pushed a URL.
+  signInRequested?: boolean;
+  // The origin of the Framelink app this server is configured against (SESSION_INFO). The browser
+  // opens a sign-in page only on this origin.
+  framelinkOrigin: string | null;
+}
+
+// The server's WRITE_ACCESS notice, as untrusted JSON narrowed to what the panel renders.
+type WriteAccessNotice =
+  | { kind: "allowance-exhausted"; allowance: number; resetsAt: string; signedIn: boolean }
+  | { kind: "sign-in-pending"; userCode: string; verificationUri: string }
+  | { kind: "signed-in"; seat: boolean | null }
+  | { kind: "sign-in-failed"; message: string };
+
+function parseWriteAccessNotice(value: unknown): WriteAccessNotice | null {
+  if (typeof value !== "object" || value === null) return null;
+  const n = value as Record<string, unknown>;
+  if (n.kind === "allowance-exhausted" && typeof n.allowance === "number" && typeof n.resetsAt === "string")
+    return { kind: n.kind, allowance: n.allowance, resetsAt: n.resetsAt, signedIn: n.signedIn === true };
+  if (n.kind === "sign-in-pending" && typeof n.userCode === "string" && typeof n.verificationUri === "string")
+    return { kind: n.kind, userCode: n.userCode, verificationUri: n.verificationUri };
+  if (n.kind === "signed-in") return { kind: n.kind, seat: typeof n.seat === "boolean" ? n.seat : null };
+  if (n.kind === "sign-in-failed" && typeof n.message === "string") return { kind: n.kind, message: n.message };
+  return null;
+}
+
+// The scheme://host[:port] of an http(s) URL, lowercased, or null. Hand-rolled: the plugin sandbox
+// has no URL class.
+function httpOriginOf(url: string): string | null {
+  const match = /^(https?:\/\/[^/?#\\@]+)(?:[/?#]|$)/i.exec(url);
+  return match ? match[1].toLowerCase() : null;
+}
+
+/**
+ * Open the sign-in page for this row's pending code — approved sessions only, and only a page on the
+ * Framelink origin the server announced: figma.openExternal hands the URL to the OS browser.
+ */
+function openSignIn(key: ConnKey): void {
+  const conn = connections.get(key);
+  const notice = conn?.writeAccess;
+  if (!conn || !isApproved(key) || notice?.kind !== "sign-in-pending") return;
+  const origin = httpOriginOf(notice.verificationUri);
+  if (origin === null || origin !== conn.framelinkOrigin) return;
+  figma.openExternal(notice.verificationUri);
 }
 
 // ui.html assigns a unique local key to each socket generation. Replies, sessions,
@@ -165,10 +217,20 @@ interface ReplyTo {
   connKey: ConnKey | undefined;
 }
 
-/** The connection-generation tag ui.html attached, or undefined if absent — one parse site for the routing
- * key, so the "is it a number" check and its absent-sentinel are defined once. */
-function connKeyOf(msg: InboundMessage): ConnKey | undefined {
-  return typeof msg.__connKey === "number" ? msg.__connKey : undefined;
+/**
+ * What ui.html posts in, from two sources kept structurally apart. A WS frame arrives only as `frame`
+ * inside a "server" envelope, tagged with the socket generation it came in on; the panel's clicks and
+ * the relay's own connect/close signals arrive only as `control` inside a "panel" envelope. ui.html
+ * builds both envelopes itself and never places server bytes in the second, so no local process that
+ * dials the relay can speak as the human — a server frame typed UI_DECISION is just an unknown frame.
+ */
+type UiInbound =
+  | { from: "server"; connKey: ConnKey; frame: unknown }
+  | { from: "panel"; control: InboundMessage };
+
+/** The row a panel control addresses, or undefined for a window-level one. */
+function controlConnKey(control: InboundMessage): ConnKey | undefined {
+  return typeof control.connKey === "number" ? control.connKey : undefined;
 }
 
 /**
@@ -191,6 +253,15 @@ function cancelResult(
   disposition: CancelDisposition,
 ): void {
   figma.ui.postMessage({ type: "CANCEL_RESULT", runId, disposition, __connKey: connKey });
+}
+
+/**
+ * The document changed after this run's reply said it hadn't (document-changes.ts watchLate). Like
+ * CANCEL_RESULT it is run-scoped and id-less, and at most one is sent per run; the server records the
+ * Write under the run's execution, so a duplicate is harmless.
+ */
+function runChanged(to: ReplyTo): void {
+  figma.ui.postMessage({ type: "RUN_CHANGED", runId: to.id, __connKey: to.connKey });
 }
 
 function reply(to: ReplyTo, body: Record<string, unknown>): void {
@@ -248,11 +319,11 @@ function callServer(to: ReplyTo, capability: string, payload: unknown): Promise<
  * port the request went out on: ui.html holds a socket per block port, so without this check any
  * other local server (approved or not — approval gates writes, not this direction) could inject
  * a result into another server's suspended call. */
-function settleServerCall(msg: InboundMessage): void {
+function settleServerCall(msg: InboundMessage, connKey: ConnKey): void {
   if (typeof msg.id !== "string") return;
   const pending = pendingServerCalls.get(msg.id);
   if (!pending) return;
-  if (pending.connKey !== connKeyOf(msg)) return;
+  if (pending.connKey !== connKey) return;
   pendingServerCalls.delete(msg.id);
   if (msg.ok === true) {
     pending.resolve(msg.payload);
@@ -287,11 +358,24 @@ function acceptRun(to: ReplyTo): void {
   runState(to, "queued");
 }
 
-/** The run reached the front of the write chain and is about to touch the document. */
+/**
+ * The run reached the front of the write chain and is about to touch the document. The previous
+ * execution's late-change watch ends first, so nothing this run does is charged to that one.
+ */
 function beginRun(to: ReplyTo): void {
+  lateChangeWatch?.stop();
+  lateChangeWatch = null;
   cancelledRuns.markRunning(to);
   runState(to, "running");
 }
+
+// The last execution whose reply said "no change", still watching for a change that lands after it
+// (document-changes.ts watchLate). Bounded by the next run's start and by LATE_CHANGE_WINDOW_MS.
+let lateChangeWatch: DocumentChangeObserver | null = null;
+// How long past its reply an execution may still be charged for a change. Figma's change events have
+// no delivery deadline; this bounds how long a human's own edit can be mistaken for the run's. The
+// server keeps a run's execution for the same window (write-access.ts), so keep them in sync.
+const LATE_CHANGE_WINDOW_MS = 60_000;
 
 /** Reject matching pending server calls. A rejected call kills its suspended run at the await —
  * the mechanism behind both CANCEL (deadline fired) and WS_CLOSED (server went away), and what
@@ -352,6 +436,7 @@ function panelSessions(): Array<{
   pairingCode: string | null;
   approved: boolean;
   active: boolean;
+  writeAccess: WriteAccessNotice | null;
 }> {
   const sessions = [];
   for (const [key, conn] of connections) {
@@ -362,6 +447,7 @@ function panelSessions(): Array<{
       pairingCode: conn.pairingCode,
       approved: isApproved(key),
       active: key === activeKey,
+      writeAccess: conn.writeAccess ?? null,
     });
   }
   return sessions;
@@ -493,7 +579,11 @@ async function applyDecision(key: ConnKey, approve: boolean): Promise<void> {
     if (connections.get(key) !== conn || conn.decisionRevision !== revision) return;
     conn.rejected = false;
     conn.token = token;
-    figma.ui.postMessage({ type: "SESSION_TOKEN", sessionToken: token, __connKey: key });
+    // The Authorizing User rides the handover: every write this session makes is attributed to the human who
+    // clicked Allow, so the server learns who that is here, once, with the token it persists.
+    const user = figma.currentUser;
+    const authorizingUser = user?.id ? { figmaUserId: user.id, name: user.name } : null;
+    figma.ui.postMessage({ type: "SESSION_TOKEN", sessionToken: token, authorizingUser, __connKey: key });
   }
   setExpanded(false);
 }
@@ -547,94 +637,115 @@ async function revokeAllApprovals(): Promise<void> {
   renderUi();
 }
 
-figma.ui.onmessage = (msg: InboundMessage) => {
-  // Local CONTROL messages from ui.html and the arbiter panel are id-less: they never traverse
-  // the WS, so they carry no server correlation id and get no reply. Server REQUESTS all carry ids
-  // (PluginBridge.request); since protocol 2 the server also emits ONE id-less one-way frame,
-  // CANCEL, handled in this branch beside the session-scoped controls because it is likewise
-  // reply-less and __connKey-routed. An id-CARRYING message falls through to the reverse-reply
-  // intercept and then the envelope path below (ERROR reply for unknown types), preserving the
-  // "every id-carrying server request gets exactly one reply" invariant.
+figma.ui.onmessage = (inbound: UiInbound) => {
+  if (inbound.from === "panel") handlePanelControl(inbound.control);
+  else if (inbound.from === "server") handleServerFrame(inbound.frame, inbound.connKey);
+};
+
+/**
+ * Local CONTROL from ui.html: the human's clicks in the panel, the iframe's own measurements, and the
+ * relay's connect/close signals. None traverse the WS, so none carry an id or get a reply.
+ */
+function handlePanelControl(msg: InboundMessage): void {
+  // Surface control first — these address the WINDOW, not a session, so they carry no connKey.
+  if (msg.type === "UI_READY") {
+    // The iframe asks for its first paint once it has loaded; the sandbox can't render into a
+    // document that doesn't exist yet.
+    renderUi();
+    return;
+  }
+  if (msg.type === "UI_TOGGLE") {
+    setExpanded(!expanded);
+    return;
+  }
+  if (msg.type === "UI_REVOKE_ALL") {
+    // Global, so — unlike UI_DECISION/UI_REVOKE — it carries no connKey: it addresses every
+    // approval this plugin remembers, not one row.
+    revokeAllApprovals();
+    return;
+  }
+  if (msg.type === "UI_HEIGHT") {
+    // The iframe measured itself after painting. Clamped, so a render bug can't leave a 0px or
+    // screen-filling window; the width never changes.
+    const measured = typeof msg.height === "number" ? Math.round(msg.height) : UI_MIN_HEIGHT;
+    resizeWindow(Math.max(UI_MIN_HEIGHT, Math.min(UI_MAX_HEIGHT, measured)));
+    return;
+  }
+  // The rest is keyed by connKey (the socket generation) so the right session is addressed.
+  // WS_CONNECTED/WS_CLOSED are the persistent relay's discovery + disconnect signals — ui.html fires
+  // them ONLY for a socket that actually opened (never for the dead block ports it also dials), so
+  // they arrive only for real sessions. UI_DECISION carries the row the human clicked. A
+  // session-scoped control with no key is malformed — drop it (fail closed).
+  const key = controlConnKey(msg);
+  if (key === undefined) return;
+  if (msg.type === "WS_CONNECTED") {
+    // Each socket generation starts with an unapproved session. The previous
+    // generation receives WS_CLOSED and keeps its own cancellation until settlement.
+    connections.set(key, { token: null, identity: null, pairingCode: null, framelinkOrigin: null });
+  } else if (msg.type === "WS_CLOSED") {
+    // The socket dropped — remove the session's row (disconnect-detection reuses this persistent
+    // relay). Keep activeKey even if it pointed here: a same-port reconnect reclaims active status,
+    // and with no socket there are no writes meanwhile. ui.html auto-reconnects the port after this.
+    // Refresh the list; collapse only once the LAST session is gone (nothing left to act on) — a
+    // departure mustn't close a list another session opened for a pending decision.
+    // First, kill this session's suspended runs: a reply to their server calls can never arrive,
+    // and an unrejected call would wedge the write queue for the life of the plugin.
+    rejectServerCalls(
+      (p) => p.connKey === key,
+      "flcm: the server disconnected mid-run — the server call was abandoned and the script stops here.",
+    );
+    // The server rejects every in-flight caller when a socket dies, so its outstanding runs here
+    // (queued or executing) were all reported failed — cancel them or they'd keep going.
+    cancelledRuns.cancelConnection(key);
+    connections.delete(key);
+    if (connections.size === 0) setExpanded(false);
+    else renderUi();
+  } else if (msg.type === "UI_DECISION") {
+    // The human clicked Allow / Deny on a specific row. The handover (on Allow) rides the same
+    // sandbox→ui.html→WS relay as any reply; it carries no id — it's unsolicited, not a reply.
+    applyDecision(key, msg.approve === true);
+  } else if (msg.type === "UI_SIGN_IN") {
+    // The human asked to sign in from this row's write-access card. The server runs the device flow
+    // and answers with a WRITE_ACCESS sign-in code, which is what opens the browser.
+    const conn = connections.get(key);
+    if (!conn || !isApproved(key)) return;
+    conn.signInRequested = true;
+    figma.ui.postMessage({ type: "WRITE_ACCESS_SIGN_IN", __connKey: key });
+  } else if (msg.type === "UI_OPEN_SIGN_IN") {
+    openSignIn(key);
+  } else if (msg.type === "UI_REVOKE") {
+    // The human clicked "Revoke access" on an approved row — de-authorize it and clear the server's
+    // persisted token.
+    revokeSession(key);
+  }
+}
+
+/**
+ * A frame one server sent over its socket (`key` names the socket generation). Server REQUESTS all
+ * carry ids (PluginBridge.request) and each gets exactly one reply; since protocol 2 the server also
+ * emits ONE id-less one-way frame, CANCEL. An id-CARRYING message falls through to the reverse-reply
+ * intercept and then the envelope path below (ERROR reply for unknown types).
+ */
+function handleServerFrame(frame: unknown, key: ConnKey): void {
+  if (typeof frame !== "object" || frame === null || Array.isArray(frame)) return;
+  const msg = frame as InboundMessage;
   if (msg.id === undefined) {
-    // Surface control first — these address the WINDOW, not a session, so they carry no __connKey.
-    if (msg.type === "UI_READY") {
-      // The iframe asks for its first paint once it has loaded; the sandbox can't render into a
-      // document that doesn't exist yet.
-      renderUi();
-      return;
-    }
-    if (msg.type === "UI_TOGGLE") {
-      setExpanded(!expanded);
-      return;
-    }
-    if (msg.type === "UI_REVOKE_ALL") {
-      // Global, so — unlike UI_DECISION/UI_REVOKE — it carries no __connKey: it addresses every
-      // approval this plugin remembers, not one row.
-      revokeAllApprovals();
-      return;
-    }
-    if (msg.type === "UI_HEIGHT") {
-      // The iframe measured itself after painting. Clamped, so a render bug can't leave a 0px or
-      // screen-filling window; the width never changes.
-      const measured = typeof msg.height === "number" ? Math.round(msg.height) : UI_MIN_HEIGHT;
-      resizeWindow(Math.max(UI_MIN_HEIGHT, Math.min(UI_MAX_HEIGHT, measured)));
-      return;
-    }
-    // The rest is local CONTROL keyed by __connKey (the source port) so the right session is
-    // addressed. WS_CONNECTED/WS_CLOSED are the persistent relay's discovery + disconnect signals —
-    // ui.html fires them ONLY for a socket that actually opened (never for the dead block ports it
-    // also dials), so they arrive only for real sessions. UI_DECISION carries the row the human clicked.
-    // A session-scoped control with no key is malformed — drop it (fail closed).
-    const key = connKeyOf(msg);
-    if (key === undefined) return;
-    if (msg.type === "WS_CONNECTED") {
-      // Each socket generation starts with an unapproved session. The previous
-      // generation receives WS_CLOSED and keeps its own cancellation until settlement.
-      connections.set(key, { token: null, identity: null, pairingCode: null });
-    } else if (msg.type === "WS_CLOSED") {
-      // The socket dropped — remove the session's row (disconnect-detection reuses this persistent
-      // relay). Keep activeKey even if it pointed here: a same-port reconnect reclaims active status,
-      // and with no socket there are no writes meanwhile. ui.html auto-reconnects the port after this.
-      // Refresh the list; collapse only once the LAST session is gone (nothing left to act on) — a
-      // departure mustn't close a list another session opened for a pending decision.
-      // First, kill this session's suspended runs: a reply to their server calls can never arrive,
-      // and an unrejected call would wedge the write queue for the life of the plugin.
+    if (msg.type !== "CANCEL") return;
+    // The server gave up on this run (id-less, run-scoped, one-way — the server-side mirror of
+    // SESSION_TOKEN's direction). Record it; every refusal point reads the registry (the full
+    // policy lives in run-cancellation.ts). Rejecting the pending server calls below additionally
+    // kills a run suspended at its await right now.
+    //
+    // Answer FIRST, before the call rejections: the server is holding its caller for this one
+    // frame, and a queued run's own refusal cannot speak for it — that refusal only fires once the
+    // run ahead finishes, which may be long after the caller was told something.
+    const runId = typeof msg.runId === "string" ? msg.runId : null;
+    if (runId) {
+      cancelResult(key, runId, cancelledRuns.recordCancellation(key, runId));
       rejectServerCalls(
-        (p) => p.connKey === key,
-        "flcm: the server disconnected mid-run — the server call was abandoned and the script stops here.",
+        (p) => p.runId === runId && p.connKey === key,
+        "flcm: this run was cancelled by the server (its deadline passed) — the script stops here.",
       );
-      // The server rejects every in-flight caller when a socket dies, so its outstanding runs here
-      // (queued or executing) were all reported failed — cancel them or they'd keep going.
-      cancelledRuns.cancelConnection(key);
-      connections.delete(key);
-      if (connections.size === 0) setExpanded(false);
-      else renderUi();
-    } else if (msg.type === "UI_DECISION") {
-      // The human clicked Allow / Deny on a specific row. The handover (on Allow) rides the same
-      // sandbox→ui.html→WS relay as any reply (ui.html forwards it verbatim); it carries no id — it's
-      // unsolicited, not a reply.
-      applyDecision(key, msg.approve === true);
-    } else if (msg.type === "UI_REVOKE") {
-      // The human clicked "Revoke access" on an approved row — de-authorize it and clear the server's
-      // persisted token.
-      revokeSession(key);
-    } else if (msg.type === "CANCEL") {
-      // The server gave up on this run (id-less, run-scoped, one-way — the server-side mirror of
-      // SESSION_TOKEN's direction). Record it; every refusal point reads the registry (the full
-      // policy lives in run-cancellation.ts). Rejecting the pending server calls below additionally
-      // kills a run suspended at its await right now.
-      //
-      // Answer FIRST, before the call rejections: the server is holding its caller for this one
-      // frame, and a queued run's own refusal cannot speak for it — that refusal only fires once the
-      // run ahead finishes, which may be long after the caller was told something.
-      const runId = typeof msg.runId === "string" ? msg.runId : null;
-      if (runId) {
-        cancelResult(key, runId, cancelledRuns.recordCancellation(key, runId));
-        rejectServerCalls(
-          (p) => p.runId === runId && p.connKey === key,
-          "flcm: this run was cancelled by the server (its deadline passed) — the script stops here.",
-        );
-      }
     }
     return;
   }
@@ -643,10 +754,10 @@ figma.ui.onmessage = (msg: InboundMessage) => {
   // envelope dispatch below — its contract is "every id-carrying SERVER request gets one reply",
   // and its ids are a different namespace.
   if (msg.type === "CHANNEL_RESPONSE") {
-    settleServerCall(msg);
+    settleServerCall(msg, key);
     return;
   }
-  const to: ReplyTo = { id: msg.id, connKey: connKeyOf(msg) };
+  const to: ReplyTo = { id: msg.id, connKey: key };
   if (msg.type === "PING") {
     // Smoke test: echo back, including a live `figma.*` read to prove the API is
     // reachable from inside the sandbox (not just that the bytes round-tripped).
@@ -654,7 +765,8 @@ figma.ui.onmessage = (msg: InboundMessage) => {
   } else if (msg.type === "SESSION_INFO") {
     // The server introduces its session: the identity (project path) the human approves, the
     // per-connection pairing code shown in the panel, and — on a reconnect of an already-approved
-    // server — the session token it was handed on the prior Allow. Bind all three for this port's
+    // server — the session token it was handed on the prior Allow — plus the Framelink origin its
+    // sign-in pages must be on. Bind them for this port's
     // connection (the echoed token re-keys sticky approval) and ack immediately — we must NOT block
     // on the human here; approval arrives later via UI_DECISION. A squatter that never got an Allow
     // echoes no token, so the entry's token stays null and the gate re-prompts.
@@ -663,6 +775,7 @@ figma.ui.onmessage = (msg: InboundMessage) => {
         token: typeof msg.sessionToken === "string" ? msg.sessionToken : null,
         identity: typeof msg.identity === "string" ? msg.identity : null,
         pairingCode: typeof msg.pairingCode === "string" ? msg.pairingCode : null,
+        framelinkOrigin: typeof msg.framelinkOrigin === "string" ? msg.framelinkOrigin : null,
       });
     }
     reply(to, { type: "SESSION_INFO_ACK" });
@@ -714,6 +827,18 @@ figma.ui.onmessage = (msg: InboundMessage) => {
         ),
       );
     }
+  } else if (msg.type === "WRITE_ACCESS") {
+    const conn = to.connKey === undefined ? undefined : connections.get(to.connKey);
+    const notice = parseWriteAccessNotice(msg.notice);
+    if (conn && notice && to.connKey !== undefined) {
+      conn.writeAccess = notice;
+      if (notice.kind === "sign-in-pending" && conn.signInRequested) {
+        conn.signInRequested = false;
+        openSignIn(to.connKey);
+      }
+      setExpanded(true);
+    }
+    reply(to, { type: "WRITE_ACCESS_ACK" });
   } else if (msg.type === "GET_VERSION") {
     // Server-initiated version handshake. The constants live here in the sandbox (not in
     // ui.html, which owns the WS connect but doesn't know them), so the server asks and we
@@ -736,7 +861,7 @@ figma.ui.onmessage = (msg: InboundMessage) => {
       error: `Unsupported message type ${JSON.stringify(msg.type)} — the server may be newer than this plugin. Update the plugin.`,
     });
   }
-};
+}
 
 // The read/image half of the stale-runtime refusal; mutation-lock words the write half, which it
 // reaches through the host's isRunFinished. Same fact either way: a runtime is built per request and
@@ -770,6 +895,7 @@ async function executeCode(to: ReplyTo, code: string, preamble: string): Promise
       console: [],
       errors:
         "flcm: this run was cancelled by the server while it was still queued — no code was executed.",
+      documentChanged: false,
     });
     return;
   }
@@ -813,7 +939,11 @@ async function executeCode(to: ReplyTo, code: string, preamble: string): Promise
   let settled = false;
   let runtime: typeof SandboxRuntime | undefined;
   let landedAfterReturn = 0;
+  let documentChanged = false;
+  let documentChanges: DocumentChangeObserver | undefined;
   try {
+    // Watching starts before anything of the agent's can run, and ends after the drain below.
+    documentChanges = observeDocumentChanges();
     // Two evals, and the split is the point. The std-lib the server sent is a FACTORY expression
     // (buildSandboxPreamble, src/preamble/index.mjs): call it with the host, get the { flcm, session } bindings
     // back, hand those to the agent's code as named parameters. Nothing HERE knows how the preamble
@@ -849,10 +979,11 @@ async function executeCode(to: ReplyTo, code: string, preamble: string): Promise
     // Checked HERE, not in the finally that drains: a std-lib that cannot be drained must fail as a
     // run error the agent sees, never as a throw out of the finally — that would cost the run its
     // reply, and the frozen envelope promises one for every request.
-    if (typeof built.mutationQueueIdle !== "function") {
+    if (typeof built.mutationQueueIdle !== "function" || typeof built.committedVerbCount !== "function") {
       throw new Error(
-        "the flcm std-lib the server sent exposes no mutation queue to drain, so writes could " +
-          "outlive this reply — update the server (`npx figma-developer-mcp@latest`) and restart it.",
+        "the flcm std-lib the server sent is older than this plugin — it exposes no mutation queue " +
+          "to drain and count, so writes could outlive this reply unmetered. Update the server " +
+          "(`npx figma-developer-mcp@latest`) and restart it.",
       );
     }
     runtime = built;
@@ -878,6 +1009,17 @@ async function executeCode(to: ReplyTo, code: string, preamble: string): Promise
     // Nothing else can wait for these writes: the agent has returned, and the reply is what it
     // screenshots against. A preamble that never evaluated leaves no queue to drain.
     if (runtime) landedAfterReturn = await runtime.mutationQueueIdle();
+    // After the drain, so writes that landed after the agent's code returned count too. A committed
+    // flcm verb is a change by construction; it is OR'd in because it is known synchronously,
+    // while change events arrive in asynchronous batches (document-changes.ts). A "no" is only
+    // provisional: the observer keeps watching past the reply and reports a late change on its own.
+    documentChanged =
+      ((await documentChanges?.changedSoFar()) ?? false) || (runtime?.committedVerbCount() ?? 0) > 0;
+    if (documentChanged) documentChanges?.stop();
+    else if (documentChanges) {
+      documentChanges.watchLate(() => runChanged(to), LATE_CHANGE_WINDOW_MS);
+      lateChangeWatch = documentChanges;
+    }
     trace("eval-end");
     console.log = originalConsole.log;
     console.info = originalConsole.info;
@@ -896,7 +1038,7 @@ async function executeCode(to: ReplyTo, code: string, preamble: string): Promise
   }
   if (runtime) consoleLog.push(...runtime.warnings.summary());
 
-  reply(to, { type: "EXECUTE_CODE_RESULT", result, console: consoleLog, errors: errorMessage });
+  reply(to, { type: "EXECUTE_CODE_RESULT", result, console: consoleLog, errors: errorMessage, documentChanged });
 }
 
 /**

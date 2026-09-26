@@ -279,15 +279,27 @@ it.each([false, true])(
     const bridge = create({ capabilities: new Map([["test.future.v19", handler]]) });
     const socket = new Socket();
     install(bridge, socket);
+    // The page and change-event registration the host meters every run by (document-changes.ts).
+    const page = { id: "0:1", name: "test", on() {}, off() {} };
+    // Settles on the Allow handover itself — the approval is stored asynchronously, so waiting a
+    // fixed number of event-loop turns for it would race.
+    let handedOver!: () => void;
+    const allowed = new Promise<void>((resolve) => (handedOver = resolve));
     const figma = {
       showUI() {},
       notify() {},
-      currentPage: { name: "test" },
+      currentPage: page,
+      root: { children: [page] },
+      on() {},
+      off() {},
       clientStorage: { getAsync: async () => [], setAsync: async () => {} },
       ui: {
         resize() {},
         onmessage: (_msg: Record<string, unknown>) => {},
-        postMessage: (msg: Record<string, unknown>) => receive(bridge, socket, msg),
+        postMessage: (msg: Record<string, unknown>) => {
+          receive(bridge, socket, msg);
+          if (msg.type === "SESSION_TOKEN") handedOver();
+        },
       },
     };
     const code = buildSync({
@@ -305,18 +317,21 @@ it.each([false, true])(
         __html__: "",
         console: { ...console },
         setTimeout,
+        clearTimeout,
       }),
     );
-    // The ordinary UI connection envelope is reproduced after a JSON round trip in Socket.send.
-    socket.forward = (frame) => figma.ui.onmessage({ ...frame, __connKey: 1 });
-    figma.ui.onmessage({ type: "WS_CONNECTED", __connKey: 1 });
-    figma.ui.onmessage({ type: "SESSION_INFO", id: "session", identity: "test", __connKey: 1 });
-    figma.ui.onmessage({ type: "UI_DECISION", approve: true, __connKey: 1 });
-    await new Promise((resolve) => setImmediate(resolve));
+    // ui.html's two envelopes: server frames (after a JSON round trip in Socket.send) and panel input.
+    socket.forward = (frame) => figma.ui.onmessage({ from: "server", connKey: 1, frame });
+    const panel = (control: Record<string, unknown>) =>
+      figma.ui.onmessage({ from: "panel", control: { ...control, connKey: 1 } });
+    panel({ type: "WS_CONNECTED" });
+    socket.forward({ type: "SESSION_INFO", id: "session", identity: "test" });
+    panel({ type: "UI_DECISION", approve: true });
+    await allowed;
     const result = (await bridge.request({
       type: "EXECUTE_CODE",
       // Only this test's server/preamble knows the capability. No image-shaped fields or host edits.
-      preamble: `(host) => ({ flcm: { test: payload => host.callServer("test.future.v19", payload) }, session: host.getSession(() => ({})), warnings: createWarningRegistry(), mutationQueueIdle: async () => 0 })`,
+      preamble: `(host) => ({ flcm: { test: payload => host.callServer("test.future.v19", payload) }, session: host.getSession(() => ({})), warnings: createWarningRegistry(), mutationQueueIdle: async () => 0, committedVerbCount: () => 0 })`,
       code: `try { await flcm.test(${JSON.stringify(request)}); } catch (error) { return JSON.stringify({ detail: error.detail, message: error.message }); }`,
     })) as { result: string; errors: string | null };
     expect(result.errors).toBeNull();

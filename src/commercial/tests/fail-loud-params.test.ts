@@ -9,6 +9,7 @@ import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
 import { createServer } from "~/mcp/index.js";
 import type { PluginBridge } from "~/commercial/plugin-bridge/bridge.js";
 import type { PluginBridgeRuntime } from "~/commercial/plugin-bridge/index.js";
+import { createTestWriteAccess, TEST_AUTHORIZING_USER } from "./fixtures/write-access.js";
 
 /**
  * The point of these tests is the SDK parse seam, not our string formatting — so they drive a real
@@ -27,10 +28,12 @@ function connectedServer(
     getPairingCode: () => "1234",
     touchApproval: () => {},
     // A plugin is on the wire in these tests, so the disconnect reply never fires.
+    getAuthorizingUser: () => TEST_AUTHORIZING_USER,
     isPluginConnected: () => true,
   } as unknown as PluginBridge;
   const runtime: PluginBridgeRuntime = {
     bridge,
+    writeAccess: createTestWriteAccess().writeAccess,
     hasEverConnected: () => true,
     onFirstConnect: () => {},
   };

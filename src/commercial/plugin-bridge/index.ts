@@ -10,6 +10,13 @@ import { ImageByteCache, createImagesCapability } from "./image-requests.js";
 import { WS_PORT_BLOCK } from "./ports.js";
 import { SESSION_IDENTITY } from "./approval.js";
 import { resolveStateDir } from "./approval-store.js";
+import { WriteAccess } from "~/commercial/entitlement/write-access.js";
+import { FramelinkApiClient } from "~/commercial/entitlement/framelink-api.js";
+import { WriteAccessStore } from "~/commercial/entitlement/write-access-store.js";
+
+// How often a connected server checks whether its Authorizing User's seat or counts have gone stale. The
+// staleness rules themselves live in WriteAccess.syncWriteAccess; this is only the polling tick.
+const WRITE_ACCESS_SYNC_TICK_MS = 10 * 60 * 1000;
 
 /**
  * The running WS relay plus the code-mode advertisement latch. The relay starts with the server in
@@ -23,6 +30,8 @@ import { resolveStateDir } from "./approval-store.js";
  */
 export interface PluginBridgeRuntime {
   bridge: PluginBridge;
+  /** Seat and free-allowance authorization for figma_execute_code. */
+  writeAccess: WriteAccess;
   /** True once a plugin has connected at least once in this process (latched — see above). */
   hasEverConnected(): boolean;
   /** Run cb on the first plugin connection; runs immediately if one already happened. */
@@ -34,14 +43,38 @@ export interface PluginBridgeRuntime {
  * process from server startup; every MCP server instance (one for stdio, one per stateless HTTP
  * request) shares the returned runtime.
  */
-export function startPluginBridge({ assetRoot }: { assetRoot: string }): PluginBridgeRuntime {
+export function startPluginBridge({
+  assetRoot,
+  framelinkApiUrl,
+}: {
+  assetRoot: string;
+  framelinkApiUrl: string;
+}): PluginBridgeRuntime {
   // The images handler answers the plugin's mid-run image requests (protocol 2). Sources split by
   // scheme: https urls go through the guarded fetch plus a session-lifetime URL→bytes cache, local
   // paths through the asset-root-contained file read (uncached — see image-requests.ts).
   // One reader per process: it pins the canonical asset root on first use, so the authorization
   // boundary can't shift under a retargeted root symlink mid-session.
   const readLocalImage = createLocalImageReader(assetRoot);
+  const writeAccess = new WriteAccess(
+    new FramelinkApiClient(framelinkApiUrl),
+    new WriteAccessStore(),
+    {
+      notifyPanel: (notice) => {
+        bridge.request({ type: "WRITE_ACCESS", notice }).catch(() => {});
+      },
+    },
+  );
   const bridge = new PluginBridge(undefined, {
+    events: {
+      onSessionApproved: (authorizingUser) => {
+        if (authorizingUser)
+          inBackground(writeAccess.syncWriteAccess(authorizingUser, { force: true }));
+      },
+      onWriteAccessSignIn: () =>
+        inBackground(writeAccess.startDeviceSignIn(bridge.getAuthorizingUser())),
+      onRunDocumentChanged: (runId) => writeAccess.recordLateDocumentChange(runId),
+    },
     capabilities: new Map([
       [
         "images.fetch",
@@ -75,7 +108,10 @@ export function startPluginBridge({ assetRoot }: { assetRoot: string }): PluginB
 
     // The version handshake is NOT fired here — PluginBridge runs it itself on every connection,
     // because the compatibility hold it feeds is only safe if a verdict always lands (bridge.ts).
-    sendSessionInfo(bridge);
+    sendSessionInfo(bridge, new URL(framelinkApiUrl).origin);
+    // A reconnect (or a restart that reloaded an approval) is "connected" for revalidation purposes.
+    const authorizingUser = bridge.getAuthorizingUser();
+    if (authorizingUser) inBackground(writeAccess.syncWriteAccess(authorizingUser));
 
     if (pendingFirstConnect) {
       const callbacks = pendingFirstConnect;
@@ -84,8 +120,16 @@ export function startPluginBridge({ assetRoot }: { assetRoot: string }): PluginB
     }
   });
 
+  const writeAccessTick = setInterval(() => {
+    const authorizingUser = bridge.getAuthorizingUser();
+    if (authorizingUser && bridge.isPluginConnected())
+      inBackground(writeAccess.syncWriteAccess(authorizingUser));
+  }, WRITE_ACCESS_SYNC_TICK_MS);
+  writeAccessTick.unref();
+
   return {
     bridge,
+    writeAccess,
     hasEverConnected: () => pendingFirstConnect === null,
     onFirstConnect: (cb) => {
       if (pendingFirstConnect) pendingFirstConnect.push(cb);
@@ -104,10 +148,21 @@ export function startPluginBridge({ assetRoot }: { assetRoot: string }): PluginB
  * hang to its 15s timeout. The plugin owns the approval decision; this just hands it what to
  * display and the token that proves a prior approval.
  */
-function sendSessionInfo(bridge: PluginBridge): void {
+function sendSessionInfo(bridge: PluginBridge, framelinkOrigin: string): void {
   const pairingCode = bridge.getPairingCode();
   const sessionToken = bridge.getSessionToken();
   bridge
-    .request({ type: "SESSION_INFO", identity: SESSION_IDENTITY, pairingCode, sessionToken })
+    .request({
+      type: "SESSION_INFO",
+      identity: SESSION_IDENTITY,
+      pairingCode,
+      sessionToken,
+      framelinkOrigin,
+    })
     .catch(() => {});
+}
+
+/** Background write-access work reports its own failures; it must never become an unhandled rejection. */
+function inBackground(work: Promise<void>): void {
+  work.catch((err: Error) => Logger.log(`Write-access sync failed: ${err.message}`));
 }

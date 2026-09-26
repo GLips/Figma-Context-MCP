@@ -54,8 +54,9 @@ import {
 } from "node:fs";
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { Logger } from "~/utils/logger.js";
+import { parseAuthorizingUser, type AuthorizingUser } from "./approval.js";
 
 // A working session lasts a day, refreshed on use (see `touch`). Long enough that an active human is
 // never re-prompted mid-session; short enough that a forgotten on-disk token can't silently re-approve
@@ -68,6 +69,9 @@ export interface ApprovalRecord {
   // when) — NOT read back or trusted at load time. The filename key already binds the file to a cwd;
   // these fields exist so a human can `cat` the file and understand it, not as a load-time check.
   identity: string;
+  // Who clicked Allow — writes are attributed to them, so it must survive a restart with the token.
+  // Null when the plugin could not name a Figma user; the write gate refuses such a session.
+  authorizingUser: AuthorizingUser | null;
   createdAt: number;
   lastUsedAt: number;
 }
@@ -163,8 +167,14 @@ export class ApprovalStore {
   }
 
   /** Persist a freshly handed-over token (0600), stamping created/used times. Fail-safe. */
-  save(port: number, token: string, identity: string, now: number): void {
-    this.write(port, { token, identity, createdAt: now, lastUsedAt: now });
+  save(
+    port: number,
+    token: string,
+    identity: string,
+    authorizingUser: AuthorizingUser | null,
+    now: number,
+  ): void {
+    this.write(port, { token, identity, authorizingUser, createdAt: now, lastUsedAt: now });
   }
 
   /**
@@ -200,22 +210,12 @@ export class ApprovalStore {
    * in-memory approval.
    */
   private write(port: number, record: ApprovalRecord): void {
-    const file = this.fileFor(port);
-    const tmp = `${file}.${process.pid}.tmp`;
     try {
-      mkdirSync(this.approvalsDir, { recursive: true, mode: 0o700 });
-      writeFileSync(tmp, JSON.stringify(record), { mode: 0o600 });
-      chmodSync(tmp, 0o600);
-      renameSync(tmp, file);
+      writePrivateFileAtomic(this.fileFor(port), JSON.stringify(record));
     } catch (err) {
       Logger.log(
         `Could not persist session approval (${(err as Error).message}) — it holds in memory for this process only.`,
       );
-      try {
-        rmSync(tmp);
-      } catch {
-        // Temp may not exist if the failure was before the write — ignore.
-      }
     }
   }
 
@@ -238,15 +238,39 @@ export class ApprovalStore {
       if (prune) this.clear(port);
       return null;
     }
+    // `authorizingUser` must be PRESENT (null is a valid value): a record without the field predates write
+    // attribution, and reloading it would drive a session nobody can be billed or counted for. It
+    // reads as corrupt, so the plugin re-prompts and the fresh Allow names its Authorizing User.
     if (
       typeof record !== "object" ||
       record === null ||
       typeof (record as ApprovalRecord).token !== "string" ||
-      typeof (record as ApprovalRecord).lastUsedAt !== "number"
+      typeof (record as ApprovalRecord).lastUsedAt !== "number" ||
+      !("authorizingUser" in record)
     ) {
       if (prune) this.clear(port);
       return null;
     }
-    return record as ApprovalRecord;
+    const approval = record as ApprovalRecord;
+    return { ...approval, authorizingUser: parseAuthorizingUser(approval.authorizingUser) };
+  }
+}
+
+/**
+ * Atomic 0600 write of a small state file: create a per-process temp file, force its mode
+ * (guaranteeing 0600 regardless of umask or a pre-existing file's mode), then rename over the target.
+ * Rename is atomic on one filesystem, so a concurrent reader sees the old or the new file, never a
+ * torn one. Throws on IO failure — each caller decides what a lost write costs it.
+ */
+export function writePrivateFileAtomic(file: string, contents: string): void {
+  const tmp = `${file}.${process.pid}.tmp`;
+  try {
+    mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
+    writeFileSync(tmp, contents, { mode: 0o600 });
+    chmodSync(tmp, 0o600);
+    renameSync(tmp, file);
+  } catch (err) {
+    rmSync(tmp, { force: true });
+    throw err;
   }
 }

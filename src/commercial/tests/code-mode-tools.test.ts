@@ -9,6 +9,7 @@ import { ListToolsResultSchema } from "@modelcontextprotocol/sdk/types.js";
 import { createServer } from "~/mcp/index.js";
 import type { PluginBridge } from "~/commercial/plugin-bridge/bridge.js";
 import type { PluginBridgeRuntime } from "~/commercial/plugin-bridge/index.js";
+import { createTestWriteAccess, TEST_AUTHORIZING_USER } from "./fixtures/write-access.js";
 
 /**
  * Advertisement is driven through a real Client/Server pair rather than by inspecting the registration
@@ -27,11 +28,13 @@ function listToolsWith({
     getPairingCode: () => null,
     protocolRefusal: () => null,
     touchApproval: () => {},
+    getAuthorizingUser: () => TEST_AUTHORIZING_USER,
     isPluginConnected: () => false,
     hasRecentApproval: () => hasRecentApproval,
   } as unknown as PluginBridge;
   const runtime: PluginBridgeRuntime = {
     bridge,
+    writeAccess: createTestWriteAccess().writeAccess,
     hasEverConnected: () => hasEverConnected,
     onFirstConnect: () => {},
   };

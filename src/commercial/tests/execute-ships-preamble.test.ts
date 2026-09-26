@@ -21,6 +21,7 @@ import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
 import { createServer } from "~/mcp/index.js";
 import type { BridgeRequest, PluginBridge } from "~/commercial/plugin-bridge/bridge.js";
 import type { PluginBridgeRuntime } from "~/commercial/plugin-bridge/index.js";
+import { createTestWriteAccess, TEST_AUTHORIZING_USER } from "./fixtures/write-access.js";
 
 function connectedServer() {
   const request = vi
@@ -28,17 +29,19 @@ function connectedServer() {
     .mockImplementation(async (payload: BridgeRequest) =>
       payload.type === "APPROVAL_STATUS"
         ? { type: "APPROVAL_GRANTED" }
-        : { result: "ok", console: [], errors: null },
+        : { result: "ok", console: [], errors: null, documentChanged: false },
     );
   const bridge = {
     request,
     getPairingCode: () => "1234",
     protocolRefusal: () => null,
     touchApproval: () => {},
+    getAuthorizingUser: () => TEST_AUTHORIZING_USER,
     isPluginConnected: () => true,
   } as unknown as PluginBridge;
   const runtime: PluginBridgeRuntime = {
     bridge,
+    writeAccess: createTestWriteAccess().writeAccess,
     hasEverConnected: () => true,
     onFirstConnect: () => {},
   };

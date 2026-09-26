@@ -45,7 +45,12 @@ import { z } from "zod";
 // cancelled caller be told "never executed" instead of the hedge (bridge.ts, cancelPending).
 // v7: FlcmHost.callServer and the opaque CHANNEL_REQUEST/CHANNEL_RESPONSE replace image-specific
 // transport. Older hosts lack callServer and must be re-imported.
-export const MIN_PROTOCOL_VERSION = 7;
+// v8: writes are metered. EXECUTE_CODE_RESULT carries documentChanged (a later RUN_CHANGED corrects a
+// "no"), the SESSION_TOKEN handover names the Authorizing User (figma.currentUser), SESSION_INFO names
+// the Framelink origin, and the panel exchanges WRITE_ACCESS / WRITE_ACCESS_SIGN_IN. A v7
+// plugin reports no document change and no Authorizing User, so its writes could be neither counted nor
+// attributed — refused, like every other gap in the contract.
+export const MIN_PROTOCOL_VERSION = 8;
 
 /**
  * Where a connection stands with the version handshake.

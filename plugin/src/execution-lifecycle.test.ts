@@ -15,33 +15,95 @@ const code = buildSync({
   write: false,
   format: "iife",
 }).outputFiles[0].text;
-const flush = async () => {
-  for (let n = 0; n < 30; n++) await Promise.resolve();
-};
+type Frame = Record<string, unknown>;
+// Tests wait on what the plugin SAYS, never on elapsed time or a count of event-loop turns: the host's
+// reply path crosses real timers (document-changes.ts settles one task), so "N turns later" is a race.
+// The deadline only turns a missing frame into a readable failure instead of a hung run.
+const FRAME_DEADLINE_MS = 5_000;
 function host(native: Record<string, unknown> = {}) {
-  const frames: Record<string, unknown>[] = [];
+  const frames: Frame[] = [];
+  const waiters = new Set<{ match: (f: Frame) => boolean; resolve: (f: Frame) => void }>();
+  const record = (msg: Frame) => {
+    frames.push(msg);
+    for (const waiter of waiters) {
+      if (!waiter.match(msg)) continue;
+      waiters.delete(waiter);
+      waiter.resolve(msg);
+    }
+  };
+  /** The first frame, already sent or still to come, that matches. */
+  const frame = (match: (f: Frame) => boolean, what = "an expected frame"): Promise<Frame> => {
+    const seen = frames.find(match);
+    if (seen) return Promise.resolve(seen);
+    return new Promise((resolve, reject) => {
+      const deadline = setTimeout(() => reject(new Error(`the plugin never sent ${what}`)), FRAME_DEADLINE_MS).unref();
+      waiters.add({ match, resolve: (f) => { clearTimeout(deadline); resolve(f); } });
+    });
+  };
+  // One page and the change events the host meters by. Live Figma delivers a raw write's nodechange
+  // "periodically", with no deadline; here it waits until the test delivers it (deliverChanges), so
+  // "after the reply" is a fact the test arranges rather than a delay it hopes for.
+  const nodeChangeListeners = new Set<(event: unknown) => void>();
+  const undelivered: ("LOCAL" | "REMOTE")[] = [];
+  const emitNodeChange = (origin: "LOCAL" | "REMOTE") => undelivered.push(origin);
+  const deliverChanges = () => {
+    for (const origin of undelivered.splice(0))
+      for (const cb of [...nodeChangeListeners]) cb({ nodeChanges: [{ type: "CREATE", id: "9:9", origin }] });
+  };
+  const page = {
+    id: "0:1",
+    name: "test",
+    on: (_type: string, cb: (event: unknown) => void) => nodeChangeListeners.add(cb),
+    off: (_type: string, cb: (event: unknown) => void) => nodeChangeListeners.delete(cb),
+  };
   const figma = {
     showUI() {},
     notify() {},
-    currentPage: { name: "test" },
+    currentPage: page,
+    root: { children: [page] },
+    on() {},
+    off() {},
+    createRectangle() {
+      emitNodeChange("LOCAL");
+      return { id: "9:9", type: "RECTANGLE" };
+    },
+    // Someone else in the file: a change the run must not be charged for.
+    simulateRemoteEdit() {
+      emitNodeChange("REMOTE");
+    },
     ...native,
     clientStorage: { getAsync: async () => [], setAsync: async () => {} },
     ui: {
-      postMessage: (msg: Record<string, unknown>) => frames.push(msg),
-      onmessage: (_msg: Record<string, unknown>) => {},
+      postMessage: record,
+      onmessage: (_inbound: Record<string, unknown>) => {},
       resize() {},
     },
   };
-  const context = vm.createContext({ createWarningRegistry, figma, __html__: "", console: { ...console }, setTimeout });
+  // Unref'd so a run's minute-long late-change watch can't hold the test process open after it ends.
+  const hostSetTimeout = (callback: () => void, ms?: number) => setTimeout(callback, ms).unref();
+  const context = vm.createContext({ createWarningRegistry, figma, __html__: "", console: { ...console }, setTimeout: hostSetTimeout, clearTimeout });
   vm.runInContext(code, context);
-  const send = (msg: Record<string, unknown>) => figma.ui.onmessage(msg);
+  // Stands in for ui.html, which posts the panel's input and server frames in separate envelopes.
+  const send = ({ __connKey, ...msg }: Record<string, unknown>) =>
+    /^(UI|WS)_/.test(String(msg.type))
+      ? figma.ui.onmessage({ from: "panel", control: { ...msg, connKey: __connKey } })
+      : figma.ui.onmessage({ from: "server", connKey: __connKey, frame: msg });
+  const approved = (key: number) =>
+    frame((f) => f.type === "SESSION_TOKEN" && f.__connKey === key, `the Allow handover for ${key}`);
   const connect = async (key: number) => {
     send({ type: "WS_CONNECTED", __connKey: key });
     send({ type: "SESSION_INFO", id: `session-${key}`, __connKey: key, identity: "test" });
     send({ type: "UI_DECISION", approve: true, __connKey: key });
-    await flush();
+    await approved(key);
   };
-  return { frames, context, send, connect };
+  const result = (id: string, key?: number) =>
+    frame(
+      (f) => f.id === id && f.type === "EXECUTE_CODE_RESULT" && (key === undefined || f.__connKey === key),
+      `a result for ${id}`,
+    ) as Promise<any>;
+  const running = (id: string, key: number) =>
+    frame((f) => f.type === "RUN_STATE" && f.runId === id && f.__connKey === key && f.phase === "running", `${id} running`);
+  return { frames, context, send, connect, approved, frame, result, running, deliverChanges };
 }
 
 test("queued cancellation never executes, old settlement cannot cancel or erase replacement run", async () => {
@@ -53,16 +115,18 @@ test("queued cancellation never executes, old settlement cannot cancel or erase 
   });
   h.context.writes = [];
   const run = (key: number, id: string, body: string) =>
-    h.send({ type: "EXECUTE_CODE", id, __connKey: key, preamble: "(host)=>({ flcm: {}, session: host.getSession(() => ({})), warnings: createWarningRegistry(), mutationQueueIdle: async () => 0 })", code: body });
+    h.send({ type: "EXECUTE_CODE", id, __connKey: key, preamble: "(host)=>({ flcm: {}, session: host.getSession(() => ({})), warnings: createWarningRegistry(), mutationQueueIdle: async () => 0, committedVerbCount: () => 0 })", code: body });
   run(1, "same-id", "await hold; writes.push('old completed'); return 'old';");
-  await flush();
+  await h.running("same-id", 1);
   h.send({ type: "WS_CLOSED", __connKey: 1 });
   await h.connect(2);
   run(2, "same-id", "writes.push('new'); return 'new';");
   run(2, "queued", "writes.push('must never run');");
   h.send({ type: "CANCEL", runId: "queued", __connKey: 2 });
   release();
-  await flush();
+  // Runs dequeue in order, so the cancelled one answering means everything before it has run.
+  await h.result("same-id", 2);
+  await h.result("queued", 2);
   assert.deepEqual(Array.from(h.context.writes), ["old completed", "new"]);
   assert(
     h.frames.some(
@@ -83,12 +147,12 @@ test("a cancel is answered at once from the phase the run had reached", async ()
   await h.connect(1);
   let release!: () => void;
   h.context.hold = new Promise<void>((resolve) => { release = resolve; });
-  const preamble = "(host)=>({ flcm: {}, session: host.getSession(() => ({})), warnings: createWarningRegistry(), mutationQueueIdle: async () => 0 })";
+  const preamble = "(host)=>({ flcm: {}, session: host.getSession(() => ({})), warnings: createWarningRegistry(), mutationQueueIdle: async () => 0, committedVerbCount: () => 0 })";
   const run = (id: string, body: string) =>
     h.send({ type: "EXECUTE_CODE", id, __connKey: 1, preamble, code: body });
   run("executing", "await hold; return 1;");
   run("waiting", "return 2;");
-  await flush();
+  await h.running("executing", 1);
   // No flush between these and the assertion: the answer must come from state the plugin already
   // holds. The queued run's own refusal can only speak once "executing" finishes — far too late.
   h.send({ type: "CANCEL", runId: "waiting", __connKey: 1 });
@@ -103,12 +167,13 @@ test("a cancel is answered at once from the phase the run had reached", async ()
     ],
   );
   release();
-  await flush();
+  await h.result("waiting");
 });
 
 test("Reject is explicit and unknown tokens cannot bypass approval status or execution", async () => {
   const h = host();
-  await flush();
+  // The first paint follows the stored approvals loading; only then is "unknown" known to be unknown.
+  await h.frame((f) => f.type === "RENDER", "the first paint");
   h.send({ type: "WS_CONNECTED", __connKey: 1 });
   h.send({ type: "SESSION_INFO", id: "session", __connKey: 1, sessionToken: "unknown" });
   h.send({ type: "UI_DECISION", approve: false, __connKey: 1 });
@@ -119,10 +184,11 @@ test("Reject is explicit and unknown tokens cannot bypass approval status or exe
     type: "EXECUTE_CODE",
     id: "run",
     __connKey: 1,
-    preamble: "(host)=>({ flcm: {}, session: host.getSession(() => ({})), warnings: createWarningRegistry(), mutationQueueIdle: async () => 0 })",
+    preamble: "(host)=>({ flcm: {}, session: host.getSession(() => ({})), warnings: createWarningRegistry(), mutationQueueIdle: async () => 0, committedVerbCount: () => 0 })",
     code: "writes.push('bad');",
   });
-  await flush();
+  // Refused at the gate, synchronously, with the one reply the request is owed.
+  assert.equal(h.frames.find((f) => f.id === "run")?.type, "PENDING_APPROVAL");
   assert.equal(h.context.writes.length, 0);
 });
 
@@ -156,11 +222,11 @@ test("actual UI routes old results and image requests only to their original con
   vm.runInContext(script, context);
   const old: Socket = context.sockets[9876];
   old.onopen();
-  const oldKey = forwarded.at(-1)!.pluginMessage.__connKey;
+  const oldKey = (forwarded.at(-1)!.pluginMessage.control as { connKey: number }).connKey;
   context.connect(9876);
   const next: Socket = context.sockets[9876];
   next.onopen();
-  const newKey = forwarded.at(-1)!.pluginMessage.__connKey;
+  const newKey = (forwarded.at(-1)!.pluginMessage.control as { connKey: number }).connKey;
   assert.notEqual(oldKey, newKey);
   for (const type of ["EXECUTE_CODE_RESULT", "CHANNEL_REQUEST", "SESSION_TOKEN", "REVOKE_SESSION"]) {
     context.window.onmessage({ data: { pluginMessage: { type, __connKey: oldKey } } });
@@ -173,7 +239,74 @@ test("actual UI routes old results and image requests only to their original con
     data: { pluginMessage: { type: "EXECUTE_CODE_RESULT", __connKey: newKey, result: "new" } },
   });
   assert.equal(JSON.parse(next.frames[0]).result, "new");
-  assert(!forwarded.some((f) => f.pluginMessage.type === "CANCEL"));
+  assert(!forwarded.some((f) => (f.pluginMessage.frame as { type?: string } | undefined)?.type === "CANCEL"));
+});
+
+test("a server frame can never act as the human's panel input", async () => {
+  const h = host({ openExternal: () => { throw new Error("a server opened the browser"); } });
+  class Socket {
+    static OPEN = 1;
+    readyState = 1;
+    onopen = () => {};
+    onmessage = (_event: { data: string }) => {};
+    onclose = () => {};
+    send() {}
+  }
+  const script = readFileSync(new URL("../ui.html", import.meta.url), "utf8")
+    .split("<script>")[1]
+    .split("</script>")[0];
+  const ui = vm.createContext({
+    WebSocket: Socket,
+    // The real relay, feeding the real host: whatever ui.html posts is what code.ts dispatches on.
+    parent: { postMessage: (msg: { pluginMessage: unknown }) => h.context.figma.ui.onmessage(msg.pluginMessage) },
+    window: {},
+    document: { getElementById: () => ({}) },
+    setTimeout() {},
+    requestAnimationFrame() {},
+    console,
+  });
+  vm.runInContext(script, ui);
+  const socket: Socket & { connectionKey?: number } = ui.sockets[9876];
+  socket.onopen();
+  const fromServer = (frame: Record<string, unknown>) => socket.onmessage({ data: JSON.stringify(frame) });
+  fromServer({ type: "SESSION_INFO", id: "session", identity: "rogue", framelinkOrigin: "https://evil.example" });
+  // Everything a panel click would say, spoken by the server instead — in both envelope spellings.
+  fromServer({ type: "UI_DECISION", approve: true });
+  fromServer({ type: "UI_DECISION", approve: true, connKey: 1, __connKey: 1 });
+  fromServer({ from: "panel", control: { type: "UI_DECISION", approve: true, connKey: 1 } });
+  fromServer({ type: "UI_SIGN_IN" });
+  fromServer({ type: "UI_OPEN_SIGN_IN" });
+  // A barrier: a genuine Allow on a second session. Approval changes land in order, so once its
+  // handover is out, any Allow a forged frame had started would have landed before it.
+  const second: Socket & { connectionKey?: number } = ui.sockets[9877];
+  second.onopen();
+  second.onmessage({ data: JSON.stringify({ type: "SESSION_INFO", id: "second", identity: "real" }) });
+  ui.decide(true, second.connectionKey);
+  await h.approved(second.connectionKey!);
+  fromServer({ type: "APPROVAL_STATUS", id: "status" });
+  assert.equal(h.frames.find((f) => f.id === "status")?.type, "PENDING_APPROVAL");
+  assert.equal(
+    h.frames.some((f) => (f.type === "SESSION_TOKEN" && f.__connKey === socket.connectionKey) || f.type === "WRITE_ACCESS_SIGN_IN"),
+    false,
+  );
+});
+
+test("the browser opens a sign-in page only on the Framelink origin the server announced", async () => {
+  const opened: string[] = [];
+  const h = host({ openExternal: (url: string) => opened.push(url) });
+  h.send({ type: "WS_CONNECTED", __connKey: 1 });
+  h.send({ type: "SESSION_INFO", id: "session", __connKey: 1, identity: "test", framelinkOrigin: "https://app.framelink.ai" });
+  h.send({ type: "UI_DECISION", approve: true, __connKey: 1 });
+  await h.approved(1);
+  const signIn = (verificationUri: string) => {
+    h.send({ type: "UI_SIGN_IN", __connKey: 1 });
+    h.send({ type: "WRITE_ACCESS", id: `notice-${verificationUri}`, __connKey: 1, notice: { kind: "sign-in-pending", userCode: "ABCD", verificationUri } });
+  };
+  signIn("https://app.framelink.ai.evil.example/device");
+  signIn("https://evil.example/?https://app.framelink.ai/");
+  signIn("https://app.framelink.ai@evil.example/device");
+  signIn("https://app.framelink.ai/device?user_code=ABCD");
+  assert.deepEqual(opened, ["https://app.framelink.ai/device?user_code=ABCD"]);
 });
 
 test("execute projects registered reads in nested results and console lines exactly once", async () => {
@@ -184,12 +317,11 @@ test("execute projects registered reads in nested results and console lines exac
     preamble: `(host) => {
       const read = { id: "v", type: "VECTOR", d: "M0 0 L1 1" };
       host.registerRead(read, () => ({ id: "v", type: "IMAGE-SVG", elided: { d: 10 } }));
-      return { flcm: { read }, session: host.getSession(() => ({})), warnings: createWarningRegistry(), mutationQueueIdle: async () => 0 };
+      return { flcm: { read }, session: host.getSession(() => ({})), warnings: createWarningRegistry(), mutationQueueIdle: async () => 0, committedVerbCount: () => 0 };
     }`,
     code: `console.log({ nested: [flcm.read] }); return { nested: [flcm.read], computed: { id: "v", type: "VECTOR", d: "mine" } };`,
   });
-  await flush();
-  const reply = h.frames.find(frame => frame.id === "projection" && frame.type === "EXECUTE_CODE_RESULT") as any;
+  const reply = await h.result("projection");
   assert.equal(reply.errors, null);
   assert.equal(reply.result.nested[0].type, "IMAGE-SVG");
   assert.equal(JSON.stringify(reply.result.nested[0].elided), '{"d":10}');
@@ -202,12 +334,7 @@ const realPreamble = import("./preamble/index.mjs").then(m => m.buildSandboxPrea
 async function execute(h: ReturnType<typeof host>, body: string, key = 1) {
   const id = `execute-${h.frames.length}`;
   h.send({ type: "EXECUTE_CODE", id, __connKey: key, preamble: await realPreamble, code: body });
-  for (let n = 0; n < 100; n++) {
-    const reply = h.frames.find(f => f.id === id && f.type === "EXECUTE_CODE_RESULT");
-    if (reply) return reply as { result: any; errors: string | null };
-    await new Promise<void>(resolve => setImmediate(resolve));
-  }
-  throw new Error("execution did not settle");
+  return (await h.result(id)) as { id: string; result: any; errors: string | null };
 }
 
 test("session identity, snapshots and last survive fresh calls, reconnects and pages but not plugin runs", async () => {
@@ -287,8 +414,7 @@ test("last retains full read data before wire projection", async () => {
     }`,
     code: `return { nested: [flcm.read] };`,
   });
-  await flush();
-  const first = h.frames.find(f => f.id === "full-read" && f.type === "EXECUTE_CODE_RESULT") as any;
+  const first = await h.result("full-read");
   assert.equal(first.errors, null);
   assert.equal(first.result.nested[0].type, "IMAGE-SVG");
   const next = await execute(h, `return session.last.nested[0].d;`);
@@ -328,6 +454,39 @@ test("two calls reorder and re-append a stored tree while preserving live ids", 
   const read = await execute(h, `return (await flcm.get(session.screen)).node.id;`);
   assert.equal(read.errors, null);
   assert.equal(read.result, promoted.result);
+});
+
+test("a raw figma write counts even when its change event lands after the reply, and Allow names the Authorizing User", async () => {
+  const h = host({ currentUser: { id: "figma-user-7", name: "Ada" } });
+  await h.connect(1);
+  const handover = h.frames.find(f => f.type === "SESSION_TOKEN") as any;
+  assert.deepEqual(JSON.parse(JSON.stringify(handover.authorizingUser)), { figmaUserId: "figma-user-7", name: "Ada" });
+  const changedLate = (id: string) => h.frames.some(f => f.type === "RUN_CHANGED" && f.runId === id);
+  const read = await execute(h, `return 1;`) as any;
+  assert.equal(read.documentChanged, false);
+  // Someone else in the file edits while this run is being watched: not this run's Write.
+  const remote = await execute(h, `figma.simulateRemoteEdit(); return 1;`) as any;
+  h.deliverChanges();
+  assert.equal(remote.documentChanged, false);
+  assert.equal(changedLate(remote.id), false);
+  // No flcm verb at all: the agent went straight to the Figma API, and Figma reports it only after
+  // the reply went out. The listener posts RUN_CHANGED as the event is delivered.
+  const raw = await execute(h, `figma.createRectangle(); return "done";`) as any;
+  assert.equal(raw.errors, null);
+  assert.equal(raw.documentChanged, false);
+  h.deliverChanges();
+  assert.equal(changedLate(raw.id), true);
+  assert.equal(changedLate(read.id), false);
+});
+
+test("a verb that lands after the code returns still changes the document", async () => {
+  const { createFigmaMock } = await import("../harness/figma-mock.mjs");
+  const h = host(createFigmaMock());
+  await h.connect(1);
+  // Never awaited: the render lands during the host's drain, after the agent's code returned.
+  const written = await execute(h, `flcm.render({ type: "FRAME", width: 20, height: 20 }); return "done";`) as any;
+  assert.equal(written.errors, null);
+  assert.equal(written.documentChanged, true);
 });
 
 test("queued calls observe completed session writes and cancelled queued calls cannot change last", async () => {
@@ -568,17 +727,12 @@ test("image adapter round-trips over the opaque channel and refuses wrong-connec
   const h = host(createFigmaMock());
   await h.connect(1);
   const result = execute(h, `return await flcm.render({ type: "RECTANGLE", width: 10, height: 10, fill: flcm.image("asset.png") });`);
-  let request: Record<string, unknown> | undefined;
-  for (let n = 0; n < 100 && !request; n++) {
-    await new Promise<void>(resolve => setImmediate(resolve));
-    request = h.frames.find(f => f.type === "CHANNEL_REQUEST");
-  }
-  assert.ok(request);
+  const request = await h.frame((f) => f.type === "CHANNEL_REQUEST", "a channel request");
   assert.equal(request.capability, "images.fetch");
   assert.equal(JSON.stringify(request.payload), '["asset.png"]');
+  // Had the wrong connection's failure been taken, the run would reject with it; that the right
+  // connection's answer still completes it cleanly is the proof it was refused.
   h.send({ type: "CHANNEL_RESPONSE", id: request.id, ok: false, error: "wrong connection", __connKey: 2 });
-  await flush();
-  assert.equal(h.frames.some(f => f.type === "EXECUTE_CODE_RESULT"), false);
   h.send({ type: "CHANNEL_RESPONSE", id: request.id, ok: true, payload: { "asset.png": "Ynl0ZXM=" }, __connKey: 1 });
   assert.equal((await result).errors, null);
 });
@@ -588,12 +742,7 @@ test("server refusals reject the suspended image await", async () => {
   const h = host(createFigmaMock());
   await h.connect(1);
   const result = execute(h, `await flcm.render({ type: "RECTANGLE", width: 10, height: 10, fill: flcm.image("asset.png") }); globalThis.resumed = true;`);
-  let request: Record<string, unknown> | undefined;
-  for (let n = 0; n < 100 && !request; n++) {
-    await new Promise<void>(resolve => setImmediate(resolve));
-    request = h.frames.find(f => f.type === "CHANNEL_REQUEST");
-  }
-  assert.ok(request);
+  const request = await h.frame((f) => f.type === "CHANNEL_REQUEST", "a channel request");
   h.send({ type: "CHANNEL_RESPONSE", id: request.id, ok: false, error: "run no longer active", __connKey: 1 });
   assert.match((await result).errors!, /run no longer active/);
   assert.equal(h.context.resumed, undefined);

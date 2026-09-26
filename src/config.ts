@@ -6,6 +6,8 @@ import { VALID_OUTPUT_FORMATS, isOutputFormat, type OutputFormat } from "./utils
 
 export type Source = "cli" | "env" | "default";
 
+export const DEFAULT_FRAMELINK_API_URL = "https://app.framelink.ai";
+
 export interface Resolved<T> {
   value: T;
   source: Source;
@@ -40,6 +42,7 @@ export interface ServerConfig {
   noTelemetry: boolean;
   codeMode: boolean;
   assetRoot: string;
+  framelinkApiUrl: string;
   configSources: Record<string, Source>;
 }
 
@@ -193,6 +196,14 @@ export function getServerConfig(flags: ServerFlags): ServerConfig {
     process.cwd(),
   );
 
+  // The Framelink app that answers write-access questions: seat checks, device sign-in, and free
+  // allowance usage reports. Overridable for local development against the app.
+  const framelinkApiUrl = resolve(
+    undefined,
+    envStr("FRAMELINK_API_URL"),
+    DEFAULT_FRAMELINK_API_URL,
+  );
+
   const noTelemetry = flags.noTelemetry ?? false;
   const telemetrySource: Source =
     flags.noTelemetry === true
@@ -213,6 +224,7 @@ export function getServerConfig(flags: ServerFlags): ServerConfig {
     imageDir: imageDir.source,
     codeMode: codeMode.source,
     assetRoot: assetRoot.source,
+    framelinkApiUrl: framelinkApiUrl.source,
     telemetry: telemetrySource,
   };
 
@@ -242,6 +254,9 @@ export function getServerConfig(flags: ServerFlags): ServerConfig {
     console.log(`- IMAGE_DIR: ${imageDir.value} (source: ${configSources.imageDir})`);
     console.log(`- CODE_MODE: ${codeMode.value} (source: ${configSources.codeMode})`);
     console.log(`- ASSET_ROOT: ${assetRoot.value} (source: ${configSources.assetRoot})`);
+    console.log(
+      `- FRAMELINK_API_URL: ${framelinkApiUrl.value} (source: ${configSources.framelinkApiUrl})`,
+    );
     const telemetryEnabled = resolveTelemetryEnabled(noTelemetry);
     console.log(
       `- TELEMETRY: ${telemetryEnabled ? "enabled" : "disabled"} (source: ${configSources.telemetry})`,
@@ -261,6 +276,7 @@ export function getServerConfig(flags: ServerFlags): ServerConfig {
     noTelemetry,
     codeMode: codeMode.value,
     assetRoot: assetRoot.value,
+    framelinkApiUrl: framelinkApiUrl.value,
     configSources,
   };
 }

@@ -183,6 +183,29 @@
         background: var(--figma-color-bg-secondary, #f0f0f0);
         color: var(--figma-color-text, #333);
       }
+      /* Write access (free allowance, Framelink sign-in) — inside the session card it concerns, set
+         apart like the orientation block because it is information first and a control second. */
+      .write-access {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        background: var(--figma-color-bg-secondary, #f5f5f5);
+        border-radius: 6px;
+        padding: 12px;
+        line-height: 1.45;
+        color: var(--figma-color-text-secondary, #555);
+      }
+      .write-access-title {
+        font-weight: 600;
+        color: var(--figma-color-text, #1e1e1e);
+      }
+      .write-access-code {
+        font-size: 16px;
+        font-weight: 600;
+        letter-spacing: 0.08em;
+        font-variant-numeric: tabular-nums;
+        color: var(--figma-color-text, #1e1e1e);
+      }
       /* The global counterpart to a per-row Revoke access — set apart by a rule rather than a card,
          since it addresses every approval this plugin remembers, not one row in the list above it. */
       .footer {
@@ -216,14 +239,14 @@
     </div>
     <script>
       // The plugin's ONLY network context (the sandbox code.js has no WS access), so this iframe
-      // relays server↔sandbox traffic unmodified:
+      // relays server↔sandbox traffic unmodified (inbound frames ride whole inside a "server" envelope):
       //   server  --WS-->            here  --parent.postMessage-->  code.js
       //   code.js --figma.ui.postMessage-->  here  --WS-->          server
       //
       // It is ALSO the plugin's only human surface: an always-visible status strip that expands into
       // the session list. The sandbox drives it with one local RENDER control message (NOT relayed to
       // the WS) and owns every decision (sole arbiter); this file only reports clicks (UI_DECISION /
-      // UI_REVOKE / UI_REVOKE_ALL / UI_TOGGLE) and its own measured height (UI_HEIGHT). Resizing does
+      // UI_REVOKE / UI_REVOKE_ALL / UI_TOGGLE / UI_SIGN_IN / UI_OPEN_SIGN_IN) and its own measured height (UI_HEIGHT). Resizing does
       // not reload the iframe, so the WS connections below survive every expand/collapse.
       //
       // Opens ONE persistent connection per port in the block from bridge/src/config.ts
@@ -274,11 +297,20 @@
       var FAST_RECONNECT_GRACE_MS = 30000;
       var lastOpenAt = {};
 
+      // Everything this document itself says to the sandbox — the human's clicks, its measurements,
+      // and the relay's connect/close signals — goes in a "panel" envelope, and ONLY from here. A
+      // server frame travels in its own "server" envelope (ws.onmessage), so a local process that
+      // dials the relay can never put words in the human's mouth (an Allow, a sign-in) whatever it
+      // sends: the sandbox dispatches on the envelope, which no server byte can reach.
+      function toSandbox(control) {
+        parent.postMessage({ pluginMessage: { from: "panel", control: control } }, "*");
+      }
+
       function connect(port) {
         var previous = sockets[port];
         if (previous && previous.connectionKey) {
           delete routes[previous.connectionKey];
-          parent.postMessage({ pluginMessage: { type: "WS_CLOSED", __connKey: previous.connectionKey } }, "*");
+          toSandbox({ type: "WS_CLOSED", connKey: previous.connectionKey });
         }
         var ws = new WebSocket("ws://localhost:" + port);
         var connectionKey = ++nextConnectionKey;
@@ -300,19 +332,20 @@
           // Tell the sandbox a FRESH connection opened on THIS port so it drops any binding from the
           // previous socket on it. A different local server can grab a freed port; without this reset
           // a write arriving before that server's SESSION_INFO would ride the prior (approved) binding
-          // into the executor — the consent gate's job is to stop exactly that. Tagged with __connKey
+          // into the executor — the consent gate's job is to stop exactly that. Tagged with connKey
           // so the sandbox resets the right session. onopen fires before any onmessage on this socket,
           // so the reset lands before the new server's first message. Carries no id: local control.
-          parent.postMessage({ pluginMessage: { type: "WS_CONNECTED", __connKey: connectionKey } }, "*");
+          toSandbox({ type: "WS_CONNECTED", connKey: connectionKey });
         };
         ws.onmessage = function (event) {
           if (sockets[port] !== ws) return;
-          // Server → sandbox. Tag the message with its socket generation (__connKey) so the sandbox keys
-          // its per-connection map and routes the reply back to this socket. __connKey is LOCAL — it
-          // is stripped again before any sandbox reply re-enters the WS (see window.onmessage).
-          var msg = JSON.parse(event.data);
-          msg.__connKey = connectionKey;
-          parent.postMessage({ pluginMessage: msg }, "*");
+          // Server → sandbox, wrapped whole as `frame` in a "server" envelope tagged with its socket
+          // generation, so the sandbox keys its per-connection map and routes the reply back to this
+          // socket. Never merged into the envelope: see toSandbox for why that is the security line.
+          parent.postMessage(
+            { pluginMessage: { from: "server", connKey: connectionKey, frame: JSON.parse(event.data) } },
+            "*",
+          );
         };
         ws.onclose = function () {
           delete routes[connectionKey];
@@ -324,7 +357,7 @@
           // outlives any single server run, and an empty port keeps its slot warm for a server that may
           // yet bind it (discovery is the same persistent relay).
           if (opened) {
-            parent.postMessage({ pluginMessage: { type: "WS_CLOSED", __connKey: connectionKey } }, "*");
+            toSandbox({ type: "WS_CLOSED", connKey: connectionKey });
           } else if (Date.now() - (lastOpenAt[port] || 0) > FAST_RECONNECT_GRACE_MS) {
             // Never opened, and no session here within the grace ⇒ presumed-empty port: double the
             // backoff (capped) so its doomed retries — and the un-mutable console line each one emits —
@@ -363,11 +396,11 @@
       // sandbox routes the decision to the right session. The button carries NO approval logic: it
       // just reports the human's choice; the sandbox mints the token (Slice 2.1b / 3.2).
       function decide(approve, key) {
-        parent.postMessage({ pluginMessage: { type: "UI_DECISION", approve: approve, __connKey: key } }, "*");
+        toSandbox({ type: "UI_DECISION", approve: approve, connKey: key });
       }
 
       document.getElementById("strip").onclick = function () {
-        parent.postMessage({ pluginMessage: { type: "UI_TOGGLE" } }, "*");
+        toSandbox({ type: "UI_TOGGLE" });
       };
 
       // Render the whole surface from one RENDER payload: the always-on strip, plus — when expanded —
@@ -398,16 +431,22 @@
         var wants = 0;
         var approved = 0;
         var active = null;
+        var writesSpent = false;
         sessions.forEach(function (s) {
           if (!s.approved) wants++;
           else approved++;
           if (s.active) active = s;
+          if (s.writeAccess && s.writeAccess.kind === "allowance-exhausted") writesSpent = true;
         });
 
         var text;
         var tone;
         if (wants) {
           text = wants === 1 ? "A session wants to connect" : wants + " sessions want to connect";
+          tone = "wants";
+        } else if (writesSpent) {
+          // Writes are being refused until the human acts, so it outranks who is driving.
+          text = "Free writes used up — sign in to keep writing";
           tone = "wants";
         } else if (active) {
           text = active.label + " — driving";
@@ -513,12 +552,67 @@
           // again.
           var revoke = el("button", "deny", "Revoke access");
           revoke.onclick = function () {
-            parent.postMessage({ pluginMessage: { type: "UI_REVOKE", __connKey: s.key } }, "*");
+            toSandbox({ type: "UI_REVOKE", connKey: s.key });
           };
           actions.appendChild(revoke);
         }
         card.appendChild(actions);
+        if (s.approved && s.writeAccess) card.appendChild(writeAccessCard(s.key, s.writeAccess));
         return card;
+      }
+
+      // The server's latest word on this session's write access. Every action is a message to the
+      // sandbox, which owns both the sign-in request and opening the browser.
+      function writeAccessCard(key, notice) {
+        var box = el("div", "write-access");
+        var send = function (type) {
+          toSandbox({ type: type, connKey: key });
+        };
+        var action = function (label, type) {
+          var row = el("div", "actions");
+          var button = el("button", "allow", label);
+          button.onclick = function () {
+            send(type);
+          };
+          row.appendChild(button);
+          box.appendChild(row);
+        };
+        if (notice.kind === "allowance-exhausted") {
+          box.appendChild(el("div", "write-access-title", "Free writes used up"));
+          box.appendChild(
+            el(
+              "div",
+              null,
+              "All " + notice.allowance + " free writes this month are used (they reset " +
+                notice.resetsAt.slice(0, 10) + " UTC). Writes past the allowance need a Framelink " +
+                "seat" + (notice.signedIn ? ", and the signed-in account has none yet." : "."),
+            ),
+          );
+          action(notice.signedIn ? "Sign in again" : "Sign in to Framelink", "UI_SIGN_IN");
+        } else if (notice.kind === "sign-in-pending") {
+          box.appendChild(el("div", "write-access-title", "Finish signing in in your browser"));
+          box.appendChild(el("div", null, "Confirm this code on the Framelink page:"));
+          box.appendChild(el("div", "write-access-code", notice.userCode));
+          action("Open sign-in page", "UI_OPEN_SIGN_IN");
+        } else if (notice.kind === "signed-in") {
+          box.appendChild(el("div", "write-access-title", "Signed in to Framelink"));
+          box.appendChild(
+            el(
+              "div",
+              null,
+              notice.seat === true
+                ? "Seat active — writes are unlimited."
+                : notice.seat === false
+                  ? "This account has no seat yet, so writes stay within the free allowance."
+                  : "Checking your seat — it applies as soon as Framelink answers.",
+            ),
+          );
+        } else if (notice.kind === "sign-in-failed") {
+          box.appendChild(el("div", "write-access-title", "Sign-in didn't finish"));
+          box.appendChild(el("div", null, notice.message));
+          action("Try again", "UI_SIGN_IN");
+        }
+        return box;
       }
 
       // Shown whenever the sandbox reports ANY remembered approval (msg.hasApprovals), independent of
@@ -533,7 +627,7 @@
           "Forgets every session this plugin has approved — including ones not currently " +
           "connected — so all of them must Allow again, even after this plugin restarts.";
         button.onclick = function () {
-          parent.postMessage({ pluginMessage: { type: "UI_REVOKE_ALL" } }, "*");
+          toSandbox({ type: "UI_REVOKE_ALL" });
         };
         footer.appendChild(button);
         return footer;
@@ -563,13 +657,13 @@
         // the element itself. This is why the window can shrink at all.
         requestAnimationFrame(function () {
           var height = document.getElementById("root").offsetHeight;
-          parent.postMessage({ pluginMessage: { type: "UI_HEIGHT", height: height } }, "*");
+          toSandbox({ type: "UI_HEIGHT", height: height });
         });
       }
 
       // The sandbox can't render into an iframe that hasn't loaded, so this document asks for its
       // first paint rather than the sandbox firing one into the void at startup.
-      parent.postMessage({ pluginMessage: { type: "UI_READY" } }, "*");
+      toSandbox({ type: "UI_READY" });
       WS_PORT_BLOCK.forEach(connect);
     </script>
   </body>

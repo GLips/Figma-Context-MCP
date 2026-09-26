@@ -37,7 +37,7 @@ async function bridgeBoundOnApproval(port: number, ageMs: number | null): Promis
   const dir = mkdtempSync(join(tmpdir(), "flcm-recency-test-"));
   dirs.push(dir);
   const store = new ApprovalStore(CWD, dir);
-  if (ageMs !== null) store.save(port, "tok-abc", CWD, Date.now() - ageMs);
+  if (ageMs !== null) store.save(port, "tok-abc", CWD, null, Date.now() - ageMs);
   const bridge = new PluginBridge(store);
   bridges.push(bridge);
   bridge.start([port]);

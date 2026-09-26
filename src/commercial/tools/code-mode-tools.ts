@@ -5,8 +5,14 @@
 import { startProgressHeartbeat, type ToolExtra } from "~/mcp/progress.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import type { PluginBridgeRuntime } from "~/commercial/plugin-bridge/index.js";
+import { BridgeRequestError } from "~/commercial/plugin-bridge/bridge.js";
+import {
+  writeRefusalText,
+  type WriteAuthorization,
+} from "~/commercial/entitlement/write-authorization.js";
 import {
   requestUntilApproved,
   isPendingApproval,
@@ -31,10 +37,16 @@ const EXECUTE_CODE_DESCRIPTION = buildQuickStart();
 // required (a missing key is the error/void path). Since protocol 2, images are fetched MID-RUN
 // (PluginBridge.serveChannelRequest), so a script executes exactly once and this reply is the
 // whole story — no re-run signals, no second pass.
+//
+// `documentChanged` is whether the document changed while the run executed — raw figma.* writes
+// included, and writes that landed after the agent's code returned. True is one Write against the
+// free allowance. False is provisional: a change Figma reports later arrives as RUN_CHANGED. It is
+// the server's to read, not the agent's, so it never reaches the tool result.
 const ExecuteCodeReply = z.object({
   result: z.unknown().optional(),
   console: z.array(z.string()),
   errors: z.string().nullable(),
+  documentChanged: z.boolean(),
 });
 
 // The sandbox posts exactly one of these (see screenshot() in code.ts): `image`
@@ -71,7 +83,7 @@ export function registerCodeModeTools(
   runtime: PluginBridgeRuntime,
   { codeMode, transport }: CodeModeToolsOptions,
 ): void {
-  const { bridge } = runtime;
+  const { bridge, writeAccess } = runtime;
 
   /** Tool advertisement stays latched for this process; outage guidance uses elapsed time below. */
   function expectsPluginConnection(): boolean {
@@ -139,6 +151,15 @@ export function registerCodeModeTools(
       async ({ code }, extra) => {
         const unavailable = pluginUnavailableReply();
         if (unavailable) return unavailable;
+        // One execution, one id: this is the identity the free allowance dedupes on. A new tool call
+        // is a new execution even when the code is identical.
+        const executionId = randomUUID();
+        // Set inside submit (a closure), so held in an object the checks below can read. `runId` is
+        // the plugin's name for this execution, which a late RUN_CHANGED will carry.
+        const gate: { authorization: WriteAuthorization | null; runId: string | null } = {
+          authorization: null,
+          runId: null,
+        };
         // Correlation ids are owned by PluginBridge; mid-run image fetches ride the bridge underneath
         // this single execute (serveChannelRequest). The wait holds the call open across the human's
         // Allow rather than returning "not approved yet" for the agent to retry — see
@@ -149,21 +170,72 @@ export function registerCodeModeTools(
         // hash — the sandbox already re-evals the whole string per call, so it costs transfer only,
         // and a preamble sent every time is definitionally the one that ran, leaving no drift to
         // detect and nothing to put in the version handshake.
-        const raw = await requestUntilApproved(
-          (signal) => bridge.request({ type: "APPROVAL_STATUS" }, signal),
-          (signal) =>
-            bridge.request({ type: "EXECUTE_CODE", code, preamble: flcmSandboxPreamble() }, signal),
-          approvalOptions(extra),
-        );
-        const gated = gateResult(raw);
-        if (gated) return gated;
-        const reply = ExecuteCodeReply.parse(raw);
-        // A write actually ran: slide the persisted approval's TTL forward so an active session never
-        // lapses mid-work (durable-approval, this cycle). No-op when the session isn't persisted.
-        bridge.touchApproval();
-        return {
-          content: [{ type: "text", text: JSON.stringify(reply, null, 2) }],
-        };
+        //
+        // The write gate sits INSIDE submit, after approval: the Authorizing User is whoever clicked
+        // Allow, which may happen during the wait. An execution can't be known to change the document
+        // before it runs, so an Authorizing User with no seat and no allowance left is refused before
+        // anything is sent — and an authorized one holds a reservation until the finally below.
+        try {
+          let raw: unknown;
+          try {
+            raw = await requestUntilApproved(
+              (signal) => bridge.request({ type: "APPROVAL_STATUS" }, signal),
+              async (signal) => {
+                gate.authorization = await writeAccess.authorizeWriteExecution(
+                  bridge.getAuthorizingUser(),
+                  executionId,
+                );
+                if (gate.authorization.kind === "refused") return null;
+                return bridge.request(
+                  { type: "EXECUTE_CODE", code, preamble: flcmSandboxPreamble() },
+                  signal,
+                  (runId) => (gate.runId = runId),
+                );
+              },
+              approvalOptions(extra),
+            );
+          } catch (err) {
+            // Lost after the plugin may have started it (timeout, cancel, disconnect): whether it
+            // changed anything is unknowable, and partial changes count, so it is counted. Only a
+            // run the plugin reported QUEUED is known not to have run — the plugin refuses a
+            // cancelled queued run at dequeue — and a result it sends anyway is still counted
+            // through the late path.
+            if (
+              gate.authorization &&
+              err instanceof BridgeRequestError &&
+              err.outcome === "unconfirmed" &&
+              err.phase !== "queued"
+            )
+              writeAccess.recordWriteExecution(gate.authorization, executionId);
+            throw err;
+          }
+          const { authorization } = gate;
+          if (authorization?.kind === "refused")
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: writeRefusalText(authorization, writeAccess.framelinkApiUrl),
+                },
+              ],
+              isError: true,
+            };
+          const gated = gateResult(raw);
+          if (gated) return gated;
+          const { documentChanged, ...reply } = ExecuteCodeReply.parse(raw);
+          if (documentChanged && authorization)
+            writeAccess.recordWriteExecution(authorization, executionId);
+          // A write actually ran: slide the persisted approval's TTL forward so an active session
+          // never lapses mid-work (durable-approval, this cycle). No-op when the session isn't persisted.
+          bridge.touchApproval();
+          return {
+            content: [{ type: "text", text: JSON.stringify(reply, null, 2) }],
+          };
+        } finally {
+          // Whatever wasn't recorded above ends here; a change the plugin reports later under
+          // `runId` is still charged to this execution (WriteAccess.recordLateDocumentChange).
+          writeAccess.releaseWriteExecution(executionId, gate.runId);
+        }
       },
     ),
 

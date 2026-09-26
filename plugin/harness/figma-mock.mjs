@@ -1043,6 +1043,10 @@ export function createFigmaMock() {
   // The current page is always loaded in live Figma, so this resolves immediately — it exists so a
   // caller that correctly awaits it isn't punished by the mock for doing the right thing.
   page.loadAsync = async () => {};
+  // Change events are registered on, never emitted: the mock doesn't model Figma's asynchronous
+  // change delivery. A run through flcm verbs still reads as a change via the verb count
+  // (code.ts executeCode); tests about raw writes stub the events themselves.
+  page.on = page.off = () => {};
 
   const categories = [];
   const figma = {
@@ -1059,6 +1063,8 @@ export function createFigmaMock() {
       },
     },
     mixed: MIXED,
+    on() {},
+    off() {},
     currentPage: page,
     // The DOCUMENT node. `name` is the FILE name — what flcm.page.current() reports for orientation —
     // and `children` is the page list the page verbs read and createPage grows.
@@ -1077,6 +1083,7 @@ export function createFigmaMock() {
       created.name = "Page " + (this.root.children.length + 1);
       created.selection = [];
       created.loadAsync = async () => {};
+      created.on = created.off = () => {};
       created.parent = this.root;
       this.root.children.push(created);
       return created;

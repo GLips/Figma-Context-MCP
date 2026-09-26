@@ -6,7 +6,13 @@ import { channelFailure } from "./channel-failure.js";
 import { RequestTrace } from "./request-trace.js";
 import { randomUUID } from "node:crypto";
 import { WebSocketServer, WebSocket } from "ws";
-import { mintPairingCode, SESSION_IDENTITY } from "./approval.js";
+import {
+  mintPairingCode,
+  parseAuthorizingUser,
+  SESSION_IDENTITY,
+  type AuthorizingUser,
+} from "./approval.js";
+import type { WriteAccessNotice } from "~/commercial/entitlement/write-authorization.js";
 import { ApprovalStore } from "./approval-store.js";
 import { parsePeerVersion, refuseProtocolSkew, type ProtocolCompatibility } from "./version.js";
 import { Logger } from "~/utils/logger.js";
@@ -37,8 +43,12 @@ export type BridgeRequest =
       identity: string;
       pairingCode: string | null;
       sessionToken: string | null;
+      // The origin of FRAMELINK_API_URL: the plugin opens sign-in pages on this origin only.
+      framelinkOrigin: string;
     }
   | { type: "EXECUTE_CODE"; code: string; preamble: string }
+  // What the panel shows about write access (allowance spent, sign-in code, outcome). Acked, not acted on.
+  | { type: "WRITE_ACCESS"; notice: WriteAccessNotice }
   | {
       type: "SCREENSHOT";
       nodeId?: string;
@@ -53,6 +63,22 @@ export type CapabilityHandler = (
   payload: unknown,
   context: { signal: AbortSignal },
 ) => Promise<unknown>;
+/**
+ * Unsolicited plugin events the bridge relays but doesn't own. Both arrive only from the current
+ * holder. `onSessionApproved` fires on each Allow handover — the moment write access is checked.
+ */
+export interface PluginBridgeEvents {
+  onSessionApproved?: (authorizingUser: AuthorizingUser | null) => void;
+  /** The human clicked the panel's sign-in button. */
+  onWriteAccessSignIn?: () => void;
+  /**
+   * A run's document changed after its caller stopped waiting on it: a RUN_CHANGED after a "no"
+   * reply, or an EXECUTE_CODE_RESULT saying documentChanged that arrived after the caller gave up.
+   * May fire more than once for a run, and for run ids this server never issued.
+   */
+  onRunDocumentChanged?: (runId: string) => void;
+}
+
 // Match the WS inbound ceiling, including the envelope. Image-specific caps remain in its adapter.
 const MAX_CHANNEL_BYTES = 100 * 1024 * 1024;
 
@@ -287,6 +313,8 @@ export class PluginBridge {
   // just a WS reconnect). A restart is exactly what used to drop this back to null and re-prompt with
   // a fresh pairing code; reloading it once the port binds closes that gap (see approval-store.ts).
   private sessionToken: string | null = null;
+  // Who clicked Allow for `sessionToken` — persisted and cleared with it, never independently.
+  private authorizingUser: AuthorizingUser | null = null;
   // The port this server won its probe-bind on, or null before `listening`. Persistence keys on it —
   // (cwd, port) — so concurrent same-cwd servers never share an approval file (see approval-store.ts).
   private boundPort: number | null = null;
@@ -336,6 +364,7 @@ export class PluginBridge {
   // restart the clock while the second service is still ours to finish). Entries survive run removal
   // until the actual work settles, including cleanup that cannot be interrupted.
   private readonly inFlightServices = new Map<string, number>();
+  private readonly events: PluginBridgeEvents;
 
   // Everything injectable for the contract harness, which drives real sockets: `store` isolates
   // persistence to a temp dir instead of touching the real ~/.framelink; `requestTimeoutMs` lets it pin
@@ -351,13 +380,16 @@ export class PluginBridge {
       runCeilingMs = DEFAULT_RUN_CEILING_MS,
       reclaimWindowMs = RECLAIM_WINDOW_MS,
       capabilities = new Map(),
+      events = {},
     }: {
       requestTimeoutMs?: number;
       runCeilingMs?: number;
       reclaimWindowMs?: number;
       capabilities?: ReadonlyMap<string, CapabilityHandler>;
+      events?: PluginBridgeEvents;
     } = {},
   ) {
+    this.events = events;
     this.requestTimeoutMs = requestTimeoutMs;
     this.runCeilingMs = runCeilingMs;
     this.reclaimWindowMs = reclaimWindowMs;
@@ -478,6 +510,7 @@ export class PluginBridge {
       // sibling on another port, or a restart that landed elsewhere, reloads nothing (fail-closed).
       const reloaded = this.store.loadRecord(port, Date.now());
       this.sessionToken = reloaded?.token ?? null;
+      this.authorizingUser = reloaded?.authorizingUser ?? null;
       this.reloadedApprovalLastUsedAt = reloaded?.lastUsedAt ?? null;
       if (this.sessionToken)
         Logger.log(
@@ -709,6 +742,11 @@ export class PluginBridge {
     return this.sessionToken;
   }
 
+  /** The Authorizing User of the session this server holds a token for, or null when it holds none. */
+  getAuthorizingUser(): AuthorizingUser | null {
+    return this.sessionToken ? this.authorizingUser : null;
+  }
+
   /** Is a plugin on the wire right now? The plain liveness question, with no approval in it. */
   isPluginConnected(): boolean {
     return this.socket !== null && this.socket.readyState === WebSocket.OPEN;
@@ -807,13 +845,22 @@ export class PluginBridge {
     return pending;
   }
 
-  request(payload: BridgeRequest, signal?: AbortSignal): Promise<unknown> {
+  /**
+   * `onSubmitted` receives the run id the plugin will know this request by (its correlation id),
+   * just before it goes on the wire — for callers that must match a later run-scoped event to it.
+   */
+  request(
+    payload: BridgeRequest,
+    signal?: AbortSignal,
+    onSubmitted?: (runId: string) => void,
+  ): Promise<unknown> {
     if (signal?.aborted) return Promise.reject(signal.reason);
     // Handshake messages send SYNCHRONOUSLY (no await before the socket.send): the connection
     // contract depends on the newcomer's handshake being in flight before a displaced socket's close
     // fires a tick later. Everything else goes through the compatibility hold.
-    if (HANDSHAKE_REQUEST_TYPES.has(payload.type)) return this.sendCorrelated(payload, signal);
-    return this.sendOnceCompatible(payload, signal);
+    if (HANDSHAKE_REQUEST_TYPES.has(payload.type))
+      return this.sendCorrelated(payload, signal, onSubmitted);
+    return this.sendOnceCompatible(payload, signal, onSubmitted);
   }
 
   /**
@@ -825,7 +872,11 @@ export class PluginBridge {
    * again and ultimately run against whoever ends up driving; a socket that dies drops out of the loop
    * and falls through to `sendCorrelated`'s own "no plugin connected" rejection.
    */
-  private async sendOnceCompatible(payload: BridgeRequest, signal?: AbortSignal): Promise<unknown> {
+  private async sendOnceCompatible(
+    payload: BridgeRequest,
+    signal?: AbortSignal,
+    onSubmitted?: (runId: string) => void,
+  ): Promise<unknown> {
     while (this.compatibility === "checking" && this.socket?.readyState === WebSocket.OPEN) {
       await waitForSignal(this.verdictSettled, signal);
     }
@@ -834,11 +885,15 @@ export class PluginBridge {
     // beats a nudge stapled to a result the wrong runtime already produced.
     const refusal = this.compatibility === "incompatible" ? this.skewRefusal : null;
     if (refusal) throw new BridgeRequestError(refusal, "not-submitted");
-    return this.sendCorrelated(payload, signal);
+    return this.sendCorrelated(payload, signal, onSubmitted);
   }
 
   /** Stamp a correlation id on the payload, send it, and resolve when the reply carrying that id lands. */
-  private sendCorrelated(payload: BridgeRequest, signal?: AbortSignal): Promise<unknown> {
+  private sendCorrelated(
+    payload: BridgeRequest,
+    signal?: AbortSignal,
+    onSubmitted?: (runId: string) => void,
+  ): Promise<unknown> {
     if (signal?.aborted) return Promise.reject(signal.reason);
     const socket = this.socket;
     if (!socket || socket.readyState !== WebSocket.OPEN) {
@@ -870,6 +925,7 @@ export class PluginBridge {
       // an inactivity deadline" is answered in exactly one place.
       this.armInactivityDeadline(id, pending);
       if (payload.type === "EXECUTE_CODE") this.trace.start(id, socket);
+      onSubmitted?.(id);
       // `id` last: the generated correlation id is authoritative and a payload field
       // must never overwrite it, or the reply could never be matched to this pending.
       socket.send(JSON.stringify({ ...payload, id }));
@@ -1010,6 +1066,7 @@ export class PluginBridge {
       error?: unknown;
       errors?: unknown;
       sessionToken?: unknown;
+      authorizingUser?: unknown;
       runId?: unknown;
       capability?: unknown;
       payload?: unknown;
@@ -1018,6 +1075,7 @@ export class PluginBridge {
       stage?: unknown;
       elapsedMs?: unknown;
       operation?: unknown;
+      documentChanged?: unknown;
     },
   ): void {
     // Diagnostic traffic is observed even from a displaced request owner. It never participates
@@ -1035,11 +1093,23 @@ export class PluginBridge {
     // later SESSION_INFO echoes it and the sandbox re-keys sticky approval to the token.
     if (msg.type === "SESSION_TOKEN" && typeof msg.sessionToken === "string") {
       this.sessionToken = msg.sessionToken;
+      this.authorizingUser = parseAuthorizingUser(msg.authorizingUser);
       // Persist so the approval survives a server restart, not just this connection (approval-store.ts).
       // boundPort is set by `listening`, which precedes any connection, so it is non-null here.
       if (this.boundPort !== null)
-        this.store.save(this.boundPort, msg.sessionToken, SESSION_IDENTITY, Date.now());
+        this.store.save(
+          this.boundPort,
+          msg.sessionToken,
+          SESSION_IDENTITY,
+          this.authorizingUser,
+          Date.now(),
+        );
       Logger.log("Stored session token handed over by the sandbox after Allow (persisted)");
+      this.events.onSessionApproved?.(this.authorizingUser);
+      return;
+    }
+    if (msg.type === "WRITE_ACCESS_SIGN_IN") {
+      this.events.onWriteAccessSignIn?.();
       return;
     }
     // The human revoked in the arbiter panel. Also unsolicited (id-less) — forget the token both in
@@ -1047,6 +1117,7 @@ export class PluginBridge {
     // approvedTokens entry, so the next write re-prompts.
     if (msg.type === "REVOKE_SESSION") {
       this.sessionToken = null;
+      this.authorizingUser = null;
       if (this.boundPort !== null) this.store.clear(this.boundPort);
       Logger.log("Session approval revoked by the human — cleared the persisted token");
       return;
@@ -1080,6 +1151,22 @@ export class PluginBridge {
           ? msg.disposition
           : "unknown";
       this.settleCancelAnswer(msg.runId, disposition, socket);
+      return;
+    }
+    // Metering outlives the caller. A run that changed the document after its "no" reply says so
+    // run-scoped and id-less; one whose caller gave up (timed out while queued, say) still replies.
+    // Either way the Write is owed — the caller that authorized the run decides whether to count it.
+    if (msg.type === "RUN_CHANGED" && typeof msg.runId === "string") {
+      this.events.onRunDocumentChanged?.(msg.runId);
+      return;
+    }
+    if (
+      msg.type === "EXECUTE_CODE_RESULT" &&
+      typeof msg.id === "string" &&
+      !this.pending.has(msg.id) &&
+      msg.documentChanged === true
+    ) {
+      this.events.onRunDocumentChanged?.(msg.id);
       return;
     }
     if (typeof msg.id !== "string" || this.pending.get(msg.id)?.socket !== socket) return;
