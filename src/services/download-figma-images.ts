@@ -1,5 +1,6 @@
 import type { Transform } from "@figma/rest-api-spec";
 import type { FigmaService } from "~/services/figma.js";
+import type { ImageUrlCache } from "~/services/response-cache.js";
 import type { ImageProcessingResult } from "~/utils/image-processing.js";
 import { tagError } from "~/utils/error-meta.js";
 
@@ -32,6 +33,10 @@ export type DownloadFigmaImagesResult = {
     requestedFileNames: string[];
   }>;
   successCount: number;
+  /** Set when at least one Figma image URL was reused. */
+  cache?: { ageMs: number; ttlMs: number };
+  /** True when every URL lookup was served from cache. */
+  cacheHit: boolean;
 };
 
 export type DownloadImagesOutcome = {
@@ -40,6 +45,8 @@ export type DownloadImagesOutcome = {
   imageCount: number;
   successCount?: number;
   error?: unknown;
+  cacheHit: boolean;
+  cacheAgeMs?: number;
 };
 
 export type DownloadFigmaImagesHooks = {
@@ -66,11 +73,14 @@ export async function downloadFigmaImages(
   figmaService: FigmaService,
   input: DownloadFigmaImagesInput,
   hooks: DownloadFigmaImagesHooks = {},
+  imageUrlCache?: ImageUrlCache,
 ): Promise<DownloadFigmaImagesResult> {
   const startedAt = Date.now();
   const imageCount = input.nodes.length;
   let successCount: number | undefined;
   let caughtError: unknown;
+  let cacheHit = false;
+  let cache: DownloadFigmaImagesResult["cache"] = undefined;
 
   try {
     const { fileKey, nodes, localPath, pngScale } = input;
@@ -144,9 +154,13 @@ export async function downloadFigmaImages(
     await hooks.onDownloadStart?.(downloadItems.length);
     let allDownloads: ImageProcessingResult[];
     try {
-      allDownloads = await figmaService.downloadImages(fileKey, localPath, downloadItems, {
+      const batch = await figmaService.downloadImages(fileKey, localPath, downloadItems, {
         pngScale,
+        imageUrlCache,
       });
+      allDownloads = batch.images;
+      cacheHit = batch.cacheHit;
+      cache = batch.cache;
     } catch (error) {
       tagError(error, { phase: "download" });
     } finally {
@@ -160,7 +174,7 @@ export async function downloadFigmaImages(
       requestedFileNames: downloadToRequests.get(index) ?? [result.filePath],
     }));
 
-    return { downloads, successCount };
+    return { downloads, successCount, cache, cacheHit };
   } catch (error) {
     caughtError = error;
     throw error;
@@ -173,6 +187,8 @@ export async function downloadFigmaImages(
           imageCount,
           successCount,
           error: caughtError,
+          cacheHit,
+          cacheAgeMs: cache?.ageMs,
         });
       } catch {
         // intentionally empty

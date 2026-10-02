@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type {
   GetImagesResponse,
   GetFileResponse,
@@ -10,6 +11,7 @@ import { Logger, writeLogs } from "~/utils/logger.js";
 import { fetchJSON } from "~/utils/fetch-json.js";
 import { getErrorMeta } from "~/utils/error-meta.js";
 import { buildForbiddenMessage, buildRateLimitMessage } from "./errors/index.js";
+import type { ImageUrlCache } from "./response-cache.js";
 
 export type FigmaAuthOptions = {
   figmaApiKey: string;
@@ -23,6 +25,12 @@ type SvgOptions = {
   simplifyStroke: boolean;
 };
 
+const DEFAULT_SVG_OPTIONS: SvgOptions = {
+  outlineText: true,
+  includeId: false,
+  simplifyStroke: true,
+};
+
 export class FigmaService {
   private readonly apiKey: string;
   private readonly oauthToken: string;
@@ -33,6 +41,18 @@ export class FigmaService {
     this.apiKey = figmaApiKey || "";
     this.oauthToken = figmaOAuthToken || "";
     this.useOAuth = !!useOAuth && !!this.oauthToken;
+  }
+
+  /**
+   * Stable id for the credential this service will actually send.
+   * Hashed so a cache key never contains the token. The scheme prefix keeps a
+   * personal-access token and an OAuth token with the same string from sharing
+   * an entry — HTTP mode builds a new service per request, and two callers of
+   * the same file must not see each other's response.
+   */
+  authFingerprint(): string {
+    const secret = this.useOAuth ? `oauth\0${this.oauthToken}` : `pat\0${this.apiKey}`;
+    return createHash("sha256").update(secret).digest("hex");
   }
 
   private getAuthHeaders(): Record<string, string> {
@@ -144,11 +164,7 @@ export class FigmaService {
       const response = await this.request<GetImagesResponse>(endpoint);
       return this.filterValidImages(response.images);
     } else {
-      const svgOptions = options.svgOptions || {
-        outlineText: true,
-        includeId: false,
-        simplifyStroke: true,
-      };
+      const svgOptions = options.svgOptions || DEFAULT_SVG_OPTIONS;
       const params = this.buildSvgQueryParams(nodeIds, svgOptions);
       const endpoint = `/images/${fileKey}?${params}`;
       const response = await this.request<GetImagesResponse>(endpoint);
@@ -165,7 +181,10 @@ export class FigmaService {
    * - Image cropping based on transform matrices
    * - CSS variable generation for image dimensions
    *
-   * @returns Array of local file paths for successfully downloaded images
+   * @returns Downloaded images, plus whether any Figma URL lookup was served
+   * from `options.imageUrlCache`. The image bytes are always downloaded —
+   * the cache holds the temporary Figma URLs, which are what the rate limit
+   * counts, and the caller's `localPath` is still written on every call.
    */
   async downloadImages(
     fileKey: string,
@@ -179,13 +198,18 @@ export class FigmaService {
       cropTransform?: Transform;
       requiresImageDimensions?: boolean;
     }>,
-    options: { pngScale?: number; svgOptions?: SvgOptions } = {},
-  ): Promise<ImageProcessingResult[]> {
-    if (items.length === 0) return [];
+    options: { pngScale?: number; svgOptions?: SvgOptions; imageUrlCache?: ImageUrlCache } = {},
+  ): Promise<{
+    images: ImageProcessingResult[];
+    cacheHit: boolean;
+    cache?: { ageMs: number; ttlMs: number };
+  }> {
+    if (items.length === 0) return { images: [], cacheHit: false };
 
     const resolvedPath = localPath;
-    const { pngScale = 2, svgOptions } = options;
+    const { pngScale = 2, svgOptions = DEFAULT_SVG_OPTIONS, imageUrlCache } = options;
     const downloadPromises: Promise<ImageProcessingResult[]>[] = [];
+    const lookup = imageUrlCache?.lookup(this.authFingerprint(), fileKey);
 
     // Separate items by type: image/gif fills vs rendered nodes
     const imageFills = items.filter(
@@ -198,7 +222,9 @@ export class FigmaService {
 
     // Download image fills (static images and animated GIFs) with processing
     if (imageFills.length > 0) {
-      const fillUrls = await this.getImageFillUrls(fileKey);
+      const fetchFillUrls = () => this.getImageFillUrls(fileKey);
+      const fillRefs = imageFills.flatMap(({ gifRef, imageRef }) => gifRef ?? imageRef ?? []);
+      const fillUrls = await (lookup ? lookup.fillUrls(fillRefs, fetchFillUrls) : fetchFillUrls());
       const fillDownloads = imageFills
         .map(
           ({
@@ -239,12 +265,12 @@ export class FigmaService {
 
       // Download PNG renders
       if (pngNodes.length > 0) {
-        const pngUrls = await this.getNodeRenderUrls(
-          fileKey,
-          pngNodes.map((n) => n.nodeId),
-          "png",
-          { pngScale },
-        );
+        const pngIds = pngNodes.map((n) => n.nodeId);
+        const fetchPngUrls = (nodeIds: string[]) =>
+          this.getNodeRenderUrls(fileKey, nodeIds, "png", { pngScale });
+        const pngUrls = await (lookup
+          ? lookup.renderUrls(pngIds, { format: "png", pngScale }, fetchPngUrls)
+          : fetchPngUrls(pngIds));
         const pngDownloads = pngNodes
           .map(({ nodeId, fileName, needsCropping, cropTransform, requiresImageDimensions }) => {
             const imageUrl = pngUrls[nodeId];
@@ -268,12 +294,12 @@ export class FigmaService {
 
       // Download SVG renders
       if (svgNodes.length > 0) {
-        const svgUrls = await this.getNodeRenderUrls(
-          fileKey,
-          svgNodes.map((n) => n.nodeId),
-          "svg",
-          { svgOptions },
-        );
+        const svgIds = svgNodes.map((n) => n.nodeId);
+        const fetchSvgUrls = (nodeIds: string[]) =>
+          this.getNodeRenderUrls(fileKey, nodeIds, "svg", { svgOptions });
+        const svgUrls = await (lookup
+          ? lookup.renderUrls(svgIds, { format: "svg", svgOptions }, fetchSvgUrls)
+          : fetchSvgUrls(svgIds));
         const svgDownloads = svgNodes
           .map(({ nodeId, fileName, needsCropping, cropTransform, requiresImageDimensions }) => {
             const imageUrl = svgUrls[nodeId];
@@ -297,7 +323,10 @@ export class FigmaService {
     }
 
     const results = await Promise.all(downloadPromises);
-    return results.flat();
+    return {
+      images: results.flat(),
+      ...(lookup?.summary() ?? { cacheHit: false }),
+    };
   }
 
   /**

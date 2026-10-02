@@ -8,7 +8,12 @@ import {
   type ClientInfo,
   type Transport,
 } from "~/telemetry/index.js";
-import { getFigmaData as runGetFigmaData } from "~/services/get-figma-data.js";
+import {
+  getFigmaData as runGetFigmaData,
+  type CachedFigmaData,
+  type GetFigmaDataResult,
+} from "~/services/get-figma-data.js";
+import { formatCacheNotice, type ResponseCache } from "~/services/response-cache.js";
 import type { OutputFormat } from "~/utils/serialize.js";
 
 const parameters = {
@@ -39,6 +44,22 @@ const parameters = {
 const parametersSchema = z.object(parameters);
 export type GetFigmaDataParams = z.infer<typeof parametersSchema>;
 
+/**
+ * The age note is its own content block. Prefixing the design text would make
+ * `--format=json` (and yaml) unparseable for anything that reads the payload
+ * as a document.
+ */
+export function toGetFigmaDataContent(
+  result: GetFigmaDataResult,
+): Array<{ type: "text"; text: string }> {
+  const design = { type: "text" as const, text: result.formatted };
+  if (!result.cache) return [design];
+  return [
+    { type: "text" as const, text: formatCacheNotice(result.cache.ageMs, result.cache.ttlMs) },
+    design,
+  ];
+}
+
 async function getFigmaData(
   params: GetFigmaDataParams,
   figmaService: FigmaService,
@@ -47,6 +68,7 @@ async function getFigmaData(
   authMode: AuthMode,
   clientInfo: ClientInfo | undefined,
   extra: ToolExtra,
+  cache?: ResponseCache<CachedFigmaData>,
 ) {
   try {
     const { fileKey, nodeId: rawNodeId, depth } = parametersSchema.parse(params);
@@ -56,7 +78,7 @@ async function getFigmaData(
     const nodeId = rawNodeId?.replace(/-/g, ":");
 
     Logger.log(
-      `Fetching ${depth ? `${depth} layers deep` : "all layers"} of ${
+      `Resolving ${depth ? `${depth} layers deep` : "all layers"} of ${
         nodeId ? `node ${nodeId} from file` : `full file`
       } ${fileKey}`,
     );
@@ -64,36 +86,48 @@ async function getFigmaData(
     let stopFetchHeartbeat: (() => Promise<void>) | undefined;
     let stopSimplifyHeartbeat: (() => Promise<void>) | undefined;
 
-    const result = await runGetFigmaData(figmaService, { fileKey, nodeId, depth }, outputFormat, {
-      onFetchStart: async () => {
-        await sendProgress(extra, 0, 3, "Fetching design data from Figma API");
-        stopFetchHeartbeat = startProgressHeartbeat(extra, "Waiting for Figma API response");
+    const result = await runGetFigmaData(
+      figmaService,
+      { fileKey, nodeId, depth },
+      outputFormat,
+      {
+        onFetchStart: async () => {
+          await sendProgress(extra, 0, 3, "Fetching design data from Figma API");
+          stopFetchHeartbeat = startProgressHeartbeat(extra, "Waiting for Figma API response");
+        },
+        onFetchComplete: async () => {
+          await stopFetchHeartbeat?.();
+        },
+        onSimplifyStart: async (progress) => {
+          await sendProgress(extra, 1, 3, "Fetched design data, simplifying");
+          stopSimplifyHeartbeat = startProgressHeartbeat(
+            extra,
+            () => `Simplifying design data (${progress.getNodeCount()} nodes processed)`,
+          );
+        },
+        onSimplifyComplete: async () => {
+          await stopSimplifyHeartbeat?.();
+        },
+        onSerializeStart: async () => {
+          await sendProgress(extra, 2, 3, "Simplified design, serializing response");
+        },
+        onComplete: (outcome) =>
+          captureGetFigmaDataCall(outcome, { transport, authMode, clientInfo }),
       },
-      onFetchComplete: async () => {
-        await stopFetchHeartbeat?.();
-      },
-      onSimplifyStart: async (progress) => {
-        await sendProgress(extra, 1, 3, "Fetched design data, simplifying");
-        stopSimplifyHeartbeat = startProgressHeartbeat(
-          extra,
-          () => `Simplifying design data (${progress.getNodeCount()} nodes processed)`,
-        );
-      },
-      onSimplifyComplete: async () => {
-        await stopSimplifyHeartbeat?.();
-      },
-      onSerializeStart: async () => {
-        await sendProgress(extra, 2, 3, "Simplified design, serializing response");
-      },
-      onComplete: (outcome) =>
-        captureGetFigmaDataCall(outcome, { transport, authMode, clientInfo }),
-    });
+      cache,
+    );
 
-    Logger.log(`Successfully extracted data: ${result.metrics.simplifiedNodeCount} nodes`);
+    if (result.cache) {
+      Logger.log(
+        `Cache hit for ${fileKey} (${result.cache.ageMs}ms old, TTL ${result.cache.ttlMs}ms)`,
+      );
+    } else {
+      Logger.log(`Successfully extracted data: ${result.metrics.simplifiedNodeCount} nodes`);
+    }
     Logger.log("Sending result to client");
 
     return {
-      content: [{ type: "text" as const, text: result.formatted }],
+      content: toGetFigmaDataContent(result),
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : JSON.stringify(error);

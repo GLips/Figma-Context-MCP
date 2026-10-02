@@ -15,6 +15,7 @@ import {
   countNamedStyles,
   detectVariables,
 } from "~/services/get-figma-data-metrics.js";
+import { figmaDataCacheKey, type ResponseCache } from "~/services/response-cache.js";
 
 export type { GetFigmaDataMetrics } from "~/services/get-figma-data-metrics.js";
 
@@ -24,9 +25,15 @@ export type GetFigmaDataInput = {
   depth?: number;
 };
 
-export type GetFigmaDataResult = {
+/** What a cache entry stores. The age annotation is added at read time, not stored. */
+export type CachedFigmaData = {
   formatted: string;
   metrics: GetFigmaDataMetrics;
+};
+
+export type GetFigmaDataResult = CachedFigmaData & {
+  /** Set only when this result was served from the response cache. */
+  cache?: { ageMs: number; ttlMs: number };
 };
 
 export type GetFigmaDataOutcome = {
@@ -35,6 +42,8 @@ export type GetFigmaDataOutcome = {
   durationMs: number;
   metrics?: GetFigmaDataMetrics;
   error?: unknown;
+  cacheHit: boolean;
+  cacheAgeMs?: number;
 };
 
 /**
@@ -75,16 +84,46 @@ export async function getFigmaData(
   input: GetFigmaDataInput,
   outputFormat: OutputFormat,
   hooks: GetFigmaDataHooks = {},
+  cache?: ResponseCache<CachedFigmaData>,
 ): Promise<GetFigmaDataResult> {
   const { fileKey, nodeId, depth } = input;
   const startedAt = Date.now();
   let metrics: GetFigmaDataMetrics | undefined;
   let caughtError: unknown;
+  let cacheHit = false;
+  let cacheAgeMs: number | undefined;
+  // Computed up front so a hit and the later store use the same identity.
+  // Absent when caching is off — every call goes to the API.
+  const cacheKey = cache
+    ? figmaDataCacheKey({
+        authFingerprint: figmaService.authFingerprint(),
+        fileKey,
+        nodeId,
+        depth,
+        outputFormat,
+      })
+    : undefined;
   // Per-call counter shared with the walker. Lives in the call closure so
   // overlapping HTTP requests each have their own — no module-global state.
   const nodeCounter = { count: 0 };
 
   try {
+    if (cache && cacheKey) {
+      const hit = cache.get(cacheKey);
+      if (hit) {
+        // Skip fetch/simplify hooks. They describe a network round-trip that
+        // did not happen; progress that says "Fetching" on a hit would be a lie.
+        cacheHit = true;
+        cacheAgeMs = hit.ageMs;
+        metrics = hit.value.metrics;
+        return {
+          formatted: hit.value.formatted,
+          metrics: hit.value.metrics,
+          cache: { ageMs: hit.ageMs, ttlMs: cache.ttlMs },
+        };
+      }
+    }
+
     await hooks.onFetchStart?.();
     let rawResult: { data: GetFileResponse | GetFileNodesResponse; rawSize: number };
     const fetchStart = Date.now();
@@ -154,6 +193,10 @@ export async function getFigmaData(
       simplifyMs,
       serializeMs,
     };
+    // Failures throw before this point, so an error response is never stored.
+    if (cache && cacheKey) {
+      cache.set(cacheKey, { formatted, metrics });
+    }
     return { formatted, metrics };
   } catch (error) {
     caughtError = error;
@@ -169,6 +212,8 @@ export async function getFigmaData(
           durationMs: Date.now() - startedAt,
           metrics,
           error: caughtError,
+          cacheHit,
+          cacheAgeMs,
         });
       } catch {
         // intentionally empty

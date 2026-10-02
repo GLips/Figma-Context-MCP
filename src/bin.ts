@@ -59,6 +59,11 @@ const argv = cli({
       type: Boolean,
       description: "Disable usage telemetry (telemetry is on by default)",
     },
+    cacheTtl: {
+      type: String,
+      description:
+        "Reuse successful Figma reads for this long (e.g. 30s, 5m, 1h). Off by default. Max 60m. Kept in process memory. get_figma_data is keyed by credential, file, node, depth, and output format. Image tools reuse fill and render URLs (credential, file, node, format, scale) but still download the bytes. A hit is labeled with its age and may be stale.",
+    },
   },
   commands: [fetchCommand],
 });

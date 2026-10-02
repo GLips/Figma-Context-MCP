@@ -5,6 +5,8 @@ import { authMode, type AuthMode, type ClientInfo, type Transport } from "~/tele
 import type { OutputFormat } from "~/utils/serialize.js";
 import { installValidationRejectCapture } from "./validation-capture.js";
 import type { ToolExtra } from "./progress.js";
+import type { CachedFigmaData } from "~/services/get-figma-data.js";
+import type { ImageUrlCache, ResponseCache } from "~/services/response-cache.js";
 import {
   downloadFigmaImagesTool,
   getFigmaDataTool,
@@ -26,11 +28,30 @@ export type CreateServerOptions = {
   outputFormat?: OutputFormat;
   skipImageDownloads?: boolean;
   imageDir?: string;
+  /**
+   * Process-wide cache. HTTP mode constructs a new MCP server per request, so
+   * the cache has to be owned by the process and passed in — a cache created
+   * inside `createServer` would never be hit twice.
+   */
+  responseCache?: ResponseCache<CachedFigmaData>;
+  /**
+   * Same TTL as `responseCache`, for the image fill and render URL lookups.
+   * Owned by the process for the same reason: HTTP builds a server per request.
+   * Holds URLs only — the image bytes are downloaded on every call.
+   */
+  imageUrlCache?: ImageUrlCache;
 };
 
 function createServer(
   authOptions: FigmaAuthOptions,
-  { transport, outputFormat = "tree", skipImageDownloads = false, imageDir }: CreateServerOptions,
+  {
+    transport,
+    outputFormat = "tree",
+    skipImageDownloads = false,
+    imageDir,
+    responseCache,
+    imageUrlCache,
+  }: CreateServerOptions,
 ) {
   const server = new McpServer(serverInfo);
   const figmaService = new FigmaService(authOptions);
@@ -48,6 +69,8 @@ function createServer(
     outputFormat,
     skipImageDownloads,
     imageDir,
+    responseCache,
+    imageUrlCache,
     getClientInfo,
   });
 
@@ -69,6 +92,8 @@ type RegisterToolsOptions = {
   outputFormat: OutputFormat;
   skipImageDownloads: boolean;
   imageDir?: string;
+  responseCache?: ResponseCache<CachedFigmaData>;
+  imageUrlCache?: ImageUrlCache;
   getClientInfo: () => ClientInfo | undefined;
 };
 
@@ -94,6 +119,7 @@ function registerTools(
         options.authMode,
         options.getClientInfo(),
         extra,
+        options.responseCache,
       ),
   );
 
@@ -115,6 +141,7 @@ function registerTools(
           options.authMode,
           options.getClientInfo(),
           extra,
+          options.imageUrlCache,
         ),
     );
   }

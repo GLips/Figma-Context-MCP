@@ -2,7 +2,11 @@ import { config as loadEnv } from "dotenv";
 import { resolve as resolvePath } from "path";
 import type { FigmaAuthOptions } from "./services/figma.js";
 import { resolveTelemetryEnabled } from "./telemetry/index.js";
+import { formatDuration, parseDuration } from "./utils/duration.js";
 import { VALID_OUTPUT_FORMATS, isOutputFormat, type OutputFormat } from "./utils/serialize.js";
+
+/** One hour. Longer than that, a cached design is more likely wrong than helpful. */
+export const MAX_CACHE_TTL_MS = 60 * 60 * 1000;
 
 export type Source = "cli" | "env" | "default";
 
@@ -24,6 +28,7 @@ export interface ServerFlags {
   proxy?: string;
   stdio?: boolean;
   noTelemetry?: boolean;
+  cacheTtl?: string;
 }
 
 export interface ServerConfig {
@@ -36,6 +41,8 @@ export interface ServerConfig {
   imageDir: string;
   isStdioMode: boolean;
   noTelemetry: boolean;
+  /** `0` disables the response cache. */
+  cacheTtlMs: number;
   configSources: Record<string, Source>;
 }
 
@@ -123,6 +130,31 @@ export class UsageError extends Error {
 }
 
 /**
+ * Parse `--cache-ttl` / `CACHE_TTL`. Undefined or blank means "not set" so the
+ * priority chain can fall through. `0s` is an explicit off. Values above
+ * {@link MAX_CACHE_TTL_MS} are rejected rather than clamped — a silent clamp
+ * would look like the flag was ignored.
+ */
+export function parseCacheTtl(value: string | undefined, source: string): number | undefined {
+  if (value === undefined) return undefined;
+  const trimmed = value.trim();
+  if (trimmed === "") return undefined;
+
+  let ms: number;
+  try {
+    ms = parseDuration(trimmed);
+  } catch {
+    throw new UsageError(
+      `Invalid ${source} value '${value}'. Expected a duration like 30s, 5m, or 1h (max 60m).`,
+    );
+  }
+  if (ms > MAX_CACHE_TTL_MS) {
+    throw new UsageError(`Invalid ${source} value '${value}'. Cache TTL cannot exceed 60m.`);
+  }
+  return ms;
+}
+
+/**
  * Fail fast when global credentials are required but missing. HTTP mode skips
  * this check so it can accept per-request `X-Figma-Token` headers; stdio and
  * the `fetch` CLI have no way to receive request-time auth and must have
@@ -173,6 +205,13 @@ export function getServerConfig(flags: ServerFlags): ServerConfig {
   const formatFromEnv = parseOutputFormat(envStr("OUTPUT_FORMAT"), "OUTPUT_FORMAT");
   const outputFormat = resolve<OutputFormat>(formatFromFlag, formatFromEnv, "tree");
 
+  // Only parse the env value when the flag is absent. Evaluating both up front
+  // would reject a stale CACHE_TTL even though --cache-ttl is supposed to win.
+  const cacheTtlFromFlag = parseCacheTtl(flags.cacheTtl, "--cache-ttl");
+  const cacheTtlFromEnv =
+    cacheTtlFromFlag === undefined ? parseCacheTtl(envStr("CACHE_TTL"), "CACHE_TTL") : undefined;
+  const cacheTtl = resolve(cacheTtlFromFlag, cacheTtlFromEnv, 0);
+
   const isStdioMode = flags.stdio === true;
 
   const noTelemetry = flags.noTelemetry ?? false;
@@ -193,6 +232,7 @@ export function getServerConfig(flags: ServerFlags): ServerConfig {
     outputFormat: outputFormat.source,
     skipImageDownloads: skipImageDownloads.source,
     imageDir: imageDir.source,
+    cacheTtl: cacheTtl.source,
     telemetry: telemetrySource,
   };
 
@@ -220,6 +260,9 @@ export function getServerConfig(flags: ServerFlags): ServerConfig {
       `- SKIP_IMAGE_DOWNLOADS: ${skipImageDownloads.value} (source: ${configSources.skipImageDownloads})`,
     );
     console.log(`- IMAGE_DIR: ${imageDir.value} (source: ${configSources.imageDir})`);
+    console.log(
+      `- CACHE_TTL: ${cacheTtl.value > 0 ? formatDuration(cacheTtl.value) : "off"} (source: ${configSources.cacheTtl})`,
+    );
     const telemetryEnabled = resolveTelemetryEnabled(noTelemetry);
     console.log(
       `- TELEMETRY: ${telemetryEnabled ? "enabled" : "disabled"} (source: ${configSources.telemetry})`,
@@ -237,6 +280,7 @@ export function getServerConfig(flags: ServerFlags): ServerConfig {
     imageDir: imageDir.value,
     isStdioMode,
     noTelemetry,
+    cacheTtlMs: cacheTtl.value,
     configSources,
   };
 }

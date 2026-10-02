@@ -90,6 +90,7 @@ The server supports two transports (configured in `src/server.ts`):
 - `OUTPUT_FORMAT` or `--format` — Output format: `tree` (default), `yaml`, or `json`
 - `--json` — Back-compat alias for `--format=json`
 - `--skip-image-downloads` — Disable image download tool
+- `CACHE_TTL` or `--cache-ttl` — Opt-in in-memory TTL for successful `get_figma_data` responses and for image fill/render URL lookups (e.g. `5m`). Off by default. Max 60m. Hits are labeled with their age and may be stale. Image bytes are still downloaded on every call.
 
 ### Path Alias
 
