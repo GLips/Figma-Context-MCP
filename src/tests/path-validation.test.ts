@@ -16,7 +16,7 @@ import type { ToolExtra } from "~/mcp/progress.js";
 import * as telemetry from "~/telemetry/index.js";
 
 const stubFigmaService = {
-  downloadImages: () => Promise.resolve([]),
+  downloadImages: () => Promise.resolve({ images: [], cacheHit: false }),
 } as unknown as Parameters<typeof downloadFigmaImagesTool.handler>[1];
 
 const stubExtra = {

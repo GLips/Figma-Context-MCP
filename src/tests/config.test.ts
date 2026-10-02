@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { envBool, envInt, envStr, resolve } from "~/config.js";
+import { envBool, envInt, envStr, parseCacheTtl, resolve, UsageError } from "~/config.js";
 
 describe("resolve", () => {
   it("CLI flag wins over env and default", () => {
@@ -85,5 +85,25 @@ describe("envBool", () => {
 
   it("returns undefined when not set", () => {
     expect(envBool("TEST_BOOL_MISSING")).toBeUndefined();
+  });
+});
+
+describe("parseCacheTtl", () => {
+  it("treats unset and blank as not configured", () => {
+    expect(parseCacheTtl(undefined, "--cache-ttl")).toBeUndefined();
+    expect(parseCacheTtl("  ", "CACHE_TTL")).toBeUndefined();
+  });
+
+  it("parses seconds, minutes, and the 60m ceiling", () => {
+    expect(parseCacheTtl("30s", "--cache-ttl")).toBe(30_000);
+    expect(parseCacheTtl("5m", "--cache-ttl")).toBe(300_000);
+    expect(parseCacheTtl("1h", "--cache-ttl")).toBe(3_600_000);
+    expect(parseCacheTtl("0s", "--cache-ttl")).toBe(0);
+  });
+
+  it("rejects malformed values and anything past 60m", () => {
+    expect(() => parseCacheTtl("5", "--cache-ttl")).toThrow(UsageError);
+    expect(() => parseCacheTtl("61m", "CACHE_TTL")).toThrow(/cannot exceed 60m/);
+    expect(() => parseCacheTtl("2h", "--cache-ttl")).toThrow(UsageError);
   });
 });

@@ -71,9 +71,14 @@ function toGetFigmaDataEvent(
     image_node_count: outcome.metrics?.imageNodeCount,
     component_property_count: outcome.metrics?.componentPropertyCount,
     has_variables: outcome.metrics?.hasVariables,
-    fetch_ms: outcome.metrics?.fetchMs,
-    simplify_ms: outcome.metrics?.simplifyMs,
-    serialize_ms: outcome.metrics?.serializeMs,
+    // A cache hit replays the metrics stored with the entry. The shape fields
+    // still describe what was returned; the phase timings describe work this
+    // call never did, and would be counted twice in any latency aggregate.
+    fetch_ms: outcome.cacheHit ? undefined : outcome.metrics?.fetchMs,
+    simplify_ms: outcome.cacheHit ? undefined : outcome.metrics?.simplifyMs,
+    serialize_ms: outcome.cacheHit ? undefined : outcome.metrics?.serializeMs,
+    cache_hit: outcome.cacheHit,
+    cache_age_ms: outcome.cacheAgeMs,
     ...errorFields(outcome.error),
   };
 }
@@ -91,6 +96,8 @@ function toDownloadImagesEvent(
     client_version: context.clientInfo?.version,
     image_count: outcome.imageCount,
     success_count: outcome.successCount,
+    cache_hit: outcome.cacheHit,
+    cache_age_ms: outcome.cacheAgeMs,
     ...errorFields(outcome.error),
   };
 }
@@ -141,12 +148,14 @@ export function captureValidationReject(
       output_format: input.outputFormat ?? "tree",
       depth: null,
       has_node_id: false,
+      cache_hit: false,
     });
   } else {
     captureToolCall({
       ...common,
       tool: "download_figma_images",
       image_count: 0,
+      cache_hit: false,
     });
   }
 }

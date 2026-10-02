@@ -76,12 +76,18 @@ export type GetFigmaDataCall = CommonCallProps & {
   serialize_ms?: number;
   depth: number | null;
   has_node_id: boolean;
+  /** True when the response was served from the in-process TTL cache. */
+  cache_hit: boolean;
+  cache_age_ms?: number;
 };
 
 export type DownloadFigmaImagesCall = CommonCallProps & {
   tool: "download_figma_images";
   image_count: number;
   success_count?: number;
+  /** True when every image URL lookup was served from the in-process TTL cache. */
+  cache_hit: boolean;
+  cache_age_ms?: number;
 };
 
 export type ToolCallProperties = GetFigmaDataCall | DownloadFigmaImagesCall;
