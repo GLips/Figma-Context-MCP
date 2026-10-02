@@ -193,6 +193,21 @@ describe("walkNodes", () => {
     expect(nodes[0].strokeWidth).toBe("2px");
   });
 
+  it("omits CENTER on a LINE, its default and a word LINE cannot author", async () => {
+    const node = makeNode({
+      id: "9:3",
+      name: "Rule",
+      type: "LINE",
+      strokes: [{ type: "SOLID", color: { r: 0, g: 0, b: 0, a: 1 }, visible: true }],
+      strokeWeight: 1,
+      strokeAlign: "CENTER",
+    });
+
+    const { nodes } = await walk([node]);
+
+    expect(nodes[0].strokeAlign).toBeUndefined();
+  });
+
   it("disambiguates named styles when style names collide", async () => {
     const nodeA = makeNode({
       id: "7:1",

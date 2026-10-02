@@ -69,7 +69,9 @@ export function buildSimplifiedStrokes(
   }
 
   if (n.strokeAlign === "OUTSIDE") strokes.strokeAlign = "outside";
-  if (n.strokeAlign === "CENTER") strokes.strokeAlign = "center";
+  // CENTER is every LINE's default (createLine seeds it), and LINE's write vocabulary has no
+  // strokeAlign word, so emitting it there made every read line refuse to round-trip.
+  if (n.strokeAlign === "CENTER" && n.type !== "LINE") strokes.strokeAlign = "center";
 
   if (n.individualStrokeWeights) {
     strokes.strokeWidth = generateCSSShorthand(n.individualStrokeWeights);

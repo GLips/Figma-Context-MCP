@@ -125,7 +125,7 @@ function readImagePaint(value: object, field: string): WriteImageHash {
   const scaleMode = ownEntry(READ_SCALE_MODES, String(o.scaleMode));
   if (!scaleMode) {
     throw new Error(
-      "flcm: " + field + ' is a cropped image fill (scaleMode "' + String(o.scaleMode) + '"). The crop lives in the paint\'s transform matrix, which the read shape does not carry, so rebuilding it would silently un-crop the image. Duplicate the node with flcm.clone to keep the crop.',
+      "flcm: " + field + ' is a cropped image fill (scaleMode "' + String(o.scaleMode) + '"). The crop lives in the paint\'s transform matrix, which flcm has no word to author, so rebuilding it would silently un-crop the image. Duplicate the node with flcm.clone to keep the crop.',
     );
   }
   const paint: WriteImageHash = { kind: "image", hash, scaleMode };

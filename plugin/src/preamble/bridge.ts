@@ -667,10 +667,11 @@ function projectedParentLayoutFacts(parent: any, deltas: BatchLayoutDeltas | und
   // Does the delta ESTABLISH a direction (off→row/column, or a row↔column flip)? Then the live
   // effective sizing is the wrong reading for an axis the delta doesn't name, in the one direction
   // that matters: it was measured under the OLD direction. A free-form frame reports "hugs nothing"
-  // (nothing hugs off auto-layout) while its primary/counterAxisSizingMode sit at Figma's AUTO
-  // default — so the instant `mode:"row"` lands it hugs BOTH axes, and a sibling entry's percent
-  // against it is the cycle assertPercentResolvable exists to name. Same swap on a row↔column flip:
-  // the axis each raw mode governs moves with the direction.
+  // (nothing hugs off auto-layout) while its raw axis modes wait underneath — live, a fresh frame
+  // turned row comes up primary AUTO, counter FIXED — so the instant `mode:"row"` lands its width
+  // hugs, and a sibling entry's percent width against it is the cycle assertPercentResolvable
+  // exists to name. Same swap on a row↔column flip: the axis each raw mode governs moves with the
+  // direction.
   const establishesDirection = parentIsAuto && parentDelta.mode != null && parentDelta.mode !== layoutModeOf(parent).word;
   // A fill is a MARK on the parent, honored by the grandparent's flow — so a grandparent whose own
   // delta re-aims that flow (any direction change: applyContainer clears every child's flow marks,
