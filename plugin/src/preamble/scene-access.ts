@@ -166,6 +166,25 @@ export function createSceneAccess(source: () => PluginAPI): { api: PluginAPI; in
     visit(tree(state));
     return result;
   }
+  // Reparenting can retire an indexed compound handle while keeping the actual node.
+  // The destination's direct children are the authoritative result of append/insert.
+  // Rebind before callers settle layout or keep using previously acquired descendants.
+  function placed(state: State, key: PropertyKey, args: unknown[]): void {
+    if (key !== "appendChild" && key !== "insertChild") return;
+    const argument = args[key === "appendChild" ? 0 : 1];
+    const moved = argument && typeof argument === "object" ? views.get(argument) : undefined;
+    if (!moved) return;
+    const indexed = !!moved.scope || !!moved.ownScope;
+    if (!indexed && moved.native.id === moved.id) return;
+    const parent = state.native as BaseNode & ChildrenMixin;
+    const children = parent.children;
+    const child = children.find(child => child.id === moved.id || child.id === moved.native.id);
+    if (!child) throw new Error("flcm: placed node identity is unavailable in its destination.");
+    stateOf(child, moved.id);
+    moved.scope = undefined;
+    moved.record = undefined;
+    if (indexed && "findAllWithCriteria" in child) tree(moved, true);
+  }
   function makeView(state: State): BaseNode {
     return new Proxy({} as BaseNode, {
       get(_target, key) {
@@ -201,6 +220,7 @@ export function createSceneAccess(source: () => PluginAPI): { api: PluginAPI; in
           let result: unknown;
           try { result = Reflect.apply(method, current, args.map(unwrap)); }
           finally { if (NODE_TOPOLOGY_METHODS.has(String(key))) invalidate(); }
+          placed(state, key, args);
           return result instanceof Promise ? result.then(wrap) : wrap(result);
         };
         state.methods.set(key, invoke);

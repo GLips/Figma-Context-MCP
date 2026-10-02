@@ -1,0 +1,1831 @@
+{
+  "date": "2026-10-02",
+  "fixture": {
+    "ownerId": "5071:2647",
+    "pageId": "5067:32",
+    "tile": "5071:2651",
+    "master": "5071:2654"
+  },
+  "cases": [
+    {
+      "route": "native-append",
+      "host": "5071:2655",
+      "slot": "I5071:2655;5071:2653",
+      "root": "5071:2657",
+      "originalRoot": "5071:2657",
+      "destination": "5071:2662"
+    },
+    {
+      "route": "native-insert",
+      "host": "5071:2663",
+      "slot": "I5071:2663;5071:2653",
+      "root": "5071:2665",
+      "originalRoot": "5071:2665",
+      "destination": "5071:2670"
+    },
+    {
+      "route": "flcm-append",
+      "host": "5071:2671",
+      "slot": "I5071:2671;5071:2653",
+      "root": "5071:2673",
+      "originalRoot": "5071:2673",
+      "destination": "5071:2678"
+    },
+    {
+      "route": "native-group-transport",
+      "host": "5071:2679",
+      "slot": "I5071:2679;5071:2653",
+      "root": "5071:2681",
+      "originalRoot": "5071:2681",
+      "destination": "5071:2686"
+    }
+  ],
+  "ordinaryAppend": {
+    "root": {
+      "found": true,
+      "fields": {
+        "id": {
+          "ok": true,
+          "value": "5071:2657"
+        },
+        "type": {
+          "ok": true,
+          "value": "INSTANCE"
+        },
+        "name": {
+          "ok": true,
+          "value": "Transport tile"
+        },
+        "width": {
+          "ok": true,
+          "value": 180
+        },
+        "height": {
+          "ok": true,
+          "value": 120
+        },
+        "characters": {
+          "ok": true
+        },
+        "visible": {
+          "ok": true,
+          "value": true
+        }
+      },
+      "parent": {
+        "ok": true,
+        "value": "5071:2662"
+      },
+      "children": {
+        "ok": true,
+        "value": [
+          {
+            "id": {
+              "ok": true,
+              "value": "I5071:2657;5071:2649"
+            },
+            "type": {
+              "ok": true,
+              "value": "TEXT"
+            },
+            "name": {
+              "ok": true,
+              "value": "ROOT TRANSPORT SENTINEL"
+            },
+            "width": {
+              "ok": true,
+              "value": 171
+            },
+            "height": {
+              "ok": true,
+              "value": 15
+            },
+            "characters": {
+              "ok": true,
+              "value": "ROOT TRANSPORT SENTINEL"
+            },
+            "visible": {
+              "ok": true,
+              "value": true
+            }
+          },
+          {
+            "id": {
+              "ok": true,
+              "value": "I5071:2657;5071:2650"
+            },
+            "type": {
+              "ok": true,
+              "value": "TEXT"
+            },
+            "name": {
+              "ok": true,
+              "value": "HIDDEN SENTINEL"
+            },
+            "width": {
+              "ok": true,
+              "value": 107
+            },
+            "height": {
+              "ok": true,
+              "value": 15
+            },
+            "characters": {
+              "ok": true,
+              "value": "HIDDEN SENTINEL"
+            },
+            "visible": {
+              "ok": true,
+              "value": false
+            }
+          }
+        ]
+      },
+      "indexed": {
+        "ok": true,
+        "value": [
+          {
+            "id": {
+              "ok": true,
+              "value": "I5071:2657;5071:2649"
+            },
+            "type": {
+              "ok": true,
+              "value": "TEXT"
+            },
+            "name": {
+              "ok": true,
+              "value": "ROOT TRANSPORT SENTINEL"
+            },
+            "width": {
+              "ok": true,
+              "value": 171
+            },
+            "height": {
+              "ok": true,
+              "value": 15
+            },
+            "characters": {
+              "ok": true,
+              "value": "ROOT TRANSPORT SENTINEL"
+            },
+            "visible": {
+              "ok": true,
+              "value": true
+            }
+          },
+          {
+            "id": {
+              "ok": true,
+              "value": "I5071:2657;5071:2650"
+            },
+            "type": {
+              "ok": true,
+              "value": "TEXT"
+            },
+            "name": {
+              "ok": true,
+              "value": "HIDDEN SENTINEL"
+            },
+            "width": {
+              "ok": true,
+              "value": 107
+            },
+            "height": {
+              "ok": true,
+              "value": 15
+            },
+            "characters": {
+              "ok": true,
+              "value": "HIDDEN SENTINEL"
+            },
+            "visible": {
+              "ok": true,
+              "value": false
+            }
+          }
+        ]
+      }
+    },
+    "originalRoot": {
+      "found": true,
+      "fields": {
+        "id": {
+          "ok": true,
+          "value": "5071:2657"
+        },
+        "type": {
+          "ok": true,
+          "value": "INSTANCE"
+        },
+        "name": {
+          "ok": true,
+          "value": "Transport tile"
+        },
+        "width": {
+          "ok": true,
+          "value": 180
+        },
+        "height": {
+          "ok": true,
+          "value": 120
+        },
+        "characters": {
+          "ok": true
+        },
+        "visible": {
+          "ok": true,
+          "value": true
+        }
+      },
+      "parent": {
+        "ok": true,
+        "value": "5071:2662"
+      },
+      "children": {
+        "ok": true,
+        "value": [
+          {
+            "id": {
+              "ok": true,
+              "value": "I5071:2657;5071:2649"
+            },
+            "type": {
+              "ok": true,
+              "value": "TEXT"
+            },
+            "name": {
+              "ok": true,
+              "value": "ROOT TRANSPORT SENTINEL"
+            },
+            "width": {
+              "ok": true,
+              "value": 171
+            },
+            "height": {
+              "ok": true,
+              "value": 15
+            },
+            "characters": {
+              "ok": true,
+              "value": "ROOT TRANSPORT SENTINEL"
+            },
+            "visible": {
+              "ok": true,
+              "value": true
+            }
+          },
+          {
+            "id": {
+              "ok": true,
+              "value": "I5071:2657;5071:2650"
+            },
+            "type": {
+              "ok": true,
+              "value": "TEXT"
+            },
+            "name": {
+              "ok": true,
+              "value": "HIDDEN SENTINEL"
+            },
+            "width": {
+              "ok": true,
+              "value": 107
+            },
+            "height": {
+              "ok": true,
+              "value": 15
+            },
+            "characters": {
+              "ok": true,
+              "value": "HIDDEN SENTINEL"
+            },
+            "visible": {
+              "ok": true,
+              "value": false
+            }
+          }
+        ]
+      },
+      "indexed": {
+        "ok": true,
+        "value": [
+          {
+            "id": {
+              "ok": true,
+              "value": "I5071:2657;5071:2649"
+            },
+            "type": {
+              "ok": true,
+              "value": "TEXT"
+            },
+            "name": {
+              "ok": true,
+              "value": "ROOT TRANSPORT SENTINEL"
+            },
+            "width": {
+              "ok": true,
+              "value": 171
+            },
+            "height": {
+              "ok": true,
+              "value": 15
+            },
+            "characters": {
+              "ok": true,
+              "value": "ROOT TRANSPORT SENTINEL"
+            },
+            "visible": {
+              "ok": true,
+              "value": true
+            }
+          },
+          {
+            "id": {
+              "ok": true,
+              "value": "I5071:2657;5071:2650"
+            },
+            "type": {
+              "ok": true,
+              "value": "TEXT"
+            },
+            "name": {
+              "ok": true,
+              "value": "HIDDEN SENTINEL"
+            },
+            "width": {
+              "ok": true,
+              "value": 107
+            },
+            "height": {
+              "ok": true,
+              "value": 15
+            },
+            "characters": {
+              "ok": true,
+              "value": "HIDDEN SENTINEL"
+            },
+            "visible": {
+              "ok": true,
+              "value": false
+            }
+          }
+        ]
+      }
+    },
+    "source": {
+      "found": true,
+      "fields": {
+        "id": {
+          "ok": true,
+          "value": "I5071:2655;5071:2653"
+        },
+        "type": {
+          "ok": true,
+          "value": "SLOT"
+        },
+        "name": {
+          "ok": true,
+          "value": "Body"
+        },
+        "width": {
+          "ok": true,
+          "value": 260
+        },
+        "height": {
+          "ok": true,
+          "value": 200
+        },
+        "characters": {
+          "ok": true
+        },
+        "visible": {
+          "ok": true,
+          "value": true
+        }
+      },
+      "parent": {
+        "ok": true,
+        "value": "5071:2655"
+      },
+      "children": {
+        "ok": true,
+        "value": []
+      },
+      "indexed": {
+        "ok": true,
+        "value": []
+      }
+    },
+    "destination": {
+      "found": true,
+      "fields": {
+        "id": {
+          "ok": true,
+          "value": "5071:2662"
+        },
+        "type": {
+          "ok": true,
+          "value": "FRAME"
+        },
+        "name": {
+          "ok": true,
+          "value": "Frame"
+        },
+        "width": {
+          "ok": true,
+          "value": 200
+        },
+        "height": {
+          "ok": true,
+          "value": 150
+        },
+        "characters": {
+          "ok": true
+        },
+        "visible": {
+          "ok": true,
+          "value": true
+        }
+      },
+      "parent": {
+        "ok": true,
+        "value": "5071:2647"
+      },
+      "children": {
+        "ok": true,
+        "value": [
+          {
+            "id": {
+              "ok": true,
+              "value": "5071:2657"
+            },
+            "type": {
+              "ok": true,
+              "value": "INSTANCE"
+            },
+            "name": {
+              "ok": true,
+              "value": "Transport tile"
+            },
+            "width": {
+              "ok": true,
+              "value": 180
+            },
+            "height": {
+              "ok": true,
+              "value": 120
+            },
+            "characters": {
+              "ok": true
+            },
+            "visible": {
+              "ok": true,
+              "value": true
+            }
+          }
+        ]
+      },
+      "indexed": {
+        "ok": true,
+        "value": [
+          {
+            "id": {
+              "ok": true,
+              "value": "5071:2657"
+            },
+            "type": {
+              "ok": true,
+              "value": "INSTANCE"
+            },
+            "name": {
+              "ok": true,
+              "value": "Transport tile"
+            },
+            "width": {
+              "ok": true,
+              "value": 180
+            },
+            "height": {
+              "ok": true,
+              "value": 120
+            },
+            "characters": {
+              "ok": true
+            },
+            "visible": {
+              "ok": true,
+              "value": true
+            }
+          },
+          {
+            "id": {
+              "ok": true,
+              "value": "I5071:2657;5071:2649"
+            },
+            "type": {
+              "ok": true,
+              "value": "TEXT"
+            },
+            "name": {
+              "ok": true,
+              "value": "ROOT TRANSPORT SENTINEL"
+            },
+            "width": {
+              "ok": true,
+              "value": 171
+            },
+            "height": {
+              "ok": true,
+              "value": 15
+            },
+            "characters": {
+              "ok": true,
+              "value": "ROOT TRANSPORT SENTINEL"
+            },
+            "visible": {
+              "ok": true,
+              "value": true
+            }
+          },
+          {
+            "id": {
+              "ok": true,
+              "value": "I5071:2657;5071:2650"
+            },
+            "type": {
+              "ok": true,
+              "value": "TEXT"
+            },
+            "name": {
+              "ok": true,
+              "value": "HIDDEN SENTINEL"
+            },
+            "width": {
+              "ok": true,
+              "value": 107
+            },
+            "height": {
+              "ok": true,
+              "value": 15
+            },
+            "characters": {
+              "ok": true,
+              "value": "HIDDEN SENTINEL"
+            },
+            "visible": {
+              "ok": true,
+              "value": false
+            }
+          }
+        ]
+      }
+    },
+    "flcm": {
+      "node": {
+        "id": "5071:2657",
+        "name": "Transport tile",
+        "type": "INSTANCE",
+        "width": "contextual",
+        "height": "contextual",
+        "designedWidth": "180px",
+        "designedHeight": "120px",
+        "componentId": "5071:2651",
+        "elided": {
+          "children": 3428
+        }
+      },
+      "components": {
+        "5071:2651": {
+          "type": "COMPONENT",
+          "name": "Transport tile",
+          "key": "f121434a9aaf8423c11b8e28a4359220d6f41165",
+          "children": [
+            {
+              "id": "5071:2649",
+              "name": "ROOT TRANSPORT SENTINEL",
+              "type": "TEXT",
+              "left": 0,
+              "top": 0,
+              "text": "ROOT TRANSPORT SENTINEL",
+              "textStyle": {
+                "fontFamily": "Inter",
+                "fontWeight": 400,
+                "fontSize": 12,
+                "fontVariantName": "Regular"
+              },
+              "fill": "#000000"
+            }
+          ]
+        }
+      }
+    }
+  },
+  "indexedInsert": {
+    "root": {
+      "found": true,
+      "fields": {
+        "id": {
+          "ok": true,
+          "value": "5071:2665"
+        },
+        "type": {
+          "ok": true,
+          "value": "INSTANCE"
+        },
+        "name": {
+          "ok": true,
+          "value": "Transport tile"
+        },
+        "width": {
+          "ok": true,
+          "value": 180
+        },
+        "height": {
+          "ok": true,
+          "value": 120
+        },
+        "characters": {
+          "ok": true
+        },
+        "visible": {
+          "ok": true,
+          "value": true
+        }
+      },
+      "parent": {
+        "ok": true,
+        "value": "5071:2670"
+      },
+      "children": {
+        "ok": true,
+        "value": [
+          {
+            "id": {
+              "ok": true,
+              "value": "I5071:2665;5071:2649"
+            },
+            "type": {
+              "ok": true,
+              "value": "TEXT"
+            },
+            "name": {
+              "ok": true,
+              "value": "ROOT TRANSPORT SENTINEL"
+            },
+            "width": {
+              "ok": true,
+              "value": 171
+            },
+            "height": {
+              "ok": true,
+              "value": 15
+            },
+            "characters": {
+              "ok": true,
+              "value": "ROOT TRANSPORT SENTINEL"
+            },
+            "visible": {
+              "ok": true,
+              "value": true
+            }
+          },
+          {
+            "id": {
+              "ok": true,
+              "value": "I5071:2665;5071:2650"
+            },
+            "type": {
+              "ok": true,
+              "value": "TEXT"
+            },
+            "name": {
+              "ok": true,
+              "value": "HIDDEN SENTINEL"
+            },
+            "width": {
+              "ok": true,
+              "value": 107
+            },
+            "height": {
+              "ok": true,
+              "value": 15
+            },
+            "characters": {
+              "ok": true,
+              "value": "HIDDEN SENTINEL"
+            },
+            "visible": {
+              "ok": true,
+              "value": false
+            }
+          }
+        ]
+      },
+      "indexed": {
+        "ok": true,
+        "value": [
+          {
+            "id": {
+              "ok": true,
+              "value": "I5071:2665;5071:2649"
+            },
+            "type": {
+              "ok": true,
+              "value": "TEXT"
+            },
+            "name": {
+              "ok": true,
+              "value": "ROOT TRANSPORT SENTINEL"
+            },
+            "width": {
+              "ok": true,
+              "value": 171
+            },
+            "height": {
+              "ok": true,
+              "value": 15
+            },
+            "characters": {
+              "ok": true,
+              "value": "ROOT TRANSPORT SENTINEL"
+            },
+            "visible": {
+              "ok": true,
+              "value": true
+            }
+          },
+          {
+            "id": {
+              "ok": true,
+              "value": "I5071:2665;5071:2650"
+            },
+            "type": {
+              "ok": true,
+              "value": "TEXT"
+            },
+            "name": {
+              "ok": true,
+              "value": "HIDDEN SENTINEL"
+            },
+            "width": {
+              "ok": true,
+              "value": 107
+            },
+            "height": {
+              "ok": true,
+              "value": 15
+            },
+            "characters": {
+              "ok": true,
+              "value": "HIDDEN SENTINEL"
+            },
+            "visible": {
+              "ok": true,
+              "value": false
+            }
+          }
+        ]
+      }
+    },
+    "originalRoot": {
+      "found": true,
+      "fields": {
+        "id": {
+          "ok": true,
+          "value": "5071:2665"
+        },
+        "type": {
+          "ok": true,
+          "value": "INSTANCE"
+        },
+        "name": {
+          "ok": true,
+          "value": "Transport tile"
+        },
+        "width": {
+          "ok": true,
+          "value": 180
+        },
+        "height": {
+          "ok": true,
+          "value": 120
+        },
+        "characters": {
+          "ok": true
+        },
+        "visible": {
+          "ok": true,
+          "value": true
+        }
+      },
+      "parent": {
+        "ok": true,
+        "value": "5071:2670"
+      },
+      "children": {
+        "ok": true,
+        "value": [
+          {
+            "id": {
+              "ok": true,
+              "value": "I5071:2665;5071:2649"
+            },
+            "type": {
+              "ok": true,
+              "value": "TEXT"
+            },
+            "name": {
+              "ok": true,
+              "value": "ROOT TRANSPORT SENTINEL"
+            },
+            "width": {
+              "ok": true,
+              "value": 171
+            },
+            "height": {
+              "ok": true,
+              "value": 15
+            },
+            "characters": {
+              "ok": true,
+              "value": "ROOT TRANSPORT SENTINEL"
+            },
+            "visible": {
+              "ok": true,
+              "value": true
+            }
+          },
+          {
+            "id": {
+              "ok": true,
+              "value": "I5071:2665;5071:2650"
+            },
+            "type": {
+              "ok": true,
+              "value": "TEXT"
+            },
+            "name": {
+              "ok": true,
+              "value": "HIDDEN SENTINEL"
+            },
+            "width": {
+              "ok": true,
+              "value": 107
+            },
+            "height": {
+              "ok": true,
+              "value": 15
+            },
+            "characters": {
+              "ok": true,
+              "value": "HIDDEN SENTINEL"
+            },
+            "visible": {
+              "ok": true,
+              "value": false
+            }
+          }
+        ]
+      },
+      "indexed": {
+        "ok": true,
+        "value": [
+          {
+            "id": {
+              "ok": true,
+              "value": "I5071:2665;5071:2649"
+            },
+            "type": {
+              "ok": true,
+              "value": "TEXT"
+            },
+            "name": {
+              "ok": true,
+              "value": "ROOT TRANSPORT SENTINEL"
+            },
+            "width": {
+              "ok": true,
+              "value": 171
+            },
+            "height": {
+              "ok": true,
+              "value": 15
+            },
+            "characters": {
+              "ok": true,
+              "value": "ROOT TRANSPORT SENTINEL"
+            },
+            "visible": {
+              "ok": true,
+              "value": true
+            }
+          },
+          {
+            "id": {
+              "ok": true,
+              "value": "I5071:2665;5071:2650"
+            },
+            "type": {
+              "ok": true,
+              "value": "TEXT"
+            },
+            "name": {
+              "ok": true,
+              "value": "HIDDEN SENTINEL"
+            },
+            "width": {
+              "ok": true,
+              "value": 107
+            },
+            "height": {
+              "ok": true,
+              "value": 15
+            },
+            "characters": {
+              "ok": true,
+              "value": "HIDDEN SENTINEL"
+            },
+            "visible": {
+              "ok": true,
+              "value": false
+            }
+          }
+        ]
+      }
+    },
+    "source": {
+      "found": true,
+      "fields": {
+        "id": {
+          "ok": true,
+          "value": "I5071:2663;5071:2653"
+        },
+        "type": {
+          "ok": true,
+          "value": "SLOT"
+        },
+        "name": {
+          "ok": true,
+          "value": "Body"
+        },
+        "width": {
+          "ok": true,
+          "value": 260
+        },
+        "height": {
+          "ok": true,
+          "value": 200
+        },
+        "characters": {
+          "ok": true
+        },
+        "visible": {
+          "ok": true,
+          "value": true
+        }
+      },
+      "parent": {
+        "ok": true,
+        "value": "5071:2663"
+      },
+      "children": {
+        "ok": true,
+        "value": []
+      },
+      "indexed": {
+        "ok": true,
+        "value": []
+      }
+    },
+    "destination": {
+      "found": true,
+      "fields": {
+        "id": {
+          "ok": true,
+          "value": "5071:2670"
+        },
+        "type": {
+          "ok": true,
+          "value": "FRAME"
+        },
+        "name": {
+          "ok": true,
+          "value": "Frame"
+        },
+        "width": {
+          "ok": true,
+          "value": 200
+        },
+        "height": {
+          "ok": true,
+          "value": 150
+        },
+        "characters": {
+          "ok": true
+        },
+        "visible": {
+          "ok": true,
+          "value": true
+        }
+      },
+      "parent": {
+        "ok": true,
+        "value": "5071:2647"
+      },
+      "children": {
+        "ok": true,
+        "value": [
+          {
+            "id": {
+              "ok": true,
+              "value": "5071:2665"
+            },
+            "type": {
+              "ok": true,
+              "value": "INSTANCE"
+            },
+            "name": {
+              "ok": true,
+              "value": "Transport tile"
+            },
+            "width": {
+              "ok": true,
+              "value": 180
+            },
+            "height": {
+              "ok": true,
+              "value": 120
+            },
+            "characters": {
+              "ok": true
+            },
+            "visible": {
+              "ok": true,
+              "value": true
+            }
+          }
+        ]
+      },
+      "indexed": {
+        "ok": true,
+        "value": [
+          {
+            "id": {
+              "ok": true,
+              "value": "5071:2665"
+            },
+            "type": {
+              "ok": true,
+              "value": "INSTANCE"
+            },
+            "name": {
+              "ok": true,
+              "value": "Transport tile"
+            },
+            "width": {
+              "ok": true,
+              "value": 180
+            },
+            "height": {
+              "ok": true,
+              "value": 120
+            },
+            "characters": {
+              "ok": true
+            },
+            "visible": {
+              "ok": true,
+              "value": true
+            }
+          },
+          {
+            "id": {
+              "ok": true,
+              "value": "I5071:2665;5071:2649"
+            },
+            "type": {
+              "ok": true,
+              "value": "TEXT"
+            },
+            "name": {
+              "ok": true,
+              "value": "ROOT TRANSPORT SENTINEL"
+            },
+            "width": {
+              "ok": true,
+              "value": 171
+            },
+            "height": {
+              "ok": true,
+              "value": 15
+            },
+            "characters": {
+              "ok": true,
+              "value": "ROOT TRANSPORT SENTINEL"
+            },
+            "visible": {
+              "ok": true,
+              "value": true
+            }
+          },
+          {
+            "id": {
+              "ok": true,
+              "value": "I5071:2665;5071:2650"
+            },
+            "type": {
+              "ok": true,
+              "value": "TEXT"
+            },
+            "name": {
+              "ok": true,
+              "value": "HIDDEN SENTINEL"
+            },
+            "width": {
+              "ok": true,
+              "value": 107
+            },
+            "height": {
+              "ok": true,
+              "value": 15
+            },
+            "characters": {
+              "ok": true,
+              "value": "HIDDEN SENTINEL"
+            },
+            "visible": {
+              "ok": true,
+              "value": false
+            }
+          }
+        ]
+      }
+    },
+    "flcm": {
+      "node": {
+        "id": "5071:2665",
+        "name": "Transport tile",
+        "type": "INSTANCE",
+        "width": "contextual",
+        "height": "contextual",
+        "designedWidth": "180px",
+        "designedHeight": "120px",
+        "componentId": "5071:2651",
+        "elided": {
+          "children": 3428
+        }
+      },
+      "components": {
+        "5071:2651": {
+          "type": "COMPONENT",
+          "name": "Transport tile",
+          "key": "f121434a9aaf8423c11b8e28a4359220d6f41165",
+          "children": [
+            {
+              "id": "5071:2649",
+              "name": "ROOT TRANSPORT SENTINEL",
+              "type": "TEXT",
+              "left": 0,
+              "top": 0,
+              "text": "ROOT TRANSPORT SENTINEL",
+              "textStyle": {
+                "fontFamily": "Inter",
+                "fontWeight": 400,
+                "fontSize": 12,
+                "fontVariantName": "Regular"
+              },
+              "fill": "#000000"
+            }
+          ]
+        }
+      }
+    }
+  },
+  "groupOperation": {
+    "route": "native-group-transport",
+    "host": "5071:2679",
+    "slot": "I5071:2679;5071:2653",
+    "root": "5071:2681",
+    "originalRoot": "5071:2681",
+    "destination": "5071:2686",
+    "transportId": "I5071:2679;5071:2653;5071:2685",
+    "phase": "threw",
+    "temporaryGroup": "I5071:2679;5071:2653;5071:2692",
+    "error": "in ungroup: The node (instance sublayer or table cell) with id \"I5071:2679;5071:2653;5071:2692\" does not exist"
+  },
+  "groupFreshEvaluationError": "Error: in findAllWithCriteria: The node (instance sublayer or table cell) with id \"I5071:2679;5071:2653;5071:2692\" does not exist\n    at <anonymous> (<input>:19:423)\n",
+  "productAppend": "User explicitly approved the disposable potentially destructive test after reviewer refusal. Baseline failed, independent readback confirmed rollback, fixed runtime passed with independent verification.",
+  "productAppendBeforeFix": {
+    "route": "flcm-append",
+    "host": "5071:2671",
+    "slot": "I5071:2671;5071:2653",
+    "root": "5071:2673",
+    "originalRoot": "5071:2673",
+    "destination": "5071:2678",
+    "transportId": "I5071:2671;5071:2653;5071:2677",
+    "phase": "threw",
+    "error": "flcm.append: failed mid-apply on FRAME \"Frame\" (id \"5071:2678\") \u2014 flcm.flcm.append.spec: Figma refused a write on INSTANCE \"Transport tile\" (id \"5071:2673\") \u2014 in set_layoutGrow: The node (instance sublayer or table cell) with id \"I5071:2671;5071:2653;5071:2677\" does not exist. This call rolled back to its entry seal (the canvas holds none of it); the 0 mutating call(s) before it in this run committed and stand. The target lives inside instance \"Transport host\" (id \"5071:2671\") \u2014 Figma restricts what can be changed on an instance's children; edit the component it comes from (flcm never auto-detaches).. This call rolled back to its entry seal (the canvas holds none of it); the 0 mutating call(s) before it in this run committed and stand."
+  },
+  "productAppendAfterFix": {
+    "route": "flcm-append",
+    "host": "5071:2671",
+    "slot": "I5071:2671;5071:2653",
+    "root": "5071:2673",
+    "originalRoot": "5071:2673",
+    "destination": "5071:2678",
+    "transportId": "I5071:2671;5071:2653;5071:2677",
+    "phase": "returned",
+    "priorFailure": {
+      "phase": "threw",
+      "error": "flcm.append: failed mid-apply on FRAME \"Frame\" (id \"5071:2678\") \u2014 flcm.flcm.append.spec: Figma refused a write on INSTANCE \"Transport tile\" (id \"5071:2673\") \u2014 in set_layoutGrow: The node (instance sublayer or table cell) with id \"I5071:2671;5071:2653;5071:2677\" does not exist. This call rolled back to its entry seal (the canvas holds none of it); the 0 mutating call(s) before it in this run committed and stand. The target lives inside instance \"Transport host\" (id \"5071:2671\") \u2014 Figma restricts what can be changed on an instance's children; edit the component it comes from (flcm never auto-detaches).. This call rolled back to its entry seal (the canvas holds none of it); the 0 mutating call(s) before it in this run committed and stand."
+    },
+    "result": {
+      "id": "5071:2673"
+    }
+  },
+  "productFinalReadback": {
+    "masterId": "5071:2651",
+    "readback": {
+      "root": {
+        "found": true,
+        "fields": {
+          "id": {
+            "ok": true,
+            "value": "5071:2673"
+          },
+          "type": {
+            "ok": true,
+            "value": "INSTANCE"
+          },
+          "name": {
+            "ok": true,
+            "value": "Transport tile"
+          },
+          "width": {
+            "ok": true,
+            "value": 180
+          },
+          "height": {
+            "ok": true,
+            "value": 120
+          },
+          "characters": {
+            "ok": true
+          },
+          "visible": {
+            "ok": true,
+            "value": true
+          }
+        },
+        "parent": {
+          "ok": true,
+          "value": "5071:2678"
+        },
+        "children": {
+          "ok": true,
+          "value": [
+            {
+              "id": {
+                "ok": true,
+                "value": "I5071:2673;5071:2649"
+              },
+              "type": {
+                "ok": true,
+                "value": "TEXT"
+              },
+              "name": {
+                "ok": true,
+                "value": "ROOT TRANSPORT SENTINEL"
+              },
+              "width": {
+                "ok": true,
+                "value": 171
+              },
+              "height": {
+                "ok": true,
+                "value": 15
+              },
+              "characters": {
+                "ok": true,
+                "value": "ROOT TRANSPORT SENTINEL"
+              },
+              "visible": {
+                "ok": true,
+                "value": true
+              }
+            },
+            {
+              "id": {
+                "ok": true,
+                "value": "I5071:2673;5071:2650"
+              },
+              "type": {
+                "ok": true,
+                "value": "TEXT"
+              },
+              "name": {
+                "ok": true,
+                "value": "HIDDEN SENTINEL"
+              },
+              "width": {
+                "ok": true,
+                "value": 107
+              },
+              "height": {
+                "ok": true,
+                "value": 15
+              },
+              "characters": {
+                "ok": true,
+                "value": "HIDDEN SENTINEL"
+              },
+              "visible": {
+                "ok": true,
+                "value": false
+              }
+            }
+          ]
+        },
+        "indexed": {
+          "ok": true,
+          "value": [
+            {
+              "id": {
+                "ok": true,
+                "value": "I5071:2673;5071:2649"
+              },
+              "type": {
+                "ok": true,
+                "value": "TEXT"
+              },
+              "name": {
+                "ok": true,
+                "value": "ROOT TRANSPORT SENTINEL"
+              },
+              "width": {
+                "ok": true,
+                "value": 171
+              },
+              "height": {
+                "ok": true,
+                "value": 15
+              },
+              "characters": {
+                "ok": true,
+                "value": "ROOT TRANSPORT SENTINEL"
+              },
+              "visible": {
+                "ok": true,
+                "value": true
+              }
+            },
+            {
+              "id": {
+                "ok": true,
+                "value": "I5071:2673;5071:2650"
+              },
+              "type": {
+                "ok": true,
+                "value": "TEXT"
+              },
+              "name": {
+                "ok": true,
+                "value": "HIDDEN SENTINEL"
+              },
+              "width": {
+                "ok": true,
+                "value": 107
+              },
+              "height": {
+                "ok": true,
+                "value": 15
+              },
+              "characters": {
+                "ok": true,
+                "value": "HIDDEN SENTINEL"
+              },
+              "visible": {
+                "ok": true,
+                "value": false
+              }
+            }
+          ]
+        }
+      },
+      "originalRoot": {
+        "found": true,
+        "fields": {
+          "id": {
+            "ok": true,
+            "value": "5071:2673"
+          },
+          "type": {
+            "ok": true,
+            "value": "INSTANCE"
+          },
+          "name": {
+            "ok": true,
+            "value": "Transport tile"
+          },
+          "width": {
+            "ok": true,
+            "value": 180
+          },
+          "height": {
+            "ok": true,
+            "value": 120
+          },
+          "characters": {
+            "ok": true
+          },
+          "visible": {
+            "ok": true,
+            "value": true
+          }
+        },
+        "parent": {
+          "ok": true,
+          "value": "5071:2678"
+        },
+        "children": {
+          "ok": true,
+          "value": [
+            {
+              "id": {
+                "ok": true,
+                "value": "I5071:2673;5071:2649"
+              },
+              "type": {
+                "ok": true,
+                "value": "TEXT"
+              },
+              "name": {
+                "ok": true,
+                "value": "ROOT TRANSPORT SENTINEL"
+              },
+              "width": {
+                "ok": true,
+                "value": 171
+              },
+              "height": {
+                "ok": true,
+                "value": 15
+              },
+              "characters": {
+                "ok": true,
+                "value": "ROOT TRANSPORT SENTINEL"
+              },
+              "visible": {
+                "ok": true,
+                "value": true
+              }
+            },
+            {
+              "id": {
+                "ok": true,
+                "value": "I5071:2673;5071:2650"
+              },
+              "type": {
+                "ok": true,
+                "value": "TEXT"
+              },
+              "name": {
+                "ok": true,
+                "value": "HIDDEN SENTINEL"
+              },
+              "width": {
+                "ok": true,
+                "value": 107
+              },
+              "height": {
+                "ok": true,
+                "value": 15
+              },
+              "characters": {
+                "ok": true,
+                "value": "HIDDEN SENTINEL"
+              },
+              "visible": {
+                "ok": true,
+                "value": false
+              }
+            }
+          ]
+        },
+        "indexed": {
+          "ok": true,
+          "value": [
+            {
+              "id": {
+                "ok": true,
+                "value": "I5071:2673;5071:2649"
+              },
+              "type": {
+                "ok": true,
+                "value": "TEXT"
+              },
+              "name": {
+                "ok": true,
+                "value": "ROOT TRANSPORT SENTINEL"
+              },
+              "width": {
+                "ok": true,
+                "value": 171
+              },
+              "height": {
+                "ok": true,
+                "value": 15
+              },
+              "characters": {
+                "ok": true,
+                "value": "ROOT TRANSPORT SENTINEL"
+              },
+              "visible": {
+                "ok": true,
+                "value": true
+              }
+            },
+            {
+              "id": {
+                "ok": true,
+                "value": "I5071:2673;5071:2650"
+              },
+              "type": {
+                "ok": true,
+                "value": "TEXT"
+              },
+              "name": {
+                "ok": true,
+                "value": "HIDDEN SENTINEL"
+              },
+              "width": {
+                "ok": true,
+                "value": 107
+              },
+              "height": {
+                "ok": true,
+                "value": 15
+              },
+              "characters": {
+                "ok": true,
+                "value": "HIDDEN SENTINEL"
+              },
+              "visible": {
+                "ok": true,
+                "value": false
+              }
+            }
+          ]
+        }
+      },
+      "source": {
+        "found": true,
+        "fields": {
+          "id": {
+            "ok": true,
+            "value": "I5071:2671;5071:2653"
+          },
+          "type": {
+            "ok": true,
+            "value": "SLOT"
+          },
+          "name": {
+            "ok": true,
+            "value": "Body"
+          },
+          "width": {
+            "ok": true,
+            "value": 260
+          },
+          "height": {
+            "ok": true,
+            "value": 200
+          },
+          "characters": {
+            "ok": true
+          },
+          "visible": {
+            "ok": true,
+            "value": true
+          }
+        },
+        "parent": {
+          "ok": true,
+          "value": "5071:2671"
+        },
+        "children": {
+          "ok": true,
+          "value": []
+        },
+        "indexed": {
+          "ok": true,
+          "value": []
+        }
+      },
+      "destination": {
+        "found": true,
+        "fields": {
+          "id": {
+            "ok": true,
+            "value": "5071:2678"
+          },
+          "type": {
+            "ok": true,
+            "value": "FRAME"
+          },
+          "name": {
+            "ok": true,
+            "value": "Frame"
+          },
+          "width": {
+            "ok": true,
+            "value": 200
+          },
+          "height": {
+            "ok": true,
+            "value": 150
+          },
+          "characters": {
+            "ok": true
+          },
+          "visible": {
+            "ok": true,
+            "value": true
+          }
+        },
+        "parent": {
+          "ok": true,
+          "value": "5071:2647"
+        },
+        "children": {
+          "ok": true,
+          "value": [
+            {
+              "id": {
+                "ok": true,
+                "value": "5071:2673"
+              },
+              "type": {
+                "ok": true,
+                "value": "INSTANCE"
+              },
+              "name": {
+                "ok": true,
+                "value": "Transport tile"
+              },
+              "width": {
+                "ok": true,
+                "value": 180
+              },
+              "height": {
+                "ok": true,
+                "value": 120
+              },
+              "characters": {
+                "ok": true
+              },
+              "visible": {
+                "ok": true,
+                "value": true
+              }
+            }
+          ]
+        },
+        "indexed": {
+          "ok": true,
+          "value": [
+            {
+              "id": {
+                "ok": true,
+                "value": "5071:2673"
+              },
+              "type": {
+                "ok": true,
+                "value": "INSTANCE"
+              },
+              "name": {
+                "ok": true,
+                "value": "Transport tile"
+              },
+              "width": {
+                "ok": true,
+                "value": 180
+              },
+              "height": {
+                "ok": true,
+                "value": 120
+              },
+              "characters": {
+                "ok": true
+              },
+              "visible": {
+                "ok": true,
+                "value": true
+              }
+            },
+            {
+              "id": {
+                "ok": true,
+                "value": "I5071:2673;5071:2649"
+              },
+              "type": {
+                "ok": true,
+                "value": "TEXT"
+              },
+              "name": {
+                "ok": true,
+                "value": "ROOT TRANSPORT SENTINEL"
+              },
+              "width": {
+                "ok": true,
+                "value": 171
+              },
+              "height": {
+                "ok": true,
+                "value": 15
+              },
+              "characters": {
+                "ok": true,
+                "value": "ROOT TRANSPORT SENTINEL"
+              },
+              "visible": {
+                "ok": true,
+                "value": true
+              }
+            },
+            {
+              "id": {
+                "ok": true,
+                "value": "I5071:2673;5071:2650"
+              },
+              "type": {
+                "ok": true,
+                "value": "TEXT"
+              },
+              "name": {
+                "ok": true,
+                "value": "HIDDEN SENTINEL"
+              },
+              "width": {
+                "ok": true,
+                "value": 107
+              },
+              "height": {
+                "ok": true,
+                "value": 15
+              },
+              "characters": {
+                "ok": true,
+                "value": "HIDDEN SENTINEL"
+              },
+              "visible": {
+                "ok": true,
+                "value": false
+              }
+            }
+          ]
+        }
+      },
+      "flcm": {
+        "node": {
+          "id": "5071:2673",
+          "name": "Transport tile",
+          "type": "INSTANCE",
+          "width": "contextual",
+          "height": "contextual",
+          "designedWidth": "180px",
+          "designedHeight": "120px",
+          "componentId": "5071:2651",
+          "elided": {
+            "children": 3430
+          }
+        },
+        "components": {
+          "5071:2651": {
+            "type": "COMPONENT",
+            "name": "Transport tile",
+            "key": "f121434a9aaf8423c11b8e28a4359220d6f41165",
+            "children": [
+              {
+                "id": "5071:2649",
+                "name": "ROOT TRANSPORT SENTINEL",
+                "type": "TEXT",
+                "left": 0,
+                "top": 0,
+                "text": "ROOT TRANSPORT SENTINEL",
+                "textStyle": {
+                  "fontFamily": "Inter",
+                  "fontWeight": 400,
+                  "fontSize": 12,
+                  "fontVariantName": "Regular"
+                },
+                "fill": "#000000"
+              }
+            ]
+          }
+        }
+      }
+    }
+  }
+}

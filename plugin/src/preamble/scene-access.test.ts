@@ -36,7 +36,6 @@ function fixture() {
     findAll() { throw Error("legacy traversal must not run"); },
     findOne() { throw Error("legacy traversal must not run"); },
     findAllWithCriteria({ types }: { types: string[] }) { assert.deepEqual(types, []); calls++; return indexed; },
-    appendChild(node: unknown) { assert.equal(this, root); assert.equal(node, text); },
   };
   page.children.push(root);
   const native = { root: document, currentPage: page, skipInvisibleInstanceChildren: true,
@@ -66,7 +65,6 @@ test("indexed acquisition preserves public identity, ordering, parents, hidden c
   leaf.resize(123, 20); leaf.characters = "Changed";
   leaf.setRangeFills(0, 2, [{ type: "SOLID", color: { r: 1, g: 0, b: 0 } }]);
   assert.equal(f.text.width, 123); assert.equal(f.text.characters, "Changed"); assert.equal(f.text.fills.length, 1);
-  root.appendChild(leaf);
   (f.api.group as any)([[leaf]], root);
   assert.equal(await f.api.getNodeByIdAsync(f.textAlias.id), leaf);
   assert.equal(leaf.characters, "Changed");
@@ -129,4 +127,38 @@ test("an old compound handle follows its native instance anchor after reopen rem
   assert.equal(leaf.id, f.text.id);
   assert.equal(leaf.characters, "Preserved");
   assert.equal(f.pageCalls, 0);
+});
+
+
+for (const method of ["appendChild", "insertChild"] as const) test(method + " refreshes a remapped root and retained children before subsequent writes", async () => {
+  const base = (id: string, type: string) => ({ id, type, removed: false, parent: null as any, getPluginData() { return ""; } });
+  const page: any = { ...base("1:1", "PAGE"), children: [] };
+  const host: any = { ...base("2:1", "INSTANCE"), parent: page, children: [] };
+  const slot: any = { ...base("I2:1;3:1", "SLOT"), parent: host, children: [] };
+  const leaf: any = { ...base("I4:1;5:1", "TEXT"), characters: "Kept" };
+  const stable: any = { ...base("4:1", "INSTANCE"), parent: slot, children: [leaf], layoutGrow: 0,
+    findAllWithCriteria() { return [leaf]; } };
+  leaf.parent = stable;
+  let retired = false;
+  const indexed: any = { ...stable, id: "I2:1;3:1;6:1" };
+  Object.defineProperty(indexed, "layoutGrow", { get() { if (retired) throw Error("retired native root"); return 0; }, set() { throw Error("write used retired native root"); } });
+  const oldLeaf: any = { ...leaf, id: "I2:1;3:1;6:1;5:1" };
+  Object.defineProperty(oldLeaf, "characters", { get() { if (retired) throw Error("retired native child"); return "Kept"; }, set() { throw Error("write used retired native child"); } });
+  host.children = [slot];slot.children = [stable];
+  host.findAllWithCriteria = () => slot.children.length ? [slot,indexed,oldLeaf] : [slot];
+  const destination: any = { ...base("7:1", "FRAME"), parent: page, children: [],
+    findAllWithCriteria() { throw Error("transport must not scan the destination subtree"); },
+    appendChild(node: any) { assert.equal(node,indexed);retired=true;slot.children=[];this.children=[stable];stable.parent=this; },
+    insertChild(index: number,node: any) { assert.equal(index,0);this.appendChild(node); },
+  };
+  page.children=[host,destination];
+  const native: any = { currentPage: page, skipInvisibleInstanceChildren:false, async getNodeByIdAsync(id: string) { return id===host.id?host:id===destination.id?destination:null; } };
+  const { api } = createSceneAccess(()=>native);
+  const root = await api.getNodeByIdAsync(indexed.id) as InstanceNode;
+  const child = root.children[0] as TextNode;
+  const dest = await api.getNodeByIdAsync(destination.id) as FrameNode;
+  if(method==="appendChild")dest.appendChild(root);else dest.insertChild(0,root);
+  root.layoutGrow=1;child.characters="After transport";
+  assert.equal(stable.layoutGrow,1);assert.equal(leaf.characters,"After transport");
+  assert.equal(root.id,"4:1");assert.equal(root.parent,dest);assert.equal(root.children[0],child);
 });

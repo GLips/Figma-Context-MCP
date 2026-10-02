@@ -12,9 +12,15 @@ The dialect now gets native objects and ordered relationships through one shared
 - Page enumeration worked with 96 pages without indexing the entire document.
 - Primary warm import→read/search/measure/edit passed in the product runtime and independent readback.
 
-## Still open
+## Root transport resolved October 2
 
-Moving an already remapped instance root OUT of a slot can invalidate even native indexed root access. This reproduces through raw Figma. The product operation rolled back; the isolated raw experiment was restored and independently checked. This is not claimed fixed.
+Current-runtime controls showed that moving an indexed instance root out of a slot preserves the actual instance, but retires its old compound native handle. The product then failed while settling layout through that handle. The shared scene-access boundary now refreshes the moved node and previously acquired descendants from the destination before subsequent writes.
+
+The exact failing product case passed after this change. Independent readback preserved the original root ID, component linkage, 180×120 dimensions, visible and hidden text, and source/destination membership. Both append and insert have focused regressions; all 482 plugin tests and plugin typecheck passed. [Durable reproduction and evidence](plugin/scenarios/live/slot-root-transport/README.md) supersede the missing temporary September artifacts for this failure.
+
+Plugin-reopen transport was not repeated in this October run. A separate native temporary-group transport candidate failed on an invalidated GROUP handle and was not used in the product fix.
+
+## Other historical limits
 
 An optional reorder/constructed-variant probe hit a native connection error. Final readback confirmed unchanged order and preserved content, but that probe did not complete. It is not a passing result.
 
