@@ -368,7 +368,9 @@ export interface WriteProps {
   maxLines?: number | "none";
   fills?: WritePaintStack;
   strokes?: WritePaintStack;
-  strokeWeight?: number;
+  // A number is one weight for every side; Edges only when sides differ, and only on a type with
+  // per-side weights (the compiler's gate) — the bridge writes strokeTop/Right/Bottom/LeftWeight.
+  strokeWeight?: number | Edges;
   strokeAlign?: "INSIDE" | "OUTSIDE" | "CENTER";
   effects?: WriteEffect[];
   opacity?: number;

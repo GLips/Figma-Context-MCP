@@ -153,7 +153,6 @@ function readyAuthoredValue(key: string, value: unknown, subject: string): unkno
   switch (key) {
     case "text": return readyTextContent(value, subject);
     case "textStyle": case "effects": case "fill": case "stroke": return assertNotCompressedRef(value, subject + "." + key);
-    case "strokeWidth": return singleValue(value, subject + ".strokeWidth", "one uniform stroke width, not per-side weights");
     default: return value;
   }
 }
@@ -174,17 +173,6 @@ function compressedRef(field: string): Error {
     field + ' is a styles-table REFERENCE (like "fill_a1b2c3d4"), not a value — that read came from a COMPRESSED read. ' +
       "flcm.get returns the expanded shape with every value inline; re-read the node with flcm.get, or resolve the ref against the design's `styles` table first.",
   );
-}
-
-// A read metric that flcm spells with ONE value. Read emits a CSS shorthand when the sides differ
-// ("1px 2px"); flcm has one word for the whole node, so the multi-value form is real state with no
-// authored form rather than something to average or take the first of. `borderRadius` is NOT one of
-// these — it takes the shorthand for real, decoded in css.ts (cornerRadii).
-function singleValue(value: unknown, field: string, whatFlcmHas: string): unknown {
-  if (typeof value === "string" && /\s/.test(value.trim())) {
-    throw new Error(field + " is " + JSON.stringify(value) + ", and flcm authors " + whatFlcmHas + ". " + CLONE_REMEDY);
-  }
-  return value;
 }
 
 // The layout bag keeps its key and its authorable words verbatim (`gap` is a metric the compiler

@@ -191,7 +191,7 @@ function liveBaseStyle(node: TextNode): WriteTextStyle {
 // enrichment, the runs' base style, and lineClamp's bounded-width gate all read it.
 function compileDeltaPatch(changes: EditDelta, legal: ReadonlySet<string>, node: SceneNode, subject: string): WriteProps {
   const patch: WriteProps = {};
-  compileNodeLocalProps(patch, changes, { radius: legal.has("borderRadius"), clip: legal.has("clip") });
+  compileNodeLocalProps(patch, changes, { type: node.type, radius: legal.has("borderRadius"), clip: legal.has("clip") });
   if (patch.effects) toFigmaEffects(patch.effects);
   // Layout words compile through the same helpers every compiler rides — never buildLayout,
   // whose creation default (omitted mode → "none") would turn a gap nudge into an auto-layout kill.

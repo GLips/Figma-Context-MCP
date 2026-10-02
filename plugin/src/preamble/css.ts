@@ -332,9 +332,9 @@ export function length(v: number | string): number {
 }
 
 // A CSS 1–4 value box shorthand ("12px" | "12px 16px" | "12px 16px 8px" | "12px 16px 8px 4px") -> typed
-// Edges, following CSS's own fill-in rules. The READ shape spells padding this way (one string, per
-// core/utils generateCSSShorthand) while flcm's `padding` prop takes numbers, so the read→write
-// normalizer needs the decode; nothing else authors padding as a string. Each value rides `length`, so a
+// Edges, following CSS's own fill-in rules. The READ shape spells padding and a per-side strokeWidth this
+// way (one string, per core/utils generateCSSShorthand), so this decode is what lets both re-author.
+// Each value rides `length`, so a
 // non-px unit fails loud there rather than coercing to wrong pixels.
 export function boxShorthand(value: string, field: string): Edges {
   const parts = String(value).trim().split(/\s+/).filter((p) => p.length);

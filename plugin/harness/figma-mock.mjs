@@ -23,7 +23,7 @@ const clonePaints = (p) => (Array.isArray(p) ? JSON.parse(JSON.stringify(p)) : p
 // The visual/layout props carried across clone (instance) and promote (createComponentFromNode).
 const COPY_FIELDS = ["gridRowSizes", "gridColumnSizes", "gridRowGap", "gridColumnGap", "gridAutoTracks", "gridItemsPositioning", "_gridRowAnchorIndex", "_gridColumnAnchorIndex", "_gridRowSpan", "_gridColumnSpan", "gridChildHorizontalAlign", "gridChildVerticalAlign", "_gridSizingW", "_gridSizingH", "_gridFillW", "_gridFillH", "isExposedInstance", "_layoutWrap", "counterAxisSpacing", "counterAxisAlignContent", "minWidth", "maxWidth", "minHeight", "maxHeight", "name", "layoutMode", "itemSpacing", "paddingTop", "paddingRight", "paddingBottom",
   "paddingLeft", "primaryAxisAlignItems", "counterAxisAlignItems", "primaryAxisSizingMode",
-  "counterAxisSizingMode", "layoutGrow", "layoutAlign", "layoutPositioning", "constraints", "strokeWeight", "strokeAlign",
+  "counterAxisSizingMode", "layoutGrow", "layoutAlign", "layoutPositioning", "constraints", "_strokeWeights", "strokeAlign",
   "_corners", "opacity", "visible", "rotation", "characters", "fontSize", "textAutoResize",
   // x/y ride along because a live clone() preserves position: without them the mock can't show
   // that flcm.clone with no parent lands the copy exactly ON TOP of the original in a free-form
@@ -93,6 +93,32 @@ function installCornerRadii(node, type) {
   });
 }
 
+// Figma's IndividualStrokesMixin — the types whose four stroke sides can differ. LINE, ELLIPSE,
+// VECTOR and TEXT have only the uniform `strokeWeight`.
+const INDIVIDUAL_STROKE_TYPES = ["RECTANGLE", "FRAME", "COMPONENT", "COMPONENT_SET", "INSTANCE", "SLOT"];
+const STROKE_SIDE_PROPS = ["strokeTopWeight", "strokeRightWeight", "strokeBottomWeight", "strokeLeftWeight"];
+
+// Stroke weights project exactly like corners: four stored sides, `strokeWeight` reading figma.mixed
+// once they differ (what node-to-snapshot branches on to emit the per-side shorthand).
+function installStrokeWeights(node, type) {
+  node._strokeWeights = [1, 1, 1, 1];
+  Object.defineProperty(node, "strokeWeight", {
+    configurable: true,
+    enumerable: true,
+    get: () => (node._strokeWeights.every((v) => v === node._strokeWeights[0]) ? node._strokeWeights[0] : MIXED),
+    set: (v) => { node._strokeWeights = [v, v, v, v]; },
+  });
+  if (!INDIVIDUAL_STROKE_TYPES.includes(type)) return;
+  STROKE_SIDE_PROPS.forEach((prop, i) => {
+    Object.defineProperty(node, prop, {
+      configurable: true,
+      enumerable: true,
+      get: () => node._strokeWeights[i],
+      set: (v) => { const next = node._strokeWeights.slice(); next[i] = v; node._strokeWeights = next; },
+    });
+  });
+}
+
 class Node {
   constructor(type) {
     this.id = nextId();
@@ -125,7 +151,7 @@ class Node {
     // appearance
     this.fills = [];
     this.strokes = [];
-    this.strokeWeight = 1;
+    installStrokeWeights(this, type);
     this.strokeAlign = "INSIDE";
     installCornerRadii(this, type);
     this.opacity = 1;
@@ -861,7 +887,7 @@ class Node {
 
 // The sublayer fields the mock treats as OVERRIDABLE — what a swap carries across when the incoming
 // component has a same-named layer. `name` is deliberately absent: it is the matching key.
-const OVERRIDDEN_FIELDS = ["characters", "visible", "opacity", "rotation", "_corners", "strokeWeight",
+const OVERRIDDEN_FIELDS = ["characters", "visible", "opacity", "rotation", "_corners", "_strokeWeights",
   "fontSize", "fills", "strokes", "effects"];
 
 // Who holds a component's property definitions: the set for a variant, else the component itself.
@@ -941,7 +967,7 @@ function writeBoundProperty(instance, full, def, value) {
 // `componentPropertyReferences`, which is re-pointed explicitly by the definition-editing calls above.
 const MIRRORED_FIELDS = ["name", "layoutMode", "itemSpacing", "paddingTop", "paddingRight", "paddingBottom",
   "paddingLeft", "primaryAxisAlignItems", "counterAxisAlignItems", "primaryAxisSizingMode",
-  "counterAxisSizingMode", "layoutGrow", "layoutAlign", "layoutPositioning", "strokeWeight", "strokeAlign",
+  "counterAxisSizingMode", "layoutGrow", "layoutAlign", "layoutPositioning", "_strokeWeights", "strokeAlign",
   "_corners", "opacity", "visible", "rotation", "_characters", "fontSize", "textAutoResize",
   "fills", "strokes", "effects", "clipsContent", "_fixedW", "_fixedH"];
 

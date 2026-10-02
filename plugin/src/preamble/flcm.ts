@@ -440,17 +440,38 @@ function base(wn: WriteProps, props: BaseProps & { annotations?: unknown }): voi
 // CSS-shaped leaf is normalized to the typed currency through css.ts here — presence-preserving by
 // construction, so it doubles as the edit patch compiler's core: only present keys produce writes.
 // Exported for edit-plan.ts (which imports FROM here; flcm.ts never imports it — no cycle).
-export function compileNodeLocalProps(wn: WriteProps, props: AppearanceProps, opts: { radius?: boolean; clip?: boolean }): void {
+export function compileNodeLocalProps(wn: WriteProps, props: AppearanceProps, opts: { type: string; radius?: boolean; clip?: boolean }): void {
   base(wn, props);
   if (props.fill != null) wn.fills = compilePaintWord(props.fill, "fill");
   if (props.stroke != null) wn.strokes = compilePaintWord(props.stroke, "stroke");
-  if (props.strokeWidth != null) wn.strokeWeight = length(props.strokeWidth);
+  if (props.strokeWidth != null) wn.strokeWeight = compileStrokeWidth(props.strokeWidth, opts.type);
   if (props.strokeAlign != null) wn.strokeAlign = compileStrokeAlign(props.strokeAlign);
   if (props.effects != null) wn.effects = props.effects === "none" ? [] : normalizeEffects(props.effects);
   if (opts.radius && props.borderRadius != null) wn.borderRadius = cornerRadii(props.borderRadius, "borderRadius");
   const clip = (props as FrameProps).clip;
   if (opts.clip && clip != null) { assertScalarType(clip, "boolean", "clip"); wn.clip = clip; }
   if (props.rotation != null) { assertScalarType(props.rotation, "number", "rotation"); wn.rotation = props.rotation; }
+}
+
+// Figma's IndividualStrokesMixin: only the rectangle-family boxes weigh their sides apart. LINE,
+// ELLIPSE and VECTOR have one strokeWeight, so a per-side width there is refused at compile, before
+// any canvas write — never dropped or averaged.
+const PER_SIDE_STROKE_TYPES: ReadonlySet<string> = new Set(["FRAME", "RECTANGLE", "COMPONENT", "COMPONENT_SET", "INSTANCE", "SLOT"]);
+
+// `strokeWidth` is CSS `border-width`: one value, or the 1–4 value box shorthand read emits when a
+// node's sides differ ("0px 0px 0px 1px" = a left-only border). Uniform collapses to a number so the
+// bridge keeps writing `strokeWeight`; only differing sides become per-side Edges.
+function compileStrokeWidth(value: number | string, type: string): number | Edges {
+  if (typeof value === "number") return value;
+  const sides = boxShorthand(value, "strokeWidth");
+  if (sides.top === sides.right && sides.right === sides.bottom && sides.bottom === sides.left) return sides.top;
+  if (!PER_SIDE_STROKE_TYPES.has(type)) {
+    throw new Error(
+      "flcm: a " + type + " has one stroke weight for every side — the per-side strokeWidth " + JSON.stringify(value) +
+        " has no equivalent on it. Give one width.",
+    );
+  }
+  return sides;
 }
 
 // Which side of the edge a border sits on. Lowercase on both sides of the surface (the read shape emits
@@ -490,7 +511,7 @@ export function compilePaintWord(value: NonNullable<AppearanceProps["fill"]>, su
 function compileFrame(props: FrameProps): WriteNode {
   props = acceptAuthoringProps(props, { type: "FRAME", verb: "create", known: FRAME_KEYS, subject: "FRAME" }) as FrameProps;
   const wn: WriteNode = { type: "FRAME" };
-  compileNodeLocalProps(wn, props, { radius: true, clip: true });
+  compileNodeLocalProps(wn, props, { type: "FRAME", radius: true, clip: true });
   compileBindings(wn, props, FRAME_BINDINGS, "FRAME");
   wn.layout = buildLayout(props, "FRAME", "FRAME");
   return wn;
@@ -527,7 +548,7 @@ function compileInstance(props: InstanceProps & { componentId: Target }): WriteN
   const wn: WriteNode = { type: "INSTANCE" };
   wn.component = component;
   if (accepted.exposed !== undefined) { assertScalarType(accepted.exposed, "boolean", "exposed"); wn.exposed = accepted.exposed; }
-  compileNodeLocalProps(wn, accepted, { radius: true, clip: true });
+  compileNodeLocalProps(wn, accepted, { type: "INSTANCE", radius: true, clip: true });
   const layout = compileNodeLayout(accepted, "INSTANCE", "INSTANCE") || {};
   // The type rule (hug needs auto-layout, gap needs a container) is NOT run here: whether this root is
   // a row/column is the COMPONENT's fact, read in render's prepare — the same live-mode call edit makes.
@@ -1092,7 +1113,7 @@ function shape(type: "RECTANGLE" | "ELLIPSE", props: ShapeProps | EllipseProps |
   const known = type === "RECTANGLE" ? SHAPE_KEYS : ELLIPSE_KEYS;
   props = acceptAuthoringProps(props, { type, verb: "create", known, subject }) as ShapeProps;
   const wn: WriteNode = { type };
-  compileNodeLocalProps(wn, props, { radius: type === "RECTANGLE" });
+  compileNodeLocalProps(wn, props, { type, radius: type === "RECTANGLE" });
   compileBindings(wn, props, ANY_NODE_BINDINGS, subject);
   const layout = buildLayout(props as FrameProps, type, subject);
   if (Object.keys(layout).length) wn.layout = layout;
@@ -1109,7 +1130,7 @@ function compileLine(props: LineProps | SimplifiedNode = {}): WriteNode {
   base(wn, props);
   compileBindings(wn, props, ANY_NODE_BINDINGS, "LINE");
   if (props.stroke != null) wn.strokes = compilePaintWord(props.stroke, "stroke");
-  if (props.strokeWidth != null) wn.strokeWeight = length(props.strokeWidth);
+  if (props.strokeWidth != null) wn.strokeWeight = compileStrokeWidth(props.strokeWidth, "LINE");
   const layout = compileNodeLayout(props, "LINE", "LINE") || {};
   // line() is the one compiler that doesn't ride buildLayout (width-only sizing), so it consults
   // the shared authority itself — no rule fires on a width-only layout today, but a future LINE-keyed
@@ -1167,7 +1188,7 @@ function compilePath(props: PathProps): WriteNode {
     : [{ windingRule: "NONZERO" as const, data: normalizePathData(d as string) }];
   const wn: WriteNode = { type: "VECTOR", vector: { kind: "path", paths, scale: compileScale(props.scale) } };
   if (width !== undefined || height !== undefined) wn.ignoredSize = { width, height };
-  compileNodeLocalProps(wn, props, {}); // fill/stroke/strokeWidth/effects/rotation + base; radius/clip off for a vector
+  compileNodeLocalProps(wn, props, { type: "VECTOR" }); // fill/stroke/strokeWidth/effects/rotation + base; radius/clip off for a vector
   compileBindings(wn, props, ANY_NODE_BINDINGS, "VECTOR");
   const layout = buildLayout(props as FrameProps, "VECTOR", "VECTOR");
   if (Object.keys(layout).length) wn.layout = layout;

@@ -329,7 +329,8 @@ When you pass effects as CSS strings (\`effects: { … }\`):
 
 | Where | Accepts |
 | --- | --- |
-| \`layout.gap\`, \`strokeWidth\` | number or \`"Npx"\` |
+| \`layout.gap\` | number or \`"Npx"\` |
+| \`strokeWidth\` | number, \`"Npx"\`, or (frames, rectangles, components, instances) the CSS \`border-width\` shorthand (\`"0px 0px 0px 1px"\` = top, right, bottom, left) — what a \`get\` hands back for a per-side border |
 | \`borderRadius\` | number, \`"Npx"\`, or the CSS \`border-radius\` shorthand (\`"12px 12px 0px 0px"\` = TL, TR, BR, BL) — what a \`get\` hands back for a mixed-corner node |
 | \`layout.padding\` (and its \`x\`/\`y\`/\`top\`/…) | **numbers only** (not \`"px"\` strings) |
 | \`width\`, \`height\` | a **number** (fixed px), \`"N%"\` (percent of the parent's realized size — see Percent sizing), or \`"fill"\` / \`"hug"\` |

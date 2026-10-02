@@ -80,7 +80,7 @@ REST does not request geometry=paths, so its decoded readOnlySource cannot suppl
 ### Rules that hold everywhere
 
 - Return ids and handles, never live Figma nodes.
-- Every metric (`width`, `height`, `gap`, `padding`, `borderRadius`, `strokeWidth`, `left`/`top`) takes a number or `"Npx"`; `width`/`height`/`left`/`top` also take `"N%"`, `width`/`height` take `"fill"`/`"hug"`, and `borderRadius` also takes the CSS shorthand (`"12px 12px 0px 0px"`). Colors, gradients and shadows are CSS strings.
+- Every metric (`width`, `height`, `gap`, `padding`, `borderRadius`, `strokeWidth`, `left`/`top`) takes a number or `"Npx"`; `width`/`height`/`left`/`top` also take `"N%"`, `width`/`height` take `"fill"`/`"hug"`, and `borderRadius`/`strokeWidth` also take the CSS shorthand (`"12px 12px 0px 0px"`). Colors, gradients and shadows are CSS strings.
 - Out-of-subset CSS fails loud.
 
 ## The verbs
@@ -256,7 +256,7 @@ Budget fixed widths together with padding and gaps; use `"fill"` for the remaini
 | --- | --- | --- |
 | `fill` | paint \| paint[] | Background paint: a color/gradient string, flcm.gradient(...) or flcm.image(url). An array is a paint stack, first entry on top — see Paint & gradients. "none" removes it. |
 | `stroke` | paint \| paint[] | Border paint, or a stack of them. "none" removes it. |
-| `strokeWidth` | number \| "Npx" | Border thickness. |
+| `strokeWidth` | number \| "Npx" \| CSS shorthand | Border thickness. Frames, rectangles, components and instances also take the CSS border-width shorthand, top/right/bottom/left — "0px 0px 0px 1px" is a left-only border; two values are top+bottom then left+right, three are top, left+right, bottom. Any other node type has one weight for every side, so a multi-value width on it throws. |
 | `strokeAlign` | "inside" \| "outside" \| "center" | Which side of the edge. Default "inside". |
 | `borderRadius` | number \| "Npx" \| CSS shorthand | Corner radius. Frames and rectangles only. Also takes the CSS border-radius shorthand, clockwise from the top-left — "12px 12px 0px 0px" rounds the top two corners; two values are TL/BR then TR/BL, three are TL, TR/BL, BR. Figma corners are circular, so the elliptical "x / y" form throws. |
 | `effects` | effects value | Shadows / blur: flcm.effects({...}) or a CSS-string bag. "none" removes all effects. |
@@ -369,7 +369,7 @@ Each styled run's delta fields:
 | --- | --- | --- |
 | `fill` | paint \| paint[] | Background paint: a color/gradient string, flcm.gradient(...) or flcm.image(url). An array is a paint stack, first entry on top — see Paint & gradients. "none" removes it. |
 | `stroke` | paint \| paint[] | Border paint, or a stack of them. "none" removes it. |
-| `strokeWidth` | number \| "Npx" | Border thickness. |
+| `strokeWidth` | number \| "Npx" \| CSS shorthand | Border thickness. Frames, rectangles, components and instances also take the CSS border-width shorthand, top/right/bottom/left — "0px 0px 0px 1px" is a left-only border; two values are top+bottom then left+right, three are top, left+right, bottom. Any other node type has one weight for every side, so a multi-value width on it throws. |
 | `strokeAlign` | "inside" \| "outside" \| "center" | Which side of the edge. Default "inside". |
 | `borderRadius` | number \| "Npx" \| CSS shorthand | Corner radius. Frames and rectangles only. Also takes the CSS border-radius shorthand, clockwise from the top-left — "12px 12px 0px 0px" rounds the top two corners; two values are TL/BR then TR/BL, three are TL, TR/BL, BR. Figma corners are circular, so the elliptical "x / y" form throws. |
 | `effects` | effects value | Shadows / blur: flcm.effects({...}) or a CSS-string bag. "none" removes all effects. |
@@ -383,7 +383,7 @@ Each styled run's delta fields:
 | --- | --- | --- |
 | `fill` | paint \| paint[] | Background paint: a color/gradient string, flcm.gradient(...) or flcm.image(url). An array is a paint stack, first entry on top — see Paint & gradients. "none" removes it. |
 | `stroke` | paint \| paint[] | Border paint, or a stack of them. "none" removes it. |
-| `strokeWidth` | number \| "Npx" | Border thickness. |
+| `strokeWidth` | number \| "Npx" \| CSS shorthand | Border thickness. Frames, rectangles, components and instances also take the CSS border-width shorthand, top/right/bottom/left — "0px 0px 0px 1px" is a left-only border; two values are top+bottom then left+right, three are top, left+right, bottom. Any other node type has one weight for every side, so a multi-value width on it throws. |
 | `strokeAlign` | "inside" \| "outside" \| "center" | Which side of the edge. Default "inside". |
 | `effects` | effects value | Shadows / blur: flcm.effects({...}) or a CSS-string bag. "none" removes all effects. |
 | `rotation` | number (deg) | Rotation in degrees. Composes AFTER layout sizing: the parent sizes the node (fill/hug/px) on its own axes first, and the node then spins about its centre — so rotating changes which way the box points, never the size it was given. |
@@ -414,7 +414,7 @@ Bare geometry: the node's box is the path's bounding box, so there is no `width`
 | `scale` | number | Multiplies the path's natural bounding box — `scale: 2` draws the same art twice as big. A single positive number, so the art can never stretch out of proportion. The path form's only size word. |
 | `fill` | paint \| paint[] | Background paint: a color/gradient string, flcm.gradient(...) or flcm.image(url). An array is a paint stack, first entry on top — see Paint & gradients. "none" removes it. |
 | `stroke` | paint \| paint[] | Border paint, or a stack of them. "none" removes it. |
-| `strokeWidth` | number \| "Npx" | Border thickness. |
+| `strokeWidth` | number \| "Npx" \| CSS shorthand | Border thickness. Frames, rectangles, components and instances also take the CSS border-width shorthand, top/right/bottom/left — "0px 0px 0px 1px" is a left-only border; two values are top+bottom then left+right, three are top, left+right, bottom. Any other node type has one weight for every side, so a multi-value width on it throws. |
 | `strokeAlign` | "inside" \| "outside" \| "center" | Which side of the edge. Default "inside". |
 | `effects` | effects value | Shadows / blur: flcm.effects({...}) or a CSS-string bag. "none" removes all effects. |
 | `rotation` | number (deg) | Rotation in degrees. Composes AFTER layout sizing: the parent sizes the node (fill/hug/px) on its own axes first, and the node then spins about its centre — so rotating changes which way the box points, never the size it was given. |
@@ -573,7 +573,7 @@ Blur values are written in **CSS px** — you always write the CSS number and we
 | `locked` | boolean | Locks the layer against pointer edits in Figma's UI. flcm.edit still writes to it. |
 | `fill` | paint \| paint[] | Background paint: a color/gradient string, flcm.gradient(...) or flcm.image(url). An array is a paint stack, first entry on top — see Paint & gradients. "none" removes it. |
 | `stroke` | paint \| paint[] | Border paint, or a stack of them. "none" removes it. |
-| `strokeWidth` | number \| "Npx" | Border thickness. |
+| `strokeWidth` | number \| "Npx" \| CSS shorthand | Border thickness. Frames, rectangles, components and instances also take the CSS border-width shorthand, top/right/bottom/left — "0px 0px 0px 1px" is a left-only border; two values are top+bottom then left+right, three are top, left+right, bottom. Any other node type has one weight for every side, so a multi-value width on it throws. |
 | `strokeAlign` | "inside" \| "outside" \| "center" | Which side of the edge. Default "inside". |
 | `borderRadius` | number \| "Npx" \| CSS shorthand | Corner radius. Frames and rectangles only. Also takes the CSS border-radius shorthand, clockwise from the top-left — "12px 12px 0px 0px" rounds the top two corners; two values are TL/BR then TR/BL, three are TL, TR/BL, BR. Figma corners are circular, so the elliptical "x / y" form throws. |
 | `effects` | effects value | Shadows / blur: flcm.effects({...}) or a CSS-string bag. "none" removes all effects. |
@@ -935,7 +935,8 @@ When you pass effects as CSS strings (`effects: { … }`):
 
 | Where | Accepts |
 | --- | --- |
-| `layout.gap`, `strokeWidth` | number or `"Npx"` |
+| `layout.gap` | number or `"Npx"` |
+| `strokeWidth` | number, `"Npx"`, or (frames, rectangles, components, instances) the CSS `border-width` shorthand (`"0px 0px 0px 1px"` = top, right, bottom, left) — what a `get` hands back for a per-side border |
 | `borderRadius` | number, `"Npx"`, or the CSS `border-radius` shorthand (`"12px 12px 0px 0px"` = TL, TR, BR, BL) — what a `get` hands back for a mixed-corner node |
 | `layout.padding` (and its `x`/`y`/`top`/…) | **numbers only** (not `"px"` strings) |
 | `width`, `height` | a **number** (fixed px), `"N%"` (percent of the parent's realized size — see Percent sizing), or `"fill"` / `"hug"` |

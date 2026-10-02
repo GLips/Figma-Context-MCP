@@ -31,7 +31,7 @@ import { warnBackgroundBlurWithoutFill } from "./background-blur-diagnostics.js"
 // noise without safety.
 
 import { applyAnnotations } from "./annotation-categories.js";
-import { WriteType, WriteNode, WriteProps, WriteLayout, TextAlign, TextDecoration, Sizing, Identity, Handle, WritePaint, WritePaintStack, WriteImage, WriteImageUrl, ComponentPropertyBinding, CornerRadii, namesFontIdentity } from "./ir.js";
+import { WriteType, WriteNode, WriteProps, WriteLayout, TextAlign, TextDecoration, Sizing, Identity, Handle, WritePaint, WritePaintStack, WriteImage, WriteImageUrl, ComponentPropertyBinding, CornerRadii, Edges, namesFontIdentity } from "./ir.js";
 import { own } from "./validate.js";
 import {
   assertLayoutRealizableForType, assertGridSizing, assertPercentResolvable, assertSizingResolvesAgainstParentFrame, ParentFlowFacts,
@@ -254,7 +254,7 @@ export function applyPaint(node: any, wn: WriteProps, ctx: RenderResources): voi
   // empties would make removal an unspeakable intent (the ADR-0003 silent no-op).
   if (wn.fills) node.fills = toFigmaPaintStack(wn.fills, ctx);
   if (wn.strokes) node.strokes = toFigmaPaintStack(wn.strokes, ctx);
-  if (wn.strokeWeight != null && "strokeWeight" in node) node.strokeWeight = wn.strokeWeight;
+  if (wn.strokeWeight != null) applyStrokeWeight(node, wn.strokeWeight);
   if (wn.strokeAlign != null && "strokeAlign" in node) node.strokeAlign = wn.strokeAlign;
   if (wn.borderRadius) applyCornerRadii(node, wn.borderRadius);
   if (wn.effects && "effects" in node) node.effects = toFigmaEffects(wn.effects);
@@ -267,6 +267,20 @@ export function applyPaint(node: any, wn: WriteProps, ctx: RenderResources): voi
   // against the other's existing value. Gated on presence so a layout-only edit doesn't re-report a
   // node's standing state on every touch.
   if (wn.fills || wn.effects) warnBackgroundBlurWithoutFill(node);
+}
+
+// Strokes split like corners: `strokeWeight` sets every side at once, the four per-side properties
+// (IndividualStrokesMixin) are the only route to differing sides. The compiler only emits Edges for
+// a type that has them, so there is no per-side fallback here.
+function applyStrokeWeight(node: any, w: number | Edges): void {
+  if (typeof w === "number") {
+    if ("strokeWeight" in node) node.strokeWeight = w;
+    return;
+  }
+  node.strokeTopWeight = w.top;
+  node.strokeRightWeight = w.right;
+  node.strokeBottomWeight = w.bottom;
+  node.strokeLeftWeight = w.left;
 }
 
 // Figma splits one concept over two APIs: `cornerRadius` writes all four at once (and READS back as
@@ -1108,7 +1122,7 @@ function buildLine(wn: WriteNode, ctx: RenderCtx): any {
   // Present-but-empty is the compiled "none" — write the clear (live createLine seeds a default
   // black stroke, so skipping would leave the line stroked, not unstroked).
   if (wn.strokes) l.strokes = toFigmaPaintStack(wn.strokes, ctx);
-  l.strokeWeight = wn.strokeWeight != null ? wn.strokeWeight : 1;
+  applyStrokeWeight(l, wn.strokeWeight ?? 1);
   applyLeafSize(l, wn.layout || {});
   if (typeof wn.opacity === "number") l.opacity = wn.opacity;
   return l;

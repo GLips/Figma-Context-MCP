@@ -245,7 +245,11 @@ const PLACEMENT_FIELDS = {
 const APPEARANCE_FIELDS = {
   fill: color('Background paint: a color/gradient string, flcm.gradient(...) or flcm.image(url). An array is a paint stack, first entry on top — see Paint & gradients. "none" removes it.'),
   stroke: color('Border paint, or a stack of them. "none" removes it.'),
-  strokeWidth: metric("Border thickness."),
+  strokeWidth: prop(
+    z.union([z.number(), z.string()]),
+    'Border thickness. Frames, rectangles, components and instances also take the CSS border-width shorthand, top/right/bottom/left — "0px 0px 0px 1px" is a left-only border; two values are top+bottom then left+right, three are top, left+right, bottom. Any other node type has one weight for every side, so a multi-value width on it throws.',
+    'number | "Npx" | CSS shorthand',
+  ),
   strokeAlign: prop(
     z.custom<"inside" | "outside" | "center">(),
     'Which side of the edge. Default "inside".',
