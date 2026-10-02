@@ -74,6 +74,7 @@ export type EffectsSugar = {
   noise?: NoiseSugar;
   texture?: TextureSugar;
   progressiveBlur?: ProgressiveBlurSugar;
+  progressiveBackgroundBlur?: ProgressiveBlurSugar;
 };
 
 // The `effects` prop accepts the sugar bag, an already-typed WriteEffect[] (what flcm.effects returns), or
@@ -730,6 +731,11 @@ export const EffectsSchema = z.object({
   progressiveBlur: prop(
     z.custom<ProgressiveBlurSugar>(),
     "A layer blur that ramps across the node — object form only. A number is the end radius; or { startRadius, endRadius, startOffset, endOffset }. Offsets are normalized 0–1 object space (default fade top→bottom: {x:0,y:0}→{x:0,y:1}). Raw Figma radii (not CSS-scaled).",
+    "number | object",
+  ),
+  progressiveBackgroundBlur: prop(
+    z.custom<ProgressiveBlurSugar>(),
+    "A background blur that ramps across the node (blurs what's behind, like `backgroundBlur`) — object form only. Same fields and defaults as `progressiveBlur`.",
     "number | object",
   ),
 });

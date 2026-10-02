@@ -110,7 +110,7 @@ test("get reads beyond-CSS effects back as the flcm.effects object form", async 
     key: "pane",
     width: 100,
     height: 100,
-    effects: effects({ glass: true, noise: true, texture: true, progressiveBlur: 24 }),
+    effects: effects({ glass: true, noise: true, texture: true, progressiveBlur: 24, progressiveBackgroundBlur: 30 }),
   });
 
   const { node: read } = await get("pane");
@@ -139,8 +139,16 @@ test("get reads beyond-CSS effects back as the flcm.effects object form", async 
     startOffset: { x: 0, y: 0 },
     endOffset: { x: 0, y: 1 },
   });
-  // A progressive blur is not a plain CSS blur — it must not also surface as `filter`.
+  // The two progressive kinds read back under their own words — a shared word re-authors one as the other.
+  assert.deepEqual(fx.progressiveBackgroundBlur, {
+    startRadius: 0,
+    endRadius: 30,
+    startOffset: { x: 0, y: 0 },
+    endOffset: { x: 0, y: 1 },
+  });
+  // A progressive blur is not a plain CSS blur — it must not also surface as `filter`/`backdropFilter`.
   assert.equal(fx.filter, undefined);
+  assert.equal(fx.backdropFilter, undefined);
 });
 
 test("get returns hidden targets with their visibility", async () => {

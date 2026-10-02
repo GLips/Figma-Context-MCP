@@ -65,7 +65,7 @@ export const KNOWN_KEYS = {
   variantsOptions: ["name", "description"],
   image: ["scaleMode", "placeholder"],
   gradient: ["type", "stops", "angle", "at"],
-  effects: ["shadow", "blur", "backgroundBlur", "glass", "noise", "texture", "progressiveBlur"],
+  effects: ["shadow", "blur", "backgroundBlur", "glass", "noise", "texture", "progressiveBlur", "progressiveBackgroundBlur"],
 } as const;
 
 function keySet(...groups: readonly (readonly string[])[]): ReadonlySet<string> {
@@ -1272,7 +1272,7 @@ function image(url: unknown, opts: ImageOpts = {}): WritePaint {
 
 function effects(sugar: EffectsSugar): WriteEffect[] {
   if (!sugar || typeof sugar !== "object") {
-    throw new Error("flcm.effects: expected { shadow?, blur?, backgroundBlur?, glass?, noise?, texture?, progressiveBlur? } — got " + JSON.stringify(sugar) + ".");
+    throw new Error("flcm.effects: expected { shadow?, blur?, backgroundBlur?, glass?, noise?, texture?, progressiveBlur?, progressiveBackgroundBlur? } — got " + JSON.stringify(sugar) + ".");
   }
   rejectUnknownKeys(sugar, EFFECTS_KEYS, "flcm.effects");
   const out: WriteEffect[] = [];
@@ -1282,7 +1282,8 @@ function effects(sugar: EffectsSugar): WriteEffect[] {
   if (sugar.glass !== undefined) out.push(sugarGlass(sugar.glass));
   if (sugar.noise !== undefined) out.push(sugarNoise(sugar.noise));
   if (sugar.texture !== undefined) out.push(sugarTexture(sugar.texture));
-  if (sugar.progressiveBlur !== undefined) out.push(sugarProgressiveBlur(sugar.progressiveBlur));
+  if (sugar.progressiveBlur !== undefined) out.push(sugarProgressiveBlur(sugar.progressiveBlur, "LAYER_BLUR"));
+  if (sugar.progressiveBackgroundBlur !== undefined) out.push(sugarProgressiveBlur(sugar.progressiveBackgroundBlur, "BACKGROUND_BLUR"));
   return out;
 }
 
@@ -1324,9 +1325,10 @@ function sugarTexture(t: TextureSugar): WriteEffect {
   });
 }
 
-function sugarProgressiveBlur(b: ProgressiveBlurSugar): WriteEffect {
+function sugarProgressiveBlur(b: ProgressiveBlurSugar, type: "LAYER_BLUR" | "BACKGROUND_BLUR"): WriteEffect {
   const s = typeof b === "number" ? { endRadius: b } : b;
   return progressiveBlur({
+    type,
     startRadius: s.startRadius != null ? s.startRadius : 0,
     radius: s.endRadius != null ? s.endRadius : 20,
     startOffset: s.startOffset || { x: 0, y: 0 },

@@ -49,6 +49,7 @@ interface BeyondCssEffects {
   noise?: SimplifiedNoise;
   texture?: SimplifiedTexture;
   progressiveBlur?: SimplifiedProgressiveBlur;
+  progressiveBackgroundBlur?: SimplifiedProgressiveBlur;
 }
 
 export type SimplifiedEffects = CssEffects & BeyondCssEffects;
@@ -65,6 +66,7 @@ const BEYOND_CSS_EFFECT_TABLE: Record<BeyondCssEffect, true> = {
   noise: true,
   texture: true,
   progressiveBlur: true,
+  progressiveBackgroundBlur: true,
 };
 export const BEYOND_CSS_EFFECTS = Object.keys(BEYOND_CSS_EFFECT_TABLE) as BeyondCssEffect[];
 
@@ -150,14 +152,17 @@ export function buildSimplifiedEffects(n: NodeSnapshot): SimplifiedEffects {
   const texture = effects.find((e): e is SnapshotTextureEffect => e.type === "TEXTURE");
   if (texture) result.texture = simplifyTexture(texture);
 
-  // Keyed off `blurType` alone — only blur effects carry it, and a PROGRESSIVE blur reads as the object
-  // form whether it's a LAYER_BLUR or a BACKGROUND_BLUR (both are typed progressive). The create surface
-  // only authors the LAYER_BLUR variant, so a background-progressive re-creates as a layer one — a
-  // create-side limitation for the edit plan, still far more faithful than a halved plain CSS blur.
-  const progressive = effects.find(
+  // Split by `type` like the plain blurs: a progressive BACKGROUND_BLUR blurs what's behind the node, a
+  // progressive LAYER_BLUR blurs the node itself — one word for both re-authors a backdrop blur as a
+  // blur of the node's own content.
+  const progressive = effects.filter(
     (e): e is SnapshotProgressiveEffect => e.blurType === "PROGRESSIVE",
   );
-  if (progressive) result.progressiveBlur = simplifyProgressiveBlur(progressive);
+  const progressiveLayer = progressive.find((e) => e.type === "LAYER_BLUR");
+  if (progressiveLayer) result.progressiveBlur = simplifyProgressiveBlur(progressiveLayer);
+  const progressiveBackground = progressive.find((e) => e.type === "BACKGROUND_BLUR");
+  if (progressiveBackground)
+    result.progressiveBackgroundBlur = simplifyProgressiveBlur(progressiveBackground);
 
   return result;
 }

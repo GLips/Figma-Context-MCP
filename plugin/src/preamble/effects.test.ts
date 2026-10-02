@@ -6,7 +6,7 @@
 // fail-loud on a bad enum, and the plugin-Effect mapping. The mapping tests are the load-bearing ones —
 // they pin decisions grounded against the LIVE runtime (verified via execute_code), which the in-memory
 // mock can't enforce: noise carries NO blendMode (the running runtime rejects it despite the 1.130.0
-// typing), and progressive blur maps to the LAYER_BLUR/PROGRESSIVE variant.
+// typing), and each progressive blur maps to its own LAYER_BLUR / BACKGROUND_BLUR PROGRESSIVE variant.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { effects } from "./flcm.js";
@@ -17,7 +17,7 @@ import type {
   SimplifiedTexture,
   SimplifiedProgressiveBlur,
 } from "@framelink/core";
-import type { GlassSugar, NoiseSugar, TextureSugar, ProgressiveBlurSugar } from "./schema.js";
+import type { GlassSugar, NoiseSugar, TextureSugar, ProgressiveBlurSugar, EffectsSugar } from "./schema.js";
 
 // ADR-0002 read↔create symmetry, tier-2: the core's beyond-CSS OBJECT form (what `get` emits) must feed
 // straight back into the create sugar (what flcm.effects({...}) accepts) — two toolchains, no shared type.
@@ -31,6 +31,9 @@ const _glassSym: ReadMatchesCreate<SimplifiedGlass, GlassSugar> = true;
 const _noiseSym: ReadMatchesCreate<SimplifiedNoise, NoiseSugar> = true;
 const _textureSym: ReadMatchesCreate<SimplifiedTexture, TextureSugar> = true;
 const _progressiveSym: ReadMatchesCreate<SimplifiedProgressiveBlur, ProgressiveBlurSugar> = true;
+// Both progressive read keys must be authorable sugar keys, or a read one wouldn't re-create.
+const _progressiveKeys: Exclude<"progressiveBlur" | "progressiveBackgroundBlur", keyof EffectsSugar> extends never ? true : never = true;
+void _progressiveKeys;
 void _glassSym;
 void _noiseSym;
 void _textureSym;
@@ -73,7 +76,7 @@ test("glass: depth < 1 fails loud (the runtime silently clamps it, so we reject 
   assert.doesNotThrow(() => effects({ glass: { depth: 1 } }));
 });
 
-test("toFigmaEffects: noise omits blendMode (live runtime rejects it); progressive blur is LAYER_BLUR/PROGRESSIVE", () => {
+test("toFigmaEffects: noise omits blendMode (live runtime rejects it); each progressive blur keeps its kind", () => {
   const [noiseFx] = toFigmaEffects(effects({ noise: true }));
   assert.equal(noiseFx.type, "NOISE");
   assert.ok(!("blendMode" in noiseFx), "noise must NOT carry blendMode — the running runtime rejects the key");
@@ -83,4 +86,8 @@ test("toFigmaEffects: noise omits blendMode (live runtime rejects it); progressi
   assert.equal(pblurFx.blurType, "PROGRESSIVE");
   assert.equal(pblurFx.radius, 30);
   assert.equal(pblurFx.startRadius, 2);
+
+  const [pbgFx] = toFigmaEffects(effects({ progressiveBackgroundBlur: 30 })) as any[];
+  assert.equal(pbgFx.type, "BACKGROUND_BLUR");
+  assert.equal(pbgFx.blurType, "PROGRESSIVE");
 });

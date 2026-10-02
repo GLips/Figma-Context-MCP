@@ -144,9 +144,9 @@ describe("buildSimplifiedEffects — beyond-CSS object form", () => {
     expect(result.filter).toBeUndefined();
   });
 
-  // A progressive blur can carry type BACKGROUND_BLUR too (typed in plugin-typings). It must read as the
-  // object form, NOT leak into the plain backdrop-filter path at a halved radius.
-  it("emits a progressive background blur as the object form, never as backdrop-filter", () => {
+  // A progressive BACKGROUND_BLUR must read under its own word — sharing `progressiveBlur` re-authors it as
+  // a layer blur of the node's own content — and never leak into backdrop-filter at a halved radius.
+  it("emits a progressive background blur as its own object form, never as backdrop-filter", () => {
     const result = buildSimplifiedEffects(
       nodeWithEffects([
         {
@@ -160,7 +160,8 @@ describe("buildSimplifiedEffects — beyond-CSS object form", () => {
         },
       ]),
     );
-    expect(result.progressiveBlur).toEqual({
+    expect(result.progressiveBlur).toBeUndefined();
+    expect(result.progressiveBackgroundBlur).toEqual({
       startRadius: 4,
       endRadius: 30,
       startOffset: { x: 0, y: 0 },

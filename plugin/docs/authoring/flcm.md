@@ -528,7 +528,7 @@ const logo = { type: "RECTANGLE", width: 120, height: 40, fill: flcm.image("publ
 
 ## Effects
 
-Write effects as the CSS you'd already write — a bag of `{ boxShadow?, textShadow?, filter?, backdropFilter? }`. `flcm.effects({...})` is the second form, and the only way to reach the Figma-native effects CSS has no word for (`glass`, `noise`, `texture`, `progressiveBlur`).
+Write effects as the CSS you'd already write — a bag of `{ boxShadow?, textShadow?, filter?, backdropFilter? }`. `flcm.effects({...})` is the second form, and the only way to reach the Figma-native effects CSS has no word for (`glass`, `noise`, `texture`, `progressiveBlur`, `progressiveBackgroundBlur`).
 
 ```js
 const frosted = { type: "FRAME", effects: { boxShadow: "0 12px 32px rgba(0,0,0,0.18)", backdropFilter: "blur(16px)" } };
@@ -550,6 +550,7 @@ Blur values are written in **CSS px** — you always write the CSS number and we
 | `noise` | true \| object | Grain overlay — object form only. `true` for a default monotone grain, or { type: "monotone"\|"duotone"\|"multitone", color, secondaryColor, opacity, noiseSize, density }. Two fields are scoped to one `type` and are REJECTED on any other: `secondaryColor` is **duotone only**, and `opacity` is **multitone only** — on the default monotone grain it fails, so vary `density`/`color` alpha instead. Note: the running runtime does not accept a per-noise blendMode (typing-ahead-of-runtime), so it is not exposed. |
 | `texture` | true \| object | Textured surface — object form only. `true` for a default, or { noiseSize, radius, clipToShape }. |
 | `progressiveBlur` | number \| object | A layer blur that ramps across the node — object form only. A number is the end radius; or { startRadius, endRadius, startOffset, endOffset }. Offsets are normalized 0–1 object space (default fade top→bottom: {x:0,y:0}→{x:0,y:1}). Raw Figma radii (not CSS-scaled). |
+| `progressiveBackgroundBlur` | number \| object | A background blur that ramps across the node (blurs what's behind, like `backgroundBlur`) — object form only. Same fields and defaults as `progressiveBlur`. |
 
 ## render(), keys & handles
 

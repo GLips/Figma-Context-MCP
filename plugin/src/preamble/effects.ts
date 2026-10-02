@@ -124,7 +124,7 @@ export function toFigmaEffects(effects: WriteEffect[]): Effect[] {
         return { type: "TEXTURE", noiseSize: effect.noiseSize, radius: effect.radius, clipToShape: effect.clipToShape, visible: true } as Effect;
       case "progressiveBlur":
         return {
-          type: "LAYER_BLUR",
+          type: effect.type,
           blurType: "PROGRESSIVE",
           radius: effect.radius,
           startRadius: effect.startRadius,

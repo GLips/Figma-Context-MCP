@@ -161,9 +161,9 @@ export interface WriteBlur { kind: "blur"; type: "LAYER_BLUR" | "BACKGROUND_BLUR
 export interface WriteGlass { kind: "glass"; lightIntensity: number; lightAngle: number; refraction: number; depth: number; dispersion: number; radius: number }
 export interface WriteNoise { kind: "noise"; noiseType: "MONOTONE" | "DUOTONE" | "MULTITONE"; color: Rgba; noiseSize: number; density: number; secondaryColor?: Rgba; opacity?: number }
 export interface WriteTexture { kind: "texture"; noiseSize: number; radius: number; clipToShape: boolean }
-// The progressive LAYER_BLUR variant: radius is the END radius; the blur ramps startRadius→radius along the
-// startOffset→endOffset axis (offsets normalized to the node's 0–1 object space).
-export interface WriteProgressiveBlur { kind: "progressiveBlur"; startRadius: number; radius: number; startOffset: { x: number; y: number }; endOffset: { x: number; y: number } }
+// A progressive blur of either kind (as WriteBlur's `type`): radius is the END radius; the blur ramps
+// startRadius→radius along the startOffset→endOffset axis (offsets normalized to the node's 0–1 object space).
+export interface WriteProgressiveBlur { kind: "progressiveBlur"; type: "LAYER_BLUR" | "BACKGROUND_BLUR"; startRadius: number; radius: number; startOffset: { x: number; y: number }; endOffset: { x: number; y: number } }
 export type WriteEffect = WriteShadow | WriteBlur | WriteGlass | WriteNoise | WriteTexture | WriteProgressiveBlur;
 
 // Author input shape for CSS-string effects: the { boxShadow, filter, backdropFilter, textShadow } bag.
