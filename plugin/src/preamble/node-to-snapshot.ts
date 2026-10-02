@@ -179,8 +179,8 @@ export interface SceneNodeLike {
   readonly layoutAlign?: "INHERIT" | "STRETCH" | "MIN" | "CENTER" | "MAX";
   readonly layoutGrow?: number;
   readonly layoutPositioning?: "AUTO" | "ABSOLUTE";
-  /** The locked width:height vector, null when unlocked — the plugin spelling of REST's `preserveRatio`. */
   readonly textAutoResize?: "NONE" | "HEIGHT" | "WIDTH_AND_HEIGHT" | "TRUNCATE";
+  /** The locked width:height vector, null when unlocked — the plugin spelling of REST's `preserveRatio`. */
   readonly targetAspectRatio?: { readonly x: number; readonly y: number } | null;
   /** Degrees, counterclockwise-positive — the same raw convention the snapshot carries. */
   readonly rotation?: number;
