@@ -481,17 +481,35 @@ test("un-filling while going absolute clears the mark; a direction flip clears m
   assert.equal(tall.layoutGrow, 0);
 });
 
-test("a TEXT's height takes no number: fixed rejects loud; width still lands", async () => {
+test('a numeric TEXT height fixes the box (NONE + size) on create and edit; "hug" restores auto height', async () => {
   const out = await render({
     type: "FRAME",
     width: 300,
     height: 100,
-    children: [{ type: "TEXT", text: "hello", key: "label" }],
+    children: [
+      { type: "TEXT", text: "fixed box", key: "box", width: 120, height: 48 },
+      { type: "TEXT", text: "half", key: "half", width: 120, height: "50%" },
+      { type: "TEXT", text: "hello", key: "label", width: 120 },
+    ],
   });
-  await assert.rejects(edit("label", { height: 80 }), /height follows its content/);
+  const box = await figma.getNodeByIdAsync(specNode(out, "box").id);
+  assert.equal(box.textAutoResize, "NONE");
+  assert.deepEqual([box.width, box.height], [120, 48]);
+  const half = await figma.getNodeByIdAsync(specNode(out, "half").id);
+  assert.equal(half.textAutoResize, "NONE");
+  assert.deepEqual([half.width, half.height], [120, 50]);
   const label = await figma.getNodeByIdAsync(specNode(out, "label").id);
-  await edit("label", { width: 120 });
-  assert.equal(label.width, 120);
+  assert.equal(label.textAutoResize, "HEIGHT");
+  await edit("label", { height: 80 });
+  assert.equal(label.textAutoResize, "NONE");
+  assert.deepEqual([label.width, label.height], [120, 80]);
+  // A width-only edit keeps the fixed box; "hug" hands the height back to the content.
+  await edit("label", { width: 140 });
+  assert.equal(label.textAutoResize, "NONE");
+  assert.equal(label.height, 80);
+  await edit("label", { height: "hug" });
+  assert.equal(label.textAutoResize, "HEIGHT");
+  assert.equal(label.width, 140);
 });
 
 test('height: "hug" on a TEXT is the un-fill: it lifts a flow fill and the height follows the content again', async () => {

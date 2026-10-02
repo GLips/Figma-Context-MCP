@@ -37,6 +37,7 @@ type RawStructuralFields = Partial<
     | "effects"
     | "children"
     | "text"
+    | "textAutoResize"
     | "styles"
     | "componentProperties"
     | "componentPropertyDefinitions"
@@ -153,6 +154,8 @@ function restSubtreeToSnapshot(
     componentProperties?: RawComponentPropertyMap;
     componentPropertyDefinitions?: RawComponentPropertyMap;
     overrides?: { id: string; overriddenFields: string[] }[];
+    /** REST carries a TEXT's auto-resize on its base style; the plugin has it on the node. */
+    style?: { textAutoResize?: NodeSnapshot["textAutoResize"] };
   };
 
   const containerRotation = degreesFromWireRotation(raw.rotation) ?? 0;
@@ -206,6 +209,7 @@ function restSubtreeToSnapshot(
     layoutGrow: raw.layoutGrow,
     layoutPositioning: raw.layoutPositioning,
     preserveRatio: raw.preserveRatio,
+    textAutoResize: node.type === "TEXT" ? raw.style?.textAutoResize : undefined,
     // Keep page/container angles local to the solve; the snapshot composes with its parent.
     rotation: pageRotation - parentSpace.emittedParentFrame.pageRotation || undefined,
     gridColumnAnchorIndex: raw.gridColumnAnchorIndex,

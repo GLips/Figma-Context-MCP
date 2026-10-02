@@ -150,16 +150,24 @@ function buildNodeGeometry(
   // the fallback for a producer that couldn't determine it (see NodeSnapshot.ownSize),
   // and the two are the same box on every unrotated node.
   const size = n.ownSize ?? n.absoluteBoundingBox;
-  const horizontal = resolveAxisDimension(
-    convertSizing(n.layoutSizingHorizontal),
-    size.width,
-    isRoot,
-    !stretch.horizontal && shouldEmitFixedDimension(n.layoutSizingHorizontal, axis),
-  );
+  // Outside auto-layout (a free-form parent, or the root) Figma reports FIXED on every axis, even a
+  // TEXT axis that grows with its content. That axis is the text's default — what an unnamed
+  // dimension authors — so it is omitted rather than pinned to today's measurement. A real
+  // HUG/FILL flag (in-flow under auto-layout) is intent and resolves below as usual.
+  const textFollowsContent = textAxesFollowingContent(n);
+  const horizontal =
+    textFollowsContent.horizontal && isUnflaggedOrFixed(n.layoutSizingHorizontal)
+      ? {}
+      : resolveAxisDimension(
+          convertSizing(n.layoutSizingHorizontal),
+          size.width,
+          isRoot,
+          !stretch.horizontal && shouldEmitFixedDimension(n.layoutSizingHorizontal, axis),
+        );
   // A LINE has no height — Figma reports 0 on every one — so its vertical axis says nothing and is
   // omitted, matching the write side, where flcm.line sizes on `width` alone.
   const vertical =
-    n.type === "LINE"
+    n.type === "LINE" || (textFollowsContent.vertical && isUnflaggedOrFixed(n.layoutSizingVertical))
       ? {}
       : resolveAxisDimension(
           convertSizing(n.layoutSizingVertical),
@@ -168,9 +176,9 @@ function buildNodeGeometry(
           !stretch.vertical && shouldEmitFixedDimension(n.layoutSizingVertical, axis),
         );
   if (horizontal.dimension !== undefined) geometry.width = horizontal.dimension;
-  // A TEXT's height follows its content unless it fills — "hug" is every text's default, so it is
-  // omitted, the way the write side treats an unnamed height. A number (a fixed-height text) and
-  // "fill" are the deviations and survive.
+  // A TEXT's height follows its content unless it fills or is fixed — "hug" is every text's default,
+  // so it is omitted, the way the write side treats an unnamed height. A number (a fixed-height
+  // text box, textAutoResize NONE) and "fill" are the deviations and survive.
   const textDefaultHeight = n.type === "TEXT" && vertical.dimension === "hug";
   if (vertical.dimension !== undefined && !textDefaultHeight) geometry.height = vertical.dimension;
   if (horizontal.designed !== undefined) geometry.designedWidth = horizontal.designed;
@@ -211,6 +219,18 @@ function buildNodeGeometry(
   }
 
   return geometry;
+}
+
+function textAxesFollowingContent(n: NodeSnapshot): { horizontal: boolean; vertical: boolean } {
+  if (n.type !== "TEXT") return { horizontal: false, vertical: false };
+  return {
+    horizontal: n.textAutoResize === "WIDTH_AND_HEIGHT",
+    vertical: n.textAutoResize === "WIDTH_AND_HEIGHT" || n.textAutoResize === "HEIGHT",
+  };
+}
+
+function isUnflaggedOrFixed(sizing: NodeSnapshot["layoutSizingHorizontal"]): boolean {
+  return sizing === undefined || sizing === "FIXED";
 }
 
 type AxisDimension = { dimension?: SimplifiedDimension; designed?: string };

@@ -198,7 +198,7 @@ const SIZE_FIELDS = {
   ),
   height: prop(
     z.union([z.number(), z.string()]),
-    'Same rules as width. On TEXT the height follows the content ("hug", the default): set `width` to re-wrap it, use "fill" inside an auto-layout parent and "hug" to undo that; a fixed or percent height is rejected.',
+    'Same rules as width. On TEXT the height follows the content by default ("hug"); a number or "N%" fixes the text box at that height (alongside a fixed, "fill" or "N%" width), "fill" stretches it inside an auto-layout parent, and "hug" returns it to following the content.',
     'number | "fill" | "hug" | "N%"',
   ),
   // Placement is the read shape's own words: `left`/`top` are the offset in the parent, and naming

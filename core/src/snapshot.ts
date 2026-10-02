@@ -379,6 +379,13 @@ export interface NodeSnapshot {
   layoutPositioning?: "AUTO" | "ABSOLUTE";
   preserveRatio?: boolean;
   /**
+   * TEXT only: which of the text box's axes follow its content (Figma `textAutoResize`).
+   * HEIGHT grows the height to the wrapped content; WIDTH_AND_HEIGHT grows both; NONE and
+   * TRUNCATE hold a fixed box. Needed because Figma reports `layoutSizing*: FIXED` for every
+   * child of a free-form parent, content-driven or not.
+   */
+  textAutoResize?: "NONE" | "HEIGHT" | "WIDTH_AND_HEIGHT" | "TRUNCATE";
+  /**
    * Degrees, counterclockwise-positive, relative to the emitted parent; absent when
    * unrotated in that frame. Producers normalize both units and coordinate space:
    * REST wire angles are radians, and both APIs state group-child angles against

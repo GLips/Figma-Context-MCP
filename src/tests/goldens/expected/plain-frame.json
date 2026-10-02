@@ -24,7 +24,6 @@
           "name": "Title",
           "type": "TEXT",
           "width": 120,
-          "height": 24,
           "left": 16,
           "top": 16,
           "text": "Hello",
@@ -38,7 +37,7 @@
         }
       ],
       "elided": {
-        "children": 1121
+        "children": 1135
       }
     }
   ],

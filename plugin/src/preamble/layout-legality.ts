@@ -62,14 +62,13 @@ export function assertLayoutRealizableForType(nodeType: string, wl: WriteLayout,
           : "Use a pixel size (only a row/column frame or a text can measure content)."),
     );
   }
-  // sizing.vertical is the ONE carrier to key on: the compile writes "fixed" beside every
-  // numeric AND percent height (ir.ts percentSize contract), and only compiled IR reaches the
-  // bridge — so dimensions.height/percentSize.height can never arrive without this twin. "hug" is
-  // legal on a text: it is the default restated at create, and the un-fill at edit.
-  if (nodeType === "TEXT" && s.vertical === "fixed") {
+  // A TEXT that hugs its width also grows its height (Figma has no auto-width, fixed-height text
+  // box), so a fixed height beside width "hug" could only land by silently freezing the width.
+  // sizing.vertical is the carrier to key on: the compile writes "fixed" beside every numeric AND
+  // percent height (ir.ts percentSize contract).
+  if (nodeType === "TEXT" && s.vertical === "fixed" && s.horizontal === "hug") {
     throw new Error(
-      subject + ": a TEXT's height follows its content and wrap — set `width` (the text re-wraps and the height follows), " +
-        'or use height: "fill" inside an auto-layout parent and height: "hug" to undo it.',
+      subject + ': a TEXT that hugs its width also follows its content in height — a fixed height needs a fixed, "fill" or "N%" width beside it, or drop the height.',
     );
   }
   if ((wl.gap != null || wl.padding || wl.justifyContent || wl.alignItems) && !willBeAuto) {
@@ -111,7 +110,7 @@ export function assertTextFillHeightInFlow(nodeType: string, wl: WriteLayout, pa
   if (!parentIsAuto || isAbsolute) {
     throw new Error(
       subject + ": a TEXT can only fill its height as an in-flow child of an auto-layout parent — " +
-        "out of flow its height follows content. Set `width` instead (the height follows the wrap), or place it in-flow in an auto-layout frame.",
+        "out of flow nothing supplies that height. Set `width` (the height follows the wrap), give it a numeric height, or place it in-flow in an auto-layout frame.",
     );
   }
 }

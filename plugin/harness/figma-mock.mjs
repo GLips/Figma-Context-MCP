@@ -645,10 +645,12 @@ class Node {
   }
 
   _textW() {
-    if (this.textAutoResize === "HEIGHT" && this._fixedW != null) return this._fixedW; // wrapping, fixed width
+    // HEIGHT wraps at a fixed width; NONE/TRUNCATE hold a fixed box on both axes.
+    if (this.textAutoResize !== "WIDTH_AND_HEIGHT" && this._fixedW != null) return this._fixedW;
     return Math.max(1, this.characters.length) * this.fontSize * 0.55; // crude estimate (NOT real metrics)
   }
   _textH() {
+    if ((this.textAutoResize === "NONE" || this.textAutoResize === "TRUNCATE") && this._fixedH != null) return this._fixedH;
     if (this.textAutoResize === "HEIGHT" && this._fixedW != null) {
       const perLine = Math.max(1, Math.floor(this._fixedW / (this.fontSize * 0.55)));
       return Math.ceil(this.characters.length / perLine) * this.fontSize * 1.3;

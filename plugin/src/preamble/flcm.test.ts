@@ -56,8 +56,8 @@ test("strokeAlign accepts the read vocabulary and rejects unknown values", async
 
 test("render rejects layout words the node cannot realize", async () => {
   await assert.rejects(
-    render({ type: "TEXT", text: "hi", height: 80 }),
-    /a TEXT's height follows its content/,
+    render({ type: "TEXT", text: "hi", width: "hug", height: 80 }),
+    /a TEXT that hugs its width also follows its content in height/,
   );
   await assert.doesNotReject(render({ type: "TEXT", text: "hi", height: "hug" }));
   await assert.rejects(render({ type: "RECTANGLE", width: "hug" }), /"hug" sizes to content/);

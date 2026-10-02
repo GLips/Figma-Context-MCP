@@ -437,24 +437,27 @@ function applyPinDelta(child: any, pin: NonNullable<WriteLayout["pin"]>): void {
 }
 
 // THE sizing home for leaf nodes (no own auto-layout) — create's builders and edit's delta path
-// both land here, so the per-kind rules can't fork: TEXT's wrap handshake (a controlled width
-// wraps; "hug" restores grow-sideways) and LINE's zero height. Generic shapes resize only the
-// named dims, floored at Figma's 0.01. The TEXT branch reads no numeric height ON PURPOSE: one rejects
-// upstream (layout-legality.ts assertLayoutRealizableForType, consulted by buildLayout and edit alike),
-// so none reaches here; the branch shape just makes ignoring it structural.
+// both land here, so the per-kind rules can't fork: TEXT's auto-resize handshake and LINE's zero
+// height. Generic shapes (and TEXT, once its auto-resize is set) resize only the named dims,
+// floored at Figma's 0.01.
 function applyLeafSize(node: any, layout: WriteLayout): void {
   if (layout.bounds) { trackSizing(node); applyBounds(node, layout.bounds); }
   const sizing = layout.sizing || {};
   const dims = layout.dimensions || {};
   if (node.type === "TEXT") {
-    if (sizing.horizontal === "fixed" || sizing.horizontal === "fill") node.textAutoResize = "HEIGHT";
+    // textAutoResize IS a text's sizing: NONE holds a fixed box, HEIGHT wraps at a fixed width
+    // and grows the height, WIDTH_AND_HEIGHT grows both. It must be set BEFORE the resize below,
+    // or an auto-resizing text snaps straight back to its content. A fixed height (a number, or a
+    // percent — the compile writes "fixed" beside both) fixes the whole box.
+    if (sizing.vertical === "fixed") node.textAutoResize = "NONE";
     else if (sizing.horizontal === "hug") node.textAutoResize = "WIDTH_AND_HEIGHT";
-    // height:"hug" is the un-fill for a text: Figma pins a flow-filled text's auto-resize to NONE
-    // (the parent policy’s clearFill has just lifted the fill), so hugging again means the height follows the
+    // A controlled width wraps. Only a width-hugging text needs switching: a fixed box keeps its
+    // height when only the width is named.
+    else if ((sizing.horizontal === "fixed" || sizing.horizontal === "fill") && node.textAutoResize === "WIDTH_AND_HEIGHT") node.textAutoResize = "HEIGHT";
+    // height:"hug" undoes a fixed or flow-filled height (Figma pins a vertically filled text to
+    // NONE; the parent policy's clearFill has just lifted the fill), so the height follows the
     // content under whatever width rule the text keeps. On a text that already hugs it is a no-op.
-    else if (sizing.vertical === "hug" && node.textAutoResize === "NONE") node.textAutoResize = "HEIGHT";
-    if (typeof dims.width === "number") resizeWithDiagnostics(node, Math.max(dims.width, 0.01), node.height);
-    return;
+    if (sizing.vertical === "hug" && (node.textAutoResize === "NONE" || node.textAutoResize === "TRUNCATE")) node.textAutoResize = "HEIGHT";
   }
   if (node.type === "LINE") {
     if (typeof dims.width === "number") resizeWithDiagnostics(node, Math.max(dims.width, 0.01), 0);
@@ -533,10 +536,13 @@ function resolvePercentSize(parent: any, child: any, layout: WriteLayout): void 
     const ps = layout.percentSize;
     const w = ps.width != null ? pctOf(ps.width, parent.width) : child.width;
     const h = ps.height != null ? pctOf(ps.height, parent.height) : child.height;
-    // A text node ignores a width resize while it auto-sizes width (WIDTH_AND_HEIGHT) — it would just keep
-    // hugging its content. Mirror buildText's fixed-width handshake so a percent-width text wraps at the
-    // resolved width (height auto-fits) instead of silently dropping the percent (ADR-0003 silent-wrong).
-    if (child.type === "TEXT" && ps.width != null) child.textAutoResize = "HEIGHT";
+    // A text node ignores a resize on any axis it auto-sizes — it would just keep hugging its content.
+    // Mirror applyLeafSize's handshake so the percent lands instead of silently dropping (ADR-0003
+    // silent-wrong): a percent height fixes the box; a percent width alone wraps, height auto-fitting.
+    if (child.type === "TEXT") {
+      if (ps.height != null) child.textAutoResize = "NONE";
+      else if (ps.width != null && child.textAutoResize === "WIDTH_AND_HEIGHT") child.textAutoResize = "HEIGHT";
+    }
     resizeWithDiagnostics(child, Math.max(w, 0.01), Math.max(h, 0.01));
   }
 }

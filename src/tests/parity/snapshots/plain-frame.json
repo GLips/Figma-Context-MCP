@@ -116,6 +116,7 @@
         },
         "layoutSizingHorizontal": "FIXED",
         "layoutSizingVertical": "FIXED",
+        "textAutoResize": "HEIGHT",
         "fills": [
           {
             "type": "SOLID",

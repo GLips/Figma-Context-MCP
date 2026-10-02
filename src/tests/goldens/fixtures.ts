@@ -111,6 +111,8 @@ const plainFrame = fileResponse("Plain Frame", [
         absoluteBoundingBox: { x: 16, y: 16, width: 120, height: 24 },
         layoutSizingHorizontal: "FIXED",
         layoutSizingVertical: "FIXED",
+        // Fixed width, auto height — the commonest text box in a free-form card. Figma still
+        // reports FIXED on both axes here, so only textAutoResize says the height follows content.
         style: {
           fontFamily: "Inter",
           fontWeight: 600,
@@ -119,6 +121,7 @@ const plainFrame = fileResponse("Plain Frame", [
           lineHeightUnit: "PIXELS",
           textAlignHorizontal: "LEFT",
           textAlignVertical: "TOP",
+          textAutoResize: "HEIGHT",
         },
         fills: [{ type: "SOLID", color: { r: 0.1, g: 0.1, b: 0.1, a: 1 }, visible: true }],
       }),
