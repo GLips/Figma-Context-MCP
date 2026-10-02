@@ -151,6 +151,43 @@ test("get reads beyond-CSS effects back as the flcm.effects object form", async 
   assert.equal(fx.backdropFilter, undefined);
 });
 
+// Figma stores effects bottom-first (live: the LAST of two offset shadows paints on top); the read
+// speaks CSS, top-first. A get → copy must land the original storage order back.
+test("get reads effects top-first and a copy restores Figma's storage order", async () => {
+  const figma = createFigmaMock();
+  const original = await render({ type: "FRAME", key: "src", width: 50, height: 50 });
+  const shadow = (type: string, r: number) => ({
+    type,
+    color: { r, g: 0, b: 0, a: 1 },
+    offset: { x: 0, y: 4 },
+    radius: 8,
+    spread: 0,
+    visible: true,
+    blendMode: "NORMAL",
+  });
+  const stored = [
+    { type: "BACKGROUND_BLUR", radius: 32, visible: true },
+    shadow("DROP_SHADOW", 1),
+    shadow("INNER_SHADOW", 0),
+    shadow("DROP_SHADOW", 0),
+  ];
+  (await figma.getNodeByIdAsync(original.id)).effects = stored;
+
+  const { node: read } = await get("src");
+  assert.deepEqual(read.effects, {
+    boxShadow:
+      "0px 4px 8px 0px rgba(0, 0, 0, 1), inset 0px 4px 8px 0px rgba(0, 0, 0, 1), 0px 4px 8px 0px rgba(255, 0, 0, 1)",
+    backdropFilter: "blur(16px)",
+  });
+
+  const copy = await render({ type: "FRAME", width: 50, height: 50, effects: read.effects });
+  const copied = (await figma.getNodeByIdAsync(copy.id)).effects;
+  assert.deepEqual(
+    copied.map((e: any) => [e.type, e.color?.r]),
+    stored.map((e: any) => [e.type, e.color?.r]),
+  );
+});
+
 test("get returns hidden targets with their visibility", async () => {
   const figma = createFigmaMock();
   const out = await render({ type: "FRAME", key: "ghost", width: 10, height: 10 });

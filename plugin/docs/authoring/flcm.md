@@ -537,6 +537,8 @@ const glass = { type: "FRAME", effects: flcm.effects({ shadow: { y: 12, blur: 32
 
 Blur values are written in **CSS px** — you always write the CSS number and we map it to Figma's scale for you.
 
+Stacks are **top first**, as in CSS: the first shadow in `boxShadow` (or in a `shadow` array) paints on top, and `get` reads them back in that order.
+
 **`glass` needs a high-frequency backdrop to read as glass.** `refraction` and `dispersion` bend what is *behind* the pane, so over a flat fill or a smooth gradient there is nothing to bend and the result looks like a plain frosted tint — that's the physics of the scene, not a broken effect. Put busy content behind it (an image, dense text, an icon grid, a sharp-edged shape) and the refraction becomes visible.
 
 ### flcm.effects fields

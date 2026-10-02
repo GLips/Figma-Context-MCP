@@ -98,18 +98,15 @@ type SnapshotProgressiveEffect = SnapshotEffect & {
 
 export function buildSimplifiedEffects(n: NodeSnapshot): SimplifiedEffects {
   if (!n.effects) return {};
-  const effects = n.effects.filter((e) => e.visible);
+  // Figma stores effects bottom-first; every list below reads top-first, as CSS does (box-shadow's
+  // first shadow paints on top), so reverse once here. The plugin's toFigmaEffects reverses back.
+  const effects = n.effects.filter((e) => e.visible).reverse();
 
-  // Handle drop and inner shadows (both go into CSS box-shadow)
-  const dropShadows = effects
-    .filter((e): e is SnapshotShadowEffect => e.type === "DROP_SHADOW")
-    .map(simplifyDropShadow);
-
-  const innerShadows = effects
-    .filter((e): e is SnapshotShadowEffect => e.type === "INNER_SHADOW")
-    .map(simplifyInnerShadow);
-
-  const boxShadow = [...dropShadows, ...innerShadows].join(", ");
+  // Drop and inner shadows share CSS box-shadow, interleaved in their real stacking order.
+  const boxShadow = effects
+    .filter((e): e is SnapshotShadowEffect => e.type === "DROP_SHADOW" || e.type === "INNER_SHADOW")
+    .map(simplifyShadow)
+    .join(", ");
 
   // Handle blur effects - separate by CSS property. A zero-radius blur is a
   // no-op, so drop it entirely rather than emit a dead `blur(0px)`. A PROGRESSIVE
@@ -141,8 +138,8 @@ export function buildSimplifiedEffects(n: NodeSnapshot): SimplifiedEffects {
   if (backdropFilterValues) result.backdropFilter = backdropFilterValues;
 
   // Beyond-CSS effects — the object form. Each is singular in the sugar (one glass, one noise, …), so we
-  // emit the first visible occurrence of each type; a design that stacks two of the same reads back the
-  // first (the write surface can't author two anyway).
+  // emit the topmost visible occurrence of each type; a design that stacks two of the same reads back
+  // only that one (the write surface can't author two anyway).
   const glass = effects.find((e): e is SnapshotGlassEffect => e.type === "GLASS");
   if (glass) result.glass = simplifyGlass(glass);
 
@@ -212,12 +209,9 @@ function simplifyProgressiveBlur(e: SnapshotProgressiveEffect): SimplifiedProgre
   };
 }
 
-function simplifyDropShadow(effect: SnapshotShadowEffect) {
-  return `${effect.offset.x}px ${effect.offset.y}px ${effect.radius}px ${effect.spread ?? 0}px ${formatRGBAColor(effect.color)}`;
-}
-
-function simplifyInnerShadow(effect: SnapshotShadowEffect) {
-  return `inset ${effect.offset.x}px ${effect.offset.y}px ${effect.radius}px ${effect.spread ?? 0}px ${formatRGBAColor(effect.color)}`;
+function simplifyShadow(effect: SnapshotShadowEffect) {
+  const inset = effect.type === "INNER_SHADOW" ? "inset " : "";
+  return `${inset}${effect.offset.x}px ${effect.offset.y}px ${effect.radius}px ${effect.spread ?? 0}px ${formatRGBAColor(effect.color)}`;
 }
 
 function simplifyBlur(effect: SnapshotEffect) {

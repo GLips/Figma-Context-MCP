@@ -164,6 +164,7 @@ export interface WriteTexture { kind: "texture"; noiseSize: number; radius: numb
 // A progressive blur of either kind (as WriteBlur's `type`): radius is the END radius; the blur ramps
 // startRadius→radius along the startOffset→endOffset axis (offsets normalized to the node's 0–1 object space).
 export interface WriteProgressiveBlur { kind: "progressiveBlur"; type: "LAYER_BLUR" | "BACKGROUND_BLUR"; startRadius: number; radius: number; startOffset: { x: number; y: number }; endOffset: { x: number; y: number } }
+// An effect list is top-first (CSS order); toFigmaEffects reverses it into Figma's bottom-first storage.
 export type WriteEffect = WriteShadow | WriteBlur | WriteGlass | WriteNoise | WriteTexture | WriteProgressiveBlur;
 
 // Author input shape for CSS-string effects: the { boxShadow, filter, backdropFilter, textShadow } bag.

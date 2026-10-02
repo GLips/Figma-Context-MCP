@@ -84,7 +84,11 @@ export function noise(p: NoiseParts): WriteNoise {
 // 1.0.0, verified via execute_code) rejects it — `set_effects … Unrecognized key(s): 'blendMode'`. Emitting
 // it would make every noise effect fail loud, so we ground on the fields the runtime accepts.
 export function toFigmaEffects(effects: WriteEffect[]): Effect[] {
-  return effects.map((effect) => {
+  // WriteEffect[] is top-first (CSS order, as `get` reads); Figma stores bottom-first. Live, only
+  // same-kind order renders (stacked shadows) — cross-kind order is panel-only and the grouped read
+  // can't carry it, so the canonical order is the read's key order (shadows, blurs, backdrop blurs,
+  // object forms), which lands the common frosted card as [BACKGROUND_BLUR, DROP_SHADOW].
+  return effects.slice().reverse().map((effect) => {
     switch (effect.kind) {
       case "shadow":
         return {
