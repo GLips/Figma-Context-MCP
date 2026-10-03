@@ -178,16 +178,17 @@ test("CSS blend modes apply to each node kind and reject unsupported values", as
       { type: "ELLIPSE", mixBlendMode: "MULTIPLY" },
       { type: "TEXT", text: "hi", mixBlendMode: "soft-light" },
       { type: "FRAME", mixBlendMode: "screen" },
+      { type: "FRAME", mixBlendMode: "plus-lighter" },
     ],
   });
   const root = await figma.getNodeByIdAsync(out.id);
   assert.equal(root.blendMode, "OVERLAY");
   assert.deepEqual(
     root.children.map((node) => node.blendMode),
-    ["MULTIPLY", "SOFT_LIGHT", "SCREEN"],
+    ["MULTIPLY", "SOFT_LIGHT", "SCREEN", "LINEAR_DODGE"],
   );
   await assert.rejects(
-    render({ type: "FRAME", mixBlendMode: "plus-lighter" }),
+    render({ type: "FRAME", mixBlendMode: "pass-through" }),
     /unsupported blend/,
   );
 });

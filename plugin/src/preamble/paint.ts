@@ -12,7 +12,7 @@
 // angle is 0 = left->right, 90 = top->bottom — so we feed it (cssAngle - 90). Verified by screenshot:
 // 180deg renders top->bottom, 90deg left->right, radial centered correctly.
 
-import { WritePaint, WriteGradient, GradientStop, GradientType, Rgba, Transform } from "./ir.js";
+import { WritePaint, WriteGradient, WriteImage, GradientStop, GradientType, Rgba, Transform } from "./ir.js";
 
 // A color (alpha included) -> SOLID paint, alpha mapped to the paint's opacity. A fully-transparent color
 // becomes opacity 0, never the opaque-black bug a naive parse produces.
@@ -48,8 +48,9 @@ function radialTransform(cxPct: number, cyPct: number): Transform {
 // WritePaint -> the plugin's Paint. The bridge routes every fill/stroke through here; it is the single
 // typed->plugin boundary for paint, so the one unavoidable plugin-typings cast lives here, not at call sites.
 export function toFigmaPaint(paint: WritePaint): Paint {
+  const blend = paint.blendMode ? { blendMode: paint.blendMode } : {};
   if (paint.kind === "solid") {
-    return { type: "SOLID", color: paint.color, opacity: paint.opacity };
+    return { type: "SOLID", color: paint.color, opacity: paint.opacity, ...blend };
   }
   if (paint.kind === "image") {
     // An image paint needs raster bytes + figma.createImage — a figma.* call, so it resolves in the bridge.
@@ -62,5 +63,17 @@ export function toFigmaPaint(paint: WritePaint): Paint {
     type: paint.type,
     gradientTransform: paint.transform,
     gradientStops: paint.stops.map((s) => ({ position: s.position, color: s.color })),
+    ...blend,
   } as GradientPaint;
+}
+
+// An image paint's adjustments as plugin ImagePaint fields — shared by both image sources the bridge
+// resolves (fetched bytes and an existing hash). Absent fields stay absent so Figma keeps its defaults.
+export function imagePaintAdjustments(paint: WriteImage): Partial<ImagePaint> {
+  return {
+    ...(paint.blendMode ? { blendMode: paint.blendMode } : {}),
+    ...(paint.opacity != null ? { opacity: paint.opacity } : {}),
+    ...(paint.rotation != null ? { rotation: paint.rotation } : {}),
+    ...(paint.filters ? { filters: paint.filters } : {}),
+  };
 }

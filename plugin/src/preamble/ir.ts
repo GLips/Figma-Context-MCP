@@ -95,12 +95,13 @@ export interface Rgba { r: number; g: number; b: number; a: number }
 
 // ---- Paint currency (Figma-domain). A solid carries its alpha on `opacity` (Figma stores paint alpha
 // there, not in the color). A gradient carries the computed 2x3 transform and stops — the angle→matrix
-// math is already done (paint.ts), so the bridge maps straight to a plugin Paint. ----
-export interface WriteSolid { kind: "solid"; color: Rgb; opacity: number }
+// math is already done (paint.ts), so the bridge maps straight to a plugin Paint. Every kind may carry a
+// per-paint `blendMode`; absent means NORMAL. ----
+export interface WriteSolid { kind: "solid"; color: Rgb; opacity: number; blendMode?: WriteBlendMode }
 export type GradientType = "GRADIENT_LINEAR" | "GRADIENT_RADIAL" | "GRADIENT_ANGULAR" | "GRADIENT_DIAMOND";
 export type Transform = [[number, number, number], [number, number, number]];
 export interface GradientStop { position: number; color: Rgba }
-export interface WriteGradient { kind: "gradient"; type: GradientType; transform: Transform; stops: GradientStop[] }
+export interface WriteGradient { kind: "gradient"; type: GradientType; transform: Transform; stops: GradientStop[]; blendMode?: WriteBlendMode }
 
 // ---- Image paint currency. Unlike solid/gradient, an image paint is NOT self-contained: turning it into a
 // plugin ImagePaint needs the raster BYTES, and the sandbox never touches the network (manifest
@@ -109,14 +110,28 @@ export interface WriteGradient { kind: "gradient"; type: GradientType; transform
 // and injected. `placeholder` records stand-in-vs-real; the bridge persists it on the node (pluginData) so
 // a later read can tell them apart — the one content case whose semantics don't recover from geometry. ----
 export type ImageScaleMode = "FILL" | "FIT" | "CROP" | "TILE";
-export interface WriteImageUrl { kind: "image"; url: string; scaleMode: ImageScaleMode; placeholder: boolean }
+// Figma's image adjustments, each -1..1 (0 = untouched). Field names are Figma's: no CSS filter maps
+// onto temperature/tint/highlights/shadows, and the read emits these same names.
+export interface WriteImageFilters {
+  exposure?: number; contrast?: number; saturation?: number; temperature?: number;
+  tint?: number; highlights?: number; shadows?: number;
+}
+// The paint-level adjustments both image sources share; each absent field is Figma's default.
+// Figma accepts only quarter-turn rotations, so the type names them.
+export interface WriteImageAdjustments {
+  blendMode?: WriteBlendMode;
+  opacity?: number;
+  rotation?: 90 | 180 | 270;
+  filters?: WriteImageFilters;
+}
+export interface WriteImageUrl extends WriteImageAdjustments { kind: "image"; url: string; scaleMode: ImageScaleMode; placeholder: boolean }
 // ---- The OTHER image source: a paint whose bytes are already in the document, named by the
 // imageHash a read shape carries (`{ type: "IMAGE", imageRef }`). Nothing needs fetching — in-plugin a
 // paint can reference an existing hash directly — which is what lets a `get` result rebuild an image
 // fill with no server round trip and no url the agent never had. The two forms are separate interfaces,
 // not one shape with two optional sources, so "which source is this" is answered by the type
 // (`"url" in paint`) and a byte collector cannot silently include a hash-backed paint. ----
-export interface WriteImageHash {
+export interface WriteImageHash extends WriteImageAdjustments {
   kind: "image";
   hash: string;
   scaleMode: ImageScaleMode;
@@ -135,15 +150,21 @@ export type WritePaint = WriteSolid | WriteGradient | WriteImage;
 export type WritePaintStack = WritePaint[];
 
 // ---- Author input shapes for a fill/stroke leaf. An author passes a CSS color/gradient string, the
-// read-form { type, gradient } object, OR an already-typed WritePaint (what flcm.gradient() returns).
+// read-form { type, gradient } / { type: "SOLID", color, blendMode } objects, OR an already-typed
+// WritePaint (what flcm.gradient() returns). `blendMode` on a read-form leaf is a CSS blend keyword.
 // These live here (the figma-free type hub) rather than in css.ts so the schema module can source them
 // via `import type` without dragging css.ts's parsers — and their Figma-typings — into a typecheck. ----
-export interface WriteGradientFill { type: GradientType; gradient: string }
+export interface WriteGradientFill { type: GradientType; gradient: string; blendMode?: string }
+// The read's spelling of a solid that doesn't blend normally — a normal solid is a bare color string.
+export interface ReadSolidFill { type: "SOLID"; color: string; blendMode?: string }
 // The read shape's image-fill leaf. Named here (rather than sniffed inline at the parser) so the
 // normalizer can type what it hands back; the extra read-only keys it carries (css hints,
 // imageDownloadArguments) are irrelevant to the parse and deliberately unnamed.
-export interface ReadImageFill { type: "IMAGE"; imageRef?: string; gifRef?: string; scaleMode?: string; scalingFactor?: number }
-export type FillLeaf = string | WriteGradientFill | ReadImageFill | WritePaint;
+export interface ReadImageFill {
+  type: "IMAGE"; imageRef?: string; gifRef?: string; scaleMode?: string; scalingFactor?: number;
+  blendMode?: string; opacity?: number; rotation?: number; filters?: WriteImageFilters;
+}
+export type FillLeaf = string | WriteGradientFill | ReadSolidFill | ReadImageFill | WritePaint;
 // A paint slot takes one leaf, or an ARRAY of them — a paint stack, top first, the same order a read
 // emits (WritePaintStack). The composite this exists for is a photograph under a legibility scrim:
 // `fill: [flcm.gradient({...}), flcm.image(url)]`.
@@ -266,14 +287,14 @@ export interface CornerRadii { topLeft: number; topRight: number; bottomRight: n
 export type PinX = "left" | "center" | "right" | "stretch" | "scale" | "none";
 export type PinY = "top" | "center" | "bottom" | "stretch" | "scale" | "none";
 
-// ---- Blend mode (author `blend`). The CSS mix-blend-mode names normalize to Figma's BlendMode enum at
-// the css.ts boundary; this is the resolved Figma-domain currency. A SUBSET of Figma's BlendMode — only the
-// CSS-reachable modes — so PASS_THROUGH (frame-grouping only) and LINEAR_BURN/LINEAR_DODGE (no CSS
-// mix-blend-mode spelling) are deliberately absent. Every SceneNode carries blendMode, so it's a shared prop.
+// ---- Blend mode (node `mixBlendMode`, paint `blendMode`). The CSS mix-blend-mode names normalize to
+// Figma's BlendMode enum at the css.ts boundary; this is the resolved Figma-domain currency. A SUBSET of
+// Figma's BlendMode — only the CSS-reachable modes (LINEAR_BURN/LINEAR_DODGE are CSS plus-darker/
+// plus-lighter) — so PASS_THROUGH (frame-grouping only) is deliberately absent.
 export type WriteBlendMode =
-  | "NORMAL" | "DARKEN" | "MULTIPLY" | "COLOR_BURN" | "LIGHTEN" | "SCREEN" | "COLOR_DODGE"
-  | "OVERLAY" | "SOFT_LIGHT" | "HARD_LIGHT" | "DIFFERENCE" | "EXCLUSION" | "HUE"
-  | "SATURATION" | "COLOR" | "LUMINOSITY";
+  | "NORMAL" | "DARKEN" | "MULTIPLY" | "LINEAR_BURN" | "COLOR_BURN" | "LIGHTEN" | "SCREEN"
+  | "LINEAR_DODGE" | "COLOR_DODGE" | "OVERLAY" | "SOFT_LIGHT" | "HARD_LIGHT" | "DIFFERENCE"
+  | "EXCLUSION" | "HUE" | "SATURATION" | "COLOR" | "LUMINOSITY";
 
 // ---- Anchor (author `anchor`). Which point of an out-of-flow child lands on the resolved left/top.
 // Reuses `pin`'s directional edge words (no stretch/scale — an anchor is a point, not a resize rule).

@@ -75,7 +75,7 @@ A node's elided map names omitted content fields and their sizes in JSON charact
 
 A marker-only object such as { elided: { children: 4200 } } retyped into a spec's children array preserves the live children it represents. It is never a node to create or edit. elided and readOnlySource are read metadata. An INSTANCE child tree whose ids all belong to that instance is an inherited echo, including after copying or JSON round-tripping. Its fields are observational; edit sublayer paths through overrides, and place slot content through overrides[path].children. Foreign or id-less inherited children are refused as restructuring. When the root id is removed to create a new instance, echo ids must share one source instance. SLOT contents can have ordinary live ids; their edits still belong in overrides.
 
-REST does not request geometry=paths, so its decoded readOnlySource cannot supply VECTOR path data. Use a live plugin read for paths. Variables, prototype interactions, vector networks, video paints, image filters, mask/boolean-operation settings and plugin data remain outside the adapter vocabulary; use raw figma access for them. Reading a node type does not imply that a verb can create it; clone preserves unsupported authoring state. The predicate admission limit remains 5,000 candidates; narrow within or the query for larger files. Unavailable library definitions can still fall back to an instance donor, identified by childrenFrom.
+REST does not request geometry=paths, so its decoded readOnlySource cannot supply VECTOR path data. Use a live plugin read for paths. Variables, prototype interactions, vector networks, video paints, mask/boolean-operation settings and plugin data remain outside the adapter vocabulary; use raw figma access for them. Reading a node type does not imply that a verb can create it; clone preserves unsupported authoring state. The predicate admission limit remains 5,000 candidates; narrow within or the query for larger files. Unavailable library definitions can still fall back to an instance donor, identified by childrenFrom.
 
 ### Rules that hold everywhere
 
@@ -108,7 +108,7 @@ REST does not request geometry=paths, so its decoded readOnlySource cannot suppl
 | `await flcm.selection()` | slim handles[] | The current selection. |
 | `await flcm.measure(target)` | { x, y, width, height } | Measured pixels relative to the immediate parent. |
 | `flcm.gradient(sugar)` | a paint value | { type: linear or radial, stops, angle?, at? }. Also accepts (type, stops, angle?). |
-| `flcm.image(url, options?)` | a paint value | Raster fill. Options: scaleMode, placeholder. Bytes are fetched through the host at the mutation verb. |
+| `flcm.image(url, options?)` | a paint value | Raster fill. Options: scaleMode, placeholder, opacity, rotation, filters, blendMode. Bytes are fetched through the host at the mutation verb. |
 | `flcm.effects(sugar)` | effect values[] | CSS and Figma effect values for an effects prop. |
 | `flcm.id(nodeId)` | { __flcmId: nodeId } | Force raw-id resolution in a target argument. |
 | `await flcm.page.current()` | { fileName, page, pages } | Current page and available pages. |
@@ -513,6 +513,7 @@ Place a **real raster image** — feed media, an avatar, a thumbnail — instead
 ```js
 const avatar = { type: "ELLIPSE", width: 48, height: 48, fill: flcm.image("https://example.com/face.jpg") };
 const logo = { type: "RECTANGLE", width: 120, height: 40, fill: flcm.image("public/logo.png", { scaleMode: "FIT" }) };
+const muted = flcm.image("https://example.com/hero.jpg", { opacity: 0.4, rotation: 90, filters: { saturation: -1 } });
 ```
 
 - **The server loads the bytes** — your code never touches the network or the filesystem. Any public http(s) url works.
@@ -525,6 +526,10 @@ const logo = { type: "RECTANGLE", width: 120, height: 40, fill: flcm.image("publ
 | --- | --- | --- |
 | `scaleMode` | "FILL" \| "FIT" \| "CROP" \| "TILE" | How the image maps into the node box. Default "FILL" (cover). "FIT" contains it, "CROP" uses the crop transform, "TILE" repeats it. |
 | `placeholder` | boolean | Mark this as a stand-in, not a real asset. Persisted on the node so a later read can tell a placeholder from a real image (and not hardcode the stand-in url as the real src). Default false. |
+| `opacity` | number (0–1) | Paint opacity, 0–1, independent of the node's own opacity. Default 1. |
+| `rotation` | 0 \| 90 \| 180 \| 270 | Turns the image inside the node in quarter turns. Default 0. |
+| `filters` | { exposure?, contrast?, saturation?, temperature?, tint?, highlights?, shadows? } | Figma's image adjustments, each -1 to 1 (0 is untouched). Unnamed ones stay 0. |
+| `blendMode` | "multiply" \| "screen" \| "overlay" \| … (CSS blend name) | How this paint blends with the paints beneath it — a CSS blend name, as in mixBlendMode. Default "normal". |
 
 ## Effects
 
@@ -932,7 +937,9 @@ When you pass effects as CSS strings (`effects: { … }`):
 
 ### Blend mode
 
-`mixBlendMode` takes a CSS `mix-blend-mode` name — `multiply`, `screen`, `overlay`, `soft-light`, `hard-light`, `color-dodge`, `color-burn`, `darken`, `lighten`, `difference`, `exclusion`, `hue`, `saturation`, `color`, `luminosity`, or `normal`. Any other name throws. (Figma's `pass-through` and the linear burn/dodge modes have no CSS spelling and aren't offered.)
+`mixBlendMode` takes a CSS `mix-blend-mode` name — `multiply`, `screen`, `overlay`, `soft-light`, `hard-light`, `color-dodge`, `color-burn`, `plus-darker`, `plus-lighter`, `darken`, `lighten`, `difference`, `exclusion`, `hue`, `saturation`, `color`, `luminosity`, or `normal`. Any other name throws. (Figma's `pass-through` has no CSS spelling and isn't offered.)
+
+A single **paint** blends too, with the same names under `blendMode` — CSS `background-blend-mode`. A blended solid is the object `{ type: "SOLID", color: "#FF0000", blendMode: "multiply" }`; a gradient leaf takes `blendMode` beside `gradient`, and `flcm.image` takes it as an option. A `get` emits these only for a non-normal blend, so a read pastes straight back.
 
 ### Metrics
 
@@ -969,7 +976,7 @@ Accepting CSS is a fidelity promise, so the boundaries are strict. Each of these
 | `textStyle.lineClamp` on a width-hugging text | Truncation needs a width to wrap against. Set `width` to a number, `"fill"`, or `"N%"`. |
 | A layout word the node can't realize — a fixed/percent `height` beside `width: "hug"` on TEXT, `"hug"` with nothing to measure, or container words without `layout.mode` | The same rules govern create and edit alike, so a word that wouldn't land names the fix instead. |
 
-An `imageRef` identifies an existing image in this file and can be reused, for example `{ type: "RECTANGLE", fill: { type: "IMAGE", imageRef } }`.
+An `imageRef` identifies an existing image in this file and can be reused, for example `{ type: "RECTANGLE", fill: { type: "IMAGE", imageRef } }`. The read's `opacity`, `rotation`, `filters` and `blendMode` on that leaf are authored back as they read — the same words `flcm.image` takes as options.
 
 Variables and prototype interactions are deliberately **out of v1** — read concepts with no create path. They're rejected loudly so you never half-write something unrealizable. (Components have one: `INSTANCE` — see the components section.)
 

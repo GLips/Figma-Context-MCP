@@ -37,7 +37,7 @@ import {
   assertLayoutRealizableForType, assertGridSizing, assertPercentResolvable, assertSizingResolvesAgainstParentFrame, ParentFlowFacts,
   assertTextFillHeightInFlow, assertLineSizingInFlow, assertLineFillUnrotated, assertInheritedRectangleDimensions,
 } from "./layout-legality.js";
-import { toFigmaPaint } from "./paint.js";
+import { toFigmaPaint, imagePaintAdjustments } from "./paint.js";
 import { toFigmaEffects } from "./effects.js";
 import { resolveFont, resolveFontStrict, FontMap } from "./fonts.js";
 import { writeKey, identityOf, isSlotHole, describeNodeIdentity } from "./identity.js";
@@ -207,9 +207,8 @@ function imagePaint(paint: WriteImage, ctx: RenderResources): Paint {
   // A hash-backed paint names bytes the document already holds (a read-form fill rebuilt through the
   // compilers), so there is nothing to fetch and nothing to create — the paint just points at it.
   if ("hash" in paint) {
-    return paint.scalingFactor != null
-      ? { type: "IMAGE", scaleMode: paint.scaleMode, imageHash: paint.hash, scalingFactor: paint.scalingFactor }
-      : { type: "IMAGE", scaleMode: paint.scaleMode, imageHash: paint.hash };
+    const tile = paint.scalingFactor != null ? { scalingFactor: paint.scalingFactor } : {};
+    return { type: "IMAGE", scaleMode: paint.scaleMode, imageHash: paint.hash, ...tile, ...imagePaintAdjustments(paint) };
   }
   const b64 = ctx.images[paint.url];
   if (typeof b64 !== "string") {
@@ -219,7 +218,7 @@ function imagePaint(paint: WriteImage, ctx: RenderResources): Paint {
     throw new Error('flcm.image: no fetched bytes for "' + paint.url + '" — the image was not resolved before render.');
   }
   const img = figma.createImage(figma.base64Decode(b64));
-  return { type: "IMAGE", scaleMode: paint.scaleMode, imageHash: img.hash };
+  return { type: "IMAGE", scaleMode: paint.scaleMode, imageHash: img.hash, ...imagePaintAdjustments(paint) };
 }
 
 // Persist an image fill's source + placeholder flag on the node (pluginData) so a later read/codegen pass

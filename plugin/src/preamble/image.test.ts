@@ -10,7 +10,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
-import { image, gradient as flcmGradient } from "./flcm.js";
+import { image, gradient as flcmGradient, compilePaintWord, get } from "./flcm.js";
 import { render } from "./render.js";
 
 createFigmaMock();
@@ -210,6 +210,46 @@ test("a TILE read fill keeps its repeat scale; STRETCH and a ref-less fill fail 
     }),
     /animated GIF fill.*flcm\.clone/s,
   );
+});
+
+test("a blended, adjusted paint stack survives get → render", async () => {
+  const original = await render({ type: "RECTANGLE", width: 100, height: 100 });
+  const live = await figma.getNodeByIdAsync(original.id);
+  // Shaped as the live plugin reports them: float32 values, every filter present, defaults explicit.
+  live.fills = [
+    {
+      type: "IMAGE", imageHash: "photo1", scaleMode: "FILL", visible: true,
+      opacity: 0.4000000059604645, blendMode: "OVERLAY", rotation: 90,
+      filters: { exposure: 0.20000000298023224, contrast: 0, saturation: -1, temperature: 0, tint: 0, highlights: 0, shadows: 0 },
+    },
+    { type: "SOLID", color: { r: 1, g: 0, b: 0 }, opacity: 1, blendMode: "MULTIPLY", visible: true },
+  ];
+  const { node } = await get(original.id);
+  assert.deepEqual(JSON.parse(JSON.stringify(node.fill)), [
+    { type: "SOLID", color: "#FF0000", blendMode: "multiply" },
+    {
+      type: "IMAGE", imageRef: "photo1", scaleMode: "FILL", blendMode: "overlay", opacity: 0.4, rotation: 90,
+      filters: { exposure: 0.2, saturation: -1 },
+      objectFit: "cover", isBackground: false,
+      imageDownloadArguments: { needsCropping: false, requiresImageDimensions: false },
+    },
+  ]);
+  const copy = await render({ type: "RECTANGLE", fill: node.fill });
+  assert.deepEqual((await figma.getNodeByIdAsync(copy.id)).fills, [
+    { type: "IMAGE", scaleMode: "FILL", imageHash: "photo1", blendMode: "OVERLAY", opacity: 0.4, rotation: 90, filters: { exposure: 0.2, saturation: -1 } },
+    { type: "SOLID", color: { r: 1, g: 0, b: 0 }, opacity: 1, blendMode: "MULTIPLY" },
+  ]);
+});
+
+test("paint adjustments Figma can't realize fail loud by name", () => {
+  assert.equal(image("https://cdn.example.com/a.jpg", { rotation: 180, blendMode: "plus-lighter" }).blendMode, "LINEAR_DODGE");
+  assert.throws(() => image("https://cdn.example.com/a.jpg", { rotation: 45 as 90 }), /rotation must be 0, 90, 180 or 270/);
+  assert.throws(() => image("https://cdn.example.com/a.jpg", { filters: { exposure: 2 } }), /filters\.exposure must be a number -1–1/);
+  assert.throws(
+    () => compilePaintWord({ type: "IMAGE", imageRef: "x", scaleMode: "FILL", filters: { blur: 1 } } as never, "fill"),
+    /fill filters has no "blur"/,
+  );
+  assert.throws(() => compilePaintWord({ type: "SOLID", color: "#000", blendMode: "pass-through" }, "fill"), /unsupported blend "pass-through"/);
 });
 
 test("a paint slot takes an array — the stack, top first — and reverses it into Figma's order", async () => {

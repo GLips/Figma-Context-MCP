@@ -689,6 +689,25 @@ const IMAGE_FIELDS = {
     z.boolean(),
     "Mark this as a stand-in, not a real asset. Persisted on the node so a later read can tell a placeholder from a real image (and not hardcode the stand-in url as the real src). Default false.",
   ),
+  opacity: prop(z.number(), "Paint opacity, 0–1, independent of the node's own opacity. Default 1.", "number (0–1)"),
+  rotation: prop(
+    z.union([z.literal(0), z.literal(90), z.literal(180), z.literal(270)]),
+    "Turns the image inside the node in quarter turns. Default 0.",
+    "0 | 90 | 180 | 270",
+  ),
+  filters: prop(
+    z.object({
+      exposure: z.number(), contrast: z.number(), saturation: z.number(), temperature: z.number(),
+      tint: z.number(), highlights: z.number(), shadows: z.number(),
+    }).partial(),
+    "Figma's image adjustments, each -1 to 1 (0 is untouched). Unnamed ones stay 0.",
+    "{ exposure?, contrast?, saturation?, temperature?, tint?, highlights?, shadows? }",
+  ),
+  blendMode: prop(
+    z.string(),
+    "How this paint blends with the paints beneath it — a CSS blend name, as in mixBlendMode. Default \"normal\".",
+    '"multiply" | "screen" | "overlay" | … (CSS blend name)',
+  ),
 };
 export const ImageSchema = z.object(IMAGE_FIELDS);
 export type ImageOpts = z.infer<typeof ImageSchema>;
@@ -851,7 +870,7 @@ export const VERBS: VerbDoc[] = [
   {"category": "read", "signature": "await flcm.selection()", "builds": "slim handles[]", "args": "The current selection."},
   {"category": "read", "signature": "await flcm.measure(target)", "builds": "{ x, y, width, height }", "args": "Measured pixels relative to the immediate parent."},
   {"category": "value", "signature": "flcm.gradient(sugar)", "builds": "a paint value", "args": "{ type: linear or radial, stops, angle?, at? }. Also accepts (type, stops, angle?)."},
-  {"category": "value", "signature": "flcm.image(url, options?)", "builds": "a paint value", "args": "Raster fill. Options: scaleMode, placeholder. Bytes are fetched through the host at the mutation verb."},
+  {"category": "value", "signature": "flcm.image(url, options?)", "builds": "a paint value", "args": "Raster fill. Options: scaleMode, placeholder, opacity, rotation, filters, blendMode. Bytes are fetched through the host at the mutation verb."},
   {"category": "value", "signature": "flcm.effects(sugar)", "builds": "effect values[]", "args": "CSS and Figma effect values for an effects prop."},
   {"category": "target", "signature": "flcm.id(nodeId)", "builds": "{ __flcmId: nodeId }", "args": "Force raw-id resolution in a target argument."},
   {"category": "page", "signature": "await flcm.page.current()", "builds": "{ fileName, page, pages }", "args": "Current page and available pages."},

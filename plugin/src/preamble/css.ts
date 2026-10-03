@@ -14,7 +14,8 @@
 import {
   WritePaint, WriteImageHash, ImageScaleMode, GradientType, GradientStop, Rgba,
   WriteEffect, WriteLineHeight, WriteLetterSpacing, Edges, CornerRadii,
-  FillLeaf, WriteGradientFill, WriteCssEffects, WriteBlendMode,
+  FillLeaf, WriteCssEffects, WriteBlendMode,
+  ReadImageFill, WriteImageAdjustments, WriteImageFilters,
 } from "./ir.js";
 import { solid, linearGradient, radialGradient } from "./paint.js";
 import { shadow, layerBlurFromCssPx, backgroundBlurFromCssPx } from "./effects.js";
@@ -72,9 +73,12 @@ export function parseFill(value: FillLeaf, field: string): WritePaint {
   if (value && typeof value === "object") {
     if ("kind" in value) return value; // already a typed WritePaint (what flcm.gradient() returns)
     if (isImageFill(value)) return readImagePaint(value, field);
-    const g = value as WriteGradientFill;
-    if (typeof g.gradient === "string" && typeof g.type === "string" && g.type.indexOf("GRADIENT_") === 0) {
-      return parseGradientString(g.gradient);
+    const leaf = value as { type?: unknown; color?: unknown; gradient?: unknown; blendMode?: unknown };
+    if (leaf.type === "SOLID" && typeof leaf.color === "string") {
+      return withPaintBlend(solid(parseColor(leaf.color)), leaf.blendMode);
+    }
+    if (typeof leaf.gradient === "string" && typeof leaf.type === "string" && leaf.type.indexOf("GRADIENT_") === 0) {
+      return withPaintBlend(parseGradientString(leaf.gradient), leaf.blendMode);
     }
     throw badFill(field, value);
   }
@@ -84,7 +88,56 @@ export function parseFill(value: FillLeaf, field: string): WritePaint {
 }
 
 function badFill(field: string, value: unknown): Error {
-  return new Error("flcm: " + field + " must be a color string, a gradient string (linear-gradient(...) / radial-gradient(...)), or a gradient leaf { type, gradient }. Got " + JSON.stringify(value) + ".");
+  return new Error("flcm: " + field + ' must be a color string, a gradient string (linear-gradient(...) / radial-gradient(...)), a gradient leaf { type, gradient, blendMode? }, or a blended solid { type: "SOLID", color, blendMode }. Got ' + JSON.stringify(value) + ".");
+}
+
+// A read-form leaf's optional `blendMode` (a CSS keyword) onto its parsed solid/gradient.
+function withPaintBlend(paint: WritePaint, blendMode: unknown): WritePaint {
+  return blendMode == null ? paint : { ...paint, blendMode: parseBlendMode(String(blendMode)) };
+}
+
+// ---- Image paint adjustments: the read's image-fill words, and flcm.image's matching options. ----
+const IMAGE_FILTER_KEYS = ["exposure", "contrast", "saturation", "temperature", "tint", "highlights", "shadows"];
+
+// `where` names the input in every refusal ("fill", "flcm.image opts"). Out-of-range values fail here
+// rather than at Figma's set_fills, whose error names neither the node nor the word.
+export function parseImageAdjustments(
+  o: { blendMode?: unknown; opacity?: unknown; rotation?: unknown; filters?: unknown },
+  where: string,
+): WriteImageAdjustments {
+  const out: WriteImageAdjustments = {};
+  if (o.blendMode != null) out.blendMode = parseBlendMode(String(o.blendMode));
+  if (o.opacity != null) {
+    if (typeof o.opacity !== "number" || !(o.opacity >= 0 && o.opacity <= 1)) {
+      throw new Error("flcm: " + where + " opacity must be a number 0–1 — got " + JSON.stringify(o.opacity) + ".");
+    }
+    out.opacity = o.opacity;
+  }
+  if (o.rotation != null && o.rotation !== 0) {
+    if (o.rotation !== 90 && o.rotation !== 180 && o.rotation !== 270) {
+      throw new Error("flcm: " + where + " rotation must be 0, 90, 180 or 270 — Figma turns an image paint only in quarter turns. Got " + JSON.stringify(o.rotation) + ".");
+    }
+    out.rotation = o.rotation;
+  }
+  if (o.filters != null) out.filters = parseImageFilters(o.filters, where);
+  return out;
+}
+
+function parseImageFilters(input: unknown, where: string): WriteImageFilters {
+  if (typeof input !== "object" || Array.isArray(input)) {
+    throw new Error("flcm: " + where + " filters must be an object of { " + IMAGE_FILTER_KEYS.join(", ") + " } — got " + JSON.stringify(input) + ".");
+  }
+  const filters: Record<string, number> = {};
+  for (const [key, value] of Object.entries(input as Record<string, unknown>)) {
+    if (IMAGE_FILTER_KEYS.indexOf(key) === -1) {
+      throw new Error("flcm: " + where + ' filters has no "' + key + '" — use ' + IMAGE_FILTER_KEYS.join(", ") + ".");
+    }
+    if (typeof value !== "number" || !(value >= -1 && value <= 1)) {
+      throw new Error("flcm: " + where + " filters." + key + " must be a number -1–1 (0 is untouched) — got " + JSON.stringify(value) + ".");
+    }
+    filters[key] = value;
+  }
+  return filters;
 }
 
 // A read-form image fill (the read shape's SimplifiedImageFill: { type:'IMAGE', imageRef|gifRef,
@@ -106,7 +159,7 @@ function isImageFill(value: object): boolean {
 const READ_SCALE_MODES: Record<string, ImageScaleMode> = { FILL: "FILL", FIT: "FIT", TILE: "TILE" };
 
 function readImagePaint(value: object, field: string): WriteImageHash {
-  const o = value as { imageRef?: unknown; gifRef?: unknown; scaleMode?: unknown; scalingFactor?: unknown };
+  const o = value as ReadImageFill;
   // An animated GIF carries BOTH refs, and its `imageRef` points at the static snapshot frame — so the
   // one path that looks like it works is exactly the one that silently strips the animation. There is no
   // hash to point a new paint at (the GIF's own bytes live behind gifRef, which is not an image hash).
@@ -128,7 +181,7 @@ function readImagePaint(value: object, field: string): WriteImageHash {
       "flcm: " + field + ' is a cropped image fill (scaleMode "' + String(o.scaleMode) + '"). The crop lives in the paint\'s transform matrix, which flcm has no word to author, so rebuilding it would silently un-crop the image. Duplicate the node with flcm.clone to keep the crop.',
     );
   }
-  const paint: WriteImageHash = { kind: "image", hash, scaleMode };
+  const paint: WriteImageHash = { kind: "image", hash, scaleMode, ...parseImageAdjustments(o, field) };
   if (scaleMode === "TILE" && typeof o.scalingFactor === "number") paint.scalingFactor = o.scalingFactor;
   return paint;
 }
@@ -140,16 +193,19 @@ function ownEntry<T>(table: Record<string, T>, key: string): T | undefined {
   return Object.prototype.hasOwnProperty.call(table, key) ? table[key] : undefined;
 }
 
-// ---- Blend mode (CSS mix-blend-mode name -> Figma BlendMode). Only the CSS-named modes are reachable;
-// Figma's PASS_THROUGH / LINEAR_BURN / LINEAR_DODGE have no mix-blend-mode spelling and aren't offered.
+// ---- Blend mode (CSS mix-blend-mode name -> Figma BlendMode), for a node's mixBlendMode and a paint's
+// blendMode alike. Only the CSS-named modes are reachable: Figma's PASS_THROUGH has no spelling. Its
+// LINEAR_BURN/LINEAR_DODGE are what its UI calls "Plus darker"/"Plus lighter" — CSS's words.
 // Case-insensitive (CSS keywords are). An unknown name FAILS LOUD, naming the supported set. ----
 const BLEND_MODES: Record<string, WriteBlendMode> = {
   normal: "NORMAL",
   darken: "DARKEN",
   multiply: "MULTIPLY",
+  "plus-darker": "LINEAR_BURN",
   "color-burn": "COLOR_BURN",
   lighten: "LIGHTEN",
   screen: "SCREEN",
+  "plus-lighter": "LINEAR_DODGE",
   "color-dodge": "COLOR_DODGE",
   overlay: "OVERLAY",
   "soft-light": "SOFT_LIGHT",
@@ -165,7 +221,7 @@ const BLEND_MODES: Record<string, WriteBlendMode> = {
 export function parseBlendMode(input: string): WriteBlendMode {
   const mode = ownEntry(BLEND_MODES, String(input).trim().toLowerCase());
   if (!mode) {
-    throw new Error('flcm: unsupported blend "' + input + '" — use one of these CSS mix-blend-mode names: ' + Object.keys(BLEND_MODES).join(", ") + ". (Figma has no equivalent for pass-through or plus-lighter/plus-darker.)");
+    throw new Error('flcm: unsupported blend "' + input + '" — use one of these CSS mix-blend-mode names: ' + Object.keys(BLEND_MODES).join(", ") + ". (Figma's pass-through has no CSS name and isn't offered.)");
   }
   return mode;
 }

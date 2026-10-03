@@ -19,7 +19,7 @@ import { assertLayoutRealizableForType, assertGridSizing } from "./layout-legali
 import { parseInlineMarkdown, MdSegment } from "./markdown.js";
 import { linearGradient, radialGradient } from "./paint.js";
 import { layerBlurFromCssPx, backgroundBlurFromCssPx, shadow, glass, noise, texture, progressiveBlur } from "./effects.js";
-import { parseColor, parseFill, parseCssEffects, parseBlendMode, boxShorthand, cornerRadii, length, lineHeight, letterSpacing, isPercent, percent } from "./css.js";
+import { parseColor, parseFill, parseImageAdjustments, parseCssEffects, parseBlendMode, boxShorthand, cornerRadii, length, lineHeight, letterSpacing, isPercent, percent } from "./css.js";
 import { requestHostImages } from "./host.js";
 import { get, find, findOne, selection } from "./read.js";
 import { rejectUnknownKeys, rejectNonDeltaWords, own } from "./validate.js";
@@ -63,7 +63,7 @@ export const KNOWN_KEYS = {
   propertyDefinition: ["type", "defaultValue", "name"],
   variantEntry: ["component", "variant"],
   variantsOptions: ["name", "description"],
-  image: ["scaleMode", "placeholder"],
+  image: ["scaleMode", "placeholder", "opacity", "rotation", "filters", "blendMode"],
   gradient: ["type", "stops", "angle", "at"],
   effects: ["shadow", "blur", "backgroundBlur", "glass", "noise", "texture", "progressiveBlur", "progressiveBackgroundBlur"],
 } as const;
@@ -1263,7 +1263,10 @@ function image(url: unknown, opts: ImageOpts = {}): WritePaint {
   if (!IMAGE_SCALE_MODES.has(scaleMode)) {
     throw new Error('flcm.image: scaleMode must be one of "FILL", "FIT", "CROP", "TILE" — got ' + JSON.stringify(scaleMode) + ".");
   }
-  return { kind: "image", url: url.trim(), scaleMode, placeholder: opts.placeholder === true };
+  return {
+    kind: "image", url: url.trim(), scaleMode, placeholder: opts.placeholder === true,
+    ...parseImageAdjustments(opts, "flcm.image opts"),
+  };
 }
 
 // ---- effects() sugar: { shadow, blur, backgroundBlur } -> typed WriteEffect[] (no string round-trip).

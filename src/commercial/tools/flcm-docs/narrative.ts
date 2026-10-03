@@ -81,7 +81,7 @@ A node's elided map names omitted content fields and their sizes in JSON charact
 
 A marker-only object such as { elided: { children: 4200 } } retyped into a spec's children array preserves the live children it represents. It is never a node to create or edit. elided and readOnlySource are read metadata. An INSTANCE child tree whose ids all belong to that instance is an inherited echo, including after copying or JSON round-tripping. Its fields are observational; edit sublayer paths through overrides, and place slot content through overrides[path].children. Foreign or id-less inherited children are refused as restructuring. When the root id is removed to create a new instance, echo ids must share one source instance. SLOT contents can have ordinary live ids; their edits still belong in overrides.
 
-REST does not request geometry=paths, so its decoded readOnlySource cannot supply VECTOR path data. Use a live plugin read for paths. Variables, prototype interactions, vector networks, video paints, image filters, mask/boolean-operation settings and plugin data remain outside the adapter vocabulary; use raw figma access for them. Reading a node type does not imply that a verb can create it; clone preserves unsupported authoring state. The predicate admission limit remains 5,000 candidates; narrow within or the query for larger files. Unavailable library definitions can still fall back to an instance donor, identified by childrenFrom.`;
+REST does not request geometry=paths, so its decoded readOnlySource cannot supply VECTOR path data. Use a live plugin read for paths. Variables, prototype interactions, vector networks, video paints, mask/boolean-operation settings and plugin data remain outside the adapter vocabulary; use raw figma access for them. Reading a node type does not imply that a verb can create it; clone preserves unsupported authoring state. The predicate admission limit remains 5,000 candidates; narrow within or the query for larger files. Unavailable library definitions can still fall back to an instance donor, identified by childrenFrom.`;
 
 export const CHILDREN = `Use \`children: [{ type: "TEXT", text: "Hi" }]\` on a FRAME. Compose with array spread and filter conditional entries before calling a verb. Every entry must be a plain node object. Instances expose editable content through slot paths in overrides. The verb places the subtree root at its named position; inside each node, mentioned children go to the end in spec order, and unmentioned children keep their relative order. \`children: []\` on a live node is a no-op.`;
 
@@ -216,6 +216,7 @@ export const IMAGE_INTRO = `Place a **real raster image** — feed media, an ava
 \`\`\`js
 const avatar = { type: "ELLIPSE", width: 48, height: 48, fill: flcm.image("https://example.com/face.jpg") };
 const logo = { type: "RECTANGLE", width: 120, height: 40, fill: flcm.image("public/logo.png", { scaleMode: "FIT" }) };
+const muted = flcm.image("https://example.com/hero.jpg", { opacity: 0.4, rotation: 90, filters: { saturation: -1 } });
 \`\`\`
 
 - **The server loads the bytes** — your code never touches the network or the filesystem. Any public http(s) url works.
@@ -325,7 +326,9 @@ When you pass effects as CSS strings (\`effects: { … }\`):
 
 ### Blend mode
 
-\`mixBlendMode\` takes a CSS \`mix-blend-mode\` name — \`multiply\`, \`screen\`, \`overlay\`, \`soft-light\`, \`hard-light\`, \`color-dodge\`, \`color-burn\`, \`darken\`, \`lighten\`, \`difference\`, \`exclusion\`, \`hue\`, \`saturation\`, \`color\`, \`luminosity\`, or \`normal\`. Any other name throws. (Figma's \`pass-through\` and the linear burn/dodge modes have no CSS spelling and aren't offered.)
+\`mixBlendMode\` takes a CSS \`mix-blend-mode\` name — \`multiply\`, \`screen\`, \`overlay\`, \`soft-light\`, \`hard-light\`, \`color-dodge\`, \`color-burn\`, \`plus-darker\`, \`plus-lighter\`, \`darken\`, \`lighten\`, \`difference\`, \`exclusion\`, \`hue\`, \`saturation\`, \`color\`, \`luminosity\`, or \`normal\`. Any other name throws. (Figma's \`pass-through\` has no CSS spelling and isn't offered.)
+
+A single **paint** blends too, with the same names under \`blendMode\` — CSS \`background-blend-mode\`. A blended solid is the object \`{ type: "SOLID", color: "#FF0000", blendMode: "multiply" }\`; a gradient leaf takes \`blendMode\` beside \`gradient\`, and \`flcm.image\` takes it as an option. A \`get\` emits these only for a non-normal blend, so a read pastes straight back.
 
 ### Metrics
 
@@ -360,7 +363,7 @@ export const FAILS_LOUD = `Accepting CSS is a fidelity promise, so the boundarie
 | \`textStyle.lineClamp\` on a width-hugging text | Truncation needs a width to wrap against. Set \`width\` to a number, \`"fill"\`, or \`"N%"\`. |
 | A layout word the node can't realize — a fixed/percent \`height\` beside \`width: "hug"\` on TEXT, \`"hug"\` with nothing to measure, or container words without \`layout.mode\` | The same rules govern create and edit alike, so a word that wouldn't land names the fix instead. |
 
-An \`imageRef\` identifies an existing image in this file and can be reused, for example \`{ type: "RECTANGLE", fill: { type: "IMAGE", imageRef } }\`.
+An \`imageRef\` identifies an existing image in this file and can be reused, for example \`{ type: "RECTANGLE", fill: { type: "IMAGE", imageRef } }\`. The read's \`opacity\`, \`rotation\`, \`filters\` and \`blendMode\` on that leaf are authored back as they read — the same words \`flcm.image\` takes as options.
 
 Variables and prototype interactions are deliberately **out of v1** — read concepts with no create path. They're rejected loudly so you never half-write something unrealizable. (Components have one: \`INSTANCE\` — see the components section.)
 
