@@ -78,7 +78,7 @@ export interface SnapshotSolidPaint {
   type: "SOLID";
   color: SnapshotColor;
   opacity?: number;
-  /** Figma BlendMode; the core only distinguishes NORMAL/PASS_THROUGH from the rest. */
+  /** Raw Figma BlendMode; NORMAL/PASS_THROUGH are the default the read omits. */
   blendMode?: string;
   visible?: boolean;
 }
@@ -89,7 +89,19 @@ export interface SnapshotGradientPaint {
   /** Gradient line/handle vectors in normalized paint space (REST gradientHandlePositions). */
   handles: SnapshotVector[];
   opacity?: number;
+  blendMode?: string;
   visible?: boolean;
+}
+
+/** Figma `ImageFilters`, each -1..1 with 0 the unfiltered default. */
+export interface SnapshotImageFilters {
+  exposure?: number;
+  contrast?: number;
+  saturation?: number;
+  temperature?: number;
+  tint?: number;
+  highlights?: number;
+  shadows?: number;
 }
 
 export interface SnapshotImagePaint {
@@ -102,6 +114,11 @@ export interface SnapshotImagePaint {
   scalingFactor?: number;
   /** Crop transform matrix (REST `imageTransform`), present when the image is cropped. */
   crop?: SnapshotTransform;
+  opacity?: number;
+  blendMode?: string;
+  /** Degrees, a multiple of 90 in 0..270 (Figma refuses any other). The plugin omits it on a cropped paint. */
+  rotation?: number;
+  filters?: SnapshotImageFilters;
   visible?: boolean;
 }
 

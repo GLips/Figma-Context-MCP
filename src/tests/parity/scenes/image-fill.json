@@ -79,6 +79,49 @@
           ]
         }
       ]
+    },
+    {
+      "id": "5:4",
+      "name": "Adjusted",
+      "type": "RECTANGLE",
+      "visible": true,
+      "absoluteBoundingBox": {
+        "x": 120,
+        "y": 0,
+        "width": 100,
+        "height": 100
+      },
+      "width": 100,
+      "height": 100,
+      "x": 120,
+      "y": 0,
+      "fills": [
+        {
+          "type": "IMAGE",
+          "imageHash": "adj321",
+          "scaleMode": "FILL",
+          "opacity": 0.4000000059604645,
+          "blendMode": "OVERLAY",
+          "rotation": 90,
+          "filters": {
+            "exposure": 0.20000000298023224,
+            "contrast": -0.30000001192092896,
+            "saturation": 0,
+            "temperature": 0,
+            "tint": 0,
+            "highlights": 0,
+            "shadows": -0.15000000596046448
+          },
+          "visible": true
+        },
+        {
+          "type": "SOLID",
+          "color": { "r": 1, "g": 0, "b": 0 },
+          "opacity": 1,
+          "blendMode": "MULTIPLY",
+          "visible": true
+        }
+      ]
     }
   ]
 }

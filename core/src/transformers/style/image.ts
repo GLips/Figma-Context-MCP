@@ -1,4 +1,8 @@
-import type { SnapshotPatternPaint, SnapshotTransform } from "../../snapshot.js";
+import type {
+  SnapshotImageFilters,
+  SnapshotPatternPaint,
+  SnapshotTransform,
+} from "../../snapshot.js";
 
 /**
  * Simplified image fill with CSS properties and processing metadata
@@ -30,6 +34,16 @@ export type SimplifiedImageFill = {
    * For TILE mode, the scaling factor relative to original image size
    */
   scalingFactor?: number;
+
+  // Paint adjustments, each emitted only when it deviates from Figma's default.
+  /** CSS blend keyword (background-blend-mode); absent means normal. */
+  blendMode?: string;
+  /** Paint opacity 0..1; absent means 1. */
+  opacity?: number;
+  /** Degrees, one of 90/180/270; absent means upright. */
+  rotation?: number;
+  /** Figma image adjustments, each -1..1; only the non-zero ones appear. */
+  filters?: SnapshotImageFilters;
 
   // CSS properties for background-image usage (when node has children)
   backgroundSize?: string;

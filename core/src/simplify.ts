@@ -1,6 +1,6 @@
 import { isRectangleCornerRadii, isVisible } from "./utils.js";
 import { buildSimplifiedLayout } from "./transformers/layout.js";
-import { buildSimplifiedStrokes, parsePaint } from "./transformers/style.js";
+import { buildSimplifiedStrokes, cssBlendKeyword, parsePaint } from "./transformers/style.js";
 import { buildSimplifiedEffects } from "./transformers/effects.js";
 import {
   buildFormattedText,
@@ -177,8 +177,8 @@ async function extractNode(
     node.clipsContent !== undefined
   )
     result.clip = node.clipsContent;
-  if (node.blendMode && CSS_BLEND_MODES.has(node.blendMode))
-    result.mixBlendMode = node.blendMode.toLowerCase().replace(/_/g, "-");
+  const mixBlendMode = cssBlendKeyword(node.blendMode);
+  if (mixBlendMode) result.mixBlendMode = mixBlendMode;
   if (node.constraints) {
     const x = HORIZONTAL_CONSTRAINTS[node.constraints.horizontal];
     const y = VERTICAL_CONSTRAINTS[node.constraints.vertical];
@@ -398,24 +398,6 @@ function extractComponent(
   }
 }
 
-const CSS_BLEND_MODES = new Set([
-  "NORMAL",
-  "MULTIPLY",
-  "SCREEN",
-  "OVERLAY",
-  "SOFT_LIGHT",
-  "HARD_LIGHT",
-  "COLOR_DODGE",
-  "COLOR_BURN",
-  "DARKEN",
-  "LIGHTEN",
-  "DIFFERENCE",
-  "EXCLUSION",
-  "HUE",
-  "SATURATION",
-  "COLOR",
-  "LUMINOSITY",
-]);
 const HORIZONTAL_CONSTRAINTS: Record<string, NonNullable<SimplifiedNode["pin"]>["x"]> = {
   MIN: "left",
   CENTER: "center",

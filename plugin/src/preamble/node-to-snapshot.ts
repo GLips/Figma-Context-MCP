@@ -26,6 +26,7 @@ import type {
   NodeSnapshot,
   SnapshotColor,
   SnapshotEffect,
+  SnapshotImageFilters,
   SnapshotPaint,
   SnapshotPoint,
   SnapshotStyleRef,
@@ -68,6 +69,7 @@ export interface SceneGradientPaint {
   gradientTransform: SceneTransform;
   gradientStops: ReadonlyArray<{ position: number; color: SnapshotColor }>;
   opacity?: number;
+  blendMode?: string;
   visible?: boolean;
 }
 
@@ -77,6 +79,10 @@ export interface SceneImagePaint {
   scaleMode: "FILL" | "FIT" | "CROP" | "TILE";
   scalingFactor?: number | null;
   imageTransform?: SceneTransform;
+  opacity?: number;
+  blendMode?: string;
+  rotation?: number;
+  filters?: SnapshotImageFilters;
   visible?: boolean;
 }
 
@@ -560,6 +566,7 @@ function decodeScenePaint(paint: ScenePaint): SnapshotPaint | undefined {
         stops: paint.gradientStops.map((stop) => ({ position: stop.position, color: stop.color })),
         handles: handlesFromTransform(paint.type, paint.gradientTransform),
         opacity: paint.opacity,
+        blendMode: paint.blendMode,
         visible: paint.visible,
       };
     case "IMAGE":
@@ -570,6 +577,10 @@ function decodeScenePaint(paint: ScenePaint): SnapshotPaint | undefined {
         scaleMode: paint.scaleMode === "CROP" ? "STRETCH" : paint.scaleMode,
         scalingFactor: paint.scalingFactor ?? undefined,
         crop: paint.imageTransform ? toSnapshotTransform(paint.imageTransform) : undefined,
+        opacity: paint.opacity,
+        blendMode: paint.blendMode,
+        rotation: paint.rotation,
+        filters: paint.filters,
         visible: paint.visible,
       };
     case "PATTERN":

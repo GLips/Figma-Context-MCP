@@ -4,6 +4,8 @@ import { formatRGBAColor } from "./color.js";
 export type SimplifiedGradientFill = {
   type: "GRADIENT_LINEAR" | "GRADIENT_RADIAL" | "GRADIENT_ANGULAR" | "GRADIENT_DIAMOND";
   gradient: string;
+  /** CSS blend keyword (background-blend-mode); absent means normal. */
+  blendMode?: string;
 };
 
 type GradientStop = { position: number; color: SnapshotColor };

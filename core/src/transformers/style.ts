@@ -1,5 +1,10 @@
-import type { NodeSnapshot, SnapshotPaint } from "../snapshot.js";
-import { generateCSSShorthand, isVisible } from "../utils.js";
+import type {
+  NodeSnapshot,
+  SnapshotImageFilters,
+  SnapshotImagePaint,
+  SnapshotPaint,
+} from "../snapshot.js";
+import { generateCSSShorthand, isVisible, pixelRound } from "../utils.js";
 
 import { convertColor, flattenSolidFills, formatRGBAColor } from "./style/color.js";
 import { translateScaleMode, handleImageTransform, parsePatternPaint } from "./style/image.js";
@@ -24,12 +29,93 @@ import type { CSSRGBAColor, CSSHexColor } from "./style/color.js";
 import type { SimplifiedPatternFill } from "./style/image.js";
 import type { SimplifiedGradientFill } from "./style/gradient.js";
 
+/**
+ * A solid that blends with its backdrop, so it can't be a bare color string. A
+ * normal-blend solid is always the bare string.
+ */
+export type SimplifiedSolidFill = {
+  type: "SOLID";
+  color: CSSRGBAColor | CSSHexColor;
+  blendMode: string;
+};
+
 export type SimplifiedFill =
+  | SimplifiedSolidFill
   | SimplifiedImageFill
   | SimplifiedGradientFill
   | SimplifiedPatternFill
   | CSSRGBAColor
   | CSSHexColor;
+
+/**
+ * Figma BlendMode → CSS mix-blend-mode keyword, the one spelling node and paint
+ * blends share. Figma's UI calls LINEAR_BURN/LINEAR_DODGE "Plus darker"/"Plus
+ * lighter", CSS's own words. PASS_THROUGH (a group compositing as if absent) has
+ * no keyword and stays unmapped.
+ */
+const CSS_BLEND_KEYWORDS: Record<string, string> = {
+  NORMAL: "normal",
+  DARKEN: "darken",
+  MULTIPLY: "multiply",
+  LINEAR_BURN: "plus-darker",
+  COLOR_BURN: "color-burn",
+  LIGHTEN: "lighten",
+  SCREEN: "screen",
+  LINEAR_DODGE: "plus-lighter",
+  COLOR_DODGE: "color-dodge",
+  OVERLAY: "overlay",
+  SOFT_LIGHT: "soft-light",
+  HARD_LIGHT: "hard-light",
+  DIFFERENCE: "difference",
+  EXCLUSION: "exclusion",
+  HUE: "hue",
+  SATURATION: "saturation",
+  COLOR: "color",
+  LUMINOSITY: "luminosity",
+};
+
+export function cssBlendKeyword(mode: string | undefined): string | undefined {
+  return mode !== undefined && Object.prototype.hasOwnProperty.call(CSS_BLEND_KEYWORDS, mode)
+    ? CSS_BLEND_KEYWORDS[mode]
+    : undefined;
+}
+
+/** A paint's blend as a deviation-only spread: present only when it isn't normal. */
+function paintBlend(mode: string | undefined): { blendMode?: string } {
+  const keyword = cssBlendKeyword(mode);
+  return keyword && keyword !== "normal" ? { blendMode: keyword } : {};
+}
+
+const IMAGE_FILTER_KEYS = [
+  "exposure",
+  "contrast",
+  "saturation",
+  "temperature",
+  "tint",
+  "highlights",
+  "shadows",
+] as const;
+
+type ImageAdjustments = Pick<SimplifiedImageFill, "opacity" | "rotation" | "filters">;
+
+/**
+ * An image paint's opacity/rotation/filters, each only when it deviates from Figma's
+ * default. Rounded like every emitted number: the plugin reports float32 (0.4 reads
+ * 0.4000000059604645), and the rounded value is what an agent pastes back.
+ */
+function imageAdjustments(raw: SnapshotImagePaint): ImageAdjustments {
+  const out: ImageAdjustments = {};
+  if (raw.opacity !== undefined && pixelRound(raw.opacity) !== 1)
+    out.opacity = pixelRound(raw.opacity);
+  if (raw.rotation) out.rotation = raw.rotation;
+  const filters: SnapshotImageFilters = {};
+  for (const key of IMAGE_FILTER_KEYS) {
+    const value = raw.filters?.[key];
+    if (value !== undefined && pixelRound(value) !== 0) filters[key] = pixelRound(value);
+  }
+  if (Object.keys(filters).length) out.filters = filters;
+  return out;
+}
 
 export type SimplifiedStroke = {
   colors: SimplifiedFill[];
@@ -121,6 +207,8 @@ export function parsePaint(raw: SnapshotPaint, hasChildren: boolean = false): Si
       ...(raw.gifRef ? { gifRef: raw.gifRef } : {}),
       scaleMode: raw.scaleMode,
       scalingFactor: raw.scalingFactor,
+      ...paintBlend(raw.blendMode),
+      ...imageAdjustments(raw),
     };
 
     // Get CSS properties and processing metadata from scale mode
@@ -153,17 +241,16 @@ export function parsePaint(raw: SnapshotPaint, hasChildren: boolean = false): Si
     };
   } else if (raw.type === "SOLID") {
     const { hex, opacity } = convertColor(raw.color, raw.opacity);
-    if (opacity === 1) {
-      return hex;
-    } else {
-      return formatRGBAColor(raw.color, opacity);
-    }
+    const color = opacity === 1 ? hex : formatRGBAColor(raw.color, opacity);
+    const { blendMode } = paintBlend(raw.blendMode);
+    return blendMode ? { type: "SOLID", color, blendMode } : color;
   } else if (raw.type === "PATTERN") {
     return parsePatternPaint(raw);
   } else {
     return {
       type: raw.type,
       gradient: convertGradientToCss(raw),
+      ...paintBlend(raw.blendMode),
     };
   }
 }

@@ -70,6 +70,37 @@
           }
         }
       ]
+    },
+    {
+      "id": "5:4",
+      "name": "Adjusted",
+      "type": "RECTANGLE",
+      "fill": [
+        {
+          "type": "SOLID",
+          "color": "#FF0000",
+          "blendMode": "multiply"
+        },
+        {
+          "type": "IMAGE",
+          "imageRef": "adj321",
+          "scaleMode": "FILL",
+          "blendMode": "overlay",
+          "opacity": 0.4,
+          "rotation": 90,
+          "filters": {
+            "exposure": 0.2,
+            "contrast": -0.3,
+            "shadows": -0.15
+          },
+          "objectFit": "cover",
+          "isBackground": false,
+          "imageDownloadArguments": {
+            "needsCropping": false,
+            "requiresImageDimensions": false
+          }
+        }
+      ]
     }
   ],
   "components": {},

@@ -91,5 +91,48 @@
         ]
       }
     ]
+  },
+  {
+    "id": "5:4",
+    "name": "Adjusted",
+    "type": "RECTANGLE",
+    "visible": true,
+    "absoluteBoundingBox": {
+      "x": 120,
+      "y": 0,
+      "width": 100,
+      "height": 100
+    },
+    "ownSize": {
+      "width": 100,
+      "height": 100
+    },
+    "fills": [
+      {
+        "type": "IMAGE",
+        "ref": "adj321",
+        "scaleMode": "FILL",
+        "opacity": 0.4,
+        "blendMode": "OVERLAY",
+        "rotation": 90,
+        "filters": {
+          "exposure": 0.2,
+          "contrast": -0.3,
+          "shadows": -0.15
+        },
+        "visible": true
+      },
+      {
+        "type": "SOLID",
+        "color": {
+          "r": 1,
+          "g": 0,
+          "b": 0,
+          "a": 1
+        },
+        "blendMode": "MULTIPLY",
+        "visible": true
+      }
+    ]
   }
 ]

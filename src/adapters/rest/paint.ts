@@ -46,6 +46,10 @@ export function decodePaint(paint: Paint): SnapshotPaint | undefined {
         scaleMode: paint.scaleMode as "FILL" | "FIT" | "TILE" | "STRETCH",
         scalingFactor: paint.scalingFactor,
         crop: paint.imageTransform,
+        opacity: paint.opacity,
+        blendMode: paint.blendMode,
+        rotation: paint.rotation,
+        filters: paint.filters,
         visible: paint.visible,
       };
     case "PATTERN":
@@ -66,6 +70,7 @@ export function decodePaint(paint: Paint): SnapshotPaint | undefined {
         stops: paint.gradientStops.map((stop) => ({ position: stop.position, color: stop.color })),
         handles: paint.gradientHandlePositions,
         opacity: paint.opacity,
+        blendMode: paint.blendMode,
         visible: paint.visible,
       };
     case "SOLID":
