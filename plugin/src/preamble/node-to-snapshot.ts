@@ -21,6 +21,7 @@ import { serializeGridTracks } from "./grid-tracks.js";
 // deliberately NOT a `{...node}` spread — so undeclared plugin fields cannot ride through at runtime.
 
 import { decodeAnnotations, type SceneAnnotation } from "./annotations.js";
+import { isReadableSceneNode, readableChildren } from "./scene-readability.js";
 import { isCoordinateTransparentType, rotateIntoParentFrame } from "@framelink/core";
 import type {
   NodeSnapshot,
@@ -343,9 +344,13 @@ export async function sceneNodeToSnapshot(
   resolveStyle: SceneStyleResolver,
   mainComponents?: MainComponentSink,
   annotationCategories: ReadonlyMap<string, string> = new Map(),
+  unreadable?: UnreadableSink,
 ): Promise<NodeSnapshot> {
-  return sceneSubtreeToSnapshot(node, resolveStyle, CONTAINER_PARENT_SPACE, mainComponents, annotationCategories);
+  return sceneSubtreeToSnapshot(node, resolveStyle, CONTAINER_PARENT_SPACE, mainComponents, annotationCategories, unreadable);
 }
+
+/** Where the caller collects ids the walk omitted: unreadable nodes, and containers whose children Figma cannot list. */
+export type UnreadableSink = Set<string>;
 
 /**
  * Where the caller collects every main component this walk resolved, keyed by id. Offered because
@@ -393,6 +398,7 @@ async function sceneSubtreeToSnapshot(
   parentSpace: SceneParentSpace,
   mainComponents?: MainComponentSink,
   annotationCategories: ReadonlyMap<string, string> = new Map(),
+  unreadable?: UnreadableSink,
 ): Promise<NodeSnapshot> {
   const text = node.type === "TEXT" ? decodeSceneText(node) : undefined;
   const main = await mainComponentOf(node);
@@ -403,9 +409,16 @@ async function sceneSubtreeToSnapshot(
   const childSpace: SceneParentSpace = isCoordinateTransparentType(node.type)
     ? { transparent: true, origin: ownXY(node), rotation: node.rotation ?? 0 }
     : CONTAINER_PARENT_SPACE;
+  const listed = readableChildren(node);
+  if (!listed) unreadable?.add(node.id);
+  const readable = (listed ?? []).filter((child) => {
+    if (isReadableSceneNode(child)) return true;
+    unreadable?.add(child.id);
+    return false;
+  });
   const children = await Promise.all(
-    (node.children ?? []).map((child) =>
-      sceneSubtreeToSnapshot(child, resolveStyle, childSpace, mainComponents, annotationCategories),
+    readable.map((child) =>
+      sceneSubtreeToSnapshot(child, resolveStyle, childSpace, mainComponents, annotationCategories, unreadable),
     ),
   );
 

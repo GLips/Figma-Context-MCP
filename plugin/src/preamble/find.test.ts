@@ -12,6 +12,7 @@ import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
 import { find, findOne, selection } from "./flcm.js";
 import { render } from "./render.js";
+import { warnings } from "./warnings.js";
 
 test("find returns matching nodes as slim handles with in-context sizing intent", async () => {
   createFigmaMock();
@@ -264,4 +265,26 @@ test("a predicate-only find fails loud past the materialization cap, naming it",
     find({}, () => true),
     /5001 candidate nodes, over the 5000-node materialization cap/s,
   );
+});
+
+// Figma can list a node it cannot read: moving inherited slot content out of its instance leaves one
+// that renders while its getters throw "does not exist". One such node must not fail a page search.
+test("find skips nodes Figma lists but cannot read, and names them in a warning", async () => {
+  createFigmaMock();
+  warnings.discardFrom(0);
+  const built = await render({
+    type: "FRAME",
+    children: [
+      { type: "RECTANGLE", key: "healthy", width: 10, height: 10 },
+      { type: "RECTANGLE", key: "zombie", width: 10, height: 10 },
+    ],
+  });
+  const zombieSpec = built.children![1];
+  const zombie = await figma.getNodeByIdAsync(zombieSpec.id);
+  Object.defineProperty(zombie, "name", { get() { throw new Error("in get_name: The node does not exist"); } });
+
+  const rects = await find({ type: "RECTANGLE" });
+  assert.deepEqual(rects.map((r) => r.key), ["healthy"]);
+  const [warning] = warnings.summary().filter((line) => line.includes("could not read"));
+  assert.match(warning, new RegExp(zombieSpec.id));
 });

@@ -12,12 +12,15 @@ import { readKey, identityOf } from "./identity.js";
 import {
   sceneNodeToSnapshot,
   type MainComponentSink,
+  type UnreadableSink,
   type SceneNodeLike,
   type SceneStyleResolver,
 } from "./node-to-snapshot.js";
 import { rejectUnknownKeys } from "./validate.js";
 import { assertNodeStillOnCanvas } from "./freshness.js";
 import { registerRead } from "./host.js";
+import { isReadableSceneNode, readableChildren } from "./scene-readability.js";
+import { warnings } from "./warnings.js";
 import { simplify, project, projectNames, projectReadNode, type SimplifiedNode } from "@framelink/core";
 import type { NodeSnapshot } from "@framelink/core/snapshot";
 
@@ -45,7 +48,7 @@ async function byId(id: string): Promise<SceneNode | null> {
 }
 
 function scanKey(key: string, root: ScanRoot): SceneNode[] {
-  return root.findAll((n) => readKey(n) === key);
+  return root.findAllWithCriteria({ types: [] }).filter((n) => isReadableSceneNode(n) && readKey(n) === key);
 }
 
 // Resolve a target to a live node, or throw. `within` scopes the key scan (default: current page); it is
@@ -160,6 +163,7 @@ const resolveStyle: SceneStyleResolver = (styleId) => figma.getStyleByIdAsync(st
 // complete in the sandbox; registration defers every lossy decision until host egress.
 async function simplifyScene(
   node: BaseNode,
+  unreadable: UnreadableSink,
   categories?: ReadonlyMap<string, string>,
 ): Promise<import("@framelink/core").SimplifyResult> {
   const annotationCategories = categories ?? await readAnnotationCategoryNames();
@@ -169,6 +173,7 @@ async function simplifyScene(
     resolveStyle,
     mainComponents,
     annotationCategories,
+    unreadable,
   );
   const componentDefinitions =
     await offTreeDefinitions(snapshot, mainComponents, annotationCategories);
@@ -226,10 +231,24 @@ async function offTreeDefinitions(
   return definitions;
 }
 
+// A skipped node must never read as absent: the agent is told what Figma listed but couldn't read.
+function reportUnreadable(verb: string, unreadable: UnreadableSink): void {
+  if (!unreadable.size) return;
+  const ids = [...unreadable];
+  const named = ids.slice(0, 5).join(", ") + (ids.length > 5 ? ` and ${ids.length - 5} more` : "");
+  warnings.add({
+    id: null,
+    message: `flcm.${verb}: Figma could not read ${ids.length} node(s) or their contents (${named}), so this result omits them. ` +
+      "They may still render on the canvas.",
+  });
+}
+
 /** Read the complete subtree, including hidden targets and instance descendants. */
 export async function get(target: Target): Promise<GetResult> {
   const node = await resolveTarget(target);
-  const full = await simplifyScene(node);
+  const unreadable: UnreadableSink = new Set();
+  const full = await simplifyScene(node, unreadable);
+  reportUnreadable("get", unreadable);
   const { nodes, components } = full;
   const result: GetResult = { node: nodes[0] };
   if (Object.keys(components).length > 0) result.components = components;
@@ -297,8 +316,8 @@ function matchesQuery(node: SceneNode, query: FindQuery): boolean {
 }
 
 // Index every descendant so predicates receive the same full shape as get.
-async function simplifiedIndex(root: ScanRoot, categories: ReadonlyMap<string, string>): Promise<Map<string, SimplifiedNode>> {
-  const { nodes } = await simplifyScene(root, categories);
+async function simplifiedIndex(root: ScanRoot, unreadable: UnreadableSink, categories: ReadonlyMap<string, string>): Promise<Map<string, SimplifiedNode>> {
+  const { nodes } = await simplifyScene(root, unreadable, categories);
   const index = new Map<string, SimplifiedNode>();
   const walk = (node: SimplifiedNode): void => {
     index.set(node.id, node);
@@ -334,7 +353,7 @@ function projectSlim(node: SceneNode, simplified: SimplifiedNode, categories: Re
   if (simplified.position === "absolute") slim.position = "absolute";
   if (simplified.left !== undefined) slim.left = simplified.left;
   if (simplified.top !== undefined) slim.top = simplified.top;
-  const childCount = "children" in node ? node.children.length : 0;
+  const childCount = "children" in node ? readableChildren(node)?.length : 0;
   if (childCount) slim.childCount = childCount;
   registerRead(slim, () => slim);
   return slim;
@@ -342,11 +361,11 @@ function projectSlim(node: SceneNode, simplified: SimplifiedNode, categories: Re
 
 // Project a set of hits into SlimHandles against ONE simplify index built over `indexRoot` (the hits'
 // common ancestor, so each reads in-context). Empty stays empty without paying to materialize the scope.
-async function projectHits(hits: readonly SceneNode[], indexRoot: ScanRoot): Promise<SlimHandle[]> {
+async function projectHits(hits: readonly SceneNode[], indexRoot: ScanRoot, unreadable: UnreadableSink): Promise<SlimHandle[]> {
   if (!hits.length) return [];
   const categories = await readAnnotationCategoryNames();
-  const index = await simplifiedIndex(indexRoot, categories);
-  return hits.map((node) => projectSlim(node, indexedRead(index, node.id), categories));
+  const index = await simplifiedIndex(indexRoot, unreadable, categories);
+  return readHits(hits, index, unreadable).map(([node, simplified]) => projectSlim(node, simplified, categories));
 }
 
 // The predicate materialization cap (ratified decision 2). A predicate-only find makes every rendered node a
@@ -364,7 +383,7 @@ const MATERIALIZE_CAP = 5000;
 // whole-scope simplify feeds both — the predicate adds no second per-candidate materialization pass. A
 // candidate the core dropped (a collapsed-SVG interior with no standalone read shape) can't satisfy a
 // styling predicate and is excluded rather than handed an `undefined` the closure would crash dereferencing.
-async function filterByPredicate(hits: SceneNode[], root: ScanRoot, predicate: ReadPredicate): Promise<SlimHandle[]> {
+async function filterByPredicate(hits: SceneNode[], root: ScanRoot, predicate: ReadPredicate, unreadable: UnreadableSink): Promise<SlimHandle[]> {
   if (hits.length > MATERIALIZE_CAP) {
     throw new Error(
       `flcm.find: the query matched ${hits.length} candidate nodes, over the ${MATERIALIZE_CAP}-node materialization cap — running the predicate would read that many full node shapes. ` +
@@ -373,10 +392,9 @@ async function filterByPredicate(hits: SceneNode[], root: ScanRoot, predicate: R
   }
   if (!hits.length) return [];
   const categories = await readAnnotationCategoryNames();
-  const index = await simplifiedIndex(root, categories);
+  const index = await simplifiedIndex(root, unreadable, categories);
   const survivors: SlimHandle[] = [];
-  for (const hit of hits) {
-    const simplified = indexedRead(index, hit.id);
+  for (const [hit, simplified] of readHits(hits, index, unreadable)) {
     if (predicate(simplified)) survivors.push(projectSlim(hit, simplified, categories));
   }
   return survivors;
@@ -420,9 +438,17 @@ export async function find(query: FindQuery = {}, predicate?: ReadPredicate): Pr
   if (query.name !== undefined && typeof query.name !== "string" && !(query.name instanceof RegExp)) throw new Error("flcm.find: name must be a string (literal substring) or RegExp.");
   if (predicate !== undefined && typeof predicate !== "function") throw new Error("flcm.find: predicate must be a function.");
   const root = await scanRoot(query.within);
-  const hits = root.findAll((node) => matchesQuery(node, query));
-  if (!predicate) return projectHits(hits, root);
-  return filterByPredicate(hits, root, predicate);
+  // findAllWithCriteria, not findAll(callback): Figma's own walk crashes the whole search when a
+  // callback reads a node it lists but cannot read. Collecting first lets each node be checked.
+  const unreadable: UnreadableSink = new Set();
+  const hits = root.findAllWithCriteria({ types: [] }).filter((node) => {
+    if (isReadableSceneNode(node)) return matchesQuery(node, query);
+    unreadable.add(node.id);
+    return false;
+  });
+  const result = predicate ? await filterByPredicate(hits, root, predicate, unreadable) : await projectHits(hits, root, unreadable);
+  reportUnreadable("find", unreadable);
+  return result;
 }
 
 /**
@@ -450,12 +476,21 @@ export async function findOne(query: FindQuery = {}, predicate?: ReadPredicate):
 export async function selection(): Promise<SlimHandle[]> {
   invalidateSceneAccess();
   const selected = figma.currentPage.selection;
-  return projectHits(selected, figma.currentPage);
+  const unreadable: UnreadableSink = new Set();
+  const result = await projectHits(selected, figma.currentPage, unreadable);
+  reportUnreadable("selection", unreadable);
+  return result;
 }
 
 
-function indexedRead(index: ReadonlyMap<string, SimplifiedNode>, id: string): SimplifiedNode {
-  const node = index.get(id);
-  if (!node) throw new Error("flcm.find: node " + id + " left the scope during this read. Make a fresh query.");
-  return node;
+// Pair each live hit with its read shape. A hit the read omitted sits inside a container Figma could
+// not list; it joins the unreadable report rather than failing the whole search.
+function readHits(hits: readonly SceneNode[], index: ReadonlyMap<string, SimplifiedNode>, unreadable: UnreadableSink): [SceneNode, SimplifiedNode][] {
+  const read: [SceneNode, SimplifiedNode][] = [];
+  for (const hit of hits) {
+    const simplified = index.get(hit.id);
+    if (simplified) read.push([hit, simplified]);
+    else unreadable.add(hit.id);
+  }
+  return read;
 }
