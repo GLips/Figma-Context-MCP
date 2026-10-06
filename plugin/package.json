@@ -11,7 +11,8 @@
   },
   "exports": {
     "./schema": "./src/preamble/schema.ts",
-    "./node-to-snapshot": "./src/preamble/node-to-snapshot.ts"
+    "./node-to-snapshot": "./src/preamble/node-to-snapshot.ts",
+    "./server-deadline": "./src/preamble/server-deadline.ts"
   },
   "dependencies": {
     "@framelink/core": "workspace:*",

@@ -16,6 +16,7 @@ import type { WriteAccessNotice } from "~/commercial/entitlement/write-authoriza
 import { ApprovalStore } from "./approval-store.js";
 import { parsePeerVersion, refuseProtocolSkew, type ProtocolCompatibility } from "./version.js";
 import { Logger } from "~/utils/logger.js";
+import { RUN_INACTIVITY_DEADLINE_MS } from "@framelink/plugin/server-deadline";
 
 /**
  * Every request the server can send the plugin, as a closed union rather than `{ type: string }` plus
@@ -129,8 +130,9 @@ interface Pending {
 // servicing the run's mid-run channel request — suspends and re-arms it (serveChannelRequest), so a
 // run only dies when neither side is doing its work. It measures SILENCE, which is why a queued run
 // has none at all (armInactivityDeadline). Injectable via the constructor so the contract harness
-// can drive timeouts without waiting out 15 real seconds.
-const DEFAULT_TIMEOUT_MS = 15_000;
+// can drive timeouts without waiting out 15 real seconds. The run mirrors the default on its own
+// clock, to refuse verbs while its CANCEL is still queued behind a blocked thread (server-deadline.ts).
+const DEFAULT_TIMEOUT_MS = RUN_INACTIVITY_DEADLINE_MS;
 
 // The message types the SERVER sends to establish a connection, before it knows what it is talking
 // to. They are the ONLY ones exempt from the compatibility hold in `request()` — the handshake can't

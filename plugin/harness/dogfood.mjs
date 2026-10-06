@@ -28,7 +28,8 @@ const SANDBOX_PREAMBLE = await buildSandboxPreamble();
 createFigmaMock();
 // The host capability object (FlcmHost, preamble/host.ts): the live sandbox awaits the server over
 // the WS bridge for images and reads the run's real CANCEL state; the harness answers instantly with
-// stand-in bytes and never cancels, so scenarios run headless.
+// stand-in bytes and never cancels, so scenarios run headless. The run's own deadline clock
+// (server-deadline.ts) still applies: a scenario must finish within it.
 let agentSession;
 const host = {
   getSession: initialize => agentSession ??= initialize(),

@@ -3,6 +3,7 @@
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
 import { warnings } from "./warnings.js";
+import { serverDeadlinePassed, withServerCall } from "./server-deadline.js";
 // The host↔preamble interface — everything the preamble needs from the plugin that isn't `figma.*`.
 //
 // Why it's named and typed rather than a pair of loose free identifiers: once the flcm runtime ships
@@ -30,7 +31,10 @@ export interface FlcmHost {
   getSession(initialize: () => Record<string, unknown>): Record<string, unknown>;
   registerRead(value: object, project: () => unknown, decorate: (value: unknown) => unknown): void;
   traceNative?(stage: NativeTraceStage, operation: NativeOperation): void;
-  /** Private transport for server-shipped verbs. Never expose this on flcm or session. */
+  /**
+   * Private transport for server-shipped verbs. Never expose this on flcm or session. Every call
+   * goes through withServerCall (server-deadline.ts), or the run's clock counts server work as silence.
+   */
   callServer(capability: string, payload: unknown): Promise<unknown>;
   /** Has the server cancelled this run? Only the host sees the CANCEL frame arrive. */
   isRunCancelled(): boolean;
@@ -68,7 +72,7 @@ export async function requestHostImages(urls: string[]): Promise<Record<string, 
       "flcm.image: this runtime has no host (FlcmHost) — image fills need the live plugin bridge.",
     );
   }
-  const payload = await host.callServer("images.fetch", urls);
+  const payload = await withServerCall(() => host.callServer("images.fetch", urls));
   if (!payload || typeof payload !== "object") {
     throw new Error("flcm.image: the server's image reply was malformed.");
   }
@@ -87,6 +91,15 @@ export async function requestHostImages(urls: string[]): Promise<Record<string, 
 export function hostRunCancelled(): boolean {
   const host = currentHost();
   return host ? host.isRunCancelled() : false;
+}
+
+/**
+ * Whether this run has gone silent past the server's inactivity deadline by its own clock — the
+ * CANCEL may still be queued behind a run holding the thread (server-deadline.ts). Fails OPEN like
+ * cancellation: with no host there is no server and no deadline.
+ */
+export function hostDeadlinePassed(): boolean {
+  return currentHost() ? serverDeadlinePassed() : false;
 }
 
 /**

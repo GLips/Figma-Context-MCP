@@ -14,7 +14,8 @@
       "@framelink/core/snapshot": ["./core/src/snapshot.ts"],
       "@framelink/core/internal": ["./core/src/internal.ts"],
       "@framelink/plugin/schema": ["./plugin/src/preamble/schema.ts"],
-      "@framelink/plugin/node-to-snapshot": ["./plugin/src/preamble/node-to-snapshot.ts"]
+      "@framelink/plugin/node-to-snapshot": ["./plugin/src/preamble/node-to-snapshot.ts"],
+      "@framelink/plugin/server-deadline": ["./plugin/src/preamble/server-deadline.ts"]
     },
 
     "target": "ES2022",

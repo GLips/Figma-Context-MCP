@@ -20,10 +20,11 @@ import { beginSizingDiagnostics, finishSizingDiagnostics } from "./sizing-diagno
 //     enqueueWrite). The queue can outlive the agent's code, so it also says when it is empty —
 //     mutationQueueIdle, which the host drains before it replies.
 //
-//   • Enforce cancellation during execution: once the host records this run's CANCEL, no further
-//     verb STARTS — checked as each verb's turn arrives AND again after its preparation (the
-//     font/image awaits are the run's long suspension points; a cancel that lands during them
-//     refuses before the entry seal), so a zombie run can never mutate a canvas the agent was
+//   • Enforce cancellation during execution: once the host records this run's CANCEL — or the
+//     run's own clock says the server's deadline passed (server-deadline.ts) — no further verb
+//     STARTS. Checked as each verb's turn arrives AND again after its preparation (the font/image
+//     awaits are the run's long suspension points; a cancel that lands during them refuses before
+//     the entry seal), so a zombie run can never mutate a canvas the agent was
 //     already told is unchanged. The full policy and its other refusal points live on the host's
 //     registry (plugin/src/run-cancellation.ts).
 //
@@ -34,7 +35,8 @@ import { beginSizingDiagnostics, finishSizingDiagnostics } from "./sizing-diagno
 // internal appliers, never the public verbs (invariant 4).
 
 import { beginAnnotationMutation, removeFailedAnnotationCategories } from "./annotation-categories.js";
-import { hostRunCancelled, hostRunFinished } from "./host.js";
+import { hostDeadlinePassed, hostRunCancelled, hostRunFinished } from "./host.js";
+import { RUN_INACTIVITY_DEADLINE_MS } from "./server-deadline.js";
 
 let verbChain: Promise<unknown> = Promise.resolve();
 
@@ -105,6 +107,17 @@ function refuseIfCancelled(verb: string): void {
     throw new Error(
       "flcm." + verb + ": this run was cancelled by the server (its deadline passed) — no further " +
         "mutating verbs start. The canvas holds what completed before the cancellation.",
+    );
+  }
+  // Worded apart from the CANCEL: with the thread held, the run can't know whether the server has
+  // given up yet (a run that waited in the queue may have reported "running" late, starting the
+  // server's clock late). Refusing anyway keeps one rule: a run that holds the plugin past the
+  // deadline writes nothing more.
+  if (hostDeadlinePassed()) {
+    throw new Error(
+      "flcm." + verb + ": this run held the plugin for " + RUN_INACTIVITY_DEADLINE_MS / 1000 +
+        "s without reaching the server, past the server's inactivity deadline — no further mutating verbs start. The canvas holds what " +
+        "completed before this point. Split long synchronous work across calls.",
     );
   }
 }
