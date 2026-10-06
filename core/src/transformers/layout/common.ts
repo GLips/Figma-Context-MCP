@@ -80,8 +80,9 @@ export interface NodeGeometry {
   width?: SimplifiedDimension;
   height?: SimplifiedDimension;
   // The size the requested root was designed at, surfaced as a non-binding
-  // reference (not a hard width/height). The root's own dimensions are
-  // "contextual" — it fills whatever it's placed in — but absolutely-positioned
+  // reference (not a hard width/height) on every axis whose sizing leaned on the
+  // parent the read dropped: "contextual" (it fills whatever it's placed in) and
+  // "fill". Hug is content-sized and carries none. Absolutely-positioned
   // children and the fill-chain still need a concrete size to anchor against, so
   // we keep the designed value here, string-typed with a px suffix so it can't
   // be mistaken for a binding numeric width.

@@ -100,6 +100,19 @@ export function assertSizingResolvesAgainstParentFrame(wl: WriteLayout, isRoot: 
   }
 }
 
+// The one way past that rule: a read root's `"fill"` axis carries the px it measured where it was
+// read (WriteLayout.designedSize), and on a page that becomes a fixed size. Callers fold BEFORE the
+// rule and hand the result to the appliers too. An axis with no designed size stays "fill" and rejects.
+export function foldDesignedSizeForPage(wl: WriteLayout): WriteLayout {
+  const designed = wl.designedSize;
+  if (!designed) return wl;
+  const out: WriteLayout = { ...wl, sizing: { ...wl.sizing }, dimensions: { ...wl.dimensions } };
+  delete out.designedSize;
+  if (designed.width != null && out.sizing!.horizontal === "fill") { out.sizing!.horizontal = "fixed"; out.dimensions!.width = designed.width; }
+  if (designed.height != null && out.sizing!.vertical === "fill") { out.sizing!.vertical = "fixed"; out.dimensions!.height = designed.height; }
+  return out;
+}
+
 // TEXT height:"fill" is realized by the parent's flow (layoutGrow/STRETCH). Out of flow — a
 // free-form parent, or absolute positioning — it falls to coverChild's resize, which a text node
 // in WIDTH_AND_HEIGHT ignores: the height silently doesn't stick, so reject instead.

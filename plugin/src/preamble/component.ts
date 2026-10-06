@@ -37,7 +37,7 @@ import {
 } from "./bridge.js";
 import { compileTree } from "./compile-tree.js";
 import type { NodeSpec, AuthoredTree } from "./schema.js";
-import { assertSizingResolvesAgainstParentFrame } from "./layout-legality.js";
+import { assertSizingResolvesAgainstParentFrame, foldDesignedSizeForPage } from "./layout-legality.js";
 import { loadTreeResources, gateTreeResources, buildTreeOnPage, LoadedTreeResources } from "./render.js";
 import { enterMutatingVerb } from "./mutation-lock.js";
 import { assertNodeStillOnCanvas, createLoadedPages, loadPageForWrite, assertPageLoaded } from "./freshness.js";
@@ -491,7 +491,10 @@ export function component(specOrTarget: NodeSpec | Target, options?: ComponentOp
     if (tree.liveId) assertPromotable(loaded.live.entries.find(e => e.wn === tree)!.node);
     else {
       assertPromotableBuiltRoot(tree);
-      if (tree.layout) assertSizingResolvesAgainstParentFrame(tree.layout, true, SUBJECT);
+      if (tree.layout) {
+        tree.layout = foldDesignedSizeForPage(tree.layout);
+        assertSizingResolvesAgainstParentFrame(tree.layout, true, SUBJECT);
+      }
     }
     const bound = collectBoundWriteNodes(tree);
     assertBindingsResolve(bound, prepared.definitions);

@@ -329,6 +329,10 @@ export interface WriteLayout {
   // Absent unless the author wrote a percent.
   percentSize?: { width?: number; height?: number };
   percentPos?: { x?: number; y?: number };
+  // The px a read root's `"fill"` axis measured where it was read (its `designedWidth`/`designedHeight`).
+  // Inert under a frame, where fill still means fill; a page has no size to fill, so a root landing on
+  // one takes this as a fixed size instead (foldDesignedSizeForPage). Present only beside a fill axis.
+  designedSize?: { width?: number; height?: number };
   // Anchor point for an out-of-flow child (author `anchor`) — which corner/edge of the child lands on the
   // resolved left/top. Applied in the same post-walk pass as percent position (it needs the child's
   // realized size to offset by). Absent → {left, top} (top-left on the coordinate).

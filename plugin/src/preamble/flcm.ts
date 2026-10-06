@@ -376,9 +376,26 @@ export function compileNodeLayout(props: Omit<SizeProps, "layout"> & { layout?: 
     const bounds = compileBounds(props);
     if (bounds) layout.bounds = bounds;
   }
+  applyDesignedSize(props as { designedWidth?: unknown; designedHeight?: unknown }, layout);
   applyPlacement(layout, props);
   applyPin(layout, props);
   return Object.keys(layout).length ? layout : undefined;
+}
+
+// A read root's designedWidth/designedHeight, kept by acceptAuthoringProps only beside a "fill" axis.
+function applyDesignedSize(props: { designedWidth?: unknown; designedHeight?: unknown }, layout: WriteLayout): void {
+  const designed: { width?: number; height?: number } = {};
+  const axis = (val: unknown, key: "horizontal" | "vertical", dim: "width" | "height", word: string) => {
+    if (val == null || layout.sizing?.[key] !== "fill") return;
+    try {
+      designed[dim] = length(val as string | number);
+    } catch {
+      throw new Error("flcm: `" + word + '` must be a number or "Npx" — got ' + JSON.stringify(val) + ".");
+    }
+  };
+  axis(props.designedWidth, "horizontal", "width", "designedWidth");
+  axis(props.designedHeight, "vertical", "height", "designedHeight");
+  if (designed.width != null || designed.height != null) layout.designedSize = designed;
 }
 
 // A LINE sizes on one word, `width` — its length. A number, or "fill" to take the length from a

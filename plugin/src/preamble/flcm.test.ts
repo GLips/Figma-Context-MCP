@@ -6,6 +6,9 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
 import { render } from "./render.js";
+import { append } from "./structure.js";
+import { component } from "./component.js";
+import { get } from "./read.js";
 import type { FrameProps } from "./schema.js";
 
 createFigmaMock();
@@ -106,6 +109,23 @@ test("parent-relative sizes reject when the parent cannot resolve them", async (
     }),
     /in-flow child of an auto-layout parent/,
   );
+});
+
+test("a read root's fill takes its designed size on a page and stays fill under a frame", async () => {
+  const read = { type: "FRAME", width: "fill", designedWidth: "342px", height: 80, layout: { mode: "row" } } as never;
+  const onPage = await figma.getNodeByIdAsync((await render(read)).id);
+  assert.equal(onPage.width, 342);
+  assert.equal(onPage.layoutSizingHorizontal, "FIXED");
+  const row = await render({ type: "FRAME", width: 500, height: 100, layout: { mode: "row" } });
+  const nested = await figma.getNodeByIdAsync((await append(row, read)).id);
+  assert.equal(nested.layoutSizingHorizontal, "FILL");
+  const promoted = await figma.getNodeByIdAsync((await component(read)).id);
+  assert.equal(promoted.width, 342);
+  // Moving the live node by id spreads its read, designedWidth included — an edit-shaped delta.
+  const { node: liveRead } = (await get(nested.id)) as never as { node: Record<string, unknown> };
+  const other = await render({ type: "FRAME", width: 300, height: 100, layout: { mode: "row" } });
+  await append(other, liveRead as never);
+  assert.equal(nested.parent.id, other.id);
 });
 
 test("mistyped scalar values reject before writing", async () => {

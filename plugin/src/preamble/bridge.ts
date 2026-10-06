@@ -34,7 +34,7 @@ import { applyAnnotations } from "./annotation-categories.js";
 import { WriteType, WriteNode, WriteProps, WriteLayout, TextAlign, TextDecoration, Sizing, Identity, Handle, WritePaint, WritePaintStack, WriteImage, WriteImageUrl, ComponentPropertyBinding, CornerRadii, Edges, namesFontIdentity } from "./ir.js";
 import { own } from "./validate.js";
 import {
-  assertLayoutRealizableForType, assertGridSizing, assertPercentResolvable, assertSizingResolvesAgainstParentFrame, ParentFlowFacts,
+  assertLayoutRealizableForType, assertGridSizing, assertPercentResolvable, assertSizingResolvesAgainstParentFrame, foldDesignedSizeForPage, ParentFlowFacts,
   assertTextFillHeightInFlow, assertLineSizingInFlow, assertLineFillUnrotated, assertInheritedRectangleDimensions,
 } from "./layout-legality.js";
 import { toFigmaPaint, imagePaintAdjustments } from "./paint.js";
@@ -809,6 +809,12 @@ export function assertLiveNodeLandsUnderParent(node: any, destination: any, subj
   assertBounds(wl.bounds, node, subject);
   assertLayoutLandsUnderParent(liveParentLayoutFacts(destination), node.type, wl, node.layoutMode, wl.position === "absolute", subject);
   return wl;
+}
+
+// A compiled root bound for `destination`: on a page, a read root's fill axes take their designed px
+// (foldDesignedSizeForPage). Runs before assertBuiltRootLandsUnderParent, which then judges the folded words.
+export function foldBuiltRootForDestination(destination: any, wn: WriteNode): void {
+  if (destination.type === "PAGE" && wn.layout) wn.layout = foldDesignedSizeForPage(wn.layout);
 }
 
 // A structural verb placing a compiled node: only its ROOT meets the destination — the interior children

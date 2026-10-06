@@ -57,5 +57,13 @@ export function acceptAuthoringProps(bag: unknown, entry: AuthoringEntry): Recor
     out.layout = layout;
   }
   rejectUnknownKeys(out, entry.known, entry.subject);
+  // Past the gate on purpose: beside a `"fill"` the designed size is the compile's page fallback
+  // (WriteLayout.designedSize), inert unless a created root lands on a page. Create only — edit and
+  // live moves reuse a delta whose destination isn't known here, so there it stays a dropped read-only word.
+  if (entry.verb === "create") {
+    for (const [axis, designed] of [["width", "designedWidth"], ["height", "designedHeight"]] as const) {
+      if (out[axis] === "fill" && src[designed] != null) out[designed] = src[designed];
+    }
+  }
   return out;
 }

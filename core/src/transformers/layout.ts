@@ -239,8 +239,9 @@ type AxisDimension = { dimension?: SimplifiedDimension; designed?: string };
  * Resolve one axis of a node's sizing to the flattened vocabulary: a concrete
  * number IS fixed px, `"fill"`/`"hug"` carry sizing intent, and the root's
  * artifact-FIXED becomes `"contextual"` with the designed size preserved as a
- * non-binding reference. An axis with no signal (no sizing flag and no
- * emittable dimension) is omitted entirely — there is no bare "fixed" tag.
+ * non-binding reference (as does a root `"fill"`, whose parent is gone). An
+ * axis with no signal (no sizing flag and no emittable dimension) is omitted
+ * entirely — there is no bare "fixed" tag.
  */
 function resolveAxisDimension(
   sizing: "fixed" | "fill" | "hug" | undefined,
@@ -248,11 +249,18 @@ function resolveAxisDimension(
   isRoot: boolean,
   emitFixedNumber: boolean,
 ): AxisDimension {
-  if (sizing === "fill" || sizing === "hug") return { dimension: sizing };
+  if (sizing === "hug") return { dimension: sizing };
+  // A root's fill resolved against a parent the read no longer carries, so its
+  // pixel size rides along — the one number that survives being placed where
+  // fill can't resolve (a page). Hug is the node's own content size and needs none.
+  if (sizing === "fill")
+    return isRoot
+      ? { dimension: sizing, designed: `${pixelRound(boxSize)}px` }
+      : { dimension: sizing };
   // For the root, rewrite the spurious FIXED axis as "contextual" (it fills
   // whatever it's placed in) and surface the designed size as a non-binding
   // reference — absolutely-positioned children and the fill-chain still need a
-  // concrete size to anchor against. Real FILL/HUG axes are intent (above).
+  // concrete size to anchor against.
   if (isRoot) {
     return sizing === "fixed"
       ? { dimension: "contextual", designed: `${pixelRound(boxSize)}px` }

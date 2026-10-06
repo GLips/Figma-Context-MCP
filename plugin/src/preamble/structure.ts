@@ -35,7 +35,7 @@ import { assertNodeStillOnCanvas, LoadedPages, createLoadedPages, loadPageForWri
 import { enterMutatingVerb, compensatedMutationFailure } from "./mutation-lock.js";
 import {
   attachBuiltChild, settleSiblingOrder, mintHandle, resolvePercents, beginRenderWalk, RenderResources,
-  liveParentAttachFacts, assertLiveNodeLandsUnderParent, assertBuiltRootLandsUnderParent, resettleMovedNode,
+  liveParentAttachFacts, assertLiveNodeLandsUnderParent, assertBuiltRootLandsUnderParent, foldBuiltRootForDestination, resettleMovedNode,
 } from "./bridge.js";
 import { loadTreeResources, gateTreeResources, LoadedTreeResources } from "./render.js";
 import { prepareInsertBindings, applyInsertBindings, InsertBindingPlan } from "./component-edit.js";
@@ -244,6 +244,7 @@ function placeVerb(verb: string, anchor: Target | undefined, spec: NodeSpec, pla
     assertInstanceChildListUntouched(subject, dest.parent, "destination");
     if (!tree.liveId) {
       assertBuiltInsertNotIntoSet(subject, dest.parent);
+      foldBuiltRootForDestination(dest.parent, tree);
       assertBuiltRootLandsUnderParent(dest.parent, tree, subject);
     }
     const resources = gateTreeResources(tree, loaded, { destination: dest.parent });
@@ -414,6 +415,7 @@ export function replace(target: Target, spec: NodeSpec): Promise<AuthoredTree> {
     if (!tree.liveId) {
       assertBuiltInsertNotIntoSet("flcm.replace", dest.parent);
       Object.assign(tree, replacementTree(node, tree));
+      foldBuiltRootForDestination(dest.parent, tree);
       assertBuiltRootLandsUnderParent(dest.parent, tree, "flcm.replace");
     }
     const resources = gateTreeResources(tree, loaded, { destination: dest.parent });

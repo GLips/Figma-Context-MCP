@@ -325,6 +325,19 @@ describe("layout alignment", () => {
       // HUG needs no anchor — height is determined by content.
       expect(geometry.designedHeight).toBeUndefined();
     });
+
+    test("a FILL root keeps fill and carries the size it filled to", () => {
+      const root = makeFrame({
+        layoutSizingHorizontal: "FILL",
+        layoutSizingVertical: "HUG",
+        absoluteBoundingBox: { x: 0, y: 0, width: 342, height: 80 },
+      });
+      const geometry = geometryOf(root);
+      // The parent fill resolved against is gone, so the measured size rides along.
+      expect(geometry.width).toBe("fill");
+      expect(geometry.designedWidth).toBe("342px");
+      expect(geometry.designedHeight).toBeUndefined();
+    });
   });
 
   describe("left/top offsets", () => {
