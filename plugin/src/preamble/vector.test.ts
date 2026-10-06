@@ -42,6 +42,13 @@ test("a path's box is the path's bounding box; width/height are ignored with pro
   assert.match(out.warnings![0].message, /`scale`.*`svg`/s);
 });
 
+test("a path re-authored at its own (pixel-rounded) size is no divergence, so it warns nothing", async () => {
+  // A `get` round-trip echoes every vector's realized size back; warning on each buried real warnings.
+  diagnostics.discardFrom(0);
+  const out = await render({ type: "VECTOR", d: "M15 18 L9 12 L15 6", stroke: "#111", width: 6.0001, height: 12 });
+  assert.equal(out.warnings, undefined);
+});
+
 test("scale multiplies the path's natural box, uniformly", async () => {
   const out = await render({ type: "VECTOR", d: "M15 18 L9 12 L15 6", stroke: "#111", scale: 3 });
   const node = await figma.getNodeByIdAsync(out.id);

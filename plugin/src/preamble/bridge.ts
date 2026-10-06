@@ -3,7 +3,7 @@
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
 import { warnings } from "./warnings.js";
-import { LAYOUT_MODES, layoutModeOf, effectiveLayoutMode, childLayout } from "./layout-mode.js";
+import { LAYOUT_MODES, layoutModeOf, effectiveLayoutMode, childLayout, type ChildLayout } from "./layout-mode.js";
 import { behaviorForMode, layoutBehavior, applySiblingOrder, growImplicitGridRows } from "./layout-native.js";
 import { hasContainerLayout } from "./ir.js";
 import type { LiveTreeNode } from "./live-tree.js";
@@ -42,6 +42,7 @@ import { toFigmaEffects } from "./effects.js";
 import { resolveFont, resolveFontStrict, FontMap } from "./fonts.js";
 import { writeKey, identityOf, isSlotHole, describeNodeIdentity } from "./identity.js";
 import { pixelRound, convertSizing } from "@framelink/core";
+import { MutatingVerbError, NodeBuildError } from "./verb-error.js";
 
 // The resource half of the walk context — what an applier resolves against, split out so an exported
 // applier demands only what it reads: `fonts` is the preloaded FontMap, `images` the url → base64 map
@@ -884,6 +885,26 @@ export function liveParentAttachFacts(parent: any, subject: string): AttachParen
   return { ...flow, crossStretch: false, widthIsBounded: !flow.hugW, subject };
 }
 
+// The child-side legality checks run inside the PARENT's buildNode, so they're attributed to the
+// child here — and flagged as flcm's own refusal, which their path-prefixed messages can't say.
+function legalChildLayout(wn: WriteNode, words: WriteLayout, facts: AttachParentFacts): ChildLayout {
+  try {
+    const context = childLayout(facts.mode, words, words.position === "absolute", facts.subject);
+    const cl = context.layout;
+    // Fail loud on the one unresolvable percent (in-flow %-size against a hugging auto-layout parent)
+    // before building the node, so a bad node doesn't orphan a live node on the canvas. Every other
+    // percent/anchor is recorded and resolved in the post-walk pass (resolvePercents) against realized size.
+    assertPercentResolvable(cl, facts, facts.subject);
+    assertTextFillHeightInFlow(wn.type, cl, facts.mode.kind !== "free", cl.position === "absolute", facts.subject);
+    assertLineSizingInFlow(wn.type, cl, facts.mode, cl.position === "absolute", facts.subject);
+    assertLineFillUnrotated(wn.type, cl.sizing?.horizontal === "fill", wn.rotation, facts.subject);
+    return context;
+  } catch (cause) {
+    if (!wn.sourcePath) throw cause;
+    throw new NodeBuildError(wn, wn.sourcePath, cause, { flcmRefusal: true });
+  }
+}
+
 // THE attach-then-size entry: build one compiled child and settle it into `parent`. Shared by the
 // create walk (parent = the frame it is assembling) and the structural insert verbs (parent = a
 // live destination), so a subtree lands the same way whichever verb placed it.
@@ -903,15 +924,8 @@ export function attachBuiltChild(
   const authored = wn.layout || {};
   const defaultTextFill = wn.type === "TEXT" && authored.sizing?.horizontal === undefined && authored.position !== "absolute" && parent.layoutMode === "VERTICAL" && facts.widthIsBounded;
   const words: WriteLayout = defaultTextFill ? { ...authored, sizing: { ...authored.sizing, horizontal: "fill" } } : authored;
-  const context = childLayout(facts.mode, words, words.position === "absolute", facts.subject);
+  const context = legalChildLayout(wn, words, facts);
   const cl = context.layout;
-  // Fail loud on the one unresolvable percent (in-flow %-size against a hugging auto-layout parent)
-  // before building the node, so a bad node doesn't orphan a live node on the canvas. Every other
-  // percent/anchor is recorded and resolved in the post-walk pass (resolvePercents) against realized size.
-  assertPercentResolvable(cl, facts, facts.subject);
-  assertTextFillHeightInFlow(wn.type, cl, facts.mode.kind !== "free", cl.position === "absolute", facts.subject);
-  assertLineSizingInFlow(wn.type, cl, facts.mode, cl.position === "absolute", facts.subject);
-  assertLineFillUnrotated(wn.type, cl.sizing?.horizontal === "fill", wn.rotation, facts.subject);
   const child = buildNode(wn, ctx, facts.widthIsBounded);
   if (defaultTextFill) child.textAutoResize = "HEIGHT";
   // BEFORE the attach: Figma auto-places the child the moment it lands, and a grid with no free
@@ -1245,9 +1259,10 @@ const BUILDERS: Record<WriteType, (wn: WriteNode, ctx: RenderCtx, enclosingWidth
 export function buildNode(wn: WriteNode, ctx: RenderCtx, enclosingWidthBounded?: boolean): any {
   try { return buildCompiledNode(wn, ctx, enclosingWidthBounded); }
   catch (cause) {
-    const message = cause instanceof Error ? cause.message : String(cause);
-    if (!wn.sourcePath || message.includes(wn.sourcePath)) throw cause;
-    throw new Error(wn.sourcePath + ": " + message);
+    // Innermost wins: the deepest node that failed is the one the verb error should name. A nested
+    // verb error (slot content, a placed live child) already names it, so it passes through too.
+    if (cause instanceof NodeBuildError || cause instanceof MutatingVerbError || !wn.sourcePath) throw cause;
+    throw new NodeBuildError(wn, wn.sourcePath, cause);
   }
 }
 
@@ -1262,7 +1277,9 @@ function buildCompiledNode(wn: WriteNode, ctx: RenderCtx, enclosingWidthBounded?
   }
   for (const prop of ["width", "height"] as const) {
     const authored = wn.ignoredSize?.[prop];
-    if (authored !== undefined) warnings.add({
+    // A `get` round-trip re-authors the read's own (pixel-rounded) size, so a match is no divergence.
+    if (authored === undefined || (typeof authored === "number" && pixelRound(authored) === pixelRound(node[prop]))) continue;
+    warnings.add({
       id: node.id, prop, authored, realized: node[prop],
       message: "A VECTOR path is bare geometry; " + prop + " was ignored. Use `scale` for uniform sizing, or `svg` with a viewBox for a sized canvas.",
     });

@@ -13,7 +13,7 @@
 // Lives in its own module because both edit-plan.ts and structure.ts throw it and neither should
 // import the other; the message shape is the contract, so one home is what keeps them identical.
 
-import { Identity } from "./ir.js";
+import { Identity, WriteNode } from "./ir.js";
 import { identityOf, instanceAncestorOf } from "./identity.js";
 import { committedVerbCount } from "./mutation-lock.js";
 
@@ -35,21 +35,52 @@ export function beginMutatingApply(verb: string, node: SceneNode): (cause: unkno
   return (cause) => mutatingVerbError(verb, identity, cause, instance);
 }
 
+/**
+ * A failure while building one node of an authored tree. A built node has no identity worth naming
+ * — the rollback erases its id — so the pointer is its spec path. buildNode wraps only the innermost
+ * failure, so the path is the node that actually failed, not the verb's subject (a render's PAGE).
+ */
+export class NodeBuildError extends Error {
+  readonly sourcePath: string;
+  readonly nodeType: string;
+  readonly nodeName: string | undefined;
+  readonly reason: string;
+  readonly flcmRefusal: boolean;
+  constructor(wn: WriteNode, sourcePath: string, cause: unknown, opts: { flcmRefusal?: boolean } = {}) {
+    const reason = cause instanceof Error ? cause.message : String(cause);
+    super(reason.includes(sourcePath) ? reason : sourcePath + ": " + reason);
+    this.sourcePath = sourcePath;
+    this.nodeType = wn.type;
+    this.nodeName = wn.name;
+    this.reason = reason.startsWith(sourcePath + ": ") ? reason.slice(sourcePath.length + 2) : reason;
+    this.flcmRefusal = opts.flcmRefusal ?? false;
+  }
+}
+
+// Tagged so a verb error raised inside another verb's apply (slot content placed during a build)
+// surfaces as-is instead of being re-wrapped under the enclosing node.
+export class MutatingVerbError extends Error {}
+
 // A Figma refusal names its own setter ("in set_fills: …"); an flcm-prefixed cause is our own
 // throw, so don't pin it on Figma.
 function mutatingVerbError(verb: string, identity: Identity, cause: unknown, instance: { id: string; name: string } | null): Error {
-  const message = cause instanceof Error ? cause.message : String(cause);
-  const who =
+  if (cause instanceof MutatingVerbError) return cause;
+  const built = cause instanceof NodeBuildError ? cause : null;
+  const message = built ? built.reason : cause instanceof Error ? cause.message : String(cause);
+  const subject =
     identity.type + " " + JSON.stringify(identity.name) + " (id " + JSON.stringify(identity.id) +
     (identity.key ? ", key " + JSON.stringify(identity.key) : "") + ")";
-  const isFigmaRefusal = !message.startsWith("flcm");
+  const who = built
+    ? built.nodeType + (built.nodeName === undefined ? "" : " " + JSON.stringify(built.nodeName)) + " at " + built.sourcePath + ", being built into " + subject
+    : subject;
+  const isFigmaRefusal = !built?.flcmRefusal && !message.startsWith("flcm");
   const refusal = isFigmaRefusal ? "Figma refused a write on " : "failed mid-apply on ";
   const instanceHost = isFigmaRefusal ? instance : null;
   const instanceNote = instanceHost
     ? " The target lives inside instance " + JSON.stringify(instanceHost.name) + " (id " + JSON.stringify(instanceHost.id) +
       ") — Figma restricts what can be changed on an instance's children; edit the component it comes from (flcm never auto-detaches)."
     : "";
-  return new Error(
+  return new MutatingVerbError(
     "flcm." + verb + ": " + refusal + who + " — " + message + ". " +
       "This call rolled back to its entry seal (the canvas holds none of it); the " + committedVerbCount() +
       " mutating call(s) before it in this run committed and stand." + instanceNote,
