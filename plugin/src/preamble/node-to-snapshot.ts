@@ -588,8 +588,14 @@ function decodeScenePaint(paint: ScenePaint): SnapshotPaint | undefined {
         ref: paint.imageHash ?? undefined,
         // The plugin's CROP is REST's STRETCH — same rendering, two wire words.
         scaleMode: paint.scaleMode === "CROP" ? "STRETCH" : paint.scaleMode,
-        scalingFactor: paint.scalingFactor ?? undefined,
-        crop: paint.imageTransform ? toSnapshotTransform(paint.imageTransform) : undefined,
+        // The plugin stamps `scalingFactor: 1` and an identity `imageTransform` on every image
+        // paint; REST carries each only for the mode it applies to (TILE, STRETCH). Passing the
+        // stamps through would emit a scale and a crop the paint doesn't have.
+        scalingFactor: paint.scaleMode === "TILE" ? (paint.scalingFactor ?? undefined) : undefined,
+        crop:
+          paint.scaleMode === "CROP" && paint.imageTransform
+            ? toSnapshotTransform(paint.imageTransform)
+            : undefined,
         opacity: paint.opacity,
         blendMode: paint.blendMode,
         rotation: paint.rotation,

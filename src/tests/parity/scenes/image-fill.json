@@ -20,6 +20,11 @@
           "type": "IMAGE",
           "imageHash": "abc123def456",
           "scaleMode": "FILL",
+          "scalingFactor": 1,
+          "imageTransform": [
+            [1, 0, 0],
+            [0, 1, 0]
+          ],
           "visible": true
         }
       ]
@@ -46,6 +51,10 @@
           "imageHash": "tile999",
           "scaleMode": "TILE",
           "scalingFactor": 0.5,
+          "imageTransform": [
+            [1, 0, 0],
+            [0, 1, 0]
+          ],
           "visible": true
         }
       ],
@@ -69,7 +78,8 @@
             {
               "type": "IMAGE",
               "imageHash": "crop555",
-              "scaleMode": "FILL",
+              "scaleMode": "CROP",
+              "scalingFactor": 1,
               "imageTransform": [
                 [1, 0, 0.1],
                 [0, 1, 0.2]
@@ -112,6 +122,11 @@
             "highlights": 0,
             "shadows": -0.15000000596046448
           },
+          "scalingFactor": 1,
+          "imageTransform": [
+            [1, 0, 0],
+            [0, 1, 0]
+          ],
           "visible": true
         },
         {
@@ -119,6 +134,35 @@
           "color": { "r": 1, "g": 0, "b": 0 },
           "opacity": 1,
           "blendMode": "MULTIPLY",
+          "visible": true
+        }
+      ]
+    },
+    {
+      "id": "5:5",
+      "name": "Uncropped",
+      "type": "RECTANGLE",
+      "visible": true,
+      "absoluteBoundingBox": {
+        "x": 240,
+        "y": 0,
+        "width": 100,
+        "height": 100
+      },
+      "width": 100,
+      "height": 100,
+      "x": 240,
+      "y": 0,
+      "fills": [
+        {
+          "type": "IMAGE",
+          "imageHash": "full888",
+          "scaleMode": "CROP",
+          "scalingFactor": 1,
+          "imageTransform": [
+            [1, 0, 0],
+            [0, 1, 0]
+          ],
           "visible": true
         }
       ]

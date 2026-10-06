@@ -7,7 +7,12 @@ import type {
 import { generateCSSShorthand, isVisible, pixelRound } from "../utils.js";
 
 import { convertColor, flattenSolidFills, formatRGBAColor } from "./style/color.js";
-import { translateScaleMode, handleImageTransform, parsePatternPaint } from "./style/image.js";
+import {
+  translateScaleMode,
+  handleImageTransform,
+  isIdentityTransform,
+  parsePatternPaint,
+} from "./style/image.js";
 import type { SimplifiedImageFill } from "./style/image.js";
 import { convertGradientToCss } from "./style/gradient.js";
 
@@ -223,7 +228,8 @@ export function parsePaint(raw: SnapshotPaint, hasChildren: boolean = false): Si
     // Combine scale mode processing with transform processing if needed
     // Transform processing (cropping) takes precedence over scale mode processing
     let finalProcessing = processing;
-    if (raw.crop) {
+    // An identity crop is a STRETCH whose frame already matches the image — nothing to cut.
+    if (raw.crop && !isIdentityTransform(raw.crop)) {
       const transformProcessing = handleImageTransform(raw.crop);
       finalProcessing = {
         ...processing,

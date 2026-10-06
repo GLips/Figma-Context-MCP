@@ -73,7 +73,7 @@
             "type": "IMAGE",
             "ref": "crop555",
             "gifRef": "gif777",
-            "scaleMode": "FILL",
+            "scaleMode": "STRETCH",
             "crop": [
               [
                 1,
@@ -131,6 +131,42 @@
           "a": 1
         },
         "blendMode": "MULTIPLY",
+        "visible": true
+      }
+    ]
+  },
+  {
+    "id": "5:5",
+    "name": "Uncropped",
+    "type": "RECTANGLE",
+    "visible": true,
+    "absoluteBoundingBox": {
+      "x": 240,
+      "y": 0,
+      "width": 100,
+      "height": 100
+    },
+    "ownSize": {
+      "width": 100,
+      "height": 100
+    },
+    "fills": [
+      {
+        "type": "IMAGE",
+        "ref": "full888",
+        "scaleMode": "STRETCH",
+        "crop": [
+          [
+            1,
+            0,
+            0
+          ],
+          [
+            0,
+            1,
+            0
+          ]
+        ],
         "visible": true
       }
     ]

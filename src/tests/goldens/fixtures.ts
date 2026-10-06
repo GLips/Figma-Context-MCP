@@ -267,7 +267,7 @@ const gradientFill = fileResponse("Gradient Fill", [
 
 // ---------------------------------------------------------------------------
 // 5. Image fills — <img> path (FILL, no children), background path (TILE,
-//    scalingFactor), and a cropped image (imageTransform) + gifRef.
+//    scalingFactor), and a cropped image (STRETCH + imageTransform) + gifRef.
 // ---------------------------------------------------------------------------
 const imageFill = fileResponse("Image Fill", [
   node({
@@ -303,7 +303,7 @@ const imageFill = fileResponse("Image Fill", [
             type: "IMAGE",
             imageRef: "crop555",
             gifRef: "gif777",
-            scaleMode: "FILL",
+            scaleMode: "STRETCH",
             imageTransform: [
               [1, 0, 0.1],
               [0, 1, 0.2],
@@ -336,6 +336,26 @@ const imageFill = fileResponse("Image Fill", [
         type: "SOLID",
         color: { r: 1, g: 0, b: 0, a: 1 },
         blendMode: "MULTIPLY",
+        visible: true,
+      },
+    ],
+  }),
+  // Crop chosen on a frame that already matches the image: an identity
+  // transform, so there is nothing for the downloader to cut.
+  node({
+    id: "5:5",
+    name: "Uncropped",
+    type: "RECTANGLE",
+    absoluteBoundingBox: { x: 240, y: 0, width: 100, height: 100 },
+    fills: [
+      {
+        type: "IMAGE",
+        imageRef: "full888",
+        scaleMode: "STRETCH",
+        imageTransform: [
+          [1, 0, 0],
+          [0, 1, 0],
+        ],
         visible: true,
       },
     ],

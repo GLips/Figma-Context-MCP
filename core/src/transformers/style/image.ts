@@ -187,6 +187,10 @@ function generateTransformHash(transform: SnapshotTransform): string {
   return Math.abs(hash).toString(16).substring(0, 6);
 }
 
+export function isIdentityTransform([[a, b, c], [d, e, f]]: SnapshotTransform): boolean {
+  return a === 1 && b === 0 && c === 0 && d === 0 && e === 1 && f === 0;
+}
+
 /**
  * Handle imageTransform for post-processing (not CSS translation)
  *

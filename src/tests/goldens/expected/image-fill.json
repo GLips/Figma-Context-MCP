@@ -47,8 +47,8 @@
             "type": "IMAGE",
             "imageRef": "crop555",
             "gifRef": "gif777",
-            "scaleMode": "FILL",
-            "objectFit": "cover",
+            "scaleMode": "STRETCH",
+            "objectFit": "fill",
             "isBackground": false,
             "imageDownloadArguments": {
               "needsCropping": true,
@@ -101,6 +101,22 @@
           }
         }
       ]
+    },
+    {
+      "id": "5:5",
+      "name": "Uncropped",
+      "type": "RECTANGLE",
+      "fill": {
+        "type": "IMAGE",
+        "imageRef": "full888",
+        "scaleMode": "STRETCH",
+        "objectFit": "fill",
+        "isBackground": false,
+        "imageDownloadArguments": {
+          "needsCropping": false,
+          "requiresImageDimensions": false
+        }
+      }
     }
   ],
   "components": {},
