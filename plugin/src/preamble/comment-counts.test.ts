@@ -9,7 +9,7 @@ import { render } from "./render.js";
 import { get, find, resolveTarget } from "./read.js";
 
 // Its own file on purpose: counts are memoized per preamble evaluation, i.e. per module instance.
-test("reads carry counts on the node under each pin, fetched once per run", async () => {
+test("reads carry counts on the node under each pin, fetched once per run and reassigned after edits", async () => {
   const figma = createFigmaMock() as { fileKey?: string };
   figma.fileKey = "abc";
   await render({
@@ -46,6 +46,13 @@ test("reads carry counts on the node under each pin, fetched once per run", asyn
     assert.equal(node.children?.find((child) => child.id === card.id)?.comments, 1);
     const [slim] = await find({ key: "card" });
     assert.equal(slim.comments, 1);
+
+    // The run moves the card off the pin: the next read reassigns without another fetch.
+    card.x = 250;
+    card.y = 0;
+    const moved = await get("screen");
+    assert.equal(moved.node.comments, 2);
+    assert.equal(moved.node.children?.find((child) => child.id === card.id)?.comments, undefined);
     assert.deepEqual(calls, [["comments.pins", { fileKey: "abc" }]]);
   } finally {
     delete g.__flcmHost;

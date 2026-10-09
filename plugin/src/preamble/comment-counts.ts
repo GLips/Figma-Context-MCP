@@ -19,12 +19,21 @@ import { isReadableSceneNode, readableChildren } from "./scene-readability.js";
 
 export type CommentCounts = ReadonlyMap<string, number>;
 
-let counts: Promise<CommentCounts> | undefined;
+let pins: Promise<readonly HostCommentPin[]> | undefined;
 
-/** Counts for this run, fetched on first use. Empty, never an error, when comments can't be read. */
-export function readCommentCounts(): Promise<CommentCounts> {
-  counts ??= loadCommentCounts();
-  return counts;
+/**
+ * Counts against the document as it stands now. The pins are fetched once per run; the assignment is
+ * redone on every read, because the run's own edits can move a node out from under a pin.
+ * Empty, never an error, when comments can't be read.
+ */
+export async function readCommentCounts(): Promise<CommentCounts> {
+  pins ??= loadCommentPins();
+  const tally = new Map<string, number>();
+  for (const pin of await pins) {
+    const assigned = await assignPin(pin).catch(() => null);
+    if (assigned) tally.set(assigned, (tally.get(assigned) ?? 0) + 1);
+  }
+  return tally;
 }
 
 // A node a hit-test can't read (orphaned slot content) is treated as invisible: skipped, never fatal.
@@ -32,20 +41,19 @@ const livePinGeometry: CommentPinGeometry<BaseNode> = {
   bounds: (node) => ("absoluteBoundingBox" in node ? node.absoluteBoundingBox : null),
   visible: (node) => isReadableSceneNode(node) && (!("visible" in node) || node.visible),
   clipsContent: (node) => "clipsContent" in node && node.clipsContent,
-  children: (node) => ("children" in node ? (readableChildren<BaseNode>(node) ?? []) : []),
+  children: (node) => {
+    const children = "children" in node ? (readableChildren<BaseNode>(node) ?? []) : [];
+    const reversed =
+      "itemReverseZIndex" in node && node.itemReverseZIndex && node.layoutMode !== "NONE";
+    return reversed ? [...children].reverse() : children;
+  },
 };
 
-async function loadCommentCounts(): Promise<CommentCounts> {
-  const tally = new Map<string, number>();
+async function loadCommentPins(): Promise<readonly HostCommentPin[]> {
   // Only private org plugins get the file key (manifest `enablePrivatePluginApi`); without it, no counts.
   const fileKey = figma.fileKey;
-  if (!fileKey) return tally;
-  const pins = await requestHostCommentPins(fileKey);
-  for (const pin of pins ?? []) {
-    const assigned = await assignPin(pin).catch(() => null);
-    if (assigned) tally.set(assigned, (tally.get(assigned) ?? 0) + 1);
-  }
-  return tally;
+  if (!fileKey) return [];
+  return (await requestHostCommentPins(fileKey)) ?? [];
 }
 
 // The id the thread counts against, or null for a page pin or a deleted anchor. Throws when Figma
@@ -54,8 +62,17 @@ async function assignPin(pin: HostCommentPin): Promise<string | null> {
   const anchor = await figma.getNodeByIdAsync(pin.nodeId);
   if (!anchor || anchor.removed || anchor.type === "PAGE" || anchor.type === "DOCUMENT") return null;
   const box = livePinGeometry.bounds(anchor);
-  const below = box
-    ? hitTestCommentPin(anchor, { x: box.x + pin.x, y: box.y + pin.y }, livePinGeometry)
-    : [];
+  const below =
+    box && ancestorsVisible(anchor)
+      ? hitTestCommentPin(anchor, { x: box.x + pin.x, y: box.y + pin.y }, livePinGeometry)
+      : [];
   return (below[below.length - 1] ?? anchor).id;
+}
+
+// A pin under a hidden ancestor points at nothing on screen; it stays on its anchor.
+function ancestorsVisible(node: BaseNode): boolean {
+  for (let up = node.parent; up && up.type !== "PAGE"; up = up.parent) {
+    if (!livePinGeometry.visible(up)) return false;
+  }
+  return true;
 }

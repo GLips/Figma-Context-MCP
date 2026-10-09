@@ -156,7 +156,16 @@ const restPinGeometry: CommentPinGeometry<FigmaNode> = {
   bounds: (node) => ("absoluteBoundingBox" in node ? (node.absoluteBoundingBox ?? null) : null),
   visible: (node) => node.visible !== false,
   clipsContent: (node) => "clipsContent" in node && node.clipsContent === true,
-  children: (node) => ("children" in node ? node.children : []),
+  children: (node) => {
+    if (!("children" in node)) return [];
+    const reversed =
+      "itemReverseZIndex" in node &&
+      node.itemReverseZIndex === true &&
+      "layoutMode" in node &&
+      node.layoutMode !== undefined &&
+      node.layoutMode !== "NONE";
+    return reversed ? [...node.children].reverse() : node.children;
+  },
 };
 
 interface PlacedThread {
@@ -225,13 +234,14 @@ function locateThreads(threads: readonly CommentThread[], tree: AnchorTree): Pla
       offset: pin.offset,
     };
     const box = restPinGeometry.bounds(anchorNode);
-    const below = box
-      ? hitTestCommentPin(
-          anchorNode,
-          { x: box.x + pin.offset.x, y: box.y + pin.offset.y },
-          restPinGeometry,
-        )
-      : [];
+    const below =
+      box && ancestors.every(restPinGeometry.visible)
+        ? hitTestCommentPin(
+            anchorNode,
+            { x: box.x + pin.offset.x, y: box.y + pin.offset.y },
+            restPinGeometry,
+          )
+        : [];
     const chain = [...ancestors, anchorNode, ...below];
     const assigned = chain[chain.length - 1];
     const assignedPath = [page.name, ...chain.slice(0, -1).map((node) => node.name)].join(

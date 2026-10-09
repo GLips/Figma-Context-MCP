@@ -15,13 +15,19 @@ export interface CommentPinGeometry<N> {
   bounds(node: N): SnapshotRect | null;
   visible(node: N): boolean;
   clipsContent(node: N): boolean;
-  /** Paint order, bottom first — Figma's own child order. */
+  /**
+   * Paint order, bottom first. Usually Figma's child order, but an auto-layout frame with
+   * `itemReverseZIndex` paints its first child on top — the adapter reverses those.
+   */
   children(node: N): readonly N[];
 }
 
 /**
  * The path from just below `anchor` down to the deepest visible node under `point`, or `[]` when no
  * descendant contains it (the anchor itself is the best answer).
+ *
+ * A hidden anchor yields `[]`: nothing under it is on screen to point at. Ancestors above the anchor are
+ * the caller's to check — this contract has no parent link.
  *
  * Overlapping siblings are tried topmost first, and the first subtree with any hit wins — the commenter
  * clicked what they saw. A clipping node's subtree is skipped when the point is outside it; a
@@ -35,6 +41,7 @@ export function hitTestCommentPin<N>(
   point: SnapshotPoint,
   geometry: CommentPinGeometry<N>,
 ): N[] {
+  if (!geometry.visible(anchor)) return [];
   return deepestHit(anchor, point, geometry)?.slice(1) ?? [];
 }
 

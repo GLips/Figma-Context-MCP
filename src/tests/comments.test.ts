@@ -54,6 +54,30 @@ const file = (homeChildren: unknown[]) =>
     },
   }) as unknown as GetFileResponse;
 
+// A hidden frame whose child is visible on its own, and an auto-layout frame that paints its first
+// child on top — both share the point (5, 5) between two children.
+const hiddenFrame = {
+  id: "30:1",
+  name: "Hidden frame",
+  type: "FRAME",
+  visible: false,
+  ...box(1000, 0, 100, 100),
+  children: [{ id: "30:2", name: "Visible child", type: "RECTANGLE", ...box(1000, 0, 50, 50) }],
+};
+const reversedStack = {
+  id: "40:1",
+  name: "Stack",
+  type: "FRAME",
+  layoutMode: "HORIZONTAL",
+  itemReverseZIndex: true,
+  ...box(2000, 0, 100, 100),
+  children: [
+    { id: "40:2", name: "First (on top)", type: "RECTANGLE", ...box(2000, 0, 50, 50) },
+    { id: "40:3", name: "Second", type: "RECTANGLE", ...box(2000, 0, 50, 50) },
+  ],
+};
+const frames = [screen, hiddenFrame, reversedStack];
+
 let clock = 0;
 function comment(id: string, client_meta: unknown, extra: Partial<Comment> = {}): Comment {
   clock++;
@@ -88,7 +112,7 @@ function run(options: Partial<GetFigmaCommentsOptions> = {}, fixture = comments)
     getComments: async () => ({ comments: fixture }),
     getFileSlice: async (_key: string, ids: string[]) => {
       sliceCalls.push(ids);
-      return file(ids.includes("10:1") ? [screen] : []);
+      return file(frames.filter((frame) => ids.includes(frame.id)));
     },
   } as unknown as FigmaService;
   const result = getFigmaComments(figma, "abc", {
@@ -151,4 +175,14 @@ it("since resurfaces a thread by its newest reply; the watermark ignores filters
 it("makes no file calls when no thread survives the filters", async () => {
   const result = await run({}, [comments[5]]);
   expect(result).toMatchObject({ total: 0, threads: [], sliceCalls: [] });
+});
+
+it("leaves a pin on a hidden anchor, and honors an auto-layout frame's reversed paint order", async () => {
+  const fixture = [
+    comment("on-hidden", { node_id: "30:1", node_offset: { x: 5, y: 5 } }),
+    comment("on-stack", { node_id: "40:1", node_offset: { x: 5, y: 5 } }),
+  ];
+  const result = await run({}, fixture);
+  const placed = Object.fromEntries(result.threads!.map((t) => [t.id, t.inferredTarget?.name]));
+  expect(placed).toEqual({ "on-hidden": undefined, "on-stack": "First (on top)" });
 });
