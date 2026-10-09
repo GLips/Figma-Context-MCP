@@ -900,8 +900,6 @@ return session.card.id;
 - **Neither** captures the whole current page.
 - **Scale** (above 0, up to 4; default 1) — detail under ~24px (a 1px stroke, grain, small type) isn't judgeable at 1×, so shoot it at 2–4.
 
-**Done when** the screenshot shows what you meant to build, at a scale where its finest detail is visible.
-
 ### Build a screen from scratch
 
 One render builds the whole tree. A node declared first paints behind its siblings, and `left`/`top` lift it out of the column, which is how the glow sits behind the title. Return the ids you'll use next.
@@ -1012,8 +1010,6 @@ return {
 };
 ```
 
-**Done when** a screenshot of `node` at scale 2 shows the glow behind the title and the card's 1px border.
-
 ### Lay out a grid
 
 Name the columns and give the frame a width: `fr` tracks divide a fixed width. Leave the rows out and they grow to fit the children. A child spans with `gridColumn: "span 2"` and aligns in its cell with `justifySelf`/`alignSelf`.
@@ -1051,8 +1047,6 @@ const grid = await flcm.render({
 return (await flcm.get(grid)).node;
 ```
 
-**Done when** a screenshot shows the banner across both columns and the small tile centred at the bottom of its cell.
-
 ### Copy or move what's already on the canvas
 
 `flcm.get` reads a live subtree as a spec you edit like any object. Keep the ids to move those nodes; drop them, at every depth you want copied, to create new ones. `flcm.clone` is the faithful copy for live state a spec can't express.
@@ -1069,8 +1063,6 @@ const copy = await flcm.append("sidebar", { ...template, name: "Caption copy" })
 const faithful = await flcm.clone(moved, "sidebar");
 return { moved, copy, faithful };
 ```
-
-**Done when** `copy` comes back with new ids, `moved` keeps the ones you read, and a screenshot of the sidebar shows both.
 
 ### Make a component with variants
 
@@ -1137,8 +1129,6 @@ await flcm.render({
 return { set: set.id, label: small.children[1].id };
 ```
 
-**Done when** a screenshot of the set shows both sizes, and the new instance's label reads "Publish".
-
 ### Use a component from the file
 
 Find the component by name and read it first: `get`'s `components` sidecar lists its property names, variant options and sublayer paths. Pick a variant by its axes in `componentProperties`, and change a sublayer by its path in `overrides`.
@@ -1179,8 +1169,6 @@ await flcm.append("toolbar", { ...copy, name: "Save (copy)" });
 return { toolbar: out.id, definitions: Object.keys(components ?? {}) };
 ```
 
-**Done when** a screenshot of the toolbar shows Save and Cancel, with Cancel 120px wide and its overridden layer red.
-
 ### Move the viewport, selection and other document state
 
 The full Figma plugin API is in scope alongside `flcm`. **Author with `flcm`**, the surface that fails loud instead of rendering wrong pixels. **Drop to `figma.*`** for document operations the DSL doesn't cover, like the viewport and selection.
@@ -1193,5 +1181,3 @@ return out.id;
 ```
 
 Raw `figma.*` gives up every guarantee this DSL makes (fills are 0–1 assigned as a new array, fonts load before `characters`, a node is invisible until appended), so use it for plumbing and come back to `flcm` to author.
-
-**Done when** Figma shows the document state you asked for; design changes still go through `flcm` and the screenshot check.

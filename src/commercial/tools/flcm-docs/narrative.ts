@@ -275,9 +275,7 @@ ${screenshotHowTo}
 - **A node id** — any handle's \`.id\`, or an id from a read verb.
 - **A key** — one you authored. Matching no node, or several, fails loud; a failed lookup never falls back to the whole page.
 - **Neither** captures the whole current page.
-- **Scale** (above 0, up to 4; default 1) — detail under ~24px (a 1px stroke, grain, small type) isn't judgeable at 1×, so shoot it at 2–4.
-
-**Done when** the screenshot shows what you meant to build, at a scale where its finest detail is visible.`;
+- **Scale** (above 0, up to 4; default 1) — detail under ~24px (a 1px stroke, grain, small type) isn't judgeable at 1×, so shoot it at 2–4.`;
 
 export const RAW_FIGMA = `The full Figma plugin API is in scope alongside \`flcm\`. **Author with \`flcm\`**, the surface that fails loud instead of rendering wrong pixels. **Drop to \`figma.*\`** for document operations the DSL doesn't cover, like the viewport and selection.
 
@@ -288,9 +286,7 @@ figma.viewport.scrollAndZoomIntoView([live]);
 return out.id;
 \`\`\`
 
-Raw \`figma.*\` gives up every guarantee this DSL makes (fills are 0–1 assigned as a new array, fonts load before \`characters\`, a node is invisible until appended), so use it for plumbing and come back to \`flcm\` to author.
-
-**Done when** Figma shows the document state you asked for; design changes still go through \`flcm\` and the screenshot check.`;
+Raw \`figma.*\` gives up every guarantee this DSL makes (fills are 0–1 assigned as a new array, fonts load before \`characters\`, a node is invisible until appended), so use it for plumbing and come back to \`flcm\` to author.`;
 
 export const PAGES = `Every verb acts on the current page; \`flcm.page\` reads and switches it:
 

@@ -438,10 +438,9 @@ const SECTIONS: Section[] = [
     // Check-what-you-built leads because every other recipe finishes with it.
     body: (channel) =>
       `### Check what you built\n\n${verifyRecipe(channel.screenshotHowTo)}\n\n` +
-      EXAMPLES.map(
-        (ex) =>
-          `### ${ex.title}\n\n${ex.intro}\n\n\`\`\`js\n${ex.code}\n\`\`\`\n\n**Done when** ${ex.doneWhen}`,
-      ).join("\n\n") +
+      EXAMPLES.map((ex) => `### ${ex.title}\n\n${ex.intro}\n\n\`\`\`js\n${ex.code}\n\`\`\``).join(
+        "\n\n",
+      ) +
       `\n\n### Move the viewport, selection and other document state\n\n${RAW_FIGMA}`,
   },
 ];

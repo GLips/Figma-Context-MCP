@@ -17,8 +17,6 @@ export interface Example {
   title: string;
   intro: string;
   code: string;
-  /** The completion criterion: what the agent checks to know the recipe worked. */
-  doneWhen: string;
 }
 
 type ExampleId = keyof typeof EXAMPLE_CODE;
@@ -36,8 +34,6 @@ const EXAMPLE_META: Record<ExampleId, Omit<Example, "code">> = {
       "One render builds the whole tree. A node declared first paints behind its siblings, and " +
       "`left`/`top` lift it out of the column, which is how the glow sits behind the title. Return the " +
       "ids you'll use next.",
-    doneWhen:
-      "a screenshot of `node` at scale 2 shows the glow behind the title and the card's 1px border.",
   },
   grid: {
     title: "Lay out a grid",
@@ -45,8 +41,6 @@ const EXAMPLE_META: Record<ExampleId, Omit<Example, "code">> = {
       "Name the columns and give the frame a width: `fr` tracks divide a fixed width. Leave the rows out " +
       'and they grow to fit the children. A child spans with `gridColumn: "span 2"` and aligns in its ' +
       "cell with `justifySelf`/`alignSelf`.",
-    doneWhen:
-      "a screenshot shows the banner across both columns and the small tile centred at the bottom of its cell.",
   },
   reuse: {
     title: "Copy or move what's already on the canvas",
@@ -54,8 +48,6 @@ const EXAMPLE_META: Record<ExampleId, Omit<Example, "code">> = {
       "`flcm.get` reads a live subtree as a spec you edit like any object. Keep the ids to move those " +
       "nodes; drop them, at every depth you want copied, to create new ones. `flcm.clone` is the " +
       "faithful copy for live state a spec can't express.",
-    doneWhen:
-      "`copy` comes back with new ids, `moved` keeps the ones you read, and a screenshot of the sidebar shows both.",
   },
   makeComponent: {
     title: "Make a component with variants",
@@ -63,8 +55,6 @@ const EXAMPLE_META: Record<ExampleId, Omit<Example, "code">> = {
       "Build the component as a frame whose layers name the property that drives them, promote each size " +
       "with `flcm.component`, then fold them into a set with `flcm.variants`. Defaults come from the bound " +
       "layers, so only the boolean states its own.",
-    doneWhen:
-      'a screenshot of the set shows both sizes, and the new instance\'s label reads "Publish".',
   },
   components: {
     title: "Use a component from the file",
@@ -72,8 +62,6 @@ const EXAMPLE_META: Record<ExampleId, Omit<Example, "code">> = {
       "Find the component by name and read it first: `get`'s `components` sidecar lists its property " +
       "names, variant options and sublayer paths. Pick a variant by its axes in `componentProperties`, and " +
       "change a sublayer by its path in `overrides`.",
-    doneWhen:
-      "a screenshot of the toolbar shows Save and Cancel, with Cancel 120px wide and its overridden layer red.",
   },
 };
 
