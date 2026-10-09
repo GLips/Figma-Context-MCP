@@ -1,0 +1,17 @@
+{
+  "name": "trials",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "trials": "./scripts/trials.ts"
+  },
+  "scripts": {
+    "test": "bun test tests/"
+  },
+  "dependencies": {
+    "citty": "^0.2.2"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3.13"
+  }
+}
