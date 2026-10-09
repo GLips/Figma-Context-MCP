@@ -344,30 +344,11 @@ A single **paint** blends too, with the same names under \`blendMode\` — CSS \
 
 export const FAIL_LOUD_PRINCIPLE = `Accepting CSS is a fidelity promise, so the boundaries are strict. An unsupported value throws a specific error naming it — never a guess, never a silent no-op.`;
 
-// Parked here by the reference re-cut: each row belongs beside the prop it constrains.
-export const FAIL_LOUD_ROWS = `| Situation | Why, and the fix |
-| --- | --- |
-| A color / gradient / effect outside the [CSS subset](#the-css-subset) | Parse error naming the value. |
-| An \`flcm.image\` source that is unfetchable, blocked (private/loopback), outside the server's asset root, oversize, or not an image | Rejected server-side with the reason, never a blank fill. |
-| An \`TEXT\` value that is neither a string nor a runs array, or text carrying read style-ref tokens (\`{ts1}…{/ts1}\`) | Those are read artifacts. Author styled text as markdown or runs. \`**\` in a plain string is markdown — backslash-escape for a literal. |
-| \`![alt](url)\` in a text string, or an unrealizable \`fontStyle\`/\`textDecoration\` (\`"oblique"\`, \`"overline"\`) | Text can't embed an image (\`flcm.image\`); the enum names the supported set. |
-| A duplicate \`key\` in one render | Keys are unique per render. |
-| A node \`type\` outside FRAME/TEXT/RECTANGLE/ELLIPSE/LINE/VECTOR | Those are the only createable types. |
-| A \`scale\` on a path that isn't a positive number | \`scale\` exists so art can't stretch; zero or a negative would collapse or mirror it. (\`width\`/\`height\` beside \`d\` are not a refusal — they're ignored with a warning.) |
-| Unparseable SVG markup, or bad path \`d\` data | Never a silent blank node. |
-| Returning a live Figma node | Return the id string or a handle. |
-| A bad \`pin\` or \`anchor\` value, or \`anchor\` on an axis without its \`left\`/\`top\` | Names the value and the allowed set. |
-| A percent \`width\`/\`height\` on an in-flow child of a parent that hugs that axis, or a percent/\`"fill"\` on the root | A genuine cycle (and the page is unbounded). Give the parent a fixed or \`"fill"\` size, or lift the child out of the flow with \`left\`/\`top\`. |
-| An unknown \`mixBlendMode\` | Names the value and the supported set. |
-| \`layout.justifyContent\`/\`alignItems\` Figma can't realize — \`"space-around"\`, \`"space-evenly"\` | Use \`"space-between"\` or \`gap\`/\`padding\`. Never faked with spacer nodes, which read as content. |
-| \`textStyle.lineClamp\` on a width-hugging text | Truncation needs a width to wrap against. Set \`width\` to a number, \`"fill"\`, or \`"N%"\`. |
-| A layout word the node can't realize — a fixed/percent \`height\` beside \`width: "hug"\` on TEXT, \`"hug"\` with nothing to measure, or container words without \`layout.mode\` | The same rules govern create and edit alike, so a word that wouldn't land names the fix instead. |`;
-
 export const IMAGE_REF_REUSE = `An \`imageRef\` identifies an existing image in this file and can be reused, for example \`{ type: "RECTANGLE", fill: { type: "IMAGE", imageRef } }\`. The read's \`opacity\`, \`rotation\`, \`filters\` and \`blendMode\` on that leaf are authored back as they read — the same words \`flcm.image\` takes as options.`;
 
 export const OUT_OF_V1 = `Variables and prototype interactions are deliberately **out of v1** — read concepts with no create path. They're rejected loudly so you never half-write something unrealizable. (Components have one: \`INSTANCE\` — see the components section.)`;
 
-export const UNRENDERABLE_GLYPHS = `Everything else fails loud. One case can't, because the plugin API exposes no glyph-coverage check: **a character the resolved font can't render draws as nothing** — no glyph, no tofu, no error. This bites emoji and private-use codepoints (SF Symbols) in fonts like Inter. If text renders blank, suspect a missing glyph first and switch to a font that covers it. Treat unusual codepoints with suspicion until you've seen a screenshot.`;
+export const UNRENDERABLE_GLYPHS = `**A character the resolved font can't render draws as nothing**: no glyph, no tofu, no error, because the plugin API has no glyph-coverage check. This bites emoji and private-use codepoints (SF Symbols) in fonts like Inter. If text renders blank, suspect a missing glyph and switch to a font that covers it.`;
 
 export const EDIT_INTRO = `\`await flcm.edit(target, changes)\` applies a partial delta to one existing node and returns its updated handle. The target is anything the read verbs accept: an flcm/key, a node id, \`flcm.id(id)\`, or a handle from \`render\`/\`find\`. The delta uses the **same words as create** — there is no separate edit dialect — and only the fields you pass change; everything else on the node is untouched.`;
 

@@ -220,6 +220,8 @@ Switch **before** you render — a render lands on whatever page is current when
 
 ## Props by node
 
+Props use CSS names and CSS value syntax; the notes say only where flcm differs.
+
 New nodes require type; INSTANCE also requires componentId, and VECTOR requires exactly one of svg or d. An id refers to a live node; type can be omitted for a move. children is an array of plain specs. Other omitted props keep live values or use creation defaults. The verb returns the spec copied with ids.
 
 ### Native spellings accepted
@@ -245,10 +247,10 @@ Aliases normalize silently on every verb; equivalent duplicates agree, conflicti
 | --- | --- | --- |
 | `name` | string | Layer name. |
 | `key` | string | Persistent metadata for find/findOne. Unique within one authored tree; id alone decides live identity. |
-| `opacity` | number (0–1) | Whole-node opacity, 0–1. |
-| `mixBlendMode` | "normal" \| "multiply" \| "screen" \| "overlay" \| "soft-light" \| … (CSS mix-blend-mode) | A CSS mix-blend-mode name. An unknown one fails loud. |
-| `visible` | boolean | Layer visibility. get and find include hidden nodes and their annotations. |
-| `locked` | boolean | Locks the layer against pointer edits in Figma's UI. flcm.edit still writes to it. |
+| `opacity` | number (0–1) |  |
+| `mixBlendMode` | "normal" \| "multiply" \| "screen" \| "overlay" \| "soft-light" \| … (CSS mix-blend-mode) |  |
+| `visible` | boolean | get and find still return hidden nodes, with their annotations. |
+| `locked` | boolean | Locks against pointer edits in Figma's UI; flcm.edit still writes to it. |
 
 ### Size & position (FRAME, TEXT, RECTANGLE, ELLIPSE, VECTOR, INSTANCE)
 
@@ -256,18 +258,18 @@ A LINE sizes along its length alone, its `width`: a number, or `"fill"` under a 
 
 | Prop | Type | Notes |
 | --- | --- | --- |
-| `layout` | { gridColumn?, gridRow?, justifySelf?, alignSelf?, zIndex? } | Placement under an auto-layout parent. Grid accepts cell alignment; flow accepts only the alignSelf "stretch" alias for counter-axis fill. |
-| `minWidth` | number \| "none" | minWidth in positive pixels, effective on auto-layout containers and their direct children. Omitted preserves the bound; "none" clears it. Sizes constrained by bounds succeed with a warnings record containing prop, authored and realized values. |
-| `maxWidth` | number \| "none" | maxWidth in positive pixels, effective on auto-layout containers and their direct children. Omitted preserves the bound; "none" clears it. Sizes constrained by bounds succeed with a warnings record containing prop, authored and realized values. |
-| `minHeight` | number \| "none" | minHeight in positive pixels, effective on auto-layout containers and their direct children. Omitted preserves the bound; "none" clears it. Sizes constrained by bounds succeed with a warnings record containing prop, authored and realized values. |
-| `maxHeight` | number \| "none" | maxHeight in positive pixels, effective on auto-layout containers and their direct children. Omitted preserves the bound; "none" clears it. Sizes constrained by bounds succeed with a warnings record containing prop, authored and realized values. |
-| `width` | number \| "Npx" \| "N%" \| "fill" \| "hug" | A fixed size (a number or "Npx"), "N%" of the parent axis (rejected for in-flow grid children), "fill" (stretch to the parent — rejected on the root), or "hug" (shrink to content — only a row/column/grid container or text can hug). |
-| `height` | number \| "fill" \| "hug" \| "N%" | Same rules as width. On TEXT the height follows the content by default ("hug"); a number or "N%" fixes the text box at that height (alongside a fixed, "fill" or "N%" width), "fill" stretches it inside an auto-layout parent, and "hug" returns it to following the content. |
-| `left` | number \| "Npx" \| "N%" | Offset from the parent's left edge — a number, "Npx", or "N%" of the parent width. Naming `left` or `top` lifts the node out of an auto-layout parent's flow (badges, overlays); under a free-form parent it is simply where the node sits. On a render root it is where on the PAGE the tree lands — without it every root stacks at the origin. Under edit, an axis you don't name keeps its live value. |
-| `top` | number \| "Npx" \| "N%" | Offset from the parent's top edge. Same rules as `left`. |
-| `position` | "absolute" \| "none" | "absolute" lifts the node out of auto-layout flow where it stands (no coordinate needed — `left`/`top` already imply it). Under edit, "none" returns the node to the flow; naming `left`/`top`/`anchor` beside "none" fails loud. |
-| `anchor` | { x?: left/center/right, y?: top/center/bottom } | Which point of the node lands on `left`/`top` (default its top-left corner), so anchor:{ x:"center" } with left:"50%" centres it. Each anchor axis needs its coordinate in the same call. |
-| `pin` | { x?, y? } \| "none" — x: left/center/right/stretch/scale/none, y: top/center/bottom/stretch/scale/none | Constraint override — how the node responds when its parent resizes, replacing the automatic choice. Honored for a child of a free-form parent and for any out-of-flow (`left`/`top`) child; on an in-flow auto-layout child it is stored but inert (fill/hug governs there) until the node leaves the flow. Under edit, "none" restores the default near-edge pin. Never lifts a node out of flow by itself. |
+| `layout` | { gridColumn?, gridRow?, justifySelf?, alignSelf?, zIndex? } | Placement under an auto-layout parent: grid cell words, or alignSelf "stretch" in flow. |
+| `minWidth` | number \| "none" | Positive px. Applies to auto-layout containers and their direct children. "none" clears it. A size the bound clamps still succeeds, with a warning. |
+| `maxWidth` | number \| "none" | Positive px. Applies to auto-layout containers and their direct children. "none" clears it. A size the bound clamps still succeeds, with a warning. |
+| `minHeight` | number \| "none" | Positive px. Applies to auto-layout containers and their direct children. "none" clears it. A size the bound clamps still succeeds, with a warning. |
+| `maxHeight` | number \| "none" | Positive px. Applies to auto-layout containers and their direct children. "none" clears it. A size the bound clamps still succeeds, with a warning. |
+| `width` | number \| "Npx" \| "N%" \| "fill" \| "hug" | "N%" is of the parent's realized size. The root takes neither "N%" nor "fill" (the page is unbounded); "N%" is also refused on in-flow grid children and on an in-flow child whose parent hugs that axis. Only text and a container with a layout mode can "hug". |
+| `height` | number \| "fill" \| "hug" \| "N%" | As width. TEXT hugs its content by default; a fixed or "N%" height needs a width that doesn't hug. |
+| `left` | number \| "Npx" \| "N%" | Naming `left` or `top` takes the node out of an auto-layout flow, like position: absolute. On a render root it is the page position; without it every root stacks at the origin. |
+| `top` | number \| "Npx" \| "N%" | As `left`. |
+| `position` | "absolute" \| "none" | "absolute" leaves the flow where the node stands. Under edit, "none" returns it to the flow and can't sit beside `left`/`top`/`anchor`. |
+| `anchor` | { x?: left/center/right, y?: top/center/bottom } | Which point of the node sits at `left`/`top` (default top-left): anchor: { x: "center" } with left: "50%" centres it. Each axis needs its coordinate in the same call. |
+| `pin` | { x?, y? } \| "none" — x: left/center/right/stretch/scale/none, y: top/center/bottom/stretch/scale/none | Figma constraint: how the node follows a parent resize, overriding the automatic one. Applies under a free-form parent or out of flow; stored but inert on an in-flow child. Under edit, "none" restores the default. Never takes a node out of flow. |
 
 How these sizes resolve is in the layout section.
 
@@ -275,47 +277,47 @@ How these sizes resolve is in the layout section.
 
 | Prop | Type | Notes |
 | --- | --- | --- |
-| `fill` | paint \| paint[] | Background paint: a color/gradient string, flcm.gradient(...) or flcm.image(url). An array is a paint stack, first entry on top — see Paint & gradients. "none" removes it. |
-| `stroke` | paint \| paint[] | Border paint, or a stack of them. "none" removes it. |
-| `strokeWidth` | number \| "Npx" \| CSS shorthand | Border thickness. Frames, rectangles, components and instances also take the CSS border-width shorthand, top/right/bottom/left — "0px 0px 0px 1px" is a left-only border; two values are top+bottom then left+right, three are top, left+right, bottom. Any other node type has one weight for every side, so a multi-value width on it throws. |
-| `strokeAlign` | "inside" \| "outside" \| "center" | Which side of the edge. Default "inside". |
-| `borderRadius` | number \| "Npx" \| CSS shorthand | Corner radius. Frames and rectangles only. Also takes the CSS border-radius shorthand, clockwise from the top-left — "12px 12px 0px 0px" rounds the top two corners; two values are TL/BR then TR/BL, three are TL, TR/BL, BR. Figma corners are circular, so the elliptical "x / y" form throws. |
-| `effects` | effects value | Shadows / blur: flcm.effects({...}) or a CSS-string bag. "none" removes all effects. |
-| `rotation` | number (deg) | Rotation in degrees. Composes AFTER layout sizing: the parent sizes the node (fill/hug/px) on its own axes first, and the node then spins about its centre — so rotating changes which way the box points, never the size it was given. |
-| `layout` | { mode?, gridTemplateColumns?, gridTemplateRows?, gap?, wrap?, padding?, justifyContent?, alignItems?, gridColumn?, gridRow?, justifySelf?, alignSelf?, zIndex? } | Own container settings plus placement under the parent. Creating a grid requires gridTemplateColumns; rows are implicit hug tracks unless named. |
-| `clip` | boolean | Clip children to the frame's bounds. Default false, like CSS overflow: visible. |
+| `fill` | paint \| paint[] | A CSS color or gradient string, flcm.gradient() or flcm.image(), or an array stacked top first (see the values section). "none" removes it. |
+| `stroke` | paint \| paint[] | Border paint, or a stack. "none" removes it. |
+| `strokeWidth` | number \| "Npx" \| CSS shorthand | The per-side shorthand works on frames, rectangles, components and instances only; other types take one value. |
+| `strokeAlign` | "inside" \| "outside" \| "center" | Default "inside", like a CSS border. |
+| `borderRadius` | number \| "Npx" \| CSS shorthand | Frames and rectangles only. Corners are circular, so the elliptical "x / y" form is refused. |
+| `effects` | effects value | flcm.effects() or a bag of CSS strings (see the values section). "none" removes all. |
+| `rotation` | number (deg) | Applied after layout sizing, about the centre: it turns the box, never resizes it. |
+| `layout` | { mode?, gridTemplateColumns?, gridTemplateRows?, gap?, wrap?, padding?, justifyContent?, alignItems?, gridColumn?, gridRow?, justifySelf?, alignSelf?, zIndex? } | Container settings plus placement under the parent; both tables follow. |
+| `clip` | boolean | Default false. |
 
 #### Auto-layout config (the `layout` object)
 
 | Prop | Type | Notes |
 | --- | --- | --- |
-| `gridTemplateColumns` | string | Grid columns, in read form: Npx, Nfr, auto or fit-content(100%) tracks; repeat(N, tracks) and minmax(0, Nfr) expand to native tracks. Reads return expanded tracks. Required when creating a grid — Figma flows row-wise, so the columns are the axis nothing can infer. An fr track divides THIS FRAME's own width, so name that width in the same call — a number, or "fill" under a row/column parent; a hugging width is refused, never guessed. Other axes default to hug. |
-| `gridTemplateRows` | string | Grid rows, with the same track syntax as gridTemplateColumns. Optional: omitted, rows are implicit — hug tracks, one per row the children need at this column count, growing as children are added. Naming rows makes them explicit, on an edit too: the named tracks are what the grid keeps, and it stops growing rows for new children. |
-| `mode` | "row" \| "column" \| "grid" \| "none" | Auto-layout mode. Default "none" = free-form. Creating a grid requires gridTemplateColumns (rows are implicit); edits preserve omitted templates. |
-| `gap` | number \| string | A number, "Npx", or "row-gap column-gap" in px. Unequal gaps require grid or wrapping. |
-| `wrap` | boolean | Wrap children onto new rows. Requires horizontal auto-layout. False disables wrapping; omitted edits preserve it. |
-| `padding` | number \| "12px 16px" \| { x?, y? } \| { top?, right?, bottom?, left? } | A number, the CSS box shorthand ("12px 16px"), { x, y } (x→left+right, y→top+bottom), or per-edge. Edge values take a number or "Npx". |
-| `justifyContent` | "flex-start" \| "flex-end" \| "center" \| "space-between" | CSS justify-content, main axis. Figma has no space-around/space-evenly — those fail loud. |
-| `alignItems` | "flex-start" \| "flex-end" \| "center" \| "stretch" \| "baseline" | CSS align-items, cross axis. "baseline" requires a horizontal row. "stretch" stretches every auto-sized child (a fixed cross-axis size wins); one child alone stretches via width/height "fill". |
+| `gridTemplateColumns` | string | Tracks are Npx, Nfr, auto or fit-content(100%); repeat() and minmax(0, Nfr) expand to native tracks, which is what reads return. Required to create a grid. Fr tracks divide this frame's own width, so give it a number or "fill" in the same call; a hugging width is refused. |
+| `gridTemplateRows` | string | Same track syntax. Omitted, rows are implicit hug tracks that grow as children are added; named rows are fixed and stop growing. |
+| `mode` | "row" \| "column" \| "grid" \| "none" | "row" and "column" are flex directions, "grid" is CSS grid, "none" (default) is free-form. The other container words need a mode. A new grid needs gridTemplateColumns. |
+| `gap` | number \| string | Unequal "row-gap column-gap" needs grid or wrap. |
+| `wrap` | boolean | Rows only. |
+| `padding` | number \| "12px 16px" \| { x?, y? } \| { top?, right?, bottom?, left? } | Also { x, y } (x = left and right, y = top and bottom) or per-edge. |
+| `justifyContent` | "flex-start" \| "flex-end" \| "center" \| "space-between" | Figma has no space-around or space-evenly: use space-between, or gap and padding, never spacer nodes. |
+| `alignItems` | "flex-start" \| "flex-end" \| "center" \| "stretch" \| "baseline" | "baseline" needs a row. "stretch" leaves a fixed cross-axis size alone. |
 
 #### Placement under a parent (in the same `layout` object)
 
 | Prop | Type | Notes |
 | --- | --- | --- |
-| `gridColumn` | string | Grid child column: "N", "span N", or "N / span N". Anchors are 1-based. Omitted placement uses Figma auto-placement. A grid child sizes in px, "fill" (the cell) or "hug"; "N%" is refused because the reference would be the cell, not the frame. |
-| `gridRow` | string | Grid child row: "N", "span N", or "N / span N". Anchors are 1-based. Rows a grid did not name grow to hold the placement. |
-| `justifySelf` | "start" \| "center" \| "end" \| "auto" \| "stretch" | Grid child horizontal cell alignment. "auto" restores Figma alignment; "stretch" is an alias rewritten to width: "fill" (the cell's width), since Figma has no STRETCH alignment. |
-| `alignSelf` | "center" \| "stretch" \| "start" \| "end" \| "auto" | Grid vertical cell alignment: start/end/center/auto, plus "stretch" — an alias rewritten to height: "fill" (the cell's height). Flow children accept only "stretch", the same alias for counter-axis fill. Figma renders no per-child MIN/CENTER/MAX alignment in flow. Set layout.alignItems on the parent for every child, or wrap the child in a fill-sized frame with its own alignItems. |
-| `zIndex` | number | Grid child sibling index, a non-negative integer. Explicit indices reserve sibling slots; unnamed siblings retain relative order in remaining slots. Duplicate or out-of-range indices fail. |
+| `gridColumn` | string | Only "N", "span N" or "N / span N", 1-based. Omitted, Figma auto-places. A grid child sizes in px, "fill" (the cell) or "hug", never "N%". |
+| `gridRow` | string | As gridColumn. Rows the grid did not name grow to hold the placement. |
+| `justifySelf` | "start" \| "center" \| "end" \| "auto" \| "stretch" | Grid children only. "stretch" is rewritten to width: "fill" (Figma has no stretch alignment); "auto" restores Figma's. |
+| `alignSelf` | "center" \| "stretch" \| "start" \| "end" \| "auto" | In a grid, as justifySelf but vertical ("stretch" → height: "fill"). Flow children take only "stretch" (counter-axis fill): Figma has no other per-child alignment, so set the parent's alignItems or wrap the child in a fill-sized frame. |
+| `zIndex` | number | Not stacking order: a grid child's sibling index (a non-negative integer). Named indices reserve slots; the rest keep their relative order. |
 
 ### TEXT — text props
 
 | Prop | Type | Notes |
 | --- | --- | --- |
-| `text` | string \| run[] | The content — a plain string (markdown: **bold**, *italic*, ~~strike~~, [text](url)) or an array of styled runs. Set it on a TEXT spec; under edit it replaces the whole content. |
+| `text` | string \| run[] | A string with markdown (**bold**, *italic*, ~~strike~~, [text](url); backslash-escape a literal *) or an array of styled runs. Read style tokens like {ts1}…{/ts1} are refused. Under edit it replaces the whole content. |
 | `textStyle` | { fontFamily?, fontWeight?, fontSize?, fontStyle?, lineHeight?, letterSpacing?, textDecoration?, textTransform?, fontVariant?, textAlign?, textAlignVertical?, paragraphSpacing?, paragraphIndent?, listSpacing?, hyperlink?, lineClamp? } | The text style base. Runs layer over it. |
-| `fill` | paint \| paint[] | The text's paint, like every other node's. "none" removes it. |
-| `boldWeight` | number (100–900) \| name | What `**bold**` in `text` resolves to. Default 700 — pass back the `boldWeight` a `get` reports and the copy emphasizes like the original. Same spellings as fontWeight. Under edit it only means something beside `text`. |
+| `fill` | paint \| paint[] | The text color. "none" removes it. |
+| `boldWeight` | number (100–900) \| name | What `**bold**` in `text` resolves to. Default 700; pass back the value `get` reports so a copy emphasizes like the original. Under edit it only matters beside `text`. |
 
 `text` is a string or array of styled runs. `fill` is its paint. `boldWeight` says what `**` in `text` resolves to. A fixed `width` makes it wrap (grows in height); otherwise it grows sideways.
 
@@ -324,25 +326,25 @@ How these sizes resolve is in the layout section.
 | Prop | Type | Notes |
 | --- | --- | --- |
 | `fontFamily` | string | An unknown family falls back to Inter. |
-| `fontWeight` | number (100–900) \| name | Snapped to the nearest available style. Numbers 100–900, or CSS names (light, normal, medium, semibold, bold, black, …). |
-| `fontSize` | number | Font size in px. |
-| `fontStyle` | "italic" \| "normal" | CSS font-style, no oblique. Snaps to the family's italic variant. On the base only "italic" means anything; "normal" is a run delta clearing an italic base. |
-| `lineHeight` | number(px) \| "Npx" \| "N%" \| "Nem" \| "auto" | Line height. "auto"/"normal" = the font default. |
-| `letterSpacing` | number(px) \| "Npx" \| "N%" \| "Nem" | Tracking. |
-| `textDecoration` | "underline" \| "line-through" \| "none" | CSS text-decoration-line. On the base "none" means nothing; it is a run delta clearing an inherited decoration. Strikethrough is also inline: ~~text~~. |
-| `textAlign` | "left" \| "center" \| "right" \| "justify" | CSS text-align. |
-| `textAlignVertical` | "top" \| "center" \| "bottom" | Vertical alignment in the text box. Whole-node only, never a run delta. |
-| `textTransform` | "uppercase" \| "lowercase" \| "capitalize" \| "none" | CSS text-transform — re-cases the glyphs, not the characters. "none" restores the original casing and clears a fontVariant (same Figma slot). |
-| `fontVariant` | "small-caps" \| "all-small-caps" | CSS font-variant-caps. Shares one Figma slot with `textTransform`, so naming both fails loud. |
+| `fontWeight` | number (100–900) \| name | Snaps to the nearest style the family has. |
+| `fontSize` | number |  |
+| `fontStyle` | "italic" \| "normal" | No oblique; snaps to the family's italic. "normal" only matters on a run, clearing an italic base. |
+| `lineHeight` | number(px) \| "Npx" \| "N%" \| "Nem" \| "auto" | "auto" is the font default. |
+| `letterSpacing` | number(px) \| "Npx" \| "N%" \| "Nem" |  |
+| `textDecoration` | "underline" \| "line-through" \| "none" | "none" only matters on a run, clearing an inherited decoration. Also inline: ~~text~~. |
+| `textAlign` | "left" \| "center" \| "right" \| "justify" |  |
+| `textAlignVertical` | "top" \| "center" \| "bottom" | Whole node only, never per run. |
+| `textTransform` | "uppercase" \| "lowercase" \| "capitalize" \| "none" | Changes the displayed case, not the characters. Shares a Figma slot with fontVariant, so "none" clears both. |
+| `fontVariant` | "small-caps" \| "all-small-caps" | Shares a slot with textTransform, so naming both is refused. |
 | `paragraphSpacing` | number \| "Npx" | Space between paragraphs. |
 | `paragraphIndent` | number \| "Npx" | First-line indent. |
 | `listSpacing` | number \| "Npx" | Space between list items. |
-| `hyperlink` | string (url) \| { type: "URL", url } | A URL over the whole text node — a url string, or the read form { type: "URL", url }. Links to a NODE are read-only and fail loud. |
-| `lineClamp` | number (≥1) \| "none" | Truncate to at most N lines with an ellipsis. Needs a bounded `width` so the text wraps — on a hugging text it fails loud. `"none"` removes a clamp. |
+| `hyperlink` | string (url) \| { type: "URL", url } | Links the whole text node. Links to a node are read-only. |
+| `lineClamp` | number (≥1) \| "none" | Ellipsis after N lines. Needs a `width` the text wraps against (a number, "fill" or "N%"); a hugging text is refused. "none" removes it. |
 
 #### Unrenderable glyphs
 
-Everything else fails loud. One case can't, because the plugin API exposes no glyph-coverage check: **a character the resolved font can't render draws as nothing** — no glyph, no tofu, no error. This bites emoji and private-use codepoints (SF Symbols) in fonts like Inter. If text renders blank, suspect a missing glyph first and switch to a font that covers it. Treat unusual codepoints with suspicion until you've seen a screenshot.
+**A character the resolved font can't render draws as nothing**: no glyph, no tofu, no error, because the plugin API has no glyph-coverage check. This bites emoji and private-use codepoints (SF Symbols) in fonts like Inter. If text renders blank, suspect a missing glyph and switch to a font that covers it.
 
 ### TEXT — rich text (runs)
 
@@ -373,15 +375,15 @@ Each styled run's delta fields:
 
 | Prop | Type | Notes |
 | --- | --- | --- |
-| `fontWeight` | number (100–900) \| name | Snapped to the nearest available style. Numbers 100–900, or CSS names (light, normal, medium, semibold, bold, black, …). |
-| `fontSize` | number | Font size in px. |
+| `fontWeight` | number (100–900) \| name | Snaps to the nearest style the family has. |
+| `fontSize` | number |  |
 | `fontFamily` | string | An unknown family falls back to Inter. |
-| `fontStyle` | "italic" \| "normal" | CSS font-style, no oblique. Snaps to the family's italic variant. On the base only "italic" means anything; "normal" is a run delta clearing an italic base. |
-| `lineHeight` | number(px) \| "Npx" \| "N%" \| "Nem" \| "auto" | Line height. "auto"/"normal" = the font default. |
-| `letterSpacing` | number(px) \| "Npx" \| "N%" \| "Nem" | Tracking. |
-| `textDecoration` | "underline" \| "line-through" \| "none" | CSS text-decoration-line. On the base "none" means nothing; it is a run delta clearing an inherited decoration. Strikethrough is also inline: ~~text~~. |
-| `textTransform` | "uppercase" \| "lowercase" \| "capitalize" \| "none" | CSS text-transform — re-cases the glyphs, not the characters. "none" restores the original casing and clears a fontVariant (same Figma slot). |
-| `fontVariant` | "small-caps" \| "all-small-caps" | CSS font-variant-caps. Shares one Figma slot with `textTransform`, so naming both fails loud. |
+| `fontStyle` | "italic" \| "normal" | No oblique; snaps to the family's italic. "normal" only matters on a run, clearing an italic base. |
+| `lineHeight` | number(px) \| "Npx" \| "N%" \| "Nem" \| "auto" | "auto" is the font default. |
+| `letterSpacing` | number(px) \| "Npx" \| "N%" \| "Nem" |  |
+| `textDecoration` | "underline" \| "line-through" \| "none" | "none" only matters on a run, clearing an inherited decoration. Also inline: ~~text~~. |
+| `textTransform` | "uppercase" \| "lowercase" \| "capitalize" \| "none" | Changes the displayed case, not the characters. Shares a Figma slot with fontVariant, so "none" clears both. |
+| `fontVariant` | "small-caps" \| "all-small-caps" | Shares a slot with textTransform, so naming both is refused. |
 | `paragraphSpacing` | number \| "Npx" | Space between paragraphs. |
 | `paragraphIndent` | number \| "Npx" | First-line indent. |
 | `listSpacing` | number \| "Npx" | Space between list items. |
@@ -392,13 +394,13 @@ Each styled run's delta fields:
 
 | Prop | Type | Notes |
 | --- | --- | --- |
-| `fill` | paint \| paint[] | Background paint: a color/gradient string, flcm.gradient(...) or flcm.image(url). An array is a paint stack, first entry on top — see Paint & gradients. "none" removes it. |
-| `stroke` | paint \| paint[] | Border paint, or a stack of them. "none" removes it. |
-| `strokeWidth` | number \| "Npx" \| CSS shorthand | Border thickness. Frames, rectangles, components and instances also take the CSS border-width shorthand, top/right/bottom/left — "0px 0px 0px 1px" is a left-only border; two values are top+bottom then left+right, three are top, left+right, bottom. Any other node type has one weight for every side, so a multi-value width on it throws. |
-| `strokeAlign` | "inside" \| "outside" \| "center" | Which side of the edge. Default "inside". |
-| `borderRadius` | number \| "Npx" \| CSS shorthand | Corner radius. Frames and rectangles only. Also takes the CSS border-radius shorthand, clockwise from the top-left — "12px 12px 0px 0px" rounds the top two corners; two values are TL/BR then TR/BL, three are TL, TR/BL, BR. Figma corners are circular, so the elliptical "x / y" form throws. |
-| `effects` | effects value | Shadows / blur: flcm.effects({...}) or a CSS-string bag. "none" removes all effects. |
-| `rotation` | number (deg) | Rotation in degrees. Composes AFTER layout sizing: the parent sizes the node (fill/hug/px) on its own axes first, and the node then spins about its centre — so rotating changes which way the box points, never the size it was given. |
+| `fill` | paint \| paint[] | A CSS color or gradient string, flcm.gradient() or flcm.image(), or an array stacked top first (see the values section). "none" removes it. |
+| `stroke` | paint \| paint[] | Border paint, or a stack. "none" removes it. |
+| `strokeWidth` | number \| "Npx" \| CSS shorthand | The per-side shorthand works on frames, rectangles, components and instances only; other types take one value. |
+| `strokeAlign` | "inside" \| "outside" \| "center" | Default "inside", like a CSS border. |
+| `borderRadius` | number \| "Npx" \| CSS shorthand | Frames and rectangles only. Corners are circular, so the elliptical "x / y" form is refused. |
+| `effects` | effects value | flcm.effects() or a bag of CSS strings (see the values section). "none" removes all. |
+| `rotation` | number (deg) | Applied after layout sizing, about the centre: it turns the box, never resizes it. |
 
 ### ELLIPSE — shape props
 
@@ -406,12 +408,12 @@ Each styled run's delta fields:
 
 | Prop | Type | Notes |
 | --- | --- | --- |
-| `fill` | paint \| paint[] | Background paint: a color/gradient string, flcm.gradient(...) or flcm.image(url). An array is a paint stack, first entry on top — see Paint & gradients. "none" removes it. |
-| `stroke` | paint \| paint[] | Border paint, or a stack of them. "none" removes it. |
-| `strokeWidth` | number \| "Npx" \| CSS shorthand | Border thickness. Frames, rectangles, components and instances also take the CSS border-width shorthand, top/right/bottom/left — "0px 0px 0px 1px" is a left-only border; two values are top+bottom then left+right, three are top, left+right, bottom. Any other node type has one weight for every side, so a multi-value width on it throws. |
-| `strokeAlign` | "inside" \| "outside" \| "center" | Which side of the edge. Default "inside". |
-| `effects` | effects value | Shadows / blur: flcm.effects({...}) or a CSS-string bag. "none" removes all effects. |
-| `rotation` | number (deg) | Rotation in degrees. Composes AFTER layout sizing: the parent sizes the node (fill/hug/px) on its own axes first, and the node then spins about its centre — so rotating changes which way the box points, never the size it was given. |
+| `fill` | paint \| paint[] | A CSS color or gradient string, flcm.gradient() or flcm.image(), or an array stacked top first (see the values section). "none" removes it. |
+| `stroke` | paint \| paint[] | Border paint, or a stack. "none" removes it. |
+| `strokeWidth` | number \| "Npx" \| CSS shorthand | The per-side shorthand works on frames, rectangles, components and instances only; other types take one value. |
+| `strokeAlign` | "inside" \| "outside" \| "center" | Default "inside", like a CSS border. |
+| `effects` | effects value | flcm.effects() or a bag of CSS strings (see the values section). "none" removes all. |
+| `rotation` | number (deg) | Applied after layout sizing, about the centre: it turns the box, never resizes it. |
 
 ### LINE — line props
 
@@ -419,14 +421,14 @@ Each styled run's delta fields:
 | --- | --- | --- |
 | `stroke` | paint \| paint[] | The line's paint. "none" removes it. |
 | `strokeWidth` | number \| "Npx" | Thickness. Defaults to 1. |
-| `width` | number \| "Npx" | The line's length: a number, or "fill" to span an UNROTATED row/column parent (the divider case). A rotated line takes a number — "fill" resolves along the parent's own axis before the rotation turns it across, so the two together are refused; a rule across a row is a RECTANGLE 1px wide with height: "fill". No "hug" and no percent — a line has no content to measure and no cell to measure against. |
-| `rotation` | number (deg) | Degrees — 90° makes a horizontal line vertical. Applied after sizing, so it needs a numeric `width` (see width). |
-| `layout` | { gridColumn?, gridRow?, justifySelf?, alignSelf?, zIndex? } | Placement under an auto-layout parent. Grid accepts cell alignment; flow accepts only the alignSelf "stretch" alias for counter-axis fill. |
-| `left` | number \| "Npx" \| "N%" | Offset from the parent's left edge — a number, "Npx", or "N%" of the parent width. Naming `left` or `top` lifts the node out of an auto-layout parent's flow (badges, overlays); under a free-form parent it is simply where the node sits. On a render root it is where on the PAGE the tree lands — without it every root stacks at the origin. Under edit, an axis you don't name keeps its live value. |
-| `top` | number \| "Npx" \| "N%" | Offset from the parent's top edge. Same rules as `left`. |
-| `position` | "absolute" \| "none" | "absolute" lifts the node out of auto-layout flow where it stands (no coordinate needed — `left`/`top` already imply it). Under edit, "none" returns the node to the flow; naming `left`/`top`/`anchor` beside "none" fails loud. |
-| `anchor` | { x?: left/center/right, y?: top/center/bottom } | Which point of the node lands on `left`/`top` (default its top-left corner), so anchor:{ x:"center" } with left:"50%" centres it. Each anchor axis needs its coordinate in the same call. |
-| `pin` | { x?, y? } \| "none" — x: left/center/right/stretch/scale/none, y: top/center/bottom/stretch/scale/none | Constraint override — how the node responds when its parent resizes, replacing the automatic choice. Honored for a child of a free-form parent and for any out-of-flow (`left`/`top`) child; on an in-flow auto-layout child it is stored but inert (fill/hug governs there) until the node leaves the flow. Under edit, "none" restores the default near-edge pin. Never lifts a node out of flow by itself. |
+| `width` | number \| "Npx" | The length: a number, or "fill" along an unrotated row or column parent. A rotated line needs a number; for a rule across a row use a 1px-wide RECTANGLE with height: "fill". No "hug" or percent. |
+| `rotation` | number (deg) | 90 makes it vertical. Needs a numeric `width`. |
+| `layout` | { gridColumn?, gridRow?, justifySelf?, alignSelf?, zIndex? } | Placement under an auto-layout parent: grid cell words, or alignSelf "stretch" in flow. |
+| `left` | number \| "Npx" \| "N%" | Naming `left` or `top` takes the node out of an auto-layout flow, like position: absolute. On a render root it is the page position; without it every root stacks at the origin. |
+| `top` | number \| "Npx" \| "N%" | As `left`. |
+| `position` | "absolute" \| "none" | "absolute" leaves the flow where the node stands. Under edit, "none" returns it to the flow and can't sit beside `left`/`top`/`anchor`. |
+| `anchor` | { x?: left/center/right, y?: top/center/bottom } | Which point of the node sits at `left`/`top` (default top-left): anchor: { x: "center" } with left: "50%" centres it. Each axis needs its coordinate in the same call. |
+| `pin` | { x?, y? } \| "none" — x: left/center/right/stretch/scale/none, y: top/center/bottom/stretch/scale/none | Figma constraint: how the node follows a parent resize, overriding the automatic one. Applies under a free-form parent or out of flow; stored but inert on an in-flow child. Under edit, "none" restores the default. Never takes a node out of flow. |
 
 ### VECTOR — path props (`d` / `vectorPaths`)
 
@@ -435,14 +437,14 @@ Bare geometry: the node's box is the path's bounding box, so there is no `width`
 | Prop | Type | Notes |
 | --- | --- | --- |
 | `vectorPaths` | Array<{ data: string; windingRule: "NONZERO" \| "EVENODD" \| "NONE" }> | Native path records for multiple paths or even-odd winding. Use exactly one of d, vectorPaths, or svg. |
-| `d` | string | SVG path data, e.g. "M12 2 L22 20 L2 20 Z". Every standard command works (relative/shorthand are normalized); only malformed data fails. The node's box is the path's bounding box — `width`/`height` are ignored here, use `scale`. Use exactly one of d, vectorPaths, or svg. |
-| `scale` | number | Multiplies the path's natural bounding box — `scale: 2` draws the same art twice as big. A single positive number, so the art can never stretch out of proportion. The path form's only size word. |
-| `fill` | paint \| paint[] | Background paint: a color/gradient string, flcm.gradient(...) or flcm.image(url). An array is a paint stack, first entry on top — see Paint & gradients. "none" removes it. |
-| `stroke` | paint \| paint[] | Border paint, or a stack of them. "none" removes it. |
-| `strokeWidth` | number \| "Npx" \| CSS shorthand | Border thickness. Frames, rectangles, components and instances also take the CSS border-width shorthand, top/right/bottom/left — "0px 0px 0px 1px" is a left-only border; two values are top+bottom then left+right, three are top, left+right, bottom. Any other node type has one weight for every side, so a multi-value width on it throws. |
-| `strokeAlign` | "inside" \| "outside" \| "center" | Which side of the edge. Default "inside". |
-| `effects` | effects value | Shadows / blur: flcm.effects({...}) or a CSS-string bag. "none" removes all effects. |
-| `rotation` | number (deg) | Rotation in degrees. Composes AFTER layout sizing: the parent sizes the node (fill/hug/px) on its own axes first, and the node then spins about its centre — so rotating changes which way the box points, never the size it was given. |
+| `d` | string | SVG path data; relative and shorthand commands are normalized. The box is the path's bounding box: `width`/`height` are ignored with a warning, so use `scale`. Use exactly one of d, vectorPaths or svg. |
+| `scale` | number | Multiplies the natural bounding box. One positive number, so the art keeps its proportions; the path form's only size word. |
+| `fill` | paint \| paint[] | A CSS color or gradient string, flcm.gradient() or flcm.image(), or an array stacked top first (see the values section). "none" removes it. |
+| `stroke` | paint \| paint[] | Border paint, or a stack. "none" removes it. |
+| `strokeWidth` | number \| "Npx" \| CSS shorthand | The per-side shorthand works on frames, rectangles, components and instances only; other types take one value. |
+| `strokeAlign` | "inside" \| "outside" \| "center" | Default "inside", like a CSS border. |
+| `effects` | effects value | flcm.effects() or a bag of CSS strings (see the values section). "none" removes all. |
+| `rotation` | number (deg) | Applied after layout sizing, about the centre: it turns the box, never resizes it. |
 
 ### VECTOR — svg props (`svg`)
 
@@ -463,28 +465,6 @@ A canvas of art, so it takes the shared and size/position props too. These two r
 | `exposed` | boolean | Expose this nested instance's existing controls in the enclosing instance panel. Writable only inside a component definition; false clears it. |
 | `componentProperties` | { [name]: string \| boolean \| component target } | Values by bare name (no `#id` suffix), as `get` reports them: a variant axis, a boolean, a text, or a component target for an instance_swap. A slot has no value here — its content is `children` under `overrides`. |
 | `overrides` | { [path]: delta } | Sublayer deltas keyed by component-relative path as `get` keys them (`"11:9"`, or `"11:9;11:14"` inside a nested instance), each in that sublayer's edit vocabulary; at a SLOT's path the delta also takes `children`. |
-
-### Constraints — to be distributed
-
-Each of these throws a specific error naming the offending value:
-
-| Situation | Why, and the fix |
-| --- | --- |
-| A color / gradient / effect outside the [CSS subset](#the-css-subset) | Parse error naming the value. |
-| An `flcm.image` source that is unfetchable, blocked (private/loopback), outside the server's asset root, oversize, or not an image | Rejected server-side with the reason, never a blank fill. |
-| An `TEXT` value that is neither a string nor a runs array, or text carrying read style-ref tokens (`{ts1}…{/ts1}`) | Those are read artifacts. Author styled text as markdown or runs. `**` in a plain string is markdown — backslash-escape for a literal. |
-| `![alt](url)` in a text string, or an unrealizable `fontStyle`/`textDecoration` (`"oblique"`, `"overline"`) | Text can't embed an image (`flcm.image`); the enum names the supported set. |
-| A duplicate `key` in one render | Keys are unique per render. |
-| A node `type` outside FRAME/TEXT/RECTANGLE/ELLIPSE/LINE/VECTOR | Those are the only createable types. |
-| A `scale` on a path that isn't a positive number | `scale` exists so art can't stretch; zero or a negative would collapse or mirror it. (`width`/`height` beside `d` are not a refusal — they're ignored with a warning.) |
-| Unparseable SVG markup, or bad path `d` data | Never a silent blank node. |
-| Returning a live Figma node | Return the id string or a handle. |
-| A bad `pin` or `anchor` value, or `anchor` on an axis without its `left`/`top` | Names the value and the allowed set. |
-| A percent `width`/`height` on an in-flow child of a parent that hugs that axis, or a percent/`"fill"` on the root | A genuine cycle (and the page is unbounded). Give the parent a fixed or `"fill"` size, or lift the child out of the flow with `left`/`top`. |
-| An unknown `mixBlendMode` | Names the value and the supported set. |
-| `layout.justifyContent`/`alignItems` Figma can't realize — `"space-around"`, `"space-evenly"` | Use `"space-between"` or `gap`/`padding`. Never faked with spacer nodes, which read as content. |
-| `textStyle.lineClamp` on a width-hugging text | Truncation needs a width to wrap against. Set `width` to a number, `"fill"`, or `"N%"`. |
-| A layout word the node can't realize — a fixed/percent `height` beside `width: "hug"` on TEXT, `"hug"` with nothing to measure, or container words without `layout.mode` | The same rules govern create and edit alike, so a word that wouldn't land names the fix instead. |
 
 ## Annotations
 
@@ -707,33 +687,33 @@ An id-bearing VECTOR accepts d or vectorPaths as a geometry edit and preserves i
 | --- | --- | --- |
 | `annotations` | { text?: string; category?: string; properties?: string[] }[] | Native annotations. Omitted leaves annotations untouched; a supplied array replaces the whole collection; [] clears every one. |
 | `name` | string | Layer name. |
-| `opacity` | number (0–1) | Whole-node opacity, 0–1. |
-| `mixBlendMode` | "normal" \| "multiply" \| "screen" \| "overlay" \| "soft-light" \| … (CSS mix-blend-mode) | A CSS mix-blend-mode name. An unknown one fails loud. |
-| `visible` | boolean | Layer visibility. get and find include hidden nodes and their annotations. |
-| `locked` | boolean | Locks the layer against pointer edits in Figma's UI. flcm.edit still writes to it. |
-| `fill` | paint \| paint[] | Background paint: a color/gradient string, flcm.gradient(...) or flcm.image(url). An array is a paint stack, first entry on top — see Paint & gradients. "none" removes it. |
-| `stroke` | paint \| paint[] | Border paint, or a stack of them. "none" removes it. |
-| `strokeWidth` | number \| "Npx" \| CSS shorthand | Border thickness. Frames, rectangles, components and instances also take the CSS border-width shorthand, top/right/bottom/left — "0px 0px 0px 1px" is a left-only border; two values are top+bottom then left+right, three are top, left+right, bottom. Any other node type has one weight for every side, so a multi-value width on it throws. |
-| `strokeAlign` | "inside" \| "outside" \| "center" | Which side of the edge. Default "inside". |
-| `borderRadius` | number \| "Npx" \| CSS shorthand | Corner radius. Frames and rectangles only. Also takes the CSS border-radius shorthand, clockwise from the top-left — "12px 12px 0px 0px" rounds the top two corners; two values are TL/BR then TR/BL, three are TL, TR/BL, BR. Figma corners are circular, so the elliptical "x / y" form throws. |
-| `effects` | effects value | Shadows / blur: flcm.effects({...}) or a CSS-string bag. "none" removes all effects. |
-| `rotation` | number (deg) | Rotation in degrees. Composes AFTER layout sizing: the parent sizes the node (fill/hug/px) on its own axes first, and the node then spins about its centre — so rotating changes which way the box points, never the size it was given. |
-| `clip` | boolean | Clip children to the frame's bounds. Default false, like CSS overflow: visible. |
-| `minWidth` | number \| "none" | minWidth in positive pixels, effective on auto-layout containers and their direct children. Omitted preserves the bound; "none" clears it. Sizes constrained by bounds succeed with a warnings record containing prop, authored and realized values. |
-| `maxWidth` | number \| "none" | maxWidth in positive pixels, effective on auto-layout containers and their direct children. Omitted preserves the bound; "none" clears it. Sizes constrained by bounds succeed with a warnings record containing prop, authored and realized values. |
-| `minHeight` | number \| "none" | minHeight in positive pixels, effective on auto-layout containers and their direct children. Omitted preserves the bound; "none" clears it. Sizes constrained by bounds succeed with a warnings record containing prop, authored and realized values. |
-| `maxHeight` | number \| "none" | maxHeight in positive pixels, effective on auto-layout containers and their direct children. Omitted preserves the bound; "none" clears it. Sizes constrained by bounds succeed with a warnings record containing prop, authored and realized values. |
-| `width` | number \| "Npx" \| "N%" \| "fill" \| "hug" | A fixed size (a number or "Npx"), "N%" of the parent axis (rejected for in-flow grid children), "fill" (stretch to the parent — rejected on the root), or "hug" (shrink to content — only a row/column/grid container or text can hug). |
-| `height` | number \| "fill" \| "hug" \| "N%" | Same rules as width. On TEXT the height follows the content by default ("hug"); a number or "N%" fixes the text box at that height (alongside a fixed, "fill" or "N%" width), "fill" stretches it inside an auto-layout parent, and "hug" returns it to following the content. |
-| `layout` | { mode?, gridTemplateColumns?, gridTemplateRows?, gap?, wrap?, padding?, justifyContent?, alignItems?, gridColumn?, gridRow?, justifySelf?, alignSelf?, zIndex? } | Own container settings plus placement under the parent. Creating a grid requires gridTemplateColumns; rows are implicit hug tracks unless named. |
-| `left` | number \| "Npx" \| "N%" | Offset from the parent's left edge — a number, "Npx", or "N%" of the parent width. Naming `left` or `top` lifts the node out of an auto-layout parent's flow (badges, overlays); under a free-form parent it is simply where the node sits. On a render root it is where on the PAGE the tree lands — without it every root stacks at the origin. Under edit, an axis you don't name keeps its live value. |
-| `top` | number \| "Npx" \| "N%" | Offset from the parent's top edge. Same rules as `left`. |
-| `position` | "absolute" \| "none" | "absolute" lifts the node out of auto-layout flow where it stands (no coordinate needed — `left`/`top` already imply it). Under edit, "none" returns the node to the flow; naming `left`/`top`/`anchor` beside "none" fails loud. |
-| `anchor` | { x?: left/center/right, y?: top/center/bottom } | Which point of the node lands on `left`/`top` (default its top-left corner), so anchor:{ x:"center" } with left:"50%" centres it. Each anchor axis needs its coordinate in the same call. |
-| `pin` | { x?, y? } \| "none" — x: left/center/right/stretch/scale/none, y: top/center/bottom/stretch/scale/none | Constraint override — how the node responds when its parent resizes, replacing the automatic choice. Honored for a child of a free-form parent and for any out-of-flow (`left`/`top`) child; on an in-flow auto-layout child it is stored but inert (fill/hug governs there) until the node leaves the flow. Under edit, "none" restores the default near-edge pin. Never lifts a node out of flow by itself. |
-| `text` | string \| run[] | The content — a plain string (markdown: **bold**, *italic*, ~~strike~~, [text](url)) or an array of styled runs. Set it on a TEXT spec; under edit it replaces the whole content. |
+| `opacity` | number (0–1) |  |
+| `mixBlendMode` | "normal" \| "multiply" \| "screen" \| "overlay" \| "soft-light" \| … (CSS mix-blend-mode) |  |
+| `visible` | boolean | get and find still return hidden nodes, with their annotations. |
+| `locked` | boolean | Locks against pointer edits in Figma's UI; flcm.edit still writes to it. |
+| `fill` | paint \| paint[] | A CSS color or gradient string, flcm.gradient() or flcm.image(), or an array stacked top first (see the values section). "none" removes it. |
+| `stroke` | paint \| paint[] | Border paint, or a stack. "none" removes it. |
+| `strokeWidth` | number \| "Npx" \| CSS shorthand | The per-side shorthand works on frames, rectangles, components and instances only; other types take one value. |
+| `strokeAlign` | "inside" \| "outside" \| "center" | Default "inside", like a CSS border. |
+| `borderRadius` | number \| "Npx" \| CSS shorthand | Frames and rectangles only. Corners are circular, so the elliptical "x / y" form is refused. |
+| `effects` | effects value | flcm.effects() or a bag of CSS strings (see the values section). "none" removes all. |
+| `rotation` | number (deg) | Applied after layout sizing, about the centre: it turns the box, never resizes it. |
+| `clip` | boolean | Default false. |
+| `minWidth` | number \| "none" | Positive px. Applies to auto-layout containers and their direct children. "none" clears it. A size the bound clamps still succeeds, with a warning. |
+| `maxWidth` | number \| "none" | Positive px. Applies to auto-layout containers and their direct children. "none" clears it. A size the bound clamps still succeeds, with a warning. |
+| `minHeight` | number \| "none" | Positive px. Applies to auto-layout containers and their direct children. "none" clears it. A size the bound clamps still succeeds, with a warning. |
+| `maxHeight` | number \| "none" | Positive px. Applies to auto-layout containers and their direct children. "none" clears it. A size the bound clamps still succeeds, with a warning. |
+| `width` | number \| "Npx" \| "N%" \| "fill" \| "hug" | "N%" is of the parent's realized size. The root takes neither "N%" nor "fill" (the page is unbounded); "N%" is also refused on in-flow grid children and on an in-flow child whose parent hugs that axis. Only text and a container with a layout mode can "hug". |
+| `height` | number \| "fill" \| "hug" \| "N%" | As width. TEXT hugs its content by default; a fixed or "N%" height needs a width that doesn't hug. |
+| `layout` | { mode?, gridTemplateColumns?, gridTemplateRows?, gap?, wrap?, padding?, justifyContent?, alignItems?, gridColumn?, gridRow?, justifySelf?, alignSelf?, zIndex? } | Container settings plus placement under the parent; both tables follow. |
+| `left` | number \| "Npx" \| "N%" | Naming `left` or `top` takes the node out of an auto-layout flow, like position: absolute. On a render root it is the page position; without it every root stacks at the origin. |
+| `top` | number \| "Npx" \| "N%" | As `left`. |
+| `position` | "absolute" \| "none" | "absolute" leaves the flow where the node stands. Under edit, "none" returns it to the flow and can't sit beside `left`/`top`/`anchor`. |
+| `anchor` | { x?: left/center/right, y?: top/center/bottom } | Which point of the node sits at `left`/`top` (default top-left): anchor: { x: "center" } with left: "50%" centres it. Each axis needs its coordinate in the same call. |
+| `pin` | { x?, y? } \| "none" — x: left/center/right/stretch/scale/none, y: top/center/bottom/stretch/scale/none | Figma constraint: how the node follows a parent resize, overriding the automatic one. Applies under a free-form parent or out of flow; stored but inert on an in-flow child. Under edit, "none" restores the default. Never takes a node out of flow. |
+| `text` | string \| run[] | A string with markdown (**bold**, *italic*, ~~strike~~, [text](url); backslash-escape a literal *) or an array of styled runs. Read style tokens like {ts1}…{/ts1} are refused. Under edit it replaces the whole content. |
 | `textStyle` | { fontFamily?, fontWeight?, fontSize?, fontStyle?, lineHeight?, letterSpacing?, textDecoration?, textTransform?, fontVariant?, textAlign?, textAlignVertical?, paragraphSpacing?, paragraphIndent?, listSpacing?, hyperlink?, lineClamp? } | The text style base. Runs layer over it. |
-| `boldWeight` | number (100–900) \| name | What `**bold**` in `text` resolves to. Default 700 — pass back the `boldWeight` a `get` reports and the copy emphasizes like the original. Same spellings as fontWeight. Under edit it only means something beside `text`. |
+| `boldWeight` | number (100–900) \| name | What `**bold**` in `text` resolves to. Default 700; pass back the value `get` reports so a copy emphasizes like the original. Under edit it only matters beside `text`. |
 | `exposed` | boolean | Expose this nested instance's existing controls in the enclosing instance panel. Writable only inside a component definition; false clears it. |
 | `componentProperties` | { [name]: string \| boolean \| component target } | Values by bare name (no `#id` suffix), as `get` reports them: a variant axis, a boolean, a text, or a component target for an instance_swap. A slot has no value here — its content is `children` under `overrides`. |
 | `overrides` | { [path]: delta } | Sublayer deltas keyed by component-relative path as `get` keys them (`"11:9"`, or `"11:9;11:14"` inside a nested instance), each in that sublayer's edit vocabulary; at a SLOT's path the delta also takes `children`. |

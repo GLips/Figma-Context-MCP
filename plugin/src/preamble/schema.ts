@@ -116,14 +116,14 @@ const ANNOTATION_FIELDS = {
 const SHARED_FIELDS = {
   name: prop(z.string(), "Layer name."),
   key: prop(z.string(), "Persistent metadata for find/findOne. Unique within one authored tree; id alone decides live identity."),
-  opacity: prop(z.number(), "Whole-node opacity, 0–1.", "number (0–1)"),
+  opacity: prop(z.number(), "", "number (0–1)"),
   mixBlendMode: prop(
     z.string(),
-    "A CSS mix-blend-mode name. An unknown one fails loud.",
+    "",
     '"normal" | "multiply" | "screen" | "overlay" | "soft-light" | … (CSS mix-blend-mode)',
   ),
-  visible: prop(z.boolean(), "Layer visibility. get and find include hidden nodes and their annotations."),
-  locked: prop(z.boolean(), "Locks the layer against pointer edits in Figma's UI. flcm.edit still writes to it."),
+  visible: prop(z.boolean(), "get and find still return hidden nodes, with their annotations."),
+  locked: prop(z.boolean(), "Locks against pointer edits in Figma's UI; flcm.edit still writes to it."),
 };
 
 // Native aliases describe the same authored values; normalization removes them before compilation.
@@ -151,55 +151,59 @@ const GRID_CONTAINER_ALIASES = {
 // Leaves take only child fields; frame-like types compose both groups. Parent mode decides cell vs flow.
 const CHILD_LAYOUT_FIELDS = {
   ...GRID_CHILD_ALIASES,
-  gridColumn: prop(z.string(), 'Grid child column: "N", "span N", or "N / span N". Anchors are 1-based. Omitted placement uses Figma auto-placement. A grid child sizes in px, "fill" (the cell) or "hug"; "N%" is refused because the reference would be the cell, not the frame.'),
-  gridRow: prop(z.string(), 'Grid child row: "N", "span N", or "N / span N". Anchors are 1-based. Rows a grid did not name grow to hold the placement.'),
-  justifySelf: prop(z.enum(["start", "center", "end", "auto", "stretch"]), 'Grid child horizontal cell alignment. "auto" restores Figma alignment; "stretch" is an alias rewritten to width: "fill" (the cell\'s width), since Figma has no STRETCH alignment.'),
-  alignSelf: prop(z.enum(["center", "stretch", "start", "end", "auto"]), 'Grid vertical cell alignment: start/end/center/auto, plus "stretch" — an alias rewritten to height: "fill" (the cell\'s height). Flow children accept only "stretch", the same alias for counter-axis fill. Figma renders no per-child MIN/CENTER/MAX alignment in flow. Set layout.alignItems on the parent for every child, or wrap the child in a fill-sized frame with its own alignItems.'),
-  zIndex: prop(z.number(), 'Grid child sibling index, a non-negative integer. Explicit indices reserve sibling slots; unnamed siblings retain relative order in remaining slots. Duplicate or out-of-range indices fail.'),
+  gridColumn: prop(z.string(), 'Only "N", "span N" or "N / span N", 1-based. Omitted, Figma auto-places. A grid child sizes in px, "fill" (the cell) or "hug", never "N%".'),
+  gridRow: prop(z.string(), 'As gridColumn. Rows the grid did not name grow to hold the placement.'),
+  justifySelf: prop(z.enum(["start", "center", "end", "auto", "stretch"]), 'Grid children only. "stretch" is rewritten to width: "fill" (Figma has no stretch alignment); "auto" restores Figma\'s.'),
+  alignSelf: prop(z.enum(["center", "stretch", "start", "end", "auto"]), 'In a grid, as justifySelf but vertical ("stretch" → height: "fill"). Flow children take only "stretch" (counter-axis fill): Figma has no other per-child alignment, so set the parent\'s alignItems or wrap the child in a fill-sized frame.'),
+  zIndex: prop(z.number(), 'Not stacking order: a grid child\'s sibling index (a non-negative integer). Named indices reserve slots; the rest keep their relative order.'),
 };
 
 const CONTAINER_LAYOUT_FIELDS = {
   ...GRID_CONTAINER_ALIASES,
-  gridTemplateColumns: prop(z.string(), "Grid columns, in read form: Npx, Nfr, auto or fit-content(100%) tracks; repeat(N, tracks) and minmax(0, Nfr) expand to native tracks. Reads return expanded tracks. Required when creating a grid — Figma flows row-wise, so the columns are the axis nothing can infer. An fr track divides THIS FRAME's own width, so name that width in the same call — a number, or \"fill\" under a row/column parent; a hugging width is refused, never guessed. Other axes default to hug."),
-  gridTemplateRows: prop(z.string(), 'Grid rows, with the same track syntax as gridTemplateColumns. Optional: omitted, rows are implicit — hug tracks, one per row the children need at this column count, growing as children are added. Naming rows makes them explicit, on an edit too: the named tracks are what the grid keeps, and it stops growing rows for new children.'),
-  mode: prop(z.enum(["row", "column", "grid", "none"]), 'Auto-layout mode. Default "none" = free-form. Creating a grid requires gridTemplateColumns (rows are implicit); edits preserve omitted templates.'),
-  gap: prop(z.union([z.number(), z.string()]), 'A number, "Npx", or "row-gap column-gap" in px. Unequal gaps require grid or wrapping.'),
-  wrap: prop(z.boolean(), "Wrap children onto new rows. Requires horizontal auto-layout. False disables wrapping; omitted edits preserve it."),
+  gridTemplateColumns: prop(z.string(), "Tracks are Npx, Nfr, auto or fit-content(100%); repeat() and minmax(0, Nfr) expand to native tracks, which is what reads return. Required to create a grid. Fr tracks divide this frame's own width, so give it a number or \"fill\" in the same call; a hugging width is refused."),
+  gridTemplateRows: prop(z.string(), 'Same track syntax. Omitted, rows are implicit hug tracks that grow as children are added; named rows are fixed and stop growing.'),
+  mode: prop(z.enum(["row", "column", "grid", "none"]), '"row" and "column" are flex directions, "grid" is CSS grid, "none" (default) is free-form. The other container words need a mode. A new grid needs gridTemplateColumns.'),
+  gap: prop(z.union([z.number(), z.string()]), 'Unequal "row-gap column-gap" needs grid or wrap.'),
+  wrap: prop(z.boolean(), "Rows only."),
   padding: prop(
     z.custom<PadInput>(),
-    'A number, the CSS box shorthand ("12px 16px"), { x, y } (x→left+right, y→top+bottom), or per-edge. Edge values take a number or "Npx".',
+    'Also { x, y } (x = left and right, y = top and bottom) or per-edge.',
     'number | "12px 16px" | { x?, y? } | { top?, right?, bottom?, left? }',
   ),
   justifyContent: prop(
     z.enum(["flex-start", "flex-end", "center", "space-between"]),
-    'CSS justify-content, main axis. Figma has no space-around/space-evenly — those fail loud.',
+    'Figma has no space-around or space-evenly: use space-between, or gap and padding, never spacer nodes.',
   ),
   alignItems: prop(
     z.enum(["flex-start", "flex-end", "center", "stretch", "baseline"]),
-    'CSS align-items, cross axis. "baseline" requires a horizontal row. "stretch" stretches every auto-sized child (a fixed cross-axis size wins); one child alone stretches via width/height "fill".',
+    '"baseline" needs a row. "stretch" leaves a fixed cross-axis size alone.',
   ),
 };
 
 const LAYOUT_FIELDS = { ...CONTAINER_LAYOUT_FIELDS, ...CHILD_LAYOUT_FIELDS };
 
+// One note for all four bounds: they differ only in axis and direction.
+const SIZE_BOUND_NOTE =
+  'Positive px. Applies to auto-layout containers and their direct children. "none" clears it. A size the bound clamps still succeeds, with a warning.';
+
 const SIZE_FIELDS = {
   ...GRID_CHILD_ALIASES,
-  layout: prop(z.object(CHILD_LAYOUT_FIELDS), 'Placement under an auto-layout parent. Grid accepts cell alignment; flow accepts only the alignSelf "stretch" alias for counter-axis fill.', '{ gridColumn?, gridRow?, justifySelf?, alignSelf?, zIndex? }'),
-  minWidth: prop(z.union([z.number(), z.literal("none")]), "minWidth in positive pixels, effective on auto-layout containers and their direct children. Omitted preserves the bound; \"none\" clears it. Sizes constrained by bounds succeed with a warnings record containing prop, authored and realized values.", 'number | "none"'),
-  maxWidth: prop(z.union([z.number(), z.literal("none")]), "maxWidth in positive pixels, effective on auto-layout containers and their direct children. Omitted preserves the bound; \"none\" clears it. Sizes constrained by bounds succeed with a warnings record containing prop, authored and realized values.", 'number | "none"'),
-  minHeight: prop(z.union([z.number(), z.literal("none")]), "minHeight in positive pixels, effective on auto-layout containers and their direct children. Omitted preserves the bound; \"none\" clears it. Sizes constrained by bounds succeed with a warnings record containing prop, authored and realized values.", 'number | "none"'),
-  maxHeight: prop(z.union([z.number(), z.literal("none")]), "maxHeight in positive pixels, effective on auto-layout containers and their direct children. Omitted preserves the bound; \"none\" clears it. Sizes constrained by bounds succeed with a warnings record containing prop, authored and realized values.", 'number | "none"'),
+  layout: prop(z.object(CHILD_LAYOUT_FIELDS), 'Placement under an auto-layout parent: grid cell words, or alignSelf "stretch" in flow.', '{ gridColumn?, gridRow?, justifySelf?, alignSelf?, zIndex? }'),
+  minWidth: prop(z.union([z.number(), z.literal("none")]), SIZE_BOUND_NOTE, 'number | "none"'),
+  maxWidth: prop(z.union([z.number(), z.literal("none")]), SIZE_BOUND_NOTE, 'number | "none"'),
+  minHeight: prop(z.union([z.number(), z.literal("none")]), SIZE_BOUND_NOTE, 'number | "none"'),
+  maxHeight: prop(z.union([z.number(), z.literal("none")]), SIZE_BOUND_NOTE, 'number | "none"'),
 
   // A percent ("50%") widens the runtime type to `string`, so `"fill"`/`"hug"` no longer survive as
   // literals in the inferred type — hence an explicit .meta label to keep the doc precise.
   width: prop(
     z.union([z.number(), z.string()]),
-    'A fixed size (a number or "Npx"), "N%" of the parent axis (rejected for in-flow grid children), "fill" (stretch to the parent — rejected on the root), or "hug" (shrink to content — only a row/column/grid container or text can hug).',
+    '"N%" is of the parent\'s realized size. The root takes neither "N%" nor "fill" (the page is unbounded); "N%" is also refused on in-flow grid children and on an in-flow child whose parent hugs that axis. Only text and a container with a layout mode can "hug".',
     'number | "Npx" | "N%" | "fill" | "hug"',
   ),
   height: prop(
     z.union([z.number(), z.string()]),
-    'Same rules as width. On TEXT the height follows the content by default ("hug"); a number or "N%" fixes the text box at that height (alongside a fixed, "fill" or "N%" width), "fill" stretches it inside an auto-layout parent, and "hug" returns it to following the content.',
+    'As width. TEXT hugs its content by default; a fixed or "N%" height needs a width that doesn\'t hug.',
     'number | "fill" | "hug" | "N%"',
   ),
   // Placement is the read shape's own words: `left`/`top` are the offset in the parent, and naming
@@ -209,25 +213,25 @@ const SIZE_FIELDS = {
   // the node lands on the coordinate it accompanies.
   left: prop(
     z.union([z.number(), z.string()]),
-    'Offset from the parent\'s left edge — a number, "Npx", or "N%" of the parent width. Naming `left` or `top` lifts the node out of an auto-layout parent\'s flow (badges, overlays); under a free-form parent it is simply where the node sits. On a render root it is where on the PAGE the tree lands — without it every root stacks at the origin. Under edit, an axis you don\'t name keeps its live value.',
+    'Naming `left` or `top` takes the node out of an auto-layout flow, like position: absolute. On a render root it is the page position; without it every root stacks at the origin.',
     'number | "Npx" | "N%"',
   ),
-  top: prop(z.union([z.number(), z.string()]), "Offset from the parent's top edge. Same rules as `left`.", 'number | "Npx" | "N%"'),
+  top: prop(z.union([z.number(), z.string()]), "As `left`.", 'number | "Npx" | "N%"'),
   position: prop(
     z.enum(["absolute", "none"]),
-    '"absolute" lifts the node out of auto-layout flow where it stands (no coordinate needed — `left`/`top` already imply it). Under edit, "none" returns the node to the flow; naming `left`/`top`/`anchor` beside "none" fails loud.',
+    '"absolute" leaves the flow where the node stands. Under edit, "none" returns it to the flow and can\'t sit beside `left`/`top`/`anchor`.',
   ),
   anchor: prop(
     z.object({
       x: z.enum(["left", "center", "right"]).optional(),
       y: z.enum(["top", "center", "bottom"]).optional(),
     }),
-    'Which point of the node lands on `left`/`top` (default its top-left corner), so anchor:{ x:"center" } with left:"50%" centres it. Each anchor axis needs its coordinate in the same call.',
+    'Which point of the node sits at `left`/`top` (default top-left): anchor: { x: "center" } with left: "50%" centres it. Each axis needs its coordinate in the same call.',
     "{ x?: left/center/right, y?: top/center/bottom }",
   ),
   pin: prop(
     z.custom<{ x?: PinX; y?: PinY } | "none">(),
-    'Constraint override — how the node responds when its parent resizes, replacing the automatic choice. Honored for a child of a free-form parent and for any out-of-flow (`left`/`top`) child; on an in-flow auto-layout child it is stored but inert (fill/hug governs there) until the node leaves the flow. Under edit, "none" restores the default near-edge pin. Never lifts a node out of flow by itself.',
+    'Figma constraint: how the node follows a parent resize, overriding the automatic one. Applies under a free-form parent or out of flow; stored but inert on an in-flow child. Under edit, "none" restores the default. Never takes a node out of flow.',
     '{ x?, y? } | "none" — x: left/center/right/stretch/scale/none, y: top/center/bottom/stretch/scale/none',
   ),
 };
@@ -244,25 +248,25 @@ const PLACEMENT_FIELDS = {
 };
 
 const APPEARANCE_FIELDS = {
-  fill: color('Background paint: a color/gradient string, flcm.gradient(...) or flcm.image(url). An array is a paint stack, first entry on top — see Paint & gradients. "none" removes it.'),
-  stroke: color('Border paint, or a stack of them. "none" removes it.'),
+  fill: color('A CSS color or gradient string, flcm.gradient() or flcm.image(), or an array stacked top first (see the values section). "none" removes it.'),
+  stroke: color('Border paint, or a stack. "none" removes it.'),
   strokeWidth: prop(
     z.union([z.number(), z.string()]),
-    'Border thickness. Frames, rectangles, components and instances also take the CSS border-width shorthand, top/right/bottom/left — "0px 0px 0px 1px" is a left-only border; two values are top+bottom then left+right, three are top, left+right, bottom. Any other node type has one weight for every side, so a multi-value width on it throws.',
+    'The per-side shorthand works on frames, rectangles, components and instances only; other types take one value.',
     'number | "Npx" | CSS shorthand',
   ),
   strokeAlign: prop(
     z.custom<"inside" | "outside" | "center">(),
-    'Which side of the edge. Default "inside".',
+    'Default "inside", like a CSS border.',
     '"inside" | "outside" | "center"',
   ),
   borderRadius: prop(
     z.union([z.number(), z.string()]),
-    'Corner radius. Frames and rectangles only. Also takes the CSS border-radius shorthand, clockwise from the top-left — "12px 12px 0px 0px" rounds the top two corners; two values are TL/BR then TR/BL, three are TL, TR/BL, BR. Figma corners are circular, so the elliptical "x / y" form throws.',
+    'Frames and rectangles only. Corners are circular, so the elliptical "x / y" form is refused.',
     'number | "Npx" | CSS shorthand',
   ),
-  effects: prop(z.custom<EffectsInput>(), 'Shadows / blur: flcm.effects({...}) or a CSS-string bag. "none" removes all effects.', "effects value"),
-  rotation: degrees("Rotation in degrees. Composes AFTER layout sizing: the parent sizes the node (fill/hug/px) on its own axes first, and the node then spins about its centre — so rotating changes which way the box points, never the size it was given."),
+  effects: prop(z.custom<EffectsInput>(), 'flcm.effects() or a bag of CSS strings (see the values section). "none" removes all.', "effects value"),
+  rotation: degrees("Applied after layout sizing, about the centre: it turns the box, never resizes it."),
 };
 
 // An ELLIPSE has no corners, so its appearance vocabulary is the shared one minus `borderRadius` — a
@@ -279,8 +283,8 @@ const ELLIPSE_FIELDS = {
 const FRAME_FIELDS = {
   ...GRID_CONTAINER_ALIASES,
   ["clipsContent" satisfies keyof typeof INPUT_ALIASES]: inputAlias(z.boolean()),
-  layout: prop(z.object(LAYOUT_FIELDS), 'Own container settings plus placement under the parent. Creating a grid requires gridTemplateColumns; rows are implicit hug tracks unless named.', '{ mode?, gridTemplateColumns?, gridTemplateRows?, gap?, wrap?, padding?, justifyContent?, alignItems?, gridColumn?, gridRow?, justifySelf?, alignSelf?, zIndex? }'),
-  clip: prop(z.boolean(), "Clip children to the frame's bounds. Default false, like CSS overflow: visible."),
+  layout: prop(z.object(LAYOUT_FIELDS), 'Container settings plus placement under the parent; both tables follow.', '{ mode?, gridTemplateColumns?, gridTemplateRows?, gap?, wrap?, padding?, justifyContent?, alignItems?, gridColumn?, gridRow?, justifySelf?, alignSelf?, zIndex? }'),
+  clip: prop(z.boolean(), "Default false."),
 };
 
 // Text style — the base every run layers over. The hybrid structure groups these under a `textStyle`
@@ -290,52 +294,52 @@ const TEXTSTYLE_FIELDS = {
   fontFamily: prop(z.string(), "An unknown family falls back to Inter."),
   fontWeight: prop(
     z.union([z.number(), z.string()]),
-    "Snapped to the nearest available style. Numbers 100–900, or CSS names (light, normal, medium, semibold, bold, black, …).",
+    "Snaps to the nearest style the family has.",
     "number (100–900) | name",
   ),
-  fontSize: prop(z.number(), "Font size in px."),
+  fontSize: prop(z.number(), ""),
   fontStyle: prop(
     z.enum(["italic", "normal"]),
-    'CSS font-style, no oblique. Snaps to the family\'s italic variant. On the base only "italic" means anything; "normal" is a run delta clearing an italic base.',
+    'No oblique; snaps to the family\'s italic. "normal" only matters on a run, clearing an italic base.',
   ),
   lineHeight: prop(
     z.union([z.number(), z.string()]),
-    'Line height. "auto"/"normal" = the font default.',
+    '"auto" is the font default.',
     'number(px) | "Npx" | "N%" | "Nem" | "auto"',
   ),
   letterSpacing: prop(
     z.union([z.number(), z.string()]),
-    "Tracking.",
+    "",
     'number(px) | "Npx" | "N%" | "Nem"',
   ),
   textDecoration: prop(
     z.enum(["underline", "line-through", "none"]),
-    'CSS text-decoration-line. On the base "none" means nothing; it is a run delta clearing an inherited decoration. Strikethrough is also inline: ~~text~~.',
+    '"none" only matters on a run, clearing an inherited decoration. Also inline: ~~text~~.',
   ),
-  textAlign: prop(z.enum(["left", "center", "right", "justify"]), "CSS text-align."),
+  textAlign: prop(z.enum(["left", "center", "right", "justify"]), ""),
   textAlignVertical: prop(
     z.enum(["top", "center", "bottom"]),
-    'Vertical alignment in the text box. Whole-node only, never a run delta.',
+    'Whole node only, never per run.',
   ),
   textTransform: prop(
     z.enum(["uppercase", "lowercase", "capitalize", "none"]),
-    'CSS text-transform — re-cases the glyphs, not the characters. "none" restores the original casing and clears a fontVariant (same Figma slot).',
+    'Changes the displayed case, not the characters. Shares a Figma slot with fontVariant, so "none" clears both.',
   ),
   fontVariant: prop(
     z.enum(["small-caps", "all-small-caps"]),
-    'CSS font-variant-caps. Shares one Figma slot with `textTransform`, so naming both fails loud.',
+    'Shares a slot with textTransform, so naming both is refused.',
   ),
   paragraphSpacing: metric("Space between paragraphs."),
   paragraphIndent: metric("First-line indent."),
   listSpacing: metric("Space between list items."),
   hyperlink: prop(
     z.custom<string | { type: "URL"; url: string }>(),
-    'A URL over the whole text node — a url string, or the read form { type: "URL", url }. Links to a NODE are read-only and fail loud.',
+    'Links the whole text node. Links to a node are read-only.',
     'string (url) | { type: "URL", url }',
   ),
   lineClamp: prop(
     z.union([z.number(), z.literal("none")]),
-    'Truncate to at most N lines with an ellipsis. Needs a bounded `width` so the text wraps — on a hugging text it fails loud. `"none"` removes a clamp.',
+    'Ellipsis after N lines. Needs a `width` the text wraps against (a number, "fill" or "N%"); a hugging text is refused. "none" removes it.',
     'number (≥1) | "none"',
   ),
 };
@@ -345,7 +349,7 @@ const TEXT_FIELDS = {
   ["fontSize" satisfies keyof typeof INPUT_ALIASES]: inputAlias(z.number()),
   text: prop(
     z.custom<string | TextRunInput[]>(),
-    "The content — a plain string (markdown: **bold**, *italic*, ~~strike~~, [text](url)) or an array of styled runs. Set it on a TEXT spec; under edit it replaces the whole content.",
+    "A string with markdown (**bold**, *italic*, ~~strike~~, [text](url); backslash-escape a literal *) or an array of styled runs. Read style tokens like {ts1}…{/ts1} are refused. Under edit it replaces the whole content.",
     "string | run[]",
   ),
   textStyle: prop(
@@ -353,10 +357,10 @@ const TEXT_FIELDS = {
     "The text style base. Runs layer over it.",
     "{ fontFamily?, fontWeight?, fontSize?, fontStyle?, lineHeight?, letterSpacing?, textDecoration?, textTransform?, fontVariant?, textAlign?, textAlignVertical?, paragraphSpacing?, paragraphIndent?, listSpacing?, hyperlink?, lineClamp? }",
   ),
-  fill: color('The text\'s paint, like every other node\'s. "none" removes it.'),
+  fill: color('The text color. "none" removes it.'),
   boldWeight: prop(
     z.union([z.number(), z.string()]),
-    "What `**bold**` in `text` resolves to. Default 700 — pass back the `boldWeight` a `get` reports and the copy emphasizes like the original. Same spellings as fontWeight. Under edit it only means something beside `text`.",
+    "What `**bold**` in `text` resolves to. Default 700; pass back the value `get` reports so a copy emphasizes like the original. Under edit it only matters beside `text`.",
     "number (100–900) | name",
   ),
 };
@@ -408,8 +412,8 @@ export type TextRunInput = string | [text: string, style: StyleDeltaInput];
 const LINE_FIELDS = {
   stroke: color('The line\'s paint. "none" removes it.'),
   strokeWidth: metric("Thickness. Defaults to 1."),
-  width: metric('The line\'s length: a number, or "fill" to span an UNROTATED row/column parent (the divider case). A rotated line takes a number — "fill" resolves along the parent\'s own axis before the rotation turns it across, so the two together are refused; a rule across a row is a RECTANGLE 1px wide with height: "fill". No "hug" and no percent — a line has no content to measure and no cell to measure against.'),
-  rotation: degrees('Degrees — 90° makes a horizontal line vertical. Applied after sizing, so it needs a numeric `width` (see width).'),
+  width: metric('The length: a number, or "fill" along an unrotated row or column parent. A rotated line needs a number; for a rule across a row use a 1px-wide RECTANGLE with height: "fill". No "hug" or percent.'),
+  rotation: degrees('90 makes it vertical. Needs a numeric `width`.'),
   ...PLACEMENT_FIELDS,
 };
 
@@ -428,13 +432,12 @@ const PATH_FIELDS = {
     .string()
     .optional()
     .describe(
-      'SVG path data, e.g. "M12 2 L22 20 L2 20 Z". Every standard command works (relative/shorthand are ' +
-        "normalized); only malformed data fails. The node's box is the path's bounding box — `width`/" +
-        "`height` are ignored here, use `scale`. Use exactly one of d, vectorPaths, or svg.",
+      "SVG path data; relative and shorthand commands are normalized. The box is the path's bounding " +
+        "box: `width`/`height` are ignored with a warning, so use `scale`. Use exactly one of d, vectorPaths or svg.",
     ),
   scale: prop(
     z.number(),
-    "Multiplies the path's natural bounding box — `scale: 2` draws the same art twice as big. A single positive number, so the art can never stretch out of proportion. The path form's only size word.",
+    "Multiplies the natural bounding box. One positive number, so the art keeps its proportions; the path form's only size word.",
   ),
   fill: APPEARANCE_FIELDS.fill,
   stroke: APPEARANCE_FIELDS.stroke,

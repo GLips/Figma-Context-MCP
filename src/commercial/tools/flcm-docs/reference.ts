@@ -41,7 +41,6 @@ import {
   ANNOTATIONS_REFERENCE,
   CSS_SUBSET,
   FAIL_LOUD_PRINCIPLE,
-  FAIL_LOUD_ROWS,
   IMAGE_REF_REUSE,
   OUT_OF_V1,
   UNRENDERABLE_GLYPHS,
@@ -247,6 +246,7 @@ const SECTIONS: Section[] = [
     title: "Props by node",
     blurb: "every prop on every node type, with types",
     body: () =>
+      "Props use CSS names and CSS value syntax; the notes say only where flcm differs.\n\n" +
       "New nodes require type; INSTANCE also requires componentId, and VECTOR requires exactly one of svg or d. " +
       "An id refers to a live node; type can be omitted for a move. children is an array of plain specs. " +
       "Other omitted props keep live values or use creation defaults. The verb returns the spec copied with ids.\n\n" +
@@ -275,9 +275,7 @@ const SECTIONS: Section[] = [
       // prose explains the same two words at length rather than repeating the table.
       "### INSTANCE — component words\n\n(An instance also takes every `FRAME` prop above; each one " +
       "named is a root-level override. `componentId` names the component in the props form, and swaps it under edit — see the components section.)\n\n" +
-      `${propTable({ ...FIELD_GROUPS.swap, ...FIELD_GROUPS.instance })}\n\n` +
-      // TEMPORARY: the old fails-loud catalogue, parked until each row moves beside the prop it constrains.
-      `### Constraints — to be distributed\n\nEach of these throws a specific error naming the offending value:\n\n${FAIL_LOUD_ROWS}`,
+      `${propTable({ ...FIELD_GROUPS.swap, ...FIELD_GROUPS.instance })}`,
   },
   {
     id: "annotations",
