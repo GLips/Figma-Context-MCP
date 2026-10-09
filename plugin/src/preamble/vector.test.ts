@@ -88,6 +88,16 @@ test("fill/stroke beside svg repaint every vector inside, including nested group
   assert.deepEqual(group.fills, []);
 });
 
+test("a paint stack beside svg reaches every vector whole, in the same order as any other node", async () => {
+  const markup = '<svg viewBox="0 0 24 24"><path d="M0 0Z"/></svg>';
+  const fill = ["linear-gradient(#FFFFFF00, #FFFFFF)", "#FF0000"];
+  const out = await render({ type: "VECTOR", svg: markup, fill });
+  const frame = await figma.getNodeByIdAsync(out.id);
+  const rect = await figma.getNodeByIdAsync((await render({ type: "RECTANGLE", fill })).id);
+
+  for (const vector of artOf(frame)) assert.deepEqual(vector.fills, rect.fills);
+});
+
 test("imported art carries SCALE constraints, so resizing the frame scales the drawing", async () => {
   // The plugin typings promise nothing here, so flcm sets them rather than inherit Top/Left.
   const out = await render({ type: "VECTOR", svg: '<svg viewBox="0 0 24 24"><path d="M0 0Z"/></svg>' });

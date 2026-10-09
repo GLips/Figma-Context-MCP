@@ -1194,8 +1194,8 @@ function buildSvg(wn: WriteNode, markup: string, ctx: RenderCtx): any {
 // Paints: only the vectors, never the containers — painting a <g>'s frame would put a backdrop behind the
 // art instead of recolouring it. A present-but-empty array is the compiled "none", same as applyPaint.
 function themeImportedArt(frame: any, wn: WriteNode, ctx: RenderCtx): void {
-  const fills = wn.fills ? (wn.fills.length ? [paintOf(wn.fills[0], ctx)] : []) : undefined;
-  const strokes = wn.strokes ? (wn.strokes.length ? [paintOf(wn.strokes[0], ctx)] : []) : undefined;
+  const fills = wn.fills ? toFigmaPaintStack(wn.fills, ctx) : undefined;
+  const strokes = wn.strokes ? toFigmaPaintStack(wn.strokes, ctx) : undefined;
   const walk = (node: any): void => {
     if ("constraints" in node) node.constraints = { horizontal: "SCALE", vertical: "SCALE" };
     if (node.type === "VECTOR") {
