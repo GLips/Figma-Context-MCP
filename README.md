@@ -48,6 +48,10 @@ This MCP server is specifically designed for use with Cursor. Before responding 
 
 Reducing the amount of context provided to the model helps make the AI more accurate and the responses more relevant.
 
+### Reading through the Framelink plugin
+
+With the Framelink Figma plugin connected, agents can read the same simplified output without the REST API: `flcm.get(target)` in `figma_execute_code` runs the same transform as `get_figma_data`. It reads the file open in Figma rather than any file by key, so start from a node ID or the user's selection. It also has no REST rate limits and needs no Figma token, which is why `get_figma_data` points at it when it fails with a 429, a 403, or no token configured.
+
 ## Getting Started
 
 Many code editors and other AI clients use a configuration file to manage MCP servers.

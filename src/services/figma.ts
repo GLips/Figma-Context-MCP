@@ -10,7 +10,7 @@ import type {
 import { downloadAndProcessImage, type ImageProcessingResult } from "~/utils/image-processing.js";
 import { Logger, writeLogs } from "~/utils/logger.js";
 import { fetchJSON } from "~/utils/fetch-json.js";
-import { getErrorMeta } from "~/utils/error-meta.js";
+import { getErrorMeta, tagError } from "~/utils/error-meta.js";
 import { buildForbiddenMessage, buildRateLimitMessage } from "./errors/index.js";
 
 export type FigmaAuthOptions = {
@@ -44,8 +44,11 @@ export class FigmaService {
     }
 
     if (!this.apiKey) {
-      throw new Error(
-        "Figma API authentication is required. Configure FIGMA_API_KEY or FIGMA_OAUTH_TOKEN on the server, or send X-Figma-Token / Authorization: Bearer on the HTTP request.",
+      tagError(
+        new Error(
+          "Figma API authentication is required. Configure FIGMA_API_KEY or FIGMA_OAUTH_TOKEN on the server, or send X-Figma-Token / Authorization: Bearer on the HTTP request.",
+        ),
+        { category: "missing_credentials" },
       );
     }
 

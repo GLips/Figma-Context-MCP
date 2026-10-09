@@ -42,6 +42,12 @@ const parameters = {
 const parametersSchema = z.object(parameters);
 export type GetFigmaDataParams = z.infer<typeof parametersSchema>;
 
+/**
+ * Extra guidance for a failed read — how to get the same data another way — or null when there is
+ * none. Supplied by the server when the plugin relay is running; the read tool knows nothing of it.
+ */
+export type DescribeReadRecovery = (error: unknown, request: { nodeId?: string }) => string | null;
+
 async function getFigmaData(
   params: GetFigmaDataParams,
   figmaService: FigmaService,
@@ -49,6 +55,7 @@ async function getFigmaData(
   transport: Transport,
   authMode: AuthMode,
   clientInfo: ClientInfo | undefined,
+  describeRecovery: DescribeReadRecovery | undefined,
   extra: ToolExtra,
 ) {
   try {
@@ -101,9 +108,15 @@ async function getFigmaData(
   } catch (error) {
     const message = error instanceof Error ? error.message : JSON.stringify(error);
     Logger.error(`Error fetching file ${params.fileKey}:`, message);
+    const recovery = describeRecovery?.(error, { nodeId: params.nodeId?.replace(/-/g, ":") });
     return {
       isError: true,
-      content: [{ type: "text" as const, text: `Error fetching file: ${message}` }],
+      content: [
+        {
+          type: "text" as const,
+          text: `Error fetching file: ${message}${recovery ? `\n\n${recovery}` : ""}`,
+        },
+      ],
     };
   }
 }
@@ -112,7 +125,7 @@ async function getFigmaData(
 export const getFigmaDataTool = {
   name: "get_figma_data",
   description:
-    "Get comprehensive Figma file data including layout, content, visuals, and component information. An elided field map reports omitted content sizes in JSON characters (null means unknown); drill in with get_figma_data using the same fileKey and that nodeId. Figma annotations are not in this output (the REST API does not expose them); read them through the plugin.",
+    "Get comprehensive Figma file data including layout, content, visuals, and component information. An elided field map reports omitted content sizes in JSON characters (null means unknown); drill in with get_figma_data using the same fileKey and that nodeId. Figma annotations are not in this output (the REST API does not expose them).",
   parametersSchema,
   handler: getFigmaData,
 } as const;

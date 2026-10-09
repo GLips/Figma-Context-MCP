@@ -26,6 +26,7 @@ export type ErrorPhase =
 export type ErrorCategory =
   | "rate_limit"
   | "auth"
+  | "missing_credentials"
   | "not_found"
   | "invalid_input"
   | "network"

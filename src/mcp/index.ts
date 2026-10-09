@@ -8,6 +8,10 @@ import type { ToolExtra } from "./progress.js";
 import type { PluginBridgeRuntime } from "~/commercial/plugin-bridge/index.js";
 import { registerCodeModeTools } from "~/commercial/tools/code-mode-tools.js";
 import {
+  advertisePluginReadRoute,
+  describePluginReadRecovery,
+} from "~/commercial/tools/plugin-read-route.js";
+import {
   downloadFigmaImagesTool,
   getFigmaCommentsTool,
   getFigmaDataTool,
@@ -32,7 +36,8 @@ export type CreateServerOptions = {
   imageDir?: string;
   /**
    * The process-wide WS relay to the Figma plugin (started once by `startServer`). When present,
-   * the code-mode write tools are registered — advertised dynamically once a plugin connects.
+   * the code-mode write tools are registered — advertised dynamically once a plugin connects — and
+   * get_figma_data's description and failures point at the plugin read route.
    * Absent for library consumers of `createServer`, which get the read-only surface unchanged.
    */
   pluginBridge?: PluginBridgeRuntime;
@@ -68,6 +73,7 @@ function createServer(
     skipImageDownloads,
     imageDir,
     getClientInfo,
+    pluginBridge,
   });
 
   if (pluginBridge) {
@@ -93,6 +99,7 @@ type RegisterToolsOptions = {
   skipImageDownloads: boolean;
   imageDir?: string;
   getClientInfo: () => ClientInfo | undefined;
+  pluginBridge?: PluginBridgeRuntime;
 };
 
 function registerTools(
@@ -100,7 +107,8 @@ function registerTools(
   figmaService: FigmaService,
   options: RegisterToolsOptions,
 ): void {
-  server.registerTool(
+  const { pluginBridge } = options;
+  const getFigmaData = server.registerTool(
     getFigmaDataTool.name,
     {
       title: "Get Figma Data",
@@ -116,9 +124,17 @@ function registerTools(
         options.transport,
         options.authMode,
         options.getClientInfo(),
+        pluginBridge &&
+          ((error, request) => describePluginReadRecovery(pluginBridge, error, request)),
         extra,
       ),
   );
+  if (pluginBridge) {
+    advertisePluginReadRoute(getFigmaData, pluginBridge, {
+      baseDescription: getFigmaDataTool.description,
+      transport: options.transport,
+    });
+  }
 
   server.registerTool(
     getFigmaCommentsTool.name,
