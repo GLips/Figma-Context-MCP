@@ -261,9 +261,9 @@ Stacks are **top first**, as in CSS: the first shadow in \`boxShadow\` (or in a 
 
 **\`glass\` needs a high-frequency backdrop to read as glass.** \`refraction\` and \`dispersion\` bend what is *behind* the pane, so over a flat fill or a smooth gradient there is nothing to bend and the result looks like a plain frosted tint — that's the physics of the scene, not a broken effect. Put busy content behind it (an image, dense text, an icon grid, a sharp-edged shape) and the refraction becomes visible.`;
 
-export const RENDER_KEYS = `\`await flcm.render(spec)\` places the spec on the current page. Set left/top on the root for canvas position. Its return is the input tree copied with ids, including every child and each node in instance slot content. Use those ids directly with get, edit, append and the other target-taking verbs.
+export const RENDER_KEYS = `\`await flcm.render(spec)\` places the spec on the current page, at the root's \`left\`/\`top\`, and returns it copied with ids at every depth, slot content included. Pass those ids to any target-taking verb.
 
-\`key\` is optional persistent metadata used by find and findOne. It does not decide identity. Duplicate keys within one authored tree are refused. Returned dimensions remain the authored values; use measure for realized pixels and get for current read data.`;
+\`key\` is optional metadata for \`find\`/\`findOne\`, unique within one authored tree; it never decides identity. Returned sizes are the authored values: use \`measure\` for realized pixels and \`get\` for current data.`;
 
 // The recipe every other recipe finishes with. How to take the screenshot depends on the reader's
 // channel (MCP tool or CLI flag), so the caller supplies that part; the targeting rules are shared.
@@ -292,7 +292,7 @@ Raw \`figma.*\` gives up every guarantee this DSL makes (fills are 0–1 assigne
 
 **Done when** Figma shows the document state you asked for; design changes still go through \`flcm\` and the screenshot check.`;
 
-export const PAGES = `**Pages** are covered — every verb acts on the current page, and \`flcm.page\` is how you see and change which one that is:
+export const PAGES = `Every verb acts on the current page; \`flcm.page\` reads and switches it:
 
 \`\`\`js
 await flcm.page.current();          // { fileName, page: { id, name }, pages: [ … ] } — where am I?
@@ -300,7 +300,7 @@ await flcm.page.new("pricing");     // make it and switch to it; a name already 
 await flcm.page.use("pricing");     // switch to one that exists (name or id); never creates
 \`\`\`
 
-Switch **before** you render — a render lands on whatever page is current when it runs. Don't reach for \`figma.currentPage = page\`: under \`documentAccess: "dynamic-page"\` that property is read-only and assigning it throws, which is the trap \`flcm.page\` removes.`;
+Switch **before** you render: a render lands on whatever page is current. Don't assign \`figma.currentPage\`; under \`documentAccess: "dynamic-page"\` it is read-only and throws.`;
 
 export const CSS_SUBSET = `Leaf values are CSS-familiar, but only a **documented subset** is supported. Anything outside it throws a specific error naming what went wrong — it never renders wrong pixels.
 
@@ -364,47 +364,41 @@ export const IMAGE_REF_REUSE = `An \`imageRef\` identifies an existing image in 
 
 export const UNRENDERABLE_GLYPHS = `**A character the resolved font can't render draws as nothing**: no glyph, no tofu, no error, because the plugin API has no glyph-coverage check. This bites emoji and private-use codepoints (SF Symbols) in fonts like Inter. If text renders blank, suspect a missing glyph and switch to a font that covers it.`;
 
-export const EDIT_INTRO = `\`await flcm.edit(target, changes)\` applies a partial delta to one existing node and returns its updated handle. The target is anything the read verbs accept: an flcm/key, a node id, \`flcm.id(id)\`, or a handle from \`render\`/\`find\`. The delta uses the **same words as create** — there is no separate edit dialect — and only the fields you pass change; everything else on the node is untouched.`;
+export const EDIT_INTRO = `\`await flcm.edit(target, changes)\` patches one live node and returns its updated handle: only the fields you pass change. The target is a key or node id string, a handle, or \`flcm.id(id)\`. A node type takes the words it is created with (see props); a word its type lacks, such as \`fill\` on a LINE, rejects and lists that type's words.`;
 
-export const EDIT_REMOVAL = `### Removal — the \`"none"\` word
+export const EDIT_REMOVAL = `### Removal — \`"none"\`
 
-\`"none"\` is the one removal word, surface-wide: \`fill\`/\`stroke\` clear the paint, \`effects\` clears every effect, \`position: "none"\` returns the node to its parent's flow, \`pin\` (or \`pin: { x: "none" }\` per axis) restores the near-edge default, \`layout: { mode: "none" }\` switches auto-layout off. The same spellings are legal at create, where they mean the explicit default. Sizes are never removed, only replaced within the number/\`"fill"\`/\`"hug"\` trio — \`width: "hug"\` is how a fixed width comes off.`;
+\`"none"\` is the one removal word: \`fill\`/\`stroke\` clear the paint, \`effects\` clears every effect, \`minWidth\` and the other bounds clear the bound, \`position: "none"\` returns the node to its parent's flow, \`pin: "none"\` (or per axis) restores the near-edge default, and \`layout: { mode: "none" }\` turns auto-layout off. Sizes are replaced, never removed: \`width: "hug"\` takes a fixed width off.`;
 
 export const EDIT_RULES = `### Rules
 
-- **A node type takes exactly the words create accepts for it.** \`fill\` on a LINE, \`clip\` on a TEXT, \`borderRadius\` on a VECTOR — each rejects loud, naming the prop, the type, and that type's editable words.
-- **Only the fields you pass change — per axis, too.** \`pin: { x: "center" }\` keeps the y pin; \`left: 10\` keeps the live \`top\`; \`width: "hug"\` leaves the height alone.
-- **Un-filling really un-fills.** \`width: 80\` or \`"hug"\` on a \`"fill"\` child clears the grow/stretch marks — the new size governs.
-- **Container edits ripple by stated rules.** \`layout.alignItems: "stretch"\` walks the live children setting their stretch marks; any other value clears every one (Figma doesn't record which child stretched because of the container, so a child that should keep filling needs its own \`height: "fill"\`). Changing direction — row↔column, or \`"none"\` to either — clears both flow marks on every in-flow child, since the axes they meant just moved.
-- **Layout legality is create's rule set, applied to live facts** and rejected before any write: a percent on an in-flow child of a hugging parent, \`"fill"\`/\`"N%"\` under the page, \`"hug"\` with nothing to measure, a fixed/percent \`height\` beside \`width: "hug"\` on TEXT, or container words on a frame that isn't (and after this delta still won't be) a row/column container. Percents resolve immediately against the live parent.
-- **Text words read the LIVE node.** \`text\` replaces the whole text and collapses it to its LEADING run's style — prior bold spans and per-range colors do NOT survive, so style the new text in the same edit. A \`textStyle\` naming part of the font triple keeps the live rest (\`fontWeight: "bold"\` on italic Roboto stays bold italic Roboto). A text that already MIXES fonts has no single base: a partial font change, or a styled \`text\` run without its own \`fontFamily\`, rejects loud — anchor \`textStyle.fontFamily\` in the same edit, or give every run its family. \`lineClamp\` needs a bounded width.
-- **Edits inside a component INSTANCE apply as overrides.** A property Figma forbids overriding rejects, naming the instance — edit the main component (flcm never auto-detaches).
-- **An INSTANCE target also takes its three component words** — \`componentProperties\`, \`overrides\`, and \`componentId\` (the swap). See the components section; on any other node type each fails loud as an unknown word for that type.
-- **A COMPONENT or COMPONENT_SET target takes a frame's words plus \`description\` and \`propertyDefinitions\`** — editing the main is how every instance of it changes. A layer inside one also takes \`componentPropertyReferences\`, which binds it to a property. See the components section.
-- **\`key\` is immutable** — re-keying could mint a duplicate address. Set \`name\` to change the layers panel.
-- **No bare \`x\`/\`y\`** — position is \`left\`/\`top\` (naming either lifts a child out of an auto-layout flow; \`position: "absolute"\` lifts it in place, \`position: "none"\` returns it), resize behavior is \`pin\`.
-- **An empty delta is rejected**, since it would still mint an undo step.
-- **Each edit is one undo step.** The whole delta validates before the first write; a Figma refusal mid-apply rolls the node back, and the error carries the target's identity, Figma's reason, and how many earlier mutating calls still stand.
-- Delta values are **absolute**, never relative (\`+10\`), so re-running an edit converges instead of compounding.`;
+- **Per field, and per axis.** \`pin: { x: "center" }\` keeps the y pin; \`left: 10\` keeps the live \`top\`; \`width: "hug"\` leaves the height alone.
+- **A new size replaces fill.** A number or \`"hug"\` on a \`"fill"\` child clears its grow/stretch marks.
+- **Container edits ripple.** \`layout.alignItems: "stretch"\` sets every live child's stretch mark and any other value clears them all, since Figma doesn't record which child stretched because of its container; a child that should keep filling needs its own \`"fill"\`. Changing direction clears both flow marks on every in-flow child.
+- **Layout legality is create's, checked against live facts** before any write. Percents resolve against the live parent.
+- **Text words read the live node.** \`text\` replaces the whole text in its leading run's style, so earlier bold spans and per-range colors are lost; style the new text in the same edit. A partial \`textStyle\` font change keeps the rest of the live font. A text that already mixes fonts has no single base, so a partial font change, or a run without its own \`fontFamily\`, rejects; set \`textStyle.fontFamily\` in the same edit, or give every run its family.
+- **Inside an INSTANCE, edits are overrides.** A property Figma won't let you override rejects, naming the instance; edit the main component instead (flcm never detaches for you).
+- **No \`x\`/\`y\`.** Position with \`left\`/\`top\` or \`position\`; resize behavior is \`pin\`.
+- **One undo step, validated first.** The whole delta validates before the first write, a Figma refusal mid-apply rolls the node back, and an empty delta rejects.
+- **Values are absolute**, never relative (\`+10\`), so re-running an edit converges.`;
 
 export const EDIT_MANY = `### Many at once — \`flcm.editMany\`
 
-\`await flcm.editMany([{ id, ...changes }, …])\` applies a whole set of deltas as **one** call, returning a handle per entry in order. Each entry is the plain-data node shape used everywhere else — a live node \`id\` plus exactly an \`flcm.edit\` delta. A key or a handle is not an id, so locate the nodes first and pass what you got back:
+\`await flcm.editMany([{ id, ...changes }, …])\` applies several edit deltas as one transaction and returns a handle per entry, in order. Each entry needs a live node \`id\`; a key or a handle won't do, so locate the nodes first:
 
 \`\`\`js
 const cards = await flcm.find({ type: "FRAME", name: "Card" });
 await flcm.editMany(cards.map((card) => ({ id: card.id, fill: "#F6F7F9", borderRadius: 12 })));
 \`\`\`
 
-Reach for it whenever you're nudging more than one node — a loop over \`flcm.edit\` is not the same thing:
+Prefer it to a loop of \`flcm.edit\` whenever more than one node changes:
 
-- **The set is atomic.** Every id resolves and every delta validates before the first write; a loop would already have mutated entries 1–3 when entry 4's typo surfaced.
-- **One rejection names every bad entry**, indexed, so you fix the batch in one pass; entries that failed the same way report together as one counted line.
-- **The whole batch is one undo step.**
-- **Order doesn't matter** — entries settle ancestors-first, so turning a parent into a row and setting its child to \`width: "fill"\` works either way round.
-- **Two entries for the same node reject** rather than last-wins; put both fields in one entry.
+- **Atomic, one undo step.** Every id resolves and every delta validates before the first write.
+- **One rejection names every bad entry** by index, so the batch is fixed in one pass.
+- **Order-free.** Entries settle ancestors-first, so a parent's new row direction and its child's \`width: "fill"\` work in either order.
+- **One entry per node.** A second entry for the same id rejects.
 
-Props only: tree shape stays with \`append\`/\`move\`/\`remove\`/\`clone\`.`;
+Props only: tree shape stays with the placement verbs, \`remove\` and \`clone\`.`;
 
 export const STRUCTURE_INTRO = `All placement verbs take a plain spec. append and prepend take a parent; insertBefore and insertAfter take a sibling. render uses the current page. Each returns a deep copy of the spec with every node id filled in.
 

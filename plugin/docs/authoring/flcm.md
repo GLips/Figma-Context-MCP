@@ -199,9 +199,9 @@ Use `children: [{ type: "TEXT", text: "Hi" }]` on a FRAME. Compose with array sp
 
 ### render(), keys & handles
 
-`await flcm.render(spec)` places the spec on the current page. Set left/top on the root for canvas position. Its return is the input tree copied with ids, including every child and each node in instance slot content. Use those ids directly with get, edit, append and the other target-taking verbs.
+`await flcm.render(spec)` places the spec on the current page, at the root's `left`/`top`, and returns it copied with ids at every depth, slot content included. Pass those ids to any target-taking verb.
 
-`key` is optional persistent metadata used by find and findOne. It does not decide identity. Duplicate keys within one authored tree are refused. Returned dimensions remain the authored values; use measure for realized pixels and get for current read data.
+`key` is optional metadata for `find`/`findOne`, unique within one authored tree; it never decides identity. Returned sizes are the authored values: use `measure` for realized pixels and `get` for current data.
 
 ### Tree shape — placing, moving, removing
 
@@ -223,7 +223,7 @@ clone duplicates the live subtree faithfully and clears its keys. It returns { n
 
 ### Pages
 
-**Pages** are covered — every verb acts on the current page, and `flcm.page` is how you see and change which one that is:
+Every verb acts on the current page; `flcm.page` reads and switches it:
 
 ```js
 await flcm.page.current();          // { fileName, page: { id, name }, pages: [ … ] } — where am I?
@@ -231,7 +231,7 @@ await flcm.page.new("pricing");     // make it and switch to it; a name already 
 await flcm.page.use("pricing");     // switch to one that exists (name or id); never creates
 ```
 
-Switch **before** you render — a render lands on whatever page is current when it runs. Don't reach for `figma.currentPage = page`: under `documentAccess: "dynamic-page"` that property is read-only and assigning it throws, which is the trap `flcm.page` removes.
+Switch **before** you render: a render lands on whatever page is current. Don't assign `figma.currentPage`; under `documentAccess: "dynamic-page"` it is read-only and throws.
 
 ## Props by node
 
@@ -288,7 +288,9 @@ A LINE sizes along its length alone, its `width`: a number, or `"fill"` under a 
 
 How these sizes resolve is in the layout section.
 
-### FRAME — container props
+### Appearance — paint, border, corners, effects, rotation
+
+FRAME, RECTANGLE and INSTANCE take every prop below; ELLIPSE and path VECTOR take all but `borderRadius`.
 
 | Prop | Type | Notes |
 | --- | --- | --- |
@@ -299,6 +301,11 @@ How these sizes resolve is in the layout section.
 | `borderRadius` | number \| "Npx" \| CSS shorthand | Frames and rectangles only. Corners are circular, so the elliptical "x / y" form is refused. |
 | `effects` | effects value | flcm.effects() or a bag of CSS strings (see the values section). "none" removes all. |
 | `rotation` | number (deg) | Applied after layout sizing, about the centre: it turns the box, never resizes it. |
+
+### FRAME — container props
+
+| Prop | Type | Notes |
+| --- | --- | --- |
 | `layout` | { mode?, gridTemplateColumns?, gridTemplateRows?, gap?, wrap?, padding?, justifyContent?, alignItems?, gridColumn?, gridRow?, justifySelf?, alignSelf?, zIndex? } | Container settings plus placement under the parent; both tables follow. |
 | `clip` | boolean | Default false. |
 
@@ -405,32 +412,9 @@ Each styled run's delta fields:
 | `color` | paint \| paint[] | Per-span text color. |
 | `hyperlink` | string (url) \| { type: "URL", url } | A URL over THIS span — inline `[text](url)` is usually simpler. Links to a NODE are read-only and fail loud. |
 
-### RECTANGLE — shape props
-
-| Prop | Type | Notes |
-| --- | --- | --- |
-| `fill` | paint \| paint[] | A CSS color or gradient string, flcm.gradient() or flcm.image(), or an array stacked top first (see the values section). "none" removes it. |
-| `stroke` | paint \| paint[] | Border paint, or a stack. "none" removes it. |
-| `strokeWidth` | number \| "Npx" \| CSS shorthand | The per-side shorthand works on frames, rectangles, components and instances only; other types take one value. |
-| `strokeAlign` | "inside" \| "outside" \| "center" | Default "inside", like a CSS border. |
-| `borderRadius` | number \| "Npx" \| CSS shorthand | Frames and rectangles only. Corners are circular, so the elliptical "x / y" form is refused. |
-| `effects` | effects value | flcm.effects() or a bag of CSS strings (see the values section). "none" removes all. |
-| `rotation` | number (deg) | Applied after layout sizing, about the centre: it turns the box, never resizes it. |
-
-### ELLIPSE — shape props
-
-(An ellipse has no `borderRadius` — its edge is already round.)
-
-| Prop | Type | Notes |
-| --- | --- | --- |
-| `fill` | paint \| paint[] | A CSS color or gradient string, flcm.gradient() or flcm.image(), or an array stacked top first (see the values section). "none" removes it. |
-| `stroke` | paint \| paint[] | Border paint, or a stack. "none" removes it. |
-| `strokeWidth` | number \| "Npx" \| CSS shorthand | The per-side shorthand works on frames, rectangles, components and instances only; other types take one value. |
-| `strokeAlign` | "inside" \| "outside" \| "center" | Default "inside", like a CSS border. |
-| `effects` | effects value | flcm.effects() or a bag of CSS strings (see the values section). "none" removes all. |
-| `rotation` | number (deg) | Applied after layout sizing, about the centre: it turns the box, never resizes it. |
-
 ### LINE — line props
+
+A LINE takes the placement words from Size & position, but not its size words, plus:
 
 | Prop | Type | Notes |
 | --- | --- | --- |
@@ -438,12 +422,6 @@ Each styled run's delta fields:
 | `strokeWidth` | number \| "Npx" | Thickness. Defaults to 1. |
 | `width` | number \| "Npx" | The length: a number, or "fill" along an unrotated row or column parent. A rotated line needs a number; for a rule across a row use a 1px-wide RECTANGLE with height: "fill". No "hug" or percent. |
 | `rotation` | number (deg) | 90 makes it vertical. Needs a numeric `width`. |
-| `layout` | { gridColumn?, gridRow?, justifySelf?, alignSelf?, zIndex? } | Placement under an auto-layout parent: grid cell words, or alignSelf "stretch" in flow. |
-| `left` | number \| "Npx" \| "N%" | Naming `left` or `top` takes the node out of an auto-layout flow, like position: absolute. On a render root it is the page position; without it every root stacks at the origin. |
-| `top` | number \| "Npx" \| "N%" | As `left`. |
-| `position` | "absolute" \| "none" | "absolute" leaves the flow where the node stands. Under edit, "none" returns it to the flow and can't sit beside `left`/`top`/`anchor`. |
-| `anchor` | { x?: left/center/right, y?: top/center/bottom } | Which point of the node sits at `left`/`top` (default top-left): anchor: { x: "center" } with left: "50%" centres it. Each axis needs its coordinate in the same call. |
-| `pin` | { x?, y? } \| "none" — x: left/center/right/stretch/scale/none, y: top/center/bottom/stretch/scale/none | Figma constraint: how the node follows a parent resize, overriding the automatic one. Applies under a free-form parent or out of flow; stored but inert on an in-flow child. Under edit, "none" restores the default. Never takes a node out of flow. |
 
 ### VECTOR — path props (`d` / `vectorPaths`)
 
@@ -454,12 +432,6 @@ Bare geometry: the node's box is the path's bounding box, so there is no `width`
 | `vectorPaths` | Array<{ data: string; windingRule: "NONZERO" \| "EVENODD" \| "NONE" }> | Native path records for multiple paths or even-odd winding. Use exactly one of d, vectorPaths, or svg. |
 | `d` | string | SVG path data; relative and shorthand commands are normalized. The box is the path's bounding box: `width`/`height` are ignored with a warning, so use `scale`. Use exactly one of d, vectorPaths or svg. |
 | `scale` | number | Multiplies the natural bounding box. One positive number, so the art keeps its proportions; the path form's only size word. |
-| `fill` | paint \| paint[] | A CSS color or gradient string, flcm.gradient() or flcm.image(), or an array stacked top first (see the values section). "none" removes it. |
-| `stroke` | paint \| paint[] | Border paint, or a stack. "none" removes it. |
-| `strokeWidth` | number \| "Npx" \| CSS shorthand | The per-side shorthand works on frames, rectangles, components and instances only; other types take one value. |
-| `strokeAlign` | "inside" \| "outside" \| "center" | Default "inside", like a CSS border. |
-| `effects` | effects value | flcm.effects() or a bag of CSS strings (see the values section). "none" removes all. |
-| `rotation` | number (deg) | Applied after layout sizing, about the centre: it turns the box, never resizes it. |
 
 ### VECTOR — svg props (`svg`)
 
@@ -692,105 +664,55 @@ An id-bearing VECTOR accepts d or vectorPaths as a geometry edit and preserves i
 
 ## edit() / editMany() — changing existing nodes
 
-`await flcm.edit(target, changes)` applies a partial delta to one existing node and returns its updated handle. The target is anything the read verbs accept: an flcm/key, a node id, `flcm.id(id)`, or a handle from `render`/`find`. The delta uses the **same words as create** — there is no separate edit dialect — and only the fields you pass change; everything else on the node is untouched.
+`await flcm.edit(target, changes)` patches one live node and returns its updated handle: only the fields you pass change. The target is a key or node id string, a handle, or `flcm.id(id)`. A node type takes the words it is created with (see props); a word its type lacks, such as `fill` on a LINE, rejects and lists that type's words.
 
-### Editable fields
+### Where edit differs from create
 
-| Prop | Type | Notes |
-| --- | --- | --- |
-| `annotations` | { text?: string; category?: string; properties?: string[] }[] | Native annotations. Omitted leaves annotations untouched; a supplied array replaces the whole collection; [] clears every one. |
-| `name` | string | Layer name. |
-| `opacity` | number (0–1) |  |
-| `mixBlendMode` | "normal" \| "multiply" \| "screen" \| "overlay" \| "soft-light" \| … (CSS mix-blend-mode) |  |
-| `visible` | boolean | get and find still return hidden nodes, with their annotations. |
-| `locked` | boolean | Locks against pointer edits in Figma's UI; flcm.edit still writes to it. |
-| `fill` | paint \| paint[] | A CSS color or gradient string, flcm.gradient() or flcm.image(), or an array stacked top first (see the values section). "none" removes it. |
-| `stroke` | paint \| paint[] | Border paint, or a stack. "none" removes it. |
-| `strokeWidth` | number \| "Npx" \| CSS shorthand | The per-side shorthand works on frames, rectangles, components and instances only; other types take one value. |
-| `strokeAlign` | "inside" \| "outside" \| "center" | Default "inside", like a CSS border. |
-| `borderRadius` | number \| "Npx" \| CSS shorthand | Frames and rectangles only. Corners are circular, so the elliptical "x / y" form is refused. |
-| `effects` | effects value | flcm.effects() or a bag of CSS strings (see the values section). "none" removes all. |
-| `rotation` | number (deg) | Applied after layout sizing, about the centre: it turns the box, never resizes it. |
-| `clip` | boolean | Default false. |
-| `minWidth` | number \| "none" | Positive px. Applies to auto-layout containers and their direct children. "none" clears it. A size the bound clamps still succeeds, with a warning. |
-| `maxWidth` | number \| "none" | Positive px. Applies to auto-layout containers and their direct children. "none" clears it. A size the bound clamps still succeeds, with a warning. |
-| `minHeight` | number \| "none" | Positive px. Applies to auto-layout containers and their direct children. "none" clears it. A size the bound clamps still succeeds, with a warning. |
-| `maxHeight` | number \| "none" | Positive px. Applies to auto-layout containers and their direct children. "none" clears it. A size the bound clamps still succeeds, with a warning. |
-| `width` | number \| "Npx" \| "N%" \| "fill" \| "hug" | "N%" is of the parent's realized size. The root takes neither "N%" nor "fill" (the page is unbounded); "N%" is also refused on in-flow grid children and on an in-flow child whose parent hugs that axis. Only text and a container with a layout mode can "hug". |
-| `height` | number \| "fill" \| "hug" \| "N%" | As width. TEXT hugs its content by default; a fixed or "N%" height needs a width that doesn't hug. |
-| `layout` | { mode?, gridTemplateColumns?, gridTemplateRows?, gap?, wrap?, padding?, justifyContent?, alignItems?, gridColumn?, gridRow?, justifySelf?, alignSelf?, zIndex? } | Container settings plus placement under the parent; both tables follow. |
-| `left` | number \| "Npx" \| "N%" | Naming `left` or `top` takes the node out of an auto-layout flow, like position: absolute. On a render root it is the page position; without it every root stacks at the origin. |
-| `top` | number \| "Npx" \| "N%" | As `left`. |
-| `position` | "absolute" \| "none" | "absolute" leaves the flow where the node stands. Under edit, "none" returns it to the flow and can't sit beside `left`/`top`/`anchor`. |
-| `anchor` | { x?: left/center/right, y?: top/center/bottom } | Which point of the node sits at `left`/`top` (default top-left): anchor: { x: "center" } with left: "50%" centres it. Each axis needs its coordinate in the same call. |
-| `pin` | { x?, y? } \| "none" — x: left/center/right/stretch/scale/none, y: top/center/bottom/stretch/scale/none | Figma constraint: how the node follows a parent resize, overriding the automatic one. Applies under a free-form parent or out of flow; stored but inert on an in-flow child. Under edit, "none" restores the default. Never takes a node out of flow. |
-| `text` | string \| run[] | A string with markdown (**bold**, *italic*, ~~strike~~, [text](url); backslash-escape a literal *) or an array of styled runs. Read style tokens like {ts1}…{/ts1} are refused. Under edit it replaces the whole content. |
-| `textStyle` | { fontFamily?, fontWeight?, fontSize?, fontStyle?, lineHeight?, letterSpacing?, textDecoration?, textTransform?, fontVariant?, textAlign?, textAlignVertical?, paragraphSpacing?, paragraphIndent?, listSpacing?, hyperlink?, lineClamp? } | The text style base. Runs layer over it. |
-| `boldWeight` | number (100–900) \| name | What `**bold**` in `text` resolves to. Default 700; pass back the value `get` reports so a copy emphasizes like the original. Under edit it only matters beside `text`. |
-| `exposed` | boolean | Expose this nested instance's existing controls in the enclosing instance panel. Writable only inside a component definition; false clears it. |
-| `componentProperties` | { [name]: string \| boolean \| component target } | Values by bare name (no `#id` suffix), as `get` reports them: a variant axis, a boolean, a text, or a component target for an instance_swap. A slot has no value here — its content is `children` under `overrides`. |
-| `overrides` | { [path]: delta } | Sublayer deltas keyed by component-relative path as `get` keys them (`"11:9"`, or `"11:9;11:14"` inside a nested instance), each in that sublayer's edit vocabulary; at a SLOT's path the delta also takes `children`. |
-| `componentId` | component target | Required on a new INSTANCE: its COMPONENT or COMPONENT_SET target. On a live instance, swaps to that component. See Changing an instance. |
-| `componentPropertyReferences` | { visible?, text?, componentId?, slot? } — property names, or null to unbind | On a live sublayer of a COMPONENT: which of its properties drives `visible` (any node), `text` (TEXT), `componentId` (INSTANCE) or `slot` (FRAME); `null` unbinds the field. See Binding a layer in the components section. |
-| `description` | string | Shown beside the component in Figma's assets panel. |
-| `propertyDefinitions` | { [name]: { type?, defaultValue?, name? } \| null } | COMPONENT / COMPONENT_SET, under edit: add, re-default, rename or delete a property. See Changing a component. |
+Create words that edit refuses:
 
-### Words by node type
+- `key` — immutable, since re-keying could mint a duplicate address; rename with `name`.
+- `vectorPaths`, `d`, `scale` (VECTOR) — path geometry; redraw a live path by placing `{ id, d }` with a placement verb (see values).
 
-- **FRAME** — `annotations`, `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `layout`, `minWidth`, `maxWidth`, `minHeight`, `maxHeight`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `fill`, `stroke`, `strokeWidth`, `strokeAlign`, `borderRadius`, `effects`, `rotation`, `clip`, `componentPropertyReferences`
-- **TEXT** — `annotations`, `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `layout`, `minWidth`, `maxWidth`, `minHeight`, `maxHeight`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `text`, `textStyle`, `fill`, `boldWeight`, `componentPropertyReferences`
-- **RECTANGLE** — `annotations`, `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `layout`, `minWidth`, `maxWidth`, `minHeight`, `maxHeight`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `fill`, `stroke`, `strokeWidth`, `strokeAlign`, `borderRadius`, `effects`, `rotation`, `componentPropertyReferences`
-- **ELLIPSE** — `annotations`, `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `layout`, `minWidth`, `maxWidth`, `minHeight`, `maxHeight`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `fill`, `stroke`, `strokeWidth`, `strokeAlign`, `effects`, `rotation`, `componentPropertyReferences`
-- **LINE** — `annotations`, `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `stroke`, `strokeWidth`, `width`, `rotation`, `layout`, `left`, `top`, `position`, `anchor`, `pin`, `componentPropertyReferences`
-- **VECTOR (path- or svg-born)** — `annotations`, `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `layout`, `minWidth`, `maxWidth`, `minHeight`, `maxHeight`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `fill`, `stroke`, `strokeWidth`, `strokeAlign`, `effects`, `rotation`, `componentPropertyReferences`
-- **INSTANCE** — `annotations`, `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `layout`, `minWidth`, `maxWidth`, `minHeight`, `maxHeight`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `fill`, `stroke`, `strokeWidth`, `strokeAlign`, `borderRadius`, `effects`, `rotation`, `clip`, `exposed`, `componentProperties`, `overrides`, `componentId`, `componentPropertyReferences`
-- **COMPONENT** — `annotations`, `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `layout`, `minWidth`, `maxWidth`, `minHeight`, `maxHeight`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `fill`, `stroke`, `strokeWidth`, `strokeAlign`, `borderRadius`, `effects`, `rotation`, `clip`, `description`, `propertyDefinitions`
-- **COMPONENT_SET** — `annotations`, `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `layout`, `minWidth`, `maxWidth`, `minHeight`, `maxHeight`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `fill`, `stroke`, `strokeWidth`, `strokeAlign`, `borderRadius`, `effects`, `rotation`, `clip`, `description`, `propertyDefinitions`
-- **POLYGON** — `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `annotations`
-- **STAR** — `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `annotations`
-- **SLOT** — `annotations`, `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `layout`, `minWidth`, `maxWidth`, `minHeight`, `maxHeight`, `width`, `height`, `left`, `top`, `position`, `anchor`, `pin`, `fill`, `stroke`, `strokeWidth`, `strokeAlign`, `borderRadius`, `effects`, `rotation`, `clip`
+Types you can edit but never create:
 
-On a node type with no vocabulary of its own (GROUP, SECTION, POLYGON, …) only the shared words apply: `name`, `opacity`, `mixBlendMode`, `visible`, `locked`.
+- COMPONENT and COMPONENT_SET — FRAME's words without `componentPropertyReferences`, plus `description`, `propertyDefinitions`.
+- POLYGON and STAR — only `name`, `opacity`, `mixBlendMode`, `visible`, `locked`, `annotations`.
+- SLOT — FRAME's words without `componentPropertyReferences`.
+- Any other type (GROUP, SECTION, …) — only `name`, `opacity`, `mixBlendMode`, `visible`, `locked`.
 
-### Removal — the `"none"` word
+### Removal — `"none"`
 
-`"none"` is the one removal word, surface-wide: `fill`/`stroke` clear the paint, `effects` clears every effect, `position: "none"` returns the node to its parent's flow, `pin` (or `pin: { x: "none" }` per axis) restores the near-edge default, `layout: { mode: "none" }` switches auto-layout off. The same spellings are legal at create, where they mean the explicit default. Sizes are never removed, only replaced within the number/`"fill"`/`"hug"` trio — `width: "hug"` is how a fixed width comes off.
+`"none"` is the one removal word: `fill`/`stroke` clear the paint, `effects` clears every effect, `minWidth` and the other bounds clear the bound, `position: "none"` returns the node to its parent's flow, `pin: "none"` (or per axis) restores the near-edge default, and `layout: { mode: "none" }` turns auto-layout off. Sizes are replaced, never removed: `width: "hug"` takes a fixed width off.
 
 ### Rules
 
-- **A node type takes exactly the words create accepts for it.** `fill` on a LINE, `clip` on a TEXT, `borderRadius` on a VECTOR — each rejects loud, naming the prop, the type, and that type's editable words.
-- **Only the fields you pass change — per axis, too.** `pin: { x: "center" }` keeps the y pin; `left: 10` keeps the live `top`; `width: "hug"` leaves the height alone.
-- **Un-filling really un-fills.** `width: 80` or `"hug"` on a `"fill"` child clears the grow/stretch marks — the new size governs.
-- **Container edits ripple by stated rules.** `layout.alignItems: "stretch"` walks the live children setting their stretch marks; any other value clears every one (Figma doesn't record which child stretched because of the container, so a child that should keep filling needs its own `height: "fill"`). Changing direction — row↔column, or `"none"` to either — clears both flow marks on every in-flow child, since the axes they meant just moved.
-- **Layout legality is create's rule set, applied to live facts** and rejected before any write: a percent on an in-flow child of a hugging parent, `"fill"`/`"N%"` under the page, `"hug"` with nothing to measure, a fixed/percent `height` beside `width: "hug"` on TEXT, or container words on a frame that isn't (and after this delta still won't be) a row/column container. Percents resolve immediately against the live parent.
-- **Text words read the LIVE node.** `text` replaces the whole text and collapses it to its LEADING run's style — prior bold spans and per-range colors do NOT survive, so style the new text in the same edit. A `textStyle` naming part of the font triple keeps the live rest (`fontWeight: "bold"` on italic Roboto stays bold italic Roboto). A text that already MIXES fonts has no single base: a partial font change, or a styled `text` run without its own `fontFamily`, rejects loud — anchor `textStyle.fontFamily` in the same edit, or give every run its family. `lineClamp` needs a bounded width.
-- **Edits inside a component INSTANCE apply as overrides.** A property Figma forbids overriding rejects, naming the instance — edit the main component (flcm never auto-detaches).
-- **An INSTANCE target also takes its three component words** — `componentProperties`, `overrides`, and `componentId` (the swap). See the components section; on any other node type each fails loud as an unknown word for that type.
-- **A COMPONENT or COMPONENT_SET target takes a frame's words plus `description` and `propertyDefinitions`** — editing the main is how every instance of it changes. A layer inside one also takes `componentPropertyReferences`, which binds it to a property. See the components section.
-- **`key` is immutable** — re-keying could mint a duplicate address. Set `name` to change the layers panel.
-- **No bare `x`/`y`** — position is `left`/`top` (naming either lifts a child out of an auto-layout flow; `position: "absolute"` lifts it in place, `position: "none"` returns it), resize behavior is `pin`.
-- **An empty delta is rejected**, since it would still mint an undo step.
-- **Each edit is one undo step.** The whole delta validates before the first write; a Figma refusal mid-apply rolls the node back, and the error carries the target's identity, Figma's reason, and how many earlier mutating calls still stand.
-- Delta values are **absolute**, never relative (`+10`), so re-running an edit converges instead of compounding.
+- **Per field, and per axis.** `pin: { x: "center" }` keeps the y pin; `left: 10` keeps the live `top`; `width: "hug"` leaves the height alone.
+- **A new size replaces fill.** A number or `"hug"` on a `"fill"` child clears its grow/stretch marks.
+- **Container edits ripple.** `layout.alignItems: "stretch"` sets every live child's stretch mark and any other value clears them all, since Figma doesn't record which child stretched because of its container; a child that should keep filling needs its own `"fill"`. Changing direction clears both flow marks on every in-flow child.
+- **Layout legality is create's, checked against live facts** before any write. Percents resolve against the live parent.
+- **Text words read the live node.** `text` replaces the whole text in its leading run's style, so earlier bold spans and per-range colors are lost; style the new text in the same edit. A partial `textStyle` font change keeps the rest of the live font. A text that already mixes fonts has no single base, so a partial font change, or a run without its own `fontFamily`, rejects; set `textStyle.fontFamily` in the same edit, or give every run its family.
+- **Inside an INSTANCE, edits are overrides.** A property Figma won't let you override rejects, naming the instance; edit the main component instead (flcm never detaches for you).
+- **No `x`/`y`.** Position with `left`/`top` or `position`; resize behavior is `pin`.
+- **One undo step, validated first.** The whole delta validates before the first write, a Figma refusal mid-apply rolls the node back, and an empty delta rejects.
+- **Values are absolute**, never relative (`+10`), so re-running an edit converges.
 
 ### Many at once — `flcm.editMany`
 
-`await flcm.editMany([{ id, ...changes }, …])` applies a whole set of deltas as **one** call, returning a handle per entry in order. Each entry is the plain-data node shape used everywhere else — a live node `id` plus exactly an `flcm.edit` delta. A key or a handle is not an id, so locate the nodes first and pass what you got back:
+`await flcm.editMany([{ id, ...changes }, …])` applies several edit deltas as one transaction and returns a handle per entry, in order. Each entry needs a live node `id`; a key or a handle won't do, so locate the nodes first:
 
 ```js
 const cards = await flcm.find({ type: "FRAME", name: "Card" });
 await flcm.editMany(cards.map((card) => ({ id: card.id, fill: "#F6F7F9", borderRadius: 12 })));
 ```
 
-Reach for it whenever you're nudging more than one node — a loop over `flcm.edit` is not the same thing:
+Prefer it to a loop of `flcm.edit` whenever more than one node changes:
 
-- **The set is atomic.** Every id resolves and every delta validates before the first write; a loop would already have mutated entries 1–3 when entry 4's typo surfaced.
-- **One rejection names every bad entry**, indexed, so you fix the batch in one pass; entries that failed the same way report together as one counted line.
-- **The whole batch is one undo step.**
-- **Order doesn't matter** — entries settle ancestors-first, so turning a parent into a row and setting its child to `width: "fill"` works either way round.
-- **Two entries for the same node reject** rather than last-wins; put both fields in one entry.
+- **Atomic, one undo step.** Every id resolves and every delta validates before the first write.
+- **One rejection names every bad entry** by index, so the batch is fixed in one pass.
+- **Order-free.** Entries settle ancestors-first, so a parent's new row direction and its child's `width: "fill"` work in either order.
+- **One entry per node.** A second entry for the same id rejects.
 
-Props only: tree shape stays with `append`/`move`/`remove`/`clone`.
+Props only: tree shape stays with the placement verbs, `remove` and `clone`.
 
 ## Components — making and using them
 
