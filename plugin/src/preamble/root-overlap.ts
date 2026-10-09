@@ -3,6 +3,7 @@
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
 import { sceneFigma as figma } from "./scene-access.js";
+import { isReadableSceneNode } from "./scene-readability.js";
 // A render root lands on the PAGE, and a page has no layout — nothing moves aside to make room. With
 // no `left`/`top` a root goes to the page origin, so a second render lands exactly on top of the
 // first, and the agent (which gets back a handle, not a canvas) has no way to notice. This note is
@@ -59,7 +60,7 @@ export function describeRootOverlap(root: any): string | null {
 
   const hits: { text: string; share: number }[] = [];
   for (const sibling of figma.currentPage.children) {
-    if (sibling.id === root.id || sibling.visible === false) continue;
+    if (sibling.id === root.id || !isReadableSceneNode(sibling) || sibling.visible === false) continue;
     const box = boundsOf(sibling);
     if (!box) continue;
     const share = rectIntersectionArea(rootBox, box) / rootArea;

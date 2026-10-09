@@ -61,3 +61,14 @@ test("many neighbours are ranked and counted, never silently dropped", async () 
   assert.match(note, /landed on top of 5 nodes/);
   assert.match(note, /; and 2 more\./);
 });
+
+// Figma can list a page-level node it cannot read (inherited slot content moved onto the page).
+// The overlap note reads every page child, so it must not turn that node into a failed render.
+test("an unreadable page-level node does not fail the next render", async () => {
+  const zombie = await renderRoot("zombie");
+  for (const key of ["name", "visible", "absoluteBoundingBox"]) {
+    Object.defineProperty(zombie, key, { get() { throw new Error("in get_" + key + ": The node does not exist"); } });
+  }
+  const next = await renderRoot("next");
+  assert.equal(describeRootOverlap(next), null);
+});
