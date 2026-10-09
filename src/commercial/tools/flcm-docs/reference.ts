@@ -27,7 +27,7 @@ import {
   MENTAL_MODEL,
   CHILDREN,
   RICH_TEXT,
-  PERCENT_SIZING,
+  LAYOUT_MODEL,
   VECTOR_INTRO,
   PAINT_INTRO,
   IMAGE_INTRO,
@@ -36,14 +36,12 @@ import {
   VERIFY_LOOP,
   RAW_FIGMA,
   PAGES,
-  READ_SHAPE,
-  READ_GET,
+  READS,
   ANNOTATIONS_REFERENCE,
   CSS_SUBSET,
-  FAIL_LOUD_PRINCIPLE,
+  FIDELITY_AND_SCOPE,
   FAIL_LOUD_ROWS,
   IMAGE_REF_REUSE,
-  OUT_OF_V1,
   UNRENDERABLE_GLYPHS,
   EDIT_INTRO,
   EDIT_REMOVAL,
@@ -205,29 +203,22 @@ const SECTIONS: Section[] = [
     id: "mental-model",
     title: "The mental model",
     blurb:
-      "what a spec is, and the identity, copying, session and scope rules every other section assumes. Read this first",
-    body: () =>
-      `${MENTAL_MODEL}\n\n### Fidelity and scope\n\n${FAIL_LOUD_PRINCIPLE}\n\n${OUT_OF_V1}\n\n` +
-      "### Rules that hold everywhere\n\n" +
-      "- Return ids and handles, never live Figma nodes.\n" +
-      "- Every metric (`width`, `height`, `gap`, `padding`, `borderRadius`, `strokeWidth`, `left`/`top`) " +
-      'takes a number or `"Npx"`; `width`/`height`/`left`/`top` also take `"N%"`, `width`/`height` take ' +
-      '`"fill"`/`"hug"`, and `borderRadius`/`strokeWidth` also take the CSS shorthand (`"12px 12px 0px 0px"`). ' +
-      "Colors, gradients and shadows are CSS strings.\n" +
-      "- Out-of-subset CSS fails loud.",
+      "what a spec is, and the identity, copying, session and fidelity rules every other section assumes. Read this first",
+    body: () => `${MENTAL_MODEL}\n\n### Fidelity and scope\n\n${FIDELITY_AND_SCOPE}`,
   },
   {
     id: "layout",
     title: "Layout and sizing",
     blurb:
-      "how fill, hug and percent sizes resolve, responsive constraints, pin/anchor, bounds and overflow",
-    body: () => PERCENT_SIZING,
+      "where sizing differs from CSS: fixed/fill/hug/percent, constraints and pin/anchor, text width, bounds and overflow",
+    body: () => LAYOUT_MODEL,
   },
   {
     id: "reads",
     title: "Reads and returned data",
-    blurb: "what get/find return: full reads, elided markers, readOnlySource and warnings records",
-    body: () => `${READ_GET}\n\n${READ_SHAPE}`,
+    blurb:
+      "what reads and returns hand back: get/find shape, using a read as a spec, elided, session.last, readOnlySource, warnings",
+    body: () => READS,
   },
   {
     id: "verbs",
