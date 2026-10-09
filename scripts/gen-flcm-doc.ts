@@ -32,16 +32,7 @@ const EXAMPLES_MODULE_PATH = fileURLToPath(new URL("examples-code.generated.ts",
 
 // Keys double as file names: examples/<id>.ts. Adding an example = add the file, add its id here,
 // add its title/intro in examples.ts, run docs:gen.
-const EXAMPLE_IDS = [
-  "login",
-  "caption",
-  "grid",
-  "vector",
-  "image",
-  "reuse",
-  "makeComponent",
-  "components",
-] as const;
+const EXAMPLE_IDS = ["login", "grid", "reuse", "makeComponent", "components"] as const;
 
 const START = "// example:start";
 const END = "// example:end";
@@ -134,18 +125,23 @@ syncArtifact(
 // Import the reference builders only now: they read the generated examples module, which the gen
 // path just rewrote (and the check path just verified fresh) — a static import would render the
 // doc from stale strings.
-const { buildFullReference, buildQuickStart, MCP_REFERENCE_CALL, oversizedReferenceSections } =
-  await import("../src/commercial/tools/flcm-docs/reference.js");
+const { buildFullReference, buildQuickStart, oversizedReferenceSections } = await import(
+  "../src/commercial/tools/flcm-docs/reference.js"
+);
+const { CLI_DOCS_CHANNEL, MCP_DOCS_CHANNEL } = await import(
+  "../src/commercial/tools/flcm-docs/channels.js"
+);
 
 // Building the quick-start here (not just the full doc) makes its ≤2KB cap a validate-time gate: the
 // call throws if the figma_execute_code description ever overflows, so `docs:check` fails rather than
 // the server silently shipping a truncated contract.
-buildQuickStart(MCP_REFERENCE_CALL);
+buildQuickStart(MCP_DOCS_CHANNEL);
+buildQuickStart(CLI_DOCS_CHANNEL);
 
 // Same idea for the get_flcm_reference size cap. A section over the response budget is unreachable
 // through the tool — the budget loop always emits the first one — so fail validate here rather than at
 // runtime, as a silently-truncated tool result in an agent's context.
-const oversized = oversizedReferenceSections();
+const oversized = oversizedReferenceSections([MCP_DOCS_CHANNEL, CLI_DOCS_CHANNEL]);
 if (oversized.length) {
   console.error(
     oversized
@@ -161,7 +157,8 @@ if (oversized.length) {
 
 syncArtifact(
   DOC_PATH,
-  BANNER + buildFullReference(),
+  // The committed doc speaks the MCP channel: it is what the get_flcm_reference tool serves.
+  BANNER + buildFullReference(MCP_DOCS_CHANNEL),
   "plugin/docs/authoring/flcm.md is stale — it no longer matches the generated reference.",
 );
 if (mode === "check") console.log("flcm docs are in sync with the schema.");

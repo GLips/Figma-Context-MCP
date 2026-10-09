@@ -6,8 +6,8 @@ import { INPUT_ALIASES } from "@framelink/plugin/schema";
 import {
   buildFullReference,
   buildReferenceSections,
-  MCP_REFERENCE_CALL,
 } from "~/commercial/tools/flcm-docs/reference.js";
+import { CLI_DOCS_CHANNEL, MCP_DOCS_CHANNEL } from "~/commercial/tools/flcm-docs/channels.js";
 import { describe, expect, it } from "vitest";
 
 // The mental model used to ship only to a caller who named nothing, which is nobody who knows what
@@ -15,8 +15,8 @@ import { describe, expect, it } from "vitest";
 // and a nameless call must come back as a menu rather than a page of reference an agent didn't ask for.
 describe("get_flcm_reference delivery", () => {
   it("refuses a call that names no sections, and points at mental-model", () => {
-    const blank = buildReferenceSections(undefined, MCP_REFERENCE_CALL);
-    const empty = buildReferenceSections([], MCP_REFERENCE_CALL);
+    const blank = buildReferenceSections(undefined, MCP_DOCS_CHANNEL);
+    const empty = buildReferenceSections([], MCP_DOCS_CHANNEL);
 
     expect(blank).toBe(empty);
     expect(blank).toContain('get_flcm_reference(["mental-model"])');
@@ -25,7 +25,7 @@ describe("get_flcm_reference delivery", () => {
   });
 
   it("serves the mental model to a caller that names it", () => {
-    const body = buildReferenceSections(["mental-model"], MCP_REFERENCE_CALL);
+    const body = buildReferenceSections(["mental-model"], MCP_DOCS_CHANNEL);
 
     expect(body).toContain("Nodes are plain JavaScript data");
     expect(body).toContain("Removing only the root id creates a new root");
@@ -33,8 +33,19 @@ describe("get_flcm_reference delivery", () => {
   });
 });
 
+// A CLI reader has no MCP tools, so telling it to call get_screenshot sends it after something it
+// cannot reach. The screenshot step must come back in the reader's own channel.
+it("spells the screenshot step in the reader's channel", () => {
+  const mcp = buildReferenceSections(["recipes"], MCP_DOCS_CHANNEL);
+  const cli = buildReferenceSections(["recipes"], CLI_DOCS_CHANNEL);
+
+  expect(mcp).toContain("get_screenshot");
+  expect(cli).toContain("--screenshot");
+  expect(cli).not.toMatch(/get_screenshot|figma_execute_code|get_flcm_reference/);
+});
+
 it("documents input aliases once, outside canonical prop tables and node key lists", () => {
-  const doc = buildFullReference();
+  const doc = buildFullReference(MCP_DOCS_CHANNEL);
   const block = doc.split("### Native spellings accepted\n")[1].split("\n### ")[0];
   for (const rule of Object.values(INPUT_ALIASES)) {
     for (const key of rule.keys) {

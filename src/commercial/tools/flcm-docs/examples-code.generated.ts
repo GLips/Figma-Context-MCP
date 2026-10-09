@@ -110,25 +110,6 @@ return {
     card: out.children[2].id,
     title: out.children[1].text, // "Welcome back"
 };`,
-  caption: `// One text node, three styles: a colored @handle, plain body copy, a muted "more". The base props
-// (size 15, a line height) apply to every run; each run overrides only what it changes.
-const caption = {
-    type: "TEXT",
-    text: [
-        ["@ridgeline", { fontWeight: "semibold", color: "#6366F1" }],
-        " summited at golden hour — the whole valley lit up. ",
-        ["more", { color: "#8E8E93" }],
-    ],
-    key: "caption",
-    fill: "#111827",
-    width: 340,
-    textStyle: { fontSize: 15, lineHeight: "20px" },
-};
-const out = await flcm.render(caption);
-return {
-    caption: out.id,
-    text: out.text,
-};`,
   grid: `const grid = await flcm.render({
     type: "FRAME",
     name: "Grid cards",
@@ -159,85 +140,6 @@ return {
     ],
 });
 return (await flcm.get(grid)).node;`,
-  vector: `// A round "play" button showing both vector forms and how each is sized.
-const player = {
-    type: "FRAME",
-    width: 96,
-    height: 96,
-    borderRadius: 48,
-    fill: "#111827",
-    children: [
-        // \`d\` is bare geometry: this path is 32x36 because those are its own coordinates, and \`scale\`
-        // is what makes it bigger. No width/height — they'd be a canvas the path doesn't have.
-        {
-            type: "VECTOR",
-            key: "play",
-            d: "M0 0 L32 18 L0 36 Z",
-            fill: "#6366F1",
-            scale: 1.5,
-            left: 34,
-            top: 24,
-        },
-        // \`svg\` is a canvas: the viewBox sets the coordinate space, width/height size it, and \`fill\`
-        // repaints every vector inside — so the same markup serves every theme.
-        {
-            type: "VECTOR",
-            svg: '<svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="#22C55E"/></svg>',
-            fill: "#F9FAFB",
-            width: 16,
-            height: 16,
-            left: 8,
-            top: 8,
-        },
-    ],
-};
-const out = await flcm.render(player);
-return { node: out.id, play: out.children[0].id };`,
-  image: `// A feed post: a real photo as a frame fill, and a circular avatar as an ellipse filled with an image.
-// flcm.image is a paint value — any shape carries one. The server fetches the bytes; your code doesn't.
-const post = {
-    type: "FRAME",
-    layout: { mode: "column", gap: 8 },
-    width: 390,
-    children: [
-        {
-            // The photo carries TWO paints — a stack, first entry on top, the order a read returns. The
-            // scrim darkens the bottom of the photo so the title over it stays legible at any exposure.
-            type: "FRAME",
-            width: 390,
-            height: 260,
-            fill: [
-                flcm.gradient({ stops: ["rgba(0,0,0,0)", "rgba(0,0,0,0.65)"], angle: 180 }),
-                flcm.image("https://example.com/photo.jpg"),
-            ],
-            children: [
-                {
-                    type: "TEXT",
-                    text: "Ridgeline at golden hour",
-                    textStyle: { fontSize: 20, fontWeight: "semibold" },
-                    fill: "#FFFFFF",
-                    left: 16,
-                    top: 216,
-                },
-            ],
-        },
-        {
-            type: "FRAME",
-            layout: { mode: "row", gap: 8, padding: 12, alignItems: "center" },
-            children: [
-                {
-                    type: "ELLIPSE",
-                    width: 40,
-                    height: 40,
-                    fill: flcm.image("https://example.com/avatar.jpg", { scaleMode: "FILL" }),
-                },
-                { type: "TEXT", text: "@ridgeline", textStyle: { fontWeight: "semibold", fontSize: 14 } },
-            ],
-        },
-    ],
-};
-const out = await flcm.render(post);
-return out.id;`,
   reuse: `const { node } = await flcm.get("caption");
 // Keeping ids moves the nodes you read and edits their named props.
 const moved = await flcm.append("sidebar", { ...node, width: 480 });

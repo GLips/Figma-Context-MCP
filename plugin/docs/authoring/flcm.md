@@ -954,35 +954,35 @@ On an instance, each of these resolves against the live component before the fir
 
 ## Recipes
 
-### Seeing what you built (get_screenshot)
+### Check what you built
 
-You cannot judge what you built from the code you wrote — hairlines, grain, glass, 1px strokes and missing glyphs all *look* fine in source. **Build → screenshot → look → fix.**
+You cannot judge a build from the code you wrote: hairlines, grain, glass, 1px strokes and missing glyphs all look fine in source. **Build, screenshot, look, fix**, and finish every recipe below this way.
 
-`get_screenshot` is a separate **MCP tool**, not an `flcm` verb (there is no `flcm.screenshot`). Keep the render result in `session` for later code calls; pass its id string to the screenshot tool.
+`get_screenshot` is a separate tool, not an `flcm` verb. Return the id from the build call, then pass it:
 
 ```js
-// call 1 — figma_execute_code
-const out = await flcm.render(card);
-return out;
+// figma_execute_code
+session.card = await flcm.render(card);
+return session.card.id;
 ```
 
 ```
-// call 2 — get_screenshot
+// get_screenshot
 { "nodeId": "12:345" }             // the id you just returned
-{ "key": "transportBar" }          // or a key you authored — resolved on the current page
-{ "nodeId": "12:345", "scale": 3 } // 3× resolution, to inspect fine detail
+{ "key": "card" }                  // or a key you authored, resolved on the current page
+{ "nodeId": "12:345", "scale": 3 } // 3× resolution, for fine detail
 ```
 
-- **`nodeId`** — any handle's `.id`, or an id from a read verb.
-- **`key`** — a key you authored. Matching no node, or more than one, fails loud; a failed lookup never falls back to a page-wide capture.
-- **Omit both** to capture the whole current page.
-- **`scale`** (>0, ≤4; default 1) multiplies export resolution. Detail below ~24px — a 1px stroke, a hairline, grain, small type — isn't reliably judgeable at 1×; shoot it at 2–4×.
+- **A node id** — any handle's `.id`, or an id from a read verb.
+- **A key** — one you authored. Matching no node, or several, fails loud; a failed lookup never falls back to the whole page.
+- **Neither** captures the whole current page.
+- **Scale** (above 0, up to 4; default 1) — detail under ~24px (a 1px stroke, grain, small type) isn't judgeable at 1×, so shoot it at 2–4.
 
-An unknown param name is named back to you, not ignored, so a typo costs one retry rather than a wrong conclusion.
+**Done when** the screenshot shows what you meant to build, at a scale where its finest detail is visible.
 
-### The login screen
+### Build a screen from scratch
 
-A gradient background, an out-of-flow radial-glow decoration declared first (so it sits behind), a frosted card whose shadow and blur are plain CSS strings, fixed and "fill" sizing, rgba/hex solids, numeric font weights, and child identities returned in the authored tree.
+One render builds the whole tree. A node declared first paints behind its siblings, and `left`/`top` lift it out of the column, which is how the glow sits behind the title. Return the ids you'll use next.
 
 ```js
 const fields = [
@@ -1090,35 +1090,11 @@ return {
 };
 ```
 
-### A feed caption (rich text)
+**Done when** a screenshot of `node` at scale 2 shows the glow behind the title and the card's 1px border.
 
-One `TEXT` node carrying three styled runs — a colored `@handle`, plain body copy, and a muted `more` — over shared base props, wrapped to a fixed width. Replaces four hand-split text nodes.
+### Lay out a grid
 
-```js
-// One text node, three styles: a colored @handle, plain body copy, a muted "more". The base props
-// (size 15, a line height) apply to every run; each run overrides only what it changes.
-const caption = {
-    type: "TEXT",
-    text: [
-        ["@ridgeline", { fontWeight: "semibold", color: "#6366F1" }],
-        " summited at golden hour — the whole valley lit up. ",
-        ["more", { color: "#8E8E93" }],
-    ],
-    key: "caption",
-    fill: "#111827",
-    width: 340,
-    textStyle: { fontSize: 15, lineHeight: "20px" },
-};
-const out = await flcm.render(caption);
-return {
-    caption: out.id,
-    text: out.text,
-};
-```
-
-### Grid tracks and cell placement
-
-Columns are explicit and fractional, so the frame takes a fixed width; rows are omitted, so they are implicit hug tracks — as many as the children need, growing as more arrive. Children auto-place unless anchors or spans are supplied.
+Name the columns and give the frame a width: `fr` tracks divide a fixed width. Leave the rows out and they grow to fit the children. A child spans with `gridColumn: "span 2"` and aligns in its cell with `justifySelf`/`alignSelf`.
 
 ```js
 const grid = await flcm.render({
@@ -1153,102 +1129,11 @@ const grid = await flcm.render({
 return (await flcm.get(grid)).node;
 ```
 
-### Vector art (svg & path)
+**Done when** a screenshot shows the banner across both columns and the small tile centred at the bottom of its cell.
 
-Both vector forms side by side, and how each is sized: a `d` triangle, which is bare geometry sized by `scale`, and an `svg` mark, which is art on a canvas sized by `width`/`height` and recolored through `fill`. No icon catalog — you bring the path data or markup.
+### Copy or move what's already on the canvas
 
-```js
-// A round "play" button showing both vector forms and how each is sized.
-const player = {
-    type: "FRAME",
-    width: 96,
-    height: 96,
-    borderRadius: 48,
-    fill: "#111827",
-    children: [
-        // `d` is bare geometry: this path is 32x36 because those are its own coordinates, and `scale`
-        // is what makes it bigger. No width/height — they'd be a canvas the path doesn't have.
-        {
-            type: "VECTOR",
-            key: "play",
-            d: "M0 0 L32 18 L0 36 Z",
-            fill: "#6366F1",
-            scale: 1.5,
-            left: 34,
-            top: 24,
-        },
-        // `svg` is a canvas: the viewBox sets the coordinate space, width/height size it, and `fill`
-        // repaints every vector inside — so the same markup serves every theme.
-        {
-            type: "VECTOR",
-            svg: '<svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="#22C55E"/></svg>',
-            fill: "#F9FAFB",
-            width: 16,
-            height: 16,
-            left: 8,
-            top: 8,
-        },
-    ],
-};
-const out = await flcm.render(player);
-return { node: out.id, play: out.children[0].id };
-```
-
-### Images (real raster fills)
-
-A feed post with a real photo as a frame fill and a circular avatar as an `ellipse` filled with an image. `flcm.image(url)` is a paint value, so any shape carries one; the server fetches the bytes. The photo takes a paint *stack* — a legibility scrim over the image, first entry on top — so the title sitting on it stays readable.
-
-```js
-// A feed post: a real photo as a frame fill, and a circular avatar as an ellipse filled with an image.
-// flcm.image is a paint value — any shape carries one. The server fetches the bytes; your code doesn't.
-const post = {
-    type: "FRAME",
-    layout: { mode: "column", gap: 8 },
-    width: 390,
-    children: [
-        {
-            // The photo carries TWO paints — a stack, first entry on top, the order a read returns. The
-            // scrim darkens the bottom of the photo so the title over it stays legible at any exposure.
-            type: "FRAME",
-            width: 390,
-            height: 260,
-            fill: [
-                flcm.gradient({ stops: ["rgba(0,0,0,0)", "rgba(0,0,0,0.65)"], angle: 180 }),
-                flcm.image("https://example.com/photo.jpg"),
-            ],
-            children: [
-                {
-                    type: "TEXT",
-                    text: "Ridgeline at golden hour",
-                    textStyle: { fontSize: 20, fontWeight: "semibold" },
-                    fill: "#FFFFFF",
-                    left: 16,
-                    top: 216,
-                },
-            ],
-        },
-        {
-            type: "FRAME",
-            layout: { mode: "row", gap: 8, padding: 12, alignItems: "center" },
-            children: [
-                {
-                    type: "ELLIPSE",
-                    width: 40,
-                    height: 40,
-                    fill: flcm.image("https://example.com/avatar.jpg", { scaleMode: "FILL" }),
-                },
-                { type: "TEXT", text: "@ridgeline", textStyle: { fontWeight: "semibold", fontSize: 14 } },
-            ],
-        },
-    ],
-};
-const out = await flcm.render(post);
-return out.id;
-```
-
-### Copying what's already on the canvas (get → plain data)
-
-The read↔write seam: `flcm.get` reads a live subtree as the canonical shape, you edit that shape like any object. Keep ids to move, or drop them recursively to create a copy. A structural verb places a COPY. `flcm.clone` stays the faithful duplicate for subtrees a rebuild can't reproduce.
+`flcm.get` reads a live subtree as a spec you edit like any object. Keep the ids to move those nodes; drop them, at every depth you want copied, to create new ones. `flcm.clone` is the faithful copy for live state a spec can't express.
 
 ```js
 const { node } = await flcm.get("caption");
@@ -1263,9 +1148,11 @@ const faithful = await flcm.clone(moved, "sidebar");
 return { moved, copy, faithful };
 ```
 
-### Authoring a component (flcm.component → flcm.variants)
+**Done when** `copy` comes back with new ids, `moved` keeps the ones you read, and a screenshot of the sidebar shows both.
 
-A Button, authored then promoted to a COMPONENT in one call — a boolean, a text and a slot property, each bound to the node it drives, defaults derived from those nodes — then two sizes folded into a variant set.
+### Make a component with variants
+
+Build the component as a frame whose layers name the property that drives them, promote each size with `flcm.component`, then fold them into a set with `flcm.variants`. Defaults come from the bound layers, so only the boolean states its own.
 
 ```js
 // Author a Button, then fold two sizes of it into a variant set. Each node a property drives says
@@ -1328,9 +1215,11 @@ await flcm.render({
 return { set: set.id, label: small.children[1].id };
 ```
 
-### Instantiating a component (INSTANCE)
+**Done when** a screenshot of the set shows both sizes, and the new instance's label reads "Publish".
 
-Buttons stamped from a set found by name: a variant picked by its axes, a bound label set through `componentProperties`, a sublayer overridden by path, and a read instance re-authored as-is.
+### Use a component from the file
+
+Find the component by name and read it first: `get`'s `components` sidecar lists its property names, variant options and sublayer paths. Pick a variant by its axes in `componentProperties`, and change a sublayer by its path in `overrides`.
 
 ```js
 // A toolbar from the file's Button set. Read it first: the `components` sidecar lists its property
@@ -1368,15 +1257,19 @@ await flcm.append("toolbar", { ...copy, name: "Save (copy)" });
 return { toolbar: out.id, definitions: Object.keys(components ?? {}) };
 ```
 
-### The raw `figma.*` escape hatch
+**Done when** a screenshot of the toolbar shows Save and Cancel, with Cancel 120px wide and its overridden layer red.
 
-The full Figma plugin API is in scope alongside `flcm`. **Author with `flcm`** — it's the surface that fails loud instead of rendering wrong pixels. **Drop to `figma.*`** for what the DSL doesn't cover: viewport, selection, and other *document* rather than *design* operations.
+### Move the viewport, selection and other document state
+
+The full Figma plugin API is in scope alongside `flcm`. **Author with `flcm`**, the surface that fails loud instead of rendering wrong pixels. **Drop to `figma.*`** for document operations the DSL doesn't cover, like the viewport and selection.
 
 ```js
-const out = await flcm.render(screen);                                  // author with flcm
-const live = await figma.getNodeByIdAsync(out.node.id);                 // drop out for document ops
+const out = await flcm.render(screen);                     // author with flcm
+const live = await figma.getNodeByIdAsync(out.id);         // drop out for document ops
 figma.viewport.scrollAndZoomIntoView([live]);
-return out.node.id;
+return out.id;
 ```
 
-Raw `figma.*` gives up every guarantee this DSL makes (fills are 0–1 assigned as a new array, fonts load before `characters`, a node is invisible until appended) — use it for plumbing, and come back to `flcm` to author.
+Raw `figma.*` gives up every guarantee this DSL makes (fills are 0–1 assigned as a new array, fonts load before `characters`, a node is invisible until appended), so use it for plumbing and come back to `flcm` to author.
+
+**Done when** Figma shows the document state you asked for; design changes still go through `flcm` and the screenshot check.

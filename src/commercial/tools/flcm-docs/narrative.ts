@@ -265,40 +265,32 @@ export const RENDER_KEYS = `\`await flcm.render(spec)\` places the spec on the c
 
 \`key\` is optional persistent metadata used by find and findOne. It does not decide identity. Duplicate keys within one authored tree are refused. Returned dimensions remain the authored values; use measure for realized pixels and get for current read data.`;
 
-export const VERIFY_LOOP = `You cannot judge what you built from the code you wrote — hairlines, grain, glass, 1px strokes and missing glyphs all *look* fine in source. **Build → screenshot → look → fix.**
+// The recipe every other recipe finishes with. How to take the screenshot depends on the reader's
+// channel (MCP tool or CLI flag), so the caller supplies that part; the targeting rules are shared.
+export const verifyRecipe = (screenshotHowTo: string) =>
+  `You cannot judge a build from the code you wrote: hairlines, grain, glass, 1px strokes and missing glyphs all look fine in source. **Build, screenshot, look, fix**, and finish every recipe below this way.
 
-\`get_screenshot\` is a separate **MCP tool**, not an \`flcm\` verb (there is no \`flcm.screenshot\`). Keep the render result in \`session\` for later code calls; pass its id string to the screenshot tool.
+${screenshotHowTo}
 
-\`\`\`js
-// call 1 — figma_execute_code
-const out = await flcm.render(card);
-return out;
-\`\`\`
+- **A node id** — any handle's \`.id\`, or an id from a read verb.
+- **A key** — one you authored. Matching no node, or several, fails loud; a failed lookup never falls back to the whole page.
+- **Neither** captures the whole current page.
+- **Scale** (above 0, up to 4; default 1) — detail under ~24px (a 1px stroke, grain, small type) isn't judgeable at 1×, so shoot it at 2–4.
 
-\`\`\`
-// call 2 — get_screenshot
-{ "nodeId": "12:345" }             // the id you just returned
-{ "key": "transportBar" }          // or a key you authored — resolved on the current page
-{ "nodeId": "12:345", "scale": 3 } // 3× resolution, to inspect fine detail
-\`\`\`
+**Done when** the screenshot shows what you meant to build, at a scale where its finest detail is visible.`;
 
-- **\`nodeId\`** — any handle's \`.id\`, or an id from a read verb.
-- **\`key\`** — a key you authored. Matching no node, or more than one, fails loud; a failed lookup never falls back to a page-wide capture.
-- **Omit both** to capture the whole current page.
-- **\`scale\`** (>0, ≤4; default 1) multiplies export resolution. Detail below ~24px — a 1px stroke, a hairline, grain, small type — isn't reliably judgeable at 1×; shoot it at 2–4×.
-
-An unknown param name is named back to you, not ignored, so a typo costs one retry rather than a wrong conclusion.`;
-
-export const RAW_FIGMA = `The full Figma plugin API is in scope alongside \`flcm\`. **Author with \`flcm\`** — it's the surface that fails loud instead of rendering wrong pixels. **Drop to \`figma.*\`** for what the DSL doesn't cover: viewport, selection, and other *document* rather than *design* operations.
+export const RAW_FIGMA = `The full Figma plugin API is in scope alongside \`flcm\`. **Author with \`flcm\`**, the surface that fails loud instead of rendering wrong pixels. **Drop to \`figma.*\`** for document operations the DSL doesn't cover, like the viewport and selection.
 
 \`\`\`js
-const out = await flcm.render(screen);                                  // author with flcm
-const live = await figma.getNodeByIdAsync(out.node.id);                 // drop out for document ops
+const out = await flcm.render(screen);                     // author with flcm
+const live = await figma.getNodeByIdAsync(out.id);         // drop out for document ops
 figma.viewport.scrollAndZoomIntoView([live]);
-return out.node.id;
+return out.id;
 \`\`\`
 
-Raw \`figma.*\` gives up every guarantee this DSL makes (fills are 0–1 assigned as a new array, fonts load before \`characters\`, a node is invisible until appended) — use it for plumbing, and come back to \`flcm\` to author.`;
+Raw \`figma.*\` gives up every guarantee this DSL makes (fills are 0–1 assigned as a new array, fonts load before \`characters\`, a node is invisible until appended), so use it for plumbing and come back to \`flcm\` to author.
+
+**Done when** Figma shows the document state you asked for; design changes still go through \`flcm\` and the screenshot check.`;
 
 export const PAGES = `**Pages** are covered — every verb acts on the current page, and \`flcm.page\` is how you see and change which one that is:
 

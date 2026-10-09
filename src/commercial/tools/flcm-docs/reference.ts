@@ -8,7 +8,8 @@
 //     generated), also printed by `execute --help`.
 //   • buildReferenceSections(s)  → the get_flcm_reference tool / `reference` command output: the named
 //     sections, or a refusal naming the sections when none were asked for.
-// Both are served over MCP and the CLI, so every "fetch more docs" pointer is spelled by a ReferenceCall.
+// Both are served over MCP and the CLI, so every pointer to screenshots or more docs is spelled by a
+// DocsChannel (channels.ts).
 // buildFullReference() concatenates every section for the committed human doc (slice: flcm.md regen), so
 // the repo doc and the served doc are assembled from the SAME source and cannot drift.
 //
@@ -33,7 +34,7 @@ import {
   IMAGE_INTRO,
   EFFECTS_INTRO,
   RENDER_KEYS,
-  VERIFY_LOOP,
+  verifyRecipe,
   RAW_FIGMA,
   PAGES,
   READS,
@@ -58,17 +59,9 @@ import {
   COMPONENTS_RULES,
 } from "./narrative.js";
 import { EXAMPLES } from "./examples.js";
-import { CLI_NAME } from "../../../utils/cli-help.js";
+import type { DocsChannel } from "./channels.js";
 
 type Fields = Record<string, z.ZodType>;
-
-/** Spells the request for some reference sections in the reader's channel. */
-export type ReferenceCall = (sectionIds: string[]) => string;
-
-export const MCP_REFERENCE_CALL: ReferenceCall = (ids) =>
-  `get_flcm_reference([${ids.map((id) => JSON.stringify(id)).join(", ")}])`;
-
-export const CLI_REFERENCE_CALL: ReferenceCall = (ids) => `${CLI_NAME} reference ${ids.join(" ")}`;
 
 // A markdown cell can't contain a raw `|` (type labels like `number | "fill"` do) — escape it.
 const cell = (s: string) => s.replace(/\|/g, "\\|").trim();
@@ -185,7 +178,7 @@ interface Section {
   id: string;
   title: string;
   blurb: string; // one-liner for the menu a nameless call gets back
-  body: () => string;
+  body: (channel: DocsChannel) => string;
 }
 
 // Inside a merged section, a fragment's own `###` subheadings sit one level under the section's `###`.
@@ -330,13 +323,15 @@ const SECTIONS: Section[] = [
     id: "recipes",
     title: "Recipes",
     blurb:
-      "worked tasks: build → screenshot → fix, full screens, copying from the canvas, components, and the raw figma.* escape hatch",
-    body: () =>
-      `### Seeing what you built (get_screenshot)\n\n${VERIFY_LOOP}\n\n` +
-      EXAMPLES.map((ex) => `### ${ex.title}\n\n${ex.intro}\n\n\`\`\`js\n${ex.code}\n\`\`\``).join(
-        "\n\n",
-      ) +
-      `\n\n### The raw \`figma.*\` escape hatch\n\n${RAW_FIGMA}`,
+      "how-tos by task: check what you built, build a screen, lay out a grid, copy from the canvas, make and use components, document operations",
+    // Check-what-you-built leads because every other recipe finishes with it.
+    body: (channel) =>
+      `### Check what you built\n\n${verifyRecipe(channel.screenshotHowTo)}\n\n` +
+      EXAMPLES.map(
+        (ex) =>
+          `### ${ex.title}\n\n${ex.intro}\n\n\`\`\`js\n${ex.code}\n\`\`\`\n\n**Done when** ${ex.doneWhen}`,
+      ).join("\n\n") +
+      `\n\n### Move the viewport, selection and other document state\n\n${RAW_FIGMA}`,
   },
 ];
 
@@ -388,13 +383,13 @@ function quickStartVerbLines(): string {
 // The docs pointer prints the literal first call: it names the must-read section and shows that the
 // argument is required, in one gesture. `mental-model` is SECTIONS[0], so the rest list without it —
 // which also buys back bytes of a budget the reference tool's own ids keep eating.
-function docsPointer(call: ReferenceCall): string {
-  return `FULL DOCS — ${call([SECTION_IDS[0]])} first, then: ${SECTION_IDS.slice(1).join(", ")}.`;
+function docsPointer(channel: DocsChannel): string {
+  return `FULL DOCS — ${channel.referenceCall([SECTION_IDS[0]])} first, then: ${SECTION_IDS.slice(1).join(", ")}.`;
 }
 
 // ---- The ≤2KB quick-start = the figma_execute_code description. Critical-first: execution model, generated
 // verb signatures, the must-knows, the pointer to the reference tool. ----
-export function buildQuickStart(call: ReferenceCall): string {
+export function buildQuickStart(channel: DocsChannel): string {
   const verbLines = quickStartVerbLines();
   const quickStart = `Execute JavaScript in Figma with \`flcm\`.
 
@@ -414,7 +409,7 @@ MUST-KNOW
 - Metrics take a number or "Npx"; width/height also take "N%", "fill", "hug". Colors/gradients/shadows are CSS strings.
 - Unsupported CSS fails loud.
 
-${docsPointer(call)}
+${docsPointer(channel)}
 
 RETURNS { result, console, errors }: JSON-safe result, captured console lines, error string or null.`;
 
@@ -445,11 +440,11 @@ export function buildReferenceMenu(): string {
   return SECTIONS.map((s) => `- \`${s.id}\` — ${s.blurb}`).join("\n");
 }
 
-function blankCallRefusal(note: string, call: ReferenceCall): string {
+function blankCallRefusal(note: string, channel: DocsChannel): string {
   return (
     `# flcm reference\n\n${note}` +
     "The reference needs the sections you want, so this call returned none. " +
-    `Retry naming them — start with \`${call([SECTION_IDS[0]])}\`. ` +
+    `Retry naming them — start with \`${channel.referenceCall([SECTION_IDS[0]])}\`. ` +
     "Several ids in one call are served together, deduped and in the order below.\n\n" +
     buildReferenceMenu()
   );
@@ -460,14 +455,14 @@ function blankCallRefusal(note: string, call: ReferenceCall): string {
 // many. Unknown ids are dropped with a note rather than erroring, so a wrong name self-corrects. ----
 export function buildReferenceSections(
   sections: string[] | undefined,
-  call: ReferenceCall,
+  channel: DocsChannel,
 ): string {
   const wanted = (sections ?? []).map((s) => s.trim().toLowerCase());
   const chosen = SECTIONS.filter((s) => wanted.includes(s.id)); // canonical order + dedupe
   const unknown = wanted.filter((w) => !SECTION_IDS.includes(w));
   if (!chosen.length) {
     const note = unknown.length ? `No section ${unknown.map((u) => `"${u}"`).join(", ")}.\n\n` : "";
-    return blankCallRefusal(note, call);
+    return blankCallRefusal(note, channel);
   }
 
   // Fill the budget in canonical order, then say out loud which sections didn't fit and how to get them.
@@ -476,7 +471,7 @@ export function buildReferenceSections(
   const dropped: string[] = [];
   let bytes = 0;
   for (const section of chosen) {
-    const part = `# flcm reference — ${section.title}\n\n${section.body()}`;
+    const part = `# flcm reference — ${section.title}\n\n${section.body(channel)}`;
     const size = Buffer.byteLength(part, "utf8");
     if (parts.length && bytes + size > REFERENCE_LIMIT_BYTES) {
       dropped.push(section.id);
@@ -488,7 +483,7 @@ export function buildReferenceSections(
   if (dropped.length) {
     parts.push(
       `_Too big for one response, so ${dropped.length > 1 ? "these sections were" : "this section was"} left out: ` +
-        `${dropped.map((d) => `\`${d}\``).join(", ")}. Run \`${call(dropped)}\` for ${dropped.length > 1 ? "them" : "it"}._`,
+        `${dropped.map((d) => `\`${d}\``).join(", ")}. Run \`${channel.referenceCall(dropped)}\` for ${dropped.length > 1 ? "them" : "it"}._`,
     );
   }
   if (unknown.length) {
@@ -504,18 +499,24 @@ export function buildReferenceSections(
  * tool, since the budget loop always emits the first one. Called by `docs:gen`/`docs:check` so a section
  * that outgrows the ceiling fails validate (tier-2) instead of shipping a doc no agent can read.
  */
-export function oversizedReferenceSections(): { id: string; bytes: number; limit: number }[] {
+export function oversizedReferenceSections(
+  channels: DocsChannel[],
+): { id: string; bytes: number; limit: number }[] {
   return SECTIONS.map((s) => ({
     id: s.id,
-    bytes: Buffer.byteLength(`# flcm reference — ${s.title}\n\n${s.body()}`, "utf8"),
+    bytes: Math.max(
+      ...channels.map((c) =>
+        Buffer.byteLength(`# flcm reference — ${s.title}\n\n${s.body(c)}`, "utf8"),
+      ),
+    ),
     limit: REFERENCE_LIMIT_BYTES,
   })).filter((s) => s.bytes > s.limit);
 }
 
 // The whole reference, in section order — the committed human doc is regenerated from this, so repo and
 // served docs are the same bytes. The mental model rides in as the first section, not separately.
-export function buildFullReference(): string {
-  const body = SECTIONS.map((s) => `## ${s.title}\n\n${s.body()}`).join("\n\n");
+export function buildFullReference(channel: DocsChannel): string {
+  const body = SECTIONS.map((s) => `## ${s.title}\n\n${s.body(channel)}`).join("\n\n");
   return `# Authoring with \`flcm\`\n\n${body}\n`;
 }
 

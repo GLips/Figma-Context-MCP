@@ -15,7 +15,8 @@ import {
   MAX_SCREENSHOT_SCALE,
   screenshotInputError,
 } from "~/commercial/plugin-bridge/screenshot-options.js";
-import { buildQuickStart, CLI_REFERENCE_CALL } from "~/commercial/tools/flcm-docs/reference.js";
+import { buildQuickStart } from "~/commercial/tools/flcm-docs/reference.js";
+import { CLI_DOCS_CHANNEL } from "~/commercial/tools/flcm-docs/channels.js";
 import { buildCommandHelp } from "~/utils/cli-help.js";
 
 const DEFAULT_WAIT_SECONDS = 600;
@@ -41,7 +42,7 @@ resubmitted automatically.`,
       ],
       // After the flags because it is what the script file needs; its FULL DOCS line is the next
       // disclosure step, into `reference`.
-      appendix: [{ title: "Writing the script:", body: buildQuickStart(CLI_REFERENCE_CALL) }],
+      appendix: [{ title: "Writing the script:", body: buildQuickStart(CLI_DOCS_CHANNEL) }],
     }),
     flags: {
       output: {
