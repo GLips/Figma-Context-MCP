@@ -2,25 +2,20 @@
  * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
+import { MAX_SCREENSHOT_SCALE } from "~/commercial/plugin-bridge/screenshot-options.js";
 import { startProgressHeartbeat, type ToolExtra } from "~/mcp/progress.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import type { PluginBridgeRuntime } from "~/commercial/plugin-bridge/index.js";
-import { BridgeRequestError } from "~/commercial/plugin-bridge/bridge.js";
+import { isPendingApproval } from "~/commercial/plugin-bridge/await-approval.js";
 import {
-  writeRefusalText,
-  type WriteAuthorization,
-} from "~/commercial/entitlement/write-authorization.js";
-import {
-  requestUntilApproved,
-  isPendingApproval,
-} from "~/commercial/plugin-bridge/await-approval.js";
+  executePluginCode,
+  capturePluginScreenshot,
+} from "~/commercial/plugin-bridge/execution.js";
 import type { ServerTransport } from "~/mcp/index.js";
 import type { FigmaService } from "~/services/figma.js";
 import { registerFailLoudTool, retryableToolReply } from "~/mcp/fail-loud-params.js";
-import { flcmSandboxPreamble } from "~/commercial/plugin-bridge/sandbox-preamble.js";
 import { referenceSessionGuidance } from "./flcm-docs/session-guidance.js";
 import { buildQuickStart, buildReferenceSections, SECTION_IDS } from "./flcm-docs/reference.js";
 
@@ -31,36 +26,6 @@ import { buildQuickStart, buildReferenceSections, SECTION_IDS } from "./flcm-doc
 // the whole bet is that one tool + this contract beats dozens of granular tools. Full docs live in
 // get_flcm_reference.
 const EXECUTE_CODE_DESCRIPTION = buildQuickStart();
-
-// The plugin always replies to EXECUTE_CODE with this exact shape; parse it once so the handler
-// trusts the type instead of re-checking each field. `result` is absent when the code returns
-// nothing or throws: undefined isn't JSON, so it's dropped crossing the WS — optional, not
-// required (a missing key is the error/void path). Since protocol 2, images are fetched MID-RUN
-// (PluginBridge.serveChannelRequest), so a script executes exactly once and this reply is the
-// whole story — no re-run signals, no second pass.
-//
-// `documentChanged` is whether the document changed while the run executed — raw figma.* writes
-// included, and writes that landed after the agent's code returned. True is one Write against the
-// free allowance. False is provisional: a change Figma reports later arrives as RUN_CHANGED. It is
-// the server's to read, not the agent's, so it never reaches the tool result.
-const ExecuteCodeReply = z.object({
-  result: z.unknown().optional(),
-  console: z.array(z.string()),
-  errors: z.string().nullable(),
-  documentChanged: z.boolean(),
-});
-
-// The sandbox posts exactly one of these (see screenshot() in code.ts): `image`
-// (base64 PNG) on success, `errors` on the failure path — never both, never neither.
-const ScreenshotReply = z.union([
-  z.object({ image: z.string(), capture: z.literal("contextual").optional() }),
-  z.object({ errors: z.string() }),
-]);
-
-// Upper cap on the screenshot export scale, so a fat-fingered `scale: 40` can't ask Figma to export a
-// page-sized PNG at absurd resolution (and blow the agent's image budget on the way back). 4x already
-// resolves hairlines and grain, and matches the top of Figma's own export-scale UI.
-const MAX_SCREENSHOT_SCALE = 4;
 
 type CodeModeToolsOptions = {
   /** Force the tools to be advertised from startup (`--code-mode`) instead of waiting for a plugin. */
@@ -86,7 +51,7 @@ export function registerCodeModeTools(
   runtime: PluginBridgeRuntime,
   { codeMode, transport, figmaService }: CodeModeToolsOptions,
 ): void {
-  const { bridge, writeAccess } = runtime;
+  const { bridge } = runtime;
 
   /** Tool advertisement stays latched for this process; outage guidance uses elapsed time below. */
   function expectsPluginConnection(): boolean {
@@ -154,92 +119,13 @@ export function registerCodeModeTools(
       async ({ code }, extra) => {
         const unavailable = pluginUnavailableReply();
         if (unavailable) return unavailable;
-        // One execution, one id: this is the identity the free allowance dedupes on. A new tool call
-        // is a new execution even when the code is identical.
-        const executionId = randomUUID();
-        // Set inside submit (a closure), so held in an object the checks below can read. `runId` is
-        // the plugin's name for this execution, which a late RUN_CHANGED will carry.
-        const gate: { authorization: WriteAuthorization | null; runId: string | null } = {
-          authorization: null,
-          runId: null,
-        };
-        // Correlation ids are owned by PluginBridge; mid-run image fetches ride the bridge underneath
-        // this single execute (serveChannelRequest). The wait holds the call open across the human's
-        // Allow rather than returning "not approved yet" for the agent to retry — see
-        // requestUntilApproved.
-        //
-        // The flcm std-lib rides along on EVERY call (ADR-0010): the plugin holds no runtime of its
-        // own, so this field IS the DSL the code runs against. Sent every time rather than cached by
-        // hash — the sandbox already re-evals the whole string per call, so it costs transfer only,
-        // and a preamble sent every time is definitionally the one that ran, leaving no drift to
-        // detect and nothing to put in the version handshake.
-        //
-        // The write gate sits INSIDE submit, after approval: the Authorizing User is whoever clicked
-        // Allow, which may happen during the wait. An execution can't be known to change the document
-        // before it runs, so an Authorizing User with no seat and no allowance left is refused before
-        // anything is sent — and an authorized one holds a reservation until the finally below.
-        try {
-          let raw: unknown;
-          try {
-            raw = await requestUntilApproved(
-              (signal) => bridge.request({ type: "APPROVAL_STATUS" }, signal),
-              async (signal) => {
-                gate.authorization = await writeAccess.authorizeWriteExecution(
-                  bridge.getAuthorizingUser(),
-                  executionId,
-                );
-                if (gate.authorization.kind === "refused") return null;
-                return bridge.request(
-                  { type: "EXECUTE_CODE", code, preamble: flcmSandboxPreamble() },
-                  signal,
-                  (runId) => (gate.runId = runId),
-                  { figma: figmaService },
-                );
-              },
-              approvalOptions(extra),
-            );
-          } catch (err) {
-            // Lost after the plugin may have started it (timeout, cancel, disconnect): whether it
-            // changed anything is unknowable, and partial changes count, so it is counted. Only a
-            // run the plugin reported QUEUED is known not to have run — the plugin refuses a
-            // cancelled queued run at dequeue — and a result it sends anyway is still counted
-            // through the late path.
-            if (
-              gate.authorization &&
-              err instanceof BridgeRequestError &&
-              err.outcome === "unconfirmed" &&
-              err.phase !== "queued"
-            )
-              writeAccess.recordWriteExecution(gate.authorization, executionId);
-            throw err;
-          }
-          const { authorization } = gate;
-          if (authorization?.kind === "refused")
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: writeRefusalText(authorization, writeAccess.framelinkApiUrl),
-                },
-              ],
-              isError: true,
-            };
-          const gated = gateResult(raw);
-          if (gated) return gated;
-          const { documentChanged, ...reply } = ExecuteCodeReply.parse(raw);
-          if (documentChanged && authorization)
-            writeAccess.recordWriteExecution(authorization, executionId);
-          // A write actually ran: slide the persisted approval's TTL forward so an active session
-          // never lapses mid-work (durable-approval, this cycle). No-op when the session isn't persisted.
-          bridge.touchApproval();
-          return {
-            content: [{ type: "text", text: JSON.stringify(reply, null, 2) }],
-          };
-        } finally {
-          // Whatever wasn't recorded above ends here; a change the plugin reports later under
-          // `runId` is still charged to this execution (WriteAccess.recordLateDocumentChange).
-          writeAccess.releaseWriteExecution(executionId, gate.runId);
-        }
+        const outcome = await executePluginCode(runtime, code, approvalOptions(extra), {
+          figma: figmaService,
+        });
+        if (outcome.kind === "refused")
+          return { content: [{ type: "text", text: outcome.message }], isError: true };
+        if (outcome.kind === "pending") return gateResult({ type: "PENDING_APPROVAL" })!;
+        return { content: [{ type: "text", text: JSON.stringify(outcome.reply, null, 2) }] };
       },
     ),
 
@@ -359,15 +245,13 @@ Returns a PNG image.`,
           );
         const unavailable = pluginUnavailableReply();
         if (unavailable) return unavailable;
-        const raw = await requestUntilApproved(
-          (signal) => bridge.request({ type: "APPROVAL_STATUS" }, signal),
-          (signal) =>
-            bridge.request({ type: "SCREENSHOT", nodeId, key, scale, context, margin }, signal),
+        const outcome = await capturePluginScreenshot(
+          bridge,
+          { nodeId, key, scale, context, margin },
           approvalOptions(extra),
         );
-        const gated = gateResult(raw);
-        if (gated) return gated;
-        const reply = ScreenshotReply.parse(raw);
+        if (outcome.kind === "pending") return gateResult({ type: "PENDING_APPROVAL" })!;
+        const reply = outcome.reply;
         if ("errors" in reply) {
           return { content: [{ type: "text", text: reply.errors }], isError: true };
         }

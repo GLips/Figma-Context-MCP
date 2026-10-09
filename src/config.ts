@@ -189,20 +189,7 @@ export function getServerConfig(flags: ServerFlags): ServerConfig {
   // The directory local flcm.image() file paths are confined to — a security boundary, not a
   // convenience (see plugin-bridge/images.ts readLocalImage). Defaults to cwd, which is the agent's
   // repo in the common launch shape.
-  const envAssetRoot = envStr("FRAMELINK_ASSET_ROOT");
-  const assetRoot = resolve(
-    flags.assetRoot ? resolvePath(flags.assetRoot) : undefined,
-    envAssetRoot ? resolvePath(envAssetRoot) : undefined,
-    process.cwd(),
-  );
-
-  // The Framelink app that answers write-access questions: seat checks, device sign-in, and free
-  // allowance usage reports. Overridable for local development against the app.
-  const framelinkApiUrl = resolve(
-    undefined,
-    envStr("FRAMELINK_API_URL"),
-    DEFAULT_FRAMELINK_API_URL,
-  );
+  const { assetRoot, framelinkApiUrl } = resolvePluginConfig(flags.assetRoot);
 
   const noTelemetry = flags.noTelemetry ?? false;
   const telemetrySource: Source =
@@ -278,5 +265,18 @@ export function getServerConfig(flags: ServerFlags): ServerConfig {
     assetRoot: assetRoot.value,
     framelinkApiUrl: framelinkApiUrl.value,
     configSources,
+  };
+}
+
+/** Plugin-only configuration, shared with the saved-script CLI; no REST credentials required. */
+export function resolvePluginConfig(assetRootFlag?: string) {
+  const envAssetRoot = envStr("FRAMELINK_ASSET_ROOT");
+  return {
+    assetRoot: resolve(
+      assetRootFlag ? resolvePath(assetRootFlag) : undefined,
+      envAssetRoot ? resolvePath(envAssetRoot) : undefined,
+      process.cwd(),
+    ),
+    framelinkApiUrl: resolve(undefined, envStr("FRAMELINK_API_URL"), DEFAULT_FRAMELINK_API_URL),
   };
 }

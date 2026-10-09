@@ -90,6 +90,23 @@ Or you can set `FIGMA_API_KEY` and `PORT` in the `env` field.
 
 If you need more information on how to configure the Framelink MCP for Figma, see the [Framelink docs](https://www.framelink.ai/docs/quickstart?utm_source=github&utm_medium=referral&utm_campaign=readme).
 
+## Run a saved Figma script
+
+Save JavaScript as an async function body in a `.js` file. The plugin provides `figma` and the current `flcm` runtime; use `await` and `return` directly rather than module imports or exports.
+
+```sh
+npx figma-developer-mcp execute workflow.js --output artifacts/result.json
+npx figma-developer-mcp execute workflow.js --screenshot artifacts/page.png --scale 2
+```
+
+Open Framelink in the intended Figma file and approve the pairing code shown on stderr. The command uses the same approval, Authorizing User, seat/free-allowance checks, and runtime as MCP execution. No Figma REST token is needed for this command.
+
+The execution reply is JSON on stdout; progress and errors go to stderr. `--output` also saves that JSON. `--screenshot` saves a PNG after a completed execution, including a script error; select a target with `--node-id` or `--key`, or omit both for the current page. Script and transport failures return a nonzero exit status. An interrupted or disconnected execution is never automatically resubmitted.
+
+`--wait` sets the connection wait and each approval wait separately (600 seconds by default); it does not extend execution deadlines. `--asset-root` confines local image reads, defaulting to the working directory. `--env` selects an environment file; `FRAMELINK_ASSET_ROOT` and `FRAMELINK_API_URL` retain their server meanings.
+
+Results are delivered promptly. When a free-allowance execution reports no document change yet, the command retains its relay for the existing late-change accounting window (up to 90 seconds), exiting sooner if a late change is reported. Seat-covered executions and already-counted writes do not need that wait. Ctrl-C exits with status 130 and warns if it interrupts this observation; the emitted result remains available, but late-write accounting could not be fully observed.
+
 ## Licensing proposal
 
 Reads and the shared read transform stay MIT. The write path ("code mode") is

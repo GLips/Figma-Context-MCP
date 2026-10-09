@@ -31,6 +31,8 @@ const WRITE_ACCESS_SYNC_TICK_MS = 10 * 60 * 1000;
  */
 export interface PluginBridgeRuntime {
   bridge: PluginBridge;
+  /** Close a short-lived CLI runtime and its background synchronization. */
+  stop?(): void;
   /** Seat and free-allowance authorization for figma_execute_code. */
   writeAccess: WriteAccess;
   /** True once a plugin has connected at least once in this process (latched — see above). */
@@ -132,6 +134,11 @@ export function startPluginBridge({
   return {
     bridge,
     writeAccess,
+    stop: () => {
+      clearInterval(writeAccessTick);
+      writeAccess.stop();
+      bridge.stop();
+    },
     hasEverConnected: () => pendingFirstConnect === null,
     onFirstConnect: (cb) => {
       if (pendingFirstConnect) pendingFirstConnect.push(cb);

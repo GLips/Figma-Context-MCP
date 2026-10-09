@@ -13,6 +13,7 @@
 // What the gate counts is more than the file: executions it authorized that haven't finished (a
 // Write they may still become) and Writes the file couldn't take (a failed save). Both live in this
 // process's memory only, so they hold against its own parallel calls, not another server's.
+import { setTimeout as pause } from "node:timers/promises";
 import type { AuthorizingUser } from "~/commercial/plugin-bridge/approval.js";
 import { Logger } from "~/utils/logger.js";
 import { FramelinkApiUnavailableError, type FramelinkApiClient } from "./framelink-api.js";
@@ -50,6 +51,13 @@ const PERSIST_RETRY_MS = 30_000;
 const LATE_DOCUMENT_CHANGE_MS = 90_000;
 
 export class WriteAccess {
+  private readonly settlementWaiters = new Map<string, Set<() => void>>();
+  private readonly lifetime = new AbortController();
+
+  /** Stop device polling when a short-lived runtime exits; recorded writes stay persisted. */
+  stop(): void {
+    this.lifetime.abort();
+  }
   private readonly now: () => Date;
   private readonly notifyPanel: (notice: WriteAccessNotice) => void;
   // Keyed by figmaUserId. One device flow per Authorizing User; a second click re-shows the live code.
@@ -147,6 +155,38 @@ export class WriteAccess {
       });
   }
 
+  /** Keep a short-lived relay alive for the existing late-change accounting window. */
+  waitForWriteSettlement(
+    runId: string,
+    signal: AbortSignal,
+    onWaiting?: (remainingMs: number) => void,
+  ): Promise<void> {
+    signal.throwIfAborted();
+    const late = this.lateRuns.get(runId);
+    if (!late) return Promise.resolve();
+    const remaining = Math.max(0, late.expiresAt - this.now().getTime());
+    if (!remaining) return Promise.resolve();
+    return new Promise((resolve, reject) => {
+      const finish = (error?: unknown) => {
+        clearTimeout(timer);
+        signal.removeEventListener("abort", abort);
+        const waiting = this.settlementWaiters.get(runId);
+        waiting?.delete(done);
+        if (!waiting?.size) this.settlementWaiters.delete(runId);
+        if (error) reject(error);
+        else resolve();
+      };
+      const done = () => finish();
+      const abort = () => finish(signal.reason);
+      const timer = setTimeout(done, remaining);
+      const waiting = this.settlementWaiters.get(runId) ?? new Set<() => void>();
+      waiting.add(done);
+      this.settlementWaiters.set(runId, waiting);
+      signal.addEventListener("abort", abort, { once: true });
+      onWaiting?.(remaining);
+    });
+  }
+
   /**
    * The plugin saw a run change the document after its caller finished with it. Recorded under the
    * run's own execution, so a second report — or one for a run already counted — changes nothing.
@@ -157,6 +197,7 @@ export class WriteAccess {
     this.lateRuns.delete(runId);
     if (late.expiresAt <= this.now().getTime()) return;
     this.recordWrite(late.figmaUserId, late.executionId);
+    for (const done of this.settlementWaiters.get(runId) ?? []) done();
   }
 
   /**
@@ -373,6 +414,7 @@ export class WriteAccess {
       notify({ kind: "sign-in-failed", message: "Couldn't reach Framelink. Try again shortly." });
       return;
     }
+    if (this.lifetime.signal.aborted) return;
     notify({
       kind: "sign-in-pending",
       userCode: signIn.userCode,
@@ -381,7 +423,11 @@ export class WriteAccess {
     const deadline = this.now().getTime() + signIn.expiresInMs;
     let intervalMs = signIn.intervalMs;
     while (this.now().getTime() < deadline) {
-      await new Promise((resolve) => setTimeout(resolve, intervalMs));
+      try {
+        await pause(intervalMs, undefined, { signal: this.lifetime.signal });
+      } catch {
+        return;
+      }
       let poll;
       try {
         poll = await this.api.pollDeviceToken(signIn.deviceCode);
@@ -389,6 +435,7 @@ export class WriteAccess {
         if (!(err instanceof FramelinkApiUnavailableError)) throw err;
         continue; // a dropped poll is not an answer; the code is still good until it expires
       }
+      if (this.lifetime.signal.aborted) return;
       if (poll.kind === "pending") continue;
       if (poll.kind === "slow-down") {
         intervalMs += SLOW_DOWN_STEP_MS;
