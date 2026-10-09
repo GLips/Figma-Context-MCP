@@ -17,12 +17,8 @@ import type { ServerTransport } from "~/mcp/index.js";
 import type { FigmaService } from "~/services/figma.js";
 import { registerFailLoudTool, retryableToolReply } from "~/mcp/fail-loud-params.js";
 import { referenceSessionGuidance } from "./flcm-docs/session-guidance.js";
-import {
-  buildQuickStart,
-  buildReferenceSections,
-  MCP_REFERENCE_CALL,
-  SECTION_IDS,
-} from "./flcm-docs/reference.js";
+import { buildQuickStart, buildReferenceSections, SECTION_IDS } from "./flcm-docs/reference.js";
+import { MCP_DOCS_CHANNEL } from "./flcm-docs/channels.js";
 
 // The figma_execute_code description is the GENERATED quick-start (buildQuickStart), assembled from
 // the schema single-source + narrative — so the agent-facing contract can't drift from the code
@@ -30,7 +26,7 @@ import {
 // description (not a separate resource) so it is ALWAYS in the agent's context when it writes code —
 // the whole bet is that one tool + this contract beats dozens of granular tools. Full docs live in
 // get_flcm_reference.
-const EXECUTE_CODE_DESCRIPTION = buildQuickStart(MCP_REFERENCE_CALL);
+const EXECUTE_CODE_DESCRIPTION = buildQuickStart(MCP_DOCS_CHANNEL);
 
 type CodeModeToolsOptions = {
   /** Force the tools to be advertised from startup (`--code-mode`) instead of waiting for a plugin. */
@@ -172,7 +168,7 @@ export function registerCodeModeTools(
         return {
           content: [
             ...(note ? [{ type: "text" as const, text: note }] : []),
-            { type: "text" as const, text: buildReferenceSections(sections, MCP_REFERENCE_CALL) },
+            { type: "text" as const, text: buildReferenceSections(sections, MCP_DOCS_CHANNEL) },
           ],
         };
       },
