@@ -57,9 +57,10 @@ return session.screen.children.map(n => n.id);
 
 Assignments copy plain objects and arrays from outside session, so mutate the stored value rather than the original. Session holds plain data only; functions, live Figma nodes and class instances are refused by name. Delete a property to drop its data.
 
-After a successful call, session.last holds a detached snapshot of its full return value before wire projection, only when the return is plain data; otherwise last becomes undefined. Returning session itself is supported. A call with no return sets it to undefined. Failed calls do not automatically replace last; valid session writes before the error remain, just as earlier canvas writes can remain. Stored copies are agent-owned snapshots and return whole; survey their fields or compute a summary to keep output small.
+After a successful call, session.last holds a detached snapshot of its full return value before wire projection, only when the return is plain data; otherwise last becomes undefined. Returning session itself is supported. A call with no return sets it to undefined. Failed calls do not automatically replace last; valid session writes before the error remain, just as earlier canvas writes can remain. Stored copies are agent-owned snapshots and return whole; survey their fields or compute a summary to keep output small.`;
 
-### Warnings on returned nodes
+// The shape of what reads and returns hand back: warnings records, full reads, wire projection.
+export const READ_SHAPE = `### Warnings on returned nodes
 
 Warnings are records shaped as { id, message, prop?, authored?, realized? }. A plain warning has a message; a divergence also names the property, the value asked for and the value that landed. Returned specs, handles, get/find reads and measure results carry a warnings array when that node has warnings in this run. For example, a path authored with width: 24 can carry { id: "12:34", prop: "width", authored: 24, realized: 6, message: "..." } beside its echoed width. Inspect warnings before trusting authored dimensions.
 
@@ -240,7 +241,7 @@ export const RENDER_KEYS = `\`await flcm.render(spec)\` places the spec on the c
 
 \`key\` is optional persistent metadata used by find and findOne. It does not decide identity. Duplicate keys within one authored tree are refused. Returned dimensions remain the authored values; use measure for realized pixels and get for current read data.`;
 
-export const VERIFY_READBACK = `You cannot judge what you built from the code you wrote — hairlines, grain, glass, 1px strokes and missing glyphs all *look* fine in source. **Build → screenshot → look → fix.**
+export const VERIFY_LOOP = `You cannot judge what you built from the code you wrote — hairlines, grain, glass, 1px strokes and missing glyphs all *look* fine in source. **Build → screenshot → look → fix.**
 
 \`get_screenshot\` is a separate **MCP tool**, not an \`flcm\` verb (there is no \`flcm.screenshot\`). Keep the render result in \`session\` for later code calls; pass its id string to the screenshot tool.
 
@@ -262,11 +263,9 @@ return out;
 - **Omit both** to capture the whole current page.
 - **\`scale\`** (>0, ≤4; default 1) multiplies export resolution. Detail below ~24px — a 1px stroke, a hairline, grain, small type — isn't reliably judgeable at 1×; shoot it at 2–4×.
 
-An unknown param name is named back to you, not ignored, so a typo costs one retry rather than a wrong conclusion.
+An unknown param name is named back to you, not ignored, so a typo costs one retry rather than a wrong conclusion.`;
 
-### The raw \`figma.*\` escape hatch
-
-The full Figma plugin API is in scope alongside \`flcm\`. **Author with \`flcm\`** — it's the surface that fails loud instead of rendering wrong pixels. **Drop to \`figma.*\`** for what the DSL doesn't cover: viewport, selection, and other *document* rather than *design* operations.
+export const RAW_FIGMA = `The full Figma plugin API is in scope alongside \`flcm\`. **Author with \`flcm\`** — it's the surface that fails loud instead of rendering wrong pixels. **Drop to \`figma.*\`** for what the DSL doesn't cover: viewport, selection, and other *document* rather than *design* operations.
 
 \`\`\`js
 const out = await flcm.render(screen);                                  // author with flcm
@@ -275,7 +274,9 @@ figma.viewport.scrollAndZoomIntoView([live]);
 return out.node.id;
 \`\`\`
 
-**Pages** are covered — every verb acts on the current page, and \`flcm.page\` is how you see and change which one that is:
+Raw \`figma.*\` gives up every guarantee this DSL makes (fills are 0–1 assigned as a new array, fonts load before \`characters\`, a node is invisible until appended) — use it for plumbing, and come back to \`flcm\` to author.`;
+
+export const PAGES = `**Pages** are covered — every verb acts on the current page, and \`flcm.page\` is how you see and change which one that is:
 
 \`\`\`js
 await flcm.page.current();          // { fileName, page: { id, name }, pages: [ … ] } — where am I?
@@ -283,9 +284,7 @@ await flcm.page.new("pricing");     // make it and switch to it; a name already 
 await flcm.page.use("pricing");     // switch to one that exists (name or id); never creates
 \`\`\`
 
-Switch **before** you render — a render lands on whatever page is current when it runs. Don't reach for \`figma.currentPage = page\`: under \`documentAccess: "dynamic-page"\` that property is read-only and assigning it throws, which is the trap \`flcm.page\` removes.
-
-Raw \`figma.*\` gives up every guarantee this DSL makes (fills are 0–1 assigned as a new array, fonts load before \`characters\`, a node is invisible until appended) — use it for plumbing, and come back to \`flcm\` to author.`;
+Switch **before** you render — a render lands on whatever page is current when it runs. Don't reach for \`figma.currentPage = page\`: under \`documentAccess: "dynamic-page"\` that property is read-only and assigning it throws, which is the trap \`flcm.page\` removes.`;
 
 export const CSS_SUBSET = `Leaf values are CSS-familiar, but only a **documented subset** is supported. Anything outside it throws a specific error naming what went wrong — it never renders wrong pixels.
 
@@ -338,14 +337,15 @@ A single **paint** blends too, with the same names under \`blendMode\` — CSS \
 | \`strokeWidth\` | number, \`"Npx"\`, or (frames, rectangles, components, instances) the CSS \`border-width\` shorthand (\`"0px 0px 0px 1px"\` = top, right, bottom, left) — what a \`get\` hands back for a per-side border |
 | \`borderRadius\` | number, \`"Npx"\`, or the CSS \`border-radius\` shorthand (\`"12px 12px 0px 0px"\` = TL, TR, BR, BL) — what a \`get\` hands back for a mixed-corner node |
 | \`layout.padding\` (and its \`x\`/\`y\`/\`top\`/…) | **numbers only** (not \`"px"\` strings) |
-| \`width\`, \`height\` | a **number** (fixed px), \`"N%"\` (percent of the parent's realized size — see Percent sizing), or \`"fill"\` / \`"hug"\` |
+| \`width\`, \`height\` | a **number** (fixed px), \`"N%"\` (percent of the parent's realized size — see the layout section), or \`"fill"\` / \`"hug"\` |
 | \`left\`/\`top\` | a number (px) or \`"N%"\` (percent of the parent axis); \`anchor\` sets which point of the node lands there. Naming either lifts a child out of an auto-layout flow |
 | \`textStyle.fontSize\`, \`rotation\`, \`opacity\` | numbers |
 | \`textStyle.lineHeight\`, \`textStyle.letterSpacing\` | number(px), \`"Npx"\`, \`"N%"\`, \`"Nem"\` (lineHeight also \`"auto"\`) |`;
 
-export const FAILS_LOUD = `Accepting CSS is a fidelity promise, so the boundaries are strict. Each of these throws a specific error naming the offending value — never a guess, never a silent no-op:
+export const FAIL_LOUD_PRINCIPLE = `Accepting CSS is a fidelity promise, so the boundaries are strict. An unsupported value throws a specific error naming it — never a guess, never a silent no-op.`;
 
-| Situation | Why, and the fix |
+// Parked here by the reference re-cut: each row belongs beside the prop it constrains.
+export const FAIL_LOUD_ROWS = `| Situation | Why, and the fix |
 | --- | --- |
 | A color / gradient / effect outside the [CSS subset](#the-css-subset) | Parse error naming the value. |
 | An \`flcm.image\` source that is unfetchable, blocked (private/loopback), outside the server's asset root, oversize, or not an image | Rejected server-side with the reason, never a blank fill. |
@@ -361,15 +361,13 @@ export const FAILS_LOUD = `Accepting CSS is a fidelity promise, so the boundarie
 | An unknown \`mixBlendMode\` | Names the value and the supported set. |
 | \`layout.justifyContent\`/\`alignItems\` Figma can't realize — \`"space-around"\`, \`"space-evenly"\` | Use \`"space-between"\` or \`gap\`/\`padding\`. Never faked with spacer nodes, which read as content. |
 | \`textStyle.lineClamp\` on a width-hugging text | Truncation needs a width to wrap against. Set \`width\` to a number, \`"fill"\`, or \`"N%"\`. |
-| A layout word the node can't realize — a fixed/percent \`height\` beside \`width: "hug"\` on TEXT, \`"hug"\` with nothing to measure, or container words without \`layout.mode\` | The same rules govern create and edit alike, so a word that wouldn't land names the fix instead. |
+| A layout word the node can't realize — a fixed/percent \`height\` beside \`width: "hug"\` on TEXT, \`"hug"\` with nothing to measure, or container words without \`layout.mode\` | The same rules govern create and edit alike, so a word that wouldn't land names the fix instead. |`;
 
-An \`imageRef\` identifies an existing image in this file and can be reused, for example \`{ type: "RECTANGLE", fill: { type: "IMAGE", imageRef } }\`. The read's \`opacity\`, \`rotation\`, \`filters\` and \`blendMode\` on that leaf are authored back as they read — the same words \`flcm.image\` takes as options.
+export const IMAGE_REF_REUSE = `An \`imageRef\` identifies an existing image in this file and can be reused, for example \`{ type: "RECTANGLE", fill: { type: "IMAGE", imageRef } }\`. The read's \`opacity\`, \`rotation\`, \`filters\` and \`blendMode\` on that leaf are authored back as they read — the same words \`flcm.image\` takes as options.`;
 
-Variables and prototype interactions are deliberately **out of v1** — read concepts with no create path. They're rejected loudly so you never half-write something unrealizable. (Components have one: \`INSTANCE\` — see the components section.)
+export const OUT_OF_V1 = `Variables and prototype interactions are deliberately **out of v1** — read concepts with no create path. They're rejected loudly so you never half-write something unrealizable. (Components have one: \`INSTANCE\` — see the components section.)`;
 
-### The one silent exception: unrenderable glyphs
-
-Everything above fails loud. One case can't, because the plugin API exposes no glyph-coverage check: **a character the resolved font can't render draws as nothing** — no glyph, no tofu, no error. This bites emoji and private-use codepoints (SF Symbols) in fonts like Inter. If text renders blank, suspect a missing glyph first and switch to a font that covers it. Treat unusual codepoints with suspicion until you've seen a screenshot.`;
+export const UNRENDERABLE_GLYPHS = `Everything else fails loud. One case can't, because the plugin API exposes no glyph-coverage check: **a character the resolved font can't render draws as nothing** — no glyph, no tofu, no error. This bites emoji and private-use codepoints (SF Symbols) in fonts like Inter. If text renders blank, suspect a missing glyph first and switch to a font that covers it. Treat unusual codepoints with suspicion until you've seen a screenshot.`;
 
 export const EDIT_INTRO = `\`await flcm.edit(target, changes)\` applies a partial delta to one existing node and returns its updated handle. The target is anything the read verbs accept: an flcm/key, a node id, \`flcm.id(id)\`, or a handle from \`render\`/\`find\`. The delta uses the **same words as create** — there is no separate edit dialect — and only the fields you pass change; everything else on the node is untouched.`;
 
@@ -427,9 +425,9 @@ export const STRUCTURE_RULES = `Placement is one undo step. Malformed input and 
 
 Unmentioned children are retained. remove explicitly deletes a node and its subtree. replace places a spec at a target's position and removes the original after placement succeeds. A new replacement inherits omitted placement and size; explicit props win. Replacing a node with its own id edits it without deleting it.
 
-clone duplicates the live subtree faithfully and clears its keys. It returns { node, to? }; the default destination is the source parent. Optional root props apply before returning the copy.
+clone duplicates the live subtree faithfully and clears its keys. It returns { node, to? }; the default destination is the source parent. Optional root props apply before returning the copy.`;
 
-get returns { node, components? }. Use its node as a spec. readOnlySource preserves decoded state beyond the authoring vocabulary; clone preserves live state a spec cannot author.`;
+export const READ_GET = `get returns { node, components? }. Use its node as a spec. readOnlySource preserves decoded state beyond the authoring vocabulary; clone preserves live state a spec cannot author.`;
 
 export const COMPONENTS_CREATE = `\`await flcm.component(specOrTarget, options?)\` promotes a FRAME to a COMPONENT. A new spec is placed on the current page; a live root stays where it is and receives the named edits and children before promotion. The return is the spec copied with ids, with type COMPONENT and the new component id at the root. Figma preserves child identity during promotion. Save the returned component in session; the replaced FRAME root id no longer resolves.
 

@@ -33,10 +33,18 @@ import {
   IMAGE_INTRO,
   EFFECTS_INTRO,
   RENDER_KEYS,
-  VERIFY_READBACK,
+  VERIFY_LOOP,
+  RAW_FIGMA,
+  PAGES,
+  READ_SHAPE,
+  READ_GET,
   ANNOTATIONS_REFERENCE,
   CSS_SUBSET,
-  FAILS_LOUD,
+  FAIL_LOUD_PRINCIPLE,
+  FAIL_LOUD_ROWS,
+  IMAGE_REF_REUSE,
+  OUT_OF_V1,
+  UNRENDERABLE_GLYPHS,
   EDIT_INTRO,
   EDIT_REMOVAL,
   EDIT_RULES,
@@ -183,18 +191,24 @@ interface Section {
   body: () => string;
 }
 
+// Inside a merged section, a fragment's own `###` subheadings sit one level under the section's `###`.
+const demoteHeadings = (md: string) => md.replace(/^### /gm, "#### ");
+
+// Ordered explanation → reference → recipes, so the full doc reads top-down and the first id is the
+// one every agent should fetch.
 const SECTIONS: Section[] = [
   // First, and named in the blank-call refusal, because it is the part that stops an agent being wrong
-  // about what a spec IS — identity, copying, session lifetime, read shape. An agent that already knows
-  // enough to name `structure` or `components` never asks for a general overview, so the rules have to
-  // be reachable by name.
+  // about what a spec IS — identity, copying, session lifetime. An agent that already knows enough to
+  // name `verbs` or `components` never asks for a general overview, so the rules have to be reachable
+  // by name.
   {
     id: "mental-model",
     title: "The mental model",
     blurb:
-      "what a spec is, and the identity, copying, session and read-shape rules every other section assumes. Read this first",
+      "what a spec is, and the identity, copying, session and scope rules every other section assumes. Read this first",
     body: () =>
-      `${MENTAL_MODEL}\n\n### Rules that hold everywhere\n\n` +
+      `${MENTAL_MODEL}\n\n### Fidelity and scope\n\n${FAIL_LOUD_PRINCIPLE}\n\n${OUT_OF_V1}\n\n` +
+      "### Rules that hold everywhere\n\n" +
       "- Return ids and handles, never live Figma nodes.\n" +
       "- Every metric (`width`, `height`, `gap`, `padding`, `borderRadius`, `strokeWidth`, `left`/`top`) " +
       'takes a number or `"Npx"`; `width`/`height`/`left`/`top` also take `"N%"`, `width`/`height` take ' +
@@ -203,31 +217,46 @@ const SECTIONS: Section[] = [
       "- Out-of-subset CSS fails loud.",
   },
   {
+    id: "layout",
+    title: "Layout and sizing",
+    blurb:
+      "how fill, hug and percent sizes resolve, responsive constraints, pin/anchor, bounds and overflow",
+    body: () => PERCENT_SIZING,
+  },
+  {
+    id: "reads",
+    title: "Reads and returned data",
+    blurb: "what get/find return: full reads, elided markers, readOnlySource and warnings records",
+    body: () => `${READ_GET}\n\n${READ_SHAPE}`,
+  },
+  {
     id: "verbs",
     title: "The verbs",
-    blurb: "the full verb list and what each builds",
+    blurb: "every verb, render and keys, placing/moving/removing nodes, and pages",
     body: () =>
       `\`flcm\` exposes exactly these. Nothing else is on the \`flcm\` object.\n\n${verbTable()}\n\n` +
       "Nodes are data with type FRAME, TEXT, RECTANGLE, ELLIPSE, LINE, VECTOR or INSTANCE. " +
       "gradient, image and effects produce reusable values for props.\n\n" +
-      `### Children and composition\n\n${CHILDREN}`,
+      `### Children and composition\n\n${CHILDREN}\n\n` +
+      `### render(), keys & handles\n\n${RENDER_KEYS}\n\n` +
+      `### Tree shape — placing, moving, removing\n\n${STRUCTURE_INTRO}\n\n${STRUCTURE_RULES}\n\n` +
+      `### Pages\n\n${PAGES}`,
   },
   {
     id: "props",
     title: "Props by node",
-    blurb: "every prop on every verb, with types",
+    blurb: "every prop on every node type, with types",
     body: () =>
       "New nodes require type; INSTANCE also requires componentId, and VECTOR requires exactly one of svg or d. " +
       "An id refers to a live node; type can be omitted for a move. children is an array of plain specs. " +
       "Other omitted props keep live values or use creation defaults. The verb returns the spec copied with ids.\n\n" +
       `${nativeSpellings()}\n\n` +
       `### Shared by every node\n\n${propTable(FIELD_GROUPS.shared)}\n\n` +
-      `### Annotations\n\n${propTable(FIELD_GROUPS.annotation)}\n\n${ANNOTATIONS_REFERENCE}\n\n` +
       "### Size & position (FRAME, TEXT, RECTANGLE, ELLIPSE, VECTOR, INSTANCE)\n\n" +
       'A LINE sizes along its length alone, its `width`: a number, or `"fill"` under a row or column parent — the divider case, ' +
       'where the flow supplies the length. There is no `height`, no `"hug"` and no percent.\n\n' +
       `${propTable(FIELD_GROUPS.size)}\n\n` +
-      `#### Percent sizing\n\n${PERCENT_SIZING}\n\n` +
+      "How these sizes resolve is in the layout section.\n\n" +
       `### FRAME — container props\n\n${propTable({ ...FIELD_GROUPS.appearance, ...FIELD_GROUPS.frame })}\n\n` +
       `#### Auto-layout config (the \`layout\` object)\n\n${propTable(FIELD_GROUPS.containerLayout)}\n\n#### Placement under a parent (in the same \`layout\` object)\n\n${propTable(FIELD_GROUPS.childLayout)}\n\n` +
       `### TEXT — text props\n\n${propTable(FIELD_GROUPS.text)}\n\n` +
@@ -235,6 +264,7 @@ const SECTIONS: Section[] = [
       "`boldWeight` says what `**` in `text` resolves to. A fixed `width` makes it wrap (grows in height); " +
       "otherwise it grows sideways.\n\n" +
       `#### Text style (the \`textStyle\` object)\n\n${propTable(FIELD_GROUPS.textStyle)}\n\n` +
+      `#### Unrenderable glyphs\n\n${UNRENDERABLE_GLYPHS}\n\n` +
       `### TEXT — rich text (runs)\n\n${RICH_TEXT}\n\nEach styled run's delta fields:\n\n${propTable(FIELD_GROUPS.run)}\n\n` +
       `### RECTANGLE — shape props\n\n${propTable(FIELD_GROUPS.appearance)}\n\n` +
       `### ELLIPSE — shape props\n\n(An ellipse has no \`borderRadius\` — its edge is already round.)\n\n${propTable(FIELD_GROUPS.ellipse)}\n\n` +
@@ -245,37 +275,27 @@ const SECTIONS: Section[] = [
       // prose explains the same two words at length rather than repeating the table.
       "### INSTANCE — component words\n\n(An instance also takes every `FRAME` prop above; each one " +
       "named is a root-level override. `componentId` names the component in the props form, and swaps it under edit — see the components section.)\n\n" +
-      propTable({ ...FIELD_GROUPS.swap, ...FIELD_GROUPS.instance }),
+      `${propTable({ ...FIELD_GROUPS.swap, ...FIELD_GROUPS.instance })}\n\n` +
+      // TEMPORARY: the old fails-loud catalogue, parked until each row moves beside the prop it constrains.
+      `### Constraints — to be distributed\n\nEach of these throws a specific error naming the offending value:\n\n${FAIL_LOUD_ROWS}`,
   },
   {
-    id: "vector",
-    title: "Vector art (svg & path)",
-    blurb: "SVG imports and themeable vector paths",
-    body: () => VECTOR_INTRO,
+    id: "annotations",
+    title: "Annotations",
+    blurb: "reading and writing Figma's native layer annotations",
+    body: () => `${propTable(FIELD_GROUPS.annotation)}\n\n${ANNOTATIONS_REFERENCE}`,
   },
   {
-    id: "paint",
-    title: "Paint & gradients",
-    blurb: "fill/stroke/color values and flcm.gradient",
-    body: () => `${PAINT_INTRO}\n\n### flcm.gradient fields\n\n${propTable(FIELD_GROUPS.gradient)}`,
-  },
-  {
-    id: "images",
-    title: "Images",
-    blurb: "raster image fills via flcm.image",
-    body: () => `${IMAGE_INTRO}\n\n### flcm.image opts\n\n${propTable(FIELD_GROUPS.image)}`,
-  },
-  {
-    id: "effects",
-    title: "Effects",
-    blurb: "shadows & blur, and flcm.effects",
-    body: () => `${EFFECTS_INTRO}\n\n### flcm.effects fields\n\n${propTable(FIELD_GROUPS.effects)}`,
-  },
-  {
-    id: "render",
-    title: "render(), keys & handles",
-    blurb: "creating nodes, addressing them, returning results",
-    body: () => RENDER_KEYS,
+    id: "values",
+    title: "Values — colors, gradients, images, effects, vector art",
+    blurb:
+      "the CSS subset, paint and flcm.gradient, flcm.image, flcm.effects, and svg/path vector art",
+    body: () =>
+      `### The CSS subset\n\n${demoteHeadings(CSS_SUBSET)}\n\n` +
+      `### Paint & gradients\n\n${PAINT_INTRO}\n\n#### flcm.gradient fields\n\n${propTable(FIELD_GROUPS.gradient)}\n\n` +
+      `### Images\n\n${IMAGE_INTRO}\n\n${IMAGE_REF_REUSE}\n\n#### flcm.image opts\n\n${propTable(FIELD_GROUPS.image)}\n\n` +
+      `### Effects\n\n${EFFECTS_INTRO}\n\n#### flcm.effects fields\n\n${propTable(FIELD_GROUPS.effects)}\n\n` +
+      `### Vector art (svg & path)\n\n${VECTOR_INTRO}`,
   },
   {
     id: "edit",
@@ -292,12 +312,6 @@ const SECTIONS: Section[] = [
         .map((k) => `\`${k}\``)
         .join(", ")}.\n\n` +
       `${EDIT_REMOVAL}\n\n${EDIT_RULES}\n\n${EDIT_MANY}`,
-  },
-  {
-    id: "structure",
-    title: "Tree shape — placing, moving, removing",
-    blurb: "append/prepend/insertBefore/insertAfter against live nodes",
-    body: () => `${STRUCTURE_INTRO}\n\n${STRUCTURE_RULES}`,
   },
   {
     id: "components",
@@ -324,31 +338,16 @@ const SECTIONS: Section[] = [
       `${COMPONENTS_EDIT}\n\n${COMPONENTS_DETACH}\n\n${COMPONENTS_RULES}`,
   },
   {
-    id: "verify",
-    title: "Seeing what you built (get_screenshot)",
-    blurb: "the build → screenshot → look → fix loop, and the raw figma.* escape hatch",
-    body: () => VERIFY_READBACK,
-  },
-  {
-    id: "css-subset",
-    title: "The CSS subset",
-    blurb: "which CSS colors/gradients/effects/metrics are supported",
-    body: () => CSS_SUBSET,
-  },
-  {
-    id: "fails-loud",
-    title: "What fails loud",
-    blurb: "what we reject rather than approximate",
-    body: () => FAILS_LOUD,
-  },
-  {
-    id: "examples",
-    title: "Worked examples",
-    blurb: "complete flcm trees exercising most of the surface",
+    id: "recipes",
+    title: "Recipes",
+    blurb:
+      "worked tasks: build → screenshot → fix, full screens, copying from the canvas, components, and the raw figma.* escape hatch",
     body: () =>
+      `### Seeing what you built (get_screenshot)\n\n${VERIFY_LOOP}\n\n` +
       EXAMPLES.map((ex) => `### ${ex.title}\n\n${ex.intro}\n\n\`\`\`js\n${ex.code}\n\`\`\``).join(
         "\n\n",
-      ),
+      ) +
+      `\n\n### The raw \`figma.*\` escape hatch\n\n${RAW_FIGMA}`,
   },
 ];
 
