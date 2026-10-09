@@ -35,7 +35,7 @@ const parameters = {
     .number()
     .optional()
     .describe(
-      "OPTIONAL. Do NOT use unless explicitly requested by the user. Controls how many levels deep to traverse the node tree.",
+      "How many levels of children to include. Only for when the user asks for a depth; the elided map is how to go deeper.",
     ),
 };
 
@@ -125,7 +125,7 @@ async function getFigmaData(
 export const getFigmaDataTool = {
   name: "get_figma_data",
   description:
-    "Get comprehensive Figma file data including layout, content, visuals, and component information. An elided field map reports omitted content sizes in JSON characters (null means unknown); drill in with get_figma_data using the same fileKey and that nodeId. Figma annotations are not in this output (the REST API does not expose them).",
+    "Read a Figma file or node as a simplified design tree: layout, text, styles, components and image references. Pass the node from the user's link; a whole file is large. Content cut for size is listed in an elided field map with its size in JSON characters (null means unknown); fetch any of it with the same fileKey and its nodeId. Figma annotations are not included (the REST API does not expose them).",
   parametersSchema,
   handler: getFigmaData,
 } as const;

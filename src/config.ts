@@ -7,6 +7,8 @@ import { VALID_OUTPUT_FORMATS, isOutputFormat, type OutputFormat } from "./utils
 export type Source = "cli" | "env" | "default";
 
 export const DEFAULT_FRAMELINK_API_URL = "https://app.framelink.ai";
+export const DEFAULT_HTTP_PORT = 3333;
+export const DEFAULT_HTTP_HOST = "127.0.0.1";
 
 export interface Resolved<T> {
   value: T;
@@ -154,8 +156,8 @@ export function getServerConfig(flags: ServerFlags): ServerConfig {
   // Resolve config values: CLI flag → env var → default
   const figmaApiKey = resolve(flags.figmaApiKey, envStr("FIGMA_API_KEY"), "");
   const figmaOauthToken = resolve(flags.figmaOauthToken, envStr("FIGMA_OAUTH_TOKEN"), "");
-  const port = resolve(flags.port, envInt("FRAMELINK_PORT", "PORT"), 3333);
-  const host = resolve(flags.host, envStr("FRAMELINK_HOST"), "127.0.0.1");
+  const port = resolve(flags.port, envInt("FRAMELINK_PORT", "PORT"), DEFAULT_HTTP_PORT);
+  const host = resolve(flags.host, envStr("FRAMELINK_HOST"), DEFAULT_HTTP_HOST);
   const skipImageDownloads = resolve(
     flags.skipImageDownloads,
     envBool("SKIP_IMAGE_DOWNLOADS"),

@@ -92,7 +92,7 @@ If you need more information on how to configure the Framelink MCP for Figma, se
 
 ## Run a saved Figma script
 
-Save JavaScript as an async function body in a `.js` file. The plugin provides `figma` and the current `flcm` runtime; use `await` and `return` directly rather than module imports or exports.
+Save JavaScript as an async function body in a `.js` file. The plugin provides `figma` and the current `flcm` runtime; use `await` and `return` directly rather than module imports or exports. `execute --help` ends with the `flcm` quick-start, and `figma-developer-mcp reference <section...>` prints the full authoring reference.
 
 ```sh
 npx figma-developer-mcp execute workflow.js --output artifacts/result.json

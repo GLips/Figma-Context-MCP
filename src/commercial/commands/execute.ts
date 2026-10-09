@@ -15,41 +15,77 @@ import {
   MAX_SCREENSHOT_SCALE,
   screenshotInputError,
 } from "~/commercial/plugin-bridge/screenshot-options.js";
+import { buildQuickStart, CLI_REFERENCE_CALL } from "~/commercial/tools/flcm-docs/reference.js";
+import { buildCommandHelp } from "~/utils/cli-help.js";
+
+const DEFAULT_WAIT_SECONDS = 600;
 
 export const executeCommand: Command = command(
   {
     name: "execute",
     strictFlags: true,
-    description: "Run a saved JavaScript body in the Figma plugin and print its JSON reply",
-    parameters: ["<file>"],
+    parameters: ["<script>"],
+    help: buildCommandHelp({
+      name: "execute",
+      summary: "Run an flcm script in the Figma file the Framelink plugin has open",
+      details: `The script is the body of an async function: use await and return directly, with no imports or
+exports. Open the Framelink plugin in the target file first; the first run waits for you to approve
+the pairing code printed to stderr. No Figma API token is needed.
+
+stdout gets the reply as JSON, { result, console, errors }; progress goes to stderr. Exits 0 when
+errors is null, 1 on a script, connection or approval failure, 130 on Ctrl-C. A run is never
+resubmitted automatically.`,
+      exampleArgs: [
+        "card.js",
+        "card.js --output out/reply.json --screenshot out/card.png --key card --scale 2",
+      ],
+      // After the flags because it is what the script file needs; its FULL DOCS line is the next
+      // disclosure step, into `reference`.
+      appendix: [{ title: "Writing the script:", body: buildQuickStart(CLI_REFERENCE_CALL) }],
+    }),
     flags: {
-      output: { type: String, description: "Also save the execution reply as JSON to this file" },
+      output: {
+        type: String,
+        placeholder: "<reply.json>",
+        description: "Also write the reply JSON to this file",
+      },
       screenshot: {
         type: String,
-        description: "Save a PNG after execution, including script failures",
+        placeholder: "<file.png>",
+        description:
+          "After the run, save a PNG of the page (or of --node-id/--key), even if the script failed",
       },
       nodeId: {
         type: String,
-        description: "Screenshot target node ID; omit targets for current page",
+        placeholder: "<id>",
+        description: "Screenshot this node instead of the page",
       },
       key: {
         type: String,
-        description: "Screenshot target authored key; mutually exclusive with --node-id",
+        placeholder: "<key>",
+        description: "Screenshot the node with this authored key instead of the page",
       },
       scale: {
         type: Number,
-        description: `Screenshot export scale, greater than 0 and at most ${MAX_SCREENSHOT_SCALE}`,
+        placeholder: "<n>",
+        description: `Screenshot resolution multiplier, above 0 and up to ${MAX_SCREENSHOT_SCALE} (default 1)`,
       },
       wait: {
         type: Number,
-        description:
-          "Seconds to wait for connection, and separately for each approval (default 600; 0 for no wait)",
+        placeholder: "<seconds>",
+        description: `Wait this long for the plugin to connect, and again for each approval (default ${DEFAULT_WAIT_SECONDS}; 0 fails at once)`,
       },
       assetRoot: {
         type: String,
-        description: "Root for local flcm.image() paths (default current directory)",
+        placeholder: "<dir>",
+        description:
+          "Local files flcm.image() may read must be inside this directory (default cwd; env FRAMELINK_ASSET_ROOT)",
       },
-      env: { type: String, description: "Path to .env file" },
+      env: {
+        type: String,
+        placeholder: "<file>",
+        description: "Load environment variables from this file (default ./.env)",
+      },
     },
   },
   (argv) => {
@@ -81,7 +117,7 @@ export async function runExecute(flags: ExecuteFlags, positionals: string[]): Pr
   if (positionals.length !== 1 || extname(positionals[0]) !== ".js") {
     throw new UsageError("execute requires one .js file containing an async function body.");
   }
-  const waitMs = (flags.wait ?? 600) * 1000;
+  const waitMs = (flags.wait ?? DEFAULT_WAIT_SECONDS) * 1000;
   if (!Number.isFinite(waitMs) || waitMs < 0 || waitMs > 2_147_483_647) {
     throw new UsageError(
       "--wait must be a finite, nonnegative number of seconds within the timer range.",

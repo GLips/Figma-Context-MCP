@@ -6,6 +6,7 @@ import { INPUT_ALIASES } from "@framelink/plugin/schema";
 import {
   buildFullReference,
   buildReferenceSections,
+  MCP_REFERENCE_CALL,
 } from "~/commercial/tools/flcm-docs/reference.js";
 import { describe, expect, it } from "vitest";
 
@@ -14,8 +15,8 @@ import { describe, expect, it } from "vitest";
 // and a nameless call must come back as a menu rather than a page of reference an agent didn't ask for.
 describe("get_flcm_reference delivery", () => {
   it("refuses a call that names no sections, and points at mental-model", () => {
-    const blank = buildReferenceSections();
-    const empty = buildReferenceSections([]);
+    const blank = buildReferenceSections(undefined, MCP_REFERENCE_CALL);
+    const empty = buildReferenceSections([], MCP_REFERENCE_CALL);
 
     expect(blank).toBe(empty);
     expect(blank).toContain('get_flcm_reference(["mental-model"])');
@@ -24,7 +25,7 @@ describe("get_flcm_reference delivery", () => {
   });
 
   it("serves the mental model to a caller that names it", () => {
-    const body = buildReferenceSections(["mental-model"]);
+    const body = buildReferenceSections(["mental-model"], MCP_REFERENCE_CALL);
 
     expect(body).toContain("Nodes are plain JavaScript data");
     expect(body).toContain("Removing only the root id creates a new root");

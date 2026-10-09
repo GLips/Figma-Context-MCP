@@ -17,7 +17,12 @@ import type { ServerTransport } from "~/mcp/index.js";
 import type { FigmaService } from "~/services/figma.js";
 import { registerFailLoudTool, retryableToolReply } from "~/mcp/fail-loud-params.js";
 import { referenceSessionGuidance } from "./flcm-docs/session-guidance.js";
-import { buildQuickStart, buildReferenceSections, SECTION_IDS } from "./flcm-docs/reference.js";
+import {
+  buildQuickStart,
+  buildReferenceSections,
+  MCP_REFERENCE_CALL,
+  SECTION_IDS,
+} from "./flcm-docs/reference.js";
 
 // The figma_execute_code description is the GENERATED quick-start (buildQuickStart), assembled from
 // the schema single-source + narrative — so the agent-facing contract can't drift from the code
@@ -25,7 +30,7 @@ import { buildQuickStart, buildReferenceSections, SECTION_IDS } from "./flcm-doc
 // description (not a separate resource) so it is ALWAYS in the agent's context when it writes code —
 // the whole bet is that one tool + this contract beats dozens of granular tools. Full docs live in
 // get_flcm_reference.
-const EXECUTE_CODE_DESCRIPTION = buildQuickStart();
+const EXECUTE_CODE_DESCRIPTION = buildQuickStart(MCP_REFERENCE_CALL);
 
 type CodeModeToolsOptions = {
   /** Force the tools to be advertised from startup (`--code-mode`) instead of waiting for a plugin. */
@@ -167,7 +172,7 @@ export function registerCodeModeTools(
         return {
           content: [
             ...(note ? [{ type: "text" as const, text: note }] : []),
-            { type: "text" as const, text: buildReferenceSections(sections) },
+            { type: "text" as const, text: buildReferenceSections(sections, MCP_REFERENCE_CALL) },
           ],
         };
       },
@@ -187,7 +192,7 @@ Passing both nodeId and key is ambiguous and fails loud. A failed lookup NEVER f
 
 scale (default 1, max 4) multiplies the export resolution — use scale: 2–4 to inspect detail you can't resolve at 1x: hairline borders, 1px strokes, grain, glass refraction, small type.
 
-context:true opts into a temporary-slice prototype that captures surrounding canvas. Requires nodeId or key. margin is pixels on each side; provisional default is 10% of the longest target side, clamped to 24–160px. Selection, flicker, undo and visual fidelity remain unverified. Omit context for the existing isolated capture.
+context:true also captures the canvas around the target, to check how it sits among its neighbours; it needs nodeId or key. margin is the pixels added on each side (default 10% of the target's longest side, clamped to 24–160).
 
 Returns a PNG image.`,
         inputSchema: {
@@ -206,11 +211,11 @@ Returns a PNG image.`,
           context: z
             .boolean()
             .optional()
-            .describe("Opt-in contextual capture prototype using a temporary canvas slice."),
+            .describe("Also capture the canvas around the target. Needs nodeId or key."),
           margin: z
             .number()
             .optional()
-            .describe("Nonnegative context margin in pixels; requires context:true."),
+            .describe("Pixels of surrounding canvas on each side; needs context:true."),
           scale: z
             .number()
             .optional()

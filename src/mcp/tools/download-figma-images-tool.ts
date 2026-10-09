@@ -205,7 +205,7 @@ async function downloadFigmaImages(
 
 function getDescription(imageDir?: string) {
   const baseDir = imageDir ?? process.cwd();
-  return `Download SVG and PNG images used in a Figma file based on the IDs of image or icon nodes. Images will be saved relative to the server's image directory: ${baseDir}`;
+  return `Save a Figma file's images to disk: image fills (PNG or GIF), icons and vectors (SVG), or any node rendered as PNG. Copy nodeId, imageRef, gifRef and the crop fields from get_figma_data output. Files are saved under the server's image directory: ${baseDir}`;
 }
 
 function rejectionDetails(

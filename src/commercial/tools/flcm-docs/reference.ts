@@ -4,9 +4,11 @@
  */
 // reference — the doc generator. It turns the schema (the single source: every verb/prop/type/one-liner)
 // plus the hand-written narrative fragments plus the compile-checked examples into two deliverables:
-//   • buildQuickStart()          → the ≤2KB figma_execute_code description (critical-first, signatures generated).
-//   • buildReferenceSections(s)  → the get_flcm_reference tool output: the named sections, or a refusal
-//     naming the sections when none were asked for.
+//   • buildQuickStart()          → the ≤2KB figma_execute_code description (critical-first, signatures
+//     generated), also printed by `execute --help`.
+//   • buildReferenceSections(s)  → the get_flcm_reference tool / `reference` command output: the named
+//     sections, or a refusal naming the sections when none were asked for.
+// Both are served over MCP and the CLI, so every "fetch more docs" pointer is spelled by a ReferenceCall.
 // buildFullReference() concatenates every section for the committed human doc (slice: flcm.md regen), so
 // the repo doc and the served doc are assembled from the SAME source and cannot drift.
 //
@@ -51,8 +53,17 @@ import {
   COMPONENTS_RULES,
 } from "./narrative.js";
 import { EXAMPLES } from "./examples.js";
+import { CLI_NAME } from "../../../utils/cli-help.js";
 
 type Fields = Record<string, z.ZodType>;
+
+/** Spells the request for some reference sections in the reader's channel. */
+export type ReferenceCall = (sectionIds: string[]) => string;
+
+export const MCP_REFERENCE_CALL: ReferenceCall = (ids) =>
+  `get_flcm_reference([${ids.map((id) => JSON.stringify(id)).join(", ")}])`;
+
+export const CLI_REFERENCE_CALL: ReferenceCall = (ids) => `${CLI_NAME} reference ${ids.join(" ")}`;
 
 // A markdown cell can't contain a raw `|` (type labels like `number | "fill"` do) — escape it.
 const cell = (s: string) => s.replace(/\|/g, "\\|").trim();
@@ -389,11 +400,13 @@ function quickStartVerbLines(): string {
 // The docs pointer prints the literal first call: it names the must-read section and shows that the
 // argument is required, in one gesture. `mental-model` is SECTIONS[0], so the rest list without it —
 // which also buys back bytes of a budget the reference tool's own ids keep eating.
-const DOCS_POINTER = `FULL DOCS — get_flcm_reference(["${SECTION_IDS[0]}"]) first, then: ${SECTION_IDS.slice(1).join(", ")}.`;
+function docsPointer(call: ReferenceCall): string {
+  return `FULL DOCS — ${call([SECTION_IDS[0]])} first, then: ${SECTION_IDS.slice(1).join(", ")}.`;
+}
 
 // ---- The ≤2KB quick-start = the figma_execute_code description. Critical-first: execution model, generated
 // verb signatures, the must-knows, the pointer to the reference tool. ----
-export function buildQuickStart(): string {
+export function buildQuickStart(call: ReferenceCall): string {
   const verbLines = quickStartVerbLines();
   const quickStart = `Execute JavaScript in Figma with \`flcm\`.
 
@@ -413,7 +426,7 @@ MUST-KNOW
 - Metrics take a number or "Npx"; width/height also take "N%", "fill", "hug". Colors/gradients/shadows are CSS strings.
 - Unsupported CSS fails loud.
 
-${DOCS_POINTER}
+${docsPointer(call)}
 
 RETURNS { result, console, errors }: JSON-safe result, captured console lines, error string or null.`;
 
@@ -439,27 +452,34 @@ const REFERENCE_LIMIT_BYTES = 50_000;
 
 // A call that names nothing gets the menu and no prose. Retryable wording, not a failure: an agent that
 // reads a terminal error abandons the tool, and the one thing a blank call is missing is the names.
-function blankCallRefusal(note: string): string {
-  const menu = SECTIONS.map((s) => `- \`${s.id}\` — ${s.blurb}`).join("\n");
+/** Every section id with its one-line blurb, in canonical order. */
+export function buildReferenceMenu(): string {
+  return SECTIONS.map((s) => `- \`${s.id}\` — ${s.blurb}`).join("\n");
+}
+
+function blankCallRefusal(note: string, call: ReferenceCall): string {
   return (
     `# flcm reference\n\n${note}` +
-    "`get_flcm_reference` needs the sections you want, so this call returned no reference. " +
-    'Retry naming them — start with `get_flcm_reference(["mental-model"])`. ' +
+    "The reference needs the sections you want, so this call returned none. " +
+    `Retry naming them — start with \`${call([SECTION_IDS[0]])}\`. ` +
     "Several ids in one call are served together, deduped and in the order below.\n\n" +
-    `${menu}`
+    buildReferenceMenu()
   );
 }
 
 // ---- The sectioned reference tool. The named sections, DEDUPED and in canonical (SECTIONS) order, each
 // under its own heading — so an agent can assemble the whole picture (or any subset) in ONE call instead of
 // many. Unknown ids are dropped with a note rather than erroring, so a wrong name self-corrects. ----
-export function buildReferenceSections(sections?: string[]): string {
+export function buildReferenceSections(
+  sections: string[] | undefined,
+  call: ReferenceCall,
+): string {
   const wanted = (sections ?? []).map((s) => s.trim().toLowerCase());
   const chosen = SECTIONS.filter((s) => wanted.includes(s.id)); // canonical order + dedupe
   const unknown = wanted.filter((w) => !SECTION_IDS.includes(w));
   if (!chosen.length) {
     const note = unknown.length ? `No section ${unknown.map((u) => `"${u}"`).join(", ")}.\n\n` : "";
-    return blankCallRefusal(note);
+    return blankCallRefusal(note, call);
   }
 
   // Fill the budget in canonical order, then say out loud which sections didn't fit and how to get them.
@@ -480,7 +500,7 @@ export function buildReferenceSections(sections?: string[]): string {
   if (dropped.length) {
     parts.push(
       `_Too big for one response, so ${dropped.length > 1 ? "these sections were" : "this section was"} left out: ` +
-        `${dropped.map((d) => `\`${d}\``).join(", ")}. Call \`get_flcm_reference([${dropped.map((d) => `"${d}"`).join(", ")}])\` for ${dropped.length > 1 ? "them" : "it"}._`,
+        `${dropped.map((d) => `\`${d}\``).join(", ")}. Run \`${call(dropped)}\` for ${dropped.length > 1 ? "them" : "it"}._`,
     );
   }
   if (unknown.length) {

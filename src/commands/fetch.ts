@@ -11,48 +11,66 @@ import { parseFigmaUrl } from "~/utils/figma-url.js";
 import { authMode, initTelemetry, captureGetFigmaDataCall, shutdown } from "~/telemetry/index.js";
 import { getFigmaData } from "~/services/get-figma-data.js";
 import type { OutputFormat } from "~/utils/serialize.js";
+import { buildCommandHelp } from "~/utils/cli-help.js";
 
 export const fetchCommand: Command = command(
   {
     name: "fetch",
-    description: "Fetch simplified Figma data and print to stdout",
     parameters: ["[url]"],
+    help: buildCommandHelp({
+      name: "fetch",
+      summary: "Print a Figma file or node as simplified design data, like get_figma_data",
+      details:
+        "Reads over the Figma REST API, so it needs a token (--figma-api-key or FIGMA_API_KEY).\nA URL's node-id selects the node; without one you get the whole file, which can be large.",
+      exampleArgs: [
+        `"https://www.figma.com/design/<fileKey>/Name?node-id=12-34"`,
+        "--file-key <fileKey> --node-id 12:34 --format json > node.json",
+      ],
+    }),
     flags: {
       fileKey: {
         type: String,
-        description: "Figma file key (overrides URL)",
+        placeholder: "<key>",
+        description: "Figma file key; overrides the URL's",
       },
       nodeId: {
         type: String,
-        description: "Node ID, format 1234:5678 (overrides URL)",
+        placeholder: "<id>",
+        description: "Node ID like 1234:5678; overrides the URL's",
       },
       depth: {
         type: Number,
-        description: "Tree traversal depth",
+        placeholder: "<n>",
+        description: "Limit output to this many levels of children",
       },
       json: {
         type: Boolean,
-        description: "Output JSON instead of YAML. Back-compat alias for --format=json.",
+        description: "Alias for --format json",
       },
       format: {
         type: String,
-        description: "Output format: yaml (default), json, or tree.",
+        placeholder: "<yaml|json|tree>",
+        description: "Output format (default yaml; tree is the compact one the MCP server uses)",
       },
       figmaApiKey: {
         type: String,
-        description: "Figma API key",
+        placeholder: "<token>",
+        description: "Figma personal access token (env FIGMA_API_KEY)",
       },
       figmaOauthToken: {
         type: String,
-        description: "Figma OAuth token",
+        placeholder: "<token>",
+        description:
+          "Figma OAuth bearer token; used instead of the API key when set (env FIGMA_OAUTH_TOKEN)",
       },
       env: {
         type: String,
-        description: "Path to .env file",
+        placeholder: "<file>",
+        description: "Load environment variables from this file (default ./.env)",
       },
       noTelemetry: {
         type: Boolean,
-        description: "Disable usage telemetry",
+        description: "Turn off usage telemetry",
       },
     },
   },

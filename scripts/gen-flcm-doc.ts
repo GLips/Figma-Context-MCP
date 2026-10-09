@@ -134,14 +134,13 @@ syncArtifact(
 // Import the reference builders only now: they read the generated examples module, which the gen
 // path just rewrote (and the check path just verified fresh) — a static import would render the
 // doc from stale strings.
-const { buildFullReference, buildQuickStart, oversizedReferenceSections } = await import(
-  "../src/commercial/tools/flcm-docs/reference.js"
-);
+const { buildFullReference, buildQuickStart, MCP_REFERENCE_CALL, oversizedReferenceSections } =
+  await import("../src/commercial/tools/flcm-docs/reference.js");
 
 // Building the quick-start here (not just the full doc) makes its ≤2KB cap a validate-time gate: the
 // call throws if the figma_execute_code description ever overflows, so `docs:check` fails rather than
 // the server silently shipping a truncated contract.
-buildQuickStart();
+buildQuickStart(MCP_REFERENCE_CALL);
 
 // Same idea for the get_flcm_reference size cap. A section over the response budget is unreachable
 // through the tool — the budget loop always emits the first one — so fail validate here rather than at

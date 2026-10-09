@@ -1,77 +1,106 @@
 #!/usr/bin/env node
 
 import { cli } from "cleye";
-import { getServerConfig, UsageError } from "./config.js";
+import { DEFAULT_HTTP_HOST, DEFAULT_HTTP_PORT, getServerConfig, UsageError } from "./config.js";
+import { CLI_NAME } from "./utils/cli-help.js";
 import { startServer } from "./server.js";
 import { executeCommand } from "./commercial/commands/execute.js";
+import { referenceCommand } from "./commercial/commands/reference.js";
 import { fetchCommand } from "./commands/fetch.js";
 
+// Defaults live in the descriptions, not cleye's `default`: a parsed default would outrank the env
+// var in getServerConfig's flag → env → default resolution.
+const ROOT_HELP_DESCRIPTION = `Framelink MCP for Figma. With no command, runs the MCP server: over HTTP at
+http://${DEFAULT_HTTP_HOST}:${DEFAULT_HTTP_PORT}/mcp, or over stdin/stdout with --stdio, which is what most MCP client
+configs launch.
+
+Reading designs uses the Figma REST API and needs a token (--figma-api-key or FIGMA_API_KEY).
+Editing designs goes through the Framelink Figma plugin; its tools appear once the plugin connects.
+Flags can also be set by the env var named in their description, or in a .env file.
+
+The commands do the same jobs from a shell. Run \`${CLI_NAME} <command> --help\` for details.`;
+
 const argv = cli({
-  name: "figma-developer-mcp",
+  name: CLI_NAME,
   version: process.env.NPM_PACKAGE_VERSION ?? "unknown",
+  help: {
+    description: ROOT_HELP_DESCRIPTION,
+    examples: [`${CLI_NAME} --stdio --figma-api-key <token>`, `${CLI_NAME} --port 8080`],
+  },
   flags: {
+    stdio: {
+      type: Boolean,
+      description: "Serve MCP over stdin/stdout instead of HTTP",
+    },
     figmaApiKey: {
       type: String,
-      description: "Figma API key (Personal Access Token)",
+      placeholder: "<token>",
+      description: "Figma personal access token (env FIGMA_API_KEY)",
     },
     figmaOauthToken: {
       type: String,
-      description: "Figma OAuth Bearer token",
+      placeholder: "<token>",
+      description:
+        "Figma OAuth bearer token; used instead of the API key when set (env FIGMA_OAUTH_TOKEN)",
     },
     env: {
       type: String,
-      description: "Path to custom .env file to load environment variables from",
+      placeholder: "<file>",
+      description: "Load environment variables from this file (default ./.env)",
     },
     port: {
       type: Number,
-      description: "Port to run the server on",
+      placeholder: "<n>",
+      description: `HTTP port (default ${DEFAULT_HTTP_PORT}; env FRAMELINK_PORT or PORT)`,
     },
     host: {
       type: String,
-      description: "Host to run the server on",
+      placeholder: "<address>",
+      description: `HTTP bind address (default ${DEFAULT_HTTP_HOST}; env FRAMELINK_HOST)`,
     },
     json: {
       type: Boolean,
-      description: "Output data from tools in JSON format. Back-compat alias for --format=json.",
+      description: "Alias for --format json",
     },
     format: {
       type: String,
-      description: "Output format for design data: tree (default, compact), yaml, or json.",
+      placeholder: "<tree|yaml|json>",
+      description:
+        "get_figma_data output format (default tree, the most compact; env OUTPUT_FORMAT)",
     },
     skipImageDownloads: {
       type: Boolean,
-      description: "Do not register the download_figma_images tool (skip image downloads)",
+      description: "Don't offer the download_figma_images tool (env SKIP_IMAGE_DOWNLOADS)",
     },
     imageDir: {
       type: String,
+      placeholder: "<dir>",
       description:
-        "Base directory for image downloads. The download tool will only write files within this directory. Defaults to the current working directory.",
+        "download_figma_images may only write inside this directory (default cwd; env IMAGE_DIR)",
     },
     proxy: {
       type: String,
+      placeholder: "<url|none>",
       description:
-        "HTTP proxy URL for networks that require a proxy (e.g. http://proxy:8080). Pass 'none' to ignore HTTP_PROXY/HTTPS_PROXY from the environment and connect directly.",
-    },
-    stdio: {
-      type: Boolean,
-      description: "Run in stdio transport mode for MCP clients",
+        "Proxy for Figma API calls, e.g. http://proxy:8080; 'none' ignores HTTP(S)_PROXY (env FIGMA_PROXY)",
     },
     assetRoot: {
       type: String,
+      placeholder: "<dir>",
       description:
-        "Root directory for local flcm.image() file paths. Only files within this directory can be placed as image fills. Defaults to the current working directory.",
+        "Local files flcm.image() may read must be inside this directory (default cwd; env FRAMELINK_ASSET_ROOT)",
     },
     codeMode: {
       type: Boolean,
       description:
-        "Always advertise the figma_execute_code write tools. By default they are hidden until the Framelink Figma plugin connects; use this for MCP clients that cache the tool list.",
+        "Advertise the plugin's tools from startup rather than on connect, for MCP clients that cache the tool list (env FIGMA_CODE_MODE)",
     },
     noTelemetry: {
       type: Boolean,
-      description: "Disable usage telemetry (telemetry is on by default)",
+      description: "Turn off usage telemetry (env FRAMELINK_TELEMETRY=off or DO_NOT_TRACK=1)",
     },
   },
-  commands: [fetchCommand, executeCommand],
+  commands: [fetchCommand, executeCommand, referenceCommand],
 });
 
 // Subcommand callbacks execute during cli() — only start the server when no subcommand ran.
