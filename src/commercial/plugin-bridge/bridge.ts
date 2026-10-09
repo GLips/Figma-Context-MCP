@@ -13,6 +13,7 @@ import {
   type AuthorizingUser,
 } from "./approval.js";
 import type { WriteAccessNotice } from "~/commercial/entitlement/write-authorization.js";
+import type { FigmaService } from "~/services/figma.js";
 import { ApprovalStore } from "./approval-store.js";
 import { parsePeerVersion, refuseProtocolSkew, type ProtocolCompatibility } from "./version.js";
 import { Logger } from "~/utils/logger.js";
@@ -59,10 +60,22 @@ export type BridgeRequest =
       margin?: number;
     };
 
+/**
+ * Server-owned facts about the run a channel request serves, fixed when the run was submitted and
+ * never read from the plugin — a payload could name anyone. `figma` is the Figma client of the request
+ * that started the run, so a mid-run fetch spends that caller's token; on a multi-user HTTP server the
+ * process-wide config belongs to nobody in particular. Null when no such request exists (the CLI).
+ */
+export interface ChannelRunContext {
+  figma: FigmaService | null;
+}
+
+const NO_RUN_CONTEXT: ChannelRunContext = { figma: null };
+
 /** Opaque JSON payloads. Only explicitly registered names can be called. */
 export type CapabilityHandler = (
   payload: unknown,
-  context: { signal: AbortSignal },
+  context: { signal: AbortSignal; run: ChannelRunContext },
 ) => Promise<unknown>;
 /**
  * Unsolicited plugin events the bridge relays but doesn't own. Both arrive only from the current
@@ -124,6 +137,7 @@ interface Pending {
   /** The request's payload type: names what stalled in the timeout rejection, and gates which
    * pending ids the reverse direction will serve (only EXECUTE_CODE runs — see serveChannelRequest). */
   payloadType: BridgeRequest["type"];
+  runContext: ChannelRunContext;
 }
 
 // The per-request INACTIVITY deadline, not a hard cap (protocol 2): run-scoped traffic — today,
@@ -855,14 +869,15 @@ export class PluginBridge {
     payload: BridgeRequest,
     signal?: AbortSignal,
     onSubmitted?: (runId: string) => void,
+    runContext: ChannelRunContext = NO_RUN_CONTEXT,
   ): Promise<unknown> {
     if (signal?.aborted) return Promise.reject(signal.reason);
     // Handshake messages send SYNCHRONOUSLY (no await before the socket.send): the connection
     // contract depends on the newcomer's handshake being in flight before a displaced socket's close
     // fires a tick later. Everything else goes through the compatibility hold.
     if (HANDSHAKE_REQUEST_TYPES.has(payload.type))
-      return this.sendCorrelated(payload, signal, onSubmitted);
-    return this.sendOnceCompatible(payload, signal, onSubmitted);
+      return this.sendCorrelated(payload, signal, onSubmitted, runContext);
+    return this.sendOnceCompatible(payload, signal, onSubmitted, runContext);
   }
 
   /**
@@ -876,8 +891,9 @@ export class PluginBridge {
    */
   private async sendOnceCompatible(
     payload: BridgeRequest,
-    signal?: AbortSignal,
-    onSubmitted?: (runId: string) => void,
+    signal: AbortSignal | undefined,
+    onSubmitted: ((runId: string) => void) | undefined,
+    runContext: ChannelRunContext,
   ): Promise<unknown> {
     while (this.compatibility === "checking" && this.socket?.readyState === WebSocket.OPEN) {
       await waitForSignal(this.verdictSettled, signal);
@@ -887,14 +903,15 @@ export class PluginBridge {
     // beats a nudge stapled to a result the wrong runtime already produced.
     const refusal = this.compatibility === "incompatible" ? this.skewRefusal : null;
     if (refusal) throw new BridgeRequestError(refusal, "not-submitted");
-    return this.sendCorrelated(payload, signal, onSubmitted);
+    return this.sendCorrelated(payload, signal, onSubmitted, runContext);
   }
 
   /** Stamp a correlation id on the payload, send it, and resolve when the reply carrying that id lands. */
   private sendCorrelated(
     payload: BridgeRequest,
-    signal?: AbortSignal,
-    onSubmitted?: (runId: string) => void,
+    signal: AbortSignal | undefined,
+    onSubmitted: ((runId: string) => void) | undefined,
+    runContext: ChannelRunContext,
   ): Promise<unknown> {
     if (signal?.aborted) return Promise.reject(signal.reason);
     const socket = this.socket;
@@ -921,6 +938,7 @@ export class PluginBridge {
         timer: null,
         ceilingTimer: setTimeout(() => this.timeoutPending(id, "ceiling"), this.runCeilingMs),
         payloadType: payload.type,
+        runContext,
       };
       this.pending.set(id, pending);
       // Armed through the same helper every later phase change uses, so "when does this request have
@@ -1309,7 +1327,7 @@ export class PluginBridge {
     void Promise.resolve()
       .then(() => {
         run.servicesAbort.signal.throwIfAborted();
-        return handler(msg.payload, { signal: run.servicesAbort.signal });
+        return handler(msg.payload, { signal: run.servicesAbort.signal, run: run.runContext });
       })
       .then((payload) => {
         if (!this.pending.has(runId)) {

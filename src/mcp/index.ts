@@ -9,8 +9,10 @@ import type { PluginBridgeRuntime } from "~/commercial/plugin-bridge/index.js";
 import { registerCodeModeTools } from "~/commercial/tools/code-mode-tools.js";
 import {
   downloadFigmaImagesTool,
+  getFigmaCommentsTool,
   getFigmaDataTool,
   type DownloadImagesParams,
+  type GetFigmaCommentsParams,
   type GetFigmaDataParams,
 } from "./tools/index.js";
 
@@ -69,7 +71,7 @@ function createServer(
   });
 
   if (pluginBridge) {
-    registerCodeModeTools(server, pluginBridge, { codeMode, transport });
+    registerCodeModeTools(server, pluginBridge, { codeMode, transport, figmaService });
   }
 
   installValidationRejectCapture(server, {
@@ -116,6 +118,17 @@ function registerTools(
         options.getClientInfo(),
         extra,
       ),
+  );
+
+  server.registerTool(
+    getFigmaCommentsTool.name,
+    {
+      title: "Get Figma Comments",
+      description: getFigmaCommentsTool.description,
+      inputSchema: getFigmaCommentsTool.parameters,
+      annotations: { readOnlyHint: true },
+    },
+    (params: GetFigmaCommentsParams) => getFigmaCommentsTool.handler(params, figmaService),
   );
 
   if (!options.skipImageDownloads) {

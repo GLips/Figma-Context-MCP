@@ -7,6 +7,7 @@ import { Logger } from "~/utils/logger.js";
 import { PluginBridge } from "./bridge.js";
 import { fetchAndProcessImage, isLocalImageSource, createLocalImageReader } from "./images.js";
 import { ImageByteCache, createImagesCapability } from "./image-requests.js";
+import { createCommentPinsCapability } from "./comment-pins.js";
 import { WS_PORT_BLOCK } from "./ports.js";
 import { SESSION_IDENTITY } from "./approval.js";
 import { resolveStateDir } from "./approval-store.js";
@@ -86,6 +87,7 @@ export function startPluginBridge({
           cache: new ImageByteCache(),
         }),
       ],
+      ["comments.pins", createCommentPinsCapability()],
     ]),
   });
   // Surface where the durable-approval token file lives — it is a security-adjacent 0600 credential, so

@@ -67,3 +67,8 @@ export type { ProjectOptions } from "./project.js";
 export type { Elision } from "./types.js";
 
 export { projectNames } from "./project-names.js";
+
+// One pin→node guess for both the REST comments tool and the plugin's read counts, so they agree on
+// which node a comment thread belongs to.
+export { hitTestCommentPin } from "./comment-pin.js";
+export type { CommentPinGeometry } from "./comment-pin.js";

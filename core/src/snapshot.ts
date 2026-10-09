@@ -337,6 +337,8 @@ export interface NodeSnapshot {
   blendMode?: string;
   constraints?: { horizontal: string; vertical: string };
   annotations?: SnapshotAnnotation[];
+  /** Unresolved comment threads assigned to this node (see comment-pin.ts). Plugin reads only. */
+  comments?: number;
   id: string;
   name: string;
   /** Raw Figma node type (e.g. FRAME, TEXT, VECTOR). Only project maps VECTOR to IMAGE-SVG. */

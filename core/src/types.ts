@@ -202,6 +202,7 @@ export interface SimplifiedNode extends NodeGeometry {
     y?: "top" | "center" | "bottom" | "stretch" | "scale";
   };
   annotations?: SnapshotAnnotation[];
+  comments?: number;
   id: string;
   // Always populated during simplification, but the serialization pass drops it
   // when it is noise (auto-generated like `Rectangle 12`, or redundant with the

@@ -8,6 +8,7 @@
   "capabilities": ["inspect"],
   "documentAccess": "dynamic-page",
   "permissions": ["currentuser"],
+  "enablePrivatePluginApi": true,
   "networkAccess": {
     "allowedDomains": ["none"],
     "devAllowedDomains": [

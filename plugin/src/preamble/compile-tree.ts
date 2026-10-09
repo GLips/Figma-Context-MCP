@@ -108,7 +108,7 @@ export function readyNodeWords(src: Record<string, unknown>, subject: string): R
   const out: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(src)) {
     // These records describe a read, never an authored change. Omission preserves live children.
-    if (key === "readOnlySource" || key === "elided" || key === "warnings") continue;
+    if (key === "readOnlySource" || key === "elided" || key === "warnings" || key === "comments") continue;
     const disposition = own(READ_FIELD_DISPOSITIONS, key);
     if (value != null && disposition) throw refuse(subject, key, disposition.refuse);
     out[key] = readyAuthoredValue(key, value, subject);

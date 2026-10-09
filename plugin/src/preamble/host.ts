@@ -84,6 +84,35 @@ export async function requestHostImages(urls: string[]): Promise<Record<string, 
   return images;
 }
 
+/** One unresolved comment thread's pin: the frame Figma anchored it to, and the offset inside it. */
+export interface HostCommentPin {
+  nodeId: string;
+  x: number;
+  y: number;
+}
+
+/**
+ * The file's unresolved comment pins, over the private server channel, or null when they can't be had.
+ *
+ * Absence is QUIET, unlike images: counts decorate reads nobody asked to be about comments, so no host,
+ * a token without the comments scope, or a failed fetch all just mean no counts.
+ */
+export async function requestHostCommentPins(fileKey: string): Promise<HostCommentPin[] | null> {
+  const host = currentHost();
+  if (!host) return null;
+  try {
+    const reply = await withServerCall(() => host.callServer("comments.pins", { fileKey }));
+    const pins = (reply as { pins?: unknown } | null)?.pins;
+    if (!Array.isArray(pins)) return null;
+    return pins.filter(
+      (pin): pin is HostCommentPin =>
+        !!pin && typeof pin.nodeId === "string" && typeof pin.x === "number" && typeof pin.y === "number",
+    );
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Whether the server has cancelled this run. Fails OPEN — no host means no cancellation, which is
  * what keeps the harness and unit tests (which never install one) running verbs normally.

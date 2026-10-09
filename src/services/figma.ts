@@ -4,6 +4,7 @@ import type {
   GetFileNodesResponse,
   GetImageFillsResponse,
   GetComponentResponse,
+  GetCommentsResponse,
   Transform,
 } from "@figma/rest-api-spec";
 import { downloadAndProcessImage, type ImageProcessingResult } from "~/utils/image-processing.js";
@@ -65,8 +66,8 @@ export class FigmaService {
     >;
   }
 
-  private async request<T>(endpoint: string): Promise<T> {
-    const { data } = await this.requestWithSize<T>(endpoint);
+  private async request<T>(endpoint: string, signal?: AbortSignal): Promise<T> {
+    const { data } = await this.requestWithSize<T>(endpoint, signal);
     return data;
   }
 
@@ -76,13 +77,17 @@ export class FigmaService {
    * we care about (`getRawFile` / `getRawNode`); image-fetching endpoints
    * continue to use `request` unchanged.
    */
-  private async requestWithSize<T>(endpoint: string): Promise<{ data: T; rawSize: number }> {
+  private async requestWithSize<T>(
+    endpoint: string,
+    signal?: AbortSignal,
+  ): Promise<{ data: T; rawSize: number }> {
     try {
       Logger.log(`Calling ${this.baseUrl}${endpoint}`);
       const headers = this.getAuthHeaders();
 
       return await fetchJSON<T & { status?: number }>(`${this.baseUrl}${endpoint}`, {
         headers,
+        signal,
         redactFromResponseBody: [this.apiKey, this.oauthToken],
       });
     } catch (error) {
@@ -363,5 +368,24 @@ export class FigmaService {
   async getPublishedComponentSite(key: string): Promise<{ fileKey: string; nodeId: string }> {
     const response = await this.request<GetComponentResponse>(`/components/${key}`);
     return { fileKey: response.meta.file_key, nodeId: response.meta.node_id };
+  }
+
+  /**
+   * Every comment on the file, replies included, with Markdown bodies. Tier 2 — the comments tool's
+   * one cheap call. Needs the `file_comments:read` scope, which a file-content-only token lacks.
+   */
+  async getComments(fileKey: string, signal?: AbortSignal): Promise<GetCommentsResponse> {
+    return this.request<GetCommentsResponse>(`/files/${fileKey}/comments?as_md=true`, signal);
+  }
+
+  /**
+   * The document with every page listed but only `nodeIds`' subtrees (and their ancestor chains)
+   * filled in — or, with no ids, the page list alone. Tier 1.
+   *
+   * Never pass a page id here: its "subtree" is the whole page.
+   */
+  async getFileSlice(fileKey: string, nodeIds: string[]): Promise<GetFileResponse> {
+    const query = nodeIds.length ? `ids=${nodeIds.join(",")}` : "depth=1";
+    return this.request<GetFileResponse>(`/files/${fileKey}?${query}`);
   }
 }

@@ -8,6 +8,7 @@ import { createWarningRegistry } from "../../../plugin/src/preamble/warnings.js"
 import { afterEach, expect, it, vi } from "vitest";
 import { PluginBridge, BridgeRequestError } from "~/commercial/plugin-bridge/bridge.js";
 import { ApprovalStore } from "~/commercial/plugin-bridge/approval-store.js";
+import type { FigmaService } from "~/services/figma.js";
 
 class Socket {
   readyState = 1;
@@ -472,4 +473,32 @@ it("failure snapshots shared nested getters once and preserves JSON fields named
   expect(reads).toBe(1);
   h.bridge.stop();
   await h.result;
+});
+
+it("hands each channel request the credentials of the request that started its run", async () => {
+  const seen: unknown[] = [];
+  const bridge = create({
+    capabilities: new Map([["test.who", async (_payload, { run }) => void seen.push(run.figma)]]),
+  });
+  const socket = new Socket();
+  install(bridge, socket);
+  const alice = { user: "alice" } as unknown as FigmaService;
+  const bob = { user: "bob" } as unknown as FigmaService;
+  const runs = [alice, bob].map((figma) =>
+    bridge
+      .request({ type: "EXECUTE_CODE", code: "x", preamble: "x" }, undefined, undefined, { figma })
+      .catch((e) => e),
+  );
+  await Promise.resolve();
+  const [aliceRun, bobRun] = socket.frames.map((frame) => frame.id);
+  for (const runId of [bobRun, aliceRun])
+    receive(bridge, socket, {
+      type: "CHANNEL_REQUEST",
+      id: `q-${runId}`,
+      runId,
+      capability: "test.who",
+    });
+  await vi.waitFor(() => expect(seen).toEqual([bob, alice]));
+  bridge.stop();
+  await Promise.all(runs);
 });

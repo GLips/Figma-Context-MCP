@@ -1,8 +1,14 @@
 import { HttpError } from "~/utils/fetch-json.js";
 import { proxyMode, type ProxyMode } from "~/utils/proxy-env.js";
 
+// Comments are a separate grant: a token that reads the file fine can still be refused its comments.
+function missingScopeCause(endpoint: string): string {
+  return endpoint.includes("/comments")
+    ? "- The access token is missing the comments scope (File comments: Read, `file_comments:read`) — a token that can read the file may still lack it"
+    : "- The access token is missing required scopes (File content: Read, Dev resources: Read)";
+}
+
 const FORBIDDEN_CAUSES = [
-  "- The access token is missing required scopes (File content: Read, Dev resources: Read)",
   "- The access token has been revoked, mistyped, or (for OAuth) expired — PATs don't expire, OAuth tokens do",
   "- The access token doesn't have permission to this specific file — it must be owned by or shared with the token's account, and for team/org files the account must belong to that team",
   "- The file's share settings don't allow viewers to copy/share/export",
@@ -48,7 +54,7 @@ export function buildForbiddenMessage(endpoint: string, error: unknown): string 
       `Request to Figma API endpoint '${endpoint}' returned 403 Forbidden.`,
       ...(body ? [`Response body: ${body}`] : []),
     ],
-    [causesHeader, ...FORBIDDEN_CAUSES],
+    [causesHeader, missingScopeCause(endpoint), ...FORBIDDEN_CAUSES],
     [TROUBLESHOOTING_GUIDE],
     ...(body ? [[LLM_INSTRUCTIONS]] : []),
     ...(proxyHint ? [[proxyHint]] : []),

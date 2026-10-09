@@ -18,6 +18,7 @@ import {
   isPendingApproval,
 } from "~/commercial/plugin-bridge/await-approval.js";
 import type { ServerTransport } from "~/mcp/index.js";
+import type { FigmaService } from "~/services/figma.js";
 import { registerFailLoudTool, retryableToolReply } from "~/mcp/fail-loud-params.js";
 import { flcmSandboxPreamble } from "~/commercial/plugin-bridge/sandbox-preamble.js";
 import { referenceSessionGuidance } from "./flcm-docs/session-guidance.js";
@@ -64,6 +65,8 @@ const MAX_SCREENSHOT_SCALE = 4;
 type CodeModeToolsOptions = {
   /** Force the tools to be advertised from startup (`--code-mode`) instead of waiting for a plugin. */
   codeMode: boolean;
+  /** This MCP request's Figma client. A run's mid-run Figma fetches (comment counts) spend its token. */
+  figmaService: FigmaService;
   transport: ServerTransport;
 };
 
@@ -81,7 +84,7 @@ type CodeModeToolsOptions = {
 export function registerCodeModeTools(
   server: McpServer,
   runtime: PluginBridgeRuntime,
-  { codeMode, transport }: CodeModeToolsOptions,
+  { codeMode, transport, figmaService }: CodeModeToolsOptions,
 ): void {
   const { bridge, writeAccess } = runtime;
 
@@ -190,6 +193,7 @@ export function registerCodeModeTools(
                   { type: "EXECUTE_CODE", code, preamble: flcmSandboxPreamble() },
                   signal,
                   (runId) => (gate.runId = runId),
+                  { figma: figmaService },
                 );
               },
               approvalOptions(extra),

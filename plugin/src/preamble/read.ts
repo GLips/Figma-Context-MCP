@@ -7,6 +7,7 @@ import { sceneFigma as figma, invalidateSceneAccess } from "./scene-access.js";
 
 import { readAnnotationCategoryNames } from "./annotation-categories.js";
 import { decodeAnnotations } from "./annotations.js";
+import { readCommentCounts, type CommentCounts } from "./comment-counts.js";
 import { Target, RawIdRef, FindQuery, SlimHandle, ReadPredicate, GetResult } from "./ir.js";
 import { readKey, identityOf } from "./identity.js";
 import {
@@ -177,6 +178,7 @@ async function simplifyScene(
   );
   const componentDefinitions =
     await offTreeDefinitions(snapshot, mainComponents, annotationCategories);
+  attachCommentCounts(snapshot, await readCommentCounts());
   const full = await simplify([snapshot], { componentDefinitions });
   for (const node of full.nodes) registerNode(node);
   for (const entry of Object.values(full.components)) for (const node of entry.children ?? []) registerNode(node);
@@ -229,6 +231,13 @@ async function offTreeDefinitions(
     }
   }
   return definitions;
+}
+
+function attachCommentCounts(snapshot: NodeSnapshot, counts: CommentCounts): void {
+  if (!counts.size) return;
+  const count = counts.get(snapshot.id);
+  if (count) snapshot.comments = count;
+  for (const child of snapshot.children ?? []) attachCommentCounts(child, counts);
 }
 
 // A skipped node must never read as absent: the agent is told what Figma listed but couldn't read.
@@ -341,6 +350,7 @@ function projectSlim(node: SceneNode, simplified: SimplifiedNode, categories: Re
   if (simplified.visible === false) slim.visible = false;
   const annotations = decodeAnnotations("annotations" in node ? node.annotations : undefined, categories);
   if (annotations) slim.annotations = annotations;
+  if (simplified.comments) slim.comments = simplified.comments;
   if (simplified.width !== undefined) slim.width = simplified.width;
   if (simplified.height !== undefined) slim.height = simplified.height;
   if (simplified.minWidth !== undefined) slim.minWidth = simplified.minWidth;

@@ -357,6 +357,7 @@ function extractComponent(
   }
 
   if (node.annotations?.length) result.annotations = node.annotations;
+  if (node.comments) result.comments = node.comments;
 
   // Any node with property references: annotate with simplified refs
   if (node.componentPropertyReferences) {

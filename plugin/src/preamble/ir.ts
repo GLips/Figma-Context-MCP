@@ -582,6 +582,8 @@ export interface SlimHandle extends Identity {
   maxHeight?: number;
 
   annotations?: SimplifiedNode["annotations"];
+  /** Unresolved comment threads pointing at this node; read them with get_figma_comments. */
+  comments?: number;
   width?: SimplifiedDimension;
   height?: SimplifiedDimension;
   layout?: { mode: SimplifiedLayout["mode"] };
