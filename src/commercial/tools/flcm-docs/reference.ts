@@ -21,6 +21,14 @@ import {
   FIELD_GROUPS,
   INPUT_ALIASES,
   EDIT_TYPE_WORD_GROUPS,
+  FrameSchema,
+  TextSchema,
+  ShapeSchema,
+  EllipseSchema,
+  LineSchema,
+  PathSchema,
+  SvgSchema,
+  InstanceSchema,
   type VerbCategory,
 } from "@framelink/plugin/schema";
 import {
@@ -152,29 +160,141 @@ function propTable(fields: Fields): string {
   return ["| Prop | Type | Notes |", "| --- | --- | --- |", ...rows].join("\n");
 }
 
-// The per-type editable-word lists, composed from EDIT_TYPE_WORD_GROUPS — the SAME table the
-// runtime legality gate composes from (edit-plan.ts DELTA_KEYS_BY_TYPE), intersected with the edit
-// field set the same way, so the doc can't promise a word the gate rejects.
-function editTypeWordLines(): string {
-  const editWords = new Set(documentedFields(FIELD_GROUPS.edit).map(([key]) => key));
-  const lines: string[] = [];
-  const labels: Partial<Record<keyof typeof EDIT_TYPE_WORD_GROUPS, string>> = {
-    VECTOR: "VECTOR (path- or svg-born)",
-  };
-  for (const t of Object.keys(EDIT_TYPE_WORD_GROUPS) as (keyof typeof EDIT_TYPE_WORD_GROUPS)[]) {
-    const words = [
-      ...new Set(
-        EDIT_TYPE_WORD_GROUPS[t].flatMap((g) =>
-          documentedFields(FIELD_GROUPS[g]).map(([key]) => key),
-        ),
-      ),
-    ]
-      .filter((k) => editWords.has(k))
-      .map((k) => `\`${k}\``)
-      .join(", ");
-    lines.push(`- **${labels[t] ?? t}** — ${words}`);
+// The props a node type is created with. INSTANCE adds the swap group: its schema leaves componentId to
+// the verb, which requires it on a new instance.
+const CREATE_FIELDS_BY_TYPE: Record<string, Fields> = {
+  FRAME: FrameSchema.shape,
+  TEXT: TextSchema.shape,
+  RECTANGLE: ShapeSchema.shape,
+  ELLIPSE: EllipseSchema.shape,
+  LINE: LineSchema.shape,
+  VECTOR: { ...PathSchema.shape, ...SvgSchema.shape },
+  INSTANCE: { ...InstanceSchema.shape, ...FIELD_GROUPS.swap },
+};
+
+const words = (keys: Iterable<string>) => [...keys].map((k) => `\`${k}\``).join(", ");
+const listTypes = (types: string[]) =>
+  types.length > 1 ? `${types.slice(0, -1).join(", ")} and ${types.at(-1)}` : types[0];
+
+// A node type's own fields: those that aren't the very field objects of a table printed elsewhere.
+// Identity, not name — LINE's `stroke` is its own object with its own note, so it stays.
+function ownFields(fields: Fields, ...printed: Fields[]): Fields {
+  const shared = new Set(printed.flatMap((group) => Object.values(group)));
+  return Object.fromEntries(Object.entries(fields).filter(([, field]) => !shared.has(field)));
+}
+
+// Which node types take the shared appearance table, in full or in part, by field identity — so
+// the sentence over the table can't drift from the schemas the compiler builds from.
+// The path form stands in for VECTOR: an svg import's own fill/stroke repaint the art inside it.
+function appearanceCoverage(): string {
+  const appearance = documentedFields(FIELD_GROUPS.appearance);
+  const full: string[] = [];
+  const partial = new Map<string, string[]>(); // the missing words → types
+  const byType: [string, Fields][] = Object.entries(CREATE_FIELDS_BY_TYPE).map(([type, fields]) =>
+    type === "VECTOR" ? ["path VECTOR", PathSchema.shape] : [type, fields],
+  );
+  for (const [type, fields] of byType) {
+    const values = new Set<z.ZodType>(Object.values(fields));
+    const missing = appearance.filter(([, f]) => !values.has(f)).map(([k]) => k);
+    if (!missing.length) full.push(type);
+    else if (missing.length < appearance.length) {
+      const key = missing.join(",");
+      partial.set(key, [...(partial.get(key) ?? []), type]);
+    }
   }
-  return lines.join("\n");
+  const take = (types: string[]) => `${listTypes(types)} ${types.length > 1 ? "take" : "takes"}`;
+  const parts = [...partial].map(
+    ([missing, types]) => `${take(types)} all but ${words(missing.split(","))}`,
+  );
+  return `${take(full)} every prop below; ${parts.join("; ")}.`;
+}
+
+// Why a create word is absent from edit. The set itself is computed, so a new create-only word with
+// no entry here fails docs:gen instead of being silently undocumented.
+const PATH_GEOMETRY =
+  "path geometry; redraw a live path by placing `{ id, d }` with a placement verb (see values)";
+const CREATE_ONLY_REASONS: Record<string, string> = {
+  key: "immutable, since re-keying could mint a duplicate address; rename with `name`",
+  d: PATH_GEOMETRY,
+  vectorPaths: PATH_GEOMETRY,
+  scale: PATH_GEOMETRY,
+};
+
+// The words flcm.edit takes per node type, composed from EDIT_TYPE_WORD_GROUPS — the SAME table the
+// runtime gate composes (edit-plan.ts DELTA_KEYS_BY_TYPE), intersected with the edit field set the
+// same way — so the doc can't promise a word the gate rejects.
+function editWordsFor(type: keyof typeof EDIT_TYPE_WORD_GROUPS): Set<string> {
+  const editable = new Set(documentedFields(FIELD_GROUPS.edit).map(([key]) => key));
+  return new Set(
+    EDIT_TYPE_WORD_GROUPS[type]
+      .flatMap((g) => documentedFields(FIELD_GROUPS[g]).map(([key]) => key))
+      .filter((k) => editable.has(k)),
+  );
+}
+
+// Edit is create's vocabulary, so the doc prints only where the two differ: create words edit
+// refuses, and the vocabularies of types that can be edited but never created.
+function editExceptions(): string {
+  const createOnly = new Map<string, string[]>(); // word → types
+  const editOnlyByType = new Map<string, string[]>();
+  for (const [type, fields] of Object.entries(CREATE_FIELDS_BY_TYPE)) {
+    const editable = editWordsFor(type as keyof typeof EDIT_TYPE_WORD_GROUPS);
+    const created = documentedFields(fields).map(([k]) => k);
+    for (const k of created.filter((k) => !editable.has(k)))
+      createOnly.set(k, [...(createOnly.get(k) ?? []), type]);
+    const extra = [...editable].filter((k) => !created.includes(k));
+    if (extra.length) editOnlyByType.set(type, extra);
+  }
+  // Words sharing a reason and the same types print as one line.
+  const allTypes = Object.keys(CREATE_FIELDS_BY_TYPE).length;
+  const byReason = new Map<string, { words: string[]; types: string[] }>();
+  for (const [word, types] of createOnly) {
+    const reason = CREATE_ONLY_REASONS[word];
+    if (!reason)
+      throw new Error(`flcm docgen: create-only word '${word}' needs a CREATE_ONLY_REASONS entry.`);
+    const key = `${reason}|${types.join(",")}`;
+    byReason.set(key, { words: [...(byReason.get(key)?.words ?? []), word], types });
+  }
+  const createLines = [...byReason].map(([key, { words: ws, types }]) => {
+    const where = types.length === allTypes ? "" : ` (${listTypes(types)})`;
+    return `- ${words(ws)}${where} — ${key.split("|")[0]}.`;
+  });
+  const extraLines = [...editOnlyByType].map(
+    ([type, extra]) => `- ${type} also takes ${words(extra)}.`,
+  );
+
+  // Types with no create path, described against FRAME's words when they're close to it.
+  const frame = editWordsFor("FRAME");
+  const byVocabulary = new Map<string, string[]>();
+  for (const type of Object.keys(EDIT_TYPE_WORD_GROUPS) as (keyof typeof EDIT_TYPE_WORD_GROUPS)[]) {
+    if (type in CREATE_FIELDS_BY_TYPE) continue;
+    const own = editWordsFor(type);
+    const minus = [...frame].filter((k) => !own.has(k));
+    const plus = [...own].filter((k) => !frame.has(k));
+    const text =
+      minus.length + plus.length < own.size
+        ? "FRAME's words" +
+          (minus.length ? ` without ${words(minus)}` : "") +
+          (plus.length ? `, plus ${words(plus)}` : "")
+        : `only ${words(own)}`;
+    byVocabulary.set(text, [...(byVocabulary.get(text) ?? []), type]);
+  }
+  const editOnlyTypes = [...byVocabulary].map(
+    ([text, types]) => `- ${listTypes(types)} — ${text}.`,
+  );
+  // The runtime's floor for a type with no vocabulary of its own (edit-plan.ts SHARED_DELTA_KEYS).
+  const editable = new Set(documentedFields(FIELD_GROUPS.edit).map(([key]) => key));
+  const floor = documentedFields(FIELD_GROUPS.shared)
+    .map(([k]) => k)
+    .filter((k) => editable.has(k));
+  editOnlyTypes.push(`- Any other type (GROUP, SECTION, …) — only ${words(floor)}.`);
+
+  return (
+    "Create words that edit refuses:\n\n" +
+    [...createLines, ...extraLines].join("\n") +
+    "\n\nTypes you can edit but never create:\n\n" +
+    editOnlyTypes.join("\n")
+  );
 }
 
 function verbTable(): string {
@@ -257,7 +377,8 @@ const SECTIONS: Section[] = [
       'where the flow supplies the length. There is no `height`, no `"hug"` and no percent.\n\n' +
       `${propTable(FIELD_GROUPS.size)}\n\n` +
       "How these sizes resolve is in the layout section.\n\n" +
-      `### FRAME — container props\n\n${propTable({ ...FIELD_GROUPS.appearance, ...FIELD_GROUPS.frame })}\n\n` +
+      `### Appearance — paint, border, corners, effects, rotation\n\n${appearanceCoverage()}\n\n${propTable(FIELD_GROUPS.appearance)}\n\n` +
+      `### FRAME — container props\n\n${propTable(FIELD_GROUPS.frame)}\n\n` +
       `#### Auto-layout config (the \`layout\` object)\n\n${propTable(FIELD_GROUPS.containerLayout)}\n\n#### Placement under a parent (in the same \`layout\` object)\n\n${propTable(FIELD_GROUPS.childLayout)}\n\n` +
       `### TEXT — text props\n\n${propTable(FIELD_GROUPS.text)}\n\n` +
       "`text` is a string or array of styled runs. `fill` is its paint. " +
@@ -266,10 +387,8 @@ const SECTIONS: Section[] = [
       `#### Text style (the \`textStyle\` object)\n\n${propTable(FIELD_GROUPS.textStyle)}\n\n` +
       `#### Unrenderable glyphs\n\n${UNRENDERABLE_GLYPHS}\n\n` +
       `### TEXT — rich text (runs)\n\n${RICH_TEXT}\n\nEach styled run's delta fields:\n\n${propTable(FIELD_GROUPS.run)}\n\n` +
-      `### RECTANGLE — shape props\n\n${propTable(FIELD_GROUPS.appearance)}\n\n` +
-      `### ELLIPSE — shape props\n\n(An ellipse has no \`borderRadius\` — its edge is already round.)\n\n${propTable(FIELD_GROUPS.ellipse)}\n\n` +
-      `### LINE — line props\n\n${propTable(FIELD_GROUPS.line)}\n\n` +
-      `### VECTOR — path props (\`d\` / \`vectorPaths\`)\n\nBare geometry: the node's box is the path's bounding box, so there is no \`width\`/\`height\` here — \`scale\` is the size word.\n\n${propTable(FIELD_GROUPS.path)}\n\n` +
+      `### LINE — line props\n\nA LINE takes the placement words from Size & position, but not its size words, plus:\n\n${propTable(ownFields(FIELD_GROUPS.line, FIELD_GROUPS.size))}\n\n` +
+      `### VECTOR — path props (\`d\` / \`vectorPaths\`)\n\nBare geometry: the node's box is the path's bounding box, so there is no \`width\`/\`height\` here — \`scale\` is the size word.\n\n${propTable(ownFields(FIELD_GROUPS.path, FIELD_GROUPS.appearance))}\n\n` +
       `### VECTOR — svg props (\`svg\`)\n\nA canvas of art, so it takes the shared and size/position props too. These two reach the vectors INSIDE the import.\n\n${propTable(FIELD_GROUPS.svg)}\n\n` +
       // The instance table prints once, here beside its sibling node types; the components section's
       // prose explains the same two words at length rather than repeating the table.
@@ -302,15 +421,7 @@ const SECTIONS: Section[] = [
     title: "edit() / editMany() — changing existing nodes",
     blurb: "partial deltas against live nodes, batching them atomically, and the rollback contract",
     body: () =>
-      `${EDIT_INTRO}\n\n### Editable fields\n\n${propTable(FIELD_GROUPS.edit)}\n\n` +
-      `### Words by node type\n\n${editTypeWordLines()}\n\n` +
-      // Derived from the schema's shared group (minus key, which is never editable) so this sentence
-      // can't drift from the runtime's non-createable gate, which composes from the same group.
-      "On a node type with no vocabulary of its own (GROUP, SECTION, POLYGON, …) only the shared words apply: " +
-      `${Object.keys(FIELD_GROUPS.shared)
-        .filter((k) => k !== "key")
-        .map((k) => `\`${k}\``)
-        .join(", ")}.\n\n` +
+      `${EDIT_INTRO}\n\n### Where edit differs from create\n\n${editExceptions()}\n\n` +
       `${EDIT_REMOVAL}\n\n${EDIT_RULES}\n\n${EDIT_MANY}`,
   },
   {
