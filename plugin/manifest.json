@@ -7,7 +7,7 @@
   "editorType": ["figma", "dev"],
   "capabilities": ["inspect"],
   "documentAccess": "dynamic-page",
-  "permissions": ["currentuser"],
+  "permissions": ["currentuser", "teamlibrary"],
   "enablePrivatePluginApi": true,
   "networkAccess": {
     "allowedDomains": ["none"],
