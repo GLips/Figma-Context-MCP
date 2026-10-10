@@ -324,7 +324,7 @@ FRAME, RECTANGLE and INSTANCE take every prop below; ELLIPSE and path VECTOR tak
 | `gridTemplateColumns` | string | Tracks are Npx, Nfr, auto or fit-content(100%); repeat() and minmax(0, Nfr) expand to native tracks, which is what reads return. Required to create a grid. Fr tracks divide this frame's own width, so give it a number or "fill" in the same call; a hugging width is refused. |
 | `gridTemplateRows` | string | Same track syntax. Omitted, rows are implicit hug tracks that grow as children are added; named rows are fixed and stop growing. |
 | `mode` | "row" \| "column" \| "grid" \| "none" | "row" and "column" are flex directions, "grid" is CSS grid, "none" (default) is free-form. The other container words need a mode. A new grid needs gridTemplateColumns. |
-| `gap` | number \| string | Unequal "row-gap column-gap" needs grid or wrap. |
+| `gap` | number \| "Npx" \| "Npx Npx" | Unequal "row-gap column-gap" needs grid or wrap. |
 | `wrap` | boolean | Rows only. |
 | `padding` | number \| "12px 16px" \| { x?, y? } \| { top?, right?, bottom?, left? } | Also { x, y } (x = left and right, y = top and bottom) or per-edge. |
 | `justifyContent` | "flex-start" \| "flex-end" \| "center" \| "space-between" | Figma has no space-around or space-evenly: use space-between, or gap and padding, never spacer nodes. |

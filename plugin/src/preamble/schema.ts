@@ -163,7 +163,11 @@ const CONTAINER_LAYOUT_FIELDS = {
   gridTemplateColumns: prop(z.string(), "Tracks are Npx, Nfr, auto or fit-content(100%); repeat() and minmax(0, Nfr) expand to native tracks, which is what reads return. Required to create a grid. Fr tracks divide this frame's own width, so give it a number or \"fill\" in the same call; a hugging width is refused."),
   gridTemplateRows: prop(z.string(), 'Same track syntax. Omitted, rows are implicit hug tracks that grow as children are added; named rows are fixed and stop growing.'),
   mode: prop(z.enum(["row", "column", "grid", "none"]), '"row" and "column" are flex directions, "grid" is CSS grid, "none" (default) is free-form. The other container words need a mode. A new grid needs gridTemplateColumns.'),
-  gap: prop(z.union([z.number(), z.string()]), 'Unequal "row-gap column-gap" needs grid or wrap.'),
+  gap: prop(
+    z.union([z.number(), z.string()]),
+    'Unequal "row-gap column-gap" needs grid or wrap.',
+    'number | "Npx" | "Npx Npx"',
+  ),
   wrap: prop(z.boolean(), "Rows only."),
   padding: prop(
     z.custom<PadInput>(),

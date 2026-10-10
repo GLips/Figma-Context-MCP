@@ -11,7 +11,7 @@
 // loud, never surfaced here as "this behaves differently than you'd expect" footguns. So there is NO
 // blur-×2 note (the code applies it) and NO alignItems:"stretch" no-op warning (the bridge now synthesizes
 // container stretch per-child, so it just works). What stays documented is the fail-loud boundary: what
-// we reject rather than approximate — plus the ONE honest silent exception (an unrenderable glyph).
+// we reject rather than approximate, and the few departures that render anyway (FIDELITY_AND_SCOPE).
 
 export const MENTAL_MODEL = `Nodes are plain JavaScript data. Each new node names its type: FRAME, TEXT, RECTANGLE, ELLIPSE, LINE, VECTOR, or INSTANCE, and children is an ordinary array of node specs. A spec is a value, not a node: every placement verb returns a deep copy with ids filled in and never changes its input, so rendering one template twice makes two independent trees.
 
