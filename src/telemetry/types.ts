@@ -1,7 +1,9 @@
 import type { OutputFormat } from "~/utils/serialize.js";
 
-export type Transport = "stdio" | "http" | "cli";
-export type AuthMode = "oauth" | "api_key" | "none";
+/** `hosted` is the multi-user Framelink service; its events are tagged by this alone. */
+export type Transport = "stdio" | "http" | "cli" | "hosted";
+/** `framelink`: a Framelink access token, exchanged server-side for the user's Figma credential. */
+export type AuthMode = "oauth" | "api_key" | "none" | "framelink";
 export type ClientInfo = { name?: string; version?: string };
 
 export interface InitTelemetryOptions {

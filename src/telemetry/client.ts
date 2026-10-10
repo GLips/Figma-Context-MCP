@@ -42,7 +42,10 @@ let redactionSecrets: string[] = [];
 // merges the request-scoped list with the global one. AsyncLocalStorage
 // propagates the value through the request's promise chain without us having
 // to thread it down through every call site.
-const requestSecrets = new AsyncLocalStorage<readonly string[]>();
+//
+// The list is mutable on purpose: hosted mode learns the user's Figma token
+// mid-request (`addRequestSecret`), after the scope was opened.
+const requestSecrets = new AsyncLocalStorage<string[]>();
 
 export function withRequestSecrets<T>(
   secrets: readonly string[],
@@ -50,9 +53,13 @@ export function withRequestSecrets<T>(
 ): Promise<T> {
   // Filter empties to avoid `replaceAll("", ...)`, which loops over every
   // character of the message and produces nonsense output.
-  const filtered = secrets.filter(Boolean);
-  if (filtered.length === 0) return fn();
-  return requestSecrets.run(filtered, fn);
+  return requestSecrets.run(secrets.filter(Boolean), fn);
+}
+
+/** Redact `secret` from telemetry for the rest of the current `withRequestSecrets` scope. */
+export function addRequestSecret(secret: string): void {
+  const store = requestSecrets.getStore();
+  if (secret && store && !store.includes(secret)) store.push(secret);
 }
 
 function parseNodeMajor(version: string): number {
