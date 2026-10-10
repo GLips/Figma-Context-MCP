@@ -15,9 +15,9 @@
       "types": "./dist/read.d.ts",
       "default": "./dist/read.js"
     },
-    "./mcp-server": {
-      "types": "./dist/mcp-server.d.ts",
-      "default": "./dist/mcp-server.js"
+    "./dist/index.js": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
     },
     "./dist/mcp-server.js": {
       "types": "./dist/mcp-server.d.ts",
