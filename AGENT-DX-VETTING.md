@@ -231,6 +231,14 @@ This is tiered 🔴 because the result is serialized in plugin host code: `plugi
 
 ### A-9. Variables and styles: usage (bind by name, discover what exists) 🟡 `[HUMAN REVIEWED]`
 
+**Verdict (Graham, 2026-10-09): approve tokens as ordinary values in the shared vocabulary.**
+
+- A token reference can stand wherever a literal can, under two distinct keys: `{ variable: … }` and `{ style: … }`. Both producers emit it, so REST and plugin reads keep one shape. Compression treats it like any other value. Tokens get no sidecar and no parallel bindings field.
+- A reference carries the token's id, plus its name when the producer knows it. Writes accept the same value and bind the prop. An unknown or ambiguous name fails and lists the candidates.
+- One discovery read lists the tokens the file can use.
+- `teamlibrary` was added to the manifest now (fig-112), so unused library variables can be discovered later without a re-import. The plugin API can't discover library styles at all; state that once in the docs.
+- Out of scope: Enterprise-only REST variable names. REST emits variable ids without names.
+
 **Status:** open.
 
 - Variables are "deliberately out of v1" (`flcm.md:970`).
