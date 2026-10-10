@@ -1,4 +1,5 @@
 import { tagError, type ErrorCategory } from "~/utils/error-meta.js";
+import { readBodyPrefix, readBodyWithLimit } from "~/utils/read-body.js";
 
 type RequestOptions = RequestInit & {
   /**
@@ -109,56 +110,6 @@ export async function fetchJSON<T extends { status?: number }>(
     }
     throw error;
   }
-}
-
-/**
- * Buffer a response body, refusing it once it passes `maxBytes`. Counts the stream itself rather
- * than trusting Content-Length, which is often absent and never binding; the header only lets an
- * honest oversize response fail before any of it is read.
- */
-export async function readBodyWithLimit(response: Response, maxBytes: number): Promise<Buffer> {
-  const tooLarge = () =>
-    tagError(
-      new Error(
-        `Response is larger than this server's ${Math.round(maxBytes / (1024 * 1024))} MB limit.`,
-      ),
-      { category: "size_limit" },
-    );
-  const declared = Number(response.headers.get("content-length"));
-  if (declared > maxBytes) {
-    await response.body?.cancel();
-    tooLarge();
-  }
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  const reader = response.body?.getReader();
-  if (!reader) return Buffer.alloc(0);
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) return Buffer.concat(chunks);
-    total += value.byteLength;
-    if (total > maxBytes) {
-      await reader.cancel();
-      tooLarge();
-    }
-    chunks.push(value);
-  }
-}
-
-/** Up to `maxBytes` of a body, then the rest is cancelled unread. */
-async function readBodyPrefix(response: Response, maxBytes: number): Promise<Buffer> {
-  const reader = response.body?.getReader();
-  if (!reader) return Buffer.alloc(0);
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  while (total < maxBytes) {
-    const { done, value } = await reader.read();
-    if (done) return Buffer.concat(chunks);
-    chunks.push(value);
-    total += value.byteLength;
-  }
-  await reader.cancel();
-  return Buffer.concat(chunks).subarray(0, maxBytes);
 }
 
 function getConnectionErrorCode(error: unknown): string | undefined {

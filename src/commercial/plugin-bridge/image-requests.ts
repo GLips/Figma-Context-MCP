@@ -13,6 +13,7 @@
 // bridge separately caps how many requests one run may have in flight (bridge.ts
 // MAX_INFLIGHT_SERVICES_PER_RUN), so neither alone bounds a whole run.
 import type { CapabilityHandler } from "./bridge.js";
+import { limitConcurrency } from "~/utils/concurrency.js";
 import { isLocalImageSource } from "./images.js";
 
 type ImagesRequestHandler = (
@@ -145,32 +146,33 @@ export function createImagesRequestHandler(deps: ImagesRequestDeps): ImagesReque
   };
 }
 
-// Run `fn` over `items` with at most `limit` in flight at once. `limit` workers pull from a shared
-// cursor until the list is drained or any item FAILS: after a failure no new item is claimed, and
-// the rejection surfaces only once every already-started item has settled. That late surfacing is
-// load-bearing, not politeness — the bridge re-arms the run's inactivity deadline when the handler
-// settles (serveChannelRequest), so "settled" must mean no fetch is still running on the run's
-// behalf. Small local helper — no concurrency dep.
+// Run `fn` over `items` with at most `limit` in flight at once. After any item FAILS no new item
+// starts, and the rejection surfaces only once every already-started item has settled. That late
+// surfacing is load-bearing, not politeness — the bridge re-arms the run's inactivity deadline when
+// the handler settles (serveChannelRequest), so "settled" must mean no fetch is still running on
+// the run's behalf.
 async function mapWithConcurrency<T>(
   items: T[],
   limit: number,
   fn: (item: T) => Promise<void>,
   signal?: AbortSignal,
 ): Promise<void> {
-  let cursor = 0;
-  const failures: unknown[] = [];
-  const worker = async (): Promise<void> => {
-    while (failures.length === 0 && cursor < items.length) {
-      try {
-        signal?.throwIfAborted();
-        await fn(items[cursor++]);
-      } catch (err) {
-        failures.push(err);
-      }
-    }
-  };
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
-  if (failures.length > 0) throw failures[0];
+  const runJob = limitConcurrency(limit);
+  let failure: { error: unknown } | undefined;
+  await Promise.all(
+    items.map((item) =>
+      runJob(async () => {
+        if (failure) return;
+        try {
+          signal?.throwIfAborted();
+          await fn(item);
+        } catch (error) {
+          failure ??= { error };
+        }
+      }),
+    ),
+  );
+  if (failure) throw failure.error;
 }
 
 /** Parse image inputs at the capability boundary, away from the uninterpreted channel. */

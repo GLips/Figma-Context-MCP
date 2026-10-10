@@ -6,7 +6,8 @@ import * as crop from "@jimp/plugin-crop";
 import type { Transform } from "@figma/rest-api-spec";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { readBodyWithLimit } from "./fetch-json.js";
+import { readBodyWithLimit } from "./read-body.js";
+import { readRasterDimensions } from "./raster-header.js";
 import { tagError } from "./error-meta.js";
 import { isWithin } from "./local-path.js";
 import { Logger } from "./logger.js";
@@ -114,54 +115,6 @@ export type ImageLimits = {
   /** How many images one call downloads, decodes and stores at once. */
   maxConcurrent?: number;
 };
-
-/** Wraps jobs so at most `max` run at once; unbounded when `max` is undefined. */
-export function limitConcurrency(
-  max: number | undefined,
-): <T>(job: () => Promise<T>) => Promise<T> {
-  if (max === undefined) return (job) => job();
-  let active = 0;
-  const waiting: Array<() => void> = [];
-  return async (job) => {
-    if (active >= max) await new Promise<void>((resolve) => waiting.push(resolve));
-    active++;
-    try {
-      return await job();
-    } finally {
-      active--;
-      waiting.shift()?.();
-    }
-  };
-}
-
-/**
- * A raster's dimensions as its header declares them, without decoding: PNG's IHDR, GIF's logical
- * screen, JPEG's first start-of-frame. Undefined when the header is unreadable.
- */
-export function readRasterDimensions(
-  bytes: Uint8Array,
-): { width: number; height: number } | undefined {
-  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  const ascii = (start: number, end: number) => String.fromCharCode(...bytes.subarray(start, end));
-  if (bytes.length >= 24 && view.getUint32(0) === 0x89504e47 && ascii(12, 16) === "IHDR") {
-    return { width: view.getUint32(16), height: view.getUint32(20) };
-  }
-  if (bytes.length >= 10 && ascii(0, 4) === "GIF8") {
-    return { width: view.getUint16(6, true), height: view.getUint16(8, true) };
-  }
-  if (bytes.length >= 4 && view.getUint16(0) === 0xffd8) {
-    let offset = 2;
-    while (offset + 9 <= bytes.length && bytes[offset] === 0xff) {
-      const marker = bytes[offset + 1];
-      // SOF0–SOF15 carry the frame size; C4 (DHT), C8 (JPG) and CC (DAC) share the range but don't.
-      if (marker >= 0xc0 && marker <= 0xcf && ![0xc4, 0xc8, 0xcc].includes(marker)) {
-        return { width: view.getUint16(offset + 7), height: view.getUint16(offset + 5) };
-      }
-      offset += 2 + view.getUint16(offset + 2);
-    }
-  }
-  return undefined;
-}
 
 function assertDecodable(bytes: Uint8Array, maxPixels: number | undefined): void {
   if (maxPixels === undefined) return;

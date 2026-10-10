@@ -7,9 +7,9 @@ import type {
   GetCommentsResponse,
   Transform,
 } from "@figma/rest-api-spec";
+import { limitConcurrency } from "~/utils/concurrency.js";
 import {
   downloadAndProcessImage,
-  limitConcurrency,
   type ImageDestination,
   type ImageLimits,
   type ImageProcessingResult,

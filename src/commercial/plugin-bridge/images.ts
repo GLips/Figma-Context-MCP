@@ -18,13 +18,15 @@ import { lookup } from "node:dns/promises";
 import { realpath, stat, open } from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
 import { resolve as resolvePath, sep as pathSep } from "node:path";
-import { Agent, fetch, type Response } from "undici";
+import { Agent, fetch } from "undici";
 import { createJimp } from "@jimp/core";
 import png from "@jimp/js-png";
 import jpeg from "@jimp/js-jpeg";
 import gif from "@jimp/js-gif";
 import * as resize from "@jimp/plugin-resize";
 import ipaddr from "ipaddr.js";
+import { readRasterDimensions } from "~/utils/raster-header.js";
+import { readBodyWithLimit } from "~/utils/read-body.js";
 
 const Jimp = createJimp({ formats: [png, jpeg, gif], plugins: [resize.methods] });
 
@@ -83,52 +85,6 @@ function detectImageType(bytes: Uint8Array): ImageType | null {
   return null;
 }
 
-// Read the declared pixel dimensions straight from the image header — cheap, and it runs BEFORE the full
-// decode that a decompression bomb weaponizes (see MAX_PIXELS). Returns null when the header can't be read
-// (an exotic/truncated variant); the caller treats null as "can't pre-check" and lets jimp attempt it. PNG
-// and GIF carry dimensions at fixed offsets, so those — the compressible-bomb formats — are always covered.
-function headerDimensions(
-  bytes: Uint8Array,
-  type: ImageType,
-): { width: number; height: number } | null {
-  const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  if (type === "image/png") {
-    // IHDR is always the first chunk after the 8-byte signature: [4 len][4 "IHDR"][4 width][4 height].
-    if (bytes.length < 24) return null;
-    return { width: dv.getUint32(16), height: dv.getUint32(20) };
-  }
-  if (type === "image/gif") {
-    // Logical Screen Descriptor follows the 6-byte header: canvas width/height as uint16 little-endian.
-    if (bytes.length < 10) return null;
-    return { width: dv.getUint16(6, true), height: dv.getUint16(8, true) };
-  }
-  // JPEG: walk marker segments to the first Start-Of-Frame, which carries the dimensions.
-  let offset = 2; // skip the SOI marker (FFD8)
-  while (offset + 9 <= bytes.length) {
-    if (bytes[offset] !== 0xff) {
-      offset++;
-      continue;
-    }
-    const marker = bytes[offset + 1];
-    // SOF0..SOF15 hold [FF][marker][2 len][1 precision][2 height][2 width] — except DHT/JPG/DAC (C4/C8/CC).
-    if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) {
-      return { height: dv.getUint16(offset + 5), width: dv.getUint16(offset + 7) };
-    }
-    // Standalone markers (SOI/EOI/RSTn/TEM) carry no length payload — step over the 2 marker bytes.
-    if (
-      marker === 0xd8 ||
-      marker === 0xd9 ||
-      (marker >= 0xd0 && marker <= 0xd7) ||
-      marker === 0x01
-    ) {
-      offset += 2;
-      continue;
-    }
-    offset += 2 + dv.getUint16(offset + 2); // every other segment has a 2-byte big-endian length
-  }
-  return null;
-}
-
 // True for any address the sandbox has no business reaching through us: loopback, private (RFC1918), CGNAT,
 // link-local, unique-local, multicast, reserved, unspecified — everything that isn't a public unicast host.
 // An allowlist (block all but "unicast") is the safe default: a new reserved range is blocked by omission,
@@ -180,36 +136,6 @@ function parseHttpUrl(raw: string): URL {
   return url;
 }
 
-// Drain the body with a hard cap, aborting the moment we cross it — so a url that lies about (or omits) its
-// Content-Length still can't stream us past MAX_BYTES.
-async function readCapped(res: Response): Promise<Uint8Array> {
-  const declared = Number(res.headers.get("content-length"));
-  if (Number.isFinite(declared) && declared > MAX_BYTES) {
-    throw new Error(`image is ${declared} bytes, over the ${MAX_BYTES}-byte cap`);
-  }
-  if (!res.body) throw new Error("image response had no body");
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  const reader = res.body.getReader();
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    total += value.byteLength;
-    if (total > MAX_BYTES) {
-      await reader.cancel();
-      throw new Error(`image exceeds the ${MAX_BYTES}-byte cap`);
-    }
-    chunks.push(value);
-  }
-  const out = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    out.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return out;
-}
-
 // Guarded fetch: validate the url + host, follow redirects manually re-guarding each hop, and cap the read.
 async function guardedFetch(rawUrl: string, signal?: AbortSignal): Promise<Uint8Array> {
   let target = rawUrl;
@@ -233,7 +159,7 @@ async function guardedFetch(rawUrl: string, signal?: AbortSignal): Promise<Uint8
       continue;
     }
     if (!res.ok) throw new Error(`fetch failed with status ${res.status}`);
-    return await readCapped(res);
+    return await readBodyWithLimit(res, MAX_BYTES);
   }
   throw new Error(`too many redirects (>${MAX_REDIRECTS})`);
 }
@@ -247,7 +173,7 @@ export async function processImageBytes(bytes: Uint8Array, signal?: AbortSignal)
   if (!type) throw new Error("payload is not a PNG, JPEG, or GIF (magic-byte check failed)");
 
   // Reject a decompression bomb from its header before jimp allocates the raster (see MAX_PIXELS).
-  const dims = headerDimensions(bytes, type);
+  const dims = readRasterDimensions(bytes);
   if (dims && dims.width * dims.height > MAX_PIXELS) {
     throw new Error(
       `image is ${dims.width}×${dims.height} (${Math.round((dims.width * dims.height) / 1e6)}MP), over the ` +
