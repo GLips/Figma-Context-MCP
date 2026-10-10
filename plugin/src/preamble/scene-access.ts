@@ -9,6 +9,10 @@
  * provide ordered identity edges, even when their objects cannot supply properties.
  * Keep those two responsibilities together here: indexed objects supply properties;
  * ordered edges supply public IDs, parents, siblings, and traversal.
+ *
+ * Only instance subtrees are indexed; stale handles occur nowhere else. Ordinary
+ * containers list native children, so a node Figma lists but cannot read fails
+ * alone instead of failing the index for everything around it.
  */
 type Container = BaseNode & ChildrenMixin;
 interface State {
@@ -158,12 +162,21 @@ export function createSceneAccess(source: () => PluginAPI): { api: PluginAPI; in
     state.record = scope.records[0];
     return scope.records[0];
   }
+  // Compound IDs mark instance descendants; a scoped state was already acquired by an index.
+  function insideInstance(state: State): boolean {
+    return !!state.scope || state.native.type === "INSTANCE" || state.id.startsWith("I");
+  }
+  function childViews(state: State): BaseNode[] {
+    if (insideInstance(state)) return tree(state).children.map(child => child.state.view);
+    return (state.native as Container).children.map(child => stateOf(child).view);
+  }
   function descendants(state: State): BaseNode[] {
     const result: BaseNode[] = [];
-    const visit = (record: RecordNode): void => {
-      for (const child of record.children) { result.push(child.state.view); visit(child); }
+    const visit = (state: State): void => {
+      if (!("children" in state.native)) return;
+      for (const child of childViews(state)) { result.push(child); visit(views.get(child)!); }
     };
-    visit(tree(state));
+    visit(state);
     return result;
   }
   // Reparenting can retire an indexed compound handle while keeping the actual node.
@@ -193,13 +206,18 @@ export function createSceneAccess(source: () => PluginAPI): { api: PluginAPI; in
         const node = state.native;
         if (key === "removed" && state.scope && !state.anchor && (!state.record || (state.scope.root.anchor ?? state.scope.root.native).removed)) return true;
         if (key === "selection" && "selection" in node) {
-          tree(state);
-          return (node as PageNode).selection.map(child => (states.get(child.id) ?? stateOf(child)).view);
+          const page = node as PageNode;
+          // A selected instance descendant reads under its public ID and parent only once
+          // its outermost instance is indexed. Ordinary selected nodes need no index.
+          const outer = new Set(page.selection.map(child => /^I([^;]+);/.exec(child.id)?.[1]).filter(Boolean));
+          if (outer.size) {
+            for (const instance of page.findAllWithCriteria({ types: ["INSTANCE"] })) {
+              if (outer.has(instance.id)) tree(stateOf(instance), true);
+            }
+          }
+          return page.selection.map(child => (states.get(child.id) ?? stateOf(child)).view);
         }
-        if (key === "children" && "children" in node) {
-          if (node.type === "DOCUMENT" || node.type === "PAGE") return node.children.map(child => stateOf(child).view);
-          return tree(state).children.map(child => child.state.view);
-        }
+        if (key === "children" && "children" in node) return childViews(state);
         if (key === "parent") {
           const record = state.record;
           if (record?.parent) return record.parent.state.view;
@@ -207,7 +225,7 @@ export function createSceneAccess(source: () => PluginAPI): { api: PluginAPI; in
         }
         if (key === "findAll" && "findAll" in node) return (predicate?: (node: SceneNode) => boolean) => descendants(state).filter(n => !predicate || predicate(n as SceneNode));
         if (key === "findOne" && "findOne" in node) return (predicate: (node: SceneNode) => boolean) => descendants(state).find(n => predicate(n as SceneNode)) ?? null;
-        if (key === "findChildren" && "findChildren" in node) return (predicate: (node: SceneNode) => boolean) => tree(state).children.map(child => child.state.view).filter(n => predicate(n as SceneNode));
+        if (key === "findChildren" && "findChildren" in node) return (predicate: (node: SceneNode) => boolean) => childViews(state).filter(n => predicate(n as SceneNode));
         const value = (node as unknown as Record<PropertyKey, unknown>)[key];
         // Native scalar/data properties already have the right shape. In particular,
         // paints, effects and text runs need no traversal or copied arrays.
