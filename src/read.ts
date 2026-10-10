@@ -44,7 +44,10 @@ export type {
 };
 
 export type ReadServerOptions = {
-  /** Resolved on the first Figma call of a tool, never on `initialize` or `tools/list`. */
+  /**
+   * Resolved on the first Figma call of a tool, never on `initialize` or `tools/list`, and then
+   * reused by every Figma call this server makes until it is invalidated or a resolve rejects.
+   */
   credentials: FigmaCredentialSource;
   /**
    * `destination` drops `localPath` from download_figma_images and reports each image's location
@@ -87,14 +90,28 @@ export type ReadToolObservation = {
 export function createReadServer(options: ReadServerOptions): McpServer {
   const { credentials, limits, observe } = options;
   const server = new McpServer(serverInfo);
+  // One get_figma_data call fans out into several Figma requests, some concurrent; they share one
+  // host resolve. A rejected resolve is dropped so the next call asks again.
+  let pending: Promise<FigmaCredential> | undefined;
+  const resolveOnce = (signal: AbortSignal): Promise<FigmaCredential> => {
+    const attempt = (pending ??= credentials.resolve({ signal }));
+    attempt.catch(() => {
+      if (pending === attempt) pending = undefined;
+    });
+    return attempt;
+  };
   const figmaService = new FigmaService(
     {
-      async resolve(opts) {
-        const credential = await credentials.resolve(opts);
+      async resolve() {
+        const credential = await resolveOnce(options.signal ?? new AbortController().signal);
+        // Each tool call opens its own secret scope, so every call that uses the credential adds it.
         addRequestSecret(credential.token);
         return credential;
       },
-      invalidate: () => credentials.invalidate(),
+      invalidate() {
+        pending = undefined;
+        credentials.invalidate();
+      },
     },
     {
       signal: options.signal,
