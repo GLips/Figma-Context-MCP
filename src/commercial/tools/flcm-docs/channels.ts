@@ -4,8 +4,8 @@
  */
 // The same flcm docs reach an agent two ways: as MCP tool text (figma_execute_code, get_screenshot,
 // get_flcm_reference) and as CLI help (execute, reference). Every sentence that names how to run
-// code, take a screenshot or fetch more docs is spelled by the reader's channel, so neither reader
-// is told to call something it doesn't have.
+// code, take a screenshot, read comments or fetch more docs is spelled by the reader's channel, so
+// neither reader is told to call something it doesn't have.
 import { CLI_NAME } from "../../../utils/cli-help.js";
 
 export interface DocsChannel {
@@ -13,6 +13,8 @@ export interface DocsChannel {
   referenceCall(sectionIds: string[]): string;
   /** How to look at a node after building it: the markdown body of the "check what you built" recipe's how-to. */
   screenshotHowTo: string;
+  /** Completes "a read's `comments: n` counts the unresolved threads pinned on that node; …". */
+  commentsHowTo: string;
 }
 
 export const MCP_DOCS_CHANNEL: DocsChannel = {
@@ -31,14 +33,21 @@ return session.card.id;
 { "key": "card" }                  // or a key you authored, resolved on the current page
 { "nodeId": "12:345", "scale": 3 } // 3× resolution, for fine detail
 \`\`\``,
+  commentsHowTo: "the `get_figma_comments` tool reads them, given the node's id in `scope`",
 };
 
 export const CLI_DOCS_CHANNEL: DocsChannel = {
   referenceCall: (ids) => `${CLI_NAME} reference ${ids.join(" ")}`,
-  screenshotHowTo: `\`execute\` takes the screenshot after the script runs, even when the script failed. Give the root a \`key\` so you can target it without knowing its id:
+  // Every execute runs its script before the screenshot, so a second look must not rerun the build.
+  screenshotHowTo: `\`execute\` takes the screenshot after the script runs, even when the script failed. Give the root a \`key\` so the first run can target it before you know its id:
 
 \`\`\`sh
+# build and look in one run
 ${CLI_NAME} execute card.js --screenshot out/card.png --key card
-${CLI_NAME} execute card.js --screenshot out/card.png --node-id 12:345 --scale 3
+
+# look again, closer: every run executes its script, so use one that changes nothing
+echo 'return' > look.js
+${CLI_NAME} execute look.js --screenshot out/card@3x.png --node-id 12:345 --scale 3
 \`\`\``,
+  commentsHowTo: `\`${CLI_NAME} comments --file-key <fileKey> --node-id <id>\` reads them`,
 };

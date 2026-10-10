@@ -5,6 +5,7 @@
 import { INPUT_ALIASES } from "@framelink/plugin/schema";
 import {
   buildFullReference,
+  buildQuickStart,
   buildReferenceSections,
 } from "~/commercial/tools/flcm-docs/reference.js";
 import { CLI_DOCS_CHANNEL, MCP_DOCS_CHANNEL } from "~/commercial/tools/flcm-docs/channels.js";
@@ -33,15 +34,18 @@ describe("get_flcm_reference delivery", () => {
   });
 });
 
-// A CLI reader has no MCP tools, so telling it to call get_screenshot sends it after something it
-// cannot reach. The screenshot step must come back in the reader's own channel.
-it("spells the screenshot step in the reader's channel", () => {
-  const mcp = buildReferenceSections(["recipes"], MCP_DOCS_CHANNEL);
-  const cli = buildReferenceSections(["recipes"], CLI_DOCS_CHANNEL);
+// A CLI reader has no MCP tools, so naming one sends it after something it cannot reach. Every
+// section and the quick-start must come back in the reader's own channel.
+const MCP_TOOL_NAMES =
+  /get_figma_data|download_figma_images|get_figma_comments|figma_execute_code|get_flcm_reference|get_screenshot/;
+
+it("never names an MCP tool to a CLI reader", () => {
+  const mcp = buildFullReference(MCP_DOCS_CHANNEL);
+  const cli = buildFullReference(CLI_DOCS_CHANNEL) + buildQuickStart(CLI_DOCS_CHANNEL);
 
   expect(mcp).toContain("get_screenshot");
   expect(cli).toContain("--screenshot");
-  expect(cli).not.toMatch(/get_screenshot|figma_execute_code|get_flcm_reference/);
+  expect(cli).not.toMatch(MCP_TOOL_NAMES);
 });
 
 it("documents input aliases once, outside canonical prop tables and node key lists", () => {
