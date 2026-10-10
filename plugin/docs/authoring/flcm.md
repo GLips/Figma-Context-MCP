@@ -23,7 +23,7 @@ An id names a live node, at every depth. A spec with an id moves that node and e
 
 ### Copying
 
-A read is a spec with ids, so `const { node } = await flcm.get(target); await flcm.append(parent, node)` moves the node you read. To copy it as data, strip the ids from every node you want copied, slot content in overrides included — except an instance's inherited children, which keep their source ids because those ids name the sublayers (see "A read is a spec" in reads). Removing only the root id creates a new root and moves its id-bearing children into it. `clone` is the faithful live copy, carrying state a spec cannot express.
+A read is a spec with ids, so `const { node } = await flcm.get(target); await flcm.append(parent, node)` moves the node you read. To copy, `clone` it: the copy carries live state a spec cannot express. Removing only the root id creates a new root and moves its id-bearing children into it.
 
 ### Session across calls
 
@@ -135,12 +135,12 @@ Any other filter goes in the predicate, a synchronous function that gets each ca
 
 ### A read is a spec
 
-Pass `node` straight to a placement verb to move it, or strip its ids to copy it (see the mental model). The parts that don't simply round-trip:
+Pass `node` straight to a placement verb to move it; to copy, `clone` (see the mental model). The parts that don't simply round-trip:
 
 - A read-only field with no authored equivalent fails by name. Compressed style references, dash patterns and locked proportions are refused.
 - A root carries its real pixel size as `designedWidth`/`designedHeight` on any axis sized by its context or by `"fill"`. A verb uses that size for a context-sized axis, and for a `"fill"` axis placed on a page; under a frame, `"fill"` still fills.
 - VECTOR reads keep `d` or `vectorPaths` and author directly. An IMAGE-SVG node is a wire projection: fetch a fresh `flcm.get` to author its geometry.
-- An instance's inherited child tree — every id belonging to that instance, even after copying or a JSON round trip — is an echo. Edit its sublayers through `overrides`, and place slot content through `overrides[path].children`; foreign or id-less inherited children are refused as restructuring. To create a new instance from a read, remove the root id and keep echo ids from a single source instance. SLOT content can carry ordinary live ids, but its edits still go through `overrides`.
+- An instance's inherited child tree — every id belonging to that instance, even after copying or a JSON round trip — is an echo. Edit its sublayers through `overrides`, and place slot content through `overrides[path].children`; foreign or id-less inherited children are refused as restructuring. To copy an instance, `clone` it; to create a new one from an edited read, remove the root id and keep echo ids from a single source instance. SLOT content can carry ordinary live ids, but its edits still go through `overrides`.
 - `warnings` and `readOnlySource` are read metadata that a spec ignores; `elided` markers are covered below.
 
 ### What reaches you
@@ -1046,21 +1046,23 @@ const grid = await flcm.render({
 return (await flcm.get(grid)).node;
 ```
 
-### Copy or move what's already on the canvas
+### Move, wrap or copy what's already on the canvas
 
-`flcm.get` reads a live subtree as a spec you edit like any object. Keep the ids to move those nodes; drop them, at every depth you want copied, to create new ones. `flcm.clone` is the faithful copy for live state a spec can't express.
+`flcm.get` reads a live subtree as a spec you edit like any object. Its ids name live nodes, so placing them moves those nodes, and mapping them selects which ones move. To copy, `clone`.
 
 ```js
-const { node } = await flcm.get("caption");
+const { node } = await flcm.get("card");
 // Keeping ids moves the nodes you read and edits their named props.
 const moved = await flcm.append("sidebar", { ...node, width: 480 });
-// This caption is one TEXT node. For a subtree, also drop ids on children and slot content you want copied.
-const template = { ...node };
-delete template.id;
-const copy = await flcm.append("sidebar", { ...template, name: "Caption copy" });
-// clone preserves live state that the data vocabulary cannot express.
-const faithful = await flcm.clone(moved, "sidebar");
-return { moved, copy, faithful };
+// Ids select live nodes: this wraps all of the card's children in a new row, inside the card.
+const row = await flcm.append(moved, {
+    type: "FRAME",
+    layout: { mode: "row", gap: 8 },
+    children: (node.children ?? []).map(({ id }) => ({ id })),
+});
+// clone copies, carrying live state a spec can't express.
+const { node: copy } = await flcm.clone(moved, "sidebar");
+return { moved, row, copy };
 ```
 
 ### Make a component with variants
@@ -1161,10 +1163,7 @@ const toolbar = {
     ],
 };
 const out = await flcm.render(toolbar);
-const { node: save } = await flcm.get(out.children[0]);
-const copy = { ...save };
-delete copy.id;
-await flcm.append("toolbar", { ...copy, name: "Save (copy)" });
+await flcm.clone(out.children[0], { name: "Save (copy)" }, "toolbar");
 return { toolbar: out.id, definitions: Object.keys(components ?? {}) };
 ```
 

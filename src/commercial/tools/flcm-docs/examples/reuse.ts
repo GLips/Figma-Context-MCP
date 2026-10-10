@@ -2,20 +2,21 @@
  * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
-import type { Flcm, NodeSpec } from "@framelink/plugin/schema";
+import type { Flcm } from "@framelink/plugin/schema";
 
 export async function reuseExample(flcm: Flcm) {
   // example:start
-  const { node } = await flcm.get("caption");
+  const { node } = await flcm.get("card");
   // Keeping ids moves the nodes you read and edits their named props.
   const moved = await flcm.append("sidebar", { ...node, width: 480 });
-
-  // This caption is one TEXT node. For a subtree, also drop ids on children and slot content you want copied.
-  const template: NodeSpec = { ...node };
-  delete template.id;
-  const copy = await flcm.append("sidebar", { ...template, name: "Caption copy" });
-  // clone preserves live state that the data vocabulary cannot express.
-  const faithful = await flcm.clone(moved, "sidebar");
-  return { moved, copy, faithful };
+  // Ids select live nodes: this wraps all of the card's children in a new row, inside the card.
+  const row = await flcm.append(moved, {
+    type: "FRAME",
+    layout: { mode: "row", gap: 8 },
+    children: (node.children ?? []).map(({ id }) => ({ id })),
+  });
+  // clone copies, carrying live state a spec can't express.
+  const { node: copy } = await flcm.clone(moved, "sidebar");
+  return { moved, row, copy };
   // example:end
 }

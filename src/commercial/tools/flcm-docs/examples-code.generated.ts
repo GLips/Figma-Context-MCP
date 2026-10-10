@@ -140,16 +140,18 @@ return {
     ],
 });
 return (await flcm.get(grid)).node;`,
-  reuse: `const { node } = await flcm.get("caption");
+  reuse: `const { node } = await flcm.get("card");
 // Keeping ids moves the nodes you read and edits their named props.
 const moved = await flcm.append("sidebar", { ...node, width: 480 });
-// This caption is one TEXT node. For a subtree, also drop ids on children and slot content you want copied.
-const template = { ...node };
-delete template.id;
-const copy = await flcm.append("sidebar", { ...template, name: "Caption copy" });
-// clone preserves live state that the data vocabulary cannot express.
-const faithful = await flcm.clone(moved, "sidebar");
-return { moved, copy, faithful };`,
+// Ids select live nodes: this wraps all of the card's children in a new row, inside the card.
+const row = await flcm.append(moved, {
+    type: "FRAME",
+    layout: { mode: "row", gap: 8 },
+    children: (node.children ?? []).map(({ id }) => ({ id })),
+});
+// clone copies, carrying live state a spec can't express.
+const { node: copy } = await flcm.clone(moved, "sidebar");
+return { moved, row, copy };`,
   makeComponent: `// Author a Button, then fold two sizes of it into a variant set. Each node a property drives says
 // so with \`componentPropertyReferences\`.
 const buildButton = (height) => ({
@@ -236,9 +238,6 @@ const toolbar = {
     ],
 };
 const out = await flcm.render(toolbar);
-const { node: save } = await flcm.get(out.children[0]);
-const copy = { ...save };
-delete copy.id;
-await flcm.append("toolbar", { ...copy, name: "Save (copy)" });
+await flcm.clone(out.children[0], { name: "Save (copy)" }, "toolbar");
 return { toolbar: out.id, definitions: Object.keys(components ?? {}) };`,
 } as const;

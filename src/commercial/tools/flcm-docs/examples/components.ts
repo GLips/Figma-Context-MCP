@@ -39,10 +39,7 @@ export async function componentsExample(flcm: Flcm) {
   };
   const out = await flcm.render(toolbar);
 
-  const { node: save } = await flcm.get(out.children![0]);
-  const copy: NodeSpec = { ...save };
-  delete copy.id;
-  await flcm.append("toolbar", { ...copy, name: "Save (copy)" });
+  await flcm.clone(out.children![0], { name: "Save (copy)" }, "toolbar");
   return { toolbar: out.id, definitions: Object.keys(components ?? {}) };
   // example:end
 }

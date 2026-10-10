@@ -43,11 +43,10 @@ const EXAMPLE_META: Record<ExampleId, Omit<Example, "code">> = {
       "cell with `justifySelf`/`alignSelf`.",
   },
   reuse: {
-    title: "Copy or move what's already on the canvas",
+    title: "Move, wrap or copy what's already on the canvas",
     intro:
-      "`flcm.get` reads a live subtree as a spec you edit like any object. Keep the ids to move those " +
-      "nodes; drop them, at every depth you want copied, to create new ones. `flcm.clone` is the " +
-      "faithful copy for live state a spec can't express.",
+      "`flcm.get` reads a live subtree as a spec you edit like any object. Its ids name live nodes, so " +
+      "placing them moves those nodes, and mapping them selects which ones move. To copy, `clone`.",
   },
   makeComponent: {
     title: "Make a component with variants",
