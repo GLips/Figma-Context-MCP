@@ -149,6 +149,11 @@ Add one line that `name` also matches a TEXT's auto-name, which is its content (
 
 **Verdict (Graham, 2026-10-02): defer for separate design consideration.** Claude proposed explicit copy/move intent, and a read-to-template helper was also discussed; neither is approved. Preserve the shared-tree wrapping workflow while reconsidering how copying and moving should be expressed. The historical explicit-intent proposal below is not current implementation approval.
 
+**Verdict (Graham, 2026-10-09): approve a diagnostic plus docs; no new syntax.** This diagnoses the mistake; it doesn't prevent it. Preventing it means changing how read ids become authored references, through an explicit copy/move word or a read-side id that stops counting as identity once its root is dropped. That was declined for launch, because `clone` already copies explicitly and one incident doesn't justify a permanent change to the surface. If prevention becomes a requirement, prefer the explicit word.
+
+- Docs: `clone` is the one documented copy route. Delete the strip-ids-to-copy recipe, but keep the sentence explaining what deleting only the root id does. Recipes show wrapping and extracting by mapping ids (`node.children.map(({ id }) => ({ id }))`), so selecting live nodes needs no selector syntax.
+- Warning: after a verb succeeds, report live nodes placed directly into a node that verb created, where they ended up outside their old parent. One line per source container, saying whether it is now empty and naming `flcm.clone` for copying. Skip sources the verb removed, and slot content Figma copied rather than moved.
+
 **Status:** open. The behaviour is documented (`flcm.md:24`); there is no intent word and no refusal.
 
 **Problem:** Stripping only the root id is the natural way to say "make a copy". It creates a new root and _moves_ every id-bearing child into it, leaving the source empty. Nothing errors.
