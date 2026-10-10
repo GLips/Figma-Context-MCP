@@ -4,9 +4,7 @@ import { cli } from "cleye";
 import { DEFAULT_HTTP_HOST, DEFAULT_HTTP_PORT, getServerConfig, UsageError } from "./config.js";
 import { CLI_NAME } from "./utils/cli-help.js";
 import { startServer } from "./server.js";
-import { executeCommand } from "./commercial/commands/execute.js";
-import { referenceCommand } from "./commercial/commands/reference.js";
-import { fetchCommand } from "./commands/fetch.js";
+import { CLI_COMMANDS } from "./commands/index.js";
 
 // Defaults live in the descriptions, not cleye's `default`: a parsed default would outrank the env
 // var in getServerConfig's flag → env → default resolution.
@@ -14,8 +12,9 @@ const ROOT_HELP_DESCRIPTION = `Framelink MCP for Figma. With no command, runs th
 http://${DEFAULT_HTTP_HOST}:${DEFAULT_HTTP_PORT}/mcp, or over stdin/stdout with --stdio, which is what most MCP client
 configs launch.
 
-Reading designs uses the Figma REST API and needs a token (--figma-api-key or FIGMA_API_KEY).
-Editing designs goes through the Framelink Figma plugin; its tools appear once the plugin connects.
+Reading over the Figma REST API needs a token (--figma-api-key or FIGMA_API_KEY): the read tools,
+fetch and comments. The Framelink Figma plugin needs none: its tools appear once it connects, and
+execute reads and edits the open file through it.
 Flags can also be set by the env var named in their description, or in a .env file.
 
 The commands do the same jobs from a shell. Run \`${CLI_NAME} <command> --help\` for details.`;
@@ -100,7 +99,7 @@ const argv = cli({
       description: "Turn off usage telemetry (env FRAMELINK_TELEMETRY=off or DO_NOT_TRACK=1)",
     },
   },
-  commands: [fetchCommand, executeCommand, referenceCommand],
+  commands: CLI_COMMANDS,
 });
 
 // Subcommand callbacks execute during cli() — only start the server when no subcommand ran.

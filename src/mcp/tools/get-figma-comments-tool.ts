@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { FigmaService } from "~/services/figma.js";
-import { getFigmaComments } from "~/services/get-figma-comments.js";
+import { getFigmaComments, type GetFigmaCommentsOptions } from "~/services/get-figma-comments.js";
 import { Logger } from "~/utils/logger.js";
 
 const nodeId = z
@@ -43,17 +43,21 @@ const parameters = {
 const parametersSchema = z.object(parameters);
 export type GetFigmaCommentsParams = z.input<typeof parametersSchema>;
 
+/** Validates raw params, from the MCP tool or the `comments` CLI command, into the service's arguments. */
+export function parseGetFigmaCommentsParams(params: GetFigmaCommentsParams): {
+  fileKey: string;
+  options: GetFigmaCommentsOptions;
+} {
+  const { fileKey, scope, include, status, since } = parametersSchema.parse(params);
+  const scopeIds =
+    scope === undefined ? undefined : [scope].flat().map((id) => id.replace(/-/g, ":"));
+  return { fileKey, options: { scope: scopeIds, include, status, since } };
+}
+
 async function handleGetFigmaComments(params: GetFigmaCommentsParams, figmaService: FigmaService) {
   try {
-    const { fileKey, scope, include, status, since } = parametersSchema.parse(params);
-    const scopeIds =
-      scope === undefined ? undefined : [scope].flat().map((id) => id.replace(/-/g, ":"));
-    const result = await getFigmaComments(figmaService, fileKey, {
-      scope: scopeIds,
-      include,
-      status,
-      since,
-    });
+    const { fileKey, options } = parseGetFigmaCommentsParams(params);
+    const result = await getFigmaComments(figmaService, fileKey, options);
     return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
   } catch (error) {
     // Loud on purpose: this is the one place an agent asked for comments, so a missing

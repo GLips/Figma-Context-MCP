@@ -1,17 +1,11 @@
 import { type Command, command } from "cleye";
-import {
-  loadEnvFile,
-  parseOutputFormat,
-  resolveAuth,
-  requireGlobalCredentials,
-  UsageError,
-} from "~/config.js";
+import { parseOutputFormat } from "~/config.js";
 import { FigmaService } from "~/services/figma.js";
-import { parseFigmaUrl } from "~/utils/figma-url.js";
 import { authMode, initTelemetry, captureGetFigmaDataCall, shutdown } from "~/telemetry/index.js";
 import { getFigmaData } from "~/services/get-figma-data.js";
 import type { OutputFormat } from "~/utils/serialize.js";
 import { buildCommandHelp } from "~/utils/cli-help.js";
+import { REST_COMMAND_FLAGS, resolveRestAuth, resolveRestTarget } from "./rest-command.js";
 
 export const fetchCommand: Command = command(
   {
@@ -28,11 +22,7 @@ export const fetchCommand: Command = command(
       ],
     }),
     flags: {
-      fileKey: {
-        type: String,
-        placeholder: "<key>",
-        description: "Figma file key; overrides the URL's",
-      },
+      ...REST_COMMAND_FLAGS,
       nodeId: {
         type: String,
         placeholder: "<id>",
@@ -51,22 +41,6 @@ export const fetchCommand: Command = command(
         type: String,
         placeholder: "<yaml|json|tree>",
         description: "Output format (default yaml; tree is the compact one the MCP server uses)",
-      },
-      figmaApiKey: {
-        type: String,
-        placeholder: "<token>",
-        description: "Figma personal access token (env FIGMA_API_KEY)",
-      },
-      figmaOauthToken: {
-        type: String,
-        placeholder: "<token>",
-        description:
-          "Figma OAuth bearer token; used instead of the API key when set (env FIGMA_OAUTH_TOKEN)",
-      },
-      env: {
-        type: String,
-        placeholder: "<file>",
-        description: "Load environment variables from this file (default ./.env)",
       },
       noTelemetry: {
         type: Boolean,
@@ -98,31 +72,8 @@ async function run(
   },
   positionals: string[],
 ) {
-  const url = positionals[0];
-  let fileKey = flags.fileKey;
-  let nodeId = flags.nodeId;
-
-  if (url) {
-    try {
-      const parsed = parseFigmaUrl(url);
-      fileKey ??= parsed.fileKey;
-      nodeId ??= parsed.nodeId;
-    } catch (error) {
-      if (!fileKey) throw error;
-      // fileKey provided via flag — malformed URL is non-fatal
-    }
-  }
-
-  if (!fileKey) {
-    throw new UsageError("Either a Figma URL or --file-key is required");
-  }
-
-  loadEnvFile(flags.env);
-  const auth = resolveAuth(flags);
-  // The fetch CLI has no per-request credential channel (unlike HTTP mode).
-  // Fail fast so the user gets an actionable error instead of an HTTP-shaped
-  // one from `getAuthHeaders`.
-  requireGlobalCredentials(auth);
+  const { fileKey, nodeId } = resolveRestTarget(positionals[0], flags);
+  const auth = resolveRestAuth(flags);
 
   // Initialize telemetry only after input validation succeeds, so every
   // captured event corresponds to an actual fetch attempt (not a usage error).
