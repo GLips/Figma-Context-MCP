@@ -1,0 +1,53 @@
+/*!
+ * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
+ * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
+ */
+import { expect, it, vi } from "vitest";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { ListToolsResultSchema } from "@modelcontextprotocol/sdk/types.js";
+import { createServer } from "~/mcp/index.js";
+import { CLI_COMMANDS, MCP_TOOL_CLI_COUNTERPARTS } from "~/commands/index.js";
+import type { PluginBridge } from "~/commercial/plugin-bridge/bridge.js";
+import type { PluginBridgeRuntime } from "~/commercial/plugin-bridge/index.js";
+import { createTestWriteAccess, TEST_AUTHORIZING_USER } from "./fixtures/write-access.js";
+
+// Every tool the server can advertise: the plugin bridge plus codeMode puts the write tools in
+// tools/list, and image downloads are on by default.
+async function listEveryToolName(): Promise<string[]> {
+  const bridge = {
+    request: vi.fn(),
+    getPairingCode: () => null,
+    protocolRefusal: () => null,
+    touchApproval: () => {},
+    getAuthorizingUser: () => TEST_AUTHORIZING_USER,
+    isPluginConnected: () => false,
+    hasRecentApproval: () => false,
+  } as unknown as PluginBridge;
+  const runtime: PluginBridgeRuntime = {
+    bridge,
+    writeAccess: createTestWriteAccess().writeAccess,
+    hasEverConnected: () => false,
+    onFirstConnect: () => {},
+  };
+  const server = createServer(
+    { figmaApiKey: "test-key", figmaOAuthToken: "", useOAuth: false },
+    { transport: "http", pluginBridge: runtime, codeMode: true },
+  );
+  const client = new Client({ name: "cli-counterparts-test", version: "1.0.0" });
+  const [clientT, serverT] = InMemoryTransport.createLinkedPair();
+  await Promise.all([client.connect(clientT), server.connect(serverT)]);
+  const { tools } = await client.request({ method: "tools/list" }, ListToolsResultSchema);
+  await Promise.all([client.close(), server.close()]);
+  return tools.map((tool) => tool.name);
+}
+
+it("gives every MCP tool a registered CLI counterpart or an explicit exemption", async () => {
+  const tools = (await listEveryToolName()).sort();
+  const commands = new Set(CLI_COMMANDS.map((command) => command.options.name));
+
+  expect(Object.keys(MCP_TOOL_CLI_COUNTERPARTS).sort()).toEqual(tools);
+  for (const [tool, counterpart] of Object.entries(MCP_TOOL_CLI_COUNTERPARTS)) {
+    if ("command" in counterpart) expect(commands, tool).toContain(counterpart.command);
+  }
+});
