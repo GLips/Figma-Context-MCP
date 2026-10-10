@@ -351,7 +351,9 @@ A single **paint** blends too, with the same names under \`blendMode\` — CSS \
 
 Which length forms each prop takes is in its Type column in props.`;
 
-export const FIDELITY_AND_SCOPE = `flcm writes only what Figma will render as you authored it. A value outside the CSS subset, a layout word the node can't realize, and a concept with no create path — variables and prototype interactions — all throw an error naming the value and the fix, never a guess or a silent no-op. Errors name the verb and the path to the node, such as \`spec.children[3].children[1]\`. The one silent exception is a character the font can't draw (see unrenderable glyphs under the TEXT props).`;
+export const FIDELITY_AND_SCOPE = `flcm refuses what it can't write as authored rather than guess. A value outside the CSS subset, a layout word the node can't realize, and a concept with no create path — variables and prototype interactions — all throw an error naming the value and the fix, never a guess or a silent no-op. Errors name the verb and the path to the node, such as \`spec.children[3].children[1]\`.
+
+Some departures render without an error. A font family Figma doesn't have falls back, and a weight or italic the family lacks snaps to its nearest style; each comes back in the returned handle's \`warnings\`, as does a size the layout resolved differently from what you wrote. A character the font can't draw renders as nothing, with no warning at all (see unrenderable glyphs under the TEXT props). So a run without errors means the script was valid, not that the canvas looks right: check it with a screenshot (see "Check what you built" in the recipes).`;
 
 export const IMAGE_REF_REUSE = `An \`imageRef\` identifies an existing image in this file and can be reused, for example \`{ type: "RECTANGLE", fill: { type: "IMAGE", imageRef } }\`. The read's \`opacity\`, \`rotation\`, \`filters\` and \`blendMode\` on that leaf are authored back as they read — the same words \`flcm.image\` takes as options.`;
 
