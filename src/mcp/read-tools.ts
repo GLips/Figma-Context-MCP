@@ -8,7 +8,6 @@ import type { FigmaService } from "~/services/figma.js";
 import type { GetFigmaDataOutcome } from "~/services/get-figma-data.js";
 import type { DownloadImagesOutcome } from "~/services/download-figma-images.js";
 import type { ImageDestination } from "~/utils/image-processing.js";
-import type { ResolveLocalPathFailureReason } from "~/utils/local-path.js";
 import type { OutputFormat } from "~/utils/serialize.js";
 import type { ToolExtra } from "./progress.js";
 import {
@@ -19,8 +18,10 @@ import {
   type DescribeReadRecovery,
   type DownloadImageDestinationParams,
   type DownloadImagesParams,
+  type GetFigmaCommentsOutcome,
   type GetFigmaCommentsParams,
   type GetFigmaDataParams,
+  type LocalPathRejection,
 } from "./tools/index.js";
 
 /** Where download_figma_images puts images, or that it isn't offered at all. */
@@ -38,19 +39,9 @@ export type ToolCallGuard = (run: () => Promise<CallToolResult>) => Promise<Call
 /** What a read tool reports when it finishes, raw: errors and inputs included. */
 export type ReadToolOutcome =
   | { tool: "get_figma_data"; kind: "completed"; outcome: GetFigmaDataOutcome }
-  | {
-      tool: "get_figma_comments";
-      kind: "completed";
-      outcome: { durationMs: number; error?: unknown };
-    }
+  | { tool: "get_figma_comments"; kind: "completed"; outcome: GetFigmaCommentsOutcome }
   | { tool: "download_figma_images"; kind: "completed"; outcome: DownloadImagesOutcome }
-  | {
-      tool: "download_figma_images";
-      kind: "rejected";
-      field: "localPath";
-      rule: ResolveLocalPathFailureReason;
-      message: string;
-    };
+  | ({ tool: "download_figma_images"; kind: "rejected" } & LocalPathRejection);
 
 export type RegisterReadToolsOptions = {
   outputFormat: OutputFormat;
@@ -84,6 +75,8 @@ export function registerReadTools(
 ): { getFigmaData: RegisteredTool } {
   const { images, observe } = options;
   const guard: ToolCallGuard = options.guardToolCall ?? ((run) => run());
+  const onDownloadComplete = (outcome: DownloadImagesOutcome) =>
+    observe({ tool: "download_figma_images", kind: "completed", outcome });
 
   const getFigmaData = server.registerTool(
     getFigmaDataTool.name,
@@ -114,9 +107,10 @@ export function registerReadTools(
     },
     (params: GetFigmaCommentsParams) =>
       guard(() =>
-        getFigmaCommentsTool.handler(params, figmaService, (outcome) =>
-          observe({ tool: "get_figma_comments", kind: "completed", outcome }),
-        ),
+        getFigmaCommentsTool.handler(params, figmaService, {
+          onComplete: (outcome) =>
+            observe({ tool: "get_figma_comments", kind: "completed", outcome }),
+        }),
       ),
   );
 
@@ -131,7 +125,13 @@ export function registerReadTools(
       },
       (params: DownloadImagesParams, extra: ToolExtra) =>
         guard(() =>
-          downloadFigmaImagesTool.handler(params, figmaService, images.imageDir, observe, extra),
+          downloadFigmaImagesTool.handler(params, figmaService, {
+            imageDir: images.imageDir,
+            extra,
+            onComplete: onDownloadComplete,
+            onReject: (rejection) =>
+              observe({ tool: "download_figma_images", kind: "rejected", ...rejection }),
+          }),
         ),
     );
   } else if (images.kind === "destination") {
@@ -146,13 +146,11 @@ export function registerReadTools(
       },
       (params: DownloadImageDestinationParams, extra: ToolExtra) =>
         guard(() =>
-          downloadFigmaImageDestinationTool.handler(
-            params,
-            figmaService,
-            images.destination,
-            observe,
+          downloadFigmaImageDestinationTool.handler(params, figmaService, {
+            destination: images.destination,
             extra,
-          ),
+            onComplete: onDownloadComplete,
+          }),
         ),
     );
   }

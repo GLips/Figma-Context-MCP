@@ -43,10 +43,12 @@ const parameters = {
 const parametersSchema = z.object(parameters);
 export type GetFigmaCommentsParams = z.input<typeof parametersSchema>;
 
+export type GetFigmaCommentsOutcome = { durationMs: number; error?: unknown };
+
 async function handleGetFigmaComments(
   params: GetFigmaCommentsParams,
   figmaService: FigmaService,
-  onComplete: (outcome: { durationMs: number; error?: unknown }) => void,
+  { onComplete }: { onComplete: (outcome: GetFigmaCommentsOutcome) => void },
 ) {
   const startedAt = Date.now();
   try {

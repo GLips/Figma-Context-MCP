@@ -1,12 +1,14 @@
 // zod/v3 — see get-figma-data-tool.ts: classic-API schemas kept as-is across the zod-4 bump.
 import { z } from "zod/v3";
-import { downloadFigmaImages as runDownloadFigmaImages } from "../../services/download-figma-images.js";
+import {
+  downloadFigmaImages as runDownloadFigmaImages,
+  type DownloadImagesOutcome,
+} from "../../services/download-figma-images.js";
 import type { FigmaService } from "../../services/figma.js";
 import { createDiskImageDestination, type ImageDestination } from "../../utils/image-processing.js";
 import { type ResolveLocalPathFailureReason, resolveLocalPath } from "../../utils/local-path.js";
 import { Logger } from "../../utils/logger.js";
 import { sendProgress, startProgressHeartbeat, type ToolExtra } from "../progress.js";
-import type { ReadToolOutcome } from "../read-tools.js";
 
 const sharedParameters = {
   fileKey: z
@@ -96,18 +98,26 @@ export type DownloadImageDestinationParams = z.infer<typeof destinationParameter
 
 type TextToolResult = { isError?: boolean; content: Array<{ type: "text"; text: string }> };
 
-type Observe = (outcome: ReadToolOutcome) => void;
+/** A localPath the schema accepted but the image directory refuses. */
+export type LocalPathRejection = {
+  field: "localPath";
+  rule: ResolveLocalPathFailureReason;
+  message: string;
+};
 
-/** Run the pipeline into `destination` and render one line per image; `showLocation` adds where it landed. */
+type DownloadHandlerOptions = {
+  extra: ToolExtra;
+  onComplete: (outcome: DownloadImagesOutcome) => void;
+};
+
+/** Run the pipeline into `destination` and render one line per image. */
 async function downloadAndList(
   figmaService: FigmaService,
   input: Omit<DownloadImageDestinationParams, "pngScale"> & {
     pngScale: number;
     destination: ImageDestination;
   },
-  observe: Observe,
-  extra: ToolExtra,
-  showLocation: boolean,
+  { extra, onComplete }: DownloadHandlerOptions,
 ): Promise<{ successCount: number; imagesList: string }> {
   await sendProgress(extra, 0, 3, "Resolving image downloads");
 
@@ -120,7 +130,7 @@ async function downloadAndList(
     onDownloadComplete: () => {
       stopHeartbeat?.();
     },
-    onComplete: (outcome) => observe({ tool: "download_figma_images", kind: "completed", outcome }),
+    onComplete,
   });
 
   await sendProgress(extra, 2, 3, `Downloaded ${successCount} images, formatting response`);
@@ -134,8 +144,8 @@ async function downloadAndList(
       const dimensionInfo = result.cssVariables
         ? `${dimensions} | ${result.cssVariables}`
         : dimensions;
-      const location = result.location.kind === "url" ? result.location.url : result.location.path;
-      const locationInfo = showLocation ? `${location} | ` : "";
+      // A file's directory is already in the reply's header line; a link is per image.
+      const locationInfo = result.location.kind === "url" ? `${result.location.url} | ` : "";
 
       const aliasText =
         requestedFileNames.length > 1
@@ -161,9 +171,14 @@ function downloadFailure(fileKey: string, error: unknown): TextToolResult {
 async function downloadFigmaImages(
   params: DownloadImagesParams,
   figmaService: FigmaService,
-  imageDir: string | undefined,
-  observe: Observe,
-  extra: ToolExtra,
+  {
+    imageDir,
+    onReject,
+    ...options
+  }: DownloadHandlerOptions & {
+    imageDir: string | undefined;
+    onReject: (rejection: LocalPathRejection) => void;
+  },
 ): Promise<TextToolResult> {
   try {
     const { fileKey, nodes, localPath, pngScale } = parametersSchema.parse(params);
@@ -179,13 +194,7 @@ async function downloadFigmaImages(
       // validation hook never sees it. Report it here as a validation reject so we
       // can track how often LLMs trip over the localPath contract.
       const details = rejectionDetails(resolution.reason, localPath, baseDir);
-      observe({
-        tool: "download_figma_images",
-        kind: "rejected",
-        field: "localPath",
-        rule: details.rule,
-        message: details.telemetryMessage,
-      });
+      onReject({ field: "localPath", rule: details.rule, message: details.telemetryMessage });
       return {
         isError: true,
         content: [{ type: "text" as const, text: details.userMessage }],
@@ -196,9 +205,7 @@ async function downloadFigmaImages(
     const { successCount, imagesList } = await downloadAndList(
       figmaService,
       { fileKey, nodes, pngScale, destination: createDiskImageDestination(resolvedPath) },
-      observe,
-      extra,
-      false,
+      options,
     );
 
     return {
@@ -222,18 +229,14 @@ async function downloadFigmaImages(
 async function downloadFigmaImagesToDestination(
   params: DownloadImageDestinationParams,
   figmaService: FigmaService,
-  destination: ImageDestination,
-  observe: Observe,
-  extra: ToolExtra,
+  { destination, ...options }: DownloadHandlerOptions & { destination: ImageDestination },
 ): Promise<TextToolResult> {
   try {
     const { fileKey, nodes, pngScale } = destinationParametersSchema.parse(params);
     const { successCount, imagesList } = await downloadAndList(
       figmaService,
       { fileKey, nodes, pngScale, destination },
-      observe,
-      extra,
-      true,
+      options,
     );
     return {
       content: [

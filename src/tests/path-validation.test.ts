@@ -24,26 +24,22 @@ const validParams = {
 describe("download path validation (handler)", () => {
   const imageDir = path.resolve("/project/root");
 
-  const observe = vi.fn();
+  const onReject = vi.fn();
 
   beforeEach(() => {
-    observe.mockClear();
+    onReject.mockClear();
   });
 
   it("reports path-traversal attempts as validation rejects", async () => {
     const result = await downloadFigmaImagesTool.handler(
       { ...validParams, localPath: "../../etc" },
       stubFigmaService,
-      imageDir,
-      observe,
-      stubExtra,
+      { imageDir, extra: stubExtra, onComplete: vi.fn(), onReject },
     );
 
     expect(result.isError).toBe(true);
-    expect(observe).toHaveBeenCalledOnce();
-    expect(observe.mock.calls[0][0]).toMatchObject({
-      tool: "download_figma_images",
-      kind: "rejected",
+    expect(onReject).toHaveBeenCalledOnce();
+    expect(onReject.mock.calls[0][0]).toMatchObject({
       field: "localPath",
       rule: "outside_image_dir",
     });
@@ -53,9 +49,7 @@ describe("download path validation (handler)", () => {
     const result = await downloadFigmaImagesTool.handler(
       { ...validParams, localPath: "../../etc" },
       stubFigmaService,
-      imageDir,
-      observe,
-      stubExtra,
+      { imageDir, extra: stubExtra, onComplete: vi.fn(), onReject },
     );
 
     expect(result.isError).toBe(true);
@@ -67,9 +61,7 @@ describe("download path validation (handler)", () => {
     const result = await downloadFigmaImagesTool.handler(
       { ...validParams, localPath: "/some/elsewhere" },
       stubFigmaService,
-      imageDir,
-      observe,
-      stubExtra,
+      { imageDir, extra: stubExtra, onComplete: vi.fn(), onReject },
     );
 
     expect(result.isError).toBe(true);
@@ -81,9 +73,7 @@ describe("download path validation (handler)", () => {
     const result = await downloadFigmaImagesTool.handler(
       { ...validParams, localPath: "public/images" },
       stubFigmaService,
-      imageDir,
-      observe,
-      stubExtra,
+      { imageDir, extra: stubExtra, onComplete: vi.fn(), onReject },
     );
 
     expect(result.isError).toBeUndefined();
@@ -97,9 +87,7 @@ describe("download path validation (handler)", () => {
     const result = await downloadFigmaImagesTool.handler(
       { ...validParams, localPath: "project/src/static/images/test" },
       stubFigmaService,
-      driveRoot,
-      observe,
-      stubExtra,
+      { imageDir: driveRoot, extra: stubExtra, onComplete: vi.fn(), onReject },
     );
 
     expect(result.isError).toBeUndefined();
