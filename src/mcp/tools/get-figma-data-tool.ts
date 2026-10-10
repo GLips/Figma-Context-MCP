@@ -125,7 +125,7 @@ async function getFigmaData(
 export const getFigmaDataTool = {
   name: "get_figma_data",
   description:
-    "Read a Figma file or node as a simplified design tree: layout, text, styles, components and image references. Pass the node from the user's link; a whole file is large. Content cut for size is listed in an elided field map with its size in JSON characters (null means unknown); fetch any of it with the same fileKey and its nodeId. Figma annotations are not included (the REST API does not expose them).",
+    "Read a Figma file or node as a simplified design tree: layout, text, styles, components and image references. Pass the node from the user's link; a whole file is large. A cut is listed in an elided field map with its size in JSON characters (null means a depth limit dropped it); fetch a node's cut children with the same fileKey and its nodeId. Hidden layers, vector paths and the shapes inside an icon collapsed to IMAGE-SVG are left out of every REST read, so fetching again won't recover them; the Framelink plugin reads them live. Figma annotations are not included (the REST API does not expose them).",
   parametersSchema,
   handler: getFigmaData,
 } as const;
