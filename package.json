@@ -5,6 +5,26 @@
   "description": "Give your coding agent access to your Figma data. Implement designs in any framework in one-shot.",
   "type": "module",
   "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./read": {
+      "types": "./dist/read.d.ts",
+      "default": "./dist/read.js"
+    },
+    "./mcp-server": {
+      "types": "./dist/mcp-server.d.ts",
+      "default": "./dist/mcp-server.js"
+    },
+    "./dist/mcp-server.js": {
+      "types": "./dist/mcp-server.d.ts",
+      "default": "./dist/mcp-server.js"
+    },
+    "./package.json": "./package.json"
+  },
   "bin": {
     "figma-developer-mcp": "dist/bin.js"
   },
