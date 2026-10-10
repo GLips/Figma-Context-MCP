@@ -7,9 +7,10 @@ import { startServer } from "./server.js";
 import { executeCommand } from "./commercial/commands/execute.js";
 import { referenceCommand } from "./commercial/commands/reference.js";
 import { fetchCommand } from "./commands/fetch.js";
-import { Logger } from "./utils/logger.js";
+import { enableLogging } from "./utils/logger.js";
 
-Logger.enabled = true;
+// stderr until the server starts: the commands and stdio mode keep stdout for their output.
+enableLogging({ http: false });
 
 // Defaults live in the descriptions, not cleye's `default`: a parsed default would outrank the env
 // var in getServerConfig's flag → env → default resolution.

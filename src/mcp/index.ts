@@ -1,7 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { getFigmaDataTool } from "./tools/index.js";
 import { FigmaService, staticCredentialSource, type FigmaAuthOptions } from "../services/figma.js";
-import { Logger } from "../utils/logger.js";
+import { enableLogging } from "../utils/logger.js";
 import {
   authMode,
   captureDownloadImagesCall,
@@ -86,8 +86,8 @@ function createServer(
     getClientInfo,
   });
 
-  Logger.enabled = true;
-  Logger.isHTTP = transport !== "stdio";
+  // Also a public entry: a host composing the local server itself gets its logging too.
+  enableLogging({ http: transport !== "stdio" });
 
   return server;
 }

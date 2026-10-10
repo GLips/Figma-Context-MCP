@@ -4,7 +4,7 @@ import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js
 import { Server } from "http";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ProxyAgent, EnvHttpProxyAgent, setGlobalDispatcher } from "undici";
-import { Logger } from "./utils/logger.js";
+import { enableLogging, Logger } from "./utils/logger.js";
 import { hasProxyEnv, setProxyMode } from "./utils/proxy-env.js";
 import { createServer, type CreateServerOptions } from "./mcp/index.js";
 import { startPluginBridge } from "./commercial/plugin-bridge/index.js";
@@ -26,6 +26,7 @@ const activeConnections = new Set<ActiveConnection>();
  * Start the MCP server in either stdio or HTTP mode.
  */
 export async function startServer(config: ServerConfig): Promise<void> {
+  enableLogging({ http: !config.isStdioMode });
   // Stdio has no per-request credential channel, so the server is unusable
   // without something resolved at startup. Fail fast BEFORE any side effects
   // (proxy install, telemetry init) — preserves the pre-PR behavior where
@@ -156,6 +157,7 @@ export async function startHttpServer(
   if (httpServer) {
     throw new Error("HTTP server is already running");
   }
+  enableLogging({ http: true });
 
   const app = createMcpExpressApp({ host });
 
