@@ -43,7 +43,12 @@ const parameters = {
 const parametersSchema = z.object(parameters);
 export type GetFigmaCommentsParams = z.input<typeof parametersSchema>;
 
-async function handleGetFigmaComments(params: GetFigmaCommentsParams, figmaService: FigmaService) {
+async function handleGetFigmaComments(
+  params: GetFigmaCommentsParams,
+  figmaService: FigmaService,
+  onComplete: (outcome: { durationMs: number; error?: unknown }) => void,
+) {
+  const startedAt = Date.now();
   try {
     const { fileKey, scope, include, status, since } = parametersSchema.parse(params);
     const scopeIds =
@@ -54,8 +59,10 @@ async function handleGetFigmaComments(params: GetFigmaCommentsParams, figmaServi
       status,
       since,
     });
+    onComplete({ durationMs: Date.now() - startedAt });
     return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
   } catch (error) {
+    onComplete({ durationMs: Date.now() - startedAt, error });
     // Loud on purpose: this is the one place an agent asked for comments, so a missing
     // `file_comments:read` scope must surface here with its fix (the 403 text names it).
     const message = error instanceof Error ? error.message : JSON.stringify(error);

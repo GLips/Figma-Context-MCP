@@ -81,10 +81,12 @@ export function parseSvgDimensions(svg: string): { width: number; height: number
   return { width: 0, height: 0 };
 }
 
+/** Where a stored image landed, as reported to the agent: a file on disk, or a link. */
+export type ImageLocation = { kind: "file"; path: string } | { kind: "url"; url: string };
+
 export type ImageProcessingResult = {
   fileName: string;
-  /** Where the processed image landed: a local file path, or a link in hosted mode. */
-  location: string;
+  location: ImageLocation;
   originalDimensions: { width: number; height: number };
   finalDimensions: { width: number; height: number };
   wasCropped: boolean;
@@ -92,23 +94,92 @@ export type ImageProcessingResult = {
   cssVariables?: string;
 };
 
-/** Where processed images are stored. Returns the location reported back to the agent. */
+/** Where processed images are stored. */
 export type ImageDestination = {
-  write(fileName: string, bytes: Buffer, contentType: string): Promise<string>;
+  write(
+    file: { fileName: string; bytes: Uint8Array; contentType: string },
+    options: { signal?: AbortSignal },
+  ): Promise<ImageLocation>;
 };
 
 /**
- * Resource bounds for image downloads. Local mode sets none; hosted mode sets all three, since one
- * process serves every user and a large render multiplies through download, decode and upload.
+ * Resource bounds for image downloads; all optional. A server shared by many users wants all
+ * three, since one large render multiplies through download, decode and store.
  */
-export type ImagePolicy = {
-  /** Refuse an image whose download is larger than this. */
+export type ImageLimits = {
+  /** Refuse an image whose download is larger than this, counted while streaming. */
   maxBytes?: number;
-  /** Wraps each image's whole download → process → store job; bounds how many run at once. */
-  runJob?: <T>(job: () => Promise<T>) => Promise<T>;
-  /** Sees the raw bytes before jimp decodes them; throws to refuse a decompression bomb. */
-  beforeDecode?: (bytes: Buffer) => void;
+  /** Refuse a raster whose header declares more pixels than this, before it is decoded. */
+  maxPixels?: number;
+  /** How many images one call downloads, decodes and stores at once. */
+  maxConcurrent?: number;
 };
+
+/** Wraps jobs so at most `max` run at once; unbounded when `max` is undefined. */
+export function limitConcurrency(
+  max: number | undefined,
+): <T>(job: () => Promise<T>) => Promise<T> {
+  if (max === undefined) return (job) => job();
+  let active = 0;
+  const waiting: Array<() => void> = [];
+  return async (job) => {
+    if (active >= max) await new Promise<void>((resolve) => waiting.push(resolve));
+    active++;
+    try {
+      return await job();
+    } finally {
+      active--;
+      waiting.shift()?.();
+    }
+  };
+}
+
+/**
+ * A raster's dimensions as its header declares them, without decoding: PNG's IHDR, GIF's logical
+ * screen, JPEG's first start-of-frame. Undefined when the header is unreadable.
+ */
+export function readRasterDimensions(
+  bytes: Uint8Array,
+): { width: number; height: number } | undefined {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const ascii = (start: number, end: number) => String.fromCharCode(...bytes.subarray(start, end));
+  if (bytes.length >= 24 && view.getUint32(0) === 0x89504e47 && ascii(12, 16) === "IHDR") {
+    return { width: view.getUint32(16), height: view.getUint32(20) };
+  }
+  if (bytes.length >= 10 && ascii(0, 4) === "GIF8") {
+    return { width: view.getUint16(6, true), height: view.getUint16(8, true) };
+  }
+  if (bytes.length >= 4 && view.getUint16(0) === 0xffd8) {
+    let offset = 2;
+    while (offset + 9 <= bytes.length && bytes[offset] === 0xff) {
+      const marker = bytes[offset + 1];
+      // SOF0–SOF15 carry the frame size; C4 (DHT), C8 (JPG) and CC (DAC) share the range but don't.
+      if (marker >= 0xc0 && marker <= 0xcf && ![0xc4, 0xc8, 0xcc].includes(marker)) {
+        return { width: view.getUint16(offset + 7), height: view.getUint16(offset + 5) };
+      }
+      offset += 2 + view.getUint16(offset + 2);
+    }
+  }
+  return undefined;
+}
+
+function assertDecodable(bytes: Uint8Array, maxPixels: number | undefined): void {
+  if (maxPixels === undefined) return;
+  const dimensions = readRasterDimensions(bytes);
+  if (!dimensions) {
+    tagError(new Error("Image header is unreadable, so its size can't be checked."), {
+      category: "image_download",
+    });
+  }
+  if (dimensions.width * dimensions.height > maxPixels) {
+    tagError(
+      new Error(
+        `Image is ${dimensions.width}x${dimensions.height}, more pixels than this server decodes. Request it at a smaller pngScale.`,
+      ),
+      { category: "size_limit" },
+    );
+  }
+}
 
 const CONTENT_TYPES: Record<string, string> = {
   png: "image/png",
@@ -120,10 +191,10 @@ function contentTypeFor(fileName: string): string {
   return CONTENT_TYPES[fileName.split(".").pop()!.toLowerCase()] ?? "application/octet-stream";
 }
 
-/** Writes images into one local directory — the only place local mode stores them. */
+/** Writes images into one local directory. */
 export function createDiskImageDestination(directory: string): ImageDestination {
   return {
-    async write(fileName, bytes) {
+    async write({ fileName, bytes }) {
       const fullPath = path.resolve(path.join(directory, fileName));
       if (!isWithin(directory, fullPath)) {
         tagError(new Error(`File path escapes target directory: ${fileName}`), {
@@ -132,7 +203,7 @@ export function createDiskImageDestination(directory: string): ImageDestination 
       }
       await mkdir(directory, { recursive: true });
       await writeFile(fullPath, bytes);
-      return fullPath;
+      return { kind: "file", path: fullPath };
     },
   };
 }
@@ -144,6 +215,7 @@ async function fetchImageBytes(
   try {
     const response = await fetch(imageUrl, { method: "GET", signal });
     if (!response.ok) {
+      await response.body?.cancel();
       tagError(new Error(`Failed to download image: ${response.statusText}`), {
         category: "image_download",
       });
@@ -170,10 +242,12 @@ export async function downloadAndProcessImage(
   needsCropping: boolean = false,
   cropTransform: Transform | undefined,
   requiresImageDimensions: boolean = false,
-  { policy = {}, signal }: { policy?: ImagePolicy; signal?: AbortSignal } = {},
+  { limits = {}, signal }: { limits?: ImageLimits; signal?: AbortSignal } = {},
 ): Promise<ImageProcessingResult> {
-  const bytes = await fetchImageBytes(imageUrl, { maxBytes: policy.maxBytes, signal });
+  const bytes = await fetchImageBytes(imageUrl, { maxBytes: limits.maxBytes, signal });
   const contentType = contentTypeFor(fileName);
+  const store = (output: Buffer) =>
+    destination.write({ fileName, bytes: output, contentType }, { signal });
 
   // SVGs are vector — jimp can't read them and cropping doesn't apply. Their
   // intrinsic size is declared in the markup, so read it from there rather than
@@ -183,7 +257,7 @@ export async function downloadAndProcessImage(
     Logger.log(`SVG dimensions: ${dimensions.width}x${dimensions.height}`);
     return {
       fileName,
-      location: await destination.write(fileName, bytes, contentType),
+      location: await store(bytes),
       originalDimensions: dimensions,
       finalDimensions: dimensions,
       wasCropped: false,
@@ -191,7 +265,7 @@ export async function downloadAndProcessImage(
     };
   }
 
-  policy.beforeDecode?.(bytes);
+  assertDecodable(bytes, limits.maxPixels);
   const image = await Jimp.fromBuffer(bytes);
   const originalDimensions = { width: image.width, height: image.height };
   Logger.log(`Original dimensions: ${originalDimensions.width}x${originalDimensions.height}`);
@@ -219,7 +293,7 @@ export async function downloadAndProcessImage(
   const finalDimensions = { width: image.width, height: image.height };
   return {
     fileName,
-    location: await destination.write(fileName, output, contentType),
+    location: await store(output),
     originalDimensions,
     finalDimensions,
     wasCropped: cropRegion !== undefined,

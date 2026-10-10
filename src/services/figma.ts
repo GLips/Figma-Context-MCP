@@ -9,12 +9,13 @@ import type {
 } from "@figma/rest-api-spec";
 import {
   downloadAndProcessImage,
+  limitConcurrency,
   type ImageDestination,
-  type ImagePolicy,
+  type ImageLimits,
   type ImageProcessingResult,
 } from "~/utils/image-processing.js";
 import { Logger, writeLogs } from "~/utils/logger.js";
-import { fetchJSON } from "~/utils/fetch-json.js";
+import { fetchJSON, HttpError } from "~/utils/fetch-json.js";
 import { getErrorMeta, tagError } from "~/utils/error-meta.js";
 import { buildForbiddenMessage, buildRateLimitMessage } from "./errors/index.js";
 
@@ -24,23 +25,69 @@ export type FigmaAuthOptions = {
   useOAuth: boolean;
 };
 
+/** One Figma credential: a personal access token or an OAuth bearer token. */
+export type FigmaCredential = { kind: "pat" | "oauth"; token: string };
+
 /**
- * Where a FigmaService gets its credential when it isn't fixed at startup. Hosted mode resolves
- * each user's token lazily, on the first Figma call, and caches it outside the request.
+ * Where a FigmaService gets its credential. Resolved lazily — on the first Figma call, never on
+ * construction — so a host that looks credentials up per user pays nothing for `initialize` or
+ * `tools/list`.
  */
 export type FigmaCredentialSource = {
-  resolve(): Promise<FigmaAuthOptions>;
-  /** Figma refused the resolved credential (401/403); drop any cached copy so the next call refetches. */
+  /** A thrown error's message reaches the agent, so make it actionable and secret-free. */
+  resolve(opts: { signal: AbortSignal }): Promise<FigmaCredential>;
+  /**
+   * Figma rejected the resolved credential itself (401, or a 403 naming the token); drop any
+   * cached copy. Never called for a file-permission 403 — that credential is still good.
+   */
   invalidate(): void;
 };
 
 export type FigmaServiceOptions = {
-  /** Aborts every Figma API and image fetch this service makes — a deadline, or the client leaving. */
+  /** Aborts every Figma API call, image download and image store this service makes. */
   signal?: AbortSignal;
-  /** Refuse Figma API responses larger than this, before parsing them. */
+  /** Refuse Figma API responses larger than this, counted while streaming. */
   maxResponseBytes?: number;
-  images?: ImagePolicy;
+  images?: ImageLimits;
 };
+
+/** The startup credential as a source: missing credentials fail the call that needed them. */
+function staticCredentialSource({
+  figmaApiKey,
+  figmaOAuthToken,
+  useOAuth,
+}: FigmaAuthOptions): FigmaCredentialSource {
+  return {
+    async resolve() {
+      if (useOAuth && figmaOAuthToken) return { kind: "oauth", token: figmaOAuthToken };
+      if (figmaApiKey) return { kind: "pat", token: figmaApiKey };
+      tagError(
+        new Error(
+          "Figma API authentication is required. Configure FIGMA_API_KEY or FIGMA_OAUTH_TOKEN on the server, or send X-Figma-Token / Authorization: Bearer on the HTTP request.",
+        ),
+        { category: "missing_credentials" },
+      );
+    },
+    invalidate() {},
+  };
+}
+
+/**
+ * Whether Figma refused the credential rather than access to the file. A 401 always does; a 403
+ * does only when its `err` names the token ("Invalid token", "Token expired") — a 403 for a file
+ * the account can't open says nothing about the credential.
+ */
+function isCredentialRejection(error: unknown): boolean {
+  const status = getErrorMeta(error).http_status;
+  if (status === 401) return true;
+  if (status !== 403 || !(error instanceof HttpError) || !error.responseBody) return false;
+  try {
+    const { err } = JSON.parse(error.responseBody) as { err?: unknown };
+    return typeof err === "string" && /\btoken\b/i.test(err);
+  } catch {
+    return false;
+  }
+}
 
 type SvgOptions = {
   outlineText: boolean;
@@ -57,34 +104,17 @@ export class FigmaService {
     credentials: FigmaAuthOptions | FigmaCredentialSource,
     options: FigmaServiceOptions = {},
   ) {
-    this.credentials =
-      "resolve" in credentials
-        ? credentials
-        : { resolve: async () => credentials, invalidate: () => {} };
+    this.credentials = "resolve" in credentials ? credentials : staticCredentialSource(credentials);
     this.options = options;
   }
 
-  private getAuthHeaders({
-    figmaApiKey,
-    figmaOAuthToken,
-    useOAuth,
-  }: FigmaAuthOptions): Record<string, string> {
-    if (useOAuth && figmaOAuthToken) {
+  private getAuthHeaders({ kind, token }: FigmaCredential): Record<string, string> {
+    if (kind === "oauth") {
       Logger.log("Using OAuth Bearer token for authentication");
-      return { Authorization: `Bearer ${figmaOAuthToken}` };
+      return { Authorization: `Bearer ${token}` };
     }
-
-    if (!figmaApiKey) {
-      tagError(
-        new Error(
-          "Figma API authentication is required. Configure FIGMA_API_KEY or FIGMA_OAUTH_TOKEN on the server, or send X-Figma-Token / Authorization: Bearer on the HTTP request.",
-        ),
-        { category: "missing_credentials" },
-      );
-    }
-
     Logger.log("Using Personal Access Token for authentication");
-    return { "X-Figma-Token": figmaApiKey };
+    return { "X-Figma-Token": token };
   }
 
   private signalFor(signal: AbortSignal | undefined): AbortSignal | undefined {
@@ -123,21 +153,20 @@ export class FigmaService {
   ): Promise<{ data: T; rawSize: number }> {
     try {
       Logger.log(`Calling ${this.baseUrl}${endpoint}`);
-      const auth = await this.credentials.resolve();
+      const requestSignal = this.signalFor(signal);
+      const credential = await this.credentials.resolve({
+        signal: requestSignal ?? new AbortController().signal,
+      });
 
       return await fetchJSON<T & { status?: number }>(`${this.baseUrl}${endpoint}`, {
-        headers: this.getAuthHeaders(auth),
-        signal: this.signalFor(signal),
-        redactFromResponseBody: [auth.figmaApiKey, auth.figmaOAuthToken],
+        headers: this.getAuthHeaders(credential),
+        signal: requestSignal,
+        redactFromResponseBody: [credential.token],
         maxBytes: this.options.maxResponseBytes,
       });
     } catch (error) {
       const meta = getErrorMeta(error);
-      // 403 also means "no access to this file", not only a dead token. Refetching costs one
-      // credential lookup; keeping a revoked token would fail every read until its cache expired.
-      if (meta.http_status === 401 || meta.http_status === 403) {
-        this.credentials.invalidate();
-      }
+      if (isCredentialRejection(error)) this.credentials.invalidate();
       if (meta.http_status === 429) {
         throw new Error(buildRateLimitMessage(error), { cause: error });
       }
@@ -236,9 +265,10 @@ export class FigmaService {
     if (items.length === 0) return [];
 
     const { pngScale = 2, svgOptions } = options;
-    const policy = this.options.images ?? {};
+    const limits = this.options.images ?? {};
     const signal = this.options.signal;
-    const runJob = policy.runJob ?? (<T>(job: () => Promise<T>) => job());
+    // Per call: bounds this request's fan-out through download, decode and store.
+    const runJob = limitConcurrency(limits.maxConcurrent);
     const processImage = (
       fileName: string,
       imageUrl: string,
@@ -254,7 +284,7 @@ export class FigmaService {
           needsCropping,
           cropTransform,
           requiresImageDimensions,
-          { policy, signal },
+          { limits, signal },
         ),
       );
     const downloadPromises: Promise<ImageProcessingResult[]>[] = [];

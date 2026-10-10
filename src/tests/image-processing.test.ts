@@ -28,13 +28,13 @@ describe("image processing", () => {
     );
   }
 
-  function memoryDestination(): ImageDestination & { written: Map<string, Buffer> } {
-    const written = new Map<string, Buffer>();
+  function memoryDestination(): ImageDestination & { written: Map<string, Uint8Array> } {
+    const written = new Map<string, Uint8Array>();
     return {
       written,
-      async write(fileName, bytes) {
+      async write({ fileName, bytes }) {
         written.set(fileName, bytes);
-        return `mem://${fileName}`;
+        return { kind: "url", url: `mem://${fileName}` };
       },
     };
   }
@@ -51,7 +51,7 @@ describe("image processing", () => {
     );
     expect(result.finalDimensions).toEqual({ width: 300, height: 150 });
     expect(result.cssVariables).toBe("--original-width: 300px; --original-height: 150px;");
-    expect(result.location).toBe("mem://photo.png");
+    expect(result.location).toEqual({ kind: "url", url: "mem://photo.png" });
   });
 
   it("crops to the fill transform and stores the cropped bytes", async () => {
@@ -71,7 +71,7 @@ describe("image processing", () => {
     );
     expect(result.wasCropped).toBe(true);
     expect(result.finalDimensions).toEqual({ width: 200, height: 200 });
-    const stored = await Jimp.fromBuffer(destination.written.get("fill.png")!);
+    const stored = await Jimp.fromBuffer(Buffer.from(destination.written.get("fill.png")!));
     expect({ width: stored.width, height: stored.height }).toEqual({ width: 200, height: 200 });
   });
 

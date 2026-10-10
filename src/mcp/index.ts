@@ -1,37 +1,28 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type { CallToolResult, ToolAnnotations } from "@modelcontextprotocol/sdk/types.js";
+import { getFigmaDataTool } from "./tools/index.js";
 import { FigmaService, type FigmaAuthOptions } from "../services/figma.js";
 import { Logger } from "../utils/logger.js";
-import { authMode, type AuthMode, type ClientInfo, type Transport } from "~/telemetry/index.js";
+import {
+  authMode,
+  captureDownloadImagesCall,
+  captureGetFigmaDataCall,
+  captureValidationReject,
+  type ClientInfo,
+  type ToolCallContext,
+  type Transport,
+} from "~/telemetry/index.js";
 import type { OutputFormat } from "~/utils/serialize.js";
 import { installValidationRejectCapture } from "./validation-capture.js";
-import type { ToolExtra } from "./progress.js";
+import { registerReadTools, type ReadToolOutcome } from "./read-tools.js";
+import { serverInfo } from "./server-info.js";
 import type { PluginBridgeRuntime } from "~/commercial/plugin-bridge/index.js";
 import { registerCodeModeTools } from "~/commercial/tools/code-mode-tools.js";
 import {
   advertisePluginReadRoute,
   describePluginReadRecovery,
 } from "~/commercial/tools/plugin-read-route.js";
-import type { ImageDestination } from "~/utils/image-processing.js";
-import {
-  downloadFigmaImageLinksTool,
-  downloadFigmaImagesTool,
-  getFigmaCommentsTool,
-  getFigmaDataTool,
-  type DownloadImageLinksParams,
-  type DownloadImagesParams,
-  type GetFigmaCommentsParams,
-  type GetFigmaDataParams,
-} from "./tools/index.js";
 
-export const serverInfo = {
-  name: "Figma MCP Server",
-  version: process.env.NPM_PACKAGE_VERSION ?? "unknown",
-  description:
-    "Gives AI coding agents access to Figma design data, providing layout, styling, and content information for implementing designs.",
-};
-
-export type ServerTransport = Extract<Transport, "stdio" | "http" | "hosted">;
+export type ServerTransport = Extract<Transport, "stdio" | "http">;
 
 export type CreateServerOptions = {
   transport: ServerTransport;
@@ -65,17 +56,26 @@ function createServer(
   const mode = authMode(authOptions);
 
   const getClientInfo = clientInfoReader(server);
-
-  registerReadTools(server, figmaService, {
+  const callContext = (): ToolCallContext => ({
     transport,
     authMode: mode,
+    clientInfo: getClientInfo(),
+  });
+
+  const { getFigmaData } = registerReadTools(server, figmaService, {
     outputFormat,
     images: skipImageDownloads ? { kind: "none" } : { kind: "disk", imageDir },
-    getClientInfo,
-    pluginBridge,
+    observe: (outcome) => captureReadToolOutcome(outcome, callContext()),
+    describeReadRecovery:
+      pluginBridge &&
+      ((error, request) => describePluginReadRecovery(pluginBridge, error, request)),
   });
 
   if (pluginBridge) {
+    advertisePluginReadRoute(getFigmaData, pluginBridge, {
+      baseDescription: getFigmaDataTool.description,
+      transport,
+    });
     registerCodeModeTools(server, pluginBridge, { codeMode, transport, figmaService });
   }
 
@@ -86,9 +86,22 @@ function createServer(
     getClientInfo,
   });
 
+  Logger.enabled = true;
   Logger.isHTTP = transport !== "stdio";
 
   return server;
+}
+
+// get_figma_comments has no telemetry event of its own yet.
+function captureReadToolOutcome(outcome: ReadToolOutcome, context: ToolCallContext): void {
+  if (outcome.kind === "rejected") {
+    const { tool, field, rule, message } = outcome;
+    captureValidationReject({ tool, field, rule, message }, context);
+  } else if (outcome.tool === "get_figma_data") {
+    captureGetFigmaDataCall(outcome.outcome, context);
+  } else if (outcome.tool === "download_figma_images") {
+    captureDownloadImagesCall(outcome.outcome, context);
+  }
 }
 
 export function clientInfoReader(server: McpServer): () => ClientInfo | undefined {
@@ -97,144 +110,6 @@ export function clientInfoReader(server: McpServer): () => ClientInfo | undefine
     if (!info) return undefined;
     return { name: info.name, version: info.version };
   };
-}
-
-/** Where download_figma_images puts images, or that it isn't offered at all. */
-export type ImageOutput =
-  | { kind: "none" }
-  | { kind: "disk"; imageDir?: string }
-  | { kind: "links"; destination: ImageDestination; retentionDays: number };
-
-/**
- * Runs around every read-tool call. Hosted mode admits or refuses the call here (rate limit,
- * concurrency); a refusal is an ordinary tool error the agent can read and act on.
- */
-export type ToolCallGuard = (run: () => Promise<CallToolResult>) => Promise<CallToolResult>;
-
-export type RegisterReadToolsOptions = {
-  transport: ServerTransport;
-  authMode: AuthMode;
-  outputFormat: OutputFormat;
-  images: ImageOutput;
-  getClientInfo: () => ClientInfo | undefined;
-  pluginBridge?: PluginBridgeRuntime;
-  guardToolCall?: ToolCallGuard;
-};
-
-// Explicit on every read tool, in every mode: directory review requires all three, and the
-// MCP defaults (destructive, open-world) are the opposite of what these tools do. Reads touch only
-// the user's own Figma files — a closed domain.
-const READ_ANNOTATIONS: ToolAnnotations = {
-  readOnlyHint: true,
-  destructiveHint: false,
-  openWorldHint: false,
-};
-// A local download writes files into the user's project and overwrites same-named ones.
-const DISK_DOWNLOAD_ANNOTATIONS: ToolAnnotations = {
-  readOnlyHint: false,
-  destructiveHint: true,
-  openWorldHint: false,
-};
-
-export function registerReadTools(
-  server: McpServer,
-  figmaService: FigmaService,
-  options: RegisterReadToolsOptions,
-): void {
-  const { pluginBridge, images } = options;
-  const guard: ToolCallGuard = options.guardToolCall ?? ((run) => run());
-  const toolContext = () => ({
-    transport: options.transport,
-    authMode: options.authMode,
-    clientInfo: options.getClientInfo(),
-  });
-
-  const getFigmaData = server.registerTool(
-    getFigmaDataTool.name,
-    {
-      title: "Get Figma Data",
-      description: getFigmaDataTool.description,
-      inputSchema: getFigmaDataTool.parametersSchema,
-      annotations: READ_ANNOTATIONS,
-    },
-    (params: GetFigmaDataParams, extra: ToolExtra) =>
-      guard(() =>
-        getFigmaDataTool.handler(
-          params,
-          figmaService,
-          options.outputFormat,
-          options.transport,
-          options.authMode,
-          options.getClientInfo(),
-          pluginBridge &&
-            ((error, request) => describePluginReadRecovery(pluginBridge, error, request)),
-          extra,
-        ),
-      ),
-  );
-  if (pluginBridge) {
-    advertisePluginReadRoute(getFigmaData, pluginBridge, {
-      baseDescription: getFigmaDataTool.description,
-      transport: options.transport,
-    });
-  }
-
-  server.registerTool(
-    getFigmaCommentsTool.name,
-    {
-      title: "Get Figma Comments",
-      description: getFigmaCommentsTool.description,
-      inputSchema: getFigmaCommentsTool.parameters,
-      annotations: READ_ANNOTATIONS,
-    },
-    (params: GetFigmaCommentsParams) =>
-      guard(() => getFigmaCommentsTool.handler(params, figmaService)),
-  );
-
-  if (images.kind === "disk") {
-    server.registerTool(
-      downloadFigmaImagesTool.name,
-      {
-        title: "Download Figma Images",
-        description: downloadFigmaImagesTool.getDescription(images.imageDir),
-        inputSchema: downloadFigmaImagesTool.parametersSchema,
-        annotations: DISK_DOWNLOAD_ANNOTATIONS,
-      },
-      (params: DownloadImagesParams, extra: ToolExtra) =>
-        guard(() =>
-          downloadFigmaImagesTool.handler(
-            params,
-            figmaService,
-            images.imageDir,
-            options.transport,
-            options.authMode,
-            options.getClientInfo(),
-            extra,
-          ),
-        ),
-    );
-  } else if (images.kind === "links") {
-    server.registerTool(
-      downloadFigmaImageLinksTool.name,
-      {
-        title: "Download Figma Images",
-        description: downloadFigmaImageLinksTool.getDescription(images.retentionDays),
-        inputSchema: downloadFigmaImageLinksTool.parametersSchema,
-        // Exports into the server's own storage: nothing of the user's changes.
-        annotations: READ_ANNOTATIONS,
-      },
-      (params: DownloadImageLinksParams, extra: ToolExtra) =>
-        guard(() =>
-          downloadFigmaImageLinksTool.handler(
-            params,
-            figmaService,
-            images.destination,
-            toolContext(),
-            extra,
-          ),
-        ),
-    );
-  }
 }
 
 export { createServer };

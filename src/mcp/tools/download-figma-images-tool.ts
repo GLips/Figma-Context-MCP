@@ -1,18 +1,12 @@
 // zod/v3 — see get-figma-data-tool.ts: classic-API schemas kept as-is across the zod-4 bump.
 import { z } from "zod/v3";
-import {
-  type AuthMode,
-  type ClientInfo,
-  captureDownloadImagesCall,
-  captureValidationReject,
-  type Transport,
-} from "~/telemetry/index.js";
 import { downloadFigmaImages as runDownloadFigmaImages } from "../../services/download-figma-images.js";
 import type { FigmaService } from "../../services/figma.js";
 import { createDiskImageDestination, type ImageDestination } from "../../utils/image-processing.js";
 import { type ResolveLocalPathFailureReason, resolveLocalPath } from "../../utils/local-path.js";
 import { Logger } from "../../utils/logger.js";
 import { sendProgress, startProgressHeartbeat, type ToolExtra } from "../progress.js";
+import type { ReadToolOutcome } from "../read-tools.js";
 
 const sharedParameters = {
   fileKey: z
@@ -96,26 +90,22 @@ const parameters = {
 const parametersSchema = z.object(parameters);
 export type DownloadImagesParams = z.infer<typeof parametersSchema>;
 
-// The link variant has no localPath: its images land wherever the destination puts them.
-const linkParametersSchema = z.object(sharedParameters);
-export type DownloadImageLinksParams = z.infer<typeof linkParametersSchema>;
+// The destination variant has no localPath: its images land wherever the destination puts them.
+const destinationParametersSchema = z.object(sharedParameters);
+export type DownloadImageDestinationParams = z.infer<typeof destinationParametersSchema>;
 
 type TextToolResult = { isError?: boolean; content: Array<{ type: "text"; text: string }> };
 
-type DownloadContext = {
-  transport: Transport;
-  authMode: AuthMode;
-  clientInfo: ClientInfo | undefined;
-};
+type Observe = (outcome: ReadToolOutcome) => void;
 
 /** Run the pipeline into `destination` and render one line per image; `showLocation` adds where it landed. */
 async function downloadAndList(
   figmaService: FigmaService,
-  input: Omit<DownloadImageLinksParams, "pngScale"> & {
+  input: Omit<DownloadImageDestinationParams, "pngScale"> & {
     pngScale: number;
     destination: ImageDestination;
   },
-  context: DownloadContext,
+  observe: Observe,
   extra: ToolExtra,
   showLocation: boolean,
 ): Promise<{ successCount: number; imagesList: string }> {
@@ -130,7 +120,7 @@ async function downloadAndList(
     onDownloadComplete: () => {
       stopHeartbeat?.();
     },
-    onComplete: (outcome) => captureDownloadImagesCall(outcome, context),
+    onComplete: (outcome) => observe({ tool: "download_figma_images", kind: "completed", outcome }),
   });
 
   await sendProgress(extra, 2, 3, `Downloaded ${successCount} images, formatting response`);
@@ -144,7 +134,8 @@ async function downloadAndList(
       const dimensionInfo = result.cssVariables
         ? `${dimensions} | ${result.cssVariables}`
         : dimensions;
-      const locationInfo = showLocation ? `${result.location} | ` : "";
+      const location = result.location.kind === "url" ? result.location.url : result.location.path;
+      const locationInfo = showLocation ? `${location} | ` : "";
 
       const aliasText =
         requestedFileNames.length > 1
@@ -171,9 +162,7 @@ async function downloadFigmaImages(
   params: DownloadImagesParams,
   figmaService: FigmaService,
   imageDir: string | undefined,
-  transport: Transport,
-  authMode: AuthMode,
-  clientInfo: ClientInfo | undefined,
+  observe: Observe,
   extra: ToolExtra,
 ): Promise<TextToolResult> {
   try {
@@ -186,19 +175,17 @@ async function downloadFigmaImages(
     const baseDir = imageDir ?? process.cwd();
     const resolution = resolveLocalPath(localPath, baseDir);
     if (!resolution.ok) {
-      // Path-traversal rejection happens after schema validation, so the SDK
-      // wrapper in mcp/index.ts never sees it. Capture it here as a validation
-      // reject so we can track how often LLMs trip over the localPath contract.
+      // Path-traversal rejection happens after schema validation, so the SDK's
+      // validation hook never sees it. Report it here as a validation reject so we
+      // can track how often LLMs trip over the localPath contract.
       const details = rejectionDetails(resolution.reason, localPath, baseDir);
-      captureValidationReject(
-        {
-          tool: "download_figma_images",
-          field: "localPath",
-          rule: details.rule,
-          message: details.telemetryMessage,
-        },
-        { transport, authMode, clientInfo },
-      );
+      observe({
+        tool: "download_figma_images",
+        kind: "rejected",
+        field: "localPath",
+        rule: details.rule,
+        message: details.telemetryMessage,
+      });
       return {
         isError: true,
         content: [{ type: "text" as const, text: details.userMessage }],
@@ -209,7 +196,7 @@ async function downloadFigmaImages(
     const { successCount, imagesList } = await downloadAndList(
       figmaService,
       { fileKey, nodes, pngScale, destination: createDiskImageDestination(resolvedPath) },
-      { transport, authMode, clientInfo },
+      observe,
       extra,
       false,
     );
@@ -232,19 +219,19 @@ async function downloadFigmaImages(
   }
 }
 
-async function downloadFigmaImageLinks(
-  params: DownloadImageLinksParams,
+async function downloadFigmaImagesToDestination(
+  params: DownloadImageDestinationParams,
   figmaService: FigmaService,
   destination: ImageDestination,
-  context: DownloadContext,
+  observe: Observe,
   extra: ToolExtra,
 ): Promise<TextToolResult> {
   try {
-    const { fileKey, nodes, pngScale } = linkParametersSchema.parse(params);
+    const { fileKey, nodes, pngScale } = destinationParametersSchema.parse(params);
     const { successCount, imagesList } = await downloadAndList(
       figmaService,
       { fileKey, nodes, pngScale, destination },
-      context,
+      observe,
       extra,
       true,
     );
@@ -309,11 +296,11 @@ export const downloadFigmaImagesTool = {
   handler: downloadFigmaImages,
 } as const;
 
-/** The same export, stored by a destination that hands back links (hosted mode) instead of local files. */
-export const downloadFigmaImageLinksTool = {
+/** The same export, stored by a host-supplied destination, which usually hands back links. */
+export const downloadFigmaImageDestinationTool = {
   name: "download_figma_images",
   getDescription: (retentionDays: number) =>
     `Export a Figma file's images: image fills (PNG or GIF), icons and vectors (SVG), or any node rendered as PNG. Copy nodeId, imageRef, gifRef and the crop fields from get_figma_data output. Returns a link to each processed image; links expire after ${retentionDays} days.`,
-  parametersSchema: linkParametersSchema,
-  handler: downloadFigmaImageLinks,
+  parametersSchema: destinationParametersSchema,
+  handler: downloadFigmaImagesToDestination,
 } as const;

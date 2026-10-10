@@ -57,6 +57,9 @@ const RETRYABLE_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504]);
 // Cap the attached response body. Corp-firewall HTML blocks can be 50KB+;
 // we only need enough to identify the origin ("Blocked by Zscaler", etc.).
 const MAX_RESPONSE_BODY_CHARS = 500;
+// Error bodies are only ever quoted (to the length above), so never buffer more than this of one,
+// whatever `maxBytes` allows a success body.
+const MAX_ERROR_BODY_BYTES = 64 * 1024;
 
 export async function fetchJSON<T extends { status?: number }>(
   url: string,
@@ -142,6 +145,22 @@ export async function readBodyWithLimit(response: Response, maxBytes: number): P
   }
 }
 
+/** Up to `maxBytes` of a body, then the rest is cancelled unread. */
+async function readBodyPrefix(response: Response, maxBytes: number): Promise<Buffer> {
+  const reader = response.body?.getReader();
+  if (!reader) return Buffer.alloc(0);
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  while (total < maxBytes) {
+    const { done, value } = await reader.read();
+    if (done) return Buffer.concat(chunks);
+    chunks.push(value);
+    total += value.byteLength;
+  }
+  await reader.cancel();
+  return Buffer.concat(chunks).subarray(0, maxBytes);
+}
+
 function getConnectionErrorCode(error: unknown): string | undefined {
   if (!(error instanceof Error)) return undefined;
   const cause = (error as { cause?: { code?: string } }).cause;
@@ -164,7 +183,7 @@ async function readResponseBody(
   // error.
   let text: string;
   try {
-    text = await response.text();
+    text = (await readBodyPrefix(response, MAX_ERROR_BODY_BYTES)).toString("utf8");
   } catch {
     return undefined;
   }

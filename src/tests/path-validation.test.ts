@@ -1,19 +1,10 @@
 import path from "path";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
-vi.mock("~/telemetry/index.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("~/telemetry/index.js")>();
-  return {
-    ...actual,
-    captureValidationReject: vi.fn(),
-  };
-});
-
 import { downloadFigmaImagesTool } from "~/mcp/tools/download-figma-images-tool.js";
 import { createDiskImageDestination } from "~/utils/image-processing.js";
 import { resolveLocalPath, isWithin } from "~/utils/local-path.js";
 import type { ToolExtra } from "~/mcp/progress.js";
-import * as telemetry from "~/telemetry/index.js";
 
 const stubFigmaService = {
   downloadImages: () => Promise.resolve([]),
@@ -33,31 +24,29 @@ const validParams = {
 describe("download path validation (handler)", () => {
   const imageDir = path.resolve("/project/root");
 
+  const observe = vi.fn();
+
   beforeEach(() => {
-    vi.mocked(telemetry.captureValidationReject).mockClear();
+    observe.mockClear();
   });
 
-  it("captures path-traversal attempts as validation rejects", async () => {
+  it("reports path-traversal attempts as validation rejects", async () => {
     const result = await downloadFigmaImagesTool.handler(
       { ...validParams, localPath: "../../etc" },
       stubFigmaService,
       imageDir,
-      "stdio",
-      "api_key",
-      undefined,
+      observe,
       stubExtra,
     );
 
     expect(result.isError).toBe(true);
-
-    const captureSpy = vi.mocked(telemetry.captureValidationReject);
-    expect(captureSpy).toHaveBeenCalledOnce();
-    const [input, context] = captureSpy.mock.calls[0];
-    expect(input.tool).toBe("download_figma_images");
-    expect(input.field).toBe("localPath");
-    expect(input.rule).toBe("outside_image_dir");
-    expect(context.transport).toBe("stdio");
-    expect(context.authMode).toBe("api_key");
+    expect(observe).toHaveBeenCalledOnce();
+    expect(observe.mock.calls[0][0]).toMatchObject({
+      tool: "download_figma_images",
+      kind: "rejected",
+      field: "localPath",
+      rule: "outside_image_dir",
+    });
   });
 
   it("rejects localPath that traverses outside imageDir", async () => {
@@ -65,9 +54,7 @@ describe("download path validation (handler)", () => {
       { ...validParams, localPath: "../../etc" },
       stubFigmaService,
       imageDir,
-      "stdio",
-      "api_key",
-      undefined,
+      observe,
       stubExtra,
     );
 
@@ -81,9 +68,7 @@ describe("download path validation (handler)", () => {
       { ...validParams, localPath: "/some/elsewhere" },
       stubFigmaService,
       imageDir,
-      "stdio",
-      "api_key",
-      undefined,
+      observe,
       stubExtra,
     );
 
@@ -97,9 +82,7 @@ describe("download path validation (handler)", () => {
       { ...validParams, localPath: "public/images" },
       stubFigmaService,
       imageDir,
-      "stdio",
-      "api_key",
-      undefined,
+      observe,
       stubExtra,
     );
 
@@ -115,9 +98,7 @@ describe("download path validation (handler)", () => {
       { ...validParams, localPath: "project/src/static/images/test" },
       stubFigmaService,
       driveRoot,
-      "stdio",
-      "api_key",
-      undefined,
+      observe,
       stubExtra,
     );
 
@@ -263,9 +244,8 @@ describe("disk image destination filename validation", () => {
 
     await expect(
       createDiskImageDestination(localPath).write(
-        "../../../etc/evil.png",
-        Buffer.from(""),
-        "image/png",
+        { fileName: "../../../etc/evil.png", bytes: Buffer.from(""), contentType: "image/png" },
+        {},
       ),
     ).rejects.toThrow("File path escapes target directory");
   });
