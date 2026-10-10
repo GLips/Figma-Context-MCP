@@ -1,6 +1,3 @@
-import path from "path";
-import os from "os";
-import fs from "fs";
 import { createJimp } from "@jimp/core";
 import png from "@jimp/js-png";
 import jpeg from "@jimp/js-jpeg";
@@ -8,42 +5,90 @@ import * as crop from "@jimp/plugin-crop";
 
 const Jimp = createJimp({ formats: [png, jpeg], plugins: [crop.methods] });
 import {
-  getImageDimensions,
-  applyCropTransform,
+  downloadAndProcessImage,
   parseSvgDimensions,
+  type ImageDestination,
 } from "../utils/image-processing.js";
 import type { Transform } from "@figma/rest-api-spec";
 
 describe("image processing", () => {
-  let tmpDir: string;
-
-  beforeAll(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "image-processing-test-"));
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
-  afterAll(() => {
-    fs.rmSync(tmpDir, { recursive: true });
-  });
-
-  async function createTemp(name: string, width: number, height: number): Promise<string> {
-    const filePath = path.join(tmpDir, name);
-    const image = new Jimp({ width, height, color: 0xff0000ff });
-    await image.write(filePath as `${string}.${string}`);
-    return filePath;
+  async function serveImage(
+    mime: "image/png" | "image/jpeg",
+    width: number,
+    height: number,
+  ): Promise<void> {
+    const bytes = await new Jimp({ width, height, color: 0xff0000ff }).getBuffer(mime);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(new Uint8Array(bytes))),
+    );
   }
 
-  describe("getImageDimensions", () => {
-    it("reads correct dimensions from a PNG", async () => {
-      const filePath = await createTemp("test-200x100.png", 200, 100);
-      const dims = await getImageDimensions(filePath);
-      expect(dims).toEqual({ width: 200, height: 100 });
-    });
+  function memoryDestination(): ImageDestination & { written: Map<string, Buffer> } {
+    const written = new Map<string, Buffer>();
+    return {
+      written,
+      async write(fileName, bytes) {
+        written.set(fileName, bytes);
+        return `mem://${fileName}`;
+      },
+    };
+  }
 
-    it("reads correct dimensions from a JPEG", async () => {
-      const filePath = await createTemp("test-300x150.jpg", 300, 150);
-      const dims = await getImageDimensions(filePath);
-      expect(dims).toEqual({ width: 300, height: 150 });
-    });
+  it("measures a JPEG it doesn't crop", async () => {
+    await serveImage("image/jpeg", 300, 150);
+    const result = await downloadAndProcessImage(
+      "photo.png",
+      memoryDestination(),
+      "https://cdn.example/photo",
+      false,
+      undefined,
+      true,
+    );
+    expect(result.finalDimensions).toEqual({ width: 300, height: 150 });
+    expect(result.cssVariables).toBe("--original-width: 300px; --original-height: 150px;");
+    expect(result.location).toBe("mem://photo.png");
+  });
+
+  it("crops to the fill transform and stores the cropped bytes", async () => {
+    await serveImage("image/png", 400, 400);
+    const destination = memoryDestination();
+    // Top-left quarter: scale 0.5 in both axes, no translation
+    const transform: Transform = [
+      [0.5, 0, 0],
+      [0, 0.5, 0],
+    ];
+    const result = await downloadAndProcessImage(
+      "fill.png",
+      destination,
+      "https://cdn.example/fill",
+      true,
+      transform,
+    );
+    expect(result.wasCropped).toBe(true);
+    expect(result.finalDimensions).toEqual({ width: 200, height: 200 });
+    const stored = await Jimp.fromBuffer(destination.written.get("fill.png")!);
+    expect({ width: stored.width, height: stored.height }).toEqual({ width: 200, height: 200 });
+  });
+
+  it("keeps the original image when the transform leaves nothing visible", async () => {
+    await serveImage("image/png", 100, 100);
+    const result = await downloadAndProcessImage(
+      "fill.png",
+      memoryDestination(),
+      "https://cdn.example/fill",
+      true,
+      [
+        [0, 0, 0],
+        [0, 0, 0],
+      ],
+    );
+    expect(result.wasCropped).toBe(false);
+    expect(result.finalDimensions).toEqual({ width: 100, height: 100 });
   });
 
   describe("parseSvgDimensions", () => {
@@ -67,39 +112,6 @@ describe("image processing", () => {
         width: 0,
         height: 0,
       });
-    });
-  });
-
-  describe("applyCropTransform", () => {
-    it("crops to the correct dimensions", async () => {
-      const filePath = await createTemp("test-crop-400x400.png", 400, 400);
-
-      // Crop to the top-left quarter: scale 0.5 in both axes, no translation
-      const transform: Transform = [
-        [0.5, 0, 0],
-        [0, 0.5, 0],
-      ];
-
-      await applyCropTransform(filePath, transform);
-
-      const dims = await getImageDimensions(filePath);
-      expect(dims).toEqual({ width: 200, height: 200 });
-    });
-
-    it("returns original image unchanged for invalid crop dimensions", async () => {
-      const filePath = await createTemp("test-crop-invalid.png", 100, 100);
-
-      // Zero scale produces invalid (0-width) crop region
-      const transform: Transform = [
-        [0, 0, 0],
-        [0, 0, 0],
-      ];
-
-      const result = await applyCropTransform(filePath, transform);
-      expect(result).toBe(filePath);
-
-      const dims = await getImageDimensions(filePath);
-      expect(dims).toEqual({ width: 100, height: 100 });
     });
   });
 });

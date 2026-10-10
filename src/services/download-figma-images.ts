@@ -1,6 +1,6 @@
 import type { Transform } from "@figma/rest-api-spec";
 import type { FigmaService } from "~/services/figma.js";
-import type { ImageProcessingResult } from "~/utils/image-processing.js";
+import type { ImageDestination, ImageProcessingResult } from "~/utils/image-processing.js";
 import { tagError } from "~/utils/error-meta.js";
 
 /**
@@ -22,7 +22,7 @@ export type DownloadImageNode = {
 export type DownloadFigmaImagesInput = {
   fileKey: string;
   nodes: DownloadImageNode[];
-  localPath: string;
+  destination: ImageDestination;
   pngScale?: number;
 };
 
@@ -73,7 +73,7 @@ export async function downloadFigmaImages(
   let caughtError: unknown;
 
   try {
-    const { fileKey, nodes, localPath, pngScale } = input;
+    const { fileKey, nodes, destination, pngScale } = input;
 
     // Resolve the set of unique downloads and track which requested
     // filenames each one satisfies (so the caller can render aliases).
@@ -144,7 +144,7 @@ export async function downloadFigmaImages(
     await hooks.onDownloadStart?.(downloadItems.length);
     let allDownloads: ImageProcessingResult[];
     try {
-      allDownloads = await figmaService.downloadImages(fileKey, localPath, downloadItems, {
+      allDownloads = await figmaService.downloadImages(fileKey, destination, downloadItems, {
         pngScale,
       });
     } catch (error) {
@@ -157,7 +157,7 @@ export async function downloadFigmaImages(
 
     const downloads = allDownloads.map((result, index) => ({
       result,
-      requestedFileNames: downloadToRequests.get(index) ?? [result.filePath],
+      requestedFileNames: downloadToRequests.get(index) ?? [result.fileName],
     }));
 
     return { downloads, successCount };

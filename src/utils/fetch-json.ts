@@ -14,6 +14,8 @@ type RequestOptions = RequestInit & {
    * request metadata into error pages.
    */
   redactFromResponseBody?: string[];
+  /** Refuse a success body larger than this many bytes, before it is buffered whole. */
+  maxBytes?: number;
 };
 
 /**
@@ -60,7 +62,7 @@ export async function fetchJSON<T extends { status?: number }>(
   url: string,
   options: RequestOptions = {},
 ): Promise<{ data: T; rawSize: number }> {
-  const { redactFromResponseBody = [], ...fetchOptions } = options;
+  const { redactFromResponseBody = [], maxBytes, ...fetchOptions } = options;
   try {
     const response = await fetch(url, fetchOptions);
 
@@ -81,13 +83,15 @@ export async function fetchJSON<T extends { status?: number }>(
         is_retryable: RETRYABLE_STATUSES.has(response.status),
       });
     }
-    // Read as text first so we can measure the raw body size for telemetry,
+    // Read the bytes first so we can measure the raw body size for telemetry,
     // then parse. This is the same work response.json() does internally, just
     // split so we can observe the byte count before parsing.
-    const text = await response.text();
-    const rawSize = Buffer.byteLength(text, "utf8");
-    const data = JSON.parse(text) as T;
-    return { data, rawSize };
+    const body =
+      maxBytes === undefined
+        ? Buffer.from(await response.arrayBuffer())
+        : await readBodyWithLimit(response, maxBytes);
+    const data = JSON.parse(body.toString("utf8")) as T;
+    return { data, rawSize: body.byteLength };
   } catch (error: unknown) {
     const networkCode = getConnectionErrorCode(error);
     if (networkCode) {
@@ -101,6 +105,40 @@ export async function fetchJSON<T extends { status?: number }>(
       tagError(wrapped, { network_code: networkCode, category: "network", is_retryable: true });
     }
     throw error;
+  }
+}
+
+/**
+ * Buffer a response body, refusing it once it passes `maxBytes`. Counts the stream itself rather
+ * than trusting Content-Length, which is often absent and never binding; the header only lets an
+ * honest oversize response fail before any of it is read.
+ */
+export async function readBodyWithLimit(response: Response, maxBytes: number): Promise<Buffer> {
+  const tooLarge = () =>
+    tagError(
+      new Error(
+        `Response is larger than this server's ${Math.round(maxBytes / (1024 * 1024))} MB limit.`,
+      ),
+      { category: "size_limit" },
+    );
+  const declared = Number(response.headers.get("content-length"));
+  if (declared > maxBytes) {
+    await response.body?.cancel();
+    tooLarge();
+  }
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  const reader = response.body?.getReader();
+  if (!reader) return Buffer.alloc(0);
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) return Buffer.concat(chunks);
+    total += value.byteLength;
+    if (total > maxBytes) {
+      await reader.cancel();
+      tooLarge();
+    }
+    chunks.push(value);
   }
 }
 

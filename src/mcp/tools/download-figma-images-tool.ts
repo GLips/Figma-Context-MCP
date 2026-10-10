@@ -1,4 +1,3 @@
-import path from "path";
 // zod/v3 — see get-figma-data-tool.ts: classic-API schemas kept as-is across the zod-4 bump.
 import { z } from "zod/v3";
 import {
@@ -10,11 +9,12 @@ import {
 } from "~/telemetry/index.js";
 import { downloadFigmaImages as runDownloadFigmaImages } from "../../services/download-figma-images.js";
 import type { FigmaService } from "../../services/figma.js";
+import { createDiskImageDestination, type ImageDestination } from "../../utils/image-processing.js";
 import { type ResolveLocalPathFailureReason, resolveLocalPath } from "../../utils/local-path.js";
 import { Logger } from "../../utils/logger.js";
 import { sendProgress, startProgressHeartbeat, type ToolExtra } from "../progress.js";
 
-const parameters = {
+const sharedParameters = {
   fileKey: z
     .string()
     .regex(/^[a-zA-Z0-9]+$/, "File key must be alphanumeric")
@@ -82,6 +82,10 @@ const parameters = {
     .describe(
       "Export scale for PNG images. Optional, defaults to 2 if not specified. Affects PNG images only.",
     ),
+};
+
+const parameters = {
+  ...sharedParameters,
   localPath: z
     .string()
     .describe(
@@ -92,6 +96,77 @@ const parameters = {
 const parametersSchema = z.object(parameters);
 export type DownloadImagesParams = z.infer<typeof parametersSchema>;
 
+// The link variant has no localPath: its images land wherever the destination puts them.
+const linkParametersSchema = z.object(sharedParameters);
+export type DownloadImageLinksParams = z.infer<typeof linkParametersSchema>;
+
+type TextToolResult = { isError?: boolean; content: Array<{ type: "text"; text: string }> };
+
+type DownloadContext = {
+  transport: Transport;
+  authMode: AuthMode;
+  clientInfo: ClientInfo | undefined;
+};
+
+/** Run the pipeline into `destination` and render one line per image; `showLocation` adds where it landed. */
+async function downloadAndList(
+  figmaService: FigmaService,
+  input: Omit<DownloadImageLinksParams, "pngScale"> & {
+    pngScale: number;
+    destination: ImageDestination;
+  },
+  context: DownloadContext,
+  extra: ToolExtra,
+  showLocation: boolean,
+): Promise<{ successCount: number; imagesList: string }> {
+  await sendProgress(extra, 0, 3, "Resolving image downloads");
+
+  let stopHeartbeat: (() => void) | undefined;
+  const { downloads, successCount } = await runDownloadFigmaImages(figmaService, input, {
+    onDownloadStart: async (downloadCount) => {
+      await sendProgress(extra, 1, 3, `Resolved ${downloadCount} images, downloading`);
+      stopHeartbeat = startProgressHeartbeat(extra, "Downloading images");
+    },
+    onDownloadComplete: () => {
+      stopHeartbeat?.();
+    },
+    onComplete: (outcome) => captureDownloadImagesCall(outcome, context),
+  });
+
+  await sendProgress(extra, 2, 3, `Downloaded ${successCount} images, formatting response`);
+
+  const imagesList = downloads
+    .map(({ result, requestedFileNames }) => {
+      const { fileName } = result;
+      const dimensions = `${result.finalDimensions.width}x${result.finalDimensions.height}`;
+      const cropStatus = result.wasCropped ? " (cropped)" : "";
+
+      const dimensionInfo = result.cssVariables
+        ? `${dimensions} | ${result.cssVariables}`
+        : dimensions;
+      const locationInfo = showLocation ? `${result.location} | ` : "";
+
+      const aliasText =
+        requestedFileNames.length > 1
+          ? ` (also requested as: ${requestedFileNames.filter((name) => name !== fileName).join(", ")})`
+          : "";
+
+      return `- ${fileName}: ${locationInfo}${dimensionInfo}${cropStatus}${aliasText}`;
+    })
+    .join("\n");
+
+  return { successCount, imagesList };
+}
+
+function downloadFailure(fileKey: string, error: unknown): TextToolResult {
+  const message = error instanceof Error ? error.message : String(error);
+  Logger.error(`Error downloading images from ${fileKey}:`, error);
+  return {
+    isError: true,
+    content: [{ type: "text" as const, text: `Failed to download images: ${message}` }],
+  };
+}
+
 async function downloadFigmaImages(
   params: DownloadImagesParams,
   figmaService: FigmaService,
@@ -100,7 +175,7 @@ async function downloadFigmaImages(
   authMode: AuthMode,
   clientInfo: ClientInfo | undefined,
   extra: ToolExtra,
-) {
+): Promise<TextToolResult> {
   try {
     const { fileKey, nodes, localPath, pngScale } = parametersSchema.parse(params);
 
@@ -131,49 +206,13 @@ async function downloadFigmaImages(
     }
     const resolvedPath = resolution.resolvedPath;
 
-    await sendProgress(extra, 0, 3, "Resolving image downloads");
-
-    let stopHeartbeat: (() => void) | undefined;
-    const { downloads, successCount } = await runDownloadFigmaImages(
+    const { successCount, imagesList } = await downloadAndList(
       figmaService,
-      { fileKey, nodes, localPath: resolvedPath, pngScale },
-      {
-        onDownloadStart: async (downloadCount) => {
-          await sendProgress(extra, 1, 3, `Resolved ${downloadCount} images, downloading`);
-          stopHeartbeat = startProgressHeartbeat(extra, "Downloading images");
-        },
-        onDownloadComplete: () => {
-          stopHeartbeat?.();
-        },
-        onComplete: (outcome) =>
-          captureDownloadImagesCall(outcome, {
-            transport,
-            authMode,
-            clientInfo,
-          }),
-      },
+      { fileKey, nodes, pngScale, destination: createDiskImageDestination(resolvedPath) },
+      { transport, authMode, clientInfo },
+      extra,
+      false,
     );
-
-    await sendProgress(extra, 2, 3, `Downloaded ${successCount} images, formatting response`);
-
-    const imagesList = downloads
-      .map(({ result, requestedFileNames }) => {
-        const fileName = path.basename(result.filePath);
-        const dimensions = `${result.finalDimensions.width}x${result.finalDimensions.height}`;
-        const cropStatus = result.wasCropped ? " (cropped)" : "";
-
-        const dimensionInfo = result.cssVariables
-          ? `${dimensions} | ${result.cssVariables}`
-          : dimensions;
-
-        const aliasText =
-          requestedFileNames.length > 1
-            ? ` (also requested as: ${requestedFileNames.filter((name) => name !== fileName).join(", ")})`
-            : "";
-
-        return `- ${fileName}: ${dimensionInfo}${cropStatus}${aliasText}`;
-      })
-      .join("\n");
 
     return {
       content: [
@@ -189,17 +228,33 @@ async function downloadFigmaImages(
       ],
     };
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    Logger.error(`Error downloading images from ${params.fileKey}:`, error);
+    return downloadFailure(params.fileKey, error);
+  }
+}
+
+async function downloadFigmaImageLinks(
+  params: DownloadImageLinksParams,
+  figmaService: FigmaService,
+  destination: ImageDestination,
+  context: DownloadContext,
+  extra: ToolExtra,
+): Promise<TextToolResult> {
+  try {
+    const { fileKey, nodes, pngScale } = linkParametersSchema.parse(params);
+    const { successCount, imagesList } = await downloadAndList(
+      figmaService,
+      { fileKey, nodes, pngScale, destination },
+      context,
+      extra,
+      true,
+    );
     return {
-      isError: true,
       content: [
-        {
-          type: "text" as const,
-          text: `Failed to download images: ${message}`,
-        },
+        { type: "text" as const, text: `Downloaded ${successCount} images:\n${imagesList}` },
       ],
     };
+  } catch (error) {
+    return downloadFailure(params.fileKey, error);
   }
 }
 
@@ -252,4 +307,13 @@ export const downloadFigmaImagesTool = {
   getDescription,
   parametersSchema,
   handler: downloadFigmaImages,
+} as const;
+
+/** The same export, stored by a destination that hands back links (hosted mode) instead of local files. */
+export const downloadFigmaImageLinksTool = {
+  name: "download_figma_images",
+  getDescription: (retentionDays: number) =>
+    `Export a Figma file's images: image fills (PNG or GIF), icons and vectors (SVG), or any node rendered as PNG. Copy nodeId, imageRef, gifRef and the crop fields from get_figma_data output. Returns a link to each processed image; links expire after ${retentionDays} days.`,
+  parametersSchema: linkParametersSchema,
+  handler: downloadFigmaImageLinks,
 } as const;

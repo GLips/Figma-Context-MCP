@@ -4,75 +4,37 @@ import jpeg from "@jimp/js-jpeg";
 import gif from "@jimp/js-gif";
 import * as crop from "@jimp/plugin-crop";
 import type { Transform } from "@figma/rest-api-spec";
+import { mkdir, writeFile } from "node:fs/promises";
+import path from "node:path";
+import { readBodyWithLimit } from "./fetch-json.js";
+import { tagError } from "./error-meta.js";
+import { isWithin } from "./local-path.js";
+import { Logger } from "./logger.js";
 
 const Jimp = createJimp({ formats: [png, jpeg, gif], plugins: [crop.methods] });
 
 /**
- * Apply crop transform to an image based on Figma's transformation matrix
- * @param imagePath - Path to the original image file
- * @param cropTransform - Figma transform matrix [[scaleX, skewX, translateX], [skewY, scaleY, translateY]]
- * @returns Promise<string> - Path to the cropped image
+ * The visible region of an image under a Figma image-fill transform, or null when the transform
+ * leaves nothing visible. Skew is intentionally ignored.
+ *
+ * The matrix is [[scaleX, skewX, translateX], [skewY, scaleY, translateY]]: scale is how much of
+ * the image is visible (0-1), translate is the visible area's offset (0-1, relative to image size).
  */
-export async function applyCropTransform(
-  imagePath: string,
+export function cropRegionFor(
+  { width, height }: { width: number; height: number },
   cropTransform: Transform,
-): Promise<string> {
-  const { Logger } = await import("./logger.js");
+): { left: number; top: number; width: number; height: number } | null {
+  const scaleX = cropTransform[0]?.[0] ?? 1;
+  const translateX = cropTransform[0]?.[2] ?? 0;
+  const scaleY = cropTransform[1]?.[1] ?? 1;
+  const translateY = cropTransform[1]?.[2] ?? 0;
 
-  try {
-    // Extract transform values (skew values intentionally unused for now)
-    const scaleX = cropTransform[0]?.[0] ?? 1;
-    const translateX = cropTransform[0]?.[2] ?? 0;
-    const scaleY = cropTransform[1]?.[1] ?? 1;
-    const translateY = cropTransform[1]?.[2] ?? 0;
-
-    const image = await Jimp.read(imagePath);
-    const { width, height } = image;
-
-    // Calculate crop region based on transform matrix
-    // Figma's transform matrix represents how the image is positioned within its container
-    // We need to extract the visible portion based on the scaling and translation
-
-    // The transform matrix defines the visible area as:
-    // - scaleX/scaleY: how much of the original image is visible (0-1)
-    // - translateX/translateY: offset of the visible area (0-1, relative to image size)
-
-    const cropLeft = Math.max(0, Math.round(translateX * width));
-    const cropTop = Math.max(0, Math.round(translateY * height));
-    const cropWidth = Math.min(width - cropLeft, Math.round(scaleX * width));
-    const cropHeight = Math.min(height - cropTop, Math.round(scaleY * height));
-
-    if (cropWidth <= 0 || cropHeight <= 0) {
-      Logger.log(`Invalid crop dimensions for ${imagePath}, using original image`);
-      return imagePath;
-    }
-
-    image.crop({ x: cropLeft, y: cropTop, w: cropWidth, h: cropHeight });
-    await image.write(imagePath as `${string}.${string}`);
-
-    Logger.log(`Cropped image saved (overwritten): ${imagePath}`);
-    Logger.log(
-      `Crop region: ${cropLeft}, ${cropTop}, ${cropWidth}x${cropHeight} from ${width}x${height}`,
-    );
-
-    return imagePath;
-  } catch (error) {
-    Logger.error(`Error cropping image ${imagePath}:`, error);
-    return imagePath;
-  }
-}
-
-/**
- * Get image dimensions from a file
- * @param imagePath - Path to the image file
- * @returns Promise<{width: number, height: number}>
- */
-export async function getImageDimensions(imagePath: string): Promise<{
-  width: number;
-  height: number;
-}> {
-  const image = await Jimp.read(imagePath);
-  return { width: image.width, height: image.height };
+  const left = Math.max(0, Math.round(translateX * width));
+  const top = Math.max(0, Math.round(translateY * height));
+  const cropWidth = Math.min(width - left, Math.round(scaleX * width));
+  const cropHeight = Math.min(height - top, Math.round(scaleY * height));
+  if (cropWidth <= 0 || cropHeight <= 0) return null;
+  return { left, top, width: cropWidth, height: cropHeight };
 }
 
 /**
@@ -120,116 +82,149 @@ export function parseSvgDimensions(svg: string): { width: number; height: number
 }
 
 export type ImageProcessingResult = {
-  filePath: string;
+  fileName: string;
+  /** Where the processed image landed: a local file path, or a link in hosted mode. */
+  location: string;
   originalDimensions: { width: number; height: number };
   finalDimensions: { width: number; height: number };
   wasCropped: boolean;
   cropRegion?: { left: number; top: number; width: number; height: number };
   cssVariables?: string;
-  processingLog: string[];
+};
+
+/** Where processed images are stored. Returns the location reported back to the agent. */
+export type ImageDestination = {
+  write(fileName: string, bytes: Buffer, contentType: string): Promise<string>;
 };
 
 /**
- * Enhanced image download with post-processing
- * @param fileName - The filename to save as
- * @param localPath - The local path to save to
- * @param imageUrl - Image URL
+ * Resource bounds for image downloads. Local mode sets none; hosted mode sets all three, since one
+ * process serves every user and a large render multiplies through download, decode and upload.
+ */
+export type ImagePolicy = {
+  /** Refuse an image whose download is larger than this. */
+  maxBytes?: number;
+  /** Wraps each image's whole download → process → store job; bounds how many run at once. */
+  runJob?: <T>(job: () => Promise<T>) => Promise<T>;
+  /** Sees the raw bytes before jimp decodes them; throws to refuse a decompression bomb. */
+  beforeDecode?: (bytes: Buffer) => void;
+};
+
+const CONTENT_TYPES: Record<string, string> = {
+  png: "image/png",
+  gif: "image/gif",
+  svg: "image/svg+xml",
+};
+
+function contentTypeFor(fileName: string): string {
+  return CONTENT_TYPES[fileName.split(".").pop()!.toLowerCase()] ?? "application/octet-stream";
+}
+
+/** Writes images into one local directory — the only place local mode stores them. */
+export function createDiskImageDestination(directory: string): ImageDestination {
+  return {
+    async write(fileName, bytes) {
+      const fullPath = path.resolve(path.join(directory, fileName));
+      if (!isWithin(directory, fullPath)) {
+        tagError(new Error(`File path escapes target directory: ${fileName}`), {
+          category: "invalid_input",
+        });
+      }
+      await mkdir(directory, { recursive: true });
+      await writeFile(fullPath, bytes);
+      return fullPath;
+    },
+  };
+}
+
+async function fetchImageBytes(
+  imageUrl: string,
+  { maxBytes, signal }: { maxBytes?: number; signal?: AbortSignal },
+): Promise<Buffer> {
+  try {
+    const response = await fetch(imageUrl, { method: "GET", signal });
+    if (!response.ok) {
+      tagError(new Error(`Failed to download image: ${response.statusText}`), {
+        category: "image_download",
+      });
+    }
+    return maxBytes === undefined
+      ? Buffer.from(await response.arrayBuffer())
+      : await readBodyWithLimit(response, maxBytes);
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    throw new Error(`Error downloading image: ${errorMessage}`, { cause: error });
+  }
+}
+
+/**
+ * Download one image, crop it to its fill transform and measure it, then store the result.
  * @param needsCropping - Whether to apply crop transform
  * @param cropTransform - Transform matrix for cropping
  * @param requiresImageDimensions - Whether to generate dimension metadata
- * @returns Promise<ImageProcessingResult> - Detailed processing information
  */
 export async function downloadAndProcessImage(
   fileName: string,
-  localPath: string,
+  destination: ImageDestination,
   imageUrl: string,
   needsCropping: boolean = false,
-  cropTransform?: Transform,
+  cropTransform: Transform | undefined,
   requiresImageDimensions: boolean = false,
+  { policy = {}, signal }: { policy?: ImagePolicy; signal?: AbortSignal } = {},
 ): Promise<ImageProcessingResult> {
-  const { Logger } = await import("./logger.js");
-  const processingLog: string[] = [];
-
-  // First download the original image
-  const { downloadFigmaImage } = await import("./download-figma-image.js");
-  const originalPath = await downloadFigmaImage(fileName, localPath, imageUrl);
-  Logger.log(`Downloaded original image: ${originalPath}`);
+  const bytes = await fetchImageBytes(imageUrl, { maxBytes: policy.maxBytes, signal });
+  const contentType = contentTypeFor(fileName);
 
   // SVGs are vector — jimp can't read them and cropping doesn't apply. Their
   // intrinsic size is declared in the markup, so read it from there rather than
   // reporting a misleading 0x0 (which reads like a download failure).
-  const isSvg = fileName.toLowerCase().endsWith(".svg");
-  if (isSvg) {
-    const { readFile } = await import("node:fs/promises");
-    const dimensions = parseSvgDimensions(await readFile(originalPath, "utf-8"));
+  if (contentType === "image/svg+xml") {
+    const dimensions = parseSvgDimensions(bytes.toString("utf-8"));
     Logger.log(`SVG dimensions: ${dimensions.width}x${dimensions.height}`);
     return {
-      filePath: originalPath,
+      fileName,
+      location: await destination.write(fileName, bytes, contentType),
       originalDimensions: dimensions,
       finalDimensions: dimensions,
       wasCropped: false,
       cssVariables: requiresImageDimensions ? generateImageCSSVariables(dimensions) : undefined,
-      processingLog,
     };
   }
 
-  // Get original dimensions before any processing
-  const originalDimensions = await getImageDimensions(originalPath);
+  policy.beforeDecode?.(bytes);
+  const image = await Jimp.fromBuffer(bytes);
+  const originalDimensions = { width: image.width, height: image.height };
   Logger.log(`Original dimensions: ${originalDimensions.width}x${originalDimensions.height}`);
 
-  let finalPath = originalPath;
-  let wasCropped = false;
-  let cropRegion: { left: number; top: number; width: number; height: number } | undefined;
+  // Skip GIFs — cropping destroys animation frames.
+  const cropRegion =
+    needsCropping && cropTransform && contentType !== "image/gif"
+      ? (cropRegionFor(originalDimensions, cropTransform) ?? undefined)
+      : undefined;
 
-  // Apply crop transform if needed (skip for GIFs — cropping destroys animation frames)
-  if (needsCropping && cropTransform && !fileName.toLowerCase().endsWith(".gif")) {
-    Logger.log("Applying crop transform...");
-
-    // Extract crop region info before applying transform
-    const scaleX = cropTransform[0]?.[0] ?? 1;
-    const scaleY = cropTransform[1]?.[1] ?? 1;
-    const translateX = cropTransform[0]?.[2] ?? 0;
-    const translateY = cropTransform[1]?.[2] ?? 0;
-
-    const cropLeft = Math.max(0, Math.round(translateX * originalDimensions.width));
-    const cropTop = Math.max(0, Math.round(translateY * originalDimensions.height));
-    const cropWidth = Math.min(
-      originalDimensions.width - cropLeft,
-      Math.round(scaleX * originalDimensions.width),
+  let output = bytes;
+  if (cropRegion) {
+    image.crop({
+      x: cropRegion.left,
+      y: cropRegion.top,
+      w: cropRegion.width,
+      h: cropRegion.height,
+    });
+    output = await image.getBuffer(contentType as "image/png");
+    Logger.log(
+      `Cropped to region: ${cropRegion.left}, ${cropRegion.top}, ${cropRegion.width}x${cropRegion.height}`,
     );
-    const cropHeight = Math.min(
-      originalDimensions.height - cropTop,
-      Math.round(scaleY * originalDimensions.height),
-    );
-
-    if (cropWidth > 0 && cropHeight > 0) {
-      cropRegion = { left: cropLeft, top: cropTop, width: cropWidth, height: cropHeight };
-      finalPath = await applyCropTransform(originalPath, cropTransform);
-      wasCropped = true;
-      Logger.log(`Cropped to region: ${cropLeft}, ${cropTop}, ${cropWidth}x${cropHeight}`);
-    } else {
-      Logger.log("Invalid crop dimensions, keeping original image");
-    }
   }
 
-  // Get final dimensions after processing
-  const finalDimensions = await getImageDimensions(finalPath);
-  Logger.log(`Final dimensions: ${finalDimensions.width}x${finalDimensions.height}`);
-
-  // Generate CSS variables if required (for TILE mode)
-  let cssVariables: string | undefined;
-  if (requiresImageDimensions) {
-    cssVariables = generateImageCSSVariables(finalDimensions);
-  }
-
+  const finalDimensions = { width: image.width, height: image.height };
   return {
-    filePath: finalPath,
+    fileName,
+    location: await destination.write(fileName, output, contentType),
     originalDimensions,
     finalDimensions,
-    wasCropped,
+    wasCropped: cropRegion !== undefined,
     cropRegion,
-    cssVariables,
-    processingLog,
+    cssVariables: requiresImageDimensions ? generateImageCSSVariables(finalDimensions) : undefined,
   };
 }
 

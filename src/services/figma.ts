@@ -7,7 +7,12 @@ import type {
   GetCommentsResponse,
   Transform,
 } from "@figma/rest-api-spec";
-import { downloadAndProcessImage, type ImageProcessingResult } from "~/utils/image-processing.js";
+import {
+  downloadAndProcessImage,
+  type ImageDestination,
+  type ImagePolicy,
+  type ImageProcessingResult,
+} from "~/utils/image-processing.js";
 import { Logger, writeLogs } from "~/utils/logger.js";
 import { fetchJSON } from "~/utils/fetch-json.js";
 import { getErrorMeta, tagError } from "~/utils/error-meta.js";
@@ -19,6 +24,24 @@ export type FigmaAuthOptions = {
   useOAuth: boolean;
 };
 
+/**
+ * Where a FigmaService gets its credential when it isn't fixed at startup. Hosted mode resolves
+ * each user's token lazily, on the first Figma call, and caches it outside the request.
+ */
+export type FigmaCredentialSource = {
+  resolve(): Promise<FigmaAuthOptions>;
+  /** Figma refused the resolved credential (401/403); drop any cached copy so the next call refetches. */
+  invalidate(): void;
+};
+
+export type FigmaServiceOptions = {
+  /** Aborts every Figma API and image fetch this service makes — a deadline, or the client leaving. */
+  signal?: AbortSignal;
+  /** Refuse Figma API responses larger than this, before parsing them. */
+  maxResponseBytes?: number;
+  images?: ImagePolicy;
+};
+
 type SvgOptions = {
   outlineText: boolean;
   includeId: boolean;
@@ -26,24 +49,32 @@ type SvgOptions = {
 };
 
 export class FigmaService {
-  private readonly apiKey: string;
-  private readonly oauthToken: string;
-  private readonly useOAuth: boolean;
+  private readonly credentials: FigmaCredentialSource;
+  private readonly options: FigmaServiceOptions;
   private readonly baseUrl = "https://api.figma.com/v1";
 
-  constructor({ figmaApiKey, figmaOAuthToken, useOAuth }: FigmaAuthOptions) {
-    this.apiKey = figmaApiKey || "";
-    this.oauthToken = figmaOAuthToken || "";
-    this.useOAuth = !!useOAuth && !!this.oauthToken;
+  constructor(
+    credentials: FigmaAuthOptions | FigmaCredentialSource,
+    options: FigmaServiceOptions = {},
+  ) {
+    this.credentials =
+      "resolve" in credentials
+        ? credentials
+        : { resolve: async () => credentials, invalidate: () => {} };
+    this.options = options;
   }
 
-  private getAuthHeaders(): Record<string, string> {
-    if (this.useOAuth) {
+  private getAuthHeaders({
+    figmaApiKey,
+    figmaOAuthToken,
+    useOAuth,
+  }: FigmaAuthOptions): Record<string, string> {
+    if (useOAuth && figmaOAuthToken) {
       Logger.log("Using OAuth Bearer token for authentication");
-      return { Authorization: `Bearer ${this.oauthToken}` };
+      return { Authorization: `Bearer ${figmaOAuthToken}` };
     }
 
-    if (!this.apiKey) {
+    if (!figmaApiKey) {
       tagError(
         new Error(
           "Figma API authentication is required. Configure FIGMA_API_KEY or FIGMA_OAUTH_TOKEN on the server, or send X-Figma-Token / Authorization: Bearer on the HTTP request.",
@@ -53,7 +84,13 @@ export class FigmaService {
     }
 
     Logger.log("Using Personal Access Token for authentication");
-    return { "X-Figma-Token": this.apiKey };
+    return { "X-Figma-Token": figmaApiKey };
+  }
+
+  private signalFor(signal: AbortSignal | undefined): AbortSignal | undefined {
+    const own = this.options.signal;
+    if (!own) return signal;
+    return signal ? AbortSignal.any([own, signal]) : own;
   }
 
   /**
@@ -86,15 +123,21 @@ export class FigmaService {
   ): Promise<{ data: T; rawSize: number }> {
     try {
       Logger.log(`Calling ${this.baseUrl}${endpoint}`);
-      const headers = this.getAuthHeaders();
+      const auth = await this.credentials.resolve();
 
       return await fetchJSON<T & { status?: number }>(`${this.baseUrl}${endpoint}`, {
-        headers,
-        signal,
-        redactFromResponseBody: [this.apiKey, this.oauthToken],
+        headers: this.getAuthHeaders(auth),
+        signal: this.signalFor(signal),
+        redactFromResponseBody: [auth.figmaApiKey, auth.figmaOAuthToken],
+        maxBytes: this.options.maxResponseBytes,
       });
     } catch (error) {
       const meta = getErrorMeta(error);
+      // 403 also means "no access to this file", not only a dead token. Refetching costs one
+      // credential lookup; keeping a revoked token would fail every read until its cache expired.
+      if (meta.http_status === 401 || meta.http_status === 403) {
+        this.credentials.invalidate();
+      }
       if (meta.http_status === 429) {
         throw new Error(buildRateLimitMessage(error), { cause: error });
       }
@@ -174,11 +217,11 @@ export class FigmaService {
    * - Image cropping based on transform matrices
    * - CSS variable generation for image dimensions
    *
-   * @returns Array of local file paths for successfully downloaded images
+   * @returns One result per successfully downloaded image
    */
   async downloadImages(
     fileKey: string,
-    localPath: string,
+    destination: ImageDestination,
     items: Array<{
       imageRef?: string;
       gifRef?: string;
@@ -192,8 +235,28 @@ export class FigmaService {
   ): Promise<ImageProcessingResult[]> {
     if (items.length === 0) return [];
 
-    const resolvedPath = localPath;
     const { pngScale = 2, svgOptions } = options;
+    const policy = this.options.images ?? {};
+    const signal = this.options.signal;
+    const runJob = policy.runJob ?? (<T>(job: () => Promise<T>) => job());
+    const processImage = (
+      fileName: string,
+      imageUrl: string,
+      needsCropping: boolean | undefined,
+      cropTransform: Transform | undefined,
+      requiresImageDimensions: boolean | undefined,
+    ) =>
+      runJob(() =>
+        downloadAndProcessImage(
+          fileName,
+          destination,
+          imageUrl,
+          needsCropping,
+          cropTransform,
+          requiresImageDimensions,
+          { policy, signal },
+        ),
+      );
     const downloadPromises: Promise<ImageProcessingResult[]>[] = [];
 
     // Separate items by type: image/gif fills vs rendered nodes
@@ -223,9 +286,8 @@ export class FigmaService {
             const fillRef = gifRef ?? imageRef;
             const imageUrl = fillRef ? fillUrls[fillRef] : undefined;
             return imageUrl
-              ? downloadAndProcessImage(
+              ? processImage(
                   fileName,
-                  resolvedPath,
                   imageUrl,
                   needsCropping,
                   cropTransform,
@@ -258,9 +320,8 @@ export class FigmaService {
           .map(({ nodeId, fileName, needsCropping, cropTransform, requiresImageDimensions }) => {
             const imageUrl = pngUrls[nodeId];
             return imageUrl
-              ? downloadAndProcessImage(
+              ? processImage(
                   fileName,
-                  resolvedPath,
                   imageUrl,
                   needsCropping,
                   cropTransform,
@@ -287,9 +348,8 @@ export class FigmaService {
           .map(({ nodeId, fileName, needsCropping, cropTransform, requiresImageDimensions }) => {
             const imageUrl = svgUrls[nodeId];
             return imageUrl
-              ? downloadAndProcessImage(
+              ? processImage(
                   fileName,
-                  resolvedPath,
                   imageUrl,
                   needsCropping,
                   cropTransform,

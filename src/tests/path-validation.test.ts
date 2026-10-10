@@ -10,7 +10,7 @@ vi.mock("~/telemetry/index.js", async (importOriginal) => {
 });
 
 import { downloadFigmaImagesTool } from "~/mcp/tools/download-figma-images-tool.js";
-import { downloadFigmaImage } from "~/utils/download-figma-image.js";
+import { createDiskImageDestination } from "~/utils/image-processing.js";
 import { resolveLocalPath, isWithin } from "~/utils/local-path.js";
 import type { ToolExtra } from "~/mcp/progress.js";
 import * as telemetry from "~/telemetry/index.js";
@@ -257,12 +257,16 @@ describe("resolveLocalPath", () => {
   });
 });
 
-describe("downloadFigmaImage filename validation", () => {
+describe("disk image destination filename validation", () => {
   it("rejects fileName with directory traversal", async () => {
     const localPath = path.join(process.cwd(), "test-images");
 
     await expect(
-      downloadFigmaImage("../../../etc/evil.png", localPath, "https://example.com/img.png"),
+      createDiskImageDestination(localPath).write(
+        "../../../etc/evil.png",
+        Buffer.from(""),
+        "image/png",
+      ),
     ).rejects.toThrow("File path escapes target directory");
   });
 });
