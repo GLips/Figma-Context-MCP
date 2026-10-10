@@ -128,3 +128,18 @@ test("a hyperlink takes the author string or the read form; a NODE link has no a
     /NODE hyperlink .* Figma has no way for a plugin to author one/s,
   );
 });
+
+test("a font the file can't honour still renders, and the handle says what it became", async () => {
+  // The mock offers Inter alone, on the 100-step ladder, so both words below must diverge.
+  const out = await render({ type: "TEXT", text: "Hi", textStyle: { fontFamily: "Roboto", fontWeight: 680 } });
+  assert.deepEqual(
+    (out.warnings ?? []).map((w) => [w.prop, w.authored, w.realized]),
+    [
+      ["textStyle.fontFamily", "Roboto", "Inter"],
+      ["textStyle.fontWeight", 680, "Bold"],
+    ],
+  );
+
+  const exact = await render({ type: "TEXT", text: "Hi", textStyle: { fontFamily: "Inter", fontWeight: "bold" } });
+  assert.equal(exact.warnings, undefined, "a font the file has is no divergence");
+});
