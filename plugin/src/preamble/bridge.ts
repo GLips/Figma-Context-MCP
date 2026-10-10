@@ -39,7 +39,7 @@ import {
 } from "./layout-legality.js";
 import { toFigmaPaint, imagePaintAdjustments } from "./paint.js";
 import { toFigmaEffects } from "./effects.js";
-import { resolveFont, resolveFontStrict, FontMap } from "./fonts.js";
+import { resolveFont, resolveFontStrict, fontDivergences, FontMap } from "./fonts.js";
 import { writeKey, identityOf, isSlotHole, describeNodeIdentity } from "./identity.js";
 import { pixelRound, convertSizing } from "@framelink/core";
 import { MutatingVerbError, NodeBuildError } from "./verb-error.js";
@@ -1040,7 +1040,10 @@ function applyRuns(t: any, runs: NonNullable<WriteNode["runs"]>, ctx: RenderReso
         // changes family, weight, OR slant needs a per-range font — resolved STRICTLY against the exact
         // (family, weight, italic) fonts.ts preloaded.
         if (namesFontIdentity(s)) {
-          t.setRangeFontName(start, end, resolveFontStrict(ctx.fonts, s.fontFamily, s.fontWeight, s.fontStyle === "italic"));
+          const italic = s.fontStyle === "italic";
+          const font = resolveFontStrict(ctx.fonts, s.fontFamily, s.fontWeight, italic);
+          t.setRangeFontName(start, end, font);
+          warnFontDivergences(t, "a run", fontDivergences(s.fontFamily, s.fontWeight, italic, font));
         }
         if (typeof s.fontSize === "number") t.setRangeFontSize(start, end, s.fontSize);
         if (s.lineHeight) t.setRangeLineHeight(start, end, s.lineHeight);
@@ -1061,6 +1064,17 @@ function applyRuns(t: any, runs: NonNullable<WriteNode["runs"]>, ctx: RenderReso
   }
 }
 
+// A substituted family or snapped weight still renders, so it is a warning rather than an error: the
+// agent learns the text is not in the font it wrote, without losing a build over a missing font.
+function warnFontDivergences(t: any, where: string, divergences: ReturnType<typeof fontDivergences>): void {
+  for (const { prop, authored, realized } of divergences) {
+    warnings.add({
+      id: t.id, prop: "textStyle." + prop, authored, realized,
+      message: "No available font matches " + where + "'s " + prop + ", so flcm used the nearest one Figma has.",
+    });
+  }
+}
+
 // The text-word applier both carriers ride — buildText for a fresh node, edit for a live one —
 // so a text style compiled for create and for edit cannot land differently. Presence-only: the
 // base font writes ONLY when the style names a font-identity word (an edit's fontSize nudge must
@@ -1072,7 +1086,9 @@ function applyRuns(t: any, runs: NonNullable<WriteNode["runs"]>, ctx: RenderReso
 export function applyTextProps(t: any, wn: WriteProps, ctx: RenderResources): void {
   const ts = wn.textStyle || {};
   if (namesFontIdentity(ts)) {
-    t.fontName = resolveFont(ctx.fonts, ts.fontFamily, ts.fontWeight, ts.fontStyle === "italic");
+    const italic = ts.fontStyle === "italic";
+    t.fontName = resolveFont(ctx.fonts, ts.fontFamily, ts.fontWeight, italic);
+    warnFontDivergences(t, "the text", fontDivergences(ts.fontFamily, ts.fontWeight, italic, t.fontName));
   }
   if (wn.runs) t.characters = wn.runs.map((r) => r.text).join("");
   else if (wn.text != null) t.characters = String(wn.text);
@@ -1194,8 +1210,8 @@ function buildSvg(wn: WriteNode, markup: string, ctx: RenderCtx): any {
 // Paints: only the vectors, never the containers — painting a <g>'s frame would put a backdrop behind the
 // art instead of recolouring it. A present-but-empty array is the compiled "none", same as applyPaint.
 function themeImportedArt(frame: any, wn: WriteNode, ctx: RenderCtx): void {
-  const fills = wn.fills ? (wn.fills.length ? [paintOf(wn.fills[0], ctx)] : []) : undefined;
-  const strokes = wn.strokes ? (wn.strokes.length ? [paintOf(wn.strokes[0], ctx)] : []) : undefined;
+  const fills = wn.fills ? toFigmaPaintStack(wn.fills, ctx) : undefined;
+  const strokes = wn.strokes ? toFigmaPaintStack(wn.strokes, ctx) : undefined;
   const walk = (node: any): void => {
     if ("constraints" in node) node.constraints = { horizontal: "SCALE", vertical: "SCALE" };
     if (node.type === "VECTOR") {

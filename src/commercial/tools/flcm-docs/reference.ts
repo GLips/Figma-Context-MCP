@@ -46,7 +46,7 @@ import {
   RAW_FIGMA,
   PAGES,
   READS,
-  ANNOTATIONS_REFERENCE,
+  annotationsReference,
   CSS_SUBSET,
   FIDELITY_AND_SCOPE,
   IMAGE_REF_REUSE,
@@ -351,7 +351,7 @@ const SECTIONS: Section[] = [
     blurb: "every prop on every node type, with types",
     body: () =>
       "Props use CSS names and CSS value syntax; the notes say only where flcm differs.\n\n" +
-      "New nodes require type; INSTANCE also requires componentId, and VECTOR requires exactly one of svg or d. " +
+      "New nodes require type; INSTANCE also requires componentId, and VECTOR exactly one geometry prop (see vector art in values). " +
       "An id refers to a live node; type can be omitted for a move. children is an array of plain specs. " +
       "Other omitted props keep live values or use creation defaults. The verb returns the spec copied with ids.\n\n" +
       `${nativeSpellings()}\n\n` +
@@ -366,8 +366,7 @@ const SECTIONS: Section[] = [
       `#### Auto-layout config (the \`layout\` object)\n\n${propTable(FIELD_GROUPS.containerLayout)}\n\n#### Placement under a parent (in the same \`layout\` object)\n\n${propTable(FIELD_GROUPS.childLayout)}\n\n` +
       `### TEXT — text props\n\n${propTable(FIELD_GROUPS.text)}\n\n` +
       "`text` is a string or array of styled runs. `fill` is its paint. " +
-      "`boldWeight` says what `**` in `text` resolves to. A fixed `width` makes it wrap (grows in height); " +
-      "otherwise it grows sideways.\n\n" +
+      "`boldWeight` says what `**` in `text` resolves to. How a text sizes without a fixed `width` is under text width in layout.\n\n" +
       `#### Text style (the \`textStyle\` object)\n\n${propTable(FIELD_GROUPS.textStyle)}\n\n` +
       `#### Unrenderable glyphs\n\n${UNRENDERABLE_GLYPHS}\n\n` +
       `### TEXT — rich text (runs)\n\n${RICH_TEXT}\n\nEach styled run's delta fields:\n\n${propTable(FIELD_GROUPS.run)}\n\n` +
@@ -384,7 +383,8 @@ const SECTIONS: Section[] = [
     id: "annotations",
     title: "Annotations",
     blurb: "reading and writing Figma's native layer annotations",
-    body: () => `${propTable(FIELD_GROUPS.annotation)}\n\n${ANNOTATIONS_REFERENCE}`,
+    body: (channel) =>
+      `${propTable(FIELD_GROUPS.annotation)}\n\n${annotationsReference(channel.commentsHowTo)}`,
   },
   {
     id: "values",
@@ -503,7 +503,7 @@ export function buildQuickStart(channel: DocsChannel): string {
   const verbLines = quickStartVerbLines();
   const quickStart = `Execute JavaScript in Figma with \`flcm\`.
 
-EXECUTION: await/return directly. Only session survives calls: plain-data snapshots, ids as pointers. session.last keeps full plain-data returns, else undefined. Same plugin run, including reconnects/pages; close/file switch clears it. Declarations and flcm are per-call.
+EXECUTION: await/return directly; await every mutation. Not a transaction: each verb commits on its own, so after an error inspect before retrying. Only session survives calls (plain data; ids point at live nodes).
 
 AUTHOR:
   const t = { type:"FRAME", layout:{ mode:"column", gap:16 }, children:[{ type:"TEXT", text:"Hi" }] };

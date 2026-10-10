@@ -268,7 +268,8 @@ test("a predicate-only find fails loud past the materialization cap, naming it",
 });
 
 // Figma can list a node it cannot read: moving inherited slot content out of its instance leaves one
-// that renders while its getters throw "does not exist". One such node must not fail a page search.
+// that renders while its getters throw "does not exist". One such node must not fail a page search
+// or hide its siblings, even though Figma's indexed search disagrees with the child list about it.
 test("find skips nodes Figma lists but cannot read, and names them in a warning", async () => {
   createFigmaMock();
   warnings.discardFrom(0);
@@ -282,6 +283,9 @@ test("find skips nodes Figma lists but cannot read, and names them in a warning"
   const zombieSpec = built.children![1];
   const zombie = await figma.getNodeByIdAsync(zombieSpec.id);
   Object.defineProperty(zombie, "name", { get() { throw new Error("in get_name: The node does not exist"); } });
+  const frame: any = await figma.getNodeByIdAsync(built.id);
+  const indexedSearch = frame.findAllWithCriteria.bind(frame);
+  frame.findAllWithCriteria = (criteria: FindAllCriteria<NodeType[]>) => indexedSearch(criteria).filter((n: SceneNode) => n.id !== zombieSpec.id);
 
   const rects = await find({ type: "RECTANGLE" });
   assert.deepEqual(rects.map((r) => r.key), ["healthy"]);

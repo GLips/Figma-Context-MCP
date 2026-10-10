@@ -480,8 +480,8 @@ export async function findOne(query: FindQuery = {}, predicate?: ReadPredicate):
 
 /**
  * flcm.selection — the user's current selection as SlimHandles (same shape as find). The primary on-ramp
- * for "edit the selected frame/button/text" tasks. Selection lives on the current page, so the index is
- * built over the page; selected nodes are its descendants and read in-context.
+ * for "edit the selected frame/button/text" tasks. Selection lives on the current page, so the page is
+ * read once; selected nodes are its descendants and read in-context.
  */
 export async function selection(): Promise<SlimHandle[]> {
   invalidateSceneAccess();

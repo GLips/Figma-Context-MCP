@@ -6,7 +6,7 @@
 // so we test them directly: each out-of-subset metric must THROW naming the value, never silently coerce.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { length, lineHeight, letterSpacing, parseCssEffects } from "./css.js";
+import { length, lineHeight, letterSpacing, parseCssEffects, parseFill } from "./css.js";
 
 test("length: number and strict Npx pass; out-of-subset units and junk throw", () => {
   assert.equal(length(24), 24);
@@ -55,4 +55,22 @@ test("parseCssEffects: a bare 0 is a length, any other unitless number is not", 
   assert.deepEqual(bare, unit);
   // A unitless NON-zero is not a CSS length — it falls through to the color and fails there.
   assert.throws(() => parseCssEffects({ boxShadow: "0 2 6 rgba(0,0,0,0.18)" }), /box-shadow/);
+});
+
+test("radial-gradient: the heads a read emits parse; anything the head can't carry throws", () => {
+  for (const head of ["circle at 30% 70%", "ellipse at 50% 50%", "circle", "ellipse"]) {
+    assert.doesNotThrow(() => parseFill(`radial-gradient(${head}, #000, #fff)`, "fill"), head);
+  }
+  assert.doesNotThrow(() => parseFill("radial-gradient(#000, #fff)", "fill"));
+  for (const head of [
+    "circle closest-side",
+    "closest-side",
+    "ellipse farthest-corner at 50% 50%",
+    "circle 20px",
+    "40px",
+    "at center",
+    "circle at 10px 20px",
+  ]) {
+    assert.throws(() => parseFill(`radial-gradient(${head}, #000, #fff)`, "fill"), /radial head supports only/, head);
+  }
 });

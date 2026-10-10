@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { FigmaService } from "~/services/figma.js";
-import { getFigmaComments } from "~/services/get-figma-comments.js";
+import { getFigmaComments, type GetFigmaCommentsOptions } from "~/services/get-figma-comments.js";
 import { Logger } from "~/utils/logger.js";
 
 const nodeId = z
@@ -45,6 +45,17 @@ export type GetFigmaCommentsParams = z.input<typeof parametersSchema>;
 
 export type GetFigmaCommentsOutcome = { durationMs: number; error?: unknown };
 
+/** Validates raw params, from the MCP tool or the `comments` CLI command, into the service's arguments. */
+export function parseGetFigmaCommentsParams(params: GetFigmaCommentsParams): {
+  fileKey: string;
+  options: GetFigmaCommentsOptions;
+} {
+  const { fileKey, scope, include, status, since } = parametersSchema.parse(params);
+  const scopeIds =
+    scope === undefined ? undefined : [scope].flat().map((id) => id.replace(/-/g, ":"));
+  return { fileKey, options: { scope: scopeIds, include, status, since } };
+}
+
 async function handleGetFigmaComments(
   params: GetFigmaCommentsParams,
   figmaService: FigmaService,
@@ -52,15 +63,8 @@ async function handleGetFigmaComments(
 ) {
   const startedAt = Date.now();
   try {
-    const { fileKey, scope, include, status, since } = parametersSchema.parse(params);
-    const scopeIds =
-      scope === undefined ? undefined : [scope].flat().map((id) => id.replace(/-/g, ":"));
-    const result = await getFigmaComments(figmaService, fileKey, {
-      scope: scopeIds,
-      include,
-      status,
-      since,
-    });
+    const { fileKey, options } = parseGetFigmaCommentsParams(params);
+    const result = await getFigmaComments(figmaService, fileKey, options);
     onComplete({ durationMs: Date.now() - startedAt });
     return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
   } catch (error) {

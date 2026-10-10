@@ -99,19 +99,20 @@ test("a prior page query does not enlarge a subsequent explicit target lookup", 
   const f = fixture();
   const all = f.api.currentPage.findAll();
   assert.equal(all.length, 4);
-  assert.equal(f.pageCalls, 1);
+  // Pages list native children; only the instance below is indexed.
+  assert.equal(f.pageCalls, 0);
   f.invalidate();
   const [leaf, root] = await Promise.all([
     f.api.getNodeByIdAsync(f.textAlias.id), f.api.getNodeByIdAsync("400:1"),
   ]);
-  assert.equal(f.pageCalls, 1);
+  assert.equal(f.pageCalls, 0);
   assert.equal(leaf, all[2]);
   assert.equal(root, all[0]);
   assert.equal((root as InstanceNode).findAll()[1], leaf);
   f.text.characters = "Raw mutation";
   f.invalidate();
   assert.equal((await f.api.getNodeByIdAsync(f.textAlias.id) as TextNode).characters, "Raw mutation");
-  assert.equal(f.pageCalls, 1);
+  assert.equal(f.pageCalls, 0);
 });
 
 

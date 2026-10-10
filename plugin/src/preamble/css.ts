@@ -265,27 +265,30 @@ function parseLinearGradient(args: string[], raw: string): WritePaint {
   return linearGradient(angle, parseStops(stops, raw));
 }
 
+// A head opening with a shape, a center, an extent keyword or a size is geometry, not a stop. Extents and
+// sizes are listed so they reach the head's own refusal instead of failing as an unparseable color.
+const RADIAL_HEAD_START = /^(circle|ellipse|at|closest-|farthest-|[\d.]+[a-z%])/i;
+// The whole supported head, anchored at both ends: anything it can't consume is refused rather than
+// dropped, since Figma has no extent or explicit radius to carry it.
+const RADIAL_HEAD = /^(circle|ellipse)?\s*(?:at\s+([\d.]+)%\s+([\d.]+)%)?$/i;
+
 function parseRadialGradient(args: string[], raw: string): WritePaint {
   const head = args[0] || "";
-  const hasGeometry = /^(circle|ellipse|at)\b/i.test(head);
-  const isEllipse = hasGeometry && /ellipse/i.test(head);
-  const center = hasGeometry ? radialCenter(head, raw) : { x: 50, y: 50 };
-  const stops = hasGeometry ? args.slice(1) : args;
-  const type: GradientType = isEllipse ? "GRADIENT_DIAMOND" : "GRADIENT_RADIAL"; // read's circle/ellipse mapping
-  return radialGradient(type, center.x, center.y, parseStops(stops, raw));
+  if (!RADIAL_HEAD_START.test(head)) return radialGradient("GRADIENT_RADIAL", 50, 50, parseStops(args, raw));
+  const m = head.match(RADIAL_HEAD);
+  if (!m) {
+    throw badGradient(raw, "the radial head supports only `circle` or `ellipse` and an optional `at X% Y%` center (got '" + head + "'); sizes and extent keywords such as closest-side have no Figma equivalent");
+  }
+  const type: GradientType = /ellipse/i.test(m[1] || "") ? "GRADIENT_DIAMOND" : "GRADIENT_RADIAL"; // read's circle/ellipse mapping
+  const x = m[2] != null ? parseFloat(m[2]) : 50;
+  const y = m[3] != null ? parseFloat(m[3]) : 50;
+  return radialGradient(type, x, y, parseStops(args.slice(1), raw));
 }
 
 function sideAngle(token: string, raw: string): number {
   const side = token.replace(/^to\s+/i, "").trim().toLowerCase();
   if (SIDE_ANGLE[side] == null) throw badGradient(raw, "only `to top|right|bottom|left` are supported (got '" + token + "')");
   return SIDE_ANGLE[side];
-}
-
-function radialCenter(head: string, raw: string): { x: number; y: number } {
-  const at = head.match(/at\s+([\d.]+)%\s+([\d.]+)%/i);
-  if (at) return { x: parseFloat(at[1]), y: parseFloat(at[2]) };
-  if (/\bat\b/i.test(head)) throw badGradient(raw, "radial center must be `at X% Y%` (percentages) in the supported subset");
-  return { x: 50, y: 50 };
 }
 
 // `<color> [<pos>%]` stops. Position is the trailing `N%` token (the color may contain spaces, e.g.

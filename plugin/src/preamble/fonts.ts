@@ -253,6 +253,21 @@ export function resolveFont(fonts: FontMap, family: string | undefined, weight: 
   return fonts[key(family, weight, italic)] || { family: DEFAULT_FAMILY, style: "Regular" };
 }
 
+/** One authored font word the loaded font does not honour, in WarningRecord's prop/authored/realized shape. */
+export interface FontDivergence { prop: "fontFamily" | "fontWeight" | "fontStyle"; authored: string | number; realized: string }
+
+// Where the resolved font departs from what was written: an unavailable family falls back, a weight snaps
+// to the nearest style the family has, an italic the family lacks comes out upright. Only AUTHORED words
+// are compared — an omitted word has no intent to depart from. The realized side is Figma's own label, so
+// a style whose weight the label grammar can't read still shows what was actually bound.
+export function fontDivergences(family: string | undefined, weight: number | string | undefined, italic: boolean, font: { family: string; style: string }): FontDivergence[] {
+  const out: FontDivergence[] = [];
+  if (family && family !== font.family) out.push({ prop: "fontFamily", authored: family, realized: font.family });
+  if (weight != null && styleWeight(font.style) !== wantWeight(weight)) out.push({ prop: "fontWeight", authored: weight, realized: font.style });
+  if (italic && !isItalic(font.style)) out.push({ prop: "fontStyle", authored: "italic", realized: font.style });
+  return out;
+}
+
 // Strict resolve for a rich-text RUN: a run's font MUST have been preloaded (loadFontsForTree collects
 // every run's pair). A miss means the run would otherwise render in the node's base style — the exact
 // silent divergence ADR-0003 forbids — so throw a specific error instead of falling back. render() always
