@@ -1,6 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { getFigmaDataTool } from "./tools/index.js";
-import { FigmaService, type FigmaAuthOptions } from "../services/figma.js";
+import { FigmaService, staticCredentialSource, type FigmaAuthOptions } from "../services/figma.js";
 import { Logger } from "../utils/logger.js";
 import {
   authMode,
@@ -52,7 +52,7 @@ function createServer(
   }: CreateServerOptions,
 ) {
   const server = new McpServer(serverInfo);
-  const figmaService = new FigmaService(authOptions);
+  const figmaService = new FigmaService(staticCredentialSource(authOptions));
   const mode = authMode(authOptions);
 
   const getClientInfo = clientInfoReader(server);

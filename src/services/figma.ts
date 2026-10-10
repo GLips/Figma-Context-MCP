@@ -15,9 +15,13 @@ import {
   type ImageProcessingResult,
 } from "~/utils/image-processing.js";
 import { Logger, writeLogs } from "~/utils/logger.js";
-import { fetchJSON, HttpError } from "~/utils/fetch-json.js";
+import { fetchJSON } from "~/utils/fetch-json.js";
 import { getErrorMeta, tagError } from "~/utils/error-meta.js";
-import { buildForbiddenMessage, buildRateLimitMessage } from "./errors/index.js";
+import {
+  buildForbiddenMessage,
+  buildRateLimitMessage,
+  isCredentialRejection,
+} from "./errors/index.js";
 
 export type FigmaAuthOptions = {
   figmaApiKey: string;
@@ -52,7 +56,7 @@ export type FigmaServiceOptions = {
 };
 
 /** The startup credential as a source: missing credentials fail the call that needed them. */
-function staticCredentialSource({
+export function staticCredentialSource({
   figmaApiKey,
   figmaOAuthToken,
   useOAuth,
@@ -72,23 +76,6 @@ function staticCredentialSource({
   };
 }
 
-/**
- * Whether Figma refused the credential rather than access to the file. A 401 always does; a 403
- * does only when its `err` names the token ("Invalid token", "Token expired") — a 403 for a file
- * the account can't open says nothing about the credential.
- */
-function isCredentialRejection(error: unknown): boolean {
-  const status = getErrorMeta(error).http_status;
-  if (status === 401) return true;
-  if (status !== 403 || !(error instanceof HttpError) || !error.responseBody) return false;
-  try {
-    const { err } = JSON.parse(error.responseBody) as { err?: unknown };
-    return typeof err === "string" && /\btoken\b/i.test(err);
-  } catch {
-    return false;
-  }
-}
-
 type SvgOptions = {
   outlineText: boolean;
   includeId: boolean;
@@ -100,11 +87,8 @@ export class FigmaService {
   private readonly options: FigmaServiceOptions;
   private readonly baseUrl = "https://api.figma.com/v1";
 
-  constructor(
-    credentials: FigmaAuthOptions | FigmaCredentialSource,
-    options: FigmaServiceOptions = {},
-  ) {
-    this.credentials = "resolve" in credentials ? credentials : staticCredentialSource(credentials);
+  constructor(credentials: FigmaCredentialSource, options: FigmaServiceOptions = {}) {
+    this.credentials = credentials;
     this.options = options;
   }
 

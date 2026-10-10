@@ -6,7 +6,7 @@ import {
   requireGlobalCredentials,
   UsageError,
 } from "~/config.js";
-import { FigmaService } from "~/services/figma.js";
+import { FigmaService, staticCredentialSource } from "~/services/figma.js";
 import { parseFigmaUrl } from "~/utils/figma-url.js";
 import { authMode, initTelemetry, captureGetFigmaDataCall, shutdown } from "~/telemetry/index.js";
 import { getFigmaData } from "~/services/get-figma-data.js";
@@ -141,7 +141,7 @@ async function run(
     parseOutputFormat(flags.format, "--format") ?? (flags.json ? "json" : "yaml");
 
   const result = await getFigmaData(
-    new FigmaService(auth),
+    new FigmaService(staticCredentialSource(auth)),
     { fileKey, nodeId, depth: flags.depth },
     outputFormat,
     {

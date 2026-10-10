@@ -1,3 +1,4 @@
+import { getErrorMeta } from "~/utils/error-meta.js";
 import { HttpError } from "~/utils/fetch-json.js";
 import { proxyMode, type ProxyMode } from "~/utils/proxy-env.js";
 
@@ -39,6 +40,7 @@ const PROXY_HINTS: Record<ProxyMode, string | undefined> = {
  * verbatim when we have it and list the common causes it could map to —
  * rather than string-matching here (fragile as Figma's wording drifts) or
  * dumping only a canned list (which is often generic for the specific case).
+ * `isCredentialRejection` below is the one place that does match `err`.
  * Full per-error resolution steps live in the docs so they can be updated
  * without a release.
  */
@@ -61,4 +63,23 @@ export function buildForbiddenMessage(endpoint: string, error: unknown): string 
   ];
 
   return sections.map((section) => section.join("\n")).join("\n\n");
+}
+
+/**
+ * Whether Figma refused the credential itself rather than access to a file: a 401, or a 403 whose
+ * `err` names the token ("Invalid token", "Token expired"). The one deliberate match on Figma's
+ * `err` wording, accepted because a miss is cheap in both directions: a false positive costs a
+ * host one credential refetch; a false negative keeps a dead cached credential until its TTL.
+ * `responseBody` is Figma's short JSON verbatim — whitespace-collapsed, far under the quote cap.
+ */
+export function isCredentialRejection(error: unknown): boolean {
+  const status = getErrorMeta(error).http_status;
+  if (status === 401) return true;
+  if (status !== 403 || !(error instanceof HttpError) || !error.responseBody) return false;
+  try {
+    const { err } = JSON.parse(error.responseBody) as { err?: unknown };
+    return typeof err === "string" && /\btoken\b/i.test(err);
+  } catch {
+    return false;
+  }
 }
