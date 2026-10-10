@@ -1,0 +1,15 @@
+{
+  // Copied into the scratch consumer by check-read-entry.mjs. No skipLibCheck: the installed
+  // declarations themselves are what's under test. DOM because the MCP SDK's own declarations
+  // name DOM types (HeadersInit).
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "types": ["node"],
+    "strict": true,
+    "outDir": "out"
+  },
+  "files": ["consumer.ts"]
+}
