@@ -42,9 +42,7 @@ const sharedParameters = {
           /^[a-zA-Z0-9_.-]+\.(png|svg|gif)$/,
           "File names must contain only letters, numbers, underscores, dots, or hyphens, and end with .png, .svg, or .gif.",
         )
-        .describe(
-          "The local name for saving the fetched file, including extension. png, svg, or gif.",
-        ),
+        .describe("The file name for the fetched image, including extension. png, svg, or gif."),
       needsCropping: z
         .boolean()
         .optional()
