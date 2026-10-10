@@ -104,7 +104,7 @@ function captureReadToolOutcome(outcome: ReadToolOutcome, context: ToolCallConte
   }
 }
 
-export function clientInfoReader(server: McpServer): () => ClientInfo | undefined {
+function clientInfoReader(server: McpServer): () => ClientInfo | undefined {
   return () => {
     const info = server.server.getClientVersion();
     if (!info) return undefined;

@@ -5,7 +5,6 @@
 import type { RegisteredTool } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { PluginBridgeRuntime } from "~/commercial/plugin-bridge/index.js";
 import { getErrorMeta } from "~/utils/error-meta.js";
-import type { ServerTransport } from "~/mcp/index.js";
 
 // The plugin route into get_figma_data's canonical read shape: flcm.get, run through
 // figma_execute_code, produces the same simplified output as REST (CI-gated by src/tests/parity/).
@@ -40,7 +39,7 @@ function describeGetFigmaDataForPlugin(baseDescription: string, paired: boolean)
 export function advertisePluginReadRoute(
   tool: RegisteredTool,
   runtime: PluginBridgeRuntime,
-  { baseDescription, transport }: { baseDescription: string; transport: ServerTransport },
+  { baseDescription, transport }: { baseDescription: string; transport: "stdio" | "http" },
 ): void {
   const paired = isPluginPaired(runtime);
   tool.update({ description: describeGetFigmaDataForPlugin(baseDescription, paired) });

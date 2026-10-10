@@ -5,6 +5,7 @@ import { Server } from "http";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ProxyAgent, EnvHttpProxyAgent, setGlobalDispatcher } from "undici";
 import { enableLogging, Logger } from "./utils/logger.js";
+import { withRequestSecrets } from "./utils/request-secrets.js";
 import { hasProxyEnv, setProxyMode } from "./utils/proxy-env.js";
 import { createServer, type CreateServerOptions } from "./mcp/index.js";
 import { startPluginBridge } from "./commercial/plugin-bridge/index.js";
@@ -172,7 +173,7 @@ export async function startHttpServer(
 
     // Request-level credentials are not known to telemetry's init-time
     // redaction list, so make them available only for this request scope.
-    await telemetry.withRequestSecrets(requestSecrets, async () => {
+    await withRequestSecrets(requestSecrets, async () => {
       const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
       const mcpServer = createServer(auth, { ...serverOptions, transport: "http" });
       const conn: ActiveConnection = { transport, server: mcpServer };
