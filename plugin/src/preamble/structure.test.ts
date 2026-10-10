@@ -338,9 +338,8 @@ test("clone duplicates an INSTANCE-bearing subtree and strips every flcm/key fro
   const tray = await render({ type: "FRAME", key: "tray", width: 300, height: 300 });
 
   const copied = await clone("card", "tray");
-  const copy = await figma.getNodeByIdAsync(copied.node.id);
+  const copy = await figma.getNodeByIdAsync(copied.id);
   assert.equal(copy.parent.id, specNode(tray, "tray").id);
-  assert.equal(copied.to.id, specNode(tray, "tray").id);
   // Faithful: the same children in the same order, the instance still an instance of the same main.
   assert.deepEqual(
     copy.children.map((c) => c.type),
@@ -399,9 +398,8 @@ test("clone with no parent lands the copy on the original's own coordinates", as
     children: [{ type: "RECTANGLE", key: "chip", width: 40, height: 40, left: 30, top: 50 }],
   });
   const copied = await clone("chip");
-  const copy = await figma.getNodeByIdAsync(copied.node.id);
+  const copy = await figma.getNodeByIdAsync(copied.id);
   assert.equal(copy.parent.id, specNode(out, "board").id); // no parent named ⇒ the original's own
-  assert.equal(copied.to.id, specNode(out, "board").id);
   // Faithful means faithful: in a free-form parent the copy sits exactly on top of the original.
   assert.deepEqual([copy.x, copy.y], [30, 50]);
 });
@@ -440,7 +438,7 @@ test("clone root overrides fix geometry before destination fill settlement and a
     { width: 70, height: 40, fill: "#00ff00", opacity: 0.5 },
     "destination",
   );
-  const copy = await figma.getNodeByIdAsync(out.node.id);
+  const copy = await figma.getNodeByIdAsync(out.id);
   assert.equal(copy.width, 70);
   assert.equal(copy.height, 40);
   assert.equal(copy.layoutGrow, 0);

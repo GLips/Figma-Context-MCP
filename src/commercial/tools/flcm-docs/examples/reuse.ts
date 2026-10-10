@@ -16,7 +16,7 @@ export async function reuseExample(flcm: Flcm) {
     children: (node.children ?? []).map(({ id }) => ({ id })),
   });
   // clone copies, carrying live state a spec can't express.
-  const { node: copy } = await flcm.clone(moved, "sidebar");
+  const copy = await flcm.clone(moved, "sidebar");
   return { moved, row, copy };
   // example:end
 }

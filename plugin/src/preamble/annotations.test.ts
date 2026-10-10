@@ -159,8 +159,8 @@ test("data copies and clone retain annotations throughout the subtree", async ()
   assert.deepEqual((await get(rebuilt)).node.annotations, (await get(out)).node.annotations);
   assert.equal((await find({ within: rebuilt, hasAnnotations: true })).length, 1);
   const copied = await clone(out);
-  assert.deepEqual((await get(copied.node)).node.annotations, (await get(out)).node.annotations);
-  assert.equal((await find({ within: copied.node, hasAnnotations: true })).length, 1);
+  assert.deepEqual((await get(copied)).node.annotations, (await get(out)).node.annotations);
+  assert.equal((await find({ within: copied, hasAnnotations: true })).length, 1);
 });
 
 test("an instance inherits none of its component's notes; cloning the instance keeps its own", async () => {
@@ -190,8 +190,8 @@ test("an instance inherits none of its component's notes; cloning the instance k
   assert.deepEqual((await get(stamped)).node.annotations, [{ text: "Wire this one up" }]);
   assert.deepEqual(await find({ within: stamped, hasAnnotations: true }), []);
   const copied = await clone(stamped);
-  assert.deepEqual((await get(copied.node)).node.annotations, [{ text: "Wire this one up" }]);
-  assert.deepEqual(await find({ within: copied.node, hasAnnotations: true }), []);
+  assert.deepEqual((await get(copied)).node.annotations, [{ text: "Wire this one up" }]);
+  assert.deepEqual(await find({ within: copied, hasAnnotations: true }), []);
 });
 
 test("the documented node matrix admits polygon, star and SLOT but refuses group and section", async () => {

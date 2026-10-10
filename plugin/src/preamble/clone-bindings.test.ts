@@ -39,7 +39,7 @@ for (const context of ["same-set", "standalone", "different-set"]) {
       destination.addComponentProperty("Same", "TEXT", "Unrelated");
     }
     const result = await clone(id(source.id), id(destination.id));
-    const copy = await figma.getNodeByIdAsync(result.node.id);
+    const copy = await figma.getNodeByIdAsync(result.id);
     const owner = context === "standalone" ? copy : destination;
     const refs = copy.children.map(n => n.componentPropertyReferences);
     assert.notEqual(refs[0].characters, refs[1].visible);
@@ -75,7 +75,7 @@ test("nested component owners retain independent controls and instance-swap refe
   const a = figma.createComponent(); const b = figma.createComponent(); figma.currentPage.appendChild(a); figma.currentPage.appendChild(b);
   const nested = a.createInstance(); outer.appendChild(nested);
   const swapId = outer.addComponentProperty("Choice", "INSTANCE_SWAP", a.id); nested.componentPropertyReferences = { mainComponent: swapId };
-  const copied = await clone(id(outer.id)); const root = await figma.getNodeByIdAsync(copied.node.id);
+  const copied = await clone(id(outer.id)); const root = await figma.getNodeByIdAsync(copied.id);
   const copiedInner = root.children[0]; const copiedLabelId = copiedInner.children[0].componentPropertyReferences.characters;
   const innerInstance = copiedInner.createInstance(); innerInstance.setProperties({ [copiedLabelId]: "Independent" });
   assert.equal(innerInstance.children[0].characters, "Independent");
@@ -94,7 +94,7 @@ test("same-set restoration does not reread definitions while the duplicate varia
     return definitions;
   } });
   const result = await clone(id(source.id), id(set.id));
-  const copy = await figma.getNodeByIdAsync(result.node.id);
+  const copy = await figma.getNodeByIdAsync(result.id);
   assert.deepEqual(copy.children.map(n => n.componentPropertyReferences), source.children.map(n => n.componentPropertyReferences));
 });
 
@@ -122,7 +122,7 @@ for (const preservesIdentity of [true, false]) test("native collision-adjusted b
     return;
   }
   const result = await clone(id(source.id), id(destination.id));
-  const copy = await figma.getNodeByIdAsync(result.node.id);
+  const copy = await figma.getNodeByIdAsync(result.id);
   assert.ok(copy.children.every(n => Object.values(n.componentPropertyReferences).every((value: any) => value.includes("#display2#"))));
 });
 

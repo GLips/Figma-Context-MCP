@@ -627,6 +627,12 @@ All are settled scope per REMAINING §2.
 
 ### A-42. `measure` has no page coordinates; `clone`'s return shape differs from its siblings ⚪
 
+**Verdict (Graham, 2026-10-09): approve the clone fix; drop page coordinates.**
+
+- `flcm.clone` returns the copy's handle, the same shape `edit` returns, so `(await flcm.clone(...)).id` works like every other verb. Delete `CloneResult` and its `to` field. `remove` keeps `{ removedId, from }`: a deleted node shouldn't look like a usable handle.
+- No `pageX`/`pageY`. Overlays belong in the closest container, where parent-relative x/y already work, and review notes have Figma annotations.
+- Correct `measure`'s docs: x/y are relative to the containing frame or page, not the immediate parent. GROUP and BOOLEAN_OPERATION parents are skipped.
+
 **Status:** partly.
 
 - `measure`'s frame of reference and `clone`'s `{ node, to? }` are now both stated in the verbs rows (`flcm.md:99,109`).

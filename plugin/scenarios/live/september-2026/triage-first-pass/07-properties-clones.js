@@ -55,7 +55,7 @@ try {
   const rawClone = boundNode.clone(); place(rawClone, 590, 30);
   const dialectClone = await capture("flcm.clone bound component", () => flcm.clone(flcm.id(boundNode.id), flcm.id(board.id)));
   const cloneObservation = { item: 9, original: bindingBefore, rawClone: bindings(rawClone), dialectClone };
-  if (dialectClone.outcome === "returned") { const node = await live(dialectClone.value.node.id); place(node, 860, 30); cloneObservation.flcmCloneBindings = bindings(node); }
+  if (dialectClone.outcome === "returned") { const node = await live(dialectClone.value.id); place(node, 860, 30); cloneObservation.flcmCloneBindings = bindings(node); }
   report.observations.push(cloneObservation);
   const rich = await flcm.component(flcm.frame({ name: "Rich price", width: 360, height: 100, fill: "#F1F5F9" }, [
     flcm.text([["$49.99", { fontSize: 24 }], ["  $149.99", { fontSize: 14, textDecoration: "line-through" }]], { key: "price", name: "Price", left: 10, top: 10 }),

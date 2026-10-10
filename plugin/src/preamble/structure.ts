@@ -29,7 +29,7 @@ import type { NodeSpec, AuthoredTree } from "./schema.js";
 // (entry seal / success commit / commit-then-undo rollback) is the lock's — each verb is a single
 // enterMutatingVerb expression, so its queue slot is reserved before it can yield.
 
-import { WriteNode, WriteLayout, Target, Handle, CloneResult, RemoveResult } from "./ir.js";
+import { WriteNode, WriteLayout, Target, Handle, RemoveResult } from "./ir.js";
 import { resolveTarget } from "./read.js";
 import { assertNodeStillOnCanvas, LoadedPages, createLoadedPages, loadPageForWrite, assertPageLoaded } from "./freshness.js";
 import { enterMutatingVerb, compensatedMutationFailure } from "./mutation-lock.js";
@@ -313,9 +313,9 @@ export function remove(target: Target): Promise<RemoveResult> {
  * the original's exact coordinates — directly on top of it. That's the faithful-duplicate contract,
  * not an oversight: `edit` the copy's left/top to separate them.
  */
-export function clone(target: Target, parent?: Target): Promise<CloneResult>;
-export function clone(target: Target, props: EditDelta, parent?: Target): Promise<CloneResult>;
-export function clone(target: Target, propsOrParent?: EditDelta | Target, parent?: Target): Promise<CloneResult> {
+export function clone(target: Target, parent?: Target): Promise<Handle>;
+export function clone(target: Target, props: EditDelta, parent?: Target): Promise<Handle>;
+export function clone(target: Target, propsOrParent?: EditDelta | Target, parent?: Target): Promise<Handle> {
   const isDestination = typeof propsOrParent === "string" || !!propsOrParent && typeof propsOrParent === "object" && isTargetShaped(propsOrParent);
   const props = isDestination ? undefined : propsOrParent as EditDelta | undefined;
   const destination = isDestination ? propsOrParent as Target : parent;
@@ -371,7 +371,7 @@ export function clone(target: Target, propsOrParent?: EditDelta | Target, parent
           settleEditPlanSizes(fail, plan);
           settleEditPlanPositions(fail, plan);
         }
-        return { node: mintHandle(copy), to: containerHandle(dest.parent) };
+        return mintHandle(copy);
       } catch (cause) {
         if (!copy) throw cause;
         try { removeFailedClone(copy, created); }
@@ -389,7 +389,7 @@ function compileCloneProps(node: any, props: EditDelta) {
   return plan;
 }
 
-/** Numeric geometry relative to the immediate parent, including the page. */
+/** Numeric geometry in Figma's x/y frame: the containing frame or page, which skips GROUP and BOOLEAN_OPERATION parents. */
 export async function measure(target: Target): Promise<{ x: number; y: number; width: number; height: number; warnings?: WarningRecord[] }> {
   const node: any = await resolveTarget(target);
   assertNodeStillOnCanvas(node, "flcm.measure");

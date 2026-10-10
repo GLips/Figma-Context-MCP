@@ -150,7 +150,7 @@ const row = await flcm.append(moved, {
     children: (node.children ?? []).map(({ id }) => ({ id })),
 });
 // clone copies, carrying live state a spec can't express.
-const { node: copy } = await flcm.clone(moved, "sidebar");
+const copy = await flcm.clone(moved, "sidebar");
 return { moved, row, copy };`,
   makeComponent: `// Author a Button, then fold two sizes of it into a variant set. Each node a property drives says
 // so with \`componentPropertyReferences\`.

@@ -109,7 +109,7 @@ async function setup() {
     const result = await flcm.render(flcm.instance(host.node.id, { name, left: x, top: y,
       overrides: { [paths.source]: { children }, [paths.destination]: { children: [] } },
     }));
-    const node = await nodeById(result.node.id, "INSTANCE");
+    const node = await nodeById(result.id, "INSTANCE");
     requireFixture(node.children.length === 2, "Host must expose exactly two children");
     const source = node.children[0];
     const destination = node.children[1];
@@ -168,7 +168,7 @@ try {
   report.observations.push(rawCopy);
   const hostCopy = await capture("flcm host clone", async () => {
     const result = await flcm.clone(flcm.id(resident.node.id));
-    const copy = await nodeById(result.node.id, "INSTANCE");
+    const copy = await nodeById(result.id, "INSTANCE");
     screenshot("host-clone", copy, "Compare intact host, slot bounds and wrapped grid with live-host; placement is the only intended visual difference.");
     copy.name = "Clone geometry / enclosing host copy"; copy.x = 1500; copy.y = 0;
     return { id: copy.id, immediate: await inspect(copy, 16) };

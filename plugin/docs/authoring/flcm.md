@@ -180,7 +180,7 @@ Warnings on nodes you neither returned nor logged appear as `[warn]` lines in th
 | `await flcm.insertAfter(sibling, spec)` | the spec copied with ids on every node | Place immediately after the sibling. |
 | `await flcm.replace(target, spec)` | the spec copied with ids on every node | Place in the target position, then remove the target. New roots inherit omitted placement and size; explicit props win. |
 | `await flcm.remove(target)` | { removedId, from? } | Delete the node and subtree. from is the former parent handle, absent for pages. |
-| `await flcm.clone(target, props?, parent?)` | { node, to? } | Faithful live copy, with optional root edits and destination. Keys are cleared. Default destination is the original parent. |
+| `await flcm.clone(target, props?, parent?)` | the copy's handle | Faithful live copy, with optional root edits and destination. Keys are cleared. Default destination is the original parent. |
 | `await flcm.component(specOrTarget, options?)` | the spec copied with ids and root type COMPONENT | Promote a FRAME to a COMPONENT. A live root stays in place; a new root lands on the current page. The returned root id is the component id. options declares name, description and propertyDefinitions. |
 | `await flcm.variants(entries, options)` | a COMPONENT_SET handle | Each entry is { component: target, variant: { axis: value } }. options names the set. |
 | `await flcm.detach(target)` | a FRAME handle | Detach an instance. Root and descendant ids change. |
@@ -190,7 +190,7 @@ Warnings on nodes you neither returned nor logged appear as `[warn]` lines in th
 | `await flcm.find(query?, predicate?)` | slim handles[] | Query fields: type, name, key, within, hasAnnotations. Optional predicate sees expanded read data. |
 | `await flcm.findOne(query?, predicate?)` | one slim handle | Like find; throws unless exactly one matches. |
 | `await flcm.selection()` | slim handles[] | The current selection. |
-| `await flcm.measure(target)` | { x, y, width, height } | Measured pixels relative to the immediate parent. |
+| `await flcm.measure(target)` | { x, y, width, height } | Measured pixels; x/y are relative to the containing frame or page, so a group's children measure from the frame around the group. |
 | `flcm.gradient(sugar)` | a paint value | { type: linear or radial, stops, angle?, at? }. Also accepts (type, stops, angle?). |
 | `flcm.image(url, options?)` | a paint value | Raster fill. Options: scaleMode, placeholder, opacity, rotation, filters, blendMode. Bytes are fetched through the host at the mutation verb. |
 | `flcm.effects(sugar)` | effect values[] | CSS and Figma effect values for an effects prop. |
@@ -227,7 +227,7 @@ Placement is one undo step. Malformed input and unresolved resources fail before
 
 Unmentioned children are retained. remove explicitly deletes a node and its subtree. replace places a spec at a target's position and removes the original after placement succeeds. A new replacement inherits omitted placement and size; explicit props win. Replacing a node with its own id edits it without deleting it.
 
-clone duplicates the live subtree faithfully and clears its keys. It returns { node, to? }; the default destination is the source parent. Optional root props apply before returning the copy.
+clone duplicates the live subtree faithfully and clears its keys. It returns the copy's handle; the default destination is the source parent. Optional root props apply before returning the copy.
 
 ### Pages
 
@@ -1061,7 +1061,7 @@ const row = await flcm.append(moved, {
     children: (node.children ?? []).map(({ id }) => ({ id })),
 });
 // clone copies, carrying live state a spec can't express.
-const { node: copy } = await flcm.clone(moved, "sidebar");
+const copy = await flcm.clone(moved, "sidebar");
 return { moved, row, copy };
 ```
 

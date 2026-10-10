@@ -30,7 +30,7 @@ import { INPUT_ALIASES } from "./input-aliases.js";
 export { INPUT_ALIASES };
 import type {
   FillInput, WriteCssEffects, WritePaint, WriteEffect, GradientStop, WriteNode, WriteChild, Handle,
-  PinX, PinY, Target, RawIdRef, SlimHandle, FindQuery, ReadPredicate, CloneResult, RemoveResult, GetResult,
+  PinX, PinY, Target, RawIdRef, SlimHandle, FindQuery, ReadPredicate, RemoveResult, GetResult,
   PageInfo, ComponentPropertyInput, OverrideDeltaInput, ComponentPropertyDefinitions, VariantEntryInput,
   ComponentPropertyDefinitionEdits, ComponentPropertyBindingEdit,
 } from "./ir.js";
@@ -806,8 +806,8 @@ export interface Flcm {
   // A faithful live duplicate — the copy path for subtrees a rebuild can't reproduce (anything
   // outside the authoring vocabulary). Lands at the end of `parent`, beside the original when omitted, and comes
   // back key-less: a raw node.clone() would copy the flcm/key and mint a duplicate address.
-  clone(target: Target, parent?: Target): Promise<CloneResult>;
-  clone(target: Target, props: CloneProps, parent?: Target): Promise<CloneResult>;
+  clone(target: Target, parent?: Target): Promise<Handle>;
+  clone(target: Target, props: CloneProps, parent?: Target): Promise<Handle>;
   measure(target: Target): Promise<{ x: number; y: number; width: number; height: number; warnings?: WarningRecord[] }>;
   replace(target: Target, replacement: NodeSpec): Promise<AuthoredTree>;
   // Complete runtime tree, including hidden and inherited children, plus component definitions.
@@ -865,7 +865,7 @@ export const VERBS: VerbDoc[] = [
   {"category": "structure", "signature": "await flcm.insertAfter(sibling, spec)", "builds": "the spec copied with ids on every node", "args": "Place immediately after the sibling."},
   {"category": "structure", "signature": "await flcm.replace(target, spec)", "builds": "the spec copied with ids on every node", "args": "Place in the target position, then remove the target. New roots inherit omitted placement and size; explicit props win."},
   {"category": "structure", "signature": "await flcm.remove(target)", "builds": "{ removedId, from? }", "args": "Delete the node and subtree. from is the former parent handle, absent for pages."},
-  {"category": "structure", "signature": "await flcm.clone(target, props?, parent?)", "builds": "{ node, to? }", "args": "Faithful live copy, with optional root edits and destination. Keys are cleared. Default destination is the original parent."},
+  {"category": "structure", "signature": "await flcm.clone(target, props?, parent?)", "builds": "the copy's handle", "args": "Faithful live copy, with optional root edits and destination. Keys are cleared. Default destination is the original parent."},
   {"category": "component", "signature": "await flcm.component(specOrTarget, options?)", "builds": "the spec copied with ids and root type COMPONENT", "args": "Promote a FRAME to a COMPONENT. A live root stays in place; a new root lands on the current page. The returned root id is the component id. options declares name, description and propertyDefinitions."},
   {"category": "component", "signature": "await flcm.variants(entries, options)", "builds": "a COMPONENT_SET handle", "args": "Each entry is { component: target, variant: { axis: value } }. options names the set."},
   {"category": "component", "signature": "await flcm.detach(target)", "builds": "a FRAME handle", "args": "Detach an instance. Root and descendant ids change."},
@@ -875,7 +875,7 @@ export const VERBS: VerbDoc[] = [
   {"category": "read", "signature": "await flcm.find(query?, predicate?)", "builds": "slim handles[]", "args": "Query fields: type, name, key, within, hasAnnotations. Optional predicate sees expanded read data."},
   {"category": "read", "signature": "await flcm.findOne(query?, predicate?)", "builds": "one slim handle", "args": "Like find; throws unless exactly one matches."},
   {"category": "read", "signature": "await flcm.selection()", "builds": "slim handles[]", "args": "The current selection."},
-  {"category": "read", "signature": "await flcm.measure(target)", "builds": "{ x, y, width, height }", "args": "Measured pixels relative to the immediate parent."},
+  {"category": "read", "signature": "await flcm.measure(target)", "builds": "{ x, y, width, height }", "args": "Measured pixels; x/y are relative to the containing frame or page, so a group's children measure from the frame around the group."},
   {"category": "value", "signature": "flcm.gradient(sugar)", "builds": "a paint value", "args": "{ type: linear or radial, stops, angle?, at? }. Also accepts (type, stops, angle?)."},
   {"category": "value", "signature": "flcm.image(url, options?)", "builds": "a paint value", "args": "Raster fill. Options: scaleMode, placeholder, opacity, rotation, filters, blendMode. Bytes are fetched through the host at the mutation verb."},
   {"category": "value", "signature": "flcm.effects(sugar)", "builds": "effect values[]", "args": "CSS and Figma effect values for an effects prop."},

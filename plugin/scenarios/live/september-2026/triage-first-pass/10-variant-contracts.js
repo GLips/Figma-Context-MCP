@@ -47,7 +47,7 @@ try {
   const rawOut = baseNode.clone(); place(rawOut, 20, 260);
   const clone = await capture("flcm.clone variant to board", () => flcm.clone(flcm.id(baseNode.id), flcm.id(board.id)));
   const observation = { item: 9, original, rawCloneBeforeExplicitReparent: rawSameRefs, rawMovedOut: refs(rawOut), dialectClone: clone };
-  if (clone.outcome === "returned") { const node = await live(clone.value.node.id); place(node, 260, 260); observation.flcmMovedOut = refs(node); }
+  if (clone.outcome === "returned") { const node = await live(clone.value.id); place(node, 260, 260); observation.flcmMovedOut = refs(node); }
   report.observations.push(observation);
   const fresh = await flcm.component(flcm.frame({ width: 200, height: 90 }, [flcm.text("New member")]), { name: "Fixture / new member" });
   place(await live(fresh.node.id), 500, 260);

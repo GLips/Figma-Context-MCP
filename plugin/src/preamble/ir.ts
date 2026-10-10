@@ -593,8 +593,6 @@ export interface SlimHandle extends Identity {
   childCount?: number;
 }
 
-export interface CloneResult { node: Handle; to?: Handle }
-
 // What `get` hands back. An ENVELOPE rather than a bare node because `components` is keyed by
 // component id and is RESPONSE data, not node data: a component's children are the same bytes for
 // every instance of it, so they are emitted here once and each INSTANCE carries only its

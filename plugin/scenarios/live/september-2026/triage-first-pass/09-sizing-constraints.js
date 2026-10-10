@@ -62,7 +62,7 @@ try {
   const cloned = await capture("flcm.clone to staging", () => flcm.clone(flcm.id(fillNode.id), flcm.id(staging.node.id)));
   const cloneObs = { item: 8, before: await snapshot(fillNode), operation: cloned };
   if (cloned.outcome === "returned") {
-    const node = await live(cloned.value.node.id); cloneObs.after = await snapshot(node);
+    const node = await live(cloned.value.id); cloneObs.after = await snapshot(node);
     cloneObs.explicitSize = await capture("edit height 100", () => flcm.edit(flcm.id(node.id), { height: 100 }));
     cloneObs.afterExplicitSize = await snapshot(node);
   }

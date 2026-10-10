@@ -409,7 +409,7 @@ export const STRUCTURE_RULES = `Placement is one undo step. Malformed input and 
 
 Unmentioned children are retained. remove explicitly deletes a node and its subtree. replace places a spec at a target's position and removes the original after placement succeeds. A new replacement inherits omitted placement and size; explicit props win. Replacing a node with its own id edits it without deleting it.
 
-clone duplicates the live subtree faithfully and clears its keys. It returns { node, to? }; the default destination is the source parent. Optional root props apply before returning the copy.`;
+clone duplicates the live subtree faithfully and clears its keys. It returns the copy's handle; the default destination is the source parent. Optional root props apply before returning the copy.`;
 
 export const COMPONENTS_CREATE = `\`await flcm.component(specOrTarget, options?)\` promotes a FRAME to a COMPONENT. A new spec is placed on the current page; a live root stays where it is and receives the named edits and children before promotion. The return is the spec copied with ids, with type COMPONENT and the new component id at the root. Figma preserves child identity during promotion. Save the returned component in session; the replaced FRAME root id no longer resolves.
 
