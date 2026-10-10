@@ -17,7 +17,12 @@ import type { ServerTransport } from "~/mcp/index.js";
 import type { FigmaService } from "~/services/figma.js";
 import { registerFailLoudTool, retryableToolReply } from "~/mcp/fail-loud-params.js";
 import { referenceSessionGuidance } from "./flcm-docs/session-guidance.js";
-import { buildQuickStart, buildReferenceSections, SECTION_IDS } from "./flcm-docs/reference.js";
+import {
+  buildQuickStart,
+  buildReferenceMenu,
+  buildReferenceSections,
+  SECTION_IDS,
+} from "./flcm-docs/reference.js";
 import { MCP_DOCS_CHANNEL } from "./flcm-docs/channels.js";
 
 // The figma_execute_code description is the GENERATED quick-start (buildQuickStart), assembled from
@@ -142,9 +147,7 @@ export function registerCodeModeTools(
         description:
           "Full authoring reference for the `flcm` DSL used in figma_execute_code. Requires an array of " +
           'section ids (deduped, served in canonical order); start with ["mental-model"], which carries the ' +
-          "identity, copying and session rules the rest assumes. Sections: " +
-          SECTION_IDS.join(", ") +
-          ".",
+          "identity, copying and session rules the rest assumes.",
         inputSchema: {
           // Optional at the wire so a blank call reaches the handler and gets the section menu back. A
           // required zod field would make the SDK answer with its own fixed "Input validation error",
@@ -152,8 +155,10 @@ export function registerCodeModeTools(
           sections: z
             .array(z.enum(SECTION_IDS))
             .optional()
+            // The menu lives here, always in context, because a successful call never returns it.
             .describe(
-              'Required. Which sections to return, e.g. ["mental-model","props"]. The whole reference does not fit one response, so ask for the sections you need; a call naming none is refused with the list of ids.',
+              'Required. Which sections to return, e.g. ["mental-model","props"]. The whole reference does not fit one response, so ask for the sections you need:\n' +
+                buildReferenceMenu(),
             ),
         },
       },
