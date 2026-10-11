@@ -35,6 +35,11 @@ with a stand-in `FlcmHost`, hand the resulting `flcm` to the scenario. So a gree
 - **Shapes**: `createEllipse` / `createLine` / `createPolygon` / `createStar` with intrinsic default
   sizes; **richer fills** (gradient paints with computed `gradientTransform`, image paints via
   `createImage` / `base64Decode`); **effects** (`shadow`/`blur` → effects array); `clipsContent`.
+- **Tokens**, seeded with `seedVariables` / `seedStyle`: local variables and collections (modes,
+  aliases), `setBoundVariable` / `setRangeBoundVariable` / `setBoundVariableForPaint` and the
+  `boundVariables` they produce; paint, effect and text styles with `set*StyleIdAsync`, the style id
+  getters, and a literal fills/strokes/effects write detaching the style. The sync style-id setters
+  throw for a seeded style, as they do live under dynamic-page.
 
 ## What it does NOT model (live check still required for these)
 
@@ -47,6 +52,9 @@ with a stand-in `FlcmHost`, hand the resulting `flcm` to the scenario. So a gree
   live node behaves differently live — verify that behavior with the plugin.
 - **Real component-property / variant features** (`addComponentProperty`, `componentPropertyDefinitions`,
   variant sets), constraints, effects rendering.
+- **Token edges**: library (remote) variables and styles, mode switching on a node
+  (`setExplicitVariableModeForCollection`), and whether a literal write to a bound NODE field (width,
+  padding, …) detaches it live — the mock keeps the binding; flcm unbinds before a literal write.
 - **Timing / backend behavior** — the live `getNodeByIdAsync` backend-fetch flakiness, font load
   latency, etc. The mock resolves everything instantly and locally.
 

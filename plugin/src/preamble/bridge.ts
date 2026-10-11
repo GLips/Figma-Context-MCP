@@ -31,7 +31,9 @@ import { warnBackgroundBlurWithoutFill } from "./background-blur-diagnostics.js"
 // noise without safety.
 
 import { applyAnnotations } from "./annotation-categories.js";
-import { WriteType, WriteNode, WriteProps, WriteLayout, TextAlign, TextDecoration, Sizing, Identity, Handle, WritePaint, WritePaintStack, WriteImage, WriteImageUrl, ComponentPropertyBinding, CornerRadii, Edges, namesFontIdentity } from "./ir.js";
+import { WriteType, WriteNode, WriteProps, WriteLayout, TextAlign, TextDecoration, Sizing, Identity, Handle, WritePaint, WritePaintStack, WriteImage, WriteImageUrl, ComponentPropertyBinding, CornerRadii, Edges, Bindable, VariableRef, namesFontIdentity, isTokenRef } from "./ir.js";
+import { writeBindable, unbindField, variableFor, variableLiteral, styleFor, type ResolvedTokens } from "./tokens.js";
+import { queueStyleWrite } from "./mutation-lock.js";
 import { own } from "./validate.js";
 import {
   assertLayoutRealizableForType, assertGridSizing, assertPercentResolvable, assertSizingResolvesAgainstParentFrame, foldDesignedSizeForPage, ParentFlowFacts,
@@ -39,7 +41,7 @@ import {
 } from "./layout-legality.js";
 import { toFigmaPaint, imagePaintAdjustments } from "./paint.js";
 import { toFigmaEffects } from "./effects.js";
-import { resolveFont, resolveFontStrict, fontDivergences, FontMap } from "./fonts.js";
+import { resolveFont, resolveFontStrict, fontDivergences, textStyleFont, FontMap } from "./fonts.js";
 import { writeKey, identityOf, isSlotHole, describeNodeIdentity } from "./identity.js";
 import { pixelRound, convertSizing } from "@framelink/core";
 import { MutatingVerbError, NodeBuildError } from "./verb-error.js";
@@ -52,6 +54,8 @@ export interface RenderResources {
   live?: ReadonlyMap<WriteNode, LiveTreeNode>;
   fonts: FontMap;
   images: Record<string, string>;
+  // Every token the verb's IR names, resolved in prepare — the apply span binds from here, never looks up.
+  tokens: ResolvedTokens;
   // Instance plans are keyed by the private IR node that the build walk consumes.
   instances: InstancePlans;
   siblingOrder?: Map<any, Map<any, number>>;
@@ -191,6 +195,11 @@ function stampKey(node: any, wn: WriteNode, ctx: RenderCtx): void {
 // figma.* call, so it lives HERE in the bridge, not in the figma-free paint.ts. Every other paint maps purely.
 function paintOf(paint: WritePaint, ctx: RenderResources): Paint {
   if (paint.kind === "image") return imagePaint(paint, ctx);
+  // A bound solid is bound on the PAINT, before the stack is assigned: a literal paint written over a
+  // bound one drops the binding, so the bound paint has to be the one that lands.
+  if (paint.kind === "solid" && paint.colorVariable) {
+    return figma.variables.setBoundVariableForPaint(toFigmaPaint(paint) as SolidPaint, "color", variableFor(paint.colorVariable, ctx.tokens));
+  }
   return toFigmaPaint(paint);
 }
 
@@ -254,12 +263,13 @@ export function applyPaint(node: any, wn: WriteProps, ctx: RenderResources): voi
   // empties would make removal an unspeakable intent (the ADR-0003 silent no-op).
   if (wn.fills) node.fills = toFigmaPaintStack(wn.fills, ctx);
   if (wn.strokes) node.strokes = toFigmaPaintStack(wn.strokes, ctx);
-  if (wn.strokeWeight != null) applyStrokeWeight(node, wn.strokeWeight);
+  if (wn.strokeWeight != null) applyStrokeWeight(node, wn.strokeWeight, ctx.tokens);
   if (wn.strokeAlign != null && "strokeAlign" in node) node.strokeAlign = wn.strokeAlign;
-  if (wn.borderRadius) applyCornerRadii(node, wn.borderRadius);
+  if (wn.borderRadius) applyCornerRadii(node, wn.borderRadius, ctx.tokens);
   if (wn.effects && "effects" in node) node.effects = toFigmaEffects(wn.effects);
+  applyStyleSlots(node, wn, ctx);
   // The `in` guard matters for edit targets: a SliceNode carries no MinimalBlendMixin at all.
-  if (typeof wn.opacity === "number" && "opacity" in node) node.opacity = wn.opacity;
+  if (wn.opacity !== undefined && "opacity" in node) writeBindable(node, "opacity", wn.opacity, ctx.tokens);
   if (typeof wn.clip === "boolean" && "clipsContent" in node) node.clipsContent = wn.clip;
   stampImageData(node, wn);
   // AFTER the writes, and only when this write was about appearance: the diagnostic asks the LIVE node
@@ -272,15 +282,20 @@ export function applyPaint(node: any, wn: WriteProps, ctx: RenderResources): voi
 // Strokes split like corners: `strokeWeight` sets every side at once, the four per-side properties
 // (IndividualStrokesMixin) are the only route to differing sides. The compiler only emits Edges for
 // a type that has them, so there is no per-side fallback here.
-function applyStrokeWeight(node: any, w: number | Edges): void {
-  if (typeof w === "number") {
-    if ("strokeWeight" in node) node.strokeWeight = w;
+const STROKE_SIDE_FIELDS = ["strokeTopWeight", "strokeRightWeight", "strokeBottomWeight", "strokeLeftWeight"] as const;
+const CORNER_FIELDS = ["topLeftRadius", "topRightRadius", "bottomRightRadius", "bottomLeftRadius"] as const;
+
+function applyStrokeWeight(node: any, w: Bindable | Edges<Bindable>, tokens: ResolvedTokens | undefined): void {
+  if (typeof w === "number" || isTokenRef(w)) {
+    // A uniform literal replaces per-side bindings too, which unbinding strokeWeight alone leaves.
+    if (typeof w === "number") for (const side of STROKE_SIDE_FIELDS) unbindField(node, side);
+    if ("strokeWeight" in node) writeBindable(node, "strokeWeight", w, tokens);
     return;
   }
-  node.strokeTopWeight = w.top;
-  node.strokeRightWeight = w.right;
-  node.strokeBottomWeight = w.bottom;
-  node.strokeLeftWeight = w.left;
+  writeBindable(node, "strokeTopWeight", w.top, tokens);
+  writeBindable(node, "strokeRightWeight", w.right, tokens);
+  writeBindable(node, "strokeBottomWeight", w.bottom, tokens);
+  writeBindable(node, "strokeLeftWeight", w.left, tokens);
 }
 
 // Figma splits one concept over two APIs: `cornerRadius` writes all four at once (and READS back as
@@ -288,21 +303,43 @@ function applyStrokeWeight(node: any, w: number | Edges): void {
 // corners — RectangleCornerMixin, which every type flcm lets carry a radius has. Uniform still goes
 // through `cornerRadius` so a corner-bearing node outside that mixin (POLYGON, STAR, VECTOR) keeps
 // working if the edit vocabulary ever widens to it.
-function applyCornerRadii(node: any, r: CornerRadii): void {
+function applyCornerRadii(node: any, r: CornerRadii<Bindable>, tokens: ResolvedTokens | undefined): void {
   if (r.topLeft === r.topRight && r.topRight === r.bottomRight && r.bottomRight === r.bottomLeft) {
-    if ("cornerRadius" in node) node.cornerRadius = r.topLeft;
+    // As with strokes: a uniform literal replaces per-corner bindings that unbinding cornerRadius leaves.
+    if (!isTokenRef(r.topLeft)) for (const corner of CORNER_FIELDS) unbindField(node, corner);
+    if ("cornerRadius" in node) writeBindable(node, "cornerRadius", r.topLeft, tokens);
     return;
   }
   if (!("topLeftRadius" in node)) {
     throw new Error("flcm: a " + node.type + " has one radius for all four corners — per-corner borderRadius has no equivalent on it.");
   }
-  node.topLeftRadius = r.topLeft;
-  node.topRightRadius = r.topRight;
-  node.bottomRightRadius = r.bottomRight;
-  node.bottomLeftRadius = r.bottomLeft;
+  writeBindable(node, "topLeftRadius", r.topLeft, tokens);
+  writeBindable(node, "topRightRadius", r.topRight, tokens);
+  writeBindable(node, "bottomRightRadius", r.bottomRight, tokens);
+  writeBindable(node, "bottomLeftRadius", r.bottomLeft, tokens);
 }
 
-function applyContainer(node: any, layout: WriteLayout): void {
+// Each style slot lands its values now, in the sealed span, so everything apply measures after this
+// sees the styled node; the link itself is queued for the lock (async-only under dynamic-page).
+function applyStyleSlots(node: any, wn: WriteProps, ctx: RenderResources): void {
+  const styles = wn.styles;
+  if (!styles) return;
+  if (styles.fill) {
+    node.fills = (styleFor(styles.fill, ctx.tokens) as PaintStyle).paints;
+    if ("setPluginData" in node) node.setPluginData("flcm/image", ""); // a style's paints carry no flcm image source
+    queueStyleWrite(node, "fill", styleFor(styles.fill, ctx.tokens).id);
+  }
+  if (styles.stroke) {
+    node.strokes = (styleFor(styles.stroke, ctx.tokens) as PaintStyle).paints;
+    queueStyleWrite(node, "stroke", styleFor(styles.stroke, ctx.tokens).id);
+  }
+  if (styles.effect && "effects" in node) {
+    node.effects = (styleFor(styles.effect, ctx.tokens) as EffectStyle).effects;
+    queueStyleWrite(node, "effect", styleFor(styles.effect, ctx.tokens).id);
+  }
+}
+
+function applyContainer(node: any, layout: WriteLayout, tokens: ResolvedTokens | undefined): void {
   if (!isFrameLike(node)) return;
   const previous = layoutModeOf(node);
   const next = effectiveLayoutMode(layout, node);
@@ -312,10 +349,13 @@ function applyContainer(node: any, layout: WriteLayout): void {
     if (next.kind !== "free" && previous.word !== next.word) layoutBehavior(node).clearChildren(node);
     node.layoutMode = next.native;
   }
-  layoutBehavior(node).container(node, layout, previous);
+  layoutBehavior(node).container(node, layout, previous, tokens);
   if (layout.padding) {
     const p = layout.padding;
-    node.paddingTop = p.top; node.paddingRight = p.right; node.paddingBottom = p.bottom; node.paddingLeft = p.left;
+    writeBindable(node, "paddingTop", p.top, tokens);
+    writeBindable(node, "paddingRight", p.right, tokens);
+    writeBindable(node, "paddingBottom", p.bottom, tokens);
+    writeBindable(node, "paddingLeft", p.left, tokens);
   }
 }
 
@@ -325,10 +365,10 @@ function applyContainer(node: any, layout: WriteLayout): void {
 // at create time applyContainer already set layoutMode so the two agree, and an edit delta naming only
 // sizing carries no mode at all. Presence-preserving per axis — an axis the caller doesn't name keeps
 // its live sizing mode; the fresh-frame hug default is the BUILDER's to inject (see buildFrame).
-function applyOwnSize(f: any, layout: WriteLayout): void {
-  if (layout.bounds) { trackSizing(f); applyBounds(f, layout.bounds); }
+function applyOwnSize(f: any, layout: WriteLayout, tokens: ResolvedTokens | undefined): void {
+  if (layout.bounds) { trackSizing(f); applyBounds(f, layout.bounds, tokens); }
   const sizing = layout.sizing || {};
-  const dims = layout.dimensions || {};
+  const dims = dimensionsForResize(f, layout.dimensions, tokens);
   const isAuto = isAutoLayout(f);
 
   layoutBehavior(f).ownSize(f, sizing);
@@ -341,6 +381,28 @@ function applyOwnSize(f: any, layout: WriteLayout): void {
     const w = fixedW && typeof dims.width === "number" ? dims.width : f.width;
     const h = fixedH && typeof dims.height === "number" ? dims.height : f.height;
     resizeWithDiagnostics(f, Math.max(w, 0.01), Math.max(h, 0.01));
+  }
+  bindDimensions(f, layout.dimensions, tokens);
+}
+
+// A bound dimension resizes to its variable's default-mode value first, so hug/fill and the sizing
+// diagnostics see a real number; bindDimensions then hands the size to the variable. A literal
+// dimension drops a standing binding before the resize, or the variable would keep driving it.
+function dimensionsForResize(node: any, dims: WriteLayout["dimensions"], tokens: ResolvedTokens | undefined): { width?: number; height?: number } {
+  const out: { width?: number; height?: number } = {};
+  for (const dim of ["width", "height"] as const) {
+    const value = dims?.[dim];
+    if (value === undefined) continue;
+    if (isTokenRef(value)) out[dim] = Number(variableLiteral(value, tokens));
+    else { unbindField(node, dim); out[dim] = value; }
+  }
+  return out;
+}
+
+function bindDimensions(node: any, dims: WriteLayout["dimensions"], tokens: ResolvedTokens | undefined): void {
+  for (const dim of ["width", "height"] as const) {
+    const value = dims?.[dim];
+    if (isTokenRef(value)) writeBindable(node, dim, value, tokens);
   }
 }
 
@@ -440,10 +502,10 @@ function applyPinDelta(child: any, pin: NonNullable<WriteLayout["pin"]>): void {
 // both land here, so the per-kind rules can't fork: TEXT's auto-resize handshake and LINE's zero
 // height. Generic shapes (and TEXT, once its auto-resize is set) resize only the named dims,
 // floored at Figma's 0.01.
-function applyLeafSize(node: any, layout: WriteLayout): void {
-  if (layout.bounds) { trackSizing(node); applyBounds(node, layout.bounds); }
+function applyLeafSize(node: any, layout: WriteLayout, tokens: ResolvedTokens | undefined): void {
+  if (layout.bounds) { trackSizing(node); applyBounds(node, layout.bounds, tokens); }
   const sizing = layout.sizing || {};
-  const dims = layout.dimensions || {};
+  const dims = dimensionsForResize(node, layout.dimensions, tokens);
   if (node.type === "TEXT") {
     // textAutoResize IS a text's sizing: NONE holds a fixed box, HEIGHT wraps at a fixed width
     // and grows the height, WIDTH_AND_HEIGHT grows both. It must be set BEFORE the resize below,
@@ -461,12 +523,11 @@ function applyLeafSize(node: any, layout: WriteLayout): void {
   }
   if (node.type === "LINE") {
     if (typeof dims.width === "number") resizeWithDiagnostics(node, Math.max(dims.width, 0.01), 0);
-    return;
-  }
-  if (typeof dims.width === "number" || typeof dims.height === "number") {
+  } else if (typeof dims.width === "number" || typeof dims.height === "number") {
     resizeWithDiagnostics(node, Math.max(typeof dims.width === "number" ? dims.width : node.width, 0.01),
                 Math.max(typeof dims.height === "number" ? dims.height : node.height, 0.01));
   }
+  bindDimensions(node, layout.dimensions, tokens);
 }
 
 // (The layout legality rules — percent-hug cycle, page-parent fill/percent, TEXT fill-height,
@@ -586,7 +647,7 @@ export function applyLiveNodeLayout(node: any, wl: WriteLayout, resources?: Rend
   wl = context.layout;
   if (wl.sizing || wl.bounds || wl.percentSize) trackSizing(node);
   const parent = node.parent;
-  applyContainer(node, wl);
+  applyContainer(node, wl, resources?.tokens);
   if (!parent) return; // a parentless node (the page itself can't get here) has no child-side context
   const parentIsAuto = isAutoLayout(parent);
   // Un-fill BEFORE the position write, and regardless of the child's CURRENT positioning: an axis
@@ -602,8 +663,8 @@ export function applyLiveNodeLayout(node: any, wl: WriteLayout, resources?: Rend
   if (inFlowAuto) {
     layoutBehavior(parent).fill(parent, node, context, false); // crossStretch is the container's own alignItems edit, never a child's
   }
-  if (isAutoLayout(node) || isFrameLike(node)) applyOwnSize(node, wl);
-  else applyLeafSize(node, wl);
+  if (isAutoLayout(node) || isFrameLike(node)) applyOwnSize(node, wl, resources?.tokens);
+  else applyLeafSize(node, wl, resources?.tokens);
   if (!inFlowAuto) coverChild(parent, node, wl);
   if (wl.pin) applyPinDelta(node, wl.pin);
 }
@@ -967,7 +1028,7 @@ function buildFrame(wn: WriteNode, ctx: RenderCtx, enclosingWidthBounded = false
   // clipped — a silent divergence from the CSS mental model. applyPaint re-applies an explicit `clip`.
   f.clipsContent = false;
   const layout = wn.layout || {};
-  applyContainer(f, layout);
+  applyContainer(f, layout, ctx.tokens);
   if (!wn.fills) f.fills = []; // omitted fill -> transparent, not a surprise white box
   applyPaint(f, wn, ctx);
 
@@ -997,7 +1058,7 @@ function buildFrame(wn: WriteNode, ctx: RenderCtx, enclosingWidthBounded = false
   // Creation default: a fresh auto-layout frame HUGS both axes (CSS fit-content). Like the
   // transparent-fill default above, it's the builder's to inject — the applier itself never turns
   // key-absence into a write, so an edit delta omitting an axis leaves it alone.
-  applyOwnSize(f, { ...layout, sizing: { horizontal: authoredSizing.horizontal || "hug", vertical: authoredSizing.vertical || "hug" } });
+  applyOwnSize(f, { ...layout, sizing: { horizontal: authoredSizing.horizontal || "hug", vertical: authoredSizing.vertical || "hug" } }, ctx.tokens);
   // Settle every positioned child now that the frame has its final size (at append it was hug-sized).
   for (const s of settlements) { coverChild(f, s.child, s.layout); applyConstraints(s.child, s.layout); }
   return f;
@@ -1017,8 +1078,8 @@ function buildInstance(wn: WriteNode, ctx: RenderCtx): any {
   if (Object.keys(plan.properties).length) inst.setProperties(plan.properties);
   applyPaint(inst, wn, ctx);
   if (wn.layout) {
-    applyContainer(inst, wn.layout);
-    applyOwnSize(inst, wn.layout);
+    applyContainer(inst, wn.layout, ctx.tokens);
+    applyOwnSize(inst, wn.layout, ctx.tokens);
   }
   if (wn.exposed !== undefined) ctx.exposures.push({ node: inst, value: wn.exposed });
   plan.applyOverrides(inst, ctx);
@@ -1030,6 +1091,12 @@ function buildInstance(wn: WriteNode, ctx: RenderCtx): any {
 // fields it overrides, so we touch only those ranges — the rest inherit the node's base style. A run's font
 // resolves STRICTLY (resolveFontStrict): an unloaded run font fails loud rather than silently rendering base.
 function applyRuns(t: any, runs: NonNullable<WriteNode["runs"]>, ctx: RenderResources): void {
+  // Read once: a literal run write clears a binding only where the node has one, so plain text
+  // pays no extra writes. Runs never overlap, so a binding laid by an earlier run is never in the way.
+  const bound = t.boundVariables || {};
+  const unbindRange = (start: number, end: number, field: VariableBindableTextField): void => {
+    if (bound[field]) t.setRangeBoundVariable(start, end, field, null);
+  };
   let start = 0;
   for (const run of runs) {
     const end = start + run.text.length;
@@ -1042,18 +1109,31 @@ function applyRuns(t: any, runs: NonNullable<WriteNode["runs"]>, ctx: RenderReso
         if (namesFontIdentity(s)) {
           const italic = s.fontStyle === "italic";
           const font = resolveFontStrict(ctx.fonts, s.fontFamily, s.fontWeight, italic);
+          if (s.fontFamily !== undefined && !isTokenRef(s.fontFamily)) unbindRange(start, end, "fontFamily");
+          if (s.fontWeight !== undefined && !isTokenRef(s.fontWeight)) unbindRange(start, end, "fontWeight");
           t.setRangeFontName(start, end, font);
           warnFontDivergences(t, "a run", fontDivergences(s.fontFamily, s.fontWeight, italic, font));
         }
-        if (typeof s.fontSize === "number") t.setRangeFontSize(start, end, s.fontSize);
-        if (s.lineHeight) t.setRangeLineHeight(start, end, s.lineHeight);
-        if (s.letterSpacing) t.setRangeLetterSpacing(start, end, s.letterSpacing);
+        const range = (field: VariableBindableTextField, value: Bindable<unknown> | undefined, write: () => void): void => {
+          if (value === undefined) return;
+          if (isTokenRef(value)) t.setRangeBoundVariable(start, end, field, variableFor(value as VariableRef, ctx.tokens));
+          else {
+            unbindRange(start, end, field);
+            write();
+          }
+        };
+        // After the font name, which a bound family or weight then binds over.
+        range("fontFamily", isTokenRef(s.fontFamily) ? s.fontFamily : undefined, () => {});
+        range("fontWeight", isTokenRef(s.fontWeight) ? s.fontWeight : undefined, () => {});
+        range("fontSize", s.fontSize, () => t.setRangeFontSize(start, end, s.fontSize));
+        range("lineHeight", s.lineHeight, () => t.setRangeLineHeight(start, end, s.lineHeight));
+        range("letterSpacing", s.letterSpacing, () => t.setRangeLetterSpacing(start, end, s.letterSpacing));
         if (s.textDecoration) t.setRangeTextDecoration(start, end, DECORATION[s.textDecoration]);
         // Casing and paragraph metrics are per-range in Figma exactly as the font is, which is why
         // they are run words at all (the read side surfaces them per segment for the same reason).
         if (s.textCase) t.setRangeTextCase(start, end, s.textCase);
-        if (typeof s.paragraphSpacing === "number") t.setRangeParagraphSpacing(start, end, s.paragraphSpacing);
-        if (typeof s.paragraphIndent === "number") t.setRangeParagraphIndent(start, end, s.paragraphIndent);
+        range("paragraphSpacing", s.paragraphSpacing, () => t.setRangeParagraphSpacing(start, end, s.paragraphSpacing));
+        range("paragraphIndent", s.paragraphIndent, () => t.setRangeParagraphIndent(start, end, s.paragraphIndent));
         if (typeof s.listSpacing === "number") t.setRangeListSpacing(start, end, s.listSpacing);
       }
       // Present-but-empty is the compiled "none" — a real transparent write over the slice, not a skip.
@@ -1085,29 +1165,53 @@ function warnFontDivergences(t: any, where: string, divergences: ReturnType<type
 // BEFORE this so range fills land over, not under, the base fill.
 export function applyTextProps(t: any, wn: WriteProps, ctx: RenderResources): void {
   const ts = wn.textStyle || {};
-  if (namesFontIdentity(ts)) {
+  const textStyle = ts.style ? (styleFor(ts.style, ctx.tokens) as TextStyle) : undefined;
+  if (ts.style) t.fontName = textStyleFont(ctx.fonts, ts.style);
+  else if (namesFontIdentity(ts)) {
+    // A literal family or weight replaces its binding; a bound one binds over the font below.
+    if (ts.fontFamily !== undefined && !isTokenRef(ts.fontFamily)) unbindField(t, "fontFamily");
+    if (ts.fontWeight !== undefined && !isTokenRef(ts.fontWeight)) unbindField(t, "fontWeight");
     const italic = ts.fontStyle === "italic";
     t.fontName = resolveFont(ctx.fonts, ts.fontFamily, ts.fontWeight, italic);
     warnFontDivergences(t, "the text", fontDivergences(ts.fontFamily, ts.fontWeight, italic, t.fontName));
   }
   if (wn.runs) t.characters = wn.runs.map((r) => r.text).join("");
   else if (wn.text != null) t.characters = String(wn.text);
-  if (typeof ts.fontSize === "number") t.fontSize = ts.fontSize;
-  if (ts.lineHeight) t.lineHeight = ts.lineHeight;
-  if (ts.letterSpacing) t.letterSpacing = ts.letterSpacing;
+  // A bound family or weight binds over the literal font written above (both are loaded in every mode).
+  if (isTokenRef(ts.fontFamily)) writeBindable(t, "fontFamily", ts.fontFamily, ctx.tokens);
+  if (isTokenRef(ts.fontWeight)) writeBindable(t, "fontWeight", ts.fontWeight, ctx.tokens);
+  if (ts.fontSize !== undefined) writeBindable(t, "fontSize", ts.fontSize, ctx.tokens);
+  if (ts.lineHeight) writeBindable(t, "lineHeight", ts.lineHeight, ctx.tokens);
+  if (ts.letterSpacing) writeBindable(t, "letterSpacing", ts.letterSpacing, ctx.tokens);
+  if (textStyle) applyTextStyleValues(t, textStyle);
   if (ts.textAlign && TEXT_ALIGN[ts.textAlign]) t.textAlignHorizontal = TEXT_ALIGN[ts.textAlign];
   if (ts.textAlignVertical) t.textAlignVertical = VERTICAL_ALIGN[ts.textAlignVertical];
   // Base decoration/casing/paragraph metrics first (whole node); runs then override their slice via
   // the matching setRange* below.
   if (ts.textDecoration) t.textDecoration = DECORATION[ts.textDecoration];
   if (ts.textCase) t.textCase = ts.textCase;
-  if (typeof ts.paragraphSpacing === "number") t.paragraphSpacing = ts.paragraphSpacing;
-  if (typeof ts.paragraphIndent === "number") t.paragraphIndent = ts.paragraphIndent;
+  if (ts.paragraphSpacing !== undefined) writeBindable(t, "paragraphSpacing", ts.paragraphSpacing, ctx.tokens);
+  if (ts.paragraphIndent !== undefined) writeBindable(t, "paragraphIndent", ts.paragraphIndent, ctx.tokens);
   if (typeof ts.listSpacing === "number") t.listSpacing = ts.listSpacing;
   // A whole-node link is a range write like a run's — over every character. Guarded on non-empty
   // characters because Figma refuses a zero-width range, and an empty text has nothing to link.
   if (ts.hyperlink && t.characters.length) t.setRangeHyperlink(0, t.characters.length, { type: "URL", value: ts.hyperlink });
   if (wn.runs) applyRuns(t, wn.runs, ctx);
+  if (textStyle) queueStyleWrite(t, "text", textStyle.id);
+}
+
+// What a text style sets, written now so the text measures styled inside the sealed span; the lock's
+// queued link (setTextStyleIdAsync) then attaches the style itself. The compiler refused every word
+// this covers, so nothing authored is overwritten.
+function applyTextStyleValues(t: any, style: TextStyle): void {
+  t.fontSize = style.fontSize;
+  t.lineHeight = style.lineHeight;
+  t.letterSpacing = style.letterSpacing;
+  t.textDecoration = style.textDecoration;
+  t.textCase = style.textCase;
+  t.paragraphSpacing = style.paragraphSpacing;
+  t.paragraphIndent = style.paragraphIndent;
+  if (style.listSpacing !== undefined) t.listSpacing = style.listSpacing;
 }
 
 // TEXT clamp writes, applied AFTER sizing (truncation needs the wrap to exist). Setting: "ENDING"
@@ -1131,7 +1235,7 @@ function buildText(wn: WriteNode, ctx: RenderCtx): any {
   // The creation default is the builder's: a fresh text ALWAYS ends up with a written base font —
   // applyTextProps's font write is presence-gated (edit's rule), so when the node names no identity
   // word, create writes the resolveFont fallback triple itself (loadFontsForTree preloaded it).
-  if (!namesFontIdentity(wn.textStyle)) t.fontName = resolveFont(ctx.fonts, undefined, undefined, false);
+  if (!wn.textStyle?.style && !namesFontIdentity(wn.textStyle)) t.fontName = resolveFont(ctx.fonts, undefined, undefined, false);
   // Present-but-empty is the compiled "none" — write the clear (live createText seeds a default
   // black fill, so skipping would leave the "unfilled" text black).
   if (wn.fills) {
@@ -1139,12 +1243,13 @@ function buildText(wn: WriteNode, ctx: RenderCtx): any {
     if (wn.fills.length) stampImageData(t, wn);
   }
   if (wn.effects) t.effects = toFigmaEffects(wn.effects);
+  applyStyleSlots(t, wn, ctx);
   applyTextProps(t, { ...wn, text: wn.text == null ? "" : wn.text }, ctx);
-  applyLeafSize(t, wn.layout || {});
+  applyLeafSize(t, wn.layout || {}, ctx.tokens);
   // TEXT guarantees a bounded width when maxLines is set (the handshake above gave it a
   // wrap), so the truncation always has real lines to bite.
   applyTextClamp(t, wn.maxLines);
-  if (typeof wn.opacity === "number") t.opacity = wn.opacity;
+  if (wn.opacity !== undefined) writeBindable(t, "opacity", wn.opacity, ctx.tokens);
   return t;
 }
 
@@ -1153,7 +1258,7 @@ function buildShape(node: any, wn: WriteNode, ctx: RenderCtx): any {
   figma.currentPage.appendChild(node);
   if (!wn.fills) node.fills = []; // omitted fill -> transparent
   applyPaint(node, wn, ctx);
-  applyLeafSize(node, wn.layout || {});
+  applyLeafSize(node, wn.layout || {}, ctx.tokens);
   return node;
 }
 
@@ -1163,9 +1268,10 @@ function buildLine(wn: WriteNode, ctx: RenderCtx): any {
   // Present-but-empty is the compiled "none" — write the clear (live createLine seeds a default
   // black stroke, so skipping would leave the line stroked, not unstroked).
   if (wn.strokes) l.strokes = toFigmaPaintStack(wn.strokes, ctx);
-  applyStrokeWeight(l, wn.strokeWeight ?? 1);
-  applyLeafSize(l, wn.layout || {});
-  if (typeof wn.opacity === "number") l.opacity = wn.opacity;
+  applyStyleSlots(l, wn, ctx);
+  applyStrokeWeight(l, wn.strokeWeight ?? 1, ctx.tokens);
+  applyLeafSize(l, wn.layout || {}, ctx.tokens);
+  if (wn.opacity !== undefined) writeBindable(l, "opacity", wn.opacity, ctx.tokens);
   return l;
 }
 
@@ -1194,8 +1300,8 @@ function buildSvg(wn: WriteNode, markup: string, ctx: RenderCtx): any {
   // BEFORE applyLeafSize: Figma applies a child's constraints during the parent's resize, so art that
   // gets SCALE only afterwards is art the authored width/height already stranded at its import size.
   themeImportedArt(frame, wn, ctx);
-  applyLeafSize(frame, wn.layout || {});
-  if (typeof wn.opacity === "number") frame.opacity = wn.opacity;
+  applyLeafSize(frame, wn.layout || {}, ctx.tokens);
+  if (wn.opacity !== undefined) writeBindable(frame, "opacity", wn.opacity, ctx.tokens);
   return frame;
 }
 
@@ -1246,7 +1352,7 @@ function buildPath(wn: WriteNode, source: { paths: VectorPaths; scale?: number }
     throw new Error('VECTOR: Figma could not parse the path data "' + source.paths.map(p => p.data).join(" ") + '" — ' + (e && e.message ? e.message : String(e)));
   }
   applyPaint(v, wn, ctx);
-  applyLeafSize(v, wn.layout || {});
+  applyLeafSize(v, wn.layout || {}, ctx.tokens);
   // AFTER the paths (which set the natural box) and after applyLeafSize (whose min/max bounds should
   // clamp the scaled size, and be reported when they do). resize, not rescale: strokeWidth/effects are
   // authored in the same breath and mean the number the author wrote, not that number times `scale`.

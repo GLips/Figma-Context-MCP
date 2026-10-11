@@ -6,7 +6,12 @@
       "name": "Heading A",
       "type": "TEXT",
       "text": "Alpha",
-      "textStyle": "Heading / Large",
+      "textStyle": {
+        "style": {
+          "id": "k1",
+          "name": "Heading / Large"
+        }
+      },
       "fill": "fill_314185fc"
     },
     {
@@ -14,30 +19,29 @@
       "name": "Heading B",
       "type": "TEXT",
       "text": "Beta",
-      "textStyle": "Heading / Large (161:300)",
+      "textStyle": {
+        "style": {
+          "id": "k2",
+          "name": "Heading / Large"
+        }
+      },
       "fill": "fill_314185fc"
     },
     {
       "id": "7:3",
       "name": "Swatch",
       "type": "RECTANGLE",
-      "fill": "Brand / Orange"
+      "fill": {
+        "style": {
+          "id": "k3",
+          "name": "Brand / Orange"
+        }
+      }
     }
   ],
   "components": {},
   "styles": {
-    "Heading / Large": {
-      "fontFamily": "Inter",
-      "fontWeight": 400,
-      "fontSize": 12
-    },
-    "fill_314185fc": "#000000",
-    "Heading / Large (161:300)": {
-      "fontFamily": "Inter",
-      "fontWeight": 600,
-      "fontSize": 14
-    },
-    "Brand / Orange": "#FF8000"
+    "fill_314185fc": "#000000"
   },
   "templates": {}
 }

@@ -1,6 +1,12 @@
 import type { Node as FigmaDocumentNode, Paint, TypeStyle } from "@figma/rest-api-spec";
-import type { SnapshotText, SnapshotTextRun, SnapshotTextStyle } from "@framelink/core/snapshot";
-import { decodePaints } from "./paint.js";
+import type {
+  SnapshotText,
+  SnapshotTextRun,
+  SnapshotTextStyle,
+  SnapshotTextVariableField,
+  SnapshotTextVariables,
+} from "@framelink/core/snapshot";
+import { decodePaints, restVariableRef, type RestVariableAlias } from "./paint.js";
 import { stableStringify } from "@framelink/core";
 
 /**
@@ -25,7 +31,9 @@ type Run = {
  * Fields ignored by the delta computation. These are either book-keeping
  * (semanticWeight, semanticItalic, isOverrideOverTextStyle) that don't affect
  * visual output, or fields we explicitly don't carry into the simplified
- * representation (fontPostScriptName, boundVariables).
+ * representation (fontPostScriptName). `boundVariables` is diffed field by
+ * field in bindingDelta instead, so bindings the snapshot drops (fontStyle)
+ * never split a run.
  */
 const IGNORED_TYPE_STYLE_FIELDS = new Set([
   "semanticWeight",
@@ -34,6 +42,58 @@ const IGNORED_TYPE_STYLE_FIELDS = new Set([
   "fontPostScriptName",
   "boundVariables",
 ]);
+
+/** The TypeStyle bindings the snapshot carries; fontStyle has no vocabulary word to bind. */
+const TEXT_VARIABLE_FIELDS: ReadonlyArray<SnapshotTextVariableField> = [
+  "fontFamily",
+  "fontSize",
+  "fontWeight",
+  "lineHeight",
+  "letterSpacing",
+  "paragraphSpacing",
+  "paragraphIndent",
+];
+
+function decodeTextVariables(
+  wire: Partial<Record<string, RestVariableAlias>> | undefined,
+): SnapshotTextVariables | undefined {
+  if (!wire) return undefined;
+  const out: SnapshotTextVariables = {};
+  for (const field of TEXT_VARIABLE_FIELDS) {
+    const ref = restVariableRef(wire[field]);
+    if (ref) out[field] = ref;
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
+/**
+ * Whole-node text bindings. Live REST (2026-10-10) reports a field bound across the whole text on
+ * the NODE's `boundVariables` — an array of the distinct aliases — and leaves the base TypeStyle's
+ * own `boundVariables` empty. The aliases no override entry claims are the base's; exactly one is
+ * its binding. Negative space: a base alias that a run entry repeats is indistinguishable from a
+ * run-only one, so it reads as the run's.
+ */
+function nodeLevelTextVariables(
+  node: FigmaDocumentNode,
+  overrideTable: Record<string, TypeStyle>,
+): Partial<Record<string, RestVariableAlias>> | undefined {
+  const wire = (node as { boundVariables?: Partial<Record<string, RestVariableAlias[]>> })
+    .boundVariables;
+  if (!wire) return undefined;
+  const out: Partial<Record<string, RestVariableAlias>> = {};
+  for (const field of TEXT_VARIABLE_FIELDS) {
+    const aliases = wire[field];
+    if (!Array.isArray(aliases)) continue;
+    const unclaimed = aliases.filter(
+      (alias) =>
+        !Object.values(overrideTable).some(
+          (entry) => entry.boundVariables?.[field]?.id === alias.id,
+        ),
+    );
+    if (unclaimed.length === 1) out[field] = unclaimed[0];
+  }
+  return Object.keys(out).length ? out : undefined;
+}
 
 export function decodeText(node: FigmaDocumentNode): SnapshotText | undefined {
   if (node.type !== "TEXT") return undefined;
@@ -50,18 +110,23 @@ export function decodeText(node: FigmaDocumentNode): SnapshotText | undefined {
   const characters = text.characters ?? "";
   const lineTypes = Array.isArray(text.lineTypes) ? text.lineTypes : [];
   const lineIndentations = Array.isArray(text.lineIndentations) ? text.lineIndentations : [];
-  const baseStyle = text.style;
+  const wireBase = text.style;
 
   // No base style → the delta pipeline can't run; the core emits the characters
   // as plain escaped text. Emit an empty style so the core takes that path.
   // (Real Figma TEXT nodes always have `style` per the API spec.)
-  if (!baseStyle) {
+  if (!wireBase) {
     return { characters, style: {}, lines: [], lineTypes, lineIndentations };
   }
 
-  const style = decodeTextStyle(baseStyle);
   const overrides = text.characterStyleOverrides ?? [];
   const overrideTable = (text.styleOverrideTable ?? {}) as Record<string, TypeStyle>;
+  // Runs diff against the base WITH its node-level bindings, so a run repeating one carries no delta.
+  const nodeBindings = nodeLevelTextVariables(node, overrideTable);
+  const baseStyle: TypeStyle = nodeBindings
+    ? { ...wireBase, boundVariables: { ...nodeBindings, ...wireBase.boundVariables } }
+    : wireBase;
+  const style = decodeTextStyle(baseStyle);
 
   // Split into code points so a surrogate pair stays with its run.
   const codePoints = Array.from(characters);
@@ -114,6 +179,8 @@ function decodeTextStyle(style: Partial<TypeStyle>): SnapshotTextStyle {
   if (style.listSpacing !== undefined) out.listSpacing = style.listSpacing;
   const fills = (style as { fills?: Paint[] }).fills;
   if (fills) out.fills = decodePaints(fills);
+  const boundVariables = decodeTextVariables(style.boundVariables);
+  if (boundVariables) out.boundVariables = boundVariables;
   return out;
 }
 
@@ -217,7 +284,23 @@ function computeDelta(
     if (JSON.stringify(baseValue) === JSON.stringify(value)) continue;
     delta[key] = value;
   }
+  const bindings = bindingDelta(override.boundVariables, baseStyle.boundVariables);
+  if (bindings) delta.boundVariables = bindings;
   return delta as Partial<TypeStyle>;
+}
+
+/** The run's carried bindings that differ from the base's, by variable id. */
+function bindingDelta(
+  run: Partial<Record<string, RestVariableAlias>> | undefined,
+  base: Partial<Record<string, RestVariableAlias>> | undefined,
+): Partial<Record<string, RestVariableAlias>> | undefined {
+  if (!run) return undefined;
+  const out: Partial<Record<string, RestVariableAlias>> = {};
+  for (const field of TEXT_VARIABLE_FIELDS) {
+    const alias = run[field];
+    if (alias && alias.id !== base?.[field]?.id) out[field] = alias;
+  }
+  return Object.keys(out).length ? out : undefined;
 }
 
 function deltasEqual(a: Partial<TypeStyle>, b: Partial<TypeStyle>): boolean {

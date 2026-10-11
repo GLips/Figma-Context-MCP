@@ -83,10 +83,11 @@ import {
 } from "./bridge.js";
 import { toFigmaEffects } from "./effects.js";
 import { own, rejectNonDeltaWords as rejectNonDeltaWordsAgainst } from "./validate.js";
+import { collectTokenRefs, resolveTokenRefs, mergeResolvedTokens, type ResolvedTokens } from "./tokens.js";
 import { liveFontWords, loadFontsForTextEdits, assertTextEditFontsLoaded, EditFontNeed, FontMap } from "./fonts.js";
 import {
   KNOWN_KEYS, compileNodeLocalProps, compileNodeLayout,
-  compileLineWidth, compileTextStyleWords, compileTextContent, assertLineClampCount, fetchImagesForTrees,
+  compileLineWidth, compileTextStyleWords, compileTextContent, assertRunColorsBesideFillStyle, assertLineClampCount, fetchImagesForTrees,
   compileComponentPropertyBag, compileOverrideBag, compileSwapTarget, compilePropertyDefinitionEditBag,
   INSTANCE_COMPONENT_WORDS, DOCUMENT_RESOLVED_EDIT_WORDS,
 } from "./flcm.js";
@@ -346,7 +347,8 @@ function compileTextDeltaWords(changes: EditDelta, patch: WriteProps, node: Text
     );
   }
   if (changes.text != null) {
-    const base = namesFontIdentity(patch.textStyle) ? patch.textStyle : liveBaseStyle(node);
+    // A delta setting the text style hands its runs that style, so compileRun can refuse covered words.
+    const base = patch.textStyle?.style || namesFontIdentity(patch.textStyle) ? patch.textStyle! : liveBaseStyle(node);
     const compiled = compileTextContent(changes.text, base, changes.boldWeight ?? undefined);
     // A styled run that changes font identity with no family anywhere (no run family, no delta
     // textStyle, mixed live base) would silently land in the DEFAULT family — reject instead.
@@ -357,6 +359,7 @@ function compileTextDeltaWords(changes: EditDelta, patch: WriteProps, node: Text
     }
     Object.assign(patch, compiled);
   }
+  assertRunColorsBesideFillStyle(patch, subject);
 }
 
 // ---- The staged pipeline. `edit` drives it once; `editMany` drives each stage across the whole
@@ -444,14 +447,19 @@ export async function loadEditResources(plans: readonly EditPlan[], needs: reado
   for (const tree of trees) liveTrees.push(await loadLiveTree(tree));
   for (const tree of trees) requestTreeAnnotationCategories(tree);
   for (const { patch } of [...plans, ...fontNeeds]) requestAnnotationCategories(patch.annotations);
+  // Tokens first: a font variable's mode values and a text style's font are font needs of their own.
+  const tokens = mergeResolvedTokens(
+    await resolveTokenRefs(collectTokenRefs([...plans, ...fontNeeds].map((p) => p.patch).concat(trees))),
+    ...liveTrees.map((live) => live.loaded.tokens),
+  );
   // Slot content is BUILT, so its fonts are a tree's, not a delta's — folded into the same load.
-  const fonts = await loadFontsForTextEdits([...plans, ...fontNeeds], trees);
+  const fonts = await loadFontsForTextEdits([...plans, ...fontNeeds], trees, tokens);
   const images = await fetchImagesForTrees([...plans.map((plan) => plan.patch), ...trees]);
   // Categories last of the three: resolving one can CREATE a file-scoped category, so a batch whose
   // font or image load was going to fail anyway never creates one to be cleaned up again.
   await resolveAnnotationCategories();
   for (const live of liveTrees) { Object.assign(fonts, live.loaded.fonts); Object.assign(images, live.loaded.images); }
-  return { fonts, images, liveTrees };
+  return { fonts, images, tokens, liveTrees };
 }
 
 /** What stage 3 loaded — everything the apply span needs except the instance plans the gate makes. */
@@ -459,6 +467,7 @@ export interface LoadedResources {
   liveTrees?: LoadedLiveTree[];
   fonts: FontMap;
   images: Record<string, string>;
+  tokens: ResolvedTokens;
 }
 
 /**
@@ -517,7 +526,7 @@ export function assertEditPlanLands(
 export function gateEditResources(loaded: LoadedResources, needs: readonly InstanceNeeds[]): RenderResources {
   const instances = new Map<WriteNode, InstancePlan>();
   for (const need of needs) need.plans.forEach((plan, wn) => instances.set(wn, plan));
-  const resources: RenderResources = { fonts: loaded.fonts, images: loaded.images, instances };
+  const resources: RenderResources = { fonts: loaded.fonts, images: loaded.images, tokens: loaded.tokens, instances };
   const live = new Map();
   for (const tree of loaded.liveTrees ?? []) for (const [wn, plan] of gateLiveTree(tree, resources)) live.set(wn, plan);
   resources.live = live;

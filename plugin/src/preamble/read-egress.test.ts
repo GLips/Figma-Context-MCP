@@ -85,14 +85,14 @@ test("blend modes, constraints and clipping read back in authorable fields", asy
   assert.deepEqual(live.constraints, { horizontal: "MAX", vertical: "MAX" });
 });
 
-test("unresolved style ids remain readable without inventing a style name", async () => {
+test("a paint style reads as a style reference in the authoring field, id only when unresolved", async () => {
   const { figma, wire } = setup();
   const original = await flcm.render({ type: "RECTANGLE", fill: "#123456" });
   const live = await figma.getNodeByIdAsync(original.id);
   live.fillStyleId = "missing-style";
   const { node } = await flcm.get(original);
-  assert.deepEqual(node.readOnlySource!.styles!.fill, { id: "missing-style" });
-  assert.equal(wire(node).fill, "#123456");
+  assert.deepEqual(node.fill, { style: { id: "missing-style" } });
+  assert.deepEqual(wire(node).fill, { style: { id: "missing-style" } });
 });
 
 test("inherited instance echoes survive verb copies and JSON round-trips without source metadata", async () => {

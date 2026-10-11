@@ -163,11 +163,16 @@ function refuseIfRunFinished(verb: string): void {
  *   (instance.ts applyOverridePlans). A refusal there is a rollback, the price of that fact.
  *
  *   apply — the mutating span, wrapped in the invariant-2/4 undo scaffold:
- *     entry seal → stamp → apply → success commit          (the verb is exactly one undo step)
- *     entry seal → stamp → apply throws → commit + trigger (seal the partial writes, pop that step)
+ *     entry seal → stamp → apply → style links → success commit   (the verb is exactly one undo step)
+ *     entry seal → stamp → apply or a link throws → commit + trigger (seal the partial writes, pop that step)
  *
  * gate and apply are SYNCHRONOUS BY TYPE: neither can suspend, so nothing can interleave between a
- * gate's read, the seal, and apply's commit. Anything a verb wants to await belongs in prepare.
+ * gate's read, the seal, and apply's writes. Anything a verb wants to await belongs in prepare.
+ *
+ * The ONE await inside the sealed span is flushStyleWrites: linking a style is async-only under
+ * dynamic-page (the sync setters throw). It writes only links apply decided, onto nodes already
+ * holding the style's values. While it suspends, a human edit or un-awaited agent figma.* writes
+ * can land inside this verb's undo step — the price of the link.
  *
  * The failure path's commit is LOAD-BEARING, not a bookkeeping nicety: figma.triggerUndo() reverts
  * the last COMMITTED step and swallows uncommitted trailing writes with it (hand-verified
@@ -199,6 +204,31 @@ type SyncOnly<T> = T extends PromiseLike<unknown> ? never : T;
 // value — a same-value write is not a mutation — so it toggles. It stays after a success as part
 // of the step: clearing it would make a no-op verb a net-zero step whose coalescing behaviour is
 // unproven, and the value itself means nothing.
+// Style links queued by this verb's apply, landed in order by the lock after apply returns.
+type StyleSlot = "fill" | "stroke" | "effect" | "text";
+let pendingStyleWrites: { node: any; slot: StyleSlot; styleId: string }[] = [];
+
+/** Queue a style link for the lock to land after apply. The caller has already written the style's values. */
+export function queueStyleWrite(node: any, slot: StyleSlot, styleId: string): void {
+  pendingStyleWrites.push({ node, slot, styleId });
+}
+
+/** Point queued links at `to`, for a verb whose apply replaced `from` (createComponentFromNode). */
+export function retargetStyleWrites(from: any, to: any): void {
+  for (const write of pendingStyleWrites) if (write.node === from) write.node = to;
+}
+
+async function flushStyleWrites(): Promise<void> {
+  const writes = pendingStyleWrites;
+  pendingStyleWrites = [];
+  for (const { node, slot, styleId } of writes) {
+    if (slot === "fill") await node.setFillStyleIdAsync(styleId);
+    else if (slot === "stroke") await node.setStrokeStyleIdAsync(styleId);
+    else if (slot === "effect") await node.setEffectStyleIdAsync(styleId);
+    else await node.setTextStyleIdAsync(styleId);
+  }
+}
+
 const UNDO_STEP_STAMP_KEY = "flcm/undo-step";
 function stampUndoStep(): void {
   const previous = figma.root.getPluginData(UNDO_STEP_STAMP_KEY);
@@ -236,7 +266,10 @@ export function enterMutatingVerb<P, G, T>(
       const warningCheckpoint = warnings.records.length;
       try {
         beginSizingDiagnostics();
+        // Cleared first: a failed verb's queue must never link nodes on the next verb's behalf.
+        pendingStyleWrites = [];
         const result = apply(gated);
+        await flushStyleWrites();
         figma.commitUndo();
         committedVerbs++;
         finishSizingDiagnostics(verb);

@@ -16,6 +16,7 @@ import { assertNodeStillOnCanvas } from "./freshness.js";
 import { childListClosingInstanceOf, writeKey } from "./identity.js";
 import { assertLiveNodeLandsUnderParent, liveParentAttachFacts, attachBuiltChild, resettleMovedNode, applyVectorPath } from "./bridge.js";
 import type { RenderCtx, RenderResources } from "./bridge.js";
+import { NO_TOKENS } from "./tokens.js";
 import { growImplicitGridRows } from "./layout-native.js";
 import { beginMutatingApply } from "./verb-error.js";
 import type { EditDelta } from "./schema.js";
@@ -60,7 +61,7 @@ export async function loadLiveTree(tree: WriteNode): Promise<LoadedLiveTree> {
       entries.push({ wn, node, changes, key, pathData, hint, targets, current, instance });
     } catch (cause) { throw new Error(at + ": " + String(cause)); }
   }
-  const loaded = entries.length ? await loadEditResources(entries.flatMap(e => [...(e.hint ? [e.hint] : []), ...(e.instance?.overrides.map(o => o.plan) ?? [])]), entries.flatMap(e => e.instance ? [e.instance.needs] : [])) : { fonts: {}, images: {} };
+  const loaded = entries.length ? await loadEditResources(entries.flatMap(e => [...(e.hint ? [e.hint] : []), ...(e.instance?.overrides.map(o => o.plan) ?? [])]), entries.flatMap(e => e.instance ? [e.instance.needs] : [])) : { fonts: {}, images: {}, tokens: NO_TOKENS };
   return { entries, loaded };
 }
 

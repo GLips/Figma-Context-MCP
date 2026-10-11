@@ -12,6 +12,7 @@ import { WriteNode, Handle } from "./ir.js";
 import { loadLiveTree, gateLiveTree, LoadedLiveTree } from "./live-tree.js";
 import { assertSizingResolvesAgainstParentFrame } from "./layout-legality.js";
 import { loadFontsForTree, loadFontsForTextEdits } from "./fonts.js";
+import { collectTokenRefs, resolveTokenRefs, mergeResolvedTokens } from "./tokens.js";
 import { assertExposureTree, type ExposureContext } from "./instance-exposure.js";
 import { buildNode, placeRootOnPage, resolvePercents, beginRenderWalk, RenderCtx, RenderResources } from "./bridge.js";
 import { describeRootOverlap } from "./root-overlap.js";
@@ -58,6 +59,11 @@ export async function loadTreeResources(tree: WriteNode): Promise<LoadedTreeReso
   const trees = [tree, ...needs.slotContentTrees];
   trees.forEach(requestTreeAnnotationCategories);
   for (const { patch } of needs.fontNeeds) requestAnnotationCategories(patch.annotations);
+  // Tokens before fonts: a font variable's mode values and a text style's font are font needs too.
+  const tokens = mergeResolvedTokens(
+    live.loaded.tokens,
+    await resolveTokenRefs(collectTokenRefs([...trees, ...needs.fontNeeds.map((n) => n.patch)])),
+  );
   let failed = false;
   let firstFailure: unknown;
   const settled = <V>(p: Promise<V>) =>
@@ -76,15 +82,15 @@ export async function loadTreeResources(tree: WriteNode): Promise<LoadedTreeReso
   // Categories last of the three: resolving one can CREATE a file-scoped category, so a tree whose
   // image or font load was going to fail anyway never creates one to be cleaned up again.
   await resolveAnnotationCategories();
-  return { images: { ...live.loaded.images, ...images }, fonts: { ...live.loaded.fonts, ...fonts }, targets, live };
+  return { images: { ...live.loaded.images, ...images }, fonts: { ...live.loaded.fonts, ...fonts }, tokens, targets, live };
 
   // The tree's own text fonts (and its slot content's), plus every override delta's (an override
   // retypes a live sublayer — the same live-then-authored load an edit makes). Keyed by (family,
   // weight, italic) on both sides, so the merge can't collide on a different meaning.
   async function loadAllFonts() {
-    const own = await loadFontsForTree(trees.length === 1 ? tree : { type: "FRAME", children: trees });
+    const own = await loadFontsForTree(trees.length === 1 ? tree : { type: "FRAME", children: trees }, tokens);
     if (!needs.fontNeeds.length) return own;
-    return { ...own, ...(await loadFontsForTextEdits(needs.fontNeeds)) };
+    return { ...own, ...(await loadFontsForTextEdits(needs.fontNeeds, [], tokens)) };
   }
 }
 
@@ -99,7 +105,7 @@ export async function loadTreeResources(tree: WriteNode): Promise<LoadedTreeReso
 export function gateTreeResources(tree: WriteNode, loaded: LoadedTreeResources, exposure: ExposureContext = {}): RenderResources {
   assertExposureTree(tree, exposure);
   const needs: InstanceNeeds = planInstanceTree(tree, { targets: loaded.targets, fonts: loaded.fonts });
-  const resources: RenderResources = { fonts: loaded.fonts, images: loaded.images, instances: needs.plans };
+  const resources: RenderResources = { fonts: loaded.fonts, images: loaded.images, tokens: loaded.tokens, instances: needs.plans };
   resources.live = gateLiveTree(loaded.live, resources);
   return resources;
 }

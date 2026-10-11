@@ -1,0 +1,158 @@
+{
+  "name": "Bound Tokens",
+  "nodes": [
+    {
+      "id": "12:1",
+      "name": "Card",
+      "type": "FRAME",
+      "width": "contextual",
+      "height": "contextual",
+      "designedWidth": "200px",
+      "designedHeight": "160px",
+      "layout": {
+        "mode": "column",
+        "padding": {
+          "variable": {
+            "id": "VariableID:2:1"
+          }
+        },
+        "gap": {
+          "variable": {
+            "id": "VariableID:2:2"
+          }
+        }
+      },
+      "fill": {
+        "variable": {
+          "id": "VariableID:1:1"
+        }
+      },
+      "effects": {
+        "style": {
+          "id": "k4",
+          "name": "Elevation / 1"
+        }
+      },
+      "borderRadius": {
+        "variable": {
+          "id": "VariableID:3:1"
+        }
+      },
+      "children": [
+        {
+          "id": "12:2",
+          "name": "Chip",
+          "type": "FRAME",
+          "width": {
+            "variable": {
+              "id": "VariableID:4:1"
+            }
+          },
+          "height": 24,
+          "layout": {
+            "mode": "row",
+            "padding": {
+              "top": 4,
+              "right": 12,
+              "bottom": 4,
+              "left": {
+                "variable": {
+                  "id": "VariableID:2:1"
+                }
+              }
+            }
+          },
+          "fill": {
+            "type": "SOLID",
+            "color": {
+              "variable": {
+                "id": "VariableID:1:2"
+              }
+            },
+            "opacity": 0.5
+          }
+        },
+        {
+          "id": "12:3",
+          "name": "Title",
+          "type": "TEXT",
+          "width": "hug",
+          "text": [
+            "Hello ",
+            [
+              "world",
+              {
+                "fontSize": {
+                  "variable": {
+                    "id": "VariableID:5:2"
+                  }
+                }
+              }
+            ]
+          ],
+          "textStyle": {
+            "fontFamily": "Inter",
+            "fontWeight": 600,
+            "fontSize": {
+              "variable": {
+                "id": "VariableID:5:1"
+              }
+            }
+          },
+          "fill": "fill_314185fc"
+        },
+        {
+          "id": "12:4",
+          "name": "Body",
+          "type": "TEXT",
+          "width": "hug",
+          "text": "Centered body",
+          "textStyle": {
+            "style": {
+              "id": "k5",
+              "name": "Body / Regular"
+            },
+            "textAlign": "center"
+          },
+          "fill": {
+            "style": {
+              "id": "k6",
+              "name": "Ink"
+            }
+          }
+        },
+        {
+          "id": "12:5",
+          "name": "Divider",
+          "type": "RECTANGLE",
+          "width": 168,
+          "height": 32,
+          "fill": [
+            {
+              "variable": {
+                "id": "VariableID:1:2"
+              }
+            },
+            "#FFFFFF"
+          ],
+          "stroke": "fill_314185fc",
+          "strokeWidth": {
+            "variable": {
+              "id": "VariableID:7:1"
+            }
+          },
+          "opacity": {
+            "variable": {
+              "id": "VariableID:6:1"
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "components": {},
+  "styles": {
+    "fill_314185fc": "#000000"
+  },
+  "templates": {}
+}

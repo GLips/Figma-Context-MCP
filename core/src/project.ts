@@ -4,6 +4,7 @@ import { readContext, type ReadContext } from "./read-context.js";
 import { createInlineStyleTable, createRefStyleTable } from "./style-table.js";
 import { computeGridChildOrder } from "./transformers/layout.js";
 import { foldPaintStack } from "./transformers/style.js";
+import { styleReference } from "./tokens.js";
 import { hasAutoLayout } from "./utils.js";
 import type { SimplifyResult } from "./simplify.js";
 import type { NodeSnapshot } from "./snapshot.js";
@@ -82,11 +83,14 @@ function projectTrees(
       }
       if (d !== undefined) cut(full, "d", d);
       if (vectorPaths !== undefined) cut(full, "vectorPaths", vectorPaths);
-      const fill = foldPaintStack(snapshot.fills, !!snapshot.children?.length);
+      // Re-folded for the wire, so the style-wins rule must hold here as it does in extraction.
+      const fill = snapshot.styles?.fill
+        ? styleReference(snapshot.styles.fill)
+        : foldPaintStack(snapshot.fills, !!snapshot.children?.length);
       if (fill !== undefined) node.fill = fill;
       else if (full.type === "TEXT") node.fill = "none";
       else delete node.fill;
-      internStyles(node, snapshot, table);
+      internStyles(node, table);
       // Notes are collected only for nodes admitted by the wire's visibility/depth rules.
       for (const id of [full.id, full.componentId, snapshot.mainComponent?.set?.id]) {
         if (!id) continue;
@@ -139,7 +143,7 @@ function projectTrees(
     entry.children ? [entry.children] : [],
   );
   const result = refs
-    ? { ...compressDesign(nodes, surfaces, table.styles, refs.namedStyleKeys), components }
+    ? { ...compressDesign(nodes, surfaces, table.styles), components }
     : { nodes, styles: table.styles, templates: {}, components };
   // Markers attach after hashing/diffing so they cannot change template ids or component deltas.
   const mark = (list: SimplifiedNode[], donorId?: string) => {
@@ -166,21 +170,19 @@ function projectTrees(
   return result;
 }
 
-function internStyles(node: SimplifiedNode, snapshot: NodeSnapshot, table: StyleTable): void {
-  // Match extraction order because named-style collisions and table order are observable on REST.
-  if (node.layout !== undefined) node.layout = table.intern(snapshot, node.layout, [], "layout");
+function internStyles(node: SimplifiedNode, table: StyleTable): void {
+  // Extraction order: the styles table's key order is observable on REST.
+  if (node.layout !== undefined) node.layout = table.intern(node.layout, "layout");
   if (Array.isArray(node.text))
     for (const run of node.text) {
-      if (Array.isArray(run)) run[1] = table.intern(snapshot, run[1], [], "style");
+      if (Array.isArray(run)) run[1] = table.intern(run[1], "style");
     }
-  if (node.textStyle !== undefined)
-    node.textStyle = table.intern(snapshot, node.textStyle, ["text", "typography"], "style");
+  if (node.textStyle !== undefined) node.textStyle = table.intern(node.textStyle, "style");
   if (node.fill !== undefined && !(node.type === "TEXT" && node.fill === "none"))
-    node.fill = table.intern(snapshot, node.fill, ["fill", "fills"], "fill");
+    node.fill = table.intern(node.fill, "fill");
   if (node.stroke !== undefined && !(node.type === "LINE" && node.stroke === "none"))
-    node.stroke = table.intern(snapshot, node.stroke, ["stroke", "strokes"], "fill");
-  if (node.effects !== undefined)
-    node.effects = table.intern(snapshot, node.effects, ["effect", "effects"], "effect");
+    node.stroke = table.intern(node.stroke, "fill");
+  if (node.effects !== undefined) node.effects = table.intern(node.effects, "effect");
 }
 // ---------------------------------------------------------------------------
 // SVG container collapse

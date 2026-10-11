@@ -76,7 +76,10 @@ export type SnapshotTransform = number[][];
 // ---------------------------------------------------------------------------
 export interface SnapshotSolidPaint {
   type: "SOLID";
+  /** The literal the paint renders; still present when `colorVariable` binds it. */
   color: SnapshotColor;
+  /** The variable the color is bound to. The read emits it in place of `color`. */
+  colorVariable?: SnapshotTokenRef;
   opacity?: number;
   /** Raw Figma BlendMode; NORMAL/PASS_THROUGH are the default the read omits. */
   blendMode?: string;
@@ -218,7 +221,24 @@ export interface SnapshotTextStyle {
   paragraphIndent?: number;
   listSpacing?: number;
   fills?: SnapshotPaint[];
+  /**
+   * Variables bound to this style's fields. Each field's literal above stays present; the read
+   * emits the reference in its place. In a run delta, a binding differs from the base like any
+   * other field.
+   */
+  boundVariables?: SnapshotTextVariables;
 }
+
+/** The text fields a variable can bind that the vocabulary carries (fontStyle has no flcm word). */
+export type SnapshotTextVariableField =
+  | "fontFamily"
+  | "fontSize"
+  | "fontWeight"
+  | "lineHeight"
+  | "letterSpacing"
+  | "paragraphSpacing"
+  | "paragraphIndent";
+export type SnapshotTextVariables = Partial<Record<SnapshotTextVariableField, SnapshotTokenRef>>;
 
 /** A run of characters sharing one style delta against the node's base style. */
 export interface SnapshotTextRun {
@@ -242,17 +262,55 @@ export interface SnapshotText {
 }
 
 // ---------------------------------------------------------------------------
-// Named styles — DECODED from the wire. REST scatters this across two places:
-// the node's `styles` map (style-slot → styleId) and the top-level `styles`
-// table (styleId → { name, ... }). The adapter joins them into per-slot resolved
-// names folded on-node; the top-level table never reaches the core (Invariant 2).
+// Tokens — named styles and variables, DECODED from the wire. REST scatters
+// styles across the node's `styles` map (slot → styleId) and the top-level
+// `styles` table (styleId → { name, ... }); the adapter joins them on-node.
+// Variables arrive as aliases on the node, its paints and its text styles.
+// Neither wire table reaches the core (Invariant 2).
 // ---------------------------------------------------------------------------
 
-/** A resolved named-style reference (Figma named style), folded on-node by the adapter. */
-export interface SnapshotStyleRef {
-  name?: string;
+/**
+ * A token a value is bound to: a named style or a variable. `name` is present when the producer
+ * could resolve it — the plugin always can; REST can name styles (from the file response) but
+ * never variables, whose names need an Enterprise-only endpoint.
+ */
+export interface SnapshotTokenRef {
   id: string;
+  name?: string;
 }
+
+/**
+ * Node fields a variable can bind, in the snapshot's own field names. Producers normalize their
+ * wire spellings onto these: REST `size.x`/`size.y` → width/height, `rectangleCornerRadii.*` and
+ * the plugin's corner fields → the four `*Radius` names, and a whole-node `strokeWeight` binding →
+ * all four side weights. Grid gaps are absent on purpose: REST carries no binding for them.
+ */
+export type SnapshotNodeVariableField =
+  | "width"
+  | "height"
+  | "minWidth"
+  | "maxWidth"
+  | "minHeight"
+  | "maxHeight"
+  | "paddingTop"
+  | "paddingRight"
+  | "paddingBottom"
+  | "paddingLeft"
+  | "itemSpacing"
+  | "counterAxisSpacing"
+  | "topLeftRadius"
+  | "topRightRadius"
+  | "bottomRightRadius"
+  | "bottomLeftRadius"
+  | "strokeTopWeight"
+  | "strokeRightWeight"
+  | "strokeBottomWeight"
+  | "strokeLeftWeight"
+  | "opacity";
+export type SnapshotNodeVariables = Partial<Record<SnapshotNodeVariableField, SnapshotTokenRef>>;
+
+/** A node's style slots. REST's plural spellings (`fills`, `strokes`, `effects`) normalize to these. */
+export type SnapshotStyleSlot = "fill" | "stroke" | "text" | "effect" | "grid";
 
 // ---------------------------------------------------------------------------
 // Component metadata — ~1:1 structural records (Figma component traits), typed
@@ -465,11 +523,15 @@ export interface NodeSnapshot {
   text?: SnapshotText;
 
   // ------------------------------------------------------------------------
-  // Named styles — the adapter joins the node's REST `styles` map with the
-  // top-level styles table into per-slot resolved names (fill/text/effect/…).
-  // Only slots whose style resolved to a name appear here.
+  // Tokens. `styles` is keyed by slot (`fill`, `stroke`, `text`, `effect`,
+  // `grid`); a style the producer couldn't name still appears, id only.
+  // `boundVariables` covers node fields; paint and text bindings live on
+  // the paint and the text style. Literals stay on their own fields — the
+  // core's layout and paint logic reads them; only emission swaps in the
+  // reference.
   // ------------------------------------------------------------------------
-  styles?: Record<string, SnapshotStyleRef>;
+  styles?: Partial<Record<SnapshotStyleSlot, SnapshotTokenRef>>;
+  boundVariables?: SnapshotNodeVariables;
 
   // ------------------------------------------------------------------------
   // Component metadata — raw structural records; present on INSTANCE /

@@ -12,8 +12,7 @@ import type { NodeDelta, SimplifiedNode, StyleValue, TemplateBody } from "./type
  *
  * Two transformations, in this order:
  *   1. Count-gated style hoisting — a style stays in the top-level `styles`
- *      table only when 2+ nodes reference it (or it's a named Figma style);
- *      single-use styles are inlined back onto their node, dropping the
+ *      table only when 2+ nodes reference it; single-use styles are inlined back onto their node, dropping the
  *      indirection tax.
  *   2. Templates — node bodies (everything except id/name/children) that
  *      appear 2+ times are emitted once into `templates` and each occurrence is
@@ -37,7 +36,6 @@ export function compressDesign(
   nodes: SimplifiedNode[],
   extraSurfaces: SimplifiedNode[][],
   styles: Record<string, StyleValue>,
-  namedStyleKeys: Set<string>,
 ): {
   nodes: SimplifiedNode[];
   styles: Record<string, StyleValue>;
@@ -52,9 +50,9 @@ export function compressDesign(
   // its own style fields. Reused by both the inlining and expansion steps.
   const styleCounts = countStyleRefs(surfaces.flat());
 
-  const surviving = inlineSingleUseStyles(surfaces, styles, namedStyleKeys, styleCounts);
+  const surviving = inlineSingleUseStyles(surfaces, styles, styleCounts);
   const { templates, instanceCounts } = deduplicateTemplates(surfaces);
-  inlineExclusiveStyles(templates, instanceCounts, surviving, styleCounts, namedStyleKeys);
+  inlineExclusiveStyles(templates, instanceCounts, surviving, styleCounts);
 
   return { nodes, styles: surviving, templates };
 }
@@ -99,31 +97,19 @@ function visitStyleRefSlots(
 
 /**
  * Feature 1: replace single-use style refs with their inline value, returning the
- * styles that stay hoisted (used by 2+ nodes, or named styles). Mutates the
- * passed nodes in place (they're owned by this call). A single-use value is
- * referenced by exactly one node, so sharing the value object on inline creates
- * no aliasing.
+ * styles that stay hoisted (used by 2+ nodes). Mutates the passed nodes in place
+ * (they're owned by this call). A single-use value is referenced by exactly one
+ * node, so sharing the value object on inline creates no aliasing. A zero-use
+ * entry (its node was folded away after interning, e.g. by collapseSvgContainers)
+ * lands in `inlineKeys` too: nothing references it, so it is simply dropped.
  */
 function inlineSingleUseStyles(
   surfaces: SimplifiedNode[][],
   styles: Record<string, StyleValue>,
-  namedStyleKeys: Set<string>,
   counts: Map<string, number>,
 ): Record<string, StyleValue> {
   const inlineKeys = new Set<string>();
-  const dropKeys = new Set<string>();
   for (const key of Object.keys(styles)) {
-    if (namedStyleKeys.has(key)) {
-      // Named styles are design-system intent, normally kept hoisted — but only
-      // while something still references them. A named style can reach zero
-      // references when its only node is dropped after registration (e.g.
-      // collapseSvgContainers registers a vector child's style, then folds the
-      // child away). A hoisted entry nothing points to is orphan noise, so drop
-      // it. (Non-named zero-count styles fall through to inlineKeys below and are
-      // likewise dropped — nothing references them, so nothing gets inlined.)
-      if ((counts.get(key) ?? 0) === 0) dropKeys.add(key);
-      continue;
-    }
     if ((counts.get(key) ?? 0) >= 2) continue; // shared, keep hoisted
     inlineKeys.add(key);
   }
@@ -142,7 +128,7 @@ function inlineSingleUseStyles(
 
   const surviving: Record<string, StyleValue> = {};
   for (const [key, value] of Object.entries(styles)) {
-    if (!inlineKeys.has(key) && !dropKeys.has(key)) surviving[key] = value;
+    if (!inlineKeys.has(key)) surviving[key] = value;
   }
   return surviving;
 }
@@ -214,8 +200,7 @@ function deduplicateTemplates(surfaces: SimplifiedNode[][]): {
  * The test: a style whose total pre-dedup reference count equals a template's
  * instance count, and which appears in that template's body, can only have come
  * from that template's instances (any other use would push the count higher).
- * Named styles are left hoisted — surfacing design-system intent is worth the
- * indirection. A style appearing on two fields of the same body (count = 2×
+ * A style appearing on two fields of the same body (count = 2×
  * instances) simply won't match and stays hoisted; safe, if not optimal.
  */
 function inlineExclusiveStyles(
@@ -223,7 +208,6 @@ function inlineExclusiveStyles(
   instanceCounts: Map<string, number>,
   styles: Record<string, StyleValue>,
   counts: Map<string, number>,
-  namedStyleKeys: Set<string>,
 ): void {
   for (const [hash, body] of Object.entries(templates)) {
     const instanceCount = instanceCounts.get(hash);
@@ -233,7 +217,6 @@ function inlineExclusiveStyles(
     const inlineExclusive = (target: SimplifiedNode | TemplateBody | NodeDelta): void => {
       visitStyleRefSlots(target, (ref, set) => {
         if (typeof ref !== "string") return;
-        if (namedStyleKeys.has(ref)) return;
         if (!(ref in styles)) return;
         if (counts.get(ref) === instanceCount) {
           set(styles[ref]);

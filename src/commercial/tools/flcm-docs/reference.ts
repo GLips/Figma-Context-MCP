@@ -41,6 +41,7 @@ import {
   PAINT_INTRO,
   IMAGE_INTRO,
   EFFECTS_INTRO,
+  TOKENS,
   RENDER_KEYS,
   verifyRecipe,
   RAW_FIGMA,
@@ -388,14 +389,15 @@ const SECTIONS: Section[] = [
   },
   {
     id: "values",
-    title: "Values — colors, gradients, images, effects, vector art",
+    title: "Values — colors, gradients, images, effects, tokens, vector art",
     blurb:
-      "the CSS subset, paint and flcm.gradient, flcm.image, flcm.effects, and svg/path vector art",
+      "the CSS subset, paint and flcm.gradient, flcm.image, flcm.effects, variable and style references, and svg/path vector art",
     body: () =>
       `### The CSS subset\n\n${demoteHeadings(CSS_SUBSET)}\n\n` +
       `### Paint & gradients\n\n${PAINT_INTRO}\n\n#### flcm.gradient fields\n\n${propTable(FIELD_GROUPS.gradient)}\n\n` +
       `### Images\n\n${IMAGE_INTRO}\n\n${IMAGE_REF_REUSE}\n\n#### flcm.image opts\n\n${propTable(FIELD_GROUPS.image)}\n\n` +
       `### Effects\n\n${EFFECTS_INTRO}\n\n#### flcm.effects fields\n\n${propTable(FIELD_GROUPS.effects)}\n\n` +
+      `### Variables and styles\n\n${TOKENS}\n\n` +
       `### Vector art (svg & path)\n\n${VECTOR_INTRO}`,
   },
   {

@@ -60,6 +60,16 @@ export { stableStringify } from "./utils.js";
 
 export type { SimplifiedFill } from "./transformers/style.js";
 
+// Token references are one vocabulary for both directions: the read emits them, the plugin's write
+// side recognizes the same shape when a read is pasted back.
+export type { StyleReference, TokenIdentity, TokenReference, VariableReference } from "./tokens.js";
+export {
+  isStyleReference,
+  isVariableReference,
+  styleReference,
+  variableReference,
+} from "./tokens.js";
+
 // Deliberately absent: `walkNodes`, `createRefStyleTable`, `STYLE_REF_FIELDS` — see internal.ts.
 
 export { project, projectReadNode, isElision } from "./project.js";

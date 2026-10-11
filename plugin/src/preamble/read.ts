@@ -15,7 +15,7 @@ import {
   type MainComponentSink,
   type UnreadableSink,
   type SceneNodeLike,
-  type SceneStyleResolver,
+  type SceneTokenResolver,
 } from "./node-to-snapshot.js";
 import { rejectUnknownKeys, showValue } from "./validate.js";
 import { assertNodeStillOnCanvas } from "./freshness.js";
@@ -157,8 +157,24 @@ export function createResolvedTargets(): ResolvedTargets {
   };
 }
 
-// Style ids survive unresolved lookups in readOnlySource; only resolved names become wire style keys.
-const resolveStyle: SceneStyleResolver = (styleId) => figma.getStyleByIdAsync(styleId);
+/**
+ * Token names for one read. Cached per id because a token repeats across a tree — every run of a
+ * bound text, every card on one fill variable. An unresolvable id (a deleted style, an unloaded
+ * library variable) reads as a reference carrying its id only.
+ */
+function liveTokenResolver(): SceneTokenResolver {
+  const cache = new Map<string, Promise<{ name: string; key?: string } | null>>();
+  return (kind, id) => {
+    const key = `${kind}:${id}`;
+    let lookup = cache.get(key);
+    if (!lookup) {
+      lookup =
+        kind === "style" ? figma.getStyleByIdAsync(id) : figma.variables.getVariableByIdAsync(id);
+      cache.set(key, lookup);
+    }
+    return lookup;
+  };
+}
 
 // The adapter's structural view narrows plugin typings at this boundary. The resulting data is
 // complete in the sandbox; registration defers every lossy decision until host egress.
@@ -169,15 +185,16 @@ async function simplifyScene(
 ): Promise<import("@framelink/core").SimplifyResult> {
   const annotationCategories = categories ?? await readAnnotationCategoryNames();
   const mainComponents: MainComponentSink = new Map();
+  const resolveToken = liveTokenResolver();
   const snapshot = await sceneNodeToSnapshot(
     node as unknown as SceneNodeLike,
-    resolveStyle,
+    resolveToken,
     mainComponents,
     annotationCategories,
     unreadable,
   );
   const componentDefinitions =
-    await offTreeDefinitions(snapshot, mainComponents, annotationCategories);
+    await offTreeDefinitions(snapshot, mainComponents, annotationCategories, resolveToken);
   attachCommentCounts(snapshot, await readCommentCounts());
   const full = await simplify([snapshot], { componentDefinitions });
   for (const node of full.nodes) registerNode(node);
@@ -210,6 +227,7 @@ async function offTreeDefinitions(
   snapshot: NodeSnapshot,
   mainComponents: MainComponentSink,
   annotationCategories: ReadonlyMap<string, string>,
+  resolveToken: SceneTokenResolver,
 ): Promise<NodeSnapshot[]> {
   if (mainComponents.size === 0) return [];
 
@@ -225,7 +243,7 @@ async function offTreeDefinitions(
     if (defined.has(id)) continue;
     defined.add(id);
     try {
-      definitions.push(await sceneNodeToSnapshot(main as unknown as SceneNodeLike, resolveStyle, mainComponents, annotationCategories));
+      definitions.push(await sceneNodeToSnapshot(main as unknown as SceneNodeLike, resolveToken, mainComponents, annotationCategories));
     } catch {
       // The component was deleted mid-read, or the library refused to load it. Donor floor.
     }

@@ -1,4 +1,6 @@
-import { gapShorthand } from "./common.js";
+import { gapShorthand, type SimplifiedLayout } from "./common.js";
+import { bindNumber } from "../bound-values.js";
+import { variableReference } from "../../tokens.js";
 import type { NodeSnapshot } from "../../snapshot.js";
 
 export function convertJustifyContent(align?: NodeSnapshot["primaryAxisAlignItems"]) {
@@ -42,17 +44,28 @@ export function convertAlignItems(
 }
 
 // SPACE_BETWEEN computes gaps dynamically — the API returns stale spacing
-// values, but Figma's UI shows "Auto". Suppress the affected axis.
-export function buildFlexGap(n: NodeSnapshot, mode: "row" | "column"): string | undefined {
+// values, but Figma's UI shows "Auto". Suppress the affected axis (and its binding with it).
+export function buildFlexGap(
+  n: NodeSnapshot,
+  mode: "row" | "column",
+): SimplifiedLayout["gap"] | undefined {
   const primaryGap = n.primaryAxisAlignItems === "SPACE_BETWEEN" ? undefined : n.itemSpacing;
   const counterGap =
     n.layoutWrap !== "WRAP" || n.counterAxisAlignContent === "SPACE_BETWEEN"
       ? undefined
       : n.counterAxisSpacing;
+  const primaryRef = primaryGap === undefined ? undefined : n.boundVariables?.itemSpacing;
+  const counterRef = counterGap === undefined ? undefined : n.boundVariables?.counterAxisSpacing;
 
   // Map Figma's primary/counter axes to CSS's row/column axes
-  const rowGap = mode === "row" ? counterGap : primaryGap;
-  const colGap = mode === "row" ? primaryGap : counterGap;
+  const [rowGap, rowRef, colGap, colRef] =
+    mode === "row"
+      ? [counterGap, counterRef, primaryGap, primaryRef]
+      : [primaryGap, primaryRef, counterGap, counterRef];
 
-  return gapShorthand(rowGap, colGap);
+  if (!rowRef && !colRef) return gapShorthand(rowGap, colGap);
+  // A bound gap emits even at 0: the binding is intent, not the omitted default.
+  if (rowGap === undefined || colGap === undefined) return variableReference((rowRef ?? colRef)!);
+  if (rowRef && colRef && rowRef.id === colRef.id) return variableReference(rowRef);
+  return { row: bindNumber(rowGap, rowRef), column: bindNumber(colGap, colRef) };
 }

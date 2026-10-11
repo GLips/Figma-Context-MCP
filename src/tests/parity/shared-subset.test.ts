@@ -112,19 +112,21 @@ describe("parityView comparator policy", () => {
     expect(parityView(hoisted)).toEqual(parityView(inlined));
   });
 
-  it("erases same-name style disambiguation by resolving refs to values", () => {
-    // Two producers hoist the same value under different keys (one plain name,
-    // one id-disambiguated). After expansion the keys are gone; values match.
-    const plainKey = design({
-      nodes: [{ id: "1", name: "H", type: "TEXT", textStyle: "Heading / Large" }],
-      styles: { "Heading / Large": { fontSize: 14 } },
-    } as unknown as Partial<SimplifiedDesign>);
-    const suffixedKey = design({
-      nodes: [{ id: "1", name: "H", type: "TEXT", textStyle: "Heading / Large (161:300)" }],
-      styles: { "Heading / Large (161:300)": { fontSize: 14 } },
-    } as unknown as Partial<SimplifiedDesign>);
+  it("compares a variable reference by id alone; style names and ids still count", () => {
+    const withFill = (fill: unknown) =>
+      design({
+        nodes: [{ id: "1", name: "R", type: "RECTANGLE", fill }],
+      } as unknown as Partial<SimplifiedDesign>);
 
-    expect(parityView(plainKey)).toEqual(parityView(suffixedKey));
+    expect(parityView(withFill({ variable: { id: "V:1", name: "color/brand" } }))).toEqual(
+      parityView(withFill({ variable: { id: "V:1" } })),
+    );
+    expect(parityView(withFill({ variable: { id: "V:1" } }))).not.toEqual(
+      parityView(withFill({ variable: { id: "V:2" } })),
+    );
+    expect(parityView(withFill({ style: { id: "S:1", name: "Brand" } }))).not.toEqual(
+      parityView(withFill({ style: { id: "S:1" } })),
+    );
   });
 
   it("expands element templates so they match the fully-inlined bodies", () => {

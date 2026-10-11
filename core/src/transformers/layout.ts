@@ -16,6 +16,8 @@ import {
 } from "./layout/common.js";
 import { buildFlexGap, convertAlignItems, convertJustifyContent } from "./layout/flex.js";
 import { buildGridChildPositioning, isPackedGrid } from "./layout/grid.js";
+import { bindNumber, bindParts } from "./bound-values.js";
+import { variableReference } from "../tokens.js";
 import type { NodeGeometry, SimplifiedDimension, SimplifiedLayout } from "./layout/common.js";
 
 export type { NodeGeometry, SimplifiedDimension, SimplifiedLayout } from "./layout/common.js";
@@ -73,13 +75,22 @@ function buildSimplifiedFrameValues(n: NodeSnapshot): SimplifiedLayout {
   // the plugin hands this object to the sandbox AS-IS (no JSON round trip to drop an undefined
   // key), and a read shape spreads into the constructors, whose closed-set gate judges every
   // present key — so a present-but-undefined `alignSelf` would read as an unknown prop.
-  if (n.paddingTop || n.paddingBottom || n.paddingLeft || n.paddingRight) {
-    frameValues.padding = generateCSSShorthand({
-      top: n.paddingTop ?? 0,
-      right: n.paddingRight ?? 0,
-      bottom: n.paddingBottom ?? 0,
-      left: n.paddingLeft ?? 0,
-    });
+  const sides = {
+    top: n.paddingTop ?? 0,
+    right: n.paddingRight ?? 0,
+    bottom: n.paddingBottom ?? 0,
+    left: n.paddingLeft ?? 0,
+  };
+  const bound = n.boundVariables;
+  const boundPadding = bindParts([
+    ["top", sides.top, bound?.paddingTop],
+    ["right", sides.right, bound?.paddingRight],
+    ["bottom", sides.bottom, bound?.paddingBottom],
+    ["left", sides.left, bound?.paddingLeft],
+  ]);
+  if (boundPadding) frameValues.padding = boundPadding;
+  else if (sides.top || sides.bottom || sides.left || sides.right) {
+    frameValues.padding = generateCSSShorthand(sides);
   }
 
   if (mode === "grid") {
@@ -135,10 +146,13 @@ function buildNodeGeometry(
   // keep their fill/hug/fixed semantics. See fig-ovmi.
   const isRoot = parent === undefined;
   const geometry: NodeGeometry = {};
-  if (n.minWidth != null) geometry.minWidth = pixelRound(n.minWidth);
-  if (n.maxWidth != null) geometry.maxWidth = pixelRound(n.maxWidth);
-  if (n.minHeight != null) geometry.minHeight = pixelRound(n.minHeight);
-  if (n.maxHeight != null) geometry.maxHeight = pixelRound(n.maxHeight);
+  const bound = n.boundVariables;
+  if (n.minWidth != null) geometry.minWidth = bindNumber(pixelRound(n.minWidth), bound?.minWidth);
+  if (n.maxWidth != null) geometry.maxWidth = bindNumber(pixelRound(n.maxWidth), bound?.maxWidth);
+  if (n.minHeight != null)
+    geometry.minHeight = bindNumber(pixelRound(n.minHeight), bound?.minHeight);
+  if (n.maxHeight != null)
+    geometry.maxHeight = bindNumber(pixelRound(n.maxHeight), bound?.maxHeight);
 
   // Per-axis width/height. Emit a concrete number only when the child isn't
   // stretching that axis and the sizing flag permits it. Stretch detection and
@@ -175,12 +189,25 @@ function buildNodeGeometry(
           isRoot,
           !stretch.vertical && shouldEmitFixedDimension(n.layoutSizingVertical, axis),
         );
-  if (horizontal.dimension !== undefined) geometry.width = horizontal.dimension;
+  // Only a fixed size gives way to its variable; fill and hug are sizing words, not values. A root's
+  // "contextual" is a fixed axis too: a bound one is deliberate, so it reads as its variable rather
+  // than as the size it happened to be designed at.
+  const bindsFixed = (dimension: SimplifiedDimension | undefined) =>
+    typeof dimension === "number" || dimension === "contextual";
+  if (horizontal.dimension !== undefined)
+    geometry.width =
+      bindsFixed(horizontal.dimension) && bound?.width
+        ? variableReference(bound.width)
+        : horizontal.dimension;
   // A TEXT's height follows its content unless it fills or is fixed — "hug" is every text's default,
   // so it is omitted, the way the write side treats an unnamed height. A number (a fixed-height
   // text box, textAutoResize NONE) and "fill" are the deviations and survive.
   const textDefaultHeight = n.type === "TEXT" && vertical.dimension === "hug";
-  if (vertical.dimension !== undefined && !textDefaultHeight) geometry.height = vertical.dimension;
+  if (vertical.dimension !== undefined && !textDefaultHeight)
+    geometry.height =
+      bindsFixed(vertical.dimension) && bound?.height
+        ? variableReference(bound.height)
+        : vertical.dimension;
   if (horizontal.designed !== undefined) geometry.designedWidth = horizontal.designed;
   if (vertical.designed !== undefined) geometry.designedHeight = vertical.designed;
 

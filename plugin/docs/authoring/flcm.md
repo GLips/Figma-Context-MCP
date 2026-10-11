@@ -51,7 +51,7 @@ Assigning into session copies plain objects and arrays, so mutate the stored val
 
 ### Fidelity and scope
 
-flcm refuses what it can't write as authored rather than guess. A value outside the CSS subset, a layout word the node can't realize, and a concept with no create path — variables and prototype interactions — all throw an error naming the value and the fix, never a guess or a silent no-op. Errors name the verb and the path to the node, such as `spec.children[3].children[1]`.
+flcm refuses what it can't write as authored rather than guess. A value outside the CSS subset, a layout word the node can't realize, and a concept with no create path — creating a variable or style, prototype interactions — all throw an error naming the value and the fix, never a guess or a silent no-op. Errors name the verb and the path to the node, such as `spec.children[3].children[1]`.
 
 Some departures render without an error. A font family Figma doesn't have falls back, and a weight or italic the family lacks snaps to its nearest style; each comes back in the returned handle's `warnings`, as does a size the layout resolved differently from what you wrote. A character the font can't draw renders as nothing, with no warning at all (see unrenderable glyphs under the TEXT props). So a run without errors means the script was valid, not that the canvas looks right: check it with a screenshot (see "Check what you built" in the recipes).
 
@@ -157,9 +157,9 @@ A null size means a REST depth limit dropped the list upstream, so its size is u
 
 ### readOnlySource
 
-`readOnlySource` records what the producer decoded before converting to CSS: exact measurements, disabled paints and effects, paint stacks, resolved text runs, style identities, constraints, blend modes, clipping and component metadata. The ordinary fields stay the authoring vocabulary; writing `readOnlySource` changes nothing, and `clone` is how to keep live state a spec can't express.
+`readOnlySource` records what the producer decoded before converting to CSS: exact measurements, disabled paints and effects, paint stacks, resolved text runs, the literal values behind token references, constraints, blend modes, clipping and component metadata. The ordinary fields stay the authoring vocabulary; writing `readOnlySource` changes nothing, and `clone` is how to keep live state a spec can't express.
 
-Data that came over REST has no VECTOR paths; read live with `flcm.get` for them. Variables, prototype interactions, vector networks, video paints, mask and boolean-operation settings and plugin data are outside the vocabulary entirely — use raw `figma.*`. Being able to read a node type doesn't mean a verb can create it.
+Data that came over REST has no VECTOR paths; read live with `flcm.get` for them. Prototype interactions, vector networks, video paints, mask and boolean-operation settings and plugin data are outside the vocabulary entirely — use raw `figma.*`. Being able to read a node type doesn't mean a verb can create it.
 
 ### Warnings
 
@@ -270,7 +270,7 @@ Aliases normalize silently on every verb; equivalent duplicates agree, conflicti
 | --- | --- | --- |
 | `name` | string | Layer name. |
 | `key` | string | Persistent metadata for find/findOne. Unique within one authored tree; id alone decides live identity. |
-| `opacity` | number (0–1) |  |
+| `opacity` | number (0–1) \| { variable } |  |
 | `mixBlendMode` | "normal" \| "multiply" \| "screen" \| "overlay" \| "soft-light" \| … (CSS mix-blend-mode) |  |
 | `visible` | boolean | get and find still return hidden nodes, with their annotations. |
 | `locked` | boolean | Locks against pointer edits in Figma's UI; flcm.edit still writes to it. |
@@ -282,12 +282,12 @@ A LINE sizes along its length alone, its `width`: a number, or `"fill"` under a 
 | Prop | Type | Notes |
 | --- | --- | --- |
 | `layout` | { gridColumn?, gridRow?, justifySelf?, alignSelf?, zIndex? } | Placement under an auto-layout parent: grid cell words, or alignSelf "stretch" in flow. |
-| `minWidth` | number \| "none" | Positive px. Applies to auto-layout containers and their direct children. "none" clears it. A size the bound clamps still succeeds, with a warning. |
-| `maxWidth` | number \| "none" | Positive px. Applies to auto-layout containers and their direct children. "none" clears it. A size the bound clamps still succeeds, with a warning. |
-| `minHeight` | number \| "none" | Positive px. Applies to auto-layout containers and their direct children. "none" clears it. A size the bound clamps still succeeds, with a warning. |
-| `maxHeight` | number \| "none" | Positive px. Applies to auto-layout containers and their direct children. "none" clears it. A size the bound clamps still succeeds, with a warning. |
-| `width` | number \| "Npx" \| "N%" \| "fill" \| "hug" | "N%" is of the parent's realized size. The root takes neither "N%" nor "fill" (the page is unbounded); "N%" is also refused on in-flow grid children and on an in-flow child whose parent hugs that axis. Only text and a container with a layout mode can "hug". |
-| `height` | number \| "fill" \| "hug" \| "N%" | As width. TEXT hugs its content by default; a fixed or "N%" height needs a width that doesn't hug. |
+| `minWidth` | number \| "none" \| { variable } | Positive px. Applies to auto-layout containers and their direct children. "none" clears it. A size the bound clamps still succeeds, with a warning. |
+| `maxWidth` | number \| "none" \| { variable } | Positive px. Applies to auto-layout containers and their direct children. "none" clears it. A size the bound clamps still succeeds, with a warning. |
+| `minHeight` | number \| "none" \| { variable } | Positive px. Applies to auto-layout containers and their direct children. "none" clears it. A size the bound clamps still succeeds, with a warning. |
+| `maxHeight` | number \| "none" \| { variable } | Positive px. Applies to auto-layout containers and their direct children. "none" clears it. A size the bound clamps still succeeds, with a warning. |
+| `width` | number \| "Npx" \| "N%" \| "fill" \| "hug" \| { variable } | "N%" is of the parent's realized size. The root takes neither "N%" nor "fill" (the page is unbounded); "N%" is also refused on in-flow grid children and on an in-flow child whose parent hugs that axis. Only text and a container with a layout mode can "hug". |
+| `height` | number \| "fill" \| "hug" \| "N%" \| { variable } | As width. TEXT hugs its content by default; a fixed or "N%" height needs a width that doesn't hug. |
 | `left` | number \| "Npx" \| "N%" | Naming `left` or `top` takes the node out of an auto-layout flow, like position: absolute. On a render root it is the page position; without it every root stacks at the origin. |
 | `top` | number \| "Npx" \| "N%" | As `left`. |
 | `position` | "absolute" \| "none" | "absolute" leaves the flow where the node stands. Under edit, "none" returns it to the flow and can't sit beside `left`/`top`/`anchor`. |
@@ -302,12 +302,12 @@ FRAME, RECTANGLE and INSTANCE take every prop below; ELLIPSE and path VECTOR tak
 
 | Prop | Type | Notes |
 | --- | --- | --- |
-| `fill` | paint \| paint[] | A CSS color or gradient string, flcm.gradient() or flcm.image(), or an array stacked top first (see the values section). "none" removes it. |
-| `stroke` | paint \| paint[] | Border paint, or a stack. "none" removes it. |
-| `strokeWidth` | number \| "Npx" \| CSS shorthand | The per-side shorthand works on frames, rectangles, components and instances only; other types take one value. |
+| `fill` | paint \| paint[] \| { style } | A CSS color or gradient string, flcm.gradient() or flcm.image(), a color { variable }, or an array stacked top first (see the values section). A paint { style } takes the whole slot. "none" removes it. |
+| `stroke` | paint \| paint[] \| { style } | Border paint, or a stack. A paint { style } takes the whole slot. "none" removes it. |
+| `strokeWidth` | number \| "Npx" \| CSS shorthand \| { variable } \| { top, right, bottom, left } | Per-side widths (the shorthand, or { top, right, bottom, left } whose sides may be variables) work on frames, rectangles, components and instances only; other types take one value. |
 | `strokeAlign` | "inside" \| "outside" \| "center" | Default "inside", like a CSS border. |
-| `borderRadius` | number \| "Npx" \| CSS shorthand | Frames and rectangles only. Corners are circular, so the elliptical "x / y" form is refused. |
-| `effects` | effects value | flcm.effects() or a bag of CSS strings (see the values section). "none" removes all. |
+| `borderRadius` | number \| "Npx" \| CSS shorthand \| { variable } \| { topLeft, topRight, bottomRight, bottomLeft } | Frames and rectangles only. Corners are circular, so the elliptical "x / y" form is refused. Per-corner { topLeft, topRight, bottomRight, bottomLeft } takes variables per corner. |
+| `effects` | effects value \| { style } | flcm.effects() or a bag of CSS strings (see the values section), or an effect { style }. An effect's own fields don't bind variables. "none" removes all. |
 | `rotation` | number (deg) | Applied after layout sizing, about the centre: it turns the box, never resizes it. |
 
 ### FRAME — container props
@@ -324,9 +324,9 @@ FRAME, RECTANGLE and INSTANCE take every prop below; ELLIPSE and path VECTOR tak
 | `gridTemplateColumns` | string | Tracks are Npx, Nfr, auto or fit-content(100%); repeat() and minmax(0, Nfr) expand to native tracks, which is what reads return. Required to create a grid. Fr tracks divide this frame's own width, so give it a number or "fill" in the same call; a hugging width is refused. |
 | `gridTemplateRows` | string | Same track syntax. Omitted, rows are implicit hug tracks that grow as children are added; named rows are fixed and stop growing. |
 | `mode` | "row" \| "column" \| "grid" \| "none" | "row" and "column" are flex directions, "grid" is CSS grid, "none" (default) is free-form. The other container words need a mode. A new grid needs gridTemplateColumns. |
-| `gap` | number \| "Npx" \| "Npx Npx" | Unequal "row-gap column-gap" needs grid or wrap. |
+| `gap` | number \| "Npx" \| "Npx Npx" \| { variable } \| { row, column } | Unequal "row-gap column-gap" (or { row, column }) needs grid or wrap. A variable binds a row or column gap, not a grid's. |
 | `wrap` | boolean | Rows only. |
-| `padding` | number \| "12px 16px" \| { x?, y? } \| { top?, right?, bottom?, left? } | Also { x, y } (x = left and right, y = top and bottom) or per-edge. |
+| `padding` | number \| "12px 16px" \| { variable } \| { x?, y? } \| { top?, right?, bottom?, left? } | Also { x, y } (x = left and right, y = top and bottom) or per-edge; each edge takes a { variable } too. |
 | `justifyContent` | "flex-start" \| "flex-end" \| "center" \| "space-between" | Figma has no space-around or space-evenly: use space-between, or gap and padding, never spacer nodes. |
 | `alignItems` | "flex-start" \| "flex-end" \| "center" \| "stretch" \| "baseline" | "baseline" needs a row. "stretch" leaves a fixed cross-axis size alone. |
 
@@ -345,8 +345,8 @@ FRAME, RECTANGLE and INSTANCE take every prop below; ELLIPSE and path VECTOR tak
 | Prop | Type | Notes |
 | --- | --- | --- |
 | `text` | string \| run[] | A string with markdown (**bold**, *italic*, ~~strike~~, [text](url); backslash-escape a literal *) or an array of styled runs. Read style tokens like {ts1}…{/ts1} are refused. Under edit it replaces the whole content. |
-| `textStyle` | { fontFamily?, fontWeight?, fontSize?, fontStyle?, lineHeight?, letterSpacing?, textDecoration?, textTransform?, fontVariant?, textAlign?, textAlignVertical?, paragraphSpacing?, paragraphIndent?, listSpacing?, hyperlink?, lineClamp? } | The text style base. Runs layer over it. |
-| `fill` | paint \| paint[] | The text color. "none" removes it. |
+| `textStyle` | { style?, fontFamily?, fontWeight?, fontSize?, fontStyle?, lineHeight?, letterSpacing?, textDecoration?, textTransform?, fontVariant?, textAlign?, textAlignVertical?, paragraphSpacing?, paragraphIndent?, listSpacing?, hyperlink?, lineClamp? } | The text style base. Runs layer over it. |
+| `fill` | paint \| paint[] \| { style } | The text color. A paint { style } takes the whole slot, and then runs can't set color. "none" removes it. |
 | `boldWeight` | number (100–900) \| name | What `**bold**` in `text` resolves to. Default 700; pass back the value `get` reports so a copy emphasizes like the original. Under edit it only matters beside `text`. |
 
 `text` is a string or array of styled runs. `fill` is its paint. `boldWeight` says what `**` in `text` resolves to. How a text sizes without a fixed `width` is under text width in layout.
@@ -355,19 +355,20 @@ FRAME, RECTANGLE and INSTANCE take every prop below; ELLIPSE and path VECTOR tak
 
 | Prop | Type | Notes |
 | --- | --- | --- |
-| `fontFamily` | string | An unknown family falls back to Inter. |
-| `fontWeight` | number (100–900) \| name | Snaps to the nearest style the family has. |
-| `fontSize` | number |  |
+| `style` | name \| id \| { id?, name? } | A shared text style, by name or id. It sets the font, size and spacing words itself, so only textAlign, textAlignVertical, hyperlink and lineClamp ride beside it, and runs may set only color and hyperlink. |
+| `fontFamily` | string \| { variable } | An unknown family falls back to Inter. A STRING variable binds it. |
+| `fontWeight` | number (100–900) \| name \| { variable } | Snaps to the nearest style the family has. |
+| `fontSize` | number \| { variable } |  |
 | `fontStyle` | "italic" \| "normal" | No oblique; snaps to the family's italic. "normal" only matters on a run, clearing an italic base. |
-| `lineHeight` | number(px) \| "Npx" \| "N%" \| "Nem" \| "auto" | "auto" is the font default. |
-| `letterSpacing` | number(px) \| "Npx" \| "N%" \| "Nem" |  |
+| `lineHeight` | number(px) \| "Npx" \| "N%" \| "Nem" \| "auto" \| { variable } | "auto" is the font default. A variable binds it in px. |
+| `letterSpacing` | number(px) \| "Npx" \| "N%" \| "Nem" \| { variable } | A variable binds it in px. |
 | `textDecoration` | "underline" \| "line-through" \| "none" | "none" only matters on a run, clearing an inherited decoration. Also inline: ~~text~~. |
 | `textAlign` | "left" \| "center" \| "right" \| "justify" |  |
 | `textAlignVertical` | "top" \| "center" \| "bottom" | Whole node only, never per run. |
 | `textTransform` | "uppercase" \| "lowercase" \| "capitalize" \| "none" | Changes the displayed case, not the characters. Shares a Figma slot with fontVariant, so "none" clears both. |
 | `fontVariant` | "small-caps" \| "all-small-caps" | Shares a slot with textTransform, so naming both is refused. |
-| `paragraphSpacing` | number \| "Npx" | Space between paragraphs. |
-| `paragraphIndent` | number \| "Npx" | First-line indent. |
+| `paragraphSpacing` | number \| "Npx" \| { variable } | Space between paragraphs. |
+| `paragraphIndent` | number \| "Npx" \| { variable } | First-line indent. |
 | `listSpacing` | number \| "Npx" | Space between list items. |
 | `hyperlink` | string (url) \| { type: "URL", url } | Links the whole text node. Links to a node are read-only. |
 | `lineClamp` | number (≥1) \| "none" | Ellipsis after N lines. Needs a `width` the text wraps against (a number, "fill" or "N%"); a hugging text is refused. "none" removes it. |
@@ -405,17 +406,17 @@ Each styled run's delta fields:
 
 | Prop | Type | Notes |
 | --- | --- | --- |
-| `fontWeight` | number (100–900) \| name | Snaps to the nearest style the family has. |
-| `fontSize` | number |  |
-| `fontFamily` | string | An unknown family falls back to Inter. |
+| `fontWeight` | number (100–900) \| name \| { variable } | Snaps to the nearest style the family has. |
+| `fontSize` | number \| { variable } |  |
+| `fontFamily` | string \| { variable } | An unknown family falls back to Inter. A STRING variable binds it. |
 | `fontStyle` | "italic" \| "normal" | No oblique; snaps to the family's italic. "normal" only matters on a run, clearing an italic base. |
-| `lineHeight` | number(px) \| "Npx" \| "N%" \| "Nem" \| "auto" | "auto" is the font default. |
-| `letterSpacing` | number(px) \| "Npx" \| "N%" \| "Nem" |  |
+| `lineHeight` | number(px) \| "Npx" \| "N%" \| "Nem" \| "auto" \| { variable } | "auto" is the font default. A variable binds it in px. |
+| `letterSpacing` | number(px) \| "Npx" \| "N%" \| "Nem" \| { variable } | A variable binds it in px. |
 | `textDecoration` | "underline" \| "line-through" \| "none" | "none" only matters on a run, clearing an inherited decoration. Also inline: ~~text~~. |
 | `textTransform` | "uppercase" \| "lowercase" \| "capitalize" \| "none" | Changes the displayed case, not the characters. Shares a Figma slot with fontVariant, so "none" clears both. |
 | `fontVariant` | "small-caps" \| "all-small-caps" | Shares a slot with textTransform, so naming both is refused. |
-| `paragraphSpacing` | number \| "Npx" | Space between paragraphs. |
-| `paragraphIndent` | number \| "Npx" | First-line indent. |
+| `paragraphSpacing` | number \| "Npx" \| { variable } | Space between paragraphs. |
+| `paragraphIndent` | number \| "Npx" \| { variable } | First-line indent. |
 | `listSpacing` | number \| "Npx" | Space between list items. |
 | `color` | paint \| paint[] | Per-span text color. |
 | `hyperlink` | string (url) \| { type: "URL", url } | A URL over THIS span — inline `[text](url)` is usually simpler. Links to a NODE are read-only and fail loud. |
@@ -426,9 +427,9 @@ A LINE takes the placement words from Size & position, but not its size words, p
 
 | Prop | Type | Notes |
 | --- | --- | --- |
-| `stroke` | paint \| paint[] | The line's paint. "none" removes it. |
-| `strokeWidth` | number \| "Npx" | Thickness. Defaults to 1. |
-| `width` | number \| "Npx" | The length: a number, or "fill" along an unrotated row or column parent. A rotated line needs a number; for a rule across a row use a 1px-wide RECTANGLE with height: "fill". No "hug" or percent. |
+| `stroke` | paint \| paint[] \| { style } | The line's paint. A paint { style } takes the whole slot. "none" removes it. |
+| `strokeWidth` | number \| "Npx" \| { variable } | Thickness. Defaults to 1. |
+| `width` | number \| "Npx" \| { variable } | The length: a number or { variable }, or "fill" along an unrotated row or column parent. A rotated line needs a number; for a rule across a row use a 1px-wide RECTANGLE with height: "fill". No "hug" or percent. |
 | `rotation` | number (deg) | 90 makes it vertical. Needs a numeric `width`. |
 
 ### VECTOR — path props (`d` / `vectorPaths`)
@@ -488,7 +489,7 @@ if (done) {
 } // not there any more: leave the node alone and say so in chat
 ```
 
-## Values — colors, gradients, images, effects, vector art
+## Values — colors, gradients, images, effects, tokens, vector art
 
 ### The CSS subset
 
@@ -633,6 +634,25 @@ Stacks are **top first**, as in CSS: the first shadow in `boxShadow` (or in a `s
 | `texture` | true \| object | Textured surface — object form only. `true` for a default, or { noiseSize, radius, clipToShape }. |
 | `progressiveBlur` | number \| object | A layer blur that ramps across the node — object form only. A number is the end radius; or { startRadius, endRadius, startOffset, endOffset }. Offsets are normalized 0–1 object space (default fade top→bottom: {x:0,y:0}→{x:0,y:1}). Raw Figma radii (not CSS-scaled). |
 | `progressiveBackgroundBlur` | number \| object | A background blur that ramps across the node (blurs what's behind, like `backgroundBlur`) — object form only. Same fields and defaults as `progressiveBlur`. |
+
+### Variables and styles
+
+A value bound to a design token reads as a **reference** in place of the literal: `{ variable: { id, name } }` or `{ style: { id, name } }`. Write the same value back and the binding stays, whereas writing the literal it renders as detaches the token. A reference also binds a value that was never bound. On a write, the token can be a name or an id: `{ variable: "Spacing/12" }`, `{ style: "Heading / Large" }`, or `{ variable: { id } }`. When both an id and a name are given, the id wins.
+
+```js
+await flcm.edit(card, {
+  fill: { style: "Surface" },                                  // a paint style takes the whole slot
+  stroke: { variable: "Border/Subtle" },                      // a color variable binds one paint layer
+  layout: { padding: { variable: "Spacing/16" }, gap: { variable: "Spacing/8" } },
+  borderRadius: { variable: "Radius/M" },
+});
+```
+
+- A variable stands in for a number or a color: `width`, `height`, the four bounds, `opacity`, `borderRadius`, `strokeWidth`, `layout.padding` and a flex `layout.gap`; a solid paint layer, including a run's `color`; and `fontFamily`, `fontSize`, `fontWeight`, `lineHeight`, `letterSpacing`, `paragraphSpacing` and `paragraphIndent`, on `textStyle` or in a run. To bind one side of a shorthand, use its object form, e.g. `padding: { top: { variable: "Spacing/8" }, right: 16, bottom: 8, left: 16 }` or `borderRadius: { topLeft, topRight, bottomRight, bottomLeft }`. A blended or translucent bound paint is `{ type: "SOLID", color: { variable }, opacity, blendMode }`.
+- A style takes a whole slot: `fill`, `stroke`, `effects`, or `textStyle: { style }`. Beside a text style, `textStyle` keeps only the words a text style doesn't set: `textAlign`, `textAlignVertical`, `hyperlink` and `lineClamp`. Font words beside it, or in its runs, are refused.
+- A name is looked up among this file's local tokens first, then among those already used on the current page. An unknown or ambiguous name fails before anything is written and lists the candidates; pass an id to choose between them. A REST read names styles but gives variables only by id.
+
+Creating variables, collections, modes and styles, switching modes, and binding gradient stops, effect fields or grid gaps all still need raw `figma.*`.
 
 ### Vector art (svg & path)
 

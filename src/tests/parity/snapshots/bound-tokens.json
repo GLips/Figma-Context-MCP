@@ -1,0 +1,364 @@
+[
+  {
+    "id": "12:1",
+    "name": "Card",
+    "type": "FRAME",
+    "visible": true,
+    "absoluteBoundingBox": {
+      "x": 0,
+      "y": 0,
+      "width": 200,
+      "height": 160
+    },
+    "ownSize": {
+      "width": 200,
+      "height": 160
+    },
+    "layoutSizingHorizontal": "FIXED",
+    "layoutSizingVertical": "FIXED",
+    "clipsContent": false,
+    "layoutMode": "VERTICAL",
+    "paddingTop": 16,
+    "paddingRight": 16,
+    "paddingBottom": 16,
+    "paddingLeft": 16,
+    "itemSpacing": 8,
+    "cornerRadius": 12,
+    "fills": [
+      {
+        "type": "SOLID",
+        "color": {
+          "r": 1,
+          "g": 1,
+          "b": 1,
+          "a": 1
+        },
+        "colorVariable": {
+          "id": "VariableID:1:1"
+        },
+        "visible": true
+      }
+    ],
+    "effects": [
+      {
+        "type": "DROP_SHADOW",
+        "visible": true,
+        "color": {
+          "r": 0,
+          "g": 0,
+          "b": 0,
+          "a": 0.25
+        },
+        "offset": {
+          "x": 0,
+          "y": 2
+        },
+        "radius": 4
+      }
+    ],
+    "styles": {
+      "effect": {
+        "id": "k4",
+        "name": "Elevation / 1"
+      }
+    },
+    "boundVariables": {
+      "paddingTop": {
+        "id": "VariableID:2:1"
+      },
+      "paddingRight": {
+        "id": "VariableID:2:1"
+      },
+      "paddingBottom": {
+        "id": "VariableID:2:1"
+      },
+      "paddingLeft": {
+        "id": "VariableID:2:1"
+      },
+      "itemSpacing": {
+        "id": "VariableID:2:2"
+      },
+      "topLeftRadius": {
+        "id": "VariableID:3:1"
+      },
+      "topRightRadius": {
+        "id": "VariableID:3:1"
+      },
+      "bottomRightRadius": {
+        "id": "VariableID:3:1"
+      },
+      "bottomLeftRadius": {
+        "id": "VariableID:3:1"
+      }
+    },
+    "children": [
+      {
+        "id": "12:2",
+        "name": "Chip",
+        "type": "FRAME",
+        "visible": true,
+        "absoluteBoundingBox": {
+          "x": 16,
+          "y": 16,
+          "width": 80,
+          "height": 24
+        },
+        "ownSize": {
+          "width": 80,
+          "height": 24
+        },
+        "ownOrigin": {
+          "x": 16,
+          "y": 16
+        },
+        "layoutSizingHorizontal": "FIXED",
+        "layoutSizingVertical": "FIXED",
+        "clipsContent": false,
+        "layoutMode": "HORIZONTAL",
+        "paddingTop": 4,
+        "paddingRight": 12,
+        "paddingBottom": 4,
+        "paddingLeft": 12,
+        "fills": [
+          {
+            "type": "SOLID",
+            "color": {
+              "r": 0.2,
+              "g": 0.4,
+              "b": 1,
+              "a": 1
+            },
+            "colorVariable": {
+              "id": "VariableID:1:2"
+            },
+            "opacity": 0.5,
+            "visible": true
+          }
+        ],
+        "boundVariables": {
+          "paddingLeft": {
+            "id": "VariableID:2:1"
+          },
+          "width": {
+            "id": "VariableID:4:1"
+          }
+        }
+      },
+      {
+        "id": "12:3",
+        "name": "Title",
+        "type": "TEXT",
+        "visible": true,
+        "absoluteBoundingBox": {
+          "x": 16,
+          "y": 48,
+          "width": 120,
+          "height": 28
+        },
+        "ownSize": {
+          "width": 120,
+          "height": 28
+        },
+        "ownOrigin": {
+          "x": 16,
+          "y": 48
+        },
+        "layoutSizingHorizontal": "HUG",
+        "layoutSizingVertical": "HUG",
+        "textAutoResize": "WIDTH_AND_HEIGHT",
+        "fills": [
+          {
+            "type": "SOLID",
+            "color": {
+              "r": 0,
+              "g": 0,
+              "b": 0,
+              "a": 1
+            },
+            "visible": true
+          }
+        ],
+        "text": {
+          "characters": "Hello world",
+          "style": {
+            "fontFamily": "Inter",
+            "fontWeight": 600,
+            "fontSize": 20,
+            "boundVariables": {
+              "fontSize": {
+                "id": "VariableID:5:1"
+              }
+            }
+          },
+          "lines": [
+            [
+              {
+                "text": "Hello ",
+                "delta": {}
+              },
+              {
+                "text": "world",
+                "delta": {
+                  "fontSize": 24,
+                  "boundVariables": {
+                    "fontSize": {
+                      "id": "VariableID:5:2"
+                    }
+                  }
+                }
+              }
+            ]
+          ],
+          "lineTypes": [],
+          "lineIndentations": []
+        }
+      },
+      {
+        "id": "12:4",
+        "name": "Body",
+        "type": "TEXT",
+        "visible": true,
+        "absoluteBoundingBox": {
+          "x": 16,
+          "y": 84,
+          "width": 120,
+          "height": 20
+        },
+        "ownSize": {
+          "width": 120,
+          "height": 20
+        },
+        "ownOrigin": {
+          "x": 16,
+          "y": 84
+        },
+        "layoutSizingHorizontal": "HUG",
+        "layoutSizingVertical": "HUG",
+        "textAutoResize": "WIDTH_AND_HEIGHT",
+        "fills": [
+          {
+            "type": "SOLID",
+            "color": {
+              "r": 0,
+              "g": 0,
+              "b": 0,
+              "a": 1
+            },
+            "colorVariable": {
+              "id": "VariableID:1:3"
+            },
+            "visible": true
+          }
+        ],
+        "text": {
+          "characters": "Centered body",
+          "style": {
+            "fontFamily": "Inter",
+            "fontWeight": 400,
+            "fontSize": 14,
+            "textAlignHorizontal": "CENTER"
+          },
+          "lines": [
+            [
+              {
+                "text": "Centered body",
+                "delta": {}
+              }
+            ]
+          ],
+          "lineTypes": [],
+          "lineIndentations": []
+        },
+        "styles": {
+          "text": {
+            "id": "k5",
+            "name": "Body / Regular"
+          },
+          "fill": {
+            "id": "k6",
+            "name": "Ink"
+          }
+        }
+      },
+      {
+        "id": "12:5",
+        "name": "Divider",
+        "type": "RECTANGLE",
+        "visible": true,
+        "absoluteBoundingBox": {
+          "x": 16,
+          "y": 112,
+          "width": 168,
+          "height": 32
+        },
+        "ownSize": {
+          "width": 168,
+          "height": 32
+        },
+        "ownOrigin": {
+          "x": 16,
+          "y": 112
+        },
+        "layoutSizingHorizontal": "FIXED",
+        "layoutSizingVertical": "FIXED",
+        "strokeWeight": 1,
+        "strokeAlign": "INSIDE",
+        "opacity": 0.8,
+        "fills": [
+          {
+            "type": "SOLID",
+            "color": {
+              "r": 1,
+              "g": 1,
+              "b": 1,
+              "a": 1
+            },
+            "visible": true
+          },
+          {
+            "type": "SOLID",
+            "color": {
+              "r": 1,
+              "g": 0,
+              "b": 0,
+              "a": 1
+            },
+            "colorVariable": {
+              "id": "VariableID:1:2"
+            },
+            "visible": true
+          }
+        ],
+        "strokes": [
+          {
+            "type": "SOLID",
+            "color": {
+              "r": 0,
+              "g": 0,
+              "b": 0,
+              "a": 1
+            },
+            "visible": true
+          }
+        ],
+        "boundVariables": {
+          "opacity": {
+            "id": "VariableID:6:1"
+          },
+          "strokeTopWeight": {
+            "id": "VariableID:7:1"
+          },
+          "strokeRightWeight": {
+            "id": "VariableID:7:1"
+          },
+          "strokeBottomWeight": {
+            "id": "VariableID:7:1"
+          },
+          "strokeLeftWeight": {
+            "id": "VariableID:7:1"
+          }
+        }
+      }
+    ]
+  }
+]

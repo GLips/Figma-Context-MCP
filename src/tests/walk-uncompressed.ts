@@ -1,7 +1,7 @@
 import type { Node as FigmaNode, Style } from "@figma/rest-api-spec";
 import { restNodeToSnapshot, type RestComponentTables } from "~/adapters/rest/node-to-snapshot.js";
 import { simplify } from "@framelink/core";
-import type { StyleValue, TraversalOptions } from "@framelink/core";
+import type { TraversalOptions } from "@framelink/core";
 import { createRefStyleTable, projectIntoTable } from "@framelink/core/internal";
 
 // The uncompressed walk — what `simplify` runs before `compressDesign`. Three read-path suites
@@ -12,14 +12,11 @@ export async function walkUncompressed(
   options: {
     traversal?: TraversalOptions;
     extraStyles?: Record<string, Style>;
-    /** Pre-registered entries; `resolveStyleKey` treats anything already in the table as taken. */
-    seedStyles?: Record<string, StyleValue>;
     /** The response envelope's component tables, folded onto the nodes by the adapter. */
     tables?: RestComponentTables;
   } = {},
 ) {
   const sink = createRefStyleTable();
-  Object.assign(sink.styles, options.seedStyles);
   const full = await simplify(
     nodes.map((node) => restNodeToSnapshot(node, options.extraStyles, options.tables)),
   );

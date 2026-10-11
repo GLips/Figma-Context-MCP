@@ -2,6 +2,8 @@ import { isRectangleCornerRadii, isVisible } from "./utils.js";
 import { buildSimplifiedLayout } from "./transformers/layout.js";
 import { buildSimplifiedStrokes, cssBlendKeyword, parsePaint } from "./transformers/style.js";
 import { buildSimplifiedEffects } from "./transformers/effects.js";
+import { bindNumber, bindParts } from "./transformers/bound-values.js";
+import { styleReference } from "./tokens.js";
 import {
   buildFormattedText,
   extractTextStyle,
@@ -41,7 +43,7 @@ export interface SimplifyResult {
   elided?: { id: string; elided: import("./types.js").Elision }[];
   nodes: SimplifiedNode[];
   /**
-   * Hoisted styles. Compressed: shared + named styles under ref keys.
+   * Hoisted styles. Compressed: values shared by 2+ nodes under content-addressed keys.
    * Expanded: always empty — every value (run deltas included) emits inline.
    */
   styles: Record<string, StyleValue>;
@@ -215,7 +217,6 @@ function extractLayout(node: NodeSnapshot, result: SimplifiedNode, context: Simp
     Object.keys(layout).some((key) => key !== "mode") ||
     (layout.mode && layout.mode !== "none")
   ) {
-    // Layout can't be a Figma named style, so no style slots to check.
     result.layout = layout;
   }
 }
@@ -252,11 +253,19 @@ function extractVisuals(node: NodeSnapshot, result: SimplifiedNode): void {
   const hasChildren = !!node.children && node.children.length > 0;
 
   // The authoring field keeps visible paint layers in CSS order; readOnlySource also keeps disabled layers.
+  // A paint style names the whole slot, so it wins over the layers — and over any paint variable
+  // under it, which live Figma reports for the style's own paint.
   const paints = node.fills
     ?.filter(isVisible)
     .map((paint) => parsePaint(paint, hasChildren))
     .reverse();
-  const fill = paints?.length ? (paints.length === 1 ? paints[0] : paints) : undefined;
+  const fill = node.styles?.fill
+    ? styleReference(node.styles.fill)
+    : paints?.length
+      ? paints.length === 1
+        ? paints[0]
+        : paints
+      : undefined;
   if (fill !== undefined) {
     result.fill = fill;
   } else if (node.type === "TEXT") {
@@ -268,13 +277,17 @@ function extractVisuals(node: NodeSnapshot, result: SimplifiedNode): void {
   }
 
   // stroke
-  // Only the stroke paint is interned as a (potentially named) shared style.
-  // Figma named styles only apply to paint, not to stroke width / dashes / per-side
-  // weights, so those stay as plain sibling fields and are never deduplicated.
+  // Only the stroke paint is interned as a shared style. A paint style covers the
+  // paint alone, not stroke width / dashes / per-side weights, so those stay as
+  // plain sibling fields beside a `{ style }` and are never deduplicated.
   const strokes = buildSimplifiedStrokes(node, hasChildren);
-  if (strokes.colors.length) {
-    const stroke = strokes.colors.length === 1 ? strokes.colors[0] : strokes.colors;
-    result.stroke = stroke;
+  const strokeStyle = node.styles?.stroke;
+  if (strokeStyle || strokes.colors.length) {
+    result.stroke = strokeStyle
+      ? styleReference(strokeStyle)
+      : strokes.colors.length === 1
+        ? strokes.colors[0]
+        : strokes.colors;
     if (strokes.strokeWidth) result.strokeWidth = strokes.strokeWidth;
     if (strokes.strokeDashes) result.strokeDashes = strokes.strokeDashes;
     if (strokes.strokeAlign) result.strokeAlign = strokes.strokeAlign;
@@ -284,27 +297,43 @@ function extractVisuals(node: NodeSnapshot, result: SimplifiedNode): void {
     result.stroke = "none";
   }
 
-  // effects
+  // effects — an effect style replaces the whole slot. Variable-bound effect fields are out of
+  // scope: they read as their literals.
   const effects = buildSimplifiedEffects(node);
-  if (Object.keys(effects).length) {
+  if (node.styles?.effect) {
+    result.effects = styleReference(node.styles.effect);
+  } else if (Object.keys(effects).length) {
     result.effects = effects;
   }
 
-  // opacity
-  if (typeof node.opacity === "number" && node.opacity !== 1) {
+  // opacity — a bound opacity emits even at 1, since the binding is intent rather than the default.
+  const bound = node.boundVariables;
+  if (bound?.opacity) {
+    result.opacity = bindNumber(node.opacity ?? 1, bound.opacity);
+  } else if (typeof node.opacity === "number" && node.opacity !== 1) {
     result.opacity = node.opacity;
   }
 
   // border radius — zero is the CSS default, so a literal cornerRadius: 0 (or
   // all-zero per-corner radii) is omitted rather than emitted as "0px".
-  if (typeof node.cornerRadius === "number" && node.cornerRadius !== 0) {
-    result.borderRadius = `${node.cornerRadius}px`;
-  }
-  if (
+  const corners = isRectangleCornerRadii(node.rectangleCornerRadii)
+    ? node.rectangleCornerRadii
+    : new Array<number>(4).fill(node.cornerRadius ?? 0);
+  const boundRadius = bindParts([
+    ["topLeft", corners[0], bound?.topLeftRadius],
+    ["topRight", corners[1], bound?.topRightRadius],
+    ["bottomRight", corners[2], bound?.bottomRightRadius],
+    ["bottomLeft", corners[3], bound?.bottomLeftRadius],
+  ]);
+  if (boundRadius) {
+    result.borderRadius = boundRadius;
+  } else if (
     isRectangleCornerRadii(node.rectangleCornerRadii) &&
     node.rectangleCornerRadii.some(Boolean)
   ) {
-    result.borderRadius = `${node.rectangleCornerRadii[0]}px ${node.rectangleCornerRadii[1]}px ${node.rectangleCornerRadii[2]}px ${node.rectangleCornerRadii[3]}px`;
+    result.borderRadius = `${corners[0]}px ${corners[1]}px ${corners[2]}px ${corners[3]}px`;
+  } else if (typeof node.cornerRadius === "number" && node.cornerRadius !== 0) {
+    result.borderRadius = `${node.cornerRadius}px`;
   }
 }
 

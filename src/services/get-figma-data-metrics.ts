@@ -1,6 +1,6 @@
 import type { GetFileResponse, GetFileNodesResponse, Node } from "@figma/rest-api-spec";
 import type { SimplifiedDesign, SimplifiedNode } from "@framelink/core";
-import type { SimplifiedFill } from "@framelink/core";
+import type { SimplifiedFill, StyleReference } from "@framelink/core";
 
 export type GetFigmaDataMetrics = {
   rawSizeKb: number;
@@ -53,12 +53,13 @@ export type GetFigmaDataMetrics = {
  * image-backed paint (IMAGE or PATTERN). Used to classify simplified nodes as
  * "image nodes" via their `fill`/`stroke` values or style-table references.
  */
-function hasImageFill(value: SimplifiedFill | SimplifiedFill[]): boolean {
+function hasImageFill(value: SimplifiedFill | SimplifiedFill[] | StyleReference): boolean {
   const fills = Array.isArray(value) ? value : [value];
   return fills.some(
     (fill) =>
       typeof fill === "object" &&
       fill !== null &&
+      "type" in fill &&
       (fill.type === "IMAGE" || fill.type === "PATTERN"),
   );
 }

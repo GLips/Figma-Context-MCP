@@ -46,8 +46,8 @@
     },
     "styles": {
       "text": {
-        "name": "Heading / Large",
-        "id": "13:77"
+        "id": "k1",
+        "name": "Heading / Large"
       }
     }
   },
@@ -98,8 +98,8 @@
     },
     "styles": {
       "text": {
-        "name": "Heading / Large",
-        "id": "161:300"
+        "id": "k2",
+        "name": "Heading / Large"
       }
     }
   },
@@ -132,8 +132,8 @@
     ],
     "styles": {
       "fill": {
-        "name": "Brand / Orange",
-        "id": "20:1"
+        "id": "k3",
+        "name": "Brand / Orange"
       }
     }
   }

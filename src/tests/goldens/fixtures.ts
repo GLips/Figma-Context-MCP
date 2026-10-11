@@ -12,8 +12,8 @@ import type {
  * `restNodeToSnapshot` — top-level component/style tables, `node.styles` name
  * lookups, text `characterStyleOverrides`/`styleOverrideTable` decoding, image
  * `imageRef`/`gifRef`, and gradient `gradientHandlePositions` — plus the
- * comparator cases (plain/autolayout frame, component + instance, named-style
- * disambiguation, deep-nested dedup).
+ * comparator cases (plain/autolayout frame, component + instance, named styles
+ * and bound variables as token references, deep-nested dedup).
  *
  * The golden test runs each through the PUBLIC entry (`simplifyRestResponse`)
  * so it survives the carve gutting the internals: the committed golden output
@@ -454,7 +454,7 @@ const componentInstance: GetFileNodesResponse = {
 
 // ---------------------------------------------------------------------------
 // 7. Named styles — node.styles referencing the top-level styles table, with a
-//    same-name collision that must disambiguate by id, plus a named fill style.
+//    same-name pair that must stay apart by id, plus a named fill style.
 // ---------------------------------------------------------------------------
 const namedStyles = fileResponse(
   "Named Styles",
@@ -1225,6 +1225,195 @@ const stretchedLeaf = fileResponse("Stretched Leaf", [
   }),
 ]);
 
+// ---------------------------------------------------------------------------
+// 12. Bound tokens — variable bindings on node fields (padding on all sides and
+//     on one side, gap, radius, width, opacity, stroke weight), on solid paints
+//     (bare, with paint opacity, and stacked over a literal), on a text base
+//     style and a run, plus paint/effect/text styles. A paint style wins over
+//     the paint variable under it. REST names no variable: refs carry ids only.
+// ---------------------------------------------------------------------------
+const alias = (id: string) => ({ type: "VARIABLE_ALIAS", id });
+const black = { type: "SOLID", color: { r: 0, g: 0, b: 0, a: 1 }, visible: true };
+const boundTokens = fileResponse(
+  "Bound Tokens",
+  [
+    node({
+      id: "12:1",
+      name: "Card",
+      type: "FRAME",
+      clipsContent: false,
+      layoutMode: "VERTICAL",
+      itemSpacing: 8,
+      paddingTop: 16,
+      paddingRight: 16,
+      paddingBottom: 16,
+      paddingLeft: 16,
+      cornerRadius: 12,
+      absoluteBoundingBox: { x: 0, y: 0, width: 200, height: 160 },
+      layoutSizingHorizontal: "FIXED",
+      layoutSizingVertical: "FIXED",
+      fills: [
+        {
+          type: "SOLID",
+          color: { r: 1, g: 1, b: 1, a: 1 },
+          visible: true,
+          boundVariables: { color: alias("VariableID:1:1") },
+        },
+      ],
+      effects: [
+        {
+          type: "DROP_SHADOW",
+          visible: true,
+          color: { r: 0, g: 0, b: 0, a: 0.25 },
+          offset: { x: 0, y: 2 },
+          radius: 4,
+        },
+      ],
+      styles: { effect: "S:shadow" },
+      boundVariables: {
+        paddingTop: alias("VariableID:2:1"),
+        paddingRight: alias("VariableID:2:1"),
+        paddingBottom: alias("VariableID:2:1"),
+        paddingLeft: alias("VariableID:2:1"),
+        itemSpacing: alias("VariableID:2:2"),
+        rectangleCornerRadii: {
+          RECTANGLE_TOP_LEFT_CORNER_RADIUS: alias("VariableID:3:1"),
+          RECTANGLE_TOP_RIGHT_CORNER_RADIUS: alias("VariableID:3:1"),
+          RECTANGLE_BOTTOM_LEFT_CORNER_RADIUS: alias("VariableID:3:1"),
+          RECTANGLE_BOTTOM_RIGHT_CORNER_RADIUS: alias("VariableID:3:1"),
+        },
+      },
+      children: [
+        node({
+          id: "12:2",
+          name: "Chip",
+          type: "FRAME",
+          clipsContent: false,
+          layoutMode: "HORIZONTAL",
+          paddingTop: 4,
+          paddingRight: 12,
+          paddingBottom: 4,
+          paddingLeft: 12,
+          absoluteBoundingBox: { x: 16, y: 16, width: 80, height: 24 },
+          layoutSizingHorizontal: "FIXED",
+          layoutSizingVertical: "FIXED",
+          fills: [
+            {
+              type: "SOLID",
+              color: { r: 0.2, g: 0.4, b: 1, a: 1 },
+              opacity: 0.5,
+              visible: true,
+              boundVariables: { color: alias("VariableID:1:2") },
+            },
+          ],
+          boundVariables: {
+            paddingLeft: alias("VariableID:2:1"),
+            size: { x: alias("VariableID:4:1") },
+          },
+        }),
+        node({
+          id: "12:3",
+          name: "Title",
+          type: "TEXT",
+          characters: "Hello world",
+          absoluteBoundingBox: { x: 16, y: 48, width: 120, height: 28 },
+          layoutSizingHorizontal: "HUG",
+          layoutSizingVertical: "HUG",
+          // Live REST's shape: whole-text bindings sit on the node as the distinct aliases, the base
+          // TypeStyle carries none. Override 2 differs from 1 only by a fontStyle binding the
+          // snapshot drops, so "world" stays one run.
+          style: {
+            fontFamily: "Inter",
+            fontWeight: 600,
+            fontSize: 20,
+            textAutoResize: "WIDTH_AND_HEIGHT",
+          },
+          characterStyleOverrides: [0, 0, 0, 0, 0, 0, 1, 1, 1, 2, 2],
+          styleOverrideTable: {
+            "1": { fontSize: 24, boundVariables: { fontSize: alias("VariableID:5:2") } },
+            "2": {
+              fontSize: 24,
+              boundVariables: {
+                fontSize: alias("VariableID:5:2"),
+                fontStyle: alias("VariableID:5:3"),
+              },
+            },
+          },
+          boundVariables: { fontSize: [alias("VariableID:5:1"), alias("VariableID:5:2")] },
+          fills: [black],
+        }),
+        node({
+          id: "12:4",
+          name: "Body",
+          type: "TEXT",
+          characters: "Centered body",
+          absoluteBoundingBox: { x: 16, y: 84, width: 120, height: 20 },
+          layoutSizingHorizontal: "HUG",
+          layoutSizingVertical: "HUG",
+          style: {
+            fontFamily: "Inter",
+            fontWeight: 400,
+            fontSize: 14,
+            textAlignHorizontal: "CENTER",
+            textAutoResize: "WIDTH_AND_HEIGHT",
+          },
+          fills: [{ ...black, boundVariables: { color: alias("VariableID:1:3") } }],
+          styles: { text: "S:body", fill: "S:ink" },
+        }),
+        node({
+          id: "12:5",
+          name: "Divider",
+          type: "RECTANGLE",
+          absoluteBoundingBox: { x: 16, y: 112, width: 168, height: 32 },
+          layoutSizingHorizontal: "FIXED",
+          layoutSizingVertical: "FIXED",
+          opacity: 0.8,
+          strokeWeight: 1,
+          strokeAlign: "INSIDE",
+          strokes: [black],
+          fills: [
+            { type: "SOLID", color: { r: 1, g: 1, b: 1, a: 1 }, visible: true },
+            {
+              type: "SOLID",
+              color: { r: 1, g: 0, b: 0, a: 1 },
+              visible: true,
+              boundVariables: { color: alias("VariableID:1:2") },
+            },
+          ],
+          boundVariables: {
+            opacity: alias("VariableID:6:1"),
+            individualStrokeWeights: {
+              top: alias("VariableID:7:1"),
+              right: alias("VariableID:7:1"),
+              bottom: alias("VariableID:7:1"),
+              left: alias("VariableID:7:1"),
+            },
+          },
+        }),
+      ],
+    }),
+  ],
+  {
+    styles: {
+      "S:shadow": {
+        key: "k4",
+        name: "Elevation / 1",
+        styleType: "EFFECT",
+        description: "",
+        remote: false,
+      },
+      "S:body": {
+        key: "k5",
+        name: "Body / Regular",
+        styleType: "TEXT",
+        description: "",
+        remote: false,
+      },
+      "S:ink": { key: "k6", name: "Ink", styleType: "FILL", description: "", remote: false },
+    },
+  },
+);
+
 export type GoldenFixture = {
   name: string;
   response: GetFileResponse | GetFileNodesResponse;
@@ -1244,4 +1433,5 @@ export const GOLDEN_FIXTURES: GoldenFixture[] = [
   { name: "rotated-nodes", response: rotatedNodes },
   { name: "grouped-nodes", response: groupedNodes },
   { name: "component-variants", response: componentVariants },
+  { name: "bound-tokens", response: boundTokens },
 ];

@@ -5,6 +5,8 @@ import type {
   SnapshotPaint,
 } from "../snapshot.js";
 import { generateCSSShorthand, isVisible, pixelRound } from "../utils.js";
+import { variableReference, type VariableReference } from "../tokens.js";
+import { bindParts, type BoundSides } from "./bound-values.js";
 
 import { convertColor, flattenSolidFills, formatRGBAColor } from "./style/color.js";
 import {
@@ -44,7 +46,25 @@ export type SimplifiedSolidFill = {
   blendMode: string;
 };
 
+/**
+ * A variable-bound solid that can't be a bare reference: it carries a paint opacity or a blend the
+ * variable doesn't. Bound solids never fold with other layers (see flattenSolidFills).
+ */
+export type SimplifiedBoundSolidFill = {
+  type: "SOLID";
+  color: VariableReference;
+  opacity?: number;
+  blendMode?: string;
+};
+
+/**
+ * One paint layer. A variable-bound solid at full opacity and normal blend is its bare
+ * `{ variable }` reference. A paint STYLE is never a layer — it replaces the whole slot (see
+ * SimplifiedNode.fill).
+ */
 export type SimplifiedFill =
+  | VariableReference
+  | SimplifiedBoundSolidFill
   | SimplifiedSolidFill
   | SimplifiedImageFill
   | SimplifiedGradientFill
@@ -124,8 +144,11 @@ function imageAdjustments(raw: SnapshotImagePaint): ImageAdjustments {
 
 export type SimplifiedStroke = {
   colors: SimplifiedFill[];
-  /** CSS metric string: "1px", or per-side shorthand "1px 2px 3px 4px". */
-  strokeWidth?: string;
+  /**
+   * CSS metric string: "1px", or per-side shorthand "1px 2px 3px 4px". Once a side is bound: one
+   * variable on all four sides is its reference, otherwise per side.
+   */
+  strokeWidth?: string | VariableReference | BoundSides;
   strokeDashes?: number[];
   /** "inside" is the omitted default — it matches the CSS border an LLM writes. */
   strokeAlign?: "outside" | "center";
@@ -167,6 +190,22 @@ export function buildSimplifiedStrokes(
   if (n.individualStrokeWeights) {
     strokes.strokeWidth = generateCSSShorthand(n.individualStrokeWeights);
   }
+
+  const weight = n.strokeWeight ?? 0;
+  const weights = n.individualStrokeWeights ?? {
+    top: weight,
+    right: weight,
+    bottom: weight,
+    left: weight,
+  };
+  const bound = n.boundVariables;
+  const boundWidth = bindParts([
+    ["top", weights.top, bound?.strokeTopWeight],
+    ["right", weights.right, bound?.strokeRightWeight],
+    ["bottom", weights.bottom, bound?.strokeBottomWeight],
+    ["left", weights.left, bound?.strokeLeftWeight],
+  ]);
+  if (boundWidth) strokes.strokeWidth = boundWidth;
 
   return strokes;
 }
@@ -246,6 +285,19 @@ export function parsePaint(raw: SnapshotPaint, hasChildren: boolean = false): Si
       imageDownloadArguments: finalProcessing,
     };
   } else if (raw.type === "SOLID") {
+    if (raw.colorVariable) {
+      // The variable carries the color's own alpha; only the paint's opacity and blend ride beside it.
+      const color = variableReference(raw.colorVariable);
+      const opacity = pixelRound(raw.opacity ?? 1);
+      const { blendMode } = paintBlend(raw.blendMode);
+      if (opacity === 1 && !blendMode) return color;
+      return {
+        type: "SOLID",
+        color,
+        ...(opacity !== 1 ? { opacity } : {}),
+        ...(blendMode ? { blendMode } : {}),
+      };
+    }
     const { hex, opacity } = convertColor(raw.color, raw.opacity);
     const color = opacity === 1 ? hex : formatRGBAColor(raw.color, opacity);
     const { blendMode } = paintBlend(raw.blendMode);

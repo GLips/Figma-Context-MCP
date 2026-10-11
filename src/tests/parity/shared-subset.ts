@@ -17,8 +17,7 @@ import { STYLE_REF_FIELDS } from "@framelink/core/internal";
  * `parityView` does two things, in order:
  *   1. EXPAND (`expandInline`) — resolve every `styles`/`templates` ref back
  *      to its inline value. This is load-bearing: the compression pass keys
- *      styles by a content hash of their value and disambiguates same-name
- *      styles with an id suffix, so two producers whose style values differ in
+ *      styles by a content hash of their value, so two producers whose style values differ in
  *      ANY byte (e.g. an image ref buried in a hoisted fill, or a future plugin
  *      enrichment) get different keys and different node refs. Comparing keys
  *      would drown real parity in keyspace noise. After expansion there are no
@@ -52,10 +51,10 @@ import { STYLE_REF_FIELDS } from "@framelink/core/internal";
  *     component's children the read published, and two producers that disagree about
  *     that are emitting different children — a real divergence, not a nuisance.
  *
- *  3. SAME-NAME STYLE DISAMBIGUATION (`resolveStyleKey`, `core/style-table.ts`).
- *     The `Name (id)` suffix only exists as a styles-table KEY. Expansion resolves
- *     refs to values, so the key — and any producer disagreement about it —
- *     is gone before comparison.
+ *  3. VARIABLE NAMES. A token reference is `{ variable: { id, name? } }`; the
+ *     plugin names a variable, REST never can (the names endpoint is
+ *     Enterprise-only). The view drops a variable reference's `name` and nothing
+ *     else — its id, and a style reference's name, still have to match.
  *
  *  4. ROOT CONTEXTUAL SIZING (`core/transformers/layout.ts`). NOT a producer
  *     difference: the rule is core's and both producers emit it. A node is "root"
@@ -279,11 +278,13 @@ function viewNode(
  */
 export function parityView(input: SimplifiedDesign): { nodes: Rec[]; components: Rec } {
   const design: SimplifiedDesign = JSON.parse(
-    JSON.stringify(input, (key, value) =>
-      key === "elided" && !Array.isArray(value)
-        ? Object.fromEntries(Object.keys(value).map((field) => [field, null]))
-        : value,
-    ),
+    JSON.stringify(input, (key, value) => {
+      if (key === "elided" && !Array.isArray(value))
+        return Object.fromEntries(Object.keys(value).map((field) => [field, null]));
+      // Pin 3: a variable reference compares by id alone.
+      if (key === "variable" && value && typeof value === "object") return { id: value.id };
+      return value;
+    }),
   );
   const styles: Record<string, StyleValue> = design.styles ?? {};
   const templates = design.templates ?? {};

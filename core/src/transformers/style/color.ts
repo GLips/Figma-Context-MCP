@@ -62,11 +62,13 @@ export function formatSolidColor(color: SnapshotColor): CSSHexColor | CSSRGBACol
  * source-over; every other blend mode (MULTIPLY, SCREEN, …) needs the backdrop
  * to compute, which a flattened stack has thrown away — so its presence anywhere
  * disqualifies the whole stack. A missing blendMode is treated as NORMAL (its
- * Figma default).
+ * Figma default). A variable-bound solid never flattens: compositing would bake the variable's
+ * current value into a literal and lose the binding.
  */
 function isFlattenableSolid(paint: SnapshotPaint): paint is SnapshotSolidPaint {
   return (
     paint.type === "SOLID" &&
+    paint.colorVariable === undefined &&
     (paint.blendMode === undefined ||
       paint.blendMode === "NORMAL" ||
       paint.blendMode === "PASS_THROUGH")
@@ -94,8 +96,8 @@ function compositeOver(top: StraightColor, bottom: StraightColor): StraightColor
  * is fully opaque, else rgba()). Compositing inherently culls dead layers —
  * anything beneath a fully-opaque paint contributes nothing to the result.
  *
- * Returns null when the stack contains a gradient, image, pattern, or any
- * non-normal blend mode: those have their own output syntax and can't be folded,
+ * Returns null when the stack contains a gradient, image, pattern, a
+ * variable-bound solid, or any non-normal blend mode: those have their own output syntax and can't be folded,
  * so the caller falls back to emitting the per-paint array untouched.
  *
  * `paints` must be in Figma order (index 0 = bottom layer).

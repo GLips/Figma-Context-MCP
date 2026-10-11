@@ -1,13 +1,16 @@
 {
   "styles": {
     "13:77": {
-      "name": "Heading / Large"
+      "name": "Heading / Large",
+      "key": "k1"
     },
     "161:300": {
-      "name": "Heading / Large"
+      "name": "Heading / Large",
+      "key": "k2"
     },
     "20:1": {
-      "name": "Brand / Orange"
+      "name": "Brand / Orange",
+      "key": "k3"
     }
   },
   "nodes": [

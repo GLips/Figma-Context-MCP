@@ -13,6 +13,7 @@ import {
   WriteNode, WriteProps, WriteChild, WriteLayout, WriteTextStyle, WriteTextRun, WritePaint, WritePaintStack,
   GradientStop, WriteEffect, Sizing, Edges, WriteCssEffects, PinX, PinY, AnchorX, AnchorY,
   Justify, Align, TextAlign, TextDecoration, WriteTextCase, RawIdRef, WriteType, Target,
+  Bindable, CornerRadii, isTokenRef,
   ComponentPropertyInput, OverrideDeltaInput, ComponentPropertyBinding, ComponentPropertyDefinitionEdit,
 } from "./ir.js";
 import { assertLayoutRealizableForType, assertGridSizing } from "./layout-legality.js";
@@ -23,6 +24,7 @@ import { parseColor, parseFill, parseImageAdjustments, parseCssEffects, parseBle
 import { requestHostImages } from "./host.js";
 import { get, find, findOne, selection } from "./read.js";
 import { rejectUnknownKeys, rejectNonDeltaWords, own } from "./validate.js";
+import { isVariableInput, isStyleInput, compileVariableRef, compileStyleRef, compileBindable, refuseTokenInput } from "./tokens.js";
 import type { SimplifiedNode } from "@framelink/core";
 
 // The authoring surface (verb Props + gradient/effects sugar) is defined ONCE in schema.ts as zod schemas
@@ -49,7 +51,7 @@ export const KNOWN_KEYS = {
   childLayout: [...gridAliasKeys("child"), "gridColumn", "gridRow", "justifySelf", "alignSelf", "zIndex"],
   containerLayout: [...gridAliasKeys("container"), "mode", "gridTemplateColumns", "gridTemplateRows", "gap", "wrap", "padding", "justifyContent", "alignItems"],
   text: ["text", "textStyle", "fill", "boldWeight", "fontSize"],
-  textStyle: ["fontFamily", "fontWeight", "fontSize", "fontStyle", "lineHeight", "letterSpacing", "textDecoration", "textTransform", "fontVariant", "textAlign", "textAlignVertical", "paragraphSpacing", "paragraphIndent", "listSpacing", "hyperlink", "lineClamp"],
+  textStyle: ["style", "fontFamily", "fontWeight", "fontSize", "fontStyle", "lineHeight", "letterSpacing", "textDecoration", "textTransform", "fontVariant", "textAlign", "textAlignVertical", "paragraphSpacing", "paragraphIndent", "listSpacing", "hyperlink", "lineClamp"],
   run: ["fontWeight", "fontSize", "fontFamily", "fontStyle", "lineHeight", "letterSpacing", "textDecoration", "textTransform", "fontVariant", "paragraphSpacing", "paragraphIndent", "listSpacing", "color", "hyperlink"],
   line: [...gridAliasKeys("child"), "layout", "stroke", "strokeWidth", "width", "rotation", "left", "top", "position", "anchor", "pin"],
   path: ["vectorPaths", "d", "scale", "fill", "stroke", "strokeWidth", "strokeAlign", "effects", "rotation"],
@@ -140,26 +142,35 @@ export const DIRECTIONAL_KEYS = keySet(["x", "y"]); // pin and anchor
 // it here a `get` result's own layout wouldn't re-author. Inside the object form the edges stay NUMBERS — a "24px"
 // there once dropped silently to zero on every side, and that reject stays (ADR-0003 fail-loud).
 const PAD_KEYS = keySet(["x", "y", "top", "right", "bottom", "left"]);
+const GAP_KEYS = keySet(["row", "column"]);
 
-function padEdges(pad: PadInput): Edges {
+function padEdges(pad: PadInput): Edges<Bindable> {
   if (typeof pad === "number") return { top: pad, right: pad, bottom: pad, left: pad };
   if (typeof pad === "string") return boxShorthand(pad, "pad");
+  // One variable binds all four sides — the same token each side would name on its own.
+  if (isVariableInput(pad)) {
+    const ref = compileVariableRef(pad, "pad", "FLOAT");
+    return { top: ref, right: ref, bottom: ref, left: ref };
+  }
   if (pad == null || typeof pad !== "object" || Array.isArray(pad)) {
-    throw new Error('flcm: pad must be a number, a CSS box shorthand string ("12px 16px"), or an object ({ x, y } or { top, right, bottom, left }) — got ' + JSON.stringify(pad) + ".");
+    throw new Error('flcm: pad must be a number, a CSS box shorthand string ("12px 16px"), { variable }, or an object ({ x, y } or { top, right, bottom, left }) — got ' + JSON.stringify(pad) + ".");
   }
   rejectUnknownKeys(pad, PAD_KEYS, "pad");
-  const edge = (v: number | string | undefined, name: string): number | undefined => {
+  const edge = (v: unknown, name: string): Bindable | undefined => {
     if (v == null) return undefined;
     // Rides length(), like every other metric: a number or "Npx", and anything else fails loud there.
-    try {
-      return length(v);
-    } catch {
-      throw new Error("flcm: pad." + name + ' must be a number or "Npx", got ' + JSON.stringify(v) + ".");
-    }
+    return compileBindable(v, "pad." + name, "FLOAT", (literal: number | string) => {
+      try {
+        return length(literal);
+      } catch {
+        throw new Error("flcm: pad." + name + ' must be a number or "Npx" (or { variable }), got ' + JSON.stringify(literal) + ".");
+      }
+    });
   };
-  const y = edge(pad.y, "y"), x = edge(pad.x, "x");
-  const top = edge(pad.top, "top"), right = edge(pad.right, "right");
-  const bottom = edge(pad.bottom, "bottom"), left = edge(pad.left, "left");
+  const p = pad as Record<string, unknown>;
+  const y = edge(p.y, "y"), x = edge(p.x, "x");
+  const top = edge(p.top, "top"), right = edge(p.right, "right");
+  const bottom = edge(p.bottom, "bottom"), left = edge(p.left, "left");
   // Specific edge wins over the x/y shorthand; `??` (not `||`) so an explicit 0 isn't treated as unset.
   return { top: top ?? y ?? 0, right: right ?? x ?? 0, bottom: bottom ?? y ?? 0, left: left ?? x ?? 0 };
 }
@@ -168,11 +179,13 @@ function padEdges(pad: PadInput): Edges {
 // are intents the bridge resolves against the parent / content.
 function applySizing(props: SizeProps, layout: WriteLayout): void {
   const sz: { horizontal?: Sizing; vertical?: Sizing } = {};
-  const dims: { width?: number; height?: number } = {};
+  const dims: { width?: Bindable; height?: Bindable } = {};
   const pct: { width?: number; height?: number } = {};
   const axis = (val: SizeProps["width"], key: "horizontal" | "vertical", dim: "width" | "height") => {
     if (val === undefined) return;
     if (val === "fill" || val === "hug") sz[key] = val;
+    // A bound size is a fixed size whose number the variable supplies.
+    else if (isVariableInput(val)) { sz[key] = "fixed"; dims[dim] = compileVariableRef(val, dim, "FLOAT"); }
     // "N%" is a fixed px once resolved against the parent (the bridge folds it in at render), so it sizes
     // "fixed" and carries only the percent intent here.
     else if (isPercent(val)) { sz[key] = "fixed"; pct[dim] = percent(val); }
@@ -182,7 +195,7 @@ function applySizing(props: SizeProps, layout: WriteLayout): void {
         sz[key] = "fixed";
         dims[dim] = length(val);
       } catch {
-        throw new Error('flcm: width/height must be a number, "Npx", "N%", "fill", or "hug" — got ' + JSON.stringify(val) + ".");
+        throw new Error('flcm: width/height must be a number, "Npx", "N%", "fill", "hug", or { variable } — got ' + JSON.stringify(val) + ".");
       }
     }
   };
@@ -352,9 +365,25 @@ function compileLayoutBag(cfg: NonNullable<FrameProps["layout"]>, subject: strin
   }
   if (cfg.mode != null) layout.mode = assertEnum("layout.mode", cfg.mode, LAYOUT_MODE);
   if (cfg.gap != null) {
-    const values = typeof cfg.gap === "string" ? cfg.gap.trim().split(/\s+/).map(length) : [cfg.gap];
-    if (values.length < 1 || values.length > 2 || values.some(v => typeof v !== "number" || !Number.isFinite(v))) throw new Error("flcm." + subject + ': gap needs a finite number, "Npx", or "row-gap column-gap".');
-    layout.gap = values.length === 1 || values[0] === values[1] ? values[0] : { row: values[0], column: values[1] };
+    const guidance = "flcm." + subject + ': gap needs a finite number, "Npx", "row-gap column-gap", { variable }, or { row, column }.';
+    const finite = (v: Bindable): Bindable => {
+      if (!isTokenRef(v) && (typeof v !== "number" || !Number.isFinite(v))) throw new Error(guidance);
+      return v;
+    };
+    const side = (v: unknown, name: string): Bindable => finite(compileBindable(v, subject + ".gap." + name, "FLOAT", length));
+    const raw: unknown = cfg.gap;
+    if (isVariableInput(raw)) layout.gap = compileVariableRef(raw, subject + ".gap", "FLOAT");
+    else if (raw !== null && typeof raw === "object" && !Array.isArray(raw)) {
+      rejectUnknownKeys(raw, GAP_KEYS, subject + ".gap");
+      const g = raw as { row?: unknown; column?: unknown };
+      if (g.row == null || g.column == null) throw new Error(guidance);
+      layout.gap = { row: side(g.row, "row"), column: side(g.column, "column") };
+    } else {
+      const values = typeof raw === "string" ? raw.trim().split(/\s+/).map(length) : [raw as number];
+      if (values.length < 1 || values.length > 2) throw new Error(guidance);
+      values.forEach(finite);
+      layout.gap = values.length === 1 || values[0] === values[1] ? values[0] : { row: values[0], column: values[1] };
+    }
   }
   if (cfg.wrap !== undefined) {
     if (typeof cfg.wrap !== "boolean") throw new Error("flcm." + subject + ": wrap must be a boolean.");
@@ -406,6 +435,7 @@ export function compileLineWidth(props: Pick<LineProps, "width">): WriteLayout |
   const w = props.width;
   if (w == null) return undefined;
   if (w === "fill") return { sizing: { horizontal: "fill" } };
+  if (isVariableInput(w)) return { sizing: { horizontal: "fixed" }, dimensions: { width: compileVariableRef(w, "width", "FLOAT") } };
   if (w === "hug" || isPercent(w)) {
     throw new Error('flcm: a LINE\'s width is its length — "hug" and "N%" have no meaning on a line, which has no content to hug and no cell to measure against. Use a number, or "fill" under a row or column. Got ' + JSON.stringify(w) + ".");
   }
@@ -447,7 +477,7 @@ function base(wn: WriteProps, props: BaseProps & { annotations?: unknown }): voi
   if (props.annotations !== undefined) wn.annotations = compileAnnotations(props.annotations);
   if (props.name != null) { assertScalarType(props.name, "string", "name"); wn.name = props.name; }
   if (props.key != null) { assertScalarType(props.key, "string", "key"); wn.key = props.key; }
-  if (props.opacity != null) { assertScalarType(props.opacity, "number", "opacity"); wn.opacity = props.opacity; }
+  if (props.opacity != null) wn.opacity = compileBindable(props.opacity, "opacity", "FLOAT", (v: unknown) => { assertScalarType(v, "number", "opacity"); return v as number; });
   if (props.mixBlendMode != null) wn.blendMode = parseBlendMode(props.mixBlendMode);
   if (props.visible != null) { assertScalarType(props.visible, "boolean", "visible"); wn.visible = props.visible; }
   if (props.locked != null) { assertScalarType(props.locked, "boolean", "locked"); wn.locked = props.locked; }
@@ -459,12 +489,12 @@ function base(wn: WriteProps, props: BaseProps & { annotations?: unknown }): voi
 // Exported for edit-plan.ts (which imports FROM here; flcm.ts never imports it — no cycle).
 export function compileNodeLocalProps(wn: WriteProps, props: AppearanceProps, opts: { type: string; radius?: boolean; clip?: boolean }): void {
   base(wn, props);
-  if (props.fill != null) wn.fills = compilePaintWord(props.fill, "fill");
-  if (props.stroke != null) wn.strokes = compilePaintWord(props.stroke, "stroke");
+  if (props.fill != null) compilePaintSlot(wn, props.fill, "fill");
+  if (props.stroke != null) compilePaintSlot(wn, props.stroke, "stroke");
   if (props.strokeWidth != null) wn.strokeWeight = compileStrokeWidth(props.strokeWidth, opts.type);
   if (props.strokeAlign != null) wn.strokeAlign = compileStrokeAlign(props.strokeAlign);
-  if (props.effects != null) wn.effects = props.effects === "none" ? [] : normalizeEffects(props.effects);
-  if (opts.radius && props.borderRadius != null) wn.borderRadius = cornerRadii(props.borderRadius, "borderRadius");
+  if (props.effects != null) compileEffectsSlot(wn, props.effects);
+  if (opts.radius && props.borderRadius != null) wn.borderRadius = compileBorderRadius(props.borderRadius);
   const clip = (props as FrameProps).clip;
   if (opts.clip && clip != null) { assertScalarType(clip, "boolean", "clip"); wn.clip = clip; }
   if (props.rotation != null) { assertScalarType(props.rotation, "number", "rotation"); wn.rotation = props.rotation; }
@@ -478,9 +508,19 @@ const PER_SIDE_STROKE_TYPES: ReadonlySet<string> = new Set(["FRAME", "RECTANGLE"
 // `strokeWidth` is CSS `border-width`: one value, or the 1–4 value box shorthand read emits when a
 // node's sides differ ("0px 0px 0px 1px" = a left-only border). Uniform collapses to a number so the
 // bridge keeps writing `strokeWeight`; only differing sides become per-side Edges.
-function compileStrokeWidth(value: number | string, type: string): number | Edges {
+function compileStrokeWidth(value: unknown, type: string): Bindable | Edges<Bindable> {
   if (typeof value === "number") return value;
-  const sides = boxShorthand(value, "strokeWidth");
+  if (isVariableInput(value)) return compileVariableRef(value, "strokeWidth", "FLOAT");
+  let sides: Edges<Bindable>;
+  if (value !== null && typeof value === "object" && !Array.isArray(value)) {
+    rejectUnknownKeys(value, EDGE_KEYS, "strokeWidth");
+    const v = value as Record<string, unknown>;
+    const side = (name: string): Bindable => {
+      if (v[name] == null) throw new Error("flcm: strokeWidth as an object names all four sides { top, right, bottom, left } — " + name + " is missing.");
+      return compileBindable(v[name], "strokeWidth." + name, "FLOAT", (literal: number | string) => length(literal));
+    };
+    sides = { top: side("top"), right: side("right"), bottom: side("bottom"), left: side("left") };
+  } else sides = boxShorthand(value as string, "strokeWidth");
   if (sides.top === sides.right && sides.right === sides.bottom && sides.bottom === sides.left) return sides.top;
   if (!PER_SIDE_STROKE_TYPES.has(type)) {
     throw new Error(
@@ -489,6 +529,52 @@ function compileStrokeWidth(value: number | string, type: string): number | Edge
     );
   }
   return sides;
+}
+
+const EDGE_KEYS = keySet(["top", "right", "bottom", "left"]);
+const CORNER_KEYS = keySet(["topLeft", "topRight", "bottomRight", "bottomLeft"]);
+const STYLE_INPUT_KEYS = keySet(["style"]);
+
+// borderRadius: the CSS leaf (css.ts cornerRadii), one variable for every corner, or the per-corner
+// object — the only spelling where a corner can be bound on its own.
+function compileBorderRadius(value: unknown): CornerRadii<Bindable> {
+  if (isVariableInput(value)) {
+    const ref = compileVariableRef(value, "borderRadius", "FLOAT");
+    return { topLeft: ref, topRight: ref, bottomRight: ref, bottomLeft: ref };
+  }
+  if (value !== null && typeof value === "object" && !Array.isArray(value)) {
+    rejectUnknownKeys(value, CORNER_KEYS, "borderRadius");
+    const v = value as Record<string, unknown>;
+    const corner = (name: string): Bindable => {
+      if (v[name] == null) throw new Error("flcm: borderRadius as an object names all four corners { topLeft, topRight, bottomRight, bottomLeft } — " + name + " is missing.");
+      return compileBindable(v[name], "borderRadius." + name, "FLOAT", (literal: number | string) => length(literal));
+    };
+    return { topLeft: corner("topLeft"), topRight: corner("topRight"), bottomRight: corner("bottomRight"), bottomLeft: corner("bottomLeft") };
+  }
+  return cornerRadii(value as number | string, "borderRadius");
+}
+
+// A `{ style }` is the WHOLE slot — a paint style is a stack of its own — so it lands on the node's
+// style slot, never as one entry of a stack.
+function compilePaintSlot(wn: WriteProps, value: unknown, slot: "fill" | "stroke"): void {
+  if (isStyleInput(value)) {
+    rejectUnknownKeys(value, STYLE_INPUT_KEYS, slot);
+    wn.styles = { ...wn.styles, [slot]: compileStyleRef(value.style, slot, "PAINT") };
+    return;
+  }
+  wn[slot === "fill" ? "fills" : "strokes"] = compilePaintWord(value as NonNullable<AppearanceProps["fill"]>, slot);
+}
+
+// Negative space: an effect's own fields (a shadow's color or radius) don't bind variables — only a
+// whole effect style does.
+function compileEffectsSlot(wn: WriteProps, value: unknown): void {
+  if (isStyleInput(value)) {
+    rejectUnknownKeys(value, STYLE_INPUT_KEYS, "effects");
+    wn.styles = { ...wn.styles, effect: compileStyleRef(value.style, "effects", "EFFECT") };
+    return;
+  }
+  refuseTokenInput(value, "effects", "effects bind an effect style ({ style }), not a variable");
+  wn.effects = value === "none" ? [] : normalizeEffects(value as EffectsInput);
 }
 
 // Which side of the edge a border sits on. Lowercase on both sides of the surface (the read shape emits
@@ -521,6 +607,9 @@ function compileStrokeAlign(value: unknown): "INSIDE" | "OUTSIDE" | "CENTER" {
 // entry as written rather than at wherever it lands in Figma's own (reversed) storage order.
 export function compilePaintWord(value: NonNullable<AppearanceProps["fill"]>, subject: string): WritePaintStack {
   if (value === "none") return [];
+  if (isStyleInput(value)) {
+    throw new Error("flcm: " + subject + ": a paint style is a node's whole fill or stroke — write it as the node's `fill: { style }` / `stroke: { style }`, never as a run's color or an imported SVG's paint.");
+  }
   if (Array.isArray(value)) return value.map((leaf, i) => parseFill(leaf, subject + "[" + i + "]"));
   return [parseFill(value, subject)];
 }
@@ -889,15 +978,42 @@ function rejectUnauthorableTextLeaves(c: object, subject: string, refused: Recor
   }
 }
 
+// What a text style sets on its own: the words refused beside `style` on a node, and refused on a run
+// of a node whose style this call sets (the queued style link would overwrite them).
+const TEXT_STYLE_COVERED_WORDS = [
+  "fontFamily", "fontWeight", "fontSize", "fontStyle", "lineHeight", "letterSpacing", "textDecoration",
+  "textTransform", "fontVariant", "paragraphSpacing", "paragraphIndent", "listSpacing",
+];
+
+// fontFamily / fontWeight / fontSize, shared by the base and a run: each a literal or a variable
+// (STRING for the family, FLOAT for the numbers — Figma binds a weight as a number).
+function compileTextFontWords(c: Record<string, unknown>, ts: WriteTextStyle, subject: string): void {
+  if (c.fontSize != null) ts.fontSize = compileBindable(c.fontSize, subject + ".fontSize", "FLOAT", (v: unknown) => { assertScalarType(v, "number", subject + ".fontSize"); return v as number; });
+  // The one non-scalar-typed leaf: a number (700) or a name ("bold"). Anything else must reject —
+  // wantWeight would silently read it as 400, a whole-node reset to regular.
+  if (c.fontWeight != null) {
+    ts.fontWeight = compileBindable(c.fontWeight, subject + ".fontWeight", "FLOAT", (v: unknown) => {
+      if (typeof v !== "number" && typeof v !== "string") {
+        throw new Error("flcm: " + subject + '.fontWeight must be a number (400, 700), a weight name ("bold", "semibold"), or { variable } — got ' + JSON.stringify(v) + ".");
+      }
+      return v;
+    });
+  }
+  if (c.fontFamily != null) ts.fontFamily = compileBindable(c.fontFamily, subject + ".fontFamily", "STRING", (v: unknown) => { assertScalarType(v, "string", subject + ".fontFamily"); return v as string; });
+}
+
 // The text words a BASE style and a RUN delta share — casing, paragraph metrics, links. Written once
 // because Figma applies every one of them per range (setRangeTextCase/setRangeParagraph*/…), so the
 // two carriers differ only in which range they cover, never in what the word means.
 function compileSharedTextWords(c: Record<string, unknown>, ts: WriteTextStyle, subject: string): void {
   const textCase = compileTextCase(c, subject);
   if (textCase) ts.textCase = textCase;
-  if (c.paragraphSpacing != null) ts.paragraphSpacing = length(c.paragraphSpacing as number | string);
-  if (c.paragraphIndent != null) ts.paragraphIndent = length(c.paragraphIndent as number | string);
-  if (c.listSpacing != null) ts.listSpacing = length(c.listSpacing as number | string);
+  if (c.paragraphSpacing != null) ts.paragraphSpacing = compileBindable(c.paragraphSpacing, subject + ".paragraphSpacing", "FLOAT", length);
+  if (c.paragraphIndent != null) ts.paragraphIndent = compileBindable(c.paragraphIndent, subject + ".paragraphIndent", "FLOAT", length);
+  if (c.listSpacing != null) {
+    refuseTokenInput(c.listSpacing, subject + ".listSpacing", "listSpacing has no variable binding in Figma");
+    ts.listSpacing = length(c.listSpacing as number | string);
+  }
 }
 
 // The textStyle word compile every text carrier rides — TEXT's base and an edit delta alike
@@ -916,19 +1032,21 @@ export function compileTextStyleWords(cfg: unknown, subject: string): WriteTextS
   rejectUnauthorableTextLeaves(c, subject);
   rejectUnknownKeys(c, TEXTSTYLE_INPUT_KEYS, subject);
   const ts: WriteTextStyle = {};
-  if (c.fontSize != null) { assertScalarType(c.fontSize, "number", "textStyle.fontSize"); ts.fontSize = c.fontSize; }
-  // The one non-scalar-typed leaf: a number (700) or a name ("bold"). Anything else must reject —
-  // wantWeight would silently read it as 400, a whole-node reset to regular.
-  if (c.fontWeight != null) {
-    if (typeof c.fontWeight !== "number" && typeof c.fontWeight !== "string") {
-      throw new Error('flcm: textStyle.fontWeight must be a number (400, 700) or a weight name ("bold", "semibold") — got ' + JSON.stringify(c.fontWeight) + ".");
+  const raw = c as Record<string, unknown>;
+  if (raw.style != null) {
+    const covered = TEXT_STYLE_COVERED_WORDS.filter((word) => raw[word] != null);
+    if (covered.length) {
+      throw new Error(
+        subject + ": a text style sets " + covered.join(", ") + " itself, so " + (covered.length === 1 ? "it" : "they") +
+          " can't ride beside `style` — drop " + (covered.length === 1 ? "it" : "them") + ", or drop `style` and give every word literally. Only textAlign, textAlignVertical, hyperlink and lineClamp ride beside a style.",
+      );
     }
-    ts.fontWeight = c.fontWeight;
+    ts.style = compileStyleRef(raw.style, subject + ".style", "TEXT");
   }
-  if (c.fontFamily != null) { assertScalarType(c.fontFamily, "string", "textStyle.fontFamily"); ts.fontFamily = c.fontFamily; }
+  compileTextFontWords(raw, ts, subject);
   if (c.fontStyle != null) ts.fontStyle = assertEnum("textStyle.fontStyle", c.fontStyle, FONT_STYLE);
-  if (c.lineHeight != null) ts.lineHeight = lineHeight(c.lineHeight);
-  if (c.letterSpacing != null) ts.letterSpacing = letterSpacing(c.letterSpacing);
+  if (c.lineHeight != null) ts.lineHeight = compileBindable(c.lineHeight, subject + ".lineHeight", "FLOAT", lineHeight);
+  if (c.letterSpacing != null) ts.letterSpacing = compileBindable(c.letterSpacing, subject + ".letterSpacing", "FLOAT", letterSpacing);
   if (c.textDecoration != null) ts.textDecoration = assertEnum("textStyle.textDecoration", c.textDecoration, TEXT_DECORATION);
   if (c.textAlign != null) ts.textAlign = assertEnum("textStyle.textAlign", c.textAlign, TEXT_ALIGN);
   if (c.textAlignVertical != null) ts.textAlignVertical = assertEnum("textStyle.textAlignVertical", c.textAlignVertical, TEXT_ALIGN_VERTICAL);
@@ -964,16 +1082,25 @@ function compileText(props: TextProps): WriteNode {
   base(wn, props);
   compileBindings(wn, props, TEXT_BINDINGS, "TEXT");
   // The text's paint is `fill`, like every other node's. "none" is the same removal word edit takes.
-  if (props.fill != null) wn.fills = compilePaintWord(props.fill, "fill");
+  if (props.fill != null) compilePaintSlot(wn, props.fill, "fill");
   const cfg = (props.textStyle ?? {}) as NonNullable<TextProps["textStyle"]>;
   const ts = compileTextStyleWords(cfg, "TEXT.textStyle");
   if (Object.keys(ts).length) wn.textStyle = ts;
   Object.assign(wn, compileTextContent(content, ts, props.boldWeight ?? undefined));
+  assertRunColorsBesideFillStyle(wn, "TEXT");
   // lineClamp "none" at create is the explicit default — no clamp to remove, nothing lands.
   if (cfg.lineClamp != null && cfg.lineClamp !== "none") wn.maxLines = assertLineClamp(cfg.lineClamp, props.width);
   const layout = buildLayout(props as FrameProps, "TEXT", "TEXT");
   if (Object.keys(layout).length) wn.layout = layout;
   return wn;
+}
+
+// The fill style's link lands after the runs (the lock's queued write) and repaints every character,
+// so a run color beside it would be silently overwritten. Shared by create and edit.
+export function assertRunColorsBesideFillStyle(wn: WriteProps, subject: string): void {
+  if (wn.styles?.fill && wn.runs?.some((run) => run.fills)) {
+    throw new Error(subject + ": a fill style repaints the whole text, so a run's color can't ride beside it — drop the run colors, or give the node a literal fill.");
+  }
 }
 
 // N's shape gate, shared by create and edit so one author mistake reads one error. "none" is each
@@ -1096,6 +1223,18 @@ function mergeDelta(seg: MdSegment, explicit: StyleDeltaInput, boldWeight?: numb
 // assertNotReadToken); it was checked on the raw input in compileRuns / text().
 function compileRun(str: string, delta: StyleDeltaInput, baseStyle: WriteTextStyle, subject: string): WriteTextRun {
   const out: WriteTextRun = { text: str };
+  if (baseStyle.style) {
+    const covered = TEXT_STYLE_COVERED_WORDS.filter((word) => (delta as Record<string, unknown>)[word] != null);
+    if (covered.length) {
+      throw new Error(
+        subject + ": this call sets the node's text style, which covers " + covered.join(", ") +
+          " — the style link lands after the runs and would overwrite them. Style the run's color or link only, or drop textStyle.style (markdown ** / * / ~~ set fontWeight, fontStyle and textDecoration).",
+      );
+    }
+  }
+  // The run's own font words compile first, so the effective triple below reads bound and literal alike.
+  const fontWords: WriteTextStyle = {};
+  compileTextFontWords(delta as Record<string, unknown>, fontWords, subject);
   const style: WriteTextStyle = {};
   const italic = delta.fontStyle != null
     ? assertEnum("run fontStyle", delta.fontStyle, FONT_STYLE)
@@ -1105,13 +1244,13 @@ function compileRun(str: string, delta: StyleDeltaInput, baseStyle: WriteTextSty
     // effective triple — fontFamily is assigned even when the base has none (the key is present
     // with an undefined value). Edit's mixed-base guard reads exactly that presence; don't "tidy"
     // the undefined assignment away.
-    style.fontFamily = delta.fontFamily != null ? delta.fontFamily : baseStyle.fontFamily;
-    style.fontWeight = delta.fontWeight != null ? delta.fontWeight : baseStyle.fontWeight;
+    style.fontFamily = fontWords.fontFamily !== undefined ? fontWords.fontFamily : baseStyle.fontFamily;
+    style.fontWeight = fontWords.fontWeight !== undefined ? fontWords.fontWeight : baseStyle.fontWeight;
     if (italic != null) style.fontStyle = italic;
   }
-  if (delta.fontSize != null) style.fontSize = delta.fontSize;
-  if (delta.lineHeight != null) style.lineHeight = lineHeight(delta.lineHeight);
-  if (delta.letterSpacing != null) style.letterSpacing = letterSpacing(delta.letterSpacing);
+  if (fontWords.fontSize !== undefined) style.fontSize = fontWords.fontSize;
+  if (delta.lineHeight != null) style.lineHeight = compileBindable(delta.lineHeight, subject + ".lineHeight", "FLOAT", lineHeight);
+  if (delta.letterSpacing != null) style.letterSpacing = compileBindable(delta.letterSpacing, subject + ".letterSpacing", "FLOAT", letterSpacing);
   if (delta.textDecoration != null) style.textDecoration = assertEnum("run textDecoration", delta.textDecoration, TEXT_DECORATION);
   compileSharedTextWords(delta as Record<string, unknown>, style, subject);
   if (Object.keys(style).length) out.style = style;
@@ -1146,7 +1285,7 @@ function compileLine(props: LineProps | SimplifiedNode = {}): WriteNode {
   const wn: WriteNode = { type: "LINE" };
   base(wn, props);
   compileBindings(wn, props, ANY_NODE_BINDINGS, "LINE");
-  if (props.stroke != null) wn.strokes = compilePaintWord(props.stroke, "stroke");
+  if (props.stroke != null) compilePaintSlot(wn, props.stroke, "stroke");
   if (props.strokeWidth != null) wn.strokeWeight = compileStrokeWidth(props.strokeWidth, "LINE");
   const layout = compileNodeLayout(props, "LINE", "LINE") || {};
   // line() is the one compiler that doesn't ride buildLayout (width-only sizing), so it consults

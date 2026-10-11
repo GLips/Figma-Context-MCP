@@ -69,8 +69,8 @@ function renderNode(
   if (node.template !== undefined) parts.push(`template=${node.template}`);
 
   // Order chosen to put high-signal properties first
-  if (node.width !== undefined) parts.push(`width=${node.width}`);
-  if (node.height !== undefined) parts.push(`height=${node.height}`);
+  if (node.width !== undefined) parts.push(`width=${renderStyleValue(node.width)}`);
+  if (node.height !== undefined) parts.push(`height=${renderStyleValue(node.height)}`);
   if (node.designedWidth !== undefined) parts.push(`designedWidth=${node.designedWidth}`);
   if (node.designedHeight !== undefined) parts.push(`designedHeight=${node.designedHeight}`);
   if (node.aspectRatio !== undefined) parts.push(`aspectRatio=${node.aspectRatio}`);
@@ -81,12 +81,14 @@ function renderNode(
   if (node.layout !== undefined) parts.push(`layout=${renderStyleValue(node.layout)}`);
   if (node.fill !== undefined) parts.push(`fill=${renderStyleValue(node.fill)}`);
   if (node.stroke !== undefined) parts.push(`stroke=${renderStyleValue(node.stroke)}`);
-  if (node.strokeWidth !== undefined) parts.push(`strokeWidth=${maybeQuote(node.strokeWidth)}`);
+  if (node.strokeWidth !== undefined)
+    parts.push(`strokeWidth=${renderStyleValue(node.strokeWidth)}`);
   if (node.strokeDashes !== undefined) parts.push(`strokeDashes=${node.strokeDashes.join(",")}`);
   if (node.strokeAlign !== undefined) parts.push(`strokeAlign=${node.strokeAlign}`);
   if (node.effects !== undefined) parts.push(`effects=${renderStyleValue(node.effects)}`);
-  if (node.opacity !== undefined) parts.push(`opacity=${node.opacity}`);
-  if (node.borderRadius !== undefined) parts.push(`borderRadius=${maybeQuote(node.borderRadius)}`);
+  if (node.opacity !== undefined) parts.push(`opacity=${renderStyleValue(node.opacity)}`);
+  if (node.borderRadius !== undefined)
+    parts.push(`borderRadius=${renderStyleValue(node.borderRadius)}`);
   if (node.componentId !== undefined) parts.push(`componentId=${node.componentId}`);
   if (node.componentProperties !== undefined) {
     parts.push(`componentProperties=${JSON.stringify(node.componentProperties)}`);
@@ -118,8 +120,8 @@ function renderNode(
 
 // Style fields hold either a styles-table reference (a short scalar id) or, for
 // single-use values after the compression pass, the inline value itself. Refs render
-// bare; inline objects/arrays render as compact JSON (consistent with how
-// componentProperties is rendered), keeping the whole node on one line.
+// bare; inline objects/arrays — token references included — render as compact JSON
+// (consistent with how componentProperties is rendered), keeping the whole node on one line.
 function renderStyleValue(value: unknown): string {
   return typeof value === "string" ? maybeQuote(value) : JSON.stringify(value);
 }

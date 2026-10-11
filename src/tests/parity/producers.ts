@@ -11,7 +11,7 @@ import type { LoadedScene } from "./scenes-io.js";
  * that must all reduce to it. `rest` is the REST wire response; `snapshot` is the
  * plan-neutral `NodeSnapshot[]` the plugin adapter produces (committed as the
  * read plan's concrete target — see snapshots/); `scene` is the plugin-native
- * fixture (roots + its style resolver) fed through the real `sceneNodeToSnapshot`
+ * fixture (roots + its token resolver) fed through the real `sceneNodeToSnapshot`
  * (null until a case's fixture lands — see scenes-io.ts).
  */
 export interface ParityCase {
@@ -71,8 +71,9 @@ const snapshotProducer: ParityProducer = {
 
 /**
  * Scene producer — the plugin path proper: a committed plugin-native fixture
- * through the REAL `sceneNodeToSnapshot`, then the same core. The style resolver
- * reads the fixture's styles table, standing in for `figma.getStyleByIdAsync`.
+ * through the REAL `sceneNodeToSnapshot`, then the same core. The token resolver
+ * reads the fixture's styles and variables tables, standing in for
+ * `figma.getStyleByIdAsync` and `figma.variables.getVariableByIdAsync`.
  * Returns null (case skipped) until a case's fixture exists.
  */
 const sceneProducer: ParityProducer = {
@@ -80,7 +81,7 @@ const sceneProducer: ParityProducer = {
   produce: ({ scene }) => {
     if (!scene) return null;
     return Promise.all(
-      scene.roots.map((root) => sceneNodeToSnapshot(root, scene.resolveStyle)),
+      scene.roots.map((root) => sceneNodeToSnapshot(root, scene.resolveToken)),
     ).then(designFromSnapshots);
   },
 };

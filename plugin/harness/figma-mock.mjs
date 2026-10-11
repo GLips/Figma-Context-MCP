@@ -62,7 +62,7 @@ function assertChildListOpen(node, countSelf, verb) {
 // Every per-range styling bucket the setRange* recorders write — the set a `characters` write clears.
 const RANGE_BUCKETS = ["_rangeFonts", "_rangeSizes", "_rangeFills", "_rangeLineHeights",
   "_rangeLetterSpacings", "_rangeDecorations", "_rangeHyperlinks", "_rangeCases",
-  "_rangeParagraphSpacings", "_rangeParagraphIndents", "_rangeListSpacings"];
+  "_rangeParagraphSpacings", "_rangeParagraphIndents", "_rangeListSpacings", "_rangeBound"];
 
 // Figma's RectangleCornerMixin — the types whose four corners can differ. Everything else with a
 // corner (POLYGON, STAR, VECTOR) has only the uniform `cornerRadius`.
@@ -148,6 +148,9 @@ class Node {
     this.counterAxisSizingMode = "AUTO";
     this.layoutGrow = 0;
     this.layoutAlign = "INHERIT";
+    // tokens — see the token block below; both must exist before the paint setters run
+    this._bound = {};
+    this._styleIds = {};
     // appearance
     this.fills = [];
     this.strokes = [];
@@ -369,6 +372,109 @@ class Node {
   setPluginData(k, v) { this._plugin[k] = String(v); }
   getPluginData(k) { return this._plugin[k] || ""; }
 
+  // --- tokens: variable bindings and style slots (see the token block near createFigmaMock) ---
+
+  // A literal paint/effect write detaches the slot's style, as live does when a style's node gets
+  // its own paint. Accessors rather than data so that detach can't be skipped by any writer.
+  get fills() { return this._fills; }
+  set fills(v) { this._fills = v; delete this._styleIds.fill; }
+  get strokes() { return this._strokes; }
+  set strokes(v) { this._strokes = v; delete this._styleIds.stroke; }
+  get effects() { return this._effects; }
+  set effects(v) { this._effects = v; delete this._styleIds.effect; }
+
+  // Under `documentAccess: dynamic-page` the sync style-id setters THROW live [verified]; only the
+  // *Async setters write. Reading stays sync and answers "" for an unstyled slot.
+  get fillStyleId() { return this._styleIds.fill || ""; }
+  set fillStyleId(id) { this._stageStyleId("fill", id, "setFillStyleIdAsync"); }
+  get strokeStyleId() { return this._styleIds.stroke || ""; }
+  set strokeStyleId(id) { this._stageStyleId("stroke", id, "setStrokeStyleIdAsync"); }
+  get effectStyleId() { return this._styleIds.effect || ""; }
+  set effectStyleId(id) { this._stageStyleId("effect", id, "setEffectStyleIdAsync"); }
+  get textStyleId() { return this.type === "TEXT" ? this._styleIds.text || "" : undefined; }
+  set textStyleId(id) { this._stageStyleId("text", id, "setTextStyleIdAsync"); }
+  // Looks wrong: live throws for EVERY id. The mock throws for any id a seeded style answers to —
+  // every write the preamble could make — and lets a fixture point a slot at an id nothing answers
+  // to, the only way to stage a deleted or unloaded style.
+  _stageStyleId(slot, id, asyncName) {
+    if (tokenStore.styles.has(id)) throw new Error(DYNAMIC_PAGE_STYLE_SETTER(asyncName));
+    this._styleIds[slot] = id;
+  }
+  async setFillStyleIdAsync(id) { this._applyStyle("fill", "PAINT", id); }
+  async setStrokeStyleIdAsync(id) { this._applyStyle("stroke", "PAINT", id); }
+  async setEffectStyleIdAsync(id) { this._applyStyle("effect", "EFFECT", id); }
+  async setTextStyleIdAsync(id) {
+    if (this.type !== "TEXT") throw new Error("setTextStyleIdAsync: not a TEXT node");
+    this._applyStyle("text", "TEXT", id);
+  }
+  // A style write lands the style's values and links the slot. Text styles replace the whole node's
+  // covered properties, ranges included.
+  _applyStyle(slot, type, id) {
+    if (this.removed) throw new Error("The node with id " + JSON.stringify(this.id) + " has been removed");
+    if (id === "") { delete this._styleIds[slot]; return; }
+    const style = tokenStore.styles.get(id);
+    if (!style) throw new Error("Style with id " + JSON.stringify(id) + " not found");
+    if (style.type !== type) throw new Error("Style " + JSON.stringify(id) + " is a " + style.type + " style, not " + type);
+    if (slot === "fill") this.fills = clonePaints(style.paints);
+    if (slot === "stroke") this.strokes = clonePaints(style.paints);
+    if (slot === "effect") this.effects = clonePaints(style.effects);
+    if (slot === "text") {
+      this.fontName = { ...style.fontName };
+      for (const field of TEXT_STYLE_FIELDS) if (style[field] !== undefined) this[field] = clonePaints(style[field]);
+      for (const bucket of ["_rangeSizes", "_rangeLineHeights", "_rangeLetterSpacings", "_rangeDecorations", "_rangeCases", "_rangeParagraphSpacings", "_rangeParagraphIndents", "_rangeListSpacings"]) this[bucket] = [];
+    }
+    this._styleIds[slot] = id;
+  }
+
+  // Live shape: a node field maps to one alias, a text field to an alias array (one per segment),
+  // and `fills`/`strokes` to the aliases their paints carry.
+  get boundVariables() {
+    const out = {};
+    for (const [field, alias] of Object.entries(this._bound)) out[field] = TEXT_VARIABLE_FIELDS.has(field) ? [alias] : alias;
+    for (const { value } of this._rangeBound || []) {
+      if (!value.alias) continue;
+      const list = (out[value.field] ||= []);
+      if (!list.some((a) => a.id === value.alias.id)) list.push(value.alias);
+    }
+    for (const slot of ["fills", "strokes"]) {
+      const aliases = (Array.isArray(this[slot]) ? this[slot] : []).map((p) => p.boundVariables && p.boundVariables.color).filter(Boolean);
+      if (aliases.length) out[slot] = aliases;
+    }
+    return out;
+  }
+  // Binding writes the variable's value for this node (its default mode — the mock models no
+  // explicit modes) the way live does, so geometry reads after a bind see the bound size.
+  setBoundVariable(field, variable) {
+    if (!NODE_VARIABLE_FIELDS.has(field) && !(this.type === "TEXT" && TEXT_VARIABLE_FIELDS.has(field))) {
+      throw new Error("setBoundVariable: " + JSON.stringify(field) + " is not bindable on a " + this.type);
+    }
+    if (variable == null) { delete this._bound[field]; return; }
+    const value = resolveVariableValue(variable);
+    const want = field === "fontFamily" ? "STRING" : "FLOAT";
+    if (variable.resolvedType !== want) throw new Error("setBoundVariable: " + field + " needs a " + want + " variable, got " + variable.resolvedType);
+    this._writeBoundValue(field, value);
+    this._bound[field] = { type: "VARIABLE_ALIAS", id: variable.id };
+  }
+  _writeBoundValue(field, value) {
+    if (field === "width") return this.resize(value, this.height);
+    if (field === "height") return this.resize(this.width, value);
+    if (field === "fontFamily") { this.fontName = { family: value, style: this._fontName.style }; return; }
+    if (field === "fontWeight") { this.fontName = { family: this._fontName.family, style: styleOfWeight(value) }; return; }
+    if (field === "lineHeight" || field === "letterSpacing") { this[field] = { value, unit: "PIXELS" }; return; }
+    this[field] = value;
+  }
+  setRangeBoundVariable(start, end, field, variable) {
+    if (this.type !== "TEXT" || !TEXT_VARIABLE_FIELDS.has(field)) throw new Error("setRangeBoundVariable: " + JSON.stringify(field) + " is not a text field");
+    this._range("_rangeBound", start, end, { field, alias: variable ? { type: "VARIABLE_ALIAS", id: variable.id } : null });
+    if (!variable) return;
+    const value = resolveVariableValue(variable);
+    if (field === "fontSize") this.setRangeFontSize(start, end, value);
+    if (field === "lineHeight") this.setRangeLineHeight(start, end, { value, unit: "PIXELS" });
+    if (field === "letterSpacing") this.setRangeLetterSpacing(start, end, { value, unit: "PIXELS" });
+    if (field === "paragraphSpacing") this.setRangeParagraphSpacing(start, end, value);
+    if (field === "paragraphIndent") this.setRangeParagraphIndent(start, end, value);
+  }
+
   // Rich-text per-range setters. The live API applies a style to characters [start, end); the mock just
   // records each range so a scenario can assert the runs landed (font/size/fills over the right slice).
   // A range whose font isn't first loaded throws live — the preamble preloads every run font, so we don't
@@ -524,6 +630,14 @@ class Node {
       if (letterSpacing !== undefined) seg.letterSpacing = letterSpacing;
       const hyperlink = at("_rangeHyperlinks", i, null);
       if (hyperlink) seg.hyperlink = hyperlink;
+      // A node-level text binding covers every character; a range binding overrides it on its span.
+      const bound = {};
+      for (const [field, alias] of Object.entries(this._bound)) if (TEXT_VARIABLE_FIELDS.has(field)) bound[field] = alias;
+      for (const r of this._rangeBound || []) if (r.start <= i && i < r.end) {
+        if (r.value.alias) bound[r.value.field] = r.value.alias;
+        else delete bound[r.value.field];
+      }
+      if (Object.keys(bound).length) seg.boundVariables = bound;
       return seg;
     };
     const runs = [];
@@ -1008,6 +1122,7 @@ function cloneSubtree(src) {
   n.fills = clonePaints(src.fills);
   n.strokes = clonePaints(src.strokes);
   n.effects = clonePaints(src.effects);
+  copyTokenState(src, n);
   n.constraints = { ...src.constraints };
   n._fontName = JSON.parse(JSON.stringify(src._fontName));
   n._rangeFonts = JSON.parse(JSON.stringify(src._rangeFonts || []));
@@ -1041,6 +1156,7 @@ function cloneInto(mainNode, instId, isRoot) {
   n.fills = clonePaints(mainNode.fills);
   n.strokes = clonePaints(mainNode.strokes);
   n.effects = clonePaints(mainNode.effects);
+  copyTokenState(mainNode, n);
   n.fontName = JSON.parse(JSON.stringify(mainNode._fontName));
   n._rangeFonts = JSON.parse(JSON.stringify(mainNode._rangeFonts || []));
   // A nested INSTANCE stays an instance inside the clone: it keeps its own main component and its
@@ -1058,9 +1174,105 @@ function cloneInto(mainNode, instId, isRoot) {
   return n;
 }
 
+// ---- tokens: variables, collections, and shared styles ----
+//
+// Self-contained so either write or read code can lean on it: a store reset by createFigmaMock, the
+// `figma.variables` / style lookups over it, and the seed helpers tests use to populate it. Modelled:
+// collections with modes, valuesByMode with aliases, resolvedType, binding through setBoundVariable /
+// setRangeBoundVariable / setBoundVariableForPaint, and the *Async style setters. Not modelled:
+// explicit variable modes on nodes (everything resolves in the collection's default mode), libraries
+// (`importVariableByKeyAsync`), scopes, and a literal text write detaching a text style.
+
+const tokenStore = { collections: new Map(), variables: new Map(), styles: new Map() };
+
+const DYNAMIC_PAGE_STYLE_SETTER = (asyncName) =>
+  "Cannot set a style id synchronously with documentAccess: dynamic-page. Use " + asyncName + " instead.";
+
+// VariableBindableNodeField and VariableBindableTextField, as the plugin typings name them.
+const NODE_VARIABLE_FIELDS = new Set(["height", "width", "characters", "itemSpacing", "paddingLeft", "paddingRight",
+  "paddingTop", "paddingBottom", "visible", "cornerRadius", "topLeftRadius", "topRightRadius", "bottomLeftRadius",
+  "bottomRightRadius", "minWidth", "maxWidth", "minHeight", "maxHeight", "counterAxisSpacing", "strokeWeight",
+  "strokeTopWeight", "strokeRightWeight", "strokeBottomWeight", "strokeLeftWeight", "opacity", "gridRowGap", "gridColumnGap"]);
+const TEXT_VARIABLE_FIELDS = new Set(["fontFamily", "fontSize", "fontStyle", "fontWeight", "letterSpacing", "lineHeight",
+  "paragraphSpacing", "paragraphIndent"]);
+// What a TEXT style carries besides its fontName, written whole-node by setTextStyleIdAsync.
+const TEXT_STYLE_FIELDS = ["fontSize", "lineHeight", "letterSpacing", "paragraphSpacing", "paragraphIndent",
+  "listSpacing", "textCase", "textDecoration"];
+
+function copyTokenState(src, dest) {
+  dest._bound = { ...src._bound };
+  dest._styleIds = { ...src._styleIds };
+}
+
+// The default-mode value, following aliases to a concrete one.
+function resolveVariableValue(variable) {
+  let current = variable;
+  for (let hops = 0; hops < 16; hops++) {
+    const collection = tokenStore.collections.get(current.variableCollectionId);
+    const value = current.valuesByMode[collection.defaultModeId];
+    if (!value || value.type !== "VARIABLE_ALIAS") return value;
+    current = tokenStore.variables.get(value.id);
+  }
+  throw new Error("variable alias chain too deep at " + variable.id);
+}
+
+const WEIGHT_STYLES = { 100: "Thin", 200: "Extra Light", 300: "Light", 400: "Regular", 500: "Medium", 600: "Semi Bold", 700: "Bold", 800: "Extra Bold", 900: "Black" };
+function styleOfWeight(weight) { return WEIGHT_STYLES[Math.round(weight / 100) * 100] || "Regular"; }
+
+/**
+ * Seed one variable collection. `values` per variable is keyed by MODE NAME; a value may be
+ * `{ alias: "<other variable name>" }` to point at a variable seeded in the same call or earlier.
+ * Returns the created variables by name, so a test can bind by id.
+ */
+export function seedVariables({ collection: name = "Tokens", modes = ["Default"], variables }) {
+  const collectionId = "VariableCollectionId:" + (tokenStore.collections.size + 1) + ":0";
+  const modeList = modes.map((modeName, i) => ({ modeId: collectionId + "/" + i, name: modeName }));
+  const collection = { id: collectionId, name, modes: modeList, defaultModeId: modeList[0].modeId, variableIds: [], remote: false };
+  tokenStore.collections.set(collectionId, collection);
+  const byName = {};
+  for (const spec of variables) {
+    const id = "VariableID:" + (tokenStore.variables.size + 1) + ":" + collection.variableIds.length;
+    const valuesByMode = {};
+    for (const mode of modeList) {
+      const raw = spec.values[mode.name] ?? spec.values[modes[0]];
+      const target = raw && typeof raw === "object" && "alias" in raw ? findVariableByName(raw.alias) : undefined;
+      valuesByMode[mode.modeId] = target ? { type: "VARIABLE_ALIAS", id: target.id } : raw;
+    }
+    const variable = {
+      id, name: spec.name, key: "k" + id, resolvedType: spec.type, variableCollectionId: collectionId, valuesByMode, remote: false,
+      resolveForConsumer() { return { value: resolveVariableValue(variable), resolvedType: variable.resolvedType }; },
+    };
+    tokenStore.variables.set(id, variable);
+    collection.variableIds.push(id);
+    byName[spec.name] = variable;
+  }
+  return byName;
+}
+
+function findVariableByName(name) {
+  for (const v of tokenStore.variables.values()) if (v.name === name) return v;
+  throw new Error("seedVariables: no variable named " + JSON.stringify(name) + " to alias");
+}
+
+/**
+ * Seed one shared style. `type` is PAINT (with `paints`), EFFECT (with `effects`) or TEXT (with
+ * `fontName` plus any TEXT_STYLE_FIELDS). Returns the style, whose `id` is what a node's *StyleId reads.
+ */
+export function seedStyle(spec) {
+  const id = "S:" + (tokenStore.styles.size + 1).toString(16).padStart(40, "0") + ",";
+  const style = { id, key: "k" + id, remote: false, description: "", ...JSON.parse(JSON.stringify(spec)) };
+  tokenStore.styles.set(id, style);
+  return style;
+}
+
+const localStyles = (type) => async () => [...tokenStore.styles.values()].filter((s) => s.type === type);
+
 export function createFigmaMock() {
   __id = 0;
   registry.clear();
+  tokenStore.collections.clear();
+  tokenStore.variables.clear();
+  tokenStore.styles.clear();
   const page = new Node("PAGE");
   page.name = "Page 1";
   registry.delete(page.id); page.id = "0:1"; registry.set(page.id, page);
@@ -1227,6 +1439,7 @@ export function createFigmaMock() {
       comp.fills = clonePaints(node.fills);
       comp.strokes = clonePaints(node.strokes);
       comp.effects = clonePaints(node.effects);
+      copyTokenState(node, comp);
       comp.children = node.children;
       comp.children.forEach((c) => (c.parent = comp));
       comp.key = "k" + Math.abs(hashStr(node.id)).toString(16).padStart(40, "0").slice(0, 40);
@@ -1247,9 +1460,27 @@ export function createFigmaMock() {
     // the live API throws on it. Omitting it from the mock is what keeps that enforced — a call site that
     // regresses to the sync form fails here instead of only in a real Figma file.
     async getNodeByIdAsync(id) { return registry.get(id) || null; },
-    // The mock models no shared styles — nodes never carry a fill/text/effectStyleId, so the read
-    // path's resolver treats every lookup as unresolvable (dropping the slot, like live).
-    async getStyleByIdAsync() { return null; },
+    // An id nothing seeded resolves to null, like a deleted or unloaded style live.
+    async getStyleByIdAsync(id) { return tokenStore.styles.get(id) || null; },
+    async importStyleByKeyAsync(key) { for (const s of tokenStore.styles.values()) if (s.key === key) return s; throw new Error("no published style with key " + key); },
+    getLocalPaintStylesAsync: localStyles("PAINT"),
+    getLocalEffectStylesAsync: localStyles("EFFECT"),
+    getLocalTextStylesAsync: localStyles("TEXT"),
+    variables: {
+      async getVariableByIdAsync(id) { return tokenStore.variables.get(id) || null; },
+      async getLocalVariablesAsync(type) {
+        return [...tokenStore.variables.values()].filter((v) => type === undefined || v.resolvedType === type);
+      },
+      async getLocalVariableCollectionsAsync() { return [...tokenStore.collections.values()]; },
+      async getVariableCollectionByIdAsync(id) { return tokenStore.collections.get(id) || null; },
+      // Returns a NEW paint, as live does: the caller must assign it back into the paint stack.
+      setBoundVariableForPaint(paint, field, variable) {
+        if (field !== "color" || paint.type !== "SOLID") throw new Error("setBoundVariableForPaint: only a SOLID paint's color is bindable here");
+        if (variable.resolvedType !== "COLOR") throw new Error("setBoundVariableForPaint: color needs a COLOR variable, got " + variable.resolvedType);
+        const { r, g, b } = resolveVariableValue(variable);
+        return { ...clonePaints([paint])[0], color: { r, g, b }, boundVariables: { color: { type: "VARIABLE_ALIAS", id: variable.id } } };
+      },
+    },
     // RECORDED like undo: tests assert a font was preloaded before a size write, not that Figma
     // would have refused without it (that rejection is live behavior, grounded by probe).
     fontLoads: [],

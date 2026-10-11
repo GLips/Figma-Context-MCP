@@ -29,11 +29,16 @@ import type {
   SnapshotEffect,
   SnapshotImageFilters,
   SnapshotPaint,
+  SnapshotNodeVariableField,
+  SnapshotNodeVariables,
   SnapshotPoint,
-  SnapshotStyleRef,
+  SnapshotStyleSlot,
   SnapshotText,
   SnapshotTextRun,
   SnapshotTextStyle,
+  SnapshotTextVariableField,
+  SnapshotTextVariables,
+  SnapshotTokenRef,
   SnapshotTransform,
   SnapshotVector,
 } from "@framelink/core/snapshot";
@@ -55,6 +60,11 @@ type SceneTransform = readonly [
   readonly [number, number, number],
 ];
 
+/** Plugin `VariableAlias`: a binding names its variable by id only. */
+export interface SceneVariableAlias {
+  readonly id: string;
+}
+
 export interface SceneSolidPaint {
   type: "SOLID";
   /** Plugin solids carry alpha on the paint's `opacity`, never in the color. */
@@ -62,6 +72,8 @@ export interface SceneSolidPaint {
   opacity?: number;
   blendMode?: string;
   visible?: boolean;
+  /** Gradient stops can bind too; out of scope, so only the solid's binding is declared. */
+  boundVariables?: { readonly color?: SceneVariableAlias };
 }
 
 export interface SceneGradientPaint {
@@ -152,7 +164,18 @@ export interface SceneTextSegment {
   paragraphSpacing?: number;
   paragraphIndent?: number;
   listSpacing?: number;
+  /** This range's own bindings, keyed by text field; requested as the `boundVariables` segment field. */
+  boundVariables?: { readonly [field: string]: SceneVariableAlias | undefined };
 }
+
+/**
+ * The node-field bindings this adapter reads: the snapshot's own field names, plus the two
+ * whole-node bindings that stand for every side or corner. Paint bindings are read off each
+ * paint (node-level `fills`/`strokes` arrays would duplicate them), text bindings off segments.
+ */
+type SceneNodeVariables = {
+  readonly [K in SnapshotNodeVariableField | "strokeWeight" | "cornerRadius"]?: SceneVariableAlias;
+};
 
 export interface SceneNodeLike {
   readonly annotations?: readonly SceneAnnotation[];
@@ -247,7 +270,8 @@ export interface SceneNodeLike {
     fields: ReadonlyArray<string>,
   ) => ReadonlyArray<SceneTextSegment>;
 
-  // Named-style slots — style ids resolved to names through the injected resolver
+  // Tokens — variable bindings, and style ids resolved to names through the injected resolver
+  readonly boundVariables?: SceneNodeVariables;
   readonly fillStyleId?: string | symbol;
   readonly strokeStyleId?: string;
   readonly textStyleId?: string | symbol;
@@ -327,12 +351,15 @@ function ownOriginIn(node: SceneNodeLike, parentSpace: SceneParentSpace): Snapsh
 }
 
 /**
- * Resolves a style id to its published name (`figma.getStyleByIdAsync` on the live path; a fixture
- * table in the parity harness). Injected because it is the one lookup that isn't node-local, and this
- * module can't touch the `figma` global. A null resolution drops the slot — mirroring the REST
- * adapter's rule that only styles the design named survive.
+ * Resolves a style or variable id to its name (`figma.getStyleByIdAsync` /
+ * `figma.variables.getVariableByIdAsync` on the live path; fixture tables in the parity harness).
+ * Injected because these are the only lookups that aren't node-local, and this module can't touch
+ * the `figma` global. A null resolution keeps the token, id only. A style also answers its `key`.
  */
-export type SceneStyleResolver = (styleId: string) => Promise<{ name: string } | null>;
+export type SceneTokenResolver = (
+  kind: "style" | "variable",
+  id: string,
+) => Promise<{ name: string; key?: string } | null>;
 
 /**
  * Plugin adapter: decode a live-shaped scene node (and its subtree) into the plan-neutral
@@ -341,12 +368,12 @@ export type SceneStyleResolver = (styleId: string) => Promise<{ name: string } |
  */
 export async function sceneNodeToSnapshot(
   node: SceneNodeLike,
-  resolveStyle: SceneStyleResolver,
+  resolveToken: SceneTokenResolver,
   mainComponents?: MainComponentSink,
   annotationCategories: ReadonlyMap<string, string> = new Map(),
   unreadable?: UnreadableSink,
 ): Promise<NodeSnapshot> {
-  return sceneSubtreeToSnapshot(node, resolveStyle, CONTAINER_PARENT_SPACE, mainComponents, annotationCategories, unreadable);
+  return sceneSubtreeToSnapshot(node, resolveToken, CONTAINER_PARENT_SPACE, mainComponents, annotationCategories, unreadable);
 }
 
 /** Where the caller collects ids the walk omitted: unreadable nodes, and containers whose children Figma cannot list. */
@@ -394,7 +421,7 @@ const CONTAINER_PARENT_SPACE: SceneParentSpace = { transparent: false, rotation:
  */
 async function sceneSubtreeToSnapshot(
   node: SceneNodeLike,
-  resolveStyle: SceneStyleResolver,
+  resolveToken: SceneTokenResolver,
   parentSpace: SceneParentSpace,
   mainComponents?: MainComponentSink,
   annotationCategories: ReadonlyMap<string, string> = new Map(),
@@ -418,11 +445,11 @@ async function sceneSubtreeToSnapshot(
   });
   const children = await Promise.all(
     readable.map((child) =>
-      sceneSubtreeToSnapshot(child, resolveStyle, childSpace, mainComponents, annotationCategories, unreadable),
+      sceneSubtreeToSnapshot(child, resolveToken, childSpace, mainComponents, annotationCategories, unreadable),
     ),
   );
 
-  return {
+  const snapshot: NodeSnapshot = {
     annotations: decodeAnnotations(node.annotations, annotationCategories),
     id: node.id,
     name: node.name,
@@ -524,8 +551,10 @@ async function sceneSubtreeToSnapshot(
     // decode straight into per-line runs (Invariant 2)
     text,
 
-    // Named styles: per-slot resolved names via the injected resolver
-    styles: await decodeStyleSlots(node, resolveStyle),
+    // Tokens: style slots named through the injected resolver; variable names are filled in below,
+    // once every binding on this node (node fields, paints, text runs) has been decoded.
+    styles: await decodeStyleSlots(node, resolveToken),
+    boundVariables: decodeNodeVariables(node.boundVariables),
 
     // A container that HAS a child list keeps it even when it is empty — `[]` and `undefined` mean
     // different things downstream: core's `emptiedContainers` only records a node whose snapshot
@@ -534,6 +563,8 @@ async function sceneSubtreeToSnapshot(
     // same distinction; collapsing `[]` to `undefined` here would split the two producers.
     children: "children" in node ? children : undefined,
   };
+  await nameVariables(snapshot, resolveToken);
+  return snapshot;
 }
 
 // ---------------------------------------------------------------------------
@@ -566,6 +597,7 @@ function decodeScenePaint(paint: ScenePaint): SnapshotPaint | undefined {
       return {
         type: "SOLID",
         color: { r: paint.color.r, g: paint.color.g, b: paint.color.b, a: 1 },
+        colorVariable: variableRef(paint.boundVariables?.color),
         opacity: paint.opacity,
         blendMode: paint.blendMode,
         visible: paint.visible,
@@ -683,6 +715,7 @@ const TEXT_SEGMENT_FIELDS: ReadonlyArray<keyof Omit<SceneTextSegment, "character
   "paragraphSpacing",
   "paragraphIndent",
   "listSpacing",
+  "boundVariables",
 ];
 
 const LINE_BREAKS = /[\n\u2029]/;
@@ -812,7 +845,32 @@ function decodeSegmentStyle(segment: SceneTextSegment): SnapshotTextStyle {
   if (segment.listSpacing !== undefined) out.listSpacing = segment.listSpacing;
   const fills = segment.fills ? decodeScenePaints(segment.fills) : undefined;
   if (fills) out.fills = fills;
+  const boundVariables = decodeTextVariables(segment.boundVariables);
+  if (boundVariables) out.boundVariables = boundVariables;
   return out;
+}
+
+/** Text fields the snapshot carries bindings for; fontStyle has no vocabulary word to bind. */
+const TEXT_VARIABLE_FIELDS: ReadonlyArray<SnapshotTextVariableField> = [
+  "fontFamily",
+  "fontSize",
+  "fontWeight",
+  "lineHeight",
+  "letterSpacing",
+  "paragraphSpacing",
+  "paragraphIndent",
+];
+
+function decodeTextVariables(
+  bound: SceneTextSegment["boundVariables"],
+): SnapshotTextVariables | undefined {
+  if (!bound) return undefined;
+  const out: SnapshotTextVariables = {};
+  for (const field of TEXT_VARIABLE_FIELDS) {
+    const ref = variableRef(bound[field]);
+    if (ref) out[field] = ref;
+  }
+  return Object.keys(out).length ? out : undefined;
 }
 
 /**
@@ -837,11 +895,28 @@ function decodeOpenTypeFeatures(features: {
  * JSON.stringify equality is sound here because both sides come from
  * `decodeSegmentStyle`, which emits keys in one fixed order.
  */
+// The literal keys each bindable text field reads from.
+const TEXT_VARIABLE_LITERAL_KEYS: Record<SnapshotTextVariableField, readonly (keyof SnapshotTextStyle)[]> = {
+  fontFamily: ["fontFamily"],
+  fontSize: ["fontSize"],
+  fontWeight: ["fontWeight"],
+  lineHeight: ["lineHeightPx", "lineHeightUnit", "lineHeightPercentFontSize"],
+  letterSpacing: ["letterSpacing"],
+  paragraphSpacing: ["paragraphSpacing"],
+  paragraphIndent: ["paragraphIndent"],
+};
+
 function styleDelta(style: SnapshotTextStyle, base: SnapshotTextStyle): SnapshotTextStyle {
   const delta: Record<string, unknown> = {};
   const baseRecord = base as Record<string, unknown>;
   for (const [key, value] of Object.entries(style)) {
     if (JSON.stringify(value) !== JSON.stringify(baseRecord[key])) delta[key] = value;
+  }
+  // A segment unbound where the base is bound differs even at an equal value: its literal rides in
+  // the delta, or the run would merge into its bound neighbour and read back bound.
+  for (const field of TEXT_VARIABLE_FIELDS) {
+    if (!base.boundVariables?.[field] || style.boundVariables?.[field]) continue;
+    for (const key of TEXT_VARIABLE_LITERAL_KEYS[field]) if (style[key] !== undefined) delta[key] = style[key];
   }
   return delta as SnapshotTextStyle;
 }
@@ -960,29 +1035,114 @@ function decodePropertyDefinitions(node: SceneNodeLike): NodeSnapshot["component
 }
 
 // ---------------------------------------------------------------------------
-// Named styles
+// Tokens — named styles and variable bindings
 // ---------------------------------------------------------------------------
 
-// Plugin per-slot style-id properties → REST's slot names, so the snapshot's `styles` map speaks one
-// vocabulary. A mixed textStyleId (per-run styles) has no single node-level slot and is skipped.
+// Plugin per-slot style-id properties → the snapshot's slot names. A mixed textStyleId (per-run
+// styles) has no single node-level slot and is skipped: per-run text styles are out of scope.
 const STYLE_SLOTS = [
   ["fill", "fillStyleId"],
   ["stroke", "strokeStyleId"],
   ["text", "textStyleId"],
   ["effect", "effectStyleId"],
   ["grid", "gridStyleId"],
-] as const;
+] as const satisfies ReadonlyArray<readonly [SnapshotStyleSlot, keyof SceneNodeLike]>;
 
 async function decodeStyleSlots(
   node: SceneNodeLike,
-  resolveStyle: SceneStyleResolver,
-): Promise<Record<string, SnapshotStyleRef> | undefined> {
-  const resolved: Record<string, SnapshotStyleRef> = {};
+  resolveToken: SceneTokenResolver,
+): Promise<NodeSnapshot["styles"]> {
+  const resolved: NonNullable<NodeSnapshot["styles"]> = {};
   for (const [slot, prop] of STYLE_SLOTS) {
     const styleId = node[prop];
     if (typeof styleId !== "string" || !styleId) continue;
-    const style = await resolveStyle(styleId);
-    resolved[slot] = { ...(style?.name ? { name: style.name } : {}), id: styleId };
+    const style = await resolveToken("style", styleId);
+    // A style's KEY is its id in the read: REST knows a style only by key (its node-local styleId
+    // is a REST-only number), and the write side resolves a key as well as a plugin `S:` id.
+    const id = style?.key || styleId;
+    resolved[slot] = style?.name ? { id, name: style.name } : { id };
   }
   return Object.keys(resolved).length ? resolved : undefined;
+}
+
+function variableRef(alias: SceneVariableAlias | undefined): SnapshotTokenRef | undefined {
+  return alias?.id ? { id: alias.id } : undefined;
+}
+
+const NODE_VARIABLE_FIELDS = [
+  "width",
+  "height",
+  "minWidth",
+  "maxWidth",
+  "minHeight",
+  "maxHeight",
+  "paddingTop",
+  "paddingRight",
+  "paddingBottom",
+  "paddingLeft",
+  "itemSpacing",
+  "counterAxisSpacing",
+  "topLeftRadius",
+  "topRightRadius",
+  "bottomRightRadius",
+  "bottomLeftRadius",
+  "strokeTopWeight",
+  "strokeRightWeight",
+  "strokeBottomWeight",
+  "strokeLeftWeight",
+  "opacity",
+] as const satisfies ReadonlyArray<SnapshotNodeVariableField>;
+
+/** The per-part fields a whole-node binding stands for. */
+const WHOLE_NODE_BINDING: Partial<Record<SnapshotNodeVariableField, "strokeWeight" | "cornerRadius">> = {
+  strokeTopWeight: "strokeWeight",
+  strokeRightWeight: "strokeWeight",
+  strokeBottomWeight: "strokeWeight",
+  strokeLeftWeight: "strokeWeight",
+  topLeftRadius: "cornerRadius",
+  topRightRadius: "cornerRadius",
+  bottomRightRadius: "cornerRadius",
+  bottomLeftRadius: "cornerRadius",
+};
+
+/**
+ * Node-field bindings in the snapshot's field names. A whole-node `strokeWeight` / `cornerRadius`
+ * binding stands for every side / corner without a binding of its own — REST only ever states the
+ * per-part form, so this keeps the two producers' snapshots alike.
+ */
+function decodeNodeVariables(bound: SceneNodeVariables | undefined): SnapshotNodeVariables | undefined {
+  if (!bound) return undefined;
+  const out: SnapshotNodeVariables = {};
+  for (const field of NODE_VARIABLE_FIELDS) {
+    const whole = WHOLE_NODE_BINDING[field];
+    const ref = variableRef(bound[field] ?? (whole && bound[whole]));
+    if (ref) out[field] = ref;
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
+/**
+ * Name every variable ref this node's own snapshot carries — node fields, paints, the text base and
+ * each run. Runs after the decode because paints and segments decode synchronously; the refs are the
+ * ones this node just built, so filling in `name` mutates nothing anyone else holds.
+ */
+async function nameVariables(snapshot: NodeSnapshot, resolveToken: SceneTokenResolver): Promise<void> {
+  const paintRefs = (paints: SnapshotPaint[] | undefined) =>
+    (paints ?? []).flatMap((paint) => (paint.type === "SOLID" && paint.colorVariable ? [paint.colorVariable] : []));
+  const textRefs = (style: SnapshotTextStyle) => [
+    ...Object.values(style.boundVariables ?? {}),
+    ...paintRefs(style.fills),
+  ];
+  const refs = [
+    ...Object.values(snapshot.boundVariables ?? {}),
+    ...paintRefs(snapshot.fills),
+    ...paintRefs(snapshot.strokes),
+    ...(snapshot.text
+      ? [snapshot.text.style, ...snapshot.text.lines.flat().map((run) => run.delta)].flatMap(textRefs)
+      : []),
+  ];
+  for (const ref of refs) {
+    const variable = await resolveToken("variable", ref.id);
+    if (variable?.name) ref.name = variable.name;
+  }
 }

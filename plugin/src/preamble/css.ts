@@ -15,8 +15,10 @@ import {
   WritePaint, WriteImageHash, ImageScaleMode, GradientType, GradientStop, Rgba,
   WriteEffect, WriteLineHeight, WriteLetterSpacing, Edges, CornerRadii,
   FillLeaf, WriteCssEffects, WriteBlendMode,
-  ReadImageFill, WriteImageAdjustments, WriteImageFilters,
+  ReadImageFill, WriteImageAdjustments, WriteImageFilters, WriteSolid, VariableRef,
 } from "./ir.js";
+import { isVariableInput, isStyleInput, compileVariableRef } from "./tokens.js";
+import { rejectUnknownKeys } from "./validate.js";
 import { solid, linearGradient, radialGradient } from "./paint.js";
 import { shadow, layerBlurFromCssPx, backgroundBlurFromCssPx } from "./effects.js";
 
@@ -73,9 +75,19 @@ export function parseFill(value: FillLeaf, field: string): WritePaint {
   if (value && typeof value === "object") {
     if ("kind" in value) return value; // already a typed WritePaint (what flcm.gradient() returns)
     if (isImageFill(value)) return readImagePaint(value, field);
-    const leaf = value as { type?: unknown; color?: unknown; gradient?: unknown; blendMode?: unknown };
+    if (isVariableInput(value)) return boundSolid(compileVariableRef(value, field, "COLOR"), 1);
+    if (isStyleInput(value)) {
+      throw new Error("flcm: " + field + ": a paint style is a node's whole fill or stroke — write it as the node's `fill: { style }` / `stroke: { style }` on its own, never as one layer of a stack, a run's color, or an imported SVG's paint.");
+    }
+    const leaf = value as { type?: unknown; color?: unknown; gradient?: unknown; blendMode?: unknown; opacity?: unknown };
     if (leaf.type === "SOLID" && typeof leaf.color === "string") {
       return withPaintBlend(solid(parseColor(leaf.color)), leaf.blendMode);
+    }
+    if (leaf.type === "SOLID" && isVariableInput(leaf.color)) {
+      rejectUnknownKeys(leaf, BOUND_SOLID_KEYS, field);
+      const opacity = leaf.opacity ?? 1;
+      if (typeof opacity !== "number" || !(opacity >= 0 && opacity <= 1)) throw new Error("flcm: " + field + " opacity must be a number 0–1 — got " + JSON.stringify(leaf.opacity) + ".");
+      return withPaintBlend(boundSolid(compileVariableRef(leaf.color, field + ".color", "COLOR"), opacity), leaf.blendMode);
     }
     if (typeof leaf.gradient === "string" && typeof leaf.type === "string" && leaf.type.indexOf("GRADIENT_") === 0) {
       return withPaintBlend(parseGradientString(leaf.gradient), leaf.blendMode);
@@ -87,8 +99,15 @@ export function parseFill(value: FillLeaf, field: string): WritePaint {
   return /^[a-z-]+-gradient\s*\(/i.test(css) ? parseGradientString(css) : solid(parseColor(css));
 }
 
+const BOUND_SOLID_KEYS: ReadonlySet<string> = new Set(["type", "color", "opacity", "blendMode"]);
+
+// The color is a placeholder: the bridge binds the variable over it, and the bind writes the variable's value.
+function boundSolid(colorVariable: VariableRef, opacity: number): WriteSolid {
+  return { kind: "solid", color: { r: 0, g: 0, b: 0 }, opacity, colorVariable };
+}
+
 function badFill(field: string, value: unknown): Error {
-  return new Error("flcm: " + field + ' must be a color string, a gradient string (linear-gradient(...) / radial-gradient(...)), a gradient leaf { type, gradient, blendMode? }, or a blended solid { type: "SOLID", color, blendMode }. Got ' + JSON.stringify(value) + ".");
+  return new Error("flcm: " + field + ' must be a color string, a gradient string (linear-gradient(...) / radial-gradient(...)), a gradient leaf { type, gradient, blendMode? }, a blended solid { type: "SOLID", color, blendMode }, a color variable { variable }, or a bound solid { type: "SOLID", color: { variable }, opacity?, blendMode? }. Got ' + JSON.stringify(value) + ".");
 }
 
 // A read-form leaf's optional `blendMode` (a CSS keyword) onto its parsed solid/gradient.

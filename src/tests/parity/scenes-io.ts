@@ -3,13 +3,13 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 import type {
   SceneNodeLike,
-  SceneStyleResolver,
+  SceneTokenResolver,
   SceneTextSegment,
 } from "@framelink/plugin/node-to-snapshot";
 
 /**
  * Committed plugin-native fixtures — one <name>.json per parity case, each a
- * `{ styles?, nodes }` file whose nodes are shaped exactly as the plugin API shapes them (RGB solids
+ * `{ styles?, variables?, nodes }` file whose nodes are shaped exactly as the plugin API shapes them (RGB solids
  * with paint-level opacity, `gradientTransform` matrices, `imageHash`). The `scene` producer feeds
  * these through the REAL `sceneNodeToSnapshot`, so the adapter's decode — not a stand-in — is what
  * parity gates.
@@ -21,7 +21,11 @@ import type {
  *   - `parent` back-links, non-enumerably — the adapter reads a parent's type (is this COMPONENT
  *     a set variant?) and, through the main component, the enclosing set's own id/name/key
  *   - the literal string "figma:mixed" becomes a symbol, the adapter's `figma.mixed` signal
- *   - the top-level `styles` table (id → { name }) backs the returned style resolver
+ *   - the top-level `styles` and `variables` tables (id → { name }) back the returned token
+ *     resolver; an id missing from its table resolves to null, as a deleted token does live
+ *
+ * Variable bindings (`boundVariables` on nodes, solid paints and text segments) are plain data
+ * on the live API too, so they ride through unrevived.
  *
  * A case without a fixture returns null and the producer skips it (the harness's documented
  * light-up-as-they-land contract).
@@ -39,13 +43,14 @@ interface SceneFixtureNode {
 }
 
 interface SceneFixtureFile {
-  styles?: Record<string, { name: string }>;
+  styles?: Record<string, { name: string; key?: string }>;
+  variables?: Record<string, { name: string }>;
   nodes: SceneFixtureNode[];
 }
 
 export interface LoadedScene {
   roots: SceneNodeLike[];
-  resolveStyle: SceneStyleResolver;
+  resolveToken: SceneTokenResolver;
 }
 
 function reviveNode(
@@ -78,12 +83,12 @@ export function loadScene(name: string): LoadedScene | null {
   const file = path.join(SCENES_DIR, `${name}.json`);
   if (!existsSync(file)) return null;
   const fixture = JSON.parse(readFileSync(file, "utf8")) as SceneFixtureFile;
-  const styles = fixture.styles ?? {};
+  const tables = { style: fixture.styles ?? {}, variable: fixture.variables ?? {} };
   // Two passes: revive registers every node by id, then the main-component links resolve — a
   // fixture may name a component that appears after the instance referencing it.
   const byId = new Map<string, Record<string, unknown>>();
   return {
     roots: fixture.nodes.map((raw) => reviveNode(raw, byId, null)),
-    resolveStyle: async (styleId) => styles[styleId] ?? null,
+    resolveToken: async (kind, id) => tables[kind][id] ?? null,
   };
 }

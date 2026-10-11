@@ -17,7 +17,7 @@
 // derivation in a prepare pass is where the two could drift. Accepted cost: a bad percent child
 // pays prepare's font/image loads before rejecting.
 import { AXES, effectiveLayoutMode, type LayoutMode } from "./layout-mode.js";
-import { WriteLayout } from "./ir.js";
+import { WriteLayout, isTokenRef, type Bindable } from "./ir.js";
 
 // The live parent-flow facts the percent rule needs — edit reads them off the canvas
 // (bridge.parentHugFacts), create derives them from the authored parent node.
@@ -43,13 +43,16 @@ export function assertLayoutRealizableForType(nodeType: string, wl: WriteLayout,
   if (effectiveMode === "grid") {
     if (nodeType === "SLOT") throw new Error(subject + ": Figma does not support GRID on slots.");
     if (wl.wrap !== undefined || wl.justifyContent || wl.alignItems) throw new Error(subject + ": grid uses child justifySelf/alignSelf; wrap, justifyContent and alignItems require row/column.");
-    if (wl.gap !== undefined && (typeof wl.gap === "number" ? wl.gap < 0 : wl.gap.row < 0 || wl.gap.column < 0)) throw new Error(subject + ": grid gaps must be non-negative.");
+    // Negative space: grid gaps don't bind variables — the contract scopes gap binding to flex.
+    if (gapSides(wl.gap).some(isTokenRef)) throw new Error(subject + ": a grid gap can't bind a variable; give a number. Variables bind flex (row/column) gaps.");
+    if (gapSides(wl.gap).some((v) => (v as number) < 0)) throw new Error(subject + ": grid gaps must be non-negative.");
 
   }
   const wraps = wl.wrap ?? liveWrap;
   if (wraps && effectiveMode !== "row") throw new Error(subject + ': layout.wrap requires layout.mode "row"; disable wrap in the same call before changing direction.');
-  if (typeof wl.gap === "object" && !wraps && effectiveMode !== "grid") throw new Error(subject + ': unequal row/column gaps require layout.wrap: true on a horizontal row.');
-  if (wraps && wl.gap !== undefined && (typeof wl.gap === "number" ? wl.gap : wl.gap.row) < 0) throw new Error(subject + ": wrapped row gap must be non-negative.");
+  if (isGapPair(wl.gap) && !wraps && effectiveMode !== "grid") throw new Error(subject + ': unequal row/column gaps require layout.wrap: true on a horizontal row.');
+  const rowGap = isGapPair(wl.gap) ? wl.gap.row : wl.gap;
+  if (wraps && typeof rowGap === "number" && rowGap < 0) throw new Error(subject + ": wrapped row gap must be non-negative.");
   const s = wl.sizing || {};
   if ((s.horizontal === "hug" || s.vertical === "hug") && !willBeAuto && nodeType !== "TEXT") {
     // The remedy is type-gated: `layout` is a FRAME-only word, so prescribing a mode to a shape
@@ -202,4 +205,13 @@ export function assertGridSizing(layout: WriteLayout, live: {
 export function assertInheritedRectangleDimensions(wl: WriteLayout, subject: string): void {
   if (wl.dimensions?.width === undefined && wl.dimensions?.height === undefined) return;
   throw new Error(subject + ': explicit width/height cannot resize an inherited rectangle. Edit its component or choose a suitable variant; use width: "fill" or height: "fill" when the auto-layout parent should size it. Nothing was applied.');
+}
+
+/** The `{ row, column }` gap form, as distinct from one (possibly bound) gap for both axes. */
+export function isGapPair(gap: WriteLayout["gap"]): gap is { row: Bindable; column: Bindable } {
+  return typeof gap === "object" && !isTokenRef(gap);
+}
+
+function gapSides(gap: WriteLayout["gap"]): Bindable[] {
+  return gap === undefined ? [] : isGapPair(gap) ? [gap.row, gap.column] : [gap];
 }

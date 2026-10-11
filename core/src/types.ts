@@ -1,14 +1,19 @@
 import type { NodeSnapshot, SnapshotAnnotation } from "./snapshot.js";
-import type { SimplifiedTextStyle, TextRun } from "./transformers/text.js";
+import type { SimplifiedTextStyle, StyledTextStyle, TextRun } from "./transformers/text.js";
 import type { NodeGeometry, SimplifiedLayout } from "./transformers/layout.js";
 import type { SimplifiedFill } from "./transformers/style.js";
 import type { SimplifiedEffects } from "./transformers/effects.js";
 import type { SimplifiedPropertyDefinition } from "./transformers/component.js";
+import type { BoundCorners, BoundSides } from "./transformers/bound-values.js";
+import type { StyleReference, VariableReference } from "./tokens.js";
 
+/** Anything compression can hoist. A token reference hoists by content like any other value. */
 export type StyleValue =
   | SimplifiedTextStyle
+  | StyledTextStyle
   | SimplifiedFill
   | SimplifiedFill[]
+  | StyleReference
   | SimplifiedLayout
   | SimplifiedEffects
   | string;
@@ -30,17 +35,11 @@ export type StyleRefPrefix = "layout" | "style" | "fill" | "effect";
  */
 export interface StyleTable {
   /**
-   * Intern a style value for a node. Returns a ref key (compressing table) or
-   * the value itself (inline table). `styleKeys` are the node style slots
-   * (e.g. `["fill", "fills"]`) checked for a Figma named style; pass `[]` for
-   * value kinds Figma can't name (layout).
+   * Intern a style value. Returns a ref key (compressing table) or the value itself (inline
+   * table). Keys are content-addressed only: a Figma named style is already a `{ style }` value
+   * on the node, so it needs no key of its own.
    */
-  intern<T extends StyleValue>(
-    node: NodeSnapshot,
-    value: T,
-    styleKeys: string[],
-    prefix: StyleRefPrefix,
-  ): string | T;
+  intern<T extends StyleValue>(value: T, prefix: StyleRefPrefix): string | T;
   /**
    * Everything the table hoisted, in interning order. Compressing table: all
    * shared styles (pre-compression). Inline table: always empty — every value
@@ -157,7 +156,7 @@ export interface SimplifiedDesign {
   nodes: SimplifiedNode[];
   /** Every component and component set the read referenced (see SimplifiedComponentEntry). */
   components: Record<string, SimplifiedComponentEntry>;
-  /** Hoisted styles: shared + named styles under ref keys. */
+  /** Hoisted styles: values shared by 2+ nodes, under content-addressed ref keys. */
   styles: Record<string, StyleValue>;
   /**
    * Deduplicated node bodies, keyed by content hash (`EL-xxxxxxxx`). Populated
@@ -219,7 +218,7 @@ export interface SimplifiedNode extends NodeGeometry {
   // text — a plain string, or run segments when some span carries a style
   // markdown can't express (see TextRun)
   text?: string | TextRun[];
-  textStyle?: string | SimplifiedTextStyle;
+  textStyle?: string | SimplifiedTextStyle | StyledTextStyle;
   /**
    * The numeric font weight that `**bold**` inside `text` maps to. Only emitted
    * when a text node has per-character bold overrides heavier than its base
@@ -227,8 +226,8 @@ export interface SimplifiedNode extends NodeGeometry {
    */
   boldWeight?: number;
   // appearance — each style field holds either a styles-table reference (when
-  // the value is shared by 2+ nodes or is a named Figma style) or the inline
-  // value itself (single-use values, after the compression pass).
+  // the value is shared by 2+ nodes) or the inline value itself (single-use
+  // values, after the compression pass).
   //
   // A paint slot names the SLOT, not the count (CSS `background`): ONE paint
   // when that is what a viewer sees, an array only for a genuinely stacked
@@ -236,16 +235,17 @@ export interface SimplifiedNode extends NodeGeometry {
   // order, not Figma's own bottom-first storage), which is the order the write
   // surface authors a stack in — so a read pastes back unchanged. A ref string
   // and an inline color are both strings — a reader tells them apart by looking
-  // the value up in the design's `styles` table, never by shape.
-  fill?: string | SimplifiedFill | SimplifiedFill[];
-  stroke?: string | SimplifiedFill | SimplifiedFill[];
-  // Non-stylable stroke properties are kept on the node when stroke uses a named color style
-  strokeWidth?: string;
+  // the value up in the design's `styles` table, never by shape. A paint style
+  // is the whole slot's `{ style }`; a bound solid layer is its `{ variable }`.
+  fill?: string | SimplifiedFill | SimplifiedFill[] | StyleReference;
+  stroke?: string | SimplifiedFill | SimplifiedFill[] | StyleReference;
+  // Stroke geometry stays beside a stroke `{ style }`: a paint style covers only the paint.
+  strokeWidth?: string | VariableReference | BoundSides;
   strokeDashes?: number[];
   strokeAlign?: "outside" | "center";
-  effects?: string | SimplifiedEffects;
-  opacity?: number;
-  borderRadius?: string;
+  effects?: string | SimplifiedEffects | StyleReference;
+  opacity?: number | VariableReference;
+  borderRadius?: string | VariableReference | BoundCorners;
   // component data — an INSTANCE names its main component and the property values it
   // resolved; the definition's own properties and children live in the components sidecar
   // (SimplifiedComponentEntry), keyed by that id, which is the one place both an in-tree and

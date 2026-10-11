@@ -2,7 +2,8 @@
  * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
-import { assertGridSizing } from "./layout-legality.js";
+import { assertGridSizing, isGapPair } from "./layout-legality.js";
+import { writeBindable, type ResolvedTokens } from "./tokens.js";
 import type { WriteLayout } from "./ir.js";
 import { AXES, LAYOUT_MODES, layoutModeOf, type LayoutMode, type Axis, type ChildLayout } from "./layout-mode.js";
 import { hugGridTracks, rowsForGridClaims, type GridClaim, type GridTrack } from "./grid-tracks.js";
@@ -10,7 +11,7 @@ import { hugGridTracks, rowsForGridClaims, type GridClaim, type GridTrack } from
 // Native layout policy owns mode-dependent writes. Bridge orchestration only chooses a policy.
 interface LayoutBehavior {
   rawHugs(node: any, axis: Axis): boolean;
-  container(node: any, layout: WriteLayout, previous: LayoutMode): void;
+  container(node: any, layout: WriteLayout, previous: LayoutMode, tokens: ResolvedTokens | undefined): void;
   ownSize(node: any, sizing: NonNullable<WriteLayout["sizing"]>): void;
   fill(parent: any, child: any, context: ChildLayout, crossStretch: boolean): void;
   clearFill(parent: any, child: any, layout: WriteLayout): void;
@@ -39,12 +40,12 @@ function flowBehavior(mode: Extract<LayoutMode, { kind: "flow" }>): LayoutBehavi
   }
   return {
     rawHugs(node, axis) { return node[axis === mode.main ? "primaryAxisSizingMode" : "counterAxisSizingMode"] === "AUTO"; },
-    container(f, layout) {
+    container(f, layout, _previous, tokens) {
       if (mode.word === "row" && layout.wrap !== undefined) f.layoutWrap = layout.wrap ? "WRAP" : "NO_WRAP";
       if (layout.gap !== undefined) {
-        const gap = typeof layout.gap === "number" ? { row: layout.gap, column: layout.gap } : layout.gap;
-        f.itemSpacing = mode.word === "row" ? gap.column : gap.row;
-        if (f.layoutWrap === "WRAP") { f.counterAxisAlignContent = "AUTO"; f.counterAxisSpacing = mode.word === "row" ? gap.row : gap.column; }
+        const gap = isGapPair(layout.gap) ? layout.gap : { row: layout.gap, column: layout.gap };
+        writeBindable(f, "itemSpacing", mode.word === "row" ? gap.column : gap.row, tokens);
+        if (f.layoutWrap === "WRAP") { f.counterAxisAlignContent = "AUTO"; writeBindable(f, "counterAxisSpacing", mode.word === "row" ? gap.row : gap.column, tokens); }
       }
       if (layout.justifyContent) f.primaryAxisAlignItems = JUSTIFY[layout.justifyContent];
       if (layout.alignItems) {
@@ -148,8 +149,9 @@ const GRID: LayoutBehavior = {
       if (requested) writeGridTracks(node, axis, requested);
     }
     if (layout.gap !== undefined) {
-      node.gridRowGap = typeof layout.gap === "number" ? layout.gap : layout.gap.row;
-      node.gridColumnGap = typeof layout.gap === "number" ? layout.gap : layout.gap.column;
+      // Legality refused a bound grid gap, so these sides are numbers.
+      node.gridRowGap = isGapPair(layout.gap) ? layout.gap.row : layout.gap;
+      node.gridColumnGap = isGapPair(layout.gap) ? layout.gap.column : layout.gap;
     }
   },
   ownSize: gridOwnSize,

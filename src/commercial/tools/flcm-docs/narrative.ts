@@ -93,9 +93,9 @@ A null size means a REST depth limit dropped the list upstream, so its size is u
 
 ### readOnlySource
 
-\`readOnlySource\` records what the producer decoded before converting to CSS: exact measurements, disabled paints and effects, paint stacks, resolved text runs, style identities, constraints, blend modes, clipping and component metadata. The ordinary fields stay the authoring vocabulary; writing \`readOnlySource\` changes nothing, and \`clone\` is how to keep live state a spec can't express.
+\`readOnlySource\` records what the producer decoded before converting to CSS: exact measurements, disabled paints and effects, paint stacks, resolved text runs, the literal values behind token references, constraints, blend modes, clipping and component metadata. The ordinary fields stay the authoring vocabulary; writing \`readOnlySource\` changes nothing, and \`clone\` is how to keep live state a spec can't express.
 
-Data that came over REST has no VECTOR paths; read live with \`flcm.get\` for them. Variables, prototype interactions, vector networks, video paints, mask and boolean-operation settings and plugin data are outside the vocabulary entirely — use raw \`figma.*\`. Being able to read a node type doesn't mean a verb can create it.
+Data that came over REST has no VECTOR paths; read live with \`flcm.get\` for them. Prototype interactions, vector networks, video paints, mask and boolean-operation settings and plugin data are outside the vocabulary entirely — use raw \`figma.*\`. Being able to read a node type doesn't mean a verb can create it.
 
 ### Warnings
 
@@ -240,6 +240,23 @@ const hero = {
 
 An empty array is "no paint", the same as \`"none"\`. To change just the photo inside a stack — on an instance, say — write the whole stack back with that one entry replaced; \`overrides[path].fill\` takes the array like any other paint slot.`;
 
+export const TOKENS = `A value bound to a design token reads as a **reference** in place of the literal: \`{ variable: { id, name } }\` or \`{ style: { id, name } }\`. Write the same value back and the binding stays, whereas writing the literal it renders as detaches the token. A reference also binds a value that was never bound. On a write, the token can be a name or an id: \`{ variable: "Spacing/12" }\`, \`{ style: "Heading / Large" }\`, or \`{ variable: { id } }\`. When both an id and a name are given, the id wins.
+
+\`\`\`js
+await flcm.edit(card, {
+  fill: { style: "Surface" },                                  // a paint style takes the whole slot
+  stroke: { variable: "Border/Subtle" },                      // a color variable binds one paint layer
+  layout: { padding: { variable: "Spacing/16" }, gap: { variable: "Spacing/8" } },
+  borderRadius: { variable: "Radius/M" },
+});
+\`\`\`
+
+- A variable stands in for a number or a color: \`width\`, \`height\`, the four bounds, \`opacity\`, \`borderRadius\`, \`strokeWidth\`, \`layout.padding\` and a flex \`layout.gap\`; a solid paint layer, including a run's \`color\`; and \`fontFamily\`, \`fontSize\`, \`fontWeight\`, \`lineHeight\`, \`letterSpacing\`, \`paragraphSpacing\` and \`paragraphIndent\`, on \`textStyle\` or in a run. To bind one side of a shorthand, use its object form, e.g. \`padding: { top: { variable: "Spacing/8" }, right: 16, bottom: 8, left: 16 }\` or \`borderRadius: { topLeft, topRight, bottomRight, bottomLeft }\`. A blended or translucent bound paint is \`{ type: "SOLID", color: { variable }, opacity, blendMode }\`.
+- A style takes a whole slot: \`fill\`, \`stroke\`, \`effects\`, or \`textStyle: { style }\`. Beside a text style, \`textStyle\` keeps only the words a text style doesn't set: \`textAlign\`, \`textAlignVertical\`, \`hyperlink\` and \`lineClamp\`. Font words beside it, or in its runs, are refused.
+- A name is looked up among this file's local tokens first, then among those already used on the current page. An unknown or ambiguous name fails before anything is written and lists the candidates; pass an id to choose between them. A REST read names styles but gives variables only by id.
+
+Creating variables, collections, modes and styles, switching modes, and binding gradient stops, effect fields or grid gaps all still need raw \`figma.*\`.`;
+
 export const IMAGE_INTRO = `Place a **real raster image** — feed media, an avatar, a thumbnail — instead of faking it with a gradient (which carries no signal it was ever meant to be an image).
 
 \`flcm.image(src, opts?)\` is a **paint value**, like \`flcm.gradient\`. An image in Figma is a fill, so any shape carries one: a RECTANGLE for a photo, an ELLIPSE for a circular avatar, a FRAME for a hero. \`src\` is an https url or a local file path, like CSS \`url()\`.
@@ -351,7 +368,7 @@ A single **paint** blends too, with the same names under \`blendMode\` — CSS \
 
 Which length forms each prop takes is in its Type column in props.`;
 
-export const FIDELITY_AND_SCOPE = `flcm refuses what it can't write as authored rather than guess. A value outside the CSS subset, a layout word the node can't realize, and a concept with no create path — variables and prototype interactions — all throw an error naming the value and the fix, never a guess or a silent no-op. Errors name the verb and the path to the node, such as \`spec.children[3].children[1]\`.
+export const FIDELITY_AND_SCOPE = `flcm refuses what it can't write as authored rather than guess. A value outside the CSS subset, a layout word the node can't realize, and a concept with no create path — creating a variable or style, prototype interactions — all throw an error naming the value and the fix, never a guess or a silent no-op. Errors name the verb and the path to the node, such as \`spec.children[3].children[1]\`.
 
 Some departures render without an error. A font family Figma doesn't have falls back, and a weight or italic the family lacks snaps to its nearest style; each comes back in the returned handle's \`warnings\`, as does a size the layout resolved differently from what you wrote. A character the font can't draw renders as nothing, with no warning at all (see unrenderable glyphs under the TEXT props). So a run without errors means the script was valid, not that the canvas looks right: check it with a screenshot (see "Check what you built" in the recipes).`;
 

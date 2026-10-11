@@ -10,12 +10,14 @@ import type {
   NodeSnapshot,
   SnapshotComponentPropertyDefinition,
   SnapshotComponentPropertyValue,
-  SnapshotStyleRef,
+  SnapshotNodeVariableField,
+  SnapshotNodeVariables,
+  SnapshotStyleSlot,
 } from "@framelink/core/snapshot";
 import { isCoordinateTransparentType } from "@framelink/core";
 import { ROOT_SPACE, solveOwnBox, type RestParentSpace } from "./own-box.js";
 import { rotateIntoParentFrame } from "@framelink/core";
-import { decodePaints, decodeEffect } from "./paint.js";
+import { decodePaints, decodeEffect, restVariableRef, type RestVariableAlias } from "./paint.js";
 import { decodeText } from "./text.js";
 
 /**
@@ -39,6 +41,7 @@ type RawStructuralFields = Partial<
     | "text"
     | "textAutoResize"
     | "styles"
+    | "boundVariables"
     | "componentProperties"
     | "componentPropertyDefinitions"
     | "overrides"
@@ -154,6 +157,7 @@ function restSubtreeToSnapshot(
     componentProperties?: RawComponentPropertyMap;
     componentPropertyDefinitions?: RawComponentPropertyMap;
     overrides?: { id: string; overriddenFields: string[] }[];
+    boundVariables?: RawNodeVariables;
     /** REST carries a TEXT's auto-resize on its base style; the plugin has it on the node. */
     style?: { textAutoResize?: NodeSnapshot["textAutoResize"] };
   };
@@ -270,9 +274,10 @@ function restSubtreeToSnapshot(
     // Text nodes: resolve the wire override tables into runs (undefined otherwise).
     text: decodeText(node),
 
-    // Named styles: join the node's `styles` map with the top-level table into
-    // per-slot resolved names; the wire shape never reaches the core.
+    // Tokens: join the node's `styles` map with the top-level table into per-slot
+    // refs, and normalize variable bindings onto snapshot field names.
     styles: decodeStyles(node, extraStyles),
+    boundVariables: raw.boundVariables && decodeNodeVariables(raw.boundVariables),
 
     children: raw.children?.map((c) => restSubtreeToSnapshot(c, extraStyles, childSpace, tables)),
   };
@@ -338,23 +343,116 @@ function decodePropertyDefinitions(
   return Object.keys(out).length ? out : undefined;
 }
 
+// REST spells some slots in the plural; the snapshot speaks the singular slot names.
+const STYLE_SLOTS: Record<string, SnapshotStyleSlot> = {
+  fill: "fill",
+  fills: "fill",
+  stroke: "stroke",
+  strokes: "stroke",
+  text: "text",
+  effect: "effect",
+  effects: "effect",
+  grid: "grid",
+};
+
 /**
- * Resolve a node's REST `styles` map (style-slot → styleId) against the
- * top-level `styles` table (styleId → { name }) into per-slot resolved refs.
- * Only slots whose styleId carries a name survive; an unnamed or unknown styleId
- * is dropped, so `getStyleMatch` never surfaces a style the design didn't name.
+ * Resolve a node's REST `styles` map (style-slot → styleId) against the top-level
+ * `styles` table (styleId → { name }) into per-slot refs. A styleId the table doesn't
+ * name (a file response without that entry) keeps its id with no name.
  */
 function decodeStyles(
   node: FigmaDocumentNode,
   extraStyles: Record<string, Style>,
-): Record<string, SnapshotStyleRef> | undefined {
+): NodeSnapshot["styles"] {
   const styleMap = (node as unknown as { styles?: Record<string, string> }).styles;
   if (!styleMap) return undefined;
 
-  const resolved: Record<string, SnapshotStyleRef> = {};
-  for (const [slot, styleId] of Object.entries(styleMap)) {
-    const name = extraStyles[styleId]?.name;
-    resolved[slot] = { ...(name ? { name } : {}), id: styleId };
+  const resolved: NonNullable<NodeSnapshot["styles"]> = {};
+  for (const [wireSlot, styleId] of Object.entries(styleMap)) {
+    const slot = STYLE_SLOTS[wireSlot];
+    if (!slot) continue;
+    // The style's publish KEY is its id in the read — the one identifier REST and the plugin share
+    // (a styleId here is a REST-local number the plugin can't resolve). Without a table entry the
+    // styleId is all there is.
+    const entry = extraStyles[styleId];
+    const id = entry?.key || styleId;
+    resolved[slot] = entry?.name ? { id, name: entry.name } : { id };
   }
   return Object.keys(resolved).length ? resolved : undefined;
+}
+
+/**
+ * The node-field bindings this adapter reads, as REST nests them. Text-field arrays and paint
+ * arrays on the node are skipped on purpose: text bindings are read off the TypeStyle (per run),
+ * and paint bindings off each paint's own `boundVariables.color`.
+ */
+type RawNodeVariables = Partial<Record<SnapshotNodeVariableField, RestVariableAlias>> & {
+  size?: { x?: RestVariableAlias; y?: RestVariableAlias };
+  // The published spec types these sides top/right/bottom/left; the live wire (2026-10-10) sends
+  // BORDER_*_WEIGHT. Both are read so neither spelling drops the binding.
+  individualStrokeWeights?: Partial<
+    Record<
+      | "top"
+      | "right"
+      | "bottom"
+      | "left"
+      | "BORDER_TOP_WEIGHT"
+      | "BORDER_RIGHT_WEIGHT"
+      | "BORDER_BOTTOM_WEIGHT"
+      | "BORDER_LEFT_WEIGHT",
+      RestVariableAlias
+    >
+  >;
+  rectangleCornerRadii?: Partial<
+    Record<
+      | "RECTANGLE_TOP_LEFT_CORNER_RADIUS"
+      | "RECTANGLE_TOP_RIGHT_CORNER_RADIUS"
+      | "RECTANGLE_BOTTOM_RIGHT_CORNER_RADIUS"
+      | "RECTANGLE_BOTTOM_LEFT_CORNER_RADIUS",
+      RestVariableAlias
+    >
+  >;
+};
+
+/** REST names fields that share the snapshot's spelling as-is; the rest are nested and renamed. */
+const DIRECT_VARIABLE_FIELDS = [
+  "minWidth",
+  "maxWidth",
+  "minHeight",
+  "maxHeight",
+  "paddingTop",
+  "paddingRight",
+  "paddingBottom",
+  "paddingLeft",
+  "itemSpacing",
+  "counterAxisSpacing",
+  "topLeftRadius",
+  "topRightRadius",
+  "bottomRightRadius",
+  "bottomLeftRadius",
+  "opacity",
+] as const satisfies ReadonlyArray<SnapshotNodeVariableField>;
+
+function decodeNodeVariables(wire: RawNodeVariables): SnapshotNodeVariables | undefined {
+  type Pair = [SnapshotNodeVariableField, RestVariableAlias | undefined];
+  const sides = wire.individualStrokeWeights;
+  const pairs: Pair[] = [
+    ...DIRECT_VARIABLE_FIELDS.map((field): Pair => [field, wire[field]]),
+    ["width", wire.size?.x],
+    ["height", wire.size?.y],
+    ["topLeftRadius", wire.rectangleCornerRadii?.RECTANGLE_TOP_LEFT_CORNER_RADIUS],
+    ["topRightRadius", wire.rectangleCornerRadii?.RECTANGLE_TOP_RIGHT_CORNER_RADIUS],
+    ["bottomRightRadius", wire.rectangleCornerRadii?.RECTANGLE_BOTTOM_RIGHT_CORNER_RADIUS],
+    ["bottomLeftRadius", wire.rectangleCornerRadii?.RECTANGLE_BOTTOM_LEFT_CORNER_RADIUS],
+    ["strokeTopWeight", sides?.BORDER_TOP_WEIGHT ?? sides?.top],
+    ["strokeRightWeight", sides?.BORDER_RIGHT_WEIGHT ?? sides?.right],
+    ["strokeBottomWeight", sides?.BORDER_BOTTOM_WEIGHT ?? sides?.bottom],
+    ["strokeLeftWeight", sides?.BORDER_LEFT_WEIGHT ?? sides?.left],
+  ];
+  const out: SnapshotNodeVariables = {};
+  for (const [field, alias] of pairs) {
+    const ref = restVariableRef(alias);
+    if (ref) out[field] = ref;
+  }
+  return Object.keys(out).length ? out : undefined;
 }

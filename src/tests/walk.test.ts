@@ -208,7 +208,7 @@ describe("walkNodes", () => {
     expect(nodes[0].strokeAlign).toBeUndefined();
   });
 
-  it("disambiguates named styles when style names collide", async () => {
+  it("keeps same-name styles apart by id", async () => {
     const nodeA = makeNode({
       id: "7:1",
       name: "Text A",
@@ -234,11 +234,12 @@ describe("walkNodes", () => {
 
     const { nodes, styles: resultVars } = await walk([nodeA, nodeB], {}, extraStyles);
 
-    expect(nodes[0].textStyle).toBe("Heading / Large");
-    expect(nodes[1].textStyle).toBe("Heading / Large (161:300)");
-
-    const styleKeys = Object.keys(resultVars).filter((key) => key.startsWith("Heading / Large"));
-    expect(styleKeys).toHaveLength(2);
+    expect(resultVars[nodes[0].textStyle as string]).toEqual({
+      style: { id: "13:77", name: "Heading / Large" },
+    });
+    expect(resultVars[nodes[1].textStyle as string]).toEqual({
+      style: { id: "161:300", name: "Heading / Large" },
+    });
   });
 });
 

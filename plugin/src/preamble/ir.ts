@@ -18,8 +18,9 @@ import type { NodeSpec } from "./schema.js";
 // `get` result (a SimplifiedNode of CSS strings) REBUILDS through the flcm compilers — the one
 // validated compile; render refuses IR they didn't mint — rather than being rendered string-for-string.
 //
-// Phase-1 scope for the WriteNode currency: only create/render fields. Read-compression refs
-// (styles/template tables), components, prototype, variables, images, and rich text are deliberately absent.
+// Read-compression refs (styles/template tables) and prototype words are deliberately absent. Design
+// tokens ride the currency as TokenRefs (below): a compiled name-or-id that prepare resolves to a live
+// variable or style before anything is written.
 //
 // This module is also the figma-free type hub for the agent-facing RETURN and QUERY shapes — Identity /
 // Handle (render) and SlimHandle / FindQuery (the read verbs) — so schema.ts can type the public surface
@@ -90,6 +91,45 @@ export function hasContainerLayout(type: string): boolean {
   return groups?.includes("frame") ?? false;
 }
 
+// ---- Token references. A compiled `{ variable }` / `{ style }` input: the author named a token by id,
+// by name, or both (id wins), and the word it stands in for decides what kind it must be. Nothing here
+// knows the live token — prepare resolves every ref (tokens.ts) and the appliers bind what it found.
+//
+// Negative space: variables on gradient stops, effect fields, grid gaps, `characters`/`visible` and
+// fontStyle, per-run text styles, and creating variables or styles have no TokenRef — those inputs
+// are refused at compile. Discovering which tokens exist is fig-114's. ----
+export interface VariableRef {
+  token: "variable";
+  id?: string;
+  name?: string;
+  /** The authored word, for every refusal: "fill", "layout.padding.top", "TEXT run[1].fontSize". */
+  word: string;
+  resolvedType: "COLOR" | "FLOAT" | "STRING";
+}
+export interface StyleRef {
+  token: "style";
+  id?: string;
+  name?: string;
+  word: string;
+  styleType: "PAINT" | "EFFECT" | "TEXT";
+}
+export type TokenRef = VariableRef | StyleRef;
+// A leaf a variable can stand in for: the literal, or the variable bound in its place.
+export type Bindable<T = number> = T | VariableRef;
+
+export function isTokenRef(value: unknown): value is TokenRef {
+  return typeof value === "object" && value !== null && "token" in value;
+}
+
+// Author input naming a token: a name or id string, or { id?, name? } (the read emits both; id wins).
+export type TokenIdentityInput = string | { id?: string; name?: string };
+export interface VariableInput { variable: TokenIdentityInput }
+export interface StyleInput { style: TokenIdentityInput }
+
+// A node's paint and effect style slots. The text style rides textStyle.style instead, beside the
+// uncovered text words it keeps.
+export interface WriteStyles { fill?: StyleRef; stroke?: StyleRef; effect?: StyleRef }
+
 export interface Rgb { r: number; g: number; b: number }
 export interface Rgba { r: number; g: number; b: number; a: number }
 
@@ -97,7 +137,8 @@ export interface Rgba { r: number; g: number; b: number; a: number }
 // there, not in the color). A gradient carries the computed 2x3 transform and stops — the angle→matrix
 // math is already done (paint.ts), so the bridge maps straight to a plugin Paint. Every kind may carry a
 // per-paint `blendMode`; absent means NORMAL. ----
-export interface WriteSolid { kind: "solid"; color: Rgb; opacity: number; blendMode?: WriteBlendMode }
+// `colorVariable` binds the color; `color` is then only the placeholder the bind replaces.
+export interface WriteSolid { kind: "solid"; color: Rgb; opacity: number; blendMode?: WriteBlendMode; colorVariable?: VariableRef }
 export type GradientType = "GRADIENT_LINEAR" | "GRADIENT_RADIAL" | "GRADIENT_ANGULAR" | "GRADIENT_DIAMOND";
 export type Transform = [[number, number, number], [number, number, number]];
 export interface GradientStop { position: number; color: Rgba }
@@ -164,11 +205,13 @@ export interface ReadImageFill {
   type: "IMAGE"; imageRef?: string; gifRef?: string; scaleMode?: string; scalingFactor?: number;
   blendMode?: string; opacity?: number; rotation?: number; filters?: WriteImageFilters;
 }
-export type FillLeaf = string | WriteGradientFill | ReadSolidFill | ReadImageFill | WritePaint;
+// A solid whose color is a variable — the read's spelling when a bound solid carries its own opacity or blend.
+export interface BoundSolidFill { type: "SOLID"; color: VariableInput; opacity?: number; blendMode?: string }
+export type FillLeaf = string | WriteGradientFill | ReadSolidFill | BoundSolidFill | ReadImageFill | VariableInput | WritePaint;
 // A paint slot takes one leaf, or an ARRAY of them — a paint stack, top first, the same order a read
 // emits (WritePaintStack). The composite this exists for is a photograph under a legibility scrim:
 // `fill: [flcm.gradient({...}), flcm.image(url)]`.
-export type FillInput = FillLeaf | FillLeaf[];
+export type FillInput = FillLeaf | FillLeaf[] | StyleInput;
 
 // ---- Effect currency (Figma-domain). A blur's radius is ALREADY the Figma radius — the ×2 CSS-blur
 // factor (see effects.ts) is applied when the effect is built, never here and never in the bridge, so a
@@ -206,16 +249,17 @@ export type TextDecoration = "underline" | "line-through" | "none";
 // the css/sugar boundary — the same shape `blend` → `blendMode` takes. Resolving there is what makes
 // "both named at once" unrepresentable in the currency instead of a rule the bridge re-checks.
 export type WriteTextCase = "ORIGINAL" | "UPPER" | "LOWER" | "TITLE" | "SMALL_CAPS" | "SMALL_CAPS_FORCED";
+// The seven variable-bindable words take a VariableRef in place of their literal.
 export interface WriteTextStyle {
-  fontFamily?: string;
-  fontWeight?: number | string;
-  fontSize?: number;
+  fontFamily?: Bindable<string>;
+  fontWeight?: Bindable<number | string>;
+  fontSize?: Bindable;
   // CSS font-style. Resolved into the loaded font's italic variant (fonts.ts keys on it, the bridge
   // applies it via setRangeFontName — italic is a font-name concern in Figma, not a separate call).
   // "normal" appears only as a per-run inverse override on an italic base.
   fontStyle?: "italic" | "normal";
-  lineHeight?: WriteLineHeight;
-  letterSpacing?: WriteLetterSpacing;
+  lineHeight?: Bindable<WriteLineHeight>;
+  letterSpacing?: Bindable<WriteLetterSpacing>;
   // Applied as a separate Figma call (node.textDecoration / setRangeTextDecoration), independent of
   // the font name — so a run carrying only a decoration change needs no per-range font.
   textDecoration?: TextDecoration;
@@ -231,12 +275,15 @@ export interface WriteTextStyle {
   textAlignVertical?: "top" | "center" | "bottom";
   // Paragraph metrics in px. Per-range in Figma (setRangeParagraph*/setRangeListSpacing), which is
   // why the read side surfaces them on run deltas and why runs carry them here.
-  paragraphSpacing?: number;
-  paragraphIndent?: number;
+  paragraphSpacing?: Bindable;
+  paragraphIndent?: Bindable;
   listSpacing?: number;
   // A URL link over the whole node (setRangeHyperlink across every character). A RUN's own link lives
   // on WriteTextRun.hyperlink instead — there the span already IS the range, so it isn't a style leaf.
   hyperlink?: string;
+  // The node's text style. A BASE word only (per-run text styles are out of scope), and the compiler
+  // refuses it beside the words it covers — only textAlign, textAlignVertical and hyperlink ride along.
+  style?: StyleRef;
 }
 
 // THE presence predicate behind "presence-gated" font writes, surface-wide: whether a style names any
@@ -271,11 +318,11 @@ export interface WriteTextRun {
 export type Justify = "start" | "center" | "end" | "between";
 export type Align = "start" | "center" | "end" | "stretch" | "baseline";
 export type Sizing = "fixed" | "fill" | "hug";
-export interface Edges { top: number; right: number; bottom: number; left: number }
+export interface Edges<T = number> { top: T; right: T; bottom: T; left: T }
 // Corner radii in Figma's own corner order (its four per-corner properties), which is also CSS's
 // 4-value border-radius order. A uniform radius is four equal values, never a separate shape — one
 // case for the bridge to apply and one for a round-trip to compare.
-export interface CornerRadii { topLeft: number; topRight: number; bottomRight: number; bottomLeft: number }
+export interface CornerRadii<T = number> { topLeft: T; topRight: T; bottomRight: T; bottomLeft: T }
 
 // ---- Constraint override (author `pin`). Directional per axis so the axis is unambiguous at the boundary
 // (x names an edge on the horizontal axis, y on the vertical); the bridge maps each to Figma's per-axis
@@ -302,7 +349,7 @@ export type WriteBlendMode =
 export type AnchorX = "left" | "center" | "right";
 export type AnchorY = "top" | "center" | "bottom";
 export interface WriteLayout {
-  bounds?: Partial<Record<"minWidth" | "maxWidth" | "minHeight" | "maxHeight", number | "none">>;
+  bounds?: Partial<Record<"minWidth" | "maxWidth" | "minHeight" | "maxHeight", Bindable | "none">>;
   mode?: "none" | "row" | "column" | "grid";
   gridTemplateColumns?: import("./grid-tracks.js").GridTrack[];
   gridTemplateRows?: import("./grid-tracks.js").GridTrack[];
@@ -315,11 +362,12 @@ export interface WriteLayout {
   zIndex?: number;
   justifyContent?: Justify; // primary-axis distribution (author `layout.justifyContent`)
   alignItems?: Align;       // counter-axis alignment (author `layout.alignItems`)
-  gap?: number | { row: number; column: number };
+  gap?: Bindable | { row: Bindable; column: Bindable };
   wrap?: boolean;
-  padding?: Edges;
+  padding?: Edges<Bindable>;
   sizing?: { horizontal?: Sizing; vertical?: Sizing };
-  dimensions?: { width?: number; height?: number };
+  // A bound size sizes "fixed" and carries its variable here; the bind lands the number.
+  dimensions?: { width?: Bindable; height?: Bindable };
   // Percent INTENT — a `width`/`height`/`left`/`top` written as "N%" (0–100), resolved to pixels
   // against the parent's *realized* axis size in a post-walk pass (bridge.resolvePercents): the node is
   // built at a provisional size first, then resized once the whole tree is assembled and every parent's
@@ -396,12 +444,15 @@ export interface WriteProps {
   strokes?: WritePaintStack;
   // A number is one weight for every side; Edges only when sides differ, and only on a type with
   // per-side weights (the compiler's gate) — the bridge writes strokeTop/Right/Bottom/LeftWeight.
-  strokeWeight?: number | Edges;
+  strokeWeight?: Bindable | Edges<Bindable>;
   strokeAlign?: "INSIDE" | "OUTSIDE" | "CENTER";
   effects?: WriteEffect[];
-  opacity?: number;
+  // A style IS the slot's word (`fill: { style }`), so a styled slot carries no literal stack beside it.
+  // The appliers land the style's own values in the sealed span; the link itself is queued for the lock.
+  styles?: WriteStyles;
+  opacity?: Bindable;
   blendMode?: WriteBlendMode; // author `blend` (CSS mix-blend-mode → Figma BlendMode); applied in buildNode (shared: every node has one)
-  borderRadius?: CornerRadii;
+  borderRadius?: CornerRadii<Bindable>;
   clip?: boolean;     // clipsContent
   rotation?: number;  // degrees (write-add; read does not surface it)
   // On every SceneNode, like blendMode — part of the shared vocabulary edit allows even on node
@@ -576,16 +627,17 @@ export interface Handle extends Identity {
 // it can hand over both; a locate has only the design's own intent to report (see Handle above).
 export interface SlimHandle extends Identity {
   visible?: false;
-  minWidth?: number;
-  maxWidth?: number;
-  minHeight?: number;
-  maxHeight?: number;
+  // The same words `get` emits, so a bound size reads as its `{ variable }` here too.
+  minWidth?: SimplifiedNode["minWidth"];
+  maxWidth?: SimplifiedNode["maxWidth"];
+  minHeight?: SimplifiedNode["minHeight"];
+  maxHeight?: SimplifiedNode["maxHeight"];
 
   annotations?: SimplifiedNode["annotations"];
   /** Unresolved comment threads pointing at this node; read them with get_figma_comments. */
   comments?: number;
-  width?: SimplifiedDimension;
-  height?: SimplifiedDimension;
+  width?: SimplifiedNode["width"];
+  height?: SimplifiedNode["height"];
   layout?: { mode: SimplifiedLayout["mode"] };
   position?: "absolute";
   left?: number;

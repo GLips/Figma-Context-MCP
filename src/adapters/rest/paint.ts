@@ -3,6 +3,7 @@ import type {
   SnapshotColor,
   SnapshotEffect,
   SnapshotPaint,
+  SnapshotTokenRef,
   SnapshotVector,
 } from "@framelink/core/snapshot";
 import { tagError } from "~/utils/error-meta.js";
@@ -12,6 +13,17 @@ import { tagError } from "~/utils/error-meta.js";
  * both the node adapter (`node-to-snapshot`) and the text adapter
  * (`text`) can share it without an import cycle.
  */
+
+export interface RestVariableAlias {
+  id: string;
+}
+
+/** REST variable refs carry the id only — naming a variable needs an Enterprise-only endpoint. */
+export function restVariableRef(
+  alias: RestVariableAlias | undefined,
+): SnapshotTokenRef | undefined {
+  return alias?.id ? { id: alias.id } : undefined;
+}
 
 /** Decode a paint list, dropping any the boundary can't decode (see decodePaint). */
 export function decodePaints(paints: Paint[]): SnapshotPaint[] {
@@ -77,6 +89,8 @@ export function decodePaint(paint: Paint): SnapshotPaint | undefined {
       return {
         type: "SOLID",
         color: paint.color,
+        // Gradient-stop variables are out of scope: a stop reads as its literal color.
+        colorVariable: restVariableRef(paint.boundVariables?.color),
         opacity: paint.opacity,
         blendMode: paint.blendMode,
         visible: paint.visible,

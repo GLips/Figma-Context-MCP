@@ -26,7 +26,7 @@ for (const producer of ["rest", "plugin"] as const) {
         producer === "rest"
           ? restResponseToSnapshots(fixture.response).snapshots
           : await Promise.all(
-              scene.roots.map((root) => sceneNodeToSnapshot(root, scene.resolveStyle)),
+              scene.roots.map((root) => sceneNodeToSnapshot(root, scene.resolveToken)),
             );
       const { nodes } = await simplify(snapshots);
       const group = nodes[0].children!.find((node) => node.id === "8:8")!;

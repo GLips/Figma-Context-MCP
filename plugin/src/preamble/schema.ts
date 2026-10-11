@@ -33,6 +33,7 @@ import type {
   PinX, PinY, Target, RawIdRef, SlimHandle, FindQuery, ReadPredicate, RemoveResult, GetResult,
   PageInfo, ComponentPropertyInput, OverrideDeltaInput, ComponentPropertyDefinitions, VariantEntryInput,
   ComponentPropertyDefinitionEdits, ComponentPropertyBindingEdit,
+  VariableInput, StyleInput, TokenIdentityInput,
 } from "./ir.js";
 // The read verbs return the canonical read shape the shared simplify core emits. Relative (not ~/) so the
 // root toolchain, which imports this module for docs generation, resolves it without the plugin's paths.
@@ -42,10 +43,16 @@ import type { SimplifiedNode } from "@framelink/core";
 // on purpose, or reference the typed currency). `z.custom<T>()` infers exactly T with no runtime check —
 // perfect here, since these are never validated by zod, only inferred and documented. ----
 export type LengthInput = number | string; // a number or "Npx"
+// A length a variable may stand in for: the read emits `{ variable: { id, name } }` in a bound word's place.
+export type BindableLength = LengthInput | VariableInput;
 export type PadInput =
   | number
   | string // the CSS box shorthand, in read's spelling: "12px" | "12px 16px" | "8px 8px 0px 0px"
-  | { x?: LengthInput; y?: LengthInput; top?: LengthInput; right?: LengthInput; bottom?: LengthInput; left?: LengthInput };
+  | VariableInput
+  | { x?: BindableLength; y?: BindableLength; top?: BindableLength; right?: BindableLength; bottom?: BindableLength; left?: BindableLength };
+export type GapInput = number | string | VariableInput | { row: BindableLength; column: BindableLength };
+export type SidesInput = { top: BindableLength; right: BindableLength; bottom: BindableLength; left: BindableLength };
+export type CornersInput = { topLeft: BindableLength; topRight: BindableLength; bottomRight: BindableLength; bottomLeft: BindableLength };
 
 export type GradientStopInput = string | { color: string; pos?: number; position?: number };
 export type GradientSugar = {
@@ -98,8 +105,12 @@ function inputAlias<T extends z.ZodType>(schema: T) {
 
 // A paint slot. Every one of them takes a STACK as well as a single paint — an array, top first, the
 // same order a read returns — so the note here only has to say what the slot paints.
-const color = (note: string) => prop(z.custom<FillInput>(), note, "paint | paint[]");
+// A paint leaf may be a color variable ({ variable }); a node's own fill/stroke may instead be a whole
+// paint style ({ style }), which the slot-level label adds.
+const color = (note: string, type = "paint | paint[]") => prop(z.custom<FillInput>(), note, type);
 const metric = (note: string) => prop(z.union([z.number(), z.string()]), note, 'number | "Npx"');
+const variable = z.custom<VariableInput>();
+const bindableMetric = (note: string) => prop(z.union([z.number(), z.string(), variable]), note, 'number | "Npx" | { variable }');
 const degrees = (note: string) => prop(z.number(), note, "number (deg)");
 
 // ---- Field groups. Each verb schema is composed from these by spread, so a field is authored once and
@@ -116,7 +127,7 @@ const ANNOTATION_FIELDS = {
 const SHARED_FIELDS = {
   name: prop(z.string(), "Layer name."),
   key: prop(z.string(), "Persistent metadata for find/findOne. Unique within one authored tree; id alone decides live identity."),
-  opacity: prop(z.number(), "", "number (0–1)"),
+  opacity: prop(z.union([z.number(), variable]), "", "number (0–1) | { variable }"),
   mixBlendMode: prop(
     z.string(),
     "",
@@ -164,15 +175,15 @@ const CONTAINER_LAYOUT_FIELDS = {
   gridTemplateRows: prop(z.string(), 'Same track syntax. Omitted, rows are implicit hug tracks that grow as children are added; named rows are fixed and stop growing.'),
   mode: prop(z.enum(["row", "column", "grid", "none"]), '"row" and "column" are flex directions, "grid" is CSS grid, "none" (default) is free-form. The other container words need a mode. A new grid needs gridTemplateColumns.'),
   gap: prop(
-    z.union([z.number(), z.string()]),
-    'Unequal "row-gap column-gap" needs grid or wrap.',
-    'number | "Npx" | "Npx Npx"',
+    z.custom<GapInput>(),
+    'Unequal "row-gap column-gap" (or { row, column }) needs grid or wrap. A variable binds a row or column gap, not a grid\'s.',
+    'number | "Npx" | "Npx Npx" | { variable } | { row, column }',
   ),
   wrap: prop(z.boolean(), "Rows only."),
   padding: prop(
     z.custom<PadInput>(),
-    'Also { x, y } (x = left and right, y = top and bottom) or per-edge.',
-    'number | "12px 16px" | { x?, y? } | { top?, right?, bottom?, left? }',
+    'Also { x, y } (x = left and right, y = top and bottom) or per-edge; each edge takes a { variable } too.',
+    'number | "12px 16px" | { variable } | { x?, y? } | { top?, right?, bottom?, left? }',
   ),
   justifyContent: prop(
     z.enum(["flex-start", "flex-end", "center", "space-between"]),
@@ -193,22 +204,22 @@ const SIZE_BOUND_NOTE =
 const SIZE_FIELDS = {
   ...GRID_CHILD_ALIASES,
   layout: prop(z.object(CHILD_LAYOUT_FIELDS), 'Placement under an auto-layout parent: grid cell words, or alignSelf "stretch" in flow.', '{ gridColumn?, gridRow?, justifySelf?, alignSelf?, zIndex? }'),
-  minWidth: prop(z.union([z.number(), z.literal("none")]), SIZE_BOUND_NOTE, 'number | "none"'),
-  maxWidth: prop(z.union([z.number(), z.literal("none")]), SIZE_BOUND_NOTE, 'number | "none"'),
-  minHeight: prop(z.union([z.number(), z.literal("none")]), SIZE_BOUND_NOTE, 'number | "none"'),
-  maxHeight: prop(z.union([z.number(), z.literal("none")]), SIZE_BOUND_NOTE, 'number | "none"'),
+  minWidth: prop(z.union([z.number(), z.literal("none"), variable]), SIZE_BOUND_NOTE, 'number | "none" | { variable }'),
+  maxWidth: prop(z.union([z.number(), z.literal("none"), variable]), SIZE_BOUND_NOTE, 'number | "none" | { variable }'),
+  minHeight: prop(z.union([z.number(), z.literal("none"), variable]), SIZE_BOUND_NOTE, 'number | "none" | { variable }'),
+  maxHeight: prop(z.union([z.number(), z.literal("none"), variable]), SIZE_BOUND_NOTE, 'number | "none" | { variable }'),
 
   // A percent ("50%") widens the runtime type to `string`, so `"fill"`/`"hug"` no longer survive as
   // literals in the inferred type — hence an explicit .meta label to keep the doc precise.
   width: prop(
-    z.union([z.number(), z.string()]),
+    z.union([z.number(), z.string(), variable]),
     '"N%" is of the parent\'s realized size. The root takes neither "N%" nor "fill" (the page is unbounded); "N%" is also refused on in-flow grid children and on an in-flow child whose parent hugs that axis. Only text and a container with a layout mode can "hug".',
-    'number | "Npx" | "N%" | "fill" | "hug"',
+    'number | "Npx" | "N%" | "fill" | "hug" | { variable }',
   ),
   height: prop(
-    z.union([z.number(), z.string()]),
+    z.union([z.number(), z.string(), variable]),
     'As width. TEXT hugs its content by default; a fixed or "N%" height needs a width that doesn\'t hug.',
-    'number | "fill" | "hug" | "N%"',
+    'number | "fill" | "hug" | "N%" | { variable }',
   ),
   // Placement is the read shape's own words: `left`/`top` are the offset in the parent, and naming
   // either lifts the node out of an auto-layout parent's flow (read reports that as `position:
@@ -252,12 +263,12 @@ const PLACEMENT_FIELDS = {
 };
 
 const APPEARANCE_FIELDS = {
-  fill: color('A CSS color or gradient string, flcm.gradient() or flcm.image(), or an array stacked top first (see the values section). "none" removes it.'),
-  stroke: color('Border paint, or a stack. "none" removes it.'),
+  fill: color('A CSS color or gradient string, flcm.gradient() or flcm.image(), a color { variable }, or an array stacked top first (see the values section). A paint { style } takes the whole slot. "none" removes it.', "paint | paint[] | { style }"),
+  stroke: color('Border paint, or a stack. A paint { style } takes the whole slot. "none" removes it.', "paint | paint[] | { style }"),
   strokeWidth: prop(
-    z.union([z.number(), z.string()]),
-    'The per-side shorthand works on frames, rectangles, components and instances only; other types take one value.',
-    'number | "Npx" | CSS shorthand',
+    z.union([z.number(), z.string(), variable, z.custom<SidesInput>()]),
+    'Per-side widths (the shorthand, or { top, right, bottom, left } whose sides may be variables) work on frames, rectangles, components and instances only; other types take one value.',
+    'number | "Npx" | CSS shorthand | { variable } | { top, right, bottom, left }',
   ),
   strokeAlign: prop(
     z.custom<"inside" | "outside" | "center">(),
@@ -265,11 +276,11 @@ const APPEARANCE_FIELDS = {
     '"inside" | "outside" | "center"',
   ),
   borderRadius: prop(
-    z.union([z.number(), z.string()]),
-    'Frames and rectangles only. Corners are circular, so the elliptical "x / y" form is refused.',
-    'number | "Npx" | CSS shorthand',
+    z.union([z.number(), z.string(), variable, z.custom<CornersInput>()]),
+    'Frames and rectangles only. Corners are circular, so the elliptical "x / y" form is refused. Per-corner { topLeft, topRight, bottomRight, bottomLeft } takes variables per corner.',
+    'number | "Npx" | CSS shorthand | { variable } | { topLeft, topRight, bottomRight, bottomLeft }',
   ),
-  effects: prop(z.custom<EffectsInput>(), 'flcm.effects() or a bag of CSS strings (see the values section). "none" removes all.', "effects value"),
+  effects: prop(z.custom<EffectsInput | StyleInput>(), 'flcm.effects() or a bag of CSS strings (see the values section), or an effect { style }. An effect\'s own fields don\'t bind variables. "none" removes all.', "effects value | { style }"),
   rotation: degrees("Applied after layout sizing, about the centre: it turns the box, never resizes it."),
 };
 
@@ -295,26 +306,31 @@ const FRAME_FIELDS = {
 // object (canonical names: fontFamily/fontWeight/fontSize/textAlign), mirroring the read side. The text's
 // paint is NOT here — it is the node-level `fill`, like every other node's (see TEXT_FIELDS).
 const TEXTSTYLE_FIELDS = {
-  fontFamily: prop(z.string(), "An unknown family falls back to Inter."),
-  fontWeight: prop(
-    z.union([z.number(), z.string()]),
-    "Snaps to the nearest style the family has.",
-    "number (100–900) | name",
+  style: prop(
+    z.custom<TokenIdentityInput>(),
+    "A shared text style, by name or id. It sets the font, size and spacing words itself, so only textAlign, textAlignVertical, hyperlink and lineClamp ride beside it, and runs may set only color and hyperlink.",
+    "name | id | { id?, name? }",
   ),
-  fontSize: prop(z.number(), ""),
+  fontFamily: prop(z.union([z.string(), variable]), "An unknown family falls back to Inter. A STRING variable binds it.", "string | { variable }"),
+  fontWeight: prop(
+    z.union([z.number(), z.string(), variable]),
+    "Snaps to the nearest style the family has.",
+    "number (100–900) | name | { variable }",
+  ),
+  fontSize: prop(z.union([z.number(), variable]), "", "number | { variable }"),
   fontStyle: prop(
     z.enum(["italic", "normal"]),
     'No oblique; snaps to the family\'s italic. "normal" only matters on a run, clearing an italic base.',
   ),
   lineHeight: prop(
-    z.union([z.number(), z.string()]),
-    '"auto" is the font default.',
-    'number(px) | "Npx" | "N%" | "Nem" | "auto"',
+    z.union([z.number(), z.string(), variable]),
+    '"auto" is the font default. A variable binds it in px.',
+    'number(px) | "Npx" | "N%" | "Nem" | "auto" | { variable }',
   ),
   letterSpacing: prop(
-    z.union([z.number(), z.string()]),
-    "",
-    'number(px) | "Npx" | "N%" | "Nem"',
+    z.union([z.number(), z.string(), variable]),
+    "A variable binds it in px.",
+    'number(px) | "Npx" | "N%" | "Nem" | { variable }',
   ),
   textDecoration: prop(
     z.enum(["underline", "line-through", "none"]),
@@ -333,8 +349,8 @@ const TEXTSTYLE_FIELDS = {
     z.enum(["small-caps", "all-small-caps"]),
     'Shares a slot with textTransform, so naming both is refused.',
   ),
-  paragraphSpacing: metric("Space between paragraphs."),
-  paragraphIndent: metric("First-line indent."),
+  paragraphSpacing: bindableMetric("Space between paragraphs."),
+  paragraphIndent: bindableMetric("First-line indent."),
   listSpacing: metric("Space between list items."),
   hyperlink: prop(
     z.custom<string | { type: "URL"; url: string }>(),
@@ -359,9 +375,9 @@ const TEXT_FIELDS = {
   textStyle: prop(
     z.object(TEXTSTYLE_FIELDS),
     "The text style base. Runs layer over it.",
-    "{ fontFamily?, fontWeight?, fontSize?, fontStyle?, lineHeight?, letterSpacing?, textDecoration?, textTransform?, fontVariant?, textAlign?, textAlignVertical?, paragraphSpacing?, paragraphIndent?, listSpacing?, hyperlink?, lineClamp? }",
+    "{ style?, fontFamily?, fontWeight?, fontSize?, fontStyle?, lineHeight?, letterSpacing?, textDecoration?, textTransform?, fontVariant?, textAlign?, textAlignVertical?, paragraphSpacing?, paragraphIndent?, listSpacing?, hyperlink?, lineClamp? }",
   ),
-  fill: color('The text color. "none" removes it.'),
+  fill: color('The text color. A paint { style } takes the whole slot, and then runs can\'t set color. "none" removes it.', "paint | paint[] | { style }"),
   boldWeight: prop(
     z.union([z.number(), z.string()]),
     "What `**bold**` in `text` resolves to. Default 700; pass back the value `get` reports so a copy emphasizes like the original. Under edit it only matters beside `text`.",
@@ -414,9 +430,9 @@ export type TextRunInput = string | [text: string, style: StyleDeltaInput];
 // pass while rendering wrong (a real hole, since the example's whole job is to fail the build on API
 // mismatch). It carries exactly what `line` reads.
 const LINE_FIELDS = {
-  stroke: color('The line\'s paint. "none" removes it.'),
-  strokeWidth: metric("Thickness. Defaults to 1."),
-  width: metric('The length: a number, or "fill" along an unrotated row or column parent. A rotated line needs a number; for a rule across a row use a 1px-wide RECTANGLE with height: "fill". No "hug" or percent.'),
+  stroke: color('The line\'s paint. A paint { style } takes the whole slot. "none" removes it.', "paint | paint[] | { style }"),
+  strokeWidth: bindableMetric("Thickness. Defaults to 1."),
+  width: bindableMetric('The length: a number or { variable }, or "fill" along an unrotated row or column parent. A rotated line needs a number; for a rule across a row use a 1px-wide RECTANGLE with height: "fill". No "hug" or percent.'),
   rotation: degrees('90 makes it vertical. Needs a numeric `width`.'),
   ...PLACEMENT_FIELDS,
 };

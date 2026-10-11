@@ -22,7 +22,9 @@ import { sceneFigma as figma } from "./scene-access.js";
 // The load pass returns a FontMap that render() threads on the RenderCtx through the build walk — load
 // and resolve agree on the `key()` of each (family, weight) by construction, with no module-level state.
 
-import { WriteNode, WriteChild, WriteProps, WriteTextStyle, namesFontIdentity } from "./ir.js";
+import { WriteNode, WriteChild, WriteProps, WriteTextStyle, namesFontIdentity, isTokenRef } from "./ir.js";
+import { variableLiteral, variableValues, styleFor, tokenKey, type ResolvedTokens } from "./tokens.js";
+import type { Bindable, StyleRef, VariableRef } from "./ir.js";
 
 // Every font this run has loaded, by Figma's own (family, style) label. Per-run, like every
 // piece of preamble state: the preamble is eval'd fresh inside each run's wrapper, and a font a
@@ -92,11 +94,42 @@ function nearestStyle(styles: string[], want: number, wantItalic: boolean): stri
 // Keyed by `family|weight|italic` exactly as both the load pass and resolveFont compute it — italic
 // is part of the identity because it selects a distinct Figma style (e.g. "Bold Italic"), so an
 // upright and an italic of the same (family, weight) must load and resolve separately.
-function key(family: string | undefined, weight: number | string | undefined, italic: boolean): string {
-  return (family || DEFAULT_FAMILY) + "|" + (weight == null ? "" : weight) + "|" + (italic ? "i" : "");
+//
+// A bound family or weight keys by its token, not its value: the load pass resolves the variable's
+// default-mode value under that key, so the apply span finds the font without the tokens in hand.
+function key(family: Bindable<string> | undefined, weight: Bindable<number | string> | undefined, italic: boolean): string {
+  const word = (w: Bindable<number | string> | undefined) => (isTokenRef(w) ? "{" + tokenKey(w) + "}" : w);
+  return (word(family) || DEFAULT_FAMILY) + "|" + (weight == null ? "" : word(weight)) + "|" + (italic ? "i" : "");
 }
 
-interface FontNeed { family?: string; weight?: number | string; italic?: boolean }
+// A text style's font, keyed by the style token — its font is Figma's own, loaded by exact name.
+function styleKey(ref: StyleRef): string {
+  return "style|" + tokenKey(ref);
+}
+
+/** The font a text style lands in, loaded by the prepare that resolved the style. */
+export function textStyleFont(fonts: FontMap, ref: StyleRef): { family: string; style: string } {
+  const font = fonts[styleKey(ref)];
+  if (!font) throw new Error(ref.word + ": the text style's font was not loaded before the write. This is an internal error; report it.");
+  return font;
+}
+
+interface FontNeed { family?: Bindable<string>; weight?: Bindable<number | string>; italic?: boolean }
+
+function needOf(ts: WriteTextStyle): FontNeed {
+  return { family: ts.fontFamily, weight: ts.fontWeight, italic: ts.fontStyle === "italic" };
+}
+
+// A need with its bound words read off the tokens: the default mode's value first (the font the
+// node is written in, and the one its key resolves to), then every other mode's — a mode switch
+// re-fonts the node, and Figma refuses an unloaded font.
+function literalNeeds(need: FontNeed, tokens: ResolvedTokens | undefined): { family?: string; weight?: number | string }[] {
+  const values = <T>(word: Bindable<T> | undefined, cast: (v: unknown) => T): (T | undefined)[] =>
+    isTokenRef(word) ? [cast(variableLiteral(word as VariableRef, tokens)), ...variableValues(word as VariableRef, tokens).map(cast)] : [word];
+  const out: { family?: string; weight?: number | string }[] = [];
+  for (const family of values(need.family, String)) for (const weight of values(need.weight, Number)) out.push({ family, weight });
+  return out;
+}
 
 // A live FontName decoded into authored font words — the ONLY translation from Figma's combined
 // style label ("Bold Italic" carries weight AND slant in one string) back into the (family, weight,
@@ -142,20 +175,20 @@ function textEditReflows(patch: WriteProps): boolean {
 //
 // `built` are the compiled trees the same verb will BUILD (an instance delta's slot content): their
 // fonts are a tree's, and they join the authored half so the verb still pays one load.
-export async function loadFontsForTextEdits(edits: readonly EditFontNeed[], built: readonly WriteNode[] = []): Promise<FontMap> {
+export async function loadFontsForTextEdits(edits: readonly EditFontNeed[], built: readonly WriteNode[] = [], tokens?: ResolvedTokens): Promise<FontMap> {
   const reflowing = edits.filter(({ node, patch }) => node.type === "TEXT" && textEditReflows(patch));
   if (!reflowing.length && !built.length) return {};
   const live: FontName[] = [];
   for (const { node } of reflowing) live.push(...liveFontsOf(node as TextNode));
   await Promise.all(live.map(loadFont));
   const authored = reflowing.filter(
-    ({ patch }) => namesFontIdentity(patch.textStyle) || (patch.runs || []).some((r) => namesFontIdentity(r.style)),
+    ({ patch }) => patch.textStyle?.style || namesFontIdentity(patch.textStyle) || (patch.runs || []).some((r) => namesFontIdentity(r.style)),
   );
   if (!authored.length && !built.length) return {};
   return loadFontsForTree({
     type: "FRAME",
     children: [...authored.map(({ patch }): WriteChild => ({ type: "TEXT", textStyle: patch.textStyle, runs: patch.runs })), ...built],
-  });
+  }, tokens);
 }
 
 // The fonts a TEXT node carries right now — every range's when mixed, since a reflow re-lays them all.
@@ -187,20 +220,20 @@ export function assertTextEditFontsLoaded(node: SceneNode, patch: WriteProps, fo
   const authored: FontNeed[] = [];
   if (namesFontIdentity(patch.textStyle)) authored.push(needOf(patch.textStyle!));
   for (const run of patch.runs || []) if (run.style && namesFontIdentity(run.style)) authored.push(needOf(run.style));
+  const style = patch.textStyle?.style;
+  if (style && !fonts[styleKey(style)]) {
+    throw new Error(subject + ": " + who + " sets a text style whose font this call did not load. This is an internal error; report it.");
+  }
   for (const need of authored) {
     if (fonts[key(need.family, need.weight, !!need.italic)]) continue;
     throw new Error(
-      subject + ": " + who + " needs " + (need.family || DEFAULT_FAMILY) + " (weight " + (need.weight == null ? "default" : need.weight) + (need.italic ? ", italic" : "") +
+      subject + ": " + who + " needs " + (isTokenRef(need.family) ? "its bound family" : need.family || DEFAULT_FAMILY) + " (weight " + (need.weight == null ? "default" : need.weight) + (need.italic ? ", italic" : "") +
         "), which this call did not load — the text's font changed while the call was loading fonts and images. Nothing was applied — re-run the call.",
     );
   }
 }
 
-function needOf(ts: WriteTextStyle): FontNeed {
-  return { family: ts.fontFamily, weight: ts.fontWeight, italic: ts.fontStyle === "italic" };
-}
-
-export async function loadFontsForTree(tree: WriteNode): Promise<FontMap> {
+export async function loadFontsForTree(tree: WriteNode, tokens?: ResolvedTokens): Promise<FontMap> {
   const avail = await awaitNative("font-list", () => figma.listAvailableFontsAsync());
   const byFamily: Record<string, string[]> = {};
   for (const { fontName } of avail) {
@@ -210,46 +243,55 @@ export async function loadFontsForTree(tree: WriteNode): Promise<FontMap> {
 
   const resolved: FontMap = {};
   const needs: FontNeed[] = [];
-  collectText(tree, needs);
-  for (const need of needs) {
-    const k = key(need.family, need.weight, !!need.italic);
-    if (resolved[k]) continue;
-    const family = need.family && byFamily[need.family] ? need.family : fallbackFamily;
-    const style = nearestStyle(byFamily[family] || ["Regular"], wantWeight(need.weight), !!need.italic);
+  const styles: StyleRef[] = [];
+  collectText(tree, needs, styles);
+  for (const ref of styles) {
+    const font = (styleFor(ref, tokens) as TextStyle).fontName;
+    await loadFont(font);
+    resolved[styleKey(ref)] = font;
+  }
+  const loadNearest = async (want: { family?: string; weight?: number | string }, italic: boolean) => {
+    const family = want.family && byFamily[want.family] ? want.family : fallbackFamily;
+    const style = nearestStyle(byFamily[family] || ["Regular"], wantWeight(want.weight), italic);
     try {
       await loadFont({ family, style });
-      resolved[k] = { family, style };
+      return { family, style };
     } catch (e) {
       // The matched style label can still be rejected (label drift); fall back to Regular rather than
       // taking down the whole render over one node's font.
       await loadFont({ family, style: "Regular" }).catch(() => {});
-      resolved[k] = { family, style: "Regular" };
+      return { family, style: "Regular" };
     }
+  };
+  for (const need of needs) {
+    const k = key(need.family, need.weight, !!need.italic);
+    if (resolved[k]) continue;
+    const [first, ...otherModes] = literalNeeds(need, tokens);
+    resolved[k] = await loadNearest(first, !!need.italic);
+    for (const other of otherModes) await loadNearest(other, !!need.italic);
   }
   return resolved;
 }
 
-function collectText(wn: WriteChild, needs: FontNeed[]): void {
+function collectText(wn: WriteChild, needs: FontNeed[], styles: StyleRef[]): void {
   if (!wn || typeof wn !== "object") return;
   if (wn.type === "TEXT") {
     const ts = wn.textStyle || {};
-    needs.push({ family: ts.fontFamily, weight: ts.fontWeight, italic: ts.fontStyle === "italic" });
+    needs.push(needOf(ts));
+    if (ts.style) styles.push(ts.style);
     // Each rich-text run may carry its own (family, weight, italic); preload those too so the bridge's
     // per-range setRangeFontName has the exact style loaded — a run that reaches the bridge with an
     // unloaded font fails loud (resolveFontStrict) rather than silently rendering in the base style.
     // The run's style carries the EFFECTIVE (family, weight, italic) triple whenever it changes any of
     // them (flcm.ts's compileRun), so this key matches what the bridge asks for.
-    for (const run of wn.runs || []) {
-      const rs = run.style || {};
-      needs.push({ family: rs.fontFamily, weight: rs.fontWeight, italic: rs.fontStyle === "italic" });
-    }
+    for (const run of wn.runs || []) needs.push(needOf(run.style || {}));
   }
-  for (const kid of wn.children || []) collectText(kid, needs);
+  for (const kid of wn.children || []) collectText(kid, needs, styles);
 }
 
 // Resolve an authored (family, weight) to a loaded style. The build walk only asks for pairs that the
 // load pass already collected from the same tree, so a miss falls back to the default.
-export function resolveFont(fonts: FontMap, family: string | undefined, weight: number | string | undefined, italic = false): { family: string; style: string } {
+export function resolveFont(fonts: FontMap, family: Bindable<string> | undefined, weight: Bindable<number | string> | undefined, italic = false): { family: string; style: string } {
   return fonts[key(family, weight, italic)] || { family: DEFAULT_FAMILY, style: "Regular" };
 }
 
@@ -260,8 +302,11 @@ export interface FontDivergence { prop: "fontFamily" | "fontWeight" | "fontStyle
 // to the nearest style the family has, an italic the family lacks comes out upright. Only AUTHORED words
 // are compared — an omitted word has no intent to depart from. The realized side is Figma's own label, so
 // a style whose weight the label grammar can't read still shows what was actually bound.
-export function fontDivergences(family: string | undefined, weight: number | string | undefined, italic: boolean, font: { family: string; style: string }): FontDivergence[] {
+// A bound word is skipped: the variable, not the author, chose the value, and it changes per mode.
+export function fontDivergences(family: Bindable<string> | undefined, weight: Bindable<number | string> | undefined, italic: boolean, font: { family: string; style: string }): FontDivergence[] {
   const out: FontDivergence[] = [];
+  if (isTokenRef(family)) family = undefined;
+  if (isTokenRef(weight)) weight = undefined;
   if (family && family !== font.family) out.push({ prop: "fontFamily", authored: family, realized: font.family });
   if (weight != null && styleWeight(font.style) !== wantWeight(weight)) out.push({ prop: "fontWeight", authored: weight, realized: font.style });
   if (italic && !isItalic(font.style)) out.push({ prop: "fontStyle", authored: "italic", realized: font.style });
@@ -272,10 +317,10 @@ export function fontDivergences(family: string | undefined, weight: number | str
 // every run's pair). A miss means the run would otherwise render in the node's base style — the exact
 // silent divergence ADR-0003 forbids — so throw a specific error instead of falling back. render() always
 // preloads, so this fires only on an internal inconsistency, not normal authored input.
-export function resolveFontStrict(fonts: FontMap, family: string | undefined, weight: number | string | undefined, italic = false): { family: string; style: string } {
+export function resolveFontStrict(fonts: FontMap, family: Bindable<string> | undefined, weight: Bindable<number | string> | undefined, italic = false): { family: string; style: string } {
   const font = fonts[key(family, weight, italic)];
   if (!font) {
-    throw new Error("TEXT: a run's font (" + (family || DEFAULT_FAMILY) + ", weight " + (weight == null ? "default" : weight) + (italic ? ", italic" : "") + ") was not loaded before render — the run would silently render in the base style. This is an internal error; report it.");
+    throw new Error("TEXT: a run's font (" + (isTokenRef(family) ? "bound family" : family || DEFAULT_FAMILY) + ", weight " + (weight == null ? "default" : weight) + (italic ? ", italic" : "") + ") was not loaded before render — the run would silently render in the base style. This is an internal error; report it.");
   }
   return font;
 }

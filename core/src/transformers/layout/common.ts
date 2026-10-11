@@ -1,5 +1,7 @@
 import { exhaustiveCheck, isFrame, isInAutoLayoutFlow } from "../../utils.js";
 import type { NodeSnapshot } from "../../snapshot.js";
+import type { VariableReference } from "../../tokens.js";
+import type { BindableNumber, BoundSides } from "../bound-values.js";
 
 /**
  * Container config and placement under a parent (the canonical `layout` group). Per-node geometry —
@@ -20,8 +22,13 @@ export interface SimplifiedLayout {
   /** Vertical alignment within a grid cell. Flow children express stretch through fill sizing. */
   alignSelf?: "center" | "start" | "end";
   wrap?: boolean;
-  gap?: string;
-  padding?: string;
+  /**
+   * CSS shorthand when nothing is bound. A bound single value is its reference; a two-value gap with
+   * any binding splits into `{ row, column }`. Grid gaps never carry a binding (REST can't see one).
+   */
+  gap?: string | VariableReference | { row: BindableNumber; column: BindableNumber };
+  /** CSS shorthand when nothing is bound; one variable on all sides is its reference; else per side. */
+  padding?: string | VariableReference | BoundSides;
   gridTemplateColumns?: string;
   gridTemplateRows?: string;
   gridColumn?: string;
@@ -73,12 +80,13 @@ export type SimplifiedDimension = number | "fill" | "hug" | "contextual";
  * (grid child-overlap) read it off the snapshot directly.
  */
 export interface NodeGeometry {
-  minWidth?: number;
-  maxWidth?: number;
-  minHeight?: number;
-  maxHeight?: number;
-  width?: SimplifiedDimension;
-  height?: SimplifiedDimension;
+  minWidth?: BindableNumber;
+  maxWidth?: BindableNumber;
+  minHeight?: BindableNumber;
+  maxHeight?: BindableNumber;
+  /** A bound size reads as its reference only where a fixed number would be emitted. */
+  width?: SimplifiedDimension | VariableReference;
+  height?: SimplifiedDimension | VariableReference;
   // The size the requested root was designed at, surfaced as a non-binding
   // reference (not a hard width/height) on every axis whose sizing leaned on the
   // parent the read dropped: "contextual" (it fills whatever it's placed in) and

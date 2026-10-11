@@ -20,7 +20,7 @@ describe("count-gated style hoisting", () => {
     const nodes = [node({ id: "1", fill: "fill_red" })];
     const styles: Record<string, StyleValue> = { fill_red: RED };
 
-    const result = compressDesign(nodes, [], styles, new Set());
+    const result = compressDesign(nodes, [], styles);
 
     expect(result.nodes[0].fill).toEqual(RED);
     expect(result.styles).toEqual({});
@@ -35,32 +35,40 @@ describe("count-gated style hoisting", () => {
     ];
     const styles: Record<string, StyleValue> = { fill_red: RED };
 
-    const result = compressDesign(nodes, [], styles, new Set());
+    const result = compressDesign(nodes, [], styles);
 
     expect(result.nodes[0].fill).toBe("fill_red");
     expect(result.nodes[1].fill).toBe("fill_red");
     expect(result.styles).toEqual({ fill_red: RED });
   });
 
-  it("keeps a single-use named Figma style hoisted (design-system intent)", () => {
-    const nodes = [node({ id: "1", type: "TEXT", textStyle: "Heading / Large" })];
-    const styles: Record<string, StyleValue> = { "Heading / Large": { fontSize: 24 } };
+  it("treats a style reference like any other value: inlined at one use, hoisted at two", () => {
+    const heading: StyleValue = { style: { id: "S:1", name: "Heading / Large" } };
+    const single = compressDesign([node({ id: "1", type: "TEXT", textStyle: "style_head" })], [], {
+      style_head: heading,
+    });
+    expect(single.nodes[0].textStyle).toEqual(heading);
+    expect(single.styles).toEqual({});
 
-    const result = compressDesign(nodes, [], styles, new Set(["Heading / Large"]));
-
-    expect(result.nodes[0].textStyle).toBe("Heading / Large");
-    expect(result.styles).toEqual({ "Heading / Large": { fontSize: 24 } });
+    const shared = compressDesign(
+      [
+        node({ id: "1", type: "TEXT", textStyle: "style_head" }),
+        node({ id: "2", type: "TEXT", textStyle: "style_head", opacity: 0.5 }),
+      ],
+      [],
+      { style_head: heading },
+    );
+    expect(shared.nodes.map((n) => n.textStyle)).toEqual(["style_head", "style_head"]);
+    expect(shared.styles).toEqual({ style_head: heading });
   });
 
-  it("drops a named style that no surviving node references (orphaned by node removal)", () => {
-    // A named style can reach zero references when its only node is dropped after
-    // registration — e.g. collapseSvgContainers registers a vector child's named
-    // style, then folds the child away. A hoisted entry nothing points to is just
-    // orphan noise, so it must be dropped rather than force-kept as "intent".
+  it("drops a style that no surviving node references (orphaned by node removal)", () => {
+    // A style can reach zero references when its only node is dropped after
+    // interning — e.g. collapseSvgContainers folds a vector child away.
     const nodes = [node({ id: "1", type: "FRAME" })]; // references no style
-    const styles: Record<string, StyleValue> = { "Heading / Large": { fontSize: 24 } };
+    const styles: Record<string, StyleValue> = { fill_red: RED };
 
-    const result = compressDesign(nodes, [], styles, new Set(["Heading / Large"]));
+    const result = compressDesign(nodes, [], styles);
 
     expect(result.styles).toEqual({});
   });
@@ -69,7 +77,7 @@ describe("count-gated style hoisting", () => {
     const nodes = [node({ id: "1", type: "TEXT", text: ["a ", ["b", "style_abc12345"]] })];
     const styles: Record<string, StyleValue> = { style_abc12345: { fontWeight: 700 } };
 
-    const result = compressDesign(nodes, [], styles, new Set());
+    const result = compressDesign(nodes, [], styles);
 
     expect(result.nodes[0].text).toEqual(["a ", ["b", { fontWeight: 700 }]]);
     expect(result.styles).toEqual({});
@@ -82,7 +90,7 @@ describe("count-gated style hoisting", () => {
     ];
     const styles: Record<string, StyleValue> = { style_abc12345: { fontWeight: 700 } };
 
-    const result = compressDesign(nodes, [], styles, new Set());
+    const result = compressDesign(nodes, [], styles);
 
     expect(result.nodes[0].text).toEqual([["a", "style_abc12345"]]);
     expect(result.nodes[1].text).toEqual([["b", "style_abc12345"]]);
@@ -103,7 +111,7 @@ describe("templates", () => {
     ];
     const styles: Record<string, StyleValue> = { fill_red: RED };
 
-    const result = compressDesign(nodes, [], styles, new Set());
+    const result = compressDesign(nodes, [], styles);
 
     const [hash] = Object.keys(result.templates);
     expect(Object.keys(result.templates)).toHaveLength(1);
@@ -126,25 +134,11 @@ describe("templates", () => {
     ];
     const styles: Record<string, StyleValue> = { fill_red: RED };
 
-    const result = compressDesign(nodes, [], styles, new Set());
+    const result = compressDesign(nodes, [], styles);
 
     const [hash] = Object.keys(result.templates);
     expect(result.templates[hash]).toEqual({ type: "FRAME", fill: RED });
     expect(result.styles).toEqual({});
-  });
-
-  it("does not expand a named style even when exclusive to one template", () => {
-    const nodes = [
-      node({ id: "1", name: "Card A", type: "TEXT", textStyle: "Heading / Large" }),
-      node({ id: "2", name: "Card B", type: "TEXT", textStyle: "Heading / Large" }),
-    ];
-    const styles: Record<string, StyleValue> = { "Heading / Large": { fontSize: 24 } };
-
-    const result = compressDesign(nodes, [], styles, new Set(["Heading / Large"]));
-
-    const [hash] = Object.keys(result.templates);
-    expect(result.templates[hash]).toEqual({ type: "TEXT", textStyle: "Heading / Large" });
-    expect(result.styles).toEqual({ "Heading / Large": { fontSize: 24 } });
   });
 
   it("leaves a unique subtree inline (no template)", () => {
@@ -155,7 +149,7 @@ describe("templates", () => {
     ];
     const styles: Record<string, StyleValue> = { fill_red: RED, fill_blue: BLUE };
 
-    const result = compressDesign(nodes, [], styles, new Set());
+    const result = compressDesign(nodes, [], styles);
 
     // The solo card's body is unique → no template, and its single-use fill
     // inlines onto the node.
@@ -176,7 +170,7 @@ describe("templates", () => {
     const nodes = [card("1"), card("2")];
     const styles: Record<string, StyleValue> = { fill_red: RED };
 
-    const result = compressDesign(nodes, [], styles, new Set());
+    const result = compressDesign(nodes, [], styles);
 
     // Two distinct templates: the card body and the icon body.
     expect(Object.keys(result.templates)).toHaveLength(2);
@@ -189,7 +183,7 @@ describe("templates", () => {
   it("does not dedupe type-only bodies (a template would grow the payload)", () => {
     const nodes = [node({ id: "1" }), node({ id: "2" })];
 
-    const result = compressDesign(nodes, [], {}, new Set());
+    const result = compressDesign(nodes, [], {});
 
     expect(result.templates).toEqual({});
     expect(result.nodes[0].template).toBeUndefined();
@@ -201,8 +195,8 @@ describe("templates", () => {
       node({ id: "1", fill: "fill_red" }),
       node({ id: "2", fill: "fill_red" }),
     ];
-    const a = compressDesign(build(), [], { fill_red: RED }, new Set());
-    const b = compressDesign(build(), [], { fill_red: RED }, new Set());
+    const a = compressDesign(build(), [], { fill_red: RED });
+    const b = compressDesign(build(), [], { fill_red: RED });
 
     expect(Object.keys(a.templates)).toEqual(Object.keys(b.templates));
   });
