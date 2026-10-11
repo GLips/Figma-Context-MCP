@@ -408,7 +408,15 @@ This is server-only, but it is part of the first-run experience.
 
 **Confidence:** medium. Most slot unreadability is fixed, so this may be rare now · **Size:** S (count) / M (audit) · **Sources:** NOTES §26.2b, NOTES §23, mobile §11, mobile §2, T3, T18
 
-### A-20. Promoting an existing design: no worked example, and the invented-default and clone-fill traps remain 🟡
+### A-20. Promoting an existing design: no worked example, and the invented-default and clone-fill traps remain 🟡 `[HUMAN REVIEWED]`
+
+**Verdict (Graham, 2026-10-10): approve both fixes, with no worked example.**
+
+- **Moves and clones keep their size (fig-115).** A live node landing in a frame without auto-layout freezes a `fill` carried over from its old parent at its current pixel size. A `fill` written in the same call still covers the parent.
+- **Remove `defaultValue` (fig-116).** In a main component, Figma keeps a property's default and its bound layer identical: binding writes the default into the layer, and editing either updates the other (live-checked for text). So the default is always the bound layer's content.
+  - Every property must be bound in the same call.
+  - Binders that disagree fail, naming each one.
+  - Reads and writes drop the field together.
 
 **Status:** partly.
 
