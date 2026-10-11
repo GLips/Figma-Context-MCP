@@ -7,7 +7,7 @@ import { normalizePathData, normalizeVectorPaths } from "./path.js";
 // Live identities compile as edits. The bridge receives closures so its write walk need not
 // import the edit orchestration that already depends on the bridge.
 import type { WriteNode } from "./ir.js";
-import { treeNodes } from "./compile-tree.js";
+import { treeNodes, childTreeNodes } from "./compile-tree.js";
 import { resolveTarget, createResolvedTargets } from "./read.js";
 import { compileEditPlan, loadEditResources, assertEditPlanLands, applyEditPlanWrites, settleEditPlanSizes, settleEditPlanPositions, holdEditPlanPivot } from "./edit-plan.js";
 import { resolveInstanceEditTargets, planInstanceEdit, applyInstanceRetarget, applyInstanceOverrides } from "./instance.js";
@@ -20,6 +20,7 @@ import { NO_TOKENS } from "./tokens.js";
 import { growImplicitGridRows } from "./layout-native.js";
 import { holdUnrotatedCorner, settleCentrePivot } from "./pivot.js";
 import { beginMutatingApply, refusedBeforeWrite } from "./verb-error.js";
+import { recordLiveMoveIntoNewNode } from "./moved-out-diagnostics.js";
 import type { EditDelta } from "./schema.js";
 
 function assertSceneNode(node: BaseNode): asserts node is SceneNode {
@@ -43,6 +44,8 @@ export function assertInheritedSlotContentStays(at: string, node: SceneNode, par
 
 export async function loadLiveTree(tree: WriteNode): Promise<LoadedLiveTree> {
   const entries = [];
+  // Live nodes whose spec parent this verb builds: a new node's children, or a new instance's slot content.
+  const intoNewNode = new Set(treeNodes(tree).flatMap(wn => wn.liveId ? [] : childTreeNodes(wn)));
   for (const wn of treeNodes(tree)) {
     if (!wn.liveId) continue;
     const at = wn.sourcePath!;
@@ -80,7 +83,7 @@ export async function loadLiveTree(tree: WriteNode): Promise<LoadedLiveTree> {
       const targets = createResolvedTargets();
       const current = node.type === "INSTANCE" ? await resolveInstanceEditTargets(node, hint?.instanceWords ?? {}, targets) : null;
       const instance = hint?.instanceWords ? planInstanceEdit(node, hint.instanceWords, current, { targets }, at) : undefined;
-      entries.push({ wn, node, changes, key, pathData, hint, targets, current, instance });
+      entries.push({ wn, node, changes, key, pathData, hint, targets, current, instance, intoNewNode: intoNewNode.has(wn) });
     } catch (cause) { throw new Error(at + ": " + String(cause)); }
   }
   const loaded = entries.length ? await loadEditResources(entries.flatMap(e => [...(e.hint ? [e.hint] : []), ...(e.instance?.overrides.map(o => o.plan) ?? [])]), entries.flatMap(e => e.instance ? [e.instance.needs] : [])) : { fonts: {}, images: {}, tokens: NO_TOKENS };
@@ -95,6 +98,7 @@ export interface LoadedLiveTree {
     targets: ReturnType<typeof createResolvedTargets>;
     current: Awaited<ReturnType<typeof resolveInstanceEditTargets>> | null;
     instance: ReturnType<typeof planInstanceEdit> | undefined;
+    intoNewNode: boolean;
   }[];
 }
 export interface LiveTreeNode {
@@ -106,7 +110,7 @@ export interface LiveTreeNode {
 export function gateLiveTree(live: LoadedLiveTree, resources: RenderResources): Map<WriteNode, LiveTreeNode> {
   const plans = new Map<WriteNode, LiveTreeNode>();
   for (const entry of live.entries) {
-    const { wn, node, changes, key, pathData, targets, current } = entry;
+    const { wn, node, changes, key, pathData, targets, current, intoNewNode } = entry;
     const at = wn.sourcePath!;
     assertNodeStillOnCanvas(node, at);
     if (childListClosingInstanceOf(node, false)) throw new Error(at + ": cannot move a component instance's sublayer; edit its main component.");
@@ -128,12 +132,15 @@ export function gateLiveTree(live: LoadedLiveTree, resources: RenderResources): 
     }
     plans.set(wn, { node, component: instance?.becomes ?? current, place(parent, place, ctx) {
       assertInheritedSlotContentStays(at, node, parent);
+      // Inherited slot content lands as Figma's copy, leaving the original where it was: not a move.
+      const from = intoNewNode && !isInheritedSlotContent(node) ? node.parent : null;
       const fail = beginMutatingApply(at, node);
       try {
         for (let p: BaseNode | null = parent; p; p = p.parent) if (p === node) throw new Error(at + ": a node cannot move inside itself or its descendant.");
         const words = assertLiveNodeLandsUnderParent(node, parent, at, plan?.patch.layout);
         growImplicitGridRows(parent, words);
         place(node);
+        if (from) recordLiveMoveIntoNewNode(node, from, parent);
         // Before anything below can resize the node — retarget, attached children, the plan's writes.
         const pivotHold = plan ? holdEditPlanPivot(plan) : holdUnrotatedCorner(node);
         if (instance) applyInstanceRetarget(fail, node, instance);

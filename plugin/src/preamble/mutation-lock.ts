@@ -6,6 +6,7 @@ import { warnings } from "./warnings.js";
 import { registerResult } from "./host.js";
 import { sceneFigma as figma, invalidateSceneAccess } from "./scene-access.js";
 import { beginSizingDiagnostics, finishSizingDiagnostics } from "./sizing-diagnostics.js";
+import { beginMovedOutDiagnostics, finishMovedOutDiagnostics } from "./moved-out-diagnostics.js";
 // mutation-lock — the single entry point every mutating verb takes (plan invariant 4): render, edit,
 // editMany, the component verbs, and the structural verbs. Three jobs, one place — serialize verbs,
 // enforce cancellation, own the undo scaffold (the seal/commit/rollback shape lives on
@@ -266,6 +267,7 @@ export function enterMutatingVerb<P, G, T>(
       const warningCheckpoint = warnings.records.length;
       try {
         beginSizingDiagnostics();
+        beginMovedOutDiagnostics();
         // Cleared first: a failed verb's queue must never link nodes on the next verb's behalf.
         pendingStyleWrites = [];
         const result = apply(gated);
@@ -273,6 +275,7 @@ export function enterMutatingVerb<P, G, T>(
         figma.commitUndo();
         committedVerbs++;
         finishSizingDiagnostics(verb);
+        finishMovedOutDiagnostics(verb);
         registerResult(result);
         return result;
       } catch (err) {

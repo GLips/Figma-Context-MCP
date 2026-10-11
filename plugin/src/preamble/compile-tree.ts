@@ -120,10 +120,15 @@ export function readyNodeWords(src: Record<string, unknown>, subject: string): R
   return out;
 }
 
+/** The nodes placed directly into `tree`: its children, then the slot content its overrides state. */
+export function childTreeNodes(tree: WriteNode): WriteNode[] {
+  const nested = Object.values(tree.overrides ?? tree.authoring?.overrides ?? {}).flatMap((delta: any) => Array.isArray(delta?.children) ? delta.children : []);
+  return [...(tree.children ?? []), ...nested];
+}
+
 export function treeNodes(tree: WriteChild): WriteNode[] {
   if (!tree) return [];
-  const nested = Object.values(tree.overrides ?? tree.authoring?.overrides ?? {}).flatMap((delta: any) => Array.isArray(delta?.children) ? delta.children : []);
-  return [tree, ...[...(tree.children ?? []), ...nested].flatMap(treeNodes)];
+  return [tree, ...childTreeNodes(tree).flatMap(treeNodes)];
 }
 
 export const LAYOUT_WORD_DISPOSITIONS: Record<keyof SimplifiedLayout, "author" | ReadFieldDisposition> = {
