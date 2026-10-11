@@ -14,22 +14,37 @@ export interface TokenIdentity {
   name?: string;
 }
 
-export interface VariableReference {
+/**
+ * A read carries `value`, the literal the token resolves to in the read's ordinary spelling, since
+ * REST can't name variables and an agent generating code needs the hex. Writes bind by identity and
+ * ignore it. A listing's paste-in reference has no value.
+ */
+export interface VariableReference<V = string | number> {
   variable: TokenIdentity;
+  value?: V;
 }
 
-export interface StyleReference {
+export interface StyleReference<V = unknown> {
   style: TokenIdentity;
+  value?: V;
 }
 
 export type TokenReference = VariableReference | StyleReference;
 
-export function variableReference(ref: SnapshotTokenRef): VariableReference {
-  return { variable: tokenIdentity(ref) };
+export function variableReference<V extends string | number>(
+  ref: SnapshotTokenRef,
+  value?: V,
+): VariableReference<V> {
+  return withValue({ variable: tokenIdentity(ref) }, value);
 }
 
-export function styleReference(ref: SnapshotTokenRef): StyleReference {
-  return { style: tokenIdentity(ref) };
+export function styleReference<V>(ref: SnapshotTokenRef, value?: V): StyleReference<V> {
+  return withValue({ style: tokenIdentity(ref) }, value);
+}
+
+// `value` always follows the identity key: compression hashes the serialized form.
+function withValue<T extends object, V>(reference: T, value: V | undefined): T & { value?: V } {
+  return value === undefined ? reference : { ...reference, value };
 }
 
 // Key order is fixed (id, then name) so a reference stringifies identically whichever producer
@@ -42,9 +57,13 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/** A read-shaped variable reference: exactly one `variable` key. Write inputs are looser; see the plugin. */
+/** A read-shaped variable reference: a `variable` key and at most its `value`. Write inputs are looser; see the plugin. */
 export function isVariableReference(value: unknown): value is VariableReference {
-  return isPlainObject(value) && Object.keys(value).length === 1 && "variable" in value;
+  return (
+    isPlainObject(value) &&
+    "variable" in value &&
+    Object.keys(value).every((key) => key === "variable" || key === "value")
+  );
 }
 
 export function isStyleReference(value: unknown): value is StyleReference {

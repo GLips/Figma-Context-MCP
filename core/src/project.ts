@@ -3,7 +3,7 @@ import { createComponentNotes, extractComponents } from "./components.js";
 import { readContext, type ReadContext } from "./read-context.js";
 import { createInlineStyleTable, createRefStyleTable } from "./style-table.js";
 import { computeGridChildOrder } from "./transformers/layout.js";
-import { foldPaintStack } from "./transformers/style.js";
+import { foldPaintStack, paintStyleValue } from "./transformers/style.js";
 import { styleReference } from "./tokens.js";
 import { hasAutoLayout } from "./utils.js";
 import type { SimplifyResult } from "./simplify.js";
@@ -90,9 +90,10 @@ function projectTrees(
       if (d !== undefined) cut(full, "d", d);
       if (vectorPaths !== undefined) cut(full, "vectorPaths", vectorPaths);
       // Re-folded for the wire, so the style-wins rule must hold here as it does in extraction.
+      const hasChildren = !!snapshot.children?.length;
       const fill = snapshot.styles?.fill
-        ? styleReference(snapshot.styles.fill)
-        : foldPaintStack(snapshot.fills, !!snapshot.children?.length);
+        ? styleReference(snapshot.styles.fill, paintStyleValue(snapshot.fills, hasChildren, true))
+        : foldPaintStack(snapshot.fills, hasChildren);
       if (fill !== undefined) node.fill = fill;
       else if (full.type === "TEXT") node.fill = "none";
       else delete node.fill;

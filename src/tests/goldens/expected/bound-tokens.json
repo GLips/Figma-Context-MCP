@@ -14,29 +14,36 @@
         "padding": {
           "variable": {
             "id": "VariableID:2:1"
-          }
+          },
+          "value": 16
         },
         "gap": {
           "variable": {
             "id": "VariableID:2:2"
-          }
+          },
+          "value": 8
         }
       },
       "fill": {
         "variable": {
           "id": "VariableID:1:1"
-        }
+        },
+        "value": "#FFFFFF"
       },
       "effects": {
         "style": {
           "id": "k4",
           "name": "Elevation / 1"
+        },
+        "value": {
+          "boxShadow": "0px 2px 4px 0px rgba(0, 0, 0, 0.25)"
         }
       },
       "borderRadius": {
         "variable": {
           "id": "VariableID:3:1"
-        }
+        },
+        "value": 12
       },
       "children": [
         {
@@ -46,7 +53,8 @@
           "width": {
             "variable": {
               "id": "VariableID:4:1"
-            }
+            },
+            "value": 80
           },
           "height": 24,
           "layout": {
@@ -58,7 +66,8 @@
               "left": {
                 "variable": {
                   "id": "VariableID:2:1"
-                }
+                },
+                "value": 12
               }
             }
           },
@@ -67,7 +76,8 @@
             "color": {
               "variable": {
                 "id": "VariableID:1:2"
-              }
+              },
+              "value": "#3366FF"
             },
             "opacity": 0.5
           }
@@ -85,7 +95,8 @@
                 "fontSize": {
                   "variable": {
                     "id": "VariableID:5:2"
-                  }
+                  },
+                  "value": 24
                 }
               }
             ]
@@ -96,7 +107,8 @@
             "fontSize": {
               "variable": {
                 "id": "VariableID:5:1"
-              }
+              },
+              "value": 20
             }
           },
           "fill": "fill_314185fc"
@@ -112,13 +124,19 @@
               "id": "k5",
               "name": "Body / Regular"
             },
+            "value": {
+              "fontFamily": "Inter",
+              "fontWeight": 400,
+              "fontSize": 14
+            },
             "textAlign": "center"
           },
           "fill": {
             "style": {
               "id": "k6",
               "name": "Ink"
-            }
+            },
+            "value": "#000000"
           }
         },
         {
@@ -131,7 +149,8 @@
             {
               "variable": {
                 "id": "VariableID:1:2"
-              }
+              },
+              "value": "#FF0000"
             },
             "#FFFFFF"
           ],
@@ -139,12 +158,14 @@
           "strokeWidth": {
             "variable": {
               "id": "VariableID:7:1"
-            }
+            },
+            "value": 1
           },
           "opacity": {
             "variable": {
               "id": "VariableID:6:1"
-            }
+            },
+            "value": 0.8
           }
         }
       ]

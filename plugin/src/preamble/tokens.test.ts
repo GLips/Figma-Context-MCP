@@ -102,23 +102,41 @@ test("a read written back unchanged keeps its bindings", async () => {
     ],
   });
   const brand = seedStyle({ type: "PAINT", name: "Brand/Primary", paints: [{ type: "SOLID", color: BRAND_RED, opacity: 1 }] });
+  const heading = seedStyle({
+    type: "TEXT", name: "Heading/L", fontName: { family: "Inter", style: "Bold" }, fontSize: 32,
+    lineHeight: { unit: "AUTO" }, letterSpacing: { unit: "PIXELS", value: 0 }, paragraphSpacing: 0, paragraphIndent: 0,
+    listSpacing: 0, textCase: "ORIGINAL", textDecoration: "NONE",
+  });
   const parent = await flcm.render({
     type: "FRAME", width: { variable: "space/md" }, height: 100,
     children: [
       { type: "FRAME", key: "chip", width: 40, height: 40, fill: { variable: "color/primary" }, layout: { mode: "row", padding: { variable: "space/md" } } },
       { type: "RECTANGLE", key: "swatch", width: 10, height: 10, fill: { style: "Brand/Primary" } },
+      { type: "TEXT", key: "title", text: "Hi", textStyle: { style: "Heading/L", textAlign: "center" } },
     ],
   });
   const { node } = await flcm.get(parent);
+  // Every reference carries its literal; the write ignores it and binds by identity.
+  const [chipRead, swatchRead, titleRead] = (node as any).children;
+  assert.deepEqual(chipRead.fill, { variable: { id: primary.id, name: "color/primary" }, value: "#FF0000" });
+  assert.deepEqual(chipRead.layout.padding, { variable: { id: md.id, name: "space/md" }, value: 12 });
   // The read names a style by its key, the id REST shares; writing that back must find the same style.
-  assert.deepEqual((node as any).children[1].fill, { style: { id: brand.key, name: "Brand/Primary" } });
+  assert.deepEqual(swatchRead.fill, { style: { id: brand.key, name: "Brand/Primary" }, value: "#FF0000" });
+  assert.deepEqual(titleRead.textStyle.value, { fontFamily: "Inter", fontWeight: 700, fontSize: 32, fontVariantName: "Bold" });
   await flcm.render(node);
   const root = await figma.getNodeByIdAsync(parent.id);
-  const [chip, swatch] = root.children;
+  const [chip, swatch, title] = root.children;
   assert.equal(root.boundVariables.width.id, md.id);
   assert.equal(chip.fills[0].boundVariables.color.id, primary.id);
   assert.equal(chip.boundVariables.paddingTop.id, md.id);
   assert.equal(swatch.fillStyleId, brand.id);
+  assert.equal(title.textStyleId, heading.id);
+  assert.equal(title.textAlignHorizontal, "CENTER");
+
+  await assert.rejects(
+    flcm.render({ type: "TEXT", text: "Hi", textStyle: { value: { fontSize: 32 } } }),
+    /`value` is what a read's text `style` resolves to/,
+  );
 });
 
 test("an edit to a literal drops the binding it replaces, uniform words included", async () => {

@@ -65,7 +65,8 @@ export function buildFlexGap(
 
   if (!rowRef && !colRef) return gapShorthand(rowGap, colGap);
   // A bound gap emits even at 0: the binding is intent, not the omitted default.
-  if (rowGap === undefined || colGap === undefined) return variableReference((rowRef ?? colRef)!);
-  if (rowRef && colRef && rowRef.id === colRef.id) return variableReference(rowRef);
+  if (rowGap === undefined || colGap === undefined)
+    return variableReference((rowRef ?? colRef)!, (rowGap ?? colGap)!);
+  if (rowRef && colRef && rowRef.id === colRef.id) return variableReference(rowRef, rowGap);
   return { row: bindNumber(rowGap, rowRef), column: bindNumber(colGap, colRef) };
 }

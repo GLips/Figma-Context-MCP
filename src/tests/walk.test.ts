@@ -234,10 +234,10 @@ describe("walkNodes", () => {
 
     const { nodes, styles: resultVars } = await walk([nodeA, nodeB], {}, extraStyles);
 
-    expect(resultVars[nodes[0].textStyle as string]).toEqual({
+    expect(resultVars[nodes[0].textStyle as string]).toMatchObject({
       style: { id: "13:77", name: "Heading / Large" },
     });
-    expect(resultVars[nodes[1].textStyle as string]).toEqual({
+    expect(resultVars[nodes[1].textStyle as string]).toMatchObject({
       style: { id: "161:300", name: "Heading / Large" },
     });
   });

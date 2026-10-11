@@ -1,6 +1,11 @@
 import { isRectangleCornerRadii, isVisible } from "./utils.js";
 import { buildSimplifiedLayout } from "./transformers/layout.js";
-import { buildSimplifiedStrokes, cssBlendKeyword, parsePaint } from "./transformers/style.js";
+import {
+  buildSimplifiedStrokes,
+  cssBlendKeyword,
+  paintStyleValue,
+  parsePaint,
+} from "./transformers/style.js";
 import { buildSimplifiedEffects } from "./transformers/effects.js";
 import { bindNumber, bindParts } from "./transformers/bound-values.js";
 import { styleReference } from "./tokens.js";
@@ -260,7 +265,7 @@ function extractVisuals(node: NodeSnapshot, result: SimplifiedNode): void {
     .map((paint) => parsePaint(paint, hasChildren))
     .reverse();
   const fill = node.styles?.fill
-    ? styleReference(node.styles.fill)
+    ? styleReference(node.styles.fill, paintStyleValue(node.fills, hasChildren, false))
     : paints?.length
       ? paints.length === 1
         ? paints[0]
@@ -284,7 +289,7 @@ function extractVisuals(node: NodeSnapshot, result: SimplifiedNode): void {
   const strokeStyle = node.styles?.stroke;
   if (strokeStyle || strokes.colors.length) {
     result.stroke = strokeStyle
-      ? styleReference(strokeStyle)
+      ? styleReference(strokeStyle, paintStyleValue(node.strokes, hasChildren, false))
       : strokes.colors.length === 1
         ? strokes.colors[0]
         : strokes.colors;
@@ -301,7 +306,10 @@ function extractVisuals(node: NodeSnapshot, result: SimplifiedNode): void {
   // scope: they read as their literals.
   const effects = buildSimplifiedEffects(node);
   if (node.styles?.effect) {
-    result.effects = styleReference(node.styles.effect);
+    result.effects = styleReference(
+      node.styles.effect,
+      Object.keys(effects).length ? effects : undefined,
+    );
   } else if (Object.keys(effects).length) {
     result.effects = effects;
   }

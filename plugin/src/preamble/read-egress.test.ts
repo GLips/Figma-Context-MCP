@@ -91,8 +91,8 @@ test("a paint style reads as a style reference in the authoring field, id only w
   const live = await figma.getNodeByIdAsync(original.id);
   live.fillStyleId = "missing-style";
   const { node } = await flcm.get(original);
-  assert.deepEqual(node.fill, { style: { id: "missing-style" } });
-  assert.deepEqual(wire(node).fill, { style: { id: "missing-style" } });
+  assert.deepEqual(node.fill, { style: { id: "missing-style" }, value: "#123456" });
+  assert.deepEqual(wire(node).fill, { style: { id: "missing-style" }, value: "#123456" });
 });
 
 test("inherited instance echoes survive verb copies and JSON round-trips without source metadata", async () => {

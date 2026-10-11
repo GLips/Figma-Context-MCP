@@ -8,7 +8,12 @@ import { generateCSSShorthand, isVisible, pixelRound } from "../utils.js";
 import { variableReference, type VariableReference } from "../tokens.js";
 import { bindParts, type BoundSides } from "./bound-values.js";
 
-import { convertColor, flattenSolidFills, formatRGBAColor } from "./style/color.js";
+import {
+  convertColor,
+  flattenSolidFills,
+  formatRGBAColor,
+  formatSolidColor,
+} from "./style/color.js";
 import {
   translateScaleMode,
   handleImageTransform,
@@ -52,7 +57,7 @@ export type SimplifiedSolidFill = {
  */
 export type SimplifiedBoundSolidFill = {
   type: "SOLID";
-  color: VariableReference;
+  color: VariableReference<string>;
   opacity?: number;
   blendMode?: string;
 };
@@ -63,7 +68,7 @@ export type SimplifiedBoundSolidFill = {
  * SimplifiedNode.fill).
  */
 export type SimplifiedFill =
-  | VariableReference
+  | VariableReference<string>
   | SimplifiedBoundSolidFill
   | SimplifiedSolidFill
   | SimplifiedImageFill
@@ -148,7 +153,7 @@ export type SimplifiedStroke = {
    * CSS metric string: "1px", or per-side shorthand "1px 2px 3px 4px". Once a side is bound: one
    * variable on all four sides is its reference, otherwise per side.
    */
-  strokeWidth?: string | VariableReference | BoundSides;
+  strokeWidth?: string | VariableReference<number> | BoundSides;
   strokeDashes?: number[];
   /** "inside" is the omitted default — it matches the CSS border an LLM writes. */
   strokeAlign?: "outside" | "center";
@@ -233,6 +238,27 @@ export function foldPaintStack(
 }
 
 /**
+ * The literal a paint style resolves to, as the slot would spell it unstyled. A variable live
+ * Figma reports under the style's own paint is dropped: the value is the color, not another reference.
+ */
+export function paintStyleValue(
+  raw: SnapshotPaint[] | undefined,
+  hasChildren: boolean,
+  fold: boolean,
+): SimplifiedFill | SimplifiedFill[] | undefined {
+  const literal = raw?.map((paint) =>
+    paint.type === "SOLID" && paint.colorVariable ? { ...paint, colorVariable: undefined } : paint,
+  );
+  if (fold) return foldPaintStack(literal, hasChildren);
+  const parsed = (literal ?? [])
+    .filter(isVisible)
+    .map((paint) => parsePaint(paint, hasChildren))
+    .reverse();
+  if (parsed.length === 0) return undefined;
+  return parsed.length === 1 ? parsed[0] : parsed;
+}
+
+/**
  * Convert a Figma paint (solid, image, gradient) to a SimplifiedFill
  * @param raw - The Figma paint to convert
  * @param hasChildren - Whether the node has children (determines CSS properties)
@@ -287,7 +313,7 @@ export function parsePaint(raw: SnapshotPaint, hasChildren: boolean = false): Si
   } else if (raw.type === "SOLID") {
     if (raw.colorVariable) {
       // The variable carries the color's own alpha; only the paint's opacity and blend ride beside it.
-      const color = variableReference(raw.colorVariable);
+      const color = variableReference(raw.colorVariable, formatSolidColor(raw.color));
       const opacity = pixelRound(raw.opacity ?? 1);
       const { blendMode } = paintBlend(raw.blendMode);
       if (opacity === 1 && !blendMode) return color;

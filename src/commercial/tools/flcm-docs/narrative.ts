@@ -237,7 +237,7 @@ const hero = {
 
 An empty array is "no paint", the same as \`"none"\`. To change just the photo inside a stack — on an instance, say — write the whole stack back with that one entry replaced; \`overrides[path].fill\` takes the array like any other paint slot.`;
 
-export const TOKENS = `A value bound to a design token reads as a **reference** in place of the literal: \`{ variable: { id, name } }\` or \`{ style: { id, name } }\`. Write the same value back and the binding stays, whereas writing the literal it renders as detaches the token. A reference also binds a value that was never bound. On a write, the token can be a name or an id: \`{ variable: "Spacing/12" }\`, \`{ style: "Heading / Large" }\`, or \`{ variable: { id } }\`. When both an id and a name are given, the id wins.
+export const TOKENS = `A value bound to a design token reads as a **reference** in place of the literal, carrying the literal as \`value\`: \`{ variable: { id, name }, value: "#2D4024" }\` or \`{ style: { id, name }, value }\`. A style's \`value\` is the slot spelled as an unstyled read spells it; a text style's sits inside \`textStyle\`, beside the words a style doesn't cover. Write the same reference back and the binding stays, since a write ignores \`value\` and binds by the token. Writing the bare literal instead detaches the token. A reference also binds a value that was never bound. On a write, the token can be a name or an id: \`{ variable: "Spacing/12" }\`, \`{ style: "Heading / Large" }\`, or \`{ variable: { id } }\`. When both an id and a name are given, the id wins.
 
 \`\`\`js
 await flcm.edit(card, {

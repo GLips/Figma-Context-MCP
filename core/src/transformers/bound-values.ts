@@ -2,10 +2,10 @@ import type { SnapshotTokenRef } from "../snapshot.js";
 import { variableReference, type VariableReference } from "../tokens.js";
 
 /**
- * Numeric words a variable can stand in for. A bound word emits the reference in place of its
- * number; the snapshot keeps the literal beside it, which is what layout and paint logic read.
+ * Numeric words a variable can stand in for. A bound word emits the reference, carrying its number
+ * as `value`; the snapshot keeps the literal beside the binding, which is what layout logic reads.
  */
-export type BindableNumber = number | VariableReference;
+export type BindableNumber = number | VariableReference<number>;
 
 /** Per-side form of a four-sided word (padding, strokeWidth) once any side is bound. */
 export interface BoundSides {
@@ -25,7 +25,7 @@ export interface BoundCorners {
 
 /** A number, or the variable bound to it. */
 export function bindNumber(literal: number, ref: SnapshotTokenRef | undefined): BindableNumber {
-  return ref ? variableReference(ref) : literal;
+  return ref ? variableReference(ref, literal) : literal;
 }
 
 /**
@@ -38,11 +38,13 @@ export function bindNumber(literal: number, ref: SnapshotTokenRef | undefined): 
  */
 export function bindParts<K extends string>(
   parts: ReadonlyArray<readonly [K, number, SnapshotTokenRef | undefined]>,
-): VariableReference | Record<K, BindableNumber> | undefined {
+): VariableReference<number> | Record<K, BindableNumber> | undefined {
   const refs = parts.map(([, , ref]) => ref);
   const first = refs[0];
   if (!refs.some(Boolean)) return undefined;
-  if (first && refs.every((ref) => ref?.id === first.id)) return variableReference(first);
+  // Every part on one variable means every part holds its one value.
+  if (first && refs.every((ref) => ref?.id === first.id))
+    return variableReference(first, parts[0][1]);
   const out = {} as Record<K, BindableNumber>;
   for (const [key, literal, ref] of parts) out[key] = bindNumber(literal, ref);
   return out;

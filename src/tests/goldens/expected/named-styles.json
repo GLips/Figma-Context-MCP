@@ -10,6 +10,11 @@
         "style": {
           "id": "k1",
           "name": "Heading / Large"
+        },
+        "value": {
+          "fontFamily": "Inter",
+          "fontWeight": 400,
+          "fontSize": 12
         }
       },
       "fill": "fill_314185fc"
@@ -23,6 +28,11 @@
         "style": {
           "id": "k2",
           "name": "Heading / Large"
+        },
+        "value": {
+          "fontFamily": "Inter",
+          "fontWeight": 600,
+          "fontSize": 14
         }
       },
       "fill": "fill_314185fc"
@@ -35,7 +45,8 @@
         "style": {
           "id": "k3",
           "name": "Brand / Orange"
-        }
+        },
+        "value": "#FF8000"
       }
     }
   ],

@@ -124,8 +124,9 @@ export function isTokenRef(value: unknown): value is TokenRef {
 
 // Author input naming a token: a name or id string, or { id?, name? } (the read emits both; id wins).
 export type TokenIdentityInput = string | { id?: string; name?: string };
-export interface VariableInput { variable: TokenIdentityInput }
-export interface StyleInput { style: TokenIdentityInput }
+// `value` is the literal a read reports beside the token; a write ignores it and binds by identity.
+export interface VariableInput { variable: TokenIdentityInput; value?: unknown }
+export interface StyleInput { style: TokenIdentityInput; value?: unknown }
 
 // A node's paint and effect style slots. The text style rides textStyle.style instead, beside the
 // uncovered text words it keeps.

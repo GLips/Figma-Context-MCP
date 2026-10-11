@@ -512,7 +512,8 @@ function compileStrokeWidth(value: unknown, type: string): Bindable | Edges<Bind
 
 const EDGE_KEYS = keySet(["top", "right", "bottom", "left"]);
 const CORNER_KEYS = keySet(["topLeft", "topRight", "bottomRight", "bottomLeft"]);
-const STYLE_INPUT_KEYS = keySet(["style"]);
+// `value` is the read's resolved literal, ignored: the style binds by identity.
+const STYLE_INPUT_KEYS = keySet(["style", "value"]);
 
 // borderRadius: the CSS leaf (css.ts cornerRadii), one variable for every corner, or the per-corner
 // object — the only spelling where a corner can be bound on its own.
@@ -955,7 +956,8 @@ const REFUSED_RUN_TEXT_LEAVES: Record<string, string> = {
 // The closed set each text-style carrier accepts as INPUT: its own words plus the derived read leaves
 // it drops. Built from KNOWN_KEYS (schema-mirrored, drift-guarded) so the tolerated extras stay
 // visibly separate from the authoring surface — they are not props, and the docs must not list them.
-const TEXTSTYLE_INPUT_KEYS = keySet(KNOWN_KEYS.textStyle, IGNORED_READ_TEXT_LEAVES);
+// `value` is the read's resolved literal beside a `style`, ignored; compileTextStyleWords refuses it alone.
+const TEXTSTYLE_INPUT_KEYS = keySet(KNOWN_KEYS.textStyle, IGNORED_READ_TEXT_LEAVES, ["value"]);
 const RUN_INPUT_KEYS = keySet(KNOWN_KEYS.run, IGNORED_READ_TEXT_LEAVES);
 
 function rejectUnauthorableTextLeaves(c: object, subject: string, refused: Record<string, string> = REFUSED_READ_TEXT_LEAVES): void {
@@ -1021,6 +1023,9 @@ export function compileTextStyleWords(cfg: unknown, subject: string): WriteTextS
   rejectUnknownKeys(c, TEXTSTYLE_INPUT_KEYS, subject);
   const ts: WriteTextStyle = {};
   const raw = c as Record<string, unknown>;
+  if (raw.value !== undefined && raw.style == null) {
+    throw new Error(subject + ": `value` is what a read's text `style` resolves to, and is only accepted beside `style`. Give the words themselves.");
+  }
   if (raw.style != null) {
     const covered = TEXT_STYLE_COVERED_WORDS.filter((word) => raw[word] != null);
     if (covered.length) {

@@ -68,12 +68,15 @@ function tokenIdentity(raw: unknown, token: "variable" | "style", word: string):
   );
 }
 
-/** Compile a `{ variable }` input standing in for `word`. */
+/**
+ * Compile a `{ variable }` input standing in for `word`. A read's `value` (the literal the variable
+ * resolved to) is accepted and ignored, so a read pastes back as the binding it was.
+ */
 export function compileVariableRef(input: { variable: unknown }, word: string, resolvedType: VariableType): VariableRef {
-  const extra = Object.keys(input).filter((k) => k !== "variable");
+  const extra = Object.keys(input).filter((k) => k !== "variable" && k !== "value");
   if (extra.length) {
     throw new Error(
-      word + ": a variable reference is { variable } alone — " + extra.map((k) => "`" + k + "`").join(", ") +
+      word + ": a variable reference is { variable } (and a read's `value`) alone — " + extra.map((k) => "`" + k + "`").join(", ") +
         " can't ride beside it." + (resolvedType === "COLOR" ? ' For a bound solid with its own opacity or blend, write { type: "SOLID", color: { variable }, opacity, blendMode }.' : ""),
     );
   }

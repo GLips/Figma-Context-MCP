@@ -237,15 +237,23 @@ export interface SimplifiedNode extends NodeGeometry {
   // and an inline color are both strings — a reader tells them apart by looking
   // the value up in the design's `styles` table, never by shape. A paint style
   // is the whole slot's `{ style }`; a bound solid layer is its `{ variable }`.
-  fill?: string | SimplifiedFill | SimplifiedFill[] | StyleReference;
-  stroke?: string | SimplifiedFill | SimplifiedFill[] | StyleReference;
+  fill?:
+    | string
+    | SimplifiedFill
+    | SimplifiedFill[]
+    | StyleReference<SimplifiedFill | SimplifiedFill[]>;
+  stroke?:
+    | string
+    | SimplifiedFill
+    | SimplifiedFill[]
+    | StyleReference<SimplifiedFill | SimplifiedFill[]>;
   // Stroke geometry stays beside a stroke `{ style }`: a paint style covers only the paint.
-  strokeWidth?: string | VariableReference | BoundSides;
+  strokeWidth?: string | VariableReference<number> | BoundSides;
   strokeDashes?: number[];
   strokeAlign?: "outside" | "center";
-  effects?: string | SimplifiedEffects | StyleReference;
-  opacity?: number | VariableReference;
-  borderRadius?: string | VariableReference | BoundCorners;
+  effects?: string | SimplifiedEffects | StyleReference<SimplifiedEffects>;
+  opacity?: number | VariableReference<number>;
+  borderRadius?: string | VariableReference<number> | BoundCorners;
   // component data — an INSTANCE names its main component and the property values it
   // resolved; the definition's own properties and children live in the components sidecar
   // (SimplifiedComponentEntry), keyed by that id, which is the one place both an in-tree and

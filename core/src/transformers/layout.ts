@@ -198,7 +198,7 @@ function buildNodeGeometry(
   if (horizontal.dimension !== undefined)
     geometry.width =
       bindsFixed(horizontal.dimension) && bound?.width
-        ? variableReference(bound.width)
+        ? variableReference(bound.width, pixelRound(size.width))
         : horizontal.dimension;
   // A TEXT's height follows its content unless it fills or is fixed — "hug" is every text's default,
   // so it is omitted, the way the write side treats an unnamed height. A number (a fixed-height
@@ -207,7 +207,7 @@ function buildNodeGeometry(
   if (vertical.dimension !== undefined && !textDefaultHeight)
     geometry.height =
       bindsFixed(vertical.dimension) && bound?.height
-        ? variableReference(bound.height)
+        ? variableReference(bound.height, pixelRound(size.height))
         : vertical.dimension;
   if (horizontal.designed !== undefined) geometry.designedWidth = horizontal.designed;
   if (vertical.designed !== undefined) geometry.designedHeight = vertical.designed;

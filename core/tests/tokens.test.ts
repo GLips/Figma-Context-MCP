@@ -16,7 +16,7 @@ async function wireNode(snapshot: NodeSnapshot) {
   return project(await simplify([snapshot])).nodes[0];
 }
 
-test("a paint style wins over the paint variables under it; bound solids never fold", async () => {
+test("a paint style wins over the paint variables under it, valued as its literal; bound solids never fold", async () => {
   const styled = await wireNode({
     id: "1",
     name: "Styled",
@@ -24,7 +24,7 @@ test("a paint style wins over the paint variables under it; bound solids never f
     fills: [solid(1, { colorVariable: brand })],
     styles: { fill: { id: "S:fill", name: "Brand" } },
   });
-  expect(styled.fill).toEqual({ style: { id: "S:fill", name: "Brand" } });
+  expect(styled.fill).toEqual({ style: { id: "S:fill", name: "Brand" }, value: "#FF0000" });
 
   // Two literal solids would composite to one color; a bound layer keeps the stack apart.
   const stacked = await wireNode({
@@ -34,7 +34,8 @@ test("a paint style wins over the paint variables under it; bound solids never f
     fills: [solid(0), solid(1, { colorVariable: { id: brand.id }, opacity: 0.5 })],
   });
   expect(stacked.fill).toEqual([
-    { type: "SOLID", color: { variable: { id: brand.id } }, opacity: 0.5 },
+    // The variable's own color; the paint's opacity rides beside the reference, not inside its value.
+    { type: "SOLID", color: { variable: { id: brand.id }, value: "#FF0000" }, opacity: 0.5 },
     "#000000",
   ]);
 });
@@ -65,13 +66,18 @@ test("four-part words collapse to one reference only when every part shares it",
       bottomLeftRadius: space,
     },
   });
-  const ref = { variable: space };
+  const ref = { variable: space, value: 8 };
   expect(node.layout).toMatchObject({
-    padding: { top: ref, right: ref, bottom: ref, left: { variable: { id: "VariableID:3:1" } } },
+    padding: {
+      top: ref,
+      right: ref,
+      bottom: ref,
+      left: { variable: { id: "VariableID:3:1" }, value: 8 },
+    },
     // A bound gap is emitted even where a literal 0 would be omitted.
-    gap: ref,
+    gap: { variable: space, value: 0 },
   });
-  expect(node.borderRadius).toEqual(ref);
+  expect(node.borderRadius).toEqual({ variable: space, value: 4 });
 });
 
 test("a text style keeps only the words it can't cover; runs differ from the base by binding", async () => {
@@ -103,12 +109,15 @@ test("a text style keeps only the words it can't cover; runs differ from the bas
   const styled = await wireNode(text({ text: { id: "S:text", name: "Heading" } }));
   expect(styled.textStyle).toEqual({
     style: { id: "S:text", name: "Heading" },
+    value: { fontFamily: "Inter", fontSize: 16 },
     textAlign: "center",
   });
 
   const bound = await wireNode(text());
-  expect(bound.textStyle).toMatchObject({ fontSize: { variable: { id: "VariableID:4:0" } } });
-  expect(bound.text).toEqual(["Hello ", ["world", { fontSize: { variable: size } }]]);
+  expect(bound.textStyle).toMatchObject({
+    fontSize: { variable: { id: "VariableID:4:0" }, value: 16 },
+  });
+  expect(bound.text).toEqual(["Hello ", ["world", { fontSize: { variable: size, value: 20 } }]]);
 });
 
 test("a root's bound fixed axis reads as its variable, not as the contextual word", async () => {
@@ -122,6 +131,6 @@ test("a root's bound fixed axis reads as its variable, not as the contextual wor
     layoutSizingVertical: "FIXED",
     boundVariables: { width: space },
   });
-  expect(root.width).toEqual({ variable: space });
+  expect(root.width).toEqual({ variable: space, value: 100 });
   expect(root.height).toBe("contextual");
 });

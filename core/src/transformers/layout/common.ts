@@ -26,9 +26,9 @@ export interface SimplifiedLayout {
    * CSS shorthand when nothing is bound. A bound single value is its reference; a two-value gap with
    * any binding splits into `{ row, column }`. Grid gaps never carry a binding (REST can't see one).
    */
-  gap?: string | VariableReference | { row: BindableNumber; column: BindableNumber };
+  gap?: string | VariableReference<number> | { row: BindableNumber; column: BindableNumber };
   /** CSS shorthand when nothing is bound; one variable on all sides is its reference; else per side. */
-  padding?: string | VariableReference | BoundSides;
+  padding?: string | VariableReference<number> | BoundSides;
   gridTemplateColumns?: string;
   gridTemplateRows?: string;
   gridColumn?: string;
@@ -85,8 +85,8 @@ export interface NodeGeometry {
   minHeight?: BindableNumber;
   maxHeight?: BindableNumber;
   /** A bound size reads as its reference only where a fixed number would be emitted. */
-  width?: SimplifiedDimension | VariableReference;
-  height?: SimplifiedDimension | VariableReference;
+  width?: SimplifiedDimension | VariableReference<number>;
+  height?: SimplifiedDimension | VariableReference<number>;
   // The size the requested root was designed at, surfaced as a non-binding
   // reference (not a hard width/height) on every axis whose sizing leaned on the
   // parent the read dropped: "contextual" (it fills whatever it's placed in) and

@@ -26,15 +26,15 @@ import { foldPaintStack, type SimplifiedFill } from "./style.js";
  */
 export type SimplifiedTextStyle = Partial<{
   // The seven variable-bindable words may each be a `{ variable }` in place of the literal.
-  fontFamily: string | VariableReference;
-  fontWeight: number | VariableReference;
-  fontSize: number | VariableReference;
+  fontFamily: string | VariableReference<string>;
+  fontWeight: number | VariableReference<number>;
+  fontSize: number | VariableReference<number>;
   fontStyle: "italic" | "normal";
   // The Figma-named variant ("Bold Italic", "Condensed") — informational.
   // Renamed from the wire's `fontStyle`, which collided with the CSS meaning.
   fontVariantName: string;
-  lineHeight: string | VariableReference;
-  letterSpacing: string | VariableReference;
+  lineHeight: string | VariableReference<string>;
+  letterSpacing: string | VariableReference<string>;
   // "left" is the omitted default on the base; run deltas may carry it as an
   // inverse override.
   textAlign: "left" | "center" | "right" | "justify";
@@ -48,8 +48,8 @@ export type SimplifiedTextStyle = Partial<{
   // Only non-zero flags are emitted; defaults stay out of the value so two nodes
   // that differ only in default flag values still dedupe.
   opentypeFlags: Record<string, number>;
-  paragraphSpacing: number | VariableReference;
-  paragraphIndent: number | VariableReference;
+  paragraphSpacing: number | VariableReference<number>;
+  paragraphIndent: number | VariableReference<number>;
   listSpacing: number;
   // Per-run text color override — run deltas only, never the base (a TEXT
   // node's `fill` carries base color like every other node). An array only for
@@ -64,7 +64,7 @@ const STYLE_RESIDUAL_WORDS = ["textAlign", "textAlignVertical", "hyperlink"] as 
  * A node's uniform text style: the reference plus only the words a style doesn't cover. Per-run
  * text styles are out of scope — a mixed text style reads as no style, its runs as plain deltas.
  */
-export type StyledTextStyle = StyleReference &
+export type StyledTextStyle = StyleReference<SimplifiedTextStyle> &
   Pick<SimplifiedTextStyle, (typeof STYLE_RESIDUAL_WORDS)[number]>;
 
 /**
@@ -82,19 +82,45 @@ const TEXT_VARIABLE_FIELDS: ReadonlyArray<SnapshotTextVariableField> = [
 ];
 
 /**
- * Swap in a reference for each bound field. Against a base (a run delta), only bindings that
- * differ from the base's emit; a field the base binds and the run doesn't is left to its literal
- * delta, since a producer may list only the run's own bindings.
+ * Swap in a reference for each bound field, valued from `style` (the effective style, so a run's
+ * reference carries the value its delta may have omitted as equal to the base). Against a base (a
+ * run delta), only bindings that differ from the base's emit; a field the base binds and the run
+ * doesn't is left to its literal delta, since a producer may list only the run's own bindings.
  */
 function bindTextVariables(
   out: SimplifiedTextStyle,
+  style: SnapshotTextStyle,
   bound: SnapshotTextVariables | undefined,
   base?: SnapshotTextVariables,
 ): void {
   if (!bound) return;
   for (const field of TEXT_VARIABLE_FIELDS) {
     const ref = bound[field];
-    if (ref && ref.id !== base?.[field]?.id) out[field] = variableReference(ref);
+    if (ref && ref.id !== base?.[field]?.id)
+      (out as Record<SnapshotTextVariableField, unknown>)[field] = variableReference(
+        ref,
+        textVariableValue(style, field),
+      );
+  }
+}
+
+/**
+ * A bindable field's literal in its read spelling. Unlike the unbound words, a zero still has a
+ * value: the binding is what made the field worth emitting.
+ */
+function textVariableValue(
+  style: SnapshotTextStyle,
+  field: SnapshotTextVariableField,
+): string | number | undefined {
+  switch (field) {
+    case "lineHeight":
+      return formatLineHeight(style, style.fontSize);
+    case "letterSpacing":
+      return style.letterSpacing !== undefined && style.fontSize
+        ? `${emRound(style.letterSpacing / style.fontSize)}em`
+        : undefined;
+    default:
+      return style[field];
   }
 }
 
@@ -193,7 +219,14 @@ export function extractTextStyle(
   const literal = simplifyLiteralTextStyle(n.text.style);
   const styleRef = n.styles?.text;
   if (!styleRef) return literal;
-  const styled: StyledTextStyle = styleReference(styleRef);
+  // The value is the style's literal: bindings under it are the style's own business (designTokens
+  // lists them), and the residual words ride beside it rather than inside.
+  const value = simplifyLiteralTextStyle({ ...n.text.style, boundVariables: undefined });
+  for (const word of STYLE_RESIDUAL_WORDS) delete value?.[word];
+  const styled: StyledTextStyle = styleReference(
+    styleRef,
+    value && Object.keys(value).length ? value : undefined,
+  );
   for (const word of STYLE_RESIDUAL_WORDS) {
     if (literal?.[word] !== undefined) Object.assign(styled, { [word]: literal[word] });
   }
@@ -243,7 +276,7 @@ export function simplifyLiteralTextStyle(
   if (style.listSpacing && style.listSpacing > 0) {
     textStyle.listSpacing = style.listSpacing;
   }
-  bindTextVariables(textStyle, style.boundVariables);
+  bindTextVariables(textStyle, style, style.boundVariables);
 
   return Object.keys(textStyle).length ? textStyle : undefined;
 }
@@ -718,7 +751,12 @@ function classifyRun(
     }
   }
 
-  bindTextVariables(refDelta, delta.boundVariables, baseStyle.boundVariables);
+  bindTextVariables(
+    refDelta,
+    { ...baseStyle, ...delta },
+    delta.boundVariables,
+    baseStyle.boundVariables,
+  );
 
   if (Object.keys(refDelta).length > 0) c.refDelta = refDelta;
   return c;
