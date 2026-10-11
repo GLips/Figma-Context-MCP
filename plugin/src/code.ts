@@ -246,11 +246,11 @@ function isApproved(key: ConnKey): boolean {
  * which is explicitly out of scope for v1 (consent stays the real gate) — see the plan's "Left
  * open". Because an attacker who defeats this has already observed the value, generator strength
  * is moot; Math.random (no crypto in Figma's QuickJS sandbox) suffices to stop blind guessing.
- */
  *
  * Session claims come from here too, and those reach UNAPPROVED servers, so a local process can draw
  * generator output on demand. That still buys nothing new: any local process can dial a real server
  * and read its token or claim straight from SESSION_INFO, the residual above.
+ */
 function mintToken(): string {
   return (
     Math.random().toString(36).slice(2) +
