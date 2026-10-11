@@ -47,7 +47,7 @@ try {
       layout: { mode: "column", padding: 8 } });
     const live = await figma.getNodeByIdAsync(root.id);
     const [source, destination] = (inherited ? live.children[0] : live).children;
-    return { source: source.id, destination: destination.id, frame: frame.id, subject: source.children[0].id };
+    return { source: source.id, sourceNode: source, destination: destination.id, frame: frame.id, subject: source.children[0].id };
   }
   async function readable(id) {
     try { const read = await flcm.get(flcm.id(id)); return read.node.type === "INSTANCE"; } catch (e) { return false; }
@@ -88,7 +88,8 @@ try {
     // Raw code can still create the zombie; flcm reads must survive it and name it.
     const f = await fixture(true);
     const frame = await figma.getNodeByIdAsync(f.frame);
-    frame.appendChild((await figma.getNodeByIdAsync(f.source)).children[0]);
+    // Walked to, not looked up: getNodeByIdAsync on a compound slot id can stall Figma's loader.
+    frame.appendChild(f.sourceNode.children[0]);
     let found, error;
     try { found = await flcm.find({ within: { id: wrapper.id }, type: "INSTANCE" }); } catch (e) { error = String(e.message || e); }
     record("find beside an unreadable node", "returns without throwing", { pass: !error, detail: error ?? { hits: found.length } });
