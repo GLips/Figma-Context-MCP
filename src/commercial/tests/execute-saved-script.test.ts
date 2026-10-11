@@ -31,15 +31,13 @@ afterEach(async () => {
   await rm(outer, { recursive: true, force: true });
 });
 
-function connectedServer(
-  reply: Record<string, unknown> = { result: "ran", console: [], errors: null },
-) {
+function connectedServer() {
   const request = vi
     .fn()
     .mockImplementation(async (payload: BridgeRequest) =>
       payload.type === "APPROVAL_STATUS"
         ? { type: "APPROVAL_GRANTED" }
-        : { ...reply, documentChanged: false },
+        : { result: "ran", console: [], errors: null, documentChanged: false },
     );
   const bridge = {
     request,
@@ -86,7 +84,8 @@ describe("figma_execute_code with scriptPath", () => {
       const reply = await call({ scriptPath: "scripts/card.js" });
 
       expect(reply.isError).toBeFalsy();
-      expect(reply.text).toBe("result: ran\nconsole: []\nerrors: null\n");
+      // Compact, with no pretty-printing indentation.
+      expect(reply.text).toBe('{"result":"ran","console":[],"errors":null}');
       expect(submitted()).toEqual([
         expect.objectContaining({ type: "EXECUTE_CODE", code: "return 'from file';\n" }),
       ]);
@@ -137,38 +136,6 @@ describe("figma_execute_code with scriptPath", () => {
       expect(both.isError).toBeFalsy();
       expect(both.text).toContain("got both");
       expect(submitted()).toEqual([]);
-    } finally {
-      await close();
-    }
-  });
-});
-
-describe("figma_execute_code reply", () => {
-  it("is written in the read tools' notation, not pretty-printed JSON", async () => {
-    const { call, close } = connectedServer({
-      result: { node: { id: "1:2", name: "Card", children: [{ id: "1:3", width: "fill" }] } },
-      console: ["built 1:2"],
-      errors: "Error: boom\n  at render",
-    });
-    try {
-      const reply = await call({ code: "return 1" });
-      expect(reply.text).toBe(
-        [
-          "result:",
-          "  node:",
-          "    id: 1:2",
-          "    name: Card",
-          "    children:",
-          "      - id: 1:3",
-          "        width: fill",
-          "console:",
-          "  - built 1:2",
-          "errors: |-",
-          "  Error: boom",
-          "    at render",
-          "",
-        ].join("\n"),
-      );
     } finally {
       await close();
     }

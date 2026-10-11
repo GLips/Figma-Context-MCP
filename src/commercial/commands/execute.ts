@@ -21,6 +21,7 @@ import {
   pluginDisconnectedAction,
 } from "~/commercial/plugin-bridge/blocked-call-guidance.js";
 import { buildQuickStart } from "~/commercial/tools/flcm-docs/reference.js";
+import { withoutTokenMarks } from "~/commercial/tools/token-tree.js";
 import { CLI_DOCS_CHANNEL } from "~/commercial/tools/flcm-docs/channels.js";
 import { buildCommandHelp } from "~/utils/cli-help.js";
 
@@ -188,7 +189,7 @@ export async function runExecute(flags: ExecuteFlags, positionals: string[]): Pr
       throw new Error(`The script did not run. ${approvalPendingRerunAction(waitMs)}`);
     }
     try {
-      const reply = outcome.reply;
+      const reply = withoutTokenMarks(outcome.reply);
       const json = JSON.stringify(reply, null, 2) + "\n";
       process.stdout.write(json);
       if (flags.output) await writeFile(flags.output, json);

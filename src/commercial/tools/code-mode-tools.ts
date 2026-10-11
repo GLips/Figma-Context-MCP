@@ -31,7 +31,7 @@ import {
 } from "./flcm-docs/reference.js";
 import { MCP_DOCS_CHANNEL } from "./flcm-docs/channels.js";
 import { CLI_NAME } from "~/utils/cli-help.js";
-import { dumpYaml } from "~/utils/yaml-dump.js";
+import { formatExecuteCodeReply } from "./token-tree.js";
 
 // The figma_execute_code description is the GENERATED quick-start (buildQuickStart), assembled from
 // the schema single-source + narrative — so the agent-facing contract can't drift from the code
@@ -170,10 +170,7 @@ export function registerCodeModeTools(
         if (outcome.kind === "refused")
           return { content: [{ type: "text", text: outcome.message }], isError: true };
         if (outcome.kind === "pending") return gateResult({ type: "PENDING_APPROVAL" })!;
-        // The read tools' tree format writes every non-node block (STYLES, COMPONENTS…) with dumpYaml, so
-        // the reply uses it too: one notation everywhere, and no indentation-heavy pretty JSON. The tree's
-        // node lines aren't reused: they only spell the SimplifiedNode fields a design read carries.
-        return { content: [{ type: "text", text: dumpYaml(outcome.reply) }] };
+        return { content: [{ type: "text", text: formatExecuteCodeReply(outcome.reply) }] };
       },
     ),
 

@@ -4,9 +4,10 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createFigmaMock } from "../../harness/figma-mock.mjs";
+import { createFigmaMock, seedVariables, seedStyle } from "../../harness/figma-mock.mjs";
 import { createReadEgress, safeSerialize } from "../serialize.js";
 import * as flcm from "./runtime.js";
+import { TOKEN_ENTRY_MARK } from "./token-mark.js";
 
 function setup() {
   const figma = createFigmaMock();
@@ -139,4 +140,29 @@ test("warnings are stripped from placement specs and edit deltas", async () => {
   assert.equal(edited.warnings, undefined);
   assert.equal((await figma.getNodeByIdAsync(r.id)).opacity, 0.5);
   assert.equal(wire(edited).warnings, undefined);
+});
+
+test("designTokens entries leave the run marked by identity, wherever they're returned, and stay plain in the script", async () => {
+  const { wire } = setup();
+  seedVariables({
+    collection: "Brand",
+    modes: ["Light"],
+    variables: [
+      { name: "color/brand", type: "COLOR", values: { Light: { r: 0, g: 0, b: 0, a: 1 } } },
+      { name: "space/md", type: "FLOAT", values: { Light: 12 } },
+    ],
+  });
+  seedStyle({ type: "PAINT", name: "Surface", paints: [{ type: "SOLID", color: { r: 1, g: 1, b: 1 }, opacity: 1, visible: true, blendMode: "NORMAL" }] });
+  const tokens = await flcm.designTokens();
+  const [brand, space] = tokens.variables;
+  assert.equal(TOKEN_ENTRY_MARK in brand, false);
+
+  const out = wire({ all: tokens, kept: tokens.variables.filter((v) => v === space), found: brand, copy: { ...brand } });
+  assert.deepEqual(out.all.variables.map((v: any) => v[TOKEN_ENTRY_MARK]), ["variable", "variable"]);
+  assert.equal(out.all.styles[0][TOKEN_ENTRY_MARK], "style");
+  assert.equal(out.kept[0][TOKEN_ENTRY_MARK], "variable");
+  assert.equal(out.found[TOKEN_ENTRY_MARK], "variable");
+  // A copy the agent built is its own data, even though it looks exactly like an entry.
+  assert.equal(TOKEN_ENTRY_MARK in out.copy, false);
+  assert.deepEqual(out.copy, brand);
 });

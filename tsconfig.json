@@ -15,7 +15,8 @@
       "@framelink/core/internal": ["./core/src/internal.ts"],
       "@framelink/plugin/schema": ["./plugin/src/preamble/schema.ts"],
       "@framelink/plugin/node-to-snapshot": ["./plugin/src/preamble/node-to-snapshot.ts"],
-      "@framelink/plugin/server-deadline": ["./plugin/src/preamble/server-deadline.ts"]
+      "@framelink/plugin/server-deadline": ["./plugin/src/preamble/server-deadline.ts"],
+      "@framelink/plugin/token-mark": ["./plugin/src/preamble/token-mark.ts"]
     },
 
     "target": "ES2022",

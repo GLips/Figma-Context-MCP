@@ -505,7 +505,7 @@ export function buildQuickStart(channel: DocsChannel): string {
   const verbLines = quickStartVerbLines();
   const quickStart = `Execute JavaScript in Figma with \`flcm\`.
 
-EXECUTION: await/return directly; await every mutation. Not a transaction: each verb commits alone; after an error, inspect before retrying. Only session survives calls.${channel.savedScriptHowTo ? `\n\n${channel.savedScriptHowTo}` : ""}
+EXECUTION: await/return directly; await every mutation. Not a transaction: verbs commit alone; after an error, inspect before retrying. Only session survives calls.${channel.savedScriptHowTo ? `\n\n${channel.savedScriptHowTo}` : ""}
 
 AUTHOR:
   const t = { type:"FRAME", layout:{ mode:"column", gap:16 }, children:[{ type:"TEXT", text:"Hi" }] };
@@ -517,13 +517,13 @@ ${verbLines}
 
 MUST-KNOW
 - Store plain data; return ids for live nodes.
-- find predicates see the full read shape. Reads project at return/console: elided gives cut sizes in JSON characters. Survey session.last or fresh flcm.get(id); never rerun edits. Computed data stays whole.
-- Metrics take a number or "Npx"; width/height also take "N%", "fill", "hug". Colors/gradients/shadows are CSS strings.
+- find predicates see the full read shape. Reads project at return/console: elided = cut sizes in JSON chars. Survey session.last or flcm.get(id); never rerun edits. Computed data stays whole.
+- Metrics take a number or "Npx"; width/height also take "N%", "fill", "hug". Colors/gradients/shadows are CSS strings. Bind designTokens(), not literals.
 - Unsupported CSS fails loud.
 
 ${docsPointer(channel)}
 
-RETURNS { result, console, errors }: JSON-safe result, console lines, error string or null.`;
+RETURNS { result, console, errors }: JSON-safe result, console lines, error or null.`;
 
   const bytes = Buffer.byteLength(quickStart, "utf8");
   if (bytes > QUICKSTART_LIMIT_BYTES) {

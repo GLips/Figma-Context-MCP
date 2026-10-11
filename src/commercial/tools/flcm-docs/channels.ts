@@ -36,7 +36,7 @@ return session.card.id;
 { "nodeId": "12:345", "scale": 3 } // 3× resolution, for fine detail
 \`\`\``,
   commentsHowTo: "the `get_figma_comments` tool reads them, given the node's id in `scope`",
-  savedScriptHowTo: `LONG SCRIPT? Pass scriptPath to a .js file in the asset root; resend after each fix. Elsewhere, send code or run \`npx ${CLI_NAME} execute <file>\`.`,
+  savedScriptHowTo: `LONG SCRIPT? Pass scriptPath to a .js file in the asset root; resend after fixes. Elsewhere, send code or run \`npx ${CLI_NAME} execute <file>\`.`,
 };
 
 export const CLI_DOCS_CHANNEL: DocsChannel = {

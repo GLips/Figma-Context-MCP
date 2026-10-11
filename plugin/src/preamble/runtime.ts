@@ -14,8 +14,24 @@ import { edit } from "./edit.js";
 import { editMany } from "./edit-many.js";
 import { append, prepend, insertBefore, insertAfter, remove, clone, measure, replace } from "./structure.js";
 import { page } from "./page.js";
-import { designTokens } from "./design-tokens.js";
+import { designTokens as listDesignTokens } from "./design-tokens.js";
+import { registerRead } from "./host.js";
+import { TOKEN_ENTRY_MARK, type TokenEntryKind } from "./token-mark.js";
 import type { Flcm } from "./schema.js";
+
+// Each listed entry is registered by identity, so it leaves the run marked for the server's token
+// renderer wherever the agent returns it: whole, filtered, found or nested. A copy the agent built is
+// not registered and stays plain JSON.
+const designTokens = (async (from?: unknown) => {
+  // Every overload's listing has this shape; the cast spares re-deriving it from the overload set.
+  const listing = (await listDesignTokens(from as never)) as { variables: object[]; styles?: object[] };
+  const mark = (entries: object[] | undefined, kind: TokenEntryKind) => {
+    for (const entry of entries ?? []) registerRead(entry, () => ({ ...entry, [TOKEN_ENTRY_MARK]: kind }));
+  };
+  mark(listing.variables, "variable");
+  mark(listing.styles, "style");
+  return listing;
+}) as typeof listDesignTokens;
 
 export { detach, component, variants, render, gradient, image, effects, get, find, findOne, selection, id, edit, editMany, append, prepend, insertBefore, insertAfter, remove, clone, measure, replace, page, designTokens };
 
