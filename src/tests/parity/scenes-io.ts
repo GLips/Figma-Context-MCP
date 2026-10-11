@@ -30,6 +30,8 @@ import type {
  * A case without a fixture returns null and the producer skips it (the harness's documented
  * light-up-as-they-land contract).
  */
+import type { SceneTokenIds } from "./shared-subset.js";
+
 const SCENES_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "scenes");
 
 const MIXED_SENTINEL = "figma:mixed";
@@ -84,11 +86,36 @@ export function loadScene(name: string): LoadedScene | null {
   if (!existsSync(file)) return null;
   const fixture = JSON.parse(readFileSync(file, "utf8")) as SceneFixtureFile;
   const tables = { style: fixture.styles ?? {}, variable: fixture.variables ?? {} };
+  // The fixture's tables are everything its file can reach. Stricter than live, which tells kinds
+  // and tiers apart: here any shared name keeps the id, a superset of the cases live keeps it.
+  const shared = (table: Record<string, { name: string }>) => {
+    const names = Object.values(table).map((token) => token.name);
+    return new Set(names.filter((name, i) => names.indexOf(name) !== i));
+  };
+  const sharedNames = { style: shared(tables.style), variable: shared(tables.variable) };
   // Two passes: revive registers every node by id, then the main-component links resolve — a
   // fixture may name a component that appears after the instance referencing it.
   const byId = new Map<string, Record<string, unknown>>();
   return {
     roots: fixture.nodes.map((raw) => reviveNode(raw, byId, null)),
-    resolveToken: async (kind, id) => tables[kind][id] ?? null,
+    resolveToken: async (kind, id) => {
+      const token = tables[kind][id];
+      return token ? { ...token, nameSuffices: !sharedNames[kind].has(token.name) } : null;
+    },
+  };
+}
+
+/** The scene's token ids by name — how parity reads a reference the plugin spelled by bare name. */
+export function loadSceneTokenIds(name: string): SceneTokenIds {
+  const file = path.join(SCENES_DIR, `${name}.json`);
+  if (!existsSync(file)) return { variable: {}, style: {} };
+  const fixture = JSON.parse(readFileSync(file, "utf8")) as SceneFixtureFile;
+  return {
+    variable: Object.fromEntries(
+      Object.entries(fixture.variables ?? {}).map(([id, token]) => [token.name, id]),
+    ),
+    style: Object.fromEntries(
+      Object.entries(fixture.styles ?? {}).map(([id, token]) => [token.name, token.key ?? id]),
+    ),
   };
 }

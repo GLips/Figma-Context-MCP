@@ -379,7 +379,9 @@ function overrideIdentity(value: unknown, styles: Record<string, StyleValue>): s
     const isReference = "variable" in field || "style" in field;
     const out: Record<string, unknown> = {};
     for (const [key, inner] of Object.entries(field)) {
-      if (!(isReference && key === "value")) out[key] = comparable(inner);
+      if (isReference && key === "value") continue;
+      // A reference's identity may be a bare token name, which is never an interned-style key.
+      out[key] = isReference && (key === "variable" || key === "style") ? inner : comparable(inner);
     }
     return out;
   };

@@ -354,11 +354,13 @@ function ownOriginIn(node: SceneNodeLike, parentSpace: SceneParentSpace): Snapsh
  * `figma.variables.getVariableByIdAsync` on the live path; fixture tables in the parity harness).
  * Injected because these are the only lookups that aren't node-local, and this module can't touch
  * the `figma` global. A null resolution keeps the token, id only. A style also answers its `key`.
+ * `nameSuffices` says the write side resolves the name alone back to this token, so the read may
+ * drop the id.
  */
 export type SceneTokenResolver = (
   kind: "style" | "variable",
   id: string,
-) => Promise<{ name: string; key?: string } | null>;
+) => Promise<{ name: string; key?: string; nameSuffices?: boolean } | null>;
 
 /**
  * Plugin adapter: decode a live-shaped scene node (and its subtree) into the plan-neutral
@@ -1091,9 +1093,13 @@ async function decodeStyleSlots(
     // A style's KEY is its id in the read: REST knows a style only by key (its node-local styleId
     // is a REST-only number), and the write side resolves a key as well as a plugin `S:` id.
     const id = style?.key || styleId;
-    resolved[slot] = style?.name ? { id, name: style.name } : { id };
+    resolved[slot] = style?.name ? namedRef(id, style) : { id };
   }
   return Object.keys(resolved).length ? resolved : undefined;
+}
+
+function namedRef(id: string, token: { name: string; nameSuffices?: boolean }): SnapshotTokenRef {
+  return token.nameSuffices ? { id, name: token.name, nameSuffices: true } : { id, name: token.name };
 }
 
 function variableRef(alias: SceneVariableAlias | undefined): SnapshotTokenRef | undefined {
@@ -1174,6 +1180,6 @@ async function nameVariables(snapshot: NodeSnapshot, resolveToken: SceneTokenRes
   ];
   for (const ref of refs) {
     const variable = await resolveToken("variable", ref.id);
-    if (variable?.name) ref.name = variable.name;
+    if (variable?.name) Object.assign(ref, namedRef(ref.id, variable));
   }
 }

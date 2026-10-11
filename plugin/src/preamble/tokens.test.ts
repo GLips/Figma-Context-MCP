@@ -101,6 +101,8 @@ test("a read written back unchanged keeps its bindings", async () => {
       { name: "space/md", type: "FLOAT", values: { Default: 12 } },
     ],
   });
+  // A second color/primary makes that name ambiguous, so the read has to keep the bound one's id.
+  seedVariables({ collection: "Alt", variables: [{ name: "color/primary", type: "COLOR", values: { Default: { r: 0, g: 0, b: 1, a: 1 } } }] });
   const brand = seedStyle({ type: "PAINT", name: "Brand/Primary", paints: [{ type: "SOLID", color: BRAND_RED, opacity: 1 }] });
   const heading = seedStyle({
     type: "TEXT", name: "Heading/L", fontName: { family: "Inter", style: "Bold" }, fontSize: 32,
@@ -110,18 +112,19 @@ test("a read written back unchanged keeps its bindings", async () => {
   const parent = await flcm.render({
     type: "FRAME", width: { variable: "space/md" }, height: 100,
     children: [
-      { type: "FRAME", key: "chip", width: 40, height: 40, fill: { variable: "color/primary" }, layout: { mode: "row", padding: { variable: "space/md" } } },
+      { type: "FRAME", key: "chip", width: 40, height: 40, fill: { variable: primary.id }, layout: { mode: "row", padding: { variable: "space/md" } } },
       { type: "RECTANGLE", key: "swatch", width: 10, height: 10, fill: { style: "Brand/Primary" } },
       { type: "TEXT", key: "title", text: "Hi", textStyle: { style: "Heading/L", textAlign: "center" } },
     ],
   });
   const { node } = await flcm.get(parent);
-  // Every reference carries its literal; the write ignores it and binds by identity.
+  // A token is named alone when its name binds it, else by id too; every reference carries its
+  // literal, which the write ignores.
   const [chipRead, swatchRead, titleRead] = (node as any).children;
   assert.deepEqual(chipRead.fill, { variable: { id: primary.id, name: "color/primary" }, value: "#FF0000" });
-  assert.deepEqual(chipRead.layout.padding, { variable: { id: md.id, name: "space/md" }, value: 12 });
-  // The read names a style by its key, the id REST shares; writing that back must find the same style.
-  assert.deepEqual(swatchRead.fill, { style: { id: brand.key, name: "Brand/Primary" }, value: "#FF0000" });
+  assert.deepEqual(chipRead.layout.padding, { variable: "space/md", value: 12 });
+  assert.deepEqual(swatchRead.fill, { style: "Brand/Primary", value: "#FF0000" });
+  assert.equal(titleRead.textStyle.style, "Heading/L");
   assert.deepEqual(titleRead.textStyle.value, { fontFamily: "Inter", fontWeight: 700, fontSize: 32, fontVariantName: "Bold" });
   await flcm.render(node);
   const root = await figma.getNodeByIdAsync(parent.id);

@@ -5,22 +5,23 @@
 // design-tokens — flcm.designTokens(), the read that lists the variables and styles a write can bind,
 // so an agent builds with a file's tokens instead of retyping their literals.
 //
-// Summary first, because the two reaches cost very different amounts. The default call lists the
-// file's local tokens and every token a page of the file is already bound to (the only way a plugin
-// sees a library STYLE — the API has no list of a library's styles), and only CATALOGS the libraries
-// enabled for the file: name, collections, a count each. Listing a library's variables means
-// importing each one by key, since a library listing carries no values or id; on a real design system
-// that is hundreds of network imports, over ten seconds. So it is a second call, for one library at a
-// time: designTokens({ library, collection?, type? }).
+// Summary first, because a file's own tokens are few and the library tokens it reaches can be
+// thousands. The default call lists the file's LOCAL tokens in full and only COUNTS the rest: the
+// library tokens something in the file is bound to (by collection, and styles by type), and the
+// libraries enabled for the file. Each count is a call away: designTokens({ used: true, … }) for the
+// used ones — the only way a plugin sees a library STYLE, since the API has no list of a library's
+// styles — and designTokens({ library, … }) for an enabled library, which imports each variable by
+// key (a listing carries no values or id), hundreds of network imports on a real design system.
 //
 // Each entry's `reference` comes from the core's own reference builders, the ones the read emits
-// through, so a listed token and a read of a node bound to it can't spell the token differently.
+// through, and is named-only exactly when the read's would be — both ask the write side's
+// TokenLookups — so a listed token and a read of a node bound to it can't spell the token differently.
 //
 // Negative space: grid styles and variable types past the four classic ones (EASING, …) are skipped,
 // since flcm has no words to bind or spell them; so are variable bindings inside a style's gradient
 // stops or effects, which the read doesn't emit either.
 import { sceneFigma as figma } from "./scene-access.js";
-import { scanUsedTokens } from "./tokens.js";
+import { enabledLibraryListing, scanUsedTokens, TokenLookups } from "./tokens.js";
 import { warnings } from "./warnings.js";
 import { liveFontWords } from "./fonts.js";
 import { decodeSceneEffect, decodeScenePaints, decodeSegmentStyle, type SceneEffect, type ScenePaint, type SceneTextSegment } from "./node-to-snapshot.js";
@@ -28,19 +29,24 @@ import {
   foldPaintStack, formatSolidColor, pixelRound, simplifyEffectStack, simplifyLiteralTextStyle,
   styleReference, variableReference,
 } from "@framelink/core";
+import type { SnapshotTokenRef } from "@framelink/core/snapshot";
 import type {
-  DesignTokenLibrary, DesignTokenLibraryQuery, DesignTokens, DesignTokenStyle, DesignTokenVariable, DesignTokenVariableValue,
-  LibraryDesignTokens,
+  DesignTokenLibrary, DesignTokenLibraryQuery, DesignTokens, DesignTokensUsed, DesignTokenStyle, DesignTokenUsedCollection,
+  DesignTokenUsedQuery, DesignTokenVariable, DesignTokenVariableValue, LibraryDesignTokens, UsedDesignTokens,
 } from "./ir.js";
 
 type ListedStyle = PaintStyle | EffectStyle | TextStyle;
 type ListedVariable = Variable & { resolvedType: DesignTokenVariable["type"] };
 const LISTED_VARIABLE_TYPES: ReadonlySet<string> = new Set(["COLOR", "FLOAT", "STRING", "BOOLEAN"] satisfies DesignTokenVariable["type"][]);
+const LISTED_STYLE_TYPES: ReadonlySet<string> = new Set(["PAINT", "EFFECT", "TEXT"] satisfies DesignTokenStyle["type"][]);
 
 export async function designTokens(): Promise<DesignTokens>;
+export async function designTokens(from: DesignTokenUsedQuery): Promise<UsedDesignTokens>;
 export async function designTokens(from: DesignTokenLibraryQuery): Promise<LibraryDesignTokens>;
-export async function designTokens(from?: unknown): Promise<DesignTokens | LibraryDesignTokens> {
-  return from === undefined ? fileTokens() : libraryTokens(parseLibraryQuery(from));
+export async function designTokens(from?: unknown): Promise<DesignTokens | UsedDesignTokens | LibraryDesignTokens> {
+  if (from === undefined) return fileTokens();
+  const query = parseTokenQuery(from);
+  return "used" in query ? usedTokens(query) : libraryTokens(query);
 }
 
 async function fileTokens(): Promise<DesignTokens> {
@@ -50,25 +56,80 @@ async function fileTokens(): Promise<DesignTokens> {
     ...(await figma.getLocalEffectStylesAsync()),
     ...(await figma.getLocalTextStylesAsync()),
   ];
-  // Every page, not just the current one: an agent on a fresh page still builds with the tokens the
-  // rest of the file uses.
+  const lookups = new TokenLookups();
+  const describe = new VariableDescriber(listable(localVariables), lookups);
+  const catalog = await libraryCatalog();
+  return {
+    variables: await describe.all(),
+    styles: await Promise.all(listableStyles(localStyles).map((s) => describeStyle(s, describe, lookups))),
+    used: await countUsed(await usedLibraryTokens(), catalog.libraryOf),
+    libraries: catalog.libraries,
+  };
+}
+
+// Every page, not just the current one: an agent on a fresh page still builds with the tokens the
+// rest of the file uses. Local tokens are left out — the default call lists every one of them.
+async function usedLibraryTokens(): Promise<{ variables: ListedVariable[]; styles: ListedStyle[] }> {
   const pages = figma.root.children;
   for (const page of pages) await page.loadAsync();
   const used = await scanUsedTokens(pages);
-
-  const variables = uniqueBy([...localVariables, ...used.variables], (v) => v.id);
-  const styles = uniqueBy([...localStyles, ...used.styles], (s) => s.id)
-    .filter((s): s is ListedStyle => s.type === "PAINT" || s.type === "EFFECT" || s.type === "TEXT");
-  const describe = new VariableDescriber(listable(variables));
   return {
-    variables: await describe.all(),
-    styles: await Promise.all(styles.map((s) => describeStyle(s, describe))),
-    libraries: await libraryCatalog(),
+    variables: listable(uniqueBy(used.variables, (v) => v.id).filter((v) => v.remote)),
+    styles: listableStyles(uniqueBy(used.styles, (s) => s.id).filter((s) => s.remote)),
   };
+}
+
+async function countUsed(used: { variables: ListedVariable[]; styles: ListedStyle[] }, libraryOf: ReadonlyMap<string, string>): Promise<DesignTokensUsed> {
+  const names = new Map<string, Promise<string>>();
+  const collectionName = (id: string) => {
+    if (!names.has(id)) names.set(id, figma.variables.getVariableCollectionByIdAsync(id).then((c) => (c ? c.name : id)));
+    return names.get(id)!;
+  };
+  // Keyed by what an entry shows, not by collection id: same-named collections of unknown libraries
+  // can't be told apart, and a { used, collection } load takes them together, so they count together.
+  const counted = new Map<string, DesignTokenUsedCollection>();
+  for (const v of used.variables) {
+    const name = await collectionName(v.variableCollectionId);
+    const library = libraryOf.get(v.key);
+    const key = JSON.stringify([name, library]);
+    const entry = counted.get(key);
+    if (entry) entry.variables++;
+    else counted.set(key, library === undefined ? { name, variables: 1 } : { name, library, variables: 1 });
+  }
+  const collections = [...counted.values()];
+  const styles = new Map<DesignTokenStyle["type"], number>();
+  for (const s of used.styles) styles.set(s.type, (styles.get(s.type) ?? 0) + 1);
+  return { collections, styles: [...styles].map(([type, count]) => ({ type, styles: count })) };
+}
+
+async function usedTokens(query: DesignTokenUsedQuery): Promise<UsedDesignTokens> {
+  const used = await usedLibraryTokens();
+  const lookups = new TokenLookups();
+  let variables = query.type === undefined || LISTED_VARIABLE_TYPES.has(query.type) ? used.variables : [];
+  let styles = query.collection === undefined && (query.type === undefined || LISTED_STYLE_TYPES.has(query.type)) ? used.styles : [];
+  if (query.type !== undefined) variables = variables.filter((v) => v.resolvedType === query.type);
+  if (query.type !== undefined) styles = styles.filter((s) => s.type === query.type);
+  if (query.collection !== undefined) {
+    const named = await Promise.all(variables.map(async (v) => (await figma.variables.getVariableCollectionByIdAsync(v.variableCollectionId))?.name));
+    const inCollection = variables.filter((_, i) => named[i] === query.collection);
+    if (!inCollection.length) {
+      const names = [...new Set(named.filter((n): n is string => n !== undefined))];
+      throw new Error("flcm.designTokens: no used library variable" + (query.type === undefined ? "" : " of type " + query.type) +
+        " is in a collection named " + JSON.stringify(query.collection) + ". " +
+        (names.length ? "Used collections: " + names.map((n) => JSON.stringify(n)).join(", ") + "." : "The file uses no library variables" + (query.type === undefined ? "" : " of that type") + "."));
+    }
+    variables = inCollection;
+  }
+  const describe = new VariableDescriber(variables, lookups, (await libraryCatalog()).libraryOf);
+  return { variables: await describe.all(), styles: await Promise.all(styles.map((s) => describeStyle(s, describe, lookups))) };
 }
 
 function listable(variables: readonly Variable[]): ListedVariable[] {
   return variables.filter((v): v is ListedVariable => LISTED_VARIABLE_TYPES.has(v.resolvedType));
+}
+
+function listableStyles(styles: readonly BaseStyle[]): ListedStyle[] {
+  return styles.filter((s): s is ListedStyle => LISTED_STYLE_TYPES.has(s.type));
 }
 
 function uniqueBy<T>(items: readonly T[], key: (item: T) => string): T[] {
@@ -77,86 +138,86 @@ function uniqueBy<T>(items: readonly T[], key: (item: T) => string): T[] {
 }
 
 const LIBRARY_QUERY_KEYS: ReadonlySet<string> = new Set(["library", "collection", "type"]);
+const USED_QUERY_KEYS: ReadonlySet<string> = new Set(["used", "collection", "type"]);
 
 // Hand-rolled: the preamble is zod-free. Fails loud on anything it doesn't know, like every flcm verb.
-function parseLibraryQuery(from: unknown): DesignTokenLibraryQuery {
-  const usage = "flcm.designTokens: pass nothing for the file's tokens, or { library, collection?, type? } to load one enabled library's variables";
+function parseTokenQuery(from: unknown): DesignTokenUsedQuery | DesignTokenLibraryQuery {
+  const usage = "flcm.designTokens: pass nothing for the file's own tokens, { used: true, collection?, type? } for the library tokens it uses, " +
+    "or { library, collection?, type? } to load one enabled library's variables";
   if (typeof from !== "object" || from === null || Array.isArray(from)) throw new Error(usage + ".");
   const query = from as Record<string, unknown>;
-  const unknown = Object.keys(query).filter((k) => !LIBRARY_QUERY_KEYS.has(k));
+  const used = "used" in query;
+  if (used && query.used !== true) throw new Error(usage + "; used must be true.");
+  if (used && "library" in query) throw new Error(usage + "; used and library are two different loads — pass one.");
+  const known = used ? USED_QUERY_KEYS : LIBRARY_QUERY_KEYS;
+  const unknown = Object.keys(query).filter((k) => !known.has(k));
   if (unknown.length) throw new Error(usage + "; unknown key " + unknown.map((k) => JSON.stringify(k)).join(", ") + ".");
-  if (typeof query.library !== "string") throw new Error(usage + "; library must be the library's name, as the default call's libraries list it.");
+  if (!used && typeof query.library !== "string") throw new Error(usage + "; library must be the library's name, as the default call's libraries list it.");
   if (query.collection !== undefined && typeof query.collection !== "string") throw new Error(usage + "; collection must be a collection name.");
-  if (query.type !== undefined && !LISTED_VARIABLE_TYPES.has(query.type as string)) {
-    throw new Error(usage + "; type must be one of " + [...LISTED_VARIABLE_TYPES].join(", ") + ".");
+  const types = used ? [...LISTED_VARIABLE_TYPES, ...LISTED_STYLE_TYPES] : [...LISTED_VARIABLE_TYPES];
+  if (query.type !== undefined && !types.includes(query.type as string)) throw new Error(usage + "; type must be one of " + types.join(", ") + ".");
+  if (used && query.collection !== undefined && LISTED_STYLE_TYPES.has(query.type as string)) {
+    throw new Error(usage + "; a collection holds variables, so it can't be narrowed to a style type.");
   }
-  return query as unknown as DesignTokenLibraryQuery;
+  return query as unknown as DesignTokenUsedQuery | DesignTokenLibraryQuery;
 }
 
 const NO_TEAMLIBRARY = "this copy of the plugin lacks the teamlibrary permission. Re-import the plugin from its manifest to reach enabled libraries.";
 
-// A plugin imported before the manifest granted `teamlibrary` still runs a newer server's preamble
-// (ADR-0010), and Figma refuses the whole namespace there. Null means exactly that refusal.
-async function enabledCollections(): Promise<LibraryVariableCollection[] | null> {
-  try {
-    return await figma.teamLibrary.getAvailableLibraryVariableCollectionsAsync();
-  } catch (error) {
-    if (!/teamlibrary/i.test(String(error))) throw error;
-    return null;
-  }
+/** The run's listing of enabled collections with variables (or null without the permission), warning once about any unreadable one. */
+async function listedLibraries(): Promise<{ collection: LibraryVariableCollection; variables: LibraryVariable[] }[] | null> {
+  const listing = await enabledLibraryListing();
+  if (!listing) return null;
+  const skipped = listing.filter((c) => !c.variables).map(({ collection: c }) => JSON.stringify(c.libraryName + " / " + c.name));
+  if (skipped.length) warnings.add({ id: null, message: "flcm.designTokens: some library collections could not be read and are left out: " + skipped.join(", ") + "." });
+  return listing.flatMap(({ collection, variables }) => (variables?.length ? [{ collection, variables }] : []));
 }
 
 // The catalog degrades rather than failing the read: the file's own tokens are already in hand, and a
 // library is the one reach that rides the network. A collection the user can't open drops out with a
 // warning naming it; an empty one drops out silently, since there is nothing in it to load.
-async function libraryCatalog(): Promise<DesignTokenLibrary[]> {
-  const collections = await enabledCollections();
-  if (!collections) {
+// `libraryOf` maps each listed variable's key to its library's name — the one way to tell which
+// enabled library a used remote variable came from.
+async function libraryCatalog(): Promise<{ libraries: DesignTokenLibrary[]; libraryOf: Map<string, string> }> {
+  const libraryOf = new Map<string, string>();
+  const listed = await listedLibraries();
+  if (!listed) {
     warnings.add({ id: null, message: "flcm.designTokens: enabled libraries are not listed, because " + NO_TEAMLIBRARY });
-    return [];
+    return { libraries: [], libraryOf };
   }
-  const listed = await listCollections(collections);
   const libraries = new Map<string, DesignTokenLibrary>();
-  collections.forEach((c, i) => {
-    const variables = listed[i];
-    if (!variables?.length) return;
+  for (const { collection: c, variables } of listed) {
+    for (const v of variables) libraryOf.set(v.key, c.libraryName);
     let library = libraries.get(c.libraryName);
     if (!library) libraries.set(c.libraryName, library = { name: c.libraryName, collections: [] });
     library.collections.push({ name: c.name, variables: variables.length });
-  });
-  return [...libraries.values()];
-}
-
-/** Each collection's variable listing, or null for one that couldn't be read (warned once, together). */
-async function listCollections(collections: readonly LibraryVariableCollection[]): Promise<(LibraryVariable[] | null)[]> {
-  const results = await Promise.all(collections.map((c) => settle(figma.teamLibrary.getVariablesInLibraryCollectionAsync(c.key))));
-  const skipped = collections.filter((_, i) => !results[i].ok).map((c) => JSON.stringify(c.libraryName + " / " + c.name));
-  if (skipped.length) warnings.add({ id: null, message: "flcm.designTokens: some library collections could not be read and are left out: " + skipped.join(", ") + "." });
-  return results.map((r) => (r.ok ? r.value : null));
+  }
+  return { libraries: [...libraries.values()], libraryOf };
 }
 
 async function libraryTokens(query: DesignTokenLibraryQuery): Promise<LibraryDesignTokens> {
-  const collections = await enabledCollections();
-  if (!collections) throw new Error("flcm.designTokens: no library can be loaded, because " + NO_TEAMLIBRARY);
-  const inLibrary = collections.filter((c) => c.libraryName === query.library);
+  const listed = await listedLibraries();
+  if (!listed) throw new Error("flcm.designTokens: no library can be loaded, because " + NO_TEAMLIBRARY);
+  const inLibrary = listed.filter(({ collection: c }) => c.libraryName === query.library);
   if (!inLibrary.length) {
-    const names = [...new Set(collections.map((c) => c.libraryName))];
+    const names = [...new Set(listed.map(({ collection: c }) => c.libraryName))];
     throw new Error("flcm.designTokens: no enabled library with variables is named " + JSON.stringify(query.library) + ". " +
       (names.length ? "Enabled: " + names.map((n) => JSON.stringify(n)).join(", ") + "." : "This file has none enabled."));
   }
-  const chosen = query.collection === undefined ? inLibrary : inLibrary.filter((c) => c.name === query.collection);
+  const chosen = query.collection === undefined ? inLibrary : inLibrary.filter(({ collection: c }) => c.name === query.collection);
   if (!chosen.length) {
     throw new Error("flcm.designTokens: " + JSON.stringify(query.library) + " has no collection named " + JSON.stringify(query.collection) +
-      ". Its collections: " + inLibrary.map((c) => JSON.stringify(c.name)).join(", ") + ".");
+      ". Its collections: " + inLibrary.map(({ collection: c }) => JSON.stringify(c.name)).join(", ") + ".");
   }
   // The type filter runs on the listing, before any import, which is what makes it worth having.
-  const listed = (await listCollections(chosen)).flatMap((variables) => variables ?? [])
+  const wanted = chosen.flatMap(({ variables }) => variables)
     .filter((v) => query.type === undefined ? LISTED_VARIABLE_TYPES.has(v.resolvedType) : v.resolvedType === query.type);
-  const imported = await settleInBatches(listed, (v) => figma.variables.importVariableByKeyAsync(v.key));
+  const imported = await settleInBatches(wanted, (v) => figma.variables.importVariableByKeyAsync(v.key));
   const failed = imported.filter((r) => !r.ok).length;
-  if (failed) warnings.add({ id: null, message: "flcm.designTokens: " + failed + " of " + listed.length + " variable imports from " + JSON.stringify(query.library) + " failed and are left out." });
+  if (failed) warnings.add({ id: null, message: "flcm.designTokens: " + failed + " of " + wanted.length + " variable imports from " + JSON.stringify(query.library) + " failed and are left out." });
   const variables = imported.flatMap((r) => (r.ok ? [r.value] : []));
-  return { variables: await new VariableDescriber(listable(variables)).all() };
+  const libraryOf = new Map(wanted.map((v) => [v.key, query.library]));
+  return { variables: await new VariableDescriber(listable(variables), new TokenLookups(), libraryOf).all() };
 }
 
 // Every import is a library request, and a design system can hold thousands of variables; a bounded
@@ -178,7 +239,12 @@ class VariableDescriber {
   private readonly byId: Map<string, Variable>;
   private readonly collections = new Map<string, Promise<VariableCollection | null>>();
 
-  constructor(private readonly variables: readonly ListedVariable[]) {
+  /** `libraryOf` names an entry's library by the variable's key, when it's in an enabled library. */
+  constructor(
+    private readonly variables: readonly ListedVariable[],
+    private readonly lookups: TokenLookups,
+    private readonly libraryOf: ReadonlyMap<string, string> = new Map(),
+  ) {
     this.byId = new Map(variables.map((v) => [v.id, v]));
   }
 
@@ -197,14 +263,15 @@ class VariableDescriber {
     return Promise.all(described.map(({ v, collection }) => this.describe(v, collection)));
   }
 
-  /** A ref the core will emit, named when the variable can be found. */
-  async ref(id: string): Promise<{ id: string; name?: string }> {
+  /** A ref the core will emit: named when the variable can be found, and by name alone when that binds it. */
+  async ref(id: string): Promise<SnapshotTokenRef> {
     let variable = this.byId.get(id);
     if (!variable) {
       const found = await figma.variables.getVariableByIdAsync(id);
       if (found) this.byId.set(id, variable = found);
     }
-    return variable ? { id, name: variable.name } : { id };
+    if (!variable) return { id };
+    return (await this.lookups.nameBindsVariable(variable)) ? { id, name: variable.name, nameSuffices: true } : { id, name: variable.name };
   }
 
   private collection(id: string): Promise<VariableCollection | null> {
@@ -221,8 +288,9 @@ class VariableDescriber {
       if (mode.modeId in v.valuesByMode) values[mode.name] = await this.value(v.valuesByMode[mode.modeId]);
     }
     const entry: DesignTokenVariable = {
-      reference: variableReference({ id: v.id, name: v.name }),
+      reference: variableReference(await this.ref(v.id)),
       collection: collection ? collection.name : v.variableCollectionId,
+      ...(this.libraryOf.has(v.key) ? { library: this.libraryOf.get(v.key)! } : {}),
       type: v.resolvedType,
       values,
     };
@@ -240,10 +308,11 @@ class VariableDescriber {
   }
 }
 
-async function describeStyle(style: ListedStyle, variables: VariableDescriber): Promise<DesignTokenStyle> {
+async function describeStyle(style: ListedStyle, variables: VariableDescriber, lookups: TokenLookups): Promise<DesignTokenStyle> {
+  // The style's key is its id in every read; see node-to-snapshot's decodeStyleSlots.
+  const ref: SnapshotTokenRef = (await lookups.nameBindsStyle(style)) ? { id: style.key, name: style.name, nameSuffices: true } : { id: style.key, name: style.name };
   const entry: DesignTokenStyle = {
-    // The style's key is its id in every read; see node-to-snapshot's decodeStyleSlots.
-    reference: styleReference({ id: style.key, name: style.name }),
+    reference: styleReference(ref),
     type: style.type,
   };
   const value = await styleValue(style, variables);

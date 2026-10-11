@@ -39,16 +39,16 @@ export function isStyleInput(value: unknown): value is { style: unknown } {
   return isPlainObject(value) && Object.prototype.hasOwnProperty.call(value, "style");
 }
 
-// Figma's own id grammars. A string that matches one is an id; anything else is a name. A style is
-// named by its plugin id (`S:…`) or its key — the 40-hex form the read emits — and no style name is
-// either in practice.
+// Figma's own id grammars. A string that matches one is an id; anything else is a name. A token is
+// named by its plugin id (`VariableID:…`, `S:…`) or its key — the 40-hex form a library publishes it
+// under, which is also a style's id in a read — and no token name is either in practice.
 const VARIABLE_ID = /^VariableID:/;
 const STYLE_ID = /^S:/;
-const STYLE_KEY = /^[0-9a-f]{40}$/i;
+const TOKEN_KEY = /^[0-9a-f]{40}$/i;
 
 function tokenIdentity(raw: unknown, token: "variable" | "style", word: string): { id?: string; name?: string } {
   if (typeof raw === "string" && raw.trim()) {
-    const isId = token === "variable" ? VARIABLE_ID.test(raw) : STYLE_ID.test(raw) || STYLE_KEY.test(raw);
+    const isId = (token === "variable" ? VARIABLE_ID : STYLE_ID).test(raw) || TOKEN_KEY.test(raw);
     return isId ? { id: raw } : { name: raw };
   }
   if (isPlainObject(raw)) {
@@ -63,7 +63,7 @@ function tokenIdentity(raw: unknown, token: "variable" | "style", word: string):
     }
   }
   throw new Error(
-    word + ": `" + token + "` names a " + token + ' by name or id — "color/primary", { name }, { id }, or the read\'s { id, name }. Got ' +
+    word + ": `" + token + "` names a " + token + ' by name, id or key — "color/primary", { name }, { id }, or the read\'s { id, name }. Got ' +
       JSON.stringify(raw) + ".",
   );
 }
@@ -171,8 +171,8 @@ function capped(items: readonly string[]): string {
 
 /**
  * Resolve every ref before the seal. Unknown, ambiguous and wrong-kind tokens throw here, naming the
- * word and listing candidates, so a bad name costs zero writes. Lookups are deduped by tokenKey and the
- * page scan runs at most once, only when a name misses the file's local tokens.
+ * word and listing candidates, so a bad name costs zero writes. Lookups are deduped by tokenKey, and each
+ * tier of a name's reach loads at most once (TokenLookups).
  */
 export async function resolveTokenRefs(refs: readonly TokenRef[]): Promise<ResolvedTokens> {
   if (!refs.length) return NO_TOKENS;
@@ -192,37 +192,58 @@ export async function resolveTokenRefs(refs: readonly TokenRef[]): Promise<Resol
   return { variables, styles };
 }
 
-// The file's tokens as candidates for a name: local first, then — lazily, once — those the current page
-// uses, which is the only reach a plugin has into an enabled library without its keys.
-class TokenLookups {
+/** A variable a name could mean. A library one is known by key until a write imports it. */
+interface VariableCandidate {
+  name: string;
+  key: string;
+  resolvedType: Variable["resolvedType"];
+  variable?: Variable;
+  /** Where it lives, for an ambiguity error: collection and id, or library and collection. */
+  describe(): Promise<string>;
+}
+
+/**
+ * Which token a name binds, shared by writes and reads: the file's local tokens first; when none has
+ * that name, the tokens the current page uses and (variables only) the enabled libraries' together.
+ * A local token never loses to a farther one; any two candidates past it are ambiguous.
+ *
+ * A read emits a bare name only when it binds from ANY page (nameBinds*): a unique local token, or a
+ * library variable unique among enabled libraries with no local namesake. A token reached only
+ * through what a page uses keeps its id, since another page can use a different token of that name.
+ * Library styles have no tier — Figma gives plugins no list of them — so they always keep theirs.
+ *
+ * Each tier loads lazily, once per instance; the library listing once per run (enabledLibraryListing).
+ */
+export class TokenLookups {
   private localVariables?: Promise<Variable[]>;
   private localStyles?: Promise<BaseStyle[]>;
   private pageUsed?: Promise<{ variables: Variable[]; styles: BaseStyle[] }>;
+  private libraryCandidates?: Promise<VariableCandidate[]>;
   private collections = new Map<string, Promise<VariableCollection | null>>();
 
   async variable(ref: VariableRef): Promise<Variable> {
     if (ref.id !== undefined) {
-      const byId = await figma.variables.getVariableByIdAsync(ref.id);
+      const byId = VARIABLE_ID.test(ref.id)
+        ? await figma.variables.getVariableByIdAsync(ref.id)
+        : await figma.variables.importVariableByKeyAsync(ref.id).catch(() => null);
       if (byId) return this.checkVariableKind(byId, ref);
       if (ref.name === undefined) throw new Error(ref.word + ": no variable has the id " + JSON.stringify(ref.id) + " in this file — it may be deleted, or from a library this file hasn't enabled. Name it instead.");
     }
     const name = ref.name!;
-    this.localVariables ??= figma.variables.getLocalVariablesAsync();
-    let named = (await this.localVariables).filter((v) => v.name === name);
-    if (!named.length) named = (await this.page()).variables.filter((v) => v.name === name);
+    const named = await this.variablesNamed(name);
     const fitting = named.filter((v) => v.resolvedType === ref.resolvedType);
-    if (fitting.length === 1) return fitting[0];
+    if (fitting.length === 1) return fitting[0].variable ?? figma.variables.importVariableByKeyAsync(fitting[0].key);
     if (fitting.length > 1) {
       throw new Error(
         ref.word + ": " + fitting.length + " " + ref.resolvedType + " variables are named " + JSON.stringify(name) + " — name one by id: " +
-          capped(await Promise.all(fitting.map((v) => this.describeCandidate(v)))) + ".",
+          capped(await Promise.all(fitting.map((v) => v.describe()))) + ".",
       );
     }
-    if (named.length) throw this.wrongVariableKind(named[0], ref);
-    const all = [...(await this.localVariables), ...(await this.page()).variables].filter((v) => v.resolvedType === ref.resolvedType);
+    if (named.length) throw new Error(ref.word + ": the variable " + JSON.stringify(name) + " is " + named[0].resolvedType + ", and this word needs a " + ref.resolvedType + " variable.");
+    const all = [...(await this.localVars()), ...(await this.page()).variables].filter((v) => v.resolvedType === ref.resolvedType);
     const near = nearestNames(name, all.map((v) => v.name));
     throw new Error(
-      ref.word + ": no " + ref.resolvedType + " variable is named " + JSON.stringify(name) + " in this file's variables or on this page" +
+      ref.word + ": no " + ref.resolvedType + " variable is named " + JSON.stringify(name) + " in this file's variables, on this page or in its enabled libraries" +
         (ref.id !== undefined ? " (and its id " + JSON.stringify(ref.id) + " is gone)" : "") +
         (near.length ? ". Nearest: " + capped(near.map((n) => JSON.stringify(n))) : "") + ".",
     );
@@ -235,14 +256,13 @@ class TokenLookups {
       if (ref.name === undefined) throw new Error(ref.word + ": no style has the id " + JSON.stringify(ref.id) + " in this file — it may be deleted, or from a library this file hasn't enabled. Name it instead.");
     }
     const name = ref.name!;
-    let named = (await this.local()).filter((s) => s.name === name);
-    if (!named.length) named = (await this.page()).styles.filter((s) => s.name === name);
+    const named = await this.stylesNamed(name);
     const fitting = named.filter((s) => s.type === ref.styleType);
     if (fitting.length === 1) return fitting[0];
     if (fitting.length > 1) {
       throw new Error(
         ref.word + ": " + fitting.length + " " + STYLE_TYPE_NOUN[ref.styleType] + " styles are named " + JSON.stringify(name) + " — name one by id: " +
-          capped(fitting.map((s) => JSON.stringify(s.name) + " (id " + s.id + ")")) + ".",
+          capped(fitting.map((s) => JSON.stringify(s.name) + " (id " + s.key + ")")) + ".",
       );
     }
     if (named.length) throw this.wrongStyleKind(named[0], ref);
@@ -255,12 +275,57 @@ class TokenLookups {
     );
   }
 
+  /** Whether writing this variable's name alone binds this variable, whichever page is current — the read's cue to drop its id. */
+  async nameBindsVariable(variable: Variable): Promise<boolean> {
+    const local = (await this.localVars()).filter((v) => v.name === variable.name);
+    const tier = local.length ? local : (await this.library()).filter((v) => v.name === variable.name);
+    const fitting = tier.filter((v) => v.resolvedType === variable.resolvedType);
+    return fitting.length === 1 && fitting[0].key === variable.key;
+  }
+
+  /** Whether writing this style's name alone binds this style, whichever page is current. */
+  async nameBindsStyle(style: BaseStyle): Promise<boolean> {
+    const fitting = (await this.local()).filter((s) => s.name === style.name && s.type === style.type);
+    return fitting.length === 1 && fitting[0].id === style.id;
+  }
+
+  private async variablesNamed(name: string): Promise<VariableCandidate[]> {
+    const local = (await this.localVars()).filter((v) => v.name === name);
+    if (local.length) return local.map((v) => this.candidate(v));
+    // A used library variable is usually in an enabled library too: one token, by key, not two.
+    const page = (await this.page()).variables.filter((v) => v.name === name).map((v) => this.candidate(v));
+    const library = (await this.library()).filter((v) => v.name === name && !page.some((p) => p.key === v.key));
+    return [...page, ...library];
+  }
+
+  private async stylesNamed(name: string): Promise<BaseStyle[]> {
+    const local = (await this.local()).filter((s) => s.name === name);
+    return local.length ? local : (await this.page()).styles.filter((s) => s.name === name);
+  }
+
+  private candidate(v: Variable): VariableCandidate {
+    return { name: v.name, key: v.key, resolvedType: v.resolvedType, variable: v, describe: () => this.describeVariable(v) };
+  }
+
+  private library(): Promise<VariableCandidate[]> {
+    this.libraryCandidates ??= enabledLibraryListing().then((listing) => (listing ?? []).flatMap(({ collection, variables }) => (variables ?? []).map((v) => ({
+      name: v.name, key: v.key, resolvedType: v.resolvedType,
+      describe: async () => JSON.stringify(v.name) + " (library " + JSON.stringify(collection.libraryName) + ", collection " + JSON.stringify(collection.name) + ", key " + v.key + ")",
+    }))));
+    return this.libraryCandidates;
+  }
+
   // The read's style id is the style's key, the one id REST and the plugin share (a plugin id is
   // file-local). Local and page-used styles answer first; importing is how a library style is reached.
   private async styleByKey(key: string): Promise<BaseStyle | null> {
     const known = [...(await this.local()), ...(await this.page()).styles].find((s) => s.key === key);
     if (known) return known;
     return figma.importStyleByKeyAsync(key).catch(() => null);
+  }
+
+  private localVars(): Promise<Variable[]> {
+    this.localVariables ??= figma.variables.getLocalVariablesAsync();
+    return this.localVariables;
   }
 
   private local(): Promise<BaseStyle[]> {
@@ -285,10 +350,10 @@ class TokenLookups {
   }
 
   private wrongStyleKind(s: BaseStyle, ref: StyleRef): Error {
-    return new Error(ref.word + ": the style " + JSON.stringify(s.name) + " (id " + s.id + ") is a " + s.type + " style, and this word needs a " + ref.styleType + " style.");
+    return new Error(ref.word + ": the style " + JSON.stringify(s.name) + " (id " + s.key + ") is a " + s.type + " style, and this word needs a " + ref.styleType + " style.");
   }
 
-  private async describeCandidate(v: Variable): Promise<string> {
+  private async describeVariable(v: Variable): Promise<string> {
     let collection = this.collections.get(v.variableCollectionId);
     if (!collection) this.collections.set(v.variableCollectionId, collection = figma.variables.getVariableCollectionByIdAsync(v.variableCollectionId));
     const c = await collection;
@@ -299,6 +364,44 @@ class TokenLookups {
     this.pageUsed ??= scanUsedTokens([figma.currentPage]);
     return this.pageUsed;
   }
+}
+
+/** One enabled library collection and its variables, or null for one the user can't open. */
+export interface LibraryCollectionListing { collection: LibraryVariableCollection; variables: LibraryVariable[] | null }
+
+// Keyed by the teamLibrary object, so a test's fresh mock lists afresh. Live, the preamble is evaluated
+// anew for every run, so this lasts one run: short enough that the enabled set can't change under it.
+const libraryListings = new WeakMap<object, Promise<LibraryCollectionListing[] | null>>();
+
+/**
+ * Every enabled library collection's variables, listed once per run — it rides the network. Null
+ * means Figma refused the namespace: a plugin imported before the manifest granted `teamlibrary`
+ * still runs a newer server's preamble (ADR-0010).
+ */
+export function enabledLibraryListing(): Promise<LibraryCollectionListing[] | null> {
+  let teamLibrary: PluginAPI["teamLibrary"];
+  try {
+    teamLibrary = figma.teamLibrary;
+  } catch (error) {
+    if (!/teamlibrary/i.test(String(error))) throw error;
+    return Promise.resolve(null);
+  }
+  let listing = libraryListings.get(teamLibrary);
+  if (!listing) {
+    listing = (async () => {
+      let collections: LibraryVariableCollection[];
+      try {
+        collections = await teamLibrary.getAvailableLibraryVariableCollectionsAsync();
+      } catch (error) {
+        if (!/teamlibrary/i.test(String(error))) throw error;
+        return null;
+      }
+      const lists = await Promise.all(collections.map((c) => teamLibrary.getVariablesInLibraryCollectionAsync(c.key).catch(() => null)));
+      return collections.map((collection, i) => ({ collection, variables: lists[i] }));
+    })();
+    libraryListings.set(teamLibrary, listing);
+  }
+  return listing;
 }
 
 // Grid styles are left out: nothing flcm writes binds one, and every field read here is a host call,

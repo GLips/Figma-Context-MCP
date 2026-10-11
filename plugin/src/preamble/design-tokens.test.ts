@@ -43,18 +43,20 @@ test("local tokens list in the read's spellings, and a listed reference binds wh
 
   const tokens = await flcm.designTokens();
 
-  const brandRef = { variable: { id: brand.id, name: "color/brand" } };
+  // Each name is the only one of its kind here, so a reference is the name alone.
+  const brandRef = { variable: "color/brand" };
   assert.deepEqual(tokens.variables, [
     { reference: brandRef, collection: "Brand", type: "COLOR", values: { Light: "#2D4024", Dark: "rgba(255, 255, 255, 0.5)" } },
     // An alias reads as the reference it points at, so the token structure shows through.
-    { reference: { variable: { id: tokens.variables[1].reference.variable.id, name: "color/action" } }, collection: "Brand", type: "COLOR", values: { Light: brandRef, Dark: brandRef } },
-    { reference: { variable: { id: md.id, name: "space/md" } }, collection: "Brand", type: "FLOAT", values: { Light: 12, Dark: 8 }, scopes: ["GAP", "WIDTH_HEIGHT"] },
+    { reference: { variable: "color/action" }, collection: "Brand", type: "COLOR", values: { Light: brandRef, Dark: brandRef } },
+    { reference: { variable: "space/md" }, collection: "Brand", type: "FLOAT", values: { Light: 12, Dark: 8 }, scopes: ["GAP", "WIDTH_HEIGHT"] },
   ]);
   assert.deepEqual(tokens.styles, [
-    { reference: { style: { id: paint.key, name: "Surface" } }, type: "PAINT", value: "#2D4024" },
-    { reference: { style: { id: tokens.styles[1].reference.style.id, name: "Shadow/Card" } }, type: "EFFECT", value: { boxShadow: "0px 4px 8px 0px rgba(0, 0, 0, 0.25)" } },
-    { reference: { style: { id: heading.key, name: "Heading/L" } }, type: "TEXT", value: { fontFamily: "Inter", fontWeight: 700, fontSize: 32, fontVariantName: "Bold", lineHeight: "40px" } },
+    { reference: { style: "Surface" }, type: "PAINT", value: "#2D4024" },
+    { reference: { style: "Shadow/Card" }, type: "EFFECT", value: { boxShadow: "0px 4px 8px 0px rgba(0, 0, 0, 0.25)" } },
+    { reference: { style: "Heading/L" }, type: "TEXT", value: { fontFamily: "Inter", fontWeight: 700, fontSize: 32, fontVariantName: "Bold", lineHeight: "40px" } },
   ]);
+  assert.deepEqual(tokens.used, { collections: [], styles: [] });
 
   const [brandToken] = tokens.variables;
   const surface = tokens.styles[0], headingToken = tokens.styles[2];
@@ -67,17 +69,19 @@ test("local tokens list in the read's spellings, and a listed reference binds wh
   assert.equal((await figma.getNodeByIdAsync(text.id)).textStyleId, heading.id);
 });
 
-test("library tokens: the default call lists used library styles and catalogs libraries; a library loads by name and binds", async () => {
+test("library tokens the file uses are counted and load on request; an enabled library loads by name; each binds", async () => {
   const figma = setup();
   const usedStyle = seedStyle({ type: "PAINT", name: "DS/Surface", remote: true, paints: [{ type: "SOLID", color: GREEN, opacity: 1, visible: true }] });
   seedStyle({ type: "PAINT", name: "DS/Unused", remote: true, paints: [{ type: "SOLID", color: GREEN, opacity: 1, visible: true }] });
-  const { "ds/accent": accent } = seedVariables({
+  // A local style of the same name wins a name lookup, so the library one has to keep its id.
+  seedStyle({ type: "PAINT", name: "DS/Surface", paints: [{ type: "SOLID", color: GREEN, opacity: 1, visible: true }] });
+  const { "ds/accent": accent, "ds/gap": gap } = seedVariables({
     library: "Design System", collection: "DS Colors", variables: [
       { name: "ds/accent", type: "COLOR", values: { Default: { r: 1, g: 0, b: 0, a: 1 } } },
       { name: "ds/gap", type: "FLOAT", values: { Default: 8 } },
     ],
   });
-  seedVariables({ library: "Locked", collection: "Locked Colors", variables: [{ name: "locked/red", type: "COLOR", values: { Default: { r: 1, g: 0, b: 0, a: 1 } } }] });
+  const { "locked/red": lockedRed } = seedVariables({ library: "Locked", collection: "Locked Colors", variables: [{ name: "locked/red", type: "COLOR", values: { Default: { r: 1, g: 0, b: 0, a: 1 } } }] });
   // A library the user can't open costs only its own variables, with a warning naming it.
   const listCollection = figma.teamLibrary.getVariablesInLibraryCollectionAsync;
   figma.teamLibrary.getVariablesInLibraryCollectionAsync = async (key: string) => {
@@ -85,7 +89,8 @@ test("library tokens: the default call lists used library styles and catalogs li
     return listCollection(key);
   };
   const before = warnings.records.length;
-  // Used on a page that isn't current: the listing reads the whole file.
+  await flcm.render({ type: "FRAME", fill: { variable: accent.id }, stroke: { variable: lockedRed.id } });
+  // Used on a page that isn't current: the count reads the whole file.
   const other = figma.createPage();
   const rect = figma.createRectangle();
   other.appendChild(rect);
@@ -93,20 +98,32 @@ test("library tokens: the default call lists used library styles and catalogs li
 
   const tokens = await flcm.designTokens();
 
-  // Nothing in the file uses ds/accent, so the default call counts it instead of importing it.
   assert.deepEqual(tokens.variables, []);
-  assert.deepEqual(tokens.styles.map((s) => [s.reference.style.name, s.remote]), [["DS/Surface", true]]);
+  assert.deepEqual(tokens.styles.map((s) => s.reference), [{ style: "DS/Surface" }]);
+  assert.deepEqual(tokens.used, {
+    collections: [{ name: "DS Colors", library: "Design System", variables: 1 }, { name: "Locked Colors", variables: 1 }],
+    styles: [{ type: "PAINT", styles: 1 }],
+  });
   assert.deepEqual(tokens.libraries, [{ name: "Design System", collections: [{ name: "DS Colors", variables: 2 }] }]);
   assert.match(warnings.records.slice(before).map((r) => r.message).join("\n"), /could not be read and are left out: "Locked \/ Locked Colors"/);
 
-  const colors = await flcm.designTokens({ library: "Design System", type: "COLOR" });
-  assert.deepEqual(colors.variables, [
-    { reference: { variable: { id: accent.id, name: "ds/accent" } }, collection: "DS Colors", type: "COLOR", values: { Default: "#FF0000" }, remote: true },
-  ]);
-  const frame = await flcm.render({ type: "FRAME", fill: colors.variables[0].reference });
-  assert.equal((await figma.getNodeByIdAsync(frame.id)).fills[0].boundVariables.color.id, accent.id);
+  const used = await flcm.designTokens({ used: true });
+  // A name reached only through what a page uses keeps its id: another page could use a different
+  // token of that name. ds/accent is in an enabled library, so its name reaches it from any page.
+  assert.deepEqual(used.variables.map((v) => v.reference), [{ variable: "ds/accent" }, { variable: { id: lockedRed.id, name: "locked/red" } }]);
+  assert.deepEqual(used.variables[0], { reference: { variable: "ds/accent" }, collection: "DS Colors", library: "Design System", type: "COLOR", values: { Default: "#FF0000" }, remote: true });
+  assert.deepEqual(used.styles.map((s) => s.reference), [{ style: { id: usedStyle.key, name: "DS/Surface" } }]);
+  const swatch = await flcm.render({ type: "RECTANGLE", width: 10, height: 10, fill: used.styles[0].reference });
+  assert.equal((await figma.getNodeByIdAsync(swatch.id)).fillStyleId, usedStyle.id);
+  assert.deepEqual((await flcm.designTokens({ used: true, type: "PAINT" })).variables, []);
+  await assert.rejects(flcm.designTokens({ used: true, collection: "Spacing" }), /Used collections: "DS Colors"/);
 
-  await assert.rejects(flcm.designTokens({ library: "Design Sys" }), /no enabled library with variables is named "Design Sys"\. Enabled: "Design System", "Locked"/);
+  const floats = await flcm.designTokens({ library: "Design System", type: "FLOAT" });
+  assert.deepEqual(floats.variables, [{ reference: { variable: "ds/gap" }, collection: "DS Colors", library: "Design System", type: "FLOAT", values: { Default: 8 }, remote: true }]);
+  const row = await flcm.render({ type: "FRAME", layout: { mode: "row", gap: floats.variables[0].reference } });
+  assert.equal((await figma.getNodeByIdAsync(row.id)).boundVariables.itemSpacing.id, gap.id);
+
+  await assert.rejects(flcm.designTokens({ library: "Design Sys" }), /no enabled library with variables is named "Design Sys"\. Enabled: "Design System"\./);
   await assert.rejects(flcm.designTokens({ library: "Design System", collection: "Spacing" }), /has no collection named "Spacing"\. Its collections: "DS Colors"/);
 });
 
@@ -120,6 +137,6 @@ test("without the teamlibrary permission, the file's own tokens still list and a
 
   const tokens = await flcm.designTokens();
 
-  assert.deepEqual(tokens.variables.map((v) => v.reference.variable.name), ["color/brand"]);
+  assert.deepEqual(tokens.variables.map((v) => v.reference), [{ variable: "color/brand" }]);
   assert.match(warnings.records.slice(before).map((r) => r.message).join("\n"), /lacks the teamlibrary permission\. Re-import the plugin/);
 });

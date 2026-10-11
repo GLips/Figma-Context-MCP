@@ -277,6 +277,8 @@ export interface SnapshotText {
 export interface SnapshotTokenRef {
   id: string;
   name?: string;
+  /** The producer checked that writing `name` back binds this token, so the read may drop the id. */
+  nameSuffices?: true;
 }
 
 /**

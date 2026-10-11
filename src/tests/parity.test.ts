@@ -8,6 +8,7 @@ import { PARITY_CASES } from "./parity/cases.js";
 import { PARITY_PRODUCERS } from "./parity/producers.js";
 import { loadSnapshot } from "./parity/snapshots-io.js";
 import { parityView } from "./parity/shared-subset.js";
+import { loadSceneTokenIds } from "./parity/scenes-io.js";
 
 /**
  * REST↔plugin parity harness — "one output, two producers" (plan Phase 4).
@@ -43,13 +44,14 @@ describe("parity harness", () => {
         const golden = JSON.parse(
           readFileSync(expectedPath(parityCase.name), "utf8"),
         ) as SimplifiedDesign;
-        const target = parityView(golden);
+        const tokenIds = loadSceneTokenIds(parityCase.name);
+        const target = parityView(golden, tokenIds);
 
         for (const producer of PARITY_PRODUCERS) {
           const produced = producer.produce(parityCase);
           if (!produced) continue; // producer has no input for this case (e.g. plugin slot)
           const design = await produced;
-          expect(parityView(design), `producer "${producer.id}"`).toEqual(target);
+          expect(parityView(design, tokenIds), `producer "${producer.id}"`).toEqual(target);
         }
       });
     }

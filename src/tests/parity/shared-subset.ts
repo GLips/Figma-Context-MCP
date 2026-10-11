@@ -3,6 +3,12 @@ import type { TemplateBody, SimplifiedDesign, SimplifiedNode, StyleValue } from 
 // the slots the compression pass can hoist — the two can't silently diverge.
 import { STYLE_REF_FIELDS } from "@framelink/core/internal";
 
+/** A scene's token ids by name: variable ids, and style keys (a read's style id). */
+export interface SceneTokenIds {
+  variable: Record<string, string>;
+  style: Record<string, string>;
+}
+
 /**
  * The comparator policy for the REST↔plugin parity harness — "shared subset" as
  * code, not vibes.
@@ -51,10 +57,12 @@ import { STYLE_REF_FIELDS } from "@framelink/core/internal";
  *     component's children the read published, and two producers that disagree about
  *     that are emitting different children — a real divergence, not a nuisance.
  *
- *  3. VARIABLE NAMES. A token reference is `{ variable: { id, name? } }`; the
- *     plugin names a variable, REST never can (the names endpoint is
- *     Enterprise-only). The view drops a variable reference's `name` and nothing
- *     else — its id, and a style reference's name, still have to match.
+ *  3. TOKEN SPELLING. A token reference is the token's bare name,
+ *     `{ variable: "color/bg" }`, when the producer vouches the name binds it
+ *     alone, else `{ id, name? }`. The plugin names variables; REST never can (the
+ *     names endpoint is Enterprise-only), so its references stay ids. The view
+ *     reads every reference as its token's id, a bare name looked up in the scene's
+ *     tables — unique by construction, since only an unshared name is emitted bare.
  *
  *  4. ROOT CONTEXTUAL SIZING (`core/transformers/layout.ts`). NOT a producer
  *     difference: the rule is core's and both producers emit it. A node is "root"
@@ -282,13 +290,19 @@ function viewNode(
  * and the now-empty `styles`/`templates` (folded inline by expansion). The
  * components sidecar IS compared — see pin 2.
  */
-export function parityView(input: SimplifiedDesign): { nodes: Rec[]; components: Rec } {
+export function parityView(
+  input: SimplifiedDesign,
+  tokenIds: SceneTokenIds = { variable: {}, style: {} },
+): { nodes: Rec[]; components: Rec } {
   const design: SimplifiedDesign = JSON.parse(
     JSON.stringify(input, (key, value) => {
       if (key === "elided" && !Array.isArray(value))
         return Object.fromEntries(Object.keys(value).map((field) => [field, null]));
-      // Pin 3: a variable reference compares by id alone.
-      if (key === "variable" && value && typeof value === "object") return { id: value.id };
+      // Pin 3: a token reference compares by its token's id.
+      if (key === "variable" || key === "style") {
+        if (typeof value === "string") return tokenIds[key][value] ?? value;
+        if (value && typeof value === "object") return value.id;
+      }
       return value;
     }),
   );

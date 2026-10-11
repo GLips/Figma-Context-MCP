@@ -116,20 +116,25 @@ describe("parityView comparator policy", () => {
     expect(parityView(hoisted)).toEqual(parityView(inlined));
   });
 
-  it("compares a variable reference by id alone; style names and ids still count", () => {
+  it("compares a token reference by its token's id, a bare name looked up", () => {
     const withFill = (fill: unknown) =>
       design({
         nodes: [{ id: "1", name: "R", type: "RECTANGLE", fill }],
       } as unknown as Partial<SimplifiedDesign>);
+    const ids = { variable: { "color/brand": "V:1" }, style: { Brand: "k1" } };
 
-    expect(parityView(withFill({ variable: { id: "V:1", name: "color/brand" } }))).toEqual(
-      parityView(withFill({ variable: { id: "V:1" } })),
+    expect(parityView(withFill({ variable: "color/brand" }), ids)).toEqual(
+      parityView(withFill({ variable: { id: "V:1" } }), ids),
     );
-    expect(parityView(withFill({ variable: { id: "V:1" } }))).not.toEqual(
-      parityView(withFill({ variable: { id: "V:2" } })),
+    expect(parityView(withFill({ variable: "color/brand" }), ids)).not.toEqual(
+      parityView(withFill({ variable: { id: "V:2" } }), ids),
     );
-    expect(parityView(withFill({ style: { id: "S:1", name: "Brand" } }))).not.toEqual(
-      parityView(withFill({ style: { id: "S:1" } })),
+    expect(parityView(withFill({ style: "Brand" }), ids)).toEqual(
+      parityView(withFill({ style: { id: "k1", name: "Brand" } }), ids),
+    );
+    // Two tokens sharing a name stay apart.
+    expect(parityView(withFill({ style: { id: "k1", name: "Heading" } }), ids)).not.toEqual(
+      parityView(withFill({ style: { id: "k2", name: "Heading" } }), ids),
     );
   });
 

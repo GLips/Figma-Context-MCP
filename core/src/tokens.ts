@@ -7,12 +7,12 @@ import type { SnapshotTokenRef } from "./snapshot.js";
  * a numeric layout or size word, a text style word, the effects slot, or the text style as a
  * whole. Two keys, never one: a variable binds one field, a style binds a whole slot, and Figma
  * binds them through different calls.
+ *
+ * The identity is the token's NAME — `{ variable: "color/bg" }` — whenever the producer vouches
+ * that writing that name back binds this same token. Otherwise it is `{ id, name? }`: an ambiguous
+ * or unreachable name, or a producer that can't name it (REST never names variables).
  */
-export interface TokenIdentity {
-  id: string;
-  /** Present when the producer could resolve it. REST never names variables. */
-  name?: string;
-}
+export type TokenIdentity = string | { id: string; name?: string };
 
 /**
  * A read carries `value`, the literal the token resolves to in the read's ordinary spelling, since
@@ -50,6 +50,7 @@ function withValue<T extends object, V>(reference: T, value: V | undefined): T &
 // Key order is fixed (id, then name) so a reference stringifies identically whichever producer
 // built it — compression and template hashing key on the serialized form.
 function tokenIdentity(ref: SnapshotTokenRef): TokenIdentity {
+  if (ref.name !== undefined && ref.nameSuffices) return ref.name;
   return ref.name === undefined ? { id: ref.id } : { id: ref.id, name: ref.name };
 }
 

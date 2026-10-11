@@ -662,6 +662,8 @@ export type DesignTokenVariableValue = string | number | boolean | VariableRefer
 export interface DesignTokenVariable {
   reference: VariableReference;
   collection: string;
+  /** The enabled library it comes from; absent for a local variable or one from a library Figma doesn't name. */
+  library?: string;
   type: "COLOR" | "FLOAT" | "STRING" | "BOOLEAN";
   /** By mode name, in the collection's mode order. */
   values: Record<string, DesignTokenVariableValue>;
@@ -680,11 +682,21 @@ export interface DesignTokenStyle {
 /** One collection of an enabled library, counted rather than listed: loading it imports every variable. */
 export interface DesignTokenLibraryCollection { name: string; variables: number }
 export interface DesignTokenLibrary { name: string; collections: DesignTokenLibraryCollection[] }
-/** The default listing: the file's own and used tokens in full, and its enabled libraries as a catalog. */
-export interface DesignTokens { variables: DesignTokenVariable[]; styles: DesignTokenStyle[]; libraries: DesignTokenLibrary[] }
+/**
+ * Library tokens something in the file is bound to, counted. `library` is named only for a collection
+ * of an enabled library: Figma tells a plugin nothing else about where a remote token came from.
+ */
+export interface DesignTokenUsedCollection { name: string; library?: string; variables: number }
+export interface DesignTokenUsedStyles { type: DesignTokenStyle["type"]; styles: number }
+export interface DesignTokensUsed { collections: DesignTokenUsedCollection[]; styles: DesignTokenUsedStyles[] }
+/** The default listing: the file's own tokens in full; used library tokens and enabled libraries counted. */
+export interface DesignTokens { variables: DesignTokenVariable[]; styles: DesignTokenStyle[]; used: DesignTokensUsed; libraries: DesignTokenLibrary[] }
 /** Which enabled-library variables to load: one library, narrowed to a collection or a type if given. */
 export interface DesignTokenLibraryQuery { library: string; collection?: string; type?: DesignTokenVariable["type"] }
+/** Which used library tokens to load: all of them, or one collection's variables, or one variable or style type. */
+export interface DesignTokenUsedQuery { used: true; collection?: string; type?: DesignTokenVariable["type"] | DesignTokenStyle["type"] }
 export interface LibraryDesignTokens { variables: DesignTokenVariable[] }
+export interface UsedDesignTokens { variables: DesignTokenVariable[]; styles: DesignTokenStyle[] }
 
 // A locate query: the declarative facets find/findOne match, AND-combined. `type` and `key` are exact;
 // `name` is a case-insensitive substring (layer names are fuzzy — findOne's cardinality guard catches an

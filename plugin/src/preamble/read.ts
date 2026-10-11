@@ -23,6 +23,7 @@ import { assertNodeStillOnCanvas } from "./freshness.js";
 import { registerRead } from "./host.js";
 import { isReadableSceneNode, readableChildren } from "./scene-readability.js";
 import { warnings } from "./warnings.js";
+import { TokenLookups } from "./tokens.js";
 import { simplify, project, projectNames, projectReadNode, type SimplifiedNode } from "@framelink/core";
 import type { NodeSnapshot } from "@framelink/core/snapshot";
 
@@ -161,16 +162,19 @@ export function createResolvedTargets(): ResolvedTargets {
 /**
  * Token names for one read. Cached per id because a token repeats across a tree — every run of a
  * bound text, every card on one fill variable. An unresolvable id (a deleted style, an unloaded
- * library variable) reads as a reference carrying its id only.
+ * library variable) reads as a reference carrying its id only. Whether the name alone suffices is
+ * asked of the write side's own reach, so a read pasted back binds the tokens it showed.
  */
 function liveTokenResolver(): SceneTokenResolver {
-  const cache = new Map<string, Promise<{ name: string; key?: string } | null>>();
+  const reach = new TokenLookups();
+  const cache = new Map<string, ReturnType<SceneTokenResolver>>();
   return (kind, id) => {
     const key = `${kind}:${id}`;
     let lookup = cache.get(key);
     if (!lookup) {
-      lookup =
-        kind === "style" ? figma.getStyleByIdAsync(id) : figma.variables.getVariableByIdAsync(id);
+      lookup = kind === "style"
+        ? figma.getStyleByIdAsync(id).then(async (style) => style && { name: style.name, key: style.key, nameSuffices: await reach.nameBindsStyle(style) })
+        : figma.variables.getVariableByIdAsync(id).then(async (variable) => variable && { name: variable.name, nameSuffices: await reach.nameBindsVariable(variable) });
       cache.set(key, lookup);
     }
     return lookup;
