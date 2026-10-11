@@ -107,7 +107,31 @@ export function createReadEgress() {
       return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, project(item, ancestors)]));
     } finally { ancestors.delete(value); }
   }
-  return { registerRead(value: object, projection: () => unknown, decorate: (value: unknown) => unknown = value => value) { reads.set(value, { project: projection, entries: readEntries(value), decorate }); }, project };
+  // JSON drops an undefined-valued key, so the agent sees `{ a }` and can't tell `b` was returned at all.
+  // Only the agent's own objects count: a registered read or live node owns its shape, so the walk stops
+  // there. Undefined array items are out of scope — JSON turns them into null, not a missing key.
+  function undefinedFieldPaths(value: unknown, path = "", ancestors = new Set<object>()): string[] {
+    if (value === null || typeof value !== "object" || looksLikeNode(value) || reads.has(value) || ancestors.has(value)) return [];
+    ancestors.add(value);
+    try {
+      if (Array.isArray(value)) return value.flatMap((item, i) => undefinedFieldPaths(item, `${path}[${i}]`, ancestors));
+      return Object.entries(value).flatMap(([key, item]) => {
+        const at = path ? `${path}.${key}` : key;
+        return item === undefined ? [at] : undefinedFieldPaths(item, at, ancestors);
+      });
+    } finally { ancestors.delete(value); }
+  }
+  return { registerRead(value: object, projection: () => unknown, decorate: (value: unknown) => unknown = value => value) { reads.set(value, { project: projection, entries: readEntries(value), decorate }); }, project, undefinedFieldPaths };
+}
+
+const UNDEFINED_FIELDS_NAMED = 10;
+
+/** The one warning for a successful return whose own fields JSON will drop; null when there are none. */
+export function undefinedFieldsWarning(paths: string[]): string | null {
+  if (paths.length === 0) return null;
+  const named = paths.slice(0, UNDEFINED_FIELDS_NAMED).join(", ");
+  const more = paths.length > UNDEFINED_FIELDS_NAMED ? ` and ${paths.length - UNDEFINED_FIELDS_NAMED} more` : "";
+  return `${paths.length} returned field(s) were undefined and dropped from the result: ${named}${more}.`;
 }
 
 // Diagnostics may arrive after a handle is minted, without changing its authored data.

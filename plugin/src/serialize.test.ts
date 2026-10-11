@@ -7,7 +7,7 @@
 // that lets the read verbs return deep canonical shapes across the bridge intact.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { safeSerialize, guardReturnValue, looksLikeNode } from "./serialize.js";
+import { safeSerialize, guardReturnValue, looksLikeNode, createReadEgress, undefinedFieldsWarning } from "./serialize.js";
 
 // A live node is anything carrying id + type + `removed` (present on every BaseNode). We fake the SHAPE the
 // discriminator keys on — serialize.ts never touches figma.*, so a POJO with these fields IS a "live node".
@@ -70,4 +70,22 @@ test("deep returned live nodes fail with their path rather than silently collaps
   let value: unknown = liveNode;
   for (let i = 0; i < 12; i++) value = { child: value };
   assert.throws(() => guardReturnValue(value), /live Figma node.*child/s);
+});
+
+test("undefined-valued fields of the agent's own return are named by path; a registered read's are its own", () => {
+  const egress = createReadEgress();
+  const read = { id: "1:2", optional: undefined };
+  egress.registerRead(read, () => read);
+  const raw = { cardId: "1:2", slotId: undefined, slot: { name: undefined }, items: [{ ref: undefined }, undefined], read };
+  assert.deepEqual(egress.undefinedFieldPaths(raw), ["slotId", "slot.name", "items[0].ref"]);
+  assert.equal(
+    undefinedFieldsWarning(egress.undefinedFieldPaths(raw)),
+    "3 returned field(s) were undefined and dropped from the result: slotId, slot.name, items[0].ref.",
+  );
+});
+
+test("a return with nothing undefined — or nothing at all — warns nothing", () => {
+  const egress = createReadEgress();
+  assert.equal(undefinedFieldsWarning(egress.undefinedFieldPaths(undefined)), null);
+  assert.equal(undefinedFieldsWarning(egress.undefinedFieldPaths({ a: 1, b: null })), null);
 });

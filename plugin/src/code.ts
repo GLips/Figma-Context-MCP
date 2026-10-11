@@ -7,7 +7,7 @@ import { captureScreenshot, type CaptureOptions } from "./screenshot-capture.js"
 // touches the network — it talks to the headless ui.html bridge via postMessage.
 
 import { createApprovalLifecycle } from "./approval-lifecycle.js";
-import { safeSerialize, guardReturnValue, createReadEgress } from "./serialize.js";
+import { safeSerialize, guardReturnValue, createReadEgress, undefinedFieldsWarning } from "./serialize.js";
 import { resolveScreenshotTarget, type ScreenshotTarget } from "./screenshot-target.js";
 import { createRunCancellationRegistry, type CancelDisposition } from "./run-cancellation.js";
 import { observeDocumentChanges, type DocumentChangeObserver } from "./document-changes.js";
@@ -995,6 +995,8 @@ async function executeCode(to: ReplyTo, code: string, preamble: string): Promise
     guardReturnValue(raw);
     result = safeSerialize(egress.project(raw));
     runtime.warnings.commitEgress();
+    const undefinedFields = undefinedFieldsWarning(egress.undefinedFieldPaths(raw));
+    if (undefinedFields) runtime.warnings.add({ id: null, message: undefinedFields });
     // Session capture is optional; its narrower data contract must not reject a valid wire result.
     try { session.last = raw; } catch { session.last = undefined; }
   } catch (err) {
