@@ -993,9 +993,10 @@ async function executeCode(to: ReplyTo, code: string, preamble: string): Promise
     // Return-path node guard (R2): a returned live node would otherwise collapse to
     // { id } and silently drop everything else. Make that loud instead of lossy.
     guardReturnValue(raw);
-    result = safeSerialize(egress.project(raw));
+    const undefinedFieldPaths: string[] = [];
+    result = safeSerialize(egress.project(raw, undefined, { at: "", paths: undefinedFieldPaths }));
     runtime.warnings.commitEgress();
-    const undefinedFields = undefinedFieldsWarning(egress.undefinedFieldPaths(raw));
+    const undefinedFields = undefinedFieldsWarning(undefinedFieldPaths);
     if (undefinedFields) runtime.warnings.add({ id: null, message: undefinedFields });
     // Session capture is optional; its narrower data contract must not reject a valid wire result.
     try { session.last = raw; } catch { session.last = undefined; }
