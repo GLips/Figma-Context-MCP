@@ -5,12 +5,16 @@
 import { join } from "node:path";
 import { Logger } from "~/utils/logger.js";
 import { PluginBridge } from "./bridge.js";
-import { fetchAndProcessImage, createLocalImageReader } from "./images.js";
-import { ImageUploadStore, imageSourceKind } from "./image-intake.js";
+import { createLocalImageReader } from "./images.js";
+import { ImageUploadStore } from "./image-intake.js";
 import { startUploadEndpoint, type UploadEndpoint } from "./upload-endpoint.js";
 import { createContainedFileReader } from "./contained-file.js";
 import { createSavedScriptReader } from "./saved-script.js";
-import { ImageByteCache, createImagesCapability } from "./image-requests.js";
+import {
+  ImageByteCache,
+  createImagesCapability,
+  createImageSourceFetcher,
+} from "./image-requests.js";
 import { createCommentPinsCapability } from "./comment-pins.js";
 import { WS_PORT_BLOCK } from "./ports.js";
 import { SESSION_IDENTITY } from "./approval.js";
@@ -72,7 +76,7 @@ export function startPluginBridge({
   // canonical asset root on first use, so the authorization boundary can't shift under a retargeted
   // root symlink mid-session.
   const readContained = createContainedFileReader(assetRoot);
-  const readLocalImage = createLocalImageReader(readContained);
+  const readLocalImage = createLocalImageReader(readContained, { uploadsAccepted: acceptUploads });
   const uploads = new ImageUploadStore();
   let uploadEndpoint: UploadEndpoint | null = null;
   let stopped = false;
@@ -108,18 +112,12 @@ export function startPluginBridge({
       [
         "images.fetch",
         createImagesCapability({
-          fetchImage: async (source, run, signal) => {
-            const kind = imageSourceKind(source);
-            if (kind === "url") return fetchAndProcessImage(source, signal);
-            if (kind === "path") return readLocalImage(source, signal);
-            try {
-              return uploads.redeem(source, run.uploadHandles);
-            } catch (err) {
-              throw new Error(
-                `flcm.image could not load an upload handle: ${(err as Error).message}`,
-              );
-            }
-          },
+          fetchImage: createImageSourceFetcher({
+            readLocalImage,
+            uploads: acceptUploads
+              ? { store: uploads, port: () => uploadEndpoint?.port ?? null }
+              : null,
+          }),
           cache: new ImageByteCache(),
         }),
       ],

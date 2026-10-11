@@ -145,8 +145,8 @@ export class ImageUploadStore {
     const stored = this.uploads.get(digest(handle));
     if (!stored) {
       throw new Error(
-        "the upload handle is unknown or has expired (handles last 30 minutes, on the server that " +
-          "issued them). Upload the file again for a fresh handle",
+        "the upload handle is unknown to this server or has expired (handles last 30 minutes, " +
+          "on the server that issued them)",
       );
     }
     return stored.base64;

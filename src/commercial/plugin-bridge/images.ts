@@ -295,7 +295,16 @@ export async function fetchAndProcessImage(url: string, signal?: AbortSignal): P
  */
 export function createLocalImageReader(
   readContained: ContainedFileReader,
+  { uploadsAccepted }: { uploadsAccepted: boolean },
 ): (source: string, signal?: AbortSignal) => Promise<string> {
+  // Only a runtime that holds uploads can send the agent to the upload command; a CLI execute run
+  // reads its own --asset-root, which the agent chose on the command line.
+  const outOfRootRemedy = uploadsAccepted
+    ? `With shell access, run \`npx ${CLI_NAME} upload <file>\`, which reads the file on your side ` +
+      "and prints a handle to pass to flcm.image in its place. If the root itself is wrong, report " +
+      "it to the user: the server's --asset-root sets it"
+    : "Move the file under the asset root, or rerun execute with --asset-root set to a directory " +
+      "that holds it";
   return async function readLocalImage(source: string, signal?: AbortSignal): Promise<string> {
     try {
       return await processImageBytes(
@@ -304,12 +313,7 @@ export function createLocalImageReader(
       );
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
-      const rootAdvice =
-        err instanceof OutsideAssetRootError
-          ? `. With shell access, run \`npx ${CLI_NAME} upload <file>\`, which reads the file on ` +
-            "your side and prints a handle to pass to flcm.image in its place. If the root itself " +
-            "is wrong, report it to the user: the server's --asset-root sets it"
-          : "";
+      const rootAdvice = err instanceof OutsideAssetRootError ? `. ${outOfRootRemedy}` : "";
       throw new Error(
         `flcm.image could not load ${JSON.stringify(source)}: ${reason}${rootAdvice}`,
       );

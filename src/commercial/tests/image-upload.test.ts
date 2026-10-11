@@ -25,6 +25,14 @@ import {
   type UploadEndpoint,
 } from "~/commercial/plugin-bridge/upload-endpoint.js";
 import { runUpload } from "~/commercial/commands/upload.js";
+import type {
+  BridgeRequest,
+  ChannelRunContext,
+  PluginBridge,
+} from "~/commercial/plugin-bridge/bridge.js";
+import { executePluginCode } from "~/commercial/plugin-bridge/execution.js";
+import { createImageSourceFetcher } from "~/commercial/plugin-bridge/image-requests.js";
+import { createTestWriteAccess, TEST_AUTHORIZING_USER } from "./fixtures/write-access.js";
 
 const Jimp = createJimp({ formats: [png] });
 const makePng = async () =>
@@ -81,24 +89,55 @@ const capabilityHeaders = () => ({
   "Content-Type": "application/octet-stream",
 });
 
-test("the CLI uploads a file and its handle redeems only for a run whose code names it", async () => {
+/**
+ * Submit `code` the way figma_execute_code does, and during the run ask for `source` the way the
+ * plugin's images.fetch would — so the grant comes from the real submission path, not a hand-built set.
+ */
+async function fetchDuringRun(code: string, source: string): Promise<string> {
+  const fetchImage = createImageSourceFetcher({
+    readLocalImage: () => Promise.reject(new Error("no local reads in this test")),
+    uploads: { store, port: () => endpoint.port },
+  });
+  let fetched: Promise<string> | undefined;
+  const bridge = {
+    request: async (
+      payload: BridgeRequest,
+      _signal: unknown,
+      _onSubmitted: unknown,
+      run: ChannelRunContext,
+    ) => {
+      if (payload.type === "APPROVAL_STATUS") return { type: "APPROVAL_GRANTED" };
+      fetched = fetchImage(source, run);
+      await fetched.catch(() => {});
+      return { result: null, console: [], errors: null, documentChanged: false };
+    },
+    touchApproval: () => {},
+    getAuthorizingUser: () => TEST_AUTHORIZING_USER,
+  } as unknown as PluginBridge;
+  await executePluginCode({ bridge, writeAccess: createTestWriteAccess().writeAccess }, code);
+  return fetched!;
+}
+
+test("the CLI uploads a file and its handle loads only in a run whose code names it", async () => {
   const file = join(stateDir, "photo.png");
   await writeFile(file, await makePng());
   const handle = await runUpload(file, {});
 
-  const runA = uploadHandlesNamedIn(`fill: flcm.image("${handle}")`);
-  const bytes = Buffer.from(store.redeem(handle, runA), "base64");
+  const bytes = Buffer.from(await fetchDuringRun(`flcm.image("${handle}")`, handle), "base64");
   expect([...bytes.subarray(0, 4)]).toEqual([0x89, 0x50, 0x4e, 0x47]);
 
   // Another run's code never named it: the plugin asking for it there is refused.
-  const runB = uploadHandlesNamedIn(`fill: flcm.image("assets/other.png")`);
-  expect(() => store.redeem(handle, runB)).toThrow(/does not name that upload handle/);
+  await expect(fetchDuringRun(`flcm.image("assets/other.png")`, handle)).rejects.toThrow(
+    /does not name that upload handle/,
+  );
 });
 
 test("a browser-origin request is refused before the capability is even checked", async () => {
-  const { status, body } = await post({ ...capabilityHeaders(), Origin: "https://evil.example" }, [
-    await makePng(),
-  ]);
+  // No capability: were the checks swapped, this would be a 401 instead.
+  const { status, body } = await post(
+    { "Content-Type": "application/octet-stream", Origin: "https://evil.example" },
+    [await makePng()],
+  );
   expect(status).toBe(403);
   expect(body.error).toMatch(/browser/);
   expect(body.handle).toBeUndefined();
@@ -120,5 +159,5 @@ test("a handle stops working once it expires", async () => {
   const named = uploadHandlesNamedIn(handle);
   expect(() => store.redeem(handle, named)).not.toThrow();
   now += UPLOAD_TTL_MS + 1;
-  expect(() => store.redeem(handle, named)).toThrow(/unknown or has expired/);
+  expect(() => store.redeem(handle, named)).toThrow(/unknown to this server or has expired/);
 });

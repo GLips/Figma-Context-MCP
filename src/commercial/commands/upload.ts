@@ -116,7 +116,9 @@ function isWithin(dir: string, cwd: string): boolean {
 }
 
 function list(records: UploadEndpointRecord[]): string {
-  return records.map((record) => `  --port ${record.port}  ${record.identity}`).join("\n");
+  return records
+    .map((record) => `  --port ${record.port}  ${record.identity} (pid ${record.pid})`)
+    .join("\n");
 }
 
 /**

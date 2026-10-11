@@ -93,7 +93,13 @@ export async function startUploadEndpoint({
     };
     writePrivateFileAtomic(recordFile, JSON.stringify(record, null, 2));
   };
-  publish();
+  try {
+    publish();
+  } catch (err) {
+    // Nothing can know this port without the record, so a listener left bound would only leak.
+    server.close();
+    throw err;
+  }
   // A failed rotation leaves the previous capability published until it expires; uploads then fail
   // with a 401 naming the cause, which beats crashing the server from a timer.
   const rotation = setInterval(() => {
@@ -282,7 +288,9 @@ function isProcessAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;
-  } catch (err) {
-    return (err as NodeJS.ErrnoException).code === "EPERM";
+  } catch {
+    // EPERM included: the record is this user's, so a pid owned by someone else was reused after
+    // our server died, and its listener is not ours to send images to.
+    return false;
   }
 }

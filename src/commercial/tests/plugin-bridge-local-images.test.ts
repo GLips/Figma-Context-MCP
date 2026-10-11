@@ -38,7 +38,8 @@ async function withRoot(body: (root: string, outer: string) => Promise<void>): P
   }
 }
 
-const imageReaderFor = (root: string) => createLocalImageReader(createContainedFileReader(root));
+const imageReaderFor = (root: string) =>
+  createLocalImageReader(createContainedFileReader(root), { uploadsAccepted: true });
 
 const refusesOutsideRoot = (root: string) => (err: Error) =>
   err.message.includes("outside the asset root") && err.message.includes(root);

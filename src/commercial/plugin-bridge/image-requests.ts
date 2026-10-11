@@ -13,7 +13,9 @@
 // bridge separately caps how many requests one run may have in flight (bridge.ts
 // MAX_INFLIGHT_SERVICES_PER_RUN), so neither alone bounds a whole run.
 import type { CapabilityHandler, ChannelRunContext } from "./bridge.js";
-import { imageSourceKind } from "./image-intake.js";
+import { imageSourceKind, type ImageUploadStore } from "./image-intake.js";
+import { fetchAndProcessImage } from "./images.js";
+import { CLI_NAME } from "~/utils/cli-help.js";
 
 type ImagesRequestHandler = (
   urls: string[],
@@ -173,6 +175,47 @@ async function mapWithConcurrency<T>(
   };
   await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
   if (failures.length > 0) throw failures[0];
+}
+
+/**
+ * The flcm.image source dispatch: urls through the guarded fetch, paths through the contained read,
+ * upload handles through the store under the run's grant. `uploads` is null for a runtime that takes
+ * no uploads (CLI execute), whose store could only ever answer "unknown".
+ */
+export function createImageSourceFetcher({
+  readLocalImage,
+  uploads,
+}: {
+  readLocalImage: (source: string, signal?: AbortSignal) => Promise<string>;
+  uploads: { store: ImageUploadStore; port: () => number | null } | null;
+}): ImagesRequestDeps["fetchImage"] {
+  return async (source, run, signal) => {
+    const kind = imageSourceKind(source);
+    if (kind === "url") return fetchAndProcessImage(source, signal);
+    if (kind === "path") return readLocalImage(source, signal);
+    if (!uploads) {
+      throw new Error(
+        "flcm.image could not load an upload handle: handles only work on the MCP server that " +
+          "issued them, not in an execute run. Pass the file's path instead, " +
+          "with --asset-root set to a directory that holds it",
+      );
+    }
+    try {
+      return uploads.store.redeem(source, run.uploadHandles);
+    } catch (err) {
+      const port = uploads.port();
+      // Several servers can run in one project, and the upload command can't tell which one is the
+      // agent's; naming this server's port makes the retry certain instead of a guess.
+      const retry =
+        port === null
+          ? ""
+          : `. This server takes uploads on port ${port}; if the handle came from another server, ` +
+            `run \`npx ${CLI_NAME} upload <file> --port ${port}\` for one this server can use`;
+      throw new Error(
+        `flcm.image could not load an upload handle: ${(err as Error).message}${retry}`,
+      );
+    }
+  };
 }
 
 /** Parse image inputs at the capability boundary, away from the uninterpreted channel. */
