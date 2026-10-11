@@ -12,6 +12,7 @@
 // blur-×2 note (the code applies it) and NO alignItems:"stretch" no-op warning (the bridge now synthesizes
 // container stretch per-child, so it just works). What stays documented is the fail-loud boundary: what
 // we reject rather than approximate, and the few departures that render anyway (FIDELITY_AND_SCOPE).
+import { CLI_NAME } from "~/utils/cli-help.js";
 
 export const MENTAL_MODEL = `Nodes are plain JavaScript data. Each new node names its type: FRAME, TEXT, RECTANGLE, ELLIPSE, LINE, VECTOR, or INSTANCE, and children is an ordinary array of node specs. A spec is a value, not a node: every placement verb returns a deep copy with ids filled in and never changes its input, so rendering one template twice makes two independent trees.
 
@@ -276,6 +277,7 @@ const muted = flcm.image("https://example.com/hero.jpg", { opacity: 0.4, rotatio
 
 - **The server loads the bytes** — your code never touches the network or the filesystem. Any public http(s) url works.
 - **Local paths are confined to the server's asset root** (\`--asset-root\`, default: the directory the server started in). A path outside it is refused, naming the root.
+- **For a file outside the root**, run \`npx ${CLI_NAME} upload <file>\` from a shell. It reads the file on your side and prints a handle (\`flcm-upload:…\`) to pass as \`src\`. Write the handle into the script literally: a run can only use handles its own code names. Handles last 30 minutes.
 - An **unfetchable, blocked, out-of-root, oversize, or non-image source fails loud** — never a silent blank fill.`;
 
 export const EFFECTS_INTRO = `Write effects as the CSS you'd already write — a bag of \`{ boxShadow?, textShadow?, filter?, backdropFilter? }\`. \`flcm.effects({...})\` is the second form, and the only way to reach the Figma-native effects CSS has no word for (\`glass\`, \`noise\`, \`texture\`, \`progressiveBlur\`, \`progressiveBackgroundBlur\`).

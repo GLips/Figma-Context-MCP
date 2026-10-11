@@ -69,9 +69,11 @@ export type BridgeRequest =
  */
 export interface ChannelRunContext {
   figma: FigmaService | null;
+  /** Upload handles the submitted code names literally — the only ones this run may redeem. */
+  uploadHandles: ReadonlySet<string>;
 }
 
-const NO_RUN_CONTEXT: ChannelRunContext = { figma: null };
+const NO_RUN_CONTEXT: ChannelRunContext = { figma: null, uploadHandles: new Set() };
 
 /** Opaque JSON payloads. Only explicitly registered names can be called. */
 export type CapabilityHandler = (

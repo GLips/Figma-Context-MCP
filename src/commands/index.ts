@@ -1,6 +1,7 @@
 import type { Command } from "cleye";
 import { executeCommand } from "~/commercial/commands/execute.js";
 import { referenceCommand } from "~/commercial/commands/reference.js";
+import { uploadCommand } from "~/commercial/commands/upload.js";
 import { commentsCommand } from "./comments.js";
 import { fetchCommand } from "./fetch.js";
 
@@ -9,6 +10,7 @@ export const CLI_COMMANDS: Command[] = [
   commentsCommand,
   executeCommand,
   referenceCommand,
+  uploadCommand,
 ];
 
 type CliCounterpart = { command: string; via?: string } | { exempt: string };

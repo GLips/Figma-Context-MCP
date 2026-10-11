@@ -5,7 +5,9 @@
 import { join } from "node:path";
 import { Logger } from "~/utils/logger.js";
 import { PluginBridge } from "./bridge.js";
-import { fetchAndProcessImage, isLocalImageSource, createLocalImageReader } from "./images.js";
+import { fetchAndProcessImage, createLocalImageReader } from "./images.js";
+import { ImageUploadStore, imageSourceKind } from "./image-intake.js";
+import { startUploadEndpoint, type UploadEndpoint } from "./upload-endpoint.js";
 import { createContainedFileReader } from "./contained-file.js";
 import { createSavedScriptReader } from "./saved-script.js";
 import { ImageByteCache, createImagesCapability } from "./image-requests.js";
@@ -53,9 +55,15 @@ export interface PluginBridgeRuntime {
 export function startPluginBridge({
   assetRoot,
   framelinkApiUrl,
+  acceptUploads = false,
 }: {
   assetRoot: string;
   framelinkApiUrl: string;
+  /**
+   * Open the image upload endpoint. Only a long-lived server wants it: an upload outlives the command
+   * that made it, so a CLI run's own short-lived runtime has nothing to hold handles for.
+   */
+  acceptUploads?: boolean;
 }): PluginBridgeRuntime {
   // The images handler answers the plugin's mid-run image requests (protocol 2). Sources split by
   // scheme: https urls go through the guarded fetch plus a session-lifetime URL→bytes cache, local
@@ -65,6 +73,18 @@ export function startPluginBridge({
   // root symlink mid-session.
   const readContained = createContainedFileReader(assetRoot);
   const readLocalImage = createLocalImageReader(readContained);
+  const uploads = new ImageUploadStore();
+  let uploadEndpoint: UploadEndpoint | null = null;
+  let stopped = false;
+  if (acceptUploads) {
+    startUploadEndpoint({ store: uploads }).then(
+      (endpoint) => {
+        if (stopped) endpoint.stop();
+        else uploadEndpoint = endpoint;
+      },
+      (err: Error) => Logger.log(`Image upload endpoint did not start: ${err.message}`),
+    );
+  }
   const writeAccess = new WriteAccess(
     new FramelinkApiClient(framelinkApiUrl),
     new WriteAccessStore(),
@@ -88,10 +108,18 @@ export function startPluginBridge({
       [
         "images.fetch",
         createImagesCapability({
-          fetchImage: (source, signal) =>
-            isLocalImageSource(source)
-              ? readLocalImage(source, signal)
-              : fetchAndProcessImage(source, signal),
+          fetchImage: async (source, run, signal) => {
+            const kind = imageSourceKind(source);
+            if (kind === "url") return fetchAndProcessImage(source, signal);
+            if (kind === "path") return readLocalImage(source, signal);
+            try {
+              return uploads.redeem(source, run.uploadHandles);
+            } catch (err) {
+              throw new Error(
+                `flcm.image could not load an upload handle: ${(err as Error).message}`,
+              );
+            }
+          },
           cache: new ImageByteCache(),
         }),
       ],
@@ -142,6 +170,8 @@ export function startPluginBridge({
     writeAccess,
     readSavedScript: createSavedScriptReader(readContained),
     stop: () => {
+      stopped = true;
+      uploadEndpoint?.stop();
       clearInterval(writeAccessTick);
       writeAccess.stop();
       bridge.stop();

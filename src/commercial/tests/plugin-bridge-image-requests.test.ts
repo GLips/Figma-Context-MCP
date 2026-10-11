@@ -13,6 +13,8 @@ import {
   MAX_IMAGES_PER_REQUEST,
 } from "~/commercial/plugin-bridge/image-requests.js";
 
+const RUN = { figma: null, uploadHandles: new Set<string>() };
+
 test("cache: a repeated url is served without a second fetch", async () => {
   // Real https urls — only remote sources are cached (a bare string classifies as a local path).
   const u1 = "https://cdn.example.com/u1.png";
@@ -27,8 +29,11 @@ test("cache: a repeated url is served without a second fetch", async () => {
   });
   // Spread: the reply map is null-prototype (attacker-chosen keys), which strict deepEqual would
   // otherwise flag against a plain object literal.
-  assert.deepEqual({ ...(await handler([u1])) }, { [u1]: `b64(${u1})` });
-  assert.deepEqual({ ...(await handler([u1, u2])) }, { [u1]: `b64(${u1})`, [u2]: `b64(${u2})` });
+  assert.deepEqual({ ...(await handler([u1], RUN)) }, { [u1]: `b64(${u1})` });
+  assert.deepEqual(
+    { ...(await handler([u1, u2], RUN)) },
+    { [u1]: `b64(${u1})`, [u2]: `b64(${u2})` },
+  );
   assert.deepEqual(fetched, [u1, u2], "u1 was fetched exactly once");
 });
 
@@ -41,8 +46,8 @@ test("cache: a local file path is never cached — each request re-reads from di
       return `b64(${url})`;
     },
   });
-  await handler(["assets/logo.png"]);
-  await handler(["assets/logo.png"]);
+  await handler(["assets/logo.png"], RUN);
+  await handler(["assets/logo.png"], RUN);
   assert.deepEqual(
     fetched,
     ["assets/logo.png", "assets/logo.png"],
@@ -79,7 +84,7 @@ test("handler: dedupes before counting against the per-request cap", async () =>
     },
   });
   const sameUrlManyTimes = Array.from({ length: MAX_IMAGES_PER_REQUEST * 2 }, () => "u1");
-  await handler(sameUrlManyTimes);
+  await handler(sameUrlManyTimes, RUN);
   assert.deepEqual(fetched, ["u1"], "duplicates collapse to one fetch and don't trip the cap");
 });
 
@@ -89,7 +94,7 @@ test("handler: over the distinct-url cap fails loud naming the cap", async () =>
     fetchImage: async () => "b",
   });
   const urls = Array.from({ length: MAX_IMAGES_PER_REQUEST + 1 }, (_, i) => `u${i}`);
-  await assert.rejects(handler(urls), new RegExp(`over the ${MAX_IMAGES_PER_REQUEST} cap`));
+  await assert.rejects(handler(urls, RUN), new RegExp(`over the ${MAX_IMAGES_PER_REQUEST} cap`));
 });
 
 test("handler: after one fetch fails, workers claim no new urls (bounded tail work)", async () => {
@@ -104,7 +109,7 @@ test("handler: after one fetch fails, workers claim no new urls (bounded tail wo
     },
   });
   const urls = ["bad", ...Array.from({ length: 12 }, (_, i) => `u${i}`)];
-  await assert.rejects(handler(urls), /boom/);
+  await assert.rejects(handler(urls, RUN), /boom/);
   // Only the fetches already in flight when "bad" failed may run — the concurrency width, not the
   // whole remaining list.
   assert.ok(fetched.length <= 4, `expected at most 4 started fetches, saw ${fetched.length}`);
@@ -115,7 +120,7 @@ test("handler: a reply exceeding the aggregate byte cap fails loud naming the bu
     cache: new ImageByteCache(),
     fetchImage: async () => "x".repeat(30 * 1024 * 1024),
   });
-  await assert.rejects(handler(["u1", "u2", "u3"]), /total over 64MiB/);
+  await assert.rejects(handler(["u1", "u2", "u3"], RUN), /total over 64MiB/);
 });
 
 test("handler: a single fetch failure rejects the whole request", async () => {
@@ -126,7 +131,7 @@ test("handler: a single fetch failure rejects the whole request", async () => {
       return "b";
     },
   });
-  await assert.rejects(handler(["ok", "bad"]), /could not load "bad"/);
+  await assert.rejects(handler(["ok", "bad"], RUN), /could not load "bad"/);
 });
 
 test("cancellation reaches image fetches, drains started work and claims no more URLs", async () => {
@@ -139,7 +144,7 @@ test("cancellation reaches image fetches, drains started work and claims no more
   const signals: Array<AbortSignal | undefined> = [];
   const handler = createImagesRequestHandler({
     cache: new ImageByteCache(),
-    fetchImage: async (url, signal) => {
+    fetchImage: async (url, _run, signal) => {
       started.push(url);
       signals.push(signal);
       // A decode/read that cannot be interrupted must still finish before service accounting ends.
@@ -149,6 +154,7 @@ test("cancellation reaches image fetches, drains started work and claims no more
   });
   const result = handler(
     Array.from({ length: 12 }, (_, i) => `u${i}`),
+    RUN,
     controller.signal,
   ).then(
     () => "resolved",

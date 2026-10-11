@@ -1404,7 +1404,7 @@ const IMAGE_SCALE_MODES = new Set(["FILL", "FIT", "CROP", "TILE"]);
 
 function image(url: unknown, opts: ImageOpts = {}): WritePaint {
   if (typeof url !== "string" || !url.trim()) {
-    throw new Error("flcm.image: expected an image url or local file path string, e.g. flcm.image(\"https://example.com/photo.jpg\") or flcm.image(\"assets/logo.png\") — got " + JSON.stringify(url) + ".");
+    throw new Error("flcm.image: expected an image url, local file path, or upload handle string, e.g. flcm.image(\"https://example.com/photo.jpg\") or flcm.image(\"assets/logo.png\") — got " + JSON.stringify(url) + ".");
   }
   opts = opts ?? {};
   rejectUnknownKeys(opts, IMAGE_KEYS, "flcm.image opts");

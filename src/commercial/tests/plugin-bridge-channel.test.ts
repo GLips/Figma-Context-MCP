@@ -486,7 +486,10 @@ it("hands each channel request the credentials of the request that started its r
   const bob = { user: "bob" } as unknown as FigmaService;
   const runs = [alice, bob].map((figma) =>
     bridge
-      .request({ type: "EXECUTE_CODE", code: "x", preamble: "x" }, undefined, undefined, { figma })
+      .request({ type: "EXECUTE_CODE", code: "x", preamble: "x" }, undefined, undefined, {
+        figma,
+        uploadHandles: new Set(),
+      })
       .catch((e) => e),
   );
   await Promise.resolve();

@@ -190,7 +190,7 @@ Warnings on nodes you neither returned nor logged appear as `[warn]` lines in th
 | `await flcm.measure(target)` | { x, y, width, height } | Measured pixels; x/y are relative to the containing frame or page, so a group's children measure from the frame around the group. |
 | `await flcm.designTokens(from?)` | { variables, styles, libraries } or { variables } | With no argument: the file's local and used variables and styles, and a catalog of enabled libraries. With { library, collection?, type? }: that library's variables. Each entry's reference pastes into a write: fill: entry.reference. See Variables and styles. |
 | `flcm.gradient(sugar)` | a paint value | { type: linear or radial, stops, angle?, at? }. Also accepts (type, stops, angle?). |
-| `flcm.image(url, options?)` | a paint value | Raster fill. Options: scaleMode, placeholder, opacity, rotation, filters, blendMode. Bytes are fetched through the host at the mutation verb. |
+| `flcm.image(url, options?)` | a paint value | Raster fill from an https url, a path under the asset root, or an upload handle. Options: scaleMode, placeholder, opacity, rotation, filters, blendMode. Bytes are fetched through the host at the mutation verb. |
 | `flcm.effects(sugar)` | effect values[] | CSS and Figma effect values for an effects prop. |
 | `flcm.id(nodeId)` | { __flcmId: nodeId } | Force raw-id resolution in a target argument. |
 | `await flcm.page.current()` | { fileName, page, pages } | Current page and available pages. |
@@ -589,6 +589,7 @@ const muted = flcm.image("https://example.com/hero.jpg", { opacity: 0.4, rotatio
 
 - **The server loads the bytes** — your code never touches the network or the filesystem. Any public http(s) url works.
 - **Local paths are confined to the server's asset root** (`--asset-root`, default: the directory the server started in). A path outside it is refused, naming the root.
+- **For a file outside the root**, run `npx figma-developer-mcp upload <file>` from a shell. It reads the file on your side and prints a handle (`flcm-upload:…`) to pass as `src`. Write the handle into the script literally: a run can only use handles its own code names. Handles last 30 minutes.
 - An **unfetchable, blocked, out-of-root, oversize, or non-image source fails loud** — never a silent blank fill.
 
 An `imageRef` identifies an existing image in this file and can be reused, for example `{ type: "RECTANGLE", fill: { type: "IMAGE", imageRef } }`. The read's `opacity`, `rotation`, `filters` and `blendMode` on that leaf are authored back as they read — the same words `flcm.image` takes as options.

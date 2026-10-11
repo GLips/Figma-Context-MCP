@@ -5,9 +5,10 @@
 // The trusted server-side image byte sources — the trust boundary in the write path. The Figma
 // sandbox holds manifest allowedDomains:["none"] and can reach nothing, so agent-authored `flcm.image(src)`
 // fills are inert until this module loads, validates, and downscales the bytes; the bridge answers the
-// sandbox's mid-run CHANNEL_REQUEST with them (see image-requests.ts). Two sources feed one processing
-// pipeline: an http(s) url through the guarded fetch (SSRF ranges, byte cap, redirect re-guarding), or a
-// LOCAL FILE PATH through readLocalImage, whose asset-root containment lives in contained-file.ts.
+// sandbox's mid-run CHANNEL_REQUEST with them (see image-requests.ts). Three sources feed one processing
+// pipeline: an http(s) url through the guarded fetch (SSRF ranges, byte cap, redirect re-guarding), a
+// LOCAL FILE PATH through readLocalImage, whose asset-root containment lives in contained-file.ts, and an
+// upload handle, whose bytes went through processImageBytes at intake (image-intake.ts).
 // Because the model — via the untrusted plugin — picks the source, every guard on both paths defends
 // against a hostile one; "read a file the plugin names" is an arbitrary-file-read primitive unless the
 // root check holds.
@@ -23,6 +24,7 @@ import jpeg from "@jimp/js-jpeg";
 import gif from "@jimp/js-gif";
 import * as resize from "@jimp/plugin-resize";
 import ipaddr from "ipaddr.js";
+import { CLI_NAME } from "~/utils/cli-help.js";
 import { OutsideAssetRootError, type ContainedFileReader } from "./contained-file.js";
 
 const Jimp = createJimp({ formats: [png, jpeg, gif], plugins: [resize.methods] });
@@ -41,8 +43,8 @@ const directDispatcher = new Agent();
 const MAX_DIMENSION = 4096;
 // Pre-downscale byte cap. Generous enough for a real photo, small enough that a hostile url can't stream us
 // out of memory. Enforced by streaming, not by trusting the (spoofable, often-absent) Content-Length header.
-const MAX_BYTES = 12 * 1024 * 1024;
-// Decoded-pixel cap, enforced from the image HEADER before jimp decodes anything. MAX_BYTES bounds the
+export const MAX_IMAGE_BYTES = 12 * 1024 * 1024;
+// Decoded-pixel cap, enforced from the image HEADER before jimp decodes anything. MAX_IMAGE_BYTES bounds the
 // COMPRESSED wire size but not the raster footprint: a highly compressible ~0.25MB PNG can declare 8000×8000
 // and decode to ~244MB (RGBA), a decompression bomb that OOMs the trusted server well under the byte cap. So
 // we read width×height from the header and reject over this budget (~30MP ≈ 120MB decoded) BEFORE decode —
@@ -180,11 +182,11 @@ function parseHttpUrl(raw: string): URL {
 }
 
 // Drain the body with a hard cap, aborting the moment we cross it — so a url that lies about (or omits) its
-// Content-Length still can't stream us past MAX_BYTES.
+// Content-Length still can't stream us past MAX_IMAGE_BYTES.
 async function readCapped(res: Response): Promise<Uint8Array> {
   const declared = Number(res.headers.get("content-length"));
-  if (Number.isFinite(declared) && declared > MAX_BYTES) {
-    throw new Error(`image is ${declared} bytes, over the ${MAX_BYTES}-byte cap`);
+  if (Number.isFinite(declared) && declared > MAX_IMAGE_BYTES) {
+    throw new Error(`image is ${declared} bytes, over the ${MAX_IMAGE_BYTES}-byte cap`);
   }
   if (!res.body) throw new Error("image response had no body");
   const chunks: Uint8Array[] = [];
@@ -194,9 +196,9 @@ async function readCapped(res: Response): Promise<Uint8Array> {
     const { done, value } = await reader.read();
     if (done) break;
     total += value.byteLength;
-    if (total > MAX_BYTES) {
+    if (total > MAX_IMAGE_BYTES) {
       await reader.cancel();
-      throw new Error(`image exceeds the ${MAX_BYTES}-byte cap`);
+      throw new Error(`image exceeds the ${MAX_IMAGE_BYTES}-byte cap`);
     }
     chunks.push(value);
   }
@@ -284,13 +286,6 @@ export async function fetchAndProcessImage(url: string, signal?: AbortSignal): P
   }
 }
 
-// The scheme split for flcm.image sources, mirroring CSS url(): an http(s) url is fetched, anything else
-// is a local file path served from the asset root. One classifier, imported by both the source dispatch
-// (plugin-bridge/index.ts) and the cache-skip rule (image-requests.ts), so they can't disagree.
-export function isLocalImageSource(source: string): boolean {
-  return !/^https?:\/\//i.test(source);
-}
-
 /**
  * The local-file byte source — the filesystem twin of fetchAndProcessImage, feeding the same processing
  * pipeline. The path arrives from the untrusted plugin, so containment under the asset root
@@ -304,14 +299,16 @@ export function createLocalImageReader(
   return async function readLocalImage(source: string, signal?: AbortSignal): Promise<string> {
     try {
       return await processImageBytes(
-        await readContained(source, { maxBytes: MAX_BYTES, signal }),
+        await readContained(source, { maxBytes: MAX_IMAGE_BYTES, signal }),
         signal,
       );
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
       const rootAdvice =
         err instanceof OutsideAssetRootError
-          ? ". If the root is wrong, report it to the user: the server's --asset-root sets it"
+          ? `. With shell access, run \`npx ${CLI_NAME} upload <file>\`, which reads the file on ` +
+            "your side and prints a handle to pass to flcm.image in its place. If the root itself " +
+            "is wrong, report it to the user: the server's --asset-root sets it"
           : "";
       throw new Error(
         `flcm.image could not load ${JSON.stringify(source)}: ${reason}${rootAdvice}`,

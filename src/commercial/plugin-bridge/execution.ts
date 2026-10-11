@@ -8,6 +8,7 @@ import type { PluginBridgeRuntime } from "./index.js";
 import { BridgeRequestError, type ChannelRunContext } from "./bridge.js";
 import { requestUntilApproved, isPendingApproval } from "./await-approval.js";
 import { flcmSandboxPreamble } from "./sandbox-preamble.js";
+import { uploadHandlesNamedIn } from "./image-intake.js";
 import { writeRefusalText, type WriteAuthorization } from "../entitlement/write-authorization.js";
 
 // The plugin always replies to EXECUTE_CODE with this exact shape; parse it once so the handler
@@ -50,8 +51,11 @@ export async function executePluginCode(
   { bridge, writeAccess }: Pick<PluginBridgeRuntime, "bridge" | "writeAccess">,
   code: string,
   options?: ApprovalOptions,
-  runContext?: ChannelRunContext,
+  { figma }: Pick<ChannelRunContext, "figma"> = { figma: null },
 ): Promise<ExecutionOutcome> {
+  // The upload grant comes from the code as submitted here, by the trusted caller — never from the
+  // plugin, which executes the code and so could otherwise name any handle it has seen.
+  const runContext: ChannelRunContext = { figma, uploadHandles: uploadHandlesNamedIn(code) };
   const executionId = randomUUID();
   const gate: { authorization: WriteAuthorization | null; runId: string | null } = {
     authorization: null,

@@ -15,7 +15,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createJimp } from "@jimp/core";
 import png from "@jimp/js-png";
-import { isLocalImageSource, createLocalImageReader } from "~/commercial/plugin-bridge/images.js";
+import { createLocalImageReader } from "~/commercial/plugin-bridge/images.js";
+import { imageSourceKind } from "~/commercial/plugin-bridge/image-intake.js";
 import { createContainedFileReader } from "~/commercial/plugin-bridge/contained-file.js";
 
 const Jimp = createJimp({ formats: [png] });
@@ -42,12 +43,13 @@ const imageReaderFor = (root: string) => createLocalImageReader(createContainedF
 const refusesOutsideRoot = (root: string) => (err: Error) =>
   err.message.includes("outside the asset root") && err.message.includes(root);
 
-test("isLocalImageSource: http(s) urls are remote, everything else is a local path", () => {
-  assert.equal(isLocalImageSource("https://cdn.example.com/a.png"), false);
-  assert.equal(isLocalImageSource("HTTP://cdn.example.com/a.png"), false);
-  assert.equal(isLocalImageSource("assets/logo.png"), true);
-  assert.equal(isLocalImageSource("./logo.png"), true);
-  assert.equal(isLocalImageSource("/abs/path/logo.png"), true);
+test("imageSourceKind: http(s) urls are remote, upload handles are uploads, the rest are paths", () => {
+  assert.equal(imageSourceKind("https://cdn.example.com/a.png"), "url");
+  assert.equal(imageSourceKind("HTTP://cdn.example.com/a.png"), "url");
+  assert.equal(imageSourceKind("flcm-upload:abc"), "upload");
+  assert.equal(imageSourceKind("assets/logo.png"), "path");
+  assert.equal(imageSourceKind("./logo.png"), "path");
+  assert.equal(imageSourceKind("/abs/path/logo.png"), "path");
 });
 
 test("a real png inside the root round-trips to base64", async () => {
@@ -104,7 +106,7 @@ test("a directory is refused by the open handle's own stat, not by a path check"
 
 test("a file over the byte cap is refused by the bounded read", async () => {
   await withRoot(async (root) => {
-    // 13MiB of zeros — past MAX_BYTES (12MiB), so the read stops at the cap-sized buffer and the
+    // 13MiB of zeros — past MAX_IMAGE_BYTES (12MiB), so the read stops at the cap-sized buffer and the
     // (cap + 1)th byte is what proves it was over. Never reaches the decoder.
     await writeFile(join(root, "huge.png"), Buffer.alloc(13 * 1024 * 1024));
     await assert.rejects(imageReaderFor(root)("huge.png"), /over the \d+-byte cap/);

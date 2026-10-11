@@ -5,18 +5,19 @@
 // Serves images.fetch over the private server channel: the sandbox's
 // render() awaits ONE batched fetch per verb, and this module answers it from the guarded byte
 // sources plus a session-lifetime URL→bytes cache, so repeated renders of the same remote asset
-// never re-download. Local file paths bypass the cache — see the miss loop below.
+// never re-download. Local file paths and upload handles bypass the cache — see the miss loop below.
 //
 // These bounds live HERE, on the server, because the plugin is the untrusted half of this
 // exchange: a compromised or stale plugin could ask for anything, so the url cap and the fetch
 // concurrency are enforced where the fetching actually happens. They are PER-REQUEST bounds — the
 // bridge separately caps how many requests one run may have in flight (bridge.ts
 // MAX_INFLIGHT_SERVICES_PER_RUN), so neither alone bounds a whole run.
-import type { CapabilityHandler } from "./bridge.js";
-import { isLocalImageSource } from "./images.js";
+import type { CapabilityHandler, ChannelRunContext } from "./bridge.js";
+import { imageSourceKind } from "./image-intake.js";
 
 type ImagesRequestHandler = (
   urls: string[],
+  run: ChannelRunContext,
   signal?: AbortSignal,
 ) => Promise<Record<string, string>>;
 
@@ -82,9 +83,10 @@ export interface ImagesRequestDeps {
   /**
    * The guarded server-side byte source, dispatched by scheme (plugin-bridge/index.ts): https urls
    * through fetchAndProcessImage (SSRF allowlist, byte caps), local paths through readLocalImage
-   * (asset-root containment). Both validate and downscale before returning base64.
+   * (asset-root containment), upload handles through the upload store (redeemable only by a run
+   * submitted naming them). All return validated, downscaled base64.
    */
-  fetchImage: (url: string, signal?: AbortSignal) => Promise<string>;
+  fetchImage: (url: string, run: ChannelRunContext, signal?: AbortSignal) => Promise<string>;
   cache: ImageByteCache;
 }
 
@@ -95,7 +97,7 @@ export interface ImagesRequestDeps {
  * plugin turns that into the run's error, so a blocked url never renders as a blank fill.
  */
 export function createImagesRequestHandler(deps: ImagesRequestDeps): ImagesRequestHandler {
-  return async (urls, signal) => {
+  return async (urls, run, signal) => {
     signal?.throwIfAborted();
     // The plugin dedupes before asking, but it is the untrusted side — dedupe again so the cap
     // below counts distinct urls no matter what was sent.
@@ -123,10 +125,10 @@ export function createImagesRequestHandler(deps: ImagesRequestDeps): ImagesReque
     };
     const misses: string[] = [];
     for (const url of distinct) {
-      // Local files bypass the cache entirely: the cache key is the source string, and a local file
-      // goes stale the moment the user tweaks it between renders — a cached read would silently
-      // paint the old bytes. Re-reading from disk each time is cheap; staleness is not.
-      const hit = isLocalImageSource(url) ? undefined : deps.cache.get(url);
+      // Only urls are cached. A local file goes stale the moment the user tweaks it between renders,
+      // so a cached read would silently paint the old bytes. An upload handle must be re-checked
+      // against each run's grant, which a source-keyed cache hit would skip.
+      const hit = imageSourceKind(url) === "url" ? deps.cache.get(url) : undefined;
       if (hit !== undefined) addBytes(url, hit);
       else misses.push(url);
     }
@@ -134,9 +136,9 @@ export function createImagesRequestHandler(deps: ImagesRequestDeps): ImagesReque
       misses,
       FETCH_CONCURRENCY,
       async (url) => {
-        const fetched = await deps.fetchImage(url, signal);
+        const fetched = await deps.fetchImage(url, run, signal);
         signal?.throwIfAborted();
-        if (!isLocalImageSource(url)) deps.cache.set(url, fetched);
+        if (imageSourceKind(url) === "url") deps.cache.set(url, fetched);
         addBytes(url, fetched);
       },
       signal,
@@ -176,9 +178,10 @@ async function mapWithConcurrency<T>(
 /** Parse image inputs at the capability boundary, away from the uninterpreted channel. */
 export function createImagesCapability(deps: ImagesRequestDeps): CapabilityHandler {
   const fetchImages = createImagesRequestHandler(deps);
-  return (payload, { signal }) =>
+  return (payload, { signal, run }) =>
     fetchImages(
       Array.isArray(payload) ? payload.filter((url): url is string => typeof url === "string") : [],
+      run,
       signal,
     );
 }
