@@ -246,6 +246,10 @@ function isApproved(key: ConnKey): boolean {
  * open". Because an attacker who defeats this has already observed the value, generator strength
  * is moot; Math.random (no crypto in Figma's QuickJS sandbox) suffices to stop blind guessing.
  */
+ *
+ * Session claims come from here too, and those reach UNAPPROVED servers, so a local process can draw
+ * generator output on demand. That still buys nothing new: any local process can dial a real server
+ * and read its token or claim straight from SESSION_INFO, the residual above.
 function mintToken(): string {
   return (
     Math.random().toString(36).slice(2) +
@@ -522,11 +526,12 @@ function panelSessions(): Array<{
       active: key === activeKey,
       writeAccess: conn.writeAccess ?? null,
       connected: true,
-      request: approved ? null : approvalRequestState(conn.askedAt, now),
+      // A rejected session's call is being refused, not waiting; it isn't an open request either.
+      request: approved || conn.rejected ? null : approvalRequestState(conn.askedAt, now),
       allowedWhileAway: false,
     });
   }
-  for (const [key, away] of awayRequests.entries()) {
+  for (const [key, away] of awayRequests.entries(now)) {
     sessions.push({
       key,
       identity: away.identity,
@@ -929,13 +934,20 @@ function handleServerFrame(frame: unknown, key: ConnKey): void {
         ? awayRequests.claim(msg.sessionClaim, conn.identity)
         : undefined;
       if (away && !isApproved(to.connKey)) {
-        if (away.allowed) {
+        const { key: awayKey, request } = away;
+        if (request.allowed) {
           const revision = (conn.decisionRevision ?? 0) + 1;
           conn.decisionRevision = revision;
-          handover = grantSession(to.connKey, conn, revision, away.allowed.authorizingUser);
+          // A handover that fails (storage, or a newer decision) puts the request back, Allow and all,
+          // rather than losing the human's click without a trace.
+          handover = grantSession(to.connKey, conn, revision, request.allowed.authorizingUser)
+            .then((granted) => {
+              if (!granted) awayRequests.retain(awayKey, request);
+              return granted;
+            });
         } else {
-          conn.askedAt = away.askedAt;
-          conn.sessionClaim = away.sessionClaim;
+          conn.askedAt = request.askedAt;
+          conn.sessionClaim = request.sessionClaim;
         }
       }
     }

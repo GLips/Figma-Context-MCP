@@ -243,7 +243,11 @@ export class ApprovalStore {
 
   /** Forget the persisted session claim: it was spent on a handover, or is expired. Idempotent. */
   clearSessionClaim(port: number): void {
-    rmSync(this.claimFileFor(port), { force: true });
+    try {
+      rmSync(this.claimFileFor(port));
+    } catch {
+      // Already gone (or unremovable) — nothing more to do.
+    }
   }
 
   private fileFor(port: number): string {

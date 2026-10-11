@@ -22,6 +22,10 @@ export const APPROVAL_WAITING_GRACE_MS = 3_000;
 // memory only, so closing the plugin drops them all.
 const MAX_AWAY_REQUESTS = 5;
 
+// Matches the server's session-claim expiry (approval-store.ts TTL_MS): past it the server has dropped
+// the claim, so the request could never be collected and its row would only mislead.
+const AWAY_REQUEST_TTL_MS = 24 * 60 * 60 * 1000;
+
 export type ApprovalRequestState = "waiting" | "expired";
 
 /** Whether a connection's last request is still waiting, or null if it has never asked. */
@@ -43,11 +47,21 @@ export interface AwayRequest<User> {
   allowed?: { authorizingUser: User };
 }
 
+export interface ClaimedAwayRequest<User> {
+  key: number;
+  request: AwayRequest<User>;
+}
+
 /** The away requests, keyed by the connection key of the socket that made them. */
 export function createAwayRequests<User>() {
   const requests = new Map<number, AwayRequest<User>>();
   return {
-    entries: () => requests.entries(),
+    /** The live away requests, dropping any past the server's claim expiry. */
+    entries(now: number) {
+      for (const [key, request] of requests)
+        if (now - request.askedAt > AWAY_REQUEST_TTL_MS) requests.delete(key);
+      return requests.entries();
+    },
     get: (key: number) => requests.get(key),
     get allowedCount() {
       let count = 0;
@@ -73,11 +87,11 @@ export function createAwayRequests<User>() {
      * Take the away request a reconnecting session claims, or undefined. The identity must match too:
      * not as proof (the claim is that), but so a claim can never move a request onto another project.
      */
-    claim(sessionClaim: string, identity: string | null): AwayRequest<User> | undefined {
+    claim(sessionClaim: string, identity: string | null): ClaimedAwayRequest<User> | undefined {
       for (const [key, request] of requests) {
         if (request.sessionClaim !== sessionClaim || request.identity !== identity) continue;
         requests.delete(key);
-        return request;
+        return { key, request };
       }
       return undefined;
     },

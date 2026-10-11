@@ -64,7 +64,8 @@ export function approvalPendingRerunAction(pairingCode: string | null, waitMs: n
     `Blocked: session approval is pending, and this run has ended without sending the script. ` +
     `Required before re-running: someone clicks Allow on ${request} in the Framelink plugin in Figma, ` +
     `where it now shows as expired. That approves the next run from this directory while the plugin ` +
-    `stays open; it does not run this one. ${REPORT_TO_PERSON} they confirm the approval — this run ` +
+    `stays open, provided it reconnects on the same port; it does not run this one. If the next run ` +
+    `prints a new pairing code instead, approve that one. ${REPORT_TO_PERSON} they confirm the approval — this run ` +
     `waited ${Math.round(waitMs / 1000)}s; raise --wait if they need longer.`
   );
 }
