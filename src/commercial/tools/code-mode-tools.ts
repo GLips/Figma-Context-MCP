@@ -3,6 +3,7 @@
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
 import { MAX_SCREENSHOT_SCALE } from "~/commercial/plugin-bridge/screenshot-options.js";
+import { OutsideAssetRootError } from "~/commercial/plugin-bridge/contained-file.js";
 import { startProgressHeartbeat, type ToolExtra } from "~/mcp/progress.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
@@ -141,9 +142,14 @@ export function registerCodeModeTools(
           try {
             script = await runtime.readSavedScript(scriptPath);
           } catch (error) {
+            const { message, cause } = error as Error;
+            const remedy =
+              cause instanceof OutsideAssetRootError
+                ? `save the script under ${cause.assetRoot} and pass that path`
+                : "correct scriptPath";
             return retryableToolReply(
-              `figma_execute_code ${(error as Error).message}, so this call did not run. Fix the ` +
-                `path and retry.`,
+              `figma_execute_code ${message}, so this call did not run. This is NOT a failure: ` +
+                `${remedy}, or send the script inline as code.`,
             );
           }
         } else return scriptSourceReply("neither");

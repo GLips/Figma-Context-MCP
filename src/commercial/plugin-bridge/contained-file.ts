@@ -18,13 +18,23 @@ import { resolve as resolvePath, sep as pathSep } from "node:path";
 const CONTAINED_OPEN_FLAGS =
   fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0);
 
+/** Callers name their own remedy for this refusal: who can act on it differs between them. */
+export class OutsideAssetRootError extends Error {
+  constructor(readonly assetRoot: string) {
+    super(
+      `the path resolves outside the asset root (${assetRoot}); only files under that root can be read`,
+    );
+  }
+}
+
 export type ContainedFileReader = (
   source: string,
   options: { maxBytes: number; signal?: AbortSignal },
 ) => Promise<Uint8Array>;
 
 /**
- * Build the byte reader for one asset root. Callers wrap its errors with what they were loading.
+ * Build the byte reader for one asset root. Callers wrap its errors with what they were loading; each
+ * message is one clause with no trailing period, so a caller can embed it in its own sentence.
  *
  * THE ROOT IS THE CONTROL. A caller-named path is an arbitrary-file-read primitive unless contained:
  * resolve against the root, then verify the resolved REALPATH sits inside the root's realpath —
@@ -80,10 +90,7 @@ export function createContainedFileReader(assetRoot: string): ContainedFileReade
       throw new Error(`could not resolve that path under the asset root (${assetRoot}): ${code}`);
     }
     if (fileReal !== rootReal && !fileReal.startsWith(rootReal + pathSep)) {
-      throw new Error(
-        `the path resolves outside the asset root (${assetRoot}) — only files under that root can be ` +
-          `read. Start the server with --asset-root pointed at your project if the root is wrong.`,
-      );
+      throw new OutsideAssetRootError(assetRoot);
     }
     return readOpenedFile(fileReal, assetRoot, maxBytes, signal);
   };

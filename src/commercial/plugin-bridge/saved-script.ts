@@ -30,9 +30,10 @@ export function createSavedScriptReader(
       const bytes = await readContained(scriptPath, { maxBytes: MAX_SCRIPT_BYTES });
       return Buffer.from(bytes).toString("utf8");
     } catch (err) {
-      // Trailing period dropped so callers can continue the sentence.
-      const reason = (err instanceof Error ? err.message : String(err)).replace(/\.$/, "");
-      throw new Error(`could not read scriptPath ${JSON.stringify(scriptPath)}: ${reason}`);
+      const reason = err instanceof Error ? err.message : String(err);
+      throw new Error(`could not read scriptPath ${JSON.stringify(scriptPath)}: ${reason}`, {
+        cause: err,
+      });
     }
   };
 }

@@ -99,8 +99,10 @@ describe("figma_execute_code with scriptPath", () => {
     const { call, submitted, close } = connectedServer();
     try {
       const escaped = await call({ scriptPath: "../outside.js" });
-      expect(escaped.text).toContain("outside the asset root");
+      expect(escaped.isError).toBeFalsy();
       expect(escaped.text).toContain("did not run");
+      expect(escaped.text).toContain(`save the script under ${root}`);
+      expect(escaped.text).toContain("send the script inline as code");
 
       const absoluteEscape = await call({ scriptPath: join(outer, "outside.js") });
       expect(absoluteEscape.text).toContain("outside the asset root");
@@ -118,10 +120,12 @@ describe("figma_execute_code with scriptPath", () => {
     await writeFile(join(root, "scripts", "card.js"), "return 1;");
     const { call, submitted, close } = connectedServer();
     try {
-      expect((await call({})).text).toContain("got neither");
-      expect((await call({ code: "return 1", scriptPath: "scripts/card.js" })).text).toContain(
-        "got both",
-      );
+      const neither = await call({});
+      expect(neither.isError).toBeFalsy();
+      expect(neither.text).toContain("got neither");
+      const both = await call({ code: "return 1", scriptPath: "scripts/card.js" });
+      expect(both.isError).toBeFalsy();
+      expect(both.text).toContain("got both");
       expect(submitted()).toEqual([]);
     } finally {
       await close();

@@ -188,8 +188,8 @@ export function getServerConfig(flags: ServerFlags): ServerConfig {
   // code-mode tools to be advertised from startup instead of waiting for a plugin connection.
   const codeMode = resolve(flags.codeMode, envBool("FIGMA_CODE_MODE"), false);
 
-  // The directory local flcm.image() file paths are confined to — a security boundary, not a
-  // convenience (see plugin-bridge/images.ts readLocalImage). Defaults to cwd, which is the agent's
+  // The directory local flcm.image() file paths and scriptPath scripts are confined to — a security
+  // boundary, not a convenience (see plugin-bridge/contained-file.ts). Defaults to cwd, which is the agent's
   // repo in the common launch shape.
   const { assetRoot, framelinkApiUrl } = resolvePluginConfig(flags.assetRoot);
 

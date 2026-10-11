@@ -7,9 +7,10 @@
 // fills are inert until this module loads, validates, and downscales the bytes; the bridge answers the
 // sandbox's mid-run CHANNEL_REQUEST with them (see image-requests.ts). Two sources feed one processing
 // pipeline: an http(s) url through the guarded fetch (SSRF ranges, byte cap, redirect re-guarding), or a
-// LOCAL FILE PATH through the asset-root guard (readLocalImage). Because the model — via the untrusted
-// plugin — picks the source, every guard here defends against a hostile one; "read a file the plugin
-// names" is an arbitrary-file-read primitive unless the root check holds.
+// LOCAL FILE PATH through readLocalImage, whose asset-root containment lives in contained-file.ts.
+// Because the model — via the untrusted plugin — picks the source, every guard on both paths defends
+// against a hostile one; "read a file the plugin names" is an arbitrary-file-read primitive unless the
+// root check holds.
 //
 // Ported in spirit from production figma-mcp (downloadAndProcessImage/jimp), but the guard is net-new:
 // figma-mcp only ever fetches from Figma's own trusted CDN, so it has no SSRF/type defense to port. jimp is
@@ -22,7 +23,7 @@ import jpeg from "@jimp/js-jpeg";
 import gif from "@jimp/js-gif";
 import * as resize from "@jimp/plugin-resize";
 import ipaddr from "ipaddr.js";
-import type { ContainedFileReader } from "./contained-file.js";
+import { OutsideAssetRootError, type ContainedFileReader } from "./contained-file.js";
 
 const Jimp = createJimp({ formats: [png, jpeg, gif], plugins: [resize.methods] });
 
@@ -308,7 +309,13 @@ export function createLocalImageReader(
       );
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
-      throw new Error(`flcm.image could not load ${JSON.stringify(source)}: ${reason}`);
+      const rootAdvice =
+        err instanceof OutsideAssetRootError
+          ? ". If the root is wrong, report it to the user: the server's --asset-root sets it"
+          : "";
+      throw new Error(
+        `flcm.image could not load ${JSON.stringify(source)}: ${reason}${rootAdvice}`,
+      );
     }
   };
 }

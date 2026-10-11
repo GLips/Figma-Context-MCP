@@ -87,7 +87,7 @@ const argv = cli({
       type: String,
       placeholder: "<dir>",
       description:
-        "Local files flcm.image() may read must be inside this directory (default cwd; env FRAMELINK_ASSET_ROOT)",
+        "Local files flcm.image() and figma_execute_code's scriptPath may read must be inside this directory (default cwd; env FRAMELINK_ASSET_ROOT)",
     },
     codeMode: {
       type: Boolean,
