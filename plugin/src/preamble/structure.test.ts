@@ -158,9 +158,10 @@ test("a fill carried from an auto-layout parent keeps its px size in a free-form
   const copy = await figma.getNodeByIdAsync((await clone("tile", "staging")).id);
   assert.equal(copy.parent.id, staging.id);
   assert.deepEqual([copy.width, copy.height], [480, 400]);
-  const read = (await get("tile")).node;
-  assert.equal(read.width, "fill"); // the paste below carries the read's own fill and readOnlySource
-  await append("staging", read);
+  // An earlier call's output: projected for egress, so no readOnlySource rides along.
+  const pasted = JSON.parse(JSON.stringify((await get("tile")).node, (key, value) => key === "readOnlySource" ? undefined : value));
+  assert.equal(pasted.width, "fill");
+  await append("staging", pasted);
   assert.equal(tile.parent.id, staging.id);
   assert.deepEqual([tile.width, tile.height], [480, 400]);
 });
@@ -169,7 +170,8 @@ test("a fill written in the same call still covers the free-form destination", a
   const { tile } = await renderTileAndStaging();
   const copy = await figma.getNodeByIdAsync((await clone("tile", { width: "fill" }, "staging")).id);
   assert.deepEqual([copy.width, copy.height], [900, 400]);
-  await append("staging", { id: tile.id, height: "fill" });
+  // The tile already fills its column, so "fill" would restate it; covering the new parent is a change.
+  await append("staging", { id: tile.id, height: "100%" });
   assert.deepEqual([tile.width, tile.height], [480, 2600]);
   // A fill typed over a pasted read's fixed axis is the author's, not the read's.
   const read = (await get(copy.id)).node;

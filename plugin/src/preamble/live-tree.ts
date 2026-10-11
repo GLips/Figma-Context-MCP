@@ -8,9 +8,10 @@ import { normalizePathData, normalizeVectorPaths } from "./path.js";
 // import the edit orchestration that already depends on the bridge.
 import type { WriteNode } from "./ir.js";
 import { treeNodes, childTreeNodes } from "./compile-tree.js";
-import { resolveTarget, createResolvedTargets } from "./read.js";
+import { resolveTarget, createResolvedTargets, readStandingState } from "./read.js";
+import { stableStringify, type SimplifiedNode } from "@framelink/core";
 import { compileEditPlan, loadEditResources, assertEditPlanLands, applyEditPlanWrites, settleEditPlanSizes, settleEditPlanPositions, holdEditPlanPivot } from "./edit-plan.js";
-import { resolveInstanceEditTargets, planInstanceEdit, applyInstanceRetarget, applyInstanceOverrides } from "./instance.js";
+import { resolveInstanceEditTargets, planInstanceEdit, applyInstanceRetarget, applyInstanceOverrides, liveSublayerIdOf } from "./instance.js";
 import { planComponentEdit, applyComponentDefinitionEdit, applyComponentBindingEdit } from "./component-edit.js";
 import { assertNodeStillOnCanvas } from "./freshness.js";
 import { childListClosingInstanceOf, writeKey, isInheritedSlotContent, slotOwnerOf, describeNodeIdentity } from "./identity.js";
@@ -50,6 +51,9 @@ export function liveChildrenOfNewNodes(trees: readonly WriteNode[]): Set<WriteNo
 
 export async function loadLiveTree(tree: WriteNode, intoNewNode = liveChildrenOfNewNodes([tree])): Promise<LoadedLiveTree> {
   const entries = [];
+  const standing = new Map<string, SimplifiedNode[]>();
+  const parentOf = new Map(treeNodes(tree).flatMap(parent => childTreeNodes(parent).map(child => [child, parent] as const)));
+  const reflowing = new Set<WriteNode>();
   for (const wn of treeNodes(tree)) {
     if (!wn.liveId) continue;
     const at = wn.sourcePath!;
@@ -59,15 +63,17 @@ export async function loadLiveTree(tree: WriteNode, intoNewNode = liveChildrenOf
       if (wn.authoring!.svg !== undefined) throw new Error("svg has no live geometry edit: importing markup can change node types and child identities. Move with { id }, or omit the id to import new artwork.");
       if (wn.source?.type !== undefined && wn.source.type !== "IMAGE-SVG" && wn.source.type !== node.type) throw new Error("type " + wn.source.type + " does not match live " + node.type + ".");
       wn.type = node.type;
-      const { key, d, vectorPaths, componentPropertyReferences, ...delta } = wn.authoring!;
-      // A pasted read reports its "fill" as the node's standing state, not a write; its readOnlySource
-      // records that state. Dropped here, the fill rides in as carried intent (liveParentRelativeWords), which a
-      // placement that reads fill differently freezes instead of stretching to cover. Only while the read and the
-      // node both say fill on that axis: a stale read, or a fill typed over a fixed axis, is a write.
-      const reported = (wn.source as { readOnlySource?: Record<string, unknown> } | undefined)?.readOnlySource;
-      for (const [axis, sizing] of [["width", "layoutSizingHorizontal"], ["height", "layoutSizingVertical"]] as const) {
-        if (delta[axis] === "fill" && reported?.[sizing] === "FILL" && (node as any)[sizing] === "FILL") delete delta[axis];
-      }
+      // Pre-order, so a live root's one read covers every live descendant pasted with it. A node
+      // stating no words (a bare { id } move) has nothing to compare and costs no read. Judged here,
+      // not at the seal: a user edit landing in between keeps the user's value for a restated word.
+      const stated = Object.keys(wn.authoring!).length > 0;
+      if (stated && !standing.has(node.id)) for (const [id, reads] of await readStandingState(node)) standing.set(id, reads);
+      const parent = parentOf.get(wn);
+      const words = changedWords(wn.authoring!, standing.get(node.id) ?? [], parent && reflowing.has(parent) ? PARENT_RELATIVE_WORDS : NO_WORDS);
+      const swapped = node.type === "INSTANCE" && retargets(node, words);
+      const { key, d, vectorPaths, componentPropertyReferences, ...delta } = swapped ? { ...wn.authoring! } : words;
+      if (node.type === "INSTANCE" && !swapped && delta.overrides) delta.overrides = changedOverrides(node.id, delta.overrides, standing);
+      if (isBag(delta.layout) ? delta.layout.mode !== undefined : "layout" in delta) reflowing.add(wn);
       if (componentPropertyReferences !== undefined) {
         wn.componentPropertyReferences = compileBindingBag(componentPropertyReferences, bindingFieldsForType(node.type), at);
       }
@@ -93,6 +99,75 @@ export async function loadLiveTree(tree: WriteNode, intoNewNode = liveChildrenOf
   }
   const loaded = entries.length ? await loadEditResources(entries.flatMap(e => [...(e.hint ? [e.hint] : []), ...(e.instance?.overrides.map(o => o.plan) ?? [])]), entries.flatMap(e => e.instance ? [e.instance.needs] : [])) : { fonts: {}, images: {}, tokens: NO_TOKENS };
   return { entries, loaded };
+}
+
+// A live identity's words are a delta against the node as it stands: a word equal to what a read of
+// it reports is no change, so a pasted read states nothing (an echoed binding declares nothing). A
+// null is the read's word for a field at its default, so it equals absence. `held` are words whose
+// context this call changes, so the read no longer describes them: they stay.
+function changedWords(words: Record<string, unknown>, standing: readonly SimplifiedNode[], held: ReadonlySet<string>): Record<string, unknown> {
+  const changed: Record<string, unknown> = {};
+  for (const [word, value] of Object.entries(words)) {
+    const reads = standing.map(read => (read as unknown as Record<string, unknown>)[word]);
+    if (!held.has(word) && reads.some(read => sameReadValue(read, value))) continue;
+    changed[word] = PARTIAL_BAGS.has(word) && isBag(value) ? changedBagWords(value, reads.filter(isBag), held) : value;
+  }
+  return changed;
+}
+
+function sameReadValue(read: unknown, authored: unknown): boolean {
+  return stableStringify(read ?? null) === stableStringify(authored ?? null);
+}
+
+// Bags an edit writes word by word, so a spread read with one word changed restates the rest, and
+// each restated word is no change too. Re-sent, `alignItems` would un-stretch every fill child.
+const PARTIAL_BAGS = new Set(["layout", "textStyle", "componentProperties", "componentPropertyReferences"]);
+
+// A font is one identity: changing one member re-resolves the others (edit-plan.ts
+// enrichFontIdentity), so a restated family beside a new weight anchors the change.
+const FONT_IDENTITY_WORDS = ["fontFamily", "fontWeight", "fontStyle", "fontVariantName"];
+
+// A child's words about its parent's flow. When the same call re-flows that parent, the read
+// described the old flow, so restating them is a write.
+const PARENT_RELATIVE_WORDS: ReadonlySet<string> = new Set([
+  "width", "height", "position", "left", "top", "right", "bottom", "alignSelf", "justifySelf", "gridColumn", "gridRow", "zIndex",
+]);
+const NO_WORDS: ReadonlySet<string> = new Set();
+
+function isBag(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function changedBagWords(bag: Record<string, unknown>, standing: readonly Record<string, unknown>[], held: ReadonlySet<string>): Record<string, unknown> {
+  const changed: Record<string, unknown> = {};
+  for (const [word, value] of Object.entries(bag)) {
+    if (held.has(word) || !standing.some(read => sameReadValue(read[word], value))) changed[word] = value;
+  }
+  if (FONT_IDENTITY_WORDS.some(word => word in changed)) for (const word of FONT_IDENTITY_WORDS) if (word in bag) changed[word] = bag[word];
+  return changed;
+}
+
+// A swap or a variant change replaces what the instance is, so its read describes the component it
+// is leaving: none of its words or overrides can be judged against it.
+function retargets(instance: InstanceNode, words: Record<string, unknown>): boolean {
+  if (words.componentId !== undefined) return true;
+  const properties = isBag(words.componentProperties) ? Object.keys(words.componentProperties) : [];
+  return properties.some(name => instance.componentProperties[name]?.type === "VARIANT");
+}
+
+// The same rule one level down: each override path is a delta against the live sublayer it names,
+// so a pasted instance's echoed children (lifted into overrides by compile-tree.ts) don't pin their
+// inherited values as overrides.
+function changedOverrides(instanceId: string, overrides: unknown, standing: ReadonlyMap<string, SimplifiedNode[]>): unknown {
+  if (!isBag(overrides)) return overrides;
+  const changed: Record<string, unknown> = {};
+  for (const [path, delta] of Object.entries(overrides)) {
+    const sublayer = standing.get(liveSublayerIdOf(instanceId, path));
+    if (!sublayer || !isBag(delta)) { changed[path] = delta; continue; }
+    const words = changedWords(delta, sublayer, NO_WORDS);
+    if (Object.keys(words).length) changed[path] = words;
+  }
+  return Object.keys(changed).length ? changed : undefined;
 }
 
 export interface LoadedLiveTree {

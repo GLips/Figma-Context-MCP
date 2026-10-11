@@ -426,7 +426,7 @@ function slotPathsSentence(definition: any): string {
 // documents (`I<instanceId>;<path>`). Exactly ONE leading `I` however deep: a NESTED instance's own
 // id already carries it (`I12:3;4:5`), so its sublayer is `I12:3;4:5;6:7`, not `II12:3;…`. Same rule
 // as core's componentPath/definitionId, which is the read side of this string.
-function liveSublayerIdOf(instanceId: string, path: string): string {
+export function liveSublayerIdOf(instanceId: string, path: string): string {
   return (instanceId.charAt(0) === "I" ? instanceId : "I" + instanceId) + ";" + path;
 }
 

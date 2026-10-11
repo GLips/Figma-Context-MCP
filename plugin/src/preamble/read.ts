@@ -192,6 +192,27 @@ async function simplifyScene(
   categories?: ReadonlyMap<string, string>,
   inContext = false,
 ): Promise<import("@framelink/core").SimplifyResult> {
+  const full = await simplifyLive(node, unreadable, categories, inContext, await readCommentCounts());
+  for (const node of full.nodes) registerNode(node);
+  for (const entry of Object.values(full.components)) for (const node of entry.children ?? []) registerNode(node);
+  registerRead(full.components, () => project(full).components);
+  return full;
+  function registerNode(node: SimplifiedNode): void {
+    registerRead(node, () => {
+      const projected = projectReadNode(node, full);
+      return projected === node ? node : projectNames(projected);
+    });
+    for (const child of node.children ?? []) registerNode(child);
+  }
+}
+
+async function simplifyLive(
+  node: BaseNode,
+  unreadable: UnreadableSink,
+  categories: ReadonlyMap<string, string> | undefined,
+  inContext: boolean,
+  comments?: CommentCounts,
+): Promise<import("@framelink/core").SimplifyResult> {
   const annotationCategories = categories ?? await readAnnotationCategoryNames();
   const mainComponents: MainComponentSink = new Map();
   const resolveToken = liveTokenResolver();
@@ -206,20 +227,26 @@ async function simplifyScene(
   );
   const componentDefinitions =
     await offTreeDefinitions(snapshot, mainComponents, annotationCategories, resolveToken);
-  attachCommentCounts(snapshot, await readCommentCounts());
+  if (comments) attachCommentCounts(snapshot, comments);
   const contextParent = parent && sceneContextParent(parent);
-  const full = await simplify([snapshot], { componentDefinitions, contextParent });
-  for (const node of full.nodes) registerNode(node);
-  for (const entry of Object.values(full.components)) for (const node of entry.children ?? []) registerNode(node);
-  registerRead(full.components, () => project(full).components);
-  return full;
-  function registerNode(node: SimplifiedNode): void {
-    registerRead(node, () => {
-      const projected = projectReadNode(node, full);
-      return projected === node ? node : projectNames(projected);
-    });
-    for (const child of node.children ?? []) registerNode(child);
-  }
+  return simplify([snapshot], { componentDefinitions, contextParent });
+}
+
+/**
+ * What a live node and its subtree already are, in every spelling a read of them hands out: the
+ * in-sandbox read, and the egress projection a previous call's output carried. Keyed by id. A word
+ * pasted back equal to either states no change (live-tree.ts), whichever call the paste came from.
+ */
+export async function readStandingState(node: SceneNode): Promise<Map<string, SimplifiedNode[]>> {
+  const full = await simplifyLive(node, new Set(), undefined, true);
+  const standing = new Map<string, SimplifiedNode[]>();
+  const index = (read: SimplifiedNode): void => {
+    standing.set(read.id, [...(standing.get(read.id) ?? []), read]);
+    for (const child of read.children ?? []) index(child);
+  };
+  full.nodes.forEach(index);
+  project(full).nodes.forEach(read => index(projectNames(read)));
+  return standing;
 }
 
 /**
