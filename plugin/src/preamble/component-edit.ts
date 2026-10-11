@@ -26,13 +26,13 @@
 // AFTER them (the node has to be what this delta makes it before it is wired to a property).
 
 import { WriteNode, WriteChild, ComponentEditWords, ComponentPropertyBinding, ComponentPropertyDefinitionEdit } from "./ir.js";
-import { BoundLiveNode } from "./bridge.js";
-import { EditPlanFailure } from "./edit-plan.js";
+import { BoundLiveNode, RenderResources } from "./bridge.js";
+import { EditPlan, EditPlanFailure } from "./edit-plan.js";
 import {
   PROPERTY_TYPES, PROPERTY_TYPE_WORD_FOR, BINDING_FIELD_WIRE_KEYS, FIELD_FOR_TYPE, PreparedDefinition,
-  compilePropertyDefinition, componentAncestorOf, writeBindingReferences, quoted, agreedDefault,
+  compilePropertyDefinition, componentAncestorOf, writeBindingReferences, quoted, agreedDefault, readableComponentOf, describeBinder, boundLayerValue,
 } from "./component.js";
-import { resolvePropertyName, matchPropertyNames, bareName } from "./instance.js";
+import { resolvePropertyName, matchPropertyNames, bareName, InstanceEditPlan } from "./instance.js";
 import { compileBindingEditBag, bindingFieldsForType, assertNoComponentPropertyBindings } from "./flcm.js";
 import { instanceAncestorOf, describeNodeIdentity, definitionOwnerOf, propertyDefinitionsOf } from "./identity.js";
 import { own } from "./validate.js";
@@ -64,8 +64,8 @@ export interface AddedDefinition extends PreparedDefinition {
   minted?: string;
 }
 
-/** What one layer bound to an added property will show once its own entry lands — its default. */
-export interface AddedPropertyBinder {
+/** A layer a property's default is read off — what it will show once the call lands — as a refusal names it. */
+export interface PropertyBinder {
   layer: string;
   value: boolean | string;
 }
@@ -110,7 +110,7 @@ export function planAddedDefinitions(node: any, words: ComponentEditWords, subje
 
 /** The definition half of an edit; editMany calls it directly, with binders gathered across its entries. */
 export function planComponentDefinitionEdit(
-  node: any, words: ComponentEditWords, subject: string, adds: ReadonlyMap<string, AddedDefinition>, bindersOf: (add: AddedDefinition) => AddedPropertyBinder[],
+  node: any, words: ComponentEditWords, subject: string, adds: ReadonlyMap<string, AddedDefinition>, bindersOf: (add: AddedDefinition) => PropertyBinder[],
 ): ComponentDefinitionEditPlan {
   const plan: ComponentDefinitionEditPlan = { deletes: [], renames: [], adds: [] };
   if (words.description !== undefined) plan.description = words.description;
@@ -428,26 +428,164 @@ export function applyComponentBindingEdit(fail: EditPlanFailure, node: any, plan
   }
 }
 
+// ---- an EXISTING property's default, settled from its binders ----
+//
+// Binding a layer writes the property's default into it, so the default and every layer bound to it
+// are one value. A call that binds to a property the component already has settles that value the way
+// a new property's is settled: from every layer bound to it once the call lands — the ones it binds
+// and the ones already bound. They must agree; when the call's binders are the only ones, the default
+// takes their content BEFORE the bindings land, so binding writes back what the layer already shows.
+
+/** One field a call binds to a property the component already has. */
+export interface ExistingPropertyBinding {
+  owner: any;
+  /** The property's full (suffixed) name. */
+  full: string;
+  wire: string;
+  binder: PropertyBinder;
+  /** Where a refusal about this binding is reported. */
+  at: string;
+}
+
+/** What the call does to the layers ALREADY bound to the properties it binds. */
+export interface StandingBinderFacts {
+  /** True when this call rewrites `wire` on `node` (rebinds or unbinds it) or removes the node — its standing binding stops counting. */
+  leaves(node: any, wire: string): boolean;
+  /** What `node` will show for `field` if this call changes it; undefined when it doesn't. */
+  shows(node: any, field: string): boolean | string | undefined;
+}
+
+/** A default an existing property takes before the call's bindings land. */
+export interface BoundDefaultWrite {
+  owner: any;
+  full: string;
+  value: boolean | string;
+  /** The binding the write is settled for — whose entry an applier failure names. */
+  by: ExistingPropertyBinding;
+}
+
+/**
+ * THE one place a binding to an existing property is judged, for every path that binds one (edit,
+ * editMany, and a bound insert). A slot holds no value, so it never reaches here. `refuse` receives
+ * the property's first binding and the refusal; it rethrows unless the caller collects per entry.
+ */
+export function settleExistingPropertyDefaults(
+  bindings: readonly ExistingPropertyBinding[], standing: StandingBinderFacts,
+  refuse: (binding: ExistingPropertyBinding, cause: unknown) => void = (_, cause) => { throw cause; },
+): BoundDefaultWrite[] {
+  const groups = new Map<any, Map<string, ExistingPropertyBinding[]>>();
+  for (const binding of bindings) {
+    const byName = groups.get(binding.owner) ?? new Map<string, ExistingPropertyBinding[]>();
+    groups.set(binding.owner, byName);
+    byName.set(binding.full, [...(byName.get(binding.full) ?? []), binding]);
+  }
+  const writes: BoundDefaultWrite[] = [];
+  for (const [owner, byName] of groups) {
+    const definitions = propertyDefinitionsOf(owner);
+    for (const [full, group] of byName) {
+      const definition = definitions[full];
+      const type = PROPERTY_TYPE_WORD_FOR[definition.type];
+      const field = FIELD_FOR_TYPE[type];
+      // Every variant's bound layers count: a set's property has one default, shown in each of them.
+      // A layer the call leaves alone shows that default, because Figma keeps the two equal.
+      const already = subtreeOf(owner)
+        .filter((node) => own((node.componentPropertyReferences || {}) as Record<string, string>, group[0].wire) === full && !standing.leaves(node, group[0].wire))
+        .map((node) => ({ layer: JSON.stringify(node.name) + " (already bound)", value: standing.shows(node, field) ?? definition.defaultValue }));
+      try {
+        const value = agreedDefault({ name: bareName(full), type }, [...already, ...group.map((b) => b.binder)], group[0].at);
+        if (value !== definition.defaultValue) writes.push({ owner, full, value, by: group[0] });
+      } catch (cause) {
+        refuse(group[0], cause);
+      }
+    }
+  }
+  return writes;
+}
+
+/**
+ * A binding edit's unbinds alone, landed before a batch's settled defaults: a default write rewrites
+ * every layer still bound to the property, and a layer the batch frees keeps what it shows. A rebind
+ * needs no such care, since its new property's default already equals what the layer will show.
+ */
+export function applyComponentUnbinds(fail: EditPlanFailure, node: any, plan: ComponentBindingEditPlan): void {
+  const unbinds = plan.writes.filter((write) => write.full === null && !write.add);
+  if (!unbinds.length) return;
+  try {
+    const wire: Record<string, string> = { ...(node.componentPropertyReferences || {}) };
+    for (const write of unbinds) delete wire[write.wire];
+    node.componentPropertyReferences = wire;
+  } catch (cause) {
+    throw fail(cause);
+  }
+}
+
+/** The settled defaults — after the layers' own words, before ANY binding of the call lands. */
+export function applyBoundDefaults(fail: EditPlanFailure, writes: readonly BoundDefaultWrite[]): void {
+  try {
+    for (const write of writes) write.owner.editComponentProperty(write.full, { defaultValue: write.value });
+  } catch (cause) {
+    throw fail(cause);
+  }
+}
+
+/** The existing-property bindings in one planned binding edit, each binder's value read by `value`. */
+export function existingPropertyBindings(
+  binding: ComponentBindingEditPlan, layer: string, at: string, value: (field: string) => boolean | string,
+): ExistingPropertyBinding[] {
+  return binding.writes.flatMap((write) => write.full === null || write.field === "slot"
+    ? []
+    : [{ owner: binding.owner, full: write.full, wire: write.wire, binder: { layer, value: value(write.field) }, at: at + ".componentPropertyReferences." + write.field }]);
+}
+
+/** What a layer an edit targets will show for a binding field because of that edit — undefined if the edit doesn't touch it. */
+export function editedBinderValue(field: string, plan: EditPlan, instance: InstanceEditPlan | undefined): boolean | string | undefined {
+  if (field === "visible") return plan.patch.visible;
+  if (field === "text") return plan.patch.runs ? plan.patch.runs.map((run) => run.text).join("") : plan.patch.text;
+  return instance && instance.retargets ? instance.becomes.id : undefined;
+}
+
+// What a bound layer will show once its edit has landed: the edit's own word for the field if it
+// names one, else the live value. That is the value a binding would write back into it, so it is
+// the value the property's default must hold. `main` is the live instance's component, for a swap binder.
+export function projectedBinderValue(field: string, plan: EditPlan, instance: InstanceEditPlan | undefined, main: any | null, at: string): boolean | string {
+  const edited = editedBinderValue(field, plan, instance);
+  if (edited !== undefined) return edited;
+  const node = plan.node as any;
+  if (field === "visible") return node.visible !== false;
+  if (field === "text") return node.characters;
+  return readableComponentOf(main, node, at).id;
+}
+
 // ---- both halves, as one delta's component work ----
 
-/** An edit delta's COMPONENT half, resolved. Either side may be absent; both may not. */
+/** An edit delta's COMPONENT half, resolved. Any part may be absent. */
 export interface ComponentEditPlan {
   definitions?: ComponentDefinitionEditPlan;
   binding?: ComponentBindingEditPlan;
+  /** Applied in their own pass between the layers' words and the bindings (applyBoundDefaults). */
+  defaults?: BoundDefaultWrite[];
 }
 
 /**
  * The sync half, run in the verb's gate: every definition and binding word, decided against the live
  * component. One delta can't both add a property and bind a sublayer to it, so a property it adds has
  * no binder — refused, pointing at editMany (which plans the halves across entries itself).
+ * `binderValue` is what the node will show for a bound field once this delta lands.
  */
-export function planComponentEdit(node: any, words: ComponentEditWords, subject: string): ComponentEditPlan {
+export function planComponentEdit(
+  node: any, words: ComponentEditWords, subject: string, binderValue: (field: string) => boolean | string,
+): ComponentEditPlan {
   const plan: ComponentEditPlan = {};
   if (words.description !== undefined || words.propertyDefinitions !== undefined) {
     plan.definitions = planComponentDefinitionEdit(node, words, subject, planAddedDefinitions(node, words, subject), () => []);
   }
   if (words.componentPropertyReferences !== undefined) {
-    plan.binding = prepareComponentBindingEdit(node, words.componentPropertyReferences, subject);
+    const binding = prepareComponentBindingEdit(node, words.componentPropertyReferences, subject);
+    plan.binding = binding;
+    plan.defaults = settleExistingPropertyDefaults(existingPropertyBindings(binding, describeBinder(node.name, subject), subject, binderValue), {
+      leaves: (other, wire) => other === node && binding.writes.some((write) => write.wire === wire),
+      shows: () => undefined,
+    });
   }
   return plan;
 }
@@ -464,18 +602,22 @@ export interface InsertBindingPlan {
   owner: any;
   resolved: Record<string, string>;
   declaresSlots: string[];
+  defaults: BoundDefaultWrite[];
 }
 
 /**
  * Prepare the bindings of a tree being inserted into `parent`. Returns undefined when it
  * carries none — the ordinary insert, unchanged. A tree that DOES carry them and is landing
  * anywhere but inside a component is refused by flcm's own surface-wide rule (a binding with no
- * declaring component names nothing).
+ * declaring component names nothing). `removes` is a live node the verb takes off the canvas
+ * (replace's original), so a binding it holds stops counting.
  *
  * Synchronous by type, and that is load-bearing: every fact it reads is live, so it runs in the
  * insert verb's synchronous gate — see structure.ts.
  */
-export function prepareInsertBindings(subject: string, parent: any, tree: WriteNode): InsertBindingPlan | undefined {
+export function prepareInsertBindings(
+  subject: string, parent: any, tree: WriteNode, resources: RenderResources, removes: (node: any) => boolean = () => false,
+): InsertBindingPlan | undefined {
   const bound: { wn: WriteNode; refs: ComponentPropertyBinding }[] = [];
   collectBoundWriteNodes(tree, bound);
   if (!bound.length) return undefined;
@@ -489,7 +631,8 @@ export function prepareInsertBindings(subject: string, parent: any, tree: WriteN
   if (!component) assertNoComponentPropertyBindings(tree, subject);
   const owner = definitionOwnerOf(component);
   const definitions = propertyDefinitionsOf(owner);
-  const plan: InsertBindingPlan = { owner, resolved: {}, declaresSlots: [] };
+  const plan: InsertBindingPlan = { owner, resolved: {}, declaresSlots: [], defaults: [] };
+  const existing: ExistingPropertyBinding[] = [];
   const where = subject + ".componentPropertyReferences";
   // A slot is one hole, and the second claim on it can come from this same tree — where neither
   // frame is on the canvas yet for the live count to see. Declared names and full names never
@@ -501,7 +644,7 @@ export function prepareInsertBindings(subject: string, parent: any, tree: WriteN
     }
     claimedSlots.push(name);
   };
-  for (const { refs } of bound) {
+  for (const { wn, refs } of bound) {
     for (const field of Object.keys(refs)) {
       const authored = (refs as Record<string, string>)[field];
       const at = where + "." + field;
@@ -517,10 +660,30 @@ export function prepareInsertBindings(subject: string, parent: any, tree: WriteN
         continue;
       }
       const full = resolveBindingToDefinition(definitions, component, field, authored, at, undefined);
-      if (field === "slot") claimSlot(full, at);
       plan.resolved[authored] = full;
+      if (field === "slot") {
+        claimSlot(full, at);
+        continue;
+      }
+      const layer = describeBinder(wn.name ?? resources.live?.get(wn)?.node.name, wn.sourcePath!);
+      existing.push({ owner, full, wire: BINDING_FIELD_WIRE_KEYS[field].wire, binder: { layer, value: boundLayerValue(definitions[full].type, wn, resources.instances, resources.live) }, at });
     }
   }
+  // A live node in the tree is what it is once its own words land (live-tree.ts projected them onto
+  // its write node), and one that carries a binding on a field rebinds that field.
+  const liveWriteNodes = new Map<any, WriteNode>();
+  for (const [wn, liveNode] of resources.live ?? []) liveWriteNodes.set(liveNode.node, wn);
+  plan.defaults = settleExistingPropertyDefaults(existing, {
+    leaves: (node, wire) => {
+      const wn = liveWriteNodes.get(node);
+      const refs = (wn?.componentPropertyReferences ?? {}) as Record<string, string>;
+      return removes(node) || Object.keys(refs).some((field) => BINDING_FIELD_WIRE_KEYS[field].wire === wire);
+    },
+    shows: (node, field) => {
+      const wn = liveWriteNodes.get(node);
+      return wn ? boundLayerValue(PROPERTY_TYPES[BINDING_FIELD_WIRE_KEYS[field].type], wn, resources.instances, resources.live) : undefined;
+    },
+  });
   return plan;
 }
 
@@ -534,10 +697,12 @@ function collectBoundWriteNodes(wn: WriteChild, out: { wn: WriteNode; refs: Comp
 }
 
 /**
- * Mint the slot properties this insert declares, then write every binding onto the built nodes —
- * inside the insert's own sealed span, after the tree is attached and settled.
+ * Settle the existing properties' defaults, mint the slot properties this insert declares, then
+ * write every binding onto the built nodes — inside the insert's own sealed span, after the tree is
+ * attached and settled.
  */
 export function applyInsertBindings(plan: InsertBindingPlan, built: readonly BoundLiveNode[]): void {
+  for (const write of plan.defaults) write.owner.editComponentProperty(write.full, { defaultValue: write.value });
   const suffixed: Record<string, string> = { ...plan.resolved };
   // Declaring a slot may make Figma materialize its own unpositioned 100×100 placeholder for the
   // hole — it does when a slot is declared through the UI, and whether this API call does it too is

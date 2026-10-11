@@ -331,6 +331,105 @@ test("a binding edit merges onto the node's live bag rather than replacing it", 
   assert.equal(label.componentPropertyReferences.visible, fullName(comp, "Show Label"));
 });
 
+// A "Tag" whose three value properties exist but bind nothing — the state after an unbind, or a
+// component someone else built — beside unbound layers showing real content.
+async function unboundTag() {
+  const badgeA = figma.createComponent();
+  badgeA.name = "Badge A";
+  figma.currentPage.appendChild(badgeA);
+  const badgeB = figma.createComponent();
+  badgeB.name = "Badge B";
+  figma.currentPage.appendChild(badgeB);
+  const out = await component(
+    {
+      type: "FRAME",
+      key: "tag",
+      layout: { mode: "row", gap: 4 },
+      children: [
+        { type: "RECTANGLE", key: "icon", name: "Icon", width: 8, height: 8, componentPropertyReferences: { visible: "Shown" } },
+        { type: "TEXT", text: "Label", key: "label", name: "Label", componentPropertyReferences: { text: "Label" } },
+        { type: "INSTANCE", componentId: badgeA.id, key: "badge", name: "Badge", componentPropertyReferences: { componentId: "Badge" } },
+        { type: "TEXT", text: "Overview", key: "title", name: "Title" },
+        { type: "RECTANGLE", key: "dot", name: "Dot", width: 8, height: 8, visible: false },
+        { type: "INSTANCE", componentId: badgeB.id, key: "mark", name: "Mark" },
+      ],
+    },
+    { name: "Tag", propertyDefinitions: { Shown: { type: "boolean" }, Label: { type: "text" }, Badge: { type: "instance_swap" } } },
+  );
+  const node = async (key: string) => figma.getNodeByIdAsync(specNode(out, key).id);
+  const [comp, icon, label, badge, title, dot, mark] = await Promise.all(["tag", "icon", "label", "badge", "title", "dot", "mark"].map((key) => key === "tag" ? figma.getNodeByIdAsync(out.id) : node(key)));
+  await editMany([
+    { id: icon.id, componentPropertyReferences: { visible: null } },
+    { id: label.id, componentPropertyReferences: { text: null } },
+    { id: badge.id, componentPropertyReferences: { componentId: null } },
+  ]);
+  return { comp, label, title, dot, mark, badgeB };
+}
+
+// Binding writes the property's default into the layer, so with nothing else bound to it the layer
+// sets the default first — its content survives, and the default follows it.
+test("binding a layer to an existing property nothing else binds keeps its content, and the default follows", async () => {
+  const { comp, title, dot, mark, badgeB } = await unboundTag();
+  await editMany([
+    { id: title.id, componentPropertyReferences: { text: "Label" } },
+    { id: dot.id, componentPropertyReferences: { visible: "Shown" } },
+  ]);
+  await edit(id(mark.id), { componentPropertyReferences: { componentId: "Badge" } });
+  const defaults = comp.componentPropertyDefinitions;
+  assert.equal(title.characters, "Overview");
+  assert.equal(dot.visible, false);
+  assert.equal(mark.mainComponent, badgeB);
+  assert.equal(defaults[fullName(comp, "Label")].defaultValue, "Overview");
+  assert.equal(defaults[fullName(comp, "Shown")].defaultValue, false);
+  assert.equal(defaults[fullName(comp, "Badge")].defaultValue, badgeB.id);
+  // A bound insert is the same binding, reached by building the layer.
+  const { comp: other } = await unboundTag();
+  await append(id(other.id), { type: "TEXT", text: "Fresh", name: "Fresh", componentPropertyReferences: { text: "Label" } });
+  assert.equal(other.findOne((n: { name: string }) => n.name === "Fresh").characters, "Fresh");
+  assert.equal(other.componentPropertyDefinitions[fullName(other, "Label")].defaultValue, "Fresh");
+});
+
+test("binders of an existing property that show different content are refused, each named", async () => {
+  const { comp, label, title } = await unboundTag();
+  const before = figma.undoLog.length;
+  // In the same call…
+  await assert.rejects(
+    editMany([
+      { id: title.id, componentPropertyReferences: { text: "Label" } },
+      { id: label.id, componentPropertyReferences: { text: "Label" } },
+    ]),
+    /2 layers bind "Label" and show different text — "Title" at entry 0 is "Overview", "Label" at entry 1 is "Label"/,
+  );
+  assert.deepEqual(figma.undoLog.slice(before), []);
+  // …and against a layer already bound to it, whichever path the new binder takes.
+  await edit(id(title.id), { componentPropertyReferences: { text: "Label" } });
+  const bound = figma.undoLog.length;
+  await assert.rejects(
+    edit(id(label.id), { componentPropertyReferences: { text: "Label" } }),
+    /2 layers bind "Label" and show different text — "Title" \(already bound\) is "Overview", "Label" .* is "Label"/,
+  );
+  await assert.rejects(
+    append(id(comp.id), { type: "TEXT", text: "Other", name: "Other", componentPropertyReferences: { text: "Label" } }),
+    /2 layers bind "Label" and show different text — "Title" \(already bound\) is "Overview", "Other" .* is "Other"/,
+  );
+  assert.deepEqual(figma.undoLog.slice(bound), []);
+  assert.equal(label.characters, "Label");
+  // A layer the same batch unbinds no longer counts, so the binding moves and the default follows.
+  await editMany([
+    { id: title.id, componentPropertyReferences: { text: null } },
+    { id: label.id, componentPropertyReferences: { text: "Label" } },
+  ]);
+  assert.equal(label.characters, "Label");
+  assert.equal(comp.componentPropertyDefinitions[fullName(comp, "Label")].defaultValue, "Label");
+  await editMany([
+    { id: label.id, componentPropertyReferences: { text: null } },
+    { id: title.id, componentPropertyReferences: { text: "Label" } },
+  ]);
+  // The same content just binds.
+  await edit(id(label.id), { text: "Overview", componentPropertyReferences: { text: "Label" } });
+  assert.equal(label.componentPropertyReferences.characters, fullName(comp, "Label"));
+});
+
 test("an insert into a component may carry bindings — an existing property, and a NEW slot it declares", async () => {
   const { comp } = await chipComponent();
   await append(id(comp.id), {
@@ -339,7 +438,7 @@ test("an insert into a component may carry bindings — an existing property, an
     children: [
       {
         type: "TEXT",
-        text: "Sub",
+        text: "Label",
         key: "sub",
         name: "Sub",
         componentPropertyReferences: { text: "Label" },

@@ -43,9 +43,10 @@ import {
 } from "./instance.js";
 import {
   planAddedDefinitions, planComponentDefinitionEdit, prepareComponentBindingEdit, applyComponentDefinitionEdit, applyComponentBindingEdit,
-  ComponentEditPlan, ComponentBindingEditPlan, AddedDefinition, AddedPropertyBinder,
+  applyBoundDefaults, applyComponentUnbinds, settleExistingPropertyDefaults, existingPropertyBindings, editedBinderValue, projectedBinderValue,
+  ComponentEditPlan, ComponentBindingEditPlan, AddedDefinition, PropertyBinder, ExistingPropertyBinding,
 } from "./component-edit.js";
-import { componentAncestorOf, describeBinder, readableComponentOf } from "./component.js";
+import { componentAncestorOf, describeBinder } from "./component.js";
 import { definitionOwnerOf } from "./identity.js";
 import type { EditDelta, EditEntry } from "./schema.js";
 
@@ -334,12 +335,13 @@ function planEntryComponents(
     const refs = plans[i]?.componentWords?.componentPropertyReferences;
     if (refs !== undefined) bindings[i] = prepareComponentBindingEdit(plans[i]!.node, refs, SUBJECT, (owner) => addsByOwner.get(owner));
   });
-  const bindersOf = (add: AddedDefinition): AddedPropertyBinder[] => {
-    const binders: AddedPropertyBinder[] = [];
+  const binderValue = (j: number, field: string) => projectedBinderValue(field, plans[j]!, instances[j], mains[j], SUBJECT);
+  const bindersOf = (add: AddedDefinition): PropertyBinder[] => {
+    const binders: PropertyBinder[] = [];
     bindings.forEach((binding, j) => {
       for (const write of binding?.writes ?? []) {
         if (write.add !== add || ledger.failed(j)) continue;
-        binders.push({ layer: describeBinder(plans[j]!.node.name, "entry " + j), value: projectedBinderValue(write.field, plans[j]!, instances[j], mains[j]) });
+        binders.push({ layer: describeBinder(plans[j]!.node.name, "entry " + j), value: binderValue(j, write.field) });
       }
     });
     return binders;
@@ -356,17 +358,45 @@ function planEntryComponents(
     if (bindings[i]) component.binding = bindings[i];
     components[i] = component;
   });
+  settleEntryBoundDefaults(ledger, plans, instances, bindings, components, binderValue);
   return components;
 }
 
-// What a bound layer will show once its own entry has landed: the entry's own word for the field if
-// it names one, else the live value. That is the value the binding would write back into it, so it is
-// the added property's default — any other value would overwrite the layer.
-function projectedBinderValue(field: string, plan: EditPlan, instance: InstanceEditPlan | undefined, main: any | null): boolean | string {
-  const node = plan.node as any;
-  if (field === "visible") return (plan.patch.visible ?? node.visible) !== false;
-  if (field === "text") return plan.patch.runs ? plan.patch.runs.map((run) => run.text).join("") : plan.patch.text ?? node.characters;
-  return readableComponentOf(instance ? instance.becomes : main, node, SUBJECT).id;
+/**
+ * The defaults of the existing properties this batch binds, judged across every entry at once: two
+ * entries binding one property are binders of the same default, and an entry that edits or rebinds a
+ * layer already bound to it changes what that layer contributes. Each write rides on the entry whose
+ * binding settled it; a refusal is that entry's.
+ */
+function settleEntryBoundDefaults(
+  ledger: BatchLedger, plans: readonly (EditPlan | undefined)[], instances: readonly (InstanceEditPlan | undefined)[],
+  bindings: readonly (ComponentBindingEditPlan | undefined)[], components: (ComponentEditPlan | undefined)[], binderValue: (j: number, field: string) => boolean | string,
+): void {
+  const existing: ExistingPropertyBinding[] = [];
+  const entryOf = new Map<ExistingPropertyBinding, number>();
+  const rewired = new Map<any, ComponentBindingEditPlan>();
+  const entryAt = new Map<any, number>();
+  forEachLiveEntry(ledger, plans.length, (j) => {
+    entryAt.set(plans[j]!.node, j);
+    const binding = bindings[j];
+    if (!binding) return;
+    rewired.set(plans[j]!.node, binding);
+    for (const one of existingPropertyBindings(binding, describeBinder(plans[j]!.node.name, "entry " + j), SUBJECT, (field) => binderValue(j, field))) {
+      existing.push(one);
+      entryOf.set(one, j);
+    }
+  });
+  const writes = settleExistingPropertyDefaults(existing, {
+    leaves: (node, wire) => !!rewired.get(node)?.writes.some((write) => write.wire === wire),
+    shows: (node, field) => {
+      const j = entryAt.get(node);
+      return j === undefined ? undefined : editedBinderValue(field, plans[j]!, instances[j]);
+    },
+  }, (binding, cause) => ledger.record(entryOf.get(binding)!, cause));
+  for (const write of writes) {
+    const component = components[entryOf.get(write.by)!]!;
+    (component.defaults ??= []).push(write);
+  }
 }
 
 /**
@@ -632,6 +662,17 @@ export function editMany(entries: EditEntry[]): Promise<Handle[]> {
         if (component && component.definitions) applyComponentDefinitionEdit(fails[i], plans[i].node, component.definitions);
       }
       for (const i of order) applyEditPlanWrites(fails[i], plans[i], resources);
+      // Unbinds, then the settled defaults, then every binding (see applyComponentUnbinds).
+      if (components.some((component) => component && component.defaults)) {
+        for (const i of order) {
+          const component = components[i];
+          if (component && component.binding) applyComponentUnbinds(fails[i], plans[i].node, component.binding);
+        }
+        for (const i of order) {
+          const component = components[i];
+          if (component && component.defaults) applyBoundDefaults(fails[i], component.defaults);
+        }
+      }
       for (const i of order) {
         const component = components[i];
         if (component && component.binding) applyComponentBindingEdit(fails[i], plans[i].node, component.binding);

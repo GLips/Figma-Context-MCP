@@ -275,10 +275,12 @@ test("moved nodes bind to properties in their destination component", async () =
     { propertyDefinitions: { Label: { type: "text" } } },
   );
   const text = await flcm.render({ type: "TEXT", text: "Moved" });
-  await flcm.append(component, { id: text.id, componentPropertyReferences: { text: "Label" } });
+  // Its binders show one value, the default: the moved layer is made to agree in the same call.
+  await flcm.append(component, { id: text.id, text: "Default", componentPropertyReferences: { text: "Label" } });
   const live: any = await figma.getNodeByIdAsync(text.id);
   assert.equal(live.parent.id, component.id);
   assert.match(live.componentPropertyReferences.characters, /^Label#/);
+  assert.equal(live.characters, "Default");
 });
 
 test("component promotion can declare bindings on existing children and derive their values", async () => {

@@ -527,7 +527,7 @@ await flcm.edit(titleId, { componentPropertyReferences: { text: "Heading" } }); 
 await flcm.edit(titleId, { componentPropertyReferences: { visible: null } });     // unbind
 \`\`\`
 
-- **Binding to an existing property makes the layer show that property's default**: Figma writes it in, replacing what the layer showed. To keep a layer's own content as the value, add the property bound to it (above).
+- **The layer keeps its content.** A property's default and every layer bound to it are one value, so they must agree. With no other layer bound, the default takes this layer's content. Otherwise its content must match the layers already bound, and binders in the same call must match each other. A mismatch is refused, naming each layer and what it shows. This applies to inserted bound layers too.
 - The node must be inside a COMPONENT or a set's variant: inside an INSTANCE it is refused naming the instance, and outside any component there is no property to point at.
 - Field legality is the compiler's, read off the live node's type. Bare names resolve to Figma's suffixed ones when unambiguous.
 - **Unbinding the only frame of a slot property is refused**: delete the property (\`{ Name: null }\`), which frees the frame. In a SET the count is per VARIANT; a sibling variant's frame is no spare.
@@ -538,7 +538,7 @@ await flcm.edit(titleId, { componentPropertyReferences: { visible: null } });   
 \`append\`/\`prepend\`/\`insertBefore\`/\`insertAfter\` into a component or its sublayers accept a plain node spec carrying \`componentPropertyReferences\`.
 
 \`\`\`js
-await flcm.append(comp, { type: "TEXT", componentPropertyReferences: { text: "Label" } });   // shows Label's default
+await flcm.append(comp, { type: "TEXT", text: "Save", componentPropertyReferences: { text: "Label" } });   // matches Label's other layers
 await flcm.append(comp, { type: "FRAME", width: 240, height: 80, componentPropertyReferences: { slot: "Content" } });
 \`\`\`
 

@@ -12,7 +12,7 @@ import { resolveTarget, createResolvedTargets } from "./read.js";
 import { createStandingState } from "./standing-state.js";
 import { compileEditPlan, loadEditResources, assertEditPlanLands, applyEditPlanWrites, settleEditPlanSizes, settleEditPlanPositions, holdEditPlanPivot } from "./edit-plan.js";
 import { resolveInstanceEditTargets, planInstanceEdit, applyInstanceRetarget, applyInstanceOverrides } from "./instance.js";
-import { planComponentEdit, applyComponentDefinitionEdit, applyComponentBindingEdit } from "./component-edit.js";
+import { planComponentEdit, applyComponentDefinitionEdit, applyComponentBindingEdit, projectedBinderValue } from "./component-edit.js";
 import { assertNodeStillOnCanvas } from "./freshness.js";
 import { childListClosingInstanceOf, writeKey, isInheritedSlotContent, slotOwnerOf, describeNodeIdentity } from "./identity.js";
 import { assertLiveNodeLandsUnderParent, liveParentAttachFacts, attachBuiltChild, attachLiveNode, resettleMovedNode, applyVectorPath } from "./bridge.js";
@@ -139,17 +139,17 @@ export function gateLiveTree(live: LoadedLiveTree, resources: RenderResources): 
     const plan = entry.hint ? compileEditPlan(node, changes, at) : undefined;
     wn.layout = plan?.patch.layout;
     const instance = plan?.instanceWords ? planInstanceEdit(node, plan.instanceWords, current, { targets, fonts: resources.fonts }, at) : undefined;
-    const component = plan?.componentWords ? planComponentEdit(node, plan.componentWords, at) : undefined;
+    const component = plan?.componentWords ? planComponentEdit(node, plan.componentWords, at, (field) => projectedBinderValue(field, plan, instance, current, at)) : undefined;
     // Placement validates against the destination. Font coverage and node-local legality still
     // use the edit gate, with parent-relative words withheld until that destination exists.
     if (plan) assertEditPlanLands({ ...plan, patch: { ...plan.patch, layout: undefined } }, resources.fonts, at);
     if (instance) for (const [tree, instancePlan] of instance.needs.plans) (resources.instances as Map<WriteNode, typeof instancePlan>).set(tree, instancePlan);
-    if (wn.componentPropertyReferences) {
-      wn.visible = plan?.patch.visible ?? node.visible;
-      if (node.type === "TEXT") {
-        wn.text = plan?.patch.runs ? undefined : plan?.patch.text ?? node.characters;
-        wn.runs = plan?.patch.runs;
-      }
+    // What the node shows once its words land: the value a property default is judged by, whether
+    // this node binds the property or is already bound to it (component.ts, component-edit.ts).
+    wn.visible = plan?.patch.visible ?? node.visible;
+    if (node.type === "TEXT") {
+      wn.text = plan?.patch.runs ? undefined : plan?.patch.text ?? node.characters;
+      wn.runs = plan?.patch.runs;
     }
     plans.set(wn, { node, component: instance?.becomes ?? current, place(parent, place, ctx) {
       assertInheritedSlotContentStays(at, node, parent);

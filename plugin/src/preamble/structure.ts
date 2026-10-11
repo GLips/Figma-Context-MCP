@@ -272,7 +272,7 @@ function placeVerb(verb: string, anchor: PlacementAnchor, spec: NodeSpec, placem
       assertInheritedSlotContentStays(tree.sourcePath!, liveRoot.node, dest.parent);
       assertLiveNodeLandsUnderParent(liveRoot.node, dest.parent, subject, tree.layout);
     }
-    const bindings = prepareInsertBindings(subject, dest.parent, tree);
+    const bindings = prepareInsertBindings(subject, dest.parent, tree, resources);
     return { kind: "insert", dest, tree, resources, bindings };
   }, prepared => applyInsert(verb, prepared));
 }
@@ -461,7 +461,15 @@ export function replace(target: Target, spec: NodeSpec): Promise<AuthoredTree> {
     }
     const resources = gateTreeResources(tree, loaded, { destination: dest.parent });
     for (const entry of loaded.live.entries) assertNoCycle(entry.wn.sourcePath!, entry.node, dest.parent);
-    return { kind: "insert", original: node, dest, tree, resources, bindings: prepareInsertBindings("flcm.replace", dest.parent, tree) };
+    // The original leaves unless the replacement keeps it, and its descendants leave with it unless kept.
+    const removes = (layer: any): boolean => {
+      for (let p = layer; p; p = p.parent) {
+        if (kept.has(p.id)) return false;
+        if (p === node) return true;
+      }
+      return false;
+    };
+    return { kind: "insert", original: node, dest, tree, resources, bindings: prepareInsertBindings("flcm.replace", dest.parent, tree, resources, removes) };
   }, prepared => {
     const result = applyInsert("replace", prepared);
     if (!treeNodes(prepared.tree).some(node => node.liveId === prepared.original.id)) {

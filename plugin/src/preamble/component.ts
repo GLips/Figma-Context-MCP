@@ -279,18 +279,21 @@ function resolveDefaults(
     if (definition.figmaType === "SLOT") return { name: definition.name, figmaType: "SLOT", defaultValue: "" };
     const binders = bindersOf(bound, definition).map(({ wn }) => ({
       layer: describeBinder(wn.name ?? live?.get(wn)?.node.name, wn.sourcePath!),
-      value: binderValue(definition, wn, plans, live),
+      value: boundLayerValue(definition.figmaType, wn, plans, live),
     }));
     return { name: definition.name, figmaType: definition.figmaType, defaultValue: agreedDefault(definition, binders, at, targetForm ? promoteThenBind(definition) : undefined) };
   });
 }
 
-/** What one binder states for a property of its type — the value its layer will show once built. */
-function binderValue(definition: AuthoredDefinition, wn: WriteNode, plans: InstancePlans, live?: RenderResources["live"]): boolean | string {
-  // A live binder's `visible` and text were projected onto it at the gate (live-tree.ts), its
+/**
+ * What one authored node states for a property of `figmaType` — the value its layer will show once
+ * built. Shared with a bound insert into an existing component (component-edit.ts).
+ */
+export function boundLayerValue(figmaType: string, wn: WriteNode, plans: InstancePlans, live?: RenderResources["live"]): boolean | string {
+  // A live node's `visible` and text were projected onto it at the gate (live-tree.ts), its
   // authored edit if there is one, else what it shows now — so the read below is one rule for both.
-  if (definition.figmaType === "BOOLEAN") return wn.visible !== false; // an unnamed `visible` is true
-  if (definition.figmaType === "TEXT") return authoredTextOf(wn);
+  if (figmaType === "BOOLEAN") return wn.visible !== false; // an unnamed `visible` is true
+  if (figmaType === "TEXT") return authoredTextOf(wn);
   // The bound node is an INSTANCE (the compilers allow `componentId` on nothing else), and
   // its plan already holds the component this call will actually STAMP — which is the point: when
   // the node names a SET and picks a member with `componentProperties`, re-resolving the target here

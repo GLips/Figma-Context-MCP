@@ -548,6 +548,21 @@ class Node {
   // collapse if a scenario ever keys on post-write size/fill). Range styling exists after a
   // write only if the same edit re-applies runs, which is the bridge's order
   // (buildText/applyTextProps: characters, then setRange*).
+  // Binding a DEFINITION layer to a property writes the property's default into the field it drives,
+  // replacing the layer's content — live-checked 2026-10-10 for text, boolean and instance swap. An
+  // instance's sublayers carry the same bag (COPY_FIELDS) but take values through setProperties.
+  get componentPropertyReferences() { return this._componentPropertyReferences; }
+  set componentPropertyReferences(refs) {
+    const before = this._componentPropertyReferences || {};
+    this._componentPropertyReferences = refs;
+    const owner = definitionOwnerAround(this);
+    if (!owner || !refs) return;
+    for (const [wire, full] of Object.entries(refs)) {
+      const def = (owner._defs || {})[full];
+      if (before[wire] !== full && def) writeDefinitionBinder(this, def, def.defaultValue);
+    }
+  }
+
   get characters() { return this._characters; }
   set characters(v) {
     if (this.type === "TEXT" && (this._rangeFonts || []).length && (this._characters || "").length) {
@@ -894,6 +909,10 @@ class Node {
     if (edits && edits.defaultValue !== undefined) {
       const before = def.defaultValue;
       def.defaultValue = edits.defaultValue;
+      // The definition's own bound layers show the default, so they are rewritten with it (live).
+      for (const n of definitionSubtreeOf(this)) {
+        if ((n.componentPropertyReferences || {})[wire] === full && definitionOwnerAround(n) === this) writeDefinitionBinder(n, def, edits.defaultValue);
+      }
       // An instance that never set the property follows the new default; one that did keeps its own.
       for (const inst of instancesOf(this)) {
         if (inst._props[full] !== before) continue;
@@ -1098,6 +1117,23 @@ function instancesOf(component) {
     if (node.type === "INSTANCE" && !node.removed && mains.indexOf(node.mainComponent) !== -1) out.push(node);
   }
   return out;
+}
+
+// The definition owner a layer's binding resolves against, or null for a layer outside any
+// component or inside an instance (whose sublayers take values from setProperties instead).
+function definitionOwnerAround(node) {
+  for (let p = node.parent; p; p = p.parent) {
+    if (p.type === "INSTANCE") return null;
+    if (p.type === "COMPONENT" || p.type === "COMPONENT_SET") return definitionOwnerOf(p);
+  }
+  return null;
+}
+
+// Show `value` in the field a property of `def`'s type drives on a definition layer.
+function writeDefinitionBinder(node, def, value) {
+  if (def.type === "TEXT") node.characters = value;
+  else if (def.type === "BOOLEAN") node.visible = value;
+  else if (def.type === "INSTANCE_SWAP" && node.mainComponent && node.mainComponent.id !== value) node.swapComponent(registry.get(value));
 }
 
 // Re-point (or, with `to` null, clear) one sublayer's reference to a property.

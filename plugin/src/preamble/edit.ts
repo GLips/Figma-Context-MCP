@@ -38,7 +38,7 @@ import {
   resolveInstanceEditTargets, planInstanceEdit, applyInstanceRetarget, applyInstanceOverrides, InstanceEditPlan,
 } from "./instance.js";
 import {
-  planComponentEdit, applyComponentDefinitionEdit, applyComponentBindingEdit, ComponentEditPlan,
+  planComponentEdit, applyComponentDefinitionEdit, applyComponentBindingEdit, applyBoundDefaults, projectedBinderValue, ComponentEditPlan,
 } from "./component-edit.js";
 import { createStandingState } from "./standing-state.js";
 import type { EditDelta } from "./schema.js";
@@ -73,18 +73,23 @@ export function edit(target: Target, changes: EditDelta): Promise<Handle> {
       const current = hint.instanceWords ? await resolveInstanceEditTargets(node, hint.instanceWords, targets) : null;
       const instance = hint.instanceWords ? planInstanceEdit(node, hint.instanceWords, current, { targets }, SUBJECT) : undefined;
       const loaded = await loadEditResources([hint, ...(instance ? instance.overrides.map((o) => o.plan) : [])], instance ? [instance.needs] : []);
-      return { node, targets, current, loaded, restated };
+      // A swap binder's component is what its instance_swap property's default is judged against.
+      const refs = hint.componentWords?.componentPropertyReferences as Record<string, unknown> | undefined;
+      const main = node.type === "INSTANCE" && refs?.componentId != null ? await (node as InstanceNode).getMainComponentAsync() : null;
+      return { node, targets, current, loaded, restated, main };
     },
     // Gate — every decision that reads the document, made against it as it stands at the seal:
     // the compile, the instance and component halves, and the root's own layout gate, which reads
     // the container this delta LEAVES BEHIND (a swap re-points the instance before its layout
     // words land — `becomesLayoutMode`).
-    ({ node, targets, current, loaded, restated }) => {
+    ({ node, targets, current, loaded, restated, main }) => {
       assertNodeStillOnCanvas(node, SUBJECT);
       const plan = restated ? restatedEditPlan(node) : compileEditPlan(node, changes, SUBJECT);
       const planning = { targets, fonts: loaded.fonts };
       const instance: InstanceEditPlan | undefined = plan.instanceWords ? planInstanceEdit(node, plan.instanceWords, current, planning, SUBJECT) : undefined;
-      const component: ComponentEditPlan | undefined = plan.componentWords ? planComponentEdit(node, plan.componentWords, SUBJECT) : undefined;
+      const component: ComponentEditPlan | undefined = plan.componentWords
+        ? planComponentEdit(node, plan.componentWords, SUBJECT, (field) => projectedBinderValue(field, plan, instance, main, SUBJECT))
+        : undefined;
       assertEditPlanLands(plan, loaded.fonts, SUBJECT, undefined, instance ? { mode: instance.becomesLayoutMode, wrap: instance.becomesLayoutWrap } : undefined);
       return { plan, instance, component, resources: gateEditResources(loaded, instance ? [instance.needs] : []) };
     },
@@ -94,6 +99,7 @@ export function edit(target: Target, changes: EditDelta): Promise<Handle> {
       if (instance) applyInstanceRetarget(fail, plan.node, instance);
       if (component && component.definitions) applyComponentDefinitionEdit(fail, plan.node, component.definitions);
       applyEditPlanWrites(fail, plan, resources);
+      if (component && component.defaults) applyBoundDefaults(fail, component.defaults);
       if (component && component.binding) applyComponentBindingEdit(fail, plan.node, component.binding);
       settleEditPlanSizes(fail, plan);
       settleEditPlanPositions(fail, plan);
