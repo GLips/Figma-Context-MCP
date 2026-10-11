@@ -66,6 +66,42 @@ describe("figma_execute_code reply text", () => {
     );
   });
 
+  it("keeps the returned order, and never merges same-named collections from different libraries", () => {
+    const colors = (library: string, name: string, values: Record<string, unknown>) =>
+      variable({
+        reference: { variable: name },
+        collection: "Colors",
+        type: "STRING",
+        values,
+        library,
+      });
+    const text = formatExecuteCodeReply({
+      result: [
+        colors("Kit A", "a1", { Light: ".5" }),
+        colors("Kit B", "b1", { Default: "NaN" }),
+        colors("Kit A", "a2", { Light: "Bold" }),
+      ],
+      console: [],
+      errors: null,
+    });
+    expect(text).toBe(
+      [
+        "result:",
+        '  [LIBRARY] "Kit A"',
+        '    [COLLECTION] "Colors" modes=["Light"]',
+        '      [STRING] "a1" ".5"',
+        '  [LIBRARY] "Kit B"',
+        '    [COLLECTION] "Colors" modes=["Default"]',
+        '      [STRING] "b1" "NaN"',
+        '  [LIBRARY] "Kit A"',
+        '    [COLLECTION] "Colors" modes=["Light"]',
+        '      [STRING] "a2" Bold',
+        "console: []",
+        "errors: null",
+      ].join("\n"),
+    );
+  });
+
   it("renders entries in place inside other data, and leaves unmarked look-alikes as JSON", () => {
     const lookalike = withoutTokenMarks(brand);
     const reply = {

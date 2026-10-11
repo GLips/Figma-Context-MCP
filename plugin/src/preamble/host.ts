@@ -167,6 +167,14 @@ export function registerRead(value: object, project: () => unknown, nodeId?: str
   currentHost()?.registerRead(value, project, warnings.project);
 }
 
+/**
+ * Register an object that egress passes through as itself plus `mark`, whether or not the agent edited
+ * it in place: decorate runs on both of egress's branches, where a projection runs only on the untouched one.
+ */
+export function registerMarked(value: object, mark: Record<string, unknown>): void {
+  currentHost()?.registerRead(value, () => value, (out) => ({ ...(warnings.project(out) as object), ...mark }));
+}
+
 /** Host ownership supplies lifetime; the server-shipped initializer supplies data policy. */
 export function hostSession(initialize: () => Record<string, unknown>): Record<string, unknown> {
   return currentHost()?.getSession(initialize) ?? initialize();

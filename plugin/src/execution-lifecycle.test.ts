@@ -3,6 +3,7 @@
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
 import { createWarningRegistry } from "./preamble/warnings.js";
+import { TOKEN_ENTRY_MARK } from "./preamble/token-mark.js";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { buildSync } from "esbuild";
@@ -389,6 +390,23 @@ test("execute projects registered reads in nested results and console lines exac
   assert.equal(reply.result.computed.d, "mine");
   assert.equal(reply.console[0].includes('"type":"IMAGE-SVG"'), true);
   assert.equal(reply.console[0].includes('"d":"M0'), false);
+});
+
+test("a marked designTokens entry keeps its mark in the result but not in a console line", async () => {
+  const h = host();
+  await h.connect(1);
+  h.send({
+    type: "EXECUTE_CODE", id: "token-mark", __connKey: 1,
+    preamble: `(host) => {
+      const entry = { reference: { variable: "color/bg" }, type: "COLOR" };
+      host.registerRead(entry, () => entry, (out) => ({ ...out, ${JSON.stringify(TOKEN_ENTRY_MARK)}: "variable" }));
+      return { flcm: { entry }, session: host.getSession(() => ({})), warnings: createWarningRegistry(), mutationQueueIdle: async () => 0, committedVerbCount: () => 0 };
+    }`,
+    code: `console.log(flcm.entry); return flcm.entry;`,
+  });
+  const reply = await h.result("token-mark");
+  assert.equal(reply.result[TOKEN_ENTRY_MARK], "variable");
+  assert.equal(reply.console[0], '[log] {"reference":{"variable":"color/bg"},"type":"COLOR"}');
 });
 
 const realPreamble = import("./preamble/index.mjs").then(m => m.buildSandboxPreamble());

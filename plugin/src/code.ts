@@ -14,6 +14,7 @@ import {
   type ApprovalRequestState,
 } from "./approval-requests.js";
 import { safeSerialize, guardReturnValue, createReadEgress, undefinedFieldsWarning } from "./serialize.js";
+import { TOKEN_ENTRY_MARK } from "./preamble/token-mark.js";
 import { resolveScreenshotTarget, type ScreenshotTarget } from "./screenshot-target.js";
 import { createRunCancellationRegistry, type CancelDisposition } from "./run-cancellation.js";
 import { observeDocumentChanges, type DocumentChangeObserver } from "./document-changes.js";
@@ -1271,8 +1272,12 @@ function formatError(err: unknown): string {
   return String(err);
 }
 
+// Console args take the same egress as the result, so a designTokens entry arrives marked; the mark is
+// for the server's reply renderer, which never sees inside a console string, so it is dropped here.
 function stringifyArg(value: unknown): string {
   if (typeof value === "string") return value;
   const serialized = safeSerialize(value);
-  return typeof serialized === "string" ? serialized : JSON.stringify(serialized);
+  return typeof serialized === "string"
+    ? serialized
+    : JSON.stringify(serialized, (key, item) => (key === TOKEN_ENTRY_MARK ? undefined : item));
 }

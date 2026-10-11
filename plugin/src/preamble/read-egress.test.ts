@@ -165,4 +165,10 @@ test("designTokens entries leave the run marked by identity, wherever they're re
   // A copy the agent built is its own data, even though it looks exactly like an entry.
   assert.equal(TOKEN_ENTRY_MARK in out.copy, false);
   assert.deepEqual(out.copy, brand);
+
+  // Still the same object after an in-place edit, so still marked, carrying the edit.
+  (space as any).uses = 3;
+  const edited = wire(space);
+  assert.equal(edited[TOKEN_ENTRY_MARK], "variable");
+  assert.equal(edited.uses, 3);
 });

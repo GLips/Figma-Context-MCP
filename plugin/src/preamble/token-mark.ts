@@ -7,9 +7,9 @@
 // everything else in the reply stays JSON. Shared by name: the preamble adds the key, the server
 // (src/commercial/tools/token-tree.ts) reads and drops it.
 //
-// The mark is added only by the entry's registered read projection (runtime.ts), so it rides an entry
-// object designTokens returned, untouched, wherever the agent put it — never a copy the agent built,
-// and never an object that merely looks like an entry. Inside the script the entries stay plain data.
+// The mark is added only at egress, to an entry object designTokens returned (runtime.ts registers each
+// by identity), wherever the agent put it — never a copy the agent built, and never an object that
+// merely looks like an entry. Inside the script the entries stay plain data.
 
 export const TOKEN_ENTRY_MARK = "__flcmToken";
 export type TokenEntryKind = "variable" | "style";

@@ -88,22 +88,30 @@ function renderValue(value: unknown, depth: number, out: string[]): void {
   }
 }
 
-// Variables group by library, then collection; styles by library. A library header appears only when
-// the run reaches beyond the file's own tokens, so a plain local listing carries none.
+// Entries keep the order they were returned in. A header opens wherever the library or (for variables)
+// the collection changes from the line before, so a designTokens listing, already ordered that way,
+// reads as one tree, and a sorted or interleaved selection keeps its order, repeating headers where it
+// must. Library headers appear only when the run reaches beyond the file's own tokens.
 function renderEntries(entries: TokenEntry[], depth: number, out: string[]): void {
-  for (const kind of ["variable", "style"] as const) {
-    const ofKind = entries.filter((entry) => entryKind(entry) === kind);
-    const libraries = groupBy(ofKind, libraryHeader);
-    const headed = libraries.size > 1 || !libraries.has(LOCAL);
-    for (const [header, inLibrary] of libraries) {
-      if (headed) out.push(`${"  ".repeat(depth)}${header}`);
-      const at = headed ? depth + 1 : depth;
-      if (kind === "style") inLibrary.forEach((entry) => out.push(tokenLine(entry, at)));
-      else
-        for (const inCollection of groupBy(inLibrary, collectionKey).values())
-          renderCollection(inCollection, at, out);
-    }
+  const headed = entries.some((entry) => libraryHeader(entry) !== LOCAL);
+  const at = headed ? depth + 1 : depth;
+  let library: string | undefined;
+  for (const run of consecutiveRuns(entries, runKey)) {
+    const header = libraryHeader(run[0]);
+    if (headed && header !== library) out.push(`${"  ".repeat(depth)}${header}`);
+    library = header;
+    if (entryKind(run[0]) === "style") run.forEach((entry) => out.push(tokenLine(entry, at)));
+    else renderCollection(run, at, out);
   }
+}
+
+function runKey(entry: TokenEntry): string {
+  const kind = entryKind(entry);
+  return JSON.stringify([
+    kind,
+    libraryHeader(entry),
+    kind === "variable" ? collectionKey(entry) : "",
+  ]);
 }
 
 const LOCAL = "[LOCAL]";
@@ -183,11 +191,15 @@ function renderReference(reference: unknown): string {
   return parts.join(" ");
 }
 
-// Bare where unambiguous (`#FFFFFF`, `12`, `true`); a string that would read as another type, or that
-// would split the space-separated line, is JSON-quoted. Objects and arrays are compact JSON.
+// Bare where unambiguous (`#FFFFFF`, `Medium`); a string that would read as another type (`12`, `.5`,
+// `true`, `NaN`), or that would split the space-separated line, is JSON-quoted. Objects, arrays,
+// numbers and booleans are JSON.
 function renderInline(value: unknown): string {
   if (typeof value !== "string") return JSON.stringify(value);
-  return /^$|[\s"=]|^[[{]|^(?:true|false|null|-?\d[\d.eE+-]*)$/.test(value) ? quote(value) : value;
+  const readsAsOther =
+    /^(?:true|false|null|[+-]?(?:NaN|Infinity))$/.test(value) ||
+    (value.trim() !== "" && !Number.isNaN(Number(value)));
+  return value === "" || readsAsOther || /[\s"=]|^[[{]/.test(value) ? quote(value) : value;
 }
 
 function renderKey(key: string): string {
@@ -198,13 +210,14 @@ function quote(s: string): string {
   return JSON.stringify(s);
 }
 
-function groupBy<T>(items: T[], key: (item: T) => string): Map<string, T[]> {
-  const groups = new Map<string, T[]>();
+function consecutiveRuns<T>(items: T[], key: (item: T) => string): T[][] {
+  const runs: T[][] = [];
+  let last: string | undefined;
   for (const item of items) {
     const k = key(item);
-    const group = groups.get(k);
-    if (group) group.push(item);
-    else groups.set(k, [item]);
+    if (runs.length && k === last) runs[runs.length - 1].push(item);
+    else runs.push([item]);
+    last = k;
   }
-  return groups;
+  return runs;
 }
