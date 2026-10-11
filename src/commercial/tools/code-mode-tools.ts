@@ -5,6 +5,7 @@
 import { MAX_SCREENSHOT_SCALE } from "~/commercial/plugin-bridge/screenshot-options.js";
 import { OutsideAssetRootError } from "~/commercial/plugin-bridge/contained-file.js";
 import { startProgressHeartbeat, type ToolExtra } from "~/mcp/progress.js";
+import { resolve as resolvePath } from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
@@ -146,12 +147,14 @@ export function registerCodeModeTools(
           } catch (error) {
             const { message, cause } = error as Error;
             // The server never widens what it reads (no roots, no path grants). An agent working outside
-            // the root is sent to routes that already work; the CLI reads on the agent's side.
+            // the root is sent to routes that already work; the CLI reads on the agent's side. Its path
+            // is absolute because the CLI resolves against the shell's cwd, not the asset root.
             const remedy =
               cause instanceof OutsideAssetRootError
                 ? `send the script inline as code, or, with shell access, run ` +
-                  `\`npx ${CLI_NAME} execute ${shellQuotedPath(scriptPath)}\`, which reads the file ` +
-                  `on your side with your own permissions`
+                  `\`npx ${CLI_NAME} execute ${shellQuotedPath(resolvePath(cause.assetRoot, scriptPath))}\`, ` +
+                  `which reads the file on your side with your own permissions (the CLI pairs ` +
+                  `separately, so a human approves its pairing code in the Figma plugin)`
                 : "correct scriptPath, or send the script inline as code";
             return retryableToolReply(
               `figma_execute_code ${message}, so this call did not run. This is NOT a failure: ${remedy}.`,

@@ -105,7 +105,10 @@ describe("figma_execute_code with scriptPath", () => {
       expect(escaped.text).toContain("did not run");
       expect(escaped.text).toContain(`outside the asset root (${root})`);
       expect(escaped.text).toContain("send the script inline as code");
-      expect(escaped.text).toContain("`npx figma-developer-mcp execute ../outside.js`");
+      // The CLI resolves against the shell's cwd, not the root, so the suggestion names the file absolutely.
+      expect(escaped.text).toContain(
+        `\`npx figma-developer-mcp execute ${join(outer, "outside.js")}\``,
+      );
 
       const spaced = join(outer, "my scripts", "outside.js");
       const absoluteEscape = await call({ scriptPath: spaced });
