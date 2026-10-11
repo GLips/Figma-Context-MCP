@@ -49,6 +49,7 @@ import type { EditDelta } from "./schema.js";
 import { compileEditPlan, loadEditResources, gateEditResources, assertEditPlanLands,
   applyEditPlanWrites, settleEditPlanSizes, settleEditPlanPositions } from "./edit-plan.js";
 import { beginMutatingApply } from "./verb-error.js";
+import { recordVerbRemovedNode } from "./moved-out-diagnostics.js";
 import { showValue } from "./validate.js";
 import { unrotatedCornerOf, holdUnrotatedCorner, settleCentrePivot } from "./pivot.js";
 
@@ -467,6 +468,7 @@ export function replace(target: Target, spec: NodeSpec): Promise<AuthoredTree> {
     const result = applyInsert("replace", prepared);
     if (!treeNodes(prepared.tree).some(node => node.liveId === prepared.original.id)) {
       const fail = beginMutatingApply("replace", prepared.original);
+      recordVerbRemovedNode(prepared.original);
       try { prepared.original.remove(); } catch (cause) { throw fail(cause); }
     }
     return result;

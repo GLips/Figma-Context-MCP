@@ -42,10 +42,15 @@ export function assertInheritedSlotContentStays(at: string, node: SceneNode, par
   );
 }
 
-export async function loadLiveTree(tree: WriteNode): Promise<LoadedLiveTree> {
+// Live nodes whose spec parent this verb builds: a new node's children, or a new instance's slot
+// content. Taken across every tree a verb loads, because an edit's slot content lists a nested new
+// instance's slot content again as a root of its own.
+export function liveChildrenOfNewNodes(trees: readonly WriteNode[]): Set<WriteNode> {
+  return new Set(trees.flatMap(treeNodes).flatMap(wn => wn.liveId ? [] : childTreeNodes(wn)));
+}
+
+export async function loadLiveTree(tree: WriteNode, intoNewNode = liveChildrenOfNewNodes([tree])): Promise<LoadedLiveTree> {
   const entries = [];
-  // Live nodes whose spec parent this verb builds: a new node's children, or a new instance's slot content.
-  const intoNewNode = new Set(treeNodes(tree).flatMap(wn => wn.liveId ? [] : childTreeNodes(wn)));
   for (const wn of treeNodes(tree)) {
     if (!wn.liveId) continue;
     const at = wn.sourcePath!;

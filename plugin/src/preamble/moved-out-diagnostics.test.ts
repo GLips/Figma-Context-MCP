@@ -10,6 +10,7 @@ import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
 import * as flcm from "./runtime.js";
 import { warnings } from "./warnings.js";
+import { beginMovedOutDiagnostics, recordLiveMoveIntoNewNode, finishMovedOutDiagnostics } from "./moved-out-diagnostics.js";
 
 const movedWarnings = () => warnings.summary().filter((line) => line.includes("Moved "));
 
@@ -79,4 +80,39 @@ test("wrapping in place, replace, and moves into existing nodes don't warn", asy
   const other = await renderCard("Other");
   await flcm.append(card.id!, { id: other.children![0].id });
   assert.deepEqual(movedWarnings(), []);
+});
+
+test("live content placed into a new instance's slot by an edit warns", async () => {
+  const component = await flcm.component(
+    {
+      type: "FRAME",
+      width: 240,
+      height: 200,
+      children: [{ type: "FRAME", width: 200, height: 100, componentPropertyReferences: { slot: "Body" }, children: [] }],
+    },
+    { propertyDefinitions: { Body: { type: "slot" } } },
+  );
+  const path = component.children![0].id!;
+  const host = await flcm.render({ type: "INSTANCE", componentId: component.id });
+  const card = await renderCard("Card");
+  await flcm.edit(host.id!, {
+    overrides: { [path]: { children: [{ type: "INSTANCE", componentId: component.id, overrides: { [path]: { children: [{ id: card.children![0].id }] } } }] } },
+  });
+  assert.equal(movedWarnings().length, 1);
+  assert.match(movedWarnings()[0], /^\[warn\] Moved 1 node out of "Card" .* into new /);
+});
+
+// The mock has no groups; Figma deletes a GROUP once its last child leaves, so its source reads removed.
+test("a source Figma deleted because the move emptied it still warns", () => {
+  const page = { id: "0:1", type: "PAGE", removed: false, parent: null };
+  const group = { id: "1:1", name: "Group", type: "GROUP", removed: false, parent: page, children: [] };
+  const into = { id: "2:1", name: "Card", type: "FRAME", removed: false, parent: page, children: [] };
+  const node = { id: "1:2", name: "Title", type: "TEXT", removed: false, parent: into };
+  beginMovedOutDiagnostics();
+  recordLiveMoveIntoNewNode(node, group, into);
+  Object.assign(group, { removed: true, parent: null });
+  finishMovedOutDiagnostics("render");
+  assert.deepEqual(movedWarnings(), [
+    "[warn] Moved 1 node out of \"Group\" (id \"1:1\") into new \"Card\" (id \"2:1\"); Figma deleted the emptied source. If you intended a copy, restore the moved nodes and use flcm.clone.",
+  ]);
 });

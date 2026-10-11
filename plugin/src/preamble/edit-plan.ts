@@ -3,7 +3,7 @@
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
 import { acceptAuthoringProps } from "./authoring-input.js";
-import { loadLiveTree, gateLiveTree, LoadedLiveTree } from "./live-tree.js";
+import { loadLiveTree, gateLiveTree, liveChildrenOfNewNodes, LoadedLiveTree } from "./live-tree.js";
 import { sceneFigma as figma } from "./scene-access.js";
 // edit-plan — the STAGES of the mutate pipeline, with no verb attached. Three callers drive them:
 // `flcm.edit` (edit.ts) once, `flcm.editMany` (edit-many.ts) N times over one queue slot, and an
@@ -447,7 +447,8 @@ export async function loadEditResources(plans: readonly EditPlan[], needs: reado
     fontNeeds.push(...need.fontNeeds);
   }
   const liveTrees: LoadedLiveTree[] = [];
-  for (const tree of trees) liveTrees.push(await loadLiveTree(tree));
+  const intoNewNode = liveChildrenOfNewNodes(trees);
+  for (const tree of trees) liveTrees.push(await loadLiveTree(tree, intoNewNode));
   for (const tree of trees) requestTreeAnnotationCategories(tree);
   for (const { patch } of [...plans, ...fontNeeds]) requestAnnotationCategories(patch.annotations);
   // Tokens first: a font variable's mode values and a text style's font are font needs of their own.
