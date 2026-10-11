@@ -195,7 +195,7 @@ This is tiered 🔴 because the result is serialized in plugin host code: `plugi
 
 **Partial verdict (Graham, 2026-10-02): approve preserving real parent context for targeted reads of nested nodes.** A nested node should retain the same sizing intent and parent-relative position whether read directly or through its parent: fill/hug remain semantic values, and fixed dimensions remain numeric. Apply this consistently to plugin and REST reads through the shared converter. Plugin reads can obtain the live parent directly. For targeted REST reads, investigate the filtered GET file endpoint with ids, which includes ancestor chains, instead of the current isolated file-nodes response. Keep returned content scoped to the requested subtree and preserve target-relative depth semantics; verify payload cost and parity. Actual canvas-level sizing policy remains unchanged pending its separate decision. Do not add measured pixel dimensions alongside every fill/hug value; explicit measurement remains the way to request them. The representation and write semantics for actual canvas-level design frames remain under discussion. Neither removing contextual everywhere nor the proposed bare-contextual refusal is approved by this partial verdict.
 
-**Tickets:** none (approved, not filed)
+**Tickets:** fig-123 (shipped)
 
 **Status:** open.
 
