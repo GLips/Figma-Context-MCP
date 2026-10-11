@@ -49,6 +49,7 @@ import { compileEditPlan, loadEditResources, gateEditResources, assertEditPlanLa
   applyEditPlanWrites, settleEditPlanSizes, settleEditPlanPositions } from "./edit-plan.js";
 import { beginMutatingApply } from "./verb-error.js";
 import { showValue } from "./validate.js";
+import { unrotatedCornerOf, holdUnrotatedCorner, settleCentrePivot } from "./pivot.js";
 
 // Where a placement verb puts its subject inside the destination. `place` is a closure evaluated
 // in the APPLY span, right after the gate that built it — the sibling's index is read at the
@@ -221,7 +222,9 @@ function applyPlacement(verb: string, { dest, node, words }: PreparedPlacement):
   try {
     growImplicitGridRows(dest.parent, words);
     dest.place(node);
+    const pivotHold = holdUnrotatedCorner(node);
     resettleMovedNode(node, words);
+    settleCentrePivot(node, pivotHold, words);
   } catch (cause) {
     throw fail(cause);
   }
@@ -418,7 +421,8 @@ export async function measure(target: Target): Promise<{ x: number; y: number; w
   const node: any = await resolveTarget(target);
   assertNodeStillOnCanvas(node, "flcm.measure");
   if (![node.x, node.y, node.width, node.height].every(Number.isFinite)) throw new Error("flcm.measure: target has no measurable scene geometry.");
-  const measured = { x: node.x, y: node.y, width: node.width, height: node.height };
+  const corner = unrotatedCornerOf(node);
+  const measured = { x: corner.x, y: corner.y, width: node.width, height: node.height };
   registerRead(measured, () => measured, node.id);
   return measured;
 }

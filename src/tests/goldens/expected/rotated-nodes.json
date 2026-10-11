@@ -17,8 +17,8 @@
           "type": "FRAME",
           "width": 40,
           "height": 24,
-          "left": 100,
-          "top": 60,
+          "left": 102.42,
+          "top": 54.41,
           "rotation": -15,
           "fill": "#3366E6"
         },
@@ -51,8 +51,8 @@
           "name": "Tilted Rule",
           "type": "LINE",
           "width": 80,
-          "left": 60,
-          "top": 250,
+          "left": 58.64,
+          "top": 239.65,
           "rotation": -15,
           "stroke": "#000000",
           "strokeWidth": "1px"
@@ -74,8 +74,8 @@
           "type": "FRAME",
           "width": 120,
           "height": 90,
-          "left": 40,
-          "top": 150,
+          "left": 46.9,
+          "top": 138.9,
           "rotation": -10,
           "fill": "#F2F2F2",
           "children": [
@@ -85,8 +85,8 @@
               "type": "FRAME",
               "width": 30,
               "height": 18,
-              "left": 12,
-              "top": 9,
+              "left": 14.17,
+              "top": 3.33,
               "rotation": -20,
               "fill": "#1AB366"
             }

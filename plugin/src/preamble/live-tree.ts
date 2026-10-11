@@ -18,6 +18,7 @@ import { assertLiveNodeLandsUnderParent, liveParentAttachFacts, attachBuiltChild
 import type { RenderCtx, RenderResources } from "./bridge.js";
 import { NO_TOKENS } from "./tokens.js";
 import { growImplicitGridRows } from "./layout-native.js";
+import { holdUnrotatedCorner, settleCentrePivot } from "./pivot.js";
 import { beginMutatingApply } from "./verb-error.js";
 import type { EditDelta } from "./schema.js";
 
@@ -128,8 +129,11 @@ export function gateLiveTree(live: LoadedLiveTree, resources: RenderResources): 
           ctx.bindings.push({ node, refs: wn.componentPropertyReferences });
         }
         if ("appendChild" in node) for (const child of wn.children ?? []) attachBuiltChild(node, child, ctx, liveParentAttachFacts(node, child.sourcePath ?? at), c => node.appendChild(c));
+        // A plan's write span already holds the unrotated corner; without one, the move opens its own.
+        const pivotHold = plan ? undefined : holdUnrotatedCorner(node);
         resettleMovedNode(node, words, ctx);
         if (plan) { settleEditPlanSizes(fail, plan); settleEditPlanPositions(fail, plan); }
+        else settleCentrePivot(node, pivotHold, words);
         if (instance) applyInstanceOverrides(node, instance, ctx, at);
         if (wn.source) wn.source.id = node.id;
         return node;

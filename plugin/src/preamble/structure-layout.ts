@@ -4,6 +4,7 @@
  */
 import type { WriteLayout, WriteNode, Sizing, PinX, PinY } from "./ir.js";
 import { layoutModeOf } from "./layout-mode.js";
+import { unrotatedCornerOf } from "./pivot.js";
 import { convertSizing } from "@framelink/core";
 
 /** Per-axis intent wins as a unit: an explicit hug/fill/percent never retains old fixed pixels. */
@@ -40,7 +41,8 @@ export function replacementTree(node: any, spec: WriteNode): WriteNode {
   }
   const positioned = layoutModeOf(node.parent).kind === "free" || node.layoutPositioning === "ABSOLUTE";
   if (positioned) {
-    inherited.left = node.x; inherited.top = node.y;
+    const corner = unrotatedCornerOf(node);
+    inherited.left = corner.x; inherited.top = corner.y;
     inherited.position = "absolute";
 
   }

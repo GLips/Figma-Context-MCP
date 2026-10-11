@@ -6,14 +6,16 @@ import type { SimplifiedNode } from "@framelink/core";
 import { GOLDEN_FIXTURES } from "./goldens/fixtures.js";
 import { loadScene } from "./parity/scenes-io.js";
 
-// Reconstruct the rendered corners, as a consumer nesting CSS transforms with
-// transform-origin: 0 0 would. Comparing page-space bounds catches a shared
+// Reconstruct the rendered corners, as a consumer nesting CSS transforms at the
+// default centre origin would. Comparing page-space bounds catches a shared
 // producer error that output parity alone cannot detect.
 function transform(node: SimplifiedNode, [x, y]: number[]): number[] {
   const radians = ((node.rotation ?? 0) * Math.PI) / 180;
+  const cx = Number(node.width) / 2;
+  const cy = Number(node.height) / 2;
   return [
-    (node.left ?? 0) + x * Math.cos(radians) - y * Math.sin(radians),
-    (node.top ?? 0) + x * Math.sin(radians) + y * Math.cos(radians),
+    (node.left ?? 0) + cx + (x - cx) * Math.cos(radians) - (y - cy) * Math.sin(radians),
+    (node.top ?? 0) + cy + (x - cx) * Math.sin(radians) + (y - cy) * Math.cos(radians),
   ];
 }
 

@@ -300,6 +300,12 @@ class Node {
     const extra = p._gridCellSize(this, dim) - this._sizeOf(dim);
     return (dim === "w" ? p.paddingLeft : p.paddingTop) + p._gridTracks(dim).slice(0, index).reduce((a, b) => a + b, 0) + index * (dim === "w" ? p.gridColumnGap : p.gridRowGap) + (align === "CENTER" ? extra / 2 : align === "MAX" ? extra : 0);
   }
+  // Figma's matrix for `rotation` (degrees, counterclockwise-positive), translated to x/y. The
+  // rotation setter keeps x/y, as live Figma does: a native turn pivots about the translation.
+  get relativeTransform() {
+    const r = (this.rotation * Math.PI) / 180;
+    return [[Math.cos(r), Math.sin(r), this.x], [-Math.sin(r), Math.cos(r), this.y]];
+  }
   get x() { return this._gridOffset("w"); }
   set x(v) { this._x = v; }
   get y() { return this._gridOffset("h"); }

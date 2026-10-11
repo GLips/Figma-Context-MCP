@@ -5,6 +5,7 @@ import {
   isInAutoLayoutFlow,
   isLayout,
   pixelRound,
+  type LayoutSnapshot,
 } from "../utils.js";
 import {
   convertSizing,
@@ -228,14 +229,9 @@ function buildNodeGeometry(
     if (n.layoutPositioning === "ABSOLUTE") {
       geometry.position = "absolute";
     }
-    // `ownOrigin` is already parent-relative; the AABB fallback subtracts the
-    // parent's box, which is the same point whenever neither node is rotated.
-    const origin = n.ownOrigin ?? {
-      x: n.absoluteBoundingBox.x - parent.absoluteBoundingBox.x,
-      y: n.absoluteBoundingBox.y - parent.absoluteBoundingBox.y,
-    };
-    geometry.left = pixelRound(origin.x);
-    geometry.top = pixelRound(origin.y);
+    const corner = unrotatedCorner(n, parent, size);
+    geometry.left = pixelRound(corner.x);
+    geometry.top = pixelRound(corner.y);
   }
 
   // Figma reports rotation in degrees, counterclockwise-positive; CSS rotate()
@@ -246,6 +242,38 @@ function buildNodeGeometry(
   }
 
   return geometry;
+}
+
+/**
+ * The parent-relative corner `left`/`top` name: the node's UNROTATED top-left, because the write
+ * side turns a node about its centre, as CSS `rotate()` does. Figma's `ownOrigin` is the transform's
+ * translation — the corner it turns about — so a rotated node shifts by (M - I)·half, M being the
+ * rotation matrix Figma's `relativeTransform` carries. The AABB fallback lands on the same point
+ * from the other side: a turned box keeps its centre, so the corner is that centre less half the
+ * own size. (The fallback subtracts the parent's AABB corner, exact only under an unrotated parent.)
+ */
+function unrotatedCorner(
+  n: LayoutSnapshot,
+  parent: LayoutSnapshot,
+  size: { width: number; height: number },
+): { x: number; y: number } {
+  const hw = size.width / 2;
+  const hh = size.height / 2;
+  if (!n.ownOrigin) {
+    const box = n.absoluteBoundingBox;
+    return {
+      x: box.x + box.width / 2 - hw - parent.absoluteBoundingBox.x,
+      y: box.y + box.height / 2 - hh - parent.absoluteBoundingBox.y,
+    };
+  }
+  if (!n.rotation) return n.ownOrigin;
+  const radians = (n.rotation * Math.PI) / 180;
+  const cos = Math.cos(radians);
+  const sin = Math.sin(radians);
+  return {
+    x: n.ownOrigin.x + (cos - 1) * hw + sin * hh,
+    y: n.ownOrigin.y - sin * hw + (cos - 1) * hh,
+  };
 }
 
 function textAxesFollowingContent(n: NodeSnapshot): { horizontal: boolean; vertical: boolean } {

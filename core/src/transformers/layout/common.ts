@@ -62,10 +62,10 @@ export type SimplifiedDimension = number | "fill" | "hug" | "contextual";
  * 40x24 rect authored at 15° emits `width: 40, height: 24, rotation: -15`, which
  * pastes as `width: 40px; transform: rotate(-15deg)`, and the AABB's 44.85 is a
  * fact about its shadow on the page. `left`/`top` follow the same rule — they name
- * the node's own top-left corner in the parent's frame, not the AABB's corner
- * (which a rotated node doesn't even have). Figma rotates about that same corner,
- * so the CSS composes only under `transform-origin: 0 0`; at the default centre
- * origin the rotation walks the box off its `left`/`top`. This matches how the
+ * the top-left of the node's own UNROTATED box in the parent's frame, and the
+ * rotation turns that box about its centre, as CSS does at the default
+ * `transform-origin`. Figma's translation is a different point on a rotated node
+ * (the corner its native setter turns about); see `unrotatedCorner`. This matches how the
  * write path spells the same numbers (`geometryOf`, plugin bridge), so a shape
  * read back can be written straight out again — with one spelling the two would
  * differ on if they could ever meet: under a GROUP, read measures `left`/`top` in

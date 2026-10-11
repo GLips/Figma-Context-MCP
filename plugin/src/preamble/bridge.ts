@@ -45,6 +45,7 @@ import { resolveFont, resolveFontStrict, fontDivergences, textStyleFont, FontMap
 import { writeKey, identityOf, isSlotHole, describeNodeIdentity } from "./identity.js";
 import { pixelRound, convertSizing } from "@framelink/core";
 import { MutatingVerbError, NodeBuildError } from "./verb-error.js";
+import { unrotatedCornerOf, settleCentrePivot } from "./pivot.js";
 
 // The resource half of the walk context — what an applier resolves against, split out so an exported
 // applier demands only what it reads: `fonts` is the preloaded FontMap, `images` the url → base64 map
@@ -83,6 +84,9 @@ export interface RenderCtx extends RenderResources {
   exposures: ExposureWrite[];
   keys: Set<string>;
   pending: PendingResolve[];
+  // Every node the walk built turned, waiting for resolvePercents to pivot it about its centre once
+  // its position and size are final (see pivot.ts).
+  pivots: any[];
   // Every node the walk built that carries a `componentPropertyReferences` bag, paired with it.
   // Collected DURING the walk along with keys because only the walk knows which live node a compiled
   // node became — a built→live pairing recovered afterwards would have to guess past falsy children
@@ -124,12 +128,13 @@ function isFrameLike(node: any): boolean { return hasContainerLayout(node.type);
 // neither: its parent has no box to be relative to, so the coordinates would be canvas trivia.
 //
 // The numbers are the node's OWN geometry — width/height exclude rotation (relativeTransform has unit axes,
-// so a rotated node's size is unchanged) and x/y are its container-parent offset. That is also what the read
-// side means by width/height/left/top, so a 40px-wide rect rotated 15° reads back 40 wide and writes back
+// so a rotated node's size is unchanged) and left/top are its UNROTATED corner's container-parent offset —
+// flcm turns about the centre (pivot.ts), so that corner, not Figma's translation, is what left/top author.
+// That is also what the read side means by width/height/left/top, so a 40px-wide rect rotated 15° reads back 40 wide and writes back
 // 40 wide. The page-space AABB (44.85 for that rect) belongs to neither side: read carries it separately on
 // the snapshot for the questions that genuinely want a page-space box.
 //
-// That container-parent offset is the raw node.x/node.y, which Figma states relative to the nearest FRAME
+// That container-parent offset derives from the raw node.x/node.y, which Figma states relative to the nearest FRAME
 // and NOT to an intervening GROUP — where the read side subtracts the group's own corner instead. The two
 // can't disagree here: every node render creates enters the doc on the page and is reparented only into a
 // frame render built itself, so a minted handle never has a group above it. find/get take their left/top
@@ -146,8 +151,9 @@ function geometryOf(node: any): Omit<Handle, keyof Identity> {
   const parentPlacesIt = !!parent && isAutoLayout(parent) && node.layoutPositioning !== "ABSOLUTE";
   if (parent && parent.type !== "PAGE" && !parentPlacesIt) {
     if (node.layoutPositioning === "ABSOLUTE") geometry.position = "absolute";
-    geometry.left = pixelRound(node.x);
-    geometry.top = pixelRound(node.y);
+    const corner = unrotatedCornerOf(node);
+    geometry.left = pixelRound(corner.x);
+    geometry.top = pixelRound(corner.y);
   }
   return geometry;
 }
@@ -546,7 +552,7 @@ function applyLeafSize(node: any, layout: WriteLayout, tokens: ResolvedTokens | 
  * it (see RenderCtx.bindings).
  */
 export function beginRenderWalk(resources: RenderResources, opts?: { bindings?: boolean }): RenderCtx {
-  const ctx: RenderCtx = { ...resources, siblingOrder: resources.siblingOrder ??= new Map(), keys: new Set(), pending: [], exposures: [] };
+  const ctx: RenderCtx = { ...resources, siblingOrder: resources.siblingOrder ??= new Map(), keys: new Set(), pending: [], pivots: [], exposures: [] };
   if (opts && opts.bindings) ctx.bindings = [];
   return ctx;
 }
@@ -568,6 +574,9 @@ export function resolvePercents(ctx: RenderCtx): void {
   settleSiblingOrder(ctx);
   ctx.pending.sort((a, b) => depthOf(a.node) - depthOf(b.node));
   for (const p of ctx.pending) resolvePercentLayout(p.parent, p.node, p.layout);
+  // Last: the pivot reads the final size and position. Emptied, because a second pass would turn
+  // the same nodes again.
+  for (const node of ctx.pivots.splice(0)) settleCentrePivot(node);
 }
 
 function depthOf(node: any): number {
@@ -1421,6 +1430,7 @@ function buildCompiledNode(wn: WriteNode, ctx: RenderCtx, enclosingWidthBounded?
     });
   }
   applySceneProps(node, wn);
+  if (wn.rotation) ctx.pivots.push(node);
   applyAnnotations(node, wn.annotations);
   stampKey(node, wn, ctx);
   if (wn.componentPropertyReferences) {
@@ -1462,6 +1472,8 @@ export function applySceneProps(node: any, wn: WriteProps): void {
   // The canonical (authored) rotation is CSS clockwise-positive, but Figma's raw `node.rotation` is
   // COUNTERclockwise-positive, so NEGATE on write: the read side negates Figma→CSS on emit
   // (figma-mcp), and a read value re-authored verbatim must not flip. Omitted at 0.
+  // This native setter turns about the top-left; the caller's span pivots it to the centre after
+  // (pivot.ts): resolvePercents on create, settleCentrePivot on edit.
   if (typeof wn.rotation === "number" && "rotation" in node) node.rotation = -wn.rotation;
   if (typeof wn.visible === "boolean") node.visible = wn.visible;
   if (typeof wn.locked === "boolean") node.locked = wn.locked;
