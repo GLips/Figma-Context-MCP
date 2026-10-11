@@ -331,11 +331,11 @@ export function clone(target: Target, parent?: Target): Promise<Handle>;
 export function clone(target: Target, props: EditDelta, parent?: Target): Promise<Handle>;
 export function clone(target: Target, propsOrParent?: EditDelta | Target, parent?: Target): Promise<Handle> {
   // Only an ABSENT argument takes the beside-the-original default; arguments.length is what tells them apart.
+  // A nullish `props` beside a named parent is just "no edits" (the edit-delta rule), so it isn't refused.
   if (arguments.length >= 2) {
     try {
-      refuseNullishTarget("flcm.clone", arguments.length === 2 ? "the second argument (props or parent)" : "props", propsOrParent,
-        ", or omit it to copy beside the original");
-      if (arguments.length >= 3) refuseNullishTarget("flcm.clone", "parent", parent, ", or omit it to copy beside the original");
+      if (arguments.length === 2) refuseNullishTarget("flcm.clone", "the second argument (props or parent)", propsOrParent, ", or omit it to copy beside the original");
+      else refuseNullishTarget("flcm.clone", "parent", parent, ", or omit it to copy beside the original");
     } catch (error) {
       return Promise.reject(error);
     }

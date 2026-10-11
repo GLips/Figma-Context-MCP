@@ -534,7 +534,7 @@ test("replace removal failure stays inside one rollback boundary", async () => {
   assert.deepEqual(figma.undoLog, ["commit", "commit", "trigger"]);
 });
 
-test("an explicitly undefined or null anchor or clone destination refuses with zero writes instead of defaulting", async () => {
+test("an explicitly undefined or null anchor, clone destination or spec id refuses with zero writes instead of defaulting", async () => {
   const row = await renderRow();
   const pageChildren = figma.currentPage.children.length;
   // Each would otherwise fall back to a default the agent never named: the current page, or beside the original.
@@ -543,7 +543,11 @@ test("an explicitly undefined or null anchor or clone destination refuses with z
     await assert.rejects(insertAfter(missing, { type: "RECTANGLE", width: 10, height: 10 }), /flcm\.insertAfter: sibling is (undefined|null)/);
     await assert.rejects(clone("a", missing), /flcm\.clone: the second argument \(props or parent\) is (undefined|null)/);
     await assert.rejects(clone("a", { left: 0 }, missing), /flcm\.clone: parent is (undefined|null)/);
+    await assert.rejects(render({ id: missing, type: "FRAME", width: 10, height: 10 }), /\.id must be a non-empty live node id — got (undefined|null)/);
   }
   assert.equal(figma.currentPage.children.length, pageChildren);
   assert.equal(row.children.length, 2);
+  // Nullish props beside a named parent is "no edits", not a missing target.
+  await clone("a", undefined, "row");
+  assert.equal(row.children.length, 3);
 });

@@ -8,7 +8,7 @@ import type { NodeSpec, FrameProps, TextProps, ShapeProps, EllipseProps, LinePro
 import { isElision } from "@framelink/core";
 import type { SimplifiedLayout } from "@framelink/core";
 import { assertNoComponentPropertyBindings, compileFrame, compileText, compileRectangle, compileEllipse, compileLine, compileInstance, compileSvg, compilePath } from "./flcm.js";
-import { own } from "./validate.js";
+import { own, showValue } from "./validate.js";
 
 const CLONE_REMEDY = "Use flcm.clone(target) for a faithful live copy.";
 type ReadFieldDisposition = { refuse: string };
@@ -43,7 +43,11 @@ export function compileTree(input: unknown, subject: string): WriteNode {
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error(at + ": expected a plain node spec.");
     if (isElision(raw)) throw new Error(at + ": an elision marker is only valid inside a children array; it preserves existing children.");
     const src = raw as Record<string, unknown>;
-    if (src.id !== undefined && (typeof src.id !== "string" || !src.id.trim())) throw new Error(at + ".id must be a non-empty live node id.");
+    // A present-but-undefined id is an unset variable, not "create": reading it as absent would build a new
+    // node where the agent meant to edit a live one. Strip an id with `delete`, not by assigning undefined.
+    if ("id" in src && (typeof src.id !== "string" || !src.id.trim())) {
+      throw new Error(at + ".id must be a non-empty live node id — got " + showValue(src.id) + ". Omit id to create a node.");
+    }
     if (typeof src.id === "string") {
       if (ids.has(src.id)) throw new Error(at + ".id: duplicate live identity " + src.id + ".");
       ids.add(src.id);
