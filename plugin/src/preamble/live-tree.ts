@@ -12,7 +12,8 @@ import { resolveTarget, createResolvedTargets } from "./read.js";
 import { createStandingState } from "./standing-state.js";
 import { compileEditPlan, loadEditResources, assertEditPlanLands, applyEditPlanWrites, settleEditPlanSizes, settleEditPlanPositions, holdEditPlanPivot } from "./edit-plan.js";
 import { resolveInstanceEditTargets, planInstanceEdit, applyInstanceRetarget, applyInstanceOverrides } from "./instance.js";
-import { planComponentEdit, applyComponentDefinitionEdit, applyComponentBindingEdit, projectedBinderValue } from "./component-edit.js";
+import { planComponentEdit, applyComponentDefinitionEdit, applyComponentBindingEdit, projectedBinderValue, releaseRewiredBindings } from "./component-edit.js";
+import { BINDING_FIELD_WIRE_KEYS } from "./component.js";
 import { assertNodeStillOnCanvas } from "./freshness.js";
 import { childListClosingInstanceOf, writeKey, isInheritedSlotContent, slotOwnerOf, describeNodeIdentity } from "./identity.js";
 import { assertLiveNodeLandsUnderParent, liveParentAttachFacts, attachBuiltChild, attachLiveNode, resettleMovedNode, applyVectorPath } from "./bridge.js";
@@ -163,6 +164,8 @@ export function gateLiveTree(live: LoadedLiveTree, resources: RenderResources): 
         if (from) recordLiveMoveIntoNewNode(node, from, parent);
         // Before anything below can resize the node — retarget, attached children, the plan's writes.
         const pivotHold = plan ? holdEditPlanPivot(plan) : holdUnrotatedCorner(node);
+        // Before the node's own writes, so none lands on a property it is leaving (see releaseRewiredBindings).
+        if (wn.componentPropertyReferences) releaseRewiredBindings(node, Object.keys(wn.componentPropertyReferences).map((field) => BINDING_FIELD_WIRE_KEYS[field].wire));
         if (instance) applyInstanceRetarget(fail, node, instance);
         if (component?.definitions) applyComponentDefinitionEdit(fail, node, component.definitions);
         if (pathData !== undefined && node.type === "VECTOR") applyVectorPath(node, pathData);

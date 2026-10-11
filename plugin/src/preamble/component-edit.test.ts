@@ -428,6 +428,35 @@ test("binders of an existing property that show different content are refused, e
   // The same content just binds.
   await edit(id(label.id), { text: "Overview", componentPropertyReferences: { text: "Label" } });
   assert.equal(label.componentPropertyReferences.characters, fullName(comp, "Label"));
+  assert.equal(title.characters, "Overview");
+  assert.equal(comp.componentPropertyDefinitions[fullName(comp, "Label")].defaultValue, "Overview");
+});
+
+// While a layer is still bound, writing its field writes the property's default and every other layer
+// bound to it — so a layer leaving a property is freed before any of the call's writes land.
+test("a layer leaving a property is freed before the call's writes, so they don't reach its old binders", async () => {
+  const { comp, label, title, mark, badgeB } = await unboundTag();
+  await edit(id(title.id), { componentPropertyReferences: { text: "Label" } });
+  await edit(id(label.id), { text: "Overview", componentPropertyReferences: { text: "Label" } });
+  await edit(id(label.id), { text: "Z", componentPropertyReferences: { text: null } });
+  assert.equal(label.characters, "Z");
+  assert.equal(title.characters, "Overview");
+  assert.equal(comp.componentPropertyDefinitions[fullName(comp, "Label")].defaultValue, "Overview");
+
+  // A rebind too: the swap binder moving to a new property must not be swapped to Badge's new
+  // default and back on the way (which would drop its overrides).
+  const badge = comp.findOne((n: { name: string }) => n.name === "Badge");
+  await edit(id(badge.id), { componentPropertyReferences: { componentId: "Badge" } });
+  const swaps: unknown[] = [];
+  const swap = badge.swapComponent.bind(badge);
+  badge.swapComponent = (main: unknown) => (swaps.push(main), swap(main));
+  await editMany([
+    { id: comp.id, propertyDefinitions: { Alt: { type: "instance_swap" } } },
+    { id: badge.id, componentPropertyReferences: { componentId: "Alt" } },
+    { id: mark.id, componentPropertyReferences: { componentId: "Badge" } },
+  ]);
+  assert.deepEqual(swaps, []);
+  assert.equal(comp.componentPropertyDefinitions[fullName(comp, "Badge")].defaultValue, badgeB.id);
 });
 
 test("an insert into a component may carry bindings — an existing property, and a NEW slot it declares", async () => {

@@ -572,6 +572,17 @@ class Node {
     }
     this._characters = v;
     for (const b of RANGE_BUCKETS) this[b] = [];
+    // Editing a bound definition layer's text IS editing its property's default (live), and so every
+    // other layer bound to it. Text only: visible is a plain field here.
+    const owner = definitionOwnerAround(this);
+    const full = (this._componentPropertyReferences || {}).characters;
+    const def = owner && full ? (owner._defs || {})[full] : undefined;
+    if (def && def.defaultValue !== v) {
+      def.defaultValue = v;
+      for (const n of definitionSubtreeOf(owner)) {
+        if (n !== this && (n.componentPropertyReferences || {}).characters === full && definitionOwnerAround(n) === owner) writeDefinitionBinder(n, def, v);
+      }
+    }
   }
   setRangeFontName(start, end, value) { this._range("_rangeFonts", start, end, value); }
   setRangeFontSize(start, end, value) { this._range("_rangeSizes", start, end, value); }
@@ -1064,7 +1075,7 @@ class Node {
     detached.type = "FRAME";
     detached.mainComponent = undefined;
     delete detached._props;
-    for (const n of [detached, ...detached.findAll()]) delete n.componentPropertyReferences;
+    for (const n of [detached, ...detached.findAll()]) n.componentPropertyReferences = undefined;
     const parent = this.parent;
     if (parent) {
       const at = parent.children.indexOf(this);
@@ -1131,7 +1142,7 @@ function definitionOwnerAround(node) {
 
 // Show `value` in the field a property of `def`'s type drives on a definition layer.
 function writeDefinitionBinder(node, def, value) {
-  if (def.type === "TEXT") node.characters = value;
+  if (def.type === "TEXT" && node.characters !== value) node.characters = value;
   else if (def.type === "BOOLEAN") node.visible = value;
   else if (def.type === "INSTANCE_SWAP" && node.mainComponent && node.mainComponent.id !== value) node.swapComponent(registry.get(value));
 }

@@ -402,7 +402,16 @@ function resolveBindingToDefinition(
 // binding: one slot property on a set is realized by one frame in EACH variant, so "a slot is one
 // hole" is a per-variant count. Name resolution stays on the owner; only this count is scoped down.
 function nodesBoundTo(definition: any, wire: string, full: string): any[] {
-  return subtreeOf(definition).filter((n) => own((n.componentPropertyReferences || {}) as Record<string, string>, wire) === full);
+  return definitionLayersOf(definition).filter((n) => own((n.componentPropertyReferences || {}) as Record<string, string>, wire) === full);
+}
+
+// A definition's own layers, root included. A nested instance is one of them, but its sublayers are
+// its own component's copies — they may carry this owner's full names (an instance of a sibling
+// variant) without being bound in this definition.
+function definitionLayersOf(root: any): any[] {
+  const out = [root];
+  if (root.type !== "INSTANCE") for (const child of root.children || []) out.push(...definitionLayersOf(child));
+  return out;
 }
 
 function subtreeOf(root: any): any[] {
@@ -487,8 +496,10 @@ export function settleExistingPropertyDefaults(
       const type = PROPERTY_TYPE_WORD_FOR[definition.type];
       const field = FIELD_FOR_TYPE[type];
       // Every variant's bound layers count: a set's property has one default, shown in each of them.
-      // A layer the call leaves alone shows that default, because Figma keeps the two equal.
-      const already = subtreeOf(owner)
+      // A layer the call leaves alone shows that default, because Figma keeps the two equal. Not
+      // modelled: an edit to ONE bound layer carrying its siblings along, so a batch editing one of
+      // two bound layers and binding a third to match is refused; edit first, then bind.
+      const already = definitionLayersOf(owner)
         .filter((node) => own((node.componentPropertyReferences || {}) as Record<string, string>, group[0].wire) === full && !standing.leaves(node, group[0].wire))
         .map((node) => ({ layer: JSON.stringify(node.name) + " (already bound)", value: standing.shows(node, field) ?? definition.defaultValue }));
       try {
@@ -503,17 +514,24 @@ export function settleExistingPropertyDefaults(
 }
 
 /**
- * A binding edit's unbinds alone, landed before a batch's settled defaults: a default write rewrites
- * every layer still bound to the property, and a layer the batch frees keeps what it shows. A rebind
- * needs no such care, since its new property's default already equals what the layer will show.
+ * Detach every value field a call is about to rebind or unbind on `node`, before ANY of the call's
+ * writes land. While still bound, a write to that field (an edit, a swap) would land on the old
+ * property's default and every layer bound to it, and a settled default write would rewrite the node
+ * — a swap and back loses its overrides. A slot is left: it holds no value, and its frame would stop being one.
  */
-export function applyComponentUnbinds(fail: EditPlanFailure, node: any, plan: ComponentBindingEditPlan): void {
-  const unbinds = plan.writes.filter((write) => write.full === null && !write.add);
-  if (!unbinds.length) return;
+export function releaseRewiredBindings(node: any, wires: readonly string[]): void {
+  const live: Record<string, string> = node.componentPropertyReferences || {};
+  const released = wires.filter((wire) => wire !== BINDING_FIELD_WIRE_KEYS.slot.wire && own(live, wire) !== undefined);
+  if (!released.length) return;
+  const wire: Record<string, string> = { ...live };
+  for (const key of released) delete wire[key];
+  node.componentPropertyReferences = wire;
+}
+
+/** releaseRewiredBindings for a planned binding edit, in a sealed span's failure terms. */
+export function applyBindingRelease(fail: EditPlanFailure, node: any, plan: ComponentBindingEditPlan): void {
   try {
-    const wire: Record<string, string> = { ...(node.componentPropertyReferences || {}) };
-    for (const write of unbinds) delete wire[write.wire];
-    node.componentPropertyReferences = wire;
+    releaseRewiredBindings(node, plan.writes.map((write) => write.wire));
   } catch (cause) {
     throw fail(cause);
   }

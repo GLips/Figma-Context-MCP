@@ -38,7 +38,7 @@ import {
   resolveInstanceEditTargets, planInstanceEdit, applyInstanceRetarget, applyInstanceOverrides, InstanceEditPlan,
 } from "./instance.js";
 import {
-  planComponentEdit, applyComponentDefinitionEdit, applyComponentBindingEdit, applyBoundDefaults, projectedBinderValue, ComponentEditPlan,
+  planComponentEdit, applyComponentDefinitionEdit, applyComponentBindingEdit, applyBoundDefaults, applyBindingRelease, projectedBinderValue, ComponentEditPlan,
 } from "./component-edit.js";
 import { createStandingState } from "./standing-state.js";
 import type { EditDelta } from "./schema.js";
@@ -96,6 +96,7 @@ export function edit(target: Target, changes: EditDelta): Promise<Handle> {
     // Apply — the sealed span: all writes, no awaits.
     ({ plan, instance, component, resources }) => {
       const fail = openEditPlanApply("edit", plan);
+      if (component && component.binding) applyBindingRelease(fail, plan.node, component.binding);
       if (instance) applyInstanceRetarget(fail, plan.node, instance);
       if (component && component.definitions) applyComponentDefinitionEdit(fail, plan.node, component.definitions);
       applyEditPlanWrites(fail, plan, resources);

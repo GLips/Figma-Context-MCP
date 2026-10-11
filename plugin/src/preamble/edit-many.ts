@@ -43,7 +43,7 @@ import {
 } from "./instance.js";
 import {
   planAddedDefinitions, planComponentDefinitionEdit, prepareComponentBindingEdit, applyComponentDefinitionEdit, applyComponentBindingEdit,
-  applyBoundDefaults, applyComponentUnbinds, settleExistingPropertyDefaults, existingPropertyBindings, editedBinderValue, projectedBinderValue,
+  applyBoundDefaults, applyBindingRelease, settleExistingPropertyDefaults, existingPropertyBindings, editedBinderValue, projectedBinderValue,
   ComponentEditPlan, ComponentBindingEditPlan, AddedDefinition, PropertyBinder, ExistingPropertyBinding,
 } from "./component-edit.js";
 import { componentAncestorOf, describeBinder } from "./component.js";
@@ -644,6 +644,12 @@ export function editMany(entries: EditEntry[]): Promise<Handle[]> {
       // stage reports (see openEditPlanApply).
       const fails = plans.map((plan, i) => openEditPlanApply("editMany (entry " + i + ")", plan));
       const order = applyOrderShallowestFirst(plans);
+      // Before every other write: a field this batch rebinds or unbinds must be free of its old
+      // property when the retargets, the words and the settled defaults land (see releaseRewiredBindings).
+      for (const i of order) {
+        const component = components[i];
+        if (component && component.binding) applyBindingRelease(fails[i], plans[i].node, component.binding);
+      }
       // Stage by stage across the WHOLE batch, not entry by entry. Within one entry `edit` already
       // orders producers before consumers; across entries only the batch can, and it must — an
       // entry that centers a hugging panel would otherwise read a width the entry editing that
@@ -662,16 +668,9 @@ export function editMany(entries: EditEntry[]): Promise<Handle[]> {
         if (component && component.definitions) applyComponentDefinitionEdit(fails[i], plans[i].node, component.definitions);
       }
       for (const i of order) applyEditPlanWrites(fails[i], plans[i], resources);
-      // Unbinds, then the settled defaults, then every binding (see applyComponentUnbinds).
-      if (components.some((component) => component && component.defaults)) {
-        for (const i of order) {
-          const component = components[i];
-          if (component && component.binding) applyComponentUnbinds(fails[i], plans[i].node, component.binding);
-        }
-        for (const i of order) {
-          const component = components[i];
-          if (component && component.defaults) applyBoundDefaults(fails[i], component.defaults);
-        }
+      for (const i of order) {
+        const component = components[i];
+        if (component && component.defaults) applyBoundDefaults(fails[i], component.defaults);
       }
       for (const i of order) {
         const component = components[i];
