@@ -107,15 +107,13 @@
       "propertyDefinitions": {
         "Variant": {
           "type": "variant",
-          "defaultValue": "Secondary",
           "variantOptions": [
             "Secondary",
             "Primary"
           ]
         },
         "Left Icon": {
-          "type": "boolean",
-          "defaultValue": true
+          "type": "boolean"
         }
       },
       "children": [
@@ -215,8 +213,7 @@
       "key": "k-card",
       "propertyDefinitions": {
         "Icon": {
-          "type": "instance_swap",
-          "defaultValue": "11:3"
+          "type": "instance_swap"
         },
         "Content": {
           "type": "slot"

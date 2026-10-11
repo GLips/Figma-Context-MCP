@@ -282,7 +282,7 @@ export interface SceneNodeLike {
   readonly key?: string;
   readonly description?: string;
 
-  // Component metadata. The value/defaultValue are `unknown` on purpose: a SLOT property's is a
+  // Component metadata. The value is `unknown` on purpose: a SLOT property's is a
   // `{ guid }` object on the wire (REST verified live; the plugin typings still say `string | boolean`),
   // and the decode below keeps only the scalars.
   readonly isExposedInstance?: boolean;
@@ -292,7 +292,6 @@ export interface SceneNodeLike {
   readonly componentPropertyDefinitions?: {
     readonly [key: string]: {
       readonly type: string;
-      readonly defaultValue: unknown;
       readonly variantOptions?: ReadonlyArray<string>;
     };
   };
@@ -1015,8 +1014,8 @@ function decodeComponentProps(node: SceneNodeLike): NodeSnapshot["componentPrope
  * set's variant COMPONENT throws in the live API (the set owns them), so the variant case is skipped
  * by parent check before the access. REST agrees: a variant carries none on the wire either.
  *
- * Every type survives, a SLOT def keeping its type and losing only its `{ guid }` default;
- * `variantOptions` rides along for VARIANT. `preferredValues` / `slotSettings` / `description` are
+ * Every type survives, keeping its type; `variantOptions` rides along for VARIANT. No default:
+ * in a main component it is always the bound layer's own content, which the tree carries. `preferredValues` / `slotSettings` / `description` are
  * deliberately not carried — nothing downstream needs them to reproduce or modify an instance.
  */
 function decodePropertyDefinitions(node: SceneNodeLike): NodeSnapshot["componentPropertyDefinitions"] {
@@ -1027,7 +1026,6 @@ function decodePropertyDefinitions(node: SceneNodeLike): NodeSnapshot["component
   const out: NonNullable<NodeSnapshot["componentPropertyDefinitions"]> = {};
   for (const [key, def] of Object.entries(node.componentPropertyDefinitions)) {
     const decoded: (typeof out)[string] = { type: def.type };
-    if (isScalarPropertyValue(def.defaultValue)) decoded.defaultValue = def.defaultValue;
     if (def.variantOptions) decoded.variantOptions = [...def.variantOptions];
     out[key] = decoded;
   }

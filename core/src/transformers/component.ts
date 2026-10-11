@@ -6,11 +6,11 @@ import type {
 /**
  * One property on a COMPONENT / COMPONENT_SET, as emitted on the defining node.
  * `type` is the lowercased Figma tag: boolean / text / instance_swap / variant / slot.
+ * No default: in a main component Figma keeps it identical to the bound layer's own
+ * content (and a set's axis default is its first variant), so the tree already says it.
  */
 export interface SimplifiedPropertyDefinition {
   type: string;
-  /** Absent on `slot` (see SnapshotComponentPropertyDefinition). */
-  defaultValue?: boolean | string;
   /** `variant` only: the legal values, so a writer can pick one without guessing. */
   variantOptions?: string[];
 }
@@ -25,7 +25,7 @@ export function stripPropertyNameSuffix(name: string): string {
 }
 
 /**
- * Property definitions → name → { type, defaultValue?, variantOptions? }. Every
+ * Property definitions → name → { type, variantOptions? }. Every
  * type is kept: a writer needs the variant axes and swap slots as much as the
  * booleans and text.
  */
@@ -35,7 +35,6 @@ export function simplifyPropertyDefinitions(
   const result: Record<string, SimplifiedPropertyDefinition> = {};
   for (const [name, def] of Object.entries(definitions)) {
     const simplified: SimplifiedPropertyDefinition = { type: def.type.toLowerCase() };
-    if (def.defaultValue !== undefined) simplified.defaultValue = def.defaultValue;
     if (def.variantOptions) simplified.variantOptions = def.variantOptions;
     result[stripPropertyNameSuffix(name)] = simplified;
   }

@@ -341,11 +341,6 @@ export interface SnapshotComponentPropertyValue {
  */
 export interface SnapshotComponentPropertyDefinition {
   type: string;
-  /**
-   * Absent on SLOT: the wire default is a `{ guid }` object (REST) that names no value an
-   * agent can set. Present on every other type.
-   */
-  defaultValue?: boolean | string;
   /** VARIANT only: every value this axis can take. */
   variantOptions?: string[];
 }

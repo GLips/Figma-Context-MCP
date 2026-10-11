@@ -38,7 +38,7 @@ import {
   resolveInstanceEditTargets, planInstanceEdit, applyInstanceRetarget, applyInstanceOverrides, InstanceEditPlan,
 } from "./instance.js";
 import {
-  resolveComponentEditTargets, planComponentEdit, applyComponentDefinitionEdit, applyComponentBindingEdit, ComponentEditPlan,
+  planComponentEdit, applyComponentDefinitionEdit, applyComponentBindingEdit, ComponentEditPlan,
 } from "./component-edit.js";
 import type { EditDelta } from "./schema.js";
 
@@ -65,7 +65,6 @@ export function edit(target: Target, changes: EditDelta): Promise<Handle> {
       const hint = compileEditPlan(node, changes, SUBJECT);
       const targets = createResolvedTargets();
       const current = hint.instanceWords ? await resolveInstanceEditTargets(node, hint.instanceWords, targets) : null;
-      if (hint.componentWords) await resolveComponentEditTargets(node, hint.componentWords, targets);
       const instance = hint.instanceWords ? planInstanceEdit(node, hint.instanceWords, current, { targets }, SUBJECT) : undefined;
       const loaded = await loadEditResources([hint, ...(instance ? instance.overrides.map((o) => o.plan) : [])], instance ? [instance.needs] : []);
       return { node, targets, current, loaded };
@@ -79,7 +78,7 @@ export function edit(target: Target, changes: EditDelta): Promise<Handle> {
       const plan = compileEditPlan(node, changes, SUBJECT);
       const planning = { targets, fonts: loaded.fonts };
       const instance: InstanceEditPlan | undefined = plan.instanceWords ? planInstanceEdit(node, plan.instanceWords, current, planning, SUBJECT) : undefined;
-      const component: ComponentEditPlan | undefined = plan.componentWords ? planComponentEdit(node, plan.componentWords, targets, SUBJECT) : undefined;
+      const component: ComponentEditPlan | undefined = plan.componentWords ? planComponentEdit(node, plan.componentWords, SUBJECT) : undefined;
       assertEditPlanLands(plan, loaded.fonts, SUBJECT, undefined, instance ? { mode: instance.becomesLayoutMode, wrap: instance.becomesLayoutWrap } : undefined);
       return { plan, instance, component, resources: gateEditResources(loaded, instance ? [instance.needs] : []) };
     },

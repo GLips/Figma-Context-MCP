@@ -162,16 +162,16 @@ const buildButton = (height) => ({
     fill: "#111827",
     borderRadius: 8,
     children: [
-        // A boolean property drives this dot's \`visible\`. Unnamed, \`visible\` derives to true, so
-        // the definition states the false.
+        // A boolean property drives this dot's \`visible\`; hidden here, so instances start hidden.
         {
             type: "ELLIPSE",
             width: 8,
             height: 8,
             fill: "#22C55E",
+            visible: false,
             componentPropertyReferences: { visible: "Show Dot" },
         },
-        // A text property drives this content; its default derives from here ("Save").
+        // A text property drives this content; its default is what the layer shows ("Save").
         {
             type: "TEXT",
             text: "Save",
@@ -185,7 +185,7 @@ const buildButton = (height) => ({
 });
 const definitions = {
     Label: { type: "text" },
-    "Show Dot": { type: "boolean", defaultValue: false },
+    "Show Dot": { type: "boolean" },
     Trailing: { type: "slot" },
 };
 const small = await flcm.component(buildButton(32), {

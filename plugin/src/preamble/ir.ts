@@ -492,25 +492,23 @@ export interface ComponentPropertyBinding {
   slot?: string;
 }
 
-// One property an flcm.component call declares, in the read's own lowercase words. `defaultValue`
-// is the property's value on a fresh instance: a boolean, a text, or — for `instance_swap` — a
-// component Target (the resolved COMPONENT's id is what Figma stores). Omitted, it is DERIVED from
-// the single node that binds the property; a `slot` refuses one outright (its content is authored).
+// One property an flcm.component call declares, in the read's own lowercase words. It carries no
+// default: a property's default IS its bound layer's content (its text, its visibility, its
+// instance's component), so every property is bound in the same call and read off that layer.
 export interface ComponentPropertyDefinitionInput {
   type: "boolean" | "text" | "instance_swap" | "slot";
-  defaultValue?: boolean | string | Target;
 }
 
 export type ComponentPropertyDefinitions = Record<string, ComponentPropertyDefinitionInput>;
 
 // One `propertyDefinitions` entry as an EDIT names it, keyed by the property's CURRENT name. Three
-// shapes in one: a name the component doesn't have yet ADDS (create's own rules, with `defaultValue`
-// required — nothing binds it in the same call), a name it has CHANGES (`defaultValue`, and `name`
-// to rename), and `null` DELETES. `name` is the one word here with no read spelling: a read reports
-// a property's name as the key, so renaming needs a word of its own.
+// shapes in one: a name the component doesn't have yet ADDS (create's own rules — bound by another
+// entry of the same editMany), a name it has RENAMES (`name`), and `null` DELETES. `name` is the one
+// word here with no read spelling: a read reports a property's name as the key, so renaming needs a
+// word of its own. `type` and `variantOptions` may restate what a read reports, as a no-op.
 export interface ComponentPropertyDefinitionEdit {
-  type?: "boolean" | "text" | "instance_swap" | "slot";
-  defaultValue?: boolean | string | Target;
+  type?: "boolean" | "text" | "instance_swap" | "slot" | "variant";
+  variantOptions?: string[];
   name?: string;
 }
 

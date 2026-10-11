@@ -171,6 +171,22 @@ test("a derived instance_swap default is the variant the bound instance actually
   assert.equal(definitions[full].defaultValue, comp.children[0].mainComponent.id);
 });
 
+test("several binders that show the same content share it as the default", async () => {
+  const figma = createFigmaMock();
+  const out = await component(
+    {
+      type: "FRAME",
+      children: [
+        { type: "TEXT", text: "Menu", componentPropertyReferences: { text: "Label" } },
+        { type: "TEXT", text: "Menu", componentPropertyReferences: { text: "Label" } },
+      ],
+    },
+    { propertyDefinitions: { Label: { type: "text" } } },
+  );
+  const comp = await figma.getNodeByIdAsync(out.id);
+  assert.deepEqual(Object.values(comp.componentPropertyDefinitions), [{ type: "TEXT", defaultValue: "Menu" }]);
+});
+
 test("a node promoted onto an occupied page says so, exactly as render does", async () => {
   createFigmaMock();
   const said: string[] = [];
@@ -194,12 +210,13 @@ test("a live frame is promoted where it stands, keeping its keys", async () => {
     width: 200,
     height: 100,
     fill: "#ff0000",
-    children: [{ type: "RECTANGLE", key: "dot", width: 8, height: 8 }],
+    children: [{ type: "RECTANGLE", key: "dot", width: 8, height: 8, visible: false }],
   });
-  const out = await component(built, {
-    name: "Card",
-    propertyDefinitions: { Muted: { type: "boolean", defaultValue: false } },
-  });
+  // Promoted as its own returned data, binding the live dot: its hidden state IS the default.
+  const out = await component(
+    { ...built, children: [{ ...built.children![0], componentPropertyReferences: { visible: "Muted" } }] },
+    { name: "Card", propertyDefinitions: { Muted: { type: "boolean" } } },
+  );
   const comp = await figma.getNodeByIdAsync(out.id);
   assert.equal(comp.type, "COMPONENT");
   assert.equal(comp.name, "Card");
@@ -213,6 +230,7 @@ test("a live frame is promoted where it stands, keeping its keys", async () => {
     defaultValue: unknown;
   }[];
   assert.deepEqual(defaults, [{ type: "BOOLEAN", defaultValue: false }]);
+  assert.equal(comp.children[0].visible, false);
 });
 
 test("flcm.variants folds components into a set an instance selects from", async () => {
@@ -282,7 +300,7 @@ test("what a component call refuses, with zero writes", async () => {
     /names property "Label", which this call doesn't declare — its propertyDefinitions are "Caption"/,
   );
   await assert.rejects(
-    component(body(), { propertyDefinitions: { Label: { type: "boolean", defaultValue: true } } }),
+    component(body(), { propertyDefinitions: { Label: { type: "boolean" } } }),
     /`componentPropertyReferences\.text` drives a text property, and "Label" is declared "boolean"/,
   );
   // A slot nobody binds would leave an unpositioned box in the component.
@@ -308,13 +326,33 @@ test("what a component call refuses, with zero writes", async () => {
     ),
     /2 frames are bound to slot property "T", and a slot is one hole/,
   );
-  // A property nothing binds and nothing defaults has no value to invent.
+  // A property nothing binds has no layer to read its default off — and none can be stated instead.
   await assert.rejects(
     component(
       { type: "FRAME", width: 10, height: 10 },
       { propertyDefinitions: { Label: { type: "text" } } },
     ),
-    /no `defaultValue`, and nothing in this call binds "Label"/,
+    /nothing in this call binds "Label"\. A property's default IS its bound layer's content/,
+  );
+  await assert.rejects(
+    component(body(), { propertyDefinitions: { Label: { type: "text", defaultValue: "Link 1" } as never } }),
+    /unknown prop "defaultValue".*A property's default is its bound layer's content/,
+  );
+  // Two binders showing different content: whichever won, the binding would overwrite the other.
+  await assert.rejects(
+    component(
+      {
+        type: "FRAME",
+        width: 10,
+        height: 10,
+        children: [
+          { type: "TEXT", name: "Home", text: "Home", componentPropertyReferences: { text: "Link" } },
+          { type: "TEXT", name: "About", text: "About", componentPropertyReferences: { text: "Link" } },
+        ],
+      },
+      { propertyDefinitions: { Link: { type: "text" } } },
+    ),
+    /2 layers bind "Link" and show different text — "Home" at flcm\.component\.spec\.children\[0\] is "Home", "About" at flcm\.component\.spec\.children\[1\] is "About"/,
   );
   // The subject itself.
   await assert.rejects(component(comp.id), /is already a component — there is nothing to promote/);

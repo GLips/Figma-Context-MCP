@@ -114,9 +114,9 @@ import { STYLE_REF_FIELDS } from "@framelink/core/internal";
  *     (verified live, file `Framelink`, 2026-09-04): REST emits `type: "SLOT"` nodes,
  *     links each to its property through `componentPropertyReferences.slotContentId`,
  *     and carries the SLOT definition on the owning COMPONENT — the same three things
- *     the plugin API exposes. Both adapters drop the two values only the wire has and
- *     an agent can't set (the `{ guid }` `defaultValue` on the definition and the
- *     `{ guid }` `value` on the instance), so the SLOT node, its `slot` reference and
+ *     the plugin API exposes. Both adapters drop the value only the wire has and an
+ *     agent can't set (the `{ guid }` `value` on the instance; no definition carries a
+ *     default at all), so the SLOT node, its `slot` reference and
  *     its `slot`-typed definition all compare as ordinary node fields. Plugin-only
  *     slot data (`slotSettings`, `limitViolations`) is not carried by either producer.
  */

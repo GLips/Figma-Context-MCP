@@ -52,14 +52,13 @@ type RawStructuralFields = Partial<
  * The wire shape of component properties, as REST actually sends it — wider than
  * `@figma/rest-api-spec` 0.42.0 declares. Grounded live (file `Framelink`, 2026-09-04):
  * a SLOT property (`type: "SLOT"`, absent from the spec's union) carries a `{ guid }`
- * OBJECT as its `defaultValue` / `value`, not a scalar, and `componentPropertyReferences`
+ * OBJECT as its `value`, not a scalar, and `componentPropertyReferences`
  * carries a `slotContentId` key the spec doesn't list either. Typed here so the decode
  * below is honest about what it filters.
  */
 interface RawComponentProperty {
   type: string;
   value?: unknown;
-  defaultValue?: unknown;
   variantOptions?: string[];
 }
 
@@ -325,8 +324,8 @@ function decodeComponentProperties(
 }
 
 /**
- * Property definitions, field-by-field. Every type survives (a SLOT def keeps its
- * type and loses only its `{ guid }` default); `variantOptions` rides along for VARIANT.
+ * Property definitions, field-by-field. Every type survives; `variantOptions` rides along
+ * for VARIANT. No default: in a main component it is always the bound layer's own content.
  * `preferredValues` (a picker palette) is deliberately not carried — nothing downstream
  * needs it to reproduce or modify an instance.
  */
@@ -336,7 +335,6 @@ function decodePropertyDefinitions(
   const out: Record<string, SnapshotComponentPropertyDefinition> = {};
   for (const [name, def] of Object.entries(wire)) {
     const decoded: SnapshotComponentPropertyDefinition = { type: def.type };
-    if (isScalarPropertyValue(def.defaultValue)) decoded.defaultValue = def.defaultValue;
     if (def.variantOptions) decoded.variantOptions = def.variantOptions;
     out[name] = decoded;
   }

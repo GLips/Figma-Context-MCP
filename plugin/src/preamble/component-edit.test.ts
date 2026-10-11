@@ -21,6 +21,7 @@ import { component, variants } from "./component.js";
 import { edit } from "./edit.js";
 import { editMany } from "./edit-many.js";
 import { append } from "./structure.js";
+import { get } from "./read.js";
 
 let figma = createFigmaMock();
 
@@ -142,37 +143,43 @@ test("`description` is a component word, and no other node type takes it", async
   assert.equal((await figma.getNodeByIdAsync(plain.id)).description, undefined);
 });
 
-test("propertyDefinitions ADDS a property, and every instance gains it at the stated default", async () => {
-  const { comp, inst } = await plainComponent();
-  await edit(id(comp.id), {
-    propertyDefinitions: { Heading: { type: "text", defaultValue: "Untitled" } },
-  });
+test("editMany ADDS a property bound in the same batch, its default the layer's own content", async () => {
+  const { comp, title, inst } = await plainComponent();
+  await editMany([
+    { id: comp.id, propertyDefinitions: { Heading: { type: "text" } } },
+    { id: title.id, componentPropertyReferences: { text: "Heading" } },
+  ]);
   const full = fullName(comp, "Heading");
   assert.equal(comp.componentPropertyDefinitions[full].type, "TEXT");
-  assert.equal(comp.componentPropertyDefinitions[full].defaultValue, "Untitled");
-  assert.equal(inst.componentProperties[full].value, "Untitled");
+  // The layer's real content IS the default — nothing was invented to overwrite it.
+  assert.equal(comp.componentPropertyDefinitions[full].defaultValue, "Title");
+  assert.equal(title.characters, "Title");
+  assert.equal(title.componentPropertyReferences.characters, full);
+  assert.equal(inst.componentProperties[full].value, "Title");
 });
 
-test("propertyDefinitions CHANGES a default, and only the instances still on the old one follow", async () => {
-  const { comp, inst } = await chipComponent();
-  const label = fullName(comp, "Label");
-  const stamped = await render({
-    type: "INSTANCE",
-    componentId: comp.id,
-    key: "second",
-    left: 600,
-    top: 600,
-  });
-  const own = await figma.getNodeByIdAsync(stamped.id);
-  await edit(id(own.id), { componentProperties: { Label: "Mine" } });
+// The same batch may also change what the bound layer shows: the default is what it shows once its
+// own entry lands, so the binding writes back exactly that and nothing else.
+test("an added property's default is its binder's content after the batch's own edit of it", async () => {
+  const { comp, title } = await plainComponent();
+  await editMany([
+    { id: comp.id, propertyDefinitions: { Heading: { type: "text" }, "Show Title": { type: "boolean" } } },
+    { id: title.id, text: "Overview", visible: false, componentPropertyReferences: { text: "Heading", visible: "Show Title" } },
+  ]);
+  assert.equal(comp.componentPropertyDefinitions[fullName(comp, "Heading")].defaultValue, "Overview");
+  assert.equal(comp.componentPropertyDefinitions[fullName(comp, "Show Title")].defaultValue, false);
+  assert.equal(title.characters, "Overview");
+  assert.equal(title.visible, false);
+});
 
-  await edit(id(comp.id), { propertyDefinitions: { Label: { defaultValue: "Save" } } });
-  assert.equal(comp.componentPropertyDefinitions[label].defaultValue, "Save");
-  // The untouched instance takes the new default, down to the bound sublayer's own characters.
-  assert.equal(inst.componentProperties[label].value, "Save");
-  assert.equal(inst.findOne((n: { name: string }) => n.name === "Label").characters, "Save");
-  // The one that stated its own value keeps it.
-  assert.equal(own.componentProperties[label].value, "Mine");
+// A read hands `{ type }` (and a set's `{ type, variantOptions }`) back; written back unchanged, it
+// changes nothing rather than refusing — so a component read round-trips through edit.
+test("a read's propertyDefinitions written back unchanged are a no-op", async () => {
+  const { comp } = await chipComponent();
+  const { components } = await get(id(comp.id));
+  const definitions = JSON.stringify(comp.componentPropertyDefinitions);
+  await edit(id(comp.id), { propertyDefinitions: components![comp.id].propertyDefinitions as any });
+  assert.equal(JSON.stringify(comp.componentPropertyDefinitions), definitions);
 });
 
 test("propertyDefinitions RENAMES a property — the bound sublayer follows, and the new name resolves", async () => {
@@ -249,18 +256,19 @@ test("propertyDefinitions DELETES a SLOT too — the frame becomes an ordinary f
 test("editMany applies definition and root words across entries in one step", async () => {
   const { comp, inst } = await chipComponent();
   const second = await component(
-    { type: "FRAME", key: "other", width: 40, height: 40, fill: "#222222" },
+    { type: "FRAME", key: "other", width: 40, height: 40, fill: "#222222", children: [{ type: "RECTANGLE", key: "dot", width: 4, height: 4 }] },
     { name: "Other" },
   );
   await editMany([
-    { id: comp.id, propertyDefinitions: { Label: { defaultValue: "Save" } }, fill: "#00ff00" },
-    { id: second.id, propertyDefinitions: { Tone: { type: "boolean", defaultValue: true } } },
+    { id: comp.id, propertyDefinitions: { Label: { name: "Caption" } }, fill: "#00ff00" },
+    { id: second.id, propertyDefinitions: { Tone: { type: "boolean" } } },
+    { id: specNode(second, "dot").id, componentPropertyReferences: { visible: "Tone" } },
   ]);
-  assert.equal(comp.componentPropertyDefinitions[fullName(comp, "Label")].defaultValue, "Save");
+  assert.ok(fullName(comp, "Caption"));
   assert.deepEqual(comp.fills[0].color, { r: 0, g: 1, b: 0 });
   assert.deepEqual(inst.fills[0].color, { r: 0, g: 1, b: 0 });
   const other = await figma.getNodeByIdAsync(second.id);
-  assert.equal(other.componentPropertyDefinitions[fullName(other, "Tone")].type, "BOOLEAN");
+  assert.deepEqual(other.componentPropertyDefinitions[fullName(other, "Tone")], { type: "BOOLEAN", defaultValue: true });
 });
 
 test("a definition edit and the node's own words are one delta, one undo step", async () => {
@@ -272,20 +280,22 @@ test("a definition edit and the node's own words are one delta, one undo step", 
   const before = figma.undoLog.length;
   await edit(id(comp.id), {
     name: "Chip B",
-    propertyDefinitions: { Label: { name: "Caption", defaultValue: "Save" } },
+    propertyDefinitions: { Label: { name: "Caption" } },
   });
   assert.equal(comp.name, "Chip B");
-  assert.equal(comp.componentPropertyDefinitions[fullName(comp, "Caption")].defaultValue, "Save");
-  // A rename, a re-default and a root word land in one step, not three.
+  assert.ok(fullName(comp, "Caption"));
+  // A rename and a root word land in one step, not two.
   assert.equal(figma.undoLog.length - before, perVerb);
   assert.ok(!figma.undoLog.includes("trigger"));
 });
 
 test("componentPropertyReferences BINDS a live sublayer, and the property then drives it", async () => {
   const { comp, title, inst } = await plainComponent();
-  await edit(id(comp.id), {
-    propertyDefinitions: { Heading: { type: "text", defaultValue: "Untitled" } },
-  });
+  await editMany([
+    { id: comp.id, propertyDefinitions: { Heading: { type: "text" } } },
+    { id: title.id, componentPropertyReferences: { text: "Heading" } },
+  ]);
+  await edit(id(title.id), { componentPropertyReferences: { text: null } });
   await edit(id(title.id), { componentPropertyReferences: { text: "Heading" } });
   const heading = fullName(comp, "Heading");
   assert.equal(title.componentPropertyReferences.characters, heading);
@@ -311,10 +321,11 @@ test("componentPropertyReferences UNBINDS a field with null, leaving its value a
 });
 
 test("a binding edit merges onto the node's live bag rather than replacing it", async () => {
-  const { comp, label } = await chipComponent();
-  await edit(id(comp.id), {
-    propertyDefinitions: { "Show Label": { type: "boolean", defaultValue: true } },
-  });
+  const { comp, icon, label } = await chipComponent();
+  await editMany([
+    { id: comp.id, propertyDefinitions: { "Show Label": { type: "boolean" } } },
+    { id: icon.id, componentPropertyReferences: { visible: "Show Label" } },
+  ]);
   await edit(id(label.id), { componentPropertyReferences: { visible: "Show Label" } });
   assert.equal(label.componentPropertyReferences.characters, fullName(comp, "Label"));
   assert.equal(label.componentPropertyReferences.visible, fullName(comp, "Show Label"));
@@ -369,11 +380,13 @@ test("an instance's SLOT takes the frame surface under edit", async () => {
   await assert.rejects(edit(id(slot.id), { text: "nope" }), /`text` is not a SLOT word/);
 });
 
-test("editMany refuses a batch that both re-declares a property and binds to it, naming both entries", async () => {
+test("editMany refuses a batch that both renames a property and binds to it, naming both entries", async () => {
   const { comp, title } = await plainComponent();
-  await edit(id(comp.id), {
-    propertyDefinitions: { Heading: { type: "text", defaultValue: "Untitled" } },
-  });
+  await editMany([
+    { id: comp.id, propertyDefinitions: { Heading: { type: "text" } } },
+    { id: title.id, componentPropertyReferences: { text: "Heading" } },
+  ]);
+  await edit(id(title.id), { componentPropertyReferences: { text: null } });
   const before = figma.undoLog.length;
   await assert.rejects(
     editMany([
@@ -383,7 +396,30 @@ test("editMany refuses a batch that both re-declares a property and binds to it,
     /\[1\].*in the same batch — the two would have to run in an order this call never states/s,
   );
   assert.deepEqual(figma.undoLog.slice(before), []);
-  assert.equal(title.componentPropertyReferences, undefined);
+  assert.deepEqual(title.componentPropertyReferences, {});
+});
+
+test("an added property's binders must agree, and each is named when they don't", async () => {
+  const { comp, label, icon } = await chipComponent();
+  await edit(id(icon.id), { visible: false });
+  const before = figma.undoLog.length;
+  await assert.rejects(
+    editMany([
+      { id: comp.id, propertyDefinitions: { Shown: { type: "boolean" } } },
+      { id: icon.id, componentPropertyReferences: { visible: "Shown" } },
+      { id: label.id, componentPropertyReferences: { visible: "Shown" } },
+    ]),
+    /2 layers bind "Shown" and show different visible — "Icon" at entry 1 is false, "Label" at entry 2 is true/,
+  );
+  assert.deepEqual(figma.undoLog.slice(before), []);
+  assert.equal(fullName(comp, "Shown"), undefined);
+  // Made to agree in the same call, it lands.
+  await editMany([
+    { id: comp.id, propertyDefinitions: { Shown: { type: "boolean" } } },
+    { id: icon.id, visible: true, componentPropertyReferences: { visible: "Shown" } },
+    { id: label.id, componentPropertyReferences: { visible: "Shown" } },
+  ]);
+  assert.equal(comp.componentPropertyDefinitions[fullName(comp, "Shown")].defaultValue, true);
 });
 
 // An instance entry is not a lesser case of the same hazard: the appliers run setProperties BEFORE
@@ -412,7 +448,7 @@ test("every definition refusal names the cause and writes nothing", async () => 
 
   // A type can't change — Figma has no such call.
   await assert.rejects(
-    edit(id(comp.id), { propertyDefinitions: { Label: { type: "boolean", defaultValue: true } } }),
+    edit(id(comp.id), { propertyDefinitions: { Label: { type: "boolean" } } }),
     /is "text" and Figma can't change a property's type/,
   );
   // A slot IS a frame, so it is made by inserting one, never declared on its own.
@@ -420,20 +456,25 @@ test("every definition refusal names the cause and writes nothing", async () => 
     edit(id(comp.id), { propertyDefinitions: { Extra: { type: "slot" } } }),
     /a slot IS the frame that holds its placeholder content/,
   );
-  // Nothing binds a property an edit adds, so there is no node to derive its default from.
+  // One delta can't bind a sublayer, so a property it adds has no layer to read its default off.
   await assert.rejects(
     edit(id(comp.id), { propertyDefinitions: { Heading: { type: "text" } } }),
-    /needs a `defaultValue` — nothing in this call binds it/,
+    /nothing in this call binds "Heading"\. A property's default IS its bound layer's content, so add it and bind the layer that shows its value in ONE flcm\.editMany/,
   );
-  // A slot has no value at all.
+  // An editMany add nothing in the batch binds is the same refusal.
   await assert.rejects(
-    edit(id(comp.id), { propertyDefinitions: { Trailing: { defaultValue: "x" } } }),
-    /is a slot, and a slot has no value/,
+    editMany([{ id: comp.id, propertyDefinitions: { Heading: { type: "text" } } }]),
+    /nothing in this call binds "Heading"/,
   );
-  // `type` alone can only restate what the property already is.
+  // A default is not a word: it is the bound layer's content.
   await assert.rejects(
-    edit(id(comp.id), { propertyDefinitions: { Label: { type: "text" } } }),
-    /names nothing that can change/,
+    edit(id(comp.id), { propertyDefinitions: { Label: { defaultValue: "Save" } as any } }),
+    /unknown prop "defaultValue".*A property's default is its bound layer's content/,
+  );
+  // An entry that names nothing at all.
+  await assert.rejects(
+    edit(id(comp.id), { propertyDefinitions: { Label: {} } }),
+    /names nothing/,
   );
   // A rename onto a name the component already uses.
   await assert.rejects(
@@ -463,11 +504,11 @@ test("every definition refusal names the cause and writes nothing", async () => 
 
 test("a variant's properties live on the SET, and the refusal points there", async () => {
   const small = await component(
-    { type: "FRAME", width: 96, height: 32, fill: "#111111" },
+    { type: "FRAME", width: 96, height: 32, fill: "#111111", children: [{ type: "TEXT", key: "small-label", text: "Go" }] },
     { name: "Button" },
   );
   const large = await component(
-    { type: "FRAME", width: 128, height: 44, fill: "#111111" },
+    { type: "FRAME", width: 128, height: 44, fill: "#111111", children: [{ type: "TEXT", key: "large-label", text: "Go" }] },
     { name: "Button" },
   );
   const set = await variants(
@@ -481,13 +522,19 @@ test("a variant's properties live on the SET, and the refusal points there", asy
   const variant = setNode.children[0];
   const before = figma.undoLog.length;
   await assert.rejects(
-    edit(id(variant.id), { propertyDefinitions: { Label: { type: "text", defaultValue: "Go" } } }),
+    edit(id(variant.id), { propertyDefinitions: { Label: { type: "text" } } }),
     /is a VARIANT, and a set's properties live on the SET/,
   );
   assert.deepEqual(figma.undoLog.slice(before), []);
-  // On the SET itself it lands, and the axis it already has is not a definition anyone can change.
-  await edit(id(set.id), { propertyDefinitions: { Label: { type: "text", defaultValue: "Go" } } });
+  // On the SET itself it lands, bound by a layer in EACH variant — they agree, so that is the default.
+  await editMany([
+    { id: set.id, propertyDefinitions: { Label: { type: "text" } } },
+    { id: specNode(small, "small-label").id, componentPropertyReferences: { text: "Label" } },
+    { id: specNode(large, "large-label").id, componentPropertyReferences: { text: "Label" } },
+  ]);
   assert.equal(setNode.componentPropertyDefinitions[fullName(setNode, "Label")].defaultValue, "Go");
+  // The axis it already has is not a definition anyone can change — but restating it is a no-op.
+  await edit(id(set.id), { propertyDefinitions: { Size: { type: "variant", variantOptions: setNode.componentPropertyDefinitions[fullName(setNode, "Size")].variantOptions } } });
   await assert.rejects(
     edit(id(set.id), { propertyDefinitions: { Size: null } }),
     /is a VARIANT axis, and a set's axes ARE its member components' names/,

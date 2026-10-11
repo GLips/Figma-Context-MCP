@@ -455,7 +455,8 @@ await flcm.component(
 \`\`\`
 
 - **One field per type, on the node that owns it:** \`boolean\` → \`visible\` (any node), \`text\` → \`text\` (\`TEXT\`), \`instance_swap\` → \`componentId\` (\`INSTANCE\`), \`slot\` → \`slot\` (\`FRAME\`). A field on the wrong node type fails at the verb; an undeclared name fails loud listing the declared ones, a mismatched type fails loud.
-- **Omit \`defaultValue\` to derive it from the binding node**: its \`visible\` (unnamed is \`true\`), its text, its component. That needs exactly one binder: a property nothing binds must state one; two binders leave no single value.
+- **A property's default IS its bound layer's content**: the text it shows, its \`visible\` (unnamed is \`true\`), its instance's component. Figma keeps the two identical in a main component, so there is no \`defaultValue\`: to start instances somewhere else, author the layer that way. Promoting existing layers keeps their content.
+- **Every property is bound in the same call.** One nothing binds is refused. Several binders must show the same content; if they differ, the call is refused naming each layer and its value, so make them agree in that call.
 - **A slot IS a frame you author.** The bound frame stays in the definition, placeholder children and all, and every instance shows it as a SLOT holding that content until it fills it (below). A slot no frame binds is refused (rather than Figma's unpositioned 100×100 box); two frames on one slot are refused: a slot is one hole.
 - **\`variant\` is not a type.** Axes come from folding components into a set (\`flcm.variants\`).
 - **A binding means something only with a component behind it**: this call, or an insert into / an edit of a layer inside a live component (below). Under \`render\`, or an insert or edit anywhere else, it is refused naming the word.`;
@@ -483,17 +484,21 @@ export const COMPONENTS_EDIT_MAIN = `**A main component is edited with \`flcm.ed
 \`\`\`js
 await flcm.edit(comp, {
   propertyDefinitions: {
-    Size: { type: "text", defaultValue: "M" },   // a new name  → ADDS
-    Label: { defaultValue: "Save" },             // a known one → re-defaults
-    Icon: { name: "Leading" },                   //             → renames
-    Legacy: null,                                //             → deletes
+    Icon: { name: "Leading" },                   // a known name → renames
+    Legacy: null,                                //              → deletes
   },
 });
+await flcm.editMany([
+  { id: comp, propertyDefinitions: { Size: { type: "text" } } },          // a new name → ADDS
+  { id: sizeLabelId, componentPropertyReferences: { text: "Size" } },     // …bound in the same batch
+]);
 \`\`\`
 
-- **Adding requires \`defaultValue\`**: an edit binds nothing in the same call, so nothing can derive it. Bind a layer next (below).
+- **Adding needs a binder in the same \`editMany\`**: the default is that layer's content, as at create (several binders must agree). A plain \`edit\` can't bind a sublayer, so an add there is refused.
+- **To change a default, edit the bound layer**: Figma keeps a main component's default and its bound layer identical.
+- **A read's \`propertyDefinitions\` written back unchanged is a no-op**, a set's \`{ type: "variant", variantOptions }\` included.
 - **A new \`slot\` can't be declared here**: insert a bound frame instead (below).
-- **Re-defaulting** reaches every instance still on the old default; one that stated its own value keeps it. **Renaming** re-suffixes the property and re-points every bound layer. **Deleting** frees the layers it drove.
+- **Renaming** re-suffixes the property and re-points every bound layer. **Deleting** frees the layers it drove.
 - **A type can't change** (Figma has no such call): delete and re-declare.
 - **A variant axis is not a definition.** A set's axes ARE its members' names, so rename the member components; a \`propertyDefinitions\` edit aimed at a variant is refused pointing at the set.
 
@@ -502,15 +507,14 @@ await flcm.edit(comp, {
 The compiler's word on a live sublayer of a component; \`null\` unbinds a field, which keeps its value.
 
 \`\`\`js
-await flcm.edit(comp, { propertyDefinitions: { Heading: { type: "text", defaultValue: "Untitled" } } });
-await flcm.edit(titleId, { componentPropertyReferences: { text: "Heading" } });   // the property drives it now
+await flcm.edit(titleId, { componentPropertyReferences: { text: "Heading" } });   // an existing property drives it now
 await flcm.edit(titleId, { componentPropertyReferences: { visible: null } });     // unbind
 \`\`\`
 
 - The node must be inside a COMPONENT or a set's variant: inside an INSTANCE it is refused naming the instance, and outside any component there is no property to point at.
 - Field legality is the compiler's, read off the live node's type. Bare names resolve to Figma's suffixed ones when unambiguous.
 - **Unbinding the only frame of a slot property is refused**: delete the property (\`{ Name: null }\`), which frees the frame. In a SET the count is per VARIANT; a sibling variant's frame is no spare.
-- An \`editMany\` batch can't mix a definition edit with an entry that depends on it (binding to a name it renames, or setting that property on an INSTANCE): refused naming both, so use two calls.
+- An \`editMany\` batch can't mix a rename or delete with an entry that depends on it (binding to a name it renames, or setting that property on an INSTANCE): refused naming both, so use two calls. Binding to a property the batch adds is the exception: it is how an add is bound.
 
 ### Inserting a bound layer
 

@@ -8,16 +8,16 @@
 // carries the change into every instance because that is what a component IS. This module is the
 // three things those verbs can't judge without the live document:
 //
-//   • `propertyDefinitions` under edit — ADD a property (a name the component doesn't have),
-//     CHANGE one (`defaultValue`, or `name` to rename), or DELETE one (`null`).
+//   • `propertyDefinitions` under edit — ADD a property (a name the component doesn't have, bound
+//     in the same editMany), RENAME one (`name`), or DELETE one (`null`). A default is never a word
+//     here: it is the bound layer's content, so changing it means editing that layer.
 //   • `componentPropertyReferences` under edit — bind an existing sublayer to a property, or
 //     unbind it (`null` per field).
 //   • the bindings an authored node carries into an existing component through append/prepend/insertBefore/
 //     insertAfter — the one place outside flcm.component where a binding means something.
 //
-// The split is edit's own (see edit-plan.ts): the sync compile judges the words' SHAPE, the targets
-// the words name resolve in the verb's prepare (resolveComponentEditTargets), everything that reads
-// the definitions is decided in the verb's synchronous GATE (planComponentEdit) with zero writes,
+// The split is edit's own (see edit-plan.ts): the sync compile judges the words' SHAPE, everything
+// that reads the definitions is decided in the verb's synchronous GATE (planComponentEdit) with zero writes,
 // and the apply is a sync span the verb seals — a rename and a recolor of the same component are
 // one undo step.
 //
@@ -25,15 +25,14 @@
 // own words (a rename must be part of the same step as whatever else the delta says), bindings land
 // AFTER them (the node has to be what this delta makes it before it is wired to a property).
 
-import { WriteNode, WriteChild, ComponentEditWords, ComponentPropertyBinding, ComponentPropertyDefinitionEdit, Target } from "./ir.js";
+import { WriteNode, WriteChild, ComponentEditWords, ComponentPropertyBinding, ComponentPropertyDefinitionEdit } from "./ir.js";
 import { BoundLiveNode } from "./bridge.js";
 import { EditPlanFailure } from "./edit-plan.js";
 import {
   PROPERTY_TYPES, PROPERTY_TYPE_WORD_FOR, BINDING_FIELD_WIRE_KEYS, FIELD_FOR_TYPE, PreparedDefinition,
-  compilePropertyDefinition, componentAncestorOf, writeBindingReferences, quoted,
+  compilePropertyDefinition, componentAncestorOf, writeBindingReferences, quoted, agreedDefault,
 } from "./component.js";
-import { resolveComponentNode, resolvePropertyName, matchPropertyNames, bareName } from "./instance.js";
-import { ResolvedTargets } from "./read.js";
+import { resolvePropertyName, matchPropertyNames, bareName } from "./instance.js";
 import { compileBindingEditBag, bindingFieldsForType, assertNoComponentPropertyBindings } from "./flcm.js";
 import { instanceAncestorOf, describeNodeIdentity, definitionOwnerOf, propertyDefinitionsOf } from "./identity.js";
 import { own } from "./validate.js";
@@ -42,35 +41,83 @@ import { own } from "./validate.js";
 
 /**
  * What an edit does to a component's declarations, fully resolved: every name matched to the full
- * name Figma files it under, every default type-checked, every instance-swap target already a node
- * id. Applied in this order — deletes, then renames/changes, then adds — so a delta that frees a
- * name and re-declares it lands the way it reads.
+ * name Figma files it under, every added property's default read off the layers bound to it.
+ * Applied in this order — deletes, then renames, then adds — so a delta that frees a name and
+ * re-declares it lands the way it reads.
  */
 export interface ComponentDefinitionEditPlan {
   description?: string;
   /** Full (suffixed) names to delete. */
   deletes: string[];
-  changes: { full: string; rename?: string; defaultValue?: boolean | string }[];
-  adds: PreparedDefinition[];
+  renames: { full: string; rename: string }[];
+  adds: AddedDefinition[];
 }
 
-function planComponentDefinitionEdit(
-  node: any, words: ComponentEditWords, targets: ResolvedTargets, subject: string,
-): ComponentDefinitionEditPlan {
-  const plan: ComponentDefinitionEditPlan = { deletes: [], changes: [], adds: [] };
-  if (words.description !== undefined) plan.description = words.description;
-  const authored = words.propertyDefinitions;
-  if (!authored) return plan;
-  const where = subject + ".propertyDefinitions";
-  // A variant's properties belong to its SET (Figma stores them there, and reading them off the
-  // variant throws), so an edit aimed at the variant would be aimed at the wrong node — including
-  // for the agent's mental model, since the change reaches every variant either way.
+/**
+ * A property an edit ADDS. One object is shared by the definition plan that mints it and by every
+ * binding planned against it in the same batch: `defaultValue` is settled from those bindings in the
+ * gate, and `minted` — the suffixed name only addComponentProperty can hand back — is filled in at
+ * apply, where the bindings (which apply after every definition) read it.
+ */
+export interface AddedDefinition extends PreparedDefinition {
+  type: string;
+  minted?: string;
+}
+
+/** What one layer bound to an added property will show once its own entry lands — its default. */
+export interface AddedPropertyBinder {
+  layer: string;
+  value: boolean | string;
+}
+
+// How to bind an added property in the same call — the only call that can carry both halves.
+function bindInSameBatch(name: string, type: string): string {
+  return "add it and bind the layer that shows its value in ONE flcm.editMany: [{ id: component, propertyDefinitions: { " + JSON.stringify(name) + ": { type: " + JSON.stringify(type) + " } } }, " +
+    "{ id: layer, componentPropertyReferences: { " + FIELD_FOR_TYPE[type] + ": " + JSON.stringify(name) + " } }] — its default is that layer's content.";
+}
+
+// A variant's properties belong to its SET (Figma stores them there, and reading them off the
+// variant throws), so an edit aimed at the variant would be aimed at the wrong node — including
+// for the agent's mental model, since the change reaches every variant either way.
+function assertNotVariantMember(node: any, where: string): void {
   if (node.type === "COMPONENT" && node.parent && node.parent.type === "COMPONENT_SET") {
     throw new Error(
       where + ": " + describeNodeIdentity(node) + " is a VARIANT, and a set's properties live on the SET — Figma keeps them there, and a change reaches every variant. " +
         "Edit the set instead: flcm.edit(" + JSON.stringify(node.parent.id) + ", { propertyDefinitions: … }).",
     );
   }
+}
+
+/**
+ * The properties an edit's `propertyDefinitions` ADDS, by name, defaults not yet settled: the first
+ * half of a definition edit, split out so editMany can plan its bindings against them before their
+ * defaults are read off those very bindings.
+ */
+export function planAddedDefinitions(node: any, words: ComponentEditWords, subject: string): Map<string, AddedDefinition> {
+  const adds = new Map<string, AddedDefinition>();
+  const authored = words.propertyDefinitions;
+  if (!authored) return adds;
+  const where = subject + ".propertyDefinitions";
+  assertNotVariantMember(node, where);
+  const definitions = propertyDefinitionsOf(node);
+  for (const name of Object.keys(authored)) {
+    const entry = authored[name];
+    if (entry === null || matchPropertyNames(name, definitions).length) continue;
+    adds.set(name, planAddedDefinition(name, entry, where + "[" + JSON.stringify(name) + "]"));
+  }
+  return adds;
+}
+
+/** The definition half of an edit; editMany calls it directly, with binders gathered across its entries. */
+export function planComponentDefinitionEdit(
+  node: any, words: ComponentEditWords, subject: string, adds: ReadonlyMap<string, AddedDefinition>, bindersOf: (add: AddedDefinition) => AddedPropertyBinder[],
+): ComponentDefinitionEditPlan {
+  const plan: ComponentDefinitionEditPlan = { deletes: [], renames: [], adds: [] };
+  if (words.description !== undefined) plan.description = words.description;
+  const authored = words.propertyDefinitions;
+  if (!authored) return plan;
+  const where = subject + ".propertyDefinitions";
+  assertNotVariantMember(node, where);
   const definitions = propertyDefinitionsOf(node);
   // Every name this call will have made by the time it lands — what a rename must not collide with.
   // Deletes are accounted FIRST, in their own pass, because that is the order they apply in: a bag
@@ -89,19 +136,19 @@ function planComponentDefinitionEdit(
     const entry = authored[name];
     if (entry === null) continue;
     const at = where + "[" + JSON.stringify(name) + "]";
-    const matches = matchPropertyNames(name, definitions);
-    if (!matches.length) {
-      plan.adds.push(planAddedDefinition(name, entry, at, targets));
+    const add = adds.get(name);
+    if (add) {
+      add.defaultValue = agreedDefault(add, bindersOf(add), at, bindInSameBatch(name, add.type));
+      plan.adds.push(add);
       taken.add(name);
       continue;
     }
     const full = resolvePropertyName(name, definitions, where);
-    const change = planChangedDefinition(full, definitions[full], entry, at, node, taken, targets);
-    if (change.rename !== undefined) {
-      taken.delete(bareName(full));
-      taken.add(change.rename);
-    }
-    plan.changes.push(change);
+    const rename = planChangedDefinition(full, definitions[full], entry, at, node, taken);
+    if (rename === undefined) continue; // restates what the property already is: nothing to write
+    taken.delete(bareName(full));
+    taken.add(rename);
+    plan.renames.push({ full, rename });
   }
   return plan;
 }
@@ -118,9 +165,9 @@ function assertNotVariantAxis(definition: any, full: string, at: string, node: a
   );
 }
 
-// A name the component doesn't have yet: create's own definition rules, with two differences that
-// both come from there being no authored tree in this call.
-function planAddedDefinition(name: string, entry: ComponentPropertyDefinitionEdit, at: string, targets: ResolvedTargets): PreparedDefinition {
+// A name the component doesn't have yet: create's own definition rules, minus the slot (below). Its
+// default is settled later, from the layers the same batch binds to it.
+function planAddedDefinition(name: string, entry: ComponentPropertyDefinitionEdit, at: string): AddedDefinition {
   const definition = compilePropertyDefinition(name, entry, at);
   // A slot IS a frame in the definition, and this call has no frame in it. Declaring one here would
   // leave Figma's own unpositioned 100×100 box in the component — the same refusal flcm.component
@@ -131,27 +178,18 @@ function planAddedDefinition(name: string, entry: ComponentPropertyDefinitionEdi
         'Insert the frame and declare it in one move: flcm.append(component, { type: "FRAME", componentPropertyReferences: { slot: ' + JSON.stringify(name) + " } }).",
     );
   }
-  // At create the default is DERIVED from the node that binds the property. Nothing binds this one —
-  // an edit declares a property and nothing else — so there is no node to read a starting value off.
-  if (definition.defaultValue === undefined) {
-    throw new Error(
-      at + ": a property added by an edit needs a `defaultValue` — nothing in this call binds it, so there is no node to read the starting value off (flcm.component derives it from the node it binds). " +
-        "Pass one, then wire a layer to it: flcm.edit(sublayer, { componentPropertyReferences: { " + FIELD_FOR_TYPE[definition.type] + ": " + JSON.stringify(name) + " } }).",
-    );
-  }
-  const value = definition.figmaType === "INSTANCE_SWAP"
-    ? resolveComponentNode(targets.node(definition.defaultValue as Target, at), at).base.id
-    : (definition.defaultValue as boolean | string);
-  return { name, figmaType: definition.figmaType, defaultValue: value };
+  // Settled in the gate from this call's binders; a placeholder until then.
+  return { name, type: definition.type, figmaType: definition.figmaType, defaultValue: "" };
 }
 
-// A name the component HAS: `defaultValue` re-defaults it, `name` renames it, and `type` may only
-// restate what it already is.
+// A name the component HAS: `name` renames it, and `type` may only restate what it already is — so
+// a read's own `{ type }` written back is a no-op, not a refusal. Returns the new name, or undefined
+// for an entry that changes nothing.
 function planChangedDefinition(
-  full: string, definition: any, entry: ComponentPropertyDefinitionEdit, at: string, node: any, taken: ReadonlySet<string>, targets: ResolvedTargets,
-): { full: string; rename?: string; defaultValue?: boolean | string } {
+  full: string, definition: any, entry: ComponentPropertyDefinitionEdit, at: string, node: any, taken: ReadonlySet<string>,
+): string | undefined {
+  if (definition.type === "VARIANT" && entry.name == null && restatesVariantAxis(definition, entry)) return undefined;
   assertNotVariantAxis(definition, full, at, node);
-  const change: { full: string; rename?: string; defaultValue?: boolean | string } = { full };
   if (entry.type != null) {
     const figmaType = typeof entry.type === "string" ? own(PROPERTY_TYPES, entry.type) : undefined;
     if (!figmaType) {
@@ -161,7 +199,7 @@ function planChangedDefinition(
       throw new Error(
         at + ": " + JSON.stringify(bareName(full)) + " is " + JSON.stringify(PROPERTY_TYPE_WORD_FOR[definition.type] || definition.type) +
           " and Figma can't change a property's type. Delete it and declare the new one: { " + JSON.stringify(bareName(full)) + ": null, " +
-          JSON.stringify(bareName(full)) + ": { type: " + JSON.stringify(entry.type) + ", defaultValue: … } } in two calls, since one object can't carry the key twice.",
+          JSON.stringify(bareName(full)) + ": { type: " + JSON.stringify(entry.type) + " } } in two calls, since one object can't carry the key twice.",
       );
     }
   }
@@ -175,35 +213,24 @@ function planChangedDefinition(
         at + ": this component already has a property named " + JSON.stringify(rename) + ". Figma allows the duplicate (the #suffix is the identity) but flcm doesn't — every later reference names a property by name and a duplicate has no way to say which.",
       );
     }
-    if (rename !== bareName(full)) change.rename = rename;
+    if (rename !== bareName(full)) return rename;
+    return undefined;
   }
-  if (entry.defaultValue != null) change.defaultValue = resolveChangedDefault(definition, entry.defaultValue, at, full, targets);
-  if (change.rename === undefined && change.defaultValue === undefined) {
-    throw new Error(
-      at + ": names nothing that can change — a definition edit passes `defaultValue` (the value fresh instances start at), `name` (renames it), or null (deletes it). `type` alone can only restate what the property already is.",
-    );
+  if (entry.type == null) {
+    throw new Error(at + ": names nothing — a definition edit passes `name` (renames it) or null (deletes it). Its default is its bound layer's content: edit that layer to change it.");
   }
-  return change;
+  return undefined;
 }
 
-function resolveChangedDefault(definition: any, value: unknown, at: string, full: string, targets: ResolvedTargets): boolean | string {
-  const named = JSON.stringify(bareName(full));
-  switch (definition.type) {
-    case "SLOT":
-      throw new Error(
-        at + ": " + named + " is a slot, and a slot has no value — its content is the FRAME bound to it. Edit that frame, or rebind the slot with componentPropertyReferences.",
-      );
-    case "BOOLEAN":
-      if (typeof value !== "boolean") throw new Error(at + ": " + named + " is a boolean property — its defaultValue is true or false. Got " + JSON.stringify(value) + ".");
-      return value;
-    case "TEXT":
-      if (typeof value !== "string") throw new Error(at + ": " + named + " is a text property — its defaultValue is a string. Got " + JSON.stringify(value) + ".");
-      return value;
-    case "INSTANCE_SWAP":
-      return resolveComponentNode(targets.node(value as Target, at), at).base.id;
-    default:
-      throw new Error(at + ": " + named + " is a " + String(definition.type) + " property, which flcm has no word for.");
-  }
+// A set's axis written back exactly as a read reports it — `{ type: "variant", variantOptions }` —
+// changes nothing, so a read round-trips through edit. Any difference falls through to the axis
+// refusal, which says how an axis actually changes.
+function restatesVariantAxis(definition: any, entry: ComponentPropertyDefinitionEdit): boolean {
+  if (entry.type != null && entry.type !== "variant") return false;
+  const options = entry.variantOptions;
+  if (options == null) return true;
+  const live: readonly string[] = definition.variantOptions || [];
+  return Array.isArray(options) && options.length === live.length && options.every((option, i) => option === live[i]);
 }
 
 /**
@@ -215,19 +242,16 @@ export function applyComponentDefinitionEdit(fail: EditPlanFailure, node: any, p
   try {
     if (plan.description !== undefined) node.description = plan.description;
     for (const full of plan.deletes) node.deleteComponentProperty(full);
-    for (const change of plan.changes) {
-      const patch: { name?: string; defaultValue?: boolean | string } = {};
-      if (change.rename !== undefined) patch.name = change.rename;
-      if (change.defaultValue !== undefined) patch.defaultValue = change.defaultValue;
+    for (const change of plan.renames) {
       // A rename RE-SUFFIXES, and the new full name is only knowable from the return value. Whether
       // Figma re-points the layers bound to it is an ASSUMPTION until the live probe runs — so the
       // re-point happens here regardless: a no-op if Figma already did it, and the difference
       // between a bound layer and one pointing at a name nothing files a property under if it
       // didn't. A stale reference is wrong pixels with no error, which this surface never allows.
-      const renamed = node.editComponentProperty(change.full, patch);
+      const renamed = node.editComponentProperty(change.full, { name: change.rename });
       if (typeof renamed === "string" && renamed !== change.full) repointBoundSublayers(node, change.full, renamed);
     }
-    for (const add of plan.adds) node.addComponentProperty(add.name, add.figmaType, add.defaultValue);
+    for (const add of plan.adds) add.minted = node.addComponentProperty(add.name, add.figmaType, add.defaultValue);
   } catch (cause) {
     throw fail(cause);
   }
@@ -252,12 +276,23 @@ function repointBoundSublayers(owner: any, before: string, after: string): void 
 
 // ---- `componentPropertyReferences` under edit ----
 
-/** Which wire keys to write on the node, and to what — `null` clears the key (unbinds the field). */
+/**
+ * Which wire keys to write on the node, and to what — `null` clears the key (unbinds the field), and
+ * `add` is a property this same batch adds, whose suffixed name exists only once it has applied.
+ */
 export interface ComponentBindingEditPlan {
-  writes: { field: string; wire: string; full: string | null }[];
+  writes: { field: string; wire: string; full: string | null; add?: AddedDefinition }[];
+  /** The definition owner the writes resolve against — whose added properties a binder can name. */
+  owner: any;
 }
 
-export function prepareComponentBindingEdit(node: any, raw: unknown, subject: string): ComponentBindingEditPlan {
+/**
+ * `addsOf(owner)` is the properties this same batch adds to `owner` (editMany only): a binding naming
+ * one of those binds to it, and becomes one of the layers its default is read off.
+ */
+export function prepareComponentBindingEdit(
+  node: any, raw: unknown, subject: string, addsOf?: (owner: any) => ReadonlyMap<string, AddedDefinition> | undefined,
+): ComponentBindingEditPlan {
   const where = subject + ".componentPropertyReferences";
   // The instance check comes FIRST and is not interchangeable with the component one: a sublayer of
   // an instance that itself sits in a component has a component ancestor, and answering with THAT
@@ -280,7 +315,8 @@ export function prepareComponentBindingEdit(node: any, raw: unknown, subject: st
   const definitions = propertyDefinitionsOf(owner);
   const refs = compileBindingEditBag(raw, bindingFieldsForType(node.type), subject, "a " + node.type);
   const live: Record<string, string> = node.componentPropertyReferences || {};
-  const writes: { field: string; wire: string; full: string | null }[] = [];
+  const writes: ComponentBindingEditPlan["writes"] = [];
+  const adds = addsOf?.(owner);
   for (const field of Object.keys(refs)) {
     const { wire } = BINDING_FIELD_WIRE_KEYS[field];
     const authored = refs[field];
@@ -308,9 +344,24 @@ export function prepareComponentBindingEdit(node: any, raw: unknown, subject: st
       writes.push({ field, wire, full: null });
       continue;
     }
+    const add = matchPropertyNames(authored, definitions).length ? undefined : adds?.get(authored);
+    if (add) {
+      assertBindingFieldMatchesType(field, add.figmaType, authored, at);
+      writes.push({ field, wire, full: null, add });
+      continue;
+    }
     writes.push({ field, wire, full: resolveBindingToDefinition(definitions, component, field, authored, at, node) });
   }
-  return { writes };
+  return { writes, owner };
+}
+
+function assertBindingFieldMatchesType(field: string, figmaType: string, name: string, at: string): void {
+  const { type } = BINDING_FIELD_WIRE_KEYS[field];
+  if (figmaType === PROPERTY_TYPES[type]) return;
+  throw new Error(
+    at + ": `" + field + "` is driven by a " + type + " property, and " + JSON.stringify(bareName(name)) +
+      " is " + JSON.stringify(PROPERTY_TYPE_WORD_FOR[figmaType] || figmaType) + ".",
+  );
 }
 
 /**
@@ -329,13 +380,7 @@ function resolveBindingToDefinition(
 ): string {
   const { wire, type } = BINDING_FIELD_WIRE_KEYS[field];
   const full = resolvePropertyName(authored, definitions, at);
-  const definition = definitions[full];
-  if (definition.type !== PROPERTY_TYPES[type]) {
-    throw new Error(
-      at + ": `" + field + "` is driven by a " + type + " property, and " + JSON.stringify(bareName(full)) +
-        " is " + JSON.stringify(PROPERTY_TYPE_WORD_FOR[definition.type] || definition.type) + ".",
-    );
-  }
+  assertBindingFieldMatchesType(field, definitions[full].type, full, at);
   // A slot is one hole: two frames bound to it would give an instance's content two places to land.
   if (field === "slot") {
     const taken = nodesBoundTo(scope, wire, full).filter((n) => n !== exclude);
@@ -370,7 +415,8 @@ export function applyComponentBindingEdit(fail: EditPlanFailure, node: any, plan
   try {
     const wire: Record<string, string> = { ...(node.componentPropertyReferences || {}) };
     for (const write of plan.writes) {
-      if (write.full === null) delete wire[write.wire];
+      if (write.add) wire[write.wire] = write.add.minted!;
+      else if (write.full === null) delete wire[write.wire];
       else wire[write.wire] = write.full;
     }
     node.componentPropertyReferences = wire;
@@ -388,29 +434,14 @@ export interface ComponentEditPlan {
 }
 
 /**
- * The async half: every component target a definition edit names as an instance-swap default —
- * an ADD says its type itself, a CHANGE's type is the live definition's, read here as the document
- * stands (the gate reads it again; a default that became a swap during the loads is a miss the
- * lookup refuses).
+ * The sync half, run in the verb's gate: every definition and binding word, decided against the live
+ * component. One delta can't both add a property and bind a sublayer to it, so a property it adds has
+ * no binder — refused, pointing at editMany (which plans the halves across entries itself).
  */
-export async function resolveComponentEditTargets(node: any, words: ComponentEditWords, targets: ResolvedTargets): Promise<void> {
-  const authored = words.propertyDefinitions;
-  if (!authored) return;
-  const definitions = node.type === "COMPONENT" || node.type === "COMPONENT_SET" ? propertyDefinitionsOf(definitionOwnerOf(node)) : {};
-  for (const name of Object.keys(authored)) {
-    const entry = authored[name];
-    if (entry === null || entry.defaultValue == null || typeof entry.defaultValue === "boolean") continue;
-    const matches = matchPropertyNames(name, definitions);
-    const swaps = matches.length ? matches.length === 1 && definitions[matches[0]].type === "INSTANCE_SWAP" : entry.type === "instance_swap";
-    if (swaps) await targets.resolve(entry.defaultValue as Target);
-  }
-}
-
-/** The sync half, run in the verb's gate: every definition and binding word, decided against the live component. */
-export function planComponentEdit(node: any, words: ComponentEditWords, targets: ResolvedTargets, subject: string): ComponentEditPlan {
+export function planComponentEdit(node: any, words: ComponentEditWords, subject: string): ComponentEditPlan {
   const plan: ComponentEditPlan = {};
   if (words.description !== undefined || words.propertyDefinitions !== undefined) {
-    plan.definitions = planComponentDefinitionEdit(node, words, targets, subject);
+    plan.definitions = planComponentDefinitionEdit(node, words, subject, planAddedDefinitions(node, words, subject), () => []);
   }
   if (words.componentPropertyReferences !== undefined) {
     plan.binding = prepareComponentBindingEdit(node, words.componentPropertyReferences, subject);

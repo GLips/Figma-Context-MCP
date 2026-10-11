@@ -81,8 +81,8 @@ test("get on a component names it in the components sidecar, not on the node", a
     name: "Card",
     children: [],
     propertyDefinitions: {
-      Title: { type: "text", defaultValue: "Product" },
-      Icon: { type: "instance_swap", defaultValue: "9:9" },
+      Title: { type: "text" },
+      Icon: { type: "instance_swap" },
       Content: { type: "slot" },
     },
   });

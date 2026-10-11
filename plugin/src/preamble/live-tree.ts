@@ -11,7 +11,7 @@ import { treeNodes } from "./compile-tree.js";
 import { resolveTarget, createResolvedTargets } from "./read.js";
 import { compileEditPlan, loadEditResources, assertEditPlanLands, applyEditPlanWrites, settleEditPlanSizes, settleEditPlanPositions } from "./edit-plan.js";
 import { resolveInstanceEditTargets, planInstanceEdit, applyInstanceRetarget, applyInstanceOverrides } from "./instance.js";
-import { resolveComponentEditTargets, planComponentEdit, applyComponentDefinitionEdit, applyComponentBindingEdit } from "./component-edit.js";
+import { planComponentEdit, applyComponentDefinitionEdit, applyComponentBindingEdit } from "./component-edit.js";
 import { assertNodeStillOnCanvas } from "./freshness.js";
 import { childListClosingInstanceOf, writeKey } from "./identity.js";
 import { assertLiveNodeLandsUnderParent, liveParentAttachFacts, attachBuiltChild, resettleMovedNode, applyVectorPath } from "./bridge.js";
@@ -63,7 +63,6 @@ export async function loadLiveTree(tree: WriteNode): Promise<LoadedLiveTree> {
       wn.layout = hint?.patch.layout;
       const targets = createResolvedTargets();
       const current = node.type === "INSTANCE" ? await resolveInstanceEditTargets(node, hint?.instanceWords ?? {}, targets) : null;
-      if (hint?.componentWords) await resolveComponentEditTargets(node, hint.componentWords, targets);
       const instance = hint?.instanceWords ? planInstanceEdit(node, hint.instanceWords, current, { targets }, at) : undefined;
       entries.push({ wn, node, changes, key, pathData, hint, targets, current, instance });
     } catch (cause) { throw new Error(at + ": " + String(cause)); }
@@ -99,7 +98,7 @@ export function gateLiveTree(live: LoadedLiveTree, resources: RenderResources): 
     const plan = entry.hint ? compileEditPlan(node, changes, at) : undefined;
     wn.layout = plan?.patch.layout;
     const instance = plan?.instanceWords ? planInstanceEdit(node, plan.instanceWords, current, { targets, fonts: resources.fonts }, at) : undefined;
-    const component = plan?.componentWords ? planComponentEdit(node, plan.componentWords, targets, at) : undefined;
+    const component = plan?.componentWords ? planComponentEdit(node, plan.componentWords, at) : undefined;
     // Placement validates against the destination. Font coverage and node-local legality still
     // use the edit gate, with parent-relative words withheld until that destination exists.
     if (plan) assertEditPlanLands({ ...plan, patch: { ...plan.patch, layout: undefined } }, resources.fonts, at);

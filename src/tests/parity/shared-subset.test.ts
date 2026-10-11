@@ -83,21 +83,25 @@ describe("parityView comparator policy", () => {
   });
 
   it("compares a definition's propertyDefinitions, now that they live in the sidecar", () => {
-    const withDefs = (defaultValue: string) =>
+    const withDefs = (variantOptions: string[]) =>
       design({
         components: {
           "1:1": {
             type: "COMPONENT_SET",
             name: "Button",
             propertyDefinitions: {
-              Variant: { type: "variant", defaultValue, variantOptions: ["Primary", "Secondary"] },
+              Variant: { type: "variant", variantOptions },
             },
           },
         },
       } as unknown as Partial<SimplifiedDesign>);
 
-    expect(parityView(withDefs("Primary"))).toEqual(parityView(withDefs("Primary")));
-    expect(parityView(withDefs("Primary"))).not.toEqual(parityView(withDefs("Secondary")));
+    expect(parityView(withDefs(["Primary", "Secondary"]))).toEqual(
+      parityView(withDefs(["Primary", "Secondary"])),
+    );
+    expect(parityView(withDefs(["Primary", "Secondary"]))).not.toEqual(
+      parityView(withDefs(["Primary"])),
+    );
   });
 
   it("expands a hoisted style ref so it matches the same value inlined", () => {

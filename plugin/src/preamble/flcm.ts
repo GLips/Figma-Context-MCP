@@ -62,7 +62,7 @@ export const KNOWN_KEYS = {
   binding: ["componentPropertyReferences"],
   componentOptions: ["name", "description", "propertyDefinitions"],
   componentDefinition: ["description", "propertyDefinitions"],
-  propertyDefinition: ["type", "defaultValue", "name"],
+  propertyDefinition: ["type", "name"],
   variantEntry: ["component", "variant"],
   variantsOptions: ["name", "description"],
   image: ["scaleMode", "placeholder", "opacity", "rotation", "filters", "blendMode"],
@@ -116,6 +116,8 @@ export const NODE_KEYS_BY_TYPE: Record<"FRAME" | "TEXT" | "RECTANGLE" | "ELLIPSE
 const PATH_KEYS = keySet(KNOWN_KEYS.annotation, KNOWN_KEYS.shared, KNOWN_KEYS.size, KNOWN_KEYS.path, KNOWN_KEYS.binding);
 const SVG_KEYS = keySet(KNOWN_KEYS.annotation, KNOWN_KEYS.shared, KNOWN_KEYS.size, KNOWN_KEYS.svg, KNOWN_KEYS.binding);
 const IMAGE_KEYS = keySet(KNOWN_KEYS.image);
+// An edit entry also takes a read's `variantOptions` back, restating a set's axis as a no-op.
+const PROPERTY_DEFINITION_EDIT_KEYS = keySet(KNOWN_KEYS.propertyDefinition, ["variantOptions"]);
 const GRADIENT_KEYS = keySet(KNOWN_KEYS.gradient);
 const EFFECTS_KEYS = keySet(KNOWN_KEYS.effects);
 // The CSS-effects bag (WriteCssEffects) — the string form of `effects`, routed to parseCssEffects. Its keys
@@ -695,6 +697,14 @@ export function compileComponentPropertyBag(raw: unknown, subject: string): Reco
   return out;
 }
 
+// The refusal's hint when a definition carries `defaultValue`, which no definition takes: the
+// default is whatever its bound layer shows.
+export function defaultValueHint(raw: object): string {
+  return "defaultValue" in raw
+    ? "A property's default is its bound layer's content (its text, visible, or instance component) — set that on the layer instead."
+    : "";
+}
+
 // The edit bag's SHAPE: an object of property names to a definition object or `null`. Which names
 // already exist — and therefore whether an entry adds, changes or deletes — is the component's to
 // say at prepare (component-edit.ts), exactly as `componentProperties` splits the question.
@@ -704,7 +714,7 @@ export function compileComponentPropertyBag(raw: unknown, subject: string): Reco
 export function compilePropertyDefinitionEditBag(raw: unknown, subject: string): Record<string, ComponentPropertyDefinitionEdit | null> {
   const where = subject + ".propertyDefinitions";
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-    throw new Error(where + ' must be an object of definitions by property name, e.g. { Label: { defaultValue: "Save" }, Icon: null } — got ' + JSON.stringify(raw) + ".");
+    throw new Error(where + ' must be an object of definitions by property name, e.g. { Label: { name: "Caption" }, Icon: null } — got ' + JSON.stringify(raw) + ".");
   }
   const out: Record<string, ComponentPropertyDefinitionEdit | null> = {};
   for (const rawName of Object.keys(raw)) {
@@ -716,10 +726,11 @@ export function compilePropertyDefinitionEditBag(raw: unknown, subject: string):
     const value = (raw as Record<string, unknown>)[rawName];
     if (value !== null && (!value || typeof value !== "object" || Array.isArray(value))) {
       throw new Error(
-        where + "[" + JSON.stringify(name) + "] must be a definition object — { defaultValue } to re-default it, { name } to rename it, " +
-          '{ type, defaultValue } to add one — or null to delete it. Got ' + JSON.stringify(value) + ".",
+        where + "[" + JSON.stringify(name) + "] must be a definition object — { name } to rename it, { type } to add one (bound in the same editMany), " +
+          "or null to delete it. Got " + JSON.stringify(value) + ".",
       );
     }
+    if (value !== null) rejectUnknownKeys(value, PROPERTY_DEFINITION_EDIT_KEYS, where + "[" + JSON.stringify(name) + "]", "prop", defaultValueHint(value));
     out[name] = value as ComponentPropertyDefinitionEdit | null;
   }
   return out;

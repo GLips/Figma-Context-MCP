@@ -44,15 +44,13 @@
         "componentPropertyDefinitions": {
           "Variant": {
             "type": "VARIANT",
-            "defaultValue": "Secondary",
             "variantOptions": [
               "Secondary",
               "Primary"
             ]
           },
           "Left Icon#920:0": {
-            "type": "BOOLEAN",
-            "defaultValue": true
+            "type": "BOOLEAN"
           }
         },
         "children": [
@@ -496,8 +494,7 @@
         "componentKey": "k-card",
         "componentPropertyDefinitions": {
           "Icon#920:4": {
-            "type": "INSTANCE_SWAP",
-            "defaultValue": "11:3"
+            "type": "INSTANCE_SWAP"
           },
           "Content#2949:0": {
             "type": "SLOT"

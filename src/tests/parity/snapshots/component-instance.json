@@ -39,16 +39,13 @@
         "componentKey": "compkey123",
         "componentPropertyDefinitions": {
           "On Sale#341:0": {
-            "type": "BOOLEAN",
-            "defaultValue": true
+            "type": "BOOLEAN"
           },
           "Title#341:1": {
-            "type": "TEXT",
-            "defaultValue": "Product Name"
+            "type": "TEXT"
           },
           "Icon#341:2": {
-            "type": "INSTANCE_SWAP",
-            "defaultValue": "999:1"
+            "type": "INSTANCE_SWAP"
           }
         },
         "children": [

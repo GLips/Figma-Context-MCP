@@ -18,8 +18,8 @@ import { sceneFigma as figma } from "./scene-access.js";
 //
 // Prepare/gate/apply like every mutating verb (mutation-lock.ts): the targets, fonts and images
 // resolve in prepare; everything the document can refuse — whether the target can be promoted,
-// the instance plans, an instance-swap default's component, every binding name against this
-// call's definitions — is decided in the synchronous gate with zero writes; the apply span is
+// the instance plans, every binding name against this call's definitions, every default its
+// binders state — is decided in the synchronous gate with zero writes; the apply span is
 // sync and sealed, so one call is one undo step and a Figma refusal rolls the whole thing back.
 //
 // A SLOT is authored as a bound FRAME, not created: `figma.createSlot()` exists but yields an
@@ -31,7 +31,7 @@ import {
   WriteNode, WriteChild, Handle, Target, ComponentPropertyBinding, VariantEntryInput,
 } from "./ir.js";
 import { applyExposures } from "./instance-exposure.js";
-import { resolveTarget, createResolvedTargets, ResolvedTargets } from "./read.js";
+import { resolveTarget } from "./read.js";
 import {
   mintHandle, BoundLiveNode, InstancePlans, beginRenderWalk, RenderResources,
 } from "./bridge.js";
@@ -43,9 +43,8 @@ import { enterMutatingVerb, retargetStyleWrites } from "./mutation-lock.js";
 import { assertNodeStillOnCanvas, createLoadedPages, loadPageForWrite, assertPageLoaded } from "./freshness.js";
 import { beginMutatingApply } from "./verb-error.js";
 import { instanceAncestorOf, readKey, writeKey, describeNodeIdentity, SLOT_CONTENT_WIRE_KEY } from "./identity.js";
-import { resolveComponentNode } from "./instance.js";
 import { own, rejectUnknownKeys } from "./validate.js";
-import { KNOWN_KEYS, isTargetShaped, COMPONENT_TARGET_HINT } from "./flcm.js";
+import { KNOWN_KEYS, isTargetShaped, COMPONENT_TARGET_HINT, defaultValueHint } from "./flcm.js";
 import type { ComponentOptions, VariantsOptions } from "./schema.js";
 
 const SUBJECT = "flcm.component";
@@ -96,11 +95,9 @@ export interface AuthoredDefinition {
   /** The read's lowercase word — kept as authored so refusals speak the agent's own vocabulary. */
   type: string;
   figmaType: "BOOLEAN" | "TEXT" | "INSTANCE_SWAP" | "SLOT";
-  /** Absent when the author omitted it — the trigger for deriving it from the bound node. */
-  defaultValue?: unknown;
 }
 
-/** The same definition with its default settled, ready for one addComponentProperty call. */
+/** The same definition with its default read off its binders, ready for one addComponentProperty call. */
 export interface PreparedDefinition {
   name: string;
   figmaType: "BOOLEAN" | "TEXT" | "INSTANCE_SWAP" | "SLOT";
@@ -163,13 +160,13 @@ function compilePropertyDefinitions(raw: unknown): AuthoredDefinition[] {
 /**
  * One DECLARED property, shape-checked with nothing looked up. Shared by flcm.component's options
  * bag and by an edit's `propertyDefinitions` ADD branch (component-edit.ts), so what a definition IS
- * is stated once — the two callers differ only in what they do about a missing `defaultValue`.
+ * is stated once.
  */
 export function compilePropertyDefinition(name: string, raw: unknown, at: string): AuthoredDefinition {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-    throw new Error(at + ' must be an object like { type: "text", defaultValue: "Save" } — got ' + JSON.stringify(raw) + ".");
+    throw new Error(at + ' must be an object like { type: "text" } — got ' + JSON.stringify(raw) + ".");
   }
-  rejectUnknownKeys(raw, DEFINITION_KEYS, at);
+  rejectUnknownKeys(raw, DEFINITION_KEYS, at, "prop", defaultValueHint(raw));
   const bag = raw as Record<string, unknown>;
   // `name` is edit's RENAME word, and this call is DECLARING a property whose name is the key it is
   // filed under — two names for one property, with no way to say which the bindings mean.
@@ -190,23 +187,7 @@ export function compilePropertyDefinition(name: string, raw: unknown, at: string
   if (!figmaType) {
     throw new Error(at + ".type must be one of " + quoted(PROPERTY_TYPE_WORDS) + " — got " + JSON.stringify(type) + ".");
   }
-  const definition: AuthoredDefinition = { name, type: type as string, figmaType };
-  const value = bag.defaultValue;
-  if (value == null) return definition; // omitted: derived from the bound node (see resolveDefaults)
-  if (figmaType === "SLOT") {
-    throw new Error(at + ": a slot has no value — its content is authored, by binding the FRAME that IS the slot (componentPropertyReferences: { slot: " + JSON.stringify(name) + " }). Drop `defaultValue`.");
-  }
-  if (figmaType === "BOOLEAN" && typeof value !== "boolean") {
-    throw new Error(at + ": a boolean property's defaultValue is true or false — got " + JSON.stringify(value) + ".");
-  }
-  if (figmaType === "TEXT" && typeof value !== "string") {
-    throw new Error(at + ": a text property's defaultValue is a string — got " + JSON.stringify(value) + ".");
-  }
-  if (figmaType === "INSTANCE_SWAP" && !isTargetShaped(value)) {
-    throw new Error(at + ": an instance-swap property's defaultValue is the component it starts on — " + COMPONENT_TARGET_HINT + ". Got " + JSON.stringify(value) + ".");
-  }
-  definition.defaultValue = value;
-  return definition;
+  return { name, type: type as string, figmaType };
 }
 
 // ---- the bindings in the tree ----
@@ -285,48 +266,29 @@ function bindersOf(bound: readonly BoundWriteNode[], definition: AuthoredDefinit
 
 // ---- the defaults ----
 
-// Settle every definition's default. An explicit instance-swap target resolves to the COMPONENT's
-// id (the only form Figma stores); an omitted default is DERIVED from the single node that binds
-// the property, because that node already states the value the component starts at — a bound text's
-// content, a bound layer's visibility, a bound instance's component. Nothing binds it and nothing
-// was passed: refused, since a silent "" or `true` would be an invented design decision.
+// Every definition's default, read off the nodes that bind it. In a main component Figma keeps a
+// property's default and its bound layer identical — binding writes the default INTO the layer — so
+// a default stated anywhere else would overwrite the layer's real content (an agent promoting
+// existing links typed "Link 1"… and lost them). The layer is the one place the value lives.
 function resolveDefaults(
-  definitions: readonly AuthoredDefinition[], bound: readonly BoundWriteNode[], plans: InstancePlans, targets: ResolvedTargets, live?: RenderResources["live"],
+  definitions: readonly AuthoredDefinition[], bound: readonly BoundWriteNode[], plans: InstancePlans, live?: RenderResources["live"],
 ): PreparedDefinition[] {
-  return definitions.map((definition) => ({ name: definition.name, figmaType: definition.figmaType, defaultValue: defaultFor(definition, bound, plans, targets, live) }));
+  return definitions.map((definition) => {
+    const at = SUBJECT + " options.propertyDefinitions[" + JSON.stringify(definition.name) + "]";
+    // A slot's "value" is the empty string Figma wants; its content is the bound frame.
+    if (definition.figmaType === "SLOT") return { name: definition.name, figmaType: "SLOT", defaultValue: "" };
+    const binders = bindersOf(bound, definition).map(({ wn }) => ({
+      layer: describeBinder(wn.name ?? live?.get(wn)?.node.name, wn.sourcePath!),
+      value: binderValue(definition, wn, plans, live),
+    }));
+    return { name: definition.name, figmaType: definition.figmaType, defaultValue: agreedDefault(definition, binders, at) };
+  });
 }
 
-// The async half of the defaults: an explicit instance-swap default names a component. Its type is
-// authored, so which defaults are targets is known without the document.
-async function resolveDefaultTargets(definitions: readonly AuthoredDefinition[], targets: ResolvedTargets): Promise<void> {
-  for (const definition of definitions) {
-    if (definition.figmaType === "INSTANCE_SWAP" && definition.defaultValue !== undefined) await targets.resolve(definition.defaultValue as Target);
-  }
-}
-
-function defaultFor(
-  definition: AuthoredDefinition, bound: readonly BoundWriteNode[], plans: InstancePlans, targets: ResolvedTargets, live?: RenderResources["live"],
-): boolean | string {
-  const at = SUBJECT + " options.propertyDefinitions[" + JSON.stringify(definition.name) + "]";
-  // A slot's "value" is the empty string Figma wants; its content is the bound frame.
-  if (definition.figmaType === "SLOT") return "";
-  if (definition.defaultValue !== undefined) {
-    if (definition.figmaType !== "INSTANCE_SWAP") return definition.defaultValue as boolean | string;
-    return resolveComponentNode(targets.node(definition.defaultValue as Target, at), at).base.id;
-  }
-  const binders = bindersOf(bound, definition);
-  if (!binders.length) {
-    throw new Error(
-      at + ": no `defaultValue`, and nothing in this call binds " + JSON.stringify(definition.name) + " — so there is no node to read the starting value off. " +
-        "Pass `defaultValue`, or bind a node with componentPropertyReferences: { " + FIELD_FOR_TYPE[definition.type] + ": " + JSON.stringify(definition.name) + " }.",
-    );
-  }
-  if (binders.length > 1) {
-    throw new Error(
-      at + ": " + binders.length + " nodes bind " + JSON.stringify(definition.name) + ", so there is no single value to derive its default from. Pass `defaultValue`.",
-    );
-  }
-  const wn = binders[0].wn;
+/** What one binder states for a property of its type — the value its layer will show once built. */
+function binderValue(definition: AuthoredDefinition, wn: WriteNode, plans: InstancePlans, live?: RenderResources["live"]): boolean | string {
+  // A live binder's `visible` and text were projected onto it at the gate (live-tree.ts), its
+  // authored edit if there is one, else what it shows now — so the read below is one rule for both.
   if (definition.figmaType === "BOOLEAN") return wn.visible !== false; // an unnamed `visible` is true
   if (definition.figmaType === "TEXT") return authoredTextOf(wn);
   // The bound node is an INSTANCE (the compilers allow `componentId` on nothing else), and
@@ -335,6 +297,33 @@ function defaultFor(
   // would land on the set's DEFAULT variant and the definition's default would disagree with the very
   // node it was derived from.
   return (plans.get(wn)?.component ?? live?.get(wn)?.component).id;
+}
+
+/**
+ * The one value a property's binders agree on. Shared with an edit that adds a property
+ * (component-edit.ts), so both refuse the same two cases in the same words: nothing binds it (there
+ * is no layer to read), and binders that disagree (whichever won, the others' content would be
+ * overwritten by the binding).
+ */
+export function agreedDefault(
+  definition: { name: string; type: string }, binders: readonly { layer: string; value: boolean | string }[], at: string,
+  unboundRemedy = "bind the layer that shows it: componentPropertyReferences: { " + FIELD_FOR_TYPE[definition.type] + ": " + JSON.stringify(definition.name) + " }.",
+): boolean | string {
+  if (!binders.length) {
+    throw new Error(at + ": nothing in this call binds " + JSON.stringify(definition.name) + ". A property's default IS its bound layer's content, so " + unboundRemedy);
+  }
+  const first = binders[0].value;
+  if (binders.every((b) => b.value === first)) return first;
+  throw new Error(
+    at + ": " + binders.length + " layers bind " + JSON.stringify(definition.name) + " and show different " + FIELD_FOR_TYPE[definition.type] + " — " +
+      binders.map((b) => b.layer + " is " + JSON.stringify(b.value)).join(", ") +
+      ". Binding writes the property's one default into every one of them, so make them agree in this call (set the same " + FIELD_FOR_TYPE[definition.type] + " on each), or bind just one.",
+  );
+}
+
+/** A binder as a refusal names it: its layer name when it has one, and where it sits in the call. */
+export function describeBinder(name: string | undefined, where: string): string {
+  return (name === undefined ? "" : JSON.stringify(name) + " ") + "at " + where;
 }
 
 // A TEXT node's authored content, however it compiled: a plain string, or the runs a markdown/rich author
@@ -499,14 +488,13 @@ export function component(specOrTarget: NodeSpec | Target, options?: ComponentOp
     const bound = collectBoundWriteNodes(tree);
     assertBindingsResolve(bound, prepared.definitions);
     assertSlotsAreBound(bound, prepared.definitions);
-    await resolveDefaultTargets(prepared.definitions, loaded.targets);
     return { kind: "built", tree, loaded, bound, options: prepared };
   }, (prepared): GatedBuiltComponent => {
     const resources = gateTreeResources(prepared.tree, prepared.loaded, { componentRoot: true });
     const live = resources.live?.get(prepared.tree);
     if (live) assertPromotable(live.node);
     return { kind: "built", tree: prepared.tree, resources,
-      definitions: resolveDefaults(prepared.options.definitions, prepared.bound, resources.instances, prepared.loaded.targets, resources.live), options: prepared.options };
+      definitions: resolveDefaults(prepared.options.definitions, prepared.bound, resources.instances, resources.live), options: prepared.options };
   }, applyBuiltComponent);
 }
 

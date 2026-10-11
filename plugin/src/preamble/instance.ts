@@ -604,6 +604,8 @@ function placeSlotContent(fail: EditPlanFailure, slot: any, slotContent: readonl
  */
 export interface InstanceEditPlan {
   swapTo: any | null;
+  /** The component the instance points at once this delta lands — the swap's, or a variant change's. */
+  becomes: any;
   /**
    * The COMPONENT whose DECLARED properties this delta names by name — null when it names none. A
    * batch reads it to refuse an entry that sets a property another entry is redeclaring in the same
@@ -676,6 +678,7 @@ export function planInstanceEdit(node: SceneNode, words: InstanceEditWords, curr
     : planLiveOverrides(instance, component, words.overrides || {}, subject, planning.fonts);
   return {
     swapTo,
+    becomes: component,
     namesDeclaredPropertiesOf: Object.keys(properties).length ? component : null,
     // With no swap the variant axes ride setProperties — Figma re-points the instance itself, keeps
     // its id, and carries the overrides it can. With one, the swap already landed on the exact

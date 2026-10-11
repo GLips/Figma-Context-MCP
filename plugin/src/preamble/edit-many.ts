@@ -40,8 +40,11 @@ import {
 import {
   resolveInstanceEditTargets, planInstanceEdit, applyInstanceRetarget, applyInstanceOverrides, InstanceEditPlan, InstancePlanning,
 } from "./instance.js";
-import { resolveComponentEditTargets, planComponentEdit, applyComponentDefinitionEdit, applyComponentBindingEdit, ComponentEditPlan } from "./component-edit.js";
-import { componentAncestorOf } from "./component.js";
+import {
+  planAddedDefinitions, planComponentDefinitionEdit, prepareComponentBindingEdit, applyComponentDefinitionEdit, applyComponentBindingEdit,
+  ComponentEditPlan, ComponentBindingEditPlan, AddedDefinition, AddedPropertyBinder,
+} from "./component-edit.js";
+import { componentAncestorOf, describeBinder } from "./component.js";
 import { definitionOwnerOf } from "./identity.js";
 import type { EditDelta, EditEntry } from "./schema.js";
 
@@ -249,19 +252,23 @@ async function resolveEntryInstanceTargets(
 }
 
 /** Every COMPONENT entry's targets — the instance-swap defaults its definition words name. */
-async function resolveEntryComponentTargets(
-  ledger: BatchLedger, plans: readonly (EditPlan | undefined)[], targets: ResolvedTargets,
-): Promise<void> {
+async function resolveEntryBoundInstanceMains(
+  ledger: BatchLedger, plans: readonly (EditPlan | undefined)[],
+): Promise<(any | null)[]> {
+  const mains: (any | null)[] = [];
   await Promise.all(
     plans.map(async (plan, i) => {
-      if (ledger.failed(i) || !plan || !plan.componentWords) return;
+      mains[i] = null;
+      const refs = plan?.componentWords?.componentPropertyReferences as Record<string, unknown> | undefined;
+      if (ledger.failed(i) || !plan || plan.node.type !== "INSTANCE" || refs == null || refs.componentId == null) return;
       try {
-        await resolveComponentEditTargets(plan.node, plan.componentWords, targets);
+        mains[i] = await (plan.node as InstanceNode).getMainComponentAsync();
       } catch (err) {
         ledger.record(i, err);
       }
     }),
   );
+  return mains;
 }
 
 /**
@@ -280,16 +287,64 @@ function planEntryInstances(
   return instances;
 }
 
-/** Every COMPONENT entry's definition/binding half, planned against the live component — gate only. */
+/**
+ * Every COMPONENT entry's definition/binding half, planned against the live component — gate only.
+ *
+ * Three passes, because a property this batch ADDS is the one cross-entry dependency with a single
+ * reading: its name exists nowhere on the canvas, so an entry binding a layer to it can only mean the
+ * new one. Its adds are planned first, the bindings against them next, and only then each add's
+ * default — read off the layers those bindings name, as they will stand once their own entries land.
+ */
 function planEntryComponents(
-  ledger: BatchLedger, plans: readonly (EditPlan | undefined)[], targets: ResolvedTargets,
+  ledger: BatchLedger, plans: readonly (EditPlan | undefined)[],
+  instances: readonly (InstanceEditPlan | undefined)[], mains: readonly (any | null)[],
 ): (ComponentEditPlan | undefined)[] {
+  const adds: Map<string, AddedDefinition>[] = [];
+  const addsByOwner = new Map<any, Map<string, AddedDefinition>>();
+  forEachLiveEntry(ledger, plans.length, (i) => {
+    const plan = plans[i];
+    if (!plan || !plan.componentWords) return;
+    adds[i] = planAddedDefinitions(plan.node, plan.componentWords, SUBJECT);
+    if (adds[i].size) addsByOwner.set(plan.node, adds[i]);
+  });
+  const bindings: (ComponentBindingEditPlan | undefined)[] = [];
+  forEachLiveEntry(ledger, plans.length, (i) => {
+    const refs = plans[i]?.componentWords?.componentPropertyReferences;
+    if (refs !== undefined) bindings[i] = prepareComponentBindingEdit(plans[i]!.node, refs, SUBJECT, (owner) => addsByOwner.get(owner));
+  });
+  const bindersOf = (add: AddedDefinition): AddedPropertyBinder[] => {
+    const binders: AddedPropertyBinder[] = [];
+    bindings.forEach((binding, j) => {
+      for (const write of binding?.writes ?? []) {
+        if (write.add !== add || ledger.failed(j)) continue;
+        binders.push({ layer: describeBinder(plans[j]!.node.name, "entry " + j), value: projectedBinderValue(write.field, plans[j]!, instances[j], mains[j]) });
+      }
+    });
+    return binders;
+  };
   const components: (ComponentEditPlan | undefined)[] = [];
   forEachLiveEntry(ledger, plans.length, (i) => {
     const plan = plans[i];
-    if (plan && plan.componentWords) components[i] = planComponentEdit(plan.node, plan.componentWords, targets, SUBJECT);
+    if (!plan || !plan.componentWords) return;
+    const words = plan.componentWords;
+    const component: ComponentEditPlan = {};
+    if (words.description !== undefined || words.propertyDefinitions !== undefined) {
+      component.definitions = planComponentDefinitionEdit(plan.node, words, SUBJECT, adds[i], bindersOf);
+    }
+    if (bindings[i]) component.binding = bindings[i];
+    components[i] = component;
   });
   return components;
+}
+
+// What a bound layer will show once its own entry has landed: the entry's own word for the field if
+// it names one, else the live value. That is the value the binding would write back into it, so it is
+// the added property's default — any other value would overwrite the layer.
+function projectedBinderValue(field: string, plan: EditPlan, instance: InstanceEditPlan | undefined, main: any | null): boolean | string {
+  const node = plan.node as any;
+  if (field === "visible") return (plan.patch.visible ?? node.visible) !== false;
+  if (field === "text") return plan.patch.runs ? plan.patch.runs.map((run) => run.text).join("") : plan.patch.text ?? node.characters;
+  return (instance ? instance.becomes : main).id;
 }
 
 /**
@@ -316,7 +371,9 @@ function assertNoDefinitionBindingCrossReference(
     const definitions = components[declarer] && components[declarer]!.definitions;
     const declarerPlan = plans[declarer];
     if (!definitions || !declarerPlan || ledger.failed(declarer)) continue;
-    if (!definitions.deletes.length && !definitions.changes.length && !definitions.adds.length) continue;
+    // Adds alone are no hazard: a new name resolves to nothing on the canvas, so a binding to it has
+    // one reading (planEntryComponents), and every other name it could bind is one adds don't touch.
+    if (!definitions.deletes.length && !definitions.renames.length) continue;
     for (let namer = 0; namer < plans.length; namer++) {
       const namerPlan = plans[namer];
       if (namer === declarer || !namerPlan || ledger.failed(namer)) continue;
@@ -486,7 +543,7 @@ export function editMany(entries: EditEntry[]): Promise<Handle[]> {
       const hints = compileEntries(ledger, nodes, batch);
       const targets = createResolvedTargets();
       const currents = await resolveEntryInstanceTargets(ledger, hints, targets);
-      await resolveEntryComponentTargets(ledger, hints, targets);
+      const mains = await resolveEntryBoundInstanceMains(ledger, hints);
       const instances = planEntryInstances(ledger, hints, currents, { targets });
       // The shape, resolve and hint stages all report together. The gate cannot join them: it
       // needs the resources, and a batch already known to be doomed must not spend a font load
@@ -499,19 +556,19 @@ export function editMany(entries: EditEntry[]): Promise<Handle[]> {
         [...plans, ...instances.flatMap((instance) => (instance ? instance.overrides.map((o) => o.plan) : []))],
         instances.flatMap((instance) => (instance ? [instance.needs] : [])),
       );
-      return { batch, nodes, targets, currents, loaded };
+      return { batch, nodes, targets, currents, mains, loaded };
     },
     // Gate — every decision that reads the document, for every entry, against the document as it
     // stands at the seal. The batch is what makes this load-bearing: entry 0's node was resolved
     // before every later entry's resolution and the whole batch's font/image round trip, and the
     // user has the document open across all of it. The ledger runs here too, so one rejection
     // still names every failing entry.
-    ({ batch, nodes, targets, currents, loaded }) => {
+    ({ batch, nodes, targets, currents, mains, loaded }) => {
       const ledger = createBatchLedger(batch.length);
       forEachLiveEntry(ledger, batch.length, (i) => assertNodeStillOnCanvas(nodes[i] as SceneNode, SUBJECT));
       const compiled = compileEntries(ledger, nodes, batch);
       const instances = planEntryInstances(ledger, compiled, currents, { targets, fonts: loaded.fonts });
-      const components = planEntryComponents(ledger, compiled, targets);
+      const components = planEntryComponents(ledger, compiled, instances, mains);
       assertNoEntryInsideRetargetedInstance(ledger, compiled, instances);
       assertNoDefinitionBindingCrossReference(ledger, compiled, components, instances);
       const deltas = layoutDeltasByNodeId(compiled);

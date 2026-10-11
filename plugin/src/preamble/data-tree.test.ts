@@ -271,8 +271,8 @@ test("placement orders mentioned children last and leaves omitted children in re
 test("moved nodes bind to properties in their destination component", async () => {
   const figma = createFigmaMock();
   const component = await flcm.component(
-    { type: "FRAME", width: 100, height: 100 },
-    { propertyDefinitions: { Label: { type: "text", defaultValue: "Default" } } },
+    { type: "FRAME", width: 100, height: 100, children: [{ type: "TEXT", text: "Default", componentPropertyReferences: { text: "Label" } }] },
+    { propertyDefinitions: { Label: { type: "text" } } },
   );
   const text = await flcm.render({ type: "TEXT", text: "Moved" });
   await flcm.append(component, { id: text.id, componentPropertyReferences: { text: "Label" } });

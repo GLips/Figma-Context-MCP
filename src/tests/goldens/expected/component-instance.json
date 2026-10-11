@@ -53,16 +53,13 @@
       "key": "compkey123",
       "propertyDefinitions": {
         "On Sale": {
-          "type": "boolean",
-          "defaultValue": true
+          "type": "boolean"
         },
         "Title": {
-          "type": "text",
-          "defaultValue": "Product Name"
+          "type": "text"
         },
         "Icon": {
-          "type": "instance_swap",
-          "defaultValue": "999:1"
+          "type": "instance_swap"
         }
       },
       "children": [

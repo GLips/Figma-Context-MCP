@@ -594,7 +594,8 @@ describe("component property support", () => {
     expect(nodes[0].overrides).toBeUndefined();
   });
 
-  it("emits every property definition type on the defining node", async () => {
+  // No definition carries its default: in a main component it is the bound layer's own content.
+  it("emits every property definition type on the defining node, without defaults", async () => {
     const componentNode = makeNode({
       id: "12:1",
       name: "Product Card",
@@ -603,7 +604,6 @@ describe("component property support", () => {
         "On Sale#341:0": { type: "BOOLEAN", defaultValue: true },
         "Title#341:1": { type: "TEXT", defaultValue: "Product Name" },
         "Icon#341:2": { type: "INSTANCE_SWAP", defaultValue: "999:1" },
-        // A SLOT default is a { guid } object on the wire — kept as a type, default dropped.
         "Content#341:3": { type: "SLOT", defaultValue: { guid: { sessionID: -1, localID: -1 } } },
       },
       children: [makeNode({ id: "12:2", name: "Title", type: "TEXT", characters: "Product Name" })],
@@ -612,9 +612,9 @@ describe("component property support", () => {
     const { components } = await walk([componentNode]);
 
     expect(components["12:1"].propertyDefinitions).toEqual({
-      "On Sale": { type: "boolean", defaultValue: true },
-      Title: { type: "text", defaultValue: "Product Name" },
-      Icon: { type: "instance_swap", defaultValue: "999:1" },
+      "On Sale": { type: "boolean" },
+      Title: { type: "text" },
+      Icon: { type: "instance_swap" },
       Content: { type: "slot" },
     });
   });
@@ -642,7 +642,6 @@ describe("component property support", () => {
     expect(components["16:1"].propertyDefinitions).toEqual({
       Variant: {
         type: "variant",
-        defaultValue: "Secondary",
         variantOptions: ["Secondary", "Primary"],
       },
     });
@@ -943,8 +942,8 @@ describe("simplifyRestResponse", () => {
       key: "abc123",
       name: "Product Card",
       propertyDefinitions: {
-        "On Sale": { type: "boolean", defaultValue: true },
-        Title: { type: "text", defaultValue: "Product Name" },
+        "On Sale": { type: "boolean" },
+        Title: { type: "text" },
       },
     });
   });

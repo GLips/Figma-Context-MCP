@@ -577,8 +577,8 @@ const COMPONENT_DEFINITION_FIELDS = {
   description: prop(z.string(), "Shown beside the component in Figma's assets panel."),
   propertyDefinitions: prop(
     z.custom<ComponentPropertyDefinitionEdits>(),
-    "COMPONENT / COMPONENT_SET, under edit: add, re-default, rename or delete a property. See Changing a component.",
-    "{ [name]: { type?, defaultValue?, name? } | null }",
+    "COMPONENT / COMPONENT_SET, under edit: add (bound in the same editMany), rename or delete a property. See Changing a component.",
+    "{ [name]: { type?, name? } | null }",
   ),
 };
 
@@ -657,8 +657,8 @@ const COMPONENT_FIELDS = {
   description: COMPONENT_DEFINITION_FIELDS.description,
   propertyDefinitions: prop(
     z.custom<ComponentPropertyDefinitions>(),
-    "The properties it exposes, by name — non-empty, unique in the call. See Properties.",
-    '{ [name]: { type, defaultValue? } }',
+    "The properties it exposes, by name — non-empty, unique in the call, each bound in it. See Properties.",
+    '{ [name]: { type } }',
   ),
 };
 
@@ -666,12 +666,7 @@ const COMPONENT_FIELDS = {
 const PROPERTY_DEFINITION_FIELDS = {
   type: z
     .enum(["boolean", "text", "instance_swap", "slot"])
-    .describe("Required; each type drives one field (see Properties)."),
-  defaultValue: prop(
-    z.custom<boolean | string | Target>(),
-    "What a fresh instance starts at. A `slot` refuses one: its content is authored, not set.",
-    "boolean | string | component target",
-  ),
+    .describe("Required; each type drives one field (see Properties). No default: it is the bound layer's content."),
   // Deliberately absent at create: there the KEY is the name, and a `name` beside it would be two
   // names for one property. It exists only so an edit can rename — see COMPONENT_DEFINITION_FIELDS.
   name: prop(
