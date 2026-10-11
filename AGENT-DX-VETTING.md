@@ -307,7 +307,7 @@ This is server-only, but it is part of the first-run experience.
 
 **Updated screenshot-default decision (supersedes the earlier approval):** Keep isolated node screenshots as the default. Context is explicitly requested; when its margin is omitted, use 10% of the target's longest side, clamped to 80–160px. Explicit finite nonnegative margins remain supported, including zero. Raising the calculated minimum from 24px to 80px remains approved implementation work.
 
-**Tickets:** none (approved, not filed)
+**Tickets:** fig-124 (shipped)
 
 **Status:** partly. `context: true` plus `margin` exists as an opt-in prototype (`code-mode-tools.ts:300-323`, `plugin/src/screenshot-capture.ts`). There is no crop, no array of ids and no labels. Per the overnight notes, cleanup can leave a temporary slice behind on forced shutdown.
 
