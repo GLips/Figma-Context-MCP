@@ -128,6 +128,17 @@
         border-radius: 6px;
         padding: 12px;
       }
+      /* A request still holding a call reads as live; one with nothing waiting to run is visibly
+         spent — dashed and muted — so it never passes for a prompt that will unblock something now. */
+      .session.waiting {
+        border-color: var(--figma-color-border-brand, #0d99ff);
+      }
+      .session.expired {
+        border-style: dashed;
+      }
+      .session.expired .session-id {
+        color: var(--figma-color-text-secondary, #777);
+      }
       .session-lines {
         display: flex;
         flex-direction: column;
@@ -429,12 +440,15 @@
       // Pending approval is what the human must act on, so it outranks everything else.
       function renderStrip(sessions, expanded) {
         var wants = 0;
+        var expired = 0;
         var approved = 0;
         var active = null;
         var writesSpent = false;
         sessions.forEach(function (s) {
-          if (!s.approved) wants++;
-          else approved++;
+          if (s.approved) approved++;
+          else if (s.request === "expired") {
+            if (!s.allowedWhileAway) expired++;
+          } else wants++;
           if (s.active) active = s;
           if (s.writeAccess && s.writeAccess.kind === "allowance-exhausted") writesSpent = true;
         });
@@ -457,6 +471,9 @@
         } else if (approved) {
           text = approved + " sessions ready";
           tone = "ready";
+        } else if (expired) {
+          text = expired === 1 ? "An approval request expired" : expired + " approval requests expired";
+          tone = "";
         } else {
           text = "Waiting for a session…";
           tone = "";
@@ -517,23 +534,50 @@
         return wrap;
       }
 
-      // A row per live session: what it is, the pairing code to glance-compare against the agent's
-      // message, its state, and the one control that state offers.
+      // A row per live session, and per disconnected one whose request still awaits an answer: what it
+      // is, the pairing code to glance-compare against the agent's message, its state, and the
+      // controls that state offers.
       function sessionCard(s) {
-        var card = el("div", "session");
+        var card = el("div", s.request ? "session " + s.request : "session");
         var lines = el("div", "session-lines");
         lines.appendChild(el("div", "session-id", s.identity || "(unknown project)"));
         lines.appendChild(el("div", "session-code", "Pairing code " + (s.pairingCode || "—")));
         card.appendChild(lines);
 
         var actions = el("div", "actions");
-        if (!s.approved) {
-          // No "waiting for your approval" line — Allow and Deny sitting there already say it.
+        if (s.allowedWhileAway) {
+          lines.appendChild(
+            el(
+              "div",
+              "status-line",
+              "Allowed — applies when this session reconnects. Nothing is waiting to run.",
+            ),
+          );
+          var cancel = el("button", "deny", "Cancel");
+          cancel.onclick = function () {
+            decide(false, s.key);
+          };
+          actions.appendChild(cancel);
+        } else if (!s.approved) {
+          // A session that has never asked needs no line — Allow and Reject sitting there already say
+          // it. One that has asked says whether a call is still waiting on the answer.
+          if (s.request === "waiting")
+            lines.appendChild(el("div", "status-line", "Waiting for approval — its call runs once you allow it."));
+          else if (s.request === "expired")
+            lines.appendChild(
+              el(
+                "div",
+                "status-line",
+                s.connected
+                  ? "Request expired — nothing is waiting to run. Allow approves this session's next call."
+                  : "Disconnected, request expired — nothing is waiting to run. Allow approves this session when it reconnects.",
+              ),
+            );
           var allow = el("button", "allow", "Allow");
           allow.onclick = function () {
             decide(true, s.key);
           };
-          var deny = el("button", "deny", "Reject");
+          var deny = el("button", "deny", s.connected ? "Reject" : "Dismiss");
           deny.onclick = function () {
             decide(false, s.key);
           };

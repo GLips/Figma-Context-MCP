@@ -180,7 +180,7 @@ it("an expired approval wait names the blocker, the pairing code, and that a lat
   const text = JSON.stringify((await call).content);
   expect(text).toContain("did not run");
   expect(text).toContain("Blocked: session approval is pending");
-  expect(text).toContain("approves pairing code 1234");
+  expect(text).toContain("clicks Allow for pairing code 1234");
   expect(text).toContain("retry only after they confirm the approval");
   expect(text).toContain("Approving later does not run this call");
   h.bridge.decision = "APPROVAL_GRANTED";

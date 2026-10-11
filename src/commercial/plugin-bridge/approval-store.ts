@@ -198,8 +198,60 @@ export class ApprovalStore {
     }
   }
 
+  /**
+   * The session claim the plugin gave this (cwd, port) the last time it asked for approval, if one is
+   * unexpired. It lets a server process that outlived its socket (or replaced it: a restart, the next
+   * `execute` run) pick up an Allow the human gave while it was away (see PluginBridge.sessionClaim).
+   * Same 0600 file discipline and fail-safe reads as the token; prunes an expired or corrupt file.
+   */
+  loadSessionClaim(port: number, now: number): string | null {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(readFileSync(this.claimFileFor(port), "utf8"));
+    } catch {
+      this.clearSessionClaim(port);
+      return null;
+    }
+    const { sessionClaim, createdAt } = (parsed ?? {}) as {
+      sessionClaim?: unknown;
+      createdAt?: unknown;
+    };
+    if (
+      typeof sessionClaim !== "string" ||
+      typeof createdAt !== "number" ||
+      now - createdAt > TTL_MS
+    ) {
+      this.clearSessionClaim(port);
+      return null;
+    }
+    return sessionClaim;
+  }
+
+  /** Persist the plugin's session claim for this (cwd, port), 0600. Fail-safe. */
+  saveSessionClaim(port: number, sessionClaim: string, now: number): void {
+    try {
+      writePrivateFileAtomic(
+        this.claimFileFor(port),
+        JSON.stringify({ sessionClaim, createdAt: now }),
+      );
+    } catch (err) {
+      Logger.log(
+        `Could not persist the session claim (${(err as Error).message}) — an Allow given while this server is disconnected reaches it only if it reconnects without restarting.`,
+      );
+    }
+  }
+
+  /** Forget the persisted session claim: it was spent on a handover, or is expired. Idempotent. */
+  clearSessionClaim(port: number): void {
+    rmSync(this.claimFileFor(port), { force: true });
+  }
+
   private fileFor(port: number): string {
     return join(this.approvalsDir, `${this.cwdKey}-${port}.json`);
+  }
+
+  private claimFileFor(port: number): string {
+    return join(this.approvalsDir, `${this.cwdKey}-${port}.claim.json`);
   }
 
   /**

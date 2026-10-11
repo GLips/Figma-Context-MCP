@@ -46,6 +46,9 @@ export type BridgeRequest =
       identity: string;
       pairingCode: string | null;
       sessionToken: string | null;
+      // The claim the plugin gave this session when it last asked for approval (null if it never
+      // has): it lets the plugin hand over an Allow given while this session was disconnected.
+      sessionClaim: string | null;
       // The origin of FRAMELINK_API_URL: the plugin opens sign-in pages on this origin only.
       framelinkOrigin: string;
     }
@@ -347,6 +350,13 @@ export class PluginBridge {
   private sessionToken: string | null = null;
   // Who clicked Allow for `sessionToken` — persisted and cleared with it, never independently.
   private authorizingUser: AuthorizingUser | null = null;
+  // The plugin's claim on this session's pending approval request: minted by the plugin and sent only
+  // to the socket that asked, so presenting it on a later connection is what identifies "the same
+  // session" to a plugin holding an Allow given while that session was away. Survives reconnects and,
+  // through `store`, restarts — like `sessionToken` and for the same reason. Spent by the handover
+  // (SESSION_TOKEN) and never echoed anywhere but SESSION_INFO. Leaks only as the token does: to a
+  // process that reads the 0600 file or dials this server and reads its SESSION_INFO.
+  private sessionClaim: string | null = null;
   // The port this server won its probe-bind on, or null before `listening`. Persistence keys on it —
   // (cwd, port) — so concurrent same-cwd servers never share an approval file (see approval-store.ts).
   private boundPort: number | null = null;
@@ -544,6 +554,7 @@ export class PluginBridge {
       this.sessionToken = reloaded?.token ?? null;
       this.authorizingUser = reloaded?.authorizingUser ?? null;
       this.reloadedApprovalLastUsedAt = reloaded?.lastUsedAt ?? null;
+      this.sessionClaim = this.store.loadSessionClaim(port, Date.now());
       if (this.sessionToken)
         Logger.log(
           "Reloaded a persisted session token — it will be offered on the next SESSION_INFO; the plugin decides whether the prior Allow still holds",
@@ -772,6 +783,11 @@ export class PluginBridge {
   /** The session token handed over on Allow, or null until one arrives; survives reconnects so SESSION_INFO can echo it. */
   getSessionToken(): string | null {
     return this.sessionToken;
+  }
+
+  /** The plugin's claim on this session's approval request, or null if it has never asked; see `sessionClaim`. */
+  getSessionClaim(): string | null {
+    return this.sessionClaim;
   }
 
   /** The Authorizing User of the session this server holds a token for, or null when it holds none. */
@@ -1105,6 +1121,7 @@ export class PluginBridge {
       error?: unknown;
       errors?: unknown;
       sessionToken?: unknown;
+      sessionClaim?: unknown;
       authorizingUser?: unknown;
       runId?: unknown;
       capability?: unknown;
@@ -1144,8 +1161,20 @@ export class PluginBridge {
           this.authorizingUser,
           Date.now(),
         );
+      // The handover spends the claim: approval now rides the token, and a stale claim must not
+      // outlive the request it was minted for.
+      this.sessionClaim = null;
+      if (this.boundPort !== null) this.store.clearSessionClaim(this.boundPort);
       Logger.log("Stored session token handed over by the sandbox after Allow (persisted)");
       this.events.onSessionApproved?.(this.authorizingUser);
+      return;
+    }
+    // The plugin's claim on the approval request this session just made (unsolicited, id-less, like
+    // SESSION_TOKEN). Kept so a later connection can present it in SESSION_INFO; see `sessionClaim`.
+    if (msg.type === "SESSION_CLAIM" && isSessionClaim(msg.sessionClaim)) {
+      this.sessionClaim = msg.sessionClaim;
+      if (this.boundPort !== null)
+        this.store.saveSessionClaim(this.boundPort, msg.sessionClaim, Date.now());
       return;
     }
     if (msg.type === "WRITE_ACCESS_SIGN_IN") {
@@ -1437,4 +1466,12 @@ function waitForSignal(promise: Promise<void>, signal?: AbortSignal): Promise<vo
       resolve();
     }, reject);
   });
+}
+
+/**
+ * A plausible plugin-minted session claim. It arrives off the socket and is written to disk, so its
+ * shape is bounded here; the plugin mints base-36 strings of ~30 characters.
+ */
+function isSessionClaim(value: unknown): value is string {
+  return typeof value === "string" && /^[0-9a-z]{16,64}$/.test(value);
 }

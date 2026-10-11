@@ -192,6 +192,67 @@ test("Reject is explicit and unknown tokens cannot bypass approval status or exe
   assert.equal(h.context.writes.length, 0);
 });
 
+test("an Allow given while a session is away reaches only the connection presenting its claim, and runs nothing", async () => {
+  const h = host();
+  await h.frame((f) => f.type === "RENDER", "the first paint");
+  const tokenFor = (key: number) => h.frames.some((f) => f.type === "SESSION_TOKEN" && f.__connKey === key);
+  const statusFor = (key: number, id: string) => {
+    h.send({ type: "APPROVAL_STATUS", id, __connKey: key });
+    return h.frames.find((f) => f.id === id)?.type;
+  };
+  h.send({ type: "WS_CONNECTED", __connKey: 1 });
+  h.send({ type: "SESSION_INFO", id: "session-1", __connKey: 1, identity: "/proj", pairingCode: "1111" });
+  assert.equal(statusFor(1, "ask"), "PENDING_APPROVAL");
+  const claim = (await h.frame((f) => f.type === "SESSION_CLAIM" && f.__connKey === 1, "a session claim")).sessionClaim;
+  // The waiting call gives up and its session disconnects; the human allows the request afterwards.
+  h.send({ type: "WS_CLOSED", __connKey: 1 });
+  h.send({ type: "UI_DECISION", approve: true, __connKey: 1 });
+  assert(!h.frames.some((f) => f.type === "SESSION_TOKEN"));
+
+  // Same project path, but not the session that asked: one presents another claim, one presents
+  // none, one presents the claim under another project.
+  h.send({ type: "WS_CONNECTED", __connKey: 2 });
+  h.send({ type: "SESSION_INFO", id: "session-2", __connKey: 2, identity: "/proj", sessionClaim: "someoneelse0000000000" });
+  h.send({ type: "WS_CONNECTED", __connKey: 3 });
+  h.send({ type: "SESSION_INFO", id: "session-3", __connKey: 3, identity: "/proj" });
+  h.send({ type: "WS_CONNECTED", __connKey: 4 });
+  h.send({ type: "SESSION_INFO", id: "session-4", __connKey: 4, identity: "/other", sessionClaim: claim });
+  // The session that asked comes back with its claim and collects the Allow.
+  h.send({ type: "WS_CONNECTED", __connKey: 5 });
+  h.send({ type: "SESSION_INFO", id: "session-5", __connKey: 5, identity: "/proj", sessionClaim: claim });
+  await h.approved(5);
+  assert.equal(statusFor(5, "next"), "APPROVAL_GRANTED");
+  for (const key of [2, 3, 4]) {
+    assert(!tokenFor(key), `connection ${key} must not be approved`);
+    assert.equal(statusFor(key, `other-${key}`), "PENDING_APPROVAL");
+  }
+  // The claim is spent: presenting it again approves nothing.
+  h.send({ type: "WS_CONNECTED", __connKey: 6 });
+  h.send({ type: "SESSION_INFO", id: "session-6", __connKey: 6, identity: "/proj", sessionClaim: claim });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert(!tokenFor(6));
+  // Nothing ran on the Allow: the only code any session sent was never sent.
+  assert(!h.frames.some((f) => f.type === "EXECUTE_CODE_RESULT"));
+});
+
+test("the panel tells a waiting request from an expired one, connected or away", async () => {
+  const h = host();
+  await h.frame((f) => f.type === "RENDER", "the first paint");
+  type Row = { key: number; request: string | null; connected: boolean; allowedWhileAway: boolean };
+  const row = (match: (r: Row) => boolean, what: string) =>
+    h.frame((f) => f.type === "RENDER" && (f.sessions as Row[]).some((r) => r.key === 1 && match(r)), what);
+  h.send({ type: "WS_CONNECTED", __connKey: 1 });
+  h.send({ type: "SESSION_INFO", id: "session-1", __connKey: 1, identity: "/proj", pairingCode: "1111" });
+  h.send({ type: "APPROVAL_STATUS", id: "ask", __connKey: 1 });
+  await row((r) => r.request === "waiting", "a waiting row");
+  // The polls stop: the request expires on its own, with nothing waiting to run.
+  await row((r) => r.request === "expired" && r.connected, "an expired, connected row");
+  h.send({ type: "WS_CLOSED", __connKey: 1 });
+  await row((r) => r.request === "expired" && !r.connected && !r.allowedWhileAway, "an away row");
+  h.send({ type: "UI_DECISION", approve: true, __connKey: 1 });
+  await row((r) => r.allowedWhileAway, "an away row allowed");
+});
+
 test("actual UI routes old results and image requests only to their original connection", () => {
   const forwarded: Array<{ pluginMessage: Record<string, unknown> }> = [];
   class Socket {

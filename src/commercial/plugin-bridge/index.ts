@@ -186,7 +186,9 @@ export function startPluginBridge({
  * Introduce this session to the plugin so the human can recognize and approve it: the
  * server identity (project path), the connection's pairing code (both shown in the arbiter
  * panel), and — once approved — the session token the sandbox handed us on Allow, echoed on
- * every reconnect so the sandbox re-keys sticky approval to it (null before the first Allow).
+ * every reconnect so the sandbox re-keys sticky approval to it (null before the first Allow), and
+ * the claim the plugin gave this session's last approval request, so an Allow given while it was
+ * disconnected can be handed over now.
  * Fire-and-forget — the plugin acks immediately and records the fields; it must NOT block on
  * the human here (approval arrives later, out of band, via the panel), or this request would
  * hang to its 15s timeout. The plugin owns the approval decision; this just hands it what to
@@ -195,12 +197,14 @@ export function startPluginBridge({
 function sendSessionInfo(bridge: PluginBridge, framelinkOrigin: string): void {
   const pairingCode = bridge.getPairingCode();
   const sessionToken = bridge.getSessionToken();
+  const sessionClaim = bridge.getSessionClaim();
   bridge
     .request({
       type: "SESSION_INFO",
       identity: SESSION_IDENTITY,
       pairingCode,
       sessionToken,
+      sessionClaim,
       framelinkOrigin,
     })
     .catch(() => {});

@@ -7,6 +7,12 @@ import { captureScreenshot, type CaptureOptions } from "./screenshot-capture.js"
 // touches the network — it talks to the headless ui.html bridge via postMessage.
 
 import { createApprovalLifecycle } from "./approval-lifecycle.js";
+import {
+  APPROVAL_WAITING_GRACE_MS,
+  approvalRequestState,
+  createAwayRequests,
+  type ApprovalRequestState,
+} from "./approval-requests.js";
 import { safeSerialize, guardReturnValue, createReadEgress, undefinedFieldsWarning } from "./serialize.js";
 import { resolveScreenshotTarget, type ScreenshotTarget } from "./screenshot-target.js";
 import { createRunCancellationRegistry, type CancelDisposition } from "./run-cancellation.js";
@@ -103,6 +109,10 @@ interface SessionConn {
   token: string | null;
   identity: string | null;
   pairingCode: string | null;
+  // When this connection last asked for approval (a pending status poll or a refused write), and the
+  // session claim minted on its first ask. See approval-requests.ts.
+  askedAt?: number;
+  sessionClaim?: string;
   // The server's latest word on write access (allowance spent, a sign-in code, its outcome), shown on
   // this session's row. Absent until the server has something to say.
   writeAccess?: WriteAccessNotice;
@@ -158,6 +168,52 @@ function openSignIn(key: ConnKey): void {
 // are independent and may survive replacement connections.
 type ConnKey = number;
 const connections = new Map<ConnKey, SessionConn>();
+
+type AuthorizingUser = { figmaUserId: string; name: string } | null;
+// Requests from sessions whose socket has closed, kept so a late Allow still reaches them. Keyed by
+// the closed connection's key, which ui.html never reuses, so a row's Allow can't land on a live one.
+const awayRequests = createAwayRequests<AuthorizingUser>();
+
+/** The human who is clicking right now, as the Allow handover names them. */
+function currentAuthorizingUser(): AuthorizingUser {
+  const user = figma.currentUser;
+  return user?.id ? { figmaUserId: user.id, name: user.name } : null;
+}
+
+/**
+ * A connection asked for approval and was told PENDING. The first ask mints the session claim and
+ * gives it to this socket's server alone; later asks just keep the request marked as waiting.
+ */
+function noteApprovalAsked(key: ConnKey | undefined): void {
+  const conn = key === undefined ? undefined : connections.get(key);
+  if (!conn) return;
+  conn.askedAt = Date.now();
+  if (conn.sessionClaim === undefined) {
+    conn.sessionClaim = mintToken();
+    figma.ui.postMessage({ type: "SESSION_CLAIM", sessionClaim: conn.sessionClaim, __connKey: key });
+  }
+  scheduleExpiryRender();
+}
+
+// One timer, re-armed for the soonest waiting request to lapse, so its row turns to "expired" when
+// the polls stop rather than at the next unrelated render.
+let expiryRender: ReturnType<typeof setTimeout> | undefined;
+function scheduleExpiryRender(): void {
+  if (expiryRender !== undefined) clearTimeout(expiryRender);
+  expiryRender = undefined;
+  const now = Date.now();
+  let soonest = Infinity;
+  for (const conn of connections.values()) {
+    if (conn.askedAt === undefined) continue;
+    const lapsesAt = conn.askedAt + APPROVAL_WAITING_GRACE_MS;
+    if (lapsesAt > now) soonest = Math.min(soonest, lapsesAt);
+  }
+  if (soonest === Infinity) return;
+  expiryRender = setTimeout(() => {
+    renderUi();
+    scheduleExpiryRender();
+  }, soonest - now);
+}
 
 // Who holds the driving baton — the approved session whose write ran most recently. It is a LABEL
 // for the human ("● Driving this file"), not a gate: any approved session takes the baton simply by
@@ -444,17 +500,44 @@ function panelSessions(): Array<{
   approved: boolean;
   active: boolean;
   writeAccess: WriteAccessNotice | null;
+  // Whether the session's socket is open. A closed one is an away request: it asked, its call gave
+  // up, and its socket went before anyone clicked Allow.
+  connected: boolean;
+  // The session's latest approval request: still waiting on a call, or expired with nothing waiting
+  // to run. Null for an approved session or one that has never asked.
+  request: ApprovalRequestState | null;
+  // An away request the human already allowed; it applies when that session next connects.
+  allowedWhileAway: boolean;
 }> {
   const sessions = [];
+  const now = Date.now();
   for (const [key, conn] of connections) {
+    const approved = isApproved(key);
     sessions.push({
       key,
       identity: conn.identity,
       label: sessionLabel(conn.identity),
       pairingCode: conn.pairingCode,
-      approved: isApproved(key),
+      approved,
       active: key === activeKey,
       writeAccess: conn.writeAccess ?? null,
+      connected: true,
+      request: approved ? null : approvalRequestState(conn.askedAt, now),
+      allowedWhileAway: false,
+    });
+  }
+  for (const [key, away] of awayRequests.entries()) {
+    sessions.push({
+      key,
+      identity: away.identity,
+      label: sessionLabel(away.identity),
+      pairingCode: away.pairingCode,
+      approved: false,
+      active: false,
+      writeAccess: null,
+      connected: false,
+      request: "expired" as const,
+      allowedWhileAway: away.allowed !== undefined,
     });
   }
   return sessions;
@@ -481,7 +564,7 @@ function renderUi(showOrientation = false): void {
     sessions: panelSessions(),
     expanded,
     showOrientation,
-    hasApprovals: approvedTokens.size > 0,
+    hasApprovals: approvedTokens.size > 0 || awayRequests.allowedCount > 0,
     approvalStorageError,
   });
 }
@@ -527,6 +610,7 @@ function resizeWindow(height: number): void {
  */
 function gateWrite(to: ReplyTo): boolean {
   if (to.connKey === undefined || !isApproved(to.connKey)) {
+    noteApprovalAsked(to.connKey);
     setExpanded(true);
     reply(to, { type: "PENDING_APPROVAL" });
     return false;
@@ -571,7 +655,10 @@ function enqueueWrite(run: () => Promise<void>): void {
 /** Allow becomes usable after durable storage succeeds. Reject ends pending waits. */
 async function applyDecision(key: ConnKey, approve: boolean): Promise<void> {
   const conn = connections.get(key);
-  if (!conn) return;
+  if (!conn) {
+    decideAwayRequest(key, approve);
+    return;
+  }
   const revision = (conn.decisionRevision ?? 0) + 1;
   conn.decisionRevision = revision;
   if (!approve) {
@@ -579,20 +666,49 @@ async function applyDecision(key: ConnKey, approve: boolean): Promise<void> {
     setExpanded(false);
     return;
   }
-  if (!isApproved(key)) {
-    const token = mintToken();
-    try { await approvedTokens.allow(token); }
-    catch { renderUi(); return; }
-    if (connections.get(key) !== conn || conn.decisionRevision !== revision) return;
-    conn.rejected = false;
-    conn.token = token;
-    // The Authorizing User rides the handover: every write this session makes is attributed to the human who
-    // clicked Allow, so the server learns who that is here, once, with the token it persists.
-    const user = figma.currentUser;
-    const authorizingUser = user?.id ? { figmaUserId: user.id, name: user.name } : null;
-    figma.ui.postMessage({ type: "SESSION_TOKEN", sessionToken: token, authorizingUser, __connKey: key });
-  }
+  if (!isApproved(key) && !(await grantSession(key, conn, revision, currentAuthorizingUser()))) return;
   setExpanded(false);
+}
+
+/**
+ * Mint a token, make it durable, and hand it to this connection's server. False when storage failed
+ * or another decision overtook this one, so the token never reached the session.
+ *
+ * Nothing runs here. A call that was waiting learns of the Allow from its next status poll and only
+ * then submits its code; a call that already gave up has no code here to run.
+ */
+async function grantSession(
+  key: ConnKey,
+  conn: SessionConn,
+  revision: number,
+  authorizingUser: AuthorizingUser,
+): Promise<boolean> {
+  const token = mintToken();
+  try { await approvedTokens.allow(token); }
+  catch { renderUi(); return false; }
+  if (connections.get(key) !== conn || conn.decisionRevision !== revision) return false;
+  conn.rejected = false;
+  conn.token = token;
+  // The server spends its claim on this handover, so the request it named is over.
+  conn.askedAt = undefined;
+  conn.sessionClaim = undefined;
+  // The Authorizing User rides the handover: every write this session makes is attributed to the human who
+  // clicked Allow, so the server learns who that is here, once, with the token it persists.
+  figma.ui.postMessage({ type: "SESSION_TOKEN", sessionToken: token, authorizingUser, __connKey: key });
+  return true;
+}
+
+/**
+ * Allow or dismiss a request whose session has disconnected. An Allow mints nothing yet: it records
+ * who approved, and the token is minted and handed over only to the connection that presents this
+ * request's session claim (SESSION_INFO). Reject just drops the row; the session asks again if it
+ * returns.
+ */
+function decideAwayRequest(key: ConnKey, approve: boolean): void {
+  if (!awayRequests.get(key)) return;
+  if (approve) awayRequests.allow(key, currentAuthorizingUser());
+  else awayRequests.dismiss(key);
+  renderUi();
 }
 
 /**
@@ -633,6 +749,7 @@ async function revokeSession(key: ConnKey): Promise<void> {
  */
 async function revokeAllApprovals(): Promise<void> {
   const persistence = approvedTokens.revokeAll();
+  awayRequests.dismissAllowed();
   for (const [key, conn] of connections) {
     conn.decisionRevision = (conn.decisionRevision ?? 0) + 1;
     if (conn.token === null) continue;
@@ -704,6 +821,24 @@ function handlePanelControl(msg: InboundMessage): void {
     // The server rejects every in-flight caller when a socket dies, so its outstanding runs here
     // (queued or executing) were all reported failed — cancel them or they'd keep going.
     cancelledRuns.cancelConnection(key);
+    // A session that asked and was neither approved nor rejected keeps its request as an away
+    // request, so a late Allow can still reach it when it reconnects.
+    const closing = connections.get(key);
+    if (
+      closing &&
+      closing.sessionClaim !== undefined &&
+      closing.askedAt !== undefined &&
+      closing.identity !== null &&
+      !closing.rejected &&
+      !isApproved(key)
+    ) {
+      awayRequests.retain(key, {
+        identity: closing.identity,
+        pairingCode: closing.pairingCode,
+        sessionClaim: closing.sessionClaim,
+        askedAt: closing.askedAt,
+      });
+    }
     connections.delete(key);
     if (connections.size === 0) setExpanded(false);
     else renderUi();
@@ -777,25 +912,48 @@ function handleServerFrame(frame: unknown, key: ConnKey): void {
     // connection (the echoed token re-keys sticky approval) and ack immediately — we must NOT block
     // on the human here; approval arrives later via UI_DECISION. A squatter that never got an Allow
     // echoes no token, so the entry's token stays null and the gate re-prompts.
+    let handover: Promise<boolean> | undefined;
     if (to.connKey !== undefined) {
-      connections.set(to.connKey, {
+      const conn: SessionConn = {
         token: typeof msg.sessionToken === "string" ? msg.sessionToken : null,
         identity: typeof msg.identity === "string" ? msg.identity : null,
         pairingCode: typeof msg.pairingCode === "string" ? msg.pairingCode : null,
         framelinkOrigin: typeof msg.framelinkOrigin === "string" ? msg.framelinkOrigin : null,
-      });
+      };
+      connections.set(to.connKey, conn);
+      // A session back from away presents the claim its last request was given. It takes over that
+      // request: allowed while away, it gets its token now; otherwise the request stays expired on
+      // this connection, under the same claim the server still holds. A session whose echoed token
+      // is already approved just retires the request.
+      const away = typeof msg.sessionClaim === "string"
+        ? awayRequests.claim(msg.sessionClaim, conn.identity)
+        : undefined;
+      if (away && !isApproved(to.connKey)) {
+        if (away.allowed) {
+          const revision = (conn.decisionRevision ?? 0) + 1;
+          conn.decisionRevision = revision;
+          handover = grantSession(to.connKey, conn, revision, away.allowed.authorizingUser);
+        } else {
+          conn.askedAt = away.askedAt;
+          conn.sessionClaim = away.sessionClaim;
+        }
+      }
     }
     reply(to, { type: "SESSION_INFO_ACK" });
     // Open the list for an unapproved session so the human can Allow/Deny; for an already-approved
-    // reconnect (its token echoed back here) just refresh, so it does NOT re-prompt (Done-when #3)
-    // and doesn't disturb a list another session opened.
-    if (to.connKey !== undefined && !isApproved(to.connKey)) setExpanded(true);
+    // reconnect (its token echoed back here) or one collecting an Allow given while it was away, just
+    // refresh, so it does NOT re-prompt (Done-when #3) and doesn't disturb a list another session opened.
+    if (handover) void handover.then(() => renderUi());
+    else if (to.connKey !== undefined && !isApproved(to.connKey)) setExpanded(true);
     else renderUi();
   } else if (msg.type === "APPROVAL_STATUS") {
     const conn = to.connKey === undefined ? undefined : connections.get(to.connKey);
     const type = conn?.rejected ? "APPROVAL_REJECTED" :
       to.connKey !== undefined && isApproved(to.connKey) ? "APPROVAL_GRANTED" : "PENDING_APPROVAL";
-    if (type === "PENDING_APPROVAL") setExpanded(true);
+    if (type === "PENDING_APPROVAL") {
+      noteApprovalAsked(to.connKey);
+      setExpanded(true);
+    }
     reply(to, { type });
   } else if (msg.type === "EXECUTE_CODE") {
     // Protocol validation comes BEFORE the consent gate, deliberately: a malformed request can never

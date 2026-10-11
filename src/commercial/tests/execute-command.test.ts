@@ -3,7 +3,7 @@
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -245,16 +245,50 @@ describe("saved-script CLI using production plugin services", () => {
     expect(stdout).toBe("");
   });
 
-  it("reports approval timeout without fabricating an execution reply", async () => {
-    const finished = expect(run({ wait: 1 })).rejects.toThrow(
-      /did not run. Blocked: session approval is pending, and this run's session has ended/,
+  it("an Allow after the run expired approves the next run, which alone executes", async () => {
+    const claim = "k3claimfromtheplugin0000000000";
+    const executions: Frame[] = [];
+    const expired = expect(run({ wait: 1 })).rejects.toThrow(
+      /did not run. Blocked: session approval is pending, and this run has ended without sending the script. Required before re-running: someone clicks Allow on the request with pairing code \d{4}/,
     );
-    const { closed } = await plugin((frame, socket) => {
-      if (frame.type === "APPROVAL_STATUS") reply(socket, frame, { type: "PENDING_APPROVAL" });
+    const first = await plugin((frame, socket) => {
+      if (frame.type === "EXECUTE_CODE") executions.push(frame);
+      if (frame.type !== "APPROVAL_STATUS") return;
+      socket.send(JSON.stringify({ type: "SESSION_CLAIM", sessionClaim: claim }));
+      reply(socket, frame, { type: "PENDING_APPROVAL" });
     }, false);
-    await finished;
-    await closed;
+    await expired;
+    await first.closed;
     expect(stdout).toBe("");
+
+    // The human clicks Allow on the expired request. The next run presents the claim, which is what
+    // lets the plugin hand it the token; that run's call is the first code anything sends.
+    let presented: unknown;
+    const next = run({ wait: 2 });
+    const second = await plugin((frame, socket) => {
+      if (frame.type === "SESSION_INFO") {
+        presented = frame.sessionClaim;
+        socket.send(
+          JSON.stringify({
+            type: "SESSION_TOKEN",
+            sessionToken: "late-allow-token",
+            authorizingUser: { figmaUserId: "cli-test-user", name: "Test User" },
+          }),
+        );
+      }
+      if (frame.type === "APPROVAL_STATUS") reply(socket, frame, { type: "APPROVAL_GRANTED" });
+      if (frame.type === "EXECUTE_CODE") {
+        executions.push(frame);
+        reply(socket, frame, { result: { answer: 42 }, console: [], errors: null });
+      }
+    }, false);
+    await expect(next).resolves.toBe(0);
+    await second.closed;
+    expect(presented).toBe(claim);
+    expect(executions).toHaveLength(1);
+    // The handover spent the claim, so no later connection can present it again.
+    const approvals = await readdir(join(dir, "state", "approvals"));
+    expect(approvals.filter((name) => name.endsWith(".claim.json"))).toEqual([]);
   });
 
   it.each([

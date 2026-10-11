@@ -186,7 +186,9 @@ export async function runExecute(flags: ExecuteFlags, positionals: string[]): Pr
     const outcome = await executePluginCode(runtime, code, options);
     if (outcome.kind === "refused") throw new Error(outcome.message);
     if (outcome.kind === "pending") {
-      throw new Error(`The script did not run. ${approvalPendingRerunAction(waitMs)}`);
+      throw new Error(
+        `The script did not run. ${approvalPendingRerunAction(runtime.bridge.getPairingCode(), waitMs)}`,
+      );
     }
     try {
       const reply = withoutTokenMarks(outcome.reply);

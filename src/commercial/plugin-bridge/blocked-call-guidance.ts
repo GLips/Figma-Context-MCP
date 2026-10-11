@@ -43,23 +43,29 @@ export function pluginDisconnectedAction(): string {
 export function approvalPendingAction(pairingCode: string | null, waitMs: number): string {
   const session = pairingCode ? `pairing code ${pairingCode}` : "this session";
   return (
-    `Blocked: session approval is pending. Required before retrying: someone approves ${session} in ` +
-    `the Framelink plugin in Figma. ${REPORT_TO_PERSON} they confirm the approval — each attempt waits ` +
-    `up to ${Math.round(waitMs / 1000)}s and cannot succeed without them. Approving later does not run ` +
+    `Blocked: session approval is pending. Required before retrying: someone clicks Allow for ` +
+    `${session} in the Framelink plugin in Figma, where the request now shows as expired. ` +
+    `${REPORT_TO_PERSON} they confirm the approval — each attempt waits up to ` +
+    `${Math.round(waitMs / 1000)}s and cannot succeed without them. Approving later does not run ` +
     `this call; submit it again.`
   );
 }
 
 /**
- * The `execute` CLI's form: its relay, and the pairing code it printed, end with the run, so there is
- * nothing left to approve afterwards. The approval has to happen during the next run's wait.
+ * The `execute` CLI's form: its relay ends with the run, but the plugin keeps the expired request, and
+ * an Allow there carries to the next run from this directory. Nothing replays — the person's Allow
+ * approves the session, and only re-running sends the script.
  */
-export function approvalPendingRerunAction(waitMs: number): string {
+export function approvalPendingRerunAction(pairingCode: string | null, waitMs: number): string {
+  const request = pairingCode
+    ? `the request with pairing code ${pairingCode}`
+    : "this run's request";
   return (
-    `Blocked: session approval is pending, and this run's session has ended, so it can no longer be ` +
-    `approved. Required before re-running: someone ready to approve, in the Framelink plugin in Figma, ` +
-    `the pairing code the next run prints. ${REPORT_TO_PERSON} they are ready — this run waited ` +
-    `${Math.round(waitMs / 1000)}s; raise --wait if they need longer.`
+    `Blocked: session approval is pending, and this run has ended without sending the script. ` +
+    `Required before re-running: someone clicks Allow on ${request} in the Framelink plugin in Figma, ` +
+    `where it now shows as expired. That approves the next run from this directory while the plugin ` +
+    `stays open; it does not run this one. ${REPORT_TO_PERSON} they confirm the approval — this run ` +
+    `waited ${Math.round(waitMs / 1000)}s; raise --wait if they need longer.`
   );
 }
 
