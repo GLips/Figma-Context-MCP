@@ -19,6 +19,7 @@
 import { sceneFigma as figma } from "./scene-access.js";
 import { scanUsedTokens } from "./tokens.js";
 import { warnings } from "./warnings.js";
+import { liveFontWords } from "./fonts.js";
 import { decodeSceneEffect, decodeScenePaints, decodeSegmentStyle, type SceneEffect, type ScenePaint, type SceneTextSegment } from "./node-to-snapshot.js";
 import {
   foldPaintStack, formatSolidColor, pixelRound, simplifyEffectStack, simplifyLiteralTextStyle,
@@ -61,9 +62,10 @@ function uniqueBy<T>(items: readonly T[], key: (item: T) => string): T[] {
   return items.filter((item) => !seen.has(key(item)) && !!seen.add(key(item)));
 }
 
-// A plugin imported before the manifest granted `teamlibrary` still runs a newer server's preamble
-// (ADR-0010), and Figma refuses the whole namespace there. The listing degrades to what the file
-// itself shows rather than failing a read over one reach.
+// Library reach degrades rather than failing the read: the file's own tokens are already in hand,
+// and a library is the one reach that rides the network. A plugin imported before the manifest
+// granted `teamlibrary` still runs a newer server's preamble (ADR-0010), and Figma refuses the whole
+// namespace there; a library the user can't open, or a dropped request, skips only what it covers.
 async function enabledLibraryVariables(known: ReadonlySet<string>): Promise<Variable[]> {
   let collections: LibraryVariableCollection[];
   try {
@@ -76,8 +78,37 @@ async function enabledLibraryVariables(known: ReadonlySet<string>): Promise<Vari
     });
     return [];
   }
-  const listed = (await Promise.all(collections.map((c) => figma.teamLibrary.getVariablesInLibraryCollectionAsync(c.key)))).flat();
-  return Promise.all(listed.filter((v) => !known.has(v.key)).map((v) => figma.variables.importVariableByKeyAsync(v.key)));
+  const skipped: string[] = [];
+  const listed: LibraryVariable[] = [];
+  const perCollection = await Promise.all(collections.map((c) => settle(figma.teamLibrary.getVariablesInLibraryCollectionAsync(c.key))));
+  perCollection.forEach((result, i) => {
+    if (result.ok) listed.push(...result.value);
+    else skipped.push(JSON.stringify(collections[i].libraryName + " / " + collections[i].name));
+  });
+  const imported = await settleInBatches(listed.filter((v) => !known.has(v.key)), (v) => figma.variables.importVariableByKeyAsync(v.key));
+  const failedImports = imported.filter((r) => !r.ok).length;
+  if (skipped.length || failedImports) {
+    warnings.add({
+      id: null,
+      message: "flcm.designTokens: some enabled-library variables are not listed — " +
+        [skipped.length ? "unreadable collections: " + skipped.join(", ") : "", failedImports ? failedImports + " variable imports failed" : ""].filter(Boolean).join("; ") + ".",
+    });
+  }
+  return imported.flatMap((r) => (r.ok ? [r.value] : []));
+}
+
+// Every import is a library request, and a design system can hold thousands of variables; a bounded
+// batch keeps one read from opening them all at once.
+const IMPORT_BATCH = 16;
+async function settleInBatches<T, R>(items: readonly T[], run: (item: T) => Promise<R>): Promise<Settled<R>[]> {
+  const out: Settled<R>[] = [];
+  for (let i = 0; i < items.length; i += IMPORT_BATCH) out.push(...(await Promise.all(items.slice(i, i + IMPORT_BATCH).map((item) => settle(run(item))))));
+  return out;
+}
+
+type Settled<R> = { ok: true; value: R } | { ok: false };
+function settle<R>(promise: Promise<R>): Promise<Settled<R>> {
+  return promise.then((value) => ({ ok: true as const, value }), () => ({ ok: false as const }));
 }
 
 // Collections and alias targets are looked up once each, however many variables share them.
@@ -171,10 +202,14 @@ async function styleValue(style: ListedStyle, variables: VariableDescriber): Pro
     const effects = simplifyEffectStack(style.effects.map((e) => decodeSceneEffect(e as unknown as SceneEffect)), false);
     return Object.keys(effects).length ? effects : undefined;
   }
-  // A text style is the segment a node set to it would report, minus what a style can't hold.
+  // A text style is the segment a node set to it would report. A style has no weight or slant field of
+  // its own — both live in its font's style label, which is where a segment's come from too.
+  const { fontWeight, fontStyle } = liveFontWords(style.fontName);
   const decoded = decodeSegmentStyle({
     characters: "",
     fontName: style.fontName,
+    fontWeight: fontWeight as number,
+    fontStyle: fontStyle === "italic" ? "ITALIC" : "REGULAR",
     fontSize: style.fontSize,
     lineHeight: style.lineHeight as SceneTextSegment["lineHeight"],
     letterSpacing: style.letterSpacing,

@@ -324,6 +324,14 @@ export async function scanUsedTokens(pages: readonly PageNode[]): Promise<{ vari
       const id = node[field];
       if (typeof id === "string" && id) styleIds.add(id);
     }
+    // Text whose ranges disagree reads figma.mixed for these; its ranges hold the tokens.
+    if (node.type === "TEXT" && [node.textStyleId, node.fillStyleId, node.fills].some((v) => typeof v === "symbol")) {
+      for (const segment of node.getStyledTextSegments(["textStyleId", "fillStyleId", "fills", "boundVariables"])) {
+        for (const id of [segment.textStyleId, segment.fillStyleId]) if (id) styleIds.add(id);
+        collectAliases(segment.boundVariables);
+        for (const paint of segment.fills) collectAliases(paint.boundVariables);
+      }
+    }
   }
   const variables = (await Promise.all([...variableIds].map((id) => figma.variables.getVariableByIdAsync(id)))).filter((v): v is Variable => !!v);
   const styles = (await Promise.all([...styleIds].map((id) => figma.getStyleByIdAsync(id)))).filter((s): s is BaseStyle => !!s);

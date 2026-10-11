@@ -53,7 +53,7 @@ test("local tokens list in the read's spellings, and a listed reference binds wh
   assert.deepEqual(tokens.styles, [
     { reference: { style: { id: paint.key, name: "Surface" } }, type: "PAINT", value: "#2D4024" },
     { reference: { style: { id: tokens.styles[1].reference.style.id, name: "Shadow/Card" } }, type: "EFFECT", value: { boxShadow: "0px 4px 8px 0px rgba(0, 0, 0, 0.25)" } },
-    { reference: { style: { id: heading.key, name: "Heading/L" } }, type: "TEXT", value: { fontFamily: "Inter", fontSize: 32, fontVariantName: "Bold", lineHeight: "40px" } },
+    { reference: { style: { id: heading.key, name: "Heading/L" } }, type: "TEXT", value: { fontFamily: "Inter", fontWeight: 700, fontSize: 32, fontVariantName: "Bold", lineHeight: "40px" } },
   ]);
 
   const [brandToken] = tokens.variables;
@@ -67,13 +67,21 @@ test("local tokens list in the read's spellings, and a listed reference binds wh
   assert.equal((await figma.getNodeByIdAsync(text.id)).textStyleId, heading.id);
 });
 
-test("library tokens: a style shows once the file uses it, and enabled-library variables list unimported", async () => {
+test("library tokens: a style shows once the file uses it, enabled-library variables list unimported, and an unreadable library is skipped", async () => {
   const figma = setup();
   const usedStyle = seedStyle({ type: "PAINT", name: "DS/Surface", remote: true, paints: [{ type: "SOLID", color: GREEN, opacity: 1, visible: true }] });
   seedStyle({ type: "PAINT", name: "DS/Unused", remote: true, paints: [{ type: "SOLID", color: GREEN, opacity: 1, visible: true }] });
   const { "ds/accent": accent } = seedVariables({
     library: "Design System", collection: "DS Colors", variables: [{ name: "ds/accent", type: "COLOR", values: { Default: { r: 1, g: 0, b: 0, a: 1 } } }],
   });
+  seedVariables({ library: "Locked", collection: "Locked Colors", variables: [{ name: "locked/red", type: "COLOR", values: { Default: { r: 1, g: 0, b: 0, a: 1 } } }] });
+  // A library the user can't open costs only its own variables, with a warning naming it.
+  const listCollection = figma.teamLibrary.getVariablesInLibraryCollectionAsync;
+  figma.teamLibrary.getVariablesInLibraryCollectionAsync = async (key: string) => {
+    if ((await figma.teamLibrary.getAvailableLibraryVariableCollectionsAsync()).find((c: any) => c.key === key).libraryName === "Locked") throw new Error("no access");
+    return listCollection(key);
+  };
+  const before = warnings.records.length;
   // Used on a page that isn't current: the listing reads the whole file.
   const other = figma.createPage();
   const rect = figma.createRectangle();
@@ -86,6 +94,7 @@ test("library tokens: a style shows once the file uses it, and enabled-library v
     { reference: { variable: { id: accent.id, name: "ds/accent" } }, collection: "DS Colors", type: "COLOR", values: { Default: "#FF0000" }, remote: true },
   ]);
   assert.deepEqual(tokens.styles.map((s) => [s.reference.style.name, s.remote]), [["DS/Surface", true]]);
+  assert.match(warnings.records.slice(before).map((r) => r.message).join("\n"), /unreadable collections: "Locked \/ Locked Colors"/);
 });
 
 test("without the teamlibrary permission, the file's own tokens still list and a warning says what's missing", async () => {
