@@ -145,7 +145,7 @@ function projectTrees(
   };
   const nodes = walk(roots, 0, false);
   const definitions = walk(context.definitions, 0, false);
-  const components = extractComponents(nodes, notes, definitions);
+  const components = extractComponents(nodes, notes, definitions, table.styles);
   const surfaces = Object.values(components).flatMap((entry) =>
     entry.children ? [entry.children] : [],
   );

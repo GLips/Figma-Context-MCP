@@ -115,6 +115,36 @@ describe("instances as diffs", () => {
     });
   });
 
+  it("reads a bound field resolving under another mode as no override", async () => {
+    const bound = (r: number) => [
+      {
+        type: "SOLID",
+        color: { r, g: 0, b: 0, a: 1 },
+        opacity: 1,
+        boundVariables: { color: { type: "VARIABLE_ALIAS", id: "VariableID:1:1" } },
+      },
+    ];
+    const design = await simplifyRestResponse(
+      page([
+        node({
+          id: "50:1",
+          name: "C",
+          type: "COMPONENT",
+          children: [node({ id: "50:2", name: "Box", type: "FRAME", fills: bound(1) })],
+        }),
+        node({
+          id: "51:1",
+          name: "Dark",
+          type: "INSTANCE",
+          componentId: "50:1",
+          children: [node({ id: "I51:1;50:2", name: "Box", type: "FRAME", fills: bound(0) })],
+        }),
+      ]),
+    );
+
+    expect(design.nodes[0].children?.[1].overrides).toBeUndefined();
+  });
+
   it("reports an instance whose every sublayer was hidden", async () => {
     const design = await simplifyRestResponse(
       page([

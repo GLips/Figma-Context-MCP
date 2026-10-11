@@ -151,7 +151,13 @@ function scopeStyleValue(value: unknown): unknown {
     }
     return entry;
   };
-  return Array.isArray(value) ? value.map(scopePaint) : scopePaint(value);
+  const scopeSlot = (slot: unknown): unknown =>
+    Array.isArray(slot) ? slot.map(scopePaint) : scopePaint(slot);
+  // A paint style carries its paints as `value`, where an image hides from a top-level check.
+  if (value && typeof value === "object" && "style" in value && "value" in value) {
+    return { ...(value as Rec), value: scopeSlot((value as Rec).value) };
+  }
+  return scopeSlot(value);
 }
 
 /**

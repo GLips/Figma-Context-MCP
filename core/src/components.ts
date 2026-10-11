@@ -1,5 +1,5 @@
 import { stableStringify } from "./utils.js";
-import type { NodeDelta, SimplifiedComponentEntry, SimplifiedNode } from "./types.js";
+import type { NodeDelta, SimplifiedComponentEntry, SimplifiedNode, StyleValue } from "./types.js";
 
 /**
  * The components pass: emit each component's `children` ONCE into a sidecar, and rewrite every
@@ -132,6 +132,7 @@ export function extractComponents(
   nodes: SimplifiedNode[],
   notes: ComponentNotes,
   definitions: SimplifiedNode[] = [],
+  styles: Record<string, StyleValue> = {},
 ): Record<string, SimplifiedComponentEntry> {
   const definitionNodes = new Map<string, SimplifiedNode>();
   const instancesByComponent = new Map<string, SimplifiedNode[]>();
@@ -180,7 +181,7 @@ export function extractComponents(
     const source = sources.get(id);
     const children = source
       ? source.children.map((child) =>
-          reduceNode(clone(child), resolveChildren, notes.emptiedContainers),
+          reduceNode(clone(child), resolveChildren, notes.emptiedContainers, styles),
         )
       : undefined;
     resolving.delete(id);
@@ -203,7 +204,7 @@ export function extractComponents(
   };
 
   for (const id of ids) resolveChildren(id);
-  for (const node of nodes) reduceNode(node, resolveChildren, notes.emptiedContainers);
+  for (const node of nodes) reduceNode(node, resolveChildren, notes.emptiedContainers, styles);
   return components;
 }
 
@@ -296,9 +297,10 @@ function reduceNode(
   node: SimplifiedNode,
   resolveChildren: (id: string) => SimplifiedNode[] | undefined,
   emptied: Set<string>,
+  styles: Record<string, StyleValue>,
 ): SimplifiedNode {
   if (node.children) {
-    for (const child of node.children) reduceNode(child, resolveChildren, emptied);
+    for (const child of node.children) reduceNode(child, resolveChildren, emptied, styles);
   }
   if (node.type !== "INSTANCE" || !node.componentId) return node;
   // No children AND the walk didn't empty it: either the component has none, or the depth limit
@@ -308,7 +310,7 @@ function reduceNode(
   const reference = resolveChildren(node.componentId);
   if (!reference) return node;
 
-  const overrides = diffChildren(reference, node.children ?? [], node.id, emptied);
+  const overrides = diffChildren(reference, node.children ?? [], node.id, emptied, styles);
   // `null` means the instance added children the diff can't express as a delta (a filled slot
   // at the top level). Keeping the full subtree is the honest answer for that instance.
   if (overrides === null) return node;
@@ -327,6 +329,7 @@ function diffChildren(
   actual: SimplifiedNode[],
   instanceId: string,
   emptied: Set<string>,
+  styles: Record<string, StyleValue> = {},
 ): Record<string, NodeDelta> | null {
   const referenceByPath = new Map<string, SimplifiedNode>();
   for (const child of reference) referenceByPath.set(componentPath(child.id, ""), child);
@@ -340,7 +343,7 @@ function diffChildren(
     if (!counterpart) return null;
     matched.add(path);
     order.push(path);
-    const delta = diffNode(counterpart, child, instanceId, out, emptied);
+    const delta = diffNode(counterpart, child, instanceId, out, emptied, styles);
     if (delta) out[path] = delta;
   }
 
@@ -363,6 +366,27 @@ function diffChildren(
 const DIFF_SKIP_KEYS = new Set(["id", "children", "readOnlySource", "elided"]);
 
 /**
+ * A field's comparable form. A token reference compares by identity: the same variable resolving
+ * to another value is a mode switch, not a designer's override, and would otherwise report every
+ * bound field under a dark-mode instance. Interned values are looked up first, since two such
+ * references intern under different names.
+ */
+function overrideIdentity(value: unknown, styles: Record<string, StyleValue>): string {
+  const comparable = (field: unknown): unknown => {
+    if (typeof field === "string") return field in styles ? comparable(styles[field]) : field;
+    if (Array.isArray(field)) return field.map(comparable);
+    if (!field || typeof field !== "object") return field;
+    const isReference = "variable" in field || "style" in field;
+    const out: Record<string, unknown> = {};
+    for (const [key, inner] of Object.entries(field)) {
+      if (!(isReference && key === "value")) out[key] = comparable(inner);
+    }
+    return out;
+  };
+  return stableStringify(comparable(value));
+}
+
+/**
  * The per-node delta: only the fields that differ, plus a structural answer for children. A
  * child list that gained entries is republished WHOLE on this node rather than diffed, because
  * a filled slot's content is new content rather than an edit to the component's.
@@ -373,6 +397,7 @@ function diffNode(
   instanceId: string,
   out: Record<string, NodeDelta>,
   emptied: Set<string>,
+  styles: Record<string, StyleValue>,
 ): NodeDelta | undefined {
   const delta: Record<string, unknown> = {};
   const referenceRecord = reference as unknown as Record<string, unknown>;
@@ -389,7 +414,7 @@ function diffNode(
       if (before !== undefined) delta[key] = null;
       continue;
     }
-    if (stableStringify(before) !== stableStringify(after)) delta[key] = after;
+    if (overrideIdentity(before, styles) !== overrideIdentity(after, styles)) delta[key] = after;
   }
 
   // An emptied container has no `children` to compare, but an EMPTY list is the honest actual:
@@ -397,7 +422,7 @@ function diffNode(
   const actualChildren = actual.children ?? (emptied.has(actual.id) ? [] : undefined);
   if (actualChildren) {
     const nested = reference.children
-      ? diffChildren(reference.children, actualChildren, instanceId, emptied)
+      ? diffChildren(reference.children, actualChildren, instanceId, emptied, styles)
       : null;
     if (nested === null) delta.children = actualChildren;
     else Object.assign(out, nested);
