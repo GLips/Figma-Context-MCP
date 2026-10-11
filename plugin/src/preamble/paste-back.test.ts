@@ -117,3 +117,29 @@ test("a word equal to the read still lands when the same call changes its contex
   await flcm.render({ id: text.id, textStyle: { fontFamily: "Inter", fontWeight: 700 } });
   assert.deepEqual((await live(text)).fontName, { family: "Inter", style: "Bold" });
 });
+
+test("edit and editMany given words copied from a read change nothing", async () => {
+  const { inst, state } = await chipOnHolder();
+  const before = await state();
+  const { id, type, children, readOnlySource, ...words } = (await flcm.get(inst)).node as any;
+  // The Label sublayer: its echoed binding would be refused as a new one, and its echoed values
+  // would pin inherited values as overrides.
+  const { id: label, type: _, readOnlySource: __, ...echoed } = children[1];
+  await flcm.edit(inst, words);
+  await flcm.edit(label, echoed);
+  await flcm.editMany([{ id: label, ...echoed }]);
+  assert.equal(await state(), before);
+});
+
+// A written textStyle sets the whole node, so on run-styled text a base word restates only beside
+// the runs it is the base of: alone, or beside new text, it is a reset.
+test("a run-styled text's base style restates only beside its own runs", async () => {
+  const figma = createFigmaMock();
+  const live = (target: { id: string }) => figma.getNodeByIdAsync(target.id) as Promise<any>;
+  const text = await flcm.render({ type: "TEXT", text: "Hello **World**" });
+  const { textStyle, text: runs } = (await flcm.get(text)).node as any;
+  await flcm.edit(text, { text: runs, textStyle });
+  assert.equal((await live(text)).fontName, figma.mixed);
+  await flcm.edit(text, { textStyle: { fontFamily: textStyle.fontFamily, fontWeight: textStyle.fontWeight } });
+  assert.deepEqual((await live(text)).fontName, { family: "Inter", style: "Regular" });
+});

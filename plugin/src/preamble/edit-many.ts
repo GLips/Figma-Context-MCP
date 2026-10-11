@@ -33,8 +33,9 @@ import { enterMutatingVerb } from "./mutation-lock.js";
 import { assertNodeStillOnCanvas } from "./freshness.js";
 import { mintHandle, resolvePercents, beginRenderWalk, BatchLayoutDeltas } from "./bridge.js";
 import { showValue } from "./validate.js";
+import { createStandingState } from "./standing-state.js";
 import {
-  EditPlan, rejectNonDeltaWords, compileEditPlan, loadEditResources, assertEditPlanLands, gateEditResources,
+  EditPlan, rejectNonDeltaWords, compileEditPlan, restatedEditPlan, loadEditResources, assertEditPlanLands, gateEditResources,
   openEditPlanApply, applyEditPlanWrites, settleEditPlanSizes, settleEditPlanPositions,
 } from "./edit-plan.js";
 import {
@@ -57,7 +58,8 @@ const SUBJECT = "flcm.editMany";
  * an ordinary edit delta through edit's own gate, so the two verbs cannot grow apart — there is no
  * per-entry allow-list here to fall out of step with the edit vocabulary.
  */
-interface BatchEntry { id: string; changes: EditDelta }
+// `restated`: every authored word equals the node's standing state, so the entry writes nothing.
+interface BatchEntry { id: string; changes: EditDelta; restated?: boolean }
 
 function messageOf(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
@@ -206,6 +208,26 @@ async function resolveEntryNodes(ledger: BatchLedger, batch: readonly BatchEntry
     }),
   );
   return nodes;
+}
+
+// Each entry's words against its node as it stands (standing-state.ts), so a value copied out of a
+// read changes nothing. Judged across the batch, so an entry under a parent another entry re-flows
+// keeps its parent-relative words, which the read measured against the old flow.
+async function dropRestatedWords(ledger: BatchLedger, nodes: readonly (SceneNode | undefined)[], batch: BatchEntry[]): Promise<void> {
+  const standing = createStandingState();
+  const depth = (node: BaseNode): number => node.parent ? 1 + depth(node.parent) : 0;
+  // Outermost first: one subtree read then covers every entry nested inside it.
+  const outermostFirst = batch.map((_, i) => i).filter(i => !ledger.failed(i)).sort((a, b) => depth(nodes[a]!) - depth(nodes[b]!));
+  for (const i of outermostFirst) {
+    try { await standing.load(nodes[i] as SceneNode); } catch (err) { ledger.record(i, err); }
+  }
+  const live: number[] = [];
+  forEachLiveEntry(ledger, batch.length, (i) => { live.push(i); });
+  const changed = standing.changesInCall(live.map(i => ({ node: nodes[i] as SceneNode, words: batch[i].changes, parent: (nodes[i] as SceneNode).parent?.id })));
+  live.forEach((i, at) => {
+    const authored = batch[i].changes;
+    batch[i] = { ...batch[i], changes: changed[at] as EditDelta, restated: Object.keys(authored).length > 0 && Object.keys(changed[at]).length === 0 };
+  });
 }
 
 // Two entries naming one node is refused, never merged. Last-wins would silently drop a delta the
@@ -487,7 +509,7 @@ function layoutDeltasByNodeId(plans: readonly (EditPlan | undefined)[]): BatchLa
 function compileEntries(ledger: BatchLedger, nodes: readonly (SceneNode | undefined)[], batch: readonly BatchEntry[]): (EditPlan | undefined)[] {
   const compiled: (EditPlan | undefined)[] = [];
   forEachLiveEntry(ledger, batch.length, (i) => {
-    compiled[i] = compileEditPlan(nodes[i] as SceneNode, batch[i].changes, SUBJECT);
+    compiled[i] = batch[i].restated ? restatedEditPlan(nodes[i] as SceneNode) : compileEditPlan(nodes[i] as SceneNode, batch[i].changes, SUBJECT);
   });
   return compiled;
 }
@@ -540,6 +562,7 @@ export function editMany(entries: EditEntry[]): Promise<Handle[]> {
       forEachLiveEntry(ledger, raw.length, (i) => { batch[i] = compileBatchEntry(raw[i], i); });
       const nodes = await resolveEntryNodes(ledger, batch);
       assertOneEntryPerNode(ledger, nodes);
+      await dropRestatedWords(ledger, nodes, batch);
       // The HINT compiles: what each entry needs loaded if the document stays as it is. Every
       // decision they make is made again in the gate, against the document at the seal.
       const hints = compileEntries(ledger, nodes, batch);

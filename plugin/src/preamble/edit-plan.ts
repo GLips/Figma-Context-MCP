@@ -385,6 +385,12 @@ export interface EditPlan {
   pivotSpan?: { hold?: PivotHold };
 }
 
+// A delta whose every word restates the node's standing state (standing-state.ts): no change, so it
+// plans no write. Only an authored delta reaches this, so the empty-delta refusal still catches `{}`.
+export function restatedEditPlan(node: SceneNode): EditPlan {
+  return { node, patch: {} };
+}
+
 /**
  * Stage 2 — compile against the live node. Sync, and the reads it makes (a text's font, wrap, live
  * clamp) are decisions, so the compile that LANDS is the gate's (gateEditPlan); prepare's call is

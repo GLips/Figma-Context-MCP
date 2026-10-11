@@ -623,10 +623,10 @@ test("every binding refusal names the cause and writes nothing", async () => {
     edit("outside", { componentPropertyReferences: { visible: "Icon" } }),
     /is not inside a component/,
   );
-  // Inside an INSTANCE the binding belongs to the definition.
+  // Inside an INSTANCE the binding belongs to the definition. (Its echoed `text: "Label"` is no change.)
   const liveLabel = inst.findOne((n: { name: string }) => n.name === "Label");
   await assert.rejects(
-    edit(id(liveLabel.id), { componentPropertyReferences: { text: "Label" } }),
+    edit(id(liveLabel.id), { componentPropertyReferences: { visible: "Icon" } }),
     /is inside component instance .* A binding belongs to the DEFINITION/s,
   );
   // Per-type field legality, exactly as at construction — read off the LIVE node's type.

@@ -31,7 +31,7 @@ import { enterMutatingVerb } from "./mutation-lock.js";
 import { assertNodeStillOnCanvas } from "./freshness.js";
 import { mintHandle, settleSiblingOrder, resolvePercents, beginRenderWalk } from "./bridge.js";
 import {
-  rejectNonDeltaWords, compileEditPlan, loadEditResources, assertEditPlanLands, gateEditResources,
+  rejectNonDeltaWords, compileEditPlan, restatedEditPlan, loadEditResources, assertEditPlanLands, gateEditResources,
   openEditPlanApply, applyEditPlanWrites, settleEditPlanSizes, settleEditPlanPositions,
 } from "./edit-plan.js";
 import {
@@ -40,6 +40,7 @@ import {
 import {
   planComponentEdit, applyComponentDefinitionEdit, applyComponentBindingEdit, ComponentEditPlan,
 } from "./component-edit.js";
+import { createStandingState } from "./standing-state.js";
 import type { EditDelta } from "./schema.js";
 
 const SUBJECT = "flcm.edit";
@@ -62,20 +63,25 @@ export function edit(target: Target, changes: EditDelta): Promise<Handle> {
       changes = compileDeltaTrees(changes, SUBJECT);
       rejectNonDeltaWords(changes, SUBJECT);
       const node = await resolveTarget(target);
-      const hint = compileEditPlan(node, changes, SUBJECT);
+      const standing = createStandingState();
+      await standing.load(node);
+      const authored = changes;
+      changes = standing.changesInCall([{ node, words: changes }])[0] as EditDelta;
+      const restated = Object.keys(authored).length > 0 && Object.keys(changes).length === 0;
+      const hint = restated ? restatedEditPlan(node) : compileEditPlan(node, changes, SUBJECT);
       const targets = createResolvedTargets();
       const current = hint.instanceWords ? await resolveInstanceEditTargets(node, hint.instanceWords, targets) : null;
       const instance = hint.instanceWords ? planInstanceEdit(node, hint.instanceWords, current, { targets }, SUBJECT) : undefined;
       const loaded = await loadEditResources([hint, ...(instance ? instance.overrides.map((o) => o.plan) : [])], instance ? [instance.needs] : []);
-      return { node, targets, current, loaded };
+      return { node, targets, current, loaded, restated };
     },
     // Gate — every decision that reads the document, made against it as it stands at the seal:
     // the compile, the instance and component halves, and the root's own layout gate, which reads
     // the container this delta LEAVES BEHIND (a swap re-points the instance before its layout
     // words land — `becomesLayoutMode`).
-    ({ node, targets, current, loaded }) => {
+    ({ node, targets, current, loaded, restated }) => {
       assertNodeStillOnCanvas(node, SUBJECT);
-      const plan = compileEditPlan(node, changes, SUBJECT);
+      const plan = restated ? restatedEditPlan(node) : compileEditPlan(node, changes, SUBJECT);
       const planning = { targets, fonts: loaded.fonts };
       const instance: InstanceEditPlan | undefined = plan.instanceWords ? planInstanceEdit(node, plan.instanceWords, current, planning, SUBJECT) : undefined;
       const component: ComponentEditPlan | undefined = plan.componentWords ? planComponentEdit(node, plan.componentWords, SUBJECT) : undefined;
