@@ -44,7 +44,7 @@ import {
   planAddedDefinitions, planComponentDefinitionEdit, prepareComponentBindingEdit, applyComponentDefinitionEdit, applyComponentBindingEdit,
   ComponentEditPlan, ComponentBindingEditPlan, AddedDefinition, AddedPropertyBinder,
 } from "./component-edit.js";
-import { componentAncestorOf, describeBinder } from "./component.js";
+import { componentAncestorOf, describeBinder, readableComponentOf } from "./component.js";
 import { definitionOwnerOf } from "./identity.js";
 import type { EditDelta, EditEntry } from "./schema.js";
 
@@ -344,7 +344,7 @@ function projectedBinderValue(field: string, plan: EditPlan, instance: InstanceE
   const node = plan.node as any;
   if (field === "visible") return (plan.patch.visible ?? node.visible) !== false;
   if (field === "text") return plan.patch.runs ? plan.patch.runs.map((run) => run.text).join("") : plan.patch.text ?? node.characters;
-  return (instance ? instance.becomes : main).id;
+  return readableComponentOf(instance ? instance.becomes : main, node, SUBJECT).id;
 }
 
 /**
@@ -384,7 +384,7 @@ function assertNoDefinitionBindingCrossReference(
         new Error(
           named.what + " of " + JSON.stringify(declarerPlan.node.name) + " (id " + JSON.stringify(declarerPlan.node.id) +
             "), whose `propertyDefinitions` entry [" + declarer + "] is changing in the same batch — the two would have to run in an order this call never states. " +
-            "Split them: declare the properties in one call, " + named.instead + " in the next.",
+            "Split them: rename or delete in one call, " + named.instead + " in the next.",
         ),
       );
     }
@@ -400,7 +400,9 @@ function assertNoDefinitionBindingCrossReference(
 function definitionsNamedByEntry(
   plan: EditPlan, component: ComponentEditPlan | undefined, instance: InstanceEditPlan | undefined,
 ): { owner: any; what: string; instead: string } | undefined {
-  if (component && component.binding) {
+  // A binding to a property this batch ADDS names nothing on the canvas, so no rename or delete can
+  // move it — only a write resolved against a live name depends on the order.
+  if (component && component.binding && component.binding.writes.some((write) => !write.add)) {
     const around = componentAncestorOf(plan.node);
     return around ? { owner: definitionOwnerOf(around), what: "binds a layer to a property", instead: "bind the layers" } : undefined;
   }

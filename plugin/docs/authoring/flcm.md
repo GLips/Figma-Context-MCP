@@ -773,7 +773,7 @@ await flcm.component(
 
 - **One field per type, on the node that owns it:** `boolean` → `visible` (any node), `text` → `text` (`TEXT`), `instance_swap` → `componentId` (`INSTANCE`), `slot` → `slot` (`FRAME`). A field on the wrong node type fails at the verb; an undeclared name fails loud listing the declared ones, a mismatched type fails loud.
 - **A property's default IS its bound layer's content**: the text it shows, its `visible` (unnamed is `true`), its instance's component. Figma keeps the two identical in a main component, so there is no `defaultValue`: to start instances somewhere else, author the layer that way. Promoting existing layers keeps their content.
-- **Every property is bound in the same call.** One nothing binds is refused. Several binders must show the same content; if they differ, the call is refused naming each layer and its value, so make them agree in that call.
+- **Every property is bound in the same call.** One nothing binds is refused. To promote existing layers, pass the frame as data and bind its live children (`{ id: frame, children: [{ id: layer, componentPropertyReferences: … }] }`, listing every child to keep their order), or promote the bare frame and add + bind with `editMany` (below). Several binders must show the same content; if they differ, the call is refused naming each layer and its value, so make them agree in that call.
 - **A slot IS a frame you author.** The bound frame stays in the definition, placeholder children and all, and every instance shows it as a SLOT holding that content until it fills it (below). A slot no frame binds is refused (rather than Figma's unpositioned 100×100 box); two frames on one slot are refused: a slot is one hole.
 - **`variant` is not a type.** Axes come from folding components into a set (`flcm.variants`).
 - **A binding means something only with a component behind it**: this call, or an insert into / an edit of a layer inside a live component (below). Under `render`, or an insert or edit anywhere else, it is refused naming the word.
@@ -817,7 +817,7 @@ await flcm.edit(comp, {
   },
 });
 await flcm.editMany([
-  { id: comp, propertyDefinitions: { Size: { type: "text" } } },          // a new name → ADDS
+  { id: comp.id, propertyDefinitions: { Size: { type: "text" } } },       // a new name → ADDS
   { id: sizeLabelId, componentPropertyReferences: { text: "Size" } },     // …bound in the same batch
 ]);
 ```
@@ -839,6 +839,7 @@ await flcm.edit(titleId, { componentPropertyReferences: { text: "Heading" } }); 
 await flcm.edit(titleId, { componentPropertyReferences: { visible: null } });     // unbind
 ```
 
+- **Binding to an existing property makes the layer show that property's default**: Figma writes it in, replacing what the layer showed. To keep a layer's own content as the value, add the property bound to it (above).
 - The node must be inside a COMPONENT or a set's variant: inside an INSTANCE it is refused naming the instance, and outside any component there is no property to point at.
 - Field legality is the compiler's, read off the live node's type. Bare names resolve to Figma's suffixed ones when unambiguous.
 - **Unbinding the only frame of a slot property is refused**: delete the property (`{ Name: null }`), which frees the frame. In a SET the count is per VARIANT; a sibling variant's frame is no spare.
@@ -849,7 +850,7 @@ await flcm.edit(titleId, { componentPropertyReferences: { visible: null } });   
 `append`/`prepend`/`insertBefore`/`insertAfter` into a component or its sublayers accept a plain node spec carrying `componentPropertyReferences`.
 
 ```js
-await flcm.append(comp, { type: "TEXT", text: "Sub", componentPropertyReferences: { text: "Label" } });
+await flcm.append(comp, { type: "TEXT", componentPropertyReferences: { text: "Label" } });   // shows Label's default
 await flcm.append(comp, { type: "FRAME", width: 240, height: 80, componentPropertyReferences: { slot: "Content" } });
 ```
 

@@ -171,6 +171,25 @@ test("a derived instance_swap default is the variant the bound instance actually
   assert.equal(definitions[full].defaultValue, comp.children[0].mainComponent.id);
 });
 
+// The live twin: an existing instance re-pointed to another variant in the promoting call itself.
+test("a live bound instance that changes variant in the promotion defaults to the variant it lands on", async () => {
+  const figma = createFigmaMock();
+  const small = await component({ type: "FRAME", width: 10, height: 10 }, { name: "Icon" });
+  const large = await component({ type: "FRAME", width: 20, height: 20 }, { name: "Icon" });
+  const set = await variants(
+    [{ component: small, variant: { Size: "S" } }, { component: large, variant: { Size: "L" } }],
+    { name: "Icon" },
+  );
+  const row = await render({ type: "FRAME", width: 40, height: 40, children: [{ type: "INSTANCE", componentId: set }] });
+  const out = await component(
+    { id: row.id, children: [{ id: row.children![0].id, componentProperties: { Size: "L" }, componentPropertyReferences: { componentId: "Icon" } }] },
+    { propertyDefinitions: { Icon: { type: "instance_swap" } } },
+  );
+  const comp = await figma.getNodeByIdAsync(out.id);
+  assert.equal(comp.children[0].mainComponent.name, "Size=L");
+  assert.equal(Object.values<any>(comp.componentPropertyDefinitions)[0].defaultValue, comp.children[0].mainComponent.id);
+});
+
 test("several binders that show the same content share it as the default", async () => {
   const figma = createFigmaMock();
   const out = await component(
@@ -386,7 +405,7 @@ test("what a component call refuses, with zero writes", async () => {
   );
   await assert.rejects(
     component(plain, { propertyDefinitions: { Label: { type: "text" } } }),
-    /nothing in this call binds/,
+    /nothing in this call binds "Label".*a bare target has no layer to bind.*flcm\.editMany/s,
   );
   assert.equal(figma.currentPage.children.length, before + 2); // only the instance and the plain frame landed
 });

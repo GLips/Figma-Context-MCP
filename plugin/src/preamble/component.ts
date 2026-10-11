@@ -271,7 +271,7 @@ function bindersOf(bound: readonly BoundWriteNode[], definition: AuthoredDefinit
 // a default stated anywhere else would overwrite the layer's real content (an agent promoting
 // existing links typed "Link 1"… and lost them). The layer is the one place the value lives.
 function resolveDefaults(
-  definitions: readonly AuthoredDefinition[], bound: readonly BoundWriteNode[], plans: InstancePlans, live?: RenderResources["live"],
+  definitions: readonly AuthoredDefinition[], bound: readonly BoundWriteNode[], plans: InstancePlans, live: RenderResources["live"], targetForm: boolean,
 ): PreparedDefinition[] {
   return definitions.map((definition) => {
     const at = SUBJECT + " options.propertyDefinitions[" + JSON.stringify(definition.name) + "]";
@@ -281,7 +281,7 @@ function resolveDefaults(
       layer: describeBinder(wn.name ?? live?.get(wn)?.node.name, wn.sourcePath!),
       value: binderValue(definition, wn, plans, live),
     }));
-    return { name: definition.name, figmaType: definition.figmaType, defaultValue: agreedDefault(definition, binders, at) };
+    return { name: definition.name, figmaType: definition.figmaType, defaultValue: agreedDefault(definition, binders, at, targetForm ? promoteThenBind(definition) : undefined) };
   });
 }
 
@@ -296,7 +296,20 @@ function binderValue(definition: AuthoredDefinition, wn: WriteNode, plans: Insta
   // the node names a SET and picks a member with `componentProperties`, re-resolving the target here
   // would land on the set's DEFAULT variant and the definition's default would disagree with the very
   // node it was derived from.
-  return (plans.get(wn)?.component ?? live?.get(wn)?.component).id;
+  const liveNode = live?.get(wn);
+  return readableComponentOf(plans.get(wn)?.component ?? liveNode?.component, liveNode?.node, wn.sourcePath!).id;
+}
+
+/**
+ * A bound instance's component, or a refusal naming the instance: a live one whose main sits in a
+ * library the file can't reach has none to read (getMainComponentAsync answers null), so there is no
+ * value to make its property's default. Shared with editMany's binders.
+ */
+export function readableComponentOf(component: any, node: any, at: string): any {
+  if (component) return component;
+  throw new Error(
+    at + ": " + describeNodeIdentity(node) + " has no readable main component — it comes from a library the file can't reach right now, so there is no component to read its instance_swap default from.",
+  );
 }
 
 /**
@@ -319,6 +332,15 @@ export function agreedDefault(
       binders.map((b) => b.layer + " is " + JSON.stringify(b.value)).join(", ") +
       ". Binding writes the property's one default into every one of them, so make them agree in this call (set the same " + FIELD_FOR_TYPE[definition.type] + " on each), or bind just one.",
   );
+}
+
+// The target form carries no authored tree, so it has nowhere to write a binding. Both ways out bind
+// live layers without retyping their content.
+function promoteThenBind(definition: AuthoredDefinition): string {
+  const binding = "componentPropertyReferences: { " + FIELD_FOR_TYPE[definition.type] + ": " + JSON.stringify(definition.name) + " }";
+  return "a bare target has no layer to bind. Pass the frame as data and bind its live layer — flcm.component({ id: frame, children: [{ id: layer, " + binding +
+    " }] }, …), listing every child to keep their order — or promote it bare and then add and bind in one flcm.editMany: [{ id: component.id, propertyDefinitions: { " +
+    JSON.stringify(definition.name) + ": { type: " + JSON.stringify(definition.type) + " } } }, { id: layer, " + binding + " }].";
 }
 
 /** A binder as a refusal names it: its layer name when it has one, and where it sits in the call. */
@@ -494,7 +516,9 @@ export function component(specOrTarget: NodeSpec | Target, options?: ComponentOp
     const live = resources.live?.get(prepared.tree);
     if (live) assertPromotable(live.node);
     return { kind: "built", tree: prepared.tree, resources,
-      definitions: resolveDefaults(prepared.options.definitions, prepared.bound, resources.instances, resources.live), options: prepared.options };
+      definitions: resolveDefaults(prepared.options.definitions, prepared.bound, resources.instances, resources.live,
+        // A live root with no authored children: nothing in the call can carry a binding.
+        Boolean(prepared.tree.liveId) && !prepared.tree.children?.length), options: prepared.options };
   }, applyBuiltComponent);
 }
 

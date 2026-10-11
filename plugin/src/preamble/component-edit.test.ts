@@ -399,6 +399,24 @@ test("editMany refuses a batch that both renames a property and binds to it, nam
   assert.deepEqual(title.componentPropertyReferences, {});
 });
 
+test("a batch may delete one property and add-and-bind another", async () => {
+  const { comp, icon, label } = await chipComponent();
+  await editMany([
+    { id: comp.id, propertyDefinitions: { Icon: null, Shown: { type: "boolean" } } },
+    { id: icon.id, componentPropertyReferences: { visible: "Shown" } },
+  ]);
+  assert.equal(fullName(comp, "Icon"), undefined);
+  assert.equal(icon.componentPropertyReferences.visible, fullName(comp, "Shown"));
+  // A binder that ALSO names a live property the batch renames is still the ordering hazard.
+  await assert.rejects(
+    editMany([
+      { id: comp.id, propertyDefinitions: { Label: { name: "Caption" }, Extra: { type: "boolean" } } },
+      { id: label.id, componentPropertyReferences: { visible: "Extra", text: "Label" } },
+    ]),
+    /\[1\].*Split them: rename or delete in one call/s,
+  );
+});
+
 test("an added property's binders must agree, and each is named when they don't", async () => {
   const { comp, label, icon } = await chipComponent();
   await edit(id(icon.id), { visible: false });
@@ -449,7 +467,7 @@ test("every definition refusal names the cause and writes nothing", async () => 
   // A type can't change — Figma has no such call.
   await assert.rejects(
     edit(id(comp.id), { propertyDefinitions: { Label: { type: "boolean" } } }),
-    /is "text" and Figma can't change a property's type/,
+    /is "text" and Figma can't change a property's type\. Delete it in one call .* in ONE flcm\.editMany/s,
   );
   // A slot IS a frame, so it is made by inserting one, never declared on its own.
   await assert.rejects(
@@ -470,6 +488,11 @@ test("every definition refusal names the cause and writes nothing", async () => 
   await assert.rejects(
     edit(id(comp.id), { propertyDefinitions: { Label: { defaultValue: "Save" } as any } }),
     /unknown prop "defaultValue".*A property's default is its bound layer's content/,
+  );
+  // `variantOptions` restates a set's axis, and nothing else.
+  await assert.rejects(
+    edit(id(comp.id), { propertyDefinitions: { Label: { type: "text", variantOptions: ["x"] } } }),
+    /`variantOptions` belongs to a set's variant axis/,
   );
   // An entry that names nothing at all.
   await assert.rejects(

@@ -577,8 +577,8 @@ const COMPONENT_DEFINITION_FIELDS = {
   description: prop(z.string(), "Shown beside the component in Figma's assets panel."),
   propertyDefinitions: prop(
     z.custom<ComponentPropertyDefinitionEdits>(),
-    "COMPONENT / COMPONENT_SET, under edit: add (bound in the same editMany), rename or delete a property. See Changing a component.",
-    "{ [name]: { type?, name? } | null }",
+    "COMPONENT / COMPONENT_SET, under edit: add (bound in the same editMany), rename or delete a property; a read's own entry restates as a no-op. See Changing a component.",
+    "{ [name]: { type?, name?, variantOptions? } | null }",
   ),
 };
 

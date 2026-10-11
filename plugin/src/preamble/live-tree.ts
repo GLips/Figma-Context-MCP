@@ -111,7 +111,7 @@ export function gateLiveTree(live: LoadedLiveTree, resources: RenderResources): 
         wn.runs = plan?.patch.runs;
       }
     }
-    plans.set(wn, { node, component: instance?.swapTo ?? current, place(parent, place, ctx) {
+    plans.set(wn, { node, component: instance?.becomes ?? current, place(parent, place, ctx) {
       const fail = beginMutatingApply(at, node);
       try {
         for (let p: BaseNode | null = parent; p; p = p.parent) if (p === node) throw new Error(at + ": a node cannot move inside itself or its descendant.");

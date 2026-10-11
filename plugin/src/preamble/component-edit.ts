@@ -190,6 +190,9 @@ function planChangedDefinition(
 ): string | undefined {
   if (definition.type === "VARIANT" && entry.name == null && restatesVariantAxis(definition, entry)) return undefined;
   assertNotVariantAxis(definition, full, at, node);
+  if (entry.variantOptions != null) {
+    throw new Error(at + ": `variantOptions` belongs to a set's variant axis, and " + JSON.stringify(bareName(full)) + " is " + JSON.stringify(PROPERTY_TYPE_WORD_FOR[definition.type] || definition.type) + ".");
+  }
   if (entry.type != null) {
     const figmaType = typeof entry.type === "string" ? own(PROPERTY_TYPES, entry.type) : undefined;
     if (!figmaType) {
@@ -198,8 +201,8 @@ function planChangedDefinition(
     if (figmaType !== definition.type) {
       throw new Error(
         at + ": " + JSON.stringify(bareName(full)) + " is " + JSON.stringify(PROPERTY_TYPE_WORD_FOR[definition.type] || definition.type) +
-          " and Figma can't change a property's type. Delete it and declare the new one: { " + JSON.stringify(bareName(full)) + ": null, " +
-          JSON.stringify(bareName(full)) + ": { type: " + JSON.stringify(entry.type) + " } } in two calls, since one object can't carry the key twice.",
+          " and Figma can't change a property's type. Delete it in one call ({ " + JSON.stringify(bareName(full)) + ": null }), then " +
+          bindInSameBatch(bareName(full), entry.type),
       );
     }
   }
