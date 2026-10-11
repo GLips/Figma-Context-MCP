@@ -433,11 +433,11 @@ export interface NodeSnapshot {
    */
   ownSize?: SnapshotSize;
   /**
-   * The node's own top-left corner in its PARENT's frame — the plugin API's
-   * `node.x`/`node.y`. Like `ownSize`, this names the node rather than its
-   * shadow: the page-space AABB delta puts a rotated node's `left`/`top` at a
-   * corner the node doesn't have. Absent → consumers fall back to the AABB
-   * delta.
+   * The node's transform translation in its PARENT's frame — the plugin API's
+   * `node.x`/`node.y`, the corner Figma's own rotation turns about. Emitted
+   * `left`/`top` are the unrotated corner derived from it (core's
+   * `unrotatedCorner`, since flcm turns about the centre). Absent → consumers
+   * recover that corner from the AABB centre less half the own size.
    */
   ownOrigin?: SnapshotPoint;
   minWidth?: number | null;

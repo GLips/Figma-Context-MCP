@@ -9,7 +9,7 @@ import { normalizePathData, normalizeVectorPaths } from "./path.js";
 import type { WriteNode } from "./ir.js";
 import { treeNodes } from "./compile-tree.js";
 import { resolveTarget, createResolvedTargets } from "./read.js";
-import { compileEditPlan, loadEditResources, assertEditPlanLands, applyEditPlanWrites, settleEditPlanSizes, settleEditPlanPositions } from "./edit-plan.js";
+import { compileEditPlan, loadEditResources, assertEditPlanLands, applyEditPlanWrites, settleEditPlanSizes, settleEditPlanPositions, holdEditPlanPivot } from "./edit-plan.js";
 import { resolveInstanceEditTargets, planInstanceEdit, applyInstanceRetarget, applyInstanceOverrides } from "./instance.js";
 import { planComponentEdit, applyComponentDefinitionEdit, applyComponentBindingEdit } from "./component-edit.js";
 import { assertNodeStillOnCanvas } from "./freshness.js";
@@ -118,6 +118,8 @@ export function gateLiveTree(live: LoadedLiveTree, resources: RenderResources): 
         const words = assertLiveNodeLandsUnderParent(node, parent, at, plan?.patch.layout);
         growImplicitGridRows(parent, words);
         place(node);
+        // Before anything below can resize the node — retarget, attached children, the plan's writes.
+        const pivotHold = plan ? holdEditPlanPivot(plan) : holdUnrotatedCorner(node);
         if (instance) applyInstanceRetarget(fail, node, instance);
         if (component?.definitions) applyComponentDefinitionEdit(fail, node, component.definitions);
         if (pathData !== undefined && node.type === "VECTOR") applyVectorPath(node, pathData);
@@ -129,8 +131,6 @@ export function gateLiveTree(live: LoadedLiveTree, resources: RenderResources): 
           ctx.bindings.push({ node, refs: wn.componentPropertyReferences });
         }
         if ("appendChild" in node) for (const child of wn.children ?? []) attachBuiltChild(node, child, ctx, liveParentAttachFacts(node, child.sourcePath ?? at), c => node.appendChild(c));
-        // A plan's write span already holds the unrotated corner; without one, the move opens its own.
-        const pivotHold = plan ? undefined : holdUnrotatedCorner(node);
         resettleMovedNode(node, words, ctx);
         if (plan) { settleEditPlanSizes(fail, plan); settleEditPlanPositions(fail, plan); }
         else settleCentrePivot(node, pivotHold, words);

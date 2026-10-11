@@ -45,7 +45,7 @@ import { resolveFont, resolveFontStrict, fontDivergences, textStyleFont, FontMap
 import { writeKey, identityOf, isSlotHole, describeNodeIdentity } from "./identity.js";
 import { pixelRound, convertSizing } from "@framelink/core";
 import { MutatingVerbError, NodeBuildError } from "./verb-error.js";
-import { unrotatedCornerOf, settleCentrePivot } from "./pivot.js";
+import { unrotatedCornerOf, settleCentrePivot, type PivotHold } from "./pivot.js";
 
 // The resource half of the walk context — what an applier resolves against, split out so an exported
 // applier demands only what it reads: `fonts` is the preloaded FontMap, `images` the url → base64 map
@@ -60,7 +60,14 @@ export interface RenderResources {
   // Instance plans are keyed by the private IR node that the build walk consumes.
   instances: InstancePlans;
   siblingOrder?: Map<any, Map<any, number>>;
+  // Turned nodes waiting to pivot about their centre once their size and position are final —
+  // settled by resolvePercents. Shared across the verb's walks like siblingOrder, because an
+  // instance edit's own size only settles after its overrides, which build in a later walk.
+  pivots?: PivotSettlement[];
 }
+
+/** One node's deferred centre pivot: its span's opening hold and the delta it applied, if any. */
+export interface PivotSettlement { node: any; hold?: PivotHold; layout?: WriteLayout }
 
 export type InstancePlans = ReadonlyMap<WriteNode, InstancePlan>;
 
@@ -84,9 +91,7 @@ export interface RenderCtx extends RenderResources {
   exposures: ExposureWrite[];
   keys: Set<string>;
   pending: PendingResolve[];
-  // Every node the walk built turned, waiting for resolvePercents to pivot it about its centre once
-  // its position and size are final (see pivot.ts).
-  pivots: any[];
+  pivots: PivotSettlement[];
   // Every node the walk built that carries a `componentPropertyReferences` bag, paired with it.
   // Collected DURING the walk along with keys because only the walk knows which live node a compiled
   // node became — a built→live pairing recovered afterwards would have to guess past falsy children
@@ -552,7 +557,7 @@ function applyLeafSize(node: any, layout: WriteLayout, tokens: ResolvedTokens | 
  * it (see RenderCtx.bindings).
  */
 export function beginRenderWalk(resources: RenderResources, opts?: { bindings?: boolean }): RenderCtx {
-  const ctx: RenderCtx = { ...resources, siblingOrder: resources.siblingOrder ??= new Map(), keys: new Set(), pending: [], pivots: [], exposures: [] };
+  const ctx: RenderCtx = { ...resources, siblingOrder: resources.siblingOrder ??= new Map(), keys: new Set(), pending: [], pivots: resources.pivots ??= [], exposures: [] };
   if (opts && opts.bindings) ctx.bindings = [];
   return ctx;
 }
@@ -576,7 +581,7 @@ export function resolvePercents(ctx: RenderCtx): void {
   for (const p of ctx.pending) resolvePercentLayout(p.parent, p.node, p.layout);
   // Last: the pivot reads the final size and position. Emptied, because a second pass would turn
   // the same nodes again.
-  for (const node of ctx.pivots.splice(0)) settleCentrePivot(node);
+  for (const p of ctx.pivots.splice(0)) settleCentrePivot(p.node, p.hold, p.layout);
 }
 
 function depthOf(node: any): number {
@@ -1430,7 +1435,7 @@ function buildCompiledNode(wn: WriteNode, ctx: RenderCtx, enclosingWidthBounded?
     });
   }
   applySceneProps(node, wn);
-  if (wn.rotation) ctx.pivots.push(node);
+  if (wn.rotation) ctx.pivots.push({ node });
   applyAnnotations(node, wn.annotations);
   stampKey(node, wn, ctx);
   if (wn.componentPropertyReferences) {

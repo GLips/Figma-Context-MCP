@@ -121,3 +121,30 @@ test("a moved or cloned rotated node lands with its unrotated box at the authore
   const copy = await figma.getNodeByIdAsync((await clone(tile.id, { left: 200, top: 100 }, "shelf")).id);
   assertNear(centreOf(copy), { x: 240, y: 120 });
 });
+
+test("a rotated hug node keeps its unrotated corner when what it hugs grows", async () => {
+  const figma: any = createFigmaMock();
+  // A moved live node that gains a child, with no other words — the move alone opens the span.
+  await render(board({ type: "FRAME", key: "chip", left: 100, top: 50, rotation: 30, layout: { mode: "row" },
+    children: [{ type: "RECTANGLE", key: "a", width: 40, height: 40 }] }));
+  const chip = await liveNode("chip");
+  await render({ id: chip.id, children: [{ id: (await liveNode("a")).id }, { type: "RECTANGLE", width: 40, height: 40 }] } as never);
+  assert.deepEqual(await measure("chip"), { x: 100, y: 50, width: 80, height: 40 });
+
+  // An instance resized by its own component property and by an override: both land after the
+  // edit's layout stages, and the pivot waits for them.
+  const built = await render({ type: "FRAME", key: "src", layout: { mode: "row", padding: 8 },
+    children: [{ type: "TEXT", text: "Label", key: "label", textStyle: { fontSize: 12 } }] });
+  const comp = figma.createComponentFromNode(await figma.getNodeByIdAsync(built.id));
+  const label = await liveNode("label");
+  label.componentPropertyReferences = { characters: comp.addComponentProperty("Label", "TEXT", "Label") };
+  await render(board({ type: "INSTANCE", componentId: comp.id, key: "pill", left: 100, top: 50, rotation: 30 }));
+  const pill = await liveNode("pill");
+  const width = pill.width;
+  await edit(pill.id, { componentProperties: { Label: "A much much longer label" } } as never);
+  assert.ok(pill.width > width);
+  assert.deepEqual(await measure(pill.id), { x: 100, y: 50, width: pill.width, height: pill.height });
+  await edit(pill.id, { componentProperties: { Label: "Label" } } as never);
+  await edit(pill.id, { overrides: { [label.id]: { text: "A much much longer label" } } } as never);
+  assert.deepEqual(await measure(pill.id), { x: 100, y: 50, width: pill.width, height: pill.height });
+});

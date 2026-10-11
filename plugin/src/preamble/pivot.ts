@@ -23,18 +23,20 @@ export function isPlacedByFlow(node: any): boolean {
 }
 
 // Where the unrotated corner sits relative to the translation: the centre is translation + M·half,
-// and the unrotated corner is centre - half, so the offset is (M - I)·half. Read off the live matrix
-// rather than `rotation`, so a flipped node pivots on its true centre too.
+// and the unrotated corner is centre - half, so the offset is (M - I)·half, M being Figma's
+// [[cos, sin], [-sin, cos]] for `rotation`. Built from `rotation`, not the live matrix: the read side
+// (core's unrotatedCorner) only has `rotation`, and a flip hides in the matrix as a rotation of 0 or
+// 180 — pivoting on the matrix would put read and write on different corners, and a pasted-back
+// read would walk the node by its height.
 function cornerOffsetOf(node: any): Point {
-  const [[a, b], [c, d]] = node.relativeTransform;
+  const radians = (node.rotation * Math.PI) / 180;
+  const cos = Math.cos(radians), sin = Math.sin(radians);
   const hw = node.width / 2, hh = node.height / 2;
-  return { x: (a - 1) * hw + b * hh, y: c * hw + (d - 1) * hh };
+  return { x: (cos - 1) * hw + sin * hh, y: -sin * hw + (cos - 1) * hh };
 }
 
 function isTurned(node: any): boolean {
-  if (!("relativeTransform" in node)) return false;
-  const [[a, b], [c, d]] = node.relativeTransform;
-  return a !== 1 || b !== 0 || c !== 0 || d !== 1;
+  return typeof node.rotation === "number" && node.rotation !== 0;
 }
 
 /** The node's unrotated top-left in its parent's frame — what `left`/`top` mean on both read and write. */

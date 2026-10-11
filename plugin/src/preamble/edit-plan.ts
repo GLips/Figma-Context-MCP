@@ -381,8 +381,8 @@ export interface EditPlan {
   instanceWords?: InstanceEditWords;
   /** The COMPONENT half, still RAW — planned by component-edit.ts in the verb's gate. */
   componentWords?: ComponentEditWords;
-  /** Apply-time state: the unrotated corner stage 5a held, for stage 5c to pivot about (pivot.ts). */
-  pivotHold?: PivotHold;
+  /** Apply-time state: present once the centre-pivot span is open, with the corner it held (pivot.ts). */
+  pivotSpan?: { hold?: PivotHold };
 }
 
 /**
@@ -544,7 +544,16 @@ export function gateEditResources(loaded: LoadedResources, needs: readonly Insta
 export type EditPlanFailure = (cause: unknown) => Error;
 
 export function openEditPlanApply(verb: string, plan: EditPlan): EditPlanFailure {
-  return beginMutatingApply(verb, plan.node);
+  const fail = beginMutatingApply(verb, plan.node);
+  // Here rather than at stage 5a: an instance retarget runs between the two and can resize the node.
+  holdEditPlanPivot(plan);
+  return fail;
+}
+
+/** Open the plan's centre-pivot span, once — the caller that runs writes before stage 5a opens it early. */
+export function holdEditPlanPivot(plan: EditPlan): PivotHold | undefined {
+  plan.pivotSpan ??= { hold: holdUnrotatedCorner(plan.node) };
+  return plan.pivotSpan.hold;
 }
 
 /**
@@ -555,7 +564,10 @@ export function applyEditPlanWrites(fail: EditPlanFailure, plan: EditPlan, resou
   const { node, patch } = plan;
   try {
     // First, while the transform is still the one the node arrived with.
-    plan.pivotHold = holdUnrotatedCorner(node);
+    const hold = holdEditPlanPivot(plan);
+    // An instance's overrides land after stage 5c and can resize it, so its pivot waits for the
+    // verb's resolvePercents, which runs after them.
+    if (plan.instanceWords) (resources.pivots ??= []).push({ node, hold, layout: patch.layout });
     applyPaint(node, patch, resources);
     applySceneProps(node, patch);
     applyAnnotations(node, patch.annotations);
@@ -589,10 +601,10 @@ export function settleEditPlanSizes(fail: EditPlanFailure, { node, patch }: Edit
  * size and the node's own, then the centre pivot, which reads the final box. Dead last, so in a
  * batch they measure a canvas where every entry's sizes have already settled.
  */
-export function settleEditPlanPositions(fail: EditPlanFailure, { node, patch, pivotHold }: EditPlan): void {
+export function settleEditPlanPositions(fail: EditPlanFailure, { node, patch, pivotSpan, instanceWords }: EditPlan): void {
   try {
     if (patch.layout) settleLiveNodePercentPosition(node, patch.layout);
-    settleCentrePivot(node, pivotHold, patch.layout);
+    if (!instanceWords) settleCentrePivot(node, pivotSpan?.hold, patch.layout);
   } catch (cause) {
     throw fail(cause);
   }
