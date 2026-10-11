@@ -8,6 +8,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
 import { createServer } from "~/mcp/index.js";
 import { PluginBridge, type BridgeRequest } from "~/commercial/plugin-bridge/bridge.js";
+import { APPROVAL_WAIT_MS } from "~/commercial/plugin-bridge/await-approval.js";
 import { createTestWriteAccess, TEST_AUTHORIZING_USER } from "./fixtures/write-access.js";
 
 class Bridge extends PluginBridge {
@@ -129,7 +130,11 @@ it.each([null, 2000, 31000])(
     );
     const text = JSON.stringify(result.content);
     expect(text).toContain("not submitted");
-    expect(text).toContain(outage === 2000 ? "retry once" : "Check that");
+    if (outage === 2000) expect(text).toContain("Wait a few seconds, then retry");
+    else {
+      expect(text).toContain("Blocked: the Framelink plugin is disconnected");
+      expect(text).toContain("retry only after the plugin is open");
+    }
     expect(h.bridge.executions).toBe(0);
     await h.close();
   },
@@ -154,6 +159,29 @@ it("the client's ordinary timeout cancels approval waiting before a late Allow",
   expect(h.bridge.signal?.aborted).toBe(true);
   h.bridge.decision = "APPROVAL_GRANTED";
   await vi.advanceTimersByTimeAsync(1000);
+  expect(h.bridge.executions).toBe(0);
+  await h.close();
+});
+
+it("an expired approval wait names the blocker, the pairing code, and that a later Allow runs nothing", async () => {
+  const h = await setup();
+  vi.useFakeTimers();
+  const call = h.client.request(
+    {
+      method: "tools/call",
+      params: { name: "figma_execute_code", arguments: { code: "return 1" } },
+    },
+    CallToolResultSchema,
+    { timeout: 300_000 },
+  );
+  await flush();
+  await vi.advanceTimersByTimeAsync(APPROVAL_WAIT_MS);
+  const text = JSON.stringify((await call).content);
+  expect(text).toContain("did not run");
+  expect(text).toContain("Blocked: session approval is pending");
+  expect(text).toContain("approves pairing code 1234");
+  expect(text).toContain("retry only after they confirm the approval");
+  expect(text).toContain("Approving later does not run this call");
   expect(h.bridge.executions).toBe(0);
   await h.close();
 });

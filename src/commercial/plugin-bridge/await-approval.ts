@@ -44,11 +44,12 @@ export async function requestUntilApproved(
   const abort = () => local.abort(signal?.reason);
   signal?.addEventListener("abort", abort, { once: true });
   if (signal?.aborted) abort();
-  const timeout = setTimeout(
-    () => local.abort(new Error("Approval wait expired; no code was submitted.")),
-    waitMs,
-  );
+  const expired = new Error("Approval wait expired; no code was submitted.");
+  const timeout = setTimeout(() => local.abort(expired), waitMs);
   let stop: (() => Promise<void>) | undefined;
+  // The timer can win the race against the deadline checks below (or cut a hung poll). Once a poll
+  // has said PENDING, that expiry is still "approval pending" and must reach the caller as such.
+  let lastPending: unknown;
   try {
     for (;;) {
       local.signal.throwIfAborted();
@@ -78,6 +79,7 @@ export async function requestUntilApproved(
       }
       if (!isPendingApproval(reply))
         throw new Error("Unexpected approval status; no code was submitted.");
+      lastPending = reply;
       if (now() >= deadline) return reply;
       stop ??= onWaiting?.();
       const delay = Math.min(pollMs, deadline - now());
@@ -85,6 +87,9 @@ export async function requestUntilApproved(
       else await pause(delay, local.signal);
       if (now() >= deadline) return reply;
     }
+  } catch (error) {
+    if (local.signal.reason === expired && lastPending !== undefined) return lastPending;
+    throw error;
   } finally {
     clearTimeout(timeout);
     signal?.removeEventListener("abort", abort);

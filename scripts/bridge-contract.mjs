@@ -1254,7 +1254,7 @@ try {
 }
 assert.match(
   goneErr.message,
-  /No Figma plugin connected/,
+  /The Framelink plugin disconnected .* This call was not submitted/,
   "with nothing connected the agent is told exactly that — not to go reinstall a plugin",
 );
 console.log("✅ A disconnect inside the handshake window leaves no false `incompatible` behind");

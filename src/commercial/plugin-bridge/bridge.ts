@@ -15,6 +15,7 @@ import {
 import type { WriteAccessNotice } from "~/commercial/entitlement/write-authorization.js";
 import type { FigmaService } from "~/services/figma.js";
 import { ApprovalStore } from "./approval-store.js";
+import { pluginDisconnectedNotSubmittedText } from "./blocked-call-guidance.js";
 import { parsePeerVersion, refuseProtocolSkew, type ProtocolCompatibility } from "./version.js";
 import { Logger } from "~/utils/logger.js";
 import { RUN_INACTIVITY_DEADLINE_MS } from "@framelink/plugin/server-deadline";
@@ -596,7 +597,7 @@ export class PluginBridge {
         this.pairingCode = null;
         this.handshaked = false;
         // Wake anything holding for a verdict that will now never arrive. The hold re-checks the
-        // socket, finds it gone, and falls through to the "No Figma plugin connected" rejection —
+        // socket, finds it gone, and falls through to the not-connected rejection —
         // which the approval wait rides out across the plugin's ~1s redial, exactly as it does for
         // any other mid-wait drop.
         this.compatibility = "checking";
@@ -824,7 +825,7 @@ export class PluginBridge {
     this.socket = null;
     // Nulling the socket makes the terminate()-driven `close` bail as "displaced", so it never runs
     // the disconnect reset — do it here, or a canvas request holding for a verdict is stranded on a
-    // promise this stop just orphaned. Waking it drops it through to "No Figma plugin connected".
+    // promise this stop just orphaned. Waking it drops it through to the not-connected rejection.
     this.compatibility = "checking";
     this.skewRefusal = null;
     this.settleVerdict();
@@ -840,7 +841,7 @@ export class PluginBridge {
       const waiting = pending.payloadType === "APPROVAL_STATUS";
       this.takePending(id)?.reject(
         new BridgeRequestError(
-          waiting ? "Plugin disconnected while checking approval; no code was submitted." : reason,
+          waiting ? pluginDisconnectedNotSubmittedText(this.disconnectedDurationMs()) : reason,
           waiting ? "not-submitted" : "unconfirmed",
           pending.phase,
         ),
@@ -918,7 +919,7 @@ export class PluginBridge {
     if (!socket || socket.readyState !== WebSocket.OPEN) {
       return Promise.reject(
         new BridgeRequestError(
-          "No Figma plugin connected. This call was not submitted. Open the Framelink plugin in Figma desktop and try again.",
+          pluginDisconnectedNotSubmittedText(this.disconnectedDurationMs()),
           "not-submitted",
         ),
       );

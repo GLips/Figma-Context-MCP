@@ -15,6 +15,10 @@ import {
   MAX_SCREENSHOT_SCALE,
   screenshotInputError,
 } from "~/commercial/plugin-bridge/screenshot-options.js";
+import {
+  approvalPendingAction,
+  pluginDisconnectedAction,
+} from "~/commercial/plugin-bridge/blocked-call-guidance.js";
 import { buildQuickStart } from "~/commercial/tools/flcm-docs/reference.js";
 import { CLI_DOCS_CHANNEL } from "~/commercial/tools/flcm-docs/channels.js";
 import { buildCommandHelp } from "~/utils/cli-help.js";
@@ -181,7 +185,7 @@ export async function runExecute(flags: ExecuteFlags, positionals: string[]): Pr
     if (outcome.kind === "refused") throw new Error(outcome.message);
     if (outcome.kind === "pending") {
       throw new Error(
-        `Approval timed out; the script did not run. Approve session ${runtime.bridge.getPairingCode()} in Figma and retry.`,
+        `The script did not run. ${approvalPendingAction(runtime.bridge.getPairingCode(), waitMs)}`,
       );
     }
     try {
@@ -194,7 +198,9 @@ export async function runExecute(flags: ExecuteFlags, positionals: string[]): Pr
       if (flags.screenshot) {
         const captured = await capturePluginScreenshot(runtime.bridge, target, options);
         if (captured.kind === "pending")
-          throw new Error("Screenshot approval timed out; no PNG was saved.");
+          throw new Error(
+            `No PNG was saved. ${approvalPendingAction(runtime.bridge.getPairingCode(), waitMs)}`,
+          );
         const screenshot = captured.reply;
         if ("errors" in screenshot) throw new Error(`Screenshot failed: ${screenshot.errors}`);
         await writeFile(flags.screenshot, Buffer.from(screenshot.image, "base64"));
@@ -251,7 +257,7 @@ function waitForPlugin(
       () =>
         finish(
           new Error(
-            "No Figma plugin connected before --wait expired. Open the Framelink plugin in the intended Figma file and retry.",
+            `Blocked: no Figma plugin connected before --wait expired, so the script was not submitted. ${pluginDisconnectedAction()}`,
           ),
         ),
       waitMs,

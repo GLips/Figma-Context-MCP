@@ -246,7 +246,9 @@ describe("saved-script CLI using production plugin services", () => {
   });
 
   it("reports approval timeout without fabricating an execution reply", async () => {
-    const finished = expect(run({ wait: 1 })).rejects.toThrow(/Approval.*(?:timed out|expired)/);
+    const finished = expect(run({ wait: 1 })).rejects.toThrow(
+      /did not run. Blocked: session approval is pending/,
+    );
     const { closed } = await plugin((frame, socket) => {
       if (frame.type === "APPROVAL_STATUS") reply(socket, frame, { type: "PENDING_APPROVAL" });
     }, false);
@@ -283,7 +285,7 @@ describe("saved-script CLI using production plugin services", () => {
 
   it("fails on connection timeout and removes its signal handlers", async () => {
     const before = process.listenerCount("SIGINT");
-    await expect(run({ wait: 0 })).rejects.toThrow("No Figma plugin connected");
+    await expect(run({ wait: 0 })).rejects.toThrow("Blocked: no Figma plugin connected");
     expect(process.listenerCount("SIGINT")).toBe(before);
     expect(stdout).toBe("");
   });

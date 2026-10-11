@@ -8,7 +8,11 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import type { PluginBridgeRuntime } from "~/commercial/plugin-bridge/index.js";
-import { isPendingApproval } from "~/commercial/plugin-bridge/await-approval.js";
+import { APPROVAL_WAIT_MS, isPendingApproval } from "~/commercial/plugin-bridge/await-approval.js";
+import {
+  approvalPendingAction,
+  pluginDisconnectedNotSubmittedText,
+} from "~/commercial/plugin-bridge/blocked-call-guidance.js";
 import {
   executePluginCode,
   capturePluginScreenshot,
@@ -67,15 +71,7 @@ export function registerCodeModeTools(
   /** A pre-submission outage uses bounded reconnect guidance; in-flight errors come from the bridge. */
   function pluginUnavailableReply(): CallToolResult | null {
     if (bridge.isPluginConnected()) return null;
-    const elapsed = bridge.disconnectedDurationMs();
-    if (elapsed !== null && elapsed < 30_000) {
-      return retryableToolReply(
-        `The Figma plugin disconnected ${Math.round(elapsed / 1000)}s ago. This call was not submitted. Allow a few seconds for reconnection, then retry once.`,
-      );
-    }
-    return retryableToolReply(
-      `No Figma plugin is connected. This call was not submitted. Check that the Framelink plugin is open in the intended Figma file and the local server is running, then retry.`,
-    );
+    return retryableToolReply(pluginDisconnectedNotSubmittedText(bridge.disconnectedDurationMs()));
   }
 
   function approvalOptions(extra: ToolExtra) {
@@ -94,12 +90,11 @@ export function registerCodeModeTools(
   /** A gate refusal proves the submitted body did not execute, including approval revoked after polling. */
   function gateResult(reply: unknown): { content: { type: "text"; text: string }[] } | null {
     if (!isPendingApproval(reply)) return null;
-    const code = bridge.getPairingCode();
     return {
       content: [
         {
           type: "text",
-          text: `Session approval was unavailable, so this call did not execute. In Figma, approve pairing code ${code}, then submit a new call. This finished call will not run after a later Allow.`,
+          text: `This call did not run. ${approvalPendingAction(bridge.getPairingCode(), APPROVAL_WAIT_MS)}`,
         },
       ],
     };
