@@ -220,7 +220,7 @@ await flcm.prepend(panel, { id: label.id, text: "Moved and edited" });
 
 No id creates. An id moves and edits that live node. This applies recursively, including new children inside moved nodes and live children inside new nodes.
 
-Placement is one undo step. Malformed input and unresolved resources fail before writing; a Figma write failure rolls the call back. A node cannot move into itself or a descendant. Figma instance sublayers cannot be moved; slot content remains open.
+Placement is one undo step. Malformed input and unresolved resources fail before writing; a Figma write failure rolls the call back. A node cannot move into itself or a descendant. Figma instance sublayers cannot be moved; slot content remains open. Slot content an enclosing component's definition supplied moves only into another slot of its own instance, where Figma copies it: use the id the move returns. To put it anywhere else, clone it.
 
 Unmentioned children are retained. remove explicitly deletes a node and its subtree. replace places a spec at a target's position and removes the original after placement succeeds. A new replacement inherits omitted placement and size; explicit props win. Replacing a node with its own id edits it without deleting it.
 

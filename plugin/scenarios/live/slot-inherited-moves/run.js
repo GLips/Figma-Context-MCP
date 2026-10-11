@@ -79,8 +79,8 @@ try {
   {
     const f = await fixture(true);
     const result = await move(f.frame, f.subject);
-    record("inherited slot→frame", "refused before writing; source keeps the tile", {
-      pass: !!result.error && await childCount(f.source) === 1 && await childCount(f.frame) === 0,
+    record("inherited slot→frame", "refused by name before writing; source keeps the tile", {
+      pass: /is inherited slot content/.test(result.error ?? "") && await childCount(f.source) === 1 && await childCount(f.frame) === 0,
       detail: result.error ?? { returnedId: result.returned.id },
     });
   }

@@ -153,3 +153,29 @@ test("slot input errors identify their path and leave the document unchanged", a
   );
   assert.deepEqual(figma.undoLog, before);
 });
+
+test("inherited slot content moves only between its own instance's slots", async () => {
+  const figma = createFigmaMock();
+  const tile = await flcm.component({ type: "FRAME", name: "Tile", width: 40, height: 40 });
+  const slot = (name: string) => ({ type: "FRAME", name, width: 100, height: 100, componentPropertyReferences: { slot: name } });
+  const host = await flcm.component(
+    { type: "FRAME", name: "Host", width: 300, height: 300, children: [slot("Source"), slot("Destination")] },
+    { propertyDefinitions: { Source: { type: "slot" }, Destination: { type: "slot" } } },
+  );
+  const filled = { type: "INSTANCE", componentId: host.id, overrides: { [host.children![0].id!]: { children: [{ type: "INSTANCE", componentId: tile.id }] } } };
+  const enclosing = await flcm.component({ type: "FRAME", name: "Enclosing", width: 400, height: 400, children: [filled] } as never);
+  const outer = await flcm.render({ type: "INSTANCE", componentId: enclosing.id, left: 500 });
+  const frame = await flcm.render({ type: "FRAME", width: 100, height: 100, left: 1000 });
+  const [source, destination] = ((await figma.getNodeByIdAsync(outer.id)) as any).children[0].children;
+  const subject = source.children[0].id;
+  const before = [...figma.undoLog];
+
+  await assert.rejects(flcm.append(frame, { id: subject }), /is inherited slot content.*flcm\.clone\(/);
+  await assert.rejects(flcm.render({ id: subject }), /is inherited slot content/);
+  assert.deepEqual(figma.undoLog, before);
+  assert.equal(source.children.length, 1);
+
+  const moved = await flcm.append(flcm.id(destination.id), { id: subject });
+  assert.equal(destination.children[0].id, moved.id);
+  assert.equal(source.children.length, 0);
+});

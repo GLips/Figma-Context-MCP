@@ -13,6 +13,11 @@
  * Only instance subtrees are indexed; stale handles occur nowhere else. Ordinary
  * containers list native children, so a node Figma lists but cannot read fails
  * alone instead of failing the index for everything around it.
+ *
+ * One edge is not an alias: moving inherited slot content into a sibling slot makes
+ * Figma copy it, and the slot's child list keeps naming the original. A compound
+ * edge whose last segment (the node's own guid) differs from the indexed node's is
+ * that retired original, so the copy reads under its own id and the old one refuses.
  */
 type Container = BaseNode & ChildrenMixin;
 interface State {
@@ -26,7 +31,7 @@ interface State {
   methods: Map<PropertyKey, (...args: unknown[]) => unknown>;
 }
 interface RecordNode { state: State; parent: RecordNode | null; children: RecordNode[] }
-interface Scope { root: State; generation: number; records: RecordNode[]; byId: Map<string, RecordNode> }
+interface Scope { root: State; generation: number; records: RecordNode[]; byId: Map<string, RecordNode>; retired: Map<string, string> }
 
 // These native operations can replace identities or change child lists. Ordinary
 // geometry/style setters stay live without rebuilding a topology index.
@@ -43,14 +48,21 @@ const API_TOPOLOGY_METHODS: ReadonlySet<string> = new Set([
   "createPage", "createSection", "createBooleanOperation", "createNodeFromSvg",
 ] satisfies (keyof PluginAPI)[]);
 
+// A node's own guid: the last segment of its id, whatever instance path leads to it.
+function guidOf(id: string): string {
+  return id.slice(id.lastIndexOf(";") + 1);
+}
+
 export function createSceneAccess(source: () => PluginAPI): { api: PluginAPI; invalidate(): void } {
   let generation = 0;
   const states = new Map<string, State>();
+  // Ids this run's placements retired, mapped to the copy that replaced each.
+  const copies = new Map<string, string>();
   let views = new WeakMap<object, State>();
   let currentApi: PluginAPI | undefined;
   function nativeApi(): PluginAPI {
     const api = source();
-    if (currentApi !== api) { currentApi = api; states.clear(); views = new WeakMap(); generation++; }
+    if (currentApi !== api) { currentApi = api; states.clear(); copies.clear(); views = new WeakMap(); generation++; }
     return api;
   }
   const invalidate = (): void => { generation++; };
@@ -99,6 +111,7 @@ export function createSceneAccess(source: () => PluginAPI): { api: PluginAPI; in
     if (root.removed) {
       scope.records = [];
       scope.byId.clear();
+      scope.retired.clear();
       scope.generation = generation;
       return;
     }
@@ -116,18 +129,23 @@ export function createSceneAccess(source: () => PluginAPI): { api: PluginAPI; in
     }
     const records: RecordNode[] = [];
     const byId = new Map<string, RecordNode>();
-    const stack: { record: RecordNode; ids: readonly SceneNode[]; next: number }[] = [];
+    const retired = new Map<string, string>();
+    const stack: { record: RecordNode; ids: readonly SceneNode[]; next: number; retired: boolean }[] = [];
     const seen = new Set<string>();
     for (const node of indexed) {
       let parent: RecordNode | null = null;
       let alias = scope.root.id;
+      let copied = false;
       if (records.length) {
         while (stack.length && stack[stack.length - 1].next === stack[stack.length - 1].ids.length) stack.pop();
         const edge = stack[stack.length - 1];
         if (!edge) throw new Error("flcm: indexed scene order exceeds the native child topology.");
         const child = edge.ids[edge.next++];
         if (child.type !== node.type) throw new Error("flcm: indexed scene order disagrees with native child types.");
-        alias = child.id;
+        // A retired original's descendants are listed under its dead path too.
+        copied = edge.retired || (child.id.startsWith("I") && guidOf(child.id) !== guidOf(node.id));
+        if (copied) retired.set(child.id, node.id);
+        alias = copied ? node.id : child.id;
         parent = edge.record;
       }
       if (seen.has(alias) || seen.has(node.id)) throw new Error("flcm: indexed scene contains an ambiguous node identity.");
@@ -139,11 +157,12 @@ export function createSceneAccess(source: () => PluginAPI): { api: PluginAPI; in
       byId.set(node.id, record);
       if (parent) parent.children.push(record);
       const children = "children" in node ? (node as Container).children : [];
-      if (children.length) stack.push({ record, ids: children, next: 0 });
+      if (children.length) stack.push({ record, ids: children, next: 0, retired: copied });
     }
     if (stack.some(edge => edge.next !== edge.ids.length)) throw new Error("flcm: this Figma host does not provide complete indexed scene access.");
     scope.records = records;
     scope.byId = byId;
+    scope.retired = retired;
     scope.generation = generation;
     for (const record of records) { record.state.scope = scope; record.state.record = record; }
   }
@@ -156,7 +175,7 @@ export function createSceneAccess(source: () => PluginAPI): { api: PluginAPI; in
       refresh(state.scope);
       if (state.record) return state.record;
     }
-    const scope = state.ownScope ??= { root: state, generation: -1, records: [], byId: new Map() };
+    const scope = state.ownScope ??= { root: state, generation: -1, records: [], byId: new Map(), retired: new Map() };
     refresh(scope);
     state.scope = scope;
     state.record = scope.records[0];
@@ -179,24 +198,52 @@ export function createSceneAccess(source: () => PluginAPI): { api: PluginAPI; in
     visit(state);
     return result;
   }
-  // Reparenting can retire an indexed compound handle while keeping the actual node.
-  // The destination's direct children are the authoritative result of append/insert.
-  // Rebind before callers settle layout or keep using previously acquired descendants.
-  function placed(state: State, key: PropertyKey, args: unknown[]): void {
+  // The children `dest` lists now, indexed from `dest` alone where handles go stale. Its own
+  // place in an enclosing index is kept, so the bounded scan doesn't cut it off from its parents.
+  function placedChildren(dest: State): State[] {
+    if (!insideInstance(dest)) return (dest.native as Container).children.map(child => stateOf(child));
+    const { scope, record } = dest;
+    const children = tree(dest, true).children.map(child => child.state);
+    if (scope && scope !== dest.ownScope) { dest.scope = scope; dest.record = record; }
+    return children;
+  }
+  // Where Figma's insertChild puts a node already in the same parent: it inserts, then drops the
+  // old entry, so an earlier sibling lands one before the index it was given.
+  function priorIndex(dest: State, key: PropertyKey, args: unknown[]): number {
+    if (key !== "insertChild") return -1;
+    const moved = viewState(args[1]);
+    if (!moved || viewState(moved.view.parent) !== dest) return -1;
+    return childViews(dest).indexOf(moved.view);
+  }
+  // Figma decides what lands. A moved indexed root retires its compound handle, and inherited slot
+  // content moved to a sibling slot becomes a copy with a new id. So the node at the written index
+  // is the result, and the moved view is rebound to it before callers settle layout or reuse
+  // descendants they acquired earlier.
+  function placed(dest: State, key: PropertyKey, args: unknown[], prior: number): void {
     if (key !== "appendChild" && key !== "insertChild") return;
-    const argument = args[key === "appendChild" ? 0 : 1];
-    const moved = argument && typeof argument === "object" ? views.get(argument) : undefined;
+    const moved = viewState(args[key === "appendChild" ? 0 : 1]);
     if (!moved) return;
-    const indexed = !!moved.scope || !!moved.ownScope;
-    if (!indexed && moved.native.id === moved.id) return;
-    const parent = state.native as BaseNode & ChildrenMixin;
-    const children = parent.children;
-    const child = children.find(child => child.id === moved.id || child.id === moved.native.id);
-    if (!child) throw new Error("flcm: placed node identity is unavailable in its destination.");
-    stateOf(child, moved.id);
+    const wasIndexed = !!moved.scope || !!moved.ownScope;
+    const children = placedChildren(dest);
+    const index = key === "appendChild" ? children.length - 1 : (args[0] as number) - (prior >= 0 && prior < (args[0] as number) ? 1 : 0);
+    const landed = children[index];
+    if (!landed || landed.native.type !== moved.native.type) throw new Error("flcm: placed node identity is unavailable in its destination.");
+    if (landed !== moved) {
+      if (landed.id !== moved.id) copies.set(moved.id, landed.id);
+      if (states.get(moved.id) === moved) states.delete(moved.id);
+      Object.assign(moved, { native: landed.native, id: landed.id, anchor: landed.anchor, scope: landed.scope, record: landed.record, ownScope: undefined });
+      if (landed.record) landed.record.state = moved;
+      states.set(landed.id, moved);
+      states.set(landed.native.id, moved);
+      return;
+    }
+    if (insideInstance(dest)) return;
     moved.scope = undefined;
     moved.record = undefined;
-    if (indexed && "findAllWithCriteria" in child) tree(moved, true);
+    if (wasIndexed && "findAllWithCriteria" in moved.native) tree(moved, true);
+  }
+  function viewState(value: unknown): State | undefined {
+    return value && typeof value === "object" ? views.get(value) : undefined;
   }
   function makeView(state: State): BaseNode {
     return new Proxy({} as BaseNode, {
@@ -235,10 +282,11 @@ export function createSceneAccess(source: () => PluginAPI): { api: PluginAPI; in
         const invoke = (...args: unknown[]) => {
           const current = live(state);
           const method = (current as unknown as Record<PropertyKey, unknown>)[key] as (...args: unknown[]) => unknown;
+          const prior = priorIndex(state, key, args);
           let result: unknown;
           try { result = Reflect.apply(method, current, args.map(unwrap)); }
           finally { if (NODE_TOPOLOGY_METHODS.has(String(key))) invalidate(); }
-          placed(state, key, args);
+          placed(state, key, args, prior);
           return result instanceof Promise ? result.then(wrap) : wrap(result);
         };
         state.methods.set(key, invoke);
@@ -269,6 +317,11 @@ export function createSceneAccess(source: () => PluginAPI): { api: PluginAPI; in
       const suffix = id.slice(id.indexOf(";") + 1);
       const currentId = (root.id.startsWith("I") ? root.id : "I" + root.id) + ";" + suffix;
       const record = scope.byId.get(currentId);
+      const copy = record ? undefined : scope.retired.get(currentId) ?? copies.get(id);
+      if (copy) {
+        throw new Error("flcm: Figma retired id " + JSON.stringify(id) + " when it copied that inherited slot content into another slot. " +
+          "Use the id the move returned: the copy is " + JSON.stringify(copy) + ".");
+      }
       if (!record || record.state.native.removed) return null;
       record.state.scope = scope;
       record.state.record = record;

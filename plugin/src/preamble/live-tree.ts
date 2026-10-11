@@ -13,17 +13,33 @@ import { compileEditPlan, loadEditResources, assertEditPlanLands, applyEditPlanW
 import { resolveInstanceEditTargets, planInstanceEdit, applyInstanceRetarget, applyInstanceOverrides } from "./instance.js";
 import { planComponentEdit, applyComponentDefinitionEdit, applyComponentBindingEdit } from "./component-edit.js";
 import { assertNodeStillOnCanvas } from "./freshness.js";
-import { childListClosingInstanceOf, writeKey } from "./identity.js";
+import { childListClosingInstanceOf, writeKey, isInheritedSlotContent, slotOwnerOf, describeNodeIdentity } from "./identity.js";
 import { assertLiveNodeLandsUnderParent, liveParentAttachFacts, attachBuiltChild, resettleMovedNode, applyVectorPath } from "./bridge.js";
 import type { RenderCtx, RenderResources } from "./bridge.js";
 import { NO_TOKENS } from "./tokens.js";
 import { growImplicitGridRows } from "./layout-native.js";
 import { holdUnrotatedCorner, settleCentrePivot } from "./pivot.js";
-import { beginMutatingApply } from "./verb-error.js";
+import { beginMutatingApply, MutatingVerbError } from "./verb-error.js";
 import type { EditDelta } from "./schema.js";
 
 function assertSceneNode(node: BaseNode): asserts node is SceneNode {
   if (node.type === "PAGE" || node.type === "DOCUMENT") throw new Error("a page or document cannot be placed as a scene node.");
+}
+
+// Inherited slot content moves only into another slot of its own instance, where Figma copies it
+// and placement returns the copy's id. Anywhere else Figma leaves a node that renders but throws on
+// every read and can't be removed, so that move is refused before it is written.
+export function assertInheritedSlotContentStays(at: string, node: SceneNode, parent: BaseNode & ChildrenMixin): void {
+  if (!isInheritedSlotContent(node)) return;
+  const owner = slotOwnerOf(node, false)!;
+  if (parent.type !== "PAGE" && slotOwnerOf(parent as SceneNode, true)?.id === owner.id) return;
+  // Already the whole pointer: the enclosing verb surfaces it as-is rather than wrapping it.
+  throw new MutatingVerbError(
+    at + ": " + describeNodeIdentity(node) + " is inherited slot content: an enclosing component's definition put it in a slot of instance " +
+      JSON.stringify(owner.name) + " (id " + JSON.stringify(owner.id) + "), not an override on the instance. Figma can move it only into another slot of " +
+      JSON.stringify(owner.name) + "; anywhere else it leaves a node that renders but can't be read or removed. To put it elsewhere, copy it with flcm.clone(" +
+      JSON.stringify(node.id) + ", destination); the slot keeps the original. Nothing was applied.",
+  );
 }
 
 export async function loadLiveTree(tree: WriteNode): Promise<LoadedLiveTree> {
@@ -112,6 +128,7 @@ export function gateLiveTree(live: LoadedLiveTree, resources: RenderResources): 
       }
     }
     plans.set(wn, { node, component: instance?.becomes ?? current, place(parent, place, ctx) {
+      assertInheritedSlotContentStays(at, node, parent);
       const fail = beginMutatingApply(at, node);
       try {
         for (let p: BaseNode | null = parent; p; p = p.parent) if (p === node) throw new Error(at + ": a node cannot move inside itself or its descendant.");

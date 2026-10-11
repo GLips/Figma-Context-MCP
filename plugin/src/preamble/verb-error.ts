@@ -14,7 +14,7 @@
 // import the other; the message shape is the contract, so one home is what keeps them identical.
 
 import { Identity, WriteNode } from "./ir.js";
-import { identityOf, instanceAncestorOf } from "./identity.js";
+import { identityOf, childListClosingInstanceOf } from "./identity.js";
 import { committedVerbCount } from "./mutation-lock.js";
 
 /**
@@ -30,7 +30,8 @@ import { committedVerbCount } from "./mutation-lock.js";
  */
 export function beginMutatingApply(verb: string, node: SceneNode): (cause: unknown) => Error {
   const identity = identityOf(node);
-  const ancestor = instanceAncestorOf(node);
+  // Only a closed child list earns the edit-the-component note; slot content is the instance's own.
+  const ancestor = childListClosingInstanceOf(node, false);
   const instance = ancestor ? { id: ancestor.id, name: ancestor.name } : null;
   return (cause) => mutatingVerbError(verb, identity, cause, instance);
 }
@@ -80,8 +81,9 @@ function mutatingVerbError(verb: string, identity: Identity, cause: unknown, ins
     ? " The target lives inside instance " + JSON.stringify(instanceHost.name) + " (id " + JSON.stringify(instanceHost.id) +
       ") — Figma restricts what can be changed on an instance's children; edit the component it comes from (flcm never auto-detaches)."
     : "";
+  // A live node placed inside a verb is named by its spec path, which already carries the prefix.
   return new MutatingVerbError(
-    "flcm." + verb + ": " + refusal + who + " — " + message + ". " +
+    (verb.startsWith("flcm.") ? verb : "flcm." + verb) + ": " + refusal + who + " — " + message + ". " +
       "This call rolled back to its entry seal (the canvas holds none of it); the " + committedVerbCount() +
       " mutating call(s) before it in this run committed and stand." + instanceNote,
   );

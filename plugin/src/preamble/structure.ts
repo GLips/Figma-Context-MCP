@@ -43,6 +43,7 @@ import { clearKeysDeep, childListClosingInstanceOf } from "./identity.js";
 import { applyExposures } from "./instance-exposure.js";
 import { captureCloneBindings, restoreCloneBindings, removeFailedClone, type CreatedCloneProperties } from "./clone-bindings.js";
 import { growImplicitGridRows } from "./layout-native.js";
+import { assertInheritedSlotContentStays } from "./live-tree.js";
 import { replacementTree } from "./structure-layout.js";
 import type { EditDelta } from "./schema.js";
 import { compileEditPlan, loadEditResources, gateEditResources, assertEditPlanLands,
@@ -267,7 +268,11 @@ function placeVerb(verb: string, anchor: PlacementAnchor, spec: NodeSpec, placem
     const resources = gateTreeResources(tree, loaded, { destination: dest.parent });
     for (const entry of loaded.live.entries) assertNoCycle(entry.wn.sourcePath!, entry.node, dest.parent);
     const liveRoot = resources.live?.get(tree);
-    if (liveRoot) assertLiveNodeLandsUnderParent(liveRoot.node, dest.parent, subject, tree.layout);
+    if (liveRoot) {
+      // Also checked as each live node is placed; here it refuses the common case before the seal.
+      assertInheritedSlotContentStays(tree.sourcePath!, liveRoot.node, dest.parent);
+      assertLiveNodeLandsUnderParent(liveRoot.node, dest.parent, subject, tree.layout);
+    }
     const bindings = prepareInsertBindings(subject, dest.parent, tree);
     return { kind: "insert", dest, tree, resources, bindings };
   }, prepared => applyInsert(verb, prepared));
@@ -438,7 +443,11 @@ export function replace(target: Target, spec: NodeSpec): Promise<AuthoredTree> {
   }, ({ node, tree, pages, loaded }): PreparedInsert & { original: any } => {
     assertNodeStillOnCanvas(node, "flcm.replace");
     assertInstanceChildListUntouched("flcm.replace", node, "subject");
-    const dest = destinationOf("flcm.replace", node, "before", pages);
+    const { parent } = destinationOf("flcm.replace", node, "before", pages);
+    // The original's index, read now: a replacement that retains it moves it inside before the
+    // replacement lands, and its index then no longer names its place.
+    const index = parent.children.indexOf(node);
+    const dest: Destination = { parent, place: (built) => parent.insertChild(index, built) };
     assertInstanceChildListUntouched("flcm.replace", dest.parent, "destination");
     if (!tree.liveId) {
       assertBuiltInsertNotIntoSet("flcm.replace", dest.parent);

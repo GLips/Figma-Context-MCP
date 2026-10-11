@@ -163,3 +163,38 @@ for (const method of ["appendChild", "insertChild"] as const) test(method + " re
   assert.equal(stable.layoutGrow,1);assert.equal(leaf.characters,"After transport");
   assert.equal(root.id,"4:1");assert.equal(root.parent,dest);assert.equal(root.children[0],child);
 });
+
+test("inherited slot content moved to a sibling slot reads as Figma's copy, and its old id is retired", async () => {
+  const base = (id: string, type: string) => ({ id, type, removed: false, parent: null as any, getPluginData() { return ""; } });
+  const page: any = { ...base("1:1", "PAGE"), children: [] };
+  const outer: any = { ...base("10:1", "INSTANCE"), parent: page };
+  const host: any = { ...base("I10:1;11:1", "INSTANCE"), parent: outer };
+  const source: any = { ...base("I10:1;11:1;12:1", "SLOT"), parent: host };
+  const destination: any = { ...base("I10:1;11:1;12:2", "SLOT"), parent: host, children: [] };
+  const tile: any = { ...base("I10:1;11:1;13:1", "INSTANCE"), parent: source, layoutGrow: 0 };
+  // Figma's child list keeps naming the original, and every read of it throws.
+  const dead = new Proxy(base(tile.id, "INSTANCE"), { get(target, key) {
+    if (key === "id" || key === "type") return Reflect.get(target, key);
+    throw Error("retired native node: " + String(key));
+  } });
+  const copy: any = { ...base("I10:1;11:1;12:2;14:1", "INSTANCE"), parent: destination, layoutGrow: 0 };
+  outer.children = [host]; host.children = [source, destination]; source.children = [tile];
+  outer.findAllWithCriteria = () => [host, source, ...source.children, destination, ...(destination.children.length ? [copy] : [])];
+  destination.findAllWithCriteria = () => destination.children.length ? [copy] : [];
+  destination.appendChild = (node: any) => { assert.equal(node, tile); source.children = []; destination.children = [dead]; };
+  page.children = [outer];
+  const native: any = { currentPage: page, skipInvisibleInstanceChildren: false,
+    async getNodeByIdAsync(id: string) { return id === outer.id ? outer : null; } };
+  const { api } = createSceneAccess(() => native);
+  const moved = await api.getNodeByIdAsync(tile.id) as InstanceNode;
+  const slot = await api.getNodeByIdAsync(destination.id) as SlotNode;
+  slot.appendChild(moved);
+  assert.equal(moved.id, copy.id);
+  moved.layoutGrow = 1;
+  assert.equal(copy.layoutGrow, 1);
+  assert.equal(moved.parent, slot);
+  assert.equal((await api.getNodeByIdAsync(copy.id))?.id, copy.id);
+  await assert.rejects(api.getNodeByIdAsync(tile.id), /retired.*I10:1;11:1;12:2;14:1/);
+  // A later run holds no memory of the move; the dead child-list entry alone identifies it.
+  await assert.rejects(createSceneAccess(() => native).api.getNodeByIdAsync(tile.id), /retired.*I10:1;11:1;12:2;14:1/);
+});

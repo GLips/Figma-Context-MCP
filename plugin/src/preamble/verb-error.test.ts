@@ -52,3 +52,13 @@ test("an flcm legality check on a nested node names that node and does not blame
     /flcm\.render: failed mid-apply on RECTANGLE "Bar" at \S+\.children\[0\], being built into PAGE .* — a percent w\/h/,
   );
 });
+
+test("a failed placement of slot content names its spec path once and gives no edit-the-component advice", () => {
+  const instance = { id: "1:1", type: "INSTANCE", name: "Host", parent: null };
+  const slot = { id: "I1:1;2:2", type: "SLOT", name: "Body", parent: instance };
+  const node = { id: "3:3", type: "FRAME", name: "Card", parent: slot, getPluginData: () => "" };
+  const message = beginMutatingApply("flcm.append.spec", node as unknown as SceneNode)(new Error("in set_layoutGrow: refused")).message;
+  assert.match(message, /^flcm\.append\.spec: Figma refused a write on FRAME "Card"/);
+  assert.doesNotMatch(message, /edit the component/);
+  assert.equal(message.split("rolled back").length, 2);
+});

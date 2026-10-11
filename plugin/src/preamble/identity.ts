@@ -54,6 +54,23 @@ export function childListClosingInstanceOf<T extends ParentedNode>(node: T, coun
   return null;
 }
 
+// The INSTANCE whose slot holds `node`, or null when no open slot does. The walk is
+// childListClosingInstanceOf's: a SLOT met first answers with the nearest INSTANCE above it.
+export function slotOwnerOf<T extends ParentedNode>(node: T, countSelf: boolean): T | null {
+  let p: ParentedNode | null | undefined = countSelf ? node : node.parent;
+  while (p && p.type !== "PAGE" && p.type !== "SLOT" && p.type !== "INSTANCE") p = p.parent;
+  if (!p || p.type !== "SLOT") return null;
+  for (p = p.parent; p && p.type !== "PAGE"; p = p.parent) if (p.type === "INSTANCE") return p as T;
+  return null;
+}
+
+// Slot content an enclosing component's definition supplied, rather than an override on the
+// instance. Figma gives an override node a plain id of its own; definition content reads through
+// the instance path, so it alone carries a compound id while sitting in an open slot.
+export function isInheritedSlotContent(node: ParentedNode & { id: string }): boolean {
+  return node.id.startsWith("I") && !!slotOwnerOf(node, false);
+}
+
 // The wire key a FRAME's `componentPropertyReferences` carries when it IS a slot property's frame —
 // the one spelling the binding writers (component.ts), the mock, and the slot predicate below share.
 export const SLOT_CONTENT_WIRE_KEY = "slotContentId";
