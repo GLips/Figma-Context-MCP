@@ -41,10 +41,10 @@ export interface RestParentSpace {
 }
 
 /**
- * The space the payload's top-level nodes are resolved in. Rotation is assumed
- * zero: an ancestor ABOVE the requested root can't be seen in the response, so a
- * rotated one would throw off every descendant's solve. Rare enough to accept —
- * and unknowable from the payload either way.
+ * The space a decode's top node is resolved in: a frame on the canvas, whose page
+ * has no rotation, or the root of a supplementary `/nodes` fetch. There an ancestor
+ * ABOVE the root can't be seen in the response, so a rotated one would throw off
+ * every descendant's solve. Rare enough to accept, and unknowable from that payload.
  */
 export const ROOT_SPACE: RestParentSpace = {
   containerPageRotation: 0,

@@ -60,12 +60,13 @@ export async function loadLiveTree(tree: WriteNode, intoNewNode = liveChildrenOf
       if (wn.source?.type !== undefined && wn.source.type !== "IMAGE-SVG" && wn.source.type !== node.type) throw new Error("type " + wn.source.type + " does not match live " + node.type + ".");
       wn.type = node.type;
       const { key, d, vectorPaths, componentPropertyReferences, ...delta } = wn.authoring!;
-      // A pasted read root reports its "fill" beside the px it measured: the node's standing state,
-      // not a write. Dropped here, it rides in as carried intent (liveParentRelativeWords), which a
-      // placement that reads fill differently freezes instead of stretching to cover. Only while the node really is
-      // fill on that axis: a stale read, or a fill typed over a fixed root's designedWidth, is a write.
-      for (const [axis, designed, live] of [["width", "designedWidth", "layoutSizingHorizontal"], ["height", "designedHeight", "layoutSizingVertical"]] as const) {
-        if (delta[axis] === "fill" && delta[designed] != null && (node as any)[live] === "FILL") delete delta[axis];
+      // A pasted read reports its "fill" as the node's standing state, not a write; its readOnlySource
+      // records that state. Dropped here, the fill rides in as carried intent (liveParentRelativeWords), which a
+      // placement that reads fill differently freezes instead of stretching to cover. Only while the read and the
+      // node both say fill on that axis: a stale read, or a fill typed over a fixed axis, is a write.
+      const reported = (wn.source as { readOnlySource?: Record<string, unknown> } | undefined)?.readOnlySource;
+      for (const [axis, sizing] of [["width", "layoutSizingHorizontal"], ["height", "layoutSizingVertical"]] as const) {
+        if (delta[axis] === "fill" && reported?.[sizing] === "FILL" && (node as any)[sizing] === "FILL") delete delta[axis];
       }
       if (componentPropertyReferences !== undefined) {
         wn.componentPropertyReferences = compileBindingBag(componentPropertyReferences, bindingFieldsForType(node.type), at);

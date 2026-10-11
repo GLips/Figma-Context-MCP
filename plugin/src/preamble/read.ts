@@ -12,6 +12,7 @@ import { Target, RawIdRef, FindQuery, SlimHandle, ReadPredicate, GetResult } fro
 import { readKey, identityOf } from "./identity.js";
 import {
   sceneNodeToSnapshot,
+  sceneContextParent,
   type MainComponentSink,
   type UnreadableSink,
   type SceneNodeLike,
@@ -178,25 +179,31 @@ function liveTokenResolver(): SceneTokenResolver {
 
 // The adapter's structural view narrows plugin typings at this boundary. The resulting data is
 // complete in the sandbox; registration defers every lossy decision until host egress.
+// `inContext` reads the node under its live parent (simplify's `contextParent`), so a nested target
+// keeps the sizing and position it has as a child. A scan root takes none: it is never a hit.
 async function simplifyScene(
   node: BaseNode,
   unreadable: UnreadableSink,
   categories?: ReadonlyMap<string, string>,
+  inContext = false,
 ): Promise<import("@framelink/core").SimplifyResult> {
   const annotationCategories = categories ?? await readAnnotationCategoryNames();
   const mainComponents: MainComponentSink = new Map();
   const resolveToken = liveTokenResolver();
+  const parent = inContext && node.parent ? node.parent as unknown as SceneNodeLike : undefined;
   const snapshot = await sceneNodeToSnapshot(
     node as unknown as SceneNodeLike,
     resolveToken,
     mainComponents,
     annotationCategories,
     unreadable,
+    parent,
   );
   const componentDefinitions =
     await offTreeDefinitions(snapshot, mainComponents, annotationCategories, resolveToken);
   attachCommentCounts(snapshot, await readCommentCounts());
-  const full = await simplify([snapshot], { componentDefinitions });
+  const contextParent = parent && sceneContextParent(parent);
+  const full = await simplify([snapshot], { componentDefinitions, contextParent });
   for (const node of full.nodes) registerNode(node);
   for (const entry of Object.values(full.components)) for (const node of entry.children ?? []) registerNode(node);
   registerRead(full.components, () => project(full).components);
@@ -274,7 +281,7 @@ function reportUnreadable(verb: string, unreadable: UnreadableSink): void {
 export async function get(target: Target): Promise<GetResult> {
   const node = await resolveTarget(target);
   const unreadable: UnreadableSink = new Set();
-  const full = await simplifyScene(node, unreadable);
+  const full = await simplifyScene(node, unreadable, undefined, true);
   reportUnreadable("get", unreadable);
   const { nodes, components } = full;
   const result: GetResult = { node: nodes[0] };
@@ -303,8 +310,7 @@ async function scanRoot(within: Target | undefined): Promise<ScanRoot> {
 // leaf is the ONE core's own output, so slim and get can't drift. To get each hit its IN-CONTEXT geometry
 // (a real px on an authored-fixed axis, "fill"/"hug" intent otherwise, out-of-flow position/left/top), the
 // core must see the hit with its real parent — so we simplify the whole scan-root subtree ONCE and index
-// every node by id, rather than rooting each hit on its own (which would make every hit "contextual" and
-// strip its position, the way `get(target)` roots the requested node). `findAll` only ever returns
+// every node by id, rather than simplifying each hit with its own context parent. `findAll` only ever returns
 // DESCENDANTS of the scan root, so every hit is a non-root node in that index and reads in-context.
 //
 // v1 cost: a query find still materializes the whole scan scope to build the index. Phase 4's hybrid filter

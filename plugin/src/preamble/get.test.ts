@@ -197,3 +197,40 @@ test("get returns hidden targets with their visibility", async () => {
   assert.equal(node.id, out.id);
   assert.equal(node.visible, false);
 });
+
+// A-7: a nested node must read the same whether targeted or reached through its parent.
+test("get on a nested node keeps the sizing and position it has as a child; a page-level root stays contextual", async () => {
+  createFigmaMock();
+  const grid = { mode: "grid", gridTemplateColumns: "60px 60px", gridTemplateRows: "40px 40px" } as const;
+  await render({
+    type: "FRAME",
+    key: "screen",
+    width: 402,
+    height: 800,
+    children: [
+      { type: "RECTANGLE", key: "scrim", width: 402, height: 94, left: 0, top: 120 },
+      { type: "FRAME", key: "row", width: 300, height: 60, layout: { mode: "row" }, children: [{ type: "RECTANGLE", key: "grow", width: "fill", height: 20 }] },
+      // Alone, the first cell would read as a packed grid; the sibling leaves cells empty, so
+      // placement is explicit and only readable against it.
+      { type: "FRAME", key: "grid", width: 120, height: 80, layout: grid, children: [
+        { type: "RECTANGLE", key: "cell", width: 10, height: 10, layout: { gridColumn: "1", gridRow: "1" } },
+        { type: "RECTANGLE", width: 10, height: 10, layout: { gridColumn: "2", gridRow: "2" } },
+      ] },
+    ],
+  });
+  const screen = (await get("screen")).node;
+  const throughParent = (id: string) => {
+    const find = (n: any): any => n.id === id ? n : n.children?.map(find).find(Boolean);
+    return find(screen);
+  };
+  for (const key of ["scrim", "grow", "cell"]) {
+    const { readOnlySource: _a, ...targeted } = (await get(key)).node as any;
+    const { readOnlySource: _b, ...child } = throughParent(targeted.id);
+    assert.deepEqual(targeted, child, key);
+  }
+  const scrim = (await get("scrim")).node;
+  assert.deepEqual([scrim.width, scrim.left, scrim.top], [402, 0, 120]);
+  assert.deepEqual((await get("cell")).node.layout, { gridColumn: "1", gridRow: "1" });
+  assert.deepEqual([screen.width, screen.designedWidth], ["contextual", "402px"]);
+  assert.equal(screen.left, undefined);
+});

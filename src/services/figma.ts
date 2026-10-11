@@ -77,7 +77,7 @@ export class FigmaService {
   /**
    * Like `request`, but also surfaces the raw response body size so callers
    * can record it for telemetry. Only used by endpoints whose payload size
-   * we care about (`getRawFile` / `getRawNode`); image-fetching endpoints
+   * we care about (`getRawFile` / `getRawNodeInContext`); image-fetching endpoints
    * continue to use `request` unchanged.
    */
   private async requestWithSize<T>(
@@ -329,22 +329,21 @@ export class FigmaService {
   }
 
   /**
-   * Get raw Figma API response for specific nodes (for use with flexible extractors).
+   * One node with its ancestor chain: the document filtered by `ids`, which is what lets a read
+   * place the node in its real parent. Each ancestor lists only the child on the path, so the chain
+   * costs its own bodies (plus a stub per page), not its siblings. No `depth`: alongside `ids`,
+   * Figma counts it from the document root rather than from the node, so the read cuts depth itself.
    *
    * Returns the parsed body alongside the raw body size in bytes so callers
    * can record payload size in telemetry.
    */
-  async getRawNode(
+  async getRawNodeInContext(
     fileKey: string,
     nodeId: string,
-    depth?: number | null,
-  ): Promise<{ data: GetFileNodesResponse; rawSize: number }> {
-    const endpoint = `/files/${fileKey}/nodes?ids=${nodeId}${depth ? `&depth=${depth}` : ""}`;
-    Logger.log(
-      `Retrieving raw Figma node: ${nodeId} from ${fileKey} (depth: ${depth ?? "default"})`,
-    );
+  ): Promise<{ data: GetFileResponse; rawSize: number }> {
+    Logger.log(`Retrieving raw Figma node in context: ${nodeId} from ${fileKey}`);
 
-    const result = await this.requestWithSize<GetFileNodesResponse>(endpoint);
+    const result = await this.requestWithSize<GetFileResponse>(`/files/${fileKey}?ids=${nodeId}`);
     writeLogs("figma-raw.json", result.data);
 
     return result;
@@ -352,12 +351,16 @@ export class FigmaService {
 
   /**
    * Several nodes in ONE call — the component-definition fetch, which asks for every off-tree
-   * definition a read referenced at once. Separate from `getRawNode` because it is a supplementary
-   * fetch: its size is not the read's payload, and the caller treats any failure as "fall back to
-   * the donated instance" rather than failing the read.
+   * definition a read referenced at once, and a grid parent's children. Separate from
+   * `getRawNodeInContext` because it is a supplementary fetch: its size is not the read's payload,
+   * and the callers treat any failure as a fallback rather than failing the read.
    */
-  async getRawNodes(fileKey: string, nodeIds: string[]): Promise<GetFileNodesResponse> {
-    const endpoint = `/files/${fileKey}/nodes?ids=${nodeIds.join(",")}`;
+  async getRawNodes(
+    fileKey: string,
+    nodeIds: string[],
+    depth?: number,
+  ): Promise<GetFileNodesResponse> {
+    const endpoint = `/files/${fileKey}/nodes?ids=${nodeIds.join(",")}${depth ? `&depth=${depth}` : ""}`;
     Logger.log(`Retrieving ${nodeIds.length} node(s) from ${fileKey}`);
     return this.request<GetFileNodesResponse>(endpoint);
   }

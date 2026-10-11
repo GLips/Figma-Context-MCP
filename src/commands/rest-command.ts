@@ -44,7 +44,8 @@ export function resolveRestTarget(
     }
   }
   if (!fileKey) throw new UsageError("Either a Figma URL or --file-key is required");
-  return { fileKey, nodeId };
+  // A node id copied from a URL's node-id is dashed; a read matches the API's colon form exactly.
+  return { fileKey, nodeId: nodeId?.replace(/-/g, ":") };
 }
 
 /**

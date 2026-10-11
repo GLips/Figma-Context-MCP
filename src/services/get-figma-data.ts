@@ -1,6 +1,7 @@
-import type { GetFileResponse, GetFileNodesResponse } from "@figma/rest-api-spec";
+import type { GetFileResponse } from "@figma/rest-api-spec";
 import { FigmaService } from "~/services/figma.js";
-import { simplifyRestResponse } from "~/adapters/rest/rest.js";
+import { restResponseToSnapshots, simplifyRestRead } from "~/adapters/rest/rest.js";
+import { withGridSiblings } from "~/adapters/rest/grid-siblings.js";
 import { fetchComponentDefinitions } from "~/adapters/rest/component-definitions.js";
 import { writeLogs } from "~/utils/logger.js";
 import { serializeResult, type OutputFormat } from "~/utils/serialize.js";
@@ -83,11 +84,11 @@ export async function getFigmaData(
 
   try {
     await hooks.onFetchStart?.();
-    let rawResult: { data: GetFileResponse | GetFileNodesResponse; rawSize: number };
+    let rawResult: { data: GetFileResponse; rawSize: number };
     const fetchStart = Date.now();
     try {
       if (nodeId) {
-        rawResult = await figmaService.getRawNode(fileKey, nodeId, depth);
+        rawResult = await figmaService.getRawNodeInContext(fileKey, nodeId);
       } else {
         rawResult = await figmaService.getRawFile(fileKey, depth);
       }
@@ -108,13 +109,16 @@ export async function getFigmaData(
       fileKey,
       rawApiResponse,
       depth,
+      nodeId,
     );
 
     await hooks.onSimplifyStart?.({ getNodeCount: () => nodeCounter.count });
     let simplifiedDesign;
     const simplifyStart = Date.now();
     try {
-      simplifiedDesign = await simplifyRestResponse(rawApiResponse, {
+      const read = restResponseToSnapshots(rawApiResponse, nodeId);
+      read.contextParent = await withGridSiblings(figmaService, fileKey, read.contextParent);
+      simplifiedDesign = await simplifyRestRead(read, {
         maxDepth: depth,
         nodeCounter,
         componentDefinitions,

@@ -371,8 +371,36 @@ export async function sceneNodeToSnapshot(
   mainComponents?: MainComponentSink,
   annotationCategories: ReadonlyMap<string, string> = new Map(),
   unreadable?: UnreadableSink,
+  contextParent?: SceneNodeLike,
 ): Promise<NodeSnapshot> {
-  return sceneSubtreeToSnapshot(node, resolveToken, CONTAINER_PARENT_SPACE, mainComponents, annotationCategories, unreadable);
+  const space = contextParent ? spaceUnder(contextParent) : CONTAINER_PARENT_SPACE;
+  return sceneSubtreeToSnapshot(node, resolveToken, space, mainComponents, annotationCategories, unreadable);
+}
+
+/**
+ * A targeted read's parent as layout context (simplify's `contextParent`): only the fields the core
+ * reads to place a child, never paints or tokens, so it costs no style or variable lookup. Siblings
+ * are listed only under a GRID, whose cell placement depends on them.
+ */
+export function sceneContextParent(parent: SceneNodeLike): NodeSnapshot {
+  const siblings = parent.layoutMode === "GRID" ? (readableChildren(parent) ?? []).filter(isReadableSceneNode) : undefined;
+  return { ...placementTraits(parent), children: siblings?.map(placementTraits) };
+}
+
+function placementTraits(node: SceneNodeLike): NodeSnapshot {
+  return {
+    id: node.id,
+    name: node.name,
+    type: node.type,
+    absoluteBoundingBox: node.absoluteBoundingBox ?? undefined,
+    clipsContent: node.clipsContent,
+    layoutMode: node.layoutMode,
+    layoutPositioning: node.layoutPositioning,
+    gridColumnAnchorIndex: node.gridColumnAnchorIndex,
+    gridRowAnchorIndex: node.gridRowAnchorIndex,
+    gridColumnSpan: node.gridColumnSpan,
+    gridRowSpan: node.gridRowSpan,
+  };
 }
 
 /** Where the caller collects ids the walk omitted: unreadable nodes, and containers whose children Figma cannot list. */
@@ -413,6 +441,13 @@ interface SceneParentSpace {
 /** The ordinary case: the emitted parent IS the container parent, so `x`/`y` need no fixup. */
 const CONTAINER_PARENT_SPACE: SceneParentSpace = { transparent: false, rotation: 0 };
 
+/** The space a node's children are stated in. */
+function spaceUnder(node: SceneNodeLike): SceneParentSpace {
+  return isCoordinateTransparentType(node.type)
+    ? { transparent: true, origin: ownXY(node), rotation: node.rotation ?? 0 }
+    : CONTAINER_PARENT_SPACE;
+}
+
 /**
  * The recursive body. `parentSpace` is walk state rather than a caller-supplied
  * argument — like the REST adapter's `RestParentSpace`, a node's parent-relative
@@ -432,9 +467,7 @@ async function sceneSubtreeToSnapshot(
     mainComponents.set(main.id, main);
   }
 
-  const childSpace: SceneParentSpace = isCoordinateTransparentType(node.type)
-    ? { transparent: true, origin: ownXY(node), rotation: node.rotation ?? 0 }
-    : CONTAINER_PARENT_SPACE;
+  const childSpace = spaceUnder(node);
   const listed = readableChildren(node);
   if (!listed) unreadable?.add(node.id);
   const readable = (listed ?? []).filter((child) => {

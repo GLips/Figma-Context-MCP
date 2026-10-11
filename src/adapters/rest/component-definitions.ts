@@ -42,8 +42,9 @@ export async function fetchComponentDefinitions(
   fileKey: string,
   apiResponse: GetFileResponse | GetFileNodesResponse,
   maxDepth?: number | null,
+  nodeId?: string,
 ): Promise<NodeSnapshot[]> {
-  const { rawNodes, components, componentSets } = parseAPIResponse(apiResponse);
+  const { rawNodes, components, componentSets } = parseAPIResponse(apiResponse, nodeId);
   const found = missingDefinitions(rawNodes, components, maxDepth);
   if (found.length === 0) return [];
 

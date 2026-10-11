@@ -46,9 +46,10 @@ export interface SimplifiedLayout {
 
 /**
  * A node's sizing along one axis. A concrete number IS fixed px — there is no
- * separate `sizing: fixed` flag. "contextual" is read-only and root-only: the
- * requested root's REST-reported FIXED size is an artifact of being top-level,
- * not design intent (see resolveAxisDimension in ../layout.ts).
+ * separate `sizing: fixed` flag. "contextual" is read-only and root-only: a
+ * root read without parent context (one on the canvas or in a section) reports
+ * FIXED as an artifact of being top-level, not design intent (see
+ * resolveAxisDimension in ../layout.ts).
  */
 export type SimplifiedDimension = number | "fill" | "hug" | "contextual";
 
@@ -87,9 +88,9 @@ export interface NodeGeometry {
   /** A bound size reads as its reference only where a fixed number would be emitted. */
   width?: SimplifiedDimension | VariableReference<number>;
   height?: SimplifiedDimension | VariableReference<number>;
-  // The size the requested root was designed at, surfaced as a non-binding
-  // reference (not a hard width/height) on every axis whose sizing leaned on the
-  // parent the read dropped: "contextual" (it fills whatever it's placed in) and
+  // The size a root read without parent context was designed at, surfaced as a
+  // non-binding reference (not a hard width/height) on every axis whose sizing
+  // leaned on the parent the read lacks: "contextual" (it fills whatever it's placed in) and
   // "fill". Hug is content-sized and carries none. Absolutely-positioned
   // children and the fill-chain still need a concrete size to anchor against, so
   // we keep the designed value here, string-typed with a px suffix so it can't

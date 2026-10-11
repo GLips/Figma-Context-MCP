@@ -140,7 +140,7 @@ describe("figma identifier redaction in telemetry error_message", () => {
     vi.unstubAllGlobals();
   });
 
-  it("scrubs the file key and node ID from a 403 on the nodes endpoint", async () => {
+  it("scrubs the file key and node ID from a 403 on a targeted read", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(
@@ -161,7 +161,7 @@ describe("figma identifier redaction in telemetry error_message", () => {
       useOAuth: false,
     });
 
-    const error = await captureThrown(() => service.getRawNode(FILE_KEY, NODE_ID));
+    const error = await captureThrown(() => service.getRawNodeInContext(FILE_KEY, NODE_ID));
 
     // Sanity: the user-facing message is *supposed* to name the endpoint —
     // that's what makes a 403 debuggable. Redaction happens at the telemetry

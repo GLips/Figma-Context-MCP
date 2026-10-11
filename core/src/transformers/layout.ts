@@ -140,11 +140,11 @@ function buildNodeGeometry(
   // signal at all; every axis is omitted rather than guessed.
   if (!isLayout(n)) return {};
 
-  // The requested root has no parent in the payload, so Figma reports its sizing
-  // FIXED relative to an absent container — an artifact of being top-level, not
-  // design intent. Honoring it as a hard width/height pins the whole design to
-  // its artboard and kills responsiveness. Descendants (which have a real parent)
-  // keep their fill/hug/fixed semantics. See fig-ovmi.
+  // A root with no parent context sits on the canvas (or in a section), where Figma
+  // reports its sizing FIXED relative to an absent container — an artifact of being
+  // top-level, not design intent. Honoring it as a hard width/height pins the whole
+  // design to its artboard and kills responsiveness. Every other node, a nested
+  // target included (simplify's `contextParent`), keeps its fill/hug/fixed semantics.
   const isRoot = parent === undefined;
   const geometry: NodeGeometry = {};
   const bound = n.boundVariables;

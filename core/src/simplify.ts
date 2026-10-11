@@ -42,6 +42,14 @@ export interface SimplifyOptions {
   scheduler?: WalkScheduler;
   nodeCounter?: NodeCounter;
   componentDefinitions?: NodeSnapshot[];
+  /**
+   * The parent a targeted read's roots sit in, read for layout context only and never emitted, so
+   * a nested node keeps the fill/hug/fixed sizing and parent-relative position it has when read
+   * through that parent. Its `children` must list every sibling when it is a GRID (cell placement
+   * depends on them) and are unused otherwise. A page or section parent is ignored on purpose:
+   * canvas-level sizing stays `"contextual"`.
+   */
+  contextParent?: NodeSnapshot;
 }
 
 export interface SimplifyResult {
@@ -77,7 +85,7 @@ export async function simplify(
 ): Promise<SimplifyResult> {
   const notes = createComponentNotes();
   const context: ReadContext = { notes, snapshots: new Map(), definitions: [] };
-  const nodes = await walkNodes(snapshots, options, notes, context);
+  const nodes = await walkNodes(snapshots, options, notes, context, options.contextParent);
   context.definitions = await walkNodes(
     options.componentDefinitions ?? [],
     options,
@@ -136,6 +144,7 @@ async function walkNodes(
   options: SimplifyOptions = {},
   notes: ComponentNotes = createComponentNotes(),
   read: ReadContext = { notes, snapshots: new Map(), definitions: [] },
+  contextParent?: NodeSnapshot,
 ): Promise<SimplifiedNode[]> {
   const context: SimplifyContext = {
     components: notes,
@@ -145,10 +154,27 @@ async function walkNodes(
 
   const processedNodes: SimplifiedNode[] = [];
   for (const node of nodes) {
-    processedNodes.push(await extractNode(node, context, options));
+    const parent = contextParent && rootParent(node, contextParent);
+    processedNodes.push(
+      await extractNode(node, parent ? { ...context, parent } : context, options),
+    );
   }
 
   return processedNodes;
+}
+
+// Where a read's root sits on the canvas itself. These parents give no sizing context: a design
+// frame's FIXED size there is an artifact of being top-level (see buildNodeGeometry).
+const CANVAS_LEVEL_PARENT_TYPES = new Set(["DOCUMENT", "CANVAS", "PAGE", "SECTION"]);
+
+/**
+ * The context parent as the root's own parent, with the root standing in for its entry among the
+ * siblings: grid placement finds a child by identity (`parent.children.indexOf`).
+ */
+function rootParent(root: NodeSnapshot, contextParent: NodeSnapshot): NodeSnapshot | undefined {
+  if (CANVAS_LEVEL_PARENT_TYPES.has(contextParent.type)) return undefined;
+  const children = contextParent.children?.map((child) => (child.id === root.id ? root : child));
+  return { ...contextParent, children };
 }
 
 /**

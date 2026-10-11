@@ -159,7 +159,7 @@ test("a fill carried from an auto-layout parent keeps its px size in a free-form
   assert.equal(copy.parent.id, staging.id);
   assert.deepEqual([copy.width, copy.height], [480, 400]);
   const read = (await get("tile")).node;
-  assert.equal(read.width, "fill"); // the paste below carries the read's own fill + designedWidth
+  assert.equal(read.width, "fill"); // the paste below carries the read's own fill and readOnlySource
   await append("staging", read);
   assert.equal(tile.parent.id, staging.id);
   assert.deepEqual([tile.width, tile.height], [480, 400]);
@@ -171,9 +171,9 @@ test("a fill written in the same call still covers the free-form destination", a
   assert.deepEqual([copy.width, copy.height], [900, 400]);
   await append("staging", { id: tile.id, height: "fill" });
   assert.deepEqual([tile.width, tile.height], [480, 2600]);
-  // A fixed root's read carries designedWidth too; a fill typed over it is the author's, not the read's.
+  // A fill typed over a pasted read's fixed axis is the author's, not the read's.
   const read = (await get(copy.id)).node;
-  assert.notEqual(read.designedWidth, undefined);
+  assert.equal(read.height, 400);
   await append("staging", { ...read, height: "fill" });
   assert.equal(copy.height, 2600);
 });
@@ -185,7 +185,7 @@ test("a carried fill keeps its px when the same call takes the node out of an au
   const copy = await figma.getNodeByIdAsync((await clone("tile", out, "flow-staging")).id);
   assert.equal(copy.layoutPositioning, "ABSOLUTE");
   assert.deepEqual([copy.width, copy.height], [480, 102]);
-  await append("flow-staging", { id: tile.id, ...out });
+  await append("flow-staging", { ...(await get("tile")).node, ...out });
   assert.equal(tile.layoutPositioning, "ABSOLUTE");
   assert.deepEqual([tile.width, tile.height], [480, 102]);
   // Written in the call, the same fill is a deliberate cover of the row's box.
