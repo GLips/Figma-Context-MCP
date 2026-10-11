@@ -1186,10 +1186,12 @@ function cloneInto(mainNode, instId, isRoot) {
 // `figma.variables` / style lookups over it, and the seed helpers tests use to populate it. Modelled:
 // collections with modes, valuesByMode with aliases, resolvedType, binding through setBoundVariable /
 // setRangeBoundVariable / setBoundVariableForPaint, and the *Async style setters. Not modelled:
-// explicit variable modes on nodes (everything resolves in the collection's default mode), libraries
-// (`importVariableByKeyAsync`), scopes, and a literal text write detaching a text style.
+// explicit variable modes on nodes (everything resolves in the collection's default mode) and a
+// literal text write detaching a text style. Libraries are modelled only as far as a listing needs:
+// a `library` seed is remote, absent from the local lists, enumerable through `figma.teamLibrary`, and
+// importable by key; by id it resolves whether or not it was imported.
 
-const tokenStore = { collections: new Map(), variables: new Map(), styles: new Map() };
+const tokenStore = { collections: new Map(), variables: new Map(), styles: new Map(), libraryCollections: [] };
 
 const DYNAMIC_PAGE_STYLE_SETTER = (asyncName) =>
   "Cannot set a style id synchronously with documentAccess: dynamic-page. Use " + asyncName + " instead.";
@@ -1230,14 +1232,18 @@ function styleOfWeight(weight) { return WEIGHT_STYLES[Math.round(weight / 100) *
  * `{ alias: "<other variable name>" }` to point at a variable seeded in the same call or earlier.
  * Returns the created variables by name, so a test can bind by id.
  */
-export function seedVariables({ collection: name = "Tokens", modes = ["Default"], variables }) {
+export function seedVariables({ collection: name = "Tokens", modes = ["Default"], variables, library }) {
+  const remote = library !== undefined;
   const collectionId = "VariableCollectionId:" + (tokenStore.collections.size + 1) + ":0";
   const modeList = modes.map((modeName, i) => ({ modeId: collectionId + "/" + i, name: modeName }));
-  const collection = { id: collectionId, name, modes: modeList, defaultModeId: modeList[0].modeId, variableIds: [], remote: false };
+  const collection = { id: collectionId, name, modes: modeList, defaultModeId: modeList[0].modeId, variableIds: [], remote };
   tokenStore.collections.set(collectionId, collection);
+  if (remote) tokenStore.libraryCollections.push({ key: "k" + collectionId, name, libraryName: library, collectionId });
   const byName = {};
   for (const spec of variables) {
-    const id = "VariableID:" + (tokenStore.variables.size + 1) + ":" + collection.variableIds.length;
+    const local = "VariableID:" + (tokenStore.variables.size + 1) + ":" + collection.variableIds.length;
+    // A library variable's id is its key plus a file-local suffix, as live.
+    const id = remote ? "VariableID:k" + local + "/1:1" : local;
     const valuesByMode = {};
     for (const mode of modeList) {
       const raw = spec.values[mode.name] ?? spec.values[modes[0]];
@@ -1245,7 +1251,8 @@ export function seedVariables({ collection: name = "Tokens", modes = ["Default"]
       valuesByMode[mode.modeId] = target ? { type: "VARIABLE_ALIAS", id: target.id } : raw;
     }
     const variable = {
-      id, name: spec.name, key: "k" + id, resolvedType: spec.type, variableCollectionId: collectionId, valuesByMode, remote: false,
+      id, name: spec.name, key: "k" + local, resolvedType: spec.type, variableCollectionId: collectionId, valuesByMode, remote,
+      scopes: spec.scopes ?? ["ALL_SCOPES"],
       resolveForConsumer() { return { value: resolveVariableValue(variable), resolvedType: variable.resolvedType }; },
     };
     tokenStore.variables.set(id, variable);
@@ -1271,7 +1278,7 @@ export function seedStyle(spec) {
   return style;
 }
 
-const localStyles = (type) => async () => [...tokenStore.styles.values()].filter((s) => s.type === type);
+const localStyles = (type) => async () => [...tokenStore.styles.values()].filter((s) => s.type === type && !s.remote);
 
 export function createFigmaMock() {
   __id = 0;
@@ -1279,6 +1286,7 @@ export function createFigmaMock() {
   tokenStore.collections.clear();
   tokenStore.variables.clear();
   tokenStore.styles.clear();
+  tokenStore.libraryCollections.length = 0;
   const page = new Node("PAGE");
   page.name = "Page 1";
   registry.delete(page.id); page.id = "0:1"; registry.set(page.id, page);
@@ -1466,6 +1474,18 @@ export function createFigmaMock() {
     // the live API throws on it. Omitting it from the mock is what keeps that enforced — a call site that
     // regresses to the sync form fails here instead of only in a real Figma file.
     async getNodeByIdAsync(id) { return registry.get(id) || null; },
+    teamLibrary: {
+      async getAvailableLibraryVariableCollectionsAsync() {
+        return tokenStore.libraryCollections.map(({ key, name, libraryName }) => ({ key, name, libraryName }));
+      },
+      async getVariablesInLibraryCollectionAsync(key) {
+        const listed = tokenStore.libraryCollections.find((c) => c.key === key);
+        if (!listed) throw new Error("no library collection with key " + key);
+        return tokenStore.collections.get(listed.collectionId).variableIds
+          .map((id) => tokenStore.variables.get(id))
+          .map(({ name, key: variableKey, resolvedType }) => ({ name, key: variableKey, resolvedType }));
+      },
+    },
     // An id nothing seeded resolves to null, like a deleted or unloaded style live.
     async getStyleByIdAsync(id) { return tokenStore.styles.get(id) || null; },
     async importStyleByKeyAsync(key) { for (const s of tokenStore.styles.values()) if (s.key === key) return s; throw new Error("no published style with key " + key); },
@@ -1475,9 +1495,13 @@ export function createFigmaMock() {
     variables: {
       async getVariableByIdAsync(id) { return tokenStore.variables.get(id) || null; },
       async getLocalVariablesAsync(type) {
-        return [...tokenStore.variables.values()].filter((v) => type === undefined || v.resolvedType === type);
+        return [...tokenStore.variables.values()].filter((v) => !v.remote && (type === undefined || v.resolvedType === type));
       },
-      async getLocalVariableCollectionsAsync() { return [...tokenStore.collections.values()]; },
+      async getLocalVariableCollectionsAsync() { return [...tokenStore.collections.values()].filter((c) => !c.remote); },
+      async importVariableByKeyAsync(key) {
+        for (const v of tokenStore.variables.values()) if (v.key === key && v.remote) return v;
+        throw new Error("no published variable with key " + key);
+      },
       async getVariableCollectionByIdAsync(id) { return tokenStore.collections.get(id) || null; },
       // Returns a NEW paint, as live does: the caller must assign it back into the paint stack.
       setBoundVariableForPaint(paint, field, variable) {

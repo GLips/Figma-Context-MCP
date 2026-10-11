@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { Node as FigmaNode, TypeStyle } from "@figma/rest-api-spec";
 import { walkUncompressed } from "./walk-uncompressed.js";
-import type { SimplifiedTextStyle, TextRun } from "@framelink/core/internal";
+import type { SimplifiedTextStyle } from "@framelink/core";
+import type { TextRun } from "@framelink/core/internal";
 
 /**
  * Minimal Figma TEXT node factory. Tests only need the fields the text

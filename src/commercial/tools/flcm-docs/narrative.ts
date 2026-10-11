@@ -252,6 +252,13 @@ await flcm.edit(card, {
 - A style takes a whole slot: \`fill\`, \`stroke\`, \`effects\`, or \`textStyle: { style }\`. Beside a text style, \`textStyle\` keeps only the words a text style doesn't set: \`textAlign\`, \`textAlignVertical\`, \`hyperlink\` and \`lineClamp\`. Font words beside it, or in its runs, are refused.
 - A name is looked up among this file's local tokens first, then among those already used on the current page. An unknown or ambiguous name fails before anything is written and lists the candidates; pass an id to choose between them. A REST read names styles but gives variables only by id.
 
+**List what the file has** with \`await flcm.designTokens()\` before typing a color or a spacing by hand. It returns \`{ variables, styles }\`. A variable entry is \`{ reference, collection, type, values, scopes?, remote? }\`, with \`values\` keyed by mode name; an alias reads as the reference it points at. A style entry is \`{ reference, type, value, remote? }\`, its \`value\` spelled as a read spells that slot. The \`reference\` is the value to write: \`fill: token.reference\`, or \`textStyle: token.reference\` for a text style. The listing covers local tokens, tokens bound anywhere in the file, and every variable in the libraries enabled for the file. Figma gives plugins no list of a library's styles, so a library style appears only once something in the file uses it. It reads every page, which takes seconds in a large file: call it once and keep what you need in \`session\`. Filter in your script rather than returning a large file's whole listing:
+
+\`\`\`js
+const { variables } = await flcm.designTokens();
+return variables.filter((v) => v.type === "COLOR" && /brand/i.test(v.reference.variable.name));
+\`\`\`
+
 Creating variables, collections, modes and styles, switching modes, and binding gradient stops, effect fields or grid gaps all still need raw \`figma.*\`.`;
 
 export const IMAGE_INTRO = `Place a **real raster image** — feed media, an avatar, a thumbnail — instead of faking it with a gradient (which carries no signal it was ever meant to be an image).

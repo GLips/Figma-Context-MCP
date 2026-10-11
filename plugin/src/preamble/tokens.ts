@@ -15,7 +15,8 @@
 //   apply    sync. The binders below write a ref onto a live node from what prepare resolved, keyed by
 //            CONTENT (tokenKey) because edit compiles its delta twice and the gate's refs are new objects.
 //
-// Negative space: creating variables or styles, and listing what exists (fig-114), are not here.
+// Negative space: creating variables or styles is not here. Listing what exists is design-tokens.ts,
+// which shares scanUsedTokens below.
 import { sceneFigma as figma } from "./scene-access.js";
 import { isTokenRef } from "./ir.js";
 import type { VariableRef, StyleRef, TokenRef, Bindable } from "./ir.js";
@@ -292,16 +293,19 @@ class TokenLookups {
   }
 
   private page(): Promise<{ variables: Variable[]; styles: BaseStyle[] }> {
-    this.pageUsed ??= scanPageTokens();
+    this.pageUsed ??= scanUsedTokens([figma.currentPage]);
     return this.pageUsed;
   }
 }
 
 const STYLE_ID_FIELDS = ["fillStyleId", "strokeStyleId", "effectStyleId", "textStyleId", "gridStyleId"] as const;
 
-// The tokens the current page's nodes are bound to: every alias under `boundVariables` (node fields,
-// text fields, paint and effect slots alike) and every paint's own binding, plus each style slot's id.
-async function scanPageTokens(): Promise<{ variables: Variable[]; styles: BaseStyle[] }> {
+/**
+ * The tokens these pages' nodes are bound to: every alias under `boundVariables` (node fields, text
+ * fields, paint and effect slots alike) and every paint's own binding, plus each style slot's id. The
+ * pages must already be loaded — the current page always is.
+ */
+export async function scanUsedTokens(pages: readonly PageNode[]): Promise<{ variables: Variable[]; styles: BaseStyle[] }> {
   const variableIds = new Set<string>();
   const styleIds = new Set<string>();
   const collectAliases = (value: unknown): void => {
@@ -310,7 +314,7 @@ async function scanPageTokens(): Promise<{ variables: Variable[]; styles: BaseSt
     if (value.type === "VARIABLE_ALIAS" && typeof value.id === "string") { variableIds.add(value.id); return; }
     Object.values(value).forEach(collectAliases);
   };
-  for (const node of figma.currentPage.findAll() as any[]) {
+  for (const node of pages.flatMap((page) => page.findAll()) as any[]) {
     collectAliases(node.boundVariables);
     for (const slot of ["fills", "strokes"]) {
       const paints = node[slot];

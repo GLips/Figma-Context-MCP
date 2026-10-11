@@ -190,7 +190,7 @@ export function extractTextStyle(
   n: NodeSnapshot,
 ): SimplifiedTextStyle | StyledTextStyle | undefined {
   if (!hasTextStyle(n)) return undefined;
-  const literal = extractLiteralTextStyle(n);
+  const literal = simplifyLiteralTextStyle(n.text.style);
   const styleRef = n.styles?.text;
   if (!styleRef) return literal;
   const styled: StyledTextStyle = styleReference(styleRef);
@@ -200,10 +200,10 @@ export function extractTextStyle(
   return styled;
 }
 
-function extractLiteralTextStyle(
-  n: NodeSnapshot & { text: SnapshotText },
+/** A text style's own words, bindings included — a node's base, or a text style's value. */
+export function simplifyLiteralTextStyle(
+  style: SnapshotTextStyle,
 ): SimplifiedTextStyle | undefined {
-  const style = n.text.style;
   const textStyle: SimplifiedTextStyle = {};
 
   if (style.fontFamily !== undefined) textStyle.fontFamily = style.fontFamily;

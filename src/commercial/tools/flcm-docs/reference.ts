@@ -505,7 +505,7 @@ export function buildQuickStart(channel: DocsChannel): string {
   const verbLines = quickStartVerbLines();
   const quickStart = `Execute JavaScript in Figma with \`flcm\`.
 
-EXECUTION: await/return directly; await every mutation. Not a transaction: each verb commits on its own, so after an error inspect before retrying. Only session survives calls (plain data; ids point at live nodes).${channel.savedScriptHowTo ? `\n\n${channel.savedScriptHowTo}` : ""}
+EXECUTION: await/return directly; await every mutation. Not a transaction: each verb commits on its own, so after an error inspect before retrying. Only session survives calls.${channel.savedScriptHowTo ? `\n\n${channel.savedScriptHowTo}` : ""}
 
 AUTHOR:
   const t = { type:"FRAME", layout:{ mode:"column", gap:16 }, children:[{ type:"TEXT", text:"Hi" }] };

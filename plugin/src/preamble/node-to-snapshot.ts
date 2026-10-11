@@ -570,7 +570,7 @@ async function sceneSubtreeToSnapshot(
 // Paints
 // ---------------------------------------------------------------------------
 
-function decodeScenePaints(
+export function decodeScenePaints(
   paints: ReadonlyArray<ScenePaint> | symbol | undefined,
 ): SnapshotPaint[] | undefined {
   // Mixed fills only occur on TEXT nodes whose runs disagree; the caller falls
@@ -795,7 +795,7 @@ function decodeSceneText(node: SceneNodeLike): SnapshotText {
  * Only fields the segment carries are emitted (the REST decode's present-keys
  * rule — the delta diff and the core's run classifier iterate present keys).
  */
-function decodeSegmentStyle(segment: SceneTextSegment): SnapshotTextStyle {
+export function decodeSegmentStyle(segment: SceneTextSegment): SnapshotTextStyle {
   const out: SnapshotTextStyle = {};
   if (segment.fontName?.family !== undefined) out.fontFamily = segment.fontName.family;
   // The variant name ("Bold Italic") is what REST calls `fontStyle`; the
@@ -924,7 +924,7 @@ function styleDelta(style: SnapshotTextStyle, base: SnapshotTextStyle): Snapshot
 // Effects / per-side / per-corner scalars
 // ---------------------------------------------------------------------------
 
-function decodeSceneEffect(effect: SceneEffect): SnapshotEffect {
+export function decodeSceneEffect(effect: SceneEffect): SnapshotEffect {
   // SceneEffect carries exactly SnapshotEffect's fields (base + the beyond-CSS bag, all raw Figma-domain),
   // so spread it through; only `radius` needs a default. The core reads only the fields its per-type
   // branch needs.

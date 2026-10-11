@@ -60,6 +60,16 @@ export { stableStringify } from "./utils.js";
 
 export type { SimplifiedFill } from "./transformers/style.js";
 
+// The read's value spellings, applied to a token's value outside any node: the plugin's
+// flcm.designTokens lists a style's paints, effects or text style exactly as a read of a node
+// carrying that style would spell them.
+export { foldPaintStack } from "./transformers/style.js";
+export { formatSolidColor } from "./transformers/style/color.js";
+export { simplifyEffectStack } from "./transformers/effects.js";
+export type { SimplifiedEffects } from "./transformers/effects.js";
+export { simplifyLiteralTextStyle } from "./transformers/text.js";
+export type { SimplifiedTextStyle } from "./transformers/text.js";
+
 // Token references are one vocabulary for both directions: the read emits them, the plugin's write
 // side recognizes the same shape when a read is pasted back.
 export type { StyleReference, TokenIdentity, TokenReference, VariableReference } from "./tokens.js";

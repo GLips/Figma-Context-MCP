@@ -31,6 +31,7 @@ import type { NodeSpec } from "./schema.js";
 import type { WriteAnnotation } from "./annotations.js";
 import type {
   SimplifiedComponentEntry, SimplifiedDimension, SimplifiedLayout, SimplifiedNode,
+  SimplifiedEffects, SimplifiedFill, SimplifiedTextStyle, StyleReference, VariableReference,
 } from "@framelink/core";
 
 // The node types createable through the plugin API, enumerated explicitly. Not every figma-mcp/REST
@@ -97,7 +98,7 @@ export function hasContainerLayout(type: string): boolean {
 //
 // Negative space: variables on gradient stops, effect fields, grid gaps, `characters`/`visible` and
 // fontStyle, per-run text styles, and creating variables or styles have no TokenRef — those inputs
-// are refused at compile. Discovering which tokens exist is fig-114's. ----
+// are refused at compile. Listing the tokens that exist is design-tokens.ts. ----
 export interface VariableRef {
   token: "variable";
   id?: string;
@@ -652,6 +653,30 @@ export interface PageSummary { id: string; name: string }
 
 // What every page verb answers with: the file, where you are, and what else is in the document.
 export interface PageInfo { fileName: string; page: PageSummary; pages: PageSummary[] }
+
+// flcm.designTokens — the tokens a write can bind. Each entry's `reference` is the exact value a read
+// emits for a prop bound to that token, so it pastes into a write as-is. Values use the read's
+// spellings: hex/rgba colors, rounded numbers, and an alias as the reference to the variable it points at.
+export type DesignTokenVariableValue = string | number | boolean | VariableReference;
+export interface DesignTokenVariable {
+  reference: VariableReference;
+  collection: string;
+  type: "COLOR" | "FLOAT" | "STRING" | "BOOLEAN";
+  /** By mode name, in the collection's mode order. */
+  values: Record<string, DesignTokenVariableValue>;
+  /** Omitted when the variable may be used everywhere (Figma's ALL_SCOPES). */
+  scopes?: string[];
+  /** Present (true) when the variable comes from a library rather than this file. */
+  remote?: true;
+}
+export interface DesignTokenStyle {
+  reference: StyleReference;
+  type: "PAINT" | "EFFECT" | "TEXT";
+  /** Absent for a style with nothing visible in it (an empty or all-hidden paint or effect stack). */
+  value?: SimplifiedFill | SimplifiedFill[] | SimplifiedEffects | SimplifiedTextStyle;
+  remote?: true;
+}
+export interface DesignTokens { variables: DesignTokenVariable[]; styles: DesignTokenStyle[] }
 
 // A locate query: the declarative facets find/findOne match, AND-combined. `type` and `key` are exact;
 // `name` is a case-insensitive substring (layer names are fuzzy — findOne's cardinality guard catches an

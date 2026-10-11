@@ -97,10 +97,17 @@ type SnapshotProgressiveEffect = SnapshotEffect & {
 };
 
 export function buildSimplifiedEffects(n: NodeSnapshot): SimplifiedEffects {
-  if (!n.effects) return {};
+  return n.effects ? simplifyEffectStack(n.effects, n.type === "TEXT") : {};
+}
+
+/**
+ * An effect stack in the read's `effects` spelling — a node's own, or an effect style's value. On
+ * text, shadows spell `textShadow` rather than `boxShadow`.
+ */
+export function simplifyEffectStack(stack: SnapshotEffect[], onText: boolean): SimplifiedEffects {
   // Figma stores effects bottom-first; every list below reads top-first, as CSS does (box-shadow's
   // first shadow paints on top), so reverse once here. The plugin's toFigmaEffects reverses back.
-  const effects = n.effects.filter((e) => e.visible).reverse();
+  const effects = stack.filter((e) => e.visible).reverse();
 
   // Drop and inner shadows share CSS box-shadow, interleaved in their real stacking order.
   const boxShadow = effects
@@ -128,7 +135,7 @@ export function buildSimplifiedEffects(n: NodeSnapshot): SimplifiedEffects {
   const result: SimplifiedEffects = {};
 
   if (boxShadow) {
-    if (n.type === "TEXT") {
+    if (onText) {
       result.textShadow = boxShadow;
     } else {
       result.boxShadow = boxShadow;

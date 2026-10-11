@@ -188,6 +188,7 @@ Warnings on nodes you neither returned nor logged appear as `[warn]` lines in th
 | `await flcm.findOne(query?, predicate?)` | one slim handle | Like find; throws unless exactly one matches. |
 | `await flcm.selection()` | slim handles[] | The current selection. |
 | `await flcm.measure(target)` | { x, y, width, height } | Measured pixels; x/y are relative to the containing frame or page, so a group's children measure from the frame around the group. |
+| `await flcm.designTokens()` | { variables, styles } | The variables and styles a write can bind. Each entry's reference pastes into a write: fill: entry.reference. See Variables and styles. |
 | `flcm.gradient(sugar)` | a paint value | { type: linear or radial, stops, angle?, at? }. Also accepts (type, stops, angle?). |
 | `flcm.image(url, options?)` | a paint value | Raster fill. Options: scaleMode, placeholder, opacity, rotation, filters, blendMode. Bytes are fetched through the host at the mutation verb. |
 | `flcm.effects(sugar)` | effect values[] | CSS and Figma effect values for an effects prop. |
@@ -647,6 +648,13 @@ await flcm.edit(card, {
 - A variable stands in for a number or a color: `width`, `height`, the four bounds, `opacity`, `borderRadius`, `strokeWidth`, `layout.padding` and a flex `layout.gap`; a solid paint layer, including a run's `color`; and `fontFamily`, `fontSize`, `fontWeight`, `lineHeight`, `letterSpacing`, `paragraphSpacing` and `paragraphIndent`, on `textStyle` or in a run. To bind one side of a shorthand, use its object form, e.g. `padding: { top: { variable: "Spacing/8" }, right: 16, bottom: 8, left: 16 }` or `borderRadius: { topLeft, topRight, bottomRight, bottomLeft }`. A blended or translucent bound paint is `{ type: "SOLID", color: { variable }, opacity, blendMode }`.
 - A style takes a whole slot: `fill`, `stroke`, `effects`, or `textStyle: { style }`. Beside a text style, `textStyle` keeps only the words a text style doesn't set: `textAlign`, `textAlignVertical`, `hyperlink` and `lineClamp`. Font words beside it, or in its runs, are refused.
 - A name is looked up among this file's local tokens first, then among those already used on the current page. An unknown or ambiguous name fails before anything is written and lists the candidates; pass an id to choose between them. A REST read names styles but gives variables only by id.
+
+**List what the file has** with `await flcm.designTokens()` before typing a color or a spacing by hand. It returns `{ variables, styles }`. A variable entry is `{ reference, collection, type, values, scopes?, remote? }`, with `values` keyed by mode name; an alias reads as the reference it points at. A style entry is `{ reference, type, value, remote? }`, its `value` spelled as a read spells that slot. The `reference` is the value to write: `fill: token.reference`, or `textStyle: token.reference` for a text style. The listing covers local tokens, tokens bound anywhere in the file, and every variable in the libraries enabled for the file. Figma gives plugins no list of a library's styles, so a library style appears only once something in the file uses it. It reads every page, which takes seconds in a large file: call it once and keep what you need in `session`. Filter in your script rather than returning a large file's whole listing:
+
+```js
+const { variables } = await flcm.designTokens();
+return variables.filter((v) => v.type === "COLOR" && /brand/i.test(v.reference.variable.name));
+```
 
 Creating variables, collections, modes and styles, switching modes, and binding gradient stops, effect fields or grid gaps all still need raw `figma.*`.
 

@@ -14,13 +14,14 @@ import { edit } from "./edit.js";
 import { editMany } from "./edit-many.js";
 import { append, prepend, insertBefore, insertAfter, remove, clone, measure, replace } from "./structure.js";
 import { page } from "./page.js";
+import { designTokens } from "./design-tokens.js";
 import type { Flcm } from "./schema.js";
 
-export { detach, component, variants, render, gradient, image, effects, get, find, findOne, selection, id, edit, editMany, append, prepend, insertBefore, insertAfter, remove, clone, measure, replace, page };
+export { detach, component, variants, render, gradient, image, effects, get, find, findOne, selection, id, edit, editMany, append, prepend, insertBefore, insertAfter, remove, clone, measure, replace, page, designTokens };
 
 // Tier-1 drift guard, held at the one true public boundary: the exported surface must match the typed
 // Flcm interface schema.ts derives docs and examples from — exhaustively, so a verb added to Flcm but
 // not exported here (or exported with a drifted signature) fails plugin typecheck. `satisfies` checks
 // without widening; the local is DCE'd from the bundle (pure init, unreferenced).
-const _flcmSurface = { detach, component, variants, render, gradient, image, effects, get, find, findOne, selection, id, edit, editMany, append, prepend, insertBefore, insertAfter, remove, clone, measure, replace, page } satisfies Flcm;
+const _flcmSurface = { detach, component, variants, render, gradient, image, effects, get, find, findOne, selection, id, edit, editMany, append, prepend, insertBefore, insertAfter, remove, clone, measure, replace, page, designTokens } satisfies Flcm;
 void _flcmSurface;
