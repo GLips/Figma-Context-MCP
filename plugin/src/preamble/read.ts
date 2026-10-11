@@ -415,7 +415,7 @@ async function filterByPredicate(hits: SceneNode[], root: ScanRoot, predicate: R
   if (hits.length > MATERIALIZE_CAP) {
     throw new Error(
       `flcm.find: the query matched ${hits.length} candidate nodes, over the ${MATERIALIZE_CAP}-node materialization cap — running the predicate would read that many full node shapes. ` +
-        `Narrow the query (type/name/key/within) so fewer nodes reach the predicate.`,
+        `Narrow the query so fewer nodes reach the predicate.`,
     );
   }
   if (!hits.length) return [];
@@ -499,7 +499,7 @@ export async function findOne(query: FindQuery = {}, predicate?: ReadPredicate):
   if (hits.length !== 1) {
     throw new Error(
       `flcm.findOne: expected exactly one match for ${JSON.stringify(query)} but found ${hits.length}. ` +
-        `Use flcm.find for zero-or-many, or narrow the query (type/name/key/within).`,
+        `Use flcm.find for zero-or-many, or narrow the query or predicate.`,
     );
   }
   return hits[0];

@@ -824,11 +824,10 @@ export interface Flcm {
   // Complete runtime tree, including hidden and inherited children, plus component definitions.
   get(target: Target): Promise<GetResult>;
   // Locate: every node matching the query, as slim handles (identity + a cheap layout world-model). May be
-  // empty; AND-combines type/name/key/within (default scope: current page). The query is a FILTER, not an
-  // address — only `within` takes a target (id/key/handle); the other facets are match conditions, and a
-  // bare string is rejected rather than guessed at. Dive into a hit with `get`. An
-  // optional predicate filters by anything in the full read shape (values inline: `n.fill === '#FFF'`);
-  // The query pre-filters live nodes; a whole-scope simplify supplies predicate shapes and geometry.
+  // empty; AND-combines the query keys (default scope: current page). The query is a FILTER, not an
+  // address — only `within` takes a target (id/key/handle); the other keys are match conditions, and a
+  // bare string is rejected rather than guessed at. Dive into a hit with `get`. The query pre-filters live
+  // nodes; a whole-scope simplify supplies predicate shapes and geometry.
   find(query?: FindQuery, predicate?: ReadPredicate): Promise<SlimHandle[]>;
   // Locate exactly one — throws on 0 or >1, naming the count (a blind agent must never silently act on the
   // first of several fuzzy-name matches). Same query+predicate as find.

@@ -517,7 +517,7 @@ ${verbLines}
 
 MUST-KNOW
 - Store plain data; return ids for live nodes.
-- get/find predicates see full trees. Reads project at return/console: elided gives cut sizes in JSON characters. Survey session.last or fresh flcm.get(id); never rerun edits. Computed data stays whole.
+- find predicates see the full read shape. Reads project at return/console: elided gives cut sizes in JSON characters. Survey session.last or fresh flcm.get(id); never rerun edits. Computed data stays whole.
 - Metrics take a number or "Npx"; width/height also take "N%", "fill", "hug". Colors/gradients/shadows are CSS strings.
 - Unsupported CSS fails loud.
 

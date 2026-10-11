@@ -67,7 +67,7 @@ export const READS = `The read verbs — \`get\`, \`find\`, \`findOne\`, \`selec
 - \`type\` and \`key\` match exactly; \`hasAnnotations\` is a boolean.
 - \`within\` is a target whose descendants are searched, never the node itself. Without it, the current page.
 
-The predicate must be synchronous and is offered at most 5,000 candidates, so narrow large files with \`within\` or the query.
+find's predicate, its optional second argument, must be synchronous and is offered at most 5,000 candidates, so narrow large files with \`within\` or the query.
 
 ### A read is a spec
 
