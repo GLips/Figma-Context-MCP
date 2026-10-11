@@ -10,7 +10,7 @@ import { specNode } from "../../harness/spec-node.js";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
-import { find, findOne, selection } from "./flcm.js";
+import { find, findOne, get, selection } from "./flcm.js";
 import { render } from "./render.js";
 import { warnings } from "./warnings.js";
 
@@ -187,6 +187,34 @@ test("find with a predicate keeps only nodes it accepts, against inline styling 
   // Matches still come back as SlimHandles (find's contract holds) — identity + layout world-model.
   assert.equal(whites[0].type, "RECTANGLE");
   assert.equal(whites[0].width, 40);
+});
+
+// An async predicate returns a Promise, which is always truthy; find must judge what it resolves to.
+test("an async predicate filters by what it resolves to, and can call flcm per candidate", async () => {
+  createFigmaMock();
+  await render({
+    type: "FRAME",
+    key: "wrap",
+    width: 200,
+    height: 100,
+    layout: { mode: "row", gap: 8 },
+    children: [
+      { type: "RECTANGLE", key: "white", width: 40, height: 40, fill: "#ffffff" },
+      { type: "RECTANGLE", key: "black", width: 40, height: 40, fill: "#000000" },
+    ],
+  });
+
+  const whites = await find({ type: "RECTANGLE" }, async (n) => (await get(n.id)).node.fill === "#FFFFFF");
+  assert.deepEqual(
+    whites.map((h) => h.key),
+    ["white"],
+  );
+  await assert.rejects(
+    find({ type: "RECTANGLE" }, async () => {
+      throw new Error("predicate broke");
+    }),
+    /predicate broke/,
+  );
 });
 
 test("a predicate-only find (no query facets) materializes every rendered candidate", async () => {

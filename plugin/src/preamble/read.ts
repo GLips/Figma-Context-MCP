@@ -23,6 +23,7 @@ import { assertNodeStillOnCanvas } from "./freshness.js";
 import { registerRead } from "./host.js";
 import { isReadableSceneNode, readableChildren } from "./scene-readability.js";
 import { warnings } from "./warnings.js";
+import { mapInBatches } from "./batches.js";
 import { TokenLookups } from "./tokens.js";
 import { simplify, project, projectNames, projectReadNode, type SimplifiedNode } from "@framelink/core";
 import type { NodeSnapshot } from "@framelink/core/snapshot";
@@ -431,11 +432,11 @@ async function filterByPredicate(hits: SceneNode[], root: ScanRoot, predicate: R
   if (!hits.length) return [];
   const categories = await readAnnotationCategoryNames();
   const index = await simplifiedIndex(root, unreadable, categories);
-  const survivors: SlimHandle[] = [];
-  for (const [hit, simplified] of readHits(hits, index, unreadable)) {
-    if (predicate(simplified)) survivors.push(projectSlim(hit, simplified, categories));
-  }
-  return survivors;
+  const read = readHits(hits, index, unreadable);
+  // Awaited because an async predicate's Promise is always truthy. Batched, so a predicate that calls flcm
+  // per candidate doesn't open thousands of reads at once.
+  const verdicts = await mapInBatches(read, ([, simplified]) => predicate(simplified));
+  return read.filter((_, i) => verdicts[i]).map(([hit, simplified]) => projectSlim(hit, simplified, categories));
 }
 
 // A bare string is deliberately NOT accepted as a query (ruled 2026-08-08). Target resolution can

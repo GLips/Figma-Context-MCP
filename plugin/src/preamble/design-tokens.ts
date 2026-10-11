@@ -23,6 +23,7 @@
 import { sceneFigma as figma } from "./scene-access.js";
 import { enabledLibraryListing, scanUsedTokens, TokenLookups } from "./tokens.js";
 import { warnings } from "./warnings.js";
+import { mapInBatches } from "./batches.js";
 import { liveFontWords } from "./fonts.js";
 import { decodeSceneEffect, decodeScenePaints, decodeSegmentStyle, type SceneEffect, type ScenePaint, type SceneTextSegment } from "./node-to-snapshot.js";
 import {
@@ -212,21 +213,13 @@ async function libraryTokens(query: DesignTokenLibraryQuery): Promise<LibraryDes
   // The type filter runs on the listing, before any import, which is what makes it worth having.
   const wanted = chosen.flatMap(({ variables }) => variables)
     .filter((v) => query.type === undefined ? LISTED_VARIABLE_TYPES.has(v.resolvedType) : v.resolvedType === query.type);
-  const imported = await settleInBatches(wanted, (v) => figma.variables.importVariableByKeyAsync(v.key));
+  // Every import is a library request, and a design system can hold thousands of variables.
+  const imported = await mapInBatches(wanted, (v) => settle(figma.variables.importVariableByKeyAsync(v.key)));
   const failed = imported.filter((r) => !r.ok).length;
   if (failed) warnings.add({ id: null, message: "flcm.designTokens: " + failed + " of " + wanted.length + " variable imports from " + JSON.stringify(query.library) + " failed and are left out." });
   const variables = imported.flatMap((r) => (r.ok ? [r.value] : []));
   const libraryOf = new Map(wanted.map((v) => [v.key, query.library]));
   return { variables: await new VariableDescriber(listable(variables), new TokenLookups(), libraryOf).all() };
-}
-
-// Every import is a library request, and a design system can hold thousands of variables; a bounded
-// batch keeps one read from opening them all at once.
-const IMPORT_BATCH = 16;
-async function settleInBatches<T, R>(items: readonly T[], run: (item: T) => Promise<R>): Promise<Settled<R>[]> {
-  const out: Settled<R>[] = [];
-  for (let i = 0; i < items.length; i += IMPORT_BATCH) out.push(...(await Promise.all(items.slice(i, i + IMPORT_BATCH).map((item) => settle(run(item))))));
-  return out;
 }
 
 type Settled<R> = { ok: true; value: R } | { ok: false };
