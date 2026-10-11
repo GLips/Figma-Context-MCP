@@ -48,6 +48,7 @@ import type { EditDelta } from "./schema.js";
 import { compileEditPlan, loadEditResources, gateEditResources, assertEditPlanLands,
   applyEditPlanWrites, settleEditPlanSizes, settleEditPlanPositions } from "./edit-plan.js";
 import { beginMutatingApply } from "./verb-error.js";
+import { showValue } from "./validate.js";
 
 // Where a placement verb puts its subject inside the destination. `place` is a closure evaluated
 // in the APPLY span, right after the gate that built it — the sibling's index is read at the
@@ -231,13 +232,26 @@ function applyPlacement(verb: string, { dest, node, words }: PreparedPlacement):
 
 type Placement = "end" | "start" | "before" | "after";
 
-function placeVerb(verb: string, anchor: Target | undefined, spec: NodeSpec, placement: Placement): Promise<AuthoredTree> {
+// render's anchor is the current page; every other placement verb names its anchor as a required argument.
+type PlacementAnchor = "currentPage" | { arg: "parent" | "sibling"; target: Target };
+
+// An explicitly passed `undefined`/`null` target is almost always an unset variable (`copy.id` off a value
+// with no id). A verb with an omitted-argument default must not read it as an omission: that default would
+// act on a node the agent never named.
+function refuseNullishTarget(subject: string, arg: string, value: unknown, remedy: string): void {
+  if (value == null) {
+    throw new Error(subject + ": " + arg + " is " + showValue(value) + " — pass a target (id, flcm/key, flcm.id(id) or a handle)" + remedy + ".");
+  }
+}
+
+function placeVerb(verb: string, anchor: PlacementAnchor, spec: NodeSpec, placement: Placement): Promise<AuthoredTree> {
   const subject = "flcm." + verb;
   return enterMutatingVerb(verb, async () => {
+    if (anchor !== "currentPage") refuseNullishTarget(subject, anchor.arg, anchor.target, ", or use flcm.render to place on the current page");
     const tree = compileTree(spec, subject + ".spec");
     const pages = createLoadedPages();
-    const anchorNode = anchor === undefined ? figma.currentPage : await resolveAnchor(anchor, placement, pages);
-    if (anchor === undefined) await loadPageForWrite(anchorNode, pages);
+    const anchorNode = anchor === "currentPage" ? figma.currentPage : await resolveAnchor(anchor.target, placement, pages);
+    if (anchor === "currentPage") await loadPageForWrite(anchorNode, pages);
     return { tree, anchorNode, pages, loaded: await loadTreeResources(tree) };
   }, ({ tree, anchorNode, pages, loaded }): PreparedInsert => {
     const dest = destinationOf(subject, anchorNode, placement, pages);
@@ -257,19 +271,19 @@ function placeVerb(verb: string, anchor: Target | undefined, spec: NodeSpec, pla
 }
 
 export function render(spec: NodeSpec): Promise<AuthoredTree> {
-  return placeVerb("render", undefined, spec, "end");
+  return placeVerb("render", "currentPage", spec, "end");
 }
 export function append(parent: Target, spec: NodeSpec): Promise<AuthoredTree> {
-  return placeVerb("append", parent, spec, "end");
+  return placeVerb("append", { arg: "parent", target: parent }, spec, "end");
 }
 export function prepend(parent: Target, spec: NodeSpec): Promise<AuthoredTree> {
-  return placeVerb("prepend", parent, spec, "start");
+  return placeVerb("prepend", { arg: "parent", target: parent }, spec, "start");
 }
 export function insertBefore(sibling: Target, spec: NodeSpec): Promise<AuthoredTree> {
-  return placeVerb("insertBefore", sibling, spec, "before");
+  return placeVerb("insertBefore", { arg: "sibling", target: sibling }, spec, "before");
 }
 export function insertAfter(sibling: Target, spec: NodeSpec): Promise<AuthoredTree> {
-  return placeVerb("insertAfter", sibling, spec, "after");
+  return placeVerb("insertAfter", { arg: "sibling", target: sibling }, spec, "after");
 }
 
 /**
@@ -316,6 +330,16 @@ export function remove(target: Target): Promise<RemoveResult> {
 export function clone(target: Target, parent?: Target): Promise<Handle>;
 export function clone(target: Target, props: EditDelta, parent?: Target): Promise<Handle>;
 export function clone(target: Target, propsOrParent?: EditDelta | Target, parent?: Target): Promise<Handle> {
+  // Only an ABSENT argument takes the beside-the-original default; arguments.length is what tells them apart.
+  if (arguments.length >= 2) {
+    try {
+      refuseNullishTarget("flcm.clone", arguments.length === 2 ? "the second argument (props or parent)" : "props", propsOrParent,
+        ", or omit it to copy beside the original");
+      if (arguments.length >= 3) refuseNullishTarget("flcm.clone", "parent", parent, ", or omit it to copy beside the original");
+    } catch (error) {
+      return Promise.reject(error);
+    }
+  }
   const isDestination = typeof propsOrParent === "string" || !!propsOrParent && typeof propsOrParent === "object" && isTargetShaped(propsOrParent);
   const props = isDestination ? undefined : propsOrParent as EditDelta | undefined;
   const destination = isDestination ? propsOrParent as Target : parent;

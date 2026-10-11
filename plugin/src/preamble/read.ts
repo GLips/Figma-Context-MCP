@@ -17,7 +17,7 @@ import {
   type SceneNodeLike,
   type SceneStyleResolver,
 } from "./node-to-snapshot.js";
-import { rejectUnknownKeys } from "./validate.js";
+import { rejectUnknownKeys, showValue } from "./validate.js";
 import { assertNodeStillOnCanvas } from "./freshness.js";
 import { registerRead } from "./host.js";
 import { isReadableSceneNode, readableChildren } from "./scene-readability.js";
@@ -447,6 +447,15 @@ export async function find(query: FindQuery = {}, predicate?: ReadPredicate): Pr
   }
   if (query.name !== undefined && typeof query.name !== "string" && !(query.name instanceof RegExp)) throw new Error("flcm.find: name must be a string (literal substring) or RegExp.");
   if (predicate !== undefined && typeof predicate !== "function") throw new Error("flcm.find: predicate must be a function.");
+  // A present-but-nullish `within` is almost always an unset variable (`within: copy.id` off a value that has
+  // no id). Falling back to the page default would answer with someone else's nodes, so only an ABSENT key
+  // means "the current page".
+  if ("within" in query && query.within == null) {
+    throw new Error(
+      `flcm.find: within is ${showValue(query.within)} — pass a container target (id, flcm/key, flcm.id(id) or a handle), ` +
+        "or omit within to search the current page.",
+    );
+  }
   const root = await scanRoot(query.within);
   // findAllWithCriteria, not findAll(callback): Figma's own walk crashes the whole search when a
   // callback reads a node it lists but cannot read. Collecting first lets each node be checked.

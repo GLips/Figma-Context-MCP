@@ -292,3 +292,15 @@ test("find skips nodes Figma lists but cannot read, and names them in a warning"
   const [warning] = warnings.summary().filter((line) => line.includes("could not read"));
   assert.match(warning, new RegExp(zombieSpec.id));
 });
+
+test("an explicitly undefined or null within refuses, naming it; an omitted one still searches the page", async () => {
+  createFigmaMock();
+  await render({ type: "FRAME", key: "card", width: 100, height: 100, children: [{ type: "RECTANGLE", key: "chip", width: 10, height: 10 }] });
+
+  assert.equal((await find({ type: "RECTANGLE" })).length, 1);
+  // An unset variable (`within: copy.id` off a value with no id) must not widen the search to the page.
+  for (const within of [undefined, null]) {
+    await assert.rejects(find({ type: "RECTANGLE", within }), /flcm\.find: within is (undefined|null)/);
+    await assert.rejects(findOne({ type: "RECTANGLE", within }), /flcm\.find: within is (undefined|null)/);
+  }
+});
