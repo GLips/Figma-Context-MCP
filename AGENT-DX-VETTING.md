@@ -57,6 +57,7 @@ Nothing in the notes duplicates fig-31, but A-17 (compact outline) and fig-31 bo
   - _partly_: some of it landed; the residual is named.
   - _likely fixed_: the code clearly shows the fix. These are all in section B.
 - `[HUMAN REVIEWED]` means the item was discussed with you and the note records that you shaped the solution. It still wants your check.
+- **Tickets** (on every entry with a verdict) lists the tickets carrying it, follow-ups included: _shipped_ (ticket closed), _in progress_, _open_ (filed, not started), or `none (approved, not filed)`.
 
 ---
 
@@ -65,6 +66,8 @@ Nothing in the notes duplicates fig-31, but A-17 (compact outline) and fig-31 bo
 ### A-1. `find` with an explicitly undefined `within` searches the whole page 🔴
 
 **Verdict (Graham, 2026-10-02): approve.** Omitted scope retains the current-page default. An explicitly supplied `undefined` or `null` scope must fail before searching, with an error identifying the argument. Audit other optional target arguments for the same accidental fallback while preserving documented omitted-argument behavior.
+
+**Tickets:** fig-98 (shipped)
 
 **Status:** open. `read.ts:246` does `if (within == null) return figma.currentPage`.
 
@@ -78,6 +81,8 @@ Nothing in the notes duplicates fig-31, but A-17 (compact outline) and fig-31 bo
 ### A-2. The components docs push text properties; the opinion that overrides are normal never reaches agents 🔴 `[HUMAN REVIEWED]`
 
 **Verdict (Graham, 2026-10-02): approve, one sentence only.** Add concise component guidance: "Use direct overrides for ordinary text and images; expose a named component property when it makes the component easier to use." No new examples or requirement that a Boolean already be used by an instance.
+
+**Tickets:** fig-99 (shipped)
 
 **Status:** open. There is no "most content should not be a property" paragraph. The old "prefer a property over overriding" sentence is gone.
 
@@ -95,6 +100,8 @@ Nothing in the notes duplicates fig-31, but A-17 (compact outline) and fig-31 bo
 ### A-3. Scripts have no durable address, so every rejection costs a full resend 🟡 `[HUMAN REVIEWED]`
 
 **Verdict (Graham, 2026-10-02): approve saved-file execution through MCP.** Add a JavaScript file-path alternative to inline code on the MCP code-execution tool, using the same FLCM runtime and shared execution path as the CLI. Document the option concisely in that tool’s own description and arguments. This approval covers file-based execution; the separate helper-source/session/eval proposal below is not included.
+
+**Tickets:** fig-100 (shipped), fig-119 (in progress)
 
 **Status:** partly. HEAD has no `scriptPath`. The unmerged `ce61b37` on `codex/saved-script-cli` adds a CLI `execute <file>`, but that is a CLI command, not something `figma_execute_code` accepts. `session` still refuses functions, and the store-source-then-`eval` pattern is undocumented.
 
@@ -118,6 +125,8 @@ This is server-only, so it is not launch-gated. It is ranked 3rd on value.
 ### A-4. Enumerated sets read as closed, so agents conclude documented capabilities are missing 🔴 `[HUMAN REVIEWED]`
 
 **Verdict (Graham, 2026-10-02): approve, clarify through removal.** Consolidate search guidance into one authoritative reference row: the listed query keys are closed; the optional predicate can test any field in each candidate's full flcm read shape. Remove redundant surrounding explanations rather than adding another paragraph or expanding example lists. Route likely query-key misses concisely in the existing error guidance. No additional search facets in this batch. Apply the illusion-of-completeness principle; examples are optional, not the fix.
+
+**Tickets:** fig-101 (shipped)
 
 **Status:** partly.
 
@@ -154,6 +163,8 @@ Add one line that `name` also matches a TEXT's auto-name, which is its content (
 - Docs: `clone` is the one documented copy route. Delete the strip-ids-to-copy recipe, but keep the sentence explaining what deleting only the root id does. Recipes show wrapping and extracting by mapping ids (`node.children.map(({ id }) => ({ id }))`), so selecting live nodes needs no selector syntax.
 - Warning: after a verb succeeds, report live nodes placed directly into a node that verb created, where they ended up outside their old parent. One line per source container, saying whether it is now empty and naming `flcm.clone` for copying. Skip sources the verb removed, and slot content Figma copied rather than moved.
 
+**Tickets:** fig-109 (shipped), fig-110 (shipped)
+
 **Status:** open. The behaviour is documented (`flcm.md:24`); there is no intent word and no refusal.
 
 **Problem:** Stripping only the root id is the natural way to say "make a copy". It creates a new root and _moves_ every id-bearing child into it, leaving the source empty. Nothing errors.
@@ -168,6 +179,8 @@ Add one line that `name` also matches a TEXT's auto-name, which is its content (
 
 **Live verification (2026-10-02): passed.** A read-only CLI probe traversed `g.node.children[0]` on an existing main component and an instance, returned selected child ID/name/type/count fields in custom objects, and checked ID/name against native Figma children. Both returned the fields successfully. The old missing-runtime-children failure did not reproduce; this item remains scoped to undefined-field warnings.
 
+**Tickets:** fig-102 (shipped)
+
 **Status:** open. `code-mode-tools.ts:34-37` only notes that the drop happens. `c5efc86` covers the failure envelope only.
 
 **Problem:** `return { cardId, slotId, slotName, refs }` arrived as `{ cardId }`. The agent read that as "the tool returned nothing" and filed a false bug. This hides every typo'd field access in code mode.
@@ -181,6 +194,8 @@ This is tiered 🔴 because the result is serialized in plugin host code: `plugi
 ### A-7. Targeted `get` has no parent context: fixed sizes become `"contextual"` and position is dropped 🟡 `[HUMAN REVIEWED]`
 
 **Partial verdict (Graham, 2026-10-02): approve preserving real parent context for targeted reads of nested nodes.** A nested node should retain the same sizing intent and parent-relative position whether read directly or through its parent: fill/hug remain semantic values, and fixed dimensions remain numeric. Apply this consistently to plugin and REST reads through the shared converter. Plugin reads can obtain the live parent directly. For targeted REST reads, investigate the filtered GET file endpoint with ids, which includes ancestor chains, instead of the current isolated file-nodes response. Keep returned content scoped to the requested subtree and preserve target-relative depth semantics; verify payload cost and parity. Actual canvas-level sizing policy remains unchanged pending its separate decision. Do not add measured pixel dimensions alongside every fill/hug value; explicit measurement remains the way to request them. The representation and write semantics for actual canvas-level design frames remain under discussion. Neither removing contextual everywhere nor the proposed bare-contextual refusal is approved by this partial verdict.
+
+**Tickets:** none (approved, not filed)
 
 **Status:** open.
 
@@ -211,6 +226,8 @@ This is tiered 🔴 because the result is serialized in plugin host code: `plugi
 - Fix the move error's wording: no "edit the component" advice, no doubled rollback sentence, no `flcm.flcm.append.spec`.
 - `flcm.find` must survive an unreadable node rather than crash page-wide.
 
+**Tickets:** fig-103 (shipped)
+
 **Status:** partly.
 
 - Descendant reads after moving into a slot are fixed (`4a295eb`, B-21).
@@ -239,6 +256,8 @@ This is tiered 🔴 because the result is serialized in plugin host code: `plugi
 - `teamlibrary` was added to the manifest now (fig-112), so unused library variables can be discovered later without a re-import. The plugin API can't discover library styles at all; state that once in the docs.
 - Out of scope: Enterprise-only REST variable names. REST emits variable ids without names.
 
+**Tickets:** fig-112 (shipped), fig-113 (shipped), fig-114 (shipped), fig-117 (in progress), fig-118 (in progress)
+
 **Status:** open.
 
 - Variables are "deliberately out of v1" (`flcm.md:970`).
@@ -259,6 +278,8 @@ This is tiered 🔴 because the result is serialized in plugin host code: `plugi
 **Verdict (Graham, 2026-10-02): approve, including asynchronous approval.** Clarify recovery messages for disconnected plugins and pending approval. After the existing wait expires, identify the blocker, state when no code was submitted, and name the action required before retrying. Use the same guidance for all callers: report the blocker to the user or coordinating agent and retry after the required state change. Apply submission-status wording only where the call is known not to have been submitted.
 
 Include approval after the originating request has ended in this item. Retain a pending session entry that the user can approve later, allowing the same authenticated session to use that approval on its next connection. Approval must not execute or replay the expired script; the agent still retries. In the plugin UI, visually distinguish inactive/expired requests from actively waiting requests and state clearly that nothing is currently waiting to run. Determine the secure disconnected-session handoff during implementation; a matching display name or project path alone is not session identity. Existing wait lengths need not change. This scope includes plugin UI and approval lifecycle work, beyond the original messaging-only proposal.
+
+**Tickets:** fig-104 (shipped), fig-121 (open)
 
 **Status:** partly.
 
@@ -286,6 +307,8 @@ This is server-only, but it is part of the first-run experience.
 
 **Updated screenshot-default decision (supersedes the earlier approval):** Keep isolated node screenshots as the default. Context is explicitly requested; when its margin is omitted, use 10% of the target's longest side, clamped to 80–160px. Explicit finite nonnegative margins remain supported, including zero. Raising the calculated minimum from 24px to 80px remains approved implementation work.
 
+**Tickets:** none (approved, not filed)
+
 **Status:** partly. `context: true` plus `margin` exists as an opt-in prototype (`code-mode-tools.ts:300-323`, `plugin/src/screenshot-capture.ts`). There is no crop, no array of ids and no labels. Per the overnight notes, cleanup can leave a temporary slice behind on forced shutdown.
 
 **Problems:**
@@ -311,6 +334,8 @@ This is server-only, but it is part of the first-run experience.
 **Verdict (Graham, 2026-10-02): approve center-pivot rotation as the dialect default.** Implement transform/position compensation so rotation uses the node's center, matching the demonstrated Figma UI behavior and ordinary CSS. Do not add a pivot/origin option; callers needing a different pivot can implement it in custom code. This replaces the documentation-only proposal. Anchor removal remains approved under A-14.
 
 **Evidence and acceptance:** Fresh live comparisons confirmed that both the native rotation setter and a rotation-only FLCM edit keep the top-left fixed; center compensation works on the retained comparison board. The Figma API describes matrix transforms as the way to implement center rotation. Verify creation and edits, already-rotated nodes, repeated identical edits without drift, simultaneous size/position changes, lines, and auto-layout children. Auto-layout controls flow-child translation, so establish the correct behavior live rather than silently falling back to top-left rotation. Keep reads, authored coordinates and documentation consistent with the chosen center-pivot contract.
+
+**Tickets:** fig-105 (shipped)
 
 **Status:** open. The "spins about its centre" wording arrived in `9bb7608` (9/15), whose message is about _when_ rotation composes, not where it pivots. The site-exploration session that found the mismatch came later (note dated 9/21), and no commit since touches the pivot. All four rotation rows still say "centre" (`flcm.md:263,376,389,420`), and I found no left/top translation. `measure` reports the unrotated box, so nothing in a read reveals the difference.
 
@@ -345,6 +370,8 @@ This is server-only, but it is part of the first-run experience.
 ### A-14. Renames: `pin` → `constraints`, `anchor` → `origin` 🔴 `[HUMAN REVIEWED]`
 
 **Verdict (Graham, 2026-10-02): approve `pin` → `constraints`; remove `anchor`.** Preserve pin's behavior and values under the name constraints. After reviewing the session audit, Graham chose to remove the anchor placement helper. This supersedes the conditional anchor-to-origin rename and proposed origin behavior expansion; do not introduce origin. Remove the helper from supported inputs, implementation, reference generation and examples, and reconcile affected tests. The audit found use concentrated in one July tool-ergonomics exercise plus one explicit centering probe, with no observed uses in the two client projects. See `.scratch/anchor-usage-audit/report.md` for coverage limits. A-12 now separately approves center-pivot rotation without exposing a pivot/origin option.
+
+**Tickets:** fig-106 (shipped)
 
 **Status:** open. Both words are still in `schema.ts:219,227`. The `fromRead` → `toSpec` half of the note is moot, because `fromRead` was removed.
 
@@ -417,6 +444,8 @@ This is server-only, but it is part of the first-run experience.
   - Every property must be bound in the same call.
   - Binders that disagree fail, naming each one.
   - Reads and writes drop the field together.
+
+**Tickets:** fig-115 (shipped), fig-116 (shipped)
 
 **Status:** partly.
 
@@ -648,6 +677,8 @@ All are settled scope per REMAINING §2.
 - `flcm.clone` returns the copy's handle, the same shape `edit` returns, so `(await flcm.clone(...)).id` works like every other verb. Delete `CloneResult` and its `to` field. `remove` keeps `{ removedId, from }`: a deleted node shouldn't look like a usable handle.
 - No `pageX`/`pageY`. Overlays belong in the closest container, where parent-relative x/y already work, and review notes have Figma annotations.
 - Correct `measure`'s docs: x/y are relative to the containing frame or page, not the immediate parent. GROUP and BOOLEAN_OPERATION parents are skipped.
+
+**Tickets:** fig-111 (shipped)
 
 **Status:** partly.
 
