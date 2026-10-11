@@ -87,6 +87,13 @@ export function registerCodeModeTools(
     };
   }
 
+  function scriptSourceReply(got: "neither" | "both"): CallToolResult {
+    return retryableToolReply(
+      `figma_execute_code needs exactly one of code or scriptPath, and got ${got}, so this call did ` +
+        `not run. This is NOT a failure: retry with one of them.`,
+    );
+  }
+
   /** A gate refusal proves the submitted body did not execute, including approval revoked after polling. */
   function gateResult(reply: unknown): { content: { type: "text"; text: string }[] } | null {
     if (!isPendingApproval(reply)) return null;
@@ -110,17 +117,39 @@ export function registerCodeModeTools(
       {
         description: EXECUTE_CODE_DESCRIPTION,
         inputSchema: {
+          // Both optional at the wire so a call with neither or both reaches the handler's named,
+          // retryable refusal instead of the SDK's fixed validation error (see fail-loud-params.ts).
           code: z
             .string()
+            .optional()
             .describe(
-              "JavaScript to run in the Figma sandbox. Runs in an async body; use await freely; return a value.",
+              "JavaScript to run in the Figma sandbox. Runs in an async body; use await freely; return a value. Pass code or scriptPath, not both.",
+            ),
+          scriptPath: z
+            .string()
+            .optional()
+            .describe(
+              "Path to a .js file holding the same kind of script, read when the call arrives. Must be inside the server's asset root (the --asset-root directory, default the server's working directory); a relative path resolves against that root, so prefer an absolute path. Use it for long scripts: after an error, edit the file and resend only the path.",
             ),
         },
       },
-      async ({ code }, extra) => {
+      async ({ code, scriptPath }, extra) => {
+        if (code !== undefined && scriptPath !== undefined) return scriptSourceReply("both");
+        let script: string;
+        if (code !== undefined) script = code;
+        else if (scriptPath !== undefined) {
+          try {
+            script = await runtime.readSavedScript(scriptPath);
+          } catch (error) {
+            return retryableToolReply(
+              `figma_execute_code ${(error as Error).message}, so this call did not run. Fix the ` +
+                `path and retry.`,
+            );
+          }
+        } else return scriptSourceReply("neither");
         const unavailable = pluginUnavailableReply();
         if (unavailable) return unavailable;
-        const outcome = await executePluginCode(runtime, code, approvalOptions(extra), {
+        const outcome = await executePluginCode(runtime, script, approvalOptions(extra), {
           figma: figmaService,
         });
         if (outcome.kind === "refused")

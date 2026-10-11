@@ -15,6 +15,8 @@ export interface DocsChannel {
   screenshotHowTo: string;
   /** Completes "a read's `comments: n` counts the unresolved threads pinned on that node; …". */
   commentsHowTo: string;
+  /** The quick-start's line on running a script from a file; null where every run already does. */
+  savedScriptHowTo: string | null;
 }
 
 export const MCP_DOCS_CHANNEL: DocsChannel = {
@@ -34,6 +36,8 @@ return session.card.id;
 { "nodeId": "12:345", "scale": 3 } // 3× resolution, for fine detail
 \`\`\``,
   commentsHowTo: "the `get_figma_comments` tool reads them, given the node's id in `scope`",
+  savedScriptHowTo:
+    "LONG SCRIPT? Save a .js file and pass scriptPath instead of code; after an error, edit it and resend the path.",
 };
 
 export const CLI_DOCS_CHANNEL: DocsChannel = {
@@ -50,4 +54,5 @@ echo 'return' > look.js
 ${CLI_NAME} execute look.js --screenshot out/card@3x.png --node-id 12:345 --scale 3
 \`\`\``,
   commentsHowTo: `\`${CLI_NAME} comments --file-key <fileKey> --node-id <id>\` reads them`,
+  savedScriptHowTo: null,
 };

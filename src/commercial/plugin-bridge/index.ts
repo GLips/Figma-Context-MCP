@@ -6,6 +6,8 @@ import { join } from "node:path";
 import { Logger } from "~/utils/logger.js";
 import { PluginBridge } from "./bridge.js";
 import { fetchAndProcessImage, isLocalImageSource, createLocalImageReader } from "./images.js";
+import { createContainedFileReader } from "./contained-file.js";
+import { createSavedScriptReader } from "./saved-script.js";
 import { ImageByteCache, createImagesCapability } from "./image-requests.js";
 import { createCommentPinsCapability } from "./comment-pins.js";
 import { WS_PORT_BLOCK } from "./ports.js";
@@ -35,6 +37,8 @@ export interface PluginBridgeRuntime {
   stop?(): void;
   /** Seat and free-allowance authorization for figma_execute_code. */
   writeAccess: WriteAccess;
+  /** Read figma_execute_code's scriptPath, contained under the asset root. */
+  readSavedScript(scriptPath: string): Promise<string>;
   /** True once a plugin has connected at least once in this process (latched — see above). */
   hasEverConnected(): boolean;
   /** Run cb on the first plugin connection; runs immediately if one already happened. */
@@ -56,9 +60,11 @@ export function startPluginBridge({
   // The images handler answers the plugin's mid-run image requests (protocol 2). Sources split by
   // scheme: https urls go through the guarded fetch plus a session-lifetime URL→bytes cache, local
   // paths through the asset-root-contained file read (uncached — see image-requests.ts).
-  // One reader per process: it pins the canonical asset root on first use, so the authorization
-  // boundary can't shift under a retargeted root symlink mid-session.
-  const readLocalImage = createLocalImageReader(assetRoot);
+  // One contained reader per process, shared by flcm.image paths and saved scripts: it pins the
+  // canonical asset root on first use, so the authorization boundary can't shift under a retargeted
+  // root symlink mid-session.
+  const readContained = createContainedFileReader(assetRoot);
+  const readLocalImage = createLocalImageReader(readContained);
   const writeAccess = new WriteAccess(
     new FramelinkApiClient(framelinkApiUrl),
     new WriteAccessStore(),
@@ -134,6 +140,7 @@ export function startPluginBridge({
   return {
     bridge,
     writeAccess,
+    readSavedScript: createSavedScriptReader(readContained),
     stop: () => {
       clearInterval(writeAccessTick);
       writeAccess.stop();

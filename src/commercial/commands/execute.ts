@@ -4,13 +4,14 @@
  */
 import { type Command, command } from "cleye";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname, extname, resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 import { loadEnvFile, resolvePluginConfig, UsageError } from "~/config.js";
 import { startPluginBridge, type PluginBridgeRuntime } from "~/commercial/plugin-bridge/index.js";
 import {
   executePluginCode,
   capturePluginScreenshot,
 } from "~/commercial/plugin-bridge/execution.js";
+import { isSavedScriptPath } from "~/commercial/plugin-bridge/saved-script.js";
 import {
   MAX_SCREENSHOT_SCALE,
   screenshotInputError,
@@ -119,7 +120,7 @@ interface ExecuteFlags {
 
 /** CLI file/stdio boundary. Execution and image policy live in the shared plugin services. */
 export async function runExecute(flags: ExecuteFlags, positionals: string[]): Promise<number> {
-  if (positionals.length !== 1 || extname(positionals[0]) !== ".js") {
+  if (positionals.length !== 1 || !isSavedScriptPath(positionals[0])) {
     throw new UsageError("execute requires one .js file containing an async function body.");
   }
   const waitMs = (flags.wait ?? DEFAULT_WAIT_SECONDS) * 1000;

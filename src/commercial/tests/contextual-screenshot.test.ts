@@ -30,6 +30,7 @@ function connectedServer(capture?: "contextual") {
   const runtime: PluginBridgeRuntime = {
     bridge,
     writeAccess: createTestWriteAccess().writeAccess,
+    readSavedScript: () => Promise.reject(new Error("no saved scripts in this test")),
     hasEverConnected: () => true,
     onFirstConnect: () => {},
   };

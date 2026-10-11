@@ -16,6 +16,7 @@ import { join } from "node:path";
 import { createJimp } from "@jimp/core";
 import png from "@jimp/js-png";
 import { isLocalImageSource, createLocalImageReader } from "~/commercial/plugin-bridge/images.js";
+import { createContainedFileReader } from "~/commercial/plugin-bridge/contained-file.js";
 
 const Jimp = createJimp({ formats: [png] });
 
@@ -36,6 +37,8 @@ async function withRoot(body: (root: string, outer: string) => Promise<void>): P
   }
 }
 
+const imageReaderFor = (root: string) => createLocalImageReader(createContainedFileReader(root));
+
 const refusesOutsideRoot = (root: string) => (err: Error) =>
   err.message.includes("outside the asset root") && err.message.includes(root);
 
@@ -51,7 +54,7 @@ test("a real png inside the root round-trips to base64", async () => {
   await withRoot(async (root) => {
     await mkdir(join(root, "assets"));
     await writeFile(join(root, "assets", "logo.png"), await makePng(4, 4));
-    const b64 = await createLocalImageReader(root)("assets/logo.png");
+    const b64 = await imageReaderFor(root)("assets/logo.png");
     assert.deepEqual(
       new Uint8Array(Buffer.from(b64, "base64").subarray(0, 4)),
       new Uint8Array([0x89, 0x50, 0x4e, 0x47]),
@@ -63,7 +66,7 @@ test("a real png inside the root round-trips to base64", async () => {
 test("`../` traversal to a file outside the root is refused, naming the root", async () => {
   await withRoot(async (root, outer) => {
     await writeFile(join(outer, "secret.png"), await makePng(4, 4));
-    await assert.rejects(createLocalImageReader(root)("../secret.png"), refusesOutsideRoot(root));
+    await assert.rejects(imageReaderFor(root)("../secret.png"), refusesOutsideRoot(root));
   });
 });
 
@@ -71,7 +74,7 @@ test("an absolute path outside the root is refused (path.resolve keeps it absolu
   await withRoot(async (root, outer) => {
     const secret = join(outer, "secret.png");
     await writeFile(secret, await makePng(4, 4));
-    await assert.rejects(createLocalImageReader(root)(secret), refusesOutsideRoot(root));
+    await assert.rejects(imageReaderFor(root)(secret), refusesOutsideRoot(root));
   });
 });
 
@@ -79,7 +82,7 @@ test("a symlink inside the root pointing outside is refused, naming the root", a
   await withRoot(async (root, outer) => {
     await writeFile(join(outer, "secret.png"), await makePng(4, 4));
     await symlink(join(outer, "secret.png"), join(root, "innocent.png"));
-    await assert.rejects(createLocalImageReader(root)("innocent.png"), refusesOutsideRoot(root));
+    await assert.rejects(imageReaderFor(root)("innocent.png"), refusesOutsideRoot(root));
   });
 });
 
@@ -87,7 +90,7 @@ test("a symlink inside the root pointing back inside it still resolves", async (
   await withRoot(async (root) => {
     await writeFile(join(root, "real.png"), await makePng(4, 4));
     await symlink(join(root, "real.png"), join(root, "alias.png"));
-    const b64 = await createLocalImageReader(root)("alias.png");
+    const b64 = await imageReaderFor(root)("alias.png");
     assert.ok(b64.length > 0, "a contained symlink is a legitimate asset, not an escape");
   });
 });
@@ -95,7 +98,7 @@ test("a symlink inside the root pointing back inside it still resolves", async (
 test("a directory is refused by the open handle's own stat, not by a path check", async () => {
   await withRoot(async (root) => {
     await mkdir(join(root, "assets"));
-    await assert.rejects(createLocalImageReader(root)("assets"), /is not a file/);
+    await assert.rejects(imageReaderFor(root)("assets"), /is not a file/);
   });
 });
 
@@ -104,14 +107,14 @@ test("a file over the byte cap is refused by the bounded read", async () => {
     // 13MiB of zeros — past MAX_BYTES (12MiB), so the read stops at the cap-sized buffer and the
     // (cap + 1)th byte is what proves it was over. Never reaches the decoder.
     await writeFile(join(root, "huge.png"), Buffer.alloc(13 * 1024 * 1024));
-    await assert.rejects(createLocalImageReader(root)("huge.png"), /over the \d+-byte cap/);
+    await assert.rejects(imageReaderFor(root)("huge.png"), /over the \d+-byte cap/);
   });
 });
 
 test("a missing file fails naming the root, not a bare ENOENT", async () => {
   await withRoot(async (root) => {
     await assert.rejects(
-      createLocalImageReader(root)("nope.png"),
+      imageReaderFor(root)("nope.png"),
       (err: Error) =>
         err.message.includes("no such file under the asset root") && err.message.includes(root),
     );
@@ -129,7 +132,7 @@ test("the canonical root is pinned once, so retargeting a root symlink can't mov
     const rootLink = join(outerRoot, "link");
     await symlink(realA, rootLink);
 
-    const read = createLocalImageReader(rootLink);
+    const read = imageReaderFor(rootLink);
     await read("logo.png"); // pins realA as the boundary
 
     // Retarget the root at b/ and remove a/'s copy: if the root were re-resolved per request, this

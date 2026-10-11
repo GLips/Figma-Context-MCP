@@ -35,6 +35,7 @@ function connectWithPlugin({ connected }: { connected: boolean }) {
   const runtime: PluginBridgeRuntime = {
     bridge,
     writeAccess: createTestWriteAccess().writeAccess,
+    readSavedScript: () => Promise.reject(new Error("no saved scripts in this test")),
     hasEverConnected: () => everConnected,
     onFirstConnect: (cb) => (everConnected ? cb() : firstConnect.push(cb)),
   };

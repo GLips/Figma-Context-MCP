@@ -48,6 +48,7 @@ async function setup() {
       pluginBridge: {
         bridge,
         writeAccess: createTestWriteAccess().writeAccess,
+        readSavedScript: () => Promise.reject(new Error("no saved scripts in this test")),
         hasEverConnected: () => true,
         onFirstConnect: () => {},
       },
