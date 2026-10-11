@@ -35,14 +35,13 @@ import { assertNodeStillOnCanvas, LoadedPages, createLoadedPages, loadPageForWri
 import { enterMutatingVerb, compensatedMutationFailure } from "./mutation-lock.js";
 import {
   attachBuiltChild, settleSiblingOrder, mintHandle, resolvePercents, beginRenderWalk, RenderResources,
-  liveParentAttachFacts, assertLiveNodeLandsUnderParent, assertBuiltRootLandsUnderParent, foldBuiltRootForDestination, resettleMovedNode,
+  liveParentAttachFacts, assertLiveNodeLandsUnderParent, assertBuiltRootLandsUnderParent, foldBuiltRootForDestination, attachLiveNode, resettleMovedNode,
 } from "./bridge.js";
 import { loadTreeResources, gateTreeResources, LoadedTreeResources } from "./render.js";
 import { prepareInsertBindings, applyInsertBindings, InsertBindingPlan } from "./component-edit.js";
 import { clearKeysDeep, childListClosingInstanceOf } from "./identity.js";
 import { applyExposures } from "./instance-exposure.js";
 import { captureCloneBindings, restoreCloneBindings, removeFailedClone, type CreatedCloneProperties } from "./clone-bindings.js";
-import { growImplicitGridRows } from "./layout-native.js";
 import { assertInheritedSlotContentStays } from "./live-tree.js";
 import { replacementTree } from "./structure-layout.js";
 import type { EditDelta } from "./schema.js";
@@ -222,8 +221,7 @@ function applyPlacement(verb: string, { dest, node, words }: PreparedPlacement):
   const fail = beginMutatingApply(verb, node);
   const from = node.parent;
   try {
-    growImplicitGridRows(dest.parent, words);
-    dest.place(node);
+    attachLiveNode(dest.parent, node, words, dest.place);
     const pivotHold = holdUnrotatedCorner(node);
     resettleMovedNode(node, words);
     settleCentrePivot(node, pivotHold, words);

@@ -14,10 +14,9 @@ import { resolveInstanceEditTargets, planInstanceEdit, applyInstanceRetarget, ap
 import { planComponentEdit, applyComponentDefinitionEdit, applyComponentBindingEdit } from "./component-edit.js";
 import { assertNodeStillOnCanvas } from "./freshness.js";
 import { childListClosingInstanceOf, writeKey, isInheritedSlotContent, slotOwnerOf, describeNodeIdentity } from "./identity.js";
-import { assertLiveNodeLandsUnderParent, liveParentAttachFacts, attachBuiltChild, resettleMovedNode, applyVectorPath } from "./bridge.js";
+import { assertLiveNodeLandsUnderParent, liveParentAttachFacts, attachBuiltChild, attachLiveNode, resettleMovedNode, applyVectorPath } from "./bridge.js";
 import type { RenderCtx, RenderResources } from "./bridge.js";
 import { NO_TOKENS } from "./tokens.js";
-import { growImplicitGridRows } from "./layout-native.js";
 import { holdUnrotatedCorner, settleCentrePivot } from "./pivot.js";
 import { beginMutatingApply, refusedBeforeWrite } from "./verb-error.js";
 import { recordLiveMoveIntoNewNode } from "./moved-out-diagnostics.js";
@@ -63,7 +62,7 @@ export async function loadLiveTree(tree: WriteNode, intoNewNode = liveChildrenOf
       const { key, d, vectorPaths, componentPropertyReferences, ...delta } = wn.authoring!;
       // A pasted read root reports its "fill" beside the px it measured: the node's standing state,
       // not a write. Dropped here, it rides in as carried intent (liveParentRelativeWords), which a
-      // free-form destination freezes instead of stretching to cover. Only while the node really is
+      // placement that reads fill differently freezes instead of stretching to cover. Only while the node really is
       // fill on that axis: a stale read, or a fill typed over a fixed root's designedWidth, is a write.
       for (const [axis, designed, live] of [["width", "designedWidth", "layoutSizingHorizontal"], ["height", "designedHeight", "layoutSizingVertical"]] as const) {
         if (delta[axis] === "fill" && delta[designed] != null && (node as any)[live] === "FILL") delete delta[axis];
@@ -143,8 +142,7 @@ export function gateLiveTree(live: LoadedLiveTree, resources: RenderResources): 
       try {
         for (let p: BaseNode | null = parent; p; p = p.parent) if (p === node) throw new Error(at + ": a node cannot move inside itself or its descendant.");
         const words = assertLiveNodeLandsUnderParent(node, parent, at, plan?.patch.layout);
-        growImplicitGridRows(parent, words);
-        place(node);
+        attachLiveNode(parent, node, words, place);
         if (from) recordLiveMoveIntoNewNode(node, from, parent);
         // Before anything below can resize the node — retarget, attached children, the plan's writes.
         const pivotHold = plan ? holdEditPlanPivot(plan) : holdUnrotatedCorner(node);

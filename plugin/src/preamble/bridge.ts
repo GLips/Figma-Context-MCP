@@ -3,7 +3,7 @@
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
 import { warnings } from "./warnings.js";
-import { LAYOUT_MODES, layoutModeOf, effectiveLayoutMode, childLayout, type ChildLayout } from "./layout-mode.js";
+import { LAYOUT_MODES, layoutModeOf, effectiveLayoutMode, childLayout, placementKind, fillReading, type ChildLayout } from "./layout-mode.js";
 import { behaviorForMode, layoutBehavior, applySiblingOrder, growImplicitGridRows } from "./layout-native.js";
 import { hasContainerLayout } from "./ir.js";
 import type { LiveTreeNode } from "./live-tree.js";
@@ -863,24 +863,25 @@ export function assertLayoutDeltaResolvable(
 export function assertLiveNodeLandsUnderParent(node: any, destination: any, subject: string, overrides?: WriteLayout): WriteLayout {
   const facts = liveParentLayoutFacts(destination);
   const live = liveParentRelativeWords(node);
-  if (facts.mode.kind === "free" && !facts.isPage) freezeCarriedFill(node, live, overrides);
   const wl: WriteLayout = { ...live, ...overrides };
   if (live.sizing || overrides?.sizing) wl.sizing = { ...live.sizing, ...overrides?.sizing };
   if (live.dimensions || overrides?.dimensions) wl.dimensions = { ...live.dimensions, ...overrides?.dimensions };
+  rederiveCarriedFill(node, wl, overrides, placementKind(facts.mode, wl.position === "absolute"));
   assertBounds(wl.bounds, node, subject);
   assertLayoutLandsUnderParent(facts, node.type, wl, node.layoutMode, wl.position === "absolute", subject);
   return wl;
 }
 
-// A `fill` carried from an old auto-layout parent meant "grow in that flow"; a free-form parent has
-// no flow, and coverChild would read it as "cover my whole box" — a 480×102 tile came out 480×2600.
-// So a carried fill axis keeps the px it has now. One this call writes is still a deliberate cover.
-// The page keeps refusing a carried fill instead (assertSizingResolvesAgainstParentFrame).
-function freezeCarriedFill(node: any, live: WriteLayout, overrides: WriteLayout | undefined): void {
+// A carried `fill` meant a share of its old layout. Where the node lands may read fill as the
+// whole parent box instead — free-form, the page, absolute — and a 480×102 tile came out 480×2600;
+// there it keeps the px it has now. Between layouts (row, column, grid) it is re-aimed instead.
+// A fill this call writes is read fresh wherever the node lands.
+function rederiveCarriedFill(node: any, wl: WriteLayout, overrides: WriteLayout | undefined, landing: ChildLayout["kind"]): void {
+  if (fillReading(landing) === fillReading(placementKind(layoutModeOf(node.parent), node.layoutPositioning === "ABSOLUTE"))) return;
   for (const [axis, dim] of [["horizontal", "width"], ["vertical", "height"]] as const) {
-    if (live.sizing?.[axis] !== "fill" || overrides?.sizing?.[axis] !== undefined) continue;
-    live.sizing[axis] = "fixed";
-    live.dimensions = { ...live.dimensions, [dim]: node[dim] };
+    if (wl.sizing?.[axis] !== "fill" || overrides?.sizing?.[axis] !== undefined) continue;
+    wl.sizing[axis] = "fixed";
+    wl.dimensions = { ...wl.dimensions, [dim]: node[dim] };
   }
 }
 
@@ -917,17 +918,23 @@ function liveParentRelativeWords(node: any): WriteLayout {
   return wl;
 }
 
-// Settle a node that just changed parents: drop the flow marks it wore under its OLD parent, then
-// re-apply its parent-relative intent against the new one through the create/edit appliers. The
-// clear is load-bearing and unconditional — layoutGrow means "the parent's PRIMARY axis" and
-// STRETCH means "its COUNTER axis", so a row→column move silently re-aims a width-fill into a
-// height-fill unless both marks go first (the same re-aim the parent policy does when a
-// container flips direction). NOT lifted, for the same reason it isn't there: the
-// hug-beats-stretch primaryAxisSizingMode pin, which is indistinguishable from an authored fixed
-// size once written.
-export function resettleMovedNode(node: any, wl: WriteLayout, resources?: RenderResources): void {
+// Attach a live node through `place`, dropping the flow marks it wore under its OLD parent first.
+// layoutGrow means "the parent's PRIMARY axis" and STRETCH "its COUNTER axis", and Figma applies a
+// mark the moment the node lands: a column's width-STRETCH becomes a row's height-STRETCH, and the
+// stretched size outlives clearing the mark afterwards [verified live, fig-125]. Cleared where it
+// sits, the node keeps the px it has. NOT lifted, as the parent policy doesn't lift it on a
+// direction flip: the hug-beats-stretch primaryAxisSizingMode pin, indistinguishable from an
+// authored fixed size once written.
+export function attachLiveNode(parent: any, node: any, wl: WriteLayout, place: (node: any) => void): void {
+  growImplicitGridRows(parent, wl);
   node.layoutGrow = 0;
   if (node.layoutAlign === "STRETCH") node.layoutAlign = "INHERIT";
+  place(node);
+}
+
+// Settle a node attachLiveNode just placed: re-apply its parent-relative intent against the new
+// parent through the create/edit appliers.
+export function resettleMovedNode(node: any, wl: WriteLayout, resources?: RenderResources): void {
   applyLiveNodeLayout(node, wl, resources);
   settleLiveNodePercentSize(node, wl);
   settleLiveNodePercentPosition(node, wl);

@@ -124,10 +124,13 @@ test("a moved node's fill is re-aimed at the new parent's axes, not left on the 
   assert.equal(grower.layoutGrow, 0);
   assert.equal(grower.layoutAlign, "STRETCH");
   assert.equal(grower.width, 200);
+  // Cleared only after landing, the row's grow mark would have grown it down the column first.
+  assert.equal(grower.height, 20);
 });
 
-// A fill-sized tile in an auto-layout column, beside a tall free-form staging frame.
-async function renderTileAndStaging() {
+// A fill-sized tile in an auto-layout column, beside a tall free-form staging frame and an
+// auto-layout row of the same size.
+async function renderTileAndStaging(tileHeight: number | "fill" = "fill") {
   const out = await render({
     type: "FRAME",
     key: "page-root",
@@ -140,9 +143,10 @@ async function renderTileAndStaging() {
         width: 480,
         height: 400,
         layout: { mode: "column" },
-        children: [{ type: "FRAME", key: "tile", width: "fill", height: "fill" }],
+        children: [{ type: "FRAME", key: "tile", width: "fill", height: tileHeight }],
       },
       { type: "FRAME", key: "staging", width: 900, height: 2600 },
+      { type: "FRAME", key: "flow-staging", width: 900, height: 2600, layout: { mode: "row" } },
     ],
   });
   return { tile: await figma.getNodeByIdAsync(specNode(out, "tile").id), staging: await figma.getNodeByIdAsync(specNode(out, "staging").id) };
@@ -174,7 +178,30 @@ test("a fill written in the same call still covers the free-form destination", a
   assert.equal(copy.height, 2600);
 });
 
-test("legality is re-asked against the DESTINATION: a fill can't land on the page", async () => {
+test("a carried fill keeps its px when the same call takes the node out of an auto-layout destination's flow", async () => {
+  // A fixed height, as live: the column's width-STRETCH would be the row's height-STRETCH on landing.
+  const { tile } = await renderTileAndStaging(102);
+  const out = { position: "absolute", left: 0, top: 0 } as const;
+  const copy = await figma.getNodeByIdAsync((await clone("tile", out, "flow-staging")).id);
+  assert.equal(copy.layoutPositioning, "ABSOLUTE");
+  assert.deepEqual([copy.width, copy.height], [480, 102]);
+  await append("flow-staging", { id: tile.id, ...out });
+  assert.equal(tile.layoutPositioning, "ABSOLUTE");
+  assert.deepEqual([tile.width, tile.height], [480, 102]);
+  // Written in the call, the same fill is a deliberate cover of the row's box.
+  await append("flow-staging", { id: copy.id, height: "fill" });
+  assert.deepEqual([copy.width, copy.height], [480, 2600]);
+});
+
+test("a carried fill moved from a flow into a grid fills its cell", async () => {
+  const { tile } = await renderTileAndStaging(102);
+  await render({ type: "FRAME", key: "grid", width: 400, height: 200, layout: { mode: "grid", gridTemplateColumns: "1fr 1fr" } });
+  await append("grid", { id: tile.id });
+  assert.equal(tile.layoutSizingHorizontal, "FILL");
+  assert.equal(tile.width, 200);
+});
+
+test("legality is re-asked against the DESTINATION: a written fill can't land on the page, a carried one keeps its px", async () => {
   await render({
     type: "FRAME",
     key: "row",
@@ -188,13 +215,12 @@ test("legality is re-asked against the DESTINATION: a fill can't land on the pag
     append(id(figma.currentPage.id), { type: "RECTANGLE", width: "fill", height: 20 }),
     /"fill" and "N%" resolve against a parent frame/,
   );
-  // A node whose live width fills its row can't be moved to the page either — the words were
-  // legal where it sat, not where it would land.
-  await assert.rejects(
-    append(id(figma.currentPage.id), { id: (await resolveTarget("grower")).id }),
-    /parent frame/,
-  );
-  assert.deepEqual(figma.undoLog, before); // every reject fired before any seal
+  assert.deepEqual(figma.undoLog, before); // the reject fired before any seal
+  // A fill the node only carries from its row isn't a write: it keeps its px on the page.
+  const grower = await figma.getNodeByIdAsync((await resolveTarget("grower")).id);
+  await append(id(figma.currentPage.id), { id: grower.id });
+  assert.equal(grower.parent.type, "PAGE");
+  assert.deepEqual([grower.width, grower.height], [300, 20]);
 });
 
 test("the destination is read at the seal: an anchor moved during the image fetch is followed to its new parent", async () => {

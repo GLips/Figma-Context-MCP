@@ -23,7 +23,7 @@ const clonePaints = (p) => (Array.isArray(p) ? JSON.parse(JSON.stringify(p)) : p
 // The visual/layout props carried across clone (instance) and promote (createComponentFromNode).
 const COPY_FIELDS = ["gridRowSizes", "gridColumnSizes", "gridRowGap", "gridColumnGap", "gridAutoTracks", "gridItemsPositioning", "_gridRowAnchorIndex", "_gridColumnAnchorIndex", "_gridRowSpan", "_gridColumnSpan", "gridChildHorizontalAlign", "gridChildVerticalAlign", "_gridSizingW", "_gridSizingH", "_gridFillW", "_gridFillH", "isExposedInstance", "_layoutWrap", "counterAxisSpacing", "counterAxisAlignContent", "minWidth", "maxWidth", "minHeight", "maxHeight", "name", "layoutMode", "itemSpacing", "paddingTop", "paddingRight", "paddingBottom",
   "paddingLeft", "primaryAxisAlignItems", "counterAxisAlignItems", "primaryAxisSizingMode",
-  "counterAxisSizingMode", "layoutGrow", "layoutAlign", "layoutPositioning", "constraints", "_strokeWeights", "strokeAlign",
+  "counterAxisSizingMode", "_layoutGrow", "_layoutAlign", "layoutPositioning", "constraints", "_strokeWeights", "strokeAlign",
   "_corners", "opacity", "visible", "rotation", "characters", "fontSize", "textAutoResize",
   // x/y ride along because a live clone() preserves position: without them the mock can't show
   // that flcm.clone with no parent lands the copy exactly ON TOP of the original in a free-form
@@ -221,6 +221,37 @@ class Node {
 
   get reactions() { return this._reactions; }
   async setReactionsAsync(reactions) { this._reactions = JSON.parse(JSON.stringify(reactions || [])); }
+
+  // Clearing a flow mark leaves a fixed-size axis at the size the mark gave it — live Figma doesn't
+  // snap back to the size it had before the fill [verified live, fig-125]. So a mark a
+  // moved node still wears stretches it under its NEW parent's axes, and that size outlives the mark.
+  get layoutGrow() { return this._layoutGrow; }
+  set layoutGrow(value) {
+    if (this._layoutGrow === 1 && value !== 1) this._pinFlowAxis(true);
+    this._layoutGrow = value;
+  }
+  get layoutAlign() { return this._layoutAlign; }
+  set layoutAlign(value) {
+    if (this._layoutAlign === "STRETCH" && value !== "STRETCH") this._pinFlowAxis(false);
+    this._layoutAlign = value;
+  }
+  _pinFlowAxis(primary) {
+    const p = this.parent;
+    if (!p || !p._isAuto || p.layoutMode === "GRID" || this.layoutPositioning === "ABSOLUTE") return;
+    const dim = primary === (p.layoutMode === "HORIZONTAL") ? "w" : "h";
+    // An axis that hugs its own content goes back to hugging (layout-native: "counter HUG must
+    // survive un-fill"). Only the fixed-size case is live-verified; this keeps the mock's prior answer.
+    if (this._ownAxisHugs(dim)) return;
+    const size = this._sizeOf(dim); // measured while the mark still holds
+    if (dim === "w") this._fixedW = size;
+    else this._fixedH = size;
+  }
+  _ownAxisHugs(dim) {
+    if (this.layoutMode === "GRID") return this[dim === "w" ? "_gridSizingW" : "_gridSizingH"] === "HUG";
+    if (this._isAuto) return ((dim === "w") === (this.layoutMode === "HORIZONTAL") ? this.primaryAxisSizingMode : this.counterAxisSizingMode) === "AUTO";
+    if (this.type === "TEXT") return this.textAutoResize === "WIDTH_AND_HEIGHT" || (dim === "h" && this.textAutoResize === "HEIGHT");
+    return false;
+  }
 
   get layoutWrap() { return this._layoutWrap; }
   set layoutWrap(value) {
@@ -1089,7 +1120,7 @@ function writeBoundProperty(instance, full, def, value) {
 // `componentPropertyReferences`, which is re-pointed explicitly by the definition-editing calls above.
 const MIRRORED_FIELDS = ["name", "layoutMode", "itemSpacing", "paddingTop", "paddingRight", "paddingBottom",
   "paddingLeft", "primaryAxisAlignItems", "counterAxisAlignItems", "primaryAxisSizingMode",
-  "counterAxisSizingMode", "layoutGrow", "layoutAlign", "layoutPositioning", "_strokeWeights", "strokeAlign",
+  "counterAxisSizingMode", "_layoutGrow", "_layoutAlign", "layoutPositioning", "_strokeWeights", "strokeAlign",
   "_corners", "opacity", "visible", "rotation", "_characters", "fontSize", "textAutoResize",
   "fills", "strokes", "effects", "clipsContent", "_fixedW", "_fixedH"];
 

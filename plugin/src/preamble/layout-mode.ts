@@ -29,6 +29,17 @@ export function effectiveLayoutMode(layout: WriteLayout, live?: { layoutMode?: s
 }
 
 // A child has one placement context. Absolute children use the parent's box, including under a grid.
+// placementKind is the one place that decides which: childLayout, and a moved node's carried sizing.
+export function placementKind(mode: LayoutMode, absolute: boolean): ChildLayout["kind"] {
+  return absolute ? "free" : mode.kind;
+}
+
+// What "fill" asks for in a placement: a share of what the layout hands out (a flow's spare room,
+// a grid cell), or the whole of the parent's box. A carried fill keeps its meaning only between
+// placements that read it the same way.
+export function fillReading(kind: ChildLayout["kind"]): "layout-share" | "parent-box" {
+  return kind === "free" ? "parent-box" : "layout-share";
+}
 export type ChildLayout =
   | { kind: "free"; layout: WriteLayout }
   | { kind: "flow"; mode: Extract<LayoutMode, { kind: "flow" }>; layout: WriteLayout }
@@ -38,7 +49,7 @@ const CELL_ALIGN = { start: "MIN", end: "MAX", center: "CENTER", auto: "AUTO" } 
 export function childLayout(mode: LayoutMode, words: WriteLayout, absolute: boolean, subject: string): ChildLayout {
   const layout = normalizeChildLayoutAliases(words, mode, absolute, subject);
   const hasCellWords = layout.gridColumn || layout.gridRow || layout.justifySelf || layout.zIndex !== undefined;
-  const kind = absolute ? "free" : mode.kind;
+  const kind = placementKind(mode, absolute);
   if (hasCellWords && kind !== "grid") throw new Error(subject + ": grid placement requires an in-flow GRID parent.");
   if (kind === "free") {
     if (layout.alignSelf) throw new Error(subject + ": alignSelf requires an in-flow auto-layout parent.");
