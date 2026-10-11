@@ -432,9 +432,9 @@ export const COMPONENTS_CREATE = `\`await flcm.component(specOrTarget, options?)
 
 Options are name, description and propertyDefinitions. Child componentPropertyReferences bind authored fields to those definitions.`;
 
-export const COMPONENTS_PROPERTIES = `A primary nested instance inside a component definition accepts \`exposed: true\` to show its existing controls in the enclosing instance panel; \`false\` clears exposure. This works in component construction and edits to the definition's nested instance.
+export const COMPONENTS_PROPERTIES = `Use direct overrides for ordinary text and images; expose a named component property when it makes the component easier to use.
 
-Use direct overrides for ordinary text and images; expose a named component property when it makes the component easier to use.
+A primary nested instance inside a component definition accepts \`exposed: true\` to show its existing controls in the enclosing instance panel; \`false\` clears exposure. This works in component construction and edits to the definition's nested instance.
 
 \`propertyDefinitions\` declares what the component exposes; each node inside names the property that drives one of its fields with \`componentPropertyReferences\` (\`null\` is the edit-side unbind word, not a create word). Both are checked against each other before any write.
 
