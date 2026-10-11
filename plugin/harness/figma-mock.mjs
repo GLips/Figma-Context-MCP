@@ -59,6 +59,28 @@ function assertChildListOpen(node, countSelf, verb) {
   }
 }
 
+// Live, a handle to the frame createComponentFromNode replaced answers `id` and `removed`, and its
+// `children` read threw "in get_children: The node with id … does not exist" (seen live, fig-128).
+// The mock extends that throw to every other read; writes aren't modelled (no setter: a TypeError).
+// Plain remove() is NOT modelled this way: whether its node's reads throw is unverified. `_` keys
+// are the mock's own bookkeeping. Own accessors rather than a Proxy: a Proxy is a second identity,
+// and the mock compares nodes by reference everywhere.
+const DESTROYED_NODE_READABLE = new Set(["id", "removed"]);
+function destroyNode(node) {
+  const keys = new Set();
+  for (let o = node; o && o !== Object.prototype; o = Object.getPrototypeOf(o)) {
+    for (const key of Object.getOwnPropertyNames(o)) keys.add(key);
+  }
+  for (const key of keys) {
+    if (key === "constructor" || key.startsWith("_") || DESTROYED_NODE_READABLE.has(key)) continue;
+    Object.defineProperty(node, key, {
+      configurable: true,
+      get() { throw new Error("in get_" + key + ": The node with id " + JSON.stringify(node.id) + " does not exist"); },
+    });
+  }
+  registry.delete(node.id);
+}
+
 // Every per-range styling bucket the setRange* recorders write — the set a `characters` write clears.
 const RANGE_BUCKETS = ["_rangeFonts", "_rangeSizes", "_rangeFills", "_rangeLineHeights",
   "_rangeLetterSpacings", "_rangeDecorations", "_rangeHyperlinks", "_rangeCases",
@@ -1499,6 +1521,7 @@ export function createFigmaMock() {
       node.children = [];
       node.parent = null;
       node.removed = true;
+      destroyNode(node);
       return comp;
     },
     // No sync getNodeById, deliberately: the manifest declares `documentAccess: dynamic-page`, under which

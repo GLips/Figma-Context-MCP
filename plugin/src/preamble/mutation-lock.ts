@@ -5,8 +5,8 @@
 import { warnings } from "./warnings.js";
 import { registerResult } from "./host.js";
 import { sceneFigma as figma, invalidateSceneAccess } from "./scene-access.js";
-import { beginSizingDiagnostics, finishSizingDiagnostics } from "./sizing-diagnostics.js";
-import { beginMovedOutDiagnostics, finishMovedOutDiagnostics } from "./moved-out-diagnostics.js";
+import { beginSizingDiagnostics, finishSizingDiagnostics, retargetSizingDiagnostics } from "./sizing-diagnostics.js";
+import { beginMovedOutDiagnostics, finishMovedOutDiagnostics, retargetMovedOutDiagnostics } from "./moved-out-diagnostics.js";
 // mutation-lock — the single entry point every mutating verb takes (plan invariant 4): render, edit,
 // editMany, the component verbs, and the structural verbs. Three jobs, one place — serialize verbs,
 // enforce cancellation, own the undo scaffold (the seal/commit/rollback shape lives on
@@ -214,9 +214,20 @@ export function queueStyleWrite(node: any, slot: StyleSlot, styleId: string): vo
   pendingStyleWrites.push({ node, slot, styleId });
 }
 
-/** Point queued links at `to`, for a verb whose apply replaced `from` (createComponentFromNode). */
-export function retargetStyleWrites(from: any, to: any): void {
+// Where this verb's warnings start in the registry; set by enterMutatingVerb before apply runs.
+let verbWarningCheckpoint = 0;
+
+/**
+ * Hand everything this verb queued against `from` to `to`, for an apply that replaced `from`
+ * (createComponentFromNode). Live, every read of the replaced node but `id` and `removed` throws
+ * "does not exist", so each per-verb accumulator that holds a node must follow the replacement
+ * here, before the lock reads it after apply. A new accumulator holding nodes belongs in this list.
+ */
+export function retargetReplacedNode(from: any, to: any): void {
   for (const write of pendingStyleWrites) if (write.node === from) write.node = to;
+  retargetSizingDiagnostics(from, to);
+  retargetMovedOutDiagnostics(from, to);
+  warnings.retargetNode(from.id, to.id, verbWarningCheckpoint);
 }
 
 async function flushStyleWrites(): Promise<void> {
@@ -265,6 +276,7 @@ export function enterMutatingVerb<P, G, T>(
       // overreach into the previous step the stamp exists to prevent.
       stampUndoStep();
       const warningCheckpoint = warnings.records.length;
+      verbWarningCheckpoint = warningCheckpoint;
       try {
         beginSizingDiagnostics();
         beginMovedOutDiagnostics();

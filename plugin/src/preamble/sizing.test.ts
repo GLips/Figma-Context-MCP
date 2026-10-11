@@ -12,6 +12,7 @@ import { edit } from "./edit.js";
 import { editMany } from "./edit-many.js";
 import { find } from "./read.js";
 import { replace } from "./structure.js";
+import { component } from "./component.js";
 import { sceneNodeToSnapshot } from "./node-to-snapshot.js";
 import { simplify } from "@framelink/core";
 
@@ -285,4 +286,21 @@ test("overflow names the worst child, axis and excess, counts other children, an
     { type: "RECTANGLE", name: "Row", width: 100, height: 124 },
   ] });
   assert.equal(warnings()[0], '[warn] ' + clipped.children![0].id + ' "Row" overflows ' + clipped.id + ' "List" by 24px on y; the parent clips, so the excess is invisible.');
+});
+
+// createComponentFromNode replaces the frame the build sized with a new COMPONENT node, and live
+// throws on every read of the frame it destroyed. Diagnostics must judge the component instead.
+test("a built or promoted component's sizing diagnostics follow the component, not the frame it replaced", async () => {
+  const built = await component({ type: "FRAME", name: "Card", left: 0, top: 0, width: 100, height: 40, children: [
+    { type: "RECTANGLE", name: "Bar", width: 200, height: 20 },
+  ] }, { name: "Card" });
+  assert.deepEqual(warnings(), ['[warn] ' + built.children![0].id + ' "Bar" overflows ' + built.id + ' "Card" by 100px on x; the parent does not clip, so the excess paints outside it.']);
+  diagnostics.discardFrom(0);
+
+  const live = await render({ type: "FRAME", name: "Tile", left: 300, top: 0, width: 300, height: 40, children: [
+    { type: "RECTANGLE", name: "Fill", width: 150, height: 20 },
+  ] });
+  diagnostics.discardFrom(0);
+  const promoted = await component({ id: live.id, width: 100 } as never, { name: "Tile" });
+  assert.deepEqual(warnings(), ['[warn] ' + live.children![0].id + ' "Fill" overflows ' + promoted.id + ' "Tile" by 50px on x; the parent does not clip, so the excess paints outside it.']);
 });

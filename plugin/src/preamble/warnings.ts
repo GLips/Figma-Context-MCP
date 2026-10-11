@@ -52,6 +52,14 @@ export function createWarningRegistry() {
         if (warnings.length) (value as Record<string, unknown>).warnings = warnings;
       }
     },
+    /**
+     * A node replaced mid-verb: the warnings this verb raised on it (from `fromIndex`, its
+     * checkpoint) belong to the node that took its place. Earlier verbs' records stay: they describe
+     * the node as it was, and a rollback restores it.
+     */
+    retargetNode(fromId: string, toId: string, fromIndex: number): void {
+      for (const record of records.slice(fromIndex)) if (record.id === fromId) record.id = toId;
+    },
     discardFrom(index: number): void {
       for (const record of records.splice(index)) { emitted.delete(record); pending.delete(record); }
       for (const [id, copies] of nodes) for (const node of copies) {

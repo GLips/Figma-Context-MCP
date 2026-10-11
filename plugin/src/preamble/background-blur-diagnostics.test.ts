@@ -11,6 +11,7 @@ import { createFigmaMock } from "../../harness/figma-mock.mjs";
 import { effects as effectsSugar, id } from "./flcm.js";
 import { render } from "./render.js";
 import { edit } from "./edit.js";
+import { component } from "./component.js";
 import { warnings as diagnostics } from "./warnings.js";
 
 beforeEach(() => {
@@ -53,4 +54,18 @@ test("a fully transparent fill is no fill, but any non-zero alpha is", async () 
   diagnostics.discardFrom(0);
   await render({ type: "FRAME", width: 200, height: 120, fill: "rgba(0,0,0,0.01)", effects: backgroundBlur() });
   assert.deepEqual(blurWarnings(), []);
+});
+
+// flcm.component builds a frame, warns on it, then createComponentFromNode replaces it: the warning
+// must ride the returned component. A warning an EARLIER call raised on a frame it later promotes
+// keeps naming the frame it described.
+test("a blur warning raised while building a component lands on the component", async () => {
+  const built = await component({ type: "FRAME", width: 200, height: 120, fill: "none", effects: backgroundBlur() }, { name: "Glass" });
+  assert.deepEqual(built.warnings?.map((w) => w.id), [built.id]);
+
+  diagnostics.discardFrom(0);
+  const panel = await render({ type: "FRAME", left: 400, width: 200, height: 120, fill: "none", effects: backgroundBlur() });
+  const promoted = await component(id(panel.id), { name: "Pane" });
+  assert.notEqual(promoted.id, panel.id);
+  assert.deepEqual(diagnostics.records.map((w) => w.id), [panel.id]);
 });

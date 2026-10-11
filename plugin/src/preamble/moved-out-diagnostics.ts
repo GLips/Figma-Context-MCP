@@ -28,6 +28,16 @@ export function recordVerbRemovedNode(node: MovedNode): void {
   removedByVerb.add(node.id);
 }
 
+/** `from` was replaced by `to` mid-verb (createComponentFromNode): name `to` at finish. Reads only `from.id`. */
+export function retargetMovedOutDiagnostics(from: MovedNode, to: MovedNode): void {
+  for (const move of moves) {
+    if (move.node === from) move.node = to;
+    if (move.into === from) move.into = to;
+    if (move.from === from) { move.from = to; move.fromId = to.id; }
+  }
+  if (removedByVerb.delete(from.id)) removedByVerb.add(to.id);
+}
+
 function insideVerbRemoved(node: MovedNode): boolean {
   for (let n: MovedNode | null = node; n; n = n.parent) {
     if (removedByVerb.has(n.id)) return true;

@@ -76,6 +76,16 @@ export function trackSizing(node: SizingNode): void {
   } catch (error) { inspectionError = error; }
 }
 
+/** `from` was replaced by `to` mid-verb (createComponentFromNode): judge `to` at finish. Reads only `from.id`. */
+export function retargetSizingDiagnostics(from: SizingNode, to: SizingNode): void {
+  const measurement = measured.get(from.id);
+  if (measurement) { measured.delete(from.id); measured.set(to.id, { ...measurement, node: to }); }
+  if (affected.delete(from.id)) affected.set(to.id, to);
+  const request = requests.get(from.id);
+  if (request) { requests.delete(from.id); requests.set(to.id, { ...request, node: to }); }
+  if (roots.delete(from.id)) roots.add(to.id);
+}
+
 export function resizeWithDiagnostics(node: SizingNode, width: number, height: number): void {
   trackSizing(node);
   node.resize(width, height);

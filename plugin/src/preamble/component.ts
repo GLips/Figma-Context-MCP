@@ -39,7 +39,7 @@ import { compileTree } from "./compile-tree.js";
 import type { NodeSpec, AuthoredTree } from "./schema.js";
 import { assertSizingResolvesAgainstParentFrame, foldDesignedSizeForPage } from "./layout-legality.js";
 import { loadTreeResources, gateTreeResources, buildTreeOnPage, LoadedTreeResources } from "./render.js";
-import { enterMutatingVerb, retargetStyleWrites } from "./mutation-lock.js";
+import { enterMutatingVerb, retargetReplacedNode } from "./mutation-lock.js";
 import { assertNodeStillOnCanvas, createLoadedPages, loadPageForWrite, assertPageLoaded } from "./freshness.js";
 import { beginMutatingApply } from "./verb-error.js";
 import { instanceAncestorOf, readKey, writeKey, describeNodeIdentity, SLOT_CONTENT_WIRE_KEY } from "./identity.js";
@@ -537,8 +537,8 @@ function applyBuiltComponent({ tree, resources, definitions, options }: GatedBui
   const fail = beginMutatingApply("component", root);
   try {
     const comp = figma.createComponentFromNode(root);
-    // The root's style links were queued on the frame, which no longer exists.
-    retargetStyleWrites(root, comp);
+    // Style links, diagnostics and warnings were queued on the frame, which no longer exists.
+    retargetReplacedNode(root, comp);
     // The root's own key rides across by hand: createComponentFromNode returns a NEW node, so the
     // pluginData stamped on the frame belongs to a node that no longer exists. Children keep theirs
     // Figma moves the same child nodes into the component.

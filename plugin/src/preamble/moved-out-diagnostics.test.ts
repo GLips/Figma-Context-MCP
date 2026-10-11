@@ -116,3 +116,16 @@ test("a source Figma deleted because the move emptied it still warns", () => {
     "[warn] Moved 1 node out of \"Group\" (id \"1:1\") into new \"Card\" (id \"2:1\"); Figma deleted the emptied source. If you intended a copy, restore the moved nodes and use flcm.clone.",
   ]);
 });
+
+// The new node a component call moves live nodes into is the frame createComponentFromNode then
+// replaces; live throws on every read of it, so the warning must name the component.
+test("a component built around live nodes names the component they moved into", async () => {
+  const card = await renderCard("Card");
+  const [title] = card.children!;
+  const made = await flcm.component({ type: "FRAME", name: "Header", children: [{ id: title.id }] }, { name: "Header" });
+  assert.deepEqual(movedWarnings(), [
+    "[warn] Moved 1 node out of \"Card\" (id " + JSON.stringify(card.id) + ") into new \"Header\" (id " + JSON.stringify(made.id) +
+      "). If you intended a copy, restore the moved nodes and use flcm.clone.",
+  ]);
+  assert.equal(warnings.summary().filter((line) => line.includes("could not inspect")).length, 0);
+});
