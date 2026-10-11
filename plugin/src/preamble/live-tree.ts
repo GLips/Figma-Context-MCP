@@ -37,6 +37,13 @@ export async function loadLiveTree(tree: WriteNode): Promise<LoadedLiveTree> {
       if (wn.source?.type !== undefined && wn.source.type !== "IMAGE-SVG" && wn.source.type !== node.type) throw new Error("type " + wn.source.type + " does not match live " + node.type + ".");
       wn.type = node.type;
       const { key, d, vectorPaths, componentPropertyReferences, ...delta } = wn.authoring!;
+      // A pasted read root reports its "fill" beside the px it measured: the node's standing state,
+      // not a write. Dropped here, it rides in as carried intent (liveParentRelativeWords), which a
+      // free-form destination freezes instead of stretching to cover. Only while the node really is
+      // fill on that axis: a stale read, or a fill typed over a fixed root's designedWidth, is a write.
+      for (const [axis, designed, live] of [["width", "designedWidth", "layoutSizingHorizontal"], ["height", "designedHeight", "layoutSizingVertical"]] as const) {
+        if (delta[axis] === "fill" && delta[designed] != null && (node as any)[live] === "FILL") delete delta[axis];
+      }
       if (componentPropertyReferences !== undefined) {
         wn.componentPropertyReferences = compileBindingBag(componentPropertyReferences, bindingFieldsForType(node.type), at);
       }

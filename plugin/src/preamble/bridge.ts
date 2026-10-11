@@ -864,13 +864,27 @@ export function assertLayoutDeltaResolvable(
 // `destination`, and hand them back — they're also what the post-move re-aim replays, and reading
 // them twice would risk reading them AFTER the reparent, when they no longer mean the old axes.
 export function assertLiveNodeLandsUnderParent(node: any, destination: any, subject: string, overrides?: WriteLayout): WriteLayout {
+  const facts = liveParentLayoutFacts(destination);
   const live = liveParentRelativeWords(node);
+  if (facts.mode.kind === "free" && !facts.isPage) freezeCarriedFill(node, live, overrides);
   const wl: WriteLayout = { ...live, ...overrides };
   if (live.sizing || overrides?.sizing) wl.sizing = { ...live.sizing, ...overrides?.sizing };
   if (live.dimensions || overrides?.dimensions) wl.dimensions = { ...live.dimensions, ...overrides?.dimensions };
   assertBounds(wl.bounds, node, subject);
-  assertLayoutLandsUnderParent(liveParentLayoutFacts(destination), node.type, wl, node.layoutMode, wl.position === "absolute", subject);
+  assertLayoutLandsUnderParent(facts, node.type, wl, node.layoutMode, wl.position === "absolute", subject);
   return wl;
+}
+
+// A `fill` carried from an old auto-layout parent meant "grow in that flow"; a free-form parent has
+// no flow, and coverChild would read it as "cover my whole box" — a 480×102 tile came out 480×2600.
+// So a carried fill axis keeps the px it has now. One this call writes is still a deliberate cover.
+// The page keeps refusing a carried fill instead (assertSizingResolvesAgainstParentFrame).
+function freezeCarriedFill(node: any, live: WriteLayout, overrides: WriteLayout | undefined): void {
+  for (const [axis, dim] of [["horizontal", "width"], ["vertical", "height"]] as const) {
+    if (live.sizing?.[axis] !== "fill" || overrides?.sizing?.[axis] !== undefined) continue;
+    live.sizing[axis] = "fixed";
+    live.dimensions = { ...live.dimensions, [dim]: node[dim] };
+  }
 }
 
 // A compiled root bound for `destination`: on a page, a read root's fill axes take their designed px

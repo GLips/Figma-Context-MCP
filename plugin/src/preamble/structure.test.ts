@@ -126,6 +126,54 @@ test("a moved node's fill is re-aimed at the new parent's axes, not left on the 
   assert.equal(grower.width, 200);
 });
 
+// A fill-sized tile in an auto-layout column, beside a tall free-form staging frame.
+async function renderTileAndStaging() {
+  const out = await render({
+    type: "FRAME",
+    key: "page-root",
+    width: 1200,
+    height: 2600,
+    children: [
+      {
+        type: "FRAME",
+        key: "col",
+        width: 480,
+        height: 400,
+        layout: { mode: "column" },
+        children: [{ type: "FRAME", key: "tile", width: "fill", height: "fill" }],
+      },
+      { type: "FRAME", key: "staging", width: 900, height: 2600 },
+    ],
+  });
+  return { tile: await figma.getNodeByIdAsync(specNode(out, "tile").id), staging: await figma.getNodeByIdAsync(specNode(out, "staging").id) };
+}
+
+test("a fill carried from an auto-layout parent keeps its px size in a free-form frame — move, clone and pasted get", async () => {
+  const { tile, staging } = await renderTileAndStaging();
+  assert.deepEqual([tile.width, tile.height], [480, 400]);
+  const copy = await figma.getNodeByIdAsync((await clone("tile", "staging")).id);
+  assert.equal(copy.parent.id, staging.id);
+  assert.deepEqual([copy.width, copy.height], [480, 400]);
+  const read = (await get("tile")).node;
+  assert.equal(read.width, "fill"); // the paste below carries the read's own fill + designedWidth
+  await append("staging", read);
+  assert.equal(tile.parent.id, staging.id);
+  assert.deepEqual([tile.width, tile.height], [480, 400]);
+});
+
+test("a fill written in the same call still covers the free-form destination", async () => {
+  const { tile } = await renderTileAndStaging();
+  const copy = await figma.getNodeByIdAsync((await clone("tile", { width: "fill" }, "staging")).id);
+  assert.deepEqual([copy.width, copy.height], [900, 400]);
+  await append("staging", { id: tile.id, height: "fill" });
+  assert.deepEqual([tile.width, tile.height], [480, 2600]);
+  // A fixed root's read carries designedWidth too; a fill typed over it is the author's, not the read's.
+  const read = (await get(copy.id)).node;
+  assert.notEqual(read.designedWidth, undefined);
+  await append("staging", { ...read, height: "fill" });
+  assert.equal(copy.height, 2600);
+});
+
 test("legality is re-asked against the DESTINATION: a fill can't land on the page", async () => {
   await render({
     type: "FRAME",
