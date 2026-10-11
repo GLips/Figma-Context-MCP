@@ -663,6 +663,8 @@ const { variables } = await flcm.designTokens({ library: libraries[0].name, type
 return variables.filter((v) => v.collection === "semantic colors");
 ```
 
+**In the reply**, returned entries print as token lines rather than JSON, wherever they sit in the result: `[COLLECTION] "Theme" modes=["Light","Dark"]`, then one line per variable, `[COLOR] "color/bg" #FFFFFF #000000`, its values in the header's mode order. A style prints as `[TEXT] "Heading/L" value={…}`. `"color/bg"` stands for `reference: { variable: "color/bg" }`, and `"Dark" #VariableID:1:2` for `{ variable: { id, name } }`. Fields without a slot follow as `key=value`, and library entries sit under `[LIBRARY] "name"` (or `[REMOTE]`). A copy you build (`map`, spread), or an entry kept in `session` and returned by a later call, prints as JSON.
+
 Creating variables, collections, modes and styles, switching modes, and binding gradient stops, effect fields or grid gaps all still need raw `figma.*`.
 
 ### Vector art (svg & path)
