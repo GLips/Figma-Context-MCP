@@ -112,8 +112,8 @@ export function gateTreeResources(tree: WriteNode, loaded: LoadedTreeResources, 
 
 /**
  * The build sequence a compiled ROOT gets when it lands on the page: build the tree (percent children at
- * a provisional size), apply the root's own position words against the page, fold every percent and
- * anchor into pixels now that each parent's realized size is readable, and tell the agent when the
+ * a provisional size), apply the root's own position words against the page, fold every percent
+ * into pixels now that each parent's realized size is readable, and tell the agent when the
  * root landed on top of something.
  *
  * Shared rather than copied because `flcm.component`'s compiled form promises the agent its tree renders
@@ -124,9 +124,9 @@ export function gateTreeResources(tree: WriteNode, loaded: LoadedTreeResources, 
 export function buildTreeOnPage(tree: WriteNode, ctx: RenderCtx): any {
   const live = ctx.live?.get(tree);
   const root = live ? live.place(live.node.parent!, () => {}, ctx) : buildNode(tree, ctx);
-  // The root's own position words (absolute x/y, pin, anchor) apply against the page — the walk
+  // The root's own position words (absolute x/y, constraints) apply against the page — the walk
   // above only positions CHILDREN, and edit applies the same words to a page child.
-  if (!live && tree.layout) placeRootOnPage(root, tree.layout, ctx);
+  if (!live && tree.layout) placeRootOnPage(root, tree.layout);
   resolvePercents(ctx);
   // After resolvePercents, so the root's bounds are final — and through the CONSOLE channel, which
   // every already-installed plugin already returns. A new field on EXECUTE_CODE_RESULT would be a

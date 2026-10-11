@@ -264,35 +264,29 @@ test("cross-entry layout legality is judged against the batch's own end state, n
   }
 });
 
-test("every MEASUREMENT waits for every write: an anchored ancestor centers on the size its descendant ends at", async () => {
+test("every MEASUREMENT waits for every write: a percent position resolves against the size its parent ends at", async () => {
   const out = await render({
     type: "FRAME",
-    key: "card",
-    width: 300,
-    height: 200,
+    key: "panel",
+    layout: { mode: "row" },
+    width: "hug",
+    height: "hug",
     children: [
-      {
-        type: "FRAME",
-        key: "panel",
-        layout: { mode: "row" },
-        width: "hug",
-        height: "hug",
-        left: 0,
-        top: 0,
-        children: [{ type: "TEXT", text: "x", key: "label" }],
-      },
+      { type: "TEXT", text: "x", key: "label" },
+      { type: "RECTANGLE", key: "dot", width: 10, height: 10, left: 0, top: 0 },
     ],
   });
-  const panel = await figma.getNodeByIdAsync(specNode(out, "panel").id);
-  // The panel HUGS, so the other entry's content change resizes it — and the anchor is measured
-  // against that size. Applied ancestor-first with no deferred measure pass, the center is computed
-  // from the pre-growth width and the panel ends up visibly off-center, with no error.
+  const panel = await figma.getNodeByIdAsync(out.id);
+  const dot = await figma.getNodeByIdAsync(specNode(out, "dot").id);
+  // The panel HUGS, so the other entry's content change resizes it — and the percent is measured
+  // against that size. Applied in entry order with no deferred measure pass, the percent resolves
+  // against the pre-growth width and the dot lands short of the middle, with no error.
   await editMany([
-    { id: panel.id, left: "50%", anchor: { x: "center" } },
+    { id: dot.id, left: "50%" },
     { id: specNode(out, "label").id, text: "this is a much longer label" },
   ]);
-  assert.ok(panel.width > 100, "the descendant edit grew the hugging panel");
-  assert.equal(panel.x + panel.width / 2, 150); // dead center of the 300-wide card
+  assert.ok(panel.width > 100, "the sibling edit grew the hugging panel");
+  assert.equal(dot.x, panel.width / 2);
 });
 
 test("a refusal names the identity the node had BEFORE the batch's first write, not after its rename", async () => {

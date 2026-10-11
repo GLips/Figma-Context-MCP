@@ -2,13 +2,13 @@
  * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
-// LIVE PROBE for AGENT-DX-NOTES-component-surgery §6 — `pin: "stretch"` resizing the node the
+// LIVE PROBE for AGENT-DX-NOTES-component-surgery §6 — `constraints: "stretch"` resizing the node the
 // author just sized. A standing runbook: re-run it whenever attachBuiltChild / buildFrame change
 // the order in which a child is constrained and its parent is sized, because no mock can settle
 // what Figma really does when a constrained child's parent grows.
 //
-// What it asks: author a 200×100 absolute child inside a 200×100 frame, four ways (pin stretch or
-// not, padding 8 or not), and measure the child. The authored size is the expected size in ALL
+// What it asks: author a 200×100 absolute child inside a 200×100 frame, four ways (stretch constraints
+// or not, padding 8 or not), and measure the child. The authored size is the expected size in ALL
 // FOUR — a constraint says how a child reflows when the parent's box changes LATER; it is never
 // part of the size the child is created at. Before the fix the stretch cases came back 300 wide
 // (and 84 tall under padding), because the STRETCH mark was written while the frame was still at
@@ -40,10 +40,10 @@ const PREAMBLE = await buildSandboxPreamble();
 
 const EXPECTED = { width: 200, height: 100 };
 const CASES = [
-  { name: "no pin, no padding", pin: null, padding: null },
-  { name: "pin stretch/stretch", pin: { x: "stretch", y: "stretch" }, padding: null },
-  { name: "no pin, padding 8", pin: null, padding: 8 },
-  { name: "pin stretch + padding 8", pin: { x: "stretch", y: "stretch" }, padding: 8 },
+  { name: "no constraints, no padding", constraints: null, padding: null },
+  { name: "constraints stretch/stretch", constraints: { x: "stretch", y: "stretch" }, padding: null },
+  { name: "no constraints, padding 8", constraints: null, padding: 8 },
+  { name: "constraints stretch + padding 8", constraints: { x: "stretch", y: "stretch" }, padding: 8 },
 ];
 
 const t0 = Date.now();
@@ -71,7 +71,7 @@ for (let i = 0; i < cases.length; i++) {
       left: 0,
       top: 0,
       fill: "#cccccc",
-      ...(c.pin ? { pin: c.pin } : {}),
+      ...(c.constraints ? { constraints: c.constraints } : {}),
     }],
   };
   if (c.padding !== null) spec.layout = { mode: "column", padding: c.padding };
@@ -152,7 +152,7 @@ function fail(reason) {
 const bridge = new PluginBridge();
 
 console.log(
-  "Framelink probe: does `pin: \"stretch\"` resize an authored absolute child?\n" +
+  "Framelink probe: does `constraints: \"stretch\"` resize an authored absolute child?\n" +
     "Waiting for the Figma plugin to connect… (open it in a scratch file and approve this session\n" +
     "when asked; Ctrl-C to abort)\n",
 );

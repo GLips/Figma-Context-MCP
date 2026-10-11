@@ -80,7 +80,7 @@ export function rejectNonDeltaWords(changes: unknown, known: ReadonlySet<string>
   }
   if ("x" in changes || "y" in changes) {
     throw new Error(
-      subject + ": position is not spelled with bare x/y — use `left`/`top` (naming either also lifts the node out of an auto-layout flow; `position: \"none\"` returns it), and `pin` for how it responds to a parent resize.",
+      subject + ": position is not spelled with bare x/y — use `left`/`top` (naming either also lifts the node out of an auto-layout flow; `position: \"none\"` returns it), and `constraints` for how it responds to a parent resize.",
     );
   }
   // The read shape's read-only words (`id`, `type`, `children`, a root's `designedWidth`) are judged

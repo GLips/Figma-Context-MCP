@@ -170,16 +170,13 @@ A positioned child — one in a free-form parent (\`layout.mode: "none"\`), or o
 | \`left:"N%"\` | center | holds its relative spot |
 | a plain number | near edge | stays put |
 
-\`pin\` overrides that choice; it is ignored on an in-flow child, which reflows through \`fill\`/\`hug\` instead. \`anchor\` picks which point of the node lands on \`left\`/\`top\` (default top-left), which saves the half-width subtraction when centring; it needs that axis's \`left\`/\`top\`.
+\`constraints\` overrides that choice; it is ignored on an in-flow child, which reflows through \`fill\`/\`hug\` instead.
 
 \`\`\`js
 // a close button that stays top-right as the card widens
 const card = { type: "FRAME", width: 320, height: 200, children: [
-  { type: "RECTANGLE", width: 28, height: 28, left: 284, top: 12, pin: { x: "right", y: "top" } },
+  { type: "RECTANGLE", width: 28, height: 28, left: 284, top: 12, constraints: { x: "right", y: "top" } },
 ] };
-
-// a knob centred on the 40% mark
-const knob = { type: "ELLIPSE", width: 16, height: 16, left: "40%", top: "50%", anchor: { x: "center", y: "center" } };
 \`\`\`
 
 ### Bounds and overflow
@@ -380,17 +377,17 @@ export const EDIT_INTRO = `\`await flcm.edit(target, changes)\` patches one live
 
 export const EDIT_REMOVAL = `### Removal — \`"none"\`
 
-\`"none"\` is the one removal word: \`fill\`/\`stroke\` clear the paint, \`effects\` clears every effect, \`minWidth\` and the other bounds clear the bound, \`position: "none"\` returns the node to its parent's flow, \`pin: "none"\` (or per axis) restores the near-edge default, and \`layout: { mode: "none" }\` turns auto-layout off. Sizes are replaced, never removed: \`width: "hug"\` takes a fixed width off.`;
+\`"none"\` is the one removal word: \`fill\`/\`stroke\` clear the paint, \`effects\` clears every effect, \`minWidth\` and the other bounds clear the bound, \`position: "none"\` returns the node to its parent's flow, \`constraints: "none"\` (or per axis) restores the near-edge default, and \`layout: { mode: "none" }\` turns auto-layout off. Sizes are replaced, never removed: \`width: "hug"\` takes a fixed width off.`;
 
 export const EDIT_RULES = `### Rules
 
-- **Per field, and per axis.** \`pin: { x: "center" }\` keeps the y pin; \`left: 10\` keeps the live \`top\`; \`width: "hug"\` leaves the height alone.
+- **Per field, and per axis.** \`constraints: { x: "center" }\` keeps the y constraint; \`left: 10\` keeps the live \`top\`; \`width: "hug"\` leaves the height alone.
 - **A new size replaces fill.** A number or \`"hug"\` on a \`"fill"\` child clears its grow/stretch marks.
 - **Container edits ripple.** \`layout.alignItems: "stretch"\` sets every live child's stretch mark and any other value clears them all, since Figma doesn't record which child stretched because of its container; a child that should keep filling needs its own \`"fill"\`. Changing direction clears both flow marks on every in-flow child.
 - **Layout legality is create's, checked against live facts** before any write. Percents resolve against the live parent.
 - **Text words read the live node.** \`text\` replaces the whole text in its leading run's style, so earlier bold spans and per-range colors are lost; style the new text in the same edit. A partial \`textStyle\` font change keeps the rest of the live font. A text that already mixes fonts has no single base, so a partial font change, or a run without its own \`fontFamily\`, rejects; set \`textStyle.fontFamily\` in the same edit, or give every run its family.
 - **Inside an INSTANCE, edits are overrides.** A property Figma won't let you override rejects, naming the instance; edit the main component instead (flcm never detaches for you).
-- **No \`x\`/\`y\`.** Position with \`left\`/\`top\` or \`position\`; resize behavior is \`pin\`.
+- **No \`x\`/\`y\`.** Position with \`left\`/\`top\` or \`position\`; resize behavior is \`constraints\`.
 - **One undo step, validated first.** The whole delta validates before the first write, a Figma refusal mid-apply rolls the node back, and an empty delta rejects.
 - **Values are absolute**, never relative (\`+10\`), so re-running an edit converges.`;
 

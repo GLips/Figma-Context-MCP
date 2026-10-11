@@ -324,15 +324,15 @@ export interface Edges<T = number> { top: T; right: T; bottom: T; left: T }
 // case for the bridge to apply and one for a round-trip to compare.
 export interface CornerRadii<T = number> { topLeft: T; topRight: T; bottomRight: T; bottomLeft: T }
 
-// ---- Constraint override (author `pin`). Directional per axis so the axis is unambiguous at the boundary
+// ---- Constraint override (author `constraints`). Directional per axis so the axis is unambiguous at the boundary
 // (x names an edge on the horizontal axis, y on the vertical); the bridge maps each to Figma's per-axis
 // constraint enum. Governs how a positioned child reflows when its parent resizes — a free-form parent's
 // children and an absolute child of any parent; inert on an in-flow auto-layout child. ----
 // "none" is edit's per-axis clearing word: it restores MIN (Figma's default, pinned to the near
 // edge) — the auto-derived constraint create chose isn't stored anywhere live, so the default is
 // the stated inverse, not a recovered intent.
-export type PinX = "left" | "center" | "right" | "stretch" | "scale" | "none";
-export type PinY = "top" | "center" | "bottom" | "stretch" | "scale" | "none";
+export type ConstraintX = "left" | "center" | "right" | "stretch" | "scale" | "none";
+export type ConstraintY = "top" | "center" | "bottom" | "stretch" | "scale" | "none";
 
 // ---- Blend mode (node `mixBlendMode`, paint `blendMode`). The CSS mix-blend-mode names normalize to
 // Figma's BlendMode enum at the css.ts boundary; this is the resolved Figma-domain currency. A SUBSET of
@@ -343,11 +343,6 @@ export type WriteBlendMode =
   | "LINEAR_DODGE" | "COLOR_DODGE" | "OVERLAY" | "SOFT_LIGHT" | "HARD_LIGHT" | "DIFFERENCE"
   | "EXCLUSION" | "HUE" | "SATURATION" | "COLOR" | "LUMINOSITY";
 
-// ---- Anchor (author `anchor`). Which point of an out-of-flow child lands on the resolved left/top.
-// Reuses `pin`'s directional edge words (no stretch/scale — an anchor is a point, not a resize rule).
-// Default {left, top}: the child's top-left sits at left/top. ----
-export type AnchorX = "left" | "center" | "right";
-export type AnchorY = "top" | "center" | "bottom";
 export interface WriteLayout {
   bounds?: Partial<Record<"minWidth" | "maxWidth" | "minHeight" | "maxHeight", Bindable | "none">>;
   mode?: "none" | "row" | "column" | "grid";
@@ -381,16 +376,12 @@ export interface WriteLayout {
   // Inert under a frame, where fill still means fill; a page has no size to fill, so a root landing on
   // one takes this as a fixed size instead (foldDesignedSizeForPage). Present only beside a fill axis.
   designedSize?: { width?: number; height?: number };
-  // Anchor point for an out-of-flow child (author `anchor`) — which corner/edge of the child lands on the
-  // resolved left/top. Applied in the same post-walk pass as percent position (it needs the child's
-  // realized size to offset by). Absent → {left, top} (top-left on the coordinate).
-  anchor?: { x?: AnchorX; y?: AnchorY };
   // Explicit Figma-constraint override for a positioned child — how it responds when the parent resizes.
   // Overrides the constraint the bridge auto-derives from the child's size/position intent (fill→STRETCH,
-  // "N%"→SCALE, percent position→CENTER, else pinned to the near edge). Absent unless the author wrote a
-  // `pin`. Honored for a free-form parent's child and an absolute child; inert on an in-flow auto-layout
+  // "N%"→SCALE, percent position→CENTER, else pinned to the near edge). Absent unless the author wrote
+  // `constraints`. Honored for a free-form parent's child and an absolute child; inert on an in-flow auto-layout
   // child (which reflows via fill/hug instead).
-  pin?: { x?: PinX; y?: PinY };
+  constraints?: { x?: ConstraintX; y?: ConstraintY };
   // "absolute" is the out-of-flow flag: the author's own `position: "absolute"`, or implied by a
   // `left`/`top`. "none" is edit's return-to-flow word: the node rejoins its auto-layout parent's flow
   // (layoutPositioning AUTO). Create only ever sets "absolute".

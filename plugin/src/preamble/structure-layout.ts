@@ -2,7 +2,7 @@
  * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
-import type { WriteLayout, WriteNode, Sizing, PinX, PinY } from "./ir.js";
+import type { WriteLayout, WriteNode, Sizing, ConstraintX, ConstraintY } from "./ir.js";
 import { layoutModeOf } from "./layout-mode.js";
 import { unrotatedCornerOf } from "./pivot.js";
 import { convertSizing } from "@framelink/core";
@@ -12,7 +12,7 @@ export function mergePlacementLayout(inherited: WriteLayout, explicit: WriteLayo
   const result: WriteLayout = { ...inherited, ...explicit,
     sizing: { ...inherited.sizing, ...explicit.sizing },
     dimensions: { ...inherited.dimensions, ...explicit.dimensions },
-    pin: { ...inherited.pin, ...explicit.pin },
+    constraints: { ...inherited.constraints, ...explicit.constraints },
     bounds: { ...inherited.bounds, ...explicit.bounds },
   };
   for (const [axis, dimension] of [["horizontal", "width"], ["vertical", "height"]] as const) {
@@ -35,9 +35,9 @@ export function replacementTree(node: any, spec: WriteNode): WriteNode {
   const bounds = Object.fromEntries(["minWidth", "maxWidth", "minHeight", "maxHeight"].filter(key => node[key] != null).map(key => [key, node[key]]));
   if (Object.keys(bounds).length) inherited.bounds = bounds;
   if (node.constraints) {
-    const x: Record<string, PinX> = { MIN: "left", CENTER: "center", MAX: "right", STRETCH: "stretch", SCALE: "scale" };
-    const y: Record<string, PinY> = { MIN: "top", CENTER: "center", MAX: "bottom", STRETCH: "stretch", SCALE: "scale" };
-    inherited.pin = { x: x[node.constraints.horizontal], y: y[node.constraints.vertical] };
+    const x: Record<string, ConstraintX> = { MIN: "left", CENTER: "center", MAX: "right", STRETCH: "stretch", SCALE: "scale" };
+    const y: Record<string, ConstraintY> = { MIN: "top", CENTER: "center", MAX: "bottom", STRETCH: "stretch", SCALE: "scale" };
+    inherited.constraints = { x: x[node.constraints.horizontal], y: y[node.constraints.vertical] };
   }
   const positioned = layoutModeOf(node.parent).kind === "free" || node.layoutPositioning === "ABSOLUTE";
   if (positioned) {

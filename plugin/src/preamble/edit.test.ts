@@ -193,7 +193,7 @@ test("fill→fixed/hug is a real inverse: the flow marks fill installed are clea
   assert.equal(tall.layoutAlign, "INHERIT");
 });
 
-test('position:"none" returns an absolute child to flow; pin deltas preserve the unnamed axis', async () => {
+test('position:"none" returns an absolute child to flow; constraints deltas preserve the unnamed axis', async () => {
   const out = await render({
     type: "FRAME",
     key: "host",
@@ -204,12 +204,12 @@ test('position:"none" returns an absolute child to flow; pin deltas preserve the
   });
   const badge = await figma.getNodeByIdAsync(specNode(out, "badge").id);
   assert.equal(badge.layoutPositioning, "ABSOLUTE");
-  await edit("badge", { pin: { x: "right" } });
+  await edit("badge", { constraints: { x: "right" } });
   assert.equal(badge.constraints.horizontal, "MAX");
-  await edit("badge", { pin: { y: "bottom" } });
+  await edit("badge", { constraints: { y: "bottom" } });
   // The unnamed x axis keeps MAX — applyConstraints' both-axes write would have reset it to MIN.
   assert.deepEqual(badge.constraints, { horizontal: "MAX", vertical: "MAX" });
-  await edit("badge", { pin: "none" });
+  await edit("badge", { constraints: "none" });
   assert.deepEqual(badge.constraints, { horizontal: "MIN", vertical: "MIN" });
   await edit("badge", { position: "none" });
   assert.equal(badge.layoutPositioning, "AUTO");
@@ -429,27 +429,6 @@ test("a percent resolves against a hug-mode parent whose axis is realized from a
   assert.equal(kid.height, inner.height / 2);
 });
 
-test("an anchored absolute edit is idempotent, and an anchor axis without its coordinate rejects", async () => {
-  const out = await render({
-    type: "FRAME",
-    key: "host",
-    width: 200,
-    height: 200,
-    layout: { mode: "row" },
-    children: [{ type: "RECTANGLE", key: "badge", width: 20, height: 20, left: 10, top: 10 }],
-  });
-  const badge = await figma.getNodeByIdAsync(specNode(out, "badge").id);
-  await edit("badge", { left: 100, anchor: { x: "center" } });
-  assert.equal(badge.x, 90);
-  await edit("badge", { left: 100, anchor: { x: "center" } });
-  assert.equal(badge.x, 90); // re-apply converges — no drift off the live coordinate
-  assert.equal(badge.y, 10); // the unnamed axis never moved
-  await assert.rejects(
-    edit("badge", { anchor: { x: "center" } } as never),
-    /name `left` alongside/,
-  );
-});
-
 test("un-filling while going absolute clears the mark; a direction flip clears marks parked on absolute children", async () => {
   const out = await render({
     type: "FRAME",
@@ -559,8 +538,8 @@ test("a present-but-malformed structured value rejects the WHOLE delta — no pa
     /pad must be a number, a CSS box shorthand/,
   );
   await assert.rejects(
-    edit("card", { fill: "#ff0000", pin: [] } as never),
-    /pin must be an object/,
+    edit("card", { fill: "#ff0000", constraints: [] } as never),
+    /constraints must be an object/,
   );
   assert.deepEqual(node.fills[0].color, { r: 0, g: 0, b: 1 }); // the valid fill beside them never landed
 });
@@ -897,14 +876,6 @@ test('TEXT({ fill: "none" }) constructs the explicit no-fill — the same word e
   assert.deepEqual(ghost.fills, []); // the clear is written over createText's default black
   const plain = await figma.getNodeByIdAsync(specNode(out, "plain").id);
   assert.equal(plain.fills.length, 1); // an OMITTED color keeps the live default — absence isn't removal
-});
-
-test("text + an anchored left in ONE edit resolves against the POST-reflow size", async () => {
-  const node = await renderKeyedText("hi");
-  await edit("label", { text: "a much longer line of text", left: 100, anchor: { x: "center" } });
-  // Text applies before layout (create's order): the anchor subtracts the NEW width. The old
-  // order centered the pre-reflow width and only converged on a second identical edit.
-  assert.equal(node.x + node.width / 2, 100);
 });
 
 test("`boldWeight` alone re-emphasizes nothing, so it rejects naming `text`; beside `text` it sets what `**` means", async () => {

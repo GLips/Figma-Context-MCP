@@ -323,7 +323,7 @@ const SECTIONS: Section[] = [
     id: "layout",
     title: "Layout and sizing",
     blurb:
-      "where sizing differs from CSS: fixed/fill/hug/percent, constraints and pin/anchor, text width, bounds and overflow",
+      "where sizing differs from CSS: fixed/fill/hug/percent, constraints, text width, bounds and overflow",
     body: () => LAYOUT_MODEL,
   },
   {

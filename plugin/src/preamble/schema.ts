@@ -30,7 +30,7 @@ import { INPUT_ALIASES } from "./input-aliases.js";
 export { INPUT_ALIASES };
 import type {
   FillInput, WriteCssEffects, WritePaint, WriteEffect, GradientStop, WriteNode, WriteChild, Handle,
-  PinX, PinY, Target, RawIdRef, SlimHandle, FindQuery, ReadPredicate, RemoveResult, GetResult,
+  ConstraintX, ConstraintY, Target, RawIdRef, SlimHandle, FindQuery, ReadPredicate, RemoveResult, GetResult,
   PageInfo, ComponentPropertyInput, OverrideDeltaInput, ComponentPropertyDefinitions, VariantEntryInput,
   ComponentPropertyDefinitionEdits, ComponentPropertyBindingEdit,
   VariableInput, StyleInput, TokenIdentityInput,
@@ -224,8 +224,7 @@ const SIZE_FIELDS = {
   // Placement is the read shape's own words: `left`/`top` are the offset in the parent, and naming
   // either lifts the node out of an auto-layout parent's flow (read reports that as `position:
   // "absolute"`). Under a free-form parent they are just the coordinates. `position` on its own lifts
-  // without moving, or ("none", edit only) returns the node to the flow; `anchor` says which point of
-  // the node lands on the coordinate it accompanies.
+  // without moving, or ("none", edit only) returns the node to the flow.
   left: prop(
     z.union([z.number(), z.string()]),
     'Naming `left` or `top` takes the node out of an auto-layout flow, like position: absolute. On a render root it is the page position; without it every root stacks at the origin.',
@@ -234,18 +233,10 @@ const SIZE_FIELDS = {
   top: prop(z.union([z.number(), z.string()]), "As `left`.", 'number | "Npx" | "N%"'),
   position: prop(
     z.enum(["absolute", "none"]),
-    '"absolute" leaves the flow where the node stands. Under edit, "none" returns it to the flow and can\'t sit beside `left`/`top`/`anchor`.',
+    '"absolute" leaves the flow where the node stands. Under edit, "none" returns it to the flow and can\'t sit beside `left`/`top`.',
   ),
-  anchor: prop(
-    z.object({
-      x: z.enum(["left", "center", "right"]).optional(),
-      y: z.enum(["top", "center", "bottom"]).optional(),
-    }),
-    'Which point of the node sits at `left`/`top` (default top-left): anchor: { x: "center" } with left: "50%" centres it. Each axis needs its coordinate in the same call.',
-    "{ x?: left/center/right, y?: top/center/bottom }",
-  ),
-  pin: prop(
-    z.custom<{ x?: PinX; y?: PinY } | "none">(),
+  constraints: prop(
+    z.custom<{ x?: ConstraintX; y?: ConstraintY } | "none">(),
     'Figma constraint: how the node follows a parent resize, overriding the automatic one. Applies under a free-form parent or out of flow; stored but inert on an in-flow child. Under edit, "none" restores the default. Never takes a node out of flow.',
     '{ x?, y? } | "none" — x: left/center/right/stretch/scale/none, y: top/center/bottom/stretch/scale/none',
   ),
@@ -258,8 +249,7 @@ const PLACEMENT_FIELDS = {
   left: SIZE_FIELDS.left,
   top: SIZE_FIELDS.top,
   position: SIZE_FIELDS.position,
-  anchor: SIZE_FIELDS.anchor,
-  pin: SIZE_FIELDS.pin,
+  constraints: SIZE_FIELDS.constraints,
 };
 
 const APPEARANCE_FIELDS = {

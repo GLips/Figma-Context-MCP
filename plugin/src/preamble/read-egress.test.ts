@@ -71,11 +71,11 @@ test("a retyped marker preserves live children and is never created as content",
 
 test("blend modes, constraints and clipping read back in authorable fields", async () => {
   const { figma } = setup();
-  const original = await flcm.render({ type: "FRAME", width: 80, height: 60, clip: true, mixBlendMode: "multiply", pin: { x: "right", y: "bottom" } });
+  const original = await flcm.render({ type: "FRAME", width: 80, height: 60, clip: true, mixBlendMode: "multiply", constraints: { x: "right", y: "bottom" } });
   const { node } = await flcm.get(original);
   assert.equal(node.clip, true);
   assert.equal(node.mixBlendMode, "multiply");
-  assert.deepEqual(node.pin, { x: "right", y: "bottom" });
+  assert.deepEqual(node.constraints, { x: "right", y: "bottom" });
   assert.equal(node.readOnlySource!.blendMode, "MULTIPLY");
   const template = { ...node }; delete template.id;
   const copy = await flcm.render(template);

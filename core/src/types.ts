@@ -196,7 +196,7 @@ export interface SimplifiedNode extends NodeGeometry {
   locked?: boolean;
   clip?: boolean;
   mixBlendMode?: string;
-  pin?: {
+  constraints?: {
     x?: "left" | "center" | "right" | "stretch" | "scale";
     y?: "top" | "center" | "bottom" | "stretch" | "scale";
   };

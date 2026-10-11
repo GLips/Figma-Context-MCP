@@ -110,7 +110,7 @@ export interface RenderCtx extends RenderResources {
 /** One built node and the raw binding bag the WriteNode behind it carried. */
 export interface BoundLiveNode { node: any; refs: ComponentPropertyBinding }
 
-// A deferred percent/anchor resolution: the built (provisional) child node, its RAW layout (percent intent
+// A deferred percent resolution: the built (provisional) child node, its RAW layout (percent intent
 // intact), and its live parent. Collected during the walk and applied in resolvePercents after the whole
 // tree is assembled — the only point at which `parent`'s realized fill/hug size is readable off the canvas.
 interface PendingResolve { node: any; layout: WriteLayout; parent: any }
@@ -454,20 +454,20 @@ function applyChildPosition(parent: any, child: any, layout: WriteLayout): void 
   if (typeof layout.top === "number") child.y = layout.top;
 }
 
-// Figma's per-axis constraint enum keyed by the author's directional `pin` (ir.ts PinX/PinY). Two maps
+// Figma's per-axis constraint enum keyed by the author's directional `constraints` (ir.ts ConstraintX/ConstraintY). Two maps
 // because the axis-neutral words (center/stretch/scale) sit alongside axis-specific edges (left/right on x,
 // top/bottom on y). This terse→enum mapping is the bridge's to own, like the container policy’s alignment maps.
-// "none" → MIN: clearing a pin restores Figma's default (near-edge). The auto-derived constraint
+// "none" → MIN: clearing a constraint restores Figma's default (near-edge). The auto-derived constraint
 // create chose isn't stored anywhere live, so the default is the stated inverse, not a recovery.
-const PIN_H: Record<string, string> = { left: "MIN", center: "CENTER", right: "MAX", stretch: "STRETCH", scale: "SCALE", none: "MIN" };
-const PIN_V: Record<string, string> = { top: "MIN", center: "CENTER", bottom: "MAX", stretch: "STRETCH", scale: "SCALE", none: "MIN" };
+const CONSTRAINT_H: Record<string, string> = { left: "MIN", center: "CENTER", right: "MAX", stretch: "STRETCH", scale: "SCALE", none: "MIN" };
+const CONSTRAINT_V: Record<string, string> = { top: "MIN", center: "CENTER", bottom: "MAX", stretch: "STRETCH", scale: "SCALE", none: "MIN" };
 
 // Derive one axis's Figma constraint from the child's ORIGINAL size/position intent, so a resized free-form
 // parent reflows it sensibly: fill→STRETCH (grows with the parent), a percent size→SCALE (scales
 // proportionally), a percent absolute position→CENTER (holds its relative spot), else MIN (pinned to the
-// leading edge — Figma's default). An explicit `pin` wins over the derived choice.
-function axisConstraint(sizing: Sizing | undefined, percentSize: number | undefined, percentPos: number | undefined, pinDir: string | undefined, pinMap: Record<string, string>): string {
-  if (pinDir != null) return pinMap[pinDir]; // validated at the flcm boundary
+// leading edge — Figma's default). An explicit `constraints` word wins over the derived choice.
+function axisConstraint(sizing: Sizing | undefined, percentSize: number | undefined, percentPos: number | undefined, explicit: string | undefined, words: Record<string, string>): string {
+  if (explicit != null) return words[explicit]; // validated at the flcm boundary
   if (sizing === "fill") return "STRETCH";
   if (percentSize != null) return "SCALE";
   if (percentPos != null) return "CENTER";
@@ -486,26 +486,26 @@ function applyConstraints(child: any, rawLayout: WriteLayout | undefined): void 
   const sizing = l.sizing || {};
   const pSize = l.percentSize || {};
   const pPos = l.percentPos || {};
-  const pin = l.pin || {};
+  const explicit = l.constraints || {};
   child.constraints = {
-    horizontal: axisConstraint(sizing.horizontal, pSize.width, pPos.x, pin.x, PIN_H),
-    vertical: axisConstraint(sizing.vertical, pSize.height, pPos.y, pin.y, PIN_V),
+    horizontal: axisConstraint(sizing.horizontal, pSize.width, pPos.x, explicit.x, CONSTRAINT_H),
+    vertical: axisConstraint(sizing.vertical, pSize.height, pPos.y, explicit.y, CONSTRAINT_V),
   };
 }
 
 // Edit-side constraint delta, presence-preserving per axis: applyConstraints above derives and
-// writes BOTH axes from create-time intent, so an edit naming only pin.x would silently reset
-// pin.y — this reads the untouched axis and re-writes it unchanged instead.
+// writes BOTH axes from create-time intent, so an edit naming only constraints.x would silently
+// reset constraints.y — this reads the untouched axis and re-writes it unchanged instead.
 // Deliberately NEVER re-derives constraints from a delta's size/position words the way create's
-// applyConstraints does (fill→STRETCH, "N%"→SCALE): a live node may carry an authored pin, and a
+// applyConstraints does (fill→STRETCH, "N%"→SCALE): a live node may carry an authored constraint, and a
 // width edit that silently rewrote it would clobber intent the delta never spoke. Under edit,
-// only an explicit `pin` word touches constraints.
-function applyPinDelta(child: any, pin: NonNullable<WriteLayout["pin"]>): void {
+// only an explicit `constraints` word touches them.
+function applyConstraintsDelta(child: any, explicit: NonNullable<WriteLayout["constraints"]>): void {
   if (!("constraints" in child)) return; // an exotic node without the constraint mixin
   const cur = child.constraints;
   child.constraints = {
-    horizontal: pin.x != null ? PIN_H[pin.x] : cur.horizontal,
-    vertical: pin.y != null ? PIN_V[pin.y] : cur.vertical,
+    horizontal: explicit.x != null ? CONSTRAINT_H[explicit.x] : cur.horizontal,
+    vertical: explicit.y != null ? CONSTRAINT_V[explicit.y] : cur.vertical,
   };
 }
 
@@ -544,7 +544,7 @@ function applyLeafSize(node: any, layout: WriteLayout, tokens: ResolvedTokens | 
 // (The layout legality rules — percent-hug cycle, page-parent fill/percent, TEXT fill-height,
 // per-type realizability — live in layout-legality.ts, the one home both verbs consult.)
 
-// Post-walk pass: fold every collected percent size / percent position / anchor into concrete pixels
+// Post-walk pass: fold every collected percent size / percent position into concrete pixels
 // against each parent's REALIZED size. Runs after the whole tree is built and appended, so a `fill`/`hug`
 // parent's size is finally readable off the canvas (the ordering hazard: doing this at walk time would
 // predate the fill/hug pin and reintroduce the unknown-parent-size problem this replaces). Ancestor-first
@@ -595,7 +595,7 @@ function pctOf(pct: number, parentDim: number): number {
   return (pct / 100) * parentDim;
 }
 
-// Fold one child's percent size / percent position / anchor into concrete pixels against its parent's
+// Fold one child's percent size / percent position into concrete pixels against its parent's
 // realized size. Render calls this through the deferred resolvePercents pass above; the edit path
 // calls it directly — at edit time the parent's realized size already exists, so there is no deferral
 // to ride. Parameter order matches the sibling child-appliers (parent, child, layout).
@@ -622,38 +622,21 @@ function resolvePercentSize(parent: any, child: any, layout: WriteLayout): void 
   }
 }
 
-// The POSITION half — it CONSUMES geometry (the parent's realized size, and the node's own for the
-// anchor shift), so it runs last of everything.
+// The POSITION half — it CONSUMES geometry (the parent's realized size), so it runs last of everything.
+// Absolute children only (percentPos is never set otherwise). Each axis is the percent resolved against
+// the parent, else the authored number re-landed; an axis with neither is never touched.
 function resolvePercentPosition(parent: any, child: any, layout: WriteLayout): void {
-  // POSITION + ANCHOR — absolute children only (percentPos/anchor never set otherwise). Resolve each axis
-  // (percent → px against the parent, else the authored number), then shift by the anchor so the child's
-  // anchor point (not its top-left) lands on x/y. STRICTLY per axis: an axis with no authored coordinate
-  // is never touched — anchoring off the LIVE coordinate would subtract the offset again on every
-  // re-apply (the relative-delta drift the absolute-values contract forbids), and applyAbsolute rejects
-  // an anchor axis without its coordinate for the same reason.
-  if (layout.position === "absolute" && (layout.percentPos || layout.anchor)) {
-    const pp = layout.percentPos || {};
-    const a = layout.anchor || {};
-    if (pp.x != null || layout.left != null) {
-      let x = pp.x != null ? pctOf(pp.x, parent.width) : layout.left!;
-      if (a.x === "center") x -= child.width / 2;
-      else if (a.x === "right") x -= child.width;
-      child.x = x;
-    }
-    if (pp.y != null || layout.top != null) {
-      let y = pp.y != null ? pctOf(pp.y, parent.height) : layout.top!;
-      if (a.y === "center") y -= child.height / 2;
-      else if (a.y === "bottom") y -= child.height;
-      child.y = y;
-    }
-  }
+  if (layout.position !== "absolute" || !layout.percentPos) return;
+  const pp = layout.percentPos;
+  if (pp.x != null || layout.left != null) child.x = pp.x != null ? pctOf(pp.x, parent.width) : layout.left!;
+  if (pp.y != null || layout.top != null) child.y = pp.y != null ? pctOf(pp.y, parent.height) : layout.top!;
 }
 
 // Apply a layout delta to a LIVE node the way the create walk applies a fresh child — the SAME
 // appliers in the same roles, re-run against the live parent. Order matters and mirrors buildFrame's
 // walk: container words first (they may change the node's own direction, which own-size mapping
 // reads), then position (in/out of flow decides which appliers govern the node), flow fills and
-// their unset inverses, own/leaf sizing, cover, pin. The percent/anchor tail is
+// their unset inverses, own/leaf sizing, cover, constraints. The percent tail is
 // settleLiveNodePercentSize/Position, deliberately NOT called here — both measure, so the caller
 // owns when they run (see those functions).
 export function applyLiveNodeLayout(node: any, wl: WriteLayout, resources?: RenderResources): void {
@@ -680,12 +663,12 @@ export function applyLiveNodeLayout(node: any, wl: WriteLayout, resources?: Rend
   if (isAutoLayout(node) || isFrameLike(node)) applyOwnSize(node, wl, resources?.tokens);
   else applyLeafSize(node, wl, resources?.tokens);
   if (!inFlowAuto) coverChild(parent, node, wl);
-  if (wl.pin) applyPinDelta(node, wl.pin);
+  if (wl.constraints) applyConstraintsDelta(node, wl.constraints);
 }
 
 /**
- * The two halves of a live layout delta's percent/anchor tail, split out so a verb can order them
- * across MORE than one node. Everything that resolves a percent or an anchor is a measurement, and
+ * The two halves of a live layout delta's percent tail, split out so a verb can order them
+ * across MORE than one node. Everything that resolves a percent is a measurement, and
  * a measurement taken while writes are still landing is a number about to move: an entry centering
  * a hugging panel reads a width that another entry's content change is about to grow, and the
  * panel ends up centered on the size it used to be.
@@ -699,7 +682,7 @@ export function settleLiveNodePercentSize(node: any, wl: WriteLayout): void {
 }
 
 export function settleLiveNodePercentPosition(node: any, wl: WriteLayout): void {
-  if (node.parent && (wl.percentPos || wl.anchor)) resolvePercentPosition(node.parent, node, wl);
+  if (node.parent && wl.percentPos) resolvePercentPosition(node.parent, node, wl);
 }
 
 // The live-parent facts assertPercentResolvable needs (create computes them from the authored
@@ -982,7 +965,7 @@ function legalChildLayout(wn: WriteNode, words: WriteLayout, facts: AttachParent
     const cl = context.layout;
     // Fail loud on the one unresolvable percent (in-flow %-size against a hugging auto-layout parent)
     // before building the node, so a bad node doesn't orphan a live node on the canvas. Every other
-    // percent/anchor is recorded and resolved in the post-walk pass (resolvePercents) against realized size.
+    // percent is recorded and resolved in the post-walk pass (resolvePercents) against realized size.
     assertPercentResolvable(cl, facts, facts.subject);
     assertTextFillHeightInFlow(wn.type, cl, facts.mode.kind !== "free", cl.position === "absolute", facts.subject);
     assertLineSizingInFlow(wn.type, cl, facts.mode, cl.position === "absolute", facts.subject);
@@ -1023,7 +1006,7 @@ export function attachBuiltChild(
   place(child);
   layoutBehavior(parent).place(parent, child, context);
   queueSiblingOrder(ctx, parent, child, cl.zIndex);
-  if (cl.percentSize || cl.percentPos || (cl.position === "absolute" && cl.anchor)) {
+  if (cl.percentSize || cl.percentPos) {
     ctx.pending.push({ node: child, layout: cl, parent });
   }
   if (cl.position === "absolute") applyChildPosition(parent, child, cl);
@@ -1038,12 +1021,12 @@ export function attachBuiltChild(
     else applyConstraints(child, wn.layout);
   } else {
     layoutBehavior(parent).fill(parent, child, context, facts.crossStretch);
-    // An explicit pin is STORED even in flow — constraints are inert on an in-flow auto-layout
-    // child, but they govern the moment it leaves the flow, and edit's applyPinDelta writes the
-    // word unconditionally. applyPinDelta, NOT applyConstraints: in flow, fill rides layoutGrow,
-    // so deriving the unnamed axis from sizing intent (fill→STRETCH) would store a constraint
-    // the author never spoke — and one the same pin through edit would leave at the default.
-    if (cl.pin) applyPinDelta(child, cl.pin);
+    // An explicit constraint is STORED even in flow — constraints are inert on an in-flow auto-layout
+    // child, but they govern the moment it leaves the flow, and edit's applyConstraintsDelta writes
+    // the word unconditionally. applyConstraintsDelta, NOT applyConstraints: in flow, fill rides
+    // layoutGrow, so deriving the unnamed axis from sizing intent (fill→STRETCH) would store a
+    // constraint the author never spoke — and one the same word through edit would leave at the default.
+    if (cl.constraints) applyConstraintsDelta(child, cl.constraints);
   }
   return child;
 }
@@ -1097,7 +1080,7 @@ function buildFrame(wn: WriteNode, ctx: RenderCtx, enclosingWidthBounded = false
 // root-level override the author never wrote, silently unlinking that field from the component).
 // Order: properties before overrides, since a property can swap a nested instance or hide a
 // sublayer and the override paths were resolved against the tree the properties produce. The
-// child-side words (position, fill, pin) are attachBuiltChild's, after the caller places the node.
+// child-side words (position, fill, constraints) are attachBuiltChild's, after the caller places the node.
 function buildInstance(wn: WriteNode, ctx: RenderCtx): any {
   const plan = ctx.instances.get(wn);
   if (!plan) throw new Error("flcm: an INSTANCE node reached the build walk without a resolved plan. This is an internal error; report it.");
@@ -1452,17 +1435,14 @@ function buildCompiledNode(wn: WriteNode, ctx: RenderCtx, enclosingWidthBounded?
 
 // The root is the page's child, and the page is a free-form parent — so the SAME child-side
 // appliers run for it that buildFrame runs for a free-form child: `left`/`top` land as canvas
-// coordinates, an explicit pin is stored (inert until the root is dragged into a frame, like any
-// page child's constraints), an anchor rides the pending pass. Without this, position words on
+// coordinates, and an explicit constraint is stored (inert until the root is dragged into a frame,
+// like any page child's constraints). Without this, position words on
 // the root would validate fine and silently not land — while edit applies the same words to a
 // page child, the exact per-verb divergence layout-legality.ts exists to forbid. ("fill" and
 // percents on the root reject upstream in render's page-parent check; they never reach here.)
-export function placeRootOnPage(root: any, wl: WriteLayout, ctx: RenderCtx): void {
-  if (wl.position === "absolute") {
-    applyChildPosition(figma.currentPage, root, wl);
-    if (wl.anchor) ctx.pending.push({ node: root, layout: wl, parent: figma.currentPage });
-  }
-  if (wl.pin) applyConstraints(root, wl);
+export function placeRootOnPage(root: any, wl: WriteLayout): void {
+  if (wl.position === "absolute") applyChildPosition(figma.currentPage, root, wl);
+  if (wl.constraints) applyConstraints(root, wl);
 }
 
 // The props every SceneNode carries (name/blendMode/rotation/visible/locked), applied once after the

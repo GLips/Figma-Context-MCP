@@ -74,7 +74,13 @@ function projectTrees(
         continue;
       const { children, d, vectorPaths, ...body } = full;
       const node = JSON.parse(JSON.stringify(body)) as SimplifiedNode;
-      for (const field of ["locked", "clip", "pin", "mixBlendMode", "readOnlySource"] as const)
+      for (const field of [
+        "locked",
+        "clip",
+        "constraints",
+        "mixBlendMode",
+        "readOnlySource",
+      ] as const)
         delete node[field];
       delete node.visible;
       delete node.overrides;

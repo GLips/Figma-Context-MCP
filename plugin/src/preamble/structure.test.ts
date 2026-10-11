@@ -521,7 +521,7 @@ test("replace preserves index and parent-relative constraints with explicit sizi
         height: 60,
         left: 23,
         top: 37,
-        pin: { x: "right", y: "bottom" },
+        constraints: { x: "right", y: "bottom" },
       },
       { type: "RECTANGLE", key: "after", width: 10, height: 10 },
     ],

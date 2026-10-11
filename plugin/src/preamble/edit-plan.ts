@@ -51,7 +51,7 @@ import { sceneFigma as figma } from "./scene-access.js";
 //                             live-parent layout gate — every document-reading decision, made once
 //   5a. applyEditPlanWrites     the sealed, commit-free span: everything that CHANGES the node
 //   5b. settleEditPlanSizes      what still PRODUCES geometry: percent size, then the text clamp
-//   5c. settleEditPlanPositions  what CONSUMES it: percent position and anchor, last of all
+//   5c. settleEditPlanPositions  what CONSUMES it: percent position, last of all
 //
 // 5a/5b/5c are one span, split only so a BATCH can run each across every entry before starting the
 // next: a size read while another entry still has writes to land is a number about to move.
@@ -571,9 +571,8 @@ export function applyEditPlanWrites(fail: EditPlanFailure, plan: EditPlan, resou
     applyPaint(node, patch, resources);
     applySceneProps(node, patch);
     applyAnnotations(node, patch.annotations);
-    // Text BEFORE layout — create's own order (buildText: characters, then applyLeafSize): an
-    // anchor or percent in the same delta must resolve against the POST-reflow metrics, or a
-    // center anchor lands off by the text-size change and only converges on a second run.
+    // Text BEFORE layout — create's own order (buildText: characters, then applyLeafSize), so the
+    // layout words size the reflowed text rather than the text it replaces.
     // Fills still precede runs (applyPaint above).
     if (node.type === "TEXT") applyTextProps(node as TextNode, patch, resources);
     if (patch.layout) applyLiveNodeLayout(node, patch.layout, resources);
@@ -597,8 +596,8 @@ export function settleEditPlanSizes(fail: EditPlanFailure, { node, patch }: Edit
 }
 
 /**
- * Stage 5c — what CONSUMES geometry: percent position and anchor, which read the parent's realized
- * size and the node's own, then the centre pivot, which reads the final box. Dead last, so in a
+ * Stage 5c — what CONSUMES geometry: percent position, which reads the parent's realized size,
+ * then the centre pivot, which reads the final box. Dead last, so in a
  * batch they measure a canvas where every entry's sizes have already settled.
  */
 export function settleEditPlanPositions(fail: EditPlanFailure, { node, patch, pivotSpan, instanceWords }: EditPlan): void {

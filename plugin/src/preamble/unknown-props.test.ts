@@ -15,7 +15,6 @@ import assert from "node:assert/strict";
 import { createFigmaMock } from "../../harness/figma-mock.mjs";
 import {
   KNOWN_KEYS,
-  DIRECTIONAL_KEYS,
   BINDING_FIELD_KEYS,
   NODE_KEYS_BY_TYPE,
   gradient,
@@ -67,19 +66,9 @@ test("KNOWN_KEYS mirrors schema.ts FIELD_GROUPS exactly (drift guard)", () => {
   }
 });
 
-test("the directional nested set (anchor) matches its inline schema shape (drift guard)", () => {
-  // anchor is defined inline in SIZE_FIELDS, not as its own FIELD_GROUP — so guard it by unwrapping the
-  // zod object directly. prop() wraps each field in .optional(); .unwrap() peels it.
-  const anchorShape = (
-    SizeSchema as unknown as { shape: { anchor: { unwrap(): { shape: Record<string, unknown> } } } }
-  ).shape.anchor.unwrap();
-  assert.deepEqual([...DIRECTIONAL_KEYS].sort(), Object.keys(anchorShape.shape).sort());
-  // `pin` reuses DIRECTIONAL_KEYS (z.custom — no zod shape to reflect on), so the anchor guard covers it too.
-});
-
 test("the binding bag's fields match their inline schema shape (drift guard)", () => {
   // componentPropertyReferences' fields are defined inline in BINDING_FIELDS, not as their own
-  // FIELD_GROUP, so guard them by unwrapping the zod object — as the anchor guard above does. The
+  // FIELD_GROUP, so guard them by unwrapping the zod object directly. The
   // runtime holds them as PER-CONSTRUCTOR lists (a `slot` is a frame's word); their UNION is the set.
   const shape = (
     FrameSchema as unknown as {
@@ -144,12 +133,8 @@ test("nested authoring objects reject unknown keys with a path-threaded error", 
     /unknown prop "fontVarient" on TEXT\.textStyle/,
   );
   await assert.rejects(
-    render({ type: "FRAME", left: 1, anchor: { z: "left" } as never }),
-    /unknown prop "z" on anchor/,
-  );
-  await assert.rejects(
-    render({ type: "FRAME", pin: { z: "left" } as never }),
-    /unknown prop "z" on pin/,
+    render({ type: "FRAME", constraints: { z: "left" } as never }),
+    /unknown prop "z" on constraints/,
   );
 });
 
@@ -197,8 +182,7 @@ test("known props on every node type render", async () => {
       layout: { mode: "row", gap: 8, padding: 4 },
       left: 1,
       top: 2,
-      anchor: { x: "center" },
-      pin: { x: "left" },
+      constraints: { x: "left" },
     }),
   );
   await assert.doesNotReject(

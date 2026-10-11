@@ -184,7 +184,7 @@ async function extractNode(
   if (node.constraints) {
     const x = HORIZONTAL_CONSTRAINTS[node.constraints.horizontal];
     const y = VERTICAL_CONSTRAINTS[node.constraints.vertical];
-    result.pin = { ...(x ? { x } : {}), ...(y ? { y } : {}) };
+    result.constraints = { ...(x ? { x } : {}), ...(y ? { y } : {}) };
   }
   if (node.vectorPaths?.length) {
     if (node.vectorPaths.length === 1 && node.vectorPaths[0].windingRule === "NONZERO")
@@ -428,14 +428,14 @@ function extractComponent(
   }
 }
 
-const HORIZONTAL_CONSTRAINTS: Record<string, NonNullable<SimplifiedNode["pin"]>["x"]> = {
+const HORIZONTAL_CONSTRAINTS: Record<string, NonNullable<SimplifiedNode["constraints"]>["x"]> = {
   MIN: "left",
   CENTER: "center",
   MAX: "right",
   STRETCH: "stretch",
   SCALE: "scale",
 };
-const VERTICAL_CONSTRAINTS: Record<string, NonNullable<SimplifiedNode["pin"]>["y"]> = {
+const VERTICAL_CONSTRAINTS: Record<string, NonNullable<SimplifiedNode["constraints"]>["y"]> = {
   MIN: "top",
   CENTER: "center",
   MAX: "bottom",

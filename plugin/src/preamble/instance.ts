@@ -537,7 +537,7 @@ function restoreNullWords(delta: OverrideDeltaInput, where: string): EditDelta {
 // every sublayer first — a slot's own `layout`/`fill` words land before its content, so the
 // content attaches under the mode it will live in — then each slot's content replaced (a child
 // list change belongs after the writes and BEFORE the sizes: a hug slot must measure its new
-// content), then 5b sizes, then 5c positions. The content's own percents and anchors ride the
+// content), then 5b sizes, then 5c positions. The content's own percents ride the
 // walk context's pending list, settled by the verb once the whole span has landed.
 function applyOverridePlans(instance: any, overrides: OverridePlan[], ctx: RenderCtx, verb: string): void {
   const subject = "flcm." + verb;

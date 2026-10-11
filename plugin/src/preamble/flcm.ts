@@ -11,7 +11,7 @@ import { compileBounds, BOUND_KEYS } from "./size-bounds.js";
 import { compileAnnotations } from "./annotations.js";
 import {
   WriteNode, WriteProps, WriteChild, WriteLayout, WriteTextStyle, WriteTextRun, WritePaint, WritePaintStack,
-  GradientStop, WriteEffect, Sizing, Edges, WriteCssEffects, PinX, PinY, AnchorX, AnchorY,
+  GradientStop, WriteEffect, Sizing, Edges, WriteCssEffects, ConstraintX, ConstraintY,
   Justify, Align, TextAlign, TextDecoration, WriteTextCase, RawIdRef, WriteType, Target,
   Bindable, CornerRadii, isTokenRef,
   ComponentPropertyInput, OverrideDeltaInput, ComponentPropertyBinding, ComponentPropertyDefinitionEdit,
@@ -41,9 +41,9 @@ import type {
 export const KNOWN_KEYS = {
   annotation: ["annotations"],
   shared: ["name", "key", "opacity", "mixBlendMode", "visible", "locked"],
-  edit: [...gridAliasKeys("all"), "exposed", ...BOUND_KEYS, "clipsContent", "fontSize", "annotations", "name", "opacity", "mixBlendMode", "visible", "locked", "fill", "stroke", "strokeWidth", "strokeAlign", "borderRadius", "effects", "rotation", "clip", "width", "height", "left", "top", "position", "anchor", "pin", "layout", "text", "textStyle", "boldWeight", "componentProperties", "overrides", "componentId", "componentPropertyReferences", "description", "propertyDefinitions"],
-  size: [...gridAliasKeys("child"), "layout", ...BOUND_KEYS, "width", "height", "left", "top", "position", "anchor", "pin"],
-  placement: [...gridAliasKeys("child"), "layout", "left", "top", "position", "anchor", "pin"],
+  edit: [...gridAliasKeys("all"), "exposed", ...BOUND_KEYS, "clipsContent", "fontSize", "annotations", "name", "opacity", "mixBlendMode", "visible", "locked", "fill", "stroke", "strokeWidth", "strokeAlign", "borderRadius", "effects", "rotation", "clip", "width", "height", "left", "top", "position", "constraints", "layout", "text", "textStyle", "boldWeight", "componentProperties", "overrides", "componentId", "componentPropertyReferences", "description", "propertyDefinitions"],
+  size: [...gridAliasKeys("child"), "layout", ...BOUND_KEYS, "width", "height", "left", "top", "position", "constraints"],
+  placement: [...gridAliasKeys("child"), "layout", "left", "top", "position", "constraints"],
   appearance: ["fill", "stroke", "strokeWidth", "strokeAlign", "borderRadius", "effects", "rotation"],
   ellipse: ["fill", "stroke", "strokeWidth", "strokeAlign", "effects", "rotation"],
   frame: [...gridAliasKeys("container"), "layout", "clip", "clipsContent"],
@@ -53,7 +53,7 @@ export const KNOWN_KEYS = {
   text: ["text", "textStyle", "fill", "boldWeight", "fontSize"],
   textStyle: ["style", "fontFamily", "fontWeight", "fontSize", "fontStyle", "lineHeight", "letterSpacing", "textDecoration", "textTransform", "fontVariant", "textAlign", "textAlignVertical", "paragraphSpacing", "paragraphIndent", "listSpacing", "hyperlink", "lineClamp"],
   run: ["fontWeight", "fontSize", "fontFamily", "fontStyle", "lineHeight", "letterSpacing", "textDecoration", "textTransform", "fontVariant", "paragraphSpacing", "paragraphIndent", "listSpacing", "color", "hyperlink"],
-  line: [...gridAliasKeys("child"), "layout", "stroke", "strokeWidth", "width", "rotation", "left", "top", "position", "anchor", "pin"],
+  line: [...gridAliasKeys("child"), "layout", "stroke", "strokeWidth", "width", "rotation", "left", "top", "position", "constraints"],
   path: ["vectorPaths", "d", "scale", "fill", "stroke", "strokeWidth", "strokeAlign", "effects", "rotation"],
   svg: ["fill", "stroke"],
   instance: ["componentProperties", "overrides", "exposed"],
@@ -129,10 +129,8 @@ const CSS_EFFECTS_KEYS = keySet(CSS_EFFECTS_WORDS);
 // has to run before the split, or a typo lands in whichever half claims it and gets named by that half's
 // gate instead of by `effects` (which is where the author wrote it).
 const EFFECTS_INPUT_KEYS = keySet(KNOWN_KEYS.effects, CSS_EFFECTS_WORDS);
-// The directional `{ x, y }` shape is defined INLINE in schema.ts's SIZE_FIELDS (not its own FIELD_GROUP).
-// The drift test still guards it by unwrapping the `anchor` zod object directly. `pin` reuses it: a
-// z.custom with no zod shape of its own, but its keys ARE anchor's, so the anchor guard covers it too.
-export const DIRECTIONAL_KEYS = keySet(["x", "y"]); // pin and anchor
+// `constraints` is a z.custom in schema.ts, so it has no zod shape for a drift test to reflect on.
+const CONSTRAINT_KEYS = keySet(["x", "y"]);
 
 // The closed-set reject (rejectUnknownKeys) lives in validate.ts — one gate shared with read.ts's locate
 // query. Every compiler + nested object below passes its verb name / path as the `subject`.
@@ -208,20 +206,20 @@ function applySizing(props: SizeProps, layout: WriteLayout): void {
   if (pct.width != null || pct.height != null) layout.percentSize = pct;
 }
 
-// The placement words — `left`/`top`, `position`, `anchor` — in the read shape's own spelling. Naming a
+// The placement words — `left`/`top` and `position` — in the read shape's own spelling. Naming a
 // coordinate is what lifts a node out of an auto-layout parent's flow (the IR's position:"absolute";
 // under a free-form parent the bridge writes the coordinate natively and the flag is inert), so
 // `position: "absolute"` alone is the coordinate-free lift and "none" (edit) is the return to flow.
 function applyPlacement(layout: WriteLayout, props: SizeProps): void {
-  const { left, top, position, anchor } = props;
+  const { left, top, position } = props;
   if (position != null && position !== "absolute" && position !== "none") {
     throw new Error('flcm: position must be "absolute" or "none" — got ' + JSON.stringify(position) + ".");
   }
   if (position === "none") {
-    // A node rejoining the flow is placed by the layout, not by coordinates — a coordinate or an
-    // anchor beside "none" is two contradictory claims, refused rather than resolved.
-    if (left != null || top != null || anchor != null) {
-      throw new Error('flcm: position: "none" returns the node to its parent\'s flow, where the layout places it — `left`/`top`/`anchor` can\'t ride along. Drop them, or drop position: "none".');
+    // A node rejoining the flow is placed by the layout, not by coordinates — a coordinate beside
+    // "none" is two contradictory claims, refused rather than resolved.
+    if (left != null || top != null) {
+      throw new Error('flcm: position: "none" returns the node to its parent\'s flow, where the layout places it — `left`/`top` can\'t ride along. Drop them, or drop position: "none".');
     }
     layout.position = "none";
     return;
@@ -243,30 +241,13 @@ function applyPlacement(layout: WriteLayout, props: SizeProps): void {
   axis(left, "left");
   axis(top, "top");
   if (pct.x != null || pct.y != null) layout.percentPos = pct;
-  const a = parseDirectional("anchor", anchor, ANCHOR_X, ANCHOR_Y);
-  if (a) {
-    // An anchor axis without its coordinate has nothing to land on. Rejected rather than anchored
-    // against the live coordinate: subtracting the anchor offset from wherever the node sits would
-    // move it again on every re-apply — the relative-delta drift the absolute-values contract forbids.
-    if (a.x != null && layout.left == null && pct.x == null) {
-      throw new Error("flcm: anchor.x names which point of the node lands on `left` — name `left` alongside it.");
-    }
-    if (a.y != null && layout.top == null && pct.y == null) {
-      throw new Error("flcm: anchor.y names which point of the node lands on `top` — name `top` alongside it.");
-    }
-    layout.anchor = a;
-  }
   if (position === "absolute" || layout.left != null || layout.top != null || layout.percentPos) layout.position = "absolute";
 }
 
-// pin and anchor are the two directional `{ x?, y? }` props: same shape, different vocabularies. Both
-// validate each axis at the boundary (a bad value fails loud, ADR-0003) so the bridge can trust the words —
-// pin's map to Figma's constraint enum, anchor's to an offset. anchor's words are a subset of pin's (no
-// stretch/scale: an anchor is a point, not a resize rule).
-const PIN_X = new Set<PinX>(["left", "center", "right", "stretch", "scale", "none"]);
-const PIN_Y = new Set<PinY>(["top", "center", "bottom", "stretch", "scale", "none"]);
-const ANCHOR_X = new Set<AnchorX>(["left", "center", "right"]);
-const ANCHOR_Y = new Set<AnchorY>(["top", "center", "bottom"]);
+// `constraints` validates each axis at the boundary (a bad value fails loud, ADR-0003) so the bridge
+// can trust the words it maps to Figma's constraint enum.
+const CONSTRAINT_X = new Set<ConstraintX>(["left", "center", "right", "stretch", "scale", "none"]);
+const CONSTRAINT_Y = new Set<ConstraintY>(["top", "center", "bottom", "stretch", "scale", "none"]);
 
 // justifyContent (primary-axis distribution) and alignItems (counter-axis alignment) — the two container
 // enums. The author speaks CSS-total value spellings (flex-start/space-between); these tables map them to
@@ -284,7 +265,7 @@ const ALIGN_ITEMS: Record<string, Align> = {
 const LAYOUT_MODE = new Set<"none" | "row" | "column" | "grid">(["row", "column", "grid", "none"]);
 
 // TS's Set.has doesn't narrow its argument, so wrap it as a real type guard: a hit proves the string is one
-// of the set's literals, letting parseDirectional return the typed axis words with no cast at the call site.
+// of the set's literals, letting parseConstraints return the typed axis words with no cast at the call site.
 function oneOf<T extends string>(set: ReadonlySet<T>, v: string): v is T {
   return set.has(v as T);
 }
@@ -293,25 +274,23 @@ function words(set: ReadonlySet<string>): string {
   return [...set].map((w) => '"' + w + '"').join(", ");
 }
 
-// Validate a directional prop against its per-axis word sets, returning the typed pair (or undefined when
-// neither axis is set). `name` prefixes every error (e.g. "pin", "anchor"); each message lists the set's
-// own members as the allowed words.
-function parseDirectional<X extends string, Y extends string>(
-  name: string, raw: unknown, xSet: ReadonlySet<X>, ySet: ReadonlySet<Y>,
-): { x?: X; y?: Y } | undefined {
+// Validate `constraints` against its per-axis word sets, returning the typed pair (or undefined when
+// neither axis is set). `"none"` is shorthand for clearing both axes.
+function parseConstraints(raw: unknown): { x?: ConstraintX; y?: ConstraintY } | undefined {
   if (raw == null) return undefined;
+  if (raw === "none") return { x: "none", y: "none" };
   if (typeof raw !== "object" || Array.isArray(raw)) {
-    throw new Error("flcm: " + name + " must be an object like { x, y } — got " + JSON.stringify(raw) + ".");
+    throw new Error('flcm: constraints must be an object like { x, y } or "none" — got ' + JSON.stringify(raw) + ".");
   }
   const r = raw as { x?: string; y?: string };
-  rejectUnknownKeys(r, DIRECTIONAL_KEYS, name);
-  const out: { x?: X; y?: Y } = {};
+  rejectUnknownKeys(r, CONSTRAINT_KEYS, "constraints");
+  const out: { x?: ConstraintX; y?: ConstraintY } = {};
   if (r.x != null) {
-    if (!oneOf(xSet, r.x)) throw new Error("flcm: " + name + ".x must be one of " + words(xSet) + " — got " + JSON.stringify(r.x) + ".");
+    if (!oneOf(CONSTRAINT_X, r.x)) throw new Error("flcm: constraints.x must be one of " + words(CONSTRAINT_X) + " — got " + JSON.stringify(r.x) + ".");
     out.x = r.x;
   }
   if (r.y != null) {
-    if (!oneOf(ySet, r.y)) throw new Error("flcm: " + name + ".y must be one of " + words(ySet) + " — got " + JSON.stringify(r.y) + ".");
+    if (!oneOf(CONSTRAINT_Y, r.y)) throw new Error("flcm: constraints.y must be one of " + words(CONSTRAINT_Y) + " — got " + JSON.stringify(r.y) + ".");
     out.y = r.y;
   }
   return out.x != null || out.y != null ? out : undefined;
@@ -330,13 +309,11 @@ function mapCssWord<T extends string>(name: string, raw: unknown, table: Record<
   return mapped;
 }
 
-// pin -> constraint-override intent on the layout. Only meaningful for a positioned child (a free-form
-// parent's, or an out-of-flow one); stored but inert under auto-layout. Never lifts a node out of flow.
-function applyPin(layout: WriteLayout, props: SizeProps): void {
-  // `pin: "none"` is shorthand for clearing both axes; per-axis "none" rides parseDirectional.
-  const raw = props.pin === "none" ? { x: "none", y: "none" } : props.pin;
-  const pin = parseDirectional("pin", raw, PIN_X, PIN_Y);
-  if (pin) layout.pin = pin;
+// constraints -> constraint-override intent on the layout. Only meaningful for a positioned child (a
+// free-form parent's, or an out-of-flow one); stored but inert under auto-layout. Never lifts a node out of flow.
+function applyConstraintsProp(layout: WriteLayout, props: SizeProps): void {
+  const constraints = parseConstraints(props.constraints);
+  if (constraints) layout.constraints = constraints;
 }
 
 // Compile the read layout bag, including container and grid-child words, into a
@@ -409,7 +386,7 @@ export function compileNodeLayout(props: Omit<SizeProps, "layout"> & { layout?: 
   }
   applyDesignedSize(props as { designedWidth?: unknown; designedHeight?: unknown }, layout);
   applyPlacement(layout, props);
-  applyPin(layout, props);
+  applyConstraintsProp(layout, props);
   return Object.keys(layout).length ? layout : undefined;
 }
 

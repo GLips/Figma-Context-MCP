@@ -80,7 +80,7 @@ test("pixel metrics work for dimensions and position; unsupported units reject",
   await assert.rejects(render({ type: "FRAME", left: "20vw" }), /left must be a number/);
 });
 
-test("root position lands on the page; an in-flow child's explicit pin is stored", async () => {
+test("root position lands on the page; an in-flow child's explicit constraint is stored", async () => {
   const out = await render({
     type: "FRAME",
     width: 40,
@@ -88,7 +88,7 @@ test("root position lands on the page; an in-flow child's explicit pin is stored
     left: 42,
     top: 17,
     layout: { mode: "row", gap: 4 },
-    children: [{ type: "RECTANGLE", width: 10, height: 10, pin: { x: "right" } }],
+    children: [{ type: "RECTANGLE", width: 10, height: 10, constraints: { x: "right" } }],
   });
   const root = await figma.getNodeByIdAsync(out.id);
   assert.deepEqual([root.x, root.y], [42, 17]);

@@ -3,7 +3,7 @@
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
 import { specNode } from "../../harness/spec-node.js";
-// Percent sizing ("N%") on width/height and left/top, plus `anchor`. Percent has no construction-time
+// Percent sizing ("N%") on width/height and left/top, plus `constraints`. Percent has no construction-time
 // meaning (the parent isn't known yet), so these exercise a live render against the in-memory figma mock:
 // the bridge resolves a percent to pixels against the parent's REALIZED axis size in a post-walk pass, and
 // fails loud only on the true cycle (an in-flow %-size child of a parent that hugs that axis) and the root.
@@ -154,76 +154,7 @@ test("percent on the root node (no parent) fails loud", async () => {
   await assert.rejects(render({ type: "RECTANGLE", width: "50%" }), /parent is the page/);
 });
 
-// --- Phase 2 (b): `anchor` on an absolute child ---
-
-test("anchor centres a child on the resolved point (no half-width offset)", async () => {
-  const out = await render({
-    type: "FRAME",
-    width: 200,
-    height: 100,
-    children: [
-      {
-        type: "RECTANGLE",
-        key: "knob",
-        width: 40,
-        height: 40,
-        left: "50%",
-        top: "50%",
-        anchor: { x: "center", y: "center" },
-      },
-    ],
-  });
-  const knob = await figma.getNodeByIdAsync(specNode(out, "knob").id);
-  assert.equal(knob.x, 80); // 50% of 200 = 100, minus half the 40px width
-  assert.equal(knob.y, 30); // 50% of 100 = 50, minus half the 40px height
-});
-
-test("anchor right/bottom pins a child's far edge to the point", async () => {
-  const out = await render({
-    type: "FRAME",
-    width: 300,
-    height: 200,
-    children: [
-      {
-        type: "RECTANGLE",
-        key: "badge",
-        width: 24,
-        height: 24,
-        left: "100%",
-        top: 0,
-        anchor: { x: "right", y: "top" },
-      },
-    ],
-  });
-  const badge = await figma.getNodeByIdAsync(specNode(out, "badge").id);
-  assert.equal(badge.x, 276); // right edge at 100% (300) → x = 300 - 24
-  assert.equal(badge.y, 0); // top anchor: no offset
-});
-
-test("anchor works with a numeric position too (no percent required)", async () => {
-  const out = await render({
-    type: "FRAME",
-    width: 200,
-    height: 100,
-    children: [
-      { type: "RECTANGLE", key: "dot", width: 10, height: 10, left: 100, anchor: { x: "center" } },
-    ],
-  });
-  assert.equal((await figma.getNodeByIdAsync(specNode(out, "dot").id)).x, 95); // 100 - half of 10
-});
-
-test("a bad anchor value fails loud", async () => {
-  await assert.rejects(
-    render({ type: "RECTANGLE", left: 0, anchor: { x: "top" } } as never),
-    /anchor\.x must be one of/,
-  );
-  await assert.rejects(
-    render({ type: "RECTANGLE", left: 0, anchor: { y: "left" } } as never),
-    /anchor\.y must be one of/,
-  );
-});
-
-// --- Phase 4.2: auto-constraints on a free-form parent's children + `pin` override ---
+// --- Phase 4.2: auto-constraints on a free-form parent's children + `constraints` override ---
 
 test("a free-form child's constraints derive from its size/position intent", async () => {
   const out = await render({
@@ -256,13 +187,13 @@ test('free-form width:"fill" actually stretches to the parent box (no warn-and-i
   assert.equal((await figma.getNodeByIdAsync(specNode(out, "bar").id)).width, 300);
 });
 
-test("`pin` overrides the auto-derived constraint per axis", async () => {
+test("`constraints` overrides the auto-derived constraint per axis", async () => {
   const out = await render({
     type: "FRAME",
     width: 300,
     height: 200,
     children: [
-      { type: "RECTANGLE", key: "r", width: "fill", height: 40, pin: { x: "right", y: "bottom" } }, // over fill/MIN
+      { type: "RECTANGLE", key: "r", width: "fill", height: 40, constraints: { x: "right", y: "bottom" } }, // over fill/MIN
       {
         type: "RECTANGLE",
         key: "c",
@@ -270,7 +201,7 @@ test("`pin` overrides the auto-derived constraint per axis", async () => {
         height: 40,
         left: 10,
         top: 10,
-        pin: { x: "center", y: "scale" },
+        constraints: { x: "center", y: "scale" },
       },
     ],
   });
@@ -284,25 +215,25 @@ test("`pin` overrides the auto-derived constraint per axis", async () => {
   });
 });
 
-test("an IN-FLOW auto-layout child STORES an explicit pin (inert in flow, governs if it leaves)", async () => {
+test("an IN-FLOW auto-layout child STORES an explicit constraint (inert in flow, governs if it leaves)", async () => {
   // Flow behavior is untouched — the child reflows via layoutGrow/stretch, on which constraints
   // are inert — but the word is written, because edit's applyPinDelta writes it unconditionally
-  // and the same pin must land identically per verb (layout-legality's charter).
+  // and the same constraint must land identically per verb (layout-legality's charter).
   const out = await render({
     type: "FRAME",
     layout: { mode: "row" },
     width: 300,
     height: 80,
-    children: [{ type: "RECTANGLE", key: "grow", width: "fill", height: 40, pin: { x: "right" } }],
+    children: [{ type: "RECTANGLE", key: "grow", width: "fill", height: 40, constraints: { x: "right" } }],
   });
   const node = await figma.getNodeByIdAsync(specNode(out, "grow").id);
   assert.equal(node.layoutGrow, 1); // fill still rides layoutGrow, unchanged
-  assert.deepEqual(node.constraints, { horizontal: "MAX", vertical: "MIN" }); // pin.x explicit → MAX; y unnamed → untouched default (presence-preserving, like edit)
+  assert.deepEqual(node.constraints, { horizontal: "MAX", vertical: "MIN" }); // constraints.x explicit → MAX; y unnamed → untouched default (presence-preserving, like edit)
 });
 
-test("an ABSOLUTE child of an auto-layout parent honors pin/constraints (out of flow)", async () => {
+test("an ABSOLUTE child of an auto-layout parent honors constraints (out of flow)", async () => {
   // An absolute child is lifted out of the flow, and Figma DOES apply constraints to it — the badge-in-corner
-  // case. So pin/auto-derivation must flow through even under an auto-layout parent (not a silent no-op).
+  // case. So constraints/auto-derivation must flow through even under an auto-layout parent (not a silent no-op).
   const out = await render({
     type: "FRAME",
     layout: { mode: "row" },
@@ -316,7 +247,7 @@ test("an ABSOLUTE child of an auto-layout parent honors pin/constraints (out of 
         height: 28,
         left: 284,
         top: 12,
-        pin: { x: "right", y: "top" },
+        constraints: { x: "right", y: "top" },
       },
     ],
   });
@@ -326,40 +257,40 @@ test("an ABSOLUTE child of an auto-layout parent honors pin/constraints (out of 
   });
 });
 
-test("a bad `pin` value fails loud", async () => {
+test("a bad `constraints` value fails loud", async () => {
   await assert.rejects(
-    render({ type: "RECTANGLE", pin: { x: "middle" } } as never),
-    /pin\.x must be one of/,
+    render({ type: "RECTANGLE", constraints: { x: "middle" } } as never),
+    /constraints\.x must be one of/,
   );
   await assert.rejects(
-    render({ type: "RECTANGLE", pin: { y: "left" } } as never),
-    /pin\.y must be one of/,
+    render({ type: "RECTANGLE", constraints: { y: "left" } } as never),
+    /constraints\.y must be one of/,
   );
   await assert.rejects(
-    render({ type: "RECTANGLE", pin: "right" } as never),
-    /pin must be an object/,
+    render({ type: "RECTANGLE", constraints: "right" } as never),
+    /constraints must be an object/,
   );
 });
 
 // The ORDER hazard, not the constraint itself: a STRETCH child grows by its parent's delta, so a
-// pin written while the parent is still at its provisional creation size inflates a child that
+// constraint written while the parent is still at its provisional creation size inflates a child that
 // named its own pixel size. Constraints describe how a child reflows LATER; they are never part of
 // the size it is authored at.
-test("`pin: \"stretch\"` never resizes the child that authored its own dimensions", async () => {
-  for (const pin of [undefined, { x: "stretch", y: "stretch" }]) {
+test("`constraints: \"stretch\"` never resizes the child that authored its own dimensions", async () => {
+  for (const constraints of [undefined, { x: "stretch", y: "stretch" }]) {
     for (const padding of [undefined, 8]) {
       const out = await render({
         type: "FRAME",
         width: 200,
         height: 100,
         ...(padding === undefined ? {} : { layout: { mode: "column", padding } }),
-        children: [{ type: "RECTANGLE", key: "child", width: 200, height: 100, position: "absolute", left: 0, top: 0, ...(pin ? { pin } : {}) }],
+        children: [{ type: "RECTANGLE", key: "child", width: 200, height: 100, position: "absolute", left: 0, top: 0, ...(constraints ? { constraints } : {}) }],
       } as never);
       const child = await figma.getNodeByIdAsync(specNode(out, "child").id);
-      const at = "pin " + JSON.stringify(pin) + ", padding " + padding;
+      const at = "constraints " + JSON.stringify(constraints) + ", padding " + padding;
       assert.equal(child.width, 200, at);
       assert.equal(child.height, 100, at);
-      assert.deepEqual(child.constraints, pin ? { horizontal: "STRETCH", vertical: "STRETCH" } : { horizontal: "MIN", vertical: "MIN" }, at);
+      assert.deepEqual(child.constraints, constraints ? { horizontal: "STRETCH", vertical: "STRETCH" } : { horizontal: "MIN", vertical: "MIN" }, at);
     }
   }
 });
