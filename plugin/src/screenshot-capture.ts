@@ -4,7 +4,7 @@
  */
 /** Opt-in prototype policy; pixel fidelity and undo/selection behavior need live verification. */
 export interface CaptureOptions { scale?: number; context?: boolean; margin?: number }
-export const CONTEXT_MARGIN_PROTOTYPE = { proportion: 0.1, min: 24, max: 160 } as const;
+export const CONTEXT_MARGIN_PROTOTYPE = { proportion: 0.1, min: 80, max: 160 } as const;
 
 export function contextualBounds(bounds: Rect, margin?: number): Rect {
   if (margin !== undefined && (!Number.isFinite(margin) || margin < 0)) throw new Error("Screenshot margin must be a finite nonnegative pixel value.");

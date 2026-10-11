@@ -18,8 +18,9 @@ function fixture(exporter: () => Promise<Uint8Array> = async () => new Uint8Arra
 }
 
 test("provisional margins use proportional min/max bounds and explicit zero", () => {
-  assert.deepEqual(contextualBounds({ x: 0, y: 0, width: 10, height: 20 }), { x: -24, y: -24, width: 58, height: 68 });
-  assert.equal(contextualBounds({ x: 0, y: 0, width: 500, height: 20 }).x, -50);
+  assert.deepEqual(contextualBounds({ x: 0, y: 0, width: 10, height: 20 }), { x: -80, y: -80, width: 170, height: 180 });
+  assert.equal(contextualBounds({ x: 0, y: 0, width: 500, height: 20 }).x, -80);
+  assert.equal(contextualBounds({ x: 0, y: 0, width: 1200, height: 20 }).x, -120);
   assert.equal(contextualBounds({ x: 0, y: 0, width: 5000, height: 20 }).x, -160);
   assert.equal(contextualBounds({ x: 0, y: 0, width: 500, height: 20 }, 0).width, 500);
   assert.throws(() => contextualBounds({ x: 0, y: 0, width: 500, height: 20 }, Infinity), /finite/);

@@ -228,7 +228,7 @@ Passing both nodeId and key is ambiguous and fails loud. A failed lookup NEVER f
 
 scale (default 1, max 4) multiplies the export resolution — use scale: 2–4 to inspect detail you can't resolve at 1x: hairline borders, 1px strokes, grain, glass refraction, small type.
 
-context:true also captures the canvas around the target, to check how it sits among its neighbours; it needs nodeId or key. margin is the pixels added on each side (default 10% of the target's longest side, clamped to 24–160).
+context:true also captures the canvas around the target, to check how it sits among its neighbours; it needs nodeId or key. margin is the pixels added on each side (default 10% of the target's longest side, clamped to 80–160).
 
 Returns a PNG image.`,
         inputSchema: {
