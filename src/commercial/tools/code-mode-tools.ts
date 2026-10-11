@@ -29,6 +29,7 @@ import {
   SECTION_IDS,
 } from "./flcm-docs/reference.js";
 import { MCP_DOCS_CHANNEL } from "./flcm-docs/channels.js";
+import { CLI_NAME } from "~/utils/cli-help.js";
 
 // The figma_execute_code description is the GENERATED quick-start (buildQuickStart), assembled from
 // the schema single-source + narrative — so the agent-facing contract can't drift from the code
@@ -130,7 +131,8 @@ export function registerCodeModeTools(
             .string()
             .optional()
             .describe(
-              "Path to a .js file holding the same kind of script, read when the call arrives. Must be inside the server's asset root (the --asset-root directory, default the server's working directory); a relative path resolves against that root, so prefer an absolute path. Use it for long scripts: after an error, edit the file and resend only the path.",
+              "Path to a .js file holding the same kind of script, read when the call arrives. Must be inside the server's asset root (the --asset-root directory, default the server's working directory); a relative path resolves against that root, so prefer an absolute path. Use it for long scripts: after an error, edit the file and resend only the path. " +
+                `For a file outside the root, send it as code, or from a shell run \`npx ${CLI_NAME} execute <file>\`.`,
             ),
         },
       },
@@ -143,13 +145,16 @@ export function registerCodeModeTools(
             script = await runtime.readSavedScript(scriptPath);
           } catch (error) {
             const { message, cause } = error as Error;
+            // The server never widens what it reads (no roots, no path grants). An agent working outside
+            // the root is sent to routes that already work; the CLI reads on the agent's side.
             const remedy =
               cause instanceof OutsideAssetRootError
-                ? `save the script under ${cause.assetRoot} and pass that path`
-                : "correct scriptPath";
+                ? `send the script inline as code, or, with shell access, run ` +
+                  `\`npx ${CLI_NAME} execute ${shellQuotedPath(scriptPath)}\`, which reads the file ` +
+                  `on your side with your own permissions`
+                : "correct scriptPath, or send the script inline as code";
             return retryableToolReply(
-              `figma_execute_code ${message}, so this call did not run. This is NOT a failure: ` +
-                `${remedy}, or send the script inline as code.`,
+              `figma_execute_code ${message}, so this call did not run. This is NOT a failure: ${remedy}.`,
             );
           }
         } else return scriptSourceReply("neither");
@@ -330,4 +335,9 @@ Returns a PNG image.`,
       for (const tool of tools) tool.enable();
     });
   }
+}
+
+/** Leaves an ordinary path bare so the suggested command reads cleanly; quotes anything a shell would split. */
+function shellQuotedPath(path: string): string {
+  return /^[\w@%+=:,./-]+$/.test(path) ? path : `'${path.replaceAll("'", `'\\''`)}'`;
 }

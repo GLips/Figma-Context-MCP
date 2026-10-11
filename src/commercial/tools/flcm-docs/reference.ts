@@ -505,12 +505,12 @@ export function buildQuickStart(channel: DocsChannel): string {
   const verbLines = quickStartVerbLines();
   const quickStart = `Execute JavaScript in Figma with \`flcm\`.
 
-EXECUTION: await/return directly; await every mutation. Not a transaction: each verb commits on its own, so after an error inspect before retrying. Only session survives calls.${channel.savedScriptHowTo ? `\n\n${channel.savedScriptHowTo}` : ""}
+EXECUTION: await/return directly; await every mutation. Not a transaction: each verb commits alone; after an error, inspect before retrying. Only session survives calls.${channel.savedScriptHowTo ? `\n\n${channel.savedScriptHowTo}` : ""}
 
 AUTHOR:
   const t = { type:"FRAME", layout:{ mode:"column", gap:16 }, children:[{ type:"TEXT", text:"Hi" }] };
   session.screen = await flcm.render(t); // copied spec with ids
-  // id means move + edit; no id means create, at every depth.
+  // id: move + edit; no id: create, at every depth.
 
 VERBS — all on \`flcm.\`, nothing else is:
 ${verbLines}
@@ -523,7 +523,7 @@ MUST-KNOW
 
 ${docsPointer(channel)}
 
-RETURNS { result, console, errors }: JSON-safe result, captured console lines, error string or null.`;
+RETURNS { result, console, errors }: JSON-safe result, console lines, error string or null.`;
 
   const bytes = Buffer.byteLength(quickStart, "utf8");
   if (bytes > QUICKSTART_LIMIT_BYTES) {

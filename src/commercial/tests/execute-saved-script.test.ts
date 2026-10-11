@@ -95,17 +95,22 @@ describe("figma_execute_code with scriptPath", () => {
 
   it("refuses a file outside the asset root, or not .js, without submitting anything", async () => {
     await writeFile(join(outer, "outside.js"), "return 'secret';");
+    await mkdir(join(outer, "my scripts"));
+    await writeFile(join(outer, "my scripts", "outside.js"), "return 'secret';");
     await writeFile(join(root, "scripts", "notes.txt"), "return 1;");
     const { call, submitted, close } = connectedServer();
     try {
       const escaped = await call({ scriptPath: "../outside.js" });
       expect(escaped.isError).toBeFalsy();
       expect(escaped.text).toContain("did not run");
-      expect(escaped.text).toContain(`save the script under ${root}`);
+      expect(escaped.text).toContain(`outside the asset root (${root})`);
       expect(escaped.text).toContain("send the script inline as code");
+      expect(escaped.text).toContain("`npx figma-developer-mcp execute ../outside.js`");
 
-      const absoluteEscape = await call({ scriptPath: join(outer, "outside.js") });
-      expect(absoluteEscape.text).toContain("outside the asset root");
+      const spaced = join(outer, "my scripts", "outside.js");
+      const absoluteEscape = await call({ scriptPath: spaced });
+      expect(absoluteEscape.text).toContain(`outside the asset root (${root})`);
+      expect(absoluteEscape.text).toContain(`execute '${spaced}'`);
 
       const wrongType = await call({ scriptPath: "scripts/notes.txt" });
       expect(wrongType.text).toContain("only .js files are run");
