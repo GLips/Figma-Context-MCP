@@ -217,7 +217,7 @@ test("`constraints` overrides the auto-derived constraint per axis", async () =>
 
 test("an IN-FLOW auto-layout child STORES an explicit constraint (inert in flow, governs if it leaves)", async () => {
   // Flow behavior is untouched — the child reflows via layoutGrow/stretch, on which constraints
-  // are inert — but the word is written, because edit's applyPinDelta writes it unconditionally
+  // are inert — but the word is written, because edit's applyConstraintsDelta writes it unconditionally
   // and the same constraint must land identically per verb (layout-legality's charter).
   const out = await render({
     type: "FRAME",

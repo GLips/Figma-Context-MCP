@@ -778,8 +778,8 @@ const FRAME_BINDINGS: readonly string[] = ["visible", "slot"];
 const TEXT_BINDINGS: readonly string[] = ["visible", "text"];
 const INSTANCE_BINDINGS: readonly string[] = ["visible", "componentId"];
 // The union of those lists — every field the word can name anywhere. Guarded against the schema's
-// inline object (unknown-props.test.ts), the way DIRECTIONAL_KEYS is: the bag's fields are defined
-// inline in BINDING_FIELDS, not as their own FIELD_GROUP.
+// inline object (unknown-props.test.ts): the bag's fields are defined inline in BINDING_FIELDS, not
+// as their own FIELD_GROUP.
 export const BINDING_FIELD_KEYS: ReadonlySet<string> = keySet(FRAME_BINDINGS, TEXT_BINDINGS, INSTANCE_BINDINGS);
 
 /**

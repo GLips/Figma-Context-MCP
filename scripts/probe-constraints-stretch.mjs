@@ -22,7 +22,7 @@
 //      included) is built from SOURCE below and shipped with the execute, so a preamble-side fix
 //      needs no re-import at all.
 //   3. Open the Framelink plugin in any (scratch) file.
-//   4. pnpm probe:pin-stretch                (this script)
+//   4. pnpm probe:constraints-stretch        (this script)
 //   5. When the plugin strip shows this session, click Allow.
 // The probe renders four small frames, measures, deletes them again, and prints PASS/FAIL per case.
 // Safe to re-run.
@@ -57,7 +57,7 @@ for (let i = 0; i < cases.length; i++) {
   const c = cases[i];
   const spec = {
     type: "FRAME",
-    name: "flcm-pin-probe " + c.name,
+    name: "flcm-constraints-probe " + c.name,
     width: 200,
     height: 100,
     left: 0,
