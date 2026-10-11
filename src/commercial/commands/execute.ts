@@ -16,7 +16,7 @@ import {
   screenshotInputError,
 } from "~/commercial/plugin-bridge/screenshot-options.js";
 import {
-  approvalPendingAction,
+  approvalPendingRerunAction,
   pluginDisconnectedAction,
 } from "~/commercial/plugin-bridge/blocked-call-guidance.js";
 import { buildQuickStart } from "~/commercial/tools/flcm-docs/reference.js";
@@ -184,9 +184,7 @@ export async function runExecute(flags: ExecuteFlags, positionals: string[]): Pr
     const outcome = await executePluginCode(runtime, code, options);
     if (outcome.kind === "refused") throw new Error(outcome.message);
     if (outcome.kind === "pending") {
-      throw new Error(
-        `The script did not run. ${approvalPendingAction(runtime.bridge.getPairingCode(), waitMs)}`,
-      );
+      throw new Error(`The script did not run. ${approvalPendingRerunAction(waitMs)}`);
     }
     try {
       const reply = outcome.reply;
@@ -199,7 +197,9 @@ export async function runExecute(flags: ExecuteFlags, positionals: string[]): Pr
         const captured = await capturePluginScreenshot(runtime.bridge, target, options);
         if (captured.kind === "pending")
           throw new Error(
-            `No PNG was saved. ${approvalPendingAction(runtime.bridge.getPairingCode(), waitMs)}`,
+            "The script ran (its reply is above), but session approval was withdrawn before the " +
+              "screenshot, so no PNG was saved. Re-running would repeat the script's writes; report " +
+              "this to the user or coordinating agent instead.",
           );
         const screenshot = captured.reply;
         if ("errors" in screenshot) throw new Error(`Screenshot failed: ${screenshot.errors}`);

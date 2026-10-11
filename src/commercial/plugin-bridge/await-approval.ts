@@ -2,6 +2,8 @@
  * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
+import { pluginUnresponsiveText } from "./blocked-call-guidance.js";
+
 /** Only status requests repeat. Code remains local until approval and is submitted once. */
 export function isPendingApproval(reply: unknown): boolean {
   return (
@@ -44,7 +46,7 @@ export async function requestUntilApproved(
   const abort = () => local.abort(signal?.reason);
   signal?.addEventListener("abort", abort, { once: true });
   if (signal?.aborted) abort();
-  const expired = new Error("Approval wait expired; no code was submitted.");
+  const expired = new Error(pluginUnresponsiveText());
   const timeout = setTimeout(() => local.abort(expired), waitMs);
   let stop: (() => Promise<void>) | undefined;
   // The timer can win the race against the deadline checks below (or cut a hung poll). Once a poll

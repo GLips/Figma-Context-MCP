@@ -182,6 +182,8 @@ it("an expired approval wait names the blocker, the pairing code, and that a lat
   expect(text).toContain("approves pairing code 1234");
   expect(text).toContain("retry only after they confirm the approval");
   expect(text).toContain("Approving later does not run this call");
+  h.bridge.decision = "APPROVAL_GRANTED";
+  await vi.advanceTimersByTimeAsync(2000);
   expect(h.bridge.executions).toBe(0);
   await h.close();
 });

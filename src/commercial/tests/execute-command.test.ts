@@ -247,7 +247,7 @@ describe("saved-script CLI using production plugin services", () => {
 
   it("reports approval timeout without fabricating an execution reply", async () => {
     const finished = expect(run({ wait: 1 })).rejects.toThrow(
-      /did not run. Blocked: session approval is pending/,
+      /did not run. Blocked: session approval is pending, and this run's session has ended/,
     );
     const { closed } = await plugin((frame, socket) => {
       if (frame.type === "APPROVAL_STATUS") reply(socket, frame, { type: "PENDING_APPROVAL" });
