@@ -883,7 +883,7 @@ export const VERBS: VerbDoc[] = [
   {"category": "edit", "signature": "await flcm.edit(target, changes)", "builds": "an updated handle", "args": "Apply only the named props. Structure changes use placement verbs."},
   {"category": "edit", "signature": "await flcm.editMany(entries)", "builds": "updated handles in entry order", "args": "One atomic batch. Each entry is { id, ...changes } — a live node id plus the same props edit takes."},
   {"category": "read", "signature": "await flcm.get(target)", "builds": "{ node, components? }", "args": "Expanded read data. Pass node directly to a placement verb to move and edit it. components contains shared definitions."},
-  {"category": "read", "signature": "await flcm.find(query?, predicate?)", "builds": "slim handles[]", "args": "Query fields: type, name, key, within, hasAnnotations. Optional predicate sees expanded read data."},
+  {"category": "read", "signature": "await flcm.find(query?, predicate?)", "builds": "slim handles[]", "args": "Query keys, the complete set: type, name, key, within, hasAnnotations. The optional predicate receives each candidate's full flcm read shape and can test any field in it."},
   {"category": "read", "signature": "await flcm.findOne(query?, predicate?)", "builds": "one slim handle", "args": "Like find; throws unless exactly one matches."},
   {"category": "read", "signature": "await flcm.selection()", "builds": "slim handles[]", "args": "The current selection."},
   {"category": "read", "signature": "await flcm.measure(target)", "builds": "{ x, y, width, height }", "args": "Measured pixels; x/y are relative to the containing frame or page, so a group's children measure from the frame around the group."},

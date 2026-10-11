@@ -327,7 +327,7 @@ const FIND_KEY_SET: ReadonlySet<string> = new Set(FIND_KEYS);
 // must say so: without this an agent reads "not a query key" as "flcm cannot filter on that" and gives up
 // on a search the predicate answers directly.
 const FIND_PREDICATE_HINT =
-  "Any other filter goes in the predicate, find's second argument, which sees the node's full read shape.";
+  "Filter text, componentId or any other read field in the predicate, find's second argument.";
 
 // AND-combine the query facets. Empty-string facets are treated as "unset" (an empty substring would match
 // everything). `type`/`key` exact; `name` case-insensitive substring.

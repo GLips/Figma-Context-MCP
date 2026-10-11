@@ -125,13 +125,13 @@ The read verbs — `get`, `find`, `findOne`, `selection` — and every verb's re
 
 `get` returns `{ node, components? }`. `node` is the complete subtree in live sibling order, including hidden nodes (`visible: false`), VECTOR geometry and the children an instance inherits. `components` holds the definitions of components the subtree uses; when a library component's own children aren't in the file, its entry takes them from an instance in use and names it in `childrenFrom`.
 
-`find` and `findOne` return slim handles; `findOne` throws unless exactly one node matches. The query's facets must all match:
+`find` and `findOne` return slim handles; `findOne` throws unless exactly one node matches. Every query key you pass must match:
 
 - `name` is a case-insensitive substring, so `"Card"` also finds "Card footer" and "Discard". Pass a RegExp such as `/^Card$/` for an exact name.
 - `type` and `key` match exactly; `hasAnnotations` is a boolean.
 - `within` is a target whose descendants are searched, never the node itself. Without it, the current page.
 
-Any other filter goes in the predicate, a synchronous function that gets each candidate's full read shape, the same one `get` returns: `find({ type: "FRAME" }, (n) => n.layout?.mode === "grid")`. A predicate is offered at most 5,000 candidates, so narrow large files with `within` or the query.
+The predicate must be synchronous and is offered at most 5,000 candidates, so narrow large files with `within` or the query.
 
 ### A read is a spec
 
@@ -187,7 +187,7 @@ Warnings on nodes you neither returned nor logged appear as `[warn]` lines in th
 | `await flcm.edit(target, changes)` | an updated handle | Apply only the named props. Structure changes use placement verbs. |
 | `await flcm.editMany(entries)` | updated handles in entry order | One atomic batch. Each entry is { id, ...changes } — a live node id plus the same props edit takes. |
 | `await flcm.get(target)` | { node, components? } | Expanded read data. Pass node directly to a placement verb to move and edit it. components contains shared definitions. |
-| `await flcm.find(query?, predicate?)` | slim handles[] | Query fields: type, name, key, within, hasAnnotations. Optional predicate sees expanded read data. |
+| `await flcm.find(query?, predicate?)` | slim handles[] | Query keys, the complete set: type, name, key, within, hasAnnotations. The optional predicate receives each candidate's full flcm read shape and can test any field in it. |
 | `await flcm.findOne(query?, predicate?)` | one slim handle | Like find; throws unless exactly one matches. |
 | `await flcm.selection()` | slim handles[] | The current selection. |
 | `await flcm.measure(target)` | { x, y, width, height } | Measured pixels; x/y are relative to the containing frame or page, so a group's children measure from the frame around the group. |

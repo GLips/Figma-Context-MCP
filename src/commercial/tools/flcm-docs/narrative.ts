@@ -61,13 +61,13 @@ export const READS = `The read verbs — \`get\`, \`find\`, \`findOne\`, \`selec
 
 \`get\` returns \`{ node, components? }\`. \`node\` is the complete subtree in live sibling order, including hidden nodes (\`visible: false\`), VECTOR geometry and the children an instance inherits. \`components\` holds the definitions of components the subtree uses; when a library component's own children aren't in the file, its entry takes them from an instance in use and names it in \`childrenFrom\`.
 
-\`find\` and \`findOne\` return slim handles; \`findOne\` throws unless exactly one node matches. The query's facets must all match:
+\`find\` and \`findOne\` return slim handles; \`findOne\` throws unless exactly one node matches. Every query key you pass must match:
 
 - \`name\` is a case-insensitive substring, so \`"Card"\` also finds "Card footer" and "Discard". Pass a RegExp such as \`/^Card$/\` for an exact name.
 - \`type\` and \`key\` match exactly; \`hasAnnotations\` is a boolean.
 - \`within\` is a target whose descendants are searched, never the node itself. Without it, the current page.
 
-Any other filter goes in the predicate, a synchronous function that gets each candidate's full read shape, the same one \`get\` returns: \`find({ type: "FRAME" }, (n) => n.layout?.mode === "grid")\`. A predicate is offered at most 5,000 candidates, so narrow large files with \`within\` or the query.
+The predicate must be synchronous and is offered at most 5,000 candidates, so narrow large files with \`within\` or the query.
 
 ### A read is a spec
 

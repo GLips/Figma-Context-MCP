@@ -95,7 +95,7 @@ test("find returns empty for no match; an unknown query key fails loud", async (
   // refusal always names the predicate, so the agent's next call is the one that works.
   await assert.rejects(
     find({ depth: 2 } as never),
-    /Any other filter goes in the predicate, find's second argument, which sees the node's full read shape\./,
+    /Filter text, componentId or any other read field in the predicate, find's second argument\./,
   );
 });
 
