@@ -50,7 +50,10 @@ import { z } from "zod";
 // the Framelink origin, and the panel exchanges WRITE_ACCESS / WRITE_ACCESS_SIGN_IN. A v7
 // plugin reports no document change and no Authorizing User, so its writes could be neither counted nor
 // attributed — refused, like every other gap in the contract.
-export const MIN_PROTOCOL_VERSION = 8;
+// v9: RUN_STATE carries `at`, the plugin's stamp for when the phase began, and FlcmHost hands the
+// preamble the same runStartedAt, so the inactivity deadline counts from one instant on both sides.
+// A v8 plugin's "running" counts from its arrival, which a run's opening synchronous work delays.
+export const MIN_PROTOCOL_VERSION = 9;
 
 /**
  * Where a connection stands with the version handshake.

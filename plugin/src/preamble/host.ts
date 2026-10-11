@@ -44,6 +44,9 @@ export interface FlcmHost {
    * bound to a host whose run is gone. Only the host knows its own run settled.
    */
   isRunFinished(): boolean;
+  /** When this run's RUN_STATE "running" was stamped, by the host's clock: the server's inactivity
+   * deadline counts from this same instant (server-deadline.ts). */
+  readonly runStartedAt: number;
 }
 
 // code.ts passes the host as the PARAMETER of the eval'd async wrapper the preamble runs inside, so
@@ -128,7 +131,8 @@ export function hostRunCancelled(): boolean {
  * cancellation: with no host there is no server and no deadline.
  */
 export function hostDeadlinePassed(): boolean {
-  return currentHost() ? serverDeadlinePassed() : false;
+  const host = currentHost();
+  return host ? serverDeadlinePassed(host.runStartedAt) : false;
 }
 
 /**

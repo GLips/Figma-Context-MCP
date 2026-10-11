@@ -33,7 +33,7 @@ import type {
   ConstraintX, ConstraintY, Target, RawIdRef, SlimHandle, FindQuery, ReadPredicate, RemoveResult, GetResult,
   PageInfo, ComponentPropertyInput, OverrideDeltaInput, ComponentPropertyDefinitions, VariantEntryInput,
   ComponentPropertyDefinitionEdits, ComponentPropertyBindingEdit,
-  VariableInput, StyleInput, TokenIdentityInput, DesignTokens,
+  VariableInput, StyleInput, TokenIdentityInput, DesignTokens, DesignTokenLibraryQuery, LibraryDesignTokens,
 } from "./ir.js";
 // The read verbs return the canonical read shape the shared simplify core emits. Relative (not ~/) so the
 // root toolchain, which imports this module for docs generation, resolves it without the plugin's paths.
@@ -824,9 +824,11 @@ export interface Flcm {
   findOne(query?: FindQuery, predicate?: ReadPredicate): Promise<SlimHandle>;
   // The user's current selection, as slim handles (same shape as find) — the on-ramp for "edit the selected …".
   selection(): Promise<SlimHandle[]>;
-  // The variables and styles a write can bind: local, used anywhere in the file, and (variables only)
-  // from enabled libraries. Each entry's `reference` is what a read emits for a prop bound to it.
+  // The variables and styles a write can bind: local and used anywhere in the file, plus a catalog of
+  // the enabled libraries. Each entry's `reference` is what a read emits for a prop bound to it.
   designTokens(): Promise<DesignTokens>;
+  // One enabled library's variables, imported so they bind: the slow half, asked for by name.
+  designTokens(from: DesignTokenLibraryQuery): Promise<LibraryDesignTokens>;
   // The target escape hatch: wraps a raw node id so target resolution treats it as an id, never an flcm/key.
   id(nodeId: string): RawIdRef;
   // The document verbs — the only words about which PAGE the other verbs act on. Every other verb works
@@ -879,7 +881,7 @@ export const VERBS: VerbDoc[] = [
   {"category": "read", "signature": "await flcm.findOne(query?, predicate?)", "builds": "one slim handle", "args": "Like find; throws unless exactly one matches."},
   {"category": "read", "signature": "await flcm.selection()", "builds": "slim handles[]", "args": "The current selection."},
   {"category": "read", "signature": "await flcm.measure(target)", "builds": "{ x, y, width, height }", "args": "Measured pixels; x/y are relative to the containing frame or page, so a group's children measure from the frame around the group."},
-  {"category": "read", "signature": "await flcm.designTokens()", "builds": "{ variables, styles }", "args": "The variables and styles a write can bind. Each entry's reference pastes into a write: fill: entry.reference. See Variables and styles."},
+  {"category": "read", "signature": "await flcm.designTokens(from?)", "builds": "{ variables, styles, libraries } or { variables }", "args": "With no argument: the file's local and used variables and styles, and a catalog of enabled libraries. With { library, collection?, type? }: that library's variables. Each entry's reference pastes into a write: fill: entry.reference. See Variables and styles."},
   {"category": "value", "signature": "flcm.gradient(sugar)", "builds": "a paint value", "args": "{ type: linear or radial, stops, angle?, at? }. Also accepts (type, stops, angle?)."},
   {"category": "value", "signature": "flcm.image(url, options?)", "builds": "a paint value", "args": "Raster fill. Options: scaleMode, placeholder, opacity, rotation, filters, blendMode. Bytes are fetched through the host at the mutation verb."},
   {"category": "value", "signature": "flcm.effects(sugar)", "builds": "effect values[]", "args": "CSS and Figma effect values for an effects prop."},

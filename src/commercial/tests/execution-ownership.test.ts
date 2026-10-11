@@ -5,6 +5,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PluginBridge, BridgeRequestError } from "~/commercial/plugin-bridge/bridge.js";
 import { ApprovalStore } from "~/commercial/plugin-bridge/approval-store.js";
+import {
+  RUN_INACTIVITY_DEADLINE_MS,
+  serverDeadlinePassed,
+} from "@framelink/plugin/server-deadline";
 
 class Socket {
   readyState = 1;
@@ -122,6 +126,32 @@ describe("connection-owned execution", () => {
     const error = await call;
     expect(error).toMatchObject({ outcome: "unconfirmed", phase: "running" });
     expect(String(error)).toContain("was executing when it was cancelled");
+  });
+  // The plugin's RUN_STATE leaves only once its thread goes idle, so a run that opens with synchronous
+  // work announces "running" late. Both clocks count from the stamp, so the server cancels exactly when
+  // the run's own copy of the deadline starts refusing writes.
+  it("counts a late-delivered running from the plugin's stamp, in step with the run's own clock", async () => {
+    vi.useFakeTimers();
+    const bridge = create();
+    const socket = new Socket();
+    install(bridge, socket);
+    const call = bridge
+      .request({ type: "EXECUTE_CODE", code: "x", preamble: "x" })
+      .catch((e: unknown) => e);
+    await Promise.resolve();
+    const id = socket.frames[0].id as string;
+    const runStartedAt = Date.now();
+    const heldThreadMs = 6_000;
+    await vi.advanceTimersByTimeAsync(heldThreadMs);
+    receive(bridge, socket, { type: "RUN_STATE", runId: id, phase: "queued", at: runStartedAt });
+    receive(bridge, socket, { type: "RUN_STATE", runId: id, phase: "running", at: runStartedAt });
+    const cancelled = () => socket.frames.some((f) => f.type === "CANCEL");
+    await vi.advanceTimersByTimeAsync(RUN_INACTIVITY_DEADLINE_MS - heldThreadMs - 1);
+    expect([cancelled(), serverDeadlinePassed(runStartedAt)]).toEqual([false, false]);
+    await vi.advanceTimersByTimeAsync(1);
+    expect([cancelled(), serverDeadlinePassed(runStartedAt)]).toEqual([true, true]);
+    receive(bridge, socket, { type: "CANCEL_RESULT", runId: id, disposition: "was-running" });
+    expect(await call).toMatchObject({ phase: "running" });
   });
   it("caller abort removes tracking, sends one cancellation, and never submits through a cancelled handshake hold", async () => {
     const bridge = create();

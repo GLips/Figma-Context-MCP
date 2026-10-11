@@ -67,12 +67,15 @@ test("local tokens list in the read's spellings, and a listed reference binds wh
   assert.equal((await figma.getNodeByIdAsync(text.id)).textStyleId, heading.id);
 });
 
-test("library tokens: a style shows once the file uses it, enabled-library variables list unimported, and an unreadable library is skipped", async () => {
+test("library tokens: the default call lists used library styles and catalogs libraries; a library loads by name and binds", async () => {
   const figma = setup();
   const usedStyle = seedStyle({ type: "PAINT", name: "DS/Surface", remote: true, paints: [{ type: "SOLID", color: GREEN, opacity: 1, visible: true }] });
   seedStyle({ type: "PAINT", name: "DS/Unused", remote: true, paints: [{ type: "SOLID", color: GREEN, opacity: 1, visible: true }] });
   const { "ds/accent": accent } = seedVariables({
-    library: "Design System", collection: "DS Colors", variables: [{ name: "ds/accent", type: "COLOR", values: { Default: { r: 1, g: 0, b: 0, a: 1 } } }],
+    library: "Design System", collection: "DS Colors", variables: [
+      { name: "ds/accent", type: "COLOR", values: { Default: { r: 1, g: 0, b: 0, a: 1 } } },
+      { name: "ds/gap", type: "FLOAT", values: { Default: 8 } },
+    ],
   });
   seedVariables({ library: "Locked", collection: "Locked Colors", variables: [{ name: "locked/red", type: "COLOR", values: { Default: { r: 1, g: 0, b: 0, a: 1 } } }] });
   // A library the user can't open costs only its own variables, with a warning naming it.
@@ -90,11 +93,21 @@ test("library tokens: a style shows once the file uses it, enabled-library varia
 
   const tokens = await flcm.designTokens();
 
-  assert.deepEqual(tokens.variables, [
+  // Nothing in the file uses ds/accent, so the default call counts it instead of importing it.
+  assert.deepEqual(tokens.variables, []);
+  assert.deepEqual(tokens.styles.map((s) => [s.reference.style.name, s.remote]), [["DS/Surface", true]]);
+  assert.deepEqual(tokens.libraries, [{ name: "Design System", collections: [{ name: "DS Colors", variables: 2 }] }]);
+  assert.match(warnings.records.slice(before).map((r) => r.message).join("\n"), /could not be read and are left out: "Locked \/ Locked Colors"/);
+
+  const colors = await flcm.designTokens({ library: "Design System", type: "COLOR" });
+  assert.deepEqual(colors.variables, [
     { reference: { variable: { id: accent.id, name: "ds/accent" } }, collection: "DS Colors", type: "COLOR", values: { Default: "#FF0000" }, remote: true },
   ]);
-  assert.deepEqual(tokens.styles.map((s) => [s.reference.style.name, s.remote]), [["DS/Surface", true]]);
-  assert.match(warnings.records.slice(before).map((r) => r.message).join("\n"), /unreadable collections: "Locked \/ Locked Colors"/);
+  const frame = await flcm.render({ type: "FRAME", fill: colors.variables[0].reference });
+  assert.equal((await figma.getNodeByIdAsync(frame.id)).fills[0].boundVariables.color.id, accent.id);
+
+  await assert.rejects(flcm.designTokens({ library: "Design Sys" }), /no enabled library with variables is named "Design Sys"\. Enabled: "Design System", "Locked"/);
+  await assert.rejects(flcm.designTokens({ library: "Design System", collection: "Spacing" }), /has no collection named "Spacing"\. Its collections: "DS Colors"/);
 });
 
 test("without the teamlibrary permission, the file's own tokens still list and a warning says what's missing", async () => {

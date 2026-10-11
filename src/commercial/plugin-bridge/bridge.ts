@@ -149,6 +149,19 @@ interface Pending {
 // clock, to refuse verbs while its CANCEL is still queued behind a blocked thread (server-deadline.ts).
 const DEFAULT_TIMEOUT_MS = RUN_INACTIVITY_DEADLINE_MS;
 
+/**
+ * How long ago the plugin entered the phase a RUN_STATE announces, from its `at` stamp. The frame
+ * leaves the plugin only once its thread goes idle, so a run that opens with seconds of synchronous
+ * work announces "running" seconds late; counting from arrival would let it outlive the deadline the
+ * run itself counts from that stamp (server-deadline.ts). Comparing the two clocks is sound because
+ * the relay listens on loopback only, so both are this machine's. Clamped, so a skewed stamp can
+ * neither push the deadline past the frame's arrival nor spend more than all of it.
+ */
+function phaseAge(at: unknown, timeoutMs: number): number {
+  if (typeof at !== "number" || !Number.isFinite(at)) return 0;
+  return Math.min(Math.max(Date.now() - at, 0), timeoutMs);
+}
+
 // The message types the SERVER sends to establish a connection, before it knows what it is talking
 // to. They are the ONLY ones exempt from the compatibility hold in `request()` — the handshake can't
 // wait on its own answer. Everything else reaches the canvas (EXECUTE_CODE, SCREENSHOT, …) and must
@@ -964,12 +977,15 @@ export class PluginBridge {
    * is real silence and is deadlined: `submitted` (the plugin has not even acknowledged the request)
    * and `running` (the plugin is the side working, so it owes us progress).
    */
-  private armInactivityDeadline(id: string, pending: Pending): void {
+  private armInactivityDeadline(id: string, pending: Pending, alreadySilentMs = 0): void {
     clearTimeout(pending.timer ?? undefined);
     pending.timer =
       pending.phase === "queued" || this.inFlightServices.has(id)
         ? null
-        : setTimeout(() => this.timeoutPending(id, "inactivity"), this.requestTimeoutMs);
+        : setTimeout(
+            () => this.timeoutPending(id, "inactivity"),
+            this.requestTimeoutMs - alreadySilentMs,
+          );
   }
 
   /**
@@ -1092,6 +1108,7 @@ export class PluginBridge {
       capability?: unknown;
       payload?: unknown;
       phase?: unknown;
+      at?: unknown;
       disposition?: unknown;
       stage?: unknown;
       elapsedMs?: unknown;
@@ -1158,7 +1175,7 @@ export class PluginBridge {
         Logger.log(
           `Bridge request ${msg.runId}: ${msg.phase} after ${Date.now() - run.startedAt}ms`,
         );
-        this.armInactivityDeadline(msg.runId, run);
+        this.armInactivityDeadline(msg.runId, run, phaseAge(msg.at, this.requestTimeoutMs));
       }
       return;
     }

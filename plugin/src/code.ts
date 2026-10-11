@@ -59,7 +59,10 @@ figma.showUI(__html__, {
 // v8 meters writes: EXECUTE_CODE_RESULT carries documentChanged (a later RUN_CHANGED corrects a "no"),
 // the Allow handover names its Authorizing User (figma.currentUser), SESSION_INFO names the Framelink origin,
 // and the panel speaks WRITE_ACCESS / WRITE_ACCESS_SIGN_IN with the server.
-const PROTOCOL_VERSION = 8;
+// v9: RUN_STATE carries `at`, when the phase began by this plugin's clock, and FlcmHost hands the
+// preamble the same runStartedAt, so the server's inactivity deadline and the run's own copy of it
+// count from one instant.
+const PROTOCOL_VERSION = 9;
 const PLUGIN_VERSION = "0.1.0";
 
 // Phase 2 consent gate. The sandbox is the SOLE ARBITER (Invariant): it holds the durable
@@ -238,8 +241,12 @@ function controlConnKey(control: InboundMessage): ConnKey | undefined {
  * Invariant) and the connection-generation tag stamped last so a body field can't clobber either.
  * `__connKey` is LOCAL — ui.html strips it before ws.send, so it never reaches a server.
  */
-function runState(to: ReplyTo, phase: "queued" | "running"): void {
-  figma.ui.postMessage({ type: "RUN_STATE", runId: to.id, phase, __connKey: to.connKey });
+function runState(to: ReplyTo, phase: "queued" | "running"): number {
+  // `at` because the frame only leaves once this thread goes idle: a run that opens with seconds of
+  // synchronous work delivers "running" seconds late, and the server would start its deadline then.
+  const at = Date.now();
+  figma.ui.postMessage({ type: "RUN_STATE", runId: to.id, phase, at, __connKey: to.connKey });
+  return at;
 }
 
 /**
@@ -362,11 +369,11 @@ function acceptRun(to: ReplyTo): void {
  * The run reached the front of the write chain and is about to touch the document. The previous
  * execution's late-change watch ends first, so nothing this run does is charged to that one.
  */
-function beginRun(to: ReplyTo): void {
+function beginRun(to: ReplyTo): number {
   lateChangeWatch?.stop();
   lateChangeWatch = null;
   cancelledRuns.markRunning(to);
-  runState(to, "running");
+  return runState(to, "running");
 }
 
 // The last execution whose reply said "no change", still watching for a change that lands after it
@@ -900,7 +907,7 @@ async function executeCode(to: ReplyTo, code: string, preamble: string): Promise
     return;
   }
   if (!gateWrite(to)) { cancelledRuns.settle(to); return; }
-  beginRun(to);
+  const runStartedAt = beginRun(to);
   const traceStarted = Date.now();
   const trace = (stage: string, operation?: string) => {
     try {
@@ -974,6 +981,7 @@ async function executeCode(to: ReplyTo, code: string, preamble: string): Promise
         settled ? Promise.reject(new Error(STALE_RUNTIME_REFUSAL)) : callServer(to, capability, payload),
       isRunCancelled: () => cancelledRuns.isCancelled(to),
       isRunFinished: () => settled,
+      runStartedAt,
     };
     const built = (eval(preamble) as (host: FlcmHost) => typeof SandboxRuntime)(host);
     // Checked HERE, not in the finally that drains: a std-lib that cannot be drained must fail as a

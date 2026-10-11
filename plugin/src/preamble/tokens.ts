@@ -301,12 +301,16 @@ class TokenLookups {
   }
 }
 
-const STYLE_ID_FIELDS = ["fillStyleId", "strokeStyleId", "effectStyleId", "textStyleId", "gridStyleId"] as const;
+// Grid styles are left out: nothing flcm writes binds one, and every field read here is a host call,
+// which across a large file is most of the scan's cost.
+const STYLE_ID_FIELDS = ["fillStyleId", "strokeStyleId", "effectStyleId"] as const;
+const TEXT_STYLE_ID_FIELDS = [...STYLE_ID_FIELDS, "textStyleId"] as const;
 
 /**
- * The tokens these pages' nodes are bound to: every alias under `boundVariables` (node fields, text
- * fields, paint and effect slots alike) and every paint's own binding, plus each style slot's id. The
- * pages must already be loaded — the current page always is.
+ * The tokens these pages' nodes are bound to: every alias under `boundVariables`, which already lists
+ * the bindings of a node's paints (`fills`, `strokes`) and effects beside its own fields, plus each
+ * style slot's id. Nothing else is read per node: on a 61k-node file each extra field costs seconds.
+ * The pages must already be loaded — the current page always is.
  */
 export async function scanUsedTokens(pages: readonly PageNode[]): Promise<{ variables: Variable[]; styles: BaseStyle[] }> {
   const variableIds = new Set<string>();
@@ -319,16 +323,15 @@ export async function scanUsedTokens(pages: readonly PageNode[]): Promise<{ vari
   };
   for (const node of pages.flatMap((page) => page.findAll()) as any[]) {
     collectAliases(node.boundVariables);
-    for (const slot of ["fills", "strokes"]) {
-      const paints = node[slot];
-      if (Array.isArray(paints)) for (const paint of paints) collectAliases(paint.boundVariables);
-    }
-    for (const field of STYLE_ID_FIELDS) {
+    const text = node.type === "TEXT";
+    let mixed = false;
+    for (const field of text ? TEXT_STYLE_ID_FIELDS : STYLE_ID_FIELDS) {
       const id = node[field];
       if (typeof id === "string" && id) styleIds.add(id);
+      else if (typeof id === "symbol") mixed = true;
     }
-    // Text whose ranges disagree reads figma.mixed for these; its ranges hold the tokens.
-    if (node.type === "TEXT" && [node.textStyleId, node.fillStyleId, node.fills].some((v) => typeof v === "symbol")) {
+    // Text whose ranges disagree reads figma.mixed; its ranges hold the tokens.
+    if (text && (mixed || typeof node.fills === "symbol")) {
       for (const segment of node.getStyledTextSegments(["textStyleId", "fillStyleId", "fills", "boundVariables"])) {
         for (const id of [segment.textStyleId, segment.fillStyleId]) if (id) styleIds.add(id);
         collectAliases(segment.boundVariables);

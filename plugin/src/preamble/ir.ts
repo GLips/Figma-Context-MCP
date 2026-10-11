@@ -677,7 +677,14 @@ export interface DesignTokenStyle {
   value?: SimplifiedFill | SimplifiedFill[] | SimplifiedEffects | SimplifiedTextStyle;
   remote?: true;
 }
-export interface DesignTokens { variables: DesignTokenVariable[]; styles: DesignTokenStyle[] }
+/** One collection of an enabled library, counted rather than listed: loading it imports every variable. */
+export interface DesignTokenLibraryCollection { name: string; variables: number }
+export interface DesignTokenLibrary { name: string; collections: DesignTokenLibraryCollection[] }
+/** The default listing: the file's own and used tokens in full, and its enabled libraries as a catalog. */
+export interface DesignTokens { variables: DesignTokenVariable[]; styles: DesignTokenStyle[]; libraries: DesignTokenLibrary[] }
+/** Which enabled-library variables to load: one library, narrowed to a collection or a type if given. */
+export interface DesignTokenLibraryQuery { library: string; collection?: string; type?: DesignTokenVariable["type"] }
+export interface LibraryDesignTokens { variables: DesignTokenVariable[] }
 
 // A locate query: the declarative facets find/findOne match, AND-combined. `type` and `key` are exact;
 // `name` is a case-insensitive substring (layer names are fuzzy — findOne's cardinality guard catches an

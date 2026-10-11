@@ -33,7 +33,7 @@ beforeEach(() => {
 const hostSlot = (): Record<string, unknown> => {
   const g = globalThis as Record<string, unknown>;
   if (!g.__flcmHost) {
-    g.__flcmHost = { registerRead() {}, callServer: async () => ({}), isRunCancelled: () => false, isRunFinished: () => false };
+    g.__flcmHost = { registerRead() {}, callServer: async () => ({}), isRunCancelled: () => false, isRunFinished: () => false, runStartedAt: Date.now() };
   }
   return g.__flcmHost as Record<string, unknown>;
 };
