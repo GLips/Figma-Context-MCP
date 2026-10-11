@@ -19,7 +19,7 @@ import type { RenderCtx, RenderResources } from "./bridge.js";
 import { NO_TOKENS } from "./tokens.js";
 import { growImplicitGridRows } from "./layout-native.js";
 import { holdUnrotatedCorner, settleCentrePivot } from "./pivot.js";
-import { beginMutatingApply, MutatingVerbError } from "./verb-error.js";
+import { beginMutatingApply, refusedBeforeWrite } from "./verb-error.js";
 import type { EditDelta } from "./schema.js";
 
 function assertSceneNode(node: BaseNode): asserts node is SceneNode {
@@ -33,12 +33,11 @@ export function assertInheritedSlotContentStays(at: string, node: SceneNode, par
   if (!isInheritedSlotContent(node)) return;
   const owner = slotOwnerOf(node, false)!;
   if (parent.type !== "PAGE" && slotOwnerOf(parent as SceneNode, true)?.id === owner.id) return;
-  // Already the whole pointer: the enclosing verb surfaces it as-is rather than wrapping it.
-  throw new MutatingVerbError(
+  throw refusedBeforeWrite(
     at + ": " + describeNodeIdentity(node) + " is inherited slot content: an enclosing component's definition put it in a slot of instance " +
       JSON.stringify(owner.name) + " (id " + JSON.stringify(owner.id) + "), not an override on the instance. Figma can move it only into another slot of " +
       JSON.stringify(owner.name) + "; anywhere else it leaves a node that renders but can't be read or removed. To put it elsewhere, copy it with flcm.clone(" +
-      JSON.stringify(node.id) + ", destination); the slot keeps the original. Nothing was applied.",
+      JSON.stringify(node.id) + ", destination); the slot keeps the original.",
   );
 }
 

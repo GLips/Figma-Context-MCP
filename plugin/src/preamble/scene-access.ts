@@ -207,40 +207,55 @@ export function createSceneAccess(source: () => PluginAPI): { api: PluginAPI; in
     if (scope && scope !== dest.ownScope) { dest.scope = scope; dest.record = record; }
     return children;
   }
-  // Where Figma's insertChild puts a node already in the same parent: it inserts, then drops the
-  // old entry, so an earlier sibling lands one before the index it was given.
-  function priorIndex(dest: State, key: PropertyKey, args: unknown[]): number {
-    if (key !== "insertChild") return -1;
+  // Where a node lands, read before the native call: last for appendChild. Figma's insertChild
+  // inserts, then drops the old entry, so an earlier sibling lands one before the index given.
+  function landingOf(dest: State, key: PropertyKey, args: unknown[]): { moved: State; index: number | "end" } | undefined {
+    if (key === "appendChild") { const moved = viewState(args[0]); return moved && { moved, index: "end" }; }
+    if (key !== "insertChild") return undefined;
     const moved = viewState(args[1]);
-    if (!moved || viewState(moved.view.parent) !== dest) return -1;
-    return childViews(dest).indexOf(moved.view);
+    if (!moved) return undefined;
+    const index = args[0] as number;
+    const prior = viewState(moved.view.parent) === dest ? childViews(dest).indexOf(moved.view) : -1;
+    return { moved, index: prior >= 0 && prior < index ? index - 1 : index };
   }
   // Figma decides what lands. A moved indexed root retires its compound handle, and inherited slot
-  // content moved to a sibling slot becomes a copy with a new id. So the node at the written index
-  // is the result, and the moved view is rebound to it before callers settle layout or reuse
-  // descendants they acquired earlier.
-  function placed(dest: State, key: PropertyKey, args: unknown[], prior: number): void {
-    if (key !== "appendChild" && key !== "insertChild") return;
-    const moved = viewState(args[key === "appendChild" ? 0 : 1]);
-    if (!moved) return;
+  // content moved to a sibling slot becomes a copy with a new id. So the node at the landing index
+  // is the result, and the moved view, with every descendant view acquired before the move, is
+  // rebound to it before callers settle layout or reuse them.
+  function placed(dest: State, moved: State, index: number | "end"): void {
+    const before = moved.record;
     const wasIndexed = !!moved.scope || !!moved.ownScope;
     const children = placedChildren(dest);
-    const index = key === "appendChild" ? children.length - 1 : (args[0] as number) - (prior >= 0 && prior < (args[0] as number) ? 1 : 0);
-    const landed = children[index];
+    const landed = children[index === "end" ? children.length - 1 : index];
     if (!landed || landed.native.type !== moved.native.type) throw new Error("flcm: placed node identity is unavailable in its destination.");
     if (landed !== moved) {
-      if (landed.id !== moved.id) copies.set(moved.id, landed.id);
-      if (states.get(moved.id) === moved) states.delete(moved.id);
-      Object.assign(moved, { native: landed.native, id: landed.id, anchor: landed.anchor, scope: landed.scope, record: landed.record, ownScope: undefined });
-      if (landed.record) landed.record.state = moved;
-      states.set(landed.id, moved);
-      states.set(landed.native.id, moved);
+      const after = landed.record;
+      adoptLanded(moved, landed);
+      // A copy has its original's shape, so descendants pair by position, whatever their ids.
+      const pair = (old: RecordNode, copy: RecordNode): void => {
+        copy.children.forEach((child, i) => {
+          const prior = old.children[i];
+          if (!prior) return;
+          if (prior.state !== child.state) adoptLanded(prior.state, child.state);
+          pair(prior, child);
+        });
+      };
+      if (before && after) pair(before, after);
       return;
     }
     if (insideInstance(dest)) return;
     moved.scope = undefined;
     moved.record = undefined;
     if (wasIndexed && "findAllWithCriteria" in moved.native) tree(moved, true);
+  }
+  // Point a held state at the node that replaced it, so its view and cached methods follow.
+  function adoptLanded(held: State, landed: State): void {
+    if (landed.id !== held.id) copies.set(held.id, landed.id);
+    if (states.get(held.id) === held) states.delete(held.id);
+    Object.assign(held, { native: landed.native, id: landed.id, anchor: landed.anchor, scope: landed.scope, record: landed.record, ownScope: undefined });
+    if (landed.record) landed.record.state = held;
+    states.set(landed.id, held);
+    states.set(landed.native.id, held);
   }
   function viewState(value: unknown): State | undefined {
     return value && typeof value === "object" ? views.get(value) : undefined;
@@ -282,11 +297,11 @@ export function createSceneAccess(source: () => PluginAPI): { api: PluginAPI; in
         const invoke = (...args: unknown[]) => {
           const current = live(state);
           const method = (current as unknown as Record<PropertyKey, unknown>)[key] as (...args: unknown[]) => unknown;
-          const prior = priorIndex(state, key, args);
+          const landing = landingOf(state, key, args);
           let result: unknown;
           try { result = Reflect.apply(method, current, args.map(unwrap)); }
           finally { if (NODE_TOPOLOGY_METHODS.has(String(key))) invalidate(); }
-          placed(state, key, args, prior);
+          if (landing) placed(state, landing.moved, landing.index);
           return result instanceof Promise ? result.then(wrap) : wrap(result);
         };
         state.methods.set(key, invoke);

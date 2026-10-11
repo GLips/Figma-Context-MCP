@@ -444,10 +444,15 @@ export function replace(target: Target, spec: NodeSpec): Promise<AuthoredTree> {
     assertNodeStillOnCanvas(node, "flcm.replace");
     assertInstanceChildListUntouched("flcm.replace", node, "subject");
     const { parent } = destinationOf("flcm.replace", node, "before", pages);
-    // The original's index, read now: a replacement that retains it moves it inside before the
-    // replacement lands, and its index then no longer names its place.
-    const index = parent.children.indexOf(node);
-    const dest: Destination = { parent, place: (built) => parent.insertChild(index, built) };
+    // Every live node the replacement keeps, the original included, leaves `parent` while the
+    // replacement is built and before it lands. So land before the first later sibling that stays.
+    const kept = new Set(treeNodes(tree).map(n => n.liveId).filter(Boolean));
+    const siblings: any[] = parent.children;
+    const after = siblings.slice(siblings.indexOf(node) + 1).find(sibling => !kept.has(sibling.id));
+    const dest: Destination = {
+      parent,
+      place: (built) => after ? parent.insertChild(parent.children.indexOf(after), built) : parent.appendChild(built),
+    };
     assertInstanceChildListUntouched("flcm.replace", dest.parent, "destination");
     if (!tree.liveId) {
       assertBuiltInsertNotIntoSet("flcm.replace", dest.parent);

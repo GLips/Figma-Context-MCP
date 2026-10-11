@@ -599,3 +599,18 @@ test("an explicitly undefined or null anchor, clone destination or spec id refus
   await clone("a", undefined, "row");
   assert.equal(row.children.length, 3);
 });
+
+test("replace that wraps its target with earlier siblings lands where they were", async () => {
+  const row = await render({
+    type: "FRAME",
+    width: 400,
+    height: 100,
+    layout: { mode: "row" },
+    children: ["A", "S", "O", "T"].map((name) => ({ type: "RECTANGLE", name, width: 10, height: 10 })),
+  });
+  const [, s, o] = row.children!;
+  const wrap = await replace(o.id!, { type: "FRAME", name: "Wrap", children: [{ id: s.id }, { id: o.id }] });
+  const host = await figma.getNodeByIdAsync(row.id);
+  assert.deepEqual(host.children.map((n: any) => n.name), ["A", "Wrap", "T"]);
+  assert.deepEqual((await figma.getNodeByIdAsync(wrap.id)).children.map((n: any) => n.name), ["S", "O"]);
+});

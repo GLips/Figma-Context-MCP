@@ -62,6 +62,17 @@ export class NodeBuildError extends Error {
 // surfaces as-is instead of being re-wrapped under the enclosing node.
 export class MutatingVerbError extends Error {}
 
+/**
+ * A refusal decided before its node is written, whether in a verb's gate or partway through its
+ * apply. The message already names its subject, so it skips the mid-apply wrapper; the tail is true
+ * either way, since the seal rolls back anything earlier in the same call.
+ */
+export function refusedBeforeWrite(message: string): MutatingVerbError {
+  return new MutatingVerbError(
+    message + " Nothing in this call was applied; the " + committedVerbCount() + " mutating call(s) before it in this run committed and stand.",
+  );
+}
+
 // A Figma refusal names its own setter ("in set_fills: …"); an flcm-prefixed cause is our own
 // throw, so don't pin it on Figma.
 function mutatingVerbError(verb: string, identity: Identity, cause: unknown, instance: { id: string; name: string } | null): Error {
