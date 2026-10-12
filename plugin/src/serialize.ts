@@ -4,7 +4,7 @@
  */
 // Host-side wire serialization for the sandbox eval result and its console output. This is TS HOST code
 // (bundled into code.ts's IIFE), NOT sandbox-preamble source — it runs on the plugin main thread and never
-// touches figma.*, so it stays a pure, unit-testable module distinct from code.ts's messaging/approval shell.
+// touches figma.*, so it stays a pure, unit-testable module distinct from the host's messaging and approval.
 // What a read looks like on the way out is the preamble's policy (preamble/egress.ts), applied first.
 //
 // The bridge JSON-serializes every outbound message, and a live Figma node is NOT plain JSON (sending one

@@ -19,7 +19,7 @@ function runKey(connKey: number, runId: string): string {
 /**
  * The cancellation policy, and the run phase it has to read to answer one. Cancellation is the only
  * consumer of the phase — the refusal points all ask "is this run cancelled, and why?", and a CANCEL
- * asks "what was it doing?" — so both live here rather than as loose booleans across code.ts.
+ * asks "what was it doing?" — so both live here rather than as loose booleans across the host.
  *
  * There is no phase for a finished run: settlement deletes the row, and "no row" is what makes a
  * cancel answer `unknown`.

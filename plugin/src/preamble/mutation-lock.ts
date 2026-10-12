@@ -17,7 +17,7 @@ import { beginMovedOutDiagnostics, finishMovedOutDiagnostics, retargetMovedOutDi
 //     an unserialized preparation would resolve its targets and load its resources against a
 //     canvas an earlier queued verb is about to change. The chain slot is reserved synchronously
 //     at call time, so verbs run in invocation order. Per-run state — the preamble is eval'd fresh
-//     inside each run's wrapper; exclusion BETWEEN runs is the host's writeChain (code.ts
+//     inside each run's wrapper; exclusion BETWEEN runs is the host's writeChain (run-executor.ts
 //     enqueueWrite). The queue can outlive the agent's code, so it also says when it is empty —
 //     mutationQueueIdle, which the host drains before it replies.
 //
@@ -80,7 +80,7 @@ export function compensatedMutationFailure(cause: unknown): Error {
 
 // How many mutating verbs committed so far this run. Read inside a verb's catch, it is the count
 // before the failing one (which hasn't and won't increment); read by the host after the drain, it is
-// the run's total, one of the host's two signals that the document changed (code.ts executeCode).
+// the run's total, one of the host's two signals that the document changed (run-executor.ts executeCode).
 export function committedVerbCount(): number {
   return committedVerbs;
 }
@@ -298,7 +298,7 @@ export function enterMutatingVerb<P, G, T>(
   });
   // A failed verb must not poison the chain — the failure belongs to its caller (via `turn`);
   // later verbs proceed against the rolled-back (or, on a prepare/gate reject, untouched) canvas.
-  // (Same swallow as the host's writeChain, code.ts enqueueWrite.)
+  // (Same swallow as the host's writeChain, run-executor.ts enqueueWrite.)
   const settle = (): void => { settledVerbs++; };
   verbChain = turn.then(settle, settle);
   return turn;

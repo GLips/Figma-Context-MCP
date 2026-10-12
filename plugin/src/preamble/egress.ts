@@ -8,7 +8,7 @@
 // anywhere inside it, made it its own data, and its own data leaves whole.
 //
 // The policy ships with the preamble, so it changes with no plugin release; the host only calls
-// projectForEgress on the way out and serializes what comes back (code.ts executeCode). State is
+// projectForEgress on the way out and serializes what comes back (run-executor.ts executeCode). State is
 // module-level on purpose: a factory evaluation is one run, so registrations die with the run.
 import { looksLikeNode } from "./live-node.js";
 import { warnings } from "./warnings.js";

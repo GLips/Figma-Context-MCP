@@ -328,8 +328,8 @@ function byId(id: string): HTMLElement {
 }
 
 // The window is sized from what this document measures, reported on EVERY render, never deduped:
-// this document can't observe whether a resize was honored (Figma drops some — see resizeWindow in
-// code.ts), and a "we already asked for 220" cache strands the window at whatever size it really has.
+// this document can't observe whether a resize was honored (Figma drops some — see resize in
+// session-panel.ts), and a "we already asked for 220" cache strands the window at whatever size it really has.
 // Measured inside rAF, after layout, and on #root: the body is stretched to the window by Figma's
 // injected styles, so it can never report a height smaller than the window.
 function reportHeight(): void {

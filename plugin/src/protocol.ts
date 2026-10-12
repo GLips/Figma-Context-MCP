@@ -461,7 +461,7 @@ export function parsePluginEvent(value: unknown): PluginEvent | null {
 }
 
 /**
- * A plausible plugin-minted session token or claim (code.ts mintToken: base-36, ~30 characters).
+ * A plausible plugin-minted session token or claim (approval-gate.ts mintToken: base-36, ~30 characters).
  * They arrive off the socket and the server writes them to disk, so their shape is bounded here.
  */
 function isPluginMintedToken(value: unknown): value is string {

@@ -56,7 +56,7 @@ export interface FlcmHost {
   readonly runStartedAt: number;
 }
 
-// code.ts passes the host as the PARAMETER of the eval'd async wrapper the preamble runs inside, so
+// run-executor.ts passes the host as the PARAMETER of the eval'd async wrapper the preamble runs inside, so
 // this resolves as a function argument — no globalThis dependency in QuickJS, and immune to bundler
 // renaming. The harness and the preamble unit tests run in global scope instead (indirect eval /
 // plain import) and install it on globalThis; both paths resolve this same free identifier.

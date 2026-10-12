@@ -4,7 +4,7 @@
  */
 // screenshot-target — which node a get_screenshot call actually captures.
 //
-// Split out of code.ts's screenshot() so the resolution RULES (which fail loud) are separable from the
+// Kept apart from run-executor.ts's screenshot() so the resolution RULES (which fail loud) are separable from the
 // export/reply plumbing (which needs a live sandbox). This is the sandbox side of the read-back surface:
 // key→node resolution can only live here, since `pluginData('flcm/key')` is unreachable from the server.
 

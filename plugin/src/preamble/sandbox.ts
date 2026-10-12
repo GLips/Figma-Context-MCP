@@ -8,9 +8,9 @@ import { createSession } from "./session.js";
 export * as flcm from "./runtime.js";
 export const session = hostSession(createSession);
 // Not for the agent — the host calls this one. It hands the agent's code only `flcm` and `session`,
-// and keeps the drain for itself (code.ts executeCode), so the reply cannot outrun a queued write.
+// and keeps the drain for itself (run-executor.ts executeCode), so the reply cannot outrun a queued write.
 // committedVerbCount is the host's too: read after the drain, a nonzero count means this run changed
-// the document, known synchronously (code.ts ORs it with the observed change events).
+// the document, known synchronously (run-executor.ts ORs it with the observed change events).
 export { mutationQueueIdle, committedVerbCount } from "./mutation-lock.js";
 
 export { warnings } from "./warnings.js";
