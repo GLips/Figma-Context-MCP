@@ -2,19 +2,19 @@
  * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
-// The imperative shell around write authorization: reads and writes the state file, talks to the
-// Framelink app, and pushes notices to the plugin panel. Every decision it acts on comes from the
-// pure modules (write-authorization.ts, write-ledger.ts).
+// The imperative shell around write-access state: reads and writes the state file and keeps seats
+// and counts in step with the Framelink app. Every decision it acts on comes from the pure modules
+// (write-authorization.ts, write-ledger.ts); a single execution's lifecycle is WriteMeter's, and the
+// device sign-in is DeviceSignIn's.
 //
 // Network is NEVER on the path that says yes: the gate decides from the cached seat and the counts
 // on disk, so an outage can't stop a validated seat or an unspent allowance from writing. The only
 // awaited request is a seat re-check for a signed-in Authorizing User who would otherwise be refused.
 //
-// What the gate counts is more than the file: executions it authorized that haven't finished (a
-// Write they may still become) and Writes the file couldn't take (a failed save). Both live in this
+// What the gate counts is more than the file: executions authorized but not finished (WriteMeter's
+// reservations) and Writes the file couldn't take (a failed save, kept here). Both live in this
 // process's memory only, so they hold against its own parallel calls, not another server's.
-import { setTimeout as pause } from "node:timers/promises";
-import type { AuthorizingUser, WriteAccessNotice } from "@framelink/plugin/protocol";
+import type { AuthorizingUser } from "@framelink/plugin/protocol";
 import { Logger } from "~/utils/logger.js";
 import { FramelinkApiError, type FramelinkApiClient } from "./framelink-api.js";
 import type {
@@ -23,7 +23,6 @@ import type {
   WriteAccessStore,
 } from "./write-access-store.js";
 import {
-  allowanceExhaustedNotice,
   authorizeWriteExecution,
   isSeatRevalidationDue,
   type CachedSeat,
@@ -45,60 +44,25 @@ const USAGE_REPORT_INTERVAL_MS = 10_000;
 const USAGE_RECONCILE_MS = 30 * 60 * 1000;
 // A refused, signed-in Authorizing User may have just bought a seat; re-check at most this often while refused.
 const REFUSAL_SEAT_RECHECK_MS = 30_000;
-// RFC 8628 §3.5: each slow_down adds five seconds to the polling interval.
-const SLOW_DOWN_STEP_MS = 5_000;
 // How often to retry saving Writes the state file refused.
 const PERSIST_RETRY_MS = 30_000;
-/**
- * How long past a "no change" reply the plugin keeps watching the document for a change it would
- * charge to that run. Sent with every EXECUTE_CODE: the plugin obeys it, so it can't drift from here.
- */
-export const LATE_CHANGE_WINDOW_MS = 60_000;
-// The plugin reports the window's end itself (RUN_SETTLED). This ceiling only covers a socket that
-// dropped before it could: the window plus slack for the relay, then the run is settled regardless.
-const LATE_DOCUMENT_CHANGE_MS = LATE_CHANGE_WINDOW_MS + 30_000;
 
 export class WriteAccess {
-  private readonly settlementWaiters = new Map<string, Set<() => void>>();
-  private readonly lifetime = new AbortController();
-
-  /** Stop device polling when a short-lived runtime exits; recorded writes stay persisted. */
-  stop(): void {
-    this.lifetime.abort();
-  }
   private readonly now: () => Date;
-  private readonly notifyPanel: (notice: WriteAccessNotice) => void;
-  // Keyed by figmaUserId. One device flow per Authorizing User; a second click re-shows the live code.
-  private readonly signIns = new Map<
-    string,
-    { notice: WriteAccessNotice | null; done: Promise<void> }
-  >();
   private readonly reportTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly reportsInFlight = new Map<string, Promise<void>>();
   private readonly lastReportAt = new Map<string, number>();
   private readonly lastSeatCheckAt = new Map<string, number>();
-  // executionId → figmaUserId: allowance-authorized executions not yet known to be a Write or not.
-  // Counted as spent, so parallel calls can't all pass the gate on the same last Write.
-  private readonly reservations = new Map<string, string>();
   // Writes recorded here that the state file hasn't taken yet. Folded into every read and every
   // successful save, so they count and get reported until one lands.
   private unpersistedWrites: WriteLedger = {};
   private persistRetry: ReturnType<typeof setTimeout> | undefined;
-  // runId (the plugin's name for an execution) → the execution a late change is charged to.
-  private readonly lateRuns = new Map<
-    string,
-    { figmaUserId: string; executionId: string; expiresAt: number }
-  >();
 
   constructor(
     private readonly api: FramelinkApiClient,
     private readonly store: WriteAccessStore,
-    {
-      notifyPanel = () => {},
-      now = () => new Date(),
-    }: { notifyPanel?: (notice: WriteAccessNotice) => void; now?: () => Date } = {},
+    { now = () => new Date() }: { now?: () => Date } = {},
   ) {
-    this.notifyPanel = notifyPanel;
     this.now = now;
   }
 
@@ -107,120 +71,45 @@ export class WriteAccess {
   }
 
   /**
-   * May this execution, attributed to this Authorizing User, start? Refusals also go to the plugin
-   * panel. An allowance authorization reserves a Write until recordWriteExecution counts it or
-   * releaseWriteExecution frees it. Every authorized execution must end in releaseWriteExecution,
-   * counted or not: it also closes the execution's tracked run.
+   * The gate's answer from the cached seat and the month's counts, plus `inFlightWrites` the caller
+   * has authorized and not yet settled (WriteMeter's reservations). Synchronous, so the caller can
+   * reserve on the same tick it decides.
    */
-  async authorizeWriteExecution(
-    authorizingUser: AuthorizingUser | null,
-    executionId: string,
-  ): Promise<WriteAuthorization> {
-    let decision = this.decide(authorizingUser);
-    if (
-      decision.kind === "refused" &&
-      decision.reason === "allowance-exhausted" &&
-      decision.signedIn
-    ) {
-      const checkedAt = this.lastSeatCheckAt.get(decision.figmaUserId) ?? 0;
-      if (this.now().getTime() - checkedAt >= REFUSAL_SEAT_RECHECK_MS) {
-        await this.validateSeat(decision.figmaUserId);
-        decision = this.decide(authorizingUser);
-      }
-    }
-    // Synchronous with the decision above, so no other call can decide in between.
-    if (decision.kind === "authorized" && decision.via === "allowance")
-      this.reservations.set(executionId, decision.figmaUserId);
-    if (decision.kind === "refused" && decision.reason === "allowance-exhausted")
-      this.notifyPanel(allowanceExhaustedNotice(decision));
-    return decision;
-  }
-
-  /**
-   * Count a Write — call once per execution that changed the document (or may have: a run lost
-   * mid-execution). Seat-authorized executions aren't counted; seats carry no usage counters.
-   */
-  recordWriteExecution(authorization: WriteAuthorization, executionId: string): void {
-    if (authorization.kind !== "authorized" || authorization.via !== "allowance") return;
-    this.recordWrite(authorization.figmaUserId, executionId);
-  }
-
-  /**
-   * The execution reached the plugin as `runId`. Called on submission, not on the reply: the
-   * plugin's RUN_SETTLED or RUN_CHANGED can follow its reply within the same socket read, before the
-   * caller has finished with the reply, and must still find the run. Open-ended until released.
-   */
-  trackLateRun(executionId: string, runId: string): void {
-    const figmaUserId = this.reservations.get(executionId);
-    if (figmaUserId === undefined) return;
-    this.lateRuns.set(runId, { figmaUserId, executionId, expiresAt: Infinity });
-  }
-
-  /**
-   * The execution ended without a Write — as far as its caller knows. Frees its reservation; a
-   * change reported late under its tracked run is still charged to it (recordLateDocumentChange)
-   * until the ceiling. For an execution already recorded, only drops its tracked run.
-   */
-  releaseWriteExecution(executionId: string): void {
-    const reserved = this.reservations.delete(executionId);
-    const now = this.now().getTime();
-    for (const [id, late] of this.lateRuns) {
-      if (late.executionId === executionId) {
-        if (reserved) this.lateRuns.set(id, { ...late, expiresAt: now + LATE_DOCUMENT_CHANGE_MS });
-        else this.lateRuns.delete(id);
-      } else if (late.expiresAt <= now) this.lateRuns.delete(id);
-    }
-  }
-
-  /** Keep a short-lived relay alive until the run settles: RUN_SETTLED, a late change, or the ceiling. */
-  waitForWriteSettlement(
-    runId: string,
-    signal: AbortSignal,
-    onWaiting?: (remainingMs: number) => void,
-  ): Promise<void> {
-    signal.throwIfAborted();
-    const late = this.lateRuns.get(runId);
-    if (!late) return Promise.resolve();
-    const remaining = Math.max(0, late.expiresAt - this.now().getTime());
-    if (!remaining) return Promise.resolve();
-    return new Promise((resolve, reject) => {
-      const finish = (error?: unknown) => {
-        clearTimeout(timer);
-        signal.removeEventListener("abort", abort);
-        const waiting = this.settlementWaiters.get(runId);
-        waiting?.delete(done);
-        if (!waiting?.size) this.settlementWaiters.delete(runId);
-        if (error) reject(error);
-        else resolve();
-      };
-      const done = () => finish();
-      const abort = () => finish(signal.reason);
-      const timer = setTimeout(done, remaining);
-      const waiting = this.settlementWaiters.get(runId) ?? new Set<() => void>();
-      waiting.add(done);
-      this.settlementWaiters.set(runId, waiting);
-      signal.addEventListener("abort", abort, { once: true });
-      onWaiting?.(remaining);
+  decide(authorizingUser: AuthorizingUser | null, inFlightWrites: number): WriteAuthorization {
+    const now = this.now();
+    const state = this.readState();
+    const figmaUserId = authorizingUser?.figmaUserId ?? null;
+    return authorizeWriteExecution({
+      figmaUserId,
+      seat: figmaUserId === null ? null : (state.seats[figmaUserId] ?? null),
+      usedThisMonth:
+        figmaUserId === null
+          ? 0
+          : writesUsedThisMonth(state.ledger, figmaUserId, now) + inFlightWrites,
+      now,
     });
   }
 
-  /**
-   * The plugin saw a run change the document after its caller finished with it. Recorded under the
-   * run's own execution, so a second report — or one for a run already counted — changes nothing.
-   */
-  recordLateDocumentChange(runId: string): void {
-    const late = this.lateRuns.get(runId);
-    if (!late) return;
-    this.lateRuns.delete(runId);
-    if (late.expiresAt <= this.now().getTime()) return;
-    this.recordWrite(late.figmaUserId, late.executionId);
-    for (const done of this.settlementWaiters.get(runId) ?? []) done();
+  /** A signed-in Authorizing User refused for the allowance may have just bought a seat: re-check, throttled. */
+  async recheckRefusedSeat(figmaUserId: string): Promise<void> {
+    const checkedAt = this.lastSeatCheckAt.get(figmaUserId) ?? 0;
+    if (this.now().getTime() - checkedAt >= REFUSAL_SEAT_RECHECK_MS)
+      await this.validateSeat(figmaUserId);
   }
 
-  /** The plugin's late watch for a run closed clean: nothing more can be charged to it. */
-  settleLateRun(runId: string): void {
-    if (!this.lateRuns.delete(runId)) return;
-    for (const done of this.settlementWaiters.get(runId) ?? []) done();
+  /**
+   * Count a Write: one execution that changed the document (or may have). Idempotent on
+   * executionId. Never throws — the canvas already changed; an unsaved Write counts from memory.
+   */
+  recordWrite(figmaUserId: string, executionId: string): void {
+    this.unpersistedWrites = recordWriteExecution(
+      this.unpersistedWrites,
+      figmaUserId,
+      executionId,
+      this.now(),
+    );
+    this.persistRecordedWrites();
+    this.scheduleUsageReport(figmaUserId);
   }
 
   /**
@@ -290,62 +179,6 @@ export class WriteAccess {
       await this.reportWriteUsage(figmaUserId);
   }
 
-  /**
-   * Start (or re-show) the device sign-in for this Authorizing User. The panel gets the code and
-   * verification URL, then the outcome. Resolves when the flow ends, for callers that wait.
-   */
-  startDeviceSignIn(authorizingUser: AuthorizingUser | null): Promise<void> {
-    if (!authorizingUser) {
-      this.notifyPanel({
-        kind: "sign-in-failed",
-        message: "Allow this session first — the sign-in is for the Figma user who approves it.",
-      });
-      return Promise.resolve();
-    }
-    const live = this.signIns.get(authorizingUser.figmaUserId);
-    if (live) {
-      if (live.notice) this.notifyPanel(live.notice);
-      return live.done;
-    }
-    const flow: { notice: WriteAccessNotice | null; done: Promise<void> } = {
-      notice: null,
-      done: Promise.resolve(),
-    };
-    flow.done = this.runDeviceSignIn(authorizingUser.figmaUserId, (notice) => {
-      flow.notice = notice;
-      this.notifyPanel(notice);
-    }).finally(() => this.signIns.delete(authorizingUser.figmaUserId));
-    this.signIns.set(authorizingUser.figmaUserId, flow);
-    return flow.done;
-  }
-
-  private decide(authorizingUser: AuthorizingUser | null): WriteAuthorization {
-    const now = this.now();
-    const state = this.readState();
-    const figmaUserId = authorizingUser?.figmaUserId ?? null;
-    let reserved = 0;
-    for (const owner of this.reservations.values()) if (owner === figmaUserId) reserved++;
-    return authorizeWriteExecution({
-      figmaUserId,
-      seat: figmaUserId === null ? null : (state.seats[figmaUserId] ?? null),
-      usedThisMonth:
-        figmaUserId === null ? 0 : writesUsedThisMonth(state.ledger, figmaUserId, now) + reserved,
-      now,
-    });
-  }
-
-  private recordWrite(figmaUserId: string, executionId: string): void {
-    this.reservations.delete(executionId);
-    this.unpersistedWrites = recordWriteExecution(
-      this.unpersistedWrites,
-      figmaUserId,
-      executionId,
-      this.now(),
-    );
-    this.persistRecordedWrites();
-    this.scheduleUsageReport(figmaUserId);
-  }
-
   /** The file's state with this process's unsaved Writes folded in — what every decision reads. */
   private readState(): WriteAccessState {
     const state = this.store.read();
@@ -385,7 +218,7 @@ export class WriteAccess {
     if (state.seats[figmaUserId]?.seat === true) return;
     const executions = nextUsageReport(state.ledger, figmaUserId);
     // The first report is what needs an installId, so it's minted here, not on a read.
-    const installId = state.installId ?? this.updateState((current) => current).installId;
+    const installId = this.store.ensureInstallId();
     this.lastReportAt.set(figmaUserId, this.now().getTime());
     let response;
     try {
@@ -432,83 +265,12 @@ export class WriteAccess {
     this.reportTimers.set(figmaUserId, timer);
   }
 
-  private async runDeviceSignIn(
-    figmaUserId: string,
-    notify: (notice: WriteAccessNotice) => void,
-  ): Promise<void> {
-    let signIn;
-    try {
-      signIn = await this.api.requestDeviceSignIn(figmaUserId);
-    } catch (err) {
-      if (!(err instanceof FramelinkApiError)) throw err;
-      notify({
-        kind: "sign-in-failed",
-        message:
-          err.kind === "rejected"
-            ? "Framelink turned down the sign-in request. Make sure Framelink MCP is up to date, then try again."
-            : "Couldn't reach Framelink. Try again shortly.",
-      });
-      return;
-    }
-    if (this.lifetime.signal.aborted) return;
-    notify({
-      kind: "sign-in-pending",
-      userCode: signIn.userCode,
-      verificationUri: signIn.verificationUri,
-    });
-    const deadline = this.now().getTime() + signIn.expiresInMs;
-    let intervalMs = signIn.intervalMs;
-    while (this.now().getTime() < deadline) {
-      try {
-        await pause(intervalMs, undefined, { signal: this.lifetime.signal });
-      } catch {
-        return;
-      }
-      let poll;
-      try {
-        poll = await this.api.pollDeviceToken(signIn.deviceCode);
-      } catch (err) {
-        if (!(err instanceof FramelinkApiError)) throw err;
-        // A dropped poll is not an answer; the code is still good until it expires.
-        if (err.kind === "unavailable") continue;
-        poll = { kind: "failed", error: err.message } as const;
-      }
-      if (this.lifetime.signal.aborted) return;
-      if (poll.kind === "pending") continue;
-      if (poll.kind === "slow-down") {
-        intervalMs += SLOW_DOWN_STEP_MS;
-        continue;
-      }
-      if (poll.kind === "denied") {
-        notify({ kind: "sign-in-failed", message: "The sign-in was declined." });
-        return;
-      }
-      if (poll.kind === "expired") break;
-      if (poll.kind === "failed") {
-        Logger.log(`Device sign-in failed: ${poll.error}`);
-        notify({ kind: "sign-in-failed", message: "The sign-in didn't go through. Start again." });
-        return;
-      }
-      const seat = await this.adoptSignInToken(figmaUserId, poll.accessToken);
-      if (!seat) {
-        notify({
-          kind: "sign-in-failed",
-          message: "Framelink didn't accept that sign-in for this Figma user. Try again.",
-        });
-        return;
-      }
-      notify({ kind: "signed-in", seat: seat.seat });
-      return;
-    }
-    notify({ kind: "sign-in-failed", message: "The sign-in code expired. Start again." });
-  }
-
   /**
    * Swap a freshly issued token in — only once it checks out, so a seat already validated survives
    * a sign-in whose token Framelink rejects (null: nothing changed). If the check can't be made (an
    * outage), the new token keeps the old seat's standing until the next check answers.
    */
-  private async adoptSignInToken(figmaUserId: string, token: string): Promise<CachedSeat | null> {
+  async adoptSignInToken(figmaUserId: string, token: string): Promise<CachedSeat | null> {
     this.lastSeatCheckAt.set(figmaUserId, this.now().getTime());
     let result;
     try {

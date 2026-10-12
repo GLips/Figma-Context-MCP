@@ -67,6 +67,11 @@ export class WriteAccessStore {
     return this.load() ?? { installId: null, seats: {}, ledger: {} };
   }
 
+  /** This install's id, minted and saved on first need — the first usage report. */
+  ensureInstallId(): string {
+    return this.read().installId ?? this.update((state) => state).installId;
+  }
+
   /** Read → transform → save, minting the installId on the first save. */
   update(transform: (state: WriteAccessState) => WriteAccessState): PersistedWriteAccessState {
     const next = transform(this.read());

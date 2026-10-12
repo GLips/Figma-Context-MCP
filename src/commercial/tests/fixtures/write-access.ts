@@ -6,6 +6,8 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { WriteAccess } from "~/commercial/entitlement/write-access.js";
+import { WriteMeter } from "~/commercial/entitlement/write-meter.js";
+import { DeviceSignIn } from "~/commercial/entitlement/device-sign-in.js";
 import { FramelinkApiClient } from "~/commercial/entitlement/framelink-api.js";
 import { WriteAccessStore } from "~/commercial/entitlement/write-access-store.js";
 import type { ApprovedSession } from "~/commercial/plugin-bridge/approval-session.js";
@@ -28,19 +30,26 @@ export async function grantedTestApproval(): Promise<ApprovalStatus> {
 }
 
 /**
- * A WriteAccess over an isolated temp state dir. With no `apiUrl` it points at a closed port, so
- * any request is an outage — tools not about write access still authorize from a fresh allowance.
+ * Write access over an isolated temp state dir, wired the way the runtime wires it. With no `apiUrl`
+ * it points at a closed port, so any request is an outage — tools not about write access still
+ * authorize from a fresh allowance.
  */
 export function createTestWriteAccess({
   apiUrl = "http://127.0.0.1:9",
-  notifyPanel,
+  notifyPanel = () => {},
 }: { apiUrl?: string; notifyPanel?: (notice: WriteAccessNotice) => void } = {}): {
   writeAccess: WriteAccess;
+  writeMeter: WriteMeter;
+  signIn: DeviceSignIn;
   store: WriteAccessStore;
 } {
   const store = new WriteAccessStore(mkdtempSync(join(tmpdir(), "flcm-write-access-")));
+  const api = new FramelinkApiClient(apiUrl);
+  const writeAccess = new WriteAccess(api, store);
   return {
-    writeAccess: new WriteAccess(new FramelinkApiClient(apiUrl), store, { notifyPanel }),
+    writeAccess,
+    writeMeter: new WriteMeter(writeAccess, { notifyPanel }),
+    signIn: new DeviceSignIn(api, writeAccess, notifyPanel),
     store,
   };
 }

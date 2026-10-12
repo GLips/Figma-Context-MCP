@@ -24,7 +24,7 @@ async function listEveryTool(): Promise<Map<string, string[]>> {
   } as unknown as PluginBridge;
   const runtime: PluginBridgeRuntime = {
     bridge,
-    writeAccess: createTestWriteAccess().writeAccess,
+    writeMeter: createTestWriteAccess().writeMeter,
     readSavedScript: () => Promise.reject(new Error("no saved scripts in this test")),
     pluginPresence: () => "absent",
     onFirstConnect: () => {},

@@ -116,7 +116,7 @@ async function fetchDuringRun(code: string, source: string): Promise<string> {
     touchApproval: () => {},
     approvalStatus: grantedTestApproval,
   } as unknown as PluginBridge;
-  await executePluginCode({ bridge, writeAccess: createTestWriteAccess().writeAccess }, code);
+  await executePluginCode({ bridge, writeMeter: createTestWriteAccess().writeMeter }, code);
   return fetched!;
 }
 

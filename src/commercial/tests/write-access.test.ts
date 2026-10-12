@@ -18,6 +18,7 @@ import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
 import { createServer as createMcpServer } from "~/mcp/index.js";
 import { PluginBridge } from "~/commercial/plugin-bridge/bridge.js";
 import type { WriteAccess } from "~/commercial/entitlement/write-access.js";
+import type { WriteMeter } from "~/commercial/entitlement/write-meter.js";
 import type {
   PluginReply,
   ReplyFor,
@@ -114,40 +115,25 @@ async function setup() {
   cleanups.push(fake.close);
   const notices: WriteAccessNotice[] = [];
   // The panel is the other reader of every refusal; capture what it would be shown.
-  const { writeAccess, store } = createTestWriteAccess({
+  const access = createTestWriteAccess({
     apiUrl: fake.baseUrl,
     notifyPanel: (notice) => notices.push(notice),
   });
-  return { ...fake, writeAccess, store, notices };
+  return { ...fake, ...access, notices };
 }
 
 const USER_ID = TEST_AUTHORIZING_USER.figmaUserId;
-const ALLOWANCE_AUTHORIZATION = {
-  kind: "authorized" as const,
-  via: "allowance" as const,
-  figmaUserId: USER_ID,
-  usedThisMonth: 0,
-};
 
 /** What the gate would say to a new execution now. Hands back the reservation it takes. */
-async function gateAnswer(writeAccess: WriteAccess) {
-  const executionId = randomUUID();
-  const decision = await writeAccess.authorizeWriteExecution(TEST_AUTHORIZING_USER, executionId);
-  writeAccess.releaseWriteExecution(executionId);
-  return decision;
+async function gateAnswer(writeMeter: WriteMeter) {
+  const admission = await writeMeter.authorize(TEST_AUTHORIZING_USER, randomUUID());
+  if (admission.kind === "refused") return admission.refusal;
+  admission.charge.lost({ mayHaveRun: false });
+  return admission.authorization;
 }
 
 function spendAllowance(writeAccess: WriteAccess, count: number): void {
-  for (let i = 0; i < count; i++)
-    writeAccess.recordWriteExecution(
-      {
-        kind: "authorized",
-        via: "allowance",
-        figmaUserId: TEST_AUTHORIZING_USER.figmaUserId,
-        usedThisMonth: 0,
-      },
-      randomUUID(),
-    );
+  for (let i = 0; i < count; i++) writeAccess.recordWrite(USER_ID, randomUUID());
 }
 
 // An approved plugin session whose executions report the document-changed answers queued here.
@@ -177,7 +163,7 @@ class MeteredBridge extends PluginBridge {
   }
 }
 
-async function connectTools(writeAccess: WriteAccess) {
+async function connectTools(writeMeter: WriteMeter) {
   const bridge = new MeteredBridge();
   const server = createMcpServer(
     { kind: "pat", token: "test" },
@@ -185,7 +171,7 @@ async function connectTools(writeAccess: WriteAccess) {
       transport: "stdio",
       pluginBridge: {
         bridge,
-        writeAccess,
+        writeMeter,
         readSavedScript: () => Promise.reject(new Error("no saved scripts in this test")),
         pluginPresence: () => "connected",
         onFirstConnect: () => {},
@@ -208,8 +194,8 @@ async function connectTools(writeAccess: WriteAccess) {
 
 describe("write authorization", () => {
   it("counts only executions that change the document, and refuses to start one past the allowance", async () => {
-    const { writeAccess, notices } = await setup();
-    const { bridge, execute } = await connectTools(writeAccess);
+    const { writeAccess, notices, writeMeter } = await setup();
+    const { bridge, execute } = await connectTools(writeMeter);
     spendAllowance(writeAccess, FREE_WRITE_ALLOWANCE - 1);
 
     // Read-only: runs, and spends nothing — so the next mutating one still fits.
@@ -229,11 +215,11 @@ describe("write authorization", () => {
   });
 
   it("counts an execution id once, and adds Writes not yet reported to the server's all-device count", async () => {
-    const { app, writeAccess } = await setup();
+    const { app, writeAccess, writeMeter } = await setup();
     const executionId = randomUUID();
-    writeAccess.recordWriteExecution(ALLOWANCE_AUTHORIZATION, executionId);
-    writeAccess.recordWriteExecution(ALLOWANCE_AUTHORIZATION, executionId);
-    expect(await gateAnswer(writeAccess)).toMatchObject({
+    writeAccess.recordWrite(USER_ID, executionId);
+    writeAccess.recordWrite(USER_ID, executionId);
+    expect(await gateAnswer(writeMeter)).toMatchObject({
       kind: "authorized",
       usedThisMonth: 1,
     });
@@ -243,16 +229,16 @@ describe("write authorization", () => {
     expect(app.reportedExecutionIds).toEqual([executionId]);
     // During an outage the server's count can't grow, so the Writes it hasn't seen add to it.
     app.down = true;
-    writeAccess.recordWriteExecution(ALLOWANCE_AUTHORIZATION, randomUUID());
-    expect(await gateAnswer(writeAccess)).toMatchObject({
+    writeAccess.recordWrite(USER_ID, randomUUID());
+    expect(await gateAnswer(writeMeter)).toMatchObject({
       kind: "refused",
       reason: "allowance-exhausted",
     });
   });
 
   it("keeps a validated seat writing through an outage and through a rejected re-sign-in", async () => {
-    const { app, writeAccess, notices, store } = await setup();
-    await writeAccess.startDeviceSignIn(TEST_AUTHORIZING_USER);
+    const { app, writeAccess, notices, store, writeMeter, signIn } = await setup();
+    await signIn.start(TEST_AUTHORIZING_USER);
     expect(notices).toEqual([
       {
         kind: "sign-in-pending",
@@ -265,13 +251,13 @@ describe("write authorization", () => {
 
     // Signing in again with a token Framelink turns down leaves the validated seat as it was.
     app.issuedToken = "tok-rejected";
-    await writeAccess.startDeviceSignIn(TEST_AUTHORIZING_USER);
+    await signIn.start(TEST_AUTHORIZING_USER);
     expect(notices.at(-1)).toMatchObject({ kind: "sign-in-failed" });
     expect(store.read().seats[USER_ID]).toMatchObject({ token: "tok-1", seat: true });
 
     app.down = true;
     await writeAccess.syncWriteAccess(TEST_AUTHORIZING_USER, { force: true });
-    expect(await gateAnswer(writeAccess)).toEqual({
+    expect(await gateAnswer(writeMeter)).toEqual({
       kind: "authorized",
       via: "seat",
       figmaUserId: TEST_AUTHORIZING_USER.figmaUserId,
@@ -279,23 +265,29 @@ describe("write authorization", () => {
   });
 
   it("counts executions still in flight, and Writes the state file couldn't save", async () => {
-    const { app, writeAccess, store } = await setup();
+    const { app, writeAccess, store, writeMeter } = await setup();
     spendAllowance(writeAccess, FREE_WRITE_ALLOWANCE - 2);
     // Three parallel calls for the last two Writes: the third must not start.
-    const decisions = await Promise.all(
+    const [readOnly, writes, oneTooMany] = await Promise.all(
       ["read-only", "writes", "one-too-many"].map((id) =>
-        writeAccess.authorizeWriteExecution(TEST_AUTHORIZING_USER, id),
+        writeMeter.authorize(TEST_AUTHORIZING_USER, id),
       ),
     );
-    expect(decisions.map((d) => d.kind)).toEqual(["authorized", "authorized", "refused"]);
-    writeAccess.releaseWriteExecution("read-only");
+    expect([readOnly, writes, oneTooMany].map((d) => d.kind)).toEqual([
+      "authorized",
+      "authorized",
+      "refused",
+    ]);
+    if (readOnly.kind !== "authorized" || writes.kind !== "authorized")
+      throw new Error("unreachable");
+    readOnly.charge.replied(false);
 
     // The state dir stops taking writes just as a Write lands: it still counts, and still reports.
     const stateDir = dirname(store.file);
     chmodSync(stateDir, 0o500);
     cleanups.push(async () => chmodSync(stateDir, 0o700));
-    writeAccess.recordWriteExecution(ALLOWANCE_AUTHORIZATION, "writes");
-    expect(await gateAnswer(writeAccess)).toMatchObject({
+    writes.charge.replied(true);
+    expect(await gateAnswer(writeMeter)).toMatchObject({
       kind: "authorized",
       usedThisMonth: FREE_WRITE_ALLOWANCE - 1,
     });
@@ -306,26 +298,27 @@ describe("write authorization", () => {
   });
 
   it("charges a change reported after the reply to that same execution, once", async () => {
-    const { app, writeAccess } = await setup();
+    const { app, writeAccess, writeMeter } = await setup();
     spendAllowance(writeAccess, FREE_WRITE_ALLOWANCE - 1);
-    await writeAccess.authorizeWriteExecution(TEST_AUTHORIZING_USER, "late-writer");
+    const admission = await writeMeter.authorize(TEST_AUTHORIZING_USER, "late-writer");
+    if (admission.kind !== "authorized") throw new Error("the last Write fits the allowance");
     // The reply said "no change", then the plugin saw one — and said so twice.
-    writeAccess.trackLateRun("late-writer", "run-7");
-    writeAccess.releaseWriteExecution("late-writer");
-    writeAccess.recordLateDocumentChange("run-7");
-    writeAccess.recordLateDocumentChange("run-7");
-    writeAccess.recordLateDocumentChange("a-run-this-server-never-issued");
-    expect(await gateAnswer(writeAccess)).toMatchObject({ kind: "refused" });
+    admission.charge.submitted("run-7");
+    admission.charge.replied(false);
+    writeMeter.runEvent({ type: "changed", runId: "run-7" });
+    writeMeter.runEvent({ type: "changed", runId: "run-7" });
+    writeMeter.runEvent({ type: "changed", runId: "a-run-this-server-never-issued" });
+    expect(await gateAnswer(writeMeter)).toMatchObject({ kind: "refused" });
     await writeAccess.reportWriteUsage(USER_ID);
     expect(app.reportedExecutionIds.filter((id) => id === "late-writer")).toHaveLength(1);
   });
 
   it("fails the call on an unreadable state file without erasing it, and decides without a writable one", async () => {
-    const { writeAccess, store } = await setup();
-    await writeAccess.startDeviceSignIn(TEST_AUTHORIZING_USER);
+    const { store, writeMeter, signIn } = await setup();
+    await signIn.start(TEST_AUTHORIZING_USER);
     chmodSync(store.file, 0o000);
     cleanups.push(async () => chmodSync(store.file, 0o600));
-    await expect(gateAnswer(writeAccess)).rejects.toThrow(/EACCES/);
+    await expect(gateAnswer(writeMeter)).rejects.toThrow(/EACCES/);
     chmodSync(store.file, 0o600);
     expect(store.read().seats[USER_ID]).toMatchObject({ token: "tok-1", seat: true });
 
@@ -334,20 +327,20 @@ describe("write authorization", () => {
     const freshDir = dirname(fresh.store.file);
     chmodSync(freshDir, 0o500);
     cleanups.push(async () => chmodSync(freshDir, 0o700));
-    expect(await gateAnswer(fresh.writeAccess)).toMatchObject({
+    expect(await gateAnswer(fresh.writeMeter)).toMatchObject({
       kind: "authorized",
       via: "allowance",
     });
   });
 
   it("ends the seat on seat:false, and drops the token on a 401", async () => {
-    const { app, writeAccess, store } = await setup();
-    await writeAccess.startDeviceSignIn(TEST_AUTHORIZING_USER);
+    const { app, writeAccess, store, writeMeter, signIn } = await setup();
+    await signIn.start(TEST_AUTHORIZING_USER);
     spendAllowance(writeAccess, FREE_WRITE_ALLOWANCE);
 
     app.seat = false;
     await writeAccess.validateSeat(TEST_AUTHORIZING_USER.figmaUserId);
-    expect(await gateAnswer(writeAccess)).toMatchObject({
+    expect(await gateAnswer(writeMeter)).toMatchObject({
       kind: "refused",
       signedIn: true,
     });
@@ -355,7 +348,7 @@ describe("write authorization", () => {
     app.revoked = true;
     await writeAccess.validateSeat(TEST_AUTHORIZING_USER.figmaUserId);
     expect(store.read().seats[TEST_AUTHORIZING_USER.figmaUserId]).toBeUndefined();
-    expect(await gateAnswer(writeAccess)).toMatchObject({
+    expect(await gateAnswer(writeMeter)).toMatchObject({
       kind: "refused",
       signedIn: false,
     });

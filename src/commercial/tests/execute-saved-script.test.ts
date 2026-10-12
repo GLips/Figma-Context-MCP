@@ -50,7 +50,7 @@ function connectedServer() {
   } as unknown as PluginBridge;
   const runtime: PluginBridgeRuntime = {
     bridge,
-    writeAccess: createTestWriteAccess().writeAccess,
+    writeMeter: createTestWriteAccess().writeMeter,
     readSavedScript: createSavedScriptReader(createContainedFileReader(root)),
     pluginPresence: () => "connected",
     onFirstConnect: () => {},

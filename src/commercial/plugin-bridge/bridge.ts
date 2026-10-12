@@ -20,6 +20,7 @@ import {
   type ChannelRunContext,
 } from "./run-ledger.js";
 import { refuseProtocolSkew, type ProtocolCompatibility } from "./version.js";
+import type { RunEvent } from "../entitlement/write-meter.js";
 import {
   HANDSHAKE_REQUEST_TYPES,
   PROTOCOL_VERSION,
@@ -47,13 +48,11 @@ export interface PluginBridgeEvents {
   /** The human clicked the panel's sign-in button. */
   onWriteAccessSignIn?: () => void;
   /**
-   * A run's document changed after its caller stopped waiting on it: a RUN_CHANGED after a "no"
-   * reply, or an EXECUTE_CODE_RESULT saying documentChanged that arrived after the caller gave up.
-   * May fire more than once for a run, and for run ids this server never issued.
+   * What the current holder says about a run outside its caller's reply: RUN_CHANGED, RUN_SETTLED,
+   * or a result that arrived after the caller gave up. Forwarded as-is — what it costs is the
+   * write meter's call. May fire more than once for a run, and for run ids this server never issued.
    */
-  onRunDocumentChanged?: (runId: string) => void;
-  /** A run's late-change watch closed with no change (RUN_SETTLED): nothing more will be charged. */
-  onRunSettled?: (runId: string) => void;
+  onRunEvent?: (event: RunEvent) => void;
 }
 
 /** The plugin's answer to an approval poll, with the session a GRANTED admits read at that instant. */
@@ -144,12 +143,15 @@ export class PluginBridge {
       handle: (connection, event) =>
         this.ledger.settleCancelAnswer(event.runId, event.disposition, connection),
     },
-    // Metering outlives the caller: the caller that authorized the run decides whether to count it.
+    // Metering outlives the caller, so these go to the meter, never to the run's caller.
     RUN_CHANGED: {
       from: "holder",
-      handle: (_, event) => this.events.onRunDocumentChanged?.(event.runId),
+      handle: (_, event) => this.events.onRunEvent?.({ type: "changed", runId: event.runId }),
     },
-    RUN_SETTLED: { from: "holder", handle: (_, event) => this.events.onRunSettled?.(event.runId) },
+    RUN_SETTLED: {
+      from: "holder",
+      handle: (_, event) => this.events.onRunEvent?.({ type: "settled", runId: event.runId }),
+    },
   };
 
   // Everything injectable for the tests and the contract harness: `store` isolates persistence to a
@@ -480,13 +482,11 @@ export class PluginBridge {
     // A reply matching its request proves the holder speaks the frozen envelope — a real plugin, not a
     // dead or mute squatter — which is what protects it from slot-reclaim, malformed or not.
     if (outcome === "settled") connection.markEstablished();
-    // A run whose caller gave up still reports a change it made; the Write is owed regardless.
-    else if (
-      outcome === "late" &&
-      connection === this.current &&
-      parseExecuteCodeResult(msg)?.documentChanged
-    )
-      this.events.onRunDocumentChanged?.(msg.id);
+    // A run whose caller gave up still reports what it did; a Write it made is owed regardless.
+    else if (outcome === "late" && connection === this.current) {
+      const reply = parseExecuteCodeResult(msg);
+      if (reply) this.events.onRunEvent?.({ type: "orphanReply", runId: msg.id, reply });
+    }
   }
 
   private route<K extends PluginEventType>(

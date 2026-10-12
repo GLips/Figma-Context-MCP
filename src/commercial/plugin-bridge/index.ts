@@ -16,9 +16,11 @@ import {
   createImageSourceFetcher,
 } from "./image-requests.js";
 import { createCommentPinsCapability } from "./comment-pins.js";
-import { WS_PORT_BLOCK } from "@framelink/plugin/protocol";
+import { WS_PORT_BLOCK, type WriteAccessNotice } from "@framelink/plugin/protocol";
 import { resolveStateDir } from "~/commercial/state-dir.js";
 import { WriteAccess } from "~/commercial/entitlement/write-access.js";
+import { WriteMeter } from "~/commercial/entitlement/write-meter.js";
+import { DeviceSignIn } from "~/commercial/entitlement/device-sign-in.js";
 import { FramelinkApiClient } from "~/commercial/entitlement/framelink-api.js";
 import { WriteAccessStore } from "~/commercial/entitlement/write-access-store.js";
 
@@ -45,10 +47,10 @@ export type PluginPresence = "connected" | "expected" | "absent";
  */
 export interface PluginBridgeRuntime {
   bridge: PluginBridge;
-  /** Close a short-lived CLI runtime and its background synchronization. */
+  /** Close a short-lived CLI runtime and its background synchronization. Call drain first. */
   stop?(): void;
-  /** Seat and free-allowance authorization for figma_execute_code. */
-  writeAccess: WriteAccess;
+  /** Seat and free-allowance authorization for figma_execute_code, and each run's charge. */
+  writeMeter: WriteMeter;
   /** Read figma_execute_code's scriptPath, contained under the asset root. */
   readSavedScript(scriptPath: string): Promise<string>;
   pluginPresence(): PluginPresence;
@@ -111,15 +113,13 @@ export function startPluginBridge({
       (err: Error) => Logger.log(`Image upload endpoint did not start: ${err.message}`),
     );
   }
-  const writeAccess = new WriteAccess(
-    new FramelinkApiClient(framelinkApiUrl),
-    new WriteAccessStore(),
-    {
-      notifyPanel: (notice) => {
-        bridge.request({ type: "WRITE_ACCESS", notice }).catch(() => {});
-      },
-    },
-  );
+  const api = new FramelinkApiClient(framelinkApiUrl);
+  const writeAccess = new WriteAccess(api, new WriteAccessStore());
+  const notifyPanel = (notice: WriteAccessNotice) => {
+    bridge.request({ type: "WRITE_ACCESS", notice }).catch(() => {});
+  };
+  const writeMeter = new WriteMeter(writeAccess, { notifyPanel });
+  const signIn = new DeviceSignIn(api, writeAccess, notifyPanel);
   const framelinkOrigin = new URL(framelinkApiUrl).origin;
   // The Allower of the session this server holds, for the background syncs that follow it.
   const heldAuthorizingUser = () => bridge.approvedSession()?.authorizingUser ?? null;
@@ -129,9 +129,8 @@ export function startPluginBridge({
         if (authorizingUser)
           inBackground(writeAccess.syncWriteAccess(authorizingUser, { force: true }));
       },
-      onWriteAccessSignIn: () => inBackground(writeAccess.startDeviceSignIn(heldAuthorizingUser())),
-      onRunDocumentChanged: (runId) => writeAccess.recordLateDocumentChange(runId),
-      onRunSettled: (runId) => writeAccess.settleLateRun(runId),
+      onWriteAccessSignIn: () => inBackground(signIn.start(heldAuthorizingUser())),
+      onRunEvent: (event) => writeMeter.runEvent(event),
     },
     capabilities: new Map([
       [
@@ -191,13 +190,13 @@ export function startPluginBridge({
 
   return {
     bridge,
-    writeAccess,
+    writeMeter,
     readSavedScript: createSavedScriptReader(readContained),
     stop: () => {
       stopped = true;
       uploadEndpoint?.stop();
       clearInterval(writeAccessTick);
-      writeAccess.stop();
+      signIn.stop();
       bridge.stop();
     },
     pluginPresence: () => {

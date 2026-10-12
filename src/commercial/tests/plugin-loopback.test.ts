@@ -61,25 +61,15 @@ const execute = (code: string) =>
 it("handshakes, waits for Allow, then settles a clean run uncharged and charges a late change", async () => {
   const read = await execute("return 1 + 1;");
   expect(read).toMatchObject({ kind: "executed", reply: { result: 2, console: [], errors: null } });
-  if (read.kind !== "executed" || !read.settlementRunId)
-    throw new Error("a read-only run is left to settle");
-  const settlement = (runId: string) =>
-    runtime.writeAccess.waitForWriteSettlement(runId, new AbortController().signal);
-  const readSettled = settlement(read.settlementRunId);
 
-  // The next run closes the first one's late-change watch clean: RUN_SETTLED, long before the ceiling.
+  // The next run closes the read's late-change watch clean (RUN_SETTLED, long before the ceiling),
+  // and Figma reports the raw write's change only after its reply: RUN_CHANGED charges it then.
   const write = await execute("figma.createRectangle(); return 'drawn';");
-  await readSettled;
+  expect(write).toMatchObject({ kind: "executed", reply: { result: "drawn" } });
+  const drained = runtime.writeMeter.drain(new AbortController().signal);
+  plugin.deliverChanges();
+  await drained;
   const writesUsed = () =>
     writesUsedThisMonth(new WriteAccessStore().read().ledger, "loopback-user", new Date());
-  expect(writesUsed()).toBe(0);
-
-  // Figma reports the raw write's change only after the reply: RUN_CHANGED charges it then.
-  if (write.kind !== "executed" || !write.settlementRunId)
-    throw new Error("a write whose change is unreported yet is left to settle");
-  expect(write.reply.result).toBe("drawn");
-  const writeSettled = settlement(write.settlementRunId);
-  plugin.deliverChanges();
-  await writeSettled;
   expect(writesUsed()).toBe(1);
 });

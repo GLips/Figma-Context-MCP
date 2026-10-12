@@ -255,18 +255,13 @@ export async function runExecute(flags: ExecuteFlags, positionals: string[]): Pr
       }
       return reply.errors === null ? 0 : 1;
     } finally {
-      if (outcome.settlementRunId) {
-        awaitingSettlement = true;
-        await runtime.writeAccess.waitForWriteSettlement(
-          outcome.settlementRunId,
-          controller.signal,
-          (remaining) => {
-            console.error(
-              `Execution finished. Keeping the relay connected for up to ${Math.ceil(remaining / 1000)}s to observe delayed document changes for write accounting.`,
-            );
-          },
+      // Before stop(): a change the plugin reports after the reply is still charged to this run.
+      awaitingSettlement = true;
+      await runtime.writeMeter.drain(controller.signal, (remaining) => {
+        console.error(
+          `Execution finished. Keeping the relay connected for up to ${Math.ceil(remaining / 1000)}s to observe delayed document changes for write accounting.`,
         );
-      }
+      });
       awaitingSettlement = false;
     }
   } catch (error) {
