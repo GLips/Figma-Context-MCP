@@ -50,10 +50,11 @@ export interface PlacementContext {
   /** Without `children`: the parent's child list is `siblings`, stated on its own. */
   parent: Omit<NodeSnapshot, "children">;
   /**
-   * The parent's children in order. A GRID places each cell against every in-flow sibling, so under
-   * a GRID this must be the complete list, the roots among it. No other parent reads it.
+   * The parent's children in order, the roots among them. Only a GRID reads it — it places each
+   * cell against every in-flow sibling, so there it must be the complete list. Absent, the parent
+   * holds the root alone, which is all any other parent needs.
    */
-  siblings: readonly NodeSnapshot[];
+  siblings?: readonly NodeSnapshot[];
 }
 
 export interface SimplifyResult {
@@ -186,7 +187,7 @@ function rootParent(
   { parent, siblings }: PlacementContext,
 ): NodeSnapshot | undefined {
   if (CANVAS_LEVEL_PARENT_TYPES.has(parent.type)) return undefined;
-  const children = siblings.map((child) => (child.id === root.id ? root : child));
+  const children = siblings?.map((child) => (child.id === root.id ? root : child)) ?? [root];
   return { ...parent, children };
 }
 

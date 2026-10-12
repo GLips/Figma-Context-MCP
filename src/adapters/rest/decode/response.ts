@@ -20,8 +20,8 @@ export interface ParsedRestResponse {
   /** The read's roots: a whole file's pages, or the one node a targeted read asked for. */
   snapshots: NodeSnapshot[];
   /**
-   * A targeted node's parent, with its siblings as an ids-filtered response lists them: the node
-   * alone. Complete enough for every parent but a GRID, whose siblings the read fetches.
+   * A targeted node's parent, without siblings: an ids-filtered response lists the node alone,
+   * which is all every parent but a GRID reads. A GRID's siblings the read fetches.
    */
   placement?: PlacementContext;
   tables: Required<RestComponentTables>;
@@ -83,9 +83,9 @@ function decodeInContext(
   for (const ancestor of path.slice(3, -1)) {
     parent = parent.children!.find((child) => child.id === ancestor.id)!;
   }
-  const { children: siblings = [], ...parentFields } = parent;
-  const snapshot = siblings.find((child) => child.id === nodeId)!;
-  return { snapshots: [snapshot], placement: { parent: parentFields, siblings } };
+  const { children = [], ...parentFields } = parent;
+  const snapshot = children.find((child) => child.id === nodeId)!;
+  return { snapshots: [snapshot], placement: { parent: parentFields } };
 }
 
 /** The chain from the document root to `nodeId`, or a not-found error. */

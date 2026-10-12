@@ -396,7 +396,8 @@ export async function sceneNodeToSnapshot(
  * are listed only under a GRID, the one parent whose placement reads them.
  */
 export function scenePlacement(parent: SceneNodeLike): PlacementContext {
-  const siblings = parent.layoutMode === "GRID" ? (readableChildren(parent) ?? []).filter(isReadableSceneNode) : [];
+  if (parent.layoutMode !== "GRID") return { parent: placementTraits(parent) };
+  const siblings = (readableChildren(parent) ?? []).filter(isReadableSceneNode);
   return { parent: placementTraits(parent), siblings: siblings.map(placementTraits) };
 }
 

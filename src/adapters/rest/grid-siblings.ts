@@ -10,7 +10,7 @@ import type { FigmaFileKey } from "~/utils/figma-url.js";
  * Grid cell placement (packed or explicit, z-order) is read against every in-flow sibling, and an
  * ids-filtered response lists only the child on the path. So a grid parent costs one more call for
  * its children, one level deep; every other parent needs none. Supplementary, like the component
- * definition fetch: on failure the read keeps the path-only siblings, placing the node against itself.
+ * definition fetch: on failure the read keeps no siblings, placing the node against itself.
  */
 export async function withGridSiblings(
   source: RestDesignSource,
