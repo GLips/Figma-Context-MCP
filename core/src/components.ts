@@ -109,17 +109,10 @@ export function extractComponents(
 
   // The children each entry publishes, captured BEFORE any node is rewritten — an instance that
   // donates is itself reduced afterwards (against its own donation, so its diff comes out empty).
-  // A donation is re-keyed into the definition's id space so a reader resolves a path the same
-  // way whatever the provenance was: `I<donor>;<path>` on the canvas, `<path>` once published.
   const sources = new Map<string, ChildrenSource>();
   for (const id of ids) {
-    const source = chooseChildren(id, index, notes);
-    if (!source) continue;
-    const from = source.from;
-    sources.set(
-      id,
-      from ? { ...source, children: source.children.map((c) => rekey(clone(c), from)) } : source,
-    );
+    const source = chooseComponentSource(id, index, notes, { rekeyDonation: true });
+    if (source) sources.set(id, source);
   }
 
   for (const definition of index.definitionNodes.values()) delete definition.children;
@@ -144,19 +137,7 @@ export function extractComponents(
     resolving.delete(id);
     resolved.set(id, children);
 
-    const provenance = notes.components.get(id);
-    const entry: SimplifiedComponentEntry = {
-      type: provenance?.type ?? "COMPONENT",
-      name: provenance?.name ?? id,
-    };
-    if (provenance?.key) entry.key = provenance.key;
-    if (provenance?.componentSetId) entry.componentSetId = provenance.componentSetId;
-    if (provenance?.description) entry.description = provenance.description;
-    if (provenance?.propertyDefinitions) entry.propertyDefinitions = provenance.propertyDefinitions;
-    if (children) entry.children = children;
-    if (source?.from) entry.childrenFrom = source.from;
-    if (source?.unverified) entry.childrenUnverified = true;
-    components[id] = entry;
+    components[id] = componentEntry(id, notes, source, children);
     return children;
   };
 
@@ -224,11 +205,18 @@ interface ChildrenSource {
   unverified?: true;
 }
 
-/** Pick the children an entry publishes. Both the runtime catalog and the wire pass use this. */
-function chooseChildren(
+/**
+ * Pick the children an entry publishes — the one source policy for the runtime catalog and the wire
+ * pass. They differ only in `rekeyDonation`, deliberately: the wire re-keys a donation (on a clone)
+ * into the definition's id space so a reader resolves a path the same way whatever the provenance
+ * was — `I<donor>;<path>` on the canvas, `<path>` once published — while the runtime keeps the live
+ * subtree itself, so an agent's read holds ids it can write to.
+ */
+function chooseComponentSource(
   id: string,
   index: ComponentSources,
   notes: ComponentNotes,
+  { rekeyDonation }: { rekeyDonation: boolean },
 ): ChildrenSource | undefined {
   const definition = index.definitionNodes.get(id);
   if (definition?.children?.length) {
@@ -239,9 +227,35 @@ function chooseChildren(
   // hidden has nothing to donate, and stopping at it would publish no children for a component
   // some other instance could have shown whole.
   for (const donor of byEditCount(index.instancesByComponent.get(id), notes.instanceEdits)) {
-    if (donor.children?.length) return { children: donor.children, from: donor.id };
+    if (!donor.children?.length) continue;
+    const children = rekeyDonation
+      ? donor.children.map((child) => rekey(clone(child), donor.id))
+      : donor.children;
+    return { children, from: donor.id };
   }
   return undefined;
+}
+
+/** One sidecar entry: the component's provenance, plus where its published children came from. */
+function componentEntry(
+  id: string,
+  notes: ComponentNotes,
+  source: ChildrenSource | undefined,
+  children: SimplifiedNode[] | undefined,
+): SimplifiedComponentEntry {
+  const provenance = notes.components.get(id);
+  const entry: SimplifiedComponentEntry = {
+    type: provenance?.type ?? "COMPONENT",
+    name: provenance?.name ?? id,
+  };
+  if (provenance?.key) entry.key = provenance.key;
+  if (provenance?.componentSetId) entry.componentSetId = provenance.componentSetId;
+  if (provenance?.description) entry.description = provenance.description;
+  if (provenance?.propertyDefinitions) entry.propertyDefinitions = provenance.propertyDefinitions;
+  if (children) entry.children = children;
+  if (source?.from) entry.childrenFrom = source.from;
+  if (source?.unverified) entry.childrenUnverified = true;
+  return entry;
 }
 
 /**
@@ -452,20 +466,8 @@ export function componentCatalog(
   const index = indexComponentSources(nodes, definitions);
   const result: Record<string, SimplifiedComponentEntry> = {};
   for (const id of componentIds(index, notes)) {
-    const provenance = notes.components.get(id);
-    const source = chooseChildren(id, index, notes);
-    result[id] = {
-      type: provenance?.type ?? "COMPONENT",
-      name: provenance?.name ?? id,
-      ...Object.fromEntries(
-        Object.entries(provenance ?? {}).filter(([, value]) => value !== undefined),
-      ),
-    };
-    // A definition with an empty child list still states it: the runtime keeps what the wire omits.
-    const children = source?.children ?? index.definitionNodes.get(id)?.children;
-    if (children) result[id].children = children;
-    if (source?.from) result[id].childrenFrom = source.from;
-    if (source?.unverified) result[id].childrenUnverified = true;
+    const source = chooseComponentSource(id, index, notes, { rekeyDonation: false });
+    result[id] = componentEntry(id, notes, source, source?.children);
   }
   return result;
 }
