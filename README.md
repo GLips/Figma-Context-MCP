@@ -99,9 +99,9 @@ npx figma-developer-mcp execute workflow.js --output artifacts/result.json
 npx figma-developer-mcp execute workflow.js --screenshot artifacts/page.png --scale 2
 ```
 
-Open Framelink in the intended Figma file and approve the pairing code shown on stderr. The command uses the same approval, Authorizing User, seat/free-allowance checks, and runtime as MCP execution. No Figma REST token is needed for this command.
+Open Framelink in the intended Figma file and approve the pairing code shown on stderr. The command uses the same approval, Authorizing User, seat/free-allowance checks, and runtime as MCP execution. A Figma REST token is optional (`--figma-api-key`, `--figma-oauth-token`, or the server's env vars); with one, a script can read the file's comment pins, as it can through the MCP server.
 
-The execution reply is JSON on stdout; progress and errors go to stderr. `--output` also saves that JSON. `--screenshot` saves a PNG after a completed execution, including a script error; select a target with `--node-id` or `--key`, or omit both for the current page. Script and transport failures return a nonzero exit status. An interrupted or disconnected execution is never automatically resubmitted.
+The execution reply is JSON on stdout; progress and errors go to stderr. `--output` also saves that JSON. `--screenshot` saves a PNG after a completed execution, including a script error; select a target with `--node-id` or `--key`, or omit both for the current page. `--context` also captures the canvas around a target, with `--margin` pixels on each side. Script and transport failures return a nonzero exit status. An interrupted or disconnected execution is never automatically resubmitted.
 
 `--wait` sets the connection wait and each approval wait separately (600 seconds by default); it does not extend execution deadlines. `--asset-root` confines local image reads, defaulting to the working directory. `--env` selects an environment file; `FRAMELINK_ASSET_ROOT` and `FRAMELINK_API_URL` retain their server meanings.
 

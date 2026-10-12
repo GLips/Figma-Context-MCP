@@ -324,6 +324,63 @@ describe("saved-script CLI using production plugin services", () => {
     expect(stdout).toBe("");
   });
 
+  it("reads a run's comment pins over REST with the CLI's Figma token", async () => {
+    const realFetch = globalThis.fetch;
+    const figmaCalls: Array<{ url: string; token: string | null }> = [];
+    vi.stubGlobal("fetch", (input: string | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (!url.startsWith("https://api.figma.com/")) return realFetch(input, init);
+      figmaCalls.push({ url, token: new Headers(init?.headers).get("X-Figma-Token") });
+      return Promise.resolve(
+        Response.json({
+          comments: [
+            {
+              id: "c1",
+              message: "Tighten this",
+              client_meta: { node_id: "1:2", node_offset: { x: 4, y: 8 } },
+              resolved_at: null,
+              created_at: "2026-01-01T00:00:00Z",
+              user: { handle: "Reviewer" },
+            },
+          ],
+        }),
+      );
+    });
+    try {
+      const finished = run({ figmaApiKey: "figd_cli_test" });
+      let pinsReply: Frame | undefined;
+      let execution: Frame | undefined;
+      await plugin((frame, socket) => {
+        if (frame.type === "EXECUTE_CODE") {
+          execution = frame;
+          socket.send(
+            JSON.stringify({
+              type: "CHANNEL_REQUEST",
+              id: "pins-1",
+              runId: frame.id,
+              capability: "comments.pins",
+              payload: { fileKey: "abc123" },
+            }),
+          );
+        }
+        if (frame.type === "CHANNEL_RESPONSE") {
+          pinsReply = frame;
+          reply(socket, execution!, { result: null, console: [], errors: null });
+        }
+      });
+      expect(await finished).toBe(0);
+      expect(figmaCalls).toEqual([
+        { url: expect.stringContaining("/v1/files/abc123/comments"), token: "figd_cli_test" },
+      ]);
+      expect(pinsReply).toMatchObject({
+        ok: true,
+        payload: { pins: [{ nodeId: "1:2", x: 4, y: 8 }] },
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("rejects invalid screenshot options before connecting or running a script", async () => {
     await expect(
       run({ screenshot: join(dir, "bad.png"), key: "card", nodeId: "1:2" }),

@@ -5,7 +5,16 @@
 import { type Command, command } from "cleye";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
-import { loadEnvFile, resolvePluginConfig, UsageError } from "~/config.js";
+import {
+  loadEnvFile,
+  resolveCredential,
+  resolvePluginConfig,
+  resolveProxy,
+  UsageError,
+} from "~/config.js";
+import { FIGMA_REST_CREDENTIAL_FLAGS } from "~/commands/rest-command.js";
+import { FigmaService, staticCredentialSource } from "~/services/figma.js";
+import { installFigmaProxyDispatcher } from "~/utils/figma-proxy-dispatcher.js";
 import { startPluginBridge, type PluginBridgeRuntime } from "~/commercial/plugin-bridge/index.js";
 import {
   executePluginCode,
@@ -37,7 +46,8 @@ export const executeCommand: Command = command(
       summary: "Run an flcm script in the Figma file the Framelink plugin has open",
       details: `The script is the body of an async function: use await and return directly, with no imports or
 exports. Open the Framelink plugin in the target file first; the first run waits for you to approve
-the pairing code printed to stderr. No Figma API token is needed.
+the pairing code printed to stderr. A Figma API token is optional: with one, the script can read
+the file's comment pins, as it can through the MCP server.
 
 stdout gets the reply as JSON, { result, console, errors }; progress goes to stderr. Exits 0 when
 errors is null, 1 on a script, connection or approval failure, 130 on Ctrl-C. A run is never
@@ -45,6 +55,7 @@ resubmitted automatically.`,
       exampleArgs: [
         "card.js",
         "card.js --output out/reply.json --screenshot out/card.png --key card --scale 2",
+        "card.js --screenshot out/card.png --key card --context --margin 120",
       ],
       // After the flags because it is what the script file needs; its FULL DOCS line is the next
       // disclosure step, into `reference`.
@@ -77,6 +88,16 @@ resubmitted automatically.`,
         placeholder: "<n>",
         description: `Screenshot resolution multiplier, above 0 and up to ${MAX_SCREENSHOT_SCALE} (default 1)`,
       },
+      context: {
+        type: Boolean,
+        description: "Also capture the canvas around the --node-id/--key target",
+      },
+      margin: {
+        type: Number,
+        placeholder: "<px>",
+        description:
+          "Pixels of surrounding canvas on each side with --context (default 10% of the target's longest side, 80-160)",
+      },
       wait: {
         type: Number,
         placeholder: "<seconds>",
@@ -93,6 +114,7 @@ resubmitted automatically.`,
         placeholder: "<file>",
         description: "Load environment variables from this file (default ./.env)",
       },
+      ...FIGMA_REST_CREDENTIAL_FLAGS,
     },
   },
   (argv) => {
@@ -114,9 +136,14 @@ interface ExecuteFlags {
   nodeId?: string;
   key?: string;
   scale?: number;
+  context?: boolean;
+  margin?: number;
   wait?: number;
   assetRoot?: string;
   env?: string;
+  figmaApiKey?: string;
+  figmaOauthToken?: string;
+  proxy?: string;
 }
 
 /** CLI file/stdio boundary. Execution and image policy live in the shared plugin services. */
@@ -130,11 +157,19 @@ export async function runExecute(flags: ExecuteFlags, positionals: string[]): Pr
       "--wait must be a finite, nonnegative number of seconds within the timer range.",
     );
   }
-  const target = { nodeId: flags.nodeId, key: flags.key, scale: flags.scale };
+  const target = {
+    nodeId: flags.nodeId,
+    key: flags.key,
+    scale: flags.scale,
+    context: flags.context,
+    margin: flags.margin,
+  };
   const inputError = screenshotInputError(target);
   if (inputError) throw new UsageError(inputError);
   if (!flags.screenshot && Object.values(target).some((value) => value !== undefined)) {
-    throw new UsageError("--node-id, --key, and --scale require --screenshot <file.png>.");
+    throw new UsageError(
+      "--node-id, --key, --scale, --context, and --margin require --screenshot <file.png>.",
+    );
   }
   const file = resolve(positionals[0]);
   const destinations = [flags.output, flags.screenshot]
@@ -146,6 +181,11 @@ export async function runExecute(flags: ExecuteFlags, positionals: string[]): Pr
   const code = await readFile(file, "utf8");
   for (const path of destinations) await mkdir(dirname(path), { recursive: true });
   loadEnvFile(flags.env);
+  // Optional, unlike the REST commands: only a run's mid-run Figma reads (comment pins) spend it,
+  // and those fail on their own, naming the missing credential, when there is none.
+  const credential = resolveCredential(flags);
+  if (credential) installFigmaProxyDispatcher(resolveProxy(flags).value);
+  const figma = credential ? new FigmaService(staticCredentialSource(credential)) : null;
 
   const config = resolvePluginConfig(flags.assetRoot);
   const runtime = startPluginBridge({
@@ -183,7 +223,7 @@ export async function runExecute(flags: ExecuteFlags, positionals: string[]): Pr
         return async () => {};
       },
     };
-    const outcome = await executePluginCode(runtime, code, options);
+    const outcome = await executePluginCode(runtime, code, options, { figma });
     if (outcome.kind === "refused") throw new Error(outcome.message);
     if (outcome.kind === "pending") {
       throw new Error(

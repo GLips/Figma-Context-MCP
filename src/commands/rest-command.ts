@@ -9,13 +9,8 @@ import type { FigmaCredential } from "~/services/figma.js";
 import { parseFigmaUrl } from "~/utils/figma-url.js";
 import { installFigmaProxyDispatcher } from "~/utils/figma-proxy-dispatcher.js";
 
-/** Flags every REST-backed command takes: where the file is and how to authenticate. */
-export const REST_COMMAND_FLAGS = {
-  fileKey: {
-    type: String,
-    placeholder: "<key>",
-    description: "Figma file key; overrides the URL's",
-  },
+/** How a command authenticates to the Figma REST API and routes its traffic. */
+export const FIGMA_REST_CREDENTIAL_FLAGS = {
   figmaApiKey: {
     type: String,
     placeholder: "<token>",
@@ -27,16 +22,26 @@ export const REST_COMMAND_FLAGS = {
     description:
       "Figma OAuth bearer token; used instead of the API key when set (env FIGMA_OAUTH_TOKEN)",
   },
-  env: {
-    type: String,
-    placeholder: "<file>",
-    description: "Load environment variables from this file (default ./.env)",
-  },
   proxy: {
     type: String,
     placeholder: "<url>",
     description:
       "Proxy for Figma API calls, e.g. http://proxy:8080; 'none' ignores HTTP(S)_PROXY (env FIGMA_PROXY)",
+  },
+} as const;
+
+/** Flags every REST-backed command takes: where the file is and how to authenticate. */
+export const REST_COMMAND_FLAGS = {
+  fileKey: {
+    type: String,
+    placeholder: "<key>",
+    description: "Figma file key; overrides the URL's",
+  },
+  ...FIGMA_REST_CREDENTIAL_FLAGS,
+  env: {
+    type: String,
+    placeholder: "<file>",
+    description: "Load environment variables from this file (default ./.env)",
   },
 } as const;
 

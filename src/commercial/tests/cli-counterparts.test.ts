@@ -14,7 +14,7 @@ import { createTestWriteAccess, TEST_AUTHORIZING_USER } from "./fixtures/write-a
 
 // Every tool the server can advertise: the plugin bridge plus codeMode puts the write tools in
 // tools/list, and image downloads are on by default.
-async function listEveryToolName(): Promise<string[]> {
+async function listEveryTool(): Promise<Map<string, string[]>> {
   const bridge = {
     request: vi.fn(),
     getPairingCode: () => null,
@@ -40,15 +40,32 @@ async function listEveryToolName(): Promise<string[]> {
   await Promise.all([client.connect(clientT), server.connect(serverT)]);
   const { tools } = await client.request({ method: "tools/list" }, ListToolsResultSchema);
   await Promise.all([client.close(), server.close()]);
-  return tools.map((tool) => tool.name);
+  return new Map(
+    tools.map((tool) => [tool.name, Object.keys(tool.inputSchema.properties ?? {}).sort()]),
+  );
 }
 
-it("gives every MCP tool a registered CLI counterpart or an explicit exemption", async () => {
-  const tools = (await listEveryToolName()).sort();
-  const commands = new Set(CLI_COMMANDS.map((command) => command.options.name));
+const kebab = (flag: string) => "--" + flag.replace(/[A-Z]/g, (c) => "-" + c.toLowerCase());
 
-  expect(Object.keys(MCP_TOOL_CLI_COUNTERPARTS).sort()).toEqual(tools);
+it("gives every MCP tool input a CLI carrier, or the tool an explicit exemption", async () => {
+  const tools = await listEveryTool();
+  const commands = new Map(CLI_COMMANDS.map((command) => [command.options.name, command.options]));
+
+  expect(Object.keys(MCP_TOOL_CLI_COUNTERPARTS).sort()).toEqual([...tools.keys()].sort());
   for (const [tool, counterpart] of Object.entries(MCP_TOOL_CLI_COUNTERPARTS)) {
-    if ("command" in counterpart) expect(commands, tool).toContain(counterpart.command);
+    if ("exempt" in counterpart) continue;
+    const command = commands.get(counterpart.command);
+    expect(command, tool).toBeDefined();
+    const carriers = new Set([
+      ...Object.keys(command!.flags ?? {}).map(kebab),
+      ...(command!.parameters ?? []),
+    ]);
+    expect(Object.keys(counterpart.inputs).sort(), tool).toEqual(tools.get(tool));
+    for (const carrier of Object.values(counterpart.inputs))
+      expect(carriers, tool).toContain(carrier);
+    if (counterpart.figmaRest) {
+      expect(carriers, tool).toContain("--figma-api-key");
+      expect(carriers, tool).toContain("--figma-oauth-token");
+    }
   }
 });
