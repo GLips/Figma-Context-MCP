@@ -66,7 +66,7 @@ export function edit(target: Target, changes: EditDelta): Promise<Handle> {
       const planning = { targets, fonts: loaded.fonts };
       const instance: InstanceEditPlan | undefined = plan.instanceWords ? planInstanceEdit(node, plan.instanceWords, current, planning, SUBJECT) : undefined;
       const component: ComponentEditPlan | undefined = plan.componentWords
-        ? planComponentEdit(node, plan.componentWords, SUBJECT, (field) => projectedBinderValue(field, plan, instance, main, SUBJECT))
+        ? planComponentEdit(node, plan.componentWords, SUBJECT, (field) => projectedBinderValue(field, node, plan, instance, main, SUBJECT))
         : undefined;
       assertEditPlanLands(plan, loaded.fonts, SUBJECT, undefined, instance ? { mode: instance.becomesLayoutMode, wrap: instance.becomesLayoutWrap } : undefined);
       return { plan, instance, component, resources: gateEditResources(loaded, instance ? [instance.needs] : []) };

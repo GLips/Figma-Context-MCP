@@ -267,6 +267,11 @@ export interface WriteTextRun {
   hyperlink?: string;
 }
 
+/** The characters a TEXT node holds once its runs land: the bridge writes exactly this, and a bound layer's projected value reads it. */
+export function textOfRuns(runs: readonly WriteTextRun[]): string {
+  return runs.map((run) => run.text).join("");
+}
+
 // ---- Layout currency. Alignment and sizing are stored as terse INTENT, not plugin enums: which plugin
 // axis a `justifyContent`/`alignItems`/`fill`/`hug` maps to depends on the frame's direction and
 // parent/child context, so the bridge resolves it. One terse→plugin map lives there; the IR stays

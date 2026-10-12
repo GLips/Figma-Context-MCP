@@ -332,7 +332,7 @@ function planEntryComponents(
     const refs = plans[i]?.componentWords?.componentPropertyReferences;
     if (refs !== undefined) bindings[i] = prepareComponentBindingEdit(plans[i]!.node, refs, SUBJECT, (owner) => addsByOwner.get(owner));
   });
-  const binderValue = (j: number, field: string) => projectedBinderValue(field, plans[j]!, instances[j], mains[j], SUBJECT);
+  const binderValue = (j: number, field: string) => projectedBinderValue(field, plans[j]!.node, plans[j]!, instances[j], mains[j], SUBJECT);
   const bindersOf = (add: AddedDefinition): PropertyBinder[] => {
     const binders: PropertyBinder[] = [];
     bindings.forEach((binding, j) => {

@@ -14,7 +14,7 @@ import { createStandingState } from "./standing-state.js";
 import { compileEditPlan, loadEditResources, assertEditPlanLands } from "./edit-plan.js";
 import { applyEditStages } from "./edit-apply.js";
 import { resolveInstanceEditTargets, planInstanceEdit } from "./instance.js";
-import { planComponentEdit, projectedBinderValue, editedBinderValue, releaseRewiredBindings } from "./component-edit.js";
+import { planComponentEdit, projectedBinderValue, releaseRewiredBindings } from "./component-edit.js";
 import { BINDING_FIELD_WIRE_KEYS } from "./component.js";
 import { assertNodeStillOnCanvas } from "./freshness.js";
 import { childListClosingInstanceOf, writeKey, isInheritedSlotContent, slotOwnerOf, describeNodeIdentity } from "./identity.js";
@@ -151,14 +151,14 @@ export function gateLiveTree(live: LoadedLiveTree, resources: RenderResources): 
     if (ref.children?.length && (!("appendChild" in node) || childListClosingInstanceOf(node, true))) throw new Error(at + ".children: this live node's child list cannot be authored.");
     const plan = entry.hint ? compileEditPlan(node, changes, at) : undefined;
     const instance = plan?.instanceWords ? planInstanceEdit(node, plan.instanceWords, current, { targets, fonts: resources.fonts }, at) : undefined;
-    const component = plan?.componentWords ? planComponentEdit(node, plan.componentWords, at, (field) => projectedBinderValue(field, plan, instance, current, at)) : undefined;
+    const component = plan?.componentWords ? planComponentEdit(node, plan.componentWords, at, (field) => projectedBinderValue(field, node, plan, instance, current, at)) : undefined;
     // Placement validates against the destination. Font coverage and node-local legality still
     // use the edit gate, with parent-relative words withheld until that destination exists.
     if (plan) assertEditPlanLands({ ...plan, patch: { ...plan.patch, layout: undefined } }, resources.fonts, at);
     if (instance) for (const [tree, instancePlan] of instance.needs.plans) (resources.instances as Map<WriteNode, typeof instancePlan>).set(tree, instancePlan);
     const shows = {
-      visible: (plan && editedBinderValue("visible", plan, instance) as boolean | undefined) ?? node.visible,
-      text: node.type === "TEXT" ? (plan && editedBinderValue("text", plan, instance) as string | undefined) ?? node.characters : undefined,
+      visible: projectedBinderValue("visible", node, plan, instance, current, at) as boolean,
+      text: node.type === "TEXT" ? projectedBinderValue("text", node, plan, instance, current, at) as string : undefined,
     };
     plans.set(ref, { node, component: instance?.becomes ?? current, layout: plan?.patch.layout, refs, shows, place(parent, place, ctx) {
       assertInheritedSlotContentStays(at, node, parent);

@@ -25,7 +25,7 @@
 // own words (a rename must be part of the same step as whatever else the delta says), bindings land
 // AFTER them (the node has to be what this delta makes it before it is wired to a property).
 
-import { WriteNode, LiveRef, ComponentEditWords, ComponentPropertyBinding, ComponentPropertyDefinitionEdit, ComponentPropertyDefinitionEdits } from "./ir.js";
+import { WriteNode, LiveRef, textOfRuns, ComponentEditWords, ComponentPropertyBinding, ComponentPropertyDefinitionEdit, ComponentPropertyDefinitionEdits } from "./ir.js";
 import { BoundLiveNode, RenderResources } from "./bridge.js";
 import { EditPlan, EditPlanFailure } from "./edit-plan.js";
 import {
@@ -590,19 +590,19 @@ export function existingPropertyBindings(
 }
 
 /** What a layer an edit targets will show for a binding field because of that edit — undefined if the edit doesn't touch it. */
-export function editedBinderValue(field: string, plan: EditPlan, instance: InstanceEditPlan | undefined): boolean | string | undefined {
+export function editedBinderValue(field: string, plan: EditPlan | undefined, instance: InstanceEditPlan | undefined): boolean | string | undefined {
+  if (!plan) return undefined;
   if (field === "visible") return plan.patch.visible;
-  if (field === "text") return plan.patch.runs ? plan.patch.runs.map((run) => run.text).join("") : plan.patch.text;
+  if (field === "text") return plan.patch.runs ? textOfRuns(plan.patch.runs) : plan.patch.text;
   return instance && instance.retargets ? instance.becomes.id : undefined;
 }
 
-// What a bound layer will show once its edit has landed: the edit's own word for the field if it
-// names one, else the live value. That is the value a binding would write back into it, so it is
-// the value the property's default must hold. `main` is the live instance's component, for a swap binder.
-export function projectedBinderValue(field: string, plan: EditPlan, instance: InstanceEditPlan | undefined, main: any | null, at: string): boolean | string {
+// What a bound live layer will show once its edit (if any) has landed: the edit's own word for the
+// field if it names one, else the live value. That is the value a binding would write back into it,
+// so it is the value the property's default must hold. `main` is the live instance's component, for a swap binder.
+export function projectedBinderValue(field: string, node: any, plan: EditPlan | undefined, instance: InstanceEditPlan | undefined, main: any | null, at: string): boolean | string {
   const edited = editedBinderValue(field, plan, instance);
   if (edited !== undefined) return edited;
-  const node = plan.node as any;
   if (field === "visible") return node.visible !== false;
   if (field === "text") return node.characters;
   return readableComponentOf(main, node, at).id;

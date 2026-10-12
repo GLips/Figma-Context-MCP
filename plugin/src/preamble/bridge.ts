@@ -32,7 +32,7 @@ import { warnBackgroundBlurWithoutFill } from "./background-blur-diagnostics.js"
 // noise without safety.
 
 import { applyAnnotations } from "./annotation-categories.js";
-import { WriteType, WriteNode, BuiltNode, LiveRef, WriteProps, WriteLayout, TextAlign, TextDecoration, Sizing, Identity, Handle, WritePaint, WritePaintStack, WriteImage, WriteImageUrl, ComponentPropertyBinding, CornerRadii, Edges, Bindable, VariableRef, namesFontIdentity, isTokenRef } from "./ir.js";
+import { WriteType, WriteNode, BuiltNode, LiveRef, WriteProps, WriteLayout, TextAlign, TextDecoration, Sizing, Identity, Handle, WritePaint, WritePaintStack, WriteImage, WriteImageUrl, ComponentPropertyBinding, CornerRadii, Edges, Bindable, VariableRef, namesFontIdentity, isTokenRef, textOfRuns } from "./ir.js";
 import { writeBindable, unbindField, variableFor, variableLiteral, styleFor, type ResolvedTokens } from "./tokens.js";
 import { queueStyleLink, settlePivot, type ApplySpan } from "./apply-span.js";
 import { own } from "./validate.js";
@@ -1242,7 +1242,7 @@ export function applyTextProps(t: any, wn: WriteProps, ctx: ApplyResources): voi
     t.fontName = resolveFont(ctx.fonts, ts.fontFamily, ts.fontWeight, italic);
     warnFontDivergences(t, "the text", fontDivergences(ts.fontFamily, ts.fontWeight, italic, t.fontName));
   }
-  if (wn.runs) t.characters = wn.runs.map((r) => r.text).join("");
+  if (wn.runs) t.characters = textOfRuns(wn.runs);
   else if (wn.text != null) t.characters = String(wn.text);
   // A bound family or weight binds over the literal font written above (both are loaded in every mode).
   if (isTokenRef(ts.fontFamily)) writeBindable(t, "fontFamily", ts.fontFamily, ctx.tokens);

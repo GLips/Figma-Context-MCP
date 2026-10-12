@@ -28,7 +28,7 @@ import { sceneFigma as figma } from "./scene-access.js";
 // a live file during the design spike].
 
 import {
-  WriteNode, BuiltNode, LiveRef, Handle, Target, ComponentPropertyBinding, VariantEntryInput,
+  WriteNode, BuiltNode, LiveRef, Handle, Target, ComponentPropertyBinding, VariantEntryInput, textOfRuns,
 } from "./ir.js";
 import { applyExposures } from "./instance-exposure.js";
 import { resolveTarget } from "./read.js";
@@ -396,11 +396,11 @@ export function describeBinder(name: string | undefined, where: string): string 
   return (name === undefined ? "" : JSON.stringify(name) + " ") + "at " + where;
 }
 
-// A TEXT node's authored content, however it compiled: a plain string, or the runs a markdown/rich author
-// produced (concatenated exactly as the bridge concatenates them into `characters`) — undefined when it states neither.
+// A TEXT node's authored content, however it compiled: a plain string, or the runs a markdown/rich
+// author produced — undefined when it states neither.
 function authoredTextOf(wn: BuiltNode): string | undefined {
   if (typeof wn.text === "string") return wn.text;
-  return wn.runs?.map((run) => run.text).join("");
+  return wn.runs && textOfRuns(wn.runs);
 }
 
 // ---- the live subject ----
