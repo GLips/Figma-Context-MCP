@@ -3,33 +3,34 @@
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
 import { afterEach, expect, test, vi } from "vitest";
-import { WebSocket } from "ws";
 import { PluginBridge } from "~/commercial/plugin-bridge/bridge.js";
 import { RequestTrace, type TraceEvent } from "~/commercial/plugin-bridge/request-trace.js";
 import { Logger } from "~/utils/logger.js";
+import { connectFakePlugin, type FakePluginSocket } from "./fixtures/fake-plugin-socket.js";
 
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
 });
-function connectedBridge(timeout = 100, ceiling = 1000) {
-  const sent: { id?: string; type: string; runId?: string }[] = [];
-  const socket = {
-    readyState: WebSocket.OPEN,
-    send: (raw: string) => sent.push(JSON.parse(raw)),
-  } as unknown as WebSocket;
-  const bridge = new PluginBridge(undefined, { requestTimeoutMs: timeout, runCeilingMs: ceiling });
-  // Exercise actual request/timer/message code without opening a network listener.
-  bridge["socket"] = socket;
-  bridge["compatibility"] = "compatible";
-  const receive = (message: object, owner = socket) =>
-    bridge["handleMessage"](owner, JSON.stringify(message));
-  return { bridge, sent, socket, receive };
+async function connectedBridge(timeout = 100, ceiling = 1000) {
+  const trace = new RequestTrace(() => {});
+  const bridge = new PluginBridge(undefined, {
+    requestTimeoutMs: timeout,
+    runCeilingMs: ceiling,
+    trace,
+  });
+  // Displaced before the holder connects: still wired to the bridge, but no longer the holder.
+  const stranger = await connectFakePlugin(bridge);
+  const socket = await connectFakePlugin(bridge);
+  const sent = socket.frames as { id?: string; type: string; runId?: string }[];
+  const receive = (message: Record<string, unknown>, owner: FakePluginSocket = socket) =>
+    owner.receive(message);
+  return { bridge, trace, sent, socket, stranger, receive };
 }
 test("host checkpoints do not reset inactivity or resubmit; late result remains diagnostic only", async () => {
   vi.useFakeTimers();
   vi.spyOn(Logger, "log").mockImplementation(() => {});
-  const { bridge, sent, socket, receive } = connectedBridge();
+  const { bridge, trace, sent, socket, receive } = await connectedBridge();
   const result = bridge
     .request({
       type: "EXECUTE_CODE",
@@ -58,35 +59,32 @@ test("host checkpoints do not reset inactivity or resubmit; late result remains 
   expect(error).toBeInstanceOf(Error);
   expect((error as Error).message).toContain("was executing when it was cancelled");
   expect(sent.map((frame) => frame.type)).toEqual(["EXECUTE_CODE", "CANCEL"]);
-  const replacement = { readyState: WebSocket.OPEN } as WebSocket;
-  bridge["socket"] = replacement;
+  await connectFakePlugin(bridge);
   receive({ id, result: { private: "response content" } }, socket);
-  expect(bridge["trace"].snapshot(id).map((event) => event.stage)).toContain("late-reply");
-  expect(JSON.stringify(bridge["trace"].snapshot(id))).not.toMatch(
-    /secret|private|response content/,
-  );
+  expect(trace.snapshot(id).map((event) => event.stage)).toContain("late-reply");
+  expect(JSON.stringify(trace.snapshot(id))).not.toMatch(/secret|private|response content/);
   expect(sent.map((frame) => frame.type)).toEqual(["EXECUTE_CODE", "CANCEL"]);
 });
 test("trace traffic cannot extend absolute ceiling; wrong socket cannot supply checkpoints", async () => {
   vi.useFakeTimers();
   vi.spyOn(Logger, "log").mockImplementation(() => {});
-  const { bridge, sent, receive } = connectedBridge(100, 150);
+  const { bridge, trace, sent, stranger, receive } = await connectedBridge(100, 150);
   const result = bridge
     .request({ type: "EXECUTE_CODE", code: "", preamble: "", lateChangeWindowMs: 60_000 })
     .catch((error) => error);
   const id = sent[0].id!;
   await vi.advanceTimersByTimeAsync(80);
   receive({ type: "RUN_STATE", runId: id, phase: "running", at: Date.now() });
-  receive({ type: "RUN_TRACE", runId: id, stage: "native-start", elapsedMs: 0 }, {} as WebSocket);
+  receive({ type: "RUN_TRACE", runId: id, stage: "native-start", elapsedMs: 0 }, stranger);
   receive({ type: "RUN_TRACE", runId: id, stage: "eval-start", elapsedMs: 0 });
   await vi.advanceTimersByTimeAsync(70);
   receive({ type: "CANCEL_RESULT", runId: id, disposition: "was-running" });
   const error = await result;
   expect(error).toBeInstanceOf(Error);
   expect((error as Error).message).toContain("absolute 150ms");
-  const trace = bridge["trace"].snapshot(id);
-  expect(trace.some((event) => event.hostStage === "native-start")).toBe(false);
-  expect(trace.at(-1)?.stage).toBe("timeout-ceiling");
+  const events = trace.snapshot(id);
+  expect(events.some((event) => event.hostStage === "native-start")).toBe(false);
+  expect(events.at(-1)?.stage).toBe("timeout-ceiling");
 });
 test("trace is bounded, stage-only, expires terminal entries, and keeps timeout context after noise", () => {
   let now = 0;
@@ -117,7 +115,7 @@ test.each(["result", "error", "caller-cancelled", "disconnected"] as const)(
   async (stage) => {
     vi.useFakeTimers();
     vi.spyOn(Logger, "log").mockImplementation(() => {});
-    const { bridge, sent, receive } = connectedBridge();
+    const { bridge, trace, sent, socket, receive } = await connectedBridge();
     const controller = new AbortController();
     const result = bridge
       .request(
@@ -145,10 +143,10 @@ test.each(["result", "error", "caller-cancelled", "disconnected"] as const)(
       });
     if (stage === "error") receive({ id, type: "ERROR", error: "private native error" });
     if (stage === "caller-cancelled") controller.abort();
-    if (stage === "disconnected") bridge["failPending"]("disconnected");
+    if (stage === "disconnected") socket.terminate();
     await result;
     await vi.advanceTimersByTimeAsync(2000);
-    const events = bridge["trace"].snapshot(id);
+    const events = trace.snapshot(id);
     expect(events.at(-1)).toMatchObject({
       stage,
       lastHostStage: "native-start",
@@ -163,7 +161,7 @@ test.each(["result", "error", "caller-cancelled", "disconnected"] as const)(
 test("execution error result is traced as error without changing successful envelope delivery", async () => {
   vi.useFakeTimers();
   vi.spyOn(Logger, "log").mockImplementation(() => {});
-  const { bridge, sent, receive } = connectedBridge();
+  const { bridge, trace, sent, receive } = await connectedBridge();
   const result = bridge.request({
     type: "EXECUTE_CODE",
     code: "",
@@ -180,6 +178,6 @@ test("execution error result is traced as error without changing successful enve
   };
   receive({ id, ...reply });
   expect(await result).toEqual(reply);
-  expect(bridge["trace"].snapshot(id).at(-1)?.stage).toBe("error");
-  expect(JSON.stringify(bridge["trace"].snapshot(id))).not.toContain("private execution detail");
+  expect(trace.snapshot(id).at(-1)?.stage).toBe("error");
+  expect(JSON.stringify(trace.snapshot(id))).not.toContain("private execution detail");
 });

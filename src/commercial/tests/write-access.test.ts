@@ -25,7 +25,11 @@ import type {
   WriteAccessNotice,
 } from "@framelink/plugin/protocol";
 import { FREE_WRITE_ALLOWANCE } from "~/commercial/entitlement/write-ledger.js";
-import { createTestWriteAccess, TEST_AUTHORIZING_USER } from "./fixtures/write-access.js";
+import {
+  createTestWriteAccess,
+  TEST_APPROVED_SESSION,
+  TEST_AUTHORIZING_USER,
+} from "./fixtures/write-access.js";
 
 /** The app's write endpoints, faithful to the contract, with knobs for what the test needs it to say. */
 async function startFakeFramelinkApp() {
@@ -153,8 +157,8 @@ class MeteredBridge extends PluginBridge {
   override isPluginConnected() {
     return true;
   }
-  override getAuthorizingUser() {
-    return TEST_AUTHORIZING_USER;
+  override approvedSession() {
+    return TEST_APPROVED_SESSION;
   }
   override async request<T extends ServerRequest>(payload: T): Promise<ReplyFor<T["type"]>> {
     let reply: PluginReply;
@@ -183,7 +187,7 @@ async function connectTools(writeAccess: WriteAccess) {
         bridge,
         writeAccess,
         readSavedScript: () => Promise.reject(new Error("no saved scripts in this test")),
-        hasEverConnected: () => true,
+        pluginPresence: () => "connected",
         onFirstConnect: () => {},
       },
     },

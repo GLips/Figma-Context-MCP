@@ -42,7 +42,7 @@ async function bridgeBoundOnApproval(port: number, ageMs: number | null): Promis
   bridges.push(bridge);
   bridge.start([port]);
   // `listening` is async, and every claim here is about what the bind reloaded.
-  for (let i = 0; i < 200 && !bridge.getSessionToken() && ageMs !== null; i++) {
+  for (let i = 0; i < 200 && !bridge.approvedSession()?.token && ageMs !== null; i++) {
     await new Promise((r) => setTimeout(r, 10));
   }
   if (ageMs === null) await new Promise((r) => setTimeout(r, 50));
@@ -63,7 +63,7 @@ describe("what a freshly bound relay believes about a plugin it hasn't seen", ()
     // outside any window in which a plugin is plausibly still open.
     const bridge = await bridgeBoundOnApproval(45232, RECENT_APPROVAL_MS + 60 * 60 * 1000);
 
-    expect(bridge.getSessionToken()).toBe("tok-abc");
+    expect(bridge.approvedSession()?.token).toBe("tok-abc");
     expect(bridge.hasRecentApproval()).toBe(false);
   });
 

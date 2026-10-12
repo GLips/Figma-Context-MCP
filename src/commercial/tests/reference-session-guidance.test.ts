@@ -3,18 +3,18 @@
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
 import { describe, it, expect, vi } from "vitest";
-import { referenceSessionGuidance } from "~/commercial/tools/flcm-docs/session-guidance.js";
+import { referenceSessionGuidance } from "~/commercial/plugin-bridge/session-guidance.js";
 
 describe("approval-aware reference guidance", () => {
   it("approved sessions receive no pairing preamble and perform one status query", async () => {
-    const status = vi.fn(async () => ({ type: "APPROVAL_GRANTED" }));
+    const status = vi.fn(async () => ({ type: "APPROVAL_GRANTED" }) as const);
     expect(
       await referenceSessionGuidance({ pairingCode: "1234", protocolRefusal: null, status }),
     ).toBeUndefined();
     expect(status).toHaveBeenCalledTimes(1);
   });
   it("pending and rejected approvals give the live code without waiting", async () => {
-    for (const type of ["PENDING_APPROVAL", "APPROVAL_REJECTED"]) {
+    for (const type of ["PENDING_APPROVAL", "APPROVAL_REJECTED"] as const) {
       const status = vi.fn(async () => ({ type }));
       expect(
         await referenceSessionGuidance({ pairingCode: "4321", protocolRefusal: null, status }),

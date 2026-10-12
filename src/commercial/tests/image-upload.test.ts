@@ -29,7 +29,7 @@ import type { ServerRequest } from "@framelink/plugin/protocol";
 import type { ChannelRunContext, PluginBridge } from "~/commercial/plugin-bridge/bridge.js";
 import { executePluginCode } from "~/commercial/plugin-bridge/execution.js";
 import { createImageSourceFetcher } from "~/commercial/plugin-bridge/image-requests.js";
-import { createTestWriteAccess, TEST_AUTHORIZING_USER } from "./fixtures/write-access.js";
+import { createTestWriteAccess, grantedTestApproval } from "./fixtures/write-access.js";
 
 const Jimp = createJimp({ formats: [png] });
 const makePng = async () =>
@@ -103,7 +103,6 @@ async function fetchDuringRun(code: string, source: string): Promise<string> {
       _onSubmitted: unknown,
       run: ChannelRunContext,
     ) => {
-      if (payload.type === "APPROVAL_STATUS") return { type: "APPROVAL_GRANTED" };
       fetched = fetchImage(source, run);
       await fetched.catch(() => {});
       return {
@@ -115,7 +114,7 @@ async function fetchDuringRun(code: string, source: string): Promise<string> {
       };
     },
     touchApproval: () => {},
-    getAuthorizingUser: () => TEST_AUTHORIZING_USER,
+    approvalStatus: grantedTestApproval,
   } as unknown as PluginBridge;
   await executePluginCode({ bridge, writeAccess: createTestWriteAccess().writeAccess }, code);
   return fetched!;

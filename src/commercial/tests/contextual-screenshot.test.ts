@@ -10,29 +10,26 @@ import { createServer } from "~/mcp/index.js";
 import type { ServerRequest } from "@framelink/plugin/protocol";
 import type { PluginBridge } from "~/commercial/plugin-bridge/bridge.js";
 import type { PluginBridgeRuntime } from "~/commercial/plugin-bridge/index.js";
-import { createTestWriteAccess, TEST_AUTHORIZING_USER } from "./fixtures/write-access.js";
+import { createTestWriteAccess, grantedTestApproval } from "./fixtures/write-access.js";
 
 function connectedServer() {
-  const request = vi
-    .fn()
-    .mockImplementation(async (payload: ServerRequest) =>
-      payload.type === "APPROVAL_STATUS"
-        ? { type: "APPROVAL_GRANTED" }
-        : { type: "SCREENSHOT_RESULT", image: "AQ==" },
-    );
+  const request = vi.fn().mockImplementation(async (_payload: ServerRequest) => ({
+    type: "SCREENSHOT_RESULT",
+    image: "AQ==",
+  }));
   const bridge = {
     request,
     getPairingCode: () => "1234",
     protocolRefusal: () => null,
     touchApproval: () => {},
-    getAuthorizingUser: () => TEST_AUTHORIZING_USER,
+    approvalStatus: grantedTestApproval,
     isPluginConnected: () => true,
   } as unknown as PluginBridge;
   const runtime: PluginBridgeRuntime = {
     bridge,
     writeAccess: createTestWriteAccess().writeAccess,
     readSavedScript: () => Promise.reject(new Error("no saved scripts in this test")),
-    hasEverConnected: () => true,
+    pluginPresence: () => "connected",
     onFirstConnect: () => {},
   };
   const server = createServer(

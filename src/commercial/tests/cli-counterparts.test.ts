@@ -10,7 +10,7 @@ import { createServer } from "~/mcp/index.js";
 import { CLI_COMMANDS, MCP_TOOL_CLI_COUNTERPARTS } from "~/commands/index.js";
 import type { PluginBridge } from "~/commercial/plugin-bridge/bridge.js";
 import type { PluginBridgeRuntime } from "~/commercial/plugin-bridge/index.js";
-import { createTestWriteAccess, TEST_AUTHORIZING_USER } from "./fixtures/write-access.js";
+import { createTestWriteAccess } from "./fixtures/write-access.js";
 
 // Every tool the server can advertise: the plugin bridge plus codeMode puts the write tools in
 // tools/list, and image downloads are on by default.
@@ -20,15 +20,13 @@ async function listEveryTool(): Promise<Map<string, string[]>> {
     getPairingCode: () => null,
     protocolRefusal: () => null,
     touchApproval: () => {},
-    getAuthorizingUser: () => TEST_AUTHORIZING_USER,
     isPluginConnected: () => false,
-    hasRecentApproval: () => false,
   } as unknown as PluginBridge;
   const runtime: PluginBridgeRuntime = {
     bridge,
     writeAccess: createTestWriteAccess().writeAccess,
     readSavedScript: () => Promise.reject(new Error("no saved scripts in this test")),
-    hasEverConnected: () => false,
+    pluginPresence: () => "absent",
     onFirstConnect: () => {},
   };
   const server = createServer(

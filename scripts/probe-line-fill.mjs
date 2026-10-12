@@ -18,7 +18,6 @@ import { PluginBridge } from "../src/commercial/plugin-bridge/bridge.ts";
 import { PROTOCOL_VERSION, WS_PORT_BLOCK } from "../plugin/src/protocol.ts";
 import { LATE_CHANGE_WINDOW_MS } from "../src/commercial/entitlement/write-access.ts";
 import { DEFAULT_FRAMELINK_API_URL } from "../src/config.ts";
-import { SESSION_IDENTITY } from "../src/commercial/plugin-bridge/approval.ts";
 import { requestUntilApproved } from "../src/commercial/plugin-bridge/await-approval.ts";
 import { buildSandboxPreamble } from "../plugin/src/preamble/index.mjs";
 
@@ -108,13 +107,7 @@ async function runProbe() {
   started = true;
   try {
     log("plugin connected — introducing the session");
-    await bridge.request({
-      type: "SESSION_INFO",
-      identity: SESSION_IDENTITY,
-      pairingCode: bridge.getPairingCode(),
-      sessionToken: bridge.getSessionToken(),
-      framelinkOrigin: DEFAULT_FRAMELINK_API_URL,
-    });
+    await bridge.request(bridge.sessionInfo(DEFAULT_FRAMELINK_API_URL));
 
     const version = await bridge.request({ type: "GET_VERSION" }).catch(() => ({}));
     if (version.protocolVersion !== PROTOCOL_VERSION) {
@@ -131,7 +124,7 @@ async function runProbe() {
 
     // Poll status separately so approval retries cannot execute the probe more than once.
     const reply = await requestUntilApproved(
-      (signal) => bridge.request({ type: "APPROVAL_STATUS" }, signal),
+      (signal) => bridge.approvalStatus(signal),
       () => bridge.request({ type: "EXECUTE_CODE", code: PROBE_CODE, preamble: PREAMBLE, lateChangeWindowMs: LATE_CHANGE_WINDOW_MS }),
     );
     if (reply?.type === "PENDING_APPROVAL") {

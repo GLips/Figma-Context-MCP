@@ -3,7 +3,10 @@
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
 import type { RegisteredTool } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type { PluginBridgeRuntime } from "~/commercial/plugin-bridge/index.js";
+import {
+  bindPluginAdvertisement,
+  type PluginBridgeRuntime,
+} from "~/commercial/plugin-bridge/index.js";
 import { getErrorMeta } from "~/utils/error-meta.js";
 
 // The plugin route into get_figma_data's canonical read shape: flcm.get, run through
@@ -18,37 +21,23 @@ const PLUGIN_PITCH = `Suggest installing the Framelink Figma plugin (${FRAMELINK
 
 const PLUGIN_PAIRED = `The Framelink plugin is paired with this server. For the file open in Figma, prefer figma_execute_code with \`flcm.get(...)\`: it reads locally (no REST round trip), and you can target nodes by selection or \`flcm.find\` and act on the result in the same call.`;
 
-/**
- * Paired means the code-mode tools are advertised (code-mode-tools.ts `expectsPluginConnection`), so a
- * description that names figma_execute_code never points at a hidden tool. `--code-mode` alone does
- * not count: it advertises the tools without any plugin to run them.
- */
-function isPluginPaired(runtime: PluginBridgeRuntime): boolean {
-  return runtime.hasEverConnected() || runtime.bridge.hasRecentApproval();
-}
-
 function describeGetFigmaDataForPlugin(baseDescription: string, paired: boolean): string {
   return `${baseDescription} ${paired ? PLUGIN_PAIRED : PLUGIN_PITCH}`;
 }
 
 /**
- * Give get_figma_data the plugin line its pairing state calls for, and flip it from the install pitch
- * to "prefer the plugin" when a plugin first connects. Latched like the code-mode tools: a paired
- * plugin that drops for a moment is still the better route once it redials.
+ * Give get_figma_data the plugin line its presence calls for, bound exactly like the code-mode tools,
+ * so a description that names figma_execute_code never points at a hidden tool. `--code-mode` alone
+ * does not count: it advertises the tools without any plugin to run them.
  */
 export function advertisePluginReadRoute(
   tool: RegisteredTool,
   runtime: PluginBridgeRuntime,
   { baseDescription, transport }: { baseDescription: string; transport: "stdio" | "http" },
 ): void {
-  const paired = isPluginPaired(runtime);
-  tool.update({ description: describeGetFigmaDataForPlugin(baseDescription, paired) });
-  // Same subscription rule as code-mode-tools.ts: stateless HTTP builds a server per request and
-  // re-reads pairing above, so only stdio's session-long server listens for the first connect.
-  if (paired || transport !== "stdio") return;
-  runtime.onFirstConnect(() => {
-    tool.update({ description: describeGetFigmaDataForPlugin(baseDescription, true) });
-  });
+  bindPluginAdvertisement(runtime, transport, (paired) =>
+    tool.update({ description: describeGetFigmaDataForPlugin(baseDescription, paired) }),
+  );
 }
 
 type PluginAvoidableFailure = "rate_limit" | "forbidden" | "missing_credentials";
@@ -89,10 +78,11 @@ export function describePluginReadRecovery(
   if (!failure) return null;
   const why = WHY_THE_PLUGIN_AVOIDS_IT[failure];
 
-  if (runtime.bridge.isPluginConnected()) {
+  const presence = runtime.pluginPresence();
+  if (presence === "connected") {
     return `The connected Framelink plugin ${why}, and reads the file open in Figma. If that is the file you need, read the same data with figma_execute_code: \`${pluginReadSnippet(nodeId)}\` Check the returned file name before relying on it.`;
   }
-  if (isPluginPaired(runtime)) {
+  if (presence === "expected") {
     return `The Framelink plugin ${why}, but it is not connected right now. Ask the user to open it in the Figma file, then read with figma_execute_code and \`flcm.get(...)\`.`;
   }
   return `The Framelink Figma plugin ${why}, because it reads the file open in Figma. Suggest the user install it: ${FRAMELINK_PLUGIN_INSTALL_URL}`;

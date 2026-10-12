@@ -10,10 +10,13 @@ import { resolve as resolvePath } from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
-import type { PluginBridgeRuntime } from "~/commercial/plugin-bridge/index.js";
+import {
+  bindPluginAdvertisement,
+  type PluginBridgeRuntime,
+} from "~/commercial/plugin-bridge/index.js";
 import { APPROVAL_WAIT_MS } from "~/commercial/plugin-bridge/await-approval.js";
 import {
-  approvalPendingAction,
+  approvalGuidance,
   pluginDisconnectedNotSubmittedText,
 } from "~/commercial/plugin-bridge/blocked-call-guidance.js";
 import {
@@ -23,7 +26,7 @@ import {
 import type { ServerTransport } from "~/mcp/index.js";
 import type { FigmaService } from "~/services/figma.js";
 import { registerFailLoudTool, retryableToolReply } from "~/mcp/fail-loud-params.js";
-import { referenceSessionGuidance } from "./flcm-docs/session-guidance.js";
+import { referenceSessionGuidance } from "~/commercial/plugin-bridge/session-guidance.js";
 import {
   buildQuickStart,
   buildReferenceMenu,
@@ -67,11 +70,6 @@ export function registerCodeModeTools(
 ): void {
   const { bridge } = runtime;
 
-  /** Tool advertisement stays latched for this process; outage guidance uses elapsed time below. */
-  function expectsPluginConnection(): boolean {
-    return runtime.hasEverConnected() || bridge.hasRecentApproval();
-  }
-
   /** A pre-submission outage uses bounded reconnect guidance; in-flight errors come from the bridge. */
   function pluginUnavailableReply(): CallToolResult | null {
     if (bridge.isPluginConnected()) return null;
@@ -84,8 +82,7 @@ export function registerCodeModeTools(
       onWaiting: () =>
         startProgressHeartbeat(
           extra,
-          () =>
-            `Waiting for approval in Figma (pairing code ${bridge.getPairingCode()}). Code has not been submitted.`,
+          () => approvalGuidance({ kind: "waiting", pairingCode: bridge.getPairingCode() }, "mcp"),
           3000,
         ),
     };
@@ -104,7 +101,10 @@ export function registerCodeModeTools(
       content: [
         {
           type: "text",
-          text: `This call did not run. ${approvalPendingAction(bridge.getPairingCode(), APPROVAL_WAIT_MS)}`,
+          text: approvalGuidance(
+            { kind: "expired", pairingCode: bridge.getPairingCode(), waitMs: APPROVAL_WAIT_MS },
+            "mcp",
+          ),
         },
       ],
     };
@@ -206,7 +206,7 @@ export function registerCodeModeTools(
         const note = await referenceSessionGuidance({
           pairingCode: bridge.getPairingCode(),
           protocolRefusal: bridge.protocolRefusal(),
-          status: (signal) => bridge.request({ type: "APPROVAL_STATUS" }, signal),
+          status: (signal) => bridge.approvalStatus(signal),
         });
         return {
           content: [
@@ -290,24 +290,16 @@ Returns a PNG image.`,
   // process. The narrower rule made a dev-watch restart look like a cold start: for the seconds before
   // the plugin redialed, a stateless-HTTP request built a server with the write tools disabled and the
   // call came back "Tool figma_execute_code disabled" — a hard MCP error (-32602) with no path
-  // forward. That is strictly worse than a slow answer: an agent told the capability does not exist
-  // stops trying, and cannot know that a retry would have worked. A hidden tool also has no handler in
-  // which to say anything better, which is why this decision has to come first.
-  if (codeMode || expectsPluginConnection()) return;
-
-  // Hidden until a plugin proves the write path exists. disable() before the transport connects is
-  // a silent flag flip (the SDK skips the list_changed notification when disconnected), so clients
-  // never see a flap. Only stdio subscribes to the latch: its one server outlives the whole session,
-  // while stateless HTTP builds a fresh server per request — each request re-reads the decision above,
-  // and subscribing those short-lived servers would accumulate dead closures until first connect.
-  // (Stdio also registers before the relay has finished binding, so `hasRecentApproval` is still
-  // false here for it — the latch subscription below is what enables its tools either way.)
-  for (const tool of tools) tool.disable();
-  if (transport === "stdio") {
-    runtime.onFirstConnect(() => {
-      for (const tool of tools) tool.enable();
-    });
-  }
+  // forward. A hidden tool has no handler in which to say anything better.
+  if (codeMode) return;
+  // disable() before the transport connects is a silent flag flip (the SDK skips the list_changed
+  // notification when disconnected), so clients never see a flap.
+  bindPluginAdvertisement(runtime, transport, (expected) => {
+    for (const tool of tools) {
+      if (expected) tool.enable();
+      else tool.disable();
+    }
+  });
 }
 
 /** Leaves an ordinary path bare so the suggested command reads cleanly; quotes anything a shell would split. */

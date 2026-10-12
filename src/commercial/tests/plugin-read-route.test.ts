@@ -14,7 +14,7 @@ import { createServer } from "~/mcp/index.js";
 import type { PluginBridge } from "~/commercial/plugin-bridge/bridge.js";
 import type { PluginBridgeRuntime } from "~/commercial/plugin-bridge/index.js";
 import { FRAMELINK_PLUGIN_INSTALL_URL } from "~/commercial/tools/plugin-read-route.js";
-import { createTestWriteAccess, TEST_AUTHORIZING_USER } from "./fixtures/write-access.js";
+import { createTestWriteAccess } from "./fixtures/write-access.js";
 
 /**
  * Driven through a real Client/Server pair: what matters is what the agent reads in tools/list and in
@@ -28,15 +28,13 @@ function connectWithPlugin({ connected }: { connected: boolean }) {
     getPairingCode: () => null,
     protocolRefusal: () => null,
     touchApproval: () => {},
-    getAuthorizingUser: () => TEST_AUTHORIZING_USER,
     isPluginConnected: () => everConnected,
-    hasRecentApproval: () => false,
   } as unknown as PluginBridge;
   const runtime: PluginBridgeRuntime = {
     bridge,
     writeAccess: createTestWriteAccess().writeAccess,
     readSavedScript: () => Promise.reject(new Error("no saved scripts in this test")),
-    hasEverConnected: () => everConnected,
+    pluginPresence: () => (everConnected ? "connected" : "absent"),
     onFirstConnect: (cb) => (everConnected ? cb() : firstConnect.push(cb)),
   };
   const server = createServer(

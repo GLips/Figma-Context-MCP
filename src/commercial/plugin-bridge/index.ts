@@ -17,7 +17,6 @@ import {
 } from "./image-requests.js";
 import { createCommentPinsCapability } from "./comment-pins.js";
 import { WS_PORT_BLOCK } from "@framelink/plugin/protocol";
-import { SESSION_IDENTITY } from "./approval.js";
 import { resolveStateDir } from "~/commercial/state-dir.js";
 import { WriteAccess } from "~/commercial/entitlement/write-access.js";
 import { FramelinkApiClient } from "~/commercial/entitlement/framelink-api.js";
@@ -28,11 +27,18 @@ import { WriteAccessStore } from "~/commercial/entitlement/write-access-store.js
 const WRITE_ACCESS_SYNC_TICK_MS = 10 * 60 * 1000;
 
 /**
- * The running WS relay plus the code-mode advertisement latch. The relay starts with the server in
- * BOTH transports (one loopback port from the block; negligible when unused), but the code-mode
- * tools are only advertised once a plugin proves the write path exists by connecting.
+ * Where a plugin stands for this process. `connected` is on the wire now; `expected` has connected
+ * in this process or recently used an approval on this (cwd, port) — so the write path exists even
+ * while it redials; `absent` has shown no sign of one.
+ */
+export type PluginPresence = "connected" | "expected" | "absent";
+
+/**
+ * The running WS relay plus the plugin's presence. The relay starts with the server in BOTH transports
+ * (one loopback port from the block; negligible when unused), but plugin-dependent tool advertisement
+ * waits for a plugin to be connected or expected (bindPluginAdvertisement).
  *
- * The latch never resets: once a plugin has connected, the tools stay advertised for the process
+ * The first-connect latch never resets: once a plugin has connected, it is expected for the process
  * lifetime. That is deliberately stronger than a disconnect grace period — the plugin's relay (ui.ts)
  * reconnects on a ~1s cadence, and a latch cannot flap on blips at all. Do not "fix" this by
  * un-advertising on disconnect: list-caching MCP clients would strand the agent mid-task.
@@ -45,10 +51,26 @@ export interface PluginBridgeRuntime {
   writeAccess: WriteAccess;
   /** Read figma_execute_code's scriptPath, contained under the asset root. */
   readSavedScript(scriptPath: string): Promise<string>;
-  /** True once a plugin has connected at least once in this process (latched — see above). */
-  hasEverConnected(): boolean;
+  pluginPresence(): PluginPresence;
   /** Run cb on the first plugin connection; runs immediately if one already happened. */
   onFirstConnect(cb: () => void): void;
+}
+
+/**
+ * Advertise what depends on a plugin according to its presence: now, and — on stdio, whose one server
+ * outlives the session — again when a plugin first connects. Stateless HTTP builds a server per
+ * request, which re-reads presence here; subscribing those short-lived servers would only accumulate
+ * dead closures until first connect.
+ */
+export function bindPluginAdvertisement(
+  runtime: PluginBridgeRuntime,
+  transport: "stdio" | "http",
+  advertise: (pluginExpected: boolean) => void,
+): void {
+  const expected = runtime.pluginPresence() !== "absent";
+  advertise(expected);
+  if (expected || transport !== "stdio") return;
+  runtime.onFirstConnect(() => advertise(true));
 }
 
 /**
@@ -98,14 +120,16 @@ export function startPluginBridge({
       },
     },
   );
+  const framelinkOrigin = new URL(framelinkApiUrl).origin;
+  // The Allower of the session this server holds, for the background syncs that follow it.
+  const heldAuthorizingUser = () => bridge.approvedSession()?.authorizingUser ?? null;
   const bridge = new PluginBridge(undefined, {
     events: {
-      onSessionApproved: (authorizingUser) => {
+      onSessionApproved: ({ authorizingUser }) => {
         if (authorizingUser)
           inBackground(writeAccess.syncWriteAccess(authorizingUser, { force: true }));
       },
-      onWriteAccessSignIn: () =>
-        inBackground(writeAccess.startDeviceSignIn(bridge.getAuthorizingUser())),
+      onWriteAccessSignIn: () => inBackground(writeAccess.startDeviceSignIn(heldAuthorizingUser())),
       onRunDocumentChanged: (runId) => writeAccess.recordLateDocumentChange(runId),
       onRunSettled: (runId) => writeAccess.settleLateRun(runId),
     },
@@ -145,10 +169,12 @@ export function startPluginBridge({
 
     // The version handshake is NOT fired here — PluginBridge runs it itself on every connection,
     // because the compatibility hold it feeds is only safe if a verdict always lands (bridge.ts).
-    sendSessionInfo(bridge, new URL(framelinkApiUrl).origin);
+    // Fire-and-forget: the plugin acks at once and records what to display and the token proving a
+    // prior Allow. It must NOT block on the human here — approval arrives later, via the panel.
+    bridge.request(bridge.sessionInfo(framelinkOrigin)).catch(() => {});
     // A reconnect (or a restart that reloaded an approval) is "connected" for revalidation purposes.
-    const authorizingUser = bridge.getAuthorizingUser();
-    if (authorizingUser) inBackground(writeAccess.syncWriteAccess(authorizingUser));
+    const user = heldAuthorizingUser();
+    if (user) inBackground(writeAccess.syncWriteAccess(user));
 
     if (pendingFirstConnect) {
       const callbacks = pendingFirstConnect;
@@ -158,9 +184,8 @@ export function startPluginBridge({
   });
 
   const writeAccessTick = setInterval(() => {
-    const authorizingUser = bridge.getAuthorizingUser();
-    if (authorizingUser && bridge.isPluginConnected())
-      inBackground(writeAccess.syncWriteAccess(authorizingUser));
+    const user = heldAuthorizingUser();
+    if (user && bridge.isPluginConnected()) inBackground(writeAccess.syncWriteAccess(user));
   }, WRITE_ACCESS_SYNC_TICK_MS);
   writeAccessTick.unref();
 
@@ -175,40 +200,15 @@ export function startPluginBridge({
       writeAccess.stop();
       bridge.stop();
     },
-    hasEverConnected: () => pendingFirstConnect === null,
+    pluginPresence: () => {
+      if (bridge.isPluginConnected()) return "connected";
+      return pendingFirstConnect === null || bridge.hasRecentApproval() ? "expected" : "absent";
+    },
     onFirstConnect: (cb) => {
       if (pendingFirstConnect) pendingFirstConnect.push(cb);
       else cb();
     },
   };
-}
-
-/**
- * Introduce this session to the plugin so the human can recognize and approve it: the
- * server identity (project path), the connection's pairing code (both shown in the arbiter
- * panel), and — once approved — the session token the sandbox handed us on Allow, echoed on
- * every reconnect so the sandbox re-keys sticky approval to it (null before the first Allow), and
- * the claim the plugin gave this session's last approval request, so an Allow given while it was
- * disconnected can be handed over now.
- * Fire-and-forget — the plugin acks immediately and records the fields; it must NOT block on
- * the human here (approval arrives later, out of band, via the panel), or this request would
- * hang to its 15s timeout. The plugin owns the approval decision; this just hands it what to
- * display and the token that proves a prior approval.
- */
-function sendSessionInfo(bridge: PluginBridge, framelinkOrigin: string): void {
-  const pairingCode = bridge.getPairingCode();
-  const sessionToken = bridge.getSessionToken();
-  const sessionClaim = bridge.getSessionClaim();
-  bridge
-    .request({
-      type: "SESSION_INFO",
-      identity: SESSION_IDENTITY,
-      pairingCode,
-      sessionToken,
-      sessionClaim,
-      framelinkOrigin,
-    })
-    .catch(() => {});
 }
 
 /** Background write-access work reports its own failures; it must never become an unhandled rejection. */

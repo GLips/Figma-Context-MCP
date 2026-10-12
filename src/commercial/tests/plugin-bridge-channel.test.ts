@@ -9,27 +9,8 @@ import { afterEach, expect, it, vi } from "vitest";
 import { PluginBridge, BridgeRequestError } from "~/commercial/plugin-bridge/bridge.js";
 import { ApprovalStore } from "~/commercial/plugin-bridge/approval-store.js";
 import type { FigmaService } from "~/services/figma.js";
+import { connectFakePlugin } from "./fixtures/fake-plugin-socket.js";
 
-class Socket {
-  readyState = 1;
-  frames: Array<Record<string, unknown>> = [];
-  forward?: (frame: Record<string, unknown>) => void;
-  send(raw: string) {
-    const frame = JSON.parse(raw);
-    this.frames.push(frame);
-    this.forward?.(frame);
-  }
-  terminate() {
-    this.readyState = 3;
-  }
-}
-function install(bridge: PluginBridge, socket: Socket) {
-  Reflect.set(bridge, "socket", socket);
-  Reflect.set(bridge, "compatibility", "compatible");
-}
-function receive(bridge: PluginBridge, socket: Socket, msg: Record<string, unknown>) {
-  Reflect.apply(Reflect.get(bridge, "handleMessage"), bridge, [socket, JSON.stringify(msg)]);
-}
 const bridges: PluginBridge[] = [];
 function create(options: ConstructorParameters<typeof PluginBridge>[1] = {}) {
   const bridge = new PluginBridge(
@@ -48,6 +29,7 @@ afterEach(() => {
 async function running(
   handler: (payload: unknown, context: { signal: AbortSignal }) => Promise<unknown>,
   options = {},
+  signal?: AbortSignal,
 ) {
   const bridge = create({
     capabilities: new Map([["test.only", handler]]),
@@ -55,15 +37,14 @@ async function running(
     runCeilingMs: 1000,
     ...options,
   });
-  const socket = new Socket();
-  install(bridge, socket);
+  const socket = await connectFakePlugin(bridge);
   const result = bridge
-    .request({ type: "EXECUTE_CODE", code: "x", preamble: "x", lateChangeWindowMs: 60_000 })
+    .request({ type: "EXECUTE_CODE", code: "x", preamble: "x", lateChangeWindowMs: 60_000 }, signal)
     .catch((e) => e);
   await Promise.resolve();
   const runId = socket.frames[0].id;
   const request = (id: string, capability = "test.only", payload: unknown = null) =>
-    receive(bridge, socket, { type: "CHANNEL_REQUEST", id, runId, capability, payload });
+    socket.receive({ type: "CHANNEL_REQUEST", id, runId, capability, payload });
   return { bridge, socket, runId, result, request };
 }
 
@@ -97,7 +78,7 @@ it("suspends until the last service settles, then rearms inactivity; limits conc
     error: { message: expect.stringContaining("in flight") },
   });
   // Run-state traffic must not accidentally rearm a suspended clock.
-  receive(h.bridge, h.socket, {
+  h.socket.receive({
     type: "RUN_STATE",
     runId: h.runId,
     phase: "running",
@@ -116,7 +97,7 @@ it("suspends until the last service settles, then rearms inactivity; limits conc
   });
   await vi.advanceTimersByTimeAsync(1);
   expect(h.socket.frames.at(-1)).toMatchObject({ type: "CANCEL", runId: h.runId });
-  receive(h.bridge, h.socket, {
+  h.socket.receive({
     type: "CANCEL_RESULT",
     runId: h.runId,
     disposition: "was-running",
@@ -137,7 +118,7 @@ it("never suspends the ceiling and refuses both late requests and late service r
   h.request("first");
   await vi.advanceTimersByTimeAsync(300);
   expect(h.socket.frames.at(-1)).toMatchObject({ type: "CANCEL", runId: h.runId });
-  receive(h.bridge, h.socket, {
+  h.socket.receive({
     type: "CANCEL_RESULT",
     runId: h.runId,
     disposition: "was-running",
@@ -187,9 +168,7 @@ it("accepts a deeply nested raw payload without reserializing the request", asyn
   const h = await running(handler);
   const raw = `{"type":"CHANNEL_REQUEST","id":"deep","runId":${JSON.stringify(h.runId)},"capability":"test.only","payload":${"[".repeat(10000)}0${"]".repeat(10000)}}`;
   expect(Buffer.byteLength(raw)).toBeLessThan(21000);
-  expect(() =>
-    Reflect.apply(Reflect.get(h.bridge, "handleMessage"), h.bridge, [h.socket, raw]),
-  ).not.toThrow();
+  expect(() => h.socket.receiveRaw(raw)).not.toThrow();
   await new Promise((resolve) => setImmediate(resolve));
   expect(handler).toHaveBeenCalledOnce();
   expect(h.socket.frames.at(-1)).toMatchObject({ id: "deep", ok: true, payload: "processed" });
@@ -197,19 +176,9 @@ it("accepts a deeply nested raw payload without reserializing the request", asyn
   await h.result;
 });
 
-it("contains malformed envelope and synchronous dispatch failures at the message boundary", async () => {
+it("contains malformed envelopes at the message boundary", async () => {
   const h = await running(async () => null);
-  for (const raw of ["null", "[]", "42", "{"]) {
-    expect(() =>
-      Reflect.apply(Reflect.get(h.bridge, "handleMessage"), h.bridge, [h.socket, raw]),
-    ).not.toThrow();
-  }
-  const dispatch = Reflect.get(h.bridge, "serveChannelRequest");
-  Reflect.set(h.bridge, "serveChannelRequest", () => {
-    throw new RangeError("validation failure");
-  });
-  expect(() => h.request("bad")).not.toThrow();
-  Reflect.set(h.bridge, "serveChannelRequest", dispatch);
+  for (const raw of ["null", "[]", "42", "{"]) expect(() => h.socket.receiveRaw(raw)).not.toThrow();
   h.request("good");
   await new Promise((resolve) => setImmediate(resolve));
   expect(h.socket.frames.at(-1)).toMatchObject({ id: "good", ok: true });
@@ -218,7 +187,7 @@ it("contains malformed envelope and synchronous dispatch failures at the message
 });
 
 it.each(["cancel", "complete", "shutdown"])(
-  "%s aborts handler work and retains accounting until cleanup settles",
+  "%s aborts handler work and withholds its late result",
   async (end) => {
     let release!: () => void;
     const cleanup = new Promise<void>((resolve) => {
@@ -226,34 +195,35 @@ it.each(["cancel", "complete", "shutdown"])(
     });
     let signalSeen: AbortSignal | undefined;
     let stopped = false;
+    const caller = new AbortController();
     // The delayed cleanup models work that cannot immediately release its resources.
-    const h = await running(async (_payload, { signal }) => {
-      signalSeen = signal;
-      await new Promise<void>((resolve) =>
-        signal.addEventListener(
-          "abort",
-          () => {
-            stopped = true;
-            resolve();
-          },
-          { once: true },
-        ),
-      );
-      await cleanup;
-      return "late";
-    });
+    const h = await running(
+      async (_payload, { signal }) => {
+        signalSeen = signal;
+        await new Promise<void>((resolve) =>
+          signal.addEventListener(
+            "abort",
+            () => {
+              stopped = true;
+              resolve();
+            },
+            { once: true },
+          ),
+        );
+        await cleanup;
+        return "late";
+      },
+      {},
+      caller.signal,
+    );
     h.request("work");
     await new Promise((resolve) => setImmediate(resolve));
     expect(signalSeen?.aborted).toBe(false);
-    if (end === "complete")
-      receive(h.bridge, h.socket, { type: "EXECUTE_CODE_RESULT", id: h.runId });
+    if (end === "complete") h.socket.receive({ type: "EXECUTE_CODE_RESULT", id: h.runId });
     else if (end === "shutdown") h.bridge.stop();
     else {
-      Reflect.apply(Reflect.get(h.bridge, "cancelPending"), h.bridge, [
-        h.runId,
-        "caller cancelled",
-      ]);
-      receive(h.bridge, h.socket, {
+      caller.abort(new Error("caller cancelled"));
+      h.socket.receive({
         type: "CANCEL_RESULT",
         runId: h.runId,
         disposition: "was-running",
@@ -262,11 +232,8 @@ it.each(["cancel", "complete", "shutdown"])(
     await h.result;
     expect(stopped).toBe(true);
     expect(signalSeen?.aborted).toBe(true);
-    const accounting = Reflect.get(h.bridge, "inFlightServices") as Map<string, number>;
-    expect(accounting.get(h.runId as string)).toBe(1);
     release();
     await new Promise((resolve) => setImmediate(resolve));
-    expect(accounting.has(h.runId as string)).toBe(false);
     expect(h.socket.frames.some((f) => f.id === "work" && f.ok === true)).toBe(false);
   },
 );
@@ -285,8 +252,7 @@ it.each([false, true])(
       throw asError ? Object.assign(new Error(failure.message), failure) : failure;
     });
     const bridge = create({ capabilities: new Map([["test.future.v19", handler]]) });
-    const socket = new Socket();
-    install(bridge, socket);
+    const socket = await connectFakePlugin(bridge);
     // The page and change-event registration the host meters every run by (document-changes.ts).
     const page = { id: "0:1", name: "test", on() {}, off() {} };
     // Settles on the Allow handover itself — the approval is stored asynchronously, so waiting a
@@ -306,7 +272,7 @@ it.each([false, true])(
         onmessage: (_msg: Record<string, unknown>) => {},
         postMessage: (msg: { to: string; frame?: Record<string, unknown> }) => {
           if (msg.to !== "server" || !msg.frame) return;
-          receive(bridge, socket, msg.frame);
+          socket.receive(msg.frame);
           if (msg.frame.type === "SESSION_TOKEN") handedOver();
         },
       },
@@ -329,12 +295,12 @@ it.each([false, true])(
         clearTimeout,
       }),
     );
-    // The relay's two envelopes: server frames (after a JSON round trip in Socket.send) and panel input.
-    socket.forward = (frame) => figma.ui.onmessage({ from: "server", connKey: 1, frame });
+    // The relay's two envelopes: server frames (after a JSON round trip in the fake socket) and panel input.
+    socket.onFrame = (frame) => figma.ui.onmessage({ from: "server", connKey: 1, frame });
     const panel = (control: Record<string, unknown>) =>
       figma.ui.onmessage({ from: "panel", control: { ...control, connKey: 1 } });
     panel({ type: "WS_CONNECTED" });
-    socket.forward({
+    socket.onFrame({
       type: "SESSION_INFO",
       id: "session",
       identity: "test",
@@ -359,14 +325,13 @@ it.each([false, true])(
   },
 );
 
-it("rejects oversized raw frames before JSON.parse, including whitespace lost by reserialization", () => {
+it("rejects oversized raw frames before JSON.parse, including whitespace lost by reserialization", async () => {
   const bridge = create();
-  const socket = new Socket();
-  install(bridge, socket);
+  const socket = await connectFakePlugin(bridge);
   const raw = '{"type":"CHANNEL_REQUEST"}' + " ".repeat(100 * 1024 * 1024);
   const parse = vi.spyOn(JSON, "parse");
   try {
-    Reflect.apply(Reflect.get(bridge, "handleMessage"), bridge, [socket, raw]);
+    socket.receiveRaw(raw);
     expect(parse).not.toHaveBeenCalled();
   } finally {
     parse.mockRestore();
@@ -494,8 +459,7 @@ it("hands each channel request the credentials of the request that started its r
   const bridge = create({
     capabilities: new Map([["test.who", async (_payload, { run }) => void seen.push(run.figma)]]),
   });
-  const socket = new Socket();
-  install(bridge, socket);
+  const socket = await connectFakePlugin(bridge);
   const alice = { user: "alice" } as unknown as FigmaService;
   const bob = { user: "bob" } as unknown as FigmaService;
   const runs = [alice, bob].map((figma) =>
@@ -514,7 +478,7 @@ it("hands each channel request the credentials of the request that started its r
   await Promise.resolve();
   const [aliceRun, bobRun] = socket.frames.map((frame) => frame.id);
   for (const runId of [bobRun, aliceRun])
-    receive(bridge, socket, {
+    socket.receive({
       type: "CHANNEL_REQUEST",
       id: `q-${runId}`,
       runId,

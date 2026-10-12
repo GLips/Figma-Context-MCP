@@ -30,7 +30,6 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { PluginBridge } from "../src/commercial/plugin-bridge/bridge.ts";
 import { ApprovalStore } from "../src/commercial/plugin-bridge/approval-store.ts";
-import { SESSION_IDENTITY } from "../src/commercial/plugin-bridge/approval.ts";
 import { PROTOCOL_VERSION, WS_PORT_BLOCK } from "../plugin/src/protocol.ts";
 import { buildSandboxPreamble } from "../plugin/src/preamble/index.mjs";
 import { startLoopbackPlugin } from "../src/commercial/tests/fixtures/loopback-plugin.ts";
@@ -58,14 +57,7 @@ const execute = (bridge, fields = {}) =>
   });
 // What index.ts sends every connection: who this server is, and the token proving a prior Allow.
 const introduce = (bridge) =>
-  bridge.request({
-    type: "SESSION_INFO",
-    identity: SESSION_IDENTITY,
-    pairingCode: bridge.getPairingCode(),
-    sessionToken: bridge.getSessionToken(),
-    sessionClaim: bridge.getSessionClaim(),
-    framelinkOrigin: "https://app.framelink.ai",
-  });
+  bridge.request(bridge.sessionInfo("https://app.framelink.ai"));
 const LOOPBACK_USER = { figmaUserId: "loopback-user", name: "Loopback Human" };
 
 // Every bridge gets its OWN empty persistence dir, so one bridge's persisted token can't be reloaded
@@ -134,7 +126,7 @@ const approvedEvents = [];
 let signInRequests = 0;
 const bridge = new PluginBridge(isolatedStore(), {
   events: {
-    onSessionApproved: (authorizingUser) => approvedEvents.push(authorizingUser),
+    onSessionApproved: (session) => approvedEvents.push(session.authorizingUser),
     onWriteAccessSignIn: () => signInRequests++,
   },
 });
@@ -157,7 +149,7 @@ console.log("✅ Version handshake round-trips {pluginVersion, protocolVersion} 
 // (PENDING_APPROVAL) — never run, never a hard error, so the agent can relay the code and retry.
 const pairingCode = bridge.getPairingCode();
 assert.match(String(pairingCode), /^\d{4}$/, "a 4-digit pairing code is minted per connection");
-assert.equal(bridge.getSessionToken(), null, "no session token before the first Allow");
+assert.equal(bridge.approvedSession(), null, "no session token before the first Allow");
 await introduce(bridge);
 // A request the plugin can't read is refused BEFORE the consent gate — asking a human to approve a
 // doomed write would be asking consent for nothing. An envelope ERROR rejects: it can never be
@@ -171,9 +163,9 @@ assert.equal((await execute(bridge)).type, "PENDING_APPROVAL", "a write before a
 console.log(`✅ Pre-approval write returns PENDING_APPROVAL (code ${pairingCode} minted)`);
 
 await plugin.allow();
-await until(() => bridge.getSessionToken() !== null, "the handed-over token");
-assert.match(String(bridge.getSessionToken()), /^[0-9a-z]{16,64}$/, "the token is persisted");
-assert.deepEqual(bridge.getAuthorizingUser(), LOOPBACK_USER, "writes are attributed to the Allower");
+await until(() => bridge.approvedSession() !== null, "the handed-over token");
+assert.match(String(bridge.approvedSession()?.token), /^[0-9a-z]{16,64}$/, "the token is persisted");
+assert.deepEqual(bridge.approvedSession()?.authorizingUser, LOOPBACK_USER, "writes are attributed to the Allower");
 assert.deepEqual(approvedEvents, [LOOPBACK_USER], "each Allow fires onSessionApproved");
 assert.equal((await execute(bridge)).result, "ok", "the approved write runs");
 console.log("✅ After Allow, the same write runs, attributed to the human who clicked it");
@@ -259,7 +251,7 @@ squatBridge.start([PORT_SQUAT]);
 await wait(150);
 const squatted = await realPlugin(PORT_SQUAT, { storage: sharedPluginStorage });
 await until(() => squatBridge.protocolCompatibility() === "compatible", "the squatter's verdict");
-assert.equal(squatBridge.getSessionToken(), null, "a squatter server holds no session token");
+assert.equal(squatBridge.approvedSession(), null, "a squatter server holds no session token");
 await introduce(squatBridge);
 assert.equal(
   (await execute(squatBridge)).type,
@@ -284,8 +276,8 @@ await wait(150);
 const r1 = await realPlugin(RESTART_PORT, { storage: restartStorage });
 await introduce(bridgeR1);
 await r1.allow();
-await until(() => bridgeR1.getSessionToken() !== null, "the persisted token");
-const persistedToken = bridgeR1.getSessionToken();
+await until(() => bridgeR1.approvedSession() !== null, "the persisted token");
+const persistedToken = bridgeR1.approvedSession()?.token;
 r1.close();
 bridgeR1.stop();
 await wait(150);
@@ -293,8 +285,8 @@ await wait(150);
 const bridgeR2 = new PluginBridge(sharedStore());
 bridgeR2.start([RESTART_PORT]);
 await wait(150);
-assert.equal(bridgeR2.getSessionToken(), persistedToken, "a restart reloads the persisted token");
-assert.deepEqual(bridgeR2.getAuthorizingUser(), LOOPBACK_USER, "and who it's attributed to");
+assert.equal(bridgeR2.approvedSession()?.token, persistedToken, "a restart reloads the persisted token");
+assert.deepEqual(bridgeR2.approvedSession()?.authorizingUser, LOOPBACK_USER, "and who it's attributed to");
 const r2 = await realPlugin(RESTART_PORT, { storage: restartStorage });
 await until(() => bridgeR2.protocolCompatibility() === "compatible", "the verdict after restart");
 await introduce(bridgeR2);
@@ -305,19 +297,19 @@ console.log("✅ Durable approval survives a same-port server restart (persisted
 const bridgeSibling = new PluginBridge(sharedStore());
 bridgeSibling.start([19883]);
 await wait(150);
-assert.equal(bridgeSibling.getSessionToken(), null, "a same-cwd server on another port inherits nothing");
+assert.equal(bridgeSibling.approvedSession(), null, "a same-cwd server on another port inherits nothing");
 console.log("✅ A concurrent same-cwd sibling on another port does not inherit approval (keyed by cwd+port)");
 bridgeSibling.stop();
 
 r2.revoke();
-await until(() => bridgeR2.getSessionToken() === null, "the revoke");
+await until(() => bridgeR2.approvedSession() === null, "the revoke");
 r2.close();
 bridgeR2.stop();
 await wait(150);
 const bridgeR3 = new PluginBridge(sharedStore());
 bridgeR3.start([RESTART_PORT]);
 await wait(150);
-assert.equal(bridgeR3.getSessionToken(), null, "after Revoke, a restart reloads nothing");
+assert.equal(bridgeR3.approvedSession(), null, "after Revoke, a restart reloads nothing");
 console.log("✅ Revoke deletes the persisted token so it can't silently re-approve on the next restart");
 bridgeR3.stop();
 
@@ -333,8 +325,8 @@ await wait(150);
 const s1 = await realPlugin(SLIP_PORT);
 await introduce(bridgeS1);
 await s1.allow();
-await until(() => bridgeS1.getSessionToken() !== null, "the pre-restart approval");
-const slipToken = bridgeS1.getSessionToken();
+await until(() => bridgeS1.approvedSession() !== null, "the pre-restart approval");
+const slipToken = bridgeS1.approvedSession()?.token;
 s1.close();
 bridgeS1.stop();
 await wait(150);
@@ -352,7 +344,7 @@ assert.equal(
 );
 await new Promise((res) => predecessor.close(res));
 await wait(400);
-assert.equal(bridgeS2.getSessionToken(), slipToken, "it reclaims its port and reloads its approval");
+assert.equal(bridgeS2.approvedSession()?.token, slipToken, "it reclaims its port and reloads its approval");
 console.log("✅ A restart racing its dying predecessor reclaims its own port — no slip, no fresh Allow");
 bridgeS2.stop();
 await wait(150);
@@ -387,7 +379,7 @@ await wait(150);
 const d1 = await realPlugin(STUCK_PORT);
 await introduce(bridgeD1);
 await d1.allow();
-await until(() => bridgeD1.getSessionToken() !== null, "precondition: the port is approved");
+await until(() => bridgeD1.approvedSession() !== null, "precondition: the port is approved");
 d1.close();
 bridgeD1.stop();
 await wait(150);
@@ -399,7 +391,7 @@ bridgeD2.start([STUCK_PORT, STUCK_PORT + 1]);
 await wait(700);
 const gaveUp = new WebSocket(`ws://127.0.0.1:${STUCK_PORT + 1}`, { origin: "null" });
 assert.equal(await refusedOrOpened(gaveUp), "opened", "a held port is abandoned at the deadline");
-assert.equal(bridgeD2.getSessionToken(), null, "with no approval for the port it settled on");
+assert.equal(bridgeD2.approvedSession(), null, "with no approval for the port it settled on");
 console.log("✅ A port held past the reclaim deadline is abandoned for the next one (startup is bounded)");
 gaveUp.close();
 bridgeD2.stop();
@@ -412,7 +404,7 @@ await wait(150);
 bridgeD3.stop();
 await new Promise((res) => stuck.close(res));
 await wait(400);
-assert.equal(bridgeD3.getSessionToken(), null, "a stopped bridge does not reload an approval");
+assert.equal(bridgeD3.approvedSession(), null, "a stopped bridge does not reload an approval");
 assert.equal(
   await refusedOrOpened(new WebSocket(`ws://127.0.0.1:${STUCK_PORT}`, { origin: "null" })),
   "refused",

@@ -2,60 +2,48 @@
  * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
-import { channelFailure } from "./channel-failure.js";
-import { RequestTrace } from "./request-trace.js";
-import { randomUUID } from "node:crypto";
-import { WebSocketServer, WebSocket } from "ws";
-import { mintPairingCode, SESSION_IDENTITY } from "./approval.js";
-import type { FigmaService } from "~/services/figma.js";
-import { ApprovalStore } from "./approval-store.js";
-import { pluginDisconnectedNotSubmittedText } from "./blocked-call-guidance.js";
-import { refuseProtocolSkew, type ProtocolCompatibility } from "./version.js";
+import type { WebSocket } from "ws";
 import { Logger } from "~/utils/logger.js";
+import { ApprovalStore } from "./approval-store.js";
+import { ApprovalSession, type ApprovedSession } from "./approval-session.js";
+import { pluginDisconnectedNotSubmittedText } from "./blocked-call-guidance.js";
+import { ChannelServer, type CapabilityHandler } from "./channel-server.js";
+import { RelayConnection } from "./relay-connection.js";
+import { MAX_CHANNEL_BYTES, RECLAIM_WINDOW_MS, RelayListener } from "./relay-listener.js";
+import { RequestTrace } from "./request-trace.js";
+import {
+  BridgeRequestError,
+  DEFAULT_RUN_CEILING_MS,
+  DEFAULT_TIMEOUT_MS,
+  NO_RUN_CONTEXT,
+  RunLedger,
+  type ChannelRunContext,
+} from "./run-ledger.js";
+import { refuseProtocolSkew, type ProtocolCompatibility } from "./version.js";
 import {
   HANDSHAKE_REQUEST_TYPES,
   PROTOCOL_VERSION,
-  RUN_INACTIVITY_DEADLINE_MS,
-  RUN_REQUEST_TYPES,
   parseExecuteCodeResult,
   parsePluginEvent,
-  parseReply,
-  type AuthorizingUser,
-  type CancelDisposition,
+  type PendingApprovalReply,
   type PluginEvent,
+  type PluginEventType,
   type PluginReply,
   type ReplyFor,
-  type RunPhase,
   type ServerRequest,
   type ServerRequestType,
 } from "@framelink/plugin/protocol";
 
-/**
- * Server-owned facts about the run a channel request serves, fixed when the run was submitted and
- * never read from the plugin — a payload could name anyone. `figma` is the Figma client of the request
- * that started the run, so a mid-run fetch spends that caller's token; on a multi-user HTTP server the
- * process-wide config belongs to nobody in particular. Null when no such request exists (the CLI).
- */
-export interface ChannelRunContext {
-  figma: FigmaService | null;
-  /** Upload handles the submitted code names literally — the only ones this run may redeem. */
-  uploadHandles: ReadonlySet<string>;
-}
+export { BridgeRequestError, type ChannelRunContext, type RequestPhase } from "./run-ledger.js";
+export type { CapabilityHandler } from "./channel-server.js";
 
-const NO_RUN_CONTEXT: ChannelRunContext = { figma: null, uploadHandles: new Set() };
-
-/** Opaque JSON payloads. Only explicitly registered names can be called. */
-export type CapabilityHandler = (
-  payload: unknown,
-  context: { signal: AbortSignal; run: ChannelRunContext },
-) => Promise<unknown>;
 /**
- * Unsolicited plugin events the bridge relays but doesn't own. The first two arrive only from the
- * current holder once its version handshake passes. `onSessionApproved` fires on each Allow
- * handover — the moment write access is checked.
+ * Unsolicited plugin events the bridge relays but doesn't own. All arrive only from the current
+ * holder, and the first two only once its version handshake passes. `onSessionApproved` fires on each
+ * Allow handover — the moment write access is checked.
  */
 export interface PluginBridgeEvents {
-  onSessionApproved?: (authorizingUser: AuthorizingUser | null) => void;
+  onSessionApproved?: (session: ApprovedSession) => void;
   /** The human clicked the panel's sign-in button. */
   onWriteAccessSignIn?: () => void;
   /**
@@ -68,758 +56,309 @@ export interface PluginBridgeEvents {
   onRunSettled?: (runId: string) => void;
 }
 
-// Match the WS inbound ceiling, including the envelope. Image-specific caps remain in its adapter.
-const MAX_CHANNEL_BYTES = 100 * 1024 * 1024;
-
-export type RequestPhase = "submitted" | RunPhase;
-
-export class BridgeRequestError extends Error {
-  constructor(
-    message: string,
-    // What the caller may DO about it, not where it happened: `not-submitted` means nothing ran and
-    // the call can be retried as-is; `unconfirmed` means the document may have been touched.
-    readonly outcome: "not-submitted" | "unconfirmed",
-    readonly phase?: RequestPhase,
-  ) {
-    super(message);
-    this.name = "BridgeRequestError";
-  }
-}
-
-interface Pending {
-  servicesAbort: AbortController;
-  socket: WebSocket;
-  phase: RequestPhase;
-  startedAt: number;
-  cleanup: () => void;
-  resolve: (value: PluginReply) => void;
-  reject: (err: Error) => void;
-  /** The inactivity deadline (see DEFAULT_TIMEOUT_MS) — suspended and re-armed by run traffic, and
-   * null while the run is QUEUED, which is the one phase that isn't silence (armInactivityDeadline). */
-  timer: ReturnType<typeof setTimeout> | null;
-  /** The absolute per-run ceiling (armed once, never reset by traffic — see DEFAULT_RUN_CEILING_MS). */
-  ceilingTimer: ReturnType<typeof setTimeout>;
-  /** The request's payload type: names what stalled in the timeout rejection, and gates which
-   * pending ids the reverse direction will serve (only EXECUTE_CODE runs — see serveChannelRequest). */
-  payloadType: ServerRequestType;
-  runContext: ChannelRunContext;
-}
-
-// The per-request INACTIVITY deadline, not a hard cap: run-scoped traffic — servicing the run's
-// mid-run channel request — suspends and re-arms it (serveChannelRequest), so a
-// run only dies when neither side is doing its work. It measures SILENCE, which is why a queued run
-// has none at all (armInactivityDeadline). Injectable via the constructor so the contract harness
-// can drive timeouts without waiting out 15 real seconds. The run mirrors the default on its own
-// clock, to refuse verbs while its CANCEL is still queued behind a blocked thread (server-deadline.ts).
-const DEFAULT_TIMEOUT_MS = RUN_INACTIVITY_DEADLINE_MS;
-
-/**
- * How long ago the plugin entered the phase a RUN_STATE announces, from its `at` stamp. The frame
- * leaves the plugin only once its thread goes idle, so a run that opens with seconds of synchronous
- * work announces "running" seconds late; counting from arrival would let it outlive the deadline the
- * run itself counts from that stamp (server-deadline.ts). Comparing the two clocks is sound because
- * the relay listens on loopback only, so both are this machine's. Clamped, so a skewed stamp can
- * neither push the deadline past the frame's arrival nor spend more than all of it.
- */
-function phaseAge(at: number, timeoutMs: number): number {
-  return Math.min(Math.max(Date.now() - at, 0), timeoutMs);
-}
+/** The plugin's answer to an approval poll, with the session a GRANTED admits read at that instant. */
+export type ApprovalStatus =
+  | { type: "APPROVAL_GRANTED"; session: ApprovedSession | null }
+  | PendingApprovalReply
+  | { type: "APPROVAL_REJECTED" };
 
 // The only requests exempt from the compatibility hold in `request()`; see the protocol's list.
 const HANDSHAKE_REQUESTS = new Set<ServerRequestType>(HANDSHAKE_REQUEST_TYPES);
 
-// The absolute wall-clock ceiling on one request, cancellation included — the backstop the
-// inactivity deadline deliberately isn't. Without it, a cold-cache many-image render (or an agent
-// looping renders) could legitimately re-arm the inactivity deadline for minutes while the MCP
-// client abandoned the call at its own ~60s default — the agent told "failed" about a canvas still
-// being written, exactly the dishonesty this protocol exists to remove. Sized to fit the client's
-// 60s budget in the common (already-approved) case; a run that genuinely needs longer should split
-// its work.
-const DEFAULT_RUN_CEILING_MS = 45_000;
-
-// How long the caller's rejection waits for the plugin's CANCEL_RESULT before falling back to the
-// hedged "completion is unconfirmed" text. The plugin answers from state it already holds — no canvas
-// work, no await — so the honest cost is one postMessage hop plus one socket hop; a second is orders
-// of magnitude more than that, and invisible beside the deadline that just expired. What actually
-// spends it is a plugin that CAN'T answer (socket dying, main thread wedged), which is precisely the
-// case where the hedge is the true statement.
-const CANCEL_ANSWER_MS = 1_000;
-
-// Only runs can have their cancellation answered. Everything else (handshake, approval polling)
-// never reaches the document, so its cancellation rejects on the spot rather than paying a round
-// trip to be told `unknown`.
-const RUN_REQUESTS = new Set<ServerRequestType>(RUN_REQUEST_TYPES);
-
-// How many channel services one run may have in flight. Excess requests are refused, not queued,
-// to bound work from a runaway or hostile holder. The run ceiling bounds the total service window.
-const MAX_INFLIGHT_SERVICES_PER_RUN = 4;
-
-// How often the server pings the holder to prove the socket is still alive. A half-open
-// socket (Figma crash / laptop sleep sends no TCP FIN, so `close` never fires and the
-// slot stays occupied) is reaped within ~2 ticks. Kept comfortably above the relay's 1s
-// reconnect cadence so the live plugin reclaims the freed slot on its very next retry.
-const HEARTBEAT_INTERVAL_MS = 10_000;
-
-// How long a starting server keeps re-probing a busy port that THIS project holds a persisted approval
-// for, before advancing. Durable approval keys on (cwd, PORT), so a restart reloads its token only if
-// it reclaims its own port, and a dev-watch save-restart is a photo finish (the predecessor frees the
-// port ~145ms after SIGTERM, the successor binds ~280ms later). Advancing past it lands on an empty
-// approval slot, and the human is re-prompted after a save they didn't think was a restart.
-//
-// The gate knows only "this project was approved on this port", which can't tell a dying predecessor
-// from a live sibling. So a SECOND same-cwd server pays the full window once before advancing:
-// accepted, against re-prompting on every save. One deadline for the whole probe, not per port.
-const RECLAIM_WINDOW_MS = 2_000;
-const RECLAIM_RETRY_MS = 100;
-
-// How recently a persisted approval must have been USED for this server to treat a plugin as probably
-// around — the window `hasRecentApproval` measures against. Sized to span the quiet gaps inside one
-// working session (an agent writes, the human looks at Figma and thinks, then asks for a tweak) while
-// expiring long before "closed Figma and moved on". Deliberately unrelated to the store's 24h TTL:
-// that one answers "must the human re-approve?", this one answers "is a plugin plausibly there?".
-const RECENT_APPROVAL_MS = 30 * 60 * 1000;
-
 /**
- * Gate connections by `Origin`. A Figma plugin UI runs in a sandboxed iframe, so its
- * WebSocket handshake carries `Origin: null` (or no Origin header for non-browser
- * clients). We accept ONLY that and refuse everything else — any real `http(s)://…`
- * origin is a script running on an identifiable web page, which must not reach the
- * eval socket. A real `figma.com` origin is included in that refusal on purpose: it
- * comes from a non-sandboxed script on a figma.com *page* (web-app context, injected
- * script, figma-scoped extension), exactly the browser-page category we shut out — the
- * plugin itself never presents it.
- *
- * Deliberately WEAK, by design — this is defense-in-depth, NOT authorization:
- *  - A determined web page CAN still present `Origin: null` by nesting its WebSocket in
- *    its own `sandbox="allow-scripts"` iframe (opaque origin). So this only stops the
- *    naive same-origin page, not a crafted one.
- *  - A non-browser local process can send any Origin (or none) it likes.
- * The in-Figma human-consent gate is the real trust boundary. This check just removes the cheapest drive-by (a visited page's direct
- * `new WebSocket`) so consent isn't the only thing standing between a page and the socket.
+ * Who may send a plugin event. `any` connection — diagnostics only, never settling anything; the
+ * current `holder`; or a holder whose version handshake passed (`compatible-holder`), for anything
+ * that changes durable approval state or starts network work. `verifyClient` admits any Origin-less
+ * or `null`-origin client into a free slot, so "is the current socket" alone would let a page or local
+ * process plant or wipe the persisted approval. Any peer that echoes GET_VERSION passes, so this raises
+ * the bar rather than authenticating; the plugin's approved-token check stays the real gate.
  */
-function isAllowedOrigin(origin: string | undefined): boolean {
-  return !origin || origin === "null";
-}
+type Acceptance = "any" | "holder" | "compatible-holder";
+type EventRoute<K extends PluginEventType> = {
+  from: Acceptance;
+  handle: (connection: RelayConnection, event: Extract<PluginEvent, { type: K }>) => void;
+};
+type EventRoutes = { [K in PluginEventType]: EventRoute<K> };
 
 /**
- * Owns the single WebSocket connection to the Figma plugin and the request/response
- * correlation. `request()` is the only REQUEST path: it stamps every outbound request
- * with a fresh id and resolves when a reply carrying that same id arrives. Replies
- * without a matching pending id are dropped. This is where "every WS request carries a
- * correlation id" is enforced — callers never deal with ids themselves. Two server→plugin
- * frames live OUTSIDE it by design: the id-less CANCEL on timeout (whose own answer,
- * CANCEL_RESULT, comes back run-scoped rather than correlated), and CHANNEL_RESPONSE, which
- * answers the PLUGIN's ids (the reverse direction, serveChannelRequest).
+ * The relay to the Figma plugin: one connection slot, and the composition of its parts — the
+ * listener (network edge), the run ledger (requests and their clocks), the channel server (the
+ * reverse direction) and the approval session (what this server presents and persists).
  *
- * It is also where the version gate lives: every connection runs its own GET_VERSION handshake, and
- * a request that isn't part of that handshake is held until the verdict lands, then sent or refused
- * (see HANDSHAKE_REQUEST_TYPES and `sendOnceCompatible`).
+ * The slot is the one place holder identity lives: a frame is honored per its event's Acceptance,
+ * and a socket that no longer holds the slot is ignored. Every connection runs its own GET_VERSION
+ * handshake, and a request that isn't part of it is held until the verdict lands, then sent or refused.
  */
 export class PluginBridge {
-  private socket: WebSocket | null = null;
-  private readonly trace = new RequestTrace((event) =>
-    Logger.log("Bridge trace " + JSON.stringify(event)),
-  );
-  private pending = new Map<string, Pending>();
-  // Runs whose CANCEL is on the wire with the caller's rejection held for one round trip, keyed by
-  // run id. They are no longer `pending` — the run is dead to the rest of the bridge the instant it
-  // is cancelled; all that is outstanding is which SENTENCE the caller gets (see cancelPending).
-  private readonly cancelsAwaitingAnswer = new Map<
-    string,
-    { socket: WebSocket; settle: (disposition: CancelDisposition) => void }
-  >();
+  private current: RelayConnection | null = null;
   private disconnectedAt: number | null = null;
-  // Where the CURRENT connection stands with the version handshake, and the refusal text when it came
-  // back mismatched. Connection-scoped on purpose: reset to `checking` the moment a socket is
-  // installed, so a newer plugin reconnecting onto the freed slot starts clean instead of inheriting
-  // its predecessor's verdict.
-  //
-  // `checking` HOLDS canvas requests rather than letting them through — that hold is the whole point.
-  // GET_VERSION is asked on connect but answered a round-trip later, and a tool call can land inside
-  // that window; sending it there is how a plugin below PROTOCOL_VERSION receives agent code and
-  // runs it instead of being refused.
-  private compatibility: ProtocolCompatibility = "checking";
-  private skewRefusal: string | null = null;
-  // Resolves when the current connection's verdict lands, or when that connection is abandoned with
-  // the verdict still unknown. Re-created per connection, and the INVARIANT that makes the hold safe
-  // is that every path which abandons a connection settles this first: disconnect (`close`), reclaim
-  // (settled before the swap in the connection handler), and `stop()`. A holder is suspended on one
-  // specific promise object, so dropping a resolver without calling it strands that holder for good —
-  // no timeout covers it, because the request was never sent.
-  private verdictSettled: Promise<void> = Promise.resolve();
-  private settleVerdict: () => void = () => {};
-  // The pairing code for the CURRENT connection — minted fresh on connect, read by the
-  // SESSION_INFO handshake (shown in the panel) and by the tool handlers (shown in the
-  // pending-approval result). Connection-scoped like the compatibility verdict: a fresh socket gets a
-  // fresh code, and disconnect clears it so the next connection can't surface a stale one.
-  private pairingCode: string | null = null;
-  // Whether the current holder has answered the server over the frozen envelope (any reply
-  // matching a pending request). True ⟺ it's a real plugin speaking the protocol — a current
-  // one, or a stale one that envelope-ERRORs — NOT a dead/silent squatter. This gates
-  // slot-reclaim: an established (handshaked) holder is never displaced by a second
-  // connection (the 1.1 anti-hijack rule); a non-handshaked one is reclaimable.
-  private handshaked = false;
-  // Heartbeat liveness for the current socket. Each ping sets it false; the holder's pong
-  // sets it true. A holder that misses a ping is half-open (dead but no FIN) and gets reaped.
-  private socketAlive = false;
-  // The session token the sandbox minted on Allow and handed back over the WS. It SURVIVES
-  // reconnects — deliberately NOT part of the connection-scoped cluster above, all of which resets on
-  // connect/disconnect. It is this server's proof of a prior approval: echoed in every SESSION_INFO so
-  // the sandbox re-keys sticky approval to it. A same-path squatter is a different process whose token
-  // starts null, so it echoes none and the sandbox re-prompts (approval keys on the token, not the
-  // forgeable identity).
-  //
-  // Held in memory AND persisted through `store`, reloaded once the port binds, so a server-process
-  // restart doesn't re-prompt the human either (see approval-store.ts).
-  private sessionToken: string | null = null;
-  // Who clicked Allow for `sessionToken` — persisted and cleared with it, never independently.
-  private authorizingUser: AuthorizingUser | null = null;
-  // The plugin's claim on this session's pending approval request: minted by the plugin and sent only
-  // to the socket that asked, so presenting it on a later connection is what identifies "the same
-  // session" to a plugin holding an Allow given while that session was away. Survives reconnects and,
-  // through `store`, restarts — like `sessionToken` and for the same reason. Spent by the handover
-  // (SESSION_TOKEN) and never echoed anywhere but SESSION_INFO. Leaks only as the token does: to a
-  // process that reads the 0600 file or dials this server and reads its SESSION_INFO.
-  private sessionClaim: string | null = null;
-  // The port this server won its probe-bind on, or null before `listening`. Persistence keys on it —
-  // (cwd, port) — so concurrent same-cwd servers never share an approval file (see approval-store.ts).
-  private boundPort: number | null = null;
-  // `lastUsedAt` of the approval this server found when it bound its port, or null if it found none.
-  // Fixed at `listening` and never refreshed: it answers "when was code mode last used HERE, before
-  // this process existed", and once a plugin connects the connection latch answers everything better
-  // (see hasRecentApproval).
-  private reloadedApprovalLastUsedAt: number | null = null;
-  // The winning WebSocketServer, retained only so `stop()` can close it (free the port). The relay is
-  // otherwise process-lifetime; stop() exists for tests that model a restart by freeing then rebinding.
-  private wss: WebSocketServer | null = null;
-  // Wall-clock cutoff for waiting on a busy-but-ours port during the initial probe (see
-  // RECLAIM_WINDOW_MS). One budget for the whole probe, stamped in `start()`; 0 means "never wait",
-  // which is what a bridge that was never started reads as.
-  private reclaimDeadline = 0;
-  // The pending re-probe of a busy-but-ours port, held so `stop()` can cancel it. Without the handle a
-  // stopped bridge would come back to life when the timer fired — binding the port it was just told to
-  // release and reloading the persisted token onto an object the caller believes is dead.
-  private reclaimTimer: ReturnType<typeof setTimeout> | null = null;
-  // The port this probe has already announced a reclaim wait for, so the ~20 retries inside one
-  // window say it once. Also what tells the giving-up branch that anyone was waiting.
-  private reclaimWaitPort: number | null = null;
-  // Whether `stop()` has run without a `start()` since. Every step of the probe checks it, because a
-  // probe is spread across three turns of the event loop — the retry timer, the `tryBind` call it
-  // makes, and the `listening` callback for a bind libuv has already accepted — and `stop()` can land
-  // between any two of them. Cancelling only the timer leaves the other two: a `WebSocketServer`
-  // constructed but not yet listening will still take the port, overwrite the `wss` handle `stop()`
-  // just nulled (so nothing can ever close it), and reload the persisted token onto a bridge the
-  // caller has discarded.
-  private stopped = false;
-
-  // How long a pending request may sit with no run traffic before it is cancelled (see
-  // DEFAULT_TIMEOUT_MS). Set once at construction.
-  private readonly requestTimeoutMs: number;
-  // The absolute wall-clock cap on one request (see DEFAULT_RUN_CEILING_MS) — never suspended,
-  // never re-armed. Set once at construction.
-  private readonly runCeilingMs: number;
-  // The probe's budget for waiting on a busy-but-ours port (see RECLAIM_WINDOW_MS). Set once at
-  // construction.
-  private readonly reclaimWindowMs: number;
-  // The server-side allowlist is fixed at construction. No dynamic lookup or fallback handler.
-  // Production registers only images.fetch; the channel does not interpret its payload.
-  private readonly capabilities: ReadonlyMap<string, CapabilityHandler>;
-  // How many server services each run has in flight right now. The run's inactivity deadline stays
-  // suspended while ANY service is running and re-arms only when the count returns to zero —
-  // a lone clearTimeout/re-arm pair breaks under concurrent services (the first reply would
-  // restart the clock while the second service is still ours to finish). Entries survive run removal
-  // until the actual work settles, including cleanup that cannot be interrupted.
-  private readonly inFlightServices = new Map<string, number>();
+  private onConnect: (() => void) | undefined;
+  private readonly listener: RelayListener;
+  private readonly ledger: RunLedger;
+  private readonly channel: ChannelServer;
+  private readonly approval: ApprovalSession;
   private readonly events: PluginBridgeEvents;
 
-  // Everything injectable for the contract harness, which drives real sockets: `store` isolates
-  // persistence to a temp dir instead of touching the real ~/.framelink; `requestTimeoutMs` lets it pin
-  // behaviour that only shows up when a request times out — a silent plugin's version handshake, and
-  // a displaced squatter's orphaned one resolving late — without waiting out the real 15s;
-  // `reclaimWindowMs` lets it pin both ends of the reclaim wait (advance immediately, and give up at
-  // the deadline) against an explicit budget rather than racing a constant. Production takes the
-  // defaults, and index.ts registers the production allowlist.
+  private readonly routes: EventRoutes = {
+    // Diagnostic traffic is observed even from a displaced request owner. It never participates in
+    // settlement or inactivity rearming, and the trace retains no response contents.
+    RUN_TRACE: {
+      from: "any",
+      handle: (connection, event) => this.ledger.trace.recordHost(event.runId, connection, event),
+    },
+    SESSION_TOKEN: {
+      from: "compatible-holder",
+      handle: (_, event) =>
+        this.approval.apply({
+          type: "handedOver",
+          session: { token: event.sessionToken, authorizingUser: event.authorizingUser },
+        }),
+    },
+    SESSION_CLAIM: {
+      from: "compatible-holder",
+      handle: (_, event) => this.approval.apply({ type: "claimed", claim: event.sessionClaim }),
+    },
+    REVOKE_SESSION: {
+      from: "compatible-holder",
+      handle: () => this.approval.apply({ type: "revoked" }),
+    },
+    WRITE_ACCESS_SIGN_IN: {
+      from: "compatible-holder",
+      handle: () => this.events.onWriteAccessSignIn?.(),
+    },
+    CHANNEL_REQUEST: {
+      from: "holder",
+      handle: (connection, event) => {
+        // A reverse request proves the holder speaks the envelope, exactly like a matched reply.
+        connection.markEstablished();
+        this.channel.serve(connection, event);
+      },
+    },
+    RUN_STATE: {
+      from: "holder",
+      handle: (connection, event) => this.ledger.runState(connection, event),
+    },
+    // Run-scoped, so it settles here rather than through the correlated-reply path.
+    CANCEL_RESULT: {
+      from: "holder",
+      handle: (connection, event) =>
+        this.ledger.settleCancelAnswer(event.runId, event.disposition, connection),
+    },
+    // Metering outlives the caller: the caller that authorized the run decides whether to count it.
+    RUN_CHANGED: {
+      from: "holder",
+      handle: (_, event) => this.events.onRunDocumentChanged?.(event.runId),
+    },
+    RUN_SETTLED: { from: "holder", handle: (_, event) => this.events.onRunSettled?.(event.runId) },
+  };
+
+  // Everything injectable for the tests and the contract harness: `store` isolates persistence to a
+  // temp dir; the clocks let them pin timeout behaviour without waiting out the real deadlines; `trace`
+  // lets a test read what the trace kept. Production takes the defaults, and index.ts registers the
+  // production capability allowlist.
   constructor(
-    private readonly store: ApprovalStore = new ApprovalStore(),
+    store: ApprovalStore = new ApprovalStore(),
     {
       requestTimeoutMs = DEFAULT_TIMEOUT_MS,
       runCeilingMs = DEFAULT_RUN_CEILING_MS,
       reclaimWindowMs = RECLAIM_WINDOW_MS,
       capabilities = new Map(),
       events = {},
+      trace = new RequestTrace((event) => Logger.log("Bridge trace " + JSON.stringify(event))),
     }: {
       requestTimeoutMs?: number;
       runCeilingMs?: number;
       reclaimWindowMs?: number;
       capabilities?: ReadonlyMap<string, CapabilityHandler>;
       events?: PluginBridgeEvents;
+      trace?: RequestTrace;
     } = {},
   ) {
     this.events = events;
-    this.requestTimeoutMs = requestTimeoutMs;
-    this.runCeilingMs = runCeilingMs;
-    this.reclaimWindowMs = reclaimWindowMs;
-    this.capabilities = new Map(capabilities);
-  }
-
-  /**
-   * Probe-bind the first free port in the block, advancing on `EADDRINUSE`. The OS guarantees no
-   * double-bind, so two concurrent servers sharing one block never collide — the second simply
-   * advances to the next free port. This is what lets N sessions coexist on N distinct ports.
-   * The per-connection handlers (verifyClient, connection/close) are attached to every
-   * probe's server, but a probe that loses the race to EADDRINUSE is closed before it accepts, so
-   * only the winner's ever fire; the heartbeat is installed in `listening`, so it is winner-only.
-   */
-  start(ports: readonly number[], onConnect?: () => void): void {
-    this.stopped = false;
-    this.reclaimDeadline = Date.now() + this.reclaimWindowMs;
-    this.reclaimWaitPort = null;
-    this.tryBind(ports, 0, onConnect);
-  }
-
-  private tryBind(ports: readonly number[], index: number, onConnect?: () => void): void {
-    if (this.stopped) return;
-    if (index >= ports.length) {
-      Logger.log(
-        `No free port in the WS block [${ports[0]}..${ports[ports.length - 1]}] — is the block full?`,
-      );
-      return;
-    }
-    const port = ports[index];
-    const wss = new WebSocketServer({
-      maxPayload: MAX_CHANNEL_BYTES,
-      // Loopback only — the eval socket must never be reachable from the LAN. Bound to the IPv4
-      // literal even though the plugin dials `ws://localhost` (the manifest can't use an IP literal —
-      // Figma's validator rejects it): `localhost` resolves to both ::1 and 127.0.0.1, and Chromium
-      // (Figma's runtime) falls back to 127.0.0.1 instantly when the ::1 attempt is refused. Don't
-      // widen this to a non-loopback host to "match" localhost — that would breach the boundary.
-      host: "127.0.0.1",
-      port,
-      // Refuse the upgrade before a socket exists when the Origin is a web page, or
-      // when an ESTABLISHED plugin holds the channel (anti-hijack — see below).
-      verifyClient: ({ origin }: { origin?: string }) => {
-        if (!isAllowedOrigin(origin)) {
-          Logger.log(`Refused WS connection from web origin ${origin}`);
-          return false;
-        }
-        // Anti-hijack, liveness-aware. An ESTABLISHED holder —
-        // one that has answered the server over the frozen envelope (handshaked) — is never
-        // displaced, so a web page or local process can't steal a live plugin's channel by
-        // connecting after it. But a holder that has NOT handshaked must not trap the real
-        // plugin: it's either a pre-consent squatter monopolizing the single slot, or a
-        // half-open socket whose plugin died. Admit the newcomer and let the connection handler
-        // reclaim the slot — reclaim is triggered by ANY admitted (allowed-origin) connection,
-        // gated on the HOLDER being non-established, not on the newcomer proving itself first;
-        // the newcomer then completes its own handshake to drive. (Replacing one non-established
-        // holder with another is harmless — consent is the real write gate.) A
-        // half-open holder that DID handshake looks established here and is reaped separately by
-        // the heartbeat, freeing the slot.
-        if (this.socket && this.socket.readyState === WebSocket.OPEN && this.handshaked) {
-          Logger.log("Refused second WS connection — an established plugin holds the channel");
-          return false;
-        }
-        return true;
+    this.approval = new ApprovalSession(store, (session) =>
+      this.events.onSessionApproved?.(session),
+    );
+    this.ledger = new RunLedger({
+      requestTimeoutMs,
+      runCeilingMs,
+      trace,
+      disconnectedDurationMs: () => this.disconnectedDurationMs(),
+    });
+    this.channel = new ChannelServer(
+      capabilities,
+      this.ledger,
+      (connection) => connection === this.current,
+    );
+    this.listener = new RelayListener(
+      {
+        // Anti-hijack, liveness-aware: an ESTABLISHED holder is never displaced, so a page or local
+        // process can't steal a live plugin's channel by connecting after it.
+        admitsNewcomer: () => !(this.current?.isOpen && this.current.isEstablished),
+        holdsApprovalFor: (port) => this.approval.holdsApprovalFor(port),
+        bound: (port) => this.approval.bind(port),
+        accept: (socket) => this.accept(socket),
+        heartbeat: () => this.heartbeatTick(),
       },
-    });
-    // EADDRINUSE means another session already holds this port — advance to the next and try
-    // again (close this loser first so its half-open listener doesn't linger), EXCEPT while this
-    // port still looks like our own former slot: see RECLAIM_WINDOW_MS. Any OTHER bind
-    // error (EACCES, EADDRNOTAVAIL …) is genuinely exceptional, NOT a "block full" condition, so
-    // crash loud rather than degrade quietly: a deliberate asymmetry with the soft block-exhaustion
-    // path above (which logs and survives serverless). Log first so the reason survives the crash.
-    wss.on("error", (err: NodeJS.ErrnoException) => {
-      if (err.code === "EADDRINUSE") {
-        wss.close();
-        if (this.shouldWaitToReclaim(port)) {
-          // Re-probe the SAME index rather than advancing: the holder is very likely the dying
-          // predecessor of this very server, and landing elsewhere would silently cost the human a
-          // fresh Allow. Retained so `stop()` can cancel it rather than leaving a discarded bridge to
-          // rebind on a later tick (`stopped` covers the rest of that hazard).
-          //
-          // REFERENCED, not unref'd: this bridge holds no port and no socket while it waits, so an
-          // unref'd timer is the only handle keeping a process whose sole job is the bridge (a probe
-          // script) alive — it exited here in under a second, code 0, silent. The wait is bounded by
-          // the reclaim budget (~2s) and cancelled by stop(), so holding the loop open costs a server
-          // nothing it wasn't already paying to acquire its port.
-          this.announceReclaimWait(port);
-          this.reclaimTimer = setTimeout(() => {
-            this.reclaimTimer = null;
-            this.tryBind(ports, index, onConnect);
-          }, RECLAIM_RETRY_MS);
-          return;
-        }
-        if (this.reclaimWaitPort === port)
-          Logger.log(
-            `Port ${port} is still held after the ${this.reclaimWindowMs}ms reclaim window — advancing to the next port in the block. The plugin scans the whole block, so it will still find this server; a prior approval keyed to port ${port} will not be reloaded.`,
-          );
-        this.tryBind(ports, index + 1, onConnect);
-        return;
-      }
-      Logger.log(`Unexpected WS bind error on port ${port}: ${err.message}`);
-      throw err;
-    });
-    wss.on("listening", () => {
-      // A bind libuv had already accepted when `stop()` ran: hand the port straight back rather than
-      // installing it. Nothing below this line may run on a stopped bridge — it would claim the port,
-      // replace the `wss` handle stop() nulled, and reload the approval onto a discarded object.
-      if (this.stopped) {
-        wss.close();
-        return;
-      }
-      Logger.log(`WS bridge listening on ws://127.0.0.1:${port}`);
-      // Record the winning port + server so persistence keys on (cwd, port) and stop() can free it.
-      this.boundPort = port;
-      this.wss = wss;
-      // Reload a prior approval the instant the port is bound — before any connection can be accepted
-      // (and thus before the first SESSION_INFO), so a plugin reconnecting onto this port immediately
-      // gets the persisted token echoed and is not re-prompted. Keyed by THIS port: a concurrent
-      // sibling on another port, or a restart that landed elsewhere, reloads nothing (fail-closed).
-      const reloaded = this.store.loadRecord(port, Date.now());
-      this.sessionToken = reloaded?.token ?? null;
-      this.authorizingUser = reloaded?.authorizingUser ?? null;
-      this.reloadedApprovalLastUsedAt = reloaded?.lastUsedAt ?? null;
-      this.sessionClaim = this.store.loadSessionClaim(port, Date.now());
-      if (this.sessionToken)
-        Logger.log(
-          "Reloaded a persisted session token — it will be offered on the next SESSION_INFO; the plugin decides whether the prior Allow still holds",
-        );
-      // Install the heartbeat here in `listening` (not eagerly in tryBind) so only the server that
-      // WON its bind gets one — a probe that lost to EADDRINUSE never reaches here. unref'd and never
-      // cleared: it lives for the whole process, like the bridge itself. (What it reaps: see HEARTBEAT_INTERVAL_MS.)
-      const heartbeat = setInterval(() => this.heartbeatTick(), HEARTBEAT_INTERVAL_MS);
-      heartbeat.unref();
-    });
-    wss.on("connection", (socket) => {
-      // verifyClient admitted this connection, so any current holder is non-handshaked (a
-      // pre-consent squatter or a half-open dead socket). Reclaim the slot for the newcomer,
-      // which will complete its own handshake. An established holder never reaches here — it's
-      // refused at verifyClient — so this can't displace a live, responsive plugin.
-      const stale = this.socket && this.socket.readyState === WebSocket.OPEN ? this.socket : null;
-
-      // Settle the OUTGOING connection's gate before swapping in this one's. A canvas request holding
-      // for the displaced connection is suspended on that promise, and we are about to drop the only
-      // resolver for it — without this it waits forever, because the displaced socket's `close` bails
-      // below and its handshake bails on the identity guard, so neither settles. Waking it here lets
-      // it re-read the field and hold for the NEWCOMER's verdict instead, which is what it wanted all
-      // along. (This is also why the displaced-socket branch of `close` must NOT settle: by then the
-      // field points at the newcomer's gate, and settling it would release holders early.)
-      this.settleVerdict();
-      this.socket = socket;
-      this.disconnectedAt = null;
-      // Start every connection back at `checking`, with a fresh promise for canvas requests to hold
-      // on. The close handler also resets this, but resetting only on close leaves a window: if a
-      // prior connection drops mid-handshake, its awaited verdict can land AFTER close cleared the
-      // slot, stranding a stale one the next plugin would inherit. Resetting on connect closes that
-      // window — a fresh connection is driven only once its OWN handshake vouches for it.
-      this.compatibility = "checking";
-      this.skewRefusal = null;
-      this.verdictSettled = new Promise((resolve) => {
-        this.settleVerdict = resolve;
-      });
-      // A fresh socket is unproven (no reply yet) and presumed alive (so the first heartbeat
-      // tick pings rather than reaps it). It earns `handshaked` on its first matched reply.
-      this.handshaked = false;
-      this.socketAlive = true;
-      // Mint this connection's pairing code up front so the SESSION_INFO handshake (fired
-      // from onConnect) and any pending-approval result share one source — guaranteeing the
-      // code in the panel matches the one in the tool result.
-      this.pairingCode = mintPairingCode();
-      socket.on("pong", () => {
-        if (this.socket === socket) this.socketAlive = true;
-      });
-      socket.on("message", (data) => this.handleMessage(socket, data.toString()));
-      let disconnected = false;
-      const disconnect = (): void => {
-        if (disconnected) return;
-        disconnected = true;
-        // A socket displaced by slot-reclaim is no longer current — this.socket already
-        // points at the newcomer, whose fresh handshake requests are queued synchronously
-        // by onConnect. terminate()'s close fires a tick LATER, so failing pending here
-        // unconditionally would reject the NEWCOMER's in-flight handshake. Bail when we're
-        // not the current socket; the displaced socket's own stragglers (server-fired
-        // handshakes to a squatter) fall to their 15s timeout — fire-and-forget, harmless.
-        if (this.socket !== socket) {
-          Logger.log("Displaced WS socket closed");
-          return;
-        }
-        this.socket = null;
-        this.disconnectedAt = Date.now();
-        this.pairingCode = null;
-        this.handshaked = false;
-        // Wake anything holding for a verdict that will now never arrive. The hold re-checks the
-        // socket, finds it gone, and falls through to the not-connected rejection —
-        // which the approval wait rides out across the plugin's ~1s redial, exactly as it does for
-        // any other mid-wait drop.
-        this.compatibility = "checking";
-        this.skewRefusal = null;
-        this.settleVerdict();
-        // Every in-flight request was sent on THIS (current, now-closed) socket, so reject
-        // them now instead of letting each hang to its 15s timeout — same "never a silent
-        // hang" contract as the frozen envelope.
-        this.failPending(
-          "Figma plugin disconnected before replying. Completion is unconfirmed; inspect affected nodes before retrying.",
-          socket,
-        );
-        // Anything cancelled on this socket has lost the only mouth that could answer it — say so now
-        // rather than holding its caller for a round trip that cannot complete.
-        this.failCancelAnswers(socket);
-        Logger.log("Plugin disconnected from WS bridge");
-      };
-      socket.on("close", disconnect);
-      // Receiver errors (including maxPayload rejection) belong to the accepted socket, not wss.
-      // Settle its runs now, then terminate; the ensuing close uses the same idempotent cleanup.
-      socket.on("error", () => {
-        disconnect();
-        socket.terminate();
-      });
-
-      if (stale) {
-        // terminate() fires `stale`'s close handler, but this.socket already points at the
-        // newcomer, so the `this.socket === socket` guard there leaves the new slot intact.
-        Logger.log("Reclaiming WS slot from a non-handshaked holder for a new connection");
-        this.failPending("Figma connection replaced. Completion is unconfirmed.", stale);
-        this.failCancelAnswers(stale);
-        stale.terminate();
-      }
-      Logger.log("Plugin connected to WS bridge");
-      // Ask what we're talking to FIRST. Fired from here rather than left to the caller that started
-      // the bridge: holding canvas requests until a verdict lands is only safe if a verdict ALWAYS
-      // lands, and the only way to guarantee that is for the connection itself to run the handshake.
-      // Anything onConnect fires is a handshake message, which rides past the hold anyway.
-      void this.handshakeProtocolVersion(socket);
-      onConnect?.();
-    });
-  }
-
-  /**
-   * Whether a busy port is worth re-probing instead of advancing past: only while the probe's reclaim
-   * budget is unspent AND this project holds an unexpired approval for that exact port. The approval
-   * is the evidence — it means a human already Allowed a server of ours on this port, so the holder is
-   * most likely our own not-yet-dead predecessor, and landing elsewhere would cost a fresh Allow.
-   *
-   * READ-ONLY on purpose (`hasUnexpiredApproval`, never `load`): the port being probed is one some
-   * OTHER live process may hold, and `load` prunes an expired record. Pruning here would delete a
-   * running peer's approval file behind its back, and its `touch` — a compare-and-set that only
-   * rewrites a file still holding its token — would never put it back, so the peer would silently lose
-   * durable approval and re-prompt on its next restart. A stale record can only ever cost this probe
-   * its own bounded window.
-   */
-  private shouldWaitToReclaim(port: number): boolean {
-    const now = Date.now();
-    return now < this.reclaimDeadline && this.store.hasUnexpiredApproval(port, now);
-  }
-
-  /**
-   * Say, once per waited-on port, that startup is paused and what a human can do about it. The wait
-   * is invisible otherwise — no port bound, no connection, nothing on stdout — and the case it most
-   * often hits is a SECOND process from the same cwd (a probe script started while the MCP server
-   * runs), where "nothing happened" is indistinguishable from a broken script.
-   */
-  private announceReclaimWait(port: number): void {
-    if (this.reclaimWaitPort === port) return;
-    this.reclaimWaitPort = port;
-    Logger.log(
-      `Port ${port} is busy and this project holds an approval for it — waiting up to ${this.reclaimWindowMs}ms ` +
-        `to reclaim it (normally this server's own restarting predecessor). If another Framelink server ` +
-        `or probe is holding the port, stop it, or give this process its own state with ` +
-        `FRAMELINK_STATE_DIR=<an isolated dir> so it advances to a free port immediately.`,
+      reclaimWindowMs,
     );
   }
 
+  /** Bind the first free port in the block; `onConnect` runs after each connection's handshake is sent. */
+  start(ports: readonly number[], onConnect?: () => void): void {
+    this.onConnect = onConnect;
+    this.listener.start(ports);
+  }
+
+  /** The port this bridge is listening on, or null before it binds. */
+  get port(): number | null {
+    return this.listener.port;
+  }
+
   /**
-   * One heartbeat cycle: terminate the holder if it missed the previous ping's pong (it's
-   * half-open — dead but no FIN), otherwise ping it and await the pong. Terminating fires
-   * `close`, which frees the slot for the live plugin's reconnect. Public so the contract
-   * harness can drive liveness deterministically instead of waiting out the real interval.
+   * Take an admitted socket as the holder. Anything the listener admits displaces the current holder,
+   * which is by then non-established (a pre-consent squatter or a half-open dead socket) — an
+   * established one is refused before a socket exists.
+   */
+  accept(socket: WebSocket): void {
+    const previous = this.current;
+    // Abandon the outgoing connection before swapping in this one: a canvas request holding for its
+    // verdict is suspended on it, and wakes to re-read the slot and hold for the newcomer instead.
+    previous?.abandon();
+    const connection = new RelayConnection(socket);
+    this.current = connection;
+    this.disconnectedAt = null;
+    socket.on("pong", () => connection.pong());
+    socket.on("message", (data) => this.receive(connection, data.toString()));
+    let disconnected = false;
+    const disconnect = (): void => {
+      if (disconnected) return;
+      disconnected = true;
+      // A displaced socket's close fires a tick AFTER the newcomer's handshake went out; failing
+      // everything here would reject the newcomer's requests. Its own were failed at displacement.
+      if (this.current !== connection) {
+        Logger.log("Displaced WS socket closed");
+        return;
+      }
+      this.current = null;
+      this.disconnectedAt = Date.now();
+      connection.abandon();
+      this.ledger.fail(
+        "Figma plugin disconnected before replying. Completion is unconfirmed; inspect affected nodes before retrying.",
+        connection,
+      );
+      Logger.log("Plugin disconnected from WS bridge");
+    };
+    socket.on("close", disconnect);
+    // Receiver errors (including maxPayload rejection) belong to the accepted socket. Settle its runs
+    // now, then terminate; the ensuing close uses the same idempotent cleanup.
+    socket.on("error", () => {
+      disconnect();
+      socket.terminate();
+    });
+    if (previous) {
+      if (previous.isOpen)
+        Logger.log("Reclaiming WS slot from a non-handshaked holder for a new connection");
+      this.ledger.fail("Figma connection replaced. Completion is unconfirmed.", previous);
+      previous.socket.terminate();
+    }
+    Logger.log("Plugin connected to WS bridge");
+    // Ask what we're talking to FIRST, from here rather than the caller: holding canvas requests until
+    // a verdict lands is only safe if a verdict ALWAYS lands, so the connection runs its own handshake.
+    void this.handshake(connection);
+    this.onConnect?.();
+  }
+
+  /**
+   * One heartbeat cycle for the holder. Public so the contract harness can drive liveness
+   * deterministically instead of waiting out the real interval.
    */
   heartbeatTick(): void {
-    const socket = this.socket;
-    if (!socket || socket.readyState !== WebSocket.OPEN) return;
-    if (!this.socketAlive) {
-      Logger.log("Heartbeat: holder missed a pong — terminating the half-open socket");
-      socket.terminate();
-      return;
-    }
-    this.socketAlive = false;
-    socket.ping();
+    this.current?.heartbeat();
   }
 
   /**
-   * Ask the fresh connection for its versions and settle this connection's compatibility verdict,
-   * releasing any canvas request holding for it. Runs once per connection, fired from the connection
-   * handler with that connection's own socket.
-   *
-   * A plugin predating the handshake answers GET_VERSION with an envelope ERROR (the request rejects),
-   * a silent one times out, and a malformed answer is refused at parse — each catches into null,
-   * which reads as the protocol floor and is refused. So every path settles: a held request is never
-   * held forever.
+   * Close the listener (freeing its port) and drop the holder. NOT part of the normal server
+   * lifecycle — the relay lives for the whole process. It exists for one-shot CLI runs and for tests
+   * that model a server RESTART honestly: free the port, then rebind it with a fresh bridge.
    */
-  private async handshakeProtocolVersion(socket: WebSocket): Promise<void> {
-    const reply = await this.request({ type: "GET_VERSION" }).catch(() => null);
-    // We are no longer the current connection, so this answer is about a socket nobody is driving.
-    // Two ways to get here, and BOTH must bail:
-    //   • Reclaimed/reconnected — a displaced squatter's orphaned GET_VERSION resolves on its timeout,
-    //     long after a real plugin took the slot, and would otherwise condemn it as incompatible.
-    //   • Disconnected — `close` fails the pending GET_VERSION, so this resolves a microtask later
-    //     with an empty record. Reading that as the floor would leave a bridge with NO plugin sitting
-    //     in `incompatible`, telling the agent to reinstall the plugin when the truth is that nothing
-    //     is connected.
-    // Socket identity catches both; the connection epoch only catches the first (it doesn't move on a
-    // disconnect), which is why the guard is on the socket.
-    if (this.socket !== socket) return;
-    this.skewRefusal = refuseProtocolSkew(reply);
-    this.compatibility = this.skewRefusal ? "incompatible" : "compatible";
-    this.settleVerdict();
-    if (!this.skewRefusal) return;
-    Logger.log(
-      `⚠️ Version skew — plugin reported ${JSON.stringify(reply)}; refusing canvas requests`,
-    );
-    // Human channel: a toast the plugin words itself. Fire-and-forget — a plugin predating the NOTIFY
-    // handler envelope-ERRORs and the toast is silently dropped, which is fine; the agent still gets
-    // the refusal on every canvas call it tries.
-    this.request({ type: "NOTIFY", serverProtocol: PROTOCOL_VERSION }).catch(() => {});
+  stop(): void {
+    this.listener.stop();
+    this.ledger.fail("Bridge stopped. Completion is unconfirmed.");
+    const connection = this.current;
+    this.current = null;
+    connection?.abandon();
+    connection?.socket.terminate();
   }
 
   /**
-   * Where the current connection stands with the version handshake — `checking` until its GET_VERSION
-   * resolves, then `compatible` or `incompatible`. Canvas requests hold on the first and are refused
-   * on the last; read directly only for diagnostics and by the bridge contract harness.
+   * Where the current connection stands with the version handshake. Canvas requests hold on
+   * `checking` and are refused on `incompatible`; read directly for diagnostics and by the harness.
    */
   protocolCompatibility(): ProtocolCompatibility {
-    return this.compatibility;
+    return this.current?.compatibility ?? "checking";
   }
 
   /**
-   * The refusal text for the current connection when its verdict is `incompatible`, else null. Canvas
-   * requests already reject with this same text; the one reader that ISN'T a canvas request is the
-   * docs tool, which still serves on a stale plugin and leads with the refusal so the agent learns the
-   * re-import fix before its first refused write.
+   * The refusal text when the current connection's verdict is `incompatible`, else null. The one
+   * reader that ISN'T a canvas request is the docs tool, which still serves on a stale plugin and
+   * leads with the refusal so the agent learns the re-import fix before its first refused write.
    */
   protocolRefusal(): string | null {
-    return this.compatibility === "incompatible" ? this.skewRefusal : null;
+    return this.current?.skewRefusal ?? null;
   }
 
   /** The current connection's pairing code, or null when no plugin is connected. */
   getPairingCode(): string | null {
-    return this.pairingCode;
+    return this.current?.pairingCode ?? null;
   }
 
-  /** The session token handed over on Allow, or null until one arrives; survives reconnects so SESSION_INFO can echo it. */
-  getSessionToken(): string | null {
-    return this.sessionToken;
+  /** The session this server holds a token for — what it presents as a prior Allow — or null. */
+  approvedSession(): ApprovedSession | null {
+    return this.approval.session;
   }
 
-  /** The plugin's claim on this session's approval request, or null if it has never asked; see `sessionClaim`. */
-  getSessionClaim(): string | null {
-    return this.sessionClaim;
-  }
-
-  /** The Authorizing User of the session this server holds a token for, or null when it holds none. */
-  getAuthorizingUser(): AuthorizingUser | null {
-    return this.sessionToken ? this.authorizingUser : null;
+  /** What this server says about itself to the connected plugin: who it is, and its prior approval. */
+  sessionInfo(framelinkOrigin: string): Extract<ServerRequest, { type: "SESSION_INFO" }> {
+    return this.approval.sessionInfo(this.getPairingCode(), framelinkOrigin);
   }
 
   /** Is a plugin on the wire right now? The plain liveness question, with no approval in it. */
   isPluginConnected(): boolean {
-    return this.socket !== null && this.socket.readyState === WebSocket.OPEN;
+    return this.current?.isOpen ?? false;
   }
 
-  /**
-   * Was code mode used on this (cwd, port) within the last few minutes, according to the approval this
-   * server found when it bound? The ONLY cross-process evidence the relay has that a plugin is around:
-   * every other signal — the connection latch, the socket, the pairing code — is per-process state that
-   * a restart clears to "no plugin has ever been here", which is indistinguishable from a genuine cold
-   * start and means the opposite.
-   *
-   * Recency, not mere presence: the store's own expiry is a 24h sliding TTL, sized for "don't re-prompt
-   * an active human". Reading that as "a plugin is around" would turn approval storage into
-   * feature-enable storage — someone who approved code mode yesterday, then closed Figma, would see
-   * write tools advertised all day. A much shorter window answers the question actually being asked.
-   *
-   * It is still a PROXY, and deliberately a cheap one. The asymmetry that makes it safe: too generous
-   * only shows a few extra tools to someone who used code mode minutes ago, while too strict reports a
-   * live capability as absent — so the window leans long, and either way it stops mattering the instant
-   * a plugin connects and the latch takes over. Not refreshed on use: once a plugin has connected, no
-   * caller consults this.
-   */
+  /** Whether the approval found at bind was used recently — see ApprovalSession.hasRecentApproval. */
   hasRecentApproval(): boolean {
-    if (this.reloadedApprovalLastUsedAt === null) return false;
-    return Date.now() - this.reloadedApprovalLastUsedAt <= RECENT_APPROVAL_MS;
+    return this.approval.hasRecentApproval();
   }
 
   /**
-   * Slide the persisted approval's TTL forward after a successful write, so an actively-used session is
-   * never pruned mid-work. No-op when nothing is persisted (unapproved, or approval-less runs). Called
-   * from the tool handler on the success path, not from `request()` — only a real write should count as
-   * use. Passes the live token so the store's compare-and-set refuses to roll back a peer's newer file.
+   * Slide the persisted approval's TTL forward after a successful write by `session`, so an
+   * actively-used session is never pruned mid-work. Called on the success path, not from `request()`
+   * — only a real write counts as use.
    */
-  touchApproval(): void {
-    if (this.boundPort !== null && this.sessionToken)
-      this.store.touch(this.boundPort, this.sessionToken, Date.now());
+  touchApproval(session: ApprovedSession): void {
+    this.approval.touch(session);
+  }
+
+  disconnectedDurationMs(): number | null {
+    return this.disconnectedAt === null ? null : Date.now() - this.disconnectedAt;
   }
 
   /**
-   * Close the WS server (freeing its port) and drop the current socket. NOT part of the normal server
-   * lifecycle — the relay is meant to live for the whole process. It exists so tests can model a server
-   * RESTART honestly: free the port, then rebind it with a fresh bridge that reloads the persisted token.
-   * Under (cwd, port) keying, a faithful restart test must reclaim the same port, which requires this.
+   * Poll the plugin's approval decision. A GRANTED carries the session this server held at that same
+   * instant, so whatever it admits is attributed to the Allow that admitted it, with no second read.
    */
-  stop(): void {
-    // Shut the probe down FIRST, on all three of its paths: latch `stopped` (checked by `tryBind` and
-    // by `listening`), cancel a scheduled re-probe, and burn the budget. Closing `wss` alone is not
-    // enough — it only disposes the bind that already WON, leaving anything still in flight free to
-    // take the port and reload the persisted token onto a bridge the caller has discarded.
-    this.stopped = true;
-    if (this.reclaimTimer) clearTimeout(this.reclaimTimer);
-    this.reclaimTimer = null;
-    this.reclaimDeadline = 0;
-    this.failPending("Bridge stopped. Completion is unconfirmed.");
-    this.failCancelAnswers();
-    this.socket?.terminate();
-    this.socket = null;
-    // Nulling the socket makes the terminate()-driven `close` bail as "displaced", so it never runs
-    // the disconnect reset — do it here, or a canvas request holding for a verdict is stranded on a
-    // promise this stop just orphaned. Waking it drops it through to the not-connected rejection.
-    this.compatibility = "checking";
-    this.skewRefusal = null;
-    this.settleVerdict();
-    this.wss?.close();
-    this.wss = null;
-  }
-
-  /** Reject and clear every pending request — used when the socket they were sent on dies. */
-  private failPending(reason: string, socket?: WebSocket): void {
-    for (const [id, pending] of this.pending) {
-      if (socket && pending.socket !== socket) continue;
-      this.trace.record(id, pending.socket, "disconnected");
-      const waiting = pending.payloadType === "APPROVAL_STATUS";
-      this.takePending(id)?.reject(
-        new BridgeRequestError(
-          waiting ? pluginDisconnectedNotSubmittedText(this.disconnectedDurationMs()) : reason,
-          waiting ? "not-submitted" : "unconfirmed",
-          pending.phase,
-        ),
-      );
-    }
-  }
-
-  /** Remove a pending request and stop its clocks — every settle path (reply, deadline, socket
-   * death) funnels through here. Signal services to stop; their accounting ends only on settlement. */
-  private takePending(id: string): Pending | undefined {
-    const pending = this.pending.get(id);
-    if (!pending) return undefined;
-    pending.cleanup();
-    clearTimeout(pending.timer ?? undefined);
-    clearTimeout(pending.ceilingTimer);
-    this.pending.delete(id);
-    pending.servicesAbort.abort();
-    return pending;
+  async approvalStatus(signal?: AbortSignal): Promise<ApprovalStatus> {
+    const reply = await this.request({ type: "APPROVAL_STATUS" }, signal);
+    return reply.type === "APPROVAL_GRANTED"
+      ? { type: "APPROVAL_GRANTED", session: this.approvedSession() }
+      : reply;
   }
 
   /**
    * Send a request and resolve with its reply, admitted by the protocol's parser for that request
-   * type — the one place a reply is parsed. An ERROR reply, or one that isn't the shape its request is
-   * owed, rejects.
+   * type. An ERROR reply, or one that isn't the shape its request is owed, rejects.
    *
    * `onSubmitted` receives the run id the plugin will know this request by (its correlation id),
    * just before it goes on the wire — for callers that must match a later run-scoped event to it.
@@ -831,24 +370,24 @@ export class PluginBridge {
     runContext: ChannelRunContext = NO_RUN_CONTEXT,
   ): Promise<ReplyFor<T["type"]>> {
     if (signal?.aborted) return Promise.reject(signal.reason);
-    // Handshake messages send SYNCHRONOUSLY (no await before the socket.send): the connection
-    // contract depends on the newcomer's handshake being in flight before a displaced socket's close
-    // fires a tick later. Everything else goes through the compatibility hold.
+    // Handshake messages send SYNCHRONOUSLY (no await before the send): the connection contract
+    // depends on the newcomer's handshake being in flight before a displaced socket's close fires a
+    // tick later. Everything else goes through the compatibility hold.
     const reply = HANDSHAKE_REQUESTS.has(payload.type)
-      ? this.sendCorrelated(payload, signal, onSubmitted, runContext)
+      ? this.sendToHolder(payload, signal, onSubmitted, runContext)
       : this.sendOnceCompatible(payload, signal, onSubmitted, runContext);
-    // Sound because settleReply resolves only what parseReply admitted for this payload's type.
+    // Sound because the ledger resolves only what parseReply admitted for this payload's type.
     return reply as Promise<ReplyFor<T["type"]>>;
   }
 
   /**
-   * Send a canvas request, but only once this connection's protocol is known to be supported: hold
-   * while the verdict is still `checking`, refuse outright when it came back mismatched.
+   * Send a canvas request only once the holder's protocol is known to be supported: hold while its
+   * verdict is `checking`, refuse when it came back mismatched.
    *
-   * A LOOP, not a single await: each abandonment settles the gate (see `verdictSettled`), which wakes
-   * us to re-read the field. A reclaim mid-hold puts us back to `checking` on the newcomer, so we hold
-   * again and ultimately run against whoever ends up driving; a socket that dies drops out of the loop
-   * and falls through to `sendCorrelated`'s own "no plugin connected" rejection.
+   * A LOOP, not a single await: each abandonment settles the connection's verdict promise, which
+   * wakes us to re-read the slot. A reclaim mid-hold puts a fresh `checking` connection there, so we
+   * hold again on the newcomer; a socket that dies drops out of the loop into the not-connected
+   * rejection.
    */
   private async sendOnceCompatible(
     payload: ServerRequest,
@@ -856,179 +395,61 @@ export class PluginBridge {
     onSubmitted: ((runId: string) => void) | undefined,
     runContext: ChannelRunContext,
   ): Promise<PluginReply> {
-    while (this.compatibility === "checking" && this.socket?.readyState === WebSocket.OPEN) {
-      await waitForSignal(this.verdictSettled, signal);
-    }
-    // Refuse rather than send. A plugin executing agent code against a wire contract the server
-    // doesn't speak is the failure the version gate exists to prevent, and a refusal the agent relays
-    // beats a nudge stapled to a result the wrong runtime already produced.
-    const refusal = this.compatibility === "incompatible" ? this.skewRefusal : null;
+    for (
+      let connection = this.current;
+      connection?.isOpen && connection.compatibility === "checking";
+      connection = this.current
+    )
+      await waitForSignal(connection.verdictSettled, signal);
+    // Refuse rather than send: a plugin executing agent code against a wire contract this server
+    // doesn't speak is the failure the version gate exists to prevent.
+    const refusal = this.current?.skewRefusal;
     if (refusal) throw new BridgeRequestError(refusal, "not-submitted");
-    return this.sendCorrelated(payload, signal, onSubmitted, runContext);
+    return this.sendToHolder(payload, signal, onSubmitted, runContext);
   }
 
-  /** Stamp a correlation id on the payload, send it, and resolve when the reply carrying that id lands. */
-  private sendCorrelated(
+  private sendToHolder(
     payload: ServerRequest,
     signal: AbortSignal | undefined,
     onSubmitted: ((runId: string) => void) | undefined,
     runContext: ChannelRunContext,
   ): Promise<PluginReply> {
-    if (signal?.aborted) return Promise.reject(signal.reason);
-    const socket = this.socket;
-    if (!socket || socket.readyState !== WebSocket.OPEN) {
+    const connection = this.current;
+    if (!connection?.isOpen)
       return Promise.reject(
         new BridgeRequestError(
           pluginDisconnectedNotSubmittedText(this.disconnectedDurationMs()),
           "not-submitted",
         ),
       );
-    }
-    const id = randomUUID();
-    return new Promise((resolve, reject) => {
-      const cancel = () => this.cancelPending(id, "caller cancelled");
-      signal?.addEventListener("abort", cancel, { once: true });
-      const pending: Pending = {
-        servicesAbort: new AbortController(),
-        socket,
-        phase: "submitted",
-        startedAt: Date.now(),
-        cleanup: () => signal?.removeEventListener("abort", cancel),
-        resolve,
-        reject,
-        timer: null,
-        ceilingTimer: setTimeout(() => this.timeoutPending(id, "ceiling"), this.runCeilingMs),
-        payloadType: payload.type,
-        runContext,
-      };
-      this.pending.set(id, pending);
-      // Armed through the same helper every later phase change uses, so "when does this request have
-      // an inactivity deadline" is answered in exactly one place.
-      this.armInactivityDeadline(id, pending);
-      if (payload.type === "EXECUTE_CODE") this.trace.start(id, socket);
-      onSubmitted?.(id);
-      // `id` last: the generated correlation id is authoritative and a payload field
-      // must never overwrite it, or the reply could never be matched to this pending.
-      socket.send(JSON.stringify({ ...payload, id }));
-    });
+    return this.ledger.submit(connection, payload, signal, onSubmitted, runContext);
   }
 
   /**
-   * (Re)arm a pending request's inactivity deadline — or leave it deliberately disarmed while the run
-   * is QUEUED.
-   *
-   * A queued run is not silent, it is WAITING: the plugin serializes writes, so a run sitting behind
-   * a slower one produces no traffic for as long as that one takes, and a clock started there
-   * measures the run ahead rather than anything wrong. The absolute run ceiling still bounds it, and
-   * that is the right bound — the caller's own budget, not a guess about silence. Every other state
-   * is real silence and is deadlined: `submitted` (the plugin has not even acknowledged the request)
-   * and `running` (the plugin is the side working, so it owes us progress).
+   * Ask a fresh connection for its versions and record its verdict, releasing any canvas request
+   * holding for it. A plugin predating the handshake answers with an envelope ERROR, a silent one
+   * times out, and a malformed answer is refused at parse — each catches into null, the protocol floor,
+   * and is refused. So every path settles.
    */
-  private armInactivityDeadline(id: string, pending: Pending, alreadySilentMs = 0): void {
-    clearTimeout(pending.timer ?? undefined);
-    pending.timer =
-      pending.phase === "queued" || this.inFlightServices.has(id)
-        ? null
-        : setTimeout(
-            () => this.timeoutPending(id, "inactivity"),
-            this.requestTimeoutMs - alreadySilentMs,
-          );
+  private async handshake(connection: RelayConnection): Promise<void> {
+    const reply = await this.request({ type: "GET_VERSION" }).catch(() => null);
+    // A displaced or disconnected connection's answer is about a socket nobody is driving: an orphaned
+    // GET_VERSION resolving on its timeout must not condemn the plugin that took the slot since.
+    if (this.current !== connection) return;
+    const refusal = refuseProtocolSkew(reply);
+    connection.decide(refusal);
+    if (!refusal) return;
+    Logger.log(
+      `⚠️ Version skew — plugin reported ${JSON.stringify(reply)}; refusing canvas requests`,
+    );
+    // Human channel: a toast the plugin words itself. Fire-and-forget — a plugin predating the NOTIFY
+    // handler envelope-ERRORs and the toast is dropped; the agent still gets every refusal.
+    this.request({ type: "NOTIFY", serverProtocol: PROTOCOL_VERSION }).catch(() => {});
   }
 
-  /**
-   * A deadline fired — the inactivity timeout or the absolute run ceiling: tell the plugin to
-   * cancel the run, then reject the caller — cancel, never silently abandon. Plugin-side the
-   * CANCEL is enforced: the run is recorded as cancelled, a still-queued run is refused
-   * at dequeue, an executing run is refused before its next mutating verb (the preamble mutation
-   * lock), and a run suspended at its server await has that await rejected. The
-   * zombie-refusal in serveChannelRequest stays the server's own half (channel requests naming a
-   * dead run are refused). Don't add a second enforcement path here; the lock owns it. The frame
-   * is a run-scoped, id-less notification — the reverse mirror of the plugin's
-   * SESSION_TOKEN/REVOKE_SESSION — and deliberately not a `request()`: a CANCEL that awaited a
-   * correlated reply could itself time out and cancel, recursively. Its answer (CANCEL_RESULT) comes
-   * back the same way, run-scoped and id-less, on its own short bound — see cancelPending.
-   */
-  private timeoutPending(id: string, cause: "inactivity" | "ceiling"): void {
-    const why =
-      cause === "inactivity"
-        ? `saw no traffic for ${this.requestTimeoutMs}ms`
-        : `exceeded the absolute ${this.runCeilingMs}ms run ceiling`;
-    const pending = this.pending.get(id);
-    if (pending)
-      this.trace.record(
-        id,
-        pending.socket,
-        cause === "inactivity" ? "timeout-inactivity" : "timeout-ceiling",
-      );
-    this.cancelPending(id, why);
-  }
-
-  /**
-   * Cancel a request and reject its caller with the most definitive sentence available.
-   *
-   * The run dies here — it leaves `pending`, so channel requests naming it are refused and no reply can settle
-   * it. What is held for one round trip is only the WORDING: the plugin knows, from state it already
-   * has, whether the run had started, and "never executed; retry as-is" and "was executing; inspect
-   * the canvas" are different instructions to the agent reading them. A queued run cannot say this
-   * for itself — its own dequeue refusal fires only after the run ahead of it finishes, which is the
-   * very delay the deadline just gave up on.
-   */
-  private cancelPending(id: string, why: string): void {
-    const pending = this.takePending(id);
-    if (!pending) return;
-    const callerWithdrew = why === "caller cancelled";
-    if (callerWithdrew) this.trace.record(id, pending.socket, "caller-cancelled");
-    const open = pending.socket.readyState === WebSocket.OPEN;
-    if (open) pending.socket.send(JSON.stringify({ type: "CANCEL", runId: id }));
-    const reject = (disposition: CancelDisposition): void =>
-      pending.reject(cancelRejection(id, pending, why, disposition));
-    // Three requests have no answer worth waiting for: one on a dead socket (nothing can reply), a
-    // non-run one (the plugin tracks no phase for it, so the answer is `unknown` by construction),
-    // and one the CALLER withdrew — it asked to stop and is no longer reading, so a round trip
-    // would only delay a rejection nobody is waiting on. Only a deadline has a live caller owed a
-    // sentence, and only that case pays for one.
-    if (!open || callerWithdrew || !RUN_REQUESTS.has(pending.payloadType)) {
-      reject("unknown");
-      return;
-    }
-    const giveUp = setTimeout(() => this.settleCancelAnswer(id, "unknown"), CANCEL_ANSWER_MS);
-    this.cancelsAwaitingAnswer.set(id, {
-      socket: pending.socket,
-      settle: (disposition) => {
-        clearTimeout(giveUp);
-        reject(disposition);
-      },
-    });
-  }
-
-  /**
-   * Deliver the plugin's cancel answer (or the fallback) to the caller waiting on it, once. Answers
-   * arriving on a socket other than the one the CANCEL went out on are dropped: a displaced holder
-   * carries live run ids and must not narrate the current connection's runs.
-   */
-  private settleCancelAnswer(id: string, disposition: CancelDisposition, socket?: WebSocket): void {
-    const awaiting = this.cancelsAwaitingAnswer.get(id);
-    if (!awaiting || (socket && awaiting.socket !== socket)) return;
-    this.cancelsAwaitingAnswer.delete(id);
-    Logger.log(`Bridge request ${id}: cancelled, plugin reports ${disposition}`);
-    awaiting.settle(disposition);
-  }
-
-  /** Settle every cancel still waiting on an answer that can no longer arrive — its socket died, or
-   * the bridge stopped. Without this the caller waits out the full CANCEL_ANSWER_MS for a plugin
-   * that is provably gone. */
-  private failCancelAnswers(socket?: WebSocket): void {
-    for (const [id, awaiting] of this.cancelsAwaitingAnswer)
-      if (!socket || awaiting.socket === socket) this.settleCancelAnswer(id, "unknown");
-  }
-
-  disconnectedDurationMs(): number | null {
-    return this.disconnectedAt === null ? null : Date.now() - this.disconnectedAt;
-  }
-
-  private handleMessage(socket: WebSocket, raw: string): void {
-    // Measure the received frame, never recursively stringify parsed, untrusted input.
-    // All synchronous boundary dispatch stays inside this guard, including envelope validation.
+  private receive(connection: RelayConnection, raw: string): void {
+    // Measure the received frame, never recursively stringify parsed, untrusted input. All
+    // synchronous boundary dispatch stays inside this guard, including envelope validation.
     try {
       if (Buffer.byteLength(raw) > MAX_CHANNEL_BYTES) {
         Logger.log("Ignoring oversized plugin frame");
@@ -1036,376 +457,56 @@ export class PluginBridge {
       }
       const msg: unknown = JSON.parse(raw);
       if (!msg || typeof msg !== "object" || Array.isArray(msg)) return;
-      this.dispatchMessage(socket, msg as Record<string, unknown>);
+      this.dispatch(connection, msg as Record<string, unknown>);
     } catch {
       Logger.log("Ignoring invalid plugin message");
     }
   }
 
-  private dispatchMessage(socket: WebSocket, msg: Record<string, unknown>): void {
+  private dispatch(connection: RelayConnection, msg: Record<string, unknown>): void {
     const event = parsePluginEvent(msg);
     if (event) {
-      this.handleEvent(socket, event);
+      this.route(connection, event);
       return;
     }
     if (typeof msg.id !== "string") return;
     // A CHANNEL_REQUEST the parser refused still carries the plugin's id, and the plugin's call is
     // suspended on it: answer, or the run hangs until its own deadline.
     if (msg.type === "CHANNEL_REQUEST") {
-      this.refuseMalformedChannelRequest(socket, msg.id);
+      this.channel.refuseMalformed(connection, msg.id);
       return;
     }
-    this.settleReply(socket, msg.id, msg);
+    const outcome = this.ledger.settleReply(connection, msg.id, msg);
+    // A reply matching its request proves the holder speaks the frozen envelope — a real plugin, not a
+    // dead or mute squatter — which is what protects it from slot-reclaim, malformed or not.
+    if (outcome === "settled") connection.markEstablished();
+    // A run whose caller gave up still reports a change it made; the Write is owed regardless.
+    else if (
+      outcome === "late" &&
+      connection === this.current &&
+      parseExecuteCodeResult(msg)?.documentChanged
+    )
+      this.events.onRunDocumentChanged?.(msg.id);
   }
 
-  private handleEvent(socket: WebSocket, event: PluginEvent): void {
-    // Diagnostic traffic is observed even from a displaced request owner. It never participates
-    // in request settlement or inactivity rearming, and the trace retains no response contents.
-    if (event.type === "RUN_TRACE") {
-      this.trace.recordHost(event.runId, socket, event);
-      return;
-    }
-    if (this.socket !== socket) return;
-    switch (event.type) {
-      // Token handover from the sandbox after Allow. Persist it OUTSIDE the connection-scoped cluster
-      // (the field never clears on disconnect) so every later SESSION_INFO echoes it and the sandbox
-      // re-keys sticky approval to the token.
-      case "SESSION_TOKEN":
-        this.acceptFromCompatibleConnection(socket, () =>
-          this.acceptSessionToken(event.sessionToken, event.authorizingUser),
-        );
-        return;
-      // The plugin's claim on the approval request this session just made. Kept so a later
-      // connection can present it in SESSION_INFO; see `sessionClaim`.
-      case "SESSION_CLAIM":
-        this.acceptFromCompatibleConnection(socket, () => {
-          this.sessionClaim = event.sessionClaim;
-          if (this.boundPort !== null)
-            this.store.saveSessionClaim(this.boundPort, event.sessionClaim, Date.now());
-        });
-        return;
-      case "WRITE_ACCESS_SIGN_IN":
-        this.acceptFromCompatibleConnection(socket, () => this.events.onWriteAccessSignIn?.());
-        return;
-      // The human revoked in the arbiter panel — forget the token both in memory and on disk so no
-      // future SESSION_INFO can re-approve; the plugin already cleared its own approvedTokens entry
-      // (and cancelled this connection's runs), so the next write re-prompts.
-      case "REVOKE_SESSION":
-        this.acceptFromCompatibleConnection(socket, () => {
-          this.sessionToken = null;
-          this.authorizingUser = null;
-          if (this.boundPort !== null) this.store.clear(this.boundPort);
-          Logger.log("Session approval revoked by the human — cleared the persisted token");
-        });
-        return;
-      // Reverse direction: the plugin calls a server capability mid-run. Its ids live in the plugin's
-      // own namespace, so it never reaches the pending-reply match, which only knows server-issued ids.
-      case "CHANNEL_REQUEST":
-        this.serveChannelRequest(socket, event);
-        return;
-      case "RUN_STATE": {
-        const run = this.pending.get(event.runId);
-        if (run?.socket !== socket) return;
-        run.phase = event.phase;
-        this.trace.record(event.runId, socket, event.phase);
-        Logger.log(
-          `Bridge request ${event.runId}: ${event.phase} after ${Date.now() - run.startedAt}ms`,
-        );
-        this.armInactivityDeadline(event.runId, run, phaseAge(event.at, this.requestTimeoutMs));
-        return;
-      }
-      // The plugin's answer to a CANCEL we sent: run-scoped, so it settles here rather than through
-      // the correlated-reply path (the run it names left `pending` the moment it was cancelled).
-      case "CANCEL_RESULT":
-        this.settleCancelAnswer(event.runId, event.disposition, socket);
-        return;
-      // Metering outlives the caller. A run that changed the document after its "no" reply says so;
-      // one whose caller gave up still replies. Either way the Write is owed — the caller that
-      // authorized the run decides whether to count it.
-      case "RUN_CHANGED":
-        this.events.onRunDocumentChanged?.(event.runId);
-        return;
-      case "RUN_SETTLED":
-        this.events.onRunSettled?.(event.runId);
-        return;
-    }
-  }
-
-  private settleReply(socket: WebSocket, id: string, msg: Record<string, unknown>): void {
-    const pending = this.pending.get(id);
-    if (!pending) {
-      this.trace.record(id, socket, "late-reply");
-      // A run whose caller gave up still reports a change it made; the Write is owed regardless.
-      if (this.socket === socket && parseExecuteCodeResult(msg)?.documentChanged)
-        this.events.onRunDocumentChanged?.(id);
-      return;
-    }
-    if (pending.socket !== socket || this.socket !== socket) return;
-    this.takePending(id);
-    // A reply matching a pending request proves the holder speaks the frozen envelope — it's a real
-    // plugin (current, or a stale one that envelope-ERRORs), not a dead/silent squatter. This is
-    // what makes the holder "established" and thus protected from slot-reclaim — malformed or not.
-    this.handshaked = true;
-    const reply = parseReply(pending.payloadType, msg);
-    // Frozen-envelope error path: a plugin replies ERROR to any message type it doesn't recognize —
-    // the case a newer server hits against an older, un-updatable plugin. Surface it at once so the
-    // caller gets a readable error instead of waiting out the deadline. A reply that isn't the shape
-    // its request is owed is refused the same way, never handed on.
-    if (reply === null || reply.type === "ERROR") {
-      this.trace.record(id, socket, "error");
-      pending.reject(
-        new Error(
-          reply?.error ??
-            `The Figma plugin answered ${pending.payloadType} with a reply this server can't read.`,
-        ),
-      );
-      return;
-    }
-    this.trace.record(
-      id,
-      socket,
-      reply.type === "EXECUTE_CODE_RESULT" && reply.errors ? "error" : "result",
-    );
-    Logger.log(`Bridge request ${id}: finished after ${Date.now() - pending.startedAt}ms`);
-    pending.resolve(reply);
-  }
-
-  /**
-   * Apply a message that changes durable approval state (or starts network work) only once its
-   * connection has passed the version handshake. `verifyClient` admits any Origin-less or `null`-origin
-   * client into a free slot, so "is the current socket" alone would let a page or local process plant
-   * or wipe the persisted approval. Any peer that echoes GET_VERSION passes, so this raises the bar
-   * rather than authenticating; the plugin's own approvedTokens check stays the real gate.
-   *
-   * Deferred, not dropped, while the verdict is pending: the plugin can hand over a token in answer to
-   * SESSION_INFO, which follows GET_VERSION closely enough to arrive before its verdict lands.
-   */
-  private acceptFromCompatibleConnection(socket: WebSocket, apply: () => void): void {
-    if (this.compatibility === "compatible") {
-      apply();
-      return;
-    }
-    if (this.compatibility === "incompatible") return;
-    void this.verdictSettled
-      .then(() => {
-        if (this.socket === socket && this.compatibility === "compatible") apply();
-      })
-      .catch(() => Logger.log("Ignoring invalid plugin message"));
-  }
-
-  private acceptSessionToken(sessionToken: string, authorizingUser: AuthorizingUser | null): void {
-    this.sessionToken = sessionToken;
-    this.authorizingUser = authorizingUser;
-    // Persist so the approval survives a server restart, not just this connection (approval-store.ts).
-    // boundPort is set by `listening`, which precedes any connection, so it is non-null here.
-    if (this.boundPort !== null)
-      this.store.save(
-        this.boundPort,
-        sessionToken,
-        SESSION_IDENTITY,
-        this.authorizingUser,
-        Date.now(),
-      );
-    // The handover spends the claim: approval now rides the token, and a stale claim must not
-    // outlive the request it was minted for.
-    this.sessionClaim = null;
-    if (this.boundPort !== null) this.store.clearSessionClaim(this.boundPort);
-    Logger.log("Stored session token handed over by the sandbox after Allow (persisted)");
-    this.events.onSessionApproved?.(this.authorizingUser);
-  }
-
-  /**
-   * Reply on the socket a channel request arrived on, and only while it is still the current one — a
-   * displaced or dead socket's result must not leak onto a newer connection.
-   */
-  private channelResponder(
-    socket: WebSocket,
-    id: string,
-  ): {
-    send: (body: Record<string, unknown>) => void;
-    refuse: (code: string, message: string) => void;
-  } {
-    const send = (body: Record<string, unknown>): void => {
-      if (this.socket !== socket || socket.readyState !== WebSocket.OPEN) return;
-      const failure = (code: string, message: string): string =>
-        JSON.stringify({ type: "CHANNEL_RESPONSE", id, ok: false, error: { code, message } });
-      let encoded: string;
-      try {
-        // Encoding can fail for non-JSON handler output, including cycles or excessive depth.
-        encoded = JSON.stringify({ ...body, id });
-        if (Buffer.byteLength(encoded) > MAX_CHANNEL_BYTES) {
-          encoded = failure(
-            "RESPONSE_TOO_LARGE",
-            "flcm: server response exceeds the channel size cap.",
-          );
-        }
-      } catch {
-        encoded = failure(
-          "SERIALIZATION_FAILED",
-          "flcm: server response could not be encoded as JSON.",
-        );
-      }
-      try {
-        socket.send(encoded);
-      } catch {
-        Logger.log("Could not send channel response");
-      }
-    };
-    const refuse = (code: string, message: string): void => {
-      send({ type: "CHANNEL_RESPONSE", ok: false, error: { code, message } });
-    };
-    return { send, refuse };
-  }
-
-  private refuseMalformedChannelRequest(socket: WebSocket, id: string): void {
-    this.channelResponder(socket, id).refuse(
-      "INVALID_INPUT",
-      "flcm: the channel request was missing its run id or capability — it was refused.",
-    );
-  }
-
-  /**
-   * Service a plugin-issued CHANNEL_REQUEST. Traffic-as-heartbeat: the run's
-   * inactivity deadline is SUSPENDED while WE are the side doing the work and re-armed when the
-   * run's last in-flight service settles. The run ceiling never suspends; the inactivity deadline
-   * only counts plugin-side silence.
-   * A request naming a run this bridge no longer tracks (timed
-   * out, cancelled, already resolved) is refused instead of served: the refusal rejects the run's
-   * suspended await plugin-side, so a zombie run can never resume into canvas writes after the
-   * agent was told nothing happened. That refusal is the server's own half of the policy; the
-   * plugin's run-cancellation registry enforces the rest (see timeoutPending).
-   */
-  private serveChannelRequest(
-    socket: WebSocket,
-    request: Extract<PluginEvent, { type: "CHANNEL_REQUEST" }>,
+  private route<K extends PluginEventType>(
+    connection: RelayConnection,
+    event: Extract<PluginEvent, { type: K }>,
   ): void {
-    const { id, runId } = request;
-    // A reverse request proves the holder speaks the envelope, exactly like a matched reply.
-    this.handshaked = true;
-    const { send, refuse } = this.channelResponder(socket, id);
-    const run = this.pending.get(runId);
-    if (!run || run.socket !== socket) {
-      refuse(
-        "RUN_INACTIVE",
-        `flcm: run ${runId} is no longer active on this server (cancelled, timed out, or already finished) — the channel request was refused.`,
-      );
-      return;
-    }
-    // Only a code run may call the server. Every server-issued request (GET_VERSION, SESSION_INFO,
-    // APPROVAL_STATUS, …) is in `pending` under a correlation id the holder was sent, so without this
-    // gate a holder could burn server work — and hold a suspension — against a request that is no run.
-    if (run.payloadType !== "EXECUTE_CODE") {
-      refuse(
-        "INVALID_INPUT",
-        `flcm: run ${runId} is not a code run — only EXECUTE_CODE runs may call server capabilities.`,
-      );
-      return;
-    }
-    const handler = this.capabilities.get(request.capability);
-    if (!handler) {
-      refuse("UNKNOWN_CAPABILITY", "flcm: unknown server capability.");
-      return;
-    }
-    const inFlight = this.inFlightServices.get(runId) ?? 0;
-    if (inFlight >= MAX_INFLIGHT_SERVICES_PER_RUN) {
-      refuse(
-        "TOO_MANY_REQUESTS",
-        `flcm: run ${runId} already has ${inFlight} channel requests in flight — this one was refused.`,
-      );
-      return;
-    }
-    this.inFlightServices.set(runId, inFlight + 1);
-    clearTimeout(run.timer ?? undefined); // suspend: the server is the side working now
-    run.timer = null;
-    // Re-arm only when the LAST in-flight service settles — with concurrent services, the first
-    // reply must not restart the run's clock while a second service is still the server's work.
-    const settleService = (): void => {
-      const count = this.inFlightServices.get(runId);
-      if (count === undefined) return;
-      if (count > 1) {
-        this.inFlightServices.set(runId, count - 1);
-        return;
-      }
-      this.inFlightServices.delete(runId);
-      // Cancelled work remains counted until it settles, but must never revive a dead run timer.
-      if (this.pending.get(runId) === run) this.armInactivityDeadline(runId, run);
-    };
-    void Promise.resolve()
-      .then(() => {
-        run.servicesAbort.signal.throwIfAborted();
-        return handler(request.payload, { signal: run.servicesAbort.signal, run: run.runContext });
-      })
-      .then((payload) => {
-        if (!this.pending.has(runId)) {
-          // The run died during service; withhold the result rather than resume a zombie.
-          refuse(
-            "RUN_INACTIVE",
-            `flcm: run ${runId} is no longer active on this server — the channel reply was withheld.`,
-          );
-          return;
-        }
-        const response = { type: "CHANNEL_RESPONSE", ok: true, payload };
-        send(response);
-      })
-      .catch((err: unknown) => {
-        if (run.servicesAbort.signal.aborted) {
-          refuse("CANCELLED", "flcm: the run ended; server work was cancelled.");
-          return;
-        }
-        try {
-          send({ type: "CHANNEL_RESPONSE", ok: false, error: channelFailure(err) });
-        } catch {
-          refuse("SERIALIZATION_FAILED", "flcm: server failure could not be encoded as JSON.");
-        }
-      })
-      .finally(settleService);
+    const route: EventRoute<K> = this.routes[event.type as K];
+    const apply = () => route.handle(connection, event);
+    if (route.from === "any") return apply();
+    if (connection !== this.current) return;
+    if (route.from === "holder" || connection.compatibility === "compatible") return apply();
+    // Deferred, not dropped, while the verdict is pending: the plugin can hand over a token in answer
+    // to SESSION_INFO, which follows GET_VERSION closely enough to arrive before its verdict lands.
+    if (connection.compatibility === "checking")
+      void connection.verdictSettled
+        .then(() => {
+          if (connection === this.current && connection.compatibility === "compatible") apply();
+        })
+        .catch(() => Logger.log("Ignoring invalid plugin message"));
   }
-}
-
-/**
- * The caller's rejection for a cancelled request, worded from the plugin's own answer.
- *
- * Every sentence here is an instruction to an agent, so the hedge is expensive: told "completion is
- * unconfirmed, inspect affected nodes" about a run that never started, an agent goes reading a canvas
- * nothing touched, and may decline to retry work that was never done. The hedge is kept for exactly
- * the case that earns it — a plugin that could not tell us.
- */
-function cancelRejection(
-  id: string,
-  pending: Pending,
-  why: string,
-  disposition: CancelDisposition,
-): BridgeRequestError {
-  const head = `Bridge request ${id} (${pending.payloadType}, last phase ${pending.phase}, ${Date.now() - pending.startedAt}ms) ${why}. `;
-  if (pending.payloadType === "APPROVAL_STATUS")
-    return new BridgeRequestError(
-      head + "Approval status was not received; no code was submitted.",
-      "not-submitted",
-      pending.phase,
-    );
-  if (disposition === "never-executed")
-    return new BridgeRequestError(
-      head +
-        "The plugin confirms this run never executed — it was still queued behind another one, and " +
-        "the queue will skip it. Nothing on the canvas changed; retry as-is.",
-      "not-submitted",
-      pending.phase,
-    );
-  if (disposition === "was-running")
-    return new BridgeRequestError(
-      head +
-        "The plugin confirms this run was executing when it was cancelled, so writes before the " +
-        "cancellation landed. Inspect affected nodes before retrying.",
-      "unconfirmed",
-      pending.phase,
-    );
-  return new BridgeRequestError(
-    head +
-      "Completion is unconfirmed: cancellation was requested and the plugin did not confirm what " +
-      "became of the run. Raw code may still finish. Inspect affected nodes before retrying.",
-    "unconfirmed",
-    pending.phase,
-  );
 }
 
 /** Abort a local hold without leaving listeners behind when its gate settles. */

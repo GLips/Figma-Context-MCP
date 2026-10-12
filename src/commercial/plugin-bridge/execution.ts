@@ -7,6 +7,7 @@ import type { ExecuteCodeResult, PendingApprovalReply } from "@framelink/plugin/
 import type { PluginBridgeRuntime } from "./index.js";
 import { BridgeRequestError, type ChannelRunContext } from "./bridge.js";
 import { requestUntilApproved, isPendingApproval } from "./await-approval.js";
+import type { ApprovedSession } from "./approval-session.js";
 import { flcmSandboxPreamble } from "./sandbox-preamble.js";
 import { uploadHandlesNamedIn } from "./image-intake.js";
 import { LATE_CHANGE_WINDOW_MS } from "../entitlement/write-access.js";
@@ -41,10 +42,13 @@ export async function executePluginCode(
   // plugin, which executes the code and so could otherwise name any handle it has seen.
   const runContext: ChannelRunContext = { figma, uploadHandles: uploadHandlesNamedIn(code) };
   const executionId = randomUUID();
-  const gate: { authorization: WriteAuthorization | null; runId: string | null } = {
-    authorization: null,
-    runId: null,
-  };
+  // What the granting poll admitted, and what was decided under it: one session from admission to
+  // attribution to the TTL slide, never re-read from the bridge.
+  const gate: {
+    session: ApprovedSession | null;
+    authorization: WriteAuthorization | null;
+    runId: string | null;
+  } = { session: null, authorization: null, runId: null };
   try {
     let raw:
       | { kind: "refused"; refusal: WriteRefusal }
@@ -52,10 +56,11 @@ export async function executePluginCode(
       | PendingApprovalReply;
     try {
       raw = await requestUntilApproved(
-        (signal) => bridge.request({ type: "APPROVAL_STATUS" }, signal),
-        async (signal) => {
+        (signal) => bridge.approvalStatus(signal),
+        async (signal, session) => {
+          gate.session = session;
           gate.authorization = await writeAccess.authorizeWriteExecution(
-            bridge.getAuthorizingUser(),
+            session?.authorizingUser ?? null,
             executionId,
           );
           if (gate.authorization.kind === "refused")
@@ -101,7 +106,7 @@ export async function executePluginCode(
       "result" in raw.reply ? { result: raw.reply.result, console, errors } : { console, errors };
     if (documentChanged && gate.authorization)
       writeAccess.recordWriteExecution(gate.authorization, executionId);
-    bridge.touchApproval();
+    if (gate.session) bridge.touchApproval(gate.session);
     return {
       kind: "executed",
       reply,
@@ -123,7 +128,7 @@ export async function capturePluginScreenshot(
   options?: ApprovalOptions,
 ) {
   const raw = await requestUntilApproved(
-    (signal) => bridge.request({ type: "APPROVAL_STATUS" }, signal),
+    (signal) => bridge.approvalStatus(signal),
     (signal) => bridge.request({ type: "SCREENSHOT", ...target }, signal),
     options,
   );

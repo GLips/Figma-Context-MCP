@@ -42,7 +42,7 @@ async function startBridge() {
   const bridge = new PluginBridge(store);
   bridge.start([port]);
   cleanup.push(() => bridge.stop());
-  await expect.poll(() => bridge.getSessionToken()).toBe(SEEDED);
+  await expect.poll(() => bridge.approvedSession()?.token).toBe(SEEDED);
   return { bridge, store, port, url: `ws://127.0.0.1:${port}` };
 }
 
@@ -73,12 +73,12 @@ it("a connection that never passed the version handshake can neither plant nor r
   squatter.send(JSON.stringify({ type: "SESSION_TOKEN", sessionToken: PLANTED }));
   squatter.send(JSON.stringify({ type: "REVOKE_SESSION" }));
   await new Promise((resolve) => setTimeout(resolve, 100));
-  expect(bridge.getSessionToken()).toBe(SEEDED);
+  expect(bridge.approvedSession()?.token).toBe(SEEDED);
   expect(store.loadRecord(port, Date.now())?.token).toBe(SEEDED);
 });
 
 it("a compatible plugin's handover lands even when it arrives before the verdict", async () => {
   const { bridge, url } = await startBridge();
   await connect(url, true);
-  await expect.poll(() => bridge.getSessionToken()).toBe(PLANTED);
+  await expect.poll(() => bridge.approvedSession()?.token).toBe(PLANTED);
 });

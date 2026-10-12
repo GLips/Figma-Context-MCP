@@ -60,7 +60,6 @@ import { PluginBridge } from "../src/commercial/plugin-bridge/bridge.ts";
 import { WS_PORT_BLOCK } from "../plugin/src/protocol.ts";
 import { LATE_CHANGE_WINDOW_MS } from "../src/commercial/entitlement/write-access.ts";
 import { DEFAULT_FRAMELINK_API_URL } from "../src/config.ts";
-import { SESSION_IDENTITY } from "../src/commercial/plugin-bridge/approval.ts";
 import { requestUntilApproved } from "../src/commercial/plugin-bridge/await-approval.ts";
 import { buildSandboxPreamble } from "../plugin/src/preamble/index.mjs";
 
@@ -193,7 +192,7 @@ async function exec(code) {
   // (code-mode-tools.ts). Handing this ONE callback polls by re-sending EXECUTE_CODE, so each
   // scenario would run repeatedly and then read its own run's reply as an unexpected approval status.
   const reply = await requestUntilApproved(
-    (signal) => bridge.request({ type: "APPROVAL_STATUS" }, signal),
+    (signal) => bridge.approvalStatus(signal),
     () => bridge.request({ type: "EXECUTE_CODE", code, preamble: PREAMBLE, lateChangeWindowMs: LATE_CHANGE_WINDOW_MS }),
     { waitMs: APPROVAL_WINDOW_MS },
   );
@@ -212,13 +211,7 @@ async function exec(code) {
 // unidentifiable, unapprovable row on the strip. Scenarios still start only once.
 async function introduceSession() {
   log("plugin connected — introducing the session");
-  await bridge.request({
-    type: "SESSION_INFO",
-    identity: SESSION_IDENTITY,
-    pairingCode: bridge.getPairingCode(),
-    sessionToken: bridge.getSessionToken(),
-    framelinkOrigin: DEFAULT_FRAMELINK_API_URL,
-  });
+  await bridge.request(bridge.sessionInfo(DEFAULT_FRAMELINK_API_URL));
   log(`if the strip asks, click Allow (pairing code ${bridge.getPairingCode()})`);
 }
 

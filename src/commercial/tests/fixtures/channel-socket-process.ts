@@ -9,7 +9,7 @@ import { once } from "node:events";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { WebSocket, type WebSocketServer } from "ws";
+import { WebSocket } from "ws";
 import { PluginBridge } from "../../plugin-bridge/bridge.js";
 import { ApprovalStore } from "../../plugin-bridge/approval-store.js";
 import { PROTOCOL_VERSION } from "@framelink/plugin/protocol";
@@ -52,14 +52,10 @@ const bridge = new PluginBridge(new ApprovalStore(directory, directory), {
     ],
   ]),
 });
-// Port 0 avoids conflicts between test processes. Only discovery uses internals; traffic is real.
+// Port 0 avoids conflicts between test processes; `bridge.port` reads back the one the OS picked.
 bridge.start([0]);
-let server: WebSocketServer | undefined;
-while (!(server = Reflect.get(bridge, "wss")))
-  await new Promise((resolve) => setImmediate(resolve));
-const address = server.address();
-assert(address && typeof address !== "string");
-const port = address.port;
+let port: number | null;
+while (!(port = bridge.port)) await new Promise((resolve) => setImmediate(resolve));
 
 async function peer() {
   const ws = new WebSocket(`ws://127.0.0.1:${port}`, { origin: "null" });
@@ -133,16 +129,9 @@ try {
     }
     await serviceAborted;
     assert.match(String(await result), /disconnected/);
-    const accounting = Reflect.get(bridge, "inFlightServices") as Map<string, number>;
-    assert.equal(
-      [...accounting.values()].reduce((a, b) => a + b, 0),
-      1,
-    );
     release();
-    while (accounting.size) await new Promise((resolve) => setImmediate(resolve));
     await closed;
   }
-  assert.equal((Reflect.get(bridge, "pending") as Map<string, unknown>).size, 0);
   // Prove the same server process remains usable and accepts a replacement connection.
   const replacement = await peer();
   const pong = await bridge.request({ type: "PING", payload: "alive" });

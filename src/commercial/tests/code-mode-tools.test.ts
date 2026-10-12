@@ -8,35 +8,27 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { ListToolsResultSchema } from "@modelcontextprotocol/sdk/types.js";
 import { createServer } from "~/mcp/index.js";
 import type { PluginBridge } from "~/commercial/plugin-bridge/bridge.js";
-import type { PluginBridgeRuntime } from "~/commercial/plugin-bridge/index.js";
-import { createTestWriteAccess, TEST_AUTHORIZING_USER } from "./fixtures/write-access.js";
+import type { PluginBridgeRuntime, PluginPresence } from "~/commercial/plugin-bridge/index.js";
+import { createTestWriteAccess } from "./fixtures/write-access.js";
 
 /**
  * Advertisement is driven through a real Client/Server pair rather than by inspecting the registration
  * call: what matters is whether the agent can SEE the write tools, and a disabled tool is invisible to
  * tools/list but still registered.
  */
-function listToolsWith({
-  hasEverConnected,
-  hasRecentApproval,
-}: {
-  hasEverConnected: boolean;
-  hasRecentApproval: boolean;
-}) {
+function listToolsWith(presence: PluginPresence) {
   const bridge = {
     request: vi.fn(),
     getPairingCode: () => null,
     protocolRefusal: () => null,
     touchApproval: () => {},
-    getAuthorizingUser: () => TEST_AUTHORIZING_USER,
     isPluginConnected: () => false,
-    hasRecentApproval: () => hasRecentApproval,
   } as unknown as PluginBridge;
   const runtime: PluginBridgeRuntime = {
     bridge,
     writeAccess: createTestWriteAccess().writeAccess,
     readSavedScript: () => Promise.reject(new Error("no saved scripts in this test")),
-    hasEverConnected: () => hasEverConnected,
+    pluginPresence: () => presence,
     onFirstConnect: () => {},
   };
   const server = createServer(
@@ -59,20 +51,14 @@ describe("code-mode write tools are advertised whenever a plugin is expected", (
     // A dev-watch restart: fresh process (latch off), relay rebound onto an approval used minutes ago,
     // and the plugin a second or two from redialing. Hiding the tools here answered a call that was
     // merely early with "Tool figma_execute_code disabled" — a hard error an agent can't retry past.
-    const { names, close } = listToolsWith({
-      hasEverConnected: false,
-      hasRecentApproval: true,
-    });
+    const { names, close } = listToolsWith("expected");
 
     expect(await names()).toContain("figma_execute_code");
     await close();
   });
 
   it("stays hidden on a genuine cold start, so read-only users never see write tools", async () => {
-    const { names, close } = listToolsWith({
-      hasEverConnected: false,
-      hasRecentApproval: false,
-    });
+    const { names, close } = listToolsWith("absent");
 
     const tools = await names();
     expect(tools).not.toContain("figma_execute_code");

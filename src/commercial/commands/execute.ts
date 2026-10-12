@@ -24,7 +24,7 @@ import { isSavedScriptPath } from "~/commercial/plugin-bridge/saved-script.js";
 import { MAX_SCREENSHOT_SCALE } from "@framelink/plugin/protocol";
 import { screenshotInputError } from "~/commercial/plugin-bridge/screenshot-options.js";
 import {
-  approvalPendingRerunAction,
+  approvalGuidance,
   pluginDisconnectedAction,
 } from "~/commercial/plugin-bridge/blocked-call-guidance.js";
 import { buildQuickStart } from "~/commercial/tools/flcm-docs/reference.js";
@@ -216,7 +216,10 @@ export async function runExecute(flags: ExecuteFlags, positionals: string[]): Pr
       signal: controller.signal,
       onWaiting: () => {
         console.error(
-          `Waiting for approval in Figma (pairing code ${runtime.bridge.getPairingCode()}); code has not been submitted.`,
+          approvalGuidance(
+            { kind: "waiting", pairingCode: runtime.bridge.getPairingCode() },
+            "cli",
+          ),
         );
         return async () => {};
       },
@@ -225,7 +228,10 @@ export async function runExecute(flags: ExecuteFlags, positionals: string[]): Pr
     if (outcome.kind === "refused") throw new Error(outcome.message);
     if (outcome.kind === "pending") {
       throw new Error(
-        `The script did not run. ${approvalPendingRerunAction(runtime.bridge.getPairingCode(), waitMs)}`,
+        approvalGuidance(
+          { kind: "expired", pairingCode: runtime.bridge.getPairingCode(), waitMs },
+          "cli",
+        ),
       );
     }
     try {

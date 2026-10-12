@@ -4,8 +4,9 @@
  */
 import { describe, it, expect, vi } from "vitest";
 import { requestUntilApproved } from "~/commercial/plugin-bridge/await-approval.js";
+import { TEST_APPROVED_SESSION } from "./fixtures/write-access.js";
 const pending = { type: "PENDING_APPROVAL" } as const;
-const granted = { type: "APPROVAL_GRANTED" } as const;
+const granted = { type: "APPROVAL_GRANTED", session: TEST_APPROVED_SESSION } as const;
 
 function clock() {
   let time = 0;
@@ -18,7 +19,7 @@ function clock() {
 }
 
 describe("approval before single submission", () => {
-  it("waits for Allow without sending code, then executes once and stops progress", async () => {
+  it("waits for Allow without sending code, then executes once under the granting session", async () => {
     let polls = 0;
     const submit = vi.fn(async () => "committed");
     const stop = vi.fn(async () => {});
@@ -29,6 +30,7 @@ describe("approval before single submission", () => {
       }),
     ).toBe("committed");
     expect(submit).toHaveBeenCalledTimes(1);
+    expect(submit).toHaveBeenCalledWith(expect.any(AbortSignal), TEST_APPROVED_SESSION);
     expect(stop).toHaveBeenCalledTimes(1);
   });
   it("never resends an approved run that committed and then timed out", async () => {

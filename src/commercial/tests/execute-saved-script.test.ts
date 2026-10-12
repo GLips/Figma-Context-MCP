@@ -17,7 +17,7 @@ import type { PluginBridge } from "~/commercial/plugin-bridge/bridge.js";
 import type { PluginBridgeRuntime } from "~/commercial/plugin-bridge/index.js";
 import { createContainedFileReader } from "~/commercial/plugin-bridge/contained-file.js";
 import { createSavedScriptReader } from "~/commercial/plugin-bridge/saved-script.js";
-import { createTestWriteAccess, TEST_AUTHORIZING_USER } from "./fixtures/write-access.js";
+import { createTestWriteAccess, grantedTestApproval } from "./fixtures/write-access.js";
 
 let outer: string;
 let root: string;
@@ -33,30 +33,26 @@ afterEach(async () => {
 });
 
 function connectedServer() {
-  const request = vi.fn().mockImplementation(async (payload: ServerRequest) =>
-    payload.type === "APPROVAL_STATUS"
-      ? { type: "APPROVAL_GRANTED" }
-      : {
-          type: "EXECUTE_CODE_RESULT",
-          result: "ran",
-          console: [],
-          errors: null,
-          documentChanged: false,
-        },
-  );
+  const request = vi.fn().mockImplementation(async (_payload: ServerRequest) => ({
+    type: "EXECUTE_CODE_RESULT",
+    result: "ran",
+    console: [],
+    errors: null,
+    documentChanged: false,
+  }));
   const bridge = {
     request,
     getPairingCode: () => "1234",
     protocolRefusal: () => null,
     touchApproval: () => {},
-    getAuthorizingUser: () => TEST_AUTHORIZING_USER,
+    approvalStatus: grantedTestApproval,
     isPluginConnected: () => true,
   } as unknown as PluginBridge;
   const runtime: PluginBridgeRuntime = {
     bridge,
     writeAccess: createTestWriteAccess().writeAccess,
     readSavedScript: createSavedScriptReader(createContainedFileReader(root)),
-    hasEverConnected: () => true,
+    pluginPresence: () => "connected",
     onFirstConnect: () => {},
   };
   const server = createServer(

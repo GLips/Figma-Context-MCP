@@ -9,7 +9,7 @@ import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
 import { createServer } from "~/mcp/index.js";
 import type { PluginBridge } from "~/commercial/plugin-bridge/bridge.js";
 import type { PluginBridgeRuntime } from "~/commercial/plugin-bridge/index.js";
-import { createTestWriteAccess, TEST_AUTHORIZING_USER } from "./fixtures/write-access.js";
+import { createTestWriteAccess, grantedTestApproval } from "./fixtures/write-access.js";
 
 /**
  * The point of these tests is the SDK parse seam, not our string formatting — so they drive a real
@@ -17,11 +17,9 @@ import { createTestWriteAccess, TEST_AUTHORIZING_USER } from "./fixtures/write-a
  * even if the SDK silently stripped the bad key on the way in, which is the exact bug this closes.
  */
 function connectedServer(
-  request = vi
-    .fn()
-    .mockImplementation(async (payload: { type: string }) =>
-      payload.type === "APPROVAL_STATUS" ? { type: "APPROVAL_GRANTED" } : { image: "iVBORw0KGgo=" },
-    ),
+  request = vi.fn().mockImplementation(async (_payload: { type: string }) => ({
+    image: "iVBORw0KGgo=",
+  })),
 ) {
   const bridge = {
     request,
@@ -29,14 +27,14 @@ function connectedServer(
     protocolRefusal: () => null,
     touchApproval: () => {},
     // A plugin is on the wire in these tests, so the disconnect reply never fires.
-    getAuthorizingUser: () => TEST_AUTHORIZING_USER,
+    approvalStatus: grantedTestApproval,
     isPluginConnected: () => true,
   } as unknown as PluginBridge;
   const runtime: PluginBridgeRuntime = {
     bridge,
     writeAccess: createTestWriteAccess().writeAccess,
     readSavedScript: () => Promise.reject(new Error("no saved scripts in this test")),
-    hasEverConnected: () => true,
+    pluginPresence: () => "connected",
     onFirstConnect: () => {},
   };
   const server = createServer(

@@ -15,7 +15,7 @@ import type {
 } from "@framelink/plugin/protocol";
 import { PluginBridge } from "~/commercial/plugin-bridge/bridge.js";
 import { APPROVAL_WAIT_MS } from "~/commercial/plugin-bridge/await-approval.js";
-import { createTestWriteAccess, TEST_AUTHORIZING_USER } from "./fixtures/write-access.js";
+import { createTestWriteAccess, TEST_APPROVED_SESSION } from "./fixtures/write-access.js";
 
 class Bridge extends PluginBridge {
   decision: ApprovalStatusReply["type"] = "PENDING_APPROVAL";
@@ -29,8 +29,8 @@ class Bridge extends PluginBridge {
   override disconnectedDurationMs() {
     return this.outage;
   }
-  override getAuthorizingUser() {
-    return TEST_AUTHORIZING_USER;
+  override approvedSession() {
+    return TEST_APPROVED_SESSION;
   }
   override getPairingCode() {
     return "1234";
@@ -68,7 +68,7 @@ async function setup() {
         bridge,
         writeAccess: createTestWriteAccess().writeAccess,
         readSavedScript: () => Promise.reject(new Error("no saved scripts in this test")),
-        hasEverConnected: () => true,
+        pluginPresence: () => "connected",
         onFirstConnect: () => {},
       },
     },
