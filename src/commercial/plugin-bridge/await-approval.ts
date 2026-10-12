@@ -42,9 +42,16 @@ interface ApprovalWaitDeps {
   onWaiting?: () => () => Promise<void>;
 }
 
+/** What a granted wait submitted, under the session the granting poll admitted. */
+export interface ApprovedSubmission<R> {
+  session: ApprovedSession | null;
+  result: R;
+}
+
 /**
  * Poll the plugin's decision until it grants, then submit exactly once. `submit` receives the session
- * the granting poll admitted, so the run is attributed to the Allow that let it in.
+ * the granting poll admitted, and the same session comes back beside its result, so the run is
+ * attributed to the Allow that let it in.
  */
 export async function requestUntilApproved<R>(
   status: (signal: AbortSignal) => Promise<ApprovalStatus>,
@@ -57,7 +64,7 @@ export async function requestUntilApproved<R>(
     signal,
     onWaiting,
   }: ApprovalWaitDeps = {},
-): Promise<R | PendingApprovalReply> {
+): Promise<ApprovedSubmission<R> | PendingApprovalReply> {
   const deadline = now() + waitMs;
   const local = new AbortController();
   const abort = () => local.abort(signal?.reason);
@@ -98,7 +105,7 @@ export async function requestUntilApproved<R>(
         await stop?.();
         stop = undefined;
         local.signal.throwIfAborted();
-        return await submit(local.signal, reply.session);
+        return { session: reply.session, result: await submit(local.signal, reply.session) };
       }
       lastPending = reply;
       if (now() >= deadline) return reply;

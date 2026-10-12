@@ -14,19 +14,20 @@ export const PLUGIN_RECONNECT_WINDOW_MS = 30_000;
 const REPORT_TO_PERSON = "Report this to the user or coordinating agent, and retry only after";
 
 /**
- * Where a call stands with the plugin's approval, as far as the wording goes. `pending` is an open
- * request nothing waits on; `waiting` is a call still waiting on the human; `expired` is one whose
- * wait ended with no Allow. Approved has no sentence, so it is not a state here.
+ * Where a call stands with the plugin's approval, as far as the wording goes. `waiting` is a call
+ * still waiting on the human; `expired` is one whose wait ended with no Allow. The `reference-`
+ * states come only from get_flcm_reference's status lookup, which never waits: an open request
+ * nothing waits on, and a lookup that got no answer. Approved has no sentence, so it is not a state.
  */
 export type ApprovalGuidanceState =
   | { kind: "disconnected"; elapsedMs: number | null }
   | { kind: "incompatible"; refusal: string }
-  | { kind: "pending"; pairingCode: string | null }
+  | { kind: "reference-pending"; pairingCode: string | null }
   | { kind: "waiting"; pairingCode: string | null }
   | { kind: "expired"; pairingCode: string | null; waitMs: number }
   | { kind: "rejected"; pairingCode: string | null }
   | { kind: "unresponsive" }
-  | { kind: "status-unknown" };
+  | { kind: "reference-status-unknown" };
 
 /**
  * Who reads it. `mcp` is a tool result on a server that outlives the call; `cli` is the `execute`
@@ -46,12 +47,12 @@ export function approvalGuidance(state: ApprovalGuidanceState, surface: Guidance
         : pluginDisconnectedNotSubmittedText(state.elapsedMs);
     case "waiting":
       return `Waiting for approval in Figma (pairing code ${state.pairingCode}). Code has not been submitted.`;
-    // On the reference, a rejected request reads like an open one: an Allow on that row still works.
-    case "pending":
+    case "reference-pending":
       return `Approval is required before executing code. Ask the user to allow pairing code ${state.pairingCode} in the Framelink plugin. This reference request does not wait for approval or submit code.`;
+    // On the reference, a rejected request reads like an open one: an Allow on that row still works.
     case "rejected":
       return surface === "reference"
-        ? approvalGuidance({ kind: "pending", pairingCode: state.pairingCode }, surface)
+        ? approvalGuidance({ kind: "reference-pending", pairingCode: state.pairingCode }, surface)
         : "Approval rejected; no code was submitted.";
     case "expired":
       return surface === "cli"
@@ -63,7 +64,7 @@ export function approvalGuidance(state: ApprovalGuidanceState, surface: Guidance
         `expired, so no code was submitted. Required before retrying: someone closes and reopens the ` +
         `Framelink plugin in Figma. ${REPORT_TO_PERSON} it is reopened.`
       );
-    case "status-unknown":
+    case "reference-status-unknown":
       return "The plugin's approval status could not be checked. Check the Framelink plugin connection before executing code. The reference is available below; no code was submitted.";
   }
 }

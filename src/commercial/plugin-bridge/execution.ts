@@ -3,7 +3,7 @@
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
 import { randomUUID } from "node:crypto";
-import type { ExecuteCodeResult, PendingApprovalReply } from "@framelink/plugin/protocol";
+import type { ExecuteCodeResult } from "@framelink/plugin/protocol";
 import type { PluginBridgeRuntime } from "./index.js";
 import { BridgeRequestError, type ChannelRunContext } from "./bridge.js";
 import { requestUntilApproved, isPendingApproval } from "./await-approval.js";
@@ -39,61 +39,55 @@ export async function executePluginCode(
   // plugin, which executes the code and so could otherwise name any handle it has seen.
   const runContext: ChannelRunContext = { figma, uploadHandles: uploadHandlesNamedIn(code) };
   const executionId = randomUUID();
-  // What the granting poll admitted, and the charge decided under it: one session from admission
-  // to attribution to the TTL slide, never re-read from the bridge.
-  const gate: { session: ApprovedSession | null; charge: ExecutionCharge | null } = {
-    session: null,
-    charge: null,
-  };
-  let raw:
-    | { kind: "refused"; refusal: WriteRefusal }
-    | { kind: "replied"; reply: ExecuteCodeResult }
-    | PendingApprovalReply;
-  try {
-    raw = await requestUntilApproved(
-      (signal) => bridge.approvalStatus(signal),
-      async (signal, session) => {
-        gate.session = session;
-        const admission = await writeMeter.authorize(session?.authorizingUser ?? null, executionId);
-        if (admission.kind === "refused") return admission;
-        const charge = (gate.charge = admission.charge);
-        const reply = await bridge.request(
-          {
-            type: "EXECUTE_CODE",
-            code,
-            preamble: flcmSandboxPreamble(),
-            lateChangeWindowMs: LATE_CHANGE_WINDOW_MS,
-          },
-          signal,
-          (runId) => charge.submitted(runId),
-          runContext,
-        );
-        // The plugin gates consent again on the submit itself, so it too may answer PENDING_APPROVAL.
-        return isPendingApproval(reply) ? reply : { kind: "replied", reply };
+  // The charge decided under the admitting session, held in an object because TS can't see the
+  // closure assign it. The session itself comes back from the wait.
+  const gate: { charge: ExecutionCharge | null } = { charge: null };
+  async function submitUnderApproval(signal: AbortSignal, session: ApprovedSession | null) {
+    const admission = await writeMeter.authorize(session?.authorizingUser ?? null, executionId);
+    if (admission.kind === "refused") return admission;
+    const charge = (gate.charge = admission.charge);
+    const reply = await bridge.request(
+      {
+        type: "EXECUTE_CODE",
+        code,
+        preamble: flcmSandboxPreamble(),
+        lateChangeWindowMs: LATE_CHANGE_WINDOW_MS,
       },
-      options,
+      signal,
+      (runId) => charge.submitted(runId),
+      runContext,
     );
-  } catch (error) {
+    // The plugin gates consent again on the submit itself, so it too may answer PENDING_APPROVAL.
+    return isPendingApproval(reply) ? reply : { kind: "replied" as const, reply };
+  }
+  const waited = await requestUntilApproved(
+    (signal) => bridge.approvalStatus(signal),
+    submitUnderApproval,
+    options,
+  ).catch((error: unknown) => {
     gate.charge?.lost({ mayHaveRun: mayHaveRun(error) });
     throw error;
-  }
-  if (isPendingApproval(raw)) {
+  });
+  if (isPendingApproval(waited) || isPendingApproval(waited.result)) {
     gate.charge?.lost({ mayHaveRun: false });
     return { kind: "pending" };
   }
-  if (raw.kind === "refused")
+  const { session, result } = waited;
+  if (result.kind === "refused")
     return {
       kind: "refused",
-      refusal: raw.refusal,
-      message: writeRefusalText(raw.refusal, writeMeter.framelinkApiUrl),
+      refusal: result.refusal,
+      message: writeRefusalText(result.refusal, writeMeter.framelinkApiUrl),
     };
-  const { documentChanged, console, errors } = raw.reply;
+  const { documentChanged, console, errors } = result.reply;
   gate.charge?.replied(documentChanged);
-  if (gate.session) bridge.touchApproval(gate.session);
+  if (session) bridge.touchApproval(session);
   // `result` stays absent when the run returned nothing: undefined isn't JSON.
   const reply =
-    "result" in raw.reply ? { result: raw.reply.result, console, errors } : { console, errors };
-  return { kind: "executed", reply, session: gate.session };
+    "result" in result.reply
+      ? { result: result.reply.result, console, errors }
+      : { console, errors };
+  return { kind: "executed", reply, session };
 }
 
 /** A failed submission may have touched the document unless the bridge proved it never started. */
@@ -110,15 +104,13 @@ export async function capturePluginScreenshot(
   target: { nodeId?: string; key?: string; scale?: number; context?: boolean; margin?: number },
   options?: ApprovalOptions,
 ) {
-  let admitted: ApprovedSession | null = null;
-  const raw = await requestUntilApproved(
+  const waited = await requestUntilApproved(
     (signal) => bridge.approvalStatus(signal),
-    (signal, session) => {
-      admitted = session;
-      return bridge.request({ type: "SCREENSHOT", ...target }, signal);
-    },
+    (signal) => bridge.request({ type: "SCREENSHOT", ...target }, signal),
     options,
   );
-  if (isPendingApproval(raw)) return { kind: "pending" as const };
-  return { kind: "captured" as const, reply: raw, session: admitted as ApprovedSession | null };
+  // As with code, the plugin gates the capture itself and may still answer PENDING_APPROVAL.
+  if (isPendingApproval(waited) || isPendingApproval(waited.result))
+    return { kind: "pending" as const };
+  return { kind: "captured" as const, reply: waited.result, session: waited.session };
 }

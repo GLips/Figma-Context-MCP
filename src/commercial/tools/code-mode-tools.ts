@@ -133,8 +133,8 @@ type CodeModeToolsOptions = Pick<
  * Register the code-mode (write-path) tools: figma_execute_code, get_flcm_reference, get_screenshot.
  *
  * Dynamic exposure: the tools are registered but DISABLED until a plugin is connected or expected
- * (expectsPluginConnection), so the many read-only users of this server never see write tools in
- * tools/list. On stdio — a single long-lived connection — the first plugin connection enables them
+ * (`bindPluginAdvertisement` over `pluginPresence()`), so the many read-only users of this server
+ * never see write tools in tools/list. On stdio — a single long-lived connection — the first plugin connection enables them
  * live and the SDK emits notifications/tools/list_changed. On stateless HTTP every request builds a
  * fresh server, so the decision is simply re-read at construction time; there is no long-lived
  * connection to notify (GETs are 405'd — no SSE stream exists to carry a notification).

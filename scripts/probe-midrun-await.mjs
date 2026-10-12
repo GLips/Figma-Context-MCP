@@ -31,7 +31,7 @@
 
 import { PluginBridge } from "../src/commercial/plugin-bridge/bridge.ts";
 import { PROTOCOL_VERSION, WS_PORT_BLOCK } from "../plugin/src/protocol.ts";
-import { LATE_CHANGE_WINDOW_MS } from "../src/commercial/entitlement/write-access.ts";
+import { LATE_CHANGE_WINDOW_MS } from "../src/commercial/entitlement/write-meter.ts";
 import { DEFAULT_FRAMELINK_API_URL } from "../src/config.ts";
 import { requestUntilApproved } from "../src/commercial/plugin-bridge/await-approval.ts";
 import { buildSandboxPreamble } from "../plugin/src/preamble/index.mjs";
@@ -97,13 +97,14 @@ async function runProbe() {
     // Poll APPROVAL_STATUS, submit the code once — the same two-callback shape the real tool uses
     // (code-mode-tools.ts). Handing this ONE callback polls by re-sending EXECUTE_CODE, so the probe
     // would execute repeatedly and then read its own run's reply as an unexpected approval status.
-    const reply = await requestUntilApproved(
+    const waited = await requestUntilApproved(
       (signal) => bridge.approvalStatus(signal),
       () => bridge.request({ type: "EXECUTE_CODE", code: PROBE_CODE, preamble: PREAMBLE, lateChangeWindowMs: LATE_CHANGE_WINDOW_MS }),
     );
-    if (reply?.type === "PENDING_APPROVAL") {
+    if (waited.type === "PENDING_APPROVAL") {
       fail("the session was never approved — click Allow on the Framelink strip and re-run the probe.");
     }
+    const reply = waited.result;
     if (reply?.errors) {
       fail(`the probe script errored in the sandbox:\n${reply.errors}`);
     }

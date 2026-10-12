@@ -28,7 +28,7 @@ describe("approval before single submission", () => {
         ...clock(),
         onWaiting: () => stop,
       }),
-    ).toBe("committed");
+    ).toEqual({ session: TEST_APPROVED_SESSION, result: "committed" });
     expect(submit).toHaveBeenCalledTimes(1);
     expect(submit).toHaveBeenCalledWith(expect.any(AbortSignal), TEST_APPROVED_SESSION);
     expect(stop).toHaveBeenCalledTimes(1);

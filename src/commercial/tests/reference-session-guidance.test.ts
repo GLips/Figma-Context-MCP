@@ -7,7 +7,7 @@ import { referenceSessionGuidance } from "~/commercial/plugin-bridge/session-gui
 
 describe("approval-aware reference guidance", () => {
   it("approved sessions receive no pairing preamble and perform one status query", async () => {
-    const status = vi.fn(async () => ({ type: "APPROVAL_GRANTED" }) as const);
+    const status = vi.fn(async () => ({ type: "APPROVAL_GRANTED", session: null }) as const);
     expect(
       await referenceSessionGuidance({ pairingCode: "1234", protocolRefusal: null, status }),
     ).toBeUndefined();

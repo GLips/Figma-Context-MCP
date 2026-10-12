@@ -2,7 +2,7 @@
  * SPDX-License-Identifier: LicenseRef-Framelink-Commercial
  * See licensing/LICENSE-Framelink-Commercial.md in the distribution root.
  */
-import type { ApprovalStatusReply } from "@framelink/plugin/protocol";
+import type { ApprovalStatus } from "./bridge.js";
 import { approvalGuidance, type ApprovalGuidanceState } from "./blocked-call-guidance.js";
 
 /**
@@ -17,7 +17,7 @@ export async function referenceSessionGuidance({
 }: {
   pairingCode: string | null;
   protocolRefusal: string | null;
-  status: (signal: AbortSignal) => Promise<ApprovalStatusReply>;
+  status: (signal: AbortSignal) => Promise<ApprovalStatus>;
   timeoutMs?: number;
 }): Promise<string | undefined> {
   const state = await referenceState({ pairingCode, protocolRefusal, status, timeoutMs });
@@ -32,7 +32,7 @@ async function referenceState({
 }: {
   pairingCode: string | null;
   protocolRefusal: string | null;
-  status: (signal: AbortSignal) => Promise<ApprovalStatusReply>;
+  status: (signal: AbortSignal) => Promise<ApprovalStatus>;
   timeoutMs: number;
 }): Promise<ApprovalGuidanceState | null> {
   if (protocolRefusal) return { kind: "incompatible", refusal: protocolRefusal };
@@ -51,9 +51,9 @@ async function referenceState({
     ]);
     if (reply.type === "APPROVAL_GRANTED") return null;
     if (reply.type === "APPROVAL_REJECTED") return { kind: "rejected", pairingCode };
-    return { kind: "pending", pairingCode };
+    return { kind: "reference-pending", pairingCode };
   } catch {
-    return { kind: "status-unknown" };
+    return { kind: "reference-status-unknown" };
   } finally {
     clearTimeout(timer);
   }
