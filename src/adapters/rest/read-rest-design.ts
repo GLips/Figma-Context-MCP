@@ -10,12 +10,14 @@ import { withGridSiblings } from "./grid-siblings.js";
 
 /**
  * The Figma calls a REST read makes. A structural slice of `FigmaService`, so tests, benchmarks and
- * replays can serve a recorded response without a network client.
+ * replays can serve a recorded response without a network client. `signal` is the calling tool's
+ * lifetime: once it aborts, the read stops between phases instead of walking for nobody.
  */
 export type RestDesignSource = Pick<
   FigmaService,
   "getRawFile" | "getRawNodeInContext" | "getRawNodes" | "getPublishedComponentSite"
->;
+> &
+  Partial<Pick<FigmaService, "signal">>;
 
 export interface RestDesignRequest {
   fileKey: FigmaFileKey;
@@ -59,6 +61,7 @@ export async function readRestDesign(
 ): Promise<RestDesignRead> {
   const timings = { fetchMs: 0, decodeMs: 0, enrichMs: 0, simplifyMs: 0 };
   const phase = async <T>(name: RestReadPhase, run: () => Promise<T>): Promise<T> => {
+    source.signal?.throwIfAborted();
     await options.onPhaseStart?.(name);
     const startedAt = Date.now();
     try {

@@ -216,4 +216,25 @@ describe("off-tree component definitions", () => {
     expect(design.components["9:1"].childrenFrom).toBeTruthy();
     expect(design.components["9:1"].children).toHaveLength(1);
   });
+
+  it("stops a cancelled read instead of falling back and walking for nobody", async () => {
+    const cancel = new AbortController();
+    let simplified = false;
+    const service = stubService({
+      signal: cancel.signal,
+      getPublishedComponentSite: async () => {
+        cancel.abort();
+        throw new Error("This operation was aborted");
+      },
+    });
+
+    await expect(
+      readRestDesign(
+        service,
+        { fileKey: figmaFileKey("consumer") },
+        { onPhaseStart: (phase) => void (simplified ||= phase === "simplify") },
+      ),
+    ).rejects.toThrow();
+    expect(simplified).toBe(false);
+  });
 });

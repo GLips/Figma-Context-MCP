@@ -121,6 +121,11 @@ export class FigmaService {
     this.options = options;
   }
 
+  /** The caller lifetime this service is scoped to (`withSignal`); absent for a process-wide one. */
+  get signal(): AbortSignal | undefined {
+    return this.options.signal;
+  }
+
   private getAuthHeaders({ kind, token }: FigmaCredential): Record<string, string> {
     if (kind === "oauth") {
       Logger.log("Using OAuth Bearer token for authentication");

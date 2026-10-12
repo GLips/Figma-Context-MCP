@@ -24,7 +24,9 @@ export async function withGridSiblings(
     const [fetched] = parseRestResponse(response).snapshots;
     return { parent, siblings: fetched.children ?? [] };
   } catch (error) {
-    // Access, rate limit, network. Expected enough to be a fallback rather than a failure.
+    // Access, rate limit, network. Expected enough to be a fallback rather than a failure — unless
+    // the call was cancelled, which is no access failure and has nobody left to fall back for.
+    source.signal?.throwIfAborted();
     Logger.log(
       `Grid siblings of ${parent.id} in ${fileKey} are unreachable — placing the node ` +
         `against itself: ${error instanceof Error ? error.message : String(error)}`,
