@@ -20,7 +20,6 @@ import { z } from "zod";
 import {
   VERBS,
   FIELD_GROUPS,
-  INPUT_ALIASES,
   TYPE_WORD_GROUPS,
   CREATE_ONLY_WORDS,
   editWordsOf,
@@ -127,21 +126,10 @@ function deriveLabel(def: any): string {
   }
 }
 
-// Input aliases are accepted by the schemas but documented once, outside the canonical vocabulary.
+// Input aliases are accepted by the schemas but never documented: flcm broadcasts one
+// vocabulary, and an alias an agent reads becomes a second spelling it writes.
 function documentedFields(fields: Fields): [string, z.ZodType][] {
   return Object.entries(fields).filter(([, field]) => !field.meta()?.inputOnly);
-}
-
-function nativeSpellings(): string {
-  const lines = Object.values(INPUT_ALIASES).flatMap((rule) =>
-    rule.keys.map((key) => `- \`${key}\` → \`${rule.path.join(".")}\``),
-  );
-  return (
-    "### Native spellings accepted\n\n" +
-    "Aliases normalize silently on every verb; equivalent duplicates agree, conflicting values fail. " +
-    "Grid aliases also work inside `layout`. Native anchors are 0-based and combine with spans into 1-based CSS placement.\n\n" +
-    lines.join("\n")
-  );
 }
 
 // Render a field group (name/key/opacity, size, a verb's props, …) as a markdown prop table.
@@ -346,7 +334,6 @@ const SECTIONS: Section[] = [
       "New nodes require type; INSTANCE also requires componentId, and VECTOR exactly one geometry prop (see vector art in values). " +
       "An id refers to a live node; type can be omitted for a move. children is an array of plain specs. " +
       "Other omitted props keep live values or use creation defaults. The verb returns the spec copied with ids.\n\n" +
-      `${nativeSpellings()}\n\n` +
       `### Shared by every node\n\n${propTable(FIELD_GROUPS.shared)}\n\n` +
       "### Size & position (FRAME, TEXT, RECTANGLE, ELLIPSE, VECTOR, INSTANCE)\n\n" +
       'A LINE sizes along its length alone, its `width`: a number, or `"fill"` under a row or column parent — the divider case, ' +

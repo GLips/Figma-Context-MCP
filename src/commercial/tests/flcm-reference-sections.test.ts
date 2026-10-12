@@ -48,18 +48,11 @@ it("never names an MCP tool to a CLI reader", () => {
   expect(cli).not.toMatch(MCP_TOOL_NAMES);
 });
 
-it("documents input aliases once, outside canonical prop tables and node key lists", () => {
-  const doc = buildFullReference(MCP_DOCS_CHANNEL);
-  const block = doc.split("### Native spellings accepted\n")[1].split("\n### ")[0];
+it("never documents an input alias", () => {
+  const doc = buildFullReference(MCP_DOCS_CHANNEL) + buildFullReference(CLI_DOCS_CHANNEL);
   for (const rule of Object.values(INPUT_ALIASES)) {
-    for (const key of rule.keys) {
-      expect(block.split(`- \`${key}\` → \`${rule.path.join(".")}\``)).toHaveLength(2);
-      // fontSize is also a canonical nested text-style field.
-      if (key !== "fontSize") expect(doc.split(key)).toHaveLength(2);
-      for (const line of doc.split("\n").filter((line) => line.startsWith("- **"))) {
-        expect(line).not.toContain(`\`${key}\``);
-      }
-    }
+    // fontSize is also the canonical nested text-style field.
+    for (const key of rule.keys) if (key !== "fontSize") expect(doc).not.toContain(key);
   }
   expect(doc).toContain("| `fontSize` |");
 });

@@ -246,23 +246,6 @@ Props use CSS names and CSS value syntax; the notes say only where flcm differs.
 
 New nodes require type; INSTANCE also requires componentId, and VECTOR exactly one geometry prop (see vector art in values). An id refers to a live node; type can be omitted for a move. children is an array of plain specs. Other omitted props keep live values or use creation defaults. The verb returns the spec copied with ids.
 
-### Native spellings accepted
-
-Aliases normalize silently on every verb; equivalent duplicates agree, conflicting values fail. Grid aliases also work inside `layout`. Native anchors are 0-based and combine with spans into 1-based CSS placement.
-
-- `clipsContent` → `clip`
-- `fontSize` → `textStyle.fontSize`
-- `gridColumnAnchorIndex` → `layout.gridColumn`
-- `gridColumnSpan` → `layout.gridColumn`
-- `gridRowAnchorIndex` → `layout.gridRow`
-- `gridRowSpan` → `layout.gridRow`
-- `gridChildHorizontalAlign` → `layout.justifySelf`
-- `gridChildVerticalAlign` → `layout.alignSelf`
-- `gridColumnsSizing` → `layout.gridTemplateColumns`
-- `gridColumnSizes` → `layout.gridTemplateColumns`
-- `gridRowsSizing` → `layout.gridTemplateRows`
-- `gridRowSizes` → `layout.gridTemplateRows`
-
 ### Shared by every node
 
 | Prop | Type | Notes |
